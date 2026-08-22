@@ -1,0 +1,474 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Azeroth Overseer</title>
+<style>
+  :root { --bg:#0d1117; --panel:#161b22; --line:#30363d; --text:#e6edf3;
+          --dim:#8b949e; --alliance:#4d9fff; --horde:#ff4d4d; --neutral:#d4b106;
+          --mortal:#7ee787; --thought:#a371f7; }
+  * { box-sizing:border-box; margin:0; }
+  body { background:var(--bg); color:var(--text);
+         font:14px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace; }
+  header { display:flex; align-items:baseline; gap:1rem; padding:.7rem 1rem;
+           border-bottom:1px solid var(--line); flex-wrap:wrap; }
+  h1 { font-size:1.05rem; }
+  #census { color:var(--dim); }
+  #stale { display:none; background:#6e2c00; color:#ffd8a8; padding:.3rem 1rem; }
+  nav { display:flex; gap:.4rem; padding:.6rem 1rem; flex-wrap:wrap; }
+  nav button { background:var(--panel); color:var(--text); border:1px solid var(--line);
+               padding:.3rem .8rem; border-radius:6px; cursor:pointer; font:inherit; }
+  nav button.on { border-color:var(--alliance); color:var(--alliance); }
+  #wrap { position:relative; margin:0 1rem 1rem; }
+  canvas { width:100%; background:var(--panel); border:1px solid var(--line);
+           border-radius:8px; display:block; }
+  #tip { position:absolute; pointer-events:none; display:none; background:#000c;
+         border:1px solid var(--line); border-radius:6px; padding:.35rem .6rem;
+         white-space:nowrap; }
+  footer { color:var(--dim); padding:0 1rem 1rem; }
+  .sw { display:inline-block; width:.7em; height:.7em; border-radius:50%; }
+  /* Character panel: a fixed overlay so opening it never reflows the map
+     and never widens the page (the no-horizontal-scroll rule). */
+  #panel { display:none; position:fixed; top:0; right:0; bottom:0;
+           width:min(340px, 92vw); overflow-y:auto; overflow-x:hidden;
+           background:var(--panel); border-left:1px solid var(--line);
+           padding:.8rem 1rem; z-index:10; }
+  #panel h2 { font-size:1rem; }
+  #phead { display:flex; justify-content:space-between; align-items:baseline; }
+  #pclose { background:none; border:1px solid var(--line); border-radius:6px;
+            color:var(--dim); cursor:pointer; font:inherit; padding:0 .5rem; }
+  #panel .sect { color:var(--dim); margin:.8rem 0 .2rem;
+                 border-bottom:1px solid var(--line); }
+  #panel .bar-track { background:var(--bg); border:1px solid var(--line);
+                      border-radius:4px; height:.8em; overflow:hidden; }
+  #panel .bar-fill { background:var(--mortal); height:100%; }
+  #panel .row { display:flex; gap:.6rem; }
+  #panel .row .k { color:var(--dim); min-width:5.5em; flex-shrink:0; }
+  #panel .row .v { overflow-wrap:anywhere; }
+  #panel .note { color:var(--dim); }
+  #panel .gone { color:#ffd8a8; }
+  /* Thought timeline (infra#2604): one stream, both surfaces. The left
+     border is the source, so a Discord line and a web line are told apart
+     at a glance without reading them. */
+  #ptimeline { max-height:38vh; overflow-y:auto; overflow-x:hidden;
+               border:1px solid var(--line); border-radius:6px;
+               background:var(--bg); padding:.3rem; }
+  .th { border-left:3px solid var(--dim); padding:.15rem .4rem; margin:.25rem 0;
+        overflow-wrap:anywhere; }
+  .th .meta { color:var(--dim); font-size:.85em; }
+  .th.s-event { border-left-color:var(--dim); }
+  .th.s-chat { border-left-color:var(--alliance); }
+  .th.s-command { border-left-color:var(--neutral); }
+  .th.s-goal { border-left-color:var(--mortal); }
+  .th.s-reflection { border-left-color:var(--thought); }
+  .th.overseer { background:#161b2288; }
+  .th.pending { opacity:.55; }
+  #pmore { width:100%; margin-top:.3rem; background:var(--panel); color:var(--dim);
+           border:1px solid var(--line); border-radius:6px; cursor:pointer;
+           font:inherit; padding:.2rem; }
+  #pchat { display:flex; gap:.3rem; margin-top:.4rem; }
+  #pinput { flex:1; min-width:0; background:var(--bg); color:var(--text);
+            border:1px solid var(--line); border-radius:6px; padding:.3rem .4rem;
+            font:inherit; }
+  #psay { background:var(--panel); color:var(--text); border:1px solid var(--line);
+          border-radius:6px; cursor:pointer; font:inherit; padding:.3rem .6rem; }
+  #psay:disabled, #pinput:disabled { opacity:.5; cursor:default; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Azeroth Overseer</h1>
+  <span id="census">reaching the world...</span>
+</header>
+<div id="stale"></div>
+<nav id="tabs"></nav>
+<div id="wrap"><canvas id="map"></canvas><div id="tip"></div></div>
+<aside id="panel">
+  <div id="phead"><h2 id="pname"></h2><button id="pclose" title="close">x</button></div>
+  <div id="pbody"></div>
+  <div class="sect">mind</div>
+  <div id="ptimeline"></div>
+  <button id="pmore">older thoughts</button>
+  <form id="pchat" autocomplete="off">
+    <input id="pinput" maxlength="500" placeholder="speak to them...">
+    <button id="psay" type="submit">say</button>
+  </form>
+  <div id="pchatnote" class="note"></div>
+</aside>
+<footer>
+  <span class="sw" style="background:var(--horde)"></span> Horde
+  <span class="sw" style="background:var(--alliance)"></span> Alliance
+  <span class="sw" style="background:var(--mortal)"></span> mortal (you)
+  &nbsp; square = inside an instance, at its entrance &nbsp; pulsing = in combat
+</footer>
+<script>
+"use strict";
+const CONTINENT_ORDER = ["0", "1", "530", "571", "quelthalas", "azuremyst"];
+let zones = null, dots = [], current = "1", freshest = null;
+
+const canvas = document.getElementById("map"), ctx = canvas.getContext("2d");
+const tip = document.getElementById("tip");
+
+async function loadZones() {
+  zones = (await (await fetch("/zones.json")).json()).continents;
+  const tabs = document.getElementById("tabs");
+  for (const id of CONTINENT_ORDER) {
+    const b = document.createElement("button");
+    b.textContent = zones[id].name;
+    b.dataset.id = id;
+    b.onclick = () => { current = id; render(); };
+    tabs.appendChild(b);
+  }
+}
+
+async function poll() {
+  try {
+    const r = await fetch("/api/map");
+    if (!r.ok) throw new Error(r.status);
+    const p = await r.json();
+    dots = p.dots; freshest = p.freshest_seconds;
+    const mortals = dots.filter(d => !d.bot).length;
+    document.getElementById("census").textContent =
+      `${dots.length} souls (${mortals} mortal) - ${p.unplaced} unplaced - ${new Date().toLocaleTimeString()}`;
+    banner(dots.length === 0 && freshest === null ? "empty" : freshest);
+  } catch (e) {
+    banner("unreachable");
+  }
+  render();
+}
+
+function banner(fresh) {
+  const el = document.getElementById("stale");
+  if (fresh === "unreachable") {
+    el.textContent = "The world is unreachable - showing the last thing the overseer saw.";
+    el.style.display = "block";
+  } else if (fresh === "empty") {
+    // A successful poll with zero rows is a real state: the module sweeps
+    // logged-out rows, so an empty world drains the table. Say so - do not
+    // cry outage over an empty tavern.
+    el.textContent = "Nobody walks the world right now.";
+    el.style.display = "block";
+  } else if (fresh > 30) {
+    el.textContent = `Snapshots are ${fresh}s old - the worldserver may be down.`;
+    el.style.display = "block";
+  } else el.style.display = "none";
+}
+
+function render() {
+  if (!zones) return;
+  for (const b of document.querySelectorAll("nav button"))
+    b.classList.toggle("on", b.dataset.id === current);
+  const c = zones[current];
+  const W = canvas.clientWidth, aspect =
+    Math.abs((c.top - c.bottom) / (c.left - c.right));
+  const H = Math.max(360, Math.min(760, W * aspect));
+  // Only reallocate the backing store when the size actually changed -
+  // render() runs on a timer for the combat pulse.
+  if (canvas.width !== W * devicePixelRatio || canvas.height !== H * devicePixelRatio) {
+    canvas.width = W * devicePixelRatio; canvas.height = H * devicePixelRatio;
+    canvas.style.height = H + "px";
+  }
+  ctx.setTransform(devicePixelRatio, 0, 0, devicePixelRatio, 0, 0);
+  ctx.clearRect(0, 0, W, H);
+
+  // zone rectangles: the schematic continent
+  ctx.strokeStyle = "#30363d"; ctx.fillStyle = "#8b949e"; ctx.font = "10px ui-monospace, monospace";
+  for (const z of c.zones) {
+    const x = u(z.left, c) * W, w = (u(z.right, c) - u(z.left, c)) * W;
+    const y = v(z.top, c) * H, h = (v(z.bottom, c) - v(z.top, c)) * H;
+    ctx.strokeRect(x, y, w, h);
+    if (w > 70) ctx.fillText(z.name, x + 4, y + 12);
+  }
+  // dots
+  const t = Date.now() / 400;
+  for (const d of dots) {
+    if (d.continent !== current) continue;
+    const x = d.u * W, y = d.v * H;
+    ctx.fillStyle = !d.bot ? "#7ee787" :
+      d.faction === "alliance" ? "#4d9fff" : d.faction === "horde" ? "#ff4d4d" : "#d4b106";
+    const r = d.combat ? 3 + Math.sin(t) * 1.2 : (d.bot ? 2.4 : 4);
+    if (d.instance) ctx.fillRect(x - r, y - r, r * 2, r * 2);
+    else { ctx.beginPath(); ctx.arc(x, y, r, 0, 7); ctx.fill(); }
+  }
+}
+
+function u(worldY, c) { return (c.left - worldY) / (c.left - c.right); }
+function v(worldX, c) { return (c.top - worldX) / (c.top - c.bottom); }
+
+function nearestDot(e) {
+  const rect = canvas.getBoundingClientRect();
+  const mx = e.clientX - rect.left, my = e.clientY - rect.top;
+  const W = canvas.clientWidth, H = parseFloat(canvas.style.height);
+  let best = null, bd = 12 * 12;
+  for (const d of dots) {
+    if (d.continent !== current) continue;
+    const dx = d.u * W - mx, dy = d.v * H - my, dist = dx * dx + dy * dy;
+    if (dist < bd) { bd = dist; best = d; }
+  }
+  return { best, mx, my };
+}
+
+canvas.addEventListener("mousemove", (e) => {
+  const { best, mx, my } = nearestDot(e);
+  if (best) {
+    tip.style.display = "block";
+    tip.style.left = (mx + 14) + "px"; tip.style.top = (my + 6) + "px";
+    tip.textContent = `${best.name} - L${best.level} - ${best.zone}` +
+      (best.combat ? " - fighting" : "") + (best.bot ? "" : " - MORTAL");
+  } else tip.style.display = "none";
+});
+
+// --- character panel (infra#2603): click a dot, inspect a colonist ---
+// All text lands via textContent, never innerHTML: names and item names
+// come from the database and must render inert.
+let selected = null;
+const panel = document.getElementById("panel");
+const pbody = document.getElementById("pbody");
+const pname = document.getElementById("pname");
+
+canvas.addEventListener("click", (e) => {
+  const { best } = nearestDot(e);
+  if (best) {
+    selected = best.name; pname.textContent = best.name; panel.style.display = "block";
+    fetchPanel(); openMind(best.name);
+  } else closePanel();
+});
+document.getElementById("pclose").onclick = closePanel;
+
+function closePanel() {
+  selected = null; panel.style.display = "none";
+  // Closing the panel also stops the thought stream: a hidden panel must
+  // not keep polling a mind nobody is watching.
+  mind.name = null;
+}
+
+async function fetchPanel() {
+  if (!selected) return;
+  const name = selected;
+  try {
+    const r = await fetch("/api/character?name=" + encodeURIComponent(name));
+    if (!r.ok) throw new Error(r.status);
+    const p = await r.json();
+    if (name === selected) renderPanel(p);
+  } catch (e) {
+    // Keep whatever was drawn; just say the refresh failed.
+    if (name === selected) note("world unreachable - panel may be stale");
+  }
+}
+
+function el(tag, cls, text) {
+  const n = document.createElement(tag);
+  if (cls) n.className = cls;
+  if (text !== undefined) n.textContent = text;
+  return n;
+}
+
+function row(parent, k, v) {
+  const r = el("div", "row");
+  r.appendChild(el("span", "k", k));
+  r.appendChild(el("span", "v", v));
+  parent.appendChild(r);
+}
+
+function sect(parent, title) { parent.appendChild(el("div", "sect", title)); }
+
+function note(text) {
+  let n = pbody.querySelector(".flash");
+  if (!n) { n = el("div", "note flash"); pbody.prepend(n); }
+  n.textContent = text;
+}
+
+function renderPanel(p) {
+  pbody.replaceChildren();
+  if (!p.present) {
+    // Logged out mid-view: the calm state, not an error.
+    pbody.appendChild(el("div", "gone", p.name + " has left the world."));
+    return;
+  }
+  pname.textContent = p.name;
+  const b = pbody;
+  b.appendChild(el("div", "note",
+    "L" + p.level + " " + p.race + " " + p["class"] +
+    (p.bot ? "" : " - MORTAL") + (p.combat ? " - fighting" : "")));
+
+  sect(b, "vitals");
+  const track = el("div", "bar-track"), fill = el("div", "bar-fill");
+  fill.style.width = (p.vitals.max_health ? Math.round(100 * p.vitals.health / p.vitals.max_health) : 0) + "%";
+  track.appendChild(fill); b.appendChild(track);
+  row(b, "health", p.vitals.health + " / " + p.vitals.max_health);
+  if (p.vitals.power)
+    // No max power in the DB, and the value updates on character save,
+    // not on the snapshot cadence - a number, not a bar, is the honest form.
+    row(b, p.vitals.power.kind.toLowerCase(), String(p.vitals.power.value) + " (at last save)");
+  if (p.target) {
+    const label = p.target.kind === "player"
+      ? p.target.name + " (L" + p.target.level + " player)"
+      : p.target.name + (p.target.kind === "creature" ? "" : " (?)");
+    row(b, "target", label);
+  }
+
+  if (p.guild !== null || p.group !== null) sect(b, "company");
+  if (p.guild !== null) row(b, "guild", p.guild);
+  if (p.group !== null)
+    for (const m of p.group.members)
+      row(b, m.leader ? "leader" : "party", m.name + " - L" + m.level + " " + m["class"]);
+
+  sect(b, "hotbar");
+  if (p.hotbar.length === 0) b.appendChild(el("div", "note", "(no buttons bound)"));
+  for (const bar of p.hotbar)
+    for (const btn of bar.buttons)
+      row(b, bar.bar + "." + (btn.slot + 1), btn.label);
+
+  sect(b, "equipment");
+  if (p.equipment.length === 0) b.appendChild(el("div", "note", "(bare)"));
+  for (const it of p.equipment) row(b, it.slot, it.name);
+
+  sect(b, "backpack");
+  if (p.backpack.length === 0) b.appendChild(el("div", "note", "(empty)"));
+  for (const it of p.backpack) row(b, it.count > 1 ? "x" + it.count : "", it.name);
+
+  for (const bag of p.bags) {
+    sect(b, bag.name);
+    if (bag.items.length === 0) b.appendChild(el("div", "note", "(empty)"));
+    for (const it of bag.items) row(b, it.count > 1 ? "x" + it.count : "", it.name);
+  }
+  if (p.stored_elsewhere > 0)
+    b.appendChild(el("div", "note", "+ " + p.stored_elsewhere + " items in the bank, keyring or buyback"));
+}
+
+// --- thought timeline + chat (infra#2604) ----------------------------------
+// One mind across surfaces: this stream is the same overseer_thought table
+// the Discord bridge writes, so a line said there shows up here and a line
+// typed here shows up there. Text lands via textContent only - thoughts are
+// model output out of a database and must render inert.
+const timelineEl = document.getElementById("ptimeline");
+const moreBtn = document.getElementById("pmore");
+const chatForm = document.getElementById("pchat");
+const chatInput = document.getElementById("pinput");
+const chatSend = document.getElementById("psay");
+const chatNote = document.getElementById("pchatnote");
+// byId, not an array: the 5s refresh re-fetches the newest page, and merging
+// by id is what stops a poll from duplicating or reordering what is already
+// on screen (older pages loaded above stay put).
+let mind = { name: null, byId: new Map(), cursor: null, more: false, pending: [], busy: false };
+
+function openMind(name) {
+  if (mind.name === name) return;   // same colonist: keep their history
+  mind = { name: name, byId: new Map(), cursor: null, more: false, pending: [], busy: false };
+  timelineEl.replaceChildren();
+  chatNote.textContent = "";
+  chatInput.value = "";
+  moreBtn.style.display = "none";
+  // Closing the panel mid-send leaves the form disabled (its own handler
+  // deliberately skips a character nobody is looking at any more); opening
+  // a mind must always hand back a usable box.
+  chatSend.disabled = false; chatInput.disabled = false;
+  fetchThoughts(null);
+}
+
+async function fetchThoughts(before) {
+  const name = mind.name;
+  if (!name) return;
+  let url = "/api/thoughts?name=" + encodeURIComponent(name);
+  if (before !== null) url += "&before=" + encodeURIComponent(before);
+  try {
+    const r = await fetch(url);
+    if (!r.ok) throw new Error(r.status);
+    const p = await r.json();
+    if (mind.name !== name) return;   // the Overseer moved on mid-flight
+    for (const t of p.thoughts) mind.byId.set(t.id, t);
+    // Only a page walked backwards moves the "older" cursor; the 5s refresh
+    // of the newest page must not rewind it.
+    if (before !== null || mind.cursor === null) { mind.cursor = p.next_before; mind.more = p.has_more; }
+    renderTimeline(before === null);
+  } catch (e) {
+    if (mind.name === name && mind.byId.size === 0)
+      timelineEl.replaceChildren(el("div", "note", "cannot read this mind right now"));
+  }
+}
+
+function thoughtEl(t) {
+  const n = el("div", "th s-" + t.source + (t.speaker === "overseer" ? " overseer" : "") +
+                     (t.pending ? " pending" : ""));
+  n.appendChild(el("div", "meta",
+    (t.speaker === "overseer" ? "you" : t.source) + " - " + t.when));
+  n.appendChild(el("div", "", t.text));
+  return n;
+}
+
+function renderTimeline(autoscroll) {
+  // Oldest at the top, newest at the bottom: a transcript, read downward.
+  const items = [...mind.byId.values()].sort((a, b) => a.id - b.id);
+  // Near the bottom means the Overseer is watching the present; further up
+  // means they are reading history and must not be yanked back down.
+  const atBottom = timelineEl.scrollHeight - timelineEl.scrollTop - timelineEl.clientHeight < 40;
+  timelineEl.replaceChildren();
+  if (items.length === 0 && mind.pending.length === 0)
+    timelineEl.appendChild(el("div", "note", "(no thoughts yet)"));
+  for (const t of items) timelineEl.appendChild(thoughtEl(t));
+  for (const t of mind.pending) timelineEl.appendChild(thoughtEl(t));
+  moreBtn.style.display = mind.more ? "block" : "none";
+  if (autoscroll && atBottom) timelineEl.scrollTop = timelineEl.scrollHeight;
+}
+
+moreBtn.onclick = () => { if (mind.cursor !== null) fetchThoughts(mind.cursor); };
+
+chatForm.addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const text = chatInput.value.trim();
+  if (!text || mind.busy || !mind.name) return;
+  const name = mind.name;
+  mind.busy = true; chatSend.disabled = true; chatInput.disabled = true;
+  chatNote.textContent = "the voice is thinking...";
+  // Optimistic: the line appears immediately, greyed, and is replaced by
+  // the real row when the timeline reconciles a moment later.
+  mind.pending = [{ id: -1, source: "chat", speaker: "overseer", text: text,
+                    when: "just now", pending: true }];
+  chatInput.value = "";
+  renderTimeline(true);
+  try {
+    const r = await fetch("/api/chat", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: name, text: text }),
+    });
+    const p = r.ok ? await r.json() : null;
+    if (mind.name !== name) return;
+    if (p === null) {
+      chatNote.textContent = r.status === 404 ? "no such character" : "the world is unreachable";
+    } else if (!p.present) {
+      // Logged out: the words were kept, but nobody answered. A note, not
+      // a speech bubble the character never uttered.
+      chatNote.textContent = p.say;
+    } else {
+      chatNote.textContent = p.degraded ? "the inner voice is unreachable - answered plainly"
+                             : p.command ? "command sent: " + p.command : "";
+      mind.pending.push({ id: -2, source: "chat", speaker: "character", text: p.say,
+                          when: "just now", pending: true });
+      renderTimeline(true);
+    }
+  } catch (err) {
+    if (mind.name === name) chatNote.textContent = "the world is unreachable";
+  } finally {
+    if (mind.name === name) {
+      mind.busy = false; chatSend.disabled = false; chatInput.disabled = false;
+      // Reconcile: the persisted rows (with real ids and timestamps)
+      // replace the optimistic pair.
+      await fetchThoughts(null);
+      mind.pending = [];
+      renderTimeline(true);
+    }
+  }
+});
+
+function refreshMind() { if (mind.name && !mind.busy) fetchThoughts(null); }
+
+loadZones().then(() => { poll(); setInterval(poll, 5000); });
+setInterval(fetchPanel, 5000);  // panel rides the same 5s snapshot cadence
+setInterval(refreshMind, 5000);  // and so does the thought stream
+setInterval(render, 200);  // combat pulse
+window.addEventListener("resize", render);
+</script>
+</body>
+</html>
