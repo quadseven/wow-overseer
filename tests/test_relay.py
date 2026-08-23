@@ -512,3 +512,61 @@ class AddonTrafficTest(unittest.TestCase):
         keep, drop = relay.partition_addon(rows)
         self.assertEqual(keep, rows)
         self.assertEqual(drop, [])
+
+
+class HearerCollapseTest(unittest.TestCase):
+    """Every council reached Discord five times over.
+
+    overseer_chat stores a row per LISTENER - the only way to tell speech that
+    carried from speech shouted into an empty field, which is how the first
+    council was caught talking to itself. Relaying all of them meant thirty
+    rows for six councils, and a Discord channel nobody could read.
+    """
+
+    def _row(self, i, sender="Grug", text="Aye.", at="2026-08-23 12:00:00", ch="party"):
+        return {"id": i, "sender_name": sender, "channel": ch, "text": text,
+                "created_at": at}
+
+    def test_one_line_heard_by_five_is_relayed_once(self):
+        keep, drop = relay.collapse_hearers([self._row(i) for i in range(1, 6)])
+        self.assertEqual([r["id"] for r in keep], [1])
+        self.assertEqual(drop, [2, 3, 4, 5])
+
+    def test_different_speakers_are_not_collapsed(self):
+        rows = [self._row(1, sender="Grug"), self._row(2, sender="Bork")]
+        keep, _ = relay.collapse_hearers(rows)
+        self.assertEqual(len(keep), 2)
+
+    def test_the_same_words_at_a_different_moment_are_not_collapsed(self):
+        """Two councils an hour apart both ending 'Aye.' are two events."""
+        rows = [self._row(1, at="2026-08-23 12:00:00"),
+                self._row(2, at="2026-08-23 13:00:00")]
+        keep, _ = relay.collapse_hearers(rows)
+        self.assertEqual(len(keep), 2)
+
+    def test_the_same_words_on_a_different_channel_are_not_collapsed(self):
+        rows = [self._row(1, ch="party"), self._row(2, ch="say")]
+        keep, _ = relay.collapse_hearers(rows)
+        self.assertEqual(len(keep), 2)
+
+    def test_the_copies_are_retired_rather_than_left_unrelayed(self):
+        """Left unrelayed they are re-read every tick, and since the relay only
+        takes the oldest MAX_LINES_PER_POST rows, four fifths of the window
+        would be copies forever."""
+        _, drop = relay.collapse_hearers([self._row(i) for i in range(1, 6)])
+        self.assertEqual(len(drop), 4)
+
+    def test_the_relay_actually_collapses(self):
+        """The rule is useless uncalled. bridge.py needs pymysql and discord,
+        so this walks its AST."""
+        import ast
+        import pathlib
+
+        src = (pathlib.Path(__file__).resolve().parent.parent / "bridge.py").read_text()
+        fn = next(n for n in ast.walk(ast.parse(src))
+                  if isinstance(n, ast.AsyncFunctionDef)
+                  and n.name == "_retire_addon_traffic")
+        names = {n.attr for n in ast.walk(fn) if isinstance(n, ast.Attribute)}
+        self.assertIn("collapse_hearers", names,
+                      "per-listener copies are never collapsed; every party "
+                      "line reaches Discord once per character in the party")

@@ -932,9 +932,14 @@ class Bridge(discord.Client):
         whispers would push real speech out of the window for good.
         """
         rows, addon_ids = relay.partition_addon(rows)
-        if addon_ids:
-            await asyncio.to_thread(_mark_relayed, addon_ids)
-            log.info("chat relay: retired %d addon line(s)", len(addon_ids))
+        rows, echo_ids = relay.collapse_hearers(rows)
+        retire = addon_ids + echo_ids
+        if retire:
+            await asyncio.to_thread(_mark_relayed, retire)
+            log.info(
+                "chat relay: retired %d addon, %d per-listener copies",
+                len(addon_ids), len(echo_ids),
+            )
         return rows
 
     async def _relay_chat(self) -> None:
@@ -1053,6 +1058,17 @@ class Bridge(discord.Client):
         held = council.hold(members, history=history)
         if not held.lines:
             log.info("council: %s", held.reason)
+            return
+
+        # A council that reaches the conclusion the family is ALREADY working
+        # on does not re-stage itself. Nothing has changed, so re-speaking the
+        # whole scene every hour is not deliberation, it is a stuck record -
+        # and it is what filled Discord with the same six lines over and over.
+        # The plan still stands; there is simply nothing new to say about it.
+        if held.plan is not None and await asyncio.to_thread(
+            _already_agreed, held.plan
+        ):
+            log.info("council: nothing new to decide (%s)", held.reason)
             return
 
         for line in held.lines:
@@ -1460,6 +1476,24 @@ def _observe_goal(row: dict) -> int | None:
         )
         found = cur.fetchone()
         return int(found["value"]) if found else None
+
+
+def _already_agreed(plan) -> bool:
+    """Is the family already working on exactly this?
+
+    Asked BEFORE the council speaks, not after. Persisting already refused a
+    duplicate goal, but the scene was played out in full first, which is the
+    half Evan actually sees.
+    """
+    if plan.kind not in ("level",):
+        return False
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT kind, target FROM overseer_goal "
+            "WHERE character_name = %s AND status = 'active'",
+            (plan.beneficiary,),
+        )
+        return goals.already_working(plan.kind, int(plan.target), list(cur.fetchall()))
 
 
 def _persist_council_plan(plan) -> int | None:

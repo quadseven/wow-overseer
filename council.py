@@ -247,7 +247,14 @@ def _merge(proposals: list) -> list:
     """
     grouped: dict = {}
     for p in proposals:
-        grouped.setdefault((p.kind, p.beneficiary, p.target), []).append(p)
+        # Self-directed proposals group by what is wanted, NOT by who wants it.
+        # Five characters each saying "I want 3 more levels" is one idea the
+        # family shares; keying on the beneficiary made it five, and the scene
+        # read as five people talking past each other and then all volunteering
+        # to help whoever spoke first.
+        key = ((p.kind, "self", p.target) if p.beneficiary == p.proposer
+               else (p.kind, p.beneficiary, p.target))
+        grouped.setdefault(key, []).append(p)
 
     merged = []
     for group in grouped.values():

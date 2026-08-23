@@ -248,6 +248,12 @@ class WiringTest(unittest.TestCase):
                          "can only error, once per cycle, forever")
         self.assertNotIn("GmCommand", names)
 
+    def test_a_settled_plan_is_not_re_staged_every_hour(self):
+        """Nothing has changed, so re-speaking the whole scene is a stuck
+        record, not deliberation. Checked BEFORE the council speaks - persisting
+        already refused the duplicate, but only after the scene had played."""
+        self.assertIn("_already_agreed", self._names_in("_council_once"))
+
     def test_a_council_remembers_what_it_argued(self):
         self.assertIn("_insert_thought", self._names_in("_council_once"))
 
@@ -277,3 +283,30 @@ class PhrasingTest(unittest.TestCase):
         me = council.Member("Grog", 1, "Paladin", gold=999999, trades=5)
         p = council.assess(me, public_levels={"Grog": 1, "Grug": 1})
         self.assertIn("more levels.", p.said)
+
+
+class SharedWantTest(unittest.TestCase):
+    """Five characters each saying "I want 3 more levels" is ONE idea.
+
+    Keying the merge on the beneficiary made it five, so the scene read as five
+    people talking past each other and then all volunteering to help whoever
+    happened to speak first.
+    """
+
+    def test_everyone_wanting_the_same_thing_says_it_once(self):
+        members = [_m(n, 7) for n in ("Grug", "Ugga", "Grog", "Bork", "Og")]
+        lines = council.hold(members, history=[]).lines
+        wants = [l for l in lines if "more level" in l]
+        self.assertEqual(len(wants), 2, lines)   # raised once, settled once
+
+    def test_the_others_still_answer(self):
+        members = [_m(n, 7) for n in ("Grug", "Ugga", "Grog", "Bork", "Og")]
+        lines = council.hold(members, history=[]).lines
+        for who in ("Ugga", "Grog", "Bork", "Og"):
+            self.assertTrue(any(l.startswith(who + ":") for l in lines), lines)
+
+    def test_wanting_different_amounts_is_still_two_ideas(self):
+        """A shared want is the same want. Different targets are not."""
+        members = [_m("Grug", 7), _m("Ugga", 7), _m("Og", 3), _m("Grog", 7)]
+        lines = council.hold(members, history=[]).lines
+        self.assertTrue(any("Og" in l for l in lines), lines)

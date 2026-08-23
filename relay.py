@@ -316,6 +316,38 @@ def is_addon_traffic(text: str) -> bool:
     return bool(_CONTROL.search(text or ""))
 
 
+def collapse_hearers(rows: list[dict]) -> tuple[list[dict], list[int]]:
+    """(one row per utterance, ids of the copies to retire).
+
+    overseer_chat stores a row per LISTENER, because who heard a line is the
+    only way to tell speech that carried from speech shouted into an empty
+    field - that is how the first council was caught talking to itself.
+    Useful for diagnosis, ruinous for a relay: a party line with five
+    characters in the party is five identical rows, so every council reached
+    Discord five times over. Thirty rows for six councils.
+
+    Keyed on (speaker, channel, text, moment). Two genuinely identical lines
+    from one speaker in the same second collapse too, which is right: nobody
+    says the same sentence twice in a second, and if they did, once is the
+    honest rendering.
+    """
+    seen: set = set()
+    keep, drop = [], []
+    for row in rows:
+        key = (
+            row.get("sender_name"),
+            row.get("channel"),
+            row.get("text"),
+            str(row.get("created_at")),
+        )
+        if key in seen:
+            drop.append(int(row["id"]))
+        else:
+            seen.add(key)
+            keep.append(row)
+    return keep, drop
+
+
 def partition_addon(rows: list[dict]) -> tuple[list[dict], list[int]]:
     """(rows worth posting, ids to acknowledge without posting).
 
