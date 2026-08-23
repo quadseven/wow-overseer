@@ -20,6 +20,7 @@ import urllib.request
 import discord
 import pymysql
 
+import council
 import core
 import events
 import fanout
@@ -383,6 +384,60 @@ def _ensure_chat_watch(names: list) -> int:
         return cur.rowcount or 0
 
 
+def _fetch_council_members(names: list) -> list:
+    """The state each family member brings to a council.
+
+    Level comes from the snapshot (5s fresh) rather than `characters`, which
+    only persists on the periodic save and reads minutes stale - a council
+    planning around a level that changed twenty minutes ago is planning around
+    fiction.
+
+    Gold and trade count are private to their owner. They are gathered here in
+    one query because one query is cheaper than five, and handed out one member
+    at a time; council.assess never sees the list.
+    """
+    if not names:
+        return []
+    placeholders = ",".join(["%s"] * len(names))
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT c.name, c.class, c.money, "
+            "       (SELECT COUNT(*) FROM character_skills k WHERE k.guid = c.guid) AS trades, "
+            "       s.level AS live_level "
+            "FROM characters c "
+            "LEFT JOIN overseer_snapshot s "
+            "       ON s.name = c.name AND s.updated_at > NOW() - INTERVAL 60 SECOND "
+            # noqa is right here and the rule is not: the only thing
+            # interpolated is the number of placeholders, which this function
+            # computed from len(names). Every name reaches MySQL as a bound
+            # parameter. There is no way to write a variable-length IN list
+            # with a static string, which is why _protected_guids does the
+            # same thing a few functions up.
+            "WHERE c.name IN (%s)" % placeholders,  # noqa: S608
+            names,
+        )
+        rows = cur.fetchall()
+
+    members = []
+    for row in rows:
+        level = row.get("live_level")
+        if level is None:
+            # Offline, or the snapshot went stale. A member nobody can see is
+            # not at the table; guessing their level from a stale row is how a
+            # council decides to help someone who already caught up.
+            continue
+        members.append(
+            council.Member(
+                name=row["name"],
+                level=int(level),
+                class_name=CLASS_NAMES.get(row["class"], "adventurer"),
+                gold=int(row["money"] or 0),
+                trades=int(row["trades"] or 0),
+            )
+        )
+    return members
+
+
 def _protected_guids() -> dict:
     """guid -> name for the characters we refuse to let be re-rolled.
 
@@ -527,11 +582,23 @@ class Bridge(discord.Client):
         self._last_muster_at: float | None = None
 
     async def setup_hook(self) -> None:
-        asyncio.create_task(self._poll_outcomes())
-        asyncio.create_task(self._protect_characters())
-        asyncio.create_task(self._narrate_events())
-        asyncio.create_task(self._supervise_goals())
-        asyncio.create_task(self._relay_chat())
+        # Held, not fired and forgotten. asyncio keeps only a weak reference to
+        # a running task, so one with no other referent can be garbage
+        # collected mid-flight - and the loop it was running simply stops, with
+        # no error and nothing in the log. Every loop in this service is a
+        # forever-loop, so that failure would read as the feature quietly not
+        # working, which is the shape this repo keeps meeting.
+        self._loops = {
+            asyncio.create_task(coro())
+            for coro in (
+                self._poll_outcomes,
+                self._protect_characters,
+                self._narrate_events,
+                self._supervise_goals,
+                self._relay_chat,
+                self._hold_council,
+            )
+        }
 
     async def on_ready(self) -> None:
         log.info("connected as %s", self.user)
@@ -874,6 +941,53 @@ class Bridge(discord.Client):
                     await asyncio.to_thread(_mark_relayed, ids)
             except Exception:
                 log.exception("chat relay tick failed; retrying next cycle")
+
+    async def _hold_council(self) -> None:
+        """The family decides what today is for (infra#2724).
+
+        Runs on a long cadence. A council is a conversation in the world - the
+        lines are SAID by the characters, so they reach Discord through the
+        ordinary relay rather than by this loop posting a summary. The relay is
+        already the one path world speech takes, and a second one would drift.
+
+        The plan is persisted as an ordinary goal, so the supervisor drives it
+        with the machinery that already exists and a council that decides
+        something is indistinguishable, downstream, from Evan asking for it.
+        """
+        await self.wait_until_ready()
+        cycle = float(os.environ.get("COUNCIL_CYCLE_SECONDS", "3600"))
+        # Deliberately not on the minute a deploy happens to land: a council is
+        # a scene, and one at every restart would make it wallpaper.
+        await asyncio.sleep(min(cycle, 120.0))
+        while not self.is_closed():
+            try:
+                await self._council_once()
+            except Exception:
+                log.exception("council failed; retrying next cycle")
+            await asyncio.sleep(cycle)
+
+    async def _council_once(self) -> None:
+        names = sorted((await asyncio.to_thread(_protected_guids)).values())
+        members = await asyncio.to_thread(_fetch_council_members, names)
+        history = bonds.history_from_thoughts(
+            await asyncio.to_thread(_fetch_reflections)
+        )
+        held = council.hold(members, history=history)
+        if not held.lines:
+            log.info("council: %s", held.reason)
+            return
+
+        for line in held.lines:
+            speaker, _, text = line.partition(": ")
+            await asyncio.to_thread(
+                _insert_speak,
+                relay.SpeakCommand(speaker, "say", text, "", "overseer:council"),
+            )
+            await asyncio.to_thread(_insert_thought, speaker, "reflection", text)
+
+        if held.plan is not None:
+            await asyncio.to_thread(_persist_council_plan, held.plan)
+        log.info("council: %d line(s), %s", len(held.lines), held.reason)
 
     async def _protect_characters(self) -> None:
         """Hold the manager's own randomize bookkeeping open (infra#2656).
@@ -1251,6 +1365,35 @@ def _observe_goal(row: dict) -> int | None:
         )
         found = cur.fetchone()
         return int(found["value"]) if found else None
+
+
+def _persist_council_plan(plan) -> int | None:
+    """Turn an agreed plan into a goal the supervisor already knows how to drive.
+
+    Only kinds the supervisor can actually act on are persisted. A council that
+    agrees to a quiet day has decided something real, and writing that as a
+    goal would have the supervisor issue grind commands for it - the opposite
+    of what was agreed.
+
+    Replaces any active goal for that character rather than stacking: the
+    family just agreed on today, and an older goal underneath would have the
+    supervisor driving yesterday's plan at the same time.
+    """
+    if plan.kind not in ("level",):
+        log.info("council: plan '%s' is not a goal the supervisor drives", plan.kind)
+        return None
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(
+            "UPDATE overseer_goal SET status = 'cancelled' "
+            "WHERE character_name = %s AND status = 'active'",
+            (plan.beneficiary,),
+        )
+        cur.execute(
+            "INSERT INTO overseer_goal (character_name, kind, target, status, channel_id) "
+            "VALUES (%s, %s, %s, 'active', %s)",
+            (plan.beneficiary, plan.kind, int(plan.target), OVERSEER_CHANNEL_ID or ""),
+        )
+        return cur.lastrowid
 
 
 def _record_goal_progress(goal_id: int, value: int, stalls: int = 0) -> None:
