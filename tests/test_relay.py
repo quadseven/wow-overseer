@@ -460,3 +460,55 @@ class OutcomeReporting(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class AddonTrafficTest(unittest.TestCase):
+    """Addon protocol rides the chat channels and reached Discord.
+
+    Sixteen rows went out to the channel before this was caught, all of the
+    shape MBOT<TAB>PING~18265384 - a multiboxing addon whispering between
+    clients. The bytes off the live table:
+
+        4D424F54 09 4745547E44455441494C53   "MBOT" TAB "GET~DETAILS"
+
+    A player cannot type that: the WoW client will not transmit a tab or any
+    other C0 byte in chat, which is what makes a control character a safe
+    signature.
+    """
+
+    def test_the_live_payload_is_recognised(self):
+        self.assertTrue(relay.is_addon_traffic("MBOT\tGET~ROSTER"))
+        self.assertTrue(relay.is_addon_traffic("MBOT\tPING~18265384"))
+
+    def test_ordinary_speech_is_never_mistaken_for_it(self):
+        for said in (
+            "I need help with my warrior quest",
+            "Wanna do Tranquillien rep grind?",
+            "another Defias Bandit bites the dust",
+            "MBOT is a great addon",          # the prefix alone is not the tell
+            "tab tab tab",
+            "",
+        ):
+            with self.subTest(said=said):
+                self.assertFalse(relay.is_addon_traffic(said))
+
+    def test_addon_rows_are_acknowledged_rather_than_posted(self):
+        """They must be marked relayed even though nothing is sent. Left
+        unrelayed they are re-read every tick, and because the relay only takes
+        the oldest MAX_LINES_PER_POST rows, a steady trickle would push real
+        speech out of the window permanently - the relay would look dead while
+        working perfectly."""
+        rows = [
+            {"id": 1, "sender_name": "Grug", "channel": "whisper", "text": "MBOT\tHELLO~1"},
+            {"id": 2, "sender_name": "Bork", "channel": "say", "text": "help me"},
+            {"id": 3, "sender_name": "Grug", "channel": "whisper", "text": "MBOT\tPING~9"},
+        ]
+        keep, drop = relay.partition_addon(rows)
+        self.assertEqual([r["id"] for r in keep], [2])
+        self.assertEqual(drop, [1, 3])
+
+    def test_nothing_is_dropped_when_there_is_no_addon_traffic(self):
+        rows = [{"id": 4, "sender_name": "Og", "channel": "say", "text": "hello"}]
+        keep, drop = relay.partition_addon(rows)
+        self.assertEqual(keep, rows)
+        self.assertEqual(drop, [])

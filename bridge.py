@@ -355,6 +355,34 @@ def _ensure_roster(names: list) -> int:
             raise
 
 
+# Everything a character says that is worth hearing. Whisper stays in despite
+# being where the addon noise arrived: bots whispering each other is exactly
+# the conversation worth watching, and relay.partition_addon removes the
+# machine traffic without removing the channel.
+WATCH_CHANNELS = "say,yell,emote,whisper,party,raid,guild,officer"
+
+
+def _ensure_chat_watch(names: list) -> int:
+    """Put the notable characters on the chat watch list.
+
+    The list was hand-populated and had exactly one name on it, so four of the
+    five family members could not be heard at all - their conversation reached
+    neither Discord nor the thought store, and nothing anywhere said so. It is
+    the same failure the roster had: a list maintained by hand beside a list
+    maintained by code, drifting quietly.
+
+    INSERT IGNORE, so a row narrowed by hand keeps its channels.
+    """
+    if not names:
+        return 0
+    with _connect() as conn, conn.cursor() as cur:
+        cur.executemany(
+            "INSERT IGNORE INTO overseer_chat_watch (name, channels) VALUES (%s, %s)",
+            [(n, WATCH_CHANNELS) for n in names],
+        )
+        return cur.rowcount or 0
+
+
 def _protected_guids() -> dict:
     """guid -> name for the characters we refuse to let be re-rolled.
 
@@ -749,6 +777,21 @@ class Bridge(discord.Client):
                 if channel is not None and reply is not None:
                     await channel.send(reply.text)
 
+    async def _retire_addon_traffic(self, rows: list) -> list:
+        """Mark addon rows relayed and return only what is worth posting.
+
+        Its own method to keep the branch out of _relay_chat, which Elder
+        already had at the complexity cap. Acknowledged rather than dropped:
+        left unrelayed they are re-read every tick, and since the relay takes
+        only the oldest MAX_LINES_PER_POST rows, a steady trickle of addon
+        whispers would push real speech out of the window for good.
+        """
+        rows, addon_ids = relay.partition_addon(rows)
+        if addon_ids:
+            await asyncio.to_thread(_mark_relayed, addon_ids)
+            log.info("chat relay: retired %d addon line(s)", len(addon_ids))
+        return rows
+
     async def _relay_chat(self) -> None:
         """Carry world chat into Discord (infra#2597).
 
@@ -796,6 +839,8 @@ class Bridge(discord.Client):
                 # Post by post, acknowledging each one on its own. Marking a
                 # whole batch after a partial failure would skip lines that
                 # never went out AND re-send the ones that did.
+                rows = await self._retire_addon_traffic(rows)
+
                 for post, ids in relay.format_batch(rows):
                     head = ids[0] if ids else 0
                     try:
@@ -848,6 +893,11 @@ class Bridge(discord.Client):
                 )
                 if added:
                     log.info("overseer_roster: added %d character(s)", added)
+                heard = await asyncio.to_thread(
+                    _ensure_chat_watch, sorted(protected.values())
+                )
+                if heard:
+                    log.info("overseer_chat_watch: added %d character(s)", heard)
                 rows = await asyncio.to_thread(_randomize_rows, list(protected))
                 now = int(time.time())
                 due = protect.rows_needing_refresh(protected, rows, now)

@@ -295,6 +295,45 @@ def format_line(row: dict) -> str:
     return f"{sender}: {text}"
 
 
+# Addon traffic carries a literal control byte as its field separator; the
+# MBOT payloads seen live are "MBOT\x09GET~ROSTER". A player cannot type one -
+# the WoW client will not transmit a tab or any other C0 byte in chat - so a
+# control character is a reliable signature for machine traffic and never
+# catches speech.
+# All C0 bytes except newline. The first cut of this skipped 0x09 - the one
+# byte the whole filter exists for - and its own test caught it.
+_CONTROL = re.compile(r"[\x00-\x09\x0b-\x1f]")
+
+
+def is_addon_traffic(text: str) -> bool:
+    """Addon protocol riding the chat channels, not something anyone said.
+
+    Multiboxing and unit-frame addons whisper structured payloads between
+    clients constantly. They are chat rows by every measure the module can
+    see, and relaying them fills the Discord channel with "MBOT PING~18265384"
+    and the thought store with sentences no character ever spoke.
+    """
+    return bool(_CONTROL.search(text or ""))
+
+
+def partition_addon(rows: list[dict]) -> tuple[list[dict], list[int]]:
+    """(rows worth posting, ids to acknowledge without posting).
+
+    Addon rows must be marked relayed even though nothing is sent. Dropping
+    them silently would leave them unrelayed forever, re-read every tick, and
+    - because the relay only takes the oldest MAX_LINES_PER_POST rows - a
+    steady trickle of addon traffic would push real speech out of the window
+    permanently. The relay would look dead while working perfectly.
+    """
+    keep, drop = [], []
+    for row in rows:
+        if is_addon_traffic(str(row.get("text", ""))):
+            drop.append(int(row["id"]))
+        else:
+            keep.append(row)
+    return keep, drop
+
+
 def format_batch(rows: list[dict]) -> list[tuple[str, list[int]]]:
     """Rows -> [(post text, the ids that post carries)].
 
