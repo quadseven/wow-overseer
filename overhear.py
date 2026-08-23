@@ -49,14 +49,25 @@ class Directive:
     text: str
 
 
-def is_addressed(row: dict, *, family) -> bool:
+def is_addressed(row: dict, *, family, authored) -> bool:
     """Was the overseer being spoken to?
 
-    Requires a HUMAN speaker on a shared channel. Being in the family matters
-    too: a passing stranger in /say is not giving Evan's orders.
+    NOT `sender_is_bot`. That was the first design and it is wrong the moment
+    selfbot is on: with SelfBotLevel 3 the AI attaches to Evan's character the
+    instant he logs in, so everything HE types comes back flagged as bot
+    speech. The listener was built on a flag an earlier change had already
+    broken - the live row read
+
+        Grug  sender_is_bot=1  party  "everyone go sell your junk and repair"
+
+    while he was sitting there typing it.
+
+    So the test is authorship instead, and it is a better one anyway: the
+    bridge knows every line it caused a character to say, because it inserted
+    the command. A family line in a shared channel that the bridge did NOT
+    author is somebody at a keyboard. That holds whether or not selfbot is on,
+    and it cannot be fooled by a character the AI happens to be driving.
     """
-    if row.get("sender_is_bot"):
-        return False
     if (row.get("channel") or "") not in HEARD_ON:
         return False
     speaker = (row.get("sender_name") or "").strip()
@@ -66,10 +77,16 @@ def is_addressed(row: dict, *, family) -> bool:
     if speaker.casefold() not in kin:
         return False
     text = (row.get("text") or "").strip()
-    return len(text.split()) >= MIN_WORDS
+    if len(text.split()) < MIN_WORDS:
+        return False
+    # Everything the bridge put in their mouths - council lines, muster
+    # reports, its own replies. Compared on the text alone: the same sentence
+    # from the same family is the bridge's own echo whoever the row names.
+    return text not in authored
 
 
-def hear(rows: list, *, family, last_at: float | None, now: float) -> Directive | None:
+def hear(rows: list, *, family, authored, last_at: float | None,
+         now: float) -> Directive | None:
     """The one order to act on from this batch, or None.
 
     The LAST qualifying line, not the first: if Evan typed twice while the
@@ -78,7 +95,7 @@ def hear(rows: list, *, family, last_at: float | None, now: float) -> Directive 
     """
     if last_at is not None and (now - last_at) < COOLDOWN_SECONDS:
         return None
-    heard = [r for r in rows if is_addressed(r, family=family)]
+    heard = [r for r in rows if is_addressed(r, family=family, authored=authored)]
     if not heard:
         return None
     row = heard[-1]

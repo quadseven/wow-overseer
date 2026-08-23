@@ -488,6 +488,25 @@ WHERE c.name IN (%s)
 """
 
 
+def _authored_lines(minutes: int = 30) -> set:
+    """Every line the bridge recently put in a character's mouth.
+
+    This is how an order is told apart from the family's own speech. The bot
+    flag cannot do it: with selfbot on, the AI attaches to Evan's character and
+    everything he types is flagged as bot speech. Authorship holds either way.
+
+    Bounded by time so the set stays small and so a sentence the family said an
+    hour ago cannot mute Evan saying the same words now.
+    """
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT command FROM overseer_command "
+            "WHERE kind = 'chat' AND created_at > NOW() - INTERVAL %s MINUTE",
+            (minutes,),
+        )
+        return {r["command"] for r in cur.fetchall()}
+
+
 def _fetch_quest_progress(names: list) -> dict:
     """name -> the quest they are closest to finishing, as a sentence.
 
@@ -1032,6 +1051,7 @@ class Bridge(discord.Client):
     async def _obey_once(self, rows: list) -> None:
         directive = overhear.hear(
             rows, family=bonds.FAMILY,
+            authored=await asyncio.to_thread(_authored_lines),
             last_at=self._last_overheard_at, now=time.monotonic(),
         )
         if directive is None:

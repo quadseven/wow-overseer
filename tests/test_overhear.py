@@ -13,6 +13,10 @@ import overhear
 
 FAMILY = bonds.FAMILY
 
+# What the bridge itself caused them to say. Anything else from the family in a
+# shared channel is somebody at a keyboard.
+AUTHORED = {"Aye.", "Then it is settled.", "Og is still 4. We should not leave them behind."}
+
 
 def _row(**over):
     row = {"sender_name": "Grug", "sender_is_bot": 0, "channel": "party",
@@ -23,28 +27,35 @@ def _row(**over):
 
 class AddressedTest(unittest.TestCase):
     def test_a_human_in_party_chat_is_giving_an_order(self):
-        self.assertTrue(overhear.is_addressed(_row(), family=FAMILY))
+        self.assertTrue(overhear.is_addressed(_row(), family=FAMILY, authored=AUTHORED))
 
     def test_the_family_talking_among_itself_is_not(self):
-        """The whole test. When the AI holds a character the row says bot; when
-        Evan holds it, it does not. Without this the council's own speech
-        becomes a stream of orders."""
-        self.assertFalse(overhear.is_addressed(_row(sender_is_bot=1), family=FAMILY))
+        """The bridge authored those lines, so they are its own echo."""
+        self.assertFalse(overhear.is_addressed(
+            _row(text="Then it is settled."), family=FAMILY, authored=AUTHORED))
+
+    def test_selfbot_does_not_silence_evan(self):
+        """The bug this replaced. With SelfBotLevel 3 the AI attaches to his
+        character on login, so everything he types comes back flagged as bot
+        speech - the live row read sender_is_bot=1 while he was sitting there
+        typing it. Authorship is the test now, and the flag is not consulted."""
+        row = _row(sender_is_bot=1, text="everyone go sell your junk and repair")
+        self.assertTrue(overhear.is_addressed(row, family=FAMILY, authored=AUTHORED))
 
     def test_a_stranger_is_not_giving_evans_orders(self):
-        self.assertFalse(overhear.is_addressed(_row(sender_name="Thrall"), family=FAMILY))
+        self.assertFalse(overhear.is_addressed(_row(sender_name="Thrall"), family=FAMILY, authored=AUTHORED))
 
     def test_a_whisper_is_between_two_people(self):
         """Fanning a private word out to five characters is not obedience, it
         is eavesdropping."""
-        self.assertFalse(overhear.is_addressed(_row(channel="whisper"), family=FAMILY))
+        self.assertFalse(overhear.is_addressed(_row(channel="whisper"), family=FAMILY, authored=AUTHORED))
 
     def test_a_single_word_is_an_exclamation_not_an_instruction(self):
-        self.assertFalse(overhear.is_addressed(_row(text="ouch"), family=FAMILY))
+        self.assertFalse(overhear.is_addressed(_row(text="ouch"), family=FAMILY, authored=AUTHORED))
 
     def test_an_empty_line_is_not_an_order(self):
         for text in ("", "   "):
-            self.assertFalse(overhear.is_addressed(_row(text=text), family=FAMILY))
+            self.assertFalse(overhear.is_addressed(_row(text=text), family=FAMILY, authored=AUTHORED))
 
 
 class HearTest(unittest.TestCase):
@@ -52,28 +63,28 @@ class HearTest(unittest.TestCase):
         """If he typed twice between ticks, the later line is the one he meant.
         Acting on the first obeys a sentence he had already replaced."""
         rows = [_row(text="everyone follow me"), _row(text="actually go sell your junk")]
-        d = overhear.hear(rows, family=FAMILY, last_at=None, now=100.0)
+        d = overhear.hear(rows, family=FAMILY, authored=AUTHORED, last_at=None, now=100.0)
         self.assertEqual(d.text, "actually go sell your junk")
 
     def test_bot_chatter_is_stepped_over_to_find_it(self):
         rows = [_row(text="go to town and sell"), _row(sender_is_bot=1, text="Aye.")]
-        d = overhear.hear(rows, family=FAMILY, last_at=None, now=100.0)
+        d = overhear.hear(rows, family=FAMILY, authored=AUTHORED, last_at=None, now=100.0)
         self.assertEqual(d.speaker, "Grug")
 
     def test_nothing_to_act_on_is_not_an_error(self):
         rows = [_row(sender_is_bot=1, text="Aye.")]
-        self.assertIsNone(overhear.hear(rows, family=FAMILY, last_at=None, now=100.0))
+        self.assertIsNone(overhear.hear(rows, family=FAMILY, authored=AUTHORED, last_at=None, now=100.0))
 
     def test_a_burst_of_typing_is_one_order_not_three(self):
         """Somebody typing three sentences of thought is having a conversation.
         Turning each line into a command would have the family thrash."""
         rows = [_row(text="everyone come here please")]
         self.assertIsNone(
-            overhear.hear(rows, family=FAMILY, last_at=100.0, now=100.0 + 1))
+            overhear.hear(rows, family=FAMILY, authored=AUTHORED, last_at=100.0, now=100.0 + 1))
 
     def test_the_cooldown_does_expire(self):
         rows = [_row(text="everyone come here please")]
-        d = overhear.hear(rows, family=FAMILY, last_at=100.0,
+        d = overhear.hear(rows, family=FAMILY, authored=AUTHORED, last_at=100.0,
                           now=100.0 + overhear.COOLDOWN_SECONDS + 1)
         self.assertIsNotNone(d)
 
@@ -113,6 +124,26 @@ class WiringTest(unittest.TestCase):
 
     def test_the_relay_listens(self):
         self.assertIn("_obey_evan_in_game", self._names("_relay_chat"))
+
+    def test_the_bridge_supplies_what_it_authored(self):
+        """authored=set() means the bridge claims to have said nothing, and its
+        own council lines become a stream of orders. A literal empty set is
+        indistinguishable from a working call at the name level, so this checks
+        the argument is a CALL."""
+        import ast
+
+        fn = next(n for n in self.ast.walk(self.tree)
+                  if isinstance(n, self.ast.AsyncFunctionDef) and n.name == "_obey_once")
+        call = next(n for n in self.ast.walk(fn)
+                    if isinstance(n, ast.Call)
+                    and getattr(n.func, "attr", None) == "hear")
+        authored = next(k.value for k in call.keywords if k.arg == "authored")
+        # Not a type check: `set()` parses as a Call and sailed through one.
+        # The argument has to actually reach for the reader.
+        inner = {n.id for n in ast.walk(authored) if isinstance(n, ast.Name)}
+        self.assertIn("_authored_lines", inner,
+                      "authored= does not read what the bridge said, so the "
+                      "family's own speech will be obeyed as orders")
 
     def test_it_hears_and_it_acts(self):
         names = self._names("_obey_once")
