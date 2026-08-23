@@ -73,6 +73,11 @@ class Member:
     class_name: str
     gold: int = 0
     trades: int = 0
+    # What this character is part-way through. PRIVATE, like gold and trades -
+    # a quest log is not something you read off a portrait. Only ever the
+    # assessing member's own.
+    quest: str = ""
+    quest_left: int = 0
 
 
 @dataclass(frozen=True)
@@ -151,6 +156,20 @@ def assess(me: Member, *, public_levels: dict) -> Proposal | None:
                 weight=100 - level,
                 said=f"{who} is still {level}. We should not leave them behind.",
             )
+
+    # What they are actually doing outranks what they might do. The family was
+    # holding conversations about levels while stood in a field killing
+    # murlocs, because levels were the only thing the council could see.
+    if me.quest:
+        return Proposal(
+            proposer=me.name, kind="quest", beneficiary=me.name,
+            target=me.quest_left,
+            # Above trades and coin, below rescuing someone left behind. A
+            # half-finished quest is the most concrete thing anyone at the
+            # table has, and finishing it is cheap.
+            weight=60,
+            said=me.quest,
+        )
 
     if me.trades < TRADES_EXPECTED:
         return Proposal(

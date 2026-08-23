@@ -29,6 +29,7 @@ import bonds
 import kin
 import persona
 import protect
+import quests
 import relay
 import voice
 from transform import Geometry
@@ -461,6 +462,61 @@ def _ensure_chat_watch(names: list) -> int:
         return cur.rowcount or 0
 
 
+# Quest progress, joined to the names a character would actually say. The
+# creature and item lookups are LEFT JOINs on purpose: a missing name yields a
+# vaguer sentence, never a dropped quest.
+_QUEST_SQL = """
+SELECT c.name AS character_name, q.quest,
+       q.mobcount1, q.mobcount2, q.mobcount3, q.mobcount4,
+       q.itemcount1, q.itemcount2, q.itemcount3, q.itemcount4,
+       t.LogTitle,
+       t.RequiredNpcOrGoCount1, t.RequiredNpcOrGoCount2,
+       t.RequiredNpcOrGoCount3, t.RequiredNpcOrGoCount4,
+       t.RequiredItemCount1, t.RequiredItemCount2,
+       t.RequiredItemCount3, t.RequiredItemCount4,
+       n1.name AS npc_name1, n2.name AS npc_name2,
+       i1.name AS item_name1, i2.name AS item_name2
+FROM character_queststatus q
+JOIN characters c              ON c.guid = q.guid
+JOIN acore_world.quest_template t ON t.ID = q.quest
+LEFT JOIN acore_world.creature_template n1 ON n1.entry = t.RequiredNpcOrGo1
+LEFT JOIN acore_world.creature_template n2 ON n2.entry = t.RequiredNpcOrGo2
+LEFT JOIN acore_world.item_template i1     ON i1.entry = t.RequiredItemId1
+LEFT JOIN acore_world.item_template i2     ON i2.entry = t.RequiredItemId2
+WHERE c.name IN (%s)
+"""
+
+
+def _fetch_quest_progress(names: list) -> dict:
+    """name -> the quest they are closest to finishing, as a sentence.
+
+    Bounded by the roster, and every number in the sentence comes from a row.
+    A character inventing its own progress is a character the overseer can no
+    longer be believed about, which is worth more than a livelier line.
+    """
+    if not names:
+        return {}
+    placeholders = ",".join(["%s"] * len(names))
+    sql = _QUEST_SQL % placeholders  # noqa: S608
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(sql, names)
+        rows = cur.fetchall()
+
+    by_name: dict = {}
+    for row in rows:
+        progress = quests.read(row, row)
+        if progress is None:
+            continue
+        by_name.setdefault(progress.character, []).append(progress)
+
+    out: dict = {}
+    for name, progress in by_name.items():
+        chosen = quests.focus(progress)
+        if chosen is not None:
+            out[name] = (quests.say_remaining(chosen), chosen.left)
+    return out
+
+
 _COUNCIL_MEMBER_SQL = (
     "SELECT c.name, c.class, c.money, "
     "       (SELECT COUNT(*) FROM character_skills k WHERE k.guid = c.guid) AS trades, "
@@ -499,6 +555,7 @@ def _fetch_council_members(names: list) -> list:
         )
         rows = cur.fetchall()
 
+    progress = _fetch_quest_progress(names)
     members = []
     for row in rows:
         level = row.get("live_level")
@@ -507,6 +564,7 @@ def _fetch_council_members(names: list) -> list:
             # not at the table; guessing their level from a stale row is how a
             # council decides to help someone who already caught up.
             continue
+        said, left = progress.get(row["name"], ("", 0))
         members.append(
             council.Member(
                 name=row["name"],
@@ -514,6 +572,8 @@ def _fetch_council_members(names: list) -> list:
                 class_name=CLASS_NAMES.get(row["class"], "adventurer"),
                 gold=int(row["money"] or 0),
                 trades=int(row["trades"] or 0),
+                quest=said,
+                quest_left=left,
             )
         )
     return members
