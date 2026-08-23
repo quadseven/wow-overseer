@@ -207,6 +207,46 @@ def strategy_for(goal: Mapping) -> str:
 # Bork had both and was the only character in the family with a quest log.
 LIFE_STRATEGY = "nc +new rpg"
 
+# Self-preservation. FleeStrategy gives `panic` and `critical health`, neither
+# of which any of them had - AiFactory adds `flee` for nobody, random bot or
+# not, so it is opt-in through a command or it does not exist.
+#
+# Do not expect miracles: `outnumbered` is an upstream no-op (GenericTriggers
+# assigns foePower inside the attacker loop instead of accumulating it, so only
+# the last attacker counts), and FleeAction backs up FleeDistance yards rather
+# than escaping. It is still the difference between dying at 20 percent and
+# dying at 0.
+FLEE_STRATEGY = "co +flee"
+
+
+def life_strategies(*, leads: bool) -> list:
+    """What keeps this character playing, given whether it leads the party.
+
+    ONE character travels and the rest follow. That asymmetry is the whole
+    point, and it is why this is a function rather than a constant.
+
+    `follow` was inert for every one of them. It resolves through a formation
+    value, the value was `chaos`, and ChaosFormation::GetLocation() opens with
+    GetMaster() - which is null for a party of masterless bots. So it returned
+    no location and FollowAction reported itself useless. They had followed
+    nobody, ever.
+
+    Even repaired it would have lost: `follow` runs at relevance 1.0 while
+    `new rpg`'s actions run 3.0 to 11.0, so a follower given both wanders every
+    single tick. Taking `new rpg` OFF the followers is what lets following
+    happen at all - measured live, the family went from a 937-yard spread to
+    four of them standing within three yards of each other.
+
+    The cost of getting this wrong the other way is the thing Evan actually
+    complained about: the healer 600 yards away in her own fight, three fights
+    in three sub-zones, and Grug charging three mobs with nobody to heal him.
+    """
+    if leads:
+        return [LIFE_STRATEGY, strategy_for({"kind": "level"}), FLEE_STRATEGY]
+    # Order matters: drop the wander before asking them to follow, so there is
+    # no tick where both are set and the follower drifts off again.
+    return ["nc -new rpg", "nc +follow", FLEE_STRATEGY]
+
 
 def already_working(kind: str, target: int, active: list) -> bool:
     """Is this character already pursuing exactly this goal?

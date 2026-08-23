@@ -408,3 +408,58 @@ class DuplicateGoalTest(unittest.TestCase):
         """MySQL hands back what the column type gives; the rule must not
         depend on which."""
         self.assertTrue(goals.already_working("level", 7, [{"kind": "level", "target": "7"}]))
+
+
+class PartyThatTravelsTest(unittest.TestCase):
+    """One character travels and the rest follow.
+
+    `follow` was inert for all five: it resolves through a formation value set
+    to `chaos`, and ChaosFormation::GetLocation() opens with GetMaster(), which
+    is null for a party of masterless bots. They had followed nobody, ever.
+
+    Even repaired it loses - `follow` runs at relevance 1.0 while `new rpg`'s
+    actions run 3.0 to 11.0. Taking the wander OFF the followers is what makes
+    following possible. Measured live: a 937-yard spread became four of them
+    standing within three yards.
+    """
+
+    def test_the_leader_travels(self):
+        self.assertIn(goals.LIFE_STRATEGY, goals.life_strategies(leads=True))
+
+    def test_a_follower_does_not(self):
+        """The whole fix. A follower given the wander strategy outranks its own
+        follow every tick and drifts off alone."""
+        self.assertNotIn(goals.LIFE_STRATEGY, goals.life_strategies(leads=False))
+        self.assertIn("nc -new rpg", goals.life_strategies(leads=False))
+
+    def test_a_follower_is_told_to_follow(self):
+        self.assertTrue(any("+follow" in c for c in goals.life_strategies(leads=False)))
+
+    def test_the_wander_is_dropped_before_the_follow_is_asked_for(self):
+        """Otherwise there is a tick where both are set and the follower is
+        gone again."""
+        cmds = goals.life_strategies(leads=False)
+        self.assertLess(cmds.index("nc -new rpg"),
+                        next(i for i, c in enumerate(cmds) if "+follow" in c))
+
+    def test_fleeing_is_a_combat_strategy(self):
+        """FleeStrategy's triggers are panic and critical health - combat
+        states. On the non-combat engine it reaches something that never sees
+        them, which is the `co +grind` mistake with the channels swapped."""
+        self.assertTrue(goals.FLEE_STRATEGY.startswith("co "), goals.FLEE_STRATEGY)
+
+    def test_everyone_gets_self_preservation(self):
+        """AiFactory adds `flee` for nobody, random bot or not. Without it they
+        fight to zero every time."""
+        for leads in (True, False):
+            with self.subTest(leads=leads):
+                self.assertIn(goals.FLEE_STRATEGY, goals.life_strategies(leads=leads))
+
+    def test_every_command_reaches_an_engine_that_can_act(self):
+        """The `co +grind` lesson: a command on the wrong channel is delivered
+        cleanly and does nothing."""
+        for leads in (True, False):
+            for cmd in goals.life_strategies(leads=leads):
+                verb, _, rest = cmd.partition(" ")
+                self.assertIn(verb, ("nc", "co"), cmd)
+                self.assertTrue(rest.startswith(("+", "-")), cmd)

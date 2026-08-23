@@ -430,8 +430,13 @@ def _give_them_a_life(names: list) -> int:
     Idempotent at the game's end: adding a strategy already present is a no-op.
     """
     driven = _bot_held_names(names)
+    head = bonds.head_of_family()
     for name in driven:
-        _insert_command(core.InsertCommand(name, goals.LIFE_STRATEGY, "overseer:life"))
+        # One travels, the rest follow. Giving everyone the wander strategy is
+        # what scattered them across a thousand yards with the healer in her
+        # own fight - see goals.life_strategies for why follow loses to it.
+        for command in goals.life_strategies(leads=(name == head)):
+            _insert_command(core.InsertCommand(name, command, "overseer:life"))
     return len(driven)
 
 

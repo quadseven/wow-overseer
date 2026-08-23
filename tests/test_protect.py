@@ -127,6 +127,35 @@ class RosterWiringTest(unittest.TestCase):
         names = {n.id for n in ast.walk(fn) if isinstance(n, ast.Name)}
         self.assertIn("_bot_held_names", names)
 
+    def test_only_one_character_is_given_the_travelling_strategy(self):
+        """Everyone travelling is what scattered them. The leader travels; the
+        rest follow him."""
+        import ast
+        import pathlib
+
+        src = (pathlib.Path(__file__).resolve().parent.parent / "bridge.py").read_text()
+        fn = next(n for n in ast.walk(ast.parse(src))
+                  if isinstance(n, ast.FunctionDef) and n.name == "_give_them_a_life")
+        names = {n.id for n in ast.walk(fn) if isinstance(n, ast.Name)} | {
+            n.attr for n in ast.walk(fn) if isinstance(n, ast.Attribute)}
+        self.assertIn("life_strategies", names)
+        self.assertIn("head_of_family", names)
+
+        # And that `leads` is DECIDED per character rather than passed a
+        # literal. Checking the names alone let a mutant through that gave
+        # every character the leader's set - which is the scattering bug
+        # restored in full.
+        call = next(
+            n for n in ast.walk(fn)
+            if isinstance(n, ast.Call)
+            and getattr(n.func, "attr", None) == "life_strategies"
+        )
+        leads = next(k.value for k in call.keywords if k.arg == "leads")
+        self.assertIsInstance(
+            leads, ast.Compare,
+            "leads= is a constant, so every character gets the same strategies",
+        )
+
     def test_the_roster_comes_from_the_same_list_as_the_protection(self):
         """Two lists drift, and both failures are quiet: protected but not
         rostered never appears, rostered but not protected gets re-rolled."""
