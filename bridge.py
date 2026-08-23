@@ -24,6 +24,7 @@ import core
 import events
 import fanout
 import goals
+import kin
 import protect
 import relay
 import voice
@@ -412,6 +413,10 @@ class Bridge(discord.Client):
         self._seen: set[int] = set()
         # (oldest row id, consecutive send failures) for the chat relay.
         self._stuck: tuple[int, int] = (0, 0)
+        # Monotonic clock of the last kin muster, so a fight that produces
+        # several pleas answers once. None means "never" - deliberately not 0.0,
+        # which on a monotonic clock is a real moment the process may be near.
+        self._last_muster_at: float | None = None
 
     async def setup_hook(self) -> None:
         asyncio.create_task(self._poll_outcomes())
@@ -518,6 +523,112 @@ class Bridge(discord.Client):
         self._pending[row_id] = channel
         await channel.send(f"{decision.say}  [{decision.command}]")
 
+    async def _answer_pleas(self, rows: list[dict], channel) -> None:
+        """Answer a call for help, and never let doing so break the relay.
+
+        The guard lives here rather than at the call site so `_relay_chat`
+        keeps one branch fewer - it was already at Elder's cyclomatic cap.
+        Swallowing is deliberate and total: every failure inside is logged,
+        and chat relaying must continue regardless.
+        """
+        try:
+            await self._muster_for_pleas(rows, channel)
+        except Exception:
+            log.exception("kin muster failed; chat relay continues")
+
+    async def _muster_for_pleas(self, rows: list[dict], channel) -> None:
+        """Read the lines the relay just fetched; answer any call for help.
+
+        Runs over the SAME rows the relay is about to post, so a muster cannot
+        answer a plea the channel never saw, and cannot answer one twice - the
+        relay marks those ids relayed immediately afterwards.
+
+        Only bot speech is considered. A human typing "help me" in game is
+        talking to a person, and pulling four characters off their quests for
+        it would be a surprise, not a feature.
+        """
+        pleas = [
+            p
+            for row in rows
+            if row.get("sender_is_bot")
+            for p in (kin.parse_plea(row.get("sender_name") or "", row.get("text") or ""),)
+            if p is not None
+        ]
+        if not pleas:
+            return
+
+        # Cooldown first, roster once. Both were per-row and the roster fetch
+        # came BEFORE the cooldown test, so a burst paid N serial pymysql
+        # connects to then refuse N-1 of them - all of it in front of the chat
+        # relay, which this code calls the product.
+        if (
+            self._last_muster_at is not None
+            and (time.monotonic() - self._last_muster_at) < kin.COOLDOWN_SECONDS
+        ):
+            log.info("kin muster: cooldown, %d plea(s) ignored", len(pleas))
+            return
+
+        roster = await asyncio.to_thread(_fetch_roster)
+        plea = pleas[0]
+        muster = kin.plan_muster(
+            plea, roster, last_muster_at=self._last_muster_at, now=time.monotonic()
+        )
+
+        if not muster.actions:
+            # Refusals are logged, never posted. fanout reports its refusals
+            # because a human typed the order and is owed an answer; a plea is
+            # emitted by autonomous characters, so a posted refusal per plea is
+            # unbounded channel noise nobody asked for.
+            log.info("kin muster refused: %s", muster.reason)
+            return
+
+        # Stamp BEFORE issuing: at-most-once matters more than at-least-once
+        # when the cost of a double is pulling the family off their quests
+        # twice. The partial-muster risk that creates is handled by counting
+        # what actually landed, below, rather than by assuming it all did.
+        self._last_muster_at = time.monotonic()
+        written = 0
+        for action in muster.actions:
+            try:
+                await asyncio.to_thread(
+                    _insert_command,
+                    core.InsertCommand(
+                        action.character_name, action.command, f"kin:{plea.caller}"
+                    ),
+                )
+                await asyncio.to_thread(
+                    _insert_thought,
+                    action.character_name,
+                    "reflection",
+                    muster.responder_memories[action.character_name],
+                )
+                written += 1
+            except Exception:
+                # Same shape as _muster: one bad row must not cost the rest,
+                # and the report must describe what landed. A report that
+                # over-claims would make the channel lie about the world.
+                log.exception("kin muster insert failed for %s", action.character_name)
+        try:
+            await asyncio.to_thread(
+                _insert_thought, plea.caller, "reflection", muster.caller_memory
+            )
+        except Exception:
+            log.exception("kin caller memory insert failed for %s", plea.caller)
+
+        log.info("kin muster: %s (%d of %d written)", muster.reason, written,
+                 len(muster.actions))
+        if channel is not None and written:
+            # sanitize + clamp, exactly like every other world-text path here:
+            # plea.about is untrusted (LLM-written or typed by any character),
+            # and AllowedMentions.none() is only the first defence.
+            report = relay.sanitize(kin.muster_report(muster, plea))[:1990]
+            try:
+                await channel.send(report)
+            except Exception:
+                # Commands are written and memories stored; a missing Discord
+                # line must not undo the help.
+                log.exception("kin muster report send failed")
+
     async def _poll_outcomes(self) -> None:
         await self.wait_until_ready()
         while not self.is_closed():
@@ -579,6 +690,13 @@ class Bridge(discord.Client):
                     # fixing the id or the invite recovers the conversation.
                     log.warning("chat relay channel %s is not visible", channel_id)
                     continue
+                # A call for help is answered BEFORE the batch is posted, so
+                # the muster line lands next to the plea rather than a tick
+                # later. _answer_pleas swallows its own failures by contract -
+                # chat is the product, help is a bonus on top of it - which
+                # also keeps this function under Elder's complexity cap.
+                await self._answer_pleas(rows, channel)
+
                 # Post by post, acknowledging each one on its own. Marking a
                 # whole batch after a partial failure would skip lines that
                 # never went out AND re-send the ones that did.
