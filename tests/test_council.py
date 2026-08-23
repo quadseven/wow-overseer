@@ -212,6 +212,23 @@ class WiringTest(unittest.TestCase):
         # let a mutant that passed None straight through.
         self.assertIn("SpeakCommand", names)
 
+    def test_a_council_is_held_where_the_family_can_actually_hear_it(self):
+        """/say carries about 25 yards and they grind in different zones. The
+        first live council went out on say: every captured line came back with
+        heard_by equal to sender_name - five characters talking to themselves
+        while Discord showed a conversation that never happened."""
+        import ast
+        import pathlib
+
+        src = (pathlib.Path(__file__).resolve().parent.parent / "bridge.py").read_text()
+        fn = next(n for n in ast.walk(ast.parse(src))
+                  if isinstance(n, ast.AsyncFunctionDef) and n.name == "_council_once")
+        channels = [n.value for n in ast.walk(fn)
+                    if isinstance(n, ast.Constant) and n.value in ("say", "yell", "party", "raid")]
+        self.assertIn("party", channels)
+        self.assertNotIn("say", channels,
+                         "a council on /say is only heard by whoever stands next to the speaker")
+
     def test_a_council_remembers_what_it_argued(self):
         self.assertIn("_insert_thought", self._names_in("_council_once"))
 

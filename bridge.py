@@ -979,9 +979,16 @@ class Bridge(discord.Client):
 
         for line in held.lines:
             speaker, _, text = line.partition(": ")
+            # PARTY, not say. /say carries about 25 yards and the family grinds
+            # in different zones, so the first council was five characters
+            # talking to themselves in empty air - every captured line came
+            # back with heard_by equal to sender_name while Discord showed a
+            # conversation that never happened. Party chat has no range, and
+            # when there is no party the module answers "not in a group",
+            # which is a loud failure instead of a convincing one.
             await asyncio.to_thread(
                 _insert_speak,
-                relay.SpeakCommand(speaker, "say", text, "", "overseer:council"),
+                relay.SpeakCommand(speaker, "party", text, "", "overseer:council"),
             )
             await asyncio.to_thread(_insert_thought, speaker, "reflection", text)
 
