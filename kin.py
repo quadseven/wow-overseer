@@ -28,6 +28,7 @@ small and every entry is asserted against voice.VOCABULARY by the tests.
 from __future__ import annotations
 
 import re
+from collections.abc import Collection
 from dataclasses import dataclass, field
 
 import voice
@@ -153,7 +154,7 @@ def parse_plea(speaker: str, text: str) -> Plea | None:
     return Plea(caller=speaker, about=about)
 
 
-def _memory_about(about: str) -> str:
+def memory_about(about: str) -> str:
     return f" with {about}" if about else ""
 
 
@@ -161,6 +162,7 @@ def plan_muster(
     plea: Plea,
     roster: list[dict],
     *,
+    family: Collection[str],
     last_muster_at: float | None,
     now: float,
 ) -> Muster:
@@ -182,9 +184,17 @@ def plan_muster(
     bot AI"` for a character with no PlayerbotAI - a guaranteed error row, and
     a Discord line claiming help that never came.
 
-    Family is scoped by GUILD. A caller with no guild musters nobody rather
-    than falling back to "everyone", because the safe failure here is silence:
-    a realm-wide muster is exactly the outcome worth never risking.
+    Family is an EXPLICIT SET OF NAMES, passed in by the caller. It was guild
+    membership until the five characters actually existed and turned out to
+    have no guild - at level 1 a WoW guild needs signatures, so scoping by one
+    made the feature depend on an unrelated in-game chore. A named set is also
+    simply more honest: the family IS five specific characters, not whoever
+    shares a tabard, and `bonds.FAMILY` already had to define exactly that list
+    to have opinions about them.
+
+    An empty family musters nobody rather than falling back to "everyone",
+    because the safe failure here is silence: a realm-wide muster is the one
+    outcome worth never risking.
     """
     by_name = {r.get("name"): r for r in roster if r.get("name")}
     caller_row = by_name.get(plea.caller)
@@ -195,15 +205,15 @@ def plan_muster(
         left = int(COOLDOWN_SECONDS - (now - last_muster_at))
         return Muster(reason=f"the family answered a call {left}s ago - cooldown")
 
-    guild_id = caller_row.get("guild_id") or 0
-    if not guild_id:
-        return Muster(reason=f"{plea.caller} has no guild - no family to call")
+    kin_names = {n.casefold() for n in family}
+    if plea.caller.casefold() not in kin_names:
+        return Muster(reason=f"{plea.caller} is not family - no one to call")
 
     # Sorted, so a plan is reproducible and a test can assert an order.
     others = sorted(
         n
         for n, r in by_name.items()
-        if n != plea.caller and r.get("is_bot") and (r.get("guild_id") or 0) == guild_id
+        if n != plea.caller and r.get("is_bot") and n.casefold() in kin_names
     )
     if not others:
         return Muster(reason=f"{plea.caller} is alone - nobody is online to answer")
@@ -213,10 +223,10 @@ def plan_muster(
 
     helpers = ", ".join(responders)
     caller_memory = (
-        f"I called for help{_memory_about(plea.about)} and {helpers} regrouped."
+        f"I called for help{memory_about(plea.about)} and {helpers} regrouped."
     )
     responder_memories = {
-        n: f"{plea.caller} called for help{_memory_about(plea.about)}. I regrouped."
+        n: f"{plea.caller} called for help{memory_about(plea.about)}. I regrouped."
         for n in responders
     }
     return Muster(
@@ -232,5 +242,5 @@ def muster_report(m: Muster, plea: Plea) -> str:
     if not m.actions:
         return f"**{plea.caller}** called for help - {m.reason}."
     who = ", ".join(a.character_name for a in m.actions)
-    about = _memory_about(plea.about)
+    about = memory_about(plea.about)
     return f"**{plea.caller}** called for help{about} - {who} regrouped ({MUSTER_COMMAND})."

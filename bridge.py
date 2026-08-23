@@ -24,6 +24,7 @@ import core
 import events
 import fanout
 import goals
+import bonds
 import kin
 import protect
 import relay
@@ -205,9 +206,25 @@ def _ensure_thought_store() -> None:
             " source ENUM('command','chat','goal','event','reflection') NOT NULL,"
             " text VARCHAR(2000) NOT NULL,"
             " created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,"
-            " PRIMARY KEY (id), KEY idx_char (character_name, id)"
+            " PRIMARY KEY (id), KEY idx_char (character_name, id),"
+            " KEY idx_source (source, id)"
             ") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4"
         )
+        # CREATE TABLE IF NOT EXISTS is a no-op on the table that already
+        # exists in the live DB, so the index above would never reach it.
+        # MySQL has no CREATE INDEX IF NOT EXISTS, hence the lookup; without
+        # it _fetch_reflections walks the primary key backwards past every
+        # command/chat/goal/event row, and reflection rows are the sparse
+        # ones - the scan lengthens as the store grows, on the chat relay's
+        # own path.
+        cur.execute(
+            "SELECT COUNT(*) AS n FROM information_schema.STATISTICS "
+            "WHERE table_schema = DATABASE() AND table_name = 'overseer_thought' "
+            "  AND index_name = 'idx_source'"
+        )
+        if not (cur.fetchone() or {}).get("n"):
+            cur.execute("ALTER TABLE overseer_thought ADD KEY idx_source (source, id)")
+            log.info("overseer_thought: added idx_source")
 
 
 def _insert_thought(name: str, source: str, text: str) -> None:
@@ -216,6 +233,34 @@ def _insert_thought(name: str, source: str, text: str) -> None:
             "INSERT INTO overseer_thought (character_name, source, text) VALUES (%s, %s, %s)",
             (name, source, text[:2000]),
         )
+
+
+# Grug sulking is a mood, not a life sentence. The window is a CLOCK, not a
+# row count: a row-count window only advances when rows are written, and a
+# muster that everyone refuses writes none - so the family could reach a state
+# where nobody comes, which then produced no memories, which kept nobody
+# coming. Deadlock, and silent, since refusals only ever hit the log. Six
+# hours means the counts drain on their own whether or not anyone helps.
+REFLECTION_WINDOW_HOURS = 6
+REFLECTION_WINDOW_MAX = 400
+
+
+def _fetch_reflections() -> list[dict]:
+    """The recent `reflection` rows bonds judges on, oldest first.
+
+    ORDER BY id DESC then reverse: a plain ASC LIMIT would pin the window to
+    the oldest rows in the table and never move. The LIMIT is a backstop on a
+    busy stream, not the window itself.
+    """
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT character_name, text FROM overseer_thought "
+            "WHERE source = 'reflection' "
+            "  AND created_at > NOW() - INTERVAL %s HOUR "
+            "ORDER BY id DESC LIMIT %s",
+            (REFLECTION_WINDOW_HOURS, REFLECTION_WINDOW_MAX),
+        )
+        return list(reversed(cur.fetchall()))
 
 
 def _fetch_grounding(name: str) -> dict | None:
@@ -571,8 +616,24 @@ class Bridge(discord.Client):
         roster = await asyncio.to_thread(_fetch_roster)
         plea = pleas[0]
         muster = kin.plan_muster(
-            plea, roster, last_muster_at=self._last_muster_at, now=time.monotonic()
+            plea,
+            roster,
+            family=bonds.FAMILY,
+            last_muster_at=self._last_muster_at,
+            now=time.monotonic(),
         )
+        # kin decides who CAN come; bonds decides who WILL. Split on purpose:
+        # kin is about the realm (is this one of ours, are they alive, are we
+        # in cooldown) and bonds is about the family (Grug always goes, unless
+        # Og has been playing husband; Bork gets helped less the more he asks).
+        rows = await asyncio.to_thread(_fetch_reflections)
+        history = bonds.history_from_thoughts(rows)
+        # Both numbers, always. history_from_thoughts skips a row it cannot
+        # parse, so if kin's memory wording ever drifts from the regex, every
+        # bond rule quietly passes and every muster looks perfectly healthy.
+        # Rows arriving while pairs sit at zero is the only visible symptom.
+        log.info("kin history: %d row(s) -> %d pair(s)", len(rows), len(history))
+        muster = bonds.apply(muster, plea, history=history)
 
         if not muster.actions:
             # Refusals are logged, never posted. fanout reports its refusals
