@@ -363,6 +363,26 @@ def _ensure_roster(names: list) -> int:
 WATCH_CHANNELS = "say,yell,emote,whisper,party,raid,guild,officer"
 
 
+def _give_them_a_life(names: list) -> int:
+    """Keep every family member on the strategy that makes them live.
+
+    Re-issued on the roster cadence rather than once, for the same reason the
+    goal supervisor re-asserts: PlayerbotAI::ResetStrategies runs on login and
+    rebuilds from defaults, and every autonomous default is gated behind
+    IsRandomBot(), false for named characters. After the last worldserver
+    restart only the one character with an active goal got a strategy back.
+    The other four stood in a huddle in Northshire and nothing anywhere said
+    so - their levels simply stopped moving.
+
+    Idempotent at the game's end: adding a strategy already present is a no-op.
+    """
+    if not names:
+        return 0
+    for name in names:
+        _insert_command(core.InsertCommand(name, goals.LIFE_STRATEGY, "overseer:life"))
+    return len(names)
+
+
 def _ensure_chat_watch(names: list) -> int:
     """Put the notable characters on the chat watch list.
 
@@ -1040,6 +1060,7 @@ class Bridge(discord.Client):
                 )
                 if heard:
                     log.info("overseer_chat_watch: added %d character(s)", heard)
+                await asyncio.to_thread(_give_them_a_life, sorted(protected.values()))
 
                 # mod-overseer forms the party from whoever is online, in name
                 # order, so the leader lands on whoever sorts first - which put
@@ -1422,6 +1443,23 @@ def _persist_council_plan(plan) -> int | None:
         log.info("council: plan '%s' is not a goal the supervisor drives", plan.kind)
         return None
     with _connect() as conn, conn.cursor() as cur:
+        # An identical goal already being worked is LEFT ALONE. The council
+        # meets hourly and keeps reaching the same conclusion while the work is
+        # still in progress, so replacing it wiped last_report every hour: the
+        # progress record restarted, and with it the stall counter that
+        # re-issues a lost strategy. Four cancelled duplicates of one goal sat
+        # in the table before this was noticed, and the supervisor never once
+        # got far enough to re-assert.
+        cur.execute(
+            "SELECT kind, target FROM overseer_goal "
+            "WHERE character_name = %s AND status = 'active'",
+            (plan.beneficiary,),
+        )
+        if goals.already_working(plan.kind, int(plan.target), list(cur.fetchall())):
+            log.info("council: %s is already working towards %s %d",
+                     plan.beneficiary, plan.kind, int(plan.target))
+            return None
+
         cur.execute(
             "UPDATE overseer_goal SET status = 'cancelled' "
             "WHERE character_name = %s AND status = 'active'",

@@ -192,6 +192,39 @@ def strategy_for(goal: Mapping) -> str:
     return "nc +grind"
 
 
+# The strategy that gives a character a LIFE rather than a task. `grind` means
+# "kill what is in front of you", which is why it worked at level 1 in a
+# starting zone and stopped working at level 7: nothing moves these characters
+# to level-appropriate content, because RandomPlayerbotMgr's teleporting only
+# ever applies to bots in its own pool and named characters are not in it.
+#
+# Measured live, same spot, 150 seconds, one on each strategy:
+#
+#     Grog  'new rpg'  -8800 -> -8924   travelled 124 yards
+#     Ugga  'grind'    -8800 -> -8797   moved 3
+#
+# `new rpg` travels, takes quests and visits vendors, and the two coexist:
+# Bork had both and was the only character in the family with a quest log.
+LIFE_STRATEGY = "nc +new rpg"
+
+
+def already_working(kind: str, target: int, active: list) -> bool:
+    """Is this character already pursuing exactly this goal?
+
+    A function rather than a check at the call site so the rule can be tested
+    on its own. The council meets hourly and keeps reaching the same conclusion
+    while the work is still in progress; replacing the goal each time wiped
+    last_report, restarting the progress record AND the stall counter that
+    re-issues a lost strategy. Four cancelled duplicates of one goal sat in the
+    table before it was noticed, and the supervisor never once got far enough
+    to re-assert.
+    """
+    return any(
+        row.get("kind") == kind and int(row.get("target", -1)) == int(target)
+        for row in active
+    )
+
+
 def _describe(kind: str, skill_name: str | None, target: int) -> str:
     if kind == "skill":
         return f"{skill_name} {target}"

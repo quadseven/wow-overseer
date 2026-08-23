@@ -107,6 +107,12 @@ class RosterWiringTest(unittest.TestCase):
             "nothing seeds overseer_roster, so mod-overseer logs nobody in",
         )
 
+    def test_every_family_member_is_kept_on_a_living_strategy(self):
+        """Only the character with an active goal got a strategy back after the
+        last worldserver restart. The other four stood still and their levels
+        stopped moving, with nothing anywhere reporting it."""
+        self.assertIn("_give_them_a_life", self.called)
+
     def test_the_roster_comes_from_the_same_list_as_the_protection(self):
         """Two lists drift, and both failures are quiet: protected but not
         rostered never appears, rostered but not protected gets re-rolled."""

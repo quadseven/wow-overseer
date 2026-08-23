@@ -351,3 +351,60 @@ class StrategyChannelTest(unittest.TestCase):
         self.assertIn(verb, ("nc", "co"))
         self.assertTrue(rest.startswith(("+", "-", "~", "!", "?")),
                         "strategy changes are sign-prefixed: %r" % cmd)
+
+
+class LifeStrategyTest(unittest.TestCase):
+    """They stopped working and nothing said so.
+
+    `grind` means "kill what is in front of you". It worked at level 1 in a
+    starting zone and stopped at level 7, because nothing moves these
+    characters to level-appropriate content - RandomPlayerbotMgr's teleporting
+    only applies to bots in its own pool, and named characters are not in it.
+
+    Measured live, same spot, 150 seconds, one on each strategy:
+
+        Grog  'new rpg'  -8800 -> -8924   travelled 124 yards
+        Ugga  'grind'    -8800 -> -8797   moved 3
+    """
+
+    def test_the_life_strategy_is_not_the_grind_strategy(self):
+        self.assertNotEqual(goals.LIFE_STRATEGY, goals.strategy_for(make_row()))
+
+    def test_it_goes_down_the_non_combat_channel_too(self):
+        """Same trap as the goal strategy: the combat channel reaches an engine
+        that cannot move the character."""
+        self.assertTrue(goals.LIFE_STRATEGY.startswith("nc "))
+
+    def test_it_adds_a_strategy_rather_than_replacing_the_set(self):
+        """A bare or '!' prefixed command resets strategies, which would strip
+        whatever the goal supervisor had just asked for."""
+        _, _, rest = goals.LIFE_STRATEGY.partition(" ")
+        self.assertTrue(rest.startswith("+"), goals.LIFE_STRATEGY)
+
+
+class DuplicateGoalTest(unittest.TestCase):
+    """The council meets hourly and keeps reaching the same conclusion while
+    the work is still in progress. Replacing the goal each time wiped
+    last_report - restarting the progress record and the stall counter that
+    re-issues a lost strategy - so the supervisor never got far enough to
+    re-assert anything."""
+
+    def test_an_identical_goal_in_progress_is_recognised(self):
+        active = [{"kind": "level", "target": 7}]
+        self.assertTrue(goals.already_working("level", 7, active))
+
+    def test_a_different_target_is_a_different_goal(self):
+        active = [{"kind": "level", "target": 7}]
+        self.assertFalse(goals.already_working("level", 9, active))
+
+    def test_a_different_kind_is_a_different_goal(self):
+        active = [{"kind": "skill", "target": 7}]
+        self.assertFalse(goals.already_working("level", 7, active))
+
+    def test_no_active_goal_means_nothing_to_duplicate(self):
+        self.assertFalse(goals.already_working("level", 7, []))
+
+    def test_a_target_stored_as_text_still_matches(self):
+        """MySQL hands back what the column type gives; the rule must not
+        depend on which."""
+        self.assertTrue(goals.already_working("level", 7, [{"kind": "level", "target": "7"}]))
