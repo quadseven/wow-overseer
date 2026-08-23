@@ -160,3 +160,45 @@ class RosterManifestTest(unittest.TestCase):
         notable = {n.strip().casefold() for n in m.group(1).split(",") if n.strip()}
         missing = sorted(n for n in bonds.FAMILY if n.casefold() not in notable)
         self.assertEqual(missing, [], "family members not on the notable list: %s" % missing)
+
+
+class ReservedWordTest(unittest.TestCase):
+    """`lead` is a reserved word in MySQL 8 - the LEAD() window function.
+
+    Unquoted it is a syntax error, and AzerothCore treats a malformed query as
+    unrecoverable: the worldserver ABORTED on its first roster poll and went
+    into a crash loop, taking the game server down. The column name was a bad
+    choice; backticking every use of it is the fix, and this stops the next one
+    slipping through.
+    """
+
+    # MySQL 8 reserved words this codebase plausibly reaches for as identifiers.
+    RESERVED = ("lead", "rank", "groups", "system", "window", "first", "last")
+
+    def _sql_strings(self, path):
+        import ast
+        import re
+
+        for node in ast.walk(ast.parse(pathlib.Path(path).read_text())):
+            if isinstance(node, ast.Constant) and isinstance(node.value, str):
+                text = node.value.strip()
+                # Must START with a SQL verb. Matching anywhere caught prose:
+                # a docstring saying "the update loop randomizes" read as SQL.
+                # Adjacent string literals are concatenated by the parser, so a
+                # multi-line query arrives here as one constant beginning with
+                # its verb.
+                if re.match(r"(SELECT|UPDATE|INSERT|DELETE|ALTER|CREATE)\b", text, re.I):
+                    yield text
+
+    def test_no_reserved_word_is_used_as_a_bare_identifier(self):
+        import re
+
+        here = pathlib.Path(__file__).resolve().parent.parent
+        offenders = []
+        for path in sorted(here.glob("*.py")):
+            for sql in self._sql_strings(path):
+                for word in self.RESERVED:
+                    # Bare use: the word with no backtick immediately before it.
+                    if re.search(r"(?<![`\w.])%s(?![`\w])" % word, sql, re.I):
+                        offenders.append("%s: %s" % (path.name, sql[:70]))
+        self.assertEqual(offenders, [], "reserved words used unquoted:\n" + "\n".join(offenders))

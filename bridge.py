@@ -508,7 +508,11 @@ def _mark_party_leader(head: str) -> None:
     """
     with _connect() as conn, conn.cursor() as cur:
         cur.execute(
-            "UPDATE overseer_roster SET lead = IF(name = %s, 1, 0)", (head,)
+            # `lead` BACKTICKED: it is a reserved word in MySQL 8 (the LEAD()
+            # window function). Unquoted it is a syntax error - which took the
+            # worldserver down in a crash loop when the module's SELECT hit it,
+            # because the core treats a malformed query as unrecoverable.
+            "UPDATE overseer_roster SET `lead` = IF(name = %s, 1, 0)", (head,)
         )
 
 
