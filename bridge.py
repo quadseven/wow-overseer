@@ -320,6 +320,41 @@ def _fetch_outcomes(min_id: int) -> list[dict]:
         return list(cur.fetchall())
 
 
+def _ensure_roster(names: list) -> int:
+    """Put the notable characters on the roster mod-overseer logs in.
+
+    One list, not two: the same OVERSEER_NOTABLE_NAMES that decides who is
+    worth protecting decides who is worth keeping online. A character we
+    refuse to let be re-rolled but never log in is a contradiction.
+
+    INSERT IGNORE, so a row disabled by hand stays disabled - parking a
+    character is a decision, and a loop that silently re-enabled it every
+    cycle would make that decision unmakeable.
+
+    The table belongs to mod-overseer's SQL, which arrives with the
+    worldserver image. Until that image ships the table is absent, and this
+    says so once per cycle rather than failing quietly - the bridge cannot
+    create it without becoming a second owner of one schema (#2595).
+    """
+    if not names:
+        return 0
+    with _connect() as conn, conn.cursor() as cur:
+        try:
+            cur.executemany(
+                "INSERT IGNORE INTO overseer_roster (name, note) VALUES (%s, %s)",
+                [(n, "notable character") for n in names],
+            )
+            return cur.rowcount or 0
+        except pymysql.err.ProgrammingError as exc:
+            if "overseer_roster" in str(exc):
+                log.warning(
+                    "overseer_roster missing - roster login needs the worldserver "
+                    "image carrying mod-overseer's SQL (infra#2656)"
+                )
+                return 0
+            raise
+
+
 def _protected_guids() -> dict:
     """guid -> name for the characters we refuse to let be re-rolled.
 
@@ -808,6 +843,11 @@ class Bridge(discord.Client):
         while not self.is_closed():
             try:
                 protected = await asyncio.to_thread(_protected_guids)
+                added = await asyncio.to_thread(
+                    _ensure_roster, sorted(protected.values())
+                )
+                if added:
+                    log.info("overseer_roster: added %d character(s)", added)
                 rows = await asyncio.to_thread(_randomize_rows, list(protected))
                 now = int(time.time())
                 due = protect.rows_needing_refresh(protected, rows, now)

@@ -10,6 +10,9 @@ the character Evan is actually growing (infra#2656).
 Suppression is therefore just: keep a row whose validIn has not elapsed.
 This module decides WHICH rows need writing; bridge.py does the writing.
 """
+import ast
+import pathlib
+import re
 import unittest
 
 import protect
@@ -72,3 +75,68 @@ class ReportTest(unittest.TestCase):
         # working one - the failure mode this repo keeps meeting.
         line = protect.report({101: "Grug"}, [], NOW)
         self.assertIn("Grug", line)
+
+
+class RosterWiringTest(unittest.TestCase):
+    """Protecting a character and never logging it in is a contradiction.
+
+    The whole point of infra#2656 is a character that plays with nobody at the
+    keyboard. Protection alone produces a character that is carefully preserved
+    and permanently absent - and absent looks exactly like working, because
+    nothing errors.
+
+    bridge.py needs pymysql and discord, so this walks its AST.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.src = (pathlib.Path(__file__).resolve().parent.parent / "bridge.py").read_text()
+        fn = next(
+            n for n in ast.walk(ast.parse(cls.src))
+            if isinstance(n, ast.AsyncFunctionDef) and n.name == "_protect_characters"
+        )
+        # Every bare name in the function, not just callees: the bridge does
+        # its blocking work as asyncio.to_thread(_ensure_roster, ...), so the
+        # function being called is an ARGUMENT, and a callee-only walk misses
+        # it entirely - reporting the wiring absent when it is present.
+        cls.called = {n.id for n in ast.walk(fn) if isinstance(n, ast.Name)}
+
+    def test_the_protect_loop_also_puts_them_on_the_roster(self):
+        self.assertIn(
+            "_ensure_roster", self.called,
+            "nothing seeds overseer_roster, so mod-overseer logs nobody in",
+        )
+
+    def test_the_roster_comes_from_the_same_list_as_the_protection(self):
+        """Two lists drift, and both failures are quiet: protected but not
+        rostered never appears, rostered but not protected gets re-rolled."""
+        fn = next(
+            n for n in ast.walk(ast.parse(self.src))
+            if isinstance(n, ast.FunctionDef) and n.name == "_protected_guids"
+        )
+        env = [
+            n.args[0].value for n in ast.walk(fn)
+            if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
+            and n.func.attr == "get" and n.args and isinstance(n.args[0], ast.Constant)
+        ]
+        self.assertIn("OVERSEER_NOTABLE_NAMES", env)
+
+
+class RosterManifestTest(unittest.TestCase):
+    def test_every_family_member_is_notable(self):
+        """A family member missing from OVERSEER_NOTABLE_NAMES is never logged
+        in, so they silently never answer a muster - which reads as the bond
+        rules being wrong rather than as a character who is not there."""
+        import bonds
+
+        manifest = (
+            pathlib.Path(__file__).resolve().parents[3]
+            / "oke/manifests/wow/70-overseer.yaml"
+        ).read_text()
+        m = re.search(
+            r'name:\s*OVERSEER_NOTABLE_NAMES\s*\n\s*value:\s*"([^"]*)"', manifest
+        )
+        self.assertIsNotNone(m, "OVERSEER_NOTABLE_NAMES not found in the manifest")
+        notable = {n.strip().casefold() for n in m.group(1).split(",") if n.strip()}
+        missing = sorted(n for n in bonds.FAMILY if n.casefold() not in notable)
+        self.assertEqual(missing, [], "family members not on the notable list: %s" % missing)
