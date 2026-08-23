@@ -136,20 +136,45 @@ class ReconcileTest(unittest.TestCase):
     def test_first_sighting_issues_strategy_and_records(self):
         actions = reconcile(make_row(), 1)
         self.assertEqual(actions, [
-            StrategyCommand("Grug", "co +grind"),
+            StrategyCommand("Grug", "nc +grind"),
             RecordProgress(7, 1),
         ])
 
-    def test_steady_state_is_read_only(self):
-        # Pinned: an unchanged observation produces NOTHING - no strategy
-        # re-issue, no writes, no chatter.
+    def test_a_stalled_goal_records_the_stall_and_stays_quiet(self):
+        """No progress is usually just a slow grind, so it must not chatter -
+        but it must be counted, because it is also what a lost strategy looks
+        like."""
         row = make_row(last_report="3")
-        for _ in range(5):
-            self.assertEqual(reconcile(row, 3), [])
+        self.assertEqual(reconcile(row, 3),
+                         [RecordProgress(7, 3, stalls=1)])
+
+    def test_a_goal_stalled_long_enough_is_put_back_on_task(self):
+        """PlayerbotAI::ResetStrategies runs on login and rebuilds strategies
+        from defaults, and the autonomous ones are gated behind IsRandomBot(),
+        false for named characters. The roster loop relogs anyone who drops, so
+        a long goal will meet this. Issued once and never again, the goal goes
+        inert while its row still reads 'active'."""
+        row = make_row(last_report="3/%d" % (goals.REASSERT_AFTER_CYCLES - 1))
+        actions = reconcile(row, 3)
+        self.assertEqual(actions[0], StrategyCommand("Grug", "nc +grind"))
+        self.assertEqual(actions[1], RecordProgress(7, 3, stalls=0))
+
+    def test_the_stall_counter_resets_when_progress_resumes(self):
+        row = make_row(last_report="3/%d" % (goals.REASSERT_AFTER_CYCLES - 1))
+        recorded = [a for a in reconcile(row, 4)
+                    if isinstance(a, goals.RecordProgress)]
+        self.assertEqual(recorded, [RecordProgress(7, 4)])
+        self.assertEqual(recorded[0].stalls, 0)
+
+    def test_a_row_written_before_stalls_existed_still_reads(self):
+        """Rows in the live table hold a bare integer."""
+        self.assertEqual(goals._read_report({"last_report": "12"}), (12, 0))
+        self.assertEqual(goals._read_report({"last_report": "12/3"}), (12, 3))
+        self.assertEqual(goals._read_report({"last_report": ""}), (None, 0))
 
     def test_level_gain_reports_milestone_without_reissuing_strategy(self):
         actions = reconcile(make_row(last_report="2"), 3)
-        self.assertNotIn(StrategyCommand("Grug", "co +grind"), actions)
+        self.assertNotIn(StrategyCommand("Grug", "nc +grind"), actions)
         kinds = [type(a) for a in actions]
         self.assertEqual(kinds, [MilestoneThought, Report, RecordProgress])
         self.assertIn("level 3", actions[1].text)
@@ -177,7 +202,7 @@ class ReconcileTest(unittest.TestCase):
 
     def test_corrupt_last_report_treated_as_first_sighting(self):
         actions = reconcile(make_row(last_report="not-a-number"), 2)
-        self.assertEqual(actions[0], StrategyCommand("Grug", "co +grind"))
+        self.assertEqual(actions[0], StrategyCommand("Grug", "nc +grind"))
 
 
 class ReconcileSkillTest(unittest.TestCase):
@@ -238,7 +263,7 @@ class LifecycleTest(unittest.TestCase):
         for observed in (1, 1, 2, 2, 3, 4, 5, 5, 6):
             store.cycle(observed)
         # Strategy exactly once, at first sighting.
-        self.assertEqual(store.commands, ["co +grind"])
+        self.assertEqual(store.commands, ["nc +grind"])
         # A milestone per level gained, then completion; nothing after.
         self.assertEqual(len(store.reports), 4)
         self.assertIn("level 2", store.reports[0])
@@ -288,3 +313,41 @@ class TextTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class StrategyChannelTest(unittest.TestCase):
+    """The bug this class exists for shipped, delivered cleanly, and did
+    nothing for weeks.
+
+    goals.py sent 'co +grind'. mod-playerbots registers grind on the NON-combat
+    engine (AiFactory::AddDefaultNonCombatStrategies calls
+    `nonCombatEngine->addStrategy("grind")`), so the combat channel adds it to
+    an engine that does not move the character. Every layer reported success:
+    the command row reached status 'delivered', the goal row stayed 'active',
+    and the bot never took a step.
+
+    Measured live, one character, 90 seconds each:
+
+        Ugga before        -8950,-132
+        after 'co +grind'  -8950,-132
+        after 'nc +grind'  -8990,-103
+    """
+
+    def test_the_strategy_goes_down_the_non_combat_channel(self):
+        for kind, skill in (("level", None), ("skill", "mining")):
+            with self.subTest(kind=kind):
+                cmd = goals.strategy_for(make_row(kind=kind, skill_name=skill))
+                self.assertTrue(
+                    cmd.startswith("nc "),
+                    "grind lives on the non-combat engine; %r reaches an engine "
+                    "that cannot move the character" % cmd,
+                )
+
+    def test_the_command_is_one_the_bot_grammar_accepts(self):
+        """'nc' and 'co' are the two strategy verbs. Anything else is parsed as
+        some other command entirely and silently does something unrelated."""
+        cmd = goals.strategy_for(make_row())
+        verb, _, rest = cmd.partition(" ")
+        self.assertIn(verb, ("nc", "co"))
+        self.assertTrue(rest.startswith(("+", "-", "~", "!", "?")),
+                        "strategy changes are sign-prefixed: %r" % cmd)

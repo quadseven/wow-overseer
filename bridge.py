@@ -986,7 +986,9 @@ class Bridge(discord.Client):
             if channel is not None:
                 await channel.send(action.text[:1990])
         elif isinstance(action, goals.RecordProgress):
-            await asyncio.to_thread(_record_goal_progress, action.goal_id, action.value)
+            await asyncio.to_thread(
+                _record_goal_progress, action.goal_id, action.value, action.stalls
+            )
         elif isinstance(action, goals.MarkComplete):
             await asyncio.to_thread(_complete_goal, action.goal_id)
 
@@ -1201,11 +1203,14 @@ def _observe_goal(row: dict) -> int | None:
         return int(found["value"]) if found else None
 
 
-def _record_goal_progress(goal_id: int, value: int) -> None:
+def _record_goal_progress(goal_id: int, value: int, stalls: int = 0) -> None:
+    # "<value>/<stalls>" once a goal has stalled, bare "<value>" otherwise, so
+    # the common row keeps the shape every existing row already has.
+    report = "%d/%d" % (value, stalls) if stalls else str(value)
     with _connect() as conn, conn.cursor() as cur:
         cur.execute(
             "UPDATE overseer_goal SET last_report = %s WHERE id = %s",
-            (str(value), goal_id),
+            (report, goal_id),
         )
 
 

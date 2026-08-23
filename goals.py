@@ -49,6 +49,15 @@ MAX_SKILL = 450
 # goals report on crossing each step boundary instead of every point.
 SKILL_MILESTONE_STEP = 25
 
+# Cycles without progress before the strategy is issued again. A character
+# that logs out and back in loses its strategies - PlayerbotAI::ResetStrategies
+# runs on login and rebuilds them from defaults, and the autonomous ones are
+# gated behind IsRandomBot(), which is false for named characters. The roster
+# loop relogs anyone who drops, so a long goal WILL meet this. Issued once and
+# never again, a goal would go quietly inert with its row still reading
+# 'active'.
+REASSERT_AFTER_CYCLES = 5
+
 
 @dataclass(frozen=True)
 class Goal:
@@ -92,10 +101,17 @@ class Report:
 
 @dataclass(frozen=True)
 class RecordProgress:
-    """Persist the observed value on the goal row; the store IS the memory."""
+    """Persist the observed value on the goal row; the store IS the memory.
+
+    `stalls` counts consecutive cycles with no progress. It rides in the same
+    field because the goal row is the only memory a restart preserves, and a
+    counter held in the supervisor would reset every deploy - which is exactly
+    when a strategy is most likely to have been lost.
+    """
 
     goal_id: int
     value: int
+    stalls: int = 0
 
 
 @dataclass(frozen=True)
@@ -152,13 +168,28 @@ def parse_goal(text: str) -> Goal | CancelGoal | None:
 
 
 def strategy_for(goal: Mapping) -> str:
-    # 'co +grind' is the one always-on leveling strategy in mod-playerbots'
-    # chat grammar (and already in the voice vocabulary). Skill goals ride
-    # the same strategy: gathering and combat skills rise while grinding,
-    # and no profession-specific strategy exists to issue instead - the
-    # supervisor's job is staying on task and reporting, not crafting
-    # rotations (out of scope on infra#2601).
-    return "co +grind"
+    """The command that puts a character on task.
+
+    NON-combat, and that is the whole point. This read 'co +grind' and could
+    never work: mod-playerbots registers grind on the non-combat engine
+    (AiFactory::AddDefaultNonCombatStrategies does
+    `nonCombatEngine->addStrategy("grind")`), so sending it down the combat
+    channel adds nothing to the engine that moves the character. The command
+    still delivered, the goal still reported healthy, and the bot stood
+    exactly where it spawned.
+
+    Measured on the live server, same character, 90 seconds each:
+
+        Ugga before        -8950,-132
+        after 'co +grind'  -8950,-132   not one unit
+        after 'nc +grind'  -8990,-103
+
+    Skill goals ride the same strategy: gathering and combat skills rise while
+    grinding, and no profession-specific strategy exists to issue instead -
+    the supervisor's job is staying on task and reporting, not crafting
+    rotations (out of scope on infra#2601).
+    """
+    return "nc +grind"
 
 
 def _describe(kind: str, skill_name: str | None, target: int) -> str:
@@ -198,15 +229,28 @@ def completion_text(row: Mapping, observed: int) -> str:
     return f"Goal complete: {row['character_name']} reached {what} (now at {observed})."
 
 
-def _last_progress(row: Mapping) -> int | None:
+def _read_report(row: Mapping) -> tuple:
+    """(last observed value, consecutive stalled cycles) from the goal row.
+
+    Stored as "<value>" or "<value>/<stalls>". The bare form is what rows
+    written before the stall counter existed look like, and it still reads
+    correctly - a migration for one integer would be a schema change the
+    module owns for no behavioral gain.
+    """
     raw = row.get("last_report")
     if raw is None or not str(raw).strip():
-        return None
+        return None, 0
+    text = str(raw).strip()
+    value, _, stalls = text.partition("/")
     try:
-        return int(str(raw).strip())
+        return int(value), int(stalls) if stalls else 0
     except ValueError:
         # A corrupt record must not wedge the goal; treat as first sighting.
-        return None
+        return None, 0
+
+
+def _last_progress(row: Mapping) -> int | None:
+    return _read_report(row)[0]
 
 
 def _milestone_crossed(kind: str, last: int, observed: int) -> bool:
@@ -237,16 +281,26 @@ def reconcile(row: Mapping, observed: int | None) -> list:
     if observed >= target:
         text = completion_text(row, observed)
         return [MilestoneThought(name, text), Report(text), MarkComplete(goal_id)]
-    last = _last_progress(row)
+    last, stalls = _read_report(row)
     if last is None:
-        # First sighting: put the bot on task exactly once. Recording the
-        # observation is what prevents a re-issue every cycle after this.
+        # First sighting: put the bot on task. Recording the observation is
+        # what stops this re-issuing every cycle from here on.
         return [
             StrategyCommand(name, strategy_for(row)),
             RecordProgress(goal_id, observed),
         ]
     if observed == last:
-        return []
+        # No progress. Usually just a slow grind, but it is also exactly what a
+        # lost strategy looks like, and the two are indistinguishable from
+        # here - so re-assert on a cadence rather than trying to tell them
+        # apart. The command is idempotent; issuing it to a bot already
+        # grinding costs one whisper.
+        if stalls + 1 >= REASSERT_AFTER_CYCLES:
+            return [
+                StrategyCommand(name, strategy_for(row)),
+                RecordProgress(goal_id, observed),
+            ]
+        return [RecordProgress(goal_id, observed, stalls + 1)]
     actions: list = []
     if observed > last and _milestone_crossed(row["kind"], last, observed):
         text = milestone_text(row, observed)
