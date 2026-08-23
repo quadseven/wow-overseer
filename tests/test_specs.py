@@ -145,6 +145,64 @@ class TrainingIsAdditive(unittest.TestCase):
         self.assertIn("SpendTalents(", _train_roster_source())
 
 
+BRIDGE = pathlib.Path(__file__).resolve().parents[1] / "bridge.py"
+
+
+def _handler(func_name: str):
+    """The single except-handler of `func_name` in bridge.py, as AST.
+
+    bridge.py imports discord and cannot be imported here - the tested seam is
+    the pure modules by design - so this reads the source. It is still a
+    structural assertion and not a text match: it finds the function, then the
+    handler inside it, and reports what that handler actually catches.
+    """
+    tree = ast.parse(BRIDGE.read_text(encoding="utf-8"))
+    for node in ast.walk(tree):
+        if isinstance(node, ast.FunctionDef) and node.name == func_name:
+            handlers = [h for n in ast.walk(node) if isinstance(n, ast.Try) for h in n.handlers]
+            assert len(handlers) == 1, f"{func_name} has {len(handlers)} handlers, expected 1"
+            return handlers[0]
+    raise AssertionError(f"{func_name} not found in bridge.py")
+
+
+class SpecWriterSurvivesAMissingColumn(unittest.TestCase):
+    """spec_tab arrives with the worldserver's SQL; the bridge is its own pod.
+
+    Any startup order is possible, so the first write can legitimately hit a
+    column that does not exist yet. If that escapes, it takes the rest of the
+    cycle with it - including the randomize guards written further down the
+    same loop, which are what stop these characters being re-rolled.
+    """
+
+    def test_it_catches_the_class_pymysql_actually_raises(self):
+        """ER_BAD_FIELD_ERROR is OperationalError, NOT ProgrammingError.
+
+        Verified against pymysql 1.4.6 as deployed: 1054 is absent from
+        error_map, and raise_mysql_exception falls back to `InternalError if
+        errno < 1000 else OperationalError`. Catching ProgrammingError here -
+        which is what the missing-TABLE guard three functions up catches, and
+        the obvious thing to copy - would compile, read correctly, and never
+        once fire.
+        """
+        caught = _handler("_mark_specs").type
+        name = caught.attr if isinstance(caught, ast.Attribute) else getattr(caught, "id", None)
+        self.assertEqual("OperationalError", name)
+
+    def test_it_matches_on_the_error_number(self):
+        """Not on the message text, which is localised and version-dependent."""
+        handler = _handler("_mark_specs")
+        numbers = [n.value for n in ast.walk(handler) if isinstance(n, ast.Constant)]
+        self.assertIn(1054, numbers, "guard does not test for ER_BAD_FIELD_ERROR")
+
+    def test_any_other_database_error_still_escapes(self):
+        """A guard that swallows everything hides the faults it is not for."""
+        handler = _handler("_mark_specs")
+        self.assertTrue(
+            any(isinstance(n, ast.Raise) for n in ast.walk(handler)),
+            "_mark_specs swallows every OperationalError instead of re-raising",
+        )
+
+
 class ModuleParses(unittest.TestCase):
     def test_bonds_still_parses(self):
         ast.parse((pathlib.Path(bonds.__file__)).read_text(encoding="utf-8"))

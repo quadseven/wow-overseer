@@ -638,14 +638,38 @@ def _mark_specs(specs: dict) -> None:
     Rewriting an unchanged value costs one indexed UPDATE against five rows and
     does NOT cause retraining: the module gates that on trained_level and on
     there being free points to spend, neither of which this touches.
+
+    THE COLUMN CAN LEGITIMATELY BE ABSENT. It arrives with mod-overseer's SQL,
+    which is applied by the worldserver on startup, and the bridge is a separate
+    deployment with its own image and its own restarts. Any order is possible: a
+    bridge that rolls before the worldserver, a bridge that crash-restarts on a
+    cluster whose worldserver has not come up yet, a cold start of the whole
+    namespace. Without this the first cycle raises and takes the REST of that
+    cycle with it - the randomize guards that keep these characters from being
+    re-rolled are written further down the same loop body.
+
+    Warned once per cycle rather than swallowed, for the same reason
+    _ensure_roster says so out loud: a column that never appears is a real
+    fault, and it should be visible without being fatal.
     """
     if not specs:
         return
     with _connect() as conn, conn.cursor() as cur:
-        cur.executemany(
-            "UPDATE overseer_roster SET spec_tab = %s WHERE name = %s",
-            [(tab, name) for name, tab in sorted(specs.items())],
-        )
+        try:
+            cur.executemany(
+                "UPDATE overseer_roster SET spec_tab = %s WHERE name = %s",
+                [(tab, name) for name, tab in sorted(specs.items())],
+            )
+        except pymysql.err.OperationalError as exc:
+            # 1054 is ER_BAD_FIELD_ERROR. Matched on the code rather than on the
+            # message text, which is localised and has changed between versions.
+            if exc.args and exc.args[0] == 1054:
+                log.warning(
+                    "overseer_roster.spec_tab missing - talent trees need the "
+                    "worldserver image carrying mod-overseer's SQL (infra#2756)"
+                )
+                return
+            raise
 
 
 def _protected_guids() -> dict:
