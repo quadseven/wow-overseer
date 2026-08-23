@@ -64,15 +64,96 @@ class Bond:
     # Higher is older. Only meaningful between blood relatives; it is what
     # makes Grog the big brother and Bork the little one.
     seniority: int
+    # Who they actually are in the world, verified against the live characters.
+    #
+    # They are all CAVEMEN - that is why the parents are human, and why the two
+    # boys are a dwarf and a gnome: those models are SHORT, so they read as
+    # children. The race is a sight gag, not a culture. Nobody has a dwarven or
+    # gnomish accent; they all talk like Grug, which is its own accent and the
+    # only one this family has.
+    #
+    # The CLASS is real and worth voicing: Ugga is the priest keeping them all
+    # alive, Bork is a rogue getting into places he should not.
+    race: str = ""
+    char_class: str = ""
+    gender: str = ""
+    # How this one differs from the others WITHIN the grug voice. The register
+    # is shared, so this is what stops five characters saying one sentence -
+    # which is exactly what happened when the personas differed only in role.
+    persona: str = ""
 
 
 FAMILY: dict[str, Bond] = {
-    "Grug": Bond(role="father", blood=True, seniority=100),
-    "Ugga": Bond(role="mother", blood=True, seniority=99),
-    "Grog": Bond(role="elder son", blood=True, seniority=50),
-    "Bork": Bond(role="younger son", blood=True, seniority=10),
-    # Lives by the river. Good guy. Helps Ugga rather a lot.
-    "Og": Bond(role="neighbour", blood=False, seniority=60),
+    "Grug": Bond(
+        role="father", blood=True, seniority=100,
+        race="human", char_class="warrior", gender="male",
+        persona=(
+            "The father, and a warrior. Fewest words of anyone, and the most "
+            "certain. Says what the family will do, not what it might. Goes "
+            "first into everything because that is where the family is not. "
+            "Watches Og around Ugga more than he admits, and has no words for "
+            "why that sits badly."
+        ),
+    ),
+    "Ugga": Bond(
+        role="mother", blood=True, seniority=99,
+        race="human", char_class="priest", gender="female",
+        persona=(
+            "The mother, and the priest keeping every one of them alive. Warm "
+            "and practical - talks about who is hurt, who has eaten, who is "
+            "cold. Fond of Og and careless about how that looks. Never says "
+            "anything untrue, which is not the same as saying everything."
+        ),
+    ),
+    "Grog": Bond(
+        role="elder son", blood=True, seniority=50,
+        race="dwarf", char_class="paladin", gender="male",
+        persona=(
+            "The older boy, and a paladin. Copies his father's way of talking "
+            "and puts one word too many in. Steadier than his brother and "
+            "quietly proud of it. Turns up for Bork every single time, then "
+            "grumbles about it after."
+        ),
+    ),
+    "Bork": Bond(
+        role="younger son", blood=True, seniority=10,
+        race="gnome", char_class="rogue", gender="male",
+        persona=(
+            "The youngest, and a rogue. Loudest of the family and uses the most "
+            "words to say the least. Excited about everything, in trouble "
+            "constantly, cheerful about both. Asks for help without a shred of "
+            "embarrassment. Worships Grog and shows it by pestering him."
+        ),
+    ),
+    "Og": Bond(
+        role="neighbour", blood=False, seniority=60,
+        race="human", char_class="mage", gender="male",
+        persona=(
+            "The neighbour from by the river, and a mage. Reaches for slightly "
+            "better words than the rest of the family and is careful not to "
+            "make that obvious. Helpful, especially to Ugga, and more often "
+            "than a neighbour needs to be. Easy around everyone except Grug."
+        ),
+    ),
+}
+
+
+# The thing nobody says out loud. Bonds already made Grug refuse to answer
+# Ugga once Og had answered her too often - the sulk was in the rules before
+# it had a reason. This is the reason, written down so the voice layer can
+# ground on it and so a reader is not left guessing why the father counts.
+#
+# It is never stated as fact to the model. Grug SUSPECTS; that is all he has,
+# and a suspicion he cannot prove is a better engine than a confirmed affair.
+SUSPICION = {
+    "who": "Grug",
+    "about": "Ugga",
+    "with": "Og",
+    "note": (
+        "Grug suspects there is something between Ugga and Og. He has no proof "
+        "and would not know what to do with it. He notices when she smiles at "
+        "him. He never accuses anyone."
+    ),
 }
 
 _BY_LOWER = {name.lower(): name for name in FAMILY}

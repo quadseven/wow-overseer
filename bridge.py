@@ -27,6 +27,7 @@ import fanout
 import goals
 import bonds
 import kin
+import persona
 import protect
 import relay
 import voice
@@ -299,7 +300,7 @@ def _fetch_grounding(name: str) -> dict | None:
         return cur.fetchone()
 
 
-def _ask_llm(prompt: str) -> str:
+def _ask_llm(prompt: str, system: str = "") -> str:
     body = json.dumps({
         "model": LLM_MODEL,
         "messages": [
@@ -1046,6 +1047,31 @@ class Bridge(discord.Client):
             except Exception:
                 log.exception("chat relay tick failed; retrying next cycle")
 
+    async def _in_character(self, speaker: str, plain: str, context: str) -> str:
+        """The line as this character would say it, or the plain line.
+
+        The plan is already decided before this runs, and the fallback is the
+        line that was going to be said anyway - so a model that is offline,
+        slow, or having a bad day costs the family its voice and never its
+        plan. That ordering is the point; do not move this before the rules.
+        """
+        prompt = persona.build_prompt(speaker, plain, context=context)
+        if prompt is None:
+            return plain
+        try:
+            said = await asyncio.to_thread(
+                _ask_llm, prompt,
+                "Answer with the sentence only. No reasoning, no preamble, "
+                "no quotation marks.",
+            )
+        except Exception:
+            # Deliberately not .exception(): the LLM being unreachable is an
+            # expected weather condition here, and a stack trace per council
+            # line would bury the councils themselves.
+            log.info("persona: %s spoke plainly (voice unavailable)", speaker)
+            return plain
+        return persona.clean(said, plain)
+
     async def _hold_council(self) -> None:
         """The family decides what today is for (infra#2724).
 
@@ -1092,8 +1118,12 @@ class Bridge(discord.Client):
             log.info("council: nothing new to decide (%s)", held.reason)
             return
 
+        # What the council is about, so a voiced line can sit in the moment
+        # rather than floating free of it.
+        context = held.reason
         for line in held.lines:
-            speaker, _, text = line.partition(": ")
+            speaker, _, plain = line.partition(": ")
+            text = await self._in_character(speaker, plain, context)
             # PARTY, not say. /say carries about 25 yards and the family grinds
             # in different zones, so the first council was five characters
             # talking to themselves in empty air - every captured line came
