@@ -20,6 +20,7 @@ keeps the model from writing the confrontation the rules cannot deliver.
 
 from __future__ import annotations
 
+import json
 import re
 
 import bonds
@@ -102,8 +103,45 @@ def build_prompt(speaker: str, plain: str, *, context: str = "") -> str | None:
     )
 
 
+# A model asked for a sentence sometimes answers with an object anyway. These
+# are the keys it actually reached for, live, before this was caught.
+_SPOKEN_KEYS = ("response", "sentence", "say", "text", "line", "answer")
+
+
+def _from_json(text: str) -> str | None:
+    """The sentence inside an object, if that is what arrived.
+
+    Live, in Evan's Discord, spoken aloud in game:
+
+        [Party] Bork: {"response": "Bork no need do thing. Bork go fish!"}
+        [Party] Og:   {"sentence": "Og help Grug."}
+        [Party] Grug: }
+
+    The last one is the worst: a pretty-printed object whose final line is a
+    lone brace, taken by a cleaner that reads the last line. Answering in JSON
+    is not the failure - failing to notice is.
+    """
+    start, end = text.find("{"), text.rfind("}")
+    if start < 0 or end <= start:
+        return None
+    try:
+        obj = json.loads(text[start:end + 1])
+    except (ValueError, TypeError):
+        return None
+    if not isinstance(obj, dict):
+        return None
+    for key in _SPOKEN_KEYS:
+        value = obj.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    # An object with no sentence in it. Whatever it is, it is not speech.
+    return ""
+
+
 _STRIP_QUOTES = re.compile(r'^[\s"\'`*]+|[\s"\'`*]+$')
 _STAGE = re.compile(r"^\s*[\(\[*].*?[\)\]*]\s*")
+# A line that is only punctuation is a fragment of something, never a sentence.
+_ALL_PUNCTUATION = re.compile(r"^[^\w]*$")
 
 
 def clean(said: str, plain: str) -> str:
@@ -117,6 +155,13 @@ def clean(said: str, plain: str) -> str:
     if not said:
         return plain
 
+    # JSON FIRST. Everything below reads line by line, and an object spread
+    # over several lines defeats all of it - which is exactly how a lone "}"
+    # ended up being said out loud in party chat.
+    from_json = _from_json(said)
+    if from_json is not None:
+        return from_json or plain
+
     text = said.strip()
     # Reasoning models narrate first and answer last; take the final non-empty
     # line rather than the whole monologue.
@@ -129,6 +174,6 @@ def clean(said: str, plain: str) -> str:
     text = _STRIP_QUOTES.sub("", text)
     text = " ".join(text.split())
 
-    if not text or len(text) > MAX_SPOKEN:
+    if not text or len(text) > MAX_SPOKEN or _ALL_PUNCTUATION.match(text):
         return plain
     return text

@@ -184,6 +184,58 @@ class CleanTest(unittest.TestCase):
         self.assertNotIn("\\t", out)
 
 
+class JsonInTheMouthTest(unittest.TestCase):
+    """A model asked for a sentence sometimes answers with an object anyway,
+    and these were SPOKEN OUT LOUD in Evan's party chat before it was caught:
+
+        [Party] Bork: {"response": "Bork no need do thing. Bork go fish!"}
+        [Party] Og:   {"sentence": "Og help Grug."}
+        [Party] Grug: }
+
+    The last one is the worst. A pretty-printed object's final line is a lone
+    brace, and clean() read the last line. Answering in JSON is not the
+    failure - failing to notice is.
+    """
+
+    PLAIN = "Og is still 4. We should not leave them behind."
+
+    def test_the_exact_lines_that_reached_the_channel(self):
+        for said, want in (
+            ('{"response": "Bork no need do thing. Bork go fish!"}',
+             "Bork no need do thing. Bork go fish!"),
+            ('{"sentence": "Og help Grug."}', "Og help Grug."),
+        ):
+            with self.subTest(said=said):
+                self.assertEqual(persona.clean(said, self.PLAIN), want)
+
+    def test_a_pretty_printed_object_is_not_read_line_by_line(self):
+        said = '{\n  "say": "Grug go now."\n}'
+        self.assertEqual(persona.clean(said, self.PLAIN), "Grug go now.")
+
+    def test_a_lone_brace_is_never_spoken(self):
+        for said in ("}", "{", "  }  ", "{}"):
+            with self.subTest(said=said):
+                self.assertEqual(persona.clean(said, self.PLAIN), self.PLAIN)
+
+    def test_an_object_with_no_sentence_in_it_falls_back(self):
+        """`{"grug_plan_carried_at":210}` was said out loud. Whatever that is,
+        it is not speech."""
+        self.assertEqual(persona.clean('{"grug_plan_carried_at":210}', self.PLAIN),
+                         self.PLAIN)
+
+    def test_json_wrapped_in_narration_is_still_found(self):
+        said = 'Let me think.\nHere is the line:\n{"response": "Grug go now."}'
+        self.assertEqual(persona.clean(said, self.PLAIN), "Grug go now.")
+
+    def test_a_plain_sentence_is_untouched_by_any_of_this(self):
+        self.assertEqual(persona.clean("Og lags. We go.", self.PLAIN), "Og lags. We go.")
+
+    def test_a_sentence_that_merely_mentions_a_brace_survives(self):
+        """Only text that actually PARSES as an object is treated as one."""
+        said = "Grug no like { thing."
+        self.assertEqual(persona.clean(said, self.PLAIN), said)
+
+
 class WiringTest(unittest.TestCase):
     """A voice nobody uses is a very well-tested monologue."""
 
