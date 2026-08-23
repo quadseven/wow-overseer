@@ -229,11 +229,24 @@ class WiringTest(unittest.TestCase):
         self.assertNotIn("say", channels,
                          "a council on /say is only heard by whoever stands next to the speaker")
 
-    def test_the_family_head_is_kept_as_party_leader(self):
-        """Without this the party leader is whoever sorts first by name."""
+    def test_the_family_head_is_marked_as_party_leader(self):
+        """Without this the party leader is whoever sorts first by name -
+        which put Bork, the youngest, in charge of his own father."""
         names = self._names_in("_protect_characters")
-        self.assertIn("leader_correction", names)
-        self.assertIn("_make_leader", names)
+        self.assertIn("_mark_party_leader", names)
+        self.assertIn("head_of_family", names)
+
+    def test_leadership_is_not_corrected_with_a_gm_command(self):
+        """A playerbot session does not carry GM security. With account 318 at
+        gmlevel 3, `.pinfo` and `.gps` issued as the bot are both refused, so
+        `.group leader` produced an error every cycle and never worked. The
+        whole kind='gm' path is only usable while a real client holds the
+        character."""
+        names = self._names_in("_protect_characters")
+        self.assertNotIn("_insert_gm", names,
+                         "a bot session cannot run GM commands; issuing one here "
+                         "can only error, once per cycle, forever")
+        self.assertNotIn("GmCommand", names)
 
     def test_a_council_remembers_what_it_argued(self):
         self.assertIn("_insert_thought", self._names_in("_council_once"))

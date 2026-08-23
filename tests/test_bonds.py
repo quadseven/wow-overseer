@@ -410,20 +410,6 @@ class HeadOfFamilyTest(unittest.TestCase):
         senior = max(bonds.FAMILY, key=lambda n: bonds.FAMILY[n].seniority)
         self.assertEqual(bonds.head_of_family(), senior)
 
-    def test_a_party_led_by_the_youngest_is_handed_back(self):
-        """The live bug: mod-overseer formed the party in name order, so Bork
-        led the family."""
-        self.assertEqual(bonds.leader_correction("Bork"), "Grug")
-
-    def test_a_party_already_in_the_right_hands_is_left_alone(self):
-        """Re-issuing the command every cycle would be a GM command per minute
-        for no reason."""
-        self.assertIsNone(bonds.leader_correction("Grug"))
-        self.assertIsNone(bonds.leader_correction("grug"))
-
-    def test_no_party_means_nothing_to_hand_over(self):
-        self.assertIsNone(bonds.leader_correction(None))
-
     def test_it_is_not_simply_the_first_name_alphabetically(self):
         """The exact bug being corrected."""
         self.assertNotEqual(bonds.head_of_family(), sorted(bonds.FAMILY)[0])

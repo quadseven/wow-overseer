@@ -113,6 +113,20 @@ class RosterWiringTest(unittest.TestCase):
         stopped moving, with nothing anywhere reporting it."""
         self.assertIn("_give_them_a_life", self.called)
 
+    def test_a_character_at_the_keyboard_is_not_sent_bot_commands(self):
+        """A character Evan is holding has no PlayerbotAI, so every bot command
+        aimed at it is refused. Without this the roster loop aimed one every
+        cycle at whichever character he happened to be playing, filling the
+        command table with errors."""
+        import ast
+        import pathlib
+
+        src = (pathlib.Path(__file__).resolve().parent.parent / "bridge.py").read_text()
+        fn = next(n for n in ast.walk(ast.parse(src))
+                  if isinstance(n, ast.FunctionDef) and n.name == "_give_them_a_life")
+        names = {n.id for n in ast.walk(fn) if isinstance(n, ast.Name)}
+        self.assertIn("_bot_held_names", names)
+
     def test_the_roster_comes_from_the_same_list_as_the_protection(self):
         """Two lists drift, and both failures are quiet: protected but not
         rostered never appears, rostered but not protected gets re-rolled."""

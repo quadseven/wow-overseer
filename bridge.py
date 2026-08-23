@@ -363,6 +363,37 @@ def _ensure_roster(names: list) -> int:
 WATCH_CHANNELS = "say,yell,emote,whisper,party,raid,guild,officer"
 
 
+_BOT_HELD_SQL = (
+    "SELECT name FROM overseer_snapshot "
+    "WHERE is_bot = 1 AND updated_at > NOW() - INTERVAL 60 SECOND "
+    "  AND name IN (%s)"
+)
+
+
+def _bot_held_names(names: list) -> list:
+    """Of `names`, the ones currently driven by the AI rather than by a person.
+
+    A character Evan is holding at the keyboard has no PlayerbotAI, so every
+    bot command aimed at it is refused - and the roster loop would aim one
+    every cycle, forever, filling the command table with errors against the
+    one character he happens to be playing.
+    """
+    if not names:
+        return []
+    placeholders = ",".join(["%s"] * len(names))
+    # The rule is right to look and wrong here: the only thing interpolated
+    # is the NUMBER of placeholders, computed from len(names) one line above.
+    # Every name reaches MySQL as a bound parameter, and a variable-length IN
+    # list cannot be written with a static string. The query is hoisted to a
+    # constant so the interpolation sits on one short line: ruff anchors S608
+    # at the START of the expression, so a noqa on the line carrying the %
+    # does not silence a multi-line one.
+    sql = _BOT_HELD_SQL % placeholders  # noqa: S608
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(sql, names)
+        return [r["name"] for r in cur.fetchall()]
+
+
 def _give_them_a_life(names: list) -> int:
     """Keep every family member on the strategy that makes them live.
 
@@ -376,11 +407,10 @@ def _give_them_a_life(names: list) -> int:
 
     Idempotent at the game's end: adding a strategy already present is a no-op.
     """
-    if not names:
-        return 0
-    for name in names:
+    driven = _bot_held_names(names)
+    for name in driven:
         _insert_command(core.InsertCommand(name, goals.LIFE_STRATEGY, "overseer:life"))
-    return len(names)
+    return len(driven)
 
 
 def _ensure_chat_watch(names: list) -> int:
@@ -404,6 +434,17 @@ def _ensure_chat_watch(names: list) -> int:
         return cur.rowcount or 0
 
 
+_COUNCIL_MEMBER_SQL = (
+    "SELECT c.name, c.class, c.money, "
+    "       (SELECT COUNT(*) FROM character_skills k WHERE k.guid = c.guid) AS trades, "
+    "       s.level AS live_level "
+    "FROM characters c "
+    "LEFT JOIN overseer_snapshot s "
+    "       ON s.name = c.name AND s.updated_at > NOW() - INTERVAL 60 SECOND "
+    "WHERE c.name IN (%s)"
+)
+
+
 def _fetch_council_members(names: list) -> list:
     """The state each family member brings to a council.
 
@@ -419,21 +460,14 @@ def _fetch_council_members(names: list) -> list:
     if not names:
         return []
     placeholders = ",".join(["%s"] * len(names))
+    # Hoisted for the same reason as _BOT_HELD_SQL: ruff anchors S608 at the
+    # START of the expression, so a noqa on the line carrying the % does not
+    # silence a multi-line query. This one carried exactly that mistake and was
+    # only invisible because the lint is scoped to the diff.
+    sql = _COUNCIL_MEMBER_SQL % placeholders  # noqa: S608
     with _connect() as conn, conn.cursor() as cur:
         cur.execute(
-            "SELECT c.name, c.class, c.money, "
-            "       (SELECT COUNT(*) FROM character_skills k WHERE k.guid = c.guid) AS trades, "
-            "       s.level AS live_level "
-            "FROM characters c "
-            "LEFT JOIN overseer_snapshot s "
-            "       ON s.name = c.name AND s.updated_at > NOW() - INTERVAL 60 SECOND "
-            # noqa is right here and the rule is not: the only thing
-            # interpolated is the number of placeholders, which this function
-            # computed from len(names). Every name reaches MySQL as a bound
-            # parameter. There is no way to write a variable-length IN list
-            # with a static string, which is why _protected_guids does the
-            # same thing a few functions up.
-            "WHERE c.name IN (%s)" % placeholders,  # noqa: S608
+            sql,
             names,
         )
         rows = cur.fetchall()
@@ -458,25 +492,24 @@ def _fetch_council_members(names: list) -> list:
     return members
 
 
-def _party_leader() -> str | None:
-    """Who currently leads the roster's party, or None if there is no party."""
+def _mark_party_leader(head: str) -> None:
+    """Record which roster character should lead, for mod-overseer to enforce.
+
+    A flag rather than a command. `.group leader <name>` works, but only from a
+    session carrying GM security, and a playerbot session does not have it:
+    with account 318 at gmlevel 3, `.pinfo` and `.gps` issued as the bot are
+    both refused. The whole kind='gm' path only works while a real client holds
+    the character - so correcting leadership from here produced an error every
+    cycle, forever, and never once worked.
+
+    The module cannot decide this itself: it has no idea who these characters
+    are to each other. bonds does, so the answer is written down here and
+    enforced there.
+    """
     with _connect() as conn, conn.cursor() as cur:
         cur.execute(
-            "SELECT c.name FROM `groups` g "
-            "JOIN characters c ON c.guid = g.leaderGuid LIMIT 1"
+            "UPDATE overseer_roster SET lead = IF(name = %s, 1, 0)", (head,)
         )
-        row = cur.fetchone()
-        return row["name"] if row else None
-
-
-def _make_leader(name: str) -> None:
-    """Hand the party to `name` through the ordinary GM command path.
-
-    A dot-prefixed command: the module rejects one without it, which is how
-    the first attempt at this failed - "gm command must start with a dot",
-    written into the row's detail rather than swallowed.
-    """
-    _insert_gm(relay.GmCommand(name, ".group leader %s" % name, "overseer:party"))
 
 
 def _protected_guids() -> dict:
@@ -1062,16 +1095,14 @@ class Bridge(discord.Client):
                     log.info("overseer_chat_watch: added %d character(s)", heard)
                 await asyncio.to_thread(_give_them_a_life, sorted(protected.values()))
 
-                # mod-overseer forms the party from whoever is online, in name
-                # order, so the leader lands on whoever sorts first - which put
-                # Bork, the youngest, in charge of the family. Corrected here
-                # rather than in the module because the module has no idea who
-                # these characters are to each other; bonds does.
-                leader = await asyncio.to_thread(_party_leader)
-                hand_to = bonds.leader_correction(leader)
-                if hand_to:
-                    await asyncio.to_thread(_make_leader, hand_to)
-                    log.info("party: leader was %s, handed to %s", leader, hand_to)
+                # mod-overseer forms the party in name order, which put Bork,
+                # the youngest, in charge of his own father. It cannot know
+                # better - it has no idea who these characters are to each
+                # other - so the answer is written down for it here.
+                await asyncio.to_thread(
+                    _mark_party_leader, bonds.head_of_family()
+                )
+
                 rows = await asyncio.to_thread(_randomize_rows, list(protected))
                 now = int(time.time())
                 due = protect.rows_needing_refresh(protected, rows, now)

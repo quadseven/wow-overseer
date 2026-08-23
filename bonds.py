@@ -100,21 +100,6 @@ def head_of_family() -> str:
     return max(FAMILY, key=lambda n: FAMILY[n].seniority)
 
 
-def leader_correction(current: str | None) -> str | None:
-    """Who the party should be handed to, or None to leave it alone.
-
-    A function rather than a comparison at the call site so the decision is
-    testable on its own. The wiring can be checked by walking an AST; whether
-    the rule is RIGHT cannot, and that is the half that was wrong.
-    """
-    if current is None:
-        return None            # no party yet; nothing to hand over
-    head = head_of_family()
-    if canon(current) == canon(head):
-        return None            # already in the right hands
-    return head
-
-
 def canon(name: str) -> str | None:
     """The FAMILY spelling of `name`, or None for anyone outside it."""
     return _BY_LOWER.get((name or "").strip().lower())
