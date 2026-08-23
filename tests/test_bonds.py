@@ -414,6 +414,90 @@ class HeadOfFamilyTest(unittest.TestCase):
         """The exact bug being corrected."""
         self.assertNotEqual(bonds.head_of_family(), sorted(bonds.FAMILY)[0])
 
+class WindowContaminationTest(unittest.TestCase):
+    """The bond rules count helping. Anything else in their window is noise
+    that can evict the thing being counted.
+
+    Measured on the live table before the fix: of 71 rows in the window,
+    66 were council speech and 5 were real muster memories. The window is
+    bounded, so a busier council evicts the memories entirely and the
+    jealousy and fatigue rules stop being able to fire - silently, because
+    an empty history is indistinguishable from a peaceful family.
+    """
+
+    def test_council_speech_contributes_no_pairs(self):
+        """Which is exactly why it must not be stored where bonds looks."""
+        council_rows = [
+            {"character_name": "Grug", "text": "Og is still 4. We should not leave them behind."},
+            {"character_name": "Ugga", "text": "Aye."},
+            {"character_name": "Grug", "text": "Then it is settled."},
+        ]
+        self.assertEqual(bonds.history_from_thoughts(council_rows), [])
+
+    def test_a_window_of_council_speech_starves_the_rules(self):
+        """The failure, reproduced: real memories crowded out by chatter that
+        parses to nothing."""
+        real = [{"character_name": "Og", "text": "Ugga called for help. I regrouped."}] * 3
+        chatter = [{"character_name": "Ugga", "text": "Aye."}] * 60
+
+        healthy = bonds.history_from_thoughts(real)
+        self.assertGreaterEqual(len(healthy), bonds.JEALOUSY_THRESHOLD)
+        self.assertFalse(
+            bonds.decide("Grug", kin.Plea("Ugga", "q"), history=healthy).will_answer)
+
+        # Same window size, but the memories have been pushed out of it.
+        starved = bonds.history_from_thoughts(chatter[:60] + real[:0])
+        self.assertEqual(starved, [])
+        self.assertTrue(
+            bonds.decide("Grug", kin.Plea("Ugga", "q"), history=starved).will_answer,
+            "with the memories evicted Grug can never get jealous, and nothing says so")
+
+    def test_the_bridge_does_not_write_council_speech_where_bonds_reads(self):
+        """bridge.py needs pymysql and discord, so this walks its AST."""
+        import ast
+        import pathlib
+
+        src = (pathlib.Path(__file__).resolve().parent.parent / "bridge.py").read_text()
+        fn = next(n for n in ast.walk(ast.parse(src))
+                  if isinstance(n, ast.AsyncFunctionDef) and n.name == "_council_once")
+        tags = [n.value for n in ast.walk(fn)
+                if isinstance(n, ast.Constant) and n.value in ("reflection", "council")]
+        self.assertIn("council", tags)
+        self.assertNotIn("reflection", tags,
+                         "council speech tagged 'reflection' lands in the window "
+                         "the bond rules count, and crowds out the memories")
+
+    def test_every_declaration_of_the_source_column_admits_the_new_tag(self):
+        """A tag the ENUM rejects is an insert that fails, every council.
+
+        Checks the ENUM LISTS themselves, not merely that the word 'council'
+        appears somewhere in the file - the first version of this test did the
+        latter and passed happily against an enum that had been stripped of it,
+        because the word still occurred in the insert two lines away.
+        """
+        import pathlib
+        import re
+
+        src = (pathlib.Path(__file__).resolve().parent.parent / "bridge.py").read_text()
+        # Only the ones that describe `source`. The file also declares enums
+        # for goal kind and status, and matching those made this fail for the
+        # wrong reason.
+        enums = [b for b in re.findall(r"ENUM\(([^)]*)\)", src) if "'reflection'" in b]
+        self.assertEqual(len(enums), 2,
+                         "expected the CREATE and the MODIFY, found %d" % len(enums))
+        for body in enums:
+            self.assertIn("'council'", body,
+                          "this enum rejects the council tag: %s" % body)
+
+    def test_the_live_table_is_widened_not_just_the_create(self):
+        """overseer_thought already exists, so CREATE TABLE IF NOT EXISTS is a
+        no-op against it and cannot add a value to the enum on its own."""
+        import pathlib
+
+        src = (pathlib.Path(__file__).resolve().parent.parent / "bridge.py").read_text()
+        self.assertIn("MODIFY source", src)
+
+
 
 if __name__ == "__main__":
     unittest.main()

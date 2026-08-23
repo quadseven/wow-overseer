@@ -204,7 +204,7 @@ def _ensure_thought_store() -> None:
             "CREATE TABLE IF NOT EXISTS overseer_thought ("
             " id INT UNSIGNED NOT NULL AUTO_INCREMENT,"
             " character_name VARCHAR(12) NOT NULL,"
-            " source ENUM('command','chat','goal','event','reflection') NOT NULL,"
+            " source ENUM('command','chat','goal','event','reflection','council') NOT NULL,"
             " text VARCHAR(2000) NOT NULL,"
             " created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,"
             " PRIMARY KEY (id), KEY idx_char (character_name, id),"
@@ -226,6 +226,27 @@ def _ensure_thought_store() -> None:
         if not (cur.fetchone() or {}).get("n"):
             cur.execute("ALTER TABLE overseer_thought ADD KEY idx_source (source, id)")
             log.info("overseer_thought: added idx_source")
+
+        # 'council' is its own source, and separating it is a correctness fix
+        # rather than tidiness. Council speech was written as 'reflection', the
+        # same tag kin uses for "X called for help. I regrouped." - and
+        # bonds.history_from_thoughts reads a bounded window of reflection rows
+        # to count who has helped whom. Measured on the live table: 66 of the
+        # 71 rows in that window were council lines and 5 were real memories.
+        # A busier council evicts the memories entirely, and the jealousy and
+        # fatigue rules stop being able to fire, silently.
+        cur.execute(
+            "SELECT COLUMN_TYPE AS t FROM information_schema.COLUMNS "
+            "WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'overseer_thought' "
+            "  AND COLUMN_NAME = 'source'"
+        )
+        column = (cur.fetchone() or {}).get("t") or ""
+        if "'council'" not in column:
+            cur.execute(
+                "ALTER TABLE overseer_thought MODIFY source "
+                "ENUM('command','chat','goal','event','reflection','council') NOT NULL"
+            )
+            log.info("overseer_thought: source gained 'council'")
 
 
 def _insert_thought(name: str, source: str, text: str) -> None:
@@ -1084,7 +1105,10 @@ class Bridge(discord.Client):
                 _insert_speak,
                 relay.SpeakCommand(speaker, "party", text, "", "overseer:council"),
             )
-            await asyncio.to_thread(_insert_thought, speaker, "reflection", text)
+            # 'council', not 'reflection'. What a character argued for is worth
+            # remembering, but it is not a memory of helping anyone, and the
+            # bond rules count only the latter.
+            await asyncio.to_thread(_insert_thought, speaker, "council", text)
 
         if held.plan is not None:
             await asyncio.to_thread(_persist_council_plan, held.plan)
