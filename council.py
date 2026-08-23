@@ -108,6 +108,11 @@ class Council:
     reason: str = ""
 
 
+def _more_levels(n: int) -> str:
+    """"I want 1 more levels" is the sort of thing that breaks the spell."""
+    return "I want one more level." if n == 1 else f"I want {n} more levels."
+
+
 def _median_level(levels: list) -> int:
     ordered = sorted(levels)
     if not ordered:
@@ -178,7 +183,7 @@ def assess(me: Member, *, public_levels: dict) -> Proposal | None:
         proposer=me.name, kind="level", beneficiary=me.name,
         target=me.level - (me.level % IDLE_LEVEL_STEP) + IDLE_LEVEL_STEP,
         weight=20,
-        said=f"I want {IDLE_LEVEL_STEP - (me.level % IDLE_LEVEL_STEP)} more levels.",
+        said=_more_levels(IDLE_LEVEL_STEP - (me.level % IDLE_LEVEL_STEP)),
     )
 
 

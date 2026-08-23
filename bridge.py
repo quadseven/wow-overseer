@@ -438,6 +438,27 @@ def _fetch_council_members(names: list) -> list:
     return members
 
 
+def _party_leader() -> str | None:
+    """Who currently leads the roster's party, or None if there is no party."""
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT c.name FROM `groups` g "
+            "JOIN characters c ON c.guid = g.leaderGuid LIMIT 1"
+        )
+        row = cur.fetchone()
+        return row["name"] if row else None
+
+
+def _make_leader(name: str) -> None:
+    """Hand the party to `name` through the ordinary GM command path.
+
+    A dot-prefixed command: the module rejects one without it, which is how
+    the first attempt at this failed - "gm command must start with a dot",
+    written into the row's detail rather than swallowed.
+    """
+    _insert_gm(relay.GmCommand(name, ".group leader %s" % name, "overseer:party"))
+
+
 def _protected_guids() -> dict:
     """guid -> name for the characters we refuse to let be re-rolled.
 
@@ -1019,6 +1040,17 @@ class Bridge(discord.Client):
                 )
                 if heard:
                     log.info("overseer_chat_watch: added %d character(s)", heard)
+
+                # mod-overseer forms the party from whoever is online, in name
+                # order, so the leader lands on whoever sorts first - which put
+                # Bork, the youngest, in charge of the family. Corrected here
+                # rather than in the module because the module has no idea who
+                # these characters are to each other; bonds does.
+                leader = await asyncio.to_thread(_party_leader)
+                hand_to = bonds.leader_correction(leader)
+                if hand_to:
+                    await asyncio.to_thread(_make_leader, hand_to)
+                    log.info("party: leader was %s, handed to %s", leader, hand_to)
                 rows = await asyncio.to_thread(_randomize_rows, list(protected))
                 now = int(time.time())
                 due = protect.rows_needing_refresh(protected, rows, now)

@@ -229,6 +229,12 @@ class WiringTest(unittest.TestCase):
         self.assertNotIn("say", channels,
                          "a council on /say is only heard by whoever stands next to the speaker")
 
+    def test_the_family_head_is_kept_as_party_leader(self):
+        """Without this the party leader is whoever sorts first by name."""
+        names = self._names_in("_protect_characters")
+        self.assertIn("leader_correction", names)
+        self.assertIn("_make_leader", names)
+
     def test_a_council_remembers_what_it_argued(self):
         self.assertIn("_insert_thought", self._names_in("_council_once"))
 
@@ -243,3 +249,18 @@ class WiringTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class PhrasingTest(unittest.TestCase):
+    def test_one_level_is_not_one_more_levels(self):
+        """It reads as a template, and a template breaks the spell."""
+        me = council.Member("Grog", council.IDLE_LEVEL_STEP - 1, "Paladin",
+                            gold=999999, trades=5)
+        p = council.assess(me, public_levels={"Grog": me.level, "Grug": me.level})
+        self.assertIn("one more level.", p.said)
+        self.assertNotIn("levels", p.said)
+
+    def test_several_levels_still_reads_naturally(self):
+        me = council.Member("Grog", 1, "Paladin", gold=999999, trades=5)
+        p = council.assess(me, public_levels={"Grog": 1, "Grug": 1})
+        self.assertIn("more levels.", p.said)
