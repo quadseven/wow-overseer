@@ -77,6 +77,23 @@ class Bond:
     race: str = ""
     char_class: str = ""
     gender: str = ""
+    # Which talent tree this character spends points in, as a DBC tabpage:
+    # 0, 1 or 2 in the in-game left-to-right order. -1 leaves talents alone.
+    #
+    # WHY THIS LIVES WITH THE FAMILY AND NOT WITH THE MODULE. mod-overseer knows
+    # a character's class and level and nothing about who it is. A spec is a
+    # ROLE, and the roles here come from the family: Grug tanks because he is the
+    # father who goes first into everything, and Ugga heals because keeping them
+    # all alive is the whole of who she is. Picking at random from
+    # RandomClassSpecProb - which is what mod-playerbots does for a bot nobody
+    # knows - would have given a party with no tank and no healer about half the
+    # time, and no way to ask for one.
+    #
+    # The numbers are the DBC tabpage, verified against the mod-playerbots enums
+    # rather than remembered: warrior 0=arms 1=fury 2=protection, paladin 0=holy
+    # 1=protection 2=retribution, priest 0=discipline 1=holy 2=shadow, rogue
+    # 0=assassination 1=combat 2=subtlety, mage 0=arcane 1=fire 2=frost.
+    spec_tab: int = -1
     # How this one differs from the others WITHIN the grug voice. The register
     # is shared, so this is what stops five characters saying one sentence -
     # which is exactly what happened when the personas differed only in role.
@@ -87,6 +104,9 @@ FAMILY: dict[str, Bond] = {
     "Grug": Bond(
         role="father", blood=True, seniority=100,
         race="human", char_class="warrior", gender="male",
+        # Protection. He is the one who goes first, so he is the one who
+        # gets hit; this is the tank the family has never had.
+        spec_tab=2,
         persona=(
             "The father, and a warrior. Fewest words of anyone, and the most "
             "certain. Says what the family will do, not what it might. Goes "
@@ -98,6 +118,9 @@ FAMILY: dict[str, Bond] = {
     "Ugga": Bond(
         role="mother", blood=True, seniority=99,
         race="human", char_class="priest", gender="female",
+        # Holy. She is already described as the priest keeping every one of
+        # them alive - this is that sentence made true in the talent tree.
+        spec_tab=1,
         persona=(
             "The mother, and the priest keeping every one of them alive. Warm "
             "and practical - talks about who is hurt, who has eaten, who is "
@@ -108,6 +131,8 @@ FAMILY: dict[str, Bond] = {
     "Grog": Bond(
         role="elder son", blood=True, seniority=50,
         race="dwarf", char_class="paladin", gender="male",
+        # Retribution. Copying his father into melee, one step behind him.
+        spec_tab=2,
         persona=(
             "The older boy, and a paladin. Copies his father's way of talking "
             "and puts one word too many in. Steadier than his brother and "
@@ -118,6 +143,9 @@ FAMILY: dict[str, Bond] = {
     "Bork": Bond(
         role="younger son", blood=True, seniority=10,
         race="gnome", char_class="rogue", gender="male",
+        # Combat. The straightforward one, which suits a boy who has never
+        # had a subtle thought.
+        spec_tab=1,
         persona=(
             "The youngest, and a rogue. Loudest of the family and uses the most "
             "words to say the least. Excited about everything, in trouble "
@@ -128,6 +156,9 @@ FAMILY: dict[str, Bond] = {
     "Og": Bond(
         role="neighbour", blood=False, seniority=60,
         race="human", char_class="mage", gender="male",
+        # Frost. The careful spec, for the one who is careful about
+        # everything including what he says.
+        spec_tab=2,
         persona=(
             "The neighbour from by the river, and a mage. Reaches for slightly "
             "better words than the rest of the family and is careful not to "
@@ -179,6 +210,20 @@ def head_of_family() -> str:
     most senior is who the party follows.
     """
     return max(FAMILY, key=lambda n: FAMILY[n].seniority)
+
+
+def spec_tabs() -> dict[str, int]:
+    """Name -> talent tree, for every member who has one chosen.
+
+    Derived from FAMILY rather than repeated, for the same reason
+    head_of_family is: the family table is where these decisions are written
+    down, and a second copy here is a second answer that can disagree.
+
+    Members left at -1 are omitted entirely. The column already defaults to -1,
+    so writing them would be writing the default back over itself, and leaving
+    them out keeps "no role chosen" distinguishable from "chose nothing".
+    """
+    return {name: bond.spec_tab for name, bond in FAMILY.items() if bond.spec_tab >= 0}
 
 
 def canon(name: str) -> str | None:

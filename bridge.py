@@ -623,6 +623,31 @@ def _mark_party_leader(head: str) -> None:
         )
 
 
+def _mark_specs(specs: dict) -> None:
+    """Write each character's talent tree onto the roster.
+
+    WHY THE BRIDGE. Same division as the party leader: the module knows a
+    character's class and level and nothing about who it is, and a spec is a
+    role. bonds holds the roles, so bonds is where the answer comes from.
+
+    WHY IT IS WRITTEN EVERY CYCLE. The module reads this column to decide where
+    to spend talent points, and a role changed in bonds has to be able to reach
+    a character that is already on the roster - an INSERT-time-only value would
+    make every later decision unreachable without a hand-edit of the game DB.
+
+    Rewriting an unchanged value costs one indexed UPDATE against five rows and
+    does NOT cause retraining: the module gates that on trained_level and on
+    there being free points to spend, neither of which this touches.
+    """
+    if not specs:
+        return
+    with _connect() as conn, conn.cursor() as cur:
+        cur.executemany(
+            "UPDATE overseer_roster SET spec_tab = %s WHERE name = %s",
+            [(tab, name) for name, tab in sorted(specs.items())],
+        )
+
+
 def _protected_guids() -> dict:
     """guid -> name for the characters we refuse to let be re-rolled.
 
@@ -1345,6 +1370,12 @@ class Bridge(discord.Client):
                 await asyncio.to_thread(
                     _mark_party_leader, bonds.head_of_family()
                 )
+
+                # Which tree each of them puts talent points in. Without this
+                # the module leaves talents alone entirely, which is the safe
+                # default for a character nobody has decided a role for and the
+                # wrong one for a family that needs a tank and a healer.
+                await asyncio.to_thread(_mark_specs, bonds.spec_tabs())
 
                 rows = await asyncio.to_thread(_randomize_rows, list(protected))
                 now = int(time.time())
