@@ -27,6 +27,7 @@ import fanout
 import goals
 import bonds
 import kin
+import overhear
 import persona
 import protect
 import quests
@@ -745,6 +746,7 @@ class Bridge(discord.Client):
         # several pleas answers once. None means "never" - deliberately not 0.0,
         # which on a monotonic clock is a real moment the process may be near.
         self._last_muster_at: float | None = None
+        self._last_overheard_at: float | None = None
 
     async def setup_hook(self) -> None:
         # Held, not fired and forgotten. asyncio keeps only a weak reference to
@@ -1009,6 +1011,82 @@ class Bridge(discord.Client):
                 if channel is not None and reply is not None:
                     await channel.send(reply.text)
 
+    async def _obey_evan_in_game(self, rows: list) -> None:
+        """Act on an order Evan typed in game rather than in Discord.
+
+        He is sitting at the keyboard playing one of these characters, so that
+        is the natural place to talk to them - and until now nothing was
+        listening: "i just asked for the sword that dropped with +4 stamina and
+        they arent listening".
+
+        Runs over the SAME rows the relay is about to post, so an order cannot
+        be obeyed that the channel never saw, nor obeyed twice.
+        """
+        try:
+            await self._obey_once(rows)
+        except Exception:
+            # Never let an order take the chat relay with it. The relay is the
+            # product; obeying is a bonus on top of it.
+            log.exception("overheard order failed; the relay carries on")
+
+    async def _obey_once(self, rows: list) -> None:
+        directive = overhear.hear(
+            rows, family=bonds.FAMILY,
+            last_at=self._last_overheard_at, now=time.monotonic(),
+        )
+        if directive is None:
+            return
+
+        who = overhear.audience(directive, family=bonds.FAMILY)
+        if not who:
+            return
+
+        # Stamp BEFORE issuing. At-most-once matters more than at-least-once
+        # when the cost of a double is the whole family acting on one sentence
+        # twice, and a missed order is one Evan can simply repeat.
+        self._last_overheard_at = time.monotonic()
+
+        first = await asyncio.to_thread(_fetch_grounding, who[0])
+        if first is None:
+            return
+        prompt = voice.build_prompt(
+            name=first["name"], level=first["level"],
+            race_name=RACE_NAMES.get(first["race"], "creature"),
+            class_name=CLASS_NAMES.get(first["class"], "adventurer"),
+            zone=GEO.zone_name(first["map_id"], first["pos_x"], first["pos_y"]),
+            personality=first["personality"], text=directive.text,
+        )
+        try:
+            decision = voice.parse_decision(await asyncio.to_thread(_ask_llm, prompt))
+        except Exception:
+            log.info("overheard '%s' but the voice is unreachable", directive.text[:60])
+            return
+
+        if decision.command is None:
+            # The vocabulary could not express it. Say so rather than guessing:
+            # inventing an approximation of an order nobody gave is worse than
+            # admitting it was not understood, when the order moves five
+            # characters around a world.
+            await asyncio.to_thread(
+                _insert_speak,
+                relay.SpeakCommand(who[0], "party", decision.say, "", "overseer:heard"),
+            )
+            log.info("overheard '%s': no command fits", directive.text[:60])
+            return
+
+        for name in who:
+            await asyncio.to_thread(
+                _insert_command,
+                core.InsertCommand(name, decision.command, "heard:%s" % directive.speaker),
+            )
+            await asyncio.to_thread(_insert_thought, name, "command", directive.text)
+        await asyncio.to_thread(
+            _insert_speak,
+            relay.SpeakCommand(who[0], "party", decision.say, "", "overseer:heard"),
+        )
+        log.info("overheard '%s' -> %s for %s",
+                 directive.text[:50], decision.command, ", ".join(who))
+
     async def _retire_addon_traffic(self, rows: list) -> list:
         """Mark addon rows relayed and return only what is worth posting.
 
@@ -1077,6 +1155,12 @@ class Bridge(discord.Client):
                 # whole batch after a partial failure would skip lines that
                 # never went out AND re-send the ones that did.
                 rows = await self._retire_addon_traffic(rows)
+
+                # Before the relay posts them, so an order and the reply to it
+                # arrive in Discord in the order they happened. Guarded inside
+                # the callee: _relay_chat was already at Elder's complexity cap
+                # and one more except here tips it over.
+                await self._obey_evan_in_game(rows)
 
                 for post, ids in relay.format_batch(rows):
                     head = ids[0] if ids else 0
