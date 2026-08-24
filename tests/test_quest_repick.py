@@ -371,6 +371,35 @@ class TheThresholdsAreSaneAndNotJustPresent(unittest.TestCase):
         self.assertLessEqual(seconds, 3600)
 
 
+class TheNestedTypeIsNotNamedUnqualified(unittest.TestCase):
+    """This one actually broke the build on main, so it gets a test.
+
+    `RepickMemory` is nested inside `AimState`. Writing `RepickMemory& repick`
+    in a member function of the OUTER class does not compile - the unqualified
+    name is not in scope - and clang says so only on `main`, because that is
+    the only place this file is ever compiled:
+
+        fatal error: unknown type name 'RepickMemory';
+                     did you mean 'AimState::RepickMemory'?
+
+    `auto&` is the robust form: it binds the same reference, needs no
+    qualification, and survives the struct being moved or renamed.
+    """
+
+    def test_the_repick_reference_does_not_name_the_nested_type_unqualified(self):
+        body = _code(_drive())
+        self.assertNotRegex(
+            body, r"(?<!::)\bRepickMemory&",
+            "name it `auto&` or `AimState::RepickMemory&`; the bare nested "
+            "name does not compile from the outer class")
+
+    def test_the_reference_is_still_taken_by_reference_not_by_value(self):
+        """A copy would silently drop every strike and give-up on return."""
+        body = _code(_drive())
+        self.assertRegex(body, r"auto&\s+repick\s*=\s*state\.repick",
+                         "a by-value copy would discard the memory each poll")
+
+
 class TheLogLineCannotBreakTheBuild(unittest.TestCase):
     """This file is only compiled on push to `main`.
 
