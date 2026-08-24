@@ -366,3 +366,52 @@ class NothingElseWasQuietlyChanged(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TheSecondErrandOnTheSameBot(unittest.TestCase):
+    """Measured in dev on 2026-08-24, and it is why this class exists.
+
+    Ymrossi drifted onto quest 233 by itself, was re-asserted onto the council's
+    3109, handed 3109 in, and its rpg then re-rolled back onto 233. Aiming it at
+    233 for a SECOND errand did nothing at all: `working == questId` was already
+    true, so DriveChosenQuest returned early and silently. The bot sat holding a
+    DoQuest state for 233 whose objective pointer belonged to its own earlier
+    pursuit - and 233 was already COMPLETE, so there was no objective left to
+    walk to and it never advanced to the hand-in.
+
+    Nothing detected it. The bot held the aimed quest, the aim was set, the
+    roster row was right, and every check passed. The only symptom was the
+    ABSENCE of a log line, which is the second time in one session that absence
+    was the diagnostic.
+
+    The guard is correct for the steady state - re-issuing every twenty seconds
+    resets objectiveIdx/pos/lastReachPOI and walks toward an objective forever -
+    and wrong for the transition, which is the one moment the state behind the
+    lease belongs to a different, self-chosen pursuit.
+    """
+
+    def test_the_steady_state_guard_is_gated_on_the_aim_not_having_changed(self):
+        code = _code(_function("bool DriveChosenQuest"))
+        self.assertIn("working == questId && !aimChanged", code)
+        self.assertNotRegex(
+            code,
+            r"if\s*\(\s*working == questId\s*\)\s*\n\s*return true;",
+            "an ungated `working == questId` early return swallows every second "
+            "errand on a bot that had already chosen that quest itself",
+        )
+
+    def test_a_new_errand_reissues_even_when_the_id_already_matches(self):
+        code = _code(_function("bool DriveChosenQuest"))
+        tail = code.split("working == questId && !aimChanged", 1)[1]
+        self.assertIn("ChangeToDoQuest", tail,
+                      "the aim-changed path must reset the objective pointer")
+
+    def test_that_reissue_is_announced_rather_than_being_a_third_silent_branch(self):
+        body = _function("bool DriveChosenQuest")
+        self.assertIn("by its own choice", body)
+        self.assertIn("re-issuing for the new errand", body)
+
+    def test_the_measurement_that_found_it_is_recorded_in_place(self):
+        body = _function("bool DriveChosenQuest")
+        for needle in ("Ymrossi", "233", "3109", "COMPLETE"):
+            self.assertIn(needle, body, needle)
