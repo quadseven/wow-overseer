@@ -283,6 +283,68 @@ class WiringTest(unittest.TestCase):
         self.assertIn("_ask_llm", names)
         self.assertIn("No reasoning", self.src)
 
+    def test_the_inner_voice_is_grounded_on_the_family_everywhere(self):
+        """Not one voice.build_prompt may take the bots' table straight.
+
+        This is the defect, stated where it can be caught again: every call
+        site passed `personality=grounding["personality"]`, which for this
+        family is ANCIENT_WISE_ONE for two of them and nothing at all for the
+        other three. Checked per call rather than by a text search, so a new
+        fourth call site cannot quietly reintroduce it.
+        """
+        ast = self.ast
+        calls = [n for n in ast.walk(self.tree)
+                 if isinstance(n, ast.Call)
+                 and getattr(n.func, "attr", None) == "build_prompt"
+                 and getattr(getattr(n.func, "value", None), "id", None) == "voice"]
+        self.assertTrue(calls, "nothing asks the inner voice at all any more")
+        for call in calls:
+            arg = next((k.value for k in call.keywords if k.arg == "personality"), None)
+            self.assertIsNotNone(arg, "a build_prompt call names no personality")
+            reached = {n.id for n in ast.walk(arg) if isinstance(n, ast.Name)}
+            self.assertIn(
+                "_persona_for", reached,
+                "line %d prompts on mod_ollama_chat_personality instead of the "
+                "family Evan wrote" % call.lineno,
+            )
+
+
+class CharacterisationTest(unittest.TestCase):
+    """The persona Evan wrote, for prompts persona.py does not build itself.
+
+    Bork replied to "lets go sell junk in town" with "The cycle of commerce
+    must flow. Let us trade these dull relics for coin, as the ancients did."
+    He was flagged ANCIENT_WISE_ONE in mod_ollama_chat_personality, which was
+    the only characterisation the inner voice was ever given.
+    """
+
+    def test_it_is_the_persona_from_bonds(self):
+        text = persona.characterisation("Grog")
+        self.assertIn("Copies his father's way of talking", text)
+        self.assertIn("elder son", text)
+
+    def test_the_register_comes_with_it(self):
+        """The persona separates the five; the register is what makes them one
+        family. Personas alone produced five polite strangers."""
+        self.assertIn("caveman", persona.characterisation("Ugga"))
+        self.assertIn("Grug no like.", persona.characterisation("Ugga"))
+
+    def test_every_member_has_one_including_the_three_the_table_forgot(self):
+        """The live table holds rows for Bork and Og and NOTHING for Grug,
+        Ugga or Grog - who were therefore prompted with no character at all."""
+        for name in ("Grug", "Ugga", "Grog", "Bork", "Og"):
+            self.assertTrue(persona.characterisation(name), name)
+
+    def test_chat_casing_still_finds_them(self):
+        self.assertEqual(persona.characterisation("bORK"), persona.characterisation("Bork"))
+
+    def test_a_stranger_gets_nothing_rather_than_a_borrowed_family(self):
+        """Five hundred random bots share this realm. This module has personas
+        for five characters and no business describing anyone else - the caller
+        falls back to whatever the bots' own table says."""
+        self.assertIsNone(persona.characterisation("Thrall"))
+        self.assertIsNone(persona.characterisation(""))
+
 
 if __name__ == "__main__":
     unittest.main()

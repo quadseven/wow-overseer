@@ -177,3 +177,45 @@ def clean(said: str, plain: str) -> str:
     if not text or len(text) > MAX_SPOKEN or _ALL_PUNCTUATION.match(text):
         return plain
     return text
+
+
+def characterisation(name: str) -> str | None:
+    """Who this character is, for a prompt this module does not build itself.
+
+    Returns None for anyone outside the family, so a caller can keep whatever
+    it had - this module has personas for five characters and no business
+    describing anyone else.
+
+    WHY THIS EXISTS. voice.build_prompt was grounded on
+    `mod_ollama_chat_personality` instead, which is the table mod-ollama-chat
+    fills in for the five hundred random bots. Read live, it holds two rows
+    for this family and both are wrong:
+
+        name | ollama_personality
+        -----+-------------------
+        Bork | ANCIENT_WISE_ONE
+        Og   | ANCIENT_WISE_ONE
+
+    and NO row at all for Grug, Ugga or Grog, who were therefore prompted with
+    no character whatsoever. So when Evan said "lets go sell junk in town", the
+    little brother who is in trouble constantly answered
+
+        "The cycle of commerce must flow. Let us trade these dull relics for
+         coin, as the ancients did."
+
+    Bork was not out of character. He was flagged ANCIENT_WISE_ONE and played
+    it perfectly. The family's real characterisation is the `persona` Evan
+    wrote on each Bond, which build_prompt above has grounded the council on
+    since it was written, and which reached the inner voice through nothing.
+
+    GRUG_VOICE comes with it deliberately. The persona is what separates the
+    five; the register is what makes them one family, and a persona without it
+    is what produced five polite strangers the first time round.
+    """
+    bond = bonds.member(name)
+    if bond is None:
+        return None
+    return (
+        f"You are the {bond.role} of a family of cavemen who travel together.\n"
+        f"{bond.persona}\n\n{GRUG_VOICE}"
+    )

@@ -498,6 +498,48 @@ class WindowContaminationTest(unittest.TestCase):
         self.assertIn("MODIFY source", src)
 
 
+class SpeakingOrderTest(unittest.TestCase):
+    """Who speaks first when the whole family answers one order at once.
+
+    overhear.audience sorts alphabetically, which is the right answer for who
+    ACTS and the wrong one for who speaks: it put the seven-year-old at the
+    head of every exchange and his mother at the end of it.
+    """
+
+    def test_the_family_answers_oldest_first(self):
+        self.assertEqual(
+            bonds.speaking_order(["Bork", "Grog", "Og", "Ugga"]),
+            ["Ugga", "Og", "Grog", "Bork"],
+        )
+
+    def test_it_does_not_depend_on_what_order_it_was_handed(self):
+        for given in (["Og", "Ugga", "Bork", "Grog"], ["Grog", "Bork", "Ugga", "Og"]):
+            self.assertEqual(bonds.speaking_order(given),
+                             ["Ugga", "Og", "Grog", "Bork"])
+
+    def test_it_agrees_with_who_leads(self):
+        """Seniority is the family table's one answer to who comes first. A
+        second answer here could disagree with head_of_family."""
+        self.assertEqual(bonds.speaking_order(bonds.FAMILY)[0], bonds.head_of_family())
+
+    def test_chat_casing_does_not_demote_anyone(self):
+        """Names arrive from chat rows, which are whatever was typed."""
+        self.assertEqual(bonds.speaking_order(["bork", "ugga"]), ["ugga", "bork"])
+
+    def test_strangers_sort_after_the_family_not_among_it(self):
+        """This module has no opinion about a stranger's standing, and
+        inventing one would put an outsider ahead of the father."""
+        self.assertEqual(
+            bonds.speaking_order(["Thrall", "Bork", "Ugga", "Arthas"]),
+            ["Ugga", "Bork", "Arthas", "Thrall"],
+        )
+
+    def test_nobody_is_added_or_lost(self):
+        """It orders an audience; it never changes who is in it."""
+        given = ["Bork", "Grog", "Og", "Ugga"]
+        self.assertCountEqual(bonds.speaking_order(given), given)
+        self.assertEqual(bonds.speaking_order([]), [])
+
 
 if __name__ == "__main__":
     unittest.main()

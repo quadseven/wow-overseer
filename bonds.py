@@ -231,6 +231,34 @@ def canon(name: str) -> str | None:
     return _BY_LOWER.get((name or "").strip().lower())
 
 
+def speaking_order(names) -> list[str]:
+    """`names`, oldest first, for when the whole family answers at once.
+
+    WHY ORDER MATTERS NOW. Every member of the audience answers an overheard
+    order in their own words (infra#2597), so four chat lines are written in
+    one go and mod-overseer delivers them in id order, twenty per two-second
+    poll - which means the order they are WRITTEN in is the order Evan reads
+    them in. Alphabetical, which is what overhear.audience returns, put the
+    seven-year-old first every single time and the mother last.
+
+    Seniority is already the family table's answer to who comes first - it is
+    what head_of_family reads - so this is that same fact used twice rather
+    than a second opinion about the family that could disagree with it.
+
+    Anyone outside the family sorts after, alphabetically: this module has no
+    opinion about their standing and guessing one would be an invention.
+    """
+    names = list(names)
+    return sorted(
+        names,
+        key=lambda n: (
+            0 if canon(n) else 1,
+            -FAMILY[canon(n)].seniority if canon(n) else 0,
+            n,
+        ),
+    )
+
+
 def _count(history: list[tuple[str, str]], helper: str, called: str) -> int:
     """How many times `helper` has answered `called`.
 

@@ -101,11 +101,19 @@ def is_raw_command(text: str) -> bool:
 
 def build_prompt(*, name: str, level: int, race_name: str, class_name: str,
                  zone: str, personality: str | None, text: str) -> str:
+    """The prompt that asks ONE character what it will do about an order.
+
+    `personality` is a block, not a clause, since persona.characterisation
+    started supplying it: the family's own description carries the shared
+    caveman register with it, and that is several lines. Squeezing it into
+    "Personality: ..." on the identity line is how it used to read, back when
+    the only thing that ever arrived was a one-word mod-ollama-chat label.
+    """
     vocab = "\n".join(f"  {cmd} - {what}" for cmd, what in VOCABULARY.items())
-    persona = f" Personality: {personality}." if personality else ""
+    persona = f"\n{personality}\n" if personality else ""
     return (
         f"You are {name}, a level {level} {race_name} {class_name} standing in "
-        f"{zone}, a character in World of Warcraft.{persona}\n"
+        f"{zone}, a character in World of Warcraft.\n{persona}"
         f"The Overseer commands you: \"{text}\"\n\n"
         "Pick the ONE command from this list that best fulfils the order:\n"
         f"{vocab}\n\n"

@@ -49,6 +49,24 @@ class PromptTest(unittest.TestCase):
         )
         self.assertIn("gruff axe-proud dwarf", p)
 
+    def test_a_whole_character_survives_being_woven_in(self):
+        """persona.characterisation supplies several lines, not a label. It
+        used to be squeezed into "Personality: ..." on the identity line,
+        which was fine for the one-word mod_ollama_chat_personality strings
+        and mangles a persona and a register into one run-on sentence."""
+        import persona
+
+        p = voice.build_prompt(
+            name="Bork", level=8, race_name="Gnome", class_name="Rogue",
+            zone="Elwynn Forest", personality=persona.characterisation("Bork"),
+            text="lets go sell junk in town",
+        )
+        self.assertIn("Worships Grog", p)
+        self.assertIn("Grug no like.", p)
+        # The order still has to be legible under all of that.
+        self.assertIn("lets go sell junk in town", p)
+        self.assertIn("sell gray", p)
+
 
 class DecisionTest(unittest.TestCase):
     def _decide(self, content):

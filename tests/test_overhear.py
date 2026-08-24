@@ -161,6 +161,83 @@ class WiringTest(unittest.TestCase):
         src = self.ast.unparse(fn)
         self.assertIn("decision.command is None", src)
 
+    def _fn(self, name):
+        return next(n for n in self.ast.walk(self.tree)
+                    if isinstance(n, self.ast.AsyncFunctionDef) and n.name == name)
+
+    def test_every_member_is_asked_not_only_the_first(self):
+        """The defect. `audience` returns a SORTED list, so with Evan speaking
+        as Grug who[0] was Bork every single time - and _obey_once fetched
+        grounding for who[0] alone, built one prompt from it, and applied the
+        answer to all four. Bork answered every order the family ever got, and
+        the other three acted on a decision taken from Bork's level, Bork's
+        zone and Bork's bags.
+
+        So the grounding fetch must not live in _obey_once at all: it belongs
+        to the per-character function that _obey_once asks for everyone.
+        """
+        self.assertNotIn("_fetch_grounding", self._names("_obey_once"),
+                         "_obey_once grounds on one character again")
+        self.assertIn("_fetch_grounding", self._names("_answer_as"))
+        self.assertIn("build_prompt", self._names("_answer_as"))
+
+    def test_the_four_calls_are_asked_at_once(self):
+        """One order is now four LLM round trips on a relay that ticks every
+        few seconds. Serially they hold the next tick's chat behind them."""
+        self.assertIn("gather", self._names("_obey_once"))
+
+    def test_one_members_dead_voice_does_not_silence_the_others(self):
+        """They share a gather. An exception escaping one character's call
+        would take the other three's answers with it, which is the old
+        all-or-nothing failure wearing a new shape."""
+        handlers = [n for n in self.ast.walk(self._fn("_answer_as"))
+                    if isinstance(n, self.ast.ExceptHandler)]
+        self.assertTrue(handlers, "a failed inference kills the whole family's answer")
+
+    def test_a_failure_is_admitted_rather_than_returned_from_silently(self):
+        """The old code returned without a word when the voice was
+        unreachable, and silence in party chat is indistinguishable from not
+        having been heard at all - which is most of why one character
+        answering for four went unnoticed."""
+        src = self.ast.unparse(self._fn("_obey_once"))
+        self.assertIn("VOICE_SILENT", src)
+        self.assertIn("log.warning", src)
+
+    def test_each_member_gets_their_own_command_and_their_own_words(self):
+        """Everything written must be written inside the loop over `who`. One
+        speak row outside it is one character answering for the family again."""
+        loops = [n for n in self.ast.walk(self._fn("_obey_once"))
+                 if isinstance(n, self.ast.For)]
+        self.assertTrue(loops, "_obey_once no longer loops over the audience")
+        inside = set()
+        for loop in loops:
+            inside |= {n.id for n in self.ast.walk(loop) if isinstance(n, self.ast.Name)}
+        self.assertIn("_insert_command", inside)
+        self.assertIn("_insert_speak", inside)
+
+    def test_the_order_is_stamped_before_anybody_is_asked(self):
+        """At-most-once. The cost of a double is the whole family acting on one
+        sentence twice; the cost of a miss is Evan typing it again. Four
+        concurrent inferences take longer than one, so the window this closes
+        got wider, not narrower."""
+        fn = self._fn("_obey_once")
+        stamped = [n.lineno for n in self.ast.walk(fn)
+                   if isinstance(n, self.ast.Attribute)
+                   and n.attr == "_last_overheard_at"
+                   and isinstance(n.ctx, self.ast.Store)]
+        asked = [n.lineno for n in self.ast.walk(fn)
+                 if isinstance(n, self.ast.Attribute) and n.attr == "gather"]
+        self.assertTrue(stamped and asked)
+        self.assertLess(max(stamped), min(asked),
+                        "the voice is asked before the order is stamped, so a "
+                        "slow inference lets the next tick act on it again")
+
+    def test_the_family_answers_oldest_first(self):
+        """Written order is read order: mod-overseer delivers pending commands
+        ORDER BY id ASC. Left alphabetical, the youngest spoke first every
+        time."""
+        self.assertIn("speaking_order", self._names("_obey_once"))
+
     def test_a_dead_voice_does_not_take_the_relay_with_it(self):
         """The relay is the product; obeying is a bonus on top of it. The
         guard lives in the listener rather than the relay because _relay_chat

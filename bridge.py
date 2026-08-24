@@ -57,6 +57,12 @@ LLM_URL = os.environ.get(
 )
 LLM_MODEL = os.environ.get("LLM_MODEL", "spark:warm-any")
 LLM_TIMEOUT = float(os.environ.get("LLM_TIMEOUT_SECONDS", "120"))
+# What gets said in game when NOBODY in the family could answer an order Evan
+# gave - the voice is down, or none of them are in the world. Said once, by the
+# most senior of them, and in the family's own register because it is one of
+# them saying it. The alternative is what this replaced: returning silently,
+# which looks exactly like not having been heard at all.
+VOICE_SILENT = "Words come to us wrong. Say again."
 
 GEO = Geometry.load(os.path.dirname(os.path.abspath(__file__)))
 
@@ -286,6 +292,23 @@ def _fetch_reflections() -> list[dict]:
             (REFLECTION_WINDOW_HOURS, REFLECTION_WINDOW_MAX),
         )
         return list(reversed(cur.fetchall()))
+
+
+def _persona_for(grounding: dict) -> str | None:
+    """The character to prompt this one as: the family's own, or the bots'.
+
+    The family is described in bonds.py, in text Evan wrote, and that beats
+    `mod_ollama_chat_personality` outright - it is not a fallback for them.
+    See persona.characterisation: that table holds ANCIENT_WISE_ONE for Bork
+    and Og and nothing for the other three, which is why the youngest son
+    answered "lets go sell junk in town" as a sage.
+
+    The JOIN stays for everyone else. _fetch_grounding also serves Discord
+    orders aimed at any of the five hundred random bots on this realm, and for
+    them that row is the only characterisation there is - dropping it would
+    trade one family's wrong voice for everybody else's missing one.
+    """
+    return persona.characterisation(grounding["name"]) or grounding["personality"]
 
 
 def _fetch_grounding(name: str) -> dict | None:
@@ -907,7 +930,7 @@ class Bridge(discord.Client):
             race_name=RACE_NAMES.get(grounding["race"], "creature"),
             class_name=CLASS_NAMES.get(grounding["class"], "adventurer"),
             zone=GEO.zone_name(grounding["map_id"], grounding["pos_x"], grounding["pos_y"]),
-            personality=grounding["personality"],
+            personality=_persona_for(grounding),
             text=d.text,
         )
         try:
@@ -1106,7 +1129,10 @@ class Bridge(discord.Client):
         if directive is None:
             return
 
-        who = overhear.audience(directive, family=bonds.FAMILY)
+        # Oldest first. audience() sorts alphabetically, which is fine for
+        # deciding WHO acts and wrong for deciding who speaks first: it put
+        # Bork at the head of the queue every time Evan spoke as Grug.
+        who = bonds.speaking_order(overhear.audience(directive, family=bonds.FAMILY))
         if not who:
             return
 
@@ -1115,46 +1141,98 @@ class Bridge(discord.Client):
         # twice, and a missed order is one Evan can simply repeat.
         self._last_overheard_at = time.monotonic()
 
-        first = await asyncio.to_thread(_fetch_grounding, who[0])
-        if first is None:
-            return
-        prompt = voice.build_prompt(
-            name=first["name"], level=first["level"],
-            race_name=RACE_NAMES.get(first["race"], "creature"),
-            class_name=CLASS_NAMES.get(first["class"], "adventurer"),
-            zone=GEO.zone_name(first["map_id"], first["pos_x"], first["pos_y"]),
-            personality=first["personality"], text=directive.text,
+        # EVERY member answers, each from their own situation. This used to ask
+        # the voice once, about who[0], and then apply that one answer to all
+        # four - so Bork answered every order Evan ever gave (he is first
+        # alphabetically), and the other three carried out a decision taken
+        # from Bork's level, Bork's zone and Bork's bags. Evan: "i want them
+        # all to answer to be honest, and it should all synthesize based on
+        # their own brain and needs based on what they are doing."
+        #
+        # They may well pick DIFFERENT commands. That is the point of asking
+        # them separately; a family that always agrees is one character.
+        #
+        # Concurrently, because this is now four LLM round trips on a relay
+        # that ticks every RELAY_SECONDS - serially they would hold the next
+        # tick's chat behind them for as long as four inferences take.
+        decisions = await asyncio.gather(
+            *(self._answer_as(name, directive) for name in who)
         )
-        try:
-            decision = voice.parse_decision(await asyncio.to_thread(_ask_llm, prompt))
-        except Exception:
-            log.info("overheard '%s' but the voice is unreachable", directive.text[:60])
-            return
 
-        if decision.command is None:
-            # The vocabulary could not express it. Say so rather than guessing:
-            # inventing an approximation of an order nobody gave is worse than
-            # admitting it was not understood, when the order moves five
-            # characters around a world.
+        answered = 0
+        # strict=True: asyncio.gather returns exactly one result per awaitable,
+        # in the order they were passed, so `decisions` is the same length as
+        # `who` by construction. If that ever stops holding, a member would be
+        # silently dropped from the answer - which is the bug this whole
+        # function exists to fix - so fail loudly instead.
+        for name, decision in zip(who, decisions, strict=True):
+            if decision is None:
+                continue
+            answered += 1
+            # A decision with no command is a refusal: the vocabulary could not
+            # express the order, so this character says so and does nothing.
+            # Inventing an approximation of an order nobody gave is worse than
+            # admitting it was not understood, when the order moves characters
+            # around a world.
+            if decision.command is None:
+                log.info("overheard '%s': no command fits for %s",
+                         directive.text[:50], name)
+            else:
+                await asyncio.to_thread(
+                    _insert_command,
+                    core.InsertCommand(name, decision.command, "heard:%s" % directive.speaker),
+                )
+            await asyncio.to_thread(_insert_thought, name, "command", directive.text)
+            await asyncio.to_thread(_insert_thought, name, "chat", decision.say)
+            # Written one at a time, in speaking order, and not staggered in
+            # time. mod-overseer takes pending commands ORDER BY id ASC, twenty
+            # per two-second poll, so insertion order IS the order Evan reads -
+            # and overhear.COOLDOWN_SECONDS already caps the whole family at
+            # one exchange per twenty seconds, which is four lines, not a
+            # flood. Sleeping between them would only park the relay tick.
             await asyncio.to_thread(
                 _insert_speak,
-                relay.SpeakCommand(who[0], "party", decision.say, "", "overseer:heard"),
+                relay.SpeakCommand(name, "party", decision.say, "", "overseer:heard"),
             )
-            log.info("overheard '%s': no command fits", directive.text[:60])
-            return
+            log.info("overheard '%s' -> %s: %s", directive.text[:50], name, decision.command)
 
-        for name in who:
+        if not answered:
+            # Say something. The old code returned here without a word, and
+            # silence in party chat is indistinguishable from nobody having
+            # heard - which is most of why one character answering for four
+            # went unnoticed for as long as it did.
             await asyncio.to_thread(
-                _insert_command,
-                core.InsertCommand(name, decision.command, "heard:%s" % directive.speaker),
+                _insert_speak,
+                relay.SpeakCommand(who[0], "party", VOICE_SILENT, "", "overseer:heard"),
             )
-            await asyncio.to_thread(_insert_thought, name, "command", directive.text)
-        await asyncio.to_thread(
-            _insert_speak,
-            relay.SpeakCommand(who[0], "party", decision.say, "", "overseer:heard"),
-        )
-        log.info("overheard '%s' -> %s for %s",
-                 directive.text[:50], decision.command, ", ".join(who))
+            log.warning("overheard '%s' but not one of %s could answer",
+                        directive.text[:50], ", ".join(who))
+
+    async def _answer_as(self, name: str, directive) -> voice.Decision | None:
+        """What THIS character decides to do about the order, or None.
+
+        None means this one could not answer at all - it is not in the world,
+        or its own call to the voice failed. Every failure is contained here on
+        purpose: four members share one gather, and one unreachable inference
+        must not take the other three's answers with it.
+        """
+        try:
+            grounding = await asyncio.to_thread(_fetch_grounding, name)
+            if grounding is None:
+                log.info("overheard an order but %s is not in the world", name)
+                return None
+            prompt = voice.build_prompt(
+                name=grounding["name"], level=grounding["level"],
+                race_name=RACE_NAMES.get(grounding["race"], "creature"),
+                class_name=CLASS_NAMES.get(grounding["class"], "adventurer"),
+                zone=GEO.zone_name(grounding["map_id"], grounding["pos_x"], grounding["pos_y"]),
+                personality=_persona_for(grounding), text=directive.text,
+            )
+            return voice.parse_decision(await asyncio.to_thread(_ask_llm, prompt))
+        except Exception:
+            log.exception("overheard '%s' but %s's voice is unreachable",
+                          directive.text[:60], name)
+            return None
 
     async def _retire_addon_traffic(self, rows: list) -> list:
         """Mark addon rows relayed and return only what is worth posting.
@@ -1640,7 +1718,7 @@ class Bridge(discord.Client):
             race_name=RACE_NAMES.get(grounding["race"], "creature"),
             class_name=CLASS_NAMES.get(grounding["class"], "adventurer"),
             zone=GEO.zone_name(grounding["map_id"], grounding["pos_x"], grounding["pos_y"]),
-            personality=grounding["personality"],
+            personality=_persona_for(grounding),
             text=d.text,
         )
         try:
