@@ -55,12 +55,33 @@ VOCABULARY = {
 # tokens beyond the vocabulary are the rest of mod-playerbots' common chat
 # grammar, so power users typing raw commands keep their pre-#2600
 # behavior instead of detouring through the model.
-RAW_STARTERS = {v.split()[0] for v in VOCABULARY} | {
+# Multi-word vocabulary entries must be matched WHOLE. Deriving starters by
+# splitting them - which this did - reduces "sell gray" to the bare token
+# "sell", and the parameterize branch below then happily accepts "sell junk":
+# the exact string documented twenty lines above as NOT A COMMAND, which sells
+# nothing and returns TRUE. The guard's own allowlist was re-admitting the
+# footgun the comment warns about. Live-found 2026-08-24: rows 856-859 sent
+# "sell junk" to four characters, all status `delivered`, nothing sold.
+MULTIWORD = frozenset(v for v in VOCABULARY if " " in v)
+
+# Only genuinely single-word entries may start a raw command on their own. The
+# extra tokens are the rest of mod-playerbots' common chat grammar, so power
+# users typing raw commands keep their pre-#2600 behavior.
+RAW_STARTERS = {v for v in VOCABULARY if " " not in v} | {
     "co", "cast", "castnc", "e", "ue", "equip", "unequip", "talk", "accept",
     "reward", "release", "revive", "emote", "q", "ll", "c", "s", "b", "bank",
     "gb", "rtsc", "rti", "focus", "playerbot", "tank", "heal", "dps", "say",
     "unmount", "formation", "stance", "give", "trainer", "maintenance",
 }
+
+
+def _starts_with_multiword(command: str) -> bool:
+    """Is this a whole multi-word entry, optionally with arguments after it?
+
+    "drop quest Foo" yes, "sell gray" yes, "sell junk" NO - because "sell"
+    alone was never a command and must not behave like one.
+    """
+    return any(command == m or command.startswith(m + " ") for m in MULTIWORD)
 
 
 @dataclass(frozen=True)
@@ -70,8 +91,12 @@ class Decision:
 
 
 def is_raw_command(text: str) -> bool:
-    first = text.split()[0].lower() if text.split() else ""
-    return first in RAW_STARTERS
+    normalised = " ".join(text.split()).lower()
+    if not normalised:
+        return False
+    if _starts_with_multiword(normalised):
+        return True
+    return normalised.split()[0] in RAW_STARTERS
 
 
 def build_prompt(*, name: str, level: int, race_name: str, class_name: str,
@@ -120,6 +145,7 @@ def parse_decision(content: str) -> Decision:
     if command in VOCABULARY:
         return Decision(command, say)
     # Parameterized form: a known raw token, then charset-clean arguments.
-    if _COMMAND_RE.fullmatch(command) and command.split()[0] in RAW_STARTERS:
+    if _COMMAND_RE.fullmatch(command) and (
+            command.split()[0] in RAW_STARTERS or _starts_with_multiword(command)):
         return Decision(command, say)
     return Decision(None, say)

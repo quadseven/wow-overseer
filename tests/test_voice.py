@@ -123,3 +123,51 @@ class ReasoningPreambleTest(unittest.TestCase):
         d = voice.parse_decision("We need to answer the request. The list includes grind which")
         self.assertIsNone(d.command)
         self.assertTrue(d.say)
+
+
+class SellJunkTest(unittest.TestCase):
+    """Live-found 2026-08-24 (infra#2597).
+
+    Evan typed "lets go sell junk in town" in party chat. The model answered
+    with the command `sell junk`, which is NOT a command: mod-playerbots'
+    SellAction accepts gray/*/vendor/[item link], anything else falls through
+    to an item-name lookup, matches nothing, sells nothing and RETURNS TRUE.
+    Rows 856-859 went to four characters, every one status `delivered`, and
+    not a single grey item left a bag.
+
+    It passed the gate because RAW_STARTERS was built by splitting the
+    vocabulary, turning "sell gray" into the bare token "sell". The comment
+    warning that "sell junk" IS NOT A COMMAND sat twenty lines above the code
+    that admitted it.
+    """
+
+    def test_sell_junk_is_refused(self):
+        d = voice.parse_decision(json.dumps({"command": "sell junk", "say": "On my way."}))
+        self.assertIsNone(d.command)
+        self.assertEqual(d.say, "On my way.")
+
+    def test_bare_sell_is_not_a_starter(self):
+        self.assertNotIn("sell", voice.RAW_STARTERS)
+        self.assertFalse(voice.is_raw_command("sell junk"))
+
+    def test_the_real_sell_commands_still_pass(self):
+        for good in ("sell gray", "sell vendor"):
+            d = voice.parse_decision(json.dumps({"command": good, "say": "Aye."}))
+            self.assertEqual(d.command, good, good)
+            self.assertTrue(voice.is_raw_command(good), good)
+
+    def test_multiword_entries_still_take_arguments(self):
+        d = voice.parse_decision(json.dumps({"command": "drop quest", "say": "Fine."}))
+        self.assertEqual(d.command, "drop quest")
+        self.assertTrue(voice.is_raw_command("drop quest"))
+        self.assertTrue(voice.is_raw_command("  DROP   QUEST  "))
+
+    def test_explicitly_listed_starters_still_parameterize(self):
+        d = voice.parse_decision(json.dumps({"command": "co +grind,-loot", "say": "Aye."}))
+        self.assertEqual(d.command, "co +grind,-loot")
+
+    def test_invented_second_word_on_a_multiword_verb_is_refused(self):
+        # The general shape of the bug, not just the one string that bit us.
+        for bad in ("sell everything", "drop everything", "reset everything"):
+            d = voice.parse_decision(json.dumps({"command": bad, "say": "..."}))
+            self.assertIsNone(d.command, bad)
