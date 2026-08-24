@@ -22,6 +22,7 @@ import pymysql
 
 import council
 import core
+import digest
 import events
 import fanout
 import goals
@@ -933,6 +934,7 @@ class Bridge(discord.Client):
                 self._supervise_goals,
                 self._relay_chat,
                 self._hold_council,
+                self._sample_family,
             )
         }
 
@@ -945,6 +947,7 @@ class Bridge(discord.Client):
             log.error("connected but in ZERO guilds - the bot cannot hear anything")
         await asyncio.to_thread(_ensure_thought_store)
         await asyncio.to_thread(_ensure_goal_store)
+        await asyncio.to_thread(_ensure_sample_store)
 
     async def on_message(self, message: discord.Message) -> None:
         if message.author.bot:
@@ -985,6 +988,8 @@ class Bridge(discord.Client):
         elif isinstance(decision, core.RosterQuery):
             rows = await asyncio.to_thread(_fetch_roster)
             await channel.send(core.format_roster(rows).text[:1990])
+        elif isinstance(decision, core.DigestQuery):
+            await self._report_digest(decision, channel)
         else:
             await channel.send(decision.text)
 
@@ -1826,6 +1831,96 @@ class Bridge(discord.Client):
         await channel.send(f"{decision.say}  [{decision.command}]"[:1990])
         await self._muster(d, decision.command, channel)
 
+    # --- catching up on the family (infra#2597) ---------------------------
+
+    async def _sample_family(self) -> None:
+        """Write one overseer_sample row per family member, forever.
+
+        THIS LOOP IS THE ONLY REASON "what changed in the last six hours" CAN
+        EVER BE ANSWERED. Levels, gold, turn-ins, spells and talents are all
+        stored as they are NOW - characters.money is a balance, not a ledger,
+        and character_queststatus_rewarded is (guid, quest, active) with no
+        time on it at all. Nothing in the schema remembers what any of them
+        were an hour ago. A sample row is that memory, and a delta is the
+        difference between two of them.
+
+        Which also means: this reaches FORWARDS only. The first useful window
+        opens one interval after the first deploy, and digest.changes reports
+        BASIS_NO_BASELINE until then rather than a zero that would read as
+        "nothing happened".
+        """
+        await self.wait_until_ready()
+        while not self.is_closed():
+            try:
+                names = await asyncio.to_thread(_family_names)
+                written = await asyncio.to_thread(_take_sample, names)
+                pruned = await asyncio.to_thread(_prune_samples)
+                log.info("sample cycle: characters=%d written=%d pruned=%d",
+                         len(names), written, pruned)
+            except Exception:
+                # A missed sample costs resolution at one instant, never the
+                # series. Taking the bridge down with it would cost all of it.
+                log.exception("sample cycle failed; retrying next interval")
+            await asyncio.sleep(SAMPLE_INTERVAL)
+
+    async def _report_digest(self, query: core.DigestQuery, channel) -> None:
+        """Answer "how are they?" with an account of the window asked for.
+
+        The account is rendered by digest.render from facts this method
+        fetches - deterministic, and posted whatever the LLM does. The model
+        is asked for ONE line of greeting on top, grounded in the finished
+        text, exactly as events.py has it voice what already happened. An
+        outage costs a greeting; the numbers are never at risk.
+        """
+        ask = digest.Ask(hours=query.hours)
+        try:
+            report = await asyncio.to_thread(_build_digest, ask)
+        except Exception:
+            log.exception("digest failed")
+            await channel.send(
+                "I cannot read the family's state right now. The database or "
+                "the worldserver is not answering; ask again in a minute."
+            )
+            return
+        speaker = bonds.head_of_family()
+        try:
+            said = await asyncio.to_thread(
+                _ask_llm, digest.build_prompt(report, speaker=speaker))
+        except Exception:
+            log.exception("digest voice unreachable; the account stands alone")
+            said = ""
+        opening = relay.sanitize(digest.opening_line(report, said, speaker=speaker))
+        body = relay.sanitize(digest.render(report))
+        log.info(
+            "digest: hours=%.1f characters=%d measured=%s moments=%d gaps=%d",
+            report.window.hours, len(report.standings), report.measured,
+            len(report.moments), len(report.gaps),
+        )
+        # Two messages, not one clipped to 1990: the account is the product
+        # and losing its tail to a greeting would be the wrong thing to drop.
+        await channel.send(opening[:1990])
+        for chunk in _chunks(body, 1990):
+            await channel.send(chunk)
+
+
+def _chunks(text: str, limit: int) -> list:
+    """`text` split on line boundaries into Discord-sized pieces.
+
+    Splitting mid-sentence is what a naive [:1990] does, and this report has
+    one fact per line - a line cut in half is a number cut in half.
+    """
+    out, current = [], ""
+    for line in text.split("\n"):
+        line = line[:limit]
+        if current and len(current) + 1 + len(line) > limit:
+            out.append(current)
+            current = line
+        else:
+            current = f"{current}\n{line}" if current else line
+    if current:
+        out.append(current)
+    return out
+
 
 # --- goal store adapters (infra#2601) --------------------------------------
 
@@ -2274,6 +2369,397 @@ def _fetch_guild_names() -> dict[int, str]:
     with _connect() as conn, conn.cursor() as cur:
         cur.execute("SELECT guildid, name FROM guild")
         return {int(row["guildid"]): row["name"] for row in cur.fetchall()}
+
+
+# --- family digest adapters (infra#2597) -----------------------------------
+#
+# Everything digest.py needs, read here and nowhere else. The module itself is
+# pure - it never learns that any of this came from a database - which is the
+# same seam questbook.py and bonds.py sit on.
+
+# Ten minutes. The cheapest interval that still resolves a night into
+# something with shape, at 5 characters x 144 rows a day; a one-minute sample
+# would buy resolution nobody reads and pay for it in a hot table forever.
+SAMPLE_INTERVAL = float(os.environ.get("SAMPLE_INTERVAL_SECONDS", "600"))
+# Long enough that "what did they do last week" works, short enough that the
+# table never becomes something anyone has to think about.
+SAMPLE_RETENTION_DAYS = int(os.environ.get("SAMPLE_RETENTION_DAYS", "30"))
+# Bound on how much conversation one report will read. A busy night is
+# thousands of chat rows and the digest quotes four of them.
+DIGEST_MAX_MOMENTS = int(os.environ.get("DIGEST_MAX_MOMENTS", "400"))
+
+
+def _ensure_sample_store() -> None:
+    """The counters table, created the same way the thought store is.
+
+    Bridge-owned state, deliberately NOT module SQL, for exactly the reason
+    written on _ensure_thought_store: this is the overseer's memory, the
+    worldserver never touches it, and coupling it to a 90-minute game-server
+    image rebuild would be friction for nothing. CREATE TABLE IF NOT EXISTS is
+    idempotent.
+
+    UNSIGNED on the counters and SIGNED deltas: every column here only ever
+    goes up in the world, but money genuinely falls (repairs, training), so
+    the delta digest computes is a Python int and never a SQL subtraction that
+    would underflow.
+    """
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(
+            "CREATE TABLE IF NOT EXISTS overseer_sample ("
+            " id INT UNSIGNED NOT NULL AUTO_INCREMENT,"
+            " character_name VARCHAR(12) NOT NULL,"
+            " level SMALLINT UNSIGNED NOT NULL DEFAULT 0,"
+            " money INT UNSIGNED NOT NULL DEFAULT 0,"
+            " quests_rewarded SMALLINT UNSIGNED NOT NULL DEFAULT 0,"
+            " spells SMALLINT UNSIGNED NOT NULL DEFAULT 0,"
+            " talents SMALLINT UNSIGNED NOT NULL DEFAULT 0,"
+            " equipped SMALLINT UNSIGNED NOT NULL DEFAULT 0,"
+            " taken_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,"
+            " PRIMARY KEY (id), KEY idx_char_time (character_name, taken_at)"
+            ") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4"
+        )
+
+
+def _family_names() -> list:
+    """The characters a digest is about, best available answer.
+
+    The protected set is the real one - it is what OVERSEER_NOTABLE_NAMES
+    already means everywhere else in this file - but it is a database lookup
+    that can come back empty on a cold realm, and a digest about nobody is
+    worse than a digest about the five names the family table has always
+    known. bonds.FAMILY is the fallback, never the first answer: a member
+    renamed in the world would otherwise be sampled under a name that no
+    longer exists.
+    """
+    try:
+        names = sorted(_protected_guids().values())
+    except Exception:
+        log.exception("protected lookup failed; falling back to bonds.FAMILY")
+        names = []
+    return names or sorted(bonds.FAMILY)
+
+
+# One row per character with every counter the digest reports. The correlated
+# counts are cheap here and only here: this runs against FIVE guids on a ten
+# minute timer, not against the realm.
+#
+# equipped counts bag 0, slots 0-18 - EQUIPMENT_SLOT_END in 3.3.5a. Bags and
+# bank rows live at other (bag, slot) pairs, so a plain COUNT(*) over
+# character_inventory would count a full backpack as gear.
+_STANDING_SQL = (
+    "SELECT c.name, c.guid, c.money, c.leveltime, c.online, "
+    "       COALESCE(s.level, c.level) AS level, "
+    "       s.map_id, s.pos_x, s.pos_y, "
+    "       (SELECT COUNT(*) FROM character_queststatus_rewarded r "
+    "          WHERE r.guid = c.guid) AS quests_rewarded, "
+    "       (SELECT COUNT(*) FROM character_spell sp WHERE sp.guid = c.guid) AS spells, "
+    "       (SELECT COUNT(*) FROM character_talent t WHERE t.guid = c.guid) AS talents, "
+    "       (SELECT COUNT(*) FROM character_inventory i "
+    "          WHERE i.guid = c.guid AND i.bag = 0 AND i.slot < 19) AS equipped "
+    "FROM characters c "
+    "LEFT JOIN overseer_snapshot s "
+    "       ON s.name = c.name AND s.updated_at > NOW() - INTERVAL 60 SECOND "
+    "WHERE c.name IN (%s) "
+    "ORDER BY c.name"
+)
+
+
+def _fetch_standing_rows(names: list) -> list:
+    if not names:
+        return []
+    sql = _STANDING_SQL % ",".join(["%s"] * len(names))  # noqa: S608
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(sql, names)
+        return list(cur.fetchall())
+
+
+def _fetch_standings(names: list) -> list:
+    """digest.Standing per character, with the provenance of each figure.
+
+    THE TWO CLOCKS ARE KEPT APART ON PURPOSE. `level` prefers
+    overseer_snapshot, which the module refreshes about once a minute;
+    `spells` and `talents` can only come from character_spell and
+    character_talent, which the worldserver writes on PlayerSaveInterval
+    (900000 ms, staggered per player) and which are therefore up to a quarter
+    of an hour behind the world. Both land in one object, so each carries the
+    string that says which it is and digest.render prints them in the footer.
+    Mixing them silently is how a report becomes confidently wrong about a
+    spell somebody learned ten minutes ago.
+    """
+    out = []
+    for row in _fetch_standing_rows(names):
+        zone = ""
+        if row.get("map_id") is not None and row.get("pos_x") is not None:
+            zone = GEO.zone_name(row["map_id"], row["pos_x"], row["pos_y"])
+        out.append(digest.Standing(
+            name=row["name"],
+            level=int(row["level"] or 0),
+            copper=int(row["money"] or 0),
+            quests_done=int(row["quests_rewarded"] or 0),
+            spells=int(row["spells"] or 0),
+            talents=int(row["talents"] or 0),
+            equipped=int(row["equipped"] or 0),
+            online=bool(row.get("online")),
+            zone=zone,
+            level_time_seconds=int(row.get("leveltime") or 0),
+            live_source=digest.SOURCE_SNAPSHOT,
+            saved_source=digest.SOURCE_SAVED,
+        ))
+    return out
+
+
+def _take_sample(names: list) -> int:
+    rows = _fetch_standing_rows(names)
+    if not rows:
+        return 0
+    with _connect() as conn, conn.cursor() as cur:
+        cur.executemany(
+            "INSERT INTO overseer_sample "
+            "(character_name, level, money, quests_rewarded, spells, talents, equipped) "
+            "VALUES (%s, %s, %s, %s, %s, %s, %s)",
+            [(r["name"], int(r["level"] or 0), int(r["money"] or 0),
+              int(r["quests_rewarded"] or 0), int(r["spells"] or 0),
+              int(r["talents"] or 0), int(r["equipped"] or 0)) for r in rows],
+        )
+        return cur.rowcount
+
+
+def _prune_samples() -> int:
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(
+            "DELETE FROM overseer_sample WHERE taken_at < NOW() - INTERVAL %s DAY",
+            (SAMPLE_RETENTION_DAYS,),
+        )
+        return cur.rowcount
+
+
+# Hoisted for the reason _LEDGER_MEMBER_SQL and _BOT_HELD_SQL are: ruff
+# anchors S608 at the START of the expression, so a noqa on the line carrying
+# the % does not silence a query whose literal spans several lines. Only the
+# NUMBER of placeholders is ever interpolated; every name reaches MySQL as a
+# bound parameter.
+_SAMPLE_SQL = (
+    "SELECT character_name, level, money, quests_rewarded, spells, talents, "
+    "       equipped, taken_at FROM overseer_sample "
+    "WHERE character_name IN (%s) AND taken_at > NOW() - INTERVAL %%s HOUR "
+    "ORDER BY taken_at ASC"
+)
+
+
+def _fetch_samples(names: list, hours: float) -> list:
+    """Samples covering the window, plus the last one BEFORE it.
+
+    The extra row is the whole point. digest.changes takes its baseline from
+    the last sample at or before the window opened, so a query bounded at the
+    window edge would hand it nothing to subtract from and every window would
+    come back BASIS_NO_BASELINE. Reaching one interval further back is what
+    makes the arithmetic possible; two intervals of slack covers a sampler
+    that missed a beat.
+    """
+    if not names:
+        return []
+    reach = hours + (SAMPLE_INTERVAL * 2 / 3600.0)
+    sql = _SAMPLE_SQL % ",".join(["%s"] * len(names))  # noqa: S608
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(sql, [*names, reach])
+        return [
+            digest.Sample(
+                name=r["character_name"],
+                at=r["taken_at"],
+                level=int(r["level"] or 0),
+                copper=int(r["money"] or 0),
+                quests_done=int(r["quests_rewarded"] or 0),
+                spells=int(r["spells"] or 0),
+                talents=int(r["talents"] or 0),
+                equipped=int(r["equipped"] or 0),
+            )
+            for r in cur.fetchall()
+        ]
+
+
+# What an overseer_event row must look like before this reads it. A sibling
+# ticket owns that table and its column spellings are not ours to assume, so
+# the shape is DISCOVERED rather than declared: the first alias present for
+# each role wins, and a table missing any role is simply not used.
+#
+# Getting this wrong in the confident direction would be a crash in the middle
+# of answering a question, on a table that may not exist yet at all - so the
+# absent case is the DESIGNED case and the enriched one is the bonus.
+_EVENT_ROLES = {
+    "name": ("character_name", "name", "character"),
+    "kind": ("kind", "event", "event_type", "type"),
+    "text": ("detail", "text", "description", "data"),
+    "at": ("created_at", "occurred_at", "at", "logged_at"),
+}
+
+
+def _event_columns() -> dict | None:
+    """Role -> real column name for overseer_event, or None if unusable."""
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT COLUMN_NAME AS c FROM information_schema.COLUMNS "
+            "WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'overseer_event'"
+        )
+        have = {r["c"].lower() for r in cur.fetchall()}
+    if not have:
+        return None
+    picked = {}
+    for role, aliases in _EVENT_ROLES.items():
+        for alias in aliases:
+            if alias in have:
+                picked[role] = alias
+                break
+    # text is optional - a typed event with no detail is still a fact about
+    # when something happened, and the digest counts those.
+    if not {"name", "kind", "at"} <= set(picked):
+        log.info("overseer_event exists but lacks name/kind/time columns: %s",
+                 sorted(have))
+        return None
+    return picked
+
+
+# Same hoist. The interpolated values here are COLUMN NAMES, which cannot be
+# bound parameters in any SQL dialect - but they are not user input either:
+# every one of them came back from information_schema in _event_columns, was
+# matched against the fixed _EVENT_ROLES allowlist, and is backquoted. Nothing
+# a Discord message contains can reach this string.
+_EVENT_MOMENT_SQL = (
+    "SELECT `%s` AS name, `%s` AS kind, %s AS detail, `%s` AS at_time "
+    "FROM overseer_event WHERE `%s` IN (%s) AND `%s` > NOW() - INTERVAL %%s HOUR "
+    "ORDER BY `%s` ASC LIMIT %%s"
+)
+
+
+def _fetch_event_moments(names: list, hours: float) -> list:
+    cols = _event_columns()
+    if cols is None or not names:
+        return []
+    text_col = cols.get("text")
+    parts = (
+        cols["name"], cols["kind"],
+        ("`%s`" % text_col) if text_col else "''",
+        cols["at"], cols["name"], ",".join(["%s"] * len(names)),
+        cols["at"], cols["at"],
+    )
+    sql = _EVENT_MOMENT_SQL % parts  # noqa: S608
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(sql, [*names, hours, DIGEST_MAX_MOMENTS])
+        return [
+            digest.Moment(
+                at=r["at_time"], name=r["name"], kind=str(r["kind"] or "event"),
+                text=str(r["detail"] or ""), source=digest.SOURCE_EVENT,
+            )
+            for r in cur.fetchall()
+        ]
+
+
+# Same hoist, same guarantee: placeholders counted, names bound.
+_CHAT_MOMENT_SQL = (
+    "SELECT id, sender_name, channel, channel_name, text, created_at "
+    "FROM overseer_chat "
+    "WHERE sender_name IN (%s) AND created_at > NOW() - INTERVAL %%s HOUR "
+    "ORDER BY id DESC LIMIT %%s"
+)
+
+
+def _fetch_chat_moments(names: list, hours: float) -> list:
+    """What the family actually said in the window.
+
+    Passed through relay.collapse_hearers and relay.partition_addon, which
+    already exist and already know the two traps: overseer_chat holds one row
+    per LISTENER, so a party line with five in the party is five identical
+    rows, and addon protocol traffic is chat by every measure the schema can
+    see. Re-solving either here would be a second answer that could disagree
+    with what the relay posts in the channel.
+    """
+    if not names:
+        return []
+    sql = _CHAT_MOMENT_SQL % ",".join(["%s"] * len(names))  # noqa: S608
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(sql, [*names, hours, DIGEST_MAX_MOMENTS])
+        rows = list(reversed(cur.fetchall()))
+    spoken, _ = relay.collapse_hearers(rows)
+    spoken, _ = relay.partition_addon(spoken)
+    return [
+        digest.Moment(
+            at=r["created_at"], name=r["sender_name"], kind="said",
+            text=str(r["text"] or ""), source=digest.SOURCE_CHAT,
+        )
+        for r in spoken
+    ]
+
+
+def _fetch_moments(names: list, hours: float) -> tuple:
+    """(moments, whether the typed event log supplied any of them).
+
+    Chat is always read; it is the one timestamped record of the family that
+    has existed since before any of this, and it is what makes a report about
+    an unsampled night still worth reading.
+    """
+    events_ = []
+    try:
+        events_ = _fetch_event_moments(names, hours)
+    except Exception:
+        # The table belongs to a concurrent ticket. Absent, half-built or
+        # renamed, none of that may cost the report the rest of its facts.
+        log.info("overseer_event unavailable; digest runs without it",
+                 exc_info=True)
+    said = []
+    try:
+        said = _fetch_chat_moments(names, hours)
+    except Exception:
+        log.exception("chat moments unavailable; digest runs without them")
+    return list(events_) + list(said), bool(events_)
+
+
+def _db_now():
+    """NOW() as the DATABASE sees it.
+
+    THE WINDOW MUST BE ANCHORED ON THE SAME CLOCK AS THE ROWS IT FILTERS.
+    Every timestamp digest compares - overseer_sample.taken_at,
+    overseer_chat.created_at - is a MySQL TIMESTAMP, read back as a naive
+    datetime in the DATABASE's timezone. The bridge is a separate pod with its
+    own. Anchoring the window on datetime.now() here would work perfectly in
+    every test and then, on a pod an hour off the database, silently drop
+    every moment in the window and report a quiet night.
+    """
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute("SELECT NOW() AS now")
+        return (cur.fetchone() or {})["now"]
+
+
+def _build_digest(ask) -> digest.Digest:
+    """Every read one report needs, then digest.build.
+
+    Built in ONE place and from ONE set of reads so the sections cannot
+    contradict each other - the same rule _fetch_questbook follows, and for
+    the same reason: a report whose standings disagree with its gaps is worse
+    than no report.
+
+    The questbook Ledger is an INPUT, never recomputed. Who is behind, in what
+    order they can catch up, and what they should abandon are questions
+    questbook.py already answers against the class masks and chain rules that
+    make them hard, and the council acts on that answer. A second opinion here
+    would be a second answer, given to Evan, that could disagree with what the
+    family then does.
+    """
+    now = _db_now()
+    names = _family_names()
+    standings = _fetch_standings(names)
+    samples = _fetch_samples(names, ask.hours)
+    moments, has_events = _fetch_moments(names, ask.hours)
+    try:
+        ledger, _ = _fetch_questbook(names)
+    except Exception:
+        # Quest catalogue reads cross into acore_world; losing them costs the
+        # catch-up section and nothing else.
+        log.exception("questbook unavailable; digest runs without catch-up")
+        ledger = None
+    return digest.build(
+        digest.window_for(ask, now),
+        standings, samples, moments,
+        ledger=ledger, has_event_log=has_events,
+    )
 
 
 class _RedactSecret(logging.Filter):

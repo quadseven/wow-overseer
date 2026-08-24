@@ -51,6 +51,25 @@ class RosterQuery:
 
 
 @dataclass(frozen=True)
+class DigestQuery:
+    """Somebody has come back and is asking after the family.
+
+    "how are they?", "what did they do all night?", "catch me up on the last 6
+    hours". A question for the OVERSEER about five characters, not an order to
+    any of them - which is why it is its own decision beside RosterQuery and
+    never a voice.VOCABULARY entry. Vocabulary entries are mod-playerbots chat
+    commands delivered verbatim to a bot; a reporting verb put there is
+    whispered into a grammar that has no such command, and mod-playerbots
+    reports success anyway (see the `sell junk` note in voice.py).
+
+    `hours` is the window asked for, already parsed and bounded by
+    digest.parse_ask.
+    """
+
+    hours: float
+
+
+@dataclass(frozen=True)
 class NLDirective:
     """A natural-language order for a character - the inner voice decides
     what playerbot command it becomes (voice.py), outside this module."""
@@ -121,6 +140,13 @@ def _spoken_directive(target: str, command: str, source: str):
 _ROSTER_RE = re.compile(r"\b(list|who|online|souls|playing|roster|players)\b", re.IGNORECASE)
 
 
+def _digest_ask(text: str):
+    """digest.Ask, or None. Late import for the same reason as voice's."""
+    from digest import parse_ask
+
+    return parse_ask(text)
+
+
 def parse_directive(
     text: str, author_id: str, allowed_ids: frozenset[str], dedicated: bool = False
 ) -> list:
@@ -173,11 +199,7 @@ def parse_directive(
             directives.append(NLDirective(target, command, f"discord:{author_id}"))
 
     if not addressed:
-        if not dedicated:
-            return []
-        if _ROSTER_RE.search(text):
-            return [RosterQuery()]
-        return [Reply(f"I command the world, not the conversation - yet. {USAGE}")]
+        return _unaddressed(text, dedicated)
     # A fan-out line counts as one order here: the flood cap bounds how many
     # things one message may ask for, and MAX_FANOUT_TARGETS bounds how wide
     # each of those things may get.
@@ -191,6 +213,37 @@ def parse_directive(
     if len(orders) > MAX_COMMANDS_PER_MESSAGE:
         return [Reply(f"That is {len(orders)} orders in one breath; the cap is {MAX_COMMANDS_PER_MESSAGE}.")]
     return directives
+
+
+def _unaddressed(text: str, dedicated: bool) -> list:
+    """What a message that names no character means.
+
+    Kept beside parse_directive for the same reason _group_directive is: this
+    is a grammar of its own - three questions the overseer answers about
+    ITSELF rather than about a character - and inlining it made the dispatcher
+    the most tangled function in the module.
+
+    In a shared channel: silence. The bridge must not answer every message.
+
+    In the overseer's own channel the ORDER IS LOAD-BEARING. The digest is
+    asked first because "what have they been playing for the last 6 hours"
+    contains "playing", which _ROSTER_RE matches - so roster-first answers a
+    question about five characters with a census of five hundred bots, and
+    looks like a working feature while doing it. The digest grammar is the
+    narrow one (it names the family or is an explicit catch-up phrase), so
+    letting it go first costs the roster nothing.
+
+    Dead air here reads as breakage, because it is - hence the closing Reply
+    rather than an empty list.
+    """
+    if not dedicated:
+        return []
+    ask = _digest_ask(text)
+    if ask is not None:
+        return [DigestQuery(hours=ask.hours)]
+    if _ROSTER_RE.search(text):
+        return [RosterQuery()]
+    return [Reply(f"I command the world, not the conversation - yet. {USAGE}")]
 
 
 def _group_directive(
