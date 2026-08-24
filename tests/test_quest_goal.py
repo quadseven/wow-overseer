@@ -497,9 +497,6 @@ class TheBridgeStopsThrowingQuestPlansAway(unittest.TestCase):
         self.assertIn("_QUEST_ONE_SQL = _QUEST_SQL.replace(", _bridge_source())
 
 
-if __name__ == "__main__":
-    unittest.main()
-
 
 class AnsweringAPleaActuallyAimsTheFamily(unittest.TestCase):
     """infra#2801: "Bork help Ugga" was a sentence with no mechanism.
@@ -602,3 +599,86 @@ class AnyoneCanAskForHelp(unittest.TestCase):
         self.assertIn("OVERSEER_NOTABLE_NAMES", code)
         found = [n for n in self.FAMILY if n in code]
         self.assertEqual([], found, "the roster is configured, not compiled in")
+
+
+class TheLeaderIsNotAGateOnHelpingSomebodyElse(unittest.TestCase):
+    """infra#2801, the half that was still missing after the aim was widened.
+
+    mod-overseer was changed to aim every holder of a quest rather than the
+    party leader alone, but the choice feeding it still intersected with what
+    the LEADER held - so the widened aim was never handed a quest it could
+    not already drive. The two halves have to agree or the C++ change is
+    inert, which is this project's most repeated failure.
+
+    The numbers below are the live world at 2026-08-24 23:07, read off
+    character_queststatus: Ugga, Og and Grog all held quest 60; Grug, the
+    leader, held five quests and none of them was 60.
+    """
+
+    HELD = {
+        "Grug": frozenset({26, 62, 176, 239, 5261}),   # the leader: NOT 60
+        "Ugga": frozenset({60, 84, 176, 239}),
+        "Og": frozenset({60, 176, 239}),
+        "Grog": frozenset({60, 84}),
+        "Bork": frozenset({84, 176}),
+    }
+
+    def test_a_quest_the_leader_does_not_hold_is_still_driveable(self):
+        """The exact live wedge: three of them are carrying quest 60 and the
+        one who is not happens to be the leader."""
+        self.assertIn(
+            60, questbook.aimable(self.HELD, "Ugga", "Grug"),
+            "quest 60 was held by Ugga, Og and Grog - it was always driveable")
+
+    def test_the_beneficiary_still_has_to_hold_it(self):
+        """Not a relaxation of both halves. A quest Ugga does not hold cannot
+        be observed for progress, so it must never be chosen for her."""
+        self.assertNotIn(
+            5261, questbook.aimable(self.HELD, "Ugga", "Grug"),
+            "only Grug holds 5261; aiming it at Ugga could never be observed")
+
+    def test_with_no_beneficiary_the_leader_is_the_fallback(self):
+        """A council that named nobody still has to be able to travel."""
+        self.assertEqual(
+            self.HELD["Grug"], questbook.aimable(self.HELD, "", "Grug"))
+
+    def test_the_old_intersection_would_have_chosen_nothing(self):
+        """Pins the bug itself, so a future refactor that reinstates the
+        intersection fails here rather than going quiet in production for
+        another three hours."""
+        old = self.HELD["Grug"] & self.HELD["Ugga"]
+        self.assertEqual(frozenset({176, 239}), old)
+        self.assertNotIn(60, old, "this is why chosen=0 every hour")
+
+    def test_drive_target_picks_it_once_the_candidates_are_right(self):
+        """End of the chain: the widened set has to survive drive_target and
+        come out as a real quest id, not just be a bigger set."""
+        # furthest_behind is a derived property, not a field; the
+        # beneficiary is passed explicitly so it is never consulted.
+        ledger = questbook.Ledger(plans={"Ugga": ()}, behind={"Ugga": ()})
+        chosen = questbook.drive_target(
+            ledger,
+            held_by_traveller=questbook.aimable(self.HELD, "Ugga", "Grug"),
+            wanted=60,
+            beneficiary="Ugga")
+        self.assertEqual(60, chosen, "the council named 60 and Ugga holds it")
+
+
+class TheChoiceFeedingTheAimDoesNotGateOnTheLeader(unittest.TestCase):
+    """A source-level guard on bridge, which the tests cannot import."""
+
+    def test_the_chooser_uses_the_shared_rule(self):
+        code = _function_code("_choose_drive_quest")
+        self.assertIn("aimable", code,
+                      "the candidate set has to come from questbook.aimable")
+
+    def test_the_chooser_no_longer_intersects_with_the_leader(self):
+        """The literal `&` against the leader's holdings is the bug."""
+        code = _function_code("_choose_drive_quest")
+        self.assertNotIn("BitAnd", code,
+                         "intersecting the candidates with anything is what "
+                         "emptied the set; aimable owns this rule now")
+
+
+if __name__ == "__main__":
+    unittest.main()

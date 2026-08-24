@@ -839,9 +839,16 @@ def _aim_for_plea(caller: str, helpers: list, about: str = "") -> int:
             "quest sharing has to catch up first", caller, ", ".join(helpers) or "none")
         return 0
     aimed = _aim_traveller(best)
+    # Re-read the ONE title rather than reaching for the picker's local map:
+    # `titles` lives inside _pick_plea_quest since the complexity split, and
+    # naming it here raised NameError on every answered plea - after the aim
+    # had already been written, so the errand landed and the line that says so
+    # never printed. Swallowed whole by the best-effort handler in
+    # _aim_after_muster, which is why it survived review and a merge.
+    title = _quest_titles([best]).get(best, "?")
     log.info("plea aim: %s asked%s, family aimed at quest %d (%s) - %d aimed",
              caller, " by name" if named else " (no title matched, took the "
-             "most widely held)", best, titles.get(best, "?"), aimed)
+             "most widely held)", best, title, aimed)
     return aimed
 
 
@@ -2517,24 +2524,18 @@ def _choose_drive_quest(plan) -> int:
     Reimplementing that choice next to the persistence would be a second,
     quieter answer to a question already answered properly.
 
-    THE INTERSECTION IS LOAD-BEARING. The candidate set handed to
-    drive_target is what the TRAVELLER holds AND what the BENEFICIARY holds:
-
-      - the traveller must hold it or NewRpgDoQuestAction idles the bot on the
-        next tick and nothing moves at all;
-      - the beneficiary must hold it or _observe_goal can never see progress,
-        and the goal would sit active forever, re-aiming at a quest whose
-        completion nobody could ever report.
-
-    Either half alone produces a goal that looks healthy and does nothing,
-    which is the failure mode this whole epic keeps hitting.
+    THE CANDIDATE RULE LIVES IN questbook.aimable, and deliberately not here.
+    It used to be an intersection with the party leader's holdings, which was
+    correct while the leader was the only character that could be aimed and
+    became a silent wedge the moment mod-overseer started aiming every holder
+    (infra#2801). Keeping the rule next to the quest module that owns it is
+    what lets a test hold it directly - bridge cannot be imported by the
+    tests, so a rule written inline here can only ever be asserted as text.
     """
     leader = bonds.head_of_family()
     names = sorted((_protected_guids()).values())
     ledger, held = _fetch_questbook(names)
-    driveable = held.get(leader, frozenset())
-    if plan.beneficiary and plan.beneficiary != leader:
-        driveable = driveable & held.get(plan.beneficiary, frozenset())
+    driveable = questbook.aimable(held, plan.beneficiary, leader)
     chosen = questbook.drive_target(
         ledger,
         held_by_traveller=driveable,
@@ -2543,7 +2544,8 @@ def _choose_drive_quest(plan) -> int:
     )
     log.info(
         "council: quest choice leader=%s beneficiary=%s wanted=%s chosen=%s "
-        "driveable=%d behind=%s",
+        "driveable=%d (quests the beneficiary holds, any holder is aimed) "
+        "behind=%s",
         leader, plan.beneficiary, plan.quest_id, chosen, len(driveable),
         ledger.furthest_behind,
     )

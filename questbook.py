@@ -609,15 +609,51 @@ def say(ledger: Ledger, name: str) -> str:
     return " ".join(parts)
 
 
+def aimable(held, beneficiary: str, leader: str) -> frozenset:
+    """The quests an aim can actually drive on the beneficiary's behalf.
+
+    THIS USED TO BE AN INTERSECTION WITH THE LEADER AND MUST NOT BE AGAIN.
+    While only the party leader could be aimed, a quest the leader did not
+    hold was undriveable however badly somebody needed it, so the candidate
+    set was `held[leader] & held[beneficiary]`. mod-overseer now aims EVERY
+    roster member that holds the quest (infra#2801), so the travellers ARE
+    the holders and the leader has no special standing in this choice.
+
+    Leaving the intersection in place after that change is what kept Ugga
+    stuck. Measured live on 2026-08-24: she needed one more Large Candle for
+    quest 60, she held it, Og and Grog held it, and Grug - the leader, and
+    the only one of the five who did NOT hold it - emptied the intersection.
+    `chosen=0` every hour for three hours, so nothing was ever persisted and
+    the council re-staged the identical scene at 21:06, 22:06 and 23:07 while
+    three of them were already carrying the quest.
+
+    THE BENEFICIARY HALF IS STILL LOAD-BEARING, for the reason it always was:
+    if she does not hold it, _observe_goal can never see progress and the
+    goal sits active forever against a completion nobody can report.
+
+    `leader` is still taken, and is still used - it is the fallback when the
+    council named no beneficiary at all, where "whoever travels" is the only
+    honest reading.
+    """
+    holdings = held or {}
+    who = beneficiary or leader
+    return frozenset(holdings.get(who, frozenset()))
+
+
 def drive_target(ledger: Ledger, *, held_by_traveller, wanted: int = 0,
                  beneficiary: str = "") -> int:
-    """The ONE quest id the family's single traveller should be aimed at.
+    """The ONE quest id the family should be aimed at, or 0.
 
-    The family has exactly one traveller by design - the leader keeps
-    `new rpg`, the other four are on `nc +follow`, and handing a follower the
-    wander strategy is what measured a 937-yard spread (goals.life_strategies).
-    So "help Ugga" cannot mean "send Ugga"; it means aim the leader at Ugga's
-    quest and let the party walk there together.
+    `held_by_traveller` MEANS "held by whoever will actually be aimed", which
+    is no longer a single character. The family used to have exactly one
+    traveller - the leader kept `new rpg` and the other four were on
+    `nc +follow`, because handing an unaimed follower the wander strategy
+    measured a 937-yard spread (goals.life_strategies). mod-overseer now aims
+    every roster member HOLDING the chosen quest (infra#2801), so cohesion
+    comes from the shared destination instead: "help Ugga" can finally mean
+    sending the three of them who are carrying her quest.
+
+    Callers should get this set from `aimable`, which owns the rule.
 
     THE HARD PRECONDITION, and why `held_by_traveller` is a required argument
     rather than a nicety. Upstream's NewRpgDoQuestAction reads
@@ -642,8 +678,10 @@ def drive_target(ledger: Ledger, *, held_by_traveller, wanted: int = 0,
          work has no chain to walk.
 
     Returns 0 for "nothing driveable", which is an honest answer and not a
-    failure: it means the work the family should do is work the traveller is
-    not carrying, and the fix for that is quest sharing, not a different aim.
+    failure: it means the work the family should do is work that NOBODY who
+    can be aimed is carrying, and the fix for that is quest sharing, not a
+    different aim. It is a much rarer answer than it was - it used to fire
+    whenever the leader alone happened not to hold the quest.
     """
     held = frozenset(int(q) for q in (held_by_traveller or ()))
     if wanted and int(wanted) in held:
