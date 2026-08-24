@@ -159,13 +159,13 @@ class ProbesAreReadOnly(unittest.TestCase):
         """DoProbe nobody dispatches to is an instrument that never reads."""
         src = MODULE.read_text(encoding="utf-8")
         self.assertIn('kind == "probe"', src)
-        self.assertIn("DoProbe(player, command, status, probeResult)", src)
+        self.assertIn("DoProbe(player, command, status, rowResult)", src)
 
     def test_the_result_is_actually_written_back(self):
         """A probe whose answer never reaches the row answers nobody."""
         src = MODULE.read_text(encoding="utf-8")
         self.assertIn("result = '{}'", src)
-        self.assertIn("EscLong(probeResult)", src)
+        self.assertIn("EscLong(rowResult)", src)
 
 
 if __name__ == "__main__":
