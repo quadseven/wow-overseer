@@ -32,6 +32,7 @@ import overhear
 import persona
 import protect
 import questbook
+import questshare
 import quests
 import relay
 import voice
@@ -935,6 +936,7 @@ class Bridge(discord.Client):
                 self._relay_chat,
                 self._hold_council,
                 self._sample_family,
+                self._share_quests_loop,
             )
         }
 
@@ -1574,6 +1576,28 @@ class Bridge(discord.Client):
                 log.exception("protect cycle failed; retrying next cycle")
             await asyncio.sleep(cycle)
 
+    async def _share_quests_loop(self) -> None:
+        """Keep every quest one of them holds within reach of all of them.
+
+        Its own loop rather than a step inside _protect_characters, because
+        the two answer to different clocks: the protect cycle exists to beat
+        the randomize manager and runs every ten minutes whatever happens,
+        while sharing is worth doing shortly after somebody picks a quest up
+        and costs three SELECTs when there is nothing to do.
+
+        A failed cycle costs nothing and is retried; it is logged rather than
+        swallowed, because a sharing pass that has quietly stopped looks
+        exactly like a family that has nothing left to share.
+        """
+        await self.wait_until_ready()
+        cycle = float(os.environ.get("SHARE_CYCLE_SECONDS", "300"))
+        while not self.is_closed():
+            await asyncio.sleep(cycle)
+            try:
+                await asyncio.to_thread(_share_quests)
+            except Exception:
+                log.exception("quest sharing pass failed; retrying next cycle")
+
     async def _narrate_events(self) -> None:
         """The world narrates itself (infra#2602).
 
@@ -2096,8 +2120,13 @@ _LEDGER_REWARDED_SQL = (
     "SELECT c.name, q.quest FROM character_queststatus_rewarded q "
     "JOIN characters c ON c.guid = q.guid WHERE c.name IN (%s)"
 )
+# Flags rides along for QUEST_FLAGS_SHARABLE (0x8), which is the server's own
+# answer to "may this quest be handed to a party member": Player::CanShareQuest
+# (core PlayerQuest.cpp:1517-1536) refuses without it, so questshare has to
+# know before it proposes a share the worldserver can only refuse.
 _LEDGER_CATALOG_SQL = (
     "SELECT t.ID, t.LogTitle, t.QuestLevel, t.MinLevel, t.AllowableRaces, "
+    "       t.Flags, "
     "       a.MaxLevel, a.AllowableClasses, a.PrevQuestID, a.NextQuestID, "
     "       a.ExclusiveGroup "
     "FROM acore_world.quest_template t "
@@ -2106,13 +2135,13 @@ _LEDGER_CATALOG_SQL = (
 )
 
 
-def _fetch_questbook(names: list) -> tuple:
-    """(ledger, name -> held quest ids) for the family, from live rows.
+def _fetch_family_quests(names: list) -> tuple:
+    """(members, catalog) for the family, from live rows.
 
-    All the reading for questbook.py in one place, because a Ledger whose
-    fields disagree with each other is worse than no ledger: shared_quests,
-    behind and catch_up_plan are all computed against the same catalog in one
-    pass, and questbook.build() is what guarantees that.
+    All the reading for questbook.py AND questshare.py in one place, because
+    two halves that disagree about the family are worse than one half: who is
+    behind, what can be caught up, and what may be handed to whom are all
+    computed against the same Members and the same catalog, in one pass.
 
     THE CATALOG IS THE UNION OF WHAT THE FAMILY HOLDS AND HAS TURNED IN, and
     nothing wider. questbook only ever asks about quests somebody in the family
@@ -2130,7 +2159,7 @@ def _fetch_questbook(names: list) -> tuple:
     a follow-up that can verify the column first.
     """
     if not names:
-        return questbook.build([], {}), {}
+        return [], {}
     placeholders = ",".join(["%s"] * len(names))
     # Hoisted for the same reason as _BOT_HELD_SQL: ruff anchors S608 at the
     # START of the expression, so a noqa on the line carrying the % does not
@@ -2175,7 +2204,123 @@ def _fetch_questbook(names: list) -> tuple:
         )
         for row in rows
     ]
-    return questbook.build(members, catalog), {n: frozenset(q) for n, q in held.items()}
+    return members, catalog
+
+
+def _fetch_questbook(names: list) -> tuple:
+    """(ledger, name -> held quest ids), the shape the drive path already uses.
+
+    A thin wrapper over _fetch_family_quests, and thin ON PURPOSE: the sharing
+    pass needs the Members and the catalog rather than the Ledger built out of
+    them, and a second query path for the same facts is how the two halves end
+    up describing different families. `held` is read back off the Members
+    instead of being carried separately, so it cannot drift from them.
+    """
+    members, catalog = _fetch_family_quests(names)
+    return questbook.build(members, catalog), {m.name: m.held for m in members}
+
+
+# How long a share command is remembered before the pass is allowed to propose
+# the same one again.
+#
+# The pass recomputes from live rows, so a share that LANDS disappears from the
+# plan on its own - the taker now holds the quest and it is no longer a
+# candidate. This window is for the other case: a share the worldserver
+# refuses. Without it the pass would re-insert an identical doomed row every
+# cycle forever, and the queue would fill with the same refusal. With it, the
+# refusal is retried occasionally - which is right, because most refusals are
+# temporary (log full, out of range, prerequisite not yet turned in) and the
+# permanent ones are already excluded by questshare before they get here.
+SHARE_RETRY_MINUTES = int(os.environ.get("SHARE_RETRY_MINUTES", "60"))
+
+
+def _recent_share_keys(minutes: int) -> set:
+    """(holder, taker, command) triples already proposed inside the window."""
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT target_name, target_arg, command FROM overseer_command "
+            "WHERE kind = 'share' AND created_at > NOW() - INTERVAL %s MINUTE",
+            (int(minutes),),
+        )
+        return {
+            (row["target_name"], row["target_arg"], row["command"])
+            for row in cur.fetchall()
+        }
+
+
+def _insert_share(grant) -> int:
+    """One overseer_command row for one grant.
+
+    target_name is the HOLDER and target_arg is the TAKER, the same column
+    roles kind='give' uses for giver and receiver, so an operator reading the
+    queue does not have to learn a second convention.
+
+    THE ENUM CAN LEGITIMATELY BE MISSING, exactly as overseer_roster.drive_quest
+    can: 'share' arrives with mod-overseer's SQL, applied by the worldserver at
+    startup, and the bridge is a separate deployment with its own restarts.
+    MySQL in strict mode rejects the unknown value with 1265 rather than
+    quietly storing something else. Warned rather than swallowed - a sharing
+    pass that never lands is a real fault and has to be visible without killing
+    the loop.
+    """
+    with _connect() as conn, conn.cursor() as cur:
+        try:
+            cur.execute(
+                "INSERT INTO overseer_command "
+                "(target_name, command, kind, target_arg, source) "
+                "VALUES (%s, %s, 'share', %s, %s)",
+                (grant.holder, grant.command, grant.taker, "questshare"),
+            )
+        except pymysql.err.MySQLError as exc:
+            # 1265 is ER_WARN_DATA_TRUNCATED, which is what an unknown ENUM
+            # value raises under strict mode. Matched on the code, not the
+            # message text, which is localised.
+            if exc.args and exc.args[0] == 1265:
+                log.warning(
+                    "overseer_command.kind has no 'share' value - sharing quest "
+                    "%d from %s to %s needs the worldserver image carrying "
+                    "mod-overseer's SQL (infra#2778)",
+                    grant.quest_id, grant.holder, grant.taker,
+                )
+                return 0
+            raise
+        return cur.lastrowid or 0
+
+
+def _share_quests() -> questshare.Plan:
+    """Hand every family member the quests the others are already carrying.
+
+    THE DECISION IS NOT MADE HERE. questshare.plan() answers what may be
+    shared, to whom, and in what order, against questbook's rules - class
+    locks, the Alliance mask, the class-id-versus-bitmask conversion, the
+    prerequisite chain, and the Coldridge Valley rows that would otherwise
+    march the family to another continent. This function reads rows, inserts
+    commands, and says what it did.
+
+    IT SAYS WHAT IT DID EVEN WHEN IT DID NOTHING. questshare.say() carries both
+    counts and the refusal breakdown, so "nothing to share" and "everything was
+    refused because no quest in this zone carries QUEST_FLAGS_SHARABLE" are one
+    log line apart rather than indistinguishable silence.
+    """
+    names = sorted(_protected_guids().values())
+    members, catalog = _fetch_family_quests(names)
+    plan = questshare.plan(members, catalog)
+
+    seen = _recent_share_keys(SHARE_RETRY_MINUTES)
+    inserted = 0
+    for grant in plan.grants:
+        if not grant.holder:
+            # questshare only emits a grant for a quest somebody is carrying,
+            # so this cannot happen - and if it ever does, it is a bug worth a
+            # line rather than a command row naming nobody.
+            log.warning("questshare: no holder for quest %d, skipping", grant.quest_id)
+            continue
+        if (grant.holder, grant.taker, grant.command) in seen:
+            continue
+        if _insert_share(grant):
+            inserted += 1
+    log.info("%s; %d command(s) inserted", questshare.say(plan), inserted)
+    return plan
 
 
 def _choose_drive_quest(plan) -> int:

@@ -167,6 +167,14 @@ class Quest:
     prev_quest_id: int = 0
     next_quest_id: int = 0
     exclusive_group: int = 0
+    # quest_template.Flags. Carried because bit 0x8, QUEST_FLAGS_SHARABLE, is
+    # the server's own answer to "may this quest be handed to a party member",
+    # and Player::CanShareQuest refuses without it (core PlayerQuest.cpp:
+    # 1517-1536). questshare.py asks that question; the column spelling lives
+    # here with every other column spelling. 0 is the honest default for a
+    # quest built without the column - see questshare.is_sharable, which says
+    # out loud that it means "not sharable, as far as we know".
+    flags: int = 0
     # Which zone this belongs to, as the bridge can determine it. 0 means
     # unknown; see Member.zones - unknown never blocks. This is what separates
     # Bork's Coldridge Valley set from work the family can really do, and it
@@ -179,9 +187,9 @@ class Quest:
         """Build from a joined quest_template + quest_template_addon row.
 
         Column names verified live against the server, not remembered:
-        quest_template carries ID/LogTitle/QuestLevel/MinLevel/AllowableRaces,
-        quest_template_addon carries MaxLevel/AllowableClasses/PrevQuestID/
-        NextQuestID/ExclusiveGroup.
+        quest_template carries ID/LogTitle/QuestLevel/MinLevel/AllowableRaces/
+        Flags, quest_template_addon carries MaxLevel/AllowableClasses/
+        PrevQuestID/NextQuestID/ExclusiveGroup.
         """
         return cls(
             id=int(row["ID"]),
@@ -194,6 +202,7 @@ class Quest:
             prev_quest_id=int(row.get("PrevQuestID") or 0),
             next_quest_id=int(row.get("NextQuestID") or 0),
             exclusive_group=int(row.get("ExclusiveGroup") or 0),
+            flags=int(row.get("Flags") or 0),
             zone=int(row.get("zone") or 0),
         )
 
@@ -499,19 +508,22 @@ def _next_ready(member: Member, done, remaining, catalog):
     return min(ready) if ready else None
 
 
-def catch_up_plan(member: Member, members, catalog) -> tuple:
-    """The quests this member should do, IN AN ORDER THAT WORKS.
+def order_for(member: Member, wanted, catalog) -> tuple:
+    """`wanted` quest ids for one member, IN AN ORDER THAT WORKS.
 
-    behind() is only what they can take today. A chain hides the rest: Grog
-    cannot be handed 37 "Find the Lost Guards" until 35 "Further Concerns" is
-    done, so 37 is not "behind" - it is behind a door. This walks the chain,
-    replaying rewards as they would land, so 35 comes out before 37.
+    The ordering walk, on its own, because two callers need it and a second
+    copy of it would be a second, quieter answer to the same question.
+    catch_up_plan() feeds it the shared quests this member has missed;
+    questshare.plan() feeds it the quests somebody else is CARRYING that this
+    member could be handed. The rule is identical in both cases and it is the
+    module's whole contribution: pull in prerequisites, then hand out ids only
+    once nothing blocks them, replaying each reward as it would land, so 35
+    "Further Concerns" always comes out before 37 "Find the Lost Guards".
 
     Anything still blocked when the walk runs out is genuinely out of reach
     and is left out; unreachable() is where that gets reported instead.
     """
-    remaining = _with_prerequisites(
-        _missed_shared_ids(member, members, catalog), member, catalog)
+    remaining = _with_prerequisites(set(wanted), member, catalog)
 
     done = set(member.rewarded)
     plan = []
@@ -520,6 +532,18 @@ def catch_up_plan(member: Member, members, catalog) -> tuple:
         remaining.discard(qid)
         done.add(qid)
     return tuple(catalog[qid] for qid in plan)
+
+
+def catch_up_plan(member: Member, members, catalog) -> tuple:
+    """The quests this member should do, IN AN ORDER THAT WORKS.
+
+    behind() is only what they can take today. A chain hides the rest: Grog
+    cannot be handed 37 "Find the Lost Guards" until 35 "Further Concerns" is
+    done, so 37 is not "behind" - it is behind a door. order_for() walks the
+    chain, replaying rewards as they would land, so 35 comes out before 37.
+    """
+    return order_for(
+        member, _missed_shared_ids(member, members, catalog), catalog)
 
 
 @dataclass(frozen=True)
