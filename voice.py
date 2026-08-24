@@ -29,7 +29,13 @@ VOCABULARY = {
     "quests": "list current quests",
     "talents": "report talent build",
     "reset ai": "clear internal state and start fresh",
-    "sell junk": "sell grey items at the next vendor",
+    # "sell junk" IS NOT A COMMAND. mod-playerbots' SellAction accepts
+    # gray/*/vendor/[item link] and nothing else - "junk" fell through to the
+    # item-name branch, matched no item, sold nothing, and RETURNED TRUE. So it
+    # reported delivered, the character announced it was on its way, and not one
+    # grey item ever left a bag. Evan watched this twice.
+    "sell gray": "sell grey items at the next vendor",
+    "sell vendor": "sell everything worth vendoring, not only greys",
     "repair": "repair equipment at the next vendor",
     "home": "set hearth at the nearest innkeeper",
     "mount": "get on the mount",
