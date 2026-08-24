@@ -10,7 +10,7 @@ COPY _shared/core.py _shared/bridge.py _shared/voice.py _shared/transform.py \
      _shared/map_core.py _shared/map_server.py _shared/events.py \
      _shared/panel.py _shared/goals.py _shared/protect.py _shared/fanout.py _shared/chat.py \
      _shared/kin.py _shared/bonds.py _shared/council.py _shared/persona.py \
-     _shared/quests.py _shared/overhear.py \
+     _shared/quests.py _shared/overhear.py _shared/questbook.py \
      _shared/relay.py \
      _shared/zones.json _shared/entrances.json _shared/index.html /app/
 
