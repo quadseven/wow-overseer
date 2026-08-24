@@ -77,14 +77,31 @@ class TheColumnIsActuallyRead(unittest.TestCase):
     def test_the_query_selects_the_aim(self):
         self.assertIn("drive_quest", _code(_drive()))
 
-    def test_it_is_still_the_party_leader_and_only_the_party_leader(self):
-        """Followers run `nc -new rpg` on purpose. `new rpg` acts at relevance
-        3.0-11.0 against follow's 1.0, so a follower holding both wanders off
-        every tick: 937 yards of spread before it was removed, 3 yards after.
-        A quest decision changes WHERE the traveller goes, never who travels."""
+    def test_only_the_leader_free_roams_its_own_quest_log(self):
+        """The lesson this guard encodes has NOT changed; where it is enforced
+        has (infra#2801, "quest together").
+
+        `new rpg` acts at relevance 3.0-11.0 against follow's 1.0, so a bot
+        holding both wanders every tick: 937 yards of spread before it was
+        taken off the followers, three yards after. What scatters a party is
+        each member pursuing a DIFFERENT objective, and the first-eligible walk
+        below picks out of each character's OWN log - which is divergent by
+        construction.
+
+        So every enabled member is now considered, because a follower that
+        cannot be aimed can never hand a quest in (turn-in is reachable only
+        through the rpg strategy) - but ONLY the leader may fall through to
+        that divergent walk. An aimed follower goes where the rest of the
+        family goes; an unaimed one stays put.
+        """
         body = _code(_drive())
-        self.assertIn("`lead` = 1", body)
         self.assertIn("enabled = 1", body)
+        self.assertNotIn("`lead` = 1", body,
+                         "a leader-only query makes a follower's aim unreadable")
+        guard = body.index("if (!isLead)")
+        walk = body.index("MAX_QUEST_LOG_SIZE")
+        self.assertLess(guard, walk,
+                        "the divergent log walk must stay behind the leader gate")
 
     def test_the_column_the_module_reads_is_the_one_the_migration_adds(self):
         sql = MIGRATION.read_text(encoding="utf-8")

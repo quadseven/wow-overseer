@@ -512,3 +512,74 @@ class NothingElseWasQuietlyChanged(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TheWholeFamilyCanBeAimed(unittest.TestCase):
+    """infra#2801 / "quest together": every member acts on its own aim.
+
+    Handing a quest in is reachable ONLY through the rpg strategy -
+    SearchQuestGiverAndAcceptOrReward is a NewRpgBaseAction method called only
+    from NewRpgAction.cpp - so a follower without `new rpg` cannot turn a quest
+    in even standing on the questgiver. That is why the four hoarded completed
+    quests: they hold `+quest`, so they finish objectives, and the last step is
+    structurally closed to them.
+
+    Letting them quest means letting them carry `new rpg`, and `new rpg` at
+    relevance 3.0-11.0 buries `follow` at 1.0. So cohesion can no longer come
+    from following. It comes from the SHARED DESTINATION instead: quest sharing
+    (#2793) already keeps their logs aligned - all five hold quest 109 and all
+    five hold 1097 - and five characters sent to hand in the same quest walk to
+    the same NPC. They converge because they want the same thing, not because
+    they are leashed.
+
+    The 937-yard scatter came from bots pursuing DIFFERENT objectives. An aim is
+    what makes the objective common, so DriveQuests has to honour one for every
+    member and not only for the leader.
+    """
+
+    def test_the_aim_query_is_not_restricted_to_the_leader(self):
+        body = _code(_drive())
+        self.assertNotRegex(
+            body, r"WHERE enabled = 1 AND `lead` = 1",
+            "a leader-only query means a follower's aim is written and never "
+            "read - the same unread-column failure this epic started with")
+
+    def test_every_enabled_member_is_considered(self):
+        body = _code(_drive())
+        self.assertRegex(body, r"WHERE enabled = 1",
+                         "all enabled roster members, aimed or not")
+
+    def test_the_leader_flag_is_still_selected_because_the_fallback_needs_it(self):
+        """Only the leader may free-roam its own quest log. A follower without
+        an aim must stay put: an unaimed follower carrying `new rpg` is exactly
+        the 937-yard scatter, and the aim is the only thing holding the party
+        to one destination."""
+        body = _code(_drive())
+        self.assertRegex(body, r"SELECT name, drive_quest, `lead`",
+                         "the query has to bring back who leads")
+
+    def test_the_first_eligible_fallback_is_leader_only(self):
+        """The guard has to sit BEFORE the walk, not merely somewhere in the
+        function - order is the whole property."""
+        body = _code(_drive())
+        guard = body.index("if (!isLead)")
+        walk = body.index("MAX_QUEST_LOG_SIZE")
+        self.assertLess(
+            guard, walk,
+            "the leader gate must precede the fallback slot walk, or every "
+            "follower free-roams its own log the moment its errand ends")
+
+
+class AFollowerWithoutAnAimDoesNotRoam(unittest.TestCase):
+    """The safety property that makes questing-together survivable.
+
+    With `new rpg` on a follower, the ONLY thing keeping the party together is
+    a live aim. If the supervisor cannot find a shared quest, the honest
+    behaviour is to leave the follower alone rather than let it wander.
+    """
+
+    def test_an_unaimed_follower_reaches_no_movement_call(self):
+        body = _code(_drive())
+        self.assertRegex(
+            body, r"if\s*\(\s*!\s*isLead\s*\)\s*\n?\s*continue;",
+            "an unaimed non-leader has to fall out before the log walk")

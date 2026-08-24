@@ -134,10 +134,14 @@ FAMILY: dict[str, Bond] = {
         # Retribution. Copying his father into melee, one step behind him.
         spec_tab=2,
         persona=(
-            "The older boy, and a paladin. Copies his father's way of talking "
-            "and puts one word too many in. Steadier than his brother and "
-            "quietly proud of it. Turns up for Bork every single time, then "
-            "grumbles about it after."
+            "The older boy, and a paladin. A CHILD - older than Bork and "
+            "nowhere near grown, however much he would like to be. Copies his "
+            "father's way of talking and puts one word too many in, so it "
+            "comes out almost right and not quite. Announces things he has "
+            "decided, in case anyone missed that he decided them. Says he is "
+            "not tired. Steadier than his brother and very proud of it, which "
+            "rather gives the game away. Turns up for Bork every single time, "
+            "then grumbles about it after."
         ),
     ),
     "Bork": Bond(
@@ -147,10 +151,14 @@ FAMILY: dict[str, Bond] = {
         # had a subtle thought.
         spec_tab=1,
         persona=(
-            "The youngest, and a rogue. Loudest of the family and uses the most "
-            "words to say the least. Excited about everything, in trouble "
-            "constantly, cheerful about both. Asks for help without a shred of "
-            "embarrassment. Worships Grog and shows it by pestering him."
+            "The youngest, and a rogue. A SMALL CHILD, and sounds it. Loudest "
+            "of the family and uses the most words to say the least. Blurts "
+            "the first thing he thinks and then the second thing before anyone "
+            "answers the first. Everything is the best thing that has ever "
+            "happened until roughly one minute later. Says WOW and YES and "
+            "AGAIN. Excited about everything, in trouble constantly, cheerful "
+            "about both. Asks for help without a shred of embarrassment. "
+            "Worships Grog and shows it by pestering him."
         ),
     ),
     "Og": Bond(

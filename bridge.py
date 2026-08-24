@@ -438,7 +438,7 @@ def _bot_held_names(names: list) -> list:
     # constant so the interpolation sits on one short line: ruff anchors S608
     # at the START of the expression, so a noqa on the line carrying the %
     # does not silence a multi-line one.
-    sql = _BOT_HELD_SQL % placeholders  # noqa: S608
+    sql = _BOT_HELD_SQL % placeholders
     with _connect() as conn, conn.cursor() as cur:
         cur.execute(sql, names)
         return [r["name"] for r in cur.fetchall()]
@@ -567,7 +567,7 @@ def _fetch_quest_progress(names: list) -> dict:
     if not names:
         return {}
     placeholders = ",".join(["%s"] * len(names))
-    sql = _QUEST_SQL % placeholders  # noqa: S608
+    sql = _QUEST_SQL % placeholders
     with _connect() as conn, conn.cursor() as cur:
         cur.execute(sql, names)
         rows = cur.fetchall()
@@ -617,7 +617,7 @@ def _fetch_council_members(names: list) -> list:
     # START of the expression, so a noqa on the line carrying the % does not
     # silence a multi-line query. This one carried exactly that mistake and was
     # only invisible because the lint is scoped to the diff.
-    sql = _COUNCIL_MEMBER_SQL % placeholders  # noqa: S608
+    sql = _COUNCIL_MEMBER_SQL % placeholders
     with _connect() as conn, conn.cursor() as cur:
         cur.execute(
             sql,
@@ -694,11 +694,16 @@ def _aim_traveller(quest_id: int) -> int:
     which is what `lead` and `spec_tab` already are. The supervisor re-asserts
     on its own cadence (goals._reconcile_quest) and this write is idempotent.
 
-    WHERE `lead` = 1 rather than by name: leadership is a fact this file
-    already writes (_mark_party_leader), and reading it back is what keeps the
-    two from ever disagreeing. `lead` is BACKTICKED - it is a reserved word in
-    MySQL 8, and unquoted it is a syntax error that the worldserver treats as
-    unrecoverable.
+    BY NAME, AND EVERY HOLDER, not the leader row (infra#2801, "quest
+    together"). Aiming only the leader meant a follower's aim was written and
+    never read, and since turn-in is reachable ONLY through the rpg strategy a
+    follower that cannot be aimed can never hand anything in - which is exactly
+    why four of them hoarded completed quests while the leader handed his own
+    in. The aim is set for precisely the characters that HOLD the quest and
+    cleared for everyone else: aiming a non-holder makes NewRpgDoQuestAction
+    idle it on the next tick, and an unaimed follower carrying `new rpg`
+    free-roams its own log, which is the 937-yard scatter. Cohesion comes from
+    the shared destination, not from following.
 
     THE COLUMN CAN LEGITIMATELY BE ABSENT, exactly as spec_tab can: it arrives
     with mod-overseer's SQL, applied by the worldserver at startup, and the
@@ -706,12 +711,35 @@ def _aim_traveller(quest_id: int) -> int:
     than swallowed - an aim that never lands is a real fault and must be
     visible without being fatal.
     """
+    holders = sorted(_holders_of(int(quest_id))) if quest_id else []
     with _connect() as conn, conn.cursor() as cur:
         try:
-            cur.execute(
-                "UPDATE overseer_roster SET drive_quest = %s WHERE `lead` = 1",
-                (int(quest_id),),
-            )
+            if holders:
+                marks = ", ".join(["%s"] * len(holders))
+                # AIM EVERYONE WHO HOLDS IT. A follower that is never aimed can
+                # never hand a quest in - turn-in is reachable only through the
+                # rpg strategy - which is why four of them hoarded completed
+                # quests while the leader handed his own in.
+                cur.execute(
+                    "UPDATE overseer_roster SET drive_quest = %%s "  # noqa: S608 - placeholders from a COUNT, values still bound
+                    "WHERE name IN (%s)" % marks,
+                    (int(quest_id), *holders),
+                )
+                aimed = cur.rowcount or 0
+                # AND CLEAR EVERYONE ELSE. Aiming a character at a quest it does
+                # not hold makes NewRpgDoQuestAction idle it on the next tick,
+                # and an unaimed follower carrying `new rpg` free-roams its own
+                # log, which is the 937-yard scatter. Both failure modes are
+                # avoided by the aim being exactly the set of holders.
+                cur.execute(
+                    "UPDATE overseer_roster SET drive_quest = 0 "  # noqa: S608 - placeholders from a COUNT, values still bound
+                    "WHERE drive_quest <> 0 AND name NOT IN (%s)" % marks,
+                    tuple(holders),
+                )
+            else:
+                cur.execute("UPDATE overseer_roster SET drive_quest = 0 "
+                            "WHERE drive_quest <> 0")
+                aimed = 0
         except pymysql.err.OperationalError as exc:
             # 1054 is ER_BAD_FIELD_ERROR. Matched on the code, not the message
             # text, which is localised and has changed between versions.
@@ -723,7 +751,139 @@ def _aim_traveller(quest_id: int) -> int:
                 )
                 return 0
             raise
-        return cur.rowcount or 0
+        log.info("aim: quest %d -> %d of the family (%s)",
+                 int(quest_id), aimed, ", ".join(holders) or "nobody")
+        return aimed
+
+
+
+def _holders_of(quest_id: int) -> set:
+    """Which protected characters actually hold this quest in an actionable
+    state.
+
+    The aim is only meaningful for a character that HOLDS the quest:
+    NewRpgDoQuestAction dispatches on QUEST_STATUS_INCOMPLETE and
+    QUEST_STATUS_COMPLETE and otherwise idles, so aiming anyone else is a
+    silent no-op - the "delivered but nothing happened" failure this epic keeps
+    repeating. Quest sharing (#2793) is what makes the holder set usually the
+    whole family rather than one character.
+    """
+    if not quest_id:
+        return set()
+    names = sorted((_protected_guids()).values())
+    if not names:
+        return set()
+    marks = ", ".join(["%s"] * len(names))
+    sql = (
+        "SELECT c.name FROM characters c "  # noqa: S608 - placeholders from a COUNT, values still bound
+        "JOIN character_queststatus q ON q.guid = c.guid "
+        "WHERE c.name IN (%s) AND q.quest = %%s AND q.status IN (1, 3)" % marks
+    )
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(sql, (*names, int(quest_id)))
+        return {row["name"] for row in cur.fetchall()}
+
+
+
+def _aim_for_plea(caller: str, helpers: list, about: str = "") -> int:
+    """Point the family at what the caller actually asked for.
+
+    THE FAILURE THIS EXISTS TO FIX. In Evan's Discord on 2026-08-24, at 14:35,
+    15:06 and 16:05, Ugga says she needs one more Large Candle and all four
+    agree to help her. Nothing happens, three times, hours apart. She sat at 7
+    of 8 for quest 60 throughout. The muster wrote a regroup command and a
+    memory, and that was the whole of "helping" - the family said yes and
+    carried on with what they were already doing.
+
+    WHICH QUEST. The caller's own INCOMPLETE quests, because a complete one
+    needs no help - it needs a walk to a questgiver, which is the caller's
+    own errand and not a favour anyone can do for them. Of those, only a quest
+    at least one helper ALSO holds is a candidate: aiming a helper at a quest
+    it does not hold makes NewRpgDoQuestAction idle it on the next tick, so a
+    helper who cannot act on it is worse than no helper at all - it looks like
+    help and is not. Quest sharing (#2793) is what usually makes such a
+    candidate exist.
+
+    WHAT THEY ASKED FOR WINS. Ugga holds six incomplete quests; the most
+    widely-held is Bounty on Murlocs, and picking by popularity would send the
+    family off to kill murlocs while she stood there still wanting a candle.
+    She NAMED the quest - "1 more Large Candle for Kobold Candles" - so the
+    plea text is matched against quest titles first, and only if nothing
+    matches does it fall back to the quest most of them hold. Helping someone
+    with a thing they did not ask for is its own kind of not listening.
+
+    Returns the number of characters aimed; 0 means nothing shared could be
+    found, and in that case nobody is aimed at all. A false aim would be the
+    same empty promise in a new place.
+    """
+    names = sorted((_protected_guids()).values())
+    if not names or not caller:
+        return 0
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT q.quest FROM characters c "
+            "JOIN character_queststatus q ON q.guid = c.guid "
+            "WHERE c.name = %s AND q.status = 3",
+            (caller,),
+        )
+        wanted = [int(row["quest"]) for row in cur.fetchall()]
+    if not wanted:
+        log.info("plea aim: %s holds no incomplete quest to be helped with", caller)
+        return 0
+
+    party = set(helpers) | {caller}
+    best, named = _pick_plea_quest(wanted, party, about)
+    if not best:
+        log.info(
+            "plea aim: nothing %s needs is held by any helper (%s) - not aiming; "
+            "quest sharing has to catch up first", caller, ", ".join(helpers) or "none")
+        return 0
+    aimed = _aim_traveller(best)
+    log.info("plea aim: %s asked%s, family aimed at quest %d (%s) - %d aimed",
+             caller, " by name" if named else " (no title matched, took the "
+             "most widely held)", best, titles.get(best, "?"), aimed)
+    return aimed
+
+
+
+def _pick_plea_quest(wanted: list, party: set, about: str) -> tuple:
+    """Choose which of the caller's quests the family should be aimed at.
+
+    Split out of _aim_for_plea to keep both readable (Grug - Elder, cyclomatic
+    cap). Returns (quest_id, was_named); 0 means no candidate.
+
+    A candidate needs at least TWO holders inside the party: the caller alone
+    is not help, and aiming a helper at a quest it does not hold idles it on
+    the next tick. Among candidates, one whose title the plea actually names
+    wins outright over one merely held by more of them - see the caller's
+    docstring for why that ordering is load-bearing.
+    """
+    asked = (about or "").lower()
+    titles = _quest_titles(wanted)
+    best, best_holders = 0, 0
+    for quest_id in wanted:
+        holders = _holders_of(quest_id) & party
+        if len(holders) < 2:
+            continue
+        title = (titles.get(quest_id) or "").lower()
+        if title and title in asked:
+            return quest_id, True
+        if len(holders) > best_holders:
+            best, best_holders = quest_id, len(holders)
+    return best, False
+
+
+def _quest_titles(quest_ids: list) -> dict:
+    """Titles for a handful of quest ids, so a plea can be matched by name."""
+    ids = [int(q) for q in quest_ids if q]
+    if not ids:
+        return {}
+    marks = ", ".join(["%s"] * len(ids))
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT ID, LogTitle FROM acore_world.quest_template "  # noqa: S608 - placeholders from a COUNT, values still bound
+            "WHERE ID IN (%s)" % marks, tuple(ids))
+        return {int(r["ID"]): r["LogTitle"] for r in cur.fetchall()}
 
 
 def _mark_specs(specs: dict) -> None:
@@ -1054,6 +1214,25 @@ class Bridge(discord.Client):
         except Exception:
             log.exception("kin muster failed; chat relay continues")
 
+    async def _aim_after_muster(self, plea, muster) -> None:
+        """Point the responders at what the caller asked for.
+
+        Best-effort by design: the muster has already landed, and a family that
+        regrouped but could not be aimed is still better off than one that did
+        neither. Extracted from _muster_for_pleas to keep that function under
+        the complexity cap (Grug - Elder).
+        """
+        try:
+            await asyncio.to_thread(
+                _aim_for_plea,
+                plea.caller,
+                [a.character_name for a in muster.actions],
+                plea.about or "",
+            )
+        except Exception:
+            log.exception("plea aim failed; the muster itself stands")
+
+
     async def _muster_for_pleas(self, rows: list[dict], channel) -> None:
         """Read the lines the relay just fetched; answer any call for help.
 
@@ -1149,6 +1328,12 @@ class Bridge(discord.Client):
         except Exception:
             log.exception("kin caller memory insert failed for %s", plea.caller)
 
+        # AND ACTUALLY HELP. Everything above regroups them and records that
+        # they came; none of it points anyone at what was asked for. That is
+        # why "Bork help Ugga" could be said three times in two hours while she
+        # stayed on 7 of 8 candles.
+        if written:
+            await self._aim_after_muster(plea, muster)
         log.info("kin muster: %s (%d of %d written)", muster.reason, written,
                  len(muster.actions))
         if channel is not None and written:
@@ -2165,9 +2350,9 @@ def _fetch_family_quests(names: list) -> tuple:
     # START of the expression, so a noqa on the line carrying the % does not
     # silence a multi-line query. Only the NUMBER of placeholders is
     # interpolated; every name reaches MySQL as a bound parameter.
-    member_sql = _LEDGER_MEMBER_SQL % placeholders    # noqa: S608
-    held_sql = _LEDGER_HELD_SQL % placeholders        # noqa: S608
-    rewarded_sql = _LEDGER_REWARDED_SQL % placeholders  # noqa: S608
+    member_sql = _LEDGER_MEMBER_SQL % placeholders  
+    held_sql = _LEDGER_HELD_SQL % placeholders      
+    rewarded_sql = _LEDGER_REWARDED_SQL % placeholders
     with _connect() as conn, conn.cursor() as cur:
         cur.execute(member_sql, names)
         rows = list(cur.fetchall())
@@ -2187,7 +2372,7 @@ def _fetch_family_quests(names: list) -> tuple:
                         | {q for ids in rewarded.values() for q in ids})
         catalog: dict = {}
         if wanted:
-            catalog_sql = _LEDGER_CATALOG_SQL % ",".join(["%s"] * len(wanted))  # noqa: S608
+            catalog_sql = _LEDGER_CATALOG_SQL % ",".join(["%s"] * len(wanted))
             cur.execute(catalog_sql, wanted)
             for row in cur.fetchall():
                 quest = questbook.Quest.from_row(row)
@@ -2612,7 +2797,7 @@ _STANDING_SQL = (
 def _fetch_standing_rows(names: list) -> list:
     if not names:
         return []
-    sql = _STANDING_SQL % ",".join(["%s"] * len(names))  # noqa: S608
+    sql = _STANDING_SQL % ",".join(["%s"] * len(names))
     with _connect() as conn, conn.cursor() as cur:
         cur.execute(sql, names)
         return list(cur.fetchall())
@@ -2704,7 +2889,7 @@ def _fetch_samples(names: list, hours: float) -> list:
     if not names:
         return []
     reach = hours + (SAMPLE_INTERVAL * 2 / 3600.0)
-    sql = _SAMPLE_SQL % ",".join(["%s"] * len(names))  # noqa: S608
+    sql = _SAMPLE_SQL % ",".join(["%s"] * len(names))
     with _connect() as conn, conn.cursor() as cur:
         cur.execute(sql, [*names, reach])
         return [
@@ -2786,7 +2971,7 @@ def _fetch_event_moments(names: list, hours: float) -> list:
         cols["at"], cols["name"], ",".join(["%s"] * len(names)),
         cols["at"], cols["at"],
     )
-    sql = _EVENT_MOMENT_SQL % parts  # noqa: S608
+    sql = _EVENT_MOMENT_SQL % parts
     with _connect() as conn, conn.cursor() as cur:
         cur.execute(sql, [*names, hours, DIGEST_MAX_MOMENTS])
         return [
@@ -2819,7 +3004,7 @@ def _fetch_chat_moments(names: list, hours: float) -> list:
     """
     if not names:
         return []
-    sql = _CHAT_MOMENT_SQL % ",".join(["%s"] * len(names))  # noqa: S608
+    sql = _CHAT_MOMENT_SQL % ",".join(["%s"] * len(names))
     with _connect() as conn, conn.cursor() as cur:
         cur.execute(sql, [*names, hours, DIGEST_MAX_MOMENTS])
         rows = list(reversed(cur.fetchall()))

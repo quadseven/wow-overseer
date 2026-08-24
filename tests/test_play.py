@@ -93,14 +93,24 @@ class TheQuestDriverPointsThemAtTheObjective(unittest.TestCase):
         """The chat command is gated on master-or-GM, which these never satisfy."""
         self.assertIn("ChangeToDoQuest", _drive_quests())
 
-    def test_only_the_party_leader_is_sent_travelling(self):
-        """Followers run `nc -new rpg` so that following works at all.
+    def test_only_the_leader_picks_an_objective_of_its_own(self):
+        """The scatter lesson still holds; the enforcement point moved
+        (infra#2801, "quest together").
 
-        Sending each of them to an objective individually scatters the family
-        across the zone - the 937-yard spread the follow work fixed.
+        Sending each of them to an objective INDIVIDUALLY scatters the family -
+        the 937-yard spread the follow work fixed. What does not scatter them
+        is sending them all to the SAME objective, which is what an aim does,
+        and quest sharing already keeps their logs aligned so a shared aim is
+        usually available.
+
+        So the family is now aimable member by member - a follower that cannot
+        be aimed can never turn a quest in, because turn-in is reachable only
+        through the rpg strategy - while the divergent "pick from my own log"
+        walk stays behind the leader gate.
         """
         body = _drive_quests()
-        self.assertIn("`lead` = 1", body)
+        self.assertNotIn("`lead` = 1", body)
+        self.assertLess(body.index("if (!isLead)"), body.index("MAX_QUEST_LOG_SIZE"))
 
     def test_a_character_already_on_a_quest_is_left_alone(self):
         """Re-issuing every poll restarts the travel, so it never arrives."""

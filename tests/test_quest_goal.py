@@ -400,6 +400,24 @@ def _function(name: str):
     raise AssertionError("%s not found in bridge.py" % name)
 
 
+def _function_code(name: str) -> str:
+    """The function's CODE, with its docstring and comments removed.
+
+    `ast.dump` of a function includes its docstring as a string constant, so a
+    test asserting a SQL fragment "is in" the dump can pass on a prose mention
+    of it long after the code stopped doing it. That happened here: the
+    leader-only aim assertion went on passing off the docstring after
+    infra#2801 changed the query. Strip both, then assert.
+    """
+    node = _function(name)
+    body = list(node.body)
+    if (body and isinstance(body[0], ast.Expr)
+            and isinstance(body[0].value, ast.Constant)
+            and isinstance(body[0].value.value, str)):
+        body = body[1:]
+    return "\n".join(ast.dump(stmt) for stmt in body)
+
+
 class TheBridgeStopsThrowingQuestPlansAway(unittest.TestCase):
     """bridge.py imports discord and is not importable here by design, so this
     is structural - it reads the source rather than running it."""
@@ -430,11 +448,29 @@ class TheBridgeStopsThrowingQuestPlansAway(unittest.TestCase):
         source = ast.dump(_function("_ensure_goal_store"))
         self.assertIn("goal_migrations", source)
 
-    def test_the_aim_is_written_to_the_party_leader(self):
-        """Not to the beneficiary: exactly one character has `new rpg`."""
-        source = ast.dump(_function("_aim_traveller"))
-        self.assertIn("`lead` = 1", source)
-        self.assertIn("drive_quest", source)
+    def test_the_aim_is_written_to_every_holder_of_the_quest(self):
+        """infra#2801: the family quests together, so the aim is not the
+        leader's alone.
+
+        Asserted against the SQL text specifically rather than an ast.dump of
+        the whole function - the previous version of this test checked a dump
+        that includes docstrings, so it went on passing off a prose mention of
+        `lead` = 1 after the code had stopped doing it. A test that can pass on
+        its own comment is not a test.
+        """
+        code = _function_code("_aim_traveller")
+        self.assertIn("drive_quest", code)
+        self.assertIn("name IN", code, "the aim must target holders by name")
+        self.assertNotIn("`lead` = 1", code,
+                         "a leader-only aim is unreadable for a follower")
+
+    def test_a_non_holder_is_cleared_rather_than_left_aimed(self):
+        """Aiming a character at a quest it does not hold idles it on the next
+        tick, and an unaimed follower with `new rpg` free-roams - so the aim has
+        to be exactly the holder set, both directions."""
+        code = _function_code("_aim_traveller")
+        self.assertIn("drive_quest = 0", code)
+        self.assertIn("NOT IN", code)
 
     def test_the_aim_survives_a_column_that_has_not_shipped_yet(self):
         """overseer_roster's columns arrive with the worldserver image, and
@@ -463,3 +499,106 @@ class TheBridgeStopsThrowingQuestPlansAway(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class AnsweringAPleaActuallyAimsTheFamily(unittest.TestCase):
+    """infra#2801: "Bork help Ugga" was a sentence with no mechanism.
+
+    Observed in Evan's Discord at 14:35, 15:06 and 16:05 on 2026-08-24: Ugga
+    says she needs one more Large Candle, all four agree to help her, and
+    nothing happens. Hours apart, three times, verbatim. Meanwhile she sat at
+    7 of 8 candles for quest 60 the whole time.
+
+    The muster wrote a regroup command and a memory and stopped there, so the
+    family said yes and then carried on with whatever they were already doing.
+    Answering a plea has to point them at the thing that was asked for.
+    """
+
+    def test_the_muster_path_aims_the_family(self):
+        code = _bridge_source()
+        self.assertIn("_aim_after_muster", code,
+                      "the muster path has to reach an aim")
+        self.assertIn("_aim_for_plea", code,
+                      "and that aim has to be the plea-derived one")
+
+    def test_the_aim_is_chosen_from_what_the_caller_actually_needs(self):
+        code = _function_code("_aim_for_plea")
+        self.assertIn("caller", code,
+                      "the quest has to come from the character who asked")
+
+    def test_only_a_quest_the_helpers_also_hold_is_chosen(self):
+        """Aiming a helper at a quest it does not hold idles it on the next
+        tick - the silent no-op this epic keeps producing. Quest sharing is
+        what usually makes a shared candidate exist."""
+        # the candidate search moved into _pick_plea_quest when _aim_for_plea
+        # was split for the complexity cap; the property is unchanged.
+        code = _function_code("_pick_plea_quest")
+        self.assertIn("_holders_of", code)
+
+    def test_an_unanswerable_plea_aims_nobody(self):
+        """If nothing shared can be found, the family must not be aimed at a
+        quest they cannot act on. Saying nothing beats a false promise."""
+        # _function_code returns an ast dump, so match the AST form rather
+        # than the source text.
+        code = _function_code("_aim_for_plea")
+        self.assertIn("Return(value=Constant(value=0))", code,
+                      "there has to be a path that aims nobody")
+        self.assertGreaterEqual(
+            code.count("Return(value=Constant(value=0))"), 2,
+            "no caller, no incomplete quest, and no shared candidate are all "
+            "reasons to aim nobody rather than aim badly")
+
+    def test_the_quest_the_caller_named_beats_the_most_popular_one(self):
+        """Ugga holds six incomplete quests. The most widely held is Bounty on
+        Murlocs; the one she asked about is Kobold Candles. Picking by
+        popularity would send the family to kill murlocs while she stood there
+        still wanting a candle - help she did not ask for is not help."""
+        chooser = _function_code("_pick_plea_quest")
+        self.assertIn("about", chooser, "the plea text has to reach the choice")
+        self.assertIn("_quest_titles", chooser, "matching by name needs titles")
+        # A named match returns immediately; the popularity fallback can only
+        # be reached by falling past it.
+        self.assertIn("Return(value=Tuple", chooser)
+        self.assertIn("Constant(value=True)", chooser,
+                      "a named match must short-circuit the popularity path")
+        self.assertIn("about", _function_code("_aim_for_plea"),
+                      "the plea text has to be threaded through")
+
+
+class AnyoneCanAskForHelp(unittest.TestCase):
+    """The plea path must never know a character's name.
+
+    Ugga is the case that exposed the bug - she asked three times in two hours
+    and nothing happened - but she is an EXAMPLE, not a special case. Bork asks
+    constantly and Grog turns up for him every time; whoever calls, the same
+    machinery has to answer. A name in this code would work perfectly for the
+    character it named and silently fail every other one, which is the kind of
+    bug that hides for months because the demo always passes.
+    """
+
+    FAMILY = ("Ugga", "Grug", "Grog", "Bork", "Og")
+
+    def _code_of(self, fn: str) -> str:
+        return _function_code(fn)
+
+    def test_no_character_name_appears_in_the_plea_aim_code(self):
+        for fn in ("_aim_for_plea", "_pick_plea_quest", "_holders_of",
+                   "_quest_titles", "_aim_traveller"):
+            code = self._code_of(fn)
+            found = [n for n in self.FAMILY if n in code]
+            self.assertEqual(
+                [], found,
+                "%s hard-codes %s; the caller must come from the plea" % (fn, found))
+
+    def test_the_caller_is_taken_from_the_plea_itself(self):
+        code = _bridge_source()
+        self.assertIn("plea.caller", code,
+                      "whoever spoke is who gets helped")
+
+    def test_the_family_roster_comes_from_configuration_not_source(self):
+        """_protected_guids reads OVERSEER_NOTABLE_NAMES, so adding a sixth
+        character is a config change and not a code change."""
+        code = _function_code("_protected_guids")
+        self.assertIn("OVERSEER_NOTABLE_NAMES", code)
+        found = [n for n in self.FAMILY if n in code]
+        self.assertEqual([], found, "the roster is configured, not compiled in")
