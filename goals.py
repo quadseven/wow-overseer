@@ -58,14 +58,79 @@ SKILL_MILESTONE_STEP = 25
 # 'active'.
 REASSERT_AFTER_CYCLES = 5
 
+# A quest goal's target, always. Quest progress counts DOWN - quests.Progress
+# .left is objectives REMAINING - while reconcile's completion test is
+# `observed >= target`. Rather than invert the test for one kind (which would
+# make every other branch read "unless it is a quest"), a quest goal is stored
+# as "get to zero left" and OBSERVED as -left. Both then move the same
+# direction as a level, and the only place the negation exists is
+# observed_from_left() below and the two text functions that undo it.
+QUEST_TARGET = 0
+
+# Every kind an overseer_goal row may carry, and the column definition that
+# admits them. ONE list: the enum and the code that writes into it drifting
+# apart is the whole failure this constant exists to prevent.
+GOAL_KINDS = ("level", "skill", "quest")
+KIND_COLUMN = "ENUM(%s) NOT NULL" % ",".join("'%s'" % k for k in GOAL_KINDS)
+
+
+def goal_migrations(kind_column_type: str, has_quest_id: bool) -> list:
+    """The ALTERs overseer_goal needs to reach the shape this module writes.
+
+    WHY THIS EXISTS AS A PURE FUNCTION. The bridge creates its own tables with
+    CREATE TABLE IF NOT EXISTS, and IF NOT EXISTS IS A NO-OP ON AN EXISTING
+    TABLE - including on every word of the column definitions inside it. The
+    live overseer_goal was created with ENUM('level','skill'), so adding
+    'quest' to that CREATE changes nothing at all on the live database: the
+    INSERT is rejected with "Data truncated for column 'kind'", the council's
+    quest decision is lost, and every test still passes because the test
+    database is always fresh. That combination - silently dead in production,
+    green in CI - is exactly what this codebase has been bitten by before, so
+    the decision lives here where it can be tested against both shapes rather
+    than inside an un-importable module.
+
+    IDEMPOTENT BY CONSTRUCTION, not by trying and catching. Both inputs
+    describe the CURRENT shape of the table, read from information_schema, so
+    a table already in the target shape produces an empty list - and that is
+    true of a fresh database, whose CREATE produced the final shape directly,
+    just as much as of one that has been migrated once already. Feeding this
+    function its own result twice is a no-op the second time, which is what
+    the test asserts.
+
+    An empty `kind_column_type` means the table does not exist yet (the
+    information_schema lookup found nothing). CREATE TABLE is about to make it
+    correctly, so there is nothing to alter.
+    """
+    if not kind_column_type:
+        # No `kind` column means no table (the caller's information_schema
+        # lookup found nothing). Returning the ADD COLUMN here would emit an
+        # ALTER against a table that does not exist yet - and it must return
+        # BOTH or NEITHER, since a half-shaped answer is what a reader would
+        # copy next time.
+        return []
+    out = []
+    if "'quest'" not in kind_column_type:
+        out.append("ALTER TABLE overseer_goal MODIFY kind " + KIND_COLUMN)
+    if not has_quest_id:
+        # MySQL has no ADD COLUMN IF NOT EXISTS, which is why the caller looks
+        # the column up rather than trying the ALTER and catching the failure -
+        # catching it would also catch the failures worth seeing.
+        out.append(
+            "ALTER TABLE overseer_goal "
+            "ADD COLUMN quest_id INT UNSIGNED NOT NULL DEFAULT 0"
+        )
+    return out
+
 
 @dataclass(frozen=True)
 class Goal:
     """A parsed goal, before persistence (no id/character/channel yet)."""
 
-    kind: str  # 'level' | 'skill'
+    kind: str  # 'level' | 'skill' | 'quest'
     target: int
     skill_name: str | None = None
+    # kind='quest' only. The id mod-overseer aims a bot at; 0 everywhere else.
+    quest_id: int = 0
 
 
 @dataclass(frozen=True)
@@ -82,6 +147,29 @@ class StrategyCommand:
 
     target_name: str
     command: str
+
+
+@dataclass(frozen=True)
+class DriveQuest:
+    """Aim the family's ONE traveller at a quest: "work quest <id> for <who>".
+
+    DELIBERATELY NOT A StrategyCommand, and this is the crux of the ticket.
+    strategy_for() returns `nc +grind` - "kill what is in front of you" - which
+    never travels, and it is the exact instruction that has been overriding
+    every quest decision the council has ever made. Five characters agreed to
+    help Ugga finish Kobold Candles and then stood still: 0.0 yards in 45
+    seconds, none in combat, 11 yards from the kobolds that drop the item.
+
+    It carries no target NAME on purpose. The traveller is whoever holds the
+    party lead, which is a fact the bridge owns (it writes overseer_roster.lead
+    from bonds.head_of_family); a name chosen here would be a second opinion
+    about leadership that could disagree with the first. `beneficiary` is who
+    the family is doing this FOR, which is what the reports and thoughts say
+    out loud - it is not who gets sent.
+    """
+
+    quest_id: int
+    beneficiary: str
 
 
 @dataclass(frozen=True)
@@ -135,6 +223,15 @@ _LEVEL_RE = re.compile(
     r"|\b(?:get|level)(?:\s+up)?\s+to\s+(?:level\s+)?(\d{1,3})\b",
     re.IGNORECASE,
 )
+# "work quest 12", the verb from the design note. It lives HERE and not in
+# voice.VOCABULARY: every entry there is a mod-playerbots chat command handed
+# verbatim to a bot session, and `work quest` is not one - it would produce a
+# command row the module passes to HandleCommand and mod-playerbots ignores,
+# which is the "delivered but nothing happened" failure this epic keeps
+# repeating. A trailing "for <someone>" is tolerated and ignored: the goal is
+# already attached to the character the directive was addressed to.
+_QUEST_RE = re.compile(r"\bwork\s+quest\s+(\d{1,6})\b", re.IGNORECASE)
+
 # Bounded gap so 'forget'/'cancel' only binds to a nearby 'goal', not one
 # three sentences away in an unrelated order.
 _CANCEL_RE = re.compile(
@@ -152,6 +249,13 @@ def parse_goal(text: str) -> Goal | CancelGoal | None:
     """
     if _CANCEL_RE.search(text):
         return CancelGoal()
+    m = _QUEST_RE.search(text)
+    if m:
+        quest_id = int(m.group(1))
+        if quest_id > 0:
+            # target 0 = "no objectives left". See QUEST_TARGET.
+            return Goal("quest", QUEST_TARGET, None, quest_id)
+        return None
     m = _SKILL_RE.search(text)
     if m:
         skill_name = " ".join(m.group(1).lower().split())
@@ -165,6 +269,24 @@ def parse_goal(text: str) -> Goal | CancelGoal | None:
         if 2 <= target <= MAX_LEVEL:
             return Goal("level", target)
     return None
+
+
+def observed_from_left(left: int | None) -> int | None:
+    """quests.Progress.left -> the value reconcile() compares against target.
+
+    The negation lives here and nowhere else. `left` is objectives REMAINING,
+    so it falls as the family makes progress, while every other observation in
+    this module rises; reconcile completes on `observed >= target` and reports
+    a milestone on `observed > last`. Negating once, at the edge, is what lets
+    both of those keep meaning one thing.
+
+    None passes through as None: a quest the character is not holding, or one
+    with no countable objective, is not observable, and reconcile is required
+    to stay quiet rather than command a character it cannot see.
+    """
+    if left is None:
+        return None
+    return -int(left)
 
 
 def strategy_for(goal: Mapping) -> str:
@@ -248,7 +370,7 @@ def life_strategies(*, leads: bool) -> list:
     return ["nc -new rpg", "nc +follow", FLEE_STRATEGY]
 
 
-def already_working(kind: str, target: int, active: list) -> bool:
+def already_working(kind: str, target: int, active: list, *, quest_id: int = 0) -> bool:
     """Is this character already pursuing exactly this goal?
 
     A function rather than a check at the call site so the rule can be tested
@@ -259,20 +381,36 @@ def already_working(kind: str, target: int, active: list) -> bool:
     table before it was noticed, and the supervisor never once got far enough
     to re-assert.
     """
+    if kind == "quest":
+        # EVERY quest goal has target 0, so comparing targets would report
+        # "already working" for any quest at all the moment one was active -
+        # the council's next decision would be swallowed, silently, and the
+        # family would keep driving yesterday's quest. The id is the identity.
+        return any(
+            row.get("kind") == "quest"
+            and int(row.get("quest_id") or 0) == int(quest_id)
+            for row in active
+        )
     return any(
         row.get("kind") == kind and int(row.get("target", -1)) == int(target)
         for row in active
     )
 
 
-def _describe(kind: str, skill_name: str | None, target: int) -> str:
+def _describe(kind: str, skill_name: str | None, target: int, quest_id: int = 0) -> str:
     if kind == "skill":
         return f"{skill_name} {target}"
+    if kind == "quest":
+        # The id, not the title. A title would have to be stored somewhere,
+        # and the only spare column is skill_name - one column meaning two
+        # things is how a schema starts lying. The council's own sentence is
+        # already in the goal's reason and says the title out loud.
+        return f"quest {quest_id}"
     return f"level {target}"
 
 
 def describe(goal: Goal) -> str:
-    return _describe(goal.kind, goal.skill_name, goal.target)
+    return _describe(goal.kind, goal.skill_name, goal.target, goal.quest_id)
 
 
 def ack_text(name: str, goal: Goal) -> str:
@@ -290,7 +428,13 @@ def cancel_text(name: str, cancelled: int) -> str:
 
 
 def milestone_text(row: Mapping, observed: int) -> str:
-    what = _describe(row["kind"], row.get("skill_name"), int(row["target"]))
+    what = _describe(row["kind"], row.get("skill_name"), int(row["target"]),
+                     int(row.get("quest_id") or 0))
+    if row["kind"] == "quest":
+        left = -int(observed)
+        plural = "" if left == 1 else "s"
+        return (f"{row['character_name']} advances: {left} objective{plural} "
+                f"left on {what}.")
     if row["kind"] == "skill":
         return f"{row['character_name']} advances: {row['skill_name']} {observed}, aiming for {what}."
     remaining = int(row["target"]) - observed
@@ -298,7 +442,15 @@ def milestone_text(row: Mapping, observed: int) -> str:
 
 
 def completion_text(row: Mapping, observed: int) -> str:
-    what = _describe(row["kind"], row.get("skill_name"), int(row["target"]))
+    what = _describe(row["kind"], row.get("skill_name"), int(row["target"]),
+                     int(row.get("quest_id") or 0))
+    if row["kind"] == "quest":
+        # "Objectives done", NOT "quest finished". The turn-in is a separate
+        # act the bot does for itself, and claiming the quest is complete here
+        # would be the overseer over-reporting - the one thing this service
+        # must never do.
+        return (f"Goal complete: {row['character_name']} has no objectives "
+                f"left on {what} and can hand it in.")
     return f"Goal complete: {row['character_name']} reached {what} (now at {observed})."
 
 
@@ -329,6 +481,11 @@ def _last_progress(row: Mapping) -> int | None:
 def _milestone_crossed(kind: str, last: int, observed: int) -> bool:
     if kind == "skill":
         return observed // SKILL_MILESTONE_STEP > last // SKILL_MILESTONE_STEP
+    if kind == "quest":
+        # Every objective closed is worth saying - "one more candle" is the
+        # whole texture of what the family is doing, and there are only ever a
+        # handful of them per quest, so this cannot become a flood.
+        return observed > last
     return observed > last
 
 
@@ -348,6 +505,12 @@ def reconcile(row: Mapping, observed: int | None) -> list:
         # Nothing visible to reconcile against; keep quiet rather than
         # command a character we cannot see. The next cycle retries.
         return []
+    if row.get("kind") == "quest":
+        # Its own branch, deliberately, rather than teaching the level branch
+        # below to mean two things. It differs in the two ways that matter -
+        # the action is an aim and not a strategy, and the aim is a LEASE that
+        # expires whether or not progress is being made.
+        return _reconcile_quest(row, observed)
     name = row["character_name"]
     goal_id = int(row["id"])
     target = int(row["target"])
@@ -380,4 +543,49 @@ def reconcile(row: Mapping, observed: int | None) -> list:
         actions.append(MilestoneThought(name, text))
         actions.append(Report(text))
     actions.append(RecordProgress(goal_id, observed))
+    return actions
+
+
+def _reconcile_quest(row: Mapping, observed: int) -> list:
+    """One supervision cycle for a kind='quest' goal.
+
+    `observed` is -left (see observed_from_left), so it rises toward
+    QUEST_TARGET = 0 exactly like a level rises toward its target, and the
+    completion and milestone tests below read the same direction as everywhere
+    else in this module.
+
+    WHY THE AIM IS RE-ISSUED ON A CLOCK RATHER THAN ON A STALL. The level
+    branch re-asserts only when nothing has moved, because a lost strategy and
+    a slow grind are indistinguishable from here. A quest aim is different and
+    worse: mod-playerbots' RPG_DO_QUEST status self-expires after
+    statusDoQuestDuration = 30 minutes, and once it goes IDLE the bot re-rolls
+    its own status - including picking a RANDOM quest out of its log. So the
+    aim decays on a timer even while the family is making excellent progress,
+    and a stall-triggered re-assert would never fire in exactly the case where
+    everything looks healthiest. It is a lease, so it is renewed.
+
+    The stall field on the goal row is reused as the lease counter. It is the
+    only memory a restart preserves, and a counter held in the supervisor
+    would reset on every deploy - which is precisely when an aim is most
+    likely to have been lost.
+    """
+    name = row["character_name"]
+    goal_id = int(row["id"])
+    quest_id = int(row.get("quest_id") or 0)
+    if observed >= QUEST_TARGET:
+        text = completion_text(row, observed)
+        return [MilestoneThought(name, text), Report(text), MarkComplete(goal_id)]
+
+    last, leases = _read_report(row)
+    # First sighting renews too: that is the aim actually being placed.
+    renew = last is None or leases + 1 >= REASSERT_AFTER_CYCLES
+
+    actions: list = []
+    if renew and quest_id:
+        actions.append(DriveQuest(quest_id=quest_id, beneficiary=name))
+    if last is not None and _milestone_crossed("quest", last, observed):
+        text = milestone_text(row, observed)
+        actions.append(MilestoneThought(name, text))
+        actions.append(Report(text))
+    actions.append(RecordProgress(goal_id, observed, 0 if renew else leases + 1))
     return actions

@@ -30,6 +30,7 @@ import kin
 import overhear
 import persona
 import protect
+import questbook
 import quests
 import relay
 import voice
@@ -511,6 +512,22 @@ WHERE c.name IN (%s)
 """
 
 
+# One character, one quest: the goal supervisor's observation. DERIVED from
+# _QUEST_SQL by replacing its WHERE clause rather than written out again, so
+# the join and the twenty-odd column spellings live in exactly one place. A
+# hand-copied second query would drift the first time quest_template's columns
+# move, and it would drift silently - the counts would simply stop matching
+# what the family says out loud.
+_QUEST_ONE_SQL = _QUEST_SQL.replace(
+    "WHERE c.name IN (%s)", "WHERE c.name = %s AND q.quest = %s"
+)
+if "c.name = %s" not in _QUEST_ONE_SQL:  # pragma: no cover - import-time tripwire
+    # A plain `assert` would vanish under python -O and leave this query with
+    # _QUEST_SQL's IN-clause and two bound parameters, which fails at the one
+    # moment it is needed - inside the supervision cycle, once an hour.
+    raise RuntimeError("_QUEST_SQL WHERE clause moved; _QUEST_ONE_SQL is stale")
+
+
 def _authored_lines(minutes: int = 30) -> set:
     """Every line the bridge recently put in a character's mouth.
 
@@ -531,7 +548,15 @@ def _authored_lines(minutes: int = 30) -> set:
 
 
 def _fetch_quest_progress(names: list) -> dict:
-    """name -> the quest they are closest to finishing, as a sentence.
+    """name -> (sentence, objectives left, quest id) for their closest quest.
+
+    THE ID IS THE POINT OF THE TUPLE. The sentence is what a character says;
+    the id is what mod-overseer can actually aim a bot at, and the council's
+    plan carries `target` = objectives remaining, which names no quest at all.
+    Carrying the id out of the SAME quests.focus() call that produced the
+    sentence is what guarantees the goal drives the quest the family talked
+    about; re-deriving it later from the same table can legitimately pick a
+    different one, because focus() breaks ties on live counts that move.
 
     Bounded by the roster, and every number in the sentence comes from a row.
     A character inventing its own progress is a character the overseer can no
@@ -556,7 +581,7 @@ def _fetch_quest_progress(names: list) -> dict:
     for name, progress in by_name.items():
         chosen = quests.focus(progress)
         if chosen is not None:
-            out[name] = (quests.say_remaining(chosen), chosen.left)
+            out[name] = (quests.say_remaining(chosen), chosen.left, chosen.quest_id)
     return out
 
 
@@ -607,7 +632,7 @@ def _fetch_council_members(names: list) -> list:
             # not at the table; guessing their level from a stale row is how a
             # council decides to help someone who already caught up.
             continue
-        said, left = progress.get(row["name"], ("", 0))
+        said, left, quest_id = progress.get(row["name"], ("", 0, 0))
         members.append(
             council.Member(
                 name=row["name"],
@@ -617,6 +642,7 @@ def _fetch_council_members(names: list) -> list:
                 trades=int(row["trades"] or 0),
                 quest=said,
                 quest_left=left,
+                quest_id=quest_id,
             )
         )
     return members
@@ -644,6 +670,58 @@ def _mark_party_leader(head: str) -> None:
             # because the core treats a malformed query as unrecoverable.
             "UPDATE overseer_roster SET `lead` = IF(name = %s, 1, 0)", (head,)
         )
+
+
+def _aim_traveller(quest_id: int) -> int:
+    """Tell mod-overseer which quest the party leader should be working.
+
+    WHY THE LEADER AND NOT THE BENEFICIARY. The family has exactly ONE
+    traveller, on purpose. `new rpg` is what walks a character to a quest
+    objective, and it runs at relevance 3.0-11.0 against `follow`'s 1.0, so a
+    follower given both wanders off every tick - measured live at a 937-yard
+    spread, with the healer 600 yards from the tank. goals.life_strategies
+    keeps `new rpg` on the leader alone and that is not negotiable here; a
+    quest goal changes WHERE the traveller goes, never WHO travels. The rest of
+    the family arrives with him, on `nc +follow`, and a quest they all hold
+    advances for all of them from the same kills.
+
+    WHY A ROSTER COLUMN AND NOT AN overseer_command ROW. Commands are
+    at-most-once and consumed. RPG_DO_QUEST self-expires after 30 minutes and
+    the bot then re-rolls a RANDOM quest out of its own log, so an aim is a
+    standing intent that has to survive both that and the leader relogging -
+    which is what `lead` and `spec_tab` already are. The supervisor re-asserts
+    on its own cadence (goals._reconcile_quest) and this write is idempotent.
+
+    WHERE `lead` = 1 rather than by name: leadership is a fact this file
+    already writes (_mark_party_leader), and reading it back is what keeps the
+    two from ever disagreeing. `lead` is BACKTICKED - it is a reserved word in
+    MySQL 8, and unquoted it is a syntax error that the worldserver treats as
+    unrecoverable.
+
+    THE COLUMN CAN LEGITIMATELY BE ABSENT, exactly as spec_tab can: it arrives
+    with mod-overseer's SQL, applied by the worldserver at startup, and the
+    bridge is a separate deployment with its own restarts. Warned once rather
+    than swallowed - an aim that never lands is a real fault and must be
+    visible without being fatal.
+    """
+    with _connect() as conn, conn.cursor() as cur:
+        try:
+            cur.execute(
+                "UPDATE overseer_roster SET drive_quest = %s WHERE `lead` = 1",
+                (int(quest_id),),
+            )
+        except pymysql.err.OperationalError as exc:
+            # 1054 is ER_BAD_FIELD_ERROR. Matched on the code, not the message
+            # text, which is localised and has changed between versions.
+            if exc.args and exc.args[0] == 1054:
+                log.warning(
+                    "overseer_roster.drive_quest missing - aiming the party at "
+                    "quest %d needs the worldserver image carrying "
+                    "mod-overseer's SQL (infra#2597)", int(quest_id),
+                )
+                return 0
+            raise
+        return cur.rowcount or 0
 
 
 def _mark_specs(specs: dict) -> None:
@@ -1610,6 +1688,14 @@ class Bridge(discord.Client):
                 _insert_command,
                 core.InsertCommand(action.target_name, action.command, "overseer:goal"),
             )
+        elif isinstance(action, goals.DriveQuest):
+            aimed = await asyncio.to_thread(_aim_traveller, action.quest_id)
+            # Logged every time it is renewed, with the count of rows actually
+            # written: this project has been burned repeatedly by "delivered"
+            # meaning nothing happened, and 0 rows here is the difference
+            # between an aim that landed and one that went nowhere.
+            log.info("goal: aiming the party at quest %d for %s (%d row(s))",
+                     action.quest_id, action.beneficiary, aimed)
         elif isinstance(action, goals.MilestoneThought):
             await asyncio.to_thread(_insert_thought, action.character_name, "goal", action.text)
         elif isinstance(action, goals.Report):
@@ -1755,9 +1841,10 @@ def _ensure_goal_store() -> None:
             "CREATE TABLE IF NOT EXISTS overseer_goal ("
             " id INT UNSIGNED NOT NULL AUTO_INCREMENT,"
             " character_name VARCHAR(12) NOT NULL,"
-            " kind ENUM('level','skill') NOT NULL,"
+            " kind ENUM('level','skill','quest') NOT NULL,"
             " skill_name VARCHAR(32) NULL,"
             " target SMALLINT UNSIGNED NOT NULL,"
+            " quest_id INT UNSIGNED NOT NULL DEFAULT 0,"
             " status ENUM('active','completed','cancelled') NOT NULL DEFAULT 'active',"
             " channel_id VARCHAR(32) NOT NULL DEFAULT '',"
             " last_report TEXT NULL,"
@@ -1766,6 +1853,40 @@ def _ensure_goal_store() -> None:
             " PRIMARY KEY (id), KEY idx_char_status (character_name, status)"
             ") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4"
         )
+        # CREATE TABLE IF NOT EXISTS IS A NO-OP ON A TABLE THAT ALREADY EXISTS,
+        # and that includes every word of the column definitions above. The
+        # live overseer_goal table was created with ENUM('level','skill'), so
+        # without the two explicit migrations below a kind='quest' INSERT is
+        # rejected by MySQL with "Data truncated for column 'kind'" - on the
+        # live database only. Every test would pass, the feature would ship,
+        # and the council's quest decisions would keep being thrown away with
+        # nothing in the log to say why. This is the same trap the
+        # overseer_thought 'council' enum walked into three functions up, and
+        # it is written the same way here on purpose.
+        #
+        # Both are guarded by information_schema rather than run every start:
+        # an ALTER on a table in use takes a metadata lock, and running one
+        # unconditionally at every bridge restart would be a needless one.
+        # Both are also idempotent by construction - the guards read the
+        # CURRENT shape, so a fresh database whose CREATE above already
+        # produced the final shape does nothing, and a re-run does nothing.
+        cur.execute(
+            "SELECT COLUMN_NAME AS c, COLUMN_TYPE AS t "
+            "FROM information_schema.COLUMNS "
+            "WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'overseer_goal' "
+            "  AND COLUMN_NAME IN ('kind', 'quest_id')"
+        )
+        shape = {row["c"]: row["t"] for row in cur.fetchall()}
+        # The DECISION is goals.goal_migrations, where it can be tested against
+        # both a legacy and an already-migrated table; this end only reads the
+        # current shape and executes what it is told. Statements are logged as
+        # they run, because a schema change nobody can see afterwards is how
+        # "it should have been applied" becomes an argument instead of a fact.
+        for statement in goals.goal_migrations(
+            shape.get("kind", ""), "quest_id" in shape
+        ):
+            cur.execute(statement)
+            log.info("overseer_goal migration: %s", statement)
 
 
 def _insert_goal(name: str, goal: goals.Goal, channel_id: str) -> int:
@@ -1781,9 +1902,10 @@ def _insert_goal(name: str, goal: goals.Goal, channel_id: str) -> int:
             (name, goal.kind, goal.skill_name),
         )
         cur.execute(
-            "INSERT INTO overseer_goal (character_name, kind, skill_name, target, channel_id) "
-            "VALUES (%s, %s, %s, %s, %s)",
-            (name, goal.kind, goal.skill_name, goal.target, channel_id),
+            "INSERT INTO overseer_goal "
+            "(character_name, kind, skill_name, target, quest_id, channel_id) "
+            "VALUES (%s, %s, %s, %s, %s, %s)",
+            (name, goal.kind, goal.skill_name, goal.target, goal.quest_id, channel_id),
         )
         return cur.lastrowid
 
@@ -1801,15 +1923,42 @@ def _cancel_goals(name: str) -> int:
 def _fetch_active_goals() -> list[dict]:
     with _connect() as conn, conn.cursor() as cur:
         cur.execute(
-            "SELECT id, character_name, kind, skill_name, target, status, "
-            "channel_id, last_report FROM overseer_goal WHERE status = 'active'"
+            "SELECT id, character_name, kind, skill_name, target, quest_id, "
+            "status, channel_id, last_report FROM overseer_goal "
+            "WHERE status = 'active'"
         )
         return list(cur.fetchall())
 
 
 def _observe_goal(row: dict) -> int | None:
-    """The character's current level or skill value, or None if unseeable."""
+    """The character's current level, skill value, or quest progress.
+
+    None whenever the answer cannot be seen, which reconcile treats as "say
+    nothing this cycle" rather than as a zero.
+    """
     with _connect() as conn, conn.cursor() as cur:
+        if row["kind"] == "quest":
+            quest_id = int(row.get("quest_id") or 0)
+            if not quest_id:
+                return None
+            cur.execute(_QUEST_ONE_SQL, (row["character_name"], quest_id))
+            found = cur.fetchone()
+            if found is None:
+                # The character is not holding the quest. That is a real
+                # state, not an error: the whole point of the epic's quest
+                # sharing half is that the family does NOT all hold the same
+                # log yet. Observing None keeps the goal alive and quiet
+                # rather than completing it on a row that does not exist -
+                # a missing row read as "0 objectives left" would report the
+                # quest finished by somebody who never took it.
+                return None
+            progress = quests.read(found, found)
+            if progress is None:
+                # A quest with no countable objective ("go and speak to
+                # someone"). There is nothing to supervise, so there is
+                # nothing to say.
+                return None
+            return goals.observed_from_left(progress.left)
         if row["kind"] == "level":
             cur.execute(
                 "SELECT level FROM overseer_snapshot "
@@ -1834,6 +1983,158 @@ def _observe_goal(row: dict) -> int | None:
         return int(found["value"]) if found else None
 
 
+_LEDGER_MEMBER_SQL = (
+    "SELECT c.name, c.class, c.race, COALESCE(s.level, c.level) AS level "
+    "FROM characters c "
+    "LEFT JOIN overseer_snapshot s "
+    "       ON s.name = c.name AND s.updated_at > NOW() - INTERVAL 60 SECOND "
+    "WHERE c.name IN (%s)"
+)
+# Held and rewarded are separate TABLES, not a status column, and questbook
+# needs both: only a rewarded quest satisfies a prerequisite, while a held one
+# is what the traveller can actually be aimed at.
+_LEDGER_HELD_SQL = (
+    "SELECT c.name, q.quest FROM character_queststatus q "
+    "JOIN characters c ON c.guid = q.guid WHERE c.name IN (%s)"
+)
+_LEDGER_REWARDED_SQL = (
+    "SELECT c.name, q.quest FROM character_queststatus_rewarded q "
+    "JOIN characters c ON c.guid = q.guid WHERE c.name IN (%s)"
+)
+_LEDGER_CATALOG_SQL = (
+    "SELECT t.ID, t.LogTitle, t.QuestLevel, t.MinLevel, t.AllowableRaces, "
+    "       a.MaxLevel, a.AllowableClasses, a.PrevQuestID, a.NextQuestID, "
+    "       a.ExclusiveGroup "
+    "FROM acore_world.quest_template t "
+    "LEFT JOIN acore_world.quest_template_addon a ON a.ID = t.ID "
+    "WHERE t.ID IN (%s)"
+)
+
+
+def _fetch_questbook(names: list) -> tuple:
+    """(ledger, name -> held quest ids) for the family, from live rows.
+
+    All the reading for questbook.py in one place, because a Ledger whose
+    fields disagree with each other is worse than no ledger: shared_quests,
+    behind and catch_up_plan are all computed against the same catalog in one
+    pass, and questbook.build() is what guarantees that.
+
+    THE CATALOG IS THE UNION OF WHAT THE FAMILY HOLDS AND HAS TURNED IN, and
+    nothing wider. questbook only ever asks about quests somebody in the family
+    is carrying or has finished - behind() requires that another member was
+    REWARDED for it - so pulling the whole 10,000-row quest_template would cost
+    a large query to answer questions nobody asks. Around 90 ids in practice.
+
+    ZONE IS DELIBERATELY LEFT UNKNOWN (0). questbook.Quest.zone is what marks
+    Bork's Coldridge Valley rows as stalls, and quest_template's QuestSortID
+    would plausibly supply it - but its positive/negative encoding has not been
+    read against THIS server, and the module's own rule is that an unknown zone
+    never blocks anything. Guessing it wrong would mark reachable work
+    unreachable and quietly drop it out of the catch-up plan, which is the
+    exact failure questbook was written to prevent. Reporting stalls is left to
+    a follow-up that can verify the column first.
+    """
+    if not names:
+        return questbook.build([], {}), {}
+    placeholders = ",".join(["%s"] * len(names))
+    # Hoisted for the same reason as _BOT_HELD_SQL: ruff anchors S608 at the
+    # START of the expression, so a noqa on the line carrying the % does not
+    # silence a multi-line query. Only the NUMBER of placeholders is
+    # interpolated; every name reaches MySQL as a bound parameter.
+    member_sql = _LEDGER_MEMBER_SQL % placeholders    # noqa: S608
+    held_sql = _LEDGER_HELD_SQL % placeholders        # noqa: S608
+    rewarded_sql = _LEDGER_REWARDED_SQL % placeholders  # noqa: S608
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(member_sql, names)
+        rows = list(cur.fetchall())
+        cur.execute(held_sql, names)
+        held_rows = list(cur.fetchall())
+        cur.execute(rewarded_sql, names)
+        rewarded_rows = list(cur.fetchall())
+
+        held: dict = {}
+        for row in held_rows:
+            held.setdefault(row["name"], set()).add(int(row["quest"]))
+        rewarded: dict = {}
+        for row in rewarded_rows:
+            rewarded.setdefault(row["name"], set()).add(int(row["quest"]))
+
+        wanted = sorted({q for ids in held.values() for q in ids}
+                        | {q for ids in rewarded.values() for q in ids})
+        catalog: dict = {}
+        if wanted:
+            catalog_sql = _LEDGER_CATALOG_SQL % ",".join(["%s"] * len(wanted))  # noqa: S608
+            cur.execute(catalog_sql, wanted)
+            for row in cur.fetchall():
+                quest = questbook.Quest.from_row(row)
+                catalog[quest.id] = quest
+
+    members = [
+        questbook.Member(
+            name=row["name"],
+            class_id=int(row["class"]),
+            race_id=int(row["race"]),
+            level=int(row["level"] or 0),
+            rewarded=frozenset(rewarded.get(row["name"], ())),
+            held=frozenset(held.get(row["name"], ())),
+        )
+        for row in rows
+    ]
+    return questbook.build(members, catalog), {n: frozenset(q) for n, q in held.items()}
+
+
+def _choose_drive_quest(plan) -> int:
+    """Which quest the family's traveller should actually be aimed at, or 0.
+
+    The council decides THAT the family will do a quest; questbook decides
+    WHICH, because it is the only thing here that knows the difference between
+    a quest four of them are behind on and a quest one of them can never do.
+    Reimplementing that choice next to the persistence would be a second,
+    quieter answer to a question already answered properly.
+
+    THE INTERSECTION IS LOAD-BEARING. The candidate set handed to
+    drive_target is what the TRAVELLER holds AND what the BENEFICIARY holds:
+
+      - the traveller must hold it or NewRpgDoQuestAction idles the bot on the
+        next tick and nothing moves at all;
+      - the beneficiary must hold it or _observe_goal can never see progress,
+        and the goal would sit active forever, re-aiming at a quest whose
+        completion nobody could ever report.
+
+    Either half alone produces a goal that looks healthy and does nothing,
+    which is the failure mode this whole epic keeps hitting.
+    """
+    leader = bonds.head_of_family()
+    names = sorted((_protected_guids()).values())
+    ledger, held = _fetch_questbook(names)
+    driveable = held.get(leader, frozenset())
+    if plan.beneficiary and plan.beneficiary != leader:
+        driveable = driveable & held.get(plan.beneficiary, frozenset())
+    chosen = questbook.drive_target(
+        ledger,
+        held_by_traveller=driveable,
+        wanted=int(plan.quest_id or 0),
+        beneficiary=plan.beneficiary,
+    )
+    log.info(
+        "council: quest choice leader=%s beneficiary=%s wanted=%s chosen=%s "
+        "driveable=%d behind=%s",
+        leader, plan.beneficiary, plan.quest_id, chosen, len(driveable),
+        ledger.furthest_behind,
+    )
+    return chosen
+
+
+# The plan kinds the supervisor can actually act on. ONE tuple, read by both
+# _already_agreed and _persist_council_plan: they were two identical literals
+# and 'quest' has to be added to BOTH or the council re-stages the same scene
+# every hour against a goal it did persist. A council that agrees to a quiet
+# day ('idle') or to learning a trade ('trades') has still decided something
+# real - it is simply not something the supervisor knows how to drive, and
+# writing it as a goal would have it issue grind commands for an afternoon off.
+DRIVEN_KINDS = ("level", "quest")
+
+
 def _already_agreed(plan) -> bool:
     """Is the family already working on exactly this?
 
@@ -1841,15 +2142,31 @@ def _already_agreed(plan) -> bool:
     duplicate goal, but the scene was played out in full first, which is the
     half Evan actually sees.
     """
-    if plan.kind not in ("level",):
+    if plan.kind not in DRIVEN_KINDS:
         return False
+    quest_id = 0
+    if plan.kind == "quest":
+        # Resolved the SAME way _persist_council_plan resolves it, and that is
+        # not a tidiness point. The row carries the quest questbook CHOSE, not
+        # the one the council named; comparing against the council's raw id
+        # would find no match, the scene would be re-staged in full every hour
+        # against a goal that was persisted the first time, and Discord would
+        # fill with the same six lines - the exact stuck record this guard was
+        # added to prevent. Two ledger builds an hour is the price.
+        quest_id = _choose_drive_quest(plan)
+        if not quest_id:
+            # Nothing driveable: let the council speak. Persisting will refuse
+            # and say why, which is the honest place for that to be reported.
+            return False
     with _connect() as conn, conn.cursor() as cur:
         cur.execute(
-            "SELECT kind, target FROM overseer_goal "
+            "SELECT kind, target, quest_id FROM overseer_goal "
             "WHERE character_name = %s AND status = 'active'",
             (plan.beneficiary,),
         )
-        return goals.already_working(plan.kind, int(plan.target), list(cur.fetchall()))
+        return goals.already_working(
+            plan.kind, int(plan.target), list(cur.fetchall()), quest_id=quest_id,
+        )
 
 
 def _persist_council_plan(plan) -> int | None:
@@ -1864,9 +2181,27 @@ def _persist_council_plan(plan) -> int | None:
     family just agreed on today, and an older goal underneath would have the
     supervisor driving yesterday's plan at the same time.
     """
-    if plan.kind not in ("level",):
+    if plan.kind not in DRIVEN_KINDS:
         log.info("council: plan '%s' is not a goal the supervisor drives", plan.kind)
         return None
+
+    quest_id = 0
+    if plan.kind == "quest":
+        quest_id = _choose_drive_quest(plan)
+        if not quest_id:
+            # Nothing the traveller holds AND the beneficiary can be measured
+            # on. Said out loud rather than persisted: a goal nobody can drive
+            # and nobody can observe would sit 'active' forever, and the
+            # supervisor would report it healthy the whole time. The fix for
+            # this state is quest SHARING (the other half of infra#2597), not
+            # a different aim.
+            log.warning(
+                "council: %s's quest cannot be driven - the party leader is "
+                "not holding a quest %s is also working on; nothing persisted",
+                plan.beneficiary, plan.beneficiary,
+            )
+            return None
+
     with _connect() as conn, conn.cursor() as cur:
         # An identical goal already being worked is LEFT ALONE. The council
         # meets hourly and keeps reaching the same conclusion while the work is
@@ -1876,13 +2211,14 @@ def _persist_council_plan(plan) -> int | None:
         # in the table before this was noticed, and the supervisor never once
         # got far enough to re-assert.
         cur.execute(
-            "SELECT kind, target FROM overseer_goal "
+            "SELECT kind, target, quest_id FROM overseer_goal "
             "WHERE character_name = %s AND status = 'active'",
             (plan.beneficiary,),
         )
-        if goals.already_working(plan.kind, int(plan.target), list(cur.fetchall())):
-            log.info("council: %s is already working towards %s %d",
-                     plan.beneficiary, plan.kind, int(plan.target))
+        if goals.already_working(plan.kind, int(plan.target), list(cur.fetchall()),
+                                 quest_id=quest_id):
+            log.info("council: %s is already working towards %s %d (quest %d)",
+                     plan.beneficiary, plan.kind, int(plan.target), quest_id)
             return None
 
         cur.execute(
@@ -1890,11 +2226,19 @@ def _persist_council_plan(plan) -> int | None:
             "WHERE character_name = %s AND status = 'active'",
             (plan.beneficiary,),
         )
+        # target for a quest goal is always goals.QUEST_TARGET (0 objectives
+        # left); the council's plan.target is objectives REMAINING right now,
+        # which is an observation and not a destination.
+        target = goals.QUEST_TARGET if plan.kind == "quest" else int(plan.target)
         cur.execute(
-            "INSERT INTO overseer_goal (character_name, kind, target, status, channel_id) "
-            "VALUES (%s, %s, %s, 'active', %s)",
-            (plan.beneficiary, plan.kind, int(plan.target), OVERSEER_CHANNEL_ID or ""),
+            "INSERT INTO overseer_goal "
+            "(character_name, kind, target, quest_id, status, channel_id) "
+            "VALUES (%s, %s, %s, %s, 'active', %s)",
+            (plan.beneficiary, plan.kind, target, quest_id,
+             OVERSEER_CHANNEL_ID or ""),
         )
+        log.info("council: persisted %s goal for %s (quest %d, row %s)",
+                 plan.kind, plan.beneficiary, quest_id, cur.lastrowid)
         return cur.lastrowid
 
 

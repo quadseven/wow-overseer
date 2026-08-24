@@ -78,6 +78,12 @@ class Member:
     # assessing member's own.
     quest: str = ""
     quest_left: int = 0
+    # WHICH quest that sentence is about. Threaded because a plan the
+    # supervisor can act on needs an id, not a sentence: mod-overseer aims a
+    # bot with ChangeToDoQuest(questId, ...), and re-deriving the id from the
+    # beneficiary's rows at persist time can pick a DIFFERENT quest than the
+    # one the council actually talked about. 0 is "no quest in view".
+    quest_id: int = 0
 
 
 @dataclass(frozen=True)
@@ -94,6 +100,9 @@ class Proposal:
     target: int
     weight: int
     said: str
+    # Only meaningful for kind='quest'; 0 everywhere else. Additive and
+    # defaulted on purpose, so every existing proposal shape is untouched.
+    quest_id: int = 0
 
 
 @dataclass(frozen=True)
@@ -104,6 +113,10 @@ class Plan:
     beneficiary: str
     target: int
     reason: str
+    # Carried through from the winning Proposal. For kind='quest' this is the
+    # whole point of the plan - target is objectives REMAINING, which names no
+    # quest at all - and it is what the persisted goal is driven by.
+    quest_id: int = 0
 
 
 @dataclass(frozen=True)
@@ -163,7 +176,7 @@ def assess(me: Member, *, public_levels: dict) -> Proposal | None:
     if me.quest:
         return Proposal(
             proposer=me.name, kind="quest", beneficiary=me.name,
-            target=me.quest_left,
+            target=me.quest_left, quest_id=me.quest_id,
             # Above trades and coin, below rescuing someone left behind. A
             # half-finished quest is the most concrete thing anyone at the
             # table has, and finishing it is cheap.
@@ -271,8 +284,13 @@ def _merge(proposals: list) -> list:
         # family shares; keying on the beneficiary made it five, and the scene
         # read as five people talking past each other and then all volunteering
         # to help whoever spoke first.
-        key = ((p.kind, "self", p.target) if p.beneficiary == p.proposer
-               else (p.kind, p.beneficiary, p.target))
+        # quest_id is part of the key, not decoration: two members each one
+        # objective from finishing DIFFERENT quests share (kind, self, target)
+        # exactly, and merging them would have the family agree to help with a
+        # quest nobody at the table named. It is 0 for every other kind, so
+        # nothing else groups differently than it did.
+        key = ((p.kind, "self", p.target, p.quest_id) if p.beneficiary == p.proposer
+               else (p.kind, p.beneficiary, p.target, p.quest_id))
         grouped.setdefault(key, []).append(p)
 
     merged = []
@@ -389,6 +407,6 @@ def hold(members: list, *, history: list) -> Council:
     return Council(
         lines=_script(tally, withheld),
         plan=Plan(kind=won.kind, beneficiary=won.beneficiary,
-                  target=won.target, reason=won.said),
+                  target=won.target, reason=won.said, quest_id=won.quest_id),
         reason=f"{won.proposer}'s plan carried at {score}",
     )

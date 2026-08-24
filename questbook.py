@@ -583,3 +583,51 @@ def say(ledger: Ledger, name: str) -> str:
                ", ".join(s.title or "quest %d" % s.quest_id for s in stalls))
         )
     return " ".join(parts)
+
+
+def drive_target(ledger: Ledger, *, held_by_traveller, wanted: int = 0,
+                 beneficiary: str = "") -> int:
+    """The ONE quest id the family's single traveller should be aimed at.
+
+    The family has exactly one traveller by design - the leader keeps
+    `new rpg`, the other four are on `nc +follow`, and handing a follower the
+    wander strategy is what measured a 937-yard spread (goals.life_strategies).
+    So "help Ugga" cannot mean "send Ugga"; it means aim the leader at Ugga's
+    quest and let the party walk there together.
+
+    THE HARD PRECONDITION, and why `held_by_traveller` is a required argument
+    rather than a nicety. Upstream's NewRpgDoQuestAction reads
+    `bot->GetQuestStatus(questId)` and dispatches only on INCOMPLETE or
+    COMPLETE; anything else falls through to ChangeToIdle(). Aim the traveller
+    at a quest it does not hold and it idles on the very next tick, having
+    moved nowhere - the "delivered, and nothing happened" failure this epic
+    keeps repeating. A quest the traveller does not hold is therefore not a
+    candidate, however badly somebody needs it.
+
+    The order of preference:
+
+      1. `wanted` - the quest the council actually named - if the traveller
+         holds it. The council already deliberated; second-guessing a decision
+         the traveller can carry out would make the scene a decoration.
+      2. The beneficiary's catch_up_plan, in ITS order. That order is the
+         module's whole contribution: it is chain-correct (35 before 37), it
+         is prerequisite-complete, and it is stable on identical facts. Taking
+         the first entry the traveller holds is a filter on that plan, never a
+         re-ranking of it.
+      3. behind(), for the case where the plan is empty because the missed
+         work has no chain to walk.
+
+    Returns 0 for "nothing driveable", which is an honest answer and not a
+    failure: it means the work the family should do is work the traveller is
+    not carrying, and the fix for that is quest sharing, not a different aim.
+    """
+    held = frozenset(int(q) for q in (held_by_traveller or ()))
+    if wanted and int(wanted) in held:
+        return int(wanted)
+    who = beneficiary or ledger.furthest_behind
+    if not who:
+        return 0
+    for quest in tuple(ledger.plans.get(who, ())) + tuple(ledger.behind.get(who, ())):
+        if quest.id in held:
+            return quest.id
+    return 0
