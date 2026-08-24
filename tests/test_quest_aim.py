@@ -320,7 +320,13 @@ class EveryMemberUsedWasVerifiedAgainstThePinnedSources(unittest.TestCase):
     # Members already used elsewhere in this file, which the build has
     # therefore already proven for us.
     ALREADY_PROVEN = {"Fetch", "NextRow", "Get", "GetTitle", "GetQuestTemplate",
-                      "FindPlayerByName"}
+                      "FindPlayerByName",
+                      # infra#2801 reads the traveller's position in DriveQuests
+                      # to tell "abandoned without moving" from "travelling".
+                      # The snapshot writer in this same file has called these
+                      # since long before, so the build has proven them. Z is
+                      # deliberately absent: the diff does not use it.
+                      "GetPositionX", "GetPositionY"}
 
     def test_every_arrow_member_used_is_on_the_verified_list(self):
         body = _code(_drive() + _chosen())
