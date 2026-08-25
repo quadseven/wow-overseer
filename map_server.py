@@ -10,6 +10,7 @@ import logging
 import os
 import re
 import threading
+import time
 import urllib.request
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -18,6 +19,7 @@ from urllib.parse import parse_qs, urlsplit
 import pymysql
 
 import chat
+import stream
 import voice
 from map_core import build_payload
 from panel import build_character_panel
@@ -187,6 +189,117 @@ def _fetch_character(name: str) -> dict:
         conn.close()
 
 
+def _ensure_stream_store() -> None:
+    """The table the map and the Windows agent meet in.
+
+    CREATE TABLE IF NOT EXISTS is a no-op on an EXISTING table - every word of
+    it, including columns - so the ALTERs are computed from the live shape by
+    stream.stream_migrations rather than hoped for. That is the overseer_goal
+    kind-ENUM lesson, which was silently dead in production while CI stayed
+    green because CI's database is always fresh.
+    """
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(
+            "CREATE TABLE IF NOT EXISTS overseer_stream ("
+            " `character` VARCHAR(24) NOT NULL PRIMARY KEY,"
+            " mode VARCHAR(16) NOT NULL DEFAULT 'cam',"
+            " state VARCHAR(16) NOT NULL DEFAULT 'requested',"
+            " detail TEXT NULL,"
+            " delivery VARCHAR(16) NULL,"
+            " last_seen TIMESTAMP NULL DEFAULT NULL,"
+            " requested_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,"
+            " updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP"
+            "   ON UPDATE CURRENT_TIMESTAMP"
+            ") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4"
+        )
+        cur.execute(
+            "SELECT COLUMN_NAME FROM information_schema.COLUMNS "
+            "WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'overseer_stream'"
+        )
+        have = [r["COLUMN_NAME"] for r in cur.fetchall()]
+        for sql in stream.stream_migrations(have):
+            log.info("stream: migrating - %s", sql)
+            cur.execute(sql)
+
+
+def _fetch_streams() -> list:
+    """Every stream row, with clocks as epoch seconds.
+
+    UNIX_TIMESTAMP in SQL rather than Python datetime arithmetic: the bridge
+    and MySQL do not necessarily agree on timezone, and a stream torn down an
+    hour early because of it would be a maddening bug to chase.
+    """
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT `character`, mode, state, detail, delivery,"
+            "       UNIX_TIMESTAMP(last_seen) AS last_seen_seconds,"
+            "       UNIX_TIMESTAMP(requested_at) AS requested_seconds"
+            " FROM overseer_stream"
+        )
+        return list(cur.fetchall())
+
+
+def _request_stream(name: str, mode: str) -> None:
+    """Ask for a client. REPLACE, so re-watching a character that ended
+    earlier reuses its row rather than colliding on the primary key."""
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(
+            "REPLACE INTO overseer_stream"
+            " (`character`, mode, state, detail, delivery, last_seen, requested_at)"
+            " VALUES (%s, %s, 'requested', NULL, NULL, NOW(), NOW())",
+            (name, mode),
+        )
+
+
+def _touch_stream(name: str) -> None:
+    """The heartbeat. The ONLY thing keeping a client alive."""
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(
+            "UPDATE overseer_stream SET last_seen = NOW()"
+            " WHERE `character` = %s AND state IN ('requested','starting','live')",
+            (name,),
+        )
+
+
+def _stop_stream(name: str) -> None:
+    """Ask for teardown. The agent moves it to 'ended' when the client is
+    actually gone - this only ever says 'stop', never 'stopped'."""
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(
+            "UPDATE overseer_stream SET state = 'stopping'"
+            " WHERE `character` = %s AND state IN ('requested','starting','live')",
+            (name,),
+        )
+
+
+def stream_expire(rows: list, now_seconds: float) -> list:
+    """Move every stale row to 'stopping'. Returns the names expired.
+
+    THE SWEEP IS THE WHOLE LIFECYCLE. A viewer who closed the tab sends
+    nothing again, so their own silence cannot end anything - this runs on
+    every read of the watch endpoint, which the open map does constantly.
+    """
+    stale = [r["character"] for r in rows if stream.is_stale(r, now_seconds)]
+    if not stale:
+        return []
+    marks = ", ".join(["%s"] * len(stale))
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(
+            "UPDATE overseer_stream SET state = 'stopping',"  # noqa: S608 - placeholders from a COUNT, values bound
+            " detail = 'nobody was watching'"
+            " WHERE `character` IN (%s)" % marks,
+            tuple(stale),
+        )
+    return stale
+
+
+def _character_exists_by_name(name: str) -> bool:
+    """A watch request for a character that does not exist should say so,
+    not queue a client for nobody."""
+    with _connect() as conn, conn.cursor() as cur:
+        return _character_exists(cur, name)
+
+
 def _character_exists(cur, name: str) -> bool:
     """Is this a real character at all (logged in or not)?
 
@@ -332,27 +445,27 @@ def _ask_llm(prompt: str) -> str:
 # than the page.
 class Handler(BaseHTTPRequestHandler):
     def do_GET(self):  # noqa: N802 (stdlib naming)
-        # A router and nothing else: each endpoint owns its own method, so
-        # this stays readable as the surface grows (infra#2604 added the
-        # third JSON endpoint and pushed the old inline form over the
-        # complexity cap).
-        path = self.path.split("?", 1)[0]
-        if path == "/api/map":
-            self._map()
-        elif path == "/api/character":
-            self._character(parse_qs(urlsplit(self.path).query))
-        elif path == "/api/thoughts":
-            self._thoughts(parse_qs(urlsplit(self.path).query))
-        elif path in ("/", "/index.html"):
-            self._send_file("index.html", "text/html; charset=utf-8")
-        elif path == "/zones.json":
-            self._send_file("zones.json", "application/json")
-        elif path == "/healthz":
-            self._send(200, "text/plain", b"ok")
-        else:
+        # A lookup and nothing else. Every GET endpoint takes the parsed
+        # query and owns its own method, so adding one is a row in the table
+        # at the foot of this class - not another branch here. The chain this
+        # replaced had reached eight and tripped the complexity cap when
+        # /api/watch landed (infra#2663).
+        handler = self.GET_ROUTES.get(self.path.split("?", 1)[0])
+        if handler is None:
             self._send(404, "text/plain", b"not found")
+            return
+        handler(self, parse_qs(urlsplit(self.path).query))
 
-    def _map(self) -> None:
+    def _index(self, _query: dict) -> None:
+        self._send_file("index.html", "text/html; charset=utf-8")
+
+    def _zones_file(self, _query: dict) -> None:
+        self._send_file("zones.json", "application/json")
+
+    def _healthz(self, _query: dict) -> None:
+        self._send(200, "text/plain", b"ok")
+
+    def _map(self, _query: dict) -> None:
         """GET /api/map - every fresh snapshot row as placed dots."""
         try:
             payload = build_payload(_fetch_rows(), GEO)
@@ -405,9 +518,18 @@ class Handler(BaseHTTPRequestHandler):
         self._send(200, "application/json", json.dumps(payload).encode())
 
     def do_POST(self):  # noqa: N802 (stdlib naming)
-        if self.path.split("?", 1)[0] != "/api/chat":
+        handler = self.POST_ROUTES.get(self.path.split("?", 1)[0])
+        if handler is None:
             self._send(404, "text/plain", b"not found")
             return
+        handler(self)
+
+    def _chat_post(self) -> None:
+        """POST /api/chat - the Overseer speaks, and one character answers.
+
+        Routing used to live in here alongside the body checks; splitting
+        them is what let do_POST become a lookup.
+        """
         request = self._read_json_body()
         if request is None:
             return
@@ -483,6 +605,92 @@ class Handler(BaseHTTPRequestHandler):
             "degraded": degraded,
         }).encode())
 
+    def _watch_state(self, query: dict) -> None:
+        """GET /api/watch?name=X - is anyone watching, and how do they look?
+
+        Also the SWEEP. A viewer who closed the tab sends nothing ever again,
+        so nothing they do can end their stream - something else has to
+        notice. Every read of this endpoint expires whatever has gone quiet,
+        which means the map merely being open keeps the world tidy.
+        """
+        name = query.get("name", [""])[0]
+        try:
+            rows = _fetch_streams()
+            expired = stream_expire(rows, time.time())
+            if expired:
+                log.info("stream: expiring %d stale row(s): %s",
+                         len(expired), ", ".join(expired))
+        except Exception:
+            log.exception("stream state read failed")
+            self._send(503, "application/json", b'{"error": "world unreachable"}')
+            return
+        mine = next((r for r in rows if r.get("character") == name), None)
+        payload = {
+            "channels_in_use": stream.channels_in_use(rows),
+            "max_channels": stream.MAX_CHANNELS,
+            "heartbeat_seconds": stream.HEARTBEAT_SECONDS,
+            "watching": None,
+        }
+        if mine and mine.get("state") in stream.OCCUPIES_A_CLIENT:
+            payload["watching"] = {
+                "state": mine.get("state"),
+                "mode": mine.get("mode"),
+                "detail": mine.get("detail") or "",
+                "delivery": stream.delivery_of(mine),
+            }
+        self._send(200, "application/json", json.dumps(payload).encode())
+
+    def _watch_post(self) -> None:
+        """POST /api/watch - {name, mode, action}
+
+        action=start  ask the Windows agent for a client
+        action=beat   "still here" - the ONLY thing keeping the client alive
+        action=stop   the viewer said so out loud
+        """
+        request = self._read_json_body()
+        if request is None:
+            return
+        name = request.get("name") if isinstance(request.get("name"), str) else ""
+        action = request.get("action") if isinstance(request.get("action"), str) else ""
+        mode = request.get("mode") if isinstance(request.get("mode"), str) else "cam"
+        if not _NAME_RE.fullmatch(name):
+            self._send(400, "application/json", b'{"error": "not a character name"}')
+            return
+        if action not in ("start", "beat", "stop"):
+            self._send(400, "application/json", b'{"error": "unknown action"}')
+            return
+        try:
+            self._watch_act(name, action, mode)
+        except Exception:
+            log.exception("watch %s failed for %s", action, name)
+            self._send(503, "application/json", b'{"error": "world unreachable"}')
+
+    def _watch_act(self, name: str, action: str, mode: str) -> None:
+        rows = _fetch_streams()
+        stream_expire(rows, time.time())
+        if action == "beat":
+            # Deliberately cheap and deliberately unconditional: a heartbeat
+            # for a row that has already ended is not an error, it is a viewer
+            # whose tab has not noticed yet.
+            _touch_stream(name)
+            self._send(200, "application/json", b'{"ok": true}')
+            return
+        if action == "stop":
+            _stop_stream(name)
+            self._send(200, "application/json", b'{"ok": true}')
+            return
+        allowed, why = stream.can_start(rows, name, mode)
+        if not allowed:
+            self._send(409, "application/json",
+                       json.dumps({"error": why}).encode())
+            return
+        if not _character_exists_by_name(name):
+            self._send(404, "application/json", b'{"error": "no such character"}')
+            return
+        _request_stream(name, mode)
+        log.info("stream: requested %s for %s", mode, name)
+        self._send(200, "application/json", b'{"ok": true, "state": "requested"}')
+
     def _read_json_body(self) -> dict | None:
         """The POST body as a dict, or None after sending the error itself."""
         try:
@@ -528,9 +736,42 @@ class Handler(BaseHTTPRequestHandler):
     def log_message(self, fmt, *args):
         log.info("%s " + fmt, self.address_string(), *args)
 
+    # The tables sit at the foot of the class so every method they name is
+    # already defined. Values are plain functions, called with the handler
+    # instance - a new endpoint is one row, and an unknown path is one miss.
+    GET_ROUTES = {
+        "/api/map": _map,
+        "/api/character": _character,
+        "/api/thoughts": _thoughts,
+        "/api/watch": _watch_state,
+        "/": _index,
+        "/index.html": _index,
+        "/zones.json": _zones_file,
+        "/healthz": _healthz,
+    }
+    POST_ROUTES = {
+        "/api/chat": _chat_post,
+        "/api/watch": _watch_post,
+    }
+
 
 def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
+
+    # AFTER basicConfig on purpose: this is the one startup step that is
+    # allowed to fail, so its exception must actually be formatted and
+    # visible rather than emitted through an unconfigured root logger.
+    #
+    # The stream table must exist before the first watch request, and the
+    # migration must run against the LIVE shape rather than be assumed by
+    # a CREATE that is a no-op on an existing table. Degrades loudly and
+    # keeps serving: a broken stream store must not take the map down,
+    # because the map is what Evan actually uses.
+    try:
+        _ensure_stream_store()
+    except Exception:
+        log.exception("stream store unavailable - watch controls will fail")
+
     server = ThreadingHTTPServer(("0.0.0.0", PORT), Handler)
     log.info("serving on :%d (threads: %s)", PORT, threading.active_count())
     server.serve_forever()

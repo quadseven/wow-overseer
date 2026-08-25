@@ -1,0 +1,272 @@
+"""The stream lifecycle: who is watched, and when the client dies.
+
+infra#2663's hardest acceptance criterion is not the video - it is "without
+leaving a WoW client running idle when nobody is watching". A client held for
+nobody costs a GPU and 300MB and is INVISIBLE, which is this project's
+favourite kind of bug. Every test below is about that sentence.
+"""
+import unittest
+
+import stream
+
+
+class Staleness(unittest.TestCase):
+    """Silence is the signal. Everything that can stop a viewer watching -
+    closed tab, crashed browser, slept laptop, dropped tailnet - stops the
+    heartbeat, so all of them end the stream."""
+
+    def _row(self, **kw):
+        base = {"state": "live", "character": "Grug", "last_seen_seconds": 1000.0}
+        base.update(kw)
+        return base
+
+    def test_a_fresh_heartbeat_keeps_the_stream(self):
+        self.assertFalse(stream.is_stale(self._row(), 1005.0))
+
+    def test_silence_past_the_timeout_ends_it(self):
+        self.assertTrue(
+            stream.is_stale(self._row(), 1000.0 + stream.STALE_AFTER_SECONDS + 1))
+
+    def test_the_timeout_is_bounded_in_absolute_seconds(self):
+        """Pinned to REAL numbers, not to the constant itself. The first cut
+        wrote every staleness assertion as `STALE_AFTER_SECONDS + 1`, so the
+        whole class moved with the constant - setting it to 999999 kept the
+        suite green, which a mutation run caught. A test derived entirely from
+        the value it is checking cannot check it."""
+        self.assertLessEqual(stream.STALE_AFTER_SECONDS, 120,
+                             "a client held this long for nobody is the bug "
+                             "infra#2663 exists to prevent")
+        self.assertGreaterEqual(stream.STALE_AFTER_SECONDS, 30,
+                                "too short and a throttled background tab "
+                                "kills a stream somebody is watching")
+
+    def test_two_minutes_of_silence_is_stale_at_any_setting(self):
+        """Absolute, not relative: whatever the constant says, two minutes of
+        no viewer must end the stream."""
+        self.assertTrue(stream.is_stale(self._row(), 1000.0 + 120))
+
+    def test_five_seconds_of_silence_is_never_stale(self):
+        self.assertFalse(stream.is_stale(self._row(), 1005.0))
+
+    def test_the_timeout_survives_a_dropped_heartbeat(self):
+        """One lost request must not kill a stream somebody is watching, so
+        the timeout is a multiple of the send cadence."""
+        self.assertGreaterEqual(
+            stream.STALE_AFTER_SECONDS, 3 * stream.HEARTBEAT_SECONDS)
+
+    def test_an_ended_row_is_never_stale(self):
+        """`ended` rows are history. History does not need tearing down, and
+        a sweep that kept 'finding' them would act on the same row forever."""
+        for state in ("ended", "stopping"):
+            self.assertFalse(
+                stream.is_stale(self._row(state=state), 9_999_999.0), state)
+
+    def test_a_request_nobody_picked_up_goes_stale_on_its_own_clock(self):
+        """No heartbeat yet, because no viewer has confirmed anything - so it
+        is judged from when it was asked for. Otherwise a request the agent
+        never takes sits in `requested` forever."""
+        row = {"state": "requested", "character": "Grug",
+               "requested_seconds": 500.0}
+        self.assertFalse(stream.is_stale(row, 505.0))
+        self.assertTrue(stream.is_stale(row, 500.0 + stream.STALE_AFTER_SECONDS + 1))
+
+    def test_a_row_with_no_clock_at_all_is_not_guessed_at(self):
+        """Refusing to act on absent data is the whole lesson of this epic:
+        five times in one day something reported nothing and it was read as a
+        measurement. A row with no timestamps has not been measured."""
+        self.assertFalse(
+            stream.is_stale({"state": "live", "character": "Grug"}, 9_999_999.0))
+
+
+class Channels(unittest.TestCase):
+    """One GPU. infra#2663: 'one or two channels is the realistic target'."""
+
+    def test_two_channels_can_be_in_use(self):
+        rows = [{"state": "live", "character": "Grug"},
+                {"state": "starting", "character": "Ugga"}]
+        self.assertEqual(2, stream.channels_in_use(rows))
+
+    def test_a_third_is_refused_with_a_reason_a_person_can_read(self):
+        rows = [{"state": "live", "character": "Grug"},
+                {"state": "live", "character": "Ugga"}]
+        ok, why = stream.can_start(rows, "Bork", "cam")
+        self.assertFalse(ok)
+        self.assertIn("channel", why.lower())
+
+    def test_ended_rows_do_not_hold_a_channel(self):
+        """Otherwise the cap would fill with history and nobody could watch
+        anything after two sessions."""
+        rows = [{"state": "ended", "character": "Grug"},
+                {"state": "ended", "character": "Ugga"}]
+        self.assertEqual(0, stream.channels_in_use(rows))
+        self.assertTrue(stream.can_start(rows, "Bork", "cam")[0])
+
+    def test_watching_the_same_character_twice_is_refused_not_duplicated(self):
+        """Two clients on one character would be two GPU channels showing the
+        same thing - the answer is 'you are already there'."""
+        rows = [{"state": "live", "character": "Grug"}]
+        ok, why = stream.can_start(rows, "Grug", "pov")
+        self.assertFalse(ok)
+        self.assertIn("already", why.lower())
+
+    def test_an_unknown_mode_is_refused(self):
+        self.assertFalse(stream.can_start([], "Grug", "hologram")[0])
+
+
+class DeliveryIsNotGuessed(unittest.TestCase):
+    """Sunshine has NO browser player: 47990 is its config UI, video leaves
+    over Moonlight (RTSP + UDP). Embedding a player for a Moonlight stream
+    renders a black rectangle and a bug report."""
+
+    def test_the_default_is_instructions_not_a_player(self):
+        self.assertEqual(stream.DELIVERY_MOONLIGHT, stream.delivery_of({}))
+        self.assertEqual(stream.DELIVERY_MOONLIGHT,
+                         stream.delivery_of({"delivery": ""}))
+
+    def test_an_embed_is_only_used_when_explicitly_claimed(self):
+        self.assertEqual(stream.DELIVERY_EMBED,
+                         stream.delivery_of({"delivery": "embed"}))
+
+    def test_an_unrecognised_kind_falls_back_to_instructions(self):
+        """Guessing wrong toward Moonlight prints a sentence; guessing wrong
+        toward embed shows a dead player."""
+        self.assertEqual(stream.DELIVERY_MOONLIGHT,
+                         stream.delivery_of({"delivery": "webrtc-maybe"}))
+
+
+class WatchingChangesTheWatched(unittest.TestCase):
+    """Logging in as a character makes it a selfbot, which hands the followers
+    a master - so watching the leader in POV makes his family follow him, for
+    as long as the stream is up. The UI says so rather than hiding it."""
+
+    def test_pov_on_the_leader_changes_the_family(self):
+        self.assertTrue(stream.pov_changes_the_family("Grug", "Grug"))
+
+    def test_pov_on_a_follower_does_not(self):
+        self.assertFalse(stream.pov_changes_the_family("Ugga", "Grug"))
+
+    def test_no_character_is_not_a_change(self):
+        self.assertFalse(stream.pov_changes_the_family("", "Grug"))
+
+
+class Migrations(unittest.TestCase):
+    """CREATE TABLE IF NOT EXISTS is a no-op on an existing table, including
+    every column inside it - the trap that made overseer_goal's kind-ENUM
+    silently dead in production while CI stayed green."""
+
+    def test_a_table_missing_everything_gets_every_alter(self):
+        sql = stream.stream_migrations(["character", "requested_at"])
+        self.assertEqual(4, len(sql))
+        self.assertTrue(all(s.startswith("ALTER TABLE overseer_stream") for s in sql))
+
+    def test_a_correct_table_needs_nothing(self):
+        sql = stream.stream_migrations(
+            ["character", "mode", "state", "detail", "last_seen"])
+        self.assertEqual([], sql)
+
+    def test_it_is_idempotent_by_construction(self):
+        """Feeding it its own outcome twice is a no-op the second time."""
+        first = stream.stream_migrations(["character"])
+        after = ["character", "mode", "state", "detail", "last_seen"]
+        self.assertEqual(4, len(first))
+        self.assertEqual([], stream.stream_migrations(after))
+
+    def test_case_does_not_defeat_it(self):
+        self.assertEqual([], stream.stream_migrations(
+            ["Character", "MODE", "State", "Detail", "LAST_SEEN"]))
+
+    def test_state_is_not_an_enum(self):
+        """VARCHAR on purpose: a new state word must never need a migration
+        to be sayable, which is exactly what the goal-kind ENUM cost."""
+        sql = " ".join(stream.stream_migrations(["character"]))
+        self.assertIn("VARCHAR", sql.upper())
+        self.assertNotIn("ENUM", sql.upper())
+
+
+if __name__ == "__main__":
+    unittest.main()
+
+
+class MapServerWiring(unittest.TestCase):
+    """The endpoints and the page, asserted against the source - map_server
+    imports pymysql and cannot be imported by the tests."""
+
+    @classmethod
+    def setUpClass(cls):
+        import pathlib
+        here = pathlib.Path(__file__).resolve().parent.parent
+        cls.server = (here / "map_server.py").read_text()
+        cls.page = (here / "index.html").read_text()
+
+    def test_the_watch_endpoints_exist_on_both_verbs(self):
+        """Asserted against the routing tables rather than an if-chain: the
+        contract is that each verb reaches the RIGHT half of the lifecycle.
+        The form this replaced only proved the path string appeared somewhere,
+        so a GET wired to _watch_post would have passed it."""
+        get_table = self.server[self.server.index("GET_ROUTES = {"):]
+        get_table = get_table[:get_table.index("}")]
+        post_table = self.server[self.server.index("POST_ROUTES = {"):]
+        post_table = post_table[:post_table.index("}")]
+        self.assertIn('"/api/watch": _watch_state', get_table)
+        self.assertIn('"/api/watch": _watch_post', post_table)
+
+    def test_every_read_sweeps_stale_rows(self):
+        """The sweep is the whole lifecycle: a viewer who closed the tab sends
+        nothing again, so their silence cannot end anything by itself."""
+        self.assertIn("stream_expire", self.server)
+        state = self.server[self.server.index("def _watch_state"):]
+        state = state[:state.index("def _watch_post")]
+        self.assertIn("stream_expire", state)
+
+    def test_the_table_is_migrated_not_merely_created(self):
+        """CREATE TABLE IF NOT EXISTS is a no-op on an existing table."""
+        self.assertIn("stream_migrations", self.server)
+        self.assertIn("information_schema.COLUMNS", self.server)
+
+    def test_clocks_come_from_the_database(self):
+        """UNIX_TIMESTAMP in SQL, not datetime arithmetic in Python: the
+        bridge and MySQL need not agree on timezone, and a stream torn down an
+        hour early for that reason would be maddening to chase."""
+        self.assertIn("UNIX_TIMESTAMP(last_seen)", self.server)
+
+    def test_a_watch_request_checks_the_character_exists(self):
+        self.assertIn("_character_exists_by_name", self.server)
+
+    def test_the_store_failing_does_not_take_the_map_down(self):
+        main = self.server[self.server.index("def main()"):]
+        self.assertIn("_ensure_stream_store", main)
+        self.assertIn("except Exception", main)
+        self.assertLess(main.index("logging.basicConfig"),
+                        main.index("_ensure_stream_store"),
+                        "the ensure must run AFTER basicConfig or its failure "
+                        "is emitted through an unconfigured logger")
+
+    def test_the_page_heartbeats_and_does_not_rely_on_unload(self):
+        """Silence is the signal. An unload handler misses a crashed tab, a
+        slept laptop and a dropped tailnet; a heartbeat misses none of them."""
+        self.assertIn("setInterval", self.page)
+        self.assertIn('"beat"', self.page)
+        self.assertNotIn("onbeforeunload", self.page)
+
+    def test_the_page_never_embeds_a_moonlight_stream(self):
+        """Sunshine has no browser player - 47990 is its config UI. An iframe
+        at any Sunshine port shows settings or nothing."""
+        watch = self.page[self.page.index("async function refreshWatch"):]
+        watch = watch[:watch.index("pwcam.onclick")]
+        self.assertIn('w.delivery === "embed"', watch)
+        self.assertIn("Moonlight", watch)
+        self.assertNotIn("<iframe", watch)
+
+    def test_closing_the_panel_does_not_stop_the_stream(self):
+        """A viewer may close the map and keep watching on the Switch. Only
+        the staleness sweep decides, because only it cannot be fooled by how
+        the page was left."""
+        close = self.page[self.page.index("function closePanel"):]
+        close = close[:close.index("async function fetchPanel")]
+        self.assertIn("clearInterval", close)
+        self.assertNotIn('"stop"', close)
+
+    def test_both_modes_are_offered_and_described(self):
+        self.assertIn('id="pwcam"', self.page)
+        self.assertIn('id="pwpov"', self.page)
+        self.assertIn("observer", self.page)

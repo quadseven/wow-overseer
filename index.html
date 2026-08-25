@@ -47,6 +47,13 @@
   #panel .row .k { color:var(--dim); min-width:5.5em; flex-shrink:0; }
   #panel .row .v { overflow-wrap:anywhere; }
   #panel .note { color:var(--dim); }
+  #pwbtns { display:flex; gap:.4rem; flex-wrap:wrap; }
+  #pwbtns button { background:var(--bg); color:var(--text); border:1px solid var(--line);
+                   padding:.3rem .6rem; cursor:pointer; font:inherit; }
+  #pwbtns button:disabled { opacity:.45; cursor:default; }
+  #pwnote { margin-top:.35rem; }
+  #pwnote.live { color:#7ee787; }
+  #pwnote.warn { color:#d29922; }
   #panel .gone { color:#ffd8a8; }
   /* Thought timeline (infra#2604): one stream, both surfaces. The left
      border is the source, so a Discord line and a web line are told apart
@@ -87,6 +94,15 @@
 <aside id="panel">
   <div id="phead"><h2 id="pname"></h2><button id="pclose" title="close">x</button></div>
   <div id="pbody"></div>
+  <div class="sect">watch live</div>
+  <div id="pwatch">
+    <div id="pwbtns">
+      <button id="pwcam" title="A GM camera follows them. The interface on screen is the observer's, not theirs.">watch them</button>
+      <button id="pwpov" title="Log in as them with the AI playing. Their own hotbars, bags and camera - the Twitch view.">be them</button>
+      <button id="pwstop" style="display:none">stop watching</button>
+    </div>
+    <div id="pwnote" class="note"></div>
+  </div>
   <div class="sect">mind</div>
   <div id="ptimeline"></div>
   <button id="pmore">older thoughts</button>
@@ -231,12 +247,127 @@ canvas.addEventListener("click", (e) => {
   const { best } = nearestDot(e);
   if (best) {
     selected = best.name; pname.textContent = best.name; panel.style.display = "block";
-    fetchPanel(); openMind(best.name);
+    watchNote(""); fetchPanel(); openMind(best.name); refreshWatch();
   } else closePanel();
 });
 document.getElementById("pclose").onclick = closePanel;
 
+// ---- watch live (infra#2663) ------------------------------------------
+//
+// THE HEARTBEAT IS THE PRODUCT. A client rendering the game for nobody costs
+// a GPU and 300MB and is invisible, which is the failure #2663 names in its
+// own acceptance criteria. So this page promises "still here" on a timer, and
+// SILENCE is what ends a stream - closing the tab, crashing, sleeping the
+// laptop or losing the tailnet all stop the beat, and all of them tear the
+// client down. Nothing here needs an unload handler to be correct.
+const watch = { name: null, timer: null, every: 10000 };
+const pwcam = document.getElementById("pwcam");
+const pwpov = document.getElementById("pwpov");
+const pwstop = document.getElementById("pwstop");
+const pwnote = document.getElementById("pwnote");
+
+function watchNote(text, cls) {
+  pwnote.textContent = text || "";
+  pwnote.className = "note" + (cls ? " " + cls : "");
+}
+
+async function watchPost(name, action, mode) {
+  const r = await fetch("/api/watch", {
+    method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ name: name, action: action, mode: mode || "cam" }),
+  });
+  let body = {};
+  try { body = await r.json(); } catch (e) { body = {}; }
+  return { ok: r.ok, body: body };
+}
+
+async function startWatch(mode) {
+  if (!selected) return;
+  const name = selected;
+  pwcam.disabled = pwpov.disabled = true;
+  watchNote("asking for a client...");
+  const res = await watchPost(name, "start", mode);
+  if (name !== selected) return;
+  if (!res.ok) {
+    // A refusal is a sentence a person can read - both channels busy, or
+    // already watching - not a silent no-op.
+    watchNote(res.body.error || "could not start", "warn");
+    pwcam.disabled = pwpov.disabled = false;
+    return;
+  }
+  watch.name = name;
+  beat();
+  refreshWatch();
+}
+
+async function stopWatch() {
+  const name = watch.name || selected;
+  if (!name) return;
+  await watchPost(name, "stop");
+  watch.name = null;
+  if (watch.timer) { clearInterval(watch.timer); watch.timer = null; }
+  if (name === selected) refreshWatch();
+}
+
+function beat() {
+  if (watch.timer) clearInterval(watch.timer);
+  watch.timer = setInterval(() => {
+    if (!watch.name) return;
+    // Fire and forget: a dropped beat is survivable by design (the server's
+    // timeout is several beats long), and a failed keepalive must never throw
+    // into the console every ten seconds.
+    watchPost(watch.name, "beat").catch(() => {});
+  }, watch.every);
+}
+
+async function refreshWatch() {
+  if (!selected) return;
+  const name = selected;
+  let s;
+  try {
+    const r = await fetch("/api/watch?name=" + encodeURIComponent(name));
+    s = await r.json();
+  } catch (e) { return; }
+  if (name !== selected) return;
+  if (s.heartbeat_seconds) watch.every = s.heartbeat_seconds * 1000;
+  const w = s.watching;
+  if (!w) {
+    pwstop.style.display = "none";
+    pwcam.disabled = pwpov.disabled = false;
+    const full = s.channels_in_use >= s.max_channels;
+    watchNote(full
+      ? "both channels busy (" + s.channels_in_use + "/" + s.max_channels + ")"
+      : "", full ? "warn" : "");
+    return;
+  }
+  pwstop.style.display = "";
+  pwcam.disabled = pwpov.disabled = true;
+  if (w.state !== "live") {
+    watchNote(w.state === "requested" ? "waiting for a client..." : w.state + "...");
+    return;
+  }
+  // Sunshine has NO browser player - its 47990 is a config UI, and video
+  // leaves over Moonlight. So a live stream is INSTRUCTIONS unless the server
+  // says it is genuinely embeddable. Rendering a player for a Moonlight
+  // stream would be a black rectangle and a bug report.
+  if (w.delivery === "embed" && w.detail) {
+    watchNote("live - open " + w.detail, "live");
+  } else {
+    watchNote("live on Moonlight" + (w.detail ? " - " + w.detail : ""), "live");
+  }
+}
+
+pwcam.onclick = () => startWatch("cam");
+pwpov.onclick = () => startWatch("pov");
+pwstop.onclick = stopWatch;
+
 function closePanel() {
+  // Closing the panel stops the heartbeat but does NOT stop the stream: a
+  // viewer may well close the map and keep watching on the Switch. The
+  // server's staleness sweep ends it if nobody is really there, which is the
+  // one mechanism that cannot be fooled by how the page was left.
+  if (watch.timer) { clearInterval(watch.timer); watch.timer = null; }
+  watch.name = null;
   selected = null; panel.style.display = "none";
   // Closing the panel also stops the thought stream: a hidden panel must
   // not keep polling a mind nobody is watching.
