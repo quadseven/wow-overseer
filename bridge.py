@@ -472,6 +472,41 @@ def _bot_held_names(names: list) -> list:
         return [r["name"] for r in cur.fetchall()]
 
 
+def _aimed_names() -> set:
+    """Who currently carries a quest aim, by name.
+
+    Read fresh rather than carried down from _aim_traveller: the aim is
+    standing state on the roster row and survives both a bridge restart and a
+    worldserver one, so the strategy pass has to ask the table what is true now
+    rather than remember what it last wrote.
+
+    THE COLUMN CAN LEGITIMATELY BE ABSENT, exactly as it can in _aim_traveller:
+    drive_quest arrives with mod-overseer's SQL, applied by the worldserver at
+    startup, and the bridge is a separate deployment with its own restarts.
+    Returning an empty set on 1054 degrades to the old leader-only behaviour,
+    which is the safe direction - nobody gets the wander strategy who did not
+    have it before. Warned, because an aim that never reaches a strategy is the
+    exact silent failure this function exists to end.
+    """
+    with _connect() as conn, conn.cursor() as cur:
+        try:
+            cur.execute(
+                "SELECT name FROM overseer_roster "
+                "WHERE enabled = 1 AND drive_quest <> 0"
+            )
+        except pymysql.err.OperationalError as exc:
+            # 1054 is ER_BAD_FIELD_ERROR. Matched on the code, not the message
+            # text, which is localised.
+            if exc.args and exc.args[0] == 1054:
+                log.warning(
+                    "overseer_roster has no drive_quest column - nobody can be "
+                    "aimed, so the family falls back to leader-only travel"
+                )
+                return set()
+            raise
+        return {row["name"] for row in cur.fetchall()}
+
+
 def _give_them_a_life(names: list) -> int:
     """Keep every family member on the strategy that makes them live.
 
@@ -487,11 +522,20 @@ def _give_them_a_life(names: list) -> int:
     """
     driven = _bot_held_names(names)
     head = bonds.head_of_family()
+    # WHO IS AIMED DECIDES WHO TRAVELS, not the lead flag alone. Fetched once
+    # for the whole pass: it is one query, and asking per character would let
+    # the set change underneath a single roster sweep, so two members could be
+    # given contradictory strategies for the same quest.
+    aimed = _aimed_names()
     for name in driven:
-        # One travels, the rest follow. Giving everyone the wander strategy is
-        # what scattered them across a thousand yards with the healer in her
-        # own fight - see goals.life_strategies for why follow loses to it.
-        for command in goals.life_strategies(leads=(name == head)):
+        # The leader always travels. A follower travels when it has somewhere
+        # to be - see goals.life_strategies: an UNAIMED follower given the
+        # wander strategy is what scattered them across a thousand yards with
+        # the healer in her own fight, and an AIMED one converges instead,
+        # because everyone aimed at a quest is walking to the same place.
+        for command in goals.life_strategies(
+            leads=(name == head), aimed=(name in aimed)
+        ):
             _insert_command(core.InsertCommand(name, command, "overseer:life"))
     return len(driven)
 
