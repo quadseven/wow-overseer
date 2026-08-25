@@ -341,7 +341,7 @@ LIFE_STRATEGY = "nc +new rpg"
 FLEE_STRATEGY = "co +flee"
 
 
-def life_strategies(*, leads: bool, aimed: bool = False) -> list:
+def life_strategies(*, leads: bool) -> list:
     """What keeps this character playing, given whether it leads the party.
 
     ONE character travels and the rest follow. That asymmetry is the whole
@@ -365,26 +365,6 @@ def life_strategies(*, leads: bool, aimed: bool = False) -> list:
     """
     if leads:
         return [LIFE_STRATEGY, strategy_for({"kind": "level"}), FLEE_STRATEGY]
-    if aimed:
-        # THE AIM HAS TO CARRY THE STRATEGY THAT READS IT. `rpgInfo` is
-        # consumed only by NewRpgDoQuestAction, which is reachable only through
-        # the `do quest status` trigger node, which is registered only by
-        # NewRpgStrategy. Strip `new rpg` and the aim is a populated column
-        # nobody reads - which is precisely what happened: drive_quest=60 was
-        # set on Ugga, Og and Grog and not one of them had the strategy, so the
-        # whole chain from council to movement ended in silence.
-        #
-        # `follow` STAYS. It runs at relevance 1.0 against every rpg action's
-        # 3.0-11.0, so it cannot pull an aimed character off its quest; it is
-        # the fallback for when the rpg action idles, which is what stops a
-        # traveller with nothing left to do from standing in a field.
-        #
-        # This is not a relaxation of the rule below - it is the rule the
-        # measurements always implied. An UNAIMED follower carrying `new rpg`
-        # free-roams its own quest log: that is the 937-yard scatter. An AIMED
-        # one walks to a destination it shares with everyone else aimed at the
-        # same quest, measured in the dev world at a 253-yard spread.
-        return [LIFE_STRATEGY, "nc +follow", FLEE_STRATEGY]
     # Order matters: drop the wander before asking them to follow, so there is
     # no tick where both are set and the follower drifts off again.
     return ["nc -new rpg", "nc +follow", FLEE_STRATEGY]

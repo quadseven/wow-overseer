@@ -374,55 +374,6 @@ class PartyCohesionIsUntouched(unittest.TestCase):
     def test_only_the_leader_travels(self):
         self.assertIn(goals.LIFE_STRATEGY, goals.life_strategies(leads=True))
 
-    # --- the aim has to carry the strategy that reads it (infra#2801) --------
-    #
-    # Found by the WoW session probing the live family in-game, which is the
-    # only way this was ever going to surface: drive_quest=60 was set on Ugga,
-    # Og and Grog, and NONE of the three had `new rpg`. rpgInfo is consumed
-    # only by NewRpgDoQuestAction, reachable only through the `do quest status`
-    # trigger node, registered only in NewRpgStrategy::InitTriggers. No
-    # strategy, no trigger, nothing reads the aim - so the column was populated
-    # and inert, which is this epic's signature failure.
-    #
-    # It was hidden because the dev-world proof used RANDOM bots, and
-    # AiFactory.cpp gives random bots `new rpg` when enableNewRpgStrategy is
-    # on. The family has it deliberately stripped, so dev validated the
-    # mechanism on subjects carrying a prerequisite the family lacks.
-
-    def test_an_aimed_follower_gets_the_strategy_that_reads_the_aim(self):
-        commands = goals.life_strategies(leads=False, aimed=True)
-        self.assertIn(goals.LIFE_STRATEGY, commands)
-        self.assertNotIn("nc -new rpg", commands,
-                         "stripping it is what made the aim unreadable")
-
-    def test_an_unaimed_follower_still_loses_it(self):
-        """The 937-yard scatter is what happens to a follower carrying `new
-        rpg` with NOWHERE to be. Aimed is the whole difference: dev measured a
-        253-yard spread with three bots aimed at one quest."""
-        commands = goals.life_strategies(leads=False, aimed=False)
-        self.assertIn("nc -new rpg", commands)
-        self.assertNotIn(goals.LIFE_STRATEGY, commands)
-
-    def test_an_aimed_follower_keeps_following(self):
-        """`follow` runs at 1.0 and every rpg action at 3.0-11.0, so it cannot
-        pull them off the quest - it is the fallback for when the rpg action
-        idles, which is what stops a finished traveller standing in a field."""
-        self.assertIn("nc +follow", goals.life_strategies(leads=False, aimed=True))
-
-    def test_the_default_is_the_safe_one(self):
-        """A caller that has not been taught about aims must not accidentally
-        hand out the wander strategy."""
-        self.assertEqual(
-            goals.life_strategies(leads=False),
-            goals.life_strategies(leads=False, aimed=False))
-
-    def test_the_supervisor_passes_the_aim_through(self):
-        """The rule is worthless if bridge never tells it who is aimed - the
-        far side of the boundary, which is where this epic keeps breaking."""
-        code = _function_code("_give_them_a_life")
-        self.assertIn("aimed", code,
-                      "life_strategies has to be called with the aim")
-
     def test_the_drive_quest_action_names_no_traveller(self):
         """It carries a beneficiary, who is who the work is FOR - not who gets
         sent. A name chosen in goals.py would be a second opinion about
