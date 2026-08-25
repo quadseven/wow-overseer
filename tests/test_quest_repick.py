@@ -555,8 +555,9 @@ class TheWholeFamilyCanBeAimed(unittest.TestCase):
         the 937-yard scatter, and the aim is the only thing holding the party
         to one destination."""
         body = _code(_drive())
-        self.assertRegex(body, r"SELECT name, drive_quest, `lead`",
+        self.assertRegex(body, r"SELECT name, `lead`",
                          "the query has to bring back who leads")
+        self.assertIn("isLead", body)
 
     def test_the_first_eligible_fallback_is_leader_only(self):
         """The guard has to sit BEFORE the walk, not merely somewhere in the

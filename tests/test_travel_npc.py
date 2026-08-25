@@ -110,6 +110,10 @@ def _index() -> str:
     return _function("void BuildTravelIndex()")
 
 
+def _aims() -> str:
+    return _function("std::map<std::string, std::string> LoadTravelAims()")
+
+
 def _patch() -> str:
     return PATCH.read_text(encoding="utf-8")
 
@@ -320,10 +324,14 @@ class TheModuleActuallyReadsTheColumn(unittest.TestCase):
     """It was written by the bridge and read by nobody. That was #2776."""
 
     def test_the_query_selects_the_column(self):
-        self.assertIn("travel_npc", _code(_drive()))
+        """The read moved into LoadTravelAims (infra#2846) so the quest drive
+        could share it without sharing its failure. It is still a read of this
+        column and DriveTravel still runs off it."""
+        self.assertIn("travel_npc", _code(_aims()))
+        self.assertIn("LoadTravelAims()", _code(_drive()))
 
     def test_only_enabled_characters_with_an_aim_are_considered(self):
-        code = _code(_drive())
+        code = _code(_aims())
         self.assertIn("enabled = 1", code)
         self.assertIn("travel_npc <> ''", code)
 
@@ -496,8 +504,15 @@ class TheTwoDriversDoNotFightOverTheWheel(unittest.TestCase):
     Three moments, all pinned here: the errand outstanding, the errand ending,
     and no errand at all."""
 
-    def test_the_quest_drive_can_see_the_travel_column(self):
-        self.assertIn("travel_npc", _code(_quests()))
+    def test_the_quest_drive_can_see_the_travel_aims(self):
+        """Through the shared loader, NOT through its own SELECT. Selecting the
+        column here is what infra#2846 was: a `travel_npc` the schema does not
+        have nulled the quest query and stopped the family questing entirely,
+        for a feature it has nothing to do with."""
+        quests = _code(_quests())
+        self.assertIn("LoadTravelAims()", quests)
+        self.assertIn("travelTarget", quests)
+        self.assertNotIn("travel_npc", quests)
 
     def test_the_decision_has_exactly_one_home(self):
         """Two functions each checking the other is how the NEXT oscillation
