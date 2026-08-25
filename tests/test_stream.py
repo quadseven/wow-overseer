@@ -78,6 +78,55 @@ class Staleness(unittest.TestCase):
             stream.is_stale({"state": "live", "character": "Grug"}, 9_999_999.0))
 
 
+class OutcomesReachTheScreen(unittest.TestCase):
+    """Every way a watch ends carries a reason. A reason nobody renders is
+    the same as no reason - the buttons just come back and the viewer is left
+    guessing, which is the bug Evan hit the first time he pressed one."""
+
+    def _row(self, **kw):
+        base = {"state": "ended", "character": "Og",
+                "detail": "cam needs a GM account that is not family",
+                "last_seen_seconds": 1000.0}
+        base.update(kw)
+        return base
+
+    def test_a_recent_refusal_is_reported_with_its_reason(self):
+        got = stream.outcome_of(self._row(), 1005.0)
+        self.assertIsNotNone(got)
+        self.assertIn("GM account", got["detail"])
+        self.assertEqual("ended", got["state"])
+
+    def test_the_sweeps_own_teardown_is_reported_too(self):
+        got = stream.outcome_of(
+            self._row(state="stopping", detail="nobody was watching"), 1005.0)
+        self.assertEqual("nobody was watching", got["detail"])
+
+    def test_a_running_watch_has_no_outcome_yet(self):
+        for state in stream.OCCUPIES_A_CLIENT:
+            self.assertIsNone(stream.outcome_of(self._row(state=state), 1005.0), state)
+
+    def test_an_old_teardown_does_not_greet_you_on_open(self):
+        """Yesterday's "nobody was watching" is not news, and showing it as a
+        warning on a panel you just opened reads as a live failure."""
+        self.assertIsNone(stream.outcome_of(self._row(), 1000.0 + 3600))
+
+    def test_the_window_is_bounded_in_absolute_seconds(self):
+        """Pinned to real numbers rather than to the constant, the same
+        lesson the staleness class learned from a mutation run."""
+        self.assertLessEqual(stream.OUTCOME_RECENT_SECONDS, 600)
+        self.assertGreaterEqual(stream.OUTCOME_RECENT_SECONDS,
+                                stream.STALE_AFTER_SECONDS)
+
+    def test_a_bare_ended_row_says_nothing_because_it_has_nothing_to_say(self):
+        self.assertIsNone(stream.outcome_of(self._row(detail=""), 1005.0))
+        self.assertIsNone(stream.outcome_of(self._row(detail=None), 1005.0))
+
+    def test_a_reason_of_unknown_age_is_not_shown(self):
+        """No clock is not a measurement - the same refusal is_stale makes."""
+        self.assertIsNone(
+            stream.outcome_of(self._row(last_seen_seconds=None), 1005.0))
+
+
 class Channels(unittest.TestCase):
     """One GPU. infra#2663: 'one or two channels is the realistic target'."""
 
@@ -231,6 +280,36 @@ class MapServerWiring(unittest.TestCase):
 
     def test_a_watch_request_checks_the_character_exists(self):
         self.assertIn("_character_exists_by_name", self.server)
+
+    def test_the_endpoint_hands_the_reason_to_the_page(self):
+        state = self.server[self.server.index("def _watch_state"):]
+        state = state[:state.index("def _watch_post")]
+        self.assertIn("outcome_of", state)
+        self.assertIn('"outcome"', state)
+
+    def test_the_page_renders_it(self):
+        self.assertIn("s.outcome", self.page)
+
+    def test_a_live_detail_is_printed_verbatim(self):
+        """The agent writes detail as prose meant to be read as-is. Labelling
+        it produced "live on Moonlight - Open Moonlight on the Switch and
+        launch..." - the sentence already says that, better."""
+        self.assertNotIn('"live on Moonlight" + (w.detail', self.page)
+        self.assertIn("watchNote(w.detail, \"live\")", self.page)
+
+    def test_the_note_keeps_the_line_breaks_it_was_given(self):
+        """detail is several sentences now; textContent collapses newlines
+        without pre-wrap, running the instruction into one wall."""
+        css = self.page[self.page.index("#pwnote {"):]
+        self.assertIn("pre-wrap", css[:css.index("}")])
+
+    def test_the_sweep_stamps_when_it_gave_up(self):
+        """Without a clock on the teardown, outcome_of cannot tell a refusal
+        that just happened from one that happened yesterday, and refuses to
+        show either."""
+        sweep = self.server[self.server.index("def stream_expire"):]
+        sweep = sweep[:sweep.index("def _character_exists_by_name")]
+        self.assertIn("last_seen = NOW()", sweep)
 
     def test_the_store_failing_does_not_take_the_map_down(self):
         main = self.server[self.server.index("def main()"):]

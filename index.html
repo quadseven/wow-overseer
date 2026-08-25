@@ -51,7 +51,7 @@
   #pwbtns button { background:var(--bg); color:var(--text); border:1px solid var(--line);
                    padding:.3rem .6rem; cursor:pointer; font:inherit; }
   #pwbtns button:disabled { opacity:.45; cursor:default; }
-  #pwnote { margin-top:.35rem; }
+  #pwnote { margin-top:.35rem; white-space:pre-wrap; overflow-wrap:anywhere; }
   #pwnote.live { color:#7ee787; }
   #pwnote.warn { color:#d29922; }
   #panel .gone { color:#ffd8a8; }
@@ -565,10 +565,15 @@ async function refreshWatch() {
   if (!w) {
     pwstop.style.display = "none";
     pwcam.disabled = pwpov.disabled = false;
+    // A request the agent could not honour comes back as a finished row with
+    // a REASON. Showing it is the difference between "it refused, and here is
+    // why" and a button that silently re-enables itself - which is exactly
+    // what this did until somebody tried to watch and got nothing.
+    const why = s.outcome && s.outcome.detail;
     const full = s.channels_in_use >= s.max_channels;
-    watchNote(full
-      ? "both channels busy (" + s.channels_in_use + "/" + s.max_channels + ")"
-      : "", full ? "warn" : "");
+    if (why) watchNote(why, "warn");
+    else if (full) watchNote("both channels busy (" + s.channels_in_use + "/" + s.max_channels + ")", "warn");
+    else watchNote("");
     return;
   }
   pwstop.style.display = "";
@@ -583,8 +588,14 @@ async function refreshWatch() {
   // stream would be a black rectangle and a bug report.
   if (w.delivery === "embed" && w.detail) {
     watchNote("live - open " + w.detail, "live");
+  } else if (w.detail) {
+    // Printed VERBATIM. The agent writes detail as the sentence it wants read
+    // - which instance to open, and what you are actually looking at - so
+    // prefixing it gave "live on Moonlight - Open Moonlight on the Switch
+    // and launch...". It says that better than a label can.
+    watchNote(w.detail, "live");
   } else {
-    watchNote("live on Moonlight" + (w.detail ? " - " + w.detail : ""), "live");
+    watchNote("live on Moonlight", "live");
   }
 }
 

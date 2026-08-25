@@ -286,7 +286,7 @@ def stream_expire(rows: list, now_seconds: float) -> list:
     with _connect() as conn, conn.cursor() as cur:
         cur.execute(
             "UPDATE overseer_stream SET state = 'stopping',"  # noqa: S608 - placeholders from a COUNT, values bound
-            " detail = 'nobody was watching'"
+            " detail = 'nobody was watching', last_seen = NOW()"
             " WHERE `character` IN (%s)" % marks,
             tuple(stale),
         )
@@ -636,6 +636,10 @@ class Handler(BaseHTTPRequestHandler):
             "max_channels": stream.MAX_CHANNELS,
             "heartbeat_seconds": stream.HEARTBEAT_SECONDS,
             "watching": None,
+            # Why the last attempt stopped, while that is still news. The
+            # agent answers a request it cannot honour by ending the row with
+            # a reason, so this is the ONLY path that reason has to a screen.
+            "outcome": stream.outcome_of(mine, time.time()) if mine else None,
         }
         if mine and mine.get("state") in stream.OCCUPIES_A_CLIENT:
             payload["watching"] = {

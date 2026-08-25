@@ -67,6 +67,19 @@ STATES = ("requested", "starting", "live", "stopping", "ended")
 # only these count against the channel limit.
 OCCUPIES_A_CLIENT = ("requested", "starting", "live")
 
+# The other end of the lifecycle. Every way a watch ends carries a REASON in
+# `detail` - "nobody was watching" from the sweep, or whatever the Windows
+# agent says when it cannot honour a request (cam mode with no spare GM
+# account, say). Those rows hold no channel, so nothing else here looks at
+# them - and for a while they were dropped on the floor, which turned a
+# carefully worded refusal into a button that quietly re-enabled itself.
+TERMINAL = ("stopping", "ended")
+
+# How long a finished row still has something to say. Long enough to explain
+# a refusal that happened while you were looking at the panel; short enough
+# that yesterday's teardown does not greet you on open.
+OUTCOME_RECENT_SECONDS = 120
+
 # ONE GPU, AND infra#2663 SAYS SO: "one or two channels is the realistic
 # target on one GPU". Two is the cap because the second channel is what makes
 # a follow-cam and a POV watchable at the same time; a third is a queue, not a
@@ -129,6 +142,29 @@ def is_stale(row: Mapping, now_seconds: float) -> bool:
         # module exists to avoid.
         return False
     return (now_seconds - float(last)) > STALE_AFTER_SECONDS
+
+
+def outcome_of(row: Mapping, now_seconds: float) -> dict | None:
+    """What just happened to a watch that is no longer running.
+
+    Returns None for a row that is still going, for one that ended too long
+    ago to be news, and for one with nothing to say - a reason is the whole
+    point, and "ended" on its own tells a viewer nothing they did not already
+    see when the buttons came back.
+    """
+    if row.get("state") not in TERMINAL:
+        return None
+    detail = (row.get("detail") or "").strip()
+    if not detail:
+        return None
+    when = row.get("last_seen_seconds")
+    if when is None:
+        # Same rule as staleness: no clock is not a measurement. Showing a
+        # reason of unknown age is worse than showing none.
+        return None
+    if (now_seconds - float(when)) > OUTCOME_RECENT_SECONDS:
+        return None
+    return {"state": row.get("state"), "detail": detail}
 
 
 def channels_in_use(rows) -> int:
