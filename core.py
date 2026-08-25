@@ -28,6 +28,37 @@ MAX_COMMANDS_PER_MESSAGE = 5
 
 USAGE = "Speak like this: @CharacterName <playerbot command>  (one per line)"
 
+# WHAT A FINISHED ROW CLAIMS (infra#2819).
+#
+# `delivered` used to be the only success, and it was written the instant
+# PlayerbotAI::HandleCommand ACCEPTED the row. A whispered command does not act
+# when it is accepted - it lands in PlayerbotAI::chatCommands and is drained on
+# the bot's next AI tick (mod_overseer.cpp:2054-2057) - so `delivered` says the
+# row was handed over and nothing more. `nc -new rpg` was sent to Ugga twice,
+# read `delivered` twice, and removed nothing either time; the three characters
+# it worked for produced rows that looked exactly the same.
+#
+# So the module now READS THE STRATEGY LIST BACK off the live engines and the
+# statuses split three ways:
+#
+#   delivered  - carried out. Unverifiable by construction, or nothing to
+#                verify: chat, gm, probe, give, share, and any bot command
+#                with no checkable post-condition. UNCHANGED IN MEANING, so
+#                every row already in the table still reads correctly and the
+#                two images can deploy in either order.
+#   applied    - a strategy command whose effect was READ BACK off the bot's
+#                own engine and holds. This is the only status that has ever
+#                meant "the bot changed".
+#   unchanged  - the bot accepted it and its live strategy list did not
+#                change. Not an error: nothing failed, nothing happened. The
+#                row's `result` carries the lists it was judged against.
+#
+# `verifying` is deliberately absent: it is the in-flight state between the
+# hand-off and the read-back, and reporting it would call a command that has
+# not finished yet a failure - the same reason `claimed` is absent.
+COMMAND_TERMINAL_STATUSES = ("delivered", "applied", "unchanged", "error")
+COMMAND_SUCCESS_STATUSES = ("delivered", "applied")
+
 
 @dataclass(frozen=True)
 class InsertCommand:
@@ -295,7 +326,8 @@ def report_outcomes(
         new_seen.add(row_id)
         # Rows written before the chat bridge existed carry no kind.
         kind = row.get("kind") or "bot"
-        if row["status"] == "delivered":
+        status = row["status"]
+        if status in COMMAND_SUCCESS_STATUSES:
             if kind == "chat":
                 # A spoken line confirms itself: it comes straight back
                 # through the chat relay, exactly as it would appear in the
@@ -306,10 +338,37 @@ def report_outcomes(
                 continue
             if kind == "gm":
                 reply = Reply(f"{row['target_name']}: {row['command']} - done.")
+            elif status == "applied":
+                # Deliberately different words from the line below. "heard"
+                # was always the honest description of `delivered` and it was
+                # read as "applied" anyway; now the two readings have two
+                # sentences and only one of them was checked.
+                reply = Reply(
+                    f"{row['target_name']} applied the order: {row['command']} "
+                    "(read back off the live engine)"
+                )
             else:
                 reply = Reply(f"{row['target_name']} heard the order: {row['command']}")
+        elif status == "unchanged":
+            # Not routed to the error branch on purpose: nothing failed. The
+            # bot took the order and its strategies are the same as before,
+            # which is the Ugga case (rows 4049 and 4184) and the one thing
+            # the queue could not say until now. The id is the handle on the
+            # evidence - `result` holds the live lists it was judged against.
+            reply = Reply(
+                f"{row['target_name']} accepted the order ({row['command']}) and "
+                f"NOTHING CHANGED - its live strategy list is the same as before. "
+                f"See overseer_command row {row_id} (`result`) for what it actually has."
+            )
         else:
-            detail = row.get("detail") or "unknown error"
+            # 'error', and anything a NEWER worldserver image starts writing
+            # that this bridge image has never heard of. The two ship
+            # separately, so that is a normal deploy window and not a bug; the
+            # unknown status is named in the text rather than swallowed, which
+            # is the difference between a confusing report and a silent one.
+            detail = row.get("detail") or (
+                "unknown error" if status == "error" else f"status '{status}'"
+            )
             if kind == "chat":
                 reply = Reply(f"{row['target_name']} could not say that ({detail}).")
             elif kind == "gm":

@@ -180,6 +180,14 @@ def _expire_stale_claims(seconds: int) -> int:
     it finally tells whoever gave the order that nothing came of it.
 
     Never re-runs anything: the row goes straight to 'error'.
+
+    'verifying' (infra#2819) is swept the same way and for the same reason,
+    with its own wording. That row HAS been handed to the bot - what was lost
+    is the read-back that would have said whether the bot changed - and
+    telling someone their command never ran when it did is the exact mistake
+    the paragraph above exists to avoid. The module keeps its outstanding
+    read-backs in memory (mod_overseer.cpp, _pendingChecks), so a worldserver
+    restart is precisely when this fires.
     """
     with _connect() as conn, conn.cursor() as cur:
         cur.execute(
@@ -189,7 +197,15 @@ def _expire_stale_claims(seconds: int) -> int:
             "WHERE status = 'claimed' AND updated_at < NOW() - INTERVAL %s SECOND",
             (seconds,),
         )
-        return cur.rowcount
+        swept = cur.rowcount
+        cur.execute(
+            "UPDATE overseer_command SET status = 'error', "
+            "detail = 'handed to the bot, but the worldserver never reported "
+            "whether anything changed' "
+            "WHERE status = 'verifying' AND updated_at < NOW() - INTERVAL %s SECOND",
+            (seconds,),
+        )
+        return swept + cur.rowcount
 
 
 def _fetch_roster() -> list[dict]:
@@ -354,6 +370,13 @@ def _ask_llm(prompt: str, system: str = "") -> str:
     return data["choices"][0]["message"]["content"]
 
 
+# One `%s` per terminal status, and nothing else is ever interpolated: the
+# count comes from a tuple length, never from a value, and every status still
+# travels as a bound parameter. An IN clause of unknown width has no other
+# form in DB-API.
+_TERMINAL_STATUS_MARKS = ",".join(["%s"] * len(core.COMMAND_TERMINAL_STATUSES))
+
+
 def _fetch_outcomes(min_id: int) -> list[dict]:
     # Static, fully parameterized SQL on purpose (a dynamic IN-list means
     # assembling the statement from strings). Rows at or above the oldest
@@ -362,11 +385,16 @@ def _fetch_outcomes(min_id: int) -> list[dict]:
     # exactly-once.
     with _connect() as conn, conn.cursor() as cur:
         cur.execute(
-            # 'claimed' is in-flight, not finished: reporting it would call a
-            # command that is still running a failure.
+            # 'claimed' and 'verifying' are in-flight, not finished: reporting
+            # either would call a command that is still running a failure.
+            # The terminal set is core.COMMAND_TERMINAL_STATUSES and NOT a
+            # literal list here - it is the same rule as the reply formatting
+            # forty lines away in core.report_outcomes, and two copies of one
+            # rule is how a status gets added in one place and dropped on the
+            # floor in the other (infra#2819).
             "SELECT id, target_name, command, kind, status, detail FROM overseer_command "
-            "WHERE status IN ('delivered', 'error') AND id >= %s",
-            (min_id,),
+            f"WHERE status IN ({_TERMINAL_STATUS_MARKS}) AND id >= %s",  # noqa: S608
+            (*core.COMMAND_TERMINAL_STATUSES, min_id),
         )
         return list(cur.fetchall())
 

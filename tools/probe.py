@@ -110,7 +110,13 @@ def collect(cur, ids: dict[int, tuple[str, str]], deadline: float) -> dict:
             tuple(pending),
         )
         for row in cur.fetchall():
-            if row["status"] in ("pending", "claimed"):
+            # 'verifying' is mod-overseer reading a bot's strategy list back
+            # after a hand-off (infra#2819). No kind='probe' row can be in it -
+            # a probe mutates nothing and has nothing to read back - but this
+            # tool exists to be trusted about in-flight versus finished, and
+            # listing every in-flight status is cheaper than reasoning about
+            # which ones can reach here.
+            if row["status"] in ("pending", "claimed", "verifying"):
                 continue
             name, what = pending.pop(row["id"])
             slot = out.setdefault(name, {})
