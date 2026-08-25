@@ -121,13 +121,23 @@
 <script>
 "use strict";
 const CONTINENT_ORDER = ["0", "1", "530", "571", "quelthalas", "azuremyst"];
-let zones = null, dots = [], current = "1", freshest = null;
+// A serif on purpose - the map should not read in the same voice as the
+// console around it. Deliberately a local stack: this page is tailnet-only
+// and must not gain a font CDN as a new way to look broken.
+const MAPFONT = "Georgia, 'Times New Roman', serif";
+let zones = null, shapes = null, dots = [], current = "1", freshest = null;
+let hoverZone = null;
 
 const canvas = document.getElementById("map"), ctx = canvas.getContext("2d");
 const tip = document.getElementById("tip");
 
 async function loadZones() {
-  zones = (await (await fetch("/zones.json")).json()).continents;
+  const [z, sh] = await Promise.all([
+    (await fetch("/zones.json")).json(),
+    (await fetch("/shapes.json")).json(),
+  ]);
+  zones = z.continents;
+  shapes = sh;
   const tabs = document.getElementById("tabs");
   for (const id of CONTINENT_ORDER) {
     const b = document.createElement("button");
@@ -171,55 +181,268 @@ function banner(fresh) {
   } else el.style.display = "none";
 }
 
+// --- the world map (infra#2597) -------------------------------------------
+//
+// The land comes from shapes.json: the same WorldMapArea rectangles that
+// place the dots, resolved into regions (the smallest box containing a point
+// wins) and clipped to a coastline by tools/gen_shapes.py. Drawing those
+// rectangles raw is what made this page a heap of overlapping outlines.
+//
+// Everything expensive is cached per size. render() runs five times a second
+// for the combat pulse; rebuilding 25 paths and a label layout at that
+// cadence would burn a core to redraw the same coastline.
+let built = null;
+
+function fitContinent(s, W, H) {
+  // Letterbox at the continent's TRUE aspect. The height used to be clamped
+  // to 760px, which squashed a 2:1 Eastern Kingdoms into a 1.4:1 blob - as
+  // much of why this read as squares as the rectangles were.
+  const cw = Math.min(W - 36, (H - 36) / s.aspect);
+  const ch = cw * s.aspect;
+  return { cw: cw, ch: ch, x0: (W - cw) / 2, y0: (H - ch) / 2 };
+}
+
+function fitLabel(label, room) {
+  // measureText at a reference size and scale down: text width is linear in
+  // font size, so one measurement per candidate is enough.
+  const words = label.split(" ");
+  const cands = [[label]];
+  if (words.length > 1) {
+    const cut = Math.ceil(words.length / 2);
+    cands.push([words.slice(0, cut).join(" "), words.slice(cut).join(" ")]);
+  }
+  let best = null;
+  for (const lines of cands) {
+    ctx.font = "100px " + MAPFONT;
+    let wide = 0;
+    for (const t of lines) wide = Math.max(wide, ctx.measureText(t).width);
+    const cap = room * (lines.length > 1 ? 0.85 : 1.4);
+    const fs = Math.min(15, 100 * (1.85 * room) / wide, cap);
+    if (!best || fs > best.fs) best = { fs: fs, lines: lines, per: wide / 100 };
+  }
+  return { fs: Math.max(8.5, best.fs), lines: best.lines, per: best.per };
+}
+
+function layoutLabels(s, fit) {
+  // Biggest region first, and only vertical nudges: a sideways shove walks a
+  // name out of its own zone and into a neighbour's, which is the collision
+  // it was meant to avoid. A name that still will not fit is dropped rather
+  // than shrunk into noise - cities keep their marker regardless.
+  const k = fit.cw / 1000, out = [], placed = [];
+  const order = s.zones.slice().sort((a, b) => b.cells - a.cells);
+  for (const z of order) {
+    let room = z.room * k, put = null;
+    for (;;) {
+      const f = fitLabel(z.label, room);
+      const bw = f.per * f.fs + 6, bh = f.lines.length * f.fs * 1.16 + 4;
+      const x = fit.x0 + z.cx * k, y = fit.y0 + z.cy * k;
+      for (const oy of [0, -bh * 0.8, bh * 0.8]) {
+        const b = [x - bw / 2, y + oy - bh / 2, x + bw / 2, y + oy + bh / 2];
+        if (!placed.some(q => b[0] < q[2] && q[0] < b[2] && b[1] < q[3] && q[1] < b[3])) {
+          put = { x: x, y: y + oy, fs: f.fs, lines: f.lines, box: b, city: z.city };
+          break;
+        }
+      }
+      if (put || f.fs <= 8.6) break;
+      room *= 0.86;
+    }
+    if (!put) continue;
+    placed.push(put.box);
+    out.push(put);
+  }
+  return out;
+}
+
+function buildMap(id, W, H) {
+  const s = shapes[id], fit = fitContinent(s, W, H);
+  const m = new DOMMatrix().translateSelf(fit.x0, fit.y0).scaleSelf(fit.cw / 1000);
+  const land = new Path2D();
+  for (const d of s.coast) land.addPath(new Path2D(d), m);
+  const regions = s.zones.map(z => {
+    const path = new Path2D();
+    path.addPath(new Path2D(z.d), m);
+    return { name: z.label, fill: z.fill, path: path };
+  });
+  const k = fit.cw / 1000;
+  const marks = s.marks.map(mk => ({ x: fit.x0 + mk.cx * k, y: fit.y0 + mk.cy * k,
+                                     label: mk.label }));
+  return { id: id, W: W, H: H, fit: fit, land: land, regions: regions,
+           marks: marks, labels: layoutLabels(s, fit),
+           yardsPerPx: (zones[id].left - zones[id].right) / fit.cw };
+}
+
+function drawSea(W, H) {
+  const g = ctx.createRadialGradient(W / 2, H * 0.42, 0, W / 2, H * 0.42, Math.max(W, H) * 0.78);
+  g.addColorStop(0, "#25405a");
+  g.addColorStop(1, "#101f2e");
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, W, H);
+  ctx.strokeStyle = "#8fb4d2";
+  ctx.globalAlpha = 0.07;
+  ctx.lineWidth = 1;
+  for (let i = 1; i < 9; i++) {
+    ctx.beginPath(); ctx.moveTo(0, H * i / 9); ctx.lineTo(W, H * i / 9); ctx.stroke();
+  }
+  for (let i = 1; i < 12; i++) {
+    ctx.beginPath(); ctx.moveTo(W * i / 12, 0); ctx.lineTo(W * i / 12, H); ctx.stroke();
+  }
+  ctx.globalAlpha = 1;
+}
+
+function drawCompass(cx, cy, r) {
+  for (let k = 0; k < 4; k++) {
+    const a = k * Math.PI / 2;
+    for (const [side, alpha] of [[1, 0.85], [-1, 0.5]]) {
+      ctx.beginPath();
+      ctx.moveTo(cx, cy);
+      ctx.lineTo(cx + r * Math.cos(a), cy - r * Math.sin(a));
+      ctx.lineTo(cx + r * 0.22 * Math.cos(a + side * Math.PI / 4),
+                 cy - r * 0.22 * Math.sin(a + side * Math.PI / 4));
+      ctx.closePath();
+      ctx.globalAlpha = alpha;
+      ctx.fillStyle = side > 0 ? "#8a6c33" : "#a3813f";
+      ctx.fill();
+    }
+  }
+  ctx.globalAlpha = 0.55;
+  ctx.strokeStyle = "#a3813f"; ctx.lineWidth = 1.1;
+  ctx.beginPath(); ctx.arc(cx, cy, r * 1.22, 0, 7); ctx.stroke();
+  ctx.globalAlpha = 0.9;
+  ctx.fillStyle = "#a3813f"; ctx.textAlign = "center";
+  ctx.font = "13px " + MAPFONT;
+  ctx.fillText("N", cx, cy - r * 1.36);
+  ctx.globalAlpha = 1;
+}
+
+function drawScale(x, y, yardsPerPx) {
+  // Real yards, off the same extents that place the dots.
+  const px = 2000 / yardsPerPx;
+  ctx.strokeStyle = "#9dc0d8"; ctx.fillStyle = "#9dc0d8"; ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.moveTo(x, y); ctx.lineTo(x + px, y);
+  ctx.moveTo(x, y - 4); ctx.lineTo(x, y + 4);
+  ctx.moveTo(x + px, y - 4); ctx.lineTo(x + px, y + 4);
+  ctx.stroke();
+  ctx.globalAlpha = 0.8;
+  ctx.font = "10.5px ui-monospace, monospace"; ctx.textAlign = "center";
+  ctx.fillText("2000 yards", x + px / 2, y - 9);
+  ctx.globalAlpha = 1;
+}
+
 function render() {
-  if (!zones) return;
+  if (!shapes) return;
   for (const b of document.querySelectorAll("nav button"))
     b.classList.toggle("on", b.dataset.id === current);
-  const c = zones[current];
-  const W = canvas.clientWidth, aspect =
-    Math.abs((c.top - c.bottom) / (c.left - c.right));
-  const H = Math.max(360, Math.min(760, W * aspect));
-  // Only reallocate the backing store when the size actually changed -
-  // render() runs on a timer for the combat pulse.
+  const W = canvas.clientWidth;
+  // Fill what is left of the window rather than a fixed box: a tall
+  // continent needs the height, and the leftover is sea either way.
+  const top = canvas.getBoundingClientRect().top;
+  const foot = document.querySelector("footer");
+  // Reserve the legend's own height: sizing to the raw viewport pushed the
+  // footer below the fold and put a scrollbar on a page that has nothing to
+  // scroll to.
+  const H = Math.max(420, Math.round(
+    window.innerHeight - top - (foot ? foot.offsetHeight : 0) - 26));
   if (canvas.width !== W * devicePixelRatio || canvas.height !== H * devicePixelRatio) {
     canvas.width = W * devicePixelRatio; canvas.height = H * devicePixelRatio;
     canvas.style.height = H + "px";
   }
   ctx.setTransform(devicePixelRatio, 0, 0, devicePixelRatio, 0, 0);
-  ctx.clearRect(0, 0, W, H);
+  if (!built || built.id !== current || built.W !== W || built.H !== H)
+    built = buildMap(current, W, H);
 
-  // zone rectangles: the schematic continent
-  ctx.strokeStyle = "#30363d"; ctx.fillStyle = "#8b949e"; ctx.font = "10px ui-monospace, monospace";
-  for (const z of c.zones) {
-    const x = u(z.left, c) * W, w = (u(z.right, c) - u(z.left, c)) * W;
-    const y = v(z.top, c) * H, h = (v(z.bottom, c) - v(z.top, c)) * H;
-    ctx.strokeRect(x, y, w, h);
-    if (w > 70) ctx.fillText(z.name, x + 4, y + 12);
+  drawSea(W, H);
+
+  // A dark halo under the coast, then parchment, then the zones on top of it
+  // - the gaps between regions read as the unclaimed ground they are.
+  ctx.save();
+  ctx.strokeStyle = "#0c1926"; ctx.globalAlpha = 0.55;
+  ctx.lineWidth = 34 * built.fit.cw / 1000;
+  ctx.stroke(built.land);
+  ctx.restore();
+  ctx.fillStyle = "#cdb994";
+  ctx.fill(built.land);
+
+  ctx.lineJoin = "round";
+  ctx.strokeStyle = "#7a6238";
+  ctx.lineWidth = Math.max(0.7, 1.6 * built.fit.cw / 1000);
+  for (const r of built.regions) {
+    ctx.fillStyle = r.fill;
+    ctx.globalAlpha = r.name === hoverZone ? 0.72 : 1;
+    ctx.fill(r.path);
+    ctx.globalAlpha = 1;
+    ctx.stroke(r.path);
   }
+  ctx.strokeStyle = "#5c4526";
+  ctx.lineWidth = Math.max(1, 3.6 * built.fit.cw / 1000);
+  ctx.stroke(built.land);
+
+  // Names, over a parchment halo so a long one stays readable where it
+  // overhangs a neighbour.
+  ctx.textAlign = "center";
+  ctx.lineJoin = "round";
+  for (const l of built.labels) {
+    ctx.font = l.fs.toFixed(1) + "px " + MAPFONT;
+    ctx.strokeStyle = "#d3c19b"; ctx.lineWidth = 2.6;
+    ctx.fillStyle = "#3b2c14";
+    const n = l.lines.length;
+    for (let i = 0; i < n; i++) {
+      const y = l.y + (i - (n - 1) / 2) * l.fs * 1.16 + l.fs * 0.34;
+      ctx.strokeText(l.lines[i], l.x, y);
+      ctx.fillText(l.lines[i], l.x, y);
+    }
+  }
+  for (const mk of built.marks) {
+    ctx.save();
+    ctx.translate(mk.x, mk.y); ctx.rotate(Math.PI / 4);
+    ctx.fillStyle = "#e8c35d"; ctx.strokeStyle = "#5e4514"; ctx.lineWidth = 1.2;
+    ctx.fillRect(-3.5, -3.5, 7, 7); ctx.strokeRect(-3.5, -3.5, 7, 7);
+    ctx.restore();
+    ctx.font = "9.5px " + MAPFONT;
+    ctx.strokeStyle = "#d3c19b"; ctx.lineWidth = 2.4; ctx.fillStyle = "#3b2c14";
+    ctx.strokeText(mk.label, mk.x, mk.y + 16);
+    ctx.fillText(mk.label, mk.x, mk.y + 16);
+  }
+
   // dots
-  const t = Date.now() / 400;
+  const t = Date.now() / 400, f = built.fit;
   for (const d of dots) {
     if (d.continent !== current) continue;
-    const x = d.u * W, y = d.v * H;
+    const x = f.x0 + d.u * f.cw, y = f.y0 + d.v * f.ch;
     ctx.fillStyle = !d.bot ? "#7ee787" :
       d.faction === "alliance" ? "#4d9fff" : d.faction === "horde" ? "#ff4d4d" : "#d4b106";
     const r = d.combat ? 3 + Math.sin(t) * 1.2 : (d.bot ? 2.4 : 4);
     if (d.instance) ctx.fillRect(x - r, y - r, r * 2, r * 2);
     else { ctx.beginPath(); ctx.arc(x, y, r, 0, 7); ctx.fill(); }
   }
+
+  drawCompass(W - 78, 84, 34);
+  drawScale(W - 150, H - 26, built.yardsPerPx);
+  ctx.textAlign = "start";
 }
 
-function u(worldY, c) { return (c.left - worldY) / (c.left - c.right); }
-function v(worldX, c) { return (c.top - worldX) / (c.top - c.bottom); }
+function zoneAt(mx, my) {
+  // isPointInPath takes the point in canvas coordinates UNAFFECTED by the
+  // current transform, while the path it tests IS transformed by it. The
+  // paths are built in CSS pixels and the context is scaled by the device
+  // ratio, so the point has to be scaled to match - passing CSS pixels
+  // simply never hits on a retina screen, silently.
+  if (!built) return null;
+  const x = mx * devicePixelRatio, y = my * devicePixelRatio;
+  for (const r of built.regions) if (ctx.isPointInPath(r.path, x, y)) return r.name;
+  return null;
+}
 
 function nearestDot(e) {
   const rect = canvas.getBoundingClientRect();
   const mx = e.clientX - rect.left, my = e.clientY - rect.top;
-  const W = canvas.clientWidth, H = parseFloat(canvas.style.height);
+  if (!built) return { best: null, mx: mx, my: my };
+  const f = built.fit;
   let best = null, bd = 12 * 12;
   for (const d of dots) {
     if (d.continent !== current) continue;
-    const dx = d.u * W - mx, dy = d.v * H - my, dist = dx * dx + dy * dy;
+    const dx = f.x0 + d.u * f.cw - mx, dy = f.y0 + d.v * f.ch - my;
+    const dist = dx * dx + dy * dy;
     if (dist < bd) { bd = dist; best = d; }
   }
   return { best, mx, my };
@@ -227,12 +450,20 @@ function nearestDot(e) {
 
 canvas.addEventListener("mousemove", (e) => {
   const { best, mx, my } = nearestDot(e);
-  if (best) {
+  const zone = best ? null : zoneAt(mx, my);
+  if (zone !== hoverZone) { hoverZone = zone; render(); }
+  if (best || zone) {
     tip.style.display = "block";
     tip.style.left = (mx + 14) + "px"; tip.style.top = (my + 6) + "px";
-    tip.textContent = `${best.name} - L${best.level} - ${best.zone}` +
-      (best.combat ? " - fighting" : "") + (best.bot ? "" : " - MORTAL");
+    tip.textContent = best
+      ? `${best.name} - L${best.level} - ${best.zone}` +
+        (best.combat ? " - fighting" : "") + (best.bot ? "" : " - MORTAL")
+      : zone;
   } else tip.style.display = "none";
+});
+canvas.addEventListener("mouseleave", () => {
+  tip.style.display = "none";
+  if (hoverZone !== null) { hoverZone = null; render(); }
 });
 
 // --- character panel (infra#2603): click a dot, inspect a colonist ---

@@ -13,7 +13,8 @@ COPY _shared/core.py _shared/bridge.py _shared/voice.py _shared/transform.py \
      _shared/quests.py _shared/overhear.py _shared/questbook.py \
      _shared/questshare.py _shared/travel.py _shared/stream.py \
      _shared/relay.py _shared/digest.py \
-     _shared/zones.json _shared/entrances.json _shared/index.html /app/
+     _shared/zones.json _shared/entrances.json _shared/shapes.json \
+     _shared/index.html /app/
 
 USER 10000
 CMD ["python", "-u", "bridge.py"]

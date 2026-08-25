@@ -462,6 +462,12 @@ class Handler(BaseHTTPRequestHandler):
     def _zones_file(self, _query: dict) -> None:
         self._send_file("zones.json", "application/json")
 
+    def _shapes_file(self, _query: dict) -> None:
+        # The zone REGIONS, built from zones.json by tools/gen_shapes.py.
+        # Served rather than inlined so the page and the dots keep reading
+        # the same committed geometry.
+        self._send_file("shapes.json", "application/json")
+
     def _healthz(self, _query: dict) -> None:
         self._send(200, "text/plain", b"ok")
 
@@ -747,6 +753,7 @@ class Handler(BaseHTTPRequestHandler):
         "/": _index,
         "/index.html": _index,
         "/zones.json": _zones_file,
+        "/shapes.json": _shapes_file,
         "/healthz": _healthz,
     }
     POST_ROUTES = {

@@ -45,8 +45,10 @@ class ShipManifestTest(unittest.TestCase):
         )
 
     def test_data_files_the_map_needs_are_copied(self):
-        # transform.Geometry.load() reads these at import time in the pod.
-        for needed in ("zones.json", "entrances.json", "index.html"):
+        # transform.Geometry.load() reads these at import time in the pod;
+        # shapes.json is served to the page, and its absence is invisible in
+        # CI - the pod starts fine and the map just draws empty sea.
+        for needed in ("zones.json", "entrances.json", "shapes.json", "index.html"):
             self.assertIn(needed, _copied_files(), needed)
 
 
