@@ -1,25 +1,31 @@
-"""The family's bags, and the two separate bugs that kept them full and frozen.
+"""The family's bags: the freeze is a bug, the fullness is a design problem.
 
 WHY THIS FILE EXISTS. Measured live on 2026-08-24, every one of the five named
-characters had ZERO free bag slots (Grug 40/40, Ugga 34/34, Bork/Grog/Og 22/22),
-and only FOUR grey items existed across all five - so mod-junk-to-gold, which
-sells greys and only greys, had been running correctly and freeing nothing for
-the life of the realm. A full bag cannot accept a looted quest item and cannot
-accept a quest reward, so the whole questing epic was unobservable underneath
-this.
+characters had ZERO free bag slots (Grug 40/40, Ugga 34/34, Bork/Grog/Og
+22/22), and only FOUR grey items existed across all five - so mod-junk-to-gold,
+which sells greys and only greys, had been running correctly and freeing
+nothing for the life of the realm. Two different things came out of that
+measurement and they are NOT the same kind of thing:
 
-Two changes are asserted here, and they are deliberately NOT the obvious one:
+  1. A BUG. `LootObject::IsLootPossible` never asks whether the bot has room
+     for what it is about to gather, so with no free slot the loot can never
+     complete, `add all loot` re-adds the node every tick, and `open loot` at
+     relevance 8.0 preempts `new rpg do quest` at 3.0 forever (#2800: Grug held
+     one position to within 0.1 yard for 8h31m, 2.98 yards from a Silverleaf).
+     Skipping a node you cannot carry is correct behaviour no matter where bags
+     come from. That is what this file pins down.
 
-  1. The roster is GIVEN BAGS. `PlayerbotFactory::InitBags` equips a bag into
-     every empty bag slot, and every random bot on this realm gets it from
-     `Randomize()` (PlayerbotFactory.cpp:759). These five never can:
-     `Randomize` is RandomPlayerbotMgr's path and these accounts fail
-     `IsRandomBot()` three separate ways. Same wall as #2756 (talents),
-     #2757 (professions) and #2782.
+  2. A DESIGN PROBLEM, deliberately left open. Having too few bags is not a bug
+     to be patched out by materialising epic 24-slot Portable Holes into empty
+     bag slots. Bags come from the world: looted, bought, or crafted by
+     whichever of the family takes tailoring and mailed or traded to the rest.
+     That route needs professions assigned first (#2757). An earlier revision
+     of this file asserted the opposite - that the roster sweep hands out bags -
+     and those assertions are gone with the code they pinned.
 
-  2. Looting a gathering node is REFUSED when there is no free slot, so a
-     character with full bags stops re-casting on a herb three yards away
-     forever (#2800: Grug held one position to 0.1 yard for 8h31m).
+So the class below named `TheModuleDoesNotHandOutBags` is not a leftover: it is
+the design decision, written down where the next person to reach for
+`PlayerbotFactory::InitBags` will trip over it.
 
 WHAT IS NOT HERE, ON PURPOSE. Nothing sells and nothing destroys. Their bags
 hold live quest items right now - Westfall Deed, Large Candle (quest 60,
@@ -29,7 +35,7 @@ white, indistinguishable by quality from the junk anyone would want to sell.
 `sell vendor` ("everything worth vendoring, not only greys") would have taken
 them. So the tests below assert the ABSENCE of any disposal path, which is a
 far stronger guarantee than an exclusion list: there is nothing to exclude
-from, because nothing in this change can remove an item from a bag.
+from, because nothing here can remove an item from a bag.
 """
 import pathlib
 import re
@@ -41,209 +47,79 @@ PATCHES = ROOT / "docker/azerothcore-playerbots/patches/mod-playerbots"
 PINS = ROOT / "docker/azerothcore-playerbots/UPSTREAM-PINS.env"
 LOOT_PATCH = PATCHES / "0004-loot-needs-a-free-bag-slot.patch"
 
-# Everything that can make an item leave a bag. None of these may appear
-# anywhere in this fix. `InitBags(true)` is on the list because its destroyOld
-# branch calls `bot->DestroyItem(INVENTORY_SLOT_BAG_0, slot, true)` on an
-# OCCUPIED bag slot (PlayerbotFactory.cpp:2634-2635) - which destroys the bag
-# AND everything inside it. That is how a Large Candle dies. (It is also
-# BROKEN upstream: after destroying it hits `if (old_bag) continue;` at :2637
-# and never equips the replacement, so the slot is left empty. A second reason
-# never to reach for it.)
+# Everything that can make an item leave a bag. None of these may appear in
+# this fix. The loot guard is a REFUSAL to pick something up; it has no
+# business being anywhere near a call that puts something down.
 DISPOSAL = [
+    "DestroyItem",
     "DestroyItemCount",
     "ClearInventory",
     "ClearAllItems",
     "SellItem",
     "sell vendor",
     "sell gray",
-    "InitBags(true)",
 ]
 
-# `DestroyItem` is handled separately rather than banned outright. There is
-# exactly ONE in this change - replacing a starter bag that `Bag::IsEmpty()`
-# has proven holds nothing - and the tests below pin down that it is one, that
-# the emptiness check comes first, and that the replacement is proven
-# equippable before anything is destroyed. Banning it outright would have been
-# easier and would have left Grug, who has FOUR occupied bag slots and zero
-# empty ones, gaining nothing at all.
-DESTROY = "DestroyItem("
+# Every way the module could conjure a bag out of nothing. `InitBags` is
+# upstream's own bag handout (PlayerbotFactory.cpp:2625, hardcoded item 51809
+# "Portable Hole", 24 slots, quality 4) and reaching for it is the exact move
+# this file exists to refuse. Bags are found, bought or crafted in the world.
+BAG_HANDOUT = [
+    "InitBags",
+    "GiveBags",
+    "ReplaceEmptyStarterBags",
+    "OVERSEER_BAG_ITEM",
+    "51809",
+]
 
 
 def _strip_comments(src: str) -> str:
     """Code only.
 
     These files carry long WHY blocks that quote the very calls the tests
-    below forbid - the GiveBags header explains what `DestroyItem` on an
-    occupied bag slot would do. A text match that cannot tell a warning about
-    a call from the call itself is not a structural test.
+    below forbid - the loot patch header explains what a full-bagged bot does
+    to a herb node, and the docstring above names `InitBags` in order to
+    reject it. A text match that cannot tell a warning about a call from the
+    call itself is not a structural test.
     """
     src = re.sub(r"/\*.*?\*/", "", src, flags=re.DOTALL)
     return re.sub(r"//[^\n]*", "", src)
 
 
-def _body(func_signature: str) -> str:
-    """One function body out of the C++ module, by brace matching."""
-    src = MODULE.read_text(encoding="utf-8")
-    start = src.index(func_signature)
-    depth = 0
-    for i in range(src.index("{", start), len(src)):
-        if src[i] == "{":
-            depth += 1
-        elif src[i] == "}":
-            depth -= 1
-            if depth == 0:
-                return _strip_comments(src[start:i + 1])
-    raise AssertionError(f"{func_signature} has no closing brace")
+class TheModuleDoesNotHandOutBags(unittest.TestCase):
+    """Bags must come from the world, not from the overseer module.
 
-
-GIVE_BAGS = "void GiveBags(Player* bot, std::string const& name)"
-REPLACE = "uint32 ReplaceEmptyStarterBags(Player* bot, uint32& blocked)"
-
-
-class TheRosterIsGivenBags(unittest.TestCase):
-    def test_the_roster_sweep_gives_bags(self):
-        """Without this call the five keep the starter bags forever.
-
-        22 slots is 16 backpack plus one small bag; three of their four bag
-        slots are simply empty, and nothing in the module or in upstream was
-        ever going to fill them for a non-random bot.
-        """
-        self.assertIn("GiveBags(", _body("void TrainRoster()"))
-        self.assertIn("InitBags(", _body(GIVE_BAGS))
-
-    def test_bags_are_never_given_destructively(self):
-        """`InitBags(true)` destroys the bag in an occupied slot, contents included.
-
-        The default argument is `destroyOld = true` (PlayerbotFactory.h:87), so
-        `InitBags()` written bare is the DANGEROUS call. It must always be
-        spelled out as false.
-        """
-        src = _strip_comments(MODULE.read_text(encoding="utf-8"))
-        calls = re.findall(r"InitBags\s*\(([^)]*)\)", src)
-        self.assertTrue(calls, "no InitBags call found at all")
-        for arg in calls:
-            self.assertEqual(
-                "false", arg.strip(),
-                "InitBags must be called with an explicit false - the default "
-                "is destroyOld=true, which destroys an occupied bag and every "
-                "quest item inside it",
-            )
-
-    def test_the_bag_pass_is_not_behind_the_level_gate(self):
-        """A character stuck at its level would never get bags.
-
-        TrainRoster's expensive trainer walk is gated on
-        `level == trainedLevel`, and every one of these five has been sitting
-        at the same level for hours with full bags. Behind that gate the fix
-        would compile, read correctly, and never once run - the `sell junk`
-        shape this repo keeps finding.
-        """
-        body = _body("void TrainRoster()")
-        self.assertLess(
-            body.index("GiveBags("), body.index("level == trainedLevel"),
-            "the bag pass sits behind the level gate and will never run for a "
-            "character that is not levelling",
-        )
-
-    def test_the_bag_pass_stops_once_the_slots_are_full(self):
-        """Otherwise this is a factory construction on every single poll."""
-        body = _body(GIVE_BAGS)
-        self.assertIn("CountEmptyBagSlots(", body)
-        self.assertLess(
-            body.index("CountEmptyBagSlots("), body.index("PlayerbotFactory"),
-            "the factory is constructed before anyone asks whether there is "
-            "an empty slot to fill",
-        )
-
-    def test_nothing_in_the_roster_sweep_can_remove_an_item(self):
-        for where in ("void TrainRoster()", GIVE_BAGS, REPLACE):
-            body = _body(where)
-            for call in DISPOSAL:
-                self.assertNotIn(
-                    call, body,
-                    f"{where} contains {call}: this fix must not be able to "
-                    "remove an item from a bag, because the bags hold live "
-                    "quest items that are quality-1 whites and look exactly "
-                    "like junk",
-                )
-
-
-class AStarterBagIsReplacedONLYWhileItIsEmpty(unittest.TestCase):
-    """Grug is why this exists, and he is why banning DestroyItem was wrong.
-
-    Measured live from character_inventory, bag slots 19-22:
-
-        who    bags equipped   empty bag slots   total
-        Bork         1               3             22
-        Grog         1               3             22
-        Og           1               3             22
-        Ugga         3               1             34
-        Grug         4               0             40
-
-    Grug has FOUR Small Pouches and no empty bag slot, so a fix that only
-    fills empty slots gives him nothing - and he is the party leader, the only
-    character carrying `new rpg`, and the one who sat 2.98 yards from a
-    Silverleaf node for 8h31m. Replacing a bag means destroying the one that is
-    there, so the only safe version of that is one that refuses any bag holding
-    anything at all.
-
-    `Player::DestroyItem` recursively destroys a bag's CONTENTS
-    (`if (pItem->IsNotEmptyBag())`, PlayerStorage.cpp:3132-3134). The
-    `Bag::IsEmpty()` guard (Bag.h:46, Bag.cpp:179-186) is the only thing
-    between this code and a Westfall Deed.
+    The rejected design was: sweep the roster, replace empty starter bags, and
+    call `PlayerbotFactory::InitBags(false)` to drop an epic Portable Hole into
+    every empty bag slot. It was merged in #2823 and NEVER DEPLOYED, so no live
+    character ever received one. It is removed because "magically upgrade
+    themselves" is the same pattern already rejected on #2782 (trainer spells
+    learned without visiting a trainer). Whoever in the group takes tailoring
+    crafts bags for the rest, and is given the cloth to do it - which needs
+    professions handed out first (#2757).
     """
 
-    def test_there_is_exactly_one_destroy_in_the_whole_module(self):
+    def test_the_module_never_conjures_a_bag(self):
         src = _strip_comments(MODULE.read_text(encoding="utf-8"))
-        self.assertEqual(
-            1, src.count(DESTROY),
-            "expected exactly one DestroyItem( in mod_overseer.cpp - the "
-            "guarded starter-bag replacement and nothing else",
-        )
+        for call in BAG_HANDOUT:
+            self.assertNotIn(
+                call, src,
+                f"mod_overseer.cpp contains {call}: the module must not create "
+                "bags out of nothing. Bags are looted, bought, or crafted by a "
+                "teammate with tailoring (#2757) and traded or mailed over.",
+            )
 
-    def test_the_one_destroy_lives_in_the_bag_replacement(self):
-        self.assertIn(DESTROY, _body(REPLACE))
-
-    def test_a_bag_that_holds_anything_is_never_destroyed(self):
-        body = _body(REPLACE)
-        self.assertIn("IsEmpty()", body, "no emptiness check at all")
-        self.assertLess(
-            body.index("IsEmpty()"), body.index(DESTROY),
-            "the emptiness check must come BEFORE the destroy, or it is not a "
-            "guard, it is a comment",
-        )
-
-    def test_the_replacement_is_proven_equippable_before_anything_is_destroyed(self):
-        """Otherwise a failed equip costs the character the bag it had.
-
-        Player::CanEquipNewItem (Player.h:1317, PlayerStorage.cpp:1885-1898)
-        makes and deletes its own probe item, so this costs nothing and needs
-        no access to PlayerbotFactory::CanEquipUnseenItem, which is private
-        (PlayerbotFactory.h:159).
-        """
-        body = _body(REPLACE)
-        self.assertIn("CanEquipNewItem", body)
-        self.assertLess(body.index("CanEquipNewItem"), body.index(DESTROY))
-
-    def test_a_bag_that_is_already_the_right_one_is_left_alone(self):
-        """Otherwise every poll destroys and re-equips the same four bags."""
-        self.assertIn("OVERSEER_BAG_ITEM", _body(REPLACE))
-
-
-class ACharacterThatGainsNothingSaysSo(unittest.TestCase):
-    def test_gaining_no_slots_is_logged_and_names_the_character(self):
-        """A silent skip on the one character with the documented freeze is how
-        this gets marked fixed and stays broken."""
-        body = _body(GIVE_BAGS)
-        self.assertIn("LOG_WARN", body,
-                      "a character that gains no bag slots must say so at a "
-                      "level somebody will see")
-
-    def test_a_bag_that_could_not_be_equipped_is_an_error_not_a_silence(self):
-        """The `sell junk` shape: reports success, does nothing. If InitBags
-        leaves a slot empty, the item could not be equipped and nobody would
-        ever find out."""
-        self.assertIn("LOG_ERROR", _body(GIVE_BAGS))
+    def test_the_module_can_remove_nothing_from_a_bag(self):
+        """The bags hold live quest items that are quality-1 whites and look
+        exactly like junk, so there is no exclusion list that could be got
+        right. The guarantee is that no disposal call exists at all."""
+        src = _strip_comments(MODULE.read_text(encoding="utf-8"))
+        for call in DISPOSAL:
+            self.assertNotIn(
+                call, src,
+                f"mod_overseer.cpp contains {call}: nothing in this module may "
+                "remove an item from a bag",
+            )
 
 
 def _patch_lines(path: pathlib.Path):
@@ -269,6 +145,10 @@ class LootStopsWhenThereIsNoRoom(unittest.TestCase):
     relevance 8.0 preempts `new rpg do quest` at 3.0 forever. Relevance changes
     are known-unsafe here (#2800 declined exactly that), so the fix is on the
     other half of the product: make the 8.0 action terminate.
+
+    This is a bug fix and not a handout. It does not give a bot one extra slot;
+    it stops a bot spending eight and a half hours re-casting on a herb it has
+    nowhere to put. That stays true however the family end up acquiring bags.
     """
 
     def test_the_patch_exists(self):
@@ -286,6 +166,21 @@ class LootStopsWhenThereIsNoRoom(unittest.TestCase):
         self.assertTrue(
             any("GetFreeInventorySpace" in line for line in added),
             "the patch adds no free-slot check",
+        )
+
+    def test_the_guard_refuses_the_node_and_does_nothing_else(self):
+        """The whole mechanism is one early `return false` at exactly zero.
+        Anything more than that has stopped being "skip what you cannot
+        carry" and started being a policy about bags."""
+        added, _ = _patch_lines(LOOT_PATCH)
+        self.assertTrue(
+            any("GetFreeInventorySpace" in line and "== 0" in line
+                for line in added),
+            "the guard does not test for exactly zero free slots",
+        )
+        self.assertTrue(
+            any(line.strip() == "return false;" for line in added),
+            "the guard does not refuse the node",
         )
 
     def test_the_patch_deletes_nothing(self):
@@ -318,6 +213,16 @@ class LootStopsWhenThereIsNoRoom(unittest.TestCase):
     def test_the_patch_can_remove_nothing_from_a_bag(self):
         added, _ = _patch_lines(LOOT_PATCH)
         for call in DISPOSAL:
+            self.assertFalse(
+                any(call in line for line in added),
+                f"the loot patch adds {call}",
+            )
+
+    def test_the_patch_hands_out_no_bags_either(self):
+        """The loot guard is the half of #2823 that was kept. It must not pick
+        up any of the half that was rejected."""
+        added, _ = _patch_lines(LOOT_PATCH)
+        for call in BAG_HANDOUT:
             self.assertFalse(
                 any(call in line for line in added),
                 f"the loot patch adds {call}",
