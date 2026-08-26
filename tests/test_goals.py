@@ -4,6 +4,8 @@ No MySQL and no Discord anywhere - the store is a dict a tiny fake mutates
 by applying the typed actions reconcile returns, which is exactly the seam
 bridge.py implements against the real store (infra#2601).
 """
+import ast
+import pathlib
 import unittest
 
 import goals
@@ -463,3 +465,112 @@ class PartyThatTravelsTest(unittest.TestCase):
                 verb, _, rest = cmd.partition(" ")
                 self.assertIn(verb, ("nc", "co"), cmd)
                 self.assertTrue(rest.startswith(("+", "-")), cmd)
+
+
+class StrategiesReturnWithTheCharacter(unittest.TestCase):
+    """`new rpg` is never a default for a named character - it exists only
+    because the life loop grants it, and ResetStrategies takes it away on
+    every login. Noticing the return is what closes a ten-minute hole."""
+
+    def test_a_character_back_under_the_ai_is_reported(self):
+        self.assertEqual(
+            frozenset({"Grug"}),
+            goals.returned_to_ai(frozenset({"Bork"}), frozenset({"Bork", "Grug"})))
+
+    def test_nobody_new_means_nobody_is_re_issued(self):
+        """These commands reach the game as whispers. Re-issuing to characters
+        that never lost anything is visible noise in Evan's chat."""
+        both = frozenset({"Bork", "Grug"})
+        self.assertEqual(frozenset(), goals.returned_to_ai(both, both))
+
+    def test_the_first_look_fires_for_nobody(self):
+        """At startup every character looks like a return. The protect cycle
+        already covers startup; firing here too would re-issue to all five on
+        every restart of the bridge."""
+        self.assertEqual(
+            frozenset(),
+            goals.returned_to_ai(None, frozenset({"Grug", "Bork", "Og"})))
+
+    def test_a_character_taken_BY_a_person_is_not_a_return(self):
+        """Losing AI control is the start of the problem, not the end of it -
+        the re-issue belongs on the way back, when a strategy can actually be
+        accepted. Commanding an AI-less character only fills the table with
+        errors."""
+        self.assertEqual(
+            frozenset(),
+            goals.returned_to_ai(frozenset({"Grug", "Bork"}), frozenset({"Bork"})))
+
+    def test_a_full_round_trip_fires_exactly_once(self):
+        """Human takes Grug, human gives him back. One re-issue, on the way
+        back, and nothing on the tick after."""
+        seen = frozenset({"Grug", "Bork"})
+        taken = frozenset({"Bork"})
+        self.assertEqual(frozenset(), goals.returned_to_ai(seen, taken))
+        given_back = frozenset({"Grug", "Bork"})
+        self.assertEqual(frozenset({"Grug"}), goals.returned_to_ai(taken, given_back))
+        self.assertEqual(frozenset(), goals.returned_to_ai(given_back, given_back))
+
+    def test_the_leader_coming_back_gets_what_drives_him(self):
+        """The whole point: a leader who relogged must get `new rpg` back, or
+        four followers stand still around him."""
+        self.assertIn("nc +new rpg", goals.life_strategies(leads=True))
+
+
+class TheReturnLoopIsActuallyWired(unittest.TestCase):
+    """goals.returned_to_ai can be perfect and never called.
+
+    bridge.py cannot be imported here - it needs pymysql, discord and a live
+    MySQL - so this walks its AST. An AST walk and not a grep on purpose: a
+    call written in a comment satisfies a grep, and a comment gives nobody
+    their strategy back.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        src = (pathlib.Path(__file__).resolve().parent.parent / "bridge.py").read_text()
+        cls.tree = ast.parse(src)
+        cls.fn = next(
+            (n for n in ast.walk(cls.tree)
+             if isinstance(n, ast.AsyncFunctionDef) and n.name == "_restore_lost_lives"),
+            None)
+
+    def _calls(self):
+        out = set()
+        for node in ast.walk(self.fn):
+            if isinstance(node, ast.Attribute):
+                out.add(node.attr)
+            elif isinstance(node, ast.Name):
+                out.add(node.id)
+        return out
+
+    def test_the_loop_exists(self):
+        self.assertIsNotNone(self.fn, "no _restore_lost_lives in bridge.py")
+
+    def test_it_is_started_and_held(self):
+        """asyncio keeps only a weak reference to a running task, so a loop
+        created and not held can be collected mid-flight - and it stops with
+        no error and nothing in the log."""
+        hook = next(n for n in ast.walk(self.tree)
+                    if isinstance(n, ast.AsyncFunctionDef) and n.name == "setup_hook")
+        started = {n.attr for n in ast.walk(hook) if isinstance(n, ast.Attribute)}
+        self.assertIn("_restore_lost_lives", started)
+
+    def test_it_asks_who_came_back_rather_than_re_issuing_to_everyone(self):
+        """These commands reach the game as whispers; blanket re-issues are
+        visible noise in Evan's chat."""
+        self.assertIn("returned_to_ai", self._calls())
+
+    def test_it_actually_hands_the_life_back(self):
+        self.assertIn("_give_them_a_life", self._calls())
+
+    def test_it_rechecks_far_more_often_than_the_protect_sweep(self):
+        """The whole point is closing a 600-second hole. A recheck on the same
+        cadence would close nothing."""
+        src = (pathlib.Path(__file__).resolve().parent.parent / "bridge.py").read_text()
+        body = src[src.index("async def _restore_lost_lives"):]
+        body = body[:body.index("async def _protect_characters")]
+        self.assertIn("LIFE_RECHECK_SECONDS", body)
+        default = body.split('LIFE_RECHECK_SECONDS", "')[1].split('"')[0]
+        self.assertLessEqual(float(default), 60.0)
+        self.assertGreaterEqual(float(default), 5.0)
+

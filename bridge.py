@@ -1176,6 +1176,7 @@ class Bridge(discord.Client):
                 self._hold_council,
                 self._sample_family,
                 self._share_quests_loop,
+                self._restore_lost_lives,
             )
         }
 
@@ -1788,6 +1789,55 @@ class Bridge(discord.Client):
         if held.plan is not None:
             await asyncio.to_thread(_persist_council_plan, held.plan)
         log.info("council: %d line(s), %s", len(held.lines), held.reason)
+
+    async def _restore_lost_lives(self) -> None:
+        """Give a character its life back the moment the AI has it again.
+
+        `_give_them_a_life` already re-issues on the roster cadence, and that
+        was enough while the only thing that stripped a strategy was a
+        worldserver restart - the same sweep covers startup. It is not enough
+        now that #2663 logs a character in and out on demand: every watch ends
+        with a re-login, ResetStrategies rebuilds from defaults that do not
+        include `new rpg` for named characters, and the character comes back
+        with nothing to do.
+
+        PROTECT_CYCLE_SECONDS is 600, so that gap is up to TEN MINUTES. On the
+        leader it is ten minutes of the whole family standing still, because
+        four of them are following him. Measured at eight minutes on live.
+
+        Watching for the transition rather than shortening the sweep is
+        deliberate: these commands reach the game as whispers, and re-issuing
+        fifteen of them a minute to characters that never lost anything is
+        visible noise in Evan's chat. A character that did not relog needs
+        nothing, and gets nothing.
+        """
+        await self.wait_until_ready()
+        cycle = float(os.environ.get("LIFE_RECHECK_SECONDS", "20"))
+        seen: frozenset | None = None
+        while not self.is_closed():
+            try:
+                protected = await asyncio.to_thread(_protected_guids)
+                names = sorted(protected.values())
+                current = frozenset(
+                    await asyncio.to_thread(_bot_held_names, names)
+                )
+                back = goals.returned_to_ai(seen, current)
+                # Seeded even on the first look, so the NEXT transition is
+                # measurable. Assigning only when something returned would
+                # leave `seen` None forever and fire for everyone the first
+                # time anybody relogged.
+                seen = current
+                if back:
+                    log.info(
+                        "life: %s back under the AI - re-issuing strategies",
+                        ", ".join(sorted(back)),
+                    )
+                    await asyncio.to_thread(_give_them_a_life, sorted(back))
+            except Exception:
+                # Never fatal. A failed recheck costs latency on the next
+                # relog, and the 600s sweep is still underneath it.
+                log.exception("life recheck failed")
+            await asyncio.sleep(cycle)
 
     async def _protect_characters(self) -> None:
         """Hold the manager's own randomize bookkeeping open (infra#2656).

@@ -341,6 +341,32 @@ LIFE_STRATEGY = "nc +new rpg"
 FLEE_STRATEGY = "co +flee"
 
 
+def returned_to_ai(previous, current) -> frozenset:
+    """Who has just come back under AI control since the last look.
+
+    THE STRATEGY DOES NOT SURVIVE A RELOG. PlayerbotAI::ResetStrategies runs on
+    login and rebuilds from AiFactory, where `new rpg` sits behind the
+    IsRandomBot gate - permanently false for named characters. So it is never
+    a default for this family: it exists only because the life loop grants it,
+    and every re-login silently takes it away again.
+
+    The cost is worst on the leader. Four followers are welded to him by
+    `follow`, so a leader with nothing driving him does not merely idle - he
+    stops the whole family, and they stand in a heap around him looking for
+    all the world like a pathfinding bug. Measured live: eight minutes of
+    stillness inside one PROTECT_CYCLE_SECONDS, self-healing at the next
+    sweep, which is exactly why it went unseen. It has been latent behind
+    every relog the module has ever done.
+
+    `previous is None` means FIRST LOOK and returns nothing. At startup every
+    character looks like a return, and the protect cycle already covers that
+    case - firing here as well would re-issue to everyone on every restart.
+    """
+    if previous is None:
+        return frozenset()
+    return frozenset(current) - frozenset(previous)
+
+
 def life_strategies(*, leads: bool, aimed: bool = False) -> list:
     """What keeps this character playing, given whether it leads the party.
 
