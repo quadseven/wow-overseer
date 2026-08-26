@@ -139,7 +139,23 @@ class RosterWiringTest(unittest.TestCase):
         names = {n.id for n in ast.walk(fn) if isinstance(n, ast.Name)} | {
             n.attr for n in ast.walk(fn) if isinstance(n, ast.Attribute)}
         self.assertIn("life_strategies", names)
-        self.assertIn("head_of_family", names)
+        # `_head_now`, NOT bonds.head_of_family directly, since infra#2757. A
+        # character running a trade errand borrows the lead for the duration,
+        # because the leader is the family's one traveller and an errand is
+        # somewhere to travel to. The invariant this test exists for is
+        # unchanged and is checked below: exactly one head, decided once for
+        # the whole pass, and `leads` computed per character from it.
+        self.assertIn("_head_now", names)
+
+        # And the resting answer is still bonds'. If _head_now ever stopped
+        # falling back to head_of_family, an ordinary afternoon with no errand
+        # would have no leader at all - which is five characters each holding
+        # `new rpg`, or none of them holding it.
+        head_now = next(n for n in ast.walk(ast.parse(src))
+                        if isinstance(n, ast.FunctionDef) and n.name == "_head_now")
+        self.assertIn("head_of_family",
+                      {n.attr for n in ast.walk(head_now)
+                       if isinstance(n, ast.Attribute)})
 
         # And that `leads` is DECIDED per character rather than passed a
         # literal. Checking the names alone let a mutant through that gave

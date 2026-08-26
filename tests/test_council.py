@@ -234,7 +234,14 @@ class WiringTest(unittest.TestCase):
         which put Bork, the youngest, in charge of his own father."""
         names = self._names_in("_protect_characters")
         self.assertIn("_mark_party_leader", names)
-        self.assertIn("head_of_family", names)
+        # Through _head_now since infra#2757, which is bonds.head_of_family()
+        # except while a trade errand is outstanding - the character going to
+        # the trainer leads, so the family walks there together behind its one
+        # traveller. Asked from the same helper as _give_them_a_life so the
+        # flag and the strategies can never disagree about who leads; a family
+        # following a character that is about to stop leading is a party split
+        # in two for thirty seconds.
+        self.assertIn("_head_now", names)
 
     def test_leadership_is_not_corrected_with_a_gm_command(self):
         """A playerbot session does not carry GM security. With account 318 at

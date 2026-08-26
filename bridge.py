@@ -522,7 +522,12 @@ def _give_them_a_life(names: list) -> int:
     Idempotent at the game's end: adding a strategy already present is a no-op.
     """
     driven = _bot_held_names(names)
-    head = bonds.head_of_family()
+    # NOT bonds.head_of_family() DIRECTLY. A character running a trade errand
+    # borrows the lead for the duration, because the leader is the family's one
+    # traveller - see _head_now and _errand_traveller. Asked once for the whole
+    # pass, like `aimed` below and for the same reason: a head that changed
+    # underneath a single sweep would leave two characters holding `new rpg`.
+    head = _head_now()
     # WHO IS AIMED DECIDES WHO TRAVELS, not the lead flag alone. Fetched once
     # for the whole pass: it is one query, and asking per character would let
     # the set change underneath a single roster sweep, so two members could be
@@ -1238,6 +1243,174 @@ def _mark_specs(specs: dict) -> None:
                 )
                 return
             raise
+
+
+# How long a decided-but-unsettled learn errand may move the family's
+# leadership around.
+#
+# WHY THERE IS A BOUND AT ALL. An errand takes the head of the family off the
+# character bonds says should have it and gives it to whoever is going to a
+# trainer. That is right while the errand is live and wrong the moment it is
+# not - and "not live" has a failure mode with no error in it: mod-overseer
+# clears `learn_skill` when the trade is bought, so a worldserver that has not
+# been built with the professions verbs yet NEVER clears it. Without a bound,
+# one undeployed image would quietly and permanently reorganise the family
+# around an errand nothing can finish.
+#
+# Six hours, because the errand is one walk on one map and the travel drive's
+# own backstop gives up after twenty minutes. Anything still outstanding after
+# six hours is not a slow journey, it is a broken one.
+ERRAND_LEAD_HOURS = float(os.environ.get("ERRAND_LEAD_HOURS", "6"))
+
+
+def _write_declared_professions() -> None:
+    """Write each character's ASSIGNED primaries onto the roster.
+
+    THIS IS THE PERMISSION, NOT A HINT, and that is why it is written on the
+    protect cycle next to the talent trees rather than once when a trade is
+    decided. mod-overseer will only ever learn a skill that appears here and
+    will never unlearn one that does, so this column is what makes a wrong
+    `learn_skill` or a stale `unlearn_skill` harmless. A permission that is
+    written only when an errand is created is a permission that is missing for
+    every character that does not currently have one - including Ugga, who
+    needs no errand precisely because she is already correct, and whose two
+    professions must still be declared so that nothing can take them.
+
+    Same shape and same degrade as _mark_specs, for the same reasons.
+    """
+    values = [
+        (professions.wanted_ids(name), name)
+        for name in sorted(bonds.FAMILY)
+        if professions.assigned(name)
+    ]
+    if not values:
+        return
+    with _connect() as conn, conn.cursor() as cur:
+        try:
+            cur.executemany(
+                "UPDATE overseer_roster SET professions = %s WHERE name = %s", values
+            )
+        except pymysql.err.OperationalError as exc:
+            # 1054 is ER_BAD_FIELD_ERROR. Matched on the code, not the message
+            # text, which is localised and has changed between versions.
+            if exc.args and exc.args[0] == 1054:
+                log.warning(
+                    "overseer_roster.professions missing - the family's trade "
+                    "assignment cannot reach the worldserver until the "
+                    "db-import image carrying mod-overseer's SQL has shipped "
+                    "(infra#2757)"
+                )
+                return
+            raise
+
+
+def _write_trade_errand(errand) -> None:
+    """Put one character's outstanding trade plan where the worldserver reads it.
+
+    THE ROAD THAT WAS MISSING. professions.plan() has been reaching the right
+    answer since 2026-08-26 and writing it to `overseer_trade`, which is a
+    Python table nothing in the worldserver has ever read. These four columns
+    are on `overseer_roster`, which mod-overseer polls.
+
+    IDEMPOTENT AND RE-ASSERTED, not written once. mod-overseer clears
+    `learn_skill` and `unlearn_skill` itself when each verb succeeds, so
+    re-writing an errand every trade cycle either changes nothing (still
+    outstanding) or is skipped entirely (the plan is empty because the trade
+    settled). What it protects against is the case in between: a worldserver
+    restart loses runtime state, and an errand that had been half-applied would
+    otherwise need somebody to notice.
+
+    `travel_npc` IS WRITTEN HERE AND NOWHERE ELSE IN THIS PROCESS. It is the
+    only column that makes a character walk, and the only reason to make one
+    walk is an errand.
+    """
+    with _connect() as conn, conn.cursor() as cur:
+        try:
+            cur.execute(
+                "UPDATE overseer_roster SET learn_skill = %s, unlearn_skill = %s, "
+                "unlearn_max = %s, travel_npc = %s WHERE name = %s",
+                (
+                    errand.learn_skill,
+                    errand.unlearn_skill,
+                    errand.unlearn_max,
+                    errand.travel_npc,
+                    errand.character,
+                ),
+            )
+        except pymysql.err.OperationalError as exc:
+            if exc.args and exc.args[0] == 1054:
+                log.warning(
+                    "overseer_roster is missing the profession errand columns - "
+                    "%s cannot be sent to a trainer until the db-import image "
+                    "carrying mod-overseer's SQL has shipped (infra#2757)",
+                    errand.character,
+                )
+                return
+            raise
+
+
+def _errand_traveller() -> str:
+    """The character that must lead the family right now, or '' for nobody.
+
+    THIS IS THE WHOLE ANSWER TO "A FOLLOWER CANNOT RUN AN ERRAND", and it is
+    worth being explicit about what it is NOT. It is not giving a follower
+    `new rpg`. `new rpg` is what walks a character to an NPC, it acts at
+    relevance 3.0-11.0 against follow's 1.0, and a follower carrying both
+    wanders off every tick - measured at a 937-yard spread with the healer in
+    her own fight (infra#2812). Nothing here changes who carries it.
+
+    What changes is WHO LEADS. The family has exactly one traveller by design;
+    this makes the traveller be the character with somewhere to be, and the
+    other four follow it there. Every piece of machinery that needs is already
+    built and is untouched: `lead` is written by _mark_party_leader,
+    KeepRosterGrouped promotes that character to group leader, and
+    KeepRosterFollowing points the rest at whoever the group leader actually
+    is. The invariant holds throughout - one `new rpg`, on the leader - and the
+    party arrives at the trainer together.
+
+    THE JOIN IS THE BOUND, and it is doing three jobs. It requires the roster
+    errand to still be set, the `overseer_trade` row behind it to still be
+    'planned', and the decision to be recent. Any one of those going false
+    hands leadership back to bonds.head_of_family() on the next protect cycle -
+    which is what makes an undeployed worldserver a no-op rather than a
+    permanent reorganisation of the family around an errand nothing can finish.
+    """
+    with _connect() as conn, conn.cursor() as cur:
+        try:
+            cur.execute(
+                "SELECT r.name FROM overseer_roster r "
+                "JOIN overseer_trade t ON t.character_name = r.name "
+                "WHERE r.enabled = 1 AND r.learn_skill <> 0 "
+                "AND t.verb = 'learn' AND t.skill_id = r.learn_skill "
+                "AND t.status = 'planned' "
+                "AND t.decided_at > NOW() - INTERVAL %s HOUR "
+                "ORDER BY t.id LIMIT 1",
+                (ERRAND_LEAD_HOURS,),
+            )
+            row = cur.fetchone()
+        except (pymysql.err.OperationalError, pymysql.err.ProgrammingError) as exc:
+            # 1054 is a missing column, 1146 a missing table. Either means the
+            # errand machinery is not deployed here, and the honest answer to
+            # "who is on an errand" is nobody.
+            if exc.args and exc.args[0] in (1054, 1146):
+                return ""
+            raise
+    return row["name"] if row else ""
+
+
+def _head_now() -> str:
+    """Who leads the family this cycle.
+
+    bonds.head_of_family() is the resting answer and the overwhelmingly common
+    one: Grug, the father, by seniority, forever. An errand borrows it, because
+    the leader is the family's one traveller and an errand is somewhere to
+    travel to. Asked in exactly two places - _give_them_a_life, which hands out
+    the strategies, and _mark_party_leader, which writes the flag - so those
+    two can never be looking at different answers to the same question. Getting
+    that wrong is a family following a character that is about to stop leading,
+    which is a party split in two.
+    """
+    return _errand_traveller() or bonds.head_of_family()
 
 
 def _protected_guids() -> dict:
@@ -2077,22 +2250,25 @@ class Bridge(discord.Client):
         WHAT IT DOES NOT DO, WRITTEN HERE SO NOBODY HAS TO GO LOOKING. It does
         not teach anybody a profession. There is no path from this loop to
         `character_skills`, and there is no command row it could send that
-        would do it either.
+        would do it either. That has not changed and must not.
 
-        THE AIM IS NO LONGER THE REASON. This docstring used to say that
-        nothing could point a bot at a chosen NPC. #2840 made that false: an
-        aimable ChangeToWanderNpc, the overseer_roster.travel_npc column and
-        DriveTravel() ship together, travel.ROLES names "profession trainer",
-        and it was proven cross-zone on dev. What #2840 delivered is TRAVEL,
-        NOT TRANSACTION: an aimed character walks to the trainer and stands
-        in front of it, and does not train. TrainerAction still needs the
-        trainer SELECTED (TrainerAction.cpp:22-24) and arrival still interacts
-        only for a quest (NewRpgAction.cpp:398-400). That verb is the
-        follow-up, and it is deliberately somebody else's change.
+        WHAT IT NOW DOES INSTEAD IS ASK. This docstring used to end by saying
+        the transaction was somebody else is change - first because nothing
+        could aim a bot at a chosen NPC (#2840 made that false), then because
+        arriving did not train (#2757 made that false too). What it writes now
+        is an ERRAND: four columns on `overseer_roster` saying which trade this
+        character should end up with, which one to buy, which one to give up
+        and at what price. mod-overseer walks the character to a trainer that
+        can teach it and buys it there, through the core is own
+        Trainer::TeachSpell - so the money is taken, the free-slot rule is
+        enforced, and nothing appears in `character_skills` that a trainer was
+        not paid for (#2782).
 
-        So the family agrees, says so, and waits - and the moment the skill
-        appears by any honest route, the row settles and the family says that
-        out loud too.
+        THE SETTLE PATH IS UNCHANGED AND IS STILL THE ONLY PROOF. A written
+        column says the module was asked, never that anything happened; the row
+        moves to 'learned' only when `character_skills` is OBSERVED to agree -
+        by whatever honest route, including Evan walking Ugga to a trainer
+        himself.
         """
         await self.wait_until_ready()
         cycle = float(os.environ.get("TRADE_CYCLE_SECONDS", "3600"))
@@ -2104,21 +2280,71 @@ class Bridge(discord.Client):
                 log.exception("trades failed; retrying next cycle")
             await asyncio.sleep(cycle)
 
+    async def _announce_settled(self, skills: dict) -> None:
+        """Say out loud what the WORLD has already done.
+
+        Runs before the plan is computed, because a plan reached against a
+        stale reading would re-decide a trade the family has already been to a
+        trainer for and announce it a second time. `professions.settled` is the
+        only thing that can move a row forward and it takes this observation as
+        an argument, so nothing here can mark a trade done by believing it.
+        """
+        for done in await asyncio.to_thread(_settle_trades, skills):
+            text = (f"{done.character} has {done.skill}." if done.verb == "learn"
+                    else f"{done.character} no longer has {done.skill}.")
+            log.info("trades: settled - %s", text)
+            await asyncio.to_thread(_insert_thought, done.character, "council", text)
+
+    async def _send_trade_errand(self, plan, skills: dict) -> None:
+        """Put the outstanding plan where the worldserver can read it.
+
+        WRITTEN EVERY CYCLE, not only when the plan is new. A plan that was
+        already decided is still a plan that has not happened, and the roster
+        row it needs is as necessary the second hour as the first - more so,
+        because by then the interesting case is a worldserver that restarted
+        with the errand half applied. mod-overseer clears each column itself
+        when its verb succeeds, so re-writing is either a no-op or a repair.
+        """
+        errand = professions.to_errand(plan, skills)
+        if not errand:
+            return
+        await asyncio.to_thread(_write_trade_errand, errand)
+        log.info(
+            "trades: errand on the roster - %s learn=%s unlearn=%s "
+            "(price %s) travel=%r; traveller=%s",
+            errand.character, errand.learn_skill, errand.unlearn_skill,
+            errand.unlearn_max, errand.travel_npc,
+            professions.traveller(errand) or "nobody has to move",
+        )
+
+    async def _speak_trade_plan(self, plan, fresh: list) -> None:
+        """The family saying it, in party chat, in its own voice.
+
+        ONLY THE NEW ASSIGNMENTS SPEAK. `plan` is recomputed every cycle and
+        returns the same answer while a trade is outstanding, so speaking all
+        of it would have Og announce the same decision once an hour forever.
+        `fresh` is what `_record_trade_plan`'s INSERT IGNORE actually created.
+        """
+        fresh_names = {(a.character, a.verb, a.skill) for a in fresh}
+        for line in professions.lines(plan):
+            speaker, _, plain = line.partition(": ")
+            if not any(speaker == c for c, _, _ in fresh_names):
+                continue
+            text = await self._in_character(speaker, plain, "the family's trades")
+            await asyncio.to_thread(
+                _insert_speak,
+                relay.SpeakCommand(speaker, "party", text, "", "overseer:trades"),
+            )
+            await asyncio.to_thread(_insert_thought, speaker, "council", text)
+
     async def _trades_once(self) -> None:
         family = await asyncio.to_thread(_council_family)
         if not family:
             log.info("trades: nobody visible to plan for")
             return
 
-        # SETTLE FIRST. A plan computed against a stale reading would re-decide
-        # a trade the family has already been to a trainer for, and announce it
-        # a second time.
         skills = {m.name: dict(m.skills) for m in family}
-        for done in await asyncio.to_thread(_settle_trades, skills):
-            text = (f"{done.character} has {done.skill}." if done.verb == "learn"
-                    else f"{done.character} no longer has {done.skill}.")
-            log.info("trades: settled - %s", text)
-            await asyncio.to_thread(_insert_thought, done.character, "council", text)
+        await self._announce_settled(skills)
 
         plan = professions.plan(family)
         for note in plan.notes:
@@ -2126,6 +2352,10 @@ class Bridge(discord.Client):
         if not plan.assignments:
             log.info("trades: nothing to decide")
             return
+
+        # Before the `fresh` check below, which returns early on the common
+        # case of a plan that is unchanged and still outstanding.
+        await self._send_trade_errand(plan, skills)
 
         fresh = await asyncio.to_thread(_record_trade_plan, plan)
         if not fresh:
@@ -2139,24 +2369,13 @@ class Bridge(discord.Client):
         for assignment in fresh:
             log.info("trades: %s - %s", professions.errand(assignment),
                      assignment.reason)
+        # NOT "the errand stops at the trainer's door" any more - it does not,
+        # since infra#2757 built the transaction. What is left is that none of
+        # it is real until both images ship, which is what BLOCKERS now says.
         for blocker in professions.BLOCKERS:
-            log.warning("trades: the errand stops at the trainer's door - %s",
-                        blocker)
+            log.warning("trades: what could still stop this - %s", blocker)
 
-        # Said in party chat by the character it is about, through the same
-        # relay every other piece of world speech takes (#2829: a need has to
-        # become a request to a person). Only the NEW assignments speak.
-        fresh_names = {(a.character, a.verb, a.skill) for a in fresh}
-        for line in professions.lines(plan):
-            speaker, _, plain = line.partition(": ")
-            if not any(speaker == c for c, _, _ in fresh_names):
-                continue
-            text = await self._in_character(speaker, plain, "the family's trades")
-            await asyncio.to_thread(
-                _insert_speak,
-                relay.SpeakCommand(speaker, "party", text, "", "overseer:trades"),
-            )
-            await asyncio.to_thread(_insert_thought, speaker, "council", text)
+        await self._speak_trade_plan(plan, fresh)
 
     async def _protect_characters(self) -> None:
         """Hold the manager's own randomize bookkeeping open (infra#2656).
@@ -2187,9 +2406,17 @@ class Bridge(discord.Client):
                 # the youngest, in charge of his own father. It cannot know
                 # better - it has no idea who these characters are to each
                 # other - so the answer is written down for it here.
-                await asyncio.to_thread(
-                    _mark_party_leader, bonds.head_of_family()
-                )
+                # ...and, while a trade errand is outstanding, whoever is
+                # going to the trainer leads instead, so the family travels
+                # there together behind its one traveller (infra#2757).
+                await asyncio.to_thread(_mark_party_leader, _head_now())
+
+                # The family's trade assignment. Written every cycle rather
+                # than with the errand, because it is a PERMISSION and not an
+                # instruction: it is what stops a stale errand column doing
+                # anything, and it has to be present for characters that have
+                # no errand at all.
+                await asyncio.to_thread(_write_declared_professions)
 
                 # Which tree each of them puts talent points in. Without this
                 # the module leaves talents alone entirely, which is the safe

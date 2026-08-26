@@ -47,10 +47,16 @@ since come down (infra#2840).
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Mapping, Sequence
 
 import goals
+# The travel vocabulary, imported rather than re-spelled. `to_errand` needs
+# the exact keyword mod-overseer resolves, and tests/test_travel_npc.py
+# already compares travel.ROLES against the C++ table in both directions -
+# so importing it means this module cannot drift from the module that reads
+# what it writes.
+import travel
 
 # The skill ids are NOT restated here. goals.SKILL_IDS was verified live
 # against `character_skills` across 100+ characters and is already this
@@ -284,50 +290,47 @@ OPEN_ORDER = (
 )
 
 # What the errand still needs - and, first, what it no longer needs, because
-# the wall this module was originally written against has since come down.
+# both walls this module was written against have now come down.
 #
-# THE AIM EXISTS NOW, AND THIS MODULE USED TO SAY IT DID NOT. When professions.py
-# was written the blocker was that a bot could not be pointed at a CHOSEN NPC:
-# ChangeToWanderNpc took no argument (NewRpgInfo.h:104) while ChangeToDoQuest
-# took a target (:106), so a bot sent wandering picked its own trainer at random.
-# That asymmetry is GONE. infra#2840 added patch 0005 (an aimable
-# ChangeToWanderNpc that walks the long leg by position), the
-# overseer_roster.travel_npc column, DriveTravel() in mod-overseer, and the
-# travel vocabulary shared with Python. travel.ROLES carries
-# "profession trainer" -> UNIT_NPC_FLAG_TRAINER_PROFESSION, which is precisely
-# the aim this plan wanted. It was proven end to end on the dev world - a bot
-# walked 1,914 yards cross-zone into Ironforge and handed in a quest - and the
-# family runs that binary on the live realm.
+# THE AIM CAME DOWN IN infra#2840. When professions.py was written a bot could
+# not be pointed at a CHOSEN NPC: ChangeToWanderNpc took no argument
+# (NewRpgInfo.h:104) while ChangeToDoQuest took a target (:106), so a bot sent
+# wandering picked its own trainer. Patch 0005 made it aimable, the
+# overseer_roster.travel_npc column and DriveTravel() shipped with it, and
+# travel.ROLES carries "profession trainer". Proven end to end on dev: a bot
+# walked 1,914 yards cross-zone into Ironforge and handed in a quest.
 #
-# infra#2818's half is answered too: goals.life_strategies(aimed=True) gives an
-# aimed follower `new rpg` back, so the character that is sent is one that
-# actually runs the strategy that reads the aim.
+# THE TRANSACTION CAME DOWN IN infra#2757, WHICH IS THIS. mod-overseer's
+# TrainOnArrival buys the named trade from the trainer the character was sent
+# to, through the core's own Trainer::TeachSpell so the money is taken and the
+# free-slot rule enforced; UnlearnProfession runs the one line the client's
+# CMSG_UNLEARN_SKILL handler runs; and the four roster columns this module now
+# fills (see `to_errand`) are the road between the plan and the worldserver.
+# The three blockers this constant used to list are answered, and the answers
+# are cited in mod_overseer.cpp rather than restated here.
 #
-# SO THE LEARNING STEP IS A DELIBERATE FOLLOW-UP, NOT A BLOCKED ONE. It is out
-# of scope in this change because this change is the DECISION and that one is
-# the TRANSACTION - not because it cannot be built. What remains is one verb.
+# WHAT IS LISTED BELOW IS WHAT IS STILL TRUE. It is deliberately not empty: an
+# empty BLOCKERS would say "nothing can go wrong", and the failure this whole
+# epic is about is a feature that reports success while doing nothing.
 BLOCKERS = (
-    "WHAT infra#2840 DELIVERED IS TRAVEL, NOT TRANSACTION. A character aimed "
-    "at a profession trainer walks there and stands in front of it. It does "
-    "not train. That is the whole remaining distance between this plan and a "
-    "family that holds its trades, and it is one verb wide.",
-    "NOTHING LEARNS FROM A TRAINER TODAY. mod-overseer's TrainRoster calls "
-    "factory.InitSkills / InitClassSpells / InitAvailableSpells directly "
-    "(mod_overseer.cpp:2206-2209) with no NPC involved at all - "
-    "InitAvailableSpells walks the trainer TABLES, not a trainer. That is "
-    "infra#2782 confirmed, and it is why this module must not add a second "
-    "path of the same shape for professions.",
-    "mod-playerbots' TrainerAction - the only code that learns anything AT a "
-    "trainer - requires a trainer creature that is already SELECTED and in "
-    "interaction range: GetCreatureTarget() returns nullptr otherwise and "
-    "Execute bails immediately (TrainerAction.cpp:22-24). Being in range is "
-    "now solved; SELECTING the trainer is not. With a master set it reads the "
-    "MASTER's selection rather than the bot's (TrainerAction.cpp:75-82), and "
-    "infra#2822 gave the family a master.",
-    "AND THE ARRIVAL STILL DOES NOTHING. NewRpgWanderNpcAction interacts only "
-    "for a QUEST when it reaches an NPC (NewRpgAction.cpp:398-400) - there is "
-    "no train, no buy, no repair branch. The aim is built; the verb for what "
-    "to do on arrival is what infra#2782 is now free to build on top of it.",
+    "NONE OF IT EXISTS UNTIL THE IMAGE IS BUILT. The verbs are C++ in "
+    "mod-overseer, which compiles only on a push to main and reaches the world "
+    "only through a worldserver pin bump - about forty-five minutes. The four "
+    "roster columns travel separately, in the DB-IMPORT image, applied by the "
+    "db-upgrade initContainer (infra#2846). Until BOTH have shipped, this "
+    "module's plan is still written and unread, and every column it fills is "
+    "silently dropped by a SELECT that fails with error 1054.",
+    "SAME MAP ONLY, AND THAT IS A REFUSAL RATHER THAN A GAP. "
+    "ResolveTravelTarget will not pick a spawn on another map, because "
+    "MoveFarTo paths through PathGenerator and there is no navmesh across an "
+    "ocean. The family are all in Westfall on map 0 and every profession "
+    "trainer they need is on it, so this costs them nothing today - but a "
+    "trade whose only trainer is in Kalimdor needs a boat, and the errand will "
+    "refuse rather than walk into the sea.",
+    "ONE TRADE AT A TIME, ON PURPOSE (see OPEN_ORDER). Eight queued would be "
+    "eight things half-done. The family holds none of its assigned trades yet, "
+    "so at one per settled errand this is a sequence of journeys and not a "
+    "single switch being thrown.",
 )
 
 
@@ -638,3 +641,153 @@ def settled(assignment: Assignment, skills: Mapping[str, int]) -> bool:
     if assignment.verb == "unlearn":
         return assignment.skill not in skills
     return assignment.skill in skills
+
+
+# --------------------------------------------------------------- the errand --
+#
+# TURNING A DECISION INTO SOMETHING THE WORLDSERVER CAN SEE.
+#
+# Everything above this line decides. Nothing above it acts, and that is the
+# rule the module was built around. What was missing was not a decision, it was
+# a ROAD: `overseer_trade` is a Python table and mod-overseer reads
+# `overseer_roster`, so the plan sat there, correct and unread, for two days.
+#
+# The functions below say what the roster row should CONTAIN for a given plan.
+# They still act on nothing - they return values, the bridge writes them, and
+# the worldserver is what actually visits a trainer. `settled` remains the only
+# thing that can move an assignment forward, and it still takes the observation
+# as an argument.
+
+
+@dataclass(frozen=True)
+class Errand:
+    """The `overseer_roster` columns one character's outstanding plan becomes.
+
+    ONE CHARACTER, because `plan()` opens one trade at a time and both of its
+    assignments - the unlearn that makes room and the learn that fills it - are
+    for the same person. A shape that could carry two people would be a shape
+    that invited two errands at once, which OPEN_ORDER exists to prevent.
+
+    `unlearn_max` IS THE PRICE, and it is the reason this is a dataclass rather
+    than a dict. It is the observed value of the skill being destroyed at the
+    moment the plan was made, and mod-overseer refuses the unlearn if the live
+    value is above it. So the request carries what the requester believes it
+    costs, and a stale belief produces a refusal instead of a surprise.
+    """
+
+    character: str
+    learn_skill: int = 0
+    unlearn_skill: int = 0
+    unlearn_max: int = 0
+    # The travel role, and it is READ FROM travel.ROLES rather than spelled
+    # here. A third spelling of "profession trainer" is a third thing to get
+    # wrong, and the one place this string has to be right is the one place a
+    # test already compares it against the C++ (tests/test_travel_npc.py).
+    travel_npc: str = ""
+
+
+# Only a LEARN needs a journey. Unlearning is a spellbook action - the client
+# sends CMSG_UNLEARN_SKILL and no NPC is involved - so an unlearn-only errand
+# moves nobody, and pretending it did would send the family across a zone to
+# watch somebody forget something.
+# Looked up rather than merely spelled, so a rename in travel.ROLES is an
+# ImportError-shaped failure at startup instead of an errand that resolves to
+# nothing six hours later.
+TRAINER_ROLE = next(role for role in travel.ROLES if role == "profession trainer")
+
+
+def wanted_ids(name: str) -> str:
+    """This character's assigned primaries as the roster column holds them.
+
+    Skill ids and not words, and the reasoning is in the migration: both ends
+    already hold these numbers - goals.SKILL_IDS here, SkillLineStore and
+    `character_skills`.skill there - so a word would be a THIRD spelling of a
+    fact that already exists twice, and the only thing a third spelling can add
+    is a way to disagree. The prose explaining each choice stays in ROSTER,
+    where it can be read; it has no place in a VARCHAR.
+
+    Sorted, so the column does not churn between two identical answers.
+    """
+    return ",".join(str(i) for i in sorted(skill_id(s) for s in assigned(name)))
+
+
+def to_errand(trade_plan: TradePlan, skills: Mapping[str, Mapping[str, int]]):
+    """What the roster should say, for the one character this plan is about.
+
+    Returns None when there is nothing to ask for - an empty plan, or one whose
+    assignments are all notes. `skills` is the same observation `settled` takes
+    and for the same reason: the price of an unlearn is a fact about the world,
+    and this module must not be able to invent one.
+
+    BOTH VERBS ARE WRITTEN AT ONCE, and the ordering is left to the world. It
+    would be tidier to send the unlearn, wait, then send the learn - and it
+    would also be a state machine in this process, with a memory, that has to
+    survive a restart. It does not need to be: mod-overseer's learn refuses
+    while both primary slots are full and says so, its unlearn runs on its own
+    poll, and the character simply stands at the trainer for the thirty seconds
+    in between. The world already sequences this correctly, so the plan does
+    not have to.
+    """
+    if not trade_plan.assignments:
+        return None
+
+    character = trade_plan.assignments[0].character
+    errand = Errand(character=character)
+    for assignment in trade_plan.assignments:
+        if assignment.character != character:
+            # `plan()` guarantees this cannot happen; said out loud rather than
+            # silently dropped, because a second character appearing here means
+            # the one-trade-at-a-time rule has broken and the roster would be
+            # given half an errand.
+            raise ValueError(
+                "a plan covering %s and %s cannot become one errand"
+                % (character, assignment.character)
+            )
+        if assignment.verb == "unlearn":
+            errand = replace(
+                errand,
+                unlearn_skill=assignment.skill_id,
+                # The observed value, NOT assignment.cost. They agree today,
+                # and the one that has to be right is the one read from the
+                # world - a cost carried through a dataclass is a belief, and
+                # this is the number a refusal will be measured against.
+                unlearn_max=int(skills.get(character, {}).get(assignment.skill, 0)),
+            )
+        else:
+            errand = replace(
+                errand,
+                learn_skill=assignment.skill_id,
+                travel_npc=TRAINER_ROLE,
+            )
+    return errand
+
+
+def traveller(errand) -> str:
+    """Who must become the family's one traveller for this errand, or ''.
+
+    THIS IS THE ANSWER TO THE BLOCKER THAT LOOKED UNANSWERABLE, and it is worth
+    stating plainly because the obvious fix is the wrong one. `travel_npc` is
+    the only way to send a character to an NPC, and mod-overseer refuses to
+    send anyone who does not carry `new rpg`. The family carry `new rpg` on the
+    LEADER ALONE, deliberately: it acts at relevance 3.0-11.0 against follow's
+    1.0, so a follower given both wanders off every tick, which is the 937-yard
+    scatter of infra#2812. So the errand column is unusable for exactly the
+    characters that need it.
+
+    The obvious fix is to give the follower `new rpg` for the duration. That is
+    the scatter, re-run, with a reason attached.
+
+    The fix here changes WHO TRAVELS instead of HOW MANY TRAVEL. A character
+    with an errand becomes the leader, and the other four follow it - through
+    machinery that already exists and is not touched: the `lead` column,
+    KeepRosterGrouped promoting it, KeepRosterFollowing re-pointing the rest.
+    The invariant survives exactly as it was: one character carries `new rpg`,
+    and it is the group leader. The family stays together and goes to the
+    trainer, which is what "the party must stay together" actually asks for.
+
+    An unlearn-only errand returns '' - nobody has to go anywhere, so nobody
+    should be made to lead.
+    """
+    if not errand or not errand.travel_npc:
+        return ""
+    return errand.character

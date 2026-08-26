@@ -572,28 +572,143 @@ class NoMagicTest(unittest.TestCase):
         self.assertTrue(professions.settled(assignment, {"herbalism": 17}))
 
     def test_the_blockers_are_stated_rather_than_worked_around(self):
-        """The honest half of this change. The family still cannot TRANSACT
-        with a trainer, and the module says so in words with issue numbers on
-        them instead of reaching for the shortcut."""
+        """The honest half of this change, and it must never become empty.
+
+        BLOCKERS used to list the transaction: the family could reach a trainer
+        and not buy anything from it. #2757 built that verb, so those entries
+        are gone - but deleting the constant, or emptying it, would say
+        "nothing can go wrong", and a feature that reports success while doing
+        nothing is the exact failure this whole epic is about.
+
+        What must remain is the fact that none of it is real until it SHIPS.
+        The verbs are C++ compiled only on a push to main, and the roster
+        columns travel in a different image on a different pin (infra#2846), so
+        a decision reached here can still be silently dropped by a SELECT that
+        fails with error 1054.
+        """
         blockers = professions.BLOCKERS
         self.assertTrue(blockers)
-        self.assertTrue(any("TrainerAction" in b for b in blockers))
-        self.assertTrue(any("2782" in b for b in blockers))
+        self.assertTrue(any("1054" in b for b in blockers),
+                        "the undeployed-schema failure must stay named")
+        self.assertTrue(any("2846" in b for b in blockers))
 
-    def test_what_remains_is_the_transaction_and_not_the_journey(self):
-        """The precise fact, because getting it wrong sends the next change
-        after the wrong thing.
+    def test_the_transaction_is_no_longer_claimed_to_be_missing(self):
+        """THE SAME REGRESSION AS test_the_aim_is_no_longer_claimed_to_be_missing,
+        one step further along.
 
-        #2840 delivered TRAVEL: a character can be aimed at a named NPC and
-        will walk there. It did NOT deliver the transaction - TrainerAction
-        still needs the trainer selected (TrainerAction.cpp:22-24) and arrival
-        still interacts only for a quest (NewRpgAction.cpp:398-400). The one
-        verb left is what BLOCKERS must be about.
+        professions.py asserted for weeks that nothing could point a bot at a
+        chosen NPC; #2840 made that false and the wording was removed. It then
+        asserted that arriving could not TRAIN; #2757 made that false too. A
+        module that keeps saying either sends the next reader off to rebuild
+        something that already shipped - which is the same class of harm as a
+        module that grants a skill: a confident false statement about the tree.
+
+        The citations banned below are the ones that were true of the OLD
+        world. TrainerAction really does read the master's selection, and
+        arrival really does only interact for a quest - both are still true of
+        UPSTREAM, and both stopped being blockers the moment mod-overseer went
+        underneath them to the core's own Trainer object.
         """
         blob = "\n".join(professions.BLOCKERS)
-        self.assertIn("TRAVEL, NOT TRANSACTION", blob)
-        self.assertIn("TrainerAction.cpp:22-24", blob)
-        self.assertIn("NewRpgAction.cpp:398-400", blob)
+        for stale in ("TRAVEL, NOT TRANSACTION", "TrainerAction.cpp:22-24",
+                      "NewRpgAction.cpp:398-400", "NOTHING LEARNS FROM A TRAINER",
+                      "it is one verb wide"):
+            self.assertNotIn(stale, blob, stale)
+
+    def test_a_plan_becomes_roster_columns_and_nothing_else(self):
+        """The road that was missing, and the shape it may take.
+
+        `overseer_trade` is a Python table; mod-overseer reads
+        `overseer_roster`. That gap is why two correct rows sat unread for two
+        days. `to_errand` is the crossing - and it is still only a VALUE, not
+        an action: this module has no database and cannot write anything.
+        """
+        family = [
+            professions.Member("Og", "mage", {"alchemy": 1, "herbalism": 15}),
+            professions.Member("Ugga", "priest", {"alchemy": 1, "herbalism": 47}),
+            professions.Member("Grug", "warrior", {"alchemy": 1, "herbalism": 41}),
+            professions.Member("Bork", "rogue", {"alchemy": 1, "herbalism": 15}),
+            professions.Member("Grog", "paladin", {"alchemy": 1, "herbalism": 33}),
+        ]
+        plan = professions.plan(family)
+        skills = {m.name: dict(m.skills) for m in family}
+        errand = professions.to_errand(plan, skills)
+
+        # The measured family's actual next step: Og drops an alchemy he has
+        # never used and buys the tailoring the bags need.
+        self.assertEqual(errand.character, "Og")
+        self.assertEqual(errand.learn_skill, professions.skill_id("tailoring"))
+        self.assertEqual(errand.unlearn_skill, professions.skill_id("alchemy"))
+        self.assertEqual(errand.travel_npc, "profession trainer")
+
+        # THE PRICE IS READ FROM THE OBSERVATION, never invented. Og's alchemy
+        # is 1/75, so that is what the request agrees to destroy - and
+        # mod-overseer refuses if the live value is above it.
+        self.assertEqual(errand.unlearn_max, 1)
+
+    def test_the_price_of_an_unlearn_tracks_what_was_observed(self):
+        """A stale price must not silently become a licence to destroy more.
+
+        The whole point of `unlearn_max` is that it is the requester's BELIEF
+        about the cost, checked against the world at the moment of the act. So
+        it has to come from the observation handed in, not from the plan.
+        """
+        family = [
+            professions.Member("Og", "mage", {"alchemy": 30, "herbalism": 15}),
+            professions.Member("Ugga", "priest", {"alchemy": 1, "herbalism": 47}),
+            professions.Member("Grug", "warrior", {"alchemy": 1, "herbalism": 41}),
+            professions.Member("Bork", "rogue", {"alchemy": 1, "herbalism": 15}),
+            professions.Member("Grog", "paladin", {"alchemy": 1, "herbalism": 33}),
+        ]
+        plan = professions.plan(family)
+        skills = {m.name: dict(m.skills) for m in family}
+        errand = professions.to_errand(plan, skills)
+
+        # Whatever the plan chose to drop, the price is that skill's OBSERVED
+        # value - not a constant, not Assignment.cost, and not the value it had
+        # when the row was first written. Asserted against the observation
+        # rather than against a hard-coded 30, because which skill `expendable`
+        # picks is the plan's business and this test is about the price.
+        dropped = next(a for a in plan.assignments if a.verb == "unlearn")
+        self.assertEqual(errand.unlearn_skill, dropped.skill_id)
+        self.assertEqual(errand.unlearn_max, skills["Og"][dropped.skill])
+        # And it moved with the world: the same family with everything at 1
+        # prices the same drop at 1.
+        self.assertNotEqual(errand.unlearn_max, 0)
+
+    def test_an_errand_moves_the_leadership_rather_than_the_strategy(self):
+        """The answer to the blocker that looked unanswerable, pinned down.
+
+        Only `new rpg` walks a character to an NPC and the family carry it on
+        the LEADER ALONE - a follower given both it and `follow` wanders off
+        every tick, which is the 937-yard scatter of infra#2812. So an errand
+        cannot be run by handing a follower the travelling strategy. It is run
+        by making the character with the errand BE the leader, so the other
+        four follow it to the trainer and the party stays together.
+
+        An unlearn needs no journey - it is a spellbook action - so it moves
+        nobody, and `traveller` says so.
+        """
+        walk = professions.Errand("Og", learn_skill=197, travel_npc="profession trainer")
+        self.assertEqual(professions.traveller(walk), "Og")
+
+        no_walk = professions.Errand("Og", unlearn_skill=171, unlearn_max=1)
+        self.assertEqual(professions.traveller(no_walk), "")
+        self.assertEqual(professions.traveller(None), "")
+
+    def test_the_declared_end_state_is_written_as_ids(self):
+        """The roster column is the module's only permission, and it carries
+        numbers because both ends already hold these numbers. A word here would
+        be a third spelling of a fact that exists twice, and the only thing a
+        third spelling can add is a way to disagree."""
+        self.assertEqual(
+            professions.wanted_ids("Og"),
+            "%d,%d" % tuple(sorted((professions.skill_id("tailoring"),
+                                    professions.skill_id("enchanting")))),
+        )
+        # A character nobody has decided about declares nothing - and an empty
+        # column is what makes mod-overseer refuse to touch it at all.
+        self.assertEqual(professions.wanted_ids("Nobody"), "")
 
     def test_the_aim_is_no_longer_claimed_to_be_missing(self):
         """THE REGRESSION THIS FILE EXISTS TO CATCH TWICE OVER.
