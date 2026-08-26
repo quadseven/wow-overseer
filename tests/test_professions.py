@@ -110,6 +110,35 @@ def _walk(family, limit=40):
     raise AssertionError("the plan never finished - it is looping")
 
 
+
+def _strip_comments(text: str) -> str:
+    """The same source with // comments removed, so a guard cannot be tripped
+    by prose that explains the very thing it forbids."""
+    return "\n".join(re.sub(r"//.*$", "", line) for line in text.splitlines())
+
+
+def _module_function(signature: str) -> str:
+    """The whole of one member function of mod_overseer.cpp, braces balanced.
+
+    Same shape as test_schema_degrade._function and for the same reason: the
+    C++ compiles only on a push to `main`, never on a PR, so a contract over
+    its source text is the only check that runs before a forty-five minute
+    build finds out.
+    """
+    source = (pathlib.Path(__file__).resolve().parents[3]
+              / "docker/azerothcore-playerbots/mod-overseer/src/mod_overseer.cpp"
+              ).read_text(encoding="utf-8")
+    start = source.index(signature)
+    depth = 0
+    for i in range(source.index("{", start), len(source)):
+        if source[i] == "{":
+            depth += 1
+        elif source[i] == "}":
+            depth -= 1
+            if depth == 0:
+                return source[start:i + 1]
+    raise AssertionError("%s has no closing brace" % signature)
+
 class SkillFactsTest(unittest.TestCase):
     """The tables, and their agreement with the ones already in the tree."""
 
@@ -607,12 +636,100 @@ class UpstreamWallTest(unittest.TestCase):
         source = self.MODULE.read_text(encoding="utf-8")
         self.assertIn("factory.InitSkills();", source)
 
-    def test_the_module_still_grants_no_profession_of_its_own(self):
-        """mod-overseer must not grow a skill-granting path either. The C++ is
-        the easier place to cheat, because nothing here can see it run."""
+    def test_the_module_grants_no_profession_without_a_trainer(self):
+        """A profession may only ever arrive by being bought from a trainer.
+
+        THIS TEST USED TO SAY `SetSkill(` MUST NOT APPEAR AT ALL, and that was
+        the right guard for as long as the module could not train. It is the
+        wrong guard now, and keeping it would have blocked the fix rather than
+        the cheat: `SetSkill(id, 0, 0, 0)` is how a profession is GIVEN UP -
+        it is the one line WorldSession::HandleUnlearnSkillOpcode runs - and it
+        cannot grant anything to anybody.
+
+        What the old test was really protecting is #2782: a skill must not
+        appear in `character_skills` without a trainer having been visited and
+        paid. That rule is unchanged and is now stated directly. The three ways
+        a module could break it are all named below, because a blanket ban on a
+        function name is only ever a proxy for the rule it stands in for.
+        """
         source = self.MODULE.read_text(encoding="utf-8")
-        for needle in ("SetSkill(", "InitTradeSkills", "GetProfessionStarterSpell"):
-            self.assertNotIn(needle, source, needle)
+        # Comments are stripped for the refusals below. Searching the raw text
+        # is not a reachability test: this file EXPLAINS both cheats at length,
+        # naming InitTradeSkills and learnSpell to say why they are not used,
+        # and a guard that a correct explanation can trip is a guard nobody
+        # will keep. Same reason test_schema_degrade._code exists.
+        code = _strip_comments(source)
+
+        # 1. NO SECOND COPY OF THE TEACHING LOOP. Trainer::TeachSpell is where
+        #    the money is taken and the free-slot rule is enforced. Going round
+        #    it - the way PlayerbotFactory and TrainerAction both do, with a
+        #    bare learnSpell or a CastSpell of the trainer spell - is exactly
+        #    how a profession appears without a trainer being paid.
+        self.assertIn("trainer->TeachSpell(npc, bot, spellId);", source)
+        for cheat in ("bot->learnSpell(", "InitTradeSkills"):
+            self.assertNotIn(cheat, code, cheat)
+
+        # 2. THE ONLY SetSkill IS THE ZEROING ONE. A SetSkill with a non-zero
+        #    value would be a granted skill wearing an unlearn's clothes.
+        self.assertEqual(
+            ["bot->SetSkill(static_cast<uint16>(skill), 0, 0, 0);"],
+            [line.strip() for line in code.splitlines()
+             if "->SetSkill(" in line and not line.lstrip().startswith("//")])
+
+        # 3. THE DECLARED END STATE IS THE ONLY PERMISSION. Both verbs consult
+        #    it, in opposite directions: nothing outside `wanted` is learned,
+        #    and nothing inside it is ever unlearned.
+        learn = _module_function("bool TrainOnArrival(")
+        unlearn = _module_function("void UnlearnProfession(")
+        self.assertIn("if (!plan.wanted.count(skill))", learn)
+        self.assertIn("if (plan.wanted.count(skill))", unlearn)
+
+    def test_the_level_up_sweep_cannot_take_a_profession(self):
+        """The fourth blocker, and the one that would have made the rest moot.
+
+        PlayerbotFactory::InitAvailableSpells walks every Tradeskill trainer
+        TEMPLATE in the world and learns everything CanTeachSpell says yes to,
+        with no NPC and no money. CanTeachSpell refuses a primary profession's
+        first rank on exactly one condition - no free primary profession point.
+        So for as long as a slot is open, the level-up sweep takes a profession
+        out of thin air, and it is where the alchemy all five hold at 1/75 came
+        from: the same one for everybody, because it was an iteration order and
+        never a roll.
+
+        Without the guard, freeing Og's slot for tailoring would have handed it
+        straight back to the sweep within sixty seconds, forever.
+        """
+        train = _module_function("void TrainRoster(")
+        shut = train.index("bot->SetFreePrimaryProfessions(0);")
+        sweep = train.index("factory.InitAvailableSpells();")
+        restore = train.index(
+            "bot->SetFreePrimaryProfessions(static_cast<uint16>(freeProfessionSlots));")
+        self.assertLess(shut, sweep, "the slots must be shut BEFORE the sweep")
+        self.assertLess(sweep, restore, "and reopened after it")
+
+    def test_an_unlearn_refuses_a_cost_nobody_agreed_to(self):
+        """Dropping a profession destroys skill progress, so the request has to
+        carry the price. `unlearn_max` is the most the requester agreed to
+        destroy; a live value above it is a refusal that LEAVES THE REQUEST
+        STANDING, so a stale requester can answer by raising the price rather
+        than discovering the loss afterwards."""
+        unlearn = _module_function("void UnlearnProfession(")
+        self.assertIn("if (value > plan.unlearnMax)", unlearn)
+        # Refused, not cleared: the three refusals that can never become right
+        # clear the request; this one is a disagreement and must survive.
+        refusal = unlearn[unlearn.index("if (value > plan.unlearnMax)"):]
+        self.assertNotIn("ClearUnlearnRequest", refusal[:refusal.index("return;")])
+
+    def test_a_trainer_errand_is_narrowed_to_a_trainer_that_teaches_it(self):
+        """UNIT_NPC_FLAG_TRAINER_PROFESSION is worn by cooking instructors and
+        fishing trainers too, so the nearest one to Elwynn is very unlikely to
+        be a tailor. Resolving without narrowing would walk a mage confidently
+        to a cook, log an arrival, and teach him nothing."""
+        resolve = _module_function("bool ResolveTravelTarget(")
+        self.assertIn("uint32 wantSkill = 0", resolve)
+        self.assertIn(
+            "if (narrowToSkill && !TrainerStartedSkills(spawn.entry).count(wantSkill))",
+            resolve)
 
 
 class CouncilTest(unittest.TestCase):

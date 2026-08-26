@@ -452,7 +452,11 @@ class TheErrandIsBounded(unittest.TestCase):
 
     def test_a_target_that_does_not_exist_here_releases_rather_than_pins(self):
         code = _code(_drive())
-        self.assertIn("!ResolveTravelTarget(bot, target, entry, pos)", code)
+        # The call carries `wantSkill` since infra#2757, which narrows a
+        # trainer role to trainers that can teach the skill being learned.
+        # The behaviour this test is about is unchanged: a target that
+        # resolves to nothing releases the errand instead of pinning it.
+        self.assertIn("!ResolveTravelTarget(bot, target, entry, pos, wantSkill)", code)
 
     def test_the_clear_escapes_the_name(self):
         """The name came out of a table a person edits by hand."""
@@ -628,7 +632,7 @@ class TheResolvedSpawnIsPinnedForTheLifeOfTheErrand(unittest.TestCase):
     def test_a_pinned_errand_does_not_resolve_again(self):
         code = _code(_drive())
         self.assertLess(code.index("state.pinned"),
-                        code.index("!ResolveTravelTarget(bot, target, entry, pos)"))
+                        code.index("!ResolveTravelTarget(bot, target, entry, pos, wantSkill)"))
 
 
 class TheMigrationMatchesWhatTheModuleReads(unittest.TestCase):
