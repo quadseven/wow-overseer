@@ -50,6 +50,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field, replace
 from typing import Mapping, Sequence
 
+import cast
 import goals
 # The travel vocabulary, imported rather than re-spelled. `to_errand` needs
 # the exact keyword mod-overseer resolves, and tests/test_travel_npc.py
@@ -202,7 +203,10 @@ class _Trade:
 # Keyed by NAME rather than by class, because these are five named people and
 # not five slots; `suits_wearer` is what keeps the pairing answerable to the
 # class anyway.
-ROSTER = {
+# As the LIVE world names them. `ROSTER` below is this table put through the
+# rename for whichever world this process serves (cast.py) - identity for live,
+# so for the live world this IS the table.
+_LIVE_ROSTER = {
     "Grug": _Trade(
         primaries=("mining", "blacksmithing"),
         why=(
@@ -255,6 +259,25 @@ ROSTER = {
         ),
     ),
 }
+
+def roster_for(which: str | None = None) -> dict:
+    """The trade table as `which` world spells it. Live is the identity.
+
+    The REASONS are renamed too. Every row carries a sentence naming other
+    members - "Inscription runs on Ugga's herbs and jewelcrafting on Grug's
+    ore" - and those sentences are read out by the council and shown to a
+    person deciding whether the plan is sane. A dev plan justified by the names
+    of characters in the other world is a plan nobody can check.
+    """
+    return {
+        cast.rename(name, which): replace(trade, why=cast.retext(trade.why, which))
+        for name, trade in _LIVE_ROSTER.items()
+    }
+
+
+# What this process actually serves; selected once, at import, from the
+# environment. Unset means live, which is every process that exists today.
+ROSTER = roster_for()
 
 # Engineering is the one primary nobody is assigned, ON PURPOSE. Evan wants the
 # guild (#2831) to cover the last profession, so leaving it open is a decision

@@ -46,6 +46,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, replace
 
+import cast
 import kin
 
 # Og answering Ugga this many times is where Grug stops being reasonable.
@@ -100,7 +101,10 @@ class Bond:
     persona: str = ""
 
 
-FAMILY: dict[str, Bond] = {
+# THE FAMILY, AS THE LIVE WORLD KNOWS IT. `FAMILY` below is this table put
+# through the rename for whichever world this process serves (cast.py); for the
+# live world that is the identity, and this IS the table.
+_LIVE_FAMILY: dict[str, Bond] = {
     "Grug": Bond(
         role="father", blood=True, seniority=100,
         race="human", char_class="warrior", gender="male",
@@ -184,7 +188,7 @@ FAMILY: dict[str, Bond] = {
 #
 # It is never stated as fact to the model. Grug SUSPECTS; that is all he has,
 # and a suspicion he cannot prove is a better engine than a confirmed affair.
-SUSPICION = {
+_LIVE_SUSPICION = {
     "who": "Grug",
     "about": "Ugga",
     "with": "Og",
@@ -194,6 +198,41 @@ SUSPICION = {
         "him. He never accuses anyone."
     ),
 }
+
+def family_for(which: str | None = None) -> dict[str, Bond]:
+    """The family table as `which` world spells it. Live is the identity.
+
+    The PROSE is renamed as well as the keys. A persona that still said
+    "Watches Og around Ugga" under a dev name would be a biography of somebody
+    who is not in that world - and would hand live family names to the model
+    that voices the dev characters, which is the leak cast.py exists to stop.
+    """
+    return {
+        cast.rename(name, which): replace(
+            bond, persona=cast.retext(bond.persona, which)
+        )
+        for name, bond in _LIVE_FAMILY.items()
+    }
+
+
+def suspicion_for(which: str | None = None) -> dict:
+    """The thing nobody says out loud, in `which` world's names.
+
+    Carried into dev rather than dropped, for the same reason the roles are:
+    it is a live code path. `decide()` reads it to know who the father counts,
+    and a dev family without it would take a branch the live family never
+    takes - which is a validation world validating something else.
+    """
+    return {
+        key: cast.rename(value, which) if key != "note" else cast.retext(value, which)
+        for key, value in _LIVE_SUSPICION.items()
+    }
+
+
+# What this process actually serves. Selected once, at import, from the
+# environment - unset means live, which is every process that exists today.
+FAMILY: dict[str, Bond] = family_for()
+SUSPICION = suspicion_for()
 
 _BY_LOWER = {name.lower(): name for name in FAMILY}
 
@@ -308,7 +347,11 @@ def decide(
     # help his family" outranks a tally.
     if bond.role == "father":
         if caller.role == "mother":
-            rival = _count(history, "Og", them)
+            # SUSPICION, not a literal "Og". The rival is the person the
+            # father counts, which is a fact the family table already states
+            # once - and a second spelling of it here is a spelling that stops
+            # matching the moment the family is renamed for another world.
+            rival = _count(history, SUSPICION["with"], them)
             if rival >= JEALOUSY_THRESHOLD:
                 return Verdict(
                     False, f"Og has answered {them} {rival} times. Let Og go."
