@@ -116,6 +116,27 @@ OUTCOME_RECENT_SECONDS = 120
 # feature.
 MAX_CHANNELS = 2
 
+# HOW LONG "STARTING" HONESTLY TAKES, measured rather than hoped for: the
+# Windows agent needs 45-60 seconds to launch a client, type a login, reach
+# the world and PROVE the selfbot attached (infra#2663, and #2781 for why that
+# proof is not optional). The page shows this number while it waits, because a
+# progress indicator with no stated duration is indistinguishable from a hang
+# - and this one is long enough that people close the tab first.
+STARTUP_SECONDS = 60
+
+# A row still saying 'requested' after this long has not been PICKED UP. The
+# agent polls every 5 seconds and writes 'starting' the moment it takes a row,
+# so six missed ticks is not a slow login - it is nothing running on the box.
+#
+# THIS IS A DISTINCT FAILURE AND MUST READ AS ONE. "waiting for a client" and
+# "nothing is listening" look identical on screen and are fixed in completely
+# different places, and the second is the state the box is in whenever the
+# agent has not been started - which is often, because it is started by hand.
+# Left unsaid, a viewer waits forever on a machine that was never going to
+# answer, and concludes the feature is broken rather than switched off.
+UNCLAIMED_AFTER_SECONDS = 30
+
+
 
 # HOW A VIEWER ACTUALLY SEES IT, and the two are not interchangeable.
 #
@@ -291,3 +312,33 @@ def stream_migrations(existing_columns) -> list:
     # the trap above, and a new state word should never need a migration to
     # be sayable. The vocabulary lives in STATES, where a test can read it.
     return [sql for col, sql in wanted if col not in have]
+
+
+def waited_seconds(row, now_seconds: float):
+    """How long this request has been going, or None if it cannot be known.
+
+    From `requested_at`, not from `last_seen`: the heartbeat rewrites last_seen
+    every ten seconds, so a clock derived from it would read "3 seconds"
+    forever and tell a waiting viewer nothing about the wait.
+
+    None rather than 0 for a row with no clock, for the same reason is_stale
+    refuses to guess: an invented elapsed time next to a stated 45-60s budget
+    is a lie with a number on it, and a viewer would believe it.
+    """
+    started = row.get("requested_seconds")
+    if started is None:
+        return None
+    return max(0, int(now_seconds - float(started)))
+
+
+def looks_unclaimed(row, now_seconds: float) -> bool:
+    """Is this request sitting in a queue that nobody is reading?
+
+    ONLY EVER TRUE OF 'requested'. Once the agent writes 'starting' it holds
+    the row and is spending its 45-60 seconds on it, and calling that
+    unclaimed would accuse a working machine of being switched off, mid-login.
+    """
+    if row.get("state") != "requested":
+        return False
+    waited = waited_seconds(row, now_seconds)
+    return waited is not None and waited > UNCLAIMED_AFTER_SECONDS

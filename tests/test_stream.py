@@ -500,3 +500,194 @@ class AShotIsNotAWatch(unittest.TestCase):
     def test_the_shot_leash_is_longer_than_the_watch_one(self):
         self.assertGreater(stream.SHOT_TIMEOUT_SECONDS,
                            stream.STALE_AFTER_SECONDS)
+
+
+class TheWaitIsStatedOutLoud(unittest.TestCase):
+    """45-60 seconds is a long time to look at a blank box.
+
+    The agent launches a client, types a login, waits for the world and then
+    PROVES the selfbot attached before it will say 'live'. That is a minute,
+    and a minute of unexplained spinner is how a working feature gets reported
+    as broken. So the wait is measured, and the budget is stated.
+    """
+
+    def row(self, **over):
+        r = {"character": "Ugga", "mode": "pov", "state": "requested",
+             "requested_seconds": 1000.0, "last_seen_seconds": 1000.0}
+        r.update(over)
+        return r
+
+    def test_the_wait_is_measured_from_when_it_was_asked_for(self):
+        self.assertEqual(12, stream.waited_seconds(self.row(), 1012.0))
+
+    def test_the_heartbeat_does_not_reset_the_wait(self):
+        """last_seen is rewritten every ten seconds. A clock taken from it
+        would read "3 seconds" for the whole minute and say nothing at all."""
+        self.assertEqual(
+            40, stream.waited_seconds(self.row(last_seen_seconds=1039.0), 1040.0))
+
+    def test_a_row_with_no_clock_admits_it(self):
+        """None, not 0: an invented number beside a stated 45-60s budget is a
+        lie a viewer would believe."""
+        self.assertIsNone(
+            stream.waited_seconds(self.row(requested_seconds=None), 1040.0))
+
+    def test_a_clock_never_runs_backwards(self):
+        self.assertEqual(0, stream.waited_seconds(self.row(), 990.0))
+
+    def test_the_stated_budget_covers_a_real_login(self):
+        """Pinned to real seconds rather than to the constant - the lesson
+        from the staleness class, that a test derived from the value it checks
+        cannot check it. WoW measured at 45-60s on this hardware."""
+        self.assertGreaterEqual(stream.STARTUP_SECONDS, 45)
+        self.assertLessEqual(stream.STARTUP_SECONDS, 120)
+
+
+class NobodyIsListeningIsItsOwnFailure(unittest.TestCase):
+    """The agent is started by hand, so "not running" is a normal state of the
+    world - and on screen it is indistinguishable from a slow login. One waits
+    a minute and works; the other waits forever. They must not share a
+    sentence, because they are fixed in completely different places.
+    """
+
+    def row(self, **over):
+        r = {"character": "Ugga", "mode": "pov", "state": "requested",
+             "requested_seconds": 1000.0}
+        r.update(over)
+        return r
+
+    def test_a_fresh_request_is_not_yet_an_accusation(self):
+        self.assertFalse(stream.looks_unclaimed(self.row(), 1005.0))
+
+    def test_a_request_nothing_ever_took_is_called_out(self):
+        self.assertTrue(stream.looks_unclaimed(self.row(), 1100.0))
+
+    def test_a_client_genuinely_starting_is_never_called_unclaimed(self):
+        """The agent writes 'starting' the moment it takes a row, then spends
+        its 45-60 seconds. Calling that unclaimed accuses a working machine of
+        being switched off, mid-login."""
+        self.assertFalse(stream.looks_unclaimed(
+            self.row(state="starting"), 1100.0))
+        self.assertFalse(stream.looks_unclaimed(
+            self.row(state="live"), 1100.0))
+
+    def test_a_row_with_no_clock_is_not_accused(self):
+        self.assertFalse(stream.looks_unclaimed(
+            self.row(requested_seconds=None), 1100.0))
+
+    def test_the_agent_gets_more_than_a_couple_of_poll_ticks(self):
+        """The agent polls every 5s. Anything under that is a race against a
+        machine that is working."""
+        self.assertGreaterEqual(stream.UNCLAIMED_AFTER_SECONDS, 15)
+        self.assertLess(stream.UNCLAIMED_AFTER_SECONDS,
+                        stream.STARTUP_SECONDS,
+                        "an unclaimed row must be named before the login "
+                        "budget runs out, or the two failures still blur")
+
+
+class ThePlayer(unittest.TestCase):
+    """infra#2663's last piece: the video renders IN THE PANEL.
+
+    Everything upstream of this produces a URL a browser can open. Until now
+    the page printed that URL and asked a person to copy it, which is not
+    "click a character and watch them play".
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        import pathlib
+        here = pathlib.Path(__file__).resolve().parent.parent
+        cls.page = (here / "index.html").read_text()
+        cls.server = (here / "map_server.py").read_text()
+
+    def test_there_is_a_video_element_for_the_stream(self):
+        self.assertIn('id="pwvid"', self.page)
+
+    def test_the_player_autoplays_muted_and_inline(self):
+        """A browser refuses to autoplay audible video, and refuses to play
+        inline on iOS without playsinline. Both failures look like a black
+        box, which is the one outcome this feature cannot survive."""
+        tag = self.page[self.page.index('id="pwvid"'):]
+        tag = tag[:tag.index(">")]
+        for attr in ("muted", "autoplay", "playsinline", "controls"):
+            self.assertIn(attr, tag)
+
+    def test_the_attribute_alone_is_not_trusted_to_start_it(self):
+        """MEASURED, not reasoned about: in a real browser at the real
+        hostname the element reported connected, 1280x720, readyState 4 - and
+        paused, with currentTime stuck at 0. A stream handed to an element
+        after load does not reliably trip the attribute, and the tab is
+        commonly unfocused because the wait is a minute long. The symptom is
+        the worst one available: a frozen frame that looks like a live game.
+        """
+        player = self.page[self.page.index("async function startPlayer"):]
+        player = player[:player.index("function stopPlayer")]
+        self.assertIn(".play()", player)
+        self.assertIn("if (!pwvid.paused) return;", player,
+                      "a rejected play() is not always a refusal - an "
+                      "interrupted promise rejects while the video plays on, "
+                      "and the first live run printed 'would not start it' "
+                      "underneath Ugga running through a forest at 30fps")
+        self.assertIn("press play", player,
+                      "a refused play() must tell the person what to do, not "
+                      "leave them looking at a still picture")
+
+    def test_a_live_embed_starts_the_player_rather_than_printing_a_url(self):
+        watch = self.page[self.page.index("async function refreshWatch"):]
+        watch = watch[:watch.index("// --- their own screen")]
+        self.assertIn("startPlayer(", watch)
+        self.assertNotIn('"live - open "', watch,
+                         "printing the URL for a person to copy is exactly "
+                         "what this piece replaces")
+
+    def test_the_whep_endpoint_is_derived_from_the_detail_url(self):
+        """`detail` is the URL the agent wrote. WHEP hangs off it; inventing a
+        hostname here would break the day the vhost is renamed."""
+        self.assertIn('"/whep"', self.page)
+
+    def test_mixed_content_is_named_rather_than_suffered(self):
+        """The map is HTTPS. An http:// stream URL is blocked by every modern
+        browser and the player then shows NOTHING, with the reason only in a
+        console nobody has open. Say it on the page instead."""
+        self.assertIn("mixed content", self.page)
+
+    def test_the_player_says_why_when_the_handshake_fails(self):
+        """404 from WHEP means nothing is publishing on that path yet.
+        Silence here is a black rectangle and a bug report."""
+        player = self.page[self.page.index("function whepFailure"):]
+        player = player[:player.index("function stopPlayer")]
+        self.assertIn("404", player)
+        self.assertNotIn("bad status code", player,
+                         "a status code on its own names nothing to go and "
+                         "look at, which is what an iframe would have given")
+
+    def test_closing_the_panel_tears_the_player_down(self):
+        """A PeerConnection left open holds a MediaMTX session and keeps
+        pulling video across the tailnet for a panel nobody can see."""
+        close = self.page[self.page.index("function closePanel"):]
+        close = close[:close.index("async function fetchPanel")]
+        self.assertIn("stopPlayer(", close)
+
+    def test_the_panel_polls_the_watch_state(self):
+        """requested -> starting -> live takes a minute on the agent's clock.
+        Without a poll the panel says 'waiting for a client' until somebody
+        clicks the dot again, and the stream that DID come up never renders."""
+        self.assertIn("setInterval(refreshWatch", self.page)
+
+    def test_the_wait_reaches_the_page_with_its_clock(self):
+        state = self.server[self.server.index("def _watch_state"):]
+        state = state[:state.index("def _watch_post")]
+        self.assertIn("waited_seconds", state)
+        self.assertIn("looks_unclaimed", state)
+
+    def test_the_page_shows_the_wait_and_the_budget(self):
+        self.assertIn("waited_seconds", self.page)
+        self.assertIn("startup_seconds", self.page)
+
+    def test_an_unclaimed_request_reads_as_a_stopped_agent(self):
+        """Asserted inside refreshWatch, not anywhere on the page: the word
+        already appears in a comment about map regions, and a whole-file
+        assertIn passed against a page that had no such state at all."""
+        watch = self.page[self.page.index("async function refreshWatch"):]
+        watch = watch[:watch.index("// --- their own screen")]
+        self.assertIn("w.unclaimed", watch)

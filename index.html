@@ -52,6 +52,15 @@
                    padding:.3rem .6rem; cursor:pointer; font:inherit; }
   #pwbtns button:disabled { opacity:.45; cursor:default; }
   #pwnote { margin-top:.35rem; white-space:pre-wrap; overflow-wrap:anywhere; }
+  /* The live player (infra#2663). 16:9 so the box is the shape of the
+     stream before a single frame has arrived - a player that resizes when
+     video appears makes the whole panel jump under the cursor. */
+  #pwvideo { margin-top:.5rem; display:none; position:relative; }
+  #pwvid { width:100%; aspect-ratio:16/9; display:block; background:#000;
+           border:1px solid var(--line); border-radius:6px; }
+  #pwvnote { margin-top:.25rem; }
+  #pwvnote.warn { color:#d29922; }
+  #pwvnote.live { color:#7ee787; }
   #pwframe { margin-top:.5rem; display:none; }
   #pwimg { width:100%; display:block; border:1px solid var(--line); border-radius:6px;
            background:var(--bg); }
@@ -108,6 +117,17 @@
       <button id="pwstop" style="display:none">stop watching</button>
     </div>
     <div id="pwnote" class="note"></div>
+    <!-- MUTED AND AUTOPLAY ARE BOTH LOAD-BEARING, not defaults copied in.
+         A browser refuses to autoplay audible video, and the refusal is
+         silent: the element stays black and the reason goes to a console
+         nobody has open. The stream carries no audio anyway - it is a
+         window capture - so muting costs nothing and buys the play.
+         playsinline stops iOS taking the video fullscreen out of the panel.
+         controls is here for the one case autoplay cannot cover: a browser
+         that refuses to start the video on its own leaves a person with
+         nothing to press, which is the same dead end as showing nothing. -->
+    <div id="pwvideo"><video id="pwvid" muted autoplay playsinline controls></video>
+      <div id="pwvnote" class="note"></div></div>
     <div id="pwframe"><img id="pwimg" alt=""><div id="pwfnote" class="note"></div></div>
   </div>
   <div class="sect">mind</div>
@@ -484,6 +504,10 @@ const pname = document.getElementById("pname");
 canvas.addEventListener("click", (e) => {
   const { best } = nearestDot(e);
   if (best) {
+    // Tear the player down BEFORE switching, or clicking a second dot leaves
+    // the first character's video playing under the second character's name -
+    // which is the exact confusion this whole feature exists to remove.
+    stopPlayer();
     selected = best.name; pname.textContent = best.name; panel.style.display = "block";
     watchNote(""); fetchPanel(); openMind(best.name); refreshWatch(); refreshFrame();
   } else closePanel();
@@ -547,6 +571,7 @@ async function stopWatch() {
   const name = watch.name || selected;
   if (!name) return;
   await watchPost(name, "stop");
+  stopPlayer();
   watch.name = null;
   if (watch.timer) { clearInterval(watch.timer); watch.timer = null; }
   if (name === selected) refreshWatch();
@@ -563,6 +588,200 @@ function beat() {
   }, watch.every);
 }
 
+// ---- the player (infra#2663, the last piece) ----------------------------
+//
+// Everything upstream of here already produces a URL a browser can open. Up
+// to now this page PRINTED that URL and asked a person to copy it into
+// another tab, which is not "click a character and watch them play".
+//
+// WHEP SPOKEN DIRECTLY, rather than an <iframe> of MediaMTX's own player
+// page. The iframe works and costs every sentence on this screen: its
+// failures are MediaMTX's wording ("bad status code 404") inside a document
+// we cannot read, and the whole discipline here is that a person can find out
+// why nothing is happening. Owning the handshake means owning the
+// explanation.
+//
+// MIXED CONTENT IS THE FAILURE THAT LOOKS EXACTLY LIKE NOTHING. This page is
+// HTTPS. The stream comes from the Caddy vhost wow.stream.ts.ehumps.me, which
+// terminates TLS in front of MediaMTX on the gaming box precisely so this
+// fetch is https-to-https. If `detail` ever arrives as plain http:// the
+// browser blocks it silently, the player stays black, and the reason goes
+// only to a console nobody has open - so it is checked here and SAID.
+//
+// ONLY THE SIGNALLING GOES OVER HTTPS. The video itself flows browser-to-box
+// over UDP 8189 across the tailnet, from the one ICE candidate MediaMTX
+// advertises. That is why this is fast (85ms measured) and why a slow Caddy
+// could delay a stream starting but cannot throttle one that has.
+const pwvideo = document.getElementById("pwvideo");
+const pwvid = document.getElementById("pwvid");
+const pwvnote = document.getElementById("pwvnote");
+const player = { url: null, pc: null, session: null };
+
+function playerNote(text, cls) {
+  pwvnote.textContent = text || "";
+  pwvnote.className = "note" + (cls ? " " + cls : "");
+}
+
+// Non-trickle WHEP: gather first, then send ONE complete offer. MediaMTX
+// answers with all of its own candidates in the SDP, so there is nothing to
+// receive later - which lets the whole ICE-fragment PATCH machinery go.
+// The timeout is a backstop, never the normal path: with no STUN configured
+// the browser has only host candidates and finishes in milliseconds. Without
+// it, a browser that never declares gathering complete would hang the player
+// forever with nothing on screen, which is the one outcome forbidden here.
+function iceGathered(pc) {
+  if (pc.iceGatheringState === "complete") return Promise.resolve();
+  return new Promise((resolve) => {
+    const done = () => {
+      clearTimeout(timer);
+      pc.removeEventListener("icegatheringstatechange", check);
+      resolve();
+    };
+    const check = () => { if (pc.iceGatheringState === "complete") done(); };
+    const timer = setTimeout(done, 3000);
+    pc.addEventListener("icegatheringstatechange", check);
+  });
+}
+
+// Every status a person could actually hit, in words that name the thing to
+// go and look at. "bad status code" names nothing.
+function whepFailure(status) {
+  if (status === 404) {
+    return "the media server has no stream on that path yet - the client is "
+      + "up but its encoder has not started publishing.";
+  }
+  if (status === 502 || status === 504) {
+    return "the gaming box is not answering. It is switched off far more "
+      + "often than it is on, and that is normal rather than a fault.";
+  }
+  return "the media server refused the connection (HTTP " + status + ").";
+}
+
+async function whepExchange(pc, url) {
+  await pc.setLocalDescription(await pc.createOffer());
+  await iceGathered(pc);
+  const r = await fetch(url, {
+    method: "POST",
+    headers: { "content-type": "application/sdp" },
+    body: pc.localDescription.sdp,
+  });
+  if (r.status !== 201) throw new Error(whepFailure(r.status));
+  // Best effort: the session URL only comes back to us if MediaMTX exposes
+  // Location across origins. Without it the DELETE below is skipped and
+  // closing the PeerConnection is what ends the session - slower, not wrong.
+  try {
+    const loc = r.headers.get("location");
+    if (loc) player.session = new URL(loc, url).toString();
+  } catch (e) { player.session = null; }
+  await pc.setRemoteDescription({ type: "answer", sdp: await r.text() });
+}
+
+function watchConnection(pc) {
+  pc.onconnectionstatechange = () => {
+    if (player.pc !== pc) return;
+    if (pc.connectionState === "failed") {
+      playerNote("the video connection failed - the browser and the box "
+        + "agreed on a stream and no media crossed the tailnet.", "warn");
+    } else if (pc.connectionState === "disconnected") {
+      playerNote("the video connection dropped.", "warn");
+    }
+  };
+}
+
+async function startPlayer(name, base) {
+  const url = base.replace(/\/+$/, "") + "/whep";
+  if (player.url === url) return;   // already playing this character
+  stopPlayer();
+  player.url = url;
+  pwvideo.style.display = "block";
+  if (location.protocol === "https:" && /^http:/i.test(url)) {
+    playerNote("the stream address is plain http:// and this page is https://"
+      + ", so the browser will block it as mixed content and show nothing. "
+      + "The stream needs its TLS vhost in front of it.", "warn");
+    return;
+  }
+  playerNote("connecting to the video...");
+  const pc = new RTCPeerConnection();
+  player.pc = pc;
+  pc.addTransceiver("video", { direction: "recvonly" });
+  pc.addTransceiver("audio", { direction: "recvonly" });
+  pc.ontrack = (e) => {
+    if (player.pc !== pc) return;
+    // ontrack FIRES ONCE PER TRACK - video and audio - and re-assigning the
+    // same MediaStream restarts loading for no reason, which is what aborted
+    // the first play() below and produced a "would not start" warning over a
+    // picture that was playing perfectly.
+    if (pwvid.srcObject !== e.streams[0]) pwvid.srcObject = e.streams[0];
+    playerNote("live from " + name + "'s screen", "live");
+    // THE autoplay ATTRIBUTE IS NOT ENOUGH, and this was measured rather than
+    // reasoned about: connected, 1280x720, readyState 4 - and paused, with
+    // currentTime stuck at 0. A stream handed to an element AFTER load does
+    // not always trip the attribute, and a tab that was not focused when the
+    // track arrived is the common case here, because the wait is a minute
+    // long and people go and do something else. The symptom is the worst one
+    // available: a still frame that looks exactly like a live game.
+    //
+    // play() returns a promise and a REJECTION IS A SENTENCE. If a browser
+    // ever refuses (an autoplay policy stricter than muted-video), the person
+    // is told to press play rather than left watching a frozen picture.
+    // AND THE REJECTION IS CHECKED BEFORE IT IS BELIEVED. A rejected play()
+    // is not always a refusal: an interrupted promise rejects while the video
+    // plays on, and the first live run said "would not start it" underneath
+    // Ugga running through a forest at 30fps. A warning that contradicts what
+    // is on screen costs more trust than saying nothing would.
+    pwvid.play().catch(() => {
+      if (!pwvid.paused) return;
+      playerNote("the video is connected but this browser would not start it "
+        + "on its own - press play on the picture.", "warn");
+    });
+  };
+  watchConnection(pc);
+  try {
+    await whepExchange(pc, url);
+  } catch (e) {
+    if (player.pc !== pc) return;
+    playerNote("could not start the video: " + (e.message || e), "warn");
+  }
+}
+
+function stopPlayer() {
+  if (player.session) {
+    // Fire and forget. A session MediaMTX keeps for a few seconds longer than
+    // it should is far cheaper than an exception thrown while closing a panel.
+    fetch(player.session, { method: "DELETE" }).catch(() => {});
+  }
+  if (player.pc) { try { player.pc.close(); } catch (e) { /* already gone */ } }
+  player.pc = null; player.session = null; player.url = null;
+  pwvid.srcObject = null;
+  pwvideo.style.display = "none";
+  playerNote("");
+}
+
+// WHAT TO SAY WHILE NOTHING IS ON SCREEN YET, and why it is three sentences
+// and not a spinner. The agent takes 45-60 REAL seconds: it launches a
+// client, types a login, waits for the world, and then proves the selfbot
+// attached (#2781 - an AI-less character in the party freezes group loot for
+// the whole family, so that check is not optional). A minute of unexplained
+// blankness is how a working feature gets reported as broken.
+//
+// AND "NOTHING PICKED IT UP" IS SAID SEPARATELY, because it is a different
+// problem with a different fix: the agent is started by hand on the box, so
+// not-running is a normal state of the world, and on screen it is otherwise
+// indistinguishable from a slow login that will succeed.
+function waitingWords(w, s) {
+  const budget = s.startup_seconds || 60;
+  const soFar = (w.waited_seconds === null || w.waited_seconds === undefined)
+    ? "" : " - " + w.waited_seconds + "s so far";
+  if (w.unclaimed) {
+    return "nothing has picked this request up" + soFar + ".\nThe stream "
+      + "agent polls every 5s and claims a request immediately, so this is "
+      + "not a slow login - it is the agent not running on the gaming box.";
+  }
+  if (w.state === "requested") return "asked for a client" + soFar + "...";
+  return "bringing a client up and checking their AI is attached. This "
+    + "honestly takes about " + budget + "s" + soFar + ".";
+}
+
 async function refreshWatch() {
   if (!selected) return;
   const name = selected;
@@ -575,6 +794,10 @@ async function refreshWatch() {
   if (s.heartbeat_seconds) watch.every = s.heartbeat_seconds * 1000;
   const w = s.watching;
   if (!w) {
+    // The row is over. Whatever it ended as, there is nothing to render, and
+    // a player left connected would keep pulling video across the tailnet for
+    // a stream the world has already torn down.
+    stopPlayer();
     pwstop.style.display = "none";
     pwcam.disabled = pwpov.disabled = pwshot.disabled = false;
     // A request the agent could not honour comes back as a finished row with
@@ -591,7 +814,8 @@ async function refreshWatch() {
   pwstop.style.display = w.mode === "shot" ? "none" : "";
   pwcam.disabled = pwpov.disabled = pwshot.disabled = true;
   if (w.state !== "live") {
-    watchNote(w.state === "requested" ? "waiting for a client..." : w.state + "...");
+    stopPlayer();
+    watchNote(waitingWords(w, s), w.unclaimed ? "warn" : "");
     return;
   }
   // Sunshine has NO browser player - its 47990 is a config UI, and video
@@ -599,14 +823,22 @@ async function refreshWatch() {
   // says it is genuinely embeddable. Rendering a player for a Moonlight
   // stream would be a black rectangle and a bug report.
   if (w.delivery === "embed" && w.detail) {
-    watchNote("live - open " + w.detail, "live");
+    // The panel says WHOSE interface is on screen, because the two modes look
+    // similar and mean very different things: POV is their own hotbars, bags
+    // and camera; cam is a GM standing next to them with the observer's UI.
+    watchNote(w.mode === "pov"
+      ? "live - their own screen, their own interface"
+      : "live - an observer's camera following them", "live");
+    startPlayer(name, w.detail);
   } else if (w.detail) {
+    stopPlayer();
     // Printed VERBATIM. The agent writes detail as the sentence it wants read
     // - which instance to open, and what you are actually looking at - so
     // prefixing it gave "live on Moonlight - Open Moonlight on the Switch
     // and launch...". It says that better than a label can.
     watchNote(w.detail, "live");
   } else {
+    stopPlayer();
     watchNote("live on Moonlight", "live");
   }
 }
@@ -677,6 +909,11 @@ function closePanel() {
   // one mechanism that cannot be fooled by how the page was left.
   if (watch.timer) { clearInterval(watch.timer); watch.timer = null; }
   watch.name = null;
+  // The video, on the other hand, goes NOW. Leaving a PeerConnection open
+  // holds a MediaMTX session and keeps pulling a 6Mbit stream across the
+  // tailnet into a panel nobody can see. Stopping it is not the same as
+  // stopping the stream - the heartbeat above decides that.
+  stopPlayer();
   selected = null; panel.style.display = "none";
   pwframe.style.display = "none";
   pwimg.removeAttribute("src");
@@ -911,6 +1148,12 @@ loadZones().then(() => { poll(); setInterval(poll, 5000); });
 setInterval(fetchPanel, 5000);  // panel rides the same 5s snapshot cadence
 setInterval(refreshMind, 5000);  // and so does the thought stream
 setInterval(refreshFrame, 5000);  // and so does their own screen
+// AND SO DOES THE WATCH STATE, which it did not until infra#2663's player
+// landed. requested -> starting -> live happens over a MINUTE on the agent's
+// clock, entirely on the other side of the database; without a poll the panel
+// said "waiting for a client" until somebody thought to click the dot again,
+// and a stream that had genuinely come up was never rendered at all.
+setInterval(refreshWatch, 5000);
 setInterval(render, 200);  // combat pulse
 window.addEventListener("resize", render);
 </script>

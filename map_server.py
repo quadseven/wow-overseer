@@ -642,15 +642,21 @@ class Handler(BaseHTTPRequestHandler):
             self._send(503, "application/json", b'{"error": "world unreachable"}')
             return
         mine = next((r for r in rows if r.get("character") == name), None)
+        now = time.time()
         payload = {
             "channels_in_use": stream.channels_in_use(rows),
             "max_channels": stream.MAX_CHANNELS,
             "heartbeat_seconds": stream.HEARTBEAT_SECONDS,
+            # How long a login HONESTLY takes, so the page can show the wait
+            # against a stated budget rather than an unexplained spinner. The
+            # number belongs to the lifecycle, not to the page: hard-coding
+            # "45-60s" in HTML would drift the day the agent gets faster.
+            "startup_seconds": stream.STARTUP_SECONDS,
             "watching": None,
             # Why the last attempt stopped, while that is still news. The
             # agent answers a request it cannot honour by ending the row with
             # a reason, so this is the ONLY path that reason has to a screen.
-            "outcome": stream.outcome_of(mine, time.time()) if mine else None,
+            "outcome": stream.outcome_of(mine, now) if mine else None,
         }
         if mine and mine.get("state") in stream.OCCUPIES_A_CLIENT:
             payload["watching"] = {
@@ -658,6 +664,14 @@ class Handler(BaseHTTPRequestHandler):
                 "mode": mine.get("mode"),
                 "detail": mine.get("detail") or "",
                 "delivery": stream.delivery_of(mine),
+                # The two clocks a waiting viewer needs. `waited_seconds` is
+                # measured from requested_at (the heartbeat rewrites last_seen
+                # every ten seconds and would read "3s" for the whole minute);
+                # `unclaimed` separates a slow login from nothing running on
+                # the box at all, which look identical on screen and are fixed
+                # in entirely different places.
+                "waited_seconds": stream.waited_seconds(mine, now),
+                "unclaimed": stream.looks_unclaimed(mine, now),
             }
         self._send(200, "application/json", json.dumps(payload).encode())
 
