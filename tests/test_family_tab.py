@@ -151,3 +151,43 @@ class ThumbSized(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TheBrokenButtonMustNotBeSpendable(unittest.TestCase):
+    """infra#2887, found the way it should never be found - by Evan.
+
+    `watch them` (follow-cam) sat FIRST in the character panel, read as the
+    primary action, and is not implemented: it spends ~40 seconds bringing a
+    client up and then answers with a refusal about needing a GM account that
+    is not one of the family. He tapped it on his phone, waited, got nothing,
+    and reasonably concluded streaming was broken - on the day it had been
+    proven working end to end.
+
+    The Family tab never offered it. The older panel did, and reordering alone
+    would not have been enough: the panel re-enabled every button on each state
+    change, so a merely-demoted control goes straight back to being spendable
+    on the next poll.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        import pathlib
+        cls.page = (pathlib.Path(__file__).resolve().parent.parent / "index.html").read_text()
+
+    def test_the_working_mode_comes_first(self):
+        self.assertLess(self.page.index('id="pwpov"'), self.page.index('id="pwcam"'),
+                        "the button that works must precede the one that cannot")
+
+    def test_follow_cam_ships_disabled(self):
+        tag = self.page[self.page.index('id="pwcam"'):]
+        self.assertIn("disabled", tag[:tag.index(">") + 1])
+
+    def test_nothing_re_enables_follow_cam(self):
+        # The part that actually matters - see the class docstring.
+        self.assertNotIn("pwcam.disabled = pwpov.disabled = pwshot.disabled = false", self.page)
+        self.assertNotIn("pwcam.disabled = false", self.page)
+
+    def test_it_says_why_rather_than_just_being_dead(self):
+        tag = self.page[self.page.index('id="pwcam"'):]
+        self.assertIn("2887", tag[:tag.index("</button>")],
+                      "a disabled control must carry its reason")

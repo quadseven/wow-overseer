@@ -191,8 +191,18 @@
   <div class="sect">watch live</div>
   <div id="pwatch">
     <div id="pwbtns">
-      <button id="pwcam" title="A GM camera follows them. The interface on screen is the observer's, not theirs.">watch them</button>
+      <!-- ORDER IS THE FIX, AND IT COST A REAL SESSION. `watch them` sat here
+           first, read as the primary action, and is NOT IMPLEMENTED: it spends
+           forty seconds bringing a client up and then answers with a refusal
+           about needing a GM account that is not one of the family (infra#2887).
+           Evan tapped it on his phone, waited, got nothing, and reasonably
+           concluded streaming was broken - on the day it was proven working.
+           `be them` is the one that works, so it leads, and follow-cam is
+           disabled rather than merely demoted: a control that cannot succeed
+           must not be spendable. It stays visible because it is a real planned
+           mode, and the title says why it is off. -->
       <button id="pwpov" title="Log in as them with the AI playing. Their own hotbars, bags and camera - the Twitch view.">be them</button>
+      <button id="pwcam" disabled title="Not implemented yet: a follow-cam needs a dedicated GM account that is not one of the family, because using one of theirs would turn that character into a selfbot - the exact thing a follow-cam exists to avoid (infra#2887).">watch them (not yet)</button>
       <button id="pwshot" title="Log a client in as them just long enough for one picture, then let it go. Costs a login, so it is not free - but it needs nobody to sit and watch.">look at them</button>
       <button id="pwstop" style="display:none">stop watching</button>
     </div>
@@ -665,7 +675,9 @@ async function startWatch(mode) {
     // A refusal is a sentence a person can read - both channels busy, or
     // already watching - not a silent no-op.
     watchNote(res.body.error || "could not start", "warn");
-    pwcam.disabled = pwpov.disabled = pwshot.disabled = false;
+    // pwcam is deliberately NOT re-enabled: follow-cam is not implemented
+  // (infra#2887) and a control that cannot succeed must not be spendable.
+  pwpov.disabled = pwshot.disabled = false;
     return;
   }
   refreshWatch();
@@ -966,7 +978,9 @@ async function refreshWatch() {
     // video across the tailnet for a stream the world has already torn down.
     stopPlayer();
     pwstop.style.display = "none";
-    pwcam.disabled = pwpov.disabled = pwshot.disabled = false;
+    // pwcam is deliberately NOT re-enabled: follow-cam is not implemented
+  // (infra#2887) and a control that cannot succeed must not be spendable.
+  pwpov.disabled = pwshot.disabled = false;
     watchNote(v.text, v.cls);
     return;
   }
