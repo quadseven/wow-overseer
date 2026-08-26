@@ -19,6 +19,7 @@ from urllib.parse import parse_qs, urlsplit
 import pymysql
 
 import chat
+import frames
 import stream
 import voice
 from map_core import build_payload
@@ -443,6 +444,16 @@ def _ask_llm(prompt: str) -> str:
 # the name charset, the body bound, the command vocabulary gate in voice.py
 # - holds regardless, because they protect the database and the game rather
 # than the page.
+# Latest-only, in memory, and deliberately not on disk or in the database.
+# A frame is worth seconds; keeping history would need a cleanup job, and
+# base64 in a TEXT column is how a table becomes unqueryable. Bounded by
+# construction: one record per roster character, each capped at
+# frames.MAX_FRAME_BYTES. Lost on restart, which is correct - a picture from
+# before the process died is not evidence of anything now.
+_FRAMES: dict = {}
+_FRAMES_LOCK = threading.Lock()
+
+
 class Handler(BaseHTTPRequestHandler):
     def do_GET(self):  # noqa: N802 (stdlib naming)
         # A lookup and nothing else. Every GET endpoint takes the parsed
@@ -701,6 +712,67 @@ class Handler(BaseHTTPRequestHandler):
         log.info("stream: requested %s for %s", mode, name)
         self._send(200, "application/json", b'{"ok": true, "state": "requested"}')
 
+    def _frame_get(self, query: dict) -> None:
+        """GET /api/frame?name=X - the last picture, or what went wrong.
+
+        `meta=1` answers in JSON; without it the JPEG itself comes back, so
+        the page can point an <img> straight at this.
+        """
+        name = query.get("name", [""])[0]
+        if not _NAME_RE.fullmatch(name):
+            self._send(400, "application/json", b'{"error": "not a character name"}')
+            return
+        with _FRAMES_LOCK:
+            record = dict(_FRAMES.get(name) or {})
+        if query.get("meta", [""])[0]:
+            payload = frames.describe(record, time.time())
+            self._send(200, "application/json", json.dumps(payload).encode())
+            return
+        jpeg = record.get("jpeg")
+        if not jpeg:
+            self._send(404, "application/json", b'{"error": "no frame yet"}')
+            return
+        self._send(200, "image/jpeg", jpeg)
+
+    def _frame_post(self) -> None:
+        """POST /api/frame?name=X&status=ok|black|failed[&detail=...]
+
+        The frame and its status arrive in ONE request on purpose. Posting a
+        picture and then its status separately is two chances for the panel to
+        show an image with the wrong status attached.
+        """
+        query = parse_qs(urlsplit(self.path).query)
+        name = query.get("name", [""])[0]
+        if not _NAME_RE.fullmatch(name):
+            self._send(400, "application/json", b'{"error": "not a character name"}')
+            return
+        status = query.get("status", [frames.OK])[0]
+        detail = query.get("detail", [""])[0]
+        try:
+            length = int(self.headers.get("Content-Length") or 0)
+        except ValueError:
+            length = -1
+        if length < 0 or length > frames.MAX_FRAME_BYTES:
+            self._send(413, "application/json", b'{"error": "frame too large"}')
+            return
+        body = self.rfile.read(length) if length else b""
+        why = frames.refusal(name, status, body, detail)
+        if why:
+            # A sentence, not a bare 400: the agent posting these runs on
+            # another machine, and a refusal with no reason is the same dead
+            # end as a capture that goes quiet.
+            self._send(400, "application/json",
+                       json.dumps({"error": why}).encode())
+            return
+        with _FRAMES_LOCK:
+            _FRAMES[name] = frames.accept(_FRAMES.get(name), status, body,
+                                          detail, time.time())
+        if status != frames.OK:
+            log.info("frame: %s reported %s%s", name, status,
+                     " - " + frames.clean_detail(detail) if detail else "")
+        self._send(200, "application/json",
+                   json.dumps(frames.describe(_FRAMES[name], time.time())).encode())
+
     def _read_json_body(self) -> dict | None:
         """The POST body as a dict, or None after sending the error itself."""
         try:
@@ -758,11 +830,13 @@ class Handler(BaseHTTPRequestHandler):
         "/index.html": _index,
         "/zones.json": _zones_file,
         "/shapes.json": _shapes_file,
+        "/api/frame": _frame_get,
         "/healthz": _healthz,
     }
     POST_ROUTES = {
         "/api/chat": _chat_post,
         "/api/watch": _watch_post,
+        "/api/frame": _frame_post,
     }
 
 

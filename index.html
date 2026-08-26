@@ -52,6 +52,11 @@
                    padding:.3rem .6rem; cursor:pointer; font:inherit; }
   #pwbtns button:disabled { opacity:.45; cursor:default; }
   #pwnote { margin-top:.35rem; white-space:pre-wrap; overflow-wrap:anywhere; }
+  #pwframe { margin-top:.5rem; display:none; }
+  #pwimg { width:100%; display:block; border:1px solid var(--line); border-radius:6px;
+           background:var(--bg); }
+  #pwfnote { margin-top:.25rem; }
+  #pwfnote.warn { color:#d29922; }
   #pwnote.live { color:#7ee787; }
   #pwnote.warn { color:#d29922; }
   #panel .gone { color:#ffd8a8; }
@@ -102,6 +107,7 @@
       <button id="pwstop" style="display:none">stop watching</button>
     </div>
     <div id="pwnote" class="note"></div>
+    <div id="pwframe"><img id="pwimg" alt=""><div id="pwfnote" class="note"></div></div>
   </div>
   <div class="sect">mind</div>
   <div id="ptimeline"></div>
@@ -478,7 +484,7 @@ canvas.addEventListener("click", (e) => {
   const { best } = nearestDot(e);
   if (best) {
     selected = best.name; pname.textContent = best.name; panel.style.display = "block";
-    watchNote(""); fetchPanel(); openMind(best.name); refreshWatch();
+    watchNote(""); fetchPanel(); openMind(best.name); refreshWatch(); refreshFrame();
   } else closePanel();
 });
 document.getElementById("pclose").onclick = closePanel;
@@ -599,6 +605,60 @@ async function refreshWatch() {
   }
 }
 
+// --- their own screen (infra#2663) ---------------------------------------
+//
+// The stream is for Evan; this still is for everyone else, including whatever
+// is reading the overseer's tables. It is the only instrument here that shows
+// the game instead of describing it.
+//
+// The token exists because an <img> whose src never changes is never
+// re-fetched, no-store or not. It advances only when a genuinely NEWER frame
+// arrives - a capture that failed leaves the last good picture on screen with
+// its age showing, rather than blanking a panel that had something useful.
+const pwframe = document.getElementById("pwframe");
+const pwimg = document.getElementById("pwimg");
+const pwfnote = document.getElementById("pwfnote");
+let frameSeen = { name: null, ago: null, token: 0 };
+
+function ageWords(seconds) {
+  if (seconds === null || seconds === undefined) return "";
+  if (seconds < 2) return "just now";
+  if (seconds < 90) return seconds + "s ago";
+  return Math.round(seconds / 60) + "m ago";
+}
+
+async function refreshFrame() {
+  if (!selected) { pwframe.style.display = "none"; return; }
+  const name = selected;
+  let m;
+  try {
+    const r = await fetch("/api/frame?meta=1&name=" + encodeURIComponent(name));
+    m = await r.json();
+  } catch (e) { return; }
+  if (name !== selected) return;
+  if (!m.has_frame && !m.status) { pwframe.style.display = "none"; return; }
+  pwframe.style.display = "block";
+  if (m.has_frame) {
+    if (frameSeen.name !== name || m.captured_seconds_ago < frameSeen.ago) {
+      frameSeen = { name: name, ago: m.captured_seconds_ago, token: frameSeen.token + 1 };
+      pwimg.src = "/api/frame?name=" + encodeURIComponent(name) + "&t=" + frameSeen.token;
+    } else {
+      frameSeen.ago = m.captured_seconds_ago;
+    }
+    pwimg.style.display = "block";
+  } else {
+    pwimg.style.display = "none";
+    pwimg.removeAttribute("src");
+  }
+  // A failure says WHY. "failed" on its own tells a viewer exactly as much as
+  // showing nothing did, which is the reason the status exists at all.
+  const bad = m.status && m.status !== "ok";
+  const why = bad ? (m.detail || m.status) : "";
+  const age = m.has_frame ? "their screen, " + ageWords(m.captured_seconds_ago) : "";
+  pwfnote.textContent = bad ? (age ? age + " - " + why : why) : age;
+  pwfnote.className = "note" + (bad ? " warn" : "");
+}
+
 pwcam.onclick = () => startWatch("cam");
 pwpov.onclick = () => startWatch("pov");
 pwstop.onclick = stopWatch;
@@ -611,6 +671,9 @@ function closePanel() {
   if (watch.timer) { clearInterval(watch.timer); watch.timer = null; }
   watch.name = null;
   selected = null; panel.style.display = "none";
+  pwframe.style.display = "none";
+  pwimg.removeAttribute("src");
+  frameSeen = { name: null, ago: null, token: frameSeen.token };
   // Closing the panel also stops the thought stream: a hidden panel must
   // not keep polling a mind nobody is watching.
   mind.name = null;
@@ -840,6 +903,7 @@ function refreshMind() { if (mind.name && !mind.busy) fetchThoughts(null); }
 loadZones().then(() => { poll(); setInterval(poll, 5000); });
 setInterval(fetchPanel, 5000);  // panel rides the same 5s snapshot cadence
 setInterval(refreshMind, 5000);  // and so does the thought stream
+setInterval(refreshFrame, 5000);  // and so does their own screen
 setInterval(render, 200);  // combat pulse
 window.addEventListener("resize", render);
 </script>
