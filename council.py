@@ -73,6 +73,17 @@ class Member:
     class_name: str
     gold: int = 0
     trades: int = 0
+    # A trade the family has agreed this character will take and that they have
+    # not been to a trainer for yet (professions.plan). PRIVATE, like gold and
+    # skills, and only ever this member's own.
+    #
+    # WHY IT IS NOT DERIVED FROM `trades`. It cannot be. `trades` is a COUNT,
+    # and the family's problem is not that they hold too few professions - all
+    # five hold two - it is that none of them is a TAILOR (infra#2757). A count
+    # cannot express "the wrong ones", so the shortfall has to arrive as a
+    # name. The count branch below is left in place for a character who
+    # genuinely has none.
+    trade_wanted: str = ""
     # What this character is part-way through. PRIVATE, like gold and trades -
     # a quest log is not something you read off a portrait. Only ever the
     # assessing member's own.
@@ -182,6 +193,17 @@ def assess(me: Member, *, public_levels: dict) -> Proposal | None:
             # table has, and finishing it is cheap.
             weight=60,
             said=me.quest,
+        )
+
+    # Below the quest, above the coin, and for the same reason: a trade the
+    # family has already agreed you will take is a concrete thing with your
+    # name on it, and going to get it is cheap next to a mount.
+    if me.trade_wanted:
+        return Proposal(
+            proposer=me.name, kind="trades", beneficiary=me.name,
+            target=TRADES_EXPECTED, weight=40,
+            said=(f"Family need {me.trade_wanted}. {me.name} go find "
+                  f"{me.trade_wanted} teacher."),
         )
 
     if me.trades < TRADES_EXPECTED:

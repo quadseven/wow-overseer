@@ -30,6 +30,7 @@ import bonds
 import kin
 import overhear
 import persona
+import professions
 import protect
 import questbook
 import questshare
@@ -659,9 +660,29 @@ def _fetch_quest_progress(names: list) -> dict:
     return out
 
 
+# The `character_skills.skill` ids that are actually TRADES, as one string, so
+# the council's own count means what its variable is called.
+#
+# WHY THIS EXISTS (infra#2757). This subquery was a bare `COUNT(*)`, and
+# `character_skills` holds every skill a character has: Language: Orcish,
+# Defense, Swords, Axes, Unarmed, and a class skill besides. So `trades` was
+# never below TRADES_EXPECTED (2) for anybody who had ever logged in, and
+# council.assess's "I have no trade to speak of" branch was unreachable code
+# from the day it was written. The council could not raise the very thing this
+# issue is about.
+#
+# Primaries only. First aid, cooking and fishing are secondary skills that cost
+# no profession slot, and counting them would put every character at five and
+# reintroduce the same always-true bug in a smaller font.
+_TRADE_SKILL_IDS = ",".join(
+    str(goals.SKILL_IDS[name]) for name in sorted(professions.PRIMARY)
+)
+
 _COUNCIL_MEMBER_SQL = (
     "SELECT c.name, c.class, c.money, "
-    "       (SELECT COUNT(*) FROM character_skills k WHERE k.guid = c.guid) AS trades, "
+    "       (SELECT COUNT(*) FROM character_skills k "
+    "         WHERE k.guid = c.guid AND k.skill IN (" + _TRADE_SKILL_IDS + ")"
+    "       ) AS trades, "
     "       s.level AS live_level "
     "FROM characters c "
     "LEFT JOIN overseer_snapshot s "
@@ -698,6 +719,10 @@ def _fetch_council_members(names: list) -> list:
         rows = cur.fetchall()
 
     progress = _fetch_quest_progress(names)
+    # What the family has already agreed this character will go and learn, and
+    # has not learned yet. Read here rather than derived, because `trades` is a
+    # count and the family's shortfall is a NAME - see _TRADE_SKILL_IDS.
+    owed = _pending_trades()
     members = []
     for row in rows:
         level = row.get("live_level")
@@ -714,12 +739,213 @@ def _fetch_council_members(names: list) -> list:
                 class_name=CLASS_NAMES.get(row["class"], "adventurer"),
                 gold=int(row["money"] or 0),
                 trades=int(row["trades"] or 0),
+                trade_wanted=owed.get(row["name"], ""),
                 quest=said,
                 quest_left=left,
                 quest_id=quest_id,
             )
         )
     return members
+
+
+# --- trades: who takes what, and the proof that nobody was handed it --------
+#
+# THE ONE RULE (infra#2757). Nothing below writes `character_skills`. A
+# profession is learned at a trainer or it is not learned, exactly as a bag is
+# crafted or not crafted (#2823) and a trainer spell is taught or not taught
+# (#2782). What this section does is DECIDE, say it out loud, write the
+# decision down, and then watch the world to see whether it has happened. A row
+# reaching 'learned' is a report about the world, never a cause of it.
+#
+# The learning step is a DELIBERATE FOLLOW-UP, not a blocked one. Sending a
+# character to a named NPC used to be impossible and is the reason this section
+# stops where it does; #2840 built it (travel.ROLES has "profession trainer"),
+# so what is left is the transaction at the far end - walking there is not
+# training. professions.BLOCKERS carries the citations for what remains, and
+# they are logged once per plan so the reason sits beside the plan.
+
+_TRADE_SKILL_SQL = (
+    "SELECT c.name, k.skill, k.value "
+    "FROM characters c JOIN character_skills k ON k.guid = c.guid "
+    "WHERE c.name IN (%s) AND k.skill IN (" + _TRADE_SKILL_IDS + ")"
+)
+
+_TRADE_CLASS_SQL = "SELECT name, class FROM characters WHERE name IN (%s)"
+
+# skill id -> the lowercase name professions and goals both use. Inverted from
+# the one table rather than restated, so a wrong number here is impossible.
+_SKILL_NAMES = {number: name for name, number in goals.SKILL_IDS.items()}
+
+
+def _ensure_trade_store() -> None:
+    """The trade decision, created the same way the goal store is.
+
+    Bridge-owned state: the worldserver never reads it, so coupling it to a
+    90-minute game-server image rebuild would be friction for nothing (the
+    deviation is recorded on infra#2600 and this follows it).
+
+    `status` has exactly two values and no third. There is deliberately NO
+    'granted' - an assignment is 'planned' until the world is observed to
+    already agree, and then it is 'learned'. A status this service could set by
+    fiat is the shape of the bug the whole issue is about.
+    """
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(
+            "CREATE TABLE IF NOT EXISTS overseer_trade ("
+            " id INT UNSIGNED NOT NULL AUTO_INCREMENT,"
+            " character_name VARCHAR(12) NOT NULL,"
+            " verb ENUM('learn','unlearn') NOT NULL,"
+            " skill_name VARCHAR(32) NOT NULL,"
+            " skill_id SMALLINT UNSIGNED NOT NULL,"
+            " reason TEXT NOT NULL,"
+            " status ENUM('planned','learned') NOT NULL DEFAULT 'planned',"
+            " decided_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,"
+            " settled_at TIMESTAMP NULL DEFAULT NULL,"
+            " PRIMARY KEY (id),"
+            " UNIQUE KEY uq_char_verb_skill (character_name, verb, skill_name)"
+            ") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4"
+        )
+
+
+def _fetch_trade_skills(names: list) -> dict:
+    """name -> {profession: value}, PRIVATE to its owner.
+
+    Professions only. `character_skills` also holds languages, Defense and
+    every weapon skill, and handing those to a module that reasons about
+    profession slots is how `trades` came to mean nothing (see
+    _TRADE_SKILL_IDS).
+
+    READ-ONLY, and that is the whole contract of this function. It is the only
+    place in the bridge that touches character_skills at all.
+    """
+    if not names:
+        return {}
+    placeholders = ",".join(["%s"] * len(names))
+    # Hoisted for the same reason as _COUNCIL_MEMBER_SQL: ruff anchors S608 at
+    # the START of the expression, so a noqa on the line carrying the % does
+    # not silence a multi-line query.
+    sql = _TRADE_SKILL_SQL % placeholders
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(sql, names)
+        rows = cur.fetchall()
+
+    out: dict = {name: {} for name in names}
+    for row in rows:
+        name = _SKILL_NAMES.get(int(row["skill"]))
+        if name is None:
+            continue
+        out.setdefault(row["name"], {})[name] = int(row["value"] or 0)
+    return out
+
+
+def _pending_trades() -> dict:
+    """name -> the trade they still owe the family, for the council to raise.
+
+    Only 'learn'. An unlearn is a chore on the way, not something a character
+    would announce it wants; what Og would say at the table is that he is going
+    to learn to sew, not that he is giving up an alchemy he never used.
+    """
+    try:
+        with _connect() as conn, conn.cursor() as cur:
+            cur.execute(
+                "SELECT character_name, skill_name FROM overseer_trade "
+                "WHERE status = 'planned' AND verb = 'learn'"
+            )
+            return {r["character_name"]: r["skill_name"] for r in cur.fetchall()}
+    except Exception:
+        # A council that cannot read the trade table is still a council. This
+        # is a decoration on one proposal, not a reason to lose the scene.
+        log.exception("trades: could not read the plan; the council goes without it")
+        return {}
+
+
+def _council_family() -> list:
+    """The family as professions.plan sees them: class, seniority, own skills."""
+    names = sorted(_protected_guids().values())
+    if not names:
+        return []
+    skills = _fetch_trade_skills(names)
+    placeholders = ",".join(["%s"] * len(names))
+    # Hoisted, same as _COUNCIL_MEMBER_SQL and _TRADE_SKILL_SQL: ruff anchors
+    # S608 at the START of the expression, so a noqa on the line carrying the %
+    # does not silence a multi-line query.
+    sql = _TRADE_CLASS_SQL % placeholders
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(sql, names)
+        rows = cur.fetchall()
+
+    family = []
+    for row in rows:
+        bond = bonds.member(row["name"])
+        family.append(professions.Member(
+            name=row["name"],
+            class_name=CLASS_NAMES.get(row["class"], ""),
+            skills=skills.get(row["name"], {}),
+            seniority=bond.seniority if bond else 0,
+        ))
+    return family
+
+
+def _record_trade_plan(plan) -> list:
+    """Write the decision down, and return the assignments that are NEW.
+
+    INSERT IGNORE against the unique key, so a plan the family reached last
+    hour and reaches again this hour is not re-decided and - the half that
+    matters - not re-announced. The scene is played once.
+    """
+    if not plan.assignments:
+        return []
+    fresh = []
+    with _connect() as conn, conn.cursor() as cur:
+        for assignment in plan.assignments:
+            cur.execute(
+                "INSERT IGNORE INTO overseer_trade "
+                "(character_name, verb, skill_name, skill_id, reason) "
+                "VALUES (%s, %s, %s, %s, %s)",
+                (assignment.character, assignment.verb, assignment.skill,
+                 assignment.skill_id, assignment.reason[:2000]),
+            )
+            if cur.rowcount:
+                fresh.append(assignment)
+    return fresh
+
+
+def _settle_trades(skills: dict) -> list:
+    """Move rows to 'learned' where the WORLD already agrees. Returns those rows.
+
+    THE NO-MAGIC HINGE. professions.settled is handed the observed skills and
+    answers a question; it cannot go and get them, and this function cannot
+    make one up - the only input is a live read of character_skills. So a row
+    can only reach 'learned' by somebody actually having been to a trainer, by
+    whatever route that happened, INCLUDING Evan walking Og there himself.
+    """
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT id, character_name, verb, skill_name, skill_id, reason "
+            "FROM overseer_trade WHERE status = 'planned'"
+        )
+        planned = list(cur.fetchall())
+
+        done = []
+        for row in planned:
+            observed = skills.get(row["character_name"])
+            if observed is None:
+                # Not seen this cycle. Silence is not evidence of anything.
+                continue
+            assignment = professions.Assignment(
+                character=row["character_name"], verb=row["verb"],
+                skill=row["skill_name"], skill_id=int(row["skill_id"]),
+                reason=row["reason"], said="",
+            )
+            if not professions.settled(assignment, observed):
+                continue
+            cur.execute(
+                "UPDATE overseer_trade SET status = 'learned', settled_at = NOW() "
+                "WHERE id = %s AND status = 'planned'",
+                (row["id"],),
+            )
+            done.append(assignment)
+    return done
 
 
 def _mark_party_leader(head: str) -> None:
@@ -1174,6 +1400,7 @@ class Bridge(discord.Client):
                 self._supervise_goals,
                 self._relay_chat,
                 self._hold_council,
+                self._assign_trades,
                 self._sample_family,
                 self._share_quests_loop,
                 self._restore_lost_lives,
@@ -1190,6 +1417,7 @@ class Bridge(discord.Client):
         await asyncio.to_thread(_ensure_thought_store)
         await asyncio.to_thread(_ensure_goal_store)
         await asyncio.to_thread(_ensure_sample_store)
+        await asyncio.to_thread(_ensure_trade_store)
 
     async def on_message(self, message: discord.Message) -> None:
         if message.author.bot:
@@ -1838,6 +2066,97 @@ class Bridge(discord.Client):
                 # relog, and the 600s sweep is still underneath it.
                 log.exception("life recheck failed")
             await asyncio.sleep(cycle)
+
+    async def _assign_trades(self) -> None:
+        """Decide who takes which trade, and watch for it actually happening.
+
+        Runs on the council's own long cadence, because it IS a council-shaped
+        decision: it is about the family as a whole, it is said out loud in
+        party chat, and it is reached the same way twice from the same state.
+
+        WHAT IT DOES NOT DO, WRITTEN HERE SO NOBODY HAS TO GO LOOKING. It does
+        not teach anybody a profession. There is no path from this loop to
+        `character_skills`, and there is no command row it could send that
+        would do it either.
+
+        THE AIM IS NO LONGER THE REASON. This docstring used to say that
+        nothing could point a bot at a chosen NPC. #2840 made that false: an
+        aimable ChangeToWanderNpc, the overseer_roster.travel_npc column and
+        DriveTravel() ship together, travel.ROLES names "profession trainer",
+        and it was proven cross-zone on dev. What #2840 delivered is TRAVEL,
+        NOT TRANSACTION: an aimed character walks to the trainer and stands
+        in front of it, and does not train. TrainerAction still needs the
+        trainer SELECTED (TrainerAction.cpp:22-24) and arrival still interacts
+        only for a quest (NewRpgAction.cpp:398-400). That verb is the
+        follow-up, and it is deliberately somebody else's change.
+
+        So the family agrees, says so, and waits - and the moment the skill
+        appears by any honest route, the row settles and the family says that
+        out loud too.
+        """
+        await self.wait_until_ready()
+        cycle = float(os.environ.get("TRADE_CYCLE_SECONDS", "3600"))
+        await asyncio.sleep(min(cycle, 90.0))
+        while not self.is_closed():
+            try:
+                await self._trades_once()
+            except Exception:
+                log.exception("trades failed; retrying next cycle")
+            await asyncio.sleep(cycle)
+
+    async def _trades_once(self) -> None:
+        family = await asyncio.to_thread(_council_family)
+        if not family:
+            log.info("trades: nobody visible to plan for")
+            return
+
+        # SETTLE FIRST. A plan computed against a stale reading would re-decide
+        # a trade the family has already been to a trainer for, and announce it
+        # a second time.
+        skills = {m.name: dict(m.skills) for m in family}
+        for done in await asyncio.to_thread(_settle_trades, skills):
+            text = (f"{done.character} has {done.skill}." if done.verb == "learn"
+                    else f"{done.character} no longer has {done.skill}.")
+            log.info("trades: settled - %s", text)
+            await asyncio.to_thread(_insert_thought, done.character, "council", text)
+
+        plan = professions.plan(family)
+        for note in plan.notes:
+            log.info("trades: %s", note)
+        if not plan.assignments:
+            log.info("trades: nothing to decide")
+            return
+
+        fresh = await asyncio.to_thread(_record_trade_plan, plan)
+        if not fresh:
+            # Already decided and still not done. What is missing is logged
+            # with the plan rather than filed away, because a decision that has
+            # not been acted on needs its reason next to it.
+            for blocker in professions.BLOCKERS:
+                log.info("trades: STILL TO BUILD - %s", blocker)
+            return
+
+        for assignment in fresh:
+            log.info("trades: %s - %s", professions.errand(assignment),
+                     assignment.reason)
+        for blocker in professions.BLOCKERS:
+            log.warning("trades: the errand stops at the trainer's door - %s",
+                        blocker)
+
+        # Said in party chat by the character it is about, through the same
+        # relay every other piece of world speech takes (#2829: a need has to
+        # become a request to a person). Only the NEW assignments speak.
+        fresh_names = {(a.character, a.verb, a.skill) for a in fresh}
+        for line in professions.lines(plan):
+            speaker, _, plain = line.partition(": ")
+            if not any(speaker == c for c, _, _ in fresh_names):
+                continue
+            text = await self._in_character(speaker, plain, "the family's trades")
+            await asyncio.to_thread(
+                _insert_speak,
+                relay.SpeakCommand(speaker, "party", text, "", "overseer:trades"),
+            )
+            await asyncio.to_thread(_insert_thought, speaker, "council", text)
 
     async def _protect_characters(self) -> None:
         """Hold the manager's own randomize bookkeeping open (infra#2656).

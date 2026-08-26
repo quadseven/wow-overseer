@@ -37,6 +37,16 @@ SKILL_IDS = {
     "enchanting": 333,
     "fishing": 356,
     "skinning": 393,
+    # These two are NOT live-verified the way the rest are: nobody on this
+    # realm holds either, which is precisely why the family's trade plan has to
+    # name them (infra#2757). They are taken from the core's own enum at the
+    # pinned SHA instead, which is a better source than a live row anyway -
+    # SharedDefines.h:3218 (SKILL_JEWELCRAFTING) and :3235 (SKILL_INSCRIPTION),
+    # in mod-playerbots/azerothcore-wotlk@efe123fa. Every id above matches that
+    # same enum exactly, which is how the two sources were checked against each
+    # other rather than assumed to agree.
+    "jewelcrafting": 755,
+    "inscription": 773,
 }
 
 # 3.3.5a caps. Targets outside these bounds are not goals: the parser stays

@@ -61,6 +61,15 @@ class ParseSkillTest(unittest.TestCase):
             "alchemy": 171, "herbalism": 182, "cooking": 185, "mining": 186,
             "tailoring": 197, "engineering": 202, "enchanting": 333,
             "fishing": 356, "skinning": 393,
+            # Added for the family's trade plan (infra#2757), and with a
+            # DIFFERENT provenance that the module says out loud: nobody on
+            # this realm holds either, so there was no live row to check them
+            # against. They come from the core's own enum at the pinned SHA -
+            # SharedDefines.h:3218 and :3235 in
+            # mod-playerbots/azerothcore-wotlk@efe123fa - which also matches
+            # every one of the twelve above, which is how the two sources were
+            # checked against each other rather than assumed to agree.
+            "jewelcrafting": 755, "inscription": 773,
         }
         self.assertEqual(goals.SKILL_IDS, expected)
         for name in expected:
@@ -80,7 +89,11 @@ class ParseSkillTest(unittest.TestCase):
         self.assertIsNone(parse_goal("get mining to 451"))
 
     def test_unknown_profession_is_not_a_goal(self):
-        self.assertIsNone(parse_goal("get jewelcrafting to 75"))
+        """Was 'jewelcrafting', which stopped being unknown when the family's
+        trade plan needed it (infra#2757). Archaeology is a Cataclysm
+        profession and does not exist on a 3.3.5a realm at all, so it is the
+        stable version of the same assertion."""
+        self.assertIsNone(parse_goal("get archaeology to 75"))
 
 
 class ParseCancelTest(unittest.TestCase):
