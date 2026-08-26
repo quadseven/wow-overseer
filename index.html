@@ -104,6 +104,7 @@
     <div id="pwbtns">
       <button id="pwcam" title="A GM camera follows them. The interface on screen is the observer's, not theirs.">watch them</button>
       <button id="pwpov" title="Log in as them with the AI playing. Their own hotbars, bags and camera - the Twitch view.">be them</button>
+      <button id="pwshot" title="Log a client in as them just long enough for one picture, then let it go. Costs a login, so it is not free - but it needs nobody to sit and watch.">look at them</button>
       <button id="pwstop" style="display:none">stop watching</button>
     </div>
     <div id="pwnote" class="note"></div>
@@ -501,6 +502,7 @@ const watch = { name: null, timer: null, every: 10000 };
 const pwcam = document.getElementById("pwcam");
 const pwpov = document.getElementById("pwpov");
 const pwstop = document.getElementById("pwstop");
+const pwshot = document.getElementById("pwshot");
 const pwnote = document.getElementById("pwnote");
 
 function watchNote(text, cls) {
@@ -529,11 +531,15 @@ async function startWatch(mode) {
     // A refusal is a sentence a person can read - both channels busy, or
     // already watching - not a silent no-op.
     watchNote(res.body.error || "could not start", "warn");
-    pwcam.disabled = pwpov.disabled = false;
+    pwcam.disabled = pwpov.disabled = pwshot.disabled = false;
     return;
   }
-  watch.name = name;
-  beat();
+  if (mode !== "shot") {
+    // A shot has no viewer to fall silent, so it needs no heartbeat - and
+    // beating for it would keep alive a row whose entire point is to end.
+    watch.name = name;
+    beat();
+  }
   refreshWatch();
 }
 
@@ -570,7 +576,7 @@ async function refreshWatch() {
   const w = s.watching;
   if (!w) {
     pwstop.style.display = "none";
-    pwcam.disabled = pwpov.disabled = false;
+    pwcam.disabled = pwpov.disabled = pwshot.disabled = false;
     // A request the agent could not honour comes back as a finished row with
     // a REASON. Showing it is the difference between "it refused, and here is
     // why" and a button that silently re-enables itself - which is exactly
@@ -582,8 +588,8 @@ async function refreshWatch() {
     else watchNote("");
     return;
   }
-  pwstop.style.display = "";
-  pwcam.disabled = pwpov.disabled = true;
+  pwstop.style.display = w.mode === "shot" ? "none" : "";
+  pwcam.disabled = pwpov.disabled = pwshot.disabled = true;
   if (w.state !== "live") {
     watchNote(w.state === "requested" ? "waiting for a client..." : w.state + "...");
     return;
@@ -659,6 +665,7 @@ async function refreshFrame() {
   pwfnote.className = "note" + (bad ? " warn" : "");
 }
 
+pwshot.onclick = () => startWatch("shot");
 pwcam.onclick = () => startWatch("cam");
 pwpov.onclick = () => startWatch("pov");
 pwstop.onclick = stopWatch;

@@ -54,7 +54,29 @@ STALE_AFTER_SECONDS = 60
 # CAM is a GM character teleported to the target and following it. Honest
 # framing matters and the UI must carry it: this is watching them, not being
 # them - the interface on screen belongs to the observer.
-MODES = ("pov", "cam")
+# `shot` is a watch that ends after one picture. It rides this lifecycle
+# rather than getting its own table and its own poller because everything that
+# makes a watch safe applies unchanged to it: the channel cap, the staleness
+# sweep, the refusal reasons, and - most of all - the selfbot verification
+# that stops a login wedging the family's loot (#2781). A screenshot is not
+# cheap: it costs a real client login. It should cost the same care.
+POV = "pov"
+CAM = "cam"
+SHOT = "shot"
+# LITERAL ON PURPOSE, and it must stay literal. The Windows stream agent reads
+# this file with ast.literal_eval to prove its own vocabulary has not drifted
+# from the map's - the two are separate codebases on separate machines with no
+# import between them. A tuple of NAMES is not literal-evaluable, so the agent
+# does not see a mismatch, it sees the constant VANISH: KeyError instead of
+# assertEqual, which is a strictly worse signal about a strictly worse problem.
+# Caught exactly that way when `shot` landed. The names above and this tuple
+# are gated against each other in tests so the duplication cannot drift.
+MODES = ("pov", "cam", "shot")
+
+# A shot needs no heartbeat: nobody is watching it, so there is no viewer to
+# fall silent. The staleness sweep is its TIMEOUT instead - a shot the agent
+# never serves ends by itself with a reason, exactly like an unanswered watch.
+NEEDS_A_VIEWER = ("pov", "cam")   # literal, same reason as MODES
 
 # requested -> the map asked
 # starting  -> the agent has taken it and is launching
@@ -66,6 +88,14 @@ STATES = ("requested", "starting", "live", "stopping", "ended")
 # States where a client exists or is about to. Only these can go stale, and
 # only these count against the channel limit.
 OCCUPIES_A_CLIENT = ("requested", "starting", "live")
+
+# A shot is judged on a different clock. A watch goes stale when its VIEWER
+# falls silent, which takes one missed beat plus margin. A shot has no viewer;
+# what it is waiting on is a client login, which WoW measured at 45-60 seconds
+# on that hardware. Sweeping it at STALE_AFTER_SECONDS would tear down the very
+# client that is midway through starting for it - the timeout would reliably
+# beat the thing it is timing.
+SHOT_TIMEOUT_SECONDS = 180
 
 # The other end of the lifecycle. Every way a watch ends carries a REASON in
 # `detail` - "nobody was watching" from the sweep, or whatever the Windows
@@ -121,6 +151,16 @@ def delivery_of(row: Mapping) -> str:
     return DELIVERY_EMBED if kind == DELIVERY_EMBED else DELIVERY_MOONLIGHT
 
 
+def needs_a_viewer(row) -> bool:
+    """Does this row expect somebody to keep saying they are there?
+
+    A watch does - silence means the viewer left, and the client must go. A
+    shot does not: it is one picture, taken and finished, and demanding a
+    heartbeat for it would tear down the very client that is mid-capture.
+    """
+    return (row.get("mode") or POV) in NEEDS_A_VIEWER
+
+
 def is_stale(row: Mapping, now_seconds: float) -> bool:
     """Has the viewer stopped saying they are there?
 
@@ -141,7 +181,8 @@ def is_stale(row: Mapping, now_seconds: float) -> bool:
         # and tearing a stream down on an absence of data is the mistake this
         # module exists to avoid.
         return False
-    return (now_seconds - float(last)) > STALE_AFTER_SECONDS
+    limit = STALE_AFTER_SECONDS if needs_a_viewer(row) else SHOT_TIMEOUT_SECONDS
+    return (now_seconds - float(last)) > limit
 
 
 def outcome_of(row: Mapping, now_seconds: float) -> dict | None:

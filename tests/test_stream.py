@@ -127,6 +127,90 @@ class OutcomesReachTheScreen(unittest.TestCase):
             stream.outcome_of(self._row(last_seen_seconds=None), 1005.0))
 
 
+class AShotIsAWatchThatEnds(unittest.TestCase):
+    """One picture, riding the watch lifecycle rather than getting its own
+    table and poller. Everything that makes a watch safe applies unchanged -
+    the channel cap, the sweep, the refusal reasons, and above all the selfbot
+    verification that stops a login wedging the family's loot (#2781). A
+    screenshot costs a real client login; it should cost the same care."""
+
+    def test_the_vocabulary_stays_machine_readable(self):
+        """The Windows agent has no import from here - it reads this file with
+        ast.literal_eval and asserts its own vocabulary matches. Writing MODES
+        as a tuple of NAMES makes the constant vanish from that parser, so the
+        agent sees KeyError rather than a mismatch. It caught `shot` that way."""
+        import ast as _ast
+        import pathlib as _pathlib
+        src = (_pathlib.Path(stream.__file__)).read_text()
+        found = {}
+        for node in _ast.parse(src).body:
+            if isinstance(node, _ast.Assign) and isinstance(node.targets[0], _ast.Name):
+                try:
+                    found[node.targets[0].id] = _ast.literal_eval(node.value)
+                except ValueError:
+                    pass
+        for name in ("MODES", "STATES", "OCCUPIES_A_CLIENT", "STALE_AFTER_SECONDS",
+                     "SHOT_TIMEOUT_SECONDS", "NEEDS_A_VIEWER"):
+            self.assertIn(name, found, f"{name} is no longer literal-evaluable")
+        self.assertEqual(tuple(stream.MODES), tuple(found["MODES"]))
+
+    def test_the_named_constants_and_the_literal_tuple_agree(self):
+        """MODES is spelled out literally so a parser can read it, which means
+        the values exist twice. Gated here so they cannot drift apart."""
+        self.assertEqual((stream.POV, stream.CAM, stream.SHOT), tuple(stream.MODES))
+        self.assertEqual((stream.POV, stream.CAM), tuple(stream.NEEDS_A_VIEWER))
+
+    def test_shot_is_a_real_mode(self):
+        self.assertIn(stream.SHOT, stream.MODES)
+        self.assertTrue(stream.can_start([], "Grug", stream.SHOT)[0])
+
+    def test_a_shot_holds_a_channel_like_anything_else(self):
+        """It is a logged-in client for a minute. Pretending otherwise is how
+        three clients end up on a two-client GPU."""
+        rows = [{"state": "live", "character": "Grug", "mode": "pov"},
+                {"state": "starting", "character": "Og", "mode": "shot"}]
+        self.assertEqual(2, stream.channels_in_use(rows))
+        self.assertFalse(stream.can_start(rows, "Bork", stream.SHOT)[0])
+
+    def test_a_shot_expects_no_viewer(self):
+        self.assertFalse(stream.needs_a_viewer({"mode": stream.SHOT}))
+        for mode in (stream.POV, stream.CAM):
+            self.assertTrue(stream.needs_a_viewer({"mode": mode}), mode)
+
+    def test_a_row_with_no_mode_is_treated_as_a_watch(self):
+        """Older rows predate the column. Assuming `shot` for them would give
+        a real watch a three-minute leash and leave a client up for nobody."""
+        self.assertTrue(stream.needs_a_viewer({}))
+
+    def test_a_shot_is_not_swept_while_its_client_is_still_logging_in(self):
+        """WoW measured 45-60s to a logged-in client on that hardware. On the
+        watch clock the timeout would reliably beat the thing it is timing,
+        tearing down the very client midway through starting for it."""
+        shot = {"state": "starting", "character": "Grug", "mode": stream.SHOT,
+                "requested_seconds": 1000.0}
+        self.assertFalse(stream.is_stale(shot, 1000.0 + 90))
+
+    def test_a_shot_nobody_serves_still_ends(self):
+        """The sweep is its timeout. Without one it would hold a channel
+        forever and no second shot could ever start."""
+        shot = {"state": "starting", "character": "Grug", "mode": stream.SHOT,
+                "requested_seconds": 1000.0}
+        self.assertTrue(stream.is_stale(shot, 1000.0 + stream.SHOT_TIMEOUT_SECONDS + 1))
+
+    def test_a_watch_keeps_the_short_leash(self):
+        """The point of two clocks is that neither drifts onto the other."""
+        watch = {"state": "live", "character": "Grug", "mode": stream.POV,
+                 "last_seen_seconds": 1000.0}
+        self.assertTrue(stream.is_stale(watch, 1000.0 + 90))
+
+    def test_the_two_timeouts_are_bounded_in_absolute_seconds(self):
+        """Pinned to real numbers, not to each other - the lesson the
+        staleness class learned from a mutation run."""
+        self.assertGreater(stream.SHOT_TIMEOUT_SECONDS, stream.STALE_AFTER_SECONDS)
+        self.assertGreaterEqual(stream.SHOT_TIMEOUT_SECONDS, 120)
+        self.assertLessEqual(stream.SHOT_TIMEOUT_SECONDS, 600)
+
+
 class Channels(unittest.TestCase):
     """One GPU. infra#2663: 'one or two channels is the realistic target'."""
 
@@ -286,6 +370,12 @@ class MapServerWiring(unittest.TestCase):
         state = state[:state.index("def _watch_post")]
         self.assertIn("outcome_of", state)
         self.assertIn('"outcome"', state)
+
+    def test_the_page_offers_a_shot_and_does_not_beat_for_it(self):
+        """A shot has no viewer to fall silent. Beating for it would keep
+        alive a row whose entire point is to finish."""
+        self.assertIn('id="pwshot"', self.page)
+        self.assertIn('mode !== "shot"', self.page)
 
     def test_the_page_renders_it(self):
         self.assertIn("s.outcome", self.page)
