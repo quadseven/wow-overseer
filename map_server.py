@@ -19,6 +19,7 @@ from urllib.parse import parse_qs, urlsplit
 import pymysql
 
 import chat
+import family
 import frames
 import stream
 import voice
@@ -186,6 +187,42 @@ def _fetch_character(name: str) -> dict:
                     row = cur.fetchone()
                     pieces["target_creature_name"] = row["name"] if row else None
             return pieces
+    finally:
+        conn.close()
+
+
+def _fetch_family() -> list[dict]:
+    """The family's fresh snapshot rows, in one query.
+
+    Deliberately the same 60s freshness rule as /api/map and /api/character:
+    a member the sweep has already removed must read as "left the world" on
+    the card at the same moment they leave the map, or the two surfaces
+    disagree about who is online.
+
+    Names come from bonds via family.roster(), never from the request, so
+    this is a fixed IN list of five - there is no user input in this SQL.
+    """
+    names = family.roster()
+    holes = ", ".join(["%s"] * len(names))
+    conn = _connect()
+    try:
+        with conn.cursor() as cur:
+            # S608: `holes` is a run of "%s" placeholders whose only input is
+            # the LENGTH of family.roster() - a constant five, from bonds.
+            # Every VALUE is still bound by the driver on the line below,
+            # nothing from the request reaches this string, and this endpoint
+            # takes no name parameter at all. Hard-coding five placeholders
+            # to dodge the f-string would silently query the wrong number of
+            # characters the day the family gains or loses somebody.
+            cur.execute(
+                "SELECT guid, name, level, race, class, health, max_health, "  # noqa: S608
+                "in_combat, is_bot, group_leader, map_id, pos_x, pos_y, "
+                "TIMESTAMPDIFF(SECOND, updated_at, NOW()) AS age_seconds "
+                "FROM overseer_snapshot "
+                f"WHERE name IN ({holes}) AND updated_at > NOW() - INTERVAL 60 SECOND",
+                tuple(names),
+            )
+            return list(cur.fetchall())
     finally:
         conn.close()
 
@@ -506,6 +543,23 @@ class Handler(BaseHTTPRequestHandler):
             # Same contract as /api/map: a dead database is a 503 the panel
             # can show as "unreachable", never a hang or a blank.
             log.exception("character query failed")
+            self._send(503, "application/json", b'{"error": "world unreachable"}')
+
+    def _family(self, query: dict) -> None:
+        """GET /api/family - the five, with enough to decide whether to look.
+
+        No name parameter on purpose: WHO the family is belongs to bonds, and
+        letting a caller pass a roster would make this a general character
+        query with a friendly name.
+        """
+        try:
+            payload = family.build_family(_fetch_family(), GEO)
+            self._send(200, "application/json", json.dumps(payload).encode())
+        except Exception:
+            # Same contract as /api/map: the tab shows its stale banner on a
+            # failed poll and keeps the last cards it drew. A blank Family tab
+            # is indistinguishable from a family who all logged out.
+            log.exception("family query failed")
             self._send(503, "application/json", b'{"error": "world unreachable"}')
 
     def _thoughts(self, query: dict) -> None:
@@ -838,6 +892,7 @@ class Handler(BaseHTTPRequestHandler):
     GET_ROUTES = {
         "/api/map": _map,
         "/api/character": _character,
+        "/api/family": _family,
         "/api/thoughts": _thoughts,
         "/api/watch": _watch_state,
         "/": _index,

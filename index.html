@@ -95,6 +95,82 @@
   #psay { background:var(--panel); color:var(--text); border:1px solid var(--line);
           border-radius:6px; cursor:pointer; font:inherit; padding:.3rem .6rem; }
   #psay:disabled, #pinput:disabled { opacity:.5; cursor:default; }
+  /* --- the Family tab (infra#2892) ---------------------------------------
+     Five cards instead of five dots among five hundred. Sized for a thumb on
+     a 390px phone FIRST and widened on a desktop, rather than the other way
+     round: the map is already the desktop's answer, and this tab exists
+     because that answer does not survive being shrunk to a phone. */
+  #family { display:none; margin:0 1rem 1rem; }
+  #fheadline { margin-bottom:.6rem; overflow-wrap:anywhere; }
+  #fheadline.alarm { color:#ff9d9d; }
+  #fcards { display:grid; gap:.6rem; grid-template-columns:1fr; }
+  /* One column until there is honestly room for two. minmax(320px,1fr) with
+     a 1fr floor means a card never gets narrower than its own content and
+     never forces the page to scroll sideways. */
+  @media (min-width:820px) {
+    #fcards { grid-template-columns:repeat(auto-fit,minmax(340px,1fr)); }
+  }
+  /* The left edge IS the health readout. A person scanning five cards on a
+     phone reads colour before they read digits, so the state has to survive
+     being seen and not read. */
+  .fcard { background:var(--panel); border:1px solid var(--line);
+           border-left:5px solid var(--line); border-radius:8px;
+           padding:.6rem .7rem; min-width:0; }
+  .fcard.c-ok   { border-left-color:var(--mortal); }
+  .fcard.c-hurt { border-left-color:#d29922; }
+  /* Dead is LOUD, not dim. The whole complaint was that a family dying on a
+     loop looked like nothing at all. */
+  .fcard.c-dead { border-left-color:var(--horde); background:#2a1416; }
+  .fcard.c-gone { border-left-color:var(--line); opacity:.6; }
+  .fhead { display:flex; align-items:center; gap:.5rem; flex-wrap:wrap; }
+  .fname { font-size:1.15rem; font-weight:bold; }
+  .fchip { border:1px solid var(--line); border-radius:99px;
+           padding:.05rem .5rem; font-size:.78rem; letter-spacing:.04em; }
+  .fchip.dead   { background:var(--horde); border-color:var(--horde); color:#1a0000;
+                  font-weight:bold; }
+  .fchip.hurt   { color:#d29922; border-color:#d29922; }
+  .fchip.gone   { color:var(--dim); }
+  .fchip.combat { color:var(--neutral); border-color:var(--neutral); }
+  .fchip.leader { color:var(--alliance); border-color:var(--alliance); }
+  .fmeta { color:var(--dim); margin-top:.15rem; }
+  .fbar { background:var(--bg); border:1px solid var(--line); border-radius:4px;
+          height:.85em; overflow:hidden; margin:.45rem 0 .25rem; }
+  .ffill { height:100%; background:var(--mortal); transition:width .3s linear; }
+  .fcard.c-hurt .ffill { background:#d29922; }
+  .fcard.c-dead .ffill { background:var(--horde); }
+  .fline { overflow-wrap:anywhere; }
+  .fline.dim { color:var(--dim); }
+  /* 44px MINIMUM, everywhere a finger goes. */
+  .fwatch, .fbtn { min-height:44px; width:100%; margin-top:.5rem;
+                   background:var(--bg); color:var(--text);
+                   border:1px solid var(--line); border-radius:6px;
+                   cursor:pointer; font:inherit; padding:.4rem .6rem; }
+  .fwatch { border-color:var(--alliance); color:var(--alliance); }
+  .fwatch:disabled, .fbtn:disabled { opacity:.45; cursor:default;
+                                     border-color:var(--line); color:var(--dim); }
+  .fpbtns { display:flex; gap:.4rem; }
+  .fpbtns .fbtn { width:auto; flex:1; }
+  .fcard .note.warn { color:#d29922; }
+  .fcard .note.live { color:var(--mortal); }
+  .fcard .note { margin-top:.35rem; white-space:pre-wrap; overflow-wrap:anywhere; }
+  .fwarn { color:var(--neutral); margin-top:.35rem; }
+  /* Same 16:9 reservation as the panel player, for the same reason: a box
+     that grows when the first frame lands makes the card jump under a thumb
+     that is already reaching for it. */
+  .fplayer { display:none; margin-top:.5rem; }
+  .fvid { width:100%; aspect-ratio:16/9; display:block; background:#000;
+          border:1px solid var(--line); border-radius:6px; }
+  /* Fullscreen letterboxes rather than crops - a stretched game is unreadable
+     and a cropped one hides the hotbars, which are half of why POV is worth
+     watching at all. */
+  .fplayer:fullscreen { background:#000; display:flex; align-items:center; }
+  .fplayer:fullscreen .fvid { max-height:100vh; border:0; border-radius:0; }
+  .fplayer:fullscreen .fpbtns, .fplayer:fullscreen .note { display:none; }
+  /* A tab is a finger target too, and .3rem of padding is 28px of button.
+     Only on touch, so the desktop keeps its compact strip. */
+  @media (pointer:coarse) {
+    nav button { min-height:44px; padding:.3rem 1rem; }
+  }
 </style>
 </head>
 <body>
@@ -104,6 +180,10 @@
 </header>
 <div id="stale"></div>
 <nav id="tabs"></nav>
+<section id="family">
+  <div id="fheadline">reaching the world...</div>
+  <div id="fcards"></div>
+</section>
 <div id="wrap"><canvas id="map"></canvas><div id="tip"></div></div>
 <aside id="panel">
   <div id="phead"><h2 id="pname"></h2><button id="pclose" title="close">x</button></div>
@@ -166,13 +246,23 @@ async function loadZones() {
   zones = z.continents;
   shapes = sh;
   const tabs = document.getElementById("tabs");
+  // FAMILY FIRST. The map answers "who is in the world"; the Family tab
+  // answers "are my five all right", which is the question that actually gets
+  // asked from a phone - so it is the first thing under the thumb, not the
+  // seventh (infra#2892).
+  const fb = document.createElement("button");
+  fb.textContent = "Family";
+  fb.dataset.view = FAMILY_VIEW;
+  fb.onclick = () => showView(FAMILY_VIEW);
+  tabs.appendChild(fb);
   for (const id of CONTINENT_ORDER) {
     const b = document.createElement("button");
     b.textContent = zones[id].name;
     b.dataset.id = id;
-    b.onclick = () => { current = id; render(); };
+    b.onclick = () => { current = id; showView("map"); render(); };
     tabs.appendChild(b);
   }
+  markTabs();
 }
 
 async function poll() {
@@ -358,8 +448,11 @@ function drawScale(x, y, yardsPerPx) {
 
 function render() {
   if (!shapes) return;
-  for (const b of document.querySelectorAll("nav button"))
-    b.classList.toggle("on", b.dataset.id === current);
+  // ONE OWNER FOR THE SELECTED TAB (infra#2892). This used to mark tabs from
+  // `current` alone, five times a second for the combat pulse - which meant
+  // it silently un-highlighted the Family tab 200ms after it was tapped,
+  // leaving the Family view on screen with a continent lit up above it.
+  markTabs();
   const W = canvas.clientWidth;
   // Fill what is left of the window rather than a fixed box: a tall
   // continent needs the height, and the leftover is sea either way.
@@ -544,12 +637,29 @@ async function watchPost(name, action, mode) {
   return { ok: r.ok, body: body };
 }
 
+// Ask for a client and, if it was granted, START PROMISING TO BE HERE. Split
+// out of startWatch (infra#2892) because the Family tab needs exactly these
+// two steps in exactly this order, and a surface that asks without beating
+// leaves a client rendering the game for nobody - the precise cost #2663
+// exists to avoid. ONE PAGE, ONE BEAT: whichever surface asked last owns
+// watch.name, which is why only one thing on this page watches at a time.
+async function requestWatch(name, mode) {
+  const res = await watchPost(name, "start", mode);
+  if (res.ok && mode !== "shot") {
+    // A shot has no viewer to fall silent, so it needs no heartbeat - and
+    // beating for it would keep alive a row whose entire point is to end.
+    watch.name = name;
+    beat();
+  }
+  return res;
+}
+
 async function startWatch(mode) {
   if (!selected) return;
   const name = selected;
   pwcam.disabled = pwpov.disabled = true;
   watchNote("asking for a client...");
-  const res = await watchPost(name, "start", mode);
+  const res = await requestWatch(name, mode);
   if (name !== selected) return;
   if (!res.ok) {
     // A refusal is a sentence a person can read - both channels busy, or
@@ -557,12 +667,6 @@ async function startWatch(mode) {
     watchNote(res.body.error || "could not start", "warn");
     pwcam.disabled = pwpov.disabled = pwshot.disabled = false;
     return;
-  }
-  if (mode !== "shot") {
-    // A shot has no viewer to fall silent, so it needs no heartbeat - and
-    // beating for it would keep alive a row whose entire point is to end.
-    watch.name = name;
-    beat();
   }
   refreshWatch();
 }
@@ -615,7 +719,6 @@ function beat() {
 const pwvideo = document.getElementById("pwvideo");
 const pwvid = document.getElementById("pwvid");
 const pwvnote = document.getElementById("pwvnote");
-const player = { url: null, pc: null, session: null };
 
 function playerNote(text, cls) {
   pwvnote.textContent = text || "";
@@ -657,105 +760,122 @@ function whepFailure(status) {
   return "the media server refused the connection (HTTP " + status + ").";
 }
 
-async function whepExchange(pc, url) {
-  await pc.setLocalDescription(await pc.createOffer());
-  await iceGathered(pc);
-  const r = await fetch(url, {
-    method: "POST",
-    headers: { "content-type": "application/sdp" },
-    body: pc.localDescription.sdp,
-  });
-  if (r.status !== 201) throw new Error(whepFailure(r.status));
-  // Best effort: the session URL only comes back to us if MediaMTX exposes
-  // Location across origins. Without it the DELETE below is skipped and
-  // closing the PeerConnection is what ends the session - slower, not wrong.
-  try {
-    const loc = r.headers.get("location");
-    if (loc) player.session = new URL(loc, url).toString();
-  } catch (e) { player.session = null; }
-  await pc.setRemoteDescription({ type: "answer", sdp: await r.text() });
-}
+// ONE WHEP PATH, TWO SURFACES (infra#2892). This was a singleton bound to the
+// panel's own <video>. The Family tab needs the same handshake against a
+// different element, and a SECOND copy of it - a second offer, a second set
+// of autoplay lies to fall for, a second opinion about what a 404 means - is
+// how two surfaces start disagreeing about whether a stream is up. So the
+// state moved into a closure and the element became an argument. The panel's
+// behaviour is unchanged because it is running the same code it was.
+function makePlayer(video, note, box) {
+  const player = { url: null, pc: null, session: null };
 
-function watchConnection(pc) {
-  pc.onconnectionstatechange = () => {
-    if (player.pc !== pc) return;
-    if (pc.connectionState === "failed") {
-      playerNote("the video connection failed - the browser and the box "
-        + "agreed on a stream and no media crossed the tailnet.", "warn");
-    } else if (pc.connectionState === "disconnected") {
-      playerNote("the video connection dropped.", "warn");
-    }
-  };
-}
-
-async function startPlayer(name, base) {
-  const url = base.replace(/\/+$/, "") + "/whep";
-  if (player.url === url) return;   // already playing this character
-  stopPlayer();
-  player.url = url;
-  pwvideo.style.display = "block";
-  if (location.protocol === "https:" && /^http:/i.test(url)) {
-    playerNote("the stream address is plain http:// and this page is https://"
-      + ", so the browser will block it as mixed content and show nothing. "
-      + "The stream needs its TLS vhost in front of it.", "warn");
-    return;
-  }
-  playerNote("connecting to the video...");
-  const pc = new RTCPeerConnection();
-  player.pc = pc;
-  pc.addTransceiver("video", { direction: "recvonly" });
-  pc.addTransceiver("audio", { direction: "recvonly" });
-  pc.ontrack = (e) => {
-    if (player.pc !== pc) return;
-    // ontrack FIRES ONCE PER TRACK - video and audio - and re-assigning the
-    // same MediaStream restarts loading for no reason, which is what aborted
-    // the first play() below and produced a "would not start" warning over a
-    // picture that was playing perfectly.
-    if (pwvid.srcObject !== e.streams[0]) pwvid.srcObject = e.streams[0];
-    playerNote("live from " + name + "'s screen", "live");
-    // THE autoplay ATTRIBUTE IS NOT ENOUGH, and this was measured rather than
-    // reasoned about: connected, 1280x720, readyState 4 - and paused, with
-    // currentTime stuck at 0. A stream handed to an element AFTER load does
-    // not always trip the attribute, and a tab that was not focused when the
-    // track arrived is the common case here, because the wait is a minute
-    // long and people go and do something else. The symptom is the worst one
-    // available: a still frame that looks exactly like a live game.
-    //
-    // play() returns a promise and a REJECTION IS A SENTENCE. If a browser
-    // ever refuses (an autoplay policy stricter than muted-video), the person
-    // is told to press play rather than left watching a frozen picture.
-    // AND THE REJECTION IS CHECKED BEFORE IT IS BELIEVED. A rejected play()
-    // is not always a refusal: an interrupted promise rejects while the video
-    // plays on, and the first live run said "would not start it" underneath
-    // Ugga running through a forest at 30fps. A warning that contradicts what
-    // is on screen costs more trust than saying nothing would.
-    pwvid.play().catch(() => {
-      if (!pwvid.paused) return;
-      playerNote("the video is connected but this browser would not start it "
-        + "on its own - press play on the picture.", "warn");
+  async function whepExchange(pc, url) {
+    await pc.setLocalDescription(await pc.createOffer());
+    await iceGathered(pc);
+    const r = await fetch(url, {
+      method: "POST",
+      headers: { "content-type": "application/sdp" },
+      body: pc.localDescription.sdp,
     });
-  };
-  watchConnection(pc);
-  try {
-    await whepExchange(pc, url);
-  } catch (e) {
-    if (player.pc !== pc) return;
-    playerNote("could not start the video: " + (e.message || e), "warn");
+    if (r.status !== 201) throw new Error(whepFailure(r.status));
+    // Best effort: the session URL only comes back to us if MediaMTX exposes
+    // Location across origins. Without it the DELETE below is skipped and
+    // closing the PeerConnection is what ends the session - slower, not wrong.
+    try {
+      const loc = r.headers.get("location");
+      if (loc) player.session = new URL(loc, url).toString();
+    } catch (e) { player.session = null; }
+    await pc.setRemoteDescription({ type: "answer", sdp: await r.text() });
   }
+
+  function watchConnection(pc) {
+    pc.onconnectionstatechange = () => {
+      if (player.pc !== pc) return;
+      if (pc.connectionState === "failed") {
+        note("the video connection failed - the browser and the box "
+          + "agreed on a stream and no media crossed the tailnet.", "warn");
+      } else if (pc.connectionState === "disconnected") {
+        note("the video connection dropped.", "warn");
+      }
+    };
+  }
+
+  async function start(name, base) {
+    const url = base.replace(/\/+$/, "") + "/whep";
+    if (player.url === url) return;   // already playing this character
+    stop();
+    player.url = url;
+    box.style.display = "block";
+    if (location.protocol === "https:" && /^http:/i.test(url)) {
+      note("the stream address is plain http:// and this page is https://"
+        + ", so the browser will block it as mixed content and show nothing. "
+        + "The stream needs its TLS vhost in front of it.", "warn");
+      return;
+    }
+    note("connecting to the video...");
+    const pc = new RTCPeerConnection();
+    player.pc = pc;
+    pc.addTransceiver("video", { direction: "recvonly" });
+    pc.addTransceiver("audio", { direction: "recvonly" });
+    pc.ontrack = (e) => {
+      if (player.pc !== pc) return;
+      // ontrack FIRES ONCE PER TRACK - video and audio - and re-assigning the
+      // same MediaStream restarts loading for no reason, which is what aborted
+      // the first play() below and produced a "would not start" warning over a
+      // picture that was playing perfectly.
+      if (video.srcObject !== e.streams[0]) video.srcObject = e.streams[0];
+      note("live from " + name + "'s screen", "live");
+      // THE autoplay ATTRIBUTE IS NOT ENOUGH, and this was measured rather than
+      // reasoned about: connected, 1280x720, readyState 4 - and paused, with
+      // currentTime stuck at 0. A stream handed to an element AFTER load does
+      // not always trip the attribute, and a tab that was not focused when the
+      // track arrived is the common case here, because the wait is a minute
+      // long and people go and do something else. The symptom is the worst one
+      // available: a still frame that looks exactly like a live game.
+      //
+      // play() returns a promise and a REJECTION IS A SENTENCE. If a browser
+      // ever refuses (an autoplay policy stricter than muted-video), the person
+      // is told to press play rather than left watching a frozen picture.
+      // AND THE REJECTION IS CHECKED BEFORE IT IS BELIEVED. A rejected play()
+      // is not always a refusal: an interrupted promise rejects while the video
+      // plays on, and the first live run said "would not start it" underneath
+      // Ugga running through a forest at 30fps. A warning that contradicts what
+      // is on screen costs more trust than saying nothing would.
+      video.play().catch(() => {
+        if (!video.paused) return;
+        note("the video is connected but this browser would not start it "
+          + "on its own - press play on the picture.", "warn");
+      });
+    };
+    watchConnection(pc);
+    try {
+      await whepExchange(pc, url);
+    } catch (e) {
+      if (player.pc !== pc) return;
+      note("could not start the video: " + (e.message || e), "warn");
+    }
+  }
+
+  function stop() {
+    if (player.session) {
+      // Fire and forget. A session MediaMTX keeps for a few seconds longer than
+      // it should is far cheaper than an exception thrown while closing a panel.
+      fetch(player.session, { method: "DELETE" }).catch(() => {});
+    }
+    if (player.pc) { try { player.pc.close(); } catch (e) { /* already gone */ } }
+    player.pc = null; player.session = null; player.url = null;
+    video.srcObject = null;
+    box.style.display = "none";
+    note("");
+  }
+
+  return { start: start, stop: stop };
 }
 
-function stopPlayer() {
-  if (player.session) {
-    // Fire and forget. A session MediaMTX keeps for a few seconds longer than
-    // it should is far cheaper than an exception thrown while closing a panel.
-    fetch(player.session, { method: "DELETE" }).catch(() => {});
-  }
-  if (player.pc) { try { player.pc.close(); } catch (e) { /* already gone */ } }
-  player.pc = null; player.session = null; player.url = null;
-  pwvid.srcObject = null;
-  pwvideo.style.display = "none";
-  playerNote("");
-}
+const panelPlayer = makePlayer(pwvid, playerNote, pwvideo);
+function startPlayer(name, base) { return panelPlayer.start(name, base); }
+function stopPlayer() { panelPlayer.stop(); }
 
 // WHAT TO SAY WHILE NOTHING IS ON SCREEN YET, and why it is three sentences
 // and not a spinner. The agent takes 45-60 REAL seconds: it launches a
@@ -782,6 +902,53 @@ function waitingWords(w, s) {
     + "honestly takes about " + budget + "s" + soFar + ".";
 }
 
+// WHAT A /api/watch PAYLOAD MEANS, with no opinion about who is drawing it
+// (infra#2892). Two surfaces render this state now, and them reaching
+// different conclusions from the same row would be worse than either being
+// wrong: only one of the two is ever on screen to be corrected.
+function watchView(s) {
+  const w = s.watching;
+  if (!w) {
+    // The row is over. A request the agent could not honour comes back as a
+    // finished row with a REASON, and showing it VERBATIM is the difference
+    // between "it refused, and here is why" and a control that silently
+    // re-enables itself. The agent writes whole sentences - the selfbot did
+    // not attach, so the stream was stopped rather than left wedging the
+    // party's loot rolls - and a bare "ended" throws all of that away.
+    const why = s.outcome && s.outcome.detail;
+    if (why) return { phase: "ended", text: why, cls: "warn" };
+    if (s.channels_in_use >= s.max_channels) {
+      return { phase: "busy", cls: "warn",
+               text: "both channels busy (" + s.channels_in_use
+                     + "/" + s.max_channels + ")" };
+    }
+    return { phase: "idle", text: "", cls: "" };
+  }
+  if (w.state !== "live") {
+    return { phase: "waiting", mode: w.mode,
+             text: waitingWords(w, s), cls: w.unclaimed ? "warn" : "" };
+  }
+  // Sunshine has NO browser player - its 47990 is a config UI, and video
+  // leaves over Moonlight. So a live stream is INSTRUCTIONS unless the server
+  // says it is genuinely embeddable. Rendering a player for a Moonlight
+  // stream would be a black rectangle and a bug report.
+  if (w.delivery === "embed" && w.detail) {
+    // The two modes look similar and mean very different things: POV is their
+    // own hotbars, bags and camera; cam is a GM standing next to them with the
+    // observer's UI. Say WHOSE interface is on screen.
+    return { phase: "live", mode: w.mode, embed: w.detail, cls: "live",
+             text: w.mode === "pov"
+               ? "live - their own screen, their own interface"
+               : "live - an observer's camera following them" };
+  }
+  // Printed VERBATIM. The agent writes detail as the sentence it wants read -
+  // which instance to open, and what you are actually looking at - so
+  // prefixing it gave "live on Moonlight - Open Moonlight on the Switch and
+  // launch...". It says that better than a label can.
+  return { phase: "elsewhere", mode: w.mode, cls: "live",
+           text: w.detail || "live on Moonlight" };
+}
+
 async function refreshWatch() {
   if (!selected) return;
   const name = selected;
@@ -793,54 +960,20 @@ async function refreshWatch() {
   if (name !== selected) return;
   if (s.heartbeat_seconds) watch.every = s.heartbeat_seconds * 1000;
   const w = s.watching;
+  const v = watchView(s);
   if (!w) {
-    // The row is over. Whatever it ended as, there is nothing to render, and
-    // a player left connected would keep pulling video across the tailnet for
-    // a stream the world has already torn down.
+    // Nothing left to render, and a player left connected would keep pulling
+    // video across the tailnet for a stream the world has already torn down.
     stopPlayer();
     pwstop.style.display = "none";
     pwcam.disabled = pwpov.disabled = pwshot.disabled = false;
-    // A request the agent could not honour comes back as a finished row with
-    // a REASON. Showing it is the difference between "it refused, and here is
-    // why" and a button that silently re-enables itself - which is exactly
-    // what this did until somebody tried to watch and got nothing.
-    const why = s.outcome && s.outcome.detail;
-    const full = s.channels_in_use >= s.max_channels;
-    if (why) watchNote(why, "warn");
-    else if (full) watchNote("both channels busy (" + s.channels_in_use + "/" + s.max_channels + ")", "warn");
-    else watchNote("");
+    watchNote(v.text, v.cls);
     return;
   }
   pwstop.style.display = w.mode === "shot" ? "none" : "";
   pwcam.disabled = pwpov.disabled = pwshot.disabled = true;
-  if (w.state !== "live") {
-    stopPlayer();
-    watchNote(waitingWords(w, s), w.unclaimed ? "warn" : "");
-    return;
-  }
-  // Sunshine has NO browser player - its 47990 is a config UI, and video
-  // leaves over Moonlight. So a live stream is INSTRUCTIONS unless the server
-  // says it is genuinely embeddable. Rendering a player for a Moonlight
-  // stream would be a black rectangle and a bug report.
-  if (w.delivery === "embed" && w.detail) {
-    // The panel says WHOSE interface is on screen, because the two modes look
-    // similar and mean very different things: POV is their own hotbars, bags
-    // and camera; cam is a GM standing next to them with the observer's UI.
-    watchNote(w.mode === "pov"
-      ? "live - their own screen, their own interface"
-      : "live - an observer's camera following them", "live");
-    startPlayer(name, w.detail);
-  } else if (w.detail) {
-    stopPlayer();
-    // Printed VERBATIM. The agent writes detail as the sentence it wants read
-    // - which instance to open, and what you are actually looking at - so
-    // prefixing it gave "live on Moonlight - Open Moonlight on the Switch
-    // and launch...". It says that better than a label can.
-    watchNote(w.detail, "live");
-  } else {
-    stopPlayer();
-    watchNote("live on Moonlight", "live");
-  }
+  watchNote(v.text, v.cls);
+  if (v.embed) startPlayer(name, v.embed); else stopPlayer();
 }
 
 // --- their own screen (infra#2663) ---------------------------------------
@@ -1143,6 +1276,329 @@ chatForm.addEventListener("submit", async (e) => {
 });
 
 function refreshMind() { if (mind.name && !mind.busy) fetchThoughts(null); }
+
+// --- the Family tab (infra#2892) -----------------------------------------
+//
+// THE COMPLAINT THIS ANSWERS, in Evan's own words: on a phone the map is five
+// hundred dots and the five that matter are indistinguishable. The map is the
+// right instrument for "who is in the world" and the wrong one for "is my
+// family alive" - that second question is about five named characters and its
+// answer is a list, not a picture. So this is a TAB and not a filter.
+//
+// It is also the tab that would have caught the incident that produced it:
+// the five of them dying on a loop in a zone thirty levels above them, with
+// nothing anywhere on this page saying so.
+const FAMILY_VIEW = "family";
+const fsection = document.getElementById("family");
+const fcards = document.getElementById("fcards");
+const fheadline = document.getElementById("fheadline");
+const legend = document.querySelector("footer");
+const wrapEl = document.getElementById("wrap");
+let view = "map";
+// `open` is who this tab is watching. ONE AT A TIME on purpose: the GPU has
+// two channels, and the second is worth leaving free for the panel, another
+// phone, or Evan on the Switch - two videos on one phone screen is not a
+// feature anybody asked for.
+const fam = { cards: new Map(), byName: new Map(), open: null, channels: null };
+
+function setNote(node, text, cls) {
+  node.textContent = text || "";
+  node.className = node.dataset.base + (cls ? " " + cls : "");
+}
+
+function noteNode(cls) {
+  const n = el("div", cls);
+  n.dataset.base = cls;
+  return n;
+}
+
+// iOS Safari has no Fullscreen API on ordinary elements - a <video> there has
+// its own native call instead. Without that branch the button does nothing at
+// all on the one device this tab was built for.
+//
+// AND A REFUSAL IS SAID OUT LOUD. This swallowed its rejection until a test
+// caught it: Chrome answers requestFullscreen with "Permissions check failed"
+// whenever the tap did not carry user activation, and an embedded page can be
+// refused by policy outright. Both look identical to a person - a button that
+// does nothing - which is the one outcome the rest of this page refuses to
+// ship. The native video path is tried first as a fallback, because on iOS it
+// is the one that actually works.
+function goFullscreen(box, video, note) {
+  const refused = (why) => note("could not go fullscreen: " + why, "warn");
+  // iOS only, and genuinely DIFFERENT machinery rather than a spelling of the
+  // same thing: it hands the video to the OS player. webkitRequestFullscreen
+  // is merely the old name for the standard call, so retrying it after the
+  // standard one has already refused buys nothing and - because the legacy
+  // form returns no promise - silently swallows the reason. That is exactly
+  // how this went quiet the first time.
+  const iosNative = () => {
+    if (!video.webkitEnterFullscreen) return false;
+    video.webkitEnterFullscreen();
+    return true;
+  };
+  if (box.requestFullscreen) {
+    box.requestFullscreen().catch((e) => {
+      try { if (iosNative()) return; } catch (e2) { /* fall through to the words */ }
+      refused(e.message || e.name || "the browser refused");
+    });
+    return;
+  }
+  try { if (iosNative()) return; } catch (e) { /* fall through to the words */ }
+  if (video.webkitRequestFullscreen) { video.webkitRequestFullscreen(); return; }
+  refused("this browser has no fullscreen for video.");
+}
+
+// Cards are built ONCE and updated in place. Rebuilding them on the 5s poll
+// would replace the <video> element mid-stream every five seconds, which is a
+// black rectangle and a torn-down PeerConnection dressed up as a refresh.
+function familyCard(name) {
+  let c = fam.cards.get(name);
+  if (c) return c;
+  const card = el("article", "fcard");
+  const head = el("div", "fhead");
+  const nm = el("span", "fname", name);
+  const chip = el("span", "fchip");
+  const combat = el("span", "fchip combat", "in combat");
+  const lead = el("span", "fchip leader", "leads");
+  head.append(nm, chip, combat, lead);
+  const meta = el("div", "fmeta");
+  const bar = el("div", "fbar");
+  const fill = el("div", "ffill");
+  bar.appendChild(fill);
+  const hp = el("div", "fline");
+  const where = el("div", "fline dim");
+  const warn = el("div", "fwarn");
+  const btn = el("button", "fwatch", "watch");
+  const note = noteNode("note");
+  const box = el("div", "fplayer");
+  // MUTED AND AUTOPLAY ARE BOTH LOAD-BEARING, exactly as they are in the
+  // panel: a browser refuses to autoplay audible video and the refusal is
+  // silent. playsinline stops iOS taking the video fullscreen on its own -
+  // this card has a button for that, so the choice stays with the person.
+  // controls is the escape hatch for a browser that still will not autoplay.
+  const video = document.createElement("video");
+  video.className = "fvid";
+  video.muted = true; video.autoplay = true; video.controls = true;
+  video.playsInline = true;
+  video.setAttribute("muted", ""); video.setAttribute("playsinline", "");
+  const btns = el("div", "fpbtns");
+  const full = el("button", "fbtn", "fullscreen");
+  const stop = el("button", "fbtn", "stop watching");
+  btns.append(full, stop);
+  const vnote = noteNode("note");
+  box.append(video, btns, vnote);
+  card.append(head, meta, bar, hp, where, warn, btn, note, box);
+  fcards.appendChild(card);
+  c = { card, nm, chip, combat, lead, meta, bar, fill, hp, where, warn,
+        btn, note, box, video, vnote, full, stop };
+  c.player = makePlayer(video, (t, cls) => setNote(vnote, t, cls), box);
+  btn.onclick = () => familyWatch(name);
+  stop.onclick = () => familyStop();
+  full.onclick = () => goFullscreen(box, video, (t, cls) => setNote(vnote, t, cls));
+  fam.cards.set(name, c);
+  return c;
+}
+
+function renderFamily(p) {
+  fam.byName = new Map(p.members.map((m) => [m.name, m]));
+  const bits = [p.here + " of " + p.expected + " here"];
+  if (p.dead) bits.push(p.dead === 1 ? "1 DEAD" : p.dead + " DEAD");
+  if (p.in_combat) bits.push(p.in_combat + " fighting");
+  fheadline.textContent = bits.join("  -  ");
+  fheadline.className = p.dead ? "alarm" : "";
+  for (const m of p.members) {
+    const c = familyCard(m.name);
+    c.card.className = "fcard c-" + m.condition;
+    c.nm.textContent = m.name;
+    c.chip.style.display = "";
+    if (m.condition === "dead") c.chip.className = "fchip dead", c.chip.textContent = "DEAD";
+    else if (m.condition === "gone") c.chip.className = "fchip gone", c.chip.textContent = "not in the world";
+    else if (m.condition === "hurt") c.chip.className = "fchip hurt", c.chip.textContent = "hurt";
+    else c.chip.style.display = "none";
+    c.combat.style.display = m.combat ? "" : "none";
+    c.lead.style.display = m.leader ? "" : "none";
+    if (!m.present) {
+      // Still says WHO is missing. A card stripped down to a name is how a
+      // logged-out character stops being noticed, which is the whole
+      // complaint this tab answers.
+      c.meta.textContent = m["class"] + " - " + m.role;
+      c.bar.style.display = "none";
+      c.hp.textContent = "";
+      c.where.textContent = "not in the world - logged out, or the "
+        + "worldserver dropped them.";
+      c.warn.style.display = "none";
+      continue;
+    }
+    c.meta.textContent = "L" + m.level + " " + m["class"] + " - " + m.role;
+    c.bar.style.display = "";
+    c.fill.style.width = m.health_pct + "%";
+    c.hp.textContent = m.condition === "dead"
+      ? "dead - 0 / " + m.max_health
+      : m.health + " / " + m.max_health + "  (" + m.health_pct + "%)";
+    c.where.textContent = m.zone;
+    // stream.pov_changes_the_family says in as many words that the UI must
+    // not hide this, and until now nothing on this page said it out loud.
+    c.warn.style.display = m.pov_changes_the_family ? "" : "none";
+    c.warn.textContent = m.pov_changes_the_family
+      ? "watching " + m.name + " in POV makes him a selfbot, and the other "
+        + "four take him as their master and follow. It stops when you stop."
+      : "";
+  }
+  updateFamilyButtons();
+}
+
+function updateFamilyButtons() {
+  const ch = fam.channels;
+  const full = ch !== null && ch.used >= ch.max;
+  for (const [name, c] of fam.cards) {
+    const m = fam.byName.get(name);
+    const mine = fam.open === name;
+    c.stop.style.display = mine ? "" : "none";
+    c.full.style.display = mine ? "" : "none";
+    c.btn.style.display = mine ? "none" : "";
+    if (mine) continue;
+    if (m && !m.present) {
+      c.btn.disabled = true;
+      c.btn.textContent = "not in the world";
+    } else if (full && !fam.open) {
+      // BOTH CHANNELS ARE SPOKEN FOR. One GPU runs two clients, so a third
+      // tap cannot succeed - and saying so on the button is the difference
+      // between an honest no and forty seconds of spinner ending in a
+      // refusal. The button is where the person is already looking.
+      c.btn.disabled = true;
+      c.btn.textContent = "both channels busy (" + ch.used + "/" + ch.max + ")";
+    } else if (fam.open) {
+      c.btn.disabled = false;
+      c.btn.textContent = "switch to " + name;
+    } else {
+      c.btn.disabled = false;
+      c.btn.textContent = "watch " + name;
+    }
+  }
+}
+
+// POV AND ONLY POV. "watch them" (follow-cam) is not implemented and answers
+// with a refusal after about forty seconds of pointless client bring-up
+// (infra#2887), so this tab does not offer it at all - a button whose only
+// outcome is a wasted minute is worse than no button.
+async function familyWatch(name) {
+  // Tear the previous one down BEFORE asking for the next, or a switch leaves
+  // the first character's video playing under the second character's name -
+  // the exact confusion this whole feature exists to remove.
+  if (fam.open && fam.open !== name) await familyStop();
+  fam.open = name;
+  const c = familyCard(name);
+  setNote(c.note, "asking for a client...");
+  updateFamilyButtons();
+  const res = await requestWatch(name, "pov");
+  if (fam.open !== name) return;
+  if (!res.ok) {
+    setNote(c.note, res.body.error || "could not start", "warn");
+    fam.open = null;
+    updateFamilyButtons();
+    return;
+  }
+  refreshFamilyWatch();
+}
+
+async function familyStop() {
+  const name = fam.open;
+  if (!name) return;
+  fam.open = null;
+  const c = fam.cards.get(name);
+  if (c) { c.player.stop(); setNote(c.note, ""); }
+  if (watch.timer) { clearInterval(watch.timer); watch.timer = null; }
+  watch.name = null;
+  updateFamilyButtons();
+  await watchPost(name, "stop").catch(() => {});
+}
+
+async function refreshFamilyWatch() {
+  if (view !== FAMILY_VIEW) return;
+  // Polled even with nobody being watched, for two reasons: it is how the
+  // cards learn that both channels are spoken for by somebody else, and every
+  // read of this endpoint is also the SWEEP that expires streams whose viewer
+  // went quiet. Merely having this tab open keeps the world tidy.
+  const name = fam.open || "";
+  let s;
+  try {
+    const r = await fetch("/api/watch?name=" + encodeURIComponent(name));
+    s = await r.json();
+  } catch (e) { return; }
+  fam.channels = { used: s.channels_in_use, max: s.max_channels };
+  if (s.heartbeat_seconds) watch.every = s.heartbeat_seconds * 1000;
+  if (!name || fam.open !== name) { updateFamilyButtons(); return; }
+  const c = fam.cards.get(name);
+  if (!c) return;
+  const v = watchView(s);
+  setNote(c.note, v.text, v.cls);
+  if (v.embed) c.player.start(name, v.embed); else c.player.stop();
+  if (!s.watching) {
+    // The row ended - honoured, refused, or swept. The reason is already on
+    // screen above; the card goes back to offering a watch underneath it.
+    fam.open = null;
+    if (watch.timer) { clearInterval(watch.timer); watch.timer = null; }
+    watch.name = null;
+  }
+  updateFamilyButtons();
+}
+
+async function pollFamily() {
+  if (view !== FAMILY_VIEW) return;
+  try {
+    const r = await fetch("/api/family");
+    if (!r.ok) throw new Error(r.status);
+    renderFamily(await r.json());
+  } catch (e) {
+    // Keep the cards that are drawn. A Family tab that blanks on a failed
+    // poll is indistinguishable from a family who all logged out at once.
+    fheadline.textContent = "the world is unreachable - these cards may be stale";
+    fheadline.className = "alarm";
+  }
+}
+
+function markTabs() {
+  for (const b of document.querySelectorAll("#tabs button")) {
+    const on = b.dataset.view === FAMILY_VIEW
+      ? view === FAMILY_VIEW
+      : view !== FAMILY_VIEW && b.dataset.id === current;
+    b.classList.toggle("on", on);
+  }
+}
+
+function showView(v) {
+  view = v;
+  const isFam = v === FAMILY_VIEW;
+  fsection.style.display = isFam ? "block" : "none";
+  wrapEl.style.display = isFam ? "none" : "block";
+  legend.style.display = isFam ? "none" : "";
+  markTabs();
+  if (isFam) {
+    // The panel is a map thing, and leaving it open behind a hidden canvas
+    // would keep a second heartbeat and a second player alive off screen.
+    closePanel();
+    pollFamily();
+    refreshFamilyWatch();
+    return;
+  }
+  // LEAVING THE TAB DOES NOT STOP THE STREAM, for the same reason closing the
+  // panel does not: a viewer may well switch to the map, or put the phone
+  // down, and keep watching elsewhere. The video goes now because it is
+  // pulling 6Mbit across the tailnet into something nobody can see; the
+  // heartbeat stopping is what ends the stream, and the server's staleness
+  // sweep is the one mechanism that cannot be fooled by how a page was left.
+  if (fam.open) {
+    const c = fam.cards.get(fam.open);
+    if (c) { c.player.stop(); setNote(c.note, ""); }
+    fam.open = null;
+    if (watch.timer) { clearInterval(watch.timer); watch.timer = null; }
+    watch.name = null;
+    updateFamilyButtons();
+  }
+}
+
+setInterval(pollFamily, 5000);         // the family rides the same 5s cadence
+setInterval(refreshFamilyWatch, 5000); // and so does the watch it owns
 
 loadZones().then(() => { poll(); setInterval(poll, 5000); });
 setInterval(fetchPanel, 5000);  // panel rides the same 5s snapshot cadence

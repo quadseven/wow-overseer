@@ -383,9 +383,17 @@ class MapServerWiring(unittest.TestCase):
     def test_a_live_detail_is_printed_verbatim(self):
         """The agent writes detail as prose meant to be read as-is. Labelling
         it produced "live on Moonlight - Open Moonlight on the Switch and
-        launch..." - the sentence already says that, better."""
-        self.assertNotIn('"live on Moonlight" + (w.detail', self.page)
-        self.assertIn("watchNote(w.detail, \"live\")", self.page)
+        launch..." - the sentence already says that, better.
+
+        Asserted inside watchView since infra#2892: the decision moved there
+        when the Family tab became a second surface rendering the same row,
+        and two surfaces disagreeing about what a row MEANS is worse than
+        either being wrong, because only one is on screen to be corrected.
+        """
+        view = self.page[self.page.index("function watchView"):]
+        view = view[:view.index("async function refreshWatch")]
+        self.assertNotIn('"live on Moonlight" + (w.detail', view)
+        self.assertIn('w.detail || "live on Moonlight"', view)
 
     def test_the_note_keeps_the_line_breaks_it_was_given(self):
         """detail is several sentences now; textContent collapses newlines
@@ -420,11 +428,11 @@ class MapServerWiring(unittest.TestCase):
     def test_the_page_never_embeds_a_moonlight_stream(self):
         """Sunshine has no browser player - 47990 is its config UI. An iframe
         at any Sunshine port shows settings or nothing."""
-        watch = self.page[self.page.index("async function refreshWatch"):]
-        watch = watch[:watch.index("pwcam.onclick")]
-        self.assertIn('w.delivery === "embed"', watch)
-        self.assertIn("Moonlight", watch)
-        self.assertNotIn("<iframe", watch)
+        view = self.page[self.page.index("function watchView"):]
+        view = view[:view.index("async function refreshWatch")]
+        self.assertIn('w.delivery === "embed"', view)
+        self.assertIn("Moonlight", view)
+        self.assertNotIn("<iframe", view)
 
     def test_closing_the_panel_does_not_stop_the_stream(self):
         """A viewer may close the map and keep watching on the Switch. Only
@@ -620,10 +628,10 @@ class ThePlayer(unittest.TestCase):
         commonly unfocused because the wait is a minute long. The symptom is
         the worst one available: a frozen frame that looks like a live game.
         """
-        player = self.page[self.page.index("async function startPlayer"):]
-        player = player[:player.index("function stopPlayer")]
+        player = self.page[self.page.index("function makePlayer"):]
+        player = player[:player.index("const panelPlayer")]
         self.assertIn(".play()", player)
-        self.assertIn("if (!pwvid.paused) return;", player,
+        self.assertIn("if (!video.paused) return;", player,
                       "a rejected play() is not always a refusal - an "
                       "interrupted promise rejects while the video plays on, "
                       "and the first live run printed 'would not start it' "
@@ -631,6 +639,11 @@ class ThePlayer(unittest.TestCase):
         self.assertIn("press play", player,
                       "a refused play() must tell the person what to do, not "
                       "leave them looking at a still picture")
+        self.assertEqual(self.page.count("new RTCPeerConnection"), 1,
+                         "ONE WHEP path for both surfaces (infra#2892): a "
+                         "second PeerConnection is a second set of autoplay "
+                         "lies to fall for, and a second chance to disagree "
+                         "about whether a stream is up")
 
     def test_a_live_embed_starts_the_player_rather_than_printing_a_url(self):
         watch = self.page[self.page.index("async function refreshWatch"):]
@@ -685,9 +698,13 @@ class ThePlayer(unittest.TestCase):
         self.assertIn("startup_seconds", self.page)
 
     def test_an_unclaimed_request_reads_as_a_stopped_agent(self):
-        """Asserted inside refreshWatch, not anywhere on the page: the word
+        """Asserted inside watchView, not anywhere on the page: the word
         already appears in a comment about map regions, and a whole-file
-        assertIn passed against a page that had no such state at all."""
-        watch = self.page[self.page.index("async function refreshWatch"):]
-        watch = watch[:watch.index("// --- their own screen")]
-        self.assertIn("w.unclaimed", watch)
+        assertIn passed against a page that had no such state at all.
+
+        watchView rather than refreshWatch since infra#2892 - see
+        MapServerWiring.test_a_live_detail_is_printed_verbatim.
+        """
+        view = self.page[self.page.index("function watchView"):]
+        view = view[:view.index("async function refreshWatch")]
+        self.assertIn("w.unclaimed", view)
