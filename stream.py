@@ -157,8 +157,20 @@ def needs_a_viewer(row) -> bool:
     A watch does - silence means the viewer left, and the client must go. A
     shot does not: it is one picture, taken and finished, and demanding a
     heartbeat for it would tear down the very client that is mid-capture.
+
+    ASKED AS "IS THIS A SHOT?", NOT AS "IS THIS IN NEEDS_A_VIEWER". The two
+    differ on exactly one input and it is the one that matters: a mode nobody
+    has heard of. Membership answers False for it - handing an unrecognised
+    row a THREE MINUTE leash, which is a client rendering for nobody for three
+    minutes if that row turns out to be a watch someone typed wrong. Asking
+    the negative puts every unknown on the short, safe clock, where being
+    wrong costs somebody a second click.
+
+    An absent mode is right either way - `or POV` already covered rows that
+    predate the column - but it is right here by construction rather than by a
+    default that has to be remembered.
     """
-    return (row.get("mode") or POV) in NEEDS_A_VIEWER
+    return (row.get("mode") or "").strip().lower() != SHOT
 
 
 def is_stale(row: Mapping, now_seconds: float) -> bool:

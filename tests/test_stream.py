@@ -439,3 +439,64 @@ class MapServerWiring(unittest.TestCase):
         self.assertIn('id="pwcam"', self.page)
         self.assertIn('id="pwpov"', self.page)
         self.assertIn("observer", self.page)
+
+
+class AShotIsNotAWatch(unittest.TestCase):
+    """The map's own sweep has to know that a still is on a different clock.
+
+    `stream_expire` runs on every read of the watch endpoint, which the open
+    map does constantly. If the map still believed a shot dies after sixty
+    seconds of silence it would move the row to 'stopping' while the Windows
+    agent was forty-five seconds into logging a character in for it - THE
+    TIMEOUT BEATING THE THING IT IS TIMING, with the agent entirely innocent
+    and the symptom being a still that never arrives.
+
+    A shot has no heartbeat on purpose: the page does not beat for one,
+    because beating would keep alive a row whose whole purpose is to finish.
+    So the only honest question about a shot is "has this been sitting here
+    longer than a login could take", asked of `requested_at`.
+    """
+
+    def shot(self, **over):
+        row = {"character": "Ugga", "mode": "shot", "state": "requested",
+               "requested_seconds": 1000.0, "last_seen_seconds": 1000.0}
+        row.update(over)
+        return row
+
+    def test_a_shot_survives_the_watch_timeout(self):
+        self.assertFalse(stream.is_stale(self.shot(), 1000.0 + 90))
+
+    def test_a_shot_expires_on_its_own_leash(self):
+        self.assertTrue(
+            stream.is_stale(self.shot(),
+                            1000.0 + stream.SHOT_TIMEOUT_SECONDS + 1))
+
+    def test_a_shot_with_no_heartbeat_is_not_stale_for_that_reason(self):
+        self.assertFalse(
+            stream.is_stale(self.shot(last_seen_seconds=None), 1000.0 + 90))
+
+    def test_a_watch_is_unchanged(self):
+        self.assertTrue(stream.is_stale(self.shot(mode="pov"), 1000.0 + 61))
+
+    def test_a_row_with_no_mode_is_a_watch(self):
+        """Rows predate the mode column. A real watch handed three minutes is
+        a client rendering for nobody for three minutes."""
+        self.assertTrue(stream.is_stale(self.shot(mode=None), 1000.0 + 61))
+
+    def test_an_unrecognised_mode_falls_to_the_shorter_leash(self):
+        """A mode nobody has heard of is far more likely to be a mistyped
+        watch than a new kind of still. Membership in NEEDS_A_VIEWER answers
+        "no viewer" for it and hands it three minutes - a client rendering for
+        nobody for three minutes. Asking "is this a shot?" instead puts every
+        unknown on the short clock, where being wrong costs a second click."""
+        self.assertTrue(stream.is_stale(self.shot(mode="hologram"),
+                                        1000.0 + 61))
+        self.assertTrue(stream.needs_a_viewer({"mode": "hologram"}))
+
+    def test_a_shot_may_be_asked_for(self):
+        allowed, why = stream.can_start([], "Ugga", stream.SHOT)
+        self.assertTrue(allowed, why)
+
+    def test_the_shot_leash_is_longer_than_the_watch_one(self):
+        self.assertGreater(stream.SHOT_TIMEOUT_SECONDS,
+                           stream.STALE_AFTER_SECONDS)
