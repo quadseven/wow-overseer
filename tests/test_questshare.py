@@ -459,3 +459,57 @@ class TheLiveShapeConverges(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class AnAbandonedQuestIsNotHeld(unittest.TestCase):
+    """infra#2892, found by a Datadog page rather than by a test.
+
+    `questshare` tried **167 times** to make Bork share quest 3361
+    ("A Refugee's Quandary"), every attempt answered:
+
+        holder is not carrying that quest or it is not sharable
+
+    It fired roughly hourly and could never succeed. Bork holds a row for 3361
+    at `status = 0` - the row exists, the quest does not. Dozens of random bots
+    hold it properly at `status = 3`.
+
+    The bug was in the READ, not the planner: `_QUEST_SQL` selected from
+    `character_queststatus` with no status filter at all, so an abandoned row
+    read as "this character holds this quest". A sibling query in the same file
+    already got this right, filtering `q.status IN (1, 3)`.
+
+    Quest status here: 0 none/abandoned, 1 complete, 3 incomplete.
+
+    READ AS TEXT, NOT IMPORTED. bridge.py imports discord, and this suite is
+    stdlib-only by design (see the module docstring) - the same reason
+    test_schema_degrade.py reads the C++ source rather than linking it.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        import pathlib
+        cls.src = (pathlib.Path(__file__).resolve().parent.parent
+                   / "bridge.py").read_text(encoding="utf-8")
+
+    def _quest_sql(self):
+        start = self.src.index("_QUEST_SQL = ")
+        return self.src[start:self.src.index('"""', self.src.index('"""', start) + 3)]
+
+    def test_the_read_only_counts_quests_actually_held(self):
+        self.assertIn("q.status IN (1, 3)", self._quest_sql(),
+                      "an abandoned row must not read as a held quest")
+
+    def test_the_single_quest_read_carries_the_same_filter(self):
+        # _QUEST_ONE_SQL is DERIVED from _QUEST_SQL by swapping the WHERE
+        # clause, so the filter must live where the swap cannot drop it.
+        derive = self.src[self.src.index("_QUEST_ONE_SQL = "):]
+        derive = derive[:derive.index(chr(10) + chr(10))]
+        self.assertIn("c.name = %s", derive)
+        self.assertNotIn("q.status", derive,
+                         "the status filter must survive the WHERE swap, not "
+                         "be re-stated in it")
+
+    def test_the_derivation_tripwire_still_holds(self):
+        # The import-time guard exists because a silent drift here fails once
+        # an hour inside the supervision cycle.
+        self.assertIn("_QUEST_SQL WHERE clause moved", self.src)

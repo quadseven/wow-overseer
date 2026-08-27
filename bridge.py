@@ -625,7 +625,7 @@ LEFT JOIN acore_world.creature_template n1 ON n1.entry = t.RequiredNpcOrGo1
 LEFT JOIN acore_world.creature_template n2 ON n2.entry = t.RequiredNpcOrGo2
 LEFT JOIN acore_world.item_template i1     ON i1.entry = t.RequiredItemId1
 LEFT JOIN acore_world.item_template i2     ON i2.entry = t.RequiredItemId2
-WHERE c.name IN (%s)
+WHERE q.status IN (1, 3) AND c.name IN (%s)
 """
 
 
@@ -635,8 +635,12 @@ WHERE c.name IN (%s)
 # hand-copied second query would drift the first time quest_template's columns
 # move, and it would drift silently - the counts would simply stop matching
 # what the family says out loud.
+# The status filter is deliberately OUTSIDE the replaced text, so this
+# derivation cannot drop it. Swapping "WHERE ... IN (%s)" wholesale is what
+# would let the single-quest read drift back to counting abandoned rows -
+# the same bug as infra#2892, one query along.
 _QUEST_ONE_SQL = _QUEST_SQL.replace(
-    "WHERE c.name IN (%s)", "WHERE c.name = %s AND q.quest = %s"
+    "c.name IN (%s)", "c.name = %s AND q.quest = %s"
 )
 if "c.name = %s" not in _QUEST_ONE_SQL:  # pragma: no cover - import-time tripwire
     # A plain `assert` would vanish under python -O and leave this query with
