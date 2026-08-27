@@ -22,6 +22,7 @@ import pymysql
 
 import council
 import core
+import craftpleas
 import digest
 import events
 import fanout
@@ -29,6 +30,7 @@ import goals
 import bonds
 import jobs
 import kin
+import materials
 import overhear
 import persona
 import professions
@@ -1611,6 +1613,7 @@ class Bridge(discord.Client):
                 self._assign_trades,
                 self._sample_family,
                 self._share_quests_loop,
+                self._move_materials_loop,
                 self._restore_lost_lives,
             )
         }
@@ -1731,6 +1734,64 @@ class Bridge(discord.Client):
             await self._muster_for_pleas(rows, channel)
         except Exception:
             log.exception("kin muster failed; chat relay continues")
+
+    async def _answer_craft_asks(self, rows: list[dict], channel) -> None:
+        """Answer "who can make X" / "need a bag" (infra#2829), best-effort.
+
+        Same swallow-everything contract as _answer_pleas, for the same
+        reason: chat relaying is the product, and a craft answer is a bonus
+        on top of it that must never be able to break the relay.
+        """
+        try:
+            await self._speak_craft_asks(rows, channel)
+        except Exception:
+            log.exception("craft ask answering failed; chat relay continues")
+
+    async def _speak_craft_asks(self, rows: list[dict], channel) -> None:
+        """Read the lines the relay just fetched; name the crafter for any
+        that ask for one.
+
+        Only bot speech is considered, same as _muster_for_pleas - a human
+        asking "who can make bags" in game is talking to a person, not
+        summoning a scripted answer. At most one per tick, the same
+        restraint _muster_for_pleas gives a burst of pleas: a fight or a
+        busy channel should not turn into several characters all naming
+        crafters at once.
+
+        `channel` is accepted only to match _answer_pleas's shape; nothing is
+        posted to Discord here. The answer is spoken IN THE WORLD, through
+        the same party-chat path council.py and professions.py already
+        speak through - that is the whole point of #2829 ("in party chat, in
+        character, using the existing voice layer"), not a bot reply in a
+        text channel nobody in the family can hear.
+        """
+        asks = [
+            a
+            for row in rows
+            if row.get("sender_is_bot")
+            for a in (craftpleas.parse_ask(
+                row.get("sender_name") or "", row.get("text") or ""
+            ),)
+            if a is not None
+        ]
+        if not asks:
+            return
+        ask = asks[0]
+        text = await self._in_character(
+            ask.crafter, craftpleas.answer(ask),
+            "a family member asking who can craft something",
+        )
+        await asyncio.to_thread(
+            _insert_speak,
+            relay.SpeakCommand(
+                ask.crafter, "party", text, "", f"overseer:craft:{ask.asker}"
+            ),
+        )
+        await asyncio.to_thread(_insert_thought, ask.crafter, "council", text)
+        log.info(
+            "craft ask: %s asked for %s -> %s (%s)",
+            ask.asker, ask.product, ask.crafter, ask.skill,
+        )
 
     async def _aim_after_muster(self, plea, muster) -> None:
         """Point the responders at what the caller asked for.
@@ -2085,6 +2146,10 @@ class Bridge(discord.Client):
                 # chat is the product, help is a bonus on top of it - which
                 # also keeps this function under Elder's complexity cap.
                 await self._answer_pleas(rows, channel)
+                # Same reasoning, same guarantee, a second bonus on top of
+                # the same batch (infra#2829): a family member asking who can
+                # craft something gets an answer next to the question.
+                await self._answer_craft_asks(rows, channel)
 
                 # Post by post, acknowledging each one on its own. Marking a
                 # whole batch after a partial failure would skip lines that
@@ -2494,6 +2559,76 @@ class Bridge(discord.Client):
                 await asyncio.to_thread(_share_quests)
             except Exception:
                 log.exception("quest sharing pass failed; retrying next cycle")
+
+    async def _move_materials_once(self) -> None:
+        """One pass of infra#2830: reagents move to whoever is assigned the
+        profession they feed.
+
+        Same shape as _trades_once: fetch, decide in the pure module, write
+        the command, and only then speak - a give that could not be written
+        (missing ENUM, or already queued inside GIVE_RETRY_MINUTES) has
+        nothing to announce.
+        """
+        names = sorted((await asyncio.to_thread(_protected_guids)).values())
+        holdings = await asyncio.to_thread(_fetch_holdings, names)
+        material_plan = await asyncio.to_thread(materials.plan, holdings)
+        for note in material_plan.notes:
+            log.info("materials: %s", note)
+        if not material_plan.grants:
+            log.info("materials: nothing to move")
+            return
+
+        seen = await asyncio.to_thread(_recent_give_keys, GIVE_RETRY_MINUTES)
+        fresh = []
+        for grant in material_plan.grants:
+            key = (grant.holder, grant.taker, grant.command)
+            if key in seen:
+                continue
+            if await asyncio.to_thread(_insert_give, grant):
+                fresh.append(grant)
+        if not fresh:
+            log.info(
+                "materials: %d grant(s) already queued or refused",
+                len(material_plan.grants),
+            )
+            return
+
+        for grant in fresh:
+            log.info(
+                "materials: %s -> %s, %d %s (%s) - %s",
+                grant.holder, grant.taker, grant.count, grant.material,
+                grant.skill, grant.reason,
+            )
+            # PARTY, not say - the same reason council speaks in party
+            # (bridge.py:2178-2184): the family grinds in different zones
+            # and /say has no cross-zone range at all.
+            text = await self._in_character(
+                grant.holder, grant.said, "handing over a crafting material"
+            )
+            await asyncio.to_thread(
+                _insert_speak,
+                relay.SpeakCommand(grant.holder, "party", text, "", "overseer:materials"),
+            )
+            await asyncio.to_thread(_insert_thought, grant.holder, "council", text)
+
+    async def _move_materials_loop(self) -> None:
+        """Keep every reagent moving toward the crafter it feeds (infra#2830).
+
+        Own loop, own clock, same reasoning as _share_quests_loop: this is
+        worth doing on a shorter cycle than the ten-minute protect sweep, and
+        a failed pass is retried rather than swallowed - a materials pass
+        that has quietly stopped looks exactly like a family with nothing
+        left to move.
+        """
+        await self.wait_until_ready()
+        cycle = float(os.environ.get("MATERIALS_CYCLE_SECONDS", "600"))
+        await asyncio.sleep(min(cycle, 90.0))
+        while not self.is_closed():
+            try:
+                await self._move_materials_once()
+            except Exception:
+                log.exception("materials pass failed; retrying next cycle")
+            await asyncio.sleep(cycle)
 
     async def _narrate_events(self) -> None:
         """The world narrates itself (infra#2602).
@@ -3253,6 +3388,111 @@ def _share_quests() -> questshare.Plan:
             inserted += 1
     log.info("%s; %d command(s) inserted", questshare.say(plan), inserted)
     return plan
+
+
+# One row per reagent stack currently sitting in a family member's bags,
+# for whichever materials materials.REAGENTS names. Joined the same way
+# _QUEST_SQL joins acore_world for item names (i1.name/i2.name above) - a
+# LEFT JOIN would be wrong here, deliberately: an item whose entry has no
+# item_template row cannot be given a name and cannot be matched against
+# REAGENTS, so it is correctly invisible to this query rather than showing up
+# as a material named NULL.
+#
+# `NOT (ci.bag = 0 AND ci.slot < 19)` excludes EQUIPMENT_SLOT_END-in-bag-0,
+# the same range _STANDING_SQL's `equipped` subquery counts - reagents are
+# never worn, so this only ever excludes gear, never a bag or backpack slot.
+#
+# UNVERIFIED AGAINST A LIVE SERVER. wow-dev is mid-RAM-swap (see the PR this
+# landed in) - this join has not been run against real character_inventory
+# rows. materials.py's own tests cover the DECISION against synthetic
+# Holdings; this query is the one part of #2830 that could not be watched.
+_HOLDINGS_SQL = (
+    "SELECT c.name AS holder, it.name AS material, "
+    "       ii.count AS count, ii.guid AS item_guid "
+    "FROM character_inventory ci "
+    "JOIN characters c                  ON c.guid = ci.guid "
+    "JOIN item_instance ii              ON ii.guid = ci.item "
+    "JOIN acore_world.item_template it  ON it.entry = ii.itemEntry "
+    "WHERE c.name IN (%s) "
+    "  AND NOT (ci.bag = 0 AND ci.slot < 19) "
+    "  AND it.name IN (%s)"
+)
+
+
+def _fetch_holdings(names: list) -> list:
+    """materials.Holding for every reagent stack the family is carrying."""
+    reagent_names = sorted(materials.REAGENTS)
+    if not names or not reagent_names:
+        return []
+    sql = _HOLDINGS_SQL % (
+        ",".join(["%s"] * len(names)), ",".join(["%s"] * len(reagent_names))
+    )
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(sql, names + reagent_names)
+        return [
+            materials.Holding(
+                holder=row["holder"], material=row["material"],
+                count=int(row["count"]), guid=int(row["item_guid"]),
+            )
+            for row in cur.fetchall()
+        ]
+
+
+# How long a give command is remembered before the pass is allowed to propose
+# the same one again - the give sibling of SHARE_RETRY_MINUTES, for the same
+# reason: a give the worldserver refuses (receiver offline, bags full since
+# measured) must not fill the queue with an identical doomed row every cycle.
+GIVE_RETRY_MINUTES = int(os.environ.get("GIVE_RETRY_MINUTES", "60"))
+
+
+def _recent_give_keys(minutes: int) -> set:
+    """(holder, taker, command) triples already proposed inside the window."""
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT target_name, target_arg, command FROM overseer_command "
+            "WHERE kind = 'give' AND created_at > NOW() - INTERVAL %s MINUTE",
+            (int(minutes),),
+        )
+        return {
+            (row["target_name"], row["target_arg"], row["command"])
+            for row in cur.fetchall()
+        }
+
+
+def _insert_give(grant: materials.Grant) -> int:
+    """One overseer_command row moving one material stack (infra#2830).
+
+    Reuses kind='give' (infra#2597) rather than adding a new kind: DoGive
+    already moves exactly one item_instance guid from one living character's
+    bags into another's, in one CharacterDatabase transaction, and does not
+    care why. See tests/test_give.py for what is already proven about the
+    mechanism, and professions.py's own "this module DECIDES and never
+    GRANTS" rule for why that mechanism - and not a database row pretending
+    the material moved - is the only acceptable shape here.
+
+    Guarded against the missing-ENUM case on the same 1265 code _insert_share
+    checks, for the same reason: a worldserver behind the migration must
+    warn rather than raise.
+    """
+    with _connect() as conn, conn.cursor() as cur:
+        try:
+            cur.execute(
+                "INSERT INTO overseer_command "
+                "(target_name, command, kind, target_arg, source) "
+                "VALUES (%s, %s, 'give', %s, %s)",
+                (grant.holder, grant.command, grant.taker, "materials"),
+            )
+        except pymysql.err.MySQLError as exc:
+            if exc.args and exc.args[0] == 1265:
+                log.warning(
+                    "overseer_command.kind has no 'give' value - moving %d "
+                    "%s from %s to %s needs the worldserver image carrying "
+                    "mod-overseer's give SQL (infra#2597)",
+                    grant.count, grant.material, grant.holder, grant.taker,
+                )
+                return 0
+            raise
+        return cur.lastrowid or 0
 
 
 def _choose_drive_quest(plan) -> int:

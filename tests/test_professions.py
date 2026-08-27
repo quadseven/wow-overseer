@@ -446,6 +446,25 @@ class PlanTest(unittest.TestCase):
         today, and the plan is about to change it."""
         self.assertEqual(professions.alchemist(_family()), "Ugga")
 
+    def test_crafter_for_answers_every_assigned_trade(self):
+        """The generalised form (#2829): craftpleas.py has no family to hand
+        this, only a skill name, so it has to be answerable from ROSTER alone."""
+        self.assertEqual(professions.crafter_for("tailoring"), "Og")
+        self.assertEqual(professions.crafter_for("alchemy"), "Ugga")
+        self.assertEqual(professions.crafter_for("blacksmithing"), "Grug")
+        self.assertEqual(professions.crafter_for("leatherworking"), "Bork")
+        self.assertEqual(professions.crafter_for("jewelcrafting"), "Grog")
+        self.assertEqual(professions.crafter_for("inscription"), "Grog")
+        self.assertEqual(professions.crafter_for("enchanting"), "Og")
+
+    def test_crafter_for_the_deliberately_unassigned_trade_is_empty(self):
+        """Engineering is UNASSIGNED on purpose (#2831, the guild) - this must
+        say so honestly rather than guessing a name."""
+        self.assertEqual(professions.crafter_for("engineering"), "")
+
+    def test_crafter_for_an_unknown_word_is_empty(self):
+        self.assertEqual(professions.crafter_for("juggling"), "")
+
 
 class CostTest(unittest.TestCase):
     """What this plan destroys, said before it happens."""

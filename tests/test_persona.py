@@ -271,9 +271,20 @@ class WiringTest(unittest.TestCase):
 
     def test_the_voice_runs_after_the_decision_not_before(self):
         """The whole design rests on this order. If the model were asked
-        before the plan existed it could change what was decided."""
-        council_at = self.src.index("held = council.hold(")
-        voice_at = self.src.index("self._in_character(")
+        before the plan existed it could change what was decided.
+
+        Scoped to `_council_once`'s own source, not the whole file: other
+        functions (materials.py's handoff pass, craftpleas.py's answers) call
+        `self._in_character(` too, and a call site living earlier in
+        bridge.py than `_council_once` says nothing about the order INSIDE
+        the council function itself.
+        """
+        fn = next(n for n in self.ast.walk(self.tree)
+                  if isinstance(n, self.ast.AsyncFunctionDef)
+                  and n.name == "_council_once")
+        body = self.ast.get_source_segment(self.src, fn)
+        council_at = body.index("held = council.hold(")
+        voice_at = body.index("self._in_character(")
         self.assertLess(council_at, voice_at)
 
     def test_the_asked_model_is_told_not_to_reason(self):

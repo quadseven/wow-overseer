@@ -470,6 +470,27 @@ def alchemist(family: Sequence) -> str:
     return ""
 
 
+def crafter_for(skill: str) -> str:
+    """Who the family has ASSIGNED this profession, or '' if nobody is.
+
+    A generalisation of `alchemist()`, which existed first because #2813 only
+    ever needed alchemy named. Every other "who makes X" question (#2829) is
+    the same lookup over ROSTER - sorted, so two calls in the same process
+    never disagree about a tie that cannot actually occur, since ROSTER
+    assigns each primary to exactly one person.
+
+    Reads ROSTER directly rather than taking a `family` argument the way
+    `alchemist()` does. The caller this exists for (craftpleas.py) has no
+    live roster to hand it, only a chat line and a question - and the five
+    characters ROSTER names ARE the family; there is no second family this
+    could be asked about.
+    """
+    for member_name in sorted(ROSTER):
+        if skill in assigned(member_name):
+            return member_name
+    return ""
+
+
 def _next_trade(family: Sequence) -> tuple:
     """(member, skill) for the ONE trade the family opens next, or (None, '').
 
