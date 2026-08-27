@@ -134,6 +134,26 @@ class DedicatedChannelTest(unittest.TestCase):
         out = parse_directive("@Grug follow", ME, ALLOWED, dedicated=True)
         self.assertEqual(out, [InsertCommand("Grug", "follow", "discord:1000")])
 
+    def test_job_order_yields_a_job_directive(self):
+        from core import JobDirective
+        out = parse_directive("job farm", ME, ALLOWED, dedicated=True)
+        self.assertEqual(out, [JobDirective(mode="farm", source="discord:1000")])
+
+    def test_evans_own_sentence_is_recognised(self):
+        from core import JobDirective
+        out = parse_directive("its farming time", ME, ALLOWED, dedicated=True)
+        self.assertEqual(out, [JobDirective(mode="farm", source="discord:1000")])
+
+    def test_job_order_is_not_recognised_in_a_shared_channel(self):
+        # A job is family-wide state, not a per-message question - the same
+        # "must not answer every message" rule as roster/digest.
+        self.assertEqual(parse_directive("job quest", ME, ALLOWED, dedicated=False), [])
+
+    def test_a_bare_mode_word_in_ordinary_chatter_is_not_a_job_order(self):
+        out = parse_directive("Grug just finished a quest", ME, ALLOWED, dedicated=True)
+        self.assertEqual(len(out), 1)
+        self.assertIsInstance(out[0], Reply)
+
 
 class FormatRosterTest(unittest.TestCase):
     def _row(self, name, level=5, race=2, map_id=1, combat=0, bot=1):

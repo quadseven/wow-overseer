@@ -27,6 +27,7 @@ import events
 import fanout
 import goals
 import bonds
+import jobs
 import kin
 import overhear
 import persona
@@ -120,6 +121,40 @@ def _insert_gm(cmd: relay.GmCommand) -> int:
             (cmd.target_name, cmd.command, cmd.source),
         )
         return cur.lastrowid
+
+
+def _insert_job(name: str, mode: str, source: str) -> int:
+    """One overseer_command row asking mod-overseer to set `name`'s job.
+
+    kind='job', not 'bot': "job quest" is not a mod-playerbots chat command,
+    so handing it to PlayerbotAI::HandleCommand the way a real vocabulary
+    entry is handed would be accepted and do nothing - precisely the
+    voice.py "sell junk" failure this codebase already paid for once. A
+    dedicated kind puts it through mod_overseer.cpp's DoJob instead, the same
+    way kind='give' and kind='share' get their own handlers rather than
+    going through the bot's own chat parser (mod_overseer.cpp:4018).
+    """
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(
+            "INSERT INTO overseer_command (target_name, command, kind, source) "
+            "VALUES (%s, %s, 'job', %s)",
+            (name, mode, source),
+        )
+        return cur.lastrowid
+
+
+def _fetch_enabled_names() -> list[str]:
+    """Every character the roster currently drives. A job order is family-wide
+    (jobs.py's own docstring explains why), so this is what it fans out over.
+    Chosen over overseer_snapshot's online-right-now view so the report names
+    the whole family the order was meant for - mod_overseer.cpp's DoJob still
+    requires the target to be in the world to act on the row (same rule every
+    other command kind follows), so an offline member's row comes back
+    'target not online' rather than silently landing later; the muster-style
+    report in _set_job says exactly what was written, not what was intended."""
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute("SELECT name FROM overseer_roster WHERE enabled = 1")
+        return [row["name"] for row in cur.fetchall()]
 
 
 def _fetch_unrelayed_chat() -> list[dict]:
@@ -1628,6 +1663,8 @@ class Bridge(discord.Client):
             await self._muster(decision, decision.command, channel)
         elif isinstance(decision, core.FanoutDirective):
             await self._conjure(decision, channel)
+        elif isinstance(decision, core.JobDirective):
+            await self._set_job(decision, channel)
         elif isinstance(decision, core.RosterQuery):
             rows = await asyncio.to_thread(_fetch_roster)
             await channel.send(core.format_roster(rows).text[:1990])
@@ -2660,6 +2697,41 @@ class Bridge(discord.Client):
             fanout.muster_report(
                 reason=reason, command=command, called=len(names), written=written
             )[:1990]
+        )
+
+    # --- job schedule (infra#2834) ------------------------------------------
+
+    async def _set_job(self, d: core.JobDirective, channel) -> None:
+        """Fan a job-schedule mode out to the WHOLE family, one kind='job' row
+        per enabled character.
+
+        Mirrors _muster's fan-out shape (a resolved set, one insert each, a
+        report of what actually landed) with one deliberate difference: the
+        set is not a fanout.resolve_targets band, it is the enabled roster in
+        full, because a job is family-wide by construction - see
+        core.JobDirective and jobs.py. Rows deliberately do NOT join
+        self._pending, same reasoning as _muster: one report for the whole
+        family, not five "heard the order" lines for one sentence.
+        """
+        names = await asyncio.to_thread(_fetch_enabled_names)
+        if not names:
+            await channel.send("Nobody is on the roster to give a job to.")
+            return
+        written = 0
+        for name in names:
+            try:
+                await asyncio.to_thread(_insert_job, name, d.mode, d.source)
+                written += 1
+            except Exception:
+                # One failed insert must not cost the rest of the family; see
+                # _muster's identical reasoning.
+                log.exception("job insert failed for %s (mode=%s)", name, d.mode)
+                continue
+        log.info(
+            "job: mode=%r called=%d written=%d", d.mode, len(names), written
+        )
+        await channel.send(
+            f"{jobs.describe(d.mode)} ({written}/{len(names)} of the family told)"
         )
 
     async def _conjure(self, d: core.FanoutDirective, channel) -> None:

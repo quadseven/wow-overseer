@@ -111,6 +111,25 @@ class NLDirective:
 
 
 @dataclass(frozen=True)
+class JobDirective:
+    """A family-wide job-schedule order (infra#2834) - "it's farming time".
+
+    NO target_name, unlike NLDirective: a job is a property of the FAMILY, not
+    of one character. mod-overseer gates `new rpg` to the leader alone (the
+    "ONLY THE TRAVELLER" rule), so a mode that could differ per character
+    would reintroduce independent aims and the 937-yard scatter of infra#2812
+    one layer up from where it was fixed. jobs.py's own docstring explains
+    this at length; it is not restated here.
+
+    `mode` is already resolved (jobs.resolve) by the time this is built, so
+    the bridge never has to re-validate what this module already checked.
+    """
+
+    mode: str
+    source: str
+
+
+@dataclass(frozen=True)
 class FanoutCommand:
     """A group order that is already a playerbot command.
 
@@ -230,7 +249,7 @@ def parse_directive(
             directives.append(NLDirective(target, command, f"discord:{author_id}"))
 
     if not addressed:
-        return _unaddressed(text, dedicated)
+        return _unaddressed(text, dedicated, author_id)
     # A fan-out line counts as one order here: the flood cap bounds how many
     # things one message may ask for, and MAX_FANOUT_TARGETS bounds how wide
     # each of those things may get.
@@ -246,29 +265,46 @@ def parse_directive(
     return directives
 
 
-def _unaddressed(text: str, dedicated: bool) -> list:
+def _job_mode(text: str):
+    """jobs.parse_order, late-imported for the same reason voice/fanout are:
+    core stays importable without the job vocabulary in contexts that only
+    need message parsing."""
+    from jobs import parse_order
+
+    return parse_order(text)
+
+
+def _unaddressed(text: str, dedicated: bool, author_id: str = "") -> list:
     """What a message that names no character means.
 
     Kept beside parse_directive for the same reason _group_directive is: this
-    is a grammar of its own - three questions the overseer answers about
-    ITSELF rather than about a character - and inlining it made the dispatcher
-    the most tangled function in the module.
+    is a grammar of its own - four questions the overseer answers about
+    ITSELF or about the family as a whole rather than about one character -
+    and inlining it made the dispatcher the most tangled function in the
+    module.
 
     In a shared channel: silence. The bridge must not answer every message.
 
-    In the overseer's own channel the ORDER IS LOAD-BEARING. The digest is
-    asked first because "what have they been playing for the last 6 hours"
-    contains "playing", which _ROSTER_RE matches - so roster-first answers a
-    question about five characters with a census of five hundred bots, and
-    looks like a working feature while doing it. The digest grammar is the
-    narrow one (it names the family or is an explicit catch-up phrase), so
-    letting it go first costs the roster nothing.
+    In the overseer's own channel the ORDER IS LOAD-BEARING. The job check
+    goes FIRST: "it's farming time" contains no digest or roster phrase today,
+    but a mode name is the most deliberate, narrowest thing a person can say
+    here (jobs._PHRASES is a closed, hand-written list) and should win over a
+    looser pattern before one exists that could collide. The digest is asked
+    next because "what have they been playing for the last 6 hours" contains
+    "playing", which _ROSTER_RE matches - so roster-first answers a question
+    about five characters with a census of five hundred bots, and looks like
+    a working feature while doing it. The digest grammar is the narrow one
+    (it names the family or is an explicit catch-up phrase), so letting it go
+    before the roster costs the roster nothing.
 
     Dead air here reads as breakage, because it is - hence the closing Reply
     rather than an empty list.
     """
     if not dedicated:
         return []
+    mode = _job_mode(text)
+    if mode is not None:
+        return [JobDirective(mode=mode, source=f"discord:{author_id}")]
     ask = _digest_ask(text)
     if ask is not None:
         return [DigestQuery(hours=ask.hours)]
