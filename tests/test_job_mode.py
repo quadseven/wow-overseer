@@ -148,12 +148,20 @@ class TheMigrationMatchesWhatTheModuleReads(unittest.TestCase):
         self.assertTrue(MIGRATION.exists(), MIGRATION)
 
     def test_it_adds_the_column_the_module_selects(self):
-        # IF NOT EXISTS (infra#2981): a redaction-only comment edit changed
+        # infra#2981 then infra#2983: a redaction-only comment edit changed
         # this file's hash without changing the statement, and AzerothCore's
         # updater reapplied an unconditional ADD COLUMN against a database
-        # that already had it - crash-looping db-import. Idempotent now.
+        # that already had it - crash-looping db-import. `ADD COLUMN IF NOT
+        # EXISTS` was tried first and confirmed LIVE to be a genuine MySQL
+        # syntax error on this exact pipeline's server (8.4.11) despite
+        # documentation suggesting it should be supported - so the guard is
+        # now the version-independent INFORMATION_SCHEMA + PREPARE/EXECUTE
+        # idiom instead, and this asserts the unconditional ALTER text is
+        # still in there (inside the dynamic-SQL string), not gone missing.
         text = MIGRATION.read_text(encoding="utf-8")
-        self.assertIn("ADD COLUMN IF NOT EXISTS `job`", text)
+        self.assertIn("INFORMATION_SCHEMA.COLUMNS", text)
+        self.assertIn("PREPARE add_job_column_stmt FROM", text)
+        self.assertIn("ALTER TABLE `overseer_roster` ADD COLUMN `job`", text)
 
     def test_the_default_matches_the_python_side(self):
         text = MIGRATION.read_text(encoding="utf-8")
