@@ -148,8 +148,12 @@ class TheMigrationMatchesWhatTheModuleReads(unittest.TestCase):
         self.assertTrue(MIGRATION.exists(), MIGRATION)
 
     def test_it_adds_the_column_the_module_selects(self):
+        # IF NOT EXISTS (infra#2981): a redaction-only comment edit changed
+        # this file's hash without changing the statement, and AzerothCore's
+        # updater reapplied an unconditional ADD COLUMN against a database
+        # that already had it - crash-looping db-import. Idempotent now.
         text = MIGRATION.read_text(encoding="utf-8")
-        self.assertIn("ADD COLUMN `job`", text)
+        self.assertIn("ADD COLUMN IF NOT EXISTS `job`", text)
 
     def test_the_default_matches_the_python_side(self):
         text = MIGRATION.read_text(encoding="utf-8")
