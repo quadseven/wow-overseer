@@ -327,6 +327,13 @@ class EveryMemberUsedWasVerifiedAgainstThePinnedSources(unittest.TestCase):
     read at the pin, and cited where it is used, before it is used."""
 
     VERIFIED = {
+        # core efe123fab543c5faf3c477674ec17a18fd59f09f - the dungeon gate.
+        # A quest aim inside an instance cannot be satisfied or abandoned and
+        # overwrites the rpgInfo the dungeon run needs, so the drive stands
+        # down there. Read at the PINNED FORK, not upstream azerothcore.
+        "GetMap": "Object.h:631",
+        "IsDungeon": "Map.h:298",
+        "GetMapId": "Position.h:281",
         # core efe123fab543c5faf3c477674ec17a18fd59f09f
         "GetQuestStatus": "Player.h:1492",
         "GetQuestSlotQuestId": "Player.h:1510",
