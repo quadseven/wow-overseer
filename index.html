@@ -15,6 +15,12 @@
            border-bottom:1px solid var(--line); flex-wrap:wrap; }
   h1 { font-size:1.05rem; }
   #census { color:var(--dim); }
+  /* Pushed to the far end of the header: it leaves this site for a
+     different machine, so it should not sit among the live readouts. */
+  #recordings { margin-left:auto; color:var(--dim); text-decoration:none;
+                border:1px solid var(--line); border-radius:4px;
+                padding:.15rem .5rem; font-size:.85rem; }
+  #recordings:hover { color:var(--text); }
   #stale { display:none; background:#6e2c00; color:#ffd8a8; padding:.3rem 1rem; }
   nav { display:flex; gap:.4rem; padding:.6rem 1rem; flex-wrap:wrap; }
   nav button { background:var(--panel); color:var(--text); border:1px solid var(--line);
@@ -177,7 +183,27 @@
 <header>
   <h1>Azeroth Overseer</h1>
   <span id="census">reaching the world...</span>
+  <!-- SAME ORIGIN, AND HIDDEN UNTIL PROVEN. The footage is on the recorder
+       box, which a pod cannot reach, so Caddy proxies /recordings on this
+       host straight to that box - which also keeps the link on HTTPS, since
+       an HTTPS page may not load http://<box>:8078.
+
+       This page is served under BOTH overseer hostnames from the same image,
+       but only the dev one has the recordings route, and the box behind it is
+       a desktop that is offline by design much of the time. So the link is
+       revealed only when it answers, rather than sitting there as a promise
+       that 404s on one host and 502s on the other. -->
+  <a id="recordings" href="recordings/?c=dev-grug" hidden
+     title="watch the recording back">Recordings</a>
 </header>
+<script>
+  // One HEAD-ish probe, and the link appears only if playback answers. Costs a
+  // request on load; the alternative is a header link that is dead on the live
+  // host and dead again whenever the recorder box is asleep.
+  fetch("recordings/healthz", { cache: "no-store" })
+    .then(r => { if (r.ok) document.getElementById("recordings").hidden = false; })
+    .catch(() => {});
+</script>
 <div id="stale"></div>
 <nav id="tabs"></nav>
 <section id="family">
