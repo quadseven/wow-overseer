@@ -637,10 +637,19 @@ class TheErrandStateIsNotOutlivedByItsClock(unittest.TestCase):
         self.assertIn("_travelState.erase(name)", _code(_clear()))
 
     def test_every_release_path_goes_through_the_one_that_erases(self):
-        """Three releases inside DriveTravel - arrival, no such spawn, the
-        backstop - and none of them may erase, or forget to erase, on its own."""
+        """Four releases inside DriveTravel - arrival, no such spawn, the
+        backstop, and stepping through a doorway - and none of them may erase,
+        or forget to erase, on its own.
+
+        The doorway release is the newest and the reason the count is a census
+        rather than a constant: a `trigger:` aim ends by GOING somewhere, not by
+        standing somewhere, so it releases on a different line from arrival even
+        though both are successes. Raise this number only when a genuinely new
+        release exists, and name it here - the assertion below is the one that
+        actually protects the invariant, and it is why the count may move at
+        all."""
         code = _code(_drive())
-        self.assertEqual(3, code.count("ClearTravelAim(name)"))
+        self.assertEqual(4, code.count("ClearTravelAim(name)"))
         self.assertNotIn("_travelState.erase(name)", code)
 
     def test_a_row_cleared_bridge_side_mid_walk_is_noticed(self):
