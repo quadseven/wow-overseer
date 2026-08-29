@@ -450,6 +450,44 @@ class TheErrandIsBounded(unittest.TestCase):
         self.assertIsNotNone(seconds)
         self.assertGreater(int(seconds.group(1)) * 60, 2 * 5 * 60)
 
+    def test_the_backstop_is_restarted_by_getting_nearer(self):
+        """The backstop is there to catch a character STANDING STILL, and it
+        used to approximate that as "twenty minutes have passed". Those come
+        apart on any long walk: measured on wow-dev, a character aimed at the
+        Deadmines portal from Elwynn walked 2347 of 2933 yards and was released
+        586 yards out, about five minutes from arriving, with the log calling it
+        unreachable while it was visibly reaching it."""
+        code = _code(_drive())
+        self.assertIn("TRAVEL_PROGRESS_YARDS", code)
+        self.assertIn("state.closest = distance", code)
+        self.assertIn("state.since = std::time(nullptr)", code)
+
+    def test_progress_is_measured_against_the_best_ever_not_the_last_poll(self):
+        """What makes a small threshold safe. `closest` only ratchets DOWNWARD,
+        so beating it means getting nearer than the character has ever been on
+        this errand - which a bot circling or jammed against scenery cannot keep
+        doing, and a walking bot does every poll. Against the previous poll
+        instead, a bot shuffling back and forth would renew the clock forever
+        and the backstop would never fire."""
+        self.assertIn("distance < state.closest - TRAVEL_PROGRESS_YARDS",
+                      _code(_drive()))
+
+    def test_an_unreachable_target_is_still_released_eventually(self):
+        """The progress check must not become a way to never give up. The clock
+        still runs from the last improvement, so a character that closes to
+        whatever range it can manage and then stops is released on the same
+        twenty minutes it always was."""
+        code = _code(_drive())
+        self.assertIn("std::time(nullptr) - state.since > TRAVEL_BACKSTOP_SECONDS",
+                      code)
+
+    def test_the_best_distance_is_forgotten_when_the_errand_changes(self):
+        """A closest approach carried into the NEXT errand is a clock that never
+        starts: the new target is further away than the old best, so nothing
+        ever beats it and the character is released on its first poll having
+        walked nowhere. Same lesson as `since` in PR #2840's review."""
+        self.assertIn("state.closest = 0.f", _code(_drive()))
+
     def test_a_target_that_does_not_exist_here_releases_rather_than_pins(self):
         code = _code(_drive())
         # The call carries `wantSkill` since infra#2757, which narrows a
