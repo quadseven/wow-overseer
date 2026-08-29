@@ -50,6 +50,32 @@ POLL_SECONDS = float(os.environ.get("POLL_SECONDS", "3"))
 OVERSEER_CHANNEL_ID = os.environ.get("OVERSEER_CHANNEL_ID", "")
 # Where world chat is relayed to. Falls back to the overseer's own channel.
 CHAT_CHANNEL_ID = os.environ.get("CHAT_CHANNEL_ID", "")
+
+# THE CHANNELS THIS BRIDGE IS ALLOWED TO ACT IN, AND WHY THAT IS NOW A RULE
+# RATHER THAN A HINT.
+#
+# on_message used to parse EVERY message in EVERY channel the bot could see,
+# using the overseer channel only to decide whether an UNaddressed message
+# also deserved an answer. That was harmless while one world existed. It stops
+# being harmless the moment a second bridge shares the token: parse_directive
+# acts on any line starting with `@` from an allowed user, in any channel, so
+# "@Grug .additem" typed in a DEV channel would be seen by the dev bridge AND
+# the production one, and production would run it on the live Grug. That is
+# the double-delivery failure 70-overseer.yaml warns about, reached through
+# channels rather than through two tokens.
+#
+# So a bridge now ignores, completely, any channel it was not given. The two
+# worlds are separated by which channels they were told about, which is a fact
+# each process holds about itself rather than a convention both must honour.
+#
+# EMPTY MEANS EVERYWHERE, deliberately preserved. A single-world install that
+# names no channel has always listened everywhere, and silently going deaf
+# would be a far worse failure than the one this prevents - the bridge would
+# look healthy and answer nobody. Isolation is what you get by CONFIGURING a
+# channel, which every multi-world deployment does.
+OWNED_CHANNEL_IDS = frozenset(
+    cid for cid in (OVERSEER_CHANNEL_ID, CHAT_CHANNEL_ID) if cid
+)
 RELAY_SECONDS = float(os.environ.get("RELAY_SECONDS", "3"))
 # On restart, anything older than this is marked relayed WITHOUT being sent.
 # Same contract as the outcome poller: the bridge reports what happens while
@@ -1636,6 +1662,11 @@ class Bridge(discord.Client):
 
     async def on_message(self, message: discord.Message) -> None:
         if message.author.bot:
+            return
+        # Not mine, not my business. See OWNED_CHANNEL_IDS: without this, a
+        # directive typed in the dev channel is executed by BOTH bridges, and
+        # the production one runs it on the live family.
+        if OWNED_CHANNEL_IDS and str(message.channel.id) not in OWNED_CHANNEL_IDS:
             return
         dedicated = OVERSEER_CHANNEL_ID and str(message.channel.id) == OVERSEER_CHANNEL_ID
         decisions = core.parse_directive(
