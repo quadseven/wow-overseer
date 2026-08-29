@@ -150,14 +150,16 @@ class AShotIsAWatchThatEnds(unittest.TestCase):
                 except ValueError:
                     pass
         for name in ("MODES", "STATES", "OCCUPIES_A_CLIENT", "STALE_AFTER_SECONDS",
-                     "SHOT_TIMEOUT_SECONDS", "NEEDS_A_VIEWER"):
+                     "SHOT_TIMEOUT_SECONDS", "RECORD_TIMEOUT_SECONDS",
+                     "NEEDS_A_VIEWER"):
             self.assertIn(name, found, f"{name} is no longer literal-evaluable")
         self.assertEqual(tuple(stream.MODES), tuple(found["MODES"]))
 
     def test_the_named_constants_and_the_literal_tuple_agree(self):
         """MODES is spelled out literally so a parser can read it, which means
         the values exist twice. Gated here so they cannot drift apart."""
-        self.assertEqual((stream.POV, stream.CAM, stream.SHOT), tuple(stream.MODES))
+        self.assertEqual((stream.POV, stream.CAM, stream.SHOT, stream.RECORD),
+                         tuple(stream.MODES))
         self.assertEqual((stream.POV, stream.CAM), tuple(stream.NEEDS_A_VIEWER))
 
     def test_shot_is_a_real_mode(self):

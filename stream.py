@@ -63,6 +63,13 @@ STALE_AFTER_SECONDS = 60
 POV = "pov"
 CAM = "cam"
 SHOT = "shot"
+# `record` is an UNATTENDED recording - a security camera on one character for
+# days at a time. It rides this same table and lifecycle for the same reason
+# `shot` does, but it is the one mode with NO VIEWER AND NO NATURAL END, so
+# the sweep below is what bounds it. The Windows agent holds the same deadline
+# in memory (wow-stream-agent/recording.py) so that a recording still ends on
+# time when this map has been unreachable for most of it.
+RECORD = "record"
 # LITERAL ON PURPOSE, and it must stay literal. The Windows stream agent reads
 # this file with ast.literal_eval to prove its own vocabulary has not drifted
 # from the map's - the two are separate codebases on separate machines with no
@@ -71,7 +78,7 @@ SHOT = "shot"
 # assertEqual, which is a strictly worse signal about a strictly worse problem.
 # Caught exactly that way when `shot` landed. The names above and this tuple
 # are gated against each other in tests so the duplication cannot drift.
-MODES = ("pov", "cam", "shot")
+MODES = ("pov", "cam", "shot", "record")
 
 # A shot needs no heartbeat: nobody is watching it, so there is no viewer to
 # fall silent. The staleness sweep is its TIMEOUT instead - a shot the agent
@@ -96,6 +103,13 @@ OCCUPIES_A_CLIENT = ("requested", "starting", "live")
 # client that is midway through starting for it - the timeout would reliably
 # beat the thing it is timing.
 SHOT_TIMEOUT_SECONDS = 180
+
+# A recording is swept on its own mandate rather than either clock above:
+# seven days, measured from requested_at. Gated against the agent copy - a map
+# that still swept a recording at 60s would move the row to `stopping` one
+# minute into a seven-day mandate, and the agent would tear down a client it
+# had correctly started.
+RECORD_TIMEOUT_SECONDS = 604800
 
 # The other end of the lifecycle. Every way a watch ends carries a REASON in
 # `detail` - "nobody was watching" from the sweep, or whatever the Windows
@@ -190,8 +204,13 @@ def needs_a_viewer(row) -> bool:
     An absent mode is right either way - `or POV` already covered rows that
     predate the column - but it is right here by construction rather than by a
     default that has to be remembered.
+
+    TWO VIEWERLESS MODES NOW, AND STILL ASKED AS A NEGATIVE. `record` joined
+    `shot` here, and the tempting rewrite - `mode in NEEDS_A_VIEWER` - would
+    hand an unknown mode a seven-day leash instead of a sixty-second one.
+    Listing the exceptions keeps every unrecognised row on the short clock.
     """
-    return (row.get("mode") or "").strip().lower() != SHOT
+    return (row.get("mode") or "").strip().lower() not in (SHOT, RECORD)
 
 
 def is_stale(row: Mapping, now_seconds: float) -> bool:
@@ -214,7 +233,12 @@ def is_stale(row: Mapping, now_seconds: float) -> bool:
         # and tearing a stream down on an absence of data is the mistake this
         # module exists to avoid.
         return False
-    limit = STALE_AFTER_SECONDS if needs_a_viewer(row) else SHOT_TIMEOUT_SECONDS
+    if needs_a_viewer(row):
+        limit = STALE_AFTER_SECONDS
+    elif (row.get("mode") or "").strip().lower() == RECORD:
+        limit = RECORD_TIMEOUT_SECONDS
+    else:
+        limit = SHOT_TIMEOUT_SECONDS
     return (now_seconds - float(last)) > limit
 
 
