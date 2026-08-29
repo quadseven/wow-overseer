@@ -4098,8 +4098,98 @@ class _RedactSecret(logging.Filter):
         return True
 
 
+class HeadlessBridge(Bridge):
+    """The world-driving half, with no Discord gateway at all.
+
+    WHY THIS EXISTS. wow-dev runs this deployment scaled to ZERO, and for a
+    good reason that has not changed: this process holds a Discord gateway
+    session on a bot token, and two sessions on one token both see the same
+    message and both act on it. A dev bridge on the live token would answer
+    real people, in real time, from a world they are not in.
+
+    But the Discord session is not what drives the family. Nine of the eleven
+    loops started by setup_hook only read and write the overseer tables:
+    _supervise_goals is what aims the party at a quest at all, _hold_council
+    picks what the family should be doing, _share_quests_loop spreads it, and
+    _restore_lost_lives is the safety net. Scaling to zero to protect Discord
+    also switched off the entire questing brain, which is why the dev family
+    stood in Elwynn for 39 minutes with nothing to do while the live family -
+    which HAS this process - was being aimed at quest 14 the whole time.
+    Measured 2026-08-29, both worlds side by side.
+
+    WHAT MAKES IT SAFE, AND IT IS NOT A PROMISE IN A COMMENT. No gateway is
+    ever connected, so `discord.Client.get_channel` reads an empty connection
+    state and returns None for every id. Every send site in this file is
+    already guarded on exactly that (`_goal_channel` returns None and logs;
+    `_apply_goal_action` checks `is not None`; `_relay_chat` warns and
+    continues), because a deleted or invisible channel was always possible.
+    So a headless process CANNOT post to Discord - not by policy, but because
+    there is nothing to post through. No token is read, either.
+
+    The two overrides are the whole mechanism. Every loop opens with
+    `await self.wait_until_ready()`, which waits on an event only a gateway
+    READY sets, and spins on `while not self.is_closed()`. Without these it
+    would not be that the loops misbehave - they would never run at all, and
+    nothing would say so.
+    """
+
+    # The chat relay is left out ON PURPOSE rather than allowed to no-op. Its
+    # entire job is carrying in-world chat TO Discord; headless it can only
+    # log "channel is not visible" every RELAY_SECONDS forever, which buries
+    # the lines that matter. Nothing else is skipped: _poll_outcomes is
+    # harmless (its _pending map is filled by on_message, which never fires).
+    HEADLESS_SKIP = frozenset({"_relay_chat"})
+
+    async def wait_until_ready(self) -> None:
+        return
+
+    def is_closed(self) -> bool:
+        return False
+
+    async def run_headless(self) -> None:
+        # The same setup on_ready does. Skipping it would leave the goal and
+        # thought stores uncreated and every loop failing on its first query.
+        await asyncio.to_thread(_ensure_thought_store)
+        await asyncio.to_thread(_ensure_goal_store)
+        await asyncio.to_thread(_ensure_sample_store)
+        await asyncio.to_thread(_ensure_trade_store)
+
+        loops = [
+            coro for coro in (
+                self._poll_outcomes,
+                self._protect_characters,
+                self._narrate_events,
+                self._supervise_goals,
+                self._relay_chat,
+                self._hold_council,
+                self._assign_trades,
+                self._sample_family,
+                self._share_quests_loop,
+                self._move_materials_loop,
+                self._restore_lost_lives,
+            ) if coro.__name__ not in self.HEADLESS_SKIP
+        ]
+        log.info("headless: no Discord gateway; driving %d loop(s): %s",
+                 len(loops), ", ".join(c.__name__ for c in loops))
+        # Held in a set for the same reason setup_hook does it: asyncio keeps
+        # only a weak reference to a running task, and a collected one stops
+        # its forever-loop silently.
+        self._loops = {asyncio.create_task(coro()) for coro in loops}
+        await asyncio.gather(*self._loops)
+
+
 def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
+
+    # HEADLESS IS CHOSEN, NEVER FALLEN INTO. An absent token could mean "this
+    # is the dev world" or "the secret failed to mount in production", and
+    # guessing the first would turn a broken live deploy into a bridge that
+    # looks like it is working while answering nobody.
+    if os.environ.get("OVERSEER_HEADLESS", "").strip() in ("1", "true", "yes"):
+        bridge = HeadlessBridge(frozenset())
+        asyncio.run(bridge.run_headless())
+        return
+
     token = os.environ["DISCORD_BOT_TOKEN"]
     for handler in logging.getLogger().handlers:
         handler.addFilter(_RedactSecret(token))
