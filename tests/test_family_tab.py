@@ -116,6 +116,113 @@ class TheFamilyTab(unittest.TestCase):
         self.assertNotIn("replaceChildren", poll)
 
 
+class TheBroadcastGrid(unittest.TestCase):
+    """The Twitch view (infra#2892): a focused player plus live thumbnails
+    of the five broadcasts that are already running, independent of the
+    on-demand watch/POV cards this class's siblings above already cover."""
+
+    @classmethod
+    def setUpClass(cls):
+        import pathlib
+        here = pathlib.Path(__file__).resolve().parent.parent
+        cls.page = (here / "index.html").read_text()
+        start = cls.page.index("// --- the Family tab (infra#2892)")
+        cls.tab = cls.page[start:cls.page.index("loadZones().then(")]
+
+    def test_the_grid_sits_beside_the_cards_in_the_family_section(self):
+        self.assertIn('<section id="family">', self.page)
+        section = self.page[self.page.index('<section id="family">'):
+                             self.page.index("</section>")]
+        self.assertIn('id="ftwitch"', section)
+        self.assertIn('id="ffocus"', section)
+        self.assertIn('id="fthumbs"', section)
+        # The grid must render BEFORE the card list in markup order, since
+        # it is the primary surface the Twitch-style request asked for.
+        self.assertLess(section.index('id="ftwitch"'), section.index('id="fcards"'))
+
+    def test_tiles_are_built_once_and_moved_not_rebuilt(self):
+        """Same rule as familyCard: rebuilding a tile mid-stream would
+        replace its <video> and tear down a live PeerConnection to redraw a
+        picture that was already fine."""
+        self.assertIn(
+            "let t = broadcasts.tiles.get(name);\n  if (t) return t;", self.tab)
+
+    def test_promoting_a_thumbnail_moves_the_node_rather_than_reconnecting(self):
+        layout = self.tab[self.tab.index("function layoutBroadcasts"):]
+        layout = layout[:layout.index("function promoteBroadcast")]
+        self.assertIn("appendChild", layout)
+        self.assertNotIn("makePlayer(", layout)
+        self.assertNotIn("player.start(", layout)
+
+    def test_the_grid_reuses_the_one_shared_whep_player(self):
+        """makePlayer's own comment calls itself shared across 'TWO
+        SURFACES' (the panel and the watch cards); this is the third, not a
+        fourth reimplementation of the handshake."""
+        self.assertEqual(self.tab.count("makePlayer(video,"), 2)
+
+    def test_the_grid_starts_and_stops_with_the_tab(self):
+        show = self.tab[self.tab.index("function showView"):]
+        show = show[:show.index("setInterval(pollFamily")]
+        fam_branch = show[show.index("if (isFam)"):show.index("stopBroadcasts();")]
+        self.assertIn("startBroadcasts();", fam_branch)
+        self.assertIn("stopBroadcasts();", show)
+
+    def test_leaving_the_tab_does_not_ask_the_encoders_to_stop(self):
+        """These five broadcasts are not this page's to end - it never
+        asked them to start, so leaving the tab must only drop the
+        picture, never call out to stop anything running on the gaming
+        box."""
+        stop_fn = self.tab[self.tab.index("function stopBroadcasts"):]
+        stop_fn = stop_fn[:stop_fn.index("function renderFamily")]
+        self.assertIn("player.stop()", stop_fn)
+        self.assertNotIn("fetch(", stop_fn)
+        self.assertNotIn("watchPost(", stop_fn)
+
+    def test_a_dark_path_reads_as_offline_with_its_own_reason(self):
+        """Requirement #3: an absent or not-ready broadcast must say so,
+        not sit there as a dead black rectangle. The reason shown is
+        whatever the WHEP handshake actually said, not a bare 'OFFLINE'."""
+        tile_fn = self.tab[self.tab.index("function broadcastTile"):]
+        tile_fn = tile_fn[:tile_fn.index("function layoutBroadcasts")]
+        self.assertIn('tile.classList.add("offline")', tile_fn)
+        self.assertIn("off.textContent = name +", tile_fn)
+
+    def test_no_roster_name_is_retyped_into_the_broadcast_code(self):
+        """Same rule test_the_roster_is_not_retyped_into_the_page enforces
+        for the cards: WHO the family is belongs to bonds.FAMILY by way of
+        /api/family, never a second list somebody could disagree with."""
+        grid = self.tab[self.tab.index("// --- the broadcast grid"):
+                         self.tab.index("function renderFamily")]
+        for name in family.roster():
+            self.assertNotIn('"' + name + '"', grid)
+
+
+class ThumbSizedBroadcastGrid(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        import pathlib
+        here = pathlib.Path(__file__).resolve().parent.parent
+        page = (here / "index.html").read_text()
+        cls.css = page[page.index("the Twitch-style broadcast grid"):
+                        page.index("</style>")]
+
+    def test_the_focused_player_reserves_its_shape(self):
+        focus = self.css[self.css.index("#ffocus {"):]
+        self.assertIn("aspect-ratio:16/9", focus[:focus.index("}")])
+
+    def test_the_focused_player_letterboxes_rather_than_crops(self):
+        """Same rule the panel's fullscreen view follows: a cropped POV
+        hides the hotbars, half of why watching it is worth doing."""
+        rule = self.css[self.css.index("#ffocus .ftile video"):]
+        self.assertIn("object-fit:contain", rule[:rule.index("}")])
+
+    def test_offline_hides_the_frozen_frame_rather_than_the_message(self):
+        video_rule = self.css[self.css.index(".ftile.offline video"):]
+        self.assertIn("visibility:hidden", video_rule[:video_rule.index("}")])
+        message_rule = self.css[self.css.index(".ftile.offline .foffline"):]
+        self.assertIn("display:flex", message_rule[:message_rule.index("}")])
+
+
 class ThumbSized(unittest.TestCase):
     @classmethod
     def setUpClass(cls):

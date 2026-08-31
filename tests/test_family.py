@@ -135,6 +135,63 @@ class WhereAndWhatTest(unittest.TestCase):
         self.assertFalse(card(p, "Grug")["leader"])
 
 
+class BroadcastPathTest(unittest.TestCase):
+    """infra#2892 Twitch view: the always-on grid's path builder.
+
+    Deliberately NOT the same convention as wow-stream-agent/video.py's
+    stream_path() (which hyphenates prefix and name) - see the module
+    docstring in family.py for why. These tests pin the convention that is
+    actually live: devgrug, not dev-grug.
+    """
+
+    def test_matches_the_paths_verified_live_on_mediamtx(self):
+        # http://127.0.0.1:9997/v3/paths/list on the gaming box, verified
+        # while this feature was built, answered with exactly these five.
+        live = {"devbork", "devgrog", "devgrug", "devog", "devugga"}
+        self.assertEqual(
+            {family.broadcast_path(n) for n in family.roster()}, live)
+
+    def test_prefix_and_name_are_concatenated_not_hyphenated(self):
+        self.assertEqual(family.broadcast_path("Grug", prefix="dev"), "devgrug")
+        self.assertNotEqual(family.broadcast_path("Grug", prefix="dev"), "dev-grug")
+
+    def test_case_and_whitespace_do_not_change_the_path(self):
+        self.assertEqual(family.broadcast_path("  Grug  ", prefix="DEV"), "devgrug")
+
+    def test_empty_prefix_is_the_bare_name(self):
+        self.assertEqual(family.broadcast_path("Grug", prefix=""), "grug")
+
+    def test_an_unusable_name_degrades_to_no_path_rather_than_raising(self):
+        # A card that cannot resolve a path must still be drawable - this
+        # module never gets to take the whole tab down over one bad name.
+        self.assertEqual(family.broadcast_path("../etc/passwd"), "")
+        self.assertEqual(family.broadcast_path(""), "")
+
+    def test_an_unusable_prefix_also_degrades_rather_than_raising(self):
+        self.assertEqual(family.broadcast_path("Grug", prefix="not a prefix"), "")
+
+    def test_broadcast_url_is_the_path_under_the_stream_host(self):
+        self.assertEqual(
+            family.broadcast_url("Grug", base="https://example.test", prefix="dev"),
+            "https://example.test/devgrug")
+
+    def test_broadcast_url_strips_a_trailing_slash_on_the_base(self):
+        self.assertEqual(
+            family.broadcast_url("Grug", base="https://example.test/", prefix="dev"),
+            "https://example.test/devgrug")
+
+    def test_broadcast_url_is_none_when_the_path_cannot_be_built(self):
+        self.assertIsNone(family.broadcast_url("", base="https://example.test"))
+
+    def test_every_card_carries_a_broadcast_url_present_or_not(self):
+        # The tile has to be drawable for a logged-out character too - the
+        # WHEP handshake is what decides offline, not this module guessing
+        # from an absent snapshot row.
+        p = family.build_family([row()], GEO)
+        self.assertTrue(card(p, "Grug")["broadcast_url"])
+        self.assertTrue(card(p, "Bork")["broadcast_url"])  # not present at all
+
+
 class HeadlineTest(unittest.TestCase):
     def test_headline_counts_are_what_the_tab_shouts(self):
         rows = [

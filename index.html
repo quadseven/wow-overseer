@@ -177,6 +177,58 @@
   @media (pointer:coarse) {
     nav button { min-height:44px; padding:.3rem 1rem; }
   }
+  /* --- the Twitch-style broadcast grid (infra#2892, on top of the cards) --
+     One big focused player plus a row of live thumbnails, all FIVE tiles
+     built once and never rebuilt - the same rule the cards below follow,
+     for the same reason: rebuilding a tile mid-stream tears down its
+     PeerConnection to redraw a picture that looked fine already. Promoting
+     a thumbnail moves its existing DOM node into the focus slot rather than
+     reconnecting, so a click never re-buffers the video that is already
+     playing. */
+  #ftwitch { margin-bottom:1rem; }
+  #ffocus { position:relative; background:#000; border:1px solid var(--line);
+            border-radius:8px; overflow:hidden; aspect-ratio:16/9; }
+  #fthumbs { display:grid; grid-template-columns:repeat(auto-fill,minmax(150px,1fr));
+             gap:.5rem; margin-top:.5rem; }
+  .ftile { position:relative; background:#000; border:1px solid var(--line);
+           border-radius:6px; overflow:hidden; aspect-ratio:16/9; cursor:pointer;
+           min-height:0; }
+  #ffocus .ftile { position:absolute; inset:0; border:0; border-radius:0;
+                    cursor:default; aspect-ratio:auto; }
+  .ftile video { width:100%; height:100%; display:block; object-fit:cover;
+                 background:#000; }
+  /* The focused player letterboxes rather than crops, the same rule the
+     panel's fullscreen view follows: a cropped POV hides the hotbars, which
+     is half of why watching it is worth doing. A thumbnail is too small for
+     that distinction to matter, so it stays cropped-to-fill. */
+  #ffocus .ftile video { object-fit:contain; }
+  /* Metadata rides ON the video, exactly the way Twitch overlays a channel's
+     name and viewer count - reading who-and-how-hurt must not cost a second
+     look away from the picture. pointer-events:none so the overlay never
+     eats the click that promotes a thumbnail. */
+  .ftile .fov { position:absolute; inset:0; display:flex; flex-direction:column;
+                justify-content:space-between; pointer-events:none;
+                background:linear-gradient(to bottom, #000a, transparent 30%,
+                            transparent 70%, #000c); padding:.3rem .4rem; }
+  .ftile .ftop { display:flex; align-items:center; gap:.35rem; flex-wrap:wrap; }
+  .ftile .fovname { font-weight:bold; overflow-wrap:anywhere; }
+  #ffocus .fovname { font-size:1.1rem; }
+  .ftile .fovbar { background:#ffffff33; border-radius:3px; height:.4em;
+                    overflow:hidden; }
+  .ftile .fovfill { height:100%; background:var(--mortal); }
+  .ftile.c-hurt .fovfill { background:#d29922; }
+  .ftile.c-dead .fovfill { background:var(--horde); }
+  .ftile .fovzone { color:#e6edf3cc; font-size:.82rem; overflow-wrap:anywhere; }
+  /* Offline is a message, not a black rectangle - requirement #3: a path
+     with nothing publishing must read as itself, never as a dead player. */
+  .ftile .foffline { position:absolute; inset:0; display:none;
+                      align-items:center; justify-content:center;
+                      text-align:center; padding:.5rem; color:var(--dim);
+                      background:var(--panel); font-size:.85rem; }
+  .ftile.offline .foffline { display:flex; }
+  .ftile.offline video { visibility:hidden; }
+  .ftile.focused { outline:2px solid var(--alliance); }
+  #fthumbs .ftile:hover { outline:1px solid var(--dim); }
 </style>
 </head>
 <body>
@@ -208,6 +260,14 @@
 <nav id="tabs"></nav>
 <section id="family">
   <div id="fheadline">reaching the world...</div>
+  <!-- The always-on broadcast grid (infra#2892 Twitch view): the five
+       continuous encoders that are already running, independent of the
+       on-demand "watch <name>" cards below. See index.html's #ftwitch CSS
+       and the JS block near "the broadcast grid" for why. -->
+  <div id="ftwitch">
+    <div id="ffocus"></div>
+    <div id="fthumbs"></div>
+  </div>
   <div id="fcards"></div>
 </section>
 <div id="wrap"><canvas id="map"></canvas><div id="tip"></div></div>
@@ -1439,8 +1499,149 @@ function familyCard(name) {
   return c;
 }
 
+// --- the broadcast grid (infra#2892 Twitch view) ---------------------------
+//
+// Independent of the watch/POV cards above: those five paths are ALREADY
+// live, continuously, from encoders this page never starts and never stops -
+// family.broadcast_path's own docstring covers why the URL comes from the
+// server rather than being built here. There is no "requested/starting/
+// live" lifecycle and no heartbeat for this grid, only a WHEP handshake per
+// tile, reusing the SAME makePlayer() this file already built to be shared
+// across surfaces (the panel and the watch cards were the "TWO SURFACES" in
+// makePlayer's own comment; this is the third).
+//
+// TILES ARE BUILT ONCE, exactly like the cards above and for the same
+// reason, and MOVED rather than rebuilt when the focus changes:
+// re-parenting an existing <video> node keeps its PeerConnection alive,
+// while recreating the element would tear the connection down and re-buffer
+// a stream that was already playing fine, over a click that only meant
+// "look at this one instead".
+const ffocus = document.getElementById("ffocus");
+const fthumbs = document.getElementById("fthumbs");
+const broadcasts = { tiles: new Map(), focus: null, connected: false };
+
+function broadcastTile(name) {
+  let t = broadcasts.tiles.get(name);
+  if (t) return t;
+  const tile = el("div", "ftile");
+  const video = document.createElement("video");
+  video.muted = true; video.autoplay = true; video.playsInline = true;
+  video.setAttribute("muted", ""); video.setAttribute("playsinline", "");
+  const ov = el("div", "fov");
+  const top = el("div", "ftop");
+  const nm = el("span", "fovname");
+  top.appendChild(nm);
+  const bottom = el("div");
+  const bar = el("div", "fovbar");
+  const fill = el("div", "fovfill");
+  bar.appendChild(fill);
+  const zone = el("div", "fovzone");
+  bottom.append(bar, zone);
+  ov.append(top, bottom);
+  const off = el("div", "foffline");
+  tile.append(video, ov, off);
+  tile.onclick = () => promoteBroadcast(name);
+  const player = makePlayer(video, (text, cls) => {
+    // Honest degrade (requirement #3 of the Twitch view): "warn" is
+    // makePlayer's word for every way this can fail to be a live picture -
+    // no encoder on the path yet, the gaming box not answering, a dropped
+    // connection - and each already carries its own sentence (whepFailure,
+    // above). The overlay shows THAT sentence rather than a generic
+    // "offline", the same "own the handshake, own the explanation" rule the
+    // panel's player follows - and it beats a frozen or black rectangle
+    // either way.
+    if (cls === "warn") {
+      tile.classList.add("offline");
+      off.textContent = name + " - " + (text || "not broadcasting");
+    } else if (cls === "live") {
+      tile.classList.remove("offline");
+    }
+  }, tile);
+  t = { tile, video, nm, fill, zone, off, player, started: false };
+  broadcasts.tiles.set(name, t);
+  return t;
+}
+
+// Moves the DOM node, not the connection - see the block comment above.
+function layoutBroadcasts() {
+  for (const [name, t] of broadcasts.tiles) {
+    const big = name === broadcasts.focus;
+    t.tile.classList.toggle("focused", big);
+    const target = big ? ffocus : fthumbs;
+    if (t.tile.parentElement !== target) target.appendChild(t.tile);
+  }
+}
+
+function promoteBroadcast(name) {
+  if (broadcasts.focus === name) return;
+  broadcasts.focus = name;
+  layoutBroadcasts();
+}
+
+function renderBroadcasts(p) {
+  if (!broadcasts.focus && p.members.length) broadcasts.focus = p.members[0].name;
+  const now = Date.now();
+  for (const m of p.members) {
+    const t = broadcastTile(m.name);
+    // classList operations, never a className RESET: "offline" and
+    // "focused" are set from elsewhere between polls (the WHEP note
+    // callback, a thumbnail click) and a wholesale reset here would erase
+    // whichever fired most recently since the last render.
+    t.tile.classList.remove("c-ok", "c-hurt", "c-dead", "c-gone");
+    t.tile.classList.add(m.present ? "c-" + m.condition : "c-gone");
+    t.tile.classList.toggle("focused", m.name === broadcasts.focus);
+    t.nm.textContent = m.present ? m.name + " - L" + m.level + " " + m["class"] : m.name;
+    t.fill.style.width = (m.present ? m.health_pct : 0) + "%";
+    t.zone.textContent = m.present ? m.zone : "not in the world";
+    // t.off's text is NOT set here - the note callback above owns it, with
+    // the exact reason the connection is not live. Overwriting it on every
+    // 5s poll would replace a real answer ("the gaming box is not
+    // answering") with a placeholder before anyone had a chance to read it.
+    if (!broadcasts.connected || !m.broadcast_url) continue;
+    // A tile that has never connected starts immediately. One already
+    // marked offline gets a slow retry - the encoder it is waiting on is
+    // one of five real WoW clients, not something this page controls, and
+    // it can start publishing at any time with nobody having touched the
+    // tab. makePlayer.start() no-ops on a repeat of the SAME url, so a
+    // genuine retry needs stop() first - deliberate, not a workaround: it
+    // is the same "tear the old one down before asking for the next" rule
+    // familyWatch already follows when switching characters.
+    const isOffline = t.tile.classList.contains("offline");
+    if (!t.started) {
+      t.started = true;
+      t.lastAttempt = now;
+      t.player.start(m.name, m.broadcast_url);
+    } else if (isOffline && (!t.lastAttempt || now - t.lastAttempt > 20000)) {
+      t.lastAttempt = now;
+      t.player.stop();
+      t.player.start(m.name, m.broadcast_url);
+    }
+  }
+  layoutBroadcasts();
+}
+
+// Opened here, but the CONNECTIONS happen from renderBroadcasts on the next
+// poll - showView calls pollFamily() right after this, and renderBroadcasts
+// is the one place that already knows each member's current broadcast_url.
+function startBroadcasts() {
+  broadcasts.connected = true;
+}
+
+// Same rule showView already follows for the watch cards: leaving the tab
+// stops the PICTURE, never the broadcast itself - these encoders are not
+// this page's to stop, and nothing here has ever asked them to run.
+function stopBroadcasts() {
+  broadcasts.connected = false;
+  for (const [, t] of broadcasts.tiles) {
+    t.player.stop();
+    t.started = false;
+    t.tile.classList.remove("offline");
+  }
+}
+
 function renderFamily(p) {
   fam.byName = new Map(p.members.map((m) => [m.name, m]));
+  renderBroadcasts(p);
   const bits = [p.here + " of " + p.expected + " here"];
   if (p.dead) bits.push(p.dead === 1 ? "1 DEAD" : p.dead + " DEAD");
   if (p.in_combat) bits.push(p.in_combat + " fighting");
@@ -1617,10 +1818,12 @@ function showView(v) {
     // The panel is a map thing, and leaving it open behind a hidden canvas
     // would keep a second heartbeat and a second player alive off screen.
     closePanel();
+    startBroadcasts();
     pollFamily();
     refreshFamilyWatch();
     return;
   }
+  stopBroadcasts();
   // LEAVING THE TAB DOES NOT STOP THE STREAM, for the same reason closing the
   // panel does not: a viewer may well switch to the map, or put the phone
   // down, and keep watching elsewhere. The video goes now because it is
