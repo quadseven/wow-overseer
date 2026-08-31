@@ -167,6 +167,44 @@ class TheBroadcastGrid(unittest.TestCase):
         self.assertIn("startBroadcasts();", fam_branch)
         self.assertIn("stopBroadcasts();", show)
 
+    def test_the_focused_tile_offers_fullscreen(self):
+        """The grid shipped with no fullscreen affordance at all: goFullscreen()
+        existed but ONLY the panel's card player called it, so on a phone - the
+        device this tab was built for - there was nothing to tap. The button
+        must be built into the tile and wired to the shared helper, not to a
+        fourth reimplementation of the fullscreen dance."""
+        tile = self.tab[self.tab.index("function broadcastTile"):]
+        tile = tile[:tile.index("function layoutBroadcasts")]
+        self.assertIn('el("button", "ffull"', tile)
+        self.assertIn("goFullscreen(tile, video,", tile)
+
+    def test_the_fullscreen_tap_does_not_also_promote_the_tile(self):
+        """The tile's own click promotes it. Without stopPropagation the one
+        tap runs both, which is a no-op on the focused tile today and becomes a
+        second silent action the day promoteBroadcast stops returning early."""
+        tile = self.tab[self.tab.index("function broadcastTile"):]
+        tile = tile[:tile.index("function layoutBroadcasts")]
+        onclick = tile[tile.index("full.onclick"):]
+        self.assertIn("e.stopPropagation();",
+                      onclick[:onclick.index("goFullscreen(")])
+
+    def test_fullscreen_is_offered_only_on_the_focused_tile(self):
+        """A tap on a thumbnail already means "make this the big one". Offering
+        fullscreen there would give one tap two meanings. The overlay is
+        pointer-events:none, so the button must opt back in for itself or it
+        cannot be tapped at all."""
+        self.assertIn(".ftile .ffull { display:none; pointer-events:auto;",
+                      self.page)
+        self.assertIn("#ffocus .ftile .ffull { display:inline-block; }",
+                      self.page)
+
+    def test_a_refused_fullscreen_is_shown_to_the_person(self):
+        """goFullscreen insists a refusal is said out loud, which is only true
+        if the caller renders the sentence it is handed."""
+        tile = self.tab[self.tab.index("function broadcastTile"):]
+        tile = tile[:tile.index("function layoutBroadcasts")]
+        self.assertIn("fsnote.textContent = text;", tile)
+
     def test_leaving_the_tab_does_not_ask_the_encoders_to_stop(self):
         """These five broadcasts are not this page's to end - it never
         asked them to start, so leaving the tab must only drop the

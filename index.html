@@ -229,6 +229,22 @@
   .ftile.offline video { visibility:hidden; }
   .ftile.focused { outline:2px solid var(--alliance); }
   #fthumbs .ftile:hover { outline:1px solid var(--dim); }
+  /* FULLSCREEN, AND ONLY ON THE FOCUSED TILE. The grid shipped without any
+     fullscreen affordance at all: goFullscreen() existed but only the panel's
+     card player ever called it, so on a phone - the device this tab was built
+     for - there was nothing to tap and no way to fill the screen.
+     pointer-events:auto because .fov above is deliberately none, so the
+     overlay never eats a tap meant to promote a thumbnail; this button opts
+     back in for itself alone. Hidden on thumbnails on purpose: a tap there
+     already means "make this the big one", and one tap carrying two meanings
+     is how a person ends up fullscreen on a stream they were only pointing
+     at. */
+  .ftile .ffull { display:none; pointer-events:auto; cursor:pointer;
+                  background:#0d1117cc; color:#e6edf3; font:inherit;
+                  font-size:.75rem; padding:.15rem .5rem;
+                  border:1px solid var(--line); border-radius:4px; }
+  #ffocus .ftile .ffull { display:inline-block; }
+  .ftile .ffsnote { font-size:.75rem; color:#d29922; overflow-wrap:anywhere; }
 </style>
 </head>
 <body>
@@ -1530,7 +1546,13 @@ function broadcastTile(name) {
   const ov = el("div", "fov");
   const top = el("div", "ftop");
   const nm = el("span", "fovname");
-  top.appendChild(nm);
+  // The button lives in the overlay's top row rather than beside the grid so
+  // it travels with the tile: layoutBroadcasts() re-parents this same node
+  // between #fthumbs and #ffocus, and anything anchored outside it would have
+  // to be moved in step and would drift the first time that was forgotten.
+  const full = el("button", "ffull", "fullscreen");
+  const fsnote = el("span", "ffsnote");
+  top.append(nm, full, fsnote);
   const bottom = el("div");
   const bar = el("div", "fovbar");
   const fill = el("div", "fovfill");
@@ -1541,6 +1563,23 @@ function broadcastTile(name) {
   const off = el("div", "foffline");
   tile.append(video, ov, off);
   tile.onclick = () => promoteBroadcast(name);
+  // stopPropagation because the tile's own click promotes it: without this the
+  // tap would ALSO run promoteBroadcast, which on the focused tile is a no-op
+  // today and would silently become a second action the day that changes.
+  //
+  // A REFUSAL IS SHOWN, not swallowed - goFullscreen already insists on that
+  // (see its comment), and it is only true if the caller actually renders the
+  // sentence. It clears itself so a stale complaint cannot sit over a picture
+  // that has since gone fullscreen fine.
+  full.onclick = (e) => {
+    e.stopPropagation();
+    goFullscreen(tile, video, (text) => {
+      fsnote.textContent = text;
+      window.setTimeout(() => {
+        if (fsnote.textContent === text) fsnote.textContent = "";
+      }, 6000);
+    });
+  };
   const player = makePlayer(video, (text, cls) => {
     // Honest degrade (requirement #3 of the Twitch view): "warn" is
     // makePlayer's word for every way this can fail to be a live picture -
