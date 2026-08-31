@@ -205,6 +205,24 @@ class TheBroadcastGrid(unittest.TestCase):
         tile = tile[:tile.index("function layoutBroadcasts")]
         self.assertIn("fsnote.textContent = text;", tile)
 
+
+    def test_the_focused_tile_gets_native_video_controls(self):
+        """The scripted fullscreen button is not what a thumb reaches for. iOS
+        Safari gives a <video> its own fullscreen affordance through the native
+        control bar, which is the control people already know from YouTube, so
+        the focused tile carries it. Thumbnails must NOT, or the control bar
+        covers a 150px picture and swallows the tap that promotes it."""
+        layout = self.tab[self.tab.index("function layoutBroadcasts"):]
+        layout = layout[:layout.index("function promoteBroadcast")]
+        self.assertIn("t.video.controls = big;", layout)
+
+    def test_thumbnails_do_not_carry_controls(self):
+        """Guards the half that is easy to regress: controls must be bound to
+        the focused flag, never set unconditionally at tile construction."""
+        tile = self.tab[self.tab.index("function broadcastTile"):]
+        tile = tile[:tile.index("function layoutBroadcasts")]
+        self.assertNotIn("video.controls = true", tile)
+
     def test_leaving_the_tab_does_not_ask_the_encoders_to_stop(self):
         """These five broadcasts are not this page's to end - it never
         asked them to start, so leaving the tab must only drop the

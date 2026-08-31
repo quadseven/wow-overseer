@@ -1606,6 +1606,18 @@ function layoutBroadcasts() {
   for (const [name, t] of broadcasts.tiles) {
     const big = name === broadcasts.focus;
     t.tile.classList.toggle("focused", big);
+    // NATIVE CONTROLS ON THE FOCUSED TILE ONLY, and this is the thing that
+    // actually makes fullscreen reachable on a phone. The `fullscreen` button
+    // added alongside goFullscreen() is a scripted call, and iOS Safari gives
+    // a <video> its own fullscreen affordance for free through the native
+    // control bar - the same one a person already knows from YouTube. Asking
+    // them to find our button instead of the one their thumb expects was the
+    // wrong half of the problem to solve.
+    //
+    // ONLY the focused tile. Controls on a thumbnail would put a play/scrub
+    // bar over a 150px picture and, worse, swallow the tap that promotes it,
+    // so the grid would stop responding to the gesture it exists for.
+    t.video.controls = big;
     const target = big ? ffocus : fthumbs;
     if (t.tile.parentElement !== target) target.appendChild(t.tile);
   }
