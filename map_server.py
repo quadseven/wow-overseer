@@ -18,6 +18,7 @@ from urllib.parse import parse_qs, urlsplit
 
 import pymysql
 
+import armory
 import chat
 import family
 import frames
@@ -31,6 +32,13 @@ log = logging.getLogger("wow-map")
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 GEO = Geometry.load(HERE)
+# The frozen client talent tables, read once at import exactly as GEO is.
+# `character_talent` stores nothing but spell ids, and acore_world's own
+# talent_dbc and talenttab_dbc are EMPTY tables, so this committed file is
+# the only thing that can turn a learned spell back into "2/3 Improved
+# Renew". Built by tools/gen_talents.py; see armory.py for why it is a
+# file rather than a mount or a database load.
+BOOK = armory.TalentBook.load(HERE)
 PORT = int(os.environ.get("PORT", "8080"))
 
 # WoW's own name rule (same as the bridge); anything else never reaches SQL.
@@ -225,6 +233,70 @@ def _fetch_family() -> list[dict]:
             return list(cur.fetchall())
     finally:
         conn.close()
+
+
+def _fetch_armory() -> dict:
+    """The family's saved gear and talents, in three queries.
+
+    NOT read from overseer_snapshot, and deliberately NOT subject to its 60s
+    freshness rule. Gear and talents are what the core has SAVED, so they
+    survive a logout and they still answer "what is he carrying" for someone
+    who is not in the world right now - which is a good part of the reason to
+    open the tab. It also means this endpoint keeps answering while the
+    worldserver is down, because nothing here needs the worldserver.
+
+    Names come from bonds via family.roster(), never from the request, so all
+    three of these are a fixed IN list of five with no user input in them.
+    """
+    names = family.roster()
+    holes = ", ".join(["%s"] * len(names))
+    conn = _connect()
+    try:
+        with conn.cursor() as cur:
+            # S608 on all three: `holes` is a run of "%s" placeholders whose
+            # only input is the LENGTH of family.roster() - a constant five,
+            # from bonds. Every VALUE is still bound by the driver, and this
+            # endpoint takes no parameters at all. Same reasoning, and the
+            # same refusal to hard-code five, as _fetch_family.
+            cur.execute(
+                "SELECT name, level, race, class, online, activeTalentGroup "  # noqa: S608
+                "FROM characters "
+                f"WHERE name IN ({holes})",
+                tuple(names),
+            )
+            char_rows = list(cur.fetchall())
+            # The item's name, quality and level live in the WORLD database,
+            # not this one, so this is a cross-schema join - the same one
+            # panel's inventory query already makes. LEFT, so a custom or
+            # removed item still reports as equipped rather than as an empty
+            # slot. bag = 0 and the slot bound are the equipped paper doll;
+            # the bound comes from armory so the query and the grid cannot
+            # disagree about how many slots there are.
+            cur.execute(
+                "SELECT c.name, ci.slot, ii.itemEntry AS entry, "  # noqa: S608
+                "ii.durability, it.name AS item_name, it.Quality AS quality, "
+                "it.ItemLevel AS item_level, it.RequiredLevel AS required_level, "
+                "it.MaxDurability AS max_durability "
+                "FROM characters c "
+                "JOIN character_inventory ci ON ci.guid = c.guid "
+                "AND ci.bag = 0 AND ci.slot < %s "
+                "JOIN item_instance ii ON ii.guid = ci.item "
+                "LEFT JOIN acore_world.item_template it ON it.entry = ii.itemEntry "
+                f"WHERE c.name IN ({holes})",
+                (len(armory.EQUIPPED_SLOTS), *names),
+            )
+            equipment_rows = list(cur.fetchall())
+            cur.execute(
+                "SELECT c.name, t.spell, t.specMask "  # noqa: S608
+                "FROM characters c JOIN character_talent t ON t.guid = c.guid "
+                f"WHERE c.name IN ({holes})",
+                tuple(names),
+            )
+            talent_rows = list(cur.fetchall())
+    finally:
+        conn.close()
+    return {"char_rows": char_rows, "equipment_rows": equipment_rows,
+            "talent_rows": talent_rows}
 
 
 def _ensure_stream_store() -> None:
@@ -562,6 +634,23 @@ class Handler(BaseHTTPRequestHandler):
             log.exception("family query failed")
             self._send(503, "application/json", b'{"error": "world unreachable"}')
 
+    def _armory(self, query: dict) -> None:
+        """GET /api/armory - what the five are wearing, and how they are specced.
+
+        No name parameter, for the same reason /api/family takes none: WHO the
+        family is belongs to bonds, and accepting a roster here would turn this
+        into a general character query wearing a friendly name.
+        """
+        try:
+            payload = armory.build_armory(**_fetch_armory(), book=BOOK)
+            self._send(200, "application/json", json.dumps(payload).encode())
+        except Exception:
+            # Same contract as every other poll: the tab keeps the grid it has
+            # already drawn and says it may be stale. A blank Armory tab reads
+            # as "they are wearing nothing", which is a worse lie than silence.
+            log.exception("armory query failed")
+            self._send(503, "application/json", b'{"error": "world unreachable"}')
+
     def _thoughts(self, query: dict) -> None:
         """GET /api/thoughts?name=X&before=<id>&limit=N - one page, newest first."""
         name = query.get("name", [""])[0]
@@ -893,6 +982,7 @@ class Handler(BaseHTTPRequestHandler):
         "/api/map": _map,
         "/api/character": _character,
         "/api/family": _family,
+        "/api/armory": _armory,
         "/api/thoughts": _thoughts,
         "/api/watch": _watch_state,
         "/": _index,

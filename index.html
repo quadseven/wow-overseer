@@ -101,6 +101,73 @@
   #psay { background:var(--panel); color:var(--text); border:1px solid var(--line);
           border-radius:6px; cursor:pointer; font:inherit; padding:.3rem .6rem; }
   #psay:disabled, #pinput:disabled { opacity:.5; cursor:default; }
+  /* --- the Armory tab (infra#3096) ---------------------------------------
+     Gear and build for all five at once. The columns are CHARACTERS and the
+     rows are SLOTS, and that arrangement is the whole feature: a slot that is
+     empty in one column and filled in the other four is the thing you are
+     looking for, and it is invisible until they are beside each other. Five
+     separate pages would each look perfectly reasonable on their own.
+
+     Same responsive posture as the Family cards - one column on a phone,
+     auto-fit on a desktop - with one extra step: the moment there is room for
+     five it is exactly five, because auto-fit would otherwise settle into
+     three-and-a-gap and quietly stop being a side-by-side view. */
+  #armory { display:none; margin:0 1rem 1rem; }
+  #aheadline { margin-bottom:.2rem; overflow-wrap:anywhere; }
+  #aheadline.alarm { color:#ff9d9d; }
+  /* Said out loud because these numbers are OLD and nobody can tell by
+     looking. The core writes gear and talents on its own save timer, so a
+     sword equipped a minute ago is genuinely not here yet - and a page that
+     let someone conclude "the tab is broken" would be worse than no page. */
+  #asaved { color:var(--dim); margin-bottom:.6rem; font-size:.9rem; }
+  #acols { display:grid; gap:.6rem; grid-template-columns:1fr; }
+  @media (min-width:820px) {
+    #acols { grid-template-columns:repeat(auto-fit,minmax(280px,1fr)); }
+  }
+  @media (min-width:1480px) { #acols { grid-template-columns:repeat(5,1fr); } }
+  .acol { background:var(--panel); border:1px solid var(--line);
+          border-left:5px solid var(--line); border-radius:8px;
+          padding:.6rem .7rem; min-width:0; }
+  .acol.c-ok { border-left-color:var(--mortal); }
+  .acol.c-gone { border-left-color:var(--line); opacity:.6; }
+  .aname { font-weight:bold; }
+  .ameta { color:var(--dim); overflow-wrap:anywhere; }
+  .asum { margin:.4rem 0; overflow-wrap:anywhere; }
+  .asect { color:var(--dim); border-top:1px solid var(--line);
+           margin-top:.5rem; padding-top:.4rem; font-size:.9rem; }
+  .aslot { display:flex; gap:.4rem; align-items:baseline; }
+  .aslot .k { color:var(--dim); flex:0 0 5.4rem; font-size:.85rem; }
+  .aslot .v { flex:1; min-width:0; overflow-wrap:anywhere; }
+  .ailvl { color:var(--dim); font-size:.85rem; }
+  /* An empty slot is the headline finding, so it is amber and it says the
+     word - the same amber the Family card already uses for "hurt", because it
+     means the same kind of thing. Shirt and tabard are only ever cosmetic, so
+     an empty one is merely dim: an alarm that fires on every character
+     forever is an alarm nobody reads. */
+  .aslot.empty .v { color:#d29922; }
+  .aslot.empty.cosmetic .v { color:var(--dim); }
+  .aslot.broken .v { color:var(--horde); }
+  .aspec { font-weight:bold; }
+  .aunspent { color:#d29922; }
+  .atree { margin-top:.3rem; }
+  .atree .t { color:var(--dim); font-size:.85rem; }
+  .atal { display:flex; gap:.4rem; align-items:baseline; }
+  .atal .r { color:var(--dim); flex:0 0 2.2rem; font-size:.85rem;
+             text-align:right; }
+  .atal .n { flex:1; min-width:0; overflow-wrap:anywhere; }
+  /* ITEM QUALITY, in the game's own colours, because the operator already
+     reads them without thinking. One deliberate departure: rare is lifted
+     from the client's #0070dd, which the game draws on a near-black tooltip
+     and which lands under 3:1 on this panel - a name nobody can read is not a
+     colour code, it is a bug. The hue is unmistakably still rare blue. */
+  .q0 { color:#9d9d9d; }
+  .q1 { color:#ffffff; }
+  .q2 { color:#1eff00; }
+  .q3 { color:#3f9bf5; }
+  .q4 { color:#a335ee; }
+  .q5 { color:#ff8000; }
+  .q6 { color:#e6cc80; }
+  .q7 { color:#00ccff; }
   /* --- the Family tab (infra#2892) ---------------------------------------
      Five cards instead of five dots among five hundred. Sized for a thumb on
      a 390px phone FIRST and widened on a desktop, rather than the other way
@@ -286,6 +353,11 @@
   </div>
   <div id="fcards"></div>
 </section>
+<section id="armory">
+  <div id="aheadline">reaching the world...</div>
+  <div id="asaved"></div>
+  <div id="acols"></div>
+</section>
 <div id="wrap"><canvas id="map"></canvas><div id="tip"></div></div>
 <aside id="panel">
   <div id="phead"><h2 id="pname"></h2><button id="pclose" title="close">x</button></div>
@@ -339,6 +411,8 @@
 </footer>
 <script>
 "use strict";
+const MAP_VIEW = "map";
+const ARMORY_VIEW = "armory";
 const CONTINENT_ORDER = ["0", "1", "530", "571", "quelthalas", "azuremyst"];
 // A serif on purpose - the map should not read in the same voice as the
 // console around it. Deliberately a local stack: this page is tailnet-only
@@ -367,6 +441,13 @@ async function loadZones() {
   fb.dataset.view = FAMILY_VIEW;
   fb.onclick = () => showView(FAMILY_VIEW);
   tabs.appendChild(fb);
+  // Second, next to the family it describes: it answers "why did that go
+  // badly", which is the question asked straight after "are they all right".
+  const ab = document.createElement("button");
+  ab.textContent = "Armory";
+  ab.dataset.view = ARMORY_VIEW;
+  ab.onclick = () => showView(ARMORY_VIEW);
+  tabs.appendChild(ab);
   for (const id of CONTINENT_ORDER) {
     const b = document.createElement("button");
     b.textContent = zones[id].name;
@@ -1410,7 +1491,7 @@ const fcards = document.getElementById("fcards");
 const fheadline = document.getElementById("fheadline");
 const legend = document.querySelector("footer");
 const wrapEl = document.getElementById("wrap");
-let view = "map";
+let view = MAP_VIEW;
 // `open` is who this tab is watching. ONE AT A TIME on purpose: the GPU has
 // two channels, and the second is worth leaving free for the panel, another
 // phone, or Evan on the Switch - two videos on one phone screen is not a
@@ -1851,9 +1932,13 @@ async function pollFamily() {
 
 function markTabs() {
   for (const b of document.querySelectorAll("#tabs button")) {
-    const on = b.dataset.view === FAMILY_VIEW
-      ? view === FAMILY_VIEW
-      : view !== FAMILY_VIEW && b.dataset.id === current;
+    // This was a two-view ternary hard-coded to the Family tab, which meant a
+    // third button fell into the map branch, compared an undefined dataset.id
+    // against `current`, and could never light up at all. Now a button either
+    // names its own view or it is a continent.
+    const on = b.dataset.view
+      ? view === b.dataset.view
+      : view === MAP_VIEW && b.dataset.id === current;
     b.classList.toggle("on", on);
   }
 }
@@ -1861,9 +1946,14 @@ function markTabs() {
 function showView(v) {
   view = v;
   const isFam = v === FAMILY_VIEW;
+  const isArm = v === ARMORY_VIEW;
   fsection.style.display = isFam ? "block" : "none";
-  wrapEl.style.display = isFam ? "none" : "block";
-  legend.style.display = isFam ? "none" : "";
+  asection.style.display = isArm ? "block" : "none";
+  // Every non-map view hides the canvas and its legend. This used to read
+  // "not Family means map", which would have drawn the map underneath the
+  // Armory tab the moment a third view existed.
+  wrapEl.style.display = view === MAP_VIEW ? "block" : "none";
+  legend.style.display = view === MAP_VIEW ? "" : "none";
   markTabs();
   if (isFam) {
     // The panel is a map thing, and leaving it open behind a hidden canvas
@@ -1872,6 +1962,16 @@ function showView(v) {
     startBroadcasts();
     pollFamily();
     refreshFamilyWatch();
+    return;
+  }
+  if (isArm) {
+    // Nothing to tear down: the Armory is a read, with no player and no
+    // heartbeat of its own. It still closes the panel and stops the grid,
+    // which are map and Family things that would otherwise go on running
+    // behind a view that does not show them.
+    closePanel();
+    stopBroadcasts();
+    pollArmory();
     return;
   }
   stopBroadcasts();
@@ -1906,6 +2006,185 @@ setInterval(refreshFrame, 5000);  // and so does their own screen
 setInterval(refreshWatch, 5000);
 setInterval(render, 200);  // combat pulse
 window.addEventListener("resize", render);
+
+// --- the Armory tab (infra#3096) -----------------------------------------
+// Deliberately at the FOOT of the script, AFTER loadZones().then(...). The
+// Family tab's tests slice this page from its own banner down to that call,
+// so anything dropped between the two gets swept into a slice it has nothing
+// to do with and starts failing assertions about a different tab.
+
+const asection = document.getElementById("armory");
+const acols = document.getElementById("acols");
+const aheadline = document.getElementById("aheadline");
+// Set here rather than in the markup so the sentence lives with the code that
+// makes it true. Every number on this tab is a SAVE, not a live read.
+document.getElementById("asaved").textContent =
+  "gear and talents as the world last saved them - the core writes these on "
+  + "its own timer, so something equipped in the last few minutes may not be "
+  + "here yet.";
+
+// Columns and their slot rows are built ONCE and updated in place, the same
+// rule the Family cards follow. Five columns of nineteen rows rebuilt every
+// poll would throw away the scroll position mid-read on a phone, which is
+// the one device this is most likely to be checked from.
+const arm = { cols: new Map() };
+
+function armoryColumn(name) {
+  let c = arm.cols.get(name);
+  if (c) return c;
+  const col = el("article", "acol");
+  const nm = el("div", "aname", name);
+  const meta = el("div", "ameta");
+  const sum = el("div", "asum");
+  const slots = el("div", "aslots");
+  const spec = el("div", "aspec");
+  const budget = el("div");
+  const trees = el("div");
+  col.append(nm, meta, el("div", "asect", "gear"), sum, slots,
+             el("div", "asect", "build"), spec, budget, trees);
+  acols.appendChild(col);
+  c = { col, nm, meta, sum, slots, spec, budget, trees, rows: new Map() };
+  arm.cols.set(name, c);
+  return c;
+}
+
+function armorySlot(c, slot) {
+  let r = c.rows.get(slot);
+  if (r) return r;
+  const row = el("div", "aslot");
+  const k = el("span", "k", slot);
+  const v = el("span", "v");
+  row.append(k, v);
+  c.slots.appendChild(row);
+  r = { row, k, v };
+  c.rows.set(slot, r);
+  return r;
+}
+
+function renderSlot(r, s) {
+  r.row.className = "aslot" + (s.empty ? " empty" : "")
+    + (s.cosmetic ? " cosmetic" : "") + (s.broken ? " broken" : "");
+  r.v.textContent = "";
+  if (s.empty) {
+    // The word, not a blank. A blank cell reads as "nothing to report", and
+    // an empty head slot on a level 25 warrior is very much something to
+    // report - it is the entire reason for looking.
+    r.v.textContent = "empty";
+    return;
+  }
+  // No quality class at all when the item is not in item_template: better an
+  // uncoloured name than a confident wrong colour.
+  r.v.appendChild(el("span", s.quality === null ? "" : "q" + s.quality, s.name));
+  if (s.item_level !== null) {
+    r.v.appendChild(el("span", "ailvl", " " + s.item_level));
+  }
+  if (s.broken) r.v.appendChild(el("span", "", " BROKEN"));
+}
+
+function renderSpec(c, spec) {
+  c.spec.textContent = spec.primary
+    ? spec.distribution + "  " + spec.primary
+    : "nothing spent";
+  let budget = spec.available === null
+    ? spec.spent + " points spent"
+    : spec.spent + " / " + spec.available + " points";
+  if (spec.unspent) budget += "  -  " + spec.unspent + " UNSPENT";
+  c.budget.textContent = budget;
+  c.budget.className = spec.unspent ? "aunspent" : "";
+  c.trees.textContent = "";
+  // Only the trees with points in them. Three headers where two are always
+  // zero is three lines of furniture per character; the distribution above
+  // already says the shape.
+  for (const t of spec.trees.concat(
+         spec.unplaced.length
+           ? [{ name: "not in the talent tables", points: spec.unplaced.length,
+                talents: spec.unplaced }]
+           : [])) {
+    if (!t.points) continue;
+    const box = el("div", "atree");
+    box.appendChild(el("div", "t", t.name + "  " + t.points));
+    for (const tal of t.talents) {
+      const line = el("div", "atal");
+      line.appendChild(el("span", "r",
+        tal.rank === null ? "?" : tal.rank + "/" + tal.max_rank));
+      line.appendChild(el("span", "n", tal.name));
+      box.appendChild(line);
+    }
+    c.trees.appendChild(box);
+  }
+}
+
+function renderArmory(p) {
+  const present = p.members.filter((m) => m.present);
+  const empty = present.reduce((n, m) => n + m.gear.empty_slots.length, 0);
+  const broken = present.reduce((n, m) => n + m.gear.broken.length, 0);
+  const idle = present.filter((m) => m.spec.unspent);
+  const bits = [present.length + " of " + p.expected + " shown"];
+  if (empty) bits.push(empty + (empty === 1 ? " empty slot" : " empty slots"));
+  if (broken) bits.push(broken + " broken");
+  if (idle.length) {
+    bits.push("unspent: "
+      + idle.map((m) => m.name + " " + m.spec.unspent).join(", "));
+  }
+  aheadline.textContent = bits.join("  -  ");
+  // Loud only for the two things a person can act on TODAY. Empty slots are
+  // ordinary at these levels and would leave the headline permanently pink,
+  // which is the same as leaving it permanently unread.
+  aheadline.className = broken || idle.length ? "alarm" : "";
+  for (const m of p.members) {
+    const c = armoryColumn(m.name);
+    // Green edge means logged in right now, the same thing green means on
+    // the Family cards. Absent the character entirely and it goes grey.
+    c.col.className = "acol" + (m.present ? (m.online ? " c-ok" : "") : " c-gone");
+    if (!m.present) {
+      // Still says who, and still says what. A column stripped to a name is
+      // how a missing character stops being noticed.
+      c.meta.textContent = m["class"] + " - " + m.role;
+      c.sum.textContent = "no saved character - deleted, or never made.";
+      c.slots.textContent = "";
+      c.rows.clear();
+      c.spec.textContent = "";
+      c.budget.textContent = "";
+      c.trees.textContent = "";
+      continue;
+    }
+    c.meta.textContent = "L" + m.level + " " + m.race + " " + m["class"]
+      + " - " + m.role;
+    c.sum.textContent = m.gear.worn + " / " + m.gear.slots + " worn"
+      + (m.gear.average_item_level === null ? ""
+         : "  -  item level " + m.gear.average_item_level);
+    const bySlot = new Map(m.slots.map((s) => [s.slot, s]));
+    // Driven by the SERVER's slot list, not by this member's rows, so every
+    // column has the same rows in the same order and the grid reads across.
+    for (const spec of p.slots) {
+      renderSlot(armorySlot(c, spec.slot), bySlot.get(spec.slot));
+    }
+    renderSpec(c, m.spec);
+  }
+}
+
+async function pollArmory() {
+  if (view !== ARMORY_VIEW) return;
+  try {
+    const r = await fetch("/api/armory");
+    if (!r.ok) throw new Error(r.status);
+    renderArmory(await r.json());
+  } catch (e) {
+    // Keep the grid that is drawn, exactly as the Family tab does. A blank
+    // Armory reads as "they are wearing nothing", which is a worse lie than
+    // an old answer honestly labelled.
+    aheadline.textContent = "the world is unreachable - this may be stale";
+    aheadline.className = "alarm";
+  }
+}
+
+// THIRTY seconds, and the departure from the page's 5s cadence is the point.
+// The core writes gear and talents to the database on its own save timer -
+// fifteen minutes on this realm - so these rows physically cannot change any
+// faster. Polling them every five seconds would re-fetch an identical 20KB
+// payload a hundred and eighty times per actual change. Entering the tab
+// still polls immediately, so it is never blank while waiting for the timer.
+setInterval(pollArmory, 30000);
 </script>
 </body>
 </html>
