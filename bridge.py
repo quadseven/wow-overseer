@@ -3215,8 +3215,20 @@ _LEDGER_MEMBER_SQL = (
 # needs both: only a rewarded quest satisfies a prerequisite, while a held one
 # is what the traveller can actually be aimed at.
 _LEDGER_HELD_SQL = (
+    # Spark-authored: qwen3-coder-next:q8_0 on DGX Spark sparkles (10.0.0.66),
+    # 2026-09-01 -- the filter and its placement are the Spark's; the comment,
+    # the string termination and the test were reworked by Claude before merge.
+    # Its first pass left this constant an unterminated literal (bridge.py did
+    # not parse) with the explanation INSIDE the SQL text as a `--` comment.
+    # status: 0 none/abandoned, 1 complete, 3 incomplete. Without this filter an
+    # abandoned row reads as "this character holds this quest", so questshare
+    # proposes a share the worldserver can only refuse -- 167 identical retries
+    # on quest 3361 before anyone noticed, because a refusal is not an error
+    # anywhere it would be seen (#2892). Same statuses _QUEST_SQL already uses;
+    # the two reads must not disagree about what "held" means.
     "SELECT c.name, q.quest FROM character_queststatus q "
-    "JOIN characters c ON c.guid = q.guid WHERE c.name IN (%s)"
+    "JOIN characters c ON c.guid = q.guid "
+    "WHERE c.name IN (%s) AND q.status IN (1, 3)"
 )
 _LEDGER_REWARDED_SQL = (
     "SELECT c.name, q.quest FROM character_queststatus_rewarded q "

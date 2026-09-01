@@ -513,3 +513,27 @@ class AnAbandonedQuestIsNotHeld(unittest.TestCase):
         # The import-time guard exists because a silent drift here fails once
         # an hour inside the supervision cycle.
         self.assertIn("_QUEST_SQL WHERE clause moved", self.src)
+
+    def _ledger_held_sql(self):
+        # Sliced to the assignment's own closing paren at column 0, NOT to the
+        # second ")" in the text: the constant carries a WHY comment, and any
+        # parenthesis inside it (an issue number, the status tuple) truncated
+        # the slice before the SQL and made this read pass or fail on prose.
+        start = self.src.index("_LEDGER_HELD_SQL = (")
+        return self.src[start:self.src.index(chr(10) + ")", start)]
+
+    def test_the_ledger_read_carries_the_same_filter(self):
+        # The ledger read is what questshare aims at, so it must agree with
+        # _QUEST_SQL about what "held" means. When it did not, a status-0 row
+        # read as held and the same impossible share was retried 167 times
+        # (#2892) -- the worldserver's refusal is not an error anywhere it
+        # would be seen.
+        self.assertIn("q.status IN (1, 3)", self._ledger_held_sql(),
+                      "an abandoned row must not read as a held quest")
+
+    def test_the_rewarded_read_is_deliberately_unfiltered(self):
+        # character_queststatus_rewarded has no status column: a row there IS
+        # the completion record. Pinning that so a future sweep does not
+        # "consistently" add a filter to a table that cannot support one.
+        start = self.src.index("_LEDGER_REWARDED_SQL = (")
+        self.assertNotIn("q.status", self.src[start:self.src.index(chr(10) + ")", start)])
