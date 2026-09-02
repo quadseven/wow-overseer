@@ -576,22 +576,43 @@ def _fetch_achievements() -> dict:
             # by the roster, and every VALUE is bound by the driver. Deaths
             # come from overseer_death, the un-coalesced record, so the
             # hourly-bucketed death rows in overseer_event are skipped here.
-            cur.execute(
-                "SELECT character_name, kind, subject_id, subject_name, detail, "  # noqa: S608
-                "level, map, zone, first_seen, last_seen, occurrences "
-                "FROM overseer_event "
-                f"WHERE kind <> 'death' AND character_name IN ({holes}) "
-                "ORDER BY first_seen ASC LIMIT 20000",
-                tuple(names),
-            )
-            event_rows = list(cur.fetchall())
-            cur.execute(
-                "SELECT character_name, map, zone, killer_name, killer_type, "  # noqa: S608
-                f"created_at FROM overseer_death WHERE character_name IN ({holes}) "
-                "ORDER BY created_at ASC LIMIT 20000",
-                tuple(names),
-            )
-            death_rows = list(cur.fetchall())
+            # THE SAME 1146 GUARD AS THE RUN TABLE ABOVE, AND FOR THE SAME
+            # REASON, LEARNED THE HARD WAY IN PRODUCTION. These tables are
+            # created by the in-world module, so a realm running an older
+            # worldserver simply does not have all of them yet: the live
+            # realm had `overseer_event` but no `overseer_death` on the day
+            # this tab shipped, and an unguarded query turned the whole tab
+            # into a 503 there while every other tab was fine. A world with
+            # no death record has nothing to say about deaths, which is a
+            # thinner page, not a broken one.
+            try:
+                cur.execute(
+                    "SELECT character_name, kind, subject_id, subject_name, detail, "  # noqa: S608
+                    "level, map, zone, first_seen, last_seen, occurrences "
+                    "FROM overseer_event "
+                    f"WHERE kind <> 'death' AND character_name IN ({holes}) "
+                    "ORDER BY first_seen ASC LIMIT 20000",
+                    tuple(names),
+                )
+                event_rows = list(cur.fetchall())
+            except pymysql.err.ProgrammingError as exc:
+                if not (exc.args and exc.args[0] == 1146):
+                    raise
+                log.info("overseer_event absent; achievements run without it")
+                event_rows = []
+            try:
+                cur.execute(
+                    "SELECT character_name, map, zone, killer_name, killer_type, "  # noqa: S608
+                    f"created_at FROM overseer_death WHERE character_name IN ({holes}) "
+                    "ORDER BY created_at ASC LIMIT 20000",
+                    tuple(names),
+                )
+                death_rows = list(cur.fetchall())
+            except pymysql.err.ProgrammingError as exc:
+                if not (exc.args and exc.args[0] == 1146):
+                    raise
+                log.info("overseer_death absent; achievements run without deaths")
+                death_rows = []
             # Which world rows to look up is a decision about event kinds and
             # dungeon boss lists; achievements owns it, the adapter just asks.
             quest_ids = achievements.wanted_quests(event_rows)
