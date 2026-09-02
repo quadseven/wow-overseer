@@ -397,7 +397,17 @@ class TheModuleActuallyReadsTheColumn(unittest.TestCase):
         self.assertLess(poll, 5 * 60 * 1000)
 
     def test_it_aims_through_the_patched_overload(self):
-        self.assertIn("ChangeToWanderNpc(entry, pos)", _code(_drive()))
+        """The two-argument overload is patch 0012's; what matters is that the
+        module reaches it. The second argument stopped being the raw `pos` in
+        mod-overseer#138: a place aim is now walked to through GroundedStep,
+        which hands back a terrain-checked step, because a raw point with no
+        reachable navmesh polygon is splined to in a straight line and walks
+        the character off whatever is in between. So this pins the call and
+        the fact that a place aim is grounded first, not the variable name."""
+        code = _code(_drive())
+        self.assertRegex(code, r"ChangeToWanderNpc\(entry, \w+\)")
+        self.assertIn("GroundedStep(bot, pos, aimAt)", code)
+        self.assertIn("ChangeToWanderNpc(entry, aimAt)", code)
 
     def test_it_does_not_reach_for_setmovefarto(self):
         """SetMoveFarTo only RECORDS a destination for stuck-tracking; the
@@ -472,7 +482,7 @@ class TheEightSecondConsumeDidNotEatTheErrand(unittest.TestCase):
         """Case 3. Once the five-minute lease expires the status is no longer
         RPG_WANDER_NPC, so the guard cannot match and the write happens."""
         code = _code(_drive())
-        aim = code.index("ChangeToWanderNpc(entry, pos)")
+        aim = code.index("ChangeToWanderNpc(entry, aimAt)")
         guard = code.index("GetStatus() == RPG_WANDER_NPC")
         self.assertLess(guard, aim, "the guard must precede the aim")
 
