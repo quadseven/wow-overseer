@@ -117,9 +117,17 @@ class TheFamilyTab(unittest.TestCase):
 
 
 class TheBroadcastGrid(unittest.TestCase):
-    """The Twitch view (infra#2892): a focused player plus live thumbnails
-    of the five broadcasts that are already running, independent of the
-    on-demand watch/POV cards this class's siblings above already cover."""
+    """The five always-on broadcasts (infra#2892), independent of the
+    on-demand watch/POV cards this class's siblings above already cover.
+
+    infra#3110 MOVED THEM. They shipped as a Twitch-style grid of their own -
+    one focused player, a strip of five thumbnails, and the character list
+    underneath - and the operator's complaint was that this is a wall of
+    video over a wall of names, leaving a viewer to match one to the other by
+    position. Each tile now lives in the card of the character it is showing.
+    Everything else about them is unchanged, and most of this class exists to
+    say so: the handshake, the retry, the offline message, the build-once
+    rule and the focused-tile-only fullscreen all still hold."""
 
     @classmethod
     def setUpClass(cls):
@@ -129,16 +137,35 @@ class TheBroadcastGrid(unittest.TestCase):
         start = cls.page.index("// --- the Family tab (infra#2892)")
         cls.tab = cls.page[start:cls.page.index("loadZones().then(")]
 
-    def test_the_grid_sits_beside_the_cards_in_the_family_section(self):
+    def test_a_stream_is_parented_into_its_own_character_card(self):
+        """infra#3110, requirement 2, and the whole of it: a tile's home is
+        the card of the character it shows. Not a shared focus slot, not a
+        thumbnail strip beside the names - there is nothing left on this page
+        that holds video for more than one person."""
         self.assertIn('<section id="family">', self.page)
         section = self.page[self.page.index('<section id="family">'):
                              self.page.index("</section>")]
-        self.assertIn('id="ftwitch"', section)
-        self.assertIn('id="ffocus"', section)
-        self.assertIn('id="fthumbs"', section)
-        # The grid must render BEFORE the card list in markup order, since
-        # it is the primary surface the Twitch-style request asked for.
-        self.assertLess(section.index('id="ftwitch"'), section.index('id="fcards"'))
+        self.assertNotIn('id="ftwitch"', section)
+        self.assertNotIn('id="ffocus"', section)
+        self.assertNotIn('id="fthumbs"', section)
+        card = self.tab[self.tab.index("function familyCard"):]
+        card = card[:card.index("// --- the broadcasts")]
+        self.assertIn('el("div", "fstream")', card)
+        layout = self.tab[self.tab.index("function layoutBroadcasts"):]
+        layout = layout[:layout.index("function promoteBroadcast")]
+        self.assertIn("familyCard(name).stream", layout)
+
+    def test_the_stream_sits_under_the_name_and_above_the_state(self):
+        """"This is Grug, this is Grug's stream" has to be one unit read top
+        to bottom, or the move has bought nothing: a tile appended after the
+        watch button would be back to being a video near a name."""
+        card = self.tab[self.tab.index("function familyCard"):]
+        card = card[:card.index("// --- the broadcasts")]
+        order = card[card.index("card.append("):]
+        order = order[:order.index(")")]
+        self.assertLess(order.index("head"), order.index("stream"))
+        self.assertLess(order.index("stream"), order.index("quests"))
+        self.assertLess(order.index("quests"), order.index("btn"))
 
     def test_tiles_are_built_once_and_moved_not_rebuilt(self):
         """Same rule as familyCard: rebuilding a tile mid-stream would
@@ -192,10 +219,14 @@ class TheBroadcastGrid(unittest.TestCase):
         """A tap on a thumbnail already means "make this the big one". Offering
         fullscreen there would give one tap two meanings. The overlay is
         pointer-events:none, so the button must opt back in for itself or it
-        cannot be tapped at all."""
+        cannot be tapped at all.
+
+        The selector moved with the tile (infra#3110) - focused is a class on
+        the tile now rather than the slot it was moved into - but the rule is
+        the same rule."""
         self.assertIn(".ftile .ffull { display:none; pointer-events:auto;",
                       self.page)
-        self.assertIn("#ffocus .ftile .ffull { display:inline-block; }",
+        self.assertIn(".ftile.focused .ffull { display:inline-block; }",
                       self.page)
 
     def test_a_refused_fullscreen_is_shown_to_the_person(self):
@@ -247,7 +278,7 @@ class TheBroadcastGrid(unittest.TestCase):
         """Same rule test_the_roster_is_not_retyped_into_the_page enforces
         for the cards: WHO the family is belongs to bonds.FAMILY by way of
         /api/family, never a second list somebody could disagree with."""
-        grid = self.tab[self.tab.index("// --- the broadcast grid"):
+        grid = self.tab[self.tab.index("// --- the broadcasts"):
                          self.tab.index("function renderFamily")]
         for name in family.roster():
             self.assertNotIn('"' + name + '"', grid)
@@ -259,17 +290,26 @@ class ThumbSizedBroadcastGrid(unittest.TestCase):
         import pathlib
         here = pathlib.Path(__file__).resolve().parent.parent
         page = (here / "index.html").read_text()
-        cls.css = page[page.index("the Twitch-style broadcast grid"):
+        cls.css = page[page.index("the broadcast tile, inside its own"):
                         page.index("</style>")]
 
-    def test_the_focused_player_reserves_its_shape(self):
-        focus = self.css[self.css.index("#ffocus {"):]
-        self.assertIn("aspect-ratio:16/9", focus[:focus.index("}")])
+    def test_the_empty_slot_reserves_the_shape_not_the_tile(self):
+        """makePlayer owns the tile's `display` - none until start(), none
+        again after stop() - so a reservation hung on the tile is worth
+        nothing in the exact window it is needed. The card must hold the
+        space while there is no picture in it, or the quest log underneath
+        gets shoved down half a second later under a thumb already reaching
+        for it."""
+        slot = self.css[self.css.index(".fstream {"):]
+        slot = slot[:slot.index("}")]
+        self.assertIn("aspect-ratio:16/9", slot)
+        self.assertIn("width:170px", slot)
+        self.assertIn(".fstream.big { width:100%; }", self.css)
 
     def test_the_focused_player_letterboxes_rather_than_crops(self):
         """Same rule the panel's fullscreen view follows: a cropped POV
         hides the hotbars, half of why watching it is worth doing."""
-        rule = self.css[self.css.index("#ffocus .ftile video"):]
+        rule = self.css[self.css.index(".ftile.focused video"):]
         self.assertIn("object-fit:contain", rule[:rule.index("}")])
 
     def test_offline_hides_the_frozen_frame_rather_than_the_message(self):
@@ -354,3 +394,204 @@ class TheBrokenButtonMustNotBeSpendable(unittest.TestCase):
         tag = self.page[self.page.index('id="pwcam"'):]
         self.assertIn("2887", tag[:tag.index("</button>")],
                       "a disabled control must carry its reason")
+
+
+class TheQuestLogOnTheCard(unittest.TestCase):
+    """infra#3110 requirement 1: what each of the five is actually working on,
+    under their own name.
+
+    The judgements all live in questlog.py, with their own suite. These are
+    the page rules - the ones a refactor could undo while leaving five
+    perfectly plausible quest lists on screen."""
+
+    @classmethod
+    def setUpClass(cls):
+        import pathlib
+        here = pathlib.Path(__file__).resolve().parent.parent
+        cls.page = (here / "index.html").read_text()
+        cls.server = (here / "map_server.py").read_text()
+        start = cls.page.index("// --- the Family tab (infra#2892)")
+        cls.tab = cls.page[start:cls.page.index("loadZones().then(")]
+        cls.block = cls.tab[cls.tab.index("// --- the quest log (infra#3110)"):
+                             cls.tab.index("// POV AND ONLY POV")]
+        # The block without its opening essay, for the assertions that are
+        # about what the CODE says rather than what the comments explain.
+        cls.code = cls.block[cls.block.index("const fquesthead"):]
+
+    def test_the_log_is_drawn_inside_the_character_own_card(self):
+        """Not a sixth panel below the five cards. A quest log belongs to a
+        character, and the whole point of putting it here is that it is read
+        beside that character's name, health and stream."""
+        section = self.page[self.page.index('<section id="family">'):
+                             self.page.index("</section>")]
+        self.assertIn('id="fquesthead"', section)
+        self.assertIn('el("div", "fquests")', self.tab)
+        self.assertIn("familyCard(m.name)", self.block)
+        self.assertIn("c.qlist", self.block)
+
+    def test_the_slot_count_is_said_even_when_it_is_fine(self):
+        """mod-overseer#73 hid for a month because nothing counted the slots.
+        A number that only appears once it is already bad is a number nobody
+        has learned to read by the time it matters."""
+        head = self.block[self.block.index("function questHeadline"):]
+        head = head[:head.index("function questRow")]
+        first = head.index('m.used + " of " + m.slots')
+        # Unconditional: before any of the `if` lines that add the rest.
+        self.assertLess(first, head.index("if (m.ready)"))
+
+    def test_the_page_does_not_decide_what_a_full_log_is(self):
+        """questlog.py owns the cap and how near it counts as full. A 25 typed
+        into this file is a second answer that can disagree with the first,
+        and it would disagree silently."""
+        self.assertNotIn("25", self.code)
+        self.assertIn("m.slots", self.code)
+        self.assertIn("m.full", self.code)
+
+    def test_every_quest_says_who_else_is_carrying_it(self):
+        """mod-overseer#28 in the only place it can be seen: on the quest
+        itself. Four names means the fight pays four of them; no names means
+        it pays one, and that is the sentence that has to be on screen."""
+        row = self.block[self.block.index("function questRow"):]
+        row = row[:row.index("function renderQuestLog")]
+        self.assertIn("q.held_by.filter", row)
+        self.assertIn("nobody else holds this", row)
+
+    def test_the_quest_list_is_the_only_thing_rebuilt(self):
+        """replaceChildren anywhere near a card is how a live <video> gets
+        thrown away mid-stream. It is allowed here and ONLY here, because
+        this list is text the server just recomputed."""
+        self.assertEqual(self.tab.count(".replaceChildren("), 1)
+        render = self.block[self.block.index("function renderQuestLog"):]
+        render = render[:render.index("function renderQuests")]
+        self.assertIn("c.qlist.replaceChildren", render)
+
+    def test_a_poll_that_changed_nothing_leaves_the_list_alone(self):
+        """Thirty seconds apart, most polls are identical. Rebuilding anyway
+        would throw away a half-read list under somebody's thumb for no
+        change at all."""
+        render = self.block[self.block.index("function renderQuestLog"):]
+        render = render[:render.index("function renderQuests")]
+        self.assertIn("quested.get(m.name) === sig", render)
+        self.assertLess(render.index("return;"), render.index("replaceChildren"))
+
+    def test_a_long_log_folds_but_its_totals_do_not(self):
+        """Sixty-five quests across five characters is nine thousand pixels of
+        phone scrolling, and a twenty-two row log buries the next character's
+        stream under it. Folding the LIST is only safe because the header line
+        above it already carries every number the two defects are made of -
+        so the fold must sit below that line, never replace it."""
+        render = self.code[self.code.index("function renderQuestLog"):]
+        render = render[:render.index("function renderQuests")]
+        self.assertIn("QUEST_PREVIEW", render)
+        self.assertLess(render.index("questHeadline(m)"), render.index("QUEST_PREVIEW"))
+        # Says how many are hidden and where they are, because the order is
+        # meaningful: what folds away is the oldest end of the log.
+        self.assertIn('" more, oldest last"', render)
+
+    def test_expanding_a_log_is_not_swallowed_by_the_no_change_guard(self):
+        """Nothing about the DATA changes when somebody taps "show more",
+        which is exactly what that guard skips on."""
+        render = self.code[self.code.index("function renderQuestLog"):]
+        render = render[:render.index("function renderQuests")]
+        toggle = render[render.index("more.onclick"):]
+        self.assertIn("quested.delete(m.name)", toggle)
+
+    def test_a_failed_poll_keeps_the_logs_it_has(self):
+        """An empty quest log means "they have nothing to do", which is the
+        opposite of what a failed read actually found out."""
+        poll = self.block[self.block.index("async function pollQuests"):]
+        self.assertIn("unreachable", poll)
+        self.assertNotIn("replaceChildren", poll)
+
+    def test_the_log_rides_its_own_slower_cadence(self):
+        """Quest rows are SAVED state on the core's own player-save timer, so
+        the 5s cadence would re-fetch an identical payload several times per
+        actual change. Entering the tab still reads immediately, or the tab
+        would be blank for half a minute on arrival."""
+        self.assertIn("setInterval(pollQuests, 30000)", self.tab)
+        show = self.tab[self.tab.index("function showView"):]
+        show = show[:show.index("setInterval(pollFamily")]
+        self.assertIn("pollQuests();", show[show.index("if (isFam)"):])
+
+    def test_the_endpoint_takes_no_roster_from_the_caller(self):
+        """Same rule /api/family and /api/armory follow: WHO the family is
+        belongs to bonds, and a roster parameter would make this a general
+        character query wearing a friendly name."""
+        handler = self.server[self.server.index("def _questlog"):]
+        handler = handler[:handler.index("def _thoughts")]
+        self.assertIn("questlog.build_questlog(**_fetch_questlog())", handler)
+        self.assertNotIn("query.get", handler)
+
+    def test_the_endpoint_is_wired_into_the_route_table(self):
+        """do_GET is a lookup and nothing else, so a handler that is never
+        named in the table is a 404 with a docstring."""
+        self.assertIn('"/api/questlog": _questlog,', self.server)
+
+    def test_the_query_reads_the_statuses_the_module_named(self):
+        """The status filter is the difference between a slot count that fits
+        in 25 and one that does not (see questlog.IN_LOG). Spelling it into
+        the SQL by hand is how it drifts from the module that explains it."""
+        fetch = self.server[self.server.index("def _fetch_questlog"):]
+        fetch = fetch[:fetch.index("def _ensure_stream_store")]
+        self.assertIn("questlog.IN_LOG", fetch)
+        self.assertIn("questlog.objective_entries", fetch)
+
+
+class TheFamilyIsTheFrontDoor(unittest.TestCase):
+    """infra#3110 requirement 3. Opening the site landed on the map, which
+    answers "who is in the world" - five hundred dots on a phone - when the
+    question actually being asked is "are my five all right". And there was no
+    routing at all, so no view could be linked to."""
+
+    @classmethod
+    def setUpClass(cls):
+        import pathlib
+        here = pathlib.Path(__file__).resolve().parent.parent
+        cls.page = (here / "index.html").read_text()
+        cls.route = cls.page[cls.page.index("// --- the front door (infra#3110)"):]
+
+    def test_the_view_is_chosen_on_load(self):
+        """A routing function nothing calls is decoration. It has to run at
+        the foot of the script - showView touches the Armory tab's own consts,
+        so calling it any earlier is a temporal-dead-zone ReferenceError."""
+        self.assertIn("\napplyHash();", self.route)
+        self.assertLess(self.page.index("setInterval(pollArmory, 30000)"),
+                        self.page.index("\napplyHash();"))
+
+    def test_an_unknown_or_missing_hash_lands_on_the_family(self):
+        fn = self.route[self.route.index("function applyHash"):]
+        fn = fn[:fn.index('window.addEventListener("hashchange"')]
+        self.assertIn("FAMILY_VIEW", fn)
+        # The map branch returns first; everything else falls through to the
+        # family, including a hash that names nothing at all.
+        self.assertLess(fn.index("MAP_VIEW"), fn.index("ARMORY_VIEW"))
+
+    def test_the_other_views_are_still_reachable_by_link(self):
+        """The half that is easy to lose: making one view the default is only
+        half of routing, and the other half is what makes "send me the Armory"
+        a thing somebody can do."""
+        fn = self.page[self.page.index("function hashFor"):]
+        fn = fn[:fn.index("function showView")]
+        self.assertIn("MAP_VIEW", fn)
+        self.assertIn("ARMORY_VIEW", self.route)
+        # The map carries its continent, or a link to it forgets the one piece
+        # of state that view actually has.
+        self.assertIn('"#" + MAP_VIEW + "/" + current', fn)
+
+    def test_a_deep_linked_continent_waits_for_the_map_data(self):
+        """The hash is read before zones.json arrives, so there is nothing to
+        check the id against yet. Adopting it unchecked draws an empty map."""
+        self.assertIn("adoptContinent();", self.page[:self.page.index("markTabs();")])
+        adopt = self.route[self.route.index("function adoptContinent"):]
+        adopt = adopt[:adopt.index("function applyHash")]
+        self.assertIn("zones && zones[wantedContinent]", adopt)
+
+    def test_switching_tabs_does_not_pile_up_history(self):
+        """Five taps must not mean five presses of Back to leave the site -
+        and assigning location.hash would also re-enter applyHash through the
+        hashchange it fires."""
+        self.assertIn("history.replaceState(null, \"\", want)", self.page)
+        self.assertNotIn("location.hash =", self.page)
+
+    def test_a_typed_or_pasted_hash_still_changes_the_view(self):
+        self.assertIn('window.addEventListener("hashchange", applyHash)', self.route)

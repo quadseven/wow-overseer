@@ -22,6 +22,7 @@ import armory
 import chat
 import family
 import frames
+import questlog
 import stream
 import voice
 from map_core import build_payload
@@ -297,6 +298,115 @@ def _fetch_armory() -> dict:
         conn.close()
     return {"char_rows": char_rows, "equipment_rows": equipment_rows,
             "talent_rows": talent_rows}
+
+
+# The quest log query, written out rather than generated. Forty column
+# spellings in one string is not pretty, but the alternative - building the
+# list in a loop - means the one place a person goes to check what this query
+# reads no longer says what it reads. bridge.py's _QUEST_SQL makes the same
+# choice for the same reason.
+#
+# The two %s are filled in with runs of "%s" placeholders sized by
+# len(family.roster()) and len(questlog.IN_LOG) - both constants from this
+# codebase, neither from the request. Every VALUE is still bound by the
+# driver, and this endpoint takes no parameters at all.
+_QUESTLOG_SQL = (
+    "SELECT c.name, q.quest, q.status, "
+    "q.mobcount1, q.mobcount2, q.mobcount3, q.mobcount4, "
+    "q.itemcount1, q.itemcount2, q.itemcount3, "
+    "q.itemcount4, q.itemcount5, q.itemcount6, q.playercount, "
+    "t.LogTitle, t.QuestLevel, t.RequiredPlayerKills, "
+    "t.RequiredNpcOrGo1, t.RequiredNpcOrGo2, "
+    "t.RequiredNpcOrGo3, t.RequiredNpcOrGo4, "
+    "t.RequiredNpcOrGoCount1, t.RequiredNpcOrGoCount2, "
+    "t.RequiredNpcOrGoCount3, t.RequiredNpcOrGoCount4, "
+    "t.RequiredItemId1, t.RequiredItemId2, t.RequiredItemId3, "
+    "t.RequiredItemId4, t.RequiredItemId5, t.RequiredItemId6, "
+    "t.RequiredItemCount1, t.RequiredItemCount2, t.RequiredItemCount3, "
+    "t.RequiredItemCount4, t.RequiredItemCount5, t.RequiredItemCount6, "
+    "t.ObjectiveText1, t.ObjectiveText2, t.ObjectiveText3, t.ObjectiveText4 "
+    "FROM characters c "
+    "JOIN character_queststatus q ON q.guid = c.guid "
+    "JOIN acore_world.quest_template t ON t.ID = q.quest "
+    "WHERE c.name IN (%s) AND q.status IN (%s)"
+)
+
+
+def _fetch_names(cur, table: str, entries: list) -> dict:
+    """entry -> name, for one acore_world template table.
+
+    Looked up by id AFTER the quest rows are in hand rather than as ten more
+    LEFT JOINs on the query above: a quest may name four creatures and six
+    items, the same murloc shows up in half the family's logs, and joining
+    would fetch each name once per row that mentions it. `table` is a literal
+    from the one call site below and never touches the request.
+    """
+    if not entries:
+        return {}
+    holes = ", ".join(["%s"] * len(entries))
+    # S608: `holes` is a run of placeholders sized by len(entries), and
+    # `table` is one of three hard-coded literals from _fetch_questlog. Every
+    # VALUE is still bound by the driver on the next line.
+    cur.execute(
+        f"SELECT entry, name FROM acore_world.{table} "  # noqa: S608
+        f"WHERE entry IN ({holes})",
+        tuple(entries),
+    )
+    return {int(row["entry"]): row["name"] for row in cur.fetchall()}
+
+
+def _fetch_questlog() -> dict:
+    """The family's quest logs, and enough of acore_world to read them.
+
+    NOT from overseer_snapshot and, like /api/armory, deliberately not subject
+    to its 60s freshness rule: a quest log is SAVED state, so it still answers
+    "what was he working on" for somebody who logged out an hour ago - which
+    is a good part of the reason to look.
+
+    Names come from bonds via family.roster(), never from the request, so the
+    roster clause is a fixed IN list of five with no user input in it.
+    """
+    names = family.roster()
+    holes = ", ".join(["%s"] * len(names))
+    statuses = ", ".join(["%s"] * len(questlog.IN_LOG))
+    conn = _connect()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT name, level, class, online "  # noqa: S608
+                f"FROM characters WHERE name IN ({holes})",
+                tuple(names),
+            )
+            char_rows = list(cur.fetchall())
+            cur.execute(_QUESTLOG_SQL % (holes, statuses),
+                        (*names, *questlog.IN_LOG))
+            quest_rows = list(cur.fetchall())
+            # Turn-ins, counted in SQL rather than fetched as rows: this is
+            # 160 rows across the five today and grows for the life of the
+            # realm, and the only thing anything does with them is len().
+            cur.execute(
+                "SELECT c.name, COUNT(*) AS turned_in "  # noqa: S608
+                "FROM characters c "
+                "JOIN character_queststatus_rewarded r ON r.guid = c.guid "
+                f"WHERE c.name IN ({holes}) GROUP BY c.guid, c.name",
+                tuple(names),
+            )
+            rewarded_rows = list(cur.fetchall())
+            # WHICH ids to look up is a decision about column spellings, and
+            # RequiredNpcOrGo being negative for a gameobject is exactly the
+            # kind of thing an adapter should not know. questlog owns it.
+            wanted = questlog.objective_entries(quest_rows)
+            lookups = {
+                "creatures": _fetch_names(cur, "creature_template",
+                                          wanted["creatures"]),
+                "gameobjects": _fetch_names(cur, "gameobject_template",
+                                            wanted["gameobjects"]),
+                "items": _fetch_names(cur, "item_template", wanted["items"]),
+            }
+    finally:
+        conn.close()
+    return {"char_rows": char_rows, "quest_rows": quest_rows,
+            "rewarded_rows": rewarded_rows, "names": lookups}
 
 
 def _ensure_stream_store() -> None:
@@ -651,6 +761,25 @@ class Handler(BaseHTTPRequestHandler):
             log.exception("armory query failed")
             self._send(503, "application/json", b'{"error": "world unreachable"}')
 
+    def _questlog(self, query: dict) -> None:
+        """GET /api/questlog - what each of the five is actually working on.
+
+        No name parameter, for the same reason /api/family and /api/armory
+        take none: WHO the family is belongs to bonds, and accepting a roster
+        here would turn this into a general character query wearing a
+        friendly name.
+        """
+        try:
+            payload = questlog.build_questlog(**_fetch_questlog())
+            self._send(200, "application/json", json.dumps(payload).encode())
+        except Exception:
+            # Same contract as every other poll: the tab keeps the logs it has
+            # already drawn and says they may be stale. A blank quest log
+            # reads as "they have nothing to do", which is the opposite of
+            # what this view exists to report.
+            log.exception("questlog query failed")
+            self._send(503, "application/json", b'{"error": "world unreachable"}')
+
     def _thoughts(self, query: dict) -> None:
         """GET /api/thoughts?name=X&before=<id>&limit=N - one page, newest first."""
         name = query.get("name", [""])[0]
@@ -983,6 +1112,7 @@ class Handler(BaseHTTPRequestHandler):
         "/api/character": _character,
         "/api/family": _family,
         "/api/armory": _armory,
+        "/api/questlog": _questlog,
         "/api/thoughts": _thoughts,
         "/api/watch": _watch_state,
         "/": _index,

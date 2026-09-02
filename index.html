@@ -244,58 +244,73 @@
   @media (pointer:coarse) {
     nav button { min-height:44px; padding:.3rem 1rem; }
   }
-  /* --- the Twitch-style broadcast grid (infra#2892, on top of the cards) --
-     One big focused player plus a row of live thumbnails, all FIVE tiles
-     built once and never rebuilt - the same rule the cards below follow,
-     for the same reason: rebuilding a tile mid-stream tears down its
-     PeerConnection to redraw a picture that looked fine already. Promoting
-     a thumbnail moves its existing DOM node into the focus slot rather than
-     reconnecting, so a click never re-buffers the video that is already
-     playing. */
-  #ftwitch { margin-bottom:1rem; }
-  #ffocus { position:relative; background:#000; border:1px solid var(--line);
-            border-radius:8px; overflow:hidden; aspect-ratio:16/9; }
-  #fthumbs { display:grid; grid-template-columns:repeat(auto-fill,minmax(150px,1fr));
-             gap:.5rem; margin-top:.5rem; }
+  /* --- the broadcast tile, inside its own character's card (infra#3110) --
+     Was a Twitch-style grid of its own above the cards (infra#2892): one
+     focused player and a strip of five thumbnails, with the names in a
+     separate list underneath. The operator's complaint was that this reads
+     as a wall of video plus a wall of people, and matching one to the other
+     is the viewer's job. So the tile now lives in the card of the character
+     it is showing, and "focused" is a state of a tile rather than a place
+     it gets moved to.
+
+     ALL FIVE TILES ARE STILL BUILT ONCE AND MOVED, NEVER REBUILT, which is
+     the rule that keeps a PeerConnection alive across a promotion: tapping a
+     thumbnail changes a class, not a connection. */
+  /* THE SLOT RESERVES THE SHAPE, NOT THE TILE, and that distinction is
+     load-bearing rather than a preference. makePlayer owns the tile's
+     `display` - it is set to none until start() is called and back to none
+     by stop() - so a reservation hung on the tile itself is worth nothing in
+     exactly the window it is needed. The quest log poll can also draw a card
+     before the family poll has said whether there is a stream, and a box
+     that appears half a second later shoves the log down under a thumb that
+     is already reaching for it. So the empty slot holds the space. */
+  .fstream { margin:.5rem 0; width:170px; max-width:100%; aspect-ratio:16/9; }
+  /* The focused stream fills its card. There is one at a time, and it is the
+     card you tapped - so "the big one" and "whose it is" are the same fact,
+     which is the whole point of moving them in here. */
+  .fstream.big { width:100%; }
   .ftile { position:relative; background:#000; border:1px solid var(--line);
-           border-radius:6px; overflow:hidden; aspect-ratio:16/9; cursor:pointer;
-           min-height:0; }
-  #ffocus .ftile { position:absolute; inset:0; border:0; border-radius:0;
-                    cursor:default; aspect-ratio:auto; }
+           border-radius:6px; overflow:hidden; aspect-ratio:16/9;
+           cursor:pointer; width:100%; height:100%; }
+  .ftile.focused { cursor:default; outline:2px solid var(--alliance);
+                   outline-offset:-2px; }
   .ftile video { width:100%; height:100%; display:block; object-fit:cover;
                  background:#000; }
   /* The focused player letterboxes rather than crops, the same rule the
      panel's fullscreen view follows: a cropped POV hides the hotbars, which
      is half of why watching it is worth doing. A thumbnail is too small for
      that distinction to matter, so it stays cropped-to-fill. */
-  #ffocus .ftile video { object-fit:contain; }
+  .ftile.focused video { object-fit:contain; }
   /* Metadata rides ON the video, exactly the way Twitch overlays a channel's
-     name and viewer count - reading who-and-how-hurt must not cost a second
-     look away from the picture. pointer-events:none so the overlay never
-     eats the click that promotes a thumbnail. */
+     name - reading who-and-how-hurt must not cost a look away from the
+     picture. pointer-events:none so the overlay never eats the click that
+     promotes a thumbnail. */
   .ftile .fov { position:absolute; inset:0; display:flex; flex-direction:column;
                 justify-content:space-between; pointer-events:none;
                 background:linear-gradient(to bottom, #000a, transparent 30%,
                             transparent 70%, #000c); padding:.3rem .4rem; }
   .ftile .ftop { display:flex; align-items:center; gap:.35rem; flex-wrap:wrap; }
-  .ftile .fovname { font-weight:bold; overflow-wrap:anywhere; }
-  #ffocus .fovname { font-size:1.1rem; }
+  /* The name is on the card above it now, so the overlay says it small and
+     only as a label on the picture - it is not the heading any more. */
+  .ftile .fovname { font-weight:bold; overflow-wrap:anywhere; font-size:.75rem; }
+  .ftile.focused .fovname { font-size:1rem; }
   .ftile .fovbar { background:#ffffff33; border-radius:3px; height:.4em;
                     overflow:hidden; }
   .ftile .fovfill { height:100%; background:var(--mortal); }
   .ftile.c-hurt .fovfill { background:#d29922; }
   .ftile.c-dead .fovfill { background:var(--horde); }
-  .ftile .fovzone { color:#e6edf3cc; font-size:.82rem; overflow-wrap:anywhere; }
+  .ftile .fovzone { color:#e6edf3cc; font-size:.75rem; overflow-wrap:anywhere; }
+  /* A thumbnail has no room for the zone; the card already says it in full. */
+  .ftile:not(.focused) .fovzone { display:none; }
   /* Offline is a message, not a black rectangle - requirement #3: a path
      with nothing publishing must read as itself, never as a dead player. */
   .ftile .foffline { position:absolute; inset:0; display:none;
                       align-items:center; justify-content:center;
                       text-align:center; padding:.5rem; color:var(--dim);
-                      background:var(--panel); font-size:.85rem; }
+                      background:var(--panel); font-size:.75rem; }
   .ftile.offline .foffline { display:flex; }
   .ftile.offline video { visibility:hidden; }
-  .ftile.focused { outline:2px solid var(--alliance); }
-  #fthumbs .ftile:hover { outline:1px solid var(--dim); }
+  .ftile:not(.focused):hover { outline:1px solid var(--dim); }
   /* FULLSCREEN, AND ONLY ON THE FOCUSED TILE. The grid shipped without any
      fullscreen affordance at all: goFullscreen() existed but only the panel's
      card player ever called it, so on a phone - the device this tab was built
@@ -310,8 +325,51 @@
                   background:#0d1117cc; color:#e6edf3; font:inherit;
                   font-size:.75rem; padding:.15rem .5rem;
                   border:1px solid var(--line); border-radius:4px; }
-  #ffocus .ftile .ffull { display:inline-block; }
+  .ftile.focused .ffull { display:inline-block; }
   .ftile .ffsnote { font-size:.75rem; color:#d29922; overflow-wrap:anywhere; }
+  /* --- the quest log, in the card of whoever is carrying it (infra#3110) --
+     Five logs side by side is the arrangement, and it is the arrangement
+     because the two defects it exists to expose are both COMPARISONS:
+     mod-overseer#73 is one character's slot count against the cap, and
+     mod-overseer#28 is one character's quests against the other four's. A
+     single log on its own screen would hide both. */
+  #fquesthead { color:var(--dim); margin-bottom:.6rem; overflow-wrap:anywhere; }
+  #fquesthead.alarm { color:#ff9d9d; }
+  .fquests { margin-top:.5rem; border-top:1px solid var(--line);
+             padding-top:.4rem; }
+  .fqhead { color:var(--dim); font-size:.85rem; overflow-wrap:anywhere; }
+  /* Loud, not dim, when the log is nearly full - the same rule the dead card
+     follows. A quest log at the cap silently refuses every new quest, and
+     greying the one number that says so would repeat the bug. */
+  .fqhead.alarm { color:#ff9d9d; }
+  .fqlist { margin-top:.35rem; display:grid; gap:.3rem; }
+  .fq { border-left:3px solid var(--line); padding:.1rem .5rem; min-width:0; }
+  .fq.ready { border-left-color:var(--mortal); }
+  .fq.failed { border-left-color:var(--horde); }
+  /* The #28 marker: a quest nobody else is carrying. Amber rather than red -
+     it is not broken, it is unshared, and there are a lot of them. */
+  .fq.alone { border-left-color:#d29922; }
+  .fqtop { display:flex; align-items:baseline; gap:.35rem; flex-wrap:wrap; }
+  .fqlvl { color:var(--dim); font-size:.8rem; }
+  .fqname { overflow-wrap:anywhere; }
+  .fq.old .fqname { color:var(--dim); }
+  .fqchip { font-size:.72rem; letter-spacing:.04em; border-radius:99px;
+            border:1px solid currentColor; padding:0 .4rem; }
+  .fq.ready .fqchip { color:var(--mortal); }
+  .fq.failed .fqchip { color:var(--horde); }
+  .fq.old .fqchip { color:var(--dim); }
+  .fqbar { background:var(--bg); border:1px solid var(--line); border-radius:3px;
+           height:.4em; overflow:hidden; margin:.2rem 0; }
+  .fqfill { height:100%; background:var(--alliance); }
+  .fq.ready .fqfill { background:var(--mortal); }
+  .fqobj { color:var(--dim); font-size:.82rem; overflow-wrap:anywhere; }
+  .fqobj.done { color:var(--mortal); }
+  .fqheld { font-size:.78rem; color:var(--dim); overflow-wrap:anywhere; }
+  .fqheld.alone { color:#d29922; }
+  /* 44px, because it is a control and this page is read with a thumb. */
+  .fqmore { min-height:44px; width:100%; margin-top:.2rem; background:var(--bg);
+            color:var(--dim); border:1px solid var(--line); border-radius:6px;
+            cursor:pointer; font:inherit; padding:.3rem .6rem; }
 </style>
 </head>
 <body>
@@ -343,14 +401,18 @@
 <nav id="tabs"></nav>
 <section id="family">
   <div id="fheadline">reaching the world...</div>
-  <!-- The always-on broadcast grid (infra#2892 Twitch view): the five
-       continuous encoders that are already running, independent of the
-       on-demand "watch <name>" cards below. See index.html's #ftwitch CSS
-       and the JS block near "the broadcast grid" for why. -->
-  <div id="ftwitch">
-    <div id="ffocus"></div>
-    <div id="fthumbs"></div>
-  </div>
+  <!-- The one quest-log fact that belongs to nobody in particular: how
+       badly the five logs disagree with each other (infra#3110). The
+       per-character logs live INSIDE the cards, because a quest log belongs
+       to a character. -->
+  <div id="fquesthead"></div>
+  <!-- ONE CARD PER CHARACTER, and the card carries everything about them:
+       their name, their state, THEIR OWN broadcast tile, and their quest
+       log. The tiles used to sit in a separate grid above this list
+       (infra#2892's Twitch view), which read as a wall of video over a wall
+       of names and left a viewer matching one to the other by position. The
+       encoders, the paths and the WHEP handshake are all unchanged - the
+       only thing infra#3110 moved is where a tile is parented. -->
   <div id="fcards"></div>
 </section>
 <section id="armory">
@@ -431,6 +493,10 @@ async function loadZones() {
   ]);
   zones = z.continents;
   shapes = sh;
+  // A #map/<id> deep link arrives before this fetch finishes, so the id it
+  // named is checked and adopted here, the moment there is something to check
+  // it against.
+  adoptContinent();
   const tabs = document.getElementById("tabs");
   // FAMILY FIRST. The map answers "who is in the world"; the Family tab
   // answers "are my five all right", which is the question that actually gets
@@ -1565,6 +1631,19 @@ function familyCard(name) {
   const hp = el("div", "fline");
   const where = el("div", "fline dim");
   const warn = el("div", "fwarn");
+  // WHERE THIS CHARACTER'S BROADCAST LIVES (infra#3110). Empty here and
+  // filled by layoutBroadcasts, which owns the one <video> per member and
+  // moves it rather than rebuilding it. The card does not create a player of
+  // its own - a second handshake for the same path would be a second
+  // connection to the same encoder for one picture.
+  const stream = el("div", "fstream");
+  // THE QUEST LOG, under the name of whoever is carrying it. Its own poll
+  // fills these (renderQuestLog below); they stay empty and take no height
+  // until /api/questlog answers, so a slow quest read never delays the card.
+  const quests = el("div", "fquests");
+  const qhead = el("div", "fqhead");
+  const qlist = el("div", "fqlist");
+  quests.append(qhead, qlist);
   const btn = el("button", "fwatch", "watch");
   const note = noteNode("note");
   const box = el("div", "fplayer");
@@ -1584,10 +1663,14 @@ function familyCard(name) {
   btns.append(full, stop);
   const vnote = noteNode("note");
   box.append(video, btns, vnote);
-  card.append(head, meta, bar, hp, where, warn, btn, note, box);
+  // ORDER IS THE FEATURE. Name, then who they are, then THEIR stream, then
+  // their state, then what they are working on. A viewer reads one character
+  // at a time instead of matching a wall of video to a list of names by
+  // position, which is what the split layout made them do (infra#3110).
+  card.append(head, meta, stream, bar, hp, where, warn, quests, btn, note, box);
   fcards.appendChild(card);
-  c = { card, nm, chip, combat, lead, meta, bar, fill, hp, where, warn,
-        btn, note, box, video, vnote, full, stop };
+  c = { card, nm, chip, combat, lead, meta, stream, bar, fill, hp, where, warn,
+        quests, qhead, qlist, btn, note, box, video, vnote, full, stop };
   c.player = makePlayer(video, (t, cls) => setNote(vnote, t, cls), box);
   btn.onclick = () => familyWatch(name);
   stop.onclick = () => familyStop();
@@ -1596,25 +1679,28 @@ function familyCard(name) {
   return c;
 }
 
-// --- the broadcast grid (infra#2892 Twitch view) ---------------------------
+// --- the broadcasts, one per character card (infra#2892, moved infra#3110) -
 //
 // Independent of the watch/POV cards above: those five paths are ALREADY
 // live, continuously, from encoders this page never starts and never stops -
 // family.broadcast_path's own docstring covers why the URL comes from the
 // server rather than being built here. There is no "requested/starting/
-// live" lifecycle and no heartbeat for this grid, only a WHEP handshake per
+// live" lifecycle and no heartbeat for these, only a WHEP handshake per
 // tile, reusing the SAME makePlayer() this file already built to be shared
 // across surfaces (the panel and the watch cards were the "TWO SURFACES" in
 // makePlayer's own comment; this is the third).
 //
 // TILES ARE BUILT ONCE, exactly like the cards above and for the same
-// reason, and MOVED rather than rebuilt when the focus changes:
-// re-parenting an existing <video> node keeps its PeerConnection alive,
-// while recreating the element would tear the connection down and re-buffer
-// a stream that was already playing fine, over a click that only meant
-// "look at this one instead".
-const ffocus = document.getElementById("ffocus");
-const fthumbs = document.getElementById("fthumbs");
+// reason, and MOVED rather than rebuilt: re-parenting an existing <video>
+// node keeps its PeerConnection alive, while recreating the element would
+// tear the connection down and re-buffer a stream that was already playing
+// fine, over a click that only meant "look at this one instead".
+//
+// WHAT infra#3110 CHANGED, AND WHAT IT DID NOT. A tile is now parented into
+// its own character's card rather than into a shared focus slot and a
+// thumbnail strip; "focused" became a class on the tile instead of a place
+// it gets moved to. The handshake, the retry, the offline message and the
+// focused-tile-only fullscreen and native controls are all untouched.
 const broadcasts = { tiles: new Map(), focus: null, connected: false };
 
 function broadcastTile(name) {
@@ -1627,10 +1713,11 @@ function broadcastTile(name) {
   const ov = el("div", "fov");
   const top = el("div", "ftop");
   const nm = el("span", "fovname");
-  // The button lives in the overlay's top row rather than beside the grid so
-  // it travels with the tile: layoutBroadcasts() re-parents this same node
-  // between #fthumbs and #ffocus, and anything anchored outside it would have
-  // to be moved in step and would drift the first time that was forgotten.
+  // The button lives in the overlay's top row rather than beside the tile so
+  // it travels with it: layoutBroadcasts() re-parents this same node into
+  // whichever card the member belongs to, and anything anchored outside it
+  // would have to be moved in step and would drift the first time that was
+  // forgotten.
   const full = el("button", "ffull", "fullscreen");
   const fsnote = el("span", "ffsnote");
   top.append(nm, full, fsnote);
@@ -1699,7 +1786,14 @@ function layoutBroadcasts() {
     // bar over a 150px picture and, worse, swallow the tap that promotes it,
     // so the grid would stop responding to the gesture it exists for.
     t.video.controls = big;
-    const target = big ? ffocus : fthumbs;
+    // HOME IS THE CHARACTER'S OWN CARD, focused or not. familyCard() builds
+    // the card on demand and is idempotent, so this works whichever of the
+    // two polls answers first - the quest log alone is enough to draw a card
+    // for somebody who is not in the world.
+    const target = familyCard(name).stream;
+    // The SLOT carries the size, because the tile's own display is
+    // makePlayer's to set - see the .fstream comment in the stylesheet.
+    target.classList.toggle("big", big);
     if (t.tile.parentElement !== target) target.appendChild(t.tile);
   }
 }
@@ -1850,6 +1944,170 @@ function updateFamilyButtons() {
   }
 }
 
+// --- the quest log (infra#3110) -------------------------------------------
+//
+// WHAT IT IS FOR. Two defects that shape every play session were invisible
+// because nothing anywhere counted them (questlog.py's docstring carries the
+// measurements). Both are COMPARISONS, which is why they belong on a page
+// that already draws all five characters at once:
+//
+//   mod-overseer#73 - a quest log at the client's cap of 25 silently refuses
+//   every new quest, and a character that CANNOT take quests looks exactly
+//   like one that has chosen not to. The slot count is the whole fix here.
+//
+//   mod-overseer#28 - five separate quest logs, so the same kill pays only
+//   whoever holds the quest. Every quest says who else is carrying it, and
+//   the ones nobody else is carrying are marked.
+//
+// Nothing on this page decides any of that: questlog.py does, and this
+// renders what it decided. A second opinion in the browser about what counts
+// as a full log is a second answer that can disagree with the first.
+const fquesthead = document.getElementById("fquesthead");
+// The last-rendered shape of each member's log. Quest rows ARE rebuilt - they
+// are text, not a live connection - but only when something actually moved,
+// so a poll that changes nothing does not throw away a half-read list under
+// somebody's thumb.
+const quested = new Map();
+// HOW MANY QUESTS A CARD SHOWS BEFORE IT FOLDS. Sixty-five quests across five
+// characters is nine thousand pixels of phone scrolling, and a card whose log
+// runs to twenty-two rows buries the next character's stream under it. The
+// FOLD IS SAFE ONLY BECAUSE THE HEADER LINE ALREADY CARRIES EVERY NUMBER the
+// two defects are made of - slots used against the cap, how many nobody else
+// holds, how many are far below their level. Folding a list whose totals were
+// not stated would be hiding the thing this view exists to show.
+const QUEST_PREVIEW = 5;
+const questsOpen = new Set();
+
+function questSignature(m) {
+  return m.quests.map((q) => q.id + ":" + q.status + ":" + q.held_by.length
+    + ":" + q.objectives.map((o) => o.have).join("/")).join(",");
+}
+
+function questHeadline(m) {
+  if (!m.present) return "no saved character to read a quest log from";
+  // Slots FIRST and always, even at four of twenty-five. It is the number
+  // that was missing, and a number that only appears once it is bad is a
+  // number nobody learns to read.
+  const bits = [m.used + " of " + m.slots + " quest slots"];
+  if (m.ready) bits.push(m.ready + " ready to hand in");
+  if (m.failed) bits.push(m.failed + " failed");
+  if (m.outleveled) bits.push(m.outleveled + " far below their level");
+  if (m.used) bits.push(m.alone + " nobody else holds");
+  bits.push(m.turned_in + " turned in");
+  return bits.join("  -  ");
+}
+
+function questRow(q, me) {
+  const box = el("div", "fq " + q.status + (q.alone ? " alone" : "")
+    + (q.outleveled ? " old" : ""));
+  const top = el("div", "fqtop");
+  top.append(el("span", "fqlvl", "L" + (q.level || "?")),
+             el("span", "fqname", q.title));
+  // A chip only where there is something to say. "active" on twenty rows is
+  // twenty pieces of furniture; the bar underneath already says that much.
+  if (q.ready) top.appendChild(el("span", "fqchip", "hand in"));
+  else if (q.failed) top.appendChild(el("span", "fqchip", "failed"));
+  if (q.outleveled) top.appendChild(el("span", "fqchip", "outlevelled"));
+  box.appendChild(top);
+  if (q.progress_pct !== null) {
+    const bar = el("div", "fqbar");
+    const fill = el("div", "fqfill");
+    fill.style.width = q.progress_pct + "%";
+    bar.appendChild(fill);
+    box.appendChild(bar);
+  }
+  for (const o of q.objectives) {
+    box.appendChild(el("div", "fqobj" + (o.done ? " done" : ""),
+      o.what + "  " + o.have + " / " + o.need));
+  }
+  // Said out loud rather than left blank. Plenty of quests count nothing at
+  // all - a delivery, a conversation, a place to walk to - and an empty space
+  // under a title reads as "the page failed to load the objectives".
+  if (!q.objectives.length && !q.ready) {
+    box.appendChild(el("div", "fqobj", "nothing counted - a delivery, a "
+      + "conversation, or somewhere to walk to"));
+  }
+  // THE #28 LINE. Who else is carrying this, by name, on every single quest.
+  // Four names means the fight pays four of them; no names means it pays one.
+  const others = q.held_by.filter((n) => n !== me);
+  box.appendChild(el("div", "fqheld" + (others.length ? "" : " alone"),
+    others.length ? "also " + others.join(", ") : "nobody else holds this"));
+  return box;
+}
+
+function renderQuestLog(m) {
+  const c = familyCard(m.name);
+  c.qhead.textContent = questHeadline(m);
+  c.qhead.className = "fqhead" + (m.full ? " alarm" : "");
+  const sig = questSignature(m);
+  if (quested.get(m.name) === sig) return;
+  quested.set(m.name, sig);
+  const open = questsOpen.has(m.name);
+  const rows = (open ? m.quests : m.quests.slice(0, QUEST_PREVIEW))
+    .map((q) => questRow(q, m.name));
+  if (!rows.length && m.present) {
+    rows.push(el("div", "fqobj", "an empty quest log - nothing accepted"));
+  }
+  if (m.quests.length > QUEST_PREVIEW) {
+    // Says how many and WHERE they are, because the order is meaningful:
+    // what is hidden is the oldest and least-progressed end of the log,
+    // which is exactly the dead weight worth going to look at.
+    const more = el("button", "fqmore", open ? "show fewer"
+      : (m.quests.length - QUEST_PREVIEW) + " more, oldest last");
+    more.onclick = () => {
+      if (open) questsOpen.delete(m.name); else questsOpen.add(m.name);
+      // Force the rebuild the signature would otherwise skip: nothing about
+      // the DATA changed, which is the whole reason that guard exists.
+      quested.delete(m.name);
+      renderQuestLog(m);
+    };
+    rows.push(more);
+  }
+  // replaceChildren, and ONLY here: this list is text the server just
+  // recomputed, with no <video> and no PeerConnection anywhere in it. The
+  // cards themselves are still built once and updated in place.
+  c.qlist.replaceChildren(...rows);
+}
+
+function renderQuests(p) {
+  const spread = p.turn_in_spread;
+  const bits = [p.held + " quests across " + p.expected + " logs"];
+  if (p.held) bits.push(p.alone + " held by only one of them");
+  bits.push(p.everyone ? p.everyone + " held by all of them"
+                       : "none held by all of them");
+  if (spread && spread.gap) {
+    bits.push("turn-ins " + spread.most + " " + spread.most_count
+      + " to " + spread.least + " " + spread.least_count);
+  }
+  fquesthead.textContent = bits.join("  -  ");
+  // Loud when most of the work is being carried alone, which is the state
+  // mod-overseer#28 describes and the state the family has been in all along.
+  fquesthead.className = p.alone > p.shared ? "alarm" : "";
+  for (const m of p.members) renderQuestLog(m);
+}
+
+// THIRTY seconds, and the departure from the page's 5s cadence is deliberate
+// - the same reasoning the Armory tab's poll carries at the foot of this
+// file. Quest rows are SAVED state: the core writes them on its own player
+// save timer, so they physically cannot change faster than that, and a 5s
+// poll would re-fetch an identical 23KB payload six times per actual change.
+// Entering the tab polls immediately, so it is never blank while waiting.
+async function pollQuests() {
+  if (view !== FAMILY_VIEW) return;
+  try {
+    const r = await fetch("/api/questlog");
+    if (!r.ok) throw new Error(r.status);
+    renderQuests(await r.json());
+  } catch (e) {
+    // Keep the logs that are drawn, for the same reason the cards are kept:
+    // an empty quest log means "they have nothing to do", which is the
+    // opposite of what a failed read actually found out.
+    fquesthead.textContent = "the world is unreachable - these quest logs "
+      + "may be stale";
+    fquesthead.className = "alarm";
+  }
+}
+
 // POV AND ONLY POV. "watch them" (follow-cam) is not implemented and answers
 // with a refusal after about forty seconds of pointless client bring-up
 // (infra#2887), so this tab does not offer it at all - a button whose only
@@ -1943,8 +2201,27 @@ function markTabs() {
   }
 }
 
+// The view IS the address (infra#3110). Before this the page had no routing
+// at all: every load landed on the map, and there was no way to send anybody
+// a link to anything else. The family is now the front door, so IT is the
+// bare URL and the other views name themselves.
+function hashFor(v) {
+  // The map carries its continent, or a link to it would forget which one
+  // was being looked at - the one piece of state that view actually has.
+  if (v === MAP_VIEW) return "#" + MAP_VIEW + "/" + current;
+  return "#" + v;
+}
+
+// replaceState, never an assignment to the hash. Assigning fires hashchange,
+// which calls straight back into here, and a tab tap is a change of view
+// rather than a new page in somebody's history - five taps should not mean
+// five presses of Back to leave the site. Typed and pasted hashes still
+// arrive through the hashchange listener at the foot of the file, which is
+// the case that actually matters.
 function showView(v) {
   view = v;
+  const want = hashFor(v);
+  if (location.hash !== want) history.replaceState(null, "", want);
   const isFam = v === FAMILY_VIEW;
   const isArm = v === ARMORY_VIEW;
   fsection.style.display = isFam ? "block" : "none";
@@ -1961,6 +2238,7 @@ function showView(v) {
     closePanel();
     startBroadcasts();
     pollFamily();
+    pollQuests();
     refreshFamilyWatch();
     return;
   }
@@ -1993,6 +2271,7 @@ function showView(v) {
 
 setInterval(pollFamily, 5000);         // the family rides the same 5s cadence
 setInterval(refreshFamilyWatch, 5000); // and so does the watch it owns
+setInterval(pollQuests, 30000);        // quest rows are a save, not a stream
 
 loadZones().then(() => { poll(); setInterval(poll, 5000); });
 setInterval(fetchPanel, 5000);  // panel rides the same 5s snapshot cadence
@@ -2185,6 +2464,56 @@ async function pollArmory() {
 // payload a hundred and eighty times per actual change. Entering the tab
 // still polls immediately, so it is never blank while waiting for the timer.
 setInterval(pollArmory, 30000);
+
+// --- the front door (infra#3110) ------------------------------------------
+//
+// THE FAMILY IS THE HOMEPAGE. Opening this page used to land on the map, and
+// the map answers "who is in the world" - five hundred dots, on a phone,
+// when the question actually being asked is "are my five all right". The
+// Family tab has been the first button under the thumb since infra#2892;
+// this makes it the first thing on the screen as well.
+//
+// AND EVERY OTHER VIEW IS STILL A LINK. #map, #map/530 and #armory all open
+// straight onto themselves, which nothing on this page could do before -
+// there was no routing at all, so "send me the Armory" was not a thing that
+// could be said. Anything unrecognised falls back to the family rather than
+// to a blank page.
+//
+// DECLARED HERE AND READ FROM loadZones(), which is called further up the
+// file. That is safe rather than lucky: loadZones awaits its two fetches on
+// its first line, so everything after the await runs in a microtask, and a
+// microtask cannot run until this script has finished executing.
+let wantedContinent = "";
+
+function adoptContinent() {
+  // Only once zones.json is in: before that there is nothing to check an id
+  // against, and adopting an unchecked one draws an empty map.
+  if (wantedContinent && zones && zones[wantedContinent]) current = wantedContinent;
+  wantedContinent = "";
+}
+
+function applyHash() {
+  const raw = (location.hash || "").replace(/^#/, "");
+  const cut = raw.indexOf("/");
+  const name = cut < 0 ? raw : raw.slice(0, cut);
+  if (name === MAP_VIEW) {
+    wantedContinent = cut < 0 ? "" : raw.slice(cut + 1);
+    adoptContinent();
+    showView(MAP_VIEW);
+    render();
+    return;
+  }
+  showView(name === ARMORY_VIEW ? ARMORY_VIEW : FAMILY_VIEW);
+}
+
+window.addEventListener("hashchange", applyHash);
+// Synchronously, at the foot of the script rather than inside loadZones's
+// promise, for two reasons. The family view needs no map data, so waiting on
+// two JSON fetches to draw it would put a blank page in front of the one
+// question this page exists to answer. And showView touches the Armory tab's
+// own elements, which are `const`s declared in the block above this one -
+// calling it any earlier than here is a temporal-dead-zone ReferenceError.
+applyHash();
 </script>
 </body>
 </html>
