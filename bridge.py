@@ -1420,6 +1420,44 @@ def _write_trade_errand(errand) -> None:
             raise
 
 
+# THE overseer_* TABLES DO NOT SHARE ONE COLLATION, AND THIS SIDE CANNOT FIX
+# THAT (infra#3173). Read this before writing any join between two of them.
+#
+# mod-overseer creates them across many migrations, and the ones created before
+# the server's default moved carry a different collation from the ones created
+# after. Measured on both realms on 2026-09-02:
+#
+#     utf8mb4_unicode_ci   overseer_roster, overseer_event, overseer_death
+#     utf8mb4_0900_ai_ci   overseer_snapshot, overseer_trade, overseer_command,
+#                          overseer_thought, overseer_goal, overseer_chat,
+#                          overseer_chat_watch, overseer_stream,
+#                          overseer_dungeon_run, overseer_sample
+#
+# Comparing a name column from the first group against one from the second
+# raises MySQL 1267, "Illegal mix of collations": both operands are IMPLICIT,
+# neither outranks the other, and MySQL fails the WHOLE statement rather than
+# returning fewer rows. It is not a bad row, it is every row - measured at six
+# raises in twenty minutes on dev, taking the protect cycle and the life
+# recheck down with them.
+#
+# SO ANY JOIN THAT CROSSES THE TWO GROUPS ON A NAME MUST CARRY AN EXPLICIT
+# `COLLATE utf8mb4_unicode_ci`, written on the operand from the
+# utf8mb4_0900_ai_ci side. COLLATE is EXPLICIT coercibility, which outranks
+# both IMPLICIT sides and settles the whole predicate in one collation.
+# utf8mb4_unicode_ci is the one to name because it is what overseer_roster.name
+# already is, so the roster's own index stays usable and only the joined side is
+# converted. The two collations differ only in Unicode version, and every value
+# compared here is an ASCII character name, so no pair that matched before stops
+# matching. tests/test_collation_split.py fails the suite on a new join written
+# without it, which is the only reason this comment is not the whole defence.
+#
+# A JOIN AGAINST `characters` NEEDS NONE OF THIS, and must not be given it:
+# characters.name is utf8mb4_bin, a binary collation already outranks either
+# group on its own, and forcing utf8mb4_unicode_ci onto it would quietly turn an
+# exact-match join into a case- and accent-insensitive one.
+#
+# Normalising the tables belongs to mod-overseer, which owns the DDL. The bridge
+# has to work against the realms that already have the split, today.
 def _errand_traveller() -> str:
     """The character that must lead the family right now, or '' for nobody.
 
@@ -1450,7 +1488,12 @@ def _errand_traveller() -> str:
         try:
             cur.execute(
                 "SELECT r.name FROM overseer_roster r "
-                "JOIN overseer_trade t ON t.character_name = r.name "
+                # overseer_roster is utf8mb4_unicode_ci and overseer_trade is
+                # utf8mb4_0900_ai_ci, so this predicate crosses the split - see
+                # the block above the def. Without the COLLATE this is MySQL
+                # 1267, every cycle, for as long as both tables exist.
+                "JOIN overseer_trade t "
+                "  ON t.character_name COLLATE utf8mb4_unicode_ci = r.name "
                 "WHERE r.enabled = 1 AND r.learn_skill <> 0 "
                 "AND t.verb = 'learn' AND t.skill_id = r.learn_skill "
                 "AND t.status = 'planned' "
@@ -1459,13 +1502,40 @@ def _errand_traveller() -> str:
                 (ERRAND_LEAD_HOURS,),
             )
             row = cur.fetchone()
-        except (pymysql.err.OperationalError, pymysql.err.ProgrammingError) as exc:
+        except pymysql.err.MySQLError as exc:
             # 1054 is a missing column, 1146 a missing table. Either means the
             # errand machinery is not deployed here, and the honest answer to
             # "who is on an errand" is nobody.
             if exc.args and exc.args[0] in (1054, 1146):
                 return ""
-            raise
+            # ANYTHING ELSE IS LOGGED LOUDLY AND STILL ANSWERS "nobody", rather
+            # than being re-raised (infra#3173). Re-raising is what let one
+            # query cost a whole cycle. Both the protect cycle and the life
+            # recheck reach this through _give_them_a_life, a third of the way
+            # in, so a 1267 here took every later step with it - the declared
+            # professions, the spec tabs, the randomize guards, the report -
+            # none of which have anything to do with an errand.
+            #
+            # This is a poll loop, and that is what makes the trade right. The
+            # caller's question has a safe answer: nobody is travelling, so
+            # leadership falls back to bonds.head_of_family(), which is the
+            # resting state anyway and is re-decided from scratch on the next
+            # cycle. Nothing is written on this path, so a wrong "nobody" costs
+            # one cycle of a slower errand and can corrupt nothing.
+            #
+            # It is not swallowed, and this is not a quiet degrade like the two
+            # codes above. log.exception writes the traceback at ERROR every
+            # cycle the fault persists - exactly as often as the loop's own
+            # handler used to, because the loop runs just as often either way -
+            # so nothing that was visible before becomes invisible now. It is
+            # scoped to pymysql's own base class rather than Exception, so a bug
+            # in this function still propagates instead of being reported as a
+            # database problem.
+            log.exception(
+                "errand traveller lookup failed; leading the family by seniority "
+                "this cycle"
+            )
+            return ""
     return row["name"] if row else ""
 
 
