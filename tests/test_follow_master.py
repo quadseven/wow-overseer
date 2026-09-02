@@ -135,13 +135,13 @@ class AHumanAtTheKeyboardWins(unittest.TestCase):
     back off the person playing, every thirty seconds, forever."""
 
     def test_a_client_driven_master_is_left_alone(self):
-        """HasGameClientMaster() is upstream's own test for "the master is a
-        real player or a selfbot" - `return IsRealPlayer(master) ||
-        IsSelfBot(master);` at PlayerbotAI.cpp:4459, declared public at
-        PlayerbotAI.h:544. It is null-safe: IsRealPlayer null-checks
-        (PlayerbotAI.cpp:4394) and IsSelfBot goes through GET_PLAYERBOT_AI
-        (PlayerbotAI.cpp:4400)."""
-        self.assertIn("HasGameClientMaster()", _code(_following()))
+        """The guard is IsRealPlayer on the follower's master (null-safe,
+        PlayerbotAI.cpp:4394). It used to be HasGameClientMaster(), which is
+        `IsRealPlayer(master) || IsSelfBot(master)`; since module 3e1e85f7 the
+        leader IS a selfbot (its own master, so it can issue the dungeon-clear
+        command), and that wider test would have skipped every follower whose
+        master is the leader. Only a real person at the keyboard wins now."""
+        self.assertIn("IsRealPlayer(botAI->GetMaster())", _code(_following()))
 
     def test_a_character_with_no_bot_ai_is_skipped(self):
         """A person seated at one of these characters has no PlayerbotAI at
@@ -164,8 +164,17 @@ class TheLeaderFollowsNobody(unittest.TestCase):
     followers is a cohesion loop with no fixed point - the party converges on
     nothing and drifts as a clump."""
 
-    def test_a_bot_master_on_the_leader_is_cleared(self):
-        self.assertIn("SetMaster(nullptr)", _code(_following()))
+    def test_the_leader_is_its_own_master(self):
+        """Its own master, not nobody. Module 3e1e85f7: the dungeon module only
+        accepts a command from a member that passes the core's IsSelfBot,
+        which is `GetMaster() == player`, and a cleared master failed that
+        test on every poll, so the dungeon brain never armed. A leader whose
+        master is itself follows nobody, which keeps the fixed point this
+        class is about, and can issue the command."""
+        body = _code(_following())
+        self.assertIn("leaderAI->SetMaster(leader)", body)
+        self.assertIn("IsSelfBot(leader)", body)
+        self.assertNotIn("SetMaster(nullptr)", body)
 
 
 class AMasterNobodyWalksTowardIsNotCohesion(unittest.TestCase):
@@ -239,13 +248,14 @@ class AMasterNobodyWalksTowardIsNotCohesion(unittest.TestCase):
         both, or the poll starts editing the strategies of a character somebody
         is playing."""
         body = _code(_following())
+        guard = body.index("IsRealPlayer(botAI->GetMaster())")
         self.assertLess(
-            body.index("HasGameClientMaster()"), body.index("SetMaster(leader)"),
+            guard, body.index("botAI->SetMaster(leader)"),
             "the poll assigns a master before checking whether a human owns this "
             "character",
         )
         self.assertLess(
-            body.index("HasGameClientMaster()"), body.index('HasStrategy("follow"'),
+            guard, body.index('HasStrategy("follow"'),
             "the poll edits strategies before checking whether a human owns this "
             "character",
         )
