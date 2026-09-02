@@ -19,6 +19,7 @@ from urllib.parse import parse_qs, urlsplit
 
 import pymysql
 
+import achievements
 import armory
 import chat
 import family
@@ -542,6 +543,103 @@ def _fetch_questlog() -> dict:
             "done_rows": done_rows, "party_rows": party_rows}
 
 
+def _fetch_achievements() -> dict:
+    """What the family has done: runs, events, deaths, and the world rows
+    that name what they gained.
+
+    Not subject to the 60s freshness rule, for the same reason /api/armory is
+    not: everything here already happened. overseer_dungeon_run ships in a
+    later migration than overseer_event, so a realm whose schema predates it
+    (error 1146) still gets its quests and levels - the runs are the bonus,
+    not the condition, in the pattern bridge.py established for the digest.
+
+    Names come from bonds via family.roster(), never from the request.
+    """
+    names = family.roster()
+    holes = ", ".join(["%s"] * len(names))
+    conn = _connect()
+    try:
+        with conn.cursor() as cur:
+            try:
+                cur.execute(
+                    "SELECT id, leader_name, map_id, state, started_at, "
+                    "last_progress_at, ended_at, ended_reason "
+                    "FROM overseer_dungeon_run ORDER BY started_at DESC LIMIT 500"
+                )
+                run_rows = list(cur.fetchall())
+            except pymysql.err.ProgrammingError as exc:
+                if not (exc.args and exc.args[0] == 1146):
+                    raise
+                log.info("overseer_dungeon_run absent; achievements run without it")
+                run_rows = []
+            # S608 on the three below: `holes` is a run of placeholders sized
+            # by the roster, and every VALUE is bound by the driver. Deaths
+            # come from overseer_death, the un-coalesced record, so the
+            # hourly-bucketed death rows in overseer_event are skipped here.
+            cur.execute(
+                "SELECT character_name, kind, subject_id, subject_name, detail, "  # noqa: S608
+                "level, map, zone, first_seen, last_seen, occurrences "
+                "FROM overseer_event "
+                f"WHERE kind <> 'death' AND character_name IN ({holes}) "
+                "ORDER BY first_seen ASC LIMIT 20000",
+                tuple(names),
+            )
+            event_rows = list(cur.fetchall())
+            cur.execute(
+                "SELECT character_name, map, zone, killer_name, killer_type, "  # noqa: S608
+                f"created_at FROM overseer_death WHERE character_name IN ({holes}) "
+                "ORDER BY created_at ASC LIMIT 20000",
+                tuple(names),
+            )
+            death_rows = list(cur.fetchall())
+            # Which world rows to look up is a decision about event kinds and
+            # dungeon boss lists; achievements owns it, the adapter just asks.
+            quest_ids = achievements.wanted_quests(event_rows)
+            quest_rows = []
+            if quest_ids:
+                qholes = ", ".join(["%s"] * len(quest_ids))
+                cur.execute(
+                    "SELECT ID, RewardItem1, RewardItem2, RewardItem3, RewardItem4, "  # noqa: S608
+                    "RewardAmount1, RewardAmount2, RewardAmount3, RewardAmount4, "
+                    "RewardChoiceItemID1, RewardChoiceItemID2, RewardChoiceItemID3, "
+                    "RewardChoiceItemID4, RewardChoiceItemID5, RewardChoiceItemID6 "
+                    f"FROM acore_world.quest_template WHERE ID IN ({qholes})",
+                    tuple(quest_ids),
+                )
+                quest_rows = list(cur.fetchall())
+            quest_rewards = achievements.quest_rewards_from_rows(quest_rows)
+            bosses = achievements.wanted_bosses(run_rows)
+            drop_rows = []
+            if bosses:
+                bholes = ", ".join(["%s"] * len(bosses))
+                cur.execute(
+                    "SELECT c.entry AS creature, l.Item AS item "  # noqa: S608
+                    "FROM acore_world.creature_template c "
+                    "JOIN acore_world.creature_loot_template l ON l.Entry = c.lootid "
+                    "JOIN acore_world.item_template i ON i.entry = l.Item "
+                    f"WHERE c.entry IN ({bholes}) AND l.Reference = 0 "
+                    "AND i.Quality >= %s",
+                    (*bosses, achievements.SIGNATURE_QUALITY),
+                )
+                drop_rows = list(cur.fetchall())
+            boss_drops = achievements.boss_drops_from_rows(drop_rows)
+            entries = achievements.wanted_entries(event_rows, quest_rewards, boss_drops)
+            items = {}
+            if entries:
+                iholes = ", ".join(["%s"] * len(entries))
+                cur.execute(
+                    "SELECT entry, name, Quality, ItemLevel, displayid "  # noqa: S608
+                    f"FROM acore_world.item_template WHERE entry IN ({iholes})",
+                    tuple(entries),
+                )
+                items = {int(r["entry"]): r for r in cur.fetchall()}
+    finally:
+        conn.close()
+    return {"run_rows": run_rows, "event_rows": event_rows, "death_rows": death_rows,
+            "items": items, "icons": ITEMS.icons, "boss_drops": boss_drops,
+            "quest_rewards": quest_rewards, "roster": names}
+
+
 def _ensure_stream_store() -> None:
     """The table the map and the Windows agent meet in.
 
@@ -943,6 +1041,23 @@ class Handler(BaseHTTPRequestHandler):
             log.exception("questlog query failed")
             self._send(503, "application/json", b'{"error": "world unreachable"}')
 
+    def _achievements(self, query: dict) -> None:
+        """GET /api/achievements - what the family has done, newest first.
+
+        No name parameter, for the same reason the other family endpoints
+        take none: WHO the family is belongs to bonds.
+        """
+        try:
+            payload = achievements.build_achievements(**_fetch_achievements())
+            self._send(200, "application/json", json.dumps(payload).encode())
+        except Exception:
+            # Same contract as every other poll: the tab keeps the timeline it
+            # has drawn and says it may be stale. A blank achievements tab
+            # reads as "they have done nothing", which is the one thing this
+            # view exists to disprove.
+            log.exception("achievements query failed")
+            self._send(503, "application/json", b'{"error": "world unreachable"}')
+
     def _thoughts(self, query: dict) -> None:
         """GET /api/thoughts?name=X&before=<id>&limit=N - one page, newest first."""
         name = query.get("name", [""])[0]
@@ -1279,6 +1394,7 @@ class Handler(BaseHTTPRequestHandler):
         "/api/family": _family,
         "/api/armory": _armory,
         "/api/questlog": _questlog,
+        "/api/achievements": _achievements,
         "/api/thoughts": _thoughts,
         "/api/watch": _watch_state,
         "/": _index,

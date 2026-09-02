@@ -101,6 +101,70 @@
   #psay { background:var(--panel); color:var(--text); border:1px solid var(--line);
           border-radius:6px; cursor:pointer; font:inherit; padding:.3rem .6rem; }
   #psay:disabled, #pinput:disabled { opacity:.5; cursor:default; }
+  /* --- the Achievements tab (mod-overseer#88, mod-overseer#152) -------------------
+     A vertical timeline, newest first, in the achievement-screen idiom: a
+     run, a turn-in, a level, a first. One column always - this is read on
+     a phone the evening after - with the line down the left and the cards
+     hanging off it. Item names are drawn in the Armory's quality colours,
+     which every player reads without a key, and each one links out to
+     wowhead for the tooltip the page does not carry. Placed ABOVE the
+     Family banner for the same reason the Armory's rules are: the Family
+     tests slice from that banner to the end of the stylesheet, and rules
+     dropped inside that window get read as Family rules. */
+  :root { --gold:#e5b53b; }
+  #achievements { display:none; padding:0 1rem 1rem; }
+  #achhead { color:var(--dim); margin-bottom:.6rem; }
+  #achhead.alarm { color:#ffd8a8; }
+  #achfilters { display:flex; gap:.4rem; flex-wrap:wrap; margin-bottom:.8rem; }
+  #achfilters button { background:var(--panel); color:var(--dim); border:1px solid var(--line);
+                       border-radius:999px; padding:.2rem .7rem; font:inherit; cursor:pointer;
+                       font-size:.85rem; }
+  #achfilters button.on { color:var(--text); border-color:var(--gold); }
+  #achline { position:relative; padding-left:1.4rem; }
+  #achline::before { content:""; position:absolute; left:.45rem; top:0; bottom:0;
+                     width:2px; background:var(--line); }
+  .ach { position:relative; background:var(--panel); border:1px solid var(--line);
+         border-radius:8px; padding:.7rem .9rem; margin-bottom:.8rem; }
+  .ach::before { content:""; position:absolute; left:-1.4rem; top:1rem; width:.7rem;
+                 height:.7rem; border-radius:50%; background:var(--line);
+                 border:2px solid var(--bg); transform:translateX(.13rem); }
+  .ach.run::before { background:var(--alliance); }
+  .ach.run.attempt::before { background:var(--line); }
+  .ach.run.attempt { border-style:dashed; }
+  .ach.quest::before { background:var(--mortal); }
+  .ach.level::before { background:var(--thought); }
+  .ach.first { border-color:var(--gold); }
+  .ach.first::before { background:var(--gold); }
+  .ach.first.big { padding:1rem; background:linear-gradient(180deg, #2a2310, var(--panel)); }
+  .ach h3 { font-size:1rem; display:flex; justify-content:space-between; gap:.6rem;
+            align-items:baseline; flex-wrap:wrap; }
+  .ach h3 .when { color:var(--dim); font-size:.8rem; font-weight:normal; white-space:nowrap; }
+  .ach .sub { color:var(--dim); font-size:.85rem; margin-top:.1rem; }
+  .ach .sect { color:var(--dim); font-size:.78rem; text-transform:uppercase;
+               letter-spacing:.05em; margin:.6rem 0 .2rem; }
+  .ach .chips { display:flex; gap:.3rem; flex-wrap:wrap; }
+  .ach .chip { border:1px solid var(--line); border-radius:999px; padding:0 .5rem;
+               font-size:.85rem; }
+  .ach .chip.dead { border-color:var(--horde); color:var(--horde); }
+  .ach .chip.boss { border-color:var(--mortal); }
+  .ach .chip.boss.unsure { border-style:dashed; color:var(--dim); }
+  .ach .loot { display:grid; grid-template-columns:repeat(auto-fill, minmax(230px, 1fr)); gap:.3rem .8rem; }
+  .ach .item { display:flex; align-items:center; gap:.45rem; min-width:0; }
+  .ach .item img { width:28px; height:28px; border-radius:4px;
+                   border:1px solid var(--line); flex-shrink:0; }
+  .ach .item a { text-decoration:none; overflow-wrap:anywhere; }
+  .ach .item a:hover { text-decoration:underline; }
+  .ach .item .who { color:var(--dim); font-size:.8rem; white-space:nowrap; }
+  /* .q0 to .q7 are the Armory's rules, below; an item here is drawn in the
+     same colour as the same item on the paper doll. Only the unknown case
+     is this tab's own. */
+  .qunknown { color:var(--dim); }
+  .ach .lvl { font-size:1.5rem; color:var(--thought); }
+  .ach .note { color:var(--dim); font-size:.8rem; margin-top:.4rem; }
+  .ach.level { padding:.5rem .9rem; }
+  #achmore { display:none; background:var(--panel); color:var(--text);
+             border:1px solid var(--line); border-radius:6px; padding:.5rem; font:inherit;
+             cursor:pointer; margin-left:1.4rem; width:calc(100% - 1.4rem); }
   /* --- the Armory tab (infra#3096, infra#3139) ---------------------------
      One profile per member, drawn the way an armory site draws a character
      and the way the character sheet in the game draws it: a header, then
@@ -593,6 +657,12 @@
   <div id="aprofiles"></div>
   <div id="atip"></div>
 </section>
+<section id="achievements">
+  <div id="achhead">reaching the world...</div>
+  <div id="achfilters"></div>
+  <div id="achline"></div>
+  <button id="achmore">show older</button>
+</section>
 <div id="wrap"><canvas id="map"></canvas><div id="tip"></div></div>
 <aside id="panel">
   <div id="phead"><h2 id="pname"></h2><button id="pclose" title="close">x</button></div>
@@ -648,6 +718,7 @@
 "use strict";
 const MAP_VIEW = "map";
 const ARMORY_VIEW = "armory";
+const ACH_VIEW = "achievements";
 const CONTINENT_ORDER = ["0", "1", "530", "571", "quelthalas", "azuremyst"];
 // A serif on purpose - the map should not read in the same voice as the
 // console around it. Deliberately a local stack: this page is tailnet-only
@@ -687,6 +758,13 @@ async function loadZones() {
   ab.dataset.view = ARMORY_VIEW;
   ab.onclick = () => showView(ARMORY_VIEW);
   tabs.appendChild(ab);
+  // Third: what they have DONE. Family is "are they all right", Armory is
+  // "why did that go badly"; this is the one to open the evening after.
+  const hb = document.createElement("button");
+  hb.textContent = "Achievements";
+  hb.dataset.view = ACH_VIEW;
+  hb.onclick = () => showView(ACH_VIEW);
+  tabs.appendChild(hb);
   for (const id of CONTINENT_ORDER) {
     const b = document.createElement("button");
     b.textContent = zones[id].name;
@@ -2447,8 +2525,10 @@ function showView(v) {
   if (location.hash !== want) history.replaceState(null, "", want);
   const isFam = v === FAMILY_VIEW;
   const isArm = v === ARMORY_VIEW;
+  const isAch = v === ACH_VIEW;
   fsection.style.display = isFam ? "block" : "none";
   asection.style.display = isArm ? "block" : "none";
+  achsection.style.display = isAch ? "block" : "none";
   // Every non-map view hides the canvas and its legend. This used to read
   // "not Family means map", which would have drawn the map underneath the
   // Armory tab the moment a third view existed.
@@ -2473,6 +2553,13 @@ function showView(v) {
     closePanel();
     stopBroadcasts();
     pollArmory();
+    return;
+  }
+  if (isAch) {
+    // A read, like the Armory: close the panel, stop the grid, fetch once.
+    closePanel();
+    stopBroadcasts();
+    pollAchievements();
     return;
   }
   stopBroadcasts();
@@ -2508,6 +2595,253 @@ setInterval(refreshFrame, 5000);  // and so does their own screen
 setInterval(refreshWatch, 5000);
 setInterval(render, 200);  // combat pulse
 window.addEventListener("resize", render);
+
+// --- the Achievements tab (mod-overseer#88, mod-overseer#152) --------------------
+//
+// What the family has DONE, as an achievement screen would show it: the
+// timeline /api/achievements hands over, drawn newest first. Every card
+// arrives fully decided - which run an item belongs to, which boss a drop
+// proves, what counts as a first - so this code only draws. It sits between
+// the map's own intervals and the Armory banner on purpose: the Family
+// tab's tests slice up to loadZones().then( and the Armory's slice from its
+// banner to the end of the script, and code dropped inside either window is
+// swept into assertions about a different tab.
+//
+// EVERY STRING FROM THE PAYLOAD IS SET AS TEXT, NEVER PARSED AS MARKUP.
+// Item and quest names come from the world database and character names
+// from a table the module writes; none of it is trusted.
+
+const achsection = document.getElementById("achievements");
+const achline = document.getElementById("achline");
+const achhead = document.getElementById("achhead");
+const achfilters = document.getElementById("achfilters");
+const achmore = document.getElementById("achmore");
+// Same host the Armory reads its icons from; declared again here rather
+// than shared so that neither tab's block depends on the other existing.
+const ACH_ICON_HOST = "https://wow.zamimg.com/images/wow/icons/large/";
+const ACH_PAGE = 40;
+const ach = { cards: [], filter: "all", shown: ACH_PAGE };
+
+const ACH_FILTERS = [["all", "everything"], ["run", "dungeon runs"],
+                     ["quest", "quests"], ["level", "levels"], ["first", "firsts"]];
+
+for (const [key, label] of ACH_FILTERS) {
+  const b = document.createElement("button");
+  b.textContent = label;
+  b.dataset.filter = key;
+  b.onclick = () => { ach.filter = key; ach.shown = ACH_PAGE; renderAchievements(); };
+  achfilters.appendChild(b);
+}
+achmore.onclick = () => { ach.shown += ACH_PAGE; renderAchievements(); };
+
+function achWhen(iso) {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (isNaN(d)) return iso;
+  const today = new Date();
+  const sameDay = d.toDateString() === today.toDateString();
+  const time = d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  if (sameDay) return "today " + time;
+  return d.toLocaleDateString([], { month: "short", day: "numeric" }) + " " + time;
+}
+
+function achEl(tag, cls, text) {
+  const el = document.createElement(tag);
+  if (cls) el.className = cls;
+  if (text !== undefined && text !== null) el.textContent = text;
+  return el;
+}
+
+function achSect(card, label) {
+  card.appendChild(achEl("div", "sect", label));
+}
+
+function achChips(list, cls) {
+  const wrap = achEl("div", "chips");
+  for (const text of list) wrap.appendChild(achEl("span", "chip " + (cls || ""), text));
+  return wrap;
+}
+
+// One item line: the icon when the frozen book knows one (nothing when it
+// does not - a blank square reads as a broken picture - and nothing again if
+// the icon host is unreachable), then the name in its quality colour,
+// linking to wowhead for the tooltip.
+function achItem(item, who) {
+  const row = achEl("div", "item");
+  if (item.icon) {
+    const img = document.createElement("img");
+    img.alt = "";
+    img.loading = "lazy";
+    img.src = ACH_ICON_HOST + item.icon + ".jpg";
+    img.onerror = () => { img.remove(); };
+    row.appendChild(img);
+  }
+  const a = document.createElement("a");
+  a.href = item.wowhead;
+  a.target = "_blank";
+  a.rel = "noopener";
+  a.className = item.quality === null || item.quality === undefined
+    ? "qunknown" : "q" + item.quality;
+  a.textContent = item.name + (item.count > 1 ? " x" + item.count : "");
+  a.title = item.quality_name + (item.ilvl ? ", item level " + item.ilvl : "");
+  row.appendChild(a);
+  if (item.chosen) row.appendChild(achEl("span", "who", "(chosen)"));
+  if (who) row.appendChild(achEl("span", "who", who));
+  return row;
+}
+
+function achHeader(card, title, at, sub) {
+  const h = achEl("h3");
+  h.appendChild(achEl("span", "", title));
+  h.appendChild(achEl("span", "when", achWhen(at)));
+  card.appendChild(h);
+  if (sub) card.appendChild(achEl("div", "sub", sub));
+}
+
+function achRunCard(c) {
+  const card = achEl("article", "ach run" + (c.gained ? "" : " attempt"));
+  const fight = c.active_duration
+    ? c.active_duration + " in the instance" + (c.duration !== c.active_duration
+      ? " (the run row stayed open " + c.duration + ")" : "")
+    : c.duration;
+  achHeader(card, c.title, c.at, "led by " + c.leader + ", " + fight
+            + (c.state === "active" ? ", still inside" : ""));
+  achSect(card, c.all_together ? "all " + c.members.length + " inside" : "seen inside");
+  card.appendChild(achChips(c.members));
+  // BOSSES. Confirmed ones are solid, the rest dashed and dim, and the note
+  // under them says what "confirmed" means today: a drop somebody equipped.
+  // The day the module writes boss_kill events, `how` flips and the note
+  // goes away without the page changing.
+  const b = c.bosses;
+  // An attempt lists no bosses: eight dashed "unconfirmed" chips under a
+  // death at the door say nothing the title has not already said.
+  if (b.total && c.gained) {
+    achSect(card, "bosses " + b.known.length + " of " + b.total
+            + (c.cleared ? ", cleared" : ""));
+    const chips = achEl("div", "chips");
+    for (const boss of b.known) chips.appendChild(achEl("span", "chip boss", boss.name));
+    for (const boss of b.unconfirmed) chips.appendChild(achEl("span", "chip boss unsure", boss.name));
+    card.appendChild(chips);
+    if (b.how === "loot") {
+      card.appendChild(achEl("div", "note",
+        "boss kills are not recorded yet; these are inferred from the loot "
+        + "somebody equipped, so an unconfirmed boss may well have fallen"));
+    }
+  }
+  if (c.deaths.length) {
+    achSect(card, "deaths " + c.deaths.length);
+    card.appendChild(achChips(c.deaths.map(d =>
+      d.who + (d.killer && d.killer !== d.who ? " (" + d.killer + ")" : "")), "dead"));
+  }
+  if (c.loot.length) {
+    achSect(card, "loot " + c.loot.length);
+    const grid = achEl("div", "loot");
+    // Grouped by member, in roster order, so "what did Ugga get" is one
+    // glance rather than a scan of the whole list.
+    for (const who of c.members) {
+      for (const item of c.loot) if (item.who === who) grid.appendChild(achItem(item, who));
+    }
+    for (const item of c.loot) {
+      if (!c.members.includes(item.who)) grid.appendChild(achItem(item, item.who));
+    }
+    card.appendChild(grid);
+  }
+  if (c.level_ups.length) {
+    achSect(card, "levelled inside");
+    card.appendChild(achChips(c.level_ups.map(l => l.who + " to " + l.level)));
+  }
+  if (c.quests.length) {
+    achSect(card, "quests inside");
+    card.appendChild(achChips(c.quests.map(q =>
+      q.title + " (" + q.who + (q.turned_in ? ", turned in" : ", done") + ")")));
+  }
+  return card;
+}
+
+function achQuestCard(c) {
+  const card = achEl("article", "ach quest");
+  achHeader(card, c.title, c.at,
+            c.who + (c.turned_in ? " turned it in" : " finished the objectives")
+            + " at level " + c.level);
+  if (c.rewards.length) {
+    achSect(card, c.turned_in ? "rewards" : "on offer");
+    const grid = achEl("div", "loot");
+    for (const item of c.rewards) grid.appendChild(achItem(item));
+    card.appendChild(grid);
+  }
+  if (c.choice_unknown) {
+    card.appendChild(achEl("div", "note",
+      "this quest offered a choice of reward, and nothing equipped afterwards says which was taken"));
+  }
+  if (c.level_gained) {
+    card.appendChild(achEl("div", "sub", "and reached level " + c.level_gained));
+  }
+  return card;
+}
+
+function achLevelCard(c) {
+  const card = achEl("article", "ach level");
+  const h = achEl("h3");
+  h.appendChild(achEl("span", "lvl", c.title));
+  h.appendChild(achEl("span", "when", achWhen(c.at)));
+  card.appendChild(h);
+  card.appendChild(achEl("div", "sub", c.who));
+  return card;
+}
+
+function achFirstCard(c) {
+  const card = achEl("article", "ach first big");
+  achHeader(card, c.title, c.at,
+            (Array.isArray(c.who) ? c.who.join(", ") : c.who) + (c.detail ? ": " + c.detail : ""));
+  return card;
+}
+
+const ACH_DRAW = { run: achRunCard, quest: achQuestCard, level: achLevelCard, first: achFirstCard };
+
+function renderAchievements() {
+  for (const b of achfilters.querySelectorAll("button")) {
+    b.classList.toggle("on", b.dataset.filter === ach.filter);
+  }
+  const wanted = ach.filter === "all"
+    ? ach.cards : ach.cards.filter(c => c.kind === ach.filter);
+  achline.replaceChildren();
+  if (!wanted.length) {
+    achline.appendChild(achEl("div", "note", "nothing here yet"));
+  }
+  for (const c of wanted.slice(0, ach.shown)) {
+    const draw = ACH_DRAW[c.kind];
+    if (draw) achline.appendChild(draw(c));
+  }
+  achmore.style.display = wanted.length > ach.shown ? "block" : "none";
+}
+
+async function pollAchievements() {
+  try {
+    const r = await fetch("/api/achievements");
+    if (!r.ok) throw new Error(r.status);
+    const p = await r.json();
+    ach.cards = p.cards;
+    achhead.textContent = p.runs + " dungeon run" + (p.runs === 1 ? "" : "s")
+      + ", " + p.attempts + " attempt" + (p.attempts === 1 ? "" : "s")
+      + ", " + p.visits + " instance visit" + (p.visits === 1 ? "" : "s")
+      + ", " + p.firsts.length + " firsts"
+      + (p.boss_kills_recorded ? "" : ", boss kills inferred from loot")
+      + " - " + new Date().toLocaleTimeString();
+    achhead.className = "";
+    renderAchievements();
+  } catch (e) {
+    // Keep the cards that are drawn, exactly as the other tabs do. A blank
+    // timeline reads as "they have done nothing", which is the one thing
+    // this tab exists to disprove.
+    achhead.textContent = "the world is unreachable - this may be stale";
+    achhead.className = "alarm";
+  }
+}
+
+// Sixty seconds. Everything here already happened, and the tables it reads
+// are written by the module on its own cadence; entering the tab polls at
+// once, so the timer only ever adds the run that ended while it was open.
+setInterval(() => { if (view === ACH_VIEW) pollAchievements(); }, 60000);
 
 // --- the Armory tab (infra#3096, infra#3139) -----------------------------
 // Deliberately at the FOOT of the script, AFTER loadZones().then(...). The
@@ -3238,6 +3572,7 @@ function applyHash() {
     render();
     return;
   }
+  if (name === ACH_VIEW) { showView(ACH_VIEW); return; }
   showView(name === ARMORY_VIEW ? ARMORY_VIEW : FAMILY_VIEW);
 }
 
