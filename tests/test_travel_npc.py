@@ -42,6 +42,7 @@ import unittest
 
 ROOT = pathlib.Path(__file__).resolve().parents[3]
 MODULE = ROOT / "docker/azerothcore-playerbots/mod-overseer/src/mod_overseer.cpp"
+DECISIONS = ROOT / "docker/azerothcore-playerbots/mod-overseer/src/overseer_decisions.cpp"
 PATCH = (
     ROOT
     / "docker/azerothcore-playerbots/patches/mod-playerbots"
@@ -99,7 +100,42 @@ def _wheel() -> str:
 
 
 def _clear() -> str:
-    return _function("void ClearTravelAim(")
+    """The one release path. It used to be a free ClearTravelAim(); it is
+    TravelAimBook::Release now, on the book that also owns the errand memory
+    and the hand-back clock (mod_overseer.cpp, `class TravelAimBook`)."""
+    return _function("void Release(std::string const& name)")
+
+
+def _book() -> str:
+    """The whole TravelAimBook class, so a test can see what is private."""
+    return _function("class TravelAimBook")
+
+
+def _prune() -> str:
+    return _function("void PruneVanished(std::set<std::string> const& stillAimed)")
+
+
+def _grace() -> str:
+    return _function("bool WithinHandbackGrace(std::string const& name)")
+
+
+def _ratchet() -> str:
+    """The backstop's rule, which four drives now share instead of each
+    carrying a copy (OverseerDecisions::Ratchet, overseer_decisions.cpp)."""
+    src = DECISIONS.read_text(encoding="utf-8")
+    out = []
+    for signature in ("bool RatchetProgressed(", "RatchetVerdict Ratchet("):
+        start = src.index(signature)
+        depth = 0
+        for i in range(src.index("{", start), len(src)):
+            if src[i] == "{":
+                depth += 1
+            elif src[i] == "}":
+                depth -= 1
+                if depth == 0:
+                    out.append(src[start:i + 1])
+                    break
+    return "\n".join(out)
 
 
 def _resolve() -> str:
@@ -111,7 +147,10 @@ def _index() -> str:
 
 
 def _aims() -> str:
-    return _function("std::map<std::string, std::string> LoadTravelAims()")
+    """The travel column's one reader, TravelAimBook::Load (reached from the
+    drives as `_travelAims.Load()`). It was a free LoadTravelAims() until
+    the book gathered the read, the release and the memory together."""
+    return _function("std::map<std::string, std::string> Load() const")
 
 
 def _patch() -> str:
@@ -324,11 +363,12 @@ class TheModuleActuallyReadsTheColumn(unittest.TestCase):
     """It was written by the bridge and read by nobody. That was #2776."""
 
     def test_the_query_selects_the_column(self):
-        """The read moved into LoadTravelAims (infra#2846) so the quest drive
-        could share it without sharing its failure. It is still a read of this
-        column and DriveTravel still runs off it."""
+        """The read moved into one loader (infra#2846) so the quest drive
+        could share it without sharing its failure, and that loader now lives
+        on TravelAimBook. It is still a read of this column and DriveTravel
+        still runs off it."""
         self.assertIn("travel_npc", _code(_aims()))
-        self.assertIn("LoadTravelAims()", _code(_drive()))
+        self.assertIn("_travelAims.Load()", _code(_drive()))
 
     def test_only_enabled_characters_with_an_aim_are_considered(self):
         code = _code(_aims())
@@ -340,7 +380,12 @@ class TheModuleActuallyReadsTheColumn(unittest.TestCase):
         diff."""
         code = _code(_source())
         self.assertIn("DriveTravel();", code)
-        self.assertIn("_travelTimer >= TRAVEL_POLL_MS", code)
+        # The threshold is a local since mod-overseer#122: the drive polls at
+        # the dungeon coordinator's cadence only while a run is escorting, and
+        # at TRAVEL_POLL_MS - exactly as before - whenever it is not.
+        self.assertIn("_travelTimer >= travelPoll", code)
+        self.assertRegex(
+            code, r"travelPoll =\s*_dungeonEscorts\.empty\(\) \? TRAVEL_POLL_MS")
         self.assertIn("_travelTimer += diff;", code)
 
     def test_the_poll_is_faster_than_the_lease_it_renews(self):
@@ -415,7 +460,13 @@ class TheEightSecondConsumeDidNotEatTheErrand(unittest.TestCase):
         code = _code(_drive())
         self.assertIn("RPG_WANDER_NPC", code)
         self.assertIn("wander->npcEntry == entry", code)
-        self.assertRegex(code, r"wander->npcEntry == entry\s*\)?\s*\n\s*continue;")
+        # A position aim (`at:`, `trigger:`) has no entry to match on, so the
+        # held aim also has to be at the same place before the poll stands
+        # down (mod-overseer#121). For a creature aim `samePlace` is simply
+        # true and the guard is what it always was.
+        self.assertIn("bool const samePlace = entry ||", code)
+        self.assertRegex(
+            code, r"wander->npcEntry == entry && samePlace\s*\)?\s*\n\s*continue;")
 
     def test_a_lapsed_lease_falls_through_to_a_fresh_aim(self):
         """Case 3. Once the five-minute lease expires the status is no longer
@@ -430,7 +481,7 @@ class TheErrandIsBounded(unittest.TestCase):
     def test_arriving_releases_it(self):
         code = _code(_drive())
         self.assertIn("TRAVEL_ARRIVED_YARDS", code)
-        self.assertIn("ClearTravelAim(name)", code)
+        self.assertIn("_travelAims.Release(name)", code)
 
     def test_arrival_is_measured_by_distance_and_not_by_bot_state(self):
         """The bot's own state stops naming the target eight seconds after it
@@ -457,10 +508,22 @@ class TheErrandIsBounded(unittest.TestCase):
         Deadmines portal from Elwynn walked 2347 of 2933 yards and was released
         586 yards out, about five minutes from arriving, with the log calling it
         unreachable while it was visibly reaching it."""
+        # The rule itself now lives in OverseerDecisions::Ratchet, which the
+        # drive feeds the distance, the clock and TRAVEL_RATCHET - the bundle
+        # of TRAVEL_PROGRESS_YARDS and TRAVEL_BACKSTOP_SECONDS. So the test
+        # follows the rule to where it is: the drive has to call it with the
+        # travel limits, the limits have to carry the yardage, and beating the
+        # mark has to restart the clock.
         code = _code(_drive())
-        self.assertIn("TRAVEL_PROGRESS_YARDS", code)
-        self.assertIn("state.closest = distance", code)
-        self.assertIn("state.since = std::time(nullptr)", code)
+        self.assertRegex(code, r"OverseerDecisions::Ratchet\(\s*state\.progress,"
+                               r"\s*distance,\s*std::time\(nullptr\),\s*TRAVEL_RATCHET\)")
+        self.assertRegex(_code(_source()),
+                         r"RatchetLimits TRAVEL_RATCHET\{\s*"
+                         r"OverseerDecisions::RatchetReading::DistanceToTarget,\s*"
+                         r"TRAVEL_PROGRESS_YARDS, TRAVEL_BACKSTOP_SECONDS\}")
+        ratchet = _code(_ratchet())
+        progressed = ratchet.index("if (verdict.progressed)")
+        self.assertIn("state.since = now;", ratchet[progressed:progressed + 200])
 
     def test_progress_is_measured_against_the_best_ever_not_the_last_poll(self):
         """What makes a small threshold safe. `closest` only ratchets DOWNWARD,
@@ -469,24 +532,34 @@ class TheErrandIsBounded(unittest.TestCase):
         doing, and a walking bot does every poll. Against the previous poll
         instead, a bot shuffling back and forth would renew the clock forever
         and the backstop would never fire."""
-        self.assertIn("distance < state.closest - TRAVEL_PROGRESS_YARDS",
-                      _code(_drive()))
+        ratchet = _code(_ratchet())
+        # DistanceToTarget: nearer than the best ever, by the margin.
+        self.assertIn("return !best || reading < best - limits.margin;", ratchet)
+        # ...and `best` only moves when that is true, so it ratchets downward.
+        progressed = ratchet.index("if (verdict.progressed)")
+        best = ratchet.index("state.best =")
+        self.assertGreater(best, progressed)
+        self.assertLess(best, ratchet.index("return verdict;"))
 
     def test_an_unreachable_target_is_still_released_eventually(self):
         """The progress check must not become a way to never give up. The clock
         still runs from the last improvement, so a character that closes to
         whatever range it can manage and then stops is released on the same
         twenty minutes it always was."""
+        ratchet = _code(_ratchet())
+        self.assertIn("now - state.since > limits.patienceSeconds", ratchet)
         code = _code(_drive())
-        self.assertIn("std::time(nullptr) - state.since > TRAVEL_BACKSTOP_SECONDS",
-                      code)
+        stalled = code.index("if (progress.stalled)")
+        self.assertIn("_travelAims.Release(name)", code[stalled:stalled + 600])
 
     def test_the_best_distance_is_forgotten_when_the_errand_changes(self):
         """A closest approach carried into the NEXT errand is a clock that never
         starts: the new target is further away than the old best, so nothing
         ever beats it and the character is released on its first poll having
         walked nowhere. Same lesson as `since` in PR #2840's review."""
-        self.assertIn("state.closest = 0.f", _code(_drive()))
+        code = _code(_drive())
+        reset = code.index("state.target = target")
+        self.assertIn("state.progress.best = 0.f", code[reset:reset + 600])
 
     def test_a_target_that_does_not_exist_here_releases_rather_than_pins(self):
         code = _code(_drive())
@@ -498,7 +571,7 @@ class TheErrandIsBounded(unittest.TestCase):
 
     def test_the_clear_escapes_the_name(self):
         """The name came out of a table a person edits by hand."""
-        self.assertIn("Esc(name)", _code(_function("void ClearTravelAim(")))
+        self.assertIn("Esc(name)", _code(_clear()))
 
 
 class AnAimNothingCanActOnIsSaidOutLoud(unittest.TestCase):
@@ -552,7 +625,7 @@ class TheTwoDriversDoNotFightOverTheWheel(unittest.TestCase):
         have nulled the quest query and stopped the family questing entirely,
         for a feature it has nothing to do with."""
         quests = _code(_quests())
-        self.assertIn("LoadTravelAims()", quests)
+        self.assertIn("_travelAims.Load()", quests)
         self.assertIn("travelTarget", quests)
         self.assertNotIn("travel_npc", quests)
 
@@ -599,8 +672,11 @@ class TheTwoDriversDoNotFightOverTheWheel(unittest.TestCase):
         oscillation is the steady-state bug in miniature - it happens once and
         stops, which makes it harder to find, not better."""
         self.assertRegex(_source(), r"TRAVEL_HANDBACK_SECONDS = \d+")
-        self.assertIn("TRAVEL_HANDBACK_SECONDS", _code(_wheel()))
-        self.assertIn("_travelHandback", _code(_clear()))
+        # The clock is the book's now: the predicate asks it, the release
+        # stamps it, and the constant is compared inside it.
+        self.assertIn("_travelAims.WithinHandbackGrace(name)", _code(_wheel()))
+        self.assertIn("TRAVEL_HANDBACK_SECONDS", _code(_grace()))
+        self.assertIn("_handback[name] = std::time(nullptr);", _code(_clear()))
 
     def test_the_grace_outlasts_a_whole_quest_poll_and_the_arrival_dwell(self):
         seconds = int(re.search(r"TRAVEL_HANDBACK_SECONDS = (\d+)",
@@ -611,14 +687,16 @@ class TheTwoDriversDoNotFightOverTheWheel(unittest.TestCase):
     def test_the_grace_expires_rather_than_holding_the_wheel_forever(self):
         """A refusal that outlives its reason is its own bug - the give-up set
         in the repick memory is swept for exactly this reason (infra#2801)."""
-        self.assertIn("_travelHandback.erase(", _code(_wheel()))
+        self.assertIn("_handback.erase(it)", _code(_grace()))
 
     def test_with_no_errand_the_quest_drive_is_unchanged_and_unaware(self):
         """Moment 3. An empty column and no recent release means the predicate
         is false and DriveQuests behaves exactly as it did before."""
         code = _code(_wheel())
         self.assertIn("travelTarget.empty()", code)
-        self.assertIn("return false;", code)
+        self.assertIn("return _travelAims.WithinHandbackGrace(name);", code)
+        self.assertRegex(_code(_grace()),
+                         r"if \(it == _handback\.end\(\)\)\s*\n\s*return false;")
 
     def test_an_errand_nothing_can_act_on_does_not_freeze_the_questing(self):
         """A follower's row is left set by design when it does not carry `new
@@ -629,12 +707,13 @@ class TheTwoDriversDoNotFightOverTheWheel(unittest.TestCase):
 
 
 class TheErrandStateIsNotOutlivedByItsClock(unittest.TestCase):
-    """PR #2840 review, P2. _travelState.since is the 20-minute backstop clock.
-    Left behind on a release, a LATER errand at the same target inherits it and
-    is released as unreachable on its first poll, having walked nowhere."""
+    """PR #2840 review, P2. The errand's `progress.since` is the 20-minute
+    backstop clock. Left behind on a release, a LATER errand at the same target
+    inherits it and is released as unreachable on its first poll, having walked
+    nowhere."""
 
     def test_releasing_an_errand_erases_its_state(self):
-        self.assertIn("_travelState.erase(name)", _code(_clear()))
+        self.assertIn("_state.erase(name)", _code(_clear()))
 
     def test_every_release_path_goes_through_the_one_that_erases(self):
         """Four releases inside DriveTravel - arrival, no such spawn, the
@@ -649,18 +728,23 @@ class TheErrandStateIsNotOutlivedByItsClock(unittest.TestCase):
         actually protects the invariant, and it is why the count may move at
         all."""
         code = _code(_drive())
-        self.assertEqual(4, code.count("ClearTravelAim(name)"))
-        self.assertNotIn("_travelState.erase(name)", code)
+        self.assertEqual(4, code.count("_travelAims.Release(name)"))
+        self.assertNotIn("_state.erase(", code)
+        # Stronger than "the drive does not erase": it cannot. The memory is a
+        # private member of the book, so the only way out is Release.
+        book = _code(_book())
+        self.assertLess(book.index("private:"),
+                        book.index("std::map<std::string, TravelState> _state;"))
 
     def test_a_row_cleared_bridge_side_mid_walk_is_noticed(self):
         """The bridge clears the column itself when it re-aims the family. That
         row simply stops coming back from the query, so nothing inside the loop
         can see it go."""
         code = _code(_drive())
-        self.assertEqual(2, code.count("PruneTravelState("))
-        prune = _code(_function("void PruneTravelState("))
-        self.assertIn("_travelState.erase(", prune)
-        self.assertIn("_travelHandback", prune)
+        self.assertEqual(2, code.count("_travelAims.PruneVanished("))
+        prune = _code(_prune())
+        self.assertIn("_state.erase(", prune)
+        self.assertIn("_handback[", prune)
 
 
 class TheResolvedSpawnIsPinnedForTheLifeOfTheErrand(unittest.TestCase):

@@ -464,6 +464,12 @@ class NoNewUpstreamMemberWasIntroduced(unittest.TestCase):
         "GetQuestStatus": "Player.h:1492",
         "GetQuestSlotQuestId": "Player.h:1510",
         "GetQuestRewardStatus": "Player.h:1491",
+        # core efe123fab543c5faf3c477674ec17a18fd59f09f - the repick ratchet.
+        # "Abandoned without moving" is now measured as a straight-line
+        # distance from where the quest was picked, fed to
+        # OverseerDecisions::RatchetProgressed, rather than compared by hand
+        # against the squared form. Public via `struct Position` (Position.h:26).
+        "GetExactDist2d": "Position.h:170",
         # module 8d9f6aa6bc6d45f9ae0ee0675b9b1f8aa6937312
         "rpgInfo": "PlayerbotAI.h:603",
         "GetStatus": "NewRpgInfo.h:99",

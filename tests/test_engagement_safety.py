@@ -57,7 +57,11 @@ class TheGateReadsTheSameAimsAsTheOtherDrives(unittest.TestCase):
         self.assertIn("LoadQuestAims()", _code(_guard()))
 
     def test_it_uses_the_same_guarded_travel_loader(self):
-        self.assertIn("LoadTravelAims()", _code(_guard()))
+        # The travel column's reader lives on the TravelAimBook now
+        # (`TravelAimBook::Load()`, mod_overseer.cpp), and DriveEngagementSafety
+        # reads it through the same `_travelAims.Load()` that DriveQuests and
+        # DriveTravel use. A free LoadTravelAims() no longer exists.
+        self.assertIn("_travelAims.Load()", _code(_guard()))
 
     def test_it_does_not_select_either_aim_column_itself(self):
         code = _code(_guard())

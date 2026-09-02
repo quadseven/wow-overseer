@@ -77,7 +77,17 @@ def _load_quest_aims() -> str:
 
 
 def _load_travel_aims() -> str:
-    return _function("std::map<std::string, std::string> LoadTravelAims()")
+    """The travel column's one reader. It moved from a free LoadTravelAims()
+    onto TravelAimBook (`_travelAims.Load()`, mod_overseer.cpp) when the
+    errand memory, the release and the prune were gathered into one book;
+    the loader's contract - one SELECT, guarded, read-only - did not move."""
+    return _function("std::map<std::string, std::string> Load() const")
+
+
+def _handback_grace() -> str:
+    """The hand-back clock, which TravelHoldsTheWheel used to read inline and
+    now asks the book for (`TravelAimBook::WithinHandbackGrace`)."""
+    return _function("bool WithinHandbackGrace(std::string const& name)")
 
 
 def _selects(column: str) -> int:
@@ -106,7 +116,7 @@ class TheQuestDriveCannotBeKilledByATravelColumn(unittest.TestCase):
 
     def test_the_quest_drive_still_gets_the_travel_aims(self):
         """Not fixed by deleting the arbitration's input. It has to still know."""
-        self.assertIn("LoadTravelAims()", _code(_quests()))
+        self.assertIn("_travelAims.Load()", _code(_quests()))
 
     def test_a_character_with_no_errand_reads_as_an_empty_target(self):
         """Absent from the map has to mean the same as an empty column, or the
@@ -160,7 +170,7 @@ class EachLateColumnIsReadOnceAndGuardedOnItsOwn(unittest.TestCase):
 
     def test_both_loaders_return_the_empty_map_rather_than_propagating(self):
         for name, body in (("LoadQuestAims", _code(_load_quest_aims())),
-                           ("LoadTravelAims", _code(_load_travel_aims()))):
+                           ("TravelAimBook::Load", _code(_load_travel_aims()))):
             self.assertIn("if (!result)", body, name)
             guard = body.index("if (!result)")
             tail = body[guard:guard + 120]
@@ -195,7 +205,7 @@ class TheTravelDriveReadsThroughTheSameLoader(unittest.TestCase):
         self.assertNotIn("SELECT", _code(_travel()))
 
     def test_it_gets_its_errands_from_the_loader(self):
-        self.assertIn("LoadTravelAims()", _code(_travel()))
+        self.assertIn("_travelAims.Load()", _code(_travel()))
 
     def test_no_errands_still_prunes_and_returns(self):
         """A null result used to mean this; an empty map means it now. The
@@ -203,7 +213,7 @@ class TheTravelDriveReadsThroughTheSameLoader(unittest.TestCase):
         code = _code(_travel())
         self.assertIn("aims.empty()", code)
         prune = code.index("aims.empty()")
-        self.assertIn("PruneTravelState(std::set<std::string>())",
+        self.assertIn("_travelAims.PruneVanished(std::set<std::string>())",
                       code[prune:prune + 300])
 
     def test_the_filter_the_errand_loop_relied_on_moved_with_it(self):
@@ -236,7 +246,11 @@ class TheArbitrationIsNotRegressed(unittest.TestCase):
         self.assertIn("state.travelHeld", quests)
         self.assertIn("state.since += ", quests)
         wheel = _code(_function("bool TravelHoldsTheWheel("))
-        self.assertIn("TRAVEL_HANDBACK_SECONDS", wheel)
+        # The grace clock is kept by the book now, so the predicate asks it
+        # rather than reading the map itself; the constant has to still be
+        # what the book compares against, or the grace is a different length.
+        self.assertIn("_travelAims.WithinHandbackGrace(name)", wheel)
+        self.assertIn("TRAVEL_HANDBACK_SECONDS", _code(_handback_grace()))
         self.assertIn("CanBeSentToNpc(botAI)", wheel)
         self.assertIn("travelTarget.empty()", wheel)
 
@@ -245,9 +259,14 @@ class TheArbitrationIsNotRegressed(unittest.TestCase):
         them: the drives are on separate timers and do not share a tick."""
         code = _code(_source())
         self.assertIn("_questTimer >= QUEST_POLL_MS", code)
-        self.assertIn("_travelTimer >= TRAVEL_POLL_MS", code)
-        self.assertEqual(1, _code(_quests()).count("LoadTravelAims()"))
-        self.assertEqual(1, _code(_travel()).count("LoadTravelAims()"))
+        # The travel drive's threshold is a local now, because it polls faster
+        # only while a dungeon run is escorting (mod-overseer#122): outside an
+        # escort it is TRAVEL_POLL_MS exactly as before. Still its own timer,
+        # still its own cadence.
+        self.assertIn("_travelTimer >= travelPoll", code)
+        self.assertRegex(code, r"travelPoll =\s*_dungeonEscorts\.empty\(\) \? TRAVEL_POLL_MS")
+        self.assertEqual(1, _code(_quests()).count("_travelAims.Load()"))
+        self.assertEqual(1, _code(_travel()).count("_travelAims.Load()"))
 
 
 class TheCommentThatCausedThisIsCorrected(unittest.TestCase):
