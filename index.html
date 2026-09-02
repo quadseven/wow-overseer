@@ -130,6 +130,7 @@
   #ajump a:hover { border-color:var(--alliance); }
   #aprofiles { display:grid; gap:1rem; grid-template-columns:minmax(0,1fr); }
   @media (min-width:1400px) { #aprofiles { grid-template-columns:repeat(2,minmax(0,1fr)); } }
+  @media (min-width:2100px) { #aprofiles { grid-template-columns:repeat(3,minmax(0,1fr)); } }
   .aprof { background:var(--panel); border:1px solid var(--line); border-radius:10px;
            padding:.8rem 1rem 1rem; min-width:0; scroll-margin-top:3rem; }
   .aprof.c-gone { opacity:.6; }
@@ -154,7 +155,7 @@
      stat block beside it when there is room. */
   .abody { display:grid; gap:1rem; grid-template-columns:minmax(0,1fr); }
   @media (min-width:760px) { .abody { grid-template-columns:auto minmax(0,1fr); } }
-  .adoll { display:grid; grid-template-columns:56px minmax(140px,1fr) 56px;
+  .adoll { display:grid; grid-template-columns:56px minmax(140px,320px) 56px;
            gap:.5rem; justify-content:center; align-items:start; }
   .acolumn { display:flex; flex-direction:column; gap:.45rem; }
   .aslot { position:relative; width:56px; height:56px; border-radius:7px;
@@ -190,6 +191,17 @@
                     border:2px solid var(--cc, var(--line)); background:#000;
                     box-shadow:0 0 12px #000; }
   .aportrait .lvl { margin-top:.4rem; color:var(--dim); font-size:.85rem; text-align:center; }
+  /* the 3D model (infra#88): Wowhead's viewer, drawn where the portrait
+     sits, with the portrait kept underneath until the model is actually
+     on screen - and kept for good when the viewer never arrives. The
+     canvas is as wide as the middle column and 4:5 tall; a drag turns it,
+     and it turns slowly on its own until touched. */
+  .aportrait.live .race, .aportrait.live .sil, .aportrait.live .cls { display:none; }
+  .amodel { display:none; width:100%; position:relative; touch-action:none;
+            cursor:grab; border-radius:10px; overflow:hidden; }
+  .amodel:active { cursor:grabbing; }
+  .aportrait.live .amodel { display:block; }
+  .amodel canvas { display:block; }
   /* the stat block: yellow labels, values right, one hairline between rows,
      as the reference draws it. A stat the world has not saved says so in
      the row rather than showing a number that would read as real. */
@@ -2515,11 +2527,13 @@ document.getElementById("asaved").textContent =
   + "these on its own timer, so something equipped in the last few minutes "
   + "may not be here yet.";
 
-// THE ONE PLACE THIS PAGE LEAVES THE TAILNET. The item, class and race icons
-// are the game's own art, and the game's art is in the client's MPQ archives,
-// not in any table this server has: the frozen books carry the icon NAMES
-// and this host serves the pictures for them. It is the same host every
-// armory site uses. If it is unreachable the fallback is drawn instead - the
+// THE FIRST OF THE TWO PLACES THIS PAGE LEAVES THE TAILNET (the other is
+// the model-viewer script, below; the model DATA goes through this
+// server's own cache). The item, class and race icons are the game's own
+// art, and the game's art is in the client's MPQ archives, not in any
+// table this server has: the frozen books carry the icon NAMES and this
+// host serves the pictures for them. It is the same host every armory
+// site uses. If it is unreachable the fallback is drawn instead - the
 // slot's name in the quality colour, a silhouette for the portrait - so the
 // page degrades to legible, never to blank. (The map font stays local for
 // the opposite reason: a font has no fallback that reads the same.)
@@ -2888,12 +2902,191 @@ function renderSpec(c, spec, colour) {
     : "";
 }
 
+// --- the 3D model (infra#88) ---------------------------------------------
+// THE SECOND PLACE THIS PAGE LEAVES THE TAILNET, and the last. Wowhead's
+// model viewer is the only renderer that draws a 3.3.5 character without
+// the game client, and its script loads from anywhere. Its DATA does not:
+// wow.zamimg.com refuses any browser whose Origin is not wowhead.com, so
+// the models, textures and customisation tables come through this server's
+// own /modelviewer/ cache (modelviewer.py) and never from the browser
+// directly. jQuery, which the viewer needs, is served from here too.
+//
+// Every failure - the script never arriving (offline viewer, a blocked
+// host), the viewer throwing, a model that never finishes downloading -
+// leaves the portrait exactly where it was. The model is an upgrade over
+// the portrait, never a replacement for it, so the tab cannot go blank.
+// PINNED to the build Wowhead's own WotLK dressing room runs (its page
+// config names it under modelViewerVersion.wow.wrath). The friendly path
+// wrath/viewer/viewer.min.js is an older build that asks for a model
+// format the host no longer serves, so it draws nothing; a hash in the
+// URL is what keeps the script and the data it asks for in step.
+const MODEL_SCRIPT = "https://wow.zamimg.com/modelviewer/wrath/deployment/viewer/c3f890f/viewer.min.js";
+const MODEL_CONTENT_PATH = "/modelviewer/";
+const MODEL_LOAD_TIMEOUT = 10000;
+// Radians per frame of idle turn: one full turn in about half a minute.
+const MODEL_TURN = 0.0035;
+const MODEL_ASPECT = 0.8;
+// How far the camera stands from the character: close enough that a
+// standing figure fills the pane head to foot.
+const MODEL_DISTANCE = 6;
+
+const viewer3d = { promise: null, ready: false };
+
+function loadScript(src) {
+  return new Promise((resolve) => {
+    const script = document.createElement("script");
+    const timer = setTimeout(() => { script.remove(); resolve(false); }, MODEL_LOAD_TIMEOUT);
+    script.onload = () => { clearTimeout(timer); resolve(true); };
+    script.onerror = () => { clearTimeout(timer); script.remove(); resolve(false); };
+    script.src = src;
+    document.head.appendChild(script);
+  });
+}
+
+// jQuery, then the viewer, once, with a timeout on each; and the WH
+// globals the viewer reads but never defines. Resolves true when there is
+// a ZamModelViewer to construct and false for every other outcome.
+function ensureViewer() {
+  if (viewer3d.promise) return viewer3d.promise;
+  viewer3d.promise = (async () => {
+    window.WH = window.WH || {};
+    WH.debug = WH.debug || (() => {});
+    WH.defaultAnimation = WH.defaultAnimation || "Stand";
+    WH.WebP = WH.WebP || { getImageExtension: () => ".webp" };
+    const ok = await loadScript("/jquery.min.js") && await loadScript(MODEL_SCRIPT)
+      && typeof ZamModelViewer === "function";
+    viewer3d.ready = ok;
+    return ok;
+  })();
+  return viewer3d.promise;
+}
+
+// The five numbers the world stores for a face, matched to the viewer's
+// option names for that race and gender. The names differ by race - a
+// tauren's "hairStyle" is its "Horn Style", a night elf's "facialStyle"
+// its "Markings" - and every race has exactly five options, so: skin and
+// face by name, the two hair numbers by name with the tauren's horns
+// standing in for hair, and whatever option is left is facialStyle.
+function appearanceKey(optionName, names) {
+  if (optionName === "Skin Color") return "skin";
+  if (optionName === "Face") return "face";
+  if (optionName === "Hair Style") return "hairStyle";
+  if (optionName === "Hair Color") return "hairColor";
+  if (optionName === "Horn Style" && !names.includes("Hair Style")) return "hairStyle";
+  if (optionName === "Horn Color" && !names.includes("Hair Color")) return "hairColor";
+  return "facialStyle";
+}
+
+function customisation(model, options) {
+  const names = options.map((o) => o.Name);
+  return options.map((o) => {
+    const index = model[appearanceKey(o.Name, names)];
+    const choice = o.Choices[index] || o.Choices[0];
+    return { optionId: o.Id, choiceId: choice.Id };
+  });
+}
+
+// One viewer per profile, torn down and rebuilt only when the character's
+// model actually changes - a new helmet, a haircut - because building one
+// is a few MB of geometry and the poll runs every thirty seconds.
+async function renderModel(c, m) {
+  const key = m.model ? JSON.stringify(m.model) : "";
+  if (c.modelKey === key) return;
+  c.modelKey = key;
+  if (c.viewer) { try { c.viewer.destroy(); } catch (e) { /* already gone */ } c.viewer = null; }
+  c.portrait.classList.remove("live");
+  if (!m.model || !(await ensureViewer())) return;
+  if (c.modelKey !== key) return;
+  let pane = c.portrait.querySelector(".amodel");
+  if (!pane) {
+    pane = el("div", "amodel");
+    c.portrait.prepend(pane);
+    // The viewer turns the model under a drag by itself; this only stops
+    // the idle turn while a finger or a mouse is on it.
+    pane.addEventListener("pointerdown", () => { c.held = true; });
+    window.addEventListener("pointerup", () => { c.held = false; });
+    new ResizeObserver(() => fitModel(c)).observe(pane);
+  }
+  pane.textContent = "";
+  try {
+    const id = m.model.race * 2 - 1 + m.model.gender;
+    const r = await fetch(MODEL_CONTENT_PATH + "meta/charactercustomization/" + id + ".json");
+    if (!r.ok) throw new Error("customisation " + r.status);
+    const options = (await r.json()).Options || [];
+    if (c.modelKey !== key) return;
+    // The canvas is sized from the container's width at construction, so
+    // the pane has to be laid out (shown) for that one moment.
+    c.portrait.classList.add("live");
+    c.viewer = new ZamModelViewer({
+      type: 2,
+      contentPath: MODEL_CONTENT_PATH,
+      container: jQuery(pane),
+      aspect: MODEL_ASPECT,
+      models: { id, type: 16 },
+      items: m.model.items,
+      charCustomization: { options: customisation(m.model, options) },
+    });
+    c.portrait.classList.remove("live");
+    watchModel(c, key);
+  } catch (e) {
+    // The portrait is still there; nothing to draw over it.
+    c.portrait.classList.remove("live");
+  }
+}
+
+// The canvas is the pane's width and 4:5 tall. The viewer sizes it once,
+// from the container's width at construction - which is the column's
+// minimum when the profile has not been laid out yet - so it is fitted
+// again when the model goes live and whenever the pane's width changes
+// (a phone turning, the profile grid going from one column to two).
+function fitModel(c) {
+  const r = c.viewer && c.viewer.renderer;
+  const pane = c.portrait.querySelector(".amodel");
+  if (!r || !pane) return;
+  const width = pane.clientWidth;
+  if (width && r.width !== width) {
+    r.onResize(width, Math.round(width / MODEL_ASPECT), MODEL_ASPECT);
+  }
+}
+
+// Shows the model only once it has something to show, and turns it. The
+// viewer has no "loaded" event, so its stage is read directly: the pane
+// goes live when an actor is on it and every actor says it has loaded,
+// and stays hidden - portrait underneath - if that never happens.
+// Runs on animation frames, which a hidden tab does not get, so there is
+// deliberately no wall-clock deadline here: a phone that was locked for
+// an hour with this tab open would otherwise come back to a portrait
+// that never turns into the model that finished loading behind it.
+function watchModel(c, key) {
+  const tick = () => {
+    if (c.modelKey !== key || !c.viewer) return;
+    const r = c.viewer.renderer;
+    if (!r) { requestAnimationFrame(tick); return; }
+    if (!c.portrait.classList.contains("live")) {
+      const actors = r.actors || [];
+      if (actors.length && actors.every((a) => a.loaded)) {
+        c.portrait.classList.add("live");
+        r.distance = MODEL_DISTANCE;
+        fitModel(c);
+      }
+    } else if (!c.held && !r.mouseDown) {
+      r.azimuth = (r.azimuth + MODEL_TURN) % (2 * Math.PI);
+    }
+    requestAnimationFrame(tick);
+  };
+  requestAnimationFrame(tick);
+}
+
 // --- the profile ---------------------------------------------------------
 
 function renderPortrait(c, m) {
   if (c.portraitFor === m.name + m.race + m.gender + m["class"]) return;
   c.portraitFor = m.name + m.race + m.gender + m["class"];
+  // The model pane, if there is one, survives the portrait being redrawn
+  // around it: the viewer owns the canvas inside it.
+  const pane = c.portrait.querySelector(".amodel");
   c.portrait.textContent = "";
+  if (pane) c.portrait.appendChild(pane);
   c.portrait.style.setProperty("--cc", m.class_colour);
   const fallback = () => {
     if (!c.portrait.querySelector(".sil")) c.portrait.prepend(silhouette(m.class_colour));
@@ -2972,6 +3165,7 @@ function renderArmory(p) {
     }
     if (m.gear.broken.length) c.nums.append(el("span", "broken", "BROKEN: " + m.gear.broken.join(", ")));
     renderPortrait(c, m);
+    renderModel(c, m);
     const bySlot = new Map(m.slots.map((s) => [s.slot, s]));
     // Driven by the SERVER's doll layout, not by this member's rows, so
     // every profile has the same cells in the same places, and the page

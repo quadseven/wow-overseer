@@ -434,5 +434,83 @@ class TheDescriptionExpanderTest(unittest.TestCase):
         self.assertEqual(ex.expand(1, "|cFFFF0000Red|r text\r\nnext"), "Red text\nnext")
 
 
+class TheModelTest(unittest.TestCase):
+    """The 3D model (infra#88): the character as Wowhead's viewer wants it."""
+
+    def test_the_viewer_slot_is_the_inventory_type_not_the_doll_position(self):
+        self.assertEqual(armory.viewer_slot("head", 1), 1)
+        self.assertEqual(armory.viewer_slot("shoulders", 3), 3)
+        self.assertEqual(armory.viewer_slot("back", 16), 16)
+        self.assertEqual(armory.viewer_slot("tabard", 19), 19)
+        self.assertEqual(armory.viewer_slot("shirt", 4), 4)
+
+    def test_a_robe_hangs_from_twenty_and_every_other_chest_from_five(self):
+        self.assertEqual(armory.viewer_slot("chest", 20), 20)
+        self.assertEqual(armory.viewer_slot("chest", 5), 5)
+        self.assertEqual(armory.viewer_slot("chest", None), 5)
+
+    def test_whatever_is_in_the_hands_goes_to_the_hand_not_the_weapon_kind(self):
+        """A two-hander (17), a one-hander (13) and a main-hand (21) all sit
+        in the main hand; a shield (14), a held item (23) and an off-hand
+        weapon all sit in the off hand."""
+        for kind in (13, 17, 21):
+            self.assertEqual(armory.viewer_slot("main hand", kind), 21)
+        for kind in (13, 14, 22, 23):
+            self.assertEqual(armory.viewer_slot("off hand", kind), 22)
+
+    def test_a_ranged_weapon_is_attached_by_its_own_kind_and_a_relic_is_not(self):
+        self.assertEqual(armory.viewer_slot("ranged", 15), 15)
+        self.assertEqual(armory.viewer_slot("ranged", 26), 26)
+        self.assertEqual(armory.viewer_slot("ranged", 25), 25)
+        self.assertIsNone(armory.viewer_slot("ranged", 28))
+
+    def test_what_the_viewer_never_draws_is_never_sent(self):
+        for slot in ("neck", "finger 1", "finger 2", "trinket 1", "trinket 2"):
+            self.assertIsNone(armory.viewer_slot(slot, 11))
+
+    def test_the_model_carries_the_face_the_character_was_made_with(self):
+        row = char(race=1, gender=1, skin=4, face=2, hairStyle=7, hairColor=3, facialStyle=0)
+        model = armory.viewer_model(row, [])
+        self.assertEqual(model, {"race": 1, "gender": 1, "skin": 4, "face": 2,
+                                 "hairStyle": 7, "hairColor": 3, "facialStyle": 0,
+                                 "items": []})
+
+    def test_gender_passes_through_as_the_database_stores_it(self):
+        """Viewer model id = race * 2 - 1 + gender, and model 1 is the human
+        male, so 0 is male on both sides. Flipping it would dress every
+        member of the family in the other body."""
+        self.assertEqual(armory.viewer_model(char(gender=0), [])["gender"], 0)
+        self.assertEqual(armory.viewer_model(char(gender=1), [])["gender"], 1)
+
+    def test_a_missing_appearance_is_left_out_rather_than_defaulted(self):
+        model = armory.viewer_model(char(), [])
+        for key in ("skin", "face", "hairStyle", "hairColor", "facialStyle"):
+            self.assertNotIn(key, model)
+
+    def test_items_are_the_display_id_at_the_viewers_slot(self):
+        rows = [worn(0, SCOUTING_BELT, displayid=1170, inventory_type=1),
+                worn(4, SCOUTING_BELT, displayid=9575, inventory_type=20),
+                worn(15, IRONPATCH, displayid=20379, inventory_type=17),
+                worn(1, SCOUTING_BELT, displayid=999, inventory_type=2)]
+        model = armory.viewer_model(char(), rows)
+        self.assertEqual(model["items"], [[1, 1170], [20, 9575], [21, 20379]])
+
+    def test_an_item_with_no_display_is_skipped_not_sent_as_zero(self):
+        rows = [worn(0, SCOUTING_BELT, displayid=None, inventory_type=1),
+                worn(2, SCOUTING_BELT, displayid=0)]
+        self.assertEqual(armory.viewer_model(char(), rows)["items"], [])
+
+    def test_a_race_the_viewer_has_no_model_for_gets_no_model(self):
+        self.assertIsNone(armory.viewer_model(char(race=99), []))
+        self.assertIsNone(armory.viewer_model(char(gender=None), []))
+
+    def test_the_model_and_the_display_id_reach_the_payload(self):
+        rows = [worn(0, SCOUTING_BELT, displayid=1170, inventory_type=1)]
+        m = member(build(rows, char_rows=[char(gender=0, skin=1)]))
+        self.assertEqual(m["model"]["items"], [[1, 1170]])
+        self.assertEqual(m["model"]["skin"], 1)
+        self.assertEqual(slot_of(m, "head")["display_id"], 1170)
+
+
 if __name__ == "__main__":
     unittest.main()

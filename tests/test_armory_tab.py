@@ -151,17 +151,61 @@ class TheArmoryTab(unittest.TestCase):
         self.assertIn("for (const spec of p.doll.left)", self.tab)
         self.assertIn("for (const spec of p.doll.right)", self.tab)
 
-    def test_the_icon_host_is_the_one_place_the_page_leaves_the_tailnet(self):
+    def test_the_page_leaves_the_tailnet_for_exactly_two_things(self):
         """The game's art is in the client's archives, not in any table this
-        server has, so the icons come from the host every armory site uses.
-        Exactly one host, named once, and every image has a fallback so an
-        unreachable host degrades to legible rather than to blank."""
-        self.assertEqual(self.tab.count("https://"), 1)
+        server has, so the icons come from the host every armory site uses,
+        and the 3D models are drawn by that host's own viewer script. Those
+        two, named once each, and nothing else: the model DATA goes through
+        this server's /modelviewer/ cache, never from the browser to the
+        host, because the host refuses any origin but its own. Every image
+        has a fallback so an unreachable host degrades to legible rather
+        than to blank."""
+        self.assertEqual(self.tab.count("https://"), 2)
         self.assertIn('const ICON_HOST = "https://wow.zamimg.com/images/wow/icons/large/";',
                       self.tab)
+        self.assertIn('const MODEL_SCRIPT = "https://wow.zamimg.com/modelviewer/wrath/'
+                      'deployment/viewer/', self.tab)
+        self.assertIn('const MODEL_CONTENT_PATH = "/modelviewer/";', self.tab)
         self.assertIn("img.onerror = () => { img.remove(); if (onFail) onFail(); };",
                       self.tab)
         self.assertIn('img.referrerPolicy = "no-referrer";', self.tab)
+
+    def test_the_model_is_an_upgrade_over_the_portrait_never_a_replacement(self):
+        """Every way the viewer can fail - script never arriving, viewer
+        throwing, model never loading - must leave the portrait on screen.
+        So: the script load has a timeout that resolves rather than hangs,
+        the pane is shown only once every actor reports loaded, and the
+        portrait is hidden by a class the pane's presence toggles rather
+        than removed."""
+        self.assertIn("const timer = setTimeout(() => { script.remove(); resolve(false); },"
+                      " MODEL_LOAD_TIMEOUT);", self.tab)
+        self.assertIn("if (actors.length && actors.every((a) => a.loaded)) {", self.tab)
+        self.assertIn('c.portrait.classList.add("live");', self.tab)
+        self.assertIn(".aportrait.live .race, .aportrait.live .sil, .aportrait.live .cls "
+                      "{ display:none; }", self.css)
+
+    def test_the_model_turns_by_itself_and_stops_under_a_finger(self):
+        self.assertIn("r.azimuth = (r.azimuth + MODEL_TURN) % (2 * Math.PI);", self.tab)
+        self.assertIn("} else if (!c.held && !r.mouseDown) {", self.tab)
+
+    def test_a_viewer_is_rebuilt_only_when_the_model_changes(self):
+        """Building one is megabytes of geometry and the poll is every
+        thirty seconds; five rebuilt viewers a minute is a phone on fire."""
+        self.assertIn('const key = m.model ? JSON.stringify(m.model) : "";', self.tab)
+        self.assertIn("if (c.modelKey === key) return;", self.tab)
+        self.assertIn("c.viewer.destroy();", self.tab)
+
+    def test_the_face_is_the_worlds_five_numbers_matched_by_option_name(self):
+        """A tauren's hairStyle is its Horn Style and a night elf's
+        facialStyle its Markings: the match is by name, with the fifth
+        option always being the facial one."""
+        self.assertIn('if (optionName === "Horn Style" && !names.includes("Hair Style")) '
+                      'return "hairStyle";', self.tab)
+        self.assertIn('return "facialStyle";', self.tab)
+
+    def test_jquery_is_served_from_here_not_a_third_host(self):
+        self.assertIn('loadScript("/jquery.min.js")', self.tab)
+        self.assertIn('"/jquery.min.js": _jquery_file,', self.server)
 
     def test_the_portrait_is_never_blank(self):
         """No character renderer here: the centre is the race portrait icon
@@ -228,6 +272,7 @@ class TheArmoryTab(unittest.TestCase):
         self.assertIn("#aprofiles { display:grid; gap:1rem; grid-template-columns:minmax(0,1fr); }",
                       self.css)
         self.assertIn("grid-template-columns:repeat(2,minmax(0,1fr))", self.css)
+        self.assertIn("grid-template-columns:repeat(3,minmax(0,1fr))", self.css)
 
     def test_the_tooltip_is_a_sheet_on_a_phone(self):
         """There is no 'beside the slot' on a 390px screen."""

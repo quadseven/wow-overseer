@@ -226,6 +226,35 @@ CLASS_ICON_NAMES = {
 # The class's own colour (panel.CLASS_COLOURS, the client's RAID_CLASS_COLORS
 # table) is what the name in the header is drawn in, as every armory does.
 
+# --- the 3D model (infra#88) ---------------------------------------------
+# The page draws each member as Wowhead's model viewer draws a character:
+# a race-and-gender model with the customisation the character was made
+# with, and the DISPLAY id of every visible item attached at the viewer's
+# own slot number. Those slot numbers are the client's INVENTORY TYPES
+# (head 1, shoulder 3, shirt 4, chest 5, robe 20, back 16, tabard 19),
+# not the paper doll's positions, with two quirks the viewer has and the
+# doll does not: whatever is in the hands goes at 21 (main) and 22 (off)
+# no matter what kind of weapon it is, and a chest piece that is a robe
+# goes at 20 rather than 5 because the model wears it differently. The
+# neck, rings and trinkets are never drawn and so are never sent.
+INVENTORY_TYPE_CHEST, INVENTORY_TYPE_ROBE = 5, 20
+VIEWER_MAIN_HAND, VIEWER_OFF_HAND = 21, 22
+# Ranged weapons are attached by their own inventory type: a bow is held
+# differently from a gun or a wand, and a relic is not drawn at all.
+VIEWER_RANGED_TYPES = frozenset({15, 25, 26})
+VIEWER_SLOTS = {
+    "head": 1, "shoulders": 3, "shirt": 4, "chest": INVENTORY_TYPE_CHEST,
+    "waist": 6, "legs": 7, "feet": 8, "wrists": 9, "hands": 10, "back": 16,
+    "tabard": 19, "main hand": VIEWER_MAIN_HAND, "off hand": VIEWER_OFF_HAND,
+}
+# characters.* -> the viewer's own names for the same five numbers. Both
+# sides are indexes into the race's list of choices, so they pass straight
+# through.
+APPEARANCE_COLUMNS = {
+    "skin": "skin", "face": "face", "hairStyle": "hairStyle",
+    "hairColor": "hairColor", "facialStyle": "facialStyle",
+}
+
 # --- the derived stats, when the world has not saved them --------------
 # character_stats is the core's OWN reading of every derived number (dodge,
 # crit, attack power...) and is the source used whenever a row exists. It
@@ -329,6 +358,52 @@ class ItemBook:
             properties={int(k): v for k, v in book["properties"].items()},
             points={int(k): v for k, v in book["points"].items()},
         )
+
+
+def viewer_slot(slot_name: str, inventory_type: int | None) -> int | None:
+    """A paper-doll slot and the item's inventory type -> the viewer's slot.
+
+    None for a slot the viewer never draws (neck, rings, trinkets) and for
+    a ranged slot holding something that is not a drawn weapon (a relic,
+    a quiver). The robe quirk: a chest piece of inventory type 20 is
+    attached at 20, every other chest piece at 5.
+    """
+    if slot_name == "chest":
+        return INVENTORY_TYPE_ROBE if inventory_type == INVENTORY_TYPE_ROBE             else INVENTORY_TYPE_CHEST
+    if slot_name == "ranged":
+        return inventory_type if inventory_type in VIEWER_RANGED_TYPES else None
+    return VIEWER_SLOTS.get(slot_name)
+
+
+def viewer_model(char_row: dict, equipment_rows: list[dict]) -> dict | None:
+    """The character as the model viewer wants it, or None if it cannot be drawn.
+
+    `gender` is sent as the database stores it (0 male, 1 female): the
+    viewer's model id is race * 2 - 1 + gender and model 1 is the human
+    male, so the two agree and nothing is flipped. The five appearance
+    numbers are omitted when the row does not carry them (an older row,
+    or a fixture) rather than defaulted, so the viewer picks its own
+    first choice instead of drawing a face the character does not have.
+    `items` are [viewer slot, display id] pairs for every drawn slot that
+    holds an item the world database knows a display for.
+    """
+    race, gender = char_row.get("race"), char_row.get("gender")
+    if race not in RACE_ICON_NAMES or gender not in (0, 1):
+        return None
+    model: dict = {"race": race, "gender": gender}
+    for column, key in APPEARANCE_COLUMNS.items():
+        value = char_row.get(column)
+        if value is not None:
+            model[key] = int(value)
+    items: list[list[int]] = []
+    for row in sorted(equipment_rows, key=lambda r: r["slot"]):
+        if row["slot"] >= len(EQUIPPED_SLOTS) or not row.get("displayid"):
+            continue
+        slot = viewer_slot(EQUIPPED_SLOTS[row["slot"]], row.get("inventory_type"))
+        if slot is not None:
+            items.append([slot, row["displayid"]])
+    model["items"] = items
+    return model
 
 
 def talent_points_at(level: int, class_id: int) -> int | None:
@@ -618,6 +693,9 @@ def _slot_payload(slot_name: str, row: dict | None, book: ItemBook,
         # The icon is the DISPLAY's, and a display the book does not know
         # (a custom item) gets none: the page draws the slot name instead.
         "icon": book.icons.get(row.get("displayid") or 0),
+        # The DISPLAY id, for the 3D model: what the item looks like, as
+        # distinct from what it is. A custom item with no template has none.
+        "display_id": row.get("displayid") or None,
         # Rings, cloaks, necks and trinkets have no durability at all, so a
         # stored 0 only means "broken" when the item HAS durability to lose.
         "broken": bool(max_durability) and not row["durability"],
@@ -882,6 +960,9 @@ def _member(name: str, char_row: dict | None, equipment_rows: list[dict],
                            if class_id in CLASS_ICON_NAMES else None),
         },
         "slots": slots,
+        # What the 3D viewer draws, or None when the race is one the
+        # viewer has no model for; the page keeps the portrait then.
+        "model": viewer_model(char_row, equipment_rows),
         "gear": _build_gear(slots),
         "stats": stats,
         "spec": _build_spec(class_id, char_row["level"], in_play, book),

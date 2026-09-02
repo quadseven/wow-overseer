@@ -11,6 +11,7 @@ import os
 import re
 import threading
 import time
+import urllib.error
 import urllib.request
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -22,6 +23,7 @@ import armory
 import chat
 import family
 import frames
+import modelviewer
 import questlog
 import stream
 import voice
@@ -44,6 +46,32 @@ BOOK = armory.TalentBook.load(HERE)
 # random-suffix tables are client data, frozen by tools/gen_items.py.
 ITEMS = armory.ItemBook.load(HERE)
 PORT = int(os.environ.get("PORT", "8080"))
+
+# The model-viewer cache (modelviewer.py): an emptyDir on the pod, a temp
+# directory locally, capped in bytes either way. The fetcher is the one
+# outbound call this server makes to the internet, and it is made only for
+# a path modelviewer.classify has admitted.
+MODEL_CACHE = modelviewer.DiskCache(
+    modelviewer.default_cache_dir(),
+    int(os.environ.get("MODEL_CACHE_MB", "512")) * 1024 * 1024,
+)
+
+
+def _fetch_upstream(url: str) -> tuple[int, bytes]:
+    # S310: `url` is modelviewer.UPSTREAM plus an allowlisted, charset-checked
+    # path - never anything the request wrote - so no scheme other than
+    # https can reach here.
+    req = urllib.request.Request(  # noqa: S310
+        url, headers={"User-Agent": modelviewer.USER_AGENT})
+    try:
+        with urllib.request.urlopen(  # noqa: S310
+                req, timeout=modelviewer.UPSTREAM_TIMEOUT_SECONDS) as resp:
+            return resp.status, resp.read()
+    except urllib.error.HTTPError as e:
+        return e.code, b""
+
+
+MODELS = modelviewer.Store(MODEL_CACHE, _fetch_upstream)
 
 # WoW's own name rule (same as the bridge); anything else never reaches SQL.
 _NAME_RE = re.compile(r"^[A-Za-z]{2,12}$")
@@ -282,7 +310,10 @@ def _fetch_armory() -> dict:
             # guild line, not a missing row.
             cur.execute(
                 "SELECT c.name, c.level, c.race, c.class, c.gender, c.online, "  # noqa: S608
-                "c.activeTalentGroup, c.totalKills, g.name AS guild "
+                "c.activeTalentGroup, c.totalKills, g.name AS guild, "
+                # The face the character was made with, for the 3D model:
+                # five indexes into the race's choice lists (armory.viewer_model).
+                "c.skin, c.face, c.hairStyle, c.hairColor, c.facialStyle "
                 "FROM characters c "
                 "LEFT JOIN guild_member gm ON gm.guid = c.guid "
                 "LEFT JOIN guild g ON g.guildid = gm.guildid "
@@ -775,6 +806,11 @@ _FRAMES: dict = {}
 _FRAMES_LOCK = threading.Lock()
 
 
+# Where the page reaches the model-viewer cache. Also the value of the
+# page's window.CONTENT_PATH, which the viewer appends its file paths to.
+MODEL_PREFIX = "/modelviewer/"
+
+
 class Handler(BaseHTTPRequestHandler):
     def do_GET(self):  # noqa: N802 (stdlib naming)
         # A lookup and nothing else. Every GET endpoint takes the parsed
@@ -782,17 +818,42 @@ class Handler(BaseHTTPRequestHandler):
         # at the foot of this class - not another branch here. The chain this
         # replaced had reached eight and tripped the complexity cap when
         # /api/watch landed (infra#2663).
-        handler = self.GET_ROUTES.get(self.path.split("?", 1)[0])
+        path = self.path.split("?", 1)[0]
+        handler = self.GET_ROUTES.get(path)
         if handler is None:
+            # The one prefix route: a model-viewer file is named by its
+            # path, so the table cannot hold every one.
+            if path.startswith(MODEL_PREFIX):
+                self._modelviewer(path[len(MODEL_PREFIX):])
+                return
             self._send(404, "text/plain", b"not found")
             return
         handler(self, parse_qs(urlsplit(self.path).query))
+
+    def _modelviewer(self, path: str) -> None:
+        """GET /modelviewer/<path> - Wowhead's model data, through the cache.
+
+        The page cannot fetch this from wow.zamimg.com itself (see
+        modelviewer.py), so it is fetched here once and kept. A refused
+        path is a 404 that never leaves the pod; an unreachable upstream
+        is a 502, which the page's own timeout turns into the paper doll.
+        """
+        r = MODELS.serve(path)
+        if r.status == 502:
+            log.warning("model viewer: upstream failed for %s", path)
+        self._send(r.status, r.content_type, r.body, r.cache_control)
 
     def _index(self, _query: dict) -> None:
         self._send_file("index.html", "text/html; charset=utf-8")
 
     def _zones_file(self, _query: dict) -> None:
         self._send_file("zones.json", "application/json")
+
+    def _jquery_file(self, _query: dict) -> None:
+        # Wowhead's model viewer needs jQuery. Vendored (3.7.1, verified
+        # against the hash code.jquery.com publishes) and served from here
+        # so the page reaches no third host for it.
+        self._send_file("jquery.min.js", "text/javascript; charset=utf-8")
 
     def _shapes_file(self, _query: dict) -> None:
         # The zone REGIONS, built from zones.json by tools/gen_shapes.py.
@@ -1195,11 +1256,14 @@ class Handler(BaseHTTPRequestHandler):
             log.exception("static file %s unreadable", name)
             self._send(500, "text/plain", b"static file missing from image")
 
-    def _send(self, code: int, ctype: str, body: bytes) -> None:
+    def _send(self, code: int, ctype: str, body: bytes,
+              cache_control: str = "no-store") -> None:
         self.send_response(code)
         self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(len(body)))
-        self.send_header("Cache-Control", "no-store")
+        # no-store for everything the page polls; the model-viewer files
+        # are the one immutable thing here and say so themselves.
+        self.send_header("Cache-Control", cache_control)
         self.end_headers()
         self.wfile.write(body)
 
@@ -1221,6 +1285,7 @@ class Handler(BaseHTTPRequestHandler):
         "/index.html": _index,
         "/zones.json": _zones_file,
         "/shapes.json": _shapes_file,
+        "/jquery.min.js": _jquery_file,
         "/api/frame": _frame_get,
         "/healthz": _healthz,
     }
