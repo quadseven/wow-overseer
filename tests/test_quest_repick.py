@@ -76,6 +76,24 @@ def _code(text: str) -> str:
     return "\n".join(line.split("//", 1)[0] for line in text.splitlines())
 
 
+def _walks_before_the_leader_gate_are_leader_only(body: str) -> None:
+    """The leader gate used to be the first thing before the ONLY slot walk.
+    Module 89878284 (the leader serves the youngest) added a second walk in
+    front of it: the leader looks over its own log for a quest the youngest
+    still needs. That walk is leader-only by its own condition, so the
+    property is unchanged: no follower ever walks its own log. Assert it
+    directly rather than by string order."""
+    gate = body.index("if (!isLead)")
+    before = body[:gate]
+    for m in re.finditer(r"MAX_QUEST_LOG_SIZE", before):
+        head = before[max(0, m.start() - 600):m.start()]
+        assert "isLead &&" in head, (
+            "a slot walk before the leader gate is not itself leader-gated; "
+            "every follower would free-roam its own log")
+    assert "MAX_QUEST_LOG_SIZE" in body[gate:], (
+        "the fallback slot walk must still sit behind the leader gate")
+
+
 def _drive() -> str:
     return _function("void DriveQuests()")
 
@@ -336,11 +354,15 @@ class TheStrikeOnlyCountsAgainstAQuestStillWorthStriking(unittest.TestCase):
 
     def test_the_strike_checks_the_quest_is_still_in_the_log(self):
         body = _code(_drive())
-        strike = body.index("repick.strikes")
-        window = body[max(0, strike - 900):strike + 300]
-        self.assertRegex(
-            window, r"GetQuestStatus\(\s*repick\.lastPicked\s*\)",
-            "only strike a quest the bot still holds in an actionable state")
+        # The strike itself is `++repick.strikes`; the preemption block that
+        # module 89878284 put in front of it resets the counter but never
+        # increments it, so the increment is what the status check must precede.
+        strike = body.index("++repick.strikes")
+        check = re.search(r"GetQuestStatus\(\s*repick\.lastPicked\s*\)", body)
+        self.assertIsNotNone(
+            check, "only strike a quest the bot still holds in an actionable state")
+        self.assertLess(check.start(), strike,
+                        "the status check has to come before the strike is counted")
 
 
 class TheThresholdsAreSaneAndNotJustPresent(unittest.TestCase):
@@ -484,7 +506,12 @@ class NoNewUpstreamMemberWasIntroduced(unittest.TestCase):
     ALREADY_PROVEN = {"Fetch", "NextRow", "Get", "GetTitle", "GetQuestTemplate",
                       "FindPlayerByName",
                       # the snapshot writer already reads these
-                      "GetPositionX", "GetPositionY"}
+                      "GetPositionX", "GetPositionY",
+                      # module 89878284: the leader-serves-the-youngest log
+                      # line names the youngest and its level. Both are used
+                      # dozens of times elsewhere in this file (58 and 14
+                      # call sites), so the build has long since proven them.
+                      "GetName", "GetLevel"}
 
     def test_the_new_member_is_cited_where_it_is_used(self):
         self.assertIn("PlayerbotAI.h:605", _drive())
@@ -513,7 +540,7 @@ class NothingElseWasQuietlyChanged(unittest.TestCase):
     def test_the_onquest_guard_survives(self):
         body = _code(_drive())
         self.assertRegex(
-            body, r"if\s*\(onQuest\)\s*\n?\s*continue;",
+            body, r"if\s*\(onQuest(?:\s*&&\s*!preempted)?\)\s*\n?\s*continue;",
             "removing this reinstates the every-poll re-issue that #2798 and "
             "#2799 exist to prevent")
 
@@ -576,12 +603,7 @@ class TheWholeFamilyCanBeAimed(unittest.TestCase):
         """The guard has to sit BEFORE the walk, not merely somewhere in the
         function - order is the whole property."""
         body = _code(_drive())
-        guard = body.index("if (!isLead)")
-        walk = body.index("MAX_QUEST_LOG_SIZE")
-        self.assertLess(
-            guard, walk,
-            "the leader gate must precede the fallback slot walk, or every "
-            "follower free-roams its own log the moment its errand ends")
+        _walks_before_the_leader_gate_are_leader_only(body)
 
 
 class AFollowerWithoutAnAimDoesNotRoam(unittest.TestCase):

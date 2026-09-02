@@ -13,6 +13,7 @@ stupid. They were obeying.
 """
 import pathlib
 import sys
+import re
 import unittest
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
@@ -110,7 +111,14 @@ class TheQuestDriverPointsThemAtTheObjective(unittest.TestCase):
         """
         body = _drive_quests()
         self.assertNotIn("`lead` = 1", body)
-        self.assertLess(body.index("if (!isLead)"), body.index("MAX_QUEST_LOG_SIZE"))
+        # Module 89878284 put a leader-only walk (the leader looks for a quest
+        # the youngest still needs) in front of the gate. Every walk before
+        # the gate must carry the leader condition itself.
+        gate = body.index("if (!isLead)")
+        for m in re.finditer("MAX_QUEST_LOG_SIZE", body[:gate]):
+            self.assertIn("isLead &&", body[max(0, m.start() - 600):m.start()],
+                          "a slot walk before the leader gate is not leader-gated")
+        self.assertIn("MAX_QUEST_LOG_SIZE", body[gate:])
 
     def test_a_character_already_on_a_quest_is_left_alone(self):
         """Re-issuing every poll restarts the travel, so it never arrives."""

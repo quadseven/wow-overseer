@@ -59,6 +59,24 @@ def _code(text: str) -> str:
     return "\n".join(line.split("//", 1)[0] for line in text.splitlines())
 
 
+def _walks_before_the_leader_gate_are_leader_only(body: str) -> None:
+    """The leader gate used to be the first thing before the ONLY slot walk.
+    Module 89878284 (the leader serves the youngest) added a second walk in
+    front of it: the leader looks over its own log for a quest the youngest
+    still needs. That walk is leader-only by its own condition, so the
+    property is unchanged: no follower ever walks its own log. Assert it
+    directly rather than by string order."""
+    gate = body.index("if (!isLead)")
+    before = body[:gate]
+    for m in re.finditer(r"MAX_QUEST_LOG_SIZE", before):
+        head = before[max(0, m.start() - 600):m.start()]
+        assert "isLead &&" in head, (
+            "a slot walk before the leader gate is not itself leader-gated; "
+            "every follower would free-roam its own log")
+    assert "MAX_QUEST_LOG_SIZE" in body[gate:], (
+        "the fallback slot walk must still sit behind the leader gate")
+
+
 def _drive() -> str:
     return _function("void DriveQuests()")
 
@@ -103,10 +121,7 @@ class TheColumnIsActuallyRead(unittest.TestCase):
         self.assertIn("enabled = 1", body)
         self.assertNotIn("`lead` = 1", body,
                          "a leader-only query makes a follower's aim unreadable")
-        guard = body.index("if (!isLead)")
-        walk = body.index("MAX_QUEST_LOG_SIZE")
-        self.assertLess(guard, walk,
-                        "the divergent log walk must stay behind the leader gate")
+        _walks_before_the_leader_gate_are_leader_only(body)
 
     def test_the_column_the_module_reads_is_the_one_the_migration_adds(self):
         sql = MIGRATION.read_text(encoding="utf-8")
@@ -156,7 +171,8 @@ class TheLeaseIsReasserted(unittest.TestCase):
         be corrected, only lost."""
         body = _code(_drive())
         self.assertLess(
-            body.index("DriveChosenQuest("), body.index("if (onQuest)\n                continue;"),
+            body.index("DriveChosenQuest("),
+            re.search(r"if \(onQuest(?: && !preempted)?\)\n\s+continue;", body).start(),
             "the RPG_DO_QUEST skip runs before the aim, so a drifted lease is never re-asserted",
         )
 
@@ -361,7 +377,12 @@ class EveryMemberUsedWasVerifiedAgainstThePinnedSources(unittest.TestCase):
                       # The snapshot writer in this same file has called these
                       # since long before, so the build has proven them. Z is
                       # deliberately absent: the diff does not use it.
-                      "GetPositionX", "GetPositionY"}
+                      "GetPositionX", "GetPositionY",
+                      # module 89878284: the leader-serves-the-youngest log
+                      # line names the youngest and its level. Both are used
+                      # dozens of times elsewhere in this file (58 and 14
+                      # call sites), so the build has long since proven them.
+                      "GetName", "GetLevel"}
 
     def test_every_arrow_member_used_is_on_the_verified_list(self):
         body = _code(_drive() + _chosen())
