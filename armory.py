@@ -1,4 +1,4 @@
-"""Pure builder for the Armory tab: character rows -> gear and build, per member.
+"""Pure builder for the Armory tab: character rows -> a profile, per member.
 
 WHY THIS EXISTS. What the five are WEARING and how they are SPECCED are the
 two things that decide whether a dungeon run works, and until this tab both
@@ -7,27 +7,41 @@ writing SQL by hand, which is why a real defect - the watched character being
 the only one nobody buffs (mod-overseer#80) - hid for as long as it did. A
 thing nobody can see is a thing nobody checks.
 
+WHAT A PROFILE IS. The first cut of this tab was a grid: five columns of
+nineteen item NAMES. Correct, and it looked nothing like an armory, which is
+what the operator asked for. An armory page - the one the family's players
+already know how to read - is a header (name, level, race, class, item
+level), a paper doll (the item ICONS down both sides of the character, each
+bordered in its quality colour), a tooltip per item with the lines the game
+itself shows, a stat block, and the three talent trees drawn as the trainer
+draws them. That is what build_armory now produces, per member, and the
+page's job is to lay it out and nothing more.
+
 Same seam rule as map_core, panel and family (infra#2597): the HTTP adapter
 fetches rows and does nothing else. Every judgement here is a decision -
-which slots count as gear at all, what an empty slot means, how a pile of
-spell ids becomes "0/0/16 Protection" - so all of it lives in this module
-where the stdlib suite can reach it without a database.
+which slots count as gear at all, what an empty slot means, what "of the
+Tiger" adds to a belt, how a pile of spell ids becomes "0/0/16 Protection" -
+so all of it lives in this module where the stdlib suite can reach it
+without a database.
 
-THE TALENT PROBLEM, AND THE ROUTE CHOSEN. `character_talent` stores one row
-per learned talent and the only thing in that row is the spell id of the rank
-currently held. Turning that back into a build needs the client's Talent.dbc
-and TalentTab.dbc, and those are exactly what the server database does NOT
-have: acore_world ships `talent_dbc` and `talenttab_dbc` as EMPTY tables
-because the core reads the real DBCs off disk. The three routes were: mount
-the DBC directory into this pod (a new runtime dependency, on a deployment
-that is not the worldserver), populate the empty world tables (an admin
-change to a database that gets rebuilt from upstream), or freeze the DBCs
-into a committed reference file. The third is what zones.json and shapes.json
-already do with frozen 3.3.5a client data, so it is what this does too:
-tools/gen_talents.py writes talents.json, TalentBook reads it, and the
-PER-CHARACTER data still comes from the live database on every poll.
+TWO FROZEN BOOKS. `character_talent` stores one row per learned talent and
+the only thing in that row is the spell id of the rank currently held; an
+item row names a displayid and a handful of spell ids. Turning either back
+into something a person reads needs the client's own tables (Talent.dbc,
+ItemDisplayInfo.dbc, Spell.dbc and friends), and those are exactly what the
+server database does NOT have: acore_world ships `talent_dbc` and
+`talenttab_dbc` as EMPTY tables because the core reads the real DBCs off
+disk. The three routes were: mount the DBC directory into this pod (a new
+runtime dependency, on a deployment that is not the worldserver), populate
+the empty world tables (an admin change to a database that gets rebuilt from
+upstream), or freeze the DBCs into committed reference files. The third is
+what zones.json and shapes.json already do with frozen 3.3.5a client data,
+so it is what this does too: tools/gen_talents.py writes talents.json and
+tools/gen_items.py writes icons.json, spells.json and items.json, TalentBook
+and ItemBook read them, and the PER-CHARACTER data still comes from the live
+database on every poll.
 
-Ticket: infra#3096.
+Tickets: infra#3096 (the tab), infra#3139 (the profile).
 """
 from __future__ import annotations
 
@@ -73,6 +87,178 @@ FIRST_TALENT_LEVEL = 10
 # worse than one that admits it does not know.
 DEATH_KNIGHT = 6
 
+# The trainer's grid is eleven tiers by four columns for every class.
+TALENT_ROWS = 11
+TALENT_COLS = 4
+
+# The paper doll, as the character sheet draws it: a column down each side
+# of the character. Sent to the page rather than typed into it, for the
+# same reason the slot list is - one list decides what the slots are, and
+# a test holds these two columns to exactly that list.
+DOLL_LEFT = ["head", "neck", "shoulders", "back", "chest", "shirt", "tabard",
+             "wrists", "main hand", "off hand"]
+DOLL_RIGHT = ["hands", "waist", "legs", "feet", "finger 1", "finger 2",
+              "trinket 1", "trinket 2", "ranged"]
+
+# --- the client's own vocabulary, by id -----------------------------------
+# All 3.3.5a enums, from the core's SharedDefines.h / ItemTemplate.h. Named
+# here because a tooltip that says "slot 13" instead of "One-Hand" is not a
+# tooltip.
+
+BINDING = {
+    1: "Binds when picked up", 2: "Binds when equipped",
+    3: "Binds when used", 4: "Quest Item", 5: "Quest Item",
+}
+
+INVENTORY_TYPES = {
+    1: "Head", 2: "Neck", 3: "Shoulder", 4: "Shirt", 5: "Chest", 6: "Waist",
+    7: "Legs", 8: "Feet", 9: "Wrist", 10: "Hands", 11: "Finger", 12: "Trinket",
+    13: "One-Hand", 14: "Off Hand", 15: "Ranged", 16: "Back", 17: "Two-Hand",
+    18: "Bag", 19: "Tabard", 20: "Chest", 21: "Main Hand", 22: "Off Hand",
+    23: "Held In Off-hand", 24: "Ammo", 25: "Thrown", 26: "Ranged",
+    27: "Quiver", 28: "Relic",
+}
+
+ITEM_CLASS_WEAPON, ITEM_CLASS_ARMOR = 2, 4
+
+ARMOR_SUBCLASSES = {
+    1: "Cloth", 2: "Leather", 3: "Mail", 4: "Plate", 6: "Shield",
+    7: "Libram", 8: "Idol", 9: "Totem", 10: "Sigil",
+}
+
+WEAPON_SUBCLASSES = {
+    0: "Axe", 1: "Axe", 2: "Bow", 3: "Gun", 4: "Mace", 5: "Mace", 6: "Polearm",
+    7: "Sword", 8: "Sword", 10: "Staff", 13: "Fist Weapon", 14: "Miscellaneous",
+    15: "Dagger", 16: "Thrown", 18: "Crossbow", 19: "Wand", 20: "Fishing Pole",
+}
+
+# ITEM_MOD_*. The five base stats and the two pools are the WHITE lines of a
+# tooltip; every other modifier is a green "Equip:" sentence, which is how
+# the client draws them.
+BASE_STATS = {
+    0: "Mana", 1: "Health", 3: "Agility", 4: "Strength", 5: "Intellect",
+    6: "Spirit", 7: "Stamina",
+}
+EQUIP_STATS = {
+    12: "Increases defense rating by {}.",
+    13: "Increases your dodge rating by {}.",
+    14: "Increases your parry rating by {}.",
+    15: "Increases your shield block rating by {}.",
+    16: "Improves melee hit rating by {}.",
+    17: "Improves ranged hit rating by {}.",
+    18: "Improves spell hit rating by {}.",
+    19: "Improves melee critical strike rating by {}.",
+    20: "Improves ranged critical strike rating by {}.",
+    21: "Improves spell critical strike rating by {}.",
+    28: "Improves melee haste rating by {}.",
+    29: "Improves ranged haste rating by {}.",
+    30: "Improves spell haste rating by {}.",
+    31: "Improves hit rating by {}.",
+    32: "Improves critical strike rating by {}.",
+    35: "Improves your resilience rating by {}.",
+    36: "Improves haste rating by {}.",
+    37: "Increases your expertise rating by {}.",
+    38: "Increases attack power by {}.",
+    39: "Increases ranged attack power by {}.",
+    40: "Increases attack power by {} in Cat, Bear, Dire Bear, and Moonkin forms only.",
+    41: "Increases healing done by spells by {}.",
+    42: "Increases damage done by spells by {}.",
+    43: "Restores {} mana per 5 sec.",
+    44: "Increases your armor penetration rating by {}.",
+    45: "Increases spell power by {}.",
+    46: "Restores {} health per 5 sec.",
+    47: "Increases your spell penetration by {}.",
+    48: "Increases the block value of your shield by {}.",
+}
+
+RESISTANCES = [
+    ("holy_res", "Holy"), ("fire_res", "Fire"), ("nature_res", "Nature"),
+    ("frost_res", "Frost"), ("shadow_res", "Shadow"), ("arcane_res", "Arcane"),
+]
+
+# spelltrigger_N -> the word the tooltip leads the sentence with.
+SPELL_TRIGGERS = {0: "Use", 1: "Equip", 2: "Chance on hit", 5: "Equip"}
+
+# SpellItemEnchantment effect types.
+ENCHANT_PROC, ENCHANT_DAMAGE, ENCHANT_SPELL, ENCHANT_RESIST, ENCHANT_STAT = 1, 2, 3, 4, 5
+RESIST_SCHOOLS = {1: "Holy", 2: "Fire", 3: "Nature", 4: "Frost", 5: "Shadow", 6: "Arcane"}
+
+# item_instance.enchantments: twelve slots of (id, duration, charges). The
+# permanent enchant, the temporary one, three gems, the socket bonus, the
+# prismatic socket, and five slots for what a random suffix or property
+# applied. The last five are how "of the Tiger" reaches an item.
+ENCHANT_SLOTS = 12
+PERMANENT_ENCHANT_SLOT, TEMPORARY_ENCHANT_SLOT = 0, 1
+GEM_SLOTS = range(2, 5)
+BONUS_ENCHANT_SLOT, PRISMATIC_ENCHANT_SLOT = 5, 6
+PROPERTY_ENCHANT_SLOTS = range(7, 12)
+
+# RandPropPoints groups: which of its five columns an inventory type reads,
+# exactly as Item::GetItemSuffixFactor picks them. A "Belt of the Monkey"
+# gets less agility than a "Chestpiece of the Monkey" of the same level, and
+# this is the whole of why.
+SUFFIX_GROUP = {
+    1: 0, 5: 0, 7: 0, 17: 0, 20: 0,
+    3: 1, 6: 1, 8: 1, 10: 1, 12: 1,
+    2: 2, 9: 2, 11: 2, 14: 2, 16: 2, 23: 2,
+    13: 3, 21: 3, 22: 3,
+    15: 4, 25: 4, 26: 4,
+}
+SUFFIX_QUALITY_COLUMN = {4: 0, 5: 0, 6: 0, 3: 1, 7: 1, 2: 2}
+
+# The portrait in the middle of the paper doll. There is no character model
+# renderer here and no honest way to fake one, so the centre shows the
+# client's own race-and-gender portrait icon with the class icon beside it -
+# the same two icons the character sheet and the guild roster use. Both are
+# named the way the icon host files them; the page draws a silhouette if
+# the host is unreachable, never a blank.
+RACE_ICON_NAMES = {
+    1: "human", 2: "orc", 3: "dwarf", 4: "nightelf", 5: "undead", 6: "tauren",
+    7: "gnome", 8: "troll", 10: "bloodelf", 11: "draenei",
+}
+CLASS_ICON_NAMES = {
+    1: "warrior", 2: "paladin", 3: "hunter", 4: "rogue", 5: "priest",
+    6: "deathknight", 7: "shaman", 8: "mage", 9: "warlock", 11: "druid",
+}
+
+# The class's own colour, from the client's RAID_CLASS_COLORS table. The
+# name in the header is drawn in it, as every armory does.
+CLASS_COLOURS = {
+    1: "#c79c6e", 2: "#f58cba", 3: "#abd473", 4: "#fff569", 5: "#ffffff",
+    6: "#c41f3b", 7: "#0070de", 8: "#69ccf0", 9: "#9482c9", 11: "#ff7d0a",
+}
+
+# --- the derived stats, when the world has not saved them --------------
+# character_stats is the core's OWN reading of every derived number (dodge,
+# crit, attack power...) and is the source used whenever a row exists. It
+# is written on save only when PlayerSave.Stats.MinLevel allows it, so a
+# character may have none yet; for that case the handful of stats that CAN
+# be honestly derived from base stats and gear are computed with the core's
+# own formulas (Player::UpdateAttackPowerAndDamage and friends, 3.3.5a),
+# and everything that cannot is reported as unavailable rather than guessed.
+# Attack power: (level multiplier, strength multiplier, agility multiplier,
+# constant) per class.
+MELEE_AP = {
+    1: (3, 2, 0, -20), 2: (3, 2, 0, -20), 6: (3, 2, 0, -20),
+    3: (2, 1, 1, -20), 4: (2, 1, 1, -20), 7: (2, 1, 1, -20),
+    11: (0, 2, 0, -20), 8: (0, 1, 0, -10), 5: (0, 1, 0, -10), 9: (0, 1, 0, -10),
+}
+RANGED_AP = {
+    3: (2, 0, 1, -10), 4: (1, 0, 1, -10), 1: (1, 0, 1, -10),
+    11: (0, 0, 0, 0), 2: (0, 0, 0, 0), 6: (0, 0, 0, 0), 7: (0, 0, 0, 0),
+    8: (0, 0, 1, -10), 5: (0, 0, 1, -10), 9: (0, 0, 1, -10),
+}
+# Power pool per class: the label, and the character_stats column that
+# holds its maximum. Rage and runic power are stored x10.
+POWER = {
+    1: ("Rage", "maxpower2", 10), 4: ("Energy", "maxpower4", 1),
+    6: ("Runic Power", "maxpower7", 10),
+}
+DEFAULT_POWER = ("Mana", "maxpower1", 1)
+# The first twenty points of stamina are worth one health each and every
+# point after that ten; intellect is the same shape at fifteen mana.
+STAT_BONUS_FLOOR = 20
+
 
 @dataclass(frozen=True)
 class TalentBook:
@@ -85,6 +271,7 @@ class TalentBook:
     """
 
     trees: dict[str, dict]
+    talents: list[dict]
     by_spell: dict[int, tuple[dict, int]]
 
     @classmethod
@@ -95,12 +282,55 @@ class TalentBook:
         for talent in book["talents"]:
             for index, spell in enumerate(talent["ranks"]):
                 by_spell[spell] = (talent, index + 1)
-        return cls(trees=book["trees"], by_spell=by_spell)
+        return cls(trees=book["trees"], talents=book["talents"], by_spell=by_spell)
 
     def trees_for(self, class_id: int) -> list[tuple[str, dict]]:
         """That class's three trees, in the order the game draws them."""
         trees = [(tid, t) for tid, t in self.trees.items() if t["class"] == class_id]
         return sorted(trees, key=lambda pair: pair[1]["order"])
+
+    def grid_for(self, tree_id: str) -> list[dict]:
+        """Every talent in one tree, tier then column: the trainer's grid."""
+        talents = [t for t in self.talents if str(t["tree"]) == tree_id]
+        return sorted(talents, key=lambda t: (t["row"], t["col"]))
+
+
+@dataclass(frozen=True)
+class ItemBook:
+    """The frozen client item tables: what the world database cannot say.
+
+    Icons by displayid, spell text by spell id, sets, enchantments and the
+    random-suffix tables - three files, one book. Built by
+    tools/gen_items.py; see there for what each section is and why it is
+    needed, and why three files.
+    """
+
+    icons: dict[int, str]
+    spells: dict[int, str]
+    sets: dict[int, dict]
+    enchants: dict[int, list]
+    suffixes: dict[int, list]
+    properties: dict[int, list]
+    points: dict[int, list]
+
+    @classmethod
+    def load(cls, static_dir: str) -> "ItemBook":
+        with open(os.path.join(static_dir, "items.json")) as f:
+            book = json.load(f)
+        with open(os.path.join(static_dir, "icons.json")) as f:
+            icons = json.load(f)
+        with open(os.path.join(static_dir, "spells.json")) as f:
+            spells = json.load(f)
+        names = icons["names"]
+        return cls(
+            icons={int(d): names[i] for d, i in icons["display"].items()},
+            spells={int(k): v for k, v in spells.items()},
+            sets={int(k): v for k, v in book["sets"].items()},
+            enchants={int(k): v for k, v in book["enchants"].items()},
+            suffixes={int(k): v for k, v in book["suffixes"].items()},
+            properties={int(k): v for k, v in book["properties"].items()},
+            points={int(k): v for k, v in book["points"].items()},
+        )
 
 
 def talent_points_at(level: int, class_id: int) -> int | None:
@@ -116,7 +346,258 @@ def _quality_name(quality: int | None) -> str:
     return QUALITY_NAMES.get(quality, UNKNOWN_QUALITY)
 
 
-def _slot_payload(slot_name: str, row: dict | None) -> dict:
+def parse_enchantments(text: str | None) -> list[int]:
+    """item_instance.enchantments -> the enchant id in each of the 12 slots.
+
+    The column is a space-separated run of (id, duration, charges) triples.
+    Anything malformed reads as no enchantments, which is what a row the
+    core has not written yet also reads as.
+    """
+    if not text:
+        return [0] * ENCHANT_SLOTS
+    try:
+        values = [int(v) for v in text.split()]
+    except ValueError:
+        return [0] * ENCHANT_SLOTS
+    ids = values[::3][:ENCHANT_SLOTS]
+    return ids + [0] * (ENCHANT_SLOTS - len(ids))
+
+
+def suffix_factor(row: dict, book: ItemBook) -> int:
+    """The item-level scaling a random SUFFIX's stats are a percentage of."""
+    group = SUFFIX_GROUP.get(row["inventory_type"] or 0)
+    column = SUFFIX_QUALITY_COLUMN.get(row["quality"] or 0)
+    points = book.points.get(row["item_level"] or 0)
+    if group is None or column is None or points is None:
+        return 0
+    return points[column][group]
+
+
+def money(copper: int | None) -> dict | None:
+    if not copper:
+        return None
+    return {"gold": copper // 10000, "silver": copper // 100 % 100, "copper": copper % 100}
+
+
+def _class_list(mask: int | None) -> list[str] | None:
+    """AllowableClass -> the classes named, or None when anyone can wear it."""
+    if mask is None or mask <= 0:
+        return None
+    named = [name for cid, name in _CLASS_NAMES.items() if mask & (1 << (cid - 1))]
+    if len(named) == len(_CLASS_NAMES):
+        return None
+    return named
+
+
+def _scaled(amount: int, pct: int | None, row: dict, book: ItemBook) -> int:
+    """A suffix enchant's amount: the allocation, scaled by the item's level.
+
+    A stat with amount 0 is a random suffix's, and the core scales it from
+    RandPropPoints when the item is equipped; this is that arithmetic.
+    """
+    if amount or pct is None:
+        return amount
+    return pct * suffix_factor(row, book) // 10000
+
+
+def _stat_line(arg: int, amount: int) -> str:
+    label = BASE_STATS.get(arg)
+    if label:
+        return f"+{amount} {label}"
+    if arg in EQUIP_STATS:
+        return "Equip: " + EQUIP_STATS[arg].format(amount)
+    return f"+{amount} stat #{arg}"
+
+
+def _enchant_lines(enchant_id: int, row: dict, book: ItemBook, pct: int | None
+                   ) -> tuple[list[str], dict[int, int]]:
+    """One enchantment -> its tooltip lines and the stats it adds.
+
+    Returns (lines, {stat type: amount}).
+    """
+    entry = book.enchants.get(enchant_id)
+    if entry is None:
+        return [f"Enchantment #{enchant_id}"], {}
+    name, effects = entry
+    fallback = name or f"Enchantment #{enchant_id}"
+    lines: list[str] = []
+    stats: dict[int, int] = {}
+    for kind, amount, arg in effects:
+        if kind == ENCHANT_STAT:
+            amount = _scaled(amount, pct, row, book)
+            stats[arg] = stats.get(arg, 0) + amount
+            lines.append(_stat_line(arg, amount))
+        elif kind == ENCHANT_RESIST:
+            amount = _scaled(amount, pct, row, book)
+            lines.append(f"+{amount} {RESIST_SCHOOLS.get(arg, 'All')} Resistance")
+        elif kind in (ENCHANT_PROC, ENCHANT_SPELL):
+            text = book.spells.get(arg)
+            lead = "Chance on hit" if kind == ENCHANT_PROC else "Equip"
+            lines.append(f"{lead}: {text}" if text else fallback)
+        elif kind == ENCHANT_DAMAGE:
+            lines.append(f"+{amount} Weapon Damage")
+        else:
+            lines.append(fallback)
+    return lines or [fallback], stats
+
+
+def _random_property(row: dict, book: ItemBook) -> tuple[str, dict[int, int]]:
+    """item_instance.randomPropertyId -> (suffix name, allocation per enchant).
+
+    Positive ids are ItemRandomProperties (fixed amounts, no allocation);
+    negative ones are ItemRandomSuffix, whose enchants carry a percentage
+    of the item's RandPropPoints instead of an amount.
+    """
+    random_id = row.get("random_property_id") or 0
+    if random_id > 0:
+        prop = book.properties.get(random_id)
+        return (prop[0] if prop else ""), {}
+    if random_id < 0:
+        suffix = book.suffixes.get(-random_id)
+        if suffix:
+            return suffix[0], {e: pct for e, pct in suffix[1]}
+    return "", {}
+
+
+def _template_stats(row: dict) -> tuple[dict[int, int], list[str], list[str]]:
+    """The template's ten stat slots -> (sums, white lines, green lines)."""
+    stats: dict[int, int] = {}
+    white: list[str] = []
+    green: list[str] = []
+    for n in range(1, 11):
+        kind, value = row.get(f"stat_type{n}"), row.get(f"stat_value{n}")
+        if not value:
+            continue
+        stats[kind] = stats.get(kind, 0) + value
+        if kind in BASE_STATS:
+            white.append(f"{value:+d} {BASE_STATS[kind]}")
+        elif kind in EQUIP_STATS:
+            green.append("Equip: " + EQUIP_STATS[kind].format(value))
+    return stats, white, green
+
+
+def _instance_enchants(row: dict, book: ItemBook, pct_by_enchant: dict[int, int],
+                       stats: dict[int, int], white: list[str], green: list[str]
+                       ) -> list[str]:
+    """The twelve enchantment slots, sorted into the tooltip's three places.
+
+    A random property's stats sit among the white lines, as the game draws
+    them, not as a separate "enchanted" block. An enchant or a poison
+    applied to the item is drawn by NAME ("+6 Weapon Damage", "Instant
+    Poison"), which is what the client does - the spell behind a poison
+    describes the poison to the rogue, not the weapon to a reader.
+    """
+    named: list[str] = []
+    for slot, enchant_id in enumerate(parse_enchantments(row.get("enchantments"))):
+        if not enchant_id:
+            continue
+        from_property = slot in PROPERTY_ENCHANT_SLOTS
+        pct = pct_by_enchant.get(enchant_id) if from_property else None
+        lines, added = _enchant_lines(enchant_id, row, book, pct)
+        for kind, amount in added.items():
+            stats[kind] = stats.get(kind, 0) + amount
+        if from_property:
+            white.extend(line for line in lines if not line.startswith("Equip:"))
+            green.extend(line for line in lines if line.startswith("Equip:"))
+            continue
+        entry = book.enchants.get(enchant_id)
+        named.extend([entry[0]] if entry and entry[0] else lines)
+    return named
+
+
+def _spell_effects(row: dict, book: ItemBook) -> list[str]:
+    """spellid_1..5 -> the green "Equip:" / "Use:" / "Chance on hit:" lines."""
+    lines: list[str] = []
+    for n in range(1, 6):
+        spell, trigger = row.get(f"spellid_{n}"), row.get(f"spelltrigger_{n}")
+        lead = SPELL_TRIGGERS.get(trigger)
+        # No lead: learn-on-use, soulstone and the like, not a tooltip line.
+        if spell and lead is not None:
+            text = book.spells.get(spell)
+            lines.append(f"{lead}: {text}" if text else f"{lead}: spell #{spell}")
+    return lines
+
+
+def _damage(row: dict) -> dict | None:
+    if not row.get("dmg_min1"):
+        return None
+    speed = (row.get("delay") or 0) / 1000
+    dps = (row["dmg_min1"] + row["dmg_max1"]) / 2 / speed if speed else None
+    return {"min": row["dmg_min1"], "max": row["dmg_max1"], "speed": speed,
+            "dps": round(dps, 1) if dps is not None else None}
+
+
+def _item_kind(row: dict) -> str | None:
+    """'Mail', 'Sword': the right-hand word of the slot line."""
+    item_class, subclass = row.get("class"), row.get("subclass")
+    if item_class == ITEM_CLASS_ARMOR:
+        return ARMOR_SUBCLASSES.get(subclass)
+    if item_class == ITEM_CLASS_WEAPON:
+        return WEAPON_SUBCLASSES.get(subclass)
+    return None
+
+
+def _item_set(row: dict, book: ItemBook, worn_entries: set[int],
+              set_names: dict[int, str]) -> dict | None:
+    entry = book.sets.get(row.get("itemset") or 0)
+    if entry is None:
+        return None
+    pieces = [{"entry": e, "name": set_names.get(e, f"Item #{e}"),
+               "worn": e in worn_entries} for e in entry["items"]]
+    worn = sum(1 for p in pieces if p["worn"])
+    return {
+        "name": entry["name"], "worn": worn, "total": len(pieces),
+        "pieces": pieces,
+        "bonuses": [{"threshold": t, "active": worn >= t,
+                     "text": book.spells.get(s, f"spell #{s}")}
+                    for t, s in entry["bonuses"]],
+    }
+
+
+def _tooltip(row: dict, book: ItemBook, worn_entries: set[int],
+             set_names: dict[int, str]) -> tuple[dict, dict[int, int], int]:
+    """The lines the game draws for one item, in the order it draws them.
+
+    Returns (tooltip, {stat type: amount}, armor) so the stat block can be
+    derived from the same reading a person sees - one source, two views.
+    """
+    suffix_name, pct_by_enchant = _random_property(row, book)
+    name = row["item_name"] if row["item_name"] is not None else f"Item #{row['entry']}"
+    if suffix_name:
+        name = f"{name} {suffix_name}"
+    stats, white, green = _template_stats(row)
+    enchant_lines = _instance_enchants(row, book, pct_by_enchant, stats, white, green)
+    green.extend(_spell_effects(row, book))
+    max_durability = row.get("max_durability") or 0
+    armor = row.get("armor") or 0
+    tooltip = {
+        "name": name,
+        "quality": row["quality"],
+        "item_level": row["item_level"],
+        "binding": BINDING.get(row.get("bonding") or 0),
+        "slot": INVENTORY_TYPES.get(row.get("inventory_type") or 0),
+        "kind": _item_kind(row),
+        "damage": _damage(row),
+        "armor": armor or None,
+        "block": row.get("block") or None,
+        "stats": white,
+        "resistances": [f"+{row[col]} {school} Resistance"
+                        for col, school in RESISTANCES if row.get(col)],
+        "enchant": enchant_lines,
+        "durability": f"{row.get('durability') or 0} / {max_durability}"
+        if max_durability else None,
+        "classes": _class_list(row.get("allowable_class")),
+        "requires_level": row["required_level"] or None,
+        "effects": green,
+        "set": _item_set(row, book, worn_entries, set_names),
+        "flavor": row.get("description") or None,
+        "sell_price": money(row.get("sell_price")),
+    }
+    return tooltip, stats, armor
+
+
+def _slot_payload(slot_name: str, row: dict | None, book: ItemBook,
+                  worn_entries: set[int], set_names: dict[int, str]) -> dict:
     """One paper-doll slot, whether or not anything is in it."""
     cosmetic = slot_name in COSMETIC_SLOTS
     if row is None:
@@ -124,21 +605,27 @@ def _slot_payload(slot_name: str, row: dict | None) -> dict:
     # A LEFT JOIN miss on acore_world.item_template is a custom or removed
     # item: it is genuinely equipped, so it must not read as an empty slot.
     # Say which item instead of drawing a blank, the same way panel does.
-    name = row["item_name"] if row["item_name"] is not None else f"Item #{row['entry']}"
+    tooltip, stats, armor = _tooltip(row, book, worn_entries, set_names)
     max_durability = row["max_durability"] or 0
     return {
         "slot": slot_name,
         "cosmetic": cosmetic,
         "empty": False,
         "entry": row["entry"],
-        "name": name,
+        "name": tooltip["name"],
         "quality": row["quality"],
         "quality_name": _quality_name(row["quality"]),
         "item_level": row["item_level"],
         "required_level": row["required_level"],
+        # The icon is the DISPLAY's, and a display the book does not know
+        # (a custom item) gets none: the page draws the slot name instead.
+        "icon": book.icons.get(row.get("displayid") or 0),
         # Rings, cloaks, necks and trinkets have no durability at all, so a
         # stored 0 only means "broken" when the item HAS durability to lose.
         "broken": bool(max_durability) and not row["durability"],
+        "tooltip": tooltip,
+        "_stats": stats,
+        "_armor": armor,
     }
 
 
@@ -160,10 +647,124 @@ def _build_gear(slots: list[dict]) -> dict:
     }
 
 
+def _stat(key: str, label: str, value, note: str | None = None) -> dict:
+    return {"key": key, "label": label, "value": value, "note": note}
+
+
+def _pct(value: float | None) -> float | None:
+    return None if value is None else round(float(value), 2)
+
+
+def _build_stats(char_row: dict, saved: dict | None, base: dict | None,
+                 slots: list[dict]) -> dict:
+    """The stat block: the core's saved reading, or the honest subset.
+
+    character_stats is preferred outright - it is the world's own answer,
+    including everything a talent or a buff adds. Without it, five base
+    stats plus gear is a real number (the game's own formula, minus buffs
+    and talents), attack power follows from those, and dodge, parry, block
+    and crit chance are NOT computable here without the rating tables, so
+    they say so.
+    """
+    class_id, level = char_row["class"], char_row["level"]
+    power_label, power_column, power_scale = POWER.get(class_id, DEFAULT_POWER)
+    if saved is not None:
+        rows = [
+            _stat("health", "Health", saved["maxhealth"]),
+            _stat("power", power_label, saved[power_column] // power_scale),
+            _stat("stamina", "Stamina", saved["stamina"]),
+            _stat("strength", "Strength", saved["strength"]),
+            _stat("agility", "Agility", saved["agility"]),
+            _stat("intellect", "Intellect", saved["intellect"]),
+            _stat("spirit", "Spirit", saved["spirit"]),
+            _stat("armor", "Armor", saved["armor"]),
+            _stat("block", "Block", _pct(saved["blockPct"])),
+            _stat("dodge", "Dodge", _pct(saved["dodgePct"])),
+            _stat("parry", "Parry", _pct(saved["parryPct"])),
+            _stat("attack_power", "Attack Power", saved["attackPower"]),
+            _stat("melee_crit", "Melee Critical Strike", _pct(saved["critPct"])),
+            _stat("ranged_attack_power", "Ranged Attack Power", saved["rangedAttackPower"]),
+            _stat("ranged_crit", "Ranged Critical Strike", _pct(saved["rangedCritPct"])),
+            _stat("spell_power", "Spell Power", saved["spellPower"]),
+            _stat("spell_crit", "Spell Critical Strike", _pct(saved["spellCritPct"])),
+        ]
+        return {"source": "saved", "rows": rows}
+
+    gear: dict[int, int] = {}
+    armor = 0
+    for s in slots:
+        if s["empty"]:
+            continue
+        for kind, amount in s["_stats"].items():
+            gear[kind] = gear.get(kind, 0) + amount
+        armor += s["_armor"]
+    derived = "base + gear; buffs and talents not counted"
+    unavailable = "not saved by the world yet"
+    if base is None:
+        # No base-stat row for this race, class and level: nothing here can
+        # be derived, and the block says so on every line rather than
+        # showing a gear-only number that reads as the whole.
+        keys = [("health", "Health"), ("power", power_label), ("stamina", "Stamina"),
+                ("strength", "Strength"), ("agility", "Agility"),
+                ("intellect", "Intellect"), ("spirit", "Spirit"), ("armor", "Armor"),
+                ("block", "Block"), ("dodge", "Dodge"), ("parry", "Parry"),
+                ("attack_power", "Attack Power"), ("melee_crit", "Melee Critical Strike"),
+                ("ranged_attack_power", "Ranged Attack Power"),
+                ("ranged_crit", "Ranged Critical Strike"), ("spell_power", "Spell Power"),
+                ("spell_crit", "Spell Critical Strike")]
+        return {"source": "unavailable",
+                "rows": [_stat(k, label, None, unavailable) for k, label in keys]}
+
+    stamina = base["stamina"] + gear.get(7, 0)
+    strength = base["strength"] + gear.get(4, 0)
+    agility = base["agility"] + gear.get(3, 0)
+    intellect = base["intellect"] + gear.get(5, 0)
+    spirit = base["spirit"] + gear.get(6, 0)
+    floor = min(stamina, STAT_BONUS_FLOOR)
+    health = base["health"] + floor + (stamina - floor) * 10 + gear.get(1, 0)
+    if power_label == "Mana":
+        floor = min(intellect, STAT_BONUS_FLOOR)
+        power = base["mana"] + floor + (intellect - floor) * 15 + gear.get(0, 0)
+    else:
+        power = 100
+    lv, st, ag, c = MELEE_AP.get(class_id, (0, 1, 0, -10))
+    attack_power = lv * level + st * strength + ag * agility + c + gear.get(38, 0)
+    lv, st, ag, c = RANGED_AP.get(class_id, (0, 0, 1, -10))
+    ranged_power = lv * level + st * strength + ag * agility + c + gear.get(39, 0)
+    spell_power = gear.get(45, 0) + gear.get(42, 0)
+    rows = [
+        _stat("health", "Health", health, derived),
+        _stat("power", power_label, power, derived),
+        _stat("stamina", "Stamina", stamina, derived),
+        _stat("strength", "Strength", strength, derived),
+        _stat("agility", "Agility", agility, derived),
+        _stat("intellect", "Intellect", intellect, derived),
+        _stat("spirit", "Spirit", spirit, derived),
+        _stat("armor", "Armor", armor + agility * 2, "gear + 2 per agility"),
+        _stat("block", "Block", None, unavailable),
+        _stat("dodge", "Dodge", None, unavailable),
+        _stat("parry", "Parry", None, unavailable),
+        _stat("attack_power", "Attack Power", attack_power, derived),
+        _stat("melee_crit", "Melee Critical Strike", None, unavailable),
+        _stat("ranged_attack_power", "Ranged Attack Power", ranged_power, derived),
+        _stat("ranged_crit", "Ranged Critical Strike", None, unavailable),
+        _stat("spell_power", "Spell Power", spell_power, "gear only"),
+        _stat("spell_crit", "Spell Critical Strike", None, unavailable),
+    ]
+    return {"source": "derived", "rows": rows}
+
+
 def _build_spec(class_id: int, level: int, talent_rows: list[dict],
                 book: TalentBook) -> dict:
-    """A pile of learned spell ids -> the build a person can read."""
-    trees = {tid: {"name": t["name"], "points": 0, "talents": []}
+    """A pile of learned spell ids -> the build a person can read.
+
+    Two views of each tree: `talents`, only what is learned (the list the
+    first cut of the tab drew), and `grid`, every talent the tree has at its
+    true row and column with the rank held - which is what the trainer's
+    own window draws and what the page now draws.
+    """
+    trees = {tid: {"name": t["name"], "icon": t["icon"],
+                   "points": 0, "talents": [], "ranks": {}}
              for tid, t in book.trees_for(class_id)}
     order = [tid for tid, _ in book.trees_for(class_id)]
     unplaced, spent = [], 0
@@ -188,6 +789,7 @@ def _build_spec(class_id: int, level: int, talent_rows: list[dict],
                              "max_rank": len(talent["ranks"])})
             continue
         trees[tid]["points"] += rank
+        trees[tid]["ranks"][talent["id"]] = rank
         trees[tid]["talents"].append({
             "name": talent["name"],
             "rank": rank,
@@ -195,10 +797,23 @@ def _build_spec(class_id: int, level: int, talent_rows: list[dict],
             "row": talent["row"],
             "col": talent["col"],
         })
-    for tree in trees.values():
+    for tid, tree in trees.items():
         # Tier then column: the order the talents sit in on the trainer's
         # own grid, so reading the list top to bottom reads down the tree.
         tree["talents"].sort(key=lambda t: (t["row"], t["col"]))
+        ranks = tree.pop("ranks")
+        tree["grid"] = [{
+            "id": t["id"],
+            "name": t["name"],
+            "icon": t["icon"],
+            "row": t["row"],
+            "col": t["col"],
+            "rank": ranks.get(t["id"], 0),
+            "max_rank": len(t["ranks"]),
+            "requires": t["requires"],
+        } for t in book.grid_for(tid)]
+        tree["rows"] = TALENT_ROWS
+        tree["cols"] = TALENT_COLS
     ordered = [trees[tid] for tid in order]
     available = talent_points_at(level, class_id)
     deepest = max(ordered, key=lambda t: t["points"], default=None)
@@ -215,7 +830,8 @@ def _build_spec(class_id: int, level: int, talent_rows: list[dict],
 
 
 def _member(name: str, char_row: dict | None, equipment_rows: list[dict],
-            talent_rows: list[dict], book: TalentBook) -> dict:
+            talent_rows: list[dict], stats_row: dict | None, base_row: dict | None,
+            set_names: dict[int, str], book: TalentBook, items: ItemBook) -> dict:
     bond = bonds.FAMILY[name]
     if char_row is None:
         # No `characters` row at all - the character was deleted or never
@@ -230,37 +846,66 @@ def _member(name: str, char_row: dict | None, equipment_rows: list[dict],
         }
     class_id, race = char_row["class"], char_row["race"]
     by_slot = {r["slot"]: r for r in equipment_rows}
-    slots = [_slot_payload(slot_name, by_slot.get(index))
+    worn_entries = {r["entry"] for r in equipment_rows}
+    slots = [_slot_payload(slot_name, by_slot.get(index), items, worn_entries, set_names)
              for index, slot_name in enumerate(EQUIPPED_SLOTS)]
+    stats = _build_stats(char_row, stats_row, base_row, slots)
+    for s in slots:
+        # The per-item stat sums were for the block above; they are not a
+        # thing the page draws and not part of the contract.
+        s.pop("_stats", None)
+        s.pop("_armor", None)
     # Dual spec: character_talent holds BOTH builds, told apart by specMask,
     # and the active one is the only one the character is actually playing.
     # Summing the two would report a level-25 warrior with 32 points spent.
     active = 1 << char_row["activeTalentGroup"]
     in_play = [r for r in talent_rows if r["specMask"] & active]
+    gender = "female" if char_row.get("gender") else "male"
     return {
         "name": char_row["name"],
         "role": bond.role,
         "present": True,
         "level": char_row["level"],
         "class": _CLASS_NAMES.get(class_id, f"class {class_id}"),
+        "class_colour": CLASS_COLOURS.get(class_id, "#ffffff"),
         "race": _RACE_NAMES.get(race, f"race {race}"),
+        "gender": gender,
         "faction": "alliance" if race in _ALLIANCE_RACES
                    else "horde" if race in _HORDE_RACES else "neutral",
         "online": bool(char_row["online"]),
+        # Guild and honourable kills are shown only when there is something
+        # to show. A character in no guild has no guild line, not "<none>".
+        "guild": char_row.get("guild") or None,
+        "honorable_kills": char_row.get("totalKills") or 0,
+        "portrait": {
+            "race_icon": (f"achievement_character_{RACE_ICON_NAMES[race]}_{gender}"
+                          if race in RACE_ICON_NAMES else None),
+            "class_icon": (f"classicon_{CLASS_ICON_NAMES[class_id]}"
+                           if class_id in CLASS_ICON_NAMES else None),
+        },
         "slots": slots,
         "gear": _build_gear(slots),
+        "stats": stats,
         "spec": _build_spec(class_id, char_row["level"], in_play, book),
     }
 
 
 def build_armory(char_rows: list[dict], equipment_rows: list[dict],
-                 talent_rows: list[dict], book: TalentBook) -> dict:
-    """Every member's gear and build, side by side and in roster order.
+                 talent_rows: list[dict], book: TalentBook, items: ItemBook,
+                 stats_rows: list[dict] | None = None,
+                 base_rows: list[dict] | None = None,
+                 set_rows: list[dict] | None = None) -> dict:
+    """Every member's profile, in roster order.
 
-    All three row lists arrive keyed by character name, unfiltered; splitting
-    them per member is this module's job so the adapter stays three queries
-    and no logic. A member with no rows still gets a column - a family view
-    that quietly drops somebody is the exact failure this tab exists to stop.
+    The row lists arrive keyed by character name, unfiltered; splitting them
+    per member is this module's job so the adapter stays a handful of
+    queries and no logic. A member with no rows still gets a profile - a
+    family view that quietly drops somebody is the exact failure this tab
+    exists to stop.
+
+    `stats_rows` are character_stats (may be absent for any member),
+    `base_rows` the class-and-race base stats keyed by (race, class, level),
+    and `set_rows` the names of every item in a set anybody is wearing.
     """
     chars = {r["name"]: r for r in char_rows}
     equipment: dict[str, list[dict]] = {}
@@ -269,17 +914,25 @@ def build_armory(char_rows: list[dict], equipment_rows: list[dict],
     talents: dict[str, list[dict]] = {}
     for row in talent_rows:
         talents.setdefault(row["name"], []).append(row)
-    members = [
-        _member(name, chars.get(name), equipment.get(name, []),
-                talents.get(name, []), book)
-        for name in family.roster()
-    ]
+    stats = {r["name"]: r for r in (stats_rows or [])}
+    base = {(r["race"], r["class"], r["level"]): r for r in (base_rows or [])}
+    set_names = {r["entry"]: r["item_name"] for r in (set_rows or [])}
+    members = []
+    for name in family.roster():
+        char_row = chars.get(name)
+        base_row = None
+        if char_row is not None:
+            base_row = base.get((char_row["race"], char_row["class"], char_row["level"]))
+        members.append(_member(name, char_row, equipment.get(name, []),
+                               talents.get(name, []), stats.get(name), base_row,
+                               set_names, book, items))
     return {
         "members": members,
-        # The row order for the grid, sent rather than retyped in the page:
-        # the columns are characters and the rows are slots, so both ends
-        # must agree on what the slots are and what order they come in.
+        # The slot order, sent rather than retyped in the page: the paper
+        # doll's left column, right column and weapon row are all drawn from
+        # this one list, so both ends must agree on what the slots are.
         "slots": [{"slot": name, "cosmetic": name in COSMETIC_SLOTS}
                   for name in EQUIPPED_SLOTS],
+        "doll": {"left": DOLL_LEFT, "right": DOLL_RIGHT},
         "expected": len(members),
     }

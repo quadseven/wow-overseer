@@ -40,6 +40,9 @@ GEO = Geometry.load(HERE)
 # Renew". Built by tools/gen_talents.py; see armory.py for why it is a
 # file rather than a mount or a database load.
 BOOK = armory.TalentBook.load(HERE)
+# And the item tables, for the same reason: icons, spell text, sets and the
+# random-suffix tables are client data, frozen by tools/gen_items.py.
+ITEMS = armory.ItemBook.load(HERE)
 PORT = int(os.environ.get("PORT", "8080"))
 
 # WoW's own name rule (same as the bridge); anything else never reaches SQL.
@@ -236,8 +239,23 @@ def _fetch_family() -> list[dict]:
         conn.close()
 
 
+# Everything a tooltip draws, straight off item_template. Listed once, here,
+# so the query and the builder's row contract are the same list.
+_ITEM_TEMPLATE_COLUMNS = (
+    "it.name AS item_name, it.Quality AS quality, it.ItemLevel AS item_level, "
+    "it.RequiredLevel AS required_level, it.MaxDurability AS max_durability, "
+    "it.displayid, it.class, it.subclass, it.InventoryType AS inventory_type, "
+    "it.armor, it.block, it.bonding, it.itemset, it.SellPrice AS sell_price, "
+    "it.AllowableClass AS allowable_class, it.description, "
+    "it.dmg_min1, it.dmg_max1, it.delay, "
+    "it.holy_res, it.fire_res, it.nature_res, it.frost_res, it.shadow_res, it.arcane_res, "
+    + ", ".join(f"it.stat_type{n}, it.stat_value{n}" for n in range(1, 11)) + ", "
+    + ", ".join(f"it.spellid_{n}, it.spelltrigger_{n}" for n in range(1, 6))
+)
+
+
 def _fetch_armory() -> dict:
-    """The family's saved gear and talents, in three queries.
+    """The family's saved gear, talents and stats, in a handful of queries.
 
     NOT read from overseer_snapshot, and deliberately NOT subject to its 60s
     freshness rule. Gear and talents are what the core has SAVED, so they
@@ -259,10 +277,16 @@ def _fetch_armory() -> dict:
             # from bonds. Every VALUE is still bound by the driver, and this
             # endpoint takes no parameters at all. Same reasoning, and the
             # same refusal to hard-code five, as _fetch_family.
+            # The guild is a LEFT JOIN because most of the family are in
+            # none, and a character in no guild is a character with no
+            # guild line, not a missing row.
             cur.execute(
-                "SELECT name, level, race, class, online, activeTalentGroup "  # noqa: S608
-                "FROM characters "
-                f"WHERE name IN ({holes})",
+                "SELECT c.name, c.level, c.race, c.class, c.gender, c.online, "  # noqa: S608
+                "c.activeTalentGroup, c.totalKills, g.name AS guild "
+                "FROM characters c "
+                "LEFT JOIN guild_member gm ON gm.guid = c.guid "
+                "LEFT JOIN guild g ON g.guildid = gm.guildid "
+                f"WHERE c.name IN ({holes})",
                 tuple(names),
             )
             char_rows = list(cur.fetchall())
@@ -273,11 +297,15 @@ def _fetch_armory() -> dict:
             # slot. bag = 0 and the slot bound are the equipped paper doll;
             # the bound comes from armory so the query and the grid cannot
             # disagree about how many slots there are.
+            # enchantments and randomPropertyId are the item INSTANCE's:
+            # they are what makes this belt a "Belt of the Tiger" and not
+            # the template's plain belt, and they are where half the family's
+            # stats actually live.
             cur.execute(
                 "SELECT c.name, ci.slot, ii.itemEntry AS entry, "  # noqa: S608
-                "ii.durability, it.name AS item_name, it.Quality AS quality, "
-                "it.ItemLevel AS item_level, it.RequiredLevel AS required_level, "
-                "it.MaxDurability AS max_durability "
+                "ii.durability, ii.enchantments, "
+                "ii.randomPropertyId AS random_property_id, "
+                f"{_ITEM_TEMPLATE_COLUMNS} "
                 "FROM characters c "
                 "JOIN character_inventory ci ON ci.guid = c.guid "
                 "AND ci.bag = 0 AND ci.slot < %s "
@@ -287,6 +315,20 @@ def _fetch_armory() -> dict:
                 (len(armory.EQUIPPED_SLOTS), *names),
             )
             equipment_rows = list(cur.fetchall())
+            # The set a piece belongs to lists its other pieces by entry, and
+            # the tooltip names them: one more query, bounded by the sets
+            # anybody is actually wearing (usually none).
+            sets = sorted({r["itemset"] for r in equipment_rows if r["itemset"]})
+            set_rows: list[dict] = []
+            if sets:
+                set_holes = ", ".join(["%s"] * len(sets))
+                cur.execute(
+                    "SELECT entry, name AS item_name "  # noqa: S608
+                    "FROM acore_world.item_template "
+                    f"WHERE itemset IN ({set_holes})",
+                    tuple(sets),
+                )
+                set_rows = list(cur.fetchall())
             cur.execute(
                 "SELECT c.name, t.spell, t.specMask "  # noqa: S608
                 "FROM characters c JOIN character_talent t ON t.guid = c.guid "
@@ -294,10 +336,43 @@ def _fetch_armory() -> dict:
                 tuple(names),
             )
             talent_rows = list(cur.fetchall())
+            # character_stats is the core's own derived numbers - written on
+            # save when PlayerSave.Stats.MinLevel allows, so a member may
+            # have no row yet. The builder falls back to base + gear for
+            # what it can and says "unavailable" for the rest.
+            cur.execute(
+                "SELECT c.name, s.maxhealth, s.maxpower1, s.maxpower2, "  # noqa: S608
+                "s.maxpower4, s.maxpower7, s.strength, s.agility, s.stamina, "
+                "s.intellect, s.spirit, s.armor, s.blockPct, s.dodgePct, "
+                "s.parryPct, s.critPct, s.rangedCritPct, s.spellCritPct, "
+                "s.attackPower, s.rangedAttackPower, s.spellPower "
+                "FROM characters c JOIN character_stats s ON s.guid = c.guid "
+                f"WHERE c.name IN ({holes})",
+                tuple(names),
+            )
+            stats_rows = list(cur.fetchall())
+            # The base stats a race and class have at a level, for the
+            # fallback. Two world tables, joined on nothing: the race row is
+            # a flat modifier added to every level of the class row.
+            cur.execute(
+                "SELECT r.Race AS race, cs.Class AS class, cs.Level AS level, "  # noqa: S608
+                "cs.BaseHP AS health, cs.BaseMana AS mana, "
+                "cs.Strength + r.Strength AS strength, cs.Agility + r.Agility AS agility, "
+                "cs.Stamina + r.Stamina AS stamina, cs.Intellect + r.Intellect AS intellect, "
+                "cs.Spirit + r.Spirit AS spirit "
+                "FROM acore_world.player_class_stats cs "
+                "JOIN acore_world.player_race_stats r "
+                "JOIN characters c ON c.class = cs.Class AND c.level = cs.Level "
+                "AND c.race = r.Race "
+                f"WHERE c.name IN ({holes})",
+                tuple(names),
+            )
+            base_rows = list(cur.fetchall())
     finally:
         conn.close()
     return {"char_rows": char_rows, "equipment_rows": equipment_rows,
-            "talent_rows": talent_rows}
+            "talent_rows": talent_rows, "stats_rows": stats_rows,
+            "base_rows": base_rows, "set_rows": set_rows}
 
 
 # The quest log query, written out rather than generated. Forty column
@@ -752,7 +827,7 @@ class Handler(BaseHTTPRequestHandler):
         into a general character query wearing a friendly name.
         """
         try:
-            payload = armory.build_armory(**_fetch_armory(), book=BOOK)
+            payload = armory.build_armory(**_fetch_armory(), book=BOOK, items=ITEMS)
             self._send(200, "application/json", json.dumps(payload).encode())
         except Exception:
             # Same contract as every other poll: the tab keeps the grid it has

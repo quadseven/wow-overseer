@@ -19,6 +19,7 @@ import armory
 import family
 
 BOOK = armory.TalentBook.load(".")
+ITEMS = armory.ItemBook.load(".")
 
 # Taken from bonds rather than retyped: WHO the family is belongs there, and
 # a second list here is a second answer that can disagree with it.
@@ -58,10 +59,10 @@ def talent(spell, **kw):
     return row
 
 
-def build(char_rows=None, equipment_rows=None, talent_rows=None):
+def build(char_rows=None, equipment_rows=None, talent_rows=None, **rest):
     return armory.build_armory(
         [char()] if char_rows is None else char_rows,
-        equipment_rows or [], talent_rows or [], BOOK)
+        equipment_rows or [], talent_rows or [], BOOK, ITEMS, **rest)
 
 
 def col(payload, name):

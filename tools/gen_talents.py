@@ -14,9 +14,13 @@ those two: 3.3.5a client data never changes, so the output is committed
 rather than built per-run, and no runtime process needs a DBC mount.
 
 Inputs (3.3.5a client data, as extracted into the worldserver's data/dbc):
-  Talent.dbc      talent id -> tab, tier, column, and the spell id per rank
-  TalentTab.dbc   tab id -> tree name, class mask, order within the class
-  Spell.dbc       spell id -> name (the talent's name is its rank-1 spell's)
+  Talent.dbc      talent id -> tab, tier, column, the spell id per rank, and
+                  the talent (and rank of it) this one requires
+  TalentTab.dbc   tab id -> tree name, class mask, order within the class,
+                  and the tree's icon
+  Spell.dbc       spell id -> name and icon (both are the rank-1 spell's)
+  SpellIcon.dbc   icon id -> icon file, whose bare name is what the page
+                  asks the icon host for
 
 Output (into the service dir root - the image build's shared-dir copy takes
 top-level files only, so this stays flat beside the code):
@@ -35,19 +39,26 @@ import json
 import struct
 import sys
 
-# Spell.dbc (3.3.5a) is 234 fields wide; the enUS name is field 136. Verified
-# against the file rather than counted off a struct definition - field 133 is
-# a description and 153 the "Rank N" subtext, so an off-by-two here would
-# silently produce plausible-looking nonsense instead of an error.
+# Spell.dbc (3.3.5a) is 234 fields wide; the enUS name is field 136 and the
+# icon id field 133. Verified against the file rather than counted off a
+# struct definition - field 153 is the "Rank N" subtext and 170 the
+# description, so an off-by-two here would silently produce plausible-looking
+# nonsense instead of an error.
 SPELL_NAME_FIELD = 136
+SPELL_ICON_FIELD = 133
 
-# Talent.dbc: ID, TabID, TierID, ColumnIndex, SpellRank[9], then prereqs and
-# flags this view has no use for.
+# Talent.dbc: ID, TabID, TierID, ColumnIndex, SpellRank[9], PrereqTalent[3],
+# PrereqRank[3], then flags this view has no use for. Only the first
+# prerequisite slot is ever used in 3.3.5a, but all three are read so a
+# talent with two arrows would draw two rather than silently one.
 TALENT_RANK_FIELDS = slice(4, 13)
+TALENT_PREREQ_FIELDS = slice(13, 16)
+TALENT_PREREQ_RANK_FIELDS = slice(16, 19)
 
 # TalentTab.dbc: ID, Name_Lang[16] + mask, SpellIconID, RaceMask, ClassMask,
 # PetTalentMask, OrderIndex, BackgroundFile.
 TAB_NAME_FIELD = 1
+TAB_ICON_FIELD = 18
 TAB_CLASS_MASK_FIELD = 20
 TAB_ORDER_FIELD = 22
 
@@ -67,6 +78,11 @@ def cstr(strings: bytes, offset: int) -> str:
     return strings[offset:end].decode("utf-8", "replace")
 
 
+def icon_name(path: str) -> str:
+    r"""'Interface\Icons\Spell_Nature_Lightning' -> 'spell_nature_lightning'."""
+    return path.replace("\\", "/").rsplit("/", 1)[-1].lower()
+
+
 def class_from_mask(mask: int) -> int:
     """ClassMask bit -> class id, or 0 when it is not a single player class.
 
@@ -79,7 +95,8 @@ def class_from_mask(mask: int) -> int:
     return mask.bit_length()
 
 
-def main(dbc_dir: str, out_dir: str) -> None:
+def load_trees(dbc_dir: str, icons: dict[int, str]) -> dict[str, dict]:
+    """TalentTab.dbc -> the player trees, keyed by tab id."""
     tab_rows, tab_strings = read_dbc(f"{dbc_dir}/TalentTab.dbc")
     trees: dict[str, dict] = {}
     for r in tab_rows:
@@ -90,46 +107,87 @@ def main(dbc_dir: str, out_dir: str) -> None:
             "name": cstr(tab_strings, r[TAB_NAME_FIELD]),
             "class": class_id,
             "order": r[TAB_ORDER_FIELD],
+            "icon": icons.get(r[TAB_ICON_FIELD], ""),
         }
+    return trees
 
-    # Spell names, but only for the rank spells a talent actually names. The
-    # full table is 49k spells and 48MB of DBC; the ~2k that talents point at
-    # are the entire reason this file exists.
-    talent_rows, _ = read_dbc(f"{dbc_dir}/Talent.dbc")
-    wanted: set[int] = set()
-    for r in talent_rows:
-        wanted.update(s for s in r[TALENT_RANK_FIELDS] if s)
 
+def load_spells(dbc_dir: str, wanted: set[int], icons: dict[int, str]
+                ) -> tuple[dict[int, str], dict[int, str]]:
+    """Spell.dbc -> (name, icon) per wanted spell.
+
+    Only for the rank spells a talent actually names. The full table is 49k
+    spells and 48MB of DBC; the ~2k that talents point at are the entire
+    reason this file exists.
+    """
     spell_rows, spell_strings = read_dbc(f"{dbc_dir}/Spell.dbc")
     names = {
         r[0]: cstr(spell_strings, r[SPELL_NAME_FIELD])
         for r in spell_rows
         if r[0] in wanted and r[SPELL_NAME_FIELD]
     }
+    spell_icons = {
+        r[0]: icons.get(r[SPELL_ICON_FIELD], "")
+        for r in spell_rows
+        if r[0] in wanted
+    }
+    return names, spell_icons
+
+
+def talent_entry(r: tuple, ranks: list[int], names: dict[int, str],
+                 spell_icons: dict[int, str]) -> dict:
+    """One Talent.dbc row -> the talent as the page reads it."""
+    # A talent is named after its first rank; every later rank is the same
+    # name with a different "Rank N" subtext, so rank 1 is the only one
+    # worth carrying. A talent whose rank-1 spell has no name would render
+    # as a blank cell: say which spell instead, so the gap is diagnosable.
+    name = names.get(ranks[0]) or f"Spell #{ranks[0]}"
+    # PrereqRank is stored ZERO-based (Combustion needs 3/3 Critical Mass
+    # and the file says 2). Carried as the rank a person would say, so the
+    # page never has to know the file's counting.
+    requires = [
+        [talent, rank + 1]
+        for talent, rank in zip(r[TALENT_PREREQ_FIELDS], r[TALENT_PREREQ_RANK_FIELDS],
+                                strict=True)
+        if talent
+    ]
+    return {
+        "id": r[0],
+        "name": name,
+        "tree": r[1],
+        "row": r[2],
+        "col": r[3],
+        "ranks": ranks,
+        "icon": spell_icons.get(ranks[0], ""),
+        # The arrow on the trainer's grid: [talent id, rank of it needed].
+        "requires": requires,
+    }
+
+
+def main(dbc_dir: str, out_dir: str) -> None:
+    icon_rows, icon_strings = read_dbc(f"{dbc_dir}/SpellIcon.dbc")
+    icons = {r[0]: icon_name(cstr(icon_strings, r[1])) for r in icon_rows if r[1]}
+    trees = load_trees(dbc_dir, icons)
+
+    talent_rows, _ = read_dbc(f"{dbc_dir}/Talent.dbc")
+    wanted: set[int] = set()
+    for r in talent_rows:
+        wanted.update(s for s in r[TALENT_RANK_FIELDS] if s)
+    names, spell_icons = load_spells(dbc_dir, wanted, icons)
 
     talents = []
     for r in talent_rows:
-        tab = str(r[1])
-        if tab not in trees:
-            continue
         ranks = [s for s in r[TALENT_RANK_FIELDS] if s]
-        if not ranks:
-            continue
-        # A talent is named after its first rank; every later rank is the
-        # same name with a different "Rank N" subtext, so rank 1 is the only
-        # one worth carrying.
-        name = names.get(ranks[0])
-        if not name:
-            # A talent whose rank-1 spell has no name would render as a blank
-            # cell. Say which spell instead, so the gap is diagnosable.
-            name = f"Spell #{ranks[0]}"
-        talents.append({
-            "name": name,
-            "tree": r[1],
-            "row": r[2],
-            "col": r[3],
-            "ranks": ranks,
-        })
+        if str(r[1]) in trees and ranks:
+            talents.append(talent_entry(r, ranks, names, spell_icons))
+
+    # Two talents in the shipped file (Sanctified Retribution, Merciless
+    # Combat) still point at a prerequisite that was removed from the tree
+    # before 3.3.5a. An arrow to nowhere is dropped here, once, rather than
+    # handled by every reader.
+    known = {t["id"] for t in talents}
+    for t in talents:
+        t["requires"] = [req for req in t["requires"] if req[0] in known]
 
     talents.sort(key=lambda t: (t["tree"], t["row"], t["col"]))
     with open(f"{out_dir}/talents.json", "w") as f:
@@ -142,6 +200,7 @@ def main(dbc_dir: str, out_dir: str) -> None:
         # one file nothing had checked.
         json.dump({"trees": trees, "talents": talents}, f,
                   separators=(",", ":"), sort_keys=True)
+        f.write("\n")
     print(f"trees: {len(trees)}  talents: {len(talents)}  rank spells: {len(wanted)}")
 
 

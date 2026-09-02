@@ -101,17 +101,18 @@
   #psay { background:var(--panel); color:var(--text); border:1px solid var(--line);
           border-radius:6px; cursor:pointer; font:inherit; padding:.3rem .6rem; }
   #psay:disabled, #pinput:disabled { opacity:.5; cursor:default; }
-  /* --- the Armory tab (infra#3096) ---------------------------------------
-     Gear and build for all five at once. The columns are CHARACTERS and the
-     rows are SLOTS, and that arrangement is the whole feature: a slot that is
-     empty in one column and filled in the other four is the thing you are
-     looking for, and it is invisible until they are beside each other. Five
-     separate pages would each look perfectly reasonable on their own.
+  /* --- the Armory tab (infra#3096, infra#3139) ---------------------------
+     One profile per member, drawn the way an armory site draws a character
+     and the way the character sheet in the game draws it: a header, then
+     the paper doll (item icons down both sides of the character, each in
+     its quality colour), a stat block, and the three talent trees as the
+     trainer's own grid. The first cut of this tab was five columns of item
+     NAMES - correct, and a spreadsheet - and the operator said so.
 
-     Same responsive posture as the Family cards - one column on a phone,
-     auto-fit on a desktop - with one extra step: the moment there is room for
-     five it is exactly five, because auto-fit would otherwise settle into
-     three-and-a-gap and quietly stop being a side-by-side view. */
+     Everything a person reads here is a save, not a live read (see #asaved).
+     The layout is one profile wide on a phone and two on a wide desktop; a
+     profile is never narrower than the doll needs, so nothing here ever
+     asks the page to scroll sideways. */
   #armory { display:none; margin:0 1rem 1rem; }
   #aheadline { margin-bottom:.2rem; overflow-wrap:anywhere; }
   #aheadline.alarm { color:#ff9d9d; }
@@ -120,41 +121,142 @@
      sword equipped a minute ago is genuinely not here yet - and a page that
      let someone conclude "the tab is broken" would be worse than no page. */
   #asaved { color:var(--dim); margin-bottom:.6rem; font-size:.9rem; }
-  #acols { display:grid; gap:.6rem; grid-template-columns:1fr; }
-  @media (min-width:820px) {
-    #acols { grid-template-columns:repeat(auto-fit,minmax(280px,1fr)); }
-  }
-  @media (min-width:1480px) { #acols { grid-template-columns:repeat(5,1fr); } }
-  .acol { background:var(--panel); border:1px solid var(--line);
-          border-left:5px solid var(--line); border-radius:8px;
-          padding:.6rem .7rem; min-width:0; }
-  .acol.c-ok { border-left-color:var(--mortal); }
-  .acol.c-gone { border-left-color:var(--line); opacity:.6; }
-  .aname { font-weight:bold; }
-  .ameta { color:var(--dim); overflow-wrap:anywhere; }
-  .asum { margin:.4rem 0; overflow-wrap:anywhere; }
-  .asect { color:var(--dim); border-top:1px solid var(--line);
-           margin-top:.5rem; padding-top:.4rem; font-size:.9rem; }
-  .aslot { display:flex; gap:.4rem; align-items:baseline; }
-  .aslot .k { color:var(--dim); flex:0 0 5.4rem; font-size:.85rem; }
-  .aslot .v { flex:1; min-width:0; overflow-wrap:anywhere; }
-  .ailvl { color:var(--dim); font-size:.85rem; }
+  /* Five names to jump between, sticky, because five full profiles are a
+     long scroll on a phone and "where is Ugga" should be one tap. */
+  #ajump { position:sticky; top:0; z-index:5; display:flex; gap:.4rem;
+           flex-wrap:wrap; padding:.4rem 0; background:var(--bg); }
+  #ajump a { color:var(--text); text-decoration:none; border:1px solid var(--line);
+             border-radius:6px; padding:.2rem .6rem; font-size:.9rem; }
+  #ajump a:hover { border-color:var(--alliance); }
+  #aprofiles { display:grid; gap:1rem; grid-template-columns:minmax(0,1fr); }
+  @media (min-width:1400px) { #aprofiles { grid-template-columns:repeat(2,minmax(0,1fr)); } }
+  .aprof { background:var(--panel); border:1px solid var(--line); border-radius:10px;
+           padding:.8rem 1rem 1rem; min-width:0; scroll-margin-top:3rem; }
+  .aprof.c-gone { opacity:.6; }
+  /* header: faction, the name in its class colour, then the line every
+     armory writes ("26 Human Warrior <Guild> realm"). */
+  .ahead { text-align:center; padding-bottom:.6rem; margin-bottom:.8rem;
+           background:linear-gradient(to right, transparent, var(--line) 30%, var(--line) 70%, transparent) bottom / 100% 1px no-repeat; }
+  .aname { display:flex; align-items:center; justify-content:center; gap:.6rem; }
+  .aname .n { font-size:2rem; line-height:1.1; font-family:Georgia,'Times New Roman',serif; }
+  .afaction { width:28px; height:28px; border-radius:4px; flex:0 0 28px; }
+  .afaction img { width:28px; height:28px; border-radius:4px; display:block; }
+  .arole { color:var(--dim); font-size:.9rem; }
+  .aline { margin-top:.5rem; overflow-wrap:anywhere; }
+  .aline .g { color:#1eff00; }
+  .aline .on { color:var(--mortal); }
+  .aline .off { color:var(--dim); }
+  .anums { margin-top:.2rem; color:#ffd100; display:flex; gap:1.2rem;
+           justify-content:center; flex-wrap:wrap; }
+  .anums .empty { color:#d29922; }
+  .anums .broken { color:var(--horde); }
+  /* the paper doll: a column of slots each side of the portrait, then the
+     stat block beside it when there is room. */
+  .abody { display:grid; gap:1rem; grid-template-columns:minmax(0,1fr); }
+  @media (min-width:760px) { .abody { grid-template-columns:auto minmax(0,1fr); } }
+  .adoll { display:grid; grid-template-columns:56px minmax(140px,1fr) 56px;
+           gap:.5rem; justify-content:center; align-items:start; }
+  .acolumn { display:flex; flex-direction:column; gap:.45rem; }
+  .aslot { position:relative; width:56px; height:56px; border-radius:7px;
+           border:2px solid var(--line); background:#000; overflow:hidden;
+           cursor:pointer; display:flex; align-items:center; justify-content:center;
+           text-align:center; font-size:.7rem; line-height:1.15; color:var(--dim);
+           padding:.15rem; overflow-wrap:anywhere; }
+  .aslot img { width:100%; height:100%; display:block; object-fit:cover; }
+  .aslot.q0 { border-color:#9d9d9d; } .aslot.q1 { border-color:#ffffff; }
+  .aslot.q2 { border-color:#1eff00; } .aslot.q3 { border-color:#3f9bf5; }
+  .aslot.q4 { border-color:#a335ee; } .aslot.q5 { border-color:#ff8000; }
+  .aslot.q6 { border-color:#e6cc80; } .aslot.q7 { border-color:#00ccff; }
+  .aslot.broken::after { content:""; position:absolute; inset:0;
+           background:linear-gradient(135deg, transparent 45%, var(--horde) 47%, var(--horde) 53%, transparent 55%); }
   /* An empty slot is the headline finding, so it is amber and it says the
-     word - the same amber the Family card already uses for "hurt", because it
-     means the same kind of thing. Shirt and tabard are only ever cosmetic, so
-     an empty one is merely dim: an alarm that fires on every character
-     forever is an alarm nobody reads. */
-  .aslot.empty .v { color:#d29922; }
-  .aslot.empty.cosmetic .v { color:var(--dim); }
-  .aslot.broken .v { color:var(--horde); }
-  .aspec { font-weight:bold; }
+     word - the same amber the Family card already uses for "hurt", because
+     it means the same kind of thing. Shirt and tabard are only ever
+     cosmetic, so an empty one is merely dim: an alarm that fires on every
+     character forever is an alarm nobody reads. */
+  .aslot.empty { border-style:dashed; color:#d29922; }
+  .aslot.empty.cosmetic { color:var(--dim); border-color:var(--line); }
+  .aslot.empty:not(.cosmetic) { border-color:#d29922; }
+  .aslot.on { outline:2px solid var(--text); }
+  .aportrait { position:relative; display:flex; flex-direction:column; align-items:center;
+               justify-content:center; min-height:300px; border-radius:10px;
+               background:radial-gradient(ellipse at 50% 40%, color-mix(in srgb, var(--cc, #445) 45%, transparent) 0%, transparent 65%);
+               overflow:hidden; }
+  .aportrait .race { width:min(160px, 100%); aspect-ratio:1; border-radius:12px;
+                     border:2px solid var(--cc, var(--line)); object-fit:cover;
+                     box-shadow:0 0 30px var(--cc, #0000); }
+  .aportrait .sil { width:min(160px, 100%); aspect-ratio:1; }
+  .aportrait .cls { width:44px; height:44px; border-radius:8px; margin-top:-22px;
+                    border:2px solid var(--cc, var(--line)); background:#000;
+                    box-shadow:0 0 12px #000; }
+  .aportrait .lvl { margin-top:.4rem; color:var(--dim); font-size:.85rem; text-align:center; }
+  /* the stat block: yellow labels, values right, one hairline between rows,
+     as the reference draws it. A stat the world has not saved says so in
+     the row rather than showing a number that would read as real. */
+  .astats { align-self:start; min-width:0; }
+  .astat { display:flex; justify-content:space-between; gap:.6rem; padding:.2rem .4rem;
+           background:linear-gradient(to right, #ffffff10, transparent) bottom / 100% 1px no-repeat; }
+  .astat .k { color:#ffd100; }
+  .astat .v { text-align:right; }
+  .astat .v.na { color:var(--dim); font-size:.85rem; }
+  .asource { color:var(--dim); font-size:.85rem; margin-top:.4rem; }
+  /* the talent trees: the trainer's grid, four wide and eleven tall, with a
+     tinted backdrop in the class colour where the game has its art. */
+  .atrees { display:grid; gap:.8rem; margin-top:1rem;
+            grid-template-columns:repeat(auto-fit, minmax(214px, 1fr)); }
+  .atree { min-width:0; }
+  .atree .th { display:flex; align-items:center; gap:.5rem; padding:.3rem .4rem;
+               background:#ffffff08; border-radius:6px 6px 0 0; }
+  .atree .th img { width:32px; height:32px; border-radius:5px; border:1px solid var(--line); }
+  .atree .th .n { flex:1; font-size:1.05rem; }
+  .atree .th .p { color:#ffd100; font-size:1.05rem; }
+  .atree .th .p.zero { color:var(--dim); }
+  .agrid { position:relative; display:grid; gap:6px; padding:8px; justify-content:center;
+           grid-template-columns:repeat(4, 44px); grid-auto-rows:44px;
+           background:radial-gradient(ellipse at 50% 30%, color-mix(in srgb, var(--cc, #334) 40%, #0b0d14) 0%, #0b0d14 70%);
+           border-radius:0 0 6px 6px; }
+  .agrid svg { position:absolute; inset:0; width:100%; height:100%; pointer-events:none; }
+  .atal { position:relative; width:44px; height:44px; border-radius:6px;
+          border:2px solid #7a7a7a; background:#000; cursor:default; }
+  .atal img { width:100%; height:100%; border-radius:4px; display:block;
+              filter:grayscale(1) brightness(.55); }
+  .atal.part { border-color:#1eff00; }
+  .atal.part img, .atal.full img { filter:none; }
+  .atal.full { border-color:#ffd100; }
+  .atal .r { position:absolute; right:-6px; bottom:-8px; font-size:.7rem; line-height:1;
+             padding:.15rem .25rem; border-radius:4px; background:#000; border:1px solid #ffd100;
+             color:#ffd100; }
+  .atal.part .r { border-color:#1eff00; color:#1eff00; }
+  .aunplaced { margin-top:.5rem; color:#d29922; font-size:.9rem; }
   .aunspent { color:#d29922; }
-  .atree { margin-top:.3rem; }
-  .atree .t { color:var(--dim); font-size:.85rem; }
-  .atal { display:flex; gap:.4rem; align-items:baseline; }
-  .atal .r { color:var(--dim); flex:0 0 2.2rem; font-size:.85rem;
-             text-align:right; }
-  .atal .n { flex:1; min-width:0; overflow-wrap:anywhere; }
+  /* the tooltip: the game's own dark-blue card. Positioned by hand from
+     the slot it belongs to on a desktop; on a phone it is a sheet in the
+     middle of the screen, because there is no "beside" to put it. */
+  #atip { display:none; position:fixed; z-index:20; width:min(360px, 94vw);
+          max-height:88vh; overflow-y:auto; background:#06102bf2; color:var(--text);
+          border:1px solid #6a7ba8; border-radius:8px; padding:.5rem .7rem;
+          font-size:.9rem; line-height:1.35; box-shadow:0 8px 30px #000c; }
+  #atip .t { display:flex; justify-content:space-between; gap:.6rem; }
+  #atip .nm { font-size:1.05rem; }
+  #atip .il { color:#ffd100; }
+  #atip .eq { color:#1eff00; }
+  #atip .st { color:var(--dim); }
+  #atip .setn { color:#ffd100; margin-top:.4rem; }
+  #atip .piece { padding-left:.8rem; color:var(--dim); }
+  #atip .piece.worn { color:#ffd100; }
+  #atip .bonus { color:var(--dim); }
+  #atip .bonus.on { color:#1eff00; }
+  #atip .fl { color:#ffd100; font-style:italic; margin-top:.3rem; }
+  #atip .cl span { color:#3f9bf5; }
+  #atip .money { margin-top:.3rem; }
+  #atip .coin { display:inline-block; width:.7em; height:.7em; border-radius:50%;
+                vertical-align:middle; margin:0 .5em 0 .2em; }
+  #atip .coin.g { background:#e6c200; } #atip .coin.s { background:#c0c0c0; }
+  #atip .coin.c { background:#b87333; }
+  #atip .cls { color:var(--dim); }
+  #atip .blk { white-space:pre-wrap; }
+  #atip .close { display:none; text-align:right; color:var(--dim); cursor:pointer; }
+  @media (max-width:600px) { #atip .close { display:block; } }
   /* ITEM QUALITY, in the game's own colours, because the operator already
      reads them without thinking. One deliberate departure: rare is lifted
      from the client's #0070dd, which the game draws on a near-black tooltip
@@ -418,7 +520,9 @@
 <section id="armory">
   <div id="aheadline">reaching the world...</div>
   <div id="asaved"></div>
-  <div id="acols"></div>
+  <nav id="ajump"></nav>
+  <div id="aprofiles"></div>
+  <div id="atip"></div>
 </section>
 <div id="wrap"><canvas id="map"></canvas><div id="tip"></div></div>
 <aside id="panel">
@@ -2286,81 +2390,382 @@ setInterval(refreshWatch, 5000);
 setInterval(render, 200);  // combat pulse
 window.addEventListener("resize", render);
 
-// --- the Armory tab (infra#3096) -----------------------------------------
+// --- the Armory tab (infra#3096, infra#3139) -----------------------------
 // Deliberately at the FOOT of the script, AFTER loadZones().then(...). The
 // Family tab's tests slice this page from its own banner down to that call,
 // so anything dropped between the two gets swept into a slice it has nothing
 // to do with and starts failing assertions about a different tab.
 
 const asection = document.getElementById("armory");
-const acols = document.getElementById("acols");
+const aprofiles = document.getElementById("aprofiles");
+const ajump = document.getElementById("ajump");
 const aheadline = document.getElementById("aheadline");
+const atip = document.getElementById("atip");
 // Set here rather than in the markup so the sentence lives with the code that
 // makes it true. Every number on this tab is a SAVE, not a live read.
 document.getElementById("asaved").textContent =
-  "gear and talents as the world last saved them - the core writes these on "
-  + "its own timer, so something equipped in the last few minutes may not be "
-  + "here yet.";
+  "gear, stats and talents as the world last saved them - the core writes "
+  + "these on its own timer, so something equipped in the last few minutes "
+  + "may not be here yet.";
 
-// Columns and their slot rows are built ONCE and updated in place, the same
-// rule the Family cards follow. Five columns of nineteen rows rebuilt every
-// poll would throw away the scroll position mid-read on a phone, which is
-// the one device this is most likely to be checked from.
-const arm = { cols: new Map() };
+// THE ONE PLACE THIS PAGE LEAVES THE TAILNET. The item, class and race icons
+// are the game's own art, and the game's art is in the client's MPQ archives,
+// not in any table this server has: the frozen books carry the icon NAMES
+// and this host serves the pictures for them. It is the same host every
+// armory site uses. If it is unreachable the fallback is drawn instead - the
+// slot's name in the quality colour, a silhouette for the portrait - so the
+// page degrades to legible, never to blank. (The map font stays local for
+// the opposite reason: a font has no fallback that reads the same.)
+const ICON_HOST = "https://wow.zamimg.com/images/wow/icons/large/";
 
-function armoryColumn(name) {
-  let c = arm.cols.get(name);
+function iconImg(name, alt, onFail) {
+  const img = document.createElement("img");
+  img.alt = alt || "";
+  img.loading = "lazy";
+  img.decoding = "async";
+  img.referrerPolicy = "no-referrer";
+  img.onerror = () => { img.remove(); if (onFail) onFail(); };
+  img.src = ICON_HOST + name + ".jpg";
+  return img;
+}
+
+// A generic figure, for the portrait when the icon host is down. Inline SVG
+// built by DOM calls so it goes through no markup path.
+function silhouette(colour) {
+  const ns = "http://www.w3.org/2000/svg";
+  const svg = document.createElementNS(ns, "svg");
+  svg.setAttribute("viewBox", "0 0 100 100");
+  svg.setAttribute("class", "sil");
+  const head = document.createElementNS(ns, "circle");
+  head.setAttribute("cx", "50"); head.setAttribute("cy", "30"); head.setAttribute("r", "16");
+  head.setAttribute("fill", colour);
+  const body = document.createElementNS(ns, "path");
+  body.setAttribute("d", "M20 95 C20 60 35 50 50 50 C65 50 80 60 80 95 Z");
+  body.setAttribute("fill", colour);
+  svg.append(head, body);
+  return svg;
+}
+
+// Profiles, slot cells, stat rows and talent cells are built ONCE and
+// updated in place, the same rule the Family cards follow. Five profiles
+// rebuilt every poll would throw away the scroll position mid-read on a
+// phone, which is the one device this is most likely to be checked from.
+const arm = { profiles: new Map(), pinned: null };
+
+function armoryProfile(name) {
+  let c = arm.profiles.get(name);
   if (c) return c;
-  const col = el("article", "acol");
-  const nm = el("div", "aname", name);
-  const meta = el("div", "ameta");
-  const sum = el("div", "asum");
-  const slots = el("div", "aslots");
+  const prof = el("article", "aprof");
+  prof.id = "aprof-" + name;
+  const head = el("div", "ahead");
+  const nameRow = el("div", "aname");
+  const faction = el("span", "afaction");
+  const nm = el("span", "n", name);
+  nameRow.append(faction, nm);
+  const role = el("div", "arole");
+  const line = el("div", "aline");
+  const nums = el("div", "anums");
+  head.append(nameRow, role, line, nums);
+  const body = el("div", "abody");
+  const doll = el("div", "adoll");
+  const left = el("div", "acolumn");
+  const portrait = el("div", "aportrait");
+  const right = el("div", "acolumn");
+  doll.append(left, portrait, right);
+  const stats = el("div", "astats");
+  body.append(doll, stats);
   const spec = el("div", "aspec");
-  const budget = el("div");
-  const trees = el("div");
-  col.append(nm, meta, el("div", "asect", "gear"), sum, slots,
-             el("div", "asect", "build"), spec, budget, trees);
-  acols.appendChild(col);
-  c = { col, nm, meta, sum, slots, spec, budget, trees, rows: new Map() };
-  arm.cols.set(name, c);
+  const trees = el("div", "atrees");
+  const unplaced = el("div", "aunplaced");
+  prof.append(head, body, spec, trees, unplaced);
+  aprofiles.appendChild(prof);
+  const jump = el("a", "", name);
+  jump.href = "#" + prof.id;
+  ajump.appendChild(jump);
+  c = { prof, faction, nm, role, line, nums, left, portrait, right, stats, spec,
+        trees, unplaced, cells: new Map(), statRows: new Map(), treeBoxes: new Map() };
+  arm.profiles.set(name, c);
   return c;
 }
 
-function armorySlot(c, slot) {
-  let r = c.rows.get(slot);
-  if (r) return r;
-  const row = el("div", "aslot");
-  const k = el("span", "k", slot);
-  const v = el("span", "v");
-  row.append(k, v);
-  c.slots.appendChild(row);
-  r = { row, k, v };
-  c.rows.set(slot, r);
-  return r;
+function slotCell(c, column, slot) {
+  let cell = c.cells.get(slot);
+  if (cell) return cell;
+  cell = el("div", "aslot");
+  cell.title = slot;
+  column.appendChild(cell);
+  c.cells.set(slot, cell);
+  // Hover on a mouse, tap on a phone. A tap PINS the tooltip (it has no
+  // hover to keep it open); tapping the slot again, or anywhere else, or
+  // Escape, lets it go.
+  cell.addEventListener("pointerenter", (e) => {
+    if (e.pointerType === "mouse" && !arm.pinned) showTip(cell);
+  });
+  cell.addEventListener("pointerleave", () => { if (!arm.pinned) hideTip(); });
+  cell.addEventListener("click", (e) => {
+    e.stopPropagation();
+    if (arm.pinned === cell) { arm.pinned = null; hideTip(); return; }
+    arm.pinned = cell;
+    showTip(cell);
+  });
+  return cell;
 }
 
-function renderSlot(r, s) {
-  r.row.className = "aslot" + (s.empty ? " empty" : "")
+function renderSlot(cell, s) {
+  cell.slotData = s;
+  cell.textContent = "";
+  cell.className = "aslot" + (s.empty ? " empty" : " q" + (s.quality === null ? "x" : s.quality))
     + (s.cosmetic ? " cosmetic" : "") + (s.broken ? " broken" : "");
-  r.v.textContent = "";
   if (s.empty) {
     // The word, not a blank. A blank cell reads as "nothing to report", and
     // an empty head slot on a level 25 warrior is very much something to
     // report - it is the entire reason for looking.
-    r.v.textContent = "empty";
+    cell.textContent = s.cosmetic ? s.slot : "empty";
     return;
   }
-  // No quality class at all when the item is not in item_template: better an
-  // uncoloured name than a confident wrong colour.
-  r.v.appendChild(el("span", s.quality === null ? "" : "q" + s.quality, s.name));
-  if (s.item_level !== null) {
-    r.v.appendChild(el("span", "ailvl", " " + s.item_level));
-  }
-  if (s.broken) r.v.appendChild(el("span", "", " BROKEN"));
+  cell.title = s.name;
+  // No icon in the book (a custom item, or no display at all): the slot's
+  // name in the quality colour is a poorer picture but a true one.
+  const label = () => { cell.textContent = s.slot; };
+  if (s.icon) cell.appendChild(iconImg(s.icon, s.name, label));
+  else label();
 }
 
-function renderSpec(c, spec) {
+// --- the tooltip ---------------------------------------------------------
+
+function tipLine(cls, text) {
+  const d = el("div", cls, text);
+  atip.appendChild(d);
+  return d;
+}
+
+function buildTip(s) {
+  atip.textContent = "";
+  const close = el("div", "close", "close");
+  close.onclick = () => { arm.pinned = null; hideTip(); };
+  atip.appendChild(close);
+  if (s.empty) {
+    tipLine("nm", s.slot);
+    tipLine(s.cosmetic ? "st" : "il", s.cosmetic ? "nothing worn (cosmetic slot)" : "EMPTY");
+    return;
+  }
+  const t = s.tooltip;
+  tipLine("nm" + (t.quality === null ? "" : " q" + t.quality), t.name);
+  if (t.item_level !== null) tipLine("il", "Item Level " + t.item_level);
+  if (t.binding) tipLine("", t.binding);
+  if (t.slot || t.kind) {
+    const r = el("div", "t");
+    r.append(el("span", "", t.slot || ""), el("span", "", t.kind || ""));
+    atip.appendChild(r);
+  }
+  if (t.damage) {
+    const r = el("div", "t");
+    r.append(el("span", "", t.damage.min + " - " + t.damage.max + " Damage"),
+             el("span", "", "Speed " + t.damage.speed.toFixed(2)));
+    atip.appendChild(r);
+    if (t.damage.dps !== null) tipLine("", "(" + t.damage.dps.toFixed(1) + " damage per second)");
+  }
+  if (t.armor) tipLine("", t.armor + " Armor");
+  if (t.block) tipLine("", t.block + " Block");
+  for (const line of t.stats) tipLine("", line);
+  for (const line of t.resistances) tipLine("", line);
+  for (const line of t.enchant) tipLine("eq", line);
+  if (t.durability) tipLine("", "Durability " + t.durability);
+  if (t.classes) {
+    const r = el("div", "cl", "Classes: ");
+    r.appendChild(el("span", "", t.classes.join(", ")));
+    atip.appendChild(r);
+  }
+  if (t.requires_level) tipLine("", "Requires Level " + t.requires_level);
+  for (const line of t.effects) tipLine("eq blk", line);
+  if (t.set) {
+    tipLine("setn", t.set.name + " (" + t.set.worn + "/" + t.set.total + ")");
+    for (const p of t.set.pieces) tipLine("piece" + (p.worn ? " worn" : ""), p.name);
+    for (const b of t.set.bonuses) {
+      tipLine("bonus blk" + (b.active ? " on" : ""), "(" + b.threshold + ") Set: " + b.text);
+    }
+  }
+  if (t.flavor) tipLine("fl", '"' + t.flavor + '"');
+  if (t.sell_price) {
+    const m = el("div", "money", "Sell Price: ");
+    const coins = [["g", t.sell_price.gold], ["s", t.sell_price.silver], ["c", t.sell_price.copper]];
+    for (const [k, v] of coins) {
+      if (!v && k !== "c") continue;
+      m.appendChild(el("span", "", String(v)));
+      m.appendChild(el("span", "coin " + k));
+    }
+    atip.appendChild(m);
+  }
+}
+
+function showTip(cell) {
+  const s = cell.slotData;
+  if (!s) return;
+  for (const c of arm.profiles.values()) for (const other of c.cells.values()) other.classList.remove("on");
+  cell.classList.add("on");
+  buildTip(s);
+  atip.style.display = "block";
+  const rect = cell.getBoundingClientRect();
+  const w = atip.offsetWidth, h = atip.offsetHeight;
+  if (window.innerWidth <= 600) {
+    atip.style.left = Math.max(0, (window.innerWidth - w) / 2) + "px";
+    atip.style.top = Math.max(0, (window.innerHeight - h) / 2) + "px";
+    return;
+  }
+  // Beside the slot, on whichever side has room, and never off the screen.
+  let left = rect.right + 10;
+  if (left + w > window.innerWidth) left = rect.left - w - 10;
+  if (left < 0) left = 4;
+  let top = rect.top;
+  if (top + h > window.innerHeight) top = Math.max(4, window.innerHeight - h - 4);
+  atip.style.left = left + "px";
+  atip.style.top = top + "px";
+}
+
+function hideTip() {
+  atip.style.display = "none";
+  for (const c of arm.profiles.values()) for (const cell of c.cells.values()) cell.classList.remove("on");
+}
+
+document.addEventListener("click", () => { if (arm.pinned) { arm.pinned = null; hideTip(); } });
+document.addEventListener("keydown", (e) => { if (e.key === "Escape") { arm.pinned = null; hideTip(); } });
+atip.addEventListener("click", (e) => e.stopPropagation());
+
+// --- the stat block ------------------------------------------------------
+
+function renderStats(c, stats) {
+  for (const s of stats.rows) {
+    let r = c.statRows.get(s.key);
+    if (!r) {
+      const row = el("div", "astat");
+      const k = el("span", "k", s.label + ":");
+      const v = el("span", "v");
+      row.append(k, v);
+      c.stats.appendChild(row);
+      r = { row, v };
+      c.statRows.set(s.key, r);
+    }
+    r.v.className = "v" + (s.value === null ? " na" : "");
+    r.v.textContent = s.value === null ? "unavailable" : String(s.value);
+    r.row.title = s.note || "";
+  }
+  let src = c.stats.querySelector(".asource");
+  if (!src) { src = el("div", "asource"); c.stats.appendChild(src); }
+  src.textContent = stats.source === "saved"
+    ? "the world's own reading, as last saved"
+    : stats.source === "derived"
+      ? "the world has not saved this character's stats yet: base + gear "
+        + "where that is honest, unavailable where it is not"
+      : "no base stats for this race, class and level";
+}
+
+// --- the talent trees ----------------------------------------------------
+
+const SVG_NS = "http://www.w3.org/2000/svg";
+const TAL = 44, GAP = 6, PAD = 8;   // must match .agrid / .atal in the CSS
+
+function cellCentre(row, col) {
+  return { x: PAD + col * (TAL + GAP) + TAL / 2, y: PAD + row * (TAL + GAP) + TAL / 2 };
+}
+
+function arrow(svg, from, to, lit) {
+  // The trainer's arrows run straight down a column, or along a row and
+  // then down: never diagonally. Drawn cell-edge to cell-edge.
+  const a = cellCentre(from.row, from.col), b = cellCentre(to.row, to.col);
+  const path = document.createElementNS(SVG_NS, "path");
+  let d;
+  if (from.col === to.col) {
+    d = `M${a.x} ${a.y + TAL / 2} L${b.x} ${b.y - TAL / 2 - 4}`;
+  } else if (from.row === to.row) {
+    const dir = to.col > from.col ? 1 : -1;
+    d = `M${a.x + dir * TAL / 2} ${a.y} L${b.x - dir * (TAL / 2 + 4)} ${b.y}`;
+  } else {
+    const dir = to.col > from.col ? 1 : -1;
+    d = `M${a.x + dir * TAL / 2} ${a.y} L${b.x} ${a.y} L${b.x} ${b.y - TAL / 2 - 4}`;
+  }
+  path.setAttribute("d", d);
+  path.setAttribute("fill", "none");
+  path.setAttribute("stroke", lit ? "#ffd100" : "#8a8a8a");
+  path.setAttribute("stroke-width", "3");
+  path.setAttribute("marker-end", lit ? "url(#ah-lit)" : "url(#ah-dim)");
+  svg.appendChild(path);
+}
+
+function arrowHeads(svg) {
+  const defs = document.createElementNS(SVG_NS, "defs");
+  for (const [id, colour] of [["ah-lit", "#ffd100"], ["ah-dim", "#8a8a8a"]]) {
+    const m = document.createElementNS(SVG_NS, "marker");
+    m.setAttribute("id", id);
+    m.setAttribute("markerWidth", "6"); m.setAttribute("markerHeight", "6");
+    m.setAttribute("refX", "3"); m.setAttribute("refY", "3");
+    m.setAttribute("orient", "auto");
+    const p = document.createElementNS(SVG_NS, "path");
+    p.setAttribute("d", "M0 0 L6 3 L0 6 Z");
+    p.setAttribute("fill", colour);
+    m.appendChild(p);
+    defs.appendChild(m);
+  }
+  svg.appendChild(defs);
+}
+
+function renderTree(c, index, tree, colour) {
+  let box = c.treeBoxes.get(index);
+  if (!box) {
+    const wrap = el("div", "atree");
+    const th = el("div", "th");
+    const n = el("span", "n", tree.name);
+    const p = el("span", "p");
+    th.append(n, p);
+    const grid = el("div", "agrid");
+    grid.style.setProperty("--cc", colour);
+    grid.style.gridTemplateRows = `repeat(${tree.rows}, ${TAL}px)`;
+    const svg = document.createElementNS(SVG_NS, "svg");
+    arrowHeads(svg);
+    grid.appendChild(svg);
+    wrap.append(th, grid);
+    c.trees.appendChild(wrap);
+    box = { wrap, th, p, grid, svg, cells: new Map(), iconed: false };
+    c.treeBoxes.set(index, box);
+  }
+  if (!box.iconed && tree.icon) {
+    box.th.prepend(iconImg(tree.icon, tree.name));
+    box.iconed = true;
+  }
+  box.p.textContent = String(tree.points);
+  box.p.className = "p" + (tree.points ? "" : " zero");
+  const byId = new Map(tree.grid.map((t) => [t.id, t]));
+  for (const t of tree.grid) {
+    let cell = box.cells.get(t.id);
+    if (!cell) {
+      cell = el("div", "atal");
+      cell.style.gridRow = String(t.row + 1);
+      cell.style.gridColumn = String(t.col + 1);
+      const fail = () => { cell.appendChild(el("span", "", "")); };
+      if (t.icon) cell.appendChild(iconImg(t.icon, t.name, fail));
+      cell.appendChild(el("span", "r"));
+      box.grid.appendChild(cell);
+      box.cells.set(t.id, cell);
+    }
+    cell.title = t.name + " " + t.rank + "/" + t.max_rank;
+    cell.className = "atal" + (t.rank ? (t.rank >= t.max_rank ? " full" : " part") : "");
+    const r = cell.querySelector(".r");
+    // The count sits on the icon only once a point is in it, as the
+    // trainer draws it; an unlearned talent is a dim icon and nothing else.
+    r.textContent = t.rank ? t.rank + "/" + t.max_rank : "";
+    r.style.display = t.rank ? "" : "none";
+  }
+  // Arrows redrawn each poll: they are a few lines, and which are lit
+  // depends on ranks that can change.
+  for (const old of Array.from(box.svg.querySelectorAll("path[marker-end]"))) old.remove();
+  for (const t of tree.grid) {
+    for (const [reqId, reqRank] of t.requires) {
+      const from = byId.get(reqId);
+      if (from) arrow(box.svg, from, t, from.rank >= reqRank);
+    }
+  }
+}
+
+function renderSpec(c, spec, colour) {
   c.spec.textContent = spec.primary
     ? spec.distribution + "  " + spec.primary
     : "nothing spent";
@@ -2368,29 +2773,37 @@ function renderSpec(c, spec) {
     ? spec.spent + " points spent"
     : spec.spent + " / " + spec.available + " points";
   if (spec.unspent) budget += "  -  " + spec.unspent + " UNSPENT";
-  c.budget.textContent = budget;
-  c.budget.className = spec.unspent ? "aunspent" : "";
-  c.trees.textContent = "";
-  // Only the trees with points in them. Three headers where two are always
-  // zero is three lines of furniture per character; the distribution above
-  // already says the shape.
-  for (const t of spec.trees.concat(
-         spec.unplaced.length
-           ? [{ name: "not in the talent tables", points: spec.unplaced.length,
-                talents: spec.unplaced }]
-           : [])) {
-    if (!t.points) continue;
-    const box = el("div", "atree");
-    box.appendChild(el("div", "t", t.name + "  " + t.points));
-    for (const tal of t.talents) {
-      const line = el("div", "atal");
-      line.appendChild(el("span", "r",
-        tal.rank === null ? "?" : tal.rank + "/" + tal.max_rank));
-      line.appendChild(el("span", "n", tal.name));
-      box.appendChild(line);
-    }
-    c.trees.appendChild(box);
+  c.spec.textContent += "  -  " + budget;
+  c.spec.className = "aspec" + (spec.unspent ? " aunspent" : "");
+  spec.trees.forEach((tree, i) => renderTree(c, i, tree, colour));
+  c.unplaced.textContent = spec.unplaced.length
+    ? "not in the talent tables: " + spec.unplaced.map((t) => t.name).join(", ")
+    : "";
+}
+
+// --- the profile ---------------------------------------------------------
+
+function renderPortrait(c, m) {
+  if (c.portraitFor === m.name + m.race + m.gender + m["class"]) return;
+  c.portraitFor = m.name + m.race + m.gender + m["class"];
+  c.portrait.textContent = "";
+  c.portrait.style.setProperty("--cc", m.class_colour);
+  const fallback = () => {
+    if (!c.portrait.querySelector(".sil")) c.portrait.prepend(silhouette(m.class_colour));
+  };
+  if (m.portrait.race_icon) {
+    const img = iconImg(m.portrait.race_icon, m.race + " " + m.gender, fallback);
+    img.className = "race";
+    c.portrait.appendChild(img);
+  } else {
+    fallback();
   }
+  if (m.portrait.class_icon) {
+    const cls = iconImg(m.portrait.class_icon, m["class"]);
+    cls.className = "cls";
+    c.portrait.appendChild(cls);
+  }
+  c.portrait.appendChild(el("div", "lvl", "Level " + m.level + " " + m.race + " " + m["class"]));
 }
 
 function renderArmory(p) {
@@ -2411,34 +2824,55 @@ function renderArmory(p) {
   // which is the same as leaving it permanently unread.
   aheadline.className = broken || idle.length ? "alarm" : "";
   for (const m of p.members) {
-    const c = armoryColumn(m.name);
-    // Green edge means logged in right now, the same thing green means on
-    // the Family cards. Absent the character entirely and it goes grey.
-    c.col.className = "acol" + (m.present ? (m.online ? " c-ok" : "") : " c-gone");
+    const c = armoryProfile(m.name);
+    c.prof.className = "aprof" + (m.present ? "" : " c-gone");
     if (!m.present) {
-      // Still says who, and still says what. A column stripped to a name is
-      // how a missing character stops being noticed.
-      c.meta.textContent = m["class"] + " - " + m.role;
-      c.sum.textContent = "no saved character - deleted, or never made.";
-      c.slots.textContent = "";
-      c.rows.clear();
-      c.spec.textContent = "";
-      c.budget.textContent = "";
-      c.trees.textContent = "";
+      // Still says who, and still says what. A profile stripped to a name
+      // is how a missing character stops being noticed.
+      c.role.textContent = m["class"] + " - " + m.role;
+      c.line.textContent = "no saved character - deleted, or never made.";
+      c.nums.textContent = "";
       continue;
     }
-    c.meta.textContent = "L" + m.level + " " + m.race + " " + m["class"]
-      + " - " + m.role;
-    c.sum.textContent = m.gear.worn + " / " + m.gear.slots + " worn"
-      + (m.gear.average_item_level === null ? ""
-         : "  -  item level " + m.gear.average_item_level);
-    const bySlot = new Map(m.slots.map((s) => [s.slot, s]));
-    // Driven by the SERVER's slot list, not by this member's rows, so every
-    // column has the same rows in the same order and the grid reads across.
-    for (const spec of p.slots) {
-      renderSlot(armorySlot(c, spec.slot), bySlot.get(spec.slot));
+    c.nm.style.color = m.class_colour;
+    c.faction.textContent = "";
+    c.faction.className = "afaction";
+    // The faction banner is the game's own icon too, and a coloured square
+    // when the host is down - the colour is the one the map already uses.
+    const banner = m.faction === "alliance" ? "inv_bannerpvp_02"
+      : m.faction === "horde" ? "inv_bannerpvp_01" : null;
+    const bannerFail = () => {
+      c.faction.className = "afaction gone";
+      c.faction.style.background = m.faction === "alliance" ? "var(--alliance)"
+        : m.faction === "horde" ? "var(--horde)" : "var(--neutral)";
+    };
+    if (banner) c.faction.appendChild(iconImg(banner, m.faction, bannerFail));
+    else bannerFail();
+    c.role.textContent = m.role;
+    c.line.textContent = "";
+    c.line.append(el("span", "", m.level + " " + m.race + " " + m["class"] + " "));
+    if (m.guild) c.line.append(el("span", "g", "<" + m.guild + "> "));
+    c.line.append(el("span", m.online ? "on" : "off", m.online ? "online" : "offline"));
+    c.nums.textContent = "";
+    c.nums.append(el("span", "", (m.gear.average_item_level === null ? "no" : m.gear.average_item_level)
+      + " ILVL"));
+    // Honourable kills only when there are any: a line of zeros on five
+    // PvE characters is furniture.
+    if (m.honorable_kills) c.nums.append(el("span", "", m.honorable_kills + " Honorable Kills"));
+    if (m.gear.empty_slots.length) {
+      c.nums.append(el("span", "empty", m.gear.empty_slots.length + " empty: "
+        + m.gear.empty_slots.join(", ")));
     }
-    renderSpec(c, m.spec);
+    if (m.gear.broken.length) c.nums.append(el("span", "broken", "BROKEN: " + m.gear.broken.join(", ")));
+    renderPortrait(c, m);
+    const bySlot = new Map(m.slots.map((s) => [s.slot, s]));
+    // Driven by the SERVER's doll layout, not by this member's rows, so
+    // every profile has the same cells in the same places, and the page
+    // never names a slot itself.
+    for (const spec of p.doll.left) renderSlot(slotCell(c, c.left, spec), bySlot.get(spec));
+    for (const spec of p.doll.right) renderSlot(slotCell(c, c.right, spec), bySlot.get(spec));
+    renderStats(c, m.stats);
+    renderSpec(c, m.spec, m.class_colour);
   }
 }
 
@@ -2449,9 +2883,9 @@ async function pollArmory() {
     if (!r.ok) throw new Error(r.status);
     renderArmory(await r.json());
   } catch (e) {
-    // Keep the grid that is drawn, exactly as the Family tab does. A blank
-    // Armory reads as "they are wearing nothing", which is a worse lie than
-    // an old answer honestly labelled.
+    // Keep the profiles that are drawn, exactly as the Family tab does. A
+    // blank Armory reads as "they are wearing nothing", which is a worse lie
+    // than an old answer honestly labelled.
     aheadline.textContent = "the world is unreachable - this may be stale";
     aheadline.className = "alarm";
   }
@@ -2460,7 +2894,7 @@ async function pollArmory() {
 // THIRTY seconds, and the departure from the page's 5s cadence is the point.
 // The core writes gear and talents to the database on its own save timer -
 // fifteen minutes on this realm - so these rows physically cannot change any
-// faster. Polling them every five seconds would re-fetch an identical 20KB
+// faster. Polling them every five seconds would re-fetch an identical 100KB
 // payload a hundred and eighty times per actual change. Entering the tab
 // still polls immediately, so it is never blank while waiting for the timer.
 setInterval(pollArmory, 30000);
