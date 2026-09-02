@@ -52,7 +52,9 @@ from dataclasses import dataclass
 import bonds
 import family
 from core import _ALLIANCE_RACES, _HORDE_RACES
-from panel import _CLASS_NAMES, _EQUIPMENT_SLOT_NAMES, _RACE_NAMES
+from panel import (  # noqa: F401 - CLASS_COLOURS is re-exported for its old callers
+    CLASS_COLOURS, _CLASS_NAMES, _EQUIPMENT_SLOT_NAMES, _RACE_NAMES,
+)
 
 # The paper doll, in slot order, re-exported under a public name. panel owns
 # the list; both the SQL bound (`ci.slot < len(EQUIPPED_SLOTS)`) and the rows
@@ -221,12 +223,8 @@ CLASS_ICON_NAMES = {
     6: "deathknight", 7: "shaman", 8: "mage", 9: "warlock", 11: "druid",
 }
 
-# The class's own colour, from the client's RAID_CLASS_COLORS table. The
-# name in the header is drawn in it, as every armory does.
-CLASS_COLOURS = {
-    1: "#c79c6e", 2: "#f58cba", 3: "#abd473", 4: "#fff569", 5: "#ffffff",
-    6: "#c41f3b", 7: "#0070de", 8: "#69ccf0", 9: "#9482c9", 11: "#ff7d0a",
-}
+# The class's own colour (panel.CLASS_COLOURS, the client's RAID_CLASS_COLORS
+# table) is what the name in the header is drawn in, as every armory does.
 
 # --- the derived stats, when the world has not saved them --------------
 # character_stats is the core's OWN reading of every derived number (dodge,

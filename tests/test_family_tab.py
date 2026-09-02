@@ -152,20 +152,33 @@ class TheBroadcastGrid(unittest.TestCase):
         card = card[:card.index("// --- the broadcasts")]
         self.assertIn('el("div", "fstream")', card)
         layout = self.tab[self.tab.index("function layoutBroadcasts"):]
-        layout = layout[:layout.index("function promoteBroadcast")]
+        layout = layout[:layout.index("function renderBroadcasts")]
         self.assertIn("familyCard(name).stream", layout)
 
-    def test_the_stream_sits_under_the_name_and_above_the_state(self):
-        """"This is Grug, this is Grug's stream" has to be one unit read top
-        to bottom, or the move has bought nothing: a tile appended after the
-        watch button would be back to being a video near a name."""
+    def test_the_stream_is_the_first_thing_on_the_card(self):
+        """infra#88: "the twitch view is so tiny". The picture is the product,
+        so it is the top of the card and edge to edge, with the name and the
+        state in one strip underneath it. A tile appended after the watch
+        button would be back to being a video near a name."""
         card = self.tab[self.tab.index("function familyCard"):]
         card = card[:card.index("// --- the broadcasts")]
         order = card[card.index("card.append("):]
         order = order[:order.index(")")]
-        self.assertLess(order.index("head"), order.index("stream"))
-        self.assertLess(order.index("stream"), order.index("quests"))
-        self.assertLess(order.index("quests"), order.index("btn"))
+        self.assertLess(order.index("stream"), order.index("strip"))
+        strip = card[card.index("strip.append("):]
+        strip = strip[:strip.index(")")]
+        self.assertLess(strip.index("head"), strip.index("slots"))
+        self.assertLess(strip.index("slots"), strip.index("btn"))
+
+    def test_the_quest_list_is_not_on_the_card_any_more(self):
+        """infra#3110 put a quest list inside every card; infra#88 moved
+        them to one board under all five feeds. Only the slot count (the
+        #73 number, a fact about ONE character) stays with the card."""
+        card = self.tab[self.tab.index("function familyCard"):]
+        card = card[:card.index("// --- the broadcasts")]
+        self.assertNotIn('el("div", "fquests")', card)
+        self.assertNotIn("qlist", card)
+        self.assertIn('el("div", "fslots")', card)
 
     def test_tiles_are_built_once_and_moved_not_rebuilt(self):
         """Same rule as familyCard: rebuilding a tile mid-stream would
@@ -174,12 +187,24 @@ class TheBroadcastGrid(unittest.TestCase):
         self.assertIn(
             "let t = broadcasts.tiles.get(name);\n  if (t) return t;", self.tab)
 
-    def test_promoting_a_thumbnail_moves_the_node_rather_than_reconnecting(self):
+    def test_laying_out_moves_the_node_rather_than_reconnecting(self):
         layout = self.tab[self.tab.index("function layoutBroadcasts"):]
-        layout = layout[:layout.index("function promoteBroadcast")]
+        layout = layout[:layout.index("function renderBroadcasts")]
         self.assertIn("appendChild", layout)
         self.assertNotIn("makePlayer(", layout)
         self.assertNotIn("player.start(", layout)
+
+    def test_there_is_no_focused_tile_and_no_thumbnail_to_promote(self):
+        """infra#88: one big player and four 170px thumbnails was the
+        "so tiny" the operator complained about. Every tile is now the full
+        width of its column, so there is nothing to promote and no tap that
+        does it - a tap on a picture belongs to the native controls."""
+        self.assertNotIn("function promoteBroadcast", self.tab)
+        self.assertNotIn("broadcasts.focus", self.tab)
+        self.assertNotIn('"focused"', self.tab)
+        tile = self.tab[self.tab.index("function broadcastTile"):]
+        tile = tile[:tile.index("function layoutBroadcasts")]
+        self.assertNotIn("tile.onclick", tile)
 
     def test_the_grid_reuses_the_one_shared_whep_player(self):
         """makePlayer's own comment calls itself shared across 'TWO
@@ -205,29 +230,24 @@ class TheBroadcastGrid(unittest.TestCase):
         self.assertIn('el("button", "ffull"', tile)
         self.assertIn("goFullscreen(tile, video,", tile)
 
-    def test_the_fullscreen_tap_does_not_also_promote_the_tile(self):
-        """The tile's own click promotes it. Without stopPropagation the one
-        tap runs both, which is a no-op on the focused tile today and becomes a
-        second silent action the day promoteBroadcast stops returning early."""
+    def test_the_fullscreen_tap_stays_on_the_button(self):
+        """The overlay is pointer-events:none and the video underneath has
+        native controls; the button's tap must not fall through to them."""
         tile = self.tab[self.tab.index("function broadcastTile"):]
         tile = tile[:tile.index("function layoutBroadcasts")]
         onclick = tile[tile.index("full.onclick"):]
         self.assertIn("e.stopPropagation();",
                       onclick[:onclick.index("goFullscreen(")])
 
-    def test_fullscreen_is_offered_only_on_the_focused_tile(self):
-        """A tap on a thumbnail already means "make this the big one". Offering
-        fullscreen there would give one tap two meanings. The overlay is
-        pointer-events:none, so the button must opt back in for itself or it
-        cannot be tapped at all.
-
-        The selector moved with the tile (infra#3110) - focused is a class on
-        the tile now rather than the slot it was moved into - but the rule is
-        the same rule."""
-        self.assertIn(".ftile .ffull { display:none; pointer-events:auto;",
-                      self.page)
-        self.assertIn(".ftile.focused .ffull { display:inline-block; }",
-                      self.page)
+    def test_fullscreen_is_offered_on_every_tile(self):
+        """Every tile is a real player now (infra#88), so every tile gets the
+        button. The overlay is pointer-events:none, so the button must opt
+        back in for itself or it cannot be tapped at all."""
+        rule = self.page[self.page.index(".ftile .ffull {"):]
+        rule = rule[:rule.index("}")]
+        self.assertIn("display:inline-block", rule)
+        self.assertIn("pointer-events:auto", rule)
+        self.assertNotIn(".ftile.focused", self.page)
 
     def test_a_refused_fullscreen_is_shown_to_the_person(self):
         """goFullscreen insists a refusal is said out loud, which is only true
@@ -237,22 +257,29 @@ class TheBroadcastGrid(unittest.TestCase):
         self.assertIn("fsnote.textContent = text;", tile)
 
 
-    def test_the_focused_tile_gets_native_video_controls(self):
+    def test_every_tile_gets_native_video_controls(self):
         """The scripted fullscreen button is not what a thumb reaches for. iOS
         Safari gives a <video> its own fullscreen affordance through the native
-        control bar, which is the control people already know from YouTube, so
-        the focused tile carries it. Thumbnails must NOT, or the control bar
-        covers a 150px picture and swallows the tap that promotes it."""
-        layout = self.tab[self.tab.index("function layoutBroadcasts"):]
-        layout = layout[:layout.index("function promoteBroadcast")]
-        self.assertIn("t.video.controls = big;", layout)
-
-    def test_thumbnails_do_not_carry_controls(self):
-        """Guards the half that is easy to regress: controls must be bound to
-        the focused flag, never set unconditionally at tile construction."""
+        control bar, which is the control people already know from YouTube.
+        With no thumbnails left to protect from a control bar (infra#88),
+        every tile carries it."""
         tile = self.tab[self.tab.index("function broadcastTile"):]
         tile = tile[:tile.index("function layoutBroadcasts")]
-        self.assertNotIn("video.controls = true", tile)
+        self.assertIn("video.controls = true;", tile)
+
+    def test_the_overlay_stays_out_of_the_control_bar(self):
+        """Native controls own the bottom edge of a video whenever they are
+        showing, so the name, the health bar and the zone all sit at the top
+        of the overlay where the controls never are."""
+        rule = self.page[self.page.index(".ftile .fov {"):]
+        rule = rule[:rule.index("}")]
+        self.assertNotIn("justify-content:space-between", rule)
+        self.assertIn("pointer-events:none", rule)
+
+    def test_the_name_on_the_picture_is_in_its_class_colour(self):
+        render = self.tab[self.tab.index("function renderBroadcasts"):]
+        render = render[:render.index("function startBroadcasts")]
+        self.assertIn("m.class_colour", render)
 
     def test_leaving_the_tab_does_not_ask_the_encoders_to_stop(self):
         """These five broadcasts are not this page's to end - it never
@@ -289,28 +316,39 @@ class ThumbSizedBroadcastGrid(unittest.TestCase):
     def setUpClass(cls):
         import pathlib
         here = pathlib.Path(__file__).resolve().parent.parent
-        page = (here / "index.html").read_text()
-        cls.css = page[page.index("the broadcast tile, inside its own"):
-                        page.index("</style>")]
+        cls.page = (here / "index.html").read_text()
+        cls.css = cls.page[cls.page.index("the broadcast tile, inside its own"):
+                           cls.page.index("</style>")]
 
     def test_the_empty_slot_reserves_the_shape_not_the_tile(self):
         """makePlayer owns the tile's `display` - none until start(), none
         again after stop() - so a reservation hung on the tile is worth
         nothing in the exact window it is needed. The card must hold the
-        space while there is no picture in it, or the quest log underneath
-        gets shoved down half a second later under a thumb already reaching
-        for it."""
+        space while there is no picture in it, or the strip underneath gets
+        shoved down half a second later under a thumb already reaching for
+        it. FULL WIDTH (infra#88): 170px was the "so tiny"."""
         slot = self.css[self.css.index(".fstream {"):]
         slot = slot[:slot.index("}")]
         self.assertIn("aspect-ratio:16/9", slot)
-        self.assertIn("width:170px", slot)
-        self.assertIn(".fstream.big { width:100%; }", self.css)
+        self.assertIn("width:100%", slot)
+        self.assertNotIn("170px", self.css)
 
-    def test_the_focused_player_letterboxes_rather_than_crops(self):
+    def test_every_player_letterboxes_rather_than_crops(self):
         """Same rule the panel's fullscreen view follows: a cropped POV
-        hides the hotbars, half of why watching it is worth doing."""
-        rule = self.css[self.css.index(".ftile.focused video"):]
+        hides the hotbars, half of why watching it is worth doing. It used
+        to apply to the focused tile only; every tile is that tile now."""
+        rule = self.css[self.css.index(".ftile video {"):]
         self.assertIn("object-fit:contain", rule[:rule.index("}")])
+
+    def test_the_feeds_fill_the_width_and_wrap_to_five(self):
+        """One column on a phone, then two, then three (3+2), then all five
+        in a row. Explicit stops, so the shape is the same on every visit."""
+        page = self.page
+        grid = page[page.index("#ffeeds {"):page.index(".fcard {")]
+        self.assertIn("grid-template-columns:1fr", grid)
+        self.assertIn("repeat(2,minmax(0,1fr))", grid)
+        self.assertIn("repeat(3,minmax(0,1fr))", grid)
+        self.assertIn("repeat(5,minmax(0,1fr))", grid)
 
     def test_offline_hides_the_frozen_frame_rather_than_the_message(self):
         video_rule = self.css[self.css.index(".ftile.offline video"):]
@@ -396,13 +434,14 @@ class TheBrokenButtonMustNotBeSpendable(unittest.TestCase):
                       "a disabled control must carry its reason")
 
 
-class TheQuestLogOnTheCard(unittest.TestCase):
-    """infra#3110 requirement 1: what each of the five is actually working on,
-    under their own name.
+class TheQuestBoard(unittest.TestCase):
+    """infra#88: one shared quest board under all five feeds, in place of
+    the five per-character lists infra#3110 put inside the cards.
 
-    The judgements all live in questlog.py, with their own suite. These are
-    the page rules - the ones a refactor could undo while leaving five
-    perfectly plausible quest lists on screen."""
+    The judgements - who is on it, helping, done, leading; how the rows
+    sort; where the fold is - all live in questlog.py, with their own suite.
+    These are the page rules: the ones a refactor could undo while leaving a
+    perfectly plausible list on screen."""
 
     @classmethod
     def setUpClass(cls):
@@ -412,92 +451,131 @@ class TheQuestLogOnTheCard(unittest.TestCase):
         cls.server = (here / "map_server.py").read_text()
         start = cls.page.index("// --- the Family tab (infra#2892)")
         cls.tab = cls.page[start:cls.page.index("loadZones().then(")]
-        cls.block = cls.tab[cls.tab.index("// --- the quest log (infra#3110)"):
+        cls.block = cls.tab[cls.tab.index("// --- the quest board (infra#3110"):
                              cls.tab.index("// POV AND ONLY POV")]
         # The block without its opening essay, for the assertions that are
         # about what the CODE says rather than what the comments explain.
         cls.code = cls.block[cls.block.index("const fquesthead"):]
 
-    def test_the_log_is_drawn_inside_the_character_own_card(self):
-        """Not a sixth panel below the five cards. A quest log belongs to a
-        character, and the whole point of putting it here is that it is read
-        beside that character's name, health and stream."""
+    def test_the_board_is_one_list_under_all_the_feeds(self):
+        """Not five lists in five cards. The whole point of one list is that
+        "who else is on this" is a row you look at, not five titles you
+        match up by eye."""
         section = self.page[self.page.index('<section id="family">'):
                              self.page.index("</section>")]
+        self.assertLess(section.index('id="ffeeds"'), section.index('id="fboard"'))
         self.assertIn('id="fquesthead"', section)
-        self.assertIn('el("div", "fquests")', self.tab)
-        self.assertIn("familyCard(m.name)", self.block)
-        self.assertIn("c.qlist", self.block)
+        self.assertIn('id="fqlist"', section)
+        self.assertNotIn('el("div", "fquests")', self.tab)
 
-    def test_the_slot_count_is_said_even_when_it_is_fine(self):
+    def test_one_row_per_quest_with_the_people_on_the_right(self):
+        row = self.code[self.code.index("function boardRow"):]
+        row = row[:row.index("function renderBoard")]
+        self.assertIn("r.people", row)
+        self.assertIn('el("div", "qbwho")', row)
+        # main first, people second: the portraits are the right-hand column.
+        self.assertIn("row.append(main, who)", row)
+
+    def test_every_role_the_module_names_is_drawn(self):
+        """questlog.HAND_IN/ON/HELPING/DONE are the vocabulary; the page must
+        have a word and a ring for each, or a role the server decided would
+        render as nothing."""
+        import questlog
+        words = self.code[self.code.index("const ROLE_WORDS"):]
+        words = words[:words.index("}")]
+        for role in (questlog.HAND_IN, questlog.ON, questlog.HELPING, questlog.DONE):
+            self.assertIn(role + ":", words)
+            self.assertIn(".pt." + role, self.page)
+
+    def test_done_is_dimmed_so_everyone_else_did_it_can_be_seen(self):
+        rule = self.page[self.page.index(".pt.done {"):]
+        self.assertIn("opacity", rule[:rule.index("}")])
+
+    def test_the_leader_wears_a_drawn_crown(self):
+        """Drawn, not typed: the page is ASCII-only, and a glyph that one
+        phone renders and another does not is not a marker."""
+        portrait = self.code[self.code.index("function portrait"):]
+        portrait = portrait[:portrait.index("function boardRow")]
+        self.assertIn("if (p.leader) box.appendChild(crown())", portrait)
+        self.assertIn("function crown()", self.code)
+        self.assertIn('setAttribute("d"', self.code[self.code.index("function crown()"):])
+
+    def test_the_portrait_is_the_armory_silhouette_in_the_class_colour(self):
+        """One face everywhere: the Armory already draws a class-coloured
+        silhouette, and a second drawing of the same person is a second
+        opinion about what they look like."""
+        portrait = self.code[self.code.index("function portrait"):]
+        portrait = portrait[:portrait.index("function boardRow")]
+        self.assertIn("silhouette(p.class_colour)", portrait)
+
+    def test_the_slot_count_stays_on_the_card_and_is_said_even_when_fine(self):
         """mod-overseer#73 hid for a month because nothing counted the slots.
         A number that only appears once it is already bad is a number nobody
-        has learned to read by the time it matters."""
+        has learned to read by the time it matters - and it is a fact about
+        one character, so it stays beside that character's name."""
         head = self.block[self.block.index("function questHeadline"):]
-        head = head[:head.index("function questRow")]
+        head = head[:head.index("function boardSignature")]
         first = head.index('m.used + " of " + m.slots')
         # Unconditional: before any of the `if` lines that add the rest.
         self.assertLess(first, head.index("if (m.ready)"))
+        render = self.code[self.code.index("function renderQuests"):]
+        self.assertIn("c.slots.textContent = questHeadline(m)", render)
 
-    def test_the_page_does_not_decide_what_a_full_log_is(self):
-        """questlog.py owns the cap and how near it counts as full. A 25 typed
-        into this file is a second answer that can disagree with the first,
-        and it would disagree silently."""
+    def test_the_page_does_not_decide_what_a_full_log_or_a_fold_is(self):
+        """questlog.py owns the cap, how near it counts as full, and how many
+        rows show before the fold. A 25 or a 12 typed into this file is a
+        second answer that can disagree with the first, silently."""
         self.assertNotIn("25", self.code)
+        self.assertNotIn("slice(0, 1", self.code)
         self.assertIn("m.slots", self.code)
         self.assertIn("m.full", self.code)
+        self.assertIn("b.preview", self.code)
 
-    def test_every_quest_says_who_else_is_carrying_it(self):
-        """mod-overseer#28 in the only place it can be seen: on the quest
-        itself. Four names means the fight pays four of them; no names means
-        it pays one, and that is the sentence that has to be on screen."""
-        row = self.block[self.block.index("function questRow"):]
-        row = row[:row.index("function renderQuestLog")]
-        self.assertIn("q.held_by.filter", row)
-        self.assertIn("nobody else holds this", row)
-
-    def test_the_quest_list_is_the_only_thing_rebuilt(self):
+    def test_the_board_is_the_only_thing_rebuilt(self):
         """replaceChildren anywhere near a card is how a live <video> gets
         thrown away mid-stream. It is allowed here and ONLY here, because
         this list is text the server just recomputed."""
         self.assertEqual(self.tab.count(".replaceChildren("), 1)
-        render = self.block[self.block.index("function renderQuestLog"):]
+        render = self.block[self.block.index("function renderBoard"):]
         render = render[:render.index("function renderQuests")]
-        self.assertIn("c.qlist.replaceChildren", render)
+        self.assertIn("fqlist.replaceChildren", render)
 
     def test_a_poll_that_changed_nothing_leaves_the_list_alone(self):
         """Thirty seconds apart, most polls are identical. Rebuilding anyway
         would throw away a half-read list under somebody's thumb for no
         change at all."""
-        render = self.block[self.block.index("function renderQuestLog"):]
+        render = self.block[self.block.index("function renderBoard"):]
         render = render[:render.index("function renderQuests")]
-        self.assertIn("quested.get(m.name) === sig", render)
+        self.assertIn("board.sig === sig", render)
         self.assertLess(render.index("return;"), render.index("replaceChildren"))
 
-    def test_a_long_log_folds_but_its_totals_do_not(self):
-        """Sixty-five quests across five characters is nine thousand pixels of
-        phone scrolling, and a twenty-two row log buries the next character's
-        stream under it. Folding the LIST is only safe because the header line
-        above it already carries every number the two defects are made of -
-        so the fold must sit below that line, never replace it."""
-        render = self.code[self.code.index("function renderQuestLog"):]
+    def test_a_long_board_folds_and_says_how_many_it_is_hiding(self):
+        render = self.code[self.code.index("function renderBoard"):]
         render = render[:render.index("function renderQuests")]
-        self.assertIn("QUEST_PREVIEW", render)
-        self.assertLess(render.index("questHeadline(m)"), render.index("QUEST_PREVIEW"))
-        # Says how many are hidden and where they are, because the order is
-        # meaningful: what folds away is the oldest end of the log.
-        self.assertIn('" more, oldest last"', render)
+        self.assertIn("b.rows.slice(0, b.preview)", render)
+        self.assertIn('"show all " + b.rows.length', render)
 
-    def test_expanding_a_log_is_not_swallowed_by_the_no_change_guard(self):
-        """Nothing about the DATA changes when somebody taps "show more",
-        which is exactly what that guard skips on."""
-        render = self.code[self.code.index("function renderQuestLog"):]
+    def test_expanding_the_board_is_not_swallowed_by_the_no_change_guard(self):
+        """Nothing about the DATA changes when somebody taps "show all",
+        which is exactly what that guard skips on - so the fold state is
+        part of the signature."""
+        render = self.code[self.code.index("function renderBoard"):]
         render = render[:render.index("function renderQuests")]
-        toggle = render[render.index("more.onclick"):]
-        self.assertIn("quested.delete(m.name)", toggle)
+        self.assertIn('(board.open ? "|open" : "")', render)
 
-    def test_a_failed_poll_keeps_the_logs_it_has(self):
-        """An empty quest log means "they have nothing to do", which is the
+    def test_the_server_reads_turn_ins_and_the_party_for_the_board(self):
+        """DONE needs character_queststatus_rewarded per quest, and HELPING
+        needs the snapshot's group_leader; a board built without either
+        would draw every row as "on it" and nothing else."""
+        fetch = self.server[self.server.index("def _fetch_questlog"):]
+        fetch = fetch[:fetch.index("def _ensure_stream_store")]
+        self.assertIn("character_queststatus_rewarded", fetch)
+        self.assertIn("group_leader", fetch)
+        self.assertIn('"done_rows": done_rows', fetch)
+        self.assertIn('"party_rows": party_rows', fetch)
+
+    def test_a_failed_poll_keeps_the_board_it_has(self):
+        """An empty board means "they have nothing to do", which is the
         opposite of what a failed read actually found out."""
         poll = self.block[self.block.index("async function pollQuests"):]
         self.assertIn("unreachable", poll)

@@ -23,7 +23,7 @@ import re
 import bonds
 import stream
 from core import _ALLIANCE_RACES, _HORDE_RACES
-from panel import _CLASS_NAMES, _RACE_NAMES
+from panel import _CLASS_NAMES, _RACE_NAMES, CLASS_COLOURS
 
 # Below this fraction of their health a character is in trouble, and the card
 # says so in colour rather than making a person read two numbers and divide.
@@ -137,6 +137,7 @@ def _member(name: str, row: dict | None, geo, leader_name: str | None) -> dict:
             "name": name,
             "role": bond.role,
             "class": bond.char_class.title(),
+            "class_colour": class_colour_by_name(bond.char_class),
             "present": False,
             "condition": GONE,
             # A logged-out character can still be mid-broadcast for a beat -
@@ -156,6 +157,9 @@ def _member(name: str, row: dict | None, geo, leader_name: str | None) -> dict:
         "present": True,
         "level": row["level"],
         "class": _CLASS_NAMES.get(class_id, f"class {class_id}"),
+        # The feed's name is drawn in it (infra#88), the same colour the
+        # Armory and the quest board's portraits use for the same person.
+        "class_colour": CLASS_COLOURS.get(class_id, "#ffffff"),
         "race": _RACE_NAMES.get(race, f"race {race}"),
         "faction": "alliance" if race in _ALLIANCE_RACES
                    else "horde" if race in _HORDE_RACES else "neutral",
@@ -180,6 +184,19 @@ def _member(name: str, row: dict | None, geo, leader_name: str | None) -> dict:
             row["name"], leader_name or ""),
         "age_seconds": int(row["age_seconds"]),
     }
+
+
+def class_colour_by_name(class_name: str) -> str:
+    """The colour for a class the family table spells by name.
+
+    A logged-out member has no snapshot row and so no class id, but the card
+    still carries their name and the name should still be their colour.
+    """
+    wanted = (class_name or "").strip().lower()
+    for cid, spelled in _CLASS_NAMES.items():
+        if spelled.lower() == wanted:
+            return CLASS_COLOURS.get(cid, "#ffffff")
+    return "#ffffff"
 
 
 def _health_pct(health: int, max_health: int) -> int:

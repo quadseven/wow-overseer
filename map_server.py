@@ -467,6 +467,32 @@ def _fetch_questlog() -> dict:
                 tuple(names),
             )
             rewarded_rows = list(cur.fetchall())
+            # WHO HAS ALREADY TURNED IN what somebody else still holds
+            # (infra#88): the board dims those portraits so "everyone else
+            # did this one" is visible. Restricted to quests in a live log
+            # by the subquery, so this stays a few dozen rows rather than
+            # every turn-in the realm has ever recorded.
+            cur.execute(
+                "SELECT c.name, r.quest "  # noqa: S608
+                "FROM characters c "
+                "JOIN character_queststatus_rewarded r ON r.guid = c.guid "
+                f"WHERE c.name IN ({holes}) AND r.quest IN ("
+                "SELECT q.quest FROM character_queststatus q "
+                "JOIN characters h ON h.guid = q.guid "
+                f"WHERE h.name IN ({holes}) AND q.status IN ({statuses}))",
+                (*names, *names, *questlog.IN_LOG),
+            )
+            done_rows = list(cur.fetchall())
+            # WHO IS GROUPED WITH WHOM, from the same fresh snapshot window
+            # /api/family reads: a helper is a party member who does not
+            # hold the quest, and a party is a live fact, not a saved one.
+            cur.execute(
+                "SELECT guid, name, group_leader FROM overseer_snapshot "  # noqa: S608
+                f"WHERE name IN ({holes}) "
+                "AND updated_at > NOW() - INTERVAL 60 SECOND",
+                tuple(names),
+            )
+            party_rows = list(cur.fetchall())
             # WHICH ids to look up is a decision about column spellings, and
             # RequiredNpcOrGo being negative for a gameobject is exactly the
             # kind of thing an adapter should not know. questlog owns it.
@@ -481,7 +507,8 @@ def _fetch_questlog() -> dict:
     finally:
         conn.close()
     return {"char_rows": char_rows, "quest_rows": quest_rows,
-            "rewarded_rows": rewarded_rows, "names": lookups}
+            "rewarded_rows": rewarded_rows, "names": lookups,
+            "done_rows": done_rows, "party_rows": party_rows}
 
 
 def _ensure_stream_store() -> None:

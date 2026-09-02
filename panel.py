@@ -21,6 +21,15 @@ _CLASS_NAMES = {
     6: "Death Knight", 7: "Shaman", 8: "Mage", 9: "Warlock", 11: "Druid",
 }
 
+# The class's own colour, from the client's RAID_CLASS_COLORS table. Every
+# name on every surface is drawn in it, the way every armory does - so it
+# lives beside the names, and armory, family and the quest board all read
+# this one table rather than each keeping a copy that could drift.
+CLASS_COLOURS = {
+    1: "#c79c6e", 2: "#f58cba", 3: "#abd473", 4: "#fff569", 5: "#ffffff",
+    6: "#c41f3b", 7: "#0070de", 8: "#69ccf0", 9: "#9482c9", 11: "#ff7d0a",
+}
+
 # class id -> (power name, characters.power* column, stored x10). Rage and
 # runic power are persisted x10 (350 = 35 rage); mana and energy are not.
 _POWER_BY_CLASS = {

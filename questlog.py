@@ -41,7 +41,7 @@ from __future__ import annotations
 
 import bonds
 import family
-from panel import _CLASS_NAMES
+from panel import _CLASS_NAMES, CLASS_COLOURS
 
 # character_queststatus.status, spelled as the core spells it (QuestStatus in
 # QuestDef.h): 0 NONE, 1 COMPLETE, 2 UNAVAILABLE, 3 INCOMPLETE, 4 AVAILABLE,
@@ -99,6 +99,36 @@ ACTIVE = "active"      # in progress
 STUCK = "failed"       # failed, still holding its slot
 
 _STATUS_WORDS = {COMPLETE: READY, INCOMPLETE: ACTIVE, FAILED: STUCK}
+
+# What a member IS to a quest on the shared board (infra#88). One word per
+# member per quest, chosen in this order of precedence, and the page draws a
+# portrait for each of them and nothing for anybody with no word at all:
+#
+#   HAND_IN  holds it and it is complete: the walk to the questgiver is all
+#            that is left, and that is the row the family should be doing next.
+#   ON       holds it, incomplete. The fight pays this person.
+#   HELPING  does not hold it, but is grouped with somebody who does. Kills in
+#            a party count for every member of it, so this person is DOING the
+#            quest for someone else's log - which is mod-overseer#28 working the
+#            way it should, and worth seeing.
+#   DONE     turned it in already, and is not helping anybody with it. Dimmed
+#            on the page, so "everyone else did this one already" is a thing a
+#            person can see rather than infer.
+#
+# Helping beats done on purpose. A member who turned the quest in last week and
+# is standing in the party tonight is helping tonight; the page still gets the
+# turned-in fact as a flag on the same portrait, so nothing is lost by the
+# choice, only ordered.
+HAND_IN = "hand_in"
+ON = "on"
+HELPING = "helping"
+DONE = "done"
+
+# How many board rows the page draws before it folds. The board is one list
+# for the whole family, so this is per FAMILY, not per member - twelve is
+# about what fits on a phone under the five feeds before "show all" is a
+# fair thing to ask somebody to tap.
+BOARD_PREVIEW = 12
 
 # Sort buckets, in the order a person wants them: what can be handed in now,
 # then what is being worked on, then what has never been touched, then what
@@ -274,6 +304,7 @@ def _member(name: str, char_row: dict | None, rows: list[dict], names: dict,
             "name": name,
             "role": bond.role,
             "class": bond.char_class.title(),
+            "class_colour": family.class_colour_by_name(bond.char_class),
             "present": False,
             "quests": [],
         }
@@ -288,6 +319,7 @@ def _member(name: str, char_row: dict | None, rows: list[dict], names: dict,
         "level": level,
         "class": _CLASS_NAMES.get(int(char_row["class"]),
                                  "class %s" % char_row["class"]),
+        "class_colour": _class_colour(char_row["class"]),
         "online": bool(char_row.get("online")),
         # THE #73 NUMBERS. used/slots is the whole defect, and it is one
         # subtraction that nothing on any surface was doing.
@@ -345,8 +377,191 @@ def _turn_in_spread(members: list[dict]) -> dict | None:
     }
 
 
+def _class_colour(class_id) -> str:
+    return CLASS_COLOURS.get(int(class_id or 0), "#ffffff")
+
+
+def party(party_rows: list[dict] | None) -> dict:
+    """Who is grouped with whom, and who leads, from the fresh snapshot rows.
+
+    `party_rows` are {guid, name, group_leader} for whoever the snapshot
+    still has (the same 60s window /api/family reads). group_leader is the
+    LEADER'S guid, shared by every member of one party and 0 for anyone solo,
+    so it is the party key as well as the leader pointer. The result is
+    {"groups": {name: leader_guid}, "leader": name or None}, the leader being
+    the world's answer when the snapshot has one and the roster's
+    (bonds.head_of_family) when it has none - the operator asked for the
+    crown on "the roster lead flag / group leader", and the live group is the
+    one that can change under the roster.
+    """
+    groups: dict[str, int] = {}
+    by_guid: dict[int, str] = {}
+    for r in party_rows or ():
+        by_guid[int(r["guid"])] = r["name"]
+    for r in party_rows or ():
+        key = int(r.get("group_leader") or 0)
+        if key:
+            groups[r["name"]] = key
+    leader = None
+    for key in groups.values():
+        if key in by_guid:
+            leader = by_guid[key]
+            break
+    if leader is None:
+        leader = bonds.head_of_family()
+    return {"groups": groups, "leader": leader}
+
+
+def _roles(quest_id: int, holders: dict, groups: dict, done: dict) -> dict:
+    """name -> role for one quest, in the precedence the HAND_IN/ON/HELPING/
+    DONE comment sets out. Names with no relation to the quest are absent."""
+    out: dict[str, str] = {}
+    by_holder = holders.get(quest_id, {})
+    for name, status in by_holder.items():
+        out[name] = HAND_IN if status == COMPLETE else ON
+    holder_parties = {groups[n] for n in by_holder if n in groups}
+    for name, key in groups.items():
+        if name not in out and key in holder_parties:
+            out[name] = HELPING
+    for name in done.get(quest_id, ()):
+        if name not in out:
+            out[name] = DONE
+    return out
+
+
+def _board_sort_key(brow: dict) -> tuple:
+    # Hand-ins first, then what is being worked on by the most people - the
+    # rows most of the family are standing in are the rows the family is
+    # actually doing tonight - then the rest, newest work first.
+    if brow["hand_in"]:
+        bucket = 0
+    elif brow["on"] and not brow["failed"]:
+        bucket = 1
+    else:
+        bucket = 2
+    return (bucket, -(brow["on"] + brow["hand_in"]), -brow["level"], brow["id"])
+
+
+def _index_rows(quest_rows: list[dict]) -> tuple[dict, dict, dict]:
+    """quest_rows -> (holders, per_holder, template).
+
+    holders is quest id -> {name: status}; per_holder is (quest id, name) ->
+    that member's own row; template is quest id -> the first row seen, which
+    carries the quest_template columns every holder's row repeats.
+    """
+    holders: dict[int, dict[str, int]] = {}
+    per_holder: dict[tuple[int, str], dict] = {}
+    template: dict[int, dict] = {}
+    for r in quest_rows:
+        qid = int(r["quest"])
+        holders.setdefault(qid, {})[r["name"]] = int(r["status"])
+        template.setdefault(qid, r)
+        per_holder[(qid, r["name"])] = r
+    return holders, per_holder, template
+
+
+def _done_by_quest(done_rows: list[dict] | None, holders: dict) -> dict[int, set]:
+    """quest id -> names who turned it in, for quests somebody still holds."""
+    done: dict[int, set] = {}
+    for r in done_rows or ():
+        qid = int(r["quest"])
+        if qid in holders:
+            done.setdefault(qid, set()).add(r["name"])
+    return done
+
+
+def _person(name: str, role: str, member: dict, own_row: dict | None,
+            names: dict, leader: str | None, turned_in: bool) -> dict:
+    objectives = _objectives(own_row, names) if own_row else []
+    return {
+        "name": name,
+        "role": role,
+        "leader": name == leader,
+        "class": member.get("class", ""),
+        "class_colour": member.get("class_colour", "#ffffff"),
+        "present": bool(member.get("present")),
+        "progress_pct": _progress_pct(objectives) if own_row else None,
+        "turned_in": turned_in,
+    }
+
+
+def _furthest(people: list[dict], order: dict) -> dict | None:
+    """The holder furthest along, ties to the earliest in roster order."""
+    return max(
+        (p for p in people if p["role"] in (ON, HAND_IN)),
+        key=lambda p: (p["progress_pct"] or 0, -order.get(p["name"], 0)),
+        default=None)
+
+
+def _board_row(qid: int, row: dict, people: list[dict], statuses: dict,
+               per_holder: dict, names: dict, order: dict) -> dict:
+    # The row's own objectives are the FURTHEST holder's. Five holders are
+    # five counters, and drawing all of them is the repetition the board
+    # exists to remove; each portrait carries its own number.
+    furthest = _furthest(people, order)
+    lead_row = per_holder.get((qid, furthest["name"])) if furthest else row
+    objectives = _objectives(lead_row, names)
+    return {
+        "id": qid,
+        "title": row.get("LogTitle") or "quest #%d" % qid,
+        "level": int(row.get("QuestLevel") or 0),
+        "objectives": objectives,
+        "progress_pct": _progress_pct(objectives),
+        "furthest": furthest["name"] if furthest else None,
+        "people": people,
+        "hand_in": sum(1 for p in people if p["role"] == HAND_IN),
+        "on": sum(1 for p in people if p["role"] == ON),
+        "helping": sum(1 for p in people if p["role"] == HELPING),
+        "done": sum(1 for p in people if p["role"] == DONE),
+        "failed": all(s == FAILED for s in statuses.values()),
+    }
+
+
+def build_board(members: list[dict], quest_rows: list[dict], names: dict,
+                done_rows: list[dict] | None, party_rows: list[dict] | None) -> dict:
+    """ONE quest board for the family, deduped by quest id (infra#88).
+
+    The per-member logs answer "what is in Ugga's log"; this answers "what is
+    the family doing, and who is on each piece of it", which is the question
+    five side-by-side lists made a person answer by reading the same title
+    five times. One row per distinct quest; on each row, a portrait for every
+    member with a role against it (see HAND_IN/ON/HELPING/DONE).
+
+    `done_rows` are {name, quest} from character_queststatus_rewarded, for the
+    quests somebody else still holds; `party_rows` are the snapshot's grouping
+    rows. Both may be None - an older adapter, or a test - and the board then
+    simply knows nothing about turn-ins or helpers rather than failing.
+    """
+    grouping = party(party_rows)
+    leader = grouping["leader"]
+    by_name = {m["name"]: m for m in members}
+    order = {name: i for i, name in enumerate(family.roster())}
+    holders, per_holder, template = _index_rows(quest_rows)
+    done = _done_by_quest(done_rows, holders)
+    rows = []
+    for qid, row in template.items():
+        roles = _roles(qid, holders, grouping["groups"], done)
+        people = [
+            _person(name, roles[name], by_name.get(name, {}),
+                    per_holder.get((qid, name)), names, leader,
+                    name in done.get(qid, ()))
+            for name in sorted(roles, key=lambda n: order.get(n, len(order)))
+        ]
+        rows.append(_board_row(qid, row, people, holders[qid], per_holder,
+                               names, order))
+    rows.sort(key=_board_sort_key)
+    return {
+        "rows": rows,
+        "preview": BOARD_PREVIEW,
+        "leader": leader,
+        "grouped": sorted(grouping["groups"], key=lambda n: order.get(n, len(order))),
+    }
+
+
 def build_questlog(char_rows: list[dict], quest_rows: list[dict],
-                   rewarded_rows: list[dict], names: dict) -> dict:
+                   rewarded_rows: list[dict], names: dict,
+                   done_rows: list[dict] | None = None,
+                   party_rows: list[dict] | None = None) -> dict:
     """Five quest logs, side by side and in roster order.
 
     All four inputs arrive keyed by character name or entry id and unfiltered;
@@ -359,6 +574,11 @@ def build_questlog(char_rows: list[dict], quest_rows: list[dict],
     `names` is {"creatures": {entry: name}, "gameobjects": {...},
     "items": {...}} - whatever the adapter could look up for the ids
     objective_entries() asked for. A miss is survivable everywhere.
+
+    `done_rows` ({name, quest} from character_queststatus_rewarded) and
+    `party_rows` ({guid, name, group_leader} from the snapshot) feed the
+    shared board only, and default to nothing so an adapter that does not
+    have them still gets five logs and a board that simply knows less.
     """
     chars = {r["name"]: r for r in char_rows}
     turned_in = {r["name"]: int(r["turned_in"]) for r in rewarded_rows}
@@ -375,6 +595,7 @@ def build_questlog(char_rows: list[dict], quest_rows: list[dict],
     everyone = sum(1 for who in holders.values() if len(who) >= len(members))
     return {
         "members": members,
+        "board": build_board(members, quest_rows, names, done_rows, party_rows),
         "slots": LOG_SLOTS,
         "expected": len(members),
         # Distinct quests, not rows: five characters holding the same quest is

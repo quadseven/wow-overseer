@@ -388,5 +388,190 @@ class TheVocabularyIsOwnedHere(unittest.TestCase):
         self.assertIn("4242", member(payload, first)["quests"][0]["title"])
 
 
+def board(quest_rows, done=None, party=None, char_specs=None):
+    """The shared board, with the same defaults build() uses."""
+    roster = family.roster()
+    if char_specs is None:
+        char_specs = [(n, 20) for n in roster]
+    return questlog.build_questlog(
+        chars(*char_specs), quest_rows, [],
+        {"creatures": {}, "gameobjects": {}, "items": {}},
+        done_rows=done, party_rows=party,
+    )["board"]
+
+
+def brow(payload_board, quest_id):
+    return next(r for r in payload_board["rows"] if r["id"] == quest_id)
+
+
+def role_of(payload_board, quest_id, name):
+    people = brow(payload_board, quest_id)["people"]
+    return next((p["role"] for p in people if p["name"] == name), None)
+
+
+def grouped(*names, leader=None):
+    """Snapshot party rows: everyone named is in one party under `leader`
+    (the first name when unsaid). guid is the roster position plus one."""
+    roster = family.roster()
+    lead = leader or names[0]
+    return [{"guid": roster.index(n) + 1, "name": n,
+             "group_leader": roster.index(lead) + 1} for n in names]
+
+
+class TheSharedBoard(unittest.TestCase):
+    """infra#88: one quest board for the family, deduped by quest id, with a
+    portrait per member on each row saying what that member IS to the quest.
+    Five side-by-side logs made a person read the same title five times to
+    learn who was on it; these are the rules that make one list say it."""
+
+    def test_one_row_per_quest_however_many_hold_it(self):
+        roster = family.roster()
+        b = board([row(n, 60) for n in roster] + [row(roster[0], 61)])
+        self.assertEqual(sorted(r["id"] for r in b["rows"]), [60, 61])
+
+    def test_a_holder_is_on_it_until_it_is_complete_then_ready_to_hand_in(self):
+        a, c = family.roster()[0], family.roster()[2]
+        b = board([row(a, 7, questlog.INCOMPLETE), row(c, 7, questlog.COMPLETE)])
+        self.assertEqual(role_of(b, 7, a), questlog.ON)
+        self.assertEqual(role_of(b, 7, c), questlog.HAND_IN)
+        self.assertEqual(brow(b, 7)["on"], 1)
+        self.assertEqual(brow(b, 7)["hand_in"], 1)
+
+    def test_somebody_with_no_relation_to_the_quest_gets_no_portrait(self):
+        a, b_ = family.roster()[:2]
+        b = board([row(a, 7)])
+        self.assertIsNone(role_of(b, 7, b_))
+        self.assertEqual([p["name"] for p in brow(b, 7)["people"]], [a])
+
+    def test_a_party_member_who_does_not_hold_it_is_helping(self):
+        """Kills in a party count for every member of it, so a member grouped
+        with the holder is doing the quest for someone else's log - which is
+        mod-overseer#28 working the way it should, and worth showing."""
+        a, b_, c = family.roster()[:3]
+        b = board([row(a, 7)], party=grouped(a, b_))
+        self.assertEqual(role_of(b, 7, b_), questlog.HELPING)
+        # c is not in the party and not holding it: nothing to say.
+        self.assertIsNone(role_of(b, 7, c))
+        self.assertEqual(brow(b, 7)["helping"], 1)
+
+    def test_being_grouped_with_a_non_holder_is_not_helping(self):
+        a, b_, c = family.roster()[:3]
+        b = board([row(a, 7)], party=grouped(b_, c))
+        self.assertIsNone(role_of(b, 7, b_))
+        self.assertIsNone(role_of(b, 7, c))
+
+    def test_a_turn_in_reads_as_done_and_only_for_quests_still_held(self):
+        a, b_ = family.roster()[:2]
+        b = board([row(a, 7)], done=[{"name": b_, "quest": 7},
+                                    {"name": b_, "quest": 999}])
+        self.assertEqual(role_of(b, 7, b_), questlog.DONE)
+        self.assertEqual(brow(b, 7)["done"], 1)
+        # 999 is in nobody's log: it is not a row, so it is not on the board.
+        self.assertEqual([r["id"] for r in b["rows"]], [7])
+
+    def test_helping_beats_done_but_the_turn_in_is_still_said(self):
+        """Turned it in last week and standing in the party tonight: they are
+        helping tonight. The flag survives so the page can still tick the
+        portrait; only the word is decided here."""
+        a, b_ = family.roster()[:2]
+        b = board([row(a, 7)], done=[{"name": b_, "quest": 7}],
+                  party=grouped(a, b_))
+        self.assertEqual(role_of(b, 7, b_), questlog.HELPING)
+        person = next(p for p in brow(b, 7)["people"] if p["name"] == b_)
+        self.assertTrue(person["turned_in"])
+
+    def test_holding_it_beats_everything(self):
+        a, b_ = family.roster()[:2]
+        b = board([row(a, 7), row(b_, 7)], done=[{"name": b_, "quest": 7}],
+                  party=grouped(a, b_))
+        self.assertEqual(role_of(b, 7, b_), questlog.ON)
+
+    def test_the_leader_wears_the_crown_and_it_is_the_worlds_leader(self):
+        a, b_ = family.roster()[:2]
+        b = board([row(a, 7), row(b_, 7)], party=grouped(a, b_, leader=b_))
+        self.assertEqual(b["leader"], b_)
+        people = {p["name"]: p for p in brow(b, 7)["people"]}
+        self.assertTrue(people[b_]["leader"])
+        self.assertFalse(people[a]["leader"])
+
+    def test_with_no_party_the_roster_head_leads(self):
+        """The operator asked for the crown on "the roster lead flag / group
+        leader". With nobody grouped there is no group leader, and the family
+        table is the answer to who the party follows when it forms."""
+        a = family.roster()[0]
+        b = board([row(a, 7)])
+        self.assertEqual(b["leader"], bonds.head_of_family())
+
+    def test_portraits_come_out_in_roster_order(self):
+        roster = family.roster()
+        b = board([row(n, 7) for n in reversed(roster)])
+        self.assertEqual([p["name"] for p in brow(b, 7)["people"]], roster)
+
+    def test_hand_ins_first_then_the_most_held_then_the_rest(self):
+        a, b_, c = family.roster()[:3]
+        rows = [
+            row(a, 1, QuestLevel=30),                     # on, one holder
+            row(a, 2), row(b_, 2), row(c, 2),             # on, three holders
+            row(b_, 3, questlog.COMPLETE, QuestLevel=5),  # ready to hand in
+            row(c, 4, questlog.FAILED, QuestLevel=40),    # the rest
+            row(a, 5), row(b_, 5),                        # on, two holders
+        ]
+        self.assertEqual([r["id"] for r in board(rows)["rows"]], [3, 2, 5, 1, 4])
+
+    def test_the_row_carries_the_furthest_holders_objectives(self):
+        """Five holders are five counters, and drawing all five is the
+        repetition the board exists to remove. The row shows the one that is
+        furthest along and says whose it is; each portrait keeps its own."""
+        a, b_ = family.roster()[:2]
+        rows = [row(a, 7, RequiredNpcOrGo1=100, RequiredNpcOrGoCount1=10, mobcount1=2),
+                row(b_, 7, RequiredNpcOrGo1=100, RequiredNpcOrGoCount1=10, mobcount1=8)]
+        r = brow(board(rows), 7)
+        self.assertEqual(r["furthest"], b_)
+        self.assertEqual(r["progress_pct"], 80)
+        by = {p["name"]: p["progress_pct"] for p in r["people"]}
+        self.assertEqual(by, {a: 20, b_: 80})
+
+    def test_a_helper_has_no_progress_of_their_own(self):
+        a, b_ = family.roster()[:2]
+        r = brow(board([row(a, 7)], party=grouped(a, b_)), 7)
+        helper = next(p for p in r["people"] if p["name"] == b_)
+        self.assertIsNone(helper["progress_pct"])
+
+    def test_every_portrait_carries_its_class_colour(self):
+        a = family.roster()[0]
+        r = brow(board([row(a, 7)]), 7)
+        self.assertTrue(r["people"][0]["class_colour"].startswith("#"))
+
+    def test_a_logged_out_member_still_has_a_colour(self):
+        a = family.roster()[0]
+        payload = build([row(a, 7)], char_specs=[])
+        self.assertTrue(member(payload, a)["class_colour"].startswith("#"))
+
+    def test_the_fold_size_is_decided_here_not_in_the_page(self):
+        a = family.roster()[0]
+        self.assertEqual(board([row(a, 7)])["preview"], questlog.BOARD_PREVIEW)
+
+    def test_an_empty_family_is_an_empty_board(self):
+        self.assertEqual(board([])["rows"], [])
+
+
+class WhoIsGroupedWithWhom(unittest.TestCase):
+    def test_solo_members_are_in_no_group(self):
+        a, b_ = family.roster()[:2]
+        rows = [{"guid": 1, "name": a, "group_leader": 0},
+                {"guid": 2, "name": b_, "group_leader": None}]
+        self.assertEqual(questlog.party(rows)["groups"], {})
+
+    def test_a_leader_the_snapshot_has_not_got_names_nobody_from_the_world(self):
+        a = family.roster()[0]
+        rows = [{"guid": 1, "name": a, "group_leader": 999}]
+        got = questlog.party(rows)
+        self.assertEqual(got["groups"], {a: 999})
+        self.assertEqual(got["leader"], bonds.head_of_family())
+
+    def test_none_is_the_same_as_no_snapshot(self):
+        self.assertEqual(questlog.party(None)["groups"], {})
+
+
 if __name__ == "__main__":
     unittest.main()
