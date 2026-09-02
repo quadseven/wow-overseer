@@ -54,6 +54,7 @@ is never proposed while 35 is undone.
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 
 import questbook
@@ -258,3 +259,145 @@ def say(result: Plan) -> str:
         len(result.grants), len(result.refusals),
         (" (%s)" % detail) if detail else "",
     )
+
+
+# The worldserver's share gates in the order DoShare tests them
+# (mod_overseer.cpp), each named by the describe() literal it writes into
+# overseer_command.result.reason. The ORDER is load-bearing: a refusal at
+# one gate proves every gate before it passed at that moment, which is how
+# a stale permanent refusal is told apart from a live one below. The tuple
+# is pinned against the mod source by tests/test_questshare.py, so a gate
+# added or moved in C++ fails a test here rather than silently proving the
+# wrong thing. "delivered" passed all of them.
+SHARE_GATES = (
+    "malformed request",
+    "no taker",
+    "taker offline",
+    "same character",
+    "no such quest",
+    "holder cannot share it (not held, or not flagged sharable)",
+    "not in the same party",
+    "not on the same map",
+    "taker already turned it in",
+    "taker already holds it",
+    "taker cannot take it in its current state",
+    "taker quest log is full",
+    "taker is not eligible (level, race, class, prerequisite or exclusive group)",
+    "no bag space for the quest starting item",
+    "the quest did not land in the taker log",
+)
+_GATE_RANK = {reason: rank for rank, reason in enumerate(SHARE_GATES)}
+
+# The gates waiting cannot change the answer of: the family regrouping,
+# freeing a log slot or logging in makes none of these succeed. "holder
+# cannot share it" is infra#2892's Bork row - a quest held at status 0 that
+# the read now excludes - and the reason this exists at all: 167 hourly
+# retries of a share that could never land. Every other gate is transient
+# ("taker offline", "not in the same party", "not on the same map", a full
+# log, a prerequisite not yet turned in, "taker already holds it" - the next
+# pass recomputes from live rows and simply stops proposing that one). A
+# reason not in SHARE_GATES at all proves nothing and counts for nothing.
+PERMANENT_REFUSALS = frozenset({
+    "holder cannot share it (not held, or not flagged sharable)",
+    "no such quest",
+    "malformed request",
+    "same character",
+    "taker already turned it in",
+})
+
+
+def history_depth(base_minutes: int, cap_hours: int) -> int:
+    """How many of a triple's youngest answers, per outcome, backed_off()
+    can ever need: the streak length at which the doubling reaches the cap.
+
+    Past that length another refusal changes nothing, so a reader that keeps
+    only this many youngest rows per (triple, status, reason) decides
+    identically to one that reads the whole memory window - the property
+    tests/test_questshare.py checks against random histories. It is what
+    lets the bridge's five-minute read stay bounded by the number of triples
+    rather than by ninety days of hourly transient retries (Codex's fifth
+    round: an unbounded read that outgrows its ten-second timeout stops
+    every share, not just the backed-off ones).
+    """
+    if base_minutes <= 0 or cap_hours <= 0:
+        return 1
+    n = 0
+    while base_minutes * 60 * 2**n < cap_hours * 3600:
+        n += 1
+    return max(n, 1)
+
+
+def backed_off(attempts, base_minutes: int, cap_hours: int) -> frozenset:
+    """(holder, taker, command) triples still inside their backoff after
+    the worldserver refused them for a PERMANENT reason.
+
+    attempts: (holder, taker, command, status, result, age_seconds) rows
+    for every share the worldserver has answered - status 'delivered' or
+    'error' - with result the JSON it wrote (None for a row that never got
+    one: the sweeper's timeouts are not refusals and count for nothing, and
+    so does JSON we cannot read - giving up on the strength of a row we
+    cannot parse would be the status-less read this issue started with)
+    and age_seconds how long ago the worldserver answered (the row's last
+    write, not its creation: a queued ask is not yet a refusal), as the
+    database measures it, so no clock of ours is compared against theirs.
+
+    A permanent refusal counts only while nothing younger has got PAST its
+    gate. A delivery got past every gate, so it resets the whole streak: it
+    proves whatever was permanent about the refusals before it has changed
+    (the holder re-picked the quest, the read was corrected) and a later
+    need for the same share starts from a clean slate rather than inheriting
+    up to a week of wait from a solved problem - Codex's third finding on
+    this change. A later refusal at a LATER gate resets it too - Codex's
+    fifth: "holder cannot share it" five times, then the holder re-picks the
+    quest and the next attempt is refused for "not on the same map". That
+    refusal came from a gate the worldserver only reaches after
+    CanShareQuest passed, so the holder problem is over, and when the party
+    regroups the share is offered within the hour instead of a week. A
+    refusal at an EARLIER gate ("taker offline" is tested before the holder
+    is) proves nothing about the gates after it and resets nothing.
+
+    The quiet time after the n-th permanent refusal in the streak is
+    base_minutes * 2**n, capped at cap_hours: 2h, 4h, 8h, 16h, 32h, 64h,
+    128h, then a week for as long as the refusals keep coming. A
+    rolling-window threshold was the first shape here and Codex showed it
+    does not stop anything: once the window is full, every row that ages
+    out admits a fresh hourly retry, so the loop merely pauses and resumes.
+    Doubling never resumes - the gaps only grow - and it never gives up for
+    good either, so a share the world later allows is offered again within
+    the cap with nobody resetting anything.
+
+    Transient refusals never accumulate here. A taker who was offline five
+    times is offered the quest again the moment they are back, which the
+    first draft of this got wrong by counting every error row alike.
+    """
+    answers: dict = {}
+    for holder, taker, command, status, result, age_s in attempts:
+        key = (holder, taker, command)
+        if status == "delivered":
+            answers.setdefault(key, []).append((age_s, len(SHARE_GATES), False))
+            continue
+        if status != "error" or not result:
+            continue
+        try:
+            reason = json.loads(result).get("reason")
+        except (ValueError, AttributeError):
+            continue
+        if reason not in _GATE_RANK:
+            continue
+        answers.setdefault(key, []).append(
+            (age_s, _GATE_RANK[reason], reason in PERMANENT_REFUSALS)
+        )
+    held = set()
+    for key, rows in answers.items():
+        n, youngest, furthest = 0, None, -1
+        for age_s, rank, permanent in sorted(rows):
+            if permanent and rank >= furthest:
+                n += 1
+                youngest = age_s if youngest is None else youngest
+            furthest = max(furthest, rank)
+        if n == 0:
+            continue
+        quiet_s = min(cap_hours * 3600, base_minutes * 60 * 2 ** min(n, 30))
+        if youngest < quiet_s:
+            held.add(key)
+    return frozenset(held)

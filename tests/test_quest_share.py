@@ -21,6 +21,8 @@ import pathlib
 import re
 import unittest
 
+import questshare
+
 ROOT = pathlib.Path(__file__).resolve().parents[3]
 MODULE = ROOT / "docker/azerothcore-playerbots/mod-overseer/src/mod_overseer.cpp"
 MIGRATION = (
@@ -330,6 +332,143 @@ class TheBridgeAsksForWhatTheDecisionNeeds(unittest.TestCase):
     def test_it_says_what_it_did_even_when_it_did_nothing(self):
         bridge = self._bridge()
         self.assertIn("questshare.say(plan)", bridge)
+
+
+# Spark-authored: qwen3-coder-next:q8_0 on an on-prem DGX Spark, 2026-09-02; the
+# reason-aware split and the backoff were added by hand after two Codex rounds.
+class TheShareRetryLogic(unittest.TestCase):
+    """The pass backs off a share the worldserver keeps refusing for a
+    PERMANENT reason (infra#2892), doubling the wait up to a cap.
+
+    These pin source text, like the rest of this file; the SQL runs only
+    against the real characters database. Which refusals count, and the
+    arithmetic, is questshare.backed_off(), tested behaviorally in
+    test_questshare.py.
+    """
+
+    def _bridge(self) -> str:
+        return BRIDGE.read_text(encoding="utf-8")
+
+    def _share_quests_body(self) -> str:
+        bridge = self._bridge()
+        start = bridge.index("def _share_quests()")
+        return bridge[start : bridge.index("def _choose_drive_quest")]
+
+    def test_it_is_a_backoff_not_a_rolling_window_threshold(self):
+        """Two shapes died before this one. The first counted errors inside
+        SHARE_RETRY_MINUTES, the window that already admits one row per
+        triple, so no threshold above one was reachable. The second counted
+        inside a longer rolling window, and Codex showed that only pauses
+        the loop: once the window is full, every row that ages out admits a
+        fresh hourly retry. The bridge hands the rows and their ages to
+        questshare and applies whatever it says."""
+        body = self._share_quests_body()
+        self.assertIn(
+            "questshare.backed_off(\n"
+            "        _answered_share_rows(\n"
+            "            SHARE_REFUSAL_MEMORY_DAYS,\n"
+            "            questshare.history_depth(SHARE_RETRY_MINUTES, SHARE_BACKOFF_CAP_HOURS),\n"
+            "        ),\n"
+            "        SHARE_RETRY_MINUTES,\n"
+            "        SHARE_BACKOFF_CAP_HOURS,\n"
+            "    )",
+            body,
+        )
+        self.assertNotIn("SHARE_GIVE_UP_HOURS", self._bridge())
+        self.assertNotIn("SHARE_RETRY_MAX_FAILURES", self._bridge())
+
+    def test_the_bridge_does_not_decide_which_refusals_are_permanent(self):
+        """The Codex review of the draft found that five 'taker offline' rows
+        would suppress a share for a day. The bridge fetches (holder, taker,
+        command, status, result, age) rows and nothing more; questshare reads the
+        worldserver's reason and keeps that decision under real tests. The
+        age comes from the database's clock, not the container's."""
+        bridge = self._bridge()
+        helper = bridge[bridge.index("def _answered_share_rows") : bridge.index("def _insert_share")]
+        self.assertIn("SELECT target_name, target_arg, command, status, result, ", helper)
+        # the answer's age, not the ask's: a row can sit pending or claimed
+        # before the worldserver reaches it, and measured from created_at a
+        # queue delay would eat the quiet time (Codex, round 4)
+        self.assertIn("TIMESTAMPDIFF(SECOND, updated_at, NOW()) AS age_s", helper)
+        self.assertIn("updated_at > NOW() - INTERVAL %s DAY", helper)
+        self.assertNotIn("created_at >", helper)
+        self.assertNotIn("TIMESTAMPDIFF(SECOND, created_at", helper)
+        # delivered rows too: a delivery resets the streak (Codex, round 3)
+        self.assertIn("status IN ('delivered', 'error')", helper)
+        self.assertIn("INTERVAL %s DAY", helper)
+        self.assertNotIn("GROUP BY", helper)
+        self.assertNotIn("HAVING", helper)
+        # and no reason literal: the SQL windows per reason without knowing
+        # what any of them means
+        for reason in questshare.PERMANENT_REFUSALS:
+            self.assertNotIn(reason, helper)
+
+    def test_the_read_is_bounded_by_triples_not_by_history(self):
+        """Codex, round 5: read whole, the ninety-day window is every hourly
+        transient retry of every triple - a party split for a season is two
+        hundred thousand rows every five minutes, and the read timeout would
+        then stop EVERY share. The SQL keeps the youngest history_depth()
+        rows per (triple, status, reason), which questshare proves decides
+        identically (test_questshare's random-history property), and the
+        reason is extracted behind JSON_VALID because JSON_EXTRACT on a
+        non-JSON result is an error rather than a NULL."""
+        bridge = self._bridge()
+        helper = bridge[bridge.index("def _answered_share_rows") : bridge.index("def _insert_share")]
+        self.assertIn("def _answered_share_rows(days: int, depth: int)", helper)
+        self.assertIn("ROW_NUMBER() OVER (", helper)
+        self.assertIn("PARTITION BY target_name, target_arg, command, status, ", helper)
+        self.assertIn("CASE WHEN JSON_VALID(result) ", helper)
+        self.assertIn("THEN JSON_UNQUOTE(JSON_EXTRACT(result, '$.reason')) END", helper)
+        self.assertIn("ORDER BY updated_at DESC) AS rn", helper)
+        self.assertIn("WHERE rn <= %s", helper)
+        self.assertIn("(int(days), int(depth))", helper)
+
+    def test_the_read_has_an_index_shaped_like_it(self):
+        """overseer_command is never pruned and shipped with idx_status only;
+        a five-minute read of kind + status + updated_at range would walk
+        every answered row the table ever held. The migration's key must
+        match the predicate, columns in that order."""
+        sql = (MIGRATION.parent / "2026_09_02_00_overseer_share_backoff.sql").read_text(encoding="utf-8")
+        self.assertIn("ADD KEY `idx_kind_status_updated` (`kind`, `status`, `updated_at`)", sql)
+
+    def test_the_index_ships_in_the_image_that_is_built(self):
+        """Codex, round 6: the worldserver image is built from
+        UPSTREAM-PINS.env's AC_OVERSEER_SHA, and its workflow is triggered by
+        that file - not by the submodule gitlink the source-reading tests
+        look at. A branch that bumps the gitlink and leaves the pin behind
+        ships the bridge's read without its index. The two must name the
+        same commit, and that commit must carry the migration."""
+        import subprocess
+
+        pins = (ROOT / "docker/azerothcore-playerbots/UPSTREAM-PINS.env").read_text(encoding="utf-8")
+        pinned = re.search(r"^AC_OVERSEER_SHA=([0-9a-f]{40})$", pins, re.MULTILINE)
+        self.assertIsNotNone(pinned, "AC_OVERSEER_SHA missing from UPSTREAM-PINS.env")
+        gitlink = subprocess.run(
+            ["git", "-C", str(ROOT), "ls-files", "-s", "--", "docker/azerothcore-playerbots/mod-overseer"],
+            capture_output=True, text=True, check=True,
+        ).stdout.split()
+        self.assertEqual(gitlink[:1], ["160000"], "mod-overseer is not a gitlink here")
+        self.assertEqual(pinned.group(1), gitlink[1])
+        checked_out = subprocess.run(
+            ["git", "-C", str(MIGRATION.parents[4]), "rev-parse", "HEAD"],
+            capture_output=True, text=True, check=True,
+        ).stdout.strip()
+        self.assertEqual(checked_out, gitlink[1], "the submodule checkout is not at the gitlink")
+        self.assertTrue((MIGRATION.parent / "2026_09_02_00_overseer_share_backoff.sql").is_file())
+
+    def test_the_constants_are_environment_overridable(self):
+        bridge = self._bridge()
+        self.assertIn('os.environ.get("SHARE_BACKOFF_CAP_HOURS", "168")', bridge)
+        self.assertIn('os.environ.get("SHARE_REFUSAL_MEMORY_DAYS", "90")', bridge)
+
+    def test_the_pass_skips_held_shares_and_says_so(self):
+        body = self._share_quests_body()
+        self.assertIn("in held", body)
+        self.assertIn("questshare: holding off", body)
+
+    def test_the_pass_still_inserts_new_shares(self):
+        """A new share (not in seen or held) still gets inserted."""
+        self.assertIn("if _insert_share(grant):", self._share_quests_body())
 
 
 if __name__ == "__main__":

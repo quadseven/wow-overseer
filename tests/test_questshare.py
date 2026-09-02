@@ -28,6 +28,7 @@ getting that wrong looks like working code, which is what this file pins:
   * proposing a share the server will refuse, because the quest does not carry
     QUEST_FLAGS_SHARABLE and Player::CanShareQuest says no.
 """
+import json
 import unittest
 
 import questbook
@@ -455,6 +456,261 @@ class TheLiveShapeConverges(unittest.TestCase):
     def test_and_bork_does_not_drag_coldridge_along(self):
         plan = self._live()
         self.assertEqual([g for g in plan.grants if g.quest_id == 218], [])
+
+
+# Spark-authored: qwen3-coder-next:q8_0 on an on-prem DGX Spark, 2026-09-02, then
+# moved here by hand after review so the decision runs under real tests.
+class BackingOffIsForPermanentRefusalsOnly(unittest.TestCase):
+    """infra#2892 was 167 identical share attempts at a quest the holder had
+    at status 0. After a PERMANENT refusal the pass waits, and the wait
+    doubles with each further refusal up to a cap. A taker who was offline
+    or on the wrong map five times has told us nothing about the quest, so
+    those rows must not count: Codex found the draft suppressed them for a
+    day."""
+
+    PERMANENT = json.dumps(
+        {"outcome": "refused", "reason": "holder cannot share it (not held, or not flagged sharable)"}
+    )
+    TRANSIENT = json.dumps({"outcome": "refused", "reason": "taker offline"})
+    KEY = ("Bork", "Aiyla", "share 1234")
+    BASE, CAP = 60, 168  # the bridge's defaults: an hour, a week
+    H = 3600
+
+    def rows(self, result, ages_h, key=None, status="error"):
+        holder, taker, command = key or self.KEY
+        return [(holder, taker, command, status, result, age * self.H) for age in ages_h]
+
+    def delivered(self, ages_h, key=None):
+        return self.rows(json.dumps({"outcome": "shared"}), ages_h, key, status="delivered")
+
+    def held(self, rows):
+        return questshare.backed_off(rows, self.BASE, self.CAP)
+
+    def test_one_permanent_refusal_holds_for_two_hours(self):
+        self.assertEqual(self.held(self.rows(self.PERMANENT, [1])), frozenset({self.KEY}))
+        self.assertEqual(self.held(self.rows(self.PERMANENT, [2])), frozenset())
+
+    def test_the_wait_doubles_with_each_refusal(self):
+        # five refusals: 2**5 hours = 32h of quiet, measured from the youngest
+        ages = [31, 40, 50, 60, 70]
+        self.assertEqual(self.held(self.rows(self.PERMANENT, ages)), frozenset({self.KEY}))
+        ages = [32, 40, 50, 60, 70]
+        self.assertEqual(self.held(self.rows(self.PERMANENT, ages)), frozenset())
+
+    def test_the_wait_is_capped_at_a_week(self):
+        ages = [167] + [200 + 10 * i for i in range(30)]
+        self.assertEqual(self.held(self.rows(self.PERMANENT, ages)), frozenset({self.KEY}))
+        ages = [168] + [200 + 10 * i for i in range(30)]
+        self.assertEqual(self.held(self.rows(self.PERMANENT, ages)), frozenset())
+
+    def test_an_unchanged_permanent_refusal_never_returns_to_hourly(self):
+        """Codex's scenario against the rolling-window draft: five hourly
+        failures, a 19h pause, then one retry per hour forever as rows age
+        out. Drive the real loop - every hour, offer unless held, and every
+        offer is refused - for ninety days and look at the gaps."""
+        rows, offers = [], []
+        for hour in range(90 * 24):
+            rows = [(h, t, c, st, r, age + self.H) for h, t, c, st, r, age in rows]
+            if self.KEY in self.held(rows):
+                continue
+            offers.append(hour)
+            rows.append((*self.KEY, "error", self.PERMANENT, 0))
+        gaps = [b - a for a, b in zip(offers, offers[1:], strict=False)]
+        self.assertEqual(gaps[:7], [2, 4, 8, 16, 32, 64, 128])
+        self.assertTrue(all(g == self.CAP for g in gaps[7:]), gaps)
+        self.assertLess(len(offers), 20, offers)
+
+    def test_a_delivered_share_resets_the_streak(self):
+        """Codex's third finding: refusals, then the holder re-picks the
+        quest and a share lands, then the taker abandons it and the same
+        share is needed again. The delivery proved the old refusals are
+        about a state that no longer exists; a fresh refusal after it is
+        the first of a new streak, not the ninth of the old one."""
+        old = self.rows(self.PERMANENT, [30, 40, 50, 60, 70, 80, 90, 100])
+        landed = self.delivered([20])
+        # nothing since the delivery: not held at all
+        self.assertEqual(self.held(old + landed), frozenset())
+        # one fresh refusal after it: a 2h wait, not the week eight would earn
+        fresh = self.rows(self.PERMANENT, [1])
+        self.assertEqual(self.held(old + landed + fresh), frozenset({self.KEY}))
+        fresh = self.rows(self.PERMANENT, [2])
+        self.assertEqual(self.held(old + landed + fresh), frozenset())
+
+    def test_a_delivery_for_another_taker_resets_nothing(self):
+        other = ("Bork", "Ilhan", "share 1234")
+        # three refusals, youngest an hour old: an 8h wait, which Ilhan's
+        # delivery has nothing to say about
+        rows = self.rows(self.PERMANENT, [1, 40, 50]) + self.delivered([20], other)
+        self.assertEqual(self.held(rows), frozenset({self.KEY}))
+        rows = self.rows(self.PERMANENT, [1, 40, 50]) + self.delivered([20])
+        self.assertEqual(self.held(rows), frozenset({self.KEY}))  # 1h < 2h: streak of one
+        rows = self.rows(self.PERMANENT, [3, 40, 50]) + self.delivered([20])
+        self.assertEqual(self.held(rows), frozenset())
+
+    def test_transient_refusals_never_accumulate(self):
+        self.assertEqual(self.held(self.rows(self.TRANSIENT, range(50))), frozenset())
+
+    def test_transient_rows_do_not_lengthen_a_permanent_wait(self):
+        rows = self.rows(self.PERMANENT, [3]) + self.rows(self.TRANSIENT, [0, 1, 2])
+        self.assertEqual(self.held(rows), frozenset())
+
+    def test_every_permanent_reason_counts(self):
+        for reason in questshare.PERMANENT_REFUSALS:
+            with self.subTest(reason=reason):
+                rows = self.rows(json.dumps({"reason": reason}), [1])
+                self.assertEqual(self.held(rows), frozenset({self.KEY}))
+
+    def test_a_sweeper_timeout_has_no_result_and_counts_for_nothing(self):
+        """The sweeper marks a stuck row status='error' with detail only and
+        result NULL. The worldserver never spoke, so nothing was refused."""
+        self.assertEqual(self.held(self.rows(None, range(9))), frozenset())
+
+    def test_malformed_result_counts_for_nothing(self):
+        rows = self.rows("not json", [0]) + self.rows("[1, 2]", [0]) + self.rows("", [0])
+        self.assertEqual(self.held(rows), frozenset())
+
+    def test_a_result_with_no_reason_counts_for_nothing(self):
+        self.assertEqual(self.held(self.rows(json.dumps({"outcome": "refused"}), [0])), frozenset())
+
+    def test_triples_are_held_separately(self):
+        other = ("Bork", "Ilhan", "share 1234")
+        rows = self.rows(self.PERMANENT, [1]) + self.rows(self.PERMANENT, [5], other)
+        self.assertEqual(self.held(rows), frozenset({self.KEY}))
+
+    def test_no_rows_no_hold(self):
+        self.assertEqual(self.held([]), frozenset())
+
+    def refused(self, reason, ages_h, key=None):
+        return self.rows(json.dumps({"outcome": "refused", "reason": reason}), ages_h, key)
+
+    def test_a_later_gate_refusal_ends_an_earlier_permanent_streak(self):
+        """Codex, round 5: five 'holder cannot share it' refusals, then the
+        holder re-picks the quest and the next attempt is refused for 'not
+        on the same map' - a gate the worldserver reaches only after
+        CanShareQuest passed. The holder problem is over; when the party
+        regroups the share must be offered within the hour, not held for
+        the 32h the dead streak would have charged."""
+        streak = self.refused("holder cannot share it (not held, or not flagged sharable)", [4, 5, 6, 7, 8])
+        self.assertEqual(self.held(streak), frozenset({self.KEY}))
+        for later in ("not in the same party", "not on the same map", "taker already holds it",
+                      "taker cannot take it in its current state", "taker quest log is full",
+                      "taker is not eligible (level, race, class, prerequisite or exclusive group)",
+                      "no bag space for the quest starting item",
+                      "the quest did not land in the taker log"):
+            self.assertEqual(self.held(streak + self.refused(later, [1])), frozenset(), later)
+
+    def test_an_earlier_gate_refusal_ends_nothing(self):
+        """'taker offline' is tested BEFORE the holder is, so a taker who
+        logged off says nothing about whether the holder can share now."""
+        streak = self.refused("holder cannot share it (not held, or not flagged sharable)", [4, 5, 6, 7, 8])
+        for earlier in ("taker offline", "no taker"):
+            self.assertEqual(self.held(streak + self.refused(earlier, [1])), frozenset({self.KEY}), earlier)
+
+    def test_the_same_gate_refused_again_extends_the_streak(self):
+        holder = "holder cannot share it (not held, or not flagged sharable)"
+        self.assertEqual(self.held(self.refused(holder, [3, 5])), frozenset({self.KEY}))  # 4h
+        self.assertEqual(self.held(self.refused(holder, [4, 5])), frozenset())
+
+    def test_a_later_permanent_gate_starts_its_own_streak(self):
+        """'taker already turned it in' comes after the holder gate: it ends
+        the holder streak and begins a streak of one, so the wait is 2h from
+        it, not 2**6 h from the six refusals together."""
+        holder = "holder cannot share it (not held, or not flagged sharable)"
+        rows = self.refused(holder, [3, 4, 5, 6, 7]) + self.refused("taker already turned it in", [1])
+        self.assertEqual(self.held(rows), frozenset({self.KEY}))
+        rows = self.refused(holder, [3, 4, 5, 6, 7]) + self.refused("taker already turned it in", [2])
+        self.assertEqual(self.held(rows), frozenset())
+
+    def test_recovery_then_a_transient_refusal_then_a_prompt_retry(self):
+        """The whole round-5 scenario driven through the loop: the holder
+        cannot share for two days (the streak reaches a 64h wait), the
+        holder re-picks the quest, the next offer fails because the party
+        is split, and the offer after THAT must come an hour later, not
+        64h later."""
+        holder = "holder cannot share it (not held, or not flagged sharable)"
+        split = "not on the same map"
+        rows, offers, hour = [], [], 0
+        answer = holder
+        while hour < 24 * 14:
+            rows = [(h, t, c, st, r, age + self.H) for h, t, c, st, r, age in rows]
+            if hour == 48:
+                answer = split  # the holder has the quest again; the party is apart
+            if self.KEY not in self.held(rows):
+                offers.append((hour, answer))
+                rows.append((*self.KEY, "error", json.dumps({"outcome": "refused", "reason": answer}), 0))
+            hour += 1
+        after = [h for h, a in offers if a == split]
+        self.assertGreaterEqual(len(after), 2)
+        self.assertEqual(after[1] - after[0], 1)
+        self.assertTrue(all(b - a == 1 for a, b in zip(after, after[1:], strict=False)))
+
+    def test_an_unknown_reason_proves_nothing_and_counts_for_nothing(self):
+        streak = self.refused("holder cannot share it (not held, or not flagged sharable)", [4, 5, 6, 7, 8])
+        self.assertEqual(self.held(streak + self.refused("a gate added next year", [1])), frozenset({self.KEY}))
+        self.assertEqual(self.held(self.refused("a gate added next year", [1])), frozenset())
+
+    def test_the_gate_order_is_the_worldservers(self):
+        """SHARE_GATES is only right while it matches the order DoShare tests
+        its gates in. Read the mod source (the submodule the gate command
+        initialises) and compare the describe() literals, in order, with
+        adjacent C++ string literals joined."""
+        import pathlib
+        import re
+
+        src = (
+            pathlib.Path(__file__).resolve().parents[3]
+            / "docker/azerothcore-playerbots/mod-overseer/src/mod_overseer.cpp"
+        ).read_text(encoding="utf-8")
+        body = src[src.index("static char const* DoShare(") : src.index("void WriteSnapshot()")]
+        found = [
+            "".join(re.findall(r'"([^"]*)"', literals))
+            for literals in re.findall(r'describe\("(?:refused|error)",\s*((?:"[^"]*"\s*)+)', body)
+        ]
+        self.assertEqual(found, list(questshare.SHARE_GATES))
+        self.assertTrue(questshare.PERMANENT_REFUSALS <= set(questshare.SHARE_GATES))
+
+    def test_history_depth_is_where_the_doubling_meets_the_cap(self):
+        # 60 min * 2**8 = 256h >= 168h, and 2**7 = 128h is not
+        self.assertEqual(questshare.history_depth(60, 168), 8)
+        self.assertEqual(questshare.history_depth(60, 1), 1)
+        self.assertEqual(questshare.history_depth(0, 168), 1)
+        self.assertEqual(questshare.history_depth(60, 0), 1)
+
+    def test_the_youngest_rows_per_answer_decide_identically(self):
+        """What lets the bridge bound its read (Codex, round 5): keeping
+        only the youngest history_depth() rows per (triple, status, reason)
+        - what the SQL window does - must never change the decision. Random
+        histories, dense with transient noise, compared full against
+        truncated."""
+        import random
+
+        rng = random.Random(2892)
+        depth = questshare.history_depth(self.BASE, self.CAP)
+        outcomes = [("error", json.dumps({"outcome": "refused", "reason": g})) for g in questshare.SHARE_GATES]
+        outcomes += [("delivered", json.dumps({"outcome": "shared"})), ("error", None), ("error", "{not json")]
+        keys = [self.KEY, ("Bork", "Ilhan", "share 1234"), ("Aiyla", "Bork", "share 77")]
+        disagreements = 0
+        for _ in range(400):
+            rows = []
+            for key in keys:
+                for _ in range(rng.randrange(0, 60)):
+                    status, result = rng.choice(outcomes)
+                    rows.append((*key, status, result, rng.randrange(0, 90 * 24 * self.H)))
+            rng.shuffle(rows)
+            kept, seen = [], {}
+            for row in sorted(rows, key=lambda r: r[5]):
+                holder, taker, command, status, result, _age = row
+                try:
+                    reason = json.loads(result).get("reason") if result else None
+                except (ValueError, AttributeError):
+                    reason = None
+                bucket = (holder, taker, command, status, reason)
+                seen[bucket] = seen.get(bucket, 0) + 1
+                if seen[bucket] <= depth:
+                    kept.append(row)
+            if self.held(rows) != self.held(kept):
+                disagreements += 1
+        self.assertEqual(disagreements, 0)
 
 
 if __name__ == "__main__":

@@ -7,6 +7,10 @@ that way - logic added here escapes the test seam (infra#2597).
 Blocking MySQL calls are pushed off the event loop with asyncio.to_thread;
 nothing in this file may call the database directly from an async handler.
 """
+# Spark-authored: qwen3-coder-next:q8_0 on an on-prem DGX Spark, 2026-09-02; reviewed by
+# hand the same day: the give-up window was the retry window, so it could never fire,
+# and it counted transient refusals; then a rolling-window threshold, which Codex
+# showed only pauses the loop. The decision is now questshare.backed_off().
 from __future__ import annotations
 
 import asyncio
@@ -3347,6 +3351,20 @@ def _fetch_questbook(names: list) -> tuple:
 # permanent ones are already excluded by questshare before they get here.
 SHARE_RETRY_MINUTES = int(os.environ.get("SHARE_RETRY_MINUTES", "60"))
 
+# The window above retries a refusal about once an hour. This is where that
+# stops being hourly: a (holder, taker, command) the worldserver has refused
+# for a PERMANENT reason waits SHARE_RETRY_MINUTES * 2**n before the next
+# offer, capped at SHARE_BACKOFF_CAP_HOURS. infra#2892 was 167 identical
+# attempts at a quest Bork held at status 0 - the read is fixed, this is what
+# keeps the next wrong row from paging hourly. Which reasons are permanent,
+# and the arithmetic, live in questshare (backed_off), not here: a taker who
+# was offline or on another map five times is offered the quest again as soon
+# as that changes, and a delivered share resets the streak. The bridge fetches
+# SHARE_REFUSAL_MEMORY_DAYS of rows; the table is never pruned, this only
+# bounds the query.
+SHARE_BACKOFF_CAP_HOURS = int(os.environ.get("SHARE_BACKOFF_CAP_HOURS", "168"))
+SHARE_REFUSAL_MEMORY_DAYS = int(os.environ.get("SHARE_REFUSAL_MEMORY_DAYS", "90"))
+
 
 def _recent_share_keys(minutes: int) -> set:
     """(holder, taker, command) triples already proposed inside the window."""
@@ -3360,6 +3378,59 @@ def _recent_share_keys(minutes: int) -> set:
             (row["target_name"], row["target_arg"], row["command"])
             for row in cur.fetchall()
         }
+
+
+def _answered_share_rows(days: int, depth: int) -> list:
+    """The youngest `depth` answers per (holder, taker, quest, status,
+    reason) the worldserver wrote inside the window - delivered or refused
+    - with the JSON it wrote and how long ago it ANSWERED, by the
+    database's own clock, for questshare.backed_off() to judge. Rows only:
+    which refusals are permanent, which gate each came from, that a later
+    gate resets an earlier streak, and how long a streak holds are the pure
+    module's call.
+
+    `depth` is questshare.history_depth(): the streak length at which the
+    doubling reaches its cap, past which more refusals of the same reason
+    change nothing, and one row of any other reason (or one delivery) says
+    everything a younger answer can say. Windowed per reason in SQL, the
+    read is bounded by the number of live triples, not by ninety days of
+    hourly transient retries - a party split for a season would otherwise
+    hand this loop two hundred thousand rows every five minutes and the
+    read timeout would stop EVERY share, not just the backed-off ones.
+    The partition key extracts result.reason with JSON_VALID guarding
+    JSON_EXTRACT (a row the worldserver never answered has NULL there,
+    and JSON_EXTRACT on non-JSON is an error, not a NULL).
+
+    updated_at, not created_at: a row can wait pending or claimed before
+    the worldserver reaches it, and the backoff clock must start at the
+    refusal, not at the ask - measured from created_at, a queue delay would
+    eat the quiet time. The terminal write stamps updated_at. The index
+    this reads through is 2026_09_02_00_overseer_share_backoff.sql."""
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT target_name, target_arg, command, status, result, age_s "
+            "FROM ("
+            "  SELECT target_name, target_arg, command, status, result, "
+            "    TIMESTAMPDIFF(SECOND, updated_at, NOW()) AS age_s, "
+            "    ROW_NUMBER() OVER ("
+            "      PARTITION BY target_name, target_arg, command, status, "
+            "        CASE WHEN JSON_VALID(result) "
+            "             THEN JSON_UNQUOTE(JSON_EXTRACT(result, '$.reason')) END "
+            "      ORDER BY updated_at DESC) AS rn "
+            "  FROM overseer_command "
+            "  WHERE kind = 'share' AND status IN ('delivered', 'error') "
+            "    AND updated_at > NOW() - INTERVAL %s DAY"
+            ") AS answered "
+            "WHERE rn <= %s",
+            (int(days), int(depth)),
+        )
+        return [
+            (
+                row["target_name"], row["target_arg"], row["command"],
+                row["status"], row["result"], row["age_s"],
+            )
+            for row in cur.fetchall()
+        ]
 
 
 def _insert_share(grant) -> int:
@@ -3421,6 +3492,14 @@ def _share_quests() -> questshare.Plan:
     plan = questshare.plan(members, catalog)
 
     seen = _recent_share_keys(SHARE_RETRY_MINUTES)
+    held = questshare.backed_off(
+        _answered_share_rows(
+            SHARE_REFUSAL_MEMORY_DAYS,
+            questshare.history_depth(SHARE_RETRY_MINUTES, SHARE_BACKOFF_CAP_HOURS),
+        ),
+        SHARE_RETRY_MINUTES,
+        SHARE_BACKOFF_CAP_HOURS,
+    )
     inserted = 0
     for grant in plan.grants:
         if not grant.holder:
@@ -3430,6 +3509,14 @@ def _share_quests() -> questshare.Plan:
             log.warning("questshare: no holder for quest %d, skipping", grant.quest_id)
             continue
         if (grant.holder, grant.taker, grant.command) in seen:
+            continue
+        if (grant.holder, grant.taker, grant.command) in held:
+            log.info(
+                "questshare: holding off %s -> %s quest %d, the worldserver keeps "
+                "refusing it for a permanent reason; the wait doubles each time, "
+                "up to %dh",
+                grant.holder, grant.taker, grant.quest_id, SHARE_BACKOFF_CAP_HOURS,
+            )
             continue
         if _insert_share(grant):
             inserted += 1
