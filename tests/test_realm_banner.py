@@ -229,7 +229,7 @@ class TheEndpointIsWiredUp(unittest.TestCase):
         self.assertIn("503", handler)
 
     def test_the_page_asks_for_it(self):
-        self.assertIn('fetch("/api/realm")', self.page)
+        self.assertIn('fetch(u("/api/realm"))', self.page)
 
     def test_the_pure_module_imports_no_database(self):
         source = (HERE / "realm.py").read_text(encoding="utf-8")

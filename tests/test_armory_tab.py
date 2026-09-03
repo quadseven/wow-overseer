@@ -165,7 +165,11 @@ class TheArmoryTab(unittest.TestCase):
                       self.tab)
         self.assertIn('const MODEL_SCRIPT = "https://wow.zamimg.com/modelviewer/wrath/'
                       'deployment/viewer/', self.tab)
-        self.assertIn('const MODEL_CONTENT_PATH = "/modelviewer/";', self.tab)
+        # Through u(), like every other same-origin URL on this page: the
+        # cache is served by THIS process, so on a realm mounted under a
+        # prefix a root-anchored path here would fetch another realm's
+        # copy of it. See basepath.py.
+        self.assertIn('const MODEL_CONTENT_PATH = u("/modelviewer/");', self.tab)
         self.assertIn("img.onerror = () => { img.remove(); if (onFail) onFail(); };",
                       self.tab)
         self.assertIn('img.referrerPolicy = "no-referrer";', self.tab)
@@ -204,7 +208,7 @@ class TheArmoryTab(unittest.TestCase):
         self.assertIn('return "facialStyle";', self.tab)
 
     def test_jquery_is_served_from_here_not_a_third_host(self):
-        self.assertIn('loadScript("/jquery.min.js")', self.tab)
+        self.assertIn('loadScript(u("/jquery.min.js"))', self.tab)
         self.assertIn('"/jquery.min.js": _jquery_file,', self.server)
 
     def test_the_portrait_is_never_blank(self):

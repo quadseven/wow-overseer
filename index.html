@@ -895,6 +895,32 @@
   #fqmore:hover { color:var(--text); border-color:var(--dim); }
   .qbempty { color:var(--dim); padding:.6rem .2rem; }
 </style>
+<script>
+  // WHERE THIS PAGE IS MOUNTED, AND WHY EVERY URL BELOW GOES THROUGH ONE
+  // FUNCTION. Three realms serve this page and they are told apart by the PATH
+  // it was fetched from: production at the root, the others under a prefix. A
+  // browser resolves "/api/map" against the ORIGIN and not against that path,
+  // so a page served under a prefix that asked for "/api/map" would be asking
+  // whatever is mounted at the root - production - and would render
+  // production's characters with no error and no symptom. basepath.py on the
+  // server side carries the long version of this.
+  //
+  // The server substitutes the token below: "" at the root, "/dev" under a
+  // prefix. Anything that is not a rooted path - including the untouched token
+  // itself, which is what a copy of this file opened straight off disk still
+  // carries - falls back to the root, because the root is what this page has
+  // always served at and a literal token in every URL would break all of them.
+  //
+  // A TOKEN, AND DELIBERATELY NOT AN HTML BASE ELEMENT. That element would fix
+  // the URLs and quietly break two other things: in-page fragment links, and
+  // the functional IRI references that point this page's SVG arrowheads at
+  // their own marker definitions ("url(#ah-lit)"), which resolve against the
+  // document base and would start pointing at another document entirely.
+  const BASE = (function (raw) { return raw.charAt(0) === "/" ? raw : ""; })("__OVERSEER_BASE__");
+  // Every same-origin URL this page builds. Written so the path stays legible
+  // at the call site: u("/api/map") reads as the endpoint it is.
+  function u(path) { return BASE + path; }
+</script>
 </head>
 <body>
 <!-- WHICH WORLD THIS IS (quadseven/mod-overseer#184). Above the header,
@@ -919,24 +945,32 @@
   <h1>Azeroth Overseer</h1>
   <span id="census">reaching the world...</span>
   <!-- SAME ORIGIN, AND HIDDEN UNTIL PROVEN. The footage is on the recorder
-       box, which a pod cannot reach, so Caddy proxies /recordings on this
-       host straight to that box - which also keeps the link on HTTPS, since
-       an HTTPS page may not load http://<box>:8078.
+       box, which a pod cannot reach, so the ingress proxies a recordings
+       path on this origin straight to that box - which also keeps the link
+       on HTTPS, since an HTTPS page may not load a plain-http port.
 
-       This page is served under BOTH overseer hostnames from the same image,
-       but only the dev one has the recordings route, and the box behind it is
-       a desktop that is offline by design much of the time. So the link is
-       revealed only when it answers, rather than sitting there as a promise
-       that 404s on one host and 502s on the other. -->
-  <a id="recordings" href="recordings/?c=dev-grug" hidden
+       Every realm is served from this one origin off the same image, told
+       apart by the path it is mounted under, and only ONE of those paths has
+       a recordings route beneath it. The box behind it is also a desktop that
+       is offline by design much of the time. So the link is revealed only
+       when it answers, rather than sitting there as a promise that 404s on
+       one realm and 502s on another. -->
+  <a id="recordings" hidden
      title="watch the recording back">Recordings</a>
 </header>
 <script>
   // One HEAD-ish probe, and the link appears only if playback answers. Costs a
-  // request on load; the alternative is a header link that is dead on the live
-  // host and dead again whenever the recorder box is asleep.
-  fetch("recordings/healthz", { cache: "no-store" })
-    .then(r => { if (r.ok) document.getElementById("recordings").hidden = false; })
+  // request on load; the alternative is a header link that is dead on every
+  // realm but one, and dead again whenever the recorder box is asleep.
+  const recordingsLink = document.getElementById("recordings");
+  // THE HREF IS BUILT HERE rather than written into the markup above, so that
+  // the one place which knows where this page is mounted is the one place that
+  // builds its URLs. A relative "recordings/" in the markup would resolve
+  // against the DOCUMENT path instead, which is the same string on a realm
+  // reached with a trailing slash and quietly a different one without.
+  recordingsLink.href = u("/recordings/?c=dev-grug");
+  fetch(u("/recordings/healthz"), { cache: "no-store" })
+    .then(r => { if (r.ok) recordingsLink.hidden = false; })
     .catch(() => {});
 </script>
 <div id="stale"></div>
@@ -1078,8 +1112,8 @@ const tip = document.getElementById("tip");
 
 async function loadZones() {
   const [z, sh] = await Promise.all([
-    (await fetch("/zones.json")).json(),
-    (await fetch("/shapes.json")).json(),
+    (await fetch(u("/zones.json"))).json(),
+    (await fetch(u("/shapes.json"))).json(),
   ]);
   zones = z.continents;
   shapes = sh;
@@ -1123,7 +1157,7 @@ async function loadZones() {
 
 async function poll() {
   try {
-    const r = await fetch("/api/map");
+    const r = await fetch(u("/api/map"));
     if (!r.ok) throw new Error(r.status);
     const p = await r.json();
     dots = p.dots; freshest = p.freshest_seconds;
@@ -1484,7 +1518,7 @@ function watchNote(text, cls) {
 }
 
 async function watchPost(name, action, mode) {
-  const r = await fetch("/api/watch", {
+  const r = await fetch(u("/api/watch"), {
     method: "POST", headers: { "content-type": "application/json" },
     body: JSON.stringify({ name: name, action: action, mode: mode || "cam" }),
   });
@@ -1812,7 +1846,7 @@ async function refreshWatch() {
   const name = selected;
   let s;
   try {
-    const r = await fetch("/api/watch?name=" + encodeURIComponent(name));
+    const r = await fetch(u("/api/watch?name=" + encodeURIComponent(name)));
     s = await r.json();
   } catch (e) { return; }
   if (name !== selected) return;
@@ -1863,7 +1897,7 @@ async function refreshFrame() {
   const name = selected;
   let m;
   try {
-    const r = await fetch("/api/frame?meta=1&name=" + encodeURIComponent(name));
+    const r = await fetch(u("/api/frame?meta=1&name=" + encodeURIComponent(name)));
     m = await r.json();
   } catch (e) { return; }
   if (name !== selected) return;
@@ -1872,7 +1906,7 @@ async function refreshFrame() {
   if (m.has_frame) {
     if (frameSeen.name !== name || m.captured_seconds_ago < frameSeen.ago) {
       frameSeen = { name: name, ago: m.captured_seconds_ago, token: frameSeen.token + 1 };
-      pwimg.src = "/api/frame?name=" + encodeURIComponent(name) + "&t=" + frameSeen.token;
+      pwimg.src = u("/api/frame?name=" + encodeURIComponent(name) + "&t=" + frameSeen.token);
     } else {
       frameSeen.ago = m.captured_seconds_ago;
     }
@@ -1920,7 +1954,7 @@ async function fetchPanel() {
   if (!selected) return;
   const name = selected;
   try {
-    const r = await fetch("/api/character?name=" + encodeURIComponent(name));
+    const r = await fetch(u("/api/character?name=" + encodeURIComponent(name)));
     if (!r.ok) throw new Error(r.status);
     const p = await r.json();
     if (name === selected) renderPanel(p);
@@ -2043,7 +2077,7 @@ function openMind(name) {
 async function fetchThoughts(before) {
   const name = mind.name;
   if (!name) return;
-  let url = "/api/thoughts?name=" + encodeURIComponent(name);
+  let url = u("/api/thoughts?name=" + encodeURIComponent(name));
   if (before !== null) url += "&before=" + encodeURIComponent(before);
   try {
     const r = await fetch(url);
@@ -2101,7 +2135,7 @@ chatForm.addEventListener("submit", async (e) => {
   chatInput.value = "";
   renderTimeline(true);
   try {
-    const r = await fetch("/api/chat", {
+    const r = await fetch(u("/api/chat"), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ name: name, text: text }),
@@ -2742,7 +2776,7 @@ function renderQuests(p) {
 async function pollQuests() {
   if (view !== FAMILY_VIEW) return;
   try {
-    const r = await fetch("/api/questlog");
+    const r = await fetch(u("/api/questlog"));
     if (!r.ok) throw new Error(r.status);
     renderQuests(await r.json());
   } catch (e) {
@@ -2800,7 +2834,7 @@ async function refreshFamilyWatch() {
   const name = fam.open || "";
   let s;
   try {
-    const r = await fetch("/api/watch?name=" + encodeURIComponent(name));
+    const r = await fetch(u("/api/watch?name=" + encodeURIComponent(name)));
     s = await r.json();
   } catch (e) { return; }
   fam.channels = { used: s.channels_in_use, max: s.max_channels };
@@ -2824,7 +2858,7 @@ async function refreshFamilyWatch() {
 async function pollFamily() {
   if (view !== FAMILY_VIEW) return;
   try {
-    const r = await fetch("/api/family");
+    const r = await fetch(u("/api/family"));
     if (!r.ok) throw new Error(r.status);
     renderFamily(await r.json());
   } catch (e) {
@@ -2988,7 +3022,7 @@ function renderRealm(d) {
 
 async function pollRealm() {
   try {
-    const r = await fetch("/api/realm");
+    const r = await fetch(u("/api/realm"));
     if (!r.ok) throw new Error(r.status);
     renderRealm(await r.json());
   } catch (e) {
@@ -3088,7 +3122,7 @@ function renderAgenda(p) {
 
 async function pollAgenda() {
   try {
-    const r = await fetch("/api/agenda");
+    const r = await fetch(u("/api/agenda"));
     if (!r.ok) throw new Error(r.status);
     renderAgenda(await r.json());
   } catch (e) {
@@ -3326,7 +3360,7 @@ function renderAchievements() {
 
 async function pollAchievements() {
   try {
-    const r = await fetch("/api/achievements");
+    const r = await fetch(u("/api/achievements"));
     if (!r.ok) throw new Error(r.status);
     const p = await r.json();
     ach.cards = p.cards;
@@ -3764,7 +3798,7 @@ function renderSpec(c, spec, colour) {
 // format the host no longer serves, so it draws nothing; a hash in the
 // URL is what keeps the script and the data it asks for in step.
 const MODEL_SCRIPT = "https://wow.zamimg.com/modelviewer/wrath/deployment/viewer/c3f890f/viewer.min.js";
-const MODEL_CONTENT_PATH = "/modelviewer/";
+const MODEL_CONTENT_PATH = u("/modelviewer/");
 const MODEL_LOAD_TIMEOUT = 10000;
 // Radians per frame of idle turn: one full turn in about half a minute.
 const MODEL_TURN = 0.0035;
@@ -3796,7 +3830,7 @@ function ensureViewer() {
     WH.debug = WH.debug || (() => {});
     WH.defaultAnimation = WH.defaultAnimation || "Stand";
     WH.WebP = WH.WebP || { getImageExtension: () => ".webp" };
-    const ok = await loadScript("/jquery.min.js") && await loadScript(MODEL_SCRIPT)
+    const ok = await loadScript(u("/jquery.min.js")) && await loadScript(MODEL_SCRIPT)
       && typeof ZamModelViewer === "function";
     viewer3d.ready = ok;
     return ok;
@@ -4023,7 +4057,7 @@ function renderArmory(p) {
 async function pollArmory() {
   if (view !== ARMORY_VIEW) return;
   try {
-    const r = await fetch("/api/armory");
+    const r = await fetch(u("/api/armory"));
     if (!r.ok) throw new Error(r.status);
     renderArmory(await r.json());
   } catch (e) {
@@ -4290,7 +4324,7 @@ function renderStanding(p) {
 async function pollStanding() {
   if (view !== ARMORY_VIEW) return;
   try {
-    const r = await fetch("/api/standing");
+    const r = await fetch(u("/api/standing"));
     if (!r.ok) throw new Error(r.status);
     renderStanding(await r.json());
   } catch (e) {
@@ -4668,7 +4702,7 @@ function renderWealth(p) {
 async function pollWealth() {
   if (view !== ARMORY_VIEW) return;
   try {
-    const r = await fetch("/api/wealth");
+    const r = await fetch(u("/api/wealth"));
     if (!r.ok) throw new Error(r.status);
     renderWealth(await r.json());
     wsaved.textContent = WSAVED;

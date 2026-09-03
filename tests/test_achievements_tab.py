@@ -74,7 +74,7 @@ class TheAchievementsTab(unittest.TestCase):
     def test_the_endpoint_is_routed_and_the_builder_is_pure(self):
         self.assertIn('"/api/achievements": _achievements,', self.server)
         self.assertIn("achievements.build_achievements(**_fetch_achievements())", self.server)
-        self.assertIn('fetch("/api/achievements")', self.tab)
+        self.assertIn('fetch(u("/api/achievements"))', self.tab)
 
     def test_a_missing_run_table_degrades_rather_than_failing(self):
         """The live realm's schema predates overseer_dungeon_run. Error 1146

@@ -22,6 +22,7 @@ import pymysql
 import achievements
 import agenda
 import armory
+import basepath
 import chat
 import family
 import frames
@@ -57,6 +58,13 @@ ITEMS = armory.ItemBook.load(HERE)
 # nowhere else. Built by tools/gen_standing.py.
 STANDING = standing.StandingBook.load(HERE)
 PORT = int(os.environ.get("PORT", "8080"))
+# WHERE THIS COPY IS MOUNTED. "" at the root, "/dev" under a path. Read
+# once at import exactly as PORT is, and deliberately allowed to raise:
+# basepath.py says why a value that was SET and cannot be read must stop
+# the process rather than quietly become the root. The ingress strips the
+# prefix before proxying, so nothing below this line ever reads it - the
+# only thing it changes is the URLs the page emits.
+BASE_PATH = basepath.normalize(os.environ.get(basepath.ENV_VAR))
 
 # The model-viewer cache (modelviewer.py): an emptyDir on the pod, a temp
 # directory locally, capped in bytes either way. The fetcher is the one
@@ -1382,7 +1390,13 @@ class Handler(BaseHTTPRequestHandler):
         self._send(r.status, r.content_type, r.body, r.cache_control)
 
     def _index(self, _query: dict) -> None:
-        self._send_file("index.html", "text/html; charset=utf-8")
+        # THE ONE FILE HERE THAT IS NOT SERVED VERBATIM. Every other
+        # static file is the same bytes on every realm; the page is not,
+        # because it has to know which path it was reached under before it
+        # can build a single URL. basepath.py says what goes wrong when it
+        # does not, and it is not a broken link.
+        self._send_file("index.html", "text/html; charset=utf-8",
+                        transform=lambda body: basepath.apply(body, BASE_PATH))
 
     def _zones_file(self, _query: dict) -> None:
         self._send_file("zones.json", "application/json")
@@ -1899,15 +1913,26 @@ class Handler(BaseHTTPRequestHandler):
             return None
         return body
 
-    def _send_file(self, name: str, ctype: str) -> None:
+    def _send_file(self, name: str, ctype: str, transform=None) -> None:
         # A file missing from the image must be a readable 500, not a bare
         # connection reset - the page keys its error banner off r.ok.
+        #
+        # A REFUSED TRANSFORM IS THE SAME CLASS OF FAILURE AND GETS THE
+        # SAME TREATMENT. basepath.apply raises when the page has lost the
+        # placeholder that tells it where it is mounted, and the whole
+        # point of that raise is that serving the page anyway would look
+        # perfectly normal while addressing the realm at the root. So it
+        # has to reach the browser as an error rather than as a page.
         try:
             with open(os.path.join(HERE, name), "rb") as f:
-                self._send(200, ctype, f.read())
-        except OSError:
-            log.exception("static file %s unreadable", name)
+                body = f.read()
+            if transform is not None:
+                body = transform(body)
+        except (OSError, ValueError):
+            log.exception("static file %s cannot be served", name)
             self._send(500, "text/plain", b"static file missing from image")
+            return
+        self._send(200, ctype, body)
 
     def _send(self, code: int, ctype: str, body: bytes,
               cache_control: str = "no-store") -> None:

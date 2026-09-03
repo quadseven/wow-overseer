@@ -231,7 +231,7 @@ class TheMapIsWiredToTheGeometry(unittest.TestCase):
         self.assertIn('"/shapes.json": _shapes_file', table)
 
     def test_the_page_asks_for_it(self):
-        self.assertIn('fetch("/shapes.json")', self.page)
+        self.assertIn('fetch(u("/shapes.json"))', self.page)
 
     def test_the_page_no_longer_squashes_a_continent_to_fit(self):
         """The old height clamp (360..760px) flattened a 2:1 continent into a
