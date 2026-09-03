@@ -27,6 +27,7 @@ import family
 import frames
 import modelviewer
 import questlog
+import realm
 import standing
 import stream
 import voice
@@ -128,6 +129,96 @@ def _connect() -> pymysql.connections.Connection:
         read_timeout=10,
         write_timeout=10,
     )
+
+
+# --- which realm this is (quadseven/mod-overseer#184) ------------------------
+#
+# FIRST AMONG THE FETCHES ON PURPOSE, and the handler is likewise first among
+# the routes. Every other read on this page answers a question about the world;
+# this one answers which world, and that is the question the rest of the page's
+# answers are only meaningful inside of. It also keeps this code out of the
+# windows that seven other suites slice map_server.py by, none of which start
+# above _fetch_rows.
+#
+# WHY THIS READS THREE PLACES AND NOT ONE. The realms are deliberately not
+# rolled together, so on any given day they are running different builds of the
+# module, and the newest table is absent on the oldest realm. The banner has to
+# be at its most useful exactly there:
+#
+#   overseer_build       everything, when the realm's worldserver is new enough
+#                        to have it. The only source that knows the realm kind.
+#   acore_world.version  AzerothCore writing down its own revision at startup,
+#                        with no module involved. Present on every realm that
+#                        has ever started, which is what lets this banner name
+#                        the core before a single worldserver has been rolled.
+#   acore_auth.realmlist the realm's client-facing name, for the same reason.
+#
+# EVERY ONE OF THE THREE IS GUARDED, INCLUDING THE TWO CORE TABLES that nothing
+# else on this page bothers to guard. That is not consistency for its own sake.
+# The rule elsewhere is that a core table is always there and a module table may
+# not be, and the rule is right - but it is a rule about tables, and this is the
+# one banner on the site whose whole job is to be trustworthy when something is
+# wrong. A page that renders "REALM NOT VERIFIED" is doing its job; a page that
+# 500s has told the reader nothing at all about what they are looking at.
+_BUILD_SQL = "SELECT name, value, source, reported_at FROM overseer_build"
+_WORLD_VERSION_SQL = "SELECT core_version FROM acore_world.version LIMIT 1"
+_REALMLIST_SQL = "SELECT name FROM acore_auth.realmlist ORDER BY id LIMIT 1"
+
+
+def _realm_guarded(cur, sql: str, what: str) -> list:
+    """Run `sql`, returning [] on a degraded schema and raising on anything else.
+
+    WHY THIS DOES NOT REUSE _guarded, WHICH DOES ALMOST THE SAME THING. That
+    helper catches pymysql.err.ProgrammingError, and error 1054 is NOT a
+    ProgrammingError. Verified against pymysql 1.4.6 as deployed, by asking the
+    live realm's own database for a column that does not exist:
+
+        MISSING TABLE  -> pymysql.err.ProgrammingError 1146
+        MISSING COLUMN -> pymysql.err.OperationalError  1054
+
+    1054 is absent from pymysql's error_map, so raise_mysql_exception falls back
+    to OperationalError for it. The base class MySQLError is the only catch that
+    covers both, and it is what bridge.py already uses for exactly this pair.
+    Copying the more obvious helper would have produced a guard that reads
+    correctly, passes review, and never once fires on half of what it names.
+
+    (The same gap exists in _guarded itself. Widening it is a real fix and it
+    belongs to the banner it would change the behaviour of, not to this one.)
+    """
+    try:
+        cur.execute(sql)
+        return list(cur.fetchall())
+    except pymysql.err.MySQLError as exc:
+        # 1146 missing table, 1054 missing column: this realm's worldserver
+        # predates the migration. A thinner banner, not a broken one. Anything
+        # else is a real fault and must still reach the handler's 503, because
+        # a banner that silently reported "not verified" for a network blip
+        # would train the alarm away.
+        if not (exc.args and exc.args[0] in (1054, 1146)):
+            raise
+        log.info("realm: %s unavailable (%s); the banner runs without it",
+                 what, exc.args[0])
+        return []
+
+
+def _fetch_realm() -> dict:
+    """Everything the realm banner reads, in one connection.
+
+    No parameters and no user input anywhere in it: this endpoint answers a
+    question about the deployment, not about anybody the caller can name.
+    """
+    conn = _connect()
+    try:
+        with conn.cursor() as cur:
+            build_rows = _realm_guarded(cur, _BUILD_SQL, "overseer_build")
+            version_rows = _realm_guarded(cur, _WORLD_VERSION_SQL,
+                                          "acore_world.version")
+            realmlist_rows = _realm_guarded(cur, _REALMLIST_SQL,
+                                            "acore_auth.realmlist")
+    finally:
+        conn.close()
+    return {"build_rows": build_rows, "version_rows": version_rows,
+            "realmlist_rows": realmlist_rows}
 
 
 def _fetch_rows() -> list[dict]:
@@ -1308,6 +1399,33 @@ class Handler(BaseHTTPRequestHandler):
         # the same committed geometry.
         self._send_file("shapes.json", "application/json")
 
+    def _realm(self, _query: dict) -> None:
+        """GET /api/realm - which world this page is showing, and its build.
+
+        FIRST AMONG THE HANDLERS, above even the map, and outside every window
+        the tab suites slice this class by. Every other endpoint answers a
+        question about a world; this one answers which world, and that is the
+        question the rest of the answers are only meaningful inside of.
+
+        No parameters. This describes the deployment, not anybody the caller
+        can name, so there is no user input to validate and none is read.
+
+        A FAILED POLL LEAVES THE LAST BANNER STANDING, like every other poll on
+        this page - but the reason is sharper here. The realm has not changed
+        because a query timed out, so replacing a correct label with an empty
+        one would be the page losing information it already had. The case that
+        actually matters is the FIRST poll failing, and that is handled in the
+        page rather than here: index.html ships the not-verified state as its
+        static markup, so a page that never hears from this endpoint at all
+        shows the alarm rather than nothing.
+        """
+        try:
+            payload = realm.build_realm(**_fetch_realm())
+            self._send(200, "application/json", json.dumps(payload).encode())
+        except Exception:
+            log.exception("realm query failed")
+            self._send(503, "application/json", b'{"error": "world unreachable"}')
+
     def _healthz(self, _query: dict) -> None:
         self._send(200, "text/plain", b"ok")
 
@@ -1809,6 +1927,9 @@ class Handler(BaseHTTPRequestHandler):
     # already defined. Values are plain functions, called with the handler
     # instance - a new endpoint is one row, and an unknown path is one miss.
     GET_ROUTES = {
+        # First, because it is the question every other row here answers
+        # inside of (quadseven/mod-overseer#184).
+        "/api/realm": _realm,
         "/api/map": _map,
         "/api/character": _character,
         "/api/family": _family,

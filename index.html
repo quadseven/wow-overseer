@@ -22,6 +22,42 @@
                 padding:.15rem .5rem; font-size:.85rem; }
   #recordings:hover { color:var(--text); }
   #stale { display:none; background:#6e2c00; color:#ffd8a8; padding:.3rem 1rem; }
+  /* --- which world this is (quadseven/mod-overseer#184) ---------------------
+     THE FIRST THING IN THE STYLESHEET AND THE FIRST THING IN THE BODY, above
+     the header and above #stale, because it is the only thing on this page
+     that qualifies everything else on it. "The world is unreachable" outranks
+     what the family wants; WHICH world outranks both, because neither of the
+     other two sentences means anything until you know which realm they are
+     about.
+
+     WHY IT IS NOT SUBTLE. This page has been told apart from its siblings by
+     the hostname it was fetched from, and those hostnames are collapsing into
+     one. From then on the only thing standing between a reader and the belief
+     that they are looking at a disposable world is this strip. So production
+     is loud, unmistakable, and says the word rather than relying on a colour
+     that a colourblind reader or a monochrome screenshot loses.
+
+     THREE STATES, AND THE THIRD IS NOT NEUTRAL. An unverified realm is drawn
+     as an alarm, not as an absence, because "this page cannot tell you what
+     you are looking at" is a more urgent thing to read than "no data". */
+  #realm { padding:.5rem 1rem .55rem; border-bottom:2px solid transparent; }
+  #rklabel { font-weight:700; font-size:1.05rem; letter-spacing:.09em; }
+  #rkwhere { color:inherit; opacity:.85; }
+  #rkwarn { margin-top:.3rem; font-weight:700; }
+  #rkbuild { margin-top:.25rem; opacity:.75; font-size:.85rem;
+             overflow-wrap:anywhere; }
+  /* The live world. Red, and the widest border on the page. */
+  #realm.rk-production { background:#5c1111; color:#ffd9d9;
+                         border-bottom-color:var(--horde); }
+  /* Not the live world. Deliberately the quiet one: this is the state a
+     reader should be able to stop noticing, or the loud states stop meaning
+     anything. */
+  #realm.rk-non-production { background:#10301d; color:#9ae6b4;
+                             border-bottom-color:#2f6b46; }
+  /* Cannot say. Amber, and distinct from #stale's brown so the two never read
+     as the same warning. */
+  #realm.rk-unknown { background:#5e4300; color:#ffe9a8;
+                      border-bottom-color:var(--neutral); }
   /* --- the current goal banner (infra#3205) ---------------------------------
      Above every tab and outside all of them, because it is the one thing on
      this page that is true whichever view is open. It sits BELOW #stale on
@@ -861,6 +897,24 @@
 </style>
 </head>
 <body>
+<!-- WHICH WORLD THIS IS (quadseven/mod-overseer#184). Above the header,
+     outside every <section>, and never hidden by showView.
+
+     THE MARKUP SHIPS THE ALARM STATE, and that is the load-bearing detail of
+     this whole element. Every other banner on this page starts empty and is
+     filled in by its first poll. If this one did that, a page whose very first
+     /api/realm call failed would sit there unlabelled - which is precisely the
+     state the reader must never be in, and precisely the state a reader is
+     most likely to be in when something is already wrong. So the static text
+     below is what an unverified realm looks like, and the script only ever
+     replaces it with something the server actually said. -->
+<div id="realm" class="rk-unknown" role="status" aria-live="polite">
+  <div id="rklabel">REALM NOT VERIFIED</div>
+  <div id="rkwhere">waiting for the world to say which realm this is</div>
+  <div id="rkwarn">This page has not yet heard from the world, so it cannot say
+    whether it is production. Treat what you are seeing as live.</div>
+  <div id="rkbuild"></div>
+</div>
 <header>
   <h1>Azeroth Overseer</h1>
   <span id="census">reaching the world...</span>
@@ -2895,6 +2949,60 @@ setInterval(refreshFrame, 5000);  // and so does their own screen
 setInterval(refreshWatch, 5000);
 setInterval(render, 200);  // combat pulse
 window.addEventListener("resize", render);
+
+// --- which world this is (quadseven/mod-overseer#184) ----------------------
+//
+// /api/realm arrives fully decided: the label, the identity line, the build
+// line and the warning sentence are all composed in realm.py, and this code
+// only sets textContent. That is the same rule the rest of this page follows,
+// and it matters more here than anywhere else - a second copy of "is this
+// production" written in JavaScript is a second copy free to drift, and the
+// only thing this banner is for is not drifting.
+//
+// IT SITS HERE, after the map's intervals and above the current-goal banner's
+// block, in the one gap no tab suite claims: the Family tab's window ends at
+// loadZones().then(, the current-goal banner's begins at its own comment
+// below, and the Achievements and Armory windows are further down again.
+//
+// POLLED, THOUGH ALMOST NOTHING IT SHOWS CAN CHANGE while the page is open. A
+// worldserver that restarts under a reader rewrites its report, and a reader
+// who left the tab open across a deploy is exactly the reader most likely to
+// act on a stale label. Sixty seconds, not five: this is not a live readout,
+// and the query behind it touches three tables.
+const realmEl = document.getElementById("realm");
+const rkLabel = document.getElementById("rklabel");
+const rkWhere = document.getElementById("rkwhere");
+const rkWarn = document.getElementById("rkwarn");
+const rkBuild = document.getElementById("rkbuild");
+
+function renderRealm(d) {
+  // The class carries the colour and the label carries the meaning, so a
+  // reader who cannot see the colour still reads the word.
+  realmEl.className = "rk-" + d.kind;
+  rkLabel.textContent = d.label;
+  rkWhere.textContent = d.realm_line;
+  rkBuild.textContent = d.build_line;
+  rkWarn.textContent = d.warning_text;
+  rkWarn.style.display = d.warning_text ? "block" : "none";
+}
+
+async function pollRealm() {
+  try {
+    const r = await fetch("/api/realm");
+    if (!r.ok) throw new Error(r.status);
+    renderRealm(await r.json());
+  } catch (e) {
+    // LEAVE THE BANNER EXACTLY AS IT IS, and this is the one poll on the page
+    // where that is not just the polite thing to do. The realm has not changed
+    // because a query timed out. Blanking a correct PRODUCTION label because
+    // of a network blip would be this page throwing away the one fact it is
+    // here to hold on to; and if no poll has ever succeeded, what is still
+    // standing is the not-verified state the markup shipped with.
+  }
+}
+
+pollRealm();
+setInterval(pollRealm, 60000);
 
 // --- the current goal banner (infra#3205) ---------------------------------
 //

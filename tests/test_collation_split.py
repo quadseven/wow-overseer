@@ -65,6 +65,16 @@ COLLATIONS = {
     "overseer_stream": "utf8mb4_0900_ai_ci",
     "overseer_dungeon_run": "utf8mb4_0900_ai_ci",
     "overseer_sample": "utf8mb4_0900_ai_ci",
+    # NOT READ FROM A LIVE SCHEMA, AND NOT A GUESS EITHER: this table does not
+    # exist on any realm yet, because it is created by SQL a worldserver has to
+    # be rolled onto first. Its collation is NAMED in its own CREATE TABLE
+    # (COLLATE=utf8mb4_unicode_ci) rather than inherited, so it is fixed by the
+    # DDL rather than by whichever server default applied on the day a realm was
+    # built. Verified by running that exact DDL against a live MySQL 8.4 in a
+    # scratch schema: the named form came out utf8mb4_unicode_ci and the bare
+    # `DEFAULT CHARSET=utf8mb4` form came out utf8mb4_0900_ai_ci, which is where
+    # the split above comes from in the first place.
+    "overseer_build": "utf8mb4_unicode_ci",
     # Not an overseer table, and the reason every join to it is safe. A binary
     # collation wins against any non-binary one of the same charset without
     # anybody writing COLLATE.
@@ -103,6 +113,9 @@ STRING_COLUMNS = {
     "overseer_roster": frozenset(
         {"job", "name", "note", "professions", "travel_npc"}),
     "overseer_sample": frozenset({"character_name"}),
+    # name/value rows rather than a column per fact, so this list is the whole
+    # table and cannot grow when the module reports something new.
+    "overseer_build": frozenset({"name", "source", "value"}),
     "overseer_snapshot": frozenset({"name"}),
     "overseer_stream": frozenset(
         {"character", "delivery", "detail", "mode", "state"}),
