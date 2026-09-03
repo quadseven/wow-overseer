@@ -48,6 +48,7 @@ PATCH = (
     / "docker/azerothcore-playerbots/patches/mod-playerbots"
     / "0005-wander-npc-can-be-aimed.patch"
 )
+PINS = ROOT / "docker/azerothcore-playerbots/UPSTREAM-PINS.env"
 MIGRATION = (
     ROOT
     / "docker/azerothcore-playerbots/mod-overseer/data/sql/characters/base"
@@ -308,7 +309,18 @@ class ThePatchExistsAndIsTheThingThatMakesAimingPossible(unittest.TestCase):
         self.assertTrue(PATCH.exists(), "patch 0005 is missing")
 
     def test_it_targets_the_pinned_module_and_says_so(self):
-        self.assertIn("8d9f6aa6bc6d45f9ae0ee0675b9b1f8aa6937312", _patch())
+        """Read the pin rather than repeat it. This assertion used to carry a
+        literal SHA, which meant every module bump failed here for the one
+        reason that is not a defect - the pin moved and the patch header moved
+        with it. What is worth pinning is that the header names the CURRENT
+        module pin, which is what the test is called."""
+        pinned = re.search(
+            r"^AC_MODULE_SHA=([0-9a-f]{40})$",
+            PINS.read_text(encoding="utf-8"),
+            re.MULTILINE,
+        )
+        self.assertIsNotNone(pinned, "no AC_MODULE_SHA in UPSTREAM-PINS.env")
+        self.assertIn(pinned.group(1), _patch())
 
     def test_it_adds_the_aimable_overload(self):
         self.assertIn("void ChangeToWanderNpc(uint32 npcEntry, WorldPosition pos)",
