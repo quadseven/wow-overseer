@@ -7,15 +7,14 @@ epic had built before this (quest aims, turn-ins, cohesion, travel, trades) is
 about whether a single behaviour works. None of it says WHAT the family should
 currently be doing, which is the layer this module names.
 
-WHAT SHIPS IN THIS PASS AND WHAT DOES NOT. `MODES` names the whole vocabulary
-Evan asked for, because a schedule with one slot is not a schedule and a
-person reading this file should see the shape of the thing being built. But
-only `quest` is wired to an actual behaviour change (mod_overseer.cpp's
-DriveQuests gate) - see IMPLEMENTED. Every other mode is a name the roster
-will accept and remember, and the one thing setting it does today is turn OFF
-the quest drive, honestly, with nothing yet turned on in its place. Building
-farm/dungeon/grind/etc is the follow-up list in the PR body, not code here
-pretending to be finished.
+WHAT SHIPS AND WHAT DOES NOT. `MODES` names the whole vocabulary Evan asked
+for, because a schedule with one slot is not a schedule and a person reading
+this file should see the shape of the thing being built. Two of those modes
+are wired to an actual behaviour change - see IMPLEMENTED. Every other mode is
+a name the roster will accept and remember, and the one thing setting it does
+today is turn OFF the quest drive, honestly, with nothing yet turned on in its
+place. Building farm/grind/etc is the follow-up list, not code here pretending
+to be finished.
 
 THE FAMILY, NOT THE CHARACTER. A quest AIM (goals.py, drive_quest) can differ
 per character because they can each hold a different quest and still travel
@@ -52,13 +51,29 @@ MODES = {
     "guild business": "charter signatures, tabard, guild bank (infra#2831)",
 }
 
-# The only mode that changes behaviour in this pass. Every other key in MODES
-# is accepted, stored, and said back honestly as "not built yet" - see
-# `describe`. Kept as its own constant, not inferred from a "the code exists"
-# check, so extending mod_overseer.cpp's gate is a one-line change here too:
-# forgetting to widen this after wiring a new mode fails LOUD (test_jobs.py
-# checks every MODES key against this set explicitly, not just 'quest').
-IMPLEMENTED = frozenset({"quest"})
+# The modes that change behaviour. Every other key in MODES is accepted,
+# stored, and said back honestly as "not built yet" - see `describe`. Kept as
+# its own constant, not inferred from a "the code exists" check, so extending
+# mod_overseer.cpp's gate is a one-line change here too: forgetting to widen
+# this after wiring a new mode fails LOUD (test_jobs.py checks every MODES key
+# against this set explicitly, not just 'quest').
+#
+# `dungeon` JOINED THIS SET LATE, and it is worth saying why rather than
+# quietly editing the line. It was added to MODES at infra#2834 as a name with
+# nothing behind it, and this constant plus the migration comment both went on
+# saying so for a week after it stopped being true. quadseven/mod-overseer#88
+# and #144 wired it fully: the leader's `job` being `dungeon` is the SOLE
+# trigger for the whole run coordinator - reset, stage, gather, cross, clear,
+# exit, and the campaign loop that repeats it. mod_overseer.cpp branches on it
+# at `leaderJob != "dungeon"` (the IDLE gate and the mid-run stand-down) and
+# passes `leaderJob == "dungeon"` as the still-wanted flag at both run ends;
+# test_jobs.py asserts those branches still exist, so this cannot drift back
+# into a claim nobody checks.
+#
+# Getting this wrong is not cosmetic: `describe` is what the bridge says back
+# in Discord, so a stale entry here had the overseer answering "NOT BUILT YET"
+# to an order it was about to carry out.
+IMPLEMENTED = frozenset({"quest", "dungeon"})
 
 # The state every character starts in and returns to when nobody has an
 # opinion. Matches overseer_roster.job's column default (migration

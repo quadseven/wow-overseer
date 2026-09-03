@@ -1,10 +1,20 @@
 """jobs.py: the RimWorld-style job-schedule vocabulary (infra#2834).
 
 Pure module, no MySQL/Discord/LLM - same seam as travel.py's own tests.
+
+One class here is NOT pure and says so: IMPLEMENTED is a claim about C++ in
+another repo, and a claim nobody checks is exactly how it came to say `quest`
+alone for a week after `dungeon` was fully wired. So it is asserted against
+mod_overseer.cpp as source text, the way test_bags.py and test_quest_aim.py
+already do (infra#3205).
 """
+import pathlib
 import unittest
 
 import jobs
+
+ROOT = pathlib.Path(__file__).resolve().parents[3]
+MODULE = ROOT / "docker/azerothcore-playerbots/mod-overseer/src/mod_overseer.cpp"
 
 
 class ResolveTest(unittest.TestCase):
@@ -96,6 +106,49 @@ class DescribeTest(unittest.TestCase):
 
     def test_describe_names_the_mode(self):
         self.assertIn("farm", jobs.describe("farm"))
+
+
+class ImplementedMatchesTheModule(unittest.TestCase):
+    """IMPLEMENTED is what `describe` tells Discord, so a stale entry makes
+    the overseer answer "NOT BUILT YET" to an order it is about to carry out.
+    That is not a hypothetical - it is what this constant did between
+    quadseven/mod-overseer#88 wiring the dungeon job and infra#3205 noticing.
+
+    Contract over source TEXT, in the pattern test_bags.py and
+    test_quest_aim.py established: the C++ is compiled only on a push to main,
+    never on a PR, so reading it is the only gate a PR can have.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        if not MODULE.exists():
+            raise unittest.SkipTest(
+                "mod-overseer submodule not checked out; "
+                "check.python-units.yml passes submodules: true for this dir")
+        cls.source = MODULE.read_text(encoding="utf-8", errors="replace")
+
+    def test_the_dungeon_job_really_does_drive_the_run_coordinator(self):
+        """The leader's job being `dungeon` is the sole trigger for reset,
+        stage, gather, cross, clear, exit and the campaign loop."""
+        self.assertIn('leaderJob != "dungeon"', self.source)
+        self.assertIn('leaderJob == "dungeon"', self.source)
+        self.assertIn("dungeon", jobs.IMPLEMENTED)
+
+    def test_the_quest_job_really_does_gate_the_quest_drive(self):
+        """LoadJobs selects everything that is neither blank nor `quest`, so
+        absence from that map IS the quest job."""
+        self.assertIn("job <> 'quest'", self.source)
+        self.assertIn("quest", jobs.IMPLEMENTED)
+
+    def test_no_other_mode_claims_to_be_wired(self):
+        """DoJob validates the rest against a list and writes the column,
+        and nothing else reads them. Widening IMPLEMENTED without a branch in
+        the module to point at is the drift this class exists to stop."""
+        for mode in jobs.MODES:
+            if mode in jobs.IMPLEMENTED:
+                continue
+            self.assertNotIn('leaderJob == "%s"' % mode, self.source, mode)
+            self.assertNotIn('Job == "%s"' % mode, self.source, mode)
 
 
 if __name__ == "__main__":

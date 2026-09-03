@@ -22,6 +22,43 @@
                 padding:.15rem .5rem; font-size:.85rem; }
   #recordings:hover { color:var(--text); }
   #stale { display:none; background:#6e2c00; color:#ffd8a8; padding:.3rem 1rem; }
+  /* --- the current goal banner (infra#3205) ---------------------------------
+     Above every tab and outside all of them, because it is the one thing on
+     this page that is true whichever view is open. It sits BELOW #stale on
+     purpose: when the world is unreachable, "the world is unreachable"
+     outranks anything this banner could say about what the family wants.
+
+     Placed first in the stylesheet, ahead of the Achievements block, because
+     three tab suites slice this file by their own banners and the earliest
+     window starts there - CSS dropped after it is swept into assertions
+     about a tab it has nothing to do with. */
+  #agenda { margin:0; padding:.85rem 1rem .9rem; background:var(--panel);
+            border-bottom:1px solid var(--line); }
+  /* THE HEADLINE IS THE FEATURE. Deliberately the largest text on the page,
+     larger than the h1 above it: this is read from across a room while five
+     streams play, and half a second is the whole budget. */
+  #agline { font-size:1.35rem; line-height:1.3; color:var(--text); }
+  #agline .agverb { color:var(--gold); }
+  #agdetail { color:var(--dim); margin-top:.35rem; font-size:.92rem; }
+  #agdetail div { margin-top:.15rem; }
+  #agwhen { color:var(--dim); margin-top:.4rem; font-size:.85rem;
+            display:flex; gap:.9rem; flex-wrap:wrap; }
+  /* Colour carries the activity so the shape of the answer is legible before
+     the words are: a split party and a stalled run are the two states worth
+     interrupting a person for, and they are the two that are not blue. */
+  #agenda.split { border-left:4px solid var(--neutral); }
+  #agenda.split #agline { color:var(--neutral); }
+  #agenda.stalled { border-left:4px solid var(--horde); }
+  #agenda.stalled #agline { color:var(--horde); }
+  #agenda.dungeon { border-left:4px solid var(--gold); }
+  #agenda.travel, #agenda.quest, #agenda.job {
+      border-left:4px solid var(--alliance); }
+  #agenda.idle { border-left:4px solid var(--line); }
+  #agenda.idle #agline { color:var(--dim); }
+  /* An honest label rather than a silent one: an answer the server could not
+     refresh must not look like an answer it just gave. */
+  .agstale { color:#ffd8a8; }
+  @media (max-width:600px) { #agline { font-size:1.12rem; } }
   nav { display:flex; gap:.4rem; padding:.6rem 1rem; flex-wrap:wrap; }
   nav button { background:var(--panel); color:var(--text); border:1px solid var(--line);
                padding:.3rem .8rem; border-radius:6px; cursor:pointer; font:inherit; }
@@ -849,6 +886,15 @@
     .catch(() => {});
 </script>
 <div id="stale"></div>
+<!-- WHAT THE FAMILY IS TRYING TO DO (infra#3205). Outside every <section>
+     because it is not a tab: it is true on the map, in the Armory and on the
+     Achievements page alike, and the question it answers ("what are they
+     even doing right now") is the one this page could not answer at all. -->
+<div id="agenda">
+  <div id="agline">reaching the world...</div>
+  <div id="agdetail"></div>
+  <div id="agwhen"></div>
+</div>
 <nav id="tabs"></nav>
 <section id="family">
   <div id="fheadline">reaching the world...</div>
@@ -2849,6 +2895,107 @@ setInterval(refreshFrame, 5000);  // and so does their own screen
 setInterval(refreshWatch, 5000);
 setInterval(render, 200);  // combat pulse
 window.addEventListener("resize", render);
+
+// --- the current goal banner (infra#3205) ---------------------------------
+//
+// One sentence saying what the family is trying to do, at the top of every
+// view. /api/agenda arrives fully decided - which of the five tables won, how
+// the party disagrees, whether it has gone stale - so this code only draws.
+//
+// IT SITS HERE, between the map's own intervals and the Achievements banner,
+// for the same reason the Achievements block does: the Family tab's suite
+// slices the page from its banner to loadZones().then( and the Armory's from
+// its banner to the end of the script, and code dropped inside either window
+// is swept into assertions about a tab it has nothing to do with.
+//
+// EVERY STRING FROM THE PAYLOAD IS SET AS TEXT, NEVER PARSED AS MARKUP. Quest
+// titles come from the world database and the errand reason is written by an
+// LLM into a table the bridge fills; none of it is trusted.
+//
+// A FAILED POLL KEEPS THE LAST GOOD ANSWER and marks it stale. Blanking this
+// would read as "the family has no goal", which is worse than an old answer
+// honestly labelled - and it is the same contract every other poll on this
+// page keeps.
+const agEl = document.getElementById("agenda");
+const agLine = document.getElementById("agline");
+const agDetail = document.getElementById("agdetail");
+const agWhen = document.getElementById("agwhen");
+// Every class the banner can wear, so a state change clears the last one
+// rather than accumulating them.
+const AG_STATES = ["dungeon", "travel", "job", "quest", "idle", "split", "stalled"];
+
+function agAge(seconds) {
+  // Deliberately coarse. This is read at a glance, and "23 minutes" and
+  // "23 minutes 41 seconds" answer the same question.
+  if (seconds === null || seconds === undefined) return "unknown";
+  if (seconds < 60) return "just now";
+  const mins = Math.floor(seconds / 60);
+  if (mins < 60) return mins + (mins === 1 ? " minute ago" : " minutes ago");
+  const hours = Math.floor(mins / 60);
+  if (hours < 24) return hours + (hours === 1 ? " hour ago" : " hours ago");
+  const days = Math.floor(hours / 24);
+  return days + (days === 1 ? " day ago" : " days ago");
+}
+
+function agStamp(label, seconds, stale) {
+  const el = document.createElement("span");
+  el.textContent = label + ": " + agAge(seconds);
+  if (stale) el.className = "agstale";
+  return el;
+}
+
+function renderAgenda(p) {
+  agLine.textContent = p.headline;
+  agDetail.replaceChildren();
+  for (const line of p.detail || []) {
+    const d = document.createElement("div");
+    d.textContent = line;
+    agDetail.appendChild(d);
+  }
+  agWhen.replaceChildren();
+  // BOTH CLOCKS, ALWAYS. "Set 40 minutes ago" is fine for a goal still being
+  // worked; "last moved 40 minutes ago" is the stall. Showing only one lets
+  // either be mistaken for the other, which is the whole point of the pair.
+  agWhen.appendChild(agStamp("goal set", p.changed_seconds, false));
+  agWhen.appendChild(agStamp("last moved", p.moved_seconds, p.stalled));
+  if (p.stalled) {
+    const s = document.createElement("span");
+    s.className = "agstale";
+    s.textContent = "STALLED - nothing has happened in over "
+      + Math.round(p.stall_after_seconds / 60) + " minutes.";
+    agWhen.appendChild(s);
+  }
+  if (p.orders && p.orders.channel_id) {
+    const o = document.createElement("span");
+    o.textContent = "from a Discord order";
+    agWhen.appendChild(o);
+  }
+  agEl.classList.remove(...AG_STATES);
+  agEl.classList.add(p.activity);
+  // Stalled is drawn ON TOP of the activity rather than instead of it: a
+  // stalled dungeon run is still a dungeon run, and losing that word would
+  // cost the reader the one number that says how far in they are.
+  if (p.stalled) agEl.classList.add("stalled");
+}
+
+async function pollAgenda() {
+  try {
+    const r = await fetch("/api/agenda");
+    if (!r.ok) throw new Error(r.status);
+    renderAgenda(await r.json());
+  } catch (e) {
+    // Keep the sentence; mark the clocks. There is nothing to redraw here -
+    // an unreachable world does not change what the family was last trying
+    // to do, only how much the reader should trust the age beside it.
+    for (const el of agWhen.children) el.className = "agstale";
+  }
+}
+
+pollAgenda();
+// Ten seconds. The underlying rows change on the order of minutes (a job is
+// set by hand, a run number ticks once an hour), so the 5s snapshot cadence
+// would be six reads of five tables per minute to redraw the same sentence.
+setInterval(pollAgenda, 10000);
 
 // --- the Achievements tab (mod-overseer#88, mod-overseer#152) --------------------
 //

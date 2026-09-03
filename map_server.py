@@ -20,6 +20,7 @@ from urllib.parse import parse_qs, urlsplit
 import pymysql
 
 import achievements
+import agenda
 import armory
 import chat
 import family
@@ -870,6 +871,157 @@ def _ensure_stream_store() -> None:
             cur.execute(sql)
 
 
+# --- the current-goal banner (infra#3205) -----------------------------------
+#
+# WHY THIS FETCH IS ALL GUARDS. Every table below except `instance` and
+# `characters` is created by the in-world module, across migrations that land
+# weeks apart, and the two realms this image serves run different worldserver
+# builds. So a read here can fail two ways and both have already taken a tab
+# down in production:
+#
+#   1146 missing TABLE   - what turned the whole Achievements tab into a 503
+#                          on the live realm (infra#3172): it has overseer_event
+#                          but no overseer_death.
+#   1054 missing COLUMN  - the same class of failure one level down, and the
+#                          nastier one, because MySQL fails a SELECT naming an
+#                          absent column WHOLE. infra#2846 is the worked
+#                          example: adding `travel_npc` to one query stopped
+#                          the family questing on every older world, silently,
+#                          for a feature they had nothing to do with.
+#
+# This banner reads the NEWEST columns in the schema - dungeon_runs_wanted,
+# dungeon_runs_done, campaign_id, run_number, outcome and members all arrived
+# on 2026-09-02 - so it is the single most likely thing in this file to meet a
+# world that predates them. Each read therefore falls back to the columns that
+# have always existed rather than raising, and agenda.build_agenda is written
+# to say less when it is handed less.
+_ROSTER_FULL = (
+    "SELECT name, enabled, `lead`, job, drive_quest, travel_npc, learn_skill, "
+    "dungeon_runs_wanted, dungeon_runs_done FROM overseer_roster"
+)
+# The lead column is back-quoted because it is a reserved word in MySQL 8; an
+# unquoted one is a syntax error, not a missing column, so no schema fallback
+# below would catch it - it would take the whole banner out on every world.
+_ROSTER_OLD = "SELECT name, enabled, `lead` FROM overseer_roster"
+
+_RUNS_FULL = (
+    "SELECT id, leader_name, map_id, state, started_at, ended_at, "
+    "ended_reason, campaign_id, run_number, outcome, members "
+    "FROM overseer_dungeon_run ORDER BY started_at DESC LIMIT 200"
+)
+_RUNS_OLD = (
+    "SELECT id, leader_name, map_id, state, started_at, ended_at, ended_reason "
+    "FROM overseer_dungeon_run ORDER BY started_at DESC LIMIT 200"
+)
+
+# The lockout the family is BOUND to, which is the only way to find the right
+# `instance` row: several may exist for one map, and the bind is what says
+# which one is theirs. Every join here is on an integer or on characters.name,
+# which is utf8mb4_bin and so outranks any collation it meets - the 1267 trap
+# infra#3173 documents needs two overseer tables to bite, and there are none
+# in this statement.
+_INSTANCE_SQL = (
+    "SELECT DISTINCT i.id, i.map, i.completedEncounters, i.resettime "
+    "FROM instance i "
+    "JOIN character_instance ci ON ci.instance = i.id "
+    "JOIN characters c ON c.guid = ci.guid "
+    "WHERE c.name IN (%s)"
+)
+
+
+def _guarded(cur, sql: str, params: tuple = (), fallback: str = "",
+             what: str = "") -> list:
+    """Run `sql`, dropping to `fallback` (then to []) on a degraded schema.
+
+    Returns rows. 1146 and 1054 are the only two errors swallowed, and only
+    those two: anything else is a real fault and must still reach the handler's
+    503 rather than being silently rendered as an empty banner.
+    """
+    for attempt in (sql, fallback):
+        if not attempt:
+            break
+        try:
+            cur.execute(attempt, params)
+            return list(cur.fetchall())
+        except pymysql.err.ProgrammingError as exc:
+            if not (exc.args and exc.args[0] in (1054, 1146)):
+                raise
+            log.info("agenda: %s unavailable (%s) - trying a thinner read",
+                     what, exc.args[0])
+    log.info("agenda: %s unavailable; the banner runs without it", what)
+    return []
+
+
+def _fetch_agenda() -> dict:
+    """Everything the current-goal banner reads, in one connection.
+
+    Not subject to the 60s snapshot freshness rule, and deliberately so: an
+    aim is SAVED state. It still answers "what were they trying to do" for a
+    family who logged out an hour ago, which is a good part of the reason to
+    look at all.
+
+    Names come from bonds via family.roster(), never from the request, so
+    every roster clause is a fixed IN list of five with no user input in it.
+    """
+    names = family.roster()
+    holes = ", ".join(["%s"] * len(names))
+    conn = _connect()
+    try:
+        with conn.cursor() as cur:
+            roster_rows = _guarded(cur, _ROSTER_FULL, (), _ROSTER_OLD,
+                                   "overseer_roster")
+            run_rows = _guarded(cur, _RUNS_FULL, (), _RUNS_OLD,
+                                "overseer_dungeon_run")
+            goal_rows = _guarded(
+                cur,
+                "SELECT character_name, kind, skill_name, target, status, "
+                "channel_id, last_report, created_at, quest_id "
+                "FROM overseer_goal ORDER BY created_at DESC LIMIT 200",
+                (), "", "overseer_goal")
+            trade_rows = _guarded(
+                cur,
+                "SELECT character_name, verb, skill_name, reason, status, "
+                "decided_at FROM overseer_trade ORDER BY decided_at DESC "
+                "LIMIT 200",
+                (), "", "overseer_trade")
+            # ONE ROW PER EVENT KIND, not the feed. The banner asks the event
+            # table exactly one question - when did anything last actually
+            # happen - and grouping in SQL answers it in seven rows instead of
+            # ten thousand. S608: `holes` is a run of placeholders sized by the
+            # roster, and every VALUE is bound by the driver below.
+            event_rows = _guarded(
+                cur,
+                "SELECT kind, MAX(last_seen) AS last_seen "  # noqa: S608
+                f"FROM overseer_event WHERE character_name IN ({holes}) "
+                "GROUP BY kind",
+                tuple(names), "", "overseer_event")
+            instance_rows = _guarded(cur, _INSTANCE_SQL % holes, tuple(names),
+                                     "", "instance")
+            # The quests anything is aimed at, named. Looked up after the rows
+            # are in hand rather than joined, because acore_world is a second
+            # schema and the ids are a handful.
+            wanted = {int(r["drive_quest"]) for r in roster_rows
+                      if int(r.get("drive_quest") or 0)}
+            wanted |= {int(r["quest_id"]) for r in goal_rows
+                       if int(r.get("quest_id") or 0)}
+            quest_titles = {}
+            if wanted:
+                qholes = ", ".join(["%s"] * len(wanted))
+                cur.execute(
+                    "SELECT ID, LogTitle FROM acore_world.quest_template "  # noqa: S608
+                    f"WHERE ID IN ({qholes})",
+                    tuple(sorted(wanted)),
+                )
+                quest_titles = {int(r["ID"]): r["LogTitle"]
+                                for r in cur.fetchall()}
+    finally:
+        conn.close()
+    return {"roster_rows": roster_rows, "run_rows": run_rows,
+            "instance_rows": instance_rows, "goal_rows": goal_rows,
+            "trade_rows": trade_rows, "event_rows": event_rows,
+            "quest_titles": quest_titles}
+
+
 def _fetch_streams() -> list:
     """Every stream row, with clocks as epoch seconds.
 
@@ -1326,6 +1478,32 @@ class Handler(BaseHTTPRequestHandler):
             log.exception("wealth query failed")
             self._send(503, "application/json", b'{"error": "world unreachable"}')
 
+    def _agenda(self, query: dict) -> None:
+        """GET /api/agenda - what the family is trying to do right now.
+
+        Below _wealth for the same reason _wealth is below _thoughts: the
+        Family tab's suite slices this class from `def _family` to
+        `def _thoughts` and the Armory's from `def _armory` to the same place,
+        so a handler dropped into either window is read as part of a contract
+        it has nothing to do with.
+
+        No name parameter, like every other family endpoint: WHO the family is
+        belongs to bonds, and this asks about the family as one thing anyway -
+        a per-character agenda is the split it exists to report.
+        """
+        try:
+            payload = agenda.build_agenda(**_fetch_agenda())
+            self._send(200, "application/json", json.dumps(payload).encode())
+        except Exception:
+            # Same contract as every other poll, and it matters more here than
+            # anywhere else on the page. This banner is the first thing read
+            # and the most confidently worded; blanking it on a failed poll
+            # would read as "the family has no goal", and replacing it with a
+            # cheerful default would be the page inventing one. So the last
+            # good answer stays up and the page marks it stale.
+            log.exception("agenda query failed")
+            self._send(503, "application/json", b'{"error": "world unreachable"}')
+
     def do_POST(self):  # noqa: N802 (stdlib naming)
         handler = self.POST_ROUTES.get(self.path.split("?", 1)[0])
         if handler is None:
@@ -1639,6 +1817,7 @@ class Handler(BaseHTTPRequestHandler):
         "/api/wealth": _wealth,
         "/api/questlog": _questlog,
         "/api/achievements": _achievements,
+        "/api/agenda": _agenda,
         "/api/thoughts": _thoughts,
         "/api/watch": _watch_state,
         "/": _index,
