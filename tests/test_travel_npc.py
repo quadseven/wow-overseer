@@ -115,6 +115,10 @@ def _prune() -> str:
     return _function("void PruneVanished(std::set<std::string> const& stillAimed)")
 
 
+def _end_travel_poll() -> str:
+    return _function("void EndTravelPoll(std::set<std::string> const& stillAimed)")
+
+
 def _grace() -> str:
     return _function("bool WithinHandbackGrace(std::string const& name)")
 
@@ -751,7 +755,14 @@ class TheErrandStateIsNotOutlivedByItsClock(unittest.TestCase):
         row simply stops coming back from the query, so nothing inside the loop
         can see it go."""
         code = _code(_drive())
-        self.assertEqual(2, code.count("_travelAims.PruneVanished("))
+        # #166 put both of DriveTravel's ways out behind a single verb, so the
+        # count that protects "every exit prunes" now counts the verb. What the
+        # verb does is asserted immediately below, so the indirection cannot
+        # hide a prune that went missing.
+        self.assertEqual(2, code.count("EndTravelPoll("))
+        end = _code(_end_travel_poll())
+        self.assertIn("_travelAims.PruneVanished(stillAimed)", end)
+        self.assertIn("SweepTravelFocus(stillAimed)", end)
         prune = _code(_prune())
         self.assertIn("_state.erase(", prune)
         self.assertIn("_handback[", prune)

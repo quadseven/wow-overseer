@@ -72,6 +72,10 @@ def _travel() -> str:
     return _function("void DriveTravel()")
 
 
+def _end_travel_poll() -> str:
+    return _function("void EndTravelPoll(std::set<std::string> const& stillAimed)")
+
+
 def _load_quest_aims() -> str:
     return _function("std::map<std::string, uint32> LoadQuestAims()")
 
@@ -213,8 +217,14 @@ class TheTravelDriveReadsThroughTheSameLoader(unittest.TestCase):
         code = _code(_travel())
         self.assertIn("aims.empty()", code)
         prune = code.index("aims.empty()")
-        self.assertIn("_travelAims.PruneVanished(std::set<std::string>())",
+        self.assertIn("EndTravelPoll(std::set<std::string>())",
                       code[prune:prune + 300])
+        # The prune moved behind a named verb in #166, which ends the errand
+        # memory and the stood-down strategies together. Assert that verb still
+        # prunes, or this test would pass on a rename that quietly dropped the
+        # prune, which is the one failure it exists to catch.
+        self.assertIn("_travelAims.PruneVanished(stillAimed)",
+                      _code(_end_travel_poll()))
 
     def test_the_filter_the_errand_loop_relied_on_moved_with_it(self):
         """DriveTravel never had to skip an empty target because the WHERE
