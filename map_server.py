@@ -26,6 +26,7 @@ import family
 import frames
 import modelviewer
 import questlog
+import standing
 import stream
 import voice
 from map_core import build_payload
@@ -46,6 +47,12 @@ BOOK = armory.TalentBook.load(HERE)
 # And the item tables, for the same reason: icons, spell text, sets and the
 # random-suffix tables are client data, frozen by tools/gen_items.py.
 ITEMS = armory.ItemBook.load(HERE)
+# The skill, faction and recipe tables, third of the frozen books and read
+# once for the same reason as the other two: acore_world's skillline_dbc,
+# faction_dbc and skilllineability_dbc are EMPTY, and `acore_world.faction`
+# does not exist at all, so a name for a skill or a faction can come from
+# nowhere else. Built by tools/gen_standing.py.
+STANDING = standing.StandingBook.load(HERE)
 PORT = int(os.environ.get("PORT", "8080"))
 
 # The model-viewer cache (modelviewer.py): an emptyDir on the pod, a temp
@@ -405,6 +412,84 @@ def _fetch_armory() -> dict:
     return {"char_rows": char_rows, "equipment_rows": equipment_rows,
             "talent_rows": talent_rows, "stats_rows": stats_rows,
             "base_rows": base_rows, "set_rows": set_rows}
+
+
+def _fetch_standing() -> dict:
+    """What the family has LEARNED: trades, skills, reputations, talents.
+
+    Five queries, all against acore_characters and all of them plain reads.
+    NOT read from overseer_snapshot and, like /api/armory, deliberately not
+    subject to its 60s freshness rule: every one of these is a SAVE, so it
+    answers for a character who is logged out and it keeps answering while
+    the worldserver is down.
+
+    Nothing here joins a `*_dbc` table, and that is the point rather than an
+    omission - every one of them is empty on this realm (see standing.py).
+    The names come from the frozen book instead.
+
+    Names come from bonds via family.roster(), never from the request, so
+    every IN list is a fixed five with no user input in it.
+    """
+    names = family.roster()
+    holes = ", ".join(["%s"] * len(names))
+    conn = _connect()
+    try:
+        with conn.cursor() as cur:
+            # S608 on all five, and the same reasoning as _fetch_armory:
+            # `holes` is a run of "%s" placeholders whose only input is the
+            # LENGTH of family.roster() - a constant five, from bonds. Every
+            # VALUE is bound by the driver and this endpoint takes no
+            # parameters at all.
+            cur.execute(
+                "SELECT c.name, c.level, c.race, c.class, "  # noqa: S608
+                "c.activeTalentGroup "
+                "FROM characters c "
+                f"WHERE c.name IN ({holes})",
+                tuple(names),
+            )
+            char_rows = list(cur.fetchall())
+            cur.execute(
+                "SELECT c.name, s.skill, s.value, s.max "  # noqa: S608
+                "FROM characters c JOIN character_skills s ON s.guid = c.guid "
+                f"WHERE c.name IN ({holes})",
+                tuple(names),
+            )
+            skill_rows = list(cur.fetchall())
+            # Every faction in the game has a row here for every character,
+            # met or not - about a hundred each. `flags` is what tells them
+            # apart and the filtering is standing.met's job, not SQL's, so
+            # the rule lives where the suite can reach it.
+            cur.execute(
+                "SELECT c.name, r.faction, r.standing, r.flags "  # noqa: S608
+                "FROM characters c JOIN character_reputation r ON r.guid = c.guid "
+                f"WHERE c.name IN ({holes})",
+                tuple(names),
+            )
+            reputation_rows = list(cur.fetchall())
+            cur.execute(
+                "SELECT c.name, t.spell, t.specMask "  # noqa: S608
+                "FROM characters c JOIN character_talent t ON t.guid = c.guid "
+                f"WHERE c.name IN ({holes})",
+                tuple(names),
+            )
+            talent_rows = list(cur.fetchall())
+            # Every spell the character knows, which is where the recipes
+            # are. Around forty rows each; the book decides which of them
+            # are recipes rather than the query, because "is this spell a
+            # recipe" is a question about client data this database has
+            # none of.
+            cur.execute(
+                "SELECT c.name, s.spell "  # noqa: S608
+                "FROM characters c JOIN character_spell s ON s.guid = c.guid "
+                f"WHERE c.name IN ({holes})",
+                tuple(names),
+            )
+            spell_rows = list(cur.fetchall())
+    finally:
+        conn.close()
+    return {"char_rows": char_rows, "skill_rows": skill_rows,
+            "reputation_rows": reputation_rows, "talent_rows": talent_rows,
+            "spell_rows": spell_rows}
 
 
 # The quest log query, written out rather than generated. Forty column
@@ -1043,6 +1128,25 @@ class Handler(BaseHTTPRequestHandler):
             log.exception("armory query failed")
             self._send(503, "application/json", b'{"error": "world unreachable"}')
 
+    def _standing(self, query: dict) -> None:
+        """GET /api/standing - what the five have learned, and what they have not.
+
+        No name parameter, for the same reason /api/armory takes none: WHO
+        the family is belongs to bonds, and accepting a roster here would
+        turn this into a general character query wearing a friendly name.
+        """
+        try:
+            payload = standing.build_standing(**_fetch_standing(), book=STANDING,
+                                              talents=BOOK)
+            self._send(200, "application/json", json.dumps(payload).encode())
+        except Exception:
+            # Same contract as every other poll: the panel keeps what it has
+            # already drawn and says it may be stale. A blank standing panel
+            # reads as "they have learned nothing", which is a worse lie
+            # than an old answer honestly labelled.
+            log.exception("standing query failed")
+            self._send(503, "application/json", b'{"error": "world unreachable"}')
+
     def _questlog(self, query: dict) -> None:
         """GET /api/questlog - what each of the five is actually working on.
 
@@ -1414,6 +1518,7 @@ class Handler(BaseHTTPRequestHandler):
         "/api/character": _character,
         "/api/family": _family,
         "/api/armory": _armory,
+        "/api/standing": _standing,
         "/api/questlog": _questlog,
         "/api/achievements": _achievements,
         "/api/thoughts": _thoughts,

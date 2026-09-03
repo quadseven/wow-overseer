@@ -346,6 +346,100 @@
   .q5 { color:#ff8000; }
   .q6 { color:#e6cc80; }
   .q7 { color:#00ccff; }
+  /* --- the standing panel (mod-overseer#88, mod-overseer#160) ------------
+     The Armory's second half: not what they are WEARING but what they have
+     LEARNED - trades, skills, reputation, spec. Sits inside #armory and
+     scrolls with it, so it is the same tab and not a sixth button.
+
+     DELIBERATELY ABOVE THE FAMILY BANNER. test_family_tab slices the CSS
+     from that banner to the end of the stylesheet; anything below it is
+     read as a Family rule and starts failing assertions about a different
+     tab. The Armory's own tests document this trap - these rules sit
+     inside the Armory's CSS window, which is where they belong anyway.
+     (And nothing in here may spell the stylesheet's own closing tag: a
+     CSS comment does not hide it from the HTML parser, which would end the
+     stylesheet right here and print the rest of it onto the page.)
+
+     Mobile first: one card per row on a phone, two when there is room. Bars
+     are the only chrome, because every number here is "x out of y" and a
+     bar is the one thing a person reads without doing arithmetic. */
+  #standing { margin-top:1.6rem; }
+  #sthead { font-size:1rem; padding-bottom:.3rem; border-bottom:1px solid var(--line); }
+  #stnote { color:var(--dim); font-size:.9rem; margin:.4rem 0 .8rem; }
+  /* THE GAP IS DRAWN FIRST AND DRAWN LOUD, and that is the whole reason
+     this panel exists. A per-member list of trades looks complete - two
+     professions each, nothing obviously wrong. Only the union of the five
+     shows that nobody can disenchant, which is what turns every unusable
+     green into vendor trash (mod-overseer#160). An absence has to be given
+     a shape or it is not read at all. */
+  #stgap { background:var(--panel); border:1px solid var(--line);
+           border-left:3px solid var(--horde); border-radius:8px;
+           padding:.7rem .9rem; margin-bottom:1rem; }
+  #stgap.ok { border-left-color:var(--mortal); }
+  .stgap-head { color:#ff9d9d; }
+  #stgap.ok .stgap-head { color:var(--mortal); }
+  .stgap-why { color:var(--dim); margin-top:.25rem; overflow-wrap:anywhere; }
+  .stgap-list { display:flex; flex-wrap:wrap; gap:.35rem; margin-top:.5rem; }
+  .stgap-list a { display:flex; align-items:center; gap:.35rem; text-decoration:none;
+                  color:var(--text); border:1px solid var(--line); border-radius:6px;
+                  padding:.15rem .45rem; font-size:.85rem; }
+  .stgap-list a:hover { border-color:var(--alliance); }
+  .stgap-list a.key { border-color:var(--horde); color:#ff9d9d; }
+  .stgap-list img { width:18px; height:18px; border-radius:3px; display:block; }
+  .stgap-list .n { color:var(--dim); }
+  /* Five names to jump between, the same affordance the profiles above
+     already need and for the same reason: by the time a phone reaches this
+     panel it has scrolled past five full paper dolls, and "where is Ugga"
+     should still be one tap. Its own row rather than a second set of links
+     in #ajump, so the two navigations stay independent. */
+  #stjump { position:sticky; top:0; z-index:5; display:flex; gap:.4rem;
+            flex-wrap:wrap; padding:.4rem 0; background:var(--bg); }
+  #stjump a { color:var(--text); text-decoration:none; border:1px solid var(--line);
+              border-radius:6px; padding:.2rem .6rem; font-size:.9rem; }
+  #stjump a:hover { border-color:var(--alliance); }
+  #stcards { display:grid; gap:1rem; grid-template-columns:minmax(0,1fr); }
+  @media (min-width:1400px) { #stcards { grid-template-columns:repeat(2,minmax(0,1fr)); } }
+  .stcard { background:var(--panel); border:1px solid var(--line); border-radius:10px;
+            padding:.8rem 1rem 1rem; min-width:0; scroll-margin-top:3rem; }
+  .stcard.gone { opacity:.6; }
+  .stname { font-size:1.3rem; font-family:Georgia,'Times New Roman',serif; }
+  .stwho { color:var(--dim); font-size:.9rem; margin-bottom:.6rem; }
+  .stsect { color:var(--dim); margin:.9rem 0 .3rem;
+            border-bottom:1px solid var(--line); }
+  /* One skill line: name, then the numbers, then the bar underneath. The
+     bar is full-width rather than inline because a 6000-point reputation
+     and a 75-point trade have to be comparable at a glance. */
+  .strow { margin-bottom:.45rem; }
+  .strow .top { display:flex; align-items:center; gap:.4rem; }
+  .strow img { width:20px; height:20px; border-radius:3px; flex:0 0 20px; display:block; }
+  .strow .nm { overflow-wrap:anywhere; text-decoration:none; color:var(--text); }
+  .strow a.nm:hover { text-decoration:underline; }
+  .strow .v { margin-left:auto; white-space:nowrap; color:var(--dim); }
+  .strow .v.good { color:var(--mortal); }
+  .strow .v.warn { color:#ffd100; }
+  .sttrack { background:var(--bg); border:1px solid var(--line); border-radius:4px;
+             height:.55em; overflow:hidden; margin-top:.2rem; }
+  .stfill { background:var(--alliance); height:100%; }
+  .stfill.rep { background:var(--mortal); }
+  .stfill.trade { background:var(--neutral); }
+  /* Proficiencies and the collection counters have no ceiling to fill, so
+     they get a chip and no bar. A bar that is always empty or always full
+     is a bar nobody reads. */
+  .stchips { display:flex; flex-wrap:wrap; gap:.3rem; }
+  .stchip { border:1px solid var(--line); border-radius:6px; padding:.1rem .45rem;
+            font-size:.85rem; color:var(--dim); }
+  .stchip.on { color:var(--text); }
+  .sttalent { border-color:var(--thought); color:var(--text); text-decoration:none;
+              display:inline-block; }
+  .sttalent:hover { border-color:var(--alliance); }
+  .sttalent .r { color:var(--thought); }
+  .stmakes { color:var(--dim); font-size:.85rem; margin:.1rem 0 .3rem 1.6rem;
+             overflow-wrap:anywhere; }
+  .stmakes a { color:var(--text); text-decoration:none; }
+  .stmakes a:hover { text-decoration:underline; }
+  .stnone { color:var(--dim); }
+  .stspec { color:var(--thought); margin-bottom:.35rem; overflow-wrap:anywhere; }
+  .stspec .un { color:#ffd100; }
   /* --- the Family tab (infra#2892), reshaped by infra#3110 and infra#88 ---
      Five feeds, then one board. Sized for a thumb on a 390px phone FIRST and
      widened on a desktop, rather than the other way round: the map is
@@ -655,6 +749,17 @@
   <div id="asaved"></div>
   <nav id="ajump"></nav>
   <div id="aprofiles"></div>
+  <!-- The standing panel (mod-overseer#88, mod-overseer#160): what the five
+       have LEARNED, under what they are wearing. Inside #armory on purpose -
+       it is the same question asked about the same five, and a sixth tab
+       button for it would be one more thing to find on a phone. -->
+  <div id="standing">
+    <h2 id="sthead">standing</h2>
+    <div id="stnote"></div>
+    <div id="stgap"></div>
+    <nav id="stjump"></nav>
+    <div id="stcards"></div>
+  </div>
   <div id="atip"></div>
 </section>
 <section id="achievements">
@@ -2553,6 +2658,10 @@ function showView(v) {
     closePanel();
     stopBroadcasts();
     pollArmory();
+    // The standing panel is the same tab and gets the same treatment:
+    // thirty seconds of blank panel under the profiles is indistinguishable
+    // from a broken one.
+    pollStanding();
     return;
   }
   if (isAch) {
@@ -3533,6 +3642,272 @@ async function pollArmory() {
 // payload a hundred and eighty times per actual change. Entering the tab
 // still polls immediately, so it is never blank while waiting for the timer.
 setInterval(pollArmory, 30000);
+
+// --- the standing panel (mod-overseer#88, mod-overseer#160) ---------------
+// The Armory's other half. The paper doll above answers "what is he
+// wearing"; this answers "what has he LEARNED" - trades and what they can
+// make, weapon and defence skill against the level cap, reputations, and
+// the spec the talent points add up to.
+//
+// IT DRAWS THE ABSENCE FIRST. Five cards each listing two professions look
+// like five complete characters. Only the union shows that nobody in the
+// family can disenchant, which is why every green and blue none of them can
+// wear is vendor trash instead of dust (mod-overseer#160). So the gap block
+// is built before any card and sits above all of them.
+//
+// It borrows this tab's icon host and iconImg rather than declaring a
+// second one - the Armory's own test counts the page's outbound hosts and
+// there are exactly two, which is the point of the count. Every link in
+// here arrives already built in the payload for the same reason.
+const stgap = document.getElementById("stgap");
+const stcards = document.getElementById("stcards");
+const stjump = document.getElementById("stjump");
+// Set here rather than in the markup so the sentence lives beside the code
+// that makes it true, exactly as #asaved does.
+document.getElementById("stnote").textContent =
+  "skills, trades, reputations and talents as the world last saved them. "
+  + "Names for them come from the client's own frozen tables, because this "
+  + "server's copies of those tables are empty.";
+
+const stand = { cards: new Map() };
+
+// A bar, or nothing when there is no scale to draw one against. A
+// proficiency has no ceiling and a bar that is always full says less than
+// no bar at all.
+function stBar(parent, pct, kind) {
+  if (pct === null || pct === undefined) return;
+  const track = el("div", "sttrack");
+  const fill = el("div", "stfill" + (kind ? " " + kind : ""));
+  fill.style.width = Math.max(0, Math.min(100, pct)) + "%";
+  track.appendChild(fill);
+  parent.appendChild(track);
+}
+
+// One graded line: icon, name (linking out for the tooltip), the numbers,
+// then the bar underneath.
+function stLine(parent, item, right, cls, kind) {
+  const wrap = el("div", "strow");
+  const top = el("div", "top");
+  if (item.icon) top.appendChild(iconImg(item.icon, ""));
+  const a = document.createElement("a");
+  a.className = "nm";
+  a.href = item.wowhead;
+  a.target = "_blank";
+  a.rel = "noopener";
+  a.textContent = item.name;
+  top.appendChild(a);
+  top.appendChild(el("span", "v" + (cls ? " " + cls : ""), right));
+  wrap.appendChild(top);
+  stBar(wrap, item.percent, kind);
+  parent.appendChild(wrap);
+  return wrap;
+}
+
+function stChip(parent, text, cls) {
+  parent.appendChild(el("span", "stchip" + (cls ? " " + cls : ""), text));
+}
+
+// What a trade can make, under the trade. A gathering trade makes nothing
+// BY DESIGN, so it says that rather than "0 of 0", which reads as a fault.
+function stMakes(parent, trade) {
+  const r = trade.recipes;
+  const line = el("div", "stmakes");
+  if (r.gathers) {
+    line.textContent = "gathers - this trade makes nothing";
+    parent.appendChild(line);
+    return;
+  }
+  line.appendChild(el("span", "", "knows " + r.known + " of " + r.total
+    + (r.known ? " recipes: " : " recipes")));
+  r.makes.forEach((m, i) => {
+    if (i) line.appendChild(el("span", "", ", "));
+    const a = document.createElement("a");
+    a.href = m.wowhead;
+    a.target = "_blank";
+    a.rel = "noopener";
+    a.textContent = m.name;
+    line.appendChild(a);
+  });
+  parent.appendChild(line);
+}
+
+function stSection(card, label) {
+  card.appendChild(el("div", "stsect", label));
+}
+
+// Cards are built once and refilled, the same rule the Armory profiles and
+// the Family cards follow: five cards rebuilt every poll would throw away
+// the scroll position mid-read on the one device this is checked from.
+function standingCard(name) {
+  let c = stand.cards.get(name);
+  if (c) return c;
+  const card = el("article", "stcard");
+  card.id = "stcard-" + name;
+  const nm = el("div", "stname", name);
+  const who = el("div", "stwho");
+  const body = el("div");
+  card.append(nm, who, body);
+  stcards.appendChild(card);
+  const jump = el("a", "", name);
+  jump.href = "#" + card.id;
+  stjump.appendChild(jump);
+  c = { card, nm, who, body };
+  stand.cards.set(name, c);
+  return c;
+}
+
+// The family-wide gap. Enchanting is called out by name and given its
+// reason; the rest are listed because "eight of the ten primaries have
+// nobody" is the shape of the problem, not a detail of it.
+function renderGap(gap) {
+  stgap.textContent = "";
+  stgap.className = gap.missing.length ? "" : "ok";
+  if (!gap.missing.length) {
+    stgap.appendChild(el("div", "stgap-head", "every primary trade has an owner"));
+    return;
+  }
+  stgap.appendChild(el("div", "stgap-head",
+    "NOBODY IN THE FAMILY HAS: " + gap.missing.length + " of the primary trades"));
+  if (gap.enchanting) stgap.appendChild(el("div", "stgap-why", gap.enchanting_why));
+  const list = el("div", "stgap-list");
+  for (const m of gap.missing) {
+    const a = document.createElement("a");
+    a.href = m.wowhead;
+    a.target = "_blank";
+    a.rel = "noopener";
+    if (m.why) a.className = "key";
+    if (m.icon) a.appendChild(iconImg(m.icon, ""));
+    a.appendChild(el("span", "", m.name));
+    // The size of what is being missed, not just its name.
+    if (m.recipes) a.appendChild(el("span", "n", m.recipes + " recipes"));
+    list.appendChild(a);
+  }
+  stgap.appendChild(list);
+}
+
+function renderStanding(p) {
+  renderGap(p.gap);
+  for (const m of p.members) {
+    const c = standingCard(m.name);
+    c.card.className = "stcard" + (m.present ? "" : " gone");
+    c.body.textContent = "";
+    if (!m.present) {
+      c.who.textContent = m["class"] + " - " + m.role
+        + " - no saved character, so nothing learned to show.";
+      continue;
+    }
+    c.nm.style.color = m.class_colour;
+    c.who.textContent = m.level + " " + m.race + " " + m["class"] + " - " + m.role;
+
+    // --- trades, and what they can make ---
+    const pro = m.professions;
+    stSection(c.body, "trades");
+    for (const t of pro.primary.concat(pro.secondary)) {
+      stLine(c.body, t, t.value + " / " + t.max, "", "trade");
+      stMakes(c.body, t);
+    }
+    if (!pro.primary.length && !pro.secondary.length) {
+      c.body.appendChild(el("div", "stnone", "no trades at all"));
+    }
+    // The ceiling is the world's, not a preference: two primaries, and it
+    // is why a missing trade cannot simply be trained. Said on every card
+    // because it is the reason the gap above is expensive to close.
+    const free = el("div", "stnone");
+    free.textContent = pro.slots_free
+      ? pro.slots_free + " of " + pro.max_primary + " primary slots free"
+      : "both primary slots taken (" + pro.blocking.join(", ")
+        + ") - a new trade costs one of these";
+    c.body.appendChild(free);
+
+    // --- the spec ---
+    const s = m.spec;
+    stSection(c.body, "talents");
+    const spec = el("div", "stspec");
+    spec.appendChild(el("span", "", s.primary
+      ? s.primary + "  " + s.distribution
+      : "nothing spent"));
+    spec.appendChild(el("span", "", "  -  " + s.spent
+      + (s.available === null ? " points spent" : " / " + s.available + " points")));
+    if (s.unspent) spec.appendChild(el("span", "un", "  -  " + s.unspent + " UNSPENT"));
+    c.body.appendChild(spec);
+    const talents = el("div", "stchips");
+    for (const tree of s.trees) {
+      for (const t of tree.talents) {
+        const a = document.createElement("a");
+        a.className = "stchip sttalent";
+        a.href = t.wowhead;
+        a.target = "_blank";
+        a.rel = "noopener";
+        a.appendChild(el("span", "", t.name + " "));
+        a.appendChild(el("span", "r", t.rank + "/" + t.max_rank));
+        talents.appendChild(a);
+      }
+    }
+    if (!talents.childNodes.length) {
+      talents.appendChild(el("span", "stnone", "no talents learned"));
+    }
+    c.body.appendChild(talents);
+    if (s.unknown.length) {
+      c.body.appendChild(el("div", "stnone",
+        "not in the talent tables: " + s.unknown.join(", ")));
+    }
+
+    // --- skills, against the cap this level allows ---
+    stSection(c.body, "skills");
+    const cap = el("div", "stnone");
+    cap.textContent = m.skills.at_cap
+      ? "every graded weapon and defence skill is at the cap of " + m.skills.cap
+      : m.skills.short_by + " points below the cap of " + m.skills.cap;
+    c.body.appendChild(cap);
+    // Group order comes from the payload, so the page never names a group
+    // and the two ends cannot come to disagree about what the groups are.
+    for (const g of m.skills.groups) {
+      c.body.appendChild(el("div", "stnone", g.group));
+      const chips = el("div", "stchips");
+      for (const sk of g.skills) {
+        if (sk.proficiency) { stChip(chips, sk.name, "on"); continue; }
+        const short = sk.short_by
+          ? sk.name + " " + sk.value + " / " + sk.cap + "  -" + sk.short_by
+          : sk.name + " " + sk.value;
+        stChip(chips, short + (sk.stale_max ? " (stale ceiling)" : ""),
+               sk.short_by ? "" : "on");
+      }
+      c.body.appendChild(chips);
+    }
+
+    // --- reputations, deepest standing first ---
+    stSection(c.body, "reputation");
+    if (!m.reputations.length) {
+      c.body.appendChild(el("div", "stnone", "has met nobody worth a standing yet"));
+    }
+    for (const r of m.reputations) {
+      stLine(c.body, r, r.standing + "  " + r.into + " / " + r.span,
+             r.friendly ? "good" : "warn", "rep");
+    }
+  }
+}
+
+async function pollStanding() {
+  if (view !== ARMORY_VIEW) return;
+  try {
+    const r = await fetch("/api/standing");
+    if (!r.ok) throw new Error(r.status);
+    renderStanding(await r.json());
+  } catch (e) {
+    // Keep every card already drawn, the same contract the rest of this
+    // page holds to. A blank standing panel reads as "they have learned
+    // nothing", which is a worse lie than an old answer labelled as old.
+    stgap.textContent = "";
+    stgap.className = "";
+    stgap.appendChild(el("div", "stgap-head",
+      "the world is unreachable - this may be stale"));
+  }
+}
+
+// Thirty seconds, matching the Armory's own cadence and for the same
+// reason: skills, reputations and talents are written by the core's save
+// timer, so they physically cannot change faster than that.
+setInterval(pollStanding, 30000);
 
 // --- the front door (infra#3110) ------------------------------------------
 //
