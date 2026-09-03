@@ -29,6 +29,7 @@ import questlog
 import standing
 import stream
 import voice
+import wealth
 from map_core import build_payload
 from panel import build_character_panel
 from transform import Geometry
@@ -273,6 +274,96 @@ def _fetch_family() -> list[dict]:
             return list(cur.fetchall())
     finally:
         conn.close()
+
+
+# --- the Wealth and Bags view (quadseven/mod-overseer#88) -----------------
+# Everything wealth.py reads off an item, which is a far shorter list than a
+# tooltip needs: a bag grid wants the picture, the colour, the price and how
+# big the bag is, and nothing else. Listed once, here, so the query and the
+# builder's row contract are the same list.
+_WEALTH_ITEM_COLUMNS = (
+    "it.name AS item_name, it.Quality AS quality, it.ItemLevel AS item_level, "
+    "it.SellPrice AS sell_price, it.class, it.subclass, it.displayid, "
+    "it.ContainerSlots AS container_slots"
+)
+
+
+def _fetch_wealth() -> dict:
+    """The family's purse, every inventory row they own, and the auction house.
+
+    NOT read from overseer_snapshot and, like /api/armory, deliberately not
+    subject to its 60s freshness rule: money and bags are what the core has
+    SAVED, so they survive a logout and they still answer "what is he
+    carrying" for somebody who is not in the world right now.
+
+    THE INVENTORY QUERY IS UNBOUNDED BY SLOT ON PURPOSE. /api/armory asks for
+    `ci.bag = 0 AND ci.slot < len(armory.EQUIPPED_SLOTS)` because it draws a
+    paper doll. This view draws everything a character owns, and deciding
+    which (bag, slot) pair is a bag, the backpack or the bank is exactly the
+    judgement that lives in wealth.split_inventory where the suite can reach
+    it. Filtering here would move that decision into SQL nothing tests.
+
+    Names come from bonds via family.roster(), never from the request, so
+    every IN list here is a fixed five with no user input in it.
+    """
+    names = family.roster()
+    holes = ", ".join(["%s"] * len(names))
+    conn = _connect()
+    try:
+        with conn.cursor() as cur:
+            # S608 on all three: `holes` is a run of "%s" placeholders whose
+            # only input is the LENGTH of family.roster() - a constant five,
+            # from bonds. Every VALUE is still bound by the driver, and this
+            # endpoint takes no parameters at all.
+            cur.execute(
+                "SELECT c.name, c.level, c.class, c.money "  # noqa: S608
+                f"FROM characters c WHERE c.name IN ({holes})",
+                tuple(names),
+            )
+            char_rows = list(cur.fetchall())
+            # The item's name, quality, price and container size live in the
+            # WORLD database, not this one, so this is the same cross-schema
+            # join panel's inventory query already makes. LEFT, so a custom
+            # or removed item still occupies its slot rather than vanishing
+            # out of a fullness count that exists to be believed.
+            # ci.item is the item_instance guid, and it is what the rows
+            # INSIDE a bag name in their own `bag` column: without it there
+            # is no way to tell which container an item is in.
+            cur.execute(
+                "SELECT c.name, ci.bag, ci.slot, ci.item AS item_guid, "  # noqa: S608
+                "ii.itemEntry AS entry, ii.count, "
+                f"{_WEALTH_ITEM_COLUMNS} "
+                "FROM characters c "
+                "JOIN character_inventory ci ON ci.guid = c.guid "
+                "JOIN item_instance ii ON ii.guid = ci.item "
+                "LEFT JOIN acore_world.item_template it ON it.entry = ii.itemEntry "
+                f"WHERE c.name IN ({holes})",
+                tuple(names),
+            )
+            inventory_rows = list(cur.fetchall())
+            # auctionhouse holds LIVE auctions only - the core deletes the row
+            # when one completes - and it keys owner and bidder by character
+            # guid, so both are joined back to a name here rather than left as
+            # numbers the builder would have to resolve. Two IN lists: their
+            # own listings, and anything they are the top bidder on.
+            cur.execute(
+                "SELECT a.id, a.startbid, a.lastbid, a.buyoutprice, "  # noqa: S608
+                "a.deposit, a.time, o.name AS owner_name, b.name AS buyer_name, "
+                "ii.itemEntry AS entry, ii.count, "
+                f"{_WEALTH_ITEM_COLUMNS} "
+                "FROM auctionhouse a "
+                "JOIN item_instance ii ON ii.guid = a.itemguid "
+                "LEFT JOIN characters o ON o.guid = a.itemowner "
+                "LEFT JOIN characters b ON b.guid = a.buyguid "
+                "LEFT JOIN acore_world.item_template it ON it.entry = ii.itemEntry "
+                f"WHERE o.name IN ({holes}) OR b.name IN ({holes})",
+                tuple(names) * 2,
+            )
+            auction_rows = list(cur.fetchall())
+    finally:
+        conn.close()
+    return {"char_rows": char_rows, "inventory_rows": inventory_rows,
+            "auction_rows": auction_rows}
 
 
 # Everything a tooltip draws, straight off item_template. Listed once, here,
@@ -1209,6 +1300,32 @@ class Handler(BaseHTTPRequestHandler):
         payload = chat.build_timeline(name, rows, db_now, limit)
         self._send(200, "application/json", json.dumps(payload).encode())
 
+    def _wealth(self, query: dict) -> None:
+        """GET /api/wealth - what the five are carrying, and what it is worth.
+
+        Deliberately BELOW _thoughts rather than beside _armory: the Armory
+        tab's suite slices this class from `def _armory` to `def _thoughts`
+        and asserts about everything it finds in that window, so a second
+        handler dropped into it would be read as part of the Armory's own
+        contract.
+
+        No name parameter, for the same reason /api/family and /api/armory
+        take none: WHO the family is belongs to bonds, and accepting a roster
+        here would turn this into a general character query wearing a
+        friendly name.
+        """
+        try:
+            payload = wealth.build_wealth(**_fetch_wealth(), icons=ITEMS.icons)
+            self._send(200, "application/json", json.dumps(payload).encode())
+        except Exception:
+            # Same contract as every other poll: the view keeps the bags it
+            # has already drawn and says they may be stale. A blank wealth
+            # panel reads as "they own nothing", and an empty bag grid reads
+            # as "they have plenty of room", which is the exact opposite of
+            # the finding this view exists to surface.
+            log.exception("wealth query failed")
+            self._send(503, "application/json", b'{"error": "world unreachable"}')
+
     def do_POST(self):  # noqa: N802 (stdlib naming)
         handler = self.POST_ROUTES.get(self.path.split("?", 1)[0])
         if handler is None:
@@ -1519,6 +1636,7 @@ class Handler(BaseHTTPRequestHandler):
         "/api/family": _family,
         "/api/armory": _armory,
         "/api/standing": _standing,
+        "/api/wealth": _wealth,
         "/api/questlog": _questlog,
         "/api/achievements": _achievements,
         "/api/thoughts": _thoughts,
