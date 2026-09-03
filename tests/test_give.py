@@ -71,12 +71,15 @@ class EveryRefusalIsReported(unittest.TestCase):
     """`detail` alone is a short string; the JSON in `result` is the evidence."""
 
     def test_every_early_return_writes_the_result_column(self):
-        """Each refusal goes through refuse() or describe(), both of which set
-        `out`. A bare `return "something"` with neither in front of it would
+        """Each refusal writes `result`. Most go through refuse() or describe(),
+        both of which set `out`; the backoff exit added in #170 builds its own
+        JSON and assigns `out` directly, which satisfies the same invariant.
+        A bare `return "something"` with none of the three in front of it would
         end the row as an error with an empty result - a failure nobody can
         diagnose from outside the worldserver."""
         body = _give_source()
-        body = body[body.index("static char const* DoGive("):]
+        # DoGive lost its `static` in #170; match on the part that is stable.
+        body = body[body.index("char const* DoGive("):]
         lines = body.splitlines()
         for line_no, line in enumerate(lines):
             stripped = line.strip()
@@ -85,8 +88,12 @@ class EveryRefusalIsReported(unittest.TestCase):
             # The refusal itself, or the describe() that recorded it, has to be
             # within the same short block. Six lines covers a wrapped call.
             window = "\n".join(lines[max(0, line_no - 6):line_no + 1])
+            # `out = ` counts because it IS the result column being written.
+            # The test names the mechanism in its title but the invariant it
+            # protects is the column, so recognising only the two helpers would
+            # fail a path that does the right thing by hand.
             self.assertTrue(
-                "describe(" in window or "refuse(" in window,
+                "describe(" in window or "refuse(" in window or "out = " in window,
                 f"DoGive line {line_no + 1} refuses without writing `result`: {stripped}",
             )
 
@@ -106,7 +113,8 @@ class EveryRefusalIsReported(unittest.TestCase):
         that statement. An apostrophe in one of these literals would break the
         report, or worse."""
         body = _give_source()
-        body = body[body.index("static char const* DoGive("):]
+        # DoGive lost its `static` in #170; match on the part that is stable.
+        body = body[body.index("char const* DoGive("):]
         statements = re.findall(r"\breturn\b[^;]*;", body, re.S)
         self.assertGreater(len(statements), 5, "the refusal paths went missing")
         checked = 0
@@ -162,10 +170,23 @@ class TheMoveIsAtomic(unittest.TestCase):
         """Asking after the item is already out of the giver's bags is how an
         item ends up owned by nobody."""
         body = _give_source()
-        self.assertLess(
-            body.index("receiver->CanStoreItem("),
-            body.index("giver->MoveItemFromInventory("),
-        )
+        # #170 moved the hand-over into PlaceItemOn, which is DEFINED ABOVE
+        # DoGive. A whole-file index comparison therefore now reads backwards
+        # and would pass or fail on layout rather than on order of execution.
+        # The invariant has not changed, so assert it where it actually lives:
+        # inside DoGive, room is established before the item is placed.
+        give = body[body.index("char const* DoGive("):]
+        room = min(i for i in (give.find("receiver->CanStoreItem("),
+                               give.find("CanWearContainer(receiver"))
+                   if i >= 0)
+        self.assertLess(room, give.index("PlaceItemOn(giver, receiver"))
+        # And there is exactly ONE place the item can leave the giver, inside
+        # that helper, so no other path can take it out of his bags first.
+        # This is stronger than the original ordering check, which only
+        # constrained the first of several possible move sites.
+        self.assertEqual(1, body.count("giver->MoveItemFromInventory("))
+        helper = body[body.index("PlaceItemOn(Player* giver"):]
+        self.assertIn("giver->MoveItemFromInventory(", helper)
 
 
 class TheEnumIsWidenedByAnExplicitAlter(unittest.TestCase):
