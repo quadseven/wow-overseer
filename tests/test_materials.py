@@ -9,7 +9,9 @@ proven about the mechanism the decision here is turned into (kind='give').
 """
 import unittest
 
+import chat
 import materials
+import professions
 
 
 def _holding(holder, material, count, guid):
@@ -107,10 +109,13 @@ class PlanTest(unittest.TestCase):
         second = materials.plan(list(reversed(holdings)))
         self.assertEqual(first.grants, second.grants)
 
-    def test_the_reason_and_the_said_line_are_never_empty(self):
+    def test_the_reason_is_never_empty(self):
+        """A Grant carries a reason and no `said`: what is spoken is a
+        Handover, which is one sentence over however many stacks share an
+        intent (infra#3197)."""
         for grant in materials.plan(_measured_holdings()).grants:
             self.assertTrue(grant.reason.strip())
-            self.assertTrue(grant.said.strip())
+            self.assertFalse(hasattr(grant, "said"))
 
     def test_an_empty_holdings_list_plans_nothing(self):
         self.assertEqual(materials.plan([]), materials.Plan())
@@ -119,10 +124,261 @@ class PlanTest(unittest.TestCase):
 class LinesTest(unittest.TestCase):
     def test_lines_are_spoken_by_the_holder_giving_it_up(self):
         plan = materials.plan([_holding("Bork", "Linen Cloth", 19, 101)])
-        said = materials.lines(plan)
+        said = materials.lines(plan, held={"Og": {"tailoring": 1}})
         self.assertEqual(len(said), 1)
         self.assertTrue(said[0].startswith("Bork: "))
         self.assertIn("Og", said[0])
+
+    def test_five_stacks_of_cloth_are_four_lines_and_not_six(self):
+        """The whole measured family in one pass: four people hand Og their
+        linen, and each of them says it once."""
+        said = materials.lines(
+            materials.plan(_measured_holdings()), held={"Og": {"tailoring": 1}}
+        )
+        cloth = [line for line in said if "Linen Cloth" in line and "Bolt" not in line]
+        self.assertEqual(len(cloth), 4)
+        self.assertEqual(len({line.split(":")[0] for line in cloth}), 4)
+
+
+# Og as `character_skills` actually has him, read live 2026-09-02: herbalism
+# and nothing else. ROSTER assigns him tailoring; `overseer_trade` has held
+# that learn at 'planned' since 2026-08-26 (mod-overseer#160, #167, #168).
+LIVE_SKILLS = {
+    "Og": {"herbalism": 30},
+    "Ugga": {"herbalism": 117, "alchemy": 1},
+    "Grug": {"herbalism": 15},
+    "Grog": {"herbalism": 34},
+    "Bork": {"herbalism": 7},
+}
+
+
+class HandoverTest(unittest.TestCase):
+    """One thing said per intent, however many stacks it takes (infra#3197)."""
+
+    def test_two_stacks_of_one_material_are_one_sentence(self):
+        """What Evan watched: 20 and then 19, a minute apart, which reads as
+        a loop re-evaluating rather than as a bundle changing hands."""
+        grants = materials.plan([
+            _holding("Grug", "Linen Cloth", 20, 501),
+            _holding("Grug", "Linen Cloth", 19, 502),
+        ]).grants
+        self.assertEqual(len(grants), 2)
+        said = materials.handovers(grants, held=LIVE_SKILLS)
+        self.assertEqual(len(said), 1)
+        self.assertEqual(said[0].count, 39)
+        self.assertEqual(said[0].guids, (501, 502))
+
+    def test_both_stacks_still_move_even_though_one_line_is_said(self):
+        """The world's half stays exact: DoGive moves one guid at a time."""
+        grants = materials.plan([
+            _holding("Grug", "Linen Cloth", 20, 501),
+            _holding("Grug", "Linen Cloth", 19, 502),
+        ]).grants
+        self.assertEqual(
+            [g.command for g in grants], ["guid:501", "guid:502"]
+        )
+
+    def test_different_materials_are_different_things_to_say(self):
+        said = materials.handovers(materials.plan([
+            _holding("Grug", "Linen Cloth", 20, 501),
+            _holding("Grug", "Malachite", 4, 503),
+        ]).grants, held=LIVE_SKILLS)
+        self.assertEqual(len(said), 2)
+
+    def test_different_holders_are_different_things_to_say(self):
+        said = materials.handovers(materials.plan([
+            _holding("Grug", "Linen Cloth", 20, 501),
+            _holding("Grog", "Linen Cloth", 18, 401),
+        ]).grants, held=LIVE_SKILLS)
+        self.assertEqual({h.holder for h in said}, {"Grug", "Grog"})
+
+    def test_the_key_is_the_intent_and_survives_a_changed_count(self):
+        """The count drifting from 20 to 19 must not defeat the dedupe."""
+        first = materials.handovers(
+            materials.plan([_holding("Grug", "Linen Cloth", 20, 501)]).grants,
+            held=LIVE_SKILLS,
+        )[0]
+        second = materials.handovers(
+            materials.plan([_holding("Grug", "Linen Cloth", 19, 777)]).grants,
+            held=LIVE_SKILLS,
+        )[0]
+        self.assertNotEqual(first.said, second.said)
+        self.assertEqual(first.key, second.key)
+
+    def test_the_key_is_holder_material_and_taker(self):
+        hand = materials.handovers(
+            materials.plan([_holding("Grug", "Linen Cloth", 20, 501)]).grants,
+            held=LIVE_SKILLS,
+        )[0]
+        self.assertEqual(hand.key, chat.say_key(
+            speaker="Grug", subject="Linen Cloth", listener="Og"
+        ))
+
+    def test_no_grants_is_nothing_to_say(self):
+        self.assertEqual(materials.handovers((), held=LIVE_SKILLS), ())
+
+
+class HonestHandoverTest(unittest.TestCase):
+    """"Og need it for tailoring" was a fact about ROSTER, not about Og."""
+
+    def _said(self, held):
+        return materials.handovers(
+            materials.plan([_holding("Grug", "Linen Cloth", 20, 501)]).grants,
+            held=held,
+        )[0].said
+
+    def test_a_trade_the_taker_holds_explains_the_handover(self):
+        said = self._said({"Og": {"tailoring": 1}})
+        self.assertIn("Og need it for tailoring", said)
+
+    def test_a_trade_that_is_only_planned_is_said_as_a_plan(self):
+        said = self._said(LIVE_SKILLS)
+        self.assertNotIn("need it for tailoring", said)
+        self.assertIn("learning tailoring", said)
+
+    def test_a_trade_nobody_is_getting_is_not_mentioned_at_all(self):
+        """The stack still moves - ROSTER is what makes it the right bag -
+        and the sentence simply stops short of a claim.
+
+        Built by hand, because `plan` cannot produce this case: it only ever
+        names a taker ROSTER has assigned the trade to, so every taker it
+        picks is at least LEARNING. The branch still has to be right - a
+        future REAGENTS entry, or a roster edit, reaches it.
+        """
+        grant = materials.Grant(
+            holder="Grug", taker="Bork", material="Mystery Powder", count=4,
+            guid=503, skill="cooking", reason="constructed",
+        )
+        said = materials.handovers([grant], held={"Bork": {"herbalism": 7}})[0].said
+        self.assertEqual(said, "Grug give Bork 4 Mystery Powder.")
+        self.assertNotIn("cooking", said)
+
+    def test_a_taker_the_plan_picks_is_always_at_least_learning_the_trade(self):
+        """ROSTER is where a taker comes from, so the quiet branch above is
+        unreachable through `plan` - said as an assertion rather than left as
+        an assumption."""
+        for hand in materials.handovers(
+            materials.plan(_measured_holdings()).grants, held={}
+        ):
+            with self.subTest(taker=hand.taker, material=hand.material):
+                self.assertIn(hand.skill, professions.assigned(hand.taker))
+                self.assertIn("learning " + hand.skill, hand.said)
+
+    def test_every_spoken_line_passes_the_honesty_gate(self):
+        for held in ({"Og": {"tailoring": 1}}, LIVE_SKILLS, {}):
+            with self.subTest(held=sorted(held)):
+                hand = materials.handovers(
+                    materials.plan([_holding("Grug", "Linen Cloth", 20, 501)]).grants,
+                    held=held,
+                )[0]
+                state = chat.skill_state(
+                    "Og", "tailoring", held=held,
+                    planned={"Og": ("tailoring", "enchanting")},
+                )
+                self.assertTrue(
+                    chat.honest_claim(hand.said, skill="tailoring", state=state)
+                )
+
+    def test_an_absent_skills_reading_never_claims_the_trade(self):
+        """A failed read must degrade to the quiet line, never to a boast."""
+        self.assertNotIn("need it for tailoring", self._said({}))
+
+
+class StuckTest(unittest.TestCase):
+    """A refusal the world keeps repeating (mod-overseer#169).
+
+    The live rows: four give commands from Grug and Grog to Og, seven
+    identical `receiver bags are full` errors each, over six hours.
+    """
+
+    def _errors(self, n, holder="Grug", taker="Og",
+                detail="receiver bags are full"):
+        return [materials.Attempt(holder, taker, "error", detail)] * n
+
+    def test_a_pair_refused_enough_times_is_stuck(self):
+        refused = materials.stuck(self._errors(materials.GIVE_UP_AFTER))
+        self.assertEqual(refused[("Grug", "Og")], "receiver bags are full")
+
+    def test_one_bad_moment_is_not_a_refusal(self):
+        self.assertEqual(materials.stuck(self._errors(1)), {})
+
+    def test_a_pending_give_is_not_a_failure(self):
+        """The distinction the whole rule rests on: nobody has answered yet
+        is not the same as the world saying no."""
+        pending = [materials.Attempt("Grug", "Og", "pending", "")] * 9
+        self.assertEqual(materials.stuck(pending), {})
+
+    def test_a_delivered_give_clears_the_count(self):
+        attempts = self._errors(2) + [
+            materials.Attempt("Grug", "Og", "delivered", "")
+        ] + self._errors(2)
+        self.assertEqual(materials.stuck(attempts), {})
+
+    def test_a_refusal_with_no_detail_still_says_something(self):
+        refused = materials.stuck(
+            self._errors(materials.GIVE_UP_AFTER, detail="")
+        )
+        self.assertTrue(refused[("Grug", "Og")].strip())
+
+    def test_each_pair_is_counted_on_its_own(self):
+        attempts = self._errors(materials.GIVE_UP_AFTER) + self._errors(
+            1, holder="Bork"
+        )
+        refused = materials.stuck(attempts)
+        self.assertIn(("Grug", "Og"), refused)
+        self.assertNotIn(("Bork", "Og"), refused)
+
+    def test_nothing_tried_is_nothing_stuck(self):
+        self.assertEqual(materials.stuck([]), {})
+
+
+class BlockedTest(unittest.TestCase):
+    def _plan(self):
+        return materials.plan(
+            [_holding("Grug", "Linen Cloth", 20, 501),
+             _holding("Grug", "Linen Cloth", 19, 502)],
+            stuck_pairs={("Grug", "Og"): "receiver bags are full"},
+        )
+
+    def test_a_stuck_pair_is_proposed_no_further(self):
+        self.assertEqual(self._plan().grants, ())
+
+    def test_it_is_said_once_rather_than_silently_dropped(self):
+        blocked = self._plan().blocked
+        self.assertEqual(len(blocked), 1)
+        self.assertIn("receiver bags are full", blocked[0].said)
+
+    def test_the_refusal_is_the_world_s_own_words(self):
+        self.assertEqual(self._plan().blocked[0].refusal, "receiver bags are full")
+
+    def test_a_blocked_line_claims_no_trade(self):
+        said = self._plan().blocked[0].said
+        self.assertNotIn("tailoring", said)
+
+    def test_an_unaffected_pair_still_moves(self):
+        plan = materials.plan(
+            [_holding("Grug", "Linen Cloth", 20, 501),
+             _holding("Bork", "Silverleaf", 19, 102)],
+            stuck_pairs={("Grug", "Og"): "receiver bags are full"},
+        )
+        self.assertEqual(
+            [(g.holder, g.taker) for g in plan.grants], [("Bork", "Ugga")]
+        )
+
+    def test_the_blocked_key_is_not_the_handover_key(self):
+        """Giving up is a different thing to say from handing over, so one
+        must not silence the other."""
+        blocked = self._plan().blocked[0]
+        hand = materials.handovers(
+            materials.plan([_holding("Grug", "Linen Cloth", 20, 501)]).grants,
+            held=LIVE_SKILLS,
+        )[0]
+        self.assertNotEqual(blocked.key, hand.key)
+
+    def test_lines_carry_the_blocked_handovers_too(self):
+        said = materials.lines(self._plan(), held=LIVE_SKILLS)
+        self.assertEqual(len(said), 1)
+        self.assertTrue(said[0].startswith("Grug: "))
 
 
 if __name__ == "__main__":

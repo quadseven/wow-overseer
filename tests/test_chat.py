@@ -12,6 +12,8 @@ import unittest
 from datetime import datetime, timedelta
 
 import chat
+import jobs
+import persona
 import voice
 
 NOW = datetime(2026, 8, 21, 12, 0, 0)
@@ -248,6 +250,312 @@ class OutageTest(unittest.TestCase):
         line = chat.outage_line("Odo")
         self.assertIn("Odo", line)
         self.assertLessEqual(len(line), chat.MAX_TEXT)
+
+
+# --- the rules for saying a thing out loud (infra#3197) --------------------
+#
+# Every case below is constructed. The three faults they pin were captured
+# from Evan's own stream and confirmed against the live database on
+# 2026-09-02: one sentence said 58 times in three minutes, a crafter
+# answering itself, and a claim ("Og know tailoring") that `character_skills`
+# has never supported.
+
+# Og as the world actually has him: herbalism, and nothing else.
+OG_LIVE = {"Og": {"herbalism": 30}}
+# What the family has DECIDED he will end up with. Still 'planned' in
+# overseer_trade since 2026-08-26 (mod-overseer#160, #167, #168).
+OG_PLANNED = {"Og": ("tailoring", "enchanting")}
+
+
+class SayKeyTest(unittest.TestCase):
+    def test_the_key_is_speaker_subject_and_listener(self):
+        self.assertEqual(
+            chat.say_key(speaker="Og", subject="tailoring", listener="Grog"),
+            ("og", "tailoring", "grog"),
+        )
+
+    def test_a_drifting_quantity_cannot_defeat_it(self):
+        """20 Linen Cloth and 19 Linen Cloth are one thing to say."""
+        self.assertEqual(
+            chat.say_key(speaker="Grug", subject="Linen Cloth", listener="Og"),
+            chat.say_key(speaker="Grug", subject="Linen Cloth", listener="Og"),
+        )
+
+    def test_names_are_matched_however_they_are_spelled(self):
+        self.assertEqual(
+            chat.say_key(speaker="OG", subject="Cloth", listener=" grog "),
+            chat.say_key(speaker="og", subject="cloth", listener="Grog"),
+        )
+
+    def test_a_different_listener_is_a_different_line(self):
+        self.assertNotEqual(
+            chat.say_key(speaker="Og", subject="tailoring", listener="Grog"),
+            chat.say_key(speaker="Og", subject="tailoring", listener="Grug"),
+        )
+
+    def test_a_missing_listener_is_still_a_key(self):
+        self.assertEqual(
+            chat.say_key(speaker="Og", subject="tailoring"),
+            ("og", "tailoring", ""),
+        )
+
+
+class SayOnceTest(unittest.TestCase):
+    def setUp(self):
+        self.said: dict = {}
+        self.key = chat.say_key(speaker="Og", subject="tailoring", listener="Grog")
+
+    def test_a_thing_never_said_may_be_said(self):
+        self.assertTrue(chat.should_say(self.said, self.key, now=100.0))
+
+    def test_the_same_thing_is_not_said_twice_in_a_screenful(self):
+        chat.remember_said(self.said, self.key, now=100.0)
+        self.assertFalse(chat.should_say(self.said, self.key, now=160.0))
+
+    def test_the_58_repeats_become_one(self):
+        """The captured loop, replayed: 58 attempts three seconds apart."""
+        spoken = 0
+        for tick in range(58):
+            now = 100.0 + tick * 3.0
+            if chat.should_say(self.said, self.key, now=now):
+                spoken += 1
+                chat.remember_said(self.said, self.key, now=now)
+        self.assertEqual(spoken, 1)
+
+    def test_it_may_be_said_again_once_the_cooldown_has_passed(self):
+        chat.remember_said(self.said, self.key, now=100.0)
+        self.assertTrue(chat.should_say(
+            self.said, self.key, now=100.0 + chat.SAY_ONCE_SECONDS
+        ))
+
+    def test_a_different_intent_is_not_silenced_by_this_one(self):
+        chat.remember_said(self.said, self.key, now=100.0)
+        other = chat.say_key(speaker="Grug", subject="Linen Cloth", listener="Og")
+        self.assertTrue(chat.should_say(self.said, other, now=101.0))
+
+    def test_expired_entries_are_forgotten_rather_than_accumulating(self):
+        for tick in range(5):
+            chat.remember_said(
+                self.said, chat.say_key(speaker="Og", subject=str(tick)),
+                now=100.0 + tick,
+            )
+        chat.remember_said(self.said, self.key, now=100.0 + chat.SAY_ONCE_SECONDS * 2)
+        self.assertEqual(list(self.said), [self.key])
+
+    def test_a_caller_may_ask_for_a_shorter_cooldown(self):
+        chat.remember_said(self.said, self.key, now=100.0, cooldown=10.0)
+        self.assertTrue(chat.should_say(self.said, self.key, now=111.0, cooldown=10.0))
+
+    def test_the_cooldown_is_long_enough_to_outlast_a_screenful(self):
+        """Not an arbitrary number: a screenful of party chat during a fight
+        is a couple of minutes, and kin's 90s answer-a-plea cooldown is the
+        shortest thing in the service."""
+        self.assertGreaterEqual(chat.SAY_ONCE_SECONDS, 600.0)
+
+
+class AddressedToSelfTest(unittest.TestCase):
+    def test_a_character_talking_to_itself_is_caught(self):
+        self.assertTrue(chat.addressed_to_self("Og", "Og"))
+
+    def test_case_does_not_rescue_it(self):
+        self.assertTrue(chat.addressed_to_self("og", " OG "))
+
+    def test_two_different_characters_are_not_self_address(self):
+        self.assertFalse(chat.addressed_to_self("Og", "Grog"))
+
+    def test_nobody_is_not_yourself(self):
+        """An empty listener is a line said to the room, which is fine."""
+        self.assertFalse(chat.addressed_to_self("Og", ""))
+        self.assertFalse(chat.addressed_to_self("", ""))
+
+
+class SkillStateTest(unittest.TestCase):
+    def test_a_trade_in_character_skills_is_held(self):
+        self.assertEqual(
+            chat.skill_state("Og", "tailoring",
+                             held={"Og": {"tailoring": 1}}, planned=OG_PLANNED),
+            chat.HELD,
+        )
+
+    def test_the_live_family_is_learning_and_not_holding(self):
+        """The fact the whole ticket turns on: Og does not know tailoring."""
+        self.assertEqual(
+            chat.skill_state("Og", "tailoring", held=OG_LIVE, planned=OG_PLANNED),
+            chat.LEARNING,
+        )
+
+    def test_a_trade_neither_held_nor_planned_is_neither(self):
+        self.assertEqual(
+            chat.skill_state("Og", "blacksmithing", held=OG_LIVE, planned=OG_PLANNED),
+            chat.UNSKILLED,
+        )
+
+    def test_the_world_outranks_the_queue(self):
+        """A trade that is both held and still queued reads as held."""
+        self.assertEqual(
+            chat.skill_state("Og", "tailoring",
+                             held={"Og": {"tailoring": 1}}, planned=OG_PLANNED),
+            chat.HELD,
+        )
+
+    def test_a_character_nobody_has_read_holds_nothing(self):
+        self.assertEqual(
+            chat.skill_state("Og", "tailoring", held={}, planned={}),
+            chat.UNSKILLED,
+        )
+
+    def test_names_and_skills_are_matched_however_they_are_spelled(self):
+        self.assertEqual(
+            chat.skill_state(" og ", "Tailoring",
+                             held={"OG": {"TAILORING": 1}}, planned={}),
+            chat.HELD,
+        )
+
+    def test_an_empty_question_is_never_a_claim(self):
+        self.assertEqual(
+            chat.skill_state("", "tailoring", held=OG_LIVE, planned=OG_PLANNED),
+            chat.UNSKILLED,
+        )
+        self.assertEqual(
+            chat.skill_state("Og", "", held=OG_LIVE, planned=OG_PLANNED),
+            chat.UNSKILLED,
+        )
+
+    def test_a_skills_row_that_is_a_bare_list_works_too(self):
+        """`held` is a mapping of name to skills; whether the skills arrive
+        as a dict of values or a plain list is the caller's business."""
+        self.assertEqual(
+            chat.skill_state("Og", "tailoring",
+                             held={"Og": ["tailoring"]}, planned={}),
+            chat.HELD,
+        )
+
+
+class HonestClaimTest(unittest.TestCase):
+    """The last gate, after the voice layer has reworded the line."""
+
+    def test_a_held_trade_may_be_claimed_in_any_words(self):
+        self.assertTrue(chat.honest_claim(
+            "Og know tailoring. Og make it.", skill="tailoring", state=chat.HELD
+        ))
+
+    def test_the_captured_lie_is_refused(self):
+        self.assertFalse(chat.honest_claim(
+            "Og need cloth? Og know tailoring. Og make it, family just bring "
+            "the stuff.",
+            skill="tailoring", state=chat.LEARNING,
+        ))
+
+    def test_a_hedged_line_about_a_planned_trade_is_honest(self):
+        self.assertTrue(chat.honest_claim(
+            "Og no know tailoring yet. Og learning it.",
+            skill="tailoring", state=chat.LEARNING,
+        ))
+
+    def test_a_line_that_never_names_the_trade_claims_nothing(self):
+        self.assertTrue(chat.honest_claim(
+            "Grug give Og 39 Linen Cloth.", skill="tailoring", state=chat.LEARNING
+        ))
+
+    def test_an_unlearned_trade_may_not_be_named_even_with_a_hedge(self):
+        """There is nothing true to say about a trade nobody is getting."""
+        self.assertFalse(chat.honest_claim(
+            "Og learning blacksmithing.", skill="blacksmithing",
+            state=chat.UNSKILLED,
+        ))
+
+    def test_the_trade_is_matched_as_a_whole_word(self):
+        self.assertTrue(chat.honest_claim(
+            "Og know tailoringcraft.", skill="tailoring", state=chat.LEARNING
+        ))
+
+    def test_no_trade_named_is_nothing_to_check(self):
+        self.assertTrue(chat.honest_claim("Og hungry.", skill="", state=chat.UNSKILLED))
+
+    def test_an_empty_line_is_honest_by_saying_nothing(self):
+        self.assertTrue(chat.honest_claim("", skill="tailoring", state=chat.UNSKILLED))
+
+
+class MidRunTest(unittest.TestCase):
+    """Reading the room (mod-overseer#169, and Evan watching a pull stop).
+
+    The live row, 2026-09-03: run 35864, map 36 (The Deadmines), state
+    'active', members "Bork,Grog,Grug,Og,Ugga".
+    """
+
+    RUN = {
+        "leader_name": "Bork", "map_id": 36, "state": "active",
+        "members": "Bork,Grog,Grug,Og,Ugga",
+    }
+    JOBS = {"Bork": "dungeon", "Grog": "dungeon", "Grug": "dungeon",
+            "Og": "dungeon", "Ugga": "dungeon"}
+
+    def test_a_member_of_an_active_run_is_mid_run(self):
+        self.assertTrue(chat.mid_run("Og", run=self.RUN, jobs=self.JOBS))
+
+    def test_no_run_at_all_is_not_mid_run(self):
+        self.assertFalse(chat.mid_run("Og", run=None, jobs=self.JOBS))
+
+    def test_an_ended_run_is_not_mid_run(self):
+        ended = dict(self.RUN, state="ended")
+        self.assertFalse(chat.mid_run("Og", run=ended, jobs=self.JOBS))
+
+    def test_somebody_outside_the_run_is_not_mid_run(self):
+        self.assertFalse(chat.mid_run("Evan", run=self.RUN, jobs=self.JOBS))
+
+    def test_the_member_list_is_read_however_it_is_spelled(self):
+        spaced = dict(self.RUN, members=" bork , og ")
+        self.assertTrue(chat.mid_run("Og", run=spaced, jobs={}))
+
+    def test_a_run_row_with_no_members_falls_back_to_the_job(self):
+        """Rows written before the members column was filled carry ''."""
+        bare = dict(self.RUN, members="")
+        self.assertTrue(chat.mid_run("Og", run=bare, jobs=self.JOBS))
+        self.assertFalse(chat.mid_run("Og", run=bare, jobs={"Og": "quest"}))
+
+    def test_the_job_alone_is_never_enough(self):
+        """All five sit at job='dungeon' between runs as well, and that is
+        not a reason to go quiet forever."""
+        self.assertFalse(chat.mid_run("Og", run=None, jobs=self.JOBS))
+
+    def test_a_member_list_beats_a_job(self):
+        outside = dict(self.RUN, members="Bork,Grog")
+        self.assertFalse(chat.mid_run("Og", run=outside, jobs=self.JOBS))
+
+    def test_a_nameless_question_is_answered_no(self):
+        self.assertFalse(chat.mid_run("", run=self.RUN, jobs=self.JOBS))
+
+    def test_the_busy_jobs_are_real_job_modes(self):
+        """A typo here would silence nothing forever, in silence."""
+        for mode in chat.BUSY_JOBS:
+            with self.subTest(mode=mode):
+                self.assertIn(mode, jobs.MODES)
+
+
+class StandDownTest(unittest.TestCase):
+    def test_it_says_not_now_and_where_they_are(self):
+        said = chat.stand_down("Og", subject="cloth", place="The Deadmines")
+        self.assertIn("not now", said)
+        self.assertIn("The Deadmines", said)
+        self.assertIn("Cloth wait", said)
+
+    def test_it_names_the_speaker_so_the_line_reads_as_theirs(self):
+        self.assertTrue(chat.stand_down("Og", subject="cloth").startswith("Og"))
+
+    def test_an_unknown_place_still_reads_as_a_sentence(self):
+        said = chat.stand_down("Og", subject="cloth")
+        self.assertIn("deep place", said)
+
+    def test_it_is_short_enough_to_survive_the_voice_layer(self):
+        said = chat.stand_down("Og", subject="Bolt of Linen Cloth",
+                               place="The Deadmines")
+        self.assertLessEqual(len(said), persona.MAX_SPOKEN)
+
+    def test_it_claims_no_trade(self):
+        said = chat.stand_down("Og", subject="cloth", place="The Deadmines")
+        self.assertTrue(
+            chat.honest_claim(said, skill="tailoring", state=chat.UNSKILLED)
+        )
 
 
 if __name__ == "__main__":

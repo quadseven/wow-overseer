@@ -14,12 +14,47 @@ One mind across surfaces: a line said on Discord and a line typed on the
 web page land in the same table with the same shape, so each surface shows
 the other's half of the conversation.
 
-Ticket: infra#2604.
+THE SECOND HALF OF THIS MODULE IS THE RULES FOR SAYING A THING AT ALL
+(infra#3197), and it is here rather than in a module of its own because it
+is the same subject seen from the other end: everything below decides what
+reaches a chat window, and the four rules are shared by every module that
+puts words in a character's mouth. They are pure predicates over facts the
+caller supplies - no roster, no SQL, no clock of their own - so each one is
+a function a test can hold, which is the point. What Evan watched on stream
+is what named them:
+
+    [Party] [Grog]: Grog give Og 20 Linen Cloth. Og need it for tailoring.
+    [Party] [Grug]: Grug give Og 19 Linen Cloth. Og need it for tailoring.
+    [Party] [Og]:   Og need cloth? Og know tailoring. Og make it, family
+                    just bring the stuff.          (x58 in three minutes)
+
+  SAY IT ONCE          keyed on the INTENT (speaker, subject, listener), so
+                       a count drifting from 20 to 19, or the voice layer
+                       rewording the same meaning, cannot defeat it.
+  NEVER ADDRESS        a plea excludes its own speaker and a response
+  YOURSELF             excludes whoever raised it. "Og need cloth? Og know
+                       tailoring" is Og answering Og, which is also the
+                       feedback loop that produced the 58.
+  NEVER CLAIM A SKILL  checked against `character_skills` AT THE MOMENT OF
+  YOU DO NOT HAVE      SPEAKING, never against a plan or a queued trade. Og
+                       does not know tailoring: `overseer_trade` has held
+                       `learn tailoring` at 'planned' since 2026-08-26 and
+                       `character_skills` gives him Herbalism and nothing
+                       else. A viewer cannot tell that line is wrong, which
+                       is what makes it the worst of the three.
+  READ THE ROOM        crafting chatter stands down while a dungeon run is
+                       active. Evan, watching a Deadmines pull stop for a
+                       cloth handover: "Why the fuck is the whole game
+                       pausing to give Og cloth? They should say shut up we
+                       are in a dungeon just wait."
+
+Tickets: infra#2604, infra#3197; mod-overseer#169.
 """
 from __future__ import annotations
 
 import json
 import re
+from collections.abc import Collection, Mapping, MutableMapping
 from datetime import datetime
 
 import voice
@@ -249,3 +284,218 @@ def parse_reply(content: str) -> voice.Decision:
         # verdict, but say something rather than showing an empty bubble.
         return voice.Decision(voice.parse_decision(body).command, SILENT_LINE)
     return voice.Decision(None, SILENT_LINE)
+
+
+# ---------------------------------------------------------------------------
+# The rules for saying a thing out loud (infra#3197).
+#
+# Pure predicates over facts the caller supplies. Nothing below reads a
+# roster, a database or a clock: `now` and `held` and `run` are arguments
+# precisely so that the rule is the part a test can hold, and so that the
+# same rule serves craftpleas.py, materials.py and bridge.py without any of
+# them growing a private copy that drifts.
+# ---------------------------------------------------------------------------
+
+# How long one INTENT stays said before it may be said again.
+#
+# Thirty minutes, and the number is a viewing decision rather than an
+# engineering one: the bar Evan set is that he never sees the same sentence
+# twice in a screenful of party chat, and a screenful is a couple of minutes
+# of a busy fight. kin.COOLDOWN_SECONDS is 90s for the opposite reason - a
+# second real emergency in the same fight still deserves an answer, while a
+# second announcement of the same handover never does.
+SAY_ONCE_SECONDS = 1800.0
+
+
+def say_key(*, speaker: str, subject: str, listener: str = "") -> tuple:
+    """What a line MEANS, as the thing that gets remembered.
+
+    THE KEY IS THE INTENT AND NEVER THE RENDERED SENTENCE. Two things defeat
+    a key made of words, and both were on screen: the count in a handover
+    drifts (20 Linen Cloth, then 19, because the stack is a different one),
+    and the voice layer turns one meaning into two wordings ("Og make it,
+    family just bring the stuff" and "Og make cloth. Family bring stuff.").
+    Speaker, subject and listener are what is actually the same about those
+    lines.
+
+    Casefolded, because bots and people spell each other's names either way
+    and "og" must not be a second Og.
+    """
+    return (
+        (speaker or "").strip().casefold(),
+        (subject or "").strip().casefold(),
+        (listener or "").strip().casefold(),
+    )
+
+
+def should_say(said: Mapping, key: tuple, *, now: float,
+               cooldown: float = SAY_ONCE_SECONDS) -> bool:
+    """Has this intent gone quiet long enough to be said again?
+
+    `said` is the caller's ledger of key -> the monotonic moment it was last
+    spoken, held for the life of the process the same way bridge.py holds
+    `_last_muster_at` for kin and `_last_overheard_at` for overhear. A
+    restart forgets, deliberately: the ledger is about a viewer's screen, and
+    a process that has just come back has not filled anybody's screen.
+    """
+    last = said.get(key)
+    if last is None:
+        return True
+    return (now - last) >= cooldown
+
+
+def remember_said(said: MutableMapping, key: tuple, *, now: float,
+                  cooldown: float = SAY_ONCE_SECONDS) -> None:
+    """Stamp this intent as just said, and forget the ones that have expired.
+
+    Pruning here rather than in a sweep keeps the ledger bounded by what is
+    actually being repeated, which is the only thing it is ever asked about.
+    """
+    for old, when in list(said.items()):
+        if (now - when) >= cooldown:
+            del said[old]
+    said[key] = now
+
+
+def addressed_to_self(speaker: str, listener: str) -> bool:
+    """Is this character about to talk to itself?
+
+    The whole of "Og need cloth? Og know tailoring" is this predicate being
+    absent: craftpleas answered a line without checking that the crafter it
+    named was the character that asked, so Og answered Og, and his own answer
+    then parsed as a fresh ask and answered itself 58 times.
+
+    An empty listener is nobody, which is not the same as being yourself.
+    """
+    them = (listener or "").strip().casefold()
+    if not them:
+        return False
+    return them == (speaker or "").strip().casefold()
+
+
+# What a character's relationship to a trade can be. Three states and not a
+# boolean, because "planned" is the case the family is actually in and the
+# honest line for it is neither the claim nor silence.
+HELD = "has"
+LEARNING = "learning"
+UNSKILLED = "neither"
+
+
+def _for(table: Mapping, who: str) -> Collection:
+    """One character's row from a name-keyed table, however it is spelled."""
+    for name, skills in (table or {}).items():
+        if str(name).strip().casefold() == who:
+            return skills or ()
+    return ()
+
+
+def skill_state(name: str, skill: str, *, held: Mapping,
+                planned: Mapping) -> str:
+    """Does this character HAVE this trade, is it only planned, or neither?
+
+    `held` is name -> the professions `character_skills` actually gives them,
+    read at the moment of speaking. `planned` is name -> the professions the
+    family has DECIDED they will end up with (professions.assigned, or the
+    'planned' rows of overseer_trade). The two are separate arguments because
+    conflating them is the bug: `professions.crafter_for` answers "who is
+    assigned tailoring" and every caller read it as "who can make cloth".
+
+    Order matters. HELD is checked first, so a trade that is both held and
+    still queued reads as held - the world is the authority, never the queue.
+    """
+    who = (name or "").strip().casefold()
+    what = (skill or "").strip().casefold()
+    if not who or not what:
+        return UNSKILLED
+    if what in {str(s).strip().casefold() for s in _for(held, who)}:
+        return HELD
+    if what in {str(s).strip().casefold() for s in _for(planned, who)}:
+        return LEARNING
+    return UNSKILLED
+
+
+# Words that turn a mention of a trade into an admission rather than a claim.
+# "Og learning tailoring" names the trade and claims nothing; "Og know
+# tailoring" names it and claims everything.
+_HEDGE_RE = re.compile(
+    r"\b(?:learn|learns|learning|learned|soon|some\s?day|going\s+to|will|"
+    r"not\s+yet|no\s+yet|no\s+know|not\s+know|no\s+can)\b",
+    re.I,
+)
+
+
+def honest_claim(text: str, *, skill: str, state: str) -> bool:
+    """Is this sentence still true once the voice layer has reworded it?
+
+    The last gate, and it exists because the plain line goes through an LLM
+    between the decision and the chat window. A hedged line can come back
+    unhedged ("Og learning tailoring" -> "Og know tailoring") and it would be
+    a lie in the family's mouth with nothing between it and the stream. The
+    caller falls back to the plain line when this says no.
+
+    HELD claims are always honest, whatever the wording: the character really
+    does have the trade. LEARNING may name the trade only with a hedge.
+    UNSKILLED may not name it at all - there is nothing true to say.
+    """
+    body = text or ""
+    what = (skill or "").strip()
+    if state == HELD or not what:
+        return True
+    if not re.search(rf"\b{re.escape(what)}\b", body, re.I):
+        return True
+    if state == LEARNING:
+        return bool(_HEDGE_RE.search(body))
+    return False
+
+
+# The jobs during which the family has something better to do than talk about
+# reagents. From jobs.MODES, named here rather than imported so this module
+# keeps its no-dependency shape; test_chat.py asserts the two agree.
+BUSY_JOBS = frozenset({"dungeon"})
+
+
+def mid_run(name: str, *, run: Mapping | None, jobs: Mapping) -> bool:
+    """Is this character in the middle of a dungeon run right now?
+
+    `run` is the `overseer_dungeon_run` row whose state is 'active', or None
+    when there is no run. `jobs` is name -> `overseer_roster.job`.
+
+    THE MEMBER LIST IS PREFERRED AND THE JOB IS THE FALLBACK. A run row
+    carries the names that were on the instance map, which is the precise
+    answer; rows written before that column was filled carry an empty string,
+    and for those the roster's job='dungeon' is what is left to go on. Asking
+    the job alone would be wrong on its own - all five sit at job='dungeon'
+    between runs as well, and that is not a reason to go quiet forever.
+    """
+    if not run or str(run.get("state") or "").strip().lower() != "active":
+        return False
+    who = (name or "").strip().casefold()
+    if not who:
+        return False
+    members = run.get("members") or ()
+    if isinstance(members, str):
+        members = members.replace(";", ",").split(",")
+    named = {str(m).strip().casefold() for m in members if str(m).strip()}
+    if named:
+        return who in named
+    for roster_name, job in (jobs or {}).items():
+        if str(roster_name).strip().casefold() == who:
+            return str(job or "").strip().lower() in BUSY_JOBS
+    return False
+
+
+def stand_down(speaker: str, *, subject: str = "", place: str = "") -> str:
+    """What a character says instead, when it is asked mid-run.
+
+    Evan's own words for the line he wanted: "They should say shut up we are
+    in a dungeon just wait." Said ONCE, keyed like every other intent - the
+    fault being fixed is a loop that cannot read the room, and a stand-down
+    repeated every tick would be the same loop wearing better manners.
+    """
+    where = (place or "").strip() or "the deep place"
+    thing = (subject or "").strip()
+    # Capitalised because it opens its own sentence: "... in The Deadmines.
+    # cloth wait." reads as a typo rather than as caveman grammar, and the
+    # register is deliberate.
+    tail = f" {thing[:1].upper()}{thing[1:]} wait." if thing else ""
+    return f"{speaker} say not now. Family fight in {where}.{tail}"

@@ -51,12 +51,33 @@ module's tests are unit tests against synthetic Holdings; they prove the
 DECISION is right for the inputs given, not that the SQL that will produce
 those inputs is. Say so plainly rather than implying otherwise, per this
 service's own hard-won rule about `delivered` meaning nothing was verified.
+
+WHAT INFRA#3197 CHANGED, AND WHY THE WORDS MOVED OUT OF THE DECISION. What
+Evan watched on stream was this, twice per character, minutes apart:
+
+    [Party] [Grog]: Grog give Og 20 Linen Cloth. Og need it for tailoring.
+    [Party] [Grog]: Grog give Og 19 Linen Cloth. Og need it for tailoring.
+
+Three things wrong with it, and only the third is about this module's
+decision. The stack COUNT drifted because Grog is carrying two stacks and
+this module correctly plans one give per `item_instance.guid` - two moves,
+which the world needs, but one thing to SAY, which is what `handovers` now
+collapses them into. The claim "Og need it for tailoring" was false: Og does
+not have tailoring and `character_skills` has never said he does, so the
+spoken line is now built from the live skills and drops the claim when there
+is no claim to make. And the whole exchange repeated for hours because every
+one of those gives came back `status='error'`, `detail="receiver bags are
+full"` - see `stuck`, and mod-overseer#169 for the underlying refusal, which
+is not fixed here. A plan that cannot land must say so once and stop, which
+is a different thing from a plan nobody has answered yet.
 """
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 
+import chat
 import professions
 
 # Which profession consumes which material, restricted to what infra#2830
@@ -93,7 +114,13 @@ class Holding:
 
 @dataclass(frozen=True)
 class Grant:
-    """One stack, moving from one family member's bags into another's."""
+    """One stack, moving from one family member's bags into another's.
+
+    NO `said` FIELD, DELIBERATELY. A Grant is one guid moving, and a guid is
+    not a sentence: Grog carrying two stacks of Linen Cloth is two Grants and
+    ONE thing to say. What gets spoken is a Handover, built by `handovers`
+    from however many Grants share an intent.
+    """
 
     holder: str
     taker: str
@@ -102,12 +129,73 @@ class Grant:
     guid: int
     skill: str
     reason: str
-    said: str
 
     @property
     def command(self) -> str:
         """What mod-overseer's DoGive parses out of `overseer_command.command`."""
         return "guid:%d" % int(self.guid)
+
+
+@dataclass(frozen=True)
+class Handover:
+    """One thing said, however many stacks it takes to do it.
+
+    `count` is every stack in this intent added together, so the line reads
+    "Grug give Og 39 Linen Cloth" instead of 20 and then 19 - which is what
+    the family is actually doing, and the reason a viewer read the pair as a
+    loop re-announcing itself rather than as two bags being handed over.
+    """
+
+    holder: str
+    taker: str
+    material: str
+    skill: str
+    count: int
+    guids: tuple
+    said: str
+
+    @property
+    def key(self) -> tuple:
+        """The say-it-once key: who hands what to whom, never the wording."""
+        return chat.say_key(
+            speaker=self.holder, subject=self.material, listener=self.taker
+        )
+
+
+@dataclass(frozen=True)
+class Blocked:
+    """A handover the world keeps refusing, said once and then dropped.
+
+    Distinct from a Grant that has simply not happened yet, and the
+    distinction is the whole point (mod-overseer#169): four give commands sat
+    at `status='error'`, `detail="receiver bags are full"` and were re-issued
+    every cycle for six hours, each one re-announced in party chat. A family
+    that says "Og bags full" once and stops is telling the truth; one that
+    asks again every ten minutes is a loop.
+    """
+
+    holder: str
+    taker: str
+    material: str
+    skill: str
+    refusal: str
+    said: str
+
+    @property
+    def key(self) -> tuple:
+        return chat.say_key(
+            speaker=self.holder, subject="stuck:" + self.material, listener=self.taker
+        )
+
+
+@dataclass(frozen=True)
+class Attempt:
+    """One `overseer_command` give row that has already been tried."""
+
+    holder: str
+    taker: str
+    status: str
+    detail: str = ""
 
 
 @dataclass(frozen=True)
@@ -117,6 +205,9 @@ class Plan:
     # costs no give command, said rather than silently skipped, same reason
     # professions._notes exists.
     notes: tuple = ()
+    # Handovers this pass will NOT propose because the world has refused them
+    # enough times to be believed. See Blocked.
+    blocked: tuple = ()
 
 
 def crafter_for(material: str) -> str:
@@ -128,7 +219,69 @@ def crafter_for(material: str) -> str:
     return professions.crafter_for(skill)
 
 
-def plan(holdings) -> Plan:
+# How many refusals it takes before the family believes the world. Three,
+# because one is a bad moment (the taker was mid-loot) and two is bad luck;
+# the live rows sat at SEVEN identical refusals over six hours, which is
+# nobody's bad luck. Read from the environment nowhere: this is a decision
+# about when to stop asking, and it belongs in the module a test can hold.
+GIVE_UP_AFTER = 3
+
+
+def stuck(attempts, *, threshold: int = GIVE_UP_AFTER) -> dict:
+    """(holder, taker) -> the refusal the world keeps giving back.
+
+    Only `status='error'` counts. A pending give is one nobody has answered
+    yet and must not be mistaken for a refusal - that is exactly the
+    distinction mod-overseer#169 asks for - and a delivered one is not a
+    failure at all, so a pair that has ever succeeded starts again from zero.
+    """
+    counts: dict = {}
+    refusals: dict = {}
+    for attempt in attempts:
+        pair = (
+            (attempt.holder or "").strip(),
+            (attempt.taker or "").strip(),
+        )
+        status = (attempt.status or "").strip().lower()
+        if status == "delivered":
+            counts[pair] = 0
+            continue
+        if status != "error":
+            continue
+        counts[pair] = counts.get(pair, 0) + 1
+        detail = (attempt.detail or "").strip()
+        if detail:
+            refusals[pair] = detail
+    return {
+        pair: refusals.get(pair, "the world refused it, and said nothing about why")
+        for pair, seen in counts.items()
+        if seen >= threshold
+    }
+
+
+def _said_for(holder: str, taker: str, material: str, count: int, skill: str,
+              held: Mapping) -> str:
+    """The handover, said in a way that is true whoever is carrying it.
+
+    THE SKILL IS ONLY NAMED WHEN THE SKILL EXISTS. "Og need it for tailoring"
+    read as a fact about Og and was not one; it was a fact about ROSTER. So
+    the trade in hand explains the handover, a trade the family has only
+    decided on is said as the plan it is, and a trade nobody is getting is
+    not mentioned - the stack still moves, because the ROSTER decision is
+    what makes it the right bag, and the sentence simply stops short of a
+    claim it cannot support.
+    """
+    head = f"{holder} give {taker} {count} {material}."
+    how = chat.skill_state(taker, skill, held=held,
+                           planned={taker: professions.assigned(taker)})
+    if how == chat.HELD:
+        return f"{head} {taker} need it for {skill}."
+    if how == chat.LEARNING:
+        return f"{head} {taker} learning {skill}."
+    return head
+
+
+def plan(holdings, *, stuck_pairs: Mapping | None = None) -> Plan:
     """Every stack that should move, in one pass.
 
     Deterministic: the same holdings in produce the same grants in the same
@@ -136,9 +289,21 @@ def plan(holdings) -> Plan:
     bags proposes an identical plan and bridge.py's dedupe (the `give` sibling
     of `_recent_share_keys`) sees the same key twice rather than a shuffled
     one that never matches.
+
+    NO LIVE SKILLS ARE NEEDED HERE, and that is a statement about the
+    decision: whose bags a reagent belongs in is ROSTER's answer and does not
+    depend on anybody having learned anything yet. Only the WORDS need to
+    know what a character can actually do, which is why `handovers` takes the
+    skills and this does not.
+
+    `stuck_pairs` is `stuck()`'s answer: those pairs produce a Blocked instead
+    of a Grant, so a doomed give is proposed no further.
     """
+    refused = stuck_pairs or {}
     grants = []
     notes = []
+    blocked = []
+    seen_blocks = set()
     for holding in sorted(holdings, key=lambda h: (h.holder, h.material, h.guid)):
         skill = REAGENTS.get(holding.material, "")
         if not skill:
@@ -157,6 +322,20 @@ def plan(holdings) -> Plan:
             # boring, correct case and saying it every pass would drown the
             # notes that are actually asking for something.
             continue
+        refusal = refused.get((holding.holder, taker))
+        if refusal:
+            mark = (holding.holder, taker, holding.material)
+            if mark not in seen_blocks:
+                seen_blocks.add(mark)
+                blocked.append(Blocked(
+                    holder=holding.holder, taker=taker,
+                    material=holding.material, skill=skill, refusal=refusal,
+                    said=(
+                        f"{holding.holder} no give {taker} {holding.material} - "
+                        f"{refusal}. {holding.holder} wait."
+                    ),
+                ))
+            continue
         grants.append(Grant(
             holder=holding.holder, taker=taker, material=holding.material,
             count=holding.count, guid=holding.guid, skill=skill,
@@ -166,17 +345,57 @@ def plan(holdings) -> Plan:
                 f"{skill}. {holding.holder} is not assigned {skill}, so the "
                 f"stack does {holding.holder} no good where it sits."
             ),
-            said=(
-                f"{holding.holder} give {taker} {holding.count} "
-                f"{holding.material}. {taker} need it for {skill}."
-            ),
         ))
-    return Plan(grants=tuple(grants), notes=tuple(notes))
+    return Plan(
+        grants=tuple(grants), notes=tuple(notes), blocked=tuple(blocked),
+    )
 
 
-def lines(material_plan: Plan) -> list:
+def handovers(grants, *, held: Mapping | None = None) -> tuple:
+    """One thing to say per (holder, taker, material), however many stacks.
+
+    THIS IS WHERE THE DOUBLE LINE DIED. Two stacks of Linen Cloth in Grug's
+    bags are two guids and two give commands, because DoGive moves one guid;
+    they were also two announcements, one saying 20 and one saying 19, which
+    is what made the family read as a loop re-evaluating rather than a person
+    handing something over. Merging them here rather than in `plan` keeps the
+    world's half exact - both stacks still move - while the family says the
+    one true sentence about it.
+
+    Order follows the grants, so the same plan speaks in the same order.
+    """
+    order: list = []
+    merged: dict = {}
+    for grant in grants:
+        key = (grant.holder, grant.taker, grant.material)
+        if key not in merged:
+            order.append(key)
+            merged[key] = [grant.skill, 0, []]
+        merged[key][1] += int(grant.count)
+        merged[key][2].append(int(grant.guid))
+
+    live = held or {}
+    spoken = []
+    for holder, taker, material in order:
+        skill, count, guids = merged[(holder, taker, material)]
+        spoken.append(Handover(
+            holder=holder, taker=taker, material=material, skill=skill,
+            count=count, guids=tuple(guids),
+            said=_said_for(holder, taker, material, count, skill, live),
+        ))
+    return tuple(spoken)
+
+
+def lines(material_plan: Plan, *, held: Mapping | None = None) -> list:
     """The family saying it, "Name: words" - the shape professions.lines and
     kin's muster report already speak in, so a handoff is a line in party
     chat and never a silent database write (#2830: "The request should be
-    legible in party chat, not silent")."""
-    return [f"{g.holder}: {g.said}" for g in material_plan.grants]
+    legible in party chat, not silent").
+
+    One line per handover, and one per handover the world has refused: a
+    family that has given up on a transfer says so rather than going quiet,
+    which is the difference between reading the room and hiding a failure.
+    """
+    spoken = [f"{h.holder}: {h.said}" for h in handovers(material_plan.grants, held=held)]
+    spoken += [f"{b.holder}: {b.said}" for b in material_plan.blocked]
+    return spoken

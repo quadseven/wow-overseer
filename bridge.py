@@ -24,6 +24,8 @@ import urllib.request
 import discord
 import pymysql
 
+import achievements
+import chat
 import council
 import core
 import craftpleas
@@ -1697,6 +1699,13 @@ class Bridge(discord.Client):
         # which on a monotonic clock is a real moment the process may be near.
         self._last_muster_at: float | None = None
         self._last_overheard_at: float | None = None
+        # Every INTENT this process has already said out loud, and when
+        # (monotonic). chat.should_say reads it, chat.remember_said prunes it.
+        # The same shape as the two clocks above, one per conversation rather
+        # than one per feature: a handover and a craft answer are different
+        # things to say and must not silence each other, while the SAME
+        # handover said twice is the whole of infra#3197.
+        self._said: dict = {}
 
     async def setup_hook(self) -> None:
         # Held, not fired and forgotten. asyncio keeps only a weak reference to
@@ -1874,8 +1883,8 @@ class Bridge(discord.Client):
         character, using the existing voice layer"), not a bot reply in a
         text channel nobody in the family can hear.
         """
-        asks = [
-            a
+        heard = [
+            ((row.get("text") or "").strip(), a)
             for row in rows
             if row.get("sender_is_bot")
             for a in (craftpleas.parse_ask(
@@ -1883,12 +1892,58 @@ class Bridge(discord.Client):
             ),)
             if a is not None
         ]
+        if not heard:
+            return
+        # NOT ITS OWN ECHO. overhear.py already tells an order from the
+        # bridge's own speech this way, and the craft answer needed it for the
+        # same reason: every line the family says comes back through this
+        # relay, so an answer that mentions cloth reads as an ask about cloth
+        # unless something says otherwise. craftpleas now refuses to let a
+        # crafter answer itself as well - both guards, because they fail on
+        # different halves of the loop, and the read below costs one query
+        # only once something has actually asked for something.
+        authored = await asyncio.to_thread(_authored_lines)
+        asks = [ask for said, ask in heard if said not in authored]
         if not asks:
             return
         ask = asks[0]
+        now = time.monotonic()
+        if not chat.should_say(self._said, craftpleas.ask_key(ask), now=now):
+            log.info(
+                "craft ask: %s already answered %s about %s - saying nothing",
+                ask.crafter, ask.asker, ask.skill,
+            )
+            return
+        if await self._stood_down_for_craft(ask, now):
+            return
+        await self._answer_craft_ask(ask, now)
+
+    async def _stood_down_for_craft(self, ask, now: float) -> bool:
+        """Mid-run, the answer is "not now" - said once, and only once.
+
+        Evan, watching a Deadmines pull stop so somebody could talk about
+        cloth: "They should say shut up we are in a dungeon just wait."
+        Either end of the conversation being in the run is enough; the party
+        chat window is the same window whoever is standing where.
+        """
+        run = await asyncio.to_thread(_active_dungeon_run)
+        if not run:
+            return False
+        roster_jobs = await asyncio.to_thread(_roster_jobs)
+        if not any(chat.mid_run(who, run=run, jobs=roster_jobs)
+                   for who in (ask.crafter, ask.asker)):
+            return False
+        key = chat.say_key(
+            speaker=ask.crafter, subject="stand down", listener=ask.asker
+        )
+        if not chat.should_say(self._said, key, now=now):
+            log.info("craft ask: mid-run and already said so; staying quiet")
+            return True
+        plain = chat.stand_down(
+            ask.crafter, subject=ask.product, place=_run_place(run)
+        )
         text = await self._in_character(
-            ask.crafter, craftpleas.answer(ask),
-            "a family member asking who can craft something",
+            ask.crafter, plain, "the family is in the middle of a dungeon run"
         )
         await asyncio.to_thread(
             _insert_speak,
@@ -1896,10 +1951,66 @@ class Bridge(discord.Client):
                 ask.crafter, "party", text, "", f"overseer:craft:{ask.asker}"
             ),
         )
+        # Remembered like every other line the family says out loud, so the
+        # web timeline shows why the answer never came rather than a gap.
         await asyncio.to_thread(_insert_thought, ask.crafter, "council", text)
+        chat.remember_said(self._said, key, now=now)
         log.info(
-            "craft ask: %s asked for %s -> %s (%s)",
-            ask.asker, ask.product, ask.crafter, ask.skill,
+            "craft ask: %s asked for %s mid-run - %s said to wait",
+            ask.asker, ask.product, ask.crafter,
+        )
+        return True
+
+    async def _answer_craft_ask(self, ask, now: float) -> None:
+        """The answer itself, checked against the world before it is said.
+
+        THE SKILLS ARE READ HERE, at the moment of speaking, and never taken
+        from the plan. professions.crafter_for names who is ASSIGNED a trade,
+        which is all this path ever knew, and so the family spent a night
+        telling the stream that Og knows tailoring. He does not: the learn has
+        been 'planned' since 2026-08-26 (mod-overseer#160, #167, #168) and
+        `character_skills` gives him herbalism.
+
+        Silence is a real outcome. craftpleas.answer returns "" when there is
+        nothing true to say, and the key is stamped anyway so the same
+        question is not re-costed every tick.
+        """
+        held = await asyncio.to_thread(_fetch_trade_skills, [ask.crafter])
+        plain = craftpleas.answer(ask, held=held)
+        key = craftpleas.ask_key(ask)
+        state = craftpleas.state(ask, held)
+        if not plain:
+            chat.remember_said(self._said, key, now=now)
+            log.info(
+                "craft ask: %s wants %s and nobody has %s - saying nothing "
+                "rather than promising it",
+                ask.asker, ask.product, ask.skill,
+            )
+            return
+        text = await self._in_character(
+            ask.crafter, plain, "a family member asking who can craft something",
+        )
+        if not chat.honest_claim(text, skill=ask.skill, state=state):
+            # The voice reworded a hedge into a boast. The plan is what is
+            # true, so the plan is what gets said - the same ordering
+            # _in_character's own docstring sets out, one rule further on.
+            log.warning(
+                "craft ask: the voice claimed %s for %s, who is only %s it - "
+                "speaking plainly instead",
+                ask.skill, ask.crafter, state,
+            )
+            text = plain
+        await asyncio.to_thread(
+            _insert_speak,
+            relay.SpeakCommand(
+                ask.crafter, "party", text, "", f"overseer:craft:{ask.asker}"
+            ),
+        )
+        await asyncio.to_thread(_insert_thought, ask.crafter, "council", text)
+        chat.remember_said(self._said, key, now=now)
+        log.info(
+            "craft ask: %s asked for %s -> %s (%s, %s)",
+            ask.asker, ask.product, ask.crafter, ask.skill, state,
         )
 
     async def _aim_after_muster(self, plea, muster) -> None:
@@ -2679,10 +2790,24 @@ class Bridge(discord.Client):
         nothing to announce.
         """
         names = sorted((await asyncio.to_thread(_protected_guids)).values())
+        if await self._mid_run(names):
+            # NOT A FAILURE AND NOT A SKIP TO BE FIXED. Reagents are still in
+            # the wrong bags and will still be in the wrong bags when the run
+            # ends; what changes is that the family is not made to stop a
+            # boss pull to discuss cloth. Evan, watching one: they should say
+            # they are in a dungeon and wait. See chat.mid_run.
+            log.info("materials: the family is in a dungeon run - reagents wait")
+            return
         holdings = await asyncio.to_thread(_fetch_holdings, names)
-        material_plan = await asyncio.to_thread(materials.plan, holdings)
+        refused = materials.stuck(
+            await asyncio.to_thread(_give_attempts, GIVE_GIVE_UP_HOURS)
+        )
+        material_plan = await asyncio.to_thread(
+            materials.plan, holdings, stuck_pairs=refused
+        )
         for note in material_plan.notes:
             log.info("materials: %s", note)
+        await self._say_blocked(material_plan.blocked)
         if not material_plan.grants:
             log.info("materials: nothing to move")
             return
@@ -2708,17 +2833,89 @@ class Bridge(discord.Client):
                 grant.holder, grant.taker, grant.count, grant.material,
                 grant.skill, grant.reason,
             )
+        await self._speak_handovers(fresh)
+
+    async def _mid_run(self, names: list) -> bool:
+        """Is any of these characters in the middle of a dungeon run?"""
+        run = await asyncio.to_thread(_active_dungeon_run)
+        if not run:
+            return False
+        roster_jobs = await asyncio.to_thread(_roster_jobs)
+        return any(chat.mid_run(name, run=run, jobs=roster_jobs) for name in names)
+
+    async def _say_blocked(self, blocked) -> None:
+        """Say once that a handover keeps failing, then stop asking.
+
+        The four `receiver bags are full` errors that ran for six hours are
+        why this exists (mod-overseer#169). A give nobody has answered yet
+        stays in the plan; a give the world has refused materials.GIVE_UP_AFTER
+        times is spoken once, as the refusal the world actually gave, and then
+        left alone until GIVE_GIVE_UP_HOURS has passed.
+        """
+        now = time.monotonic()
+        for stop in blocked:
+            log.info(
+                "materials: %s -> %s %s is stuck - %s",
+                stop.holder, stop.taker, stop.material, stop.refusal,
+            )
+            if not chat.should_say(self._said, stop.key, now=now):
+                continue
+            text = await self._in_character(
+                stop.holder, stop.said, "a handover the world keeps refusing"
+            )
+            await asyncio.to_thread(
+                _insert_speak,
+                relay.SpeakCommand(stop.holder, "party", text, "", "overseer:materials"),
+            )
+            await asyncio.to_thread(_insert_thought, stop.holder, "council", text)
+            chat.remember_said(self._said, stop.key, now=now)
+
+    async def _speak_handovers(self, fresh: list) -> None:
+        """One line per handover, not one per stack, and each of them once.
+
+        Two stacks of Linen Cloth in Grug's bags are two give commands - the
+        world moves one `item_instance.guid` at a time - and were two lines,
+        one saying 20 and one saying 19. That pair is what made the family
+        read as a loop re-evaluating rather than as somebody handing over a
+        bundle, so the commands stay separate and the sentence is merged.
+
+        The taker's live skills come along because the sentence used to end
+        "Og need it for tailoring" about a character who has never had it.
+        """
+        held = await asyncio.to_thread(
+            _fetch_trade_skills, sorted({g.taker for g in fresh})
+        )
+        now = time.monotonic()
+        for hand in materials.handovers(fresh, held=held):
+            if not chat.should_say(self._said, hand.key, now=now):
+                log.info(
+                    "materials: %s already told %s about %s - moving it quietly",
+                    hand.holder, hand.taker, hand.material,
+                )
+                continue
             # PARTY, not say - the same reason council speaks in party
             # (bridge.py:2178-2184): the family grinds in different zones
             # and /say has no cross-zone range at all.
             text = await self._in_character(
-                grant.holder, grant.said, "handing over a crafting material"
+                hand.holder, hand.said, "handing over a crafting material"
             )
+            state = chat.skill_state(
+                hand.taker, hand.skill, held=held,
+                planned={hand.taker: professions.assigned(hand.taker)},
+            )
+            if not chat.honest_claim(text, skill=hand.skill, state=state):
+                log.warning(
+                    "materials: the voice claimed %s for %s, who is only %s "
+                    "it - speaking plainly instead",
+                    hand.skill, hand.taker, state,
+                )
+                text = hand.said
             await asyncio.to_thread(
                 _insert_speak,
-                relay.SpeakCommand(grant.holder, "party", text, "", "overseer:materials"),
+                relay.SpeakCommand(hand.holder, "party", text, "", "overseer:materials"),
             )
-            await asyncio.to_thread(_insert_thought, grant.holder, "council", text)
+            await asyncio.to_thread(_insert_thought, hand.holder, "council", text)
+            chat.remember_said(self._said, hand.key, now=now)
 
     async def _move_materials_loop(self) -> None:
         """Keep every reagent moving toward the crafter it feeds (infra#2830).
@@ -3647,6 +3844,92 @@ def _fetch_holdings(names: list) -> list:
 # reason: a give the worldserver refuses (receiver offline, bags full since
 # measured) must not fill the queue with an identical doomed row every cycle.
 GIVE_RETRY_MINUTES = int(os.environ.get("GIVE_RETRY_MINUTES", "60"))
+
+
+# How far back the family looks before deciding the world means it. A day,
+# not GIVE_RETRY_MINUTES: the live refusals were SEVEN identical
+# `receiver bags are full` errors spread over six hours, so an hour-wide
+# window sees one or two of them and never reaches materials.GIVE_UP_AFTER.
+# Bounded rather than unbounded on purpose - a give that has been refused all
+# day is worth trying once more tomorrow, in case the bags were emptied.
+GIVE_GIVE_UP_HOURS = int(os.environ.get("GIVE_GIVE_UP_HOURS", "24"))
+
+
+def _give_attempts(hours: int) -> list:
+    """Every give this family has tried lately, and how the world answered.
+
+    READ-ONLY, and it reads `status`/`detail` rather than counting rows: a
+    pending give is one nobody has answered yet, which is not the same thing
+    as a refusal, and materials.stuck depends on being able to tell them
+    apart (mod-overseer#169).
+    """
+    with _connect() as conn, conn.cursor() as cur:
+        try:
+            cur.execute(
+                "SELECT target_name, target_arg, status, detail "
+                "FROM overseer_command "
+                "WHERE kind = 'give' AND created_at > NOW() - INTERVAL %s HOUR",
+                (int(hours),),
+            )
+            rows = cur.fetchall()
+        except pymysql.err.MySQLError as exc:
+            # 1054 missing column, 1146 missing table: a world without the
+            # give machinery has refused nothing, so nothing is stuck.
+            if exc.args and exc.args[0] in (1054, 1146):
+                return []
+            raise
+    return [
+        materials.Attempt(
+            holder=row["target_name"], taker=row["target_arg"],
+            status=row["status"] or "", detail=row["detail"] or "",
+        )
+        for row in rows
+    ]
+
+
+def _active_dungeon_run() -> dict | None:
+    """The run the family is in the middle of, or None.
+
+    `overseer_dungeon_run` is written by the C++ side and can legitimately be
+    absent on a world whose image predates it - map_server.py already treats
+    it that way ("overseer_dungeon_run absent; achievements run without it").
+    Absent means "no run", which is the answer that lets the family carry on
+    talking rather than going silent forever.
+    """
+    with _connect() as conn, conn.cursor() as cur:
+        try:
+            cur.execute(
+                "SELECT leader_name, map_id, state, members "
+                "FROM overseer_dungeon_run WHERE state = 'active' "
+                "ORDER BY id DESC LIMIT 1"
+            )
+            return cur.fetchone()
+        except pymysql.err.MySQLError as exc:
+            if exc.args and exc.args[0] in (1054, 1146):
+                return None
+            raise
+
+
+def _roster_jobs() -> dict:
+    """name -> `overseer_roster.job`, the fallback half of chat.mid_run."""
+    with _connect() as conn, conn.cursor() as cur:
+        try:
+            cur.execute("SELECT name, job FROM overseer_roster WHERE enabled = 1")
+            return {row["name"]: row["job"] for row in cur.fetchall()}
+        except pymysql.err.MySQLError as exc:
+            # `job` arrived in a migration (infra#2834); a world without it
+            # has no job to read and mid_run falls back to the member list.
+            if exc.args and exc.args[0] in (1054, 1146):
+                return {}
+            raise
+
+
+def _run_place(run: dict | None) -> str:
+    """What the family would call where they are, for a stand-down line."""
+    if not run:
+        return ""
+    dungeon = achievements.DUNGEONS.get(int(run.get("map_id") or 0), {})
+    return dungeon.get("name", "")
 
 
 def _recent_give_keys(minutes: int) -> set:
