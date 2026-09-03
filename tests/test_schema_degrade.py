@@ -316,13 +316,20 @@ class TheTwoImagesReallyAreBumpedIndependently(unittest.TestCase):
     unnecessary; while it is true, the old comment was a live hazard."""
 
     def _images(self):
-        return re.findall(r"image: (registry\.[^\s@]+)@(sha256:[0-9a-f]{64})",
-                          WORLDSERVER.read_text(encoding="utf-8"))
+        """Host-agnostic on purpose. The premise these tests protect is that the
+        manifest runs TWO different images pinned SEPARATELY, which is a fact
+        about the images and not about where they are hosted. The pattern used
+        to require a literal `registry.` prefix, so when production moved to
+        ghcr it matched nothing at all and both assertions below failed about a
+        hostname instead of about the premise."""
+        return re.findall(
+            r"image: \S*?(ac-playerbots-[a-z-]+)@(sha256:[0-9a-f]{64})",
+            WORLDSERVER.read_text(encoding="utf-8"))
 
     def test_the_worldserver_manifest_runs_two_different_images(self):
         repos = {repo for repo, _ in self._images()}
-        self.assertIn("registry.ts.ehumps.me/ac-playerbots-db-import", repos)
-        self.assertIn("registry.ts.ehumps.me/ac-playerbots-worldserver", repos)
+        self.assertIn("ac-playerbots-db-import", repos)
+        self.assertIn("ac-playerbots-worldserver", repos)
 
     def test_the_sql_is_applied_by_the_db_import_image_not_the_worldserver(self):
         text = WORLDSERVER.read_text(encoding="utf-8")
@@ -334,8 +341,8 @@ class TheTwoImagesReallyAreBumpedIndependently(unittest.TestCase):
     def test_they_are_pinned_by_separate_digests(self):
         digests = {repo: digest for repo, digest in self._images()}
         self.assertNotEqual(
-            digests["registry.ts.ehumps.me/ac-playerbots-db-import"],
-            digests["registry.ts.ehumps.me/ac-playerbots-worldserver"],
+            digests["ac-playerbots-db-import"],
+            digests["ac-playerbots-worldserver"],
             "two independently bumped pins is the reason the schema and the "
             "reader can disagree")
 
