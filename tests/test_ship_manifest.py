@@ -23,10 +23,26 @@ DOCKERFILE = os.path.normpath(
 def _copied_files() -> set:
     with open(DOCKERFILE, encoding="utf-8") as f:
         text = f.read()
-    # The COPY spans continuation lines; take everything up to the target dir.
-    match = re.search(r"^COPY\s(.*?)\s/app/", text, re.MULTILINE | re.DOTALL)
-    assert match, "no COPY ... /app/ block found in the Dockerfile"
-    return set(re.findall(r"_shared/(\S+)", match.group(1)))
+    # EVERY `COPY ... /app/` block, not the first one. The Dockerfile grew a
+    # second COPY when jquery.min.js moved out of the shared tarball and into
+    # this image's own build context, and a non-greedy search for the first
+    # block silently returned that one instead - reporting that fifty modules
+    # had stopped shipping. The failure was in the reader, not the manifest.
+    blocks = re.findall(r"^COPY\s(.*?)\s/app/", text, re.MULTILINE | re.DOTALL)
+    assert blocks, "no COPY ... /app/ block found in the Dockerfile"
+    return {name for b in blocks for name in re.findall(r"_shared/(\S+)", b)}
+
+
+def _context_files() -> set:
+    """Files copied from the build CONTEXT rather than the shared tarball.
+
+    The shared dir is packed into one configMap and handed to every image built
+    from it, so a browser asset there is charged to the bridge as well as to
+    the map. This image's own context is the right home for one.
+    """
+    with open(DOCKERFILE, encoding="utf-8") as f:
+        text = f.read()
+    return set(re.findall(r"^COPY\s+([^/\s]+)\s+/app/", text, re.MULTILINE))
 
 
 class ShipManifestTest(unittest.TestCase):
@@ -43,6 +59,22 @@ class ShipManifestTest(unittest.TestCase):
         self.assertEqual(
             phantom, [], "Dockerfile COPYs files that do not exist: %s" % phantom
         )
+
+    def test_jquery_ships_from_the_context_and_not_the_shared_tarball(self):
+        """It is a browser asset, not a Python module, and the shared tarball
+        goes to every image built from that directory. Moving it here freed
+        30KB gzipped of a 786KB budget that two finished views were blocked
+        on. It stays VENDORED: map_server._jquery_file explains that the page
+        reaches no third host for it, and a CDN would have saved the same
+        bytes by trading that away."""
+        self.assertIn("jquery.min.js", _context_files())
+        self.assertNotIn("jquery.min.js", _copied_files())
+        here = os.path.dirname(DOCKERFILE)
+        self.assertTrue(os.path.exists(os.path.join(here, "jquery.min.js")),
+                        "the Dockerfile copies it from the context but it is "
+                        "not in the context")
+        self.assertFalse(os.path.exists(os.path.join(HERE, "jquery.min.js")),
+                         "still in the shared dir, so still in the tarball")
 
     def test_data_files_the_map_needs_are_copied(self):
         # transform.Geometry.load() reads these at import time in the pod;

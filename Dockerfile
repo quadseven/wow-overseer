@@ -6,6 +6,7 @@ FROM python:3.12-slim
 RUN pip install --no-cache-dir discord.py==2.4.0 PyMySQL==1.1.1
 
 WORKDIR /app
+
 COPY _shared/core.py _shared/bridge.py _shared/voice.py _shared/transform.py \
      _shared/map_core.py _shared/map_server.py _shared/events.py \
      _shared/panel.py _shared/family.py _shared/goals.py _shared/protect.py _shared/fanout.py _shared/chat.py \
@@ -22,7 +23,19 @@ COPY _shared/core.py _shared/bridge.py _shared/voice.py _shared/transform.py \
      _shared/zones.json _shared/entrances.json _shared/shapes.json \
      _shared/talents.json _shared/items.json _shared/icons.json _shared/spells.json \
      _shared/standing.json \
-     _shared/index.html _shared/jquery.min.js /app/
+     _shared/index.html /app/
+
+# jQuery comes from the build CONTEXT, not the shared tarball, and that is a
+# budget decision rather than a tidying one. The shared dir is packed into ONE
+# configMap and handed to EVERY image built from it, so a browser asset there
+# is 30KB gzipped charged to the bridge as well as the map, for a file only
+# the map serves. The context configMap holds this image's own files and had
+# nothing in it but this Dockerfile.
+#
+# It stays VENDORED. map_server._jquery_file says why - the page reaches no
+# third host for it - and moving it to a CDN to save the same bytes would have
+# traded that away. Same file, same served path, same origin.
+COPY jquery.min.js /app/
 
 USER 10000
 CMD ["python", "-u", "bridge.py"]
