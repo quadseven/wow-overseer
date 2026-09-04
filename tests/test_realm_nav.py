@@ -52,6 +52,31 @@ def strip_comments(text, style):
 CODE = strip_comments(STYLE, "css")
 
 
+def _theme_block(selector):
+    """The declarations inside one theme selector, and nothing else.
+
+    Scoped overrides elsewhere in the sheet (the Armory sets the same token
+    names for its own section) must not be able to stand in for a theme
+    definition, which is exactly the confusion a whole-stylesheet count fell
+    into.
+    """
+    out = []
+    at = 0
+    while True:
+        i = CODE.find(selector, at)
+        if i < 0:
+            break
+        start = i + len(selector)
+        out.append(CODE[start:CODE.index("}", start)])
+        at = start
+    # EVERY block with that selector, joined. A theme state is the UNION of
+    # its rules, and this page splits the light one across two `:root` blocks:
+    # the legacy names in the first, the design tokens in the second. Reading
+    # only the first reports the design tokens missing from a state they are
+    # plainly in.
+    return chr(10).join(out)
+
+
 def rules_using(token):
     """Every DECLARATION that references a token, ignoring where it is defined.
 
@@ -106,13 +131,31 @@ class DarkIsTheSameDesignAndNotTheOldSite(unittest.TestCase):
                              "the dark theme is still the pre-redesign grey")
             self.assertNotIn("#161b22", block)
 
-    def test_the_card_surface_is_themed_in_all_three_states(self):
-        """A card token defined only in light renders dark text on a dark card
-        for every reader whose system prefers dark, which is most of them."""
-        for token in ("--card", "--card-line", "--on-card", "--on-card-dim"):
-            self.assertGreaterEqual(
-                STYLE.count(token + ":"), 3,
-                token + " is not defined in all three theme states")
+    def test_every_surface_token_is_defined_in_each_theme_block(self):
+        """A token defined only in light renders the dark theme's text on the
+        light theme's card, and that shipped: with data-theme="dark" the shell
+        went dark, the cards stayed white, and .fline measured 1.1:1 on the
+        live page.
+
+        COUNTING WAS NOT ENOUGH, AND THE FIRST VERSION OF THIS TEST PROVED IT.
+        It asserted each token appeared three or more times anywhere in the
+        stylesheet, which the Armory's own scoped override satisfied on its
+        own: deleting the entire dark media query left the count at three and
+        the test still passed. Verified by deleting it. So this reads the
+        three theme blocks BY SELECTOR and asks each one directly."""
+        blocks = {
+            "bare :root": _theme_block(":root {"),
+            "prefers-color-scheme: dark": _theme_block(
+                ':root:not([data-theme="light"]) {'),
+            'data-theme="dark"': _theme_block(':root[data-theme="dark"] {'),
+        }
+        for token in ("--card", "--card-line", "--on-card", "--on-card-dim",
+                      "--bg", "--panel", "--line", "--text", "--dim",
+                      "--shell-bg", "--shell-text", "--shell-dim",
+                      "--shell-line"):
+            for where, block in blocks.items():
+                self.assertIn(token + ":", block,
+                              "%s is not defined in %s" % (token, where))
 
     def test_no_component_is_styled_inside_a_theme_block(self):
         """Only tokens move between themes. A component rule inside a media

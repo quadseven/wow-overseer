@@ -104,6 +104,51 @@ class TheShellTakesTheThemeAndSoDoesTheContent(unittest.TestCase):
             self.assertIn(canonical, STYLE, canonical)
 
 
+class ClassColourDoesNotSurviveAWhiteCard(unittest.TestCase):
+    """MEASURED ON THE LIVE PAGE, by a contrast audit over every rendered text
+    node after the light conversion:
+
+        Ugga   priest   rgb(255,255,255) on white   1.0:1   invisible
+        Bork   rogue    rgb(255,245,105)            1.1:1
+        Og     mage     rgb(105,204,240)            1.8:1
+        Grog   paladin  rgb(245,140,186)            2.2:1
+        Grug   warrior  rgb(199,156,110)            2.5:1
+
+    This is the same problem as item quality, which the Armory solves by
+    keeping a dark ground, and that fix was scoped too narrowly: class colours
+    are canonical too, chosen for a dark game UI, and a priest is literally
+    white. The Armory, Standing and Wealth all sit inside the dark section and
+    keep their class-coloured names; the broadcast tile's name sits on video.
+    The Family card was the one light surface drawing names in class colour."""
+
+    def test_the_family_name_is_ink_and_not_the_class_colour(self):
+        rule = STYLE[STYLE.index(".fname {"):]
+        rule = rule[:rule.index("}")]
+        self.assertIn("color:var(--text)", rule)
+
+    def test_the_family_card_no_longer_paints_the_name_from_the_class(self):
+        """The assignment that made a priest invisible."""
+        self.assertNotIn('c.nm.style.color = m.class_colour || "";', PAGE)
+
+    def test_the_class_survives_as_a_swatch(self):
+        """The information does not move, it lands on a shape where colour
+        costs nothing to read."""
+        self.assertIn('el("span", "fclass")', PAGE)
+        self.assertIn('sw.style.setProperty("--cc"', PAGE)
+
+    def test_the_swatch_has_a_border_or_a_priest_is_an_invisible_hole(self):
+        """A priest's colour IS #ffffff. Without a hairline the swatch is a
+        white square on a white card, which is the same bug in a new shape."""
+        rule = STYLE[STYLE.index(".fclass {"):]
+        rule = rule[:rule.index("}")]
+        self.assertIn("border:", rule)
+
+    def test_the_dark_surfaces_keep_their_class_colours(self):
+        """Not a retreat from class colour. Where the ground is dark the
+        canonical colours are exactly right, and three views still use them."""
+        self.assertGreaterEqual(PAGE.count("c.nm.style.color = m.class_colour;"), 2)
+
+
 class TheStoredChoiceSurvivesAReload(unittest.TestCase):
 
     def test_it_is_applied_before_the_first_paint(self):

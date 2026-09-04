@@ -248,6 +248,26 @@ class TheTilesAreMovedAndNeverRebuilt(unittest.TestCase):
             self.assertNotIn("." + name, outside,
                              ".%s is styled outside the wall too" % name)
 
+    def test_promoting_a_tile_is_offered_and_not_just_possible(self):
+        """The tiles were clickable from the day hero mode existed and nothing
+        said so, which is the same as not being clickable: nobody tries what a
+        page has not offered. A real BUTTON, not a clickable div, so it is
+        reachable by keyboard and announces itself."""
+        self.assertIn('el("button", "povbig", "BIG")', PAGE)
+        self.assertIn("big.onclick", PAGE)
+        self.assertIn("e.stopPropagation();", PAGE)
+
+    def test_the_button_and_the_tile_share_one_promote_path(self):
+        """Two copies of "make this the hero" is two places for the stored
+        preference to be written differently."""
+        self.assertIn("function promote(name) {", PAGE)
+        self.assertIn("slot.onclick = () => promote(name);", PAGE)
+
+    def test_it_is_offered_only_where_it_means_something(self):
+        """"Make this the big one" says nothing when there is no big one, and
+        nothing on the tile that already is it."""
+        self.assertIn('s.big.hidden = wall.mode !== "hero" || isHero;', PAGE)
+
     def test_a_slot_is_built_once_and_cached(self):
         self.assertIn("let slot = wall.slots.get(name);", PAGE)
         self.assertIn('el("div", "povslot")', PAGE)
