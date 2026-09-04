@@ -171,6 +171,12 @@
     --warn-text:var(--rust);          /* something is wrong and can be fixed  */
     --caution-text:var(--amber-text); /* worth a look, not an alarm          */
     --accent-text:var(--deep-green);  /* this worked, this is live           */
+    /* A FOURTH ROLE, added with the Chronicle and the Council. Both draw a
+       kind or a speaker in a hue a pure module names, and cyan is one of the
+       names it can emit. It gets a role for exactly the reason the three
+       above have one: --cyan itself is 3.2:1 on white, under the 4.5:1 a
+       label needs, and the wrong colour on the dark theme. */
+    --info-text:#0A6C93;              /* derived, secondary, a marker        */
     /* The video letterbox. Dark in BOTH themes on purpose: a pale box around
        a game capture reads as a blown-out picture, and the handoff draws these
        as dark green rectangles for the same reason. */
@@ -202,6 +208,12 @@
       --accent:#2FD46F;
       --warn-bg:#2A1710; --warn-text:#FFB59E;
       --caution-text:#E8B33D; --accent-text:#2FD46F;
+      /* The fourth role, re-tuned rather than repointed, like the other
+         three. A role defined in only one of the three theme states is the
+         classic unreadable-page bug this file's tests were written against,
+         and infra#3265 is the same failure one step earlier: a role used and
+         never defined at all. */
+      --info-text:#5BC8FF;
     }
   }
   :root[data-theme="dark"] {
@@ -215,6 +227,7 @@
     --accent:#2FD46F;
     --warn-bg:#2A1710; --warn-text:#FFB59E;
     --caution-text:#E8B33D; --accent-text:#2FD46F;
+    --info-text:#5BC8FF;
   }
   * { box-sizing:border-box; margin:0; }
   /* THE FACES WERE LOADING AND NOTHING WAS USING THEM. Measured on the live
@@ -466,70 +479,282 @@
   #psay { background:var(--panel); color:var(--text); border:1px solid var(--line);
           border-radius:6px; cursor:pointer; font:inherit; padding:.3rem .6rem; }
   #psay:disabled, #pinput:disabled { opacity:.5; cursor:default; }
-  /* --- the Achievements tab (mod-overseer#88, mod-overseer#152) -------------------
-     A vertical timeline, newest first, in the achievement-screen idiom: a
-     run, a turn-in, a level, a first. One column always - this is read on
-     a phone the evening after - with the line down the left and the cards
-     hanging off it. Item names are drawn in the Armory's quality colours,
-     which every player reads without a key, and each one links out to
-     wowhead for the tooltip the page does not carry. Placed ABOVE the
-     Family banner for the same reason the Armory's rules are: the Family
-     tests slice from that banner to the end of the stylesheet, and rules
-     dropped inside that window get read as Family rules. */
+  /* --- the redesign furniture (infra#2597) ---------------------------------
+     Three shapes the redesigned views share, written once here and used by
+     the Chronicle, the Council and the Eye below. A second copy of any of
+     them is a second opinion about what a section header looks like, and the
+     three views would drift apart the first time one of them was touched.
+
+     THE SECTION HEADER IS A THREE-PART RULE: a mono index, a 2px line, and a
+     mono label pushed to the right. The line is painted from --on-card and
+     not from --ink, and that is not a shortcut. --ink is a PIGMENT: it is
+     near-black green, mixed for a pale ground, and on the dark theme's
+     near-black ground a 2px --ink rule is invisible. --on-card is the ROLE -
+     "the colour text takes on a card" - and it is ink on one theme and pale
+     green on the other, which is what "an ink line" actually means on a page
+     with two grounds. */
+  .ds-rule { display:flex; align-items:center; gap:.7rem;
+             margin:1.15rem 0 .75rem; font-family:var(--mono); }
+  .ds-rule .ix { flex:none; font-size:11px; font-weight:700;
+                 letter-spacing:.14em; color:var(--on-card); }
+  .ds-rule .ln { flex:1 1 auto; height:2px; background:var(--on-card); }
+  .ds-rule .lb { flex:none; font-size:11px; letter-spacing:.14em;
+                 text-transform:uppercase; color:var(--on-card-dim);
+                 text-align:right; }
+  /* THE STAT STRIP. 2px gaps, and the gap IS the border: the grid's own
+     background shows through between the tiles, so five tiles read as one
+     object rather than as five cards that happen to be adjacent. auto-fit
+     rather than a breakpoint, so it is five across on a desktop and two on a
+     phone without anybody choosing where that happens. */
+  .ds-strip { display:grid; gap:2px; background:var(--card-line);
+              border:1px solid var(--card-line); border-radius:12px;
+              overflow:hidden;
+              grid-template-columns:repeat(auto-fit, minmax(128px, 1fr)); }
+  .ds-tile { background:var(--card); padding:14px 16px; min-height:64px; }
+  .ds-tile .v { display:block; font-family:var(--mono); font-weight:700;
+                font-size:1.3rem; line-height:1.15; color:var(--on-card);
+                overflow-wrap:anywhere; }
+  .ds-tile .k { display:block; margin-top:4px; font-family:var(--mono);
+                font-size:10px; letter-spacing:.14em; color:var(--on-card-dim); }
+  /* THE CARD, WRITTEN ONCE. A Chronicle card, a council line, a place and a
+     rung of the ladder are the same object: white on the ground, a hairline,
+     a 14px radius and THE one shadow this design has. Four copies of that
+     recipe is four chances for one of them to drift, and the handoff is
+     explicit that there is exactly one shadow - a rule that is stated four
+     times is a rule nobody can check. The two that differ say only how they
+     differ, below. */
+  .chr-card, .cn-line, .cn-place, .ey-row {
+    background:var(--card); border:1px solid var(--card-line);
+    border-radius:14px; padding:16px 18px;
+    box-shadow:0 1px 2px rgba(11,26,16,.06); }
+  /* THE HUE VOCABULARY, AND THE REASON IT IS A VOCABULARY. A pure module
+     names a hue ("cyan"); this says what that name looks like on the surface
+     it is actually drawn on. Every one of these is a TEXT ROLE and never a
+     pigment: --cyan is mixed for white and lands at 3.2:1 on it, which is
+     under the 4.5:1 a label needs, and on the dark theme it is the wrong
+     colour entirely. The roles carry a value per theme; the pigments do not. */
+  .h-ink { color:var(--on-card); }
+  .h-muted { color:var(--on-card-dim); }
+  .h-green { color:var(--accent-text); }
+  .h-cyan { color:var(--info-text); }
+  .h-amber { color:var(--caution-text); }
+  .h-vermilion { color:var(--warn-text); }
+  /* A poll that failed. One rule, so the three views cannot disagree about
+     what stale looks like. */
+  .ds-head { font-family:var(--mono); font-size:11px; letter-spacing:.12em;
+             text-transform:uppercase; color:var(--on-card-dim);
+             margin-bottom:.8rem; }
+  .ds-head.alarm { color:var(--warn-text); }
+  /* Kept from the Achievements tab this block replaces: --gold still dresses
+     the current-goal banner's dungeon state and the Armory's jump link, both
+     of which are elsewhere in this file. */
   :root { --gold:#e5b53b; }
-  #achievements { display:none; padding:0 1rem 1rem; }
-  #achhead { color:var(--dim); margin-bottom:.6rem; }
-  #achhead.alarm { color:var(--amber-text); }
-  #achfilters { display:flex; gap:.4rem; flex-wrap:wrap; margin-bottom:.8rem; }
-  #achfilters button { background:var(--panel); color:var(--dim); border:1px solid var(--line);
-                       border-radius:999px; padding:.2rem .7rem; font:inherit; cursor:pointer;
-                       font-size:.85rem; }
-  #achfilters button.on { color:var(--text); border-color:var(--gold); }
-  #achline { position:relative; padding-left:1.4rem; }
-  #achline::before { content:""; position:absolute; left:.45rem; top:0; bottom:0;
-                     width:2px; background:var(--line); }
-  .ach { position:relative; background:var(--panel); border:1px solid var(--line);
-         border-radius:8px; padding:.7rem .9rem; margin-bottom:.8rem; }
-  .ach::before { content:""; position:absolute; left:-1.4rem; top:1rem; width:.7rem;
-                 height:.7rem; border-radius:50%; background:var(--line);
-                 border:2px solid var(--bg); transform:translateX(.13rem); }
-  .ach.run::before { background:var(--alliance); }
-  .ach.run.attempt::before { background:var(--line); }
-  .ach.run.attempt { border-style:dashed; }
-  .ach.quest::before { background:var(--mortal); }
-  .ach.level::before { background:var(--thought); }
-  .ach.first { border-color:var(--gold); }
-  .ach.first::before { background:var(--gold); }
-  .ach.first.big { padding:1rem; background:linear-gradient(180deg, #2a2310, var(--panel)); }
-  .ach h3 { font-size:1rem; display:flex; justify-content:space-between; gap:.6rem;
-            align-items:baseline; flex-wrap:wrap; }
-  .ach h3 .when { color:var(--dim); font-size:.8rem; font-weight:normal; white-space:nowrap; }
-  .ach .sub { color:var(--dim); font-size:.85rem; margin-top:.1rem; }
-  .ach .sect { color:var(--dim); font-size:.78rem; text-transform:uppercase;
-               letter-spacing:.05em; margin:.6rem 0 .2rem; }
-  .ach .chips { display:flex; gap:.3rem; flex-wrap:wrap; }
-  .ach .chip { border:1px solid var(--line); border-radius:999px; padding:0 .5rem;
-               font-size:.85rem; }
-  .ach .chip.dead { border-color:var(--horde); color:var(--horde); }
-  .ach .chip.boss { border-color:var(--mortal); }
-  .ach .chip.boss.unsure { border-style:dashed; color:var(--dim); }
-  .ach .loot { display:grid; grid-template-columns:repeat(auto-fill, minmax(230px, 1fr)); gap:.3rem .8rem; }
-  .ach .item { display:flex; align-items:center; gap:.45rem; min-width:0; }
-  .ach .item img { width:28px; height:28px; border-radius:4px;
-                   border:1px solid var(--line); flex-shrink:0; }
-  .ach .item a { text-decoration:none; overflow-wrap:anywhere; }
-  .ach .item a:hover { text-decoration:underline; }
-  .ach .item .who { color:var(--dim); font-size:.8rem; white-space:nowrap; }
+
+  /* --- the Chronicle (infra#2597, mod-overseer#88, mod-overseer#152) -------
+     WHAT THEY HAVE DONE, and the redesign of the Achievements tab rather
+     than a second copy of it. The old version was a vertical rail with dots
+     on it and a card hanging off each dot; the rail was two pixels of colour
+     doing the job the KIND word does better, and it cost every card an inch
+     of left margin on the device this view is actually read on.
+
+     So: a stat strip, then cards. Each card is a date, the kind in its hue,
+     an Archivo title, a muted body, and the line the character gets to say
+     about it. Not one of those five is composed here - achievements.py
+     hands over the word, the hue name, the body and the line already
+     written, because a sentence a reader sees is a judgement and judgement
+     does not live in a page (infra#2597).
+
+     Placed ABOVE the Family banner for the same reason the Armory's rules
+     are: the Family tests slice from that banner to the end of the
+     stylesheet, and rules dropped inside that window get read as Family
+     rules. */
+  #chronicle { display:none; padding:.9rem 1rem 1.2rem; }
+  #chrnote { max-width:72ch; margin:.8rem 0 0; color:var(--on-card-dim);
+             font-size:13px; line-height:1.55; }
+  #chrnote[hidden] { display:none; }
+  #chrfilters { display:flex; gap:8px; flex-wrap:wrap; margin:0 0 .9rem; }
+  /* 44px, like every other hit target on this page: this is a phone view. */
+  #chrfilters button { min-height:44px; padding:0 1rem; flex:none;
+                       border-radius:999px; border:1px solid var(--card-line);
+                       background:var(--card); color:var(--on-card-dim);
+                       font-family:var(--mono); font-size:11px;
+                       letter-spacing:.12em; font-weight:700;
+                       text-transform:uppercase; cursor:pointer; }
+  #chrfilters button:hover { color:var(--on-card); }
+  #chrfilters button.on { background:var(--ink); color:var(--pale-green);
+                          border-color:var(--ink); }
+  #chrfilters button:focus-visible { outline:2px solid var(--accent);
+                                     outline-offset:2px; }
+  #chrline { display:grid; gap:10px; }
+  /* .chr-card takes the shared card recipe from the furniture above. */
+  .chr-top { display:flex; align-items:center; gap:.85rem; flex-wrap:wrap;
+             font-family:var(--mono); font-size:11px; font-weight:700;
+             letter-spacing:.14em; }
+  .chr-when { color:var(--on-card-dim); }
+  .chr-title { margin-top:7px; font-family:var(--display); font-weight:800;
+               font-stretch:125%; font-size:1.14rem; line-height:1.2;
+               letter-spacing:-.01em; color:var(--on-card); }
+  .chr-body { margin-top:5px; color:var(--on-card-dim); font-size:13px;
+              line-height:1.55; }
+  /* THE CHARACTER'S LINE. Inset rather than italicised, because it is the one
+     thing on the card that is a VOICE and not a record, and a reader should
+     be able to tell those apart without reading either. The name is set in
+     mono above it: an unattributed quote reads as the site talking. */
+  .chr-said { margin-top:11px; padding:10px 12px; border-radius:10px;
+              background:var(--sunken); color:var(--on-card);
+              font-size:14px; line-height:1.5; }
+  .chr-said .who { display:block; font-family:var(--mono); font-size:10px;
+                   font-weight:700; letter-spacing:.14em;
+                   color:var(--on-card-dim); }
+  .chr-card .sect { margin:.85rem 0 .3rem; font-family:var(--mono);
+                    font-size:10px; letter-spacing:.14em;
+                    text-transform:uppercase; color:var(--on-card-dim); }
+  .chr-card .chips { display:flex; gap:6px; flex-wrap:wrap; }
+  .chr-card .chip { border:1px solid var(--card-line); border-radius:999px;
+                    padding:2px .6rem; font-size:12px; color:var(--on-card); }
+  .chr-card .chip.dead { border-color:var(--warn-text);
+                         color:var(--warn-text); }
+  .chr-card .chip.boss { border-color:var(--accent-text); }
+  .chr-card .chip.boss.unsure { border-style:dashed;
+                                color:var(--on-card-dim); }
+  .chr-card .loot { display:grid; gap:6px 14px;
+                    grid-template-columns:repeat(auto-fill, minmax(230px, 1fr)); }
+  .chr-card .item { display:flex; align-items:center; gap:.45rem; min-width:0; }
+  .chr-card .item img { width:28px; height:28px; border-radius:6px;
+                        border:1px solid var(--card-line); flex-shrink:0; }
+  .chr-card .item a { text-decoration:none; overflow-wrap:anywhere; }
+  .chr-card .item a:hover { text-decoration:underline; }
+  .chr-card .item .who { color:var(--on-card-dim); font-size:12px;
+                         white-space:nowrap; }
+  .chr-card .note { margin-top:.5rem; color:var(--on-card-dim); font-size:12px;
+                    line-height:1.5; }
   /* .q0 to .q7 are the Armory's rules, below; an item here is drawn in the
      same colour as the same item on the paper doll. Only the unknown case
-     is this tab's own. */
+     is this view's own. */
+  /* --dim, NOT --on-card-dim, and that is not a leftover. This class is
+     SHARED with the Armory's item tooltip, which draws on the near-black card
+     that section scopes for itself - and that scope overrides --dim while
+     leaving --on-card-dim alone, so an unknown-quality name written as
+     --on-card-dim would land at #5C6F60 on #0F1D14 and be close to
+     unreadable. --dim follows both grounds, which is the whole reason the
+     Armory overrides it. */
   .qunknown { color:var(--dim); }
-  .ach .lvl { font-size:1.5rem; color:var(--thought); }
-  .ach .note { color:var(--dim); font-size:.8rem; margin-top:.4rem; }
-  .ach.level { padding:.5rem .9rem; }
-  #achmore { display:none; background:var(--panel); color:var(--text);
-             border:1px solid var(--line); border-radius:6px; padding:.5rem; font:inherit;
-             cursor:pointer; margin-left:1.4rem; width:calc(100% - 1.4rem); }
+  #chrmore { display:none; width:100%; min-height:44px; margin-top:10px;
+             border-radius:999px; border:1px solid var(--card-line);
+             background:var(--card); color:var(--on-card);
+             font-family:var(--mono); font-size:11px; letter-spacing:.12em;
+             font-weight:700; text-transform:uppercase; cursor:pointer; }
+  #chrmore:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
+
+  /* --- the Council (infra#2597) --------------------------------------------
+     TWO COLUMNS, and which is which is the argument. On the left the family
+     talking, in the order the family talks in; on the right what they know
+     about where to go next. A reader who only looks at one should get the
+     conversation, so it leads on a phone as well as on a desktop - the grid
+     below is auto-fit, so "left" becomes "first" and nothing has to be said
+     about a breakpoint.
+
+     EVERY SENTENCE HERE COMES FROM council.py, including the order of the
+     transcript. The lines arrive oldest-speaker-first, which is the family's
+     own seniority order and not the clock's; this view must never sort them,
+     because alphabetical put the seven-year-old first and the mother last,
+     which is what bonds.speaking_order exists to prevent. */
+  #council { display:none; padding:.9rem 1rem 1.2rem; }
+  .cn-cols { display:grid; gap:14px;
+             grid-template-columns:repeat(auto-fit, minmax(320px, 1fr));
+             align-items:start; }
+  #cnlines { display:grid; gap:8px; }
+  /* Tighter than the shared card: a council line is one sentence, and eight
+     of them at card padding is a page of scrolling on a phone. */
+  .cn-line { border-radius:12px; padding:14px 16px; }
+  .cn-who { font-family:var(--mono); font-size:11px; font-weight:700;
+            letter-spacing:.14em; text-transform:uppercase; }
+  .cn-said { margin-top:5px; color:var(--on-card); font-size:14px;
+             line-height:1.55; overflow-wrap:anywhere; }
+  /* THE CONSENSUS BLOCK IS GREEN because green is what this palette says
+     "this works" in, and a decision that carried is the one thing on this
+     view that did. It is a panel and not a chip: the decision is a sentence,
+     and the vote beside it is the part a reader checks. */
+  #cnagreed { margin-top:12px; }
+  .cn-agreed { background:var(--pale-green); border:1px solid var(--accent);
+               border-radius:14px; padding:16px 18px; }
+  .cn-agreed .lbl { font-family:var(--mono); font-size:10px; font-weight:700;
+                    letter-spacing:.14em; color:var(--deep-green); }
+  .cn-agreed .what { margin-top:6px; font-family:var(--display);
+                     font-weight:700; font-stretch:125%; font-size:1.05rem;
+                     line-height:1.3; color:var(--ink); }
+  .cn-agreed .vote { margin-top:8px; font-family:var(--mono); font-size:11px;
+                     letter-spacing:.12em; color:var(--deep-green); }
+  /* The consensus block keeps ONE ground in both themes, and says so. Its
+     colours are the palette's success pair (pale green under deep green) and
+     they read correctly on either page ground; re-tinting it for dark would
+     be inventing a second thing green means. */
+  #cnquiet, #cnundecided { max-width:72ch; margin-top:10px;
+                           color:var(--on-card-dim); font-size:13px;
+                           line-height:1.55; }
+  #cnquiet[hidden], #cnundecided[hidden] { display:none; }
+  #cnplaces { display:grid; gap:10px; }
+  /* .cn-place takes the shared card recipe from the furniture above. */
+  .cn-place .top { display:flex; align-items:baseline; gap:.8rem;
+                   flex-wrap:wrap; }
+  .cn-place .where { font-family:var(--display); font-weight:700;
+                     font-stretch:125%; font-size:1.05rem; color:var(--on-card); }
+  /* THE GATE IS A WORD, NOT A COLOUR. "4 LEVELS SHORT" is readable in a
+     screenshot, by a colourblind reader, and out loud; the hue only repeats
+     what it already says. */
+  .cn-gate { margin-left:auto; font-family:var(--mono); font-size:11px;
+             font-weight:700; letter-spacing:.12em; }
+  .cn-place .drops { margin-top:10px; display:flex; gap:6px; flex-wrap:wrap; }
+  .cn-place .drop { border:1px solid var(--card-line); border-radius:999px;
+                    padding:2px .6rem; font-size:12px; color:var(--on-card); }
+  .cn-place .none { margin-top:10px; color:var(--on-card-dim); font-size:12px; }
+  .cn-place .verdict { margin-top:10px; color:var(--on-card-dim);
+                       font-size:13px; line-height:1.55; }
+
+  /* --- the Eye (infra#2597) ------------------------------------------------
+     A SERVER ROLLUP FOR A SERVER THAT IS ONE FAMILY. Every rung says whether
+     it is real, and a rung that is not real says what would turn it on
+     instead of drawing an empty chart of itself. That is the whole design: a
+     guild ladder with nothing in it is a picture of a server that does not
+     exist, and a reader remembers the picture.
+
+     Nothing here is decided in the page. eye.py counts the rows, picks the
+     word (ON, OFF, PARTIAL) and writes the switch sentence; this draws rungs. */
+  #eye { display:none; padding:.9rem 1rem 1.2rem; }
+  #eyehonest { max-width:72ch; margin:.9rem 0 0; color:var(--on-card);
+               font-size:15px; line-height:1.55; }
+  #eyetiers { display:grid; gap:8px; }
+  /* A grid rather than flow, because a rung is a header row, a sentence and
+     sometimes a switch panel. The card itself comes from the furniture. */
+  .ey-row { display:grid; gap:4px 16px; }
+  .ey-top { display:flex; align-items:baseline; gap:.8rem; flex-wrap:wrap; }
+  .ey-name { font-family:var(--mono); font-size:11px; font-weight:700;
+             letter-spacing:.16em; color:var(--on-card); }
+  .ey-count { font-family:var(--mono); font-size:1.3rem; font-weight:700;
+              color:var(--on-card); }
+  .ey-state { margin-left:auto; font-family:var(--mono); font-size:11px;
+              font-weight:700; letter-spacing:.14em; }
+  .ey-said { color:var(--on-card); font-size:14px; line-height:1.55; }
+  /* THE SWITCH. Inset on the page ground rather than on the card, so a rung
+     that is off is visibly a rung with something underneath it - and set in
+     body text, because what turns a tier on is a sentence and not a label. */
+  .ey-switch { margin-top:4px; padding:10px 12px; border-radius:10px;
+               background:var(--sunken); color:var(--on-card-dim);
+               font-size:13px; line-height:1.55; }
+  .ey-switch .lbl { font-family:var(--mono); font-size:10px; font-weight:700;
+                    letter-spacing:.14em; display:block;
+                    color:var(--on-card-dim); }
+  /* A rung that is off is dimmed at its EDGE and never in its text: the
+     switch sentence is the most useful thing on an off rung, and greying it
+     out would hide the one part worth reading. */
+  .ey-row.s-off { border-style:dashed; }
+  /* THE ONE BREAKPOINT. Below it a rung is stacked; above it the count sits
+     beside the name and the sentence runs the width of the card. Everything
+     else on these three views is auto-fit and needs no query at all. */
+  @media (min-width:640px) {
+    .ey-row { grid-template-columns:minmax(0, 1fr); }
+    #eye, #council, #chronicle { padding:1.1rem 1rem 1.6rem; }
+  }
   /* --- the Armory tab (infra#3096, infra#3139) ---------------------------
      One profile per member, drawn the way an armory site draws a character
      and the way the character sheet in the game draws it: a header, then
@@ -1661,7 +1886,11 @@
   .wwbody { margin-top:.5rem; font-size:14px; }
   #wallwarn[hidden] { display:none; }
   #wallhead { color:var(--shell-dim); margin-bottom:.7rem; }
-  #watch, #family, #armory, #achievements { padding:.9rem 1rem; }
+  /* The three redesigned views are NOT in this list. They set their own
+     padding beside the rest of their rules, and adding them here would let a
+     value hundreds of lines from the block that owns them win by being later
+     in the cascade. */
+  #watch, #family, #armory { padding:.9rem 1rem; }
 </style>
 <script>
   // WHERE THIS PAGE IS MOUNTED, AND WHY EVERY URL BELOW GOES THROUGH ONE
@@ -1869,11 +2098,51 @@
   <div id="wguildhead" class="brule"></div>
   <div id="wguild"></div>
 </section>
-<section id="achievements">
-  <div id="achhead">reaching the world...</div>
-  <div id="achfilters"></div>
-  <div id="achline"></div>
-  <button id="achmore">show older</button>
+<!-- THE CHRONICLE. What they have DONE, and the redesign of the Achievements
+     tab rather than a second view beside it: same endpoint, same module, a
+     stat strip and cards in place of a rail with dots on it. The old #achline
+     rail cost every card an inch of left margin on a phone, which is the
+     device this is read on. -->
+<section id="chronicle">
+  <div id="chrhead" class="ds-head">reaching the world...</div>
+  <div id="chrstrip" class="ds-strip"></div>
+  <p id="chrnote" hidden></p>
+  <div class="ds-rule"><span class="ix">01</span><span class="ln"></span><span class="lb">what they have done</span></div>
+  <div id="chrfilters"></div>
+  <div id="chrline"></div>
+  <button id="chrmore">show older</button>
+</section>
+<!-- THE COUNCIL. The family working out what today is for: the transcript on
+     the left in the family's own speaking order, what it carried underneath
+     it, and on the right what they know about where to go next. Every
+     sentence, every gate word and the ORDER of the transcript come from
+     council.py; this markup holds no judgement of its own. -->
+<section id="council">
+  <div id="cnhead" class="ds-head">reaching the world...</div>
+  <div class="cn-cols">
+    <div>
+      <div class="ds-rule"><span class="ix">01</span><span class="ln"></span><span class="lb">the last sitting</span></div>
+      <div id="cnlines"></div>
+      <p id="cnquiet" hidden></p>
+      <div id="cnagreed"></div>
+      <p id="cnundecided" hidden></p>
+    </div>
+    <div>
+      <div class="ds-rule"><span class="ix">02</span><span class="ln"></span><span class="lb">what they know drops where</span></div>
+      <div id="cnplaces"></div>
+    </div>
+  </div>
+</section>
+<!-- THE EYE. A server rollup for a server that is one family, and the point
+     of it is what it refuses to draw: no population curve, no guild ladder,
+     no faction split. Each rung says whether it is real and, when it is not,
+     what would turn it on. eye.py counts the rows and picks the words. -->
+<section id="eye">
+  <div id="eyehead" class="ds-head">reaching the world...</div>
+  <div id="eyestrip" class="ds-strip"></div>
+  <p id="eyehonest"></p>
+  <div class="ds-rule"><span class="ix">01</span><span class="ln"></span><span class="lb">what is actually here</span></div>
+  <div id="eyetiers"></div>
 </section>
 <div id="wrap"><canvas id="map"></canvas><div id="tip"></div></div>
 <aside id="panel">
@@ -1931,7 +2200,15 @@
 const MAP_VIEW = "map";
 const ARMORY_VIEW = "armory";
 const BAGS_VIEW = "bags";
-const ACH_VIEW = "achievements";
+// THE CHRONICLE, WHICH USED TO BE CALLED ACHIEVEMENTS. Renamed with the
+// redesign rather than duplicated - it is the same endpoint and the same
+// module, drawn differently - so the old #achievements deep link is kept
+// alive by HASH_ALIASES at the foot of this file. A renamed view whose old
+// address silently opens the Family tab is the bug this page has already had
+// once, from a routing ladder that swallowed #watch.
+const CHRONICLE_VIEW = "chronicle";
+const COUNCIL_VIEW = "council";
+const EYE_VIEW = "eye";
 const CONTINENT_ORDER = ["0", "1", "530", "571", "quelthalas", "azuremyst"];
 // A serif on purpose - the map should not read in the same voice as the
 // console around it. Deliberately a local stack: this page is tailnet-only
@@ -1995,10 +2272,25 @@ async function loadZones() {
   // Fifth: what they have DONE. Family is "are they all right", Armory is
   // "why did that go badly"; this is the one to open the evening after.
   const hb = document.createElement("button");
-  hb.textContent = "Achievements";
-  hb.dataset.view = ACH_VIEW;
-  hb.onclick = () => showView(ACH_VIEW);
+  hb.textContent = "Chronicle";
+  hb.dataset.view = CHRONICLE_VIEW;
+  hb.onclick = () => showView(CHRONICLE_VIEW);
   tabs.appendChild(hb);
+  // Sixth and seventh, and deliberately after the five that answer a question
+  // about a character. These two answer questions about the family as one
+  // thing and about the realm around it, which is a step further out every
+  // time - and neither is asked in a hurry from a phone, which is what the
+  // places above are for.
+  const cb = document.createElement("button");
+  cb.textContent = "Council";
+  cb.dataset.view = COUNCIL_VIEW;
+  cb.onclick = () => showView(COUNCIL_VIEW);
+  tabs.appendChild(cb);
+  const eb = document.createElement("button");
+  eb.textContent = "The Eye";
+  eb.dataset.view = EYE_VIEW;
+  eb.onclick = () => showView(EYE_VIEW);
+  tabs.appendChild(eb);
   for (const id of CONTINENT_ORDER) {
     const b = document.createElement("button");
     b.textContent = zones[id].name;
@@ -4257,12 +4549,16 @@ function showView(v) {
   const isWatch = v === WATCH_VIEW;
   const isArm = v === ARMORY_VIEW;
   const isBags = v === BAGS_VIEW;
-  const isAch = v === ACH_VIEW;
+  const isChr = v === CHRONICLE_VIEW;
+  const isCouncil = v === COUNCIL_VIEW;
+  const isEye = v === EYE_VIEW;
   fsection.style.display = isFam ? "block" : "none";
   watchsection.style.display = isWatch ? "block" : "none";
   asection.style.display = isArm ? "block" : "none";
   bagsection.style.display = isBags ? "block" : "none";
-  achsection.style.display = isAch ? "block" : "none";
+  chrsection.style.display = isChr ? "block" : "none";
+  cnsection.style.display = isCouncil ? "block" : "none";
+  eyesection.style.display = isEye ? "block" : "none";
   // Every non-map view hides the canvas and its legend. This used to read
   // "not Family means map", which would have drawn the map underneath the
   // Armory tab the moment a third view existed.
@@ -4315,11 +4611,27 @@ function showView(v) {
     pollWealth();
     return;
   }
-  if (isAch) {
+  if (isChr) {
     // A read, like the Armory: close the panel, stop the grid, fetch once.
     closePanel();
     stopBroadcasts();
-    pollAchievements();
+    pollChronicle();
+    return;
+  }
+  if (isCouncil) {
+    // The same treatment, and for the same reasons: both of these are reads
+    // with no player and no heartbeat of their own, and the panel and the
+    // grid are map and Family things that would otherwise go on running
+    // behind a view that does not show them.
+    closePanel();
+    stopBroadcasts();
+    pollCouncil();
+    return;
+  }
+  if (isEye) {
+    closePanel();
+    stopBroadcasts();
+    pollEye();
     return;
   }
   stopBroadcasts();
@@ -4516,45 +4828,57 @@ pollAgenda();
 // would be six reads of five tables per minute to redraw the same sentence.
 setInterval(pollAgenda, 10000);
 
-// --- the Achievements tab (mod-overseer#88, mod-overseer#152) --------------------
+// --- the Chronicle (infra#2597, mod-overseer#88, mod-overseer#152) --------
 //
-// What the family has DONE, as an achievement screen would show it: the
-// timeline /api/achievements hands over, drawn newest first. Every card
-// arrives fully decided - which run an item belongs to, which boss a drop
-// proves, what counts as a first - so this code only draws. It sits between
-// the map's own intervals and the Armory banner on purpose: the Family
-// tab's tests slice up to loadZones().then( and the Armory's slice from its
-// banner to the end of the script, and code dropped inside either window is
-// swept into assertions about a different tab.
+// What the family has DONE. The timeline /api/achievements hands over, drawn
+// newest first, under a strip of the numbers that describe it.
+//
+// THIS IS THE ACHIEVEMENTS TAB RENAMED AND REDRESSED, not a second view. Same
+// endpoint, same module, same cards; what changed is that the sentences on a
+// card are no longer written here. "led by Grug, 21m in the instance" used to
+// be three JavaScript ternaries, which meant the words a reader saw were
+// composed somewhere the Python suite could not reach and could drift from
+// what the module believed. achievements.py now hands over the kind word, the
+// name of the hue it is drawn in, the body line and the character's own line,
+// and this code puts them on the page (infra#2597).
+//
+// It sits between the map's own intervals and the Council banner on purpose:
+// the Family tab's tests slice up to loadZones().then( and the Armory's slice
+// from its banner to the end of the script, and code dropped inside either
+// window is swept into assertions about a different tab.
 //
 // EVERY STRING FROM THE PAYLOAD IS SET AS TEXT, NEVER PARSED AS MARKUP.
 // Item and quest names come from the world database and character names
 // from a table the module writes; none of it is trusted.
 
-const achsection = document.getElementById("achievements");
-const achline = document.getElementById("achline");
-const achhead = document.getElementById("achhead");
-const achfilters = document.getElementById("achfilters");
-const achmore = document.getElementById("achmore");
+const chrsection = document.getElementById("chronicle");
+const chrline = document.getElementById("chrline");
+const chrhead = document.getElementById("chrhead");
+const chrstrip = document.getElementById("chrstrip");
+const chrnote = document.getElementById("chrnote");
+const chrfilters = document.getElementById("chrfilters");
+const chrmore = document.getElementById("chrmore");
 // Same host the Armory reads its icons from; declared again here rather
-// than shared so that neither tab's block depends on the other existing.
-const ACH_ICON_HOST = "https://wow.zamimg.com/images/wow/icons/large/";
-const ACH_PAGE = 40;
-const ach = { cards: [], filter: "all", shown: ACH_PAGE };
+// than shared so that neither view's block depends on the other existing.
+const CHR_ICON_HOST = "https://wow.zamimg.com/images/wow/icons/large/";
+const CHR_PAGE = 40;
+const chr = { cards: [], filter: "all", shown: CHR_PAGE };
 
-const ACH_FILTERS = [["all", "everything"], ["run", "dungeon runs"],
+const CHR_FILTERS = [["all", "everything"], ["run", "dungeon runs"],
                      ["quest", "quests"], ["level", "levels"], ["first", "firsts"]];
 
-for (const [key, label] of ACH_FILTERS) {
-  const b = document.createElement("button");
-  b.textContent = label;
+for (const [key, label] of CHR_FILTERS) {
+  const b = el("button", "", label);
   b.dataset.filter = key;
-  b.onclick = () => { ach.filter = key; ach.shown = ACH_PAGE; renderAchievements(); };
-  achfilters.appendChild(b);
+  b.onclick = () => { chr.filter = key; chr.shown = CHR_PAGE; renderChronicle(); };
+  chrfilters.appendChild(b);
 }
-achmore.onclick = () => { ach.shown += ACH_PAGE; renderAchievements(); };
+chrmore.onclick = () => { chr.shown += CHR_PAGE; renderChronicle(); };
 
-function achWhen(iso) {
+// THE ONE THING THIS VIEW STILL DECIDES, and it is not a judgement about the
+// family: a timestamp has to be rendered in the READER'S timezone, and the
+// server has no idea what that is. Everything else on a card arrives written.
+function chrWhen(iso) {
   if (!iso) return "";
   const d = new Date(iso);
   if (isNaN(d)) return iso;
@@ -4565,20 +4889,13 @@ function achWhen(iso) {
   return d.toLocaleDateString([], { month: "short", day: "numeric" }) + " " + time;
 }
 
-function achEl(tag, cls, text) {
-  const el = document.createElement(tag);
-  if (cls) el.className = cls;
-  if (text !== undefined && text !== null) el.textContent = text;
-  return el;
+function chrSect(card, label) {
+  card.appendChild(el("div", "sect", label));
 }
 
-function achSect(card, label) {
-  card.appendChild(achEl("div", "sect", label));
-}
-
-function achChips(list, cls) {
-  const wrap = achEl("div", "chips");
-  for (const text of list) wrap.appendChild(achEl("span", "chip " + (cls || ""), text));
+function chrChips(list, cls) {
+  const wrap = el("div", "chips");
+  for (const text of list) wrap.appendChild(el("span", "chip " + (cls || ""), text));
   return wrap;
 }
 
@@ -4586,13 +4903,13 @@ function achChips(list, cls) {
 // does not - a blank square reads as a broken picture - and nothing again if
 // the icon host is unreachable), then the name in its quality colour,
 // linking to wowhead for the tooltip.
-function achItem(item, who) {
-  const row = achEl("div", "item");
+function chrItem(item, who) {
+  const row = el("div", "item");
   if (item.icon) {
     const img = document.createElement("img");
     img.alt = "";
     img.loading = "lazy";
-    img.src = ACH_ICON_HOST + item.icon + ".jpg";
+    img.src = CHR_ICON_HOST + item.icon + ".jpg";
     img.onerror = () => { img.remove(); };
     row.appendChild(img);
   }
@@ -4605,29 +4922,41 @@ function achItem(item, who) {
   a.textContent = item.name + (item.count > 1 ? " x" + item.count : "");
   a.title = item.quality_name + (item.ilvl ? ", item level " + item.ilvl : "");
   row.appendChild(a);
-  if (item.chosen) row.appendChild(achEl("span", "who", "(chosen)"));
-  if (who) row.appendChild(achEl("span", "who", who));
+  if (item.chosen) row.appendChild(el("span", "who", "(chosen)"));
+  if (who) row.appendChild(el("span", "who", who));
   return row;
 }
 
-function achHeader(card, title, at, sub) {
-  const h = achEl("h3");
-  h.appendChild(achEl("span", "", title));
-  h.appendChild(achEl("span", "when", achWhen(at)));
-  card.appendChild(h);
-  if (sub) card.appendChild(achEl("div", "sub", sub));
+// THE CARD HEAD, AND THE FOUR THINGS IT DRAWS ARE ALL GIVEN. The date is the
+// reader's clock; the kind word, the hue name, the title and the body come
+// from the payload. `c.hue` is a NAME of a design role, never a colour - the
+// stylesheet decides what "cyan" looks like on the ground this is drawn on,
+// which is the only place that knows there are two grounds.
+function chrHead(card, c) {
+  const top = el("div", "chr-top");
+  top.appendChild(el("span", "chr-when", chrWhen(c.at)));
+  top.appendChild(el("span", "chr-kind h-" + c.hue, c.word));
+  card.appendChild(top);
+  card.appendChild(el("h3", "chr-title", c.title));
+  if (c.body) card.appendChild(el("p", "chr-body", c.body));
+  if (c.line) {
+    const said = el("div", "chr-said");
+    said.appendChild(el("span", "who", c.line.who));
+    said.appendChild(document.createTextNode(c.line.text));
+    card.appendChild(said);
+  }
 }
 
-function achRunCard(c) {
-  const card = achEl("article", "ach run" + (c.gained ? "" : " attempt"));
-  const fight = c.active_duration
-    ? c.active_duration + " in the instance" + (c.duration !== c.active_duration
-      ? " (the run row stayed open " + c.duration + ")" : "")
-    : c.duration;
-  achHeader(card, c.title, c.at, "led by " + c.leader + ", " + fight
-            + (c.state === "active" ? ", still inside" : ""));
-  achSect(card, c.all_together ? "all " + c.members.length + " inside" : "seen inside");
-  card.appendChild(achChips(c.members));
+function chrCard(c) {
+  const card = el("article", "chr-card k-" + c.kind);
+  chrHead(card, c);
+  return card;
+}
+
+function chrRunCard(c) {
+  const card = chrCard(c);
+  chrSect(card, c.all_together ? "all " + c.members.length + " inside" : "seen inside");
+  card.appendChild(chrChips(c.members));
   // BOSSES. Confirmed ones are solid, the rest dashed and dim, and the note
   // under them says what "confirmed" means today: a drop somebody equipped.
   // The day the module writes boss_kill events, `how` flips and the note
@@ -4636,132 +4965,323 @@ function achRunCard(c) {
   // An attempt lists no bosses: eight dashed "unconfirmed" chips under a
   // death at the door say nothing the title has not already said.
   if (b.total && c.gained) {
-    achSect(card, "bosses " + b.known.length + " of " + b.total
+    chrSect(card, "bosses " + b.known.length + " of " + b.total
             + (c.cleared ? ", cleared" : ""));
-    const chips = achEl("div", "chips");
-    for (const boss of b.known) chips.appendChild(achEl("span", "chip boss", boss.name));
-    for (const boss of b.unconfirmed) chips.appendChild(achEl("span", "chip boss unsure", boss.name));
+    const chips = el("div", "chips");
+    for (const boss of b.known) chips.appendChild(el("span", "chip boss", boss.name));
+    for (const boss of b.unconfirmed) chips.appendChild(el("span", "chip boss unsure", boss.name));
     card.appendChild(chips);
     if (b.how === "loot") {
-      card.appendChild(achEl("div", "note",
+      card.appendChild(el("div", "note",
         "boss kills are not recorded yet; these are inferred from the loot "
         + "somebody equipped, so an unconfirmed boss may well have fallen"));
     }
   }
   if (c.deaths.length) {
-    achSect(card, "deaths " + c.deaths.length);
-    card.appendChild(achChips(c.deaths.map(d =>
+    chrSect(card, "deaths " + c.deaths.length);
+    card.appendChild(chrChips(c.deaths.map(d =>
       d.who + (d.killer && d.killer !== d.who ? " (" + d.killer + ")" : "")), "dead"));
   }
   if (c.loot.length) {
-    achSect(card, "loot " + c.loot.length);
-    const grid = achEl("div", "loot");
+    chrSect(card, "loot " + c.loot.length);
+    const grid = el("div", "loot");
     // Grouped by member, in roster order, so "what did Ugga get" is one
     // glance rather than a scan of the whole list.
     for (const who of c.members) {
-      for (const item of c.loot) if (item.who === who) grid.appendChild(achItem(item, who));
+      for (const item of c.loot) if (item.who === who) grid.appendChild(chrItem(item, who));
     }
     for (const item of c.loot) {
-      if (!c.members.includes(item.who)) grid.appendChild(achItem(item, item.who));
+      if (!c.members.includes(item.who)) grid.appendChild(chrItem(item, item.who));
     }
     card.appendChild(grid);
   }
   if (c.level_ups.length) {
-    achSect(card, "levelled inside");
-    card.appendChild(achChips(c.level_ups.map(l => l.who + " to " + l.level)));
+    chrSect(card, "levelled inside");
+    card.appendChild(chrChips(c.level_ups.map(l => l.who + " to " + l.level)));
   }
   if (c.quests.length) {
-    achSect(card, "quests inside");
-    card.appendChild(achChips(c.quests.map(q =>
+    chrSect(card, "quests inside");
+    card.appendChild(chrChips(c.quests.map(q =>
       q.title + " (" + q.who + (q.turned_in ? ", turned in" : ", done") + ")")));
   }
   return card;
 }
 
-function achQuestCard(c) {
-  const card = achEl("article", "ach quest");
-  achHeader(card, c.title, c.at,
-            c.who + (c.turned_in ? " turned it in" : " finished the objectives")
-            + " at level " + c.level);
+function chrQuestCard(c) {
+  const card = chrCard(c);
   if (c.rewards.length) {
-    achSect(card, c.turned_in ? "rewards" : "on offer");
-    const grid = achEl("div", "loot");
-    for (const item of c.rewards) grid.appendChild(achItem(item));
+    chrSect(card, c.turned_in ? "rewards" : "on offer");
+    const grid = el("div", "loot");
+    for (const item of c.rewards) grid.appendChild(chrItem(item));
     card.appendChild(grid);
   }
   if (c.choice_unknown) {
-    card.appendChild(achEl("div", "note",
+    card.appendChild(el("div", "note",
       "this quest offered a choice of reward, and nothing equipped afterwards says which was taken"));
   }
   if (c.level_gained) {
-    card.appendChild(achEl("div", "sub", "and reached level " + c.level_gained));
+    card.appendChild(el("div", "note", "and reached level " + c.level_gained));
   }
   return card;
 }
 
-function achLevelCard(c) {
-  const card = achEl("article", "ach level");
-  const h = achEl("h3");
-  h.appendChild(achEl("span", "lvl", c.title));
-  h.appendChild(achEl("span", "when", achWhen(c.at)));
-  card.appendChild(h);
-  card.appendChild(achEl("div", "sub", c.who));
-  return card;
+// A level and a first carry nothing under the head. They are one fact each,
+// and the head is where a fact goes.
+function chrPlainCard(c) {
+  return chrCard(c);
 }
 
-function achFirstCard(c) {
-  const card = achEl("article", "ach first big");
-  achHeader(card, c.title, c.at,
-            (Array.isArray(c.who) ? c.who.join(", ") : c.who) + (c.detail ? ": " + c.detail : ""));
-  return card;
-}
+const CHR_DRAW = { run: chrRunCard, quest: chrQuestCard, level: chrPlainCard,
+                   first: chrPlainCard };
 
-const ACH_DRAW = { run: achRunCard, quest: achQuestCard, level: achLevelCard, first: achFirstCard };
-
-function renderAchievements() {
-  for (const b of achfilters.querySelectorAll("button")) {
-    b.classList.toggle("on", b.dataset.filter === ach.filter);
+// THE STAT STRIP. Five tiles, and not one of them is counted here: the
+// payload's `strip` arrives as label/value pairs, including the last one,
+// which is a WORD rather than a number because boss kills are inferred from
+// loot and a count there would present a guess as a measurement.
+function renderChrStrip(tiles) {
+  chrstrip.replaceChildren();
+  for (const tile of tiles || []) {
+    const box = el("div", "ds-tile");
+    box.appendChild(el("span", "v", tile.value));
+    box.appendChild(el("span", "k", tile.label));
+    chrstrip.appendChild(box);
   }
-  const wanted = ach.filter === "all"
-    ? ach.cards : ach.cards.filter(c => c.kind === ach.filter);
-  achline.replaceChildren();
+}
+
+function renderChronicle() {
+  for (const b of chrfilters.querySelectorAll("button")) {
+    b.classList.toggle("on", b.dataset.filter === chr.filter);
+  }
+  const wanted = chr.filter === "all"
+    ? chr.cards : chr.cards.filter(c => c.kind === chr.filter);
+  chrline.replaceChildren();
   if (!wanted.length) {
-    achline.appendChild(achEl("div", "note", "nothing here yet"));
+    chrline.appendChild(el("div", "chr-body", "nothing here yet"));
   }
-  for (const c of wanted.slice(0, ach.shown)) {
-    const draw = ACH_DRAW[c.kind];
-    if (draw) achline.appendChild(draw(c));
+  for (const c of wanted.slice(0, chr.shown)) {
+    const draw = CHR_DRAW[c.kind];
+    if (draw) chrline.appendChild(draw(c));
   }
-  achmore.style.display = wanted.length > ach.shown ? "block" : "none";
+  chrmore.style.display = wanted.length > chr.shown ? "block" : "none";
 }
 
-async function pollAchievements() {
+async function pollChronicle() {
   try {
     const r = await fetch(u("/api/achievements"));
     if (!r.ok) throw new Error(r.status);
     const p = await r.json();
-    ach.cards = p.cards;
-    achhead.textContent = p.runs + " dungeon run" + (p.runs === 1 ? "" : "s")
-      + ", " + p.attempts + " attempt" + (p.attempts === 1 ? "" : "s")
-      + ", " + p.visits + " instance visit" + (p.visits === 1 ? "" : "s")
-      + ", " + p.firsts.length + " firsts"
-      + (p.boss_kills_recorded ? "" : ", boss kills inferred from loot")
-      + " - " + new Date().toLocaleTimeString();
-    achhead.className = "";
-    renderAchievements();
+    chr.cards = p.cards;
+    renderChrStrip(p.strip);
+    chrnote.textContent = p.provenance || "";
+    chrnote.hidden = !p.provenance;
+    chrhead.textContent = "read " + new Date().toLocaleTimeString();
+    chrhead.className = "ds-head";
+    renderChronicle();
   } catch (e) {
-    // Keep the cards that are drawn, exactly as the other tabs do. A blank
+    // Keep the cards that are drawn, exactly as the other views do. A blank
     // timeline reads as "they have done nothing", which is the one thing
-    // this tab exists to disprove.
-    achhead.textContent = "the world is unreachable - this may be stale";
-    achhead.className = "alarm";
+    // this view exists to disprove.
+    chrhead.textContent = "the world is unreachable - this may be stale";
+    chrhead.className = "ds-head alarm";
   }
 }
 
 // Sixty seconds. Everything here already happened, and the tables it reads
-// are written by the module on its own cadence; entering the tab polls at
+// are written by the module on its own cadence; entering the view polls at
 // once, so the timer only ever adds the run that ended while it was open.
-setInterval(() => { if (view === ACH_VIEW) pollAchievements(); }, 60000);
+setInterval(() => { if (view === CHRONICLE_VIEW) pollChronicle(); }, 60000);
+
+// --- the Council (infra#2597) --------------------------------------------
+//
+// The family working out what today is for. /api/council arrives fully
+// decided: the transcript is already in the family's own speaking order, the
+// hue each speaker is drawn in is already chosen, the gate on a place is
+// already a word and the verdict beside it is already a sentence.
+//
+// THIS CODE MUST NEVER SORT THE TRANSCRIPT. The order is the point of the
+// view and it is a fact about the family: bonds.speaking_order exists because
+// alphabetical put the seven-year-old first every time and the mother last,
+// and a .sort() here would be a second opinion about that, free to drift from
+// the one the bridge uses when it writes the lines in the first place.
+//
+// EVERY STRING FROM THE PAYLOAD IS SET AS TEXT. A council line is written by
+// a language model into a table the bridge fills, which is about as untrusted
+// as text on this page gets.
+
+const cnsection = document.getElementById("council");
+const cnhead = document.getElementById("cnhead");
+const cnlines = document.getElementById("cnlines");
+const cnquiet = document.getElementById("cnquiet");
+const cnagreed = document.getElementById("cnagreed");
+const cnundecided = document.getElementById("cnundecided");
+const cnplaces = document.getElementById("cnplaces");
+
+function renderCouncilLines(lines) {
+  cnlines.replaceChildren();
+  // NO SORT, NO REVERSE, NO COMPARATOR. See the banner above.
+  for (const line of lines || []) {
+    const box = el("div", "cn-line");
+    box.appendChild(el("div", "cn-who h-" + line.hue, line.who));
+    box.appendChild(el("div", "cn-said", line.text));
+    cnlines.appendChild(box);
+  }
+}
+
+function renderConsensus(agreed) {
+  cnagreed.replaceChildren();
+  if (!agreed) return;
+  const box = el("div", "cn-agreed");
+  box.appendChild(el("div", "lbl", "CARRIED"));
+  box.appendChild(el("div", "what", agreed.decision));
+  box.appendChild(el("div", "vote", agreed.vote));
+  cnagreed.appendChild(box);
+}
+
+// A place, its gate, what the family has watched drop there, and whether to
+// go in anyway. The gate is a WORD - "READY", "4 LEVELS SHORT" - so it
+// survives a screenshot, a colourblind reader and being read out loud; the
+// hue only repeats what the word already says.
+function renderPlaces(places) {
+  cnplaces.replaceChildren();
+  if (!(places || []).length) {
+    cnplaces.appendChild(el("div", "cn-place",
+      "Nowhere to say anything about yet."));
+    return;
+  }
+  for (const p of places) {
+    const box = el("div", "cn-place");
+    const top = el("div", "top");
+    top.appendChild(el("span", "where", p.place));
+    top.appendChild(el("span", "cn-gate h-" + p.hue, p.gate));
+    box.appendChild(top);
+    if (p.drops.length) {
+      const chips = el("div", "drops");
+      for (const drop of p.drops) chips.appendChild(el("span", "drop", drop));
+      if (p.more_drops) {
+        chips.appendChild(el("span", "drop", "+" + p.more_drops + " more"));
+      }
+      box.appendChild(chips);
+    } else {
+      box.appendChild(el("div", "none", "nothing has come out of here yet"));
+    }
+    box.appendChild(el("div", "verdict", p.verdict));
+    cnplaces.appendChild(box);
+  }
+}
+
+function renderCouncil(p) {
+  renderCouncilLines(p.transcript);
+  cnquiet.textContent = p.quiet || "";
+  cnquiet.hidden = !p.quiet;
+  renderConsensus(p.consensus);
+  cnundecided.textContent = p.undecided || "";
+  cnundecided.hidden = !p.undecided;
+  renderPlaces(p.prospects);
+  cnhead.textContent = "read " + new Date().toLocaleTimeString();
+  cnhead.className = "ds-head";
+}
+
+async function pollCouncil() {
+  try {
+    const r = await fetch(u("/api/council"));
+    if (!r.ok) throw new Error(r.status);
+    renderCouncil(await r.json());
+  } catch (e) {
+    // Keep the transcript. Blanking it would read as "the family has stopped
+    // talking", which is a far stronger claim than "one read failed".
+    cnhead.textContent = "the world is unreachable - this may be stale";
+    cnhead.className = "ds-head alarm";
+  }
+}
+
+// Sixty seconds, like the Chronicle and for the same reason: a council is
+// held on the bridge's own long cadence, and nothing here changes between
+// them. Entering the view reads at once.
+setInterval(() => { if (view === COUNCIL_VIEW) pollCouncil(); }, 60000);
+
+// --- the Eye (infra#2597) -------------------------------------------------
+//
+// The server rollup, and what it refuses to draw is the design. There is no
+// population curve here, no guild ladder and no faction split, because this
+// realm is one family and a chart of that would be five real numbers and a
+// dozen invented ones - and the invented ones are what a reader remembers.
+//
+// eye.py counts every row, decides whether a tier is ON, OFF or PARTIAL, and
+// writes the sentence saying what would turn an off one on. This draws rungs.
+
+const eyesection = document.getElementById("eye");
+const eyehead = document.getElementById("eyehead");
+const eyestrip = document.getElementById("eyestrip");
+const eyehonest = document.getElementById("eyehonest");
+const eyetiers = document.getElementById("eyetiers");
+
+// The same shape the Chronicle's strip uses, drawn from the same key. Two
+// copies of six lines, and deliberately not one shared function: the two
+// blocks are sliced apart by this file's own test suites, and a helper
+// living in one of them would make the other's window depend on it.
+function renderEyeStrip(tiles) {
+  eyestrip.replaceChildren();
+  for (const tile of tiles || []) {
+    const box = el("div", "ds-tile");
+    box.appendChild(el("span", "v", tile.value));
+    box.appendChild(el("span", "k", tile.label));
+    eyestrip.appendChild(box);
+  }
+}
+
+// ON, OFF and PARTIAL are the module's words, and so is the hue each one is
+// drawn in. The colour only repeats what the word already says, and an off
+// rung is dashed as well, so the state survives a monochrome screenshot and a
+// reader who cannot tell the two colours apart.
+//
+// The tier NAME leads and the count follows it. Read aloud that is "GUILD 0
+// OFF", which is a sentence; the other way round it is a number looking for a
+// noun.
+function eyeRow(t) {
+  const row = el("div", "ey-row s-" + t.state.toLowerCase());
+  const top = el("div", "ey-top");
+  top.appendChild(el("span", "ey-name", t.tier));
+  top.appendChild(el("span", "ey-count", t.value));
+  top.appendChild(el("span", "ey-state h-" + t.hue, t.state));
+  row.appendChild(top);
+  row.appendChild(el("div", "ey-said", t.headline));
+  // THE SWITCH IS THE POINT OF AN OFF RUNG. A tier that is not real says what
+  // would make it real, in place of a chart of itself.
+  if (t.switch) {
+    const sw = el("div", "ey-switch");
+    sw.appendChild(el("span", "lbl", "WHAT TURNS IT ON"));
+    sw.appendChild(document.createTextNode(t.switch));
+    row.appendChild(sw);
+  }
+  return row;
+}
+
+function renderEye(p) {
+  renderEyeStrip(p.strip);
+  eyehonest.textContent = p.honest;
+  eyetiers.replaceChildren();
+  for (const t of p.tiers || []) eyetiers.appendChild(eyeRow(t));
+  eyehead.textContent = "read " + new Date().toLocaleTimeString();
+  eyehead.className = "ds-head";
+}
+
+async function pollEye() {
+  try {
+    const r = await fetch(u("/api/eye"));
+    if (!r.ok) throw new Error(r.status);
+    renderEye(await r.json());
+  } catch (e) {
+    // Keep the ladder. A view whose whole job is to say what is NOT real,
+    // rendered empty, reads as a realm where nothing is real at all.
+    eyehead.textContent = "the world is unreachable - this may be stale";
+    eyehead.className = "ds-head alarm";
+  }
+}
+
+// Thirty seconds. Two of the five rungs are live reads - who is in the world,
+// and whether the family is behind one leader - and both change on the same
+// cadence the map does.
+setInterval(() => { if (view === EYE_VIEW) pollEye(); }, 30000);
 
 // --- the Armory tab (infra#3096, infra#3139) -----------------------------
 // Deliberately at the FOOT of the script, AFTER loadZones().then(...). The
@@ -6202,12 +6722,26 @@ function adoptContinent() {
 // The map is still separate below, because it is the one view whose hash
 // carries state (which continent) and so needs more than a name.
 const HASH_VIEWS = [FAMILY_VIEW, WATCH_VIEW, ARMORY_VIEW, BAGS_VIEW,
-                    ACH_VIEW];
+                    CHRONICLE_VIEW, COUNCIL_VIEW, EYE_VIEW];
+
+// ADDRESSES A VIEW USED TO HAVE. The Achievements tab was renamed to the
+// Chronicle in its redesign, and every link anybody has already sent or
+// bookmarked says #achievements. Without this that link falls through to the
+// unrecognised branch below and opens the Family tab - no error, no warning,
+// the wrong page - which is exactly the failure the routing TABLE replaced a
+// ladder of ifs to prevent. A rename is not a reason to break an address.
+//
+// A Map and not an object literal, because the name comes out of the URL bar:
+// #constructor and #__proto__ both find something truthy on a plain object's
+// prototype, and the router would be reading a function where it expected a
+// view name.
+const HASH_ALIASES = new Map([["achievements", CHRONICLE_VIEW]]);
 
 function applyHash() {
   const raw = (location.hash || "").replace(/^#/, "");
   const cut = raw.indexOf("/");
-  const name = cut < 0 ? raw : raw.slice(0, cut);
+  const asked = cut < 0 ? raw : raw.slice(0, cut);
+  const name = HASH_ALIASES.get(asked) || asked;
   if (name === MAP_VIEW) {
     wantedContinent = cut < 0 ? "" : raw.slice(cut + 1);
     adoptContinent();

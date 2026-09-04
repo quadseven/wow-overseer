@@ -473,6 +473,116 @@ class ReadingTheWorldTables(unittest.TestCase):
         self.assertEqual(ach.dungeon_name(36), "The Deadmines")
 
 
+class TheCardBringsItsOwnWords(unittest.TestCase):
+    """The Chronicle's furniture (infra#2597).
+
+    Every sentence on a card used to be assembled in JavaScript: "led by Og,
+    46m in the instance (the run row stayed open 7h 20m)" was three ternaries
+    in the page. That is judgement, it lived where no test here could reach
+    it, and it was free to drift from what this module believed. It is now
+    built here, which is what these assertions are for.
+    """
+
+    def payload(self):
+        return build([RUN], [equip(7230, "Og", T.replace(hour=15, minute=30)),
+                             ev(ach.LEVEL_UP, "Bork", 25, "", "", 25, 36,
+                                T.replace(hour=15, minute=40))],
+                     [death("Grug", T.replace(hour=15, minute=35))])
+
+    def test_a_run_that_gained_something_is_a_run_and_one_that_did_not_is_an_attempt(self):
+        """Calling a wipe at the door a dungeon run flatters the family, and
+        the word is the only thing on the card that says which it was."""
+        card = run_card(self.payload())
+        self.assertEqual("DUNGEON RUN", ach.card_word(card))
+        attempt = dict(card, gained=False)
+        self.assertEqual(ach.ATTEMPT_WORD, ach.card_word(attempt))
+        self.assertNotEqual(ach.card_hue(card), ach.card_hue(attempt))
+
+    def test_every_kind_carries_a_hue_that_is_a_name_and_not_a_colour(self):
+        """index.html owns what a colour looks like, and owns it twice - once
+        per theme. A hex here would be right on one ground and wrong on the
+        other."""
+        for card in self.payload()["cards"]:
+            hue = ach.card_hue(card)
+            self.assertTrue(hue.isalpha(), hue)
+            self.assertNotIn("#", hue)
+
+    def test_the_body_reports_both_spans_when_they_disagree(self):
+        """The run ROW and the time anything actually happened are different
+        questions: this row was open seven hours and the family was inside for
+        under one. A body that showed only the row would say the family spent
+        an afternoon in a dungeon they walked through."""
+        body = ach.card_body(run_card(self.payload()))
+        self.assertIn("led by Og", body)
+        self.assertIn("in the instance", body)
+        self.assertIn("the run row stayed open", body)
+
+    def test_the_body_reports_one_span_when_they_agree(self):
+        """No parenthetical when there is nothing to reconcile."""
+        card = dict(run_card(self.payload()))
+        card["duration"] = card["active_duration"]
+        self.assertNotIn("stayed open", ach.card_body(card))
+
+    def test_a_run_still_open_says_so_in_the_body(self):
+        card = dict(run_card(self.payload()), state="active")
+        self.assertIn("still inside", ach.card_body(card))
+
+    def test_every_card_gets_a_body_and_the_payload_carries_it(self):
+        for card in self.payload()["cards"]:
+            self.assertIn("body", card)
+            self.assertTrue(card["body"], card["kind"])
+            self.assertEqual(card["body"], ach.card_body(card))
+
+    def test_the_line_is_said_by_somebody_and_names_a_fact_on_the_card(self):
+        """An unattributed quote reads as the site talking, and a quote that
+        invents an event is the one thing this page must never do."""
+        card = run_card(self.payload())
+        line = ach.card_line(card)
+        self.assertEqual(card["leader"], line["who"])
+        self.assertIn(card["dungeon"], line["text"])
+
+    def test_a_run_nobody_survived_is_said_by_somebody_who_died_in_it(self):
+        card = dict(run_card(self.payload()), gained=False)
+        self.assertEqual(card["deaths"][0]["who"], ach.card_line(card)["who"])
+
+    def test_a_level_card_says_the_level_it_reached(self):
+        card = next(c for c in self.payload()["cards"] if c["kind"] == ach.LEVEL)
+        self.assertIn(str(card["level"]), ach.card_line(card)["text"])
+        self.assertEqual(card["who"], ach.card_line(card)["who"])
+
+    def test_a_first_with_nobody_to_attribute_it_to_gets_no_line(self):
+        """None, and the page draws nothing. Better than a voice belonging to
+        no one."""
+        self.assertIsNone(ach.card_line(
+            {"kind": ach.FIRST, "who": [], "detail": ""}))
+
+    def test_the_strip_counts_what_the_payload_counted(self):
+        payload = self.payload()
+        strip = {t["label"]: t["value"] for t in payload["strip"]}
+        self.assertEqual(str(payload["runs"]), strip["RUNS"])
+        self.assertEqual(str(payload["attempts"]), strip["ATTEMPTS"])
+        self.assertEqual(str(payload["visits"]), strip["VISITS"])
+        self.assertEqual(str(len(payload["firsts"])), strip["FIRSTS"])
+
+    def test_the_boss_tile_is_a_word_because_the_number_would_be_a_guess(self):
+        """Boss kills are inferred from loot somebody equipped. A count there
+        would present a guess as a measurement, and the day the module writes
+        boss_kill events the tile turns into RECORDED on its own."""
+        strip = {t["label"]: t["value"] for t in self.payload()["strip"]}
+        self.assertEqual("INFERRED", strip["BOSS KILLS"])
+        recorded = ach.strip(1, 1, 1, 1, True)
+        self.assertEqual("RECORDED", recorded[-1]["value"])
+
+    def test_the_provenance_sentence_goes_away_when_it_stops_being_true(self):
+        self.assertIn("inferred", ach.provenance(False))
+        self.assertEqual("", ach.provenance(True))
+
+    def test_the_payload_carries_the_strip_and_the_sentence(self):
+        payload = self.payload()
+        self.assertEqual(5, len(payload["strip"]))
+        self.assertTrue(payload["provenance"])
+
+
 class WithoutTheRunTable(unittest.TestCase):
     """The live realm's schema predates overseer_dungeon_run. Quests and
     levels must still make a timeline out of nothing but events."""

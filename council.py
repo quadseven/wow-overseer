@@ -33,7 +33,9 @@ rule - the LLM is never asked to restate data we hold.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import datetime, timedelta
 
+import achievements
 import bonds
 
 # A member this far below the family's median level is visibly struggling and
@@ -432,3 +434,353 @@ def hold(members: list, *, history: list) -> Council:
                   target=won.target, reason=won.said, quest_id=won.quest_id),
         reason=f"{won.proposer}'s plan carried at {score}",
     )
+
+
+# --- the Council view (infra#2597) -------------------------------------------
+#
+# What the Council tab draws: the last sitting as a transcript, what it
+# carried, and the places the family could go next. Rows in, JSON out; the
+# page draws it and decides nothing.
+#
+# WHY THE TRANSCRIPT IS BUILT HERE AND NOT IN THE PAGE. Its ORDER is the whole
+# point of the view and the order is a fact about the family, not about the
+# markup. `speaking_order` exists because alphabetical put the seven-year-old
+# first every time and the mother last, which read as a family nobody in it
+# would recognise. A page that sorted these itself would be a second opinion
+# about who speaks first, free to drift from the one the bridge already uses
+# when it writes them.
+#
+# WHY THE HUE IS A TOKEN NAME. index.html owns what --green looks like, and it
+# owns it TWICE - the site has a light theme and a dark one, and a hex chosen
+# here would be mixed for one ground and wrong on the other. So a speaker
+# carries the NAME of a role, and the stylesheet says what that name looks
+# like on the surface it is actually drawn on.
+
+COUNCIL_SOURCE = "council"
+
+# Council lines this close together are one sitting. The bridge writes a whole
+# council in a single pass - one line per speaker, each voiced by the model
+# before it is written - so a sitting takes as long as the model does, and a
+# gap larger than this is the NEXT council rather than a slow speaker.
+SITTING_GAP = timedelta(minutes=20)
+
+# The hues a speaker can be drawn in, handed out in the family's own order, so
+# the father is always the same colour and the little one is always his.
+# NAMES OF DESIGN TOKENS, never colours - see the note above.
+SPEAKER_HUES = ("ink", "green", "cyan", "amber", "vermilion")
+# Anyone who is not family. They have no place in the seniority order, so they
+# get the quiet role rather than a colour that would rank them among people it
+# knows nothing about.
+OUTSIDER_HUE = "muted"
+
+# WHERE THE FAMILY COULD GO, and the level this module says they should be
+# before walking in. A RECOMMENDATION, not a claim about the world database:
+# the core will let a level 10 into most of these, and the family would die at
+# the door. The NAMES are not repeated here - achievements.dungeon_name is
+# where the family's dungeons are written down, and a second copy would be a
+# second answer able to disagree with it.
+PLACES = {
+    389: 15,   # Ragefire Chasm
+    43: 17,    # Wailing Caverns
+    36: 17,    # The Deadmines
+    33: 22,    # Shadowfang Keep
+    48: 24,    # Blackfathom Deeps
+    34: 24,    # The Stockade
+    90: 29,    # Gnomeregan
+    47: 30,    # Razorfen Kraul
+}
+
+# Levels short the family would go in on anyway. Two is one bad pull; four is
+# a wipe at the door, and the difference is what the gate exists to say.
+NEAR_ENOUGH = 2
+
+# How far above the family's weakest member a place is worth listing at all.
+# Everything they have already been is listed whatever the number says: a
+# place they have been to is a place they know, and dropping it would lose the
+# only drops this view can honestly report.
+HORIZON = 8
+
+# Enough to say what the place gives up without turning the panel into a loot
+# table. The Chronicle is where the whole list lives.
+DROPS_SHOWN = 4
+
+# Gate words. Status words, so the page sets them in the mono face and never
+# has to work out what to call a family four levels short of somewhere.
+READY = "READY"
+
+# The hue a gate is drawn in. Here rather than in the page for the same reason
+# the word is: "green means they can go" is a judgement about a gate, and the
+# page's job is to know what green looks like on the ground it is painting.
+READY_HUE = "green"
+SHORT_HUE = "amber"
+
+
+def _iso(when) -> str | None:
+    """An ISO string, from either a datetime or something already stringy."""
+    if when is None:
+        return None
+    return when.isoformat() if hasattr(when, "isoformat") else str(when)
+
+
+def speaker_hue(name: str) -> str:
+    """The token name this speaker is always drawn in.
+
+    Keyed on the family's own order rather than on who happened to turn up, so
+    a council Bork sat out does not shuffle everybody else's colour.
+    """
+    canonical = bonds.canon(name)
+    if canonical is None:
+        return OUTSIDER_HUE
+    order = bonds.speaking_order(list(bonds.FAMILY))
+    return SPEAKER_HUES[order.index(canonical) % len(SPEAKER_HUES)]
+
+
+def sittings(rows: list[dict]) -> list[list[dict]]:
+    """Council rows split into sittings, oldest sitting first.
+
+    `rows` are overseer_thought rows in any order; only the family's are kept,
+    because a council is a conversation between people who live together and a
+    stray row from outside it is not part of one.
+    """
+    mine = [row for row in rows if bonds.canon(row.get("character_name", ""))]
+    mine.sort(key=lambda row: row["created_at"])
+    grouped: list[list[dict]] = []
+    for row in mine:
+        if grouped and row["created_at"] - grouped[-1][-1]["created_at"] <= SITTING_GAP:
+            grouped[-1].append(row)
+        else:
+            grouped.append([row])
+    return grouped
+
+
+def transcript(rows: list[dict]) -> list[dict]:
+    """The last sitting, oldest speaker first.
+
+    OLDEST FIRST IS THE FAMILY'S ORDER, not the clock's: the father opens, the
+    mother answers, and the seven-year-old is not the first voice a reader
+    meets. That is `bonds.speaking_order`, which is the same fact the bridge
+    uses when it decides who answers an overheard order - used twice rather
+    than decided twice.
+
+    A speaker who says more than one thing keeps those lines together, in the
+    order they were said. Splitting them by clock would interleave five
+    characters into something no reader could follow.
+    """
+    sitting = sittings(rows)[-1:] or [[]]
+    lines = sitting[0]
+    order = bonds.speaking_order({bonds.canon(row["character_name"])
+                                  for row in lines})
+    rank = {name: index for index, name in enumerate(order)}
+    ordered = sorted(
+        lines,
+        key=lambda row: (rank[bonds.canon(row["character_name"])],
+                         row["created_at"]),
+    )
+    return [{
+        "who": bonds.canon(row["character_name"]),
+        "hue": speaker_hue(row["character_name"]),
+        "text": str(row.get("text") or ""),
+        "at": _iso(row["created_at"]),
+    } for row in ordered]
+
+
+def decision_line(row: dict, quest_titles: dict | None = None) -> str:
+    """What the council carried, as a sentence.
+
+    Read off the goal the council persisted, which is the only part of a
+    council that survives it: the ARGUMENT is written to overseer_thought in
+    the model's words, and the outcome is written as a goal the supervisor can
+    drive. So this reads the outcome and never tries to parse the argument.
+    """
+    who = str(row.get("character_name") or "").strip() or "The family"
+    kind = str(row.get("kind") or "")
+    if kind == "level":
+        return "%s is to reach level %d." % (who, int(row.get("target") or 0))
+    if kind == "quest":
+        title = (quest_titles or {}).get(int(row.get("quest_id") or 0))
+        if title:
+            return "%s is to finish %s." % (who, title)
+        return "%s is to finish the quest the council picked." % who
+    if kind == "skill":
+        return "%s is to learn %s." % (
+            who, str(row.get("skill_name") or "a trade"))
+    return "%s is to see to %s." % (who, kind or "what was agreed")
+
+
+def consensus(goal_rows: list[dict], lines: list[dict],
+              quest_titles: dict | None = None) -> dict | None:
+    """The decision and the vote, or None when nothing is on record.
+
+    THE VOTE IS WHO SPOKE, and it says so in those words. The tally itself is
+    not written down anywhere - `hold` scores the proposals and then throws
+    the numbers away, keeping only the winner - so a count of ayes here would
+    be a number this module invented about a vote it did not see. How many of
+    the family turned up to argue is a fact it does have.
+    """
+    active = [row for row in goal_rows
+              if str(row.get("status") or "") == "active"]
+    if not active:
+        return None
+    won = max(active, key=lambda row: row.get("created_at") or "")
+    spoke = len({line["who"] for line in lines})
+    return {
+        "decision": decision_line(won, quest_titles),
+        "beneficiary": str(won.get("character_name") or ""),
+        "kind": str(won.get("kind") or ""),
+        "spoke": spoke,
+        "family": len(bonds.FAMILY),
+        "vote": "%d OF %d SPOKE" % (spoke, len(bonds.FAMILY)),
+        "at": _iso(won.get("created_at")),
+    }
+
+
+def _weakest(level_rows: list[dict]) -> tuple[str, int] | None:
+    """Whoever is furthest behind, because the whole family walks in together.
+
+    The gate is asked of the LOWEST level and not of the median: a party is
+    gated by the member who dies at the door, and a median would report a
+    family ready while one of them was four levels off it.
+    """
+    known = [(str(row["name"]), int(row.get("level") or 0))
+             for row in level_rows if str(row.get("name") or "")]
+    known = [row for row in known if row[1] > 0]
+    if not known:
+        return None
+    return min(known, key=lambda row: (row[1], row[0]))
+
+
+def gate_word(short: int) -> str:
+    """READY, or how far off it is. A status word, so the page never spells one."""
+    if short <= 0:
+        return READY
+    return "%d LEVEL%s SHORT" % (short, "" if short == 1 else "S")
+
+
+def verdict(short: int, been: bool, drops: list[str], who: str) -> str:
+    """Whether to go in anyway, which is the question a gate always raises.
+
+    A gate on its own reads as a rule, and the family is not run by rules -
+    they went into a dungeon under-levelled the first time and came out with
+    the only loot this view can report. So the gate is always answered.
+    """
+    if short <= 0:
+        if been and drops:
+            return "They have been in and come out with something. Go again."
+        if been:
+            return "They have been in. Nothing came out of it, and nothing is stopping them trying again."
+        return "Nothing is stopping them. Nobody has walked in yet."
+    if short <= NEAR_ENOUGH:
+        return ("Short, and near enough to try anyway: %s is the one who would "
+                "be carried." % who)
+    return ("Not yet. %s is %d levels short, and the family goes in together "
+            "or not at all." % (who, short))
+
+
+def _drops_seen(cards: list[dict]) -> dict:
+    """map id -> what the family has actually watched drop there.
+
+    Their OWN knowledge, and deliberately nothing else. A wiki would list what
+    every boss in the game can drop; this lists what came out of the runs
+    these five have actually done, which is the only thing they can be said to
+    know. A place they have never been reports nothing, and that is the honest
+    answer rather than an empty state.
+    """
+    found: dict = {}
+    for card in cards:
+        if card.get("kind") != "run":
+            continue
+        bucket = found.setdefault(int(card.get("map_id") or 0), {})
+        for item in card.get("loot") or []:
+            name = str(item.get("name") or "")
+            if name:
+                bucket[name] = max(bucket.get(name, -1),
+                                   int(item.get("quality") or 0))
+    return {
+        map_id: [name for name, _ in sorted(bucket.items(),
+                                            key=lambda pair: (-pair[1], pair[0]))]
+        for map_id, bucket in found.items()
+    }
+
+
+def prospects(level_rows: list[dict], cards: list[dict]) -> list[dict]:
+    """Every place worth an opinion, weakest gate first.
+
+    A place the family has already been is listed however far past it they
+    are: it is the only place they know anything about, and dropping it would
+    take the drops with it.
+    """
+    weakest = _weakest(level_rows)
+    if weakest is None:
+        return []
+    who, level = weakest
+    drops = _drops_seen(cards)
+    been = set(drops)
+    out = []
+    for map_id, wants in sorted(PLACES.items(), key=lambda pair: (pair[1], pair[0])):
+        if map_id not in been and wants > level + HORIZON:
+            continue
+        short = wants - level
+        seen = drops.get(map_id, [])
+        out.append({
+            "map_id": map_id,
+            "place": achievements.dungeon_name(map_id),
+            "wants": wants,
+            "short": max(short, 0),
+            "gate": gate_word(short),
+            "hue": READY_HUE if short <= 0 else SHORT_HUE,
+            "ready": short <= 0,
+            "been": map_id in been,
+            "drops": seen[:DROPS_SHOWN],
+            "more_drops": max(len(seen) - DROPS_SHOWN, 0),
+            "verdict": verdict(short, map_id in been, seen, who),
+        })
+    return out
+
+
+def quiet_line(lines: list[dict]) -> str:
+    """What to say when no council is on record. Empty when there is one."""
+    if lines:
+        return ""
+    return ("No council is on record. They meet on their own cadence and only "
+            "when somebody has something to raise; an empty transcript is a "
+            "quiet week, not a broken page.")
+
+
+def undecided_line(agreed: dict | None) -> str:
+    """Why the consensus block is empty. Empty when it is not."""
+    if agreed is not None:
+        return ""
+    return ("Nothing the supervisor can drive is on the table. A council that "
+            "agrees on a quiet day has still decided something real - it is "
+            "simply not written as a goal, so this block has nothing to show.")
+
+
+def build_council(thought_rows: list[dict], goal_rows: list[dict],
+                  level_rows: list[dict], cards: list[dict],
+                  quest_titles: dict | None = None,
+                  now: datetime | None = None) -> dict:
+    """Rows in, the Council tab's JSON out.
+
+    thought_rows  overseer_thought rows with source 'council', any order
+    goal_rows     overseer_goal rows, any status
+    level_rows    name -> level for the family, from `characters`
+    cards         the Chronicle's cards, for what the family has seen drop
+    quest_titles  quest id -> LogTitle, so a quest decision can be named
+    now           the clock, injectable so the suite can stand still
+
+    EVERY ONE OF THOSE MAY BE EMPTY, exactly as build_agenda's may. A realm
+    whose schema predates a table hands in [] for it and gets a thinner view,
+    never an exception.
+    """
+    now = now or datetime.now()
+    lines = transcript(thought_rows)
+    agreed = consensus(goal_rows, lines, quest_titles)
+    return {
+        "generated_at": _iso(now),
+        "transcript": lines,
+        "spoke": sorted({line["who"] for line in lines}),
+        "consensus": agreed,
+        "quiet": quiet_line(lines),
+        "undecided": undecided_line(agreed),
+        "prospects": prospects(level_rows, cards),
+    }

@@ -1,4 +1,11 @@
-"""Pure builder for the Achievements tab: what the family has DONE.
+"""Pure builder for the Chronicle: what the family has DONE.
+
+The view was called Achievements until infra#2597 redesigned it; the tickets
+below and several comments in this file still use the old name, and they are
+about the same view. What the redesign changed here is that the WORDS on a
+card are built in this module now - the kind, the hue it is drawn in, the body
+line and the character's own line about it - rather than being assembled in
+JavaScript where no test in this suite could reach them.
 
 Every other tab answers a present-tense question - where are they, are they
 all right, what are they wearing, what are they working on. This one answers
@@ -692,6 +699,168 @@ def wanted_bosses(run_rows: list[dict]) -> list[int]:
     return sorted(creatures)
 
 
+# --- the Chronicle's card furniture (infra#2597) -----------------------------------------
+#
+# A card is drawn as a date, a KIND in a hue, a title, a muted body, and the
+# line the character gets to say about it. All five are judgement and all five
+# live here. They used to be assembled in the page - "led by X, 21m in the
+# instance" was three JavaScript ternaries - which meant the sentence a reader
+# saw was written somewhere no test in this suite could reach.
+#
+# THE HUE IS A TOKEN NAME, NEVER A COLOUR. index.html owns what --cyan looks
+# like and it owns it twice, once per theme; a hex chosen here would be mixed
+# for one ground and wrong on the other.
+
+# The word each kind is announced by. Status words, in the mono face.
+KIND_WORDS = {RUN: "DUNGEON RUN", QUEST: "QUEST", LEVEL: "LEVEL",
+              FIRST: "FIRST"}
+# A run nobody got anything out of is not a run, and calling it one flatters
+# the family. It gets its own word and its own quiet hue.
+ATTEMPT_WORD = "ATTEMPT"
+ATTEMPT_HUE = "muted"
+KIND_HUES = {RUN: "cyan", QUEST: "green", LEVEL: "amber", FIRST: "vermilion"}
+
+
+def card_word(card: dict) -> str:
+    """The kind, as the word the page prints."""
+    if card["kind"] == RUN and not card.get("gained"):
+        return ATTEMPT_WORD
+    return KIND_WORDS.get(card["kind"], card["kind"].upper())
+
+
+def card_hue(card: dict) -> str:
+    """The token name the kind is drawn in."""
+    if card["kind"] == RUN and not card.get("gained"):
+        return ATTEMPT_HUE
+    return KIND_HUES.get(card["kind"], "muted")
+
+
+def _run_body(card: dict) -> str:
+    """How long they were in there, and who took them.
+
+    The run ROW and the time anything actually happened are two different
+    spans, and the difference matters: a row left open by a crash says three
+    hours while the family was inside for twenty minutes. Both are reported
+    when they disagree, and only the honest one when they do not.
+    """
+    fight = card.get("active_duration") or card["duration"]
+    if card.get("active_duration") and card["duration"] != card["active_duration"]:
+        fight = "%s in the instance (the run row stayed open %s)" % (
+            card["active_duration"], card["duration"])
+    elif card.get("active_duration"):
+        fight = "%s in the instance" % card["active_duration"]
+    body = "led by %s, %s" % (card["leader"], fight)
+    if card.get("state") == "active":
+        body += ", still inside"
+    return body
+
+
+def card_body(card: dict) -> str:
+    """The muted line under the title: who, and how it went."""
+    kind = card["kind"]
+    if kind == RUN:
+        return _run_body(card)
+    if kind == QUEST:
+        return "%s %s at level %d" % (
+            card["who"],
+            "turned it in" if card["turned_in"] else "finished the objectives",
+            card["level"])
+    if kind == LEVEL:
+        return str(card["who"])
+    if kind == FIRST:
+        who = card["who"]
+        who = ", ".join(who) if isinstance(who, list) else str(who)
+        return who + (": " + card["detail"] if card.get("detail") else "")
+    return ""
+
+
+def _first_name(who) -> str:
+    if isinstance(who, list):
+        return str(who[0]) if who else ""
+    return str(who or "")
+
+
+def card_line(card: dict) -> dict | None:
+    """The line the character gets to say about it, or None.
+
+    SHORT, PRESENT TENSE, AND TIED TO A FACT ON THE CARD. Everyone in this
+    family talks the same way - bonds.py says so, and says why - so these are
+    written in that register rather than in five. Every one of them names
+    something the row actually contains: the dungeon, the level, the deed.
+    Nothing here invents an event; it only says the one on the card out loud.
+
+    A card with nobody to attribute a line to gets None, and the page draws
+    nothing. An unattributed quote is the worst of both: it reads as a voice
+    and belongs to no one.
+    """
+    kind = card["kind"]
+    if kind == RUN:
+        where = card["dungeon"]
+        if card.get("gained"):
+            if card.get("cleared"):
+                return {"who": card["leader"],
+                        "text": "We finished %s." % where}
+            return {"who": card["leader"],
+                    "text": "We got into %s, and we got out again." % where}
+        if card.get("deaths"):
+            return {"who": card["deaths"][0]["who"],
+                    "text": "%s put me down." % where}
+        return {"who": card["leader"],
+                "text": "We walked into %s and nothing came of it." % where}
+    if kind == QUEST:
+        if card["turned_in"]:
+            return {"who": card["who"],
+                    "text": "I gave it back. That is one less thing."}
+        return {"who": card["who"],
+                "text": "The work is done. The walking back is not."}
+    if kind == LEVEL:
+        return {"who": card["who"], "text": "%d now." % card["level"]}
+    if kind == FIRST:
+        who = _first_name(card["who"])
+        if not who:
+            return None
+        return {"who": who, "text": "Nobody in the family had done that before."}
+    return None
+
+
+def dress(card: dict) -> dict:
+    """One card, with the four things the page is not allowed to decide."""
+    card["word"] = card_word(card)
+    card["hue"] = card_hue(card)
+    card["body"] = card_body(card)
+    card["line"] = card_line(card)
+    return card
+
+
+def strip(visits: int, runs: int, attempts: int, firsts: int,
+          boss_kills_recorded: bool) -> list[dict]:
+    """The stat strip over the timeline: five counted things, in mono.
+
+    The last tile is not a count and is the most useful one on the strip. Boss
+    kills are INFERRED from loot somebody equipped, because the module does not
+    write boss_kill events yet, and a strip that quietly showed a number would
+    be presenting a guess as a measurement. The day those events arrive the
+    tile turns into the word RECORDED on its own.
+    """
+    return [
+        {"label": "RUNS", "value": str(runs)},
+        {"label": "ATTEMPTS", "value": str(attempts)},
+        {"label": "VISITS", "value": str(visits)},
+        {"label": "FIRSTS", "value": str(firsts)},
+        {"label": "BOSS KILLS",
+         "value": "RECORDED" if boss_kills_recorded else "INFERRED"},
+    ]
+
+
+def provenance(boss_kills_recorded: bool) -> str:
+    """What the reader has to know to read the strip honestly. Empty when nothing does."""
+    if boss_kills_recorded:
+        return ""
+    return ("Boss kills are not recorded yet. Where this page names a boss it "
+            "inferred one from a drop somebody equipped, so a boss it does not "
+            "name may well have fallen.")
+
+
 # --- the timeline -----------------------------------------------------------------------
 
 def sort_key(card: dict) -> tuple:
@@ -710,7 +879,7 @@ def build_achievements(run_rows: list[dict], event_rows: list[dict],
                        death_rows: list[dict], items: dict, icons: dict,
                        boss_drops: dict, quest_rewards: dict,
                        roster: list[str], now: datetime | None = None) -> dict:
-    """Rows in, the Achievements tab's JSON out.
+    """Rows in, the Chronicle's JSON out.
 
     run_rows      overseer_dungeon_run rows
     event_rows    overseer_event rows, any kind
@@ -733,14 +902,22 @@ def build_achievements(run_rows: list[dict], event_rows: list[dict],
     quests = quest_cards(events, quest_rewards, items, icons)
     levels = [c for c in level_cards(events) if c["milestone"]]
     firsts = first_cards(runs, events, items, roster)
-    cards = timeline(runs + quests + levels + firsts)
+    cards = [dress(c) for c in timeline(runs + quests + levels + firsts)]
+    recorded = any(e["kind"] == BOSS_KILL for e in events)
+    done = sum(1 for r in runs if r["gained"])
+    tried = sum(1 for r in runs if not r["gained"])
     return {
         "generated_at": _iso(now),
         "roster": list(roster),
         "visits": visits,
-        "runs": sum(1 for r in runs if r["gained"]),
-        "attempts": sum(1 for r in runs if not r["gained"]),
+        "runs": done,
+        "attempts": tried,
         "firsts": firsts,
         "cards": cards,
-        "boss_kills_recorded": any(e["kind"] == BOSS_KILL for e in events),
+        "boss_kills_recorded": recorded,
+        # The stat strip and the sentence under it. Counted here rather than
+        # composed in the page, for the same reason every card's body is: a
+        # number with a word beside it is a claim, and a claim is judgement.
+        "strip": strip(visits, done, tried, len(firsts), recorded),
+        "provenance": provenance(recorded),
     }

@@ -24,6 +24,8 @@ import agenda
 import armory
 import basepath
 import chat
+import council
+import eye
 import family
 import frames
 import modelviewer
@@ -1123,6 +1125,127 @@ def _ensure_stream_store() -> None:
             cur.execute(sql)
 
 
+# --- the Council and the Eye (infra#2597) -----------------------------------
+#
+# TWO FETCHES AND NO JUDGEMENT. Both hand their rows straight to a pure module
+# (council.build_council, eye.build_eye) and neither decides anything: not the
+# order of a transcript, not whether a family is high enough for a dungeon,
+# not whether a tier is real. That is the seam rule this whole directory is
+# built on, and these two views are the ones most tempting to break it - a
+# transcript wants sorting and a rollup wants counting, and both look like
+# nothing until the page and the module disagree about the family.
+#
+# THEY SIT HERE, between the stream store and the current-goal banner, because
+# every other fetch window in this file is claimed by a suite that slices it
+# by name. The names are not repeated in this comment on purpose: the slices
+# are taken with a string index, so a comment that spells a boundary out
+# BECOMES that boundary, and the first draft of this block moved the Wealth
+# suite's window up here by saying where it started.
+#
+# EVERY OVERSEER TABLE GOES THROUGH _guarded, for the reason the banner below
+# spells out at length: infra#3172 turned a whole tab into a 503 on the live
+# realm over one unguarded read of a table that world does not have. _guarded
+# itself is defined with that banner, a few dozen lines down, and is reached
+# here by name at call time like every other helper in this file.
+
+# Nobody reads a transcript longer than this, and a council is a handful of
+# lines. Enough to hold the last sitting several times over, so the module can
+# find the sitting boundary rather than being handed a truncated one.
+_COUNCIL_LINES = 60
+
+
+def _fetch_council() -> dict:
+    """Everything the Council view reads, in one connection.
+
+    Names come from bonds via family.roster(), never from the request, so
+    every roster clause is a fixed IN list of five with no user input in it.
+
+    Not subject to the 60s snapshot freshness rule and deliberately so: a
+    council is a thing that HAPPENED, and it is still worth reading an hour
+    after everybody logged out.
+    """
+    names = family.roster()
+    holes = ", ".join(["%s"] * len(names))
+    conn = _connect()
+    try:
+        with conn.cursor() as cur:
+            # S608: `holes` is a run of placeholders sized by the roster, and
+            # every VALUE is bound by the driver on the line below.
+            thought_rows = _guarded(
+                cur,
+                "SELECT character_name, text, created_at "  # noqa: S608
+                "FROM overseer_thought "
+                f"WHERE source = %s AND character_name IN ({holes}) "
+                f"ORDER BY id DESC LIMIT {_COUNCIL_LINES}",
+                (council.COUNCIL_SOURCE, *names), "", "overseer_thought")
+            goal_rows = _guarded(
+                cur,
+                "SELECT character_name, kind, skill_name, target, status, "
+                "quest_id, created_at FROM overseer_goal "
+                "ORDER BY created_at DESC LIMIT 200",
+                (), "", "overseer_goal")
+            # SAVED levels, not the snapshot's. The gate on a dungeon has to
+            # answer "are they high enough" for a family who logged out ten
+            # minutes ago, and a snapshot swept clean would report every
+            # member at level 0 and every door shut.
+            level_rows = _guarded(
+                cur,
+                f"SELECT name, level FROM characters WHERE name IN ({holes})",  # noqa: S608
+                tuple(names), "", "characters")
+            wanted = {int(r["quest_id"]) for r in goal_rows
+                      if int(r.get("quest_id") or 0)}
+            quest_titles = {}
+            if wanted:
+                qholes = ", ".join(["%s"] * len(wanted))
+                cur.execute(
+                    "SELECT ID, LogTitle FROM acore_world.quest_template "  # noqa: S608
+                    f"WHERE ID IN ({qholes})",
+                    tuple(sorted(wanted)),
+                )
+                quest_titles = {int(r["ID"]): r["LogTitle"]
+                                for r in cur.fetchall()}
+    finally:
+        conn.close()
+    return {"thought_rows": thought_rows, "goal_rows": goal_rows,
+            "level_rows": level_rows, "quest_titles": quest_titles}
+
+
+def _fetch_eye() -> dict:
+    """The four counts the rollup is built from.
+
+    THE GUILD COUNT IS A REAL READ. The Eye reports no guild because the guild
+    table was counted and had nothing in it, not because somebody remembered
+    that no guild had been made - and the day one exists that tier turns on
+    with no change to this file or to eye.py.
+    """
+    names = family.roster()
+    holes = ", ".join(["%s"] * len(names))
+    conn = _connect()
+    try:
+        with conn.cursor() as cur:
+            # Same 60s freshness rule as /api/map: the two surfaces must not
+            # disagree about who is in the world.
+            snapshot_rows = _guarded(
+                cur,
+                "SELECT name, is_bot, group_leader FROM overseer_snapshot "
+                "WHERE updated_at > NOW() - INTERVAL 60 SECOND",
+                (), "", "overseer_snapshot")
+            family_rows = _guarded(
+                cur,
+                f"SELECT name FROM characters WHERE name IN ({holes})",  # noqa: S608
+                tuple(names), "", "characters")
+            realm_rows = _guarded(
+                cur, "SELECT COUNT(*) AS characters FROM characters",
+                (), "", "characters")
+            guild_rows = _guarded(
+                cur, "SELECT COUNT(*) AS guilds FROM guild",
+                (), "", "guild")
+    finally:
+        conn.close()
+    return {"snapshot_rows": snapshot_rows, "family_rows": family_rows,
+            "realm_rows": realm_rows, "guild_rows": guild_rows}
+
+
 # --- the current-goal banner (infra#3205) -----------------------------------
 #
 # WHY THIS FETCH IS ALL GUARDS. Every table below except `instance` and
@@ -1737,6 +1860,57 @@ class Handler(BaseHTTPRequestHandler):
         payload = chat.build_timeline(name, rows, db_now, limit)
         self._send(200, "application/json", json.dumps(payload).encode())
 
+    def _council(self, query: dict) -> None:
+        """GET /api/council - the last sitting, what it carried, where next.
+
+        Deliberately BELOW the thought handler and ABOVE the wealth one. Four
+        suites slice this class by handler name - the Family and Armory ones
+        end at the thought handler, the Wealth and current-goal ones run from
+        theirs to the POST dispatcher - and this gap is the only window none
+        of them claims. Naming those boundaries in full here would be worse
+        than useless: the slices are taken by string index, so a docstring
+        that spells one out becomes the boundary.
+
+        The Chronicle's own builder is called here to supply what the family
+        has watched drop, rather than the prospects panel re-deriving it: which
+        run a drop belongs to is a question achievements.py already answers,
+        and a second answer to it here would be free to disagree about the
+        only knowledge this view can honestly report.
+
+        No name parameter, like every other family endpoint: WHO the family is
+        belongs to bonds.
+        """
+        try:
+            cards = achievements.build_achievements(**_fetch_achievements())["cards"]
+            payload = council.build_council(**_fetch_council(), cards=cards)
+            self._send(200, "application/json", json.dumps(payload).encode())
+        except Exception:
+            # Same contract as every other poll: the view keeps the transcript
+            # it has drawn and says it may be stale. A blanked council reads as
+            # "the family has stopped talking", which is a far stronger claim
+            # than "this one read failed".
+            log.exception("council query failed")
+            self._send(503, "application/json", b'{"error": "world unreachable"}')
+
+    def _eye(self, query: dict) -> None:
+        """GET /api/eye - the server rollup, tier by tier, honestly.
+
+        Beside the council handler, in the same unclaimed window and for the
+        same reason.
+
+        No name parameter: this asks about the realm as one thing, and the one
+        roster clause it does have comes from bonds.
+        """
+        try:
+            payload = eye.build_eye(**_fetch_eye())
+            self._send(200, "application/json", json.dumps(payload).encode())
+        except Exception:
+            # Blanking this one would be the worst failure on the page: a
+            # rollup that exists to say what is NOT real, rendering empty,
+            # reads as a realm where nothing is real at all.
+            log.exception("eye query failed")
+            self._send(503, "application/json", b'{"error": "world unreachable"}')
+
     def _wealth(self, query: dict) -> None:
         """GET /api/wealth - what the five are carrying, and what it is worth.
 
@@ -2142,6 +2316,8 @@ class Handler(BaseHTTPRequestHandler):
         "/api/questlog": _questlog,
         "/api/needs": _needs,
         "/api/achievements": _achievements,
+        "/api/council": _council,
+        "/api/eye": _eye,
         "/api/agenda": _agenda,
         "/api/thoughts": _thoughts,
         "/api/watch": _watch_state,

@@ -1,13 +1,13 @@
 """The current-goal banner's page contract (infra#3205).
 
 Asserted against index.html as source, the way test_family_tab.py,
-test_armory_tab.py and test_achievements_tab.py do: map_server.py imports
+test_armory_tab.py and test_chronicle_tab.py do: map_server.py imports
 pymysql and the page has no other test seam.
 
 The first class here is about WHERE the code sits, and it is not bookkeeping.
 Three tab suites slice this file by their own banners - the Family from its
 banner to loadZones().then(, the Armory and the Wealth view from theirs to
-</script>, the Achievements from its to the Armory's - and anything dropped
+</script>, the Chronicle from its to the Council's - and anything dropped
 inside one of those windows silently becomes part of a contract about a
 different tab. This banner is not a tab at all, so it has to sit in the one
 gap none of them claim.
@@ -18,8 +18,8 @@ import unittest
 HERE = pathlib.Path(__file__).resolve().parent.parent
 BANNER = "// --- the current goal banner (infra#3205)"
 CSS_BANNER = "/* --- the current goal banner (infra#3205)"
-ACH = "// --- the Achievements tab (mod-overseer#88, mod-overseer#152)"
-ACH_CSS = "/* --- the Achievements tab (mod-overseer#88, mod-overseer#152)"
+CHRONICLE = "// --- the Chronicle (infra#2597, mod-overseer#88, mod-overseer#152)"
+CHRONICLE_CSS = "/* --- the Chronicle (infra#2597, mod-overseer#88, mod-overseer#152)"
 FAMILY_CSS = "--- the Family tab (infra#2892)"
 
 
@@ -29,16 +29,18 @@ class WhereTheCodeIsAllowedToSit(unittest.TestCase):
         cls.page = (HERE / "index.html").read_text(encoding="utf-8")
 
     def test_the_styles_sit_above_every_tabs_css_slice(self):
-        """The earliest CSS window on the page starts at the Achievements
-        banner, so this block goes ahead of it or it is swept into one."""
-        self.assertLess(self.page.index(CSS_BANNER), self.page.index(ACH_CSS))
+        """The earliest CSS window on the page starts at the redesign
+        furniture the Chronicle heads, so this block goes ahead of it or it
+        is swept into one."""
+        self.assertLess(self.page.index(CSS_BANNER),
+                        self.page.index(CHRONICLE_CSS))
         self.assertLess(self.page.index(CSS_BANNER),
                         self.page.index(FAMILY_CSS))
 
-    def test_the_script_sits_between_the_family_slice_and_the_achievements(self):
+    def test_the_script_sits_between_the_family_slice_and_the_chronicle(self):
         start = self.page.index(BANNER)
         self.assertGreater(start, self.page.index("loadZones().then("))
-        self.assertLess(start, self.page.index(ACH))
+        self.assertLess(start, self.page.index(CHRONICLE))
 
     def test_the_handler_sits_outside_the_family_and_armory_windows(self):
         """Both suites slice map_server.py to `def _thoughts`."""
@@ -59,7 +61,9 @@ class TheBannerIsAlwaysVisible(unittest.TestCase):
         agenda_at = self.page.index('<div id="agenda">')
         self.assertLess(agenda_at, self.page.index('<section id="family">'))
         self.assertLess(agenda_at, self.page.index('<section id="armory">'))
-        self.assertLess(agenda_at, self.page.index('<section id="achievements">'))
+        self.assertLess(agenda_at, self.page.index('<section id="chronicle">'))
+        self.assertLess(agenda_at, self.page.index('<section id="council">'))
+        self.assertLess(agenda_at, self.page.index('<section id="eye">'))
 
     def test_it_is_above_the_tabs_and_below_the_outage_banner(self):
         """An unreachable world outranks anything this can say about a goal."""
@@ -77,15 +81,15 @@ class TheBannerIsAlwaysVisible(unittest.TestCase):
         self.assertNotIn("agEl", show)
 
     def test_it_polls_unconditionally_not_per_view(self):
-        """Contrast setInterval(() => { if (view === ACH_VIEW) ... }) - the
-        Achievements tab polls only while it is open, and this must not."""
+        """Contrast setInterval(() => { if (view === CHRONICLE_VIEW) ... }) -
+        the Chronicle polls only while it is open, and this must not."""
         tab = self._tab()
         self.assertIn("setInterval(pollAgenda, 10000);", tab)
         self.assertNotIn("if (view ===", tab)
 
     def _tab(self):
         start = self.page.index(BANNER)
-        return self.page[start:self.page.index(ACH, start)]
+        return self.page[start:self.page.index(CHRONICLE, start)]
 
 
 class TheBannerDrawsWhatItIsGiven(unittest.TestCase):
@@ -93,10 +97,10 @@ class TheBannerDrawsWhatItIsGiven(unittest.TestCase):
     def setUpClass(cls):
         cls.page = (HERE / "index.html").read_text(encoding="utf-8")
         start = cls.page.index(BANNER)
-        cls.tab = cls.page[start:cls.page.index(ACH, start)]
+        cls.tab = cls.page[start:cls.page.index(CHRONICLE, start)]
         css = cls.page.index(CSS_BANNER)
         # To the `nav` rule that follows the block, NOT to the next tab
-        # banner: the Achievements CSS is hundreds of lines further down, and
+        # banner: the Chronicle CSS is hundreds of lines further down, and
         # slicing that far would sweep the panel and player styles in here and
         # let an assertion pass on a rule belonging to something else.
         cls.css = cls.page[css:cls.page.index("  nav { display:flex", css)]

@@ -2,7 +2,7 @@
 
 Asserted against index.html and map_server.py as source, the way
 test_agenda_banner.py, test_family_tab.py, test_armory_tab.py and
-test_achievements_tab.py do: map_server.py imports pymysql and the page has no
+test_chronicle_tab.py do: map_server.py imports pymysql and the page has no
 other test seam.
 
 WHAT IS ACTUALLY BEING PROTECTED HERE. This is the only element on the site that
@@ -27,7 +27,7 @@ CSS_BANNER = "/* --- which world this is (quadseven/mod-overseer#184)"
 JS_BANNER = "// --- which world this is (quadseven/mod-overseer#184)"
 AGENDA_CSS = "/* --- the current goal banner (infra#3205)"
 AGENDA_JS = "// --- the current goal banner (infra#3205)"
-ACH_CSS = "/* --- the Achievements tab (mod-overseer#88, mod-overseer#152)"
+ACH_CSS = "/* --- the redesign furniture (infra#2597)"
 FAMILY_CSS = "--- the Family tab (infra#2892)"
 
 # The C++ module that writes the table this banner reads, through the submodule
@@ -46,7 +46,7 @@ class WhereTheCodeIsAllowedToSit(unittest.TestCase):
 
     def test_the_styles_sit_above_every_other_css_slice(self):
         """The earliest CSS windows on the page start at the current-goal
-        banner and the Achievements banner, so this block goes ahead of both or
+        banner and the redesign furniture, so this block goes ahead of both or
         it is swept into one of them."""
         self.assertLess(self.page.index(CSS_BANNER), self.page.index(AGENDA_CSS))
         self.assertLess(self.page.index(CSS_BANNER), self.page.index(ACH_CSS))
@@ -54,7 +54,7 @@ class WhereTheCodeIsAllowedToSit(unittest.TestCase):
 
     def test_the_script_sits_in_the_one_gap_no_suite_claims(self):
         """The Family tab's window ends at loadZones().then(, the current-goal
-        banner's begins at its own comment, and the Achievements and Armory
+        banner's begins at its own comment, and the Chronicle and Armory
         windows are further down again."""
         start = self.page.index(JS_BANNER)
         self.assertGreater(start, self.page.index("loadZones().then("))
@@ -94,7 +94,7 @@ class TheBannerIsAlwaysVisible(unittest.TestCase):
     def test_it_is_not_inside_any_section(self):
         realm_at = self.page.index('<div id="realm"')
         for section in ('<section id="family">', '<section id="armory">',
-                        '<section id="achievements">', '<div id="wrap">'):
+                        '<section id="chronicle">', '<div id="wrap">'):
             self.assertLess(realm_at, self.page.index(section), section)
 
     def test_it_is_the_first_thing_in_the_body_and_above_every_other_banner(self):

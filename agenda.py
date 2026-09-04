@@ -3,7 +3,7 @@
 infra#3205. Every view this page already has answers a different question.
 The map says WHERE the five are. The Family tab says whether they are alive.
 The Armory says what they are wearing, the Quest board what is in their logs,
-the Achievements tab what they have already done. None of them says what the
+the Chronicle what they have already done. None of them says what the
 family is CURRENTLY TRYING TO ACHIEVE, which is the question Evan asks out
 loud every time he opens the page, and the only one he still has to ask a
 person to answer.
