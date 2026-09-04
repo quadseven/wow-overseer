@@ -41,13 +41,32 @@ they are imported from there rather than retyped: two modules disagreeing
 about where the backpack starts would be two different answers to "how full
 is he", both rendered, neither flagged.
 
+  3. THERE IS NO GUILD, SO THERE IS NO GUILD BANK, and drawing an empty vault
+     on the strength of that is the same mistake as drawing a blank auction
+     panel. What is worth a reader's time is the ROAD to one: travel to a
+     petitioner and to a guild banker both work, and buying a charter,
+     collecting signatures, registering, depositing and withdrawing are not
+     written (infra#2831). Whether a guild exists is asked of the database
+     rather than assumed, so the sentence stops being drawn the day one does.
+
 Same seam rule as map_core, panel, family and armory (infra#2597): the HTTP
 adapter fetches rows and does nothing else. Every judgement here - what
 counts as carried, what "full" means, which items are worth naming, what the
 auction table can and cannot honestly say - lives in this module where the
 stdlib suite can reach it without a database.
 
-Tickets: quadseven/mod-overseer#88, quadseven/mod-overseer#147.
+AND SO DOES EVERY WORD ON THE PAGE. The redesign made Bags its own tab, and
+the rewrite that came with it moved the last of the judgement out of
+index.html: the headline finding, the labels on the stat strip, when a bag
+meter turns amber, the word for an empty purse, and the reason each empty
+panel is empty were all composed in JavaScript, where no test could reach
+them. They are composed here now, from the payload they describe, and the
+page turns a `tone` into a class name and draws what it is handed. The rule
+of thumb that keeps it that way: if a string would be read by a person, it is
+built in this module; if it is a class name or a pixel, it is the page's.
+
+Tickets: quadseven/mod-overseer#88, quadseven/mod-overseer#147, infra#2597,
+infra#2831.
 """
 from __future__ import annotations
 
@@ -114,9 +133,71 @@ EQUIPPED = "equipped"
 CARRIED = "carried"
 ELSEWHERE = "elsewhere"
 
+# What the notable list calls a worn item. Its opposite is not a constant: an
+# item that is not worn is named by the container it sits in, which is the
+# more useful half of the answer. See place_tone() for why one of the two is
+# drawn in amber and the other is not.
+PLACE_WORN = "worn"
+
+# --- how loud a fact is drawn ----------------------------------------------
+# THE PAGE PICKS NO COLOURS. A full bag is vermilion and an empty bag position
+# is amber because those two facts mean different things and want different
+# fixes - sell something, versus find him a bag - and which of those a number
+# is is a judgement about the data, not about the stylesheet. So everything
+# this module composes carries the tone it should be drawn in, and index.html
+# turns a tone into a class name and does nothing else with it (infra#2597).
+ALARM = "alarm"       # vermilion: this is stopping a character from playing
+CAUTION = "caution"   # amber: worth acting on, and nobody is stuck yet
+GOOD = "good"         # green: worth noticing, nothing to do
+PLAIN = ""            # a fact with no verdict attached
+
+# The word for an empty purse, an unsellable stack and a section with no rows
+# in it. One word, in one place, because "nothing" and "none" and "0c" drawn
+# on the same card for the same condition is how a panel starts looking like
+# three different panels.
+NOTHING = "nothing"
+NONE = "none"
+
+# A COUNT READS AS A WORD IN A SENTENCE AND AS A DIGIT IN A READOUT. "One free
+# slot in the whole family" is the finding; "1 of 190" is the number under it,
+# and the number is set in the mono face precisely so it can be scanned rather
+# than read. Anything past ten is a digit in both, because nobody reads "one
+# hundred and eighty-nine" faster than they read 189.
+NUMBER_WORDS = ("no", "one", "two", "three", "four", "five", "six", "seven",
+                "eight", "nine", "ten")
+
+
+def spell(count: int) -> str:
+    """A small count as the word for it, so a sentence reads as a sentence."""
+    if 0 <= count < len(NUMBER_WORDS):
+        return NUMBER_WORDS[count]
+    return str(count)
+
+
+def plural(count: int, one: str, many: str | None = None) -> str:
+    """'1 bag', '3 bags', and the irregulars spelled out where they occur.
+
+    Worth a function rather than an inline ternary for one reason: a sentence
+    that says "1 bags" reads as a bug in the number, not in the grammar, and
+    somebody goes looking for the wrong thing.
+    """
+    return one if count == 1 else (many if many is not None else one + "s")
+
+
+def sentence(text: str) -> str:
+    """First letter up.
+
+    Capitalised at the END of composition on purpose. A lead reads "one free
+    slot in the whole family", and the first word is a COUNT that changes with
+    the data; capitalising the fragment as it is built means one branch says
+    "One" and the next says "no", which is exactly the sort of difference
+    nobody notices in review.
+    """
+    return text[:1].upper() + text[1:]
+
 
 def coins(copper: int | None) -> dict:
-    """Copper -> the three coins, ALWAYS a dict.
+    """Copper -> the three coins, ALWAYS a dict, and the words for them.
 
     armory.money() returns None for nothing, which is right for a tooltip
     line that should not be drawn at all. Here nothing is a real answer -
@@ -126,15 +207,34 @@ def coins(copper: int | None) -> dict:
     A negative purse is not a state `characters.money` can hold (it is an
     unsigned column), so a negative reads as zero rather than as three
     negative coins that would look like a rendering bug.
+
+    `text` IS PART OF THE ANSWER, not a convenience. The page draws money in
+    three coloured spans when it has room and as one string when it does not
+    (a tooltip line, a stat note), and the second form used to be built in
+    JavaScript - which meant the word for an empty purse was typed into
+    index.html, where nothing tests it and it can disagree with this module
+    about whether zero copper is "nothing", "0c" or a blank space.
     """
     total = int(copper or 0)
     if total < 0:
         total = 0
+    gold = total // COPPER_PER_GOLD
+    silver = total // COPPER_PER_SILVER % SILVER_PER_GOLD
+    remainder = total % COPPER_PER_SILVER
+    bits = []
+    if gold:
+        bits.append("%dg" % gold)
+    # Silver is drawn whenever gold is, so "1g 0s 4c" reads as one amount
+    # rather than as a gold piece and four coppers that lost something.
+    if gold or silver:
+        bits.append("%ds" % silver)
+    bits.append("%dc" % remainder)
     return {
-        "gold": total // COPPER_PER_GOLD,
-        "silver": total // COPPER_PER_SILVER % SILVER_PER_GOLD,
-        "copper": total % COPPER_PER_SILVER,
+        "gold": gold,
+        "silver": silver,
+        "copper": remainder,
         "total": total,
+        "text": " ".join(bits) if total else NOTHING,
     }
 
 
@@ -214,6 +314,64 @@ def stack_value(row: dict) -> int:
     return int(row.get("sell_price") or 0) * int(row.get("count") or 1)
 
 
+def stack_label(payload: dict) -> str:
+    """'Linen Cloth', or 'Linen Cloth x20'.
+
+    One place decides whether a stack count is drawn and how, because the same
+    name is written on a bag square, in the notable list and on an auction
+    row, and three copies of `count > 1 ? " x" + count : ""` is three chances
+    for one of them to start saying "x1".
+    """
+    count = payload["count"]
+    return payload["name"] + (" x%d" % count if count > 1 else "")
+
+
+def place_label(where: str, container: str | None) -> str | None:
+    """'worn', or 'in Backpack'. The half of the notable list that is a verdict.
+
+    "Why is that rare sitting in a bag" is the question this list gets scanned
+    for, so WHERE a thing is has to be a word on the row rather than something
+    the reader infers from a colour. The container's name comes from the
+    container, so the label under a bag and the label on a notable item inside
+    it can never disagree about what that bag is called.
+    """
+    if where == EQUIPPED:
+        return PLACE_WORN
+    return "in %s" % container if container else None
+
+
+def place_tone(where: str, container: str | None) -> str:
+    """A bagged item is drawn in amber and a worn one is not.
+
+    Not decoration. An item being WORN is an item where it belongs; the same
+    item loose in a bag is a spare, a mistake, or gold nobody has banked. Only
+    one of those two states is worth an eye, so only one of them is coloured.
+    """
+    if where == EQUIPPED:
+        return PLAIN
+    return CAUTION if container else PLAIN
+
+
+def item_tip(payload: dict) -> str:
+    """The lines the game's own tooltip would carry, as one string.
+
+    A real tooltip card is the Armory's, and it is built from stats this view
+    does not fetch; borrowing it would mean fetching every carried item's
+    stats in order to draw a bag grid, which is a hundred times the data for
+    a picture. So the page hangs this on a title attribute instead - and it is
+    composed HERE because "no vendor value" is a sentence about what a
+    SellPrice of 0 means, which is the same judgement stack_value() makes.
+    """
+    facts = [payload["quality_name"]]
+    if payload["kind"]:
+        facts.append(payload["kind"])
+    if payload["item_level"]:
+        facts.append("item level %d" % payload["item_level"])
+    worth = ("vendor " + payload["value"]["text"] if payload["sell_price"]
+             else "no vendor value")
+    return "%s (%s) %s" % (payload["stack"], ", ".join(facts), worth)
+
+
 def item_payload(row: dict, icons: dict[int, str], where: str,
                  container: str | None = None, position: int | None = None) -> dict:
     """One inventory row, as the page draws it.
@@ -232,7 +390,7 @@ def item_payload(row: dict, icons: dict[int, str], where: str,
     quality = row.get("quality")
     count = int(row.get("count") or 1)
     value = stack_value(row)
-    return {
+    payload = {
         "slot": row["slot"],
         "entry": row["entry"],
         "name": item_name(row),
@@ -253,6 +411,11 @@ def item_payload(row: dict, icons: dict[int, str], where: str,
         "position": position,
         "wowhead": WOWHEAD % row["entry"],
     }
+    payload["stack"] = stack_label(payload)
+    payload["place"] = place_label(where, container)
+    payload["place_tone"] = place_tone(where, container)
+    payload["tip"] = item_tip(payload)
+    return payload
 
 
 def _container(key: str, position: int, slots: int, name: str,
@@ -341,6 +504,17 @@ def split_inventory(rows: list[dict], icons: dict[int, str]) -> dict:
         # free space: it reads as a rendering bug rather than as the data
         # problem it is, and the used count already says what is true.
         bag["free"] = max(0, bag["slots"] - bag["used"])
+        bag["full"] = bag["slots"] > 0 and bag["used"] >= bag["slots"]
+        bag["tone"] = ALARM if bag["full"] else PLAIN
+        # A CONTAINER OF UNKNOWN SIZE SAYS SO. ContainerSlots comes from the
+        # world database through a LEFT JOIN, so a custom or removed bag
+        # arrives with no size at all - and "3 of 0" reads as a broken count
+        # rather than as the missing template it is. The grid has nothing to
+        # draw in that case either; the items still land in the spill row the
+        # page keeps for exactly this.
+        bag["room_label"] = ("%d of %d" % (bag["used"], bag["slots"])
+                             if bag["slots"]
+                             else "%d carried, size unknown" % bag["used"])
     return {"equipped": equipped, "containers": containers, "elsewhere": elsewhere,
             "bank_bags": len(bank_bags)}
 
@@ -367,6 +541,75 @@ def build_capacity(containers: list[dict]) -> dict:
     }
 
 
+# NINETY PER CENT, AND IT USED TO LIVE IN THE PAGE. The bar under each purse
+# went amber near the top of its range and red at it, and that ternary was
+# written in JavaScript where no test could reach it: the threshold that
+# decides whether a person is warned about a bag is a judgement about bags.
+# Ninety rather than eighty because at these levels a single dungeon run is
+# four or five slots, and a warning that fires with a fifth of the bag still
+# empty is a warning that gets ignored on the day it is true.
+TIGHT_PERCENT = 90
+
+# The sentence that turns an empty bag position from a number into a job.
+SPARE_NOTE = ("An empty bag position is a bag somebody could hand him, which "
+              "is a different fix from selling something.")
+
+# What the notable list is, said once above it rather than guessed at.
+NOTABLE_NOTE = "green or better in a bag, rares anywhere"
+
+# A member with no `characters` row. Still a card, still a sentence: a family
+# view that quietly drops somebody is the exact failure the Armory tab was
+# built to stop, and a card stripped to a name is how a missing character
+# stops being noticed.
+ABSENT_NOTE = "no saved character - deleted, or never made."
+
+
+def money_sentence(before: str, money: dict, after: str = "") -> dict:
+    """A sentence with an amount of money in the middle of it.
+
+    The page draws money as three coloured spans, so an amount cannot simply
+    be interpolated into a string the way a count can. The words either side
+    of it still belong here, so they travel as the two halves they are and
+    index.html appends the coins between them.
+    """
+    return {"before": before, "money": money, "after": after}
+
+
+def build_room(capacity: dict) -> dict:
+    """How full one character is, as the words and the tone to draw them in.
+
+    THE BAR IS THE POINT OF THE CARD. Everything else here is a number that
+    can wait; this is the one that stops a character playing, so it carries a
+    percentage for the bar, a tone for its colour, and the three phrases that
+    say the same thing for a reader who cannot see the colour at all.
+    """
+    slots, used, free = capacity["slots"], capacity["used"], capacity["free"]
+    percent = round(used * 100 / slots) if slots else 0
+    if capacity["full"]:
+        tone = ALARM
+    elif percent >= TIGHT_PERCENT:
+        tone = CAUTION
+    else:
+        tone = PLAIN
+    bags = capacity["bags"]
+    spare = capacity["empty_bag_slots"]
+    return {
+        "percent": percent,
+        "tone": tone,
+        "used_label": "%d of %d slots used" % (used, slots),
+        # "no room left" rather than "0 free". Zero is a number a reader has
+        # to interpret, and this is the state the whole view exists to report.
+        "free_label": "%d free" % free if free else "no room left",
+        "free_tone": PLAIN if free else ALARM,
+        "bags_label": ("across %d %s and the backpack"
+                       % (bags, plural(bags, "bag")) if bags
+                       else "the backpack alone, no bags carried"),
+        "spare_label": ("%d empty bag %s" % (spare, plural(spare, "position"))
+                        if spare else None),
+        "spare_tone": CAUTION if spare else PLAIN,
+    }
+
+
 def tally(items: list[dict]) -> dict:
     """Vendor value and a quality breakdown over any list of item payloads.
 
@@ -386,10 +629,13 @@ def tally(items: list[dict]) -> dict:
             counts[quality] = counts.get(quality, 0) + 1
         value += item["value_copper"]
         stacked += item["count"]
-    by_quality = [{"quality": q, "name": quality_name(q), "count": n}
+    by_quality = [{"quality": q, "name": quality_name(q), "count": n,
+                   "label": "%d %s" % (n, quality_name(q))}
                   for q, n in sorted(counts.items(), reverse=True)]
     if unknown:
-        by_quality.append({"quality": None, "name": UNKNOWN_QUALITY, "count": unknown})
+        by_quality.append({"quality": None, "name": UNKNOWN_QUALITY,
+                           "count": unknown,
+                           "label": "%d %s" % (unknown, UNKNOWN_QUALITY)})
     return {
         "items": len(items),
         # Stacks are the slot count; `units` is what is actually in them. A
@@ -451,12 +697,14 @@ def build_member(name: str, char_row: dict | None, inventory_rows: list[dict],
             "role": bond.role,
             "class": bond.char_class.title(),
             "present": False,
+            "who": "%s - %s" % (bond.char_class.title(), bond.role),
+            "absent_note": ABSENT_NOTE,
         }
     split = split_inventory(inventory_rows, icons)
     carried = [i for bag in split["containers"] for i in bag["items"]]
     held = split["equipped"] + carried
     class_id = char_row.get("class")
-    return {
+    member = {
         "name": char_row["name"],
         "role": bond.role,
         "present": True,
@@ -476,6 +724,172 @@ def build_member(name: str, char_row: dict | None, inventory_rows: list[dict],
         "notable": worth_naming(split["equipped"], carried),
         "elsewhere": split["elsewhere"],
     }
+    member["who"] = "%s %s - %s" % (char_row.get("level"), member["class"],
+                                    member["role"])
+    member["room"] = build_room(member["capacity"])
+    stacks, units = member["carried"]["items"], member["carried"]["units"]
+    # STACKS AND ITEMS ARE DIFFERENT NUMBERS AND BOTH ARE SAID. A bag holding
+    # one stack of twenty linen is one slot and twenty things, and a line
+    # that reports either number alone is wrong about the other one.
+    member["holding"] = money_sentence(
+        "carrying %d %s (%d items), worth "
+        % (stacks, plural(stacks, "stack"), units),
+        member["carried"]["vendor"], " at a vendor")
+    member["elsewhere_note"] = (
+        "%d more stored elsewhere (bank, keyring), not drawn here"
+        % member["elsewhere"] if member["elsewhere"] else None)
+    member["notable_note"] = NOTABLE_NOTE if member["notable"] else None
+    return member
+
+
+# --- the finding this view opens with --------------------------------------
+# THE PAGE OPENS WITH A SENTENCE, NOT A CHART. The first cut of the Bags view
+# opened with a strip of numbers, and a strip of numbers is something a reader
+# has to interpret before it can tell them anything: "189/190" is only alarming
+# once you have worked out that the second number is the first one plus one.
+# So the top of the view is one composed finding, and everything under it is
+# the evidence for it.
+#
+# EVERY WORD OF IT IS BUILT HERE, from the live payload, because the finding is
+# a verdict. The day the family buys four bags each it has to start saying
+# something else on its own, and a sentence typed into index.html would go on
+# saying "one free slot in the whole family" until somebody noticed.
+
+# What a full inventory actually does, which is the half nobody guesses. This
+# is not "your bags are full", it is "this character has stopped questing":
+# `LootObject::IsLootPossible` never asks whether the bot has room, so the loot
+# can never complete, the loot goal outranks questing, and the character stands
+# there re-trying it (infra#2800). Deliberately not naming which of them it was
+# measured on: who it happened to is in bonds, and a name typed into a sentence
+# here is a second roster that can disagree with the first one.
+FULL_CONSEQUENCE = (
+    "A bot with no room can never finish a loot, so the loot goal preempts "
+    "questing forever: that is how one of them held a single position to "
+    "within 0.1 yard for eight and a half hours.")
+TIGHT_CONSEQUENCE = (
+    "One good drop takes the last of it, and a character with no room stops "
+    "questing rather than skipping the loot it cannot carry.")
+ROOMY_CONSEQUENCE = (
+    "Nobody is about to stall on a loot they have no room for, which is the "
+    "one thing a full bag does to a character on this realm.")
+NO_CHARACTERS = (
+    "Purses and bags are read off saved characters, so there is nothing here "
+    "to be full or empty.")
+NO_BAGS = (
+    "Every character is born with a backpack, so a family with no slots at "
+    "all is a query that answered, not a family that owns nothing.")
+
+# UNDER ONE BACKPACK OF ROOM LEFT, ACROSS ALL FIVE, is where this stops being
+# comfortable. A PERCENTAGE was the obvious rule and it is the wrong one: five
+# per cent of 190 slots is nine slots, and nine slots is one quest turn-in away
+# from nothing. A backpack is a real unit of room on this realm, so the
+# threshold is one of them - taken from panel's own range rather than typed as
+# a number, so it moves if the backpack ever does.
+FAMILY_TIGHT_SLOTS = BACKPACK_SLOTS
+
+
+def build_finding(totals: dict) -> dict:
+    """The one sentence at the top of the view, and how loudly to draw it.
+
+    Six states, and THE ORDER THEY ARE TESTED IN IS THE FINDING. "One free
+    slot in the whole family" outranks "four of the five are out of room" even
+    though both are true at the same moment, because the first is the more
+    surprising fact and the reader has half a second. Two of the six are about
+    the data rather than about the family, and they come first for the same
+    reason: "no free slot anywhere" is TRUE of an empty realm and completely
+    misleading about it.
+    """
+    cap = totals["capacity"]
+    slots, used, free = cap["slots"], cap["used"], cap["free"]
+    full = totals["full"]
+    present = totals["present"]
+    who = ("out of room: " + ", ".join(full)) if full else None
+    if not present:
+        return {"lead": "Nobody has a saved character",
+                "detail": "Not one of the roster has a row in the world's "
+                          "character table.",
+                "because": NO_CHARACTERS, "tone": ALARM, "who": [],
+                "who_label": None}
+    if not slots:
+        return {"lead": "No bags and no backpack",
+                "detail": "%s saved %s, and not one carried slot between them."
+                          % (sentence(spell(present)),
+                             plural(present, "character")),
+                "because": NO_BAGS, "tone": ALARM, "who": [], "who_label": None}
+    if free == 0:
+        lead, tone, because = ("No free slot anywhere in the family", ALARM,
+                               FULL_CONSEQUENCE)
+    elif free <= FAMILY_TIGHT_SLOTS:
+        # Alarm rather than caution when somebody is ALREADY stuck: a family
+        # with ten slots left and nobody full is tight, and a family with one
+        # slot left and four characters full is a fault being reported.
+        lead = "%s free %s in the whole family" % (spell(free),
+                                                   plural(free, "slot"))
+        tone = ALARM if full else CAUTION
+        because = FULL_CONSEQUENCE if full else TIGHT_CONSEQUENCE
+    elif full:
+        lead = "%s of the %s %s out of room" % (
+            spell(len(full)), spell(present), "is" if len(full) == 1 else "are")
+        tone, because = ALARM, FULL_CONSEQUENCE
+    else:
+        lead = "%s free %s across the family" % (spell(free),
+                                                 plural(free, "slot"))
+        tone, because = PLAIN, ROOMY_CONSEQUENCE
+    return {
+        "lead": sentence(lead),
+        "detail": "%d of %d slots taken." % (used, slots),
+        "because": because,
+        "tone": tone,
+        "who": list(full),
+        "who_label": who,
+    }
+
+
+def stat(label: str, value: str | None = None, money: dict | None = None,
+         note: str | None = None, tone: str = PLAIN) -> dict:
+    """One reading in the strip under the finding.
+
+    Either a `value` (a string, already counted and pluralised here) or an
+    amount of `money` the page draws in the three coins, never both.
+    """
+    return {"label": label, "value": value, "money": money, "note": note,
+            "tone": tone}
+
+
+def build_stats(totals: dict) -> list[dict]:
+    """The strip under the finding: the same seven readings, always.
+
+    ALWAYS SEVEN, INCLUDING THE ZEROES. A strip that drops a reading when it
+    is zero changes shape as the data changes, so the reader loses the one
+    thing a strip is good for - knowing where to look without reading. "0
+    empty bag positions" is also a fact worth having on the screen: it is
+    half of the answer to "so is this a bag problem or a selling problem".
+    """
+    cap = totals["capacity"]
+    present, free, used = totals["present"], cap["free"], cap["slots"]
+    spare, rares = cap["empty_bag_slots"], totals["rare_or_better"]
+    positions = present * BAG_POSITIONS
+    stats = [
+        stat("purse", money=totals["money"],
+             note="across %d %s" % (present, plural(present, "purse"))),
+        stat("carried goods", money=totals["vendor"],
+             note="what a vendor would pay"),
+        stat("slots", value="%d of %d" % (cap["used"], used), note="taken",
+             tone=ALARM if not free else
+             (CAUTION if free <= FAMILY_TIGHT_SLOTS else PLAIN)),
+        stat("bags", value="%d of %d" % (cap["bags"], positions),
+             note="bag positions filled",
+             tone=CAUTION if spare else PLAIN),
+        stat("empty bag positions", value=str(spare),
+             note="waiting for a bag", tone=CAUTION if spare else PLAIN),
+        stat("rare or better", value=str(rares), note="worn or carried",
+             tone=GOOD if rares else PLAIN),
+    ]
+    # Named rather than merely counted, and last because it is the one reading
+    # here that nobody has to act on.
+    stats.append(stat("richest", value=totals["richest"] or NOTHING,
+                      note="the biggest purse"))
+    return stats
 
 
 def build_family(members: list[dict]) -> dict:
@@ -492,7 +906,7 @@ def build_family(members: list[dict]) -> dict:
                 continue
             counts[entry["quality"]] = counts.get(entry["quality"], 0) + entry["count"]
     richest = max(present, key=lambda m: m["money"]["total"], default=None)
-    return {
+    totals = {
         "present": len(present),
         "money": coins(money),
         "vendor": coins(vendor),
@@ -512,6 +926,11 @@ def build_family(members: list[dict]) -> dict:
         # hour. A list, not a count, because the fix is per character.
         "full": [m["name"] for m in present if m["capacity"]["full"]],
     }
+    totals["finding"] = build_finding(totals)
+    totals["stats"] = build_stats(totals)
+    totals["spare_note"] = (SPARE_NOTE if totals["capacity"]["empty_bag_slots"]
+                            else None)
+    return totals
 
 
 def auction_payload(row: dict, roster: set[str], icons: dict[int, str]) -> dict:
@@ -524,22 +943,72 @@ def auction_payload(row: dict, roster: set[str], icons: dict[int, str]) -> dict:
     """
     owner, buyer = row.get("owner_name"), row.get("buyer_name")
     item = item_payload(dict(row, slot=0), icons, CARRIED, None)
+    ours = owner in roster
+    has_bid = bool(row.get("lastbid"))
     return {
         "id": row["id"],
         "item": item,
         "owner": owner,
         "buyer": buyer,
-        "ours": owner in roster,
+        "ours": ours,
         "we_bid": buyer in roster,
+        # WHOSE AUCTION THIS IS, in words. `ours` is a boolean the page would
+        # otherwise have to turn into a sentence, and "seller unknown" is a
+        # real state: `itemowner` is a guid and the character behind it can
+        # have been deleted since the auction was posted.
+        "who_label": ("listed by %s" % owner if ours
+                      else "seller %s" % (owner or "unknown")),
+        # A listing with no bid on it has a STARTING price, not a highest
+        # one, and drawing the start under the word "highest bid" would be
+        # this panel inventing a bidder.
+        "bid_label": "highest bid" if has_bid else "starting bid",
+        "buyout_label": "buyout" if row.get("buyoutprice") else None,
+        "winner_label": "winning: %s" % buyer if buyer else None,
+        # The date itself is formatted by the page in the reader's own locale.
+        # This module has no clock, and a pure function that read one would be
+        # untestable for the sake of a phrase.
+        "expires_label": "expires" if row.get("time") else None,
         # startbid is what it was listed at, lastbid the highest bid so far
         # (0 when nobody has bid), buyout 0 when there is no buyout price.
         "start": coins(row.get("startbid")),
         "bid": coins(row.get("lastbid")),
         "buyout": coins(row.get("buyoutprice")),
         "deposit": coins(row.get("deposit")),
-        "has_bid": bool(row.get("lastbid")),
+        "has_bid": has_bid,
         "expires_at": row.get("time"),
     }
+
+
+def linked_sentence(before: str, ticket: dict, after: str = ".") -> dict:
+    """A sentence with a ticket link in the middle of it.
+
+    The same shape as money_sentence and for the same reason: the page has to
+    build an anchor, so the sentence arrives as the two halves either side of
+    it. Both halves are words, so both halves are here - a panel that says
+    "is still open" needs the module that knows what is still open to have
+    written it.
+    """
+    return {"before": before, "ticket": ticket, "after": after}
+
+
+# THE EMPTY STATE IS THE PANEL. Nothing in the module lists, buys, bids or
+# sells (quadseven/mod-overseer#147), so an empty auction house is the CORRECT
+# reading of the table - and a blank box and a broken query look identical. So
+# the panel says which of the two it is, in as many words, and names the open
+# ticket rather than leaving a reader to wonder whether anybody knows.
+AUCTION_EMPTY_LEAD = "Nothing listed, nothing sold, nothing bid on."
+AUCTION_EMPTY_BODY = (
+    "The auction house table holds no row belonging to any of them, and that "
+    "is an empty auction house rather than an empty panel.")
+# The second thing the table structurally cannot say, and it does not go away
+# the day the family starts trading: the core DELETES an auction the moment it
+# completes and mails the gold to the seller, so `sold` can only ever mean
+# "mid-sale" and an empty one can never honestly read as "nothing has ever
+# sold".
+AUCTION_CAVEAT = (
+    "Completed sales leave no trace to read: the core deletes an auction the "
+    "moment it finishes and mails the gold, so this table can only ever show "
+    "live auctions.")
 
 
 def build_auctions(auction_rows: list[dict], icons: dict[int, str]) -> dict:
@@ -562,11 +1031,31 @@ def build_auctions(auction_rows: list[dict], icons: dict[int, str]) -> dict:
     roster = set(family.roster())
     rows = [auction_payload(r, roster, icons) for r in auction_rows]
     listings = [r for r in rows if r["ours"]]
+    sold = [r for r in listings if r["has_bid"]]
+    bids = [r for r in rows if r["we_bid"] and not r["ours"]]
     return {
         "listings": listings,
-        "sold": [r for r in listings if r["has_bid"]],
-        "bids": [r for r in rows if r["we_bid"] and not r["ours"]],
+        "sold": sold,
+        "bids": bids,
         "any": bool(rows),
+        # The three lists as the page draws them, labels included, so adding a
+        # fourth is a change here rather than a change in two places.
+        "sections": [
+            {"label": "listed by the family", "rows": listings,
+             "count": len(listings), "empty": NONE},
+            {"label": "sold, gold in the post", "rows": sold,
+             "count": len(sold), "empty": NONE},
+            {"label": "bid on by the family", "rows": bids,
+             "count": len(bids), "empty": NONE},
+        ],
+        "empty": {
+            "lead": AUCTION_EMPTY_LEAD,
+            "body": AUCTION_EMPTY_BODY,
+            "why": linked_sentence(
+                "No part of the module lists, buys, bids or sells anything "
+                "yet: ", AUCTION_TICKET, " is still open."),
+        },
+        "caveat": AUCTION_CAVEAT,
         # The page's empty state hangs off this: completed sales are not
         # recorded anywhere in acore_characters, so "no sales" here means
         # "nothing is mid-sale", never "nothing has ever sold".
@@ -575,9 +1064,103 @@ def build_auctions(auction_rows: list[dict], icons: dict[int, str]) -> dict:
     }
 
 
+# --- the guild bank there is not (infra#2831) ------------------------------
+# THERE IS NO GUILD, SO THERE IS NO GUILD BANK, and an empty vault drawn on the
+# strength of that would be the same mistake the auction panel exists to avoid:
+# a blank box and a broken query look identical. What is actually useful to a
+# reader is not the empty vault, it is the ROAD to one - which parts of it the
+# module can already drive and which are not written - because that is the
+# difference between "wait for a guild" and "somebody has to build this".
+#
+# THE STEPS ARE A CAPABILITY TABLE, NOT A QUERY. Travel is the one part that
+# works: a petitioner and a guild banker are both ordinary NPCs, and travel.py
+# can already aim a character at an NPC by entry. Everything after arriving is
+# a packet nothing sends.
+GUILD_TICKET = {
+    "label": "infra#2831",
+    "url": "https://github.com/quadseven/infra/issues/2831",
+}
+WORKS = "works"
+MISSING = "missing"
+GUILD_STEP_WORDS = {WORKS: "works", MISSING: "not written"}
+GUILD_STEP_TONES = {WORKS: GOOD, MISSING: CAUTION}
+# In the order somebody would actually do them, so the list reads as a road
+# rather than as a feature matrix. The two that work come first because that
+# is where the road runs out, and a reader should be able to see how far.
+GUILD_STEPS = (
+    ("travel to a petitioner", WORKS),
+    ("travel to a guild banker", WORKS),
+    ("buy a charter", MISSING),
+    ("collect the signatures", MISSING),
+    ("register the guild", MISSING),
+    ("deposit into the guild bank", MISSING),
+    ("withdraw from the guild bank", MISSING),
+)
+NO_GUILD_LEAD = "There is no guild, so there is no guild bank."
+NO_GUILD_BODY = ("Rather than draw an empty vault, here is what stands "
+                 "between the family and one.")
+# A guild appearing is not a thing this panel can be trusted to have kept up
+# with, so it says so rather than guessing at what is in the bank.
+GUILD_BODY = ("The bank's own tabs are not read here yet, so this is still "
+              "the road rather than the contents.")
+
+
+def build_guild_bank(guild_rows: list[dict]) -> dict:
+    """Which guild the family is in, if any, and what stands in front of one.
+
+    `guild_rows` is whatever `guild_member` joined to `guild` returns for the
+    roster: no rows means nobody is in a guild, which is the live answer today
+    and is checked rather than assumed. A hardcoded "there is no guild" would
+    go on being drawn on the day somebody makes one.
+    """
+    guilds = sorted({row["guild_name"] for row in guild_rows
+                     if row.get("guild_name")})
+    steps = [{"step": step, "state": state,
+              "state_label": GUILD_STEP_WORDS[state],
+              "tone": GUILD_STEP_TONES[state]} for step, state in GUILD_STEPS]
+    missing = [s for s in steps if s["state"] == MISSING]
+    if guilds:
+        lead = "The family is in %s." % ", ".join(guilds)
+        body = GUILD_BODY
+    else:
+        lead, body = NO_GUILD_LEAD, NO_GUILD_BODY
+    return {
+        "guilds": guilds,
+        "lead": lead,
+        "body": body,
+        "steps": steps,
+        "works": len(steps) - len(missing),
+        "missing": len(missing),
+        "blocked": linked_sentence(
+            "%s of the %s steps are not written, and all of them are "
+            "blocked on " % (sentence(spell(len(missing))), spell(len(steps))),
+            GUILD_TICKET, "."),
+    }
+
+
+# --- what the page calls each block ----------------------------------------
+# The three-part section rule wants an index and a label, and both are words on
+# a screen. They live here for the same reason every other word on this view
+# does: index.html draws what it is given and names nothing itself.
+SECTION_HEADERS = {
+    "cards": {"index": "01", "label": "purses and bags"},
+    "auction": {"index": "02", "label": "auction house"},
+    "guild": {"index": "03", "label": "guild bank"},
+}
+
+# These numbers are a SAVE, and nobody can tell by looking. The core writes
+# money and bags on its own timer, so gold spent five minutes ago is still
+# here - and a reader who sells a sword, sees no change and concludes the page
+# is broken is a reader the page lied to.
+SAVED_NOTE = ("Purses, bags and auctions as the world last saved them, on the "
+              "same timer as the gear in the Armory.")
+
+
 def build_wealth(char_rows: list[dict], inventory_rows: list[dict],
-                 auction_rows: list[dict], icons: dict[int, str]) -> dict:
-    """Every member's purse and bags, the family total, and the auction house.
+                 auction_rows: list[dict], guild_rows: list[dict],
+                 icons: dict[int, str]) -> dict:
+    """Every member's purse and bags, the family total, the auction house,
+    and the guild bank there is not.
 
     The row lists arrive keyed by character name, unfiltered, exactly as
     build_armory takes them; splitting them per member is this module's job
@@ -593,5 +1176,8 @@ def build_wealth(char_rows: list[dict], inventory_rows: list[dict],
         "members": members,
         "family": build_family(members),
         "auctions": build_auctions(auction_rows, icons),
+        "guild_bank": build_guild_bank(guild_rows),
+        "sections": SECTION_HEADERS,
+        "saved_note": SAVED_NOTE,
         "expected": len(members),
     }

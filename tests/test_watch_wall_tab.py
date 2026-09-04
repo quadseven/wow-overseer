@@ -238,14 +238,23 @@ class TheTilesAreMovedAndNeverRebuilt(unittest.TestCase):
         every bag, and the bags' item-quality colours landed on the wall.
 
         Renaming the newcomer, never the incumbent: the wall is `pov-`
-        prefixed now, one point of view per tile."""
+        prefixed now, one point of view per tile.
+
+        THE INCUMBENT HAS CHANGED SHAPE SINCE, and the check below moved with
+        it rather than being deleted. A bag slot used to be a 44px icon in a
+        quality-coloured border (`.wslot img`, `.wslot.q0`); the Bags redesign
+        made it an 11px square, ink for full and a hairline for empty, and
+        neither of those rules exists any more. What this test is actually
+        for - the name still belongs to Bags and the wall still does not touch
+        it - is unchanged, so it is asserted against the rules that are there
+        now."""
         wall_css = PAGE[PAGE.index("/* --- THE WATCH WALL"):]
         wall_css = wall_css[:wall_css.index("</style>")]
         absent(self, ".wslot", wall_css, "the wall CSS")
         self.assertIn(".povslot", wall_css)
-        # And the incumbent is still there, untouched.
-        self.assertIn(".wslot img", PAGE)
-        self.assertIn(".wslot.q0", PAGE)
+        # And the incumbent is still there, still Bags'.
+        self.assertIn("  .wslot { width:11px;", PAGE)
+        self.assertIn(".wslot.free {", PAGE)
 
     def test_no_class_the_wall_defines_is_defined_anywhere_else(self):
         """The general form of the .wslot collision, and the one that catches

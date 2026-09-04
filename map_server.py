@@ -461,10 +461,24 @@ def _fetch_wealth() -> dict:
                 tuple(names) * 2,
             )
             auction_rows = list(cur.fetchall())
+            # WHETHER THERE IS A GUILD AT ALL, asked rather than assumed. The
+            # guild bank panel says there is no guild bank because there is no
+            # guild, and that sentence has to stop being drawn on the day
+            # somebody makes one - which a constant in the builder could never
+            # do. An INNER JOIN, so no rows means nobody is in a guild.
+            cur.execute(
+                "SELECT c.name, g.name AS guild_name "  # noqa: S608
+                "FROM characters c "
+                "JOIN guild_member gm ON gm.guid = c.guid "
+                "JOIN guild g ON g.guildid = gm.guildid "
+                f"WHERE c.name IN ({holes})",
+                tuple(names),
+            )
+            guild_rows = list(cur.fetchall())
     finally:
         conn.close()
     return {"char_rows": char_rows, "inventory_rows": inventory_rows,
-            "auction_rows": auction_rows}
+            "auction_rows": auction_rows, "guild_rows": guild_rows}
 
 
 # Everything a tooltip draws, straight off item_template. Listed once, here,

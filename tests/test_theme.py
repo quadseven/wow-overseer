@@ -18,6 +18,18 @@ STYLE = PAGE[PAGE.index("<style>"):PAGE.index("</style>")]
 HEAD = PAGE[:PAGE.index("</head>")]
 
 
+def _theme_blocks():
+    """The three places a reader can be: nothing chosen and a light system, a
+    dark system, and an explicit choice. A token has to be in all three."""
+    blocks = []
+    for marker in (":root {\n    --ink:",
+                   ':root:not([data-theme="light"]) {',
+                   ':root[data-theme="dark"] {'):
+        start = STYLE.index(marker)
+        blocks.append(STYLE[start:STYLE.index("}", start)])
+    return blocks
+
+
 class TheThemeResolvesInAllThreeStates(unittest.TestCase):
     """A reader is in one of three states, not two: they chose light, they chose
     dark, or they chose nothing and the operating system decides. The third is
@@ -82,20 +94,54 @@ class TheShellTakesTheThemeAndSoDoesTheContent(unittest.TestCase):
         self.assertNotIn("--panel:#161b22", root)
         self.assertNotIn("--text:#e6edf3", root)
 
-    def test_the_armory_is_the_one_dark_surface_and_says_why(self):
+    def test_the_dark_surfaces_are_the_ones_that_draw_items_and_say_why(self):
         """Not a stylistic exception. Item quality is a COLOUR in this game and
         the values are canonical: #1eff00 uncommon-green on white is close to
         invisible. Re-tinting them would invent new quality colours; leaving
-        them on paper would ship ones nobody can read. So that section keeps
-        the ground they were designed for, by overriding the same tokens."""
-        scope = STYLE[STYLE.index("#armory {"):]
+        them on paper would ship ones nobody can read. So the sections that
+        draw items keep the ground those colours were designed for, by
+        overriding the same tokens.
+
+        TWO SCOPES SINCE BAGS BECAME ITS OWN TAB. It used to be a div inside
+        #armory and was covered by that scope for free; the day it moved out
+        it needed its own, and a redesign that moved the markup without moving
+        the scope would have left every uncommon-green item name at about
+        1.3:1 on a white card. That is the same bug the Family tab shipped
+        with priests, which is what the class below is about."""
+        for section in ("#armory {", "#bags {"):
+            scope = STYLE[STYLE.index(section):]
+            scope = scope[:scope.index("}")]
+            for token in ("--bg:", "--panel:", "--line:", "--text:", "--dim:"):
+                self.assertIn(token, scope,
+                              token + " is not overridden for " + section)
+
+    def test_the_bags_scope_also_overrides_the_text_roles(self):
+        """The five legacy tokens are not enough on their own any more. The
+        redesign draws with --on-card, --warn-text, --caution-text and
+        --accent-text, and every one of those resolves to a colour chosen for
+        a WHITE card. Inside a section that is dark in both themes they have
+        to be overridden too, or the finding at the top of the tab is ink on
+        near-black."""
+        scope = STYLE[STYLE.index("#bags {"):]
         scope = scope[:scope.index("}")]
-        for token in ("--bg:", "--panel:", "--line:", "--text:", "--dim:"):
-            self.assertIn(token, scope, token + " is not overridden for the Armory")
-        # The bags and the purse live inside that same section, which is what
-        # makes one scope enough to cover every surface that draws an item.
-        self.assertLess(PAGE.index('<section id="armory">'),
-                        PAGE.index('<div id="wealth">'))
+        for token in ("--on-card:", "--on-card-dim:", "--warn-text:",
+                      "--caution-text:", "--accent-text:"):
+            self.assertIn(token, scope, token + " is not overridden for #bags")
+
+    def test_the_new_text_roles_exist_in_every_theme_state(self):
+        """Same rule as the shell tokens: a role defined only inside a media
+        query is invisible to a reader whose system preference does not match,
+        and the symptom is unstyled text rather than an error.
+
+        ASKED OF THE THREE BLOCKS, NOT OF A COUNT. Counting the token across
+        the whole stylesheet was the first version of this, and it passed with
+        the bug live: #bags overrides both roles in its own scope, so deleting
+        one from the explicit-dark block still left three occurrences and
+        three was the bar. A count cannot tell you WHERE, which is the only
+        thing this test is about."""
+        for block in _theme_blocks():
+            for token in ("--caution-text:", "--accent-text:"):
+                self.assertIn(token, block, token + " missing from " + block[:40])
 
     def test_the_canonical_quality_colours_are_untouched(self):
         """Changing these would be changing what the game means, not what the

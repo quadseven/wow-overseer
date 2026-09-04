@@ -65,23 +65,46 @@
 
      So the Armory keeps the dark ground they were designed for, by overriding
      the same five tokens in its own scope. Its rules are untouched; they were
-     always written against these names. #wealth (bags and purse) sits INSIDE
-     this section, which is why one scope covers every surface in the page that
-     draws an item. */
+     always written against these names.
+
+     AND SO DOES BAGS, which used to be a div inside this section and is now a
+     tab of its own. The reason it was covered was that it sat inside this
+     scope; the reason it NEEDS covering is that it draws items, in the same
+     canonical colours, on the same argument. Moving the markup out without
+     moving the scope would have left every uncommon-green item name at 1.3:1
+     on a white card - the exact bug the Family tab shipped with priests. The
+     two scopes are written out rather than combined into one selector so that
+     each one can be read, and deleted, with the tab it belongs to. */
   #armory {
     --bg:#0A140E; --panel:#0F1D14; --line:#1E3226; --text:#E6F5EC;
     --dim:#8FA795; --alliance:#4d9fff; --horde:#ff4d4d; --neutral:#d4b106;
     --mortal:#7ee787; --thought:#a371f7;
     /* The handoff's dark-card text ramp: primary, secondary, faint. Added
        beside --text/--dim rather than replacing them, because those two dress
-       the standing and wealth blocks that share this scope and re-pointing
-       them would restyle two views this change is not about. The Armory's own
-       rules read the ramp. */
+       the standing block that shares this scope and re-pointing them would
+       restyle a view this change is not about. The Armory's own rules read
+       the ramp. (Bags used to share this scope too; it is its own tab now,
+       with its own copy of the override below.) */
     --on-dark:#E8EFE6; --on-dark-dim:#B9C9BC; --on-dark-faint:#8FA396;
     /* The three roles again, re-pigmented for a near-black ground. This is
        the whole argument for roles rather than pigments: --rust is 2.2:1
        here, and every rule that asked for "warning text" follows the ground
        without being edited. */
+    --warn-text:#FF7A5E; --caution-text:#E8B33D; --accent-text:#2FD46F;
+    background:var(--bg); color:var(--text);
+  }
+  /* The same five, plus the roles the redesign draws with. A card inside this
+     section is dark in BOTH themes, so --on-card and --on-card-dim have to be
+     overridden here or every word on the tab is ink on near-black - and the
+     three text roles are re-pigmented to the SAME values the Armory uses
+     above, because two dark surfaces on one page disagreeing about which
+     amber means caution is a difference nobody sees in a diff and everybody
+     sees on the screen. */
+  #bags {
+    --bg:#0A140E; --panel:#0F1D14; --line:#1E3226; --text:#E6F5EC;
+    --dim:#8FA795; --alliance:#4d9fff; --horde:#ff4d4d; --neutral:#d4b106;
+    --mortal:#7ee787; --thought:#a371f7;
+    --on-card:#E6F5EC; --on-card-dim:#8FA795;
     --warn-text:#FF7A5E; --caution-text:#E8B33D; --accent-text:#2FD46F;
     background:var(--bg); color:var(--text);
   }
@@ -894,133 +917,194 @@
   .stnone { color:var(--dim); }
   .stspec { color:var(--thought); margin-bottom:.35rem; overflow-wrap:anywhere; }
   .stspec .un { color:#ffd100; }
-  /* --- the Wealth and Bags view (quadseven/mod-overseer#88) --------------
-     The bottom half of the Armory tab: what the five are CARRYING, what it
-     is worth, how much room is left, and the auction house.
+  /* --- the Bags tab (quadseven/mod-overseer#88, infra#2597) --------------
+     What the five are carrying, what it is worth, how much room is left, the
+     auction house and the guild bank there is not.
 
-     WHERE THESE RULES SIT IS LOAD-BEARING. They are inside the Armory's own
-     window (its banner to the Family banner) because they belong to the
-     Armory tab, and they are above the Family banner because the Family
-     tests slice from that banner to the end of the stylesheet.
+     WHERE THESE RULES SIT IS LOAD-BEARING, AND IT IS NOT ABOUT THE ARMORY ANY
+     MORE. The Family tests slice the stylesheet from their own banner to the
+     end of it, so anything below that banner is read as a Family rule; the
+     Armory's window runs from its banner to the Family's. This block sits in
+     the Armory's window because that is the last place above the Family
+     banner, not because Bags is part of the Armory - it is its own tab now.
+     Moving it below the Family banner would sweep it into assertions about a
+     different feature.
 
-     A BAG IS DRAWN AS A BAG. The grid is the game's own idiom: square
-     slots, the item icon in each, the quality colour as the border, the
-     stack count in the corner, and an empty slot drawn as an empty slot
-     rather than left out. Drawing only what is IN the bag would hide the
-     one finding this view exists for - that on the day it landed there was
-     one free slot across all five characters - because a full bag and a
-     half-empty one would render the same shape. */
-  #wealth { margin-top:1.6rem; border-top:1px solid var(--line); padding-top:1rem; }
-  #wtitle { font-family:Georgia,'Times New Roman',serif; font-size:1.4rem;
-            font-weight:normal; margin-bottom:.2rem; }
-  #wsaved { color:var(--dim); font-size:.9rem; margin-bottom:.6rem; }
-  #wsaved.alarm { color:var(--amber-text); }
-  #ajump a.wjump { order:1; border-color:var(--gold); }
-  /* The family strip: one chip per number a person came here to read. */
-  #wheadline { display:flex; gap:.4rem; flex-wrap:wrap; margin-bottom:.9rem; }
-  .wchip { border:1px solid var(--line); border-radius:999px;
-           padding:.15rem .7rem; font-size:.9rem; }
-  .wchip .k { color:var(--dim); margin-right:.35rem; }
-  .wchip.alarm { border-color:#d29922; color:var(--amber-text); }
-  .wchip.good { border-color:var(--mortal); }
-  /* Same column stops as the profiles above, so the tab does not change
-     shape halfway down as a window is dragged wider. */
+     THE FINDING IS THE PAGE. Everything under it is evidence for one
+     sentence, so the sentence is set at display size and given the whole
+     width, and the numbers under it are mono because they are read by shape.
+
+     A BAG IS ELEVEN PIXELS PER SLOT. The previous version drew the game's own
+     bag window - a 44px icon per slot, quality colour as the border - which
+     is the right shape for browsing a bag and the wrong one for the question
+     this tab exists to answer. "Is he full" had to be read off a number
+     beside a picture of forty-four things. At eleven pixels a bag is one
+     glance and five bags are one glance, and the items that actually deserve
+     a name are named below, in the list that exists for exactly that. */
+  #bags { display:none; margin:0 1rem 1.5rem; padding:1rem 1.25rem 1.5rem;
+          border-radius:16px; }
+  /* The opener. Display face, the widest thing on the tab, and it takes its
+     colour from the tone the module put on it: an alarm is a refusal and
+     refusals are vermilion here, a caution is amber. */
+  .wlead { font-family:var(--display); font-weight:800; font-stretch:125%;
+           font-size:clamp(1.3rem,4.6vw,2rem); line-height:1.14;
+           letter-spacing:-.015em; color:var(--on-card); }
+  #wfinding.t-alarm .wlead { color:var(--warn-text); }
+  #wfinding.t-caution .wlead { color:var(--caution-text); }
+  .wdetail { font-family:var(--mono); font-size:13px; letter-spacing:.06em;
+             margin-top:.45rem; color:var(--on-card-dim); }
+  .wbecause { margin-top:.6rem; max-width:64ch; color:var(--on-card-dim); }
+  .wwho { font-family:var(--mono); font-size:12px; letter-spacing:.08em;
+          margin-top:.5rem; color:var(--warn-text); overflow-wrap:anywhere; }
+  /* The save notice. Said out loud because these numbers are OLD and nobody
+     can tell by looking: the core writes money and bags on its own timer, so
+     gold spent five minutes ago is still here. Two spans, never one string -
+     the sentence about the data and the sentence about a failed fetch are
+     owned by different places and only one of them can come from the payload. */
+  #wsaved { font-family:var(--mono); font-size:11px; letter-spacing:.06em;
+            margin-top:.7rem; color:var(--on-card-dim); }
+  #wsaved span + span { margin-left:.4rem; }
+  #wsaved.t-alarm { color:var(--warn-text); }
+  /* The strip. Two columns on a phone rather than one: seven readings stacked
+     is a screen and a half of scrolling before the first card, and these are
+     glanced at rather than read. */
+  #wstats { display:grid; gap:.55rem; margin-top:1rem;
+            grid-template-columns:repeat(2,minmax(0,1fr)); }
+  @media (min-width:640px) {
+    #wstats { grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); }
+  }
+  .wstat { background:var(--panel); border:1px solid var(--line);
+           border-radius:12px; padding:.7rem .8rem; min-width:0; }
+  .wstat .k { display:block; font-family:var(--mono); font-size:10px;
+              letter-spacing:.14em; text-transform:uppercase;
+              color:var(--on-card-dim); overflow-wrap:anywhere; }
+  .wstat .v { display:block; margin-top:.3rem; font-family:var(--mono);
+              font-size:1.15rem; font-weight:700; overflow-wrap:anywhere; }
+  .wstat .n { display:block; margin-top:.2rem; font-size:.78rem;
+              color:var(--on-card-dim); overflow-wrap:anywhere; }
+  .wstat.t-alarm .v { color:var(--warn-text); }
+  .wstat.t-caution .v { color:var(--caution-text); }
+  .wstat.t-good .v { color:var(--accent-text); }
+  /* The section rule: mono index, a 2px line, the label ranged right in
+     muted. The line grows, which is what pushes the label to the edge. */
+  .brule { display:flex; align-items:center; gap:.7rem; margin:1.7rem 0 .8rem; }
+  .bidx { font-family:var(--mono); font-weight:700; font-size:12px;
+          letter-spacing:.14em; color:var(--on-card); }
+  .bline { flex:1 1 auto; height:2px; background:var(--on-card); }
+  .blab { font-family:var(--mono); font-size:11px; letter-spacing:.14em;
+          text-transform:uppercase; color:var(--on-card-dim); }
+  /* One card on a phone, and as many as fit above the breakpoint. One stop,
+     not three, so the tab does not change shape twice on the way to a
+     desktop. */
   #wcards { display:grid; gap:1rem; grid-template-columns:minmax(0,1fr); }
-  @media (min-width:1400px) { #wcards { grid-template-columns:repeat(2,minmax(0,1fr)); } }
-  @media (min-width:2100px) { #wcards { grid-template-columns:repeat(3,minmax(0,1fr)); } }
-  .wcard { background:var(--panel); border:1px solid var(--line); border-radius:10px;
-           padding:.8rem 1rem 1rem; min-width:0; }
+  @media (min-width:640px) {
+    #wcards { grid-template-columns:repeat(auto-fit,minmax(330px,1fr)); }
+  }
+  .wcard { background:var(--panel); border:1px solid var(--line);
+           border-radius:14px; padding:16px 18px 18px; min-width:0; }
   .wcard.c-gone { opacity:.6; }
-  .wcard h3 { font-size:1.15rem; font-weight:normal;
-              font-family:Georgia,'Times New Roman',serif; }
-  .wcard .who { color:var(--dim); font-size:.85rem; margin-bottom:.5rem; }
-  /* The purse, in the coin colours the game uses. Big, because "how much
-     gold has he got" is the first question anybody asks this view. */
-  .wpurse { font-size:1.35rem; margin-bottom:.5rem; }
+  .wcard h3 { font-family:var(--display); font-weight:800; font-stretch:125%;
+              font-size:1.15rem; letter-spacing:-.01em; overflow-wrap:anywhere; }
+  .wcard .who { font-family:var(--mono); font-size:10px; letter-spacing:.12em;
+                text-transform:uppercase; color:var(--on-card-dim);
+                margin-top:.2rem; overflow-wrap:anywhere; }
+  /* The purse, in the coin colours the game uses. RAW PIGMENT ON PURPOSE and
+     for the same reason the quality colours are: gold, silver and copper are
+     the game's own and a player reads them without thinking. It is also why
+     this whole section keeps a dark ground - #e6c200 on white is a smear. */
+  .wpurse { font-family:var(--mono); font-size:1.5rem; font-weight:700;
+            margin:.7rem 0 .55rem; }
   .wpurse .g, .wcoins .g { color:#e6c200; }
   .wpurse .s, .wcoins .s { color:#c0c0c0; }
   .wpurse .c, .wcoins .c { color:#b87333; }
-  .wcoins .none { color:var(--dim); }
-  /* The fullness bar. Amber at the top of the range and red at the very
-     top, because a full bag is not a cosmetic state: a bot with no room
-     can never finish a loot, and it will stand there re-trying forever. */
-  .wmeter { height:9px; border-radius:5px; background:var(--bg);
+  .wcoins .zero { color:var(--on-card-dim); }
+  /* The room bar. Vermilion at the top, because a full inventory is not a
+     cosmetic state on this realm: a bot with no room can never finish a loot,
+     and it will stand there re-trying it until somebody notices. */
+  .wmeter { height:10px; border-radius:5px; background:var(--bg);
             border:1px solid var(--line); overflow:hidden; }
-  .wmeter span { display:block; height:100%; background:var(--mortal); }
-  .wmeter.tight span { background:#d29922; }
-  .wmeter.full span { background:var(--horde); }
-  .wroom { color:var(--dim); font-size:.9rem; margin:.25rem 0 .5rem; }
-  .wroom .full { color:var(--rust); }
-  .wroom .spare { color:#d29922; }
-  .wtally { color:var(--dim); font-size:.9rem; margin-bottom:.6rem; }
-  .wqs { display:flex; gap:.3rem; flex-wrap:wrap; margin-top:.3rem; }
-  .wqs span { border:1px solid var(--line); border-radius:999px;
-              padding:0 .5rem; font-size:.85rem; }
-  /* One container: a header line, then its slots. */
-  .wbag { margin-top:.7rem; }
-  .wbh { display:flex; align-items:center; gap:.45rem; margin-bottom:.3rem;
-         font-size:.9rem; }
-  .wbh img { width:22px; height:22px; border-radius:4px; border:1px solid var(--line);
-             flex-shrink:0; }
-  .wbh .n { overflow-wrap:anywhere; }
-  .wbh .of { color:var(--dim); margin-left:auto; white-space:nowrap; }
-  /* MOST OF THESE SQUARES CARRY NO PICTURE, and that is a property of the
-     frozen icon book rather than of the host. icons.json holds the displays
-     Item.dbc marks EQUIPPABLE (tools/gen_items.py, which says why: the other
-     24k displays would take the file past the 500KB the repository refuses),
-     and a bag is mostly the other kind - reagents, trade goods, quest items.
-     Measured on the live realm: 81 of the 189 carried items have an icon.
-     So the square is sized for a NAME as much as for a picture, and the name
-     is drawn in the item's own quality colour, which keeps the one thing a
-     player reads without thinking working on every square either way. */
-  .wgrid { display:grid; grid-template-columns:repeat(auto-fill, 44px);
-           gap:4px; justify-content:start; }
-  .wslot { position:relative; width:44px; height:44px; border-radius:6px;
-           border:2px solid var(--line); background:#000; overflow:hidden;
-           display:flex; align-items:center; justify-content:center;
-           text-align:center; font-size:.6rem; line-height:1.1; color:var(--dim);
-           padding:.1rem; overflow-wrap:anywhere; text-decoration:none; }
-  .wslot img { width:100%; height:100%; display:block; object-fit:cover; }
-  /* Top of the name, never the middle of it. A long name in a 44px square
-     does not fit, and clipping it symmetrically removes the first line -
-     which is the half a person actually reads it by. */
-  .wslot .nm { align-self:flex-start; max-height:100%; overflow:hidden; }
-  .wslot.q0 { border-color:#9d9d9d; color:#9d9d9d; }
-  .wslot.q1 { border-color:#ffffff; color:#ffffff; }
-  .wslot.q2 { border-color:#1eff00; color:#1eff00; }
-  .wslot.q3 { border-color:#3B9DFF; color:#3B9DFF; }
-  .wslot.q4 { border-color:#a335ee; color:#a335ee; }
-  .wslot.q5 { border-color:#ff8000; color:#ff8000; }
-  .wslot.q6 { border-color:#e6cc80; color:#e6cc80; }
-  .wslot.q7 { border-color:#00ccff; color:#00ccff; }
-  .wslot.free { border-style:dashed; border-color:var(--line); background:var(--bg); }
-  .wslot .c { position:absolute; right:1px; bottom:0; font-size:.65rem; line-height:1.1;
-              padding:0 .15rem; border-radius:3px; background:#000c; color:var(--text); }
-  /* Green and better, worn or carried. The list a person scans for "why is
-     that rare sitting in a bag". */
-  .wnote { color:var(--dim); font-size:.85rem; text-transform:uppercase;
-           letter-spacing:.05em; margin:.8rem 0 .25rem; }
-  .wlist { display:grid; grid-template-columns:repeat(auto-fill, minmax(210px, 1fr));
-           gap:.2rem .8rem; }
-  .witem { display:flex; align-items:center; gap:.4rem; min-width:0; font-size:.9rem; }
-  .witem img { width:22px; height:22px; border-radius:4px; border:1px solid var(--line);
-               flex-shrink:0; }
-  .witem a { text-decoration:none; overflow-wrap:anywhere; }
+  .wmeter span { display:block; height:100%; background:var(--accent-text); }
+  .wmeter.t-caution span { background:var(--caution-text); }
+  .wmeter.t-alarm span { background:var(--vermilion); }
+  .wroom { display:flex; flex-wrap:wrap; gap:.1rem .6rem; margin-top:.5rem;
+           font-family:var(--mono); font-size:12px; letter-spacing:.04em;
+           color:var(--on-card-dim); }
+  .wroom .t-alarm { color:var(--warn-text); }
+  .wspare { font-family:var(--mono); font-size:12px; letter-spacing:.04em;
+            margin-top:.25rem; }
+  .wspare .t-caution { color:var(--caution-text); }
+  .wtally { margin-top:.7rem; font-size:.88rem; color:var(--on-card-dim); }
+  .wqs { display:flex; gap:.3rem; flex-wrap:wrap; margin-top:.4rem; }
+  .wqs span { font-family:var(--mono); font-size:11px; letter-spacing:.04em;
+              border:1px solid var(--line); border-radius:999px;
+              padding:.1rem .5rem; }
+  .welse { margin-top:.35rem; }
+  /* One container: a named row, then its slots. */
+  .wbags { margin-top:.8rem; }
+  .wbag { padding:.5rem 0; border-top:1px solid var(--line); }
+  .wbh { display:flex; align-items:baseline; gap:.6rem; }
+  .wbh .n { overflow-wrap:anywhere; min-width:0; }
+  .wbh .of { margin-left:auto; white-space:nowrap; font-family:var(--mono);
+             font-size:11px; letter-spacing:.06em; color:var(--on-card-dim); }
+  .wbag.t-alarm .of { color:var(--warn-text); }
+  /* ELEVEN PIXELS, INK FOR FULL AND A HAIRLINE FOR EMPTY, so "full" reads
+     without parsing a number. Not a link and not focusable: an 11px hit
+     target is a third of what this page allows anywhere, and the item behind
+     a square is named properly in the list below. */
+  .wgrid { display:flex; flex-wrap:wrap; gap:2px; margin-top:.4rem; }
+  .wslot { width:11px; height:11px; border-radius:2px;
+           background:var(--on-card); }
+  .wslot.free { background:transparent;
+                box-shadow:inset 0 0 0 1px var(--line); }
+  /* Green and better in a bag, rares anywhere. The list a person scans for
+     "why is that rare sitting in a bag", which is why the place is amber. */
+  .wnote { display:flex; align-items:baseline; gap:.5rem; font-family:var(--mono);
+           font-size:10px; letter-spacing:.14em; text-transform:uppercase;
+           color:var(--on-card-dim); margin:.9rem 0 .2rem; }
+  .wnote .n { margin-left:auto; }
+  .wlist { display:grid; }
+  .witem { display:flex; align-items:center; gap:.5rem; min-height:44px;
+           min-width:0; font-size:.9rem; }
+  .witem img { width:26px; height:26px; border-radius:6px; flex-shrink:0;
+               border:1px solid var(--line); }
+  .witem a { text-decoration:none; overflow-wrap:anywhere; min-width:0; }
   .witem a:hover { text-decoration:underline; }
-  .witem .w { color:var(--dim); font-size:.8rem; white-space:nowrap; }
-  /* The auction house. Almost certainly empty, and the empty state is the
-     whole point of the panel: a blank box and "the auction house is broken"
-     look identical, so this one says which it is and names the ticket. */
-  #wauction { background:var(--panel); border:1px solid var(--line);
-              border-radius:10px; padding:.8rem 1rem 1rem; margin-top:1rem; }
-  #wauction h3 { font-size:1.15rem; font-weight:normal;
-                 font-family:Georgia,'Times New Roman',serif; margin-bottom:.4rem; }
-  #wauction .empty { color:var(--dim); }
-  #wauction .empty a { color:var(--alliance); }
+  .witem .w { margin-left:auto; white-space:nowrap; font-family:var(--mono);
+              font-size:11px; letter-spacing:.05em; color:var(--on-card-dim); }
+  .witem .w.t-caution { color:var(--caution-text); }
+  /* The auction house and the guild bank. Both are panels whose whole content
+     is an explanation, so both are cards rather than bare text: an
+     unexplained blank and a broken query look identical. */
+  #wauction, #wguild { background:var(--panel); border:1px solid var(--line);
+                       border-radius:14px; padding:16px 18px 18px; }
+  .wplead { font-weight:700; overflow-wrap:anywhere; }
+  .wbody { margin-top:.5rem; max-width:68ch; color:var(--on-card-dim);
+           overflow-wrap:anywhere; }
+  .wbody a { color:var(--accent-text); }
+  .wempty { color:var(--on-card-dim); font-family:var(--mono); font-size:12px;
+            letter-spacing:.06em; }
+  .wsect + .wsect { margin-top:.9rem; }
   .wauc { display:flex; align-items:center; gap:.5rem; flex-wrap:wrap;
-          padding:.35rem 0; border-bottom:1px solid var(--line); }
-  .wauc img { width:26px; height:26px; border-radius:4px; border:1px solid var(--line); }
-  .wauc .m { color:var(--dim); font-size:.85rem; }
+          min-height:44px; padding:.35rem 0;
+          border-top:1px solid var(--line); }
+  .wauc img { width:26px; height:26px; border-radius:6px;
+              border:1px solid var(--line); }
+  .wauc a { text-decoration:none; overflow-wrap:anywhere; }
+  .wauc .m { font-family:var(--mono); font-size:11px; letter-spacing:.05em;
+             color:var(--on-card-dim); }
+  .wauc .k, .wstep .v { display:inline-block; }
+  .wauc .k { margin-right:.3rem; }
+  /* The road to a guild bank, as a numbered list, because it is a sequence
+     somebody has to walk in order and not a feature matrix. */
+  .wsteps { list-style:none; padding:0; margin-top:.9rem; }
+  .wstep { display:flex; align-items:center; gap:.7rem; min-height:44px;
+           border-top:1px solid var(--line); }
+  .wstep .s { overflow-wrap:anywhere; min-width:0; }
+  .wstep .v { margin-left:auto; white-space:nowrap; font-family:var(--mono);
+              font-size:11px; letter-spacing:.1em; text-transform:uppercase;
+              color:var(--on-card-dim); }
+  .wstep .v.t-good { color:var(--accent-text); }
+  .wstep .v.t-caution { color:var(--caution-text); }
   /* --- the Family tab (infra#2892), reshaped by infra#3110 and infra#88 ---
      Five feeds, then one board. Sized for a thumb on a 390px phone FIRST and
      widened on a desktop, rather than the other way round: the map is
@@ -1759,20 +1843,31 @@
     <nav id="stjump"></nav>
     <div id="stcards"></div>
   </div>
-  <!-- --- the Wealth and Bags view (quadseven/mod-overseer#88) --------------
-       Inside the Armory section on purpose, not a seventh tab. It is the
-       same five characters and the same saved rows the paper dolls above are
-       drawn from, and the question it answers ("what is he carrying, and is
-       there room for the next drop") is the one asked immediately after
-       "what is he wearing". A jump link is added to the sticky nav above so
-       reaching it from a phone is one tap rather than a long scroll. -->
-  <div id="wealth">
-    <h2 id="wtitle">Wealth and bags</h2>
-    <div id="wsaved"></div>
-    <div id="wheadline"></div>
-    <div id="wcards"></div>
-    <div id="wauction"></div>
-  </div>
+</section>
+<!-- THE BAGS TAB (quadseven/mod-overseer#88, infra#2597) --------------------
+     A TAB OF ITS OWN, and that is a change of mind rather than a move. This
+     lived at the bottom of the Armory on the theory that "what is he wearing"
+     and "what is he carrying" are one question asked twice. They are not: the
+     Armory is opened when something went wrong in a fight, and this is opened
+     when nothing is happening at all - because a character with no bag room
+     stops questing and stands still, which is the least dramatic failure this
+     realm has and the easiest one to look straight past. Buried under five
+     paper dolls it was reachable by a jump link nobody pressed.
+
+     EVERY WORD IN HERE ARRIVES IN THE PAYLOAD. The finding at the top, the
+     labels on the strip, the words on the bag rows and the reason the auction
+     panel is empty are all composed in wealth.py; this markup is six empty
+     boxes and three section rules for the page to fill (infra#2597). -->
+<section id="bags">
+  <div id="wfinding"></div>
+  <div id="wsaved"></div>
+  <div id="wstats"></div>
+  <div id="wcardshead" class="brule"></div>
+  <div id="wcards"></div>
+  <div id="wauchead" class="brule"></div>
+  <div id="wauction"></div>
+  <div id="wguildhead" class="brule"></div>
+  <div id="wguild"></div>
 </section>
 <section id="achievements">
   <div id="achhead">reaching the world...</div>
@@ -1835,6 +1930,7 @@
 "use strict";
 const MAP_VIEW = "map";
 const ARMORY_VIEW = "armory";
+const BAGS_VIEW = "bags";
 const ACH_VIEW = "achievements";
 const CONTINENT_ORDER = ["0", "1", "530", "571", "quelthalas", "azuremyst"];
 // A serif on purpose - the map should not read in the same voice as the
@@ -1888,7 +1984,15 @@ async function loadZones() {
   ab.dataset.view = ARMORY_VIEW;
   ab.onclick = () => showView(ARMORY_VIEW);
   tabs.appendChild(ab);
-  // Third: what they have DONE. Family is "are they all right", Armory is
+  // Fourth, straight after the Armory, because it is the same five and the
+  // next question about them: the Armory says what they are wearing, this
+  // says what they are carrying and whether there is room for the next drop.
+  const bb = document.createElement("button");
+  bb.textContent = "Bags";
+  bb.dataset.view = BAGS_VIEW;
+  bb.onclick = () => showView(BAGS_VIEW);
+  tabs.appendChild(bb);
+  // Fifth: what they have DONE. Family is "are they all right", Armory is
   // "why did that go badly"; this is the one to open the evening after.
   const hb = document.createElement("button");
   hb.textContent = "Achievements";
@@ -4152,10 +4256,12 @@ function showView(v) {
   const isFam = v === FAMILY_VIEW;
   const isWatch = v === WATCH_VIEW;
   const isArm = v === ARMORY_VIEW;
+  const isBags = v === BAGS_VIEW;
   const isAch = v === ACH_VIEW;
   fsection.style.display = isFam ? "block" : "none";
   watchsection.style.display = isWatch ? "block" : "none";
   asection.style.display = isArm ? "block" : "none";
+  bagsection.style.display = isBags ? "block" : "none";
   achsection.style.display = isAch ? "block" : "none";
   // Every non-map view hides the canvas and its legend. This used to read
   // "not Family means map", which would have drawn the map underneath the
@@ -4197,9 +4303,15 @@ function showView(v) {
     // thirty seconds of blank panel under the profiles is indistinguishable
     // from a broken one.
     pollStanding();
-    // The bags and purses below the profiles, on their own endpoint: two
-    // reads of the same five saved characters, so a slow item_template join
-    // cannot hold up the paper dolls and a failed one cannot blank them.
+    return;
+  }
+  if (isBags) {
+    // A read, exactly like the Armory: no player, no heartbeat of its own.
+    // It still closes the panel and stops the grid, which are map and Family
+    // things that would otherwise go on running behind a view that does not
+    // show them.
+    closePanel();
+    stopBroadcasts();
     pollWealth();
     return;
   }
@@ -5655,146 +5767,154 @@ async function pollStanding() {
 // timer, so they physically cannot change faster than that.
 setInterval(pollStanding, 30000);
 
-// --- the Wealth and Bags view (quadseven/mod-overseer#88) -----------------
-// The second half of the Armory tab. The paper dolls above answer "what is
-// he WEARING"; this answers "what is he CARRYING, what is it worth, and is
-// there room for the next drop" - and on the day it landed the answer to the
-// last one was no, for four of the five, which is a condition that stops a
-// bot questing entirely (a loot it has no room for never completes, so the
-// loot goal preempts everything else forever) and which nothing on this site
-// could show without hand-written SQL.
+// --- the Bags tab (quadseven/mod-overseer#88, infra#2597) -----------------
+// What the five are CARRYING, what it is worth, and whether there is room for
+// the next drop. The Armory above answers "what is he wearing"; this used to
+// hang off the bottom of that tab on the theory that the two are one question
+// asked twice. They are not. The Armory is opened when something went wrong
+// in a fight; this is opened when nothing is happening at all, because a
+// character with no bag room stops questing and stands still - the least
+// dramatic failure this realm has, and the easiest to look straight past.
+// Buried under five paper dolls it was reachable only by a jump link, and a
+// jump link is not a tab.
 //
-// WHERE IT SITS. Inside #armory, below the profiles, polled from the same
-// showView branch - one more view on the same five saved characters, not a
-// seventh tab. All of the arithmetic is in wealth.py where the suite can
-// reach it; nothing below decides anything, it only draws.
+// NOTHING BELOW DECIDES ANYTHING (infra#2597). Every sentence, every label,
+// every threshold and every tone arrives in the payload, composed in
+// wealth.py where the stdlib suite can reach it with no database and no
+// browser. If you are about to write a ternary here that picks a status
+// word, or join a level and a class into a line with punctuation of your
+// own, stop: it belongs in the module. The one string this file owns is the
+// unreachable notice, and it says why it is here.
 //
-// Icons and item links are the Armory's own: iconImg against ICON_HOST for
-// the picture, the quality colour as the border, and the wowhead page behind
-// the name for the tooltip this page does not carry. One approach for item
-// art on this page, not two.
-
-const wsection = document.getElementById("wealth");
-const wheadline = document.getElementById("wheadline");
+// The quality colours are the Armory's own .q0-.q7, which is why this section
+// carries the same dark token scope it does: #1eff00 uncommon-green on white
+// is close to invisible, and re-tinting it would be inventing a new quality
+// colour rather than showing the game's.
+const bagsection = document.getElementById("bags");
+const wfinding = document.getElementById("wfinding");
+const wsaved = document.getElementById("wsaved");
+const wstats = document.getElementById("wstats");
 const wcards = document.getElementById("wcards");
 const wauction = document.getElementById("wauction");
-const wsaved = document.getElementById("wsaved");
-// Said out loud for the same reason #asaved is: these rows are a SAVE. Gold
-// spent five minutes ago is still here until the core's own timer runs.
-const WSAVED = "purses, bags and auctions as the world last saved them, on the "
-  + "same timer as the gear above.";
-const WSTALE = " The world is unreachable right now, so this may be stale.";
-wsaved.textContent = WSAVED;
+const wguild = document.getElementById("wguild");
+const wcardshead = document.getElementById("wcardshead");
+const wauchead = document.getElementById("wauchead");
+const wguildhead = document.getElementById("wguildhead");
 
-// wealth.py's own word for an item that is worn rather than carried.
-const WORN = "equipped";
+// THE ONE SENTENCE THIS FILE OWNS, and it is about the FETCH rather than about
+// the family: there is no payload during the failure it exists for, so it
+// cannot come from one. Everything the page says about the DATA arrives with
+// the data - "as the world last saved them" is wealth.SAVED_NOTE, and it is
+// kept beside this one when a poll fails so the reader still knows both.
+const WSTALE = "The world is unreachable right now, so this may be stale.";
 
-// A jump link into this block, on the Armory's sticky nav. It is appended
-// now, before any profile exists, and put LAST by `order` in CSS rather than
-// by DOM position, because the five name links arrive later and from a
-// different poll: ordering by arrival would mean the nav reshuffles itself
-// depending on which fetch answered first. The click scrolls rather than
-// navigating - an href that actually fired would rewrite location.hash, and
-// the hash is this page's router.
-const wjump = el("a", "wjump", "wealth and bags");
-wjump.href = "#" + ARMORY_VIEW;
-wjump.onclick = (e) => {
-  e.preventDefault();
-  wsection.scrollIntoView({ behavior: "smooth", block: "start" });
-};
-ajump.appendChild(wjump);
+// Cards are built once and updated in place, the same rule the Armory
+// profiles and the Family cards follow: five cards rebuilt every poll would
+// throw away the scroll position mid-read on a phone, which is the one device
+// this is checked from. `note` is the last good saved-note, kept for the
+// failure path above.
+const wlth = { cards: new Map(), note: "" };
 
-// Cards are built once and updated in place, the same rule the profiles
-// above and the Family cards follow: five cards rebuilt every poll would
-// throw away the scroll position mid-read on a phone.
-const wlth = { cards: new Map() };
-
-// Money, in the game's three coins and its three colours. Zero is a real
-// answer here (a quest item is worth nothing to a vendor and should say so),
-// which is why this does not reuse the Armory tooltip's money helper - that
-// one draws nothing at all for nothing, which is right for a tooltip line
-// and wrong for a total.
-function wcoins(m) {
-  const n = el("span", "wcoins");
-  if (!m || !m.total) { n.append(el("span", "none", "nothing")); return n; }
-  if (m.gold) n.append(el("span", "g", m.gold + "g "));
-  if (m.gold || m.silver) n.append(el("span", "s", m.silver + "s "));
-  n.append(el("span", "c", m.copper + "c"));
-  return n;
-}
-
-function wcoinsText(m) {
-  if (!m || !m.total) return "nothing";
-  const bits = [];
-  if (m.gold) bits.push(m.gold + "g");
-  if (m.gold || m.silver) bits.push(m.silver + "s");
-  bits.push(m.copper + "c");
-  return bits.join(" ");
-}
-
-function wchip(cls, key, value) {
-  const c = el("span", cls ? "wchip " + cls : "wchip");
-  if (key) c.append(el("span", "k", key));
-  if (value instanceof Node) c.append(value);
-  else c.append(el("span", "", String(value)));
-  return c;
+// A tone from the payload becomes a class and nothing else. wealth.py decides
+// what counts as an alarm; this decides what an alarm looks like.
+function wtone(base, tone) {
+  if (!tone) return base;
+  return base ? base + " t-" + tone : "t-" + tone;
 }
 
 function wquality(quality) {
   return quality === null || quality === undefined ? "qunknown" : "q" + quality;
 }
 
-// The lines the game's own tooltip would carry, as a title attribute. A real
-// tooltip card is the Armory's, and it is built from a payload this view
-// does not fetch; borrowing it would mean fetching every carried item's
-// stats to draw a bag grid, which is a hundred times the data for a picture.
-function wtitle(it) {
-  const facts = [it.quality_name];
-  if (it.kind) facts.push(it.kind);
-  if (it.item_level) facts.push("item level " + it.item_level);
-  const bits = [it.name + (it.count > 1 ? " x" + it.count : "")];
-  bits.push("(" + facts.join(", ") + ")");
-  bits.push(it.sell_price ? "vendor " + wcoinsText(it.value) : "no vendor value");
-  return bits.join(" ");
+// Money, in the game's three coins and its three colours. The word for an
+// empty purse is the module's (coins().text), because a word, a zero and a
+// blank space are three different claims about the same amount.
+function wcoins(m) {
+  const n = el("span", "wcoins");
+  if (!m) return n;
+  if (!m.total) { n.append(el("span", "zero", m.text)); return n; }
+  if (m.gold) n.append(el("span", "g", m.gold + "g "));
+  if (m.gold || m.silver) n.append(el("span", "s", m.silver + "s "));
+  n.append(el("span", "c", m.copper + "c"));
+  return n;
 }
 
+// A sentence with an amount of money in the middle of it. Both halves are
+// composed in the module; this only puts the coins between them.
+function wmoney(s) {
+  const n = el("div", "wsay");
+  n.append(el("span", "", s.before));
+  n.append(wcoins(s.money));
+  if (s.after) n.append(el("span", "", s.after));
+  return n;
+}
+
+// The same shape for a sentence with a ticket link in the middle of it. The
+// page holds itself to naming exactly two outside hosts (the icon CDN and the
+// model viewer), so every other link is built server side.
+function wlinked(s) {
+  const p = el("p", "wbody");
+  p.append(el("span", "", s.before));
+  const a = document.createElement("a");
+  a.href = s.ticket.url;
+  a.target = "_blank";
+  a.rel = "noopener";
+  a.textContent = s.ticket.label;
+  p.append(a, el("span", "", s.after));
+  return p;
+}
+
+// The section rule: a mono index, a 2px line, and the label ranged right. The
+// index and the label are both words on a screen, so both come from the
+// payload rather than being typed here.
+function wrule(node, sec) {
+  node.replaceChildren();
+  node.append(el("span", "bidx", sec.index));
+  node.append(el("span", "bline"));
+  node.append(el("span", "blab", sec.label));
+}
+
+// A link to the item's page, for the tooltip this site does not carry. The
+// title line is composed in the module, because the phrase for an unsellable
+// stack is a sentence about what a SellPrice of 0 means.
 function wlink(it) {
   const a = document.createElement("a");
   a.href = it.wowhead;
   a.target = "_blank";
   a.rel = "noopener";
-  a.title = wtitle(it);
+  a.title = it.tip;
+  a.className = wquality(it.quality);
+  a.textContent = it.stack;
   return a;
 }
 
-// One square. An EMPTY square is drawn too, dashed and grey: a bag rendered
-// as only the things in it would make a full bag and a half-empty one the
-// same shape, and which of those is true is the whole finding here.
+// ONE SQUARE PER SLOT, ELEVEN PIXELS, ink for a full one and a hairline for an
+// empty one. The previous version of this grid drew a 44px icon per slot,
+// which is the game's own bag window and the wrong shape for the question
+// being asked here: "is he full" had to be read off a number beside a picture
+// of forty-four things. At eleven pixels a bag is one glance, five bags are
+// one glance, and a full one is a solid block.
 //
-// The name is the fallback and it is a COMMON path here, not a rare one: the
-// frozen icon book covers equippable displays only (see the stylesheet), so
-// most of a bag draws its name in its quality colour instead of a picture.
-// Same shape as the Armory's fallback, and the same reason - legible beats
-// blank - it just happens far more often on this grid.
+// A SQUARE IS NOT A CONTROL. It carries the item's tooltip line as a title and
+// nothing else - an 11px link would be a hit target a third the size this page
+// allows anywhere else, and the item it names is one row down in the notable
+// list with a real one.
 function wslotCell(it) {
-  if (!it) return el("div", "wslot free");
-  const a = wlink(it);
-  a.className = "wslot " + wquality(it.quality);
-  const fallback = () => { a.prepend(el("span", "nm", it.name)); };
-  if (it.icon) a.appendChild(iconImg(it.icon, it.name, fallback));
-  else fallback();
-  if (it.count > 1) a.append(el("span", "c", it.count));
-  return a;
+  if (!it) return el("span", "wslot free");
+  const cell = el("span", "wslot");
+  cell.title = it.tip;
+  return cell;
 }
 
-// One container, drawn at its true size: every position it has, with the
-// items sitting where the game has them rather than packed to the front.
+// One container: a named row, then its slots. The name is drawn in the bag's
+// own quality colour, which is what makes the row identifiable without an
+// icon - and an icon per bag is four more requests per character for a
+// picture of a bag nobody is trying to identify by its art.
 function wbag(bag) {
-  const box = el("div", "wbag");
+  const box = el("div", wtone("wbag", bag.tone));
   const head = el("div", "wbh");
-  if (bag.icon) head.appendChild(iconImg(bag.icon, "", () => {}));
   head.appendChild(el("span", "n " + wquality(bag.quality), bag.name));
-  head.appendChild(el("span", "of", bag.used + " of " + bag.slots));
+  head.appendChild(el("span", "of", bag.room_label));
   const grid = el("div", "wgrid");
   const cells = new Array(bag.slots).fill(null);
   const spill = [];
@@ -5812,15 +5932,44 @@ function wbag(bag) {
   return box;
 }
 
+// One line of "worth naming". The place is amber when the thing is in a bag
+// and quiet when it is being worn, and which of those it is was decided in
+// the module: an item on a body is where it belongs, and the same item loose
+// in a bag is a spare, a mistake, or gold nobody has banked.
 function witem(it) {
   const line = el("div", "witem");
   if (it.icon) line.appendChild(iconImg(it.icon, "", () => {}));
-  const a = wlink(it);
-  a.className = wquality(it.quality);
-  a.textContent = it.name + (it.count > 1 ? " x" + it.count : "");
-  line.appendChild(a);
-  line.appendChild(el("span", "w", it.where === WORN ? "(worn)" : "(" + it.container + ")"));
+  line.appendChild(wlink(it));
+  if (it.place) line.appendChild(el("span", wtone("w", it.place_tone), it.place));
   return line;
+}
+
+// THE FINDING, AND IT IS THE FIRST THING ON THE TAB. Not a chart: a chart of
+// 189 out of 190 is a full bar, and a full bar is what a healthy inventory
+// looks like too until you read the axis. The sentence says which.
+function renderFinding(f) {
+  wfinding.className = wtone("", f.tone);
+  wfinding.replaceChildren();
+  wfinding.appendChild(el("p", "wlead", f.lead));
+  wfinding.appendChild(el("p", "wdetail", f.detail));
+  wfinding.appendChild(el("p", "wbecause", f.because));
+  if (f.who_label) wfinding.appendChild(el("p", "wwho", f.who_label));
+}
+
+// The strip under it: the same readings in the same order every poll, zeroes
+// included, so a reader knows where to look without reading.
+function renderStats(list) {
+  wstats.replaceChildren();
+  for (const s of list) {
+    const box = el("div", wtone("wstat", s.tone));
+    box.appendChild(el("span", "k", s.label));
+    const v = el("span", "v");
+    if (s.money) v.appendChild(wcoins(s.money));
+    else v.textContent = s.value;
+    box.appendChild(v);
+    if (s.note) box.appendChild(el("span", "n", s.note));
+    wstats.appendChild(box);
+  }
 }
 
 function wealthCard(name) {
@@ -5834,77 +5983,63 @@ function wealthCard(name) {
   const bar = el("span");
   meter.appendChild(bar);
   const room = el("div", "wroom");
+  const spare = el("div", "wspare");
   const tally = el("div", "wtally");
   const bags = el("div", "wbags");
   const notable = el("div", "wnotable");
-  card.append(head, who, purse, meter, room, tally, bags, notable);
+  card.append(head, who, purse, meter, room, spare, tally, bags, notable);
   wcards.appendChild(card);
-  c = { card, head, who, purse, meter, bar, room, tally, bags, notable };
+  c = { card, head, who, purse, meter, bar, room, spare, tally, bags, notable };
   wlth.cards.set(name, c);
   return c;
 }
 
 function renderWealthMember(c, m) {
   c.card.className = "wcard" + (m.present ? "" : " c-gone");
+  c.who.textContent = m.who;
   if (!m.present) {
-    // Still says who, and still says what. A card stripped to a name is how
-    // a missing character stops being noticed.
-    c.who.textContent = m["class"] + " - " + m.role;
+    // Still says who, and still says what. A card stripped to a name is how a
+    // missing character stops being noticed.
     c.purse.replaceChildren();
-    c.meter.style.display = "none";
-    c.room.textContent = "no saved character - deleted, or never made.";
+    c.meter.hidden = true;
+    c.room.textContent = m.absent_note;
+    c.spare.replaceChildren();
     c.tally.replaceChildren();
     c.bags.replaceChildren();
     c.notable.replaceChildren();
     return;
   }
   c.head.style.color = m.class_colour;
-  c.who.textContent = m.level + " " + m["class"] + " - " + m.role;
   c.purse.replaceChildren(wcoins(m.money));
-  const cap = m.capacity;
-  const pct = cap.slots ? Math.round(cap.used / cap.slots * 100) : 0;
-  c.meter.style.display = "";
-  // Amber near the top and red at it, because a full inventory is not a
-  // cosmetic state on this realm: it is what stops a character questing.
-  c.meter.className = "wmeter" + (cap.full ? " full" : pct >= 90 ? " tight" : "");
-  c.bar.style.width = pct + "%";
+  const r = m.room;
+  c.meter.hidden = false;
+  c.meter.className = wtone("wmeter", r.tone);
+  c.bar.style.width = r.percent + "%";
   c.room.replaceChildren();
-  c.room.append(el("span", "", cap.used + " of " + cap.slots + " slots used, "));
-  c.room.append(el("span", cap.free ? "" : "full",
-    cap.free ? cap.free + " free" : "no room left"));
-  c.room.append(el("span", "", " across " + cap.bags
-    + (cap.bags === 1 ? " bag" : " bags") + " and the backpack"));
-  // The actionable half of a full inventory: an empty bag slot is a bag
-  // somebody could hand him, which is a different fix from selling.
-  if (cap.empty_bag_slots) {
-    c.room.append(el("span", "spare", " - " + cap.empty_bag_slots + " empty bag "
-      + (cap.empty_bag_slots === 1 ? "slot" : "slots")));
+  c.room.append(el("span", "", r.used_label));
+  c.room.append(el("span", wtone("", r.free_tone), r.free_label));
+  c.room.append(el("span", "", r.bags_label));
+  // The actionable half of a full inventory, on a line of its own and in
+  // amber: an empty bag position is a bag somebody could hand him, which is a
+  // different fix from selling something.
+  c.spare.replaceChildren();
+  if (r.spare_label) {
+    c.spare.append(el("span", wtone("", r.spare_tone), r.spare_label));
   }
-  c.tally.replaceChildren();
-  const line = el("div");
-  line.append(el("span", "", "carrying " + m.carried.items
-    + (m.carried.items === 1 ? " stack" : " stacks")
-    + " (" + m.carried.units + " items), worth "));
-  line.append(wcoins(m.carried.vendor));
-  line.append(el("span", "", " at a vendor"));
-  c.tally.appendChild(line);
+  c.tally.replaceChildren(wmoney(m.holding));
   // The quality breakdown is over what he HOLDS, worn included: "how many
-  // rares has this family got" has one honest denominator and it is not
-  // "the ones that happen to be loose in a bag".
+  // rares has this family got" has one honest denominator and it is not "the
+  // ones that happen to be loose in a bag".
   const qs = el("div", "wqs");
   for (const q of m.held.by_quality) {
-    qs.append(el("span", wquality(q.quality), q.count + " " + q.name));
+    qs.append(el("span", wquality(q.quality), q.label));
   }
   c.tally.appendChild(qs);
-  if (m.elsewhere) {
-    c.tally.appendChild(el("div", "", m.elsewhere
-      + " more stored elsewhere (bank, keyring), not drawn here"));
-  }
+  if (m.elsewhere_note) c.tally.appendChild(el("div", "welse", m.elsewhere_note));
   c.bags.replaceChildren(...m.containers.map(wbag));
   c.notable.replaceChildren();
-  if (m.notable.length) {
-    c.notable.appendChild(el("div", "wnote",
-      "green or better in the bags, and rares anywhere"));
+  if (m.notable_note) {
+    c.notable.appendChild(el("div", "wnote", m.notable_note));
     const list = el("div", "wlist");
     for (const it of m.notable) list.appendChild(witem(it));
     c.notable.appendChild(list);
@@ -5915,121 +6050,117 @@ function waucRow(r) {
   const line = el("div", "wauc");
   const it = r.item;
   if (it.icon) line.appendChild(iconImg(it.icon, "", () => {}));
-  const a = wlink(it);
-  a.className = wquality(it.quality);
-  a.textContent = it.name + (it.count > 1 ? " x" + it.count : "");
-  line.appendChild(a);
-  line.appendChild(el("span", "m", r.ours ? "listed by " + r.owner
-    : "seller " + (r.owner || "unknown")));
+  line.appendChild(wlink(it));
+  line.appendChild(el("span", "m", r.who_label));
   const bid = el("span", "m");
-  bid.append(el("span", "", r.has_bid ? "highest bid " : "starting bid "));
+  bid.append(el("span", "k", r.bid_label));
   bid.append(wcoins(r.has_bid ? r.bid : r.start));
   line.appendChild(bid);
-  if (r.buyout && r.buyout.total) {
+  if (r.buyout_label) {
     const buyout = el("span", "m");
-    buyout.append(el("span", "", "buyout "));
+    buyout.append(el("span", "k", r.buyout_label));
     buyout.append(wcoins(r.buyout));
     line.appendChild(buyout);
   }
-  if (r.buyer) line.appendChild(el("span", "m", "winning: " + r.buyer));
-  if (r.expires_at) {
-    line.appendChild(el("span", "m",
-      "expires " + new Date(r.expires_at * 1000).toLocaleString()));
+  if (r.winner_label) line.appendChild(el("span", "m", r.winner_label));
+  if (r.expires_label) {
+    // The only thing on this tab the page is allowed to decide: the reader's
+    // own locale for a timestamp. The module has no clock, and a pure
+    // function that read one would be untestable for the sake of a date.
+    const when = el("span", "m");
+    when.append(el("span", "k", r.expires_label));
+    when.append(el("span", "", new Date(r.expires_at * 1000).toLocaleString()));
+    line.appendChild(when);
   }
   return line;
 }
 
-function waucSection(label, rows) {
-  const box = el("div");
-  box.appendChild(el("div", "wnote", label + " (" + rows.length + ")"));
-  if (!rows.length) {
-    box.appendChild(el("div", "empty", "none"));
+function waucSection(s) {
+  const box = el("div", "wsect");
+  const head = el("div", "wnote");
+  head.append(el("span", "", s.label));
+  head.append(el("span", "n", String(s.count)));
+  box.appendChild(head);
+  if (!s.rows.length) {
+    box.appendChild(el("div", "wempty", s.empty));
     return box;
   }
-  for (const r of rows) box.appendChild(waucRow(r));
+  for (const r of s.rows) box.appendChild(waucRow(r));
   return box;
 }
 
-// THE EMPTY STATE IS THE PANEL. Nothing in the module lists, bids or buys
-// yet, so an empty auction house is the CORRECT reading and a blank box
-// would be indistinguishable from a broken query. It says which, names the
-// open ticket, and says the one thing the table structurally cannot tell
-// anybody: a completed sale is deleted and mailed, so no history survives
-// here to be shown even once the family starts trading.
+// THE EMPTY STATE IS THE PANEL. Nothing in the module lists, bids or buys yet,
+// so an empty auction house is the CORRECT reading of the table and a blank
+// box would be indistinguishable from a broken query. Which of the two it is,
+// the ticket that is still open, and the thing the table structurally cannot
+// say are all sentences in wealth.py; this puts them on the screen.
 function renderAuctions(a) {
   wauction.replaceChildren();
-  wauction.appendChild(el("h3", "", "Auction house"));
   if (!a.any) {
-    wauction.appendChild(el("div", "empty",
-      "Nothing listed, nothing sold, nothing bid on: the auction house table "
-      + "holds no row belonging to any of them."));
-    const why = el("div", "empty");
-    why.append(el("span", "", "That is an empty auction house, not an empty "
-      + "panel. No part of the module lists, bids or buys anything yet - "));
-    // The ticket comes from the payload, not from here: this page names
-    // exactly two outside hosts and neither of them is a bug tracker.
-    const link = document.createElement("a");
-    link.href = a.ticket.url;
-    link.target = "_blank";
-    link.rel = "noopener";
-    link.textContent = a.ticket.label;
-    why.append(link, el("span", "", " is still open."));
-    wauction.appendChild(why);
+    wauction.appendChild(el("p", "wplead", a.empty.lead));
+    wauction.appendChild(el("p", "wbody", a.empty.body));
+    wauction.appendChild(wlinked(a.empty.why));
   } else {
-    wauction.appendChild(waucSection("listed by the family", a.listings));
-    wauction.appendChild(waucSection("sold, gold in the post", a.sold));
-    wauction.appendChild(waucSection("bid on by the family", a.bids));
+    for (const s of a.sections) wauction.appendChild(waucSection(s));
   }
-  if (!a.tracked) {
-    wauction.appendChild(el("div", "empty",
-      "Completed sales leave no trace to read: the core deletes an auction "
-      + "the moment it finishes and mails the gold, so this table can only "
-      + "ever show live auctions."));
+  if (!a.tracked) wauction.appendChild(el("p", "wbody", a.caveat));
+}
+
+// THE GUILD BANK THERE IS NOT, drawn as the road to one rather than as an
+// empty vault. Same reasoning as the auction panel: an empty vault and a
+// broken query look identical, and what is actually useful is which parts of
+// the road the module can already drive.
+function renderGuild(g) {
+  wguild.replaceChildren();
+  wguild.appendChild(el("p", "wplead", g.lead));
+  wguild.appendChild(el("p", "wbody", g.body));
+  const list = el("ol", "wsteps");
+  for (const s of g.steps) {
+    const li = el("li", "wstep");
+    li.append(el("span", "s", s.step));
+    li.append(el("span", wtone("v", s.tone), s.state_label));
+    list.appendChild(li);
   }
+  wguild.appendChild(list);
+  wguild.appendChild(wlinked(g.blocked));
 }
 
 function renderWealth(p) {
-  const f = p.family;
-  wheadline.replaceChildren();
-  wheadline.appendChild(wchip("", "purse", wcoins(f.money)));
-  wheadline.appendChild(wchip("", "carried goods", wcoins(f.vendor)));
-  wheadline.appendChild(wchip(f.capacity.free ? "" : "alarm", "bag slots free",
-    f.capacity.free + " of " + f.capacity.slots));
-  if (f.rare_or_better) {
-    wheadline.appendChild(wchip("good", "rare or better", f.rare_or_better));
-  }
-  if (f.richest) wheadline.appendChild(wchip("", "richest", f.richest));
-  // The two findings a person can act on today, and the only two drawn loud.
-  if (f.full.length) {
-    wheadline.appendChild(wchip("alarm", "out of room", f.full.join(", ")));
-  }
-  if (f.capacity.empty_bag_slots) {
-    wheadline.appendChild(wchip("alarm", "empty bag slots",
-      f.capacity.empty_bag_slots));
-  }
+  renderFinding(p.family.finding);
+  renderStats(p.family.stats);
+  wrule(wcardshead, p.sections.cards);
+  wrule(wauchead, p.sections.auction);
+  wrule(wguildhead, p.sections.guild);
   for (const m of p.members) renderWealthMember(wealthCard(m.name), m);
   renderAuctions(p.auctions);
+  renderGuild(p.guild_bank);
 }
 
 async function pollWealth() {
-  if (view !== ARMORY_VIEW) return;
+  if (view !== BAGS_VIEW) return;
   try {
     const r = await fetch(u("/api/wealth"));
     if (!r.ok) throw new Error(r.status);
-    renderWealth(await r.json());
-    wsaved.textContent = WSAVED;
+    const p = await r.json();
+    renderWealth(p);
+    wlth.note = p.saved_note;
+    wsaved.replaceChildren(el("span", "", p.saved_note));
     wsaved.className = "";
   } catch (e) {
-    // Keep every bag already drawn, exactly as the profiles above do. An
-    // empty bag grid reads as "he has plenty of room", which is the precise
+    // Keep every bag already drawn, exactly as the profiles in the Armory do.
+    // An empty bag grid reads as "he has plenty of room", which is the precise
     // opposite of what this view exists to report.
-    wsaved.textContent = WSAVED + WSTALE;
-    wsaved.className = "alarm";
+    wsaved.replaceChildren();
+    if (wlth.note) wsaved.append(el("span", "", wlth.note));
+    wsaved.append(el("span", "", WSTALE));
+    wsaved.className = "t-alarm";
   }
 }
 
-// The same thirty seconds the profiles above use, and for the same reason:
-// money and bags are written by the core's save timer, not by the second.
+// The same thirty seconds the Armory uses, and for the same reason: money and
+// bags are written by the core's save timer, not by the second. Polling them
+// at the map's five would refetch an identical payload a hundred and eighty
+// times per actual change.
 setInterval(pollWealth, 30000);
 
 // --- the front door (infra#3110) ------------------------------------------
@@ -6070,7 +6201,8 @@ function adoptContinent() {
 //
 // The map is still separate below, because it is the one view whose hash
 // carries state (which continent) and so needs more than a name.
-const HASH_VIEWS = [FAMILY_VIEW, WATCH_VIEW, ARMORY_VIEW, ACH_VIEW];
+const HASH_VIEWS = [FAMILY_VIEW, WATCH_VIEW, ARMORY_VIEW, BAGS_VIEW,
+                    ACH_VIEW];
 
 function applyHash() {
   const raw = (location.hash || "").replace(/^#/, "");

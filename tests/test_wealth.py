@@ -87,22 +87,36 @@ ICONS = {55: "inv_fabric_linen_01", 60: "inv_misc_bag_09", 61: "inv_sword_04"}
 class Coins(unittest.TestCase):
     def test_copper_becomes_three_coins(self):
         self.assertEqual(wealth.coins(1666355),
-                         {"gold": 166, "silver": 63, "copper": 55, "total": 1666355})
+                         {"gold": 166, "silver": 63, "copper": 55,
+                          "total": 1666355, "text": "166g 63s 55c"})
 
     def test_nothing_is_a_real_answer_rather_than_no_answer(self):
         """A quest item is worth nothing to a vendor and the panel must be
         able to say so. armory.money() returns None for this, which is right
         for a tooltip line it should not draw and wrong for a total."""
         self.assertEqual(wealth.coins(0),
-                         {"gold": 0, "silver": 0, "copper": 0, "total": 0})
+                         {"gold": 0, "silver": 0, "copper": 0, "total": 0,
+                          "text": wealth.NOTHING})
         self.assertEqual(wealth.coins(None)["total"], 0)
+
+    def test_the_word_for_an_amount_is_the_modules_and_not_the_pages(self):
+        """The page draws money twice: as three coloured spans where there is
+        room, and as one string where there is not (a tooltip line, a stat
+        note). The second used to be built in JavaScript, which meant the word
+        for an empty purse was typed into index.html where nothing tests it."""
+        self.assertEqual(wealth.coins(0)["text"], "nothing")
+        self.assertEqual(wealth.coins(7)["text"], "7c")
+        # Silver whenever gold is, so "1g 0s 4c" reads as one amount rather
+        # than as a gold piece and four coppers that lost something between.
+        self.assertEqual(wealth.coins(10004)["text"], "1g 0s 4c")
+        self.assertEqual(wealth.coins(504)["text"], "5s 4c")
 
     def test_the_denominations_do_not_carry_into_each_other(self):
         """One silver is a hundred copper and one gold a hundred silver. The
         one bug this arithmetic can have is a factor of a hundred, and it
         would render as a plausible number."""
         self.assertEqual(wealth.coins(99), {"gold": 0, "silver": 0, "copper": 99,
-                                            "total": 99})
+                                            "total": 99, "text": "99c"})
         self.assertEqual(wealth.coins(100)["silver"], 1)
         self.assertEqual(wealth.coins(9999)["gold"], 0)
         self.assertEqual(wealth.coins(10000)["gold"], 1)
@@ -406,7 +420,8 @@ class Tally(unittest.TestCase):
         would make the counts disagree with the grid beside them."""
         t = wealth.tally(self.items({"quality": None}, {"quality": COMMON, "entry": 2}))
         self.assertEqual(t["by_quality"][-1],
-                         {"quality": None, "name": wealth.UNKNOWN_QUALITY, "count": 1})
+                         {"quality": None, "name": wealth.UNKNOWN_QUALITY,
+                          "count": 1, "label": "1 unknown"})
 
     def test_green_and_better_are_counted_separately_from_rare_and_better(self):
         t = wealth.tally(self.items({"quality": POOR}, {"quality": COMMON, "entry": 2},
@@ -425,7 +440,8 @@ class Tally(unittest.TestCase):
         self.assertEqual(t["rare_or_better"], 1)
         self.assertEqual(t["notable"], 1)
         self.assertEqual(t["by_quality"][-1],
-                         {"quality": None, "name": wealth.UNKNOWN_QUALITY, "count": 1})
+                         {"quality": None, "name": wealth.UNKNOWN_QUALITY,
+                          "count": 1, "label": "1 unknown"})
 
     def test_an_empty_list_tallies_to_zero_rather_than_to_nothing(self):
         t = wealth.tally([])
@@ -572,9 +588,10 @@ class OneMember(unittest.TestCase):
 
 
 class TheWholeFamily(unittest.TestCase):
-    def build(self, rows=(), chars=None, auctions=()):
+    def build(self, rows=(), chars=None, auctions=(), guilds=()):
         return wealth.build_wealth(list(chars if chars is not None else [char()]),
-                                   list(rows), list(auctions), ICONS)
+                                   list(rows), list(auctions), list(guilds),
+                                   ICONS)
 
     def test_everybody_on_the_roster_gets_a_card_in_roster_order(self):
         p = self.build()
@@ -695,6 +712,448 @@ class TheAuctionHouse(unittest.TestCase):
         self.assertEqual(row["item"]["icon"], "inv_fabric_linen_01")
         self.assertEqual(row["item"]["wowhead"],
                          "https://www.wowhead.com/wotlk/item=1234")
+
+
+class TheWordsAroundTheNumbers(unittest.TestCase):
+    """A count reads as a word in a sentence and as a digit in a readout.
+
+    Small helpers, and they are tested because they are the difference between
+    "One free slot in the whole family" and "1 free slots in the whole
+    family" - and the second reads as a bug in the number rather than in the
+    grammar, which sends whoever finds it looking for the wrong thing."""
+
+    def test_small_counts_are_words_and_large_ones_are_digits(self):
+        self.assertEqual(wealth.spell(0), "no")
+        self.assertEqual(wealth.spell(1), "one")
+        self.assertEqual(wealth.spell(10), "ten")
+        self.assertEqual(wealth.spell(11), "11")
+        self.assertEqual(wealth.spell(189), "189")
+
+    def test_one_is_singular_and_everything_else_is_not(self):
+        self.assertEqual(wealth.plural(1, "slot"), "slot")
+        self.assertEqual(wealth.plural(0, "slot"), "slots")
+        self.assertEqual(wealth.plural(2, "slot"), "slots")
+        self.assertEqual(wealth.plural(2, "character"), "characters")
+
+    def test_a_lead_is_capitalised_after_it_is_composed_and_not_before(self):
+        """The first word of a lead is a COUNT that changes with the data, so
+        capitalising the fragment as it is built means one branch says "One"
+        and the next says "no"."""
+        self.assertEqual(wealth.sentence("one free slot"), "One free slot")
+        self.assertEqual(wealth.sentence(""), "")
+
+
+class TheFinding(unittest.TestCase):
+    """The one sentence at the top of the tab, composed from the live payload.
+
+    THE WHOLE REASON IT IS HERE. A sentence typed into index.html would still
+    be saying "one free slot in the whole family" on the day somebody hands
+    them four bags each, and nothing would ever fail. Every branch below is a
+    different thing the family can be doing, and each one has to be reachable
+    from the numbers alone."""
+
+    def find(self, present=5, slots=190, used=189, full=(), rares=0,
+             richest=FIRST):
+        totals = {
+            "present": present,
+            "money": wealth.coins(0),
+            "vendor": wealth.coins(0),
+            "capacity": {"slots": slots, "used": used,
+                         "free": max(0, slots - used), "bags": 4 * present,
+                         "empty_bag_slots": 0},
+            "by_quality": [],
+            "rare_or_better": rares,
+            "richest": richest,
+            "full": list(full),
+        }
+        return wealth.build_finding(totals)
+
+    def test_nobody_saved_is_a_finding_of_its_own_rather_than_a_zero(self):
+        """"No free slot anywhere in the family" would be TRUE of an empty
+        realm and completely misleading about it."""
+        f = self.find(present=0, slots=0, used=0)
+        self.assertIn("saved character", f["lead"])
+        self.assertEqual(f["tone"], wealth.ALARM)
+
+    def test_five_characters_and_no_slots_is_a_query_that_answered(self):
+        """Every character is born with a backpack, so this is a data fault
+        rather than a family who own nothing."""
+        f = self.find(slots=0, used=0)
+        self.assertIn("No bags", f["lead"])
+        self.assertEqual(f["tone"], wealth.ALARM)
+        self.assertIn("born with a backpack", f["because"])
+
+    def test_one_free_slot_across_the_family_is_the_headline(self):
+        """The measured state on the day this landed, and the reason the tab
+        exists: 189 of 190, with four of the five unable to loot anything."""
+        f = self.find(slots=190, used=189, full=[FIRST, SECOND])
+        self.assertEqual(f["lead"], "One free slot in the whole family")
+        self.assertEqual(f["detail"], "189 of 190 slots taken.")
+        self.assertEqual(f["tone"], wealth.ALARM)
+        self.assertIn("never finish a loot", f["because"])
+
+    def test_no_free_slot_at_all_says_so_rather_than_saying_none(self):
+        f = self.find(slots=190, used=190, full=[FIRST])
+        self.assertEqual(f["lead"], "No free slot anywhere in the family")
+        self.assertEqual(f["tone"], wealth.ALARM)
+
+    def test_tight_with_nobody_stuck_yet_is_a_caution_and_not_an_alarm(self):
+        """A family with ten slots left and nobody full is tight. A family
+        with one slot left and four characters full is a fault being
+        reported, and drawing both the same colour would spend the alarm."""
+        f = self.find(slots=190, used=180, full=[])
+        self.assertEqual(f["tone"], wealth.CAUTION)
+        self.assertEqual(f["lead"], "Ten free slots in the whole family")
+
+    def test_the_threshold_is_one_backpack_and_not_a_percentage(self):
+        """Five per cent of 190 slots is nine, and nine slots is one quest
+        turn-in away from nothing. A backpack is a real unit of room here."""
+        self.assertEqual(wealth.FAMILY_TIGHT_SLOTS, wealth.BACKPACK_SLOTS)
+        self.assertEqual(self.find(slots=190, used=190 - wealth.BACKPACK_SLOTS)
+                         ["tone"], wealth.CAUTION)
+        self.assertEqual(self.find(slots=190, used=190 - wealth.BACKPACK_SLOTS - 1)
+                         ["tone"], wealth.PLAIN)
+
+    def test_somebody_full_with_room_elsewhere_names_how_many(self):
+        f = self.find(slots=190, used=100, full=[FIRST, SECOND])
+        self.assertEqual(f["lead"], "Two of the five are out of room")
+        self.assertEqual(f["tone"], wealth.ALARM)
+
+    def test_one_person_full_reads_as_one_person(self):
+        f = self.find(slots=190, used=100, full=[FIRST])
+        self.assertEqual(f["lead"], "One of the five is out of room")
+
+    def test_a_family_with_room_is_allowed_to_be_unremarkable(self):
+        """Not every state is a problem, and drawing this one loud would
+        teach a reader to stop looking at the top of the tab."""
+        f = self.find(slots=190, used=20)
+        self.assertEqual(f["tone"], wealth.PLAIN)
+        self.assertIn("free slots across the family", f["lead"])
+
+    def test_who_is_out_of_room_is_named_wherever_anybody_is(self):
+        f = self.find(slots=190, used=189, full=[FIRST, SECOND])
+        self.assertEqual(f["who"], [FIRST, SECOND])
+        self.assertIn(FIRST, f["who_label"])
+        self.assertIn(SECOND, f["who_label"])
+        self.assertIsNone(self.find(slots=190, used=20)["who_label"])
+
+    def test_the_consequence_never_names_a_member_of_the_roster(self):
+        """The eight-and-a-half-hour freeze happened to a specific character,
+        and naming them in a constant here would be a second roster that can
+        disagree with bonds. It says "one of them"."""
+        for name in ROSTER:
+            self.assertNotIn(name, wealth.FULL_CONSEQUENCE)
+            self.assertNotIn(name, wealth.TIGHT_CONSEQUENCE)
+
+
+class TheStatStrip(unittest.TestCase):
+    def strip(self, **kw):
+        totals = {
+            "present": 5,
+            "money": wealth.coins(166 * GOLD),
+            "vendor": wealth.coins(150),
+            "capacity": {"slots": 190, "used": 189, "free": 1, "bags": 17,
+                         "empty_bag_slots": 3},
+            "by_quality": [],
+            "rare_or_better": 11,
+            "richest": FIRST,
+            "full": [FIRST],
+        }
+        totals.update(kw)
+        return wealth.build_stats(totals)
+
+    def test_the_same_readings_in_the_same_order_every_poll(self):
+        """A strip that drops a reading when it is zero changes shape as the
+        data changes, and a reader loses the one thing a strip is good for."""
+        labels = [s["label"] for s in self.strip()]
+        self.assertEqual(labels, [s["label"] for s in self.strip(
+            rare_or_better=0,
+            capacity={"slots": 190, "used": 10, "free": 180, "bags": 20,
+                      "empty_bag_slots": 0})])
+        self.assertEqual(len(labels), 7)
+
+    def test_money_readings_carry_coins_and_not_a_string(self):
+        """The page draws money in three colours, so an amount cannot be
+        interpolated into a value the way a count can."""
+        purse = self.strip()[0]
+        self.assertEqual(purse["money"]["gold"], 166)
+        self.assertIsNone(purse["value"])
+
+    def test_a_family_with_no_room_left_reads_as_an_alarm(self):
+        tight = self.strip(capacity={"slots": 190, "used": 190, "free": 0,
+                                     "bags": 20, "empty_bag_slots": 0})
+        slots = [s for s in tight if s["label"] == "slots"][0]
+        self.assertEqual(slots["tone"], wealth.ALARM)
+        self.assertEqual(slots["value"], "190 of 190")
+
+    def test_an_empty_bag_position_is_amber_and_not_red(self):
+        """Find him a bag is a different job from sell something, and only
+        one of the two is stopping a character playing right now."""
+        spare = [s for s in self.strip() if s["label"] == "empty bag positions"][0]
+        self.assertEqual(spare["value"], "3")
+        self.assertEqual(spare["tone"], wealth.CAUTION)
+
+    def test_rares_are_the_one_reading_drawn_as_good_news(self):
+        rares = [s for s in self.strip() if s["label"] == "rare or better"][0]
+        self.assertEqual(rares["tone"], wealth.GOOD)
+        self.assertEqual(
+            [s for s in self.strip(rare_or_better=0)
+             if s["label"] == "rare or better"][0]["tone"], wealth.PLAIN)
+
+    def test_the_richest_is_a_person_and_an_empty_realm_is_not(self):
+        self.assertEqual(self.strip()[-1]["value"], FIRST)
+        self.assertEqual(self.strip(richest=None)[-1]["value"], wealth.NOTHING)
+
+
+class TheRoomLine(unittest.TestCase):
+    def room(self, slots=44, used=40, bags=4, spare=0):
+        return wealth.build_room({"slots": slots, "used": used,
+                                  "free": max(0, slots - used), "bags": bags,
+                                  "bag_slots": wealth.BAG_POSITIONS,
+                                  "empty_bag_slots": spare,
+                                  "full": used >= slots})
+
+    def test_the_bar_is_a_percentage_of_the_room_that_exists(self):
+        self.assertEqual(self.room(slots=44, used=22)["percent"], 50)
+        self.assertEqual(self.room(slots=0, used=0)["percent"], 0)
+
+    def test_full_is_an_alarm_and_nearly_full_is_a_caution(self):
+        """This used to be a ternary in the page, where no test could reach
+        the number in it."""
+        self.assertEqual(self.room(slots=44, used=44)["tone"], wealth.ALARM)
+        self.assertEqual(self.room(slots=100, used=90)["tone"], wealth.CAUTION)
+        self.assertEqual(self.room(slots=100, used=89)["tone"], wealth.PLAIN)
+        self.assertEqual(wealth.TIGHT_PERCENT, 90)
+
+    def test_no_room_left_is_said_in_words_rather_than_as_a_zero(self):
+        """Zero is a number a reader has to interpret, and this is the state
+        the whole tab exists to report."""
+        self.assertEqual(self.room(slots=44, used=44)["free_label"],
+                         "no room left")
+        self.assertEqual(self.room(slots=44, used=44)["free_tone"], wealth.ALARM)
+        self.assertEqual(self.room(slots=44, used=40)["free_label"], "4 free")
+        self.assertEqual(self.room(slots=44, used=40)["free_tone"], wealth.PLAIN)
+
+    def test_a_character_carrying_no_bags_says_so_rather_than_saying_zero(self):
+        self.assertEqual(self.room(bags=0)["bags_label"],
+                         "the backpack alone, no bags carried")
+        self.assertEqual(self.room(bags=1)["bags_label"],
+                         "across 1 bag and the backpack")
+
+    def test_an_empty_bag_position_is_its_own_line_in_amber(self):
+        self.assertIsNone(self.room(spare=0)["spare_label"])
+        self.assertEqual(self.room(spare=1)["spare_label"], "1 empty bag position")
+        self.assertEqual(self.room(spare=2)["spare_label"], "2 empty bag positions")
+        self.assertEqual(self.room(spare=2)["spare_tone"], wealth.CAUTION)
+
+
+class TheWordsOnAnItem(unittest.TestCase):
+    def one(self, where=wealth.CARRIED, container="Backpack", **kw):
+        return wealth.item_payload(item(**kw), ICONS, where, container, 0)
+
+    def test_a_stack_says_how_many_and_a_single_item_does_not(self):
+        """Three copies of `count > 1 ? " x" + count : ""` is three chances
+        for one of them to start saying "x1"."""
+        self.assertEqual(self.one(count=1)["stack"], "Linen Cloth")
+        self.assertEqual(self.one(count=20)["stack"], "Linen Cloth x20")
+
+    def test_where_a_thing_is_is_a_word_and_not_an_inference(self):
+        self.assertEqual(self.one(where=wealth.EQUIPPED)["place"],
+                         wealth.PLACE_WORN)
+        self.assertEqual(self.one(container="Small Red Pouch")["place"],
+                         "in Small Red Pouch")
+
+    def test_only_a_bagged_item_is_drawn_in_amber(self):
+        """An item on a body is where it belongs; the same item loose in a
+        bag is a spare, a mistake, or gold nobody has banked."""
+        self.assertEqual(self.one(where=wealth.EQUIPPED)["place_tone"],
+                         wealth.PLAIN)
+        self.assertEqual(self.one()["place_tone"], wealth.CAUTION)
+
+    def test_the_tooltip_line_says_quality_kind_level_and_price(self):
+        tip = self.one(count=20, quality=UNCOMMON, item_level=14,
+                       sell_price=10)["tip"]
+        self.assertIn("Linen Cloth x20", tip)
+        self.assertIn("uncommon", tip)
+        self.assertIn("Trade Goods", tip)
+        self.assertIn("item level 14", tip)
+        self.assertIn("vendor 2s 0c", tip)
+
+    def test_an_unsellable_stack_says_so_rather_than_showing_nothing(self):
+        """A SellPrice of 0 is the game saying this cannot be sold at all,
+        which is what every quest item is. An empty space where a price
+        should be reads as a missing number."""
+        self.assertIn("no vendor value", self.one(sell_price=0)["tip"])
+
+
+class TheContainerLabel(unittest.TestCase):
+    def containers(self, rows):
+        return wealth.split_inventory(list(rows), ICONS)["containers"]
+
+    def test_a_bag_says_how_full_it_is(self):
+        backpack = self.containers([item(slot=BACKPACK_SLOT)])[0]
+        self.assertEqual(backpack["room_label"],
+                         "1 of %d" % wealth.BACKPACK_SLOTS)
+        self.assertFalse(backpack["full"])
+        self.assertEqual(backpack["tone"], wealth.PLAIN)
+
+    def test_a_full_bag_is_an_alarm_of_its_own(self):
+        rows = [bag(slots=1, guid=7001),
+                item(bag=7001, slot=0, entry=9, item_name="Gold Dust")]
+        pouch = [c for c in self.containers(rows) if c["key"] != wealth.BACKPACK][0]
+        self.assertTrue(pouch["full"])
+        self.assertEqual(pouch["tone"], wealth.ALARM)
+        self.assertEqual(pouch["room_label"], "1 of 1")
+
+    def test_a_container_of_unknown_size_says_that_rather_than_of_zero(self):
+        """ContainerSlots comes through a LEFT JOIN, so a custom or removed
+        bag arrives with no size at all - and "1 of 0" reads as a broken
+        count rather than as the missing template it is."""
+        rows = [bag(slots=0, guid=7001),
+                item(bag=7001, slot=0, entry=9, item_name="Gold Dust")]
+        pouch = [c for c in self.containers(rows) if c["key"] != wealth.BACKPACK][0]
+        self.assertEqual(pouch["room_label"], "1 carried, size unknown")
+        self.assertFalse(pouch["full"])
+
+
+class TheGuildBankThereIsNot(unittest.TestCase):
+    """There is no guild, so there is no guild bank - and an empty vault drawn
+    on the strength of that is the same mistake the auction panel exists to
+    avoid. What is useful is the road to one, and which parts of it the module
+    can already drive."""
+
+    def test_no_rows_means_no_guild_and_the_panel_says_it(self):
+        bank = wealth.build_guild_bank([])
+        self.assertEqual(bank["guilds"], [])
+        self.assertEqual(bank["lead"], "There is no guild, so there is no guild bank.")
+
+    def test_a_guild_that_exists_is_named_rather_than_denied(self):
+        """Asked of the database rather than assumed, so the sentence stops
+        being drawn on the day somebody makes one."""
+        bank = wealth.build_guild_bank([{"name": FIRST, "guild_name": "Cave"}])
+        self.assertEqual(bank["guilds"], ["Cave"])
+        self.assertIn("Cave", bank["lead"])
+        self.assertNotIn("no guild", bank["lead"])
+
+    def test_a_row_with_no_guild_name_is_not_a_guild(self):
+        bank = wealth.build_guild_bank([{"name": FIRST, "guild_name": None}])
+        self.assertEqual(bank["guilds"], [])
+
+    def test_travel_works_and_everything_after_arriving_does_not(self):
+        """Travel is the one part that works: a petitioner and a guild banker
+        are both ordinary NPCs, and travel.py can already aim a character at
+        an NPC by entry. Everything after arriving is a packet nothing
+        sends."""
+        bank = wealth.build_guild_bank([])
+        works = [s["step"] for s in bank["steps"] if s["state"] == wealth.WORKS]
+        missing = [s["step"] for s in bank["steps"] if s["state"] == wealth.MISSING]
+        self.assertEqual(works, ["travel to a petitioner",
+                                 "travel to a guild banker"])
+        self.assertIn("buy a charter", missing)
+        self.assertIn("collect the signatures", missing)
+        self.assertIn("register the guild", missing)
+        self.assertIn("deposit into the guild bank", missing)
+        self.assertIn("withdraw from the guild bank", missing)
+        self.assertEqual(bank["works"], 2)
+        self.assertEqual(bank["missing"], 5)
+
+    def test_every_step_carries_a_word_and_a_tone(self):
+        for step in wealth.build_guild_bank([])["steps"]:
+            self.assertIn(step["state_label"], ("works", "not written"))
+            self.assertIn(step["tone"], (wealth.GOOD, wealth.CAUTION))
+
+    def test_the_blocked_sentence_counts_the_table_rather_than_a_number(self):
+        """"Five of the seven" has to come from the table, or the day a sixth
+        blocked step is added the sentence quietly starts lying."""
+        blocked = wealth.build_guild_bank([])["blocked"]
+        self.assertEqual(blocked["before"],
+                         "Five of the seven steps are not written, and all of "
+                         "them are blocked on ")
+        self.assertEqual(blocked["ticket"], wealth.GUILD_TICKET)
+        self.assertEqual(blocked["after"], ".")
+
+
+class TheEmptyAuctionPanel(unittest.TestCase):
+    def test_the_reason_it_is_empty_is_a_sentence_the_module_owns(self):
+        """A blank panel and a broken query look identical, and the page used
+        to hold the words that told them apart."""
+        a = wealth.build_auctions([], ICONS)
+        self.assertIn("Nothing listed", a["empty"]["lead"])
+        self.assertIn("empty auction house rather than an empty panel",
+                      a["empty"]["body"])
+        self.assertEqual(a["empty"]["why"]["ticket"], wealth.AUCTION_TICKET)
+        self.assertIn("lists, buys, bids or sells", a["empty"]["why"]["before"])
+
+    def test_the_caveat_is_true_whether_or_not_there_are_rows(self):
+        """The core deletes an auction the moment it completes and mails the
+        gold, so `sold` can only ever mean mid-sale."""
+        for rows in ([], [auction()]):
+            a = wealth.build_auctions(list(rows), ICONS)
+            self.assertIn("Completed sales leave no trace", a["caveat"])
+            self.assertFalse(a["tracked"])
+
+    def test_the_three_lists_arrive_labelled_and_counted(self):
+        a = wealth.build_auctions([auction()], ICONS)
+        self.assertEqual([s["label"] for s in a["sections"]],
+                         ["listed by the family", "sold, gold in the post",
+                          "bid on by the family"])
+        self.assertEqual(a["sections"][0]["count"], 1)
+        self.assertEqual(a["sections"][1]["count"], 0)
+        self.assertEqual(a["sections"][1]["empty"], wealth.NONE)
+
+    def test_a_row_says_whose_it_is_and_what_the_price_means(self):
+        """A listing with no bid on it has a STARTING price, not a highest
+        one, and drawing the start under "highest bid" would be the panel
+        inventing a bidder."""
+        mine = wealth.auction_payload(auction(), {FIRST}, ICONS)
+        self.assertEqual(mine["who_label"], "listed by " + FIRST)
+        self.assertEqual(mine["bid_label"], "starting bid")
+        bid_on = wealth.auction_payload(auction(lastbid=9000), {FIRST}, ICONS)
+        self.assertEqual(bid_on["bid_label"], "highest bid")
+
+    def test_a_seller_the_world_has_forgotten_is_unknown_not_blank(self):
+        """`itemowner` is a guid and the character behind it can have been
+        deleted since the auction was posted."""
+        theirs = wealth.auction_payload(auction(owner_name=None), set(), ICONS)
+        self.assertEqual(theirs["who_label"], "seller unknown")
+
+
+class TheMemberSentences(unittest.TestCase):
+    def build(self, rows=(), **kw):
+        return wealth.build_member(FIRST, char(**kw), list(rows), ICONS)
+
+    def test_the_line_under_the_name_is_composed_here(self):
+        """A level, a class and a role joined with punctuation of the page's
+        own choosing is three views spelling the same line three ways."""
+        self.assertIn(" - ", self.build()["who"])
+        self.assertTrue(self.build()["who"].startswith("25 "))
+        self.assertIn(" - ", wealth.build_member(FIRST, None, [], ICONS)["who"])
+
+    def test_stacks_and_items_are_both_said_because_they_differ(self):
+        """A bag holding one stack of twenty linen is one slot and twenty
+        things, and a line reporting either alone is wrong about the other."""
+        m = self.build([item(slot=BACKPACK_SLOT, count=20)])
+        self.assertIn("carrying 1 stack (20 items)", m["holding"]["before"])
+        self.assertEqual(m["holding"]["after"], " at a vendor")
+        self.assertEqual(m["holding"]["money"], m["carried"]["vendor"])
+
+    def test_what_is_stored_elsewhere_is_a_sentence_or_nothing_at_all(self):
+        self.assertIsNone(self.build()["elsewhere_note"])
+        note = self.build([item(slot=BANK_SLOT)])["elsewhere_note"]
+        self.assertIn("1 more stored elsewhere", note)
+
+    def test_the_notable_note_only_exists_when_there_is_a_list(self):
+        self.assertIsNone(self.build()["notable_note"])
+        m = self.build([item(slot=BACKPACK_SLOT, quality=RARE)])
+        self.assertEqual(m["notable_note"], wealth.NOTABLE_NOTE)
+
+    def test_a_missing_character_gets_the_sentence_and_not_a_blank_card(self):
+        m = wealth.build_member(FIRST, None, [], ICONS)
+        self.assertEqual(m["absent_note"], wealth.ABSENT_NOTE)
+
+    def test_the_quality_chips_arrive_written_out(self):
+        m = self.build([item(slot=BACKPACK_SLOT, quality=RARE)])
+        self.assertEqual(m["held"]["by_quality"][0]["label"], "1 rare")
 
 
 class TheContractWithTheRestOfTheCodebase(unittest.TestCase):
