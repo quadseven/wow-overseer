@@ -285,3 +285,64 @@ def give_command(move):
     was actually weighed and chosen.
     """
     return "guid:%d" % move.guid
+
+
+# ---------------------------------------------------------------------------
+# FROM ROWS TO MEMBERS
+#
+# The bridge fetches one row per container the family owns and nothing else;
+# which of those rows is a WORN bag, which is CARGO, and which is out of reach
+# in the bank is decided here, where it can be tested against rows written by
+# hand rather than against a live character_inventory.
+#
+# Inventory geography is the core's own (Player.h, the 3.3.5 slot enums), the
+# same ranges panel.py draws from:
+#
+#     bag 0, slot 19..22   the four bag positions            -> worn
+#     bag 0, slot 23..38   the built-in backpack             -> carried
+#     bag = a worn bag     inside one of the four            -> carried
+#     bag 0, slot 39..66   bank item slots                   -> ignored
+#     bag 0, slot 67..73   bank bag positions                -> ignored
+#     bag = a bank bag     inside the bank                   -> ignored
+#
+# A bag in the bank is not "spare" for this planner: DoGive moves what the
+# giver is CARRYING, and a bag sitting in the bank is exactly as unreachable
+# as one on the auction house until somebody walks to a banker. Counting it
+# would plan a give the world refuses, which is the failure mode this whole
+# file exists to stop.
+
+BAG_POSITIONS = range(19, 23)
+BACKPACK_POSITIONS = range(23, 39)
+
+
+def members_from_rows(rows, names, positions=len(BAG_POSITIONS)):
+    """One Member per name, whether or not any row mentions them.
+
+    A character with no container rows at all still has `positions` empty
+    bag positions, and a name missing from the result would make the planner
+    forget the one member who most needs a bag. `rows` carry holder, guid,
+    name, slots, bag, slot and used, as the bridge's SQL names them.
+    """
+    by_name = {name: {"worn": [], "carried": []} for name in names}
+    worn_guids = {}
+    for row in rows:
+        if row["holder"] not in by_name:
+            continue
+        if int(row["bag"]) == 0 and int(row["slot"]) in BAG_POSITIONS:
+            worn_guids.setdefault(row["holder"], set()).add(int(row["guid"]))
+    for row in rows:
+        holder = row["holder"]
+        if holder not in by_name:
+            continue
+        bag = Bag(row["name"], int(row["slots"]), used=int(row.get("used", 0)),
+                  guid=int(row["guid"]))
+        container, slot = int(row["bag"]), int(row["slot"])
+        if container == 0 and slot in BAG_POSITIONS:
+            by_name[holder]["worn"].append(bag)
+        elif ((container == 0 and slot in BACKPACK_POSITIONS)
+              or container in worn_guids.get(holder, ())):
+            by_name[holder]["carried"].append(bag)
+    return [Member(name, positions,
+                   worn=tuple(sorted(by_name[name]["worn"], key=lambda b: b.guid)),
+                   carried=tuple(sorted(by_name[name]["carried"], key=lambda b: b.guid)))
+            for name in sorted(by_name)]

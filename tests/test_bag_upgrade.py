@@ -9,7 +9,7 @@ the arithmetic was wrong - there was no arithmetic at all.
 import unittest
 
 from bag_pressure import ItemForSale, sellable
-from bag_upgrade import (Bag, Member, bags_in_plan, fill_empty_positions,
+from bag_upgrade import (Bag, Member, members_from_rows, bags_in_plan, fill_empty_positions,
                          give_command, plan_bag_moves, plan_family_bags,
                          slots_gained, upgrade_swaps)
 
@@ -269,3 +269,60 @@ class ThePlanIsStable(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def _row(holder, guid, name, slots, bag, slot, used=0):
+    return {"holder": holder, "guid": guid, "name": name, "slots": slots,
+            "bag": bag, "slot": slot, "used": used}
+
+
+class RowsBecomeMembers(unittest.TestCase):
+    """The bridge fetches containers; where each one SITS is decided here."""
+
+    ROWS = [
+        _row("Grug", 901, "Journeyman's Backpack", 14, 0, 19, used=14),
+        _row("Grug", 902, "Journeyman's Backpack", 14, 0, 20, used=14),
+        _row("Grug", 11, "Small Red Pouch", 6, 0, 30),            # in the backpack
+        _row("Grug", 12, "Small Black Pouch", 6, 901, 3),         # inside a worn bag
+        _row("Grug", 13, "Small Black Pouch", 6, 0, 40),          # bank item slot
+        _row("Grug", 14, "Red Leather Bag", 12, 0, 67),           # a bank bag position
+        _row("Grug", 15, "Green Leather Bag", 12, 14, 0),         # inside the bank bag
+        _row("Nobody", 99, "Small Red Pouch", 6, 0, 30),          # not in the family
+    ]
+
+    def test_bag_positions_are_worn(self):
+        grug = members_from_rows(self.ROWS, ["Grug"])[0]
+        self.assertEqual([b.guid for b in grug.worn], [901, 902])
+        self.assertEqual(grug.worn[0].used, 14)
+
+    def test_backpack_and_inside_worn_bags_is_carried(self):
+        grug = members_from_rows(self.ROWS, ["Grug"])[0]
+        self.assertEqual([b.guid for b in grug.carried], [11, 12])
+
+    def test_the_bank_is_out_of_reach(self):
+        """DoGive moves what the giver carries. A bag in the bank, or inside
+        a bank bag, would be planned and then refused, every hour, forever."""
+        grug = members_from_rows(self.ROWS, ["Grug"])[0]
+        self.assertNotIn(13, [b.guid for b in grug.carried])
+        self.assertNotIn(14, [b.guid for b in grug.carried])
+        self.assertNotIn(15, [b.guid for b in grug.carried])
+
+    def test_a_member_with_no_rows_still_exists_with_every_position_empty(self):
+        members = members_from_rows(self.ROWS, ["Grug", "Bork"])
+        bork = [m for m in members if m.name == "Bork"][0]
+        self.assertEqual((bork.positions, bork.worn, bork.carried), (4, (), ()))
+
+    def test_strangers_rows_are_ignored(self):
+        self.assertEqual([m.name for m in members_from_rows(self.ROWS, ["Grug"])], ["Grug"])
+
+    def test_the_measured_family_plans_from_rows_the_same_as_from_members(self):
+        """Bork's empty position and Grog's Red Leather Bag, end to end."""
+        rows = [_row("Grog", 930, "worn", 11, 0, 19), _row("Grog", 931, "worn", 11, 0, 20),
+                _row("Grog", 932, "worn", 11, 0, 21), _row("Grog", 933, "worn", 11, 0, 22),
+                _row("Grog", 31, "Red Leather Bag", 12, 0, 25),
+                _row("Grog", 32, "Green Leather Bag", 12, 930, 1),
+                _row("Bork", 940, "worn", 13, 0, 19), _row("Bork", 941, "worn", 13, 0, 20),
+                _row("Bork", 942, "worn", 13, 0, 21)]
+        moves = plan_family_bags(members_from_rows(rows, ["Bork", "Grog"]))
+        self.assertEqual([(m.giver, m.receiver, m.guid) for m in moves],
+                         [("Grog", "Bork", 32)])
