@@ -25,6 +25,7 @@ import discord
 import pymysql
 
 import achievements
+import bag_upgrade
 import chat
 import council
 import core
@@ -2798,6 +2799,11 @@ class Bridge(discord.Client):
             # they are in a dungeon and wait. See chat.mid_run.
             log.info("materials: the family is in a dungeon run - reagents wait")
             return
+        # BAGS BEFORE REAGENTS. A give into full bags is refused, and the
+        # family was measured at 273 of 274 slots used with six bags carried
+        # as cargo. Handing those over is what makes the reagent gives below
+        # land, so it goes first and shares the same queue and retry window.
+        await self._hand_bags_once(names)
         holdings = await asyncio.to_thread(_fetch_holdings, names)
         refused = materials.stuck(
             await asyncio.to_thread(_give_attempts, GIVE_GIVE_UP_HOURS)
@@ -2834,6 +2840,41 @@ class Bridge(discord.Client):
                 grant.skill, grant.reason,
             )
         await self._speak_handovers(fresh)
+
+    async def _hand_bags_once(self, names: list) -> None:
+        """Give every idle bag to whoever has an empty bag position.
+
+        Measured on the dev family: four of five had no free bag position
+        while carrying spare bags as cargo, and the fifth had an empty
+        position and no bag. Per-character logic decides nothing there; only
+        a family-wide match does, and bag_upgrade.plan_family_bags is that
+        match. The move is an ordinary kind='give' - DoGive equips a
+        container straight into the receiver's bag position and needs no
+        free inventory slot to do it, which is why this works on bags that
+        are already full.
+
+        The SQL fetches containers and where they sit; which of them is worn,
+        carried or out of reach in the bank is decided in bag_upgrade, not
+        here.
+        """
+        rows = await asyncio.to_thread(_fetch_bag_state, names)
+        moves = bag_upgrade.plan_family_bags(
+            bag_upgrade.members_from_rows(rows, names)
+        )
+        if not moves:
+            log.info("bags: nothing to hand over")
+            return
+        seen = await asyncio.to_thread(_recent_give_keys, GIVE_RETRY_MINUTES)
+        for move in moves:
+            command = bag_upgrade.give_command(move)
+            if (move.giver, move.receiver, command) in seen:
+                continue
+            if await asyncio.to_thread(_insert_bag_give, move, command):
+                log.info(
+                    "bags: %s -> %s, %s (%s, +%d slots) - %s",
+                    move.giver, move.receiver, move.bag, command,
+                    move.slots_gained, move.why,
+                )
 
     async def _mid_run(self, names: list) -> bool:
         """Is any of these characters in the middle of a dungeon run?"""
@@ -3976,6 +4017,64 @@ def _insert_give(grant: materials.Grant) -> int:
                     "%s from %s to %s needs the worldserver image carrying "
                     "mod-overseer's give SQL (infra#2597)",
                     grant.count, grant.material, grant.holder, grant.taker,
+                )
+                return 0
+            raise
+        return cur.lastrowid or 0
+
+
+# Every container the family owns and where it sits. `used` is how many items
+# are inside it, for the worn bags. ITEM_CLASS_CONTAINER is 1; quivers and
+# ammo pouches are a different class and would not take ordinary loot, so
+# they are not bags for this purpose. The bank ranges come back too and are
+# set aside in bag_upgrade.members_from_rows, where the rule can be tested.
+_BAG_STATE_SQL = (
+    "SELECT c.name AS holder, ii.guid AS guid, it.name AS name, "
+    "       it.ContainerSlots AS slots, ci.bag AS bag, ci.slot AS slot, "
+    "       COALESCE(fill.n, 0) AS used "
+    "FROM character_inventory ci "
+    "JOIN characters c                  ON c.guid = ci.guid "
+    "JOIN item_instance ii              ON ii.guid = ci.item "
+    "JOIN acore_world.item_template it  ON it.entry = ii.itemEntry "
+    "LEFT JOIN (SELECT bag, COUNT(*) AS n FROM character_inventory "
+    "           WHERE bag <> 0 GROUP BY bag) fill ON fill.bag = ii.guid "
+    "WHERE c.name IN (%s) AND it.class = 1 AND it.ContainerSlots > 0"
+)
+
+
+def _fetch_bag_state(names: list) -> list:
+    """Rows for bag_upgrade.members_from_rows; no judgement here."""
+    if not names:
+        return []
+    sql = _BAG_STATE_SQL % ",".join(["%s"] * len(names))
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(sql, names)
+        return [dict(row) for row in cur.fetchall()]
+
+
+def _insert_bag_give(move, command: str) -> int:
+    """One overseer_command row handing one bag over, source='bags'.
+
+    Same row shape and the same 1265 guard as _insert_give: the giver in
+    target_name, the receiver in target_arg, the item_instance guid in the
+    command. A different `source` so the log and the queue can tell a bag
+    handover from a reagent one.
+    """
+    with _connect() as conn, conn.cursor() as cur:
+        try:
+            cur.execute(
+                "INSERT INTO overseer_command "
+                "(target_name, command, kind, target_arg, source) "
+                "VALUES (%s, %s, 'give', %s, %s)",
+                (move.giver, command, move.receiver, "bags"),
+            )
+        except pymysql.err.MySQLError as exc:
+            if exc.args and exc.args[0] == 1265:
+                log.warning(
+                    "overseer_command.kind has no 'give' value - handing %s "
+                    "from %s to %s needs the worldserver image carrying "
+                    "mod-overseer's give SQL (infra#2597)",
+                    move.bag, move.giver, move.receiver,
                 )
                 return 0
             raise

@@ -18,6 +18,7 @@ COPY _shared/core.py _shared/bridge.py _shared/voice.py _shared/transform.py \
      _shared/armory.py _shared/wealth.py _shared/questlog.py _shared/modelviewer.py \
      _shared/relay.py _shared/digest.py \
      _shared/achievements.py _shared/standing.py _shared/agenda.py _shared/eye.py _shared/decree.py \
+     _shared/bag_pressure.py _shared/bag_upgrade.py _shared/disposition.py \
      _shared/realm.py _shared/basepath.py _shared/watchwall.py _shared/realmnav.py \
      _shared/needs.py \
      _shared/zones.json _shared/entrances.json _shared/shapes.json \
