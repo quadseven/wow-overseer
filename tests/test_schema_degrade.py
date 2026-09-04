@@ -77,7 +77,7 @@ def _end_travel_poll() -> str:
 
 
 def _load_quest_aims() -> str:
-    return _function('std::map<std::string, uint32> LoadQuestAims(bool& readSucceeded)')
+    return _function('std::map<std::string, uint32> LoadQuestAims()')
 
 
 def _load_travel_aims() -> str:
