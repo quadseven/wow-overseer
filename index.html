@@ -4,23 +4,125 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Azeroth Overseer</title>
+<!-- THE THREE TYPEFACES THE DESIGN IS SET IN. Archivo for display, Zen Kaku
+     Gothic New for body, Space Mono for every number, label and status word.
+
+     AN EXTERNAL HOST, DELIBERATELY AND WITH A FALLBACK. This page already
+     depends on a CDN for item icons and the model viewer, so a font host is
+     not a new class of dependency here. Every family below is declared with a
+     real fallback stack, so a blocked or slow font host costs the page its
+     typography and nothing else - the layout, the colours and every word still
+     render. display=swap so text is never invisible while a face loads.
+
+     This page is served on a private network. The BROWSER fetches these, not
+     the pod, so this works wherever the reader is - and fails soft if it does
+     not. -->
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@125,700;125,800&amp;family=Space+Mono:wght@400;700&amp;family=Zen+Kaku+Gothic+New:wght@400;500;700&amp;display=swap">
+<!-- THE STORED THEME, APPLIED BEFORE THE FIRST PAINT. In the body it would run
+     after the browser has already drawn one theme, and the reader would watch
+     the page change colour on every load. Inline and in the head is the only
+     place that avoids it.
+
+     Wrapped because storage throws rather than returning null in a private
+     window or with site data blocked, and a page that will not render is a
+     worse outcome than a page that forgot your preference. No stored value
+     means no attribute, which means the OS preference decides. -->
+<script>
+  try {
+    var t = localStorage.getItem("overseer-theme");
+    if (t === "light" || t === "dark") {
+      document.documentElement.setAttribute("data-theme", t);
+    }
+  } catch (e) { /* storage unavailable; the OS preference still decides */ }
+</script>
 <style>
   :root { --bg:#0d1117; --panel:#161b22; --line:#30363d; --text:#e6edf3;
           --dim:#8b949e; --alliance:#4d9fff; --horde:#ff4d4d; --neutral:#d4b106;
           --mortal:#7ee787; --thought:#a371f7; }
+  /* --- the redesign palette -------------------------------------------------
+     Named exactly as the design handoff names them, so a colour in a review can
+     be matched to the token it came from without translating. These sit BESIDE
+     the original variables rather than replacing them: the page is still dark
+     everywhere the redesign has not reached, and swapping --bg out from under
+     the untouched views would leave them unreadable. The two sets retire as
+     each view is converted. */
+  :root {
+    --ink:#0B1A10;          /* text, dark surfaces, active chips            */
+    --paper:#FFFFFF;        /* cards                                        */
+    --ground:#F2F6EE;       /* page background, inset panels                */
+    --pale-green:#E6F5EC;   /* success chips, quiet affordances             */
+    --green:#00A94A;        /* primary accent, consensus block              */
+    --deep-green:#00833A;   /* "this works"                                 */
+    --cyan:#0097DC;         /* secondary accent, derived-data marker        */
+    --vermilion:#FF4D2E;    /* live badge, alarms, refusals                 */
+    --rust:#B0330F;         /* warning body text                            */
+    --amber:#D29922;        /* maxed talents, "name only" states            */
+    --amber-text:#8A6100;   /* warning text on light                        */
+    --muted:#5C6F60;        /* secondary text                               */
+    --hairline:#DDE6D6;     /* bars, dividers                               */
+    --divider:#EDF2E9;      /* card-internal rules                          */
+    --display:Archivo,"Archivo Expanded","Helvetica Neue",system-ui,sans-serif;
+    --body:"Zen Kaku Gothic New","Hiragino Sans",system-ui,sans-serif;
+    --mono:"Space Mono",ui-monospace,SFMono-Regular,Menlo,monospace;
+
+    /* THE SHELL, WHICH IS THE PART THAT HAS A THEME. Page ground, the header
+       and the nav. These are separate from --bg/--panel/--text on purpose:
+       those still dress the content cards, and the content cards are still
+       dark in both themes because 156 colours inside them are written as bare
+       hexes that assume a dark ground. Converting all of them blind, across
+       eight views nobody can see at once, is how a page ships broken. So the
+       shell themes now and each view themes as the redesign reaches it, which
+       is the order the handoff already prescribes.
+
+       Dark cards on a light ground is not a compromise shape either - it is
+       the shape the handoff already asks for in the Armory, where quality
+       colours are meaningless on a pale background. */
+    --shell-bg:var(--ground);
+    --shell-text:var(--ink);
+    --shell-dim:var(--muted);
+    --shell-line:var(--hairline);
+  }
+
+  /* Dark is the default this page has always had, so an unset preference keeps
+     it. The explicit choice wins in BOTH directions: data-theme="light" beats a
+     dark OS, and data-theme="dark" beats a light one. */
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --shell-bg:#0d1117; --shell-text:#e6edf3;
+      --shell-dim:#8b949e; --shell-line:#30363d;
+    }
+  }
+  :root[data-theme="dark"] {
+    --shell-bg:#0d1117; --shell-text:#e6edf3;
+    --shell-dim:#8b949e; --shell-line:#30363d;
+  }
   * { box-sizing:border-box; margin:0; }
-  body { background:var(--bg); color:var(--text);
+  body { background:var(--shell-bg); color:var(--shell-text);
          font:14px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace; }
   header { display:flex; align-items:baseline; gap:1rem; padding:.7rem 1rem;
-           border-bottom:1px solid var(--line); flex-wrap:wrap; }
-  h1 { font-size:1.05rem; }
-  #census { color:var(--dim); }
+           border-bottom:1px solid var(--shell-line); flex-wrap:wrap; }
+  h1 { font-size:1.05rem; font-family:var(--display); font-weight:800;
+       font-stretch:125%; letter-spacing:-.02em; }
+  #census { color:var(--shell-dim); font-family:var(--mono); font-size:12px;
+            letter-spacing:.06em; }
   /* Pushed to the far end of the header: it leaves this site for a
      different machine, so it should not sit among the live readouts. */
-  #recordings { margin-left:auto; color:var(--dim); text-decoration:none;
-                border:1px solid var(--line); border-radius:4px;
+  #recordings { margin-left:auto; color:var(--shell-dim); text-decoration:none;
+                border:1px solid var(--shell-line); border-radius:4px;
                 padding:.15rem .5rem; font-size:.85rem; }
-  #recordings:hover { color:var(--text); }
+  #recordings:hover { color:var(--shell-text); }
+  /* Sits after the recordings link, which carries the margin-left:auto, so it
+     rides the right edge with it. 44px tall because every hit target on this
+     page is, per the handoff. */
+  #theme { background:transparent; color:var(--shell-dim);
+           border:1px solid var(--shell-line); border-radius:4px;
+           font-family:var(--mono); font-size:11px; letter-spacing:.1em;
+           text-transform:uppercase; padding:0 .7rem; min-height:44px;
+           cursor:pointer; }
+  #theme:hover { color:var(--shell-text); }
+  #theme:focus-visible { outline:2px solid var(--green); outline-offset:2px; }
   #stale { display:none; background:#6e2c00; color:#ffd8a8; padding:.3rem 1rem; }
   /* --- which world this is (quadseven/mod-overseer#184) ---------------------
      THE FIRST THING IN THE STYLESHEET AND THE FIRST THING IN THE BODY, above
@@ -40,24 +142,53 @@
      THREE STATES, AND THE THIRD IS NOT NEUTRAL. An unverified realm is drawn
      as an alarm, not as an absence, because "this page cannot tell you what
      you are looking at" is a more urgent thing to read than "no data". */
-  #realm { padding:.5rem 1rem .55rem; border-bottom:2px solid transparent; }
-  #rklabel { font-weight:700; font-size:1.05rem; letter-spacing:.09em; }
-  #rkwhere { color:inherit; opacity:.85; }
-  #rkwarn { margin-top:.3rem; font-weight:700; }
-  #rkbuild { margin-top:.25rem; opacity:.75; font-size:.85rem;
+  #realm { padding:14px 20px 15px; border-bottom:2px solid transparent;
+           font-family:var(--body); }
+  /* The label is a STATUS WORD, so it is set in the mono face like every other
+     status word on this page - but at display size, because realm.py calls it
+     the largest text on the page and means it. */
+  #rklabel { font-family:var(--mono); font-weight:700;
+             font-size:clamp(1.05rem,3.4vw,1.45rem); letter-spacing:.1em;
+             text-transform:uppercase; }
+  #rkwhere { margin-top:2px; font-size:15px; line-height:1.55; opacity:.92; }
+  #rkwarn  { margin-top:8px; font-weight:700; font-size:15px; line-height:1.5; }
+  /* Hashes and version numbers, so mono, and it must be allowed to break
+     anywhere - a 40-hex SHA has no spaces to wrap at. */
+  #rkbuild { margin-top:7px; font-family:var(--mono); font-size:12px;
+             line-height:1.55; letter-spacing:.02em; opacity:.8;
              overflow-wrap:anywhere; }
-  /* The live world. Red, and the widest border on the page. */
-  #realm.rk-production { background:#5c1111; color:#ffd9d9;
-                         border-bottom-color:var(--horde); }
-  /* Not the live world. Deliberately the quiet one: this is the state a
+
+  /* THE LIVE WORLD. Ink, per the design tokens, and it keeps the widest border
+     on the page in vermilion. The colour moved from red to ink in the redesign;
+     the LOUDNESS did not move, it just stopped living in the background and
+     started living in the word and the rule beneath it. That matters because a
+     colourblind reader or a monochrome screenshot never had the red anyway. */
+  #realm.rk-production { background:var(--ink); color:var(--pale-green);
+                         border-bottom-color:var(--vermilion); }
+  #realm.rk-production #rklabel { color:var(--paper); }
+
+  /* NOT THE LIVE WORLD, and deliberately the quiet one: this is the state a
      reader should be able to stop noticing, or the loud states stop meaning
-     anything. */
-  #realm.rk-non-production { background:#10301d; color:#9ae6b4;
-                             border-bottom-color:#2f6b46; }
-  /* Cannot say. Amber, and distinct from #stale's brown so the two never read
-     as the same warning. */
-  #realm.rk-unknown { background:#5e4300; color:#ffe9a8;
-                      border-bottom-color:var(--neutral); }
+     anything.
+
+     Darkened from the deep-green token rather than given a hex of its own.
+     Plain #00833A under white lands at about 4.4:1, just under the 4.5:1 that
+     body text needs, and this band carries three lines of body text. The plain
+     token is declared first so a browser without color-mix still gets a green
+     band rather than no background at all. */
+  #realm.rk-non-production { background:var(--deep-green);
+                             background:color-mix(in srgb, var(--deep-green) 42%, var(--ink));
+                             color:var(--pale-green);
+                             border-bottom-color:var(--deep-green); }
+  #realm.rk-non-production #rklabel { color:var(--paper); }
+
+  /* CANNOT SAY. Vermilion, which in this palette is reserved for live badges,
+     alarms and refusals - and "this page cannot tell you which world you are
+     looking at" is an alarm, not an absence. Ink on vermilion rather than white
+     on vermilion: white lands near 3.5:1 and this band exists to be read. */
+  #realm.rk-unknown { background:var(--vermilion); color:var(--ink);
+                      border-bottom-color:var(--ink); }
+  #realm.rk-unknown #rkbuild { opacity:.9; }
   /* --- the current goal banner (infra#3205) ---------------------------------
      Above every tab and outside all of them, because it is the one thing on
      this page that is true whichever view is open. It sits BELOW #stale on
@@ -96,7 +227,8 @@
   .agstale { color:#ffd8a8; }
   @media (max-width:600px) { #agline { font-size:1.12rem; } }
   nav { display:flex; gap:.4rem; padding:.6rem 1rem; flex-wrap:wrap; }
-  nav button { background:var(--panel); color:var(--text); border:1px solid var(--line);
+  nav button { background:transparent; color:var(--shell-text);
+               border:1px solid var(--shell-line);
                padding:.3rem .8rem; border-radius:6px; cursor:pointer; font:inherit; }
   nav button.on { border-color:var(--alliance); color:var(--alliance); }
   #wrap { position:relative; margin:0 1rem 1rem; }
@@ -105,7 +237,7 @@
   #tip { position:absolute; pointer-events:none; display:none; background:#000c;
          border:1px solid var(--line); border-radius:6px; padding:.35rem .6rem;
          white-space:nowrap; }
-  footer { color:var(--dim); padding:0 1rem 1rem; }
+  footer { color:var(--shell-dim); padding:0 1rem 1rem; }
   .sw { display:inline-block; width:.7em; height:.7em; border-radius:50%; }
   /* Character panel: a fixed overlay so opening it never reflows the map
      and never widens the page (the no-horizontal-scroll rule). */
@@ -957,6 +1089,7 @@
        one realm and 502s on another. -->
   <a id="recordings" hidden
      title="watch the recording back">Recordings</a>
+  <button id="theme" type="button" aria-live="polite">theme</button>
 </header>
 <script>
   // One HEAD-ish probe, and the link appears only if playback answers. Costs a
@@ -4770,6 +4903,52 @@ window.addEventListener("hashchange", applyHash);
 // own elements, which are `const`s declared in the block above this one -
 // calling it any earlier than here is a temporal-dead-zone ReferenceError.
 applyHash();
+
+// --- light and dark -------------------------------------------------------
+// The button reports what it will DO, not what is currently set. "Light" on a
+// dark page is an instruction; a label that named the current state would read
+// as a claim and get clicked by someone trying to reach the state it names.
+//
+// Three states, not two: an explicit choice, or nothing stored at all, in which
+// case the OS decides and the CSS handles it with no attribute present. Cycling
+// only ever moves between the two explicit values, because a tri-state toggle
+// that can land back on "whatever the OS says" is not something a person can
+// aim at.
+const themeBtn = document.getElementById("theme");
+
+function systemPrefersDark() {
+  return window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches;
+}
+
+function currentTheme() {
+  const set = document.documentElement.getAttribute("data-theme");
+  if (set === "light" || set === "dark") return set;
+  return systemPrefersDark() ? "dark" : "light";
+}
+
+function paintThemeButton() {
+  // Name the destination, and say it in the same mono voice as every other
+  // status word on the page.
+  themeBtn.textContent = currentTheme() === "dark" ? "light" : "dark";
+  themeBtn.setAttribute("aria-label",
+    "Switch to " + (currentTheme() === "dark" ? "light" : "dark") + " mode");
+}
+
+themeBtn.addEventListener("click", () => {
+  const next = currentTheme() === "dark" ? "light" : "dark";
+  document.documentElement.setAttribute("data-theme", next);
+  try { localStorage.setItem("overseer-theme", next); } catch (e) { /* not fatal */ }
+  paintThemeButton();
+});
+
+// Follow the OS while the reader has expressed no preference of their own, and
+// stop following it the moment they do.
+if (window.matchMedia) {
+  window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => {
+    if (!document.documentElement.getAttribute("data-theme")) paintThemeButton();
+  });
+}
+paintThemeButton();
 </script>
 </body>
 </html>

@@ -220,7 +220,28 @@ class TheWealthView(unittest.TestCase):
         self.assertIn("let c = wlth.cards.get(name);", self.tab)
 
     def test_the_page_carries_no_framework(self):
-        self.assertNotIn('<link rel="stylesheet"', self.page)
+        """No framework, no bundler, no external CSS of our own.
+
+        NARROWED FOR THE TYPEFACES, AND ONLY FOR THEM. The redesign is set in
+        three faces the page cannot supply itself, and self-hosting them as
+        base64 would add most of a megabyte to a file that is already one
+        document. So exactly one stylesheet link is permitted, to the font
+        host, and every other one is still refused.
+
+        WHAT THIS GUARD IS ACTUALLY FOR is a framework arriving by the back
+        door: a CSS kit, a component library, a bundle. A font is none of
+        those, and the check below still fails if one shows up, because it
+        counts the links rather than deleting the rule.
+
+        `<script src=` stays absolutely forbidden. The one external script
+        this page runs, the model viewer, is created at runtime with a failure
+        path, and that is the pattern anything external has to follow."""
+        links = [ln for ln in self.page.splitlines()
+                 if '<link rel="stylesheet"' in ln]
+        for ln in links:
+            self.assertIn("fonts.googleapis.com", ln,
+                          "only the font host may be linked: " + ln.strip())
+        self.assertLessEqual(len(links), 1, "one font stylesheet, no more")
         self.assertNotIn("<script src=", self.page)
 
     def test_no_em_dashes(self):
