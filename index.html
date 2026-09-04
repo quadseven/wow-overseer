@@ -550,6 +550,150 @@
      of which are elsewhere in this file. */
   :root { --gold:#e5b53b; }
 
+  /* --- the Decree console (infra#2597) --------------------------------------
+     THE ONLY WRITE SURFACE IN THE REDESIGN, and most of its controls are
+     drawn disabled on purpose. What this page may and may not reach is
+     decided in decree.py; the refusal is printed beside the control it
+     belongs to, because a button that silently does nothing is the failure
+     this whole epic is named after.
+
+     WHERE THIS BLOCK SITS. Between the character panel's rules and the
+     Achievements banner, which is the one stretch of this stylesheet no tab
+     suite slices: the Achievements window starts at its own banner, the
+     Armory's and the Wealth view's start at theirs, the Family's runs from
+     its banner to the end of the stylesheet, and the current-goal banner's
+     ends at the `nav` rule far above here. A rule dropped inside one of
+     those windows is read as a rule about a tab it has nothing to do with.
+
+     EVERY `color` HERE IS A TEXT ROLE, never a pigment. See --caution-text
+     above for the measurement that rule came from. Pigments still draw
+     FILLS: a 10px dot and a 4px rule are shapes, not sentences. */
+  #decree { display:none; padding:.9rem 1rem 2.2rem; }
+  /* THE MACHINE VOICE. Every label, status word and count on this view is set
+     in it: mono, small, tracked, upper. One rule rather than five copies of
+     the same four declarations, which is also what stops the fifth from
+     drifting away from the other four. */
+  #dcrhead, .dcrtag, .dcrlabel, .dcrnumlabel, .dcrword {
+             font-family:var(--mono); font-size:11px; letter-spacing:.14em;
+             text-transform:uppercase; }
+  #dcrhead, .dcrlabel, .dcrnumlabel { color:var(--on-card-dim); }
+  #dcrhead { margin-bottom:.75rem; }
+  #dcrhead.stale { color:var(--caution-text); }
+  #dcrgrid { display:block; }
+  .dcrcard { background:var(--card); color:var(--on-card);
+             border:1px solid var(--card-line); border-radius:16px;
+             padding:1rem; margin-bottom:.85rem; max-width:74ch; }
+  .dcrcard h2 { font-family:var(--display); font-weight:800; font-size:1.08rem;
+                letter-spacing:-.01em; }
+  .dcrlede { color:var(--on-card-dim); margin-top:.25rem; line-height:1.55; }
+  /* The live answer, in the face every number and status word on this page
+     is set in. */
+  .dcrnow { font-family:var(--mono); font-size:.9rem; margin-top:.7rem;
+            line-height:1.5; overflow-wrap:anywhere; }
+  .dcrsplit { font-family:var(--mono); font-size:12px;
+              color:var(--caution-text); margin-top:.3rem; }
+  .dcrsplit:empty { display:none; }
+  /* CHIPS. Pill radius, ink when active, and 44px tall whether or not the
+     label is short: this is pressed with a thumb. */
+  .dcrchips { display:flex; flex-wrap:wrap; gap:.4rem; margin-top:.7rem; }
+  /* `hidden` beats a display the rule above already set, so every element
+     this view toggles needs it said once. */
+  .dcrchips[hidden], .dcrsays[hidden], .dcrwhy[hidden] { display:none; }
+  .dcrchip { display:inline-flex; align-items:center; gap:.45rem;
+             min-height:44px; padding:0 .85rem; border-radius:999px;
+             border:1px solid var(--card-line); background:transparent;
+             color:var(--on-card); font-family:var(--mono); font-size:12px;
+             letter-spacing:.03em; cursor:pointer; }
+  .dcrchip:hover { border-color:var(--on-card-dim); }
+  .dcrchip[aria-pressed="true"] { background:var(--ink); color:var(--pale-green);
+                                  border-color:var(--ink); }
+  .dcrchip:disabled { opacity:.5; cursor:not-allowed; }
+  .dcrchip:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
+  /* The dot IS the job list's whole status vocabulary: a mode that changes
+     behaviour, or a name and nothing else. It never carries the meaning
+     alone - the chip's title says it in words, and picking one prints the
+     module's own sentence underneath. */
+  .dcrdot { width:.62rem; height:.62rem; border-radius:50%; flex:none; }
+  .dcrdot.wired { background:var(--green); }
+  .dcrdot.unwired { background:var(--amber); }
+  .dcrchip[aria-pressed="true"] .dcrdot { box-shadow:0 0 0 1px var(--pale-green); }
+  /* WHAT PICKING IT WOULD MEAN. The stand-down warning is the single most
+     important sentence in this view, so it is a panel and not a footnote. */
+  .dcrsays, .dcrwhy { margin-top:.7rem; border-radius:12px;
+                      padding:.7rem .8rem; background:var(--sunken);
+                      line-height:1.55; }
+  .dcrsays.warn { background:var(--warn-bg); color:var(--warn-text); }
+  /* THE REFUSAL, in the same card as the control it disables. */
+  .dcrwhy { color:var(--on-card-dim); }
+  .dcrtag { display:block; color:var(--caution-text); margin-bottom:.3rem; }
+  /* THE CAMPAIGN COUNTER. Both buttons are exactly 44px square. */
+  .dcrstep { display:flex; align-items:center; gap:.6rem; margin-top:.8rem;
+             flex-wrap:wrap; }
+  .dcrstepbtn { width:44px; height:44px; flex:none; border-radius:14px;
+                border:1px solid var(--card-line); background:transparent;
+                color:var(--on-card); font-family:var(--mono); font-size:20px;
+                line-height:1; cursor:pointer; }
+  .dcrstepbtn:disabled { opacity:.45; cursor:not-allowed; }
+  .dcrnum { font-family:var(--mono); font-size:1.9rem; min-width:3ch;
+            text-align:center; }
+  /* THE WILL. */
+  .dcrlabel { display:block; margin:.95rem 0 .1rem; }
+  #dcrtext { width:100%; min-height:96px; margin-top:.4rem; border-radius:12px;
+             padding:.6rem .7rem; border:1px solid var(--card-line);
+             background:var(--sunken); color:var(--on-card); font:inherit;
+             resize:vertical; }
+  #dcrtext:disabled { opacity:.55; }
+  #dcrsend { margin-top:.85rem; width:100%; min-height:44px; border-radius:14px;
+             border:1px solid var(--ink); background:var(--ink);
+             color:var(--pale-green); font-family:var(--mono); font-size:13px;
+             letter-spacing:.05em; cursor:pointer; }
+  #dcrsend:disabled { opacity:.45; cursor:not-allowed; }
+  #dcrnote { margin-top:.6rem; }
+  .dcrheard { margin-top:.7rem; border-top:1px solid var(--card-line);
+              padding-top:.6rem; line-height:1.55; }
+  .dcrwho { font-family:var(--mono); font-size:12px; color:var(--on-card-dim); }
+  /* WHAT CAME BACK. The tone is the left rule AND the word, so nothing here
+     depends on seeing colour. `delivered` is deliberately not green: it means
+     handed over with nothing verified, and it has already been read as
+     success once, in writing, all night (infra#2819). */
+  .dcrout { border-left:4px solid var(--hairline); border-radius:0 12px 12px 0;
+            background:var(--sunken); padding:.6rem .8rem; margin-top:.5rem; }
+  .dcrout.verified { border-left-color:var(--green); }
+  .dcrout.unverified, .dcrout.unseen { border-left-color:var(--amber); }
+  .dcrout.inert, .dcrout.failed { border-left-color:var(--vermilion); }
+  /* The one row that earns more weight than the rest, and it is the payload's
+     verdict that grants it. `delivered` never gets here. */
+  .dcrout.ok { border-left-width:7px; }
+  .dcrword.verified { color:var(--accent-text); }
+  .dcrword.unverified, .dcrword.unseen { color:var(--caution-text); }
+  .dcrword.inert, .dcrword.failed { color:var(--warn-text); }
+  .dcrword.waiting { color:var(--on-card-dim); }
+  .dcrcmd { font-family:var(--mono); margin-top:.25rem; overflow-wrap:anywhere; }
+  .dcrid { font-family:var(--mono); font-size:11px; color:var(--on-card-dim);
+           margin-left:.5rem; }
+  .dcrmeans { margin-top:.35rem; line-height:1.55; }
+  .dcrev { margin-top:.25rem; color:var(--on-card-dim); line-height:1.55; }
+  /* WHAT IS STOPPING THEM. */
+  .dcrblock { padding:.65rem 0; border-top:1px solid var(--card-line); }
+  .dcrblock:first-child { border-top:0; padding-top:.4rem; }
+  .dcrwhat { font-weight:700; }
+  .dcrlist { margin-top:.5rem; }
+  .dcrlist > div { color:var(--on-card-dim); padding:.2rem 0 .2rem .95rem;
+                   position:relative; line-height:1.55; }
+  .dcrlist > div::before { content:"-"; position:absolute; left:0; }
+  .dcrnone { color:var(--on-card-dim); font-family:var(--mono); font-size:12px;
+             margin-top:.5rem; }
+  /* ONE BREAKPOINT, and all it does is let the cards sit two abreast on
+     something wider than a hand. The section itself is toggled inline by
+     showView, so the grid lives on a wrapper inside it: a display set on the
+     element would be overridden by that inline style and this rule would
+     silently never apply. */
+  @media (min-width:640px) {
+    #dcrgrid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr));
+               gap:.85rem; align-items:start; }
+    .dcrcard { margin-bottom:0; max-width:none; }
+  }
+
   /* --- the Chronicle (infra#2597, mod-overseer#88, mod-overseer#152) -------
      WHAT THEY HAVE DONE, and the redesign of the Achievements tab rather
      than a second copy of it. The old version was a vertical rail with dots
@@ -2144,6 +2288,71 @@
   <div class="ds-rule"><span class="ix">01</span><span class="ln"></span><span class="lb">what is actually here</span></div>
   <div id="eyetiers"></div>
 </section>
+<!-- THE DECREE CONSOLE (infra#2597). The only view on this page that WRITES,
+     and most of its controls are drawn disabled on purpose: which columns
+     this surface can reach is decided in decree.py and said here in words,
+     because a button that silently does nothing is the failure this epic is
+     named after. This markup holds no sentence of its own except the two
+     headings the module does not name - every other word arrives from
+     /api/decree. -->
+<section id="decree">
+  <div id="dcrhead">reaching the world...</div>
+  <div id="dcrgrid">
+    <div class="dcrcard">
+      <h2 id="dcrjobtitle"></h2>
+      <div id="dcrjobnow" class="dcrnow"></div>
+      <div id="dcrjobsplit" class="dcrsplit"></div>
+      <div id="dcrjobchips" class="dcrchips" role="group" aria-label="job modes"></div>
+      <p id="dcrjobsays" class="dcrsays"></p>
+      <div id="dcrjobwhy" class="dcrwhy" hidden></div>
+    </div>
+    <div class="dcrcard">
+      <h2 id="dcrcamptitle"></h2>
+      <div id="dcrcampline" class="dcrnow"></div>
+      <div class="dcrstep">
+        <button id="dcrcampdown" class="dcrstepbtn" type="button" disabled>-</button>
+        <span id="dcrcampnum" class="dcrnum">0</span>
+        <button id="dcrcampup" class="dcrstepbtn" type="button" disabled>+</button>
+        <span class="dcrnumlabel">runs wanted</span>
+      </div>
+      <p id="dcrcampmeans" class="dcrsays"></p>
+      <p id="dcrcampwarn" class="dcrsays warn" hidden></p>
+      <div id="dcrcampwhy" class="dcrwhy" hidden></div>
+    </div>
+    <div class="dcrcard">
+      <h2 id="dcrtraveltitle"></h2>
+      <p id="dcrtravelcaveat" class="dcrlede"></p>
+      <div id="dcrtravelnow" class="dcrnow"></div>
+      <div id="dcrtravelchips" class="dcrchips" role="group" aria-label="travel roles"></div>
+      <p id="dcrtravelsays" class="dcrsays" hidden></p>
+      <div id="dcrtravelunbuilt" class="dcrlist"></div>
+      <div id="dcrtravelwhy" class="dcrwhy" hidden></div>
+    </div>
+    <div class="dcrcard">
+      <h2 id="dcrwilltitle"></h2>
+      <span class="dcrlabel">who overhears it</span>
+      <div id="dcrwilltargets" class="dcrchips" role="group" aria-label="who overhears it"></div>
+      <div id="dcrwillwhy" class="dcrlist"></div>
+      <div id="dcrwillone" class="dcrchips" role="group" aria-label="which one of them" hidden></div>
+      <label class="dcrlabel" for="dcrtext">what they overhear</label>
+      <textarea id="dcrtext"></textarea>
+      <span class="dcrlabel">or say one of these</span>
+      <div id="dcrpresets" class="dcrchips" role="group" aria-label="preset decrees"></div>
+      <button id="dcrsend" type="button" disabled></button>
+      <p id="dcrnote" class="dcrnone"></p>
+      <div id="dcrheard"></div>
+    </div>
+    <div class="dcrcard">
+      <h2>What came back</h2>
+      <p id="dcroutlede" class="dcrlede"></p>
+      <div id="dcroutlist"></div>
+    </div>
+    <div class="dcrcard">
+      <h2>What is stopping them</h2>
+      <div id="dcrblocklist"></div>
+    </div>
+  </div>
+</section>
 <div id="wrap"><canvas id="map"></canvas><div id="tip"></div></div>
 <aside id="panel">
   <div id="phead"><h2 id="pname"></h2><button id="pclose" title="close">x</button></div>
@@ -2209,6 +2418,7 @@ const BAGS_VIEW = "bags";
 const CHRONICLE_VIEW = "chronicle";
 const COUNCIL_VIEW = "council";
 const EYE_VIEW = "eye";
+const DECREE_VIEW = "decree";
 const CONTINENT_ORDER = ["0", "1", "530", "571", "quelthalas", "azuremyst"];
 // A serif on purpose - the map should not read in the same voice as the
 // console around it. Deliberately a local stack: this page is tailnet-only
@@ -2291,6 +2501,15 @@ async function loadZones() {
   eb.dataset.view = EYE_VIEW;
   eb.onclick = () => showView(EYE_VIEW);
   tabs.appendChild(eb);
+  // LAST OF THE NAMED VIEWS, and deliberately so. Every tab before it
+  // answers a question about the family; this one changes what they are
+  // doing, and a control surface should not be the thing under the thumb of
+  // somebody who opened the site to check whether anybody had died.
+  const db = document.createElement("button");
+  db.textContent = "Decree";
+  db.dataset.view = DECREE_VIEW;
+  db.onclick = () => showView(DECREE_VIEW);
+  tabs.appendChild(db);
   for (const id of CONTINENT_ORDER) {
     const b = document.createElement("button");
     b.textContent = zones[id].name;
@@ -4552,6 +4771,7 @@ function showView(v) {
   const isChr = v === CHRONICLE_VIEW;
   const isCouncil = v === COUNCIL_VIEW;
   const isEye = v === EYE_VIEW;
+  const isDec = v === DECREE_VIEW;
   fsection.style.display = isFam ? "block" : "none";
   watchsection.style.display = isWatch ? "block" : "none";
   asection.style.display = isArm ? "block" : "none";
@@ -4559,6 +4779,7 @@ function showView(v) {
   chrsection.style.display = isChr ? "block" : "none";
   cnsection.style.display = isCouncil ? "block" : "none";
   eyesection.style.display = isEye ? "block" : "none";
+  dcrSection.style.display = isDec ? "block" : "none";
   // Every non-map view hides the canvas and its legend. This used to read
   // "not Family means map", which would have drawn the map underneath the
   // Armory tab the moment a third view existed.
@@ -4634,6 +4855,16 @@ function showView(v) {
     pollEye();
     return;
   }
+  if (isDec) {
+    // The same treatment, for the same two reasons: the panel is a map thing
+    // that would keep a second player alive off screen, and thirty seconds
+    // of blank console under a heading is indistinguishable from a broken
+    // one, so it fetches on open rather than waiting for the timer.
+    closePanel();
+    stopBroadcasts();
+    pollDecree();
+    return;
+  }
   stopBroadcasts();
   // LEAVING THE TAB DOES NOT STOP THE STREAM, for the same reason closing the
   // panel does not: a viewer may well switch to the map, or put the phone
@@ -4672,6 +4903,359 @@ setInterval(refreshFrame, 5000);  // and so does their own screen
 setInterval(refreshWatch, 5000);
 setInterval(render, 200);  // combat pulse
 window.addEventListener("resize", render);
+
+// --- the Decree console (infra#2597) ---------------------------------------
+//
+// THE ONLY VIEW ON THIS PAGE THAT WRITES, and the one where being wrong is
+// not cosmetic. /api/decree arrives fully decided by decree.py: which job
+// modes are wired, what setting an unwired one actually does to the family,
+// which control can reach the world at all, and what a finished command row
+// is allowed to claim. Nothing below decides any of that - it sets
+// textContent and toggles a class, exactly as the current-goal banner does.
+//
+// IT SITS HERE, after the map's intervals and above the realm banner's block,
+// in the gap no tab suite claims: the Family window ends at loadZones().then(
+// , the realm banner's begins at its own comment below, and the current-goal,
+// Achievements and Armory windows are all further down again. Code dropped
+// into one of those is swept into assertions about a tab it has nothing to do
+// with.
+//
+// THE ONE THING IT SENDS is a decree, down a road that already exists: POST
+// /api/chat, once per character, oldest first, exactly as the character
+// panel's chat box does it. No second endpoint and no second grammar. Every
+// other control is disabled because decree.py says the column behind it
+// cannot be reached from this page, and the reason is printed beside the
+// control rather than discovered by pressing it.
+//
+// EVERY STRING FROM THE PAYLOAD IS SET AS TEXT. A command a bot was given and
+// a detail a worldserver wrote are both data, and both land here.
+const DECREE_POLL_MS = 10000;
+const dcrSection = document.getElementById("decree");
+const dcrHead = document.getElementById("dcrhead");
+const dcrJobTitle = document.getElementById("dcrjobtitle");
+const dcrJobNow = document.getElementById("dcrjobnow");
+const dcrJobSplit = document.getElementById("dcrjobsplit");
+const dcrJobChips = document.getElementById("dcrjobchips");
+const dcrJobSays = document.getElementById("dcrjobsays");
+const dcrJobWhy = document.getElementById("dcrjobwhy");
+const dcrCampTitle = document.getElementById("dcrcamptitle");
+const dcrCampLine = document.getElementById("dcrcampline");
+const dcrCampNum = document.getElementById("dcrcampnum");
+const dcrCampUp = document.getElementById("dcrcampup");
+const dcrCampDown = document.getElementById("dcrcampdown");
+const dcrCampMeans = document.getElementById("dcrcampmeans");
+const dcrCampWarn = document.getElementById("dcrcampwarn");
+const dcrCampWhy = document.getElementById("dcrcampwhy");
+const dcrTravelTitle = document.getElementById("dcrtraveltitle");
+const dcrTravelCaveat = document.getElementById("dcrtravelcaveat");
+const dcrTravelNow = document.getElementById("dcrtravelnow");
+const dcrTravelChips = document.getElementById("dcrtravelchips");
+const dcrTravelSays = document.getElementById("dcrtravelsays");
+const dcrTravelUnbuilt = document.getElementById("dcrtravelunbuilt");
+const dcrTravelWhy = document.getElementById("dcrtravelwhy");
+const dcrWillTitle = document.getElementById("dcrwilltitle");
+const dcrWillTargets = document.getElementById("dcrwilltargets");
+const dcrWillWhy = document.getElementById("dcrwillwhy");
+const dcrWillOne = document.getElementById("dcrwillone");
+const dcrText = document.getElementById("dcrtext");
+const dcrPresets = document.getElementById("dcrpresets");
+const dcrSend = document.getElementById("dcrsend");
+const dcrNote = document.getElementById("dcrnote");
+const dcrHeard = document.getElementById("dcrheard");
+const dcrOutLede = document.getElementById("dcroutlede");
+const dcrOutList = document.getElementById("dcroutlist");
+const dcrBlockList = document.getElementById("dcrblocklist");
+
+// WHAT IS BEING DRAFTED, which is deliberately not what the world is set to.
+// The poll rewrites the live lines every ten seconds; it must never rewrite
+// the mode somebody is currently reading about, because a page that changes
+// the subject under a reader is how an order gets given by accident.
+const dcr = {
+  seen: null, built: false, job: null, role: null, target: null, one: "",
+  busy: false,
+  jobs: new Map(), jobBtns: new Map(),
+  roles: new Map(), roleBtns: new Map(),
+  targetBtns: new Map(), oneBtns: new Map(),
+};
+
+function dcrChip(label, dot, onPick, why) {
+  const b = el("button", "dcrchip");
+  b.type = "button";
+  if (dot) b.appendChild(el("span", "dcrdot " + dot));
+  b.appendChild(el("span", "", label));
+  b.setAttribute("aria-pressed", "false");
+  // A chip that cannot do anything is DISABLED and carries the reason, not
+  // merely greyed: a disabled button is unfocusable and screen readers say
+  // so, where a styled-flat one still reads as pressable.
+  if (why) { b.disabled = true; b.title = why; }
+  else b.onclick = onPick;
+  return b;
+}
+
+function dcrPress(buttons, chosen) {
+  for (const [key, b] of buttons) b.setAttribute("aria-pressed", String(key === chosen));
+}
+
+// A control that cannot reach the world says so, in the card it lives in,
+// in the module's words. `instead` is how the thing is actually done today,
+// which is the half a person needs and the half a disabled button never has.
+function dcrRefusal(node, sec, tag) {
+  node.replaceChildren();
+  if (!sec || sec.can_send) { node.hidden = true; return; }
+  node.hidden = false;
+  node.appendChild(el("span", "dcrtag", tag));
+  node.appendChild(el("div", "", sec.why_not));
+  if (sec.instead) node.appendChild(el("div", "dcrev", sec.instead));
+}
+
+function dcrBuildChips(p) {
+  dcr.built = true;
+  for (const c of p.job.chips) {
+    const b = dcrChip(c.mode, c.state, () => { dcr.job = c.mode; dcrShowJob(); }, "");
+    // The dot is a shape; this is the same fact in words, for anybody who
+    // cannot use the colour and for anybody hovering before they commit.
+    b.title = c.says;
+    dcr.jobs.set(c.mode, c);
+    dcr.jobBtns.set(c.mode, b);
+    dcrJobChips.appendChild(b);
+  }
+  for (const c of p.travel.chips) {
+    const b = dcrChip(c.role, "", () => { dcr.role = c.role; dcrShowRole(); }, "");
+    b.title = c.says;
+    dcr.roles.set(c.role, c);
+    dcr.roleBtns.set(c.role, b);
+    dcrTravelChips.appendChild(b);
+  }
+  for (const t of p.will.targets) {
+    const b = dcrChip(t.label, "", () => { dcr.target = t.id; dcrShowWill(); },
+                      t.reachable ? "" : t.why_not);
+    dcr.targetBtns.set(t.id, b);
+    dcrWillTargets.appendChild(b);
+    if (!t.reachable) {
+      const why = el("div", "");
+      why.appendChild(el("span", "dcrwho", t.label));
+      why.appendChild(el("span", "", " " + t.why_not));
+      dcrWillWhy.appendChild(why);
+    }
+  }
+  for (const name of p.will.audience) {
+    const b = dcrChip(name, "", () => { dcr.one = name; dcrShowWill(); }, "");
+    dcr.oneBtns.set(name, b);
+    dcrWillOne.appendChild(b);
+  }
+  for (const preset of p.will.presets) {
+    const b = dcrChip(preset, "", () => { dcrText.value = preset; dcrShowWill(); }, "");
+    dcrPresets.appendChild(b);
+  }
+  dcrText.maxLength = p.will.max_chars;
+  dcrSend.textContent = p.will.submit;
+}
+
+// THE MOST IMPORTANT FUNCTION IN THIS VIEW. Picking a mode that is not wired
+// does not do nothing: it stands the quest drive DOWN and puts nothing in its
+// place, so the family stops questing and starts doing nothing at all. The
+// sentence that says so is jobs.describe, arriving on the chip, and it is
+// drawn as a warning panel rather than a caption.
+function dcrShowJob() {
+  dcrPress(dcr.jobBtns, dcr.job);
+  const c = dcr.jobs.get(dcr.job);
+  dcrJobSays.hidden = !c;
+  dcrJobSays.textContent = c ? c.says : "";
+  dcrJobSays.classList.toggle("warn", !!c && !c.wired);
+}
+
+function dcrShowRole() {
+  dcrPress(dcr.roleBtns, dcr.role);
+  const c = dcr.roles.get(dcr.role);
+  dcrTravelSays.hidden = !c;
+  dcrTravelSays.textContent = c ? c.says : "";
+}
+
+function dcrShowWill() {
+  const p = dcr.seen;
+  if (!p) return;
+  dcrPress(dcr.targetBtns, dcr.target);
+  dcrPress(dcr.oneBtns, dcr.one);
+  const t = p.will.targets.find((x) => x.id === dcr.target);
+  dcrWillOne.hidden = !(t && t.needs_name);
+  // WHICH REFUSAL APPLIES is a choice between sentences the module wrote,
+  // made on conditions this page can see for itself. The page never composes
+  // one: a refusal is a claim about this system, and those are authored in
+  // Python or they drift.
+  let refusal = "";
+  if (!t) refusal = p.will.refusals.unchosen;
+  else if (!t.reachable) refusal = t.why_not;
+  else if (!dcrText.value.trim()) refusal = p.will.refusals.empty;
+  else if (t.needs_name && !dcr.one) refusal = p.will.refusals.unnamed;
+  else if (!t.needs_name && !p.will.audience.length) refusal = p.will.refusals.nobody;
+  if (!dcr.busy) dcrNote.textContent = refusal;
+  dcrSend.disabled = dcr.busy || refusal !== "";
+}
+
+// ONE POST PER CHARACTER, IN THE ORDER THEY ANSWER. mod-overseer delivers in
+// row order, so the order these are written is the order the family is read
+// in; who comes first is a fact bonds.py already holds, which is why the
+// audience arrives sorted rather than being sorted here.
+async function dcrSpeak() {
+  const p = dcr.seen;
+  if (!p || dcr.busy || dcrSend.disabled) return;
+  const t = p.will.targets.find((x) => x.id === dcr.target);
+  if (!t || !t.reachable) return;
+  const text = dcrText.value.trim();
+  const names = t.needs_name ? [dcr.one] : p.will.audience;
+  if (!text || !names.length) return;
+  dcr.busy = true;
+  dcrSend.disabled = true;
+  dcrText.disabled = true;
+  dcrHeard.replaceChildren();
+  dcrNote.textContent = "the family is being spoken to...";
+  for (const name of names) {
+    const line = el("div", "dcrheard");
+    line.appendChild(el("div", "dcrwho", name));
+    const said = el("div", "", "...");
+    line.appendChild(said);
+    dcrHeard.appendChild(line);
+    try {
+      const r = await fetch(u("/api/chat"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: name, text: text }),
+      });
+      if (!r.ok) {
+        said.textContent = r.status === 404 ? "no such character"
+                                            : "the world is unreachable";
+        continue;
+      }
+      const a = await r.json();
+      // `say` is composed on the server for BOTH cases - a character who
+      // answered, and one who is not in the world - so a member who is
+      // logged out is reported in the server's own words instead of being
+      // quietly dropped from a family of five.
+      said.textContent = a.say;
+      // QUEUED, and the word matters. A row on the queue has not been
+      // handed over, a handed-over row has not been applied, and the card
+      // below is where all three are told apart.
+      if (a.command) {
+        line.appendChild(el("div", "dcrid",
+          "queued command row " + a.command_id + ": " + a.command));
+      }
+    } catch (e) {
+      said.textContent = "the world is unreachable";
+    }
+  }
+  dcr.busy = false;
+  dcrText.disabled = false;
+  dcrText.value = "";
+  dcrShowWill();
+  // What became of those rows belongs to the other card, and it reads them
+  // off the queue rather than being told by this one.
+  pollDecree();
+}
+
+dcrSend.onclick = dcrSpeak;
+dcrText.oninput = dcrShowWill;
+
+function dcrOutcome(o) {
+  // `ok` comes from the row's own verdict, never from this file comparing a
+  // status word. It is the only extra weight any row gets, and `delivered`
+  // cannot reach it: decree.py decides, and it decides that handed over is
+  // not applied.
+  const n = el("div", "dcrout " + o.tone + (o.success ? " ok" : ""));
+  const top = el("div", "");
+  top.appendChild(el("span", "dcrword " + o.tone, o.word));
+  top.appendChild(el("span", "dcrid", "row " + o.id + " - " + o.name));
+  n.appendChild(top);
+  n.appendChild(el("div", "dcrcmd", o.command));
+  n.appendChild(el("div", "dcrmeans", o.means));
+  n.appendChild(el("div", "dcrev", o.evidence));
+  if (o.detail) n.appendChild(el("div", "dcrev", o.detail));
+  return n;
+}
+
+function renderDecree(p) {
+  dcr.seen = p;
+  dcrHead.textContent = "console read " + new Date().toLocaleTimeString();
+  dcrHead.classList.remove("stale");
+  const secs = new Map();
+  for (const s of p.sections) secs.set(s.key, s);
+  if (!dcr.built) dcrBuildChips(p);
+  if (dcr.job === null) dcr.job = p.job.standing;
+
+  const jobSec = secs.get(p.job.section);
+  if (jobSec) dcrJobTitle.textContent = jobSec.title;
+  dcrJobNow.textContent = p.job.line;
+  dcrJobSplit.textContent = p.job.split_line;
+  dcrShowJob();
+  dcrRefusal(dcrJobWhy, jobSec, p.refusal_tag);
+
+  const campSec = secs.get(p.campaign.section);
+  if (campSec) dcrCampTitle.textContent = campSec.title;
+  dcrCampLine.textContent = p.campaign.line;
+  dcrCampNum.textContent = String(p.campaign.wanted);
+  dcrCampMeans.textContent = p.campaign.means;
+  dcrCampWarn.textContent = p.campaign.warning;
+  dcrCampWarn.hidden = p.campaign.warning === "";
+  // THE TWO BUTTONS STAY DISABLED, and there is deliberately no click
+  // handler behind them anywhere in this file. Nothing writes
+  // dungeon_runs_wanted over HTTP, and wiring a control to a write path that
+  // does not exist is precisely what this view refuses to do; the day the
+  // path lands, this file gains a handler in the same change that flips
+  // can_send. Until then the reason is on the button itself.
+  dcrCampUp.disabled = true;
+  dcrCampDown.disabled = true;
+  dcrCampUp.title = campSec ? campSec.why_not : "";
+  dcrCampDown.title = dcrCampUp.title;
+  dcrRefusal(dcrCampWhy, campSec, p.refusal_tag);
+
+  const travSec = secs.get(p.travel.section);
+  if (travSec) dcrTravelTitle.textContent = travSec.title;
+  dcrTravelCaveat.textContent = p.travel.caveat;
+  dcrTravelNow.textContent = p.travel.line;
+  dcrShowRole();
+  dcrTravelUnbuilt.replaceChildren();
+  for (const line of p.travel.unbuilt) dcrTravelUnbuilt.appendChild(el("div", "", line));
+  dcrRefusal(dcrTravelWhy, travSec, p.refusal_tag);
+
+  const willSec = secs.get(p.will.section);
+  if (willSec) dcrWillTitle.textContent = willSec.title;
+  dcrShowWill();
+
+  dcrOutLede.textContent = p.outcome_lede;
+  dcrOutList.replaceChildren();
+  if (!p.outcomes.length) {
+    dcrOutList.appendChild(el("div", "dcrnone", p.outcome_empty));
+  } else {
+    for (const o of p.outcomes) dcrOutList.appendChild(dcrOutcome(o));
+  }
+
+  dcrBlockList.replaceChildren();
+  for (const b of p.backlog) {
+    const n = el("div", "dcrblock");
+    n.appendChild(el("div", "dcrwhat", b.what));
+    n.appendChild(el("div", "dcrev", b.why));
+    dcrBlockList.appendChild(n);
+  }
+}
+
+async function pollDecree() {
+  if (view !== DECREE_VIEW) return;
+  try {
+    const r = await fetch(u("/api/decree"));
+    if (!r.ok) throw new Error(r.status);
+    renderDecree(await r.json());
+  } catch (e) {
+    // KEEP WHAT IS DRAWN. A console that blanked on a failed poll would read
+    // as "no job is set, nobody is aimed anywhere, nothing is stopping them",
+    // which is the opposite of every fact on it - and this is the one view
+    // whose whole job is to say what is actually true.
+    dcrHead.textContent = "the world is unreachable - this console may be stale";
+    dcrHead.classList.add("stale");
+  }
+}
+
+// Ten seconds, like the current-goal banner and for the same reason: these
+// are saved columns and a finished command row, not a stream.
+setInterval(pollDecree, DECREE_POLL_MS);
 
 // --- which world this is (quadseven/mod-overseer#184) ----------------------
 //
@@ -6722,7 +7306,8 @@ function adoptContinent() {
 // The map is still separate below, because it is the one view whose hash
 // carries state (which continent) and so needs more than a name.
 const HASH_VIEWS = [FAMILY_VIEW, WATCH_VIEW, ARMORY_VIEW, BAGS_VIEW,
-                    CHRONICLE_VIEW, COUNCIL_VIEW, EYE_VIEW];
+                    CHRONICLE_VIEW, COUNCIL_VIEW, EYE_VIEW,
+                    DECREE_VIEW];
 
 // ADDRESSES A VIEW USED TO HAVE. The Achievements tab was renamed to the
 // Chronicle in its redesign, and every link anybody has already sent or

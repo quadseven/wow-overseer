@@ -25,6 +25,7 @@ import armory
 import basepath
 import chat
 import council
+import decree
 import eye
 import family
 import frames
@@ -1565,6 +1566,13 @@ def _insert_thought(name: str, source: str, text: str) -> None:
         conn.close()
 
 
+# WHO ASKED, for a row this process wrote. One constant rather than a literal
+# at each call site: the decree console reads its own orders back by matching
+# on it, and a second spelling would silently hand it an empty console while
+# the orders themselves went through perfectly.
+WEB_SOURCE = "web:overseer"
+
+
 def _insert_command(name: str, command: str, source: str) -> int:
     """Queue a playerbot command exactly as the Discord path does.
 
@@ -1631,6 +1639,41 @@ _FRAMES_LOCK = threading.Lock()
 # Where the page reaches the model-viewer cache. Also the value of the
 # page's window.CONTENT_PATH, which the viewer appends its file paths to.
 MODEL_PREFIX = "/modelviewer/"
+
+
+def _fetch_decree() -> dict:
+    """Everything the decree console reads, in one connection.
+
+    Two questions, one trip: what the roster COLUMNS are set to, and what
+    became of the orders this page has already sent.
+
+    THE COMMAND ROWS ARE SCOPED TO THIS SURFACE, by `source`. Every order the
+    web console sends is inserted with WEB_SOURCE (_insert_command, which is
+    the same road the Discord path takes), so this reads back what THIS page
+    caused and nothing else. A console that also showed the bridge's own
+    traffic would report somebody else's orders as if the operator had given
+    them, and the whole point of the view is that a line on it can be traced
+    back to a thing that was pressed.
+
+    Sits between `_ask_llm` and the Handler class deliberately: the Armory,
+    Achievements, Questlog and Wealth endpoint suites each slice this file by
+    their own fetch window, and a fetch dropped into one of them is read as
+    part of a contract it has nothing to do with.
+    """
+    conn = _connect()
+    try:
+        with conn.cursor() as cur:
+            roster_rows = _guarded(cur, _ROSTER_FULL, (), _ROSTER_OLD,
+                                   "overseer_roster")
+            command_rows = _guarded(
+                cur,
+                "SELECT id, target_name, command, kind, status, detail, "
+                "created_at FROM overseer_command WHERE source = %s "
+                "ORDER BY id DESC LIMIT %s",
+                (WEB_SOURCE, decree.OUTCOME_ROWS), "", "overseer_command")
+    finally:
+        conn.close()
+    return {"roster_rows": roster_rows, "command_rows": command_rows}
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -2064,17 +2107,52 @@ class Handler(BaseHTTPRequestHandler):
             decision = voice.Decision(None, chat.outage_line(name))
             degraded = True
         _insert_thought(name, "chat", decision.say)
+        # None when the voice picked no command, which is an ordinary answer:
+        # the reply below always carries the key, so a caller can tell "no
+        # order was queued" from "an order was queued and I lost the id".
+        row_id = None
         if decision.command is not None:
             # voice.parse_decision already gated this string; the web
             # surface delivers it down the same road as Discord.
-            row_id = _insert_command(name, decision.command, "web:overseer")
+            row_id = _insert_command(name, decision.command, WEB_SOURCE)
             log.info("web chat queued command %s for %s: %s", row_id, name, decision.command)
         self._send(200, "application/json", json.dumps({
             "present": True,
             "say": decision.say,
             "command": decision.command,
             "degraded": degraded,
+            # THE ROW ID, so a caller can follow what became of the order
+            # instead of assuming. Queued is not delivered, and delivered is
+            # not applied; the decree console reads all three off the row
+            # this names (infra#2819).
+            "command_id": row_id,
         }).encode())
+
+    def _decree(self, query: dict) -> None:
+        """GET /api/decree - the console's own state, fully decided.
+
+        BELOW the chat handler and above the watch one, which is the one
+        gap in this class no other endpoint suite claims: the Family, Armory,
+        Wealth and current-goal windows all end at the thoughts handler or at
+        do_POST, and the watch window starts below this. Those suites slice
+        this file on the literal string "def <name>", which is why no name
+        above is written that way.
+
+        No name parameter, like every other family endpoint: a job is
+        family-wide by construction and a campaign belongs to one party, so a
+        per-character console would answer a question this view does not ask.
+        """
+        try:
+            payload = decree.build_console(**_fetch_decree())
+            self._send(200, "application/json", json.dumps(payload).encode())
+        except Exception:
+            # Same contract as every other poll, and it matters here for a
+            # particular reason: this console exists to say what is real. A
+            # blanked card would read as "no job is set" and a cheerful
+            # default would be the page inventing an order nobody gave, so
+            # the last good answer stays up and the page marks it stale.
+            log.exception("decree query failed")
+            self._send(503, "application/json", b'{"error": "world unreachable"}')
 
     def _watch_state(self, query: dict) -> None:
         """GET /api/watch?name=X - is anyone watching, and how do they look?
@@ -2319,6 +2397,7 @@ class Handler(BaseHTTPRequestHandler):
         "/api/council": _council,
         "/api/eye": _eye,
         "/api/agenda": _agenda,
+        "/api/decree": _decree,
         "/api/thoughts": _thoughts,
         "/api/watch": _watch_state,
         "/": _index,

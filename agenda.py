@@ -269,6 +269,42 @@ def campaign(rows: list[dict]) -> dict:
     }
 
 
+def standing_orders(roster_rows: list[dict]) -> dict:
+    """What the roster COLUMNS say the family is set to right now.
+
+    A different question from build_agenda's, and deliberately its own
+    function rather than a slice of that payload. The banner answers "what
+    are they doing", which is a race between five tables; this answers "what
+    is set", which is four columns and the three judgements that read them.
+    A surface that offers to change those columns needs the second question
+    and would have to re-derive it from the first.
+
+    THE THREE JUDGEMENTS ARE ALREADY MADE IN THIS MODULE and are used here
+    rather than copied: which rows count (a disabled row is nobody), who the
+    leader is, and what a blank job column means. The job reported is the
+    LEADER's, for the same reason campaign() reports the leader's count -
+    mod_overseer.cpp looks the leader's name up in LoadJobs() and treats
+    absence as the default, and every branch that starts, stands down or
+    repeats a dungeon run compares that one string. A family-wide job is
+    family-wide by construction (jobs.py), so a disagreement between rows is
+    something to REPORT - job_split is right here for that - and never a
+    reason to average five opinions into one.
+    """
+    rows = _enabled(roster_rows)
+    leader = _leader(rows)
+    return {
+        "roster": [str(r["name"]) for r in rows],
+        "leader": None if leader is None else str(leader["name"]),
+        "job": jobs.DEFAULT if leader is None else _mode(leader),
+        "job_split": job_split(rows),
+        "campaign": campaign(rows),
+        "travel": [
+            {"name": str(r["name"]), "target": str(r.get("travel_npc") or "")}
+            for r in rows
+        ],
+    }
+
+
 def active_run(run_rows: list[dict]) -> dict | None:
     """The run in progress, or None.
 

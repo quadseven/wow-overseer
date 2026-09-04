@@ -512,5 +512,74 @@ class TheEncounterDenominator(unittest.TestCase):
         self.assertEqual(agenda.bosses_down(0), 0)
 
 
+class WhatTheColumnsSayIsSet(unittest.TestCase):
+    """`standing_orders` answers a different question from the banner's.
+
+    The banner answers "what are they doing", which is a race between five
+    tables. This answers "what is SET", which is four columns and the three
+    judgements that read them - and a surface offering to change those columns
+    needs the second question. It must not become a second opinion: the leader,
+    the enabled filter and the blank-job default are all reused from the
+    functions the banner already uses.
+    """
+
+    def test_the_job_reported_is_the_leaders(self):
+        """mod_overseer.cpp looks the LEADER's name up in LoadJobs() and every
+        branch that starts, stands down or repeats a run compares that one
+        string. A family-wide job is family-wide by construction."""
+        rows = roster({"Og": {"job": "dungeon"}, "Grug": {"job": "farm"}})
+        self.assertEqual(agenda.standing_orders(rows)["job"], "dungeon")
+        self.assertEqual(agenda.standing_orders(rows)["leader"], "Og")
+
+    def test_a_blank_job_reads_as_the_column_default(self):
+        """LoadJobs selects `job <> '' AND job <> 'quest'` and treats absence
+        from the result as questing, so an empty string means the same thing
+        the module means by it."""
+        rows = roster({"Og": {"job": ""}})
+        self.assertEqual(agenda.standing_orders(rows)["job"], jobs.DEFAULT)
+
+    def test_a_disagreement_is_reported_and_never_averaged(self):
+        rows = roster({"Grug": {"job": "farm"}})
+        state = agenda.standing_orders(rows)
+        self.assertEqual(state["job"], "quest")
+        self.assertIsNotNone(state["job_split"])
+
+    def test_a_disabled_row_is_nobody(self):
+        """Nothing aims it, so counting its columns would invent a
+        disagreement out of a character nobody is playing."""
+        rows = roster({"Bork": {"enabled": 0, "job": "farm"}})
+        state = agenda.standing_orders(rows)
+        self.assertNotIn("Bork", state["roster"])
+        self.assertIsNone(state["job_split"])
+
+    def test_the_counter_is_the_one_campaign_already_decided(self):
+        rows = roster({"Og": {"dungeon_runs_done": 1},
+                       "Grug": {"dungeon_runs_done": 5}})
+        self.assertEqual(agenda.standing_orders(rows)["campaign"],
+                         agenda.campaign(agenda._enabled(rows)))
+
+    def test_the_travel_column_comes_back_per_character(self):
+        rows = roster({"Grug": {"travel_npc": "profession trainer"}})
+        aimed = {t["name"]: t["target"] for t in agenda.standing_orders(rows)["travel"]}
+        self.assertEqual(aimed["Grug"], "profession trainer")
+        self.assertEqual(aimed["Og"], "")
+
+    def test_an_empty_roster_answers_rather_than_raising(self):
+        """A realm whose worldserver predates the table hands in []."""
+        state = agenda.standing_orders([])
+        self.assertIsNone(state["leader"])
+        self.assertEqual(state["job"], jobs.DEFAULT)
+        self.assertEqual(state["roster"], [])
+
+    def test_a_schema_without_the_job_column_still_answers(self):
+        """The adapter drops to a narrower SELECT on a degraded schema, so
+        these dicts genuinely arrive without the column."""
+        rows = [{"name": n, "enabled": 1, "lead": 1 if n == "Og" else 0}
+                for n in FAMILY]
+        state = agenda.standing_orders(rows)
+        self.assertEqual(state["job"], jobs.DEFAULT)
+        self.assertEqual(state["campaign"]["done"], 0)
+
+
 if __name__ == "__main__":
     unittest.main()
