@@ -242,7 +242,11 @@ def _spares(members):
     whichever member happens to sort first, and tie-broken by holder name so
     two identical pouches are chosen in a stable order.
     """
-    held = [(m, b) for m in members for b in m.carried]
+    # The core refuses to trade a non-empty container.  Treating one as a
+    # spare would enqueue a command that can never free space, then make the
+    # real recovery look like another receiver-full loop.  `used` comes from
+    # the bridge's fill count and is deliberately part of this pure seam.
+    held = [(m, b) for m in members for b in m.carried if b.used == 0]
     return sorted(held, key=lambda pair: (-pair[1].slots, pair[0].name,
                                           pair[1].name, pair[1].guid))
 

@@ -326,3 +326,18 @@ class RowsBecomeMembers(unittest.TestCase):
         moves = plan_family_bags(members_from_rows(rows, ["Bork", "Grog"]))
         self.assertEqual([(m.giver, m.receiver, m.guid) for m in moves],
                          [("Grog", "Bork", 32)])
+
+    def test_nonempty_carried_bags_are_not_offered(self):
+        """The core will not trade a container that still holds cargo."""
+        rows = [
+            _row("Grog", 930, "worn", 11, 0, 19),
+            _row("Grog", 931, "worn", 11, 0, 20),
+            _row("Grog", 932, "worn", 11, 0, 21),
+            _row("Grog", 933, "worn", 11, 0, 22),
+            _row("Grog", 31, "Full Red Leather Bag", 12, 0, 25, used=1),
+            _row("Bork", 940, "worn", 8, 0, 19),
+            _row("Bork", 941, "worn", 8, 0, 20),
+            _row("Bork", 942, "worn", 8, 0, 21),
+        ]
+        self.assertEqual(plan_family_bags(
+            members_from_rows(rows, ["Bork", "Grog"])), [])
