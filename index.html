@@ -38,9 +38,42 @@
   } catch (e) { /* storage unavailable; the OS preference still decides */ }
 </script>
 <style>
-  :root { --bg:#0d1117; --panel:#161b22; --line:#30363d; --text:#e6edf3;
-          --dim:#8b949e; --alliance:#4d9fff; --horde:#ff4d4d; --neutral:#d4b106;
-          --mortal:#7ee787; --thought:#a371f7; }
+  /* THE FIVE LEGACY TOKENS, NOW POINTING AT THE DESIGN. These were the whole
+     page's palette when it was dark, and 188 rules still dress themselves in
+     them. Repointing them is the conversion: every view moves at once and not
+     one of those rules changes.
+
+     They are kept as names rather than being search-and-replaced away, because
+     `--panel` means "the surface a card is drawn on" in 19 places and that is
+     a useful thing for a token to mean. What was wrong was the value.
+
+     The five ACCENTS below are different: they are not chrome, they carry
+     meaning (faction, mortality, a thought) and they are tuned for a dark
+     ground. Each is re-tuned for the light one rather than repointed, because
+     "alliance blue" has to stay recognisably alliance blue. */
+  :root { --bg:#F2F6EE; --panel:#FFFFFF; --line:#DDE6D6; --text:#0B1A10;
+          --dim:#5C6F60; --alliance:#1B6FC7; --horde:#B0330F; --neutral:#8A6100;
+          --mortal:#00833A; --thought:#6B3FA0; }
+
+  /* THE ARMORY IS THE ONE DARK SURFACE, and it is not a stylistic exception.
+     Item quality is a COLOUR in this game and always has been: grey poor,
+     green uncommon, blue rare, purple epic, orange legendary. Those values are
+     canonical, players read them without thinking, and #1eff00 uncommon-green
+     on white is close to invisible. Re-tinting them would be inventing new
+     quality colours; leaving them on a pale ground would be shipping ones
+     nobody can read.
+
+     So the Armory keeps the dark ground they were designed for, by overriding
+     the same five tokens in its own scope. Its rules are untouched; they were
+     always written against these names. #wealth (bags and purse) sits INSIDE
+     this section, which is why one scope covers every surface in the page that
+     draws an item. */
+  #armory {
+    --bg:#0A140E; --panel:#0F1D14; --line:#1E3226; --text:#E6F5EC;
+    --dim:#8FA795; --alliance:#4d9fff; --horde:#ff4d4d; --neutral:#d4b106;
+    --mortal:#7ee787; --thought:#a371f7;
+    background:var(--bg); color:var(--text);
+  }
   /* --- the redesign palette -------------------------------------------------
      Named exactly as the design handoff names them, so a colour in a review can
      be matched to the token it came from without translating. These sit BESIDE
@@ -83,28 +116,104 @@
     --shell-text:var(--ink);
     --shell-dim:var(--muted);
     --shell-line:var(--hairline);
+    /* THE SURFACES THE DESIGN IS MADE OF. The shell tokens above are the page
+       ground; these are the things drawn ON it, and they are separate because
+       the design puts white cards on a pale green ground rather than one flat
+       colour. */
+    --card:var(--paper);          /* header, tab bar, tile captions          */
+    --card-line:var(--hairline);  /* the hairline between them               */
+    --sunken:var(--ground);       /* inset panels inside a card              */
+    --on-card:var(--ink);         /* text on a card                          */
+    --on-card-dim:var(--muted);   /* secondary text on a card                */
+    --accent:var(--green);        /* the active tab underline, LIVE          */
+    --warn-bg:#FDEFEA;            /* the leader warning panel                */
+    --warn-text:var(--rust);
+    /* The video letterbox. Dark in BOTH themes on purpose: a pale box around
+       a game capture reads as a blown-out picture, and the handoff draws these
+       as dark green rectangles for the same reason. */
+    --shot:#0E1A12;
   }
 
   /* Dark is the default this page has always had, so an unset preference keeps
      it. The explicit choice wins in BOTH directions: data-theme="light" beats a
      dark OS, and data-theme="dark" beats a light one. */
+  /* DARK IS THE SAME DESIGN, NOT A DIFFERENT ONE. The first version of this
+     block reused the old #0d1117/#161b22 greys, which meant a reader on a
+     dark-preferring phone saw the previous site with a new banner on top and
+     no sign the redesign had happened at all. That was the whole complaint.
+     So the dark theme is now the handoff palette with the ground and the card
+     swapped: near-black GREEN rather than near-black grey, the same green
+     accent, the same vermilion. Only the tokens move; no component below is
+     styled inside a theme block. */
   @media (prefers-color-scheme: dark) {
     :root:not([data-theme="light"]) {
-      --shell-bg:#0d1117; --shell-text:#e6edf3;
-      --shell-dim:#8b949e; --shell-line:#30363d;
+      --shell-bg:#0A140E; --shell-text:#E6F5EC;
+      --shell-dim:#8FA795; --shell-line:#1E3226;
+      --card:#0F1D14; --card-line:#1E3226; --sunken:#0A140E;
+      --on-card:#E6F5EC; --on-card-dim:#8FA795;
+      /* Lifted off the deep-green print value: #00A94A on a near-black ground
+         is legible but tense, and this is a colour the eye follows. */
+      --accent:#2FD46F;
+      --warn-bg:#2A1710; --warn-text:#FFB59E;
     }
   }
   :root[data-theme="dark"] {
-    --shell-bg:#0d1117; --shell-text:#e6edf3;
-    --shell-dim:#8b949e; --shell-line:#30363d;
+    --shell-bg:#0A140E; --shell-text:#E6F5EC;
+    --shell-dim:#8FA795; --shell-line:#1E3226;
+    --card:#0F1D14; --card-line:#1E3226; --sunken:#0A140E;
+    --on-card:#E6F5EC; --on-card-dim:#8FA795;
+    --accent:#2FD46F;
+    --warn-bg:#2A1710; --warn-text:#FFB59E;
   }
   * { box-sizing:border-box; margin:0; }
+  /* THE FACES WERE LOADING AND NOTHING WAS USING THEM. Measured on the live
+     page: document.fonts listed Archivo, Space Mono and Zen Kaku Gothic New
+     all `loaded`, while every element on the page computed to
+     ui-monospace/SFMono-Regular/Menlo. The stylesheet link, the tokens and a
+     test that the tokens carry fallbacks had all shipped; not one rule used
+     them. Three typefaces were being downloaded and rendered in none.
+
+     Body is the humanist sans now. Mono is kept for DATA - counts, hashes,
+     timestamps, status words - which is what it is for, and what the whole
+     page was previously set in. */
   body { background:var(--shell-bg); color:var(--shell-text);
-         font:14px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace; }
-  header { display:flex; align-items:baseline; gap:1rem; padding:.7rem 1rem;
-           border-bottom:1px solid var(--shell-line); flex-wrap:wrap; }
-  h1 { font-size:1.05rem; font-family:var(--display); font-weight:800;
-       font-stretch:125%; letter-spacing:-.02em; }
+         font:15px/1.55 var(--body); }
+  /* Everything that is a number, an identifier or a machine word. Grouped so
+     the rule reads as a decision about DATA rather than as decoration. */
+  #census, #rklabel, #rkbuild, .wbar button, .rn-pill,
+  .agenda-meta, code, pre { font-family:var(--mono); }
+  header { display:flex; align-items:center; gap:.85rem; padding:.7rem 1rem;
+           background:var(--card); color:var(--on-card);
+           border-bottom:1px solid var(--card-line); flex-wrap:wrap; }
+  /* THE MARK. A vermilion dot and the name, and the dot is not decoration: it
+     is the one piece of the header that stays put while the realm band under
+     it changes colour, so the page has a fixed point to be recognised by. */
+  .mark { display:flex; align-items:center; gap:.55rem; }
+  .mark .dot { width:.62rem; height:.62rem; border-radius:50%;
+               background:var(--vermilion); flex:none; }
+  /* Pushes the switcher to the far edge, and collapses to nothing when the
+     header wraps on a narrow screen. */
+  .hgap { flex:1 1 auto; }
+
+  /* THE REALM SWITCHER. Three worlds have been served from one hostname for a
+     while now and nothing on the page said so: moving between them meant
+     editing the URL, which nobody does, so in practice the site had one realm,
+     whichever you happened to open. */
+  #realmnav { display:flex; gap:2px; padding:3px; border-radius:999px;
+              background:var(--sunken); border:1px solid var(--card-line); }
+  .rn-pill { display:inline-flex; align-items:center; min-height:34px;
+             padding:0 .8rem; border-radius:999px; border:0; cursor:pointer;
+             font-size:11px; letter-spacing:.12em; font-weight:700;
+             background:transparent; color:var(--on-card-dim);
+             text-decoration:none; }
+  .rn-pill:hover { color:var(--on-card); }
+  .rn-pill[aria-current="page"] { background:var(--ink); color:var(--pale-green); }
+  /* Hardcore has no page at all, deliberately (infra#2912). Shown, disabled,
+     and it says why on hover rather than linking to a 404 that reads as an
+     outage. */
+  .rn-pill.rn-dead { opacity:.45; cursor:not-allowed; }
+  h1 { font-size:1.18rem; font-family:var(--display); font-weight:800;
+       font-stretch:125%; letter-spacing:-.01em; text-transform:uppercase; }
   #census { color:var(--shell-dim); font-family:var(--mono); font-size:12px;
             letter-spacing:.06em; }
   /* Pushed to the far end of the header: it leaves this site for a
@@ -123,7 +232,7 @@
            cursor:pointer; }
   #theme:hover { color:var(--shell-text); }
   #theme:focus-visible { outline:2px solid var(--green); outline-offset:2px; }
-  #stale { display:none; background:#6e2c00; color:#ffd8a8; padding:.3rem 1rem; }
+  #stale { display:none; background:#6e2c00; color:var(--amber-text); padding:.3rem 1rem; }
   /* --- which world this is (quadseven/mod-overseer#184) ---------------------
      THE FIRST THING IN THE STYLESHEET AND THE FIRST THING IN THE BODY, above
      the header and above #stale, because it is the only thing on this page
@@ -224,7 +333,7 @@
   #agenda.idle #agline { color:var(--dim); }
   /* An honest label rather than a silent one: an answer the server could not
      refresh must not look like an answer it just gave. */
-  .agstale { color:#ffd8a8; }
+  .agstale { color:var(--amber-text); }
   @media (max-width:600px) { #agline { font-size:1.12rem; } }
   nav { display:flex; gap:.4rem; padding:.6rem 1rem; flex-wrap:wrap; }
   nav button { background:transparent; color:var(--shell-text);
@@ -279,7 +388,7 @@
   #pwfnote.warn { color:#d29922; }
   #pwnote.live { color:#7ee787; }
   #pwnote.warn { color:#d29922; }
-  #panel .gone { color:#ffd8a8; }
+  #panel .gone { color:var(--amber-text); }
   /* Thought timeline (infra#2604): one stream, both surfaces. The left
      border is the source, so a Discord line and a web line are told apart
      at a glance without reading them. */
@@ -294,7 +403,7 @@
   .th.s-command { border-left-color:var(--neutral); }
   .th.s-goal { border-left-color:var(--mortal); }
   .th.s-reflection { border-left-color:var(--thought); }
-  .th.overseer { background:#161b2288; }
+  .th.overseer { background:var(--divider); }
   .th.pending { opacity:.55; }
   #pmore { width:100%; margin-top:.3rem; background:var(--panel); color:var(--dim);
            border:1px solid var(--line); border-radius:6px; cursor:pointer;
@@ -319,7 +428,7 @@
   :root { --gold:#e5b53b; }
   #achievements { display:none; padding:0 1rem 1rem; }
   #achhead { color:var(--dim); margin-bottom:.6rem; }
-  #achhead.alarm { color:#ffd8a8; }
+  #achhead.alarm { color:var(--amber-text); }
   #achfilters { display:flex; gap:.4rem; flex-wrap:wrap; margin-bottom:.8rem; }
   #achfilters button { background:var(--panel); color:var(--dim); border:1px solid var(--line);
                        border-radius:999px; padding:.2rem .7rem; font:inherit; cursor:pointer;
@@ -384,7 +493,7 @@
      asks the page to scroll sideways. */
   #armory { display:none; margin:0 1rem 1rem; }
   #aheadline { margin-bottom:.2rem; overflow-wrap:anywhere; }
-  #aheadline.alarm { color:#ff9d9d; }
+  #aheadline.alarm { color:var(--rust); }
   /* Said out loud because these numbers are OLD and nobody can tell by
      looking. The core writes gear and talents on its own save timer, so a
      sword equipped a minute ago is genuinely not here yet - and a page that
@@ -494,7 +603,7 @@
   .atree .th .p.zero { color:var(--dim); }
   .agrid { position:relative; display:grid; gap:6px; padding:8px; justify-content:center;
            grid-template-columns:repeat(4, 44px); grid-auto-rows:44px;
-           background:radial-gradient(ellipse at 50% 30%, color-mix(in srgb, var(--cc, #334) 40%, #0b0d14) 0%, #0b0d14 70%);
+           background:radial-gradient(ellipse at 50% 30%, color-mix(in srgb, var(--cc, #334) 40%, var(--bg)) 0%, var(--bg) 70%);
            border-radius:0 0 6px 6px; }
   .agrid svg { position:absolute; inset:0; width:100%; height:100%; pointer-events:none; }
   .atal { position:relative; width:44px; height:44px; border-radius:6px;
@@ -581,7 +690,7 @@
            border-left:3px solid var(--horde); border-radius:8px;
            padding:.7rem .9rem; margin-bottom:1rem; }
   #stgap.ok { border-left-color:var(--mortal); }
-  .stgap-head { color:#ff9d9d; }
+  .stgap-head { color:var(--rust); }
   #stgap.ok .stgap-head { color:var(--mortal); }
   .stgap-why { color:var(--dim); margin-top:.25rem; overflow-wrap:anywhere; }
   .stgap-list { display:flex; flex-wrap:wrap; gap:.35rem; margin-top:.5rem; }
@@ -589,7 +698,7 @@
                   color:var(--text); border:1px solid var(--line); border-radius:6px;
                   padding:.15rem .45rem; font-size:.85rem; }
   .stgap-list a:hover { border-color:var(--alliance); }
-  .stgap-list a.key { border-color:var(--horde); color:#ff9d9d; }
+  .stgap-list a.key { border-color:var(--horde); color:var(--rust); }
   .stgap-list img { width:18px; height:18px; border-radius:3px; display:block; }
   .stgap-list .n { color:var(--dim); }
   /* Five names to jump between, the same affordance the profiles above
@@ -665,14 +774,14 @@
   #wtitle { font-family:Georgia,'Times New Roman',serif; font-size:1.4rem;
             font-weight:normal; margin-bottom:.2rem; }
   #wsaved { color:var(--dim); font-size:.9rem; margin-bottom:.6rem; }
-  #wsaved.alarm { color:#ffd8a8; }
+  #wsaved.alarm { color:var(--amber-text); }
   #ajump a.wjump { order:1; border-color:var(--gold); }
   /* The family strip: one chip per number a person came here to read. */
   #wheadline { display:flex; gap:.4rem; flex-wrap:wrap; margin-bottom:.9rem; }
   .wchip { border:1px solid var(--line); border-radius:999px;
            padding:.15rem .7rem; font-size:.9rem; }
   .wchip .k { color:var(--dim); margin-right:.35rem; }
-  .wchip.alarm { border-color:#d29922; color:#ffd8a8; }
+  .wchip.alarm { border-color:#d29922; color:var(--amber-text); }
   .wchip.good { border-color:var(--mortal); }
   /* Same column stops as the profiles above, so the tab does not change
      shape halfway down as a window is dragged wider. */
@@ -695,13 +804,13 @@
   /* The fullness bar. Amber at the top of the range and red at the very
      top, because a full bag is not a cosmetic state: a bot with no room
      can never finish a loot, and it will stand there re-trying forever. */
-  .wmeter { height:9px; border-radius:5px; background:#0b0d14;
+  .wmeter { height:9px; border-radius:5px; background:var(--bg);
             border:1px solid var(--line); overflow:hidden; }
   .wmeter span { display:block; height:100%; background:var(--mortal); }
   .wmeter.tight span { background:#d29922; }
   .wmeter.full span { background:var(--horde); }
   .wroom { color:var(--dim); font-size:.9rem; margin:.25rem 0 .5rem; }
-  .wroom .full { color:#ff9d9d; }
+  .wroom .full { color:var(--rust); }
   .wroom .spare { color:#d29922; }
   .wtally { color:var(--dim); font-size:.9rem; margin-bottom:.6rem; }
   .wqs { display:flex; gap:.3rem; flex-wrap:wrap; margin-top:.3rem; }
@@ -744,7 +853,7 @@
   .wslot.q5 { border-color:#ff8000; color:#ff8000; }
   .wslot.q6 { border-color:#e6cc80; color:#e6cc80; }
   .wslot.q7 { border-color:#00ccff; color:#00ccff; }
-  .wslot.free { border-style:dashed; border-color:var(--line); background:#0b0d14; }
+  .wslot.free { border-style:dashed; border-color:var(--line); background:var(--bg); }
   .wslot .c { position:absolute; right:1px; bottom:0; font-size:.65rem; line-height:1.1;
               padding:0 .15rem; border-radius:3px; background:#000c; color:var(--text); }
   /* Green and better, worn or carried. The list a person scans for "why is
@@ -787,7 +896,7 @@
      quest, with a portrait for everyone on it. */
   #family { display:none; margin:0 1rem 1.5rem; }
   #fheadline { margin-bottom:.6rem; overflow-wrap:anywhere; color:var(--dim); }
-  #fheadline.alarm { color:#ff9d9d; }
+  #fheadline.alarm { color:var(--rust); }
   /* ONE column until there is honestly room for two, then three (3+2), then
      all five in a row. Explicit stops rather than auto-fit so the shape is
      the same on every visit: a 3+2 that turns into a 4+1 as a window is
@@ -832,7 +941,7 @@
      a quest log at the cap is a fact about one character, and it has to be
      read beside that character's name. Loud when the log is nearly full. */
   .fslots { color:var(--dim); font-size:.85rem; margin-top:.3rem; overflow-wrap:anywhere; }
-  .fslots.alarm { color:#ff9d9d; }
+  .fslots.alarm { color:var(--rust); }
   /* 44px MINIMUM, everywhere a finger goes. */
   .fwatch, .fbtn { min-height:44px; width:100%; margin-top:.6rem;
                    background:var(--bg); color:var(--text);
@@ -943,7 +1052,7 @@
             margin-bottom:.5rem; }
   .fbhead h2 { font-size:1.05rem; letter-spacing:-.01em; }
   #fquesthead { color:var(--dim); overflow-wrap:anywhere; font-size:.9rem; }
-  #fquesthead.alarm { color:#ff9d9d; }
+  #fquesthead.alarm { color:var(--rust); }
   /* The key: what a ring around a portrait means, said once above the
      list rather than guessed at. */
   #fkey { display:flex; gap:.35rem .9rem; flex-wrap:wrap; font-size:.78rem;
@@ -1040,6 +1149,24 @@
      would be walking straight back into that. It is back as a CHOICE, and
      below the breakpoint it collapses into the stacked column rather than
      shrinking four tiles into a rail nobody can see. */
+  /* THE TAB BAR. Outlined boxes made every tab look equally like a control
+     and nothing look like the page you were on; an underline says "you are
+     here" using the one axis a row of words has spare. Scrolls sideways
+     rather than wrapping, because a wrapped tab row changes height when the
+     view changes and shoves the content under the thumb reaching for it. */
+  #tabs { display:flex; gap:.2rem; padding:0 .5rem; background:var(--card);
+          border-bottom:1px solid var(--card-line);
+          overflow-x:auto; scrollbar-width:none; }
+  #tabs::-webkit-scrollbar { display:none; }
+  #tabs button { flex:none; min-height:44px; padding:0 .8rem; border:0;
+                 background:transparent; color:var(--on-card-dim);
+                 font:inherit; font-weight:600; cursor:pointer;
+                 border-bottom:3px solid transparent; }
+  #tabs button:hover { color:var(--on-card); }
+  #tabs button.on { color:var(--on-card); border-bottom-color:var(--accent); }
+  #tabs button:focus-visible { outline:2px solid var(--accent);
+                               outline-offset:-2px; }
+
   #wall { display:grid; gap:.7rem; }
   #wall.m-five-up { grid-template-columns:repeat(auto-fit, minmax(320px, 1fr)); }
   #wall.m-stacked { grid-template-columns:1fr; max-width:900px; margin-inline:auto; }
@@ -1047,35 +1174,63 @@
   /* The hero spans the full row above its own rail. `order` is NOT used to
      move it: the roster is seniority and the wall must not reorder, so the
      hero is promoted by SPAN while every tile keeps its place in the DOM. */
-  #wall.m-hero > .wslot.hero { grid-column:1 / -1; }
+  #wall.m-hero > .povslot.hero { grid-column:1 / -1; }
   @media (max-width:760px) {
     #wall.m-hero { grid-template-columns:1fr; }
-    #wall.m-hero > .wslot.hero { grid-column:auto; }
+    #wall.m-hero > .povslot.hero { grid-column:auto; }
   }
-  .wslot { position:relative; }
+  /* THE TILE IS A PICTURE WITH A CAPTION UNDER IT, not a picture with words
+     printed over it. The overlay version had the name, the health bar and the
+     zone floating on the video, which is fine on one tile and unreadable on
+     five: every caption sat on a different moving background. So the wall
+     gives each tile a card with a strip beneath, and the strip is the only
+     place text lives.
+     (The Family tab keeps its overlay. There the tile is inside a card that
+     already names the character, so a second caption would repeat it.) */
+  .povslot { display:flex; flex-direction:column; border-radius:10px;
+           overflow:hidden; background:var(--card);
+           border:1px solid var(--card-line); }
   /* Same reservation rule the Family tab's .fstream follows, and for the same
      reason: makePlayer owns the tile's display, so a shape hung on the tile
-     is worth nothing in the window before it connects. */
-  .wslot { aspect-ratio:16/9; background:#000; border-radius:8px;
-           overflow:hidden; border:1px solid var(--line); }
-  .wslot.hero { aspect-ratio:16/9; }
+     is worth nothing in the window before it connects. The SHOT holds the
+     16/9, never the slot, or the caption would be squeezed inside it. */
+  .povshot { position:relative; aspect-ratio:16/9; background:var(--shot); }
+  .povstrip { display:flex; align-items:center; gap:.6rem;
+            padding:.5rem .7rem; background:var(--card); }
+  .povname { font-weight:700; color:var(--on-card); }
+  .povline { color:var(--on-card-dim); font-size:12px;
+           overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .povstatus { margin-left:auto; font-size:11px; letter-spacing:.1em;
+             font-family:var(--mono);
+             font-weight:700; color:var(--accent); flex:none; }
+  /* The tones colour the STATUS WORD and the frame, never the picture. A wash
+     over a game capture is the one thing on this page nobody can read
+     through. */
+  .povslot.t-dead .povstatus, .povslot.t-dead { border-color:var(--vermilion); }
+  .povslot.t-dead .povstatus { color:var(--vermilion); }
+  .povslot.t-combat { border-color:var(--amber); }
+  .povslot.t-combat .povstatus { color:var(--amber); }
+  .povslot.t-hurt .povstatus { color:var(--amber); }
+  .povslot.t-gone { opacity:.72; }
+  .povslot.t-gone .povstatus { color:var(--on-card-dim); }
+  /* The hero is framed rather than enlarged-and-recoloured: it is already the
+     biggest thing on the wall, so the frame only has to say which one it is. */
+  #wall.m-hero > .povslot.hero { border-color:var(--vermilion);
+                               border-width:2px; }
   /* The tone ring. Colour is the LAST thing that says a character is dead -
      the caption says it in words first - so this is a border, not a wash
      over the picture somebody came to look at. */
-  .wslot.t-dead { border-color:var(--vermilion); }
-  .wslot.t-combat { border-color:var(--amber); }
-  .wslot.t-hurt { border-color:var(--amber); }
-  .wslot.t-gone { border-color:var(--line); opacity:.72; }
-  .wslot.t-calm { border-color:var(--line); }
   .wbar { display:flex; flex-wrap:wrap; gap:.5rem; align-items:center;
           margin-bottom:.7rem; }
   /* 44px on every control: this is read with a thumb, same as #fqmore. */
-  .wbar button { min-height:44px; background:var(--panel); color:var(--dim);
-                 border:1px solid var(--line); border-radius:8px; cursor:pointer;
-                 font:inherit; padding:.3rem .9rem; letter-spacing:.06em; }
-  .wbar button:hover { color:var(--text); border-color:var(--dim); }
-  .wbar button[aria-pressed="true"] { color:var(--ink); background:var(--green);
-                                      border-color:var(--green); }
+  .wbar button { min-height:44px; background:var(--card);
+                 color:var(--on-card-dim); border:1px solid var(--card-line);
+                 border-radius:999px; cursor:pointer; font-size:11px;
+                 font-weight:700; padding:.3rem .9rem; letter-spacing:.12em; }
+  .wbar button:hover { color:var(--on-card); }
+  .wbar button[aria-pressed="true"] { color:var(--pale-green);
+                                      background:var(--ink);
+                                      border-color:var(--ink); }
   .wbar button:focus-visible { outline:2px solid var(--alliance);
                                outline-offset:2px; }
   .wspacer { flex:1 1 auto; }
@@ -1083,11 +1238,15 @@
      a sentence: the family behaves differently while observed. It renders in
      every mode - a truth that only appears in one layout is one a viewer can
      miss by preferring another. */
-  #wallwarn { border-left:3px solid var(--amber); background:#d299221a;
-           color:var(--text); padding:.6rem .8rem; border-radius:0 8px 8px 0;
-           margin-bottom:.7rem; max-width:70ch; line-height:1.5; }
+  /* A PANEL, NOT A STRIPE. What this says needs a paragraph - the family
+     behaves differently while it is observed - and a thin warning bar is a
+     shape people have learned to skip. */
+  #wallwarn { background:var(--warn-bg); color:var(--warn-text);
+              padding:.8rem 1rem; border-radius:10px; margin-bottom:.7rem;
+              max-width:72ch; line-height:1.55; }
   #wallwarn[hidden] { display:none; }
-  #wallhead { color:var(--dim); margin-bottom:.7rem; }
+  #wallhead { color:var(--shell-dim); margin-bottom:.7rem; }
+  #watch, #family, #armory, #achievements { padding:.9rem 1rem; }
 </style>
 <script>
   // WHERE THIS PAGE IS MOUNTED, AND WHY EVERY URL BELOW GOES THROUGH ONE
@@ -1114,6 +1273,7 @@
   // Every same-origin URL this page builds. Written so the path stays legible
   // at the call site: u("/api/map") reads as the endpoint it is.
   function u(path) { return BASE + path; }
+
 </script>
 </head>
 <body>
@@ -1136,8 +1296,14 @@
   <div id="rkbuild"></div>
 </div>
 <header>
-  <h1>Azeroth Overseer</h1>
+  <span class="mark"><span class="dot" aria-hidden="true"></span><h1>THE OVERSEER</h1></span>
   <span id="census">reaching the world...</span>
+  <span class="hgap"></span>
+  <!-- Built from __OVERSEER_NAV__, which basepath substitutes beside the mount
+       point in the same pass, so the pill that is lit and the realm the page
+       is actually reading can never disagree. -->
+  <nav id="realmnav" aria-label="realm"></nav>
+  <script id="realmnav-data" type="application/json">__OVERSEER_NAV__</script>
   <!-- SAME ORIGIN, AND HIDDEN UNTIL PROVEN. The footage is on the recorder
        box, which a pod cannot reach, so the ingress proxies a recordings
        path on this origin straight to that box - which also keeps the link
@@ -2655,6 +2821,16 @@ function broadcastTile(name) {
 const WALL_MODE_KEY = "overseer-wall-mode";
 const WALL_HERO_KEY = "overseer-wall-hero";
 const WALL_SOUND_KEY = "overseer-wall-sound";
+// WHAT EACH TONE IS CALLED ON SCREEN. Deliberately not returned by the module:
+// the module's job is to decide the STATE, and these are five English words for
+// a wall in a browser. If a second surface ever needs them they move to
+// watchwall and become part of the payload; one surface does not justify it.
+//
+// "LIVE" for calm is the odd one and it is the right word: on a wall of video,
+// the useful thing to say about a character with nothing wrong is that you are
+// watching them right now.
+const WALL_STATUS = { dead: "DEAD", combat: "FIGHTING", hurt: "HURT",
+                      gone: "OFFLINE", calm: "LIVE" };
 const wall = { mode: null, hero: null, sound: false, modeList: [],
                slots: new Map(), tones: new Map(), audio: null };
 
@@ -2671,8 +2847,18 @@ function wallStore(key, value) {
 function wallSlot(name) {
   let slot = wall.slots.get(name);
   if (slot) return slot;
-  slot = el("div", "wslot");
+  slot = el("div", "povslot");
   slot.dataset.name = name;
+  // The picture and the caption are separate boxes: the picture owns the 16/9
+  // and the caption sits under it, so a long zone name can never squeeze the
+  // video or spill over it.
+  const shot = el("div", "povshot");
+  const strip = el("div", "povstrip");
+  const nm = el("span", "povname", name);
+  const line = el("span", "povline");
+  const status = el("span", "povstatus");
+  strip.append(nm, line, status);
+  slot.append(shot, strip);
   // Clicking a tile promotes it. Only visible in hero mode, and harmless in
   // the other two, where it records a preference for the next time hero mode
   // is chosen rather than doing nothing at all.
@@ -2681,8 +2867,8 @@ function wallSlot(name) {
     wallStore(WALL_HERO_KEY, name);
     if (wall.mode === "hero") applyWallLayout();
   };
-  wall.slots.set(name, slot);
-  return slot;
+  wall.slots.set(name, { slot: slot, shot: shot, line: line, status: status });
+  return wall.slots.get(name);
 }
 
 // A SHORT SYNTHESISED TONE, not a file: this page ships as one HTML document
@@ -2724,8 +2910,8 @@ function applyWallLayout() {
   for (const b of wallmodes.querySelectorAll("button")) {
     b.setAttribute("aria-pressed", String(b.dataset.mode === wall.mode));
   }
-  for (const [name, slot] of wall.slots) {
-    slot.classList.toggle("hero", wall.mode === "hero" && name === wall.hero);
+  for (const [name, s] of wall.slots) {
+    s.slot.classList.toggle("hero", wall.mode === "hero" && name === wall.hero);
   }
   layoutBroadcasts();
 }
@@ -2765,11 +2951,15 @@ function renderWall(p) {
   // has tests pinning that the wall does not reorder, and re-sorting in the
   // page would move that guarantee somewhere no test can see it.
   for (const t of w.tiles) {
-    const slot = wallSlot(t.name);
-    slot.classList.remove("t-dead", "t-combat", "t-hurt", "t-gone", "t-calm");
-    slot.classList.add("t-" + t.tone);
-    slot.title = t.name + " - " + t.line;
-    if (slot.parentElement !== wallEl) wallEl.appendChild(slot);
+    const s = wallSlot(t.name);
+    s.slot.classList.remove("t-dead", "t-combat", "t-hurt", "t-gone", "t-calm");
+    s.slot.classList.add("t-" + t.tone);
+    // The caption is the module's sentence, printed. The status word is the
+    // module's TONE, spelled for a reader: a tone is a class name and nobody
+    // wants to read "t-combat".
+    s.line.textContent = t.line;
+    s.status.textContent = WALL_STATUS[t.tone] || "";
+    if (s.slot.parentElement !== wallEl) wallEl.appendChild(s.slot);
     // A TONE CHANGE, not a tone. Cueing on the state itself would sound the
     // alarm every five seconds for as long as a fight lasted, which is how a
     // sound feature gets switched off and never switched back on.
@@ -2797,7 +2987,7 @@ function layoutBroadcasts() {
     // tile is MOVED and never rebuilt, so switching to the wall mid-fight
     // does not drop and re-establish five PeerConnections across the tailnet.
     const target = view === WATCH_VIEW
-      ? wallSlot(name)
+      ? wallSlot(name).shot
       : familyCard(name).stream;
     if (t.tile.parentElement !== target) target.appendChild(t.tile);
   }
@@ -2823,7 +3013,7 @@ function renderBroadcasts(p) {
     t.nm.textContent = m.present
       ? m.name + " - L" + m.level + " " + m["class"] + (m.condition === "dead" ? " - DEAD" : "")
       : m.name;
-    t.nm.style.color = m.condition === "dead" ? "#ff9d9d" : (m.class_colour || "");
+    t.nm.style.color = m.condition === "dead" ? "var(--rust)" : (m.class_colour || "");
     t.fill.style.width = (m.present ? m.health_pct : 0) + "%";
     // THE SENTENCE COMES FROM watchwall, not from a ternary here. It used to
     // read `m.present ? m.zone : "not in the world"`, which is a judgement
@@ -5205,6 +5395,54 @@ function applyHash() {
   // sense.
   showView(HASH_VIEWS.indexOf(name) >= 0 ? name : FAMILY_VIEW);
 }
+
+// THE REALM SWITCHER, DRAWN AT THE FOOT because the header does not exist yet
+// anywhere above here. The first version of this ran beside `u()`, which is in
+// a script block ABOVE the markup it draws into: getElementById returned null,
+// the guard returned early exactly as written, and the switcher silently never
+// appeared. No error, no failing test, just a missing control - the same shape
+// as the hash router opening the wrong tab.
+//
+// applyHash() below is at the foot for the same class of reason, and says so.
+//
+// Every judgement here was made in realmnav.py: which worlds exist, which one
+// this page is, which has no site, and the sentence explaining the one that
+// does not. This draws pills.
+(function () {
+    var nav = [];
+    try {
+      var data = document.getElementById("realmnav-data");
+      if (data) nav = JSON.parse(data.textContent);
+    } catch (e) {
+      // An unsubstituted or malformed island means no switcher, and no
+      // switcher is a visible absence. Throwing here would take the whole
+      // script with it and cost the page every other view as well.
+      nav = [];
+    }
+    var box = document.getElementById("realmnav");
+    if (!box || !nav || !nav.length) return;
+    for (var i = 0; i < nav.length; i++) {
+      var r = nav[i];
+      // An anchor for a realm you can reach, a BUTTON for one you cannot.
+      // A disabled anchor is still focusable and still looks clickable; a
+      // disabled button is neither, and screen readers say so.
+      var el = document.createElement(r.reachable ? "a" : "button");
+      el.className = "rn-pill" + (r.reachable ? "" : " rn-dead");
+      el.textContent = r.label;
+      el.title = r.note || r.description;
+      if (r.reachable) {
+        el.href = r.href;
+      } else {
+        el.type = "button";
+        el.disabled = true;
+      }
+      // aria-current, not a class alone: "which realm am I on" is exactly the
+      // question this attribute exists to answer, and the styling hangs off
+      // it so the two cannot drift apart.
+      if (r.current) el.setAttribute("aria-current", "page");
+      box.appendChild(el);
+    }
+  })();
 
 window.addEventListener("hashchange", applyHash);
 // Synchronously, at the foot of the script rather than inside loadZones's

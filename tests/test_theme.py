@@ -53,10 +53,18 @@ class TheThemeResolvesInAllThreeStates(unittest.TestCase):
                 token + " is not defined in all three theme states")
 
 
-class TheShellTakesTheThemeAndTheContentDoesNot(unittest.TestCase):
-    """Deliberate, and worth pinning so it is not "fixed" by accident. The
-    content cards still carry bare hex colours that assume a dark ground, so
-    they stay dark in both themes until each view is converted."""
+class TheShellTakesTheThemeAndSoDoesTheContent(unittest.TestCase):
+    """THIS CLASS USED TO PIN THE OPPOSITE, and the change that flipped it is
+    the point rather than an accident. It asserted that --panel and --text
+    stayed dark while only the shell themed, and its own docstring named the
+    condition for reversing it: "if these ever become theme-aware, every bare
+    hex inside those views has to move in the same change".
+
+    That is what happened. The five legacy tokens now carry the design, which
+    converts 188 rules at once, and the literals that assumed a dark ground
+    moved with them. So the assertion inverts: the content tokens must be the
+    LIGHT palette, and the one surface that stays dark must stay dark for a
+    stated reason rather than by omission."""
 
     def test_the_body_is_painted_from_a_shell_token(self):
         """An unpainted body borrows whatever ground the host draws, which is
@@ -64,13 +72,36 @@ class TheShellTakesTheThemeAndTheContentDoesNot(unittest.TestCase):
         self.assertIn("background:var(--shell-bg)", STYLE)
         self.assertIn("color:var(--shell-text)", STYLE)
 
-    def test_the_original_content_variables_are_still_dark(self):
-        """--panel and --text still dress the views this redesign has not
-        reached. If these ever become theme-aware, every bare hex inside those
-        views has to move in the same change."""
-        root = STYLE[STYLE.index(":root {"):]
-        self.assertIn("--panel:#161b22", root)
-        self.assertIn("--text:#e6edf3", root)
+    def test_the_content_tokens_now_carry_the_light_palette(self):
+        """The old dark values are the thing being asserted GONE. A page whose
+        shell is the design and whose cards are the previous site is what got
+        reported as "this looks nothing like the handoff"."""
+        root = STYLE[STYLE.index(":root {"):STYLE.index(":root {") + 400]
+        self.assertIn("--panel:#FFFFFF", root)
+        self.assertIn("--text:#0B1A10", root)
+        self.assertNotIn("--panel:#161b22", root)
+        self.assertNotIn("--text:#e6edf3", root)
+
+    def test_the_armory_is_the_one_dark_surface_and_says_why(self):
+        """Not a stylistic exception. Item quality is a COLOUR in this game and
+        the values are canonical: #1eff00 uncommon-green on white is close to
+        invisible. Re-tinting them would invent new quality colours; leaving
+        them on paper would ship ones nobody can read. So that section keeps
+        the ground they were designed for, by overriding the same tokens."""
+        scope = STYLE[STYLE.index("#armory {"):]
+        scope = scope[:scope.index("}")]
+        for token in ("--bg:", "--panel:", "--line:", "--text:", "--dim:"):
+            self.assertIn(token, scope, token + " is not overridden for the Armory")
+        # The bags and the purse live inside that same section, which is what
+        # makes one scope enough to cover every surface that draws an item.
+        self.assertLess(PAGE.index('<section id="armory">'),
+                        PAGE.index('<div id="wealth">'))
+
+    def test_the_canonical_quality_colours_are_untouched(self):
+        """Changing these would be changing what the game means, not what the
+        page looks like."""
+        for canonical in ("#1eff00", "#a335ee", "#ff8000", "#e6cc80"):
+            self.assertIn(canonical, STYLE, canonical)
 
 
 class TheStoredChoiceSurvivesAReload(unittest.TestCase):

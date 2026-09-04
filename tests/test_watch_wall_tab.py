@@ -212,14 +212,52 @@ class TheTilesAreMovedAndNeverRebuilt(unittest.TestCase):
         self.assertIn("appendChild(t.tile)", fn)
         absent(self, "broadcastTile(", fn, "layoutBroadcasts")
 
+    def test_the_wall_does_not_use_the_wealth_tabs_class_name(self):
+        """SHIPPED BROKEN AND WENT LIVE. `.wslot` was already the Wealth tab's
+        bag slot: `.wslot img`, `.wslot .nm`, `.wslot.q0` through `.q7` and
+        `.wslot.free` have been styled there since long before the wall
+        existed. The wall taking the same name meant its slot rules landed on
+        every bag, and the bags' item-quality colours landed on the wall.
+
+        Renaming the newcomer, never the incumbent: the wall is `pov-`
+        prefixed now, one point of view per tile."""
+        wall_css = PAGE[PAGE.index("/* --- THE WATCH WALL"):]
+        wall_css = wall_css[:wall_css.index("</style>")]
+        absent(self, ".wslot", wall_css, "the wall CSS")
+        self.assertIn(".povslot", wall_css)
+        # And the incumbent is still there, untouched.
+        self.assertIn(".wslot img", PAGE)
+        self.assertIn(".wslot.q0", PAGE)
+
+    def test_no_class_the_wall_defines_is_defined_anywhere_else(self):
+        """The general form of the .wslot collision, and the one that catches
+        the NEXT one. Two views styling the same class name is invisible in a
+        diff, produces no error, and renders as one view quietly wearing the
+        other view's rules.
+
+        Scoped to classes the WALL introduces, because plenty of shared
+        utility classes legitimately appear in several places; what must not
+        happen is a wall-specific name colliding with a view-specific one."""
+        style = PAGE[PAGE.index("<style>"):PAGE.index("</style>")]
+        block = style[style.index("/* --- THE WATCH WALL"):]
+        block = block[:block.index("#wallhead {")]
+        outside = style.replace(block, "")
+        mine = set(re.findall(r"\.(pov[a-z-]+)", block))
+        self.assertTrue(mine, "the wall defines no pov- classes at all")
+        for name in sorted(mine):
+            self.assertNotIn("." + name, outside,
+                             ".%s is styled outside the wall too" % name)
+
     def test_a_slot_is_built_once_and_cached(self):
         self.assertIn("let slot = wall.slots.get(name);", PAGE)
+        self.assertIn('el("div", "povslot")', PAGE)
         self.assertIn("if (slot) return slot;", PAGE)
 
     def test_hero_is_promoted_by_span_not_by_order(self):
         """`order` would move tiles past each other visually, which is
         reordering the roster by another name."""
-        self.assertIn("#wall.m-hero > .wslot.hero { grid-column:1 / -1; }", PAGE)
+        self.assertIn("#wall.m-hero > .povslot.hero { grid-column:1 / -1; }",
+                      PAGE)
         wall_css = PAGE[PAGE.index("#wall { display:grid"):][:1400]
         # Anchored, because "order:" is a substring of "border:" and the
         # unanchored version could never pass.
