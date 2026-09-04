@@ -34,9 +34,26 @@ class DungeonPlanTests(unittest.TestCase):
         result = dungeon_plan.recommend_next(dungeons, 21, {1}, dungeon_plan.SAFE)
         self.assertEqual(result["map_id"], 2)
 
+    def test_next_never_recommends_catalogued_but_unrunnable_dungeon(self):
+        dungeons = [{"map_id": 389, "name": "Ragefire Chasm", "level": 15,
+                     "order": 1, "runnable": False},
+                    {"map_id": 36, "name": "The Deadmines", "level": 20,
+                     "order": 2, "runnable": True}]
+        result = dungeon_plan.recommend_next(dungeons, 20, set())
+        self.assertEqual(result["map_id"], 36)
+
+    def test_catalog_marks_unimplemented_portals_without_calling_them_ready(self):
+        payload = dungeon_plan.build_payload([{"name": "Grug", "level": 20}], set())
+        ragefire = next(row for row in payload["dungeons"] if row["map_id"] == 389)
+        deadmines = next(row for row in payload["dungeons"] if row["map_id"] == 36)
+        self.assertFalse(ragefire["runnable"])
+        self.assertEqual(ragefire["availability"],
+                         "catalogued; portal and traversal not implemented")
+        self.assertTrue(deadmines["runnable"])
+
     def test_payload_is_honest_about_missing_loot(self):
         payload = dungeon_plan.build_payload([{"name": "Grug", "level": 20}], set())
-        self.assertEqual(payload["next"]["map_id"], 389)
+        self.assertEqual(payload["next"]["map_id"], 36)
         self.assertEqual(payload["dungeons"][0]["loot"], [])
         self.assertIn("verified", payload["loot_status"])
 

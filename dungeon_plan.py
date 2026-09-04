@@ -11,6 +11,13 @@ SAFE = "safe"
 CHALLENGE = "challenge"
 PUSH = "push"
 
+# This is deliberately smaller than the catalog below.  The catalog describes
+# the leveling route, while this set describes what the coordinator can
+# actually enter today.  Adding a catalog row must never make the job parser
+# issue a dungeon order for a portal whose measured entry and exit geometry is
+# not in mod-overseer yet.
+RUNNABLE_MAPS = frozenset({36, 33})
+
 DUNGEON_CATALOG = (
     {"map_id": 389, "name": "Ragefire Chasm", "level": 15, "order": 1},
     {"map_id": 43, "name": "Wailing Caverns", "level": 18, "order": 2},
@@ -80,9 +87,18 @@ def challenge_for(party_level: int, dungeon: dict, mode: str = SAFE) -> dict:
     recommended = int(dungeon.get("level", dungeon.get("level_max", minimum)) or minimum)
     deficit = max(0, recommended - int(party_level))
     allowed = {SAFE: 0, CHALLENGE: 3, PUSH: 6}.get(mode, 0)
+    # Callers supplying an ad-hoc dungeon row (including older API tests) have
+    # no capability claim, so retain the historical level-only calculation.
+    # Catalog rows are annotated by build_payload and therefore fail closed.
+    runnable = dungeon.get("runnable")
+    if runnable is None:
+        runnable = True
+    runnable = bool(runnable)
     return {"mode": mode if mode in (SAFE, CHALLENGE, PUSH) else SAFE,
             "recommended_level": recommended, "deficit": deficit,
-            "allowed_deficit": allowed, "eligible": deficit <= allowed}
+            "allowed_deficit": allowed, "runnable": runnable,
+            "eligibility_reason": "runnable" if runnable else "portal not implemented",
+            "eligible": runnable and deficit <= allowed}
 
 
 def recommend_next(dungeons: list[dict], party_level: int,
@@ -91,6 +107,8 @@ def recommend_next(dungeons: list[dict], party_level: int,
     for dungeon in sorted(dungeons, key=lambda row: int(row.get("order", 0))):
         map_id = int(dungeon.get("map_id", 0) or 0)
         if map_id in completed_maps:
+            continue
+        if dungeon.get("runnable", True) is False:
             continue
         challenge = challenge_for(party_level, dungeon, mode)
         if challenge["eligible"]:
@@ -109,6 +127,9 @@ def build_payload(family: list[dict], completed_maps: set[int],
     dungeons = []
     for dungeon in DUNGEON_CATALOG:
         row = dict(dungeon)
+        row["runnable"] = dungeon["map_id"] in RUNNABLE_MAPS
+        row["availability"] = ("ready" if row["runnable"]
+                                else "catalogued; portal and traversal not implemented")
         row["completed"] = dungeon["map_id"] in completed_maps
         row["loot"] = loot_by_map.get(dungeon["map_id"], [])
         dungeons.append(row)
