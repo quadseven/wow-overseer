@@ -72,6 +72,17 @@
     --bg:#0A140E; --panel:#0F1D14; --line:#1E3226; --text:#E6F5EC;
     --dim:#8FA795; --alliance:#4d9fff; --horde:#ff4d4d; --neutral:#d4b106;
     --mortal:#7ee787; --thought:#a371f7;
+    /* The handoff's dark-card text ramp: primary, secondary, faint. Added
+       beside --text/--dim rather than replacing them, because those two dress
+       the standing and wealth blocks that share this scope and re-pointing
+       them would restyle two views this change is not about. The Armory's own
+       rules read the ramp. */
+    --on-dark:#E8EFE6; --on-dark-dim:#B9C9BC; --on-dark-faint:#8FA396;
+    /* The three roles again, re-pigmented for a near-black ground. This is
+       the whole argument for roles rather than pigments: --rust is 2.2:1
+       here, and every rule that asked for "warning text" follows the ground
+       without being edited. */
+    --warn-text:#FF7A5E; --caution-text:#E8B33D; --accent-text:#2FD46F;
     background:var(--bg); color:var(--text);
   }
   /* --- the redesign palette -------------------------------------------------
@@ -127,7 +138,16 @@
     --on-card-dim:var(--muted);   /* secondary text on a card                */
     --accent:var(--green);        /* the active tab underline, LIVE          */
     --warn-bg:#FDEFEA;            /* the leader warning panel                */
-    --warn-text:var(--rust);
+    /* THE THREE TEXT ROLES. A pigment token says what a colour IS; these say
+       what it is FOR, and only these may be used for `color:`. The reason is
+       that the same meaning needs a different pigment on a different ground:
+       rust reads on paper and disappears on the Armory's near-black card, and
+       a rule written as `color:var(--rust)` cannot follow it there. Written as
+       `color:var(--warn-text)` it follows automatically, because the ground is
+       what redefines the role. */
+    --warn-text:var(--rust);          /* something is wrong and can be fixed  */
+    --caution-text:var(--amber-text); /* worth a look, not an alarm          */
+    --accent-text:var(--deep-green);  /* this worked, this is live           */
     /* The video letterbox. Dark in BOTH themes on purpose: a pale box around
        a game capture reads as a blown-out picture, and the handoff draws these
        as dark green rectangles for the same reason. */
@@ -158,6 +178,7 @@
          is legible but tense, and this is a colour the eye follows. */
       --accent:#2FD46F;
       --warn-bg:#2A1710; --warn-text:#FFB59E;
+      --caution-text:#E8B33D; --accent-text:#2FD46F;
     }
   }
   :root[data-theme="dark"] {
@@ -170,6 +191,7 @@
     --on-card:#E6F5EC; --on-card-dim:#8FA795;
     --accent:#2FD46F;
     --warn-bg:#2A1710; --warn-text:#FFB59E;
+    --caution-text:#E8B33D; --accent-text:#2FD46F;
   }
   * { box-sizing:border-box; margin:0; }
   /* THE FACES WERE LOADING AND NOTHING WAS USING THEM. Measured on the live
@@ -498,83 +520,152 @@
      profile is never narrower than the doll needs, so nothing here ever
      asks the page to scroll sideways. */
   #armory { display:none; margin:0 1rem 1rem; }
-  #aheadline { margin-bottom:.2rem; overflow-wrap:anywhere; }
-  #aheadline.alarm { color:var(--rust); }
+  #aheadline { margin-bottom:.2rem; overflow-wrap:anywhere;
+               font-family:var(--mono); font-size:.9rem; }
+  #aheadline.alarm { color:var(--warn-text); }
   /* Said out loud because these numbers are OLD and nobody can tell by
      looking. The core writes gear and talents on its own save timer, so a
      sword equipped a minute ago is genuinely not here yet - and a page that
      let someone conclude "the tab is broken" would be worse than no page. */
   #asaved { color:var(--dim); margin-bottom:.6rem; font-size:.9rem; }
   /* Five names to jump between, sticky, because five full profiles are a
-     long scroll on a phone and "where is Ugga" should be one tap. */
+     long scroll on a phone and "where is Ugga" should be one tap. Every one
+     of them is a thumb target, which is why they are 44px tall and not the
+     26px a text link would be. */
   #ajump { position:sticky; top:0; z-index:5; display:flex; gap:.4rem;
            flex-wrap:wrap; padding:.4rem 0; background:var(--bg); }
-  #ajump a { color:var(--text); text-decoration:none; border:1px solid var(--line);
-             border-radius:6px; padding:.2rem .6rem; font-size:.9rem; }
-  #ajump a:hover { border-color:var(--alliance); }
+  #ajump a { display:inline-flex; align-items:center; min-height:44px;
+             color:var(--text); text-decoration:none; border:1px solid var(--line);
+             border-radius:10px; padding:0 .8rem; font-family:var(--mono);
+             font-size:.8rem; text-transform:uppercase; letter-spacing:.06em; }
+  #ajump a:hover { border-color:var(--accent-text); color:var(--accent-text); }
   #aprofiles { display:grid; gap:1rem; grid-template-columns:minmax(0,1fr); }
   @media (min-width:1400px) { #aprofiles { grid-template-columns:repeat(2,minmax(0,1fr)); } }
   @media (min-width:2100px) { #aprofiles { grid-template-columns:repeat(3,minmax(0,1fr)); } }
-  .aprof { background:var(--panel); border:1px solid var(--line); border-radius:10px;
-           padding:.8rem 1rem 1rem; min-width:0; scroll-margin-top:3rem; }
+  /* THE DARK CARD ITSELF, painted from --ink rather than from this scope's
+     --panel: the handoff names one dark surface and gives it one value, and
+     --panel in here also dresses the standing and wealth cards below. */
+  .aprof { background:var(--ink); border:1px solid var(--line); border-radius:14px;
+           padding:.9rem 1rem 1.1rem; min-width:0; scroll-margin-top:3.6rem;
+           color:var(--on-dark); }
+  /* A CHARACTER WITH NO SAVED ROW STILL GETS A CARD - that is the whole
+     point of drawing one per member - but it gets the header and nothing
+     else. The doll, the item card and the talent controls are all built once
+     and refilled, so without this they sit there empty: an unlabelled 44px
+     button under a name, which reads as something broken rather than as
+     somebody missing. */
   .aprof.c-gone { opacity:.6; }
-  /* header: faction, the name in its class colour, then the line every
-     armory writes ("26 Human Warrior <Guild> realm"). */
-  .ahead { text-align:center; padding-bottom:.6rem; margin-bottom:.8rem;
-           background:linear-gradient(to right, transparent, var(--line) 30%, var(--line) 70%, transparent) bottom / 100% 1px no-repeat; }
+  .aprof.c-gone .abody, .aprof.c-gone .adetail, .aprof.c-gone .aspec,
+  .aprof.c-gone .aspecbar, .aprof.c-gone .atrees { display:none; }
+  /* header: the two glyph chips, the faction banner and the name in its
+     class colour, then the one line every armory writes, then the gear
+     chips. */
+  .ahead { text-align:center; padding-bottom:.7rem; margin-bottom:.9rem;
+           border-bottom:1px solid var(--line); }
+  .aglyphs { display:flex; align-items:center; justify-content:center;
+             gap:.45rem; margin-bottom:.55rem; }
+  .aglyph { display:inline-flex; align-items:center; justify-content:center;
+            gap:.35rem; min-width:44px; min-height:44px; padding:.25rem .5rem;
+            border-radius:10px; border:1px solid var(--line);
+            background:var(--panel); color:var(--on-dark-dim);
+            font-family:var(--mono); font-size:.7rem; text-transform:uppercase;
+            letter-spacing:.06em; }
+  .aglyph img { width:30px; height:30px; border-radius:6px; display:block; }
+  /* The class chip is bordered in the class's own colour, which is the one
+     place on this card the colour is load-bearing rather than decorative:
+     it is how a raid leader picks a name out of a list without reading it. */
+  .aglyph.cls { border-color:var(--cc, var(--line)); }
   .aname { display:flex; align-items:center; justify-content:center; gap:.6rem; }
-  .aname .n { font-size:2rem; line-height:1.1; font-family:Georgia,'Times New Roman',serif; }
-  .afaction { width:28px; height:28px; border-radius:4px; flex:0 0 28px; }
-  .afaction img { width:28px; height:28px; border-radius:4px; display:block; }
-  .arole { color:var(--dim); font-size:.9rem; }
-  .aline { margin-top:.5rem; overflow-wrap:anywhere; }
-  .aline .g { color:#1eff00; }
-  .aline .on { color:var(--mortal); }
-  .aline .off { color:var(--dim); }
-  .anums { margin-top:.2rem; color:#ffd100; display:flex; gap:1.2rem;
-           justify-content:center; flex-wrap:wrap; }
-  .anums .empty { color:#d29922; }
-  .anums .broken { color:var(--horde); }
-  /* the paper doll: a column of slots each side of the portrait, then the
-     stat block beside it when there is room. */
+  .aname .n { font-family:var(--display); font-size:1.9rem; font-weight:600;
+              line-height:1.1; letter-spacing:-.01em; }
+  .afaction { width:28px; height:28px; border-radius:6px; flex:0 0 28px; }
+  .afaction img { width:28px; height:28px; border-radius:6px; display:block; }
+  .arole { color:var(--on-dark-faint); font-family:var(--mono); font-size:.7rem;
+           text-transform:uppercase; letter-spacing:.08em; margin-top:.2rem; }
+  .aline { margin-top:.45rem; color:var(--on-dark-dim); overflow-wrap:anywhere; }
+  .aline .on, .aline .off { font-family:var(--mono); font-size:.72rem;
+                           text-transform:uppercase; letter-spacing:.06em;
+                           margin-left:.35rem; }
+  .aline .on { color:var(--accent-text); }
+  .aline .off { color:var(--on-dark-faint); }
+  /* The gear read, as chips. Loudness is decided in armory.py and arrives as
+     a tone word, so the page never gets to decide that an empty slot is an
+     alarm - which is the decision that would put five permanently coloured
+     chips on a card and teach the reader to stop looking. */
+  .anums { margin-top:.6rem; display:flex; gap:.4rem; justify-content:center;
+           flex-wrap:wrap; }
+  .anums .gc { display:inline-flex; align-items:baseline; gap:.4rem;
+               padding:.3rem .55rem; border-radius:10px;
+               border:1px solid var(--line); font-family:var(--mono);
+               font-size:.72rem; color:var(--on-dark); }
+  .anums .gc .k { color:var(--on-dark-faint); text-transform:uppercase;
+                  letter-spacing:.05em; }
+  .anums .gc.caution { border-color:var(--caution-text); color:var(--caution-text); }
+  .anums .gc.caution .k { color:var(--caution-text); }
+  .anums .gc.warn { border-color:var(--warn-text); color:var(--warn-text); }
+  .anums .gc.warn .k { color:var(--warn-text); }
+  /* the paper doll: a column of slots each side of the model stage, then the
+     stat block beside it when there is room. ONE content breakpoint, at the
+     handoff's 640px. */
   .abody { display:grid; gap:1rem; grid-template-columns:minmax(0,1fr); }
-  @media (min-width:760px) { .abody { grid-template-columns:auto minmax(0,1fr); } }
-  .adoll { display:grid; grid-template-columns:56px minmax(140px,320px) 56px;
-           gap:.5rem; justify-content:center; align-items:start; }
-  .acolumn { display:flex; flex-direction:column; gap:.45rem; }
-  .aslot { position:relative; width:56px; height:56px; border-radius:7px;
-           border:2px solid var(--line); background:#000; overflow:hidden;
+  @media (min-width:640px) { .abody { grid-template-columns:auto minmax(0,1fr); } }
+  .adoll { display:grid; grid-template-columns:46px minmax(120px,300px) 46px;
+           gap:.4rem; justify-content:center; align-items:start; }
+  .acolumn { display:flex; flex-direction:column; gap:.4rem; }
+  /* A CELL IS A BUTTON, not a div with a click handler: the item card below
+     is reached by keyboard as well as by thumb, and 46px clears the 44px
+     target floor with the border. */
+  .aslot { position:relative; width:46px; height:46px; border-radius:6px;
+           border:2px solid var(--line); background:var(--panel); overflow:hidden;
            cursor:pointer; display:flex; align-items:center; justify-content:center;
-           text-align:center; font-size:.7rem; line-height:1.15; color:var(--dim);
-           padding:.15rem; overflow-wrap:anywhere; }
+           text-align:center; font-family:var(--mono); font-size:.55rem;
+           line-height:1.15; color:var(--on-dark-faint); padding:2px;
+           overflow-wrap:anywhere; appearance:none; -webkit-appearance:none; }
   .aslot img { width:100%; height:100%; display:block; object-fit:cover; }
+  /* The two corner marks. The slot's mark says WHICH cell this is when the
+     icon host is unreachable or the item has no display, and the level says
+     what is in it - the two facts a paper doll is read for. Both come from
+     the payload; the page has no table of slot names to draw one from. */
+  .aslot .mk, .aslot .lv { position:absolute; padding:1px 3px;
+           font-family:var(--mono); font-size:.5rem; line-height:1.2;
+           background:var(--ink);
+           background:color-mix(in srgb, var(--ink) 78%, transparent); }
+  .aslot .mk { top:0; left:0; border-radius:4px 0 4px 0; color:var(--on-dark-dim); }
+  /* No picture arrived, so the mark stops being a corner label and becomes
+     the cell. Drawn in the item's own quality colour, which the cell already
+     carries on its border. */
+  .aslot.bare .mk { position:static; background:none; font-size:.75rem;
+                    color:inherit; padding:0; }
+  .aslot.bare { color:inherit; }
+  .aslot .lv { right:0; bottom:0; border-radius:4px 0 4px 0; color:var(--on-dark); }
   .aslot.q0 { border-color:#9d9d9d; } .aslot.q1 { border-color:#ffffff; }
-  .aslot.q2 { border-color:#1eff00; } .aslot.q3 { border-color:#3f9bf5; }
+  .aslot.q2 { border-color:#1eff00; } .aslot.q3 { border-color:#3B9DFF; }
   .aslot.q4 { border-color:#a335ee; } .aslot.q5 { border-color:#ff8000; }
   .aslot.q6 { border-color:#e6cc80; } .aslot.q7 { border-color:#00ccff; }
-  .aslot.broken::after { content:""; position:absolute; inset:0;
-           background:linear-gradient(135deg, transparent 45%, var(--horde) 47%, var(--horde) 53%, transparent 55%); }
-  /* An empty slot is the headline finding, so it is amber and it says the
-     word - the same amber the Family card already uses for "hurt", because
-     it means the same kind of thing. Shirt and tabard are only ever
-     cosmetic, so an empty one is merely dim: an alarm that fires on every
-     character forever is an alarm nobody reads. */
-  .aslot.empty { border-style:dashed; color:#d29922; }
-  .aslot.empty.cosmetic { color:var(--dim); border-color:var(--line); }
-  .aslot.empty:not(.cosmetic) { border-color:#d29922; }
-  .aslot.on { outline:2px solid var(--text); }
+  /* AN EMPTY SLOT SAYS THE WORD, and which word it says is decided in
+     armory.py. A real gap is dashed amber and says "empty"; shirt and tabard
+     are dashed grey and say their own name, because they are empty on
+     everyone forever and an alarm that always fires is an alarm nobody reads
+     - it would drown the bare ring finger standing next to it. */
+  .aslot.empty { border-style:dashed; }
+  .aslot.empty.cosmetic { border-color:var(--on-dark-faint); color:var(--on-dark-faint); }
+  .aslot.empty:not(.cosmetic) { border-color:var(--caution-text);
+                                color:var(--caution-text); }
+  /* The ring, not a fill: a fill would hide the icon that is the whole
+     point of the cell. Broken keeps its own ring underneath the selection
+     one so a selected broken item still reads as broken. */
+  .aslot.broken { box-shadow:0 0 0 2px var(--vermilion); }
+  .aslot.on { box-shadow:0 0 0 2px var(--ground); }
+  .aslot.broken.on { box-shadow:0 0 0 2px var(--vermilion), 0 0 0 4px var(--ground); }
+  .aslot:focus-visible { outline:2px solid var(--ground); outline-offset:3px; }
   .aportrait { position:relative; display:flex; flex-direction:column; align-items:center;
-               justify-content:center; min-height:300px; border-radius:10px;
+               justify-content:center; min-height:300px; border-radius:12px;
                background:radial-gradient(ellipse at 50% 40%, color-mix(in srgb, var(--cc, #445) 45%, transparent) 0%, transparent 65%);
                overflow:hidden; }
   .aportrait .race { width:min(160px, 100%); aspect-ratio:1; border-radius:12px;
                      border:2px solid var(--cc, var(--line)); object-fit:cover;
                      box-shadow:0 0 30px var(--cc, #0000); }
   .aportrait .sil { width:min(160px, 100%); aspect-ratio:1; }
-  .aportrait .cls { width:44px; height:44px; border-radius:8px; margin-top:-22px;
-                    border:2px solid var(--cc, var(--line)); background:#000;
-                    box-shadow:0 0 12px #000; }
-  .aportrait .lvl { margin-top:.4rem; color:var(--dim); font-size:.85rem; text-align:center; }
   /* the 3D model (infra#88): Wowhead's viewer, drawn where the portrait
      sits, with the portrait kept underneath until the model is actually
      on screen - and kept for good when the viewer never arrives. The
@@ -582,31 +673,100 @@
      and it turns slowly on its own until touched. */
   .aportrait.live .race, .aportrait.live .sil, .aportrait.live .cls { display:none; }
   .amodel { display:none; width:100%; position:relative; touch-action:none;
-            cursor:grab; border-radius:10px; overflow:hidden; }
+            cursor:grab; border-radius:12px; overflow:hidden; }
   .amodel:active { cursor:grabbing; }
   .aportrait.live .amodel { display:block; }
   .amodel canvas { display:block; }
-  /* the stat block: yellow labels, values right, one hairline between rows,
-     as the reference draws it. A stat the world has not saved says so in
-     the row rather than showing a number that would read as real. */
+  /* THE STAT BLOCK IS LABELLED BY SOURCE. "Attack Power 214" read off the
+     world's save and "Attack Power 214" worked out here from base stats and
+     gear are different claims, and a block that prints them in one ink
+     invites a comparison between two numbers that do not mean the same
+     thing. So the value carries the colour of where it came from, and the
+     legend under the block spells each word out in plain language. A stat
+     with no honest answer prints the word, never a zero. */
   .astats { align-self:start; min-width:0; }
-  .astat { display:flex; justify-content:space-between; gap:.6rem; padding:.2rem .4rem;
-           background:linear-gradient(to right, #ffffff10, transparent) bottom / 100% 1px no-repeat; }
-  .astat .k { color:#ffd100; }
-  .astat .v { text-align:right; }
-  .astat .v.na { color:var(--dim); font-size:.85rem; }
-  .asource { color:var(--dim); font-size:.85rem; margin-top:.4rem; }
+  .astat { display:flex; justify-content:space-between; gap:.6rem; padding:.25rem .4rem;
+           border-bottom:1px solid var(--line); }
+  .astat .k { color:var(--on-dark-dim); font-size:.85rem; }
+  .astat .v { text-align:right; font-family:var(--mono); font-size:.85rem; }
+  .astat.saved .v { color:var(--on-dark); }
+  .astat.derived .v { color:var(--accent-text); }
+  .astat.unavailable .v { color:var(--on-dark-faint); }
+  .asource { color:var(--on-dark-faint); font-size:.8rem; margin-top:.5rem; }
+  .alegend { margin-top:.35rem; display:flex; flex-direction:column; gap:.15rem; }
+  .alegend div { font-size:.75rem; color:var(--on-dark-faint); }
+  .alegend .w { font-family:var(--mono); text-transform:uppercase;
+                letter-spacing:.06em; margin-right:.4rem; }
+  .alegend .saved .w { color:var(--on-dark); }
+  .alegend .derived .w { color:var(--accent-text); }
+  .alegend .unavailable .w { color:var(--on-dark-faint); }
+  /* THE ITEM CARD SITS IN THE FLOW, under the doll, rather than floating
+     beside the cell it belongs to. A phone has no hover to lose and no room
+     to put a card "beside" a 46px square, and a panel that is always in the
+     same place is one a reader can look at without hunting. */
+  .adetail { margin-top:.9rem; padding-top:.75rem; border-top:1px solid var(--line);
+             font-size:.88rem; line-height:1.4; overflow-wrap:anywhere;
+             /* A measure, not the card's width. The game draws these lines in
+                a narrow box and two of them are a pair pushed to the ends of
+                it ("One-Hand ... Sword"); across a 700px card that pair stops
+                reading as a pair. */
+             max-width:32rem; }
+  .adetail .hint { color:var(--on-dark-faint); font-family:var(--mono);
+                   font-size:.75rem; }
+  .adetail .t { display:flex; justify-content:space-between; gap:.6rem; }
+  .adetail .nm { font-family:var(--display); font-size:1.05rem; font-weight:600;
+                 line-height:1.3; }
+  .adetail .il { color:var(--caution-text); font-family:var(--mono); font-size:.8rem; }
+  .adetail .st { color:var(--on-dark-faint); }
+  .adetail .eq { color:#1eff00; }
+  .adetail .setn { color:var(--caution-text); margin-top:.4rem; }
+  .adetail .piece { padding-left:.8rem; color:var(--on-dark-faint); }
+  .adetail .piece.worn { color:var(--on-dark); }
+  .adetail .bonus { color:var(--on-dark-faint); }
+  .adetail .bonus.on { color:#1eff00; }
+  .adetail .fl { color:var(--caution-text); font-style:italic; margin-top:.3rem; }
+  .adetail .cl { color:var(--on-dark-faint); }
+  .adetail .cl span { color:#3B9DFF; }
+  .adetail .money { margin-top:.3rem; font-family:var(--mono); font-size:.8rem; }
+  .adetail .coin { display:inline-block; width:.7em; height:.7em; border-radius:50%;
+                   vertical-align:middle; margin:0 .5em 0 .2em; }
+  .adetail .coin.g { background:#e6c200; } .adetail .coin.s { background:#c0c0c0; }
+  .adetail .coin.c { background:#b87333; }
+  .adetail .blk { white-space:pre-wrap; }
+  /* THE TREES ARE CLOSED UNTIL ASKED FOR. Three grids of forty-four cells,
+     five characters over, is six hundred and sixty icons answering a
+     question that "0/0/15 Protection" answers in six characters - and the
+     operator asked for exactly that. The collapsed line is the build, the
+     bar is the budget, and SHOW TREES is there for the day the line is
+     surprising. */
+  .aspec { margin-top:1rem; display:flex; flex-wrap:wrap; align-items:center;
+           gap:.45rem .9rem; }
+  .aspec .sum { font-family:var(--display); font-size:1.05rem; font-weight:600; }
+  .aspec .budget { font-family:var(--mono); font-size:.75rem; color:var(--on-dark-dim); }
+  .aspec .unspent { font-family:var(--mono); font-size:.75rem;
+                    color:var(--caution-text); }
+  .aspecbar { display:flex; height:8px; border-radius:4px; overflow:hidden;
+              background:var(--panel); margin-top:.5rem; }
+  .aspecbar span { display:block; min-width:2px; }
+  .aspecbar .spent { background:var(--accent-text); }
+  .aspecbar .unspent { background:var(--caution-text); }
+  .atoggle { min-height:44px; padding:0 .9rem; border-radius:10px;
+             border:1px solid var(--line); background:var(--panel);
+             color:var(--on-dark-dim); font-family:var(--mono); font-size:.7rem;
+             text-transform:uppercase; letter-spacing:.08em; cursor:pointer; }
+  .atoggle:hover { border-color:var(--accent-text); color:var(--accent-text); }
   /* the talent trees: the trainer's grid, four wide and eleven tall, with a
      tinted backdrop in the class colour where the game has its art. */
   .atrees { display:grid; gap:.8rem; margin-top:1rem;
             grid-template-columns:repeat(auto-fit, minmax(214px, 1fr)); }
+  .atrees[hidden] { display:none; }
   .atree { min-width:0; }
   .atree .th { display:flex; align-items:center; gap:.5rem; padding:.3rem .4rem;
                background:#ffffff08; border-radius:6px 6px 0 0; }
   .atree .th img { width:32px; height:32px; border-radius:5px; border:1px solid var(--line); }
   .atree .th .n { flex:1; font-size:1.05rem; }
-  .atree .th .p { color:#ffd100; font-size:1.05rem; }
-  .atree .th .p.zero { color:var(--dim); }
+  .atree .th .p { color:var(--caution-text); font-family:var(--mono); font-size:1.05rem; }
+  .atree .th .p.zero { color:var(--on-dark-faint); }
   .agrid { position:relative; display:grid; gap:6px; padding:8px; justify-content:center;
            grid-template-columns:repeat(4, 44px); grid-auto-rows:44px;
            background:radial-gradient(ellipse at 50% 30%, color-mix(in srgb, var(--cc, #334) 40%, var(--bg)) 0%, var(--bg) 70%);
@@ -618,50 +778,24 @@
               filter:grayscale(1) brightness(.55); }
   .atal.part { border-color:#1eff00; }
   .atal.part img, .atal.full img { filter:none; }
-  .atal.full { border-color:#ffd100; }
-  .atal .r { position:absolute; right:-6px; bottom:-8px; font-size:.7rem; line-height:1;
-             padding:.15rem .25rem; border-radius:4px; background:#000; border:1px solid #ffd100;
-             color:#ffd100; }
+  /* Maxed is amber, which is the handoff's word for "look here": on the
+     trainer's own grid the finished talents are the shape of the build. */
+  .atal.full { border-color:var(--caution-text); }
+  .atal .r { position:absolute; right:-6px; bottom:-8px; font-family:var(--mono);
+             font-size:.6rem; line-height:1; padding:.15rem .25rem; border-radius:4px;
+             background:#000; border:1px solid var(--caution-text);
+             color:var(--caution-text); }
   .atal.part .r { border-color:#1eff00; color:#1eff00; }
-  .aunplaced { margin-top:.5rem; color:#d29922; font-size:.9rem; }
-  .aunspent { color:#d29922; }
-  /* the tooltip: the game's own dark-blue card. Positioned by hand from
-     the slot it belongs to on a desktop; on a phone it is a sheet in the
-     middle of the screen, because there is no "beside" to put it. */
-  #atip { display:none; position:fixed; z-index:20; width:min(360px, 94vw);
-          max-height:88vh; overflow-y:auto; background:#06102bf2; color:var(--text);
-          border:1px solid #6a7ba8; border-radius:8px; padding:.5rem .7rem;
-          font-size:.9rem; line-height:1.35; box-shadow:0 8px 30px #000c; }
-  #atip .t { display:flex; justify-content:space-between; gap:.6rem; }
-  #atip .nm { font-size:1.05rem; }
-  #atip .il { color:#ffd100; }
-  #atip .eq { color:#1eff00; }
-  #atip .st { color:var(--dim); }
-  #atip .setn { color:#ffd100; margin-top:.4rem; }
-  #atip .piece { padding-left:.8rem; color:var(--dim); }
-  #atip .piece.worn { color:#ffd100; }
-  #atip .bonus { color:var(--dim); }
-  #atip .bonus.on { color:#1eff00; }
-  #atip .fl { color:#ffd100; font-style:italic; margin-top:.3rem; }
-  #atip .cl span { color:#3f9bf5; }
-  #atip .money { margin-top:.3rem; }
-  #atip .coin { display:inline-block; width:.7em; height:.7em; border-radius:50%;
-                vertical-align:middle; margin:0 .5em 0 .2em; }
-  #atip .coin.g { background:#e6c200; } #atip .coin.s { background:#c0c0c0; }
-  #atip .coin.c { background:#b87333; }
-  #atip .cls { color:var(--dim); }
-  #atip .blk { white-space:pre-wrap; }
-  #atip .close { display:none; text-align:right; color:var(--dim); cursor:pointer; }
-  @media (max-width:600px) { #atip .close { display:block; } }
+  .aunplaced { margin-top:.5rem; color:var(--caution-text); font-size:.85rem; }
   /* ITEM QUALITY, in the game's own colours, because the operator already
      reads them without thinking. One deliberate departure: rare is lifted
      from the client's #0070dd, which the game draws on a near-black tooltip
-     and which lands under 3:1 on this panel - a name nobody can read is not a
+     and which lands under 3:1 on this card - a name nobody can read is not a
      colour code, it is a bug. The hue is unmistakably still rare blue. */
   .q0 { color:#9d9d9d; }
   .q1 { color:#ffffff; }
   .q2 { color:#1eff00; }
-  .q3 { color:#3f9bf5; }
+  .q3 { color:#3B9DFF; }
   .q4 { color:#a335ee; }
   .q5 { color:#ff8000; }
   .q6 { color:#e6cc80; }
@@ -854,7 +988,7 @@
   .wslot.q0 { border-color:#9d9d9d; color:#9d9d9d; }
   .wslot.q1 { border-color:#ffffff; color:#ffffff; }
   .wslot.q2 { border-color:#1eff00; color:#1eff00; }
-  .wslot.q3 { border-color:#3f9bf5; color:#3f9bf5; }
+  .wslot.q3 { border-color:#3B9DFF; color:#3B9DFF; }
   .wslot.q4 { border-color:#a335ee; color:#a335ee; }
   .wslot.q5 { border-color:#ff8000; color:#ff8000; }
   .wslot.q6 { border-color:#e6cc80; color:#e6cc80; }
@@ -1454,7 +1588,6 @@
     <div id="wcards"></div>
     <div id="wauction"></div>
   </div>
-  <div id="atip"></div>
 </section>
 <section id="achievements">
   <div id="achhead">reaching the world...</div>
@@ -4123,7 +4256,6 @@ const asection = document.getElementById("armory");
 const aprofiles = document.getElementById("aprofiles");
 const ajump = document.getElementById("ajump");
 const aheadline = document.getElementById("aheadline");
-const atip = document.getElementById("atip");
 // Set here rather than in the markup so the sentence lives with the code that
 // makes it true. Every number on this tab is a SAVE, not a live read.
 document.getElementById("asaved").textContent =
@@ -4175,7 +4307,10 @@ function silhouette(colour) {
 // updated in place, the same rule the Family cards follow. Five profiles
 // rebuilt every poll would throw away the scroll position mid-read on a
 // phone, which is the one device this is most likely to be checked from.
-const arm = { profiles: new Map(), pinned: null };
+// `trees` is the payload's own answer to whether the talent grids start
+// open. It is read here rather than decided here: "collapsed by default" is
+// a product decision and armory.py owns it.
+const arm = { profiles: new Map(), trees: null };
 
 function armoryProfile(name) {
   let c = arm.profiles.get(name);
@@ -4183,6 +4318,7 @@ function armoryProfile(name) {
   const prof = el("article", "aprof");
   prof.id = "aprof-" + name;
   const head = el("div", "ahead");
+  const glyphs = el("div", "aglyphs");
   const nameRow = el("div", "aname");
   const faction = el("span", "afaction");
   const nm = el("span", "n", name);
@@ -4190,7 +4326,7 @@ function armoryProfile(name) {
   const role = el("div", "arole");
   const line = el("div", "aline");
   const nums = el("div", "anums");
-  head.append(nameRow, role, line, nums);
+  head.append(glyphs, nameRow, role, line, nums);
   const body = el("div", "abody");
   const doll = el("div", "adoll");
   const left = el("div", "acolumn");
@@ -4199,39 +4335,54 @@ function armoryProfile(name) {
   doll.append(left, portrait, right);
   const stats = el("div", "astats");
   body.append(doll, stats);
+  // The item card, in the flow under the doll. It is built once and refilled
+  // like everything else here, so choosing a slot never moves the page under
+  // the thumb that chose it.
+  const detail = el("div", "adetail");
   const spec = el("div", "aspec");
+  const sum = el("span", "sum");
+  const budget = el("span", "budget");
+  const unspent = el("span", "unspent");
+  const toggle = el("button", "atoggle");
+  toggle.type = "button";
+  spec.append(sum, budget, unspent, toggle);
+  const bar = el("div", "aspecbar");
   const trees = el("div", "atrees");
   const unplaced = el("div", "aunplaced");
-  prof.append(head, body, spec, trees, unplaced);
+  prof.append(head, body, detail, spec, bar, trees, unplaced);
   aprofiles.appendChild(prof);
   const jump = el("a", "", name);
   jump.href = "#" + prof.id;
   ajump.appendChild(jump);
-  c = { prof, faction, nm, role, line, nums, left, portrait, right, stats, spec,
-        trees, unplaced, cells: new Map(), statRows: new Map(), treeBoxes: new Map() };
+  c = { prof, glyphs, faction, nm, role, line, nums, left, portrait, right, stats,
+        detail, spec, sum, budget, unspent, toggle, bar, trees, unplaced,
+        cells: new Map(), statRows: new Map(), treeBoxes: new Map(),
+        selected: null, open: !!(arm.trees && arm.trees.expanded), specData: null };
+  toggle.addEventListener("click", () => {
+    c.open = !c.open;
+    showTrees(c);
+  });
   arm.profiles.set(name, c);
   return c;
 }
 
+// One cell of the paper doll. A BUTTON rather than a div with a handler: the
+// item card below it is reached by keyboard as well as by thumb, and a
+// button is the only element that gets that for free.
 function slotCell(c, column, slot) {
   let cell = c.cells.get(slot);
   if (cell) return cell;
-  cell = el("div", "aslot");
+  cell = el("button", "aslot");
+  cell.type = "button";
   cell.title = slot;
   column.appendChild(cell);
   c.cells.set(slot, cell);
-  // Hover on a mouse, tap on a phone. A tap PINS the tooltip (it has no
-  // hover to keep it open); tapping the slot again, or anywhere else, or
-  // Escape, lets it go.
-  cell.addEventListener("pointerenter", (e) => {
-    if (e.pointerType === "mouse" && !arm.pinned) showTip(cell);
-  });
-  cell.addEventListener("pointerleave", () => { if (!arm.pinned) hideTip(); });
-  cell.addEventListener("click", (e) => {
-    e.stopPropagation();
-    if (arm.pinned === cell) { arm.pinned = null; hideTip(); return; }
-    arm.pinned = cell;
-    showTip(cell);
+  // A tap SELECTS, and a second tap on the same cell lets go. There is no
+  // hover branch any more: the card is in the flow, so there is nothing to
+  // keep open and nothing to lose by moving the pointer.
+  cell.addEventListener("click", () => {
+    c.selected = c.selected === slot ? null : slot;
+    showSelection(c);
   });
   return cell;
 }
@@ -4242,75 +4393,99 @@ function renderSlot(cell, s) {
   cell.className = "aslot" + (s.empty ? " empty" : " q" + (s.quality === null ? "x" : s.quality))
     + (s.cosmetic ? " cosmetic" : "") + (s.broken ? " broken" : "");
   if (s.empty) {
-    // The word, not a blank. A blank cell reads as "nothing to report", and
-    // an empty head slot on a level 25 warrior is very much something to
-    // report - it is the entire reason for looking.
-    cell.textContent = s.cosmetic ? s.slot : "empty";
+    // The word, not a blank, and not a word this page chose. A blank cell
+    // reads as "nothing to report"; an empty head slot on a level 25 warrior
+    // is the entire reason for looking, and a permanently empty tabard slot
+    // is not - so armory.py decides which of those this is and what it says.
+    cell.textContent = s.empty_label;
     return;
   }
   cell.title = s.name;
-  // No icon in the book (a custom item, or no display at all): the slot's
-  // name in the quality colour is a poorer picture but a true one.
-  const label = () => { cell.textContent = s.slot; };
-  if (s.icon) cell.appendChild(iconImg(s.icon, s.name, label));
-  else label();
+  // Two marks on every worn cell: WHICH slot this is, and what is in it.
+  // Both come from the payload, which is what lets a 46px square stay
+  // readable when the icon host is unreachable - a common outcome here, not
+  // a rare one, because the art lives off the tailnet. With no picture the
+  // cell goes bare and the mark becomes its content rather than its corner.
+  const bare = () => { cell.classList.add("bare"); };
+  if (s.icon) cell.appendChild(iconImg(s.icon, s.name, bare));
+  else bare();
+  cell.appendChild(el("span", "mk", s.mark));
+  if (s.item_level_mark) cell.appendChild(el("span", "lv", s.item_level_mark));
 }
 
-// --- the tooltip ---------------------------------------------------------
+// Which cell wears the ring, and what the card underneath says. One place,
+// so a poll that redraws the cells cannot leave the two disagreeing.
+function showSelection(c) {
+  for (const [slot, cell] of c.cells) cell.classList.toggle("on", slot === c.selected);
+  const cell = c.selected === null ? null : c.cells.get(c.selected);
+  renderDetail(c, cell ? cell.slotData : null);
+}
 
-function tipLine(cls, text) {
+// --- the item card -------------------------------------------------------
+// IN THE FLOW, UNDER THE DOLL, rather than floating beside the cell. The
+// first cut of this was a hand-positioned tooltip, which needed a hover
+// branch, a pin, an Escape key and four rules about which screen edge it had
+// run off - none of which a phone has any use for, and the phone is the
+// device this tab is actually opened on. A panel that is always in the same
+// place needs none of them.
+
+function detailLine(c, cls, text) {
   const d = el("div", cls, text);
-  atip.appendChild(d);
+  c.detail.appendChild(d);
   return d;
 }
 
-function buildTip(s) {
-  atip.textContent = "";
-  const close = el("div", "close", "close");
-  close.onclick = () => { arm.pinned = null; hideTip(); };
-  atip.appendChild(close);
+function renderDetail(c, s) {
+  c.detail.textContent = "";
+  if (!s) {
+    detailLine(c, "hint", arm.hint || "");
+    return;
+  }
   if (s.empty) {
-    tipLine("nm", s.slot);
-    tipLine(s.cosmetic ? "st" : "il", s.cosmetic ? "nothing worn (cosmetic slot)" : "EMPTY");
+    // Both kinds of empty say their own word and their own sentence, and
+    // neither is written here: which of the two this is, and what each one
+    // means, is armory.py's judgement.
+    detailLine(c, "nm", s.empty_label);
+    detailLine(c, "st", s.empty_note);
     return;
   }
   const t = s.tooltip;
-  tipLine("nm" + (t.quality === null ? "" : " q" + t.quality), t.name);
-  if (t.item_level !== null) tipLine("il", "Item Level " + t.item_level);
-  if (t.binding) tipLine("", t.binding);
+  detailLine(c, "nm" + (t.quality === null ? "" : " q" + t.quality), t.name);
+  if (t.item_level !== null) detailLine(c, "il", "Item Level " + t.item_level);
+  if (t.binding) detailLine(c, "", t.binding);
   if (t.slot || t.kind) {
     const r = el("div", "t");
     r.append(el("span", "", t.slot || ""), el("span", "", t.kind || ""));
-    atip.appendChild(r);
+    c.detail.appendChild(r);
   }
   if (t.damage) {
     const r = el("div", "t");
     r.append(el("span", "", t.damage.min + " - " + t.damage.max + " Damage"),
              el("span", "", "Speed " + t.damage.speed.toFixed(2)));
-    atip.appendChild(r);
-    if (t.damage.dps !== null) tipLine("", "(" + t.damage.dps.toFixed(1) + " damage per second)");
+    c.detail.appendChild(r);
+    if (t.damage.dps !== null) detailLine(c, "", "(" + t.damage.dps.toFixed(1) + " damage per second)");
   }
-  if (t.armor) tipLine("", t.armor + " Armor");
-  if (t.block) tipLine("", t.block + " Block");
-  for (const line of t.stats) tipLine("", line);
-  for (const line of t.resistances) tipLine("", line);
-  for (const line of t.enchant) tipLine("eq", line);
-  if (t.durability) tipLine("", "Durability " + t.durability);
+  if (t.armor) detailLine(c, "", t.armor + " Armor");
+  if (t.block) detailLine(c, "", t.block + " Block");
+  for (const line of t.stats) detailLine(c, "", line);
+  for (const line of t.resistances) detailLine(c, "", line);
+  for (const line of t.enchant) detailLine(c, "eq", line);
+  if (t.durability) detailLine(c, "", "Durability " + t.durability);
   if (t.classes) {
     const r = el("div", "cl", "Classes: ");
     r.appendChild(el("span", "", t.classes.join(", ")));
-    atip.appendChild(r);
+    c.detail.appendChild(r);
   }
-  if (t.requires_level) tipLine("", "Requires Level " + t.requires_level);
-  for (const line of t.effects) tipLine("eq blk", line);
+  if (t.requires_level) detailLine(c, "", "Requires Level " + t.requires_level);
+  for (const line of t.effects) detailLine(c, "eq blk", line);
   if (t.set) {
-    tipLine("setn", t.set.name + " (" + t.set.worn + "/" + t.set.total + ")");
-    for (const p of t.set.pieces) tipLine("piece" + (p.worn ? " worn" : ""), p.name);
+    detailLine(c, "setn", t.set.name + " (" + t.set.worn + "/" + t.set.total + ")");
+    for (const p of t.set.pieces) detailLine(c, "piece" + (p.worn ? " worn" : ""), p.name);
     for (const b of t.set.bonuses) {
-      tipLine("bonus blk" + (b.active ? " on" : ""), "(" + b.threshold + ") Set: " + b.text);
+      detailLine(c, "bonus blk" + (b.active ? " on" : ""), "(" + b.threshold + ") Set: " + b.text);
     }
   }
-  if (t.flavor) tipLine("fl", '"' + t.flavor + '"');
+  if (t.flavor) detailLine(c, "fl", '"' + t.flavor + '"');
   if (t.sell_price) {
     const m = el("div", "money", "Sell Price: ");
     const coins = [["g", t.sell_price.gold], ["s", t.sell_price.silver], ["c", t.sell_price.copper]];
@@ -4319,46 +4494,19 @@ function buildTip(s) {
       m.appendChild(el("span", "", String(v)));
       m.appendChild(el("span", "coin " + k));
     }
-    atip.appendChild(m);
+    c.detail.appendChild(m);
   }
 }
-
-function showTip(cell) {
-  const s = cell.slotData;
-  if (!s) return;
-  for (const c of arm.profiles.values()) for (const other of c.cells.values()) other.classList.remove("on");
-  cell.classList.add("on");
-  buildTip(s);
-  atip.style.display = "block";
-  const rect = cell.getBoundingClientRect();
-  const w = atip.offsetWidth, h = atip.offsetHeight;
-  if (window.innerWidth <= 600) {
-    atip.style.left = Math.max(0, (window.innerWidth - w) / 2) + "px";
-    atip.style.top = Math.max(0, (window.innerHeight - h) / 2) + "px";
-    return;
-  }
-  // Beside the slot, on whichever side has room, and never off the screen.
-  let left = rect.right + 10;
-  if (left + w > window.innerWidth) left = rect.left - w - 10;
-  if (left < 0) left = 4;
-  let top = rect.top;
-  if (top + h > window.innerHeight) top = Math.max(4, window.innerHeight - h - 4);
-  atip.style.left = left + "px";
-  atip.style.top = top + "px";
-}
-
-function hideTip() {
-  atip.style.display = "none";
-  for (const c of arm.profiles.values()) for (const cell of c.cells.values()) cell.classList.remove("on");
-}
-
-document.addEventListener("click", () => { if (arm.pinned) { arm.pinned = null; hideTip(); } });
-document.addEventListener("keydown", (e) => { if (e.key === "Escape") { arm.pinned = null; hideTip(); } });
-atip.addEventListener("click", (e) => e.stopPropagation());
 
 // --- the stat block ------------------------------------------------------
 
+// EVERY ROW CARRIES THE WORD FOR WHERE ITS OWN NUMBER CAME FROM, and the
+// page paints by that word rather than deciding it. What it PRINTS is
+// `reading`, already a string, so there is no branch here that could ever
+// turn a null into a zero - which is the one failure this block is arranged
+// around: 0 attack power is a number somebody acts on.
 function renderStats(c, stats) {
+  const seen = [];
   for (const s of stats.rows) {
     let r = c.statRows.get(s.key);
     if (!r) {
@@ -4370,18 +4518,24 @@ function renderStats(c, stats) {
       r = { row, v };
       c.statRows.set(s.key, r);
     }
-    r.v.className = "v" + (s.value === null ? " na" : "");
-    r.v.textContent = s.value === null ? "unavailable" : String(s.value);
-    r.row.title = s.note || "";
+    r.row.className = "astat " + s.source;
+    r.v.textContent = s.reading;
+    r.row.title = s.note || s.gloss;
+    if (!seen.some((w) => w.source === s.source)) seen.push(s);
   }
   let src = c.stats.querySelector(".asource");
   if (!src) { src = el("div", "asource"); c.stats.appendChild(src); }
-  src.textContent = stats.source === "saved"
-    ? "the world's own reading, as last saved"
-    : stats.source === "derived"
-      ? "the world has not saved this character's stats yet: base + gear "
-        + "where that is honest, unavailable where it is not"
-      : "no base stats for this race, class and level";
+  src.textContent = stats.gloss;
+  let legend = c.stats.querySelector(".alegend");
+  if (!legend) { legend = el("div", "alegend"); c.stats.appendChild(legend); }
+  // One line per source actually present, in the colour that source's values
+  // are drawn in, so the colour is never a code the reader has to crack.
+  legend.textContent = "";
+  for (const s of seen) {
+    const d = el("div", s.source);
+    d.append(el("span", "w", s.source), el("span", "", s.gloss));
+    legend.appendChild(d);
+  }
 }
 
 // --- the talent trees ----------------------------------------------------
@@ -4490,17 +4644,36 @@ function renderTree(c, index, tree, colour) {
   }
 }
 
+// Open or shut, and the grids built only once somebody asks. Three trees of
+// forty-four cells each, five profiles over, is six hundred and sixty icons
+// nobody requested; building them lazily is what makes "collapsed" cost
+// nothing rather than merely hide something expensive.
+function showTrees(c) {
+  c.trees.hidden = !c.open;
+  c.toggle.textContent = c.open ? arm.trees.hide : arm.trees.show;
+  c.toggle.setAttribute("aria-expanded", String(c.open));
+  if (c.open && c.specData) {
+    c.specData.trees.forEach((tree, i) => renderTree(c, i, tree, c.specColour));
+  }
+}
+
 function renderSpec(c, spec, colour) {
-  c.spec.textContent = spec.primary
-    ? spec.distribution + "  " + spec.primary
-    : "nothing spent";
-  let budget = spec.available === null
-    ? spec.spent + " points spent"
-    : spec.spent + " / " + spec.available + " points";
-  if (spec.unspent) budget += "  -  " + spec.unspent + " UNSPENT";
-  c.spec.textContent += "  -  " + budget;
-  c.spec.className = "aspec" + (spec.unspent ? " aunspent" : "");
-  spec.trees.forEach((tree, i) => renderTree(c, i, tree, colour));
+  // The collapsed reading IS the answer: "0/0/15 Protection", the budget,
+  // and how many points are sitting unspent. Every one of those sentences is
+  // built in armory.py, so the page has nothing to assemble and nothing to
+  // get wrong about a death knight whose budget is unknown.
+  c.sum.textContent = spec.headline;
+  c.budget.textContent = spec.budget;
+  c.unspent.textContent = spec.unspent_note || "";
+  c.bar.textContent = "";
+  for (const seg of spec.bar) {
+    const span = el("span", seg.kind);
+    span.style.flex = String(seg.points);
+    c.bar.appendChild(span);
+  }
+  c.specData = spec;
+  c.specColour = colour;
+  showTrees(c);
   c.unplaced.textContent = spec.unplaced.length
     ? "not in the talent tables: " + spec.unplaced.map((t) => t.name).join(", ")
     : "";
@@ -4702,31 +4875,39 @@ function renderPortrait(c, m) {
   } else {
     fallback();
   }
-  if (m.portrait.class_icon) {
-    const cls = iconImg(m.portrait.class_icon, m["class"]);
-    cls.className = "cls";
-    c.portrait.appendChild(cls);
-  }
-  c.portrait.appendChild(el("div", "lvl", "Level " + m.level + " " + m.race + " " + m["class"]));
+}
+
+// The two glyph chips the header wears: the race, and the class bordered in
+// the class's own colour. They are the game's own icons, with the word as
+// the fallback when the icon host is unreachable - the same degrade-to-
+// legible rule every picture on this tab follows.
+function renderGlyphs(c, m) {
+  if (c.glyphsFor === m.race + m.gender + m["class"]) return;
+  c.glyphsFor = m.race + m.gender + m["class"];
+  c.glyphs.textContent = "";
+  const chip = (cls, icon, word, alt) => {
+    const g = el("span", cls);
+    const fallback = () => { g.appendChild(el("span", "", word)); };
+    if (icon) g.appendChild(iconImg(icon, alt, fallback));
+    else fallback();
+    c.glyphs.appendChild(g);
+    return g;
+  };
+  chip("aglyph race", m.portrait.race_icon, m.race, m.race + " " + m.gender);
+  const cls = chip("aglyph cls", m.portrait.class_icon, m["class"], m["class"]);
+  cls.style.setProperty("--cc", m.class_colour);
 }
 
 function renderArmory(p) {
-  const present = p.members.filter((m) => m.present);
-  const empty = present.reduce((n, m) => n + m.gear.empty_slots.length, 0);
-  const broken = present.reduce((n, m) => n + m.gear.broken.length, 0);
-  const idle = present.filter((m) => m.spec.unspent);
-  const bits = [present.length + " of " + p.expected + " shown"];
-  if (empty) bits.push(empty + (empty === 1 ? " empty slot" : " empty slots"));
-  if (broken) bits.push(broken + " broken");
-  if (idle.length) {
-    bits.push("unspent: "
-      + idle.map((m) => m.name + " " + m.spec.unspent).join(", "));
-  }
-  aheadline.textContent = bits.join("  -  ");
-  // Loud only for the two things a person can act on TODAY. Empty slots are
-  // ordinary at these levels and would leave the headline permanently pink,
-  // which is the same as leaving it permanently unread.
-  aheadline.className = broken || idle.length ? "alarm" : "";
+  // Read before the first profile is built: armoryProfile asks it whether
+  // the trees start open, and the toggle asks it what to call itself.
+  arm.trees = p.talent_trees;
+  arm.hint = p.detail_hint;
+  // The headline sentence AND how loud it is are both armory.py's: "loud
+  // only for the two things somebody can act on today" is a verdict, and a
+  // verdict in a ternary here is a verdict no test can reach.
+  aheadline.textContent = p.headline.text;
+  aheadline.className = p.headline.alarm ? "alarm" : "";
   for (const m of p.members) {
     const c = armoryProfile(m.name);
     c.prof.className = "aprof" + (m.present ? "" : " c-gone");
@@ -4734,7 +4915,7 @@ function renderArmory(p) {
       // Still says who, and still says what. A profile stripped to a name
       // is how a missing character stops being noticed.
       c.role.textContent = m["class"] + " - " + m.role;
-      c.line.textContent = "no saved character - deleted, or never made.";
+      c.line.textContent = m.identity;
       c.nums.textContent = "";
       continue;
     }
@@ -4752,22 +4933,18 @@ function renderArmory(p) {
     };
     if (banner) c.faction.appendChild(iconImg(banner, m.faction, bannerFail));
     else bannerFail();
+    renderGlyphs(c, m);
     c.role.textContent = m.role;
     c.line.textContent = "";
-    c.line.append(el("span", "", m.level + " " + m.race + " " + m["class"] + " "));
-    if (m.guild) c.line.append(el("span", "g", "<" + m.guild + "> "));
-    c.line.append(el("span", m.online ? "on" : "off", m.online ? "online" : "offline"));
+    c.line.append(el("span", "", m.identity + " "));
+    c.line.append(el("span", m.presence === "online" ? "on" : "off", m.presence));
+    // The gear read arrives as chips that already know their own loudness.
     c.nums.textContent = "";
-    c.nums.append(el("span", "", (m.gear.average_item_level === null ? "no" : m.gear.average_item_level)
-      + " ILVL"));
-    // Honourable kills only when there are any: a line of zeros on five
-    // PvE characters is furniture.
-    if (m.honorable_kills) c.nums.append(el("span", "", m.honorable_kills + " Honorable Kills"));
-    if (m.gear.empty_slots.length) {
-      c.nums.append(el("span", "empty", m.gear.empty_slots.length + " empty: "
-        + m.gear.empty_slots.join(", ")));
+    for (const chip of m.gear.chips) {
+      const g = el("span", "gc " + chip.tone);
+      g.append(el("span", "k", chip.key), el("span", "", chip.value));
+      c.nums.appendChild(g);
     }
-    if (m.gear.broken.length) c.nums.append(el("span", "broken", "BROKEN: " + m.gear.broken.join(", ")));
     renderPortrait(c, m);
     renderModel(c, m);
     const bySlot = new Map(m.slots.map((s) => [s.slot, s]));
@@ -4776,6 +4953,9 @@ function renderArmory(p) {
     // never names a slot itself.
     for (const spec of p.doll.left) renderSlot(slotCell(c, c.left, spec), bySlot.get(spec));
     for (const spec of p.doll.right) renderSlot(slotCell(c, c.right, spec), bySlot.get(spec));
+    // The card under the doll is redrawn from the fresh row, so a poll that
+    // arrives while a slot is open updates it instead of going stale.
+    showSelection(c);
     renderStats(c, m.stats);
     renderSpec(c, m.spec, m.class_colour);
   }

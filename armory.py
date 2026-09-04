@@ -78,6 +78,41 @@ UNKNOWN_QUALITY = "unknown"
 # number that is always wrong by two is a number nobody reads.
 COSMETIC_SLOTS = frozenset({"shirt", "tabard"})
 
+# AN EMPTY SLOT IS TWO DIFFERENT FINDINGS WEARING ONE WORD. A missing helmet
+# is something somebody can fix this evening. An empty tabard slot is true of
+# nearly every character on the realm and always will be. Drawn identically
+# they READ identically, and the alarm that fires on everyone is the one that
+# drowns the alarm that does not - which is the specific complaint: the
+# watched warrior's bare ring fingers must not sit in a row of cells that
+# look exactly as alarming and never mean anything.
+#
+# So the word an empty slot says is decided here, per slot, rather than by a
+# ternary in the page. A cosmetic slot says its own NAME, because "shirt" is
+# a complete and unalarming answer to what is in it; a real gap says "empty",
+# because there is no name that would be the answer.
+EMPTY_MISSING, EMPTY_COSMETIC = "missing", "cosmetic"
+EMPTY_WORD = "empty"
+
+
+def empty_reading(slot_name: str) -> dict:
+    """What an empty slot says, and which of the two kinds of empty it is."""
+    if slot_name in COSMETIC_SLOTS:
+        return {
+            "kind": EMPTY_COSMETIC,
+            "label": slot_name,
+            "note": f"nothing worn, and nothing missing: a {slot_name} carries "
+                    "no stats in this expansion and is empty on almost every "
+                    "character. It is drawn because what somebody is wearing "
+                    "includes what they are not.",
+        }
+    return {
+        "kind": EMPTY_MISSING,
+        "label": EMPTY_WORD,
+        "note": "nothing worn in a slot that takes gear. This is a real gap: "
+                "it costs the character every stat the slot would carry, and "
+                "it is the thing this tab exists to make visible.",
+    }
+
 # A talent point arrives every level from 10 on. Rate.Talent is 1 on this
 # realm, which is the assumption this budget makes.
 FIRST_TALENT_LEVEL = 10
@@ -101,6 +136,33 @@ DOLL_LEFT = ["head", "neck", "shoulders", "back", "chest", "shirt", "tabard",
              "wrists", "main hand", "off hand"]
 DOLL_RIGHT = ["hands", "waist", "legs", "feet", "finger 1", "finger 2",
               "trinket 1", "trinket 2", "ranged"]
+
+# The mark a doll cell wears when there is no picture in it. A cell is 46px
+# and the icon comes from a host off the tailnet, so "no icon" is an ordinary
+# outcome rather than a rare one - and "shoulders" wrapped over three lines
+# inside 46 pixels is not a fallback, it is a smudge. Two letters fit.
+#
+# WHICH two letters is a naming decision and so it lives here: a ring slot is
+# stored as "finger 1" and read by a player as R1, a trinket as T1, and no
+# rule that took the first two letters of the stored name would produce
+# either. The page is handed the mark and never invents one, which is the
+# same rule that keeps it from naming a slot at all.
+SLOT_MARKS = {
+    "head": "HD", "neck": "NK", "shoulders": "SH", "shirt": "SR",
+    "chest": "CH", "waist": "WS", "legs": "LG", "feet": "FT",
+    "wrists": "WR", "hands": "HN", "finger 1": "R1", "finger 2": "R2",
+    "trinket 1": "T1", "trinket 2": "T2", "back": "BK",
+    "main hand": "MH", "off hand": "OH", "ranged": "RG", "tabard": "TB",
+}
+
+
+def slot_mark(slot_name: str) -> str:
+    """A slot's two-letter mark; its own first two letters if it has none.
+
+    The fallback exists so the day panel's slot list grows a twentieth entry
+    the doll draws a slightly wrong mark rather than an empty cell.
+    """
+    return SLOT_MARKS.get(slot_name) or slot_name[:2].upper()
 
 # --- the client's own vocabulary, by id -----------------------------------
 # All 3.3.5a enums, from the core's SharedDefines.h / ItemTemplate.h. Named
@@ -285,6 +347,48 @@ DEFAULT_POWER = ("Mana", "maxpower1", 1)
 # The first twenty points of stamina are worth one health each and every
 # point after that ten; intellect is the same shape at fifteen mana.
 STAT_BONUS_FLOOR = 20
+
+# WHERE A STAT CAME FROM IS PART OF THE STAT. "Attack Power 214" read off the
+# world's own save and "Attack Power 214" worked out here from base stats and
+# gear are different claims - the second is missing every buff and every
+# talent - and a block that prints them in the same ink invites somebody to
+# compare two characters whose numbers do not mean the same thing.
+#
+# Three words, one per row, and a plain-language gloss for each so the word
+# does not need to be learned. The page colours by the word; it does not
+# decide it.
+STAT_SAVED, STAT_DERIVED, STAT_UNAVAILABLE = "saved", "derived", "unavailable"
+STAT_SOURCE_GLOSS = {
+    STAT_SAVED: "read from the world's own save of this character",
+    STAT_DERIVED: "worked out from base stats and gear; buffs and talents "
+                  "are not counted",
+    STAT_UNAVAILABLE: "the world has not saved this and it cannot be worked "
+                      "out honestly from what is here",
+}
+# The same three, said once for the block as a whole.
+STAT_BLOCK_GLOSS = {
+    STAT_SAVED: "the world's own reading, as it was last saved.",
+    STAT_DERIVED: "the world has not saved this character's stats yet: base "
+                  "plus gear where that is honest, unavailable where it is not.",
+    STAT_UNAVAILABLE: "no base stats for this race, class and level, so "
+                      "nothing in this block can be worked out.",
+}
+
+
+def stat_reading(value) -> str:
+    """What a stat PRINTS.
+
+    A stat the world has not saved prints the word, never a zero: 0 attack
+    power and 0 dodge are numbers somebody acts on, and printing them for
+    "we do not know" is the one failure this whole block is arranged around.
+    Whole floats print whole, because "4.0% dodge" is a percentage nobody
+    writes that way.
+    """
+    if value is None:
+        return STAT_UNAVAILABLE
+    if isinstance(value, float) and value.is_integer():
+        return str(int(value))
+    return str(value)
 
 
 @dataclass(frozen=True)
@@ -673,8 +777,12 @@ def _slot_payload(slot_name: str, row: dict | None, book: ItemBook,
                   worn_entries: set[int], set_names: dict[int, str]) -> dict:
     """One paper-doll slot, whether or not anything is in it."""
     cosmetic = slot_name in COSMETIC_SLOTS
+    mark = slot_mark(slot_name)
     if row is None:
-        return {"slot": slot_name, "cosmetic": cosmetic, "empty": True}
+        reading = empty_reading(slot_name)
+        return {"slot": slot_name, "mark": mark, "cosmetic": cosmetic,
+                "empty": True, "empty_kind": reading["kind"],
+                "empty_label": reading["label"], "empty_note": reading["note"]}
     # A LEFT JOIN miss on acore_world.item_template is a custom or removed
     # item: it is genuinely equipped, so it must not read as an empty slot.
     # Say which item instead of drawing a blank, the same way panel does.
@@ -682,13 +790,24 @@ def _slot_payload(slot_name: str, row: dict | None, book: ItemBook,
     max_durability = row["max_durability"] or 0
     return {
         "slot": slot_name,
+        "mark": mark,
         "cosmetic": cosmetic,
         "empty": False,
+        # A worn slot has no empty reading, and says so with a null rather
+        # than by leaving the keys off: the page reads the same fields for
+        # every cell it draws.
+        "empty_kind": None,
+        "empty_label": None,
+        "empty_note": None,
         "entry": row["entry"],
         "name": tooltip["name"],
         "quality": row["quality"],
         "quality_name": _quality_name(row["quality"]),
         "item_level": row["item_level"],
+        # The corner of the cell, already a string: an item the world database
+        # does not know has no level, and "" is the honest mark for that. A
+        # page left to do this itself writes `|| 0` and paints a level-0 item.
+        "item_level_mark": "" if row["item_level"] is None else str(row["item_level"]),
         "required_level": row["required_level"],
         # The icon is the DISPLAY's, and a display the book does not know
         # (a custom item) gets none: the page draws the slot name instead.
@@ -705,26 +824,74 @@ def _slot_payload(slot_name: str, row: dict | None, book: ItemBook,
     }
 
 
+# How loud each header chip is. Three words, because there are three kinds of
+# thing to say: a fact, something to look at, something to fix.
+TONE_PLAIN, TONE_CAUTION, TONE_WARN = "plain", "caution", "warn"
+
+
 def _build_gear(slots: list[dict]) -> dict:
     """The read across one character's slots: what is worn, what is missing."""
     counts = [s for s in slots if not s["cosmetic"]]
     worn = [s for s in counts if not s["empty"]]
     levels = [s["item_level"] for s in worn if s["item_level"] is not None]
+    empty_slots = [s["slot"] for s in counts if s["empty"]]
+    broken = [s["slot"] for s in worn if s["broken"]]
+    # Averaged over what is WORN, not over every slot. Counting an empty
+    # slot as item level 0 would fold two different complaints - "his gear
+    # is old" and "he has no helmet" - into one number that answers
+    # neither. The empty slots are listed right beside it instead.
+    average = round(sum(levels) / len(levels)) if levels else None
+    # The header's chips, in the order the design reads them: what the gear
+    # is worth, how much of it there is, and then only the two things that
+    # are wrong, if either is. Which chips exist and how loud each one is is
+    # the judgement; the page draws what it is handed.
+    chips = [
+        {"key": "average item level",
+         "value": stat_reading(average), "tone": TONE_PLAIN},
+        {"key": "slots worn",
+         "value": f"{len(worn)} of {len(counts)}", "tone": TONE_PLAIN},
+    ]
+    # EMPTY IS A COUNT AND BROKEN IS A LIST, and the asymmetry is deliberate.
+    # Both are visible on the doll directly below - an empty slot is dashed
+    # amber and says the word, a broken one wears a vermilion ring - so the
+    # chip does not have to repeat what the doll already draws. What differs
+    # is what you do next: an empty slot is scanned ("how far off is he"),
+    # while a broken item is carried to a repair vendor by name, and eleven
+    # slot names in a header chip is a wall of text that buries the one line
+    # under it that is an instruction.
+    if empty_slots:
+        chips.append({"key": "empty", "value": str(len(empty_slots)),
+                      "tone": TONE_CAUTION})
+    if broken:
+        chips.append({"key": "broken", "value": ", ".join(broken),
+                      "tone": TONE_WARN})
     return {
         "worn": len(worn),
         "slots": len(counts),
-        "empty_slots": [s["slot"] for s in counts if s["empty"]],
-        # Averaged over what is WORN, not over every slot. Counting an empty
-        # slot as item level 0 would fold two different complaints - "his gear
-        # is old" and "he has no helmet" - into one number that answers
-        # neither. The empty slots are listed right beside it instead.
-        "average_item_level": round(sum(levels) / len(levels)) if levels else None,
-        "broken": [s["slot"] for s in worn if s["broken"]],
+        "empty_slots": empty_slots,
+        "average_item_level": average,
+        "broken": broken,
+        "chips": chips,
     }
 
 
 def _stat(key: str, label: str, value, note: str | None = None) -> dict:
-    return {"key": key, "label": label, "value": value, "note": note}
+    return {"key": key, "label": label, "value": value,
+            "reading": stat_reading(value), "note": note}
+
+
+def _sourced(rows: list[dict], source: str) -> list[dict]:
+    """Label every row with where its own number came from.
+
+    The block has one source and the rows do NOT: a derived block still
+    contains dodge and parry, which cannot be derived at all and are not
+    "derived, and 0". A row with no value is unavailable whatever the block
+    around it managed.
+    """
+    for row in rows:
+        row["source"] = STAT_UNAVAILABLE if row["value"] is None else source
+        row["gloss"] = STAT_SOURCE_GLOSS[row["source"]]
+    return rows
 
 
 def _pct(value: float | None) -> float | None:
@@ -764,7 +931,8 @@ def _build_stats(char_row: dict, saved: dict | None, base: dict | None,
             _stat("spell_power", "Spell Power", saved["spellPower"]),
             _stat("spell_crit", "Spell Critical Strike", _pct(saved["spellCritPct"])),
         ]
-        return {"source": "saved", "rows": rows}
+        return {"source": STAT_SAVED, "gloss": STAT_BLOCK_GLOSS[STAT_SAVED],
+                "rows": _sourced(rows, STAT_SAVED)}
 
     gear: dict[int, int] = {}
     armor = 0
@@ -788,8 +956,10 @@ def _build_stats(char_row: dict, saved: dict | None, base: dict | None,
                 ("ranged_attack_power", "Ranged Attack Power"),
                 ("ranged_crit", "Ranged Critical Strike"), ("spell_power", "Spell Power"),
                 ("spell_crit", "Spell Critical Strike")]
-        return {"source": "unavailable",
-                "rows": [_stat(k, label, None, unavailable) for k, label in keys]}
+        rows = [_stat(k, label, None, unavailable) for k, label in keys]
+        return {"source": STAT_UNAVAILABLE,
+                "gloss": STAT_BLOCK_GLOSS[STAT_UNAVAILABLE],
+                "rows": _sourced(rows, STAT_UNAVAILABLE)}
 
     stamina = base["stamina"] + gear.get(7, 0)
     strength = base["strength"] + gear.get(4, 0)
@@ -827,7 +997,8 @@ def _build_stats(char_row: dict, saved: dict | None, base: dict | None,
         _stat("spell_power", "Spell Power", spell_power, "gear only"),
         _stat("spell_crit", "Spell Critical Strike", None, unavailable),
     ]
-    return {"source": "derived", "rows": rows}
+    return {"source": STAT_DERIVED, "gloss": STAT_BLOCK_GLOSS[STAT_DERIVED],
+            "rows": _sourced(rows, STAT_DERIVED)}
 
 
 def _build_spec(class_id: int, level: int, talent_rows: list[dict],
@@ -893,16 +1064,47 @@ def _build_spec(class_id: int, level: int, talent_rows: list[dict],
     ordered = [trees[tid] for tid in order]
     available = talent_points_at(level, class_id)
     deepest = max(ordered, key=lambda t: t["points"], default=None)
+    distribution = "/".join(str(t["points"]) for t in ordered)
+    primary = deepest["name"] if deepest and deepest["points"] else None
+    unspent = None if available is None else max(0, available - spent)
     return {
         "trees": ordered,
         # The shorthand every WoW player already reads, in tree order.
-        "distribution": "/".join(str(t["points"]) for t in ordered),
-        "primary": deepest["name"] if deepest and deepest["points"] else None,
+        "distribution": distribution,
+        "primary": primary,
         "spent": spent,
         "available": available,
-        "unspent": None if available is None else max(0, available - spent),
+        "unspent": unspent,
         "unplaced": unplaced,
+        # THE COLLAPSED READING, which is what the tab shows by default.
+        # Three grids of forty-four cells each, five times over, is six
+        # hundred and sixty icons for a question that is answered by six
+        # characters, and the operator said so: the build IS "0/0/15
+        # Protection", and the trees are the thing you open when the answer
+        # is surprising. So the summary is a first-class field rather than
+        # something the page assembles out of four others.
+        "headline": f"{distribution} {primary}" if primary
+                    else f"{distribution} nothing spent",
+        "budget": f"{spent} points spent" if available is None
+                  else f"{spent} of {available} points spent",
+        # Said separately from the budget because it is the only part of it
+        # anybody acts on, and it is drawn in the caution colour.
+        "unspent_note": None if not unspent else f"{unspent} unspent",
+        # The bar, as segments rather than as two numbers and a rule in the
+        # page about whether the second one exists. A death knight's budget
+        # is unknown, so there is no unspent segment to draw; a character
+        # who has spent nothing and is owed nothing has no bar at all.
+        "bar": [seg for seg in (
+            {"kind": "spent", "points": spent} if spent else None,
+            {"kind": "unspent", "points": unspent} if unspent else None,
+        ) if seg is not None],
     }
+
+
+# What a profile says when there is no character behind it. A sentence, not
+# a blank: a profile stripped to a name is how a missing character stops
+# being noticed, which is the failure this whole tab exists to prevent.
+ABSENT_NOTE = "no saved character - deleted, or never made."
 
 
 def _member(name: str, char_row: dict | None, equipment_rows: list[dict],
@@ -919,6 +1121,7 @@ def _member(name: str, char_row: dict | None, equipment_rows: list[dict],
             "role": bond.role,
             "class": bond.char_class.title(),
             "present": False,
+            "identity": ABSENT_NOTE,
         }
     class_id, race = char_row["class"], char_row["race"]
     by_slot = {r["slot"]: r for r in equipment_rows}
@@ -937,22 +1140,40 @@ def _member(name: str, char_row: dict | None, equipment_rows: list[dict],
     active = 1 << char_row["activeTalentGroup"]
     in_play = [r for r in talent_rows if r["specMask"] & active]
     gender = "female" if char_row.get("gender") else "male"
+    race_name = _RACE_NAMES.get(race, f"race {race}")
+    class_name = _CLASS_NAMES.get(class_id, f"class {class_id}")
+    guild = char_row.get("guild") or None
+    kills = char_row.get("totalKills") or 0
+    # The one line every armory writes under the name, assembled here so the
+    # page has a sentence to print rather than four fields and a rule about
+    # which of them are worth a separator. A character in no guild has no
+    # guild segment, and five PvE characters do not each carry a "0
+    # honourable kills" that is furniture on all of them.
+    identity = [f"Level {char_row['level']} {race_name} {class_name}"]
+    if guild:
+        identity.append(guild)
+    if kills:
+        identity.append(f"{kills} honourable kill" + ("" if kills == 1 else "s"))
     return {
         "name": char_row["name"],
         "role": bond.role,
         "present": True,
+        "identity": " - ".join(identity),
+        # The word, not the boolean, because the page must not be the place
+        # that decides what the opposite of online is called.
+        "presence": "online" if char_row["online"] else "offline",
         "level": char_row["level"],
-        "class": _CLASS_NAMES.get(class_id, f"class {class_id}"),
+        "class": class_name,
         "class_colour": CLASS_COLOURS.get(class_id, "#ffffff"),
-        "race": _RACE_NAMES.get(race, f"race {race}"),
+        "race": race_name,
         "gender": gender,
         "faction": "alliance" if race in _ALLIANCE_RACES
                    else "horde" if race in _HORDE_RACES else "neutral",
         "online": bool(char_row["online"]),
         # Guild and honourable kills are shown only when there is something
         # to show. A character in no guild has no guild line, not "<none>".
-        "guild": char_row.get("guild") or None,
-        "honorable_kills": char_row.get("totalKills") or 0,
+        "guild": guild,
+        "honorable_kills": kills,
         "portrait": {
             "race_icon": (f"achievement_character_{RACE_ICON_NAMES[race]}_{gender}"
                           if race in RACE_ICON_NAMES else None),
@@ -967,6 +1188,43 @@ def _member(name: str, char_row: dict | None, equipment_rows: list[dict],
         "stats": stats,
         "spec": _build_spec(class_id, char_row["level"], in_play, book),
     }
+
+
+# What the page says over the whole tab, and how loudly. LOUD ONLY FOR THE
+# TWO THINGS SOMEBODY CAN ACT ON TODAY: a broken item is a repair and an
+# unspent talent point is a click, while empty slots are ordinary at these
+# levels and would leave the headline permanently coloured - which is the
+# same as leaving it permanently unread. That is a verdict, so it is here.
+def _headline(members: list[dict], expected: int) -> dict:
+    present = [m for m in members if m["present"]]
+    empty = sum(len(m["gear"]["empty_slots"]) for m in present)
+    broken = sum(len(m["gear"]["broken"]) for m in present)
+    idle = [m for m in present if m["spec"]["unspent"]]
+    bits = [f"{len(present)} of {expected} shown"]
+    if empty:
+        bits.append(f"{empty} empty slot" + ("" if empty == 1 else "s"))
+    if broken:
+        bits.append(f"{broken} broken")
+    if idle:
+        bits.append("unspent: " + ", ".join(
+            f"{m['name']} {m['spec']['unspent']}" for m in idle))
+    return {"text": "  -  ".join(bits), "alarm": bool(broken or idle)}
+
+
+# The item card sits in the flow under the doll rather than floating beside
+# a cell, so it is a place on the page that exists before anything is chosen
+# and has to say something then. "Nothing selected" would be a description of
+# the software; this is an instruction about the page.
+DETAIL_HINT = "choose a slot above to read what is in it."
+
+# THE TREES START CLOSED. Explicitly stated rather than left to whatever the
+# page happens to do, because it is a product decision and the operator's
+# own: the collapsed line answers the question, and eleven tiers of icons
+# per tree, three trees per character, five characters, is a scroll nobody
+# asked for. The words on the control live here for the same reason every
+# other word on this tab does.
+TREES_EXPANDED = False
+TREES_SHOW, TREES_HIDE = "show trees", "hide trees"
 
 
 def build_armory(char_rows: list[dict], equipment_rows: list[dict],
@@ -1010,8 +1268,13 @@ def build_armory(char_rows: list[dict], equipment_rows: list[dict],
         # The slot order, sent rather than retyped in the page: the paper
         # doll's left column, right column and weapon row are all drawn from
         # this one list, so both ends must agree on what the slots are.
-        "slots": [{"slot": name, "cosmetic": name in COSMETIC_SLOTS}
+        "slots": [{"slot": name, "cosmetic": name in COSMETIC_SLOTS,
+                   "mark": slot_mark(name)}
                   for name in EQUIPPED_SLOTS],
         "doll": {"left": DOLL_LEFT, "right": DOLL_RIGHT},
         "expected": len(members),
+        "headline": _headline(members, len(members)),
+        "detail_hint": DETAIL_HINT,
+        "talent_trees": {"expanded": TREES_EXPANDED,
+                         "show": TREES_SHOW, "hide": TREES_HIDE},
     }

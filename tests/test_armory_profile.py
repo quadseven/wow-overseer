@@ -260,6 +260,73 @@ class TheStatBlockTest(unittest.TestCase):
         self.assertEqual(len(stats["rows"]), 17)
 
 
+class TheStatSourceTest(unittest.TestCase):
+    """WHERE A STAT CAME FROM IS PART OF THE STAT, and the redesign is where
+    it stopped being a note nobody could see and became a label the block is
+    coloured by.
+
+    "Attack Power 214" read off the world's own save and "Attack Power 214"
+    worked out here from base stats and gear are different claims: the second
+    is missing every buff and every talent. A block that prints them in one
+    ink invites a comparison between two numbers that do not mean the same
+    thing, and the reader has no way to know they were invited."""
+
+    def rows(self, stats):
+        return {r["key"]: r for r in stats["rows"]}
+
+    def test_a_saved_block_labels_every_row_saved(self):
+        stats = member(build(stats_rows=[SAVED], base_rows=[BASE]))["stats"]
+        self.assertTrue(all(r["source"] == armory.STAT_SAVED
+                            for r in stats["rows"]))
+
+    def test_a_derived_block_still_has_rows_that_are_not_derived(self):
+        """THE ROW IS NOT THE BLOCK. Dodge and parry cannot be derived at all
+        without the rating tables, and "derived, and 0" is exactly the lie
+        this arrangement exists to stop."""
+        stats = member(build([worn(5, SCOUTING_BELT)], base_rows=[BASE]))["stats"]
+        self.assertEqual(stats["source"], armory.STAT_DERIVED)
+        rows = self.rows(stats)
+        self.assertEqual(rows["attack_power"]["source"], armory.STAT_DERIVED)
+        for key in ("block", "dodge", "parry", "melee_crit"):
+            self.assertEqual(rows[key]["source"], armory.STAT_UNAVAILABLE, key)
+
+    def test_every_row_carries_a_gloss_that_says_what_its_word_means(self):
+        """The colour is not a code the reader is asked to crack."""
+        for stats in (member(build(stats_rows=[SAVED], base_rows=[BASE]))["stats"],
+                      member(build([worn(5, SCOUTING_BELT)], base_rows=[BASE]))["stats"],
+                      member(build([worn(5, SCOUTING_BELT)]))["stats"]):
+            self.assertTrue(stats["gloss"])
+            for row in stats["rows"]:
+                self.assertEqual(row["gloss"],
+                                 armory.STAT_SOURCE_GLOSS[row["source"]])
+
+    def test_a_missing_stat_prints_the_word_and_can_never_print_zero(self):
+        """The page is handed a string precisely so there is no branch left in
+        it that could turn a null into a 0 - and 0 attack power is a number
+        somebody acts on."""
+        rows = self.rows(member(build(base_rows=[BASE]))["stats"])
+        for key in ("block", "dodge", "parry", "melee_crit"):
+            self.assertIsNone(rows[key]["value"], key)
+            self.assertEqual(rows[key]["reading"], armory.STAT_UNAVAILABLE, key)
+
+    def test_a_real_zero_still_prints_as_a_zero(self):
+        """The rule is "a null is not a zero", not "a zero is suspicious".
+        A saved 0.0 dodge is the world's own answer."""
+        saved = dict(SAVED, dodgePct=0.0)
+        rows = self.rows(member(build(stats_rows=[saved], base_rows=[BASE]))["stats"])
+        self.assertEqual(rows["dodge"]["reading"], "0")
+        self.assertEqual(rows["dodge"]["source"], armory.STAT_SAVED)
+
+    def test_a_whole_percentage_is_not_printed_with_a_trailing_zero(self):
+        """"4.0% dodge" is a percentage nobody writes that way, and the page
+        no longer formats numbers so this is the only place it can be got
+        right."""
+        saved = dict(SAVED, dodgePct=4.0, critPct=7.5)
+        rows = self.rows(member(build(stats_rows=[saved], base_rows=[BASE]))["stats"])
+        self.assertEqual(rows["dodge"]["reading"], "4")
+        self.assertEqual(rows["melee_crit"]["reading"], "7.5")
+
+
 class TheHeaderTest(unittest.TestCase):
     def test_guild_and_kills_come_through_when_they_exist(self):
         m = member(build(char_rows=[char(guild="Ashenvale", totalKills=12)]))

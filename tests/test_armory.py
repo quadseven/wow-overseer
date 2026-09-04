@@ -293,5 +293,276 @@ class TheTalentBookTest(unittest.TestCase):
         self.assertEqual(named, [], "talents with no name in the book")
 
 
+class TheWordAnEmptySlotSaysTest(unittest.TestCase):
+    """WHAT AN EMPTY SLOT MEANS is not one answer, and the redesign is where
+    that stopped being a ternary in the page.
+
+    A bare ring finger on a level 26 warrior is a thing somebody can fix this
+    evening. An empty tabard slot is true of nearly every character on the
+    realm and always will be. Drawn the same they READ the same, and the
+    alarm that fires on everyone drowns the one that does not - which is the
+    exact complaint that got this view redesigned."""
+
+    def test_a_real_gap_says_the_word(self):
+        s = slot_of(col(build(), FIRST), "head")
+        self.assertEqual(s["empty_label"], armory.EMPTY_WORD)
+        self.assertEqual(s["empty_kind"], armory.EMPTY_MISSING)
+
+    def test_a_cosmetic_slot_says_its_own_name_instead(self):
+        """"empty" on a tabard is a true sentence that means nothing. Its own
+        name is the complete answer to what is in it."""
+        s = slot_of(col(build(), FIRST), "tabard")
+        self.assertEqual(s["empty_label"], "tabard")
+        self.assertEqual(s["empty_kind"], armory.EMPTY_COSMETIC)
+
+    def test_the_two_kinds_carry_different_sentences(self):
+        """The label is what fits in a 46px cell; the note is what the card
+        under the doll says. Both have to distinguish, or the distinction
+        only exists at a glance."""
+        member = col(build(), FIRST)
+        gap = slot_of(member, "head")["empty_note"]
+        cosmetic = slot_of(member, "shirt")["empty_note"]
+        self.assertNotEqual(gap, cosmetic)
+        self.assertIn("real gap", gap)
+        self.assertIn("shirt", cosmetic)
+
+    def test_a_worn_slot_carries_the_same_keys_with_nothing_in_them(self):
+        """The page reads one shape for every cell it draws. Leaving the keys
+        off a worn slot is how `undefined` reaches textContent."""
+        s = slot_of(col(build(equipment_rows=[item(0)]), FIRST), "head")
+        self.assertFalse(s["empty"])
+        for key in ("empty_kind", "empty_label", "empty_note"):
+            self.assertIsNone(s[key], key)
+
+    def test_every_slot_the_doll_draws_has_a_word_for_being_empty(self):
+        """A slot with no reading is a blank cell, which is the failure this
+        whole rule is about."""
+        for name in armory.EQUIPPED_SLOTS:
+            reading = armory.empty_reading(name)
+            self.assertTrue(reading["label"], name)
+            self.assertTrue(reading["note"], name)
+            self.assertIn(reading["kind"],
+                          (armory.EMPTY_MISSING, armory.EMPTY_COSMETIC), name)
+
+
+class TheSlotMarkTest(unittest.TestCase):
+    """The two letters a 46px cell wears when no picture arrives - which is an
+    ORDINARY outcome here, because the art is served from a host off the
+    tailnet and the frozen icon book does not cover every display."""
+
+    def test_every_slot_the_doll_draws_has_a_mark(self):
+        for name in armory.EQUIPPED_SLOTS:
+            self.assertIn(name, armory.SLOT_MARKS, name)
+
+    def test_no_two_slots_wear_the_same_mark(self):
+        """Two cells marked HD is worse than two cells marked nothing: it
+        looks like an answer."""
+        marks = list(armory.SLOT_MARKS.values())
+        self.assertEqual(len(marks), len(set(marks)))
+
+    def test_a_mark_is_two_upper_case_letters_because_that_is_what_fits(self):
+        for name, mark in armory.SLOT_MARKS.items():
+            self.assertEqual(len(mark), 2, name)
+            self.assertEqual(mark, mark.upper(), name)
+
+    def test_the_marks_are_the_players_names_not_the_databases(self):
+        """"finger 1" is R1 because a player calls it a ring. No rule over the
+        stored name produces that, which is why there is a table."""
+        self.assertEqual(armory.slot_mark("finger 1"), "R1")
+        self.assertEqual(armory.slot_mark("trinket 2"), "T2")
+
+    def test_a_slot_the_table_has_not_been_taught_still_gets_something(self):
+        """The day panel's list grows a twentieth slot, the doll draws a
+        slightly wrong mark rather than an empty cell."""
+        self.assertEqual(armory.slot_mark("wings"), "WI")
+
+    def test_the_mark_reaches_both_the_slot_list_and_every_cell(self):
+        payload = build(equipment_rows=[item(0)])
+        self.assertEqual([s["mark"] for s in payload["slots"]],
+                         [armory.slot_mark(n) for n in armory.EQUIPPED_SLOTS])
+        self.assertEqual(slot_of(col(payload, FIRST), "head")["mark"], "HD")
+
+    def test_an_item_with_no_level_has_an_empty_corner_not_a_zero(self):
+        """A custom item the world database does not know has no item level.
+        The corner is a string here precisely so the page has no null to turn
+        into a 0 that reads as a level."""
+        member = col(build(equipment_rows=[item(0, item_level=None)]), FIRST)
+        self.assertEqual(slot_of(member, "head")["item_level_mark"], "")
+        member = col(build(equipment_rows=[item(0, item_level=19)]), FIRST)
+        self.assertEqual(slot_of(member, "head")["item_level_mark"], "19")
+
+
+class TheGearChipsTest(unittest.TestCase):
+    """The header's read of the gear, as chips that already know how loud
+    they are. Loudness is the judgement: an empty slot is ordinary at these
+    levels and a broken item is not, and a page left to decide that puts a
+    permanently coloured chip on every card, which is the same as putting
+    none."""
+
+    def test_the_first_two_chips_are_always_there(self):
+        chips = col(build(), FIRST)["gear"]["chips"]
+        self.assertEqual([c["key"] for c in chips[:2]],
+                         ["average item level", "slots worn"])
+        self.assertTrue(all(c["tone"] == armory.TONE_PLAIN for c in chips[:2]))
+
+    def test_no_average_says_the_word_rather_than_zero(self):
+        """Zero is a claim about his gear."""
+        chips = col(build(), FIRST)["gear"]["chips"]
+        self.assertEqual(chips[0]["value"], armory.STAT_UNAVAILABLE)
+
+    def test_an_empty_slot_is_a_caution_and_a_broken_item_is_a_warning(self):
+        member = col(build(equipment_rows=[item(0, durability=0)]), FIRST)
+        tones = {c["key"]: c["tone"] for c in member["gear"]["chips"]}
+        self.assertEqual(tones["empty"], armory.TONE_CAUTION)
+        self.assertEqual(tones["broken"], armory.TONE_WARN)
+
+    def test_empty_is_a_count_and_broken_is_named(self):
+        """Both are drawn on the doll right below, so the chip is not there to
+        repeat them. It is there to be scanned - and what you do next differs:
+        an empty slot is a gap you measure, a broken item is a thing you carry
+        to a repair vendor by name. Sixteen slot names in a header chip buries
+        the one line under it that is an instruction."""
+        member = col(build(equipment_rows=[item(0, durability=0)]), FIRST)
+        chips = {c["key"]: c["value"] for c in member["gear"]["chips"]}
+        self.assertEqual(chips["empty"], "16")
+        self.assertEqual(chips["broken"], "head")
+
+    def test_a_character_with_nothing_wrong_carries_no_loud_chips(self):
+        """Every slot filled and nothing broken: the header is two facts and
+        no colour."""
+        rows = [item(n, durability=70)
+                for n in range(len(armory.EQUIPPED_SLOTS))]
+        chips = col(build(equipment_rows=rows), FIRST)["gear"]["chips"]
+        self.assertEqual([c["tone"] for c in chips],
+                         [armory.TONE_PLAIN, armory.TONE_PLAIN])
+
+
+class TheTabHeadlineTest(unittest.TestCase):
+    """One sentence over five profiles, and how loud it is. LOUD ONLY FOR THE
+    TWO THINGS SOMEBODY CAN ACT ON TODAY - a repair and a click - because a
+    headline that is coloured on every poll is a headline nobody reads."""
+
+    def test_it_counts_who_is_actually_there(self):
+        headline = build([char()])["headline"]
+        self.assertIn("1 of %d shown" % len(ROSTER), headline["text"])
+
+    def test_empty_slots_are_reported_and_do_not_raise_the_alarm(self):
+        """Every character at these levels has some. Colouring for them would
+        leave the line permanently coloured."""
+        headline = build([char(level=5)])["headline"]
+        self.assertIn("empty slots", headline["text"])
+        self.assertFalse(headline["alarm"])
+
+    def test_a_broken_item_raises_it(self):
+        headline = build([char(level=5)], [item(4, durability=0)])["headline"]
+        self.assertIn("1 broken", headline["text"])
+        self.assertTrue(headline["alarm"])
+
+    def test_an_unspent_point_raises_it_and_names_who(self):
+        """Invisible in the game unless you open the talent pane, and the one
+        finding here that is a single click to fix."""
+        headline = build([char(level=25)])["headline"]
+        self.assertIn("unspent: %s 16" % FIRST, headline["text"])
+        self.assertTrue(headline["alarm"])
+
+    def test_one_empty_slot_is_singular(self):
+        rows = [item(n) for n in range(len(armory.EQUIPPED_SLOTS)) if n != 0]
+        headline = build([char(level=5)], rows)["headline"]
+        self.assertIn("1 empty slot ", headline["text"] + " ")
+
+
+class TheCollapsedBuildTest(unittest.TestCase):
+    """THE TREES ARE SHUT AND THE LINE IS THE ANSWER. Three grids of
+    forty-four cells, five characters over, is six hundred and sixty icons
+    answering a question that "0/0/2 Protection" answers in six characters,
+    and the operator asked for exactly that."""
+
+    def test_the_trees_start_closed_and_the_payload_says_so(self):
+        trees = build()["talent_trees"]
+        self.assertFalse(trees["expanded"])
+        self.assertTrue(trees["show"])
+        self.assertTrue(trees["hide"])
+        self.assertNotEqual(trees["show"], trees["hide"])
+
+    def test_the_headline_is_the_distribution_and_the_deepest_tree(self):
+        spec = col(build([char(level=25)], None, [talent(PUNCTURE_R2)]),
+                   FIRST)["spec"]
+        self.assertEqual(spec["headline"], "0/0/2 Protection")
+
+    def test_a_character_who_has_spent_nothing_still_gets_a_line(self):
+        """"0/0/0" alone reads as a rendering failure."""
+        self.assertEqual(col(build(), FIRST)["spec"]["headline"],
+                         "0/0/0 nothing spent")
+
+    def test_the_budget_names_both_numbers_when_both_are_known(self):
+        spec = col(build([char(level=25)], None, [talent(PUNCTURE_R2)]),
+                   FIRST)["spec"]
+        self.assertEqual(spec["budget"], "2 of 16 points spent")
+        self.assertEqual(spec["unspent_note"], "14 unspent")
+
+    def test_an_unknown_budget_says_only_what_it_knows(self):
+        """A death knight's points count quest rewards this server does not
+        expose. "0 of None points" would be worse than saying less."""
+        spec = col(build([char(level=25, **{"class": DEATH_KNIGHT})]),
+                   FIRST)["spec"]
+        self.assertEqual(spec["budget"], "0 points spent")
+        self.assertIsNone(spec["unspent_note"])
+
+    def test_the_bar_is_segments_so_the_page_never_decides_it_has_two(self):
+        spec = col(build([char(level=25)], None, [talent(PUNCTURE_R2)]),
+                   FIRST)["spec"]
+        self.assertEqual(spec["bar"], [{"kind": "spent", "points": 2},
+                                       {"kind": "unspent", "points": 14}])
+
+    def test_an_unknown_budget_has_no_unspent_segment_to_draw(self):
+        spec = col(build([char(level=25, **{"class": DEATH_KNIGHT})], None,
+                         [talent(PUNCTURE_R2)]), FIRST)["spec"]
+        self.assertEqual([seg["kind"] for seg in spec["bar"]], ["spent"])
+
+    def test_a_character_owed_nothing_and_holding_nothing_has_no_bar(self):
+        """Two zero-width segments are an empty rounded rectangle pretending
+        to be a measurement."""
+        self.assertEqual(col(build([char(level=5)]), FIRST)["spec"]["bar"], [])
+
+
+class TheMemberLineTest(unittest.TestCase):
+    """The one line every armory writes under the name. Which of guild and
+    honourable kills is worth a separator is a judgement about the data, and
+    it used to be four appends and two truthiness checks in the page."""
+
+    def test_it_reads_the_way_an_armory_writes_it(self):
+        member = col(build([char(level=26, guild="Ironforge Irregulars",
+                                 totalKills=412)]), FIRST)
+        self.assertEqual(member["identity"],
+                         "Level 26 Human Warrior - Ironforge Irregulars"
+                         " - 412 honourable kills")
+
+    def test_no_guild_leaves_no_gap_where_a_guild_would_be(self):
+        self.assertEqual(col(build([char(level=26)]), FIRST)["identity"],
+                         "Level 26 Human Warrior")
+
+    def test_a_single_kill_is_singular(self):
+        member = col(build([char(level=26, totalKills=1)]), FIRST)
+        self.assertTrue(member["identity"].endswith("1 honourable kill"),
+                        member["identity"])
+
+    def test_five_pve_characters_do_not_each_carry_a_zero(self):
+        """A line of zeros on every card is furniture."""
+        self.assertNotIn("kill", col(build([char()]), FIRST)["identity"])
+
+    def test_a_missing_character_says_so_in_the_same_field(self):
+        """A profile stripped to a name is how a missing character stops
+        being noticed, and the page reads one field either way."""
+        member = col(build(char_rows=[]), FIRST)
+        self.assertFalse(member["present"])
+        self.assertEqual(member["identity"], armory.ABSENT_NOTE)
+
+    def test_presence_is_a_word_rather_than_a_boolean_for_the_page_to_name(self):
+        self.assertEqual(col(build([char(online=1)]), FIRST)["presence"],
+                         "online")
+        self.assertEqual(col(build([char(online=0)]), FIRST)["presence"],
+                         "offline")
+
+
 if __name__ == "__main__":
     unittest.main()

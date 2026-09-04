@@ -51,8 +51,22 @@ class TheArmoryTab(unittest.TestCase):
         cls.server = (HERE / "map_server.py").read_text()
         start = cls.page.index("// --- the Armory tab (infra#3096, infra#3139)")
         cls.tab = cls.page[start:cls.page.index("</script>", start)]
+        # The Armory's OWN script, for the same reason cls.acss exists below:
+        # cls.tab runs to the end of the script and so contains the standing
+        # panel and the wealth grid, which are two other views sharing this
+        # section. "The page never says this word" has to be asked of the
+        # code that would have said it.
+        cls.ajs = cls.tab[:cls.tab.index(
+            "// --- the standing panel (mod-overseer#88, mod-overseer#160)")]
         css = cls.page.index("--- the Armory tab (infra#3096, infra#3139)")
         cls.css = cls.page[css:cls.page.index("--- the Family tab (infra#2892)")]
+        # The Armory's OWN rules. cls.css runs to the Family banner, which
+        # sweeps in the standing panel and the wealth grid - two views that
+        # share this section and are not this tab. Anything asserted about
+        # how the Armory paints has to be asserted here or it is asserting
+        # something about somebody else's code.
+        cls.acss = cls.css[:cls.css.index(
+            "--- the standing panel (mod-overseer#88, mod-overseer#160)")]
 
     def test_the_tab_exists_beside_the_family_and_the_continents(self):
         self.assertIn('<section id="armory">', self.page)
@@ -139,10 +153,42 @@ class TheArmoryTab(unittest.TestCase):
         for slot in armory.EQUIPPED_SLOTS:
             self.assertNotIn('"' + slot + '"', self.tab)
 
-    def test_an_empty_slot_says_the_word(self):
+    def test_an_empty_slot_says_the_word_and_does_not_choose_it(self):
         """A blank cell reads as 'nothing to report'. An empty head slot on a
-        level 25 warrior is the entire reason for opening this tab."""
-        self.assertIn('cell.textContent = s.cosmetic ? s.slot : "empty";', self.tab)
+        level 25 warrior is the entire reason for opening this tab.
+
+        WHICH word it says is armory.py's: a real gap says "empty" and a
+        cosmetic slot says its own name, and that is a judgement about what
+        an empty slot MEANS, not about how to draw one. The page used to
+        make it in a ternary, where no test could reach it."""
+        self.assertIn("cell.textContent = s.empty_label;", self.ajs)
+        self.assertNotIn('"empty"', self.ajs, "the page names the state itself")
+        # `s.cosmetic` may still pick a CSS class - how loud a cell is drawn
+        # is the page's job. Picking the WORD is not.
+        self.assertNotIn("s.cosmetic ? s.slot", self.ajs)
+
+    def test_the_two_kinds_of_empty_are_told_apart_by_the_payload(self):
+        """The page draws a cosmetic empty quietly and a real one loudly, and
+        it must learn which is which from the payload rather than from a
+        second copy of the shirt-and-tabard list."""
+        for slot in armory.COSMETIC_SLOTS:
+            self.assertNotIn('"' + slot + '"', self.ajs)
+        self.assertIn("s.empty_note", self.ajs)
+
+    def test_the_slot_mark_is_never_invented_in_the_page(self):
+        """A 46px cell with no icon needs two letters in it, and which two is
+        a naming decision: "finger 1" is R1 because a player calls it a ring,
+        which no rule over the stored name would produce."""
+        self.assertIn('el("span", "mk", s.mark)', self.ajs)
+        for mark in armory.SLOT_MARKS.values():
+            self.assertNotIn('"' + mark + '"', self.ajs)
+
+    def test_the_cells_other_corner_is_the_item_level_and_never_a_zero(self):
+        """A custom item the world database does not know has no level. The
+        corner arrives as a string so there is no null here for the page to
+        turn into a 0 that reads as a level."""
+        self.assertIn('el("span", "lv", s.item_level_mark)', self.ajs)
+        self.assertIn(".aslot .lv { right:0; bottom:0;", self.acss)
 
     def test_the_doll_layout_is_not_retyped_into_the_page(self):
         """Which slots go down which side of the character is a fact the
@@ -218,28 +264,163 @@ class TheArmoryTab(unittest.TestCase):
         self.assertIn("m.portrait.race_icon", self.tab)
         self.assertIn("m.portrait.class_icon", self.tab)
 
-    def test_a_tooltip_opens_on_hover_and_stays_on_tap(self):
-        """A phone has no hover. A tap pins the tooltip; a second tap, a tap
-        elsewhere or Escape lets it go."""
-        self.assertIn('e.pointerType === "mouse"', self.tab)
-        self.assertIn("arm.pinned = cell;", self.tab)
-        self.assertIn('if (e.key === "Escape")', self.tab)
+    def test_the_item_card_is_in_the_flow_and_not_a_floating_tooltip(self):
+        """A phone has no hover to lose and no room beside a 46px square. The
+        card that replaced the tooltip is a block under the doll, which is
+        why none of the tooltip's machinery survives: no hover branch, no
+        pin, no Escape, and above all no hand-computed position that could
+        put the card off the edge of a screen."""
+        self.assertIn('const detail = el("div", "adetail");', self.tab)
+        self.assertIn("function renderDetail(c, s)", self.tab)
+        for gone in ("pointerenter", "arm.pinned", "getBoundingClientRect",
+                     "window.innerWidth", "position:fixed"):
+            self.assertNotIn(gone, self.ajs, gone + " is tooltip machinery")
+        self.assertNotIn("#atip", self.page)
 
-    def test_the_tooltip_draws_the_lines_the_game_draws(self):
+    def test_choosing_a_slot_rings_it_and_choosing_again_lets_go(self):
+        """There is no hover here, so selection is the only way in and it has
+        to be reversible with the same thumb that opened it."""
+        self.assertIn("c.selected = c.selected === slot ? null : slot;", self.tab)
+        self.assertIn('cell.classList.toggle("on", slot === c.selected)', self.tab)
+        self.assertIn(".aslot.on { box-shadow:0 0 0 2px var(--ground); }", self.acss)
+        self.assertIn(".aslot.broken { box-shadow:0 0 0 2px var(--vermilion); }",
+                      self.acss)
+
+    def test_a_doll_cell_is_a_button_so_a_keyboard_can_reach_the_card(self):
+        """A div with a click handler is invisible to a keyboard and to a
+        screen reader, and the card underneath is the only place the item's
+        stats exist on this tab."""
+        self.assertIn('cell = el("button", "aslot");', self.tab)
+        self.assertIn('cell.type = "button";', self.tab)
+        self.assertIn(":focus-visible", self.acss)
+
+    def test_the_doll_cell_is_the_handoffs_geometry(self):
+        """46px clears the 44px hit-target floor, and the quality colour is
+        the border rather than a tint, so the icon inside stays the icon."""
+        self.assertIn("width:46px; height:46px; border-radius:6px;", self.acss)
+        self.assertIn("border:2px solid var(--line);", self.acss)
+
+    def test_the_card_draws_the_lines_the_game_draws(self):
         """Name in quality colour, item level, binding, slot and kind, armor,
         stats, enchant, durability, classes, level, equip effects, the set
-        with its pieces and bonuses, flavour text, sell price."""
-        tip = self.tab[self.tab.index("function buildTip"):self.tab.index("function showTip")]
+        with its pieces and bonuses, flavour text, sell price - in
+        armory.py::_tooltip's own order."""
+        tip = self.tab[self.tab.index("function renderDetail"):
+                       self.tab.index("function renderStats")]
         for field in ("t.item_level", "t.binding", "t.slot", "t.kind", "t.armor",
                       "t.stats", "t.enchant", "t.durability", "t.classes",
                       "t.requires_level", "t.effects", "t.set.pieces", "t.set.bonuses",
                       "t.flavor", "t.sell_price"):
             self.assertIn(field, tip)
 
-    def test_an_unavailable_stat_says_so(self):
+    def test_an_unavailable_stat_says_so_and_the_page_cannot_say_zero(self):
         """A stat the world has not saved is not a zero. Zero attack power is
-        a number a person acts on."""
-        self.assertIn('s.value === null ? "unavailable" : String(s.value)', self.tab)
+        a number a person acts on, and the way it gets printed is a page that
+        was left to turn a null into something - so the page is handed a
+        string and given nothing to decide."""
+        self.assertIn("r.v.textContent = s.reading;", self.tab)
+        stats = self.tab[self.tab.index("function renderStats"):
+                         self.tab.index("function showTrees")]
+        self.assertNotIn("String(s.value)", stats)
+        self.assertNotIn("|| 0", stats)
+        self.assertNotIn('"unavailable"', self.ajs,
+                         "the page must not name a stat's source itself")
+
+    def test_a_stat_is_coloured_by_where_its_number_came_from(self):
+        """A saved reading and a derived one are different claims, and a
+        block that prints them in one ink invites a comparison between two
+        numbers that do not mean the same thing."""
+        self.assertIn('r.row.className = "astat " + s.source;', self.tab)
+        for source in (armory.STAT_SAVED, armory.STAT_DERIVED,
+                       armory.STAT_UNAVAILABLE):
+            self.assertIn(".astat.%s .v {" % source, self.acss)
+        # And the word is spelled out rather than left as a colour to crack.
+        self.assertIn('el("span", "w", s.source)', self.tab)
+        self.assertIn("s.gloss", self.tab)
+
+    def test_the_talent_trees_are_collapsed_until_they_are_asked_for(self):
+        """THE OPERATOR'S OWN COMPLAINT. Three grids of forty-four cells,
+        five profiles over, is six hundred and sixty icons answering a
+        question that "0/0/15 Protection" answers in six characters. The
+        default is a product decision, so it arrives in the payload; the
+        page reads it and does not have one of its own."""
+        self.assertIn("arm.trees = p.talent_trees;", self.tab)
+        self.assertIn("open: !!(arm.trees && arm.trees.expanded)", self.tab)
+        self.assertIn("c.trees.hidden = !c.open;", self.tab)
+        self.assertIn(".atrees[hidden] { display:none; }", self.acss)
+        self.assertFalse(armory.TREES_EXPANDED,
+                         "the trees must not start open")
+
+    def test_a_shut_tree_is_not_built_at_all(self):
+        """Hiding six hundred and sixty icons still builds them. Collapsed
+        has to cost nothing or it is only a smaller version of the
+        complaint."""
+        # renderTree is defined further up, in the talent-grid section, so
+        # the window is showTrees to the renderSpec that calls it.
+        spec = self.tab[self.tab.index("function showTrees"):
+                        self.tab.index("function renderSpec")]
+        self.assertIn("if (c.open && c.specData) {", spec)
+        self.assertNotIn("spec.trees.forEach", self.ajs)
+
+    def test_the_page_does_not_name_the_toggle_or_the_summary(self):
+        """Every word on this control is a word about the data, so every one
+        of them comes from armory.py."""
+        self.assertIn("c.toggle.textContent = c.open ? arm.trees.hide : arm.trees.show;",
+                      self.tab)
+        self.assertIn("c.sum.textContent = spec.headline;", self.tab)
+        self.assertIn("c.budget.textContent = spec.budget;", self.tab)
+        for word in (armory.TREES_SHOW, armory.TREES_HIDE):
+            self.assertNotIn(word, self.ajs)
+        self.assertNotIn("nothing spent", self.ajs)
+        self.assertNotIn("points spent", self.ajs)
+
+    def test_the_unspent_points_are_the_amber_half_of_the_bar(self):
+        """The bar's segments arrive as a list, so the page never decides
+        whether a death knight of unknown budget has an unspent half."""
+        self.assertIn("for (const seg of spec.bar) {", self.tab)
+        self.assertIn(".aspecbar .unspent { background:var(--caution-text); }",
+                      self.acss)
+        self.assertIn(".aspecbar .spent { background:var(--accent-text); }",
+                      self.acss)
+
+    def test_the_headline_verdict_is_not_a_ternary_in_the_page(self):
+        """"Loud only for the two things somebody can act on today" is a
+        verdict, and a verdict written into a page is a verdict no test can
+        reach without a browser."""
+        self.assertIn("aheadline.textContent = p.headline.text;", self.tab)
+        self.assertIn('aheadline.className = p.headline.alarm ? "alarm" : "";',
+                      self.tab)
+        self.assertNotIn("empty slots", self.ajs)
+        self.assertNotIn('of " + p.expected', self.ajs)
+
+    def test_a_card_with_no_character_behind_it_shows_no_empty_controls(self):
+        """Every part of a profile is built once and refilled, so a member
+        with no saved row leaves a doll with no cells, an item card with no
+        hint, and an unlabelled 44px button - which reads as broken software
+        rather than as a missing character."""
+        self.assertIn(".aprof.c-gone .abody, .aprof.c-gone .adetail, "
+                      ".aprof.c-gone .aspec,", self.acss)
+        self.assertIn(".aprof.c-gone .aspecbar, .aprof.c-gone .atrees "
+                      "{ display:none; }", self.acss)
+
+    def test_the_line_under_the_name_is_not_assembled_in_the_page(self):
+        """Which of guild and honourable kills is worth a separator, and what
+        a character with no saved row says instead, are both decisions about
+        the data."""
+        self.assertIn('c.line.append(el("span", "", m.identity + " "));', self.ajs)
+        self.assertIn("c.line.textContent = m.identity;", self.ajs)
+        self.assertNotIn("honourable", self.ajs.lower())
+        self.assertNotIn("no saved character", self.ajs)
+
+    def test_the_gear_chips_take_their_loudness_from_the_payload(self):
+        """An empty slot is ordinary at these levels and a broken item is
+        not. If the page decided that, every card would carry a permanently
+        coloured chip, which is the same as carrying none."""
+        self.assertIn('const g = el("span", "gc " + chip.tone);', self.ajs)
+        for tone in (armory.TONE_CAUTION, armory.TONE_WARN):
+            self.assertIn(".anums .gc.%s {" % tone, self.acss)
+        self.assertNotIn("ILVL", self.ajs)
+        self.assertNotIn("BROKEN", self.ajs)
 
     def test_the_talent_grid_is_the_trainers(self):
         """Talents at their true row and column, a count only once a point
@@ -259,10 +440,13 @@ class TheArmoryTab(unittest.TestCase):
     def test_a_cosmetic_empty_slot_is_quieter_than_a_real_one(self):
         """Shirt and tabard are empty on everyone forever. An alarm that
         always fires is an alarm nobody reads, and it would drown the empty
-        head slot standing next to it."""
-        self.assertIn(".aslot.empty { border-style:dashed; color:#d29922; }", self.css)
-        self.assertIn(".aslot.empty.cosmetic { color:var(--dim); border-color:var(--line); }",
-                      self.css)
+        head slot standing next to it. Both are dashed - neither holds
+        anything - and only the real gap is amber."""
+        self.assertIn(".aslot.empty { border-style:dashed; }", self.acss)
+        self.assertIn(".aslot.empty.cosmetic { border-color:var(--on-dark-faint); "
+                      "color:var(--on-dark-faint); }", self.acss)
+        self.assertIn(".aslot.empty:not(.cosmetic) { border-color:var(--caution-text);",
+                      self.acss)
 
     def test_every_quality_borders_its_slot(self):
         """The quality colour is the border of the icon, as the reference
@@ -278,9 +462,49 @@ class TheArmoryTab(unittest.TestCase):
         self.assertIn("grid-template-columns:repeat(2,minmax(0,1fr))", self.css)
         self.assertIn("grid-template-columns:repeat(3,minmax(0,1fr))", self.css)
 
-    def test_the_tooltip_is_a_sheet_on_a_phone(self):
-        """There is no 'beside the slot' on a 390px screen."""
-        self.assertIn("if (window.innerWidth <= 600) {", self.tab)
+    def test_one_content_breakpoint_and_it_is_the_handoffs(self):
+        """Mobile first, and the doll goes beside the stat block at 640. The
+        profile GRID still widens later, which is a different question - how
+        many profiles fit on a monitor, not how one profile is laid out."""
+        self.assertIn("@media (min-width:640px) { .abody {", self.acss)
+        self.assertNotIn("min-width:760px", self.acss)
+
+    def test_every_thumb_target_on_this_tab_clears_44px(self):
+        """The jump links were 26px of text: five of them, wrapped, on the
+        one device this tab is most likely to be read from."""
+        self.assertIn("min-height:44px", self.acss)
+        self.assertIn(".atoggle { min-height:44px;", self.acss)
+
+    def test_the_armory_paints_text_from_roles_and_never_from_a_pigment(self):
+        """A PIGMENT TOKEN SAYS WHAT A COLOUR IS; A ROLE SAYS WHAT IT IS FOR,
+        and only a role survives being moved to another ground. This section
+        is the page's one dark surface, where --rust lands at about 2.2:1 -
+        so `color:var(--rust)` here is not a style choice, it is text nobody
+        can read, and it was exactly what #aheadline.alarm said."""
+        for pigment in ("--rust", "--vermilion", "--amber", "--amber-text",
+                        "--green", "--deep-green", "--cyan"):
+            self.assertNotIn("color:var(%s)" % pigment, self.acss,
+                             "a text colour taken from a pigment token")
+        self.assertIn("#aheadline.alarm { color:var(--warn-text); }", self.acss)
+
+    def test_the_dark_card_carries_the_handoffs_own_text_ramp(self):
+        """Three tiers, stated once in the scope rather than as three greys
+        scattered through the rules."""
+        scope = self.page[self.page.index("#armory {"):]
+        scope = scope[:scope.index("}")]
+        for token in ("--on-dark:#E8EFE6", "--on-dark-dim:#B9C9BC",
+                      "--on-dark-faint:#8FA396"):
+            self.assertIn(token, scope, token)
+        for role in ("--warn-text:", "--caution-text:", "--accent-text:"):
+            self.assertIn(role, scope, role + " is not re-pigmented for the dark card")
+
+    def test_rare_is_lifted_off_the_clients_own_blue_exactly_once(self):
+        """#0070dd is under 3:1 on this card and #3f9bf5 was a first attempt
+        at fixing that. Two values for one canonical colour is the drift this
+        file's own comments are about, so there is one."""
+        self.assertIn(".q3 { color:#3B9DFF; }", self.acss)
+        self.assertIn(".aslot.q3 { border-color:#3B9DFF; }", self.acss)
+        self.assertNotIn("#3f9bf5", self.page)
 
     def test_the_page_says_the_numbers_are_a_save_rather_than_a_live_read(self):
         """The core writes these on a timer measured in minutes. Without the
