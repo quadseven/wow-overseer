@@ -22,6 +22,7 @@ import re
 
 import bonds
 import stream
+import watchwall
 from core import _ALLIANCE_RACES, _HORDE_RACES
 from panel import _CLASS_NAMES, _RACE_NAMES, CLASS_COLOURS
 
@@ -235,6 +236,12 @@ def build_family(rows: list[dict], geo) -> dict:
     present = [m for m in members if m["present"]]
     return {
         "members": members,
+        # THE WALL IS COMPOSED HERE rather than in the page, because deciding
+        # what a tile says is judgement and infra#2597 puts judgement in a
+        # module the stdlib suite can reach. It rides on this payload rather
+        # than on an endpoint of its own so the wall and the cards can never
+        # disagree about who is dead: they are the same five dicts, read once.
+        "wall": watchwall.build_wall(members),
         "here": len(present),
         "expected": len(members),
         "dead": sum(1 for m in present if m["condition"] == DEAD),

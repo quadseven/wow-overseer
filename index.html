@@ -1026,6 +1026,68 @@
             cursor:pointer; font:inherit; padding:.3rem .6rem; }
   #fqmore:hover { color:var(--text); border-color:var(--dim); }
   .qbempty { color:var(--dim); padding:.6rem .2rem; }
+  /* --- THE WATCH WALL (infra#2597) ---------------------------------------
+     Three shapes for the same five tiles, and the tiles are the SAME NODES
+     the Family tab uses. layoutBroadcasts() re-parents them; nothing here
+     rebuilds one, because rebuilding a tile is tearing down a live
+     PeerConnection and reconnecting it across the tailnet for a layout
+     change nobody asked to pay for.
+
+     WHY HERO IS OPT-IN AND NEVER THE DEFAULT. This page HAD a hero layout -
+     one big player, four thumbnails - and infra#88 removed it because on a
+     phone the four were the smallest thing on the screen. The operator's
+     words were "the twitch view is so tiny". Bringing it back as the default
+     would be walking straight back into that. It is back as a CHOICE, and
+     below the breakpoint it collapses into the stacked column rather than
+     shrinking four tiles into a rail nobody can see. */
+  #wall { display:grid; gap:.7rem; }
+  #wall.m-five-up { grid-template-columns:repeat(auto-fit, minmax(320px, 1fr)); }
+  #wall.m-stacked { grid-template-columns:1fr; max-width:900px; margin-inline:auto; }
+  #wall.m-hero { grid-template-columns:repeat(4, 1fr); }
+  /* The hero spans the full row above its own rail. `order` is NOT used to
+     move it: the roster is seniority and the wall must not reorder, so the
+     hero is promoted by SPAN while every tile keeps its place in the DOM. */
+  #wall.m-hero > .wslot.hero { grid-column:1 / -1; }
+  @media (max-width:760px) {
+    #wall.m-hero { grid-template-columns:1fr; }
+    #wall.m-hero > .wslot.hero { grid-column:auto; }
+  }
+  .wslot { position:relative; }
+  /* Same reservation rule the Family tab's .fstream follows, and for the same
+     reason: makePlayer owns the tile's display, so a shape hung on the tile
+     is worth nothing in the window before it connects. */
+  .wslot { aspect-ratio:16/9; background:#000; border-radius:8px;
+           overflow:hidden; border:1px solid var(--line); }
+  .wslot.hero { aspect-ratio:16/9; }
+  /* The tone ring. Colour is the LAST thing that says a character is dead -
+     the caption says it in words first - so this is a border, not a wash
+     over the picture somebody came to look at. */
+  .wslot.t-dead { border-color:var(--vermilion); }
+  .wslot.t-combat { border-color:var(--amber); }
+  .wslot.t-hurt { border-color:var(--amber); }
+  .wslot.t-gone { border-color:var(--line); opacity:.72; }
+  .wslot.t-calm { border-color:var(--line); }
+  .wbar { display:flex; flex-wrap:wrap; gap:.5rem; align-items:center;
+          margin-bottom:.7rem; }
+  /* 44px on every control: this is read with a thumb, same as #fqmore. */
+  .wbar button { min-height:44px; background:var(--panel); color:var(--dim);
+                 border:1px solid var(--line); border-radius:8px; cursor:pointer;
+                 font:inherit; padding:.3rem .9rem; letter-spacing:.06em; }
+  .wbar button:hover { color:var(--text); border-color:var(--dim); }
+  .wbar button[aria-pressed="true"] { color:var(--ink); background:var(--green);
+                                      border-color:var(--green); }
+  .wbar button:focus-visible { outline:2px solid var(--alliance);
+                               outline-offset:2px; }
+  .wspacer { flex:1 1 auto; }
+  /* The leader warning is a SENTENCE, not a badge, because what it says needs
+     a sentence: the family behaves differently while observed. It renders in
+     every mode - a truth that only appears in one layout is one a viewer can
+     miss by preferring another. */
+  #wallwarn { border-left:3px solid var(--amber); background:#d299221a;
+           color:var(--text); padding:.6rem .8rem; border-radius:0 8px 8px 0;
+           margin-bottom:.7rem; max-width:70ch; line-height:1.5; }
+  #wallwarn[hidden] { display:none; }
+  #wallhead { color:var(--dim); margin-bottom:.7rem; }
 </style>
 <script>
   // WHERE THIS PAGE IS MOUNTED, AND WHY EVERY URL BELOW GOES THROUGH ONE
@@ -1137,6 +1199,22 @@
     <div id="fqlist"></div>
     <button id="fqmore" hidden></button>
   </div>
+</section>
+<!-- THE WATCH WALL. Deliberately its own view rather than a wider Family tab:
+     the Family tab answers "are my five all right" and is read in a hurry,
+     and burying five live players in it makes that answer slower to reach.
+     Everything inside is drawn from /api/family's `wall` key, which watchwall
+     composes - this markup holds no sentence of its own. -->
+<section id="watch">
+  <div id="wallhead">reaching the world...</div>
+  <div class="wbar">
+    <div id="wallmodes" role="group" aria-label="wall layout"></div>
+    <span class="wspacer"></span>
+    <button id="wallsound" type="button" aria-pressed="false"
+            title="A short synthesised tone when a character enters combat or dies. Off until you ask for it: a page that makes noise on load is a page that gets closed.">sound off</button>
+  </div>
+  <p id="wallwarn" hidden></p>
+  <div id="wall"></div>
 </section>
 <section id="armory">
   <div id="aheadline">reaching the world...</div>
@@ -1264,7 +1342,17 @@ async function loadZones() {
   fb.dataset.view = FAMILY_VIEW;
   fb.onclick = () => showView(FAMILY_VIEW);
   tabs.appendChild(fb);
-  // Second, next to the family it describes: it answers "why did that go
+  // SECOND, AND NOT FIRST. The wall is the headline of this redesign and the
+  // reason to have the site open at all, but Family is first for a reason
+  // that has not stopped being true (infra#2892): "are my five all right" is
+  // the question asked from a phone, and it must not move. So the wall takes
+  // the next best place rather than a decision somebody already made.
+  const wb = document.createElement("button");
+  wb.textContent = "Watch";
+  wb.dataset.view = WATCH_VIEW;
+  wb.onclick = () => showView(WATCH_VIEW);
+  tabs.appendChild(wb);
+  // Third, next to the family it describes: it answers "why did that go
   // badly", which is the question asked straight after "are they all right".
   const ab = document.createElement("button");
   ab.textContent = "Armory";
@@ -2320,7 +2408,28 @@ function refreshMind() { if (mind.name && !mind.busy) fetchThoughts(null); }
 // view is so tiny". The five feeds are now the whole width of the tab, and
 // the five quest logs became one board beneath them.
 const FAMILY_VIEW = "family";
+const WATCH_VIEW = "watch";
 const fsection = document.getElementById("family");
+const watchsection = document.getElementById("watch");
+const wallEl = document.getElementById("wall");
+const wallmodes = document.getElementById("wallmodes");
+const wallwarn = document.getElementById("wallwarn");
+const wallhead = document.getElementById("wallhead");
+const wallsound = document.getElementById("wallsound");
+// OFF UNTIL ASKED FOR, and the stored value has to say "on" in as many words
+// rather than merely being present. A page that makes a noise on load is a
+// page that gets closed, and a viewer who once turned it on for a Deadmines
+// run should not be startled by it a week later on a phone in a meeting.
+wallsound.onclick = () => {
+  wall.sound = !wall.sound;
+  wallStore(WALL_SOUND_KEY, wall.sound ? "on" : "off");
+  wallsound.textContent = wall.sound ? "sound on" : "sound off";
+  wallsound.setAttribute("aria-pressed", String(wall.sound));
+  // Built inside the click, because an AudioContext created any earlier
+  // starts suspended under every autoplay policy and the first real cue
+  // would be silent with nothing on screen to explain it.
+  if (wall.sound) wallCue("combat");
+};
 const ffeeds = document.getElementById("ffeeds");
 const fheadline = document.getElementById("fheadline");
 const legend = document.querySelector("footer");
@@ -2535,20 +2644,175 @@ function broadcastTile(name) {
   return t;
 }
 
+// --- the Watch wall (infra#2597) -----------------------------------------
+//
+// EVERY SENTENCE ON THIS VIEW COMES FROM watchwall.py. What a tile says, what
+// tone it carries, who may be the hero and whether the leader warning applies
+// are all judgement, and judgement lives in a module the stdlib suite can
+// reach with no browser and no database. The code below places nodes and
+// makes noises. If you find yourself about to write
+// `m.condition === "dead" ? ... : ...` in here, it belongs in the module.
+const WALL_MODE_KEY = "overseer-wall-mode";
+const WALL_HERO_KEY = "overseer-wall-hero";
+const WALL_SOUND_KEY = "overseer-wall-sound";
+const wall = { mode: null, hero: null, sound: false, modeList: [],
+               slots: new Map(), tones: new Map(), audio: null };
+
+// localStorage THROWS rather than returning null in a private window or with
+// site data blocked, and an unwrapped read here would stop the wall drawing
+// at all - a far worse outcome than forgetting which layout somebody liked.
+function wallStored(key) {
+  try { return window.localStorage.getItem(key); } catch (e) { return null; }
+}
+function wallStore(key, value) {
+  try { window.localStorage.setItem(key, value); } catch (e) { /* fine */ }
+}
+
+function wallSlot(name) {
+  let slot = wall.slots.get(name);
+  if (slot) return slot;
+  slot = el("div", "wslot");
+  slot.dataset.name = name;
+  // Clicking a tile promotes it. Only visible in hero mode, and harmless in
+  // the other two, where it records a preference for the next time hero mode
+  // is chosen rather than doing nothing at all.
+  slot.onclick = () => {
+    wall.hero = name;
+    wallStore(WALL_HERO_KEY, name);
+    if (wall.mode === "hero") applyWallLayout();
+  };
+  wall.slots.set(name, slot);
+  return slot;
+}
+
+// A SHORT SYNTHESISED TONE, not a file: this page ships as one HTML document
+// with no build step, and an audio asset would be a second thing to deploy
+// and a second way to 404. Two notes, and they differ in DIRECTION rather
+// than only in pitch - a fall for a death, a rise for a fight - because
+// somebody who is not looking at the screen can tell those apart without
+// having been taught them.
+function wallCue(kind) {
+  if (!wall.sound) return;
+  try {
+    const Ctx = window.AudioContext || window.webkitAudioContext;
+    if (!Ctx) return;
+    if (!wall.audio) wall.audio = new Ctx();
+    const ctx = wall.audio;
+    // A context built before the first real click starts suspended, by
+    // design, in every browser that has an autoplay policy.
+    if (ctx.state === "suspended") ctx.resume();
+    const osc = ctx.createOscillator(), gain = ctx.createGain();
+    const t0 = ctx.currentTime;
+    osc.type = "sine";
+    osc.frequency.setValueAtTime(kind === "dead" ? 440 : 330, t0);
+    osc.frequency.exponentialRampToValueAtTime(kind === "dead" ? 220 : 494,
+                                               t0 + 0.18);
+    // Ramped rather than stopped flat: an oscillator cut at full amplitude
+    // clicks, and a click is what a broken page sounds like.
+    gain.gain.setValueAtTime(0.0001, t0);
+    gain.gain.exponentialRampToValueAtTime(0.09, t0 + 0.02);
+    gain.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.42);
+    osc.connect(gain).connect(ctx.destination);
+    osc.start(t0);
+    osc.stop(t0 + 0.45);
+  } catch (e) { /* a wall that cannot make a noise is still a wall */ }
+}
+
+function applyWallLayout() {
+  wallEl.className = "";
+  if (wall.mode) wallEl.classList.add("m-" + wall.mode);
+  for (const b of wallmodes.querySelectorAll("button")) {
+    b.setAttribute("aria-pressed", String(b.dataset.mode === wall.mode));
+  }
+  for (const [name, slot] of wall.slots) {
+    slot.classList.toggle("hero", wall.mode === "hero" && name === wall.hero);
+  }
+  layoutBroadcasts();
+}
+
+function renderWall(p) {
+  const w = p.wall;
+  if (!w) return;
+  wall.modeList = w.modes;
+  if (!wall.mode) {
+    // Validated against the modes the server named, for the same reason
+    // watchwall validates the hero: it arrives from browser storage, which is
+    // to say from anywhere, and an unknown mode is a wall with no layout.
+    const stored = wallStored(WALL_MODE_KEY);
+    wall.mode = w.modes.indexOf(stored) >= 0 ? stored : w.default_mode;
+  }
+  if (!wallmodes.firstChild) {
+    for (const m of w.modes) {
+      const b = el("button", null, w.mode_labels[m] || m);
+      b.type = "button";
+      b.dataset.mode = m;
+      b.onclick = () => {
+        wall.mode = m;
+        wallStore(WALL_MODE_KEY, m);
+        applyWallLayout();
+      };
+      wallmodes.appendChild(b);
+    }
+  }
+  // The hero the module named is the FALLBACK, never an override: watchwall already
+  // decided who leads when nobody has chosen, and a stored name is honoured
+  // only when it is one of the five actually on the wall.
+  const names = w.tiles.map((t) => t.name);
+  const chosen = wall.hero || wallStored(WALL_HERO_KEY);
+  wall.hero = names.indexOf(chosen) >= 0 ? chosen : w.hero;
+
+  // ROSTER ORDER, STRAIGHT FROM THE PAYLOAD, never sorted here. The module
+  // has tests pinning that the wall does not reorder, and re-sorting in the
+  // page would move that guarantee somewhere no test can see it.
+  for (const t of w.tiles) {
+    const slot = wallSlot(t.name);
+    slot.classList.remove("t-dead", "t-combat", "t-hurt", "t-gone", "t-calm");
+    slot.classList.add("t-" + t.tone);
+    slot.title = t.name + " - " + t.line;
+    if (slot.parentElement !== wallEl) wallEl.appendChild(slot);
+    // A TONE CHANGE, not a tone. Cueing on the state itself would sound the
+    // alarm every five seconds for as long as a fight lasted, which is how a
+    // sound feature gets switched off and never switched back on.
+    const was = wall.tones.get(t.name);
+    if (was && was !== t.tone && (t.tone === "dead" || t.tone === "combat")) {
+      wallCue(t.tone);
+    }
+    wall.tones.set(t.name, t.tone);
+  }
+  wallwarn.textContent = w.warning || "";
+  wallwarn.hidden = !w.warning;
+  // Counted from what the module marked playable rather than from a
+  // constant. The wall shows the continuous broadcasts, which have no channel
+  // budget - watchwall says in its docstring why that vocabulary is missing
+  // here on purpose.
+  const live = w.tiles.filter((t) => t.playable).length;
+  wallhead.textContent = live + " of " + w.tiles.length + " broadcasting";
+  applyWallLayout();
+}
+
 // Moves the DOM node, not the connection - see the block comment above.
 function layoutBroadcasts() {
   for (const [name, t] of broadcasts.tiles) {
-    // HOME IS THE CHARACTER'S OWN CARD. familyCard() builds the card on
-    // demand and is idempotent, so this works whichever of the two polls
-    // answers first - the quest poll alone is enough to draw a card for
-    // somebody who is not in the world.
-    const target = familyCard(name).stream;
+    // HOME IS THE CHARACTER OWN CARD, unless the wall is open. Either way the
+    // tile is MOVED and never rebuilt, so switching to the wall mid-fight
+    // does not drop and re-establish five PeerConnections across the tailnet.
+    const target = view === WATCH_VIEW
+      ? wallSlot(name)
+      : familyCard(name).stream;
     if (t.tile.parentElement !== target) target.appendChild(t.tile);
   }
 }
 
+// The tile captions, keyed by name, taken from the wall the module composed.
+// A plain Map rather than a lookup through wall.slots: renderBroadcasts runs
+// before renderWall on the very first poll, and reaching into state that does
+// not exist yet is how a first render comes up blank.
+const wallLines = new Map();
+
 function renderBroadcasts(p) {
   const now = Date.now();
+  wallLines.clear();
+  for (const t of (p.wall && p.wall.tiles) || []) wallLines.set(t.name, t.line);
   for (const m of p.members) {
     const t = broadcastTile(m.name);
     // classList operations, never a className RESET: "offline" is set from
@@ -2561,7 +2825,12 @@ function renderBroadcasts(p) {
       : m.name;
     t.nm.style.color = m.condition === "dead" ? "#ff9d9d" : (m.class_colour || "");
     t.fill.style.width = (m.present ? m.health_pct : 0) + "%";
-    t.zone.textContent = m.present ? m.zone : "not in the world";
+    // THE SENTENCE COMES FROM watchwall, not from a ternary here. It used to
+    // read `m.present ? m.zone : "not in the world"`, which is a judgement
+    // about what absence means, made in the one place the suite cannot read.
+    // The module says "logged out" instead, and says it once for both the
+    // card and the wall so the two cannot word it differently.
+    t.zone.textContent = wallLines.get(m.name) || "";
     // t.off's text is NOT set here - the note callback above owns it, with
     // the exact reason the connection is not live. Overwriting it on every
     // 5s poll would replace a real answer ("the gaming box is not
@@ -2611,6 +2880,11 @@ function stopBroadcasts() {
 function renderFamily(p) {
   fam.byName = new Map(p.members.map((m) => [m.name, m]));
   renderBroadcasts(p);
+  // Drawn on every poll rather than only while the wall is open, so switching
+  // to it shows the current five instead of a blank grid for up to five
+  // seconds. Placing the tiles is layoutBroadcasts, which already refuses to
+  // move anything that is where it belongs.
+  renderWall(p);
   const bits = [p.here + " of " + p.expected + " here"];
   if (p.dead) bits.push(p.dead === 1 ? "1 DEAD" : p.dead + " DEAD");
   if (p.in_combat) bits.push(p.in_combat + " fighting");
@@ -2988,8 +3262,12 @@ async function refreshFamilyWatch() {
   updateFamilyButtons();
 }
 
+// ONE POLL, TWO VIEWS. The wall and the Family cards read the same payload,
+// and giving the wall an endpoint of its own would let the two disagree about
+// who is dead - which is the kind of disagreement nobody catches, because
+// only one of them is ever on screen to be checked.
 async function pollFamily() {
-  if (view !== FAMILY_VIEW) return;
+  if (view !== FAMILY_VIEW && view !== WATCH_VIEW) return;
   try {
     const r = await fetch(u("/api/family"));
     if (!r.ok) throw new Error(r.status);
@@ -3037,9 +3315,11 @@ function showView(v) {
   const want = hashFor(v);
   if (location.hash !== want) history.replaceState(null, "", want);
   const isFam = v === FAMILY_VIEW;
+  const isWatch = v === WATCH_VIEW;
   const isArm = v === ARMORY_VIEW;
   const isAch = v === ACH_VIEW;
   fsection.style.display = isFam ? "block" : "none";
+  watchsection.style.display = isWatch ? "block" : "none";
   asection.style.display = isArm ? "block" : "none";
   achsection.style.display = isAch ? "block" : "none";
   // Every non-map view hides the canvas and its legend. This used to read
@@ -3056,6 +3336,17 @@ function showView(v) {
     pollFamily();
     pollQuests();
     refreshFamilyWatch();
+    return;
+  }
+  if (isWatch) {
+    // The same treatment the Family tab gets, and for the same reasons: the
+    // panel is a map thing that would keep a second player alive off screen,
+    // and the grid has to be told it may connect before the poll that hands
+    // it the URLs. No watch heartbeat here on purpose - the wall shows the
+    // continuous broadcasts, which nothing on this page starts or stops.
+    closePanel();
+    startBroadcasts();
+    pollFamily();
     return;
   }
   if (isArm) {
@@ -3100,6 +3391,10 @@ function showView(v) {
   }
 }
 
+// Read once, at startup, and only "on" counts - see the toggle above.
+wall.sound = wallStored(WALL_SOUND_KEY) === "on";
+wallsound.textContent = wall.sound ? "sound on" : "sound off";
+wallsound.setAttribute("aria-pressed", String(wall.sound));
 setInterval(pollFamily, 5000);         // the family rides the same 5s cadence
 setInterval(refreshFamilyWatch, 5000); // and so does the watch it owns
 setInterval(pollQuests, 30000);        // quest rows are a save, not a stream
