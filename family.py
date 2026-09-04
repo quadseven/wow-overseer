@@ -117,6 +117,47 @@ def roster() -> list[str]:
     return bonds.speaking_order(bonds.FAMILY)
 
 
+# THE GLYPH TILE, WHICH IS NOT A PHOTO SLOT. 64 pixels cannot hold a portrait
+# with any chrome around it, and there is no portrait to hold: these are game
+# characters whose only likeness on this page is the live broadcast above the
+# tile. So the tile is a MARK - the character's initials over a two-letter
+# stand-in for their race - and the two functions that build it are here
+# because a label is a decision about what to call something, which is the
+# same rule that keeps every other word on this card out of the page.
+
+
+def race_mark(race: str) -> str:
+    """A race as two letters: "human" -> HU, "night elf" -> NE.
+
+    Two WORDS take an initial each and one word takes its first two letters,
+    which is what keeps the four elf races apart: "night elf" and "blood elf"
+    both start "bl"/"ni" harmlessly, but "ni" and "bl" say nothing while NE
+    and BE are what players already write. An empty race gives an empty mark
+    rather than a placeholder, so a tile with nothing to say draws nothing.
+    """
+    words = (race or "").split()
+    if not words:
+        return ""
+    if len(words) > 1:
+        return (words[0][:1] + words[1][:1]).upper()
+    return words[0][:2].upper()
+
+
+def initials(name: str) -> str:
+    """The letters that go on the tile: "Grug" -> G.
+
+    At most two, because three initials in a 64px tile is a word rather than a
+    mark. Every one of the five has a single name today; this handles the
+    other shape rather than assuming it away.
+    """
+    words = (name or "").split()
+    if not words:
+        return ""
+    if len(words) > 1:
+        return (words[0][:1] + words[1][:1]).upper()
+    return words[0][:1].upper()
+
+
 def _condition(health: int, max_health: int) -> str:
     # max_health of 0 is a snapshot mid-write, not a corpse. Calling that
     # "dead" would put a red card on screen for a character running about
@@ -139,6 +180,12 @@ def _member(name: str, row: dict | None, geo, leader_name: str | None) -> dict:
             "role": bond.role,
             "class": bond.char_class.title(),
             "class_colour": class_colour_by_name(bond.char_class),
+            # The glyph tile is drawn for a logged-out member too. The card
+            # still carries their name, and a card whose picture, bars and
+            # zone have all gone quiet is exactly the one that needs a mark
+            # on it to still read as somebody.
+            "initials": initials(name),
+            "mark": race_mark(bond.race),
             "present": False,
             "condition": GONE,
             # A logged-out character can still be mid-broadcast for a beat -
@@ -162,6 +209,8 @@ def _member(name: str, row: dict | None, geo, leader_name: str | None) -> dict:
         # Armory and the quest board's portraits use for the same person.
         "class_colour": CLASS_COLOURS.get(class_id, "#ffffff"),
         "race": _RACE_NAMES.get(race, f"race {race}"),
+        "initials": initials(row["name"]),
+        "mark": race_mark(_RACE_NAMES.get(race, "")),
         "faction": "alliance" if race in _ALLIANCE_RACES
                    else "horde" if race in _HORDE_RACES else "neutral",
         "condition": _condition(health, max_health),

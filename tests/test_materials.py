@@ -381,5 +381,128 @@ class BlockedTest(unittest.TestCase):
         self.assertTrue(said[0].startswith("Grug: "))
 
 
+
+class RefusalCountsTest(unittest.TestCase):
+    """`stuck` used to be the only reading of the give rows, and it answers one
+    question: has this pair been refused enough times to be believed. A view
+    showing "1 of 3" is showing a person the thing that is about to happen,
+    which is a different question over the same rows."""
+
+    def test_a_pair_nobody_has_refused_is_absent(self):
+        counts = materials.refusal_counts(
+            [materials.Attempt("Grug", "Og", "pending")])
+        self.assertEqual(counts, {})
+
+    def test_one_refusal_is_counted_even_though_nothing_is_stuck_yet(self):
+        attempts = [materials.Attempt("Grug", "Og", "error", "bags are full")]
+        self.assertEqual(materials.refusal_counts(attempts)[("Grug", "Og")],
+                         (1, "bags are full"))
+        self.assertEqual(materials.stuck(attempts), {})
+
+    def test_a_delivery_starts_the_count_again(self):
+        attempts = [materials.Attempt("Grug", "Og", "error", "bags are full"),
+                    materials.Attempt("Grug", "Og", "error", "bags are full"),
+                    materials.Attempt("Grug", "Og", "delivered")]
+        self.assertEqual(materials.refusal_counts(attempts)[("Grug", "Og")][0], 0)
+
+    def test_a_refusal_with_no_reason_still_says_something(self):
+        attempts = [materials.Attempt("Grug", "Og", "error", "")]
+        self.assertEqual(materials.refusal_counts(attempts)[("Grug", "Og")][1],
+                         materials.NO_REASON_GIVEN)
+
+    def test_stuck_is_this_with_the_threshold_applied(self):
+        attempts = [materials.Attempt("Grug", "Og", "error", "bags are full")
+                    ] * materials.GIVE_UP_AFTER
+        self.assertEqual(materials.stuck(attempts),
+                         {("Grug", "Og"): "bags are full"})
+
+
+class TheBoardTest(unittest.TestCase):
+    """What the Family view draws, which is a READ of the plan the bridge is
+    already acting on rather than a second plan with different inputs."""
+
+    def holdings(self):
+        return [
+            materials.Holding("Grug", "Linen Cloth", 20, 1),
+            materials.Holding("Grug", "Linen Cloth", 19, 2),
+            materials.Holding("Bork", "Linen Cloth", 19, 3),
+        ]
+
+    def test_two_stacks_in_one_pair_of_bags_are_one_row(self):
+        """The double line that started #3197: two guids the world moves
+        separately are one thing a person reads."""
+        rows = materials.board(self.holdings())["rows"]
+        grug = [r for r in rows if r.holder == "Grug"]
+        self.assertEqual(len(grug), 1)
+        self.assertEqual(grug[0].count, 39)
+
+    def test_a_waiting_handover_carries_the_moving_word(self):
+        for row in materials.board(self.holdings())["rows"]:
+            self.assertEqual(row.word, materials.MOVING)
+            self.assertFalse(row.blocked)
+            self.assertEqual(row.refusal_line, "")
+
+    def test_a_refused_pair_is_a_different_kind_of_row(self):
+        attempts = [materials.Attempt("Grug", "Og", "error", "receiver bags are full")
+                    ] * materials.GIVE_UP_AFTER
+        rows = materials.board(self.holdings(), attempts=attempts)["rows"]
+        grug = next(r for r in rows if r.holder == "Grug")
+        self.assertTrue(grug.blocked)
+        self.assertEqual(grug.word, materials.gave_up_word())
+        self.assertIn("receiver bags are full", grug.refusal_line)
+        self.assertIn(str(materials.GIVE_UP_AFTER), grug.word)
+
+    def test_a_blocked_row_still_says_how_much_is_stuck(self):
+        """"Og bags full" is worth reading. "39 Linen Cloth is stuck in Grug's
+        bags because Og bags full" is worth acting on."""
+        attempts = [materials.Attempt("Grug", "Og", "error", "full")
+                    ] * materials.GIVE_UP_AFTER
+        rows = materials.board(self.holdings(), attempts=attempts)["rows"]
+        grug = next(r for r in rows if r.holder == "Grug")
+        self.assertEqual(grug.count, 39)
+        self.assertIn("39", grug.title)
+
+    def test_a_refused_pair_is_never_also_proposed(self):
+        """The family has stopped asking. A row that said both would be the
+        loop mod-overseer#169 is about, drawn twice."""
+        attempts = [materials.Attempt("Grug", "Og", "error", "full")
+                    ] * materials.GIVE_UP_AFTER
+        rows = materials.board(self.holdings(), attempts=attempts)["rows"]
+        self.assertEqual(len([r for r in rows if r.holder == "Grug"]), 1)
+
+    def test_the_rows_say_exactly_what_the_family_says(self):
+        """Not a paraphrase. A view that reworded the line would put a sentence
+        on screen nobody ever spoke."""
+        plan = materials.plan(self.holdings())
+        spoken = [h.said for h in materials.handovers(plan.grants)]
+        self.assertEqual([r.said for r in materials.board(self.holdings())["rows"]],
+                         spoken)
+
+    def test_nothing_to_move_is_said_rather_than_left_empty(self):
+        board = materials.board([])
+        self.assertEqual(board["rows"], ())
+        self.assertIn("nothing wants to move", board["headline"])
+
+    def test_the_rule_is_built_from_the_threshold(self):
+        """The sentence is the whole point of the section: a family that says a
+        doomed handover once and stops is telling the truth, and a reader has
+        to know the silence afterwards is the rule rather than a lost row."""
+        self.assertIn(str(materials.GIVE_UP_AFTER), materials.giving_up_rule())
+        self.assertIn("7", materials.giving_up_rule(threshold=7))
+
+    def test_a_title_with_no_count_does_not_claim_zero(self):
+        row = materials.Move(holder="Grug", taker="Og", material="Linen Cloth",
+                             skill="tailoring", count=0, said="", word="",
+                             blocked=True, refusals=3, refusal="full")
+        self.assertNotIn("0", row.title)
+
+    def test_the_row_key_is_stable_across_two_identical_reads(self):
+        """The page reuses a row rather than rebuilding it, and a key that
+        moved would rebuild every row on every poll."""
+        first = [r.key for r in materials.board(self.holdings())["rows"]]
+        second = [r.key for r in materials.board(self.holdings())["rows"]]
+        self.assertEqual(first, second)
+        self.assertEqual(len(set(first)), len(first))
+
 if __name__ == "__main__":
     unittest.main()

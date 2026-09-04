@@ -227,13 +227,24 @@ def crafter_for(material: str) -> str:
 GIVE_UP_AFTER = 3
 
 
-def stuck(attempts, *, threshold: int = GIVE_UP_AFTER) -> dict:
-    """(holder, taker) -> the refusal the world keeps giving back.
+# What a refusal reads as when the world gave one and said nothing about it.
+# Named because it is a SENTENCE the family repeats out loud, and a sentence
+# that appears in two places is a sentence that gets edited in one of them.
+NO_REASON_GIVEN = "the world refused it, and said nothing about why"
+
+
+def refusal_counts(attempts) -> dict:
+    """(holder, taker) -> (how many refusals running, what the world said).
 
     Only `status='error'` counts. A pending give is one nobody has answered
     yet and must not be mistaken for a refusal - that is exactly the
     distinction mod-overseer#169 asks for - and a delivered one is not a
     failure at all, so a pair that has ever succeeded starts again from zero.
+
+    EVERY refused pair, however few times, which is the difference between
+    this and `stuck`. The family only ever acts on the ones past the
+    threshold, but a view showing "1 of 3" is showing a person the thing that
+    is about to happen rather than announcing it after the fact.
     """
     counts: dict = {}
     refusals: dict = {}
@@ -253,8 +264,22 @@ def stuck(attempts, *, threshold: int = GIVE_UP_AFTER) -> dict:
         if detail:
             refusals[pair] = detail
     return {
-        pair: refusals.get(pair, "the world refused it, and said nothing about why")
+        pair: (seen, refusals.get(pair, NO_REASON_GIVEN))
         for pair, seen in counts.items()
+    }
+
+
+def stuck(attempts, *, threshold: int = GIVE_UP_AFTER) -> dict:
+    """(holder, taker) -> the refusal the world keeps giving back.
+
+    `refusal_counts` with the threshold applied: the pairs the family has
+    stopped asking about. Kept as its own name because that is what the
+    bridge asks for, and because "refused once" and "refused enough times to
+    be believed" are two different facts that must not share a spelling.
+    """
+    return {
+        pair: reason
+        for pair, (seen, reason) in refusal_counts(attempts).items()
         if seen >= threshold
     }
 
@@ -399,3 +424,172 @@ def lines(material_plan: Plan, *, held: Mapping | None = None) -> list:
     spoken = [f"{h.holder}: {h.said}" for h in handovers(material_plan.grants, held=held)]
     spoken += [f"{b.holder}: {b.said}" for b in material_plan.blocked]
     return spoken
+
+
+# --- WHAT WANTS TO MOVE, AS SOMETHING TO LOOK AT (infra#2597) --------------
+#
+# The functions above are what the bridge calls: they decide what moves and
+# what gets said in party chat. This is the same answer shaped for a person
+# LOOKING at the family rather than listening to it, and it exists here rather
+# than in the page for the reason infra#2597 states in one line: a status
+# word, a threshold and a sentence are judgement, and judgement belongs in a
+# module the stdlib suite can import with no database and no browser.
+#
+# It is deliberately a READ. Nothing here inserts a command, and nothing here
+# decides anything `plan` has not already decided - a view that could change
+# what the family does by being looked at is a view nobody can trust.
+
+# The status word a row carries. `GAVE UP AFTER n` is built from the threshold
+# rather than typed, so it cannot go on claiming three the day somebody
+# changes GIVE_UP_AFTER.
+MOVING = "WANTS TO MOVE"
+
+
+def gave_up_word(threshold: int = GIVE_UP_AFTER) -> str:
+    return "GAVE UP AFTER %d" % threshold
+
+
+@dataclass(frozen=True)
+class Move:
+    """One row of "what wants to move": a handover, or one given up on."""
+
+    holder: str
+    taker: str
+    material: str
+    skill: str
+    # Every stack in this intent added together - the same merge `handovers`
+    # does, and for the same reason: two stacks of linen are two guids the
+    # world moves separately and ONE thing a person reads.
+    count: int
+    # What the family says about it, from `_said_for` for a live handover and
+    # from `Blocked.said` for one that has been given up on. The exact
+    # sentence, not a paraphrase: a view that reworded it would be showing
+    # something nobody ever said.
+    said: str
+    word: str
+    blocked: bool
+    # How many times running the world has refused this pair, and its own
+    # words for why. Zero and "" for a handover nobody has refused yet.
+    refusals: int
+    refusal: str
+
+    @property
+    def key(self) -> str:
+        """A stable id for one row, so a view reuses it rather than rebuilding
+        it. Not `Handover.key`, which is the say-it-once key and is a tuple."""
+        return "%s>%s>%s" % (self.holder, self.taker, self.material)
+
+    @property
+    def title(self) -> str:
+        """Who is handing what to whom, over the sentence they say about it.
+
+        A blocked row can have a count of zero - the stack it was about is no
+        longer in those bags - and "0 Linen Cloth" would read as a bug rather
+        than as the honest "we do not know how much any more". So the count is
+        dropped when there is none rather than printed as nothing.
+        """
+        if not self.count:
+            return "%s to %s: %s" % (self.holder, self.taker, self.material)
+        return "%s to %s: %d %s" % (self.holder, self.taker, self.count,
+                                    self.material)
+
+    @property
+    def refusal_line(self) -> str:
+        """What the world said, and how many times running it said it.
+
+        Empty for a handover nobody has refused: a row that printed "refused 0
+        times" about a give that is simply waiting would turn every plan into
+        a failure report.
+        """
+        if not self.blocked and not self.refusals:
+            return ""
+        return "refused %d time%s: %s" % (
+            self.refusals, "" if self.refusals == 1 else "s",
+            self.refusal or NO_REASON_GIVEN,
+        )
+
+
+def giving_up_rule(threshold: int = GIVE_UP_AFTER) -> str:
+    """The rule, said once under the rows instead of on every one.
+
+    This sentence is the whole point of the section. Four gives sat at
+    `status='error'`, `detail="receiver bags are full"` and were re-issued and
+    re-announced every cycle for six hours (mod-overseer#169); a family that
+    says it once and stops is telling the truth, and a reader has to be told
+    that the silence afterwards is the rule working rather than the page
+    losing the row.
+    """
+    return (
+        "After %d identical refusals the family stops asking, so this is said "
+        "once and then dropped rather than re-announced every cycle. A give "
+        "nobody has answered yet is not a refusal and keeps its place in the "
+        "plan." % threshold
+    )
+
+
+def _headline(rows: tuple, threshold: int) -> str:
+    """The one line over the rows. Says nothing rather than inventing a
+    finding when there is nothing to move."""
+    if not rows:
+        return ("nothing wants to move - every reagent this family carries is "
+                "already in the bags of whoever is assigned it")
+    waiting = sum(1 for r in rows if not r.blocked)
+    stopped = sum(1 for r in rows if r.blocked)
+    bits = []
+    if waiting:
+        bits.append("%d handover%s waiting" % (waiting, "" if waiting == 1 else "s"))
+    if stopped:
+        bits.append("%d given up on after %d refusals each"
+                    % (stopped, threshold))
+    return "  -  ".join(bits)
+
+
+def board(holdings, *, attempts=(), held: Mapping | None = None,
+          threshold: int = GIVE_UP_AFTER) -> dict:
+    """Everything the "what wants to move" section draws, in one call.
+
+    `holdings` are the same Holdings the bridge plans on and `attempts` the
+    same give rows it judges refusals from, so this view and the family cannot
+    disagree about what is happening - they are one decision read twice, which
+    is the same discipline `family.build_family` follows by carrying the watch
+    wall on the payload the cards are drawn from.
+
+    A blocked row carries the COUNT as well, looked up from the holdings: "Og
+    bags full" is worth reading, and "39 Linen Cloth is stuck in Grug's bags
+    because Og bags full" is worth acting on.
+    """
+    counts = refusal_counts(attempts)
+    refused = {pair: reason for pair, (seen, reason) in counts.items()
+               if seen >= threshold}
+    material_plan = plan(holdings, stuck_pairs=refused)
+
+    carried: dict = {}
+    for holding in holdings:
+        carried[(holding.holder, holding.material)] = (
+            carried.get((holding.holder, holding.material), 0) + int(holding.count)
+        )
+
+    rows = [
+        Move(holder=hand.holder, taker=hand.taker, material=hand.material,
+             skill=hand.skill, count=hand.count, said=hand.said, word=MOVING,
+             blocked=False, refusals=counts.get((hand.holder, hand.taker), (0, ""))[0],
+             refusal="")
+        for hand in handovers(material_plan.grants, held=held)
+    ]
+    rows += [
+        Move(holder=stop.holder, taker=stop.taker, material=stop.material,
+             skill=stop.skill,
+             count=carried.get((stop.holder, stop.material), 0),
+             said=stop.said, word=gave_up_word(threshold), blocked=True,
+             refusals=counts.get((stop.holder, stop.taker), (threshold, ""))[0],
+             refusal=stop.refusal)
+        for stop in material_plan.blocked
+    ]
+    rows = tuple(rows)
+    return {
+        "rows": rows,
+        "notes": material_plan.notes,
+        "give_up_after": threshold,
+        "rule": giving_up_rule(threshold),
+        "headline": _headline(rows, threshold),
+    }

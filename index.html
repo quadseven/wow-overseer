@@ -1036,7 +1036,7 @@
      quest, with a portrait for everyone on it. */
   #family { display:none; margin:0 1rem 1.5rem; }
   #fheadline { margin-bottom:.6rem; overflow-wrap:anywhere; color:var(--dim); }
-  #fheadline.alarm { color:var(--rust); }
+  #fheadline.alarm { color:var(--warn-text); }
   /* ONE column until there is honestly room for two, then three (3+2), then
      all five in a row. Explicit stops rather than auto-fit so the shape is
      the same on every visit: a 3+2 that turns into a 4+1 as a window is
@@ -1052,15 +1052,20 @@
   .fcard { background:var(--panel); border:1px solid var(--line);
            border-radius:12px; overflow:hidden; min-width:0;
            box-shadow:0 8px 24px -12px #000c; }
-  .fcard.c-hurt { border-color:#d29922; }
+  .fcard.c-hurt { border-color:var(--amber); }
   /* Dead is LOUD, not dim. The whole complaint was that a family dying on a
      loop looked like nothing at all. */
-  .fcard.c-dead { border-color:var(--horde); background:#2a1416; }
+  .fcard.c-dead { border-color:var(--horde); background:var(--warn-bg); }
   .fcard.c-gone { opacity:.6; }
   .fstrip { padding:.6rem .8rem .8rem; }
-  .fhead { display:flex; align-items:center; gap:.45rem; flex-wrap:wrap; }
+  /* THE HEAD IS NOW A GLYPH AND A COLUMN. The 64px tile is flex:none and
+     everything else shares what is left, so a long zone name wraps inside the
+     column instead of pushing the tile off the card. */
+  .fhead { display:flex; align-items:center; gap:.7rem; }
+  .fwho { flex:1; min-width:0; }
+  .fnamerow { display:flex; align-items:center; gap:.45rem; flex-wrap:wrap; }
   .fname { font-size:1.25rem; font-weight:bold; letter-spacing:-.01em;
-           color:var(--text); }
+           font-family:var(--display); color:var(--text); }
   /* The class, as colour, on something that is not text. The hairline is not
      decoration: a priest's colour IS #ffffff, and without a border that swatch
      is an invisible hole in a white card. */
@@ -1071,9 +1076,14 @@
   .fchip { border:1px solid var(--line); border-radius:99px;
            padding:.05rem .5rem; font-size:.74rem; letter-spacing:.05em;
            text-transform:uppercase; }
-  .fchip.dead   { background:var(--horde); border-color:var(--horde); color:#1a0000;
-                  font-weight:bold; }
-  .fchip.hurt   { color:#d29922; border-color:#d29922; }
+  /* DEAD IS VERMILION, not the faction red it used to be. Measured: #1a0000
+     on --horde is 2.7:1 in light and the same chip had to work on both
+     grounds. --vermilion is the palette's alarm, it is the SAME value in both
+     themes, and ink on it measures 5.6:1 - so one rule is legible everywhere
+     instead of two that are each wrong somewhere. */
+  .fchip.dead   { background:var(--vermilion); border-color:var(--vermilion);
+                  color:var(--ink); font-weight:bold; }
+  .fchip.hurt   { color:var(--caution-text); border-color:var(--amber); }
   .fchip.gone   { color:var(--dim); }
   .fchip.combat { color:var(--neutral); border-color:var(--neutral); }
   .fchip.leader { color:var(--alliance); border-color:var(--alliance); }
@@ -1081,7 +1091,7 @@
   .fbar { background:var(--bg); border:1px solid var(--line); border-radius:4px;
           height:.6em; overflow:hidden; margin:.5rem 0 .25rem; }
   .ffill { height:100%; background:var(--mortal); transition:width .3s linear; }
-  .fcard.c-hurt .ffill { background:#d29922; }
+  .fcard.c-hurt .ffill { background:var(--amber); }
   .fcard.c-dead .ffill { background:var(--horde); }
   .fline { overflow-wrap:anywhere; }
   .fline.dim { color:var(--dim); }
@@ -1089,7 +1099,7 @@
      a quest log at the cap is a fact about one character, and it has to be
      read beside that character's name. Loud when the log is nearly full. */
   .fslots { color:var(--dim); font-size:.85rem; margin-top:.3rem; overflow-wrap:anywhere; }
-  .fslots.alarm { color:var(--rust); }
+  .fslots.alarm { color:var(--warn-text); }
   /* 44px MINIMUM, everywhere a finger goes. */
   .fwatch, .fbtn { min-height:44px; width:100%; margin-top:.6rem;
                    background:var(--bg); color:var(--text);
@@ -1101,7 +1111,7 @@
                                      border-color:var(--line); color:var(--dim); }
   .fpbtns { display:flex; gap:.4rem; }
   .fpbtns .fbtn { width:auto; flex:1; }
-  .fcard .note.warn { color:#d29922; }
+  .fcard .note.warn { color:var(--caution-text); }
   .fcard .note.live { color:var(--mortal); }
   .fcard .note { margin-top:.35rem; white-space:pre-wrap; overflow-wrap:anywhere; }
   .fwarn { color:var(--neutral); margin-top:.35rem; }
@@ -1195,12 +1205,13 @@
      five times with "also Grog, Bork" under each; this puts it on screen
      once, with everybody's portrait on the right of it saying what they are
      to it - on it, ready to hand in, helping, or already done. */
-  #fboard { margin-top:1.4rem; }
-  .fbhead { display:flex; align-items:baseline; gap:.5rem 1rem; flex-wrap:wrap;
-            margin-bottom:.5rem; }
-  .fbhead h2 { font-size:1.05rem; letter-spacing:-.01em; }
-  #fquesthead { color:var(--dim); overflow-wrap:anywhere; font-size:.9rem; }
-  #fquesthead.alarm { color:var(--rust); }
+  /* The board's heading is the shared section rule now (.fsec below), so the
+     four blocks in this tab are separated the same way instead of one of them
+     shouting in an <h2> while the others whisper. */
+  #fboard { margin-top:0; }
+  #fquesthead { color:var(--on-card-dim); overflow-wrap:anywhere;
+                font-size:.9rem; margin-bottom:.6rem; }
+  #fquesthead.alarm { color:var(--warn-text); }
   /* The key: what a ring around a portrait means, said once above the
      list rather than guessed at. */
   #fkey { display:flex; gap:.35rem .9rem; flex-wrap:wrap; font-size:.78rem;
@@ -1283,6 +1294,150 @@
             cursor:pointer; font:inherit; padding:.3rem .6rem; }
   #fqmore:hover { color:var(--text); border-color:var(--dim); }
   .qbempty { color:var(--dim); padding:.6rem .2rem; }
+  /* --- the needs, the handovers and the bonds (infra#2597) ---------------
+     THE CARD ANSWERED "IS MY FAMILY ALIVE" AND NOTHING UNDER IT. Alive is the
+     first question and it has never been the interesting one: the family has
+     spent whole sessions alive, standing still, with full bags, broken gear
+     and a stack of linen that four of them keep trying to hand to the fifth.
+     None of that was on any surface.
+
+     Not one rule below decides anything. Every threshold, status word, colour
+     class and sentence arrives on the payload from needs.py, materials.py and
+     bonds.py; these rules only say what a state LOOKS like, which is the only
+     half of this that belongs in a stylesheet.
+
+     THE SECTION RULE, used by all four blocks: a mono index, a 2px line, and
+     the label right-aligned in muted. A rule rather than a heading because
+     four bold headings down one column compete with the five cards, and the
+     cards are the thing being read. */
+  .fsec { display:flex; align-items:center; gap:.6rem; margin:1.5rem 0 .6rem; }
+  #family > .fsec:first-child { margin-top:0; }
+  .fsecn { font-family:var(--mono); font-size:12px; font-weight:700;
+           letter-spacing:.08em; color:var(--shell-text); flex:none; }
+  /* The ink line, THEMED. --ink is a fixed near-black and this line sits on
+     the page ground, not on a card, so a literal --ink would be an invisible
+     rule the moment somebody reads the page in the dark. --shell-text is what
+     "ink" means on whichever ground is actually under it. */
+  .fsecline { flex:1; height:2px; background:var(--shell-text); }
+  .fsecl { font-family:var(--mono); font-size:11px; letter-spacing:.14em;
+           text-transform:uppercase; color:var(--shell-dim); flex:none; }
+
+  /* THE GLYPH TILE, AND IT IS NOT A PHOTO SLOT. There is no portrait of these
+     characters anywhere on this page except the live broadcast a couple of
+     centimetres above it, and 64 pixels cannot hold a picture plus any chrome
+     around it - it would be a thumbnail of a thumbnail. So it is a MARK: the
+     two-letter race stand-in as a watermark, the initials over it in the
+     colour of how they are doing. family.race_mark decides the letters. */
+  .fglyph { width:64px; height:64px; flex:none; position:relative;
+            border-radius:14px; border:1px solid var(--line);
+            background:var(--sunken); display:flex; align-items:center;
+            justify-content:center; overflow:hidden; }
+  .fgrace { position:absolute; inset:0; display:flex; align-items:center;
+            justify-content:center; font-family:var(--mono); font-size:2rem;
+            font-weight:700; letter-spacing:.06em; color:var(--on-card-dim);
+            opacity:.24; }
+  .fginit { position:relative; font-family:var(--display); font-size:1.7rem;
+            font-weight:800; letter-spacing:-.02em; color:var(--mortal); }
+  .fcard.c-hurt .fginit { color:var(--caution-text); }
+  .fcard.c-dead .fginit { color:var(--warn-text); }
+  .fcard.c-gone .fginit { color:var(--on-card-dim); }
+
+  /* SAID OUT LOUD. An inset in the ground colour, because a quotation is
+     something the card is holding rather than something it is claiming - and
+     because the one thing this family is unambiguously good at is talking,
+     and none of it reached this page. `quiet` is a character who has not
+     spoken: the sentence in the box is then ABOUT the silence, so it reads as
+     the page's voice rather than theirs. */
+  .fsaid { background:var(--sunken); border:1px solid var(--line);
+           border-radius:10px; padding:.5rem .65rem; margin-top:.65rem; }
+  .fsaidl { font-family:var(--mono); font-size:10px; letter-spacing:.14em;
+            text-transform:uppercase; color:var(--on-card-dim); }
+  .fsaidt { margin-top:.2rem; overflow-wrap:anywhere; color:var(--on-card); }
+  .fsaid.quiet .fsaidt { color:var(--on-card-dim); font-style:italic; }
+
+  /* THE NEEDS BARS: a motive panel, four rows, one column. A FULL BAR ALWAYS
+     MEANS THE NEED IS MET (needs.py's docstring argues it out) - room left,
+     durability left, coin, bag positions filled - so a short red bar means
+     one thing in every row instead of four.
+
+     The label goes ink when it is the problem and muted otherwise, which is
+     the whole reading trick here: four grey labels and one black one is a
+     card that answers "what is wrong with him" before it is asked. */
+  .fneeds { margin-top:.7rem; display:grid; gap:.45rem; }
+  .fneed { display:grid; gap:.22rem; }
+  .fneedt { display:flex; justify-content:space-between; gap:.5rem;
+            font-family:var(--mono); font-size:11px; letter-spacing:.06em; }
+  /* The LABEL is upper case and the value is not. Seen on the rendered page:
+     a purse of 34 silver came out "34S", which is not how anybody writes it -
+     "g", "s" and "c" are the game's own units and they are lower case. A
+     label is a heading and a value is a number; only one of them is shouting. */
+  .fneedl { color:var(--on-card-dim); text-transform:uppercase; }
+  .fneed.problem .fneedl { color:var(--on-card); font-weight:700; }
+  .fneedv { color:var(--on-card-dim); flex:none; }
+  .fneedb { height:6px; border-radius:99px; background:var(--sunken);
+            border:1px solid var(--line); overflow:hidden; }
+  .fneedf { height:100%; background:var(--green); transition:width .3s linear; }
+  .fneed.s-caution .fneedf { background:var(--amber); }
+  .fneed.s-warn .fneedf { background:var(--vermilion); }
+  /* One line, naming ONE thing. The bars already say what is true; what a
+     person cannot do at a glance is rank them. */
+  .fworst { margin-top:.5rem; font-size:.9rem; overflow-wrap:anywhere;
+            color:var(--on-card-dim); }
+  .fworst.s-caution { color:var(--caution-text); }
+  .fworst.s-warn { color:var(--warn-text); }
+  /* The bond note closes the card, under a rule: it is the one line on here
+     that is about somebody else as much as about this character. */
+  .fbond { margin-top:.55rem; padding-top:.55rem;
+           border-top:1px solid var(--line); font-size:.88rem;
+           color:var(--on-card-dim); overflow-wrap:anywhere; }
+
+  /* THE TWO BLOCKS UNDER THE BOARD. Cards on the ground, auto-fit at 290px -
+     these hold text and nothing else, so unlike the feed grid above there is
+     no video to protect from a column count that changes as a window is
+     dragged, and the design's own grid can be used as drawn. */
+  #fmovehead, #fbondhead { color:var(--on-card-dim); font-size:.9rem;
+                           overflow-wrap:anywhere; margin-bottom:.6rem; }
+  #fmovehead.alarm, #fbondhead.alarm { color:var(--warn-text); }
+  #fmovelist, #fbondlist { display:grid; gap:14px;
+                grid-template-columns:repeat(auto-fit,minmax(290px,1fr)); }
+  .fmv, .fbd { background:var(--panel); border:1px solid var(--line);
+               border-radius:12px; padding:14px; min-width:0; }
+  /* A handover the world keeps refusing is not a row with a red word on it,
+     it is a different KIND of row: the family has stopped asking. */
+  .fmv.stuck { border-color:var(--vermilion); background:var(--warn-bg); }
+  .fmvtop, .fbdtop { display:flex; align-items:baseline; gap:.5rem;
+                     flex-wrap:wrap; }
+  .fmvw, .fbdw { font-family:var(--mono); font-size:10px; font-weight:700;
+                 letter-spacing:.1em; padding:.18rem .45rem; border-radius:6px;
+                 border:1px solid var(--line); color:var(--on-card-dim);
+                 flex:none; }
+  .fmv.stuck .fmvw { color:var(--warn-text); border-color:var(--vermilion); }
+  .fbd.s-stopped .fbdw { color:var(--warn-text); border-color:var(--vermilion); }
+  .fbd.s-counting .fbdw { color:var(--caution-text); border-color:var(--amber); }
+  .fbd.s-exempt .fbdw,
+  .fbd.s-always .fbdw { color:var(--accent-text); border-color:var(--green); }
+  .fmvt, .fbdp { font-weight:700; overflow-wrap:anywhere; color:var(--on-card); }
+  .fbdn { font-family:var(--mono); font-size:11px; color:var(--on-card-dim);
+          margin-left:auto; flex:none; }
+  /* The sentence the family actually says, in their own words. */
+  .fmvsaid { margin-top:.5rem; overflow-wrap:anywhere; color:var(--on-card); }
+  .fmvwhy { margin-top:.4rem; font-family:var(--mono); font-size:11px;
+            color:var(--warn-text); overflow-wrap:anywhere; }
+  .fbdnote { margin-top:.45rem; font-size:.9rem; color:var(--on-card-dim);
+             overflow-wrap:anywhere; }
+  .fbdbar { margin-top:.55rem; height:6px; border-radius:99px;
+            background:var(--sunken); border:1px solid var(--line);
+            overflow:hidden; }
+  .fbdfill { height:100%; background:var(--green); transition:width .3s linear; }
+  .fbd.s-counting .fbdfill { background:var(--amber); }
+  .fbd.s-stopped .fbdfill { background:var(--vermilion); }
+  /* The rule under the rows, said once. In `what wants to move` it is the
+     whole point of the section: the family says a doomed handover ONCE and
+     then goes quiet, and a reader has to know the silence is the rule working
+     rather than the page dropping the row. */
+  #fmovenotes, #fmoverule, #fbondrule { margin-top:.8rem; padding-top:.6rem;
+            border-top:1px solid var(--hairline); font-size:.85rem;
+            color:var(--on-card-dim); overflow-wrap:anywhere; }
   /* --- THE WATCH WALL (infra#2597) ---------------------------------------
      Three shapes for the same five tiles, and the tiles are the SAME NODES
      the Family tab uses. layoutBroadcasts() re-parents them; nothing here
@@ -1522,6 +1677,11 @@
 </div>
 <nav id="tabs"></nav>
 <section id="family">
+  <!-- FOUR BLOCKS, ONE SEPARATOR. The mono index, the ink rule and the
+       right-aligned label are the same three parts every time, so the tab
+       reads as one document rather than four features that landed
+       separately. -->
+  <div class="fsec"><span class="fsecn">01</span><span class="fsecline"></span><span class="fsecl">the family</span></div>
   <div id="fheadline">reaching the world...</div>
   <!-- THE FIVE FEEDS, and nothing between them and the top of the tab
        (infra#88). One card per character: their broadcast at the full
@@ -1536,10 +1696,35 @@
        a stake in it. The family-level numbers (how badly the five logs
        disagree) head it. -->
   <div id="fboard">
-    <div class="fbhead"><h2>Quest board</h2><div id="fquesthead"></div></div>
+    <div class="fsec"><span class="fsecn">02</span><span class="fsecline"></span><span class="fsecl">quest board</span></div>
+    <div id="fquesthead"></div>
     <div id="fkey"></div>
     <div id="fqlist"></div>
     <button id="fqmore" hidden></button>
+  </div>
+  <!-- WHAT WANTS TO MOVE (infra#2830, mod-overseer#169). Every one of the five
+       is carrying Linen Cloth, the family assigned tailoring to one of them,
+       so four stacks want to reach one pair of bags - and those bags are
+       full, so the world refuses the transfer. materials.py decides all of
+       that; the footer states the rule that keeps the refusal from being
+       re-announced every cycle, which is the half a reader cannot infer from
+       a silent row. -->
+  <div id="fmove">
+    <div class="fsec"><span class="fsecn">03</span><span class="fsecline"></span><span class="fsecl">what wants to move</span></div>
+    <div id="fmovehead"></div>
+    <div id="fmovelist"></div>
+    <div id="fmovenotes" hidden></div>
+    <div id="fmoverule"></div>
+  </div>
+  <!-- WHO ANSWERS WHO (bonds.py). The family rules are the reason a plea gets
+       answered or does not, and until now they only existed in a log line
+       nobody reads. One row per pair the rules have something to say about,
+       with the counter that will change the answer. -->
+  <div id="fbonds">
+    <div class="fsec"><span class="fsecn">04</span><span class="fsecline"></span><span class="fsecl">who answers who</span></div>
+    <div id="fbondhead"></div>
+    <div id="fbondlist"></div>
+    <div id="fbondrule"></div>
   </div>
 </section>
 <!-- THE WATCH WALL. Deliberately its own view rather than a wider Family tab:
@@ -2848,6 +3033,19 @@ function familyCard(name) {
   const stream = el("div", "fstream");
   const strip = el("div", "fstrip");
   const head = el("div", "fhead");
+  // THE GLYPH TILE, and deliberately not a photo slot: 64px cannot hold a
+  // picture with any chrome round it, and the only likeness of this
+  // character on the page is the live broadcast directly above. Both letters
+  // come off the payload (family.race_mark, family.initials) - working out
+  // what to call a race is a decision, and it is not this file's.
+  // aria-hidden because it is the name beside it said twice in shorthand.
+  const glyph = el("div", "fglyph");
+  const gmark = el("span", "fgrace");
+  const ginit = el("span", "fginit");
+  glyph.append(gmark, ginit);
+  glyph.setAttribute("aria-hidden", "true");
+  const who = el("div", "fwho");
+  const nmrow = el("div", "fnamerow");
   const nm = el("span", "fname", name);
   const cls = el("span", "fclass");
   cls.setAttribute("aria-hidden", "true");
@@ -2855,8 +3053,10 @@ function familyCard(name) {
   const chip = el("span", "fchip");
   const combat = el("span", "fchip combat", "in combat");
   const lead = el("span", "fchip leader", "leads");
-  head.append(nm, chip, combat, lead);
+  nmrow.append(nm, chip, combat, lead);
   const meta = el("div", "fmeta");
+  who.append(nmrow, meta);
+  head.append(glyph, who);
   const bar = el("div", "fbar");
   const fill = el("div", "ffill");
   bar.appendChild(fill);
@@ -2865,8 +3065,22 @@ function familyCard(name) {
   // THE SLOT COUNT stays with the character (mod-overseer#73) even though
   // the quests themselves moved to the shared board: a log at the cap is a
   // fact about one person, read beside that person's name.
+  // SAID OUT LOUD. The one thing this family is unambiguously good at is
+  // talking, and none of it reached this page until now. Which thought rows
+  // count as speech rather than as an inner life is needs.SPOKEN_SOURCES'
+  // decision; this draws whichever sentence comes back.
+  const saidbox = el("div", "fsaid");
+  saidbox.appendChild(el("div", "fsaidl", "said out loud"));
+  const said = el("div", "fsaidt");
+  saidbox.appendChild(said);
+  // THE MOTIVE PANEL. Empty here: one row per motive the module sends, built
+  // on first sight and kept, never rebuilt - a card holds a live <video> and
+  // nothing near one is allowed to be thrown away and redrawn.
+  const needbox = el("div", "fneeds");
+  const worst = el("div", "fworst");
   const slots = el("div", "fslots");
   const warn = el("div", "fwarn");
+  const bond = el("div", "fbond");
   const btn = el("button", "fwatch", "watch");
   const note = noteNode("note");
   const box = el("div", "fplayer");
@@ -2886,14 +3100,15 @@ function familyCard(name) {
   btns.append(full, stop);
   const vnote = noteNode("note");
   box.append(video, btns, vnote);
-  strip.append(head, meta, bar, hp, where, slots, warn, btn, note, box);
+  strip.append(head, bar, hp, where, saidbox, needbox, worst, slots, warn, bond, btn, note, box);
   // ORDER IS THE FEATURE. Their picture, then who they are and how they
   // are, then the POV controls. A viewer reads one character top to bottom
   // instead of matching a wall of video to a list of names by position.
   card.append(stream, strip);
   ffeeds.appendChild(card);
   c = { card, nm, chip, combat, lead, meta, stream, bar, fill, hp, where, slots,
-        warn, btn, note, box, video, vnote, full, stop };
+        warn, btn, note, box, video, vnote, full, stop,
+        ginit, gmark, saidbox, said, needbox, needbars: new Map(), worst, bond };
   c.player = makePlayer(video, (t, cls) => setNote(vnote, t, cls), box);
   btn.onclick = () => familyWatch(name);
   stop.onclick = () => familyStop();
@@ -3329,6 +3544,11 @@ function renderFamily(p) {
       sw.style.setProperty("--cc", m.class_colour || "transparent");
       sw.title = m["class"] || "";
     }
+    // The initials and the race mark, both composed by family.py. The COLOUR
+    // of the initials is the card's state class doing its job in CSS, so
+    // "how is he" is said once here and drawn in three places.
+    c.ginit.textContent = m.initials || "";
+    c.gmark.textContent = m.mark || "";
     c.chip.style.display = "";
     if (m.condition === "dead") c.chip.className = "fchip dead", c.chip.textContent = "DEAD";
     else if (m.condition === "gone") c.chip.className = "fchip gone", c.chip.textContent = "not in the world";
@@ -3393,6 +3613,189 @@ function updateFamilyButtons() {
       c.btn.disabled = false;
       c.btn.textContent = "watch " + name;
     }
+  }
+}
+
+// --- what they need, what wants to move, who answers who (infra#2597) ----
+//
+// THE THREE THINGS THE CARD COULD NOT SAY. "Is my family alive" is the first
+// question and it has never been the interesting one: they have spent whole
+// sessions alive, standing still, with full bags, gear at a third durability,
+// and a stack of linen four of them keep trying to hand to the fifth whose
+// bags are full. Every one of those facts already existed in a module and
+// none of them was on any surface.
+//
+// NOTHING HERE DECIDES ANYTHING. There is not a comparison against a number
+// anywhere in this block - no threshold, no verdict, no composed sentence.
+// Every status word, colour class, percentage and line of prose arrives on
+// the payload from needs.py, materials.py and bonds.py, which is infra#2597
+// in one paragraph: the version of this that worked out for itself what 39%
+// durability meant would be a second opinion about the family, rendering
+// bars that look perfectly plausible while disagreeing with the world.
+//
+// BUILT ONCE AND WRITTEN INTO, like every other node on this tab. Rows are
+// keyed by the id the module sends and re-ordered with appendChild, which
+// MOVES a node rather than replacing it. There is exactly one replaceChildren
+// on this page - the quest board's, which holds no player - and a card holds
+// a live <video> whose PeerConnection a redraw would tear down mid-stream.
+const fmovehead = document.getElementById("fmovehead");
+const fmovelist = document.getElementById("fmovelist");
+const fmovenotes = document.getElementById("fmovenotes");
+const fmoverule = document.getElementById("fmoverule");
+const fbondhead = document.getElementById("fbondhead");
+const fbondlist = document.getElementById("fbondlist");
+const fbondrule = document.getElementById("fbondrule");
+const needrows = { moves: new Map(), bonds: new Map() };
+
+function needBar(c, key) {
+  let n = c.needbars.get(key);
+  if (n) return n;
+  const row = el("div", "fneed");
+  const top = el("div", "fneedt");
+  const label = el("span", "fneedl");
+  const value = el("span", "fneedv");
+  top.append(label, value);
+  const bar = el("div", "fneedb");
+  const fill = el("div", "fneedf");
+  bar.appendChild(fill);
+  row.append(top, bar);
+  c.needbox.appendChild(row);
+  n = { row, label, value, bar, fill };
+  c.needbars.set(key, n);
+  return n;
+}
+
+function moveRow(key) {
+  let r = needrows.moves.get(key);
+  if (r) return r;
+  const row = el("div", "fmv");
+  const top = el("div", "fmvtop");
+  const word = el("span", "fmvw");
+  const title = el("span", "fmvt");
+  top.append(word, title);
+  const said = el("div", "fmvsaid");
+  const why = el("div", "fmvwhy");
+  row.append(top, said, why);
+  fmovelist.appendChild(row);
+  r = { row, word, title, said, why };
+  needrows.moves.set(key, r);
+  return r;
+}
+
+function bondRow(key) {
+  let r = needrows.bonds.get(key);
+  if (r) return r;
+  const row = el("div", "fbd");
+  const top = el("div", "fbdtop");
+  const word = el("span", "fbdw");
+  const pair = el("span", "fbdp");
+  const progress = el("span", "fbdn");
+  top.append(word, pair, progress);
+  const note = el("div", "fbdnote");
+  const bar = el("div", "fbdbar");
+  const fill = el("div", "fbdfill");
+  bar.appendChild(fill);
+  row.append(top, note, bar);
+  fbondlist.appendChild(row);
+  r = { row, word, pair, progress, note, bar, fill };
+  needrows.bonds.set(key, r);
+  return r;
+}
+
+function renderNeeds(p) {
+  for (const m of p.members) {
+    const c = familyCard(m.name);
+    // Hidden, never removed. A motive can stop applying - a character wearing
+    // nothing that can break has no repair question - and it comes back the
+    // moment it applies again; a node kept is a node that never has to be
+    // rebuilt under somebody's thumb.
+    for (const n of c.needbars.values()) n.row.hidden = true;
+    for (const b of m.needs) {
+      const n = needBar(c, b.key);
+      n.row.hidden = false;
+      n.row.className = "fneed s-" + b.state + (b.problem ? " problem" : "");
+      n.label.textContent = b.label;
+      n.value.textContent = b.value;
+      // No percentage means the question does not apply to this character at
+      // all, which is a different answer from zero and must not be drawn as
+      // an empty bar. The value line beside it says so in words.
+      n.bar.style.display = b.pct === null ? "none" : "";
+      n.fill.style.width = (b.pct === null ? 0 : b.pct) + "%";
+      c.needbox.appendChild(n.row);
+    }
+    c.worst.textContent = m.worst.text;
+    c.worst.className = "fworst s-" + m.worst.state;
+    c.said.textContent = m.said.text;
+    c.saidbox.className = "fsaid" + (m.said.spoken ? "" : " quiet");
+    c.bond.textContent = m.bond;
+  }
+  renderMoves(p.moving);
+  renderAnswering(p.answering);
+}
+
+function renderMoves(b) {
+  fmovehead.textContent = b.headline;
+  fmovehead.className = "";
+  fmoverule.textContent = b.rule;
+  fmovenotes.textContent = b.notes.join("  -  ");
+  fmovenotes.hidden = !b.notes.length;
+  for (const r of needrows.moves.values()) r.row.hidden = true;
+  for (const row of b.rows) {
+    const r = moveRow(row.key);
+    r.row.hidden = false;
+    r.row.className = "fmv" + (row.blocked ? " stuck" : "");
+    r.word.textContent = row.word;
+    r.title.textContent = row.title;
+    // Their own sentence, drawn exactly as the family says it in party chat.
+    // Rewording it here would put a line on screen nobody ever said.
+    r.said.textContent = row.said;
+    r.why.textContent = row.refusal_line;
+    r.why.hidden = !row.refusal_line;
+    fmovelist.appendChild(r.row);
+  }
+}
+
+function renderAnswering(a) {
+  fbondhead.textContent = a.headline;
+  fbondhead.className = "";
+  fbondrule.textContent = a.rule;
+  for (const r of needrows.bonds.values()) r.row.hidden = true;
+  for (const row of a.rows) {
+    const r = bondRow(row.key);
+    r.row.hidden = false;
+    r.row.className = "fbd s-" + row.state;
+    r.word.textContent = row.word;
+    r.pair.textContent = row.pair;
+    r.progress.textContent = row.progress;
+    r.note.textContent = row.note;
+    // A pair with no counter gets no bar. Drawing an exemption as a full bar
+    // would read as one answer away from running out, which is the opposite
+    // of what being exempt means.
+    r.bar.style.display = row.pct === null ? "none" : "";
+    r.fill.style.width = (row.pct === null ? 0 : row.pct) + "%";
+    fbondlist.appendChild(r.row);
+  }
+}
+
+// THIRTY seconds, the cadence the quest board already rides and for the same
+// reason: bags, durability, money, give rows and thoughts are all SAVED
+// state written on the core's own timer and by the bridge, so a 5s poll would
+// re-fetch an identical payload six times per actual change. Entering the tab
+// reads immediately, or these panels are blank for half a minute on arrival.
+async function pollNeeds() {
+  if (view !== FAMILY_VIEW) return;
+  try {
+    const r = await fetch(u("/api/needs"));
+    if (!r.ok) throw new Error(r.status);
+    renderNeeds(await r.json());
+  } catch (e) {
+    // Keep the bars that are drawn, for the same reason the cards are kept: a
+    // needs panel that blanks reads as "there is nothing wrong with any of
+    // them", which is the one claim this view exists to be able to disprove.
+    fmovehead.textContent = "the world is unreachable - what wants to move may be stale";
+    fmovehead.className = "alarm";
+    fbondhead.textContent = "the world is unreachable - these bonds may be stale";
+    fbondhead.className = "alarm";
   }
 }
 
@@ -3767,6 +4170,7 @@ function showView(v) {
     startBroadcasts();
     pollFamily();
     pollQuests();
+    pollNeeds();
     refreshFamilyWatch();
     return;
   }
@@ -3830,6 +4234,7 @@ wallsound.setAttribute("aria-pressed", String(wall.sound));
 setInterval(pollFamily, 5000);         // the family rides the same 5s cadence
 setInterval(refreshFamilyWatch, 5000); // and so does the watch it owns
 setInterval(pollQuests, 30000);        // quest rows are a save, not a stream
+setInterval(pollNeeds, 30000);         // and so are bags, gear and coin
 
 loadZones().then(() => { poll(); setInterval(poll, 5000); });
 setInterval(fetchPanel, 5000);  // panel rides the same 5s snapshot cadence

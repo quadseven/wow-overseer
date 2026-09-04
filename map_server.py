@@ -27,6 +27,7 @@ import chat
 import family
 import frames
 import modelviewer
+import needs
 import questlog
 import realm
 import standing
@@ -937,6 +938,144 @@ def _fetch_achievements() -> dict:
             "quest_rewards": quest_rewards, "roster": names}
 
 
+# --- the Family view's needs, handovers and bonds (infra#2597) ------------
+#
+# WHERE THIS SITS AND WHY. Below every other fetch and above
+# _ensure_stream_store, which puts it inside the Armory's fetch window and
+# outside the Wealth one - and that is the constraint, not a preference. The
+# Wealth suite reads `# --- the Wealth and Bags view` to
+# `# Everything a tooltip draws` as that view's SQL and asserts the inventory
+# query is NOT bounded by slot; the durability read below is bounded by slot,
+# because a paper doll is exactly what it wants. Dropping it in there would
+# fail an assertion about a query it has nothing to do with.
+#
+# SIX READS, ON A THIRTY SECOND POLL. Every one of them is SAVED state - bags,
+# durability and money are written on the core's own player-save timer, and
+# the give rows and thoughts are written by the bridge - so none of it can
+# change faster than the cadence, and putting any of it on /api/family's 5s
+# poll would re-fetch an identical answer six times per actual change.
+#
+# Names come from bonds via family.roster(), never from the request, so every
+# IN list here is a fixed five with no user input in it.
+def _fetch_needs() -> dict:
+    """The bags, gear, purse, trades, give attempts and thoughts of the five.
+
+    Fetches rows and does nothing else (infra#2597). Which slot is a bag,
+    which skill is a profession, which thought was said out loud, what counts
+    as "no room" and when the family has given up are all decisions, and every
+    one of them lives in needs.py where the stdlib suite can reach it.
+    """
+    names = family.roster()
+    holes = ", ".join(["%s"] * len(names))
+    conn = _connect()
+    try:
+        with conn.cursor() as cur:
+            # S608 on all of these: `holes` is a run of "%s" placeholders
+            # whose only input is the LENGTH of family.roster() - a constant
+            # five, from bonds. Every VALUE is still bound by the driver, and
+            # this endpoint takes no parameters at all.
+            cur.execute(
+                "SELECT c.name, c.money FROM characters c "  # noqa: S608
+                f"WHERE c.name IN ({holes})",
+                tuple(names),
+            )
+            char_rows = list(cur.fetchall())
+            # The same unbounded inventory read /api/wealth makes, with the
+            # same column list, so the two views cannot come to different
+            # answers about how full a bag is. Unbounded because which
+            # (bag, slot) pair is a bag, the backpack or the bank is
+            # wealth.split_inventory's judgement to make.
+            cur.execute(
+                "SELECT c.name, ci.bag, ci.slot, ci.item AS item_guid, "  # noqa: S608
+                "ii.itemEntry AS entry, ii.count, "
+                f"{_WEALTH_ITEM_COLUMNS} "
+                "FROM characters c "
+                "JOIN character_inventory ci ON ci.guid = c.guid "
+                "JOIN item_instance ii ON ii.guid = ci.item "
+                "LEFT JOIN acore_world.item_template it ON it.entry = ii.itemEntry "
+                f"WHERE c.name IN ({holes})",
+                tuple(names),
+            )
+            inventory_rows = list(cur.fetchall())
+            # DURABILITY, off the worn slots only. Bounded by
+            # len(armory.EQUIPPED_SLOTS) for the same reason /api/armory is:
+            # the bound and the paper doll must come from one list, and a 19
+            # typed here would silently drop a slot the day that list grows.
+            # LEFT, so a custom item still occupies its slot; MaxDurability of
+            # 0 is an item that cannot break, which needs.py tells apart from
+            # one that is broken.
+            cur.execute(
+                "SELECT c.name, ci.slot, ii.durability, "  # noqa: S608
+                "it.MaxDurability AS max_durability "
+                "FROM characters c "
+                "JOIN character_inventory ci ON ci.guid = c.guid "
+                "AND ci.bag = 0 AND ci.slot < %s "
+                "JOIN item_instance ii ON ii.guid = ci.item "
+                "LEFT JOIN acore_world.item_template it ON it.entry = ii.itemEntry "
+                f"WHERE c.name IN ({holes})",
+                (len(armory.EQUIPPED_SLOTS), *names),
+            )
+            equipment_rows = list(cur.fetchall())
+            # EVERY skill row, unfiltered. character_skills also holds
+            # languages, Defence and every weapon skill, and which of them is
+            # a profession is needs.held_skills' decision - an IN list of ids
+            # built here would be that decision in SQL nothing tests.
+            cur.execute(
+                "SELECT c.name, k.skill, k.value "  # noqa: S608
+                "FROM characters c JOIN character_skills k ON k.guid = c.guid "
+                f"WHERE c.name IN ({holes})",
+                tuple(names),
+            )
+            skill_rows = list(cur.fetchall())
+            # The give commands the bridge has already tried, and how the
+            # world answered. GUARDED: a world whose image predates the give
+            # machinery has refused nothing, so a missing table or column is
+            # an empty list rather than a 503 that takes the whole view down -
+            # the same treatment _fetch_achievements gives overseer_dungeon_run.
+            try:
+                cur.execute(
+                    "SELECT target_name, target_arg, status, detail "
+                    "FROM overseer_command WHERE kind = 'give' "
+                    "AND created_at > NOW() - INTERVAL %s HOUR",
+                    (needs.HISTORY_HOURS,),
+                )
+                give_rows = list(cur.fetchall())
+            except pymysql.err.MySQLError as exc:
+                if exc.args and exc.args[0] in (1054, 1146):
+                    log.info("overseer_command give rows absent; needs runs without them")
+                    give_rows = []
+                else:
+                    raise
+            # NEWEST FIRST, and one read for two jobs: the quotation box on a
+            # card wants the last thing somebody SAID, and the bonds count the
+            # `reflection` rows underneath. Sieving them apart is needs.py's
+            # decision; ORDER BY id DESC then a LIMIT is the same window shape
+            # bridge._fetch_reflections uses, and for the same reason - a
+            # plain ASC LIMIT would pin the window to the oldest rows in the
+            # table and never move.
+            try:
+                cur.execute(
+                    "SELECT character_name, source, text "  # noqa: S608
+                    "FROM overseer_thought "
+                    f"WHERE character_name IN ({holes}) "
+                    "AND created_at > NOW() - INTERVAL %s HOUR "
+                    "ORDER BY id DESC LIMIT %s",
+                    (*names, needs.HISTORY_HOURS, needs.HISTORY_MAX),
+                )
+                thought_rows = list(cur.fetchall())
+            except pymysql.err.MySQLError as exc:
+                if exc.args and exc.args[0] in (1054, 1146):
+                    log.info("overseer_thought absent; needs runs without bonds history")
+                    thought_rows = []
+                else:
+                    raise
+    finally:
+        conn.close()
+    return {"char_rows": char_rows, "inventory_rows": inventory_rows,
+            "equipment_rows": equipment_rows, "skill_rows": skill_rows,
+            "give_rows": give_rows, "thought_rows": thought_rows}
+
+
 def _ensure_stream_store() -> None:
     """The table the map and the Windows agent meet in.
 
@@ -1610,6 +1749,31 @@ class Handler(BaseHTTPRequestHandler):
             log.exception("wealth query failed")
             self._send(503, "application/json", b'{"error": "world unreachable"}')
 
+    def _needs(self, query: dict) -> None:
+        """GET /api/needs - what the five need, and what is being done about it.
+
+        Deliberately BELOW _thoughts and beside _wealth, for exactly the
+        reason _wealth gives for being there: the Armory tab's suite slices
+        this class from `def _armory` to `def _thoughts` and reads everything
+        it finds as the Armory's own contract, so a handler dropped into that
+        window is read as part of a feature it has nothing to do with.
+
+        No name parameter, for the same reason /api/family and /api/armory
+        take none: WHO the family is belongs to bonds, and accepting a roster
+        here would turn this into a general character query wearing a
+        friendly name.
+        """
+        try:
+            payload = needs.build_needs(**_fetch_needs())
+            self._send(200, "application/json", json.dumps(payload).encode())
+        except Exception:
+            # Same contract as every other poll: the view keeps the bars it
+            # has already drawn and says they may be stale. A blank needs
+            # panel reads as "there is nothing wrong with any of them", which
+            # is the one claim this view exists to be able to disprove.
+            log.exception("needs query failed")
+            self._send(503, "application/json", b'{"error": "world unreachable"}')
+
     def _agenda(self, query: dict) -> None:
         """GET /api/agenda - what the family is trying to do right now.
 
@@ -1962,6 +2126,7 @@ class Handler(BaseHTTPRequestHandler):
         "/api/standing": _standing,
         "/api/wealth": _wealth,
         "/api/questlog": _questlog,
+        "/api/needs": _needs,
         "/api/achievements": _achievements,
         "/api/agenda": _agenda,
         "/api/thoughts": _thoughts,

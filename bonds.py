@@ -450,3 +450,262 @@ def history_from_thoughts(rows: list[dict]) -> list[tuple[str, str]]:
         if helper and m:
             pairs.append((helper, m.group(1)))
     return pairs
+
+
+# --- WHO ANSWERS WHO, AS SOMETHING TO LOOK AT (infra#2597) -----------------
+#
+# Everything above answers one plea at a time, which is what the bridge needs
+# and is nothing anybody can read. The Family view asks a different question -
+# "where does this family stand right now" - and the honest answer to it is
+# the same rules, asked about every pair instead of about one caller.
+#
+# COMPOSED HERE AND NOT IN THE PAGE. A threshold, a verdict and the sentence
+# explaining one are all judgement, and a page that worked out for itself that
+# two of three is "counting" and three of three is "stopped" would be a second
+# opinion about this family that could disagree with `decide` - silently,
+# because both would render a perfectly plausible row.
+#
+# Every verdict below comes back OUT of `decide`. Re-deriving one from the
+# counts would be a copy of the rules that starts out identical and drifts the
+# first time either is edited, which is precisely how the little-brother rule
+# spent a release being decoration.
+
+# The status word a pair gets, drawn as-is. Mono and upper case, like every
+# other status word on the page.
+ALWAYS = "ALWAYS"
+EXEMPT = "EXEMPT"
+COUNTING = "COUNTING"
+STOPPED = "STOPPED"
+
+# Which of the written rules is the one in play for a pair.
+FATHER = "father"
+JEALOUSY = "jealousy"
+LITTLE_BROTHER = "little brother"
+FATIGUE = "fatigue"
+
+# The order a reader wants them in: a refusal is the news, a counter running
+# towards one is the warning, and the two standing exemptions are the
+# background those are read against.
+_WORD_ORDER = {STOPPED: 0, COUNTING: 1, EXEMPT: 2, ALWAYS: 3}
+
+# Sorts a pair with no counter last within its own word, without pretending it
+# is one answer away from anything.
+_NO_COUNTER = 1 << 30
+
+
+@dataclass(frozen=True)
+class _Call:
+    """The one field `decide` reads off a plea.
+
+    `decide` takes a plea because a plea is what the bridge is holding. Asking
+    it about a PAIR needs the caller's name and nothing else, and building a
+    real `kin.Plea` here would drag a subject, a zone and a muster into a
+    question that has none of them.
+    """
+
+    caller: str
+
+
+@dataclass(frozen=True)
+class Answering:
+    """One ordered pair of the family, and what the bonds say about it now."""
+
+    responder: str
+    caller: str
+    will_answer: bool
+    # `decide`'s own words, so a view and the world never differ about why.
+    reason: str
+    word: str
+    rule: str
+    # WHOSE answers the rule counts, which is not always the responder's: what
+    # stops the father going to the mother is the count of the answers somebody
+    # ELSE gave her. Named in the payload because a bar labelled with the wrong
+    # person is worse than no bar at all.
+    counted: str
+    count: int
+    # The count that changes the answer, or None where no counter applies -
+    # which is what tells a reader to draw no bar rather than a full one.
+    threshold: int | None
+    note: str
+
+    @property
+    def key(self) -> str:
+        """A stable id for one pair, so a view can reuse a row rather than
+        rebuild it - the same reason every other list on that page has one."""
+        return "%s>%s" % (self.responder, self.caller)
+
+    @property
+    def pair(self) -> str:
+        """The two of them, over the sentence about them. "Grug to Ugga" is
+        who would be going to whom, which is the direction the rule is about -
+        not "Grug and Ugga", which says nothing about who calls."""
+        return "%s to %s" % (self.responder, self.caller)
+
+    @property
+    def progress(self) -> str:
+        """The counter in words, naming WHOSE answers it is counting.
+
+        "2 of 3" beside a Grug row would read as Grug's own tally, and it is
+        not: what stops the father going to the mother is the count of the
+        answers somebody else gave her. Empty where no counter applies.
+        """
+        if not self.threshold:
+            return ""
+        return "%s %d of %d" % (self.counted, self.count, self.threshold)
+
+    @property
+    def pct(self) -> int | None:
+        """How far along the counter is, 0-100, or None where none applies.
+
+        Capped at 100: a pair can be answered past its threshold (the rule
+        stops the NEXT answer, it does not erase the last one), and a bar drawn
+        at 140% is a rendering bug wearing a fact.
+        """
+        if not self.threshold:
+            return None
+        return min(100, round(100 * self.count / self.threshold))
+
+
+def _counter(me: str, them: str) -> tuple[str, str, int | None]:
+    """Which rule counts this pair, WHOSE answers it counts, and the count that
+    changes the answer.
+
+    Mirrors `decide` branch for branch, and the suite checks it against
+    `decide` rather than against a second reading of the docstring: this
+    decides what to SHOW and `decide` decides what HAPPENS, and the two quietly
+    disagreeing is the one failure that would look perfectly fine on screen.
+    """
+    bond, caller = FAMILY[me], FAMILY[them]
+    if bond.role == "father":
+        if caller.role == "mother":
+            # SUSPICION, not a literal name, for the same reason `decide` reads
+            # it from there: the rival is the person the father counts, and a
+            # second spelling here stops matching the moment the family is
+            # renamed for another world.
+            return JEALOUSY, SUSPICION["with"], JEALOUSY_THRESHOLD
+        return FATHER, me, None
+    if bond.role == "elder son" and caller.role == "younger son":
+        return LITTLE_BROTHER, me, None
+    return FATIGUE, me, FATIGUE_THRESHOLD
+
+
+def _times(count: int) -> str:
+    """"1 time", "2 times". A count printed into a sentence has to agree with
+    it: "answered Bork 1 times" is the sort of line that makes a reader
+    distrust the number as well as the grammar."""
+    return "1 time" if count == 1 else "%d times" % count
+
+
+def _note(rule: str, me: str, them: str, counted: str, count: int,
+          threshold: int | None, verdict: Verdict) -> str:
+    """One sentence about this pair, for a card or a row to print whole.
+
+    NO PRONOUNS. This family has a mother, a father and three boys, so a
+    sentence saying "her" is a sentence that has to know which of them it is
+    about; naming both sides costs a few characters and cannot be wrong.
+    """
+    if rule == JEALOUSY:
+        if not verdict.will_answer:
+            return "%s stays away from %s. %s" % (me, them, verdict.reason)
+        return (
+            "%s has answered %s %s of the %d that make %s stop going to %s."
+            % (counted, them, _times(count), threshold, me, them)
+        )
+    if rule == LITTLE_BROTHER:
+        return (
+            "%s turns up for %s every time. The little brother is exempt from "
+            "fatigue, so this one never runs out." % (me, them)
+        )
+    if rule == FATHER:
+        return "%s answers %s every time - %s." % (me, them, verdict.reason)
+    if not verdict.will_answer:
+        return "%s has stopped answering %s. %s" % (me, them, verdict.reason)
+    return (
+        "%s has answered %s %s of the %d that make the family tire of it."
+        % (me, them, _times(count), threshold)
+    )
+
+
+def answers(history: list[tuple[str, str]]) -> tuple:
+    """Every pair the bonds have something to say about, most consequential first.
+
+    NOT ALL TWENTY PAIRS. A pair nobody has ever answered, under the ordinary
+    fatigue rule, is the common and boring and correct case, and twenty rows of
+    it would drown the two or three actually asking for something - the same
+    reason `materials.plan` does not note a stack that is already in the right
+    bags. The two WRITTEN exceptions are always shown, because they are the
+    rules a reader has come to check, and every other pair appears the moment
+    somebody has actually answered somebody.
+
+    `history` is `history_from_thoughts`' output: (helper, called) pairs.
+    """
+    rows = []
+    for me in speaking_order(FAMILY):
+        for them in speaking_order(FAMILY):
+            if me == them:
+                continue
+            rule, counted, threshold = _counter(me, them)
+            count = _count(history, counted, them)
+            if rule not in (JEALOUSY, LITTLE_BROTHER) and not count:
+                continue
+            verdict = decide(me, _Call(them), history=history)
+            if rule == LITTLE_BROTHER:
+                word = EXEMPT
+            elif threshold is None:
+                word = ALWAYS
+            elif verdict.will_answer:
+                word = COUNTING
+            else:
+                word = STOPPED
+            rows.append(Answering(
+                responder=me, caller=them, will_answer=verdict.will_answer,
+                reason=verdict.reason, word=word, rule=rule, counted=counted,
+                count=count, threshold=threshold,
+                note=_note(rule, me, them, counted, count, threshold, verdict),
+            ))
+    rows.sort(key=lambda r: (
+        _WORD_ORDER[r.word],
+        (r.threshold - r.count) if r.threshold else _NO_COUNTER,
+        r.responder, r.caller,
+    ))
+    return tuple(rows)
+
+
+def note_for(name: str, *, history: list[tuple[str, str]]) -> str:
+    """The one line about where `name` stands, for their own card.
+
+    Where they are the RESPONDER first, because a card is about what that
+    character does; failing that, where they are the caller, because "somebody
+    has stopped coming when you ask" is a fact about you too. Anyone the rules
+    have nothing live to say about gets the standing rule rather than a blank:
+    a card with no bond note reads as a family with no bonds.
+    """
+    me = canon(name)
+    if me is None:
+        return ""
+    rows = answers(history)
+    mine = [r for r in rows if r.responder == me]
+    if not mine:
+        mine = [r for r in rows if r.caller == me]
+    if mine:
+        return mine[0].note
+    return (
+        "%s is the family's %s, and nobody has called on %s lately. Anyone "
+        "answers anyone until the same caller has been answered %d times."
+        % (me, FAMILY[me].role, me, FATIGUE_THRESHOLD)
+    )
+
+
+def answering_rule() -> str:
+    """The standing rules, said once under the rows rather than on every one.
+
+    Built FROM the thresholds rather than typed beside them, so the sentence
+    cannot go on claiming five after somebody has changed FATIGUE_THRESHOLD.
+    """
+    return (
+        "The father answers anyone in the family. The big brother turns up for "
+        "the little one however often it is asked. Everyone else answers the "
+        "same caller %d times and then stops - and %s answering the mother %d "
+        "times is what makes the father stop going to her."
+        % (FATIGUE_THRESHOLD, SUSPICION["with"], JEALOUSY_THRESHOLD)
+    )

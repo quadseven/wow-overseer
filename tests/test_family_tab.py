@@ -683,3 +683,312 @@ class TheFamilyIsTheFrontDoor(unittest.TestCase):
 
     def test_a_typed_or_pasted_hash_still_changes_the_view(self):
         self.assertIn('window.addEventListener("hashchange", applyHash)', self.route)
+
+
+class TheNeedsTheHandoversAndTheBonds(unittest.TestCase):
+    """infra#2597 on the Family view. The card answered "is my family alive"
+    and nothing under it, and alive has never been the interesting question:
+    they have spent whole sessions alive, standing still, with full bags, gear
+    at a quarter durability, and a stack of linen four of them keep trying to
+    hand to the fifth whose bags are full. Every one of those facts already
+    existed in a module and none of them was on a surface.
+
+    THE RULES THAT COST SOMETHING. These are not "does it render" - they are
+    the handful that a refactor could undo while leaving three perfectly
+    plausible panels on screen. The load-bearing one is
+    test_the_page_decides_nothing: the moment a threshold or a status word is
+    spelled in this file, the page has an opinion about the family that can
+    disagree with the module, and both will render."""
+
+    @classmethod
+    def setUpClass(cls):
+        import pathlib
+        here = pathlib.Path(__file__).resolve().parent.parent
+        cls.page = (here / "index.html").read_text(encoding="utf-8")
+        cls.server = (here / "map_server.py").read_text(encoding="utf-8")
+        cls.dockerfile = (here.parent.parent / "docker" / "wow-overseer"
+                          / "Dockerfile").read_text(encoding="utf-8")
+        start = cls.page.index("// --- the Family tab (infra#2892)")
+        cls.tab = cls.page[start:cls.page.index("loadZones().then(")]
+        cls.block = cls.tab[
+            cls.tab.index("// --- what they need, what wants to move"):
+            cls.tab.index("// --- the quest board (infra#3110")]
+        cls.section = cls.page[cls.page.index('<section id="family">'):
+                               cls.page.index("</section>")]
+        cls.css = cls.page[cls.page.index("--- the needs, the handovers"):
+                           cls.page.index("--- THE WATCH WALL")]
+
+    # --- the page decides nothing -----------------------------------------
+
+    def test_the_page_decides_nothing(self):
+        """THE WHOLE POINT. Not one status word, threshold or verdict is
+        spelled in this block: every one arrives on the payload from needs.py,
+        materials.py and bonds.py. A page that worked out for itself that 39%
+        durability is red would be a second opinion about the family, and it
+        would render a perfectly plausible bar while being wrong."""
+        import bonds
+        import materials
+        for word in (materials.MOVING, "GAVE UP AFTER", bonds.STOPPED,
+                     bonds.COUNTING, bonds.EXEMPT, bonds.ALWAYS):
+            self.assertNotIn(word, self.block, word)
+
+    def test_no_threshold_is_compared_in_javascript(self):
+        """A comparison against a number IS a threshold, whatever it is called.
+        There is not one in this block, and this fails the moment somebody
+        adds the first - which is the edit that starts the drift."""
+        self.assertNotIn(" < ", self.block)
+        self.assertNotIn(" > ", self.block)
+        self.assertNotIn(" <= ", self.block)
+        self.assertNotIn(" >= ", self.block)
+
+    def test_no_sentence_is_composed_in_a_template(self):
+        """Every line of prose on these three panels is a field. Joining a name
+        to a verb here would be writing dialogue in a renderer."""
+        for field in (".said", ".note", ".title", ".headline", ".rule",
+                      ".refusal_line", ".progress", ".pair"):
+            self.assertIn(field, self.block, field)
+        self.assertNotIn('" + row.holder + " to " + row.taker', self.block)
+
+    def test_the_worst_line_takes_its_colour_from_the_module(self):
+        """Rust when it is a warning, amber when it is a caution, muted when
+        there is nothing to say - and which of those it is, is a judgement."""
+        self.assertIn('"fworst s-" + m.worst.state', self.block)
+        self.assertIn(".fworst.s-warn { color:var(--warn-text); }", self.page)
+        self.assertIn(".fworst.s-caution { color:var(--caution-text); }", self.page)
+
+    def test_the_label_goes_ink_when_it_is_the_problem(self):
+        """The reading trick this panel is made of: four grey labels and one
+        black one answers "what is wrong with him" before it is asked. Which
+        one is the problem is needs.py's decision, carried as a flag."""
+        self.assertIn("b.problem", self.block)
+        rule = self.css[self.css.index(".fneed.problem .fneedl {"):]
+        self.assertIn("color:var(--on-card)", rule[:rule.index("}")])
+        rule = self.css[self.css.index(".fneedl {"):]
+        self.assertIn("color:var(--on-card-dim)", rule[:rule.index("}")])
+
+    # --- nothing near a card is ever rebuilt -------------------------------
+
+    def test_the_new_rows_are_built_once_and_moved_rather_than_rebuilt(self):
+        """A card holds a live <video>. There is exactly ONE replaceChildren on
+        this page - the quest board's, which holds no player - and these three
+        panels do not add a second: rows are keyed by the id the module sends
+        and re-ordered with appendChild, which MOVES a node."""
+        self.assertEqual(self.tab.count(".replaceChildren("), 1)
+        self.assertNotIn(".replaceChildren(", self.block)
+        self.assertNotIn("innerHTML", self.block)
+        for builder, reuse in (("function needBar", "if (n) return n;"),
+                               ("function moveRow", "if (r) return r;"),
+                               ("function bondRow", "if (r) return r;")):
+            fn = self.block[self.block.index(builder):]
+            self.assertIn(reuse, fn[:400],
+                          builder + " rebuilds its row instead of reusing it")
+
+    def test_a_motive_that_stops_applying_is_hidden_and_not_removed(self):
+        """A character wearing nothing that can break has no repair question,
+        and gets one again the moment they put a helmet on. A node kept is a
+        node that never has to be rebuilt under somebody's thumb."""
+        render = self.block[self.block.index("function renderNeeds"):]
+        render = render[:render.index("function renderMoves")]
+        self.assertIn("n.row.hidden = true", render)
+        self.assertIn("c.needbox.appendChild(n.row)", render)
+
+    def test_a_bar_with_no_percentage_draws_no_bar(self):
+        """None is not zero. "Nothing that can break" drawn as an empty bar
+        reads as gear at zero durability, which is the opposite claim."""
+        self.assertIn('b.pct === null ? "none" : ""', self.block)
+        self.assertIn('row.pct === null ? "none" : ""', self.block)
+
+    # --- what is on the page ----------------------------------------------
+
+    def test_the_three_blocks_sit_under_the_board_in_the_order_they_are_read(self):
+        """Who they are, what they are doing, what they need moved, and who
+        will still turn up. Each one is the context for the next."""
+        self.assertLess(self.section.index('id="fboard"'),
+                        self.section.index('id="fmove"'))
+        self.assertLess(self.section.index('id="fmove"'),
+                        self.section.index('id="fbonds"'))
+        for node in ("fmovehead", "fmovelist", "fmoverule",
+                     "fbondhead", "fbondlist", "fbondrule"):
+            self.assertIn('id="%s"' % node, self.section, node)
+
+    def test_every_block_wears_the_same_three_part_rule(self):
+        """A mono index, a 2px line and the label right-aligned in muted, four
+        times. One of the four shouting in an <h2> while the others whisper is
+        what this replaced."""
+        self.assertEqual(self.section.count('class="fsec"'), 4)
+        for index in ("01", "02", "03", "04"):
+            self.assertIn('<span class="fsecn">%s</span>' % index, self.section)
+        self.assertEqual(self.section.count('class="fsecline"'), 4)
+        rule = self.page[self.page.index(".fsecline {"):]
+        self.assertIn("height:2px", rule[:rule.index("}")])
+
+    def test_the_ink_line_is_themed_rather_than_literally_ink(self):
+        """--ink is a fixed near-black and this line sits on the page ground,
+        not on a card. A literal --ink would be an invisible rule for anybody
+        reading in the dark."""
+        rule = self.page[self.page.index(".fsecline {"):]
+        rule = rule[:rule.index("}")]
+        self.assertIn("background:var(--shell-text)", rule)
+        self.assertNotIn("var(--ink)", rule)
+
+    def test_the_glyph_tile_is_a_mark_and_not_a_photo_slot(self):
+        """64px cannot hold a picture plus any chrome round it, and the only
+        likeness of these characters on the page is the live broadcast a
+        couple of centimetres above. So it is initials over a two-letter race
+        mark, and both come off the payload - working out what to call a race
+        is a decision, and family.race_mark owns it."""
+        card = self.tab[self.tab.index("function familyCard"):]
+        card = card[:card.index("// --- the broadcasts")]
+        self.assertIn('el("div", "fglyph")', card)
+        self.assertNotIn('createElement("img")', card)
+        self.assertNotIn("<img", card)
+        self.assertIn("c.ginit.textContent = m.initials", self.tab)
+        self.assertIn("c.gmark.textContent = m.mark", self.tab)
+
+    def test_the_glyph_takes_its_colour_from_the_cards_state_and_not_from_js(self):
+        """"How is he" is decided once, by family._condition, and lands as the
+        card's class. A second assignment in JavaScript is how a priest came to
+        be painted invisible on a white card."""
+        self.assertNotIn("ginit.style.color", self.page)
+        for state in ("c-hurt", "c-dead", "c-gone"):
+            self.assertIn(".fcard.%s .fginit" % state, self.page)
+
+    def test_the_quotation_is_speech_and_never_an_inner_thought(self):
+        """overseer_thought holds the family's inner life as well as its
+        speech. Quoting a reflection on a card would put words in somebody's
+        mouth; needs.SPOKEN_SOURCES is where that line is drawn."""
+        import needs
+        self.assertIn('el("div", "fsaidl", "said out loud")', self.tab)
+        self.assertIn("c.said.textContent = m.said.text", self.block)
+        self.assertIn('m.said.spoken ? "" : " quiet"', self.block)
+        # And the sieve stays in the module. A source name spelled in this file
+        # is that decision made a second time, in the one place it cannot be
+        # tested - and the failure mode is a card quoting a thought nobody
+        # said, which reads exactly like a card quoting speech.
+        self.assertTrue(needs.SPOKEN_SOURCES)
+        for source in tuple(needs.SPOKEN_SOURCES) + ("reflection", "goal",
+                                                     "command", "event"):
+            self.assertNotIn('"%s"' % source, self.block, source)
+
+    def test_the_card_carries_the_needs_the_worst_line_and_the_bond(self):
+        """In that order, and above the watch button: what is wrong with them
+        is read before deciding whether to go and look."""
+        card = self.tab[self.tab.index("function familyCard"):]
+        card = card[:card.index("// --- the broadcasts")]
+        strip = card[card.index("strip.append("):]
+        strip = strip[:strip.index(")")]
+        for node in ("saidbox", "needbox", "worst", "bond"):
+            self.assertIn(node, strip, node)
+        self.assertLess(strip.index("needbox"), strip.index("worst"))
+        self.assertLess(strip.index("bond"), strip.index("btn"))
+
+    def test_the_two_lists_use_the_grid_the_handoff_draws(self):
+        """auto-fit at 290px, unlike the feed grid above it. These hold text,
+        so there is no <video> to protect from a column count that changes as
+        a window is dragged - which is the only reason that grid has explicit
+        stops."""
+        rule = self.css[self.css.index("#fmovelist, #fbondlist {"):]
+        rule = rule[:rule.index("}")]
+        self.assertIn("repeat(auto-fit,minmax(290px,1fr))", rule)
+        self.assertIn("gap:14px", rule)
+
+    # --- the poll ----------------------------------------------------------
+
+    def test_it_rides_the_slow_cadence_and_still_reads_on_arrival(self):
+        """Bags, durability, money, give rows and thoughts are all SAVED state
+        written on the core's own timer, so a 5s poll would re-fetch an
+        identical payload six times per actual change. Entering the tab reads
+        immediately, or these panels are blank for half a minute on arrival."""
+        self.assertIn("setInterval(pollNeeds, 30000)", self.tab)
+        show = self.tab[self.tab.index("function showView"):]
+        show = show[:show.index("setInterval(pollFamily")]
+        self.assertIn("pollNeeds();", show[show.index("if (isFam)"):])
+
+    def test_a_failed_poll_keeps_the_panels_it_has(self):
+        """An empty needs panel reads as "there is nothing wrong with any of
+        them", which is the one claim this view exists to be able to disprove."""
+        poll = self.block[self.block.index("async function pollNeeds"):]
+        self.assertIn("unreachable", poll)
+        self.assertNotIn("replaceChildren", poll)
+
+    # --- the endpoint ------------------------------------------------------
+
+    def test_the_endpoint_is_wired_into_the_route_table(self):
+        """do_GET is a lookup and nothing else, so a handler that is never
+        named in the table is a 404 with a docstring."""
+        self.assertIn('"/api/needs": _needs,', self.server)
+        self.assertIn('fetch(u("/api/needs"))', self.tab)
+
+    def test_the_endpoint_takes_no_roster_from_the_caller(self):
+        handler = self.server[self.server.index("def _needs"):]
+        handler = handler[:handler.index("def _agenda")]
+        self.assertIn("needs.build_needs(**_fetch_needs())", handler)
+        self.assertNotIn("query.get", handler)
+        self.assertIn("self._send(503", handler)
+
+    def test_the_handler_sits_outside_every_other_suites_window(self):
+        """The Armory suite reads `def _armory` to `def _thoughts` as its own
+        contract; the Wealth handler is below _thoughts for exactly that
+        reason and so is this one."""
+        self.assertGreater(self.server.index("def _needs"),
+                           self.server.index("def _thoughts"))
+
+    def test_the_fetch_sits_outside_the_wealth_suites_window(self):
+        """That window is read as the Wealth view's SQL, and it asserts the
+        inventory query is NOT bounded by slot. The durability read here IS
+        bounded by slot, because a paper doll is exactly what it wants."""
+        self.assertGreater(self.server.index("def _fetch_needs"),
+                           self.server.index("# Everything a tooltip draws"))
+        self.assertLess(self.server.index("def _fetch_needs"),
+                        self.server.index("def _ensure_stream_store"))
+
+    def test_the_window_is_the_modules_number_and_not_one_typed_into_sql(self):
+        """A window is a decision about what counts as recent, and a 24 in a
+        query nothing tests is a decision nobody can find."""
+        fetch = self.server[self.server.index("def _fetch_needs"):]
+        fetch = fetch[:fetch.index("def _ensure_stream_store")]
+        # BOTH reads, counted rather than merely present. Two queries take the
+        # window and one of them going back to a literal would leave the other
+        # holding the name - the assertion would pass and the two reads would
+        # be looking at different amounts of history.
+        self.assertEqual(fetch.count("needs.HISTORY_HOURS"), 2)
+        self.assertIn("needs.HISTORY_MAX", fetch)
+
+    def test_the_two_reads_that_can_be_missing_are_guarded(self):
+        """A world whose image predates the give machinery has refused nothing.
+        infra#3172 cost a whole tab on production because one read of a table
+        the module creates was not guarded."""
+        fetch = self.server[self.server.index("def _fetch_needs"):]
+        fetch = fetch[:fetch.index("def _ensure_stream_store")]
+        self.assertEqual(fetch.count("1054, 1146"), 2)
+        self.assertIn("give_rows = []", fetch)
+        self.assertIn("thought_rows = []", fetch)
+
+    def test_the_inventory_read_is_the_same_columns_the_bag_view_uses(self):
+        """Two views counting the same bags off two column lists is two
+        answers to how full a bag is, and one of them drifts."""
+        fetch = self.server[self.server.index("def _fetch_needs"):]
+        fetch = fetch[:fetch.index("def _ensure_stream_store")]
+        self.assertIn("_WEALTH_ITEM_COLUMNS", fetch)
+
+    def test_the_gear_read_is_bounded_by_the_module_and_not_by_a_typed_19(self):
+        fetch = self.server[self.server.index("def _fetch_needs"):]
+        fetch = fetch[:fetch.index("def _ensure_stream_store")]
+        self.assertIn("len(armory.EQUIPPED_SLOTS)", fetch)
+        self.assertIn("it.MaxDurability AS max_durability", fetch)
+
+    def test_the_skills_are_sieved_in_python_and_not_in_sql(self):
+        """character_skills also holds languages, Defence and every weapon
+        skill. Which of them is a profession is needs.held_skills' decision,
+        and an IN list of ids here would be that decision in SQL nothing
+        tests."""
+        fetch = self.server[self.server.index("def _fetch_needs"):]
+        fetch = fetch[:fetch.index("def _ensure_stream_store")]
+        self.assertIn("JOIN character_skills k ON k.guid = c.guid", fetch)
+        self.assertNotIn("k.skill IN", fetch)
+
+    def test_the_module_ships_in_the_image(self):
+        """The build's shared-dir copy takes top-level files only and the
+        Dockerfile names them explicitly, so a new module is one forgotten line
+        away from a pod that crashes at start, long after CI went green."""
+        self.assertIn("_shared/needs.py", self.dockerfile)

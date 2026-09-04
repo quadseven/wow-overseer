@@ -541,5 +541,172 @@ class SpeakingOrderTest(unittest.TestCase):
         self.assertEqual(bonds.speaking_order([]), [])
 
 
+
+class WhoAnswersWhoTest(unittest.TestCase):
+    """`answers` is the same rules asked about every pair instead of about one
+    plea, and the failure it can have is not "wrong" but "plausible": a row
+    that says COUNTING while `decide` would refuse renders perfectly and lies.
+
+    The class that catches that is TheViewAgreesWithTheWorld below. These are
+    the readable half - what a person is actually shown.
+    """
+
+    def rows(self, history):
+        return {r.key: r for r in bonds.answers(history)}
+
+    def test_the_two_written_exceptions_are_always_shown(self):
+        """They are the rules a reader has come to check. A section that only
+        appeared once somebody had already answered somebody would be empty on
+        exactly the day you wanted to know what the rules were."""
+        rows = self.rows([])
+        self.assertIn("Grug>Ugga", rows)
+        self.assertIn("Grog>Bork", rows)
+
+    def test_an_ordinary_pair_nobody_has_answered_is_not_a_row(self):
+        """Twenty rows of "nothing has happened" would drown the two or three
+        that are asking for something - the same reason materials.plan does not
+        note a stack already in the right bags."""
+        self.assertNotIn("Bork>Grog", self.rows([]))
+
+    def test_it_appears_the_moment_somebody_has_actually_answered(self):
+        self.assertIn("Bork>Grog", self.rows([("Bork", "Grog")]))
+
+    def test_the_fathers_counter_counts_somebody_elses_answers(self):
+        """THE RULE THAT IS EASIEST TO GET WRONG. What stops Grug going to Ugga
+        is not how often GRUG has answered her - it is how often Og has. A row
+        labelled with the responder's own tally would be a different number,
+        moving at a different speed, under the right words."""
+        row = self.rows([("Og", "Ugga"), ("Og", "Ugga")])["Grug>Ugga"]
+        self.assertEqual(row.counted, bonds.SUSPICION["with"])
+        self.assertEqual(row.count, 2)
+        self.assertEqual(row.threshold, bonds.JEALOUSY_THRESHOLD)
+        self.assertIn(bonds.SUSPICION["with"], row.progress)
+
+    def test_the_fathers_own_answers_do_not_move_that_counter(self):
+        row = self.rows([("Grug", "Ugga")] * 9)["Grug>Ugga"]
+        self.assertEqual(row.count, 0)
+
+    def test_it_says_stopped_once_the_rule_has_fired(self):
+        row = self.rows([("Og", "Ugga")] * bonds.JEALOUSY_THRESHOLD)["Grug>Ugga"]
+        self.assertEqual(row.word, bonds.STOPPED)
+        self.assertFalse(row.will_answer)
+
+    def test_the_little_brother_is_exempt_rather_than_merely_ahead(self):
+        """Bork calls constantly and that is characterisation. The row must say
+        EXEMPT however many times Grog has been - a counter here would read as
+        a big brother about to run out, which is the opposite of the rule."""
+        row = self.rows([("Grog", "Bork")] * 50)["Grog>Bork"]
+        self.assertEqual(row.word, bonds.EXEMPT)
+        self.assertIsNone(row.threshold)
+        self.assertIsNone(row.pct)
+        self.assertEqual(row.progress, "")
+
+    def test_a_refusal_sorts_above_a_counter_and_a_counter_above_an_exemption(self):
+        """A refusal is the news. An exemption is the background it is read
+        against, and putting the background first buries the finding."""
+        words = [r.word for r in bonds.answers(
+            [("Og", "Ugga")] * bonds.JEALOUSY_THRESHOLD + [("Bork", "Grog")])]
+        self.assertEqual(words[0], bonds.STOPPED)
+        self.assertLess(words.index(bonds.COUNTING), words.index(bonds.EXEMPT))
+
+    def test_the_bar_never_runs_past_the_end(self):
+        """A pair can be answered past its threshold - the rule stops the NEXT
+        answer, it does not erase the last one - and a bar at 140% is a
+        rendering bug wearing a fact."""
+        row = self.rows([("Og", "Ugga")] * 20)["Grug>Ugga"]
+        self.assertEqual(row.pct, 100)
+
+    def test_the_sentence_agrees_with_the_number_it_carries(self):
+        """"answered Bork 1 times" makes a reader distrust the count as well as
+        the grammar."""
+        row = self.rows([("Bork", "Grog")])["Bork>Grog"]
+        self.assertIn("1 time ", row.note + " ")
+        self.assertNotIn("1 times", row.note)
+
+    def test_no_note_reaches_for_a_pronoun_it_cannot_know(self):
+        """This family is a mother, a father and three boys. A sentence that
+        says "her" has to know which of them it is about; naming both sides
+        costs a few characters and cannot be wrong."""
+        for row in bonds.answers([("Og", "Ugga")] * 2 + [("Ugga", "Bork")]):
+            for pronoun in (" he ", " she ", " him ", " her ", " his "):
+                self.assertNotIn(pronoun, " " + row.note + " ", row.note)
+
+
+class TheViewAgreesWithTheWorld(unittest.TestCase):
+    """The one failure that would look fine on screen.
+
+    `_counter` mirrors `decide` branch for branch so a row can say WHOSE
+    answers it is counting. Two copies of one rule start identical and drift
+    the first time either is edited - which is exactly how the little-brother
+    rule spent a release being decoration. So every row is checked against
+    `decide` itself rather than against a second reading of the docstring."""
+
+    def histories(self):
+        return [
+            [],
+            [("Og", "Ugga")] * 2,
+            [("Og", "Ugga")] * bonds.JEALOUSY_THRESHOLD,
+            [("Grog", "Bork")] * (bonds.FATIGUE_THRESHOLD + 2),
+            [("Ugga", "Bork")] * bonds.FATIGUE_THRESHOLD,
+            [(h, c) for h in bonds.FAMILY for c in bonds.FAMILY if h != c] * 3,
+        ]
+
+    def test_every_verdict_is_the_one_decide_would_give(self):
+        for history in self.histories():
+            for row in bonds.answers(history):
+                verdict = bonds.decide(
+                    row.responder, bonds._Call(row.caller), history=history)
+                self.assertEqual(row.will_answer, verdict.will_answer,
+                                 (row.key, len(history)))
+                self.assertEqual(row.reason, verdict.reason, row.key)
+
+    def test_stopped_and_will_answer_can_never_disagree(self):
+        for history in self.histories():
+            for row in bonds.answers(history):
+                self.assertEqual(row.word == bonds.STOPPED, not row.will_answer,
+                                 (row.key, row.word))
+
+    def test_a_counter_that_has_reached_its_threshold_has_stopped(self):
+        """The whole promise of the bar: when it fills, something changes."""
+        for history in self.histories():
+            for row in bonds.answers(history):
+                if row.threshold and row.count >= row.threshold:
+                    self.assertEqual(row.word, bonds.STOPPED, row.key)
+
+
+class TheCardNoteTest(unittest.TestCase):
+
+    def test_it_prefers_what_this_character_does(self):
+        """A card is about that character. Where they are the responder comes
+        first; where they are the caller is still their business, because
+        somebody having stopped coming when you ask is a fact about you."""
+        note = bonds.note_for("Grog", history=[])
+        self.assertIn("Grog", note)
+        self.assertIn("Bork", note)
+
+    def test_a_caller_only_row_still_says_something_about_them(self):
+        note = bonds.note_for("Ugga", history=[("Og", "Ugga")] * 2)
+        self.assertIn("Ugga", note)
+        self.assertIn(bonds.SUSPICION["with"], note)
+
+    def test_nobody_gets_a_blank(self):
+        """A card with no bond note reads as a family with no bonds."""
+        for name in bonds.FAMILY:
+            self.assertTrue(bonds.note_for(name, history=[]).strip(), name)
+
+    def test_somebody_outside_the_family_gets_nothing_rather_than_a_guess(self):
+        self.assertEqual(bonds.note_for("Thrall", history=[]), "")
+
+
+class TheStandingRuleIsBuiltFromTheThresholds(unittest.TestCase):
+
+    def test_it_quotes_the_numbers_rather_than_repeating_them(self):
+        """A sentence with a 5 typed into it goes on claiming five the day
+        somebody changes FATIGUE_THRESHOLD, and reads exactly as convincingly."""
+        rule = bonds.answering_rule()
+        self.assertIn(str(bonds.FATIGUE_THRESHOLD), rule)
+        self.assertIn(str(bonds.JEALOUSY_THRESHOLD), rule)
+        self.assertIn(bonds.SUSPICION["with"], rule)
+
 if __name__ == "__main__":
     unittest.main()
