@@ -186,6 +186,31 @@ def hero_of(members, chosen=None) -> str | None:
     return names[0] if names else None
 
 
+def headline(members) -> str:
+    """One line over the whole wall, and it must not claim what it cannot see.
+
+    THE FIRST VERSION OF THIS CLAIMED "5 of 5 broadcasting" AND WAS WRONG ON
+    PRODUCTION THE MOMENT IT SHIPPED. It counted `playable`, which means "a URL
+    exists to try", not "an encoder is publishing" - and the production page
+    reported five characters broadcasting while reporting the same five logged
+    out, on the same screen, from the same payload.
+
+    Nothing this module can see knows whether video is flowing. That is the
+    WHEP handshake, it happens in the browser, and it is the tile's own job to
+    say so. So this counts the only thing the payload actually knows: who is in
+    the world. A count of streams is not offered at all, because an honest one
+    is not available here and a dishonest one is worse than none.
+    """
+    if not members:
+        return "no family"
+    here = sum(1 for m in members if m.get("present"))
+    if here == 0:
+        # Said as a sentence rather than as "0 of 5", because zero of five is
+        # a statistic and nobody being there is the thing worth reading.
+        return "nobody is in the world"
+    return "%d of %d in the world" % (here, len(members))
+
+
 def build_wall(members, chosen=None) -> dict:
     """The whole wall, composed, in roster order.
 
@@ -212,6 +237,7 @@ def build_wall(members, chosen=None) -> dict:
         "modes": list(MODES),
         "mode_labels": dict(MODE_LABELS),
         "default_mode": DEFAULT_MODE,
+        "headline": headline(members),
         "hero": hero_of(members, chosen),
         "warning": leader_warning(members),
         "tiles": tiles,

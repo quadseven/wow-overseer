@@ -56,10 +56,17 @@ class TheAchievementsTab(unittest.TestCase):
                         self.page.index("for (const id of CONTINENT_ORDER)"))
 
     def test_the_view_is_an_address(self):
-        """#achievements opens straight onto the tab, like #armory does."""
-        apply = self.page[self.page.index("function applyHash"):]
-        apply = apply[:apply.index("window.addEventListener(\"hashchange\"")]
-        self.assertIn("showView(ACH_VIEW)", apply)
+        """#achievements opens straight onto the tab, like #armory does.
+
+        ASKED OF THE ROUTING TABLE, not of a branch. This used to look for
+        `showView(ACH_VIEW)` inside applyHash, which was true only while the
+        router was a chain of ifs. That chain silently swallowed #watch when
+        the Watch wall was added, so the router became a list; being in that
+        list is now what "reachable by hash" means, and it is the same
+        guarantee stated against a shape that cannot lose a view."""
+        listed = self.page[self.page.index("const HASH_VIEWS = ["):]
+        listed = listed[:listed.index("]")]
+        self.assertIn("ACH_VIEW", listed)
 
     def test_show_view_hides_it_with_the_others(self):
         show = self.page[self.page.index("function showView"):]

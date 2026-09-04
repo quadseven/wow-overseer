@@ -2781,12 +2781,12 @@ function renderWall(p) {
   }
   wallwarn.textContent = w.warning || "";
   wallwarn.hidden = !w.warning;
-  // Counted from what the module marked playable rather than from a
-  // constant. The wall shows the continuous broadcasts, which have no channel
-  // budget - watchwall says in its docstring why that vocabulary is missing
-  // here on purpose.
-  const live = w.tiles.filter((t) => t.playable).length;
-  wallhead.textContent = live + " of " + w.tiles.length + " broadcasting";
+  // PRINTED, NOT COMPOSED. This line used to be built here, out of `playable`,
+  // and it read "5 of 5 broadcasting" on production while the same payload
+  // reported all five logged out. `playable` means a URL exists to try, and
+  // whether video is actually flowing is the WHEP handshake in the browser,
+  // which the tile reports for itself. The module now writes the sentence.
+  wallhead.textContent = w.headline || "";
   applyWallLayout();
 }
 
@@ -5175,6 +5175,19 @@ function adoptContinent() {
   wantedContinent = "";
 }
 
+// EVERY VIEW A HASH CAN NAME, as a list rather than as a chain of ifs.
+//
+// THE LADDER THIS REPLACES HAD ALREADY EATEN A VIEW. It tested MAP, then ACH,
+// then ternaried ARMORY against FAMILY - so #watch, added by the Watch wall,
+// matched nothing, fell to the final else and opened the FAMILY tab. No error,
+// no warning, a deep link that quietly showed the wrong page. It is the same
+// shape as the bug markTabs records in its own comment: a hard-coded ladder
+// that silently swallows the view somebody adds next.
+//
+// The map is still separate below, because it is the one view whose hash
+// carries state (which continent) and so needs more than a name.
+const HASH_VIEWS = [FAMILY_VIEW, WATCH_VIEW, ARMORY_VIEW, ACH_VIEW];
+
 function applyHash() {
   const raw = (location.hash || "").replace(/^#/, "");
   const cut = raw.indexOf("/");
@@ -5186,8 +5199,11 @@ function applyHash() {
     render();
     return;
   }
-  if (name === ACH_VIEW) { showView(ACH_VIEW); return; }
-  showView(name === ARMORY_VIEW ? ARMORY_VIEW : FAMILY_VIEW);
+  // FAMILY for anything unrecognised, deliberately: an empty hash, a typo and
+  // a stale bookmark all land on the page that answers "are my five all
+  // right", which is the right place to be dropped when the request made no
+  // sense.
+  showView(HASH_VIEWS.indexOf(name) >= 0 ? name : FAMILY_VIEW);
 }
 
 window.addEventListener("hashchange", applyHash);

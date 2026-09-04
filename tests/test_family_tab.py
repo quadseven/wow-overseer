@@ -637,12 +637,22 @@ class TheFamilyIsTheFrontDoor(unittest.TestCase):
                         self.page.index("\napplyHash();"))
 
     def test_an_unknown_or_missing_hash_lands_on_the_family(self):
+        """The fallback, which is the half of routing that gets a stale
+        bookmark to somewhere useful.
+
+        The ordering assertion this used to make (MAP_VIEW named before
+        ARMORY_VIEW inside applyHash) was really a description of the old
+        if-ladder, and it broke when that ladder became a list, which it had
+        to, because the ladder had just swallowed #watch. What it was actually
+        protecting is below: the map still returns first, and anything the
+        table does not name still lands on the family."""
         fn = self.route[self.route.index("function applyHash"):]
         fn = fn[:fn.index('window.addEventListener("hashchange"')]
-        self.assertIn("FAMILY_VIEW", fn)
-        # The map branch returns first; everything else falls through to the
-        # family, including a hash that names nothing at all.
-        self.assertLess(fn.index("MAP_VIEW"), fn.index("ARMORY_VIEW"))
+        # The map returns before the table is consulted, because its hash
+        # carries which continent and so needs more than a name.
+        self.assertLess(fn.index("if (name === MAP_VIEW)"),
+                        fn.index("HASH_VIEWS.indexOf(name)"))
+        self.assertIn("HASH_VIEWS.indexOf(name) >= 0 ? name : FAMILY_VIEW", fn)
 
     def test_the_other_views_are_still_reachable_by_link(self):
         """The half that is easy to lose: making one view the default is only

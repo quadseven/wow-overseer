@@ -19,6 +19,7 @@ import os
 import re
 import unittest
 
+LF = chr(10)
 HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 with open(os.path.join(HERE, "index.html"), encoding="utf-8") as _fh:
     PAGE = _fh.read()
@@ -35,6 +36,19 @@ def _wall_js():
     """
     js = APP[APP.index("// --- the Watch wall"):]
     return js[:js.index("function layoutBroadcasts")]
+
+
+def _wall_code():
+    """The wall with its comments stripped.
+
+    Four assertions in the change that added this failed on their own
+    explanations: a comment quoting the string it replaced is not that string
+    coming back, and a test that cannot tell the difference punishes writing
+    the comment at all. Anything asserting that a bad pattern is GONE reads
+    this; anything asserting a good pattern is PRESENT can read the source.
+    """
+    return LF.join(l for l in _wall_js().splitlines()
+                   if not l.strip().startswith("//"))
 
 
 def absent(case, needle, haystack, where):
@@ -90,6 +104,37 @@ class TheWallIsItsOwnView(unittest.TestCase):
                       PAGE)
 
 
+class EveryViewIsReachableByItsOwnHash(unittest.TestCase):
+    """FOUND LIVE, on the deploy of the Watch wall. `#watch` opened the FAMILY
+    tab: applyHash was a chain of ifs against three named views, the wall was a
+    fourth, and an unrecognised name fell through to the final else. No error
+    anywhere, just a deep link showing the wrong page.
+
+    So the list is asserted against the view constants themselves, which is the
+    only version of this test that survives somebody adding a fifth view."""
+
+    def test_the_router_is_a_list_and_not_a_ladder(self):
+        self.assertIn("const HASH_VIEWS = [", PAGE)
+
+    def test_every_view_constant_is_routable(self):
+        names = set(re.findall(r"^const ([A-Z]+_VIEW) = ", APP, re.M))
+        listed = PAGE[PAGE.index("const HASH_VIEWS = ["):]
+        listed = listed[:listed.index("]")]
+        for name in sorted(names):
+            if name == "MAP_VIEW":
+                # The map is routed separately because its hash carries which
+                # continent, so it needs more than a name.
+                self.assertIn("if (name === MAP_VIEW)", PAGE)
+                continue
+            self.assertIn(name, listed, "%s is not reachable by hash" % name)
+
+    def test_an_unknown_hash_falls_back_to_family(self):
+        """An empty hash, a typo and a stale bookmark should all land on the
+        page that answers "are my five all right"."""
+        self.assertIn("HASH_VIEWS.indexOf(name) >= 0 ? name : FAMILY_VIEW",
+                      PAGE)
+
+
 class NoJudgementLivesInTheScript(unittest.TestCase):
     """infra#2597. Every sentence on the wall is composed by watchwall.py, and
     the page places nodes."""
@@ -115,20 +160,26 @@ class NoJudgementLivesInTheScript(unittest.TestCase):
         have to agree about what the urgent thing is."""
         self.assertIn('slot.classList.add("t-" + t.tone)', PAGE)
 
+    def test_the_headline_is_printed_not_written(self):
+        """It used to be built in the page out of `playable` and said
+        "5 of 5 broadcasting" over a production realm with nobody logged in."""
+        self.assertIn('wallhead.textContent = w.headline', PAGE)
+        absent(self, "broadcasting", _wall_code(), "the wall view")
+
     def test_the_warning_is_printed_not_written(self):
         """Scoped to the wall, not the page. The on-demand panel says
         "selfbot" in a button title and has said it since infra#2887; that
         copy is correct where it is. The rule being pinned is that the WALL
         prints what watchwall composed instead of wording it again."""
         self.assertIn("wallwarn.textContent = w.warning", PAGE)
-        absent(self, "selfbot", _wall_js(), "the wall view")
-        absent(self, "follow", _wall_js(), "the wall view")
+        absent(self, "selfbot", _wall_code(), "the wall view")
+        absent(self, "follow", _wall_code(), "the wall view")
 
     def test_the_page_never_reorders_the_roster(self):
         """The module has tests pinning that the wall does not reorder. A sort
         here would move that guarantee somewhere no test can see it."""
         for banned in (".sort(", "sortBy", ".reverse("):
-            absent(self, banned, _wall_js(), "the wall view")
+            absent(self, banned, _wall_code(), "the wall view")
 
 
 class TheChannelBudgetIsNotOnThisWall(unittest.TestCase):
@@ -140,14 +191,14 @@ class TheChannelBudgetIsNotOnThisWall(unittest.TestCase):
     def test_the_wall_view_names_none_of_it(self):
         for word in ("max_channels", "channels_in_use", "startup_seconds",
                      "unclaimed", "heartbeat"):
-            absent(self, word, _wall_js(), "the wall view")
+            absent(self, word, _wall_code(), "the wall view")
 
     def test_the_wall_asks_for_no_stream(self):
         """It shows what is already broadcasting. A start button here would be
         a second way to spend a channel, from a view that cannot show the
         refusal."""
-        absent(self, "/api/watch", _wall_js(), "the wall view")
-        absent(self, '"start"', _wall_js(), "the wall view")
+        absent(self, "/api/watch", _wall_code(), "the wall view")
+        absent(self, '"start"', _wall_code(), "the wall view")
 
 
 class TheTilesAreMovedAndNeverRebuilt(unittest.TestCase):
@@ -225,13 +276,10 @@ class TheStoredPreferencesAreHandledLikeStorage(unittest.TestCase):
             body = PAGE[PAGE.index(helper):]
             self.assertIn("try {", body[:260])
             self.assertIn("catch", body[:260])
-        # Counted over CODE, not comments. The block comment above the
+        # Counted over CODE, not comments: the block comment above the
         # helpers explains why localStorage is wrapped, and counting the word
-        # there is the third time in this change a test punished the
-        # explanation instead of the thing explained.
-        code = chr(10).join(l for l in _wall_js().splitlines()
-                            if not l.strip().startswith("//"))
-        self.assertEqual(code.count("localStorage"), 2,
+        # there punishes the explanation instead of the thing explained.
+        self.assertEqual(_wall_code().count("localStorage"), 2,
                          "raw localStorage use outside the two helpers")
 
     def test_a_stored_mode_is_validated_against_the_server(self):

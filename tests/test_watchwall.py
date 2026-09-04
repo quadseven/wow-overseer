@@ -215,6 +215,39 @@ class TheRosterOrderIsNeverTouched(unittest.TestCase):
         self.assertEqual([t["name"] for t in wall["tiles"]], names)
 
 
+class TheHeadlineClaimsOnlyWhatThePayloadKnows(unittest.TestCase):
+    """WRITTEN AFTER SHIPPING THE WRONG ONE. The first headline counted
+    `playable` and said "5 of 5 broadcasting"; on production that rendered over
+    five characters the very same payload reported as logged out."""
+
+    def test_it_does_not_claim_anything_is_broadcasting(self):
+        """Nothing here can see whether an encoder is publishing. That is the
+        WHEP handshake, it happens in the browser, and the tile reports it."""
+        rows = [member("Grug", broadcast_url="u"), member("Ugga", broadcast_url="u")]
+        line = watchwall.headline(rows).lower()
+        for claim in ("broadcast", "streaming", "live"):
+            self.assertNotIn(claim, line, claim)
+
+    def test_an_empty_world_says_so_in_words(self):
+        """Zero of five is a statistic; nobody being there is the thing worth
+        reading, and it is the production case."""
+        rows = [{"name": n, "present": False, "broadcast_url": "u"}
+                for n in ("Grug", "Ugga", "Og")]
+        self.assertEqual(watchwall.headline(rows), "nobody is in the world")
+
+    def test_it_counts_presence_and_not_urls(self):
+        rows = [member("Grug", broadcast_url="u"),
+                {"name": "Ugga", "present": False, "broadcast_url": "u"}]
+        self.assertEqual(watchwall.headline(rows), "1 of 2 in the world")
+
+    def test_an_empty_roster_does_not_divide_by_anything(self):
+        self.assertEqual(watchwall.headline([]), "no family")
+
+    def test_the_wall_carries_it(self):
+        wall = watchwall.build_wall([member("Grug")])
+        self.assertEqual(wall["headline"], "1 of 1 in the world")
+
+
 class TheWallCarriesNoneOfTheChannelBudget(unittest.TestCase):
     """The budget belongs to the on-demand watch, which the wall does not use.
     "both channels busy" on a wall of continuous broadcasts would be a sentence
