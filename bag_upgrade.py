@@ -47,6 +47,10 @@ class Bag:
     name: str
     slots: int
     used: int = 0
+    # The item_instance guid. A move is executed by naming the exact
+    # item, not its kind: the family carries several identical pouches
+    # and an entry id would name any of them.
+    guid: int = 0
 
 
 @dataclass(frozen=True)
@@ -170,3 +174,114 @@ def bags_in_plan(moves):
 def slots_gained(moves):
     """What the plan claims it will free, for reporting against reality."""
     return sum(m.slots_gained for m in moves)
+
+
+# ---------------------------------------------------------------------------
+# THE FAMILY, NOT THE CHARACTER
+#
+# Everything above reasons about one character's own bags, and on the measured
+# family that decides nothing at all: the four who carry spare bags have no
+# empty position, and the one with an empty position carries no spare.
+#
+#     Grug   4 worn   carrying Small Red Pouch, Small Black Pouch x2
+#     Ugga   4 worn   carrying nothing
+#     Og     4 worn   carrying Small Black Pouch
+#     Grog   4 worn   carrying Red Leather Bag, Green Leather Bag
+#     Bork   3 worn   carrying nothing, AND ONE EMPTY BAG POSITION
+#
+# Every useful move is therefore a transfer between two characters, and that is
+# also the only move the world can actually perform: mod-overseer's DoGive
+# equips a container straight into the receiver's bag slot, using the same core
+# call a player makes dragging a bag onto a bag position, and because it equips
+# rather than stores it needs NO free inventory slot on the receiver. That last
+# property is what dissolves the deadlock - Bork has no room to receive the bag
+# that would give him room, and does not need any.
+#
+# WHY THE MODULE HAS TO DO THIS AND THE WORLD CANNOT. mod-overseer already
+# looks for a spare bag when a give is refused for want of room, but
+# `SpareContainerFor(giver, receiver)` is scoped to the PAIR of the blocked
+# give. On the measured family the blocked give is Grog -> Og, and Og has four
+# of four positions filled, so no container can be offered and the rescue
+# correctly fails. Bork, who has the empty position, is not party to that
+# transfer and never will be. The family-wide match is the missing half, and it
+# can only be made somewhere that can see all five at once.
+#
+# SAME-CHARACTER EQUIPS ARE DELIBERATELY NOT HERE. Putting on a bag you already
+# carry is not a give, and `give` is the only mechanism that exists. Nothing on
+# the measured family needs it, so nothing here pretends to.
+
+
+@dataclass(frozen=True)
+class Member:
+    """One character's bag situation, as the caller measured it."""
+    name: str
+    positions: int
+    worn: tuple = ()
+    carried: tuple = ()
+
+
+@dataclass(frozen=True)
+class Handover:
+    """One bag moving from somebody who cannot use it to somebody who can.
+
+    `guid` is the item_instance guid, because that is what the give command
+    names. A move without one cannot be executed, so it is not optional.
+    """
+    giver: str
+    receiver: str
+    bag: str
+    guid: int
+    slots_gained: int
+    why: str
+
+
+def _spares(members):
+    """Every carried bag in the family, largest first, as (member, bag).
+
+    Sorted so the biggest bag reaches the first empty position rather than
+    whichever member happens to sort first, and tie-broken by holder name so
+    two identical pouches are chosen in a stable order.
+    """
+    held = [(m, b) for m in members for b in m.carried]
+    return sorted(held, key=lambda pair: (-pair[1].slots, pair[0].name,
+                                          pair[1].name, pair[1].guid))
+
+
+def plan_family_bags(members):
+    """Hand the family's idle bags to whoever has somewhere to put them.
+
+    Each empty position is filled once and each spare bag is given once. The
+    gain is the bag's own capacity PLUS the slot it stops occupying in the
+    giver's bags, which is why a transfer helps BOTH characters and why doing
+    this before any vendor run is worth the ordering.
+    """
+    spares = _spares(members)
+    taken = set()
+    moves = []
+    for member in sorted(members, key=lambda m: m.name):
+        empty = member.positions - len(member.worn)
+        for _ in range(max(0, empty)):
+            choice = next(((holder, bag) for holder, bag in spares
+                           if bag.guid not in taken and holder.name != member.name),
+                          None)
+            if choice is None:
+                break
+            holder, bag = choice
+            taken.add(bag.guid)
+            moves.append(Handover(
+                giver=holder.name, receiver=member.name, bag=bag.name,
+                guid=bag.guid, slots_gained=bag.slots + 1,
+                why="%s has an empty bag position and %s is carrying %s as "
+                    "cargo, where it costs a slot and gives none"
+                    % (member.name, holder.name, bag.name)))
+    return moves
+
+
+def give_command(move):
+    """The command text mod-overseer's DoGive takes for one handover.
+
+    `guid:` rather than `entry:` because the family carries several identical
+    pouches and an entry would name any of them. The guid names the one that
+    was actually weighed and chosen.
+    """
+    return "guid:%d" % move.guid
