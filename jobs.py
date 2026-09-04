@@ -57,6 +57,15 @@ MODES = {
     "guild business": "charter signatures, tabard, guild bank (infra#2831)",
 }
 
+# Dungeon keywords are deliberately a closed vocabulary.  The C++ coordinator
+# stores the selected keyword in the existing VARCHAR(20) job column as
+# ``dungeon:<keyword>``; keeping the suffix short preserves that schema.
+DUNGEONS = {
+    "deadmines": "deadmines",
+    "shadowfang": "shadowfang",
+    "shadowfang keep": "shadowfang",
+}
+
 # The modes that change behaviour. Every other key in MODES is accepted,
 # stored, and said back honestly as "not built yet" - see `describe`. Kept as
 # its own constant, not inferred from a "the code exists" check, so extending
@@ -305,6 +314,9 @@ def resolve(text: str | None) -> str | None:
         return None
     if cleaned in MODES:
         return cleaned
+    if cleaned.startswith("dungeon "):
+        keyword = DUNGEONS.get(cleaned[len("dungeon "):])
+        return f"dungeon:{keyword}" if keyword else None
     return ALIASES.get(cleaned)
 
 

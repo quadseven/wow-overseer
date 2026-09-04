@@ -53,6 +53,13 @@ class ParseOrderTest(unittest.TestCase):
         self.assertEqual(jobs.parse_order("job: farm"), "farm")
         self.assertEqual(jobs.parse_order("JOB grind"), "grind")
 
+    def test_explicit_dungeon_name_is_preserved(self):
+        self.assertEqual(jobs.parse_order("job dungeon shadowfang"),
+                         "dungeon:shadowfang")
+
+    def test_unknown_dungeon_name_is_rejected(self):
+        self.assertIsNone(jobs.parse_order("job dungeon zulfarak"))
+
     def test_evans_own_sentence_from_the_issue(self):
         self.assertEqual(jobs.parse_order("its farming time"), "farm")
         self.assertEqual(jobs.parse_order("it's farming time"), "farm")
