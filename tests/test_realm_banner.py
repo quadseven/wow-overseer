@@ -336,8 +336,9 @@ class TheTwoSidesAgreeOnTheStrings(unittest.TestCase):
         for constant, value in (("REALM_PRODUCTION", realm.PRODUCTION),
                                 ("REALM_NON_PRODUCTION", realm.NON_PRODUCTION),
                                 ("REALM_UNKNOWN", realm.UNKNOWN)):
-            self.assertIn('%s[] = "%s"' % (constant, value), self.source,
-                          constant)
+            declaration = r'%s\[\]\s*=\s*"%s"' % (
+                re.escape(constant), re.escape(value))
+            self.assertRegex(self.source, declaration, constant)
 
     def test_the_pin_verdicts_are_spelled_the_same_on_both_sides(self):
         if not self.has_feature:
@@ -346,8 +347,9 @@ class TheTwoSidesAgreeOnTheStrings(unittest.TestCase):
         for constant, value in (("PINS_MATCH", realm.PINS_MATCH),
                                 ("PINS_STALE", realm.PINS_STALE),
                                 ("PINS_UNKNOWN", realm.PINS_UNKNOWN)):
-            self.assertIn('%s[] = "%s"' % (constant, value), self.source,
-                          constant)
+            declaration = r'%s\[\]\s*=\s*"%s"' % (
+                re.escape(constant), re.escape(value))
+            self.assertRegex(self.source, declaration, constant)
 
 
 if __name__ == "__main__":
