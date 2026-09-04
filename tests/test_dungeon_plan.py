@@ -34,6 +34,12 @@ class DungeonPlanTests(unittest.TestCase):
         result = dungeon_plan.recommend_next(dungeons, 21, {1}, dungeon_plan.SAFE)
         self.assertEqual(result["map_id"], 2)
 
+    def test_payload_is_honest_about_missing_loot(self):
+        payload = dungeon_plan.build_payload([{"name": "Grug", "level": 20}], set())
+        self.assertEqual(payload["next"]["map_id"], 389)
+        self.assertEqual(payload["dungeons"][0]["loot"], [])
+        self.assertIn("verified", payload["loot_status"])
+
 
 if __name__ == "__main__":
     unittest.main()

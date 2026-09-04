@@ -11,6 +11,28 @@ SAFE = "safe"
 CHALLENGE = "challenge"
 PUSH = "push"
 
+DUNGEON_CATALOG = (
+    {"map_id": 389, "name": "Ragefire Chasm", "level": 15, "order": 1},
+    {"map_id": 43, "name": "Wailing Caverns", "level": 18, "order": 2},
+    {"map_id": 36, "name": "The Deadmines", "level": 20, "order": 3},
+    {"map_id": 33, "name": "Shadowfang Keep", "level": 22, "order": 4},
+    {"map_id": 34, "name": "The Stockade", "level": 24, "order": 5},
+    {"map_id": 48, "name": "Blackfathom Deeps", "level": 24, "order": 6},
+    {"map_id": 90, "name": "Gnomeregan", "level": 28, "order": 7},
+    {"map_id": 47, "name": "Razorfen Kraul", "level": 32, "order": 8},
+    {"map_id": 189, "name": "Scarlet Monastery", "level": 38, "order": 9},
+    {"map_id": 129, "name": "Razorfen Downs", "level": 40, "order": 10},
+    {"map_id": 70, "name": "Uldaman", "level": 42, "order": 11},
+    {"map_id": 209, "name": "Zul'Farrak", "level": 44, "order": 12},
+    {"map_id": 349, "name": "Maraudon", "level": 48, "order": 13},
+    {"map_id": 109, "name": "Sunken Temple", "level": 52, "order": 14},
+    {"map_id": 230, "name": "Blackrock Depths", "level": 55, "order": 15},
+    {"map_id": 229, "name": "Blackrock Spire", "level": 58, "order": 16},
+    {"map_id": 289, "name": "Scholomance", "level": 58, "order": 17},
+    {"map_id": 329, "name": "Stratholme", "level": 58, "order": 18},
+    {"map_id": 429, "name": "Dire Maul", "level": 58, "order": 19},
+)
+
 
 def _level(item: dict) -> int:
     return int(item.get("item_level", item.get("ItemLevel", 0)) or 0)
@@ -75,3 +97,22 @@ def recommend_next(dungeons: list[dict], party_level: int,
             return {"map_id": map_id, "name": dungeon.get("name", "Unknown dungeon"),
                     "challenge": challenge, "reason": dungeon.get("reason", "new dungeon")}
     return None
+
+
+def build_payload(family: list[dict], completed_maps: set[int],
+                  loot_by_map: dict[int, list[dict]] | None = None,
+                  mode: str = SAFE) -> dict:
+    """Build the page contract from already-fetched rows."""
+    levels = [int(row.get("level") or 0) for row in family if row.get("level")]
+    party_level = min(levels) if levels else 0
+    loot_by_map = loot_by_map or {}
+    dungeons = []
+    for dungeon in DUNGEON_CATALOG:
+        row = dict(dungeon)
+        row["completed"] = dungeon["map_id"] in completed_maps
+        row["loot"] = loot_by_map.get(dungeon["map_id"], [])
+        dungeons.append(row)
+    return {"party_level": party_level, "mode": mode,
+            "dungeons": dungeons,
+            "next": recommend_next(list(dungeons), party_level, completed_maps, mode),
+            "loot_status": "verified rows only; missing rows are not inferred"}

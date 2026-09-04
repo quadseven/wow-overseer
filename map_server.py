@@ -24,6 +24,7 @@ import agenda
 import armory
 import basepath
 import chat
+import dungeon_plan
 import council
 import decree
 import dungeonplan
@@ -1123,6 +1124,25 @@ def _fetch_needs() -> dict:
     return {"char_rows": char_rows, "inventory_rows": inventory_rows,
             "equipment_rows": equipment_rows, "skill_rows": skill_rows,
             "give_rows": give_rows, "thought_rows": thought_rows}
+
+
+def _fetch_dungeon_plan() -> dict:
+    """Rows needed by the pure dungeon planner, with old-schema tolerance."""
+    family_rows = _fetch_family()
+    conn = _connect()
+    try:
+        with conn.cursor() as cur:
+            try:
+                cur.execute("SELECT map_id, state FROM overseer_dungeon_run")
+                runs = list(cur.fetchall())
+            except pymysql.err.ProgrammingError as exc:
+                if not (exc.args and exc.args[0] == 1146):
+                    raise
+                log.info("overseer_dungeon_run absent; dungeon plan has no history")
+                runs = []
+    finally:
+        conn.close()
+    return {"family_rows": family_rows, "runs": runs}
 
 
 def _ensure_stream_store() -> None:
@@ -2952,6 +2972,18 @@ class Handler(BaseHTTPRequestHandler):
             log.exception("achievements query failed")
             self._send(503, "application/json", b'{"error": "world unreachable"}')
 
+    def _dungeons(self, query: dict) -> None:
+        """GET /api/dungeons - progression and upgrade-planning inputs."""
+        try:
+            fetched = _fetch_dungeon_plan()
+            completed = {int(row["map_id"]) for row in fetched["runs"]
+                         if row.get("state") == "ended" and row.get("map_id")}
+            payload = dungeon_plan.build_payload(fetched["family_rows"], completed)
+            self._send(200, "application/json", json.dumps(payload).encode())
+        except Exception:
+            log.exception("dungeon plan query failed")
+            self._send(503, "application/json", b'{"error": "world unreachable"}')
+
     def _thoughts(self, query: dict) -> None:
         """GET /api/thoughts?name=X&before=<id>&limit=N - one page, newest first."""
         name = query.get("name", [""])[0]
@@ -3664,6 +3696,7 @@ class Handler(BaseHTTPRequestHandler):
         "/api/questlog": _questlog,
         "/api/needs": _needs,
         "/api/achievements": _achievements,
+        "/api/dungeons": _dungeons,
         "/api/dungeons": _dungeons,
         "/api/raidgoals": _raidgoals,
         "/api/trades": _trades,
