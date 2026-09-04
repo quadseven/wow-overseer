@@ -167,6 +167,49 @@ class DarkIsTheSameDesignAndNotTheOldSite(unittest.TestCase):
                               "component styled inside a theme block: " + selector)
 
 
+class EveryCustomPropertyUsedIsAlsoDefined(unittest.TestCase):
+    """SHIPPED TO PRODUCTION, and nothing anywhere reported it.
+
+    The mobile wall wrote `color:var(--accent-text)` and `var(--caution-text)`
+    into the tile rules. The change that DEFINED those two tokens was a
+    separate pull request that had not merged yet, and the wall merged first.
+
+    An undefined custom property is invalid at computed-value time, so `color`
+    falls back to INHERIT. Every status word on the wall - LIVE, DEAD,
+    FIGHTING, HURT - quietly took the caption's ink instead of its own tone.
+    No console error, no failing test, and the page looked plausible: the
+    words were there, just the wrong colour.
+
+    This is the general form. A var() with no definition and no fallback is
+    always a silent nothing, and the failure is invisible in a diff because
+    the two halves live in different files or different branches."""
+
+    def test_no_rule_reads_a_property_that_is_never_defined(self):
+        # ONLY uses with NO FALLBACK. `var(--cc, transparent)` is a
+        # deliberate optional: the class swatch is painted from a value the
+        # script sets per character, and the fallback is what it looks like
+        # before that happens. A var() with a fallback cannot silently
+        # inherit, which is the entire failure this guards against.
+        used = set(re.findall(r"var\(\s*(--[a-z0-9-]+)\s*\)", CODE))
+        defined = set(re.findall(r"(--[a-z0-9-]+)\s*:", CODE))
+        missing = sorted(used - defined)
+        self.assertEqual(missing, [],
+                         "used but never defined, so they silently inherit: %s"
+                         % missing)
+
+    def test_the_two_that_shipped_undefined_are_defined_everywhere(self):
+        """Named explicitly as well as covered by the sweep above, because
+        these two are the ones that actually reached a browser."""
+        for token in ("--accent-text", "--caution-text"):
+            for where, block in (("bare :root", _theme_block(":root {")),
+                                 ("dark media", _theme_block(
+                                     ':root:not([data-theme="light"]) {')),
+                                 ("dark stamp", _theme_block(
+                                     ':root[data-theme="dark"] {'))):
+                self.assertIn(token + ":", block,
+                              "%s missing from %s" % (token, where))
+
+
 class TheSwitcherKnowsWhichWorldsExist(unittest.TestCase):
 
     def test_all_three_realms_are_offered(self):
