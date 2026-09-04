@@ -1181,75 +1181,83 @@
   #tabs button:focus-visible { outline:2px solid var(--accent);
                                outline-offset:-2px; }
 
-  #wall { display:grid; gap:.7rem; }
-  #wall.m-five-up { grid-template-columns:repeat(auto-fit, minmax(320px, 1fr)); }
-  #wall.m-stacked { grid-template-columns:1fr; max-width:900px; margin-inline:auto; }
-  #wall.m-hero { grid-template-columns:repeat(4, 1fr); }
-  /* The hero spans the full row above its own rail. `order` is NOT used to
-     move it: the roster is seniority and the wall must not reorder, so the
-     hero is promoted by SPAN while every tile keeps its place in the DOM. */
+  /* THE WALL. Three modes, one breakpoint at 640px, and the numbers are the
+     handoff's rather than mine: what shipped first was auto-fit minmax(320px)
+     with a 0.7rem gap and a 760px breakpoint, all invented.
+
+     GAP 2px, NOT 12. A mosaic of five points of view is one object with seams,
+     not five cards on a page, and the seam is what makes it read as a wall.
+     STACKED goes further and closes the gap entirely: one continuous column,
+     which is what a phone actually wants. */
+  #wall { display:grid; gap:2px; }
+  #wall.m-five-up { grid-template-columns:repeat(4, 1fr);
+                    border-radius:12px; overflow:hidden; }
+  /* THE HERO GROWS, THE WALL DOES NOT RESHUFFLE. An explicit grid-area on the
+     selected tile and `auto` on every other one: the four remaining tiles flow
+     into the row beneath in the order they were already in. Reordering the
+     array instead would make promoting read as the wall dealing itself again,
+     and roster order is seniority. */
+  #wall.m-five-up > .povslot.hero { grid-area:1 / 1 / 2 / 5; }
+  #wall.m-stacked { grid-template-columns:1fr; gap:0; }
+  #wall.m-hero { grid-template-columns:repeat(auto-fit, minmax(150px, 1fr)); }
+  /* HERO + WALL is a 16:9 frame ABOVE the strip rather than a big cell inside
+     it, which is why the hero spans every column whatever the count. */
   #wall.m-hero > .povslot.hero { grid-column:1 / -1; }
-  @media (max-width:760px) {
-    #wall.m-hero { grid-template-columns:1fr; }
-    #wall.m-hero > .povslot.hero { grid-column:auto; }
+
+  @media (max-width: 640px) {
+    #wall.m-five-up { grid-template-columns:repeat(2, 1fr); }
+    #wall.m-five-up > .povslot.hero { grid-area:1 / 1 / 2 / 3; }
   }
-  /* THE TILE IS A PICTURE WITH A CAPTION UNDER IT, not a picture with words
-     printed over it. The overlay version had the name, the health bar and the
-     zone floating on the video, which is fine on one tile and unreadable on
-     five: every caption sat on a different moving background. So the wall
-     gives each tile a card with a strip beneath, and the strip is the only
-     place text lives.
-     (The Family tab keeps its overlay. There the tile is inside a card that
+
+  /* THE TILE IS A PICTURE WITH A CAPTION UNDER IT, not words printed over
+     one. The overlay is fine on a single tile and unreadable on five, where
+     every caption sits on a different moving background.
+     (The Family tab keeps its overlay: there the tile is inside a card that
      already names the character, so a second caption would repeat it.) */
-  .povslot { display:flex; flex-direction:column; border-radius:10px;
-           overflow:hidden; background:var(--card);
-           border:1px solid var(--card-line); }
-  /* Same reservation rule the Family tab's .fstream follows, and for the same
-     reason: makePlayer owns the tile's display, so a shape hung on the tile
-     is worth nothing in the window before it connects. The SHOT holds the
-     16/9, never the slot, or the caption would be squeezed inside it. */
+  .povslot { position:relative; display:flex; flex-direction:column;
+             background:var(--card); }
+  /* Only the OUTER corners are rounded, by the grid's own overflow:hidden.
+     Rounding every tile would put four white notches in the middle of the
+     mosaic where the corners meet. */
   .povshot { position:relative; aspect-ratio:16/9; background:var(--shot); }
-  .povstrip { display:flex; align-items:center; gap:.6rem;
-            padding:.5rem .7rem; background:var(--card); }
-  .povname { font-weight:700; color:var(--on-card); }
-  .povline { color:var(--on-card-dim); font-size:12px; flex:1 1 auto;
-           min-width:0; overflow:hidden; text-overflow:ellipsis;
-           white-space:nowrap; }
-  /* PROMOTE. The tiles have been clickable since hero mode existed and nothing
-     said so, which is the same as not being clickable: a person does not try
-     things a page has not offered. It appears only in hero mode, because
-     "make this the big one" means nothing when there is no big one, and only
-     on the tiles that are not already it. */
-  .povbig { margin-left:auto; min-height:32px; padding:0 .7rem; flex:none;
-            border-radius:999px; border:1px solid var(--card-line);
-            background:var(--card); color:var(--on-card);
+  /* 32px, and it is a measurement rather than a preference: five of these
+     stack on a phone, so every pixel here costs five. */
+  .povstrip { display:flex; align-items:center; gap:.5rem; height:32px;
+              padding:7px 9px; background:var(--card); }
+  .povname { font-family:var(--display); font-weight:700; font-size:13px;
+             color:var(--on-card); }
+  .povline { color:var(--on-card-dim); font-size:11px; flex:1 1 auto;
+             min-width:0; overflow:hidden; text-overflow:ellipsis;
+             white-space:nowrap; }
+  .povstatus { font-size:11px; letter-spacing:.1em; font-family:var(--mono);
+               font-weight:700; color:var(--accent-text); flex:none; }
+  /* THE CLICK TARGET COVERS THE PICTURE AND STOPS AT THE BAR. The handoff is
+     explicit: never under it, or the label eats the click. A transparent
+     button rather than a handler on the tile, so it is reachable by keyboard
+     and announces itself. */
+  .povhit { position:absolute; inset:0; border:0; background:transparent;
+            cursor:pointer; padding:0; }
+  .povhit:focus-visible { outline:2px solid var(--accent); outline-offset:-3px; }
+  /* The BIG chip rides on the picture, top right, on the four that are not
+     the hero. */
+  .povbig { position:absolute; top:8px; right:8px; z-index:1; min-height:28px;
+            padding:0 .6rem; border-radius:999px; border:0;
+            background:var(--paper); color:var(--ink);
             font-family:var(--mono); font-size:10px; letter-spacing:.14em;
             font-weight:700; cursor:pointer; }
-  .povbig:hover { border-color:var(--on-card-dim); }
   .povbig:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
-  /* Hidden rather than absent, so the strip does not change height when hero
-     mode is entered and shove every caption down a few pixels. */
   .povbig[hidden] { display:none; }
-  .povstatus { font-size:11px; letter-spacing:.1em;
-             font-family:var(--mono);
-             font-weight:700; color:var(--accent); flex:none; }
-  /* The tones colour the STATUS WORD and the frame, never the picture. A wash
-     over a game capture is the one thing on this page nobody can read
-     through. */
-  .povslot.t-dead .povstatus, .povslot.t-dead { border-color:var(--vermilion); }
-  .povslot.t-dead .povstatus { color:var(--vermilion); }
-  .povslot.t-combat { border-color:var(--amber); }
-  .povslot.t-combat .povstatus { color:var(--amber); }
-  .povslot.t-hurt .povstatus { color:var(--amber); }
+  /* The tones colour the STATUS WORD, never the picture: a wash over a game
+     capture is the one thing on this page nobody can read through. */
+  .povslot.t-dead .povstatus { color:var(--warn-text); }
+  .povslot.t-combat .povstatus, .povslot.t-hurt .povstatus {
+    color:var(--caution-text); }
   .povslot.t-gone { opacity:.72; }
   .povslot.t-gone .povstatus { color:var(--on-card-dim); }
-  /* The hero is framed rather than enlarged-and-recoloured: it is already the
-     biggest thing on the wall, so the frame only has to say which one it is. */
-  #wall.m-hero > .povslot.hero { border-color:var(--vermilion);
-                               border-width:2px; }
-  /* The tone ring. Colour is the LAST thing that says a character is dead -
-     the caption says it in words first - so this is a border, not a wash
-     over the picture somebody came to look at. */
+  /* The hero says which one it is with a vermilion status word rather than a
+     frame: a border inside a 2px mosaic reads as a rendering fault. */
+  .povslot.hero .povstatus { color:var(--vermilion); }
+
   .wbar { display:flex; flex-wrap:wrap; gap:.5rem; align-items:center;
           margin-bottom:.7rem; }
   /* 44px on every control: this is read with a thumb, same as #fqmore. */
@@ -1272,8 +1280,12 @@
      behaves differently while it is observed - and a thin warning bar is a
      shape people have learned to skip. */
   #wallwarn { background:var(--warn-bg); color:var(--warn-text);
-              padding:.8rem 1rem; border-radius:10px; margin-bottom:.7rem;
+              padding:.7rem .9rem; border-radius:10px; margin-bottom:.7rem;
               max-width:72ch; line-height:1.55; }
+  .wwtitle { font-family:var(--mono); font-size:11px; letter-spacing:.12em;
+             font-weight:700; cursor:pointer; min-height:32px;
+             display:flex; align-items:center; }
+  .wwbody { margin-top:.5rem; font-size:14px; }
   #wallwarn[hidden] { display:none; }
   #wallhead { color:var(--shell-dim); margin-bottom:.7rem; }
   #watch, #family, #armory, #achievements { padding:.9rem 1rem; }
@@ -1409,7 +1421,7 @@
     <button id="wallsound" type="button" aria-pressed="false"
             title="A short synthesised tone when a character enters combat or dies. Off until you ask for it: a page that makes noise on load is a page that gets closed.">sound off</button>
   </div>
-  <p id="wallwarn" hidden></p>
+  <details id="wallwarn" hidden></details>
   <div id="wall"></div>
 </section>
 <section id="armory">
@@ -1533,21 +1545,24 @@ async function loadZones() {
   // answers "are my five all right", which is the question that actually gets
   // asked from a phone - so it is the first thing under the thumb, not the
   // seventh (infra#2892).
-  const fb = document.createElement("button");
-  fb.textContent = "Family";
-  fb.dataset.view = FAMILY_VIEW;
-  fb.onclick = () => showView(FAMILY_VIEW);
-  tabs.appendChild(fb);
-  // SECOND, AND NOT FIRST. The wall is the headline of this redesign and the
-  // reason to have the site open at all, but Family is first for a reason
-  // that has not stopped being true (infra#2892): "are my five all right" is
-  // the question asked from a phone, and it must not move. So the wall takes
-  // the next best place rather than a decision somebody already made.
   const wb = document.createElement("button");
   wb.textContent = "Watch";
   wb.dataset.view = WATCH_VIEW;
   wb.onclick = () => showView(WATCH_VIEW);
   tabs.appendChild(wb);
+  const fb = document.createElement("button");
+  fb.textContent = "Family";
+  fb.dataset.view = FAMILY_VIEW;
+  fb.onclick = () => showView(FAMILY_VIEW);
+  tabs.appendChild(fb);
+  // FIRST NOW, AND THIS REVERSES A DECISION THIS FILE ARGUED FOR. infra#2892
+  // put Family first because "are my five all right" is the question asked
+  // from a phone, and when the wall landed it took second place on exactly
+  // that reasoning. The design handoff makes Watch the default tab, and the
+  // operator asked for a Twitch-like experience for watching the family: the
+  // question asked from a phone turns out to be "what are they doing", and
+  // the wall answers it in pictures. Family is one tap away and still answers
+  // the health question better than five video tiles can.
   // Third, next to the family it describes: it answers "why did that go
   // badly", which is the question asked straight after "are they all right".
   const ab = document.createElement("button");
@@ -2880,7 +2895,7 @@ function wallStore(key, value) {
 function promote(name) {
   wall.hero = name;
   wallStore(WALL_HERO_KEY, name);
-  if (wall.mode === "hero") applyWallLayout();
+  applyWallLayout();
 }
 
 function wallSlot(name) {
@@ -2896,27 +2911,35 @@ function wallSlot(name) {
   const nm = el("span", "povname", name);
   const line = el("span", "povline");
   const status = el("span", "povstatus");
-  // A real button, not a clickable div: it is reachable by keyboard, it
-  // announces itself, and the whole-tile click below stays as the shortcut
-  // rather than as the only way in.
+  strip.append(nm, line, status);
+
+  // THE CLICK TARGET COVERS THE PICTURE AND STOPS AT THE BAR. The handoff is
+  // explicit about this: never under it, or the label eats the click. It also
+  // has to sit ABOVE the video, which is why it is a positioned sibling rather
+  // than a handler on the slot: a <video> with native controls swallows clicks
+  // that land on it.
+  const hit = el("button", "povhit");
+  hit.type = "button";
+  hit.title = "Make " + name + " the large tile";
+  hit.setAttribute("aria-label", "Make " + name + " the large tile");
+  hit.onclick = () => promote(name);
+
+  // The BIG chip, on the picture rather than in the caption: the caption is
+  // 32px tall and already carries a name and a status word.
   const big = el("button", "povbig", "BIG");
   big.type = "button";
   big.hidden = true;
   big.title = "Make " + name + " the large tile";
   big.onclick = (e) => {
-    // The tile behind it also promotes, and without this the click would run
-    // twice: once here and once on the way past.
+    // The hit area is underneath and promotes too; without this the click
+    // runs twice on its way past.
     e.stopPropagation();
     promote(name);
   };
-  strip.append(nm, line, status, big);
+  shot.append(hit, big);
   slot.append(shot, strip);
-  // Clicking a tile promotes it. Only visible in hero mode, and harmless in
-  // the other two, where it records a preference for the next time hero mode
-  // is chosen rather than doing nothing at all.
-  slot.onclick = () => promote(name);
-  wall.slots.set(name,
-                 { slot: slot, shot: shot, line: line, status: status, big: big });
+  wall.slots.set(name, { slot: slot, shot: shot, line: line, status: status,
+                         big: big, hit: hit });
   return wall.slots.get(name);
 }
 
@@ -2960,10 +2983,12 @@ function applyWallLayout() {
     b.setAttribute("aria-pressed", String(b.dataset.mode === wall.mode));
   }
   for (const [name, s] of wall.slots) {
-    const isHero = wall.mode === "hero" && name === wall.hero;
+    const isHero = wall.mode !== "stacked" && name === wall.hero;
     s.slot.classList.toggle("hero", isHero);
-    // Only in hero mode, and never on the tile that is already the hero.
-    s.big.hidden = wall.mode !== "hero" || isHero;
+    // In FIVE UP and HERO the wall HAS a big tile, so "make this the big one"
+    // means something on the other four. STACKED has no big tile at all, so
+    // the chip would be a promise the layout does not keep.
+    s.big.hidden = wall.mode === "stacked" || isHero;
   }
   layoutBroadcasts();
 }
@@ -3021,8 +3046,29 @@ function renderWall(p) {
     }
     wall.tones.set(t.name, t.tone);
   }
-  wallwarn.textContent = w.warning || "";
+  // A TITLE AND A BODY, because it is five sentences of genuinely important
+  // text and this is read on a phone. Open on a wide screen where it costs
+  // nothing; a summary the reader opens on a narrow one, where five sentences
+  // above the video is how a warning gets scrolled past unread. <details>
+  // rather than a scripted toggle: it is the element for exactly this and it
+  // is keyboard reachable for free.
+  //
+  // BUILT ONCE, THEN WRITTEN INTO. Rebuilding it on every five second poll
+  // would reset `open` under a reader mid-sentence, snapping the warning shut
+  // while they were in it. Same rule the quest board follows, and the same
+  // reason: a poll that changed nothing must leave the DOM alone.
   wallwarn.hidden = !w.warning;
+  if (w.warning) {
+    if (!wallwarn.firstChild) {
+      wallwarn.append(el("summary", "wwtitle"), el("p", "wwbody"));
+      // The default only, and only at first build: after that it is the
+      // reader's to open and close.
+      wallwarn.open = window.matchMedia("(min-width: 641px)").matches;
+    }
+    const sum = wallwarn.firstChild, body = wallwarn.lastChild;
+    if (sum.textContent !== w.warning.title) sum.textContent = w.warning.title;
+    if (body.textContent !== w.warning.body) body.textContent = w.warning.body;
+  }
   // PRINTED, NOT COMPOSED. This line used to be built here, out of `playable`,
   // and it read "5 of 5 broadcasting" on production while the same payload
   // reported all five logged out. `playable` means a URL exists to try, and
@@ -3041,7 +3087,12 @@ function layoutBroadcasts() {
     const target = view === WATCH_VIEW
       ? wallSlot(name).shot
       : familyCard(name).stream;
-    if (t.tile.parentElement !== target) target.appendChild(t.tile);
+    if (t.tile.parentElement !== target) {
+      // Inserted FIRST so the transparent hit area and the BIG chip stay above
+      // it. appendChild would put the video on top and swallow every click.
+      if (target.firstChild) target.insertBefore(t.tile, target.firstChild);
+      else target.appendChild(t.tile);
+    }
   }
 }
 

@@ -126,19 +126,29 @@ class TheLeaderWarningIsAccurateOrAbsent(unittest.TestCase):
         rows = [member("Grug", leader=True, pov_changes_the_family=True),
                 member("Ugga")]
         warning = watchwall.leader_warning(rows)
-        self.assertIn("Grug", warning)
-        self.assertIn("selfbot", warning)
-        self.assertIn("follow", warning)
+        self.assertIn("Grug", warning["body"])
+        self.assertIn("selfbot", warning["body"])
+        self.assertIn("follow", warning["body"])
+
+    def test_it_is_a_title_and_a_body(self):
+        """Five sentences above the video on a phone is a warning that gets
+        scrolled past unread. The title carries the whole claim, so the page
+        can collapse to it on a narrow screen and still be honest."""
+        rows = [member("Grug", pov_changes_the_family=True)]
+        warning = watchwall.leader_warning(rows)
+        self.assertEqual(warning["title"], "THE LEADER IS A SELFBOT")
+        self.assertGreater(len(warning["body"]), len(warning["title"]))
 
     def test_it_does_not_promise_that_closing_the_tab_stops_it(self):
         """The on-demand watch stops when the viewer stops asking. These
         encoders were up before the page was opened and stay up after it is
         closed, so the tab-shaped wording would be false here."""
         rows = [member("Grug", pov_changes_the_family=True)]
-        warning = watchwall.leader_warning(rows).lower()
-        self.assertNotIn("close", warning)
-        self.assertNotIn("stop watching", warning)
-        self.assertIn("as long as that stream is up", warning)
+        body = watchwall.leader_warning(rows)["body"].lower()
+        self.assertNotIn("stop watching", body)
+        self.assertNotIn("as long as", body)
+        self.assertIn("never logs out", body)
+        self.assertIn("whether or not you are looking", body)
 
     def test_it_reads_the_family_modules_answer_rather_than_the_leader_flag(self):
         """`leader` and `pov_changes_the_family` are different questions and

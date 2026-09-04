@@ -90,12 +90,21 @@ class TheWallIsItsOwnView(unittest.TestCase):
         self.assertIn('const WATCH_VIEW = "watch";', PAGE)
         self.assertIn("wb.dataset.view = WATCH_VIEW;", PAGE)
 
-    def test_family_is_still_the_first_tab(self):
-        """infra#2892 put Family first because "are my five all right" is the
-        question asked from a phone. The wall is the headline of the redesign
-        and still does not get to move it."""
-        self.assertLess(PAGE.index("fb.dataset.view = FAMILY_VIEW;"),
-                        PAGE.index("wb.dataset.view = WATCH_VIEW;"))
+    def test_watch_is_the_first_tab(self):
+        """THIS REVERSES infra#2892 AND THE TEST THAT PINNED IT, deliberately.
+
+        That decision put Family first because "are my five all right" is the
+        question asked from a phone, and when the wall landed it took second
+        place on exactly that reasoning. The design handoff makes Watch the
+        default tab, and the operator asked for a Twitch-like experience for
+        watching the family: the question asked from a phone turns out to be
+        "what are they doing", and the wall answers it in pictures.
+
+        Family is one tap away and still answers the health question better
+        than five video tiles can, which is why it is second rather than
+        moved down the row."""
+        self.assertLess(PAGE.index("wb.dataset.view = WATCH_VIEW;"),
+                        PAGE.index("fb.dataset.view = FAMILY_VIEW;"))
 
     def test_the_two_views_read_one_payload(self):
         """A second endpoint would let the wall and the cards disagree about
@@ -171,9 +180,18 @@ class NoJudgementLivesInTheScript(unittest.TestCase):
         "selfbot" in a button title and has said it since infra#2887; that
         copy is correct where it is. The rule being pinned is that the WALL
         prints what watchwall composed instead of wording it again."""
-        self.assertIn("wallwarn.textContent = w.warning", PAGE)
+        self.assertIn("sum.textContent = w.warning.title", PAGE)
+        self.assertIn("body.textContent = w.warning.body", PAGE)
         absent(self, "selfbot", _wall_code(), "the wall view")
         absent(self, "follow", _wall_code(), "the wall view")
+
+    def test_the_warning_is_built_once_and_not_on_every_poll(self):
+        """Rebuilding it every five seconds resets `open` under a reader
+        mid-sentence, snapping the warning shut while they are in it. Same
+        rule the quest board follows: a poll that changed nothing leaves the
+        DOM alone."""
+        self.assertIn("if (!wallwarn.firstChild) {", PAGE)
+        absent(self, "wallwarn.replaceChildren", PAGE, "the wall view")
 
     def test_the_page_never_reorders_the_roster(self):
         """The module has tests pinning that the wall does not reorder. A sort
@@ -261,12 +279,26 @@ class TheTilesAreMovedAndNeverRebuilt(unittest.TestCase):
         """Two copies of "make this the hero" is two places for the stored
         preference to be written differently."""
         self.assertIn("function promote(name) {", PAGE)
-        self.assertIn("slot.onclick = () => promote(name);", PAGE)
+        self.assertIn("hit.onclick = () => promote(name);", PAGE)
+
+    def test_the_click_target_stops_at_the_caption(self):
+        """The handoff is explicit: the transparent button covers everything
+        above the bottom bar, never under it, or the label eats the click.
+        It also has to sit ABOVE the video, because a <video> with native
+        controls swallows clicks that land on it, which is why the tile is
+        INSERTED FIRST rather than appended."""
+        self.assertIn('el("button", "povhit")', PAGE)
+        self.assertIn("shot.append(hit, big);", PAGE)
+        self.assertIn("target.insertBefore(t.tile, target.firstChild)", PAGE)
+        css = PAGE[PAGE.index(".povhit {"):]
+        self.assertIn("inset:0", css[:css.index("}")])
 
     def test_it_is_offered_only_where_it_means_something(self):
         """"Make this the big one" says nothing when there is no big one, and
-        nothing on the tile that already is it."""
-        self.assertIn('s.big.hidden = wall.mode !== "hero" || isHero;', PAGE)
+        nothing on the tile that already is it. FIVE UP and HERO both have a
+        big tile; STACKED does not, so there the chip would be a promise the
+        layout does not keep."""
+        self.assertIn('s.big.hidden = wall.mode === "stacked" || isHero;', PAGE)
 
     def test_a_slot_is_built_once_and_cached(self):
         self.assertIn("let slot = wall.slots.get(name);", PAGE)
@@ -294,9 +326,13 @@ class HeroModeDoesNotWalkBackIntoTheTinyTwitchView(unittest.TestCase):
         self.assertIn('DEFAULT_MODE = FIVE_UP', _module_source())
 
     def test_hero_collapses_to_one_column_on_a_narrow_screen(self):
-        self.assertIn("@media (max-width:760px) {", PAGE)
-        narrow = PAGE[PAGE.index("@media (max-width:760px) {"):]
-        self.assertIn("#wall.m-hero { grid-template-columns:1fr; }", narrow[:400])
+        # 640px, which is the handoff's single breakpoint. The first version
+        # of the wall invented 760 along with the rest of its geometry.
+        self.assertIn("@media (max-width: 640px) {", PAGE)
+        narrow = PAGE[PAGE.index("@media (max-width: 640px) {"):]
+        self.assertIn("#wall.m-five-up { grid-template-columns:repeat(2, 1fr); }",
+                      narrow[:400])
+        self.assertIn("grid-area:1 / 1 / 2 / 3", narrow[:400])
 
 
 class TheSoundIsOffUntilAskedFor(unittest.TestCase):

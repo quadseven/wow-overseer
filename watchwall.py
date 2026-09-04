@@ -134,7 +134,7 @@ def playable(member) -> bool:
     return bool((member.get("broadcast_url") or "").strip())
 
 
-def leader_warning(members) -> str | None:
+def leader_warning(members) -> dict | None:
     """What watching costs, in the one case where watching costs something.
 
     `stream.pov_changes_the_family` says in as many words that the UI must not
@@ -143,25 +143,38 @@ def leader_warning(members) -> str | None:
     sentence: the party may be led by someone the snapshot has not got, and a
     warning naming nobody is worse than no warning.
 
-    WORDED FOR A BROADCAST, NOT FOR A TAB. The on-demand watch stops when the
-    viewer stops asking, so its warning could honestly say "and it stops when
-    you close this". These encoders do not: they were up before the page was
-    opened and stay up after it is closed. So this says the condition holds
-    while the stream is up, which is true of both and overclaims neither.
+    WORDED FOR AN ALWAYS-ON CLIENT. The design handoff is explicit about this
+    and about the wording that must NOT come back: `pov_changes_the_family`'s
+    own docstring says the effect stops when you stop watching, and that
+    framing predates the five clients streaming continuously. They do not log
+    out, so the condition is true right now whether or not anybody has this
+    page open, and saying otherwise invites a reader to believe they can turn
+    it off by closing a tab.
+
+    RETURNED AS A TITLE AND A BODY, not one paragraph. It is five sentences of
+    genuinely important text, the operator reads this on a phone, and five
+    sentences above the video is how a warning gets scrolled past unread. The
+    title is the whole claim in four words; the body is why. The page collapses
+    to the title on a narrow screen and this is what lets it.
     """
     named = [m.get("name") for m in members if m.get("pov_changes_the_family")]
     named = [n for n in named if n]
     if not named:
         return None
     who = named[0]
-    return (
-        who + " leads the party, and a character with a client logged in as "
-        "them is a selfbot. The other four acquire " + who + " as their "
-        "master and follow, for as long as that stream is up. This is "
-        "arguably the best thing about watching " + who + ", but it means "
-        "the family you are watching is the observed configuration rather "
-        "than the one that runs unwatched."
-    )
+    return {
+        "title": "THE LEADER IS A SELFBOT",
+        "body": (
+            who + "'s client is logged in as him, which makes him a selfbot, "
+            "and FindNewMaster hands the other four a master, so they follow "
+            "and obey him. That is true right now whether or not you are "
+            "looking at this tile, and it does not stop, because the client "
+            "never logs out. Any cohesion you see is the streamed "
+            "configuration, not the family on their own. Only a POV login "
+            "does this; a follow-cam is a GM watching from outside and "
+            "changes nothing."
+        ),
+    }
 
 
 def hero_of(members, chosen=None) -> str | None:
