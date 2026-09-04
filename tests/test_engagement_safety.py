@@ -54,7 +54,10 @@ class TheGateReadsTheSameAimsAsTheOtherDrives(unittest.TestCase):
     the air."""
 
     def test_it_uses_the_same_guarded_quest_loader(self):
-        self.assertIn("LoadQuestAims()", _code(_guard()))
+        # `LoadQuestAims(` rather than `LoadQuestAims()`: the loader takes an out-parameter since mod-overseer#192, which keeps the last good aim across a transient read failure.
+        # What this pins is that the gate reads through the SHARED loader
+        # rather than issuing its own query, and that is unchanged.
+        self.assertIn("LoadQuestAims(", _code(_guard()))
 
     def test_it_uses_the_same_guarded_travel_loader(self):
         # The travel column's reader lives on the TravelAimBook now

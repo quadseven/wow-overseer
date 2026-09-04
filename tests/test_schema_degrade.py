@@ -77,7 +77,7 @@ def _end_travel_poll() -> str:
 
 
 def _load_quest_aims() -> str:
-    return _function("std::map<std::string, uint32> LoadQuestAims()")
+    return _function('std::map<std::string, uint32> LoadQuestAims(bool& readSucceeded)')
 
 
 def _load_travel_aims() -> str:
@@ -144,7 +144,8 @@ class TheQuestAimHasTheSameExposureAndIsHandledTheSameWay(unittest.TestCase):
         self.assertNotIn("drive_quest", _code(_quests()))
 
     def test_the_aim_is_read_by_its_own_guarded_loader(self):
-        self.assertIn("LoadQuestAims()", _code(_quests()))
+        # `LoadQuestAims(` rather than `LoadQuestAims()`: the loader takes an out-parameter since mod-overseer#192, which keeps the last good aim across a transient read failure.
+        self.assertIn("LoadQuestAims(", _code(_quests()))
         self.assertIn("drive_quest", _code(_load_quest_aims()))
 
     def test_an_absent_aim_is_zero_which_is_the_columns_own_sentinel(self):

@@ -560,7 +560,15 @@ class TheErrandIsBounded(unittest.TestCase):
         and the backstop would never fire."""
         ratchet = _code(_ratchet())
         # DistanceToTarget: nearer than the best ever, by the margin.
-        self.assertIn("return !best || reading < best - limits.margin;", ratchet)
+        #
+        # `!seen` rather than `!best` since mod-overseer#191. The guarantee this
+        # test protects is unchanged and the change strengthens it: zero is a
+        # REAL reading, because WorldObject::GetDistance2d clamps arrival-range
+        # distances to zero, so a traveller standing on its target used to look
+        # "never measured" on every poll and restart the patience clock forever.
+        # An explicit seen bit separates "no reading yet" from "a reading of
+        # zero", which `!best` could not.
+        self.assertIn("return !seen || reading < best - limits.margin;", ratchet)
         # ...and `best` only moves when that is true, so it ratchets downward.
         progressed = ratchet.index("if (verdict.progressed)")
         best = ratchet.index("state.best =")

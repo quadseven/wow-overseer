@@ -97,8 +97,10 @@ class TheColumnIsActuallyRead(unittest.TestCase):
         roster query - a `drive_quest` the schema does not have would otherwise
         null that query and take the leader's own-log fallback down with it. The
         property that matters here is unchanged: the aim is READ."""
-        self.assertIn("LoadQuestAims()", _code(_drive()))
-        self.assertIn("drive_quest", _code(_function("std::map<std::string, uint32> LoadQuestAims()")))
+        # `LoadQuestAims(` rather than `LoadQuestAims()`: the loader takes an out-parameter since mod-overseer#192, which keeps the last good aim across a transient read failure.
+        self.assertIn("LoadQuestAims(", _code(_drive()))
+        self.assertIn("drive_quest",
+                      _code(_function('std::map<std::string, uint32> LoadQuestAims(bool& readSucceeded)')))
 
     def test_only_the_leader_free_roams_its_own_quest_log(self):
         """The lesson this guard encodes has NOT changed; where it is enforced
@@ -129,7 +131,7 @@ class TheColumnIsActuallyRead(unittest.TestCase):
         self.assertIn("overseer_roster", _code(_drive()))
 
     def test_the_two_columns_are_fetched_by_index_not_by_one_getter(self):
-        body = _code(_function("std::map<std::string, uint32> LoadQuestAims()"))
+        body = _code(_function('std::map<std::string, uint32> LoadQuestAims(bool& readSucceeded)'))
         self.assertIn("fields[0]", body)
         self.assertIn("fields[1]", body)
 
