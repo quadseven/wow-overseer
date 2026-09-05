@@ -9,6 +9,7 @@ that family is actually in.
 import unittest
 
 from disposition import (AUCTION, BANK, BIND_NONE, BIND_ON_EQUIP, BIND_ON_PICKUP,
+                         EXECUTABLE_TODAY,
                          DISENCHANT, GIVE, KEEP, VENDOR, Family, Item, decide,
                          outgrown)
 
@@ -262,6 +263,99 @@ class TheBankIsWhereThingsGoToWait(unittest.TestCase):
         it = Item(name="Gold Pickup Schedule", quality=1, known=True,
                   quest_item=True, binding=BIND_ON_PICKUP)
         self.assertEqual(decide(it, town).route, KEEP)
+
+
+class OnlyRoutesSomethingCanActuallyCarryOut(unittest.TestCase):
+    """A verdict nothing can execute is not a plan, it is a bag that never
+    empties (infra#3330).
+
+    Measured 2026-09-05: `overseer_command` has never held a single kind
+    'auction' or kind 'bank' row, and there is no disenchant kind at all. So
+    every AUCTION verdict this module has ever produced would have been a
+    decision to keep the item forever, said in a way that looked like action.
+    """
+
+    def test_the_default_is_still_the_theoretical_answer(self):
+        """Availability is the caller's fact, not this module's. Asked with no
+        opinion about deployment, it answers as it always did."""
+        it = green(auction_value=100000)
+        self.assertEqual(decide(it, TOWN, character_level=28).route, AUCTION)
+
+    def test_a_listing_verdict_is_withheld_when_nothing_can_list(self):
+        it = green(auction_value=100000)
+        verdict = decide(it, TOWN, character_level=28,
+                         available=EXECUTABLE_TODAY)
+        self.assertNotEqual(verdict.route, AUCTION)
+
+    def test_a_tradable_green_is_kept_rather_than_dumped_at_a_vendor(self):
+        """The 111 bind-on-equip greens the family is carrying. Vendoring them
+        because the auction executor is unfinished spends value that cannot be
+        recovered, and several of them are the sibling-upgrade question
+        (mod-overseer#189) rather than surplus at all."""
+        it = green(binding=BIND_ON_EQUIP, auction_value=100000)
+        self.assertEqual(decide(it, TOWN, character_level=28,
+                                available=EXECUTABLE_TODAY).route, KEEP)
+
+    def test_an_outgrown_soulbound_piece_is_sold(self):
+        """Nobody can ever wear, trade or list it, and Og cannot dust it. The
+        vendor is the only truthful answer, and it is a real one."""
+        it = green(binding=BIND_ON_PICKUP, required_level=15)
+        self.assertEqual(decide(it, REAL, character_level=28,
+                                available=EXECUTABLE_TODAY).route, VENDOR)
+
+    def test_reaching_a_route_and_owning_a_route_are_different_facts(self):
+        """An auctioneer out of walking range is a transient fact about today.
+        A missing executor is a fact about the deployment. Only the second one
+        may be answered by permanently giving the item away cheaply."""
+        away = Family(vendor_reachable=True, auction_reachable=False)
+        it = green(binding=BIND_ON_EQUIP, auction_value=100000)
+        self.assertEqual(decide(it, away, character_level=28).route, VENDOR)
+        self.assertEqual(decide(it, away, character_level=28,
+                                available=EXECUTABLE_TODAY).route, KEEP)
+
+    def test_junk_is_still_sold_because_vendor_is_available(self):
+        it = green(quality=0, binding=BIND_ON_PICKUP, sell_price=12)
+        self.assertEqual(decide(it, REAL, character_level=28,
+                                available=EXECUTABLE_TODAY).route, VENDOR)
+
+    def test_with_no_routes_at_all_everything_is_kept(self):
+        """Fail closed: an availability set nobody filled in must not become a
+        licence to sell, and must not throw either."""
+        for it in (green(quality=0, sell_price=12),
+                   green(binding=BIND_ON_PICKUP),
+                   green(auction_value=100000)):
+            self.assertEqual(decide(it, TOWN, character_level=28,
+                                    available=frozenset()).route, KEEP)
+
+    def test_the_bank_is_not_offered_until_something_writes_bank_rows(self):
+        nobody = Family(vendor_reachable=True, bank_reachable=True,
+                        professions={})
+        cloth = Item(name="Linen Cloth", quality=1, known=True,
+                     binding=BIND_NONE, quest_item=False, equipment=False,
+                     sell_price=10, reagent_for="tailoring")
+        self.assertEqual(decide(cloth, nobody, reagent_held=999).route, BANK)
+        self.assertEqual(decide(cloth, nobody, reagent_held=999,
+                                available=EXECUTABLE_TODAY).route, KEEP)
+
+    def test_a_disenchant_verdict_is_withheld_while_no_executor_exists(self):
+        able = Family(enchanting_skill=450, vendor_reachable=True)
+        it = green(binding=BIND_ON_PICKUP, disenchant_skill_required=25)
+        self.assertEqual(decide(it, able, character_level=28).route, DISENCHANT)
+        self.assertEqual(decide(it, able, character_level=28,
+                                available=EXECUTABLE_TODAY).route, VENDOR)
+
+    def test_a_sibling_upgrade_is_kept_when_no_handover_route_is_open(self):
+        it = green()
+        self.assertEqual(decide(it, TOWN, character_level=28,
+                                upgrade_for_sibling=True,
+                                available=frozenset({VENDOR})).route, KEEP)
+
+    def test_turning_the_auction_on_is_one_name(self):
+        """The point of a set rather than five more booleans."""
+        it = green(auction_value=100000)
+        self.assertEqual(decide(it, TOWN, character_level=28,
+                                available=EXECUTABLE_TODAY | {AUCTION}).route,
+                         AUCTION)
 
 
 if __name__ == "__main__":

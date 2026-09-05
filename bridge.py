@@ -32,10 +32,12 @@ import council
 import core
 import craftpleas
 import digest
+import disposition
 import events
 import fanout
 import goals
 import bonds
+import item_plan
 import jobs
 import kin
 import materials
@@ -2993,14 +2995,41 @@ class Bridge(discord.Client):
             await asyncio.sleep(cycle)
 
     async def _vendor_once(self) -> None:
-        """Queue safe carried junk for the merged world-side sell executor."""
+        """Queue carried junk and outgrown gear for the world sell executor.
+
+        TWO SOURCES, ONE PASS, ONE ERRAND. Junk comes from bag_pressure and
+        outgrown equipment from disposition, but both end as a kind='sell'
+        row for a character walking to the same vendor, so splitting them
+        into two loops would only mean two errands fighting over one leader.
+
+        NOTHING HERE DECIDES ANYTHING. What is worth selling is bag_pressure's
+        and disposition's; whether a decision an earlier poll already made is
+        still true is item_plan's. This method fetches, calls them, and writes
+        what comes back.
+        """
         names = sorted((await asyncio.to_thread(_protected_guids)).values())
         if not names or await self._mid_run(names):
             return
         rows = await asyncio.to_thread(_fetch_vendor_items, names)
-        candidates = bag_pressure.vendor_candidates(rows)
+        gear_rows = await asyncio.to_thread(_fetch_surplus_gear, names)
+        candidates = bag_pressure.vendor_candidates(rows) + (
+            bag_pressure.gear_candidates(
+                gear_rows, disposition.Family(vendor_reachable=True),
+                available=SELL_ROUTES,
+            )
+        )
         if not candidates:
             log.info("economy: no safe carried vendor goods")
+            return
+        # The world has already answered some of these. A sale that was
+        # delivered, or refused with a reason retrying cannot change, must not
+        # be proposed again: 819 of 822 `item not carried` refusals in one day
+        # were re-issues of an item that had already been sold (infra#3330).
+        attempts = await asyncio.to_thread(_sell_attempts, SELL_MEMORY_HOURS)
+        plan = item_plan.plan(candidates, attempts)
+        if not plan.write:
+            log.info("economy: %d carried candidate(s), none still open - %s",
+                     len(candidates), item_plan.reasons(plan.skipped))
             return
         # Only the family leader can take `new rpg`; followers travel by
         # following that leader. Queue every holder's rows together and let
@@ -3012,16 +3041,12 @@ class Bridge(discord.Client):
             _write_trade_errand,
             professions.Errand(character=leader, travel_npc="vendor"),
         )
-        seen = await asyncio.to_thread(_recent_sell_keys, GIVE_RETRY_MINUTES)
         inserted = 0
-        for candidate in candidates:
-            key = (candidate.holder, "guid:%d" % candidate.item_guid)
-            if key in seen:
-                continue
+        for candidate in plan.write:
             if await asyncio.to_thread(_insert_sell, candidate):
                 inserted += 1
-        log.info("economy: queued %d/%d safe vendor sale(s), leader=%s",
-                 inserted, len(candidates), leader)
+        log.info("economy: queued %d/%d vendor sale(s), leader=%s, held back %s",
+                 inserted, len(candidates), leader, item_plan.reasons(plan.skipped))
 
     async def _vendor_loop(self) -> None:
         await self.wait_until_ready()
@@ -3983,6 +4008,21 @@ GIVE_RETRY_MINUTES = int(os.environ.get("GIVE_RETRY_MINUTES", "60"))
 GIVE_GIVE_UP_HOURS = int(os.environ.get("GIVE_GIVE_UP_HOURS", "24"))
 
 
+# How far back the vendor pass looks for sales the world has already
+# answered. A day, not GIVE_RETRY_MINUTES, and for the opposite reason to a
+# retry window: a `delivered` sale or an `item not carried` refusal is a
+# PERMANENT fact about that item, and forgetting it after an hour brings the
+# whole retry storm back. Bounded rather than unbounded because item guids
+# are eventually recycled by the core, and a day is far longer than any
+# vendor errand.
+SELL_MEMORY_HOURS = int(os.environ.get("SELL_MEMORY_HOURS", "24"))
+
+# The routes the family can actually carry out today. Adding AUCTION here is
+# the whole of the change when mod-overseer#208 lands, and BANK when the
+# bank pass starts writing rows (infra#3329).
+SELL_ROUTES = disposition.EXECUTABLE_TODAY
+
+
 def _give_attempts(hours: int) -> list:
     """Every give this family has tried lately, and how the world answered.
 
@@ -4030,6 +4070,47 @@ _VENDOR_ITEMS_SQL = (
 )
 
 
+# Carried weapons and armour of uncommon quality or better, with the two
+# facts that decide what may be done with them: the wearer's level, and
+# whether THIS COPY is already soulbound. `ii.flags` is handed over raw so
+# the bit is read in bag_pressure.item_binding rather than in SQL; the same
+# bag-and-backpack scope as _VENDOR_ITEMS_SQL, so nothing worn is offered.
+_SURPLUS_GEAR_SQL = (
+    "SELECT c.name AS holder, c.level AS level, ii.guid AS item_guid, "
+    "ii.count AS count, ii.flags AS instance_flags, it.name AS name, "
+    "it.Quality AS quality, it.SellPrice AS sell_price, "
+    "it.RequiredLevel AS required_level, it.bonding AS bonding, "
+    "it.class AS item_class "
+    "FROM character_inventory ci "
+    "JOIN characters c ON c.guid = ci.guid "
+    "JOIN item_instance ii ON ii.guid = ci.item "
+    "JOIN acore_world.item_template it ON it.entry = ii.itemEntry "
+    "WHERE c.name IN (%s) AND ((ci.bag = 0 AND ci.slot BETWEEN 19 AND 38) "
+    "OR ci.bag IN (SELECT bag.item FROM character_inventory bag "
+    "WHERE bag.guid = ci.guid AND bag.bag = 0 AND bag.slot BETWEEN 19 AND 22)) "
+    "AND it.class IN (2, 4) AND it.Quality >= 2"
+)
+
+
+def _fetch_surplus_gear(names: list) -> list:
+    """Read carried gear facts; every route decision stays in bag_pressure."""
+    if not names:
+        return []
+    sql = _SURPLUS_GEAR_SQL % ",".join(["%s"] * len(names))
+    with _connect() as conn, conn.cursor() as cur:
+        try:
+            cur.execute(sql, names)
+        except pymysql.err.MySQLError as exc:
+            # 1054 on a world image whose item_instance predates `flags`.
+            # Without that column this side cannot tell a worn green from a
+            # tradable one, and guessing is how value gets vendored away.
+            if exc.args and exc.args[0] in (1054, 1146):
+                log.warning("surplus gear facts unavailable on this world image")
+                return []
+            raise
+        return [dict(row) for row in cur.fetchall()]
+
+
 def _fetch_vendor_items(names: list) -> list:
     """Read carried sale facts; all routing remains in bag_pressure."""
     if not names:
@@ -4050,20 +4131,37 @@ def _fetch_vendor_items(names: list) -> list:
         return rows
 
 
-def _recent_sell_keys(minutes: int) -> set:
-    """Avoid re-queueing the same seller and item during a retry window."""
+def _sell_attempts(hours: int) -> list:
+    """Every sale the world has already answered, as item_plan reads them.
+
+    READ-ONLY, and it reads `status`, `detail` and `result` rather than
+    counting rows. What may be re-issued is decided by what the world SAID,
+    and `result` carries the retry word and the true stack beside the refusal
+    literal. The predecessor of this function compared a bare `guid:N` key
+    against the stored `guid:N count:M` command, so it never matched anything
+    and the retry window it was supposed to enforce was never enforced.
+
+    A world with no sell history has answered nothing, so 1146 (missing
+    table) and 1054 (missing column) return an empty history rather than
+    raising. That is deliberately the FAIL-OPEN direction: it degrades to the
+    behaviour this pass already had, where a gate that cannot read its
+    evidence would otherwise quietly stop the family selling anything.
+    """
     with _connect() as conn, conn.cursor() as cur:
         try:
             cur.execute(
-                "SELECT target_name, command FROM overseer_command "
-                "WHERE kind = 'sell' AND created_at > NOW() - INTERVAL %s MINUTE",
-                (int(minutes),),
+                "SELECT target_name, command, status, detail, result "
+                "FROM overseer_command "
+                "WHERE kind = 'sell' AND created_at > NOW() - INTERVAL %s HOUR",
+                (int(hours),),
             )
+            rows = cur.fetchall()
         except pymysql.err.MySQLError as exc:
             if exc.args and exc.args[0] in (1054, 1146):
-                return set()
+                return []
             raise
-        return {(row["target_name"], row["command"]) for row in cur.fetchall()}
+    attempts = [item_plan.attempt_from_row(row) for row in rows]
+    return [attempt for attempt in attempts if attempt is not None]
 
 
 def _insert_sell(candidate: bag_pressure.SellCandidate) -> int:

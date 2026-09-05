@@ -1,7 +1,21 @@
 import unittest
 
-from bag_pressure import (ItemForSale, bag_purchase_allowed, sellable,
-                          town_run_needed, vendor_batch, vendor_candidates)
+import disposition
+from bag_pressure import (ItemForSale, bag_purchase_allowed, gear_candidates,
+                          item_binding, sellable, town_run_needed,
+                          vendor_batch, vendor_candidates)
+
+# The family in town: a vendor in reach, nothing else built yet.
+IN_TOWN = disposition.Family(vendor_reachable=True)
+
+
+def gear(**kw):
+    """One carried armour row, shaped as the vendor SQL returns it."""
+    base = dict(holder="Grog", level=26, item_guid=5001, count=1,
+                instance_flags=0, name="Smelting Pants", quality=2,
+                sell_price=966, required_level=16, bonding=2, item_class=4)
+    base.update(kw)
+    return base
 
 
 class BagPressureTests(unittest.TestCase):
@@ -51,6 +65,71 @@ class BagPressureTests(unittest.TestCase):
         holder, batch = vendor_batch(rows)
         self.assertEqual(holder, "Grug")
         self.assertEqual([item.holder for item in batch], ["Grug"])
+
+
+class BindingIsAFactAboutTheCopy(unittest.TestCase):
+
+    def test_a_worn_bind_on_equip_green_is_soulbound(self):
+        """38 of the family's 111 bind-on-equip greens are in this state."""
+        self.assertEqual(item_binding(gear(bonding=2, instance_flags=1)),
+                         disposition.BIND_ON_PICKUP)
+
+    def test_an_unworn_bind_on_equip_green_is_still_tradable(self):
+        self.assertEqual(item_binding(gear(bonding=2, instance_flags=0)),
+                         disposition.BIND_ON_EQUIP)
+
+    def test_a_bonding_value_we_cannot_read_is_no_answer_at_all(self):
+        self.assertEqual(item_binding(gear(bonding=99)), "")
+        self.assertEqual(gear_candidates([gear(bonding=99)], IN_TOWN), ())
+
+
+class OnlyGearNobodyElseCouldEverUse(unittest.TestCase):
+    """Clearing the bags without spending what the family cannot get back."""
+
+    def test_an_outgrown_soulbound_piece_is_offered_to_the_vendor(self):
+        got = gear_candidates([gear(instance_flags=1, required_level=15)],
+                              IN_TOWN)
+        self.assertEqual([c.item_guid for c in got], [5001])
+        self.assertEqual(got[0].holder, "Grog")
+
+    def test_a_tradable_green_is_left_alone_while_nothing_can_list_it(self):
+        self.assertEqual(
+            gear_candidates([gear(instance_flags=0, required_level=15)],
+                            IN_TOWN), ())
+
+    def test_gear_close_to_level_is_never_sold_however_it_is_bound(self):
+        self.assertEqual(
+            gear_candidates([gear(instance_flags=1, required_level=25)],
+                            IN_TOWN), ())
+
+    def test_a_worthless_piece_is_not_walked_to_a_vendor(self):
+        self.assertEqual(
+            gear_candidates([gear(instance_flags=1, required_level=15,
+                                  sell_price=0)], IN_TOWN), ())
+
+    def test_a_quest_item_is_refused_even_wearing_an_armour_class(self):
+        self.assertEqual(
+            gear_candidates([gear(instance_flags=1, required_level=15,
+                                  item_class=12)], IN_TOWN), ())
+
+    def test_a_row_missing_the_facts_is_dropped_not_guessed_at(self):
+        broken = gear(instance_flags=1, required_level=15)
+        del broken["sell_price"]
+        self.assertEqual(gear_candidates([broken], IN_TOWN), ())
+
+    def test_no_vendor_in_reach_means_nothing_is_queued(self):
+        away = disposition.Family(vendor_reachable=False)
+        self.assertEqual(
+            gear_candidates([gear(instance_flags=1, required_level=15)],
+                            away), ())
+
+    def test_turning_the_auction_on_stops_the_vendor_taking_them(self):
+        """When mod-overseer#208 lands, the same soulbound piece is still a
+        vendor sale, because soulbound is the fact that decides it."""
+        both = disposition.EXECUTABLE_TODAY | {disposition.AUCTION}
+        got = gear_candidates([gear(instance_flags=1, required_level=15)],
+                              IN_TOWN, available=both)
+        self.assertEqual(len(got), 1)
 
 
 if __name__ == "__main__":

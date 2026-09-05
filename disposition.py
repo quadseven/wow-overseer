@@ -60,6 +60,26 @@ GIVE = "give"
 # at skill one. That is precisely the pile a person walks to a bank.
 BANK = "bank"
 
+# Every route this module can name. The default for `available`, so a caller
+# that only wants the theoretical answer still gets it.
+ALL_ROUTES = frozenset({KEEP, VENDOR, AUCTION, DISENCHANT, GIVE, BANK})
+
+# The routes that can actually happen, measured 2026-09-05 (infra#3330).
+#
+# REACHABILITY AND EXECUTABILITY ARE DIFFERENT FACTS, and conflating them is
+# why this module has never been safe to wire. `Family.auction_reachable` asks
+# whether this character could walk to an auctioneer today; `available` asks
+# whether anything in this system can carry the verdict out at all. A route
+# needs BOTH, and only the second is a fact about the deployment: VENDOR and
+# GIVE ship and have passes writing their rows, BANK has an executor but no
+# writer (infra#3329), AUCTION's executor is a draft (mod-overseer#208), and
+# DISENCHANT has no executor or command kind at all. `overseer_command` has
+# never held a single kind='auction' or kind='bank' row.
+#
+# Turning a route on is adding its name here, which is the point of a set
+# rather than five more booleans on Family.
+EXECUTABLE_TODAY = frozenset({KEEP, VENDOR, GIVE})
+
 # Binding, which decides which routes exist at all.
 BIND_NONE = "none"          # freely tradable and auctionable
 BIND_ON_EQUIP = "boe"       # auctionable until somebody wears it
@@ -146,8 +166,11 @@ def _can_disenchant(item, family):
     return family.enchanting_skill >= needed
 
 
-def _auction_is_worth_it(item, family, multiple=AUCTION_BEATS_VENDOR_BY):
+def _auction_is_worth_it(item, family, multiple=AUCTION_BEATS_VENDOR_BY,
+                         available=ALL_ROUTES):
     """Worth a listing slot and the wait, and legal to list at all."""
+    if AUCTION not in available:
+        return False          # no executor: a listing verdict would sit forever
     if not family.auction_reachable:
         return False
     if item.binding == BIND_ON_PICKUP:
@@ -158,12 +181,20 @@ def _auction_is_worth_it(item, family, multiple=AUCTION_BEATS_VENDOR_BY):
 
 
 def decide(item, family, character_level=1, upgrade_for_sibling=False,
-           reagent_held=0):
+           reagent_held=0, available=ALL_ROUTES):
     """One item, one route, with the reason attached.
 
     Order matters and is the argument: every refusal is checked before every
     disposal, so a bug in the disposal ranking can waste value but cannot
     destroy something irreplaceable.
+
+    `available` is the set of routes this system can actually carry out, and
+    it is an argument rather than a constant so that it is testable and so
+    that turning on the auction executor is a one-line change at the caller.
+    It defaults to every route, which is the theoretical answer; a caller
+    writing rows into the world is expected to pass EXECUTABLE_TODAY. A route
+    that is not available is not an error, it simply is not offered, and the
+    item falls through to the next honest option and finally to KEEP.
     """
     if not item.known:
         return Verdict(KEEP, "nothing is known about %s, and an unclassified "
@@ -173,13 +204,16 @@ def decide(item, family, character_level=1, upgrade_for_sibling=False,
     if upgrade_for_sibling:
         # Deferred to the sibling-upgrade gate rather than re-decided here;
         # two modules answering "is this better" is how they drift apart.
+        if GIVE not in available:
+            return Verdict(KEEP, "%s suits somebody in the family better, and "
+                                 "no handover route is open to it" % item.name)
         return Verdict(GIVE, "%s suits somebody in the family better than what "
                              "they are wearing" % item.name)
 
     if item.reagent_for:
         needed = family.professions.get(item.reagent_for)
         if needed is None:
-            if family.bank_reachable:
+            if family.bank_reachable and BANK in available:
                 return Verdict(BANK, "%s feeds %s, which nobody has yet - the "
                                      "bank keeps it without spending a bag slot "
                                      "on a profession the family may still take"
@@ -195,22 +229,22 @@ def decide(item, family, character_level=1, upgrade_for_sibling=False,
                                     family.reagent_keep))
         # Surplus beyond what the profession can use is ordinary goods, and
         # cloth and ore are exactly what sells on the auction house.
-        if _auction_is_worth_it(item, family):
+        if _auction_is_worth_it(item, family, available=available):
             return Verdict(AUCTION, "%s is %d past the %d of %s the family "
                                     "keeps, and it is worth more listed"
                                     % (item.name, reagent_held - family.reagent_keep,
                                        family.reagent_keep, item.reagent_for))
-        if family.vendor_reachable and item.sell_price > 0:
+        if VENDOR in available and family.vendor_reachable and item.sell_price > 0:
             return Verdict(VENDOR, "%s is surplus to %s"
                                    % (item.name, item.reagent_for))
-        if family.bank_reachable:
+        if family.bank_reachable and BANK in available:
             return Verdict(BANK, "%s is surplus with no buyer in reach, and the "
                                  "bank costs nothing to use" % item.name)
         return Verdict(KEEP, "%s is surplus but there is nowhere to take it"
                              % item.name)
 
     if item.quality == 0:
-        if family.vendor_reachable and item.sell_price > 0:
+        if VENDOR in available and family.vendor_reachable and item.sell_price > 0:
             return Verdict(VENDOR, "%s is junk" % item.name)
         return Verdict(KEEP, "%s is junk but no vendor is reachable" % item.name)
 
@@ -220,14 +254,23 @@ def decide(item, family, character_level=1, upgrade_for_sibling=False,
 
     # An old green. This is the branch the whole module exists for, and
     # binding decides which routes are even open.
-    if _auction_is_worth_it(item, family):
+    if _auction_is_worth_it(item, family, available=available):
         return Verdict(AUCTION, "%s is bind-on-equip and worth more listed "
                                 "than vendored" % item.name)
-    if _can_disenchant(item, family):
+    if DISENCHANT in available and _can_disenchant(item, family):
         return Verdict(DISENCHANT, "%s cannot be listed or is not worth "
                                    "listing, and the family can break it down"
                                    % item.name)
-    if family.vendor_reachable and item.sell_price > 0:
+    if item.binding != BIND_ON_PICKUP and AUCTION not in available:
+        # A tradable green is the auction's item and, if somebody in the
+        # family should be wearing it, the sibling-upgrade gate's item
+        # (mod-overseer#189). Vendoring it merely because no listing route
+        # is BUILT YET throws the difference away permanently, and it is a
+        # decision nobody can take back. Waiting costs one bag slot.
+        return Verdict(KEEP, "%s is still tradable and nothing here can list "
+                             "or hand it on yet, so vendoring it now would "
+                             "throw away the difference" % item.name)
+    if VENDOR in available and family.vendor_reachable and item.sell_price > 0:
         return Verdict(VENDOR, "%s is outgrown, and vendoring is the only "
                                "route open to it" % item.name)
     return Verdict(KEEP, "%s has no route open to it right now" % item.name)
