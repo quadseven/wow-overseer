@@ -25,6 +25,7 @@ import discord
 import pymysql
 
 import achievements
+import bag_pressure
 import bag_upgrade
 import chat
 import council
@@ -1400,17 +1401,27 @@ def _write_trade_errand(errand) -> None:
     """
     with _connect() as conn, conn.cursor() as cur:
         try:
-            cur.execute(
-                "UPDATE overseer_roster SET learn_skill = %s, unlearn_skill = %s, "
-                "unlearn_max = %s, travel_npc = %s WHERE name = %s",
-                (
-                    errand.learn_skill,
-                    errand.unlearn_skill,
-                    errand.unlearn_max,
-                    errand.travel_npc,
-                    errand.character,
-                ),
-            )
+            if errand.travel_npc == "vendor":
+                # Economy must never erase a profession trainer errand. A
+                # vendor pass may coexist with a stale row, but only an idle
+                # traveller can be retasked for the town run.
+                cur.execute(
+                    "UPDATE overseer_roster SET travel_npc = %s "
+                    "WHERE name = %s AND (travel_npc = '' OR travel_npc = %s)",
+                    (errand.travel_npc, errand.character, errand.travel_npc),
+                )
+            else:
+                cur.execute(
+                    "UPDATE overseer_roster SET learn_skill = %s, unlearn_skill = %s, "
+                    "unlearn_max = %s, travel_npc = %s WHERE name = %s",
+                    (
+                        errand.learn_skill,
+                        errand.unlearn_skill,
+                        errand.unlearn_max,
+                        errand.travel_npc,
+                        errand.character,
+                    ),
+                )
         except pymysql.err.OperationalError as exc:
             if exc.args and exc.args[0] == 1054:
                 log.warning(
@@ -1728,6 +1739,7 @@ class Bridge(discord.Client):
                 self._sample_family,
                 self._share_quests_loop,
                 self._move_materials_loop,
+                self._vendor_loop,
                 self._restore_lost_lives,
             )
         }
@@ -2977,6 +2989,45 @@ class Bridge(discord.Client):
                 log.exception("materials pass failed; retrying next cycle")
             await asyncio.sleep(cycle)
 
+    async def _vendor_once(self) -> None:
+        """Queue safe carried junk for the merged world-side sell executor."""
+        names = sorted((await asyncio.to_thread(_protected_guids)).values())
+        if not names or await self._mid_run(names):
+            return
+        rows = await asyncio.to_thread(_fetch_vendor_items, names)
+        candidates = bag_pressure.vendor_candidates(rows)
+        if not candidates:
+            log.info("economy: no safe carried vendor goods")
+            return
+        # One vendor errand leads the family to town; the seller rows remain
+        # durable and are consumed by the executor as the party arrives.
+        leader = bonds.head_of_family()
+        await asyncio.to_thread(
+            _write_trade_errand,
+            professions.Errand(character=leader, travel_npc="vendor"),
+        )
+        seen = await asyncio.to_thread(_recent_sell_keys, GIVE_RETRY_MINUTES)
+        inserted = 0
+        for candidate in candidates:
+            key = (candidate.holder, "guid:%d" % candidate.item_guid)
+            if key in seen:
+                continue
+            if await asyncio.to_thread(_insert_sell, candidate):
+                inserted += 1
+        log.info("economy: queued %d/%d safe vendor sale(s), leader=%s",
+                 inserted, len(candidates), leader)
+
+    async def _vendor_loop(self) -> None:
+        await self.wait_until_ready()
+        cycle = float(os.environ.get("VENDOR_CYCLE_SECONDS", "300"))
+        await asyncio.sleep(min(cycle, 90.0))
+        while not self.is_closed():
+            try:
+                await self._vendor_once()
+            except Exception:
+                log.exception("economy vendor pass failed; retrying next cycle")
+            await asyncio.sleep(cycle)
+
     async def _narrate_events(self) -> None:
         """The world narrates itself (infra#2602).
 
@@ -3926,6 +3977,76 @@ def _give_attempts(hours: int) -> list:
         )
         for row in rows
     ]
+
+
+_VENDOR_ITEMS_SQL = (
+    "SELECT c.name AS holder, ii.guid AS item_guid, ii.count AS count, "
+    "it.name AS name, it.Quality AS quality, it.SellPrice AS sell_price, "
+    "(it.class = 12) AS quest_item, (it.class = 5) AS reagent "
+    "FROM character_inventory ci "
+    "JOIN characters c ON c.guid = ci.guid "
+    "JOIN item_instance ii ON ii.guid = ci.item "
+    "JOIN acore_world.item_template it ON it.entry = ii.itemEntry "
+    "WHERE c.name IN (%s) AND ((ci.bag = 0 AND ci.slot BETWEEN 19 AND 38) "
+    "OR ci.bag IN (SELECT bag.item FROM character_inventory bag "
+    "WHERE bag.guid = ci.guid AND bag.bag = 0 AND bag.slot BETWEEN 19 AND 22)) "
+    "AND it.class <> 1"
+)
+
+
+def _fetch_vendor_items(names: list) -> list:
+    """Read carried sale facts; all routing remains in bag_pressure."""
+    if not names:
+        return []
+    sql = _VENDOR_ITEMS_SQL % ",".join(["%s"] * len(names))
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(sql, names)
+        rows = []
+        for row in cur.fetchall():
+            item = dict(row)
+            # Trade goods such as Linen are class 7, not class 5. The
+            # profession roster is the stronger fact and must protect them
+            # even when item_template calls them ordinary trade goods.
+            profession_material = item.get("name") in materials.REAGENTS
+            item["reagent"] = bool(item.get("reagent")) or profession_material
+            item["profession_needed"] = profession_material
+            rows.append(item)
+        return rows
+
+
+def _recent_sell_keys(minutes: int) -> set:
+    """Avoid re-queueing the same seller and item during a retry window."""
+    with _connect() as conn, conn.cursor() as cur:
+        try:
+            cur.execute(
+                "SELECT target_name, command FROM overseer_command "
+                "WHERE kind = 'sell' AND created_at > NOW() - INTERVAL %s MINUTE",
+                (int(minutes),),
+            )
+        except pymysql.err.MySQLError as exc:
+            if exc.args and exc.args[0] in (1054, 1146):
+                return set()
+            raise
+        return {(row["target_name"], row["command"]) for row in cur.fetchall()}
+
+
+def _insert_sell(candidate: bag_pressure.SellCandidate) -> int:
+    """Queue one explicitly chosen stack for the world-side vendor executor."""
+    command = "guid:%d count:%d" % (candidate.item_guid, candidate.count)
+    with _connect() as conn, conn.cursor() as cur:
+        try:
+            cur.execute(
+                "INSERT INTO overseer_command "
+                "(target_name, command, kind, target_arg, source) "
+                "VALUES (%s, %s, 'sell', '', %s)",
+                (candidate.holder, command, "economy"),
+            )
+        except pymysql.err.MySQLError as exc:
+            if exc.args and exc.args[0] in (1146, 1265):
+                log.warning("sell command unavailable on this world image")
+                return 0
+            raise
+        return cur.lastrowid or 0
 
 
 def _active_dungeon_run() -> dict | None:

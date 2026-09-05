@@ -568,7 +568,7 @@ class TheErrandIsBounded(unittest.TestCase):
         # "never measured" on every poll and restart the patience clock forever.
         # An explicit seen bit separates "no reading yet" from "a reading of
         # zero", which `!best` could not.
-        self.assertIn("return !best || reading < best - limits.margin;", ratchet)
+        self.assertIn("return !seen || reading < best - limits.margin;", ratchet)
         # ...and `best` only moves when that is true, so it ratchets downward.
         progressed = ratchet.index("if (verdict.progressed)")
         best = ratchet.index("state.best =")

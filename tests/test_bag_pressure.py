@@ -1,6 +1,7 @@
 import unittest
 
-from bag_pressure import ItemForSale, bag_purchase_allowed, sellable, town_run_needed
+from bag_pressure import (ItemForSale, bag_purchase_allowed, sellable,
+                          town_run_needed, vendor_candidates)
 
 
 class BagPressureTests(unittest.TestCase):
@@ -24,6 +25,19 @@ class BagPressureTests(unittest.TestCase):
         self.assertTrue(bag_purchase_allowed(20000, 5000, True))
         self.assertFalse(bag_purchase_allowed(12000, 5000, True))
         self.assertFalse(bag_purchase_allowed(20000, 5000, False))
+
+    def test_vendor_candidates_preserve_identity_and_count(self):
+        rows = [{"holder": "Og", "item_guid": 42, "count": 7,
+                 "quality": 0, "sell_price": 12,
+                 "quest_item": False, "reagent": False,
+                 "profession_needed": False}]
+        self.assertEqual(vendor_candidates(rows)[0].item_guid, 42)
+        self.assertEqual(vendor_candidates(rows)[0].count, 7)
+
+    def test_vendor_candidates_fail_closed_for_unknowns(self):
+        rows = [{"holder": "Og", "item_guid": 43, "count": 1,
+                 "quality": 0, "sell_price": 12}]
+        self.assertEqual(vendor_candidates(rows), ())
 
 
 if __name__ == "__main__":

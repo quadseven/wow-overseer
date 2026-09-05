@@ -55,7 +55,6 @@ DISPOSAL = [
     "DestroyItemCount",
     "ClearInventory",
     "ClearAllItems",
-    "SellItem",
     "sell vendor",
     "sell gray",
 ]

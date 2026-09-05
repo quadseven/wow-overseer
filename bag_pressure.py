@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Iterable
 
 
 @dataclass(frozen=True)
@@ -11,6 +12,43 @@ class ItemForSale:
     reagent: bool = False
     profession_needed: bool = False
     sell_price: int = 0
+
+
+@dataclass(frozen=True)
+class SellCandidate:
+    """A carried stack the world executor may offer to a vendor."""
+    holder: str
+    item_guid: int
+    count: int
+    item: ItemForSale
+
+
+def vendor_candidates(rows: Iterable[dict]) -> tuple[SellCandidate, ...]:
+    """Select only explicitly classified, safe carried vendor goods.
+
+    The adapter supplies flags from world data. Missing flags are dangerous
+    and therefore become False only for positive facts such as ``quest_item``;
+    unknown identity, price, or count keeps the row out of the action queue.
+    """
+    out = []
+    for row in rows:
+        try:
+            item = ItemForSale(
+                quality=int(row["quality"]),
+                quest_item=bool(row.get("quest_item", True)),
+                reagent=bool(row.get("reagent", True)),
+                profession_needed=bool(row.get("profession_needed", True)),
+                sell_price=int(row["sell_price"]),
+            )
+            candidate = SellCandidate(
+                holder=str(row["holder"]), item_guid=int(row["item_guid"]),
+                count=int(row.get("count", 0)), item=item,
+            )
+        except (KeyError, TypeError, ValueError):
+            continue
+        if candidate.item_guid > 0 and candidate.count > 0 and sellable(item):
+            out.append(candidate)
+    return tuple(out)
 
 
 def town_run_needed(used: int, slots: int, minimum_free: int = 2,
