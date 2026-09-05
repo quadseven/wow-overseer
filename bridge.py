@@ -27,6 +27,7 @@ import pymysql
 import achievements
 import bag_pressure
 import bag_upgrade
+import bank
 import chat
 import council
 import core
@@ -1382,6 +1383,16 @@ def _write_declared_professions() -> None:
             raise
 
 
+# The travel roles the ECONOMY may aim, as opposed to the ones the trade
+# plan owns. Both of these are town errands the family runs and comes back
+# from; a profession trainer errand is a standing plan that outlives them,
+# so an economy pass may only retask a traveller that is idle or already
+# doing the same errand (see the UPDATE guard below). travel.ROLES is the
+# vocabulary these come from, and mod-overseer's DriveTravel is what reads
+# the column.
+ECONOMY_ERRANDS = ("vendor", "banker")
+
+
 def _write_trade_errand(errand) -> None:
     """Put one character's outstanding trade plan where the worldserver reads it.
 
@@ -1404,10 +1415,10 @@ def _write_trade_errand(errand) -> None:
     """
     with _connect() as conn, conn.cursor() as cur:
         try:
-            if errand.travel_npc == "vendor":
+            if errand.travel_npc in ECONOMY_ERRANDS:
                 # Economy must never erase a profession trainer errand. A
-                # vendor pass may coexist with a stale row, but only an idle
-                # traveller can be retasked for the town run.
+                # vendor or bank pass may coexist with a stale row, but only
+                # an idle traveller can be retasked for the town run.
                 cur.execute(
                     "UPDATE overseer_roster SET travel_npc = %s "
                     "WHERE name = %s AND (travel_npc = '' OR travel_npc = %s)",
@@ -1852,6 +1863,7 @@ class Bridge(discord.Client):
                 self._share_quests_loop,
                 self._move_materials_loop,
                 self._vendor_loop,
+                self._bank_loop,
                 self._restore_lost_lives,
             )
         }
@@ -3173,6 +3185,83 @@ class Bridge(discord.Client):
                 await self._vendor_once()
             except Exception:
                 log.exception("economy vendor pass failed; retrying next cycle")
+            await asyncio.sleep(cycle)
+
+    async def _bank_once(self) -> None:
+        """One pass of the bank: park what the family keeps but cannot use.
+
+        Same shape as _hand_bags_once and _vendor_once, and deliberately no
+        more than that shape: fetch rows in a thread, hand them to the pure
+        planner, write the rows it returns. There is no slot arithmetic here
+        and no rule about what belongs in a bank - bank.py owns both, and
+        disposition owns the verdict bank.py consumes.
+
+        THE TRAVEL PROBLEM IS THE VENDOR'S, SOLVED THE VENDOR'S WAY. DoBank
+        refuses with `banker not in range` unless a banker is within
+        INTERACTION_DISTANCE and will deal with the character, and a follower
+        cannot be sent to an NPC on its own - only the family leader takes
+        `new rpg`, and the rest arrive by following. So the errand goes to the
+        leader, every character's rows are queued together, and each command
+        stays pending until its holder reaches the counter (mod-overseer#209,
+        infra#3311). The errand is written BEFORE the rows for the same reason
+        the vendor pass writes it first: a queue that outlives the journey is
+        the failure this ordering avoids.
+
+        NOT IN THE MIDDLE OF A DUNGEON RUN, for the same reason reagents wait.
+        A bank trip is a town errand, and pulling the leader out of a run to
+        make one is how the party spreads.
+        """
+        names = sorted((await asyncio.to_thread(_protected_guids)).values())
+        if not names or await self._mid_run(names):
+            return
+        rows = await asyncio.to_thread(_fetch_bank_items, names)
+        held = await asyncio.to_thread(_fetch_trade_skills, names)
+        bank_plan = bank.plan(
+            bank.members_from_rows(rows, names), bank.family_from_skills(held)
+        )
+        for note in bank_plan.notes:
+            log.info("bank: %s", note)
+        if not bank_plan.moves:
+            log.info("bank: nothing to put down and nothing to fetch back")
+            return
+        leader = bonds.head_of_family()
+        await asyncio.to_thread(
+            _write_trade_errand,
+            professions.Errand(character=leader, travel_npc="banker"),
+        )
+        seen = await asyncio.to_thread(_recent_bank_keys, GIVE_RETRY_MINUTES)
+        fresh = []
+        for move in bank_plan.moves:
+            command = bank.command(move)
+            if (move.character, command) in seen:
+                continue
+            if await asyncio.to_thread(_insert_bank, move, command):
+                fresh.append(move)
+        for line in bank.lines(fresh):
+            log.info("bank: %s", line)
+        log.info("bank: queued %d/%d move(s), leader=%s",
+                 len(fresh), len(bank_plan.moves), leader)
+
+    async def _bank_loop(self) -> None:
+        """Keep the family's bank in use (mod-overseer#207).
+
+        Own loop and own clock, the same reasoning as _vendor_loop: a failed
+        pass is logged and retried rather than swallowed, because a bank pass
+        that has quietly stopped looks exactly like a family with nothing left
+        to put down.
+        """
+        await self.wait_until_ready()
+        cycle = float(os.environ.get("BANK_CYCLE_SECONDS", "600"))
+        # Behind the vendor pass on purpose. Both send the leader to town and
+        # both write `travel_npc`, and the guard in _write_trade_errand lets
+        # only an idle traveller be retasked - so the two must not arrive in
+        # the same instant and race for the column every cycle.
+        await asyncio.sleep(min(cycle, 150.0))
+        while not self.is_closed():
+            try:
+                await self._bank_once()
+            except Exception:
+                log.exception("economy bank pass failed; retrying next cycle")
             await asyncio.sleep(cycle)
 
     async def _narrate_events(self) -> None:
@@ -4521,6 +4610,106 @@ def _insert_bag_give(move, command: str) -> int:
                     "from %s to %s needs the worldserver image carrying "
                     "mod-overseer's give SQL (infra#2597)",
                     move.bag, move.giver, move.receiver,
+                )
+                return 0
+            raise
+        return cur.lastrowid or 0
+
+
+# Every item the family owns and where it sits, both sides of the bank
+# counter. ONE query and no WHERE on the geography, because the bank pass has
+# to see both sides at once: what is in the bags decides what goes down, what
+# is in the bank decides what comes back, and the free room on each side is
+# counted from the same rows. Filtering here would mean counting room in SQL,
+# and slot arithmetic is exactly what belongs in the pure module.
+#
+# `it.class` and `it.bonding` come along raw. Which class is a container and
+# which bonding is soulbound is bank.item_from_row's to say, against the same
+# constants disposition already reasons in.
+#
+# UNVERIFIED AGAINST A LIVE SERVER, the same caveat _HOLDINGS_SQL carries:
+# nothing in this change has been run against real character_inventory rows.
+# bank.py's own tests cover the DECISION against rows written by hand.
+_BANK_ITEMS_SQL = (
+    "SELECT c.name AS holder, c.level AS level, ii.guid AS item_guid, "
+    "       ii.count AS count, it.name AS name, it.Quality AS quality, "
+    "       it.SellPrice AS sell_price, it.RequiredLevel AS required_level, "
+    "       it.bonding AS bonding, it.class AS item_class, "
+    "       it.ContainerSlots AS container_slots, "
+    "       ci.bag AS bag, ci.slot AS slot "
+    "FROM character_inventory ci "
+    "JOIN characters c                  ON c.guid = ci.guid "
+    "JOIN item_instance ii              ON ii.guid = ci.item "
+    "JOIN acore_world.item_template it  ON it.entry = ii.itemEntry "
+    "WHERE c.name IN (%s)"
+)
+
+
+def _fetch_bank_items(names: list) -> list:
+    """Rows for bank.members_from_rows; no judgement and no arithmetic here."""
+    if not names:
+        return []
+    sql = _BANK_ITEMS_SQL % ",".join(["%s"] * len(names))
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(sql, names)
+        return [dict(row) for row in cur.fetchall()]
+
+
+def _recent_bank_keys(minutes: int) -> set:
+    """(character, command) pairs already proposed inside the retry window.
+
+    The bank sibling of _recent_sell_keys, and the reason a walk that has not
+    finished does not fill the queue: a deposit whose character is still on
+    the road to the banker is refused with `banker not in range`, and an
+    identical row every cycle would turn one slow journey into a hundred dead
+    commands.
+    """
+    with _connect() as conn, conn.cursor() as cur:
+        try:
+            cur.execute(
+                "SELECT target_name, command FROM overseer_command "
+                "WHERE kind = 'bank' AND created_at > NOW() - INTERVAL %s MINUTE",
+                (int(minutes),),
+            )
+        except pymysql.err.MySQLError as exc:
+            # 1054 missing column, 1146 missing table, 1265 a `kind` ENUM with
+            # no 'bank' value. A world with none of the bank machinery has
+            # been asked for nothing, so nothing is already queued.
+            if exc.args and exc.args[0] in (1054, 1146, 1265):
+                return set()
+            raise
+        return {(row["target_name"], row["command"]) for row in cur.fetchall()}
+
+
+def _insert_bank(move, command: str) -> int:
+    """One overseer_command row moving one item across a banker's counter.
+
+    THE COLUMNS DO NOT MEAN WHAT THEY MEAN FOR A GIVE. mod-overseer#207 puts
+    THE CHARACTER in `target_name` and leaves `target_arg` unused, where a
+    give puts the giver in one and the receiver in the other. A bank row with
+    a name in `target_arg` would still be delivered and would still be wrong,
+    which is why the empty string is written literally rather than left to a
+    default.
+
+    Guarded on 1146 and 1265 exactly as _insert_sell and _insert_give are: a
+    worldserver whose image predates the bank migration must warn rather than
+    take the whole pass down.
+    """
+    with _connect() as conn, conn.cursor() as cur:
+        try:
+            cur.execute(
+                "INSERT INTO overseer_command "
+                "(target_name, command, kind, target_arg, source) "
+                "VALUES (%s, %s, 'bank', '', %s)",
+                (move.character, command, "economy"),
+            )
+        except pymysql.err.MySQLError as exc:
+            if exc.args and exc.args[0] in (1146, 1265):
+                log.warning(
+                    "overseer_command.kind has no 'bank' value - %s cannot "
+                    "%s %s until the worldserver image carrying "
+                    "mod-overseer's bank SQL has shipped (mod-overseer#207)",
+                    move.character, move.verb, move.item,
                 )
                 return 0
             raise
