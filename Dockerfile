@@ -31,7 +31,7 @@ COPY _shared/core.py _shared/bridge.py _shared/voice.py _shared/transform.py \
      _shared/realm.py _shared/basepath.py _shared/watchwall.py _shared/realmnav.py \
      _shared/needs.py _shared/partystatus.py _shared/lootcard.py _shared/towntrip.py \
      _shared/townslot.py \
-     _shared/tabard.py \
+     _shared/tabard.py _shared/crossing.py \
      _shared/zones.json _shared/entrances.json _shared/shapes.json \
      _shared/talents.json _shared/items.json _shared/icons.json _shared/spells.json \
      _shared/standing.json _shared/craftbook.json \
