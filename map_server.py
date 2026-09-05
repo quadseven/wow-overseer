@@ -31,6 +31,7 @@ import family
 import frames
 import modelviewer
 import needs
+import partystatus
 import questlog
 import recap
 import realm
@@ -2593,6 +2594,48 @@ class Handler(BaseHTTPRequestHandler):
         self._send(200, "application/json",
                    json.dumps(frames.describe(_FRAMES[name], time.time())).encode())
 
+    def _party_status(self, _query: dict) -> None:
+        """GET /api/party-status - one line the in-game addon can render.
+
+        infra#3334. The party frames in five game clients say who the family
+        are and nothing about what they are doing. This is the half of that
+        answer no client can see for itself; the other half - dead, offline,
+        out of sight, fighting, out of range - the addon observes and needs
+        nothing from here.
+
+        READS NOTHING THE AGENDA BANNER DOES NOT ALREADY READ. `_fetch_agenda`
+        is reused whole rather than replaced by a thinner query of its own, for
+        the same reason agenda.py adds no table: two surfaces querying the same
+        family separately is two surfaces that can disagree about it, and every
+        `overseer_*` read in there is already behind `_guarded` for 1146 and
+        1054.
+
+        No name parameter. The line carries the whole roster because the addon
+        renders the whole party, and a per-character endpoint would answer a
+        question no viewer of a party frame is asking.
+
+        BELOW _frame_post and above _read_json_body, which is the one window in
+        this class no other endpoint suite slices: the Agenda, Armory,
+        Questlog, Wealth, Decree and Watch suites each cut this file by their
+        own handler's name, and a handler dropped inside one of those windows
+        is read as part of a contract it has nothing to do with.
+        """
+        try:
+            rows = _fetch_agenda()
+            payload = partystatus.build_push(
+                roster_rows=rows["roster_rows"],
+                run_rows=rows["run_rows"],
+                event_rows=rows["event_rows"],
+            )
+            self._send(200, "application/json", json.dumps(payload).encode())
+        except Exception:
+            # Same contract as every other poll. It matters particularly here:
+            # a blank line rendered as success would blank five labels in the
+            # game and read as "nobody is doing anything", which is a specific
+            # and alarming claim rather than the absence of one.
+            log.exception("party status query failed")
+            self._send(503, "application/json", b'{"error": "world unreachable"}')
+
     def _read_json_body(self) -> dict | None:
         """The POST body as a dict, or None after sending the error itself."""
         try:
@@ -2672,6 +2715,7 @@ class Handler(BaseHTTPRequestHandler):
         "/api/council": _council,
         "/api/eye": _eye,
         "/api/agenda": _agenda,
+        "/api/party-status": _party_status,
         "/api/decree": _decree,
         "/api/thoughts": _thoughts,
         "/api/watch": _watch_state,
