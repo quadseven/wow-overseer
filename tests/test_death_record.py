@@ -33,6 +33,19 @@ def _migration() -> str:
     return MIGRATION.read_text(encoding="utf-8")
 
 
+def _migrations() -> str:
+    """Every migration that touches `overseer_death`, concatenated.
+
+    The base file creates the table; later files ALTER it. #235 added sixteen
+    attribution columns in `2026_09_05_02_overseer_death_context.sql`, and a
+    check that read only the base CREATE TABLE would report them missing from
+    a schema that in fact has them. Globbing rather than listing means the
+    next migration is covered without editing this test."""
+    return chr(10).join(
+        path.read_text(encoding="utf-8")
+        for path in sorted(MIGRATION.parent.glob("*overseer_death*.sql")))
+
+
 def _function(signature: str) -> str:
     """The whole of a function or method, braces balanced, starting from the
     first occurrence of `signature`. `signature` only needs to be enough text
@@ -252,6 +265,15 @@ class TheMigrationMatchesWhatTheCodeWrites(unittest.TestCase):
         "killer_entry", "health_at_death", "max_health_at_death",
         "seconds_since_full_health", "job", "quest_aim", "travel_target",
         "grouped", "group_size", "group_leader",
+        # mod-overseer#235: what was actually moving the character. Added by
+        # a SECOND migration rather than the base one, which is why
+        # _migrations() below reads both - the base CREATE TABLE has no
+        # opinion about these and never will.
+        "driver", "movement_generator", "in_combat", "last_seen_seconds",
+        "last_pos_x", "last_pos_y", "last_pos_z", "yards_fallen",
+        "leader_seen", "leader_map", "leader_pos_x", "leader_pos_y",
+        "leader_pos_z", "recovery_rung", "recovery_prev_rung",
+        "recovery_seconds",
     )
 
     def test_migration_file_exists(self):
@@ -271,7 +293,7 @@ class TheMigrationMatchesWhatTheCodeWrites(unittest.TestCase):
         self.assertEqual(self.INSERT_COLUMNS, columns)
 
     def test_every_inserted_column_exists_in_the_create_table(self):
-        migration = _migration()
+        migration = _migrations()
         for column in self.INSERT_COLUMNS:
             self.assertIn("`%s`" % column, migration,
                           "%s is written by FlushDeaths but missing from the "
