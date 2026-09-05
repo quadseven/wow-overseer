@@ -99,11 +99,106 @@ def broadcast_url(character: str, base: str | None = None,
 
     None when the path cannot be built, so the page can tell "nobody to
     watch" (no URL) apart from "asked and got refused" (a URL that 404s).
+
+    ALWAYS THE DEFAULT RENDITION. This field predates the quality ladder and
+    a player that has never heard of renditions must keep working unchanged,
+    so it keeps meaning exactly what it always meant: one address, the full
+    size one.
     """
+    return _rendition_url(character, RENDITION_DEFAULT, base, prefix)
+
+
+# --- the quality ladder (infra#3330) --------------------------------------
+#
+# WHY THE SERVER SAYS THIS AT ALL, rather than the page assuming a suffix.
+# WebRTC has no quality ladder of its own and MediaMTX does not transcode, so
+# a second quality exists only because a second encoder output publishes it.
+# That is a fact about what the gaming box is running, and a page that
+# guessed it would offer a picker whose second entry is a 404. Naming the
+# ladder here means the UI is built from data and, when the list has one
+# entry, honestly shows no picker at all.
+#
+# WHAT THIS CAN AND CANNOT KNOW, stated plainly because the difference is the
+# whole contract. It knows what the publisher is CONFIGURED to produce. It
+# does NOT know what is live right now, and it cannot: MediaMTX's API is
+# bound to 127.0.0.1:9997 on the gaming box (wow-stream-agent/mediamtx.yml)
+# and this server runs in the cluster, so there is nothing to ask. Probing per
+# request would also put a network call in the middle of a page load to answer
+# a question the browser is about to answer for itself.
+#
+# SO LIVENESS STAYS WHERE IT ALREADY LIVES: the WHEP handshake. That is not a
+# new rule, it is the one _member already follows - a logged-out character is
+# still offered a URL because the tile learns the truth from the handshake. A
+# rendition nobody is publishing answers the WHEP POST with 404, which
+# index.html's whepFailure() already turns into a sentence. The page falls
+# back to the default rendition; the ladder never has to lie.
+#
+# MIRRORED FROM wow-stream-agent/video.py's RENDITIONS, deliberately rather
+# than imported - the same split, for the same reason, as broadcast_path
+# above: that is a separate codebase on a separate machine. Kept honest by
+# tests/test_family.py, which reads that file and compares.
+RENDITION_DEFAULT = "high"
+RENDITIONS = (
+    {"id": "high", "label": "720p", "suffix": "", "width": 1280, "height": 720},
+    {"id": "low", "label": "360p", "suffix": "low", "width": 640, "height": 360},
+)
+
+# The lever for turning the ladder off from the map's side, and the one case
+# it is for: the encoders on the gaming box are pinned to a detached worktree
+# and only pick up a new command line when an operator restarts them. If they
+# are ever rolled back to a build that publishes one rendition, setting this
+# to 0 stops the page offering a second quality before anyone sees a 404.
+# It is not a feature flag for the ladder itself - the WHEP fallback already
+# makes a mismatch harmless - it is a way to make the UI quieter during one.
+_LADDER = os.environ.get("WOW_STREAM_LADDER", "1").strip().lower() not in (
+    "0", "false", "no", "off")
+
+
+def _rendition_url(character: str, rendition_id: str, base: str | None = None,
+                   prefix: str | None = None) -> str | None:
+    """One rendition's WHEP base URL, or None if the path cannot be built."""
     path = broadcast_path(character, prefix)
     if not path:
         return None
-    return f"{(_STREAM_BASE if base is None else base).rstrip('/')}/{path}"
+    for spec in RENDITIONS:
+        if spec["id"] == rendition_id:
+            suffix = spec["suffix"]
+            break
+    else:
+        return None
+    root = (_STREAM_BASE if base is None else base).rstrip("/")
+    return f"{root}/{path}{suffix}"
+
+
+def broadcast_renditions(character: str, base: str | None = None,
+                         prefix: str | None = None) -> list[dict]:
+    """Every quality this member can be watched at, best first.
+
+    A LIST, ALWAYS, and never a bare URL: one entry is the honest answer when
+    only one rendition is published, and the page draws no picker for it. An
+    unusable name returns [] for the same reason broadcast_path returns "" -
+    a tile that cannot resolve a path is drawn offline, not a 500 that takes
+    the whole Family tab down.
+
+    `default` marks where a player starts and what it falls back TO when a
+    chosen rendition 404s. Exactly one entry carries it.
+    """
+    out = []
+    for spec in RENDITIONS:
+        if not _LADDER and spec["id"] != RENDITION_DEFAULT:
+            continue
+        url = _rendition_url(character, spec["id"], base, prefix)
+        if not url:
+            return []
+        out.append({
+            "id": spec["id"],
+            "label": spec["label"],
+            "url": url,
+            "width": spec["width"],
+            "height": spec["height"],
+            "default": spec["id"] == RENDITION_DEFAULT,
+        })
+    return out
 
 
 def roster() -> list[str]:
@@ -194,6 +289,7 @@ def _member(name: str, row: dict | None, geo, leader_name: str | None) -> dict:
             # truth from the WHEP handshake, the same way the on-demand
             # player does; this module does not guess "offline" from absence.
             "broadcast_url": broadcast_url(name),
+            "broadcast_renditions": broadcast_renditions(name),
         }
     race, class_id = row["race"], row["class"]
     health, max_health = int(row["health"]), int(row["max_health"])
@@ -223,6 +319,7 @@ def _member(name: str, row: dict | None, geo, leader_name: str | None) -> dict:
         "zone": "inside an instance" if in_instance
                 else geo.zone_name(row["map_id"], row["pos_x"], row["pos_y"]),
         "broadcast_url": broadcast_url(row["name"]),
+        "broadcast_renditions": broadcast_renditions(row["name"]),
         "instance": in_instance,
         "combat": bool(row["in_combat"]),
         "leader": bool(leader_name) and row["name"] == leader_name,

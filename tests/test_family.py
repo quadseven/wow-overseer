@@ -5,7 +5,10 @@ levels above them and the map - 500 dots on a phone - surfaced none of it. So
 the cases that matter here are the ones that were invisible: dead, hurt, and
 missing, each of which must read as itself and not as the other two.
 """
+import ast
+import re
 import unittest
+from pathlib import Path
 
 import family
 from transform import Geometry
@@ -208,6 +211,191 @@ class HeadlineTest(unittest.TestCase):
         rows = [row(age_seconds=40), row(guid=2, name="Og", age_seconds=6)]
         self.assertEqual(family.build_family(rows, GEO)["freshest_seconds"], 6)
 
+
+class TheQualityLadder(unittest.TestCase):
+    """WebRTC has no ladder of its own and MediaMTX does not transcode, so a
+    second quality exists only because the gaming box publishes a second
+    stream. This is the page's only way to find out that it does."""
+
+    def test_the_ladder_lists_every_rendition_best_first(self):
+        got = family.broadcast_renditions("Grug", base="https://x", prefix="dev")
+        self.assertEqual([r["id"] for r in got], ["high", "low"])
+
+    def test_each_rendition_carries_the_url_the_page_opens(self):
+        got = family.broadcast_renditions("Grug", base="https://x", prefix="dev")
+        by_id = {r["id"]: r["url"] for r in got}
+        self.assertEqual(by_id["high"], "https://x/devgrug")
+        self.assertEqual(by_id["low"], "https://x/devgruglow")
+
+    def test_the_default_rendition_is_the_one_broadcast_url_already_meant(self):
+        """The field predates the ladder. A player that never learns about
+        renditions must keep working, byte for byte, off the old field."""
+        self.assertEqual(
+            family.broadcast_url("Grug", base="https://x", prefix="dev"),
+            next(r["url"] for r
+                 in family.broadcast_renditions("Grug", base="https://x",
+                                                prefix="dev")
+                 if r["default"]))
+
+    def test_exactly_one_rendition_is_the_default(self):
+        """The page starts on it and falls back TO it when another 404s. Two
+        would make that ambiguous, none would make it impossible."""
+        got = family.broadcast_renditions("Grug", base="https://x")
+        self.assertEqual(sum(1 for r in got if r["default"]), 1)
+
+    def test_the_renditions_carry_their_size_so_the_page_need_not_guess(self):
+        got = {r["id"]: (r["width"], r["height"]) for r
+               in family.broadcast_renditions("Grug", base="https://x")}
+        self.assertEqual(got["high"], (1280, 720))
+        self.assertEqual(got["low"], (640, 360))
+
+    def test_the_low_rendition_is_actually_smaller(self):
+        """A picker whose second entry is the same size is a fake picker, and
+        this feature is explicitly not allowed to ship one."""
+        got = {r["id"]: r for r in family.broadcast_renditions("Grug")}
+        self.assertLess(got["low"]["width"], got["high"]["width"])
+        self.assertLess(got["low"]["height"], got["high"]["height"])
+
+    def test_a_name_that_cannot_be_a_path_gets_no_ladder(self):
+        """Empty, not a 500. A tile that cannot resolve a path is drawn
+        offline; it does not take the whole Family tab down with it."""
+        for bad in ("", "../etc/passwd", "Gr0g", "A" * 13):
+            with self.subTest(name=bad):
+                self.assertEqual(family.broadcast_renditions(bad), [])
+
+    def test_every_card_carries_the_ladder_present_or_not(self):
+        """Same rule the url already follows: a logged-out character can still
+        be mid-broadcast, and the tile learns the truth from the handshake."""
+        p = family.build_family([row()], GEO)
+        self.assertTrue(card(p, "Grug")["broadcast_renditions"])
+        self.assertTrue(card(p, "Bork")["broadcast_renditions"])
+
+    def test_the_ladder_and_the_url_never_disagree(self):
+        """Two fields describing one stream is two chances to be wrong."""
+        p = family.build_family([row()], GEO)
+        for name in ("Grug", "Bork"):
+            with self.subTest(name=name):
+                c = card(p, name)
+                default = [r for r in c["broadcast_renditions"] if r["default"]]
+                self.assertEqual([c["broadcast_url"]],
+                                 [r["url"] for r in default])
+
+
+class TheLadderMatchesWhatIsPublished(unittest.TestCase):
+    """The agent PUBLISHES the renditions and this module ADVERTISES them, and
+    the two processes never speak. A suffix that disagrees is a quality option
+    that 404s - the fake picker this feature must not ship.
+
+    Read with ast.literal_eval rather than imported: wow-stream-agent is a
+    separate codebase that runs on a different machine and is not importable
+    from here, which is the same reason broadcast_path duplicates its formula
+    instead of borrowing it.
+    """
+
+    @staticmethod
+    def _agent_constants():
+        src = (Path(__file__).resolve().parents[2]
+               / "wow-stream-agent" / "video.py").read_text(encoding="utf-8")
+        out = {}
+        for node in ast.parse(src).body:
+            if isinstance(node, ast.Assign) and isinstance(node.targets[0], ast.Name):
+                try:
+                    out[node.targets[0].id] = ast.literal_eval(node.value)
+                except ValueError:
+                    pass
+        return out
+
+    def test_the_two_sides_agree_about_the_ladder(self):
+        theirs = self._agent_constants()
+        self.assertEqual(family.RENDITION_DEFAULT, theirs["RENDITION_DEFAULT"])
+        mine = {r["id"]: (r["suffix"], r["width"], r["height"])
+                for r in family.RENDITIONS}
+        yours = {r["id"]: (r["suffix"], r["width"], r["height"])
+                 for r in theirs["RENDITIONS"]}
+        self.assertEqual(mine, yours)
+
+    def test_the_gated_constant_survived_the_parse(self):
+        """A value that stops being literal-evaluable blinds its own gate
+        rather than failing it, so its absence is the failure."""
+        self.assertIn("RENDITIONS", self._agent_constants())
+
+    def test_the_advertised_path_is_one_the_encoder_would_accept(self):
+        """This module returns "" for a name it cannot use, so it can never
+        say no the way the agent does. The check that the two agree about
+        what a usable path looks like has to happen here."""
+        pattern = re.compile(r"^https://[^/]+/[a-z]{2,16}$")
+        for name in family.roster():
+            for r in family.broadcast_renditions(name, base="https://x",
+                                                 prefix="dev"):
+                with self.subTest(name=name, rendition=r["id"]):
+                    self.assertRegex(r["url"], pattern)
+
+class TheRollbackLever(unittest.TestCase):
+    """WOW_STREAM_LADDER=0 stops the page offering a quality nobody publishes.
+
+    IT IS NOT A FEATURE FLAG FOR THE LADDER. The WHEP 404 fallback already
+    makes a mismatch harmless, so this exists for one narrow case: the
+    encoders on the gaming box are pinned to a detached worktree and only
+    pick up a new command line when an operator restarts them, so a rollback
+    there would leave the API advertising a rendition that stopped existing.
+    This makes the UI quiet during one instead of merely survivable.
+
+    Tested by reloading the module because the value is read at import, which
+    is deliberate - a per-request getenv would let the ladder change shape
+    between two polls of the same page.
+    """
+
+    # RESTORED IN tearDown, NOT IN A finally AROUND THE RELOAD, and that is
+    # not a style choice - it is the bug this helper was written with first.
+    # reload() mutates the module IN PLACE, so a finally that reloads with the
+    # original environment runs before the caller ever sees the value and
+    # hands back a module already reset. Every assertion then reads the
+    # default state and the test passes for a reason that is not true.
+    def setUp(self):
+        import os
+        self._before = os.environ.get("WOW_STREAM_LADDER")
+
+    def tearDown(self):
+        import importlib
+        import os
+        if self._before is None:
+            os.environ.pop("WOW_STREAM_LADDER", None)
+        else:
+            os.environ["WOW_STREAM_LADDER"] = self._before
+        importlib.reload(family)
+
+    def _reloaded(self, value):
+        import importlib
+        import os
+        if value is None:
+            os.environ.pop("WOW_STREAM_LADDER", None)
+        else:
+            os.environ["WOW_STREAM_LADDER"] = value
+        return importlib.reload(family)
+
+    def test_off_leaves_exactly_the_default_rendition(self):
+        for off in ("0", "false", "no", "off", "OFF"):
+            with self.subTest(value=off):
+                mod = self._reloaded(off)
+                got = mod.broadcast_renditions("Grug", base="https://x")
+                self.assertEqual([r["id"] for r in got],
+                                 [mod.RENDITION_DEFAULT])
+                self.assertTrue(got[0]["default"])
+
+    def test_off_still_leaves_a_watchable_stream(self):
+        """Turning the ladder off must not turn the video off. One entry is
+        the honest answer, not an empty list."""
+        mod = self._reloaded("0")
+        got = mod.broadcast_renditions("Grug", base="https://x", prefix="dev")
+        self.assertEqual(got[0]["url"], "https://x/devgrug")
+        self.assertEqual(mod.broadcast_url("Grug", base="https://x",
+                                           prefix="dev"), got[0]["url"])
+
+    def test_the_ladder_is_on_by_default(self):
+        """An operator should not have to switch on the thing this change is
+        for. Default-off is how a feature ships inert."""
+        mod = self._reloaded(None)
+        self.assertEqual(len(mod.broadcast_renditions("Grug")), 2)
 
 if __name__ == "__main__":
     unittest.main()
