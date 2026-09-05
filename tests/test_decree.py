@@ -397,6 +397,16 @@ class WhatThisConsoleMayWrite(unittest.TestCase):
             source = (HERE / name).read_text(encoding="utf-8")
             self.assertNotIn("travel.aim_statements(", source, name)
 
+    def test_the_train_drive_is_the_bridge_side_aimer(self):
+        """infra#3338 gave the `train` job drive its own statements on the
+        bridge side. That is a different symbol from travel.aim_statements,
+        which the test above pins as still having no callers, so both claims
+        are true at once and this keeps the train drive's coverage rather
+        than losing it to the merge.
+        """
+        bridge = (HERE / "bridge.py").read_text(encoding="utf-8")
+        self.assertIn("trainjob.statements", bridge)
+
 
 class TheWill(unittest.TestCase):
 
@@ -466,7 +476,11 @@ class WhatIsStoppingThem(unittest.TestCase):
         with mock.patch.object(jobs, "IMPLEMENTED", widened):
             after = decree.backlog()[-1]["what"]
         self.assertNotEqual(before, after)
-        self.assertIn("9 of 12", after)
+        # Derived, not typed: wiring a real mode changes how many are left,
+        # and this test must not need an edit each time one is (it did, once,
+        # when `train` was wired).
+        self.assertIn("%d of %d" % (len(jobs.MODES) - len(widened), len(jobs.MODES)),
+                      after)
 
     def test_the_crafter_is_read_off_the_family_plan(self):
         """Who is owed the family's first trade is a fact professions.py

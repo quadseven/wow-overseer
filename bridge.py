@@ -49,6 +49,7 @@ import questbook
 import questshare
 import quests
 import relay
+import trainjob
 import voice
 from transform import Geometry
 
@@ -1555,19 +1556,128 @@ def _errand_traveller() -> str:
     return row["name"] if row else ""
 
 
+def _train_members() -> list:
+    """The roster rows `job = train` is decided from, with the skills observed.
+
+    TWO READS AND NO JOIN, deliberately. `character_skills` is keyed by guid and
+    `overseer_roster` by name, and the collation split documented above this
+    file's other cross-table read makes every such join a thing to get right
+    once and then never notice again. There is no ordering requirement between
+    the two, five rows come back from each, and a plan built from a roster row
+    with no skills observed simply has an empty `holds` - which trainjob treats
+    as "not held", the conservative direction.
+
+    Guarded for 1146 and 1054 like every other overseer_* read: a realm whose
+    db-import image predates the profession columns has no errand to drive, and
+    the honest answer there is an empty family rather than an exception that
+    costs the whole protect cycle.
+    """
+    with _connect() as conn, conn.cursor() as cur:
+        try:
+            cur.execute(
+                "SELECT name, job, professions, learn_skill "
+                "FROM overseer_roster WHERE enabled = 1"
+            )
+            rows = list(cur.fetchall())
+        except pymysql.err.MySQLError as exc:
+            if exc.args and exc.args[0] in (1054, 1146):
+                return []
+            raise
+        if not rows:
+            return []
+        held: dict = {}
+        try:
+            cur.execute(
+                "SELECT c.name AS name, s.skill AS skill "
+                "FROM character_skills s JOIN characters c ON c.guid = s.guid "
+                "WHERE c.name IN (%s)" % ", ".join(["%s"] * len(rows)),  # noqa: S608 - placeholders from a COUNT, values still bound
+                tuple(r["name"] for r in rows),
+            )
+            for row in cur.fetchall():
+                held.setdefault(row["name"], []).append(int(row["skill"]))
+        except pymysql.err.MySQLError as exc:
+            # `characters` and `character_skills` are core tables, so 1146 here
+            # means something much stranger than a missing migration. It is
+            # still not worth an exception: an unobserved family produces no
+            # errand, which is the same refusal an observed one with nothing
+            # outstanding produces.
+            if not (exc.args and exc.args[0] in (1054, 1146)):
+                raise
+            log.warning("character_skills is unreadable; train can decide nothing")
+        return [
+            trainjob.Member(
+                name=row["name"],
+                job=row["job"] or "",
+                wanted=trainjob.parse_wanted(row["professions"]),
+                learn_skill=int(row["learn_skill"] or 0),
+                holds=tuple(sorted(held.get(row["name"], ()))),
+            )
+            for row in rows
+        ]
+
+
+def _train_traveller() -> str:
+    """Who must lead the family because `job = train` is sending them somewhere.
+
+    Asked from _head_now, ahead of the trade errand and ahead of seniority, and
+    it answers '' for every family that is not on this mode - so the resting
+    order of leadership is untouched by this file existing.
+
+    IT OUTRANKS _errand_traveller ON PURPOSE. That function is bounded by
+    ERRAND_LEAD_HOURS against `overseer_trade.decided_at`, which is the right
+    bound for a plan the family drifted into and the wrong one for an order a
+    person just gave: an operator saying "go train" at hour seven of a
+    six-hour-old plan would otherwise be told nothing and see nobody move
+    (quadseven/mod-overseer#167). The job column IS the standing intent, so
+    while it says train there is no staleness to bound.
+    """
+    try:
+        return trainjob.plan(_train_members()).traveller
+    except pymysql.err.MySQLError:
+        # Same contract as _errand_traveller's own handler: loudly logged,
+        # still answers "nobody", never costs the caller its cycle.
+        log.exception("train traveller lookup failed; leading by seniority this cycle")
+        return ""
+
+
+def _aim_train_traveller(statements) -> None:
+    """Run trainjob's aim, in order, on one cursor.
+
+    The statements are BUILT IN THE PURE MODULE and only executed here, which
+    is the same seam travel.aim_statements was written for: the aim and its
+    clearing half are one decision, they are tested without a database, and
+    this function has no opinion it could get wrong.
+    """
+    with _connect() as conn, conn.cursor() as cur:
+        for sql, params in statements:
+            try:
+                cur.execute(sql, params)
+            except pymysql.err.MySQLError as exc:
+                if exc.args and exc.args[0] in (1054, 1146):
+                    log.warning(
+                        "overseer_roster has no travel_npc column - the family "
+                        "cannot be sent to a trainer on this realm (infra#2783)"
+                    )
+                    return
+                raise
+
+
 def _head_now() -> str:
     """Who leads the family this cycle.
 
     bonds.head_of_family() is the resting answer and the overwhelmingly common
     one: Grug, the father, by seniority, forever. An errand borrows it, because
     the leader is the family's one traveller and an errand is somewhere to
-    travel to. Asked in exactly two places - _give_them_a_life, which hands out
-    the strategies, and _mark_party_leader, which writes the flag - so those
+    travel to. A standing `job = train` borrows it FIRST - see
+    _train_traveller for why an order a person just gave outranks a plan the
+    family drifted into. Asked in exactly two places - _give_them_a_life,
+    which hands out the strategies, and _mark_party_leader, which writes the
+    flag - so those
     two can never be looking at different answers to the same question. Getting
     that wrong is a family following a character that is about to stop leading,
     which is a party split in two.
     """
-    return _errand_traveller() or bonds.head_of_family()
+    return _train_traveller() or _errand_traveller() or bonds.head_of_family()
 
 
 def _protected_guids() -> dict:
@@ -2748,6 +2858,12 @@ class Bridge(discord.Client):
                 # there together behind its one traveller (infra#2757).
                 await asyncio.to_thread(_mark_party_leader, _head_now())
 
+                # ...and while that job is `train`, the traveller is aimed at
+                # a trainer in the SAME pass, so leadership and destination can
+                # never disagree for a cycle. Both read _train_members, and
+                # both no-op for a family on any other mode (infra#3338).
+                await self._drive_train()
+
                 # The family's trade assignment. Written every cycle rather
                 # than with the errand, because it is a PERMISSION and not an
                 # instruction: it is what stops a stale errand column doing
@@ -3277,6 +3393,31 @@ class Bridge(discord.Client):
         self._pending, same reasoning as _muster: one report for the whole
         family, not five "heard the order" lines for one sentence.
         """
+        # THE GUARD, AND IT IS HERE BECAUSE HERE IS WHERE THE HARM WAS
+        # (infra#3338). jobs.py has always known which modes are wired; nothing
+        # consulted it at the point an order was written, so `job craft` was
+        # accepted, stood the quest drive down, and left five characters
+        # standing still with nothing in the channel and nothing in the log to
+        # say why. Refused BEFORE _fetch_enabled_names, so a refusal costs no
+        # query and cannot half-write a family.
+        refusal = jobs.why_not(d.mode)
+        if refusal:
+            log.info("job: refused mode=%r - not wired", d.mode)
+            await channel.send(refusal[:1990])
+            return
+
+        # THE SECOND HALF OF THE SAME GUARD. A mode can be wired and still have
+        # nothing to do, and setting it then is the same idle by a longer road.
+        # Only `train` can answer this today because only `train` has a drive
+        # in this process to ask; quest and dungeon are driven inside the
+        # worldserver and have no equivalent question to put.
+        if d.mode == trainjob.MODE:
+            blocked = trainjob.readiness(await asyncio.to_thread(_train_members))
+            if blocked:
+                log.info("job: refused mode=%r - nothing to train", d.mode)
+                await channel.send(("Refusing to set job=train. " + blocked)[:1990])
+                return
+
         names = await asyncio.to_thread(_fetch_enabled_names)
         if not names:
             await channel.send("Nobody is on the roster to give a job to.")
@@ -3294,9 +3435,59 @@ class Bridge(discord.Client):
         log.info(
             "job: mode=%r called=%d written=%d", d.mode, len(names), written
         )
+        # DRIVEN NOW, NOT ONLY ON THE NEXT CYCLE. The protect cycle re-asserts
+        # this every ten minutes, which is right for a restart and far too slow
+        # for a person who has just given an order and is watching a stream.
+        # Idempotent either way: the aim is the same two UPDATEs whichever pass
+        # runs them.
+        if d.mode == trainjob.MODE and written:
+            await self._drive_train()
         await channel.send(
             f"{jobs.describe(d.mode)} ({written}/{len(names)} of the family told)"
         )
+
+    async def _drive_train(self) -> None:
+        """Make `job = train` mean something: aim the traveller at a trainer.
+
+        THE POSITIVE HALF OF A MODE THAT ONLY EVER HAD A NEGATIVE ONE. Setting
+        any non-quest job stands the quest drive down inside the worldserver;
+        until this ran, nothing put anything in its place, which is the whole
+        of infra#3338. What replaces it is one write to `overseer_roster.
+        travel_npc` - the column that makes a character walk, and the one the
+        C++ derives learn errands for and then cannot act on, because nothing
+        in mod_overseer.cpp ever writes a role keyword into it.
+
+        NOT A SECOND OPINION ABOUT WHO TRAVELS. `_head_now` already asks
+        `_train_traveller` first, so the character aimed here is the character
+        `_mark_party_leader` made the leader in the same pass. That matters
+        more than it looks: mod-overseer refuses to send anybody who is not
+        carrying `new rpg`, and only the leader carries it, so aiming anybody
+        else is an UPDATE that moves nobody.
+
+        A WIRED MODE WITH NOTHING TO DO IS SAID OUT LOUD. The order was
+        refused at the moment it was given if there was nothing to train, but
+        an errand that COMPLETES leaves the family on a mode with no work in
+        it - and that is the idle #3338 is about, arrived at from the other
+        side. Logged at warning rather than silently returned, because the
+        answer is a person deciding what they should do instead.
+        """
+        try:
+            members = await asyncio.to_thread(_train_members)
+            plan = trainjob.plan(members)
+            if not plan.traveller:
+                if trainjob.family_mode(members) == trainjob.MODE:
+                    log.warning("job train drives nothing: %s", plan.why_not)
+                return
+            await asyncio.to_thread(_aim_train_traveller, trainjob.statements(plan))
+            log.info("%s", trainjob.report(plan))
+        except Exception:
+            # LOUD, AND STILL NOT FATAL, for the reason infra#3173 wrote down:
+            # this runs a third of the way into the protect cycle, so an
+            # exception escaping here would take the declared professions, the
+            # spec tabs and the randomize guards with it - a failed aim costing
+            # every unrelated thing that comes after it. The next cycle
+            # re-asserts the aim, and this call site has nothing to roll back.
+            log.exception("train drive failed; the family keeps its current aim")
 
     async def _conjure(self, d: core.FanoutDirective, channel) -> None:
         """A conjured event: natural language aimed at a whole band.

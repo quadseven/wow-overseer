@@ -13,7 +13,8 @@ COPY _shared/core.py _shared/bridge.py _shared/voice.py _shared/transform.py \
      _shared/kin.py _shared/cast.py _shared/bonds.py _shared/council.py _shared/persona.py \
      _shared/quests.py _shared/overhear.py _shared/questbook.py \
      _shared/questshare.py _shared/travel.py _shared/stream.py _shared/frames.py \
-     _shared/professions.py _shared/jobs.py _shared/craftpleas.py _shared/materials.py \
+     _shared/professions.py _shared/jobs.py _shared/trainjob.py \
+     _shared/craftpleas.py _shared/materials.py \
      _shared/gear.py \
      _shared/armory.py _shared/wealth.py _shared/questlog.py _shared/modelviewer.py \
      _shared/relay.py _shared/digest.py \

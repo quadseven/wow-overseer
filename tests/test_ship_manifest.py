@@ -60,6 +60,37 @@ class ShipManifestTest(unittest.TestCase):
             phantom, [], "Dockerfile COPYs files that do not exist: %s" % phantom
         )
 
+    def test_every_continuation_is_a_real_line_break(self):
+        """A backslash that is not the last character on its line is not a
+        continuation, it is an argument.
+
+        The manifest tests above read the COPY block as text, so a line break
+        that got written as the two characters backslash-n still parses into
+        the right set of filenames and still reports healthy - while docker
+        would take the backslash-n as part of a path and fail the build. That
+        build runs on a push to main and NEVER on a pull request
+        (build.wow-overseer.yml's own trigger), so there is no other gate in
+        front of it: a malformed continuation merges green and breaks the
+        image afterwards. Caught here instead, which is the only place a PR
+        can catch it.
+        """
+        backslash = chr(92)
+        with open(DOCKERFILE, encoding="utf-8") as f:
+            lines = f.read().splitlines()
+        stray = []
+        for n, line in enumerate(lines, 1):
+            # Drop the one trailing backslash a real continuation is allowed.
+            # ANY that survives is in the middle of the line, which is the
+            # shape the bug had - and note the naive check (does the line END
+            # with a backslash) passes it happily, because a line carrying
+            # backslash-n mid-way still ends with its own real continuation.
+            body = line.rstrip()
+            if body.endswith(backslash):
+                body = body[:-1]
+            if backslash in body:
+                stray.append((n, line))
+        self.assertEqual(stray, [], "backslash not at end of line: %s" % stray)
+
     def test_jquery_ships_from_the_context_and_not_the_shared_tarball(self):
         """It is a browser asset, not a Python module, and the shared tarball
         goes to every image built from that directory. Moving it here freed

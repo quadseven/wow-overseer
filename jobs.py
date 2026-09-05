@@ -73,7 +73,93 @@ MODES = {
 # Getting this wrong is not cosmetic: `describe` is what the bridge says back
 # in Discord, so a stale entry here had the overseer answering "NOT BUILT YET"
 # to an order it was about to carry out.
-IMPLEMENTED = frozenset({"quest", "dungeon"})
+# `train` JOINED THIS SET at infra#3338, and its drive is the one that does
+# NOT live in mod_overseer.cpp - so the honesty rule this constant exists for
+# needs restating rather than assuming. The worldserver already derives its own
+# learn errands (StepTowardAssignment writes `learn_skill` through AimLearnAt)
+# and then cannot act on one, because nothing in the C++ ever writes
+# `travel_npc = 'profession trainer'`. trainjob.py is the drive: it picks the
+# character with an outstanding trade and bridge._drive_train aims them there
+# with travel.aim_statements, which is infra#3270's missing caller. So the
+# branch this entry points at is a Python one, and tests/test_trainjob.py
+# pins it exactly as ImplementedMatchesTheModule pins the two C++ ones.
+IMPLEMENTED = frozenset({"quest", "dungeon", "train"})
+
+# What each wired mode actually MAKES HAPPEN, named so `describe` can say it.
+# A mode in IMPLEMENTED with no entry here is a claim with no address, which
+# is the drift the whole constant above exists to stop; test_jobs.py requires
+# the two sets to match.
+DRIVES = {
+    "quest": "the quest drive runs as normal (mod_overseer.cpp, DriveQuests)",
+    "dungeon": (
+        "the leader's row arms the run coordinator - reset, stage, gather, "
+        "cross, clear, exit and the campaign loop (mod-overseer#88, #144)"
+    ),
+    "train": (
+        "trainjob.plan picks whoever has an outstanding trade and the bridge "
+        "aims them at the nearest profession trainer, the family following; "
+        "mod-overseer buys it there through the core's Trainer::TeachSpell"
+    ),
+}
+
+# Why a mode cannot be set, for the one somebody is actually going to try.
+# Every other unimplemented mode gets GENERIC_BLOCK, which is the same fact
+# said less specifically - a bespoke sentence per unbuilt mode would be nine
+# more promises this file cannot keep, which is the habit #3338 asks it to
+# stop.
+BLOCKED = {
+    "craft": (
+        "nothing in the worldserver can make an item. mod-overseer's command "
+        "kinds are bot, chat, gm, probe, give, share, trade, job, sell and "
+        "bank, and not one of them casts a tradeskill - \"craft\" in "
+        "JobModes() is a name DoJob accepts and writes to a column nothing "
+        "reads back except the quest gate, which reads it as \"stop\". "
+        "Supplying a crafter (materials.py) and answering for one "
+        "(craftpleas.py) both work, and neither of them is a craft"
+    ),
+}
+
+GENERIC_BLOCK = (
+    "no drive exists for it - DoJob validates the name and writes the "
+    "column, and the only thing that reads the column back is the quest "
+    "gate, which reads every non-quest value as \"stop\""
+)
+
+
+def can_set(mode: str) -> bool:
+    """Whether an order for `mode` may be written at all (infra#3338).
+
+    THE ONE PREDICATE EVERY WRITE PATH MUST PASS THROUGH, and the reason it is
+    a function rather than a bare `in` is that the caller must have somewhere
+    to get the REASON from as well. This file has always known which modes are
+    real; what was missing was anybody asking it at the moment an order was
+    written, so `job='craft'` was accepted, stood the quest drive down, and
+    idled the family with nothing in the log to say why.
+    """
+    return mode in IMPLEMENTED
+
+
+def why_not(mode: str) -> str:
+    """The refusal to say out loud, or '' when there is nothing to refuse.
+
+    Never a bare "no". A refusal a person cannot act on is the same silence
+    with a different shape, so this names the missing verb, names what setting
+    it would actually do instead, and names what does work today.
+    """
+    if can_set(mode):
+        return ""
+    if mode not in MODES:
+        return (
+            "%r is not a job mode. The vocabulary is: %s."
+            % (mode, ", ".join(sorted(MODES)))
+        )
+    return (
+        "Refusing to set job=%s: %s. Setting it would stand the quest drive "
+        "down and put nothing in its place (infra#3338) - the family would go "
+        "idle, not %s. Modes that drive something today: %s."
+        % (mode, BLOCKED.get(mode, GENERIC_BLOCK), mode,
+           ", ".join(sorted(IMPLEMENTED)))
+    )
 
 # The state every character starts in and returns to when nobody has an
 # opinion. Matches overseer_roster.job's column default (migration
@@ -194,7 +280,13 @@ def describe(mode: str) -> str:
     """One sentence for what setting `mode` actually does right now."""
     what = MODES.get(mode, "")
     if mode in IMPLEMENTED:
-        return f"job set to {mode} - {what}."
+        # `.get` and not `[]`: DRIVES falling behind IMPLEMENTED is a bug, and
+        # test_jobs.py fails on it by name - but it must not be a KeyError
+        # raised through `describe`, which is what the console renders every
+        # chip with and what Discord hears back for every order.
+        drive = DRIVES.get(mode)
+        return (f"job set to {mode} - {what}. This drives: {drive}."
+                if drive else f"job set to {mode} - {what}.")
     return (
         f"job set to {mode} - {what}. NOT BUILT YET: this only stands the "
         f"quest drive down; nothing positive replaces it until {mode} is "
