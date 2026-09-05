@@ -1,7 +1,7 @@
 import unittest
 
 from bag_pressure import (ItemForSale, bag_purchase_allowed, sellable,
-                          town_run_needed, vendor_candidates)
+                          town_run_needed, vendor_batch, vendor_candidates)
 
 
 class BagPressureTests(unittest.TestCase):
@@ -38,6 +38,19 @@ class BagPressureTests(unittest.TestCase):
         rows = [{"holder": "Og", "item_guid": 43, "count": 1,
                  "quality": 0, "sell_price": 12}]
         self.assertEqual(vendor_candidates(rows), ())
+
+    def test_vendor_batch_scopes_one_travelling_holder(self):
+        rows = vendor_candidates([
+            {"holder": "Og", "item_guid": 7, "count": 1,
+             "quality": 0, "sell_price": 3, "quest_item": False,
+             "reagent": False, "profession_needed": False},
+            {"holder": "Grug", "item_guid": 8, "count": 2,
+             "quality": 1, "sell_price": 4, "quest_item": False,
+             "reagent": False, "profession_needed": False},
+        ])
+        holder, batch = vendor_batch(rows)
+        self.assertEqual(holder, "Grug")
+        self.assertEqual([item.holder for item in batch], ["Grug"])
 
 
 if __name__ == "__main__":

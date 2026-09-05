@@ -51,6 +51,25 @@ def vendor_candidates(rows: Iterable[dict]) -> tuple[SellCandidate, ...]:
     return tuple(out)
 
 
+def vendor_batch(candidates: Iterable[SellCandidate]) -> tuple[str, tuple[SellCandidate, ...]]:
+    """Choose one holder's safe stacks for a single vendor errand.
+
+    The world executor sells items carried by the character named on each
+    command. Sending every holder to one leader's vendor position makes all
+    but the leader fail the core's interaction-range check, so one pass must
+    be scoped to one travelling holder.
+    """
+    grouped: dict[str, list[SellCandidate]] = {}
+    for candidate in candidates:
+        if not isinstance(candidate, SellCandidate) or not candidate.holder:
+            continue
+        grouped.setdefault(candidate.holder, []).append(candidate)
+    if not grouped:
+        return "", ()
+    holder = sorted(grouped)[0]
+    return holder, tuple(grouped[holder])
+
+
 def town_run_needed(used: int, slots: int, minimum_free: int = 2,
                     pressure_percent: int = 90) -> bool:
     """Return whether bag pressure warrants a vendor run."""

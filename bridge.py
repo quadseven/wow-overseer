@@ -2999,23 +2999,27 @@ class Bridge(discord.Client):
         if not candidates:
             log.info("economy: no safe carried vendor goods")
             return
-        # One vendor errand leads the family to town; the seller rows remain
-        # durable and are consumed by the executor as the party arrives.
-        leader = bonds.head_of_family()
+        # The core's sell packet is answered by the seller's own proximity to
+        # a vendor. Process one holder per pass, rather than sending every
+        # character's rows to the family leader's vendor position.
+        holder, batch = bag_pressure.vendor_batch(candidates)
+        if not batch:
+            log.info("economy: no safe carried vendor batch")
+            return
         await asyncio.to_thread(
             _write_trade_errand,
-            professions.Errand(character=leader, travel_npc="vendor"),
+            professions.Errand(character=holder, travel_npc="vendor"),
         )
         seen = await asyncio.to_thread(_recent_sell_keys, GIVE_RETRY_MINUTES)
         inserted = 0
-        for candidate in candidates:
+        for candidate in batch:
             key = (candidate.holder, "guid:%d" % candidate.item_guid)
             if key in seen:
                 continue
             if await asyncio.to_thread(_insert_sell, candidate):
                 inserted += 1
         log.info("economy: queued %d/%d safe vendor sale(s), leader=%s",
-                 inserted, len(candidates), leader)
+                 inserted, len(batch), holder)
 
     async def _vendor_loop(self) -> None:
         await self.wait_until_ready()
