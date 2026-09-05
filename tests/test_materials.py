@@ -331,6 +331,14 @@ class StuckTest(unittest.TestCase):
     def test_nothing_tried_is_nothing_stuck(self):
         self.assertEqual(materials.stuck([]), {})
 
+    def test_a_full_receiver_reopens_when_a_slot_is_free_again(self):
+        stuck = {("Grug", "Og"): "receiver bags are full"}
+        self.assertEqual(materials.retryable_stuck(stuck, {"Og": 2}), {})
+
+    def test_unknown_capacity_keeps_a_stuck_pair_quiet(self):
+        stuck = {("Grug", "Og"): "receiver bags are full"}
+        self.assertEqual(materials.retryable_stuck(stuck, {}), stuck)
+
 
 class BlockedTest(unittest.TestCase):
     def _plan(self):

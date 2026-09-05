@@ -2820,6 +2820,9 @@ class Bridge(discord.Client):
         refused = materials.stuck(
             await asyncio.to_thread(_give_attempts, GIVE_GIVE_UP_HOURS)
         )
+        refused = materials.retryable_stuck(
+            refused, await asyncio.to_thread(_fetch_free_slots, names)
+        )
         material_plan = await asyncio.to_thread(
             materials.plan, holdings, stuck_pairs=refused
         )
@@ -3932,6 +3935,36 @@ def _fetch_holdings(names: list) -> list:
             )
             for row in cur.fetchall()
         ]
+
+
+def _fetch_free_slots(names: list) -> dict:
+    """Read carried capacity facts; materials decides which refusals reopen."""
+    if not names:
+        return {}
+    sql = (
+        "SELECT c.name, "
+        "SUM(CASE WHEN ci.bag = 0 AND ci.slot BETWEEN 23 AND 38 "
+        "         THEN 1 ELSE 0 END) AS backpack_used, "
+        "SUM(CASE WHEN ci.bag <> 0 THEN 1 ELSE 0 END) AS bag_used, "
+        "SUM(CASE WHEN ci.bag = 0 AND ci.slot BETWEEN 19 AND 22 "
+        "         THEN COALESCE(it.ContainerSlots, 0) ELSE 0 END) AS bag_slots "
+        "FROM character_inventory ci "
+        "JOIN characters c ON c.guid = ci.guid "
+        "LEFT JOIN item_instance ii ON ii.guid = ci.item "
+        "LEFT JOIN acore_world.item_template it ON it.entry = ii.itemEntry "
+        "WHERE c.name IN (%s) GROUP BY c.name"
+    ) % ",".join(["%s"] * len(names))
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(sql, names)
+        return {
+            row["name"]: max(
+                0,
+                16 + int(row["bag_slots"] or 0)
+                - int(row["backpack_used"] or 0)
+                - int(row["bag_used"] or 0),
+            )
+            for row in cur.fetchall()
+        }
 
 
 # How long a give command is remembered before the pass is allowed to propose

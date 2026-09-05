@@ -284,6 +284,22 @@ def stuck(attempts, *, threshold: int = GIVE_UP_AFTER) -> dict:
     }
 
 
+def retryable_stuck(stuck_pairs: Mapping, free_slots: Mapping) -> dict:
+    """Release a stopped handover when its receiver has room again.
+
+    A full receiver is a temporary world state, not a permanent decision
+    about who should own a profession reagent. The bridge supplies current
+    free-slot facts; this pure seam decides which old refusals can re-enter
+    the normal plan. Unknown capacity stays blocked, so a failed read never
+    turns into a noisy retry storm.
+    """
+    return {
+        pair: reason
+        for pair, reason in stuck_pairs.items()
+        if int(free_slots.get(pair[1], 0) or 0) <= 0
+    }
+
+
 def _said_for(holder: str, taker: str, material: str, count: int, skill: str,
               held: Mapping) -> str:
     """The handover, said in a way that is true whoever is carrying it.
