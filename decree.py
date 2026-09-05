@@ -28,10 +28,13 @@ whole story is in tests/test_command_outcome.py). So this module draws its own
 line and SUCCESS_STATUSES is narrower than core's on purpose: `applied` is the
 only status that has ever meant the character changed.
 
-THREE: WHAT THIS CONSOLE MAY ACTUALLY WRITE, which is mostly a refusal. See
-SECTIONS. A control that cannot reach the world is drawn disabled with the
-reason printed beside it, because a button that silently does nothing is the
-exact failure this epic is named after.
+THREE: WHAT THIS CONSOLE MAY ACTUALLY WRITE, and exactly what each order
+becomes. See SECTIONS for the four cards and `plan_order` for the rows and
+columns any one of them turns into. Three of them wrote nothing at all until
+infra#3345 and said so; they write now, and the same rule holds either way: a
+control either reaches the world or is drawn disabled with the reason printed
+beside it, because a button that silently does nothing is the exact failure
+this epic is named after.
 """
 from __future__ import annotations
 
@@ -48,22 +51,31 @@ import travel
 
 # --- what this page can and cannot write -------------------------------------
 #
-# ONE write path exists from this page to the world: POST /api/chat. It
-# persists the operator's words, asks the inner voice, and queues at most one
-# allowlisted playerbot command (voice.VOCABULARY) as an overseer_command row.
-# That is enough to speak to a character and nothing else.
+# TWO write paths exist from this page to the world.
 #
-# A job, a travel aim and a campaign cap are all COLUMNS ON overseer_roster.
-# No HTTP path writes that table. Routing one of them through the chat box
-# would not set the column either: the inner voice would pick some unrelated
-# playerbot command, the page would report an order, and the column would be
-# untouched. That is a mechanism reporting success while doing nothing, which
-# is the failure this whole epic is named after, so those three controls are
-# declared unreachable HERE - in the module the suite can hold - and the page
-# draws them disabled with the reason beside them.
+# POST /api/chat persists the operator's words, asks the inner voice, and
+# queues at most one allowlisted playerbot command (voice.VOCABULARY) as an
+# overseer_command row. That is how the will is spoken and it is the only
+# thing it can do.
+#
+# POST /api/decree carries the other three cards. A job, a travel aim and a
+# campaign cap were all declared unreachable here for the whole of infra#2597,
+# because nothing but a hand on the database wrote them - the mechanism was
+# proved by an operator hand-writing those rows on a live realm, which is what
+# infra#3345 wired a button to. Routing any of them through the chat box would still
+# be wrong and the old comment was right about why: the inner voice would pick
+# some unrelated playerbot command, the page would report an order, and the
+# column would be untouched. So they get their own endpoint, with every
+# judgement about what an order becomes held HERE, in the module the suite can
+# hold with no database and no browser.
+#
+# `writes` NAMES THE ROAD, NOT THE PERMISSION. can_send is derived from it, so
+# a card cannot become sendable on screen without naming what it writes.
 
-CHAT = "chat"       # reachable: POST /api/chat
-NOWHERE = ""        # no write path from this page
+CHAT = "chat"        # POST /api/chat, one character at a time
+COMMAND = "command"  # POST /api/decree, one overseer_command row per character
+ROSTER = "roster"    # POST /api/decree, one overseer_roster column
+NOWHERE = ""         # no write path from this page
 
 JOB = "job"
 CAMPAIGN = "campaign"
@@ -73,60 +85,68 @@ WILL = "will"
 
 @dataclass(frozen=True)
 class Section:
-    """One card on the console, and whether its controls can reach the world."""
+    """One card on the console, and whether its controls can reach the world.
+
+    `does` is the sentence that replaced three refusals. A card that CAN
+    reach the world owes the reader the same candour the refusal used to
+    give: which table, which column, on whose rows, and what it does not do.
+    An operator who has to press a button to find out what it writes is being
+    asked to experiment on a live realm.
+    """
 
     key: str
     title: str
     writes: str
     why_not: str
     instead: str
+    does: str
 
 
 SECTIONS = (
     Section(
         key=JOB,
         title="Standing job",
-        writes=NOWHERE,
-        why_not=(
-            "This page cannot write overseer_roster.job. The job column is "
-            "set by one kind='job' command row per enabled character, written "
-            "by the bridge when it hears a job order; no HTTP endpoint writes "
-            "it."
-        ),
-        instead=(
-            "Say the mode in the overseer's own channel - the explicit form "
-            "is \"job <mode>\" - and jobs.parse_order reads it there."
+        writes=COMMAND,
+        why_not="",
+        instead="",
+        does=(
+            "Writes one kind='job' overseer_command row per ENABLED roster "
+            "character - the same table, row shape and worldserver poller the "
+            "bridge uses when it hears a job order in Discord "
+            "(bridge._insert_job). No column is set from here: "
+            "mod_overseer.cpp's DoJob is what moves overseer_roster.job, and "
+            "it needs the character in the world to act on the row."
         ),
     ),
     Section(
         key=CAMPAIGN,
         title="Campaign counter",
-        writes=NOWHERE,
-        why_not=(
-            "This page cannot write overseer_roster.dungeon_runs_wanted. "
-            "Nothing writes it but a hand on the database; the run "
-            "coordinator only ever reads it."
-        ),
-        instead=(
-            "The count below is live and is the leader's own row, which is "
-            "the row the coordinator reads."
+        writes=ROSTER,
+        why_not="",
+        instead="",
+        does=(
+            "Writes overseer_roster.dungeon_runs_wanted and "
+            "dungeon_runs_done on EVERY enabled row, not only the leader's. "
+            "The coordinator reads the leader's row and the count does not "
+            "travel with the crown, so a cap set on one row is a campaign "
+            "that appears to restart the moment somebody else takes the "
+            "lead - which is the disagreement this card already reports."
         ),
     ),
     Section(
         key=TRAVEL,
         title="Send them somewhere",
-        writes=NOWHERE,
-        why_not=(
-            "This page cannot write overseer_roster.travel_npc, and neither "
-            "can any other surface. The column is written in exactly one "
-            "place in the bridge, by the profession errand planner, for the "
-            "character it decided to send. travel.aim_statements - the "
-            "function that would aim a chosen character at a chosen role - "
-            "is written and called by nothing."
-        ),
-        instead=(
-            "The roles below are the vocabulary that exists. Where the family "
-            "is currently aimed is read live from the roster."
+        writes=ROSTER,
+        why_not="",
+        instead="",
+        does=(
+            "Writes overseer_roster.travel_npc for ONE named character, and "
+            "only while that column is free - the same WHERE clause the "
+            "bridge guards its vendor pass with, widened here to every role, "
+            "because a console aim must not erase an errand the profession "
+            "planner wrote. Standing somebody down clears the column "
+            "outright, which is the one write on this page that removes an "
+            "intent rather than replacing one."
         ),
     ),
     Section(
@@ -135,6 +155,13 @@ SECTIONS = (
         writes=CHAT,
         why_not="",
         instead="",
+        does=(
+            "Persists the words, then asks the inner voice once per "
+            "character. At most one allowlisted playerbot command is queued "
+            "per answer and WHICH one is the voice's decision, not the "
+            "operator's - so this is the one card whose order is a "
+            "conversation rather than a column."
+        ),
     ),
 )
 
@@ -173,6 +200,11 @@ def job_chips() -> tuple:
     answers in the overseer's channel when the same mode is set there. One
     sentence, one author: a console that phrased the stand-down warning in
     its own words would be a second copy free to soften.
+
+    `sendable` is the same fact as `wired` said in the vocabulary the send
+    button uses, and it is here so the page never compares a mode against a
+    list. Its refusal travels with it: a chip a person has picked prints why
+    it will not go rather than leaving a dead button to be discovered.
     """
     return tuple(
         {
@@ -180,6 +212,8 @@ def job_chips() -> tuple:
             "what": what,
             "state": WIRED if mode in jobs.IMPLEMENTED else UNWIRED,
             "wired": mode in jobs.IMPLEMENTED,
+            "sendable": mode in jobs.IMPLEMENTED,
+            "why_not": "" if mode in jobs.IMPLEMENTED else unwired_refusal(mode),
             "says": jobs.describe(mode),
         }
         for mode, what in jobs.MODES.items()
@@ -734,6 +768,361 @@ def backlog() -> tuple:
     )
 
 
+# --- giving an order ---------------------------------------------------------
+#
+# THE HALF THAT WAS MISSING. Everything above reads. This decides what an
+# order BECOMES, and holds every judgement on the write path: whether a mode
+# is a mode, who an order fans out over, whether a campaign number is one the
+# column can hold, and the exact rows and column writes it turns into.
+# map_server.py reads a body, calls plan_order, and either serialises the
+# refusal or runs the writes it was handed. It decides nothing, which is why
+# all of this is held by a stdlib suite with no database and no browser.
+#
+# TWO OF THESE ARE JUDGEMENTS RATHER THAN VALIDATION, and each is argued at
+# the function that makes it: an unwired mode is REFUSED here where Discord
+# only warns (unwired_refusal), and a travel aim never overwrites a travel aim
+# (_plan_travel). Read those before widening either.
+
+# The command kind, matching bridge._insert_job. NOT 'bot': "quest" is not a
+# mod-playerbots chat command, so a row handed to PlayerbotAI::HandleCommand
+# would be accepted and do nothing.
+JOB_KIND = "job"
+
+CAMPAIGN_WANTED = "dungeon_runs_wanted"
+CAMPAIGN_DONE = "dungeon_runs_done"
+TRAVEL_COLUMN = "travel_npc"
+
+# The column's own ceiling and not a number this module invented: both
+# campaign columns are SMALLINT UNSIGNED in mod-overseer's
+# 2026_09_02_01_overseer_roster_dungeon_runs.sql. A cap above it is not an
+# ambitious campaign, it is an out-of-range error the operator would read as
+# the console being broken.
+CAMPAIGN_CEILING = 65535
+
+# A restart is to zero and to nothing else. dungeon_runs_done is the
+# coordinator's own record of runs that closed, and the migration's comment
+# says how a campaign is started again: set it back to 0. A console that let a
+# person type any number into it would be offering to forge that record.
+CAMPAIGN_RESTART = 0
+
+# What the buttons say. Here rather than in the markup for the same reason
+# every other sentence on this view is: a label that drifted to "apply" in a
+# markup edit would be a claim nothing tests.
+JOB_SUBMIT = "Set the family's job"
+CAMPAIGN_SUBMIT = "Set the run cap"
+CAMPAIGN_RESTART_LABEL = "Start the count again"
+TRAVEL_SUBMIT = "Send them"
+TRAVEL_STAND_DOWN = "Stand them down"
+
+# Said on the travel card, because it is the fact that makes a stand-down look
+# broken to somebody who does not know it.
+TRAVEL_REASSERT = (
+    "A profession errand is re-asserted by the bridge on every trade cycle, "
+    "so standing down a character who is on one clears the column until the "
+    "next pass writes it back. Standing down an aim given from here is final."
+)
+
+
+def unwired_refusal(mode: str) -> str:
+    """Why a named but unimplemented mode will not be sent from this page.
+
+    Opens with jobs.describe rather than restating it: the stand-down warning
+    has one author, and a second copy here would be free to soften.
+    """
+    return (
+        "%s That is a name and nothing else, so this console will not send "
+        "it - one tap is too cheap for an order that stands the family down. "
+        "Say \"job %s\" in the overseer's own channel if you mean it anyway."
+        % (jobs.describe(mode), mode)
+    )
+
+
+# Every way an order can be refused, authored here and printed verbatim by the
+# page. The page never composes one, for the same reason WILL_REFUSALS exists:
+# a refusal is a claim about this system, and those are written in Python or
+# they drift.
+ORDER_REFUSALS = {
+    "section": "That is not a card that gives orders on this console.",
+    "will": (
+        "The will is not sent from here. It goes through the chat path, once "
+        "per character, so each of them answers in their own words."
+    ),
+    "roster": "Nobody is on the roster, so there is nobody to order.",
+    "mode": "That is not a job mode. The modes are: %s." % ", ".join(jobs.MODES),
+    "campaign": (
+        "Say what the campaign should be: a new cap, a restart, or both."
+    ),
+    "wanted": "The run cap has to be a whole number of runs.",
+    "ceiling": (
+        "The run cap has to be between %d and %d. That ceiling is the "
+        "column's own - it is SMALLINT UNSIGNED - so anything above it is "
+        "refused by the database rather than by this page."
+        % (CAMPAIGN_STOP, CAMPAIGN_CEILING)
+    ),
+    "name": (
+        "That is not one of the enabled characters, and only an enabled row "
+        "is one the worldserver drives."
+    ),
+    "role": (
+        "That is not somewhere the family can be sent. The roles are: %s - "
+        "or a creature entry." % ", ".join(travel.ROLES)
+    ),
+}
+
+
+@dataclass(frozen=True)
+class Row:
+    """One overseer_command row to insert.
+
+    `source` is deliberately not a field: every row this console writes is
+    map_server.WEB_SOURCE, and a field would be a second place to spell it.
+    """
+
+    target_name: str
+    command: str
+    kind: str
+
+
+@dataclass(frozen=True)
+class Update:
+    """One overseer_roster column write, on one named row.
+
+    `if_free` picks between the two statements the adapter holds: the plain
+    one, and the guarded one that declines to overwrite a column already
+    carrying something else. A boolean rather than a WHERE clause, because SQL
+    is the adapter's half.
+    """
+
+    name: str
+    column: str
+    value: object
+    if_free: bool
+
+
+@dataclass(frozen=True)
+class Order:
+    """A refusal, or exactly what to write. Never both, and never neither."""
+
+    section: str
+    refusal: str
+    rows: tuple
+    updates: tuple
+    says: str
+
+    @property
+    def asked(self) -> int:
+        """How many writes this is, which is what `changed` is read against."""
+        return len(self.rows) + len(self.updates)
+
+
+def _refuse(section: str, why: str) -> Order:
+    return Order(section=section, refusal=why, rows=(), updates=(), says="")
+
+
+def _plan_job(request: dict, standing: dict) -> Order:
+    """One kind='job' row per enabled character, or why not.
+
+    FAMILY-WIDE BY CONSTRUCTION, over the enabled roster in full rather than
+    who happens to be online - jobs.py explains why a job cannot differ per
+    character and bridge._fetch_enabled_names picks the same set. An offline
+    member's row comes back "target not online" on the queue, which is
+    visible, rather than being left out of an order meant for everybody.
+    """
+    raw = request.get("mode")
+    mode = jobs.resolve(raw if isinstance(raw, str) else None)
+    if mode is None:
+        return _refuse(JOB, ORDER_REFUSALS["mode"])
+    if mode not in jobs.IMPLEMENTED:
+        return _refuse(JOB, unwired_refusal(mode))
+    names = list(standing["roster"])
+    if not names:
+        return _refuse(JOB, ORDER_REFUSALS["roster"])
+    return Order(
+        section=JOB,
+        refusal="",
+        rows=tuple(Row(name, mode, JOB_KIND) for name in names),
+        updates=(),
+        says=jobs.describe(mode),
+    )
+
+
+def _plan_campaign(request: dict, standing: dict) -> Order:
+    """The cap, the restart, or both - on every enabled row.
+
+    EVERY ENABLED ROW, not the leader's alone, and campaign_view above is the
+    argument for it: the coordinator reads the leader's row, the crown moves
+    in world, and the count does not travel with it. Writing all of them is
+    the only write that makes the number mean the same thing whoever leads.
+    """
+    names = list(standing["roster"])
+    if not names:
+        return _refuse(CAMPAIGN, ORDER_REFUSALS["roster"])
+    wanted = request.get("wanted")
+    restart = bool(request.get("restart"))
+    updates = []
+    said = []
+    if wanted is not None:
+        # bool is an int in Python, so JSON `true` would arrive as a cap of 1
+        # and pass every range check. A cap of True is not a cap.
+        if isinstance(wanted, bool) or not isinstance(wanted, int):
+            return _refuse(CAMPAIGN, ORDER_REFUSALS["wanted"])
+        if not CAMPAIGN_STOP <= wanted <= CAMPAIGN_CEILING:
+            return _refuse(CAMPAIGN, ORDER_REFUSALS["ceiling"])
+        updates.extend(
+            Update(name, CAMPAIGN_WANTED, wanted, False) for name in names
+        )
+        # A cap of 0 is legal and is not a small campaign. campaign_view
+        # already owns that sentence; this is the same fact said forwards.
+        said.append(
+            "the campaign is stopped outright - wanted is 0, and the "
+            "coordinator asks whether done is at least wanted before it "
+            "starts a run at all"
+            if wanted == CAMPAIGN_STOP
+            else "the campaign wants %d run%s" % (wanted, "" if wanted == 1 else "s")
+        )
+    if restart:
+        updates.extend(
+            Update(name, CAMPAIGN_DONE, CAMPAIGN_RESTART, False) for name in names
+        )
+        said.append("the count starts again from %d" % CAMPAIGN_RESTART)
+    if not updates:
+        return _refuse(CAMPAIGN, ORDER_REFUSALS["campaign"])
+    return Order(
+        section=CAMPAIGN,
+        refusal="",
+        rows=(),
+        updates=tuple(updates),
+        says="On every enabled row, %s." % " and ".join(said),
+    )
+
+
+def _plan_travel(request: dict, standing: dict) -> Order:
+    """One character aimed at one role, or stood down.
+
+    NOT travel.aim_statements, which is still called by nothing and still
+    should be: its second statement clears everybody who was not named, which
+    is right for a council that decides where the whole family stands and
+    wrong for a console aiming one person. Standing the others down is an
+    order in its own right here, and it is given one character at a time.
+    """
+    names = list(standing["roster"])
+    if not names:
+        return _refuse(TRAVEL, ORDER_REFUSALS["roster"])
+    raw_name = request.get("name")
+    name = raw_name.strip() if isinstance(raw_name, str) else ""
+    if name not in names:
+        return _refuse(TRAVEL, ORDER_REFUSALS["name"])
+    raw_role = request.get("role")
+    if not isinstance(raw_role, str):
+        return _refuse(TRAVEL, ORDER_REFUSALS["role"])
+    role = raw_role.strip()
+    if role == travel.NONE:
+        return Order(
+            section=TRAVEL,
+            refusal="",
+            rows=(),
+            updates=(Update(name, TRAVEL_COLUMN, travel.NONE, False),),
+            says=(
+                "%s stops walking anywhere. Clearing the column does not "
+                "fetch them back from wherever they already are." % name
+            ),
+        )
+    target = travel.resolve(role)
+    # The width check is travel.py's own and is made here rather than
+    # discovered as a silently truncated row - the same discipline
+    # travel.aim_statements keeps for the same column.
+    if target is None or len(target) > travel.COLUMN_WIDTH:
+        return _refuse(TRAVEL, ORDER_REFUSALS["role"])
+    return Order(
+        section=TRAVEL,
+        refusal="",
+        rows=(),
+        updates=(Update(name, TRAVEL_COLUMN, target, True),),
+        says=(
+            "%s walks to %s and stands in front of it. Standing in front of "
+            "it is not using it." % (name, travel.describe(target))
+        ),
+    )
+
+
+# Which card plans which order. A table rather than a chain for the same
+# reason map_server's routes are one: an unknown section is a miss, not
+# another branch.
+PLANNERS = {JOB: _plan_job, CAMPAIGN: _plan_campaign, TRAVEL: _plan_travel}
+
+
+def plan_order(request: dict, roster_rows: list) -> Order:
+    """One order from the console: a refusal with a reason, or what to write.
+
+    request       the POST body, entirely untrusted
+    roster_rows   overseer_roster, the same rows build_console is handed
+
+    THE ROSTER IS READ, NEVER TAKEN FROM THE REQUEST: a stale page carrying
+    its own idea of the family would fan an order out over characters the
+    worldserver no longer drives.
+    """
+    section = request.get("section") if isinstance(request.get("section"), str) else ""
+    if section == WILL:
+        return _refuse(WILL, ORDER_REFUSALS["will"])
+    planner = PLANNERS.get(section)
+    if planner is None:
+        return _refuse(section, ORDER_REFUSALS["section"])
+    return planner(request, agenda.standing_orders(roster_rows))
+
+
+# What came of it, in this module's words. `changed` is rows CHANGED and not
+# rows matched: pymysql does not set CLIENT_FOUND_ROWS, so re-asserting a
+# value a row already holds reports zero. That is the ordinary shape of the
+# same order pressed twice, so it gets a sentence of its own rather than being
+# reported as a failure.
+ORDER_ALL = "%d of %d writes landed."
+ORDER_SOME = (
+    "%d of %d writes landed. The rest changed nothing, which on these columns "
+    "means the row already carried the value."
+)
+ORDER_NOTHING = {
+    JOB: (
+        "No row was written. overseer_command.kind has no 'job' value on this "
+        "realm, which needs the worldserver image carrying mod-overseer's SQL."
+    ),
+    CAMPAIGN: (
+        "Nothing changed. Either every enabled row already carried those "
+        "numbers, or this realm's overseer_roster predates the campaign "
+        "columns."
+    ),
+    TRAVEL: (
+        "Nothing changed. Either they are already walking there, or the "
+        "column carries an errand and this console will not erase one. The "
+        "live line above says which."
+    ),
+}
+
+
+def order_result(order: Order, changed: int) -> dict:
+    """What actually landed, said rather than counted at the reader.
+
+    `ok` is deliberately false for an order that changed nothing, including
+    the harmless re-assert, and the note is what explains which it was. The
+    alternative is a console that reports success for a write the database
+    declined, which is the failure this whole view is named after.
+    """
+    asked = order.asked
+    if changed >= asked:
+        note = ORDER_ALL % (changed, asked)
+    elif changed == 0:
+        note = ORDER_NOTHING[order.section]
+    else:
+        note = ORDER_SOME % (changed, asked)
+    return {
+        "section": order.section,
+        "ok": changed > 0,
+        "changed": changed,
+        "asked": asked,
+        "says": order.says,
+        "note": note,
+    }
+
+
 # --- the whole console -------------------------------------------------------
 
 def build_console(roster_rows: list, command_rows: list,
@@ -762,6 +1151,7 @@ def build_console(roster_rows: list, command_rows: list,
                 "can_send": can_send(s.key),
                 "why_not": s.why_not,
                 "instead": s.instead,
+                "does": s.does,
             }
             for s in SECTIONS
         ],
@@ -775,8 +1165,16 @@ def build_console(roster_rows: list, command_rows: list,
             "choice": job_choice(mode),
             "split": split,
             "split_line": agenda.split_sentence(split) if split else "",
+            "submit": JOB_SUBMIT,
         },
-        "campaign": dict(campaign_view(standing["campaign"]), section=CAMPAIGN),
+        "campaign": dict(
+            campaign_view(standing["campaign"]),
+            section=CAMPAIGN,
+            submit=CAMPAIGN_SUBMIT,
+            restart_label=CAMPAIGN_RESTART_LABEL,
+            floor=CAMPAIGN_STOP,
+            ceiling=CAMPAIGN_CEILING,
+        ),
         "travel": {
             "section": TRAVEL,
             "caveat": TRAVEL_CAVEAT,
@@ -784,6 +1182,14 @@ def build_console(roster_rows: list, command_rows: list,
             "aimed": list(aimed),
             "line": travel_line(aimed),
             "unbuilt": list(TRAVEL_UNBUILT),
+            # WHO CAN BE AIMED, off the roster and never off the request.
+            "who": list(standing["roster"]),
+            "submit": TRAVEL_SUBMIT,
+            "stand_down": TRAVEL_STAND_DOWN,
+            # The value that means nowhere, so the page sends travel.NONE
+            # rather than holding its own idea of what an empty aim is.
+            "clear": travel.NONE,
+            "reassert": TRAVEL_REASSERT,
         },
         "will": {
             "section": WILL,

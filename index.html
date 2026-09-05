@@ -643,11 +643,21 @@
              background:var(--sunken); color:var(--on-card); font:inherit;
              resize:vertical; }
   #dcrtext:disabled { opacity:.55; }
-  #dcrsend { margin-top:.85rem; width:100%; min-height:44px; border-radius:14px;
+  /* THE SEND. One rule for all five, because four of them arrived when the
+     three refusing cards learned to write (infra#3345) and a second copy of
+     these six declarations is how the fifth drifts away from the other four.
+     `.dcrgo` buttons stack full width: two of them side by side on a phone
+     puts a stand-down under a thumb aiming for a send. */
+  #dcrsend, .dcrgo { margin-top:.85rem; width:100%; min-height:44px;
+             border-radius:14px;
              border:1px solid var(--ink); background:var(--ink);
              color:var(--pale-green); font-family:var(--mono); font-size:13px;
              letter-spacing:.05em; cursor:pointer; }
-  #dcrsend:disabled { opacity:.45; cursor:not-allowed; }
+  #dcrsend:disabled, .dcrgo:disabled { opacity:.45; cursor:not-allowed; }
+  /* The second button on a card is the one that takes something away. Quieter
+     than the send it sits under, and never the thing a thumb lands on first. */
+  .dcrgo.undo { background:transparent; color:var(--on-card);
+                border-color:var(--card-line); }
   #dcrnote { margin-top:.6rem; }
   .dcrheard { margin-top:.7rem; border-top:1px solid var(--card-line);
               padding-top:.6rem; line-height:1.55; }
@@ -2334,6 +2344,8 @@
       <div id="dcrjobsplit" class="dcrsplit"></div>
       <div id="dcrjobchips" class="dcrchips" role="group" aria-label="job modes"></div>
       <p id="dcrjobsays" class="dcrsays"></p>
+      <button id="dcrjobsend" class="dcrgo" type="button" disabled></button>
+      <p id="dcrjobnote" class="dcrnone"></p>
       <div id="dcrjobwhy" class="dcrwhy" hidden></div>
     </div>
     <div class="dcrcard">
@@ -2347,14 +2359,24 @@
       </div>
       <p id="dcrcampmeans" class="dcrsays"></p>
       <p id="dcrcampwarn" class="dcrsays warn" hidden></p>
+      <button id="dcrcampsend" class="dcrgo" type="button" disabled></button>
+      <button id="dcrcampreset" class="dcrgo undo" type="button" disabled></button>
+      <p id="dcrcampnote" class="dcrnone"></p>
       <div id="dcrcampwhy" class="dcrwhy" hidden></div>
     </div>
     <div class="dcrcard">
       <h2 id="dcrtraveltitle"></h2>
       <p id="dcrtravelcaveat" class="dcrlede"></p>
       <div id="dcrtravelnow" class="dcrnow"></div>
+      <span class="dcrlabel">who walks</span>
+      <div id="dcrtravelwho" class="dcrchips" role="group" aria-label="who walks"></div>
+      <span class="dcrlabel">where they stand</span>
       <div id="dcrtravelchips" class="dcrchips" role="group" aria-label="travel roles"></div>
       <p id="dcrtravelsays" class="dcrsays" hidden></p>
+      <button id="dcrtravelsend" class="dcrgo" type="button" disabled></button>
+      <button id="dcrtravelstop" class="dcrgo undo" type="button" disabled></button>
+      <p id="dcrtravelnote" class="dcrnone"></p>
+      <p id="dcrtravelreassert" class="dcrlede"></p>
       <div id="dcrtravelunbuilt" class="dcrlist"></div>
       <div id="dcrtravelwhy" class="dcrwhy" hidden></div>
     </div>
@@ -2371,6 +2393,7 @@
       <button id="dcrsend" type="button" disabled></button>
       <p id="dcrnote" class="dcrnone"></p>
       <div id="dcrheard"></div>
+      <div id="dcrwilldoes" class="dcrwhy" hidden></div>
     </div>
     <div class="dcrcard">
       <h2>What came back</h2>
@@ -4951,12 +4974,13 @@ window.addEventListener("resize", render);
 // into one of those is swept into assertions about a tab it has nothing to do
 // with.
 //
-// THE ONE THING IT SENDS is a decree, down a road that already exists: POST
-// /api/chat, once per character, oldest first, exactly as the character
-// panel's chat box does it. No second endpoint and no second grammar. Every
-// other control is disabled because decree.py says the column behind it
-// cannot be reached from this page, and the reason is printed beside the
-// control rather than discovered by pressing it.
+// WHAT IT SENDS, AND DOWN WHICH ROAD. The will goes to POST /api/chat, once
+// per character, oldest first, exactly as the character panel's chat box does
+// it. The other three go to POST /api/decree as one body naming a card, and
+// decree.plan_order decides whether that is a legal order and what it
+// becomes. A refusal arrives as a 400 carrying the module's own sentence and
+// is printed verbatim: this file never composes one, and never checks a mode,
+// a number or a name for itself.
 //
 // EVERY STRING FROM THE PAYLOAD IS SET AS TEXT. A command a bot was given and
 // a detail a worldserver wrote are both data, and both land here.
@@ -4968,6 +4992,8 @@ const dcrJobNow = document.getElementById("dcrjobnow");
 const dcrJobSplit = document.getElementById("dcrjobsplit");
 const dcrJobChips = document.getElementById("dcrjobchips");
 const dcrJobSays = document.getElementById("dcrjobsays");
+const dcrJobSend = document.getElementById("dcrjobsend");
+const dcrJobNote = document.getElementById("dcrjobnote");
 const dcrJobWhy = document.getElementById("dcrjobwhy");
 const dcrCampTitle = document.getElementById("dcrcamptitle");
 const dcrCampLine = document.getElementById("dcrcampline");
@@ -4976,18 +5002,27 @@ const dcrCampUp = document.getElementById("dcrcampup");
 const dcrCampDown = document.getElementById("dcrcampdown");
 const dcrCampMeans = document.getElementById("dcrcampmeans");
 const dcrCampWarn = document.getElementById("dcrcampwarn");
+const dcrCampSend = document.getElementById("dcrcampsend");
+const dcrCampReset = document.getElementById("dcrcampreset");
+const dcrCampNote = document.getElementById("dcrcampnote");
 const dcrCampWhy = document.getElementById("dcrcampwhy");
 const dcrTravelTitle = document.getElementById("dcrtraveltitle");
 const dcrTravelCaveat = document.getElementById("dcrtravelcaveat");
 const dcrTravelNow = document.getElementById("dcrtravelnow");
 const dcrTravelChips = document.getElementById("dcrtravelchips");
 const dcrTravelSays = document.getElementById("dcrtravelsays");
+const dcrTravelWho = document.getElementById("dcrtravelwho");
+const dcrTravelSend = document.getElementById("dcrtravelsend");
+const dcrTravelStop = document.getElementById("dcrtravelstop");
+const dcrTravelNote = document.getElementById("dcrtravelnote");
+const dcrTravelReassert = document.getElementById("dcrtravelreassert");
 const dcrTravelUnbuilt = document.getElementById("dcrtravelunbuilt");
 const dcrTravelWhy = document.getElementById("dcrtravelwhy");
 const dcrWillTitle = document.getElementById("dcrwilltitle");
 const dcrWillTargets = document.getElementById("dcrwilltargets");
 const dcrWillWhy = document.getElementById("dcrwillwhy");
 const dcrWillOne = document.getElementById("dcrwillone");
+const dcrWillDoes = document.getElementById("dcrwilldoes");
 const dcrText = document.getElementById("dcrtext");
 const dcrPresets = document.getElementById("dcrpresets");
 const dcrSend = document.getElementById("dcrsend");
@@ -5001,12 +5036,16 @@ const dcrBlockList = document.getElementById("dcrblocklist");
 // The poll rewrites the live lines every ten seconds; it must never rewrite
 // the mode somebody is currently reading about, because a page that changes
 // the subject under a reader is how an order gets given by accident.
+// `wanted` and `who` join it for the same reason `job` is here: they are what
+// somebody is DRAFTING, and the ten-second poll must never rewrite the number
+// under a hand that is about to press send.
 const dcr = {
   seen: null, built: false, job: null, role: null, target: null, one: "",
+  wanted: null, who: "",
   busy: false,
   jobs: new Map(), jobBtns: new Map(),
   roles: new Map(), roleBtns: new Map(),
-  targetBtns: new Map(), oneBtns: new Map(),
+  targetBtns: new Map(), oneBtns: new Map(), whoBtns: new Map(),
 };
 
 function dcrChip(label, dot, onPick, why) {
@@ -5027,13 +5066,18 @@ function dcrPress(buttons, chosen) {
   for (const [key, b] of buttons) b.setAttribute("aria-pressed", String(key === chosen));
 }
 
-// A control that cannot reach the world says so, in the card it lives in,
-// in the module's words. `instead` is how the thing is actually done today,
-// which is the half a person needs and the half a disabled button never has.
+// WHAT THIS CARD DOES TO THE WORLD, in the module's words, whichever answer
+// that is. A card that cannot reach the world prints the refusal and
+// `instead`, which is how the thing is actually done today - the half a
+// person needs and the half a disabled button never has. A card that CAN
+// reach it prints `does`: which table, which column, on whose rows. An
+// operator who has to press a button to find out what it writes is being
+// asked to experiment on a live realm, so the same panel answers either way.
 function dcrRefusal(node, sec, tag) {
   node.replaceChildren();
-  if (!sec || sec.can_send) { node.hidden = true; return; }
+  if (!sec) { node.hidden = true; return; }
   node.hidden = false;
+  if (sec.can_send) { node.appendChild(el("div", "dcrev", sec.does)); return; }
   node.appendChild(el("span", "dcrtag", tag));
   node.appendChild(el("div", "", sec.why_not));
   if (sec.instead) node.appendChild(el("div", "dcrev", sec.instead));
@@ -5042,7 +5086,15 @@ function dcrRefusal(node, sec, tag) {
 function dcrBuildChips(p) {
   dcr.built = true;
   for (const c of p.job.chips) {
-    const b = dcrChip(c.mode, c.state, () => { dcr.job = c.mode; dcrShowJob(); }, "");
+    // PICKING CLEARS THE LINE, and only picking. The note under this card
+    // carries two different answers - why a mode cannot be sent, and what
+    // became of one that was - so the render pass must write neither, or it
+    // wipes the result it has just been handed.
+    const b = dcrChip(c.mode, c.state, () => {
+      dcr.job = c.mode;
+      dcrJobNote.textContent = c.sendable ? "" : c.why_not;
+      dcrShowJob();
+    }, "");
     // The dot is a shape; this is the same fact in words, for anybody who
     // cannot use the colour and for anybody hovering before they commit.
     b.title = c.says;
@@ -5078,8 +5130,60 @@ function dcrBuildChips(p) {
     const b = dcrChip(preset, "", () => { dcrText.value = preset; dcrShowWill(); }, "");
     dcrPresets.appendChild(b);
   }
+  // WHO WALKS. A travel aim is one character at a time, so the roster is a
+  // chip row of its own rather than a role applied to everybody - which is
+  // the difference between this and a job.
+  for (const name of p.travel.who) {
+    const b = dcrChip(name, "", () => { dcr.who = name; dcrShowRole(); }, "");
+    dcr.whoBtns.set(name, b);
+    dcrTravelWho.appendChild(b);
+  }
   dcrText.maxLength = p.will.max_chars;
   dcrSend.textContent = p.will.submit;
+  // EVERY LABEL COMES OFF THE PAYLOAD. A verb typed into the markup is a
+  // claim about what the button does, and those are authored in Python.
+  dcrJobSend.textContent = p.job.submit;
+  dcrCampSend.textContent = p.campaign.submit;
+  dcrCampReset.textContent = p.campaign.restart_label;
+  dcrTravelSend.textContent = p.travel.submit;
+  dcrTravelStop.textContent = p.travel.stand_down;
+}
+
+// ONE POST, ONE SHAPE, AND NO JUDGEMENT IN IT. The body names a card and
+// carries what was drafted; decree.plan_order decides what that becomes. A
+// 400 carries the module's refusal and is set as text exactly as it arrived.
+//
+// `dcr.busy` IS SHARED WITH THE WILL ON PURPOSE: one order at a time from
+// this page, so a decree being read out to five characters cannot have a job
+// order land in the middle of it. The server holds the same rule process-wide.
+async function dcrOrder(body, note) {
+  if (dcr.busy) return;
+  dcr.busy = true;
+  dcrShowAll();
+  note.textContent = "sending...";
+  try {
+    const r = await fetch(u("/api/decree"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    const a = await r.json();
+    note.textContent = r.ok ? a.says + " " + a.note : a.error;
+  } catch (e) {
+    note.textContent = "the world is unreachable";
+  }
+  dcr.busy = false;
+  dcrShowAll();
+  // What the columns say now belongs to the poll, which reads them off the
+  // roster rather than being told by the thing that just wrote them.
+  pollDecree();
+}
+
+function dcrShowAll() {
+  dcrShowJob();
+  dcrShowCamp();
+  dcrShowRole();
+  dcrShowWill();
 }
 
 // THE MOST IMPORTANT FUNCTION IN THIS VIEW. Picking a mode that is not wired
@@ -5093,14 +5197,73 @@ function dcrShowJob() {
   dcrJobSays.hidden = !c;
   dcrJobSays.textContent = c ? c.says : "";
   dcrJobSays.classList.toggle("warn", !!c && !c.wired);
+  // `sendable` IS THE PAYLOAD'S WORD, never this file comparing a mode
+  // against a list of the wired ones. The chip stays pressable so the
+  // stand-down warning above can be read; it is the SEND that is refused,
+  // and decree.py's reason for refusing it is printed beside the button
+  // rather than left in a title nobody can hover on a phone.
+  dcrJobSend.disabled = dcr.busy || !(c && c.sendable);
 }
+
+dcrJobSend.onclick = () => {
+  const p = dcr.seen;
+  if (p) dcrOrder({ section: p.job.section, mode: dcr.job }, dcrJobNote);
+};
+
+// THE COUNTER IS DRAFTED, THEN SENT. The two steppers move a number on this
+// page and nothing else; the send is what reaches the column, so a thumb
+// resting on `+` cannot walk the live campaign upwards one write at a time.
+// The bounds are the payload's - `floor` is the value that stops a campaign
+// outright and `ceiling` is the column's own - and this file holds neither.
+function dcrShowCamp() {
+  const p = dcr.seen;
+  if (!p) return;
+  dcrCampNum.textContent = String(dcr.wanted);
+  dcrCampUp.disabled = dcr.busy || dcr.wanted >= p.campaign.ceiling;
+  dcrCampDown.disabled = dcr.busy || dcr.wanted <= p.campaign.floor;
+  dcrCampSend.disabled = dcr.busy;
+  dcrCampReset.disabled = dcr.busy;
+}
+
+dcrCampUp.onclick = () => { dcr.wanted += 1; dcrShowCamp(); };
+dcrCampDown.onclick = () => { dcr.wanted -= 1; dcrShowCamp(); };
+dcrCampSend.onclick = () => {
+  const p = dcr.seen;
+  if (p) dcrOrder({ section: p.campaign.section, wanted: dcr.wanted }, dcrCampNote);
+};
+// THE ONE THE OPERATOR ACTUALLY NEEDED. A family sitting at 30 of 30 has
+// silently stopped attempting dungeons, and until this landed the only way
+// back was a hand on the database.
+dcrCampReset.onclick = () => {
+  const p = dcr.seen;
+  if (p) dcrOrder({ section: p.campaign.section, restart: true }, dcrCampNote);
+};
 
 function dcrShowRole() {
   dcrPress(dcr.roleBtns, dcr.role);
+  dcrPress(dcr.whoBtns, dcr.who);
   const c = dcr.roles.get(dcr.role);
   dcrTravelSays.hidden = !c;
   dcrTravelSays.textContent = c ? c.says : "";
+  // An aim needs both halves; standing somebody down needs only the name,
+  // which is what makes it the way out of a character stuck walking.
+  dcrTravelSend.disabled = dcr.busy || !c || !dcr.who;
+  dcrTravelStop.disabled = dcr.busy || !dcr.who;
 }
+
+dcrTravelSend.onclick = () => {
+  const p = dcr.seen;
+  if (p) dcrOrder({ section: p.travel.section, name: dcr.who, role: dcr.role },
+                  dcrTravelNote);
+};
+// `clear` IS THE PAYLOAD'S VALUE for nowhere, not an empty string typed here:
+// travel.NONE is the column's sentinel and this page must not hold a second
+// idea of what an unaimed character looks like.
+dcrTravelStop.onclick = () => {
+  const p = dcr.seen;
+  if (p) dcrOrder({ section: p.travel.section, name: dcr.who, role: p.travel.clear },
+                  dcrTravelNote);
+};
 
 function dcrShowWill() {
   const p = dcr.seen;
@@ -5211,6 +5374,9 @@ function renderDecree(p) {
   for (const s of p.sections) secs.set(s.key, s);
   if (!dcr.built) dcrBuildChips(p);
   if (dcr.job === null) dcr.job = p.job.standing;
+  // Seeded once from the world, then owned by the page: the poll must not
+  // rewrite a number somebody is part-way through setting.
+  if (dcr.wanted === null) dcr.wanted = p.campaign.wanted;
 
   const jobSec = secs.get(p.job.section);
   if (jobSec) dcrJobTitle.textContent = jobSec.title;
@@ -5222,26 +5388,17 @@ function renderDecree(p) {
   const campSec = secs.get(p.campaign.section);
   if (campSec) dcrCampTitle.textContent = campSec.title;
   dcrCampLine.textContent = p.campaign.line;
-  dcrCampNum.textContent = String(p.campaign.wanted);
   dcrCampMeans.textContent = p.campaign.means;
   dcrCampWarn.textContent = p.campaign.warning;
   dcrCampWarn.hidden = p.campaign.warning === "";
-  // THE TWO BUTTONS STAY DISABLED, and there is deliberately no click
-  // handler behind them anywhere in this file. Nothing writes
-  // dungeon_runs_wanted over HTTP, and wiring a control to a write path that
-  // does not exist is precisely what this view refuses to do; the day the
-  // path lands, this file gains a handler in the same change that flips
-  // can_send. Until then the reason is on the button itself.
-  dcrCampUp.disabled = true;
-  dcrCampDown.disabled = true;
-  dcrCampUp.title = campSec ? campSec.why_not : "";
-  dcrCampDown.title = dcrCampUp.title;
+  dcrShowCamp();
   dcrRefusal(dcrCampWhy, campSec, p.refusal_tag);
 
   const travSec = secs.get(p.travel.section);
   if (travSec) dcrTravelTitle.textContent = travSec.title;
   dcrTravelCaveat.textContent = p.travel.caveat;
   dcrTravelNow.textContent = p.travel.line;
+  dcrTravelReassert.textContent = p.travel.reassert;
   dcrShowRole();
   dcrTravelUnbuilt.replaceChildren();
   for (const line of p.travel.unbuilt) dcrTravelUnbuilt.appendChild(el("div", "", line));
@@ -5249,6 +5406,7 @@ function renderDecree(p) {
 
   const willSec = secs.get(p.will.section);
   if (willSec) dcrWillTitle.textContent = willSec.title;
+  dcrRefusal(dcrWillDoes, willSec, p.refusal_tag);
   dcrShowWill();
 
   dcrOutLede.textContent = p.outcome_lede;

@@ -1893,6 +1893,151 @@ def _fetch_decree() -> dict:
     return {"roster_rows": roster_rows, "command_rows": command_rows}
 
 
+# --- the console's write path (infra#3345) -----------------------------------
+#
+# ONE STATEMENT PER COLUMN, LOOKED UP BY NAME. decree.plan_order decides which
+# column and what value; these two tables are the only place a column name
+# reaches SQL, and they are fixed dicts keyed by that module's own constants -
+# the same shape as GET_ROUTES, and for the same reason. An Update naming a
+# column that is not in here is a miss, not a statement assembled out of a
+# string. Values are still bound, always.
+_ROSTER_SET = {
+    decree.CAMPAIGN_WANTED:
+        "UPDATE overseer_roster SET dungeon_runs_wanted = %s WHERE name = %s",
+    decree.CAMPAIGN_DONE:
+        "UPDATE overseer_roster SET dungeon_runs_done = %s WHERE name = %s",
+    decree.TRAVEL_COLUMN:
+        "UPDATE overseer_roster SET travel_npc = %s WHERE name = %s",
+}
+# THE GUARDED FORM, and it is bridge._write_trade_errand's own WHERE clause
+# rather than a new one: an aim given from this page must not erase an errand
+# the profession planner wrote. decree.Update.if_free is what picks it.
+_ROSTER_SET_IF_FREE = {
+    decree.TRAVEL_COLUMN:
+        "UPDATE overseer_roster SET travel_npc = %s WHERE name = %s "
+        "AND (travel_npc = '' OR travel_npc = %s)",
+}
+
+# ONE ORDER AT A TIME FROM THIS PROCESS. ThreadingHTTPServer runs a thread per
+# request, and a job order is one INSERT per character: two taps a second
+# apart would otherwise interleave their fan-outs and leave half the family on
+# one mode and half on another - the split agenda.job_split exists to REPORT,
+# and nothing this page does should be the thing that causes it. The lock is
+# held across the plan as well as the writes, so an order is planned against
+# the roster it is about to be applied to.
+_DECREE_LOCK = threading.Lock()
+
+# 1146 missing table, 1054 missing column, 1265 an ENUM value this realm's
+# schema has never heard of. The same three a degraded schema produces on the
+# read side, plus the one bridge._insert_share already guards kind= inserts
+# with: 'job' arrives with mod-overseer's SQL and this process deploys
+# separately, so a worldserver that predates it rejects the row under strict
+# mode rather than storing something else.
+_DEGRADED = (1054, 1146, 1265)
+
+
+def _fetch_roster_rows() -> list:
+    """The roster an order is planned against.
+
+    THE SAME TWO STATEMENTS as the console's own read, so a plan and the page
+    agree about who is enabled - and every planner needs only `name`, `enabled`
+    and `lead`, which is exactly what the fallback carries.
+
+    IT DOES NOT REUSE _guarded, AND THE REASON IS NOT STYLE. That helper
+    catches pymysql.err.ProgrammingError, and 1054 is absent from pymysql's
+    error_map so a MISSING COLUMN arrives as an OperationalError instead -
+    _realm_guarded documents the measurement. On the read side that gap costs
+    a banner; here it would 503 every order on a realm whose overseer_roster
+    predates the campaign columns, which is the one realm most likely to need
+    the fallback. So this guards on _DEGRADED like the writes below it.
+    """
+    conn = _connect()
+    try:
+        with conn.cursor() as cur:
+            for attempt in (_ROSTER_FULL, _ROSTER_OLD):
+                try:
+                    cur.execute(attempt)
+                    return list(cur.fetchall())
+                except pymysql.err.MySQLError as exc:
+                    if not (exc.args and exc.args[0] in _DEGRADED):
+                        raise
+                    log.info("decree: overseer_roster is thinner than this "
+                             "image expects (%s) - trying a thinner read",
+                             exc.args[0])
+    finally:
+        conn.close()
+    return []
+
+
+def _apply_order(order) -> int:
+    """Run one planned order and report how many writes CHANGED a row.
+
+    Decides nothing. `order` already carries the exact rows and columns, and
+    every guard below is about a degraded schema rather than about whether the
+    order was a good idea - decree.plan_order made that call.
+
+    CHANGED, NOT MATCHED. pymysql does not set CLIENT_FOUND_ROWS, so an UPDATE
+    writing the value a row already holds reports 0. decree.order_result owns
+    the sentence that says so.
+
+    A DEGRADED WRITE IS LOGGED AND SKIPPED, never swallowed silently and never
+    allowed to cost the rest of the family - the same rule bridge._set_job
+    keeps on the identical fan-out. The count comes back short, and the count
+    is what the operator is shown.
+    """
+    changed = 0
+    conn = _connect()
+    try:
+        with conn.cursor() as cur:
+            for row in order.rows:
+                try:
+                    cur.execute(
+                        "INSERT INTO overseer_command "
+                        "(target_name, command, kind, source) "
+                        "VALUES (%s, %s, %s, %s)",
+                        (row.target_name, row.command, row.kind, WEB_SOURCE),
+                    )
+                except pymysql.err.MySQLError as exc:
+                    if not (exc.args and exc.args[0] in _DEGRADED):
+                        raise
+                    log.warning(
+                        "decree: overseer_command will not take kind=%r for %s "
+                        "(%s) - this realm needs the worldserver image "
+                        "carrying mod-overseer's SQL",
+                        row.kind, row.target_name, exc.args[0],
+                    )
+                    continue
+                changed += 1
+            for up in order.updates:
+                table = _ROSTER_SET_IF_FREE if up.if_free else _ROSTER_SET
+                sql = table.get(up.column)
+                if sql is None:
+                    # Unreachable while decree.py and these tables agree, and
+                    # said out loud rather than passed over: the one way to
+                    # get here is a new column planned with no statement
+                    # behind it, which would otherwise look like a write that
+                    # simply did nothing.
+                    log.error("decree: no statement for column %r", up.column)
+                    continue
+                params = ((up.value, up.name, up.value) if up.if_free
+                          else (up.value, up.name))
+                try:
+                    cur.execute(sql, params)
+                except pymysql.err.MySQLError as exc:
+                    if not (exc.args and exc.args[0] in _DEGRADED):
+                        raise
+                    log.warning(
+                        "decree: overseer_roster.%s is not writable on this "
+                        "realm (%s) - %s keeps whatever it had",
+                        up.column, exc.args[0], up.name,
+                    )
+                    continue
+                changed += cur.rowcount
+    finally:
+        conn.close()
+    return changed
+
+
 class Handler(BaseHTTPRequestHandler):
     def do_GET(self):  # noqa: N802 (stdlib naming)
         # A lookup and nothing else. Every GET endpoint takes the parsed
@@ -2429,6 +2574,47 @@ class Handler(BaseHTTPRequestHandler):
             log.exception("decree query failed")
             self._send(503, "application/json", b'{"error": "world unreachable"}')
 
+    def _decree_post(self) -> None:
+        """POST /api/decree - the console gives an order.
+
+        VALIDATES NOTHING ITSELF, which is the rule this whole view is built
+        on. The body and the roster go to decree.plan_order; back comes either
+        a refusal with a reason or a concrete list of rows to insert and
+        columns to set. There is no `if` here about job modes, campaign
+        numbers or character names, and there must not be one.
+
+        THE REFUSAL IS A 400 AND CARRIES THE MODULE'S OWN SENTENCE, printed
+        verbatim: a status code alone would have the browser composing an
+        explanation of a system it knows nothing about.
+        """
+        request = self._read_json_body()
+        if request is None:
+            return
+        try:
+            # THE LOCK COVERS THE PLAN AND THE WRITES AND NOTHING ELSE. A
+            # _send inside it would hold every other order behind one slow
+            # socket, which is a queue nobody asked for on a page polled every
+            # ten seconds.
+            with _DECREE_LOCK:
+                order = decree.plan_order(request, _fetch_roster_rows())
+                changed = 0 if order.refusal else _apply_order(order)
+            if order.refusal:
+                log.info("decree: refused section=%r", order.section)
+                self._send(400, "application/json", json.dumps({
+                    "error": order.refusal, "section": order.section,
+                }).encode())
+                return
+            log.info("decree: section=%s asked=%d changed=%d",
+                     order.section, order.asked, changed)
+            self._send(200, "application/json",
+                       json.dumps(decree.order_result(order, changed)).encode())
+        except Exception:
+            # Same contract as every other endpoint, and it matters on a write
+            # more than on a read: a console that reported an order it could
+            # not place would be the exact failure this view is named after.
+            log.exception("decree order failed")
+            self._send(503, "application/json", b'{"error": "world unreachable"}')
+
     def _watch_state(self, query: dict) -> None:
         """GET /api/watch?name=X - is anyone watching, and how do they look?
 
@@ -2729,6 +2915,7 @@ class Handler(BaseHTTPRequestHandler):
     }
     POST_ROUTES = {
         "/api/chat": _chat_post,
+        "/api/decree": _decree_post,
         "/api/watch": _watch_post,
         "/api/frame": _frame_post,
     }

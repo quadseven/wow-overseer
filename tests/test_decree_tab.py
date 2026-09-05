@@ -294,34 +294,86 @@ class TheHonestyMechanisms(unittest.TestCase):
 
 class ControlsThatCannotReachTheWorld(unittest.TestCase):
     """A button that silently does nothing is the failure this epic is named
-    after. Three of the four cards cannot write, and each says so."""
+    after. Every card writes now (infra#3345), so the rule turns into its
+    other half: nothing is drawn sendable that the payload has not said is
+    sendable, and every card still says what it does to the world."""
 
-    def test_the_campaign_buttons_are_disabled_in_the_markup(self):
-        """Disabled, not styled flat: a disabled button is unfocusable and
-        assistive tech says so, where a greyed one still reads as pressable."""
-        for control in ("dcrcampup", "dcrcampdown"):
+    def test_every_send_control_starts_disabled_in_the_markup(self):
+        """Disabled until a payload says otherwise: a button that is live
+        before the first poll is a button pressed against a console that has
+        not read the world yet."""
+        for control in ("dcrcampup", "dcrcampdown", "dcrjobsend",
+                        "dcrcampsend", "dcrcampreset", "dcrtravelsend",
+                        "dcrtravelstop", "dcrsend"):
             button = SECTION[SECTION.index('id="' + control + '"'):]
             self.assertIn("disabled", button[:button.index(">")], control)
 
-    def test_the_campaign_buttons_have_no_click_handler_anywhere(self):
-        """There is no write path behind them. Wiring one to an endpoint that
-        does not exist is exactly what this view refuses to do."""
-        self.assertNotIn("dcrCampUp.onclick", PAGE)
-        self.assertNotIn("dcrCampDown.onclick", PAGE)
+    def test_the_campaign_steppers_only_draft_and_never_write(self):
+        """A thumb resting on `+` must not walk the live campaign upwards one
+        write at a time. The steppers move a number on the page; the send is
+        the only control that reaches the column."""
+        # The whole handler, pinned as a literal rather than searched for an
+        # absent word: "no dcrOrder in the next N characters" passes for a
+        # window that stopped one character early.
+        self.assertIn("dcrCampUp.onclick = () => { dcr.wanted += 1; dcrShowCamp(); };",
+                      VIEW)
+        self.assertIn("dcrCampDown.onclick = () => { dcr.wanted -= 1; dcrShowCamp(); };",
+                      VIEW)
 
-    def test_the_campaign_buttons_stay_disabled_at_render(self):
+    def test_the_campaign_bounds_are_the_payloads_and_not_this_files(self):
+        """`floor` is the value that stops a campaign outright and `ceiling`
+        is the column's own. A page holding either would be a second copy of a
+        fact the database decides."""
+        show = VIEW[VIEW.index("function dcrShowCamp"):]
+        show = show[:show.index("dcrCampUp.onclick")]
+        self.assertIn("dcr.wanted >= p.campaign.ceiling", show)
+        self.assertIn("dcr.wanted <= p.campaign.floor", show)
+        self.assertNotIn(str(decree.CAMPAIGN_CEILING), PAGE)
+
+    def test_the_drafted_number_is_not_rewritten_by_the_poll(self):
+        """Seeded once from the world, then owned by the page. A poll that
+        reset the counter every ten seconds would change the subject under a
+        reader about to press send."""
         render = VIEW[VIEW.index("function renderDecree"):]
-        self.assertIn("dcrCampUp.disabled = true;", render)
-        self.assertIn("dcrCampDown.disabled = true;", render)
+        self.assertIn("if (dcr.wanted === null) dcr.wanted = p.campaign.wanted;",
+                      render)
+        self.assertNotIn("dcrCampNum.textContent = String(p.campaign.wanted);",
+                         render)
 
     def test_they_are_exactly_44px(self):
         self.assertIn("width:44px", rule(".dcrstepbtn"))
         self.assertIn("height:44px", rule(".dcrstepbtn"))
 
-    def test_a_card_that_cannot_send_prints_the_reason_in_the_card(self):
+    def test_an_unwired_mode_refuses_the_send_and_prints_the_modules_reason(self):
+        """The chip stays pressable so the stand-down warning can be read; it
+        is the SEND that is refused. `sendable` is the payload's word - this
+        file never compares a mode against a list of the wired ones."""
+        show = VIEW[VIEW.index("function dcrShowJob"):]
+        show = show[:show.index("dcrJobSend.onclick")]
+        self.assertIn("dcrJobSend.disabled = dcr.busy || !(c && c.sendable);", show)
+        build = VIEW[VIEW.index("function dcrBuildChips"):]
+        build = build[:build.index("async function dcrOrder")]
+        self.assertIn(
+            "dcrJobNote.textContent = c.sendable ? \"\" : c.why_not;", build)
+        for mode in decree.unwired_modes():
+            self.assertNotIn('"%s"' % mode, VIEW, mode)
+
+    def test_the_render_pass_never_writes_a_note_it_would_wipe(self):
+        """The note under each card carries two different answers - why an
+        order cannot go, and what became of one that did - written by the pick
+        and by the send. A render that wrote either would blank the result the
+        moment the poll that follows a send came back, which is a console
+        reporting nothing about a write that happened."""
+        render = VIEW[VIEW.index("function renderDecree"):]
+        show = VIEW[VIEW.index("function dcrShowJob"):VIEW.index("dcrJobSend.onclick")]
+        for note in ("dcrJobNote", "dcrCampNote", "dcrTravelNote"):
+            self.assertNotIn(note + ".textContent", render, note)
+            self.assertNotIn(note + ".textContent", show, note)
+
+    def test_a_card_says_what_it_does_to_the_world_either_way(self):
         refusal = VIEW[VIEW.index("function dcrRefusal"):]
         refusal = refusal[:refusal.index("function dcrBuildChips")]
-        self.assertIn("if (!sec || sec.can_send) { node.hidden = true; return; }",
+        self.assertIn('if (sec.can_send) { node.appendChild(el("div", "dcrev", sec.does)); return; }',
                       refusal)
         self.assertIn("sec.why_not", refusal)
         self.assertIn("sec.instead", refusal)
@@ -340,8 +392,11 @@ class TheOnlyThingItSends(unittest.TestCase):
         panel's chat box has posted here since infra#2604."""
         self.assertIn('fetch(u("/api/chat")', VIEW)
 
-    def test_it_is_the_only_write_the_view_makes(self):
-        self.assertEqual(VIEW.count('method: "POST"'), 1)
+    def test_there_are_exactly_two_write_paths_and_no_more(self):
+        """The chat path for the will, and one decree path for the other
+        three. A third would be a second grammar for the same table."""
+        self.assertEqual(VIEW.count('method: "POST"'), 2)
+        self.assertEqual(VIEW.count('fetch(u("/api/decree"), {'), 1)
 
     def test_one_post_per_character_and_never_a_fan_out_endpoint(self):
         speak = VIEW[VIEW.index("async function dcrSpeak"):]
@@ -392,9 +447,9 @@ class TheEndpointIsAnAdapter(unittest.TestCase):
         table = SERVER[SERVER.index("GET_ROUTES = {"):]
         self.assertIn('"/api/decree": _decree,', table[:table.index("}")])
 
-    def test_it_is_not_a_write_endpoint(self):
+    def test_the_write_endpoint_is_in_the_post_table(self):
         post = SERVER[SERVER.index("POST_ROUTES = {"):]
-        self.assertNotIn("decree", post[:post.index("}")])
+        self.assertIn('"/api/decree": _decree_post,', post[:post.index("}")])
 
     def test_the_handler_only_fetches_and_serves(self):
         handler = SERVER[SERVER.index("    def _decree(self"):]

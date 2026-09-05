@@ -339,43 +339,63 @@ class TravelIsNotTransaction(unittest.TestCase):
 
 
 class WhatThisConsoleMayWrite(unittest.TestCase):
-    """Three of the four cards cannot reach the world at all, and each says
-    so in the card. A control that silently does nothing is the failure this
-    epic is named after."""
+    """All four cards reach the world now (infra#3345), and every one of them
+    says which road it takes and what it writes. A control that silently does
+    nothing is the failure this epic is named after; so is one that writes
+    without saying where."""
 
-    def test_only_the_will_can_be_sent(self):
-        sendable = [s.key for s in decree.SECTIONS if decree.can_send(s.key)]
-        self.assertEqual(sendable, [decree.WILL])
+    def test_every_card_can_be_sent_and_names_its_road(self):
+        """`writes` is the road, and can_send is derived from it - so a card
+        cannot become sendable on screen without naming what it writes."""
+        roads = {s.key: s.writes for s in decree.SECTIONS}
+        self.assertEqual(roads, {
+            decree.JOB: decree.COMMAND,
+            decree.CAMPAIGN: decree.ROSTER,
+            decree.TRAVEL: decree.ROSTER,
+            decree.WILL: decree.CHAT,
+        })
+        for section in decree.SECTIONS:
+            self.assertTrue(decree.can_send(section.key), section.key)
 
-    def test_the_one_that_can_send_goes_through_the_chat_path(self):
-        """Not a new endpoint. The page already had a chat POST and the
-        decree travels it, one character at a time."""
+    def test_the_will_still_goes_through_the_chat_path(self):
+        """Not a new endpoint for it. The page already had a chat POST and the
+        decree travels it, one character at a time - and plan_order refuses
+        the will rather than growing a second grammar for it."""
         will = next(s for s in decree.SECTIONS if s.key == decree.WILL)
         self.assertEqual(will.writes, decree.CHAT)
+        order = decree.plan_order({"section": decree.WILL}, roster())
+        self.assertEqual(order.refusal, decree.ORDER_REFUSALS["will"])
 
-    def test_every_refusal_names_the_column_it_cannot_write(self):
-        columns = {decree.JOB: "overseer_roster.job",
-                   decree.CAMPAIGN: "overseer_roster.dungeon_runs_wanted",
-                   decree.TRAVEL: "overseer_roster.travel_npc"}
+    def test_every_card_names_the_table_or_column_it_writes(self):
+        """The candour the refusals used to carry, now that the buttons work.
+        An operator who has to press one to find out what it writes is being
+        asked to experiment on a live realm."""
+        named = {decree.JOB: "overseer_command",
+                 decree.CAMPAIGN: "overseer_roster.dungeon_runs_wanted",
+                 decree.TRAVEL: "overseer_roster.travel_npc"}
         for section in decree.SECTIONS:
-            if decree.can_send(section.key):
-                continue
-            self.assertIn(columns[section.key], section.why_not, section.key)
+            self.assertTrue(section.does, section.key)
+            if section.key in named:
+                self.assertIn(named[section.key], section.does, section.key)
 
-    def test_every_refusal_says_how_it_is_actually_done(self):
-        """A disabled button with no way forward is a dead end. The refusal
-        carries where the thing does happen today."""
+    def test_a_card_that_could_not_send_would_still_say_how_it_is_done(self):
+        """The refusal machinery is kept, not deleted: a control that loses
+        its write path must go back to a reason and a way forward rather than
+        to a dead button."""
         for section in decree.SECTIONS:
             if not decree.can_send(section.key):
+                self.assertTrue(section.why_not, section.key)
                 self.assertTrue(section.instead, section.key)
 
-    def test_the_travel_refusal_is_still_true(self):
-        """It claims travel.aim_statements is written and called by nothing.
-        The day somebody wires it, this fails and the console's refusal gets
-        revisited instead of standing as a stale claim."""
-        for name in ("bridge.py", "map_server.py", "council.py"):
+    def test_the_console_does_not_aim_through_aim_statements(self):
+        """travel.aim_statements is STILL called by nothing, and the travel
+        order deliberately does not become its first caller: its second
+        statement clears everybody who was not named, which is right for a
+        council deciding where the whole family stands and wrong for a console
+        aiming one person. Standing the others down is its own order here."""
+        for name in ("bridge.py", "map_server.py", "council.py", "decree.py"):
             source = (HERE / name).read_text(encoding="utf-8")
-            self.assertNotIn("aim_statements", source, name)
+            self.assertNotIn("travel.aim_statements(", source, name)
 
 
 class TheWill(unittest.TestCase):
