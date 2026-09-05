@@ -525,10 +525,21 @@ class TheEndpoint(unittest.TestCase):
 
     def test_the_endpoint_takes_no_roster_from_the_caller(self):
         """WHO the family is belongs to bonds. Accepting a roster would make
-        this a general character query wearing a friendly name."""
+        this a general character query wearing a friendly name.
+
+        THE TWO LINES PINNED HERE CHANGED SHAPE AND THE GUARD DID NOT. This
+        used to assert the single expression
+        `armory.build_armory(**_fetch_armory(), book=BOOK, items=ITEMS)`,
+        which stopped being one line when the handler grew the provenance
+        index: the fetch is now bound so its equip rows can be lifted off
+        before the splat. What the guard is FOR is that the fetch takes
+        nothing from the request and that the roster reaches the builder
+        whole, and both halves are still asserted, splat included. The
+        assertNotIn below is the load-bearing one and it is untouched."""
         handler = self.server[self.server.index("def _armory"):]
         handler = handler[:handler.index("def _thoughts")]
-        self.assertIn("armory.build_armory(**_fetch_armory(), book=BOOK, items=ITEMS)",
+        self.assertIn("fetched = _fetch_armory()", handler)
+        self.assertIn("armory.build_armory(**fetched, book=BOOK, items=ITEMS)",
                       handler)
         self.assertNotIn("query.get", handler)
 

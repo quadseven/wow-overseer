@@ -790,6 +790,30 @@
              font-weight:700; text-transform:uppercase; cursor:pointer; }
   #chrmore:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
 
+  /* --- the recap and the loot board, inside the Chronicle (infra#2597) ---
+     WHAT IS HAPPENING RIGHT NOW, above what has already happened. The tab was
+     a timeline and nothing else, so the answer to "how far through are they"
+     was to read the newest card and infer. It is a live view now, and it
+     borrows the card recipe above wholesale: the recap and every boss are
+     .chr-card, which is what makes .sect, .chips, .chip, .loot and .item
+     work in here for the cost of nothing.
+
+     Only the four things the cards above have no word for are new. Every one
+     of them paints from an on-card ROLE and never from a pigment, because
+     this view is drawn on two grounds and a pigment is mixed for one. */
+  #rcbox, #rcboard { display:grid; gap:10px; margin:0 0 1.1rem; }
+  .rc-bar { height:6px; border-radius:999px; background:var(--card-line);
+            overflow:hidden; margin:.7rem 0 .1rem; }
+  .rc-bar i { display:block; height:100%; background:var(--accent-text); }
+  .chr-card .chip.away { border-style:dashed; color:var(--on-card-dim); }
+  .chr-card .chip.fighting { border-color:var(--accent-text);
+                             color:var(--accent-text); }
+  .rc-drop { padding:.5rem 0; border-top:1px solid var(--card-line); }
+  .rc-drop:first-child { border-top:0; }
+  .rc-why { margin-top:2px; font-size:12px; line-height:1.5;
+            color:var(--on-card-dim); }
+  .rc-why.up { color:var(--accent-text); }
+  .rc-why.no { color:var(--caution-text); }
   /* --- the Council (infra#2597) --------------------------------------------
      TWO COLUMNS, and which is which is the argument. On the left the family
      talking, in the order the family talks in; on the right what they know
@@ -1110,6 +1134,7 @@
                  line-height:1.3; }
   .adetail .il { color:var(--caution-text); font-family:var(--mono); font-size:.8rem; }
   .adetail .st { color:var(--on-dark-faint); }
+  .adetail .st a { color:inherit; }
   .adetail .eq { color:#1eff00; }
   .adetail .setn { color:var(--caution-text); margin-top:.4rem; }
   .adetail .piece { padding-left:.8rem; color:var(--on-dark-faint); }
@@ -2251,7 +2276,12 @@
   <div id="chrhead" class="ds-head">reaching the world...</div>
   <div id="chrstrip" class="ds-strip"></div>
   <p id="chrnote" hidden></p>
-  <div class="ds-rule"><span class="ix">01</span><span class="ln"></span><span class="lb">what they have done</span></div>
+  <div class="ds-rule"><span class="ix">01</span><span class="ln"></span><span class="lb">what is happening right now</span></div>
+  <div id="rcbox"></div>
+  <div class="ds-rule"><span class="ix">02</span><span class="ln"></span><span class="lb">what can drop in there</span></div>
+  <p id="rcbasis" class="chr-body"></p>
+  <div id="rcboard"></div>
+  <div class="ds-rule"><span class="ix">03</span><span class="ln"></span><span class="lb">what they have done</span></div>
   <div id="chrfilters"></div>
   <div id="chrline"></div>
   <button id="chrmore">show older</button>
@@ -4837,6 +4867,7 @@ function showView(v) {
     closePanel();
     stopBroadcasts();
     pollChronicle();
+    pollRecap();
     return;
   }
   if (isCouncil) {
@@ -5578,6 +5609,7 @@ function chrRunCard(c) {
       if (!c.members.includes(item.who)) grid.appendChild(chrItem(item, item.who));
     }
     card.appendChild(grid);
+    card.appendChild(el("div", "note", c.loot_caveat));
   }
   if (c.level_ups.length) {
     chrSect(card, "levelled inside");
@@ -5674,6 +5706,187 @@ async function pollChronicle() {
 // are written by the module on its own cadence; entering the view polls at
 // once, so the timer only ever adds the run that ended while it was open.
 setInterval(() => { if (view === CHRONICLE_VIEW) pollChronicle(); }, 60000);
+
+// --- the live recap and the loot board (infra#2597, mod-overseer#88) ------
+//
+// The Chronicle answered "what have they done" and could not answer "what is
+// happening", which is the question actually asked while five streams are
+// open and nobody can tell how far through the dungeon they are.
+//
+// EVERY SENTENCE HERE ARRIVES WRITTEN, exactly as the cards above do. "all 5
+// inside, all standing", "3 of 7 bosses down", "2 first worn in here" and
+// every verdict on every drop are recap.py's words. This block turns a
+// verdict WORD into a class name and prints strings; the one mapping it owns
+// is which of three tones a verdict is drawn in, which is a fact about the
+// stylesheet and not about the family.
+//
+// It sits in the Chronicle's window on purpose: it renders into that tab, and
+// the two blocks share chrItem, chrSect, chrChips and chrWhen rather than
+// keeping a second copy of any of them.
+
+const rcbox = document.getElementById("rcbox");
+const rcboard = document.getElementById("rcboard");
+const rcbasis = document.getElementById("rcbasis");
+
+// A verdict word -> the tone it is painted in. The WORDS are the module's and
+// this map must never invent one: an unknown verdict draws in the body colour
+// rather than being dropped, so a new word from recap.py shows up as plain
+// text instead of vanishing off the page.
+const RC_TONES = new Map([["upgrade", "up"], ["empty", "up"],
+                          ["locked", "no"], ["too heavy", "no"],
+                          ["wrong class", "no"]]);
+
+function rcNote(card, text) {
+  if (text) card.appendChild(el("div", "note", text));
+}
+
+// WHO IS IN THERE. Each chip is a name and the module's own word for what
+// that character is doing; the class only decides how the word is painted.
+function rcParty(card, p) {
+  chrSect(card, p.party_line);
+  const chips = el("div", "chips");
+  for (const m of p.party) {
+    // `tone` is a ROLE NAME the module chose, never a colour and never a
+    // state this code worked out for itself. The stylesheet decides what
+    // "fighting" looks like on each of the two grounds this page is drawn on.
+    chips.appendChild(el("span", "chip" + (m.tone ? " " + m.tone : ""),
+                         m.label));
+  }
+  card.appendChild(chips);
+}
+
+// HOW FAR THROUGH. The bar is the module's count over its total, and the
+// basis line under it says where that count came from and what about it is
+// inferred. A progress bar with no provenance is the most confidently wrong
+// thing a page can draw.
+function rcProgress(card, prog) {
+  if (!prog) return;
+  chrSect(card, prog.line);
+  // ONLY WHEN THE MODULE SAYS IT KNOWS. With no instance record the payload
+  // is known:false, count 0 and total 7, and drawing that bar renders an
+  // empty track: a reader glancing at it sees "no bosses down" asserted,
+  // which is the exact distinction encounters_down goes out of its way to
+  // keep. No record means no bar, and the line and the basis say why.
+  if (prog.known && prog.total) {
+    const bar = el("div", "rc-bar");
+    const fill = el("i");
+    fill.style.width = (100 * prog.count / prog.total) + "%";
+    bar.appendChild(fill);
+    card.appendChild(bar);
+  }
+  if (prog.total) {
+    const chips = el("div", "chips");
+    for (const name of prog.down) chips.appendChild(el("span", "chip boss", name));
+    for (const name of prog.left) chips.appendChild(el("span", "chip boss unsure", name));
+    card.appendChild(chips);
+  }
+  rcNote(card, prog.basis);
+}
+
+function rcLoot(card, p) {
+  chrSect(card, p.loot_line);
+  if (p.loot.length) {
+    const grid = el("div", "loot");
+    for (const item of p.loot) grid.appendChild(chrItem(item, item.who));
+    card.appendChild(grid);
+  }
+  rcNote(card, p.loot_caveat);
+}
+
+function rcRecap(p) {
+  rcbox.replaceChildren();
+  const card = el("article", "chr-card");
+  const top = el("div", "chr-top");
+  top.appendChild(el("span", "chr-when", chrWhen(p.run ? p.run.started_at : null)));
+  card.appendChild(top);
+  card.appendChild(el("h3", "chr-title", p.headline));
+  if (!p.live) {
+    // NOTHING IS RUNNING, WHICH IS THE COMMON CASE AND NOT A FAULT. An empty
+    // frame here reads as a broken page, so the module says what is true
+    // instead and hands over the last run to stand in its place.
+    if (p.last) {
+      card.appendChild(el("p", "chr-body", p.last.line));
+      if (p.last.ended_reason) rcNote(card, p.last.ended_reason);
+      if (p.last.loot.length) {
+        chrSect(card, p.last.loot_line);
+        const grid = el("div", "loot");
+        for (const item of p.last.loot) grid.appendChild(chrItem(item, item.who));
+        card.appendChild(grid);
+        rcNote(card, p.loot_caveat);
+      }
+    }
+    rcbox.appendChild(card);
+    return;
+  }
+  if (p.run.stall_note) rcNote(card, p.run.stall_note);
+  rcProgress(card, p.progress);
+  rcParty(card, p);
+  rcLoot(card, p);
+  chrSect(card, p.deaths_line);
+  if (p.deaths.length) {
+    card.appendChild(chrChips(p.deaths.map(d => d.who + " (" + d.killer + ")"), "dead"));
+  }
+  rcbox.appendChild(card);
+}
+
+// ONE DROP. The verdict, the reason for it and the list of who wants it are
+// all decided in recap.py; the tone class is the only thing chosen here.
+function rcDrop(drop) {
+  const row = el("div", "rc-drop");
+  row.appendChild(chrItem(drop, drop.meta));
+  if (drop.verdict_line) {
+    // The WORD picks the tone; the sentence is the module's. This block used
+    // to slice wanted_by to drop the name it had already shown, which was
+    // only correct while the module's ranking happened to put that reader
+    // first. The module trims its own list now.
+    const tone = drop.best ? (RC_TONES.get(drop.best.verdict) || "") : "";
+    row.appendChild(el("div", "rc-why" + (tone ? " " + tone : ""),
+                       drop.verdict_line));
+  }
+  if (drop.also_line) row.appendChild(el("div", "rc-why", drop.also_line));
+  for (const caveat of drop.caveats) row.appendChild(el("div", "rc-why", caveat));
+  return row;
+}
+
+function rcBoard(board) {
+  rcboard.replaceChildren();
+  if (board.empty_note) {
+    // The basis describes how a board was built, so it must not stand over
+    // one that was not built at all.
+    rcbasis.textContent = board.empty_note;
+    return;
+  }
+  rcbasis.textContent = board.basis;
+  for (const boss of board.bosses) {
+    const card = el("article", "chr-card");
+    card.appendChild(el("h3", "chr-title", boss.name));
+    card.appendChild(el("p", "chr-body", boss.line));
+    for (const drop of boss.drops) card.appendChild(rcDrop(drop));
+    rcboard.appendChild(card);
+  }
+}
+
+async function pollRecap() {
+  try {
+    const r = await fetch(u("/api/recap"));
+    if (!r.ok) throw new Error(r.status);
+    const p = await r.json();
+    rcRecap(p);
+    rcBoard(p.board);
+  } catch (e) {
+    // Whatever is drawn stays drawn, like every other poll on this page. A
+    // blanked recap reads as "nothing is happening in there", which is the
+    // one claim this view must never make by accident. The Chronicle's own
+    // banner carries the warning for both polls rather than this half of the
+    // tab growing a second one that could disagree with it.
+    chrhead.textContent = "the world is unreachable - this may be stale";
+    chrhead.className = "ds-head alarm";
+  }
+}
+
+// Thirty seconds, not the timeline's sixty: this half of the tab is about a
+// fight that is going on now, and a minute is four pulls.
+setInterval(() => { if (view === CHRONICLE_VIEW) pollRecap(); }, 30000);
 
 // --- the Council (infra#2597) --------------------------------------------
 //
@@ -5931,7 +6144,7 @@ function silhouette(colour) {
 // `trees` is the payload's own answer to whether the talent grids start
 // open. It is read here rather than decided here: "collapsed by default" is
 // a product decision and armory.py owns it.
-const arm = { profiles: new Map(), trees: null };
+const arm = { profiles: new Map(), trees: null, provenance: {} };
 
 function armoryProfile(name) {
   let c = arm.profiles.get(name);
@@ -5975,7 +6188,7 @@ function armoryProfile(name) {
   const jump = el("a", "", name);
   jump.href = "#" + prof.id;
   ajump.appendChild(jump);
-  c = { prof, glyphs, faction, nm, role, line, nums, left, portrait, right, stats,
+  c = { name, prof, glyphs, faction, nm, role, line, nums, left, portrait, right, stats,
         detail, spec, sum, budget, unspent, toggle, bar, trees, unplaced,
         cells: new Map(), statRows: new Map(), treeBoxes: new Map(),
         selected: null, open: !!(arm.trees && arm.trees.expanded), specData: null };
@@ -6056,6 +6269,31 @@ function detailLine(c, cls, text) {
   return d;
 }
 
+// WHERE THIS CAME FROM, AND A WAY TO GO AND LOOK. The operator asked to be
+// able to click a piece of gear and find out where it was picked up; what the
+// record can actually support is where it was first seen WORN, and the
+// sentence recap.py writes says that and not the other thing. The link opens
+// the Chronicle, which is where the run it happened in is written up.
+//
+// An item with no record still gets a line saying so. Hiding those would make
+// "we have no idea where this came from" look identical to "this came from
+// nowhere interesting", and the difference is the whole point of the feature.
+function renderProvenance(c, s) {
+  const forName = arm.provenance[c.name];
+  const p = forName ? forName[s.entry] : null;
+  if (!p) return;
+  const row = detailLine(c, "st", "");
+  if (!p.known) {
+    row.textContent = p.line;
+    return;
+  }
+  const a = document.createElement("a");
+  a.href = "#chronicle";
+  a.textContent = p.line;
+  row.appendChild(a);
+  row.appendChild(document.createTextNode(", " + chrWhen(p.at)));
+}
+
 function renderDetail(c, s) {
   c.detail.textContent = "";
   if (!s) {
@@ -6107,6 +6345,7 @@ function renderDetail(c, s) {
     }
   }
   if (t.flavor) detailLine(c, "fl", '"' + t.flavor + '"');
+  renderProvenance(c, s);
   if (t.sell_price) {
     const m = el("div", "money", "Sell Price: ");
     const coins = [["g", t.sell_price.gold], ["s", t.sell_price.silver], ["c", t.sell_price.copper]];
@@ -6524,6 +6763,11 @@ function renderArmory(p) {
   // the trees start open, and the toggle asks it what to call itself.
   arm.trees = p.talent_trees;
   arm.hint = p.detail_hint;
+  // WHERE EACH WORN ITEM WAS FIRST SEEN WORN, keyed by name then by item
+  // entry. recap.py decides which equip row is the first one, what the place
+  // is called and what to say when there is no row at all; this only looks
+  // the sentence up and prints it.
+  arm.provenance = p.provenance || {};
   // The headline sentence AND how loud it is are both armory.py's: "loud
   // only for the two things somebody can act on today" is a verdict, and a
   // verdict in a ternary here is a verdict no test can reach.

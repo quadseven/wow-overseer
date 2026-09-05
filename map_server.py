@@ -32,6 +32,7 @@ import frames
 import modelviewer
 import needs
 import questlog
+import recap
 import realm
 import standing
 import stream
@@ -563,6 +564,15 @@ def _fetch_armory() -> dict:
                 (len(armory.EQUIPPED_SLOTS), *names),
             )
             equipment_rows = list(cur.fetchall())
+            # The equip record, for the provenance line under each item. It is
+            # guarded where the reads above are not, and for a reason: those
+            # are core tables that are always there, and overseer_event is
+            # written by the in-world module, so a realm whose schema predates
+            # it must still get a paper doll. A grid with no provenance is a
+            # thinner tab; a 503 is a blank one (infra#3172).
+            equip_event_rows = _wide_guarded(
+                cur, _RECAP_EQUIPS.format(holes=holes), tuple(names), "",  # noqa: S608
+                "overseer_event")
             # The set a piece belongs to lists its other pieces by entry, and
             # the tooltip names them: one more query, bounded by the sets
             # anybody is actually wearing (usually none).
@@ -618,7 +628,8 @@ def _fetch_armory() -> dict:
             base_rows = list(cur.fetchall())
     finally:
         conn.close()
-    return {"char_rows": char_rows, "equipment_rows": equipment_rows,
+    return {"equip_event_rows": equip_event_rows,
+            "char_rows": char_rows, "equipment_rows": equipment_rows,
             "talent_rows": talent_rows, "stats_rows": stats_rows,
             "base_rows": base_rows, "set_rows": set_rows}
 
@@ -1247,6 +1258,211 @@ def _fetch_eye() -> dict:
             "realm_rows": realm_rows, "guild_rows": guild_rows}
 
 
+# --- the live dungeon recap and the loot board (infra#2597) ------------------
+#
+# EVERY READ BELOW IS GUARDED FOR BOTH 1146 AND 1054, and this endpoint is the
+# one most exposed to the pair. It joins five overseer_* tables written by the
+# in-world module across migrations that land weeks apart, plus four world
+# tables, and the two realms this image serves run different worldserver
+# builds. The failures are the ones this file has already been bitten by:
+#
+#   1146 missing TABLE   turned the whole Achievements tab into a 503 on the
+#                        live realm (infra#3172): it had overseer_event and no
+#                        overseer_death.
+#   1054 missing COLUMN  is the nastier one, because MySQL fails a SELECT
+#                        naming an absent column WHOLE. infra#2846 is the
+#                        worked example.
+#
+# `overseer_dungeon_run.outcome` arrived on 2026-09-02 and is exactly that
+# shape of risk, so the run read has a thinner fallback naming only columns
+# that have always been there.
+_RECAP_RUNS = (
+    "SELECT id, leader_name, map_id, state, started_at, last_progress_at, "
+    "ended_at, ended_reason, outcome FROM overseer_dungeon_run "
+    "ORDER BY started_at DESC LIMIT 200"
+)
+_RECAP_RUNS_OLD = (
+    "SELECT id, leader_name, map_id, state, started_at, last_progress_at, "
+    "ended_at, ended_reason FROM overseer_dungeon_run "
+    "ORDER BY started_at DESC LIMIT 200"
+)
+# The whole equip history, not a window of it. recap.first_equips needs the
+# EARLIEST row for each (character, item) pair, and the earliest row for gear
+# somebody has worn for a fortnight is a fortnight old: narrowing this to the
+# run would reproduce exactly the bug the module exists to fix. It is 355 rows
+# on the live realm for five characters.
+_RECAP_EQUIPS = (
+    "SELECT character_name, kind, subject_id, subject_name, detail, map, zone, "
+    "occurrences, first_seen, last_seen FROM overseer_event "
+    "WHERE kind = 'item_equip' AND character_name IN ({holes})"
+)
+_RECAP_DEATHS = (
+    "SELECT character_name, map, zone, killer_name, killer_type, created_at "
+    "FROM overseer_death WHERE character_name IN ({holes})"
+)
+_RECAP_SNAPSHOT = (
+    "SELECT name, level, map_id, health, max_health, in_combat, updated_at "
+    "FROM overseer_snapshot WHERE name IN ({holes})"
+)
+# The lockout the family is bound to. Every join is on an integer or on
+# characters.name, which is utf8mb4_bin and outranks any collation it meets,
+# so the 1267 trap infra#3173 documents cannot bite here.
+_RECAP_INSTANCE = (
+    "SELECT DISTINCT i.id, i.map, i.completedEncounters FROM instance i "
+    "JOIN character_instance ci ON ci.instance = i.id "
+    "JOIN characters c ON c.guid = ci.guid WHERE c.name IN ({holes})"
+)
+# The bosses, from the core's own encounter table narrowed to the creatures
+# actually spawned on the map. instance_encounters carries no map column (the
+# worldserver reads that from DungeonEncounter.dbc, which this service will
+# never see), and the spawn table is what supplies it.
+# `creditType` 0 is a creature and 1 is a SPELL, and there are 34 of the
+# latter on this realm. Without the filter the join reads a spell id as a
+# creature entry and names the encounter after whatever creature happens to
+# share that number.
+_RECAP_ENCOUNTERS = (
+    "SELECT ie.entry, ie.creditEntry, ct.name "
+    "FROM acore_world.instance_encounters ie "
+    "JOIN acore_world.creature_template ct ON ct.entry = ie.creditEntry "
+    "WHERE ie.creditType = 0 AND ie.creditEntry IN "
+    "(SELECT DISTINCT id FROM acore_world.creature WHERE map = %s)"
+)
+_RECAP_LOOT = (
+    "SELECT clt.Entry, clt.Item, clt.Chance, clt.GroupId, ct.entry AS creature, "
+    "it.name AS item_name, it.Quality AS quality, it.ItemLevel AS item_level, "
+    "it.RequiredLevel AS required_level, it.class, it.subclass, it.displayid, "
+    "it.InventoryType AS inventory_type, it.AllowableClass AS allowable_class "
+    "FROM acore_world.creature_loot_template clt "
+    "JOIN acore_world.creature_template ct ON ct.lootid = clt.Entry "
+    "JOIN acore_world.item_template it ON it.entry = clt.Item "
+    # `Reference = 0` is the same filter the achievements drop query carries,
+    # and for the same reason: a row with a Reference points at
+    # reference_loot_template rather than at an item, so joining it on
+    # `it.entry = clt.Item` can surface something unrelated as a boss drop.
+    # The loot behind those references is not followed, and build_lootboard's
+    # `basis` says so rather than letting the board read as complete.
+    "WHERE clt.Reference = 0 AND ct.entry IN "
+    "(SELECT DISTINCT id FROM acore_world.creature WHERE map = %s) "
+    "AND ct.entry IN "
+    "(SELECT creditEntry FROM acore_world.instance_encounters "
+    "WHERE creditType = 0)"
+)
+_RECAP_CHARS = "SELECT name, level, class FROM characters WHERE name IN ({holes})"
+_RECAP_WORN = (
+    "SELECT c.name, ci.slot, ii.itemEntry AS entry, it.name AS item_name, "
+    "it.Quality AS quality, it.ItemLevel AS item_level, it.class, it.subclass, "
+    "it.InventoryType AS inventory_type, it.displayid FROM characters c "
+    "JOIN character_inventory ci ON ci.guid = c.guid AND ci.bag = 0 "
+    "AND ci.slot < %s JOIN item_instance ii ON ii.guid = ci.item "
+    "LEFT JOIN acore_world.item_template it ON it.entry = ii.itemEntry "
+    "WHERE c.name IN ({holes})"
+)
+_RECAP_ITEMS = (
+    "SELECT entry, name, Quality AS quality, ItemLevel AS item_level, displayid "
+    "FROM acore_world.item_template WHERE entry IN ({holes})"
+)
+
+
+def _wide_guarded(cur, sql: str, params: tuple = (), fallback: str = "",
+                  what: str = "") -> list:
+    """Run `sql`, dropping to `fallback` (then to []) on a degraded schema.
+
+    A THIRD GUARD IN THIS FILE, AND DELIBERATELY NOT ONE OF THE TWO ALREADY
+    HERE. `_guarded` takes a fallback but catches only ProgrammingError, and
+    error 1054 is NOT a ProgrammingError: pymysql has no entry for it in
+    error_map, so raise_mysql_exception falls back to OperationalError. A
+    read guarded by `_guarded` therefore survives a missing table and dies on
+    a missing column, which is half a guard. `_realm_guarded` catches the
+    right base class but takes neither parameters nor a fallback.
+
+    This is the widened form with both, and the note in `_realm_guarded` is
+    why it is a new function rather than an edit to `_guarded`: widening that
+    one changes the behaviour of the banner it belongs to, which is a
+    different change with a different blast radius, and it is not this one.
+
+    Anything that is not 1146 or 1054 still reaches the handler's 503. A guard
+    that swallowed a network blip would render an empty recap and train the
+    alarm away.
+    """
+    for attempt in (sql, fallback):
+        if not attempt:
+            break
+        try:
+            cur.execute(attempt, params)
+            return list(cur.fetchall())
+        except pymysql.err.MySQLError as exc:
+            if not (exc.args and exc.args[0] in (1054, 1146)):
+                raise
+            log.info("recap: %s unavailable (%s) - trying a thinner read",
+                     what, exc.args[0])
+    log.info("recap: %s unavailable; the recap runs without it", what)
+    return []
+
+
+def _fetch_recap(map_id: int | None) -> dict:
+    """Everything the recap and the loot board read, in one connection.
+
+    `map_id` is the ONLY thing a caller may steer, it is an int the handler
+    has already parsed, and it is bound by the driver. Names come from bonds
+    via family.roster() and never from the request, exactly as /api/armory and
+    /api/family refuse a name parameter, so every roster clause is a fixed IN
+    list with no user input in it.
+    """
+    names = family.roster()
+    holes = ", ".join(["%s"] * len(names))
+    conn = _connect()
+    try:
+        with conn.cursor() as cur:
+            runs = _wide_guarded(cur, _RECAP_RUNS, (), _RECAP_RUNS_OLD,
+                                 "overseer_dungeon_run")
+            # S608 on the roster reads below: `holes` is a run of placeholders
+            # sized by len(family.roster()), and every VALUE is still bound by
+            # the driver.
+            equips = _wide_guarded(cur, _RECAP_EQUIPS.format(holes=holes),  # noqa: S608
+                                   tuple(names), "", "overseer_event")
+            deaths = _wide_guarded(cur, _RECAP_DEATHS.format(holes=holes),  # noqa: S608
+                                   tuple(names), "", "overseer_death")
+            snaps = _wide_guarded(cur, _RECAP_SNAPSHOT.format(holes=holes),  # noqa: S608
+                                  tuple(names), "", "overseer_snapshot")
+            instances = _wide_guarded(cur, _RECAP_INSTANCE.format(holes=holes),  # noqa: S608
+                                      tuple(names), "", "instance")
+            chars = _wide_guarded(cur, _RECAP_CHARS.format(holes=holes),  # noqa: S608
+                                  tuple(names), "", "characters")
+            worn = _wide_guarded(cur, _RECAP_WORN.format(holes=holes),  # noqa: S608
+                                 (len(armory.EQUIPPED_SLOTS), *names), "",
+                                 "character_inventory")
+            # TWO MAPS, AND THEY ARE ONLY USUALLY THE SAME ONE. The board is
+            # whichever dungeon is being browsed; the progress bar is the map
+            # the family is actually in. Both decisions are the module's, and
+            # conflating them counted a Wailing Caverns lockout mask against
+            # the Deadmines' encounter list.
+            board = recap.board_map(runs, map_id)
+            here = recap.run_map(runs)
+            board_encounters = _wide_guarded(cur, _RECAP_ENCOUNTERS, (board,),
+                                             "", "instance_encounters")
+            encounters = board_encounters if here in (None, board) else (
+                _wide_guarded(cur, _RECAP_ENCOUNTERS, (here,), "",
+                              "instance_encounters"))
+            loot = _wide_guarded(cur, _RECAP_LOOT, (board,), "",
+                                 "creature_loot_template")
+            # Only the items somebody has actually worn need naming, and which
+            # those are is the module's answer, not a guess here.
+            wanted = recap.wanted_items(equips)
+            items = []
+            if wanted:
+                iholes = ", ".join(["%s"] * len(wanted))
+                items = _wide_guarded(cur, _RECAP_ITEMS.format(holes=iholes),  # noqa: S608
+                                      tuple(wanted), "", "item_template")
+    finally:
+        conn.close()
+    return {"run_rows": runs, "event_rows": equips, "death_rows": deaths,
+            "snapshot_rows": snaps, "instance_rows": instances,
+            "encounter_rows": encounters,
+            "board_encounter_rows": board_encounters, "loot_rows": loot,
+            "char_rows": chars, "equipped_rows": worn,
+            "item_rows": items, "board_map": board}
+
+
 # --- the current-goal banner (infra#3205) -----------------------------------
 #
 # WHY THIS FETCH IS ALL GUARDS. Every table below except `instance` and
@@ -1813,7 +2029,16 @@ class Handler(BaseHTTPRequestHandler):
         into a general character query wearing a friendly name.
         """
         try:
-            payload = armory.build_armory(**_fetch_armory(), book=BOOK, items=ITEMS)
+            fetched = _fetch_armory()
+            # WHERE each worn item was first seen worn, from the same equip
+            # record the Chronicle reads and by the same rule. The adapter
+            # hands over rows; recap decides which row is the first one, what
+            # the place is called and what to say when there is no row at all.
+            equip_rows = fetched.pop("equip_event_rows")
+            payload = armory.build_armory(**fetched, book=BOOK, items=ITEMS)
+            payload["provenance"] = recap.provenance_index(
+                equip_rows, fetched["equipment_rows"], achievements.MAP_NAMES,
+                recap.zone_names(GEO.continents))
             self._send(200, "application/json", json.dumps(payload).encode())
         except Exception:
             # Same contract as every other poll: the tab keeps the grid it has
@@ -1902,6 +2127,55 @@ class Handler(BaseHTTPRequestHandler):
         rows, db_now = fetched
         payload = chat.build_timeline(name, rows, db_now, limit)
         self._send(200, "application/json", json.dumps(payload).encode())
+
+    def _recap(self, query: dict) -> None:
+        """GET /api/recap[?map=N] - what is happening in there right now, and
+        what can drop where.
+
+        `map` is the only parameter, it is a dungeon map id, and it is parsed
+        to an int here and bound by the driver below. Anything unparseable is
+        dropped rather than rejected: the recap of the live run is still the
+        right answer to a request with a broken query string, and a 400 would
+        blank a tab over a typo in a URL somebody pasted.
+        """
+        # ONLY A MAP THIS SITE ALREADY NAMES. `?map=1` is Kalimdor, and both
+        # world reads below would then scan a whole continent's spawn table on
+        # an endpoint that takes no auth and is polled every thirty seconds.
+        # achievements.MAP_NAMES is the list of dungeons this site knows, so
+        # it is the allowlist; anything else falls back to the live run's map
+        # rather than being rejected, because the recap is still the right
+        # answer to a request with a bad query string and a 400 would blank
+        # the tab over a typo in a pasted URL.
+        asked = query.get("map", [None])[0]
+        map_id = int(asked) if asked and asked.isdigit() else None
+        if map_id not in achievements.MAP_NAMES:
+            map_id = None
+        try:
+            fetched = _fetch_recap(map_id)
+            board_map = fetched.pop("board_map")
+            board_encounters = fetched.pop("board_encounter_rows")
+            item_rows = fetched.pop("item_rows")
+            loot_rows = fetched.pop("loot_rows")
+            char_rows = fetched.pop("char_rows")
+            equipped_rows = fetched.pop("equipped_rows")
+            payload = recap.build_recap(
+                roster=family.roster(),
+                items={int(row["entry"]): row for row in item_rows},
+                icons=ITEMS.icons, dungeons=achievements.MAP_NAMES,
+                zones=recap.zone_names(GEO.continents),
+                now=datetime.now(), **fetched)
+            payload["board"] = recap.build_lootboard(
+                board_map, achievements.MAP_NAMES.get(board_map,
+                                                      "map %d" % board_map),
+                board_encounters, loot_rows, char_rows, equipped_rows,
+                ITEMS.icons, family.roster())
+            self._send(200, "application/json", json.dumps(payload).encode())
+        except Exception:
+            # Same contract as every other poll: the tab keeps what it has
+            # drawn and says it may be stale. A blank recap reads as "nothing
+            # is happening", which is the one thing this view exists to answer.
+            log.exception("recap query failed")
+            self._send(503, "application/json", b'{"error": "world unreachable"}')
 
     def _council(self, query: dict) -> None:
         """GET /api/council - the last sitting, what it carried, where next.
@@ -2394,6 +2668,7 @@ class Handler(BaseHTTPRequestHandler):
         "/api/questlog": _questlog,
         "/api/needs": _needs,
         "/api/achievements": _achievements,
+        "/api/recap": _recap,
         "/api/council": _council,
         "/api/eye": _eye,
         "/api/agenda": _agenda,

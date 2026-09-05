@@ -56,6 +56,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 
 from armory import QUALITY_NAMES, UNKNOWN_QUALITY
+from recap import LOOT_CAVEAT, first_equips, run_state
 
 # --- the vocabulary the module writes, and this reads --------------------
 #
@@ -152,6 +153,12 @@ SIGNATURE_QUALITY = 3
 # row handed in, so it stays a first however long the realm runs, and the
 # timeline shows the newest of everything else.
 MAX_CARDS = 200
+
+
+# The same table by map id alone, for callers that want the names and not the
+# boss lists. recap.py takes one of these rather than importing DUNGEONS and
+# reaching into it, so the shape of an entry stays this module's business.
+MAP_NAMES = {map_id: entry["name"] for map_id, entry in DUNGEONS.items()}
 
 
 def dungeon_name(map_id: int) -> str:
@@ -278,8 +285,35 @@ def infer_bosses(map_id: int, loot_entries: set[int], boss_drops: dict,
 
 # --- runs -------------------------------------------------------------------------
 
-def _run_loot(inside: list[dict], items: dict, icons: dict) -> list[dict]:
-    loot = [_loot_line(e, items, icons) for e in inside if e["kind"] == ITEM_EQUIP]
+def _run_loot(inside: list[dict], items: dict, icons: dict,
+              first_worn: dict) -> list[dict]:
+    """The run's loot: gear FIRST worn inside it, not gear worn during it.
+
+    THIS FILTER IS THE FIX FOR A CARD THAT SHIPPED WRONG. `inside` is already
+    narrowed to the run's map and window, and that used to be the whole rule,
+    which made this list "everything the party had on while they were in
+    there". The card for the Wailing Caverns run of 2026-09-05 read LOOT 9 and
+    two of the nine were from that run. recap.py's header has the mechanism
+    and the measurements.
+
+    `first_worn` is recap.first_equips over the WHOLE event history, so a row
+    survives only if it is the earliest the record has ever seen that
+    character in that item. The rule lives over there because the live recap,
+    the Armory's provenance line and this card must not be able to disagree
+    about what counts as loot.
+    """
+    loot = []
+    for event in inside:
+        if event["kind"] != ITEM_EQUIP:
+            continue
+        first = first_worn.get((event["character_name"],
+                                int(event["subject_id"])))
+        # Compared by time rather than by identity: the caller is free to hand
+        # in a filtered copy of the rows, and a rule that quietly depended on
+        # getting the same dict objects back would fail silently if it did.
+        if first is None or first["first_seen"] != event["first_seen"]:
+            continue
+        loot.append(_loot_line(event, items, icons))
     loot.sort(key=lambda line: line["at"])
     return loot
 
@@ -366,10 +400,13 @@ def _gained(loot: list, bosses: dict, levels: list, quests: list) -> bool:
 def _run_state(run: dict) -> str:
     """What the row says it is, and what it must be when the row says nothing.
 
-    A run with an ended_at is over whatever the state column holds; the
-    column is the authority only while the run is open.
+    THE RULE MOVED TO recap.run_state AND THIS DELEGATES. It was written out
+    twice, and the copies disagreed about a row with a NULL state and no
+    ended_at: this file called it active, the recap called it ended. Both are
+    drawn on the Chronicle, so the tab could say "no dungeon run is open right
+    now" directly above a card for that row saying they were still inside.
     """
-    return run.get("state") or ("ended" if run.get("ended_at") else "active")
+    return run_state(run)
 
 
 def _card_moment(run: dict, active_to: datetime | None, start: datetime) -> datetime:
@@ -385,7 +422,7 @@ def _card_moment(run: dict, active_to: datetime | None, start: datetime) -> date
 
 def assemble_run(run: dict, events: list[dict], deaths: list[dict], items: dict,
                  icons: dict, boss_drops: dict, roster: list[str],
-                 now: datetime) -> dict:
+                 now: datetime, first_worn: dict | None = None) -> dict:
     """One dungeon run, with everything that happened inside it.
 
     `events` and `deaths` are the WHOLE tables (or the fetched horizon); the
@@ -400,7 +437,9 @@ def assemble_run(run: dict, events: list[dict], deaths: list[dict], items: dict,
     died = [d for d in deaths
             if in_run(run, d["created_at"], int(d["map"]), now)]
     map_id = int(run["map_id"])
-    loot = _run_loot(inside, items, icons)
+    loot = _run_loot(inside, items, icons,
+                     first_worn if first_worn is not None
+                     else first_equips(events))
     levels = _run_levels(inside)
     quests = _run_quests(inside)
     bosses = infer_bosses(map_id, {line["entry"] for line in loot}, boss_drops,
@@ -432,6 +471,10 @@ def assemble_run(run: dict, events: list[dict], deaths: list[dict], items: dict,
         "cleared": bosses["final"],
         "deaths": _run_deaths(died),
         "loot": loot,
+        # Printed under the loot list by the page. The count in the header and
+        # the rows in the list are now the same rows, and this says what those
+        # rows do and do not prove.
+        "loot_caveat": LOOT_CAVEAT,
         "level_ups": levels,
         "quests": quests,
     }
@@ -892,7 +935,12 @@ def build_achievements(run_rows: list[dict], event_rows: list[dict],
     """
     now = now or datetime.now()
     events = [e for e in event_rows if e["kind"] != "death"]
-    runs = [assemble_run(r, events, death_rows, items, icons, boss_drops, roster, now)
+    # Computed once over the whole history rather than per run: the earliest
+    # equip of a pair is a fact about the record, not about any one visit, and
+    # recomputing it inside assemble_run would be the same answer 200 times.
+    first_worn = first_equips(event_rows)
+    runs = [assemble_run(r, events, death_rows, items, icons, boss_drops, roster,
+                         now, first_worn)
             for r in run_rows]
     # A visit in which nothing happened at all - opened by a heartbeat at the
     # door and closed by the next cold one - is not even an attempt. It is
