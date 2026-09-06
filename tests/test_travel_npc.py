@@ -434,10 +434,23 @@ class TheModuleActuallyReadsTheColumn(unittest.TestCase):
 
 
 class TheTargetIsResolvedWhereTheAnswerIsKnown(unittest.TestCase):
-    def test_the_nearest_spawn_is_chosen_from_the_characters_own_position(self):
+    def test_the_choice_is_made_from_the_characters_own_position(self):
+        """NEAREST IS NO LONGER THE RULE, and that is mod-overseer#250.
+
+        Choosing by distance alone aimed an Alliance family at Zargh, a
+        Horde vendor 15 yards from two level 40 Horde Guards, who would
+        never trade with them. It produced 180 refused sales in an
+        afternoon, the deaths on the way there, and the graveyard loop
+        that followed. The distance is still measured from the character's
+        own position, which is what this test was originally protecting,
+        but it is now one input to ChooseTravelTarget rather than the
+        whole decision.
+        """
         code = _code(_resolve())
         self.assertIn("GetDistance2d", code)
-        self.assertIn("bestDist", code)
+        self.assertIn("ChooseTravelTarget(candidates)", code)
+        self.assertIn("candidate.mayInteract", code)
+        self.assertNotIn("bestDist", code)
 
     def test_only_the_map_the_character_is_standing_on(self):
         """MoveFarTo paths through PathGenerator and there is no navmesh across
@@ -598,10 +611,13 @@ class TheErrandIsBounded(unittest.TestCase):
     def test_a_target_that_does_not_exist_here_releases_rather_than_pins(self):
         code = _code(_drive())
         # The call carries `wantSkill` since infra#2757, which narrows a
-        # trainer role to trainers that can teach the skill being learned.
-        # The behaviour this test is about is unchanged: a target that
-        # resolves to nothing releases the errand instead of pinning it.
-        self.assertIn("!ResolveTravelTarget(bot, target, entry, pos, wantSkill)", code)
+        # trainer role to trainers that can teach the skill being learned,
+        # and `&said` since mod-overseer#250, which lets the resolver name
+        # what it turned down when the only vendor in reach is one this
+        # character cannot trade with. The behaviour this test is about is
+        # unchanged: a target that resolves to nothing releases the errand
+        # instead of pinning it.
+        self.assertIn("!ResolveTravelTarget(bot, target, entry, pos, wantSkill, &said)", code)
 
     def test_the_clear_escapes_the_name(self):
         """The name came out of a table a person edits by hand."""
@@ -804,7 +820,7 @@ class TheResolvedSpawnIsPinnedForTheLifeOfTheErrand(unittest.TestCase):
     def test_a_pinned_errand_does_not_resolve_again(self):
         code = _code(_drive())
         self.assertLess(code.index("state.pinned"),
-                        code.index("!ResolveTravelTarget(bot, target, entry, pos, wantSkill)"))
+                        code.index("!ResolveTravelTarget(bot, target, entry, pos, wantSkill, &said)"))
 
 
 class TheMigrationMatchesWhatTheModuleReads(unittest.TestCase):
