@@ -6523,7 +6523,7 @@ function renderDetail(c, s) {
 // `reading`, already a string, so there is no branch here that could ever
 // turn a null into a zero - which is the one failure this block is arranged
 // around: 0 attack power is a number somebody acts on.
-function renderStats(c, stats) {
+function renderArmoryStats(c, stats) {
   const seen = [];
   for (const s of stats.rows) {
     let r = c.statRows.get(s.key);
@@ -6979,7 +6979,7 @@ function renderArmory(p) {
     // The card under the doll is redrawn from the fresh row, so a poll that
     // arrives while a slot is open updates it instead of going stale.
     showSelection(c);
-    renderStats(c, m.stats);
+    renderArmoryStats(c, m.stats);
     renderSpec(c, m.spec, m.class_colour);
   }
 }
