@@ -25,6 +25,7 @@ import discord
 import pymysql
 
 import achievements
+import armory
 import bag_pressure
 import bag_upgrade
 import bank
@@ -50,6 +51,7 @@ import questbook
 import questshare
 import quests
 import relay
+import towntrip
 import trainjob
 import voice
 from transform import Geometry
@@ -1390,7 +1392,11 @@ def _write_declared_professions() -> None:
 # doing the same errand (see the UPDATE guard below). travel.ROLES is the
 # vocabulary these come from, and mod-overseer's DriveTravel is what reads
 # the column.
-ECONOMY_ERRANDS = ("vendor", "banker")
+# `repair` joined for the town trip: it walks the leader to a repairer,
+# and it is an economy errand for the same reason the other two are - it
+# may be retasked off an idle traveller but must never erase a profession
+# trainer errand somebody is already walking to.
+ECONOMY_ERRANDS = ("vendor", "banker", "repair")
 
 
 def _write_trade_errand(errand) -> None:
@@ -1864,6 +1870,7 @@ class Bridge(discord.Client):
                 self._move_materials_loop,
                 self._vendor_loop,
                 self._bank_loop,
+                self._towntrip_loop,
                 self._restore_lost_lives,
             )
         }
@@ -3262,6 +3269,95 @@ class Bridge(discord.Client):
                 await self._bank_once()
             except Exception:
                 log.exception("economy bank pass failed; retrying next cycle")
+            await asyncio.sleep(cycle)
+
+    async def _towntrip_once(self) -> None:
+        """Repair and restock between two dungeon runs.
+
+        THE EXECUTORS SHIPPED WITHOUT A WRITER. mod-overseer#227 landed
+        `kind='repair'` and `kind='buy'`, both driven through the core's own
+        handlers, and towntrip.plan has been complete and tested since
+        infra#3357 - and nothing has ever called it or written one of those
+        rows. Two working verbs with no producer is the whole of this pass.
+
+        NOT IN THE MIDDLE OF A DUNGEON RUN, the same gate the vendor and bank
+        passes use and for the same reason: a town errand pulls the leader out
+        of the instance and the party spreads.
+
+        NOTHING IS PLANNED UNTIL THEY HAVE ARRIVED, and that falls out of the
+        Town read rather than being sequenced here. `_fetch_town` reads what is
+        within reach of where the leader is STANDING, so a pass that runs while
+        they are still walking sees an empty Town, plans nothing, and writes the
+        travel errand again. The cycle after they arrive is the one that queues
+        rows. That is why this pass needs no state of its own and survives a
+        restart: every step is re-derived from the world.
+        """
+        names = sorted((await asyncio.to_thread(_protected_guids)).values())
+        if not names or await self._mid_run(names):
+            return
+
+        leader = bonds.head_of_family()
+        # THE AIM GOES FIRST, before anything is planned, exactly as the bank
+        # pass writes its banker errand first. A row queued for a counter
+        # nobody is walking to is a refusal waiting to be logged.
+        await asyncio.to_thread(
+            _write_trade_errand,
+            professions.Errand(character=leader, travel_npc="repair"),
+        )
+
+        town = await asyncio.to_thread(_fetch_town, leader)
+        members = towntrip.members_from_rows(
+            await asyncio.to_thread(_fetch_town_worn, names),
+            await asyncio.to_thread(_fetch_town_carried, names),
+            await asyncio.to_thread(_fetch_town_spells, names),
+            await asyncio.to_thread(_fetch_free_slots, names),
+            names,
+        )
+        trip = towntrip.plan(members, town)
+        for note in trip.notes:
+            log.info("towntrip: %s", note)
+        for stopped in trip.blocked:
+            log.warning("towntrip: %s", stopped)
+        if not trip.errands:
+            log.info(
+                "towntrip: nothing to do at this counter (repairs=%s, %d item(s) stocked)",
+                town.repairs, len(town.stocks),
+            )
+            return
+
+        seen = await asyncio.to_thread(_recent_town_keys, GIVE_RETRY_MINUTES)
+        queued = 0
+        for errand in trip.errands:
+            if (errand.member, errand.command) in seen:
+                continue
+            if await asyncio.to_thread(_insert_town_errand, errand):
+                queued += 1
+                log.info("towntrip: %s %s - %s",
+                         errand.member, errand.kind, errand.why)
+        log.info("towntrip: queued %d/%d errand(s), leader=%s",
+                 queued, len(trip.errands), leader)
+
+    async def _towntrip_loop(self) -> None:
+        """Keep the family repaired and fed between runs (mod-overseer#226).
+
+        Own loop and own clock, the same reasoning as _vendor_loop and
+        _bank_loop: a failed pass is logged and retried rather than swallowed,
+        because a maintenance pass that has quietly stopped looks exactly like
+        a family that needs nothing.
+        """
+        await self.wait_until_ready()
+        cycle = float(os.environ.get("TOWNTRIP_CYCLE_SECONDS", "300"))
+        # Third in the queue behind the vendor pass (90s) and the bank pass
+        # (150s), for the reason _bank_loop gives about itself: all three send
+        # the leader to town and all three write `travel_npc`, and the guard in
+        # _write_trade_errand only lets an idle traveller be retasked, so they
+        # must not arrive in the same instant and race for the column.
+        await asyncio.sleep(min(cycle, 210.0))
+        while not self.is_closed():
+            try:
+                await self._towntrip_once()
+            except Exception:
+                log.exception("town trip pass failed; retrying next cycle")
             await asyncio.sleep(cycle)
 
     async def _narrate_events(self) -> None:
@@ -4716,6 +4812,201 @@ def _insert_bank(move, command: str) -> int:
         return cur.lastrowid or 0
 
 
+# How close a counter has to be before this pass will plan against it.
+#
+# THE CORE'S OWN INTERACTION DISTANCE IS 5 YARDS, and DoRepair and DoBuy both
+# fail against anything further, so a plan built from a wider net is a queue of
+# refusals. The box below is per-axis rather than a radius - it is what an index
+# can use - so its corner is about eleven yards, which is the core's five plus
+# the few a bot actually stops short by.
+#
+# THE CONSEQUENCE, NAMED RATHER THAN HIDDEN: a repairer and a food vendor
+# standing further apart than this are not both "in town" as far as this pass is
+# concerned. The leader is aimed at the repairer, so the repair rows land and
+# the purchases come back as a note saying no reachable vendor stocks the item.
+# That is the honest answer for one aim, and a second leg that walks them to a
+# vendor afterwards is the obvious next change rather than something to fake
+# here by widening the net.
+TOWN_COUNTER_YARDS = 8
+
+# Every spawn near the leader that can repair or sell, and what it sells.
+#
+# POSITION COMES FROM overseer_snapshot AND NOT FROM `characters`. The
+# characters row is written on the player-save timer, so its position can be a
+# quarter of an hour stale - long enough to still show the family at the dungeon
+# door after they have walked to town, which would make this read the wrong
+# town's counters. The snapshot is refreshed continuously by the module itself,
+# and a stale one is filtered out rather than trusted.
+_TOWN_COUNTERS_SQL = (
+    "SELECT ct.npcflag AS npcflag, nv.item AS item "
+    "FROM overseer_snapshot s "
+    "JOIN acore_world.creature cr ON cr.map = s.map_id "
+    "AND ABS(cr.position_x - s.pos_x) <= %s AND ABS(cr.position_y - s.pos_y) <= %s "
+    "JOIN acore_world.creature_template ct ON ct.entry = cr.id "
+    "LEFT JOIN acore_world.npc_vendor nv ON nv.entry = cr.id "
+    "WHERE s.name = %s AND s.updated_at > NOW() - INTERVAL 120 SECOND "
+    "AND (ct.npcflag & %s) <> 0"
+)
+
+# Worn items and their wear, plus the three facts about the wearer that come
+# free with the join. LEFT on item_template on purpose: a missing template row
+# means the item cannot be priced, not that the wearer should vanish from the
+# trip. The slot bound is len(armory.EQUIPPED_SLOTS) and never a literal 19.
+_TOWN_WORN_SQL = (
+    "SELECT c.name AS holder, c.class AS klass_id, c.money AS money, "
+    "COALESCE(s.level, c.level) AS level, ii.itemEntry AS entry, "
+    "it.name AS item_name, ii.durability AS durability, "
+    "it.MaxDurability AS max_durability "
+    "FROM characters c "
+    "LEFT JOIN overseer_snapshot s ON s.name = c.name "
+    "AND s.updated_at > NOW() - INTERVAL 60 SECOND "
+    "JOIN character_inventory ci ON ci.guid = c.guid AND ci.bag = 0 AND ci.slot < %s "
+    "JOIN item_instance ii ON ii.guid = ci.item "
+    "LEFT JOIN acore_world.item_template it ON it.entry = ii.itemEntry "
+    "WHERE c.name IN (%s)"
+)
+
+# How much food and drink each of them is carrying. Grouped here rather than
+# counted in Python because a stack is a row and a character can hold several
+# of the same thing; towntrip only wants the total.
+_TOWN_CARRIED_SQL = (
+    "SELECT c.name AS holder, ii.itemEntry AS entry, SUM(ii.count) AS carried "
+    "FROM characters c "
+    "JOIN character_inventory ci ON ci.guid = c.guid "
+    "JOIN item_instance ii ON ii.guid = ci.item "
+    "WHERE c.name IN (%s) AND ii.itemEntry IN (%s) "
+    "AND NOT (ci.bag = 0 AND ci.slot < 19) "
+    "GROUP BY c.name, ii.itemEntry"
+)
+
+# The spellbook, for the conjure check and nothing else. Written on the
+# player-save timer like the position above, so it can be a quarter of an hour
+# behind - and towntrip.py already writes down why that is safe in this
+# direction: a rank nobody has measured yet only means a stack of water bought
+# that was not needed.
+_TOWN_SPELLS_SQL = (
+    "SELECT c.name AS holder, sp.spell AS spell "
+    "FROM characters c JOIN character_spell sp ON sp.guid = c.guid "
+    "WHERE c.name IN (%s)"
+)
+
+
+def _fetch_town(leader: str):
+    """What the counters within reach of the leader can do, as a towntrip.Town.
+
+    An empty answer is the normal state for most of a trip: it is what the world
+    looks like while they are still walking. towntrip.plan turns that into notes
+    rather than errands, which is what keeps the queue clean.
+    """
+    want = towntrip.NPC_FLAG_VENDOR | towntrip.NPC_FLAG_REPAIR
+    with _connect() as conn, conn.cursor() as cur:
+        try:
+            cur.execute(
+                _TOWN_COUNTERS_SQL,
+                (TOWN_COUNTER_YARDS, TOWN_COUNTER_YARDS, leader, want),
+            )
+            rows = [dict(row) for row in cur.fetchall()]
+        except pymysql.err.MySQLError as exc:
+            # 1054 missing column, 1146 missing table. A world image without
+            # overseer_snapshot cannot say where anybody is standing, and the
+            # honest reading of that is "no counter is in reach", which plans
+            # nothing rather than planning against a guess.
+            if exc.args and exc.args[0] in (1054, 1146):
+                log.warning("towntrip: cannot see where the family is standing")
+                return towntrip.Town()
+            raise
+    return towntrip.town_from_rows(rows)
+
+
+def _fetch_town_worn(names: list) -> list:
+    """One row per worn item, with the wearer's class, level and purse."""
+    if not names:
+        return []
+    sql = _TOWN_WORN_SQL % ("%s", ",".join(["%s"] * len(names)))
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(sql, (len(armory.EQUIPPED_SLOTS), *names))
+        rows = [dict(row) for row in cur.fetchall()]
+    # The class arrives as the core's integer and towntrip wants the lowercase
+    # word its MANA_CLASSES set is keyed on. Named here, at the edge, so the
+    # pure module never sees a number it would have to know how to decode.
+    for row in rows:
+        row["klass"] = CLASS_NAMES.get(row.get("klass_id") or 0, "")
+    return rows
+
+
+def _fetch_town_carried(names: list) -> list:
+    """How much food and drink each of them holds, by item entry."""
+    entries = sorted({entry for _, entry, _, _ in towntrip.FOOD}
+                     | {entry for _, entry, _, _ in towntrip.DRINK})
+    if not names or not entries:
+        return []
+    sql = _TOWN_CARRIED_SQL % (",".join(["%s"] * len(names)),
+                               ",".join(["%s"] * len(entries)))
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(sql, (*names, *entries))
+        return [dict(row) for row in cur.fetchall()]
+
+
+def _fetch_town_spells(names: list) -> list:
+    """Known spell ids, for the conjure check and nothing else."""
+    if not names:
+        return []
+    sql = _TOWN_SPELLS_SQL % ",".join(["%s"] * len(names))
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(sql, names)
+        return [dict(row) for row in cur.fetchall()]
+
+
+def _recent_town_keys(minutes: int) -> set:
+    """(character, command) pairs already proposed inside the retry window.
+
+    The town-trip sibling of _recent_bank_keys, and it is what stops a walk that
+    has not finished from filling the queue: a repair whose character is still
+    on the road is refused with `repairer not in range`, and an identical row
+    every cycle would turn one slow journey into a hundred dead commands.
+    """
+    with _connect() as conn, conn.cursor() as cur:
+        try:
+            cur.execute(
+                "SELECT target_name, command FROM overseer_command "
+                "WHERE kind IN ('repair', 'buy') "
+                "AND created_at > NOW() - INTERVAL %s MINUTE",
+                (int(minutes),),
+            )
+        except pymysql.err.MySQLError as exc:
+            # 1054 missing column, 1146 missing table, 1265 a `kind` ENUM with
+            # no 'repair' or 'buy' value. A world with none of that machinery
+            # has been asked for nothing, so nothing is already queued.
+            if exc.args and exc.args[0] in (1054, 1146, 1265):
+                return set()
+            raise
+        return {(row["target_name"], row["command"]) for row in cur.fetchall()}
+
+
+def _insert_town_errand(errand) -> int:
+    """Queue one repair or buy row for the world-side executor."""
+    with _connect() as conn, conn.cursor() as cur:
+        try:
+            cur.execute(
+                "INSERT INTO overseer_command "
+                "(target_name, command, kind, target_arg, source) "
+                "VALUES (%s, %s, %s, '', %s)",
+                (errand.member, errand.command, errand.kind, "towntrip"),
+            )
+        except pymysql.err.MySQLError as exc:
+            if exc.args and exc.args[0] in (1146, 1265):
+                log.warning(
+                    "overseer_command.kind has no %r value - %s cannot be sent "
+                    "to the counter until the worldserver image carrying "
+                    "mod-overseer's repair and buy SQL has shipped "
+                    "(mod-overseer#227)",
+                    errand.kind, errand.member,
+                )
+                return 0
+            raise
+        return cur.lastrowid or 0
+
+
 def _choose_drive_quest(plan) -> int:
     """Which quest the family's traveller should actually be aimed at, or 0.
 
@@ -5383,6 +5674,7 @@ class HeadlessBridge(Bridge):
                 self._sample_family,
                 self._share_quests_loop,
                 self._move_materials_loop,
+                self._towntrip_loop,
                 self._restore_lost_lives,
             ) if coro.__name__ not in self.HEADLESS_SKIP
         ]

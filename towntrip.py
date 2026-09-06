@@ -333,3 +333,149 @@ def plan(members, town: Town) -> Plan:
         notes.extend(said)
 
     return Plan(tuple(errands), tuple(notes), tuple(blocked))
+
+
+# ---------------------------------------------------------------- from rows --
+#
+# THE SAME SEAM bank.members_from_rows AND bank.family_from_skills SIT ON. The
+# bridge holds the SQL and the connection; what a row MEANS is a decision, and a
+# decision belongs on this side where a test can reach it without a database.
+# Everything below takes the rows as the bridge's own queries name them and
+# returns the value objects `plan` above already reads.
+
+# The two npcflag bits this trip cares about, as the core defines them
+# (UnitDefines.h: UNIT_NPC_FLAG_VENDOR 0x80, UNIT_NPC_FLAG_REPAIR 0x1000).
+# Named here rather than in the SQL so the bit test is testable and so a reader
+# does not have to decode a hex literal in a WHERE clause.
+NPC_FLAG_VENDOR = 0x80
+NPC_FLAG_REPAIR = 0x1000
+
+
+def _int(value, default=0):
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def town_from_rows(rows) -> Town:
+    """What the counters within reach of the party can actually do.
+
+    `rows` are the creature spawns near where the family is STANDING, one row
+    per (spawn, item it sells), carrying `npcflag` and `item` as the bridge's
+    query names them. `item` is NULL for a spawn that sells nothing, which is
+    what a repairer with no vendor rows looks like.
+
+    WHY THIS IS READ FROM WHERE THEY STAND AND NOT FROM A LIST OF TOWNS. There
+    is no list. No vendor entry, name or coordinate appears anywhere in this
+    repository and none is introduced here: the family is aimed at a ROLE, the
+    worldserver resolves that role against live spawns on their own map and
+    excludes any they may not interact with (mod-overseer#250), and this
+    function then reads back what is actually around them once they arrive. So
+    the town this trip visits is whichever one they were nearest to, and this
+    side never has to know its name.
+
+    BEFORE THEY ARRIVE THIS IS CORRECTLY EMPTY, and that is the mechanism
+    rather than a shortcoming. An empty Town makes `plan` produce no errands and
+    a note saying why, so a pass that runs while they are still walking writes
+    nothing instead of writing rows the executor would refuse - which is the
+    rule the module docstring above states and the reason a refused row is
+    worse than no row.
+    """
+    repairs = False
+    stocks = set()
+    for row in rows:
+        flags = _int(row.get("npcflag"))
+        if flags & NPC_FLAG_REPAIR:
+            repairs = True
+        entry = _int(row.get("item"))
+        # A vendor's stock only counts when the spawn is actually a vendor. A
+        # repairer that happens to have npc_vendor rows it cannot sell from
+        # would otherwise make `plan` promise a purchase nobody can make.
+        if entry and flags & NPC_FLAG_VENDOR:
+            stocks.add(entry)
+    return Town(repairs=repairs, stocks=frozenset(stocks))
+
+
+def members_from_rows(rows, carried, spells, free_slots, names) -> tuple:
+    """One Member per name, whether or not any row mentions them.
+
+    The four inputs are four queries, kept separate because they are four
+    different scopes and joining them in SQL would multiply rows against each
+    other: `rows` is one row per worn item, `carried` one per (holder, item
+    entry) they are carrying, `spells` one per known spell, `free_slots` one
+    number per holder.
+
+    A NAME WITH NOTHING IS STILL A MEMBER, the same rule bank.members_from_rows
+    states: "we could not see anything of theirs" is an honest reading and it
+    produces a member who plans nothing, where dropping them would silently
+    exclude somebody from every trip.
+
+    A WORN ITEM WITH MaxDurability 0 CANNOT BREAK AND IS NOT BROKEN. Cloth,
+    trinkets and rings all report zero, and `Equipped.fraction` already reads
+    that as 1.0; it is repeated here only so a reader of the SQL does not
+    "fix" the LEFT join into an INNER one and quietly drop every wearer whose
+    item_template row is missing.
+    """
+    wanted = list(dict.fromkeys(names))
+    worn = {name: [] for name in wanted}
+    facts = {name: {} for name in wanted}
+
+    for row in rows:
+        holder = row.get("holder")
+        if holder not in worn:
+            continue
+        facts[holder] = {
+            "klass": str(row.get("klass") or "").strip().lower(),
+            "level": _int(row.get("level")),
+            "money": _int(row.get("money")),
+        }
+        maximum = _int(row.get("max_durability"))
+        if maximum <= 0:
+            continue
+        worn[holder].append(
+            Equipped(
+                _int(row.get("entry")),
+                str(row.get("item_name") or "worn"),
+                _int(row.get("durability")),
+                maximum,
+            )
+        )
+
+    food_entries = {entry for _, entry, _, _ in FOOD}
+    drink_entries = {entry for _, entry, _, _ in DRINK}
+    food = {name: 0 for name in wanted}
+    drink = {name: 0 for name in wanted}
+    for row in carried:
+        holder = row.get("holder")
+        if holder not in food:
+            continue
+        entry, count = _int(row.get("entry")), _int(row.get("carried"))
+        if entry in food_entries:
+            food[holder] += count
+        elif entry in drink_entries:
+            drink[holder] += count
+
+    known = {name: set() for name in wanted}
+    for row in spells:
+        holder = row.get("holder")
+        if holder in known:
+            known[holder].add(_int(row.get("spell")))
+
+    members = []
+    for name in wanted:
+        got = facts[name]
+        members.append(
+            Member(
+                name,
+                got.get("klass", ""),
+                got.get("level", 0),
+                got.get("money", 0),
+                _int(free_slots.get(name)),
+                tuple(worn[name]),
+                food[name],
+                drink[name],
+                frozenset(known[name]),
+            )
+        )
+    return tuple(members)
