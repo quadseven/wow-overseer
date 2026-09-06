@@ -50,16 +50,26 @@ THREE THINGS THIS DELIBERATELY DOES NOT SAY:
    is nothing to read, so there is no code for it: a state that can never
    arrive teaches a viewer to expect a warning that will not come.
 
-HOW IT IS CARRIED. `overseer_command` already has `kind='chat'` and
-`channel='party'`, and mod_overseer.cpp's DoChat broadcasts that to the group
-as a packet it builds itself, so `build_push` emits ready-made rows and nothing
-new is needed server-side. Two properties make party chat survivable for
-machine traffic: the payload is TAB separated, which relay.is_addon_traffic
-already recognises so it never reaches Discord, and the addon filters its own
-lines out of the chat frames so nothing appears on the stream. The better route
-is the same packet sent with LANG_ADDON, which no chat frame renders at all -
-a few lines in DoChat, in quadseven/mod-overseer, and not this change. The
-addon accepts both.
+HOW IT IS CARRIED. `overseer_command` has `kind='chat'` and
+`channel='party_addon'`, and mod_overseer.cpp's DoChat broadcasts that to the
+group as a packet it builds itself, so `build_push` emits ready-made rows and
+nothing new is needed server-side.
+
+WHY `party_addon` AND NOT `party`. The two send the same packet to the same
+five sessions and differ only in the language field, where LANG_ADDON is not a
+language at all but 3.3.5a's addon transport: the client hands a group packet
+carrying it to CHAT_MSG_ADDON and no chat frame is ever asked to draw it. So
+the line reaches the addon and reaches no viewer. `party` is what the family
+says out loud - the council, the trades, a crafting request - and every word of
+that stays visible, which is why this is a second channel and not a change to
+the first (quadseven/mod-overseer#269).
+
+This used to ride `party`, because that was the only route reaching all five
+sessions from one row, and it survived there on two accidents: the payload is
+TAB separated, which relay.is_addon_traffic recognises so it never reached
+Discord, and the addon filtered its own lines out of the chat frames. Both
+still hold and neither is load-bearing now. The addon reads either route, so it
+needed no change for this.
 
 PURE MODULE: rows in, lines out. No MySQL, no client, and no clock of its own
 unless one is not handed to it.
@@ -352,9 +362,15 @@ def build_push(roster_rows: list[dict], run_rows: list[dict],
 def commands(text: str, speaker: str | None) -> list[dict]:
     """The overseer_command rows that put one line in front of five clients.
 
-    Party chat, spoken by the leader, because DoChat builds that packet itself
-    and broadcasts it to the whole group: one row reaches all five sessions and
-    none of them has to be picked as a special case.
+    Sent to the party, spoken by the leader, because DoChat builds that packet
+    itself and broadcasts it to the whole group: one row reaches all five
+    sessions and none of them has to be picked as a special case.
+
+    `party_addon` RATHER THAN `party`, so nothing draws it. Same packet, same
+    recipients, sent with LANG_ADDON in place of LANG_UNIVERSAL. A channel
+    DoChat does not know is refused by name, so a module older than this token
+    marks the row an error rather than delivering machine text as speech
+    (quadseven/mod-overseer#269).
 
     NO SPEAKER, NO ROWS. DoChat answers "not in a group" and marks the row an
     error, so enqueueing anyway would fill the queue with failures rather than
@@ -369,5 +385,5 @@ def commands(text: str, speaker: str | None) -> list[dict]:
         "target_name": speaker,
         "command": text,
         "kind": "chat",
-        "channel": "party",
+        "channel": "party_addon",
     }]

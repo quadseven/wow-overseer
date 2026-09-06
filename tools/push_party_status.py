@@ -9,24 +9,24 @@ rest of the answer, which is the part the operator asked for first, lives in
 WHAT IT DOES. Asks the map server for one already-composed line
 (`GET /api/party-status`, which is `partystatus.build_push`), and enqueues it
 as an `overseer_command` row. mod_overseer.cpp's DoChat drains that queue every
-two seconds and broadcasts a `channel='party'` row to the whole group as a
-packet it builds itself, so ONE row reaches all five sessions.
+two seconds and broadcasts a `channel='party_addon'` row to the whole group as
+a packet it builds itself, so ONE row reaches all five sessions.
 
 IT DECIDES NOTHING. Every word in the line was chosen in partystatus.py and is
 covered by tests/test_partystatus.py. This is a pipe with a schedule.
 
-WHY IT IS RUN BY HAND AND NOT A DAEMON. It puts machine text into party chat.
-The addon filters those lines out of every chat frame, and relay.py's
-control-byte filter already keeps them out of Discord and the thought store -
-but a client WITHOUT the addon shows them, and starting an unattended writer
-into a live realm's command queue is a decision for whoever owns the realm
-rather than a side effect of installing an addon. Run it under whatever
-supervisor that person prefers, or not at all.
+WHY IT IS RUN BY HAND AND NOT A DAEMON. No longer because of what it looks
+like. The line goes out on `party_addon`, which mod_overseer.cpp sends with
+LANG_ADDON, and no chat frame draws that at all - so a client without the addon
+now shows nothing rather than a tab separated payload
+(quadseven/mod-overseer#269). relay.py's control-byte filter still keeps it out
+of Discord and the thought store, unchanged.
 
-The route worth having instead is the same packet sent with LANG_ADDON, which
-no chat frame renders in the first place. That is a few lines in DoChat, in
-quadseven/mod-overseer, and it would leave everything here unchanged: the
-addon already reads both.
+What is left is the half that was never about visibility: pointing an
+unattended writer at a LIVE REALM'S command queue is a decision for whoever
+owns that realm, not a side effect of installing an addon. So this still runs
+only when a person runs it. Nothing schedules it, and nothing here should. Run
+it under whatever supervisor that person prefers, or not at all.
 
 USAGE
     push_party_status.py --dry-run           # show the line, write nothing

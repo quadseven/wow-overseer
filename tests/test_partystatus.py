@@ -293,7 +293,25 @@ class TheCommandRowsAreOnesDoChatAccepts(unittest.TestCase):
         rows = partystatus.commands("OVSR\t1\tGrug\ttask\tquest", "Grug")
         self.assertEqual(rows, [{"target_name": "Grug",
                                  "command": "OVSR\t1\tGrug\ttask\tquest",
-                                 "kind": "chat", "channel": "party"}])
+                                 "kind": "chat", "channel": "party_addon"}])
+
+    def test_the_row_rides_the_addon_channel_so_no_chat_frame_draws_it(self):
+        """`party` is what the family says out loud, and it stays visible on
+        the streams. `party_addon` is the same packet to the same five
+        sessions with LANG_ADDON on it, which the client hands to
+        CHAT_MSG_ADDON and no chat frame renders
+        (quadseven/mod-overseer#269).
+
+        Pinned on its own rather than left to the row shape above, because
+        putting this line back onto `party` would push a tab separated payload
+        into party chat on five streams at once, and the channel is the one
+        field here whose regression every other assertion in this file would
+        still pass through.
+        """
+        line = partystatus.SEP.join([partystatus.PREFIX, partystatus.VERSION,
+                                     "Grug", partystatus.TASK, "quest"])
+        rows = partystatus.commands(line, "Grug")
+        self.assertEqual([row["channel"] for row in rows], ["party_addon"])
 
     def test_no_leader_means_no_rows_rather_than_a_row_that_will_fail(self):
         """DoChat answers "not in a group" and marks the row an error, so
