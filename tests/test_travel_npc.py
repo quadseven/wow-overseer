@@ -766,19 +766,26 @@ class TheErrandStateIsNotOutlivedByItsClock(unittest.TestCase):
         self.assertIn("_state.erase(name)", _code(_clear()))
 
     def test_every_release_path_goes_through_the_one_that_erases(self):
-        """Four releases inside DriveTravel - arrival, no such spawn, the
-        backstop, and stepping through a doorway - and none of them may erase,
-        or forget to erase, on its own.
+        """Six releases inside DriveTravel - arrival, no such spawn, the
+        backstop, stepping through a doorway, and the death-rate breaker's two
+        - and none of them may erase, or forget to erase, on its own.
 
-        The doorway release is the newest and the reason the count is a census
-        rather than a constant: a `trigger:` aim ends by GOING somewhere, not by
-        standing somewhere, so it releases on a different line from arrival even
-        though both are successes. Raise this number only when a genuinely new
-        release exists, and name it here - the assertion below is the one that
-        actually protects the invariant, and it is why the count may move at
-        all."""
+        The doorway release is why the count is a census rather than a
+        constant: a `trigger:` aim ends by GOING somewhere, not by standing
+        somewhere, so it releases on a different line from arrival even though
+        both are successes. Raise this number only when a genuinely new release
+        exists, and name it here - the assertion below is the one that actually
+        protects the invariant, and it is why the count may move at all.
+
+        The two newest are mod-overseer#272's breaker, and they are two rather
+        than one for a reason worth keeping: the first calls an errand off
+        because it has killed its traveller, and the second clears the column
+        AGAIN on a later poll because something outside this module writes it
+        too and has re-armed a called-off errand within five minutes. A single
+        release could not do both, because the second one has to keep happening
+        while the first must not repeat its own log line."""
         code = _code(_drive())
-        self.assertEqual(4, code.count("_travelAims.Release(name)"))
+        self.assertEqual(6, code.count("_travelAims.Release(name)"))
         self.assertNotIn("_state.erase(", code)
         # Stronger than "the drive does not erase": it cannot. The memory is a
         # private member of the book, so the only way out is Release.
