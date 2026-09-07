@@ -1698,6 +1698,31 @@ def _aim_train_traveller(statements) -> None:
                 raise
 
 
+# WHO THE PARTY FOLLOWS WHEN SENIORITY WOULD STRAND IT. Normally None, and
+# then nothing changes: the father leads, as he always has.
+#
+# Set when the resting head is bound on a continent the family is not working
+# on, because REVIVAL USES THE GROUP LEADER'S BIND AND NEVER THE CHARACTER'S
+# OWN (mod_overseer.cpp, RevivalHome reads group->GetLeaderGUID()). Every
+# death therefore gathers all five wherever the leader is bound, so a leader
+# bound across an ocean turns every death into a party split, and no drive in
+# the module can rejoin one.
+#
+# DELIBERATELY NOT bonds.head_of_family(). That answer is the family's, not
+# the logistics', and other things read it as story: speaking_order puts the
+# head first in every digest, and bonds.SUSPICION is asserted to be the head's
+# because the jealousy is the father's. Overriding there would have made the
+# man he is suspicious of the head of his family, and changed who narrates the
+# day. This seam already exists for exactly this shape: an errand borrows the
+# lead here without anybody's standing changing.
+#
+# REMOVE IT once the resting head can be bound on the family's own continent.
+# Today that needs a crossing the module cannot make, because there is no
+# navmesh on a moving transport and nothing can walk a character onto a deck
+# (quadseven/mod-overseer#279).
+HOMEWARD_LEAD: str | None = "Og"
+
+
 def _head_now() -> str:
     """Who leads the family this cycle.
 
@@ -1711,9 +1736,12 @@ def _head_now() -> str:
     flag - so those
     two can never be looking at different answers to the same question. Getting
     that wrong is a family following a character that is about to stop leading,
-    which is a party split in two.
+    which is a party split in two. HOMEWARD_LEAD above outranks seniority and
+    is outranked by both borrowers, because a character actually walking
+    somewhere is a better leader for that moment than one merely bound well.
     """
-    return _train_traveller() or _errand_traveller() or bonds.head_of_family()
+    return (_train_traveller() or _errand_traveller()
+            or HOMEWARD_LEAD or bonds.head_of_family())
 
 
 def _protected_guids() -> dict:
