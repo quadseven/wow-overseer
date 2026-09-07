@@ -604,6 +604,62 @@ def _aimed_names() -> set:
         return {row["name"] for row in cur.fetchall()}
 
 
+def _travelling_names() -> set:
+    """Who is part-way through a travel errand, by name.
+
+    A NARROWER QUESTION THAN _aimed_names ABOVE, and the two are not
+    interchangeable. That one asks who has somewhere to be, and a quest aim
+    counts. This one asks who is ALREADY WALKING somewhere under an errand,
+    which is the window in which the module owns the character's task and this
+    process must not hand it a second one - see goals.life_strategies.
+
+    THE COLUMN IS THE SIGNAL, AND IT IS THE MODULE'S OWN DEFINITION:
+
+        WHAT COUNTS AS TRAVELLING HERE. Any character with a live errand in
+        `travel_npc` that it can actually act on. The dungeon run's BARRIER
+        escort, DriveCatchUp's catch-up walk and an operator's own travel aim
+        are three names for one row in one column, and from this angle they
+        are the same thing.
+
+    That is not merely a convention the callers follow. mod_overseer.cpp opens
+    a stand-down in exactly one place, and it sits inside a loop over
+    `WHERE enabled = 1 AND travel_npc <> ''`, so the module CANNOT have a
+    strategy stood down for a character whose column is empty. Withholding on
+    a non-empty column therefore cannot miss a window in which it does.
+
+    Asked separately from _aimed_names rather than folded into it, because the
+    two mean different things and a single query returning both would invite
+    the next reader to use whichever set was nearer. It is one more indexed
+    read on a five-row table, on a cadence measured in minutes.
+
+    THE COLUMN CAN LEGITIMATELY BE ABSENT, exactly as in _aimed_names, and for
+    the same reason: it arrives with mod-overseer's SQL, applied by the
+    worldserver at startup, and this bridge is a separate deployment with its
+    own restarts. Returning an empty set degrades to the behaviour from before
+    infra#3423 - the task strategy is granted as it always was - which is the
+    right direction, because a realm with no such column has no errands for
+    this to collide with either.
+    """
+    with _connect() as conn, conn.cursor() as cur:
+        try:
+            cur.execute(
+                "SELECT name FROM overseer_roster "
+                "WHERE enabled = 1 AND travel_npc IS NOT NULL AND travel_npc <> ''"
+            )
+        except pymysql.err.OperationalError as exc:
+            # 1054 is ER_BAD_FIELD_ERROR. Matched on the code, not the message
+            # text, which is localised.
+            if exc.args and exc.args[0] == 1054:
+                log.warning(
+                    "overseer_roster has no travel_npc column - nobody counts "
+                    "as travelling, so a character on an errand can still be "
+                    "handed the strategy that pulls it off the errand"
+                )
+                return set()
+            raise
+        return {row["name"] for row in cur.fetchall()}
+
+
 def _give_them_a_life(names: list) -> int:
     """Keep every family member on the strategy that makes them live.
 
@@ -629,14 +685,26 @@ def _give_them_a_life(names: list) -> int:
     # the set change underneath a single roster sweep, so two members could be
     # given contradictory strategies for the same quest.
     aimed = _aimed_names()
+    # WHO IS ALREADY WALKING DECIDES WHO IS LEFT ALONE. Fetched once for the
+    # whole pass, like `head` and `aimed` above and for the same reason: a
+    # character that started an errand halfway through a sweep would otherwise
+    # be told twice, contradictorily, in one pass.
+    travelling = _travelling_names()
     for name in driven:
         # The leader always travels. A follower travels when it has somewhere
         # to be - see goals.life_strategies: an UNAIMED follower given the
         # wander strategy is what scattered them across a thousand yards with
         # the healer in her own fight, and an AIMED one converges instead,
         # because everyone aimed at a quest is walking to the same place.
+        # An errand in flight means the module already owns this character's
+        # task and has stood down everything that would divert it. Granting
+        # the task strategy on top is infra#3423, which the module catches and
+        # undoes within one poll - bounded, but two writers should not both be
+        # answering one question.
         for command in goals.life_strategies(
-            leads=(name == head), aimed=(name in aimed)
+            leads=(name == head),
+            aimed=(name in aimed),
+            travelling=(name in travelling),
         ):
             _insert_command(core.InsertCommand(name, command, "overseer:life"))
     return len(driven)

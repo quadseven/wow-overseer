@@ -377,7 +377,7 @@ def returned_to_ai(previous, current) -> frozenset:
     return frozenset(current) - frozenset(previous)
 
 
-def life_strategies(*, leads: bool, aimed: bool = False) -> list:
+def life_strategies(*, leads: bool, aimed: bool = False, travelling: bool = False) -> list:
     """What keeps this character playing, given whether it leads the party.
 
     ONE character travels and the rest follow. That asymmetry is the whole
@@ -398,8 +398,54 @@ def life_strategies(*, leads: bool, aimed: bool = False) -> list:
     The cost of getting this wrong the other way is the thing Evan actually
     complained about: the healer 600 yards away in her own fight, three fights
     in three sub-zones, and Grug charging three mobs with nobody to heal him.
+
+    `travelling` MEANS SOMEBODY ELSE OWNS THE TASK. A character part-way
+    through an errand already has a job, and the module has stood down
+    everything that would pull it off that job for the duration - see
+    ESCORT_DIVERT_STRATEGIES in mod_overseer.cpp. Handing the task strategy
+    back mid-errand is this function granting a second task, and the two then
+    fight: the module takes it off on its poll, this pass puts it back on
+    the roster cadence, and the character makes no progress in either
+    direction.
+
+    Measured live on infra#3423, and the module catches it itself:
+
+        'Og' had grind put back on its non-combat engine while it was
+        travelling to 'at:1:-705,-2045,66.45' - taken off again. Something
+        is granting strategies to a character that is mid-escort
+
+    "Something" was this function. Twice in three hours.
+
+    THE DAMAGE IS BOUNDED, and saying so is part of the fix being honest.
+    The module re-asserts its stand-down on every travel poll rather than once
+    at the start of the trip, so a second writer costs a few seconds of the
+    wrong strategy rather than the errand. This was first reported as the
+    cause of a dungeon campaign stuck at 0 of 100, and it was not: the module
+    tests that hypothesis on its own correction ladder and prints "nothing had
+    come back on, so this is not what is holding it". That campaign was failing
+    on terrain and on a run that opens with no distance gate
+    (quadseven/mod-overseer#305). This is worth fixing because two writers
+    should not both answer one question, not because it was the outage.
+
+    ONLY THE TASK STRATEGY IS WITHHELD, and that is the whole of the change.
+    `new rpg` and `follow` are how the errand travels at all and the module
+    deliberately never touches either; `flee` is how it survives what finds it
+    on the way. Withholding the whole set instead would be a worse bug than
+    the one it fixes: the module restores ONLY what it stood down, and it
+    never stands down - and never grants - those three. They exist solely
+    because this loop grants them, and ResetStrategies takes them away on
+    every relog. A character that relogged mid-errand would come back with no
+    strategy at all and nobody to give it one, which is infra#3409 restored.
+
+    This is infra#3410 one layer along. That fix made a travel errand count as
+    an aim, so a traveller keeps the strategy that MOVES it. This one stops
+    the same pass also granting the one that FIGHTS it.
     """
     if leads:
+        if travelling:
+            # The errand is the task. Everything else the leader branch hands
+            # out is life support, and stays.
+            return [LIFE_STRATEGY, FLEE_STRATEGY]
         return [LIFE_STRATEGY, strategy_for({"kind": "level"}), FLEE_STRATEGY]
     if aimed:
         # THE AIM HAS TO CARRY THE STRATEGY THAT READS IT. `rpgInfo` is

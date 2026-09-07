@@ -441,6 +441,36 @@ class PartyThatTravelsTest(unittest.TestCase):
     def test_the_leader_travels(self):
         self.assertIn(goals.LIFE_STRATEGY, goals.life_strategies(leads=True))
 
+    def test_a_travelling_leader_is_not_also_put_on_a_task(self):
+        """infra#3423. The leader branch is the ONLY one that ever granted a
+        diverter, so it is the only one this parameter changes. A character
+        part-way through an errand already has a job, and mod-overseer has
+        stood down everything that would pull it off that job for the trip -
+        granting the task strategy on top makes the two writers take turns.
+
+        Pinned here, beside the cases that walk the un-travelled path, so the
+        cluster covers both sides of the branch rather than only the resting
+        default. The full invariant, read against the module's own
+        ESCORT_DIVERT_STRATEGIES rather than a name copied into this repo,
+        lives in test_escort_owns_the_strategy.py.
+        """
+        task = goals.strategy_for({"kind": "level"})
+        self.assertIn(task, goals.life_strategies(leads=True))
+        self.assertNotIn(task, goals.life_strategies(leads=True, travelling=True))
+
+    def test_a_travelling_follower_never_had_the_task_strategy_anyway(self):
+        """The follower branches grant `new rpg`, `follow` and `flee`, none of
+        which an escort stands down, so `travelling` is a no-op for them. Worth
+        pinning rather than assuming: it is why the fix touches one branch, and
+        a reader checking the follower case would otherwise see nothing change
+        and suspect the parameter was not wired up."""
+        for aimed in (True, False):
+            with self.subTest(aimed=aimed):
+                self.assertEqual(
+                    goals.life_strategies(leads=False, aimed=aimed),
+                    goals.life_strategies(leads=False, aimed=aimed, travelling=True),
+                )
+
     def test_a_follower_does_not(self):
         """The whole fix. A follower given the wander strategy outranks its own
         follow every tick and drifts off alone."""
@@ -467,17 +497,26 @@ class PartyThatTravelsTest(unittest.TestCase):
         """AiFactory adds `flee` for nobody, random bot or not. Without it they
         fight to zero every time."""
         for leads in (True, False):
-            with self.subTest(leads=leads):
-                self.assertIn(goals.FLEE_STRATEGY, goals.life_strategies(leads=leads))
+            # Travelling too: an errand takes the TASK away, never the
+            # self-preservation. A traveller that stopped fleeing would be the
+            # withhold-everything mistake, and it would be invisible here if
+            # this loop only ever walked the resting default.
+            for travelling in (True, False):
+                with self.subTest(leads=leads, travelling=travelling):
+                    self.assertIn(
+                        goals.FLEE_STRATEGY,
+                        goals.life_strategies(leads=leads, travelling=travelling),
+                    )
 
     def test_every_command_reaches_an_engine_that_can_act(self):
         """The `co +grind` lesson: a command on the wrong channel is delivered
         cleanly and does nothing."""
         for leads in (True, False):
-            for cmd in goals.life_strategies(leads=leads):
-                verb, _, rest = cmd.partition(" ")
-                self.assertIn(verb, ("nc", "co"), cmd)
-                self.assertTrue(rest.startswith(("+", "-")), cmd)
+            for travelling in (True, False):
+                for cmd in goals.life_strategies(leads=leads, travelling=travelling):
+                    verb, _, rest = cmd.partition(" ")
+                    self.assertIn(verb, ("nc", "co"), cmd)
+                    self.assertTrue(rest.startswith(("+", "-")), cmd)
 
 
 class StrategiesReturnWithTheCharacter(unittest.TestCase):
