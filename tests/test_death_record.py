@@ -274,6 +274,15 @@ class TheMigrationMatchesWhatTheCodeWrites(unittest.TestCase):
         "leader_seen", "leader_map", "leader_pos_x", "leader_pos_y",
         "leader_pos_z", "recovery_rung", "recovery_prev_rung",
         "recovery_seconds",
+        # mod-overseer#281: WHY the fall baseline guard declined to look, as a
+        # bitmask of every input that stood it down, plus how old that reading
+        # is. The guard was proved not to be RUNNING rather than not working:
+        # it polls once a second, so a baseline it had rebased could never be
+        # more than one second of movement from the feet, and these deaths need
+        # 69 or more yards. A mask of 0 means it looked and nothing declined it,
+        # which is the reading that would refute that, and -1 in either column
+        # means NOT SAMPLED rather than zero.
+        "fall_guard_standdown", "fall_guard_seconds",
     )
 
     def test_migration_file_exists(self):
