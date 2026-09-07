@@ -780,7 +780,7 @@ class TheErrandStateIsNotOutlivedByItsClock(unittest.TestCase):
         self.assertIn("_state.erase(name)", _code(_clear()))
 
     def test_every_release_path_goes_through_the_one_that_erases(self):
-        """Six releases inside DriveTravel - arrival, no such spawn, the
+        """Seven releases inside DriveTravel - arrival, no such spawn, the
         backstop, stepping through a doorway, and the death-rate breaker's two
         - and none of them may erase, or forget to erase, on its own.
 
@@ -797,9 +797,17 @@ class TheErrandStateIsNotOutlivedByItsClock(unittest.TestCase):
         AGAIN on a later poll because something outside this module writes it
         too and has re-armed a called-off errand within five minutes. A single
         release could not do both, because the second one has to keep happening
-        while the first must not repeat its own log line."""
+        while the first must not repeat its own log line.
+
+        The seventh is mod-overseer#300, the route gate. It is a release and
+        not a refusal-in-place because a walk this character cannot survive
+        has no shorter version: the destination gate can pick a farther safe
+        candidate, but once every candidate is behind lethal ground there is
+        nothing left to aim at, so the errand ends rather than waits. It is
+        also the one release that can fire before the character has taken a
+        single step."""
         code = _code(_drive())
-        self.assertEqual(6, code.count("_travelAims.Release(name)"))
+        self.assertEqual(7, code.count("_travelAims.Release(name)"))
         self.assertNotIn("_state.erase(", code)
         # Stronger than "the drive does not erase": it cannot. The memory is a
         # private member of the book, so the only way out is Release.
