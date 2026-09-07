@@ -551,7 +551,25 @@ def _bot_held_names(names: list) -> list:
 
 
 def _aimed_names() -> set:
-    """Who currently carries a quest aim, by name.
+    """Who currently has somewhere to be, by name.
+
+    A QUEST AIM IS NOT THE ONLY KIND OF SOMEWHERE. This asked only for
+    `drive_quest` until 2026-09-07, so a character carrying a travel errand
+    and no quest did not count as aimed, and the strategy pass below took
+    `new rpg` straight back off it. The module then could not walk it
+    anywhere and logged that it does not carry `new rpg`, advising the
+    reader to aim the leader instead, which was the character it had just
+    refused. One follower stood motionless for nineteen minutes with its
+    errand still set, until the errand own twenty-minute backstop released
+    it as unreachable, and the party leader was refused the same way.
+
+    The tell was that a sibling with a quest aim walked the identical
+    errand successfully in the same minute. That is this line and nothing
+    else: one had `drive_quest` set and the other did not.
+
+    This function own docstring already named the failure it exists to end,
+    "an aim that never reaches a strategy is the exact silent failure".
+    It ended it for quest aims and not for errands.
 
     Read fresh rather than carried down from _aim_traveller: the aim is
     standing state on the roster row and survives both a bridge restart and a
@@ -570,7 +588,8 @@ def _aimed_names() -> set:
         try:
             cur.execute(
                 "SELECT name FROM overseer_roster "
-                "WHERE enabled = 1 AND drive_quest <> 0"
+                "WHERE enabled = 1 AND (drive_quest <> 0 "
+                "OR (travel_npc IS NOT NULL AND travel_npc <> ''))"
             )
         except pymysql.err.OperationalError as exc:
             # 1054 is ER_BAD_FIELD_ERROR. Matched on the code, not the message
