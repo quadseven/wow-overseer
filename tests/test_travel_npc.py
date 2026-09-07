@@ -504,8 +504,18 @@ class TheEightSecondConsumeDidNotEatTheErrand(unittest.TestCase):
         # down (mod-overseer#121). For a creature aim `samePlace` is simply
         # true and the guard is what it always was.
         self.assertIn("bool const samePlace = entry ||", code)
+        # mod-overseer#293 gave the guard its missing third input. Removing a
+        # strategy does not touch rpgInfo, so a character that had `new rpg`
+        # taken off it by the goal supervisor still READ as walking to exactly
+        # this destination, and the guard continued past the only code that
+        # could hand the walk back. One character stood still for nineteen
+        # minutes that way. So "already walking there" now also asks whether
+        # the character can act on the walk at all: it cannot have one in
+        # flight if it cannot act, whatever its own state says.
+        self.assertIn("atSameDestination = wander->npcEntry == entry && samePlace", code)
         self.assertRegex(
-            code, r"wander->npcEntry == entry && samePlace\s*\)?\s*\n\s*continue;")
+            code,
+            r"WalkAlreadyInFlight\([^;]*?atSameDestination[^;]*?\)\s*\)?\s*\n\s*continue;")
 
     def test_a_lapsed_lease_falls_through_to_a_fresh_aim(self):
         """Case 3. Once the five-minute lease expires the status is no longer
@@ -606,7 +616,11 @@ class TheErrandIsBounded(unittest.TestCase):
         walked nowhere. Same lesson as `since` in PR #2840's review."""
         code = _code(_drive())
         reset = code.index("state.target = target")
-        self.assertIn("state.progress.best = 0.f", code[reset:reset + 600])
+        # The window is generous on purpose: this block gains a line whenever
+        # the errand grows a new piece of per-errand state, and a window sized
+        # to today's block turns every such addition into a failure about
+        # something else. mod-overseer#293 added two and broke it at 600.
+        self.assertIn("state.progress.best = 0.f", code[reset:reset + 1400])
 
     def test_a_target_that_does_not_exist_here_releases_rather_than_pins(self):
         code = _code(_drive())
