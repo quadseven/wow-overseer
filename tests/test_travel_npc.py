@@ -419,11 +419,38 @@ class TheModuleActuallyReadsTheColumn(unittest.TestCase):
         which hands back a terrain-checked step, because a raw point with no
         reachable navmesh polygon is splined to in a straight line and walks
         the character off whatever is in between. So this pins the call and
-        the fact that a place aim is grounded first, not the variable name."""
+        the fact that a place aim is grounded first, not the variable name.
+
+        And it now keeps that promise. It used to say "not the variable
+        name" and then assert the variable name, so mod-overseer#316 broke it
+        by doing exactly what the docstring said was allowed: the second
+        argument became a ROUTE LEG, a nearer waypoint chosen so the greedy
+        step chooser can walk round terrain instead of into it, falling back
+        to the errand's own destination when no route is planned. That is a
+        better second argument, not a violation.
+
+        What must stay true is the invariant, so that is what is asserted:
+        whatever gets walked to is GROUNDED first, and it ORIGINATES from the
+        errand's own destination rather than from somewhere unrelated. A raw
+        point with no reachable navmesh polygon is splined to in a straight
+        line and walks the character off whatever is in between, and a
+        grounded point that came from somewhere else would walk it safely to
+        the wrong place."""
         code = _code(_drive())
         self.assertRegex(code, r"ChangeToWanderNpc\(entry, \w+\)")
-        self.assertIn("GroundedStep(bot, pos, aimAt)", code)
         self.assertIn("ChangeToWanderNpc(entry, aimAt)", code)
+        grounded = re.search(r"GroundedStep\(bot, (\w+), aimAt\)", code)
+        self.assertIsNotNone(
+            grounded, "a place aim must be grounded before it is walked to")
+        walked = grounded.group(1)
+        # No regex here on purpose: the point is that the grounded position is
+        # ASSIGNED FROM the errand destination, and a line carrying all three
+        # of the name, an assignment and `pos` is the whole of that claim.
+        origin = [line for line in code.splitlines()
+                  if walked in line and "=" in line and "pos" in line]
+        self.assertTrue(
+            origin,
+            "what is grounded must originate from the errand destination")
 
     def test_it_does_not_reach_for_setmovefarto(self):
         """SetMoveFarTo only RECORDS a destination for stuck-tracking; the
