@@ -981,7 +981,7 @@
      button under a name, which reads as something broken rather than as
      somebody missing. */
   .aprof.c-gone { opacity:.6; }
-  .aprof.c-gone .abody, .aprof.c-gone .adetail, .aprof.c-gone .aspec,
+  .aprof.c-gone .abody, .aprof.c-gone .ahint, .aprof.c-gone .aspec,
   .aprof.c-gone .aspecbar, .aprof.c-gone .atrees { display:none; }
   /* header: the two glyph chips, the faction banner and the name in its
      class colour, then the one line every armory writes, then the gear
@@ -1084,8 +1084,16 @@
   .aslot.on { box-shadow:0 0 0 2px var(--ground); }
   .aslot.broken.on { box-shadow:0 0 0 2px var(--vermilion), 0 0 0 4px var(--ground); }
   .aslot:focus-visible { outline:2px solid var(--ground); outline-offset:3px; }
+  /* THE STAGE IS AS TALL AS THE GEAR COLUMNS (infra#3456), which it was
+     not: the doll's row is 518px of item cells and the stage stopped at the
+     model, leaving a column of dead space under the character's feet. That
+     space is where the item card goes, so stretching the stage is what lets
+     the card sit on the character without covering it. And overflow:hidden
+     is doing a second job now: it is what guarantees the card cannot reach
+     past the stage, and so cannot reach past the screen. */
   .aportrait { position:relative; display:flex; flex-direction:column; align-items:center;
-               justify-content:center; min-height:300px; border-radius:12px;
+               justify-content:center; align-self:stretch; min-height:300px;
+               border-radius:12px;
                background:radial-gradient(ellipse at 50% 40%, color-mix(in srgb, var(--cc, #445) 45%, transparent) 0%, transparent 65%);
                overflow:hidden; }
   .aportrait .race { width:min(160px, 100%); aspect-ratio:1; border-radius:12px;
@@ -1103,6 +1111,12 @@
   .amodel:active { cursor:grabbing; }
   .aportrait.live .amodel { display:block; }
   .amodel canvas { display:block; }
+  /* THE CHARACTER STANDS AT THE TOP OF THE STAGE, and only once there is a
+     character to stand: a model centred in a stage the height of the gear
+     columns floats in the middle of it with its feet where the card goes.
+     The portrait icon underneath stays centred, because it is a badge and
+     not a figure with feet. */
+  .aportrait.live { justify-content:flex-start; }
   /* THE STAT BLOCK IS LABELLED BY SOURCE. "Attack Power 214" read off the
      world's save and "Attack Power 214" worked out here from base stats and
      gear are different claims, and a block that prints them in one ink
@@ -1126,19 +1140,59 @@
   .alegend .saved .w { color:var(--on-dark); }
   .alegend .derived .w { color:var(--accent-text); }
   .alegend .unavailable .w { color:var(--on-dark-faint); }
-  /* THE ITEM CARD SITS IN THE FLOW, under the doll, rather than floating
-     beside the cell it belongs to. A phone has no hover to lose and no room
-     to put a card "beside" a 46px square, and a panel that is always in the
-     same place is one a reader can look at without hunting. */
-  .adetail { margin-top:.9rem; padding-top:.75rem; border-top:1px solid var(--line);
-             font-size:.88rem; line-height:1.4; overflow-wrap:anywhere;
-             /* A measure, not the card's width. The game draws these lines in
-                a narrow box and two of them are a pair pushed to the ends of
-                it ("One-Hand ... Sword"); across a 700px card that pair stops
-                reading as a pair. */
-             max-width:32rem; }
-  .adetail .hint { color:var(--on-dark-faint); font-family:var(--mono);
-                   font-size:.75rem; }
+  /* THE ITEM CARD RIDES ON THE CHARACTER (infra#3456). It used to sit in
+     the flow under the doll, and the doll is 518px tall: on a phone that put
+     a sword's damage most of a screen below the character holding it, so
+     reading one meant scrolling the model off the top and comparing two
+     meant doing that twice. The operator asked for the card to come to the
+     model instead, and it does.
+
+     WHAT DID NOT COME BACK IS THE TOOLTIP. The first cut of this tab was a
+     hand-positioned one and it needed a hover branch, a pin and four rules
+     about which screen edge it had run off. None of that is here, because
+     the card is not positioned against the CELL: it is a child of the model
+     stage and is placed against the stage's own edges, which CSS does. There
+     is nothing to measure, nothing to redo when the phone turns, and no way
+     for it to leave the screen, because the stage clips it and the stage is
+     inside the page.
+
+     BOTTOM ANCHORED AND CAPPED, because the whole point is that the
+     character stays in view. The stage is as tall as the gear columns and
+     the model stands at the top of it, so the card takes the room under the
+     feet first and only then starts covering the legs. The cap is the
+     smaller of the stage and the viewport, so a phone held sideways gets a
+     card it can see all of; a long item scrolls inside the card rather than
+     growing up over the face. */
+  .acard { position:absolute; left:0; right:0; bottom:0; z-index:2;
+           display:flex; flex-direction:column; max-height:min(60%, 60vh);
+           border-top:1px solid var(--line); border-radius:12px 12px 0 0;
+           /* The flat colour first and the mix second. Without a background
+              this is text on a moving 3D render, which is the one thing on
+              this tab nobody could read, so a browser that does not know
+              color-mix has to get the solid card rather than none. */
+           background:var(--ink);
+           background:color-mix(in srgb, var(--ink) 94%, transparent);
+           box-shadow:0 -10px 24px #00000080; }
+  .acard[hidden] { display:none; }
+  .adetail { overflow-y:auto; padding:.55rem .7rem .65rem;
+             font-size:.88rem; line-height:1.4; overflow-wrap:anywhere; }
+  /* A FULL WIDTH ROW AND NOT A CORNER CROSS. It is 44px because it is pressed
+     with a thumb, and it is the width of the card because a 44px square in
+     the top corner would be sitting on the item's own name. It sits outside
+     the scrolling part, so scrolling a long item never scrolls the way out
+     of it off the bottom. */
+  .aclose { flex:0 0 auto; min-height:44px; padding:0 .9rem; border:0;
+            border-top:1px solid var(--line); background:none;
+            color:var(--on-dark-dim); cursor:pointer; font-family:var(--mono);
+            font-size:.7rem; text-transform:uppercase; letter-spacing:.08em; }
+  .aclose:hover { color:var(--accent-text); }
+  .aclose:focus-visible { outline:2px solid var(--ground); outline-offset:-3px; }
+  /* The sentence that says a cell can be tapped, left in the flow where the
+     card used to be. It is deliberately NOT in the card: a card that is only
+     there once an item is open cannot be where a reader finds out that
+     opening one is possible. */
+  .ahint { margin-top:.9rem; padding-top:.75rem; border-top:1px solid var(--line);
+           color:var(--on-dark-faint); font-family:var(--mono); font-size:.75rem; }
   .adetail .t { display:flex; justify-content:space-between; gap:.6rem; }
   .adetail .nm { font-family:var(--display); font-size:1.05rem; font-weight:600;
                  line-height:1.3; }
@@ -6327,10 +6381,22 @@ function armoryProfile(name) {
   doll.append(left, portrait, right);
   const stats = el("div", "astats");
   body.append(doll, stats);
-  // The item card, in the flow under the doll. It is built once and refilled
-  // like everything else here, so choosing a slot never moves the page under
-  // the thumb that chose it.
+  // THE ITEM CARD, ON THE MODEL STAGE rather than in the flow under the doll.
+  // Built once and refilled like everything else here, so choosing a slot
+  // never moves the page under the thumb that chose it. The card carries an
+  // id because the cells point at it with aria-controls: a button that opens
+  // something has to say what.
+  const card = el("div", "acard");
+  card.id = "acard-" + name;
+  card.hidden = true;
   const detail = el("div", "adetail");
+  const closer = el("button", "aclose", "close");
+  closer.type = "button";
+  card.append(detail, closer);
+  portrait.appendChild(card);
+  // The sentence that says the cells can be tapped stays in the flow, where
+  // the card used to be.
+  const hint = el("div", "ahint");
   const spec = el("div", "aspec");
   const sum = el("span", "sum");
   const budget = el("span", "budget");
@@ -6341,15 +6407,19 @@ function armoryProfile(name) {
   const bar = el("div", "aspecbar");
   const trees = el("div", "atrees");
   const unplaced = el("div", "aunplaced");
-  prof.append(head, body, detail, spec, bar, trees, unplaced);
+  prof.append(head, body, hint, spec, bar, trees, unplaced);
   aprofiles.appendChild(prof);
   const jump = el("a", "", name);
   jump.href = "#" + prof.id;
   ajump.appendChild(jump);
   c = { name, prof, glyphs, faction, nm, role, line, nums, left, portrait, right, stats,
-        detail, spec, sum, budget, unspent, toggle, bar, trees, unplaced,
+        card, detail, hint, spec, sum, budget, unspent, toggle, bar, trees, unplaced,
         cells: new Map(), statRows: new Map(), treeBoxes: new Map(),
         selected: null, open: !!(arm.trees && arm.trees.expanded), specData: null };
+  closer.addEventListener("click", () => {
+    c.selected = null;
+    showSelection(c);
+  });
   toggle.addEventListener("click", () => {
     c.open = !c.open;
     showTrees(c);
@@ -6367,12 +6437,14 @@ function slotCell(c, column, slot) {
   cell = el("button", "aslot");
   cell.type = "button";
   cell.title = slot;
+  cell.setAttribute("aria-controls", c.card.id);
   column.appendChild(cell);
   c.cells.set(slot, cell);
-  // A tap SELECTS, and a second tap on the same cell lets go. There is no
-  // hover branch any more: the card is in the flow, so there is nothing to
-  // keep open and nothing to lose by moving the pointer.
+  // A tap SELECTS, and a second tap on the same cell lets go. There is still
+  // no hover branch: a tap opens the card and a tap closes it, which is the
+  // whole vocabulary the device this tab is read on has.
   cell.addEventListener("click", () => {
+    closeItemCards(c);
     c.selected = c.selected === slot ? null : slot;
     showSelection(c);
   });
@@ -6408,18 +6480,55 @@ function renderSlot(cell, s) {
 // Which cell wears the ring, and what the card underneath says. One place,
 // so a poll that redraws the cells cannot leave the two disagreeing.
 function showSelection(c) {
-  for (const [slot, cell] of c.cells) cell.classList.toggle("on", slot === c.selected);
+  for (const [slot, cell] of c.cells) {
+    cell.classList.toggle("on", slot === c.selected);
+    // The cell is the control that opened the card, so it is the cell that
+    // has to say the card is open. Without this a screen reader is told a
+    // button was pressed and nothing about what appeared.
+    cell.setAttribute("aria-expanded", String(slot === c.selected));
+  }
   const cell = c.selected === null ? null : c.cells.get(c.selected);
   renderDetail(c, cell ? cell.slotData : null);
 }
 
+// ONE CARD AT A TIME, AND THREE WAYS TO PUT IT AWAY. The card sits on the
+// character, so a card left open on each of five profiles is five covered
+// models; and a thing that appears on a tap has to leave on one. Tapping the
+// same cell again is the first way and lives in the cell's own handler,
+// tapping anything that is not a card or a cell is the second, and Escape is
+// the third, for the keyboard that opened it.
+function closeItemCards(keep) {
+  for (const c of arm.profiles.values()) {
+    if (c === keep || c.selected === null) continue;
+    c.selected = null;
+    showSelection(c);
+  }
+}
+
+// pointerdown rather than click, and the listener only READS the event: the
+// drag that dismisses the card is then the same drag that turns the model
+// underneath it, instead of costing a gesture to put the card away first.
+document.addEventListener("pointerdown", (e) => {
+  const t = e.target;
+  if (t instanceof Element && t.closest(".acard, .aslot")) return;
+  closeItemCards(null);
+});
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape") closeItemCards(null);
+});
+
 // --- the item card -------------------------------------------------------
-// IN THE FLOW, UNDER THE DOLL, rather than floating beside the cell. The
-// first cut of this was a hand-positioned tooltip, which needed a hover
-// branch, a pin, an Escape key and four rules about which screen edge it had
-// run off - none of which a phone has any use for, and the phone is the
-// device this tab is actually opened on. A panel that is always in the same
-// place needs none of them.
+// ON THE MODEL STAGE, rather than in the flow under the doll or floating
+// beside the cell. The first cut of this was a hand-positioned tooltip, which
+// needed a hover branch, a pin and four rules about which screen edge it had
+// run off; the second was a block under the doll, which needed none of them
+// and put the item most of a screen away from the character wearing it.
+//
+// The card is a child of the stage and CSS places it against the stage's own
+// edges, so this one is the first two without the cost of either: no hover
+// branch, and not one measured coordinate. What the page decides here is
+// WHICH item is in the card and WHETHER there is one, and nothing about
+// where it lands.
 
 function detailLine(c, cls, text) {
   const d = el("div", cls, text);
@@ -6454,10 +6563,16 @@ function renderProvenance(c, s) {
 
 function renderDetail(c, s) {
   c.detail.textContent = "";
-  if (!s) {
-    detailLine(c, "hint", arm.hint || "");
-    return;
-  }
+  // THE CARD IS ONLY ON THE CHARACTER WHILE THERE IS AN ITEM IN IT. With
+  // nothing chosen it comes off the stage entirely rather than sitting there
+  // empty, because an empty panel over a character is a panel that has to be
+  // read before it can be ignored.
+  c.card.hidden = !s;
+  // Written every time and never cleared: the hint is a fixed line in the
+  // flow, and a line that came and went as the card opened would move the
+  // rest of the profile under the thumb that opened it.
+  c.hint.textContent = arm.hint || "";
+  if (!s) return;
   if (s.empty) {
     // Both kinds of empty say their own word and their own sentence, and
     // neither is written here: which of the two this is, and what each one
@@ -6882,6 +6997,10 @@ function renderPortrait(c, m) {
   const pane = c.portrait.querySelector(".amodel");
   c.portrait.textContent = "";
   if (pane) c.portrait.appendChild(pane);
+  // And so does the item card, for the same reason: it is built once and
+  // refilled, so a portrait redrawn around it must put it back rather than
+  // leave the profile with a card no cell can open.
+  c.portrait.appendChild(c.card);
   c.portrait.style.setProperty("--cc", m.class_colour);
   const fallback = () => {
     if (!c.portrait.querySelector(".sil")) c.portrait.prepend(silhouette(m.class_colour));

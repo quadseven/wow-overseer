@@ -264,18 +264,122 @@ class TheArmoryTab(unittest.TestCase):
         self.assertIn("m.portrait.race_icon", self.tab)
         self.assertIn("m.portrait.class_icon", self.tab)
 
-    def test_the_item_card_is_in_the_flow_and_not_a_floating_tooltip(self):
-        """A phone has no hover to lose and no room beside a 46px square. The
-        card that replaced the tooltip is a block under the doll, which is
-        why none of the tooltip's machinery survives: no hover branch, no
-        pin, no Escape, and above all no hand-computed position that could
-        put the card off the edge of a screen."""
+    def test_the_item_card_rides_on_the_model_and_not_in_the_flow(self):
+        """It used to be a block under the doll, and the doll is 518px tall:
+        on a phone that put a sword's damage most of a screen below the
+        character holding it, and comparing two pieces meant scrolling twice.
+        It is on the model stage now (infra#3456).
+
+        NONE OF THE TOOLTIP'S MACHINERY CAME BACK WITH IT, which is what made
+        the block under the doll worth having in the first place. The card is
+        not positioned against the CELL: it is a child of the stage and CSS
+        places it against the stage's own edges, so there is still no hover
+        branch, no pin, and not one measured coordinate."""
+        self.assertIn('const card = el("div", "acard");', self.tab)
         self.assertIn('const detail = el("div", "adetail");', self.tab)
+        self.assertIn("portrait.appendChild(card);", self.tab)
         self.assertIn("function renderDetail(c, s)", self.tab)
+        self.assertIn(".acard { position:absolute; left:0; right:0; bottom:0;",
+                      self.acss)
         for gone in ("pointerenter", "arm.pinned", "getBoundingClientRect",
                      "window.innerWidth", "position:fixed"):
             self.assertNotIn(gone, self.ajs, gone + " is tooltip machinery")
         self.assertNotIn("#atip", self.page)
+
+    def test_the_card_cannot_leave_the_stage_or_the_screen(self):
+        """The one thing a hand-positioned tooltip can always get wrong, and
+        the reason this one is not positioned by hand. The stage clips its
+        children and the stage is inside the page, so the card is inside the
+        page; and the cap is the smaller of the stage and the viewport, so a
+        phone held sideways gets a card it can see all of."""
+        rule = self.acss[self.acss.index("  .aportrait { position:relative;"):]
+        rule = rule[:rule.index("}") + 1]
+        self.assertIn("overflow:hidden", rule,
+                      "the stage must clip the card it holds")
+        self.assertIn("max-height:min(60%, 60vh);", self.acss)
+
+    def test_the_character_stays_visible_under_the_card(self):
+        """A card that covered the model would have answered the request by
+        deleting the thing the request was about. The stage is as tall as the
+        gear columns and the model stands at the top of it, so the card takes
+        the empty room under the feet before it takes any of the character."""
+        self.assertIn("align-self:stretch;", self.acss)
+        self.assertIn(".aportrait.live { justify-content:flex-start; }", self.acss)
+
+    def test_the_card_goes_away_every_way_a_tap_can_ask(self):
+        """It appears on a tap, so it has to leave on one. The same cell
+        again is the first way, anything that is not a card or a cell is the
+        second, and Escape is the third for the keyboard that opened it."""
+        self.assertIn("function closeItemCards(keep)", self.ajs)
+        self.assertIn("closeItemCards(c);", self.ajs)
+        self.assertIn('if (t instanceof Element && t.closest(".acard, .aslot")) return;',
+                      self.ajs)
+        self.assertIn('if (e.key === "Escape") closeItemCards(null);', self.ajs)
+
+    def test_dismissing_the_card_does_not_cost_the_drag_that_turns_the_model(self):
+        """pointerdown, and the listener only reads the event. Swallowing it
+        would make putting the card away cost the gesture that was going to
+        turn the character underneath it."""
+        block = self.ajs[self.ajs.index("function closeItemCards"):]
+        block = block[:block.index("// --- the item card")]
+        self.assertIn('document.addEventListener("pointerdown"', block)
+        for swallowed in ("preventDefault", "stopPropagation"):
+            self.assertNotIn(swallowed, block, swallowed + " eats the drag")
+
+    def test_the_way_out_of_the_card_is_thumb_sized(self):
+        """44px, the floor every control on this tab clears, and the width of
+        the card rather than a corner cross that would be sitting on top of
+        the item's own name."""
+        self.assertIn(".aclose { flex:0 0 auto; min-height:44px;", self.acss)
+        self.assertIn('const closer = el("button", "aclose", "close");', self.tab)
+        self.assertIn('closer.type = "button";', self.tab)
+
+    def test_only_one_card_is_open_across_the_five_profiles(self):
+        """Five open cards is five covered models, and on a phone the reader
+        can only see one of them to put it away."""
+        self.assertIn("if (c === keep || c.selected === null) continue;", self.ajs)
+
+    def test_the_cell_says_the_card_is_open_and_says_which_one(self):
+        """The cell is the control that opened it. Without this a screen
+        reader is told a button was pressed and nothing about what arrived."""
+        self.assertIn('cell.setAttribute("aria-expanded", String(slot === c.selected));',
+                      self.tab)
+        self.assertIn('cell.setAttribute("aria-controls", c.card.id);', self.tab)
+        self.assertIn('card.id = "acard-" + name;', self.tab)
+
+    def test_the_card_comes_off_the_character_when_nothing_is_chosen(self):
+        """An empty panel sitting on a character is a panel that has to be
+        read before it can be ignored."""
+        self.assertIn("c.card.hidden = !s;", self.tab)
+        self.assertIn(".acard[hidden] { display:none; }", self.acss)
+
+    def test_the_hint_stays_in_the_flow_and_never_moves(self):
+        """The card is only there once an item is open, so it cannot be where
+        a reader finds out that opening one is possible. And it is written
+        every time rather than cleared: a line that came and went with the
+        card would move the rest of the profile under the thumb."""
+        self.assertIn('const hint = el("div", "ahint");', self.tab)
+        self.assertIn('c.hint.textContent = arm.hint || "";', self.tab)
+        self.assertIn("prof.append(head, body, hint, spec, bar, trees, unplaced);",
+                      self.tab)
+
+    def test_the_stage_puts_the_card_back_when_it_redraws(self):
+        """renderPortrait empties the stage and rebuilds it. The model pane
+        has always been carried across; the card has to be as well, or a
+        profile is left with a card no cell can open."""
+        block = self.ajs[self.ajs.index("function renderPortrait"):]
+        block = block[:block.index("function renderGlyphs")]
+        self.assertIn("c.portrait.appendChild(c.card);", block)
+
+    def test_the_card_is_readable_over_a_moving_render(self):
+        """It sits on a 3D canvas, so without a background it is text on a
+        moving picture. The flat colour is declared first, because a browser
+        that does not know color-mix has to get the solid card rather than
+        none at all."""
+        rules = self.acss[self.acss.index(".acard {"):]
+        rules = rules[:rules.index(".acard[hidden]")]
+        self.assertLess(rules.index("background:var(--ink);"),
+                        rules.index("background:color-mix"))
 
     def test_choosing_a_slot_rings_it_and_choosing_again_lets_go(self):
         """There is no hover here, so selection is the only way in and it has
@@ -395,10 +499,10 @@ class TheArmoryTab(unittest.TestCase):
 
     def test_a_card_with_no_character_behind_it_shows_no_empty_controls(self):
         """Every part of a profile is built once and refilled, so a member
-        with no saved row leaves a doll with no cells, an item card with no
-        hint, and an unlabelled 44px button - which reads as broken software
-        rather than as a missing character."""
-        self.assertIn(".aprof.c-gone .abody, .aprof.c-gone .adetail, "
+        with no saved row leaves a doll with no cells, a hint under it
+        pointing at them, and an unlabelled 44px button - which reads as
+        broken software rather than as a missing character."""
+        self.assertIn(".aprof.c-gone .abody, .aprof.c-gone .ahint, "
                       ".aprof.c-gone .aspec,", self.acss)
         self.assertIn(".aprof.c-gone .aspecbar, .aprof.c-gone .atrees "
                       "{ display:none; }", self.acss)
