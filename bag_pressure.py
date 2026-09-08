@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from typing import Iterable
 
 import disposition
+import gear
 
 # The two item classes that are worn: weapons and armour. A bag is class 1 and
 # is deliberately not here, because an empty bag is still slots.
@@ -26,6 +27,25 @@ _BONDING = {
 _INSTANCE_SOULBOUND = 0x1
 
 
+def owner_keeps(name: str, keep_names) -> bool:
+    """Has the owner marked this item by name as never-dispose (infra#3449)?
+
+    A LIST OF NAMES, NOT OF GUIDS, and deliberately. The owner types this,
+    and a guid is a number that changes every time an item is re-looted while
+    "Dervish Buckler" is the thing he means. Matched case-insensitively on the
+    whole name for the same reason - "dervish buckler" is the same mark.
+
+    The list is passed in rather than read from the environment here, because
+    this module is pure and the seam is worth more than the convenience: a
+    test can hand it a mark, and bridge.py can hand it the deployment's.
+    """
+    if not keep_names:
+        return False
+    return str(name).strip().casefold() in {
+        str(k).strip().casefold() for k in keep_names if str(k).strip()
+    }
+
+
 @dataclass(frozen=True)
 class ItemForSale:
     quality: int
@@ -44,15 +64,22 @@ class SellCandidate:
     item: ItemForSale
 
 
-def vendor_candidates(rows: Iterable[dict]) -> tuple[SellCandidate, ...]:
+def vendor_candidates(rows: Iterable[dict], keep_names=()
+                     ) -> tuple[SellCandidate, ...]:
     """Select only explicitly classified, safe carried vendor goods.
 
     The adapter supplies flags from world data. Missing flags are dangerous
     and therefore become False only for positive facts such as ``quest_item``;
     unknown identity, price, or count keeps the row out of the action queue.
+
+    `keep_names` is the owner's own never-dispose mark and is checked on this
+    path as well as the gear path, because a mark the owner has to remember to
+    put on the right one of two lists is not a protection.
     """
     out = []
     for row in rows:
+        if owner_keeps(row.get("name", ""), keep_names):
+            continue
         try:
             item = ItemForSale(
                 quality=int(row["quality"]),
@@ -128,8 +155,8 @@ def item_binding(row) -> str:
     return _BONDING.get(int(row.get("bonding", -1) or 0), "")
 
 
-def gear_candidates(rows: Iterable[dict], family, available=None
-                    ) -> tuple[SellCandidate, ...]:
+def gear_candidates(rows: Iterable[dict], family, available=None, fits=None,
+                    keep_names=()) -> tuple[SellCandidate, ...]:
     """Carried equipment whose only honest route is a vendor (infra#3330).
 
     `disposition.decide` makes every judgement; this is the adapter that turns
@@ -138,16 +165,29 @@ def gear_candidates(rows: Iterable[dict], family, available=None
     thing the caller can write today; a KEEP, or an AUCTION or BANK verdict
     withheld for want of an executor, produces nothing and the item stays put.
 
-    THE SIBLING-UPGRADE QUESTION IS NOT ANSWERED HERE and must not be. Whether
-    a carried green would be an upgrade for somebody else is mod-overseer#189's
-    job; until it exists, `disposition` keeps every tradable piece and only
-    soulbound gear the wearer has outgrown by the `outgrown` margin is offered
-    to a vendor. Nobody can trade, list or wear those, so no route loses out.
+    THE SIBLING-UPGRADE QUESTION IS STILL NOT ANSWERED HERE, and still must
+    not be - but it is now ANSWERABLE, and `fits` is where the answer arrives
+    (infra#3449). It maps item guid to one of disposition's FIT_* values, as
+    `gear.claims` computed them from the same class- and role-aware opinion
+    that decides hand-offs. One opinion, consulted twice, rather than a second
+    one grown next to it.
+
+    `fits=None` means nobody asked, every row is FIT_UNASKED, and this
+    function behaves exactly as it did before the gate existed. That default
+    is the fail-closed one: on a world image where the gear facts cannot be
+    read, the pass keeps everything instead of falling back to a level proxy
+    that sells the soulbound upgrades their holders should be wearing.
+
+    `keep_names` is the owner's never-dispose mark, checked before anything
+    else and before any row is even parsed.
     """
     if available is None:
         available = disposition.EXECUTABLE_TODAY
+    fits = fits or {}
     out = []
     for row in rows:
+        if owner_keeps(row.get("name", ""), keep_names):
+            continue
         try:
             binding = item_binding(row)
             if not binding:
@@ -171,8 +211,12 @@ def gear_candidates(rows: Iterable[dict], family, available=None
             continue
         if guid <= 0 or count <= 0 or not holder:
             continue
-        verdict = disposition.decide(item, family, character_level=level,
-                                     available=available)
+        verdict = disposition.decide(
+            item, family, character_level=level, available=available,
+            # An item the gate never reached is UNASKED, not "nobody wants
+            # it": the two answers differ by exactly one irreversible sale.
+            family_fit=fits.get(guid, disposition.FIT_UNASKED),
+        )
         if verdict.route != disposition.VENDOR:
             continue
         out.append(SellCandidate(
@@ -183,3 +227,39 @@ def gear_candidates(rows: Iterable[dict], family, available=None
             item=ItemForSale(quality=item.quality, sell_price=item.sell_price),
         ))
     return tuple(out)
+
+
+# ---------------------------------------------------------------------------
+# THE FAMILY-FIT GATE, TRANSLATED (infra#3449)
+#
+# gear.py answers in names because that is what a hand-off needs: WHO should
+# get it. disposition asks a coarser question - is disposal off the table -
+# and answers in FIT_* values. This is the whole of the translation between
+# them, and it lives here because bag_pressure is already the adapter between
+# world rows and disposition, and because gear.py is deliberately
+# dependency-free and must not learn about disposition to do it.
+
+
+def family_fits(gear_rows, equipped_rows, names) -> dict:
+    """item guid -> disposition.FIT_*, from the one gear opinion.
+
+    A guid missing from the result is FIT_UNASKED at the point of use, which
+    keeps the item. That is the right answer for every way this can come back
+    short - no equipped rows on an older world image, a row gear.py could not
+    describe, a holder nobody named - and it is why this returns only what it
+    positively decided rather than a value for every row it was handed.
+    """
+    characters = gear.characters_from_rows(equipped_rows, names)
+    holdings = gear.holdings_from_rows(gear_rows)
+    holder_of = {int(h.guid): h.holder for h in holdings}
+    fits = {}
+    for guid, who in gear.claims(holdings, characters).items():
+        if who == gear.UNJUDGEABLE:
+            fits[guid] = disposition.FIT_UNJUDGEABLE
+        elif who == gear.NOBODY:
+            fits[guid] = disposition.FIT_NOBODY
+        elif who == holder_of.get(guid):
+            fits[guid] = disposition.FIT_HOLDER
+        else:
+            fits[guid] = disposition.FIT_SIBLING
+    return fits

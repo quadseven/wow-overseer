@@ -3278,10 +3278,20 @@ class Bridge(discord.Client):
             return
         rows = await asyncio.to_thread(_fetch_vendor_items, names)
         gear_rows = await asyncio.to_thread(_fetch_surplus_gear, names)
-        candidates = bag_pressure.vendor_candidates(rows) + (
+        worn = await asyncio.to_thread(_fetch_family_equipped, names)
+        # THE SAME OPINION THAT DECIDES HAND-OFFS DECIDES WHAT MAY BE SOLD.
+        # gear.py judges who would wear a carried piece; only the answer
+        # "nobody, and we asked all five" lets it reach a vendor. An empty
+        # `worn` (older world image, missing columns) yields no fits at all,
+        # every piece is UNASKED, and the gear half of this pass offers
+        # nothing - which is the safe way to not know.
+        fits = bag_pressure.family_fits(gear_rows, worn, names)
+        candidates = bag_pressure.vendor_candidates(
+            rows, keep_names=OWNER_KEEPS,
+        ) + (
             bag_pressure.gear_candidates(
                 gear_rows, disposition.Family(vendor_reachable=True),
-                available=SELL_ROUTES,
+                available=SELL_ROUTES, fits=fits, keep_names=OWNER_KEEPS,
             )
         )
         if not candidates:
@@ -4529,6 +4539,16 @@ SELL_MEMORY_HOURS = int(os.environ.get("SELL_MEMORY_HOURS", "24"))
 # bank pass starts writing rows (infra#3329).
 SELL_ROUTES = disposition.EXECUTABLE_TODAY
 
+# Items the owner has marked as never-dispose, by name, comma separated.
+# Empty by default: this is a hand brake the owner pulls, not a policy the
+# process invents. Checked on both halves of the vendor pass, before any
+# other rule, so a marked item cannot be reached by any route that ends in a
+# merchant.
+OWNER_KEEPS = tuple(
+    part.strip() for part in os.environ.get("OWNER_KEEPS", "").split(",")
+    if part.strip()
+)
+
 
 def _give_attempts(hours: int) -> list:
     """Every give this family has tried lately, and how the world answered.
@@ -4584,10 +4604,13 @@ _VENDOR_ITEMS_SQL = (
 # bag-and-backpack scope as _VENDOR_ITEMS_SQL, so nothing worn is offered.
 _SURPLUS_GEAR_SQL = (
     "SELECT c.name AS holder, c.level AS level, ii.guid AS item_guid, "
+    "ii.itemEntry AS entry, "
     "ii.count AS count, ii.flags AS instance_flags, it.name AS name, "
     "it.Quality AS quality, it.SellPrice AS sell_price, "
     "it.RequiredLevel AS required_level, it.bonding AS bonding, "
-    "it.class AS item_class "
+    "it.class AS item_class, it.ItemLevel AS item_level, "
+    "it.AllowableClass AS allowable_class, "
+    "it.InventoryType AS inventory_type "
     "FROM character_inventory ci "
     "JOIN characters c ON c.guid = ci.guid "
     "JOIN item_instance ii ON ii.guid = ci.item "
@@ -4613,6 +4636,48 @@ def _fetch_surplus_gear(names: list) -> list:
             # tradable one, and guessing is how value gets vendored away.
             if exc.args and exc.args[0] in (1054, 1146):
                 log.warning("surplus gear facts unavailable on this world image")
+                return []
+            raise
+        return [dict(row) for row in cur.fetchall()]
+
+
+# What each of the five is WEARING, which is the half of the family-fit gate
+# the carried-gear query cannot see (infra#3449). LEFT JOINed from
+# `characters` on purpose: a character wearing nothing must still come back
+# with a name, a class and a level, because gear.characters_from_rows leaving
+# them out means every piece they carry answers UNJUDGEABLE and is kept.
+#
+# bag 0 and slot < 19 is the worn range, the exact complement of the range
+# _SURPLUS_GEAR_SQL selects, so no item can appear in both.
+_FAMILY_EQUIPPED_SQL = (
+    "SELECT c.name AS name, c.class AS class_id, c.level AS level, "
+    "it.InventoryType AS inventory_type, it.ItemLevel AS item_level "
+    "FROM characters c "
+    "LEFT JOIN character_inventory ci ON ci.guid = c.guid "
+    "AND ci.bag = 0 AND ci.slot < 19 "
+    "LEFT JOIN item_instance ii ON ii.guid = ci.item "
+    "LEFT JOIN acore_world.item_template it ON it.entry = ii.itemEntry "
+    "WHERE c.name IN (%s)"
+)
+
+
+def _fetch_family_equipped(names: list) -> list:
+    """Read what the family is wearing; gear.py decides what it means.
+
+    Same 1054/1146 swallow as _fetch_surplus_gear, and the same consequence
+    stated plainly: no rows means no CharacterStates, which means every
+    carried piece is UNJUDGEABLE and the vendor pass offers nothing. Refusing
+    to sell is the correct answer to not knowing what anybody is wearing.
+    """
+    if not names:
+        return []
+    sql = _FAMILY_EQUIPPED_SQL % ",".join(["%s"] * len(names))
+    with _connect() as conn, conn.cursor() as cur:
+        try:
+            cur.execute(sql, names)
+        except pymysql.err.MySQLError as exc:
+            if exc.args and exc.args[0] in (1054, 1146):
+                log.warning("equipped facts unavailable on this world image")
                 return []
             raise
         return [dict(row) for row in cur.fetchall()]

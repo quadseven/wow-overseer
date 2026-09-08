@@ -64,21 +64,71 @@ BANK = "bank"
 # that only wants the theoretical answer still gets it.
 ALL_ROUTES = frozenset({KEEP, VENDOR, AUCTION, DISENCHANT, GIVE, BANK})
 
-# The routes that can actually happen, measured 2026-09-05 (infra#3330).
+# The routes that can actually happen, re-measured 2026-09-08 (infra#3449).
 #
 # REACHABILITY AND EXECUTABILITY ARE DIFFERENT FACTS, and conflating them is
 # why this module has never been safe to wire. `Family.auction_reachable` asks
 # whether this character could walk to an auctioneer today; `available` asks
 # whether anything in this system can carry the verdict out at all. A route
-# needs BOTH, and only the second is a fact about the deployment: VENDOR and
-# GIVE ship and have passes writing their rows, BANK has an executor but no
-# writer (infra#3329), AUCTION's executor is a draft (mod-overseer#208), and
-# DISENCHANT has no executor or command kind at all. `overseer_command` has
-# never held a single kind='auction' or kind='bank' row.
+# needs BOTH, and only the second is a fact about the deployment.
+#
+# WHAT CHANGED SINCE THE 2026-09-05 NOTE THIS REPLACES, all of it verified
+# against the checked-out module and the live realm rather than remembered:
+#
+#   VENDOR      ships, and has written 13,919 rows.
+#   GIVE        ships, and has written 137 rows.
+#   BANK        NOW HAS A WRITER. The old note here said it did not; it was
+#               right when written and has been wrong since bridge._bank_once
+#               landed, and the realm holds 42 kind='bank' rows. BANK stays
+#               out of this set anyway, because bank.py reaches its own
+#               verdicts against ALL_ROUTES and does not read this one.
+#   AUCTION     the executor is NOT a draft. mod-overseer#208 merged as
+#               DoAuction (mod_overseer.cpp:24389): it builds a real
+#               CMSG_AUCTION_SELL_ITEM, calls HandleAuctionSellItem, and
+#               refuses to report success unless it can read the listing back
+#               out of the house. It stays out of this set for two other
+#               reasons, both facts about THIS process: nothing here writes a
+#               kind='auction' row, and ECONOMY_ERRANDS is ("vendor",
+#               "banker", "repair"), so no pass can put a character within the
+#               5.5 yards of an auctioneer that DoAuction requires.
+#   MAIL        same shape: mod-overseer#219 merged as DoMail, no writer here,
+#               and nothing in this repository knows where a mailbox is.
+#   DISENCHANT  no executor, and `overseer_command.kind` is an ENUM of 18
+#               values that does not contain 'disenchant', so such a row
+#               cannot even be inserted. Og, the family enchanter, is skill
+#               1 of 75, which would cover 38 of the 155 carried greens.
 #
 # Turning a route on is adding its name here, which is the point of a set
 # rather than five more booleans on Family.
 EXECUTABLE_TODAY = frozenset({KEEP, VENDOR, GIVE})
+
+
+# WHAT THE FAMILY-FIT GATE ANSWERED ABOUT ONE ITEM (infra#3449).
+#
+# `decide` used to hold every tradable green forever, on the stated grounds
+# that it might be somebody's upgrade and that vendoring it "would throw away
+# the difference". Both halves of that were honest while unmeasured, and both
+# have now been measured, which is what makes it safe to let one go:
+#
+#   THE FIRST HALF IS ANSWERED. gear.claimant asks the holder and all four
+#   siblings whether they would wear it. UNASKED is still the default and
+#   still keeps everything, so nothing changes for a caller that has not put
+#   the question.
+#
+#   THE SECOND HALF IS SMALLER THAN IT LOOKED. On this realm, on 2026-09-08,
+#   the auction house's own listings price a green weapon or armour piece in
+#   the family's item-level band (20-40) at 2.2 to 2.9 times its vendor
+#   price - BELOW the AUCTION_BEATS_VENDOR_BY multiple this module already
+#   picked as the bar for a listing worth its deposit and its wait. The whole
+#   pile of gear nobody will wear is worth 0.77 gold against the 800 gold the
+#   five already carry, while two of the five sit at 100% of their bag slots.
+#   The difference being thrown away is real and it is a rounding error; the
+#   bag slot is the thing actually at stake.
+FIT_UNASKED = "unasked"    # nobody put the question. Keeps, as before.
+FIT_HOLDER = "holder"      # the one carrying it would wear it. Keeps.
+FIT_SIBLING = "sibling"    # somebody else would wear it. Hands it over.
+FIT_NOBODY = "nobody"      # asked, and the answer was no. Disposal is open.
+FIT_UNJUDGEABLE = "?"      # the gate ran and could not tell. Keeps.
 
 # Binding, which decides which routes exist at all.
 BIND_NONE = "none"          # freely tradable and auctionable
@@ -181,7 +231,7 @@ def _auction_is_worth_it(item, family, multiple=AUCTION_BEATS_VENDOR_BY,
 
 
 def decide(item, family, character_level=1, upgrade_for_sibling=False,
-           reagent_held=0, available=ALL_ROUTES):
+           reagent_held=0, available=ALL_ROUTES, family_fit=FIT_UNASKED):
     """One item, one route, with the reason attached.
 
     Order matters and is the argument: every refusal is checked before every
@@ -195,13 +245,32 @@ def decide(item, family, character_level=1, upgrade_for_sibling=False,
     writing rows into the world is expected to pass EXECUTABLE_TODAY. A route
     that is not available is not an error, it simply is not offered, and the
     item falls through to the next honest option and finally to KEEP.
+
+    `family_fit` is what gear.claimant answered about this item, and it
+    defaults to FIT_UNASKED so that a caller who never asked gets exactly the
+    behaviour this module had before the gate existed. Only FIT_NOBODY - the
+    gate ran, and neither the holder nor any sibling would wear it - opens
+    anything up. FIT_HOLDER and FIT_UNJUDGEABLE both KEEP, and they are
+    checked before every disposal for the usual reason: a wrong KEEP costs a
+    bag slot and a wrong sale costs the item.
     """
     if not item.known:
         return Verdict(KEEP, "nothing is known about %s, and an unclassified "
                              "item is kept rather than risked" % item.name)
     if item.quest_item:
         return Verdict(KEEP, "%s is a quest item" % item.name)
-    if upgrade_for_sibling:
+    if family_fit == FIT_HOLDER:
+        # Soulbound or not, the character carrying it would wear it. This sits
+        # ABOVE the `outgrown` level test on purpose: required level plus a
+        # margin is a proxy for "still wanted", and this is the real answer,
+        # so it must not be reachable only when the proxy happens to agree.
+        return Verdict(KEEP, "%s is an upgrade for the character already "
+                             "carrying it" % item.name)
+    if family_fit == FIT_UNJUDGEABLE:
+        return Verdict(KEEP, "nothing here can judge whether anybody would "
+                             "wear %s, and an unjudged item is kept rather "
+                             "than risked" % item.name)
+    if upgrade_for_sibling or family_fit == FIT_SIBLING:
         # Deferred to the sibling-upgrade gate rather than re-decided here;
         # two modules answering "is this better" is how they drift apart.
         if GIVE not in available:
@@ -261,12 +330,22 @@ def decide(item, family, character_level=1, upgrade_for_sibling=False,
         return Verdict(DISENCHANT, "%s cannot be listed or is not worth "
                                    "listing, and the family can break it down"
                                    % item.name)
-    if item.binding != BIND_ON_PICKUP and AUCTION not in available:
+    if (item.binding != BIND_ON_PICKUP and AUCTION not in available
+            and family_fit != FIT_NOBODY):
         # A tradable green is the auction's item and, if somebody in the
-        # family should be wearing it, the sibling-upgrade gate's item
-        # (mod-overseer#189). Vendoring it merely because no listing route
-        # is BUILT YET throws the difference away permanently, and it is a
-        # decision nobody can take back. Waiting costs one bag slot.
+        # family should be wearing it, the family-fit gate's item. Vendoring
+        # it merely because no listing route is BUILT YET throws the
+        # difference away permanently, and it is a decision nobody can take
+        # back. Waiting costs one bag slot.
+        #
+        # FIT_NOBODY is what retires that wait, one item at a time: the gate
+        # has asked all five and none would wear it, so the "somebody should
+        # be wearing it" half is answered, and the measurement above the
+        # FIT_* constants prices the "throw the difference away" half at 2.2
+        # to 2.9 times a vendor value of 0.77 gold across the whole pile.
+        # Waiting then no longer costs one bag slot for a while; it costs the
+        # slot indefinitely, for a green nobody will wear and no pass in this
+        # process can list.
         return Verdict(KEEP, "%s is still tradable and nothing here can list "
                              "or hand it on yet, so vendoring it now would "
                              "throw away the difference" % item.name)

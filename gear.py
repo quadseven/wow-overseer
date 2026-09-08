@@ -198,18 +198,28 @@ def usable_by_class(holding: Holding, class_id: int) -> bool:
     return bool(int(holding.allowable_class) & (1 << (class_id - 1)))
 
 
-def is_upgrade_for(holding: Holding, character: CharacterState) -> tuple:
-    """Would `holding` be a real upgrade for `character` - the class- and
-    role-aware test #14 asked for, not "does item level beat item level".
+def would_wear(holding: Holding, character: CharacterState) -> tuple:
+    """Would this character actually put this on, ignoring who may own it.
 
-    Returns (is_upgrade: bool, reason: str). `reason` explains a False as
-    much as a True, since plan() logs both rather than only the ones that
-    move.
+    THE BINDING QUESTION IS NOT ASKED HERE, and that omission is the whole
+    point of the split (infra#3449). "Can this item move to that character"
+    and "would that character wear it" are different questions, and
+    `is_upgrade_for` answers the first by answering the second and refusing
+    anything soulbound. That refusal is right for a hand-off and WRONG for
+    the character already holding it, who needs no hand-off at all: a
+    soulbound green in Grog's own bags is still the best chest Grog owns.
+
+    MEASURED ON THE DEV FAMILY, 2026-09-08. Asking `is_upgrade_for` about a
+    holder's own bags calls 7 soulbound greens unwanted while they beat what
+    that character is wearing, among them Grog's Watcher's Jerkin (item level
+    30 against an equipped 23) and Og's Buccaneer's Orb. Two of those were
+    already inside the four rows the shipped vendor pass would have sold.
+
+    Returns (would_wear: bool, reason: str), the same pair `is_upgrade_for`
+    returns and for the same reason: a False is logged as often as a True.
     """
     if holding.item_class not in (ITEM_CLASS_WEAPON, ITEM_CLASS_ARMOR):
         return False, "not gear (quest items, reagents and consumables are never considered)"
-    if holding.soulbound:
-        return False, "soulbound to the current holder"
     if not usable_by_class(holding, character.class_id):
         cls = _CLASS_NAMES.get(character.class_id, "class %d" % character.class_id)
         return False, f"{cls} cannot equip it"
@@ -239,6 +249,26 @@ def is_upgrade_for(holding: Holding, character: CharacterState) -> tuple:
         f"empty {slot.replace('_', ' ')} slot" if not current
         else f"item level {holding.item_level} beats the equipped {current}"
     )
+
+
+def is_upgrade_for(holding: Holding, character: CharacterState) -> tuple:
+    """Would `holding` be a real upgrade for `character` - the class- and
+    role-aware test #14 asked for, not "does item level beat item level".
+
+    Soulbound is refused here and only here, because this question is asked
+    about a hand-off: an item bound to whoever picked it up cannot reach a
+    third party at all, so wanting it is beside the point. For the holder's
+    own claim on their own bags, ask `would_wear` instead.
+
+    Returns (is_upgrade: bool, reason: str). `reason` explains a False as
+    much as a True, since plan() logs both rather than only the ones that
+    move.
+    """
+    if holding.item_class not in (ITEM_CLASS_WEAPON, ITEM_CLASS_ARMOR):
+        return False, "not gear (quest items, reagents and consumables are never considered)"
+    if holding.soulbound:
+        return False, "soulbound to the current holder"
+    return would_wear(holding, character)
 
 
 def plan(holdings, characters) -> Plan:
@@ -315,3 +345,152 @@ def lines(gear_plan: Plan) -> list:
     materials.lines already speak in, so a hand-off is a line in party chat
     and never a silent database write."""
     return [f"{g.holder}: {g.said}" for g in gear_plan.grants]
+
+
+# ---------------------------------------------------------------------------
+# WHO IN THE FAMILY WANTS THIS, ASKED SO THAT A DISPOSAL RULE CAN HEAR "NOBODY"
+#
+# Everything above answers "should this move", and answers it for the give
+# path. `claimant` asks the mirror question the sell path needs (infra#3449):
+# before anything is sold, is there ANYBODY - the holder included - who would
+# wear this? Disposal is the one decision that cannot be taken back, so the
+# gate that guards it must be the same opinion that decides hand-offs, not a
+# second one written next to it that will drift.
+#
+# THREE ANSWERS, NOT TWO. "Nobody wants it" and "I cannot tell" are different
+# facts and collapsing them is how gear gets sold for want of a lookup table.
+# Measured 2026-09-08: the family carries 3 green rings (InventoryType 11),
+# and _SLOT_BY_INVTYPE has no entry for finger slots, so every one of them
+# answers "no upgrade for anyone" to a naive reading. They are UNJUDGEABLE,
+# which keeps them, and the deliberately small slot map (see its own comment)
+# stays a refusal rather than becoming a licence.
+
+# Nobody in the family would wear it. The only answer that permits disposal.
+NOBODY = ""
+# This module cannot form an opinion: not weapon or armour, an inventory type
+# it has no slot for, or a holder it was given no character for. KEEPS.
+UNJUDGEABLE = "?"
+
+
+def claimant(holding: Holding, characters) -> str:
+    """Who would wear this: the holder, a sibling, NOBODY, or UNJUDGEABLE.
+
+    THE HOLDER IS ASKED FIRST AND ASKED SOULBOUND-BLIND, via `would_wear`.
+    They are already carrying it, so no hand-off has to be legal for them to
+    put it on, and asking `is_upgrade_for` here would call every soulbound
+    upgrade unwanted - the exact failure `would_wear`'s docstring measures.
+
+    Siblings are asked with `is_upgrade_for`, binding refusal and all,
+    because reaching a sibling IS a hand-off. A sibling who could wear a
+    soulbound piece never gets it, so their opinion does not protect it; the
+    holder's does, and it was asked first.
+
+    One name is returned rather than a ranking. Ranking who benefits most is
+    `plan`'s job and stays there; this only has to answer whether disposal is
+    off the table, and any single claimant settles that.
+    """
+    by_name = {c.name: c for c in characters}
+    if holding.item_class not in (ITEM_CLASS_WEAPON, ITEM_CLASS_ARMOR):
+        return UNJUDGEABLE
+    if not _slot_for(holding):
+        return UNJUDGEABLE
+    holder = by_name.get(holding.holder)
+    if holder is None:
+        # A row whose holder nobody described. Refusing beats guessing that
+        # the absent character had no use for their own gear.
+        return UNJUDGEABLE
+    if would_wear(holding, holder)[0]:
+        return holder.name
+    for character in sorted(characters, key=lambda c: c.name):
+        if character.name == holding.holder:
+            continue
+        if is_upgrade_for(holding, character)[0]:
+            return character.name
+    return NOBODY
+
+
+def claims(holdings, characters) -> dict:
+    """`claimant` over many holdings, keyed by item guid for the sell path."""
+    return {int(h.guid): claimant(h, characters) for h in holdings}
+
+
+# ---------------------------------------------------------------------------
+# FROM ROWS TO THE TWO SHAPES ABOVE
+#
+# The same seam bag_upgrade.members_from_rows and bank.members_from_rows use,
+# and here for the same reason: which world row means what is a decision, it
+# wants testing against rows written by hand, and bridge.py should stay a
+# thing that fetches and writes rather than a thing that knows the 3.3.5 slot
+# enums. Both functions are total - they never raise on a row they cannot
+# read, they drop it, and a dropped row simply has no claimant.
+
+# bag 0, slot 0..18 is what a character is WEARING. `characters_from_rows`
+# reads exactly this range and `holdings_from_rows` never sees it, because
+# the gear SQL excludes it - see _SURPLUS_GEAR_SQL.
+EQUIPPED_POSITIONS = range(0, 19)
+
+
+def characters_from_rows(rows, names) -> list:
+    """One CharacterState per name, from equipped rows joined to characters.
+
+    A NAME WITH NO USABLE ROW IS LEFT OUT, not defaulted. `claimant` answers
+    UNJUDGEABLE for a holder it was given no character for, which keeps that
+    character's gear; inventing a level-1 warrior for them instead would make
+    every piece they carry look like nobody's upgrade and offer the lot to a
+    vendor. The caller passes `names` so the order is the family's, not the
+    query planner's.
+
+    Rows carry name, class_id, level and, when something is worn in the slot,
+    inventory_type and item_level. A LEFT JOIN row for a character wearing
+    nothing at all still names them, and they get an empty equipped map.
+    """
+    seen = {}
+    for row in rows:
+        try:
+            name = str(row["name"])
+            if name not in names:
+                continue
+            class_id = int(row["class_id"])
+            level = int(row["level"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        equipped = seen.setdefault(name, (class_id, level, {}))[2]
+        try:
+            slot = _SLOT_BY_INVTYPE.get(int(row["inventory_type"]), "")
+            item_level = int(row["item_level"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if slot:
+            # Two rings, two trinkets, a main hand and an off hand all land in
+            # one bucket. The BEST of them is what an upgrade has to beat,
+            # because the worst is the one a new piece would displace.
+            equipped[slot] = max(equipped.get(slot, 0), item_level)
+    return [CharacterState(name=name, class_id=seen[name][0],
+                           level=seen[name][1], equipped=seen[name][2])
+            for name in names if name in seen]
+
+
+def holdings_from_rows(rows) -> list:
+    """Holdings from the carried-gear rows, dropping any this cannot describe.
+
+    `soulbound` is read from the INSTANCE flag rather than the template's
+    bonding, the same fact and the same bit bag_pressure.item_binding reads,
+    because a bind-on-equip green somebody wore once is bound forever while
+    its template still says it is tradable.
+    """
+    out = []
+    for row in rows:
+        try:
+            out.append(Holding(
+                holder=str(row["holder"]), guid=int(row["item_guid"]),
+                entry=int(row.get("entry", 0)), name=str(row["name"]),
+                quality=int(row["quality"]), item_level=int(row["item_level"]),
+                required_level=int(row["required_level"]),
+                allowable_class=int(row["allowable_class"]),
+                inventory_type=int(row["inventory_type"]),
+                item_class=int(row["item_class"]),
+                soulbound=bool(int(row.get("instance_flags", 0) or 0) & 0x1),
+            ))
+        except (KeyError, TypeError, ValueError):
+            continue
+    return out
