@@ -1784,11 +1784,27 @@ def _aim_train_traveller(statements) -> None:
 # day. This seam already exists for exactly this shape: an errand borrows the
 # lead here without anybody's standing changing.
 #
-# REMOVE IT once the resting head can be bound on the family's own continent.
-# Today that needs a crossing the module cannot make, because there is no
-# navmesh on a moving transport and nothing can walk a character onto a deck
-# (quadseven/mod-overseer#279).
-HOMEWARD_LEAD: str | None = "Og"
+# WHICH CHARACTER, AND WHY IT MOVED. It is no longer only about the bind.
+# The route to the dungeon door was replayed against the shipped heightmaps
+# from both places the family could stage from, and the same code opens a run
+# or fails purely on which one it walks out of:
+#
+#     from the mountains   7.5 to 24 minutes   against a 12 minute window
+#     from the port town   4 to 7 minutes      against the same window
+#
+# So the lead is the character bound at the port town on the working
+# continent, and the family gathers on flat ground beside the dungeon rather
+# than in a mountain range with a wall between it and the door. The bind
+# argument above still holds and now points the same way: every death sends
+# all five to the leader's bind, and that bind is now somewhere worth being.
+#
+# REMOVE IT once the resting head can be bound on the family's own continent
+# AND can walk out of where it stands. The crossing is no longer the blocker
+# it was when this was written: a character can now reach the other continent
+# on its own hearthstone, and a split party can be rejoined on the game's own
+# summoning stone (quadseven/mod-overseer#308, #313). What remains is routing
+# around terrain (quadseven/mod-overseer#316).
+HOMEWARD_LEAD: str | None = "Grog"
 
 
 def _head_now() -> str:
