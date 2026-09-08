@@ -780,7 +780,7 @@ class TheErrandStateIsNotOutlivedByItsClock(unittest.TestCase):
         self.assertIn("_state.erase(name)", _code(_clear()))
 
     def test_every_release_path_goes_through_the_one_that_erases(self):
-        """Seven releases inside DriveTravel - arrival, no such spawn, the
+        """Eight releases inside DriveTravel - arrival, no such spawn, the
         backstop, stepping through a doorway, and the death-rate breaker's two
         - and none of them may erase, or forget to erase, on its own.
 
@@ -805,9 +805,22 @@ class TheErrandStateIsNotOutlivedByItsClock(unittest.TestCase):
         candidate, but once every candidate is behind lethal ground there is
         nothing left to aim at, so the errand ends rather than waits. It is
         also the one release that can fire before the character has taken a
-        single step."""
+        single step.
+
+        The eighth is mod-overseer#312, the footing refusal's own bound. It
+        is a release rather than a wait because the thing it gives up on is
+        not a moment of bad luck: the character has been refused every
+        bearing toward its aim on eight consecutive polls without moving a
+        yard, which is what standing at the foot of a mountain with the
+        destination behind it looks like from inside a greedy step chooser.
+        Waiting cannot fix terrain. It is also the release that had to exist
+        before the ratchet above could bind at all, because the ratchet is
+        anchored to a target and a catch-up walk rewrites its target every
+        poll with the leader's live position, so the twenty-minute clock was
+        restarted before it could ever run out. This one is anchored to a
+        PLACE, which is why it fires."""
         code = _code(_drive())
-        self.assertEqual(7, code.count("_travelAims.Release(name)"))
+        self.assertEqual(8, code.count("_travelAims.Release(name)"))
         self.assertNotIn("_state.erase(", code)
         # Stronger than "the drive does not erase": it cannot. The memory is a
         # private member of the book, so the only way out is Release.
