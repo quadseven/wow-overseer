@@ -80,6 +80,20 @@ class EveryRefusalIsReported(unittest.TestCase):
         body = _give_source()
         # DoGive lost its `static` in #170; match on the part that is stable.
         body = body[body.index("char const* DoGive("):]
+        # AND IT STOPS AT DoGive'S OWN END, which it did not used to. The window
+        # _give_source returns runs to WriteSnapshot, so slicing only at the
+        # front left this scanning every function that happens to sit between
+        # DoGive and there. That was harmless for as long as nothing did, and
+        # stopped being harmless when quadseven/mod-overseer#349 lifted
+        # BindAtInnkeeperInReach out of DoBind into that gap. That helper
+        # returns a refusal literal FOR ITS CALLER to record, which is its
+        # documented contract, and both callers honour it: DoBind wraps it in
+        # refuse(), and the home errand logs it and holds the member. So the
+        # invariant this test protects was never broken; the test was reading a
+        # function it was never about.
+        end = body.find("--------------------------------------------------------------- trade --")
+        if end != -1:
+            body = body[:end]
         lines = body.splitlines()
         for line_no, line in enumerate(lines):
             stripped = line.strip()
