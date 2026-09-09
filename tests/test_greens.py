@@ -185,10 +185,28 @@ class NothingTheFamilyWouldWearIsEverSold(unittest.TestCase):
         self.assertEqual(bag_pressure.vendor_candidates(
             [row], keep_names=("Ornate Bronze Lockbox",)), ())
 
-    def test_gear_still_close_to_level_is_never_sold(self):
-        """The `outgrown` margin, still doing its job under the new gate."""
+    def test_gear_still_close_to_level_is_kept_when_nobody_was_asked(self):
+        """The `outgrown` margin, still doing its job wherever the gate has
+        not answered. FIT_UNASKED is the default and is what every caller
+        that has not been taught about `fits` gets."""
         recent = carried(item_guid=7008, required_level=25, item_level=30)
-        self.assertEqual(sold([recent], OG_IS_DRESSED), set())
+        self.assertEqual(
+            bag_pressure.gear_candidates([recent], IN_TOWN,
+                                         available=disposition.EXECUTABLE_TODAY),
+            ())
+
+    def test_a_piece_nobody_has_grown_into_yet_is_kept(self):
+        """`gear.is_upgrade_for` refuses a character below the required level
+        with "requires level N", so a piece the family has not reached answers
+        NOBODY for a reason that levelling retires. That is not an old green,
+        it is a future one, and selling it is the irreversible half of a
+        temporary fact (infra#3464).
+        """
+        early = carried(item_guid=7013, name="Feet of the Lynx",
+                        required_level=40, item_level=45, inventory_type=8)
+        self.assertEqual(sold([early], OG_IS_DRESSED), set())
+        fits = bag_pressure.family_fits([early], OG_IS_DRESSED, THE_FIVE)
+        self.assertEqual(fits[7013], disposition.FIT_NOBODY)
 
     def test_a_worthless_piece_is_not_walked_to_a_vendor(self):
         self.assertEqual(sold([carried(item_guid=7009, sell_price=0)],
@@ -283,6 +301,45 @@ class OnlyNobodyWantsItOpensTheVendor(unittest.TestCase):
                                available=both,
                                family_fit=disposition.FIT_NOBODY).route,
             disposition.AUCTION)
+
+    def test_a_green_nobody_wants_no_longer_waits_for_the_level_margin(self):
+        """THE DEFECT THIS PR IS AGAINST, in one row (infra#3464).
+
+        `outgrown` asks whether the holder has moved ten levels past the
+        required level, which is a PROXY for "would anybody wear this". The
+        family-fit gate asks that question directly, of all five, with the
+        same opinion that decides hand-offs. Letting the proxy overrule the
+        answer is why a green nobody can use sits in a bag until its holder
+        out-levels it by ten - and this family farms one instance, so several
+        of them never get there.
+
+        Safe because gear only ever improves: item level is fixed on the item
+        and nothing here takes gear off anybody, so a piece that beats
+        nobody's slot today beats nobody's slot at any later level.
+        """
+        stuck = carried(item_guid=7014, name="Ridge Cloak",
+                        required_level=25, item_level=30)
+        self.assertEqual(sold([stuck], OG_IS_DRESSED), {7014})
+        fits = bag_pressure.family_fits([stuck], OG_IS_DRESSED, THE_FIVE)
+        self.assertEqual(fits[7014], disposition.FIT_NOBODY)
+
+    def test_the_margin_still_holds_every_answer_that_is_not_nobody(self):
+        """One rule changed and only for one answer. A holder's own upgrade, a
+        sibling's, and a piece nothing can judge are all still kept by the
+        checks above this branch, and a piece nobody was asked about is kept
+        by the margin itself."""
+        item = disposition.Item(
+            name="Ridge Cloak", quality=2, known=True,
+            binding=disposition.BIND_ON_EQUIP, quest_item=False,
+            equipment=True, required_level=25, sell_price=402)
+        for answer in (disposition.FIT_UNASKED, disposition.FIT_HOLDER,
+                       disposition.FIT_UNJUDGEABLE):
+            with self.subTest(answer=answer):
+                self.assertEqual(
+                    disposition.decide(item, IN_TOWN, character_level=28,
+                                       available=disposition.EXECUTABLE_TODAY,
+                                       family_fit=answer).route,
+                    disposition.KEEP)
 
     def test_a_soulbound_green_nobody_wants_is_still_a_vendor_sale(self):
         """Unchanged behaviour, and the reason is unchanged: nobody can list

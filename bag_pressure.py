@@ -263,3 +263,41 @@ def family_fits(gear_rows, equipped_rows, names) -> dict:
         else:
             fits[guid] = disposition.FIT_SIBLING
     return fits
+
+
+def family_gifts(gear_rows, equipped_rows, names, keep_names=()) -> tuple:
+    """The carried pieces a sibling should be handed, and who should have them.
+
+    THE OTHER HALF OF THE SAME PASS, AND THE BIGGER ONE (infra#3464). The
+    family-fit gate has answered FIT_SIBLING about a carried piece since
+    infra#3450, and `gear_candidates` above deliberately drops every verdict
+    that is not VENDOR because a sale was the only thing the caller could
+    write. On the measurement that shipped with that gate, 35 of 101 carried
+    weapons and armour were upgrades a sibling should be wearing against 25
+    that were nobody's - so the larger answer was the one being computed and
+    thrown away every cycle, and the bag kept it.
+
+    `gear.plan` has been the writer for exactly this since mod-overseer#14 and
+    has never had a production call site: bridge.py did not import gear at
+    all, and the kind='give' rows on the realm come from materials.py and
+    bag_upgrade.py. This is that call site, and it is an adapter and nothing
+    else - who should get what is `gear.plan`'s to say, for the same reason
+    `family_fits` refuses to re-decide what `gear.claims` already decided.
+
+    IT CANNOT DISAGREE WITH `family_fits`, and that is structural rather than
+    hoped for: both ask `gear.would_wear` of the holder and
+    `gear.is_upgrade_for` of every sibling. `claimant` returns the first
+    sibling by name and `plan` returns the one who gains most, which is a
+    difference about WHO and never about WHETHER. tests/test_gear_handoff.py
+    pins that.
+
+    `keep_names` is the owner's never-dispose mark, applied before a row is
+    parsed, exactly as it is on both halves of the vendor pass. A hand-off is
+    not a disposal, but a mark on a name means leave that item alone, and an
+    owner should not have to know which of three passes would have moved it.
+    """
+    kept = [row for row in gear_rows
+            if not owner_keeps(row.get("name", ""), keep_names)]
+    characters = gear.characters_from_rows(equipped_rows, names)
+    holdings = gear.holdings_from_rows(kept)
+    return gear.plan(holdings, characters).grants

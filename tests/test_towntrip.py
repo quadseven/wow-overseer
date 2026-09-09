@@ -87,11 +87,18 @@ class WhatTheTownCanAndCannotSupply(unittest.TestCase):
 
     def test_the_mage_is_sold_neither_food_nor_water(self):
         """He knows Conjure Food and Conjure Water. Selling him either is
-        spending gold on something he makes for free."""
+        spending gold on something he makes for free.
+
+        THE ROW IS THE CHANGE (infra#3464). This used to be a note reading "a
+        conjure-and-share pass would supply the party for nothing", and
+        nothing acted on it for as long as the module existed. kind='conjure'
+        has had an executor since mod-overseer#147 and had no producer.
+        """
         got = towntrip.plan((OG,), RATCHET)
-        self.assertEqual([e.kind for e in got.errands], ["repair"])
-        self.assertTrue(any("conjures food" in n for n in got.notes))
-        self.assertTrue(any("conjures drink" in n for n in got.notes))
+        self.assertEqual([e.kind for e in got.errands],
+                         ["repair", "conjure", "conjure"])
+        self.assertEqual([e.command for e in got.errands[1:]],
+                         ["food up_to:20", "water up_to:20"])
 
     def test_a_warrior_is_bought_food_and_never_drink(self):
         got = towntrip.plan((GRUG,), RATCHET)
@@ -109,7 +116,10 @@ class WhatTheTownCanAndCannotSupply(unittest.TestCase):
         planner that emitted a row for one would be queueing a refusal."""
         bare = Town(repairs=True, stocks=frozenset())
         got = towntrip.plan(FAMILY, bare)
-        self.assertEqual([e.kind for e in got.errands], ["repair"] * 4)
+        # The four repairs, and the mage conjuring for a party a town that
+        # will not trade with them cannot feed. Nothing is bought.
+        self.assertEqual([e.kind for e in got.errands],
+                         ["repair"] * 4 + ["conjure", "conjure"])
         self.assertTrue(any("no reachable vendor stocks" in n for n in got.notes))
 
     def test_the_reagent_table_is_empty_on_purpose(self):
@@ -152,8 +162,12 @@ class TheOrderIsTheReservation(unittest.TestCase):
         so the gear wins the coin toss."""
         got = towntrip.plan(FAMILY, RATCHET)
         kinds = [e.kind for e in got.errands]
-        self.assertEqual(sorted(set(kinds)), ["buy", "repair"])
-        self.assertEqual(kinds.index("buy"), kinds.count("repair"))
+        self.assertEqual(sorted(set(kinds)), ["buy", "conjure", "repair"])
+        repairs = kinds.count("repair")
+        self.assertEqual(kinds[:repairs], ["repair"] * repairs)
+        # And the free route before the paid one, which is the other half of
+        # the same argument: a stack conjured is a stack not bought.
+        self.assertLess(kinds.index("conjure"), kinds.index("buy"))
 
     def test_the_plan_does_not_depend_on_the_order_the_members_arrive_in(self):
         forwards = towntrip.plan(FAMILY, RATCHET)
@@ -168,6 +182,24 @@ class TheOrderIsTheReservation(unittest.TestCase):
         for errand in towntrip.plan(FAMILY, RATCHET).errands:
             if errand.kind == "repair":
                 self.assertEqual(errand.command, "all")
+                continue
+            if errand.kind == "conjure":
+                # `food|water [up_to:<units>]`, and mod-overseer refuses a
+                # row above CONJURE_UNITS_MAX as malformed rather than
+                # clamping it.
+                what, target = errand.command.split()
+                self.assertIn(what, ("food", "water"))
+                self.assertTrue(target.startswith("up_to:"))
+                units = int(target.split(":", 1)[1])
+                self.assertGreater(units, 0)
+                self.assertLessEqual(units, towntrip.CONJURE_UNITS_MAX)
+                continue
+            if errand.kind == "give":
+                # ParseGiveSpec takes `guid:<n>` or `entry:<n>`; the guid form
+                # names exactly the stack that is being handed over.
+                self.assertTrue(errand.command.startswith("guid:"))
+                self.assertTrue(errand.command.split(":", 1)[1].isdigit())
+                self.assertTrue(errand.taker)
                 continue
             words = errand.command.split()
             self.assertEqual(len(words), 3)
@@ -189,13 +221,168 @@ class TheOrderIsTheReservation(unittest.TestCase):
         self.assertEqual(buy.spend, ceiling)
 
 
+class TheFreeRoutesComeBeforeTheCounter(unittest.TestCase):
+    """Conjure, hand on, and only then buy (infra#3464).
+
+    MEASURED ON THE LIVE REALM, 2026-09-09, and the two right-hand columns are
+    why this class exists:
+
+        character  greens  food or drink  items in bags
+        Bork          20          7             66
+        Grog          45          2             56
+        Grug          45          0             59
+        Og            46         15             78
+        Ugga          41          2             55
+
+    Og is the mage and the only one with a supply worth the name, and every
+    one of his fifteen is CONJURED - made a stack at a time by mod-playerbots
+    patch 0015 when his own runs out, which keeps one character fed and can
+    never feed five. The party leader has nothing at all. The counters nearest
+    this roster's instance belong to the other faction, so the answer cannot
+    be "buy some": it has to be the caster standing next to them.
+    """
+
+    def _mage(self, food=0, drink=0, stacks=(), slots=9, level=26):
+        return Member("Og", "mage", level, 10 ** 6, slots, (),
+                      food_carried=food, drink_carried=drink,
+                      spells=frozenset({990, 5506}), stacks=tuple(stacks))
+
+    def _warrior(self, food=0, slots=8):
+        return Member("Grug", "warrior", 33, 10 ** 6, slots, (),
+                      food_carried=food)
+
+    def _conjured(self, guid, what, count=20, name="Conjured Bread"):
+        return towntrip.Stack(guid=guid, entry=1113, name=name, count=count,
+                              what=what, conjured=True)
+
+    def test_the_conjurer_is_asked_for_a_stack_per_mouth(self):
+        """One for the caster and one for everybody with none. A row sized for
+        the caster alone is the trigger upstream already wrote, and it is the
+        thing that has never fed anybody else."""
+        got = towntrip.plan((self._mage(), self._warrior()), RATCHET)
+        conjures = [e for e in got.errands if e.kind == "conjure"]
+        food = [e for e in conjures if e.command.startswith("food")][0]
+        self.assertEqual(food.member, "Og")
+        self.assertEqual(food.command, "food up_to:40")
+        self.assertIn("1 other(s) with none", food.why)
+
+    def test_the_ask_never_exceeds_what_the_executor_will_take(self):
+        """mod-overseer refuses a row above CONJURE_UNITS_MAX as malformed
+        rather than clamping it, so a family of nine would be a dead row."""
+        many = [self._mage(slots=20)] + [
+            Member(name, "warrior", 30, 10 ** 6, 8, ())
+            for name in ("A", "B", "C", "D", "E", "F", "G")
+        ]
+        got = towntrip.plan(tuple(many), RATCHET)
+        food = [e for e in got.errands
+                if e.kind == "conjure" and e.command.startswith("food")][0]
+        self.assertEqual(food.command,
+                         "food up_to:%d" % towntrip.CONJURE_UNITS_MAX)
+
+    def test_the_ask_is_held_under_the_bag_slots_that_exist(self):
+        """A stack is a slot. Conjuring into bags that cannot take it ends in
+        `bags cannot take the item`, which is a sell problem wearing a
+        conjure's clothes."""
+        crowded = self._mage(slots=2)
+        got = towntrip.plan((crowded, self._warrior(), self._warrior()), RATCHET)
+        food = [e for e in got.errands
+                if e.kind == "conjure" and e.command.startswith("food")][0]
+        self.assertEqual(food.command, "food up_to:40")
+
+    def test_no_free_slot_at_all_is_said_and_not_cast_into(self):
+        got = towntrip.plan((self._mage(slots=0),), RATCHET)
+        self.assertEqual([e.kind for e in got.errands], [])
+        self.assertTrue(any("no free bag slot to conjure" in n for n in got.notes))
+
+    def test_a_spare_conjured_stack_is_handed_to_somebody_with_none(self):
+        """Conjured items are BIND_NONE, measured, so kind='give' moves them
+        and nothing new had to be built for the hand-off."""
+        mage = self._mage(food=40, stacks=[self._conjured(11, "food"),
+                                           self._conjured(12, "food")])
+        got = towntrip.plan((mage, self._warrior()), RATCHET)
+        gives = [e for e in got.errands if e.kind == "give"]
+        self.assertEqual(len(gives), 1)
+        # The giver is the row's character and the taker is its argument,
+        # which is the direction DoGive moves an item.
+        self.assertEqual(gives[0].member, "Og")
+        self.assertEqual(gives[0].taker, "Grug")
+        self.assertEqual(gives[0].command, "guid:11")
+
+    def test_the_conjurer_never_hands_over_its_last_stack(self):
+        """Feeding the party by starving the caster is not a supply plan."""
+        mage = self._mage(food=20, stacks=[self._conjured(11, "food")])
+        got = towntrip.plan((mage, self._warrior()), RATCHET)
+        self.assertEqual([e for e in got.errands if e.kind == "give"], [])
+
+    def test_a_looted_stack_is_never_handed_on(self):
+        """Only the conjured ones are free to remake. Somebody's real food is
+        theirs, and a looted stack may not even be tradable."""
+        looted = towntrip.Stack(guid=13, entry=4594, name="Rockscale Cod",
+                                count=20, what="food", conjured=False)
+        rogue = Member("Bork", "rogue", 30, 10 ** 6, 8, (),
+                       food_carried=40, stacks=(looted, looted))
+        got = towntrip.plan((rogue, self._warrior()), RATCHET)
+        self.assertEqual([e for e in got.errands if e.kind == "give"], [])
+
+    def test_somebody_handed_a_stack_is_not_also_sold_one(self):
+        mage = self._mage(food=40, stacks=[self._conjured(11, "food"),
+                                           self._conjured(12, "food")])
+        got = towntrip.plan((mage, self._warrior()), RATCHET)
+        buys = [e for e in got.errands if e.kind == "buy" and e.member == "Grug"]
+        self.assertEqual(buys, [])
+
+    def test_somebody_the_hand_off_did_not_reach_still_buys(self):
+        """A promise is not food. The buy is suppressed by being supplied THIS
+        pass and never by the hope that a conjure will land on the next one -
+        the regression that would be is a family that stops buying and never
+        receives."""
+        got = towntrip.plan((self._mage(), self._warrior()), RATCHET)
+        buys = [e for e in got.errands if e.kind == "buy"]
+        self.assertEqual([e.member for e in buys], ["Grug"])
+
+    def test_a_family_with_no_conjurer_buys_exactly_as_before(self):
+        got = towntrip.plan((self._warrior(),), RATCHET)
+        self.assertEqual([e.kind for e in got.errands], ["buy"])
+        self.assertEqual(got.errands[0].command, "entry:4594 count:20 max:20000")
+
+    def test_a_warrior_is_never_conjured_water(self):
+        """A drink restores mana and nothing else, so it is a bag slot spent
+        on a decoration for a class that runs on rage."""
+        got = towntrip.plan((self._mage(), self._warrior()), RATCHET)
+        water = [e for e in got.errands
+                 if e.kind == "conjure" and e.command.startswith("water")][0]
+        self.assertEqual(water.command, "water up_to:20")
+
+    def test_a_priest_is_counted_as_a_mouth_that_drinks(self):
+        priest = Member("Ugga", "priest", 30, 10 ** 6, 8, ())
+        got = towntrip.plan((self._mage(), priest), RATCHET)
+        water = [e for e in got.errands
+                 if e.kind == "conjure" and e.command.startswith("water")][0]
+        self.assertEqual(water.command, "water up_to:40")
+
+    def test_a_conjurer_already_stocked_is_asked_for_nothing(self):
+        alone = self._mage(food=20, drink=20)
+        self.assertEqual(towntrip.plan((alone,), RATCHET).errands, ())
+
+    def test_the_plan_is_the_same_however_the_family_is_ordered(self):
+        mage = self._mage(food=40, stacks=[self._conjured(11, "food"),
+                                           self._conjured(12, "food")])
+        family = (mage, self._warrior(),
+                  Member("Ugga", "priest", 30, 10 ** 6, 8, ()))
+        self.assertEqual(towntrip.plan(family, RATCHET),
+                         towntrip.plan(tuple(reversed(family)), RATCHET))
+
+
 class TheEmptyCases(unittest.TestCase):
     def test_no_members_is_an_empty_plan_and_not_a_crash(self):
         self.assertEqual(towntrip.plan((), RATCHET), towntrip.Plan())
 
     def test_a_character_wearing_nothing_that_wears_out_is_not_repaired(self):
         naked = Member("A", "mage", 26, 10 ** 6, 8, (), spells=frozenset({990, 5506}))
-        self.assertEqual(towntrip.plan((naked,), RATCHET).errands, ())
+        got = towntrip.plan((naked,), RATCHET)
+        self.assertNotIn("repair", [e.kind for e in got.errands])
+        # He still eats. Nothing worn is a repair question and not a food one.
+        self.assertEqual({e.kind for e in got.errands}, {"conjure"})
 
 
 if __name__ == "__main__":

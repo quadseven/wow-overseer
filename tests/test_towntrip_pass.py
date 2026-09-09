@@ -114,10 +114,16 @@ class TheBridgeDecidesNothingAboutTheTrip(unittest.TestCase):
             with self.subTest(entry=entry):
                 self.assertNotIn(entry, code)
 
-    def test_the_entries_queried_come_from_the_planners_own_tables(self):
+    def test_what_counts_as_food_comes_from_the_planners_own_tables(self):
+        """The two spell categories are named once, in towntrip, beside the
+        test that pins them (infra#3464). The predecessor of this query
+        filtered on the twelve VENDOR entries instead, which made conjured and
+        looted stock invisible and every holder of it read as carrying none."""
         code = _code("def _fetch_town_carried(names: list)")
-        self.assertIn("towntrip.FOOD", code)
-        self.assertIn("towntrip.DRINK", code)
+        self.assertIn("towntrip.CONSUMABLE_CATEGORY_FOOD", code)
+        self.assertIn("towntrip.CONSUMABLE_CATEGORY_DRINK", code)
+        self.assertNotIn("towntrip.FOOD", code)
+        self.assertNotIn("towntrip.DRINK", code)
 
     def test_the_town_is_built_by_the_pure_constructor(self):
         code = _code("def _fetch_town(leader: str)")
@@ -146,7 +152,8 @@ class TheRowsCarryWhatThePlannerReads(unittest.TestCase):
     def test_the_carried_query_names_its_columns(self):
         src = _source()
         sql = src[src.index("_TOWN_CARRIED_SQL = ("):src.index("_TOWN_SPELLS_SQL = (")]
-        for column in ("holder", "entry", "carried"):
+        for column in ("holder", "guid", "entry", "name", "carried",
+                       "spell_category", "item_flags"):
             with self.subTest(column=column):
                 self.assertIn("AS %s" % column, sql)
 
@@ -181,6 +188,20 @@ class TheRowIsTheRowTheExecutorReads(unittest.TestCase):
         self.assertNotIn("'mail'", code)
         self.assertNotIn("'auction'", code)
 
+    def test_a_hand_off_names_its_receiver(self):
+        """kind='give' moves an item out of target_name into target_arg, so a
+        row that left target_arg empty would be a give to nobody."""
+        code = _code("def _insert_town_errand(errand)")
+        self.assertIn("errand.taker", code)
+        self.assertNotIn("'', %s)", code)
+
+    def test_the_retry_window_cannot_be_silenced_by_another_pass(self):
+        """The materials and bag passes write kind='give' with the same
+        `guid:N` command shape. Without the source scope one of them could
+        hold a conjured hand-off back for a whole retry window."""
+        code = _code("def _recent_town_keys(minutes: int)")
+        self.assertIn("source = 'towntrip'", code)
+
     def test_the_insert_degrades_on_a_world_without_the_migration(self):
         """1146 missing table, 1265 a `kind` ENUM with no repair/buy value."""
         code = _code("def _insert_town_errand(errand)")
@@ -193,10 +214,11 @@ class TheRowIsTheRowTheExecutorReads(unittest.TestCase):
         code = _code("    async def _towntrip_once(self)")
         self.assertIn("_recent_town_keys", code)
 
-    def test_the_retry_window_reads_both_kinds(self):
+    def test_the_retry_window_reads_every_kind_the_trip_writes(self):
         code = _code("def _recent_town_keys(minutes: int)")
-        self.assertIn("'repair'", code)
-        self.assertIn("'buy'", code)
+        for kind in ("'repair'", "'buy'", "'conjure'", "'give'"):
+            with self.subTest(kind=kind):
+                self.assertIn(kind, code)
 
 
 class TheModuleShips(unittest.TestCase):

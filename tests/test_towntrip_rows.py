@@ -14,6 +14,13 @@ import towntrip
 from towntrip import Town
 
 
+def stack_row(holder, guid=1, entry=787, name="Slitherskin Mackerel",
+              carried=1, category=towntrip.CONSUMABLE_CATEGORY_FOOD, flags=0):
+    """One carried consumable stack, as _TOWN_CARRIED_SQL returns it."""
+    return {"holder": holder, "guid": guid, "entry": entry, "name": name,
+            "carried": carried, "spell_category": category, "item_flags": flags}
+
+
 def worn_row(holder, entry=1, durability=90, maximum=100, **kw):
     row = {
         "holder": holder,
@@ -43,6 +50,31 @@ class TheTownIsReadFromWhereTheyStand(unittest.TestCase):
         got = towntrip.town_from_rows([{"npcflag": towntrip.NPC_FLAG_REPAIR, "item": None}])
         self.assertTrue(got.repairs)
         self.assertEqual(got.stocks, frozenset())
+
+    def test_a_vendor_in_reach_is_recorded_even_with_nothing_to_sell(self):
+        """WHAT A VENDOR SELLS IS NOT WHAT A VENDOR BUYS (infra#3464).
+
+        mod-overseer's DoSell says VendorItemData is never consulted when a
+        player sells TO a vendor, so a merchant with no npc_vendor rows at all
+        still takes the family's greens. `stocks` is empty for one of those
+        and `vendor` is what the sell pass gates on, so deriving one from the
+        other would refuse exactly the vendors that would have bought.
+        """
+        got = towntrip.town_from_rows(
+            [{"npcflag": towntrip.NPC_FLAG_VENDOR, "item": None}])
+        self.assertTrue(got.vendor)
+        self.assertEqual(got.stocks, frozenset())
+
+    def test_a_repairer_alone_is_not_a_vendor(self):
+        got = towntrip.town_from_rows(
+            [{"npcflag": towntrip.NPC_FLAG_REPAIR, "item": None}])
+        self.assertTrue(got.repairs)
+        self.assertFalse(got.vendor)
+
+    def test_nothing_in_reach_is_not_a_vendor_either(self):
+        """Which is what a party still walking to the counter looks like, and
+        is why the sell pass writes nothing while they are on the road."""
+        self.assertFalse(towntrip.town_from_rows([]).vendor)
 
     def test_a_vendor_contributes_what_it_sells(self):
         rows = [
@@ -128,24 +160,60 @@ class TheFactsSurviveTheCrossing(unittest.TestCase):
         self.assertEqual(got[0].equipped, ())
         self.assertEqual(got[0].worst, 1.0)
 
-    def test_food_and_drink_are_counted_against_the_right_tables(self):
-        carried = [
-            {"holder": "Bork", "entry": 787, "carried": 3},     # food
-            {"holder": "Bork", "entry": 159, "carried": 5},     # drink
-            {"holder": "Bork", "entry": 12345, "carried": 40},  # neither
-        ]
-        got = towntrip.members_from_rows([worn_row("Bork")], carried, [], {}, ["Bork"])
+    def test_food_and_drink_are_counted_by_the_worlds_own_categories(self):
+        """spellcategory_1 is 11 for anything eaten and 59 for anything drunk,
+        which is what mod-playerbots and mod-overseer both ask. A row carrying
+        neither is not a consumable and is dropped rather than guessed at."""
+        got = towntrip.members_from_rows(
+            [worn_row("Bork")],
+            [stack_row("Bork", guid=1, category=11, carried=3),
+             stack_row("Bork", guid=2, category=59, carried=5),
+             stack_row("Bork", guid=3, category=0, carried=40)],
+            [], {}, ["Bork"])
         self.assertEqual(got[0].food_carried, 3)
         self.assertEqual(got[0].drink_carried, 5)
+        self.assertEqual([s.guid for s in got[0].stacks], [1, 2])
+
+    def test_a_conjured_stack_is_counted_the_same_as_a_bought_one(self):
+        """The predecessor of this seam counted against twelve vendor entries,
+        so Og's fifteen conjured units and Bork's seven looted ones both read
+        as zero and a stack would have been bought over them (infra#3464)."""
+        got = towntrip.members_from_rows(
+            [worn_row("Og")],
+            [stack_row("Og", guid=9, entry=5350, name="Conjured Water",
+                       category=59, carried=15, flags=towntrip.ITEM_FLAG_CONJURED)],
+            [], {}, ["Og"])
+        self.assertEqual(got[0].drink_carried, 15)
+        self.assertTrue(got[0].stacks[0].conjured)
+
+    def test_a_looted_stack_is_not_called_conjured(self):
+        """Only the conjured ones are free to remake and free to hand on, so
+        reading the flag wrong would offer somebody's real food to a sibling."""
+        got = towntrip.members_from_rows(
+            [worn_row("Bork")],
+            [stack_row("Bork", guid=4, category=11, carried=7, flags=0)],
+            [], {}, ["Bork"])
+        self.assertFalse(got[0].stacks[0].conjured)
+
+    def test_a_stack_with_no_guid_still_counts_and_cannot_be_handed_on(self):
+        """"We can see they have it but not which stack" keeps a purchase from
+        being planned over it, and offers nothing it cannot name."""
+        got = towntrip.members_from_rows(
+            [worn_row("Bork")],
+            [stack_row("Bork", guid=0, category=11, carried=6)],
+            [], {}, ["Bork"])
+        self.assertEqual(got[0].food_carried, 6)
+        self.assertEqual(got[0].stacks, ())
 
     def test_stacks_of_the_same_thing_add_up(self):
         """Twenty of something is two stacks of ten as often as one of twenty."""
-        carried = [
-            {"holder": "Bork", "entry": 787, "carried": 12},
-            {"holder": "Bork", "entry": 787, "carried": 8},
-        ]
-        got = towntrip.members_from_rows([worn_row("Bork")], carried, [], {}, ["Bork"])
+        got = towntrip.members_from_rows(
+            [worn_row("Bork")],
+            [stack_row("Bork", guid=1, category=11, carried=12),
+             stack_row("Bork", guid=2, category=11, carried=8)],
+            [], {}, ["Bork"])
         self.assertEqual(got[0].food_carried, 20)
+        self.assertEqual(len(got[0].stacks), 2)
 
     def test_spells_reach_the_conjure_check(self):
         spells = [{"holder": "Og", "spell": 5504}, {"holder": "Og", "spell": 990}]

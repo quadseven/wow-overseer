@@ -54,8 +54,40 @@ import json
 import re
 from dataclasses import dataclass, field
 
-# The world's own word for "this row can never work" (SellRetryWord).
+# The world's own words for whether a row could ever work (SellRetryWord).
 RETRY_NEVER = "never"
+
+# "This row can work, but not from where the character is standing."
+# mod-overseer#230 classifies `vendor not in range` and `vendor refuses item`
+# as ELSEWHERE and carries the word out in `result` precisely so that the side
+# which DECIDES re-queues a fresh row, rather than the executor re-attempting
+# the same one: twenty rows that kept their place at the head of the queue
+# livelocked the drain for half an hour, which is why that change was made.
+#
+# NOTHING ON THIS SIDE READ IT (infra#3464). `terminal_scope` honoured only
+# `never`, so an ELSEWHERE refusal was indistinguishable from `later` and the
+# same row was proposed again on the next cycle, from the same spot, for ever.
+# Measured over three hours on the live realm: 1,950 sell rows answered, 1,860
+# of them `vendor not in range`, and 10 sales.
+RETRY_ELSEWHERE = "elsewhere"
+
+# How many ELSEWHERE refusals before this stops offering an item and says so.
+#
+# The caller's own gate is the first line and the bigger one: the vendor pass
+# now writes nothing unless a vendor is within reach of the seller. This is
+# what catches the case that gate cannot see - a vendor IS standing there and
+# will not deal. `GetNPCIfCanInteractWith` refuses an unfriendly vendor with
+# the same "vendor not in range" it gives an absent one, so distance and
+# hostility are indistinguishable from this side, and only the repetition
+# tells them apart. On this realm that is not hypothetical: the innkeeper
+# nearest the family's instance is the other faction's and was correctly
+# refusing them.
+#
+# THREE, and it is a judgement rather than a measurement. Two is a plausible
+# pair of near misses while a bot drifts in and out of five yards, and the
+# cost of being wrong is one item held for the rest of the memory window
+# rather than an item lost. The same shape as materials.GIVE_UP_AFTER.
+ELSEWHERE_GIVE_UP = 3
 
 # How far a terminal refusal reaches.
 ITEM = "item"        # the item is gone or unsellable: never ask for it again
@@ -180,6 +212,34 @@ def settled(attempts) -> tuple:
     return items, requests
 
 
+def refused_here(attempts, give_up=ELSEWHERE_GIVE_UP) -> dict:
+    """(holder, item) -> reason, for items the world keeps refusing on PLACE.
+
+    An ELSEWHERE refusal is not terminal, and must not be treated as one: the
+    row would work somewhere else, and the honest answer to it is to move
+    rather than to give up. But nothing on this side can make anybody move,
+    and answering it by asking again from the same spot is the retry storm
+    this module exists to prevent in its other form. So repetition settles it:
+    asked `give_up` times, refused `give_up` times, hold it and say why.
+
+    Keyed on the ITEM and never on the request, because where a character is
+    standing is a fact about the character and not about the count.
+
+    The hold expires with the caller's memory window rather than being
+    permanent, so a party that walks to a vendor which WILL deal with them
+    offers every one of these again.
+    """
+    tally: dict = {}
+    for attempt in attempts:
+        if attempt.retry != RETRY_ELSEWHERE:
+            continue
+        key = (attempt.holder, attempt.item_guid)
+        tally[key] = tally.get(key, 0) + 1
+    least = max(1, int(give_up))
+    return {key: "refused %d times for want of a reachable vendor" % count
+            for key, count in tally.items() if count >= least}
+
+
 def open_requests(attempts) -> set:
     """Keys with a row nobody has answered yet, which must not be doubled."""
     return {(a.holder, a.item_guid) for a in attempts
@@ -217,6 +277,7 @@ def plan(candidates, attempts) -> Plan:
     """
     attempts = tuple(attempts)
     done_items, done_requests = settled(attempts)
+    stuck_here = refused_here(attempts)
     already_open = open_requests(attempts)
     stacks = true_stacks(attempts)
     write, skipped, seen = [], {}, set()
@@ -231,6 +292,9 @@ def plan(candidates, attempts) -> Plan:
             continue
         if key in already_open:
             drop("already queued")
+            continue
+        if key in stuck_here:
+            drop(stuck_here[key])
             continue
         if key in seen:
             # Two rows for one stack in a single pass is the duplicate this

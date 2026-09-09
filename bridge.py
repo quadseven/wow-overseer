@@ -1486,8 +1486,16 @@ def _write_declared_professions() -> None:
 ECONOMY_ERRANDS = ("vendor", "banker", "repair")
 
 
-def _write_trade_errand(errand) -> None:
+def _write_trade_errand(errand) -> bool:
     """Put one character's outstanding trade plan where the worldserver reads it.
+
+    RETURNS WHETHER THE AIM WAS ACTUALLY TAKEN (infra#3464). The economy guard
+    below only retasks an IDLE traveller, so a vendor aim written while the
+    town-trip pass owns `travel_npc = repair` matches no row and changes
+    nothing. That was silent: the update ran, the pass carried on, and it
+    queued a queue-full of sales for a journey nobody had been sent on.
+    Measured on the live realm over three hours, 1,950 sell rows ended in
+    error and 1,860 of them said `vendor not in range`.
 
     THE ROAD THAT WAS MISSING. professions.plan() has been reaching the right
     answer since 2026-08-26 and writing it to `overseer_trade`, which is a
@@ -1517,6 +1525,10 @@ def _write_trade_errand(errand) -> None:
                     "WHERE name = %s AND (travel_npc = '' OR travel_npc = %s)",
                     (errand.travel_npc, errand.character, errand.travel_npc),
                 )
+                # rowcount 0 is "somebody else's errand owns this traveller",
+                # which is a legitimate outcome and not an error - but it means
+                # nobody is walking anywhere, and the caller has to know.
+                return bool(cur.rowcount)
             else:
                 cur.execute(
                     "UPDATE overseer_roster SET learn_skill = %s, unlearn_skill = %s, "
@@ -1537,8 +1549,9 @@ def _write_trade_errand(errand) -> None:
                     "carrying mod-overseer's SQL has shipped (infra#2757)",
                     errand.character,
                 )
-                return
+                return False
             raise
+    return True
 
 
 # THE overseer_* TABLES DO NOT SHARE ONE COLLATION, AND THIS SIDE CANNOT FIX
@@ -3286,6 +3299,14 @@ class Bridge(discord.Client):
         # every piece is UNASKED, and the gear half of this pass offers
         # nothing - which is the safe way to not know.
         fits = bag_pressure.family_fits(gear_rows, worn, names)
+        # THE HAND-OFF IS TRIED FIRST, AND IT IS TRIED WHETHER OR NOT ANYTHING
+        # IS FOR SALE. A piece a sibling should be wearing is worth more on
+        # that sibling than in anybody's purse, and the two answers come from
+        # one gate over one read of the world, so asking for them in one place
+        # is what stops a sale and a hand-off ever being proposed for the same
+        # item. It sits above the `no candidates` return because a family with
+        # nothing to sell can still be carrying somebody else's upgrade.
+        await self._hand_gear(gear_rows, worn, names)
         candidates = bag_pressure.vendor_candidates(
             rows, keep_names=OWNER_KEEPS,
         ) + (
@@ -3297,6 +3318,65 @@ class Bridge(discord.Client):
         if not candidates:
             log.info("economy: no safe carried vendor goods")
             return
+        # Only the family leader can take `new rpg`; followers travel by
+        # following that leader. Sending a follower directly to a vendor is
+        # refused by the world module and leaves that character behind.
+        leader = bonds.head_of_family()
+        aimed = await asyncio.to_thread(
+            _write_trade_errand,
+            professions.Errand(character=leader, travel_npc="vendor"),
+        )
+        if not aimed:
+            # Not an error. The bank and town-trip passes aim the same
+            # traveller and only an idle one may be retasked, so this is the
+            # ordinary state while one of them owns the leader. It is logged
+            # because "nobody is walking to a vendor" was invisible before.
+            log.info("economy: %s is on another errand; no vendor aim taken",
+                     leader)
+        # THE ROW IS ONLY WRITTEN WHERE IT CAN WORK (infra#3464).
+        #
+        # THE MEASUREMENT. Over three hours on the live realm the sell verb
+        # was answered 1,950 times and 1,940 of those were errors: 1,860
+        # `vendor not in range`, 48 `seller is dead`, 42 `seller is in
+        # flight`. Ten sales succeeded. That is roughly 650 attempts an hour
+        # issued from wherever the party happened to be standing.
+        #
+        # WHY IT LOOKED LIKE A DECISION BUG AND IS NOT ONLY ONE. A sale rule
+        # that never runs at a vendor leaves exactly the same 197 greens in
+        # the bags as a sale rule that refuses to sell them. Both were true
+        # here, and this is the half that was doing the damage.
+        #
+        # WHAT THE WORLD ALREADY SAID AND NOBODY READ. mod-overseer#230
+        # stopped pushing a refused row back to `pending` - twenty of them
+        # held the head of a FIFO for half an hour and livelocked the drain -
+        # and carries the retry class out instead: `vendor not in range` is
+        # classified ELSEWHERE, whose whole meaning is "this row can work, but
+        # not from where this character is standing". The comment on that
+        # change says the deciding side re-queues a fresh row. This side never
+        # read the word (item_plan honours only `never`), so it re-queued from
+        # the same spot every cycle, for ever.
+        #
+        # THE GATE IS THE READER THE TOWN TRIP ALREADY USES. `_fetch_town`
+        # reads the counters within TOWN_COUNTER_YARDS of where the leader is
+        # STANDING, from the live snapshot rather than the save timer, and
+        # that box is deliberately sized to the core's own 5.5 yard
+        # interaction distance. So "a vendor is in reach" here is a tight
+        # proxy for "DoSell will not refuse on range", not a loose "we are in
+        # town somewhere".
+        #
+        # WHY `town.vendor` AND NOT `town.stocks`. What a vendor SELLS is
+        # never consulted when a player sells TO it, so a merchant with no
+        # npc_vendor rows still buys; gating on stock would refuse exactly the
+        # vendors that would have taken the greens.
+        town = await asyncio.to_thread(_fetch_town, leader)
+        if not town.vendor:
+            log.info(
+                "economy: %d carried candidate(s) but no vendor within reach "
+                "of %s - queuing nothing, and %s",
+                len(candidates), leader,
+                "walking there" if aimed else "not walking there either",
+            )
+            return
         # The world has already answered some of these. A sale that was
         # delivered, or refused with a reason retrying cannot change, must not
         # be proposed again: 819 of 822 `item not carried` refusals in one day
@@ -3307,22 +3387,49 @@ class Bridge(discord.Client):
             log.info("economy: %d carried candidate(s), none still open - %s",
                      len(candidates), item_plan.reasons(plan.skipped))
             return
-        # Only the family leader can take `new rpg`; followers travel by
-        # following that leader. Queue every holder's rows together and let
-        # the core keep each sale pending until the follower reaches town.
-        # Sending a follower directly to a vendor is refused by the world
-        # module and leaves that character behind.
-        leader = bonds.head_of_family()
-        await asyncio.to_thread(
-            _write_trade_errand,
-            professions.Errand(character=leader, travel_npc="vendor"),
-        )
         inserted = 0
         for candidate in plan.write:
             if await asyncio.to_thread(_insert_sell, candidate):
                 inserted += 1
         log.info("economy: queued %d/%d vendor sale(s), leader=%s, held back %s",
                  inserted, len(candidates), leader, item_plan.reasons(plan.skipped))
+
+    async def _hand_gear(self, gear_rows: list, worn: list, names: list) -> None:
+        """Move every carried piece that suits a sibling better (infra#3464).
+
+        THE VERB IS kind='trade' AND NOT kind='give', and gear.py's own banner
+        argues it: DoTrade drives the core's WorldSession trade handlers, so
+        the exchange renders and animates between two characters standing
+        together, where DoGive is a database move. Both exist; a piece of gear
+        changing hands is a thing the party should be seen doing, and the
+        materials pass keeps kind='give' for a stack of cloth.
+
+        NO TRAVEL ERRAND IS WRITTEN, deliberately. A trade happens where the
+        two of them already are, so this needs no counter, no leader and no
+        `travel_npc` - which is also why it can run beside the vendor half
+        without joining the queue of passes that all want to aim the leader
+        somewhere.
+
+        NOTHING IS DESTROYED AND NOTHING SOULBOUND IS OFFERED.
+        `gear.is_upgrade_for` refuses a soulbound item outright, so a piece
+        that cannot legally reach a sibling never becomes a grant, and
+        DoTrade refuses one again on its own side.
+        """
+        grants = bag_pressure.family_gifts(gear_rows, worn, names,
+                                           keep_names=OWNER_KEEPS)
+        if not grants:
+            return
+        seen = await asyncio.to_thread(_recent_trade_keys, GIVE_RETRY_MINUTES)
+        fresh = []
+        for grant in grants:
+            if (grant.holder, grant.taker, grant.command) in seen:
+                continue
+            if await asyncio.to_thread(_insert_gear_trade, grant):
+                fresh.append(grant)
+        for grant in fresh:
+            log.info("gear: %s -> %s, %s - %s",
+                     grant.holder, grant.taker, grant.name, grant.reason)
+        log.info("gear: queued %d/%d hand-off(s)", len(fresh), len(grants))
 
     async def _vendor_loop(self) -> None:
         await self.wait_until_ready()
@@ -3421,6 +3528,13 @@ class Bridge(discord.Client):
         infra#3357 - and nothing has ever called it or written one of those
         rows. Two working verbs with no producer is the whole of this pass.
 
+        AND kind='conjure' WAS THE THIRD OF THEM (infra#3464). mod-overseer#147
+        landed a verb that makes a party's food and water out of nothing, and
+        nothing in this process has ever written one either, so the only
+        conjuring on the realm was the mage feeding himself one stack at a time
+        through mod-playerbots patch 0015. towntrip.plan now asks for the
+        party's worth and hands the surplus on with kind='give'.
+
         NOT IN THE MIDDLE OF A DUNGEON RUN, the same gate the vendor and bank
         passes use and for the same reason: a town errand pulls the leader out
         of the instance and the party spreads.
@@ -3473,8 +3587,10 @@ class Bridge(discord.Client):
                 continue
             if await asyncio.to_thread(_insert_town_errand, errand):
                 queued += 1
-                log.info("towntrip: %s %s - %s",
-                         errand.member, errand.kind, errand.why)
+                log.info("towntrip: %s %s%s - %s",
+                         errand.member, errand.kind,
+                         " -> %s" % errand.taker if errand.taker else "",
+                         errand.why)
         log.info("towntrip: queued %d/%d errand(s), leader=%s",
                  queued, len(trip.errands), leader)
 
@@ -4850,6 +4966,66 @@ def _insert_give(grant: materials.Grant) -> int:
         return cur.lastrowid or 0
 
 
+def _recent_trade_keys(minutes: int) -> set:
+    """(holder, taker, command) triples already proposed inside the window.
+
+    Its own reader rather than a widened _recent_give_keys, because the two
+    kinds have to stay tellable apart: a reagent hand-off and a gear hand-off
+    can name the same guid form, and a shared window would let one pass
+    silence the other's retry. Degrades to "nothing is queued" on a world
+    image with no 'trade' value, the same direction _recent_town_keys takes.
+    """
+    with _connect() as conn, conn.cursor() as cur:
+        try:
+            cur.execute(
+                "SELECT target_name, target_arg, command FROM overseer_command "
+                "WHERE kind = 'trade' AND created_at > NOW() - INTERVAL %s MINUTE",
+                (int(minutes),),
+            )
+        except pymysql.err.MySQLError as exc:
+            if exc.args and exc.args[0] in (1054, 1146, 1265):
+                return set()
+            raise
+        return {
+            (row["target_name"], row["target_arg"], row["command"])
+            for row in cur.fetchall()
+        }
+
+
+def _insert_gear_trade(grant) -> int:
+    """One overseer_command row handing one carried piece to a sibling.
+
+    The giver in target_name, the receiver in target_arg and the
+    item_instance guid in the command - the same three roles kind='give'
+    already uses, so an operator reading the queue does not have to learn a
+    second layout. source='gear' is what separates this from the reagent and
+    bag hand-offs in the log and in the retry window above.
+
+    Guarded on 1265 like every other kind this process writes: a worldserver
+    behind mod-overseer's trade migration must warn rather than raise and
+    take the whole economy pass down with it.
+    """
+    with _connect() as conn, conn.cursor() as cur:
+        try:
+            cur.execute(
+                "INSERT INTO overseer_command "
+                "(target_name, command, kind, target_arg, source) "
+                "VALUES (%s, %s, 'trade', %s, %s)",
+                (grant.holder, grant.command, grant.taker, "gear"),
+            )
+        except pymysql.err.MySQLError as exc:
+            if exc.args and exc.args[0] in (1146, 1265):
+                log.warning(
+                    "overseer_command.kind has no 'trade' value - handing %s "
+                    "from %s to %s needs the worldserver image carrying "
+                    "mod-overseer's trade SQL (mod-overseer#14)",
+                    grant.name, grant.holder, grant.taker,
+                )
+                return 0
+            raise
+        return cur.lastrowid or 0
+
+
 # Every container the family owns and where it sits. `used` is how many items
 # are inside it, for the worn bags. ITEM_CLASS_CONTAINER is 1; quivers and
 # ammo pouches are a different class and would not take ordinary loot, so
@@ -5062,17 +5238,34 @@ _TOWN_WORN_SQL = (
     "WHERE c.name IN (%s)"
 )
 
-# How much food and drink each of them is carrying. Grouped here rather than
-# counted in Python because a stack is a row and a character can hold several
-# of the same thing; towntrip only wants the total.
+# EVERY CARRIED STACK OF ANYTHING EATEN OR DRUNK, ONE ROW PER STACK, ASKED OF
+# THE WORLD RATHER THAN OF A LIST (infra#3464).
+#
+# The predecessor of this query filtered `ii.itemEntry IN (...)` against the
+# twelve vendor tiers towntrip.FOOD and towntrip.DRINK name, so conjured food,
+# conjured water and anything looted were all invisible to it and every one of
+# their holders read as carrying nothing. `it.spellcategory_1` is the game's
+# own classification (11 eaten, 59 drunk) and is what mod-playerbots and
+# mod-overseer both ask; towntrip.CATEGORY_KIND decides what the number means,
+# because that is a decision and decisions do not belong in a WHERE clause.
+#
+# NOT GROUPED ANY MORE EITHER. A hand-off moves one item_instance, so the guid
+# of each stack has to survive the crossing; towntrip sums them. `it.Flags`
+# comes over raw for the same reason `ii.flags` does on the gear path - the
+# conjured bit is read in the pure module where a test can reach it.
+#
+# The bag scope is the carried one: bag 0 slot < 19 is what a character is
+# WEARING and nobody eats their boots.
 _TOWN_CARRIED_SQL = (
-    "SELECT c.name AS holder, ii.itemEntry AS entry, SUM(ii.count) AS carried "
+    "SELECT c.name AS holder, ii.guid AS guid, ii.itemEntry AS entry, "
+    "it.name AS name, ii.count AS carried, "
+    "it.spellcategory_1 AS spell_category, it.Flags AS item_flags "
     "FROM characters c "
     "JOIN character_inventory ci ON ci.guid = c.guid "
     "JOIN item_instance ii ON ii.guid = ci.item "
-    "WHERE c.name IN (%s) AND ii.itemEntry IN (%s) "
-    "AND NOT (ci.bag = 0 AND ci.slot < 19) "
-    "GROUP BY c.name, ii.itemEntry"
+    "JOIN acore_world.item_template it ON it.entry = ii.itemEntry "
+    "WHERE c.name IN (%s) AND it.spellcategory_1 IN (%%s, %%s) "
+    "AND NOT (ci.bag = 0 AND ci.slot < 19)"
 )
 
 # The spellbook, for the conjure check and nothing else. Written on the
@@ -5131,15 +5324,25 @@ def _fetch_town_worn(names: list) -> list:
 
 
 def _fetch_town_carried(names: list) -> list:
-    """How much food and drink each of them holds, by item entry."""
-    entries = sorted({entry for _, entry, _, _ in towntrip.FOOD}
-                     | {entry for _, entry, _, _ in towntrip.DRINK})
-    if not names or not entries:
+    """Every carried stack of food or drink; towntrip decides what it means.
+
+    Degrades to "they carry nothing" on 1054 or 1146, which is the direction
+    the rest of this pass takes: a world image with no `spellcategory_1` or no
+    item_template cannot say what a consumable is, and planning against a
+    guess is how a stack gets bought for somebody who has two.
+    """
+    if not names:
         return []
-    sql = _TOWN_CARRIED_SQL % (",".join(["%s"] * len(names)),
-                               ",".join(["%s"] * len(entries)))
+    sql = _TOWN_CARRIED_SQL % ",".join(["%s"] * len(names))
     with _connect() as conn, conn.cursor() as cur:
-        cur.execute(sql, (*names, *entries))
+        try:
+            cur.execute(sql, (*names, towntrip.CONSUMABLE_CATEGORY_FOOD,
+                              towntrip.CONSUMABLE_CATEGORY_DRINK))
+        except pymysql.err.MySQLError as exc:
+            if exc.args and exc.args[0] in (1054, 1146):
+                log.warning("towntrip: cannot read what anybody is carrying")
+                return []
+            raise
         return [dict(row) for row in cur.fetchall()]
 
 
@@ -5160,12 +5363,19 @@ def _recent_town_keys(minutes: int) -> set:
     has not finished from filling the queue: a repair whose character is still
     on the road is refused with `repairer not in range`, and an identical row
     every cycle would turn one slow journey into a hundred dead commands.
+
+    SCOPED TO source='towntrip' NOW THAT IT READS kind='give' TOO (infra#3464).
+    The materials and bag passes write their own give rows with the same
+    `guid:N` command shape, and a window that could not tell them apart would
+    let one pass silence another's retry - a give of a conjured stack held back
+    for an hour because a bag handover happened to name the same guid.
     """
     with _connect() as conn, conn.cursor() as cur:
         try:
             cur.execute(
                 "SELECT target_name, command FROM overseer_command "
-                "WHERE kind IN ('repair', 'buy') "
+                "WHERE kind IN ('repair', 'buy', 'conjure', 'give') "
+                "AND source = 'towntrip' "
                 "AND created_at > NOW() - INTERVAL %s MINUTE",
                 (int(minutes),),
             )
@@ -5180,14 +5390,20 @@ def _recent_town_keys(minutes: int) -> set:
 
 
 def _insert_town_errand(errand) -> int:
-    """Queue one repair or buy row for the world-side executor."""
+    """Queue one repair, buy, conjure or give row for the world executor.
+
+    `target_arg` carries the receiving character on a hand-off and is empty on
+    everything else, which is the role that column already holds for
+    kind='give' in the materials and bag passes.
+    """
     with _connect() as conn, conn.cursor() as cur:
         try:
             cur.execute(
                 "INSERT INTO overseer_command "
                 "(target_name, command, kind, target_arg, source) "
-                "VALUES (%s, %s, %s, '', %s)",
-                (errand.member, errand.command, errand.kind, "towntrip"),
+                "VALUES (%s, %s, %s, %s, %s)",
+                (errand.member, errand.command, errand.kind,
+                 errand.taker, "towntrip"),
             )
         except pymysql.err.MySQLError as exc:
             if exc.args and exc.args[0] in (1146, 1265):
@@ -5835,6 +6051,16 @@ class HeadlessBridge(Bridge):
     READY sets, and spins on `while not self.is_closed()`. Without these it
     would not be that the loops misbehave - they would never run at all, and
     nothing would say so.
+
+    THE ECONOMY PASSES WERE MISSING FROM THIS LIST AND ARE NOT ANY MORE
+    (infra#3464, named as a known gap by infra#3450 and left alone there).
+    `_vendor_loop` and `_bank_loop` were started by setup_hook and not by
+    `run_headless`, so a dev world could never answer "did the vendor pass
+    empty the bags" - the one question a validation world exists to answer
+    about a change to the vendor pass. The list below and setup_hook's now
+    differ by exactly the skip set declared underneath this docstring, and
+    tests/test_headless_bridge.py holds them to that rather than to a
+    hand-kept enumeration.
     """
 
     # The chat relay is left out ON PURPOSE rather than allowed to no-op. Its
@@ -5870,6 +6096,8 @@ class HeadlessBridge(Bridge):
                 self._sample_family,
                 self._share_quests_loop,
                 self._move_materials_loop,
+                self._vendor_loop,
+                self._bank_loop,
                 self._towntrip_loop,
                 self._restore_lost_lives,
             ) if coro.__name__ not in self.HEADLESS_SKIP

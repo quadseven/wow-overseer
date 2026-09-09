@@ -253,6 +253,11 @@ def decide(item, family, character_level=1, upgrade_for_sibling=False,
     anything up. FIT_HOLDER and FIT_UNJUDGEABLE both KEEP, and they are
     checked before every disposal for the usual reason: a wrong KEEP costs a
     bag slot and a wrong sale costs the item.
+
+    FIT_NOBODY ALSO RETIRES THE `outgrown` LEVEL MARGIN, but only for a piece
+    the holder has already reached the required level of. The margin is a
+    proxy for the question the gate answers directly, and the branch below
+    says why in full.
     """
     if not item.known:
         return Verdict(KEEP, "nothing is known about %s, and an unclassified "
@@ -318,8 +323,37 @@ def decide(item, family, character_level=1, upgrade_for_sibling=False,
         return Verdict(KEEP, "%s is junk but no vendor is reachable" % item.name)
 
     if item.equipment and not outgrown(item, character_level):
-        return Verdict(KEEP, "%s is still close enough to level to be worn"
-                             % item.name)
+        # THE LEVEL MARGIN IS A PROXY FOR THE QUESTION THE GATE HAS ALREADY
+        # ANSWERED, and a proxy must not overrule the measurement (infra#3464).
+        #
+        # `outgrown` asks "has this character moved far enough past the
+        # required level that it will never be worn again", which is a guess at
+        # "would anybody wear this". FIT_NOBODY is that same question, put to
+        # the holder soulbound-blind and to all four siblings by the one
+        # opinion that also decides hand-offs, and answered no. Letting the
+        # guess win over the answer is why a green that nobody in the family
+        # can use sits in a bag until the character out-levels it by ten, and
+        # then keeps sitting there because nothing looks at it again.
+        #
+        # THE ARGUMENT THAT MAKES THIS SAFE IS THAT GEAR ONLY IMPROVES. Item
+        # level is fixed on the item; every character's equipped item level
+        # only ever goes up, because nothing in this system takes gear off
+        # anybody. So a piece that beats nobody's slot today beats nobody's
+        # slot at any level after today, and re-asking later cannot change the
+        # answer to yes.
+        #
+        # THE ONE CASE THAT ARGUMENT DOES NOT COVER IS A PIECE NOBODY HAS
+        # REACHED YET, and it is excluded rather than reasoned about.
+        # `gear.is_upgrade_for` refuses a character below the required level
+        # with "requires level N", so a level-30 robe carried by a level-24
+        # priest answers NOBODY for a reason that is temporary and that levelling
+        # retires. Requiring the holder to have reached the level keeps every
+        # one of those, which is the fail-closed direction and the same one the
+        # rest of this module takes: a wrong KEEP costs a bag slot, a wrong sale
+        # costs the item.
+        if family_fit != FIT_NOBODY or item.required_level > character_level:
+            return Verdict(KEEP, "%s is still close enough to level to be worn"
+                                 % item.name)
 
     # An old green. This is the branch the whole module exists for, and
     # binding decides which routes are even open.
