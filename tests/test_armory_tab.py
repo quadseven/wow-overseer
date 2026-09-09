@@ -17,6 +17,7 @@ happen again to whoever adds the third one.
 Tickets: infra#3096 (the tab), infra#3139 (the profile).
 """
 import pathlib
+import re
 import unittest
 
 import armory
@@ -67,6 +68,15 @@ class TheArmoryTab(unittest.TestCase):
         # something about somebody else's code.
         cls.acss = cls.css[:cls.css.index(
             "--- the standing panel (mod-overseer#88, mod-overseer#160)")]
+        # THE SAME RULES WITH THE COMMENTS TAKEN OUT, for anything asserting
+        # that a declaration is GONE. Every rule in this file is explained
+        # above itself and the explanation names what it replaced, so
+        # "align-self:stretch is no longer set" read against the source is
+        # answered by the paragraph saying it used to be. That is a test that
+        # punishes writing the comment. Anything asserting a declaration is
+        # PRESENT can read cls.acss; anything asserting one is absent reads
+        # this. (The wall suite learned the same thing: see _wall_code.)
+        cls.acode = re.sub(r"/\*.*?\*/", "", cls.acss, flags=re.S)
 
     def test_the_tab_exists_beside_the_family_and_the_continents(self):
         self.assertIn('<section id="armory">', self.page)
@@ -296,15 +306,89 @@ class TheArmoryTab(unittest.TestCase):
         rule = rule[:rule.index("}") + 1]
         self.assertIn("overflow:hidden", rule,
                       "the stage must clip the card it holds")
-        self.assertIn("max-height:min(60%, 60vh);", self.acss)
+        self.assertIn("max-height:min(100%, 60vh);", self.acss)
 
-    def test_the_character_stays_visible_under_the_card(self):
-        """A card that covered the model would have answered the request by
-        deleting the thing the request was about. The stage is as tall as the
-        gear columns and the model stands at the top of it, so the card takes
-        the empty room under the feet before it takes any of the character."""
-        self.assertIn("align-self:stretch;", self.acss)
-        self.assertIn(".aportrait.live { justify-content:flex-start; }", self.acss)
+    def test_the_card_is_capped_by_the_stage_and_not_by_a_fraction_of_it(self):
+        """It was min(60%, 60vh) against a stage that borrowed its height
+        from whatever stood beside it, so the same card holding the same
+        words was capped at 310px on a phone and 470px on a desktop. Against
+        the 4:5 stage that fraction is 167px, and this tab's own items
+        measure 266.7px: it would put a sword's stats in a box the size of
+        the sword's icon. The card is height:auto under the cap, so a short
+        item is still a short card at the character's feet (infra#3488)."""
+        rules = self.acode[self.acode.index(".acard {"):]
+        rules = rules[:rules.index(".acard[hidden]")]
+        self.assertNotIn("min(60%", rules,
+                         "a fraction of a stage that is now the model's own box")
+        self.assertNotIn("height:100%", rules,
+                         "the card grows to the item, it does not fill the stage")
+
+    def test_the_stage_is_a_shape_and_not_whatever_its_row_happens_to_be(self):
+        """THE FAULT THIS CLOSES (infra#3488). align-self:stretch with no
+        ceiling made the stage take the height of the tallest thing beside
+        it: the taller gear column on a phone, 517.5px whatever the model is,
+        and the stat block on a desktop, 783.1px. Measured against a 279px
+        character that is 238.5px of empty gradient on every one of five
+        profiles.
+
+        align-self:start IS THE LOAD-BEARING HALF. A stretched grid item has
+        a definite height and a definite height beats aspect-ratio, so
+        leaving the stretch in place would leave the ratio inert and the box
+        exactly as tall as before."""
+        rule = self.acss[self.acss.index("  .aportrait { position:relative;"):]
+        rule = rule[:rule.index("}") + 1]
+        self.assertIn("align-self:start;", rule)
+        self.assertIn("aspect-ratio:4/5;", rule)
+        self.assertIn("max-height:70vh;", rule)
+        self.assertNotIn("align-self:stretch", self.acode,
+                         "the stage must not take its height from its row")
+        self.assertNotIn("min-height:300px", rule,
+                         "a floor under a ratio only letterboxes the model")
+
+    def test_the_canvas_is_given_both_its_sides_and_not_only_its_width(self):
+        """THE SHELL SETS `canvas { width:100% }` WITH NO HEIGHT, for the map
+        views, and it reaches this canvas. A canvas taking its width from a
+        stylesheet and its height from its own attribute has an aspect ratio
+        nothing constrains, and this one was in that state on the widest
+        screens: measured at 1440 the element carried no inline style at all,
+        because the viewer writes one only from onResize and fitModel skips
+        onResize when the size already matches. 300px of CSS width beside a
+        375px attribute happens to be 4:5 until the column changes.
+
+        So both sides are stated, against a pane that is the stage, and the
+        attribute goes back to being only the backing store's resolution."""
+        self.assertIn(".amodel canvas { display:block; width:100%; height:100%; }",
+                      self.acss)
+        self.assertIn(".aportrait.live .amodel { display:block; height:100%; }",
+                      self.acss)
+        # The global rule this defends against, so the pair is read together:
+        # if the shell ever stops setting it, the reason above is stale.
+        self.assertIn("canvas { width:100%;", self.page)
+
+    def test_the_stage_ratio_and_the_camera_agree_on_one_number(self):
+        """The CSS decides the box and MODEL_ASPECT frames the character in
+        it. Written twice, in two languages, so they are asserted to be the
+        same number: change one alone and the model is letterboxed inside
+        its own element."""
+        self.assertIn("const MODEL_ASPECT = 0.8;", self.ajs)
+        self.assertIn("aspect-ratio:4/5;", self.acss)
+
+    def test_the_canvas_is_fitted_to_the_stage_and_carries_its_ratio(self):
+        """TWO THINGS THIS GETS RIGHT THAT READING THE PANE DID NOT. The pane's
+        height is written by this call, through the viewer's own inline style,
+        so an observer on the pane watches its own output; the stage is the
+        element carrying the shape. And the aspect handed to the renderer is
+        the one the measured box actually makes, not the constant, because
+        the two part company the moment the 70vh ceiling bites on a short
+        landscape phone and then it is the box that is right."""
+        self.assertIn("const width = Math.round(c.portrait.clientWidth);", self.ajs)
+        self.assertIn("const height = Math.round(c.portrait.clientHeight);", self.ajs)
+        self.assertIn("r.onResize(width, height, width / height);", self.ajs)
+        self.assertIn("new ResizeObserver(() => fitModel(c)).observe(c.portrait);",
+                      self.ajs)
+        self.assertNotIn("MODEL_ASPECT)", self.ajs[self.ajs.index("function fitModel"):
+                                                   self.ajs.index("function watchModel")],
+                         "fitModel must pass the measured ratio, not the constant")
 
     def test_the_card_goes_away_every_way_a_tap_can_ask(self):
         """It appears on a tap, so it has to leave on one. The same cell

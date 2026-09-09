@@ -1167,15 +1167,41 @@
   .aslot.on { box-shadow:0 0 0 2px var(--ground); }
   .aslot.broken.on { box-shadow:0 0 0 2px var(--vermilion), 0 0 0 4px var(--ground); }
   .aslot:focus-visible { outline:2px solid var(--ground); outline-offset:3px; }
-  /* THE STAGE IS AS TALL AS THE GEAR COLUMNS (infra#3456), which it was
-     not: the doll's row is 518px of item cells and the stage stopped at the
-     model, leaving a column of dead space under the character's feet. That
-     space is where the item card goes, so stretching the stage is what lets
-     the card sit on the character without covering it. And overflow:hidden
-     is doing a second job now: it is what guarantees the card cannot reach
+  /* THE STAGE IS THE CHARACTER'S OWN SHAPE (infra#3488), which is 4:5, which
+     is MODEL_ASPECT 0.8 written as a ratio. Keep the two in step: the canvas
+     is fitted to this box, so this declaration is what decides how a
+     character is framed.
+
+     IT USED TO BE WHATEVER ITS ROW WAS. infra#3456 gave it align-self:stretch
+     and no ceiling, so it was not a shape at all - it took the height of the
+     tallest thing beside it. On a phone that is the taller gear column, ten
+     46px cells and nine 6.4px gaps, 517.5px whatever the model is; on a
+     desktop .abody puts the doll beside the stat block and it becomes the
+     stat block's twenty rows, 783.1px. Measured against a 279px character on
+     a 390px screen that is 238.5px of empty gradient under his feet, on every
+     one of five profiles, and it is why this tab was 16,040px tall.
+
+     WHAT THE STRETCH WAS BUYING, and why it is not worth 238.5px. The empty
+     room was where the item card landed, so that reading a sword did not
+     cover the character holding it. The card measures 266.7px at that width.
+     It covered the legs anyway. The page was paying for that room at every
+     width, on every profile, whether or not a card was ever opened, to half
+     solve a state that only exists while somebody is reading an item.
+
+     align-self:start IS LOAD-BEARING, not tidying. A stretched grid item has
+     a definite height, and a definite height beats aspect-ratio: leaving the
+     stretch in place would leave this rule inert and the box exactly as tall
+     as before.
+
+     AND A CEILING BEHIND THE RATIO. The ratio decides the height from the
+     width, so it cannot run away on its own - but a column this box sits in
+     could be widened by a change three rules away, and 70vh is the point past
+     which a character stops being something you can see all of. overflow is
+     doing a second job as well: it is what guarantees the card cannot reach
      past the stage, and so cannot reach past the screen. */
   .aportrait { position:relative; display:flex; flex-direction:column; align-items:center;
-               justify-content:center; align-self:stretch; min-height:300px;
+               justify-content:center; align-self:start;
+               aspect-ratio:4/5; max-height:70vh;
                border-radius:12px;
                background:radial-gradient(ellipse at 50% 40%, color-mix(in srgb, var(--cc, #445) 45%, transparent) 0%, transparent 65%);
                overflow:hidden; }
@@ -1185,21 +1211,35 @@
   .aportrait .sil { width:min(160px, 100%); aspect-ratio:1; }
   /* the 3D model (infra#88): Wowhead's viewer, drawn where the portrait
      sits, with the portrait kept underneath until the model is actually
-     on screen - and kept for good when the viewer never arrives. The
-     canvas is as wide as the middle column and 4:5 tall; a drag turns it,
-     and it turns slowly on its own until touched. */
+     on screen - and kept for good when the viewer never arrives. The canvas
+     is the stage, exactly (infra#3488): fitModel measures this box and hands
+     the renderer its width, its height and the aspect the two make, so the
+     picture cannot be a different shape from the element holding it. A drag
+     turns it, and it turns slowly on its own until touched. */
   .aportrait.live .race, .aportrait.live .sil, .aportrait.live .cls { display:none; }
   .amodel { display:none; width:100%; position:relative; touch-action:none;
             cursor:grab; border-radius:12px; overflow:hidden; }
   .amodel:active { cursor:grabbing; }
-  .aportrait.live .amodel { display:block; }
-  .amodel canvas { display:block; }
-  /* THE CHARACTER STANDS AT THE TOP OF THE STAGE, and only once there is a
-     character to stand: a model centred in a stage the height of the gear
-     columns floats in the middle of it with its feet where the card goes.
-     The portrait icon underneath stays centred, because it is a badge and
-     not a figure with feet. */
-  .aportrait.live { justify-content:flex-start; }
+  .aportrait.live .amodel { display:block; height:100%; }
+  /* THE CANVAS IS GIVEN BOTH ITS SIDES, and this is the declaration that
+     stops the shell sizing it (infra#3488).
+
+     `canvas { width:100% }` is set globally with no height, for the map
+     views. A canvas taking its width from a stylesheet and its height from
+     its own attribute has an aspect ratio nothing on the page constrains,
+     and this canvas was in exactly that state on the widest screens:
+     MEASURED at 1440, the element carried no inline style at all, because
+     the viewer writes one only from onResize and fitModel skips onResize
+     when the size it computes already matches. The construction path leaves
+     the attributes and nothing else. 300px of CSS width beside a 375px
+     attribute happened to be 4:5, which is the kind of agreement that holds
+     until the column it is in changes.
+
+     So the box is stated here, in both axes, against a pane that is the
+     stage: whatever the attribute says, the picture is drawn at the shape of
+     the element holding it. The attribute is then only the backing store's
+     resolution, which is the one thing a canvas attribute should decide. */
+  .amodel canvas { display:block; width:100%; height:100%; }
   /* THE STAT BLOCK IS LABELLED BY SOURCE. "Attack Power 214" read off the
      world's save and "Attack Power 214" worked out here from base stats and
      gear are different claims, and a block that prints them in one ink
@@ -1239,15 +1279,24 @@
      for it to leave the screen, because the stage clips it and the stage is
      inside the page.
 
-     BOTTOM ANCHORED AND CAPPED, because the whole point is that the
-     character stays in view. The stage is as tall as the gear columns and
-     the model stands at the top of it, so the card takes the room under the
-     feet first and only then starts covering the legs. The cap is the
-     smaller of the stage and the viewport, so a phone held sideways gets a
-     card it can see all of; a long item scrolls inside the card rather than
-     growing up over the face. */
+     BOTTOM ANCHORED, AND IT GROWS ONLY AS FAR AS THE ITEM NEEDS. The card is
+     `height:auto` under a cap, so a three line item is a three line card
+     sitting at the character's feet, which is the arrangement infra#3456
+     asked for and the one almost every item gets.
+
+     THE CAP IS THE STAGE, NOT A FRACTION OF IT (infra#3488). It was 60% of a
+     stage that borrowed its height from the gear columns, and neither half of
+     that was a real number: 60% of 517.5px is 310px on a phone and 60% of
+     783.1px is 470px on a desktop, for the same card holding the same words.
+     Now the stage is the character's own 4:5 box, so a fraction of it would
+     be 167px on a phone against the 266.7px this tab's own items measure, and
+     the reader would scroll a sword's stats through a slot the size of the
+     sword's icon. The card may take the whole stage when the item is long
+     enough to need it, and the character comes back on one full width thumb
+     row. 60vh is still the other half of the cap, so a phone held sideways
+     gets a card it can see all of. */
   .acard { position:absolute; left:0; right:0; bottom:0; z-index:2;
-           display:flex; flex-direction:column; max-height:min(60%, 60vh);
+           display:flex; flex-direction:column; max-height:min(100%, 60vh);
            border-top:1px solid var(--line); border-radius:12px 12px 0 0;
            /* The flat colour first and the mix second. Without a background
               this is text on a moving 3D render, which is the one thing on
@@ -7103,6 +7152,12 @@ const MODEL_CONTENT_PATH = u("/modelviewer/");
 const MODEL_LOAD_TIMEOUT = 10000;
 // Radians per frame of idle turn: one full turn in about half a minute.
 const MODEL_TURN = 0.0035;
+// The shape a character is framed in, 4:5, and the ONLY place this number is
+// a number. It is what the stage's `aspect-ratio:4/5` says in CSS, and the two
+// have to stay in step: change one and the model is letterboxed inside its own
+// element. It is used at construction, where there is nothing measured to read
+// yet; from then on fitModel hands the renderer the ratio of the box it
+// actually got.
 const MODEL_ASPECT = 0.8;
 // How far the camera stands from the character: close enough that a
 // standing figure fills the pane head to foot.
@@ -7183,7 +7238,9 @@ async function renderModel(c, m) {
     // the idle turn while a finger or a mouse is on it.
     pane.addEventListener("pointerdown", () => { c.held = true; });
     window.addEventListener("pointerup", () => { c.held = false; });
-    new ResizeObserver(() => fitModel(c)).observe(pane);
+    // The STAGE, for the reason fitModel gives: the pane's height is this
+    // observer's own output, and the stage is the element carrying the shape.
+    new ResizeObserver(() => fitModel(c)).observe(c.portrait);
   }
   pane.textContent = "";
   try {
@@ -7212,18 +7269,35 @@ async function renderModel(c, m) {
   }
 }
 
-// The canvas is the pane's width and 4:5 tall. The viewer sizes it once,
-// from the container's width at construction - which is the column's
-// minimum when the profile has not been laid out yet - so it is fitted
-// again when the model goes live and whenever the pane's width changes
-// (a phone turning, the profile grid going from one column to two).
+// THE CANVAS IS THE STAGE, AND THE ASPECT IS THE ONE THE STAGE MAKES
+// (infra#3488). The viewer sizes the canvas once, from its container's width
+// at construction - which is the column's minimum when the profile has not
+// been laid out yet - so it is fitted again when the model goes live and
+// whenever the stage's box changes (a phone turning, the profile grid going
+// from one column to two).
+//
+// IT MEASURES THE STAGE AND NOT THE PANE, for two reasons. The stage is the
+// element with the shape: .aportrait carries the 4:5 ratio and the 70vh
+// ceiling, so a height read anywhere else is a guess at what CSS already
+// decided. And the pane's height is written BY this function, through the
+// viewer's own inline style, so observing the pane would be watching this
+// call's own output.
+//
+// THE THIRD ARGUMENT IS THE MEASURED RATIO, not MODEL_ASPECT. They are the
+// same number while the stage is 4:5, which is the point of writing the ratio
+// into the CSS; they stop being the same the moment the 70vh ceiling bites on
+// a short landscape phone, and then it is the box that is right and the
+// constant that is stale. Passing the box's own ratio is what keeps the
+// character from being stretched by its own container.
 function fitModel(c) {
   const r = c.viewer && c.viewer.renderer;
   const pane = c.portrait.querySelector(".amodel");
   if (!r || !pane) return;
-  const width = pane.clientWidth;
-  if (width && r.width !== width) {
-    r.onResize(width, Math.round(width / MODEL_ASPECT), MODEL_ASPECT);
+  const width = Math.round(c.portrait.clientWidth);
+  const height = Math.round(c.portrait.clientHeight);
+  if (!width || !height) return;
+  if (r.width !== width || r.height !== height) {
+    r.onResize(width, height, width / height);
   }
 }
 
