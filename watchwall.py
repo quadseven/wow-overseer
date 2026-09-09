@@ -105,6 +105,36 @@ def status_line(member) -> str:
     return where or "in the world"
 
 
+def standing(member) -> str:
+    """What this character IS, for the caption under their picture.
+
+    THE WALL COULD NOT SAY THIS AT ALL UNTIL infra#3482, and the way it lost
+    it is worth writing down. The tile arrived from the Family tab still
+    wearing that tab's overlay, so "Grug - L33 Warrior" was printed over the
+    picture while the caption underneath printed "Grug" again. Taking the
+    duplicate off meant taking the overlay off, and the level and the class
+    went with it: the Watch wall could show you five characters and not tell
+    you what any of them was.
+
+    So it is composed here, beside the sentence it sits next to, rather than
+    assembled from two payload fields in the page. What to do when a level is
+    missing is a judgement - say the class alone, never "L None Warrior" or a
+    bare "L33" - and judgements on this view live where the suite can call
+    them.
+
+    ABSENT CHARACTERS KEEP THEIR STANDING. A logged-out character is still a
+    level 33 warrior; `present` decides what they are DOING, which is
+    status_line's question, not what they are.
+    """
+    klass = (member.get("class") or "").strip()
+    level = member.get("level")
+    if not level:
+        return klass
+    if not klass:
+        return "L%s" % level
+    return "L%s %s" % (level, klass)
+
+
 def tone_of(member) -> str:
     """Which of the five tones dresses this tile.
 
@@ -243,6 +273,7 @@ def build_wall(members, chosen=None) -> dict:
             "leader": bool(m.get("leader")),
             "playable": playable(m),
             "url": (m.get("broadcast_url") or "") or None,
+            "standing": standing(m),
             "line": status_line(m),
             "tone": tone_of(m),
         })

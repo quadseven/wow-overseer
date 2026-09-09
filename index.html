@@ -134,6 +134,26 @@
     --body:"Zen Kaku Gothic New","Hiragino Sans",system-ui,sans-serif;
     --mono:"Space Mono",ui-monospace,SFMono-Regular,Menlo,monospace;
 
+    /* ONE GUTTER FOR THE WHOLE SHELL (infra#3482). The realm band, the
+       header, the goal banner, the tab row and every view used to inset
+       themselves by a number each had picked alone: 20px, 16px, 16px, 8px
+       and 16px-plus-a-16px-margin. Five left edges, no two of them aligned,
+       which on a wide screen reads as sloppiness and on a 390px one costs
+       real width - the Family tab was paying 64px of margin AND padding, a
+       sixth of the screen, before a word of content.
+
+       So the gutter is a token, it is the same on every band, and it is
+       smaller on a phone than on a desktop because a fixed inset that looks
+       generous at 1440 is an eighth of the screen at 320. */
+    --gutter:20px;
+
+    /* THE SPACING SCALE the phone rules step through, rather than each one
+       inventing a margin. Three steps, and only three, because three is what
+       the shell's vertical rhythm has room for: a gap inside a line, a gap
+       between lines, a gap between bands. A scale with unused steps in it is
+       a scale nobody trusts to be complete. */
+    --s1:4px; --s2:8px; --s3:12px;
+
     /* THE SHELL, WHICH IS THE PART THAT HAS A THEME. Page ground, the header
        and the nav. These are separate from --bg/--panel/--text on purpose:
        those still dress the content cards, and the content cards are still
@@ -246,7 +266,8 @@
      the rule reads as a decision about DATA rather than as decoration. */
   #census, #rklabel, #rkbuild, .wbar button, .rn-pill,
   .agenda-meta, code, pre { font-family:var(--mono); }
-  header { display:flex; align-items:center; gap:.85rem; padding:.7rem 1rem;
+  header { display:flex; align-items:center; gap:.85rem;
+           padding:.7rem var(--gutter);
            background:var(--card); color:var(--on-card);
            border-bottom:1px solid var(--card-line); flex-wrap:wrap; }
   /* THE MARK. A vermilion dot and the name, and the dot is not decoration: it
@@ -315,7 +336,7 @@
      THREE STATES, AND THE THIRD IS NOT NEUTRAL. An unverified realm is drawn
      as an alarm, not as an absence, because "this page cannot tell you what
      you are looking at" is a more urgent thing to read than "no data". */
-  #realm { padding:14px 20px 15px; border-bottom:2px solid transparent;
+  #realm { padding:14px var(--gutter) 15px; border-bottom:2px solid transparent;
            font-family:var(--body); }
   /* The label is a STATUS WORD, so it is set in the mono face like every other
      status word on this page - but at display size, because realm.py calls it
@@ -372,7 +393,7 @@
      three tab suites slice this file by their own banners and the earliest
      window starts there - CSS dropped after it is swept into assertions
      about a tab it has nothing to do with. */
-  #agenda { margin:0; padding:.85rem 1rem .9rem; background:var(--panel);
+  #agenda { margin:0; padding:.85rem var(--gutter) .9rem; background:var(--panel);
             border-bottom:1px solid var(--line); }
   /* THE HEADLINE IS THE FEATURE. Deliberately the largest text on the page,
      larger than the h1 above it: this is read from across a room while five
@@ -404,6 +425,68 @@
                border:1px solid var(--shell-line);
                padding:.3rem .8rem; border-radius:6px; cursor:pointer; font:inherit; }
   nav button.on { border-color:var(--alliance); color:var(--alliance); }
+
+  /* --- THE SHELL ON A PHONE (infra#3482) ------------------------------------
+     Placed here, immediately after the shell's own rules and BEFORE the
+     redesign-furniture banner, for the reason the goal banner above already
+     gives: three tab suites slice this file by their banners, and CSS dropped
+     after the earliest window is swept into assertions about a tab it has
+     nothing to do with. Everything below dresses the shell - the realm band,
+     the header, the goal banner - so this is where it belongs.
+
+     WHAT THIS IS FOR. The page is read on a phone to answer one question,
+     "what is the family doing", and the answer is five moving pictures. On a
+     390x844 screen there were 874px of banner, header, goal and tab row above
+     the first of them: you could not see a single stream without scrolling,
+     on the page whose whole purpose is to show them. Nothing here removes a
+     word. It takes the ceremony out of the type scale and the padding, which
+     is where the 874px actually was.
+
+     THE BREAKPOINT IS 640px, which is the one the wall already uses. A second
+     number would mean the shell and the wall change shape at different widths
+     and there would be a band where the page is half converted. */
+  @media (max-width:640px) {
+    :root { --gutter:14px; }
+    /* The realm band still shouts - it is the one thing on this page that
+       qualifies everything else - but it shouts in the WORD, which #rklabel
+       already scales with the viewport. The three lines under it are prose
+       and provenance, and they were set at desktop size. */
+    #realm { padding:10px var(--gutter) 11px; }
+    #rkwhere { font-size:13.5px; line-height:1.45; }
+    #rkwarn { margin-top:6px; font-size:13.5px; line-height:1.4; }
+    /* Forty hex characters of build provenance, which is a thing you go
+       looking for rather than a thing you read. It keeps its place and stops
+       taking three lines of the first screen to hold it. */
+    #rkbuild { margin-top:5px; font-size:10.5px; line-height:1.45; }
+    /* The header wrapped into three rows: the mark, the census, then the
+       realm pills and the theme button. It still wraps - there is no width
+       for it not to - but the rows are tight and the gap between them is the
+       scale's, not a rem of body text. */
+    header { gap:var(--s2) var(--s3); padding:var(--s2) var(--gutter); }
+    #census { font-size:11px; letter-spacing:.04em; }
+    /* The switcher and the theme button share the last row. margin-left:auto
+       on #recordings already pushes that group right; this keeps the group
+       from being taller than the 44px its own controls need. */
+    #theme { min-height:44px; padding:0 .65rem; }
+    /* The goal banner is the feature and keeps the largest text on the page.
+       What it loses is the space around its supporting lines. */
+    #agenda { padding:var(--s3) var(--gutter); }
+    #agdetail { margin-top:var(--s1); font-size:13.5px; line-height:1.45; }
+    #agwhen { margin-top:var(--s2); gap:var(--s1) var(--s3); font-size:12px; }
+    /* THE TAB ROW SAYS THAT IT SCROLLS. A row of words clipped flat by the
+       edge of the screen reads as a row that was cut off, not as one you can
+       push - which is how the fourteen tabs beyond "Chronicle" stayed
+       undiscovered. Fading the last few pixels is the difference.
+
+       Confined to this breakpoint because it is only honest here: fourteen
+       tabs are about 1280px wide, so below 640 the row ALWAYS overflows and
+       the fade is always telling the truth. On a wide screen the row can end
+       before the edge does, and a fade there would dim a tab for no reason.
+       Only the far edge fades: the near one is where the selected tab starts
+       from on load, and it has to read as a hard edge. */
+    #tabs { mask-image:linear-gradient(to right, #000 calc(100% - 28px),
+                                       transparent 100%); }
+  }
   #wrap { position:relative; margin:0 1rem 1rem; }
   canvas { width:100%; background:var(--panel); border:1px solid var(--line);
            border-radius:8px; display:block; }
@@ -1940,8 +2023,15 @@
   #fmovehead, #fbondhead { color:var(--on-card-dim); font-size:.9rem;
                            overflow-wrap:anywhere; margin-bottom:.6rem; }
   #fmovehead.alarm, #fbondhead.alarm { color:var(--warn-text); }
+  /* min() ON THE TRACK FLOOR, NOT A BARE 290px (infra#3482). auto-fit's
+     minimum is a hard floor: on a 320px screen the content box here is 292px
+     wide and the track insisted on 290 plus its gap, so the two cards stood
+     wider than the tab that held them and pushed the page off the side. A
+     floor of `min(100%, 290px)` asks for the same 290 wherever there is 290
+     to be had and yields the whole width where there is not, which is the
+     one-column layout this already wanted below its own breakpoint. */
   #fmovelist, #fbondlist { display:grid; gap:14px;
-                grid-template-columns:repeat(auto-fit,minmax(290px,1fr)); }
+                grid-template-columns:repeat(auto-fit,minmax(min(100%,290px),1fr)); }
   .fmv, .fbd { background:var(--panel); border:1px solid var(--line);
                border-radius:12px; padding:14px; min-width:0; }
   /* A handover the world keeps refusing is not a row with a red word on it,
@@ -1998,14 +2088,41 @@
      and nothing look like the page you were on; an underline says "you are
      here" using the one axis a row of words has spare. Scrolls sideways
      rather than wrapping, because a wrapped tab row changes height when the
-     view changes and shoves the content under the thumb reaching for it. */
-  #tabs { display:flex; gap:.2rem; padding:0 .5rem; background:var(--card);
-          border-bottom:1px solid var(--card-line);
-          overflow-x:auto; scrollbar-width:none; }
+     view changes and shoves the content under the thumb reaching for it.
+
+     flex-wrap:nowrap IS THE WHOLE POINT AND IT WAS MISSING (infra#3482). This
+     rule has said "scrolls sideways rather than wrapping" since the redesign
+     and did not do it, because #tabs is a <nav> and the shell's generic
+     `nav { ... flex-wrap:wrap }` is the only rule on this page that declares
+     flex-wrap at all. An ID selector does not beat a type selector on a
+     property it never sets: the generic rule won by default, the row wrapped,
+     and overflow-x:auto had nothing left to scroll. On a phone that is four
+     ragged lines of tabs, 187px of them, above every view.
+
+     So it is stated here rather than fixed by deleting the generic rule,
+     which #realmnav and #ajump are both still dressed by.
+
+     SNAP AND scroll-margin BECAUSE THE ROW IS NOW SCROLLED BY A THUMB. The
+     eleventh tab is off-screen on a phone, and showTab scrolls the selected
+     one back into view; the margin keeps it off the very edge when it lands,
+     so a tab arriving from the right does not read as clipped. */
+  /* THE GUTTER MINUS THE BUTTON'S OWN PADDING, so that the WORD "Watch"
+     starts on the same left edge as "THE OVERSEER" and the goal headline
+     above it, rather than the tab's invisible box starting there and the
+     word sitting .8rem further in. A tap target that reaches nearer the
+     screen edge is the right trade on the row a thumb drives. */
+  #tabs { display:flex; flex-wrap:nowrap; gap:.2rem;
+          padding:0 calc(var(--gutter) - .8rem);
+          background:var(--card); border-bottom:1px solid var(--card-line);
+          overflow-x:auto; overscroll-behavior-x:contain;
+          scrollbar-width:none; scroll-snap-type:x proximity;
+          -webkit-overflow-scrolling:touch; }
   #tabs::-webkit-scrollbar { display:none; }
   #tabs button { flex:none; min-height:44px; padding:0 .8rem; border:0;
                  background:transparent; color:var(--on-card-dim);
                  font:inherit; font-weight:600; cursor:pointer;
+                 white-space:nowrap; scroll-snap-align:start;
+                 scroll-margin-inline:var(--gutter);
                  border-bottom:3px solid transparent; }
   #tabs button:hover { color:var(--on-card); }
   #tabs button.on { color:var(--on-card); border-bottom-color:var(--accent); }
@@ -2035,9 +2152,26 @@
      it, which is why the hero spans every column whatever the count. */
   #wall.m-hero > .povslot.hero { grid-column:1 / -1; }
 
+  /* ONE COLUMN ON A PHONE, WHATEVER THE MODE (infra#3482). This block used to
+     halve five-up to two columns and leave the other two modes alone, which
+     produced 177px-wide tiles on a 390px screen: infra#88's complaint, "the
+     twitch view is so tiny", arriving again through a different door. Four
+     tiles that small are not a wall, they are four thumbnails of a game whose
+     hotbars and nameplates are the reason to watch at all. m-hero was never
+     covered here at all, so its `minmax(150px, 1fr)` auto-fit ran at full
+     width on the narrowest screen the page has.
+
+     So all three modes are a single full-width column below the breakpoint,
+     which is what this file's own comment above already says a phone wants.
+     The modes still differ where the difference is real: with a hero, the
+     promoted tile leads the column, and the other four carry a BIG chip.
+     order:-1 rather than a DOM move, because layoutBroadcasts re-parents live
+     PeerConnections and reordering the array would tear one down. */
   @media (max-width: 640px) {
-    #wall.m-five-up { grid-template-columns:repeat(2, 1fr); }
-    #wall.m-five-up > .povslot.hero { grid-area:1 / 1 / 2 / 3; }
+    #wall.m-five-up, #wall.m-hero { grid-template-columns:1fr; gap:0; }
+    #wall.m-five-up > .povslot.hero,
+    #wall.m-hero > .povslot.hero { grid-area:auto; grid-column:1 / -1;
+                                   order:-1; }
   }
 
   /* THE TILE IS A PICTURE WITH A CAPTION UNDER IT, not words printed over
@@ -2045,19 +2179,81 @@
      every caption sits on a different moving background.
      (The Family tab keeps its overlay: there the tile is inside a card that
      already names the character, so a second caption would repeat it.) */
+  /* min-width:0 IS WHAT KEPT THIS PAGE OFF A PHONE (infra#3482). A grid item's
+     automatic minimum size is its min-content width, and a tile's min-content
+     is a <video> with native controls inside two nested aspect-ratio boxes:
+     360px, measured, whatever the column it was given. So the wall's tracks
+     could not shrink to the screen. At 320px the tiles stood 72px wider than
+     the wall that held them.
+
+     THE VISIBLE DAMAGE WAS NOT A SCROLLBAR. Mobile Safari answers a page
+     wider than the viewport by zooming out to fit it, so the overflow did not
+     appear as overflow: it appeared as the WHOLE PAGE shrunk to about half
+     size, body text rendering near 7px, the content in a narrow column with
+     the rest of the screen empty. That is the bug report this rule closes,
+     and it is one declaration.
+
+     Every other grid item on this page already carries it. */
   .povslot { position:relative; display:flex; flex-direction:column;
-             background:var(--card); }
+             min-width:0; background:var(--card); }
   /* Only the OUTER corners are rounded, by the grid's own overflow:hidden.
      Rounding every tile would put four white notches in the middle of the
      mosaic where the corners meet. */
-  .povshot { position:relative; aspect-ratio:16/9; background:var(--shot); }
-  /* 32px, and it is a measurement rather than a preference: five of these
-     stack on a phone, so every pixel here costs five. */
-  .povstrip { display:flex; align-items:center; gap:.5rem; height:32px;
-              padding:7px 9px; background:var(--card); }
-  .povname { font-family:var(--display); font-weight:700; font-size:13px;
-             color:var(--on-card); }
-  .povline { color:var(--on-card-dim); font-size:11px; flex:1 1 auto;
+  .povshot { position:relative; min-width:0; aspect-ratio:16/9;
+             background:var(--shot); }
+  /* THE CAPTION IS THE ONLY CAPTION NOW (infra#3482). The rule above has said
+     since the wall shipped that a tile here is "a picture with a caption under
+     it, not words printed over one" - and the tile arrived from the Family
+     tab still wearing its own overlay, so every tile carried BOTH. The name
+     and the sentence were printed twice, once over the game and once beneath
+     it, and on the small tiles the overlay's `fullscreen` button rendered
+     straight through the BIG chip: two controls, same corner, one on top of
+     the other.
+     The overlay is the Family card's, and it stays the Family card's. Here
+     the words come off. */
+  .povshot .fov { background:none; padding:0; }
+  .povshot .fovname, .povshot .fovzone, .povshot .ffsnote { display:none; }
+  /* AND THE FULLSCREEN BUTTON WAS ALREADY DEAD. .povhit covers the picture and
+     is inserted above the tile, so nothing inside the tile can be tapped on
+     this view - the suite says as much where it asserts the hit area sits
+     above the video. Drawing a control that cannot be pressed is worse than
+     not drawing it. Fullscreen stays where it works: the Family tab. */
+  .povshot .ffull { display:none; }
+  /* HEALTH SURVIVES THE OVERLAY, as a band at the foot of the picture rather
+     than a line of text. It is the one thing the overlay carried that the
+     caption below does not, and a bar read at the same place on all five
+     tiles is scannable in a way five sentences are not. Sitting on the seam
+     between the picture and the caption ties it to both. */
+  .povshot .fovbar { position:absolute; left:0; right:0; bottom:0; margin:0;
+                     max-width:none; height:4px; border-radius:0;
+                     background:#0009; }
+  /* NATIVE CONTROLS OFF, and this is not only taste. These are live WebRTC
+     feeds with no duration, so the control bar renders a seek track stuck at
+     00:00 across the bottom of every tile, over the picture, saying something
+     untrue about what it is showing. The bar is also unreachable here for the
+     same reason `fullscreen` is. The attribute stays on the element because
+     the same node is the Family tab's player, where the controls are real and
+     reachable; what is scoped to the wall is whether they are drawn. */
+  .povshot video::-webkit-media-controls { display:none !important; }
+  .povshot video { pointer-events:none; }
+  /* THE CAPTION. It was 32px tall with 13px and 11px text in it, sized when
+     four of these sat in a 2x2 grid and every pixel cost four. A phone shows
+     one column now, so the caption can be read at arm's length: it is the
+     only place the wall says who this is. */
+  .povstrip { display:flex; align-items:center; gap:.5rem; min-height:38px;
+              padding:8px var(--s3); background:var(--card); }
+  .povname { font-family:var(--display); font-weight:700; font-size:14px;
+             color:var(--on-card); flex:none; }
+  /* Three weights in one line, so it is read in one pass: the name is the
+     heading, what they are is set in the data face like every other fact on
+     this page, and what they are DOING is the sentence. flex:none on the
+     first two because the sentence is the part that should ellipsis when the
+     tile is narrow - a truncated class name reads as a broken page, and
+     "fighting inside an inst..." reads as a long sentence. */
+  .povstanding { font-family:var(--mono); font-size:11px; letter-spacing:.02em;
+                 color:var(--on-card-dim); flex:none; }
+  .povstanding:empty { display:none; }
+  .povline { color:var(--on-card-dim); font-size:12px; flex:1 1 auto;
              min-width:0; overflow:hidden; text-overflow:ellipsis;
              white-space:nowrap; }
   .povstatus { font-size:11px; letter-spacing:.1em; font-family:var(--mono);
@@ -2091,6 +2287,29 @@
 
   .wbar { display:flex; flex-wrap:wrap; gap:.5rem; align-items:center;
           margin-bottom:.7rem; }
+  #wallmodes { display:flex; gap:.5rem; align-items:center; }
+  /* THE CONTROL BAR SCROLLS RATHER THAN WRAPPING, for the same reason the tab
+     row above it does: four pills at 44px do not fit across 390px, and the
+     wrapped second row put 60px of chrome between the reader and the pictures
+     on the one screen that has none to spare. Same gesture as the tabs, so
+     the page has one answer to "a row of controls is wider than the phone". */
+  @media (max-width:640px) {
+    .wbar { flex-wrap:nowrap; overflow-x:auto; overscroll-behavior-x:contain;
+            scrollbar-width:none; margin-bottom:var(--s3);
+            padding-bottom:2px;
+            /* The same fade the tab row carries, saying the same thing, for
+               the same reason: four 44px pills are wider than any phone, so
+               below this breakpoint the strip always has more to its right. */
+            mask-image:linear-gradient(to right, #000 calc(100% - 28px),
+                                       transparent 100%); }
+    .wbar::-webkit-scrollbar { display:none; }
+    .wbar > * { flex:none; }
+    /* The spacer exists to push the sound toggle to the far edge of a wide
+       bar. In a scrolling strip there is no far edge to push it to, and a
+       flexible gap in a nowrap row just collapses, so it is taken out of the
+       row rather than left in it doing nothing. */
+    .wspacer { display:none; }
+  }
   /* 44px on every control: this is read with a thumb, same as #fqmore. */
   .wbar button { min-height:44px; background:var(--card);
                  color:var(--on-card-dim); border:1px solid var(--card-line);
@@ -2123,7 +2342,18 @@
      padding beside the rest of their rules, and adding them here would let a
      value hundreds of lines from the block that owns them win by being later
      in the cascade. */
-  #watch, #family, #armory { padding:.9rem 1rem; }
+  #watch, #family, #armory { padding:.9rem var(--gutter); }
+  /* ONE INSET ON A PHONE, NOT TWO (infra#3482). #family and #armory each
+     carry a 1rem margin of their own beside this padding. On a 390px screen
+     that is 64px of horizontal room spent twice on the same edge, a sixth of
+     the display, and it left the content's left edge 32px inside the left
+     edge of the realm band, the header and the tab row above it. The margin
+     goes on a phone and the padding is the gutter, so the page has one left
+     edge rather than three. */
+  @media (max-width:640px) {
+    #family, #armory { margin-left:0; margin-right:0; }
+    #watch, #family, #armory { padding:var(--s3) var(--gutter); }
+  }
 </style>
 <script>
   // WHERE THIS PAGE IS MOUNTED, AND WHY EVERY URL BELOW GOES THROUGH ONE
@@ -3979,9 +4209,14 @@ function wallSlot(name) {
   const shot = el("div", "povshot");
   const strip = el("div", "povstrip");
   const nm = el("span", "povname", name);
+  // WHAT THEY ARE, beside who they are, and it is the module's phrase rather
+  // than a level and a class joined up here (infra#3482). The wall used to
+  // read this off the tile's overlay, printed over the picture; the caption
+  // carries it now, so the picture is a picture.
+  const standing = el("span", "povstanding");
   const line = el("span", "povline");
   const status = el("span", "povstatus");
-  strip.append(nm, line, status);
+  strip.append(nm, standing, line, status);
 
   // THE CLICK TARGET COVERS THE PICTURE AND STOPS AT THE BAR. The handoff is
   // explicit about this: never under it, or the label eats the click. It also
@@ -4008,8 +4243,8 @@ function wallSlot(name) {
   };
   shot.append(hit, big);
   slot.append(shot, strip);
-  wall.slots.set(name, { slot: slot, shot: shot, line: line, status: status,
-                         big: big, hit: hit });
+  wall.slots.set(name, { slot: slot, shot: shot, standing: standing,
+                         line: line, status: status, big: big, hit: hit });
   return wall.slots.get(name);
 }
 
@@ -4104,6 +4339,11 @@ function renderWall(p) {
     // The caption is the module's sentence, printed. The status word is the
     // module's TONE, spelled for a reader: a tone is a class name and nobody
     // wants to read "t-combat".
+    // `|| ""` and not a bare assignment: textContent of undefined prints the
+    // word "undefined" into the caption, and this is the one field on the
+    // tile that a payload is allowed not to carry. Empty is also what
+    // .povstanding:empty keys off to take its own gap out of the row.
+    s.standing.textContent = t.standing || "";
     s.line.textContent = t.line;
     s.status.textContent = WALL_STATUS[t.tone] || "";
     if (s.slot.parentElement !== wallEl) wallEl.appendChild(s.slot);
@@ -4847,6 +5087,34 @@ function markTabs() {
       ? view === b.dataset.view
       : view === MAP_VIEW && b.dataset.id === current;
     b.classList.toggle("on", on);
+    if (on) revealTab(b);
+  }
+}
+
+// THE SELECTED TAB IS BROUGHT BACK INTO ITS OWN ROW (infra#3482). Fourteen
+// buttons on a row narrower than half of them, so the lit tab is routinely
+// off-screen: opening the Armory from a link used to leave you looking at a
+// row of tabs with no underline anywhere on it.
+//
+// WRITTEN AGAINST scrollLeft RATHER THAN scrollIntoView, and that is the
+// whole reason this is a function. scrollIntoView walks EVERY scrollable
+// ancestor, the document included, and `block:"nearest"` did not stop it: on
+// first paint the row is below the fold, so the page scrolled 430px down and
+// stayed there - every load landing halfway through the header. Setting
+// scrollLeft touches one axis of one element and can move nothing else.
+function revealTab(b) {
+  const row = b.parentElement;
+  if (!row) return;
+  const rr = row.getBoundingClientRect();
+  const br = b.getBoundingClientRect();
+  // A tab already inside the row does not move. The gutter of slack keeps a
+  // tab that has just arrived off the very edge, where it reads as clipped
+  // rather than as the end of the row.
+  const slack = 12;
+  if (br.left < rr.left + slack) {
+    row.scrollLeft -= (rr.left + slack) - br.left;
+  } else if (br.right > rr.right - slack) {
+    row.scrollLeft += br.right - (rr.right - slack);
   }
 }
 

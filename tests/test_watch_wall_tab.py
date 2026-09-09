@@ -335,13 +335,39 @@ class HeroModeDoesNotWalkBackIntoTheTinyTwitchView(unittest.TestCase):
         self.assertIn('DEFAULT_MODE = FIVE_UP', _module_source())
 
     def test_hero_collapses_to_one_column_on_a_narrow_screen(self):
+        """ONE COLUMN, and that is what this test has been named all along.
+
+        It used to assert TWO, which is what the block actually did, and two
+        columns on a 390px screen is a 177px tile: infra#88's complaint about
+        the tiny twitch view arriving again by a different route, asserted as
+        if it were the fix. infra#3482 made every mode a single full-width
+        column below the breakpoint and this assertion now says so.
+
+        m-hero is named here too. It was never in this block at all, so its
+        `minmax(150px, 1fr)` auto-fit ran at full strength on the narrowest
+        screen the page has, which is the exact rail the class docstring above
+        says the wall must never collapse into."""
         # 640px, which is the handoff's single breakpoint. The first version
         # of the wall invented 760 along with the rest of its geometry.
         self.assertIn("@media (max-width: 640px) {", PAGE)
         narrow = PAGE[PAGE.index("@media (max-width: 640px) {"):]
-        self.assertIn("#wall.m-five-up { grid-template-columns:repeat(2, 1fr); }",
-                      narrow[:400])
-        self.assertIn("grid-area:1 / 1 / 2 / 3", narrow[:400])
+        head = narrow[:400]
+        self.assertIn(
+            "#wall.m-five-up, #wall.m-hero { grid-template-columns:1fr;", head)
+        # No mode is left out: a mode with no rule here is a mode that keeps
+        # its desktop column count on a phone, which is how m-hero was missed.
+        for mode in ("m-five-up", "m-hero"):
+            self.assertIn("#wall.%s > .povslot.hero" % mode, head, mode)
+
+    def test_the_promoted_tile_leads_the_phone_column(self):
+        """A hero that is only "the first row" of a four-column grid means
+        nothing once there is one column: the promoted tile would sit wherever
+        roster order put it, and promoting would do nothing visible. It leads
+        with `order`, which is also why it is a grid property and not a DOM
+        move - layoutBroadcasts re-parents live PeerConnections, and
+        reordering the array would tear one down to change a layout."""
+        narrow = PAGE[PAGE.index("@media (max-width: 640px) {"):][:400]
+        self.assertIn("order:-1", narrow)
 
 
 class TheSoundIsOffUntilAskedFor(unittest.TestCase):
@@ -398,6 +424,116 @@ class TheStoredPreferencesAreHandledLikeStorage(unittest.TestCase):
 def _module_source():
     with open(os.path.join(HERE, "watchwall.py"), encoding="utf-8") as fh:
         return fh.read()
+
+
+class ThePageFitsThePhoneItIsReadOn(unittest.TestCase):
+    """infra#3482. Two declarations, each missing, each invisible in a diff,
+    and between them the page could not be used on a phone at all.
+
+    Neither produced an error, a warning or a scrollbar. The first wrapped the
+    tab row into four ragged lines above every view; the second made the wall
+    wider than the screen, which mobile Safari answers by zooming the entire
+    document out until it fits - so the report that arrived was "all the text
+    is about 7px", which points at a font size and is caused by a grid."""
+
+    def test_the_tab_row_says_it_does_not_wrap(self):
+        """#tabs is a <nav>, and the shell's generic `nav` rule is the only
+        rule on this page that declares flex-wrap at all. An ID selector does
+        not beat a type selector on a property it never sets, so the generic
+        `flex-wrap:wrap` won by default and `overflow-x:auto` had nothing left
+        to scroll. The row has to say nowrap itself."""
+        # Anchored on the declaration rather than on "#tabs {", because the
+        # phone block sets a mask on the same id and comes first in the file.
+        rule = PAGE[PAGE.index("#tabs { display:flex"):]
+        rule = rule[:rule.index("}")]
+        self.assertIn("flex-wrap:nowrap", rule)
+        self.assertIn("overflow-x:auto", rule)
+
+    def test_the_generic_nav_rule_still_wraps_for_everyone_else(self):
+        """The fix is stated on #tabs rather than taken off `nav`, because
+        #realmnav and #ajump are both still dressed by that rule and both
+        want to wrap. This asserts the fix did not become a deletion."""
+        self.assertIn("flex-wrap:wrap; }", PAGE[PAGE.index("  nav {"):][:120])
+
+    def test_a_tab_never_breaks_across_two_lines(self):
+        """"Eastern Kingdoms" in a scrolling row with nowhere to wrap to."""
+        rule = PAGE[PAGE.index("  #tabs button {"):]
+        self.assertIn("white-space:nowrap", rule[:rule.index("}")])
+
+    def test_the_selected_tab_is_scrolled_back_into_its_own_row(self):
+        """Fourteen tabs on a row narrower than half of them. Opening the
+        Armory from a link used to leave the lit tab off-screen, which reads
+        as no tab being lit at all."""
+        self.assertIn("function revealTab(b) {", PAGE)
+        self.assertIn("if (on) revealTab(b);", PAGE)
+
+    def test_revealing_a_tab_can_scroll_nothing_but_the_row(self):
+        """scrollIntoView walks EVERY scrollable ancestor including the
+        document, and block:"nearest" does not stop it: on first paint the
+        row is below the fold, so the first version of this scrolled the page
+        430px down and left it there, every load landing halfway through the
+        header. scrollLeft touches one axis of one element."""
+        fn = PAGE[PAGE.index("function revealTab(b) {"):]
+        fn = fn[:fn.index("\n}")]
+        self.assertIn("row.scrollLeft", fn)
+        absent(self, "scrollIntoView", fn, "revealTab")
+        absent(self, "scrollTop", fn, "revealTab")
+
+    def test_the_caption_carries_the_identity_the_overlay_used_to(self):
+        """The tile's overlay comes off on this view, so the caption has to
+        say what the overlay said: what this character is, not only who. The
+        phrase is the module's, like every other word on this wall."""
+        self.assertIn('el("span", "povstanding")', PAGE)
+        # `|| ""` and not a bare assignment: textContent of undefined prints
+        # the word "undefined" into the caption, and empty is what
+        # .povstanding:empty keys off to take its gap out of the row.
+        self.assertIn('s.standing.textContent = t.standing || "";', PAGE)
+        # Composed in watchwall, never assembled out of two fields here.
+        # Scoped to the wall's own render loop: `.level` is read legitimately
+        # elsewhere on the page, and an unscoped search finds those instead.
+        loop = PAGE[PAGE.index("for (const t of w.tiles) {"):]
+        loop = loop[:loop.index("\n  }")]
+        # ("t.class" is not checked here: it is a substring of
+        # "slot.classList", which the same loop uses legitimately.)
+        absent(self, "t.level", loop, "the wall render loop")
+
+    def test_the_tile_wears_no_second_caption(self):
+        """The Family tab's overlay travels with the tile when it is
+        re-parented, so without this the name and the sentence are printed
+        twice - once over the game and once beneath it - and the overlay's
+        `fullscreen` button lands on top of the BIG chip."""
+        block = PAGE[PAGE.index("/* --- THE WATCH WALL"):]
+        block = block[:block.index("#wallhead {")]
+        for hidden in (".povshot .fovname", ".povshot .fovzone",
+                       ".povshot .ffull"):
+            self.assertIn(hidden, block, hidden)
+
+    def test_health_survives_the_overlay_coming_off(self):
+        """It is the one thing the overlay carried that the caption does not,
+        and five bars in the same place on five tiles is the whole reason to
+        look at a wall rather than five cards."""
+        block = PAGE[PAGE.index("/* --- THE WATCH WALL"):]
+        block = block[:block.index("#wallhead {")]
+        self.assertIn(".povshot .fovbar", block)
+
+    def test_a_tile_can_be_narrower_than_its_own_contents(self):
+        """A grid item's automatic minimum size is its min-content width, and
+        a tile's min-content is a <video> inside two nested aspect-ratio
+        boxes: 360px, measured, whatever column it was handed. Without this
+        the wall could not shrink to a 320px screen and stood 72px wider than
+        the element containing it."""
+        rule = PAGE[PAGE.index("  .povslot {"):]
+        self.assertIn("min-width:0", rule[:rule.index("}")])
+
+    def test_the_wall_declares_no_track_it_cannot_honour(self):
+        """The general form of the rule above. Every track floor on the wall
+        has to be reachable on the narrowest screen the page has."""
+        block = PAGE[PAGE.index("/* --- THE WATCH WALL"):]
+        block = block[:block.index("#wallhead {")]
+        for floor in re.findall(r"minmax\(\s*(\d+)px", block):
+            self.assertLessEqual(
+                int(floor), 320,
+                "a %spx track floor cannot be met on a 320px screen" % floor)
 
 
 class TheHouseRules(unittest.TestCase):

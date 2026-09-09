@@ -8,6 +8,7 @@ undo while leaving five cards on screen looking perfectly fine.
 
 Ticket: infra#2892.
 """
+import re
 import unittest
 
 import family
@@ -886,11 +887,32 @@ class TheNeedsTheHandoversAndTheBonds(unittest.TestCase):
         """auto-fit at 290px, unlike the feed grid above it. These hold text,
         so there is no <video> to protect from a column count that changes as
         a window is dragged - which is the only reason that grid has explicit
-        stops."""
+        stops.
+
+        THE 290 IS WRAPPED IN min() SINCE infra#3482, and that is not a
+        loosening of this assertion. auto-fit's floor is a hard one: on a
+        320px screen this tab's content box is 292px, the track held out for
+        290 plus its gap, and the two cards stood wider than the tab that held
+        them - which mobile Safari answers by zooming the WHOLE PAGE out to
+        fit. `min(100%, 290px)` asks for the identical 290 wherever 290 exists
+        and takes the full width where it does not, so what the handoff draws
+        is unchanged on every screen wide enough to draw it."""
         rule = self.css[self.css.index("#fmovelist, #fbondlist {"):]
         rule = rule[:rule.index("}")]
-        self.assertIn("repeat(auto-fit,minmax(290px,1fr))", rule)
+        self.assertIn("repeat(auto-fit,minmax(min(100%,290px),1fr))", rule)
         self.assertIn("gap:14px", rule)
+
+    def test_no_track_in_this_block_has_a_bare_pixel_floor(self):
+        """The general form of the rule above, and the one that catches the
+        NEXT one. auto-fit's minimum is a hard floor: a track that asks for
+        290px keeps asking on a 320px screen, and the row it is in ends up
+        wider than the page. That does not show up as a scrollbar on the
+        device this page is read on - mobile Safari zooms the whole document
+        out until it fits, so the symptom is every word on the page rendering
+        at half size, which is a bug nobody thinks to blame on a grid."""
+        bare = re.findall(r"minmax\(\s*(\d+)px", self.css)
+        self.assertEqual(bare, [], "bare px track floors in this block: %s; "
+                                   "wrap each in min(100%%, Npx)" % bare)
 
     # --- the poll ----------------------------------------------------------
 

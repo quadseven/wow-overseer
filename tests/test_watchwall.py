@@ -66,6 +66,49 @@ class TheSentenceSaysTheMostUrgentTrueThing(unittest.TestCase):
         self.assertEqual(watchwall.status_line(m), "hurt in Westfall")
 
 
+class TheCaptionSaysWhatTheyAreAndNotOnlyWhoTheyAre(unittest.TestCase):
+    """infra#3482. The wall printed "Grug - L33 Warrior" over the picture and
+    "Grug" again underneath it. Taking the duplicate off took the level and
+    the class with it, and a wall of five characters that cannot say what any
+    of them IS answers half the question it exists for."""
+
+    def test_it_says_the_level_and_the_class(self):
+        self.assertEqual(
+            watchwall.standing(member("Grug", level=33, **{"class": "Warrior"})),
+            "L33 Warrior")
+
+    def test_a_missing_level_says_the_class_alone(self):
+        """Never "L None Warrior", and never a bare "L" with nothing after
+        it. An absent field is the ordinary case on this payload, not an
+        error, so it has to read as a shorter sentence rather than as a
+        broken one."""
+        self.assertEqual(watchwall.standing(member("Grug", **{"class": "Warrior"})),
+                         "Warrior")
+        self.assertEqual(watchwall.standing(member("Grug", level=0,
+                                                   **{"class": "Warrior"})),
+                         "Warrior")
+
+    def test_a_missing_class_still_says_the_level(self):
+        self.assertEqual(watchwall.standing(member("Grug", level=33)), "L33")
+
+    def test_a_member_with_neither_says_nothing_rather_than_a_stray_l(self):
+        self.assertEqual(watchwall.standing(member("Grug")), "")
+
+    def test_being_logged_out_does_not_take_their_class_away(self):
+        """What they ARE does not change when they log off; what they are
+        DOING is status_line's question and it says "logged out" there. A
+        wall that blanked the class on absence would make four of five tiles
+        anonymous every night."""
+        row = member("Grug", present=False, level=33, **{"class": "Warrior"})
+        self.assertEqual(watchwall.standing(row), "L33 Warrior")
+        self.assertEqual(watchwall.status_line(row), "logged out")
+
+    def test_it_rides_on_the_tile(self):
+        tile = watchwall.build_wall(
+            [member("Grug", level=33, **{"class": "Warrior"})])["tiles"][0]
+        self.assertEqual(tile["standing"], "L33 Warrior")
+
+
 class TheToneAgreesWithTheSentence(unittest.TestCase):
     """A tile coloured for calm under a caption saying "dead" is worse than
     either being wrong alone, so the two ladders are pinned together."""
@@ -291,7 +334,7 @@ class TheShapeTheFamilyPayloadPromises(unittest.TestCase):
                                             class_colour="#C79C6E")])
         tile = wall["tiles"][0]
         for key in ("name", "role", "class", "class_colour", "leader",
-                    "playable", "url", "line", "tone"):
+                    "playable", "url", "standing", "line", "tone"):
             self.assertIn(key, tile, key)
 
     def test_it_is_json_serialisable(self):
