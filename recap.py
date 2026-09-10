@@ -661,11 +661,87 @@ EMPTY = "empty"
 LOCKED = "locked"
 TOO_HEAVY = "too heavy"
 WRONG_CLASS = "wrong class"
+NO_PROFICIENCY = "no proficiency"
 UNRANKED = "unranked"
 
 # The order the board sorts a drop's readers in, best first.
 _VERDICT_RANK = {EMPTY: 0, UPGRADE: 1, SIDEGRADE: 2, LOCKED: 3,
-                 TOO_HEAVY: 4, WRONG_CLASS: 5, WORSE: 6, UNRANKED: 7}
+                 TOO_HEAVY: 4, WRONG_CLASS: 5, NO_PROFICIENCY: 6, WORSE: 7,
+                 UNRANKED: 8}
+
+# --- can this character hold it at all (mod-overseer#411) -------------------
+#
+# THE ITEM SAYS NOTHING ABOUT THIS, AND THAT IS THE WHOLE DEFECT. The board
+# offered Kam's Walking Stick (entry 2280, a STAFF) to a rogue, because the
+# only class gate here is `allowable_class` and that column is -1 on the
+# staff, which means the ITEM restricts nobody. Whether a character may hold
+# a weapon is not an item property in this game at all: it is a proficiency,
+# granted by spells a class learns, kept in that character's own
+# `character_skills` rows, and absent from `item_template` entirely. So a
+# class mask plus an item-level comparison will keep offering staves and
+# polearms to rogues for ever, and will look right every time.
+#
+# NOT A CLASS-TO-SUBCLASS TABLE, for the same reason `armour_grade` below
+# refuses to be one: a warrior may wear plate, but not until 40, and a weapon
+# master will teach a class a weapon line it did not start with. What each
+# character actually holds is a row in the realm, and a table would be a guess
+# that goes stale silently.
+#
+# THE MAP FROM SUBCLASS TO SKILL IS THE CORE'S OWN, copied in the core's own
+# order out of `ItemTemplate::GetSkill` (ItemTemplate.h:782-815 at the pinned
+# revision this realm runs) so the two can be diffed by eye. The ids are
+# SharedDefines.h:3104-3199 of the same revision, read rather than remembered.
+# A 0 is the core's own 0: a subclass it maps to no skill, which therefore
+# needs none.
+#
+# The test itself is the core's, too. `Player::CanUseItem(Item*, bool)` refuses
+# with EQUIP_ERR_NO_REQUIRED_PROFICIENCY whenever `GetSkillValue(itemSkill)`
+# is 0 (PlayerStorage.cpp:2343-2367), and `Item::GetSkill` is
+# `GetTemplate()->GetSkill()` (Item.cpp:556-559), so the skill line is a
+# property of the template and this read reproduces the core's answer exactly.
+#
+# (The OTHER CanUseItem overload, the one taking an ItemTemplate, does NOT
+# make this test - it returns EQUIP_ERR_NO_REQUIRED_PROFICIENCY only for the
+# item's own RequiredSkill and RequiredSpell columns, both 0 on an ordinary
+# weapon. It is the obvious call and it would not have caught entry 2280.)
+WEAPON_SKILLS = {
+    0: 44, 1: 172, 2: 45, 3: 46, 4: 54,
+    5: 160, 6: 229, 7: 43, 8: 55, 9: 0,
+    10: 136, 11: 0, 12: 0, 13: 473, 14: 0,
+    15: 173, 16: 176, 17: 253, 18: 226, 19: 228,
+    20: 356,
+}
+ARMOUR_SKILLS = {0: 0, 1: 415, 2: 414, 3: 413, 4: 293, 5: 0, 6: 433,
+                 7: 0, 8: 0, 9: 0, 10: 0}
+
+# For the SENTENCE only. It decides nothing, which is why it is allowed to be
+# a table: a refusal a reader cannot check is a refusal they will distrust.
+SKILL_NAMES = {
+    43: "one-hand sword", 44: "one-hand axe", 45: "bow", 46: "gun",
+    54: "one-hand mace", 55: "two-hand sword", 136: "staff",
+    160: "two-hand mace", 172: "two-hand axe", 173: "dagger", 176: "thrown",
+    226: "crossbow", 228: "wand", 229: "polearm", 253: "spear",
+    293: "plate", 356: "fishing pole", 413: "mail", 414: "leather",
+    415: "cloth", 433: "shield", 473: "fist weapon",
+}
+
+# WORN REGARDLESS, so no proficiency is asked for. A cloak's subclass is cloth
+# and a shirt's and a tabard's are too, and the core exempts all three from the
+# proficiency rule the same way mod-overseer's own scorer does. Gating them
+# would refuse a cloak to somebody wearing one.
+NO_PROFICIENCY_SLOTS = (4, 16, 19)  # shirt, back, tabard
+
+
+def item_skill(drop: dict) -> int:
+    """The skill line this item needs, by the core's own table. 0 for none."""
+    if int(drop.get("inventory_type") or 0) in NO_PROFICIENCY_SLOTS:
+        return 0
+    subclass = int(drop.get("subclass") or 0)
+    if drop.get("class") == WEAPON_CLASS:
+        return WEAPON_SKILLS.get(subclass, 0)
+    if drop.get("class") == ARMOUR_CLASS:
+        return ARMOUR_SKILLS.get(subclass, 0)
+    return 0
 
 
 def slots_for(inventory_type: int | None) -> tuple:
@@ -689,6 +765,13 @@ def armour_grade(equipped: list[dict]) -> int | None:
     None when nothing worn is graded armour, which is a real state for a
     character in starting cloth-and-cloaks, and the verdict says so rather
     than guessing.
+
+    NOW THE FALLBACK RATHER THAN THE RULE (mod-overseer#411). Reading the
+    character's own `character_skills` rows answers the same question directly
+    and answers it for weapons too, so `verdict` uses that whenever it has it
+    and drops back to this only when the realm handed no skill rows over. This
+    stays because that fallback is real - it is what the board ranked on for
+    its whole life - and because it needs no query of its own.
     """
     grades = [int(row["subclass"]) for row in equipped
               if row.get("class") == ARMOUR_CLASS
@@ -758,7 +841,32 @@ def verdict(drop: dict, member: dict) -> dict:
                     why="restricted to other classes, so %s cannot use it at "
                         "all" % name)
         return base
-    grade = drop.get("subclass") if drop.get("class") == ARMOUR_CLASS else None
+    # PROFICIENCY, WHICH `allowable_class` ABOVE IS NOT (mod-overseer#411).
+    # Placed here because it is the same KIND of gate as the one above it and
+    # answers before anything about levels or item levels: a character who can
+    # never hold the thing is not "locked" and is not "worse", and printing
+    # either of those about them invites a comparison that has no meaning.
+    #
+    # `skills` is None when the realm did not hand this character's skill rows
+    # over - a degraded schema, a read that fell through its guard. That is not
+    # a refusal and must never become one: an unknown answer falls through to
+    # exactly the behaviour this board had before, item level and a caveat
+    # saying proficiency was not checked. Silently refusing everybody on a
+    # failed read would empty the board and look like a quiet dungeon.
+    needed = item_skill(drop)
+    skills = member.get("skills")
+    if needed and skills is not None:
+        if needed not in skills:
+            base.update(verdict=NO_PROFICIENCY,
+                        why="%s has no %s skill, so %s can never hold this "
+                            "whatever its item level"
+                            % (name, SKILL_NAMES.get(needed, "required"),
+                               name))
+            return base
+        grade = None
+    else:
+        grade = (drop.get("subclass")
+                 if drop.get("class") == ARMOUR_CLASS else None)
     if grade in ARMOUR_GRADES:
         worn_grade = member.get("armour_grade")
         if worn_grade is None:
@@ -805,23 +913,40 @@ def verdict(drop: dict, member: dict) -> dict:
     return base
 
 
-def _caveats(drop: dict) -> list[str]:
+def _caveats(drop: dict, proficiency_checked: bool = False) -> list[str]:
     """What the verdict above did NOT check, said out loud.
 
     A verdict that quietly omits this is one a reader will over-trust, and
-    weapon proficiency is the case that actually bites: nothing here knows a
-    Priest cannot hold an axe.
+    weapon proficiency was the case that actually bit: a staff was offered to
+    a rogue because nothing here knew a rogue cannot hold one.
+
+    AND A CAVEAT THAT OUTLIVES THE GAP IT DESCRIBED IS WORSE THAN NONE,
+    because it teaches the reader to distrust the whole footer. So the two
+    notes that mod-overseer#411 closed - weapon proficiency and shield
+    proficiency - are printed only while `proficiency_checked` is False, which
+    is when the realm did not hand over the skill rows and the verdict really
+    did fall back to item level alone.
+
+    THE OTHER TWO STAY, because their gaps are still real. Nothing here checks
+    dual wield, so a one-hander is still compared against the main hand only;
+    and a two-hander's cost to the off hand still is not priced, which this
+    board cannot do honestly anyway - it ranks by item level, and item levels
+    do not add, so "27 against 24 plus 22" would be arithmetic on a scale that
+    does not support it.
 
     FACTS ABOUT THE ITEM, SO THEY NAME NOBODY. The first version took a member
     and interpolated their name, and the caller passed members[0] once for the
     whole list, so every weapon in the dungeon was captioned "says nothing
-    about whether Bork can hold it" including the ones being read for Ugga.
+    about whether they can hold it" including the ones read for somebody else.
+    `proficiency_checked` keeps that property: it is a fact about the board's
+    own data, not about any one character.
     """
     notes = []
-    if drop.get("class") == WEAPON_CLASS:
+    if not proficiency_checked and drop.get("class") == WEAPON_CLASS:
         notes.append("weapon proficiency is not checked, so nothing here says "
                      "who can actually hold it")
-    if drop.get("class") == ARMOUR_CLASS and int(drop.get("subclass") or 0) == 6:
+    if (not proficiency_checked and drop.get("class") == ARMOUR_CLASS
+            and int(drop.get("subclass") or 0) == 6):
         notes.append("shield proficiency is not checked")
     if int(drop.get("inventory_type") or 0) == ONE_HANDED:
         notes.append("compared against the main hand only: putting it in the "
@@ -875,16 +1000,28 @@ def _chance(row: dict, group_sizes: dict) -> str:
 def build_lootboard(map_id: int, dungeon: str, encounter_rows: list[dict],
                     loot_rows: list[dict], char_rows: list[dict],
                     equipped_rows: list[dict], icons: dict,
-                    roster: list[str]) -> dict:
+                    roster: list[str],
+                    skill_rows: list[dict] | None = None) -> dict:
     """What each boss on this map can drop, and who it would be for.
 
     The bosses come from `instance_encounters` narrowed to creatures spawned
     on the map, not from a hand-written list: a hand-written list is what put
     a boss in the Chronicle that the core does not count (infra#3189), and it
     also cannot follow the family into the next dungeon on its own.
+
+    `skill_rows` are `character_skills` rows and are what lets the verdict
+    answer proficiency at all (mod-overseer#411). They default to None so a
+    caller that has not got them still gets the board it always got, with the
+    caveats that say proficiency was not checked still printed.
     """
     encounters = encounter_order(encounter_rows)
-    members = _members(char_rows, equipped_rows, roster)
+    members = _members(char_rows, equipped_rows, roster, skill_rows)
+    # EVERY MEMBER, OR THE FOOTER STILL WARNS. A board where one character's
+    # skills are missing is a board where that character's verdicts are the
+    # old item-level ones, and the caveat is about the board rather than about
+    # a member - so one unknown is enough to keep it printed for everybody.
+    proficiency_checked = bool(members) and all(
+        member["skills"] is not None for member in members)
     group_sizes: dict = {}
     for row in loot_rows:
         key = (int(row["Entry"]), int(row.get("GroupId") or 0))
@@ -927,7 +1064,7 @@ def build_lootboard(map_id: int, dungeon: str, encounter_rows: list[dict],
                 verdict_line=("%s: %s" % (best["who"], best["why"])
                               if best else ""),
                 also_line=_also_line(wanted, best),
-                caveats=_caveats(row),
+                caveats=_caveats(row, proficiency_checked),
             )
             drops.append(drop)
         drops.sort(key=lambda d: (0 if d["wanted_by"] else 1,
@@ -960,7 +1097,15 @@ def build_lootboard(map_id: int, dungeon: str, encounter_rows: list[dict],
             "loot that lives behind reference_loot_template is not followed, "
             "so this is not a complete drop list. Ranked by item level only: "
             "no stat weighting is applied anywhere, and a tie is reported as "
-            "a tie."),
+            "a tie. " + (
+                "Whether a character can hold a thing is read from their own "
+                "character_skills rows, using the core's own "
+                "subclass-to-skill map, so a weapon or a shield nobody can "
+                "use is refused by name rather than ranked."
+                if proficiency_checked else
+                "Proficiency could not be read for every character this time, "
+                "so a weapon is ranked on item level alone and the drop says "
+                "so.")),
         "empty_note": ("the world database lists no encounters for this map, "
                        "so there is no boss loot to show"
                        if not encounters else ""),
@@ -976,15 +1121,31 @@ def _boss_line(drops: int, wanted: int) -> str:
 
 
 def _members(char_rows: list[dict], equipped_rows: list[dict],
-             roster: list[str]) -> list[dict]:
+             roster: list[str],
+             skill_rows: list[dict] | None = None) -> list[dict]:
     """The family as the board compares against them.
 
     Built from whatever rows arrive, in roster order, so a sixth character or
     a rerolled class is a different payload and not a different code path.
+
+    `skills` is a set of skill ids the character actually holds, or None when
+    nothing was handed over for them (mod-overseer#411). None is the honest
+    third state and it is NOT an empty set: an empty set says "holds nothing",
+    which would refuse this character every weapon on the board, and a read
+    that fell through its guard must not be able to do that. A member absent
+    from `skill_rows` while other members are present therefore stays None,
+    rather than inheriting somebody else's answer or a confident zero.
+
+    A row is only counted when its value is above zero, which is what
+    `Player::GetSkillValue(skill) == 0` tests in the core.
     """
     worn: dict = {}
     for row in equipped_rows:
         worn.setdefault(row["name"], []).append(row)
+    held: dict = {}
+    for row in skill_rows or []:
+        if int(row.get("value") or 0) > 0:
+            held.setdefault(row["name"], set()).add(int(row["skill"]))
     by_name = {row["name"]: row for row in char_rows}
     members = []
     for name in roster:
@@ -998,6 +1159,7 @@ def _members(char_rows: list[dict], equipped_rows: list[dict],
             "class": char.get("class"),
             "by_slot": {int(row["slot"]): row for row in mine},
             "armour_grade": armour_grade(mine),
+            "skills": held.get(name),
         })
     return members
 

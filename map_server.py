@@ -1362,6 +1362,16 @@ _RECAP_ITEMS = (
     "SELECT entry, name, Quality AS quality, ItemLevel AS item_level, displayid "
     "FROM acore_world.item_template WHERE entry IN ({holes})"
 )
+# WHAT EACH CHARACTER MAY ACTUALLY HOLD (mod-overseer#411). The loot board
+# offered a staff to a rogue, because `item_template.allowable_class` was the
+# only class gate it had and that column restricts nobody on a staff. Whether a
+# character may hold a weapon is not on the item at all; it is one of these
+# rows. `value` comes with it because the core's own test is
+# `GetSkillValue(skill) == 0`, not "is there a row".
+_RECAP_SKILLS = (
+    "SELECT c.name, cs.skill, cs.value FROM characters c "
+    "JOIN character_skills cs ON cs.guid = c.guid WHERE c.name IN ({holes})"
+)
 
 
 def _wide_guarded(cur, sql: str, params: tuple = (), fallback: str = "",
@@ -1432,6 +1442,14 @@ def _fetch_recap(map_id: int | None) -> dict:
             worn = _wide_guarded(cur, _RECAP_WORN.format(holes=holes),  # noqa: S608
                                  (len(armory.EQUIPPED_SLOTS), *names), "",
                                  "character_inventory")
+            # GUARDED LIKE EVERYTHING ELSE HERE, and the empty list this hands
+            # back on a degraded schema is a real answer rather than a silent
+            # one: recap._members turns "no rows for this character" into an
+            # unknown, and an unknown proficiency ranks the board exactly the
+            # way it was ranked before and keeps printing the caveat that says
+            # so. A failed read must not be able to empty the board.
+            skills = _wide_guarded(cur, _RECAP_SKILLS.format(holes=holes),  # noqa: S608
+                                   tuple(names), "", "character_skills")
             # TWO MAPS, AND THEY ARE ONLY USUALLY THE SAME ONE. The board is
             # whichever dungeon is being browsed; the progress bar is the map
             # the family is actually in. Both decisions are the module's, and
@@ -1461,6 +1479,7 @@ def _fetch_recap(map_id: int | None) -> dict:
             "encounter_rows": encounters,
             "board_encounter_rows": board_encounters, "loot_rows": loot,
             "char_rows": chars, "equipped_rows": worn,
+            "skill_rows": skills,
             "item_rows": items, "board_map": board}
 
 
@@ -2304,6 +2323,7 @@ class Handler(BaseHTTPRequestHandler):
             loot_rows = fetched.pop("loot_rows")
             char_rows = fetched.pop("char_rows")
             equipped_rows = fetched.pop("equipped_rows")
+            skill_rows = fetched.pop("skill_rows")
             payload = recap.build_recap(
                 roster=family.roster(),
                 items={int(row["entry"]): row for row in item_rows},
@@ -2314,7 +2334,7 @@ class Handler(BaseHTTPRequestHandler):
                 board_map, achievements.MAP_NAMES.get(board_map,
                                                       "map %d" % board_map),
                 board_encounters, loot_rows, char_rows, equipped_rows,
-                ITEMS.icons, family.roster())
+                ITEMS.icons, family.roster(), skill_rows)
             self._send(200, "application/json", json.dumps(payload).encode())
         except Exception:
             # Same contract as every other poll: the tab keeps what it has
