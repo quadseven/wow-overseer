@@ -55,7 +55,8 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta
 
-from armory import QUALITY_NAMES, UNKNOWN_QUALITY
+from armory import (QUALITY_NAMES, UNKNOWN_QUALITY, ItemBook,
+                    template_tooltip)
 from recap import LOOT_CAVEAT, first_equips, run_state
 
 # --- the vocabulary the module writes, and this reads --------------------
@@ -215,32 +216,66 @@ def _duration(start: datetime, end: datetime) -> str:
 
 # --- items ----------------------------------------------------------------------
 
-def item_payload(entry: int, items: dict, icons: dict) -> dict:
-    """One item, as the page draws it: name in its quality colour, an icon
-    when the frozen book knows one, and the wowhead link for the tooltip.
+# BOTH COLUMN SPELLINGS, READ IN ONE PLACE. These rows used to arrive with
+# the world table's own names (name, Quality) and now arrive aliased, beside
+# every other column a tooltip needs. Two readers rather than four call sites
+# each guessing, so a fixture written against either spelling stays a true row
+# and a widened query cannot quietly blank a name somewhere nobody looked.
 
-    `items` is entry -> item_template row (name, Quality, ItemLevel,
-    displayid); `icons` is displayid -> icon name from the frozen ItemBook.
-    An entry the world database no longer knows (a custom item, a removed
-    one) still renders, by entry, rather than vanishing from the loot list.
+def _item_quality(row: dict):
+    return row.get("quality", row.get("Quality"))
+
+
+def _item_name(row: dict) -> str | None:
+    return row.get("item_name") or row.get("name")
+
+
+def item_payload(entry: int, items: dict, icons: dict,
+                 book: ItemBook | None = None) -> dict:
+    """One item, as the page draws it: name in its quality colour, an icon
+    when the frozen book knows one, and the lines its tooltip draws.
+
+    `items` is entry -> item_template row; `icons` is displayid -> icon name
+    from the frozen ItemBook. An entry the world database no longer knows (a
+    custom item, a removed one) still renders, by entry, rather than
+    vanishing from the loot list.
+
+    BOTH COLUMN SPELLINGS ARE READ, the same tolerance recap.item_payload
+    carries and for the same reason: this row used to arrive with the world
+    table's own names (name, Quality, ItemLevel) and now arrives aliased
+    alongside every other column a tooltip needs. A fixture written against
+    either spelling is still a true row.
+
+    `book` is an armory.ItemBook and is the only thing here a caller can be
+    missing. Without it the item renders exactly as it did before, with a
+    link out instead of a tooltip.
     """
     row = items.get(entry) or {}
-    quality = row.get("Quality")
+    quality = _item_quality(row)
     displayid = row.get("displayid")
     return {
         "entry": entry,
-        "name": row.get("name") or ("item %d" % entry),
+        "name": _item_name(row) or ("item %d" % entry),
         "quality": quality,
         "quality_name": QUALITY_NAMES.get(quality, UNKNOWN_QUALITY)
         if quality is not None else UNKNOWN_QUALITY,
-        "ilvl": row.get("ItemLevel"),
+        "ilvl": row.get("item_level", row.get("ItemLevel")),
         "icon": icons.get(displayid) if displayid is not None else None,
         "wowhead": "https://www.wowhead.com/wotlk/item=%d" % entry,
+        # Built from our own tables, never fetched from Wowhead's script.
+        # recap.item_payload says why at length; the short version is that
+        # this page already refuses to let a browser reach that CDN.
+        # `entry` is handed over rather than read off the row, for the
+        # reason recap.item_payload gives at length: the entry the caller
+        # resolved is the one this page is drawing.
+        "tooltip": (template_tooltip(dict(row, entry=entry), book)
+                    if book is not None and row else None),
     }
 
 
-def _loot_line(event: dict, items: dict, icons: dict) -> dict:
-    line = item_payload(int(event["subject_id"]), items, icons)
+def _loot_line(event: dict, items: dict, icons: dict,
+               book: ItemBook | None = None) -> dict:
+    line = item_payload(int(event["subject_id"]), items, icons, book)
     line["who"] = event["character_name"]
     line["at"] = _iso(event["first_seen"])
     line["slot"] = event.get("detail") or ""
@@ -286,7 +321,8 @@ def infer_bosses(map_id: int, loot_entries: set[int], boss_drops: dict,
 # --- runs -------------------------------------------------------------------------
 
 def _run_loot(inside: list[dict], items: dict, icons: dict,
-              first_worn: dict) -> list[dict]:
+              first_worn: dict,
+              book: ItemBook | None = None) -> list[dict]:
     """The run's loot: gear FIRST worn inside it, not gear worn during it.
 
     THIS FILTER IS THE FIX FOR A CARD THAT SHIPPED WRONG. `inside` is already
@@ -313,7 +349,7 @@ def _run_loot(inside: list[dict], items: dict, icons: dict,
         # getting the same dict objects back would fail silently if it did.
         if first is None or first["first_seen"] != event["first_seen"]:
             continue
-        loot.append(_loot_line(event, items, icons))
+        loot.append(_loot_line(event, items, icons, book))
     loot.sort(key=lambda line: line["at"])
     return loot
 
@@ -422,7 +458,8 @@ def _card_moment(run: dict, active_to: datetime | None, start: datetime) -> date
 
 def assemble_run(run: dict, events: list[dict], deaths: list[dict], items: dict,
                  icons: dict, boss_drops: dict, roster: list[str],
-                 now: datetime, first_worn: dict | None = None) -> dict:
+                 now: datetime, first_worn: dict | None = None,
+                 book: ItemBook | None = None) -> dict:
     """One dungeon run, with everything that happened inside it.
 
     `events` and `deaths` are the WHOLE tables (or the fetched horizon); the
@@ -439,7 +476,7 @@ def assemble_run(run: dict, events: list[dict], deaths: list[dict], items: dict,
     map_id = int(run["map_id"])
     loot = _run_loot(inside, items, icons,
                      first_worn if first_worn is not None
-                     else first_equips(events))
+                     else first_equips(events), book)
     levels = _run_levels(inside)
     quests = _run_quests(inside)
     bosses = infer_bosses(map_id, {line["entry"] for line in loot}, boss_drops,
@@ -490,7 +527,8 @@ def _after(events: list[dict], who: str, kind: str, since: datetime,
 
 
 def assemble_quest(event: dict, events: list[dict], quest_rewards: dict,
-                   items: dict, icons: dict) -> dict:
+                   items: dict, icons: dict,
+                   book: ItemBook | None = None) -> dict:
     """One turn-in: who, what it paid, and whether it was the level.
 
     `quest_rewards` is quest id -> {"items": [(entry, count)], "choices":
@@ -506,7 +544,7 @@ def assemble_quest(event: dict, events: list[dict], quest_rewards: dict,
     at = event["first_seen"]
     rewards = []
     for entry, count in template["items"]:
-        line = item_payload(int(entry), items, icons)
+        line = item_payload(int(entry), items, icons, book)
         line["count"] = int(count or 1)
         line["chosen"] = False
         rewards.append(line)
@@ -516,7 +554,8 @@ def assemble_quest(event: dict, events: list[dict], quest_rewards: dict,
         for equip in sorted(_after(events, who, ITEM_EQUIP, at, CHOICE_WINDOW),
                             key=lambda e: e["first_seen"]):
             if int(equip["subject_id"]) in choices:
-                chosen = item_payload(int(equip["subject_id"]), items, icons)
+                chosen = item_payload(int(equip["subject_id"]), items, icons,
+                                      book)
                 chosen["count"] = 1
                 chosen["chosen"] = True
                 rewards.append(chosen)
@@ -540,7 +579,8 @@ def assemble_quest(event: dict, events: list[dict], quest_rewards: dict,
 
 
 def quest_cards(events: list[dict], quest_rewards: dict, items: dict,
-                icons: dict) -> list[dict]:
+                icons: dict,
+                book: ItemBook | None = None) -> list[dict]:
     """A card per turn-in, and one per completion that was never turned in.
 
     quest_complete fires when the objectives are done and quest_reward when
@@ -554,10 +594,12 @@ def quest_cards(events: list[dict], quest_rewards: dict, items: dict,
     cards = []
     for e in events:
         if e["kind"] == QUEST_REWARD:
-            cards.append(assemble_quest(e, events, quest_rewards, items, icons))
+            cards.append(assemble_quest(e, events, quest_rewards, items,
+                                        icons, book))
         elif e["kind"] == QUEST_COMPLETE:
             if (e["character_name"], int(e["subject_id"])) not in rewarded:
-                cards.append(assemble_quest(e, events, quest_rewards, items, icons))
+                cards.append(assemble_quest(e, events, quest_rewards, items,
+                                            icons, book))
     return cards
 
 
@@ -635,12 +677,13 @@ def _quality_firsts(events: list[dict], items: dict) -> list[dict]:
     for quality, key, title in ((3, "rare_item", "First rare item"),
                                 (4, "epic_item", "First epic item")):
         good = [e for e in equips
-                if (items.get(int(e["subject_id"])) or {}).get("Quality", -1) >= quality]
+                if (_item_quality(items.get(int(e["subject_id"])) or {})
+                    or -1) >= quality]
         hit = _earliest(good, "first_seen")
         if hit:
             firsts.append(_first_card(
                 key, title, _iso(hit["first_seen"]), hit["character_name"],
-                items[int(hit["subject_id"])]["name"]))
+                _item_name(items[int(hit["subject_id"])])))
     return firsts
 
 
@@ -921,14 +964,17 @@ def timeline(cards: list[dict]) -> list[dict]:
 def build_achievements(run_rows: list[dict], event_rows: list[dict],
                        death_rows: list[dict], items: dict, icons: dict,
                        boss_drops: dict, quest_rewards: dict,
-                       roster: list[str], now: datetime | None = None) -> dict:
+                       roster: list[str], now: datetime | None = None,
+                       book: ItemBook | None = None) -> dict:
     """Rows in, the Chronicle's JSON out.
 
     run_rows      overseer_dungeon_run rows
     event_rows    overseer_event rows, any kind
     death_rows    overseer_death rows
-    items         item entry -> item_template row (name, Quality, ItemLevel, displayid)
+    items         item entry -> item_template row, read wide enough for a
+                  tooltip (map_server._ITEM_TEMPLATE_COLUMNS)
     icons         displayid -> icon name (armory.ItemBook.icons)
+    book          the armory.ItemBook itself, for the tooltip lines
     boss_drops    creature entry -> iterable of item entries (rare and up)
     quest_rewards quest id -> {"items": [(entry, count)], "choices": [entry]}
     roster        the family, from family.roster()
@@ -940,14 +986,14 @@ def build_achievements(run_rows: list[dict], event_rows: list[dict],
     # recomputing it inside assemble_run would be the same answer 200 times.
     first_worn = first_equips(event_rows)
     runs = [assemble_run(r, events, death_rows, items, icons, boss_drops, roster,
-                         now, first_worn)
+                         now, first_worn, book)
             for r in run_rows]
     # A visit in which nothing happened at all - opened by a heartbeat at the
     # door and closed by the next cold one - is not even an attempt. It is
     # still in the payload's count so the page can say how many there were.
     visits = len(runs)
     runs = [r for r in runs if r["active_from"]]
-    quests = quest_cards(events, quest_rewards, items, icons)
+    quests = quest_cards(events, quest_rewards, items, icons, book)
     levels = [c for c in level_cards(events) if c["milestone"]]
     firsts = first_cards(runs, events, items, roster)
     cards = [dress(c) for c in timeline(runs + quests + levels + firsts)]

@@ -954,16 +954,26 @@ def _fetch_achievements() -> dict:
             items = {}
             if entries:
                 iholes = ", ".join(["%s"] * len(entries))
+                # READ WIDE ENOUGH FOR A TOOLTIP (infra#3501). This used to
+                # select five columns, which is a name in a colour and
+                # nothing a reader could act on; the Chronicle's gear names
+                # now open the item's own lines in place, and those lines are
+                # built from these columns rather than fetched from wowhead.
+                # The list is bounded by achievements.wanted_entries, which is
+                # already narrowed to the items these cards actually draw, so
+                # the wider read is over the same handful of rows.
                 cur.execute(
-                    "SELECT entry, name, Quality, ItemLevel, displayid "  # noqa: S608
-                    f"FROM acore_world.item_template WHERE entry IN ({iholes})",
+                    f"SELECT it.entry, {_ITEM_TEMPLATE_COLUMNS} "  # noqa: S608
+                    "FROM acore_world.item_template it "
+                    f"WHERE it.entry IN ({iholes})",
                     tuple(entries),
                 )
                 items = {int(r["entry"]): r for r in cur.fetchall()}
     finally:
         conn.close()
     return {"run_rows": run_rows, "event_rows": event_rows, "death_rows": death_rows,
-            "items": items, "icons": ITEMS.icons, "boss_drops": boss_drops,
+            "items": items, "icons": ITEMS.icons, "book": ITEMS,
+            "boss_drops": boss_drops,
             "quest_rewards": quest_rewards, "roster": names}
 
 
@@ -1329,10 +1339,14 @@ _RECAP_ENCOUNTERS = (
     "(SELECT DISTINCT id FROM acore_world.creature WHERE map = %s)"
 )
 _RECAP_LOOT = (
+    # The item half of this list is _ITEM_TEMPLATE_COLUMNS, which is every
+    # column a tooltip draws (infra#3501). It was eight of them, enough for a
+    # name, a level and the class gate; a drop on this board opens its own
+    # lines now, and they come from here rather than from wowhead. The rows
+    # the PAYLOAD carries are narrowed by build_lootboard to the drops that
+    # can be equipped at all, which is a fraction of what this selects.
     "SELECT clt.Entry, clt.Item, clt.Chance, clt.GroupId, ct.entry AS creature, "
-    "it.name AS item_name, it.Quality AS quality, it.ItemLevel AS item_level, "
-    "it.RequiredLevel AS required_level, it.class, it.subclass, it.displayid, "
-    "it.InventoryType AS inventory_type, it.AllowableClass AS allowable_class "
+    f"{_ITEM_TEMPLATE_COLUMNS} "
     "FROM acore_world.creature_loot_template clt "
     "JOIN acore_world.creature_template ct ON ct.lootid = clt.Entry "
     "JOIN acore_world.item_template it ON it.entry = clt.Item "
@@ -1359,8 +1373,10 @@ _RECAP_WORN = (
     "WHERE c.name IN ({holes})"
 )
 _RECAP_ITEMS = (
-    "SELECT entry, name, Quality AS quality, ItemLevel AS item_level, displayid "
-    "FROM acore_world.item_template WHERE entry IN ({holes})"
+    # Same widening, same reason (infra#3501). Bounded by recap.wanted_items,
+    # which is already "only the items somebody has actually worn".
+    "SELECT it.entry, " + _ITEM_TEMPLATE_COLUMNS + " "
+    "FROM acore_world.item_template it WHERE it.entry IN ({holes})"
 )
 # WHAT EACH CHARACTER MAY ACTUALLY HOLD (mod-overseer#411). The loot board
 # offered a staff to a rogue, because `item_template.allowable_class` was the
@@ -2327,14 +2343,15 @@ class Handler(BaseHTTPRequestHandler):
             payload = recap.build_recap(
                 roster=family.roster(),
                 items={int(row["entry"]): row for row in item_rows},
-                icons=ITEMS.icons, dungeons=achievements.MAP_NAMES,
+                icons=ITEMS.icons, book=ITEMS,
+                dungeons=achievements.MAP_NAMES,
                 zones=recap.zone_names(GEO.continents),
                 now=datetime.now(), **fetched)
             payload["board"] = recap.build_lootboard(
                 board_map, achievements.MAP_NAMES.get(board_map,
                                                       "map %d" % board_map),
                 board_encounters, loot_rows, char_rows, equipped_rows,
-                ITEMS.icons, family.roster(), skill_rows)
+                ITEMS.icons, family.roster(), skill_rows, ITEMS)
             self._send(200, "application/json", json.dumps(payload).encode())
         except Exception:
             # Same contract as every other poll: the tab keeps what it has

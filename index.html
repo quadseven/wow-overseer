@@ -633,6 +633,86 @@
      of which are elsewhere in this file. */
   :root { --gold:#e5b53b; }
 
+  /* --- the item tooltip, on every gear name (infra#3501) -----------------
+     WHAT THIS REPLACED, and it is the whole reason it exists. A gear name
+     used to be an anchor to the item's page on wowhead.com. On a desktop
+     that is a new tab; on the phone this site is actually read on it is
+     either a navigation off the page or, held down, the browser's own link
+     menu sitting over the thing somebody was trying to read. Neither of
+     those is a tooltip. So the name is a button now, the lines the game
+     draws for that item are drawn in this panel, and the full page is one
+     deliberate row at the foot of it rather than the default tap.
+
+     NOT ONE MEASURED COORDINATE, which is the lesson .acard already wrote
+     down for the Armory's item card. A panel positioned beside the thing it
+     describes needs a hover branch, a pin, and a rule for each screen edge it
+     can run off; this one is pinned by CSS to the foot of the VIEWPORT on a
+     phone and to the bottom corner on a wide screen. It therefore cannot be
+     clipped and cannot render off-screen for an item sitting at an edge, at
+     any size, without this page measuring anything at all.
+
+     IT HAS ITS OWN DARK GROUND, for exactly the reason #armory and #bags each
+     have one: item quality is a colour in this game, uncommon green on white
+     is close to invisible, and this panel is a child of the body so it is
+     inside neither of those scopes. Written out a third time rather than
+     folded into one selector, on the same argument the Armory's scope gives
+     above: each one can be read, and deleted, with the thing it dresses.
+
+     THE READING ITSELF IS .adetail, the Armory's, and deliberately not a
+     second set of rules that resembles it. The operator asked for the item
+     card they already have, everywhere, and two stylesheets for one reading
+     is how two readings start. */
+  #itemtip {
+    --bg:#0A140E; --panel:#0F1D14; --line:#1E3226; --text:#E6F5EC;
+    --dim:#8FA795;
+    --on-dark:#E8EFE6; --on-dark-dim:#B9C9BC; --on-dark-faint:#8FA396;
+    --warn-text:#FF7A5E; --caution-text:#E8B33D; --accent-text:#2FD46F;
+    position:fixed; z-index:40; left:0; right:0; bottom:0;
+    display:flex; flex-direction:column; max-height:min(70vh, 34rem);
+    border-top:1px solid var(--line); border-radius:12px 12px 0 0;
+    /* SOLID, unlike .acard, and the difference is what is behind each of
+       them. The Armory's card sits over a turning 3D model, where a little
+       of the character showing through reads as depth. This one sits over a
+       list of item names in the same colours at the same size, and at 96%
+       the sentence underneath came through the panel and turned the stats
+       into a smudge. There is a top border and a shadow to separate it. */
+    background:var(--bg);
+    color:var(--text); box-shadow:0 -10px 24px #000000a6; }
+  #itemtip[hidden] { display:none; }
+  /* WITH ROOM BESIDE THE READING IT MOVES INTO THE CORNER. A full width band
+     across the foot of a 1440px window is a cookie banner, not a tooltip, and
+     at that width there is somewhere for it to go that covers nothing. */
+  @media (min-width:640px) {
+    #itemtip { left:auto; right:var(--gutter); bottom:var(--gutter);
+               width:min(24rem, calc(100vw - 2 * var(--gutter)));
+               border:1px solid var(--line); border-radius:12px; } }
+  /* TWO FULL WIDTH THUMB ROWS, OUTSIDE THE PART THAT SCROLLS, so scrolling a
+     long item never scrolls the way out of it off the bottom. 44px and the
+     width of the panel for the same reason .aclose is both: a corner cross
+     would be sitting on the item's own name, and a 26px text link is a third
+     of the hit target this page allows anywhere else. */
+  #itemtipout, #itemtipclose {
+    flex:0 0 auto; display:flex; align-items:center; justify-content:center;
+    min-height:44px; padding:0 .9rem; border:0;
+    border-top:1px solid var(--line); background:none; cursor:pointer;
+    color:var(--on-dark-dim); text-decoration:none; font-family:var(--mono);
+    font-size:.7rem; text-transform:uppercase; letter-spacing:.08em; }
+  #itemtipout:hover, #itemtipclose:hover { color:var(--accent-text); }
+  #itemtipout:focus-visible, #itemtipclose:focus-visible {
+    outline:2px solid var(--ground); outline-offset:-3px; }
+  /* THE GEAR NAME ITSELF. It is a button and it has to read as the run of
+     text it replaced, so everything a button brings with it is taken back
+     off. touch-action takes the tap delay off it, and the callout rule is
+     what stops a long press offering to copy the label instead of opening
+     the panel, which is half of the behaviour this whole thing is here to
+     replace. The colour is the caller's .q0 to .q7 class, so a name reads as
+     its quality here exactly as it did as a link. */
+  .iname { font:inherit; color:inherit; padding:0; border:0; background:none;
+           cursor:pointer; text-align:left; overflow-wrap:anywhere;
+           touch-action:manipulation; -webkit-touch-callout:none; }
+  .iname:hover { text-decoration:underline; }
+  .iname:focus-visible { outline:2px solid currentColor; outline-offset:2px; }
+
   /* --- the Decree console (infra#2597) --------------------------------------
      THE ONLY WRITE SURFACE IN THE REDESIGN, and most of its controls are
      drawn disabled on purpose. What this page may and may not reach is
@@ -2790,6 +2870,17 @@
   <span class="sw" style="background:var(--mortal)"></span> mortal (you)
   &nbsp; square = inside an instance, at its entrance &nbsp; pulsing = in combat
 </footer>
+<!-- THE ITEM TOOLTIP (infra#3501). Outside every view on purpose: it is
+     drawn over whichever tab is open, so it cannot be a child of one of
+     them, and it is placed against the viewport by CSS, so nothing measures
+     anything. Hidden until a gear name is tapped. The body is .adetail, the
+     Armory's item card, because it is the same reading and there is only one
+     of it. -->
+<div id="itemtip" hidden>
+  <div id="itemtipbody" class="adetail" aria-live="polite"></div>
+  <a id="itemtipout" target="_blank" rel="noopener">open on wowhead</a>
+  <button id="itemtipclose" type="button">close</button>
+</div>
 <script>
 "use strict";
 const MAP_VIEW = "map";
@@ -5329,6 +5420,131 @@ setInterval(refreshWatch, 5000);
 setInterval(render, 200);  // combat pulse
 window.addEventListener("resize", render);
 
+// --- the item tooltip, on every gear name (infra#3501) -------------------
+//
+// WHAT A GEAR NAME USED TO DO. It was an anchor to the item's page on
+// wowhead.com, which on the phone this site is read on is either a navigation
+// off the page or, held down, the browser's own link menu over the thing
+// somebody was trying to read. Neither is a tooltip, and a tooltip is what
+// was asked for. So a gear name is a BUTTON: tapping it draws the item's own
+// lines in the panel pinned to the viewport, tapping the same name again puts
+// them away, and the full page is one deliberate row at the foot of the panel
+// instead of the default tap.
+//
+// EVERY LINE IN IT IS BUILT FROM OUR OWN TABLES. Wowhead ships a tooltip
+// script and this page does not load it, for the same reason the 3D model's
+// data comes through this server rather than from the browser: that host
+// refuses an Origin it does not recognise, so a tooltip leaning on it would
+// be the one part of this page that stops working off the tailnet, and the
+// slowest part of it everywhere else. recap.py and achievements.py read the
+// columns out of item_template and armory.template_tooltip turns them into
+// the lines the game draws.
+//
+// IT SITS HERE, after the map's own intervals and above the Decree console,
+// in the gap no tab suite claims: the Family window ends at loadZones().then(
+// and the Armory's runs from its own banner to the end of the script, so code
+// dropped into either is swept into assertions about a tab it has nothing to
+// do with. The LINES are drawn by itemTipLines, which lives beside the
+// Armory's item card, because that card is the same reading and two renderers
+// would be two readings.
+//
+// ONE PANEL, AND THREE WAYS TO PUT IT AWAY, which is the contract the
+// Armory's item card already keeps and the reason it is copied rather than
+// reinvented: the same name again, anything that is not the panel or a name,
+// and Escape.
+const tipPanel = document.getElementById("itemtip");
+const tipBody = document.getElementById("itemtipbody");
+const tipOut = document.getElementById("itemtipout");
+const tipClose = document.getElementById("itemtipclose");
+// WHICH NAME IS OPEN, and whether a tap opened it. `at` is the button itself
+// rather than the item entry: the same sword can be on the page twice, worn
+// by two members, and keying this by entry would make tapping the second one
+// close the first one's panel.
+const tipShown = { at: null, pinned: false };
+// A POINTER THAT CAN HOVER PREVIEWS; A THUMB HAS TO TAP. Both halves of the
+// test are needed. The media query alone says nothing about the gesture in
+// hand on a laptop with a touchscreen, and the pointer type alone says
+// nothing about a browser that reports a synthesised mouse for a tap. A
+// touch that opened the panel on entering would cover the item under the
+// thumb that was reaching for it.
+const TIP_HOVERS = window.matchMedia("(hover: hover) and (pointer: fine)");
+
+function closeItemTip() {
+  if (tipShown.at) tipShown.at.setAttribute("aria-expanded", "false");
+  tipShown.at = null;
+  tipShown.pinned = false;
+  tipPanel.hidden = true;
+}
+
+// `pinned` is the difference between a tap and a hover, and it is the whole
+// of the interaction rule: a hover may replace an unpinned panel and may take
+// it away again, and neither may touch one a tap put up. Without it, moving
+// a mouse across the list on the way to the close button would take the panel
+// away under the cursor.
+function openItemTip(at, item, pinned) {
+  if (tipShown.at && tipShown.at !== at) {
+    tipShown.at.setAttribute("aria-expanded", "false");
+  }
+  tipShown.at = at;
+  tipShown.pinned = pinned;
+  at.setAttribute("aria-expanded", "true");
+  tipBody.replaceChildren();
+  itemTipLines(tipBody, item.tooltip, null);
+  tipOut.href = item.wowhead;
+  tipPanel.hidden = false;
+  // A new item is read from its name down, not from wherever the last one
+  // was left scrolled to.
+  tipBody.scrollTop = 0;
+}
+
+// THE NAME, AS A CONTROL. A button and not an anchor, which is the change
+// itself: an anchor with an href is what raises the browser's own menu on a
+// long press, and no amount of cancelling the click takes that away.
+//
+// A NAME WITH NOTHING BEHIND IT IS PLAIN TEXT. An item the world database no
+// longer knows, and a row read too narrowly to carry the columns, both arrive
+// with no tooltip; an affordance that opens an empty panel is worse than no
+// affordance, and the item still renders and still says its own name.
+//
+// THE QUALITY CLASS IS THE CALLER'S. Each surface already works out its own,
+// and a control that imposed one would be deciding how an item reads on a tab
+// it knows nothing about.
+function itemTipName(item, label, cls) {
+  if (!item.tooltip) return el("span", cls, label);
+  const b = el("button", "iname " + cls, label);
+  b.type = "button";
+  b.setAttribute("aria-controls", "itemtip");
+  b.setAttribute("aria-expanded", "false");
+  b.addEventListener("click", () => {
+    if (tipShown.at === b && tipShown.pinned) closeItemTip();
+    else openItemTip(b, item, true);
+  });
+  b.addEventListener("pointerenter", (e) => {
+    if (e.pointerType !== "mouse" || !TIP_HOVERS.matches) return;
+    if (tipShown.pinned) return;
+    openItemTip(b, item, false);
+  });
+  b.addEventListener("pointerleave", (e) => {
+    if (e.pointerType !== "mouse" || tipShown.pinned) return;
+    if (tipShown.at === b) closeItemTip();
+  });
+  return b;
+}
+
+tipClose.addEventListener("click", closeItemTip);
+// pointerdown rather than click, and the listener only READS the event: the
+// drag that dismisses the panel is then the same drag that scrolls the page
+// under it, instead of costing a gesture to put the panel away first. The
+// same arrangement, for the same reason, as closeItemCards further down.
+document.addEventListener("pointerdown", (e) => {
+  const t = e.target;
+  if (t instanceof Element && t.closest("#itemtip, .iname")) return;
+  closeItemTip();
+});
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape") closeItemTip();
+});
+
 // --- the Decree console (infra#2597) ---------------------------------------
 //
 // THE ONLY VIEW ON THIS PAGE THAT WRITES, and the one where being wrong is
@@ -6045,8 +6261,13 @@ function chrChips(list, cls) {
 
 // One item line: the icon when the frozen book knows one (nothing when it
 // does not - a blank square reads as a broken picture - and nothing again if
-// the icon host is unreachable), then the name in its quality colour,
-// linking to wowhead for the tooltip.
+// the icon host is unreachable), then the name in its quality colour.
+//
+// THE NAME OPENS THE ITEM'S TOOLTIP AND DOES NOT NAVIGATE (infra#3501). It
+// used to be an anchor to wowhead.com carrying a one-line title, which on a
+// phone meant a tap left the site and a long press raised the browser's own
+// link menu over the loot list. itemTipName makes it a button; the way to
+// the full page is a row inside the panel it opens.
 function chrItem(item, who) {
   const row = el("div", "item");
   if (item.icon) {
@@ -6057,15 +6278,10 @@ function chrItem(item, who) {
     img.onerror = () => { img.remove(); };
     row.appendChild(img);
   }
-  const a = document.createElement("a");
-  a.href = item.wowhead;
-  a.target = "_blank";
-  a.rel = "noopener";
-  a.className = item.quality === null || item.quality === undefined
+  const quality = item.quality === null || item.quality === undefined
     ? "qunknown" : "q" + item.quality;
-  a.textContent = item.name + (item.count > 1 ? " x" + item.count : "");
-  a.title = item.quality_name + (item.ilvl ? ", item level " + item.ilvl : "");
-  row.appendChild(a);
+  row.appendChild(itemTipName(
+    item, item.name + (item.count > 1 ? " x" + item.count : ""), quality));
   if (item.chosen) row.appendChild(el("span", "who", "(chosen)"));
   if (who) row.appendChild(el("span", "who", who));
   return row;
@@ -6862,20 +7078,29 @@ function detailLine(c, cls, text) {
 // An item with no record still gets a line saying so. Hiding those would make
 // "we have no idea where this came from" look identical to "this came from
 // nowhere interesting", and the difference is the whole point of the feature.
+//
+// IT RETURNS ITS ROW RATHER THAN APPENDING ONE (infra#3501). The lines
+// around it are drawn by itemTipLines now, which every gear name on the page
+// shares, and this sentence is the one line on an Armory item that no other
+// surface has: the Armory knows which character is wearing the thing, and a
+// drop on the loot board has nobody to have worn it yet. So it is handed in
+// rather than reached for, and it still lands between the flavour text and
+// the sell price, exactly where the card has always put it.
 function renderProvenance(c, s) {
   const forName = arm.provenance[c.name];
   const p = forName ? forName[s.entry] : null;
-  if (!p) return;
-  const row = detailLine(c, "st", "");
+  if (!p) return null;
+  const row = el("div", "st");
   if (!p.known) {
     row.textContent = p.line;
-    return;
+    return row;
   }
   const a = document.createElement("a");
   a.href = "#chronicle";
   a.textContent = p.line;
   row.appendChild(a);
   row.appendChild(document.createTextNode(", " + chrWhen(p.at)));
+  return row;
 }
 
 function renderDetail(c, s) {
@@ -6898,44 +7123,65 @@ function renderDetail(c, s) {
     detailLine(c, "st", s.empty_note);
     return;
   }
-  const t = s.tooltip;
-  detailLine(c, "nm" + (t.quality === null ? "" : " q" + t.quality), t.name);
-  if (t.item_level !== null) detailLine(c, "il", "Item Level " + t.item_level);
-  if (t.binding) detailLine(c, "", t.binding);
+  itemTipLines(c.detail, s.tooltip, renderProvenance(c, s));
+}
+
+// EVERY LINE THE GAME DRAWS FOR ONE ITEM, in the order it draws them, and
+// the only place on this page that draws them (infra#3501). The card above
+// calls it with the slot's own reading; the panel pinned to the viewport
+// calls it with a drop's, a first equip's or a quest reward's. Two renderers
+// would be two items: the ask was for the card that is already here, on
+// every gear name, not for a second one that resembles it.
+//
+// `note` is the one line this site adds that the game has none of, and it is
+// handed in because only the Armory has it. Null everywhere else.
+//
+// NOTHING HERE DECIDES ANYTHING. Which lines exist, what is in them and what
+// order they come in are armory._tooltip's answer; this walks the fields it
+// was handed and paints the labels the client paints beside them.
+function itemTipLines(node, t, note) {
+  const add = (cls, text) => {
+    const d = el("div", cls, text);
+    node.appendChild(d);
+    return d;
+  };
+  add("nm" + (t.quality === null ? "" : " q" + t.quality), t.name);
+  if (t.item_level !== null) add("il", "Item Level " + t.item_level);
+  if (t.binding) add("", t.binding);
   if (t.slot || t.kind) {
     const r = el("div", "t");
     r.append(el("span", "", t.slot || ""), el("span", "", t.kind || ""));
-    c.detail.appendChild(r);
+    node.appendChild(r);
   }
   if (t.damage) {
     const r = el("div", "t");
     r.append(el("span", "", t.damage.min + " - " + t.damage.max + " Damage"),
              el("span", "", "Speed " + t.damage.speed.toFixed(2)));
-    c.detail.appendChild(r);
-    if (t.damage.dps !== null) detailLine(c, "", "(" + t.damage.dps.toFixed(1) + " damage per second)");
+    node.appendChild(r);
+    if (t.damage.dps !== null) add("", "(" + t.damage.dps.toFixed(1) + " damage per second)");
   }
-  if (t.armor) detailLine(c, "", t.armor + " Armor");
-  if (t.block) detailLine(c, "", t.block + " Block");
-  for (const line of t.stats) detailLine(c, "", line);
-  for (const line of t.resistances) detailLine(c, "", line);
-  for (const line of t.enchant) detailLine(c, "eq", line);
-  if (t.durability) detailLine(c, "", "Durability " + t.durability);
+  if (t.armor) add("", t.armor + " Armor");
+  if (t.block) add("", t.block + " Block");
+  for (const line of t.stats) add("", line);
+  for (const line of t.resistances) add("", line);
+  for (const line of t.enchant) add("eq", line);
+  if (t.durability) add("", "Durability " + t.durability);
   if (t.classes) {
     const r = el("div", "cl", "Classes: ");
     r.appendChild(el("span", "", t.classes.join(", ")));
-    c.detail.appendChild(r);
+    node.appendChild(r);
   }
-  if (t.requires_level) detailLine(c, "", "Requires Level " + t.requires_level);
-  for (const line of t.effects) detailLine(c, "eq blk", line);
+  if (t.requires_level) add("", "Requires Level " + t.requires_level);
+  for (const line of t.effects) add("eq blk", line);
   if (t.set) {
-    detailLine(c, "setn", t.set.name + " (" + t.set.worn + "/" + t.set.total + ")");
-    for (const p of t.set.pieces) detailLine(c, "piece" + (p.worn ? " worn" : ""), p.name);
+    add("setn", t.set.name + " (" + t.set.worn + "/" + t.set.total + ")");
+    for (const p of t.set.pieces) add("piece" + (p.worn ? " worn" : ""), p.name);
     for (const b of t.set.bonuses) {
-      detailLine(c, "bonus blk" + (b.active ? " on" : ""), "(" + b.threshold + ") Set: " + b.text);
+      add("bonus blk" + (b.active ? " on" : ""), "(" + b.threshold + ") Set: " + b.text);
     }
   }
-  if (t.flavor) detailLine(c, "fl", '"' + t.flavor + '"');
-  renderProvenance(c, s);
+  if (t.flavor) add("fl", '"' + t.flavor + '"');
+  if (note) node.appendChild(note);
   if (t.sell_price) {
     const m = el("div", "money", "Sell Price: ");
     const coins = [["g", t.sell_price.gold], ["s", t.sell_price.silver], ["c", t.sell_price.copper]];
@@ -6944,7 +7190,7 @@ function renderDetail(c, s) {
       m.appendChild(el("span", "", String(v)));
       m.appendChild(el("span", "coin " + k));
     }
-    c.detail.appendChild(m);
+    node.appendChild(m);
   }
 }
 

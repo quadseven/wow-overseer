@@ -146,9 +146,41 @@ class TheChronicle(unittest.TestCase):
         self.assertNotIn("insertAdjacentHTML", self.tab)
         self.assertIn(".textContent = ", self.tab)
 
-    def test_outbound_links_do_not_hand_over_the_opener(self):
-        self.assertIn('a.rel = "noopener";', self.tab)
+    def test_nothing_in_this_block_navigates_anywhere(self):
+        """THE GUARANTEE FOLLOWED THE LINK (infra#3501), it was not dropped.
+
+        This used to read `assertIn('a.rel = "noopener";', self.tab)`, and it
+        was the right assertion while a gear name WAS the outbound link: an
+        anchor to wowhead.com built inside chrItem. That anchor is the bug the
+        tooltip replaced. On a phone a tap on it left the site, and a long
+        press raised the browser's own link menu over the loot list.
+
+        So the block has no outbound link to guard any more, and an assertion
+        about one would either pass vacuously or push the next person back to
+        an anchor. What is asserted instead is stronger and narrower: NOTHING
+        in this window sets an href at all, so no item line here can navigate
+        by any route; and the one link out that survived, the tooltip's own
+        row, still refuses the opener. The icon host stays named here because
+        it is still this block that reaches it.
+        """
+        self.assertNotIn(".href = ", self.tab)
+        self.assertNotIn('createElement("a")', self.tab)
         self.assertIn("wow.zamimg.com/images/wow/icons/large/", self.tab)
+
+    def test_the_one_link_out_still_refuses_the_opener(self):
+        """The gear name's way to the full page, now a row in the tooltip."""
+        markup = self.page[self.page.index('id="itemtipout"'):]
+        markup = markup[:markup.index(">")]
+        self.assertIn('rel="noopener"', markup)
+        self.assertIn('target="_blank"', markup)
+
+    def test_the_address_it_opens_is_still_the_modules(self):
+        """`wowhead` is built in achievements.py and recap.py. A page that
+        composed the address would be a second copy of it, free to drift, and
+        index.html holds itself to naming a fixed list of outside hosts."""
+        opener = self.page[self.page.index("function openItemTip"):]
+        opener = opener[:opener.index("\n}")]
+        self.assertIn("tipOut.href = item.wowhead;", opener)
 
     def test_a_failed_poll_keeps_the_cards_and_says_so(self):
         poll = self.tab[self.tab.index("async function pollChronicle"):]

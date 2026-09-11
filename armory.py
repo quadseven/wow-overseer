@@ -773,6 +773,42 @@ def _tooltip(row: dict, book: ItemBook, worn_entries: set[int],
     return tooltip, stats, armor
 
 
+def template_tooltip(row: dict, book: ItemBook) -> dict | None:
+    """The lines the game draws for an item that is in nobody's hands.
+
+    `_tooltip` above reads an item INSTANCE: this belt, with this enchant, at
+    this durability, carrying the suffix that makes it a Belt of the Tiger.
+    Every OTHER view on this page names an item no character is holding - a
+    drop on the loot board, a first equip in the Chronicle, a quest reward -
+    and there is no instance row behind any of those. So the three
+    instance-only readings are answered here rather than left to arrive as
+    zeros, which is what each of them would otherwise do:
+
+    - no enchantments and no random property. The template is what DROPS;
+      what it becomes once somebody puts it on is a fact about their copy.
+    - durability at FULL, because `_tooltip` prints "durability / max" off a
+      column a template row does not have. Left alone that reads "0 / 55",
+      which is the tooltip for a broken sword.
+    - no item set. `_item_set` names the other pieces out of a lookup the
+      caller supplies and none of these callers has one, so a set header over
+      five lines of "Item #40303" would say less than no set header at all.
+
+    None for a row from a NARROW read. Four queries behind this page used to
+    select a name, a quality and a level and nothing else; a caller that has
+    not been widened gets no tooltip rather than a tooltip full of nulls, and
+    the page draws the name without the affordance that would open one.
+    """
+    if not row or "item_name" not in row:
+        return None
+    unheld = dict(row)
+    unheld["enchantments"] = None
+    unheld["random_property_id"] = 0
+    unheld["durability"] = row.get("max_durability")
+    tooltip, _stats, _armor = _tooltip(unheld, book, frozenset(), {})
+    tooltip["set"] = None
+    return tooltip
+
+
 def _slot_payload(slot_name: str, row: dict | None, book: ItemBook,
                   worn_entries: set[int], set_names: dict[int, str]) -> dict:
     """One paper-doll slot, whether or not anything is in it."""

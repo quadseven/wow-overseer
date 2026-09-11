@@ -85,7 +85,8 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta
 
-from armory import EQUIPPED_SLOTS, QUALITY_NAMES, UNKNOWN_QUALITY
+from armory import (EQUIPPED_SLOTS, QUALITY_NAMES, UNKNOWN_QUALITY,
+                    ItemBook, template_tooltip)
 
 ITEM_EQUIP = "item_equip"
 
@@ -200,13 +201,21 @@ def place_name(map_id: int, zone_id: int, dungeons: dict, zones: dict) -> str:
 
 # --- items -----------------------------------------------------------------
 
-def item_payload(entry: int, row: dict, icons: dict) -> dict:
+def item_payload(entry: int, row: dict, icons: dict,
+                 book: ItemBook | None = None) -> dict:
     """One item as the page draws it.
 
     The same shape achievements.item_payload emits, so the Chronicle's two
     loot lists share one renderer. Accepts either the aliased column names the
     armory query selects (item_name, quality, item_level) or the raw
     item_template ones, because the loot board reads the world table directly.
+
+    `book` is an armory.ItemBook and is what turns a name into a TOOLTIP. It
+    is optional because it is the only thing here that a caller can be missing:
+    without it the item still renders, with its name in its quality colour and
+    its link out, exactly as it did before. With it the page can draw the
+    item's own lines in place, which is the whole point - the alternative was
+    a tap that left the site.
     """
     quality = row.get("quality", row.get("Quality"))
     ilvl = row.get("item_level", row.get("ItemLevel"))
@@ -221,6 +230,20 @@ def item_payload(entry: int, row: dict, icons: dict) -> dict:
         "ilvl": ilvl,
         "icon": icons.get(displayid) if displayid is not None else None,
         "wowhead": "https://www.wowhead.com/wotlk/item=%d" % entry,
+        # WHAT THE TOOLTIP DRAWS, BUILT FROM OUR OWN TABLES. Not fetched
+        # from Wowhead's script: the page already refuses to let a browser
+        # reach wow.zamimg.com for the 3D model (modelviewer.py says why), and
+        # a tooltip that needed that CDN would be the one part of this page
+        # that stops working off the tailnet. None when the row was read too
+        # narrowly to carry the columns, and None again when the world
+        # database no longer knows the item.
+        #
+        # `entry` is handed over rather than read off the row, because the
+        # loot board's rows come from creature_loot_template, where the item
+        # id is a column of its own. The entry the caller resolved is the one
+        # this page is drawing.
+        "tooltip": (template_tooltip(dict(row, entry=entry), book)
+                    if book is not None and row else None),
     }
 
 
@@ -253,7 +276,8 @@ def run_window(run: dict, now: datetime) -> tuple[datetime, datetime]:
 
 
 def run_loot(run: dict, firsts: dict, items: dict, icons: dict,
-             now: datetime, dungeons: dict, zones: dict) -> list[dict]:
+             now: datetime, dungeons: dict, zones: dict,
+             book: ItemBook | None = None) -> list[dict]:
     """The gear whose FIRST EVER equip falls inside this run, on its map.
 
     Both facts, for the reason achievements.in_run gives about time and map,
@@ -266,7 +290,7 @@ def run_loot(run: dict, firsts: dict, items: dict, icons: dict,
             continue
         if not (start <= row["first_seen"] <= end):
             continue
-        line = item_payload(entry, items.get(entry) or {}, icons)
+        line = item_payload(entry, items.get(entry) or {}, icons, book)
         line["who"] = who
         line["at"] = _iso(row["first_seen"])
         line["slot"] = row.get("detail") or ""
@@ -510,10 +534,11 @@ def _ending(run: dict) -> str:
 
 
 def _ended_summary(run: dict, firsts: dict, items: dict, icons: dict,
-                   now: datetime, dungeons: dict, zones: dict) -> dict:
+                   now: datetime, dungeons: dict, zones: dict,
+                   book: ItemBook | None = None) -> dict:
     map_id = int(run["map_id"])
     end = run.get("ended_at") or run.get("last_progress_at") or run["started_at"]
-    loot = run_loot(run, firsts, items, icons, now, dungeons, zones)
+    loot = run_loot(run, firsts, items, icons, now, dungeons, zones, book)
     return {
         "dungeon": dungeons.get(map_id, "map %d" % map_id),
         "leader": run.get("leader_name") or "",
@@ -534,7 +559,8 @@ def build_recap(run_rows: list[dict], event_rows: list[dict],
                 death_rows: list[dict], snapshot_rows: list[dict],
                 instance_rows: list[dict], encounter_rows: list[dict],
                 roster: list[str], items: dict, icons: dict,
-                dungeons: dict, zones: dict, now: datetime) -> dict:
+                dungeons: dict, zones: dict, now: datetime,
+                book: ItemBook | None = None) -> dict:
     """The live recap, or an honest account of why there is not one.
 
     DEGRADING IS HALF THE JOB. Nothing is running most of the time, and a
@@ -565,7 +591,8 @@ def build_recap(run_rows: list[dict], event_rows: list[dict],
             "party_line": "",
             "progress": None,
             "last": (_ended_summary(last, firsts, items, icons, now, dungeons,
-                                    zones) if last is not None else None),
+                                    zones, book)
+                     if last is not None else None),
         }
 
     run = max(active, key=lambda r: r["started_at"])
@@ -576,7 +603,7 @@ def build_recap(run_rows: list[dict], event_rows: list[dict],
     party = party_state(roster, snapshot_rows, run, now)
     inside = [member for member in party if member.get("inside")]
     standing = len([member for member in inside if member.get("alive")])
-    loot = run_loot(run, firsts, items, icons, now, dungeons, zones)
+    loot = run_loot(run, firsts, items, icons, now, dungeons, zones, book)
     deaths = _run_deaths(run, death_rows, now, dungeons, zones)
     return {
         "live": True,
@@ -1001,7 +1028,8 @@ def build_lootboard(map_id: int, dungeon: str, encounter_rows: list[dict],
                     loot_rows: list[dict], char_rows: list[dict],
                     equipped_rows: list[dict], icons: dict,
                     roster: list[str],
-                    skill_rows: list[dict] | None = None) -> dict:
+                    skill_rows: list[dict] | None = None,
+                    book: ItemBook | None = None) -> dict:
     """What each boss on this map can drop, and who it would be for.
 
     The bosses come from `instance_encounters` narrowed to creatures spawned
@@ -1038,7 +1066,7 @@ def build_lootboard(map_id: int, dungeon: str, encounter_rows: list[dict],
             if not slots_for(row.get("inventory_type")):
                 continue
             entry = int(row["Item"])
-            drop = item_payload(entry, row, icons)
+            drop = item_payload(entry, row, icons, book)
             readers = sorted((verdict(row, member) for member in members),
                              key=lambda v: (_VERDICT_RANK.get(v["verdict"], 9),
                                             -int(v.get("gain") or 0), v["who"]))
