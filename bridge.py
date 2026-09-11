@@ -4938,7 +4938,7 @@ def _fetch_live_maps(names: list) -> dict[str, int] | None:
     if not names:
         return {}
     sql = (
-        "SELECT name, map_id FROM overseer_snapshot "
+        "SELECT name, map_id FROM overseer_snapshot "  # noqa: S608 - placeholders only
         "WHERE updated_at > NOW() - INTERVAL 60 SECOND AND name IN (%s)"
         % ",".join(["%s"] * len(names))  # noqa: S608 - placeholders only
     )

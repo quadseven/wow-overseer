@@ -535,6 +535,12 @@ class MidRunTest(unittest.TestCase):
             self.RUN, {"Og": 0, "Bork": 0}
         ))
 
+    def test_leader_outside_releases_split_run(self):
+        run = dict(self.RUN, leader_name="Og")
+        self.assertFalse(chat.run_has_present_member(
+            run, {"Og": 0, "Bork": 36}
+        ))
+
     def test_snapshot_read_failure_fails_closed(self):
         self.assertTrue(chat.run_has_present_member(self.RUN, None))
 

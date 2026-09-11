@@ -484,6 +484,32 @@ def mid_run(name: str, *, run: Mapping | None, jobs: Mapping) -> bool:
     return False
 
 
+def _run_map_id(run: Mapping) -> int | None:
+    try:
+        return int(run["map_id"])
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
+def _run_member_names(run: Mapping) -> set[str]:
+    members = run.get("members") or ()
+    if isinstance(members, str):
+        members = members.replace(";", ",").split(",")
+    return {str(member).strip().casefold() for member in members if str(member).strip()}
+
+
+def _leader_left_run(run: Mapping, live_maps: Mapping[str, int], map_id: int) -> bool:
+    leader = str(run.get("leader_name") or "").strip().casefold()
+    if not leader:
+        return False
+    leader_map = next(
+        (int(member_map) for name, member_map in live_maps.items()
+         if str(name).strip().casefold() == leader),
+        None,
+    )
+    return leader_map is not None and leader_map != map_id
+
+
 def run_has_present_member(run: Mapping | None, live_maps: Mapping[str, int] | None) -> bool:
     """Whether an active run still contains a member in its instance.
 
@@ -496,16 +522,14 @@ def run_has_present_member(run: Mapping | None, live_maps: Mapping[str, int] | N
         return False
     if live_maps is None:
         return True
-    try:
-        map_id = int(run["map_id"])
-    except (KeyError, TypeError, ValueError):
+    map_id = _run_map_id(run)
+    if map_id is None:
         return True
-    members = run.get("members") or ()
-    if isinstance(members, str):
-        members = members.replace(";", ",").split(",")
-    names = {str(member).strip().casefold() for member in members if str(member).strip()}
+    names = _run_member_names(run)
     if not names:
         return bool(live_maps)
+    if _leader_left_run(run, live_maps, map_id):
+        return False
     return any(
         str(name).strip().casefold() in names and int(member_map) == map_id
         for name, member_map in live_maps.items()
