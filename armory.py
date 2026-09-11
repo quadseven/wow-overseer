@@ -309,6 +309,62 @@ VIEWER_SLOTS = {
     "waist": 6, "legs": 7, "feet": 8, "wrists": 9, "hands": 10, "back": 16,
     "tabard": 19, "main hand": VIEWER_MAIN_HAND, "off hand": VIEWER_OFF_HAND,
 }
+# WHERE THE MODEL HOST KEEPS THE ART FOR A DRAWN ITEM (infra#3510). Before it
+# can draw a piece the viewer fetches one metadata file for it, and the path
+# it builds is its own rule, read out of the pinned build the page loads: the
+# display id under a directory named by the viewer slot for the twelve slots
+# worn on the body, and a flat item directory for anything held in a hand,
+# which carries no slot in its path at all.
+#
+# It is written here, beside the slot table it is the other half of, rather
+# than in the page, for the reason the whole of this module exists: the page
+# does not get to decide what a request means. It is also the only way the
+# page can ask "is the art for this piece actually there" without a second,
+# disagreeing copy of the viewer's rule in JavaScript.
+VIEWER_BODY_SLOTS = frozenset({1, 3, 4, 5, 6, 7, 8, 9, 10, 16, 19, 20})
+
+
+def viewer_asset(slot: int, display_id: int) -> str:
+    """A drawn item -> the model host's path for the metadata behind it.
+
+    A tail, not an address: WHICH host these hang off is the page's to know,
+    and the page reaches them through this server's own cache rather than
+    the model host directly (modelviewer.py says why).
+    """
+    if slot in VIEWER_BODY_SLOTS:
+        return f"meta/armor/{slot}/{display_id}.json"
+    return f"meta/item/{display_id}.json"
+
+
+# WHY A PIECE THAT CANNOT BE DRAWN HAS TO SAY SO (infra#3510). The model host
+# does not have art for every display id the world database holds, and when it
+# has none the viewer swallows the miss: it drops that one piece and draws
+# the rest. A character whose legs and boots were dropped is a character in
+# its underwear and bare feet - which is EXACTLY what a character who owns
+# neither looks like, so the failure hides inside a picture that is already
+# meaningful. It went unreported for as long as it did because there was
+# nothing anywhere, on the page or in the log, that said a piece had been
+# asked for and not drawn.
+#
+# So each drawn item carries the sentence to print if its art turns out to be
+# missing, written here where a test can read it, and the page prints the
+# ones that actually failed. The paper doll beside the model still shows the
+# item: the claim is about the PICTURE, never about the gear.
+MODEL_GAP_HINT = "Worn, but not drawn - the model host has no art for these:"
+
+
+def _model_gap_note(slot_name: str, item_name: str | None, display_id: int) -> str:
+    """What one undrawn piece says about itself.
+
+    The display id is on the line on purpose. It is the number somebody has
+    to carry to the model host to find out whether the art is missing or the
+    world database is naming art that never existed, and it is not written
+    anywhere else on this tab.
+    """
+    named = item_name or "an item the world database does not name"
+    return f"{slot_name} - {named} (display {display_id})"
+
+
 # characters.* -> the viewer's own names for the same five numbers. Both
 # sides are indexes into the race's list of choices, so they pass straight
 # through.
@@ -490,6 +546,13 @@ def viewer_model(char_row: dict, equipment_rows: list[dict]) -> dict | None:
     first choice instead of drawing a face the character does not have.
     `items` are [viewer slot, display id] pairs for every drawn slot that
     holds an item the world database knows a display for.
+
+    `assets` is the SAME list read the other way round: one entry per pair,
+    carrying the model host's own path for that piece's metadata and the
+    sentence to print if the host turns out not to have it. The viewer will
+    fetch exactly these paths and say nothing when one is missing, so this
+    is what lets the page report a piece it could not draw instead of
+    leaving a bare-legged character to be read as a character with no legs.
     """
     race, gender = char_row.get("race"), char_row.get("gender")
     if race not in RACE_ICON_NAMES or gender not in (0, 1):
@@ -500,13 +563,22 @@ def viewer_model(char_row: dict, equipment_rows: list[dict]) -> dict | None:
         if value is not None:
             model[key] = int(value)
     items: list[list[int]] = []
+    assets: list[dict] = []
     for row in sorted(equipment_rows, key=lambda r: r["slot"]):
         if row["slot"] >= len(EQUIPPED_SLOTS) or not row.get("displayid"):
             continue
-        slot = viewer_slot(EQUIPPED_SLOTS[row["slot"]], row.get("inventory_type"))
+        slot_name = EQUIPPED_SLOTS[row["slot"]]
+        slot = viewer_slot(slot_name, row.get("inventory_type"))
         if slot is not None:
             items.append([slot, row["displayid"]])
+            assets.append({
+                "slot": slot_name,
+                "path": viewer_asset(slot, row["displayid"]),
+                "note": _model_gap_note(slot_name, row.get("item_name"),
+                                        row["displayid"]),
+            })
     model["items"] = items
+    model["assets"] = assets
     return model
 
 
@@ -1311,6 +1383,10 @@ def build_armory(char_rows: list[dict], equipment_rows: list[dict],
         "expected": len(members),
         "headline": _headline(members, len(members)),
         "detail_hint": DETAIL_HINT,
+        # The heading over the pieces the model host had no art for, sent
+        # rather than typed into the page for the same reason every other
+        # sentence here is.
+        "model_gap_hint": MODEL_GAP_HINT,
         "talent_trees": {"expanded": TREES_EXPANDED,
                          "show": TREES_SHOW, "hide": TREES_HIDE},
     }

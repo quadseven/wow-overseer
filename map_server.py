@@ -2456,6 +2456,18 @@ class Handler(BaseHTTPRequestHandler):
         r = MODELS.serve(path)
         if r.status == 502:
             log.warning("model viewer: upstream failed for %s", path)
+        elif r.status == 404:
+            # THE FAILURE THAT HIDES (infra#3510), and the reason this line
+            # exists at all. The viewer asks for one metadata file per worn
+            # piece and, when it does not get one, drops that piece and draws
+            # the rest without raising anything: a character whose legs and
+            # boots were dropped is drawn in its underwear and bare feet,
+            # which is exactly how a character wearing neither is drawn. Left
+            # unlogged, the only witness is somebody looking at the picture.
+            # The body is the store's own reason, and the two reasons are
+            # different problems: a path THIS server would not serve is a bug
+            # here, a file the model host has not got is not.
+            log.warning("model viewer: %s for %s", r.body.decode(), path)
         self._send(r.status, r.content_type, r.body, r.cache_control)
 
     def _index(self, _query: dict) -> None:

@@ -59,6 +59,15 @@ class TheArmoryTab(unittest.TestCase):
         # code that would have said it.
         cls.ajs = cls.tab[:cls.tab.index(
             "// --- the standing panel (mod-overseer#88, mod-overseer#160)")]
+        # THE SAME SCRIPT WITH THE COMMENTS TAKEN OUT, for exactly the reason
+        # cls.acode exists below. Every rule here is explained above itself
+        # and the explanation names the failure it prevents, so "the page
+        # never says 'not drawn'" read against the source is answered by the
+        # paragraph saying what happens when it does - a test that punishes
+        # writing the comment. Anything asserting a word is ABSENT from the
+        # page's own words reads this; anything asserting code is PRESENT can
+        # read cls.ajs.
+        cls.ajscode = re.sub(r"//.*", "", cls.ajs)
         css = cls.page.index("--- the Armory tab (infra#3096, infra#3139)")
         cls.css = cls.page[css:cls.page.index("--- the Family tab (infra#2892)")]
         # The Armory's OWN rules. cls.css runs to the Family banner, which
@@ -389,6 +398,85 @@ class TheArmoryTab(unittest.TestCase):
         self.assertNotIn("MODEL_ASPECT)", self.ajs[self.ajs.index("function fitModel"):
                                                    self.ajs.index("function watchModel")],
                          "fitModel must pass the measured ratio, not the constant")
+
+    def test_a_piece_the_model_could_not_draw_is_named_rather_than_swallowed(self):
+        """THE DEFECT THIS CLOSES (infra#3510). The viewer fetches one
+        metadata file per worn piece and, when the model host has none, drops
+        that piece and draws the rest without raising anything. A character
+        whose legs and boots were dropped is drawn in its underwear and bare
+        feet, which is EXACTLY how a character wearing neither is drawn - so
+        the failure arrives disguised as a fact about the gear, and it went
+        unreported for as long as it did because nothing said otherwise.
+
+        The page asks for the same files and prints the ones that are not
+        there. It is gated on the model key, so it runs once per model rather
+        than once per thirty-second poll, and it is called from watchModel
+        rather than renderModel: "what is missing from the drawing" is a
+        question with an answer only once the drawing is finished, and by
+        then the viewer's own fetches are in the browser's cache."""
+        self.assertIn("async function reportModelGaps(c, assets, key)", self.ajs)
+        self.assertIn("watchModel(c, key, m.model.assets);", self.ajs)
+        live = self.ajs[self.ajs.index("function watchModel(c, key, assets)"):]
+        live = live[:live.index("// --- the profile")]
+        # Inside the one branch that fires when every actor says it loaded,
+        # which is the moment the drawing is finished.
+        live = live[live.index('c.portrait.classList.add("live");'):]
+        self.assertIn("reportModelGaps(c, assets, key);", live)
+        block = self.ajs[self.ajs.index("async function reportModelGaps"):]
+        self.assertIn("if (c.modelKey !== key || !missing.length) return;", block)
+
+    def test_the_address_of_a_pieces_art_is_never_built_in_the_page(self):
+        """Which directory a display id sits under is the VIEWER's rule, and
+        the page holding a second copy of it is a copy that can disagree: get
+        it wrong and every weapon in the family is reported as art the host
+        has not got, over a model that drew all five of them. armory.py sends
+        the path it already had to know to send the pair."""
+        self.assertIn("MODEL_CONTENT_PATH + a.path", self.ajs)
+        # Out of the browser's own cache wherever it can be: the viewer has
+        # already fetched every one of these and the proxy dated them a day.
+        self.assertIn('{ cache: "force-cache" }', self.ajs)
+        for built in ("meta/armor", "meta/item"):
+            self.assertNotIn(built, self.ajscode, built + " is the viewer's rule")
+
+    def test_the_words_over_an_undrawn_piece_are_all_the_modules(self):
+        """Same contract as every other sentence on this tab: the heading and
+        the line naming the slot and the item both arrive written."""
+        self.assertIn("arm.gapHint = p.model_gap_hint;", self.ajs)
+        self.assertIn('c.gaps.appendChild(el("div", "gh", arm.gapHint));', self.ajs)
+        self.assertIn('c.gaps.appendChild(el("div", "", a.note));', self.ajs)
+        for invented in ("no art", "not drawn", "underwear", "cannot be drawn"):
+            self.assertNotIn(invented, self.ajscode, invented)
+
+    def test_an_unreachable_model_host_is_not_reported_as_missing_art(self):
+        """They are different claims and only one of them is about the gear.
+        A fetch that throws is the host being gone, which the portrait
+        already covers; a fetch that answers is the host saying it has no
+        such file, which is the thing worth naming."""
+        block = self.ajs[self.ajs.index("async function reportModelGaps"):]
+        block = block[:block.index("const missing")]
+        self.assertIn("return r.ok ? null : a;", block)
+        self.assertIn("} catch (e) {", block)
+
+    def test_the_note_is_taken_down_by_everything_that_takes_the_model_down(self):
+        """It is a caveat on a picture. Outliving the picture would leave a
+        profile claiming a piece was not drawn on a model that is not there,
+        and a character who was deleted never reaches renderModel at all."""
+        model = self.ajs[self.ajs.index("async function renderModel"):]
+        self.assertIn('c.gaps.textContent = "";', model[:model.index("let pane")])
+        gone = self.ajs[self.ajs.index("if (!m.present) {"):]
+        self.assertIn('c.gaps.textContent = "";', gone[:gone.index("continue;")])
+
+    def test_the_undrawn_note_is_a_caution_and_takes_no_room_when_empty(self):
+        """Caution ink, not alarm ink: the gear IS on the character and the
+        doll beside the model is showing it correctly - only the drawing is
+        wrong, and red would say the character is missing something. And an
+        element reserving a margin for a note it usually has none of pushes
+        every profile's hint down on every profile that is fine."""
+        self.assertIn(".agaps:empty { display:none; }", self.acss)
+        rule = self.acss[self.acss.index("  .agaps { margin-top"):]
+        rule = rule[:rule.index("}") + 1]
+        self.assertIn("color:var(--caution-text);", rule)
+        self.assertNotIn("--alarm", rule)
 
     def test_the_card_goes_away_every_way_a_tap_can_ask(self):
         """It appears on a tap, so it has to leave on one. The same cell
@@ -730,6 +818,19 @@ class TheEndpoint(unittest.TestCase):
         self.assertIn("armory.build_armory(**fetched, book=BOOK, items=ITEMS)",
                       handler)
         self.assertNotIn("query.get", handler)
+
+    def test_a_file_the_model_host_has_not_got_is_logged_and_not_only_answered(self):
+        """The 502 was logged and the 404 was not, which left the failure
+        that actually happens with no witness anywhere: the viewer drops the
+        piece it could not fetch and draws the rest, so the only evidence was
+        somebody looking at the picture. The reason is logged with it because
+        the two 404s are different problems - a path THIS server refuses is a
+        bug here, a file the model host has not got is not."""
+        handler = self.server[self.server.index("def _modelviewer"):]
+        handler = handler[:handler.index("def _index")]
+        self.assertIn("elif r.status == 404:", handler)
+        self.assertIn('log.warning("model viewer: %s for %s", r.body.decode(), path)',
+                      handler)
 
     def test_a_dead_database_is_a_503_rather_than_a_hang(self):
         handler = self.server[self.server.index("def _armory"):]

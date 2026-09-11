@@ -540,7 +540,7 @@ class TheModelTest(unittest.TestCase):
         model = armory.viewer_model(row, [])
         self.assertEqual(model, {"race": 1, "gender": 1, "skin": 4, "face": 2,
                                  "hairStyle": 7, "hairColor": 3, "facialStyle": 0,
-                                 "items": []})
+                                 "items": [], "assets": []})
 
     def test_gender_passes_through_as_the_database_stores_it(self):
         """Viewer model id = race * 2 - 1 + gender, and model 1 is the human
@@ -577,6 +577,87 @@ class TheModelTest(unittest.TestCase):
         self.assertEqual(m["model"]["items"], [[1, 1170]])
         self.assertEqual(m["model"]["skin"], 1)
         self.assertEqual(slot_of(m, "head")["display_id"], 1170)
+
+    def test_every_slot_the_viewer_draws_reaches_it(self):
+        """THE HOLE THIS CLOSES (infra#3510). The four tests above between
+        them name head, shoulders, back, tabard, shirt, chest and the hands -
+        and leave waist, legs, feet, wrists and hands unasserted, which is
+        five of the twelve pieces a dressed character wears. The operator
+        reported a model standing in its underwear and bare feet, and the
+        first thing to rule out was that legs and feet were being dropped
+        here; nothing in this file could have said so either way.
+
+        One worn piece in every drawn doll slot at once, and the whole list
+        read back, so a slot that stops being sent fails HERE rather than on
+        a screenshot."""
+        kinds = [(0, 1), (2, 3), (3, 4), (4, 5), (5, 6), (6, 7), (7, 8),
+                 (8, 9), (9, 10), (14, 16), (15, 13), (16, 14), (17, 15), (18, 19)]
+        rows = [worn(doll, SCOUTING_BELT, displayid=900 + doll, inventory_type=kind)
+                for doll, kind in kinds]
+        self.assertEqual(
+            armory.viewer_model(char(), rows)["items"],
+            [[1, 900], [3, 902], [4, 903], [5, 904], [6, 905], [7, 906],
+             [8, 907], [9, 908], [10, 909], [16, 914], [21, 915], [22, 916],
+             [15, 917], [19, 918]])
+
+    def test_the_asset_path_is_the_viewers_own_rule_and_not_one_slot_shape(self):
+        """Anything worn on the body is filed under its viewer slot; anything
+        held in a hand is filed flat, with no slot in the path at all. Read
+        out of the viewer build the page pins. Getting this wrong would make
+        the page report a piece as undrawable that the viewer drew perfectly
+        well - a false alarm on every weapon in the family."""
+        for slot in sorted(armory.VIEWER_BODY_SLOTS):
+            self.assertEqual(armory.viewer_asset(slot, 25796),
+                             f"meta/armor/{slot}/25796.json")
+        for held in (armory.VIEWER_MAIN_HAND, armory.VIEWER_OFF_HAND, 15, 25, 26):
+            self.assertEqual(armory.viewer_asset(held, 8272), "meta/item/8272.json")
+
+    def test_the_body_slots_are_exactly_the_ones_the_doll_can_fill(self):
+        """The two tables are halves of one fact and can drift apart in
+        silence: a slot in VIEWER_SLOTS but not here would be asked for at
+        the wrong address, and every piece in it reported as missing art."""
+        drawn = set(armory.VIEWER_SLOTS.values()) - {armory.VIEWER_MAIN_HAND,
+                                                     armory.VIEWER_OFF_HAND}
+        self.assertTrue(drawn <= armory.VIEWER_BODY_SLOTS, drawn)
+        self.assertIn(armory.INVENTORY_TYPE_ROBE, armory.VIEWER_BODY_SLOTS)
+
+    def test_each_drawn_piece_carries_where_to_look_and_what_to_say(self):
+        """The viewer drops a piece whose art the model host has not got and
+        says nothing at all, so the page has to ask for the same file itself.
+        Both the address and the sentence are written here, because the page
+        may not invent either."""
+        rows = [worn(6, SCOUTING_BELT, displayid=25796, inventory_type=7,
+                     item_name="Battleforge Legguards"),
+                worn(15, IRONPATCH, displayid=8272, inventory_type=13)]
+        assets = armory.viewer_model(char(), rows)["assets"]
+        self.assertEqual(assets[0], {
+            "slot": "legs",
+            "path": "meta/armor/7/25796.json",
+            "note": "legs - Battleforge Legguards (display 25796)",
+        })
+        self.assertEqual(assets[1]["slot"], "main hand")
+        self.assertEqual(assets[1]["path"], "meta/item/8272.json")
+
+    def test_a_piece_the_world_cannot_name_still_gets_a_sentence(self):
+        """A custom or removed item joins as a NULL name. "undefined (display
+        25760)" is the note that teaches a reader to distrust the rest."""
+        row = worn(7, SCOUTING_BELT, displayid=25760, inventory_type=8,
+                   item_name=None)
+        note = armory.viewer_model(char(), [row])["assets"][0]["note"]
+        self.assertNotIn("None", note)
+        self.assertIn("25760", note)
+        self.assertTrue(note.startswith("feet - "), note)
+
+    def test_a_slot_the_viewer_never_draws_is_never_looked_up(self):
+        """A ring has no art to be missing, so it must not appear as a piece
+        that failed to draw."""
+        rows = [worn(1, SCOUTING_BELT, displayid=555, inventory_type=2),
+                worn(10, SCOUTING_BELT, displayid=556, inventory_type=11)]
+        self.assertEqual(armory.viewer_model(char(), rows)["assets"], [])
+
+    def test_the_heading_over_the_undrawn_pieces_is_the_modules(self):
+        """The page prints it; it does not write it."""
+        self.assertEqual(build()["model_gap_hint"], armory.MODEL_GAP_HINT)
 
 
 if __name__ == "__main__":

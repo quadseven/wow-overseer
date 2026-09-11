@@ -1615,6 +1615,18 @@
              color:var(--caution-text); }
   .atal.part .r { border-color:#1eff00; color:#1eff00; }
   .aunplaced { margin-top:.5rem; color:var(--caution-text); font-size:.85rem; }
+  /* WHAT THE MODEL COULD NOT DRAW (infra#3510), under the doll and above the
+     hint, because it is a caveat on the picture directly above it. Caution
+     ink and not alarm ink on purpose: the gear is on the character and the
+     paper doll beside the model is showing it correctly. The only thing
+     wrong is the drawing, and a red block would say the character is
+     missing something. Empty most of the time, and it takes no space when
+     it is: an element reserving a margin for a note it usually has none of
+     would push every profile's hint down for nothing. */
+  .agaps:empty { display:none; }
+  .agaps { margin-top:.7rem; color:var(--caution-text); font-family:var(--mono);
+           font-size:.75rem; line-height:1.5; }
+  .agaps .gh { color:var(--on-dark-faint); }
   /* ITEM QUALITY, in the game's own colours, because the operator already
      reads them without thinking. One deliberate departure: rare is lifted
      from the client's #0070dd, which the game draws on a near-black tooltip
@@ -7476,6 +7488,11 @@ function armoryProfile(name) {
   closer.type = "button";
   card.append(detail, closer);
   portrait.appendChild(card);
+  // Anything the model host had no art for, under the doll it is a caveat
+  // on. Built with the profile and refilled like everything else, so a poll
+  // that arrives while a note is up replaces it rather than stacking on it.
+  const gaps = el("div", "agaps");
+  body.appendChild(gaps);
   // The sentence that says the cells can be tapped stays in the flow, where
   // the card used to be.
   const hint = el("div", "ahint");
@@ -7495,7 +7512,8 @@ function armoryProfile(name) {
   jump.href = "#" + prof.id;
   ajump.appendChild(jump);
   c = { name, prof, glyphs, faction, nm, role, line, nums, left, portrait, right, stats,
-        card, detail, hint, spec, sum, budget, unspent, toggle, bar, trees, unplaced,
+        card, detail, gaps, hint, spec, sum, budget, unspent, toggle, bar,
+        trees, unplaced,
         cells: new Map(), statRows: new Map(), treeBoxes: new Map(),
         selected: null, open: !!(arm.trees && arm.trees.expanded), specData: null };
   closer.addEventListener("click", () => {
@@ -8023,6 +8041,7 @@ async function renderModel(c, m) {
   c.modelKey = key;
   if (c.viewer) { try { c.viewer.destroy(); } catch (e) { /* already gone */ } c.viewer = null; }
   c.portrait.classList.remove("live");
+  c.gaps.textContent = "";
   if (!m.model || !(await ensureViewer())) return;
   if (c.modelKey !== key) return;
   let pane = c.portrait.querySelector(".amodel");
@@ -8057,11 +8076,56 @@ async function renderModel(c, m) {
       charCustomization: { options: customisation(m.model, options) },
     });
     c.portrait.classList.remove("live");
-    watchModel(c, key);
+    watchModel(c, key, m.model.assets);
   } catch (e) {
     // The portrait is still there; nothing to draw over it.
     c.portrait.classList.remove("live");
   }
+}
+
+// THE VIEWER NEVER SAYS WHAT IT COULD NOT DRAW (infra#3510). It fetches one
+// metadata file per worn piece and, when the model host has none, it drops
+// that piece and carries on: no exception, no console line, nothing on the
+// canvas. A character whose legs and boots were dropped is drawn in its
+// underwear and bare feet, which is exactly how a character wearing neither
+// is drawn - so the failure arrives disguised as a fact about the gear, and
+// that is how it went unreported.
+//
+// So the same paths are asked for again, here, and every one that is not
+// there is named. It is a SECOND request for a file the viewer has already
+// fetched, and that is why watchModel calls it rather than renderModel: by
+// the time the stage goes live the viewer is done, so a piece that IS there
+// comes back out of the browser's cache (the proxy dates it a day) instead
+// of racing the viewer to the same file, and a piece that is NOT there was
+// sent no-store, so it is asked again - and the proxy answers that from its
+// own miss memory without reaching the model host either. Once per model
+// rather than once per poll, because the model key gates both.
+//
+// Every path and every sentence is the server's (armory.viewer_model). The
+// page decides one thing: whether any of them failed.
+async function reportModelGaps(c, assets, key) {
+  const checked = await Promise.all((assets || []).map(async (a) => {
+    try {
+      // force-cache because model art is immutable for a frozen expansion
+      // and the proxy says so (a day of max-age): a piece the viewer has
+      // already fetched is answered out of the browser without a request.
+      // A piece that is NOT there was answered no-store, so it is asked
+      // again - and the proxy answers that from its own miss memory
+      // without reaching the model host either.
+      const r = await fetch(MODEL_CONTENT_PATH + a.path, { cache: "force-cache" });
+      return r.ok ? null : a;
+    } catch (e) {
+      // The model host being unreachable is not the same claim as a piece
+      // having no art, and this must not make it. watchModel already keeps
+      // the portrait when nothing renders.
+      return null;
+    }
+  }));
+  const missing = checked.filter(Boolean);
+  if (c.modelKey !== key || !missing.length) return;
+  c.gaps.textContent = "";
+  c.gaps.appendChild(el("div", "gh", arm.gapHint));
+  for (const a of missing) c.gaps.appendChild(el("div", "", a.note));
 }
 
 // THE CANVAS IS THE STAGE, AND THE ASPECT IS THE ONE THE STAGE MAKES
@@ -8104,7 +8168,7 @@ function fitModel(c) {
 // deliberately no wall-clock deadline here: a phone that was locked for
 // an hour with this tab open would otherwise come back to a portrait
 // that never turns into the model that finished loading behind it.
-function watchModel(c, key) {
+function watchModel(c, key, assets) {
   const tick = () => {
     if (c.modelKey !== key || !c.viewer) return;
     const r = c.viewer.renderer;
@@ -8115,6 +8179,11 @@ function watchModel(c, key) {
         c.portrait.classList.add("live");
         r.distance = MODEL_DISTANCE;
         fitModel(c);
+        // ONLY ONCE THE DRAWING IS FINISHED is there anything to say about
+        // what is missing from it, and only then has the viewer fetched the
+        // files this is about to ask for again - so they come out of the
+        // browser's cache rather than racing the viewer for them.
+        reportModelGaps(c, assets, key);
       }
     } else if (!c.held && !r.mouseDown) {
       r.azimuth = (r.azimuth + MODEL_TURN) % (2 * Math.PI);
@@ -8177,6 +8246,9 @@ function renderArmory(p) {
   // the trees start open, and the toggle asks it what to call itself.
   arm.trees = p.talent_trees;
   arm.hint = p.detail_hint;
+  // The heading over anything the model host had no art for. Read here for
+  // the same reason as the hint: reportModelGaps runs long after this loop.
+  arm.gapHint = p.model_gap_hint;
   // WHERE EACH WORN ITEM WAS FIRST SEEN WORN, keyed by name then by item
   // entry. recap.py decides which equip row is the first one, what the place
   // is called and what to say when there is no row at all; this only looks
@@ -8196,6 +8268,10 @@ function renderArmory(p) {
       c.role.textContent = m["class"] + " - " + m.role;
       c.line.textContent = m.identity;
       c.nums.textContent = "";
+      // A character who is gone has no model, so renderModel is never
+      // reached to take its note down. A caveat about a picture that is not
+      // there any more would outlive the picture.
+      c.gaps.textContent = "";
       continue;
     }
     c.nm.style.color = m.class_colour;
