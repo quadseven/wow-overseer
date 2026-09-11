@@ -525,6 +525,30 @@ class MidRunTest(unittest.TestCase):
     def test_a_nameless_question_is_answered_no(self):
         self.assertFalse(chat.mid_run("", run=self.RUN, jobs=self.JOBS))
 
+    def test_present_member_on_run_map_keeps_row_busy(self):
+        self.assertTrue(chat.run_has_present_member(
+            self.RUN, {"Og": 36, "Evan": 0}
+        ))
+
+    def test_members_elsewhere_release_stale_row(self):
+        self.assertFalse(chat.run_has_present_member(
+            self.RUN, {"Og": 0, "Bork": 0}
+        ))
+
+    def test_snapshot_read_failure_fails_closed(self):
+        self.assertTrue(chat.run_has_present_member(self.RUN, None))
+
+    def test_ended_or_missing_run_is_not_present(self):
+        self.assertFalse(chat.run_has_present_member(None, {"Og": 36}))
+        self.assertFalse(chat.run_has_present_member(
+            dict(self.RUN, state="ended"), {"Og": 36}
+        ))
+
+    def test_legacy_run_without_members_uses_any_live_snapshot(self):
+        bare = dict(self.RUN, members="")
+        self.assertTrue(chat.run_has_present_member(bare, {"Og": 36}))
+        self.assertFalse(chat.run_has_present_member(bare, {}))
+
     def test_the_busy_jobs_are_real_job_modes(self):
         """A typo here would silence nothing forever, in silence."""
         for mode in chat.BUSY_JOBS:

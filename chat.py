@@ -484,6 +484,34 @@ def mid_run(name: str, *, run: Mapping | None, jobs: Mapping) -> bool:
     return False
 
 
+def run_has_present_member(run: Mapping | None, live_maps: Mapping[str, int] | None) -> bool:
+    """Whether an active run still contains a member in its instance.
+
+    The durable run row can outlive the party after a crash or an incomplete
+    exit. When fresh snapshot rows are available, they are the authority for
+    whether the family is still on that run's map. ``None`` means the snapshot
+    read failed, so callers must fail closed and retain the busy state.
+    """
+    if not run or str(run.get("state") or "").strip().lower() != "active":
+        return False
+    if live_maps is None:
+        return True
+    try:
+        map_id = int(run["map_id"])
+    except (KeyError, TypeError, ValueError):
+        return True
+    members = run.get("members") or ()
+    if isinstance(members, str):
+        members = members.replace(";", ",").split(",")
+    names = {str(member).strip().casefold() for member in members if str(member).strip()}
+    if not names:
+        return bool(live_maps)
+    return any(
+        str(name).strip().casefold() in names and int(member_map) == map_id
+        for name, member_map in live_maps.items()
+    )
+
+
 def stand_down(speaker: str, *, subject: str = "", place: str = "") -> str:
     """What a character says instead, when it is asked mid-run.
 

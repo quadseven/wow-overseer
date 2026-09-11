@@ -3177,6 +3177,14 @@ class Bridge(discord.Client):
         run = await asyncio.to_thread(_active_dungeon_run)
         if not run:
             return False
+        live_maps = await asyncio.to_thread(_fetch_live_maps, names)
+        if not chat.run_has_present_member(run, live_maps):
+            log.info(
+                "run: ignoring stale active row %s because no named member "
+                "has a fresh snapshot on map %s",
+                run.get("id", "unknown"), run.get("map_id", "unknown"),
+            )
+            return False
         roster_jobs = await asyncio.to_thread(_roster_jobs)
         return any(chat.mid_run(name, run=run, jobs=roster_jobs) for name in names)
 
@@ -4917,6 +4925,31 @@ def _active_dungeon_run() -> dict | None:
             if exc.args and exc.args[0] in (1054, 1146):
                 return None
             raise
+
+
+def _fetch_live_maps(names: list) -> dict[str, int] | None:
+    """Read fresh member locations for stale-run arbitration.
+
+    ``None`` is reserved for a missing or unreadable snapshot table. An empty
+    mapping is a successful read that proves nobody in the requested family
+    has a fresh world row, which is exactly the evidence needed to release a
+    durable run row and let vendor maintenance proceed.
+    """
+    if not names:
+        return {}
+    sql = (
+        "SELECT name, map_id FROM overseer_snapshot "
+        "WHERE updated_at > NOW() - INTERVAL 60 SECOND AND name IN (%s)"
+        % ",".join(["%s"] * len(names))  # noqa: S608 - placeholders only
+    )
+    with _connect() as conn, conn.cursor() as cur:
+        try:
+            cur.execute(sql, names)
+        except pymysql.err.MySQLError as exc:
+            if exc.args and exc.args[0] in (1054, 1146):
+                return None
+            raise
+        return {str(row["name"]): int(row["map_id"]) for row in cur.fetchall()}
 
 
 def _roster_jobs() -> dict:
