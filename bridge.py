@@ -3287,12 +3287,27 @@ class Bridge(discord.Client):
         what comes back.
         """
         names = sorted((await asyncio.to_thread(_protected_guids)).values())
-        if not names or await self._mid_run(names):
+        if not names:
             return
         free_slots = await asyncio.to_thread(_fetch_free_slots, names)
         if not bag_pressure.family_town_run_needed(free_slots):
             log.info("economy: carried vendor goods exist, but bag pressure is below "
                      "the town-run trigger")
+            return
+        if await self._mid_run(names):
+            # Bag pressure outranks an unfinished dungeon. The world-side
+            # coordinator already treats job=quest as the operator's request
+            # to exit through the known portal; issuing it here prevents a
+            # full inventory from trapping the party in an instance forever.
+            for name in names:
+                await asyncio.to_thread(
+                    _insert_job, name, "quest", "overseer:vendor"
+                )
+            log.warning(
+                "economy: bag pressure is urgent during a dungeon; requested "
+                "quest mode for %d roster members before vendor maintenance",
+                len(names),
+            )
             return
         rows = await asyncio.to_thread(_fetch_vendor_items, names)
         gear_rows = await asyncio.to_thread(_fetch_surplus_gear, names)
