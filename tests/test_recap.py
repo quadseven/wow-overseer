@@ -442,7 +442,7 @@ class WhetherADropBeatsWhatIsWorn(unittest.TestCase):
 
     def member(self, level=25, klass=1, gear=None):
         gear = gear if gear is not None else [worn("Grug", 4, "Old Tunic", 20)]
-        return recap._members([{"name": "Grug", "level": level, "class": klass}],
+        return recap.family_members([{"name": "Grug", "level": level, "class": klass}],
                               gear, ["Grug"])[0]
 
     def test_a_higher_item_level_in_the_slot_is_an_upgrade(self):

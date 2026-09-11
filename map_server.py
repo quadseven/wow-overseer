@@ -26,6 +26,7 @@ import basepath
 import chat
 import council
 import decree
+import dungeonplan
 import eye
 import family
 import frames
@@ -1269,6 +1270,154 @@ def _fetch_eye() -> dict:
             "realm_rows": realm_rows, "guild_rows": guild_rows}
 
 
+# --- which dungeon is worth running next (infra#3500) ------------------------
+#
+# THREE WHOLE-WORLD READS, AND THAT IS THE WHOLE COST STORY. This view is a
+# cross product - every dungeon's boss loot against all five characters - and
+# the obvious shape for it is a loop that asks the world for one dungeon's
+# encounters and one dungeon's loot at a time. That is forty round trips for
+# twenty dungeons on an endpoint with no auth in front of it. The catalogue,
+# the encounters and the loot each arrive ONCE for every map at the same time,
+# bucketed by map in Python, and nothing in dungeonplan.py goes back to the
+# database.
+#
+# THE MAP LIST COMES FROM THE CATALOGUE AND NEVER FROM THE CALLER. There is no
+# parameter on this endpoint at all: it asks about every dungeon, so there is
+# nothing for a request to steer. The map ids bound into the two reads below
+# are the ones the world's own access table just handed over.
+#
+# Guarded for both 1146 and 1054 like every other read in this file. A world
+# without dungeon_access_template gets an empty catalogue and a page that says
+# so, rather than a 503 on a tab that has nothing to do with the missing
+# table (infra#3172).
+_PLAN_CATALOGUE = (
+    "SELECT map_id, difficulty, min_level, max_level, comment "
+    "FROM acore_world.dungeon_access_template ORDER BY map_id, difficulty"
+)
+# `difficulty` is what picks ONE row per map when a map has several. A world
+# whose table predates that column still gets its dungeons, and _catalogue
+# treats the missing value as difficulty 0, which is the row it would have
+# picked anyway.
+_PLAN_CATALOGUE_OLD = (
+    "SELECT map_id, min_level, max_level, comment "
+    "FROM acore_world.dungeon_access_template ORDER BY map_id"
+)
+# THE MAP HAS TO COME OFF THE SPAWN, because instance_encounters carries no
+# map column: the worldserver reads that from DungeonEncounter.dbc, which this
+# service will never see. `creditType` 0 is a creature and 1 is a SPELL, and
+# without that filter the join reads a spell id as a creature entry and names
+# an encounter after whatever creature happens to share the number.
+#
+# DISTINCT IS LOAD BEARING. A boss with two spawn rows on the same map is two
+# rows out of this join and would be counted as two bosses.
+_PLAN_ENCOUNTERS = (
+    "SELECT DISTINCT cr.map AS map_id, ie.creditEntry AS creature, ct.name "
+    "FROM acore_world.instance_encounters ie "
+    "JOIN acore_world.creature_template ct ON ct.entry = ie.creditEntry "
+    "JOIN acore_world.creature cr ON cr.id = ie.creditEntry "
+    "WHERE ie.creditType = 0 AND cr.map IN ({holes})"
+)
+# The loot board's own query widened from one map to all of them. The spawn
+# test stays a SUBQUERY rather than becoming a fourth join for the reason
+# above: joined, a boss with two spawns would multiply every one of its loot
+# rows by two. `Reference = 0` is the same filter the loot board and the
+# achievements drop query both carry - a row with a Reference points at
+# reference_loot_template rather than at an item, so joining it on
+# `it.entry = clt.Item` surfaces something unrelated as a boss drop. What
+# lives behind those references is not followed, and the basis says so.
+# NO `Chance` AND NO `GroupId`, WHICH THE LOOT BOARD'S OWN VERSION SELECTS.
+# Those two are what `recap._chance` turns into "80%" or "one roll shared with
+# three others", and this page does not ask how likely anything is - the loot
+# board asks that one dungeon at a time, and the basis says so. Selecting them
+# here would be two unread columns on the widest read this service makes, and
+# the next person to see them would reasonably add the sentence they support.
+_PLAN_LOOT = (
+    "SELECT clt.Item, ct.entry AS creature, " + _ITEM_TEMPLATE_COLUMNS + " "
+    "FROM acore_world.creature_loot_template clt "
+    "JOIN acore_world.creature_template ct ON ct.lootid = clt.Entry "
+    "JOIN acore_world.item_template it ON it.entry = clt.Item "
+    "WHERE clt.Reference = 0 AND ct.entry IN "
+    "(SELECT DISTINCT id FROM acore_world.creature WHERE map IN ({holes})) "
+    "AND ct.entry IN "
+    "(SELECT creditEntry FROM acore_world.instance_encounters "
+    "WHERE creditType = 0)"
+)
+# WHERE THE FAMILY ARE STANDING, which is the half of "is it on their
+# continent" that is about them rather than about the dungeon. `map` is on
+# the characters row already, so this is _RECAP_CHARS with one more column
+# rather than a second read.
+_PLAN_CHARS = (
+    "SELECT name, level, class, map FROM characters WHERE name IN ({holes})"
+)
+
+
+def _fetch_dungeonplan() -> dict:
+    """Every dungeon, every boss drop, and what the five are wearing.
+
+    One connection, six reads, none of them per dungeon. Names come from bonds
+    via family.roster() and never from the request, exactly as /api/armory and
+    /api/family refuse a name parameter.
+
+    `_wide_guarded` and the two roster reads this borrows are defined with the
+    loot board's below, and this section sits ABOVE that one deliberately. The
+    recap suite slices its own fetch window from that function to the
+    current-goal banner and forbids an unguarded read anywhere inside it, so a
+    section dropped in there would be asserted about by a suite that knows
+    nothing of it - and naming that function here would move the START of
+    their window into this docstring, which is a subtler version of the same
+    fault.
+    """
+    names = family.roster()
+    holes = ", ".join(["%s"] * len(names))
+    conn = _connect()
+    try:
+        with conn.cursor() as cur:
+            catalogue = _wide_guarded(cur, _PLAN_CATALOGUE, (),
+                                      _PLAN_CATALOGUE_OLD,
+                                      "dungeon_access_template")
+            # THE UNION, AND THE MODULE DECIDES IT. The page draws a row per
+            # access-table map AND per map this site already names, so binding
+            # the access table's maps alone would leave a site-named dungeon
+            # rendering "no boss loot" over loot that was simply never asked
+            # for. dungeonplan.map_ids is the one answer to which maps get a
+            # row, and it is asked here so the reads cannot fall behind it.
+            #
+            # NO MAPS MEANS NOTHING TO BIND, and `IN ()` is a syntax error
+            # rather than an empty result. The page says the world listed no
+            # dungeons it could read, which is what happened.
+            maps = dungeonplan.map_ids(catalogue, achievements.MAP_NAMES)
+            encounters: list = []
+            loot: list = []
+            if maps:
+                mholes = ", ".join(["%s"] * len(maps))
+                encounters = _wide_guarded(
+                    cur, _PLAN_ENCOUNTERS.format(holes=mholes),  # noqa: S608
+                    tuple(maps), "", "instance_encounters")
+                loot = _wide_guarded(
+                    cur, _PLAN_LOOT.format(holes=mholes),  # noqa: S608
+                    tuple(maps), "", "creature_loot_template")
+            # S608 on the roster reads: `holes` is a run of placeholders sized
+            # by len(family.roster()), and every VALUE is still bound by the
+            # driver.
+            chars = _wide_guarded(cur, _PLAN_CHARS.format(holes=holes),  # noqa: S608
+                                  tuple(names), "", "characters")
+            worn = _wide_guarded(cur, _RECAP_WORN.format(holes=holes),  # noqa: S608
+                                 (len(armory.EQUIPPED_SLOTS), *names), "",
+                                 "character_inventory")
+            # Guarded like everything else, and the empty list this hands back
+            # on a degraded schema is a real answer: recap.family_members
+            # turns "no rows for this character" into an unknown, an unknown
+            # proficiency ranks the page the way it was ranked before, and the
+            # basis keeps printing the line that says so.
+            skills = _wide_guarded(cur, _RECAP_SKILLS.format(holes=holes),  # noqa: S608
+                                   tuple(names), "", "character_skills")
+    finally:
+        conn.close()
+    return {"catalogue_rows": catalogue, "encounter_rows": encounters,
+            "loot_rows": loot, "char_rows": chars, "equipped_rows": worn,
+            "skill_rows": skills}
+
+
 # --- the live dungeon recap and the loot board (infra#2597) ------------------
 #
 # EVERY READ BELOW IS GUARDED FOR BOTH 1146 AND 1054, and this endpoint is the
@@ -1460,7 +1609,7 @@ def _fetch_recap(map_id: int | None) -> dict:
                                  "character_inventory")
             # GUARDED LIKE EVERYTHING ELSE HERE, and the empty list this hands
             # back on a degraded schema is a real answer rather than a silent
-            # one: recap._members turns "no rows for this character" into an
+            # one: recap.family_members turns "no rows for this character" into an
             # unknown, and an unknown proficiency ranks the board exactly the
             # way it was ranked before and keeps printing the caveat that says
             # so. A failed read must not be able to empty the board.
@@ -2309,6 +2458,29 @@ class Handler(BaseHTTPRequestHandler):
         payload = chat.build_timeline(name, rows, db_now, limit)
         self._send(200, "application/json", json.dumps(payload).encode())
 
+    def _dungeons(self, _query: dict) -> None:
+        """GET /api/dungeons - every dungeon, and who would gain by running it.
+
+        NO PARAMETERS AT ALL, and that is the shape of the view rather than an
+        omission: it asks about every dungeon in the world at once, so there
+        is nothing for a caller to steer and no map id to validate. WHO the
+        family is belongs to bonds, exactly as /api/armory and /api/family
+        refuse a name.
+        """
+        try:
+            payload = dungeonplan.build_dungeonplan(
+                **_fetch_dungeonplan(), icons=ITEMS.icons, book=ITEMS,
+                roster=family.roster(), names=achievements.MAP_NAMES,
+                entrances=GEO.entrances, continents=GEO.continents)
+            self._send(200, "application/json", json.dumps(payload).encode())
+        except Exception:
+            # Same contract as every other poll: the tab keeps what it has
+            # drawn and says it may be stale. A blanked list reads as "there
+            # is nothing worth running anywhere", which is a far stronger
+            # claim than "this one read failed".
+            log.exception("dungeon plan query failed")
+            self._send(503, "application/json", b'{"error": "world unreachable"}')
+
     def _recap(self, query: dict) -> None:
         """GET /api/recap[?map=N] - what is happening in there right now, and
         what can drop where.
@@ -2934,6 +3106,7 @@ class Handler(BaseHTTPRequestHandler):
         "/api/questlog": _questlog,
         "/api/needs": _needs,
         "/api/achievements": _achievements,
+        "/api/dungeons": _dungeons,
         "/api/recap": _recap,
         "/api/council": _council,
         "/api/eye": _eye,

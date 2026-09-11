@@ -940,7 +940,7 @@ def verdict(drop: dict, member: dict) -> dict:
     return base
 
 
-def _caveats(drop: dict, proficiency_checked: bool = False) -> list[str]:
+def caveats_for(drop: dict, proficiency_checked: bool = False) -> list[str]:
     """What the verdict above did NOT check, said out loud.
 
     A verdict that quietly omits this is one a reader will over-trust, and
@@ -1043,7 +1043,7 @@ def build_lootboard(map_id: int, dungeon: str, encounter_rows: list[dict],
     caveats that say proficiency was not checked still printed.
     """
     encounters = encounter_order(encounter_rows)
-    members = _members(char_rows, equipped_rows, roster, skill_rows)
+    members = family_members(char_rows, equipped_rows, roster, skill_rows)
     # EVERY MEMBER, OR THE FOOTER STILL WARNS. A board where one character's
     # skills are missing is a board where that character's verdicts are the
     # old item-level ones, and the caveat is about the board rather than about
@@ -1092,7 +1092,7 @@ def build_lootboard(map_id: int, dungeon: str, encounter_rows: list[dict],
                 verdict_line=("%s: %s" % (best["who"], best["why"])
                               if best else ""),
                 also_line=_also_line(wanted, best),
-                caveats=_caveats(row, proficiency_checked),
+                caveats=caveats_for(row, proficiency_checked),
             )
             drops.append(drop)
         drops.sort(key=lambda d: (0 if d["wanted_by"] else 1,
@@ -1148,7 +1148,7 @@ def _boss_line(drops: int, wanted: int) -> str:
     return "%d pieces, %d of them worth taking" % (drops, wanted)
 
 
-def _members(char_rows: list[dict], equipped_rows: list[dict],
+def family_members(char_rows: list[dict], equipped_rows: list[dict],
              roster: list[str],
              skill_rows: list[dict] | None = None) -> list[dict]:
     """The family as the board compares against them.

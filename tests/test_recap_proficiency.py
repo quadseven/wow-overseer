@@ -88,7 +88,7 @@ WORN = [worn(name, 4, "a tunic", 20) for name in ROSTER]
 
 
 def member(name, skills):
-    return recap._members(CHARS, WORN, [name], skills)[0]
+    return recap.family_members(CHARS, WORN, [name], skills)[0]
 
 
 class TheStaffAndTheRogue(unittest.TestCase):
@@ -164,32 +164,32 @@ class TheCaveatsTrackTheGaps(unittest.TestCase):
     """A caveat that outlives its gap teaches distrust of the whole footer."""
 
     def test_the_proficiency_caveat_goes_once_proficiency_is_checked(self):
-        notes = recap._caveats(KAMS, proficiency_checked=True)
+        notes = recap.caveats_for(KAMS, proficiency_checked=True)
         self.assertFalse([n for n in notes if "proficiency" in n])
 
     def test_and_stays_while_it_is_not(self):
-        notes = recap._caveats(KAMS, proficiency_checked=False)
+        notes = recap.caveats_for(KAMS, proficiency_checked=False)
         self.assertTrue([n for n in notes if "proficiency" in n])
 
     def test_the_shield_caveat_goes_with_it(self):
         shield = dict(KAMS, **{"class": 4, "subclass": 6,
                                "inventory_type": 14})
-        self.assertFalse(recap._caveats(shield, proficiency_checked=True))
-        self.assertTrue(recap._caveats(shield, proficiency_checked=False))
+        self.assertFalse(recap.caveats_for(shield, proficiency_checked=True))
+        self.assertTrue(recap.caveats_for(shield, proficiency_checked=False))
 
     def test_the_two_hander_caveat_stays_because_its_gap_is_real(self):
         """This board ranks by item level, and item levels do not add, so it
         cannot price an off hand honestly however much it knows."""
-        notes = recap._caveats(KAMS, proficiency_checked=True)
+        notes = recap.caveats_for(KAMS, proficiency_checked=True)
         self.assertTrue([n for n in notes if "off hand" in n])
 
     def test_the_one_hander_caveat_stays_too(self):
-        notes = recap._caveats(VIPER, proficiency_checked=True)
+        notes = recap.caveats_for(VIPER, proficiency_checked=True)
         self.assertTrue([n for n in notes if "dual wield" in n])
 
     def test_a_caveat_still_names_nobody(self):
         for checked in (True, False):
-            for note in recap._caveats(KAMS, proficiency_checked=checked):
+            for note in recap.caveats_for(KAMS, proficiency_checked=checked):
                 for name in ROSTER:
                     self.assertNotIn(name, note)
 
@@ -234,14 +234,14 @@ class WhatIsNotKnownIsNotARefusal(unittest.TestCase):
     """The third state, and why it is None rather than an empty set."""
 
     def test_no_rows_at_all_leaves_every_member_unknown(self):
-        who = recap._members(CHARS, WORN, ROSTER)
+        who = recap.family_members(CHARS, WORN, ROSTER)
         self.assertTrue(all(m["skills"] is None for m in who))
 
     def test_a_member_absent_from_the_rows_stays_unknown(self):
         """Not an empty set, which would refuse them every weapon on the
         board on the strength of a read that returned nothing for them."""
         who = {m["name"]: m for m in
-               recap._members(CHARS, WORN, ROSTER, ROGUE_SKILLS)}
+               recap.family_members(CHARS, WORN, ROSTER, ROGUE_SKILLS)}
         self.assertIsNotNone(who["Ugga"]["skills"])
         self.assertIsNone(who["Grug"]["skills"])
 
@@ -252,7 +252,7 @@ class WhatIsNotKnownIsNotARefusal(unittest.TestCase):
     def test_a_skill_row_at_zero_does_not_count_as_holding_it(self):
         """`Player::GetSkillValue(skill) == 0` is the core's own test."""
         zeroed = skill("Ugga", STAVES, value=0) + ROGUE_SKILLS
-        who = recap._members(CHARS, WORN, ["Ugga"], zeroed)[0]
+        who = recap.family_members(CHARS, WORN, ["Ugga"], zeroed)[0]
         self.assertNotIn(STAVES, who["skills"])
         self.assertEqual(recap.verdict(KAMS, who)["verdict"],
                          recap.NO_PROFICIENCY)
@@ -275,7 +275,7 @@ class TheArmourLadderStillWorksWhereItIsStillUsed(unittest.TestCase):
                             recap.NO_PROFICIENCY)
 
     def test_without_skills_the_old_ladder_still_answers(self):
-        who = recap._members(CHARS, [worn("Og", 4, "a mail tunic", 20,
+        who = recap.family_members(CHARS, [worn("Og", 4, "a mail tunic", 20,
                                           subclass=3)], ["Og"])[0]
         self.assertEqual(recap.verdict(self.PLATE_CHEST, who)["verdict"],
                          recap.TOO_HEAVY)

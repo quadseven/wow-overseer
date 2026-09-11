@@ -713,6 +713,69 @@
   .iname:hover { text-decoration:underline; }
   .iname:focus-visible { outline:2px solid currentColor; outline-offset:2px; }
 
+  /* --- where to go next (infra#3500) ---------------------------------------
+     EVERY DUNGEON AT ONCE, on a phone. The loot board answers this one map at
+     a time, so choosing between twenty of them meant twenty visits; this is
+     the same question asked of the whole world, and the layout problem that
+     comes with it is that twenty dungeons times five characters times their
+     gains is far more than a thumb can scan.
+
+     SO THE ROW IS A <details>. Collapsed, a dungeon is its place in the
+     order, its name, the module's count sentence and four chips: three lines
+     on a phone, twenty of them still a list. Opened, it is the same card the
+     Chronicle draws, and it takes .chr-card wholesale for exactly the reason
+     the loot board does - .sect, .note and .item all work in here for the
+     cost of nothing, and an item is drawn in the same colour here as on the
+     paper doll.
+
+     NOTHING IN HERE SETS A WIDTH IN PIXELS and nothing scrolls sideways. The
+     chips wrap, the long names break, and the only grid is two columns where
+     the first is the width of a two-digit number.
+
+     It sits in the one gap no suite claims: the current-goal banner's window
+     ends at the `nav` rule above, the Decree console's begins at its own
+     banner below, and the shared furniture is above both so this cannot take
+     it hostage. */
+  #dungeons { display:none; padding:.9rem 1rem 1.2rem; }
+  #dgnfamily, #dgncoverage, #dgnorder, #dgnbasis { max-width:72ch; }
+  #dgnlist { display:grid; gap:10px; }
+  .dgn-card > summary { list-style:none; cursor:pointer; display:grid;
+                        grid-template-columns:auto minmax(0, 1fr);
+                        gap:.15rem .7rem; align-items:baseline; }
+  /* Safari draws its own triangle from a pseudo-element the property above
+     does not reach. */
+  .dgn-card > summary::-webkit-details-marker { display:none; }
+  .dgn-card > summary:focus-visible { outline:2px solid var(--accent);
+                                      outline-offset:3px; }
+  .dgn-rank { font-family:var(--mono); font-size:11px; font-weight:700;
+              letter-spacing:.14em; color:var(--on-card-dim); }
+  .dgn-name { font-family:var(--display); font-weight:800; font-stretch:125%;
+              font-size:1.14rem; line-height:1.2; letter-spacing:-.01em;
+              color:var(--on-card); overflow-wrap:anywhere; }
+  .dgn-sum { grid-column:2; margin-top:4px; color:var(--on-card-dim);
+             font-size:13px; line-height:1.5; overflow-wrap:anywhere; }
+  .dgn-chips { grid-column:2; display:flex; gap:6px; flex-wrap:wrap;
+               margin-top:7px; }
+  /* The three tones this view paints a chip in, and every one of them is a
+     ROLE the module named rather than a colour it chose. An unknown tone
+     draws in the body colour instead of vanishing. */
+  .dgn-chips .chip { border:1px solid var(--card-line); border-radius:999px;
+                     padding:2px .6rem; font-size:12px;
+                     color:var(--on-card-dim); }
+  .dgn-chips .chip.up { border-color:var(--accent-text);
+                        color:var(--accent-text); }
+  .dgn-chips .chip.no { border-color:var(--caution-text);
+                        color:var(--caution-text); }
+  .dgn-chips .chip.unsure { border-style:dashed; }
+  .dgn-body { margin-top:.7rem; }
+  .dgn-who { margin-top:.9rem; }
+  /* One gain. The rule down the left is what keeps five of them under one
+     name from reading as five separate findings. */
+  .dgn-gain { margin-top:.35rem; padding:.1rem 0 .1rem .75rem;
+              border-left:2px solid var(--card-line); }
+  .dgn-why { margin-top:3px; font-size:12px; line-height:1.5;
+             color:var(--on-card-dim); }
+
   /* --- the Decree console (infra#2597) --------------------------------------
      THE ONLY WRITE SURFACE IN THE REDESIGN, and most of its controls are
      drawn disabled on purpose. What this page may and may not reach is
@@ -2709,6 +2772,21 @@
   <div id="chrline"></div>
   <button id="chrmore">show older</button>
 </section>
+<!-- WHERE TO GO NEXT (infra#3500). The operator asked for a page that shows
+     every dungeon and what upgrades they can get at each, because that is the
+     choice being made a hundred times and the site could only answer it one
+     dungeon at a time. Every sentence, every chip and the ORDER of the list
+     come from dungeonplan.py; this markup holds no judgement of its own, and
+     the rule it ranked on is printed on the page rather than left implied. -->
+<section id="dungeons">
+  <div id="dgnhead" class="ds-head">reaching the world...</div>
+  <p id="dgnfamily" class="chr-body"></p>
+  <p id="dgncoverage" class="chr-body"></p>
+  <div class="ds-rule"><span class="ix">01</span><span class="ln"></span><span class="lb">where to go next</span></div>
+  <p id="dgnorder" class="chr-body"></p>
+  <div id="dgnlist"></div>
+  <p id="dgnbasis" class="chr-body"></p>
+</section>
 <!-- THE COUNCIL. The family working out what today is for: the transcript on
      the left in the family's own speaking order, what it carried underneath
      it, and on the right what they know about where to go next. Every
@@ -2895,6 +2973,7 @@ const BAGS_VIEW = "bags";
 const CHRONICLE_VIEW = "chronicle";
 const COUNCIL_VIEW = "council";
 const EYE_VIEW = "eye";
+const DUNGEONS_VIEW = "dungeons";
 const DECREE_VIEW = "decree";
 const CONTINENT_ORDER = ["0", "1", "530", "571", "quelthalas", "azuremyst"];
 // A serif on purpose - the map should not read in the same voice as the
@@ -2963,6 +3042,16 @@ async function loadZones() {
   hb.dataset.view = CHRONICLE_VIEW;
   hb.onclick = () => showView(CHRONICLE_VIEW);
   tabs.appendChild(hb);
+  // Sixth, straight after what they have DONE, because it is the same
+  // question turned round: the Chronicle says where they have been, this says
+  // which of the places they have not been is worth the walk. It reads about
+  // the family, so it belongs with the five above rather than with the two
+  // below that ask about the realm.
+  const gb = document.createElement("button");
+  gb.textContent = "Dungeons";
+  gb.dataset.view = DUNGEONS_VIEW;
+  gb.onclick = () => showView(DUNGEONS_VIEW);
+  tabs.appendChild(gb);
   // Sixth and seventh, and deliberately after the five that answer a question
   // about a character. These two answer questions about the family as one
   // thing and about the realm around it, which is a step further out every
@@ -5286,6 +5375,7 @@ function showView(v) {
   const isChr = v === CHRONICLE_VIEW;
   const isCouncil = v === COUNCIL_VIEW;
   const isEye = v === EYE_VIEW;
+  const isDgn = v === DUNGEONS_VIEW;
   const isDec = v === DECREE_VIEW;
   fsection.style.display = isFam ? "block" : "none";
   watchsection.style.display = isWatch ? "block" : "none";
@@ -5294,6 +5384,7 @@ function showView(v) {
   chrsection.style.display = isChr ? "block" : "none";
   cnsection.style.display = isCouncil ? "block" : "none";
   eyesection.style.display = isEye ? "block" : "none";
+  dgnsection.style.display = isDgn ? "block" : "none";
   dcrSection.style.display = isDec ? "block" : "none";
   // Every non-map view hides the canvas and its legend. This used to read
   // "not Family means map", which would have drawn the map underneath the
@@ -5369,6 +5460,28 @@ function showView(v) {
     closePanel();
     stopBroadcasts();
     pollEye();
+    return;
+  }
+  if (isDgn) {
+    // A read, like the Armory and the Chronicle: no player and no heartbeat
+    // of its own, and it still closes the panel and stops the grid, which are
+    // map and Family things that would otherwise go on running behind a view
+    // that does not show them. It fetches on open rather than waiting for the
+    // timer, because a minute of empty list under a heading is
+    // indistinguishable from a broken one.
+    closePanel();
+    stopBroadcasts();
+    pollDungeons();
+    return;
+  }
+  if (isDec) {
+    // The same treatment, for the same two reasons: the panel is a map thing
+    // that would keep a second player alive off screen, and thirty seconds
+    // of blank console under a heading is indistinguishable from a broken
+    // one, so it fetches on open rather than waiting for the timer.
+    closePanel();
+    stopBroadcasts();
+    pollDecree();
     return;
   }
   if (isDec) {
@@ -5544,6 +5657,159 @@ document.addEventListener("pointerdown", (e) => {
 document.addEventListener("keydown", (e) => {
   if (e.key === "Escape") closeItemTip();
 });
+
+// --- where to go next (infra#3500) ------------------------------------------
+//
+// THE ONE QUESTION THIS SITE COULD NOT ANSWER. The Chronicle's loot board
+// answers "what can drop in there" for the dungeon the family is standing in,
+// or for one named in a query string. Choosing where to go next means asking
+// that of every dungeon, and the operator does it about a hundred times.
+//
+// EVERY SENTENCE HERE ARRIVES WRITTEN, exactly as the recap's do. The count
+// on each row, the level line, the continent line, the reason a dungeon is
+// out of reach, the tie, and the reason the item level total does not count
+// an empty slot are all dungeonplan.py's words. This block turns a TONE NAME
+// into a class and prints strings, and the only mapping it owns is which of
+// three tones a chip is drawn in, which is a fact about the stylesheet.
+//
+// AND IT PRINTS THE RULE IT WAS RANKED BY. A list in an order is read as a
+// finding whether or not anybody meant it to be, so `p.order` sits above the
+// list and the basis sits under it. Neither is optional furniture.
+//
+// It sits in the one gap no suite claims, between the Family window's end at
+// loadZones().then( and the Decree console's own banner. chrItem and el are
+// declared further down the same script: both are read at poll time, long
+// after the script has finished evaluating, which is the same arrangement
+// showView already has with the Armory's and the console's consts.
+const dgnsection = document.getElementById("dungeons");
+const dgnhead = document.getElementById("dgnhead");
+const dgnfamily = document.getElementById("dgnfamily");
+const dgncoverage = document.getElementById("dgncoverage");
+const dgnorder = document.getElementById("dgnorder");
+const dgnbasis = document.getElementById("dgnbasis");
+const dgnlist = document.getElementById("dgnlist");
+
+// An empty string is a real answer from the module and means "there is
+// nothing to say here", so it draws nothing rather than an empty line.
+function dgnNote(parent, text) {
+  if (text) parent.appendChild(el("div", "note", text));
+}
+
+// ONE GAIN: the item as the Chronicle draws it, then the module's sentence
+// about what it replaces, then whatever that verdict did NOT check. The
+// caveats are printed and never composed - a weapon nobody here can rule on
+// has to say so beside itself, not in a footer at the bottom of twenty rows.
+function dgnGain(gain) {
+  const row = el("div", "dgn-gain");
+  row.appendChild(chrItem(gain, ""));
+  row.appendChild(el("div", "dgn-why", gain.line));
+  for (const caveat of gain.caveats) row.appendChild(el("div", "dgn-why", caveat));
+  return row;
+}
+
+function dgnMember(found) {
+  const box = el("div", "dgn-who");
+  box.appendChild(el("div", "sect", found.line));
+  dgnNote(box, found.delta_note);
+  for (const gain of found.gains) box.appendChild(dgnGain(gain));
+  return box;
+}
+
+// ONE DUNGEON, COLLAPSED BY DEFAULT. The summary carries the place in the
+// order the module decided, the name, the count sentence and the chips; the
+// body carries the context and every gain. `d.rank` is the module's number
+// and is never counted off the position this loop drew the row at: the page
+// would agree with it today and disagree the first time this list was
+// filtered, with nothing failing and the tie lines still naming the old one.
+function dgnCard(d) {
+  const card = el("details", "chr-card dgn-card");
+  const head = document.createElement("summary");
+  head.appendChild(el("span", "dgn-rank", String(d.rank)));
+  head.appendChild(el("span", "dgn-name", d.name));
+  head.appendChild(el("span", "dgn-sum", d.line));
+  const chips = el("div", "dgn-chips");
+  for (const chip of d.chips) {
+    // `tone` is a ROLE NAME the module chose, never a colour and never a
+    // state worked out here. An unknown tone draws in the body colour rather
+    // than being dropped, so a new one shows up as a plain chip instead of
+    // vanishing off the page.
+    chips.appendChild(el("span", "chip" + (chip.tone ? " " + chip.tone : ""),
+                         chip.text));
+  }
+  head.appendChild(chips);
+  card.appendChild(head);
+  const body = el("div", "dgn-body");
+  dgnNote(body, d.source_line);
+  dgnNote(body, d.level_line);
+  dgnNote(body, d.where_line);
+  dgnNote(body, d.entry_line);
+  dgnNote(body, d.tie_line);
+  for (const found of d.members) body.appendChild(dgnMember(found));
+  card.appendChild(body);
+  return card;
+}
+
+function dgnRender(p) {
+  dgnhead.textContent = p.line;
+  dgnhead.className = "ds-head";
+  dgnfamily.textContent = p.family_line;
+  // WHAT THE LIST HAD TO WORK WITH. A list that is simply short reads exactly
+  // like a complete one, so the count of what was offered is the only thing
+  // that can tell a reader their dungeon was never listed rather than empty.
+  dgncoverage.textContent = p.coverage;
+  dgnorder.textContent = p.order;
+  // The basis describes how a list was built, so it must not stand over one
+  // that was not built at all.
+  dgnbasis.textContent = p.empty_note || p.basis;
+  dgnlist.replaceChildren();
+  for (const d of p.dungeons) dgnlist.appendChild(dgnCard(d));
+}
+
+// ONE PULL AT A TIME, AND A CLOCK ON IT. These are one guard and not two.
+// This poll is started from two places - showView on the way into the tab, and
+// the interval below - so two can be in flight at once, and nothing orders
+// their replies: the slower one lands last and stamps its older ranks over the
+// newer ones, with the page looking freshly drawn either way.
+//
+// A flag alone would turn that into a worse failure. It is the heaviest read
+// on the site, so a world server that accepts the connection and never answers
+// leaves the promise pending for ever, the catch never runs, and the flag is
+// never cleared - the tab would sit on "reaching the world..." and no later
+// poll could ever replace it. The timeout is what gives the flag something to
+// be released by, which is why the two arrived together. Twenty seconds is
+// a third of the cadence, so a read that hits it is reported as stale well
+// before the next one is due.
+let dgnPulling = false;
+
+async function pollDungeons() {
+  if (view !== DUNGEONS_VIEW || dgnPulling) return;
+  dgnPulling = true;
+  try {
+    const r = await fetch(u("/api/dungeons"),
+                          {signal: AbortSignal.timeout(20000)});
+    if (!r.ok) throw new Error(r.status);
+    dgnRender(await r.json());
+  } catch (e) {
+    // Whatever is drawn stays drawn, like every other poll on this page. A
+    // blanked list reads as "there is nothing worth running anywhere", which
+    // is the one claim this view must never make by accident.
+    dgnhead.textContent = "the world is unreachable - this may be stale";
+    dgnhead.className = "ds-head alarm";
+  } finally {
+    // FINALLY, so a throw on the way through releases it too. Cleared at the
+    // end of the try it would be skipped by the very failure that most needs
+    // the next poll to be allowed to run.
+    dgnPulling = false;
+  }
+}
+
+// A MINUTE, and the slowest poll on the page on purpose. This answers where
+// to go next, and that answer moves when somebody equips something or gains a
+// level, not between two pulls. It is also the heaviest read on the site -
+// every dungeon's boss loot in one go - so it runs only while the tab is
+// open, and the guard at the top of pollDungeons is what makes that true even
+// for the call showView makes on the way in.
+setInterval(() => { if (view === DUNGEONS_VIEW) pollDungeons(); }, 60000);
 
 // --- the Decree console (infra#2597) ---------------------------------------
 //
@@ -8415,7 +8681,7 @@ function adoptContinent() {
 // The map is still separate below, because it is the one view whose hash
 // carries state (which continent) and so needs more than a name.
 const HASH_VIEWS = [FAMILY_VIEW, WATCH_VIEW, ARMORY_VIEW, BAGS_VIEW,
-                    CHRONICLE_VIEW, COUNCIL_VIEW, EYE_VIEW,
+                    CHRONICLE_VIEW, DUNGEONS_VIEW, COUNCIL_VIEW, EYE_VIEW,
                     DECREE_VIEW];
 
 // ADDRESSES A VIEW USED TO HAVE. The Achievements tab was renamed to the
