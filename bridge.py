@@ -3323,21 +3323,15 @@ class Bridge(discord.Client):
         if not candidates:
             log.info("economy: no safe carried vendor goods")
             return
-        # Only the family leader can take `new rpg`; followers travel by
-        # following that leader. Sending a follower directly to a vendor is
-        # refused by the world module and leaves that character behind.
-        leader = bonds.head_of_family()
-        aimed = await asyncio.to_thread(
-            _write_trade_errand,
-            professions.Errand(character=leader, travel_npc="vendor"),
-        )
-        if not aimed:
-            # Not an error. The bank and town-trip passes aim the same
-            # traveller and only an idle one may be retasked, so this is the
-            # ordinary state while one of them owns the leader. It is logged
-            # because "nobody is walking to a vendor" was invisible before.
-            log.info("economy: %s is on another errand; no vendor aim taken",
-                     leader)
+        # A sale is owned by the character carrying that item. A single
+        # leader aim cannot make the other four characters pass a vendor-range
+        # check, and their sell rows would otherwise be retried forever from
+        # wherever the party happened to be standing. Plan one vendor pass per
+        # holder so every seller reaches the NPC that will answer its command.
+        by_holder: dict[str, list] = {}
+        for candidate in candidates:
+            by_holder.setdefault(candidate.holder, []).append(candidate)
+
         # THE ROW IS ONLY WRITTEN WHERE IT CAN WORK (infra#3464).
         #
         # THE MEASUREMENT. Over three hours on the live realm the sell verb
@@ -3361,7 +3355,7 @@ class Bridge(discord.Client):
         # read the word (item_plan honours only `never`), so it re-queued from
         # the same spot every cycle, for ever.
         #
-        # THE GATE IS THE READER THE TOWN TRIP ALREADY USES. `_fetch_town`
+        # THE GATE IS THE READER THE TOWN TRIP ALREADY USES. The town reader
         # reads the counters within TOWN_COUNTER_YARDS of where the leader is
         # STANDING, from the live snapshot rather than the save timer, and
         # that box is deliberately sized to the core's own 5.5 yard
@@ -3373,31 +3367,42 @@ class Bridge(discord.Client):
         # never consulted when a player sells TO it, so a merchant with no
         # npc_vendor rows still buys; gating on stock would refuse exactly the
         # vendors that would have taken the greens.
-        town = await asyncio.to_thread(_fetch_town, leader)
-        if not town.vendor:
-            log.info(
-                "economy: %d carried candidate(s) but no vendor within reach "
-                "of %s - queuing nothing, and %s",
-                len(candidates), leader,
-                "walking there" if aimed else "not walking there either",
-            )
-            return
-        # The world has already answered some of these. A sale that was
-        # delivered, or refused with a reason retrying cannot change, must not
-        # be proposed again: 819 of 822 `item not carried` refusals in one day
-        # were re-issues of an item that had already been sold (infra#3330).
         attempts = await asyncio.to_thread(_sell_attempts, SELL_MEMORY_HOURS)
-        plan = item_plan.plan(candidates, attempts)
-        if not plan.write:
-            log.info("economy: %d carried candidate(s), none still open - %s",
-                     len(candidates), item_plan.reasons(plan.skipped))
-            return
         inserted = 0
-        for candidate in plan.write:
-            if await asyncio.to_thread(_insert_sell, candidate):
-                inserted += 1
-        log.info("economy: queued %d/%d vendor sale(s), leader=%s, held back %s",
-                 inserted, len(candidates), leader, item_plan.reasons(plan.skipped))
+        considered = 0
+        for holder in sorted(by_holder):
+            holder_candidates = tuple(by_holder[holder])
+            await asyncio.to_thread(
+                _write_trade_errand,
+                professions.Errand(character=holder, travel_npc="vendor"),
+            )
+            aimed = True
+            town = await asyncio.to_thread(_fetch_town, holder)
+            if not town.vendor:
+                log.info(
+                    "economy: %d carried candidate(s) for %s but no vendor "
+                    "within reach - travel aim queued=%s",
+                    len(holder_candidates), holder,
+                    aimed,
+                )
+                continue
+            # The world has already answered some of these. A sale that was
+            # delivered, or refused with a reason retrying cannot change, must
+            # not be proposed again: 819 of 822 `item not carried` refusals in
+            # one day were re-issues of an item that had already been sold
+            # (infra#3330).
+            plan = item_plan.plan(holder_candidates, attempts)
+            considered += len(holder_candidates)
+            for candidate in plan.write:
+                if await asyncio.to_thread(_insert_sell, candidate):
+                    inserted += 1
+            log.info(
+                "economy: holder=%s queued %d/%d vendor sale(s), held back %s",
+                holder, len(plan.write), len(holder_candidates),
+                item_plan.reasons(plan.skipped),
+            )
+        log.info("economy: queued %d/%d vendor sale(s) across %d holder(s)",
+                 inserted, considered, len(by_holder))
 
     async def _hand_gear(self, gear_rows: list, worn: list, names: list) -> None:
         """Move every carried piece that suits a sibling better (infra#3464).
