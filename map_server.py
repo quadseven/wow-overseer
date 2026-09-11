@@ -30,6 +30,7 @@ import dungeonplan
 import eye
 import family
 import frames
+import guildcraft
 import modelviewer
 import needs
 import partystatus
@@ -1270,6 +1271,209 @@ def _fetch_eye() -> dict:
             "realm_rows": realm_rows, "guild_rows": guild_rows}
 
 
+# --- what the guild can make, and what it cannot (infra#3507) ---------------
+#
+# TEN WHOLE-SET READS IN TWO PHASES, AND THAT IS THE WHOLE COST STORY. This
+# view is a cross product - every covered character against every trade against
+# every recipe in it - and the obvious shape for it is a loop that asks the
+# world for one trade's recipes, then one recipe's vendors, then one recipe's
+# drops. That is thousands of round trips on an endpoint with no auth in front
+# of it. Every read below covers EVERY trade at once and is bucketed in Python,
+# and nothing in guildcraft.py goes back to the database.
+#
+# THE TWO PHASES ARE THE ROSTER AND EVERYTHING ELSE. Which characters this page
+# covers is the family plus whoever shares a guild with them, and that is not
+# known until the guild read has answered - so the skills and spells reads bind
+# `guildcraft.covered_names`, the module's own answer, rather than a list this
+# file works out for itself and lets drift.
+#
+# Guarded for both 1146 and 1054 like every other read in this file. A world
+# without `guild_member` gets an empty guild and a page covering the family,
+# rather than a 503 on a tab that has nothing to do with the missing table
+# (infra#3172). `_wide_guarded` is defined further down with the recap's reads,
+# for the same reason `_fetch_dungeonplan` below sits above it: this section
+# must stay OUTSIDE the recap suite's fetch window, and a module-level function
+# is resolved when it is called rather than when this one is defined.
+
+# The trade skill ids, inlined as text rather than bound, exactly as
+# bridge.py's `_TRADE_SKILL_IDS` is and for the same reason: every element is
+# an int from goals.SKILL_IDS, a table in this repository, and NOTHING a caller
+# can reach ever touches it. /api/trades takes no parameters at all.
+#
+# THAT IS ALSO WHAT EVERY `noqa: S608` BELOW IS SAYING. ruff sees a query
+# built by concatenation and cannot tell a constant from a request; the
+# fragments joined into these six are this constant, `_TRADE_RECIPE_ITEMS`
+# (itself built from this one) and `guildcraft.RECIPE_CLASS`, all of them ints
+# and column names from code in this repository. Every VALUE that varies is
+# still bound by the driver, and the markers are anchored on the FIRST line of
+# each expression because that is where ruff anchors the rule - a marker on the
+# line carrying the `+` silences nothing, which bridge.py learned first.
+_TRADE_SKILL_LIST = ", ".join(str(i) for i in guildcraft.recipe_skills())
+
+# EVERY GUILD THE COVERED CHARACTERS ARE IN, and their whole membership. Not a
+# guild named in the request: there is no request parameter here, exactly as
+# /api/armory and /api/family refuse a name. The family is in none of this
+# realm's twenty guilds today, so this returns nothing and the page says so.
+_TRADE_GUILD = (
+    "SELECT g.name AS guild, c.name FROM guild_member gm "
+    "JOIN guild g ON g.guildid = gm.guildid "
+    "JOIN characters c ON c.guid = gm.guid "
+    "WHERE gm.guildid IN (SELECT guildid FROM guild_member WHERE guid IN "
+    "(SELECT guid FROM characters WHERE name IN ({holes})))"
+)
+_TRADE_MEMBERS = (
+    "SELECT name, level, class FROM characters WHERE name IN ({holes})"
+)
+# `max` IS THE HALF THAT MAKES THE VALUE MEAN ANYTHING. A tailoring of 1 out of
+# 75 and a tailoring of 1 out of 300 are different characters, and the ceiling
+# is also what bounds which missing recipes this page is willing to list.
+# Backticked because it is a function name everywhere else in SQL.
+_TRADE_SKILLS = (
+    "SELECT c.name, cs.skill, cs.value, cs.`max` FROM characters c "  # noqa: S608 - joined fragments are constants, not caller input
+    "JOIN character_skills cs ON cs.guid = c.guid "
+    "WHERE c.name IN ({holes}) AND cs.skill IN (" + _TRADE_SKILL_LIST + ")"
+)
+# THE SPELLBOOK IS WHAT "KNOWS A RECIPE" MEANS. A crafting recipe IS a spell,
+# so the only honest test for "do they already know this" is whether the craft
+# spell a recipe item teaches is in their `character_spell` rows.
+_TRADE_SPELLS = (
+    "SELECT c.name, sp.spell FROM characters c "
+    "JOIN character_spell sp ON sp.guid = c.guid WHERE c.name IN ({holes})"
+)
+# WHAT THE FAMILY DECIDED, which is allowed to disagree with what the world
+# granted and is the more interesting half when it does. professions.py's whole
+# design is that this column never causes a `character_skills` row.
+_TRADE_ROSTER = "SELECT name, professions FROM overseer_roster"
+# EVERY RECIPE ITEM IN THE WORLD, narrowed to the trades this page is about.
+# class 9 is Recipe, which is every recipe, pattern, plan, formula, design,
+# technique and manual. `spellid_2 > 0` is what makes it a recipe that TEACHES
+# something rather than a token: the taught craft spell is the only bridge back
+# to `character_spell` this database has, because skilllineability_dbc is empty
+# on this realm.
+_TRADE_RECIPES = (
+    "SELECT it.entry, it.RequiredSkill, it.RequiredSkillRank, "  # noqa: S608 - joined fragments are constants, not caller input
+    + _ITEM_TEMPLATE_COLUMNS + " FROM acore_world.item_template it "
+    "WHERE it.class = " + str(guildcraft.RECIPE_CLASS) + " "
+    "AND it.RequiredSkill IN (" + _TRADE_SKILL_LIST + ") AND it.spellid_2 > 0"
+)
+# The one table on this realm that DOES map a spell to a skill line. It carries
+# no name, which is why the page counts trainer crafts and never names them.
+# DISTINCT because one spell is taught by many trainers and would otherwise be
+# counted once per trainer.
+_TRADE_TRAINER = (
+    "SELECT DISTINCT SpellId, ReqSkillLine, ReqSkillRank, ReqLevel "
+    "FROM acore_world.trainer_spell "
+    "WHERE ReqSkillLine IN (" + _TRADE_SKILL_LIST + ")"
+)
+# WHERE A RECIPE COMES FROM, THREE WAYS. The item filter is a SUBQUERY and not
+# a bound list of entries: binding it would mean reading the recipes first and
+# then sending a few thousand ids back over the wire, which is the same rows
+# twice. ONE SPAWN per creature, the lowest guid, as a scalar subquery: joined
+# plainly, a vendor with twelve spawn rows would be twelve copies of the same
+# sentence, and the basis says only one is named.
+_TRADE_RECIPE_ITEMS = (
+    "SELECT entry FROM acore_world.item_template "  # noqa: S608 - joined fragments are constants, not caller input
+    "WHERE class = " + str(guildcraft.RECIPE_CLASS) + " "
+    "AND RequiredSkill IN (" + _TRADE_SKILL_LIST + ")"
+)
+_TRADE_VENDORS = (
+    "SELECT nv.item, ct.name, cr.map, cr.position_x, cr.position_y "  # noqa: S608 - joined fragments are constants, not caller input
+    "FROM acore_world.npc_vendor nv "
+    "JOIN acore_world.creature_template ct ON ct.entry = nv.entry "
+    "LEFT JOIN acore_world.creature cr ON cr.guid = "
+    "(SELECT MIN(guid) FROM acore_world.creature WHERE id = ct.entry) "
+    "WHERE nv.item IN (" + _TRADE_RECIPE_ITEMS + ")"
+)
+# `Reference = 0` is the same filter the loot board and the dungeon plan both
+# carry: a row with a Reference points at reference_loot_template rather than
+# at an item. What lives behind those references is NOT followed, which is
+# where most world drops live, and the page's own basis says so rather than
+# letting a recipe with no row read as a recipe with nowhere to come from.
+_TRADE_DROPS = (
+    "SELECT clt.Item AS item, clt.Chance, ct.name, ct.minlevel, ct.maxlevel, "  # noqa: S608 - joined fragments are constants, not caller input
+    "cr.map, cr.position_x, cr.position_y "
+    "FROM acore_world.creature_loot_template clt "
+    "JOIN acore_world.creature_template ct ON ct.lootid = clt.Entry "
+    "LEFT JOIN acore_world.creature cr ON cr.guid = "
+    "(SELECT MIN(guid) FROM acore_world.creature WHERE id = ct.entry) "
+    "WHERE clt.Reference = 0 AND clt.Item IN (" + _TRADE_RECIPE_ITEMS + ")"
+)
+# TEN REWARD COLUMNS AND NO WAY TO UNPIVOT THEM. quest_template carries four
+# fixed rewards and six choices as ten separate columns, so a UNION of ten
+# narrow reads is what turns them into rows. Written as a UNION rather than as
+# a join on `IN (ten columns)` because each arm's subquery is materialised once
+# and probed by index, while the join shape makes the optimiser's choice the
+# difference between a hash probe and a scan of the whole quest table per item.
+_TRADE_QUEST_COLUMNS = (
+    "RewardItem1", "RewardItem2", "RewardItem3", "RewardItem4",
+    "RewardChoiceItemID1", "RewardChoiceItemID2", "RewardChoiceItemID3",
+    "RewardChoiceItemID4", "RewardChoiceItemID5", "RewardChoiceItemID6",
+)
+_TRADE_QUESTS = " UNION ".join(
+    "SELECT %s AS item, ID, LogTitle, QuestLevel "  # noqa: S608 - joined fragments are constants, not caller input
+    "FROM acore_world.quest_template "
+    "WHERE %s IN (%s)" % (column, column, _TRADE_RECIPE_ITEMS)
+    for column in _TRADE_QUEST_COLUMNS
+)
+
+
+def _fetch_guildcraft() -> dict:
+    """Every trade, every recipe in it, and where each one can be got.
+
+    One connection, ten reads, none of them per trade, per character or per
+    recipe. Names come from bonds via family.roster() and never from the
+    request, exactly as /api/armory and /api/family refuse a name parameter.
+
+    THE SECOND PHASE IS THE POINT. `covered` is the family plus their guild,
+    and it is `guildcraft.covered_names` that decides it, so the two reads that
+    bind a roster cannot fall behind the list the page draws rows for. A name
+    with a row and no spells read would render as "knows nothing", which is a
+    claim rather than a gap.
+    """
+    names = family.roster()
+    holes = ", ".join(["%s"] * len(names))
+    conn = _connect()
+    try:
+        with conn.cursor() as cur:
+            # S608 on every roster read below: `holes` is a run of "%s"
+            # placeholders sized by len(family.roster()), and every VALUE is
+            # still bound by the driver. The skill-id lists are ints from
+            # goals.SKILL_IDS and no request can reach them.
+            guild = _wide_guarded(cur, _TRADE_GUILD.format(holes=holes),  # noqa: S608
+                                  tuple(names), "", "guild_member")
+            covered = guildcraft.covered_names(names, guild)
+            choles = ", ".join(["%s"] * len(covered))
+            members = _wide_guarded(cur, _TRADE_MEMBERS.format(holes=choles),  # noqa: S608
+                                    tuple(covered), "", "characters")
+            skills = _wide_guarded(cur, _TRADE_SKILLS.format(holes=choles),  # noqa: S608
+                                   tuple(covered), "", "character_skills")
+            spells = _wide_guarded(cur, _TRADE_SPELLS.format(holes=choles),  # noqa: S608
+                                   tuple(covered), "", "character_spell")
+            # THE ONE READ WHOSE ABSENCE CHANGES A SENTENCE. An empty list here
+            # is either "nobody is assigned anything" or "the column is not in
+            # this world yet", and those are different admissions, so the page
+            # is told which it got rather than being left to guess from a
+            # length.
+            roster_rows = _wide_guarded(cur, _TRADE_ROSTER, (), "",
+                                        "overseer_roster")
+            recipes = _wide_guarded(cur, _TRADE_RECIPES, (), "",
+                                    "item_template")
+            trainer = _wide_guarded(cur, _TRADE_TRAINER, (), "",
+                                    "trainer_spell")
+            vendors = _wide_guarded(cur, _TRADE_VENDORS, (), "", "npc_vendor")
+            drops = _wide_guarded(cur, _TRADE_DROPS, (), "",
+                                  "creature_loot_template")
+            quests = _wide_guarded(cur, _TRADE_QUESTS, (), "",
+                                   "quest_template")
+    finally:
+        conn.close()
+    return {"guild_rows": guild, "member_rows": members, "skill_rows": skills,
+            "spell_rows": spells, "roster_rows": roster_rows,
+            "recipe_rows": recipes, "trainer_rows": trainer,
+            "vendor_rows": vendors, "drop_rows": drops, "quest_rows": quests,
+            "roster_read": bool(roster_rows)}
+
+
 # --- which dungeon is worth running next (infra#3500) ------------------------
 #
 # THREE WHOLE-WORLD READS, AND THAT IS THE WHOLE COST STORY. This view is a
@@ -2458,6 +2662,29 @@ class Handler(BaseHTTPRequestHandler):
         payload = chat.build_timeline(name, rows, db_now, limit)
         self._send(200, "application/json", json.dumps(payload).encode())
 
+    def _trades(self, _query: dict) -> None:
+        """GET /api/trades - who can make what, and where the rest comes from.
+
+        NO PARAMETERS AT ALL, and that is the shape of the view rather than an
+        omission: it asks about every trade and every recipe in the world at
+        once, so there is nothing for a caller to steer and no id to validate.
+        WHO the guild is belongs to bonds and to the world's own guild table,
+        exactly as /api/armory and /api/family refuse a name.
+        """
+        try:
+            fetched = _fetch_guildcraft()
+            payload = guildcraft.build_guildcraft(
+                **fetched, icons=ITEMS.icons, book=ITEMS,
+                roster=family.roster(), names=achievements.MAP_NAMES, geo=GEO)
+            self._send(200, "application/json", json.dumps(payload).encode())
+        except Exception:
+            # Same contract as every other poll: the tab keeps what it has
+            # drawn and says it may be stale. A blanked list reads as "the
+            # guild can make nothing and needs nothing", which is a far
+            # stronger claim than "this one read failed".
+            log.exception("guild trades query failed")
+            self._send(503, "application/json", b'{"error": "world unreachable"}')
+
     def _dungeons(self, _query: dict) -> None:
         """GET /api/dungeons - every dungeon, and who would gain by running it.
 
@@ -3107,6 +3334,7 @@ class Handler(BaseHTTPRequestHandler):
         "/api/needs": _needs,
         "/api/achievements": _achievements,
         "/api/dungeons": _dungeons,
+        "/api/trades": _trades,
         "/api/recap": _recap,
         "/api/council": _council,
         "/api/eye": _eye,

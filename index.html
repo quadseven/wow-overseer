@@ -713,6 +713,78 @@
   .iname:hover { text-decoration:underline; }
   .iname:focus-visible { outline:2px solid currentColor; outline-offset:2px; }
 
+  /* --- what the guild can make (infra#3507) --------------------------------
+     FOURTEEN TRADES, EACH WITH A LIST OF RECIPES UNDER IT, on a phone. The
+     shape is the dungeon plan's for the same reason the dungeon plan took the
+     Chronicle's: a row that is a <details> is three lines collapsed and a
+     whole card opened, and fourteen of them are still a list a thumb can
+     scan. It takes .chr-card wholesale, so .sect, .note and .item all work in
+     here for the cost of nothing and a recipe is drawn in the same quality
+     colour it has on the paper doll.
+
+     NOTHING IN HERE SETS A WIDTH IN PIXELS and nothing scrolls sideways. The
+     chips wrap, the long names break, and the only grid is two columns where
+     the first is the width of a two-digit number.
+
+     It sits between the item tooltip's block and the dungeon plan's, which is
+     inside no view suite's own window: the tooltip's slice runs to the Decree
+     console's banner and asserts only what must be PRESENT in it, and the
+     dungeon plan's slice starts at its own banner below this one. */
+  #trades { display:none; padding:.9rem 1rem 1.2rem; }
+  #gcrguild, #gcrcoverage, #gcrgapsline, #gcrorder, #gcrbasis { max-width:72ch; }
+  #gcrgaps { display:grid; gap:8px; }
+  /* A TRADE NOBODY HOLDS IS NOT A CARD. It is one sentence, and giving it the
+     same weight as a trade with a hundred recipes under it would make the
+     absence look like the finding it explains. */
+  .gcr-gap { padding:.55rem .8rem; border-left:2px solid var(--caution-text);
+             color:var(--on-card-dim); font-size:13px; line-height:1.5;
+             overflow-wrap:anywhere; }
+  #gcrlist { display:grid; gap:10px; }
+  .gcr-card > summary { list-style:none; cursor:pointer; display:grid;
+                        grid-template-columns:auto minmax(0, 1fr);
+                        gap:.15rem .7rem; align-items:baseline; }
+  /* Safari draws its own triangle from a pseudo-element the property above
+     does not reach. */
+  .gcr-card > summary::-webkit-details-marker { display:none; }
+  .gcr-card > summary:focus-visible { outline:2px solid var(--accent);
+                                      outline-offset:3px; }
+  .gcr-rank { font-family:var(--mono); font-size:11px; font-weight:700;
+              letter-spacing:.14em; color:var(--on-card-dim); }
+  .gcr-name { font-family:var(--display); font-weight:800; font-stretch:125%;
+              font-size:1.14rem; line-height:1.2; letter-spacing:-.01em;
+              color:var(--on-card); overflow-wrap:anywhere;
+              text-transform:capitalize; }
+  .gcr-sum { grid-column:2; margin-top:4px; color:var(--on-card-dim);
+             font-size:13px; line-height:1.5; overflow-wrap:anywhere; }
+  .gcr-chips { grid-column:2; display:flex; gap:6px; flex-wrap:wrap;
+               margin-top:7px; }
+  /* The three tones this view paints a chip in, and every one of them is a
+     ROLE the module named rather than a colour it chose. An unknown tone
+     draws in the body colour instead of vanishing, so a tone added later
+     shows up as a plain chip rather than disappearing off the page. */
+  .gcr-chips .chip { border:1px solid var(--card-line); border-radius:999px;
+                     padding:2px .6rem; font-size:12px;
+                     color:var(--on-card-dim); }
+  .gcr-chips .chip.up { border-color:var(--accent-text);
+                        color:var(--accent-text); }
+  .gcr-chips .chip.no { border-color:var(--caution-text);
+                        color:var(--caution-text); }
+  .gcr-chips .chip.unsure { border-style:dashed; }
+  .gcr-body { margin-top:.7rem; }
+  /* ONE RECIPE. The rule down the left is what keeps twelve of them under one
+     trade from reading as twelve separate findings, and the chips sit inside
+     it rather than beside the name so a wrapped name cannot push them out. */
+  .gcr-recipe { margin-top:.5rem; padding:.1rem 0 .35rem .75rem;
+                border-left:2px solid var(--card-line); }
+  .gcr-recipe .gcr-chips { grid-column:auto; margin-top:5px; }
+  .gcr-why { margin-top:3px; font-size:12px; line-height:1.5;
+             color:var(--on-card-dim); overflow-wrap:anywhere; }
+  /* WHERE TO GO AND GET IT, which is the half of this page that is a plan
+     rather than a list, so it is not drawn dimmer than the sentence above it. */
+  .gcr-src { margin-top:3px; padding-left:.7rem;
+             border-left:2px solid var(--accent-text); font-size:12px;
+             line-height:1.5; color:var(--on-card); overflow-wrap:anywhere; }
+
   /* --- where to go next (infra#3500) ---------------------------------------
      EVERY DUNGEON AT ONCE, on a phone. The loot board answers this one map at
      a time, so choosing between twenty of them meant twenty visits; this is
@@ -2787,6 +2859,26 @@
   <div id="dgnlist"></div>
   <p id="dgnbasis" class="chr-body"></p>
 </section>
+<!-- WHAT THE GUILD CAN MAKE (infra#3507). The operator asked for a guild
+     profession view and, in the same breath, for farm runs for the recipes it
+     is missing. So this is both halves: who holds which trade and how far, and
+     for every recipe nobody knows, where this database says it comes from and
+     what it would take to learn it. Every sentence, every chip and the ORDER
+     of the list come from guildcraft.py; this markup holds no judgement of its
+     own, and the rule the list is in is printed on the page rather than left
+     implied. -->
+<section id="trades">
+  <div id="gcrhead" class="ds-head">reaching the world...</div>
+  <p id="gcrguild" class="chr-body"></p>
+  <p id="gcrcoverage" class="chr-body"></p>
+  <div class="ds-rule"><span class="ix">01</span><span class="ln"></span><span class="lb">what nobody holds</span></div>
+  <p id="gcrgapsline" class="chr-body"></p>
+  <div id="gcrgaps"></div>
+  <div class="ds-rule"><span class="ix">02</span><span class="ln"></span><span class="lb">what each trade still needs</span></div>
+  <p id="gcrorder" class="chr-body"></p>
+  <div id="gcrlist"></div>
+  <p id="gcrbasis" class="chr-body"></p>
+</section>
 <!-- THE COUNCIL. The family working out what today is for: the transcript on
      the left in the family's own speaking order, what it carried underneath
      it, and on the right what they know about where to go next. Every
@@ -2974,6 +3066,7 @@ const CHRONICLE_VIEW = "chronicle";
 const COUNCIL_VIEW = "council";
 const EYE_VIEW = "eye";
 const DUNGEONS_VIEW = "dungeons";
+const TRADES_VIEW = "trades";
 const DECREE_VIEW = "decree";
 const CONTINENT_ORDER = ["0", "1", "530", "571", "quelthalas", "azuremyst"];
 // A serif on purpose - the map should not read in the same voice as the
@@ -3052,6 +3145,17 @@ async function loadZones() {
   gb.dataset.view = DUNGEONS_VIEW;
   gb.onclick = () => showView(DUNGEONS_VIEW);
   tabs.appendChild(gb);
+  // Seventh, straight after the dungeon plan, because it is the same kind of
+  // question about the same five: that one says which place is worth walking
+  // to for a drop, this one says which place is worth walking to for a recipe
+  // nobody here can make yet. It reads about the family and their guild, so it
+  // belongs with the six above rather than with the two below that ask about
+  // the realm.
+  const tb = document.createElement("button");
+  tb.textContent = "Trades";
+  tb.dataset.view = TRADES_VIEW;
+  tb.onclick = () => showView(TRADES_VIEW);
+  tabs.appendChild(tb);
   // Sixth and seventh, and deliberately after the five that answer a question
   // about a character. These two answer questions about the family as one
   // thing and about the realm around it, which is a step further out every
@@ -5376,6 +5480,7 @@ function showView(v) {
   const isCouncil = v === COUNCIL_VIEW;
   const isEye = v === EYE_VIEW;
   const isDgn = v === DUNGEONS_VIEW;
+  const isTrd = v === TRADES_VIEW;
   const isDec = v === DECREE_VIEW;
   fsection.style.display = isFam ? "block" : "none";
   watchsection.style.display = isWatch ? "block" : "none";
@@ -5385,6 +5490,7 @@ function showView(v) {
   cnsection.style.display = isCouncil ? "block" : "none";
   eyesection.style.display = isEye ? "block" : "none";
   dgnsection.style.display = isDgn ? "block" : "none";
+  gcrsection.style.display = isTrd ? "block" : "none";
   dcrSection.style.display = isDec ? "block" : "none";
   // Every non-map view hides the canvas and its legend. This used to read
   // "not Family means map", which would have drawn the map underneath the
@@ -5460,6 +5566,18 @@ function showView(v) {
     closePanel();
     stopBroadcasts();
     pollEye();
+    return;
+  }
+  if (isTrd) {
+    // A read, like the Armory, the Chronicle and the dungeon plan: no player
+    // and no heartbeat of its own, and it still closes the panel and stops the
+    // grid, which are map and Family things that would otherwise go on running
+    // behind a view that does not show them. It fetches on open rather than
+    // waiting for the timer, because two minutes of empty list under a heading
+    // is indistinguishable from a broken one.
+    closePanel();
+    stopBroadcasts();
+    pollTrades();
     return;
   }
   if (isDgn) {
@@ -5657,6 +5775,171 @@ document.addEventListener("pointerdown", (e) => {
 document.addEventListener("keydown", (e) => {
   if (e.key === "Escape") closeItemTip();
 });
+
+// --- what the guild can make (infra#3507) ------------------------------------
+//
+// THE HALF OF THE REQUEST THAT IS A PLAN. A list of who holds which trade is
+// the easy half; the useful half is that a recipe nobody knows carries where
+// this database says it comes from and what it would take to learn it, because
+// that is what a farm run is planned from.
+//
+// EVERY SENTENCE HERE ARRIVES WRITTEN, exactly as the recap's and the dungeon
+// plan's do. The count on each trade, the skill arithmetic on each recipe, the
+// heading over each list, the reason a trade is missing and the admission that
+// a trainer craft cannot be named are all guildcraft.py's words. This block
+// turns a TONE NAME into a class and prints strings, and the only mapping it
+// owns is which of three tones a chip is drawn in, which is a fact about the
+// stylesheet.
+//
+// AND IT PRINTS THE RULE IT WAS ORDERED BY. A list in an order is read as a
+// finding whether or not anybody meant it to be, so `p.order` sits above the
+// list and the basis sits under it. Neither is optional furniture.
+//
+// It sits between the item tooltip's block and the dungeon plan's, in the same
+// stretch no view suite claims as its own window. chrItem and el are declared
+// further down the same script: both are read at poll time, long after this
+// script has finished evaluating, which is the same arrangement showView
+// already has with the Armory's and the console's consts.
+const gcrsection = document.getElementById("trades");
+const gcrhead = document.getElementById("gcrhead");
+const gcrguild = document.getElementById("gcrguild");
+const gcrcoverage = document.getElementById("gcrcoverage");
+const gcrgapsline = document.getElementById("gcrgapsline");
+const gcrgaps = document.getElementById("gcrgaps");
+const gcrorder = document.getElementById("gcrorder");
+const gcrbasis = document.getElementById("gcrbasis");
+const gcrlist = document.getElementById("gcrlist");
+
+// An empty string is a real answer from the module and means "there is nothing
+// to say here", so it draws nothing rather than an empty line.
+function gcrNote(parent, text) {
+  if (text) parent.appendChild(el("div", "note", text));
+}
+
+// `tone` is a ROLE NAME the module chose, never a colour and never a state
+// worked out here. An unknown tone draws in the body colour rather than being
+// dropped, so a new one shows up as a plain chip instead of vanishing.
+function gcrChips(parent, chips) {
+  const box = el("div", "gcr-chips");
+  for (const chip of chips) {
+    box.appendChild(el("span", "chip" + (chip.tone ? " " + chip.tone : ""),
+                       chip.text));
+  }
+  parent.appendChild(box);
+}
+
+// ONE MISSING RECIPE: the item as the Chronicle draws it, the chips, the
+// module's sentence about what it would take, and then every source it found.
+// A recipe with no source read still draws its sentence saying so, because a
+// row that simply stopped after the chips would read as a recipe somebody
+// forgot to finish.
+function gcrMissing(recipe) {
+  const row = el("div", "gcr-recipe");
+  row.appendChild(chrItem(recipe, ""));
+  gcrChips(row, recipe.chips);
+  row.appendChild(el("div", "gcr-why", recipe.reach_line));
+  row.appendChild(el("div", "gcr-why", recipe.source_line));
+  for (const source of recipe.sources) {
+    row.appendChild(el("div", "gcr-src", source.line));
+  }
+  return row;
+}
+
+// ONE KNOWN RECIPE. The sentence names who can make it, because "who do I ask"
+// is the question this list answers.
+function gcrKnown(recipe) {
+  const row = el("div", "gcr-recipe");
+  row.appendChild(chrItem(recipe, ""));
+  row.appendChild(el("div", "gcr-why", recipe.line));
+  return row;
+}
+
+// ONE TRADE, COLLAPSED BY DEFAULT. The summary carries the place in the order
+// the module decided, the trade, its count sentence and the chips; the body
+// carries every holder, what the trainer still has, and the two lists.
+// `t.rank` is the module's number and is never counted off the position this
+// loop drew the row at: the page would agree with it today and disagree the
+// first time this list was filtered, with nothing failing.
+function gcrTrade(t) {
+  const card = el("details", "chr-card gcr-card");
+  const head = document.createElement("summary");
+  head.appendChild(el("span", "gcr-rank", String(t.rank)));
+  head.appendChild(el("span", "gcr-name", t.name));
+  head.appendChild(el("span", "gcr-sum", t.line));
+  gcrChips(head, t.chips);
+  card.appendChild(head);
+  const body = el("div", "gcr-body");
+  for (const line of t.holder_lines) gcrNote(body, line);
+  gcrNote(body, t.assigned_line);
+  gcrNote(body, t.recipes_line);
+  gcrNote(body, t.beyond_line);
+  gcrNote(body, t.trainer_line);
+  if (t.missing_head) body.appendChild(el("div", "sect", t.missing_head));
+  for (const recipe of t.missing) body.appendChild(gcrMissing(recipe));
+  if (t.known_head) body.appendChild(el("div", "sect", t.known_head));
+  for (const recipe of t.known) body.appendChild(gcrKnown(recipe));
+  card.appendChild(body);
+  return card;
+}
+
+function gcrRender(p) {
+  gcrhead.textContent = p.line;
+  gcrhead.className = "ds-head";
+  gcrguild.textContent = p.guild_line;
+  // WHAT THE LIST HAD TO WORK WITH. A list that is simply short reads exactly
+  // like a complete one, so the count of what was read is the only thing that
+  // can tell a reader a character was never looked at rather than known to
+  // hold nothing.
+  gcrcoverage.textContent = p.coverage;
+  gcrgapsline.textContent = p.gaps_line;
+  gcrgaps.replaceChildren();
+  for (const gap of p.gaps) gcrgaps.appendChild(el("div", "gcr-gap", gap.line));
+  gcrorder.textContent = p.order;
+  // The basis describes how a list was built, so it must not stand over one
+  // that was not built at all.
+  gcrbasis.textContent = p.empty_note || p.basis;
+  gcrlist.replaceChildren();
+  for (const t of p.trades) gcrlist.appendChild(gcrTrade(t));
+}
+
+// ONE PULL AT A TIME, AND A CLOCK ON IT. These are one guard and not two, for
+// the reasons the dungeon plan's own poll writes out below: two pulls in
+// flight land in whatever order the world answers in, and a flag with no
+// timeout behind it is never cleared by a connection that is accepted and
+// never answered.
+let gcrPulling = false;
+
+async function pollTrades() {
+  if (view !== TRADES_VIEW || gcrPulling) return;
+  gcrPulling = true;
+  try {
+    const r = await fetch(u("/api/trades"),
+                          {signal: AbortSignal.timeout(20000)});
+    if (!r.ok) throw new Error(r.status);
+    gcrRender(await r.json());
+  } catch (e) {
+    // Whatever is drawn stays drawn, like every other poll on this page. A
+    // blanked list reads as "the guild can make nothing and needs nothing",
+    // which is the one claim this view must never make by accident.
+    gcrhead.textContent = "the world is unreachable - this may be stale";
+    gcrhead.className = "ds-head alarm";
+  } finally {
+    // FINALLY, so a throw on the way through releases it too. Cleared at the
+    // end of the try it would be skipped by the very failure that most needs
+    // the next poll to be allowed to run.
+    gcrPulling = false;
+  }
+}
+
+// TWO MINUTES, AND IT IS NOW THE SLOWEST POLL ON THE PAGE. The dungeon plan's
+// block below still calls its own minute the slowest, and it was: this read is
+// heavier again, because it scans every recipe item in the world and unions
+// ten quest reward columns. What it answers moves when somebody learns a
+// recipe or gains a skill point, which is not something that happens between
+// two pulls, so it runs only while the tab is open and the guard at the top of
+// pollTrades is what makes that true even for the call showView makes on the
+// way in.
+setInterval(() => { if (view === TRADES_VIEW) pollTrades(); }, 120000);
 
 // --- where to go next (infra#3500) ------------------------------------------
 //
@@ -8681,7 +8964,8 @@ function adoptContinent() {
 // The map is still separate below, because it is the one view whose hash
 // carries state (which continent) and so needs more than a name.
 const HASH_VIEWS = [FAMILY_VIEW, WATCH_VIEW, ARMORY_VIEW, BAGS_VIEW,
-                    CHRONICLE_VIEW, DUNGEONS_VIEW, COUNCIL_VIEW, EYE_VIEW,
+                    CHRONICLE_VIEW, DUNGEONS_VIEW, TRADES_VIEW,
+                    COUNCIL_VIEW, EYE_VIEW,
                     DECREE_VIEW];
 
 // ADDRESSES A VIEW USED TO HAVE. The Achievements tab was renamed to the
