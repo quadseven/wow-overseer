@@ -127,6 +127,22 @@ def town_run_needed(used: int, slots: int, minimum_free: int = 2,
     return free <= minimum_free or used * 100 >= slots * pressure_percent
 
 
+def family_town_run_needed(free_slots: dict[str, int],
+                           minimum_free: int = 2) -> bool:
+    """Return whether any measured family member needs a vendor visit.
+
+    The bridge's capacity query returns free slots rather than used and total
+    counts. A conservative pressure floor is enough for the trigger: a
+    member at or below it can no longer reliably receive loot or materials.
+    Unknown and negative readings fail closed, so a broken read cannot send
+    the family on a blind trip.
+    """
+    if not free_slots or minimum_free < 0:
+        return False
+    return any(isinstance(free, int) and free >= 0 and free <= minimum_free
+               for free in free_slots.values())
+
+
 def sellable(item: ItemForSale) -> bool:
     """Sell only safe vendor goods: never rare, quest, reagent, or needed."""
     return (item.quality <= 1 and not item.quest_item and not item.reagent

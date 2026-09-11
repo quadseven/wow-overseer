@@ -3289,6 +3289,11 @@ class Bridge(discord.Client):
         names = sorted((await asyncio.to_thread(_protected_guids)).values())
         if not names or await self._mid_run(names):
             return
+        free_slots = await asyncio.to_thread(_fetch_free_slots, names)
+        if not bag_pressure.family_town_run_needed(free_slots):
+            log.info("economy: carried vendor goods exist, but bag pressure is below "
+                     "the town-run trigger")
+            return
         rows = await asyncio.to_thread(_fetch_vendor_items, names)
         gear_rows = await asyncio.to_thread(_fetch_surplus_gear, names)
         worn = await asyncio.to_thread(_fetch_family_equipped, names)

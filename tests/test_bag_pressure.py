@@ -1,8 +1,8 @@
 import unittest
 
 import disposition
-from bag_pressure import (ItemForSale, bag_purchase_allowed, gear_candidates,
-                          item_binding, sellable, town_run_needed,
+from bag_pressure import (ItemForSale, bag_purchase_allowed, family_town_run_needed,
+                          gear_candidates, item_binding, sellable, town_run_needed,
                           vendor_batch, vendor_candidates)
 
 # The family in town: a vendor in reach, nothing else built yet.
@@ -22,6 +22,16 @@ class BagPressureTests(unittest.TestCase):
     def test_full_family_triggers_town_run(self):
         self.assertTrue(town_run_needed(44, 44))
         self.assertFalse(town_run_needed(10, 44))
+
+    def test_any_family_member_at_the_floor_triggers_town_run(self):
+        self.assertTrue(family_town_run_needed({"Grug": 0, "Ugga": 10}))
+        self.assertTrue(family_town_run_needed({"Grug": 2}))
+        self.assertFalse(family_town_run_needed({"Grug": 3, "Ugga": 10}))
+
+    def test_unknown_family_capacity_does_not_trigger_a_blind_trip(self):
+        self.assertFalse(family_town_run_needed({}))
+        self.assertFalse(family_town_run_needed({"Grug": -1}))
+        self.assertFalse(family_town_run_needed({"Grug": None}))
 
     def test_never_sells_a_rare(self):
         self.assertFalse(sellable(ItemForSale(quality=3, sell_price=500)))
