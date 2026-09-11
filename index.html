@@ -633,6 +633,110 @@
      of which are elsewhere in this file. */
   :root { --gold:#e5b53b; }
 
+
+  /* --- what the guild still needs before it can raid (infra#3508) --------
+     A GOAL, EVERY WAY OF FINISHING IT, AND EVERY LINE OF EVERY ONE. That is
+     three levels of list on a phone: six goals, up to three recipes under a
+     goal, and up to ten reagents under a recipe, each of which may carry a
+     recipe of its own. Drawn flat it is a wall nobody reads.
+
+     SO IT IS <details> INSIDE <details>. Collapsed, a goal is its name, the
+     module's count sentence and three or four chips: three lines, and six of
+     them is a screen. Opened, it is who is short and what would fix it, with
+     each recipe still shut until somebody asks for the shopping list. The
+     card itself is .chr-card, which the Chronicle and the dungeon plan
+     already share, so a raid goal reads as the same kind of object as a
+     dungeon.
+
+     NO ITEM QUALITY COLOURS IN HERE, AND THAT IS DELIBERATE TWICE OVER.
+     icons.json freezes icons for displayids the client marks EQUIPPABLE, and
+     a flask has no inventory type, so there is no icon to draw for anything
+     on this page. And a quality colour is designed for the dark ground the
+     Armory and the Bags tab override their tokens to keep: #1eff00 on a white
+     card is about 1.3:1, which is the bug test_theme exists to stop. Every
+     item here is a NAME in the body colour, and the sentence beside it
+     carries the meaning the colour would have.
+
+     NOTHING IN HERE SETS A WIDTH IN PIXELS and nothing scrolls sideways. The
+     chips wrap, the long item names break, and the only grid is the strip the
+     shared furniture already owns.
+
+     It sits in the one gap between the shared furniture above and the first
+     view window below: the item tooltip's window starts at its own banner,
+     and the dungeon plan's and the console's are below that again, so this
+     cannot be taken hostage by one of them or sweep one of them in. */
+  #raid { display:none; padding:.9rem 1rem 1.2rem; }
+  #rgroster, #rgraid, #rgorder, #rgothers, #rgbasis { max-width:72ch; }
+  #rgstrip { margin:.9rem 0 .2rem; }
+  #rglist, #rgotherlist { display:grid; gap:10px; }
+  .rg-card > summary { list-style:none; cursor:pointer; display:grid;
+                       grid-template-columns:minmax(0, 1fr);
+                       gap:.15rem; }
+  /* Safari draws its own triangle from a pseudo-element `list-style` does
+     not reach. */
+  .rg-card > summary::-webkit-details-marker { display:none; }
+  .rg-card > summary:focus-visible { outline:2px solid var(--accent);
+                                     outline-offset:3px; }
+  .rg-name { font-family:var(--display); font-weight:800; font-stretch:125%;
+             font-size:1.14rem; line-height:1.2; letter-spacing:-.01em;
+             color:var(--on-card); overflow-wrap:anywhere; }
+  .rg-sum { margin-top:4px; color:var(--on-card-dim); font-size:13px;
+            line-height:1.5; overflow-wrap:anywhere; }
+  .rg-chips { display:flex; gap:6px; flex-wrap:wrap; margin-top:7px; }
+  /* The same three tones the dungeon plan paints, and every one of them is a
+     ROLE the module named rather than a colour it chose. An unknown tone
+     draws in the body colour instead of vanishing off the page. */
+  .rg-chips .chip { border:1px solid var(--card-line); border-radius:999px;
+                    padding:2px .6rem; font-size:12px;
+                    color:var(--on-card-dim); }
+  .rg-chips .chip.up { border-color:var(--accent-text);
+                       color:var(--accent-text); }
+  .rg-chips .chip.no { border-color:var(--caution-text);
+                       color:var(--caution-text); }
+  .rg-chips .chip.unsure { border-style:dashed; }
+  .rg-body { margin-top:.7rem; }
+  .rg-note { margin-top:6px; font-size:12px; line-height:1.55;
+             color:var(--on-card-dim); overflow-wrap:anywhere; }
+  .rg-sect { margin-top:.9rem; font-family:var(--mono); font-size:10px;
+             letter-spacing:.14em; text-transform:uppercase;
+             color:var(--on-card-dim); }
+  /* One member, one product, one reagent: the rule down the left is what
+     keeps five of them under one heading from reading as five findings. */
+  .rg-row { margin-top:.35rem; padding:.1rem 0 .1rem .75rem;
+            border-left:2px solid var(--card-line); font-size:13px;
+            line-height:1.5; color:var(--on-card); overflow-wrap:anywhere; }
+  .rg-row .rg-note { margin-top:2px; }
+  /* A BLOCKER IS THE MOST USEFUL LINE ON THIS PAGE, so it is the one thing
+     drawn in a warning role rather than the body one. It is still a role and
+     not a pigment: the stylesheet decides what a warning looks like on each
+     of the two grounds. */
+  .rg-block { margin-top:.35rem; padding:.1rem 0 .1rem .75rem;
+              border-left:2px solid var(--caution-text);
+              color:var(--caution-text); font-size:12.5px; line-height:1.5;
+              overflow-wrap:anywhere; }
+  /* An UNKNOWN is not a blocker and must not look like one. Same shape, body
+     colour, and a dashed rule: the page saying "I cannot answer this" rather
+     than "this is in your way". */
+  .rg-unknown { margin-top:.35rem; padding:.1rem 0 .1rem .75rem;
+                border-left:2px dashed var(--card-line);
+                color:var(--on-card-dim); font-size:12.5px; line-height:1.5;
+                overflow-wrap:anywhere; }
+  /* A recipe is shut inside an already-open goal. Somebody reading "22 short"
+     does not always want ten reagent lines with it. */
+  .rg-recipe { margin-top:.6rem; border:1px solid var(--card-line);
+               border-radius:10px; padding:.55rem .7rem; }
+  .rg-recipe > summary { list-style:none; cursor:pointer;
+                         font-size:13px; color:var(--on-card);
+                         overflow-wrap:anywhere; }
+  .rg-recipe > summary::-webkit-details-marker { display:none; }
+  .rg-recipe > summary:focus-visible { outline:2px solid var(--accent);
+                                       outline-offset:3px; }
+  /* The second craft level, indented once more so a reagent that is itself
+     made reads as under its reagent rather than beside it. */
+  .rg-sub { margin-left:.75rem; }
+  .rg-other { font-size:13px; line-height:1.5; color:var(--on-card);
+              overflow-wrap:anywhere; }
+
   /* --- the item tooltip, on every gear name (infra#3501) -----------------
      WHAT THIS REPLACED, and it is the whole reason it exists. A gear name
      used to be an anchor to the item's page on wowhead.com. On a desktop
@@ -2871,6 +2975,26 @@
   <div id="dgnlist"></div>
   <p id="dgnbasis" class="chr-body"></p>
 </section>
+<!-- WHAT THE GUILD STILL NEEDS BEFORE IT CAN RAID (infra#3508). The operator
+     asked for "resource goal tracking for like molten core mats like fire res
+     etc, all the amazing flasks", and nothing here could answer any part of
+     it. Every sentence, every chip and the ORDER of the list come from
+     raidgoals.py; this markup holds no judgement of its own, and the footer
+     that separates what this realm's database said from what a community of
+     players agreed on is the most important thing on the page. -->
+<section id="raid">
+  <div id="rghead" class="ds-head">reaching the world...</div>
+  <p id="rgroster" class="chr-body"></p>
+  <p id="rgraid" class="chr-body"></p>
+  <div id="rgstrip" class="ds-strip"></div>
+  <div class="ds-rule"><span class="ix">01</span><span class="ln"></span><span class="lb">before molten core</span></div>
+  <p id="rgorder" class="chr-body"></p>
+  <div id="rglist"></div>
+  <div class="ds-rule"><span class="ix">02</span><span class="ln"></span><span class="lb">the rest of the tier</span></div>
+  <p id="rgothers" class="chr-body"></p>
+  <div id="rgotherlist"></div>
+  <p id="rgbasis" class="chr-body"></p>
+</section>
 <!-- WHAT THE GUILD CAN MAKE (infra#3507). The operator asked for a guild
      profession view and, in the same breath, for farm runs for the recipes it
      is missing. So this is both halves: who holds which trade and how far, and
@@ -3078,6 +3202,11 @@ const CHRONICLE_VIEW = "chronicle";
 const COUNCIL_VIEW = "council";
 const EYE_VIEW = "eye";
 const DUNGEONS_VIEW = "dungeons";
+// RAID, and it is the tier above the one above: the Dungeons tab answers
+// which five-man is worth the walk, and this answers what is still missing
+// before forty of them can walk into Molten Core. Same subject, one rung up,
+// so it sits next to it in the tab strip.
+const RAID_VIEW = "raid";
 const TRADES_VIEW = "trades";
 const DECREE_VIEW = "decree";
 const CONTINENT_ORDER = ["0", "1", "530", "571", "quelthalas", "azuremyst"];
@@ -3157,6 +3286,16 @@ async function loadZones() {
   gb.dataset.view = DUNGEONS_VIEW;
   gb.onclick = () => showView(DUNGEONS_VIEW);
   tabs.appendChild(gb);
+  // Seventh, straight after the dungeons it comes after in the game: that tab
+  // says which five-man is worth the walk, this says what the guild still has
+  // to farm before the raid above them is worth attempting. It reads about the
+  // family and what they hold, so it belongs with the tabs above rather than
+  // with the two below that ask about the realm.
+  const rb = document.createElement("button");
+  rb.textContent = "Raid";
+  rb.dataset.view = RAID_VIEW;
+  rb.onclick = () => showView(RAID_VIEW);
+  tabs.appendChild(rb);
   // Seventh, straight after the dungeon plan, because it is the same kind of
   // question about the same five: that one says which place is worth walking
   // to for a drop, this one says which place is worth walking to for a recipe
@@ -5492,6 +5631,7 @@ function showView(v) {
   const isCouncil = v === COUNCIL_VIEW;
   const isEye = v === EYE_VIEW;
   const isDgn = v === DUNGEONS_VIEW;
+  const isRaid = v === RAID_VIEW;
   const isTrd = v === TRADES_VIEW;
   const isDec = v === DECREE_VIEW;
   fsection.style.display = isFam ? "block" : "none";
@@ -5502,6 +5642,7 @@ function showView(v) {
   cnsection.style.display = isCouncil ? "block" : "none";
   eyesection.style.display = isEye ? "block" : "none";
   dgnsection.style.display = isDgn ? "block" : "none";
+  rgsection.style.display = isRaid ? "block" : "none";
   gcrsection.style.display = isTrd ? "block" : "none";
   dcrSection.style.display = isDec ? "block" : "none";
   // Every non-map view hides the canvas and its legend. This used to read
@@ -5604,6 +5745,16 @@ function showView(v) {
     pollDungeons();
     return;
   }
+  if (isRaid) {
+    // The same treatment and the same reasons: a read with no player and no
+    // heartbeat of its own, and it fetches on open rather than waiting for
+    // the timer, because a minute of empty goal list under a heading is
+    // indistinguishable from a broken one.
+    closePanel();
+    stopBroadcasts();
+    pollRaid();
+    return;
+  }
   if (isDec) {
     // The same treatment, for the same two reasons: the panel is a map thing
     // that would keep a second player alive off screen, and thirty seconds
@@ -5662,6 +5813,205 @@ setInterval(refreshFrame, 5000);  // and so does their own screen
 setInterval(refreshWatch, 5000);
 setInterval(render, 200);  // combat pulse
 window.addEventListener("resize", render);
+
+// --- what the guild still needs before it can raid (infra#3508) -------------
+//
+// THE QUESTION THIS SITE COULD NOT ANSWER AT ALL. The Bags tab says what one
+// character is carrying and the bank plan says what should move between them.
+// Neither knows what a raid asks for, so "are we ready for Molten Core" had no
+// page, and the operator asked for one in those words.
+//
+// EVERY SENTENCE HERE ARRIVES WRITTEN, exactly as the recap's and the dungeon
+// plan's do. The count on each goal, the working behind every total, who is
+// short and by how much, what blocks a recipe, where a reagent comes from on
+// this realm, and the admission that a reagent list is a convention rather
+// than a measurement are all raidgoals.py's words. This block turns a TONE
+// NAME into a class and prints strings, and the only mapping it owns is which
+// of three tones a chip is drawn in, which is a fact about the stylesheet.
+//
+// AND IT PRINTS THE RULE IT WAS ORDERED BY. A list in an order is read as a
+// finding whether or not anybody meant it to be, so `p.order` sits above the
+// list and the basis sits under it. Neither is optional furniture, and the
+// basis least of all: this is the one view on the site carrying numbers the
+// world database did not hand over.
+//
+// It sits in the gap between the map's own intervals above and the item
+// tooltip's banner below, which is the one window no tab suite claims: the
+// routing slice ends at setInterval(pollFamily, the tooltip's, the dungeon
+// plan's and the console's all start at their own banners, and the Armory's
+// runs from its banner to the end of the script. `el` is declared further
+// down the same script and is read at poll time, long after the script has
+// finished evaluating, which is the arrangement showView already has with the
+// Armory's and the console's consts.
+const rgsection = document.getElementById("raid");
+const rghead = document.getElementById("rghead");
+const rgroster = document.getElementById("rgroster");
+const rgraid = document.getElementById("rgraid");
+const rgstrip = document.getElementById("rgstrip");
+const rgorder = document.getElementById("rgorder");
+const rglist = document.getElementById("rglist");
+const rgothers = document.getElementById("rgothers");
+const rgotherlist = document.getElementById("rgotherlist");
+const rgbasis = document.getElementById("rgbasis");
+
+// An empty string is a real answer from the module and means "there is
+// nothing to say here", so it draws nothing rather than an empty line.
+function rgNote(parent, text, cls) {
+  if (text) parent.appendChild(el("div", cls || "rg-note", text));
+}
+
+function rgChips(parent, chips) {
+  const box = el("div", "rg-chips");
+  for (const chip of chips) {
+    // `tone` is a ROLE NAME the module chose, never a colour and never a state
+    // worked out here. An unknown tone draws in the body colour rather than
+    // being dropped, so a new one shows up as a plain chip instead of
+    // vanishing off the page.
+    box.appendChild(el("span", "chip" + (chip.tone ? " " + chip.tone : ""),
+                       chip.text));
+  }
+  parent.appendChild(box);
+}
+
+// ONE REAGENT, AND WHATEVER IS UNDER IT. A reagent that is itself a craft
+// carries its own lines, indented once, because a shopping list that said
+// "three Stonescale Oil" and stopped would send somebody looking for a thing
+// nothing on this realm drops. Both sentences are the module's.
+function rgReagent(reagent) {
+  const row = el("div", "rg-row");
+  row.appendChild(el("div", "", reagent.line));
+  rgNote(row, reagent.source);
+  rgNote(row, reagent.made_line);
+  for (const sub of reagent.made) {
+    const inner = rgReagent(sub);
+    inner.className = "rg-row rg-sub";
+    row.appendChild(inner);
+  }
+  return row;
+}
+
+// ONE WAY OF MAKING UP A SHORTFALL, shut until somebody asks. The summary is
+// the module's sentence about what this recipe would cost; the body is who
+// could cast it, what skill this realm asks for, everything in the way, and
+// the lines themselves.
+function rgRecipe(recipe) {
+  const box = el("details", "rg-recipe");
+  const head = document.createElement("summary");
+  head.textContent = recipe.line;
+  box.appendChild(head);
+  rgNote(box, recipe.who_line);
+  rgNote(box, recipe.rank_line);
+  // TWO LISTS AND TWO TONES, because they are two different admissions. A
+  // BLOCKER is something the module knows stops this craft today; an UNKNOWN
+  // is something it cannot answer, and painting the second like the first
+  // would report the page's own blind spot as the guild's problem. Which
+  // reason is which is the module's decision, not this block's.
+  for (const reason of recipe.blocked) rgNote(box, reason, "rg-block");
+  for (const reason of recipe.unknown) rgNote(box, reason, "rg-unknown");
+  for (const reagent of recipe.reagents) box.appendChild(rgReagent(reagent));
+  return box;
+}
+
+// ONE GOAL, COLLAPSED BY DEFAULT. The summary carries the name, the module's
+// count sentence and the chips; the body carries the working behind the total,
+// who is short, what is actually held, and every recipe.
+function rgGoal(goal) {
+  const card = el("details", "chr-card rg-card");
+  const head = document.createElement("summary");
+  head.appendChild(el("div", "rg-name", goal.name));
+  head.appendChild(el("div", "rg-sum", goal.line));
+  rgChips(head, goal.chips);
+  card.appendChild(head);
+  const body = el("div", "rg-body");
+  rgNote(body, goal.need_line);
+  rgNote(body, goal.recipes_line);
+  if (goal.members.length) {
+    body.appendChild(el("div", "rg-sect", "per member"));
+    for (const m of goal.members) body.appendChild(el("div", "rg-row", m.line));
+  }
+  if (goal.products.length) {
+    body.appendChild(el("div", "rg-sect", "what is held"));
+    for (const p of goal.products) body.appendChild(el("div", "rg-row", p.line));
+  }
+  if (goal.recipes.length) {
+    body.appendChild(el("div", "rg-sect", "how it would be made"));
+    for (const r of goal.recipes) body.appendChild(rgRecipe(r));
+  }
+  card.appendChild(body);
+  return card;
+}
+
+function rgOther(raid) {
+  const row = el("div", "chr-card rg-other");
+  row.appendChild(el("div", "rg-name", raid.name));
+  row.appendChild(el("div", "rg-sum", raid.line));
+  return row;
+}
+
+function rgRender(p) {
+  rghead.textContent = p.line;
+  rghead.className = "ds-head";
+  rgroster.textContent = p.roster_line;
+  rgraid.textContent = p.raid_line;
+  rgstrip.replaceChildren();
+  for (const tile of p.strip) {
+    const box = el("div", "ds-tile");
+    box.appendChild(el("span", "v", tile.value));
+    box.appendChild(el("span", "k", tile.label));
+    rgstrip.appendChild(box);
+  }
+  rgorder.textContent = p.order;
+  rglist.replaceChildren();
+  for (const goal of p.goals) rglist.appendChild(rgGoal(goal));
+  rgothers.textContent = p.others_line;
+  rgotherlist.replaceChildren();
+  for (const raid of p.others) rgotherlist.appendChild(rgOther(raid));
+  // The basis describes how a list was built, so it must not stand over one
+  // that was not built at all.
+  rgbasis.textContent = p.empty_note || p.basis;
+}
+
+// ONE PULL AT A TIME, AND A CLOCK ON IT, the same one guard the dungeon plan
+// carries and for the same two reasons. This poll is started from two places -
+// showView on the way into the tab, and the interval below - so two can be in
+// flight at once and nothing orders their replies. A flag alone would turn
+// that into a worse failure: a world server that accepts the connection and
+// never answers leaves the promise pending for ever, the catch never runs, the
+// flag is never cleared, and the tab sits on "reaching the world..." with no
+// later poll able to replace it. The timeout is what gives the flag something
+// to be released by.
+let rgPulling = false;
+
+async function pollRaid() {
+  if (view !== RAID_VIEW || rgPulling) return;
+  rgPulling = true;
+  try {
+    const r = await fetch(u("/api/raidgoals"),
+                          {signal: AbortSignal.timeout(20000)});
+    if (!r.ok) throw new Error(r.status);
+    rgRender(await r.json());
+  } catch (e) {
+    // Whatever is drawn stays drawn, like every other poll on this page. A
+    // blanked list here reads as "there is nothing left to farm", which is
+    // the one claim this view must never make by accident.
+    rghead.textContent = "the world is unreachable - this may be stale";
+    rghead.className = "ds-head alarm";
+  } finally {
+    // FINALLY, so a throw on the way through releases it too. Cleared at the
+    // end of the try it would be skipped by the very failure that most needs
+    // the next poll to be allowed to run.
+    rgPulling = false;
+  }
+}
+
+// A MINUTE, and for the same reason the dungeon plan's is a minute: this
+// answers what is left to farm, and that answer moves when somebody picks a
+// herb or learns a recipe, not between two pulls. It is also a wide read -
+// every roster member's whole inventory, plus three source tables - so it runs
+// only while the tab is open, and the guard at the top of pollRaid is what
+// makes that true even for the call showView makes on the way in.
+setInterval(() => { if (view === RAID_VIEW) pollRaid(); }, 60000);
+
 
 // --- the item tooltip, on every gear name (infra#3501) -------------------
 //
@@ -9040,9 +9390,8 @@ function adoptContinent() {
 // The map is still separate below, because it is the one view whose hash
 // carries state (which continent) and so needs more than a name.
 const HASH_VIEWS = [FAMILY_VIEW, WATCH_VIEW, ARMORY_VIEW, BAGS_VIEW,
-                    CHRONICLE_VIEW, DUNGEONS_VIEW, TRADES_VIEW,
-                    COUNCIL_VIEW, EYE_VIEW,
-                    DECREE_VIEW];
+                    CHRONICLE_VIEW, DUNGEONS_VIEW, RAID_VIEW, TRADES_VIEW,
+                    COUNCIL_VIEW, EYE_VIEW, DECREE_VIEW];
 
 // ADDRESSES A VIEW USED TO HAVE. The Achievements tab was renamed to the
 // Chronicle in its redesign, and every link anybody has already sent or

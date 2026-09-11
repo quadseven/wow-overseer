@@ -35,6 +35,7 @@ import modelviewer
 import needs
 import partystatus
 import questlog
+import raidgoals
 import recap
 import realm
 import standing
@@ -1271,6 +1272,236 @@ def _fetch_eye() -> dict:
             "realm_rows": realm_rows, "guild_rows": guild_rows}
 
 
+# --- what the guild still needs before it can raid (infra#3508) --------------
+#
+# TEN READS, NONE OF THEM PER GOAL AND NONE OF THEM WHOLE-WORLD. This view
+# crosses a roster against a plan, and the shape that kills it is a query per
+# reagent: twenty-seven items times three source tables is eighty round trips
+# on an endpoint with no auth in front of it. Every read below is bound either
+# to the roster or to the entry list `raidgoals.plan_item_names` produced, and
+# nothing in raidgoals.py goes back to the database.
+#
+# THE ENTRY LIST IS THE MODULE'S AND NOT THIS FILE'S, exactly as the dungeon
+# plan's map list is. The plan is written in item NAMES (raidgoals says why at
+# length), so the names are bound first, the realm hands back the entries it
+# actually has, and the three source reads bind those. A name this realm does
+# not carry simply produces no entry, and the page reports it by name rather
+# than counting it as zero.
+#
+# GUARDED FOR BOTH 1146 AND 1054 like every other read in this file. Two of
+# these tables are ones nothing else here has ever read - `trainer_spell` and
+# `gameobject_loot_template` - so they are exactly the shape of risk infra#3172
+# and infra#2846 were: the two realms this image serves run different
+# worldserver builds, and a missing table must thin this view rather than 503
+# a tab that has nothing to do with it.
+#
+# WHO IS IN THE GUILD, WHICH IS THE WHOLE POINT OF ASKING. The goals are per
+# member of the guild and there is no guild yet, so this reads the members of
+# whichever guild the FAMILY are in rather than every guild on the realm: the
+# random population has guilds of its own, and counting those would be a raid
+# group nobody is in. An empty result is "no guild", and raidgoals falls back
+# to the family and says on the page that it did.
+_RAID_GUILD = (
+    "SELECT c.name, c.level, g.name AS guild_name, g.guildid "
+    "FROM characters c "
+    "JOIN guild_member gm ON gm.guid = c.guid "
+    "JOIN guild g ON g.guildid = gm.guildid "
+    "WHERE g.guildid IN (SELECT gm2.guildid FROM guild_member gm2 "
+    "JOIN characters c2 ON c2.guid = gm2.guid WHERE c2.name IN ({holes}))"
+)
+# BY NAME, AND THAT IS THE DESIGN RATHER THAN A SHORTCUT. raidgoals.py carries
+# a hand-written plan it cannot check against this realm, so the plan names
+# items and the realm resolves them: a wrong entry id would be a silent lie,
+# and a wrong name is a row that does not come back and a sentence that says
+# which name failed.
+_RAID_ITEMS = (
+    "SELECT entry, name AS item_name, Quality AS quality, "
+    "ItemLevel AS item_level FROM acore_world.item_template "
+    "WHERE name IN ({holes})"
+)
+# THE SKILL A RECIPE NEEDS IS MEASURABLE AND THE REAGENTS ARE NOT, which is
+# the split this whole view is built around. bag_economy.py proved this join
+# against this realm: the item that TEACHES a craft carries the craft's spell
+# in `spellid_2` and the rank it needs in `RequiredSkillRank`, right there on
+# its own row.
+#
+# `rank` IS RESERVED IN MySQL 8, so the alias is `skill_rank`. Selecting it as
+# `rank` is a syntax error rather than a wrong answer, which is the better of
+# the two failures but would still have taken the tab down on a realm running
+# a newer server than the one it was written on.
+_RAID_RECIPES = (
+    "SELECT entry, name AS item_name, spellid_2 AS teaches, "
+    "RequiredSkill AS skill, RequiredSkillRank AS skill_rank "
+    "FROM acore_world.item_template WHERE spellid_2 IN ({holes})"
+)
+# The other place a rank is stated: a craft taught by a trainer has no recipe
+# item to carry it. Either, both or neither may answer for a given craft, and
+# raidgoals treats neither answering as an ABSENT rank rather than a zero,
+# because zero reads as "anybody can make it".
+_RAID_TRAINER = (
+    "SELECT SpellId AS spell, ReqSkillRank AS skill_rank "
+    "FROM acore_world.trainer_spell WHERE SpellId IN ({holes})"
+)
+_RAID_CHARS = "SELECT name, level, class FROM characters WHERE name IN ({holes})"
+# WHICH CRAFTS ARE ACTUALLY LEARNED, bound to the plan's own spells. Unbounded
+# this is every spell every character knows, which is thousands of rows to
+# answer a question about eight.
+_RAID_SPELLS = (
+    "SELECT c.name, s.spell FROM characters c "
+    "JOIN character_spell s ON s.guid = c.guid "
+    "WHERE c.name IN ({holes}) AND s.spell IN ({spells})"
+)
+# THE BAGS TAB'S OWN READ, COLUMN FOR COLUMN, because bank.members_from_rows
+# is what places a stack into bags or bank and it reads exactly these keys. A
+# thinner read here would mean a second answer to "where is that stack", free
+# to disagree with the Bags tab about the same stack on the same evening.
+#
+# UNFILTERED BY SLOT ON PURPOSE: the placement is a two-pass job over
+# container guids, so the bag rows have to arrive with the items in them.
+_RAID_HOLDINGS = (
+    "SELECT c.name AS holder, c.level, ii.guid AS item_guid, ii.count, "
+    "it.name, it.Quality AS quality, it.SellPrice AS sell_price, "
+    "it.RequiredLevel AS required_level, it.bonding, it.class AS item_class, "
+    "it.ContainerSlots AS container_slots, ci.bag, ci.slot "
+    "FROM character_inventory ci "
+    "JOIN characters c ON c.guid = ci.guid "
+    "JOIN item_instance ii ON ii.guid = ci.item "
+    "JOIN acore_world.item_template it ON it.entry = ii.itemEntry "
+    "WHERE c.name IN ({holes})"
+)
+# THE ONE MEASURED HALF OF THE RESISTANCE GOAL. `fire_res` is a column on
+# item_template and the paper doll is bag 0 below the first bag position, so
+# what somebody is actually wearing sums straight out of this. No other
+# resistance is selected: the page asks about Molten Core, which is a fire
+# raid, and five unread columns would invite the five sentences this view has
+# not earned.
+_RAID_WORN = (
+    "SELECT c.name, it.fire_res FROM characters c "
+    "JOIN character_inventory ci ON ci.guid = c.guid AND ci.bag = 0 "
+    "AND ci.slot < %s JOIN item_instance ii ON ii.guid = ci.item "
+    "JOIN acore_world.item_template it ON it.entry = ii.itemEntry "
+    "WHERE c.name IN ({holes})"
+)
+# WHERE A REAGENT COMES FROM, AS THIS REALM ANSWERS IT, and the three tables
+# are three different answers rather than one with a flag. A herb is a node, a
+# vial is a vendor, an elemental's mote is a drop, and a reagent in none of the
+# three is one NOTHING THIS PAGE READS accounts for - which is not the same as
+# one that cannot be got, and the page says so in those words.
+#
+# DISTINCT is load bearing on all three: a vial sold by ninety vendors is
+# ninety rows and one answer.
+# `Reference = 0` ON BOTH LOOT READS, and it is a correctness filter rather
+# than a narrowing. A loot row with a Reference does NOT hold an item entry in
+# its `Item` column, it holds a reference id into reference_loot_template, so
+# matching `Item IN (...)` against one reads a reference number as an item
+# number and reports that a herb drops off a creature because some unrelated
+# reference happens to share its entry. The loot board and the dungeon plan
+# both carry this filter for the same reason. What lives BEHIND those
+# references is not followed here either, so a reagent that only drops through
+# one is reported as unaccounted rather than as dropped.
+_RAID_VENDOR = ("SELECT DISTINCT item FROM acore_world.npc_vendor "
+                "WHERE item IN ({holes})")
+_RAID_CREATURE = ("SELECT DISTINCT Item AS item FROM "
+                  "acore_world.creature_loot_template "
+                  "WHERE Reference = 0 AND Item IN ({holes})")
+_RAID_OBJECT = ("SELECT DISTINCT Item AS item FROM "
+                "acore_world.gameobject_loot_template "
+                "WHERE Reference = 0 AND Item IN ({holes})")
+
+
+def _fetch_raidgoals() -> dict:
+    """Everything the raid-readiness view counts, on one connection.
+
+    TWO PHASES AND NOT TWO CONNECTIONS. The three source reads bind ITEM
+    ENTRIES, and the entries are whatever the realm just returned for the
+    plan's names, so they cannot be bound until the item read has answered.
+    Both phases share one cursor.
+
+    Names come from bonds via family.roster() and never from the request,
+    exactly as /api/armory and /api/family refuse a name. The guild read then
+    widens that to whoever else is in their guild, which is how a page written
+    for five stops being a page written for five.
+
+    `_wide_guarded` and the roster read this borrows are defined with the loot
+    board's below, and this section sits ABOVE that one deliberately. The
+    recap suite slices its own fetch window from that function to the
+    current-goal banner and forbids an unguarded read anywhere inside it, so a
+    section dropped in there would be asserted about by a suite that knows
+    nothing of it - and SPELLING THAT FUNCTION'S NAME here would move the
+    START of their window into this docstring, which is a subtler version of
+    the same fault and is how this paragraph came to be worded around it. The
+    dungeon plan's fetch carries the same warning for the same reason.
+    """
+    names = family.roster()
+    holes = ", ".join(["%s"] * len(names))
+    plan_names = raidgoals.plan_item_names()
+    name_holes = ", ".join(["%s"] * len(plan_names))
+    spells = raidgoals.craft_spells()
+    spell_holes = ", ".join(["%s"] * len(spells))
+    conn = _connect()
+    try:
+        with conn.cursor() as cur:
+            # S608 throughout: every `holes` is a run of placeholders sized by
+            # a list this process owns, and every VALUE is still bound by the
+            # driver.
+            guild = _wide_guarded(cur, _RAID_GUILD.format(holes=holes),  # noqa: S608
+                                  tuple(names), "", "guild_member")
+            # WHO THE REST OF THE READS ARE ABOUT. The guild widens the roster
+            # and every read below binds the WIDER list, or a guild of forty
+            # would be counted against five characters' bags.
+            roster = sorted({row["name"] for row in guild if row.get("name")}
+                            | set(names))
+            rholes = ", ".join(["%s"] * len(roster))
+            items = _wide_guarded(cur, _RAID_ITEMS.format(holes=name_holes),  # noqa: S608
+                                  tuple(plan_names), "", "item_template")
+            recipes = _wide_guarded(
+                cur, _RAID_RECIPES.format(holes=spell_holes),  # noqa: S608
+                tuple(spells), "", "item_template recipes")
+            trainer = _wide_guarded(
+                cur, _RAID_TRAINER.format(holes=spell_holes),  # noqa: S608
+                tuple(spells), "", "trainer_spell")
+            chars = _wide_guarded(cur, _RAID_CHARS.format(holes=rholes),  # noqa: S608
+                                  tuple(roster), "", "characters")
+            skills = _wide_guarded(cur, _RECAP_SKILLS.format(holes=rholes),  # noqa: S608
+                                   tuple(roster), "", "character_skills")
+            known = _wide_guarded(
+                cur,
+                _RAID_SPELLS.format(holes=rholes, spells=spell_holes),  # noqa: S608
+                (*roster, *spells), "", "character_spell")
+            holdings = _wide_guarded(
+                cur, _RAID_HOLDINGS.format(holes=rholes),  # noqa: S608
+                tuple(roster), "", "character_inventory")
+            worn = _wide_guarded(cur, _RAID_WORN.format(holes=rholes),  # noqa: S608
+                                 (len(armory.EQUIPPED_SLOTS), *roster), "",
+                                 "character_inventory worn")
+            # NO ENTRIES MEANS NOTHING TO BIND, and `IN ()` is a syntax error
+            # rather than an empty result. Every reagent then reports that
+            # this realm carries no item under its name, which is what
+            # happened.
+            entries = sorted({int(row["entry"]) for row in items
+                              if row.get("entry") is not None})
+            vendor: list = []
+            creature: list = []
+            objects: list = []
+            if entries:
+                eholes = ", ".join(["%s"] * len(entries))
+                vendor = _wide_guarded(
+                    cur, _RAID_VENDOR.format(holes=eholes),  # noqa: S608
+                    tuple(entries), "", "npc_vendor")
+                creature = _wide_guarded(
+                    cur, _RAID_CREATURE.format(holes=eholes),  # noqa: S608
+                    tuple(entries), "", "creature_loot_template")
+                objects = _wide_guarded(
+                    cur, _RAID_OBJECT.format(holes=eholes),  # noqa: S608
+                    tuple(entries), "", "gameobject_loot_template")
+    finally:
+        conn.close()
+    return {"item_rows": items, "recipe_rows": recipes,
+            "trainer_rows": trainer, "char_rows": chars,
+            "skill_rows": skills, "spell_rows": known,
+            "holding_rows": holdings, "worn_rows": worn,
+            "vendor_rows": vendor, "creature_rows": creature,
+            "object_rows": objects, "guild_rows": guild}
 # --- what the guild can make, and what it cannot (infra#3507) ---------------
 #
 # TEN WHOLE-SET READS IN TWO PHASES, AND THAT IS THE WHOLE COST STORY. This
@@ -2631,6 +2862,27 @@ class Handler(BaseHTTPRequestHandler):
             log.exception("questlog query failed")
             self._send(503, "application/json", b'{"error": "world unreachable"}')
 
+    def _raidgoals(self, _query: dict) -> None:
+        """GET /api/raidgoals - what the guild still needs before it can raid.
+
+        NO PARAMETERS AT ALL, and that is the shape of the view rather than an
+        omission: it asks one question about one raid for the whole roster, so
+        there is nothing for a caller to steer. WHO the roster is belongs to
+        bonds and to the world's own guild tables, exactly as /api/armory and
+        /api/family refuse a name.
+        """
+        try:
+            payload = raidgoals.build_raidgoals(**_fetch_raidgoals(),
+                                                roster=family.roster())
+            self._send(200, "application/json", json.dumps(payload).encode())
+        except Exception:
+            # Same contract as every other poll: the tab keeps what it has
+            # drawn and says it may be stale. A blanked list here would read
+            # as "there is nothing left to farm", which is the one claim this
+            # view must never make by accident.
+            log.exception("raid goals query failed")
+            self._send(503, "application/json", b'{"error": "world unreachable"}')
+
     def _achievements(self, query: dict) -> None:
         """GET /api/achievements - what the family has done, newest first.
 
@@ -3346,6 +3598,7 @@ class Handler(BaseHTTPRequestHandler):
         "/api/needs": _needs,
         "/api/achievements": _achievements,
         "/api/dungeons": _dungeons,
+        "/api/raidgoals": _raidgoals,
         "/api/trades": _trades,
         "/api/recap": _recap,
         "/api/council": _council,
