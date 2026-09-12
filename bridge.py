@@ -1069,10 +1069,21 @@ def _fetch_council_members(names: list) -> list:
 # training. professions.BLOCKERS carries the citations for what remains, and
 # they are logged once per plan so the reason sits beside the plan.
 
+# Primary AND secondary, unlike _TRADE_SKILL_IDS above (which the council's
+# trade-count deliberately keeps primary-only, per its own comment). craft.py
+# (infra#2757's Cooking/First Aid slice) needs First Aid/Cooking values to
+# aim `job='craft'` at a secondary recipe - a second constant rather than
+# widening _TRADE_SKILL_IDS itself, so the council's count is untouched.
+_SECONDARY_SKILL_IDS = ",".join(
+    str(goals.SKILL_IDS[name]) for name in sorted(professions.SECONDARY)
+    if name in goals.SKILL_IDS
+)
+
 _TRADE_SKILL_SQL = (
     "SELECT c.name, k.skill, k.value "
     "FROM characters c JOIN character_skills k ON k.guid = c.guid "
-    "WHERE c.name IN (%s) AND k.skill IN (" + _TRADE_SKILL_IDS + ")"
+    "WHERE c.name IN (%s) AND k.skill IN ("
+    + _TRADE_SKILL_IDS + "," + _SECONDARY_SKILL_IDS + ")"
 )
 
 _TRADE_CLASS_SQL = "SELECT name, class FROM characters WHERE name IN (%s)"
@@ -1115,10 +1126,11 @@ def _ensure_trade_store() -> None:
 def _fetch_trade_skills(names: list) -> dict:
     """name -> {profession: value}, PRIVATE to its owner.
 
-    Professions only. `character_skills` also holds languages, Defense and
-    every weapon skill, and handing those to a module that reasons about
-    profession slots is how `trades` came to mean nothing (see
-    _TRADE_SKILL_IDS).
+    Professions only - primary AND secondary (First Aid, Cooking, Fishing).
+    `character_skills` also holds languages, Defense and every weapon skill,
+    and handing those to a module that reasons about profession slots is how
+    `trades` came to mean nothing (see _TRADE_SKILL_IDS, which the council's
+    own primary-only trade count still uses unchanged).
 
     READ-ONLY, and that is the whole contract of this function. It is the only
     place in the bridge that touches character_skills at all.

@@ -95,6 +95,67 @@ class CraftErrandTests(unittest.TestCase):
         self.assertEqual(spell_id, 0)
 
 
+class FirstAidAndCookingTests(unittest.TestCase):
+    """infra#2757's Cooking/First Aid slice - the two SECONDARY skills every
+    family character already holds, verified independently of the
+    per-character CRAFTING assignment `professions.assigned` gates."""
+
+    def test_finds_linen_bandage_bracket(self):
+        recipe = craft.recipe_for(goals.SKILL_IDS["first aid"], 1)
+        self.assertIsNotNone(recipe)
+        self.assertEqual(recipe.spell_id, 3275)
+
+    def test_finds_heavy_linen_bandage_bracket(self):
+        recipe = craft.recipe_for(goals.SKILL_IDS["first aid"], 74)
+        self.assertIsNotNone(recipe)
+        self.assertEqual(recipe.spell_id, 3276)
+
+    def test_nothing_past_apprentice_first_aid_cap(self):
+        # 75 is Apprentice's own live-verified cap (character_skills.max) -
+        # a character sitting there needs a Journeyman trainer visit before
+        # anything else is worth casting, not a wasted recipe that grants no
+        # skill-up.
+        self.assertIsNone(craft.recipe_for(goals.SKILL_IDS["first aid"], 75))
+
+    def test_finds_charred_wolf_meat_bracket(self):
+        recipe = craft.recipe_for(goals.SKILL_IDS["cooking"], 1)
+        self.assertIsNotNone(recipe)
+        self.assertEqual(recipe.spell_id, 2538)
+
+    def test_nothing_past_the_one_verified_cooking_bracket(self):
+        self.assertIsNone(craft.recipe_for(goals.SKILL_IDS["cooking"], 51))
+
+    def test_craft_errand_finds_first_aid_for_a_character_assigned_no_primary_with_recipe(self):
+        # Grug: assigned mining + blacksmithing (professions.ROSTER), neither
+        # of which has a craft.RECIPES entry, so the primary loop finds
+        # nothing - but every character, Grug included, already holds First
+        # Aid, so the secondary fallthrough must answer with it.
+        spell_id = craft.craft_errand("Grug", {"mining": 8, "first aid": 1})
+        self.assertEqual(spell_id, 3275)
+
+    def test_craft_errand_prefers_a_live_primary_recipe_over_a_secondary_one(self):
+        # Og: assigned tailoring, which DOES have a verified recipe - that
+        # must win over First Aid even though Og also holds First Aid, same
+        # "one craft_spell at a time" contract craft_errand always had.
+        spell_id = craft.craft_errand(
+            "Og", {"tailoring": 1, "first aid": 1, "cooking": 1}
+        )
+        self.assertEqual(spell_id, 3910)
+
+    def test_craft_errand_zero_for_first_aid_not_yet_learned(self):
+        # A value of 0 means the trainer errand has not landed yet, the same
+        # rule craft_errand already holds for a primary trade - never invent
+        # a recipe for a skill nobody has actually trained.
+        spell_id = craft.craft_errand("Grug", {"mining": 8, "first aid": 0})
+        self.assertEqual(spell_id, 0)
+
+    def test_craft_errand_falls_through_to_cooking_when_first_aid_is_capped(self):
+        spell_id = craft.craft_errand(
+            "Grug", {"mining": 8, "first aid": 75, "cooking": 1}
+        )
+        self.assertEqual(spell_id, 2538)
+
+
 class RecipeTableDisciplineTests(unittest.TestCase):
     """The module's own stated rule: one verified entry beats five guessed
     ones. This suite is what keeps a future edit honest about that."""
@@ -104,10 +165,18 @@ class RecipeTableDisciplineTests(unittest.TestCase):
             for recipe in recipes:
                 self.assertGreater(recipe.spell_id, 0)
 
-    def test_every_recipe_key_is_a_real_crafting_skill(self):
-        crafting_ids = {goals.SKILL_IDS[name] for name in professions.CRAFTING}
+    def test_every_recipe_key_is_a_real_crafting_or_secondary_skill(self):
+        # CRAFTING (a primary, slot-costing trade) and SECONDARY (First Aid /
+        # Cooking / Fishing, free and held by everyone) are the only two
+        # kinds of skill craft_errand ever answers for - see its own
+        # docstring. A key that is neither is a typo, not a new profession.
+        real_ids = {
+            goals.SKILL_IDS[name]
+            for name in professions.CRAFTING | professions.SECONDARY
+            if name in goals.SKILL_IDS
+        }
         for skill_id in craft.RECIPES:
-            self.assertIn(skill_id, crafting_ids)
+            self.assertIn(skill_id, real_ids)
 
     def test_brackets_do_not_overlap_within_one_skill(self):
         for recipes in craft.RECIPES.values():

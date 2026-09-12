@@ -974,5 +974,39 @@ class BridgeContractTest(unittest.TestCase):
         self._holds("professions.settled")
 
 
+class SecondaryRankErrandTest(unittest.TestCase):
+    """infra#2757's Cooking/First Aid slice. First Aid's Apprentice cap (75,
+    live-verified for all five) gates craft.RECIPES' Wool Bandage bracket -
+    this is the errand that would send a character to lift it, built the
+    same shape as a primary trade's `to_errand` learn half, minus the
+    unlearn a secondary skill never needs."""
+
+    def test_none_below_the_ceiling(self):
+        self.assertIsNone(professions.secondary_rank_errand("Grug", {"first aid": 74}))
+
+    def test_none_for_a_skill_with_no_named_ceiling(self):
+        # Cooking's one verified bracket tops out at 50, well short of
+        # Apprentice's own 75 cap - nothing to name a ceiling for yet.
+        self.assertIsNone(professions.secondary_rank_errand("Grug", {"cooking": 75}))
+
+    def test_fires_at_the_apprentice_ceiling(self):
+        errand = professions.secondary_rank_errand("Grug", {"first aid": 75})
+        self.assertIsNotNone(errand)
+        self.assertEqual(errand.character, "Grug")
+        self.assertEqual(errand.learn_skill, professions.skill_id("first aid"))
+        self.assertEqual(errand.unlearn_skill, 0)
+        self.assertEqual(errand.travel_npc, professions.TRAINER_ROLE)
+
+    def test_fires_past_the_ceiling_too(self):
+        # A character cannot actually exceed character_skills.max in the
+        # live engine, but this must not silently miss a stale value above
+        # it either - >= , not ==.
+        errand = professions.secondary_rank_errand("Grug", {"first aid": 76})
+        self.assertIsNotNone(errand)
+
+    def test_no_errand_for_a_character_holding_nothing_named(self):
+        self.assertIsNone(professions.secondary_rank_errand("Grug", {}))
+
+
 if __name__ == "__main__":
     unittest.main()

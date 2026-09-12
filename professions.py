@@ -819,6 +819,66 @@ def to_errand(trade_plan: TradePlan, skills: Mapping[str, Mapping[str, int]]):
     return errand
 
 
+# SECONDARY SKILL RANK-UPS (infra#2757's Cooking/First Aid slice). A primary
+# trade's `to_errand` above always pairs a learn with an unlearn, because a
+# primary costs a slot somebody else has to give up first. A secondary skill
+# costs no slot - every one of the five already holds First Aid and Cooking -
+# so raising one past its current trainer-taught rank needs only the LEARN
+# half of the same Errand shape, with `unlearn_skill` left at its default of
+# 0 (mod-overseer already reads that as "forget nothing").
+#
+# THE CEILING IS A LIVE FACT, NOT A GUESS. `character_skills.value` cannot
+# exceed `character_skills.max` in the running engine - the client and the
+# core both enforce it - so a character sitting AT the ceiling below is
+# provably stuck on the current rank's recipes, not merely close to it.
+# 75 is Apprentice First Aid's cap, live-verified for all five family
+# characters (character_skills skill 129, value=1/max=75, 2026-09-12) - the
+# same rank that already teaches craft.RECIPES' Linen Bandage/Heavy Linen
+# Bandage pair for free. Past it, Wool Bandage/Heavy Wool Bandage are taught
+# only once Journeyman First Aid is bought from a trainer, exactly the
+# transaction `to_errand` already sends a character on for a primary trade's
+# next rank.
+#
+# THIS FUNCTION IS NOT YET WIRED INTO A LIVE WRITER (infra follow-up issue).
+# `learn_skill`/`unlearn_skill` on `overseer_roster` already have exactly one
+# writer - `_assign_trades`, driven by this module's own `plan()`/
+# `to_errand()` for PRIMARY trade swaps - and a second, uncoordinated writer
+# for the same two columns is the "second writer" collision class this
+# codebase has already been bitten by on `travel_npc`. Calling this from
+# bridge.py needs that coordination decided first, not an extra write bolted
+# onto the craft-errand loop; until then this is a pure, tested function
+# ready for that caller.
+#
+# Cooking has no entry here yet: craft.RECIPES' one verified Cooking bracket
+# (Charred Wolf Meat, Apprentice-taught) tops out at skill 50, short of
+# Apprentice Cooking's own 75 cap, so nothing about Cooking is stuck at a
+# ceiling this pass can name a next rank for.
+SECONDARY_RANK_CEILING = {
+    "first aid": 75,
+}
+
+
+def secondary_rank_errand(name: str, skills: Mapping[str, int]):
+    """A trainer errand to raise a secondary skill past its rank ceiling.
+
+    None means "nothing to send this character to a trainer for" - either
+    every secondary skill it holds is below its ceiling (still room to craft
+    in the current rank) or above 0 skills this module has a named ceiling
+    for at all. A skill absent from SECONDARY_RANK_CEILING never fires one,
+    the same "don't guess a ceiling" discipline craft.py holds for recipes.
+
+    Only ONE errand at a time, same as a primary trade plan - `to_errand`'s
+    own one-character-one-errand rule - so the first ceiling this character
+    has actually reached wins; today's table has exactly one entry and
+    cannot yet disagree with itself.
+    """
+    for skill_name, ceiling in SECONDARY_RANK_CEILING.items():
+        if skills.get(skill_name, 0) >= ceiling:
+            return Errand(character=name, learn_skill=skill_id(skill_name),
+                          travel_npc=TRAINER_ROLE)
+    return None
+
+
 def traveller(errand) -> str:
     """Who must become the family's one traveller for this errand, or ''.
 

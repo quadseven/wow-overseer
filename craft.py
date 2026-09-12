@@ -19,6 +19,16 @@ mechanism a real player's "Create" click runs) is the right primitive rather
 than driving mod-playerbots' own SetCraftAction, which is built for an
 attended master trading reagents across a live trade window.
 
+SECONDARY SKILLS (First Aid, Cooking - infra#2757's Cooking/First Aid slice,
+sibling to whichever primary profession each other pass covers) ARE COVERED
+TOO, and by design apply to ALL FIVE characters at once rather than to
+whoever `professions.assigned` gave a trade to - `professions.SECONDARY`
+already names them as free, held by everyone, and never an assignment
+question. `craft_errand` below checks them for every character regardless of
+its primaries, which is the whole reason this slice is worth more than any
+one primary profession: five characters gain from one verified bracket
+instead of one.
+
 WHAT THIS MODULE DOES NOT DO. It does not verify a character holds the
 reagents a recipe needs - that check happens in mod_overseer.cpp's DriveCraft,
 against the character's REAL bags, using the core's own CheckCast path. A
@@ -126,6 +136,72 @@ RECIPES: dict = {
         Recipe(18401, "Bolt of Runecloth", min_skill=250, max_skill=260,
                note="5x Runecloth -> 1x Bolt of Runecloth, no focus needed"),
     ),
+    # FIRST AID (infra#2757's Cooking/First Aid slice) - a SECONDARY skill,
+    # not a CRAFTING one: every one of the five already holds it at 1/75
+    # (verified live, character_skills skill 129, 2026-09-12) rather than
+    # having to be assigned it, so `craft_errand` below checks it for every
+    # character, not only whoever `professions.assigned` names. This is the
+    # closest fit to the module's own verified pattern - plain cloth
+    # reagent, no vendor purchase, no SpellInfo::RequiresSpellFocus - and the
+    # family already carries cloth from humanoid kills while questing.
+    #
+    # Both entries below are taught TOGETHER the moment Apprentice First Aid
+    # is learned (which the family already has - that is what "1/75" means),
+    # so neither needs a trainer visit before `craft_errand` may aim a
+    # character at it. Capped at 74, one short of Apprentice's own 75 cap
+    # (character_skills.max, live-verified for all five): sitting exactly at
+    # 75/75 with nothing left in this bracket is a `craft_spell = 0` "go
+    # train Journeyman" state (professions.secondary_rank_errand), not a
+    # wasted cast on a recipe that has stopped granting skill-ups.
+    #
+    # Spell ids and reagents cross-checked against two independent public
+    # WotLK/classic spell databases (wowhead.com and classicdb.ch, both
+    # returning the same id and reagent count for every entry below):
+    #
+    #   Linen Bandage        spell 3275  item 1251  1x Linen Cloth (2589)
+    #   Heavy Linen Bandage  spell 3276  item 2581  2x Linen Cloth (2589)
+    #
+    # Wool Bandage/Heavy Wool Bandage (spells 3277/3278, verified the same
+    # way) are the next bracket - taught together at Journeyman - and are
+    # deferred to a follow-up issue until `professions.secondary_rank_errand`
+    # actually lands a character at that trainer, per the same "never name a
+    # spell the character does not yet hold" rule DriveCraft enforces
+    # (mod-overseer's own bad-id-vs-not-known distinction in DriveCraft would
+    # otherwise drop the errand as a "planner bug" the moment it were tried).
+    SKILL_IDS["first aid"]: (
+        Recipe(3275, "Linen Bandage", min_skill=1, max_skill=39,
+               note="1x Linen Cloth -> 1x Linen Bandage, taught with "
+                    "Apprentice First Aid"),
+        Recipe(3276, "Heavy Linen Bandage", min_skill=40, max_skill=74,
+               note="2x Linen Cloth -> 1x Heavy Linen Bandage, taught "
+                    "alongside Linen Bandage at Apprentice"),
+    ),
+    # COOKING (infra#2757's Cooking/First Aid slice) - also SECONDARY, same
+    # reasoning as First Aid above: every one of the five holds it at 1/75
+    # already (character_skills skill 185, verified live 2026-09-12).
+    #
+    # Cooking's own reagents are raw meat, a creature drop rather than a
+    # crafting material - closer to gathering than the cloth/ore-consuming
+    # trades - so v1 ships exactly the one bracket that needs neither a
+    # vendor purchase nor a recipe scroll: Charred Wolf Meat, taught with
+    # Apprentice Cooking (the rank the family already holds), reagent a
+    # common humanoid/beast-kill drop the family already gets from
+    # questing. Every bracket past this one in the wow-professions.com guide
+    # needs either vendor-bought meat (Bear Meat) or a purchased recipe (Crab
+    # Cake, Curiously Tasty Omelet, Roast Raptor, ...) - the same "buy a
+    # recipe scroll first" problem First Aid's Wool Bandage bracket has past
+    # this pass, and is deferred to the same follow-up issue rather than
+    # guessed at.
+    #
+    # Cross-checked against two independent public WotLK/classic spell
+    # databases (wowhead.com and classicdb.ch, matching id and reagent):
+    #
+    #   Charred Wolf Meat  spell 2538  item 2679  1x Stringy Wolf Meat
+    SKILL_IDS["cooking"]: (
+        Recipe(2538, "Charred Wolf Meat", min_skill=1, max_skill=50,
+               note="1x Stringy Wolf Meat -> 1x Charred Wolf Meat, taught "
+                    "with Apprentice Cooking"),
+    ),
 }
 
 
@@ -154,6 +230,17 @@ def craft_errand(name: str, skills: dict) -> int:
     council.py enforces). 0 means "no standing craft errand" - the schema's
     own sentinel for the column, so a caller can write this value straight
     through with no translation.
+
+    CRAFTING FIRST, THEN SECONDARY - and the order is deliberate, not
+    incidental. `professions.assigned(name)` names the one or two PRIMARY
+    trades this specific character was given, which cost a slot and were
+    chosen for them; a secondary skill (`professions.SECONDARY`) costs no
+    slot and every character already holds all of them, so it is checked for
+    EVERY name, not only whoever `assigned` names. A character with a live
+    primary recipe keeps casting it; one with no primary recipe available
+    (no RECIPES entry yet, or between brackets) falls through to whatever
+    secondary bracket its First Aid/Cooking value is in, rather than sitting
+    on job='craft' doing nothing while a free skill-up sits unclaimed.
     """
     for skill_name in professions.assigned(name):
         if skill_name not in professions.CRAFTING:
@@ -161,6 +248,13 @@ def craft_errand(name: str, skills: dict) -> int:
         value = skills.get(skill_name, 0)
         if not value:
             continue  # not learned yet - professions.py's trainer errand owns this
+        recipe = recipe_for(SKILL_IDS[skill_name], value)
+        if recipe:
+            return recipe.spell_id
+    for skill_name in sorted(professions.SECONDARY):
+        value = skills.get(skill_name, 0)
+        if not value:
+            continue  # not learned yet - same permission discipline as above
         recipe = recipe_for(SKILL_IDS[skill_name], value)
         if recipe:
             return recipe.spell_id
