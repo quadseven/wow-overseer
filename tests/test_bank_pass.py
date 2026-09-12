@@ -79,8 +79,36 @@ class ThePassRunsAndInTheRightOrder(unittest.TestCase):
         """Only the leader takes `new rpg`; followers arrive by following.
         Sending a follower straight to an NPC leaves that character behind."""
         body = _block("    async def _bank_once(")
-        self.assertIn("bonds.head_of_family()", body)
+        self.assertIn("leader = await asyncio.to_thread(_head_now)", body)
         self.assertIn("professions.Errand(character=leader", body)
+
+    def test_the_leader_is_head_now_not_the_static_seniority_answer(self):
+        """infra#3553/#3554. `_head_now()`, NOT bonds.head_of_family() directly.
+
+        The two differ exactly when it matters: `_head_now` is what
+        `_mark_party_leader` writes into `overseer_roster.lead` and what
+        `_give_them_a_life` reads to decide who carries `new rpg`, so it
+        names a character that can actually walk. `bonds.head_of_family()`
+        is a pure seniority table that always answers the father, whatever
+        the live world is doing.
+
+        Measured on the dev realm: `overseer_roster.lead` was 'Grog' for at
+        least six hours (a trade errand had borrowed the lead) while this
+        pass kept writing the banker aim to 'Grug', the static answer.
+        mod-overseer refused to walk 'Grug' ("does not carry `new rpg`"),
+        never released the aim, and burned the errand budget into a 900s
+        lockout every cycle - every personal bank on the realm sat empty.
+
+        A per-holder-write regression would still pass a test that merely
+        asserted `_head_now` was called somewhere in the block, so this also
+        pins that the STATIC answer is gone from the actual code - checked
+        with comments stripped, since the prose above is allowed to name the
+        function it is warning against.
+        """
+        body = _block("    async def _bank_once(")
+        self.assertIn("_head_now", body)
+        code_lines = [ln.split("#", 1)[0] for ln in body.splitlines()]
+        self.assertNotIn("bonds.head_of_family()", "\n".join(code_lines))
 
     def test_an_economy_errand_never_erases_a_trainer_errand(self):
         body = _block("def _write_trade_errand(")

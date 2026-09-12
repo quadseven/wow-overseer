@@ -77,7 +77,23 @@ class ThePassRunsAndInTheRightOrder(unittest.TestCase):
     def test_the_leader_is_the_one_sent(self):
         """Only the leader carries `new rpg`; an aimed follower wanders."""
         code = _code("    async def _towntrip_once(self)")
-        self.assertIn("bonds.head_of_family()", code)
+        self.assertIn("leader = await asyncio.to_thread(_head_now)", code)
+
+    def test_the_leader_is_head_now_not_the_static_seniority_answer(self):
+        """infra#3553/#3554, the same defect as the bank pass right beside it.
+
+        `_head_now()`, NOT bonds.head_of_family() directly: the resting
+        seniority answer never moves, but `overseer_roster.lead` (and
+        whoever actually carries `new rpg`) does, whenever a trade errand or
+        a standing `job = train` borrows the lead. Aiming the static answer
+        while a live errand has moved leadership elsewhere writes a
+        `travel_npc` nobody can walk. Checked with comments stripped, since
+        the prose above is allowed to name the function it warns against.
+        """
+        code = _code("    async def _towntrip_once(self)")
+        self.assertIn("_head_now", code)
+        code_lines = [ln.split("#", 1)[0] for ln in code.splitlines()]
+        self.assertNotIn("bonds.head_of_family()", "\n".join(code_lines))
 
     def test_repair_is_an_economy_errand(self):
         """`_write_trade_errand` refuses to write a role it does not know as an

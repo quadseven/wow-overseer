@@ -3592,7 +3592,20 @@ class Bridge(discord.Client):
         if not bank_plan.moves:
             log.info("bank: nothing to put down and nothing to fetch back")
             return
-        leader = bonds.head_of_family()
+        # `_head_now()` RATHER THAN bonds.head_of_family() (infra#3553, same
+        # defect #3554 fixed in _vendor_once). The two differ exactly when it
+        # matters: `_head_now` is what `_mark_party_leader` writes into
+        # `lead` and what `_give_them_a_life` reads to decide who carries
+        # `new rpg`, so it names the character that can actually walk.
+        # bonds.head_of_family() is a pure seniority answer that never moves -
+        # measured live, it named 'Grug' for six-plus hours while
+        # `overseer_roster.lead` (and the character actually carrying
+        # `new rpg`) was 'Grog', on a trade errand. Aiming the static father
+        # wrote a `travel_npc` nothing walked, and the module's own guard
+        # ("'Grug' was sent to 'banker' but does not carry `new rpg`") burned
+        # the errand budget into a 900s refusal every cycle - every personal
+        # bank on the realm sat empty because of it.
+        leader = await asyncio.to_thread(_head_now)
         await asyncio.to_thread(
             _write_trade_errand,
             professions.Errand(character=leader, travel_npc="banker"),
@@ -3664,7 +3677,12 @@ class Bridge(discord.Client):
         if not names or await self._mid_run(names):
             return
 
-        leader = bonds.head_of_family()
+        # `_head_now()` RATHER THAN bonds.head_of_family() - same reasoning
+        # as the bank pass just above (infra#3553): the leader that can
+        # actually be walked to the repair counter is whoever `_head_now`
+        # names this cycle, not the family's resting seniority answer, which
+        # can be sitting on somebody else's errand right now.
+        leader = await asyncio.to_thread(_head_now)
         # THE AIM GOES FIRST, before anything is planned, exactly as the bank
         # pass writes its banker errand first. A row queued for a counter
         # nobody is walking to is a refusal waiting to be logged.
