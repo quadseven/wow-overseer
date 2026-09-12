@@ -41,6 +41,7 @@ import goals
 import bonds
 import guildbank
 import craft
+import craft_supply
 import item_plan
 import jobs
 import kin
@@ -2299,6 +2300,7 @@ class Bridge(discord.Client):
                 self._vendor_loop,
                 self._bank_loop,
                 self._guild_bank_loop,
+                self._craft_supply_loop,
                 self._towntrip_loop,
                 self._restore_lost_lives,
             )
@@ -3455,6 +3457,99 @@ class Bridge(discord.Client):
                 await self._craft_once()
             except Exception:
                 log.exception("craft failed; retrying next cycle")
+            await asyncio.sleep(cycle)
+
+    async def _craft_supply_once(self) -> None:
+        """Buy the vendor reagent a standing craft errand needs (infra#3613).
+
+        THE GAP THIS CLOSES. Every crafting recipe craft.py verified tonight
+        that names a vial - all ten Alchemy potions but one - was proven live
+        to stall on it: Ugga sat on job='craft' with 20 Silverleaf, 13
+        Peacebloom and zero Empty Vials, casting nothing. craft.py's own
+        docstring is explicit that it never checks reagents; this is the pass
+        that does, for the one reagent class (craft_supply.VIAL) verified
+        against the live world database rather than guessed.
+
+        ONE VENDOR AIM PER CANDIDATE, NOT PER PARTY, unlike _vendor_once's
+        leader-only aim. A vial is a personal shopping list keyed to
+        whichever recipe THIS character's craft_spell names, not a party
+        errand the leader can carry for everyone - so each candidate is
+        aimed individually, through the same ECONOMY_ERRANDS-guarded
+        `_write_trade_errand` every other town errand uses, which is what
+        keeps this from stamping on a traveller already on a real errand.
+        """
+        names = sorted((await asyncio.to_thread(_protected_guids)).values())
+        if not names:
+            return
+        spells = await asyncio.to_thread(_fetch_craft_spells, names)
+        candidates = {
+            name: spell_id
+            for name, (spell_id, _) in spells.items()
+            if spell_id in craft_supply.VIAL
+        }
+        if not candidates:
+            return
+
+        free_slots = await asyncio.to_thread(_fetch_free_slots, list(candidates))
+        # ONE BATCH, NOT ONE QUERY PER CANDIDATE - holdings for every
+        # candidate's vial are fetched together (at most three round trips,
+        # since craft_supply.VIAL names three entries total), the same
+        # batching discipline _fetch_free_slots/_fetch_craft_spells already
+        # hold to. Town is the one thing that genuinely cannot batch this
+        # way: it is a read of wherever `name` is CURRENTLY STANDING, which
+        # is exactly as per-character as `_vendor_once`'s own per-holder
+        # `_fetch_town` calls already are.
+        pairs = [
+            (name, craft_supply.VIAL[craft_spell][0])
+            for name, craft_spell in candidates.items()
+        ]
+        held_by = await asyncio.to_thread(_fetch_item_counts, pairs)
+        queued = 0
+        for name, craft_spell in sorted(candidates.items()):
+            entry, label, _price = craft_supply.VIAL[craft_spell]
+            town = await asyncio.to_thread(_fetch_town, name)
+            if entry not in town.stocks:
+                aimed = await asyncio.to_thread(
+                    _write_trade_errand,
+                    professions.Errand(character=name, travel_npc="vendor"),
+                )
+                log.info(
+                    "craft_supply: %s is not near a vendor stocking %s; "
+                    "vendor aim taken=%s", name, label, aimed,
+                )
+                continue
+            held = held_by.get((name, entry), 0)
+            _spell_id, money = spells[name]
+            errand, note = craft_supply.reagent_errand(
+                name, craft_spell, held, money, free_slots.get(name, 0), town,
+            )
+            if note:
+                log.info("craft_supply: %s", note)
+                continue
+            if errand and await asyncio.to_thread(_insert_town_errand, errand):
+                queued += 1
+                log.info("craft_supply: %s %s - %s", name, errand.command, errand.why)
+        log.info(
+            "craft_supply: queued %d buy errand(s) across %d candidate(s)",
+            queued, len(candidates),
+        )
+
+    async def _craft_supply_loop(self) -> None:
+        """Own loop and own clock, the same reasoning _bank_loop gives for
+        itself: a failed pass is logged and retried rather than swallowed.
+        Staggered past _vendor_loop (90s), _bank_loop (150s) and
+        _guild_bank_loop (240s), all of which also write `travel_npc`
+        through the same ECONOMY_ERRANDS guard - this one goes last so it
+        never wins a race against a pass with more to do that cycle.
+        """
+        await self.wait_until_ready()
+        cycle = float(os.environ.get("CRAFT_SUPPLY_CYCLE_SECONDS", "600"))
+        await asyncio.sleep(min(cycle, 300.0))
+        while not self.is_closed():
+            try:
+                await self._craft_supply_once()
+            except Exception:
+                log.exception("craft_supply failed; retrying next cycle")
             await asyncio.sleep(cycle)
 
     async def _protect_characters(self) -> None:
@@ -6125,8 +6220,68 @@ _TOWN_SPELLS_SQL = (
 )
 
 
+def _fetch_craft_spells(names: list) -> dict:
+    """name -> (craft_spell, money) for whoever is on job='craft' right now.
+
+    craft_supply only needs a candidate list, and job='craft' is the same
+    gate _craft_once already reads via _crafting_roster - a character not on
+    it is not standing an errand this pass should touch, per the same
+    permission discipline craft.craft_errand holds for `professions.assigned`.
+    """
+    if not names:
+        return {}
+    marks = ",".join(["%s"] * len(names))
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT r.name, r.craft_spell, c.money "  # noqa: S608 - placeholders from a COUNT, values still bound
+            "FROM overseer_roster r JOIN characters c ON c.name = r.name "
+            "WHERE r.name IN (%s) AND r.job = 'craft'" % marks,
+            names,
+        )
+        return {row["name"]: (row["craft_spell"], row["money"]) for row in cur.fetchall()}
+
+
+def _fetch_item_counts(pairs: list) -> dict:
+    """How many of each (name, item entry) pair this character carries right
+    now, summed across every stack - craft_supply's `held` is a total, not a
+    stack size.
+
+    ONE ROUND TRIP PER DISTINCT ENTRY, NOT PER CHARACTER - the same batching
+    discipline `_fetch_free_slots`/`_fetch_craft_spells` already hold to.
+    `craft_supply.VIAL` names three entries total, so a full-family cycle is
+    at most three queries regardless of how many characters are shopping.
+    """
+    if not pairs:
+        return {}
+    by_entry: dict = {}
+    for name, entry in pairs:
+        by_entry.setdefault(entry, []).append(name)
+    counts: dict = {}
+    with _connect() as conn, conn.cursor() as cur:
+        for entry, names in by_entry.items():
+            marks = ",".join(["%s"] * len(names))
+            cur.execute(
+                "SELECT c.name AS name, COALESCE(SUM(ii.count), 0) AS n "  # noqa: S608 - placeholders from a COUNT, values still bound
+                "FROM characters c LEFT JOIN item_instance ii "
+                "ON ii.owner_guid = c.guid AND ii.itemEntry = %s "
+                f"WHERE c.name IN ({marks}) GROUP BY c.name",
+                (entry, *names),
+            )
+            for row in cur.fetchall():
+                counts[(row["name"], entry)] = int(row["n"] or 0)
+    return counts
+
+
 def _fetch_town(leader: str):
-    """What the counters within reach of the leader can do, as a towntrip.Town.
+    """What the counters within reach of `leader` can do, as a towntrip.Town.
+
+    THE PARAMETER NAME IS A HOLDOVER, NOT A CONTRACT - test_towntrip_pass.py
+    pins this exact signature text, so it stays `leader` here, but this
+    reads whatever position the NAMED CHARACTER has, leader or not.
+    `_vendor_once` already calls this per SELLING HOLDER, not just the party
+    leader, and `_craft_supply_once` does the same per character shopping
+    for their own reagent - the town-trip pass is the one caller that
+    happens to only ever want the leader's own position.
 
     An empty answer is the normal state for most of a trip: it is what the world
     looks like while they are still walking. towntrip.plan turns that into notes
@@ -6964,6 +7119,7 @@ class HeadlessBridge(Bridge):
                 self._vendor_loop,
                 self._bank_loop,
                 self._guild_bank_loop,
+                self._craft_supply_loop,
                 self._towntrip_loop,
                 self._restore_lost_lives,
             ) if coro.__name__ not in self.HEADLESS_SKIP
