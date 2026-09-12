@@ -76,17 +76,55 @@ class Recipe:
 # discipline. Grow this table by adding entries with the SAME care, not by
 # filling every profession at once from memory.
 #
-# TAILORING - "Bolt of Linen Cloth" (spell 3910, creates item 2996 from two
-# Linen Cloth (2589)). No SpellInfo::RequiresSpellFocus - a tailor needs no
-# workbench for this one, which is exactly the "no travel needed" shape
-# DriveCraft's v1 assumes. Reagents come from the family's own herbalism-
-# adjacent... no - from Linen Cloth drops/quest rewards, which is what
-# professions.py's own docstring already measured the family carrying ~84 of
-# (2026-08-23), so this is not a cold start.
+# TAILORING - the "Bolt of X Cloth" family (infra#2757 follow-up to #440).
+# Every entry below is a plain cloth->bolt SPELL_EFFECT_CREATE_ITEM spell,
+# same shape as the original verified Linen entry: no
+# SpellInfo::RequiresSpellFocus (a tailor needs no workbench for any bolt
+# recipe), one cloth reagent, no vendor-bought thread/dye. That is a
+# deliberate v1 scoping decision, not an oversight - see
+# docs/design/profession-crafting-drive.md's follow-up note and infra's
+# craft-leveling follow-up issue: the thread/dye-dependent recipes between
+# these brackets (Linen Belt, Silk Headband, Runecloth Belt, ...) need
+# bridge.py's town-trip `kind='buy'` plumbing extended to also buy craft
+# reagents, which this pass deferred rather than guessing at. Real thread-
+# and-dye recipes are worth more skill per cast, so a character sits idle
+# in the gaps between these brackets instead of the y-axis staying full -
+# that is the accepted cost of only shipping what could be verified.
+#
+# Each spell id and its reagent were checked against two independent public
+# WotLK/classic spell databases (wowhead.com and classicdb.ch), cross-
+# referenced against the wow-professions.com guide's own stated cloth-to-
+# bolt ratios (e.g. 470 Mageweave Cloth -> 94 bolts = 5 cloth/bolt) to catch
+# a source disagreement before trusting it - one source (warcraft.wiki.gg)
+# gave a stale reagent count of 4 for both Mageweave and Runecloth, which the
+# 5-per-bolt ratio from the guide's own totals and both database sources
+# rejected, so the wiki page was NOT used.
+#
+#   Bolt of Linen Cloth    spell 3910  item 2996  2x Linen Cloth (2589)
+#   Bolt of Woolen Cloth   spell 2964  item 2997  3x Wool Cloth
+#   Bolt of Silk Cloth     spell 3839  item 4305  4x Silk Cloth
+#   Bolt of Mageweave      spell 3865  item 4339  5x Mageweave Cloth
+#   Bolt of Runecloth      spell 18401 item 14048 5x Runecloth
+#
+# Brackets below are the wow-professions.com guide's own stated ranges for
+# each bolt (a leveling guide's "worth casting here" bracket, same kind of
+# source the existing Linen entry's 1-60 already leaned on before this pass
+# extended it slightly past the guide's stated 1-45). Gaps between brackets
+# (61-124, 146-174, 186-249, 261-300) are exactly where the deferred thread/
+# dye recipes belong - `recipe_for` correctly returns None there rather than
+# inventing a bolt recipe that would not grant a skill-up.
 RECIPES: dict = {
     SKILL_IDS["tailoring"]: (
         Recipe(3910, "Bolt of Linen Cloth", min_skill=1, max_skill=60,
                note="2x Linen Cloth -> 1x Bolt of Linen Cloth, no focus needed"),
+        Recipe(2964, "Bolt of Woolen Cloth", min_skill=61, max_skill=100,
+               note="3x Wool Cloth -> 1x Bolt of Woolen Cloth, no focus needed"),
+        Recipe(3839, "Bolt of Silk Cloth", min_skill=125, max_skill=145,
+               note="4x Silk Cloth -> 1x Bolt of Silk Cloth, no focus needed"),
+        Recipe(3865, "Bolt of Mageweave", min_skill=175, max_skill=185,
+               note="5x Mageweave Cloth -> 1x Bolt of Mageweave, no focus needed"),
+        Recipe(18401, "Bolt of Runecloth", min_skill=250, max_skill=260,
+               note="5x Runecloth -> 1x Bolt of Runecloth, no focus needed"),
     ),
 }
 

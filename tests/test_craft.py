@@ -15,9 +15,36 @@ import professions
 
 
 class RecipeForTests(unittest.TestCase):
-    def test_returns_none_outside_every_bracket(self):
-        # Tailoring's only entry today covers 1-60. Nothing above that yet.
-        self.assertIsNone(craft.recipe_for(goals.SKILL_IDS["tailoring"], 61))
+    def test_returns_none_in_the_gap_between_two_bolt_brackets(self):
+        # 61-124 is a deliberate gap: the recipe worth casting there needs
+        # vendor-bought thread (Linen Belt), which this pass explicitly
+        # deferred rather than guess a spell id for. recipe_for must not
+        # fall back to the Woolen bolt just because it is close by.
+        self.assertIsNone(craft.recipe_for(goals.SKILL_IDS["tailoring"], 101))
+        self.assertIsNone(craft.recipe_for(goals.SKILL_IDS["tailoring"], 124))
+
+    def test_returns_none_above_every_bracket(self):
+        self.assertIsNone(craft.recipe_for(goals.SKILL_IDS["tailoring"], 301))
+
+    def test_finds_bolt_of_woolen_cloth_bracket(self):
+        recipe = craft.recipe_for(goals.SKILL_IDS["tailoring"], 75)
+        self.assertIsNotNone(recipe)
+        self.assertEqual(recipe.spell_id, 2964)
+
+    def test_finds_bolt_of_silk_cloth_bracket(self):
+        recipe = craft.recipe_for(goals.SKILL_IDS["tailoring"], 130)
+        self.assertIsNotNone(recipe)
+        self.assertEqual(recipe.spell_id, 3839)
+
+    def test_finds_bolt_of_mageweave_bracket(self):
+        recipe = craft.recipe_for(goals.SKILL_IDS["tailoring"], 180)
+        self.assertIsNotNone(recipe)
+        self.assertEqual(recipe.spell_id, 3865)
+
+    def test_finds_bolt_of_runecloth_bracket(self):
+        recipe = craft.recipe_for(goals.SKILL_IDS["tailoring"], 255)
+        self.assertIsNotNone(recipe)
+        self.assertEqual(recipe.spell_id, 18401)
 
     def test_returns_none_for_a_profession_with_no_entry(self):
         # Blacksmithing is assigned in professions.py's own ROSTER but has no
