@@ -10,10 +10,14 @@ field is won by somebody who wanted it, and the same family always arrives at
 the same tabard - because a debate that reaches a different answer each night
 is the #2807 restaging bug wearing a new hat.
 """
+import pathlib
+import re
 import unittest
 
 import bonds
 import tabard
+
+BRIDGE = (pathlib.Path(__file__).resolve().parent.parent / "bridge.py").read_text()
 
 
 # The real family, with the race and class ids the live characters row holds -
@@ -194,3 +198,58 @@ class WhoCanActuallyApplyIt(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TheGuardAsksWhetherItHappenedNotWhetherWeTried(unittest.TestCase):
+    """A CONTRACT OVER SOURCE TEXT, the same shape as test_headless_bridge:
+    bridge.py imports `discord` and `pymysql` at module level and this suite
+    is stdlib-only with no pip install, so it cannot be imported here.
+
+    What it guards is a distinction that cost a live rollout. The first guard
+    asked "is there a tabard command row", i.e. did we TRY. On 2026-09-12 the
+    bridge - which deploys on merge in seconds, while the module it talks to
+    needs a full image build, so the two halves of one feature land 15-20
+    minutes apart - held the debate into a worldserver that was still
+    rolling. All eleven lines and the guild row came back `target not
+    online`. Nothing reached the world, and the guard would still have said
+    "asked" and suppressed the scene permanently; a row had to be deleted by
+    hand. A pod swap is not rare, so this has to be self-healing.
+    """
+
+    def _guard(self):
+        start = BRIDGE.index("def _tabard_already_held(")
+        end = BRIDGE.index("\ndef ", start + 10)
+        return BRIDGE[start:end]
+
+    def test_it_counts_only_lines_that_were_delivered(self):
+        """`delivered` is the status a chat row reaches when a character
+        actually said it; `error` is the one it reaches when nobody was there
+        to hear. Counting both is what made a scene nobody heard look held."""
+        guard = self._guard()
+        self.assertIn("'delivered'", guard,
+                      "the guard must require delivery, or an undelivered "
+                      "scene reads as an argument the family had")
+        self.assertIn("kind = 'chat'", guard)
+
+    def test_it_no_longer_keys_on_the_command_row(self):
+        """Whether the guild command was SENT says nothing about whether the
+        family was heard, and it was the wrong question in both directions:
+        it counted an unheard attempt, and it would also have counted a row
+        issued by a person testing the verb by hand."""
+        self.assertNotIn("LIKE 'tabard %'", BRIDGE,
+                         "the guard is back on the command row")
+
+    def test_the_writer_and_the_guard_name_the_same_source(self):
+        """Two literals would be one rename away from a guard that never
+        matches the rows it guards - which fails OPEN, restaging the scene
+        forever, and is exactly the bug this area keeps growing."""
+        self.assertEqual(BRIDGE.count("TABARD_SOURCE"), 4,
+                         "expected the constant at its definition, the guard, "
+                         "the speak rows and the guild row")
+        self.assertEqual(BRIDGE.count('"overseer:tabard"'), 1,
+                         "the source string should be written once")
+
+    def test_the_loop_is_registered_in_both_lists(self):
+        """setup_hook and the headless driver. A loop in only one runs only
+        under Discord, and wow-dev runs headless."""
+        self.assertEqual(BRIDGE.count("self._design_tabard,"), 2)

@@ -219,29 +219,57 @@ def _fetch_family_kin() -> list[dict]:
         return list(cur.fetchall())
 
 
-def _tabard_already_asked() -> dict | None:
-    """The last tabard row this bridge wrote, whatever became of it.
+TABARD_SOURCE = "overseer:tabard"
 
-    THE SUCCESS CASE IS NOT THE DANGEROUS ONE. A guild that took its tabard
-    has non-zero emblem columns and the debate is unreachable on that alone.
-    The case that bites is the one where the command did NOT land - the guild
-    master offline, the module too old to know the verb, the core refusing -
-    because the columns stay at zero and nothing about the world remembers
-    that five characters already had the argument. That is precisely the
-    infra#2807 shape the ticket warns about, and it would have replayed a
-    byte-identical eleven-line scene into party chat every hour for as long as
-    the verb was missing. Asked once, it stays asked.
 
-    Returns the row so the caller can say what became of it rather than going
-    quiet, because a tabard that never landed is worth a line in the log.
+def _tabard_already_held() -> dict | None:
+    """Did the family actually HOLD the argument - not did this bridge try.
+
+    THE SUCCESS CASE IS NOT THE DANGEROUS ONE. A guild wearing a tabard has
+    non-zero emblem columns and the debate is unreachable on that alone. The
+    case that bites is the one where nothing landed, because the columns stay
+    at zero and the scene would replay every hour - the infra#2807 shape the
+    ticket warns about.
+
+    SO THE QUESTION IS WHAT COUNTS AS HAVING HAPPENED, and the first answer
+    was wrong in a way that took a live rollout to show. It asked "is there a
+    `tabard %` command row", which answers "did we TRY", and those are not the
+    same question. On 2026-09-12 the bridge - which deploys on merge in
+    seconds, while the module it talks to needs a full image build and a
+    digest promotion, so the two halves of one feature land on clocks 15-20
+    minutes apart - fired its first debate at 12:35 into a worldserver that
+    was still rolling. All eleven lines came back `target not online`, the
+    guild row came back `target not online`, NOTHING reached the world, and
+    the guard would nonetheless have said "asked" and suppressed the scene
+    for good. It took a hand-deleted row to recover.
+
+    A pod swap is not a rare event, so this needed to be self-healing rather
+    than merely documented.
+
+    What it asks now: did any line of the scene reach a character. A chat row
+    at `delivered` was SPOKEN; one at `error` was not. If even one was heard
+    the argument happened and must not be staged again - partial delivery
+    counts as happened, deliberately, because re-speaking three lines
+    somebody already heard is the stutter this whole guard exists to prevent.
+    If none was heard, nothing happened, and the next cycle may hold it.
+
+    Note this no longer looks at the guild command row at all. A scene that
+    was heard but whose command was refused is NOT re-staged: the family had
+    the argument, and the refusal is a thing to report, not to re-enact.
     """
     with _connect() as conn, conn.cursor() as cur:
         cur.execute(
-            "SELECT id, status, detail, created_at FROM overseer_command "
-            " WHERE kind = 'guild' AND command LIKE 'tabard %' "
-            " ORDER BY id DESC LIMIT 1"
+            # `last_heard`, not `last`: `last` is a reserved word in MySQL 8
+            # and an unquoted one is a syntax error, which is the same trap
+            # `lead` set when it crash-looped the worldserver. Caught here by
+            # test_protect.ReservedWordTest rather than in production.
+            "SELECT COUNT(*) AS heard, MAX(created_at) AS last_heard "
+            "  FROM overseer_command "
+            " WHERE kind = 'chat' AND source = %s AND status = 'delivered'",
+            (TABARD_SOURCE,),
         )
-        return cur.fetchone()
+        row = cur.fetchone()
+        return row if row and row["heard"] else None
 
 
 def _fetch_family_guild() -> dict | None:
@@ -3040,14 +3068,10 @@ class Bridge(discord.Client):
         # SUCCEEDED, and the whole point of the guard is the case where it did
         # not. Logged at info and not debug when the ask failed, because a
         # tabard the family agreed on and never got is worth noticing.
-        asked = await asyncio.to_thread(_tabard_already_asked)
-        if asked:
-            if asked["status"] in ("failed", "refused"):
-                log.info("tabard: already asked in row %s and it %s (%s); "
-                         "not re-staging the argument",
-                         asked["id"], asked["status"], asked["detail"])
-            else:
-                log.debug("tabard: row %s is %s", asked["id"], asked["status"])
+        held = await asyncio.to_thread(_tabard_already_held)
+        if held:
+            log.debug("tabard: the family already had this argument (%s lines "
+                      "heard, last %s)", held["heard"], held["last_heard"])
             return
 
         # The ids the world stores for what each of them is, read from their
@@ -3080,14 +3104,14 @@ class Bridge(discord.Client):
             # party, not say - the same 25-yard problem the council hit.
             await asyncio.to_thread(
                 _insert_speak,
-                relay.SpeakCommand(speaker, "party", text, "", "overseer:tabard"),
+                relay.SpeakCommand(speaker, "party", text, "", TABARD_SOURCE),
             )
             await asyncio.to_thread(_insert_thought, speaker, "council", text)
 
         # TO THE GUILD MASTER BY NAME, because Guild::HandleSetEmblem refuses
         # anybody else - it is not whoever happens to be carrying the row.
         await asyncio.to_thread(
-            _insert_guild, design.applied_by, design.command(), "overseer:tabard",
+            _insert_guild, design.applied_by, design.command(), TABARD_SOURCE,
         )
         log.info("tabard: %s -> %s (%s)", row["name"], design.command(), held.reason)
 
