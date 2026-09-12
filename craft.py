@@ -86,6 +86,44 @@ class Recipe:
 # discipline. Grow this table by adding entries with the SAME care, not by
 # filling every profession at once from memory.
 #
+# ALCHEMY (infra#2757, the Alchemy slice) - the full skill 1-300 potion/elixir
+# progression from wow-professions.com's classic Alchemy guide, with every
+# spell id, reagent, and output item cross-checked against two independent
+# public WotLK spell/item databases (wowhead.com/wotlk and classicdb.ch) - no
+# id here was carried over from the guide unverified, per the module's own
+# rule. None of these `SpellInfo::RequiresSpellFocus` (Alchemy has no
+# forge/anvil equivalent), so all eleven fit DriveCraft's v1 shape.
+#
+# THE POTION-AS-REAGENT CHAIN (Lesser Healing Potion needs 1x Minor Healing
+# Potion, not a raw herb). This needs NO special handling here or in
+# DriveCraft: brackets are ordered by ascending min_skill and recipe_for
+# returns the FIRST bracket containing skill_value, so while skill sits in
+# Minor Healing Potion's own 1-59 range the drive keeps casting it - and every
+# successful cast produces one Minor Healing Potion into the bag regardless of
+# whether that particular cast also rolled a skill-up, since item creation and
+# the skill-up roll are independent SpellEffects. By the time skill crosses
+# into Lesser Healing Potion's bracket the character has typically crafted far
+# more than the guide's suggested 65, because skill-ups are probabilistic but
+# casts are not. If a character DOES cross the boundary short on stock,
+# DriveCraft's own CheckCast simply refuses the cast for insufficient reagents
+# and leaves the errand standing - the same "fail closed, wait for the next
+# poll" shape the module docstring already states for every other recipe, not
+# a new failure mode this bracket introduces.
+#
+# VIAL-BUYING IS NOT WIRED YET - EVERY RECIPE BELOW NEEDS ONE. Empty Vial,
+# Leaded Vial and Crystal Vial are vendor-bought, never gathered, and
+# `towntrip.py`'s `kind='buy'` plumbing (mod-overseer#227) only knows how to
+# restock food and drink today - the same gap PR #3608 already found and
+# deferred for Tailoring's thread/dye recipes, except there every recipe
+# past the plain cloth bolts needed it and here EVERY recipe does. Shipping
+# the table anyway (rather than shipping nothing) is deliberate: a vial that
+# arrives by loot, quest reward, starting kit, or a manual restock still lets
+# DriveCraft actually cast these, and the alternative - holding back a fully
+# verified table because ONE dependency is unmet - repeats the mistake
+# `craft.py`'s own docstring already warns against for guessed ids, just
+# aimed at a missing feature instead of a wrong number. Follow-up filed to
+# wire vial-buying through `kind='buy'` (see the PR this shipped with).
+#
 # BLACKSMITHING (Grug, skill 164) - the Sharpening/Grinding Stone family
 # only (infra#2757 follow-up to #440). Every entry below creates a plain
 # stone item from smelted-ore-adjacent mining byproduct (Rough/Coarse/
@@ -261,6 +299,42 @@ RECIPES: dict = {
         Recipe(2538, "Charred Wolf Meat", min_skill=1, max_skill=50,
                note="1x Stringy Wolf Meat -> 1x Charred Wolf Meat, taught "
                     "with Apprentice Cooking"),
+    ),
+    SKILL_IDS["alchemy"]: (
+        Recipe(2330, "Minor Healing Potion", min_skill=1, max_skill=59,
+               note="1x Peacebloom (2447), 1x Silverleaf (765), "
+                    "1x Empty Vial (3371) -> item 118, no focus needed"),
+        Recipe(2337, "Lesser Healing Potion", min_skill=60, max_skill=109,
+               note="1x Minor Healing Potion (118), 1x Briarthorn (2450) "
+                    "-> item 858 - THE POTION-AS-REAGENT BRACKET, see the "
+                    "table's own header comment; no focus needed"),
+        Recipe(3447, "Healing Potion", min_skill=110, max_skill=139,
+               note="1x Bruiseweed (2453), 1x Briarthorn (2450), "
+                    "1x Leaded Vial (3372) -> item 929, no focus needed"),
+        Recipe(3173, "Lesser Mana Potion", min_skill=140, max_skill=154,
+               note="1x Mageroyal (785), 1x Stranglekelp (3820), "
+                    "1x Empty Vial (3371) -> item 3385, no focus needed"),
+        Recipe(7181, "Greater Healing Potion", min_skill=155, max_skill=184,
+               note="1x Liferoot (3357), 1x Kingsblood (3356), "
+                    "1x Leaded Vial (3372) -> item 1710, no focus needed"),
+        Recipe(11449, "Elixir of Agility", min_skill=185, max_skill=209,
+               note="1x Stranglekelp (3820), 1x Goldthorn (3821), "
+                    "1x Leaded Vial (3372) -> item 8949, no focus needed"),
+        Recipe(11450, "Elixir of Greater Defense", min_skill=210, max_skill=214,
+               note="1x Wild Steelbloom (3355), 1x Goldthorn (3821), "
+                    "1x Leaded Vial (3372) -> item 8951, no focus needed"),
+        Recipe(11457, "Superior Healing Potion", min_skill=215, max_skill=229,
+               note="1x Sungrass (8838), 1x Khadgar's Whisker (3358), "
+                    "1x Crystal Vial (8925) -> item 3928, no focus needed"),
+        Recipe(11460, "Elixir of Detect Undead", min_skill=230, max_skill=264,
+               note="1x Arthas' Tears (8836), 1x Crystal Vial (8925) "
+                    "-> item 9154 - only two reagent types, no focus needed"),
+        Recipe(17553, "Superior Mana Potion", min_skill=265, max_skill=284,
+               note="2x Sungrass (8838), 2x Blindweed (8839), "
+                    "1x Crystal Vial (8925) -> item 13443, no focus needed"),
+        Recipe(17556, "Major Healing Potion", min_skill=285, max_skill=300,
+               note="2x Golden Sansam (13464), 1x Mountain Silversage (13465), "
+                    "1x Crystal Vial (8925) -> item 13446, no focus needed"),
     ),
     SKILL_IDS["blacksmithing"]: (
         Recipe(2660, "Rough Sharpening Stone", min_skill=1, max_skill=29,

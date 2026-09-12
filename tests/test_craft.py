@@ -112,12 +112,80 @@ class RecipeForTests(unittest.TestCase):
         self.assertIsNone(craft.recipe_for(goals.SKILL_IDS["leatherworking"], 100))
 
 
+class AlchemyRecipeForTests(unittest.TestCase):
+    """One assertion per bracket - the full skill 1-300 Alchemy progression,
+    verified against real spell/reagent data (see craft.RECIPES's own
+    comment). Boundaries checked explicitly since the brackets abut without
+    overlapping (RecipeTableDisciplineTests.test_brackets_do_not_overlap
+    already holds the general shape; this pins the actual numbers)."""
+
+    def test_minor_healing_potion_covers_1_to_59(self):
+        alchemy = goals.SKILL_IDS["alchemy"]
+        self.assertEqual(craft.recipe_for(alchemy, 1).spell_id, 2330)
+        self.assertEqual(craft.recipe_for(alchemy, 59).spell_id, 2330)
+
+    def test_lesser_healing_potion_covers_60_to_109(self):
+        # THE POTION-AS-REAGENT BRACKET: this recipe's own reagent is the
+        # previous recipe's output (1x Minor Healing Potion), not a raw herb.
+        alchemy = goals.SKILL_IDS["alchemy"]
+        self.assertEqual(craft.recipe_for(alchemy, 60).spell_id, 2337)
+        self.assertEqual(craft.recipe_for(alchemy, 109).spell_id, 2337)
+
+    def test_healing_potion_covers_110_to_139(self):
+        alchemy = goals.SKILL_IDS["alchemy"]
+        self.assertEqual(craft.recipe_for(alchemy, 110).spell_id, 3447)
+        self.assertEqual(craft.recipe_for(alchemy, 139).spell_id, 3447)
+
+    def test_lesser_mana_potion_covers_140_to_154(self):
+        alchemy = goals.SKILL_IDS["alchemy"]
+        self.assertEqual(craft.recipe_for(alchemy, 140).spell_id, 3173)
+        self.assertEqual(craft.recipe_for(alchemy, 154).spell_id, 3173)
+
+    def test_greater_healing_potion_covers_155_to_184(self):
+        alchemy = goals.SKILL_IDS["alchemy"]
+        self.assertEqual(craft.recipe_for(alchemy, 155).spell_id, 7181)
+        self.assertEqual(craft.recipe_for(alchemy, 184).spell_id, 7181)
+
+    def test_elixir_of_agility_covers_185_to_209(self):
+        alchemy = goals.SKILL_IDS["alchemy"]
+        self.assertEqual(craft.recipe_for(alchemy, 185).spell_id, 11449)
+        self.assertEqual(craft.recipe_for(alchemy, 209).spell_id, 11449)
+
+    def test_elixir_of_greater_defense_covers_210_to_214(self):
+        alchemy = goals.SKILL_IDS["alchemy"]
+        self.assertEqual(craft.recipe_for(alchemy, 210).spell_id, 11450)
+        self.assertEqual(craft.recipe_for(alchemy, 214).spell_id, 11450)
+
+    def test_superior_healing_potion_covers_215_to_229(self):
+        alchemy = goals.SKILL_IDS["alchemy"]
+        self.assertEqual(craft.recipe_for(alchemy, 215).spell_id, 11457)
+        self.assertEqual(craft.recipe_for(alchemy, 229).spell_id, 11457)
+
+    def test_elixir_of_detect_undead_covers_230_to_264(self):
+        alchemy = goals.SKILL_IDS["alchemy"]
+        self.assertEqual(craft.recipe_for(alchemy, 230).spell_id, 11460)
+        self.assertEqual(craft.recipe_for(alchemy, 264).spell_id, 11460)
+
+    def test_superior_mana_potion_covers_265_to_284(self):
+        alchemy = goals.SKILL_IDS["alchemy"]
+        self.assertEqual(craft.recipe_for(alchemy, 265).spell_id, 17553)
+        self.assertEqual(craft.recipe_for(alchemy, 284).spell_id, 17553)
+
+    def test_major_healing_potion_covers_285_to_300(self):
+        alchemy = goals.SKILL_IDS["alchemy"]
+        self.assertEqual(craft.recipe_for(alchemy, 285).spell_id, 17556)
+        self.assertEqual(craft.recipe_for(alchemy, 300).spell_id, 17556)
+
+    def test_nothing_above_300(self):
+        self.assertIsNone(craft.recipe_for(goals.SKILL_IDS["alchemy"], 301))
+
+
 class CraftErrandTests(unittest.TestCase):
     def test_zero_for_a_character_with_no_crafting_trade(self):
-        # Ugga holds herbalism + alchemy (professions.ROSTER) - a GATHERING
-        # trade and one with no craft.RECIPES entry, so this must be 0, never
-        # a guessed spell id for either.
-        self.assertEqual(craft.craft_errand("Ugga", {"herbalism": 132, "alchemy": 1}), 0)
+        # Grog holds mining + engineering (professions.ROSTER) - a GATHERING
+        # trade and a CRAFTING one with no craft.RECIPES entry, so this must
+        # be 0, never a guessed spell id for either.
+        self.assertEqual(craft.craft_errand("Grog", {"mining": 8, "engineering": 1}), 0)
 
     def test_zero_for_a_trade_not_yet_learned(self):
         # Og is assigned tailoring but a skill value of 0 means the trainer
@@ -133,6 +201,14 @@ class CraftErrandTests(unittest.TestCase):
         # what answers this.
         spell_id = craft.craft_errand("Og", {"tailoring": 1, "enchanting": 1})
         self.assertEqual(spell_id, 3910)
+
+    def test_finds_the_alchemy_recipe_for_uggas_learned_trade(self):
+        # Ugga: herbalism + alchemy (professions.ROSTER) - herbalism is a
+        # GATHERING trade with no craft.RECIPES entry (it climbs on its own
+        # per the module docstring), so the learned alchemy value must be
+        # what answers this.
+        spell_id = craft.craft_errand("Ugga", {"herbalism": 132, "alchemy": 60})
+        self.assertEqual(spell_id, 2337)  # Lesser Healing Potion's bracket
 
     def test_finds_the_leatherworking_recipe_for_bork(self):
         # Bork: skinning + leatherworking (professions.ROSTER). Skinning is a
