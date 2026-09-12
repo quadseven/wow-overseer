@@ -3346,11 +3346,9 @@ class Bridge(discord.Client):
         if not candidates:
             log.info("economy: no safe carried vendor goods")
             return
-        # A sale is owned by the character carrying that item. A single
-        # leader aim cannot make the other four characters pass a vendor-range
-        # check, and their sell rows would otherwise be retried forever from
-        # wherever the party happened to be standing. Plan one vendor pass per
-        # holder so every seller reaches the NPC that will answer its command.
+        # A sale is owned by the character carrying that item, so the ROWS are
+        # grouped by holder. The ERRAND is not, and that distinction is the
+        # whole of infra#3553 - see the aim written below the gate.
         by_holder: dict[str, list] = {}
         for candidate in candidates:
             by_holder.setdefault(candidate.holder, []).append(candidate)
@@ -3391,22 +3389,103 @@ class Bridge(discord.Client):
         # npc_vendor rows still buys; gating on stock would refuse exactly the
         # vendors that would have taken the greens.
         attempts = await asyncio.to_thread(_sell_attempts, SELL_MEMORY_HOURS)
+
+        # ONE ERRAND, ON THE LEADER, AND NEVER ONE PER HOLDER (infra#3553).
+        #
+        # WHAT THIS USED TO DO AND WHY IT LOOKED RIGHT. It wrote
+        # `travel_npc = 'vendor'` once per HOLDER, arguing that "a single
+        # leader aim cannot make the other four characters pass a
+        # vendor-range check". The first half of that sentence is true and
+        # the conclusion drawn from it is not: a follower does pass the
+        # range check, by FOLLOWING THE LEADER to the counter. That is how
+        # the bank pass has always worked - "a follower cannot be sent to an
+        # NPC on its own ... So the errand goes to the leader, every
+        # character's rows are queued together, and each command stays
+        # pending until its holder reaches the counter" - and the repair
+        # half of the town trip is the same shape again.
+        #
+        # AIMING A FOLLOWER IS AN UPDATE THAT MOVES NOBODY, and mod-overseer
+        # says so in the log every time:
+        #
+        #     'Ugga' was sent to 'vendor' but does not carry `new rpg` -
+        #     nothing walks it anywhere. Followers travel by following the
+        #     leader; aim the leader instead
+        #
+        # (mod_overseer.cpp DriveTravel, the AimedMover::RefuseInFormation
+        # branch). `_drive_train` already wrote the rule down: "only the
+        # leader carries it, so aiming anybody else is an UPDATE that moves
+        # nobody."
+        #
+        # AND IT IS NOT MERELY INERT - IT COSTS THE FAMILY THE ERRAND.
+        # Two things charge for those four dead aims:
+        #
+        #   * mod-overseer bills an outstanding economy errand 15 seconds of
+        #     an ErrandBudgetLimits bucket on every travel poll, and a
+        #     follower's aim is never released, because the arrival check
+        #     that would release it sits BELOW the refusal above. 420
+        #     seconds of budget against a 1,800 second window drains at
+        #     0.233 s/s and fills at 1 s/s, so a follower reaches the line in
+        #     about nine minutes, every time, and is then refused for fifteen
+        #     ("economy errands had taken more than their share of this
+        #     character's time"). Every sell row queued during that window
+        #     answers `vendor not in range`. Measured all-time on the dev
+        #     realm: 17,333 `vendor not in range` against 1,689 delivered.
+        #
+        #   * `_aimed_names` counts a non-empty `travel_npc` as aimed, and
+        #     `_give_them_a_life` hands every aimed character
+        #     `goals.life_strategies(...)` -> `nc +new rpg`. So five vendor
+        #     aims can also put the wander strategy on all five, which is the
+        #     937-yard scatter goals.py exists to prevent.
+        #
+        #     SAID CAREFULLY, BECAUSE IT IS CONDITIONAL AND THE FIRST DRAFT OF
+        #     THIS COMMENT OVERSTATED IT. `_aimed_names` is
+        #     `drive_quest <> 0 OR travel_npc <> ''`, and `_aim_quest` already
+        #     writes `drive_quest` for EVERY holder of the party's quest
+        #     (infra#2801) - so while the family is questing together they are
+        #     all aimed and all carrying `new rpg` whatever this pass does, and
+        #     these aims add nothing there. The scatter is this pass's doing
+        #     only when `drive_quest` is clear. That is a real window and not
+        #     the steady state, and it is not why selling stalls; the two
+        #     reasons above are.
+        #
+        # THE HOLDER GATE BELOW IS UNCHANGED and is still per holder, which
+        # is the half of infra#3464 that was right: each seller's own DoSell
+        # answers on its own range, so each holder's rows wait for that
+        # holder to be standing at the counter.
+        #
+        # `_head_now()` RATHER THAN bonds.head_of_family(), because the two
+        # differ exactly when it matters. `_head_now` is what
+        # `_mark_party_leader` writes into `lead` and what
+        # `_give_them_a_life` reads to decide who carries `new rpg`, so it
+        # names the character that can actually walk; the resting answer is
+        # the same father either way.
+        leader = await asyncio.to_thread(_head_now)
+        # THE RETURN VALUE IS READ. The economy guard in _write_trade_errand
+        # only retasks an IDLE traveller, so this write is a no-op while the
+        # town trip owns `travel_npc = 'repair'` - which is a legitimate
+        # outcome and the exact thing infra#3464 called silent. It was still
+        # silent afterwards: the caller hardcoded `aimed = True` and threw
+        # the answer away.
+        aimed = await asyncio.to_thread(
+            _write_trade_errand,
+            professions.Errand(character=leader, travel_npc="vendor"),
+        )
+        if not aimed:
+            log.info(
+                "economy: leader=%s is already on somebody else's errand, so "
+                "no vendor aim was taken this pass", leader,
+            )
+
         inserted = 0
         considered = 0
         for holder in sorted(by_holder):
             holder_candidates = tuple(by_holder[holder])
-            await asyncio.to_thread(
-                _write_trade_errand,
-                professions.Errand(character=holder, travel_npc="vendor"),
-            )
-            aimed = True
             town = await asyncio.to_thread(_fetch_town, holder)
             if not town.vendor:
                 log.info(
                     "economy: %d carried candidate(s) for %s but no vendor "
-                    "within reach - travel aim queued=%s",
-                    len(holder_candidates), holder,
-                    aimed,
+                    "within reach - leader=%s aim taken=%s",
+                    len(holder_candidates), holder, leader, aimed,
                 )
                 continue
             # The world has already answered some of these. A sale that was
@@ -3424,8 +3503,9 @@ class Bridge(discord.Client):
                 holder, len(plan.write), len(holder_candidates),
                 item_plan.reasons(plan.skipped),
             )
-        log.info("economy: queued %d/%d vendor sale(s) across %d holder(s)",
-                 inserted, considered, len(by_holder))
+        log.info("economy: queued %d/%d vendor sale(s) across %d holder(s), "
+                 "one errand on leader=%s (taken=%s)",
+                 inserted, considered, len(by_holder), leader, aimed)
 
     async def _hand_gear(self, gear_rows: list, worn: list, names: list) -> None:
         """Move every carried piece that suits a sibling better (infra#3464).

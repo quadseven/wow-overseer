@@ -443,6 +443,67 @@ class TheBridgeAsksBeforeItSells(unittest.TestCase):
         self.assertIn("fits=fits", block)
         self.assertIn("keep_names=OWNER_KEEPS", block)
 
+    def _vendor_pass(self):
+        start = self.src.index("    async def _vendor_once(self)")
+        return self.src[start:self.src.index("    async def _vendor_loop(")]
+
+    def test_the_vendor_errand_is_written_once_and_to_the_leader(self):
+        """infra#3553. One aim, on the character that carries `new rpg`.
+
+        mod-overseer refuses to walk anybody else - "Followers travel by
+        following the leader; aim the leader instead" - so a per-holder aim
+        moved nobody while still being billed against that character's
+        ErrandBudgetLimits bucket on every travel poll, which refused the
+        whole family's vendor errand for fifteen minutes at a time.
+        """
+        block = self._vendor_pass()
+        self.assertIn(
+            'professions.Errand(character=leader, travel_npc="vendor")', block)
+        self.assertNotIn(
+            'professions.Errand(character=holder, travel_npc="vendor")', block)
+        self.assertEqual(1, block.count('travel_npc="vendor"'))
+
+    def test_the_aim_is_taken_outside_the_per_holder_loop(self):
+        """A second aim per holder is the defect, so geometry forbids it.
+
+        Counting the write is not enough on its own: the same single call
+        placed inside `for holder in sorted(by_holder)` would be five writes
+        again with one line of source.
+        """
+        block = self._vendor_pass()
+        self.assertLess(block.index("_write_trade_errand"),
+                        block.index("for holder in sorted(by_holder):"))
+
+    def test_the_leader_is_the_one_that_carries_the_strategy(self):
+        """`_head_now`, not bonds.head_of_family().
+
+        `_mark_party_leader` writes `_head_now()` into `lead` and
+        `_give_them_a_life` reads it to decide who gets `nc +new rpg`, so it
+        is the only answer that names a character able to walk.
+        """
+        self.assertIn("leader = await asyncio.to_thread(_head_now)",
+                      self._vendor_pass())
+
+    def test_whether_the_aim_was_taken_is_read_and_not_assumed(self):
+        """The economy guard only retasks an idle traveller, so this write
+        legitimately does nothing while the town trip owns the column. The
+        caller used to hardcode `aimed = True` and log that instead."""
+        block = self._vendor_pass()
+        self.assertIn("aimed = await asyncio.to_thread(", block)
+        # Asked of CODE and not of prose: the comment above the call quotes
+        # the old line, so a substring search over the whole block would be
+        # answered by the explanation of the bug rather than by the bug.
+        code = [ln.split("#", 1)[0].strip() for ln in block.splitlines()]
+        self.assertNotIn("aimed = True", code)
+
+    def test_the_sale_rows_are_still_grouped_by_holder(self):
+        """The errand is the leader's; the ROWS stay the holder's, because
+        DoSell answers on the range of whoever is selling (infra#3464)."""
+        block = self._vendor_pass()
+        self.assertIn("by_holder.setdefault(candidate.holder, [])", block)
+        self.assertIn("town = await asyncio.to_thread(_fetch_town, holder)",
+                      block)
+
     def test_the_pass_writes_a_sale_and_never_a_destruction(self):
         """Deleting is the last resort and it is not reached: nothing in the
         disposable pile is worth zero, and mod-overseer has no destroy kind."""
