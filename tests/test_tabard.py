@@ -253,3 +253,58 @@ class TheGuardAsksWhetherItHappenedNotWhetherWeTried(unittest.TestCase):
         """setup_hook and the headless driver. A loop in only one runs only
         under Discord, and wow-dev runs headless."""
         self.assertEqual(BRIDGE.count("self._design_tabard,"), 2)
+
+
+class TheSceneIsNotStagedToAnEmptyRoom(unittest.TestCase):
+    """Source-text contract, same reason as the class above.
+
+    Two failures share one cause, and the second is the expensive one.
+
+    COST: voicing a line is an LLM call, so a scene nobody can hear is eleven
+    of them per cycle, forever. Measured 2026-09-12: the family was offline
+    five hours and the loop kept paying for a conversation into an empty room.
+
+    A HALF-TOLD ARGUMENT: _tabard_already_held counts PARTIAL delivery as
+    held, on purpose. So three members present means six lines land, the
+    guard closes, and the family is stuck having had two thirds of an
+    argument with no way to finish it. That is worse than the cost and it is
+    not recoverable without deleting rows by hand.
+    """
+
+    def _once(self):
+        """Code only.
+
+        The WHY block above the gate NAMES `_in_character`, in order to
+        explain what staging to an empty room costs - and the first version
+        of the test below matched that comment and concluded the gate came
+        after the call it precedes. A text match that cannot tell a warning
+        about a call from the call itself is not a structural test; this is
+        the same rule tests/test_bags.py states for the C++ side.
+        """
+        start = BRIDGE.index("async def _tabard_once(")
+        end = BRIDGE.index("\n    async def ", start + 10)
+        return re.sub(r"#[^\n]*", "", BRIDGE[start:end])
+
+    def test_presence_is_checked_before_a_single_line_is_voiced(self):
+        body = self._once()
+        gate = body.index("_bot_held_names")
+        voiced = body.index("_in_character")
+        self.assertLess(gate, voiced,
+                        "presence must be settled before the LLM is asked for "
+                        "a line, or an empty room costs eleven calls a cycle")
+
+    def test_it_waits_for_everyone_not_just_for_anyone(self):
+        """Partial presence is the half-told-argument case, so the gate is
+        'all of them' and not 'some of them'."""
+        body = self._once()
+        self.assertIn("absent", body)
+        self.assertIn("if absent:", body,
+                      "the gate must refuse on ANY absentee; a truthiness "
+                      "check on the present set would stage to a half-empty "
+                      "room")
+
+    def test_it_reuses_the_existing_presence_rule(self):
+        """_bot_held_names already carries the 60-second freshness window and
+        the is_bot rule. A second copy would be a second answer to who is in
+        the world, and they would drift."""
+        self.assertIn("_bot_held_names, [k.name for k in kin]", BRIDGE)

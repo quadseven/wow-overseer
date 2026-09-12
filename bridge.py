@@ -3080,6 +3080,37 @@ class Bridge(discord.Client):
         # of the council's private/public rule.
         kin = [tabard.Kin(name=r["name"], race=r["race"], char_class=r["class"])
                for r in await asyncio.to_thread(_fetch_family_kin)]
+
+        # EVERY SPEAKER HAS TO BE IN THE WORLD, and this is checked BEFORE the
+        # scene is built rather than discovered from eleven failed rows.
+        #
+        # Two things go wrong without it, and the second is the bad one.
+        #
+        # 1. COST. Voicing a line is an LLM call (_in_character -> _ask_llm),
+        #    so an unheard scene is eleven of them, every cycle, for as long
+        #    as nobody is logged in. The family was offline for five hours on
+        #    2026-09-12 and the loop kept paying for a conversation nobody
+        #    could hear.
+        # 2. A HALF-TOLD ARGUMENT, PERMANENTLY. _tabard_already_held counts
+        #    PARTIAL delivery as held - deliberately, because re-speaking
+        #    lines somebody already heard is the stutter the guard exists to
+        #    prevent. So with three of five in the world, six lines land, the
+        #    guard closes, and the family is stuck having had two thirds of
+        #    an argument with no way to finish it. Waiting for all five costs
+        #    an hour; getting this wrong costs the scene.
+        #
+        # _bot_held_names is reused rather than reimplemented: same table,
+        # same 60-second freshness window, and it already carries the
+        # is_bot rule - a character Evan is holding at the keyboard has no
+        # PlayerbotAI and could not say its line anyway.
+        present = set(await asyncio.to_thread(
+            _bot_held_names, [k.name for k in kin]))
+        absent = [k.name for k in kin if k.name not in present]
+        if absent:
+            log.debug("tabard: not staging, %s not in the world",
+                      ", ".join(sorted(absent)))
+            return
+
         held = tabard.debate(kin)
         if held.design is None:
             # Same shape as _council_once: a conversation with nothing in it
