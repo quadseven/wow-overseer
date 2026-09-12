@@ -1227,6 +1227,81 @@ def _aim_traveller(quest_id: int) -> int:
         return aimed
 
 
+def _drive_dungeon(keyword: str, wanted: int) -> tuple:
+    """Turn a decided dungeon goal into the roster writes that actually send
+    the family in: job='dungeon:<keyword>' (or the bare 'dungeon') on every
+    ENABLED character, plus the campaign cap the coordinator counts against.
+
+    WHY THE WHOLE FAMILY AND NOT ONE TRAVELLER, UNLIKE _aim_traveller ABOVE. A
+    quest needs one character to hold the drive so the rest can follow into
+    it; a dungeon run needs everybody IN THE INSTANCE, which is exactly the
+    same reasoning bridge._set_job already applies to every other job-schedule
+    mode (jobs.py's own docstring). This is that fan-out, mirrored rather than
+    reinvented, with a dungeon-specific campaign write alongside it.
+
+    GATED ON BAG PRESSURE, AND DELIBERATELY HERE RATHER THAN IN goals.py.
+    Whether the family's bags are already too full to loot a run is a
+    live-world fact a pure decision module has no way to see, and
+    mod-overseer's own bag-pressure evacuation (#423/#424/#430) will evacuate
+    and fail a run for a family that cannot loot - sending them in anyway
+    would spend the very campaign this pass exists to advance on a run the
+    module is about to cut short. Reuses bag_pressure.family_town_run_needed
+    rather than a second threshold: it is the same "is this family too full to
+    keep going" question the economy pass already answers, asked here before
+    a run rather than mid-run.
+
+    Returns (jobs written, campaign rows written), both possibly 0 when bag
+    pressure withholds the whole pass or the roster is empty - the same
+    "count what actually landed" honesty _set_job's own fan-out keeps.
+    """
+    names = _fetch_enabled_names()
+    if not names:
+        return 0, 0
+
+    free_slots = _fetch_free_slots(names)
+    if bag_pressure.family_town_run_needed(free_slots):
+        log.info(
+            "goal: withholding dungeon:%s for %d enabled character(s) - bags "
+            "are already near full and a run started now would be evacuated "
+            "before it could progress (mod-overseer#423/#424/#430)",
+            keyword or "(default)", len(names),
+        )
+        return 0, 0
+
+    mode = "dungeon:%s" % keyword if keyword else "dungeon"
+    jobs_written = 0
+    for name in names:
+        try:
+            _insert_job(name, mode, "overseer:goal")
+            jobs_written += 1
+        except Exception:
+            # One failed insert must not cost the rest of the family; see
+            # _set_job's identical reasoning.
+            log.exception("dungeon job insert failed for %s (mode=%s)", name, mode)
+
+    campaign_written = 0
+    with _connect() as conn, conn.cursor() as cur:
+        for name in names:
+            try:
+                cur.execute(
+                    "UPDATE overseer_roster SET dungeon_runs_wanted = %s "
+                    "WHERE name = %s",
+                    (int(wanted), name),
+                )
+                campaign_written += cur.rowcount
+            except pymysql.err.MySQLError as exc:
+                if exc.args and exc.args[0] in (1054, 1146):
+                    log.warning(
+                        "overseer_roster.dungeon_runs_wanted missing - this "
+                        "realm predates mod-overseer's campaign columns "
+                        "(mod-overseer#302)",
+                    )
+                    break
+                raise
+    log.info("goal: dungeon:%s -> %d job(s), %d campaign row(s) of %d enabled",
+             keyword or "(default)", jobs_written, campaign_written, len(names))
+    return jobs_written, campaign_written
+
 
 def _holders_of(quest_id: int) -> set:
     """Which protected characters actually hold this quest in an actionable
@@ -2759,7 +2834,27 @@ class Bridge(discord.Client):
         history = bonds.history_from_thoughts(
             await asyncio.to_thread(_fetch_reflections)
         )
-        held = council.hold(members, history=history)
+        # What council._dungeon_proposal needs to reason about the whole
+        # family, alongside the per-member rows assess() already gets.
+        # level_rows comes straight from `members` rather than a second
+        # query: they are the exact characters the council can hear from,
+        # which is also what _dungeon_proposal requires of its weakest voice
+        # (a member absent from THIS sitting cannot be made to speak).
+        #
+        # cards IS DELIBERATELY EMPTY HERE. achievements.build_achievements
+        # needs the full Chronicle fetch (item templates, boss-drop
+        # inference, quest rewards - map_server._fetch_achievements) to
+        # build it properly, and replicating that whole pipeline in the
+        # bridge for an hourly decision was more than this pass could take
+        # on. The cost is real but bounded: _drops_seen with no cards only
+        # changes the verdict SENTENCE and which already-cleared, far-off
+        # dungeons stay listed past HORIZON - it does not change whether a
+        # dungeon in the family's current level range reads as ready, which
+        # is the whole of what the proposal acts on. Tracked as a follow-up
+        # rather than silently declared complete.
+        level_rows = [{"name": m.name, "level": m.level} for m in members]
+        held = council.hold(members, history=history,
+                            level_rows=level_rows, cards=[])
         if not held.lines:
             log.info("council: %s", held.reason)
             return
@@ -3905,6 +4000,11 @@ class Bridge(discord.Client):
             # between an aim that landed and one that went nowhere.
             log.info("goal: aiming the party at quest %d for %s (%d row(s))",
                      action.quest_id, action.beneficiary, aimed)
+        elif isinstance(action, goals.DriveDungeon):
+            # _drive_dungeon is what decides whether bag pressure withholds
+            # this cycle; 0 written either means that, or an empty roster, and
+            # both are already logged there with the reason.
+            await asyncio.to_thread(_drive_dungeon, action.keyword, action.wanted)
         elif isinstance(action, goals.MilestoneThought):
             await asyncio.to_thread(_insert_thought, action.character_name, "goal", action.text)
         elif isinstance(action, goals.Report):
@@ -4250,7 +4350,14 @@ def _ensure_goal_store() -> None:
             "CREATE TABLE IF NOT EXISTS overseer_goal ("
             " id INT UNSIGNED NOT NULL AUTO_INCREMENT,"
             " character_name VARCHAR(12) NOT NULL,"
-            " kind ENUM('level','skill','quest') NOT NULL,"
+            # goals.KIND_COLUMN, not a hardcoded literal, and that is the
+            # fix and not a style choice. This exact string was the trap the
+            # comment two lines down describes: it was hand-kept in sync with
+            # GOAL_KINDS once already for 'quest' and stayed one kind behind
+            # again the moment 'dungeon' was added the same way. Reading the
+            # constant means the CREATE and the migration can never drift
+            # apart a second time.
+            " kind " + goals.KIND_COLUMN + ","
             " skill_name VARCHAR(32) NULL,"
             " target SMALLINT UNSIGNED NOT NULL,"
             " quest_id INT UNSIGNED NOT NULL DEFAULT 0,"
@@ -4376,6 +4483,27 @@ def _observe_goal(row: dict) -> int | None:
             )
             found = cur.fetchone()
             return int(found["level"]) if found else None
+        if row["kind"] == "dungeon":
+            # dungeon_runs_done is written to EVERY enabled roster row alike
+            # (decree.py's own campaign-counter comment explains why: the
+            # coordinator counts against whoever leads, and the count does not
+            # travel with the crown), so the beneficiary's own row is as good
+            # a read as any other enabled member's. A missing row - a realm
+            # whose overseer_roster predates the campaign columns, or the
+            # character has never been enabled - is "cannot be seen", not
+            # zero runs done.
+            try:
+                cur.execute(
+                    "SELECT dungeon_runs_done FROM overseer_roster "
+                    "WHERE name = %s",
+                    (row["character_name"],),
+                )
+            except pymysql.err.MySQLError as exc:
+                if exc.args and exc.args[0] in (1054, 1146):
+                    return None
+                raise
+            found = cur.fetchone()
+            return int(found["dungeon_runs_done"]) if found else None
         skill_id = goals.SKILL_IDS.get(row["skill_name"] or "")
         if skill_id is None:
             return None
@@ -5701,7 +5829,11 @@ def _choose_drive_quest(plan) -> int:
 # day ('idle') or to learning a trade ('trades') has still decided something
 # real - it is simply not something the supervisor knows how to drive, and
 # writing it as a goal would have it issue grind commands for an afternoon off.
-DRIVEN_KINDS = ("level", "quest")
+#
+# 'dungeon' joined the tuple once the council could actually decide one
+# (infra dungeon-decision gap) - see _persist_council_plan for what gets
+# stored and _apply_goal_action for what execing a dungeon goal does.
+DRIVEN_KINDS = ("level", "quest", "dungeon")
 
 
 def _already_agreed(plan) -> bool:
@@ -5729,12 +5861,13 @@ def _already_agreed(plan) -> bool:
             return False
     with _connect() as conn, conn.cursor() as cur:
         cur.execute(
-            "SELECT kind, target, quest_id FROM overseer_goal "
+            "SELECT kind, target, quest_id, skill_name FROM overseer_goal "
             "WHERE character_name = %s AND status = 'active'",
             (plan.beneficiary,),
         )
         return goals.already_working(
             plan.kind, int(plan.target), list(cur.fetchall()), quest_id=quest_id,
+            keyword=plan.keyword,
         )
 
 
@@ -5771,6 +5904,17 @@ def _persist_council_plan(plan) -> int | None:
             )
             return None
 
+    # skill_name IS THE JOB KEYWORD FOR kind='dungeon', not a skill. There is
+    # no column on overseer_goal for it, the same gap 'quest' hit before it
+    # - the id had nowhere to live either, until it was threaded onto
+    # Proposal/Plan themselves. skill_name is the only spare TEXT column the
+    # row has, and it is otherwise unused for both 'level' and 'quest' goals,
+    # so a dungeon row is the one place it carries meaning other than a
+    # profession name. "" (the bare 'dungeon' job) is stored as "" and not
+    # NULL, matching how goals.already_working and goals._describe both read
+    # it back with `or ""`.
+    skill_name = plan.keyword if plan.kind == "dungeon" else None
+
     with _connect() as conn, conn.cursor() as cur:
         # An identical goal already being worked is LEFT ALONE. The council
         # meets hourly and keeps reaching the same conclusion while the work is
@@ -5780,12 +5924,12 @@ def _persist_council_plan(plan) -> int | None:
         # in the table before this was noticed, and the supervisor never once
         # got far enough to re-assert.
         cur.execute(
-            "SELECT kind, target, quest_id FROM overseer_goal "
+            "SELECT kind, target, quest_id, skill_name FROM overseer_goal "
             "WHERE character_name = %s AND status = 'active'",
             (plan.beneficiary,),
         )
         if goals.already_working(plan.kind, int(plan.target), list(cur.fetchall()),
-                                 quest_id=quest_id):
+                                 quest_id=quest_id, keyword=plan.keyword):
             log.info("council: %s is already working towards %s %d (quest %d)",
                      plan.beneficiary, plan.kind, int(plan.target), quest_id)
             return None
@@ -5797,17 +5941,19 @@ def _persist_council_plan(plan) -> int | None:
         )
         # target for a quest goal is always goals.QUEST_TARGET (0 objectives
         # left); the council's plan.target is objectives REMAINING right now,
-        # which is an observation and not a destination.
+        # which is an observation and not a destination. A dungeon goal's
+        # target IS a destination (council.DUNGEON_RUNS_WANTED runs done), so
+        # it takes the same road as 'level'.
         target = goals.QUEST_TARGET if plan.kind == "quest" else int(plan.target)
         cur.execute(
             "INSERT INTO overseer_goal "
-            "(character_name, kind, target, quest_id, status, channel_id) "
-            "VALUES (%s, %s, %s, %s, 'active', %s)",
-            (plan.beneficiary, plan.kind, target, quest_id,
+            "(character_name, kind, skill_name, target, quest_id, status, "
+            "channel_id) VALUES (%s, %s, %s, %s, %s, 'active', %s)",
+            (plan.beneficiary, plan.kind, skill_name, target, quest_id,
              OVERSEER_CHANNEL_ID or ""),
         )
-        log.info("council: persisted %s goal for %s (quest %d, row %s)",
-                 plan.kind, plan.beneficiary, quest_id, cur.lastrowid)
+        log.info("council: persisted %s goal for %s (quest %d, keyword %r, row %s)",
+                 plan.kind, plan.beneficiary, quest_id, skill_name, cur.lastrowid)
         return cur.lastrowid
 
 

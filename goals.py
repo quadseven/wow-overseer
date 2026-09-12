@@ -80,7 +80,12 @@ QUEST_TARGET = 0
 # Every kind an overseer_goal row may carry, and the column definition that
 # admits them. ONE list: the enum and the code that writes into it drifting
 # apart is the whole failure this constant exists to prevent.
-GOAL_KINDS = ("level", "skill", "quest")
+#
+# 'dungeon' joined this list once the council could actually decide one
+# (infra dungeon-decision gap): a family-wide plan to run a named dungeon,
+# stored the same way 'quest' is - see Goal.dungeon_keyword below and
+# _persist_council_plan's comment on what each column holds for it.
+GOAL_KINDS = ("level", "skill", "quest", "dungeon")
 KIND_COLUMN = "ENUM(%s) NOT NULL" % ",".join("'%s'" % k for k in GOAL_KINDS)
 
 
@@ -110,6 +115,16 @@ def goal_migrations(kind_column_type: str, has_quest_id: bool) -> list:
     An empty `kind_column_type` means the table does not exist yet (the
     information_schema lookup found nothing). CREATE TABLE is about to make it
     correctly, so there is nothing to alter.
+
+    GENERALIZED FOR 'dungeon', RATHER THAN GIVEN A SECOND COPY OF THIS
+    FUNCTION'S BODY. The check used to read `"'quest'" not in
+    kind_column_type` because 'quest' was the only value this table had ever
+    been asked to grow into after 'level' and 'skill'. Reading GOAL_KINDS
+    itself instead of naming one value keeps this the SAME migration for
+    every kind that has ever needed one, including the next one - the ALTER
+    it emits already sets the full ENUM regardless of how many values were
+    missing, so there is nothing to change about the statement, only about
+    when it fires.
     """
     if not kind_column_type:
         # No `kind` column means no table (the caller's information_schema
@@ -119,7 +134,7 @@ def goal_migrations(kind_column_type: str, has_quest_id: bool) -> list:
         # copy next time.
         return []
     out = []
-    if "'quest'" not in kind_column_type:
+    if any("'%s'" % kind not in kind_column_type for kind in GOAL_KINDS):
         out.append("ALTER TABLE overseer_goal MODIFY kind " + KIND_COLUMN)
     if not has_quest_id:
         # MySQL has no ADD COLUMN IF NOT EXISTS, which is why the caller looks
@@ -136,6 +151,12 @@ def goal_migrations(kind_column_type: str, has_quest_id: bool) -> list:
 class Goal:
     """A parsed goal, before persistence (no id/character/channel yet)."""
 
+    # 'dungeon' is deliberately absent from this list: nobody TYPES a dungeon
+    # goal into Discord the way they type "get to level 20" - parse_goal below
+    # never produces one. A dungeon goal is council-only, persisted straight
+    # to overseer_goal by bridge._persist_council_plan, which is also why this
+    # dataclass carries no dungeon_keyword field of its own; see
+    # _persist_council_plan's comment on where that value actually lives.
     kind: str  # 'level' | 'skill' | 'quest'
     target: int
     skill_name: str | None = None
@@ -179,6 +200,36 @@ class DriveQuest:
     """
 
     quest_id: int
+    beneficiary: str
+
+
+@dataclass(frozen=True)
+class DriveDungeon:
+    """Send the WHOLE family into a dungeon: job='dungeon:<keyword>' on every
+    enabled roster row, plus the campaign cap that goes with it.
+
+    FAMILY-WIDE ON PURPOSE, unlike DriveQuest. A quest aim names one traveller
+    because only one character needs to hold and drive it; a dungeon run needs
+    everybody in the party, the same way jobs.py's own job-schedule modes are
+    fanned out to every enabled character (bridge._set_job) rather than to one
+    name. `beneficiary` is who the council's plan named, kept for the report
+    and the thought log - it is not who the job is written to.
+
+    `keyword` is "" for the bare 'dungeon' job (whichever the module treats
+    as its own default) and a wing name like 'scarlet-library' otherwise - the
+    same string council.Proposal.keyword and Plan.keyword carry, unpacked from
+    the goal row's skill_name column (see _persist_council_plan's comment on
+    why that column is where it is stored).
+
+    THE BAG-PRESSURE GATE LIVES OUTSIDE THIS MODULE. Whether the family's bags
+    are already too full to loot a run is a live-world fact this pure module
+    has no way to see; bridge.py checks it (bag_pressure.family_town_run_needed)
+    before turning this action into a write, the same way it is the one place
+    that can see whether a database write actually landed.
+    """
+
+    keyword: str
+    wanted: int
     beneficiary: str
 
 
@@ -472,7 +523,8 @@ def life_strategies(*, leads: bool, aimed: bool = False, travelling: bool = Fals
     return ["nc -new rpg", "nc +follow", FLEE_STRATEGY]
 
 
-def already_working(kind: str, target: int, active: list, *, quest_id: int = 0) -> bool:
+def already_working(kind: str, target: int, active: list, *, quest_id: int = 0,
+                    keyword: str = "") -> bool:
     """Is this character already pursuing exactly this goal?
 
     A function rather than a check at the call site so the rule can be tested
@@ -493,10 +545,33 @@ def already_working(kind: str, target: int, active: list, *, quest_id: int = 0) 
             and int(row.get("quest_id") or 0) == int(quest_id)
             for row in active
         )
+    if kind == "dungeon":
+        # EVERY dungeon goal shares the same target (DUNGEON_RUNS_WANTED), so
+        # comparing targets here has the identical failure the quest branch
+        # above already fixed once: "already working" would read true for
+        # ANY dungeon at all, and a council that moved on from the graveyard
+        # to the cathedral would find its new decision silently swallowed by
+        # the old one. skill_name carries the keyword (see
+        # _persist_council_plan) and is the identity here, the same role
+        # quest_id plays for a quest.
+        return any(
+            row.get("kind") == "dungeon"
+            and str(row.get("skill_name") or "") == str(keyword or "")
+            for row in active
+        )
     return any(
         row.get("kind") == kind and int(row.get("target", -1)) == int(target)
         for row in active
     )
+
+
+def _dungeon_name(keyword: str) -> str:
+    # The keyword IS the name, hyphens aside - this module has no dungeon
+    # catalogue of its own (achievements.py is where dungeon names actually
+    # live) and reusing council.py's own SCARLET_WINGS vocabulary here would
+    # be a second answer able to disagree with the first. "" is the bare
+    # 'dungeon' job, which names no specific place.
+    return keyword.replace("-", " ") if keyword else "a dungeon"
 
 
 def _describe(kind: str, skill_name: str | None, target: int, quest_id: int = 0) -> str:
@@ -508,6 +583,12 @@ def _describe(kind: str, skill_name: str | None, target: int, quest_id: int = 0)
         # things is how a schema starts lying. The council's own sentence is
         # already in the goal's reason and says the title out loud.
         return f"quest {quest_id}"
+    if kind == "dungeon":
+        # skill_name carries the job keyword here, not a skill - see
+        # _persist_council_plan's comment on why that column holds it. A
+        # dedicated column would be the honest fix; this module reuses the
+        # one spare column the schema already has, same as 'quest' does.
+        return f"{_dungeon_name(skill_name or '')}, {target} run{'s' if target != 1 else ''}"
     return f"level {target}"
 
 
@@ -537,6 +618,11 @@ def milestone_text(row: Mapping, observed: int) -> str:
         plural = "" if left == 1 else "s"
         return (f"{row['character_name']} advances: {left} objective{plural} "
                 f"left on {what}.")
+    if row["kind"] == "dungeon":
+        # The FAMILY advances, not the beneficiary alone - a dungeon run needs
+        # everybody, and the character_name on the row is who the council
+        # named, not who is running it (see DriveDungeon's docstring).
+        return f"The family advances: {observed} of {int(row['target'])} runs done on {what}."
     if row["kind"] == "skill":
         return f"{row['character_name']} advances: {row['skill_name']} {observed}, aiming for {what}."
     remaining = int(row["target"]) - observed
@@ -553,6 +639,8 @@ def completion_text(row: Mapping, observed: int) -> str:
         # must never do.
         return (f"Goal complete: {row['character_name']} has no objectives "
                 f"left on {what} and can hand it in.")
+    if row["kind"] == "dungeon":
+        return f"Goal complete: the family finished its campaign on {what}."
     return f"Goal complete: {row['character_name']} reached {what} (now at {observed})."
 
 
@@ -613,6 +701,12 @@ def reconcile(row: Mapping, observed: int | None) -> list:
         # the action is an aim and not a strategy, and the aim is a LEASE that
         # expires whether or not progress is being made.
         return _reconcile_quest(row, observed)
+    if row.get("kind") == "dungeon":
+        # Its own branch for the same reason quest gets one: the action is a
+        # family-wide job write, not a per-character strategy, and it is a
+        # LEASE for the same reason a quest aim is - see DriveDungeon and
+        # _reconcile_dungeon's docstrings.
+        return _reconcile_dungeon(row, observed)
     name = row["character_name"]
     goal_id = int(row["id"])
     target = int(row["target"])
@@ -686,6 +780,51 @@ def _reconcile_quest(row: Mapping, observed: int) -> list:
     if renew and quest_id:
         actions.append(DriveQuest(quest_id=quest_id, beneficiary=name))
     if last is not None and _milestone_crossed("quest", last, observed):
+        text = milestone_text(row, observed)
+        actions.append(MilestoneThought(name, text))
+        actions.append(Report(text))
+    actions.append(RecordProgress(goal_id, observed, 0 if renew else leases + 1))
+    return actions
+
+
+def _reconcile_dungeon(row: Mapping, observed: int) -> list:
+    """One supervision cycle for a kind='dungeon' goal.
+
+    `observed` is dungeon_runs_done, read the same direction as a level: it
+    rises toward `target` (DUNGEON_RUNS_WANTED, council.py), so the
+    completion and milestone tests below need no negation the way a quest's
+    do.
+
+    RE-ASSERTED ON A CLOCK, LIKE A QUEST AIM AND FOR THE SAME REASON: the job
+    this goal depends on can be knocked off the roster without the campaign
+    itself having failed - a relog resets overseer_roster strategies, and
+    mod-overseer's own bag-pressure evacuation (#423/#424/#430) will pull the
+    family out of a run their bags cannot hold any more. A stall-triggered
+    re-assert would never fire in exactly the case where the campaign is
+    healthiest, same argument _reconcile_quest already makes.
+
+    THE ACTION IS EMITTED UNCONDITIONALLY ON THE LEASE CLOCK. Whether writing
+    it is safe THIS cycle - bags not already near-full - is a live-world fact
+    this pure module cannot see; bridge.py checks it before turning the
+    action into a write (see DriveDungeon's docstring). A skipped write here
+    would also skip the lease renewal that is the only thing standing between
+    a healthy campaign and a silently stale job.
+    """
+    name = row["character_name"]
+    goal_id = int(row["id"])
+    target = int(row["target"])
+    keyword = str(row.get("skill_name") or "")
+    if observed >= target:
+        text = completion_text(row, observed)
+        return [MilestoneThought(name, text), Report(text), MarkComplete(goal_id)]
+
+    last, leases = _read_report(row)
+    renew = last is None or leases + 1 >= REASSERT_AFTER_CYCLES
+
+    actions: list = []
+    if renew:
+        actions.append(DriveDungeon(keyword=keyword, wanted=target, beneficiary=name))
+    if last is not None and _milestone_crossed("dungeon", last, observed):
         text = milestone_text(row, observed)
         actions.append(MilestoneThought(name, text))
         actions.append(Report(text))

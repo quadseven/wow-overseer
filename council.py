@@ -116,6 +116,12 @@ class Proposal:
     # Only meaningful for kind='quest'; 0 everywhere else. Additive and
     # defaulted on purpose, so every existing proposal shape is untouched.
     quest_id: int = 0
+    # Only meaningful for kind='dungeon'; "" everywhere else, same discipline
+    # as quest_id above. Carries the job keyword mod-overseer's DoJob reads
+    # for job='dungeon:<keyword>' (mod-overseer#426/#432) - for example
+    # 'scarlet-library'. "" means the bare 'dungeon' job, which the module
+    # treats as its own default rather than naming a specific wing.
+    keyword: str = ""
 
 
 @dataclass(frozen=True)
@@ -130,6 +136,10 @@ class Plan:
     # whole point of the plan - target is objectives REMAINING, which names no
     # quest at all - and it is what the persisted goal is driven by.
     quest_id: int = 0
+    # Carried through from the winning Proposal, same discipline as quest_id.
+    # Only meaningful for kind='dungeon' - the job keyword to send, or "" for
+    # the bare 'dungeon' job.
+    keyword: str = ""
 
 
 @dataclass(frozen=True)
@@ -399,12 +409,25 @@ def _script(tally: list, withheld: list) -> list:
     return lines
 
 
-def hold(members: list, *, history: list) -> Council:
+def hold(members: list, *, history: list, level_rows: list[dict] | None = None,
+         cards: list[dict] | None = None) -> Council:
     """Run one council. Members in, a conversation and one plan out.
 
     Deterministic: the same state produces the same plan every time, so the
     supervisor cannot be surprised and a test can pin the outcome. The voice
     layer decorates these lines later; it never changes the decision.
+
+    `level_rows` and `cards` are additive and default to nothing, so every
+    existing caller is untouched. They are what prospects() already reasons
+    over for the Council tab's own readiness panel, and they are handed in
+    here rather than threaded through `assess()` on purpose: a dungeon run is
+    a decision about the WHOLE family (like `idle`, which speaks for
+    FAMILY_AT_LARGE), never one member's own want, so it does not belong in
+    the one-member-at-a-time seam `assess()` guards. Extending `assess()`'s
+    signature to carry family-wide dungeon data would have every member
+    quietly gain the power to reason about the whole family's business, which
+    is exactly the privacy contract this module's docstring says `assess()`
+    is built to prevent.
     """
     speakers = [m for m in members if bonds.member(m.name)]
     if len(speakers) < 2:
@@ -416,6 +439,11 @@ def hold(members: list, *, history: list) -> Council:
     # else's gold.
     raw = [p for p in (assess(m, public_levels=public_levels) for m in speakers)
            if p is not None]
+    # The one proposal not spoken for by assess(). See the docstring above
+    # for why it lives here instead.
+    dungeon = _dungeon_proposal(speakers, level_rows or [], cards or [])
+    if dungeon is not None:
+        raw.append(dungeon)
     if not raw:
         return Council(reason="nobody had anything to say")
 
@@ -431,7 +459,8 @@ def hold(members: list, *, history: list) -> Council:
     return Council(
         lines=_script(tally, withheld),
         plan=Plan(kind=won.kind, beneficiary=won.beneficiary,
-                  target=won.target, reason=won.said, quest_id=won.quest_id),
+                  target=won.target, reason=won.said, quest_id=won.quest_id,
+                  keyword=won.keyword),
         reason=f"{won.proposer}'s plan carried at {score}",
     )
 
@@ -479,6 +508,15 @@ OUTSIDER_HUE = "muted"
 # the door. The NAMES are not repeated here - achievements.dungeon_name is
 # where the family's dungeons are written down, and a second copy would be a
 # second answer able to disagree with it.
+#
+# EXTENDED 2026-09-12 (infra dungeon-decision gap): the table topped out at
+# Razorfen Kraul (30) while the family sat at 41-42, so `prospects()` had
+# nothing to say for the level range they were actually IN. Scarlet Monastery
+# is the operator's own stated priority; Razorfen Downs, Uldaman and
+# Zul'Farrak are added alongside it on the same judgment - they are already
+# named in achievements.DUNGEONS (someone anticipated the family reaching
+# them), and they fill the run of levels between Razorfen Kraul and Scarlet
+# Monastery's cathedral rather than leaving a gap prospects() cannot speak to.
 PLACES = {
     389: 15,   # Ragefire Chasm
     43: 17,    # Wailing Caverns
@@ -488,7 +526,38 @@ PLACES = {
     34: 24,    # The Stockade
     90: 29,    # Gnomeregan
     47: 30,    # Razorfen Kraul
+    # ONE NUMBER PER MAP ID, and Scarlet Monastery is four wings on one map
+    # (189). This entry is the GRAVEYARD's level - the wing met first, at the
+    # door - because that is what "wants" means for every other entry here:
+    # the level that gets the family in, not the level that clears the whole
+    # place. Which of the four wing job keywords the council actually sends
+    # once it settles on Scarlet Monastery is a narrower question, answered by
+    # SCARLET_WINGS below rather than by trying to force four rows onto one
+    # map id.
+    189: 28,   # Scarlet Monastery (Graveyard: Interrogator Vishas, Bloodmage Thalnos)
+    129: 33,   # Razorfen Downs
+    70: 34,    # Uldaman
+    209: 36,   # Zul'Farrak
 }
+
+# The four wings of Scarlet Monastery (map 189, PLACES above), by the level
+# that opens them, lowest first - a second, narrower table used ONLY to pick
+# which job keyword (mod-overseer#426/#432, already live) the council sends
+# once it has decided Scarlet Monastery is the target. PLACES cannot hold this
+# itself: it is one number per map id, and all four wings share map 189.
+SCARLET_MAP_ID = 189
+SCARLET_WINGS = (
+    ("scarlet", 28),               # graveyard: Interrogator Vishas, Bloodmage Thalnos
+    ("scarlet-library", 33),       # Houndmaster Loksey, Arcanist Doan
+    ("scarlet-armory", 36),        # Herod
+    ("scarlet-cathedral", 39),     # Whitemane, Mograine
+)
+
+# What the operator set by hand the night these wings went live. Not derived
+# from anything below - it is a fact about how big a campaign this family runs
+# once it decides to go, and reusing the number the operator actually used is
+# more honest than inventing a formula for it.
+DUNGEON_RUNS_WANTED = 25
 
 # Levels short the family would go in on anyway. Two is one bad pull; four is
 # a wipe at the door, and the difference is what the gate exists to say.
@@ -735,6 +804,110 @@ def prospects(level_rows: list[dict], cards: list[dict]) -> list[dict]:
             "verdict": verdict(short, map_id in been, seen, who),
         })
     return out
+
+
+# --- the one proposal `assess()` cannot make (infra dungeon-decision gap) ---
+#
+# prospects() above already knows everything a dungeon decision needs - the
+# weakest member's level, the gate word, what has been seen to drop - and
+# until now it fed only the website's display. This is the wiring that lets
+# the council actually ACT on its own readiness panel instead of just showing
+# it.
+
+
+def _scarlet_keyword(level: int) -> str:
+    """Which of Scarlet Monastery's four wings this family should be sent to.
+
+    The HIGHEST wing the family is ready (or NEAR_ENOUGH short) for, same gate
+    prospects() uses everywhere else - a family ready for the cathedral is not
+    sent back to the graveyard, and one only ready for the graveyard is not
+    sent past its door.
+    """
+    keyword = SCARLET_WINGS[0][0]
+    for name, wants in SCARLET_WINGS:
+        if level + NEAR_ENOUGH >= wants:
+            keyword = name
+    return keyword
+
+
+def _dungeon_proposal(speakers: list, level_rows: list[dict],
+                      cards: list[dict]) -> Proposal | None:
+    """A family-wide proposal to run a dungeon, when one is actually ready.
+
+    Built from prospects() - the exact readiness gate the Council tab already
+    draws - so the council can never argue for a target the page would call
+    unready in the same breath. Only a READY or NEAR_ENOUGH-short place is
+    worth raising here; anything further off is idle noise, and there is
+    always a dungeon further off.
+
+    RAISED BY THE WEAKEST MEMBER, per _weakest() - the family is gated on
+    whoever is furthest behind, so that is whose voice this naturally is, and
+    it is also who a dungeon goal is persisted against (overseer_goal has no
+    row for FAMILY_AT_LARGE). If that member is not sitting at THIS council
+    (offline, or not yet bonded) there is nobody to put the sentence in, and
+    proposing on their behalf would put words in an absent mouth - so the
+    proposal is withheld for the sitting rather than reassigned to someone
+    else's voice.
+    """
+    if not level_rows:
+        return None
+    weakest = _weakest(level_rows)
+    if weakest is None:
+        return None
+    who, level = weakest
+    voice = next((m for m in speakers if m.name == who), None)
+    if voice is None:
+        return None
+
+    # Scarlet Monastery's entry in PLACES carries only the graveyard's level -
+    # one number per map id, and it is the LOWEST of the four wings. Comparing
+    # that number straight against every other dungeon would have the council
+    # always undersell Scarlet Monastery once the family outgrows its door,
+    # proposing Zul'Farrak over the cathedral for a family strong enough for
+    # both. So the map-189 row is re-rated here to whichever wing the family
+    # can ACTUALLY reach, before the frontier is chosen - the same
+    # short/ready arithmetic prospects() uses, just aimed at the wing instead
+    # of the doorway.
+    wing_wants = dict(SCARLET_WINGS)[_scarlet_keyword(level)]
+    rated = []
+    for p in prospects(level_rows, cards):
+        if p["map_id"] == SCARLET_MAP_ID:
+            short = wing_wants - level
+            p = dict(p, wants=wing_wants, short=max(short, 0), ready=short <= 0)
+        rated.append(p)
+
+    ready = [p for p in rated if p["short"] <= NEAR_ENOUGH]
+    if not ready:
+        return None
+    # The FRONTIER, not the first entry: prospects() lists everything the
+    # family has already been to as well, however far past it they now are,
+    # and the honest next target is the hardest one they can currently walk
+    # into - not the easiest. Ties favour Scarlet Monastery, Evan's own
+    # stated priority.
+    best = max(ready, key=lambda p: (p["wants"], p["map_id"] == SCARLET_MAP_ID))
+    keyword = _scarlet_keyword(level) if best["map_id"] == SCARLET_MAP_ID else ""
+    place = best["place"]
+    if best["ready"]:
+        said = f"{place} will not trouble us now. We should go in."
+    else:
+        said = (f"{place} is close enough to try. {who} would be carried, "
+                f"and I would rather we went than waited.")
+    return Proposal(
+        proposer=voice.name, kind="dungeon", beneficiary=voice.name,
+        # target is DUNGEON_RUNS_WANTED, not a level or a map id: it is the
+        # one number the persisted goal actually needs to drive a campaign,
+        # the same way a quest proposal's target is objectives remaining
+        # rather than the quest's own id.
+        target=DUNGEON_RUNS_WANTED,
+        # Above a half-finished quest (60): the whole family being gated on
+        # one dungeon is a bigger fact than one character's errand, and it is
+        # the fact Evan's own priority named. Below a laggard rescue, whose
+        # weight (100 - level) reflects how far behind somebody actually is -
+        # nobody left behind outranks anywhere the family could go next. See
+        # the PR for the full argument.
+        weight=70,
+        said=said, keyword=keyword,
+    )
 
 
 def quiet_line(lines: list[dict]) -> str:
