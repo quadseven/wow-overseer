@@ -39,6 +39,7 @@ import events
 import fanout
 import goals
 import bonds
+import craft
 import item_plan
 import jobs
 import kin
@@ -1162,6 +1163,22 @@ def _pending_trades() -> dict:
         return {}
 
 
+def _crafting_roster() -> list:
+    """Every enabled character currently on `job='craft'` (infra#440).
+
+    A PLAIN COLUMN READ, not a decision - _craft_once uses this to know WHO
+    to write a craft_spell errand for, never WHETHER anyone should be on
+    job='craft' in the first place. That call is an operator/decree/council
+    one this module does not make.
+    """
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT name FROM overseer_roster WHERE enabled = 1 AND job = %s",
+            ("craft",),
+        )
+        return [row["name"] for row in cur.fetchall()]
+
+
 def _council_family() -> list:
     """The family as professions.plan sees them: class, seniority, own skills."""
     names = sorted(_protected_guids().values())
@@ -1759,6 +1776,40 @@ def _write_trade_errand(errand) -> bool:
     return True
 
 
+def _write_craft_errand(character: str, spell_id: int) -> bool:
+    """Put one character's standing craft errand where mod-overseer's
+    DriveCraft reads it (infra#440).
+
+    UNCONDITIONAL, unlike `_write_trade_errand`'s ECONOMY_ERRANDS guard -
+    `craft_spell` has no other writer to collide with yet (no economy pass
+    aims it, no dungeon coordinator touches it), so there is no "somebody
+    else owns this column right now" case to protect against. If one is
+    ever added, it needs a guard exactly like `_write_trade_errand`'s.
+
+    RE-ASSERTED EVERY CALL, same reasoning as the trade errand: mod-overseer
+    clears `craft_spell` itself on a hard failure (unknown spell, spell not
+    known), so re-writing an outstanding errand is a no-op, and re-writing
+    one a worldserver restart lost is a repair.
+    """
+    with _connect() as conn, conn.cursor() as cur:
+        try:
+            cur.execute(
+                "UPDATE overseer_roster SET craft_spell = %s WHERE name = %s",
+                (spell_id, character),
+            )
+        except pymysql.err.OperationalError as exc:
+            if exc.args and exc.args[0] == 1054:
+                log.warning(
+                    "overseer_roster.craft_spell is missing - %s cannot be sent "
+                    "to craft until the db-import image carrying mod-overseer's "
+                    "SQL has shipped (infra#440)",
+                    character,
+                )
+                return False
+            raise
+    return bool(cur.rowcount)
+
+
 # THE overseer_* TABLES DO NOT SHARE ONE COLLATION, AND THIS SIDE CANNOT FIX
 # THAT (infra#3173). Read this before writing any join between two of them.
 #
@@ -2215,6 +2266,7 @@ class Bridge(discord.Client):
                 self._hold_council,
                 self._design_tabard,
                 self._assign_trades,
+                self._assign_crafts,
                 self._sample_family,
                 self._share_quests_loop,
                 self._move_materials_loop,
@@ -3331,6 +3383,52 @@ class Bridge(discord.Client):
             log.warning("trades: what could still stop this - %s", blocker)
 
         await self._speak_trade_plan(plan, fresh)
+
+    async def _craft_once(self) -> None:
+        """Aim every `job='craft'` character at the recipe craft.recipe_for
+        picks for its current skill (infra#440).
+
+        DELIBERATELY DOES NOT DECIDE WHO GETS `job='craft'`. That is an
+        operator/decree/council decision this pass does not make - v1's own
+        design doc leaves "when does a character start crafting" open, the
+        same way `job='train'`/`'rest'`/every other stand-down-only mode
+        already does. This loop only answers "given that a character IS on
+        job='craft' right now, which recipe should it be casting" - the
+        `craft_spell` column, re-asserted every cycle exactly like the trade
+        errand, so a worldserver restart cannot lose it.
+
+        A character on `job='craft'` with no matching entry in
+        `craft.RECIPES` (profession not yet in the table, or skill value
+        outside every bracket) gets `craft_spell = 0` written - explicit
+        "nothing to do" rather than a stale spell id left standing from a
+        bracket the character has since grown past.
+        """
+        names = await asyncio.to_thread(_crafting_roster)
+        if not names:
+            return
+        skills = await asyncio.to_thread(_fetch_trade_skills, names)
+        for name in names:
+            spell_id = craft.craft_errand(name, skills.get(name, {}))
+            await asyncio.to_thread(_write_craft_errand, name, spell_id)
+            if spell_id:
+                log.info("craft: %s aimed at recipe spell %s", name, spell_id)
+
+    async def _assign_crafts(self) -> None:
+        """Same cadence family as _assign_trades - a standing errand needs
+        re-asserting far more often than it needs re-deciding, but nothing
+        here is decided at all (see _craft_once), so this loop is cheaper:
+        no council announcement, no party-chat line, just the errand column
+        kept correct for whoever operations has put on job='craft'.
+        """
+        await self.wait_until_ready()
+        cycle = float(os.environ.get("CRAFT_CYCLE_SECONDS", "300"))
+        await asyncio.sleep(min(cycle, 90.0))
+        while not self.is_closed():
+            try:
+                await self._craft_once()
+            except Exception:
+                log.exception("craft failed; retrying next cycle")
+            await asyncio.sleep(cycle)
 
     async def _protect_characters(self) -> None:
         """Hold the manager's own randomize bookkeeping open (infra#2656).
@@ -6728,6 +6826,7 @@ class HeadlessBridge(Bridge):
                 self._hold_council,
                 self._design_tabard,
                 self._assign_trades,
+                self._assign_crafts,
                 self._sample_family,
                 self._share_quests_loop,
                 self._move_materials_loop,
