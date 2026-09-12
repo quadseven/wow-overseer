@@ -10,9 +10,13 @@ of twelve. Each of those is one assertion below, because each of them is a
 sentence somebody would act on.
 
 THE FIXTURES ARE THE REAL FAMILY. Five characters, levels 34 to 38, holding
-eight of the nine primaries between them with engineering deliberately open.
-Writing them out rather than generating them is what lets a failure read as
-"Og's tailoring line is wrong" instead of "member 3 of 5".
+eight of the eleven primaries between them. Grog has not yet learned his new
+assignment (mining + engineering, #2831 update), so engineering is a plain
+gap - assigned to somebody, not yet held - while inscription and
+jewelcrafting, his OLD pair, are the two professions.UNASSIGNED trades a
+guild is meant to cover instead. Writing the fixtures out rather than
+generating them is what lets a failure read as "Og's tailoring line is wrong"
+instead of "member 3 of 5".
 
 Tickets: infra#3507.
 """
@@ -94,15 +98,15 @@ def quest(item: int, title: str, level: int = 20, ident: int = 1) -> dict:
 
 
 # The family's live skills as the brief measured them: the full spread, every
-# trade freshly taken, and nobody holding engineering.
+# trade freshly taken by the four who already have their assignment, and
+# nobody holding engineering, inscription or jewelcrafting - Grog is pending
+# on his new pair (#2831 update) and has not learned it yet.
 FAMILY_SKILLS = [
     skill("Grug", BLACKSMITHING, 1), skill("Grug", MINING, 5),
     skill("Bork", goals.SKILL_IDS["leatherworking"], 1),
     skill("Bork", goals.SKILL_IDS["skinning"], 12),
     skill("Og", TAILORING, 20), skill("Og", ENCHANTING, 1),
     skill("Ugga", ALCHEMY, 30), skill("Ugga", HERBALISM, 34),
-    skill("Grog", goals.SKILL_IDS["jewelcrafting"], 1),
-    skill("Grog", goals.SKILL_IDS["inscription"], 1),
 ]
 
 
@@ -237,15 +241,27 @@ class WhoHoldsWhat(unittest.TestCase):
 class WhatNobodyHolds(unittest.TestCase):
     """The gaps, which are the useful part."""
 
-    def test_engineering_is_a_gap_and_is_reported_as_a_decision(self):
-        """professions.UNASSIGNED names it as the trade left open for a guild.
-        Listing it beside an accident would report a decision as a defect."""
-        self.assertIn("engineering", professions.UNASSIGNED)
+    def test_inscription_and_jewelcrafting_are_gaps_reported_as_a_decision(self):
+        """professions.UNASSIGNED now names these two (Grog's old pair) as the
+        trades left open for a guild. Listing either beside an accident would
+        report a decision as a defect."""
+        self.assertEqual(professions.UNASSIGNED, ("inscription", "jewelcrafting"))
         payload = build()
-        gap = [g for g in payload["gaps"] if g["name"] == "engineering"]
-        self.assertEqual(len(gap), 1)
-        self.assertIn("left open on purpose", gap[0]["line"])
-        self.assertIn("a guild is meant to fill", gap[0]["line"])
+        for word in professions.UNASSIGNED:
+            with self.subTest(word=word):
+                gap = [g for g in payload["gaps"] if g["name"] == word]
+                self.assertEqual(len(gap), 1)
+                self.assertIn("left open on purpose", gap[0]["line"])
+                self.assertIn("a guild is meant to fill", gap[0]["line"])
+
+    def test_engineering_is_now_a_plain_gap_not_a_decision(self):
+        """Engineering used to be the UNASSIGNED trade; #2831's update gave it
+        to Grog instead. He has not learned it yet in this fixture, so it must
+        read as an ordinary unheld gap, not as the deliberate one."""
+        self.assertNotIn("engineering", professions.UNASSIGNED)
+        payload = build()
+        gap = [g for g in payload["gaps"] if g["name"] == "engineering"][0]
+        self.assertNotIn("left open on purpose", gap["line"])
 
     def test_a_trade_nobody_holds_still_counts_its_recipes(self):
         """`known + missing` is zero for a trade nobody holds, and printing

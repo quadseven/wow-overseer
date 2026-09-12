@@ -643,16 +643,23 @@ def _best_holder(holders: list[dict]) -> dict | None:
 def _gap_line(word: str, kind: str, assigned_to: list[str]) -> str:
     """Why a trade nobody holds is missing, said in the terms it is missing in.
 
-    ENGINEERING IS THE ONE THAT MATTERS AND IT IS NOT AN OVERSIGHT.
-    professions.UNASSIGNED names it as the trade the family deliberately left
-    open for a guild to cover, so a page listing it beside an accident would be
-    reporting a decision as a defect.
+    A TRADE IN professions.UNASSIGNED IS NOT AN OVERSIGHT. It names the
+    trade(s) the family's own table deliberately leaves open for a guild to
+    cover, so a page listing one beside an accident would be reporting a
+    decision as a defect. Engineering used to be the one - it moved to
+    inscription and jewelcrafting when Grog's assignment changed (#2831
+    update) - and the count and wording below are read from
+    professions.PRIMARY / professions.UNASSIGNED rather than typed in, so
+    this sentence cannot go stale the next time that table is edited again.
     """
     if word in professions.UNASSIGNED:
+        claimed = len(professions.PRIMARY) - len(professions.UNASSIGNED)
+        this_one = "this one" if len(professions.UNASSIGNED) == 1 else "these"
         return ("%s: left open on purpose. The family's own trade table gives "
-                "its five characters the other eight primaries and names this "
-                "one as the gap a guild is meant to fill, so it is a decision "
-                "waiting on members rather than a mistake" % word)
+                "its five characters the other %d primaries and names %s as "
+                "the gap a guild is meant to fill, so it is a decision "
+                "waiting on members rather than a mistake"
+                % (word, claimed, this_one))
     if assigned_to:
         return ("%s: assigned to %s in the roster, and not held by anybody in "
                 "character_skills yet" % (word, ", ".join(assigned_to)))

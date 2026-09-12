@@ -47,8 +47,6 @@ class ParseAskTest(unittest.TestCase):
             "armor": "Grug", "plate": "Grug", "sword": "Grug",
             "leathers": "Bork",
             "enchant": "Og",
-            "glyph": "Grog",
-            "gem": "Grog", "ring": "Grog",
         }
         for product, crafter in cases.items():
             with self.subTest(product=product):
@@ -56,6 +54,16 @@ class ParseAskTest(unittest.TestCase):
                 ask = craftpleas.parse_ask(asker, f"we need a {product}")
                 self.assertIsNotNone(ask, f"{product} produced no ask")
                 self.assertEqual(ask.crafter, crafter)
+
+    def test_a_product_of_an_unassigned_trade_asks_nobody(self):
+        """Glyphs and gems were Grog's until #2831's update moved him to
+        mining + engineering. Inscription and jewelcrafting are now in
+        professions.UNASSIGNED, so these words must resolve to no ask at all
+        rather than keep naming him."""
+        for product in ("glyph", "gem", "ring"):
+            with self.subTest(product=product):
+                ask = craftpleas.parse_ask("Ugga", f"we need a {product}")
+                self.assertIsNone(ask, f"{product} should have no crafter")
 
     def test_leather_armor_is_not_shadowed_by_bare_armor(self):
         ask = craftpleas.parse_ask("Grug", "I need leather armor")
@@ -71,8 +79,9 @@ class ParseAskTest(unittest.TestCase):
         self.assertIsNone(craftpleas.parse_ask("Grug", ""))
 
     def test_an_unlisted_product_is_none(self):
-        """Deliberately no opinion, same as professions.UNASSIGNED - engineering
-        has no crafter, and craftpleas has no idea what a "widget" is either."""
+        """Deliberately no opinion, same as professions.UNASSIGNED - inscription
+        and jewelcrafting have no crafter, and craftpleas has no idea what a
+        "widget" is either."""
         self.assertIsNone(craftpleas.parse_ask("Grug", "I need a widget"))
 
     def test_a_line_with_no_trigger_word_is_none(self):
@@ -195,14 +204,14 @@ class SkillStateTest(unittest.TestCase):
         )
 
     def test_a_trade_nobody_planned_or_holds_is_neither(self):
-        ask = craftpleas.parse_ask("Grug", "Grug need a glyph")
-        self.assertEqual(ask.crafter, "Grog")
+        ask = craftpleas.parse_ask("Grug", "Grug need a bag")
+        self.assertEqual(ask.crafter, "Og")
         self.assertEqual(
-            chat.skill_state("Grog", "cooking", held={"Grog": {"herbalism": 1}},
-                             planned={"Grog": ("inscription",)}),
+            chat.skill_state("Og", "cooking", held={"Og": {"herbalism": 1}},
+                             planned={"Og": ("tailoring",)}),
             chat.UNSKILLED,
         )
-        self.assertEqual(craftpleas.state(ask, {"Grog": {}}), chat.LEARNING)
+        self.assertEqual(craftpleas.state(ask, {"Og": {}}), chat.LEARNING)
 
     def test_an_empty_reading_never_reads_as_held(self):
         """A failed skills read must not become a boast. Nothing known about

@@ -211,9 +211,10 @@ _LIVE_ROSTER = {
         primaries=("mining", "blacksmithing"),
         why=(
             "the father, a plate-wearing warrior who tanks: blacksmithing makes "
-            "the plate he takes hits in, and mining feeds it. His ore also "
-            "feeds Grog's jewelcrafting, so this is the gathering trade two of "
-            "the family's crafts run on"
+            "the plate he takes hits in, and mining feeds it. Grog now mines "
+            "too, to feed his own engineering rather than Grug's ore - so this "
+            "gathering trade no longer feeds a second character's craft, and "
+            "the family carries two miners for it"
         ),
     ),
     "Bork": _Trade(
@@ -245,17 +246,25 @@ _LIVE_ROSTER = {
         ),
     ),
     "Grog": _Trade(
-        primaries=("inscription", "jewelcrafting"),
+        primaries=("mining", "engineering"),
         why=(
-            "the elder son, and the only one with no gathering trade - "
-            "deliberately. The other four already cover all three gathering "
-            "professions, and the crafts still unclaimed are engineering, "
-            "inscription and jewelcrafting. Inscription runs on Ugga's herbs "
-            "and jewelcrafting on Grug's ore, so he needs no slot of his own to "
-            "feed them: he is the one character whose trade depends entirely on "
-            "the family supplying him, which makes the material hand-off "
-            "(#2830) structural rather than optional. Glyphs benefit all five, "
-            "permanently"
+            "the elder son. Evan asked for this directly: engineering over "
+            "jewelcrafting (#2831 update), because it is the only 3.3.5a trade "
+            "that makes a repair bot and a portable mailbox, and "
+            "mod-overseer's own guild-migration notes cite 17,200+ logged "
+            "'vendor not in range' refusals - 17,333 as of this change - which "
+            "a repair bot answers directly. He was given no gathering trade "
+            "ON PURPOSE, originally: inscription ran on Ugga's herbs and "
+            "jewelcrafting on Grug's ore, so he needed no slot of his own to "
+            "feed them. THAT REASONING IS REVERSED HERE, and deliberately: "
+            "mining feeds his own engineering instead, which makes him "
+            "self-sufficient rather than the one character structurally "
+            "dependent on everyone else. It is not free - Grug is already the "
+            "family's miner, so this is a second person walking the same ore "
+            "nodes, mild redundancy and not a discovery - and it costs the "
+            "family inscription (glyphs for all five) and jewelcrafting "
+            "(gems), which move to UNASSIGNED for a future guild recruit to "
+            "cover instead"
         ),
     ),
 }
@@ -264,10 +273,10 @@ def roster_for(which: str | None = None) -> dict:
     """The trade table as `which` world spells it. Live is the identity.
 
     The REASONS are renamed too. Every row carries a sentence naming other
-    members - "Inscription runs on Ugga's herbs and jewelcrafting on Grug's
-    ore" - and those sentences are read out by the council and shown to a
-    person deciding whether the plan is sane. A dev plan justified by the names
-    of characters in the other world is a plan nobody can check.
+    members - "Grug is already the family's miner" - and those sentences are
+    read out by the council and shown to a person deciding whether the plan is
+    sane. A dev plan justified by the names of characters in the other world
+    is a plan nobody can check.
     """
     return {
         cast.rename(name, which): replace(trade, why=cast.retext(trade.why, which))
@@ -279,11 +288,15 @@ def roster_for(which: str | None = None) -> dict:
 # environment. Unset means live, which is every process that exists today.
 ROSTER = roster_for()
 
-# Engineering is the one primary nobody is assigned, ON PURPOSE. Evan wants the
-# guild (#2831) to cover the last profession, so leaving it open is a decision
-# and not an oversight - and this constant is here so that a future reader
-# counting the crafts does not "fix" it.
-UNASSIGNED = ("engineering",)
+# Inscription and jewelcrafting are the two primaries nobody is assigned, ON
+# PURPOSE. They were Grog's until this change (#2831 update): he now takes
+# mining + engineering instead (see his `why`), which means the family loses
+# its glyph-maker and its gem-cutter. Evan wants the guild (#2831) to cover
+# them - engineering used to be that placeholder, and these two take its
+# place - so leaving them open is a decision and not an oversight, and this
+# constant is here so that a future reader counting the crafts does not "fix"
+# it.
+UNASSIGNED = ("inscription", "jewelcrafting")
 
 # The order the family opens its trades in, one at a time.
 #
@@ -296,20 +309,20 @@ UNASSIGNED = ("engineering",)
 #                   full, a full bag freezes a character on a herb node
 #                   (#2813), and the linen is already in their bags - so this
 #                   is the one trade that pays out the day it is learned.
-#   mining          before blacksmithing, and skinning before leatherworking:
-#                   a craft with no supply is a skill that sits at 1/75, which
-#                   is the exact failure this whole issue is about.
+#   mining          before blacksmithing AND before engineering, exactly like
+#                   skinning before leatherworking: a craft with no supply is
+#                   a skill that sits at 1/75, which is the exact failure this
+#                   whole issue is about. Engineering is Grog's now (was
+#                   jewelcrafting, which had the same dependency on Grug's
+#                   ore), so it needs mining first for the same reason
+#                   blacksmithing does.
 #   enchanting      after Og's tailoring, so the bag maker is working before he
 #                   spends his second slot.
-#   inscription,    LAST, because Grog's pair depends entirely on other people
-#   jewelcrafting   having their gathering trades first. Opening them early
-#                   would be opening two more empty skills.
 OPEN_ORDER = (
     "tailoring",
-    "mining", "blacksmithing",
+    "mining", "blacksmithing", "engineering",
     "skinning", "leatherworking",
     "enchanting",
-    "inscription", "jewelcrafting",
 )
 
 # What the errand still needs - and, first, what it no longer needs, because
@@ -642,7 +655,7 @@ def _notes(family: Sequence) -> tuple:
     if UNASSIGNED:
         notes.append(
             f"Deliberately unassigned: {', '.join(UNASSIGNED)}. The guild "
-            "(#2831) is meant to cover the last profession, so this is a "
+            "(#2831) is meant to cover these professions, so this is a "
             "decision and not a gap to be filled in."
         )
     return tuple(notes)

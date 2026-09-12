@@ -64,10 +64,14 @@ import professions
 # What a product word most likely means, matched as a whole word. Grounded in
 # the `why` text professions.ROSTER already carries for each assignment - Og's
 # row calls tailoring "the family's BAG problem", Ugga's calls alchemy
-# "potions and elixirs", Grog's calls inscription "glyphs" - restated here as
-# a lookup rather than invented fresh. Deliberately small: a product not
-# listed gets no answer, exactly as professions.UNASSIGNED leaves engineering
-# unclaimed rather than guessed at.
+# "potions and elixirs" - restated here as a lookup rather than invented
+# fresh. Deliberately small: a product not listed gets no answer, exactly as
+# professions.UNASSIGNED leaves inscription and jewelcrafting unclaimed
+# rather than guessed at. "glyph", "gem" and "ring" stay in this table on
+# purpose even though nobody is assigned either trade right now: they are
+# still real product words, and professions.crafter_for already answers ""
+# for them, so parse_ask correctly finds no ask rather than this table
+# needing to know who, if anybody, currently holds the trade.
 PRODUCTS = {
     "bag": "tailoring",
     "bags": "tailoring",

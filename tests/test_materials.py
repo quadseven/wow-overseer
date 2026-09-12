@@ -44,7 +44,13 @@ class CrafterForTest(unittest.TestCase):
         self.assertEqual(materials.crafter_for("Silverleaf"), "Ugga")
         self.assertEqual(materials.crafter_for("Peacebloom"), "Ugga")
         self.assertEqual(materials.crafter_for("Silver Ore"), "Grug")
-        self.assertEqual(materials.crafter_for("Malachite"), "Grog")
+
+    def test_a_material_whose_trade_is_now_unassigned_has_no_crafter(self):
+        """Malachite feeds jewelcrafting, which moved to professions.UNASSIGNED
+        when Grog's assignment changed to mining + engineering (#2831 update).
+        It used to resolve to Grog; it must now honestly resolve to nobody
+        rather than keep naming him."""
+        self.assertEqual(materials.crafter_for("Malachite"), "")
 
     def test_an_unlisted_material_has_no_opinion(self):
         self.assertEqual(materials.crafter_for("Hearthstone"), "")
@@ -64,9 +70,21 @@ class PlanTest(unittest.TestCase):
         # Silverleaf and Peacebloom move to Ugga from everyone but her.
         self.assertIn(("Bork", "Silverleaf"), moved)
         self.assertIn(("Og", "Silverleaf"), moved)
-        # Malachite (a jewelcrafting reagent) moves off Grug to Grog, even
-        # though Grug is himself a crafter - just not of THIS material.
-        self.assertIn(("Grug", "Malachite"), moved)
+        # Malachite feeds jewelcrafting, which is UNASSIGNED (#2831 update) -
+        # nobody is a jewelcrafting crafter any more, so it must NOT move and
+        # must produce a note instead (see
+        # test_an_unassigned_trades_material_is_a_note_not_a_grant below).
+        self.assertNotIn(("Grug", "Malachite"), moved)
+
+    def test_an_unassigned_trades_material_is_a_note_not_a_grant(self):
+        """Said, not silently skipped, same reason professions._notes exists.
+        Malachite still exists in Grug's bags; it just has nowhere to go."""
+        plan = materials.plan(_measured_holdings())
+        self.assertIn(
+            "Malachite feeds jewelcrafting, and nobody is assigned "
+            "jewelcrafting - see professions.UNASSIGNED.",
+            plan.notes,
+        )
 
     def test_a_stack_already_in_the_crafters_own_hands_is_not_regranted(self):
         plan = materials.plan(_measured_holdings())
@@ -181,7 +199,7 @@ class HandoverTest(unittest.TestCase):
     def test_different_materials_are_different_things_to_say(self):
         said = materials.handovers(materials.plan([
             _holding("Grug", "Linen Cloth", 20, 501),
-            _holding("Grug", "Malachite", 4, 503),
+            _holding("Grug", "Silverleaf", 4, 503),
         ]).grants, held=LIVE_SKILLS)
         self.assertEqual(len(said), 2)
 

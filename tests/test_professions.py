@@ -25,9 +25,11 @@ THE ASSIGNMENT, which is Evan's and not this module's invention:
     Bork   rogue             skinning    + leatherworking
     Og     mage              tailoring   + enchanting
     Ugga   priest   healer   herbalism   + alchemy     <- already correct
-    Grog   paladin           inscription + jewelcrafting
+    Grog   paladin           mining      + engineering
 
-Engineering is deliberately left to nobody (#2831, the guild).
+Inscription and jewelcrafting are deliberately left to nobody (#2831, the
+guild) - Grog's old pair, before Evan asked for engineering over
+jewelcrafting.
 
 THE RULE THIS SUITE IS REALLY ABOUT. Evan rejected #2823 for conjuring bags out
 of nowhere, and #2782 is open against spells that appear without a trainer
@@ -193,26 +195,33 @@ class RosterTest(unittest.TestCase):
         self.assertEqual(professions.assigned("Bork"), ("skinning", "leatherworking"))
         self.assertEqual(professions.assigned("Og"), ("tailoring", "enchanting"))
         self.assertEqual(professions.assigned("Ugga"), ("herbalism", "alchemy"))
-        self.assertEqual(professions.assigned("Grog"), ("inscription", "jewelcrafting"))
+        self.assertEqual(professions.assigned("Grog"), ("mining", "engineering"))
 
-    def test_nobody_is_assigned_the_same_trade_as_anybody_else(self):
-        """Two blacksmiths is one wasted profession slot in a family of five."""
+    def test_nobody_is_assigned_the_same_CRAFT_as_anybody_else(self):
+        """Two blacksmiths is one wasted profession slot in a family of five -
+        but mining is the one deliberate exception now. Grug and Grog are both
+        assigned it: Grog's engineering needs its own ore rather than
+        depending on Grug's, and that redundancy is named and accepted in
+        Grog's `why`, not an accident this test should catch."""
         taken = [s for name in professions.ROSTER
                  for s in professions.assigned(name)]
-        self.assertEqual(len(taken), len(set(taken)))
+        self.assertEqual(taken.count("mining"), 2)
+        crafts = [s for s in taken if s in professions.CRAFTING]
+        self.assertEqual(len(crafts), len(set(crafts)))
 
     def test_all_three_gathering_trades_are_covered(self):
         taken = {s for name in professions.ROSTER
                  for s in professions.assigned(name)}
         self.assertEqual(professions.GATHERING - taken, set())
 
-    def test_engineering_is_left_unassigned_on_purpose(self):
-        """#2831: Evan wants the guild to cover the last profession. A future
+    def test_inscription_and_jewelcrafting_are_left_unassigned_on_purpose(self):
+        """#2831: Evan wants the guild to cover these two professions - Grog's
+        old pair, before he asked for engineering over jewelcrafting. A future
         reader counting the crafts must not 'fix' this."""
         taken = {s for name in professions.ROSTER
                  for s in professions.assigned(name)}
         self.assertEqual(professions.CRAFTING - taken, set(professions.UNASSIGNED))
-        self.assertEqual(professions.UNASSIGNED, ("engineering",))
+        self.assertEqual(professions.UNASSIGNED, ("inscription", "jewelcrafting"))
 
     def test_every_armour_making_craft_suits_the_class_that_owns_it(self):
         """The table was handed down by a person; this is what keeps it
@@ -229,12 +238,15 @@ class RosterTest(unittest.TestCase):
         """The guard above is only worth having if it can fail."""
         self.assertFalse(professions.suits_wearer("Og", "warrior"))
 
-    def test_grog_is_the_one_who_depends_on_everyone_else(self):
-        """His pair is deliberately gathering-free: inscription runs on Ugga's
-        herbs and jewelcrafting on Grug's ore, which makes the material
-        hand-off (#2830) structural rather than optional."""
-        self.assertFalse(set(professions.assigned("Grog")) & professions.GATHERING)
-        self.assertIn("#2830", professions.ROSTER["Grog"].why)
+    def test_grog_is_now_self_sufficient_instead_of_dependent(self):
+        """The old pair (inscription + jewelcrafting) was deliberately
+        gathering-free, structurally dependent on Ugga's herbs and Grug's ore
+        (#2830). Evan asked for engineering over jewelcrafting instead, and
+        Grog's own mining now feeds it - this test pins the reversal, not the
+        old shape."""
+        self.assertIn("mining", professions.assigned("Grog"))
+        self.assertTrue(set(professions.assigned("Grog")) & professions.GATHERING)
+        self.assertIn("self-sufficient", professions.ROSTER["Grog"].why)
 
     def test_every_row_says_why(self):
         for name, trade in professions.ROSTER.items():
@@ -371,7 +383,7 @@ class PlanTest(unittest.TestCase):
             ("Bork", {"skinning", "leatherworking"}),
             ("Og", {"tailoring", "enchanting"}),
             ("Ugga", {"herbalism", "alchemy"}),
-            ("Grog", {"inscription", "jewelcrafting"}),
+            ("Grog", {"mining", "engineering"}),
         ):
             held = {s for s in final[name] if s in professions.PRIMARY}
             self.assertEqual(held, wanted, name)
@@ -407,18 +419,24 @@ class PlanTest(unittest.TestCase):
 
     def test_a_gatherer_is_opened_before_the_craft_it_feeds(self):
         """A craft with no supply is a skill that sits at 1/75, which is the
-        exact failure this whole issue is about."""
+        exact failure this whole issue is about. Engineering needs mining
+        first for the same reason blacksmithing does - it is Grog's craft now
+        (was jewelcrafting, which had the same dependency on Grug's ore)."""
         steps, _ = _walk(_family())
         order = [a.skill for a in steps if a.verb == "learn"]
         self.assertLess(order.index("mining"), order.index("blacksmithing"))
+        self.assertLess(order.index("mining"), order.index("engineering"))
         self.assertLess(order.index("skinning"), order.index("leatherworking"))
 
-    def test_grogs_pair_is_opened_last(self):
-        """It depends entirely on other people having their gathering trades
-        first; opening it early would be opening two more empty skills."""
+    def test_inscription_and_jewelcrafting_are_never_opened_at_all(self):
+        """Nobody is assigned either any more (#2831 update), so OPEN_ORDER
+        has no entry for them and the walk must never try to learn one."""
         steps, _ = _walk(_family())
         order = [a.skill for a in steps if a.verb == "learn"]
-        self.assertEqual(order[-2:], ["inscription", "jewelcrafting"])
+        self.assertNotIn("inscription", order)
+        self.assertNotIn("jewelcrafting", order)
+        self.assertNotIn("inscription", professions.OPEN_ORDER)
+        self.assertNotIn("jewelcrafting", professions.OPEN_ORDER)
 
     def test_nobody_is_ever_asked_to_give_up_something_they_are_assigned(self):
         steps, _ = _walk(_family())
@@ -453,14 +471,16 @@ class PlanTest(unittest.TestCase):
         self.assertEqual(professions.crafter_for("alchemy"), "Ugga")
         self.assertEqual(professions.crafter_for("blacksmithing"), "Grug")
         self.assertEqual(professions.crafter_for("leatherworking"), "Bork")
-        self.assertEqual(professions.crafter_for("jewelcrafting"), "Grog")
-        self.assertEqual(professions.crafter_for("inscription"), "Grog")
+        self.assertEqual(professions.crafter_for("mining"), "Grog")
+        self.assertEqual(professions.crafter_for("engineering"), "Grog")
         self.assertEqual(professions.crafter_for("enchanting"), "Og")
 
-    def test_crafter_for_the_deliberately_unassigned_trade_is_empty(self):
-        """Engineering is UNASSIGNED on purpose (#2831, the guild) - this must
-        say so honestly rather than guessing a name."""
-        self.assertEqual(professions.crafter_for("engineering"), "")
+    def test_crafter_for_the_deliberately_unassigned_trades_are_empty(self):
+        """Inscription and jewelcrafting are UNASSIGNED on purpose (#2831, the
+        guild) - Grog's old pair - and this must say so honestly rather than
+        guessing a name."""
+        self.assertEqual(professions.crafter_for("inscription"), "")
+        self.assertEqual(professions.crafter_for("jewelcrafting"), "")
 
     def test_crafter_for_an_unknown_word_is_empty(self):
         self.assertEqual(professions.crafter_for("juggling"), "")
