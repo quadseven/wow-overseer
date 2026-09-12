@@ -81,8 +81,13 @@ THE_HAND_OFF = worn("Ugga", PRIEST, 27, i7=20) + worn("Og", MAGE, 28, i7=12)
 
 
 def gifts(gear_rows, equipped_rows, keep_names=()):
+    """The grants only. `family_gifts` returns a Plan since the delivery gate
+    landed; what this file pins is WHO should get WHAT, and
+    tests/test_gear_delivery.py pins whether it can land and by which verb.
+    Neither position nor capacity is passed, which means "nobody asked" and
+    keeps every case below about the decision it was written for."""
     return bag_pressure.family_gifts(gear_rows, equipped_rows, THE_FIVE,
-                                     keep_names=keep_names)
+                                     keep_names=keep_names).grants
 
 
 class TheAnswerReachesSomebody(unittest.TestCase):
@@ -216,24 +221,28 @@ class TheRowIsTheRowTheExecutorReads(unittest.TestCase):
         self.assertLess(body.index("self._hand_gear("),
                         body.index("no safe carried vendor goods"))
 
-    def test_the_row_is_a_trade_and_carries_its_receiver(self):
-        body = _block("def _insert_gear_trade(grant)")
-        self.assertIn("'trade'", body)
+    def test_the_row_carries_its_verb_and_its_receiver(self):
+        """The kind is `grant.verb` and no longer a literal: which verb can
+        land is a fact about where the two of them are standing, and
+        gear.deliverable has already looked."""
+        body = _block("def _insert_gear_handoff(grant)")
+        self.assertIn("grant.verb", body)
         self.assertIn("grant.taker", body)
         self.assertIn("grant.command", body)
 
     def test_the_writer_degrades_on_a_world_without_the_migration(self):
         """1146 missing table, 1265 a `kind` ENUM with no 'trade' value."""
-        body = _block("def _insert_gear_trade(grant)")
+        body = _block("def _insert_gear_handoff(grant)")
         self.assertIn("1146", body)
         self.assertIn("1265", body)
 
-    def test_the_retry_window_reads_trades_and_not_gives(self):
+    def test_the_retry_window_reads_this_pass_and_not_the_others(self):
         """The materials and bag passes write kind='give' with the same
         `guid:N` shape. One window over both would let either silence the
-        other's retry."""
+        other's retry - so it keys on `source`, which names the pass, rather
+        than on `kind`, which since the delivery gate no longer does."""
         body = _block("def _recent_trade_keys(minutes: int)")
-        self.assertIn("kind = 'trade'", body)
+        self.assertIn("source = 'gear'", body)
 
     def test_nothing_is_destroyed_and_no_gm_command_is_used(self):
         body = _block("    async def _hand_gear(self")

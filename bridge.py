@@ -3510,39 +3510,69 @@ class Bridge(discord.Client):
     async def _hand_gear(self, gear_rows: list, worn: list, names: list) -> None:
         """Move every carried piece that suits a sibling better (infra#3464).
 
-        THE VERB IS kind='trade' AND NOT kind='give', and gear.py's own banner
-        argues it: DoTrade drives the core's WorldSession trade handlers, so
-        the exchange renders and animates between two characters standing
-        together, where DoGive is a database move. Both exist; a piece of gear
-        changing hands is a thing the party should be seen doing, and the
-        materials pass keeps kind='give' for a stack of cloth.
+        THE VERB FOLLOWS WHERE THE TWO OF THEM ARE STANDING. It was always
+        kind='trade', because DoTrade drives the core's WorldSession trade
+        handlers and the exchange renders and animates where DoGive is a
+        silent database move - a piece of gear changing hands is a thing the
+        party should be seen doing. That reasoning was right and it is kept:
+        what was missing is that nothing ever asked WHERE they were standing,
+        and 343 of 755 trade rows died on `characters are too far apart`.
+        `gear.deliverable` now picks the verb from the measured distance, so
+        an exchange that can be watched still is one and an exchange across
+        744 yards - which renders nothing either way - becomes a give that
+        lands. See its banner for the full 41-of-755 measurement.
 
-        NO TRAVEL ERRAND IS WRITTEN, deliberately. A trade happens where the
-        two of them already are, so this needs no counter, no leader and no
-        `travel_npc` - which is also why it can run beside the vendor half
-        without joining the queue of passes that all want to aim the leader
-        somewhere.
+        NO TRAVEL ERRAND IS WRITTEN, deliberately, and this is why that is
+        still right rather than merely convenient: the alternative to
+        choosing the verb is steering five characters into one place, and
+        #3554 has just finished removing the second writer of travel aims.
+        This pass still needs no counter, no leader and no `travel_npc`,
+        which is why it can run beside the vendor half.
 
         NOTHING IS DESTROYED AND NOTHING SOULBOUND IS OFFERED.
         `gear.is_upgrade_for` refuses a soulbound item outright, so a piece
-        that cannot legally reach a sibling never becomes a grant, and
-        DoTrade refuses one again on its own side.
+        that cannot legally reach a sibling never becomes a grant, and both
+        DoTrade and DoGive refuse one again on their own side.
         """
-        grants = bag_pressure.family_gifts(gear_rows, worn, names,
-                                           keep_names=OWNER_KEEPS)
-        if not grants:
+        # Both facts are read here rather than passed down from _vendor_once,
+        # because this pass is reached on cycles that return before the
+        # vendor half and must not depend on how far that half got.
+        free_slots = await asyncio.to_thread(_fetch_free_slots, names)
+        positions = await asyncio.to_thread(_fetch_positions, names)
+        plan = bag_pressure.family_gifts(
+            gear_rows, worn, names, keep_names=OWNER_KEEPS,
+            position_rows=positions, free_slots=free_slots,
+        )
+        for note in plan.notes:
+            log.info("gear: %s", note)
+        # ONE NOTE PER WITHHELD GRANT, so this is the number the family
+        # decided on rather than a second count to trust.
+        decided = len(plan.grants) + len(plan.notes)
+        if not plan.grants:
+            log.info(
+                "gear: considered %d carried piece(s), decided %d hand-off(s), "
+                "queued none - %d held back above, %d of the family visible",
+                len(gear_rows), decided, len(plan.notes), len(positions),
+            )
             return
         seen = await asyncio.to_thread(_recent_trade_keys, GIVE_RETRY_MINUTES)
         fresh = []
-        for grant in grants:
+        for grant in plan.grants:
             if (grant.holder, grant.taker, grant.command) in seen:
                 continue
-            if await asyncio.to_thread(_insert_gear_trade, grant):
+            if await asyncio.to_thread(_insert_gear_handoff, grant):
                 fresh.append(grant)
         for grant in fresh:
-            log.info("gear: %s -> %s, %s - %s",
-                     grant.holder, grant.taker, grant.name, grant.reason)
-        log.info("gear: queued %d/%d hand-off(s)", len(fresh), len(grants))
+            log.info("gear: %s -> %s by %s, %s - %s", grant.holder,
+                     grant.taker, grant.verb, grant.name, grant.reason)
+        log.info(
+            "gear: queued %d/%d hand-off(s) (%d trade, %d give), "
+            "%d held back, %d already queued",
+            len(fresh), decided,
+            sum(1 for g in fresh if g.verb == "trade"),
+            sum(1 for g in fresh if g.verb == "give"),
+            len(plan.notes), len(plan.grants) - len(fresh),
+        )
 
     async def _vendor_loop(self) -> None:
         await self.wait_until_ready()
@@ -4855,7 +4885,8 @@ _SURPLUS_GEAR_SQL = (
     "ii.count AS count, ii.flags AS instance_flags, it.name AS name, "
     "it.Quality AS quality, it.SellPrice AS sell_price, "
     "it.RequiredLevel AS required_level, it.bonding AS bonding, "
-    "it.class AS item_class, it.ItemLevel AS item_level, "
+    "it.class AS item_class, it.subclass AS item_subclass, "
+    "it.ItemLevel AS item_level, "
     "it.AllowableClass AS allowable_class, "
     "it.InventoryType AS inventory_type "
     "FROM character_inventory ci "
@@ -4928,6 +4959,44 @@ def _fetch_family_equipped(names: list) -> list:
                 return []
             raise
         return [dict(row) for row in cur.fetchall()]
+
+
+# Where each of the family is standing, and therefore whether they are in the
+# world at all - the two facts that decide whether a hand-off can land.
+#
+# POSITION COMES FROM overseer_snapshot AND NOT FROM `characters`, the same
+# rule _TOWN_COUNTERS_SQL states and for the same reason: the characters row
+# is written on the player-save timer and can be a quarter of an hour stale,
+# which here would mean trading with somebody who logged out ten minutes ago.
+# The freshness filter is also what makes this ONE read answer both
+# questions: a character who is not online has no fresh row, so a name
+# missing from the result is a name nobody can hand anything to.
+_FAMILY_POSITION_SQL = (
+    "SELECT name, map_id, pos_x, pos_y FROM overseer_snapshot "
+    "WHERE name IN (%s) AND updated_at > NOW() - INTERVAL 60 SECOND"
+)
+
+
+def _fetch_positions(names: list) -> dict:
+    """name -> its snapshot row; gear.spots_from_rows decides what it means.
+
+    Returns a MAPPING and never None, because None means "nobody asked" to
+    `gear.deliverable` and this function has asked. An empty result is the
+    honest answer that nobody is visible, and it withholds every hand-off -
+    which is right: both DoGive and DoTrade refuse an offline receiver.
+    """
+    if not names:
+        return {}
+    sql = _FAMILY_POSITION_SQL % ",".join(["%s"] * len(names))
+    with _connect() as conn, conn.cursor() as cur:
+        try:
+            cur.execute(sql, names)
+        except pymysql.err.MySQLError as exc:
+            if exc.args and exc.args[0] in (1054, 1146):
+                log.warning("position facts unavailable on this world image")
+                return {}
+            raise
+        return {row["name"]: dict(row) for row in cur.fetchall()}
 
 
 def _fetch_vendor_items(names: list) -> list:
@@ -5126,16 +5195,23 @@ def _recent_trade_keys(minutes: int) -> set:
     """(holder, taker, command) triples already proposed inside the window.
 
     Its own reader rather than a widened _recent_give_keys, because the two
-    kinds have to stay tellable apart: a reagent hand-off and a gear hand-off
+    passes have to stay tellable apart: a reagent hand-off and a gear hand-off
     can name the same guid form, and a shared window would let one pass
     silence the other's retry. Degrades to "nothing is queued" on a world
     image with no 'trade' value, the same direction _recent_town_keys takes.
+
+    KEYED ON `source` AND NOT ON `kind`. It read kind='trade' when trade was
+    the only verb this pass could write; now that the verb follows where the
+    two of them are standing, a gear hand-off issued as a give would have
+    been invisible to its own retry window and re-proposed every cycle.
+    `source` is the column that actually names the pass, and it is the one
+    _insert_gear_handoff has always written.
     """
     with _connect() as conn, conn.cursor() as cur:
         try:
             cur.execute(
                 "SELECT target_name, target_arg, command FROM overseer_command "
-                "WHERE kind = 'trade' AND created_at > NOW() - INTERVAL %s MINUTE",
+                "WHERE source = 'gear' AND created_at > NOW() - INTERVAL %s MINUTE",
                 (int(minutes),),
             )
         except pymysql.err.MySQLError as exc:
@@ -5148,7 +5224,7 @@ def _recent_trade_keys(minutes: int) -> set:
         }
 
 
-def _insert_gear_trade(grant) -> int:
+def _insert_gear_handoff(grant) -> int:
     """One overseer_command row handing one carried piece to a sibling.
 
     The giver in target_name, the receiver in target_arg and the
@@ -5156,6 +5232,12 @@ def _insert_gear_trade(grant) -> int:
     already uses, so an operator reading the queue does not have to learn a
     second layout. source='gear' is what separates this from the reagent and
     bag hand-offs in the log and in the retry window above.
+
+    THE KIND IS `grant.verb` AND NOT A LITERAL. Which verb can land is a fact
+    about where the two of them are standing, and `gear.deliverable` has
+    already looked - see its banner for the 41-of-755 measurement that moved
+    this decision out of this function and into a place that can see the
+    world. This writes what it was told.
 
     Guarded on 1265 like every other kind this process writes: a worldserver
     behind mod-overseer's trade migration must warn rather than raise and
@@ -5166,16 +5248,16 @@ def _insert_gear_trade(grant) -> int:
             cur.execute(
                 "INSERT INTO overseer_command "
                 "(target_name, command, kind, target_arg, source) "
-                "VALUES (%s, %s, 'trade', %s, %s)",
-                (grant.holder, grant.command, grant.taker, "gear"),
+                "VALUES (%s, %s, %s, %s, %s)",
+                (grant.holder, grant.command, grant.verb, grant.taker, "gear"),
             )
         except pymysql.err.MySQLError as exc:
             if exc.args and exc.args[0] in (1146, 1265):
                 log.warning(
-                    "overseer_command.kind has no 'trade' value - handing %s "
+                    "overseer_command.kind has no '%s' value - handing %s "
                     "from %s to %s needs the worldserver image carrying "
                     "mod-overseer's trade SQL (mod-overseer#14)",
-                    grant.name, grant.holder, grant.taker,
+                    grant.verb, grant.name, grant.holder, grant.taker,
                 )
                 return 0
             raise

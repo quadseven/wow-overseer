@@ -57,7 +57,19 @@ on the running server.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+import math
+from dataclasses import dataclass, field, replace
+
+# The two verbs the world executor understands for moving one item from one
+# character's bags into another's, and the single fact that decides between
+# them. See `deliverable` for the measurement; in short, DoTrade tests that
+# the two are within TRADE_DISTANCE and DoGive does not test position at all.
+TRADE = "trade"
+GIVE = "give"
+
+# TRADE_DISTANCE (ObjectDefines.h:29), measured in two dimensions because
+# DoTrade measures it in two - it calls IsWithinDistInMap(..., false).
+TRADE_YARDS = 11.11
 
 # WoW's numeric class ids (characters.class / item_template.AllowableClass
 # bit position), the same table panel.py's _CLASS_NAMES keys against.
@@ -95,6 +107,82 @@ _SLOT_BY_INVTYPE = {
 # conflicts with any of them - the Severing Axe test (#2813).
 _OFF_HAND_SLOTS = (_OFF_HAND,)
 
+# ---------------------------------------------------------------------------
+# WHAT A CLASS CAN ACTUALLY WEAR, WHICH AllowableClass DOES NOT SAY
+#
+# AllowableClass is -1 on essentially every piece of armour in the game - it
+# exists to restrict a libram or a class token, not to say a priest cannot
+# wear mail. So `usable_by_class` alone answers YES for a warrior asked about
+# a cloth robe and, far worse, YES for a priest asked about mail boots.
+#
+# MEASURED 2026-09-11: the planner proposed handing Battleforge Boots (mail)
+# to Ugga, who is a priest, and 7 of the 24 cross-member upgrades the family
+# is sitting on are held by somebody who physically cannot equip them. The
+# holder-first-claim rule in `plan` reads that same false YES, so a priest
+# hoarding mail counts as having a claim on it and the piece never moves at
+# all - the refusal and the misdelivery are the same missing fact.
+#
+# item_template.subclass for class 4 (ARMOR). 5 is an unused buckler slot and
+# 7-10 are librams, idols, totems and sigils, which AllowableClass really
+# does gate - so only 1-4 and 6 are decided here.
+ARMOR_MISC, ARMOR_CLOTH, ARMOR_LEATHER, ARMOR_MAIL, ARMOR_PLATE = 0, 1, 2, 3, 4
+ARMOR_SHIELD = 6
+
+# Class id -> the armour types it is trained in, and the level it trains.
+# Everyone wears cloth from level 1, so cloth is the floor rather than a row.
+# The two entries that are not level 1 are the ones that matter to a family
+# at 38-39: a warrior or paladin is in MAIL until Plate Mail at 40, and a
+# hunter or shaman is in LEATHER until Mail at 40.
+_ARMOR_TRAINED_AT = {
+    1: ((ARMOR_MAIL, 1), (ARMOR_PLATE, 40)),    # Warrior
+    2: ((ARMOR_MAIL, 1), (ARMOR_PLATE, 40)),    # Paladin
+    3: ((ARMOR_LEATHER, 1), (ARMOR_MAIL, 40)),  # Hunter
+    4: ((ARMOR_LEATHER, 1),),                   # Rogue
+    5: (),                                      # Priest - cloth only
+    6: ((ARMOR_PLATE, 1),),                     # Death Knight
+    7: ((ARMOR_LEATHER, 1), (ARMOR_MAIL, 40)),  # Shaman
+    8: (),                                      # Mage - cloth only
+    9: (),                                      # Warlock - cloth only
+    11: ((ARMOR_LEATHER, 1),),                  # Druid
+}
+
+# A shield is not "heavier armour", it is its own proficiency.
+_SHIELD_CLASSES = frozenset({1, 2, 7})
+
+# A Holding built without the fact. NOT STATED is not the same as "misc", and
+# it means this check abstains rather than guesses - the same shape
+# `bag_pressure.gear_candidates` gives `fits=None`. bridge.py always states
+# it; tests written before the fact existed do not have to.
+SUBCLASS_UNSTATED = -1
+
+
+def heaviest_armor(class_id: int, level: int) -> int:
+    """The heaviest armour subclass this character is trained in right now."""
+    best = ARMOR_CLOTH
+    for subclass, trained_at in _ARMOR_TRAINED_AT.get(int(class_id), ()):
+        if int(level) >= trained_at:
+            best = max(best, subclass)
+    return best
+
+
+def wearable_armor(holding: Holding, character: CharacterState) -> bool:
+    """Can this character's class physically equip this piece of armour.
+
+    Abstains - returns True - for anything that is not armour, for a subclass
+    AllowableClass genuinely does gate, and for a row that never stated its
+    subclass. Refusing on a fact nobody supplied would stop every hand-off on
+    an older world image; guessing the other way is how a mail chest ends up
+    "fitting" a cloth caster, which is the failure this exists to stop.
+    """
+    if int(holding.item_class) != ITEM_CLASS_ARMOR:
+        return True
+    subclass = int(holding.item_subclass)
+    if subclass == ARMOR_SHIELD:
+        return int(character.class_id) in _SHIELD_CLASSES
+    if subclass not in (ARMOR_CLOTH, ARMOR_LEATHER, ARMOR_MAIL, ARMOR_PLATE):
+        return True
+    return subclass <= heaviest_armor(character.class_id, character.level)
+
 
 @dataclass(frozen=True)
 class Holding:
@@ -120,6 +208,10 @@ class Holding:
     inventory_type: int
     item_class: int
     soulbound: bool = False
+    # item_template.subclass - for armour, cloth/leather/mail/plate, which is
+    # the fact AllowableClass does not carry. SUBCLASS_UNSTATED means the row
+    # did not say and `wearable_armor` abstains.
+    item_subclass: int = SUBCLASS_UNSTATED
 
 
 @dataclass(frozen=True)
@@ -151,7 +243,14 @@ class CharacterState:
 @dataclass(frozen=True)
 class Grant:
     """One item, moving from the family member who cannot use it to the one
-    who can, by real in-world trade."""
+    who can.
+
+    `verb` is how it moves, and it is a fact about where the two of them are
+    standing rather than a taste: TRADE while they are close enough for the
+    core to run a real trade, GIVE when they are not. `plan` does not set it -
+    it answers WHO and WHAT and has never been able to see the world - so it
+    stays TRADE until `deliverable` has looked.
+    """
 
     holder: str
     taker: str
@@ -160,6 +259,7 @@ class Grant:
     guid: int
     reason: str
     said: str
+    verb: str = TRADE
 
     @property
     def command(self) -> str:
@@ -223,6 +323,12 @@ def would_wear(holding: Holding, character: CharacterState) -> tuple:
     if not usable_by_class(holding, character.class_id):
         cls = _CLASS_NAMES.get(character.class_id, "class %d" % character.class_id)
         return False, f"{cls} cannot equip it"
+    # AllowableClass said yes, which for armour it says to everyone. Whether
+    # the class is trained in that armour type is a separate fact and the one
+    # that stops mail reaching the priest - see _ARMOR_TRAINED_AT.
+    if not wearable_armor(holding, character):
+        cls = _CLASS_NAMES.get(character.class_id, "class %d" % character.class_id)
+        return False, f"{cls} is not trained in that armour type"
     if character.level < holding.required_level:
         return False, f"requires level {holding.required_level}"
 
@@ -345,6 +451,139 @@ def lines(gear_plan: Plan) -> list:
     materials.lines already speak in, so a hand-off is a line in party chat
     and never a silent database write."""
     return [f"{g.holder}: {g.said}" for g in gear_plan.grants]
+
+
+# ---------------------------------------------------------------------------
+# WHETHER THE ANSWER CAN ACTUALLY LAND, WHICH IS A DIFFERENT QUESTION
+#
+# Everything above decides WHO should end up wearing a piece. None of it can
+# see the world, and for a fortnight nothing else looked either: the pass
+# wrote a kind='trade' row for every grant and hoped.
+#
+# MEASURED ON THE LIVE REALM, 2026-09-11. 755 trade rows, aimed at exactly the
+# right people. 41 delivered. The other 714: 343 `characters are too far apart
+# to trade`, 169 `target not online`, 146 `receiver bags are full`, 29
+# `receiver not online`, 15 `one of the characters is on a flight path`, 10
+# `giver is dead`. Five per cent. Over the same hours the reagent pass's
+# kind='give' rows delivered 107 of 182, and the ONLY thing give ever failed
+# on was a full receiver.
+#
+# WHY THE TWO VERBS DIFFER THAT MUCH. DoGive (mod_overseer.cpp) tests three
+# things: the receiver is online, the item is not soulbound, the bags have
+# room. DoTrade tests all three AND that both are alive, neither is in
+# flight, neither is stunned, neither is logging out, neither is already
+# trading, and that they are within TRADE_DISTANCE - the check its own
+# comment calls "normally false for a travelling group rather than rarely
+# false". Measured the same night, the five were 157 to 744 yards apart.
+#
+# SO THE VERB IS CHOSEN FROM AN OBSERVED FACT AND NOT FROM A PREFERENCE. The
+# aesthetic argument for trade is real and it survives intact: an exchange
+# between two characters standing together renders and animates, and that is
+# worth having on a stream. An exchange between two characters 744 yards
+# apart renders NOTHING - it was only ever going to become an error row - so
+# nothing is given up by moving that one to give. Trade when it can be
+# watched, give when it cannot.
+#
+# WHY NO TRAVEL ERRAND IS WRITTEN TO CLOSE THE DISTANCE INSTEAD. Because the
+# family already has one writer for travel aims and adding a second is the
+# bug this repo most recently fixed (#3554, "aim only the leader at the
+# vendor, not all five holders"). A hand-off that waits for the party to
+# converge on its own is free; a hand-off that steers people is a second
+# hand on the wheel.
+
+
+@dataclass(frozen=True)
+class Spot:
+    """Where one character is standing, as the world last reported it."""
+
+    map_id: int
+    x: float
+    y: float
+
+
+def _within_trade_range(here: Spot, there: Spot) -> bool:
+    """Close enough for the core to open a trade window.
+
+    THE MAP IS CHECKED BEFORE THE DISTANCE, and not as a formality: three of
+    the five hearth to Eastern Kingdoms while the dungeon is on Kalimdor, and
+    coordinates on two different maps are not comparable at all. Subtracting
+    them yields a number, and that number would have put an ocean inside
+    eleven yards.
+    """
+    if int(here.map_id) != int(there.map_id):
+        return False
+    return math.hypot(here.x - there.x, here.y - there.y) <= TRADE_YARDS
+
+
+def spots_from_rows(rows) -> dict:
+    """name -> Spot, from fresh snapshot rows, dropping what it cannot read.
+
+    A NAME MISSING FROM THE RESULT IS NOT IN THE WORLD. The caller filters
+    `overseer_snapshot` on `updated_at`, so a character who logged out simply
+    has no fresh row - which makes one read answer both "where are they" and
+    "are they there at all", the two facts that account for 541 of the 714
+    refusals.
+    """
+    spots = {}
+    for name, row in dict(rows or {}).items():
+        try:
+            spots[str(name)] = Spot(map_id=int(row["map_id"]),
+                                    x=float(row["pos_x"]),
+                                    y=float(row["pos_y"]))
+        except (KeyError, TypeError, ValueError):
+            continue
+    return spots
+
+
+def deliverable(grants, position_rows=None, free_slots=None) -> Plan:
+    """The hand-offs that can land right now, each carrying the verb to use.
+
+    EXACTLY ONE NOTE PER WITHHELD GRANT, so a caller can report "decided N,
+    queued M, held back K" without being handed a second count to trust.
+
+    `position_rows=None` and `free_slots=None` both mean NOBODY ASKED, and
+    the result is what this pass did before either gate existed - the same
+    default, for the same reason, that `bag_pressure.gear_candidates` gives
+    `fits=None`. bridge.py always asks. A caller that asks and gets back a
+    mapping which does not mention somebody has asked and been told that
+    character is not there, which is a different fact and blocks the row.
+
+    ROOM IS BUDGETED ACROSS THE PASS RATHER THAN CHECKED PER GRANT. Og was
+    measured at 62 of 62 slots used while eight pieces were waiting for him;
+    checking "has room" eight times against one free slot writes seven rows
+    that were doomed when they were written. Unknown capacity counts as no
+    room, the direction `materials.retryable_stuck` already takes.
+    """
+    asked_where = position_rows is not None
+    asked_room = free_slots is not None
+    spots = spots_from_rows(position_rows)
+    room = {str(k): int(v or 0) for k, v in dict(free_slots or {}).items()}
+
+    out, notes = [], []
+    for grant in grants:
+        verb = TRADE
+        if asked_where:
+            here, there = spots.get(grant.holder), spots.get(grant.taker)
+            absent = ([] if here else [grant.holder]) + ([] if there else [grant.taker])
+            if absent:
+                notes.append(
+                    f"{grant.name} stays with {grant.holder}: "
+                    f"{' and '.join(absent)} "
+                    f"{'are' if len(absent) > 1 else 'is'} "
+                    f"not in the world right now"
+                )
+                continue
+            verb = TRADE if _within_trade_range(here, there) else GIVE
+        if asked_room:
+            if room.get(grant.taker, 0) <= 0:
+                notes.append(
+                    f"{grant.name} stays with {grant.holder}: {grant.taker} "
+                    f"has no free bag slot to receive it"
+                )
+                continue
+            room[grant.taker] -= 1
+        out.append(replace(grant, verb=verb))
+    return Plan(grants=tuple(out), notes=tuple(notes))
 
 
 # ---------------------------------------------------------------------------
@@ -490,6 +729,7 @@ def holdings_from_rows(rows) -> list:
                 inventory_type=int(row["inventory_type"]),
                 item_class=int(row["item_class"]),
                 soulbound=bool(int(row.get("instance_flags", 0) or 0) & 0x1),
+                item_subclass=int(row.get("item_subclass", SUBCLASS_UNSTATED)),
             ))
         except (KeyError, TypeError, ValueError):
             continue

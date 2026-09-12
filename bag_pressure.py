@@ -281,7 +281,8 @@ def family_fits(gear_rows, equipped_rows, names) -> dict:
     return fits
 
 
-def family_gifts(gear_rows, equipped_rows, names, keep_names=()) -> tuple:
+def family_gifts(gear_rows, equipped_rows, names, keep_names=(),
+                 position_rows=None, free_slots=None):
     """The carried pieces a sibling should be handed, and who should have them.
 
     THE OTHER HALF OF THE SAME PASS, AND THE BIGGER ONE (infra#3464). The
@@ -311,9 +312,24 @@ def family_gifts(gear_rows, equipped_rows, names, keep_names=()) -> tuple:
     parsed, exactly as it is on both halves of the vendor pass. A hand-off is
     not a disposal, but a mark on a name means leave that item alone, and an
     owner should not have to know which of three passes would have moved it.
+
+    RETURNS A PLAN AND NOT A TUPLE OF GRANTS, because "nothing moved" and
+    "nothing should move" were indistinguishable here and that cost a
+    fortnight. `gear.deliverable` withholds a grant the world will refuse and
+    says which wall it hit, one note per withheld grant, and the caller logs
+    them. `position_rows` and `free_slots` default to "nobody asked" and the
+    result is what it was before either gate existed; see `gear.deliverable`.
+
+    THE NOTES ARE THE DELIVERY REFUSALS ONLY. `gear.plan` also notes every
+    piece nobody in the family can use, which on a measured cycle is most of
+    the bag and is the VENDOR half's business - it is already reported there,
+    and repeating it here would bury the six lines that are actionable.
     """
     kept = [row for row in gear_rows
             if not owner_keeps(row.get("name", ""), keep_names)]
     characters = gear.characters_from_rows(equipped_rows, names)
     holdings = gear.holdings_from_rows(kept)
-    return gear.plan(holdings, characters).grants
+    return gear.deliverable(
+        gear.plan(holdings, characters).grants,
+        position_rows=position_rows, free_slots=free_slots,
+    )
