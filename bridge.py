@@ -39,6 +39,7 @@ import events
 import fanout
 import goals
 import bonds
+import guildbank
 import craft
 import item_plan
 import jobs
@@ -1705,7 +1706,20 @@ def _write_declared_professions() -> None:
 # and it is an economy errand for the same reason the other two are - it
 # may be retasked off an idle traveller but must never erase a profession
 # trainer errand somebody is already walking to.
-ECONOMY_ERRANDS = ("vendor", "banker", "repair")
+#
+# `guild bank` joined for infra#2831/mod-overseer#437, and belongs here for
+# the identical reason. It is a town errand the leader runs and comes back
+# from, not a standing plan - and mod-overseer#438 (this same session) is the
+# whole reason to get the categorization right rather than assume: that fix
+# closed exactly this hole on the C++ side (a dungeon-crossing goal
+# overwriting a standing profession errand's travel_npc unconditionally).
+# `_write_trade_errand`'s two branches are this file's OWN version of that
+# same fork - the ECONOMY_ERRANDS branch retasks only an idle traveller, the
+# other branch overwrites unconditionally because it exists for a standing
+# plan. Writing "guild bank" down the unconditional branch would silently
+# steal a leader's own outstanding profession-trainer errand the moment the
+# guild-bank pass runs - the identical bug, self-inflicted, one file over.
+ECONOMY_ERRANDS = ("vendor", "banker", "repair", "guild bank")
 
 
 def _write_trade_errand(errand) -> bool:
@@ -2272,6 +2286,7 @@ class Bridge(discord.Client):
                 self._move_materials_loop,
                 self._vendor_loop,
                 self._bank_loop,
+                self._guild_bank_loop,
                 self._towntrip_loop,
                 self._restore_lost_lives,
             )
@@ -4118,6 +4133,65 @@ class Bridge(discord.Client):
                 log.exception("economy bank pass failed; retrying next cycle")
             await asyncio.sleep(cycle)
 
+    async def _guild_bank_once(self) -> None:
+        """One pass of the guild bank: park gold above each character's float.
+
+        Deposit only (mod-overseer#437, infra#2831) - see guildbank.py for
+        why withdrawal is a separate, harder feature and not attempted here.
+
+        SAME SHAPE AS _bank_once, DELIBERATELY. `travel_npc='guild bank'` is
+        the identical kind of errand: only the leader can be aimed (followers
+        arrive by following, mod-overseer#209), so the errand goes to the
+        leader once and every character's deposit row is queued alongside it,
+        each staying pending until its holder reaches the vault
+        (`GuildBankInReach`, mod-overseer#441).
+
+        NOT IN THE MIDDLE OF A DUNGEON RUN, for the same reason the personal
+        bank pass skips one: pulling the leader out to bank is how the party
+        spreads.
+        """
+        names = sorted((await asyncio.to_thread(_protected_guids)).values())
+        if not names or await self._mid_run(names):
+            return
+        members = await asyncio.to_thread(_fetch_guild_money, names)
+        deposits = guildbank.plan_deposits(members)
+        if not deposits:
+            log.info("guild bank: nobody is carrying more than the float")
+            return
+        leader = await asyncio.to_thread(_head_now)
+        await asyncio.to_thread(
+            _write_trade_errand,
+            professions.Errand(character=leader, travel_npc="guild bank"),
+        )
+        seen = await asyncio.to_thread(_recent_guild_bank_keys, GIVE_RETRY_MINUTES)
+        fresh = []
+        for deposit in deposits:
+            command = f"bank deposit {deposit.copper}"
+            if (deposit.name, command) in seen:
+                continue
+            await asyncio.to_thread(_insert_guild, deposit.name, command, "guildbank")
+            fresh.append(deposit)
+        log.info("guild bank: queued %d/%d deposit(s), leader=%s",
+                 len(fresh), len(deposits), leader)
+
+    async def _guild_bank_loop(self) -> None:
+        """Keep the guild bank fed (mod-overseer#437, infra#2831).
+
+        Own loop and own clock, the same reasoning as _bank_loop.
+        """
+        await self.wait_until_ready()
+        cycle = float(os.environ.get("GUILD_BANK_CYCLE_SECONDS", "600"))
+        # Staggered past every other loop that writes `travel_npc` (vendor,
+        # bank, towntrip all claim earlier slots) so this pass never arrives
+        # in the same instant and races one of them for the column.
+        await asyncio.sleep(min(cycle, 240.0))
+        while not self.is_closed():
+            try:
+                await self._guild_bank_once()
+            except Exception:
+                log.exception("guild bank pass failed; retrying next cycle")
+            await asyncio.sleep(cycle)
+
     async def _towntrip_once(self) -> None:
         """Repair and restock between two dungeon runs.
 
@@ -5837,6 +5911,51 @@ def _fetch_bank_items(names: list) -> list:
         return [dict(row) for row in cur.fetchall()]
 
 
+def _fetch_guild_money(names: list) -> list:
+    """Rows for guildbank.plan_deposits; no judgement and no arithmetic here.
+
+    `guildid <> 0` is the whole membership test - `characters` has no other
+    guild column worth reading for a deposit decision, and a character with
+    no guild has nowhere for the deposit to land regardless of purse."""
+    if not names:
+        return []
+    marks = ",".join(["%s"] * len(names))
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT name, money, guildid <> 0 AS in_guild "  # noqa: S608 - placeholders from a COUNT, values still bound
+            "FROM characters WHERE name IN (%s)" % marks,
+            names,
+        )
+        return [dict(row) for row in cur.fetchall()]
+
+
+def _recent_guild_bank_keys(minutes: int) -> set:
+    """(character, command) pairs already proposed inside the retry window.
+
+    The `kind='guild'` sibling of _recent_bank_keys, and needed for the same
+    reason: `bank deposit <copper>` rows go through `_insert_guild`, which
+    also carries tabard/invite/shortlist commands under the same kind - the
+    `LIKE 'bank deposit %'` filter is what keeps this read to only the
+    deposit rows this pass itself is responsible for re-queuing.
+    """
+    with _connect() as conn, conn.cursor() as cur:
+        try:
+            cur.execute(
+                "SELECT target_name, command FROM overseer_command "
+                "WHERE kind = 'guild' AND command LIKE 'bank deposit %' "
+                "AND created_at > NOW() - INTERVAL %s MINUTE",
+                (int(minutes),),
+            )
+        except pymysql.err.MySQLError as exc:
+            # 1054 missing column, 1146 missing table, 1265 a `kind` ENUM with
+            # no 'guild' value. A world with none of the guild machinery has
+            # been asked for nothing, so nothing is already queued.
+            if exc.args and exc.args[0] in (1054, 1146, 1265):
+                return set()
+            raise
+        return {(row["target_name"], row["command"]) for row in cur.fetchall()}
+
+
 def _recent_bank_keys(minutes: int) -> set:
     """(character, command) pairs already proposed inside the retry window.
 
@@ -6832,6 +6951,7 @@ class HeadlessBridge(Bridge):
                 self._move_materials_loop,
                 self._vendor_loop,
                 self._bank_loop,
+                self._guild_bank_loop,
                 self._towntrip_loop,
                 self._restore_lost_lives,
             ) if coro.__name__ not in self.HEADLESS_SKIP
