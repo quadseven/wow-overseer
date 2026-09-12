@@ -86,6 +86,20 @@ class Recipe:
 # discipline. Grow this table by adding entries with the SAME care, not by
 # filling every profession at once from memory.
 #
+# LEATHERWORKING - three verified entries, each checked against the same
+# clean source: wowhead's own tooltip API (nether.wowhead.com/wotlk/tooltip/
+# spell/<id>), which renders the SpellInfo reagent table directly with none
+# of a spell page's "related recipes" sidebar to confuse a reader (that
+# sidebar DID leak into a first pass at Heavy Leather and Light Armor Kit
+# read off the rendered page - the tooltip API does not carry one and is
+# corroborated below by a second, independent database each time). All three
+# are the wow-professions.com guide's own "recycle a gathered good into
+# armor" bracket - every reagent is Skinning output, none is bought from a
+# vendor, which is exactly the "no travel needed" shape DriveCraft's v1
+# assumes and the only slice of the guide's 1-300 table this pass covers.
+# See infra#3611 for the thread/dye-dependent brackets this deliberately
+# leaves out. (Its own dict entries sit below Cooking's, in insertion order.)
+#
 # TAILORING - the "Bolt of X Cloth" family (infra#2757 follow-up to #440).
 # Every entry below is a plain cloth->bolt SPELL_EFFECT_CREATE_ITEM spell,
 # same shape as the original verified Linen entry: no
@@ -201,6 +215,27 @@ RECIPES: dict = {
         Recipe(2538, "Charred Wolf Meat", min_skill=1, max_skill=50,
                note="1x Stringy Wolf Meat -> 1x Charred Wolf Meat, taught "
                     "with Apprentice Cooking"),
+    ),
+    SKILL_IDS["leatherworking"]: (
+        # spell 2881, creates item 2318 from 3x Ruined Leather Scraps (2934).
+        # Cross-checked: wowhead tooltip API (wotlk) + classicdb.ch spell
+        # search naming the same id for the same name. Every leatherworker
+        # knows this from skill 1 - it is not trainer-gated separately.
+        Recipe(2881, "Light Leather", min_skill=1, max_skill=19,
+               note="3x Ruined Leather Scraps -> 1x Light Leather, recycle, "
+                    "no focus needed"),
+        # spell 2152, creates item 2304 from 1x Light Leather (2318).
+        # Cross-checked: wowhead tooltip API (wotlk) + classicdb.ch spell
+        # page, both agreeing on a single Light Leather reagent and a
+        # SPELL_EFFECT_CREATE_ITEM effect.
+        Recipe(2152, "Light Armor Kit", min_skill=20, max_skill=45,
+               note="1x Light Leather -> 1x Light Armor Kit, no focus needed"),
+        # spell 20649, creates item 4234 from 5x Medium Leather (2319).
+        # Cross-checked: wowhead tooltip API (wotlk) + classicdb.ch spell
+        # page, both agreeing on a single Medium Leather x5 reagent.
+        Recipe(20649, "Heavy Leather", min_skill=150, max_skill=155,
+               note="5x Medium Leather -> 1x Heavy Leather, recycle, "
+                    "no focus needed"),
     ),
 }
 

@@ -61,6 +61,31 @@ class RecipeForTests(unittest.TestCase):
         self.assertIsNotNone(craft.recipe_for(goals.SKILL_IDS["tailoring"], 60))
         self.assertIsNone(craft.recipe_for(goals.SKILL_IDS["tailoring"], 0))
 
+    def test_leatherworking_picks_light_leather_at_skill_1(self):
+        # 3x Ruined Leather Scraps -> 1x Light Leather, spell 2881, no
+        # purchased reagent - the recycle recipe every leatherworker knows.
+        recipe = craft.recipe_for(goals.SKILL_IDS["leatherworking"], 1)
+        self.assertIsNotNone(recipe)
+        self.assertEqual(recipe.spell_id, 2881)
+
+    def test_leatherworking_picks_light_armor_kit_mid_bracket(self):
+        recipe = craft.recipe_for(goals.SKILL_IDS["leatherworking"], 30)
+        self.assertIsNotNone(recipe)
+        self.assertEqual(recipe.spell_id, 2152)
+
+    def test_leatherworking_picks_heavy_leather_at_150(self):
+        recipe = craft.recipe_for(goals.SKILL_IDS["leatherworking"], 150)
+        self.assertIsNotNone(recipe)
+        self.assertEqual(recipe.spell_id, 20649)
+
+    def test_leatherworking_gap_between_45_and_150_answers_none(self):
+        # The guide's own bracket table has no zero-purchased-reagent recipe
+        # between Light Armor Kit (ends 45) and Heavy Leather (starts 150) -
+        # everything in between needs vendor-bought thread or dye, deferred
+        # per this pass's scoping (see the RECIPES table comment). A gap must
+        # answer None, never a stale or wrong-bracket recipe.
+        self.assertIsNone(craft.recipe_for(goals.SKILL_IDS["leatherworking"], 100))
+
 
 class CraftErrandTests(unittest.TestCase):
     def test_zero_for_a_character_with_no_crafting_trade(self):
@@ -83,6 +108,13 @@ class CraftErrandTests(unittest.TestCase):
         # what answers this.
         spell_id = craft.craft_errand("Og", {"tailoring": 1, "enchanting": 1})
         self.assertEqual(spell_id, 3910)
+
+    def test_finds_the_leatherworking_recipe_for_bork(self):
+        # Bork: skinning + leatherworking (professions.ROSTER). Skinning is a
+        # GATHERING trade with no craft.RECIPES entry, so the leatherworking
+        # value is what must answer this.
+        spell_id = craft.craft_errand("Bork", {"skinning": 40, "leatherworking": 1})
+        self.assertEqual(spell_id, 2881)
 
     def test_never_answers_for_a_trade_this_character_does_not_hold(self):
         # Grug is assigned mining + blacksmithing (a GATHERING trade and a
