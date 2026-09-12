@@ -47,10 +47,12 @@ class RecipeForTests(unittest.TestCase):
         self.assertEqual(recipe.spell_id, 18401)
 
     def test_returns_none_for_a_profession_with_no_entry(self):
-        # Blacksmithing is assigned in professions.py's own ROSTER but has no
-        # verified recipe in craft.RECIPES yet - see the module docstring on
-        # why an unverified id is never guessed in rather than left absent.
-        self.assertIsNone(craft.recipe_for(goals.SKILL_IDS["blacksmithing"], 1))
+        # Enchanting is assigned in professions.py's own ROSTER (Og) but has
+        # no verified recipe in craft.RECIPES - it is not even a plain
+        # SPELL_EFFECT_CREATE_ITEM output (see the module docstring on why an
+        # unverified/wrong-shaped id is never guessed in rather than left
+        # absent).
+        self.assertIsNone(craft.recipe_for(goals.SKILL_IDS["enchanting"], 1))
 
     def test_finds_the_bracket_a_skill_value_falls_in(self):
         recipe = craft.recipe_for(goals.SKILL_IDS["tailoring"], 1)
@@ -60,6 +62,29 @@ class RecipeForTests(unittest.TestCase):
     def test_bracket_boundaries_are_inclusive(self):
         self.assertIsNotNone(craft.recipe_for(goals.SKILL_IDS["tailoring"], 60))
         self.assertIsNone(craft.recipe_for(goals.SKILL_IDS["tailoring"], 0))
+
+    def test_blacksmithing_finds_the_bracket_a_skill_value_falls_in(self):
+        # Grug's real starting bracket - Rough Sharpening Stone, 1-29.
+        recipe = craft.recipe_for(goals.SKILL_IDS["blacksmithing"], 1)
+        self.assertIsNotNone(recipe)
+        self.assertEqual(recipe.spell_id, 2660)
+
+    def test_blacksmithing_returns_none_in_an_anvil_gated_gap(self):
+        # 91-124 is real skill range with real recipes (Runed Copper Belt,
+        # Silver Rod, Rough Bronze Leggings) - all require an Anvil +
+        # Blacksmith Hammer DriveCraft's v1 cannot satisfy, so this must stay
+        # None rather than falling back to a stone recipe that would not
+        # actually grant a skill-up there.
+        self.assertIsNone(craft.recipe_for(goals.SKILL_IDS["blacksmithing"], 100))
+
+    def test_blacksmithing_finds_the_top_bracket(self):
+        # Dense Sharpening Stone, 250-260 - the highest verified entry.
+        recipe = craft.recipe_for(goals.SKILL_IDS["blacksmithing"], 260)
+        self.assertIsNotNone(recipe)
+        self.assertEqual(recipe.spell_id, 16641)
+
+    def test_blacksmithing_returns_none_past_the_last_verified_bracket(self):
+        self.assertIsNone(craft.recipe_for(goals.SKILL_IDS["blacksmithing"], 261))
 
     def test_leatherworking_picks_light_leather_at_skill_1(self):
         # 3x Ruined Leather Scraps -> 1x Light Leather, spell 2881, no
@@ -118,13 +143,20 @@ class CraftErrandTests(unittest.TestCase):
 
     def test_never_answers_for_a_trade_this_character_does_not_hold(self):
         # Grug is assigned mining + blacksmithing (a GATHERING trade and a
-        # CRAFTING one with no recipe entry yet). Even if `skills` claimed a
-        # tailoring value (bad data from a stale row, say), craft_errand must
-        # not answer with a tailoring recipe for a character professions.py
-        # never assigned it - the same permission discipline professions.py
-        # itself holds for `wanted`.
+        # CRAFTING one that now has verified recipe entries). Even if
+        # `skills` claimed a tailoring value (bad data from a stale row,
+        # say), craft_errand must not answer with a tailoring recipe for a
+        # character professions.py never assigned it - the same permission
+        # discipline professions.py itself holds for `wanted`.
         spell_id = craft.craft_errand("Grug", {"mining": 8, "tailoring": 50})
         self.assertEqual(spell_id, 0)
+
+    def test_finds_the_recipe_for_grugs_blacksmithing(self):
+        # Grug: mining + blacksmithing. mining is a GATHERING trade with no
+        # RECIPES entry (it climbs on its own, per the module docstring);
+        # blacksmithing now has Rough Sharpening Stone at 1-29.
+        spell_id = craft.craft_errand("Grug", {"mining": 8, "blacksmithing": 1})
+        self.assertEqual(spell_id, 2660)
 
 
 class FirstAidAndCookingTests(unittest.TestCase):

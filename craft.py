@@ -86,6 +86,52 @@ class Recipe:
 # discipline. Grow this table by adding entries with the SAME care, not by
 # filling every profession at once from memory.
 #
+# BLACKSMITHING (Grug, skill 164) - the Sharpening/Grinding Stone family
+# only (infra#2757 follow-up to #440). Every entry below creates a plain
+# stone item from smelted-ore-adjacent mining byproduct (Rough/Coarse/
+# Heavy/Solid/Dense Stone - the "junk" stone mining also yields alongside
+# ore, which Grug's own mining already carries as a side effect), and every
+# one of them was checked to have NO SpellInfo::RequiresSpellFocus and NO
+# EquippedItemClass tool requirement - the same "no travel, no gear-swap
+# needed" shape DriveCraft's v1 assumes for Tailoring's bolts.
+#
+# THIS IS DELIBERATELY NOT THE WHOLE BLACKSMITHING PROGRESSION. Every
+# "worn" recipe in the wow-professions.com guide between these brackets
+# (Runed Copper Belt, Silver Rod, Rough Bronze Leggings, Patterned Bronze
+# Bracers, Golden Rod, Green Iron Leggings/Bracers, Golden Scale Bracers,
+# Heavy Mithril Gauntlet, Steel Plate Helm, Mithril Spurs, Imperial Plate
+# Bracers/Boots) was checked and every one of them requires an Anvil
+# (SpellInfo::RequiresSpellFocus) PLUS a Blacksmith Hammer equipped as a
+# tool (SpellInfo::EquippedItemClass) - neither of which DriveCraft's v1
+# satisfies (it casts in place, it does not walk anyone to a forge, and it
+# does not swap gear). Casting one of those today would sit refused on
+# every single poll (SPELL_FAILED_REQUIRES_SPELL_FOCUS or
+# SPELL_FAILED_EQUIPPED_ITEM_CLASS) forever, not eventually succeed - so
+# they are left out rather than shipped to fail closed silently. Green Iron
+# Leggings/Bracers carry a second, independent blocker on top of the anvil
+# one: Green Dye, which nothing in the family gathers and bridge.py's
+# town-trip `kind='buy'` plumbing does not yet buy craft reagents (only
+# food/drink) - see infra's craft-leveling follow-up issue.
+#
+# Each spell id, its reagent, and its RequiresSpellFocus/EquippedItemClass
+# status was checked against two independent public WotLK/classic spell
+# databases (wowhead.com/wotlk and classicdb.ch), cross-referenced against
+# the wow-professions.com guide's own stated stone-to-item ratios. The
+# guide's own brackets touch or overlap at their edges (the same shape
+# Tailoring's brackets did) - adjacent entries below are shifted by one
+# skill point off the guide's stated numbers so RECIPES brackets never
+# overlap; the real gaps between entries (91-124, 141-199, 211-249) are the
+# Anvil-gated brackets above, left empty on purpose rather than stretched
+# to cover them.
+#
+#   Rough Sharpening Stone   spell 2660   item 2862   1x Rough Stone (2835)
+#   Rough Grinding Stone     spell 3320   item 3470   2x Rough Stone (2835)
+#   Coarse Sharpening Stone  spell 2665   item 2863   1x Coarse Stone (2836)
+#   Coarse Grinding Stone    spell 3326   item 3478   2x Coarse Stone (2836)
+#   Heavy Grinding Stone     spell 3337   item 3486   3x Heavy Stone (2838)
+#   Solid Grinding Stone     spell 9920   item 7966   4x Solid Stone (7912)
+#   Dense Sharpening Stone   spell 16641  item 12404  1x Dense Stone (12365)
+#
 # LEATHERWORKING - three verified entries, each checked against the same
 # clean source: wowhead's own tooltip API (nether.wowhead.com/wotlk/tooltip/
 # spell/<id>), which renders the SpellInfo reagent table directly with none
@@ -215,6 +261,22 @@ RECIPES: dict = {
         Recipe(2538, "Charred Wolf Meat", min_skill=1, max_skill=50,
                note="1x Stringy Wolf Meat -> 1x Charred Wolf Meat, taught "
                     "with Apprentice Cooking"),
+    ),
+    SKILL_IDS["blacksmithing"]: (
+        Recipe(2660, "Rough Sharpening Stone", min_skill=1, max_skill=29,
+               note="1x Rough Stone -> 1x Rough Sharpening Stone, no focus needed"),
+        Recipe(3320, "Rough Grinding Stone", min_skill=30, max_skill=64,
+               note="2x Rough Stone -> 1x Rough Grinding Stone, no focus needed"),
+        Recipe(2665, "Coarse Sharpening Stone", min_skill=65, max_skill=74,
+               note="1x Coarse Stone -> 1x Coarse Sharpening Stone, no focus needed"),
+        Recipe(3326, "Coarse Grinding Stone", min_skill=75, max_skill=90,
+               note="2x Coarse Stone -> 1x Coarse Grinding Stone, no focus needed"),
+        Recipe(3337, "Heavy Grinding Stone", min_skill=125, max_skill=140,
+               note="3x Heavy Stone -> 1x Heavy Grinding Stone, no focus needed"),
+        Recipe(9920, "Solid Grinding Stone", min_skill=200, max_skill=210,
+               note="4x Solid Stone -> 1x Solid Grinding Stone, no focus needed"),
+        Recipe(16641, "Dense Sharpening Stone", min_skill=250, max_skill=260,
+               note="1x Dense Stone -> 1x Dense Sharpening Stone, no focus needed"),
     ),
     SKILL_IDS["leatherworking"]: (
         # spell 2881, creates item 2318 from 3x Ruined Leather Scraps (2934).
