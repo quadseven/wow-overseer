@@ -112,6 +112,76 @@ class RecipeForTests(unittest.TestCase):
         self.assertIsNone(craft.recipe_for(goals.SKILL_IDS["leatherworking"], 100))
 
 
+class EngineeringRecipeForTests(unittest.TestCase):
+    """Engineering (infra#440's follow-up) is the first skill with more than
+    one bracket, so it is what actually exercises `recipe_for` picking among
+    several entries rather than the trivial single-entry case Tailoring
+    covers above."""
+
+    def test_first_bracket_covers_skill_one(self):
+        recipe = craft.recipe_for(goals.SKILL_IDS["engineering"], 1)
+        self.assertIsNotNone(recipe)
+        self.assertEqual(recipe.spell_id, 3918)  # Rough Blasting Powder
+
+    def test_a_middle_bracket_answers_its_own_value(self):
+        recipe = craft.recipe_for(goals.SKILL_IDS["engineering"], 200)
+        self.assertIsNotNone(recipe)
+        self.assertEqual(recipe.spell_id, 12589)  # Mithril Tube
+
+    def test_last_bracket_covers_skill_three_hundred(self):
+        recipe = craft.recipe_for(goals.SKILL_IDS["engineering"], 300)
+        self.assertIsNotNone(recipe)
+        self.assertEqual(recipe.spell_id, 19795)  # Thorium Tube
+
+    def test_a_deliberately_deferred_gap_answers_none(self):
+        # 106-124: Bronze Tube / Standard Scope need a vendor-bought reagent
+        # (Weak Flux / Moss Agate) this pass does not reach - see craft.py's
+        # module-level comment. None is the honest answer here, not a guess.
+        self.assertIsNone(craft.recipe_for(goals.SKILL_IDS["engineering"], 115))
+
+    def test_the_explosive_sheep_chain_gap_answers_none(self):
+        # 151-174: Whirring Bronze Gizmo / Bronze Framework / Explosive Sheep
+        # collide with Heavy Blasting Powder's own skill window and cannot
+        # all be stocked by this module's one-recipe-per-bracket model - see
+        # craft.py's module-level comment.
+        self.assertIsNone(craft.recipe_for(goals.SKILL_IDS["engineering"], 160))
+
+
+class ToolRecipeTests(unittest.TestCase):
+    """The tool-vs-consumable distinction (infra#440's Engineering follow-up):
+    a recipe that creates a permanent tool, not something to spam, is marked
+    `repeatable=False` and MUST use a single-skill-point bracket - that
+    narrow bracket, not an inventory check this module cannot make, is what
+    stops DriveCraft from recasting it once the skill-up lands."""
+
+    def test_every_non_repeatable_recipe_has_a_single_point_bracket(self):
+        for recipes in craft.RECIPES.values():
+            for recipe in recipes:
+                if not recipe.repeatable:
+                    self.assertEqual(
+                        recipe.min_skill, recipe.max_skill,
+                        f"{recipe.name} is marked repeatable=False but spans "
+                        f"more than one skill point - it would be recast "
+                        f"like a consumable"
+                    )
+
+    def test_arclight_spanner_is_marked_not_repeatable(self):
+        recipe = craft.recipe_for(goals.SKILL_IDS["engineering"], 51)
+        self.assertIsNotNone(recipe)
+        self.assertEqual(recipe.spell_id, 7430)
+        self.assertFalse(recipe.repeatable)
+
+    def test_gyromatic_micro_adjustor_is_marked_not_repeatable(self):
+        recipe = craft.recipe_for(goals.SKILL_IDS["engineering"], 195)
+        self.assertIsNotNone(recipe)
+        self.assertEqual(recipe.spell_id, 12590)
+        self.assertFalse(recipe.repeatable)
+
+    def test_ordinary_consumable_recipes_default_to_repeatable(self):
+        recipe = craft.recipe_for(goals.SKILL_IDS["tailoring"], 1)
+        self.assertTrue(recipe.repeatable)
+
+
 class AlchemyRecipeForTests(unittest.TestCase):
     """One assertion per bracket - the full skill 1-300 Alchemy progression,
     verified against real spell/reagent data (see craft.RECIPES's own
@@ -182,10 +252,14 @@ class AlchemyRecipeForTests(unittest.TestCase):
 
 class CraftErrandTests(unittest.TestCase):
     def test_zero_for_a_character_with_no_crafting_trade(self):
-        # Grog holds mining + engineering (professions.ROSTER) - a GATHERING
-        # trade and a CRAFTING one with no craft.RECIPES entry, so this must
-        # be 0, never a guessed spell id for either.
-        self.assertEqual(craft.craft_errand("Grog", {"mining": 8, "engineering": 1}), 0)
+        # Og holds tailoring + enchanting (professions.ROSTER). Tailoring at
+        # 0 means "not learned yet" (professions.py's trainer errand owns
+        # that), and enchanting still has no craft.RECIPES entry (a
+        # non-CREATE_ITEM output, flagged deferred in the design doc) - so
+        # this must fall all the way through to 0, never a guessed spell id.
+        # No secondary (First Aid/Cooking) keys are given, so the fallback
+        # below this loop also finds nothing learned.
+        self.assertEqual(craft.craft_errand("Og", {"tailoring": 0, "enchanting": 1}), 0)
 
     def test_zero_for_a_trade_not_yet_learned(self):
         # Og is assigned tailoring but a skill value of 0 means the trainer
@@ -226,6 +300,14 @@ class CraftErrandTests(unittest.TestCase):
         # discipline professions.py itself holds for `wanted`.
         spell_id = craft.craft_errand("Grug", {"mining": 8, "tailoring": 50})
         self.assertEqual(spell_id, 0)
+
+    def test_finds_grogs_engineering_recipe(self):
+        # Grog: mining + engineering (professions.ROSTER). mining is a
+        # GATHERING trade with no craft.RECIPES entry; engineering now has a
+        # full bracket table, so his engineering value must be what answers
+        # this.
+        spell_id = craft.craft_errand("Grog", {"mining": 40, "engineering": 1})
+        self.assertEqual(spell_id, 3918)  # Rough Blasting Powder
 
     def test_finds_the_recipe_for_grugs_blacksmithing(self):
         # Grug: mining + blacksmithing. mining is a GATHERING trade with no

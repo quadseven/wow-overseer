@@ -73,6 +73,26 @@ class Recipe:
     skill-ups at is a grey/green/yellow/orange band the core computes per
     cast, not a fixed number - so this is "worth aiming at", not "guaranteed
     to grant a point every time".
+
+    `repeatable` is the TOOL-VS-CONSUMABLE distinction (infra#440's Engineering
+    follow-up). Most recipes are worth casting many times in a row - a Bolt of
+    Linen Cloth, a Rough Blasting Powder - and `repeatable=True` (the default)
+    is exactly that: DriveCraft keeps recasting the same errand every poll
+    until skill_value walks past `max_skill`. A handful of Engineering recipes
+    (Arclight Spanner, Gyromatic Micro-Adjustor) create a PERMANENT TOOL - the
+    family wants exactly one, ever, not sixty. Neither the core nor this
+    module blocks a second cast outright (these items are not "Unique" -
+    verified against a real WotLK/3.3.5a spell+item lookup, not assumed - so
+    CheckCast will not refuse a duplicate the way it would for a
+    Unique-Equipped item), so `repeatable=False` is enforced the ONLY way this
+    module can reach the C++ side today: a single-skill-point bracket
+    (`min_skill == max_skill`). One successful cast raises skill_value past
+    `max_skill` and the character falls out of the bracket on the very next
+    poll, the same "walked out of range" exit every other recipe already
+    uses - no new mechanism, no inventory check this module cannot make. A
+    test in test_craft.py holds every `repeatable=False` entry to that
+    single-point shape so a future entry cannot reintroduce a wide "craft one
+    of these sixty times" bracket for a tool by mistake.
     """
 
     spell_id: int
@@ -80,11 +100,72 @@ class Recipe:
     min_skill: int
     max_skill: int
     note: str = ""
+    repeatable: bool = True
 
 
 # One profession, one verified entry, per the module docstring's own
 # discipline. Grow this table by adding entries with the SAME care, not by
 # filling every profession at once from memory.
+#
+# ENGINEERING (Grog, skill 202; infra#440's Engineering follow-up, sibling of
+# infra#2757). Every spell id below was checked against two independent
+# WotLK/3.3.5a spell+item references (wowhead's /wotlk/ and /classic/ trees,
+# wotlkdb.com, classicdb.ch, warcraft.wiki.gg), not read off wowhead's
+# `/wotlk/` (2022 Classic-relaunch) pages alone - that tree silently diverges
+# from original 3.3.5a ids for at least two of these recipes (Explosive
+# Sheep: relaunch uses 8209, an on-use "Summon NPC" spell, not the CREATE
+# spell; Hi-Explosive Bomb: relaunch's 12543 has no reagent data at all on a
+# 3.3.5a-targeted database). The id used below is always the one a 3.3.5a-era
+# reference agrees on, cross-checked against the guide's own cumulative
+# reagent totals for each bracket (total / per-cast count = the number of
+# casts the bracket implies, and every entry below passed that arithmetic).
+#
+# BRACKETS ARE A CONTINUOUS, NON-OVERLAPPING PARTITION, not a copy of the
+# leveling guide's own ranges - the guide happily lists two simultaneous
+# recipes for one skill window (real Engineering, unlike Tailoring, offers
+# several parallel "good enough" recipes at many skill values) but
+# `recipe_for` picks one bracket per skill value, so two RECIPES entries
+# cannot legally claim the same point. Adjacent brackets below therefore
+# start one point after the previous one's `max_skill`, even where the guide
+# itself listed a lower or equal number - this only ever costs a skill point
+# of aiming-precision at a boundary, never wrongness, and
+# `test_brackets_do_not_overlap_within_one_skill` already holds the whole
+# table to this.
+#
+# TWO GAPS ARE LEFT DELIBERATELY EMPTY, not filled with a guessed entry:
+#
+#   106-124 (Bronze Tube / Standard Scope) - both need Weak Flux, and
+#   Standard Scope also needs Moss Agate; neither is a mining/smelting
+#   byproduct or a cloth drop, both are a vendor purchase this module's
+#   reagent model does not reach yet. towntrip.py's `_buy` (mod-overseer#227)
+#   is built entirely around FOOD_KIND/DRINK - a level-tiered stack size and
+#   vendor table - and generalizing it to an arbitrary named reagent and
+#   count is not the "clean small addition" this pass was scoped to attempt.
+#   See the filed follow-up issue for extending `_buy` (or a sibling
+#   mechanism) to name-and-count reagent purchases.
+#
+#   151-174 (Whirring Bronze Gizmo, Bronze Framework, Explosive Sheep) -
+#   verified real, but they collide with Heavy Blasting Powder for the SAME
+#   skill window instead of sitting in their own like the Mithril/Thorium
+#   chains below do (Whirring Bronze Gizmo's own trainer-verified skill floor
+#   is 125, identical to Heavy Blasting Powder's, not the guide's stated 135).
+#   Explosive Sheep needs BOTH of those plus Bronze Framework as reagents
+#   (30/15/15 per the guide), and this module can only stand one recipe up
+#   per skill window - it cannot craft Heavy Blasting Powder AND Whirring
+#   Bronze Gizmo in parallel to stock Explosive Sheep the way a human
+#   leveling guide assumes. Picking Heavy Blasting Powder alone would leave
+#   Explosive Sheep's errand permanently reagent-short (not the ordinary
+#   "gatherer is running behind" case DriveCraft's comments describe -
+#   permanently, because nothing in this table ever produces the other two
+#   reagents). Left out rather than shipped as a recipe that can never
+#   complete; see the follow-up issue for what a multi-recipe stockpile
+#   primitive would need to look like before this gap can close.
+#
+# Unlike Tailoring's SpellInfo, this module does not restate reagents in
+# code - DriveCraft's CheckCast already reads them from the real SpellInfo,
+# and duplicating them here would be a second source of truth this module's
+# own docstring already argues against. The `note` on each entry names them
+# for a human reading this table, not for anything the code checks.
 #
 # ALCHEMY (infra#2757, the Alchemy slice) - the full skill 1-300 potion/elixir
 # progression from wow-professions.com's classic Alchemy guide, with every
@@ -300,6 +381,79 @@ RECIPES: dict = {
                note="1x Stringy Wolf Meat -> 1x Charred Wolf Meat, taught "
                     "with Apprentice Cooking"),
     ),
+    SKILL_IDS["engineering"]: (
+        Recipe(3918, "Rough Blasting Powder", min_skill=1, max_skill=30,
+               note="1x Rough Stone -> 1x Rough Blasting Powder (item 4357)"),
+        Recipe(3922, "Handful of Copper Bolts", min_skill=31, max_skill=50,
+               note="1x Copper Bar -> 1x Handful of Copper Bolts (item 4359)"),
+        Recipe(7430, "Arclight Spanner", min_skill=51, max_skill=51,
+               repeatable=False,
+               note="TOOL, craft once - 6x Copper Bar -> 1x Arclight Spanner "
+                    "(item 6219). Not Unique/Unique-Equipped - verified "
+                    "against wowhead+classicdb tooltip data, not assumed - so "
+                    "nothing in the core refuses a second cast; the "
+                    "single-point bracket is what stops this module from "
+                    "recasting it, not an item flag"),
+        Recipe(3923, "Rough Copper Bomb", min_skill=52, max_skill=75,
+               note="1x Copper Bar, 1x Handful of Copper Bolts, 2x Rough "
+                    "Blasting Powder, 1x Linen Cloth -> 1x Rough Copper Bomb "
+                    "(item 4360)"),
+        Recipe(3929, "Coarse Blasting Powder", min_skill=76, max_skill=90,
+               note="1x Coarse Stone -> 1x Coarse Blasting Powder (item 4364)"),
+        Recipe(3931, "Coarse Dynamite", min_skill=91, max_skill=100,
+               note="3x Coarse Blasting Powder, 1x Linen Cloth -> 1x Coarse "
+                    "Dynamite (item 4365). NOT spell 4061 - that id is the "
+                    "crafted item's own throw/damage spell, a different "
+                    "spell that happens to share the display name"),
+        Recipe(3973, "Silver Contact", min_skill=101, max_skill=105,
+               note="1x Silver Bar -> Silver Contact (item 4404); per-cast "
+                    "yield could not be independently confirmed for the "
+                    "3.3.5a era (a later, Cataclysm-only patch changed it) - "
+                    "verify against this deployment's own cast if it matters"),
+        # 106-124 deliberately empty - Bronze Tube / Standard Scope need
+        # Weak Flux / Moss Agate, a vendor purchase this pass does not reach.
+        # See the module-level comment above and the filed follow-up issue.
+        Recipe(3945, "Heavy Blasting Powder", min_skill=125, max_skill=150,
+               note="1x Heavy Stone -> 1x Heavy Blasting Powder (item 4377); "
+                    "real trainer skill floor is 125, not the guide's stated "
+                    "135 - also the reagent Hi-Explosive Bomb needs later"),
+        # 151-174 deliberately empty - Whirring Bronze Gizmo / Bronze
+        # Framework / Explosive Sheep, see the module-level comment above.
+        Recipe(12585, "Solid Blasting Powder", min_skill=175, max_skill=194,
+               note="2x Solid Stone -> 1x Solid Blasting Powder (item 10505)"),
+        Recipe(12590, "Gyromatic Micro-Adjustor", min_skill=195, max_skill=195,
+               repeatable=False,
+               note="TOOL, craft once - 4x Steel Bar -> 1x Gyromatic "
+                    "Micro-Adjustor (item 10498). Unique-Equipped (toolkit "
+                    "slot, limit 1) - verified, not assumed - so a duplicate "
+                    "cast is not blocked by the core either, same reasoning "
+                    "as Arclight Spanner above: the single-point bracket is "
+                    "the actual stop"),
+        Recipe(12589, "Mithril Tube", min_skill=196, max_skill=200,
+               note="3x Mithril Bar -> 1x Mithril Tube (item 10559)"),
+        Recipe(12591, "Unstable Trigger", min_skill=201, max_skill=215,
+               note="1x Mithril Bar, 1x Mageweave Cloth, 1x Solid Blasting "
+                    "Powder -> 1x Unstable Trigger (item 10560); also a Hi-"
+                    "Explosive Bomb reagent"),
+        Recipe(12599, "Mithril Casing", min_skill=216, max_skill=238,
+               note="3x Mithril Bar -> 1x Mithril Casing (item 10561); also "
+                    "a Hi-Explosive Bomb reagent"),
+        Recipe(12619, "Hi-Explosive Bomb", min_skill=239, max_skill=250,
+               note="2x Mithril Casing, 1x Unstable Trigger, 2x Solid "
+                    "Blasting Powder -> 1x Hi-Explosive Bomb (item 10562); "
+                    "NOT spell 12543 - that id is the 2022 Classic-relaunch "
+                    "tree's id for the same name and carries no 3.3.5a "
+                    "reagent data. All three reagents come from the three "
+                    "brackets directly above, in order, so this recipe is "
+                    "reagent-ready by the time a character reaches it"),
+        Recipe(19788, "Dense Blasting Powder", min_skill=251, max_skill=260,
+               note="2x Dense Stone -> 1x Dense Blasting Powder (item 15992)"),
+        Recipe(19791, "Thorium Widget", min_skill=261, max_skill=285,
+               note="3x Thorium Bar, 1x Runecloth (item 14047) -> 1x Thorium "
+                    "Widget (item 15994)"),
+        Recipe(19795, "Thorium Tube", min_skill=286, max_skill=300,
+               note="6x Thorium Bar -> 1x Thorium Tube (item 16000)"),
+    ),
     SKILL_IDS["alchemy"]: (
         Recipe(2330, "Minor Healing Potion", min_skill=1, max_skill=59,
                note="1x Peacebloom (2447), 1x Silverleaf (765), "
@@ -383,9 +537,10 @@ def recipe_for(skill_id: int, skill_value: int):
     yet" - a caller must not invent a fallback, the same permission
     discipline `professions.assigned` holds for who may hold a trade at all.
     Picks the first bracket that contains `skill_value`; RECIPES entries for
-    one skill are expected to be kept in ascending bracket order, though
-    today's table has exactly one entry per skill and cannot yet disagree
-    with itself.
+    one skill are expected to be kept in ascending, non-overlapping bracket
+    order (Engineering's table is the first with more than one entry, and
+    `test_brackets_do_not_overlap_within_one_skill` holds it, and every
+    profession after it, to that).
     """
     for recipe in RECIPES.get(skill_id, ()):
         if recipe.min_skill <= skill_value <= recipe.max_skill:
