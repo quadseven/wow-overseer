@@ -807,9 +807,22 @@ class TheErrandStateIsNotOutlivedByItsClock(unittest.TestCase):
         self.assertIn("_state.erase(name)", _code(_clear()))
 
     def test_every_release_path_goes_through_the_one_that_erases(self):
-        """Eight releases inside DriveTravel - arrival, no such spawn, the
-        backstop, stepping through a doorway, and the death-rate breaker's two
-        - and none of them may erase, or forget to erase, on its own.
+        """Ten releases inside DriveTravel - arrival, no such spawn, the
+        backstop, stepping through a doorway, the death-rate breaker's two, and
+        mod-overseer#388's flight-discovery pair - and none of them may erase,
+        or forget to erase, on its own.
+
+        The ninth and tenth are #388's deliberate flight-discovery errand
+        (`flight master:<nodeId>`), and they are two for the same reason the
+        breaker above is two rather than one: they answer different questions.
+        The ninth fires once the hold-and-learn transaction is resolved,
+        whether or not the node was actually learned - a deliberate errand
+        that reached its flight master and tried is done either way, and
+        `LearnFlightNodeDeliberately`'s own log line already said which. The
+        tenth is #402's rule applied here: the spawn this errand was sent to
+        is gone (despawned, dead, or phased) by the time the character
+        arrives, so nothing is left to learn from and the aim is handed back
+        to whatever wrote it rather than held open forever.
 
         The doorway release is why the count is a census rather than a
         constant: a `trigger:` aim ends by GOING somewhere, not by standing
@@ -847,7 +860,7 @@ class TheErrandStateIsNotOutlivedByItsClock(unittest.TestCase):
         restarted before it could ever run out. This one is anchored to a
         PLACE, which is why it fires."""
         code = _code(_drive())
-        self.assertEqual(8, code.count("_travelAims.Release(name)"))
+        self.assertEqual(10, code.count("_travelAims.Release(name)"))
         self.assertNotIn("_state.erase(", code)
         # Stronger than "the drive does not erase": it cannot. The memory is a
         # private member of the book, so the only way out is Release.
