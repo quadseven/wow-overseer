@@ -51,6 +51,7 @@ import questbook
 import questshare
 import quests
 import relay
+import tabard
 import towntrip
 import trainjob
 import voice
@@ -163,6 +164,107 @@ def _insert_gm(cmd: relay.GmCommand) -> int:
             (cmd.target_name, cmd.command, cmd.source),
         )
         return cur.lastrowid
+
+
+def _insert_guild(name: str, command: str, source: str) -> int:
+    """One overseer_command row for mod-overseer's DoGuild.
+
+    kind='guild', for the same reason _insert_job uses its own kind: the guild
+    verbs are not mod-playerbots chat commands, so handing one to the bot's own
+    parser would be accepted and do nothing.
+    """
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(
+            "INSERT INTO overseer_command (target_name, command, kind, source) "
+            "VALUES (%s, %s, 'guild', %s)",
+            (name, command, source),
+        )
+        return cur.lastrowid
+
+
+def _fetch_family_kin() -> list[dict]:
+    """name, race and class for every member of the family.
+
+    FROM bonds.FAMILY, NOT FROM WHO IS LOGGED IN, and that is deliberate. The
+    council reads `_protected_guids` because what today is for depends on who
+    is here; a tabard does not. Taking the online roster would make the design
+    a function of who happened to be awake when the loop ran, so the same
+    family could agree on two different flags on two different evenings - and
+    `test_the_same_family_always_arrives_at_the_same_tabard` would be pinning
+    a property the bridge did not actually have.
+
+    bonds.FAMILY is already put through cast.py's rename for whichever world
+    this process serves, so the names match the characters table on dev and
+    live alike.
+
+    `class` is a reserved word in Python but not in MySQL, and it is the real
+    column name, so it is read as-is and unpacked at the call site rather than
+    aliased into something that would not match `characters`.
+    """
+    names = list(bonds.FAMILY)
+    if not names:
+        return []
+    # Placeholders from a COUNT, values still bound - the same construction and
+    # the same suppression as travel.aim_statements and _aim_traveller. Nothing
+    # from `names` reaches the query text: `marks` is a run of `%s` whose only
+    # input is how many there are, and the names themselves go to the driver as
+    # parameters.
+    marks = ",".join(["%s"] * len(names))
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT name, race, class "  # noqa: S608 - placeholders from a COUNT, values still bound
+            "FROM characters WHERE name IN (%s)" % marks,
+            names,
+        )
+        return list(cur.fetchall())
+
+
+def _tabard_already_asked() -> dict | None:
+    """The last tabard row this bridge wrote, whatever became of it.
+
+    THE SUCCESS CASE IS NOT THE DANGEROUS ONE. A guild that took its tabard
+    has non-zero emblem columns and the debate is unreachable on that alone.
+    The case that bites is the one where the command did NOT land - the guild
+    master offline, the module too old to know the verb, the core refusing -
+    because the columns stay at zero and nothing about the world remembers
+    that five characters already had the argument. That is precisely the
+    infra#2807 shape the ticket warns about, and it would have replayed a
+    byte-identical eleven-line scene into party chat every hour for as long as
+    the verb was missing. Asked once, it stays asked.
+
+    Returns the row so the caller can say what became of it rather than going
+    quiet, because a tabard that never landed is worth a line in the log.
+    """
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT id, status, detail, created_at FROM overseer_command "
+            " WHERE kind = 'guild' AND command LIKE 'tabard %' "
+            " ORDER BY id DESC LIMIT 1"
+        )
+        return cur.fetchone()
+
+
+def _fetch_family_guild() -> dict | None:
+    """The guild the family's head leads, and what it currently wears.
+
+    Keyed off the head of the family rather than off a guild name, because the
+    name is a decision that has already been made once and re-deriving it here
+    would be a second answer to which guild is theirs.
+
+    Returns None when they are in none, which is the ordinary answer for most
+    of this family's life and is not an error.
+    """
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT g.guildid, g.name, g.EmblemStyle, g.EmblemColor, "
+            "       g.BorderStyle, g.BorderColor, g.BackgroundColor, c.money "
+            "  FROM characters c "
+            "  JOIN guild_member gm ON gm.guid = c.guid "
+            "  JOIN guild g ON g.guildid = gm.guildid "
+            " WHERE c.name = %s",
+            (bonds.head_of_family(),),
+        )
+        return cur.fetchone()
 
 
 def _insert_job(name: str, mode: str, source: str) -> int:
@@ -2083,6 +2185,7 @@ class Bridge(discord.Client):
                 self._supervise_goals,
                 self._relay_chat,
                 self._hold_council,
+                self._design_tabard,
                 self._assign_trades,
                 self._sample_family,
                 self._share_quests_loop,
@@ -2895,6 +2998,98 @@ class Bridge(discord.Client):
         if held.plan is not None:
             await asyncio.to_thread(_persist_council_plan, held.plan)
         log.info("council: %d line(s), %s", len(held.lines), held.reason)
+
+    async def _design_tabard(self) -> None:
+        """The family argues about the tabard, once (infra#2831).
+
+        WHY THIS IS NOT PART OF THE COUNCIL. The council decides what TODAY is
+        for and is meant to run forever; this decides one thing once and then
+        has nothing further to say. Folding it in would have made every hourly
+        sitting carry a question that is already answered.
+
+        AND WHY IT CANNOT RESTAGE ITSELF, which is the risk the ticket names
+        out loud - "a tabard debate that never ends would be a very funny way
+        to rediscover that bug". The guard is not a memory of having spoken, it
+        is the world: a guild with any of its five emblem columns set has a
+        tabard, so the debate is unreachable the moment it succeeds. Nothing to
+        get out of step, and a tabard cleared by hand correctly starts the
+        argument again.
+        """
+        await self.wait_until_ready()
+        cycle = float(os.environ.get("TABARD_CYCLE_SECONDS", "3600"))
+        await asyncio.sleep(min(cycle, 180.0))
+        while not self.is_closed():
+            try:
+                await self._tabard_once()
+            except Exception:
+                log.exception("tabard failed; retrying next cycle")
+            await asyncio.sleep(cycle)
+
+    async def _tabard_once(self) -> None:
+        row = await asyncio.to_thread(_fetch_family_guild)
+        if not row:
+            log.debug("tabard: the family is in no guild")
+            return
+        worn = [row[f.name] for f in tabard.FIELDS]
+        if any(worn):
+            log.debug("tabard: %s already wears %s", row["name"], worn)
+            return
+
+        # ASKED ONCE, EVEN IF ASKING DID NOT WORK. See _tabard_already_asked:
+        # the emblem columns alone only guard the case where the command
+        # SUCCEEDED, and the whole point of the guard is the case where it did
+        # not. Logged at info and not debug when the ask failed, because a
+        # tabard the family agreed on and never got is worth noticing.
+        asked = await asyncio.to_thread(_tabard_already_asked)
+        if asked:
+            if asked["status"] in ("failed", "refused"):
+                log.info("tabard: already asked in row %s and it %s (%s); "
+                         "not re-staging the argument",
+                         asked["id"], asked["status"], asked["detail"])
+            else:
+                log.debug("tabard: row %s is %s", asked["id"], asked["status"])
+            return
+
+        # The ids the world stores for what each of them is, read from their
+        # own character rows rather than from a table in tabard.py. race and
+        # class are public - you can see a gnome rogue - so this breaks none
+        # of the council's private/public rule.
+        kin = [tabard.Kin(name=r["name"], race=r["race"], char_class=r["class"])
+               for r in await asyncio.to_thread(_fetch_family_kin)]
+        held = tabard.debate(kin)
+        if held.design is None:
+            # Same shape as _council_once: a conversation with nothing in it
+            # is reported, not staged.
+            log.info("tabard: %s", held.reason)
+            return
+        design = held.design
+
+        # ASKED BEFORE THE SCENE, not after. The core refuses an emblem the
+        # guild master cannot pay for, and a family that argues its way to a
+        # tabard and is then quietly refused has held the conversation for
+        # nothing - the lines are already in Discord by then.
+        if not design.affordable(row["money"]):
+            log.info("tabard: %s holds %d copper and an emblem costs %d",
+                     design.applied_by, row["money"], tabard.EMBLEM_PRICE)
+            return
+
+        context = held.reason
+        for line in held.lines:
+            speaker, _, plain = line.partition(": ")
+            text = await self._in_character(speaker, plain, context)
+            # party, not say - the same 25-yard problem the council hit.
+            await asyncio.to_thread(
+                _insert_speak,
+                relay.SpeakCommand(speaker, "party", text, "", "overseer:tabard"),
+            )
+            await asyncio.to_thread(_insert_thought, speaker, "council", text)
+
+        # TO THE GUILD MASTER BY NAME, because Guild::HandleSetEmblem refuses
+        # anybody else - it is not whoever happens to be carrying the row.
+        await asyncio.to_thread(
+            _insert_guild, design.applied_by, design.command(), "overseer:tabard",
+        )
+        log.info("tabard: %s -> %s (%s)", row["name"], design.command(), held.reason)
 
     async def _restore_lost_lives(self) -> None:
         """Give a character its life back the moment the AI has it again.
@@ -6476,6 +6671,7 @@ class HeadlessBridge(Bridge):
                 self._supervise_goals,
                 self._relay_chat,
                 self._hold_council,
+                self._design_tabard,
                 self._assign_trades,
                 self._sample_family,
                 self._share_quests_loop,
