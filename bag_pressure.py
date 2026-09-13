@@ -143,6 +143,51 @@ def family_town_run_needed(free_slots: dict[str, int],
                for free in free_slots.values())
 
 
+# WHAT A VENDOR ERRAND SHOULD DO NEXT. Three words rather than two booleans at
+# the call site, because the interesting answer is the middle one and a pair of
+# flags is exactly how it stayed invisible: "not aiming" and "giving the column
+# back" are opposite intentions that both read as "no write this pass".
+VENDOR_ERRAND_AIM = "aim"
+VENDOR_ERRAND_HOLD = "hold"
+VENDOR_ERRAND_RELEASE = "release"
+
+
+def vendor_errand_step(at_counter: bool, sales_outstanding: int) -> str:
+    """What to do with the leader's `travel_npc` this pass (infra#3708).
+
+    THE ERRAND HAD NO TERMINAL PATH, AND THAT IS THE WHOLE BUG. `travel_npc` was
+    written by the economy and cleared by nobody, so `TravelHoldsTheWheel` stood
+    the quest drive down for ever: measured 2026-09-13, all five inside one shop
+    in Gadgetzan for over half an hour, with the guild bank pass refused the
+    column every cycle (infra#3703). mod-overseer will not clear it and refuses
+    on purpose - see `bridge._release_trade_errand` for that half.
+
+    RELEASED ON COMPLETION, NEVER ON SUSPICION, which is the distinction a first
+    draft of this got wrong. The errand was neither stale nor an orphan write:
+    the leader had arrived, 4.4 yards from the merchant against the core's 5.0
+    yard interact gate, and the sales were landing, seventeen `delivered` in
+    half an hour. Releasing one for LOOKING finished breaks the half that works.
+    The only thing allowed to end it is the queue emptying, because that is the
+    one fact saying the trip has nothing left to do.
+
+    NOT KNOWING IS A REASON TO HOLD. A negative count is what the bridge reports
+    when it could not read the queue at all. Holding a cycle too long costs a
+    cycle; releasing a live errand costs the rows already queued against the
+    counter the character then walks away from.
+
+    AND `hold` IS A REAL ANSWER, NOT A DO-NOTHING. Re-asserting the keyword on a
+    leader already at the counter makes the aim book erase its own state and
+    read a standing errand as a new one, which releases and re-takes the 300
+    second counter hold. Measured every fifteen seconds for hours: the ceiling
+    was never once reached, so nothing ever collected it.
+    """
+    if not at_counter:
+        return VENDOR_ERRAND_AIM
+    if sales_outstanding != 0:
+        return VENDOR_ERRAND_HOLD
+    return VENDOR_ERRAND_RELEASE
+
+
 def sellable(item: ItemForSale) -> bool:
     """Sell only safe vendor goods: never rare, quest, reagent, or needed."""
     return (item.quality <= 1 and not item.quest_item and not item.reagent

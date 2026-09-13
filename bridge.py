@@ -1931,6 +1931,67 @@ def _write_trade_errand(errand) -> bool:
     return True
 
 
+def _release_trade_errand(character: str, travel_npc: str) -> bool:
+    """Give an economy errand back, and only one this process could have written.
+
+    THE MIRROR OF `_write_trade_errand`, AND THE HALF THAT WAS NEVER BUILT
+    (infra#3708). That function's docstring says `travel_npc` "IS WRITTEN HERE
+    AND NOWHERE ELSE IN THIS PROCESS", which was true and only ever half the
+    sentence: it was CLEARED nowhere else either, or anywhere at all. One writer
+    that only ever sets is a latch, and the family stood in it for half an hour.
+
+    WHY THE WORLD DOES NOT DO THIS FOR US. It tries. `TravelAimBook::Release`
+    reaches "errand done, releasing" on arrival and then skips the column write,
+    because the aim book never claimed an aim the bridge wrote and
+    `IsMaintenanceErrand` says a vendor errand is the bridge's business. That
+    refusal is infra#3655 and is correct: a crossing releasing a straggler must
+    not blank an unresolved vendor aim. It is paired with a comment naming who
+    is expected to do it instead - "the bridge owns the column too and clears it
+    when it re-aims the family" - and nothing here ever did.
+
+    GUARDED ON THE KEYWORD, LIKE THE WRITE IT MIRRORS. The economy may only hand
+    back an errand the economy could have issued, so a profession errand is
+    untouchable here for the reason `_write_trade_errand` will not overwrite one
+    (mod-overseer#438). The keyword is in the WHERE clause rather than trusted
+    from the caller, so a stale reading of who owns the column cannot become an
+    erase. A numeric aim craft_supply refined (infra#3692, `_retaskable_from`)
+    is therefore NOT released here: it is that pass's errand, not this one's.
+
+    AND ROWCOUNT IS UNAMBIGUOUS HERE, WHICH IT IS NOT ON THE WRITE. The write
+    must tell "matched but unchanged" from "somebody else owns this", because
+    re-asserting a keyword already carried changes no row (infra#3663). Clearing
+    has no such case, so a zero here means the column was genuinely not ours.
+    """
+    if travel_npc not in ECONOMY_ERRANDS:
+        # Refused rather than obeyed. A caller asking to blank a profession
+        # errand is a caller with a bug, and answering "no" is cheaper to find
+        # than an erased trainer errand three passes later.
+        log.warning(
+            "refusing to release travel_npc=%r for %s - only an economy errand "
+            "may be handed back here", travel_npc, character,
+        )
+        return False
+    with _connect() as conn, conn.cursor() as cur:
+        try:
+            cur.execute(
+                "UPDATE overseer_roster SET travel_npc = '' "
+                "WHERE name = %s AND travel_npc = %s",
+                (character, travel_npc),
+            )
+        except pymysql.err.OperationalError as exc:
+            if exc.args and exc.args[0] == 1054:
+                # Same degradation as every other reader of these columns: a
+                # world image without them cannot be holding an errand in them.
+                log.warning(
+                    "overseer_roster is missing the travel errand column - "
+                    "%s's %s errand cannot be handed back (infra#2757)",
+                    character, travel_npc,
+                )
+                return False
+            raise
+        return bool(cur.rowcount)
+
+
 def _write_craft_errand(character: str, spell_id: int) -> bool:
     """Put one character's standing craft errand where mod-overseer's
     DriveCraft reads it (infra#440).
@@ -4342,6 +4403,74 @@ class Bridge(discord.Client):
                 log.exception("materials pass failed; retrying next cycle")
             await asyncio.sleep(cycle)
 
+    async def _settle_vendor_errand(self, names: list, leader: str) -> str:
+        """Is the vendor errand the leader already carries finished? (infra#3708)
+
+        LIFTED OUT WHOLE, AND THE REASON IS A BUG RATHER THAN A METRIC. A draft
+        of this change put the release at the BOTTOM of `_vendor_once`, below
+        three early returns, where it could never fire on the cycles that matter
+        - an errand is only finished BECAUSE the selling worked, and selling
+        empties the bags, so the cycle that should hand the column back is the
+        cycle `family_town_run_needed` returns False. That is a control-flow bug
+        in a function whose control flow had grown past the point anybody could
+        hold it, and the complexity number grug-tribe flagged is the same fact
+        stated as a measurement. One question with one answer belongs in one
+        place, which is the shape `bag_pressure.vendor_errand_step` already has
+        on the pure side.
+
+        SO THIS RUNS ABOVE EVERY GATE IN THE PASS, DELIBERATELY. Ending an old
+        errand and deciding on a new trip are different questions; nothing about
+        a quiet bag makes a standing errand less finished.
+
+        IT SETTLES ONLY `vendor`, AND ONLY THIS PASS'S OWN. `travel_npc` is a
+        single slot four passes write, and each of them must hand back what it
+        wrote: releasing the town trip's `repair` from here would be exactly the
+        cross-pass theft `_write_trade_errand`'s guard exists to prevent
+        (mod-overseer#438). The other three are latched the same way this one
+        was and are filed separately - measured 2026-09-13, the leader re-armed
+        as `repair` about five minutes after the column was cleared by hand.
+        """
+        leader_town = await asyncio.to_thread(_fetch_town, leader)
+        outstanding = await asyncio.to_thread(_outstanding_sales, names)
+        step = bag_pressure.vendor_errand_step(
+            bool(leader_town.vendor), outstanding,
+        )
+        if step == bag_pressure.VENDOR_ERRAND_HOLD:
+            log.info(
+                "economy: leader=%s is already standing at a vendor with %s "
+                "sale(s) unanswered, so the aim it carries is left exactly as "
+                "it is - re-asserting one is what makes the world read a "
+                "standing errand as a new one", leader,
+                "an unreadable number of" if outstanding < 0 else outstanding,
+            )
+        elif step == bag_pressure.VENDOR_ERRAND_RELEASE:
+            # THE AIM IS FOR WALKING, AND THIS CHARACTER HAS ARRIVED. It is the
+            # module's COUNTER HOLD that keeps it at the merchant while rows
+            # execute, not the column - mod-overseer takes that hold and
+            # releases the errand in the same breath, and says why: "the
+            # release IS the signal ... a character not already pinned by then
+            # has an AI tick in which to roll RPG_IDLE into something that
+            # walks". So an aim left on a character already standing at the
+            # counter buys nothing and costs the quest drive everything.
+            released = await asyncio.to_thread(
+                _release_trade_errand, leader, "vendor",
+            )
+            if released:
+                log.info(
+                    "economy: leader=%s has answered every sale the last vendor "
+                    "trip queued, so the errand is handed back and the family "
+                    "walks again", leader,
+                )
+            else:
+                # Not a failure. The column belongs to somebody else now - a
+                # profession errand, or another town pass that won it - and the
+                # keyword guard is what stops this pass taking it from them.
+                log.debug(
+                    "economy: leader=%s is not carrying a vendor errand, so "
+                    "there was nothing to hand back", leader,
+                )
+        return step
+
     async def _vendor_once(self) -> None:
         """Queue carried junk and outgrown gear for the world sell executor.
 
@@ -4358,6 +4487,32 @@ class Bridge(discord.Client):
         names = sorted((await asyncio.to_thread(_protected_guids)).values())
         if not names:
             return
+
+        # SETTLING THE LAST ERRAND COMES BEFORE DECIDING ON A NEW ONE, AND
+        # ABOVE EVERY GATE BELOW (infra#3708, infra#3703's option 2).
+        #
+        # THE ORDER IS THE FIX, NOT TIDINESS. A first draft put the release at
+        # the BOTTOM of the pass, which reads naturally and rebuilt the same
+        # latch one step along: an errand is only ever finished BECAUSE the
+        # selling worked, and selling empties the bags, so the very cycle that
+        # would hand the column back is the cycle `family_town_run_needed`
+        # returns False and the cycle `candidates` is empty. Every exit between
+        # here and there is one a finished errand would be abandoned on, and a
+        # family that sold everything would be parked for having succeeded.
+        # Measured after infra#3714 freed Og's bags, that is now most cycles.
+        #
+        # ENDING AN OLD ERRAND AND STARTING A NEW ONE ARE DIFFERENT QUESTIONS.
+        # The gates below decide whether the family should make a trip; this
+        # decides whether the trip it already made is over. Nothing about a
+        # quiet bag makes a standing errand less finished.
+        #
+        # `_head_now()` rather than bonds.head_of_family(), for the reason
+        # `_drive_train` gives: it names the character that can actually walk.
+        # Read once and used for both halves, because releasing an errand from
+        # one leader and aiming another would be two leaders.
+        leader = await asyncio.to_thread(_head_now)
+        step = await self._settle_vendor_errand(names, leader)
+
         free_slots = await asyncio.to_thread(_fetch_free_slots, names)
         if not bag_pressure.family_town_run_needed(free_slots):
             log.info("economy: carried vendor goods exist, but bag pressure is below "
@@ -4514,28 +4669,33 @@ class Bridge(discord.Client):
         # answers on its own range, so each holder's rows wait for that
         # holder to be standing at the counter.
         #
-        # `_head_now()` RATHER THAN bonds.head_of_family(), because the two
-        # differ exactly when it matters. `_head_now` is what
-        # `_mark_party_leader` writes into `lead` and what
-        # `_give_them_a_life` reads to decide who carries `new rpg`, so it
-        # names the character that can actually walk; the resting answer is
-        # the same father either way.
-        leader = await asyncio.to_thread(_head_now)
-        # THE RETURN VALUE IS READ. The economy guard in _write_trade_errand
-        # only retasks an IDLE traveller, so this write is a no-op while the
-        # town trip owns `travel_npc = 'repair'` - which is a legitimate
-        # outcome and the exact thing infra#3464 called silent. It was still
-        # silent afterwards: the caller hardcoded `aimed = True` and threw
-        # the answer away.
-        aimed = await asyncio.to_thread(
-            _write_trade_errand,
-            professions.Errand(character=leader, travel_npc="vendor"),
-        )
-        if not aimed:
-            log.info(
-                "economy: leader=%s is already on somebody else's errand, so "
-                "no vendor aim was taken this pass", leader,
+        # (`leader` is read at the top of the pass now, with `_head_now` rather
+        # than bonds.head_of_family for the reason recorded there.)
+        #
+        # AN ERRAND THAT HAS ALREADY LANDED IS NOT RE-ISSUED (infra#3708). This
+        # pass used to write `travel_npc = 'vendor'` on every cycle regardless,
+        # and nothing anywhere ever wrote it back to empty. `hold` therefore
+        # does nothing rather than writing the same word again: a fresh write
+        # makes the aim book erase its own state and read a standing errand as
+        # a new one, releasing and re-taking the counter hold. The argument and
+        # the measurements are on `bag_pressure.vendor_errand_step`.
+        aimed = False
+        if step == bag_pressure.VENDOR_ERRAND_AIM:
+            # THE RETURN VALUE IS READ. The economy guard in _write_trade_errand
+            # only retasks an IDLE traveller, so this write is a no-op while the
+            # town trip owns `travel_npc = 'repair'` - which is a legitimate
+            # outcome and the exact thing infra#3464 called silent. It was still
+            # silent afterwards: the caller hardcoded `aimed = True` and threw
+            # the answer away.
+            aimed = await asyncio.to_thread(
+                _write_trade_errand,
+                professions.Errand(character=leader, travel_npc="vendor"),
             )
+            if not aimed:
+                log.info(
+                    "economy: leader=%s is already on somebody else's errand, so "
+                    "no vendor aim was taken this pass", leader,
+                )
 
         inserted = 0
         considered = 0
@@ -6381,6 +6541,54 @@ def _insert_sell(candidate: bag_pressure.SellCandidate) -> int:
                 return 0
             raise
         return cur.lastrowid or 0
+
+
+# Hoisted for the same reason as _BOT_HELD_SQL: ruff anchors S608 at the START
+# of the expression, so a noqa on the line carrying the % does not silence a
+# multi-line query. Only the NUMBER of placeholders is interpolated; every name
+# reaches MySQL as a bound parameter.
+_OUTSTANDING_SALES_SQL = (
+    "SELECT COUNT(*) AS waiting FROM overseer_command "
+    "WHERE kind = 'sell' AND status IN ('pending', 'claimed') "
+    "AND target_name IN (%s)"
+)
+
+
+def _outstanding_sales(names: list) -> int:
+    """Sell rows the world still owes an answer on, or -1 if it cannot be read.
+
+    THE ONE FACT THAT ENDS A VENDOR ERRAND (infra#3708). Everything else about a
+    trip is a guess from outside: where the leader stands is a snapshot, the bags
+    are a save timer minutes behind, and "it looks finished" would have released
+    an errand that was still selling. An empty queue is not a guess - the rows
+    were written by this pass and answered by the world.
+
+    `pending` AND `claimed` ARE THE WHOLE OF "UNANSWERED". `delivered`, `error`,
+    `applied`, `unchanged` and `verifying` are all answers, refusals included.
+    Counting the answered ones would hold the errand open on the 17,536 all-time
+    `vendor not in range` rows for ever, which is the same latch one table over.
+
+    -1 IS "COULD NOT MEASURE" AND IT IS NOT ZERO. Returning 0 on a failed read
+    would make an unreadable database look exactly like a finished errand, which
+    is the fail-open direction; `vendor_errand_step` holds on any non-zero.
+    """
+    if not names:
+        return 0
+    placeholders = ",".join(["%s"] * len(names))
+    sql = _OUTSTANDING_SALES_SQL % placeholders  # noqa: S608 - placeholders from a COUNT, values still bound
+    with _connect() as conn, conn.cursor() as cur:
+        try:
+            cur.execute(sql, names)
+            row = cur.fetchone()
+        except pymysql.err.MySQLError as exc:
+            if exc.args and exc.args[0] in (1054, 1146):
+                log.warning(
+                    "economy: cannot read the sell queue, so no vendor errand "
+                    "is handed back this pass"
+                )
+                return -1
+            raise
+    return int(row["waiting"] or 0) if row else 0
 
 
 def _active_dungeon_run() -> dict | None:

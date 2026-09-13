@@ -284,10 +284,19 @@ class TheSaleIsOnlyOfferedWhereItCanWork(unittest.TestCase):
 
     def test_the_aim_is_written_before_the_gate_is_read(self):
         """Nobody arrives at a vendor they were never sent to. The aim is the
-        one thing that must happen on a cycle that queues nothing."""
+        one thing that must happen on a cycle that queues nothing.
+
+        THE GATE IS NAMED BY ITS ARGUMENT NOW, because `_fetch_town` has two
+        callers in this pass since infra#3708. One reads where the LEADER is
+        standing, to decide whether the errand it is already carrying has
+        landed, and that one deliberately runs before anything else. The other
+        is this gate, per selling HOLDER, and it is the one the aim has to
+        precede. A bare `_fetch_town` index now finds the wrong one and would
+        have failed this test for a change that kept its invariant exactly.
+        """
         body = _block("    async def _vendor_once(self")
         self.assertLess(body.index("_write_trade_errand"),
-                        body.index("_fetch_town"))
+                        body.index("_fetch_town, holder"))
 
     def test_an_aim_nobody_took_is_reported_rather_than_assumed(self):
         """The economy guard only retasks an IDLE traveller, so a vendor aim
@@ -305,7 +314,8 @@ class TheSaleIsOnlyOfferedWhereItCanWork(unittest.TestCase):
         for a vendor would be inventing a dependency the executor does not
         have."""
         body = _block("    async def _vendor_once(self")
-        self.assertLess(body.index("self._hand_gear("), body.index("_fetch_town"))
+        self.assertLess(body.index("self._hand_gear("),
+                        body.index("_fetch_town, holder"))
 
 
 class TheSupplyPlannerStaysReadable(unittest.TestCase):
