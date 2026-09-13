@@ -334,15 +334,22 @@ class SendingThemSomewhere(unittest.TestCase):
         self.assertEqual(decree.TRAVEL_COLUMN, "travel_npc")
 
     def test_an_aim_is_guarded_and_will_not_erase_an_errand(self):
-        """bridge._write_trade_errand guards its vendor pass with exactly this
+        """bridge._write_trade_errand guards its vendor pass with the same
         rule so the town run cannot erase a profession trainer errand. A
         console aim gets it on every role, because the errand planner at least
-        knows what it is replacing and a person tapping a chip does not."""
+        knows what it is replacing and a person tapping a chip does not.
+
+        The bridge's half of that guard became a value list rather than a
+        two-way OR in infra#3692, when a bare creature entry joined the role
+        keywords as something an economy pass may aim at; the invariant this
+        checks - the bridge never writes a town aim over a column it has not
+        been told it may - is unchanged, and map_server's own copy above is
+        untouched."""
         order = decree.plan_order(
             {"section": decree.TRAVEL, "name": "Og", "role": "vendor"}, roster())
         self.assertTrue(order.updates[0].if_free)
-        self.assertIn(
-            "WHERE name = %s AND (travel_npc = '' OR travel_npc = %s)", BRIDGE)
+        self.assertIn("WHERE name = %%s AND travel_npc IN (", BRIDGE)
+        self.assertIn("def _retaskable_from(", BRIDGE)
 
     def test_standing_somebody_down_clears_the_column_unguarded(self):
         """The one write on this page that removes an intent rather than

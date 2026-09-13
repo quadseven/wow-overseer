@@ -111,9 +111,23 @@ class ThePassRunsAndInTheRightOrder(unittest.TestCase):
         self.assertNotIn("bonds.head_of_family()", "\n".join(code_lines))
 
     def test_an_economy_errand_never_erases_a_trainer_errand(self):
+        """The guard moved into `_retaskable_from` (infra#3692) so a SECOND
+        kind of economy aim - a bare creature entry, which no role keyword
+        can express - could join it without a second copy of the WHERE
+        clause. What must not change, and is what this pins: an economy aim
+        is still written under a WHERE that matches only an allowed standing
+        value, and an errand outside that set still goes down the
+        unconditional branch that carries learn_skill/unlearn_skill with
+        it."""
         body = _block("def _write_trade_errand(")
-        self.assertIn("errand.travel_npc in ECONOMY_ERRANDS", body)
-        self.assertIn("travel_npc = '' OR travel_npc = %s", body)
+        self.assertIn("retaskable = _retaskable_from(errand.travel_npc)", body)
+        self.assertIn("WHERE name = %%s AND travel_npc IN (", body)
+        guard = _block("def _retaskable_from(")
+        self.assertIn("if aim in ECONOMY_ERRANDS:", guard)
+        self.assertIn('return ("", aim)', guard)
+        # Neither a keyword nor an entry retasks anybody: that is a standing
+        # profession errand and belongs on the other branch.
+        self.assertIn("return ()", guard)
         self.assertIn("\"banker\"", _source()[:_source().index("def _write_trade_errand(")]
                       .rsplit("ECONOMY_ERRANDS = ", 1)[1])
 

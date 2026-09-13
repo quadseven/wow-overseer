@@ -1759,6 +1759,55 @@ def _write_declared_professions() -> None:
 ECONOMY_ERRANDS = ("vendor", "banker", "repair", "guild banker")
 
 
+def _retaskable_from(travel_npc: str) -> tuple:
+    """Which standing `travel_npc` values this aim may be written over, or ()
+    for an aim that overwrites whatever is there.
+
+    THE TUPLE IS THE GUARD, and pulling it out of the UPDATE is what let a
+    second kind of aim exist without a second copy of the WHERE clause. An
+    empty answer is not "overwrite nothing", it is "this is not an economy
+    errand at all" - a profession-trainer errand is a standing plan that
+    outlives a town run, it carries `learn_skill`/`unlearn_skill` with it, and
+    it goes down `_write_trade_errand`'s other branch exactly as it always
+    has. Getting that backwards would silently zero a learn errand every time
+    somebody went shopping.
+
+    A BARE CREATURE ENTRY IS AN ECONOMY ERRAND TOO (infra#3692), and it is the
+    only numeric aim this process writes: `craft_supply.supply_trip` names one
+    specific vendor because the role keyword resolves to the nearest one,
+    which is not the one that stocks the reagent. It belongs in the guarded
+    branch for precisely the reason the keywords do - it must never erase a
+    trainer errand somebody is already walking to.
+
+    AND IT MAY REFINE AN OUTSTANDING `vendor`, WHICH THE KEYWORDS MAY NOT DO
+    TO EACH OTHER. This is the one asymmetry here and it is deliberate, so it
+    is worth stating why it is not the theft the ECONOMY_ERRANDS comment above
+    exists to prevent. `vendor` and `5594` are not two errands competing for
+    one traveller; they are the SAME errand at two resolutions. The sell pass
+    asks for a vendor because any vendor will buy - mod-overseer's DoSell
+    never consults VendorItemData - so a walk to a named vendor still
+    satisfies it, and satisfies the reagent purchase as well, which the
+    nearest-anything walk does not. Refusing to refine would have left this
+    fix inert on the live realm: the leader was measured holding
+    `travel_npc = 'vendor'` from the sell pass at the moment the craft-supply
+    pass ran, so an idle-only guard would have declined the better aim every
+    cycle and reported a perfectly honest "already on somebody else's errand"
+    forever. The refinement is self-limiting: once the family is standing at
+    the named vendor the reagent is in `town.stocks`, no need is raised, and
+    the column goes back to being the vendor pass's own.
+    """
+    aim = str(travel_npc or "")
+    if aim in ECONOMY_ERRANDS:
+        return ("", aim)
+    if aim.isdigit():
+        # craft_supply.VENDOR_ROLE rather than a fourth spelling of the word:
+        # it is read from travel.ROLES there, and the numeric aim exists only
+        # because that keyword was the wrong answer, so the two belong in one
+        # place.
+        return ("", aim, craft_supply.VENDOR_ROLE)
+    return ()
+
+
 def _write_trade_errand(errand) -> bool:
     """Put one character's outstanding trade plan where the worldserver reads it.
 
@@ -1789,14 +1838,24 @@ def _write_trade_errand(errand) -> bool:
     """
     with _connect() as conn, conn.cursor() as cur:
         try:
-            if errand.travel_npc in ECONOMY_ERRANDS:
+            retaskable = _retaskable_from(errand.travel_npc)
+            if retaskable:
                 # Economy must never erase a profession trainer errand. A
                 # vendor or bank pass may coexist with a stale row, but only
-                # an idle traveller can be retasked for the town run.
+                # a traveller that is idle - or already on an errand this aim
+                # is a refinement of - can be retasked for the town run. See
+                # `_retaskable_from` for which values those are and why a
+                # bare creature entry may refine a plain `vendor`.
+                #
+                # The placeholder run comes from a COUNT of the values the
+                # guard returned; every value is still bound, the same
+                # construction and the same suppression `_aim_traveller` and
+                # `travel.aim_statements` already use.
+                marks = ", ".join(["%s"] * len(retaskable))
                 cur.execute(
-                    "UPDATE overseer_roster SET travel_npc = %s "
-                    "WHERE name = %s AND (travel_npc = '' OR travel_npc = %s)",
-                    (errand.travel_npc, errand.character, errand.travel_npc),
+                    "UPDATE overseer_roster SET travel_npc = %%s "  # noqa: S608 - placeholders from a COUNT, values still bound
+                    "WHERE name = %%s AND travel_npc IN (%s)" % marks,
+                    (errand.travel_npc, errand.character, *retaskable),
                 )
                 # rowcount 0 is AMBIGUOUS, and this connection does not ask
                 # MySQL to resolve it (no CLIENT_FOUND_ROWS): the server's
@@ -3518,13 +3577,39 @@ class Bridge(discord.Client):
         reagent per spell) verified against the live world database rather
         than guessed.
 
-        ONE VENDOR AIM PER CANDIDATE, NOT PER PARTY, unlike _vendor_once's
-        leader-only aim. A vial is a personal shopping list keyed to
-        whichever recipe THIS character's craft_spell names, not a party
-        errand the leader can carry for everyone - so each candidate is
-        aimed individually, through the same ECONOMY_ERRANDS-guarded
-        `_write_trade_errand` every other town errand uses, which is what
-        keeps this from stamping on a traveller already on a real errand.
+        THE SHOPPING LIST IS PER CANDIDATE; THE WALK IS NOT (infra#3692).
+        This function used to write one `travel_npc = 'vendor'` per
+        candidate, and this paragraph used to argue for it: a vial is a
+        personal shopping list keyed to whichever recipe THIS character's
+        craft_spell names, not a party errand the leader can carry for
+        everyone. The premise is right and the conclusion did not follow. A
+        follower aimed at anything does not move. The family carries exactly
+        one `new rpg` and it is on the LEADER, deliberately - it acts at
+        relevance 3.0-11.0 against follow's 1.0, so a follower holding both
+        wanders off every tick, which is infra#2812's 937-yard scatter, and
+        `professions.traveller` is the whole written argument. mod-overseer
+        says it outright when it happens: "'Ugga' was sent to '5594' but does
+        not carry `new rpg` - nothing walks it anywhere. Followers travel by
+        following the leader; aim the leader instead."
+
+        So the WALK is `_vendor_once`'s shape - one aim, on `_head_now()`'s
+        leader, through the same ECONOMY_ERRANDS-guarded
+        `_write_trade_errand` - while the SHOPPING LIST stays per candidate,
+        because `DoBuy` runs for whoever `overseer_command.target_name` names
+        and looks for a vendor near THAT buyer, exactly as the per-holder
+        sell rows already rely on. Both halves are true at once: the family
+        walks together, and each character buys their own reagent once they
+        are standing there.
+
+        AND THE WALK IS TO A NAMED VENDOR, NOT TO THE `vendor` ROLE. The
+        keyword resolves to the NEAREST vendor this character may deal with,
+        which answers "where is a shop" when the question asked was "where is
+        a shop that sells Empty Vial" - measured live in Gadgetzan those were
+        90 yards and one whole different NPC apart, and the family went to
+        the wrong one and bought nothing. `craft_supply.supply_trip` chooses
+        the creature entry, `_fetch_reagent_vendors` reads the candidates it
+        chooses between, and craft_supply's own docstring has why a bare
+        entry needs no C++ change and why no coordinate is ever authored.
 
         A SECOND PASS BELOW HANDLES `craft_supply.REAGENTS` (infra#3609/
         #3611's Tailoring/Leatherworking thread and dye) - kept as its own
@@ -3554,6 +3639,12 @@ class Bridge(discord.Client):
             return
 
         queued = 0
+        # EVERY REAGENT NOBODY CAN REACH A COUNTER FOR, from both blocks
+        # below, collected rather than acted on one at a time (infra#3692).
+        # One walk can serve only one of them - the family has one traveller
+        # - so the choice of which is a decision about the whole family and
+        # is made once, at the end, by craft_supply.supply_trip.
+        needs: list = []
         if candidates:
             free_slots = await asyncio.to_thread(_fetch_free_slots, list(candidates))
             # ONE BATCH, NOT ONE QUERY PER CANDIDATE - holdings for every
@@ -3572,19 +3663,20 @@ class Bridge(discord.Client):
             ]
             held_by = await asyncio.to_thread(_fetch_item_counts, pairs)
             for name, craft_spell in sorted(candidates.items()):
-                entry, label, _price = craft_supply.REAGENT[craft_spell]
+                entry, _label, _price = craft_supply.REAGENT[craft_spell]
                 town = await asyncio.to_thread(_fetch_town, name)
-                if entry not in town.stocks:
-                    aimed = await asyncio.to_thread(
-                        _write_trade_errand,
-                        professions.Errand(character=name, travel_npc="vendor"),
-                    )
-                    log.info(
-                        "craft_supply: %s is not near a vendor stocking %s; "
-                        "vendor aim taken=%s", name, label, aimed,
-                    )
-                    continue
                 held = held_by.get((name, entry), 0)
+                # A NEED, NOT AN AIM (infra#3692). What used to stand here
+                # was one `travel_npc = 'vendor'` write per candidate, and
+                # both halves of it were wrong - the keyword cannot see the
+                # reagent, and the character it was written onto is usually a
+                # follower, who does not walk. Whether a trip is warranted at
+                # all is craft_supply's decision and not this loop's: a
+                # character already carrying TARGET needs no journey, which
+                # `entry not in town.stocks` alone cannot tell you.
+                need = craft_supply.reagent_need(name, craft_spell, held, town)
+                if need:
+                    needs.append(need)
                 _spell_id, money = spells[name]
                 errand, note = craft_supply.reagent_errand(
                     name, craft_spell, held, money, free_slots.get(name, 0), town,
@@ -3611,24 +3703,29 @@ class Bridge(discord.Client):
             for name, craft_spell in sorted(multi_candidates.items()):
                 needed = craft_supply.REAGENTS[craft_spell]
                 town = await asyncio.to_thread(_fetch_town, name)
-                missing = [
-                    label for entry, label, _price, _qty in needed
-                    if entry not in town.stocks
-                ]
-                if missing:
-                    aimed = await asyncio.to_thread(
-                        _write_trade_errand,
-                        professions.Errand(character=name, travel_npc="vendor"),
-                    )
-                    log.info(
-                        "craft_supply: %s is not near a vendor stocking %s; "
-                        "vendor aim taken=%s", name, ", ".join(missing), aimed,
-                    )
-                    continue
                 held = {
                     entry: held_by2.get((name, entry), 0)
                     for entry, _label, _price, _qty in needed
                 }
+                # ONE NEED PER MISSING REAGENT, AND NO `continue` (infra#3692).
+                # Thread and dye need not share a counter, so each becomes its
+                # own need and `supply_trip` takes whichever has the nearer
+                # vendor this pass; the pass after that finds it carried and
+                # only the other still outstanding. Two vendors, no second
+                # mechanism - just the willingness to take more than one pass,
+                # which a ten-minute loop has in abundance.
+                #
+                # Falling through rather than skipping the buy is the other
+                # half of that: standing at the thread vendor with no dye in
+                # reach, the thread should still be bought.
+                # `craft_reagent_errands` has always returned per-reagent
+                # errands AND per-reagent refusals for exactly this case
+                # (tests/test_craft_supply.py has held it to that since it
+                # shipped), and a `continue` above it meant that half had no
+                # caller.
+                needs.extend(
+                    craft_supply.craft_reagent_needs(name, craft_spell, held, town)
+                )
                 _spell_id, money = spells[name]
                 errands, notes = craft_supply.craft_reagent_errands(
                     name, craft_spell, held, money, free_slots2.get(name, 0), town,
@@ -3643,10 +3740,127 @@ class Bridge(discord.Client):
                             name, errand.command, errand.why,
                         )
 
+        if needs:
+            await self._aim_at_reagent_vendor(needs)
+
         log.info(
-            "craft_supply: queued %d buy errand(s) across %d candidate(s)",
-            queued, len(candidates) + len(multi_candidates),
+            "craft_supply: queued %d buy errand(s) across %d candidate(s), "
+            "%d reagent(s) still need a trip",
+            queued, len(candidates) + len(multi_candidates), len(needs),
         )
+
+    async def _aim_at_reagent_vendor(self, needs: list) -> None:
+        """Walk the family to a vendor that actually stocks one of the
+        outstanding reagents (infra#3692).
+
+        ONE TRIP, ON THE LEADER. `_head_now()` is what `_mark_party_leader`
+        writes into `lead` and what `_give_them_a_life` reads to decide who
+        carries `new rpg`, so it names the character that can actually walk -
+        the same reason `_vendor_once` asks it rather than
+        `bonds.head_of_family()`. Nothing here borrows leadership the way
+        `_errand_traveller` does for a trainer errand, and it deliberately
+        does not need to: a purchase is performed by the BUYER wherever the
+        buyer is standing, so the shopper has to arrive, not to lead. Making
+        a shopper the leader would reorganise the family around an errand
+        that does not require it.
+
+        THE LEADER'S OWN POSITION IS WHAT THE SEARCH IS ANCHORED ON, because
+        the leader is the one whose walk has to exist. `ResolveTravelTarget`
+        refuses a spawn that is not on the aimed character's map, so a vendor
+        chosen from anywhere else would be an aim that silently resolves to
+        nothing; `craft_supply._usable` asserts the same rule again on this
+        side, where a test can reach it.
+
+        A LEADER NOBODY CAN SEE IS A PASS THAT WRITES NOTHING. `_fetch_positions`
+        is bounded to snapshots under a minute old, so an empty answer means
+        the leader is offline or the snapshot machinery is not deployed - and
+        a vendor chosen from a stale position is a vendor chosen for where
+        somebody used to be.
+
+        WHAT A NUMERIC AIM GIVES UP ON THE C++ SIDE, SAID HERE BECAUSE IT IS A
+        REAL COST AND NOT A THEORETICAL ONE. `OverseerDecisions::IsMaintenance
+        Errand` answers off `CounterRoleForAim`, which knows the three counter
+        KEYWORDS and nothing else, so a bare creature entry is not a
+        maintenance errand as far as mod-overseer is concerned. Two things
+        follow, both verified by reading that file rather than assumed:
+
+          * `TravelAimBook::Claim` will overwrite this aim, where it would
+            have refused to overwrite `vendor`. That refusal is infra#3655,
+            added for THIS pass - a dungeon escort's catch-up walk kept
+            re-claiming Ugga before her vial errand could resolve. Aiming the
+            LEADER rather than the straggler sidesteps most of it (a catch-up
+            walk claims followers), but dungeon staging aims the leader and
+            would still win. The consequence is a lost cycle, not a wrong
+            write: the next pass raises the same need and re-aims.
+          * `TravelAimBook::Release` will blank this aim on a release that
+            book did not claim, where it would have left `vendor` standing.
+            Same consequence, same recovery - and measured live, that is
+            exactly what happened to a hand-written `5594`, which is how we
+            know the column does come back to '' rather than sticking.
+
+        Teaching that vocabulary about a numeric aim is a mod-overseer change
+        and is deliberately not made here; this pass needs no C++ change to
+        work, and a ten-minute loop that re-asserts is a cheaper answer than a
+        core rebuild.
+        """
+        leader = await asyncio.to_thread(_head_now)
+        positions = await asyncio.to_thread(
+            _fetch_positions, [leader] if leader else []
+        )
+        spot = positions.get(leader)
+        if not spot:
+            log.info(
+                "craft_supply: %d reagent(s) need a trip, but nothing can say "
+                "where leader=%s is standing, so no vendor was chosen",
+                len(needs), leader or "nobody",
+            )
+            return
+
+        entries = sorted({int(need.entry) for need in needs})
+        spawns = await asyncio.to_thread(_fetch_reagent_vendors, spot, entries)
+        # WHERE THE SHOPPERS THEMSELVES ARE STANDING, read in the same bounded
+        # window as the leader's own row. Following does not cross a map, so a
+        # shopper on the other continent cannot be served by any walk the
+        # leader takes - and this family has been split across an ocean
+        # before. `_fetch_positions` already batches, so this is one query.
+        shopper_maps = {
+            name: int(row.get("map_id") or 0)
+            for name, row in (
+                await asyncio.to_thread(
+                    _fetch_positions, sorted({n.shopper for n in needs})
+                )
+            ).items()
+        }
+        trip = craft_supply.supply_trip(
+            needs, spawns, leader, int(spot.get("map_id") or 0),
+            shopper_maps=shopper_maps,
+        )
+        # WARNING, NOT INFO, AND SAID EVERY PASS. A reagent nothing on this
+        # map sells is a craft errand that can never complete where the
+        # family is, and it needs a person to change the recipe or the
+        # continent. It was invisible before this: "vendor aim taken=True"
+        # and then nothing, forever.
+        for note in trip.unreachable:
+            log.warning("craft_supply: %s", note)
+        if not trip.target:
+            log.info("craft_supply: %s", craft_supply.report(trip))
+            return
+
+        # THE RETURN VALUE IS READ, for the reason infra#3464 gave when it
+        # was not: the guard in `_write_trade_errand` can legitimately refuse
+        # this write, and a caller that assumes it took would report a
+        # journey nobody was sent on.
+        aimed = await asyncio.to_thread(
+            _write_trade_errand,
+            professions.Errand(character=trip.traveller, travel_npc=trip.target),
+        )
+        log.info("craft_supply: %s (aim taken=%s)", craft_supply.report(trip), aimed)
+        if not aimed:
+            log.info(
+                "craft_supply: leader=%s is on an errand that a reagent trip "
+                "may not retask, so the walk to creature %s waits for the "
+                "next pass", trip.traveller, trip.target,
+            )
 
     async def _craft_supply_loop(self) -> None:
         """Own loop and own clock, the same reasoning _bank_loop gives for
@@ -6433,6 +6647,115 @@ def _fetch_item_counts(pairs: list) -> dict:
                 counts[(row["name"], entry)] = int(row["n"] or 0)
     return counts
 
+
+# WHERE A REAGENT CAN ACTUALLY BE BOUGHT (infra#3692). This is
+# `_TOWN_COUNTERS_SQL` turned inside out: that one asks "what is within eight
+# yards of where this character is standing", which is the right question for
+# deciding whether a purchase can be made NOW. This one asks "where is the
+# nearest spawn on this map that stocks THIS item", which is the question the
+# craft-supply travel aim was answering with a role keyword that cannot see
+# the item at all.
+#
+# `cr.id`, NOT `cr.id1`. acore_world.creature's spawn-to-template column is
+# `id` on this world - read off SHOW COLUMNS rather than remembered - and it
+# is the same column `_TOWN_COUNTERS_SQL` already joins on, so there is one
+# spelling of this join in the file and not two.
+#
+# THE VENDOR FLAG IS CHECKED, AND AGAINST creature_template. npc_vendor rows
+# exist on spawns that carry no vendor flag, and `towntrip.town_from_rows`
+# already refuses to count a stock list that no vendor flag stands behind
+# ("a repairer that happens to have npc_vendor rows it cannot sell from would
+# otherwise make `plan` promise a purchase nobody can make"). Walking to one
+# would be the same promise, with a journey attached. The template's flag
+# rather than the per-spawn override for the same reason _TOWN_COUNTERS_SQL
+# uses it: one spelling of "is this a shop" across both reads.
+#
+# MIN() PER ENTRY, BECAUSE THE AIM NAMES AN ENTRY AND NOT A GUID. A creature
+# with four spawns is one travel target as far as `travel_npc` is concerned,
+# and ResolveTravelTarget chooses which copy of it this character walks to;
+# ranking the duplicates against each other here would only crowd the
+# shortlist with the same shop four times and hide the genuine alternatives.
+#
+# NO LIMIT ON DISTANCE, deliberately. A vendor 3,000 yards away is a bad trip
+# and `supply_trip` will prefer any nearer one, but it is a REAL answer, and
+# a distance cut-off here would turn "the only shop on this continent that
+# sells it is far" into the same silence this issue exists to remove. The map
+# bound is the only hard one, because it is the only one MoveFarTo cannot
+# cross.
+_REAGENT_VENDOR_SQL = (
+    "SELECT cr.id AS entry, ct.name AS name, ct.faction AS faction, "
+    "cr.map AS map_id, "
+    "MIN(SQRT(POW(cr.position_x - %s, 2) + POW(cr.position_y - %s, 2))) AS yards "
+    "FROM acore_world.npc_vendor nv "
+    "JOIN acore_world.creature cr ON cr.id = nv.entry "
+    "JOIN acore_world.creature_template ct ON ct.entry = cr.id "
+    "WHERE nv.item = %s AND cr.map = %s AND (ct.npcflag & %s) <> 0 "
+    "GROUP BY cr.id, ct.name, ct.faction, cr.map "
+    "ORDER BY yards LIMIT %s"
+)
+
+# How many stocking vendors to read back per reagent: the one that gets
+# chosen, plus the runners-up `craft_supply.report` names so a person can
+# tell a silent faction refusal apart from a shop that was simply never
+# reached. Derived from craft_supply.SHORTLIST rather than spelled, so the
+# query cannot come to read back fewer rows than the log promises to print.
+REAGENT_VENDOR_ROWS = craft_supply.SHORTLIST + 1
+
+
+def _fetch_reagent_vendors(spot: dict, entries: list) -> dict:
+    """item entry -> the nearest vendors on `spot`'s map that stock it.
+
+    `spot` is one `overseer_snapshot` row - the LEADER's, because the leader
+    is the character that actually walks and the rest arrive by following, so
+    the map and the distance that matter are the leader's own.
+
+    ONE QUERY PER DISTINCT ITEM ENTRY, the same batching discipline
+    `_fetch_item_counts` already holds to and for the same reason: the whole
+    of `craft_supply.REAGENT` plus `REAGENTS` resolves to a dozen item
+    entries, and a pass only ever asks about the ones somebody is actually
+    short of, so a full family cycle is a handful of queries however many
+    characters are shopping. The cadence is ten minutes, and npc_vendor is
+    37,753 rows on this world - this is not a read worth optimising further
+    until something says it is.
+
+    Degrades to an empty mapping on 1054/1146 exactly as `_fetch_town` does.
+    A world image that cannot say which vendors stock what has not said there
+    are none, and the only safe reading of "I cannot tell" is to walk nobody
+    anywhere.
+    """
+    if not spot or not entries:
+        return {}
+    map_id = int(spot.get("map_id") or 0)
+    at_x = float(spot.get("pos_x") or 0.0)
+    at_y = float(spot.get("pos_y") or 0.0)
+    found: dict = {}
+    with _connect() as conn, conn.cursor() as cur:
+        for entry in entries:
+            try:
+                cur.execute(
+                    _REAGENT_VENDOR_SQL,
+                    (at_x, at_y, int(entry), map_id,
+                     towntrip.NPC_FLAG_VENDOR, REAGENT_VENDOR_ROWS),
+                )
+            except pymysql.err.MySQLError as exc:
+                if exc.args and exc.args[0] in (1054, 1146):
+                    log.warning(
+                        "craft_supply: this world image cannot say which "
+                        "vendors stock anything, so nobody is sent shopping"
+                    )
+                    return {}
+                raise
+            found[int(entry)] = [
+                craft_supply.VendorSpawn(
+                    entry=int(row["entry"]),
+                    name=row["name"] or "",
+                    faction=int(row["faction"] or 0),
+                    map_id=int(row["map_id"] or 0),
+                    yards=float(row["yards"] or 0.0),
+                )
+                for row in cur.fetchall()
+            ]
+    return found
 
 def _fetch_town(leader: str):
     """What the counters within reach of `leader` can do, as a towntrip.Town.
