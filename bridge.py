@@ -6080,6 +6080,7 @@ class Bridge(discord.Client):
             actors=actors,
             shortlist=recruit.names_from_shortlist(result or {}),
             shortlist_age_minutes=age,
+            shortlist_asked_minutes_ago=await asyncio.to_thread(_minutes_since_shortlist_asked),
             asked=await asyncio.to_thread(_guild_invites_asked, recruit.ASKED_MEMORY_DAYS),
             minutes_since_last_invite=await asyncio.to_thread(_minutes_since_last_guild_invite),
             member_count=members,
@@ -8520,6 +8521,35 @@ def _latest_guild_shortlist() -> tuple:
         log.warning("recruit: newest shortlist result did not parse as JSON")
         return (None, None)
     return (result, float(row["age_s"] or 0) / 60.0)
+
+
+def _minutes_since_shortlist_asked() -> float | None:
+    """How long since a shortlist was last ASKED for, whatever became of it.
+
+    NO STATUS FILTER, WHICH IS THE ENTIRE POINT. `_latest_guild_shortlist`
+    reads only 'delivered' rows because only those carry an answer; this reads
+    every one, because a row stuck at 'pending' or come back 'error' still
+    means the question has been asked. Without it the planner reads a world
+    where shortlists never complete as a world where none was ever requested,
+    and writes a fresh row every pass for as long as that lasts.
+    """
+    with _connect() as conn, conn.cursor() as cur:
+        try:
+            cur.execute(
+                "SELECT TIMESTAMPDIFF(SECOND, created_at, NOW()) AS age_s "
+                "FROM overseer_command "
+                "WHERE kind = 'guild' AND command LIKE %s "
+                "ORDER BY id DESC LIMIT 1",
+                ("shortlist%",),
+            )
+        except pymysql.err.MySQLError as exc:
+            if exc.args and exc.args[0] in (1054, 1146, 1265):
+                return None
+            raise
+        row = cur.fetchone()
+    if not row:
+        return None
+    return float(row["age_s"] or 0) / 60.0
 
 
 def _guild_invites_asked(days: int) -> set:

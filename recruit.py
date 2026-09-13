@@ -67,6 +67,28 @@ SHORTLIST_SIZE = 20
 # the module for a reason that looks like a bug in this loop.
 SHORTLIST_FRESH_MINUTES = 30
 
+# How long a shortlist that has been ASKED FOR is given to come back before
+# another is asked for.
+#
+# THIS IS BACKPRESSURE AND IT IS NOT THE SAME CLOCK AS THE ONE ABOVE. That one
+# is about a delivered answer going out of date; this one is about a question
+# that has not been answered yet. Without it, a shortlist row that never
+# reaches 'delivered' - because the worldserver is down, or mid-rollout, or
+# because the acting character left the guild and every row comes back
+# 'error' - reads to the planner as "there has never been a shortlist", and it
+# writes a fresh one every single pass for as long as the fault lasts.
+#
+# That is the exact shape this project has been burned by repeatedly and that
+# infra#3650 was written about: a loop with no terminal state, re-issuing for
+# ever, each row individually reasonable. The guild-bank pass has the same
+# hazard and answers it the same way, with `_recent_guild_bank_keys`; a walk
+# that has not finished must not fill the queue.
+#
+# Ten minutes, because the command queue is polled in seconds - a row that has
+# not been answered in ten minutes is not slow, it is stuck, and the right
+# response to stuck is to say so once a pass rather than to ask louder.
+SHORTLIST_WAIT_MINUTES = 10
+
 # The gap between invites. See the module docstring for why this is not one a
 # day.
 MIN_MINUTES_BETWEEN_INVITES = 5
@@ -105,6 +127,7 @@ def plan_recruit(
     actors: list,
     shortlist: list,
     shortlist_age_minutes: float | None,
+    shortlist_asked_minutes_ago: float | None,
     asked: set,
     minutes_since_last_invite: float | None,
     member_count: int,
@@ -122,6 +145,11 @@ def plan_recruit(
     `shortlist_age_minutes`
                       how old that shortlist is, or None when there has never
                       been one.
+    `shortlist_asked_minutes_ago`
+                      how long since a shortlist was last ASKED for, whatever
+                      became of it, or None when none ever was. The
+                      backpressure that stops a shortlist nobody answers from
+                      being re-asked every pass.
     `asked`           names invited inside the memory window.
     `minutes_since_last_invite`
                       or None when none has ever been issued.
@@ -144,25 +172,36 @@ def plan_recruit(
 
     actor = sorted(actors)[0]
 
-    if shortlist_age_minutes is None:
-        return RecruitAction(
-            verb="shortlist",
-            actor=actor,
-            command=f"shortlist {SHORTLIST_SIZE}",
-            target_arg="",
-            reason="no shortlist has been asked for yet",
+    wants_shortlist = (
+        "no shortlist has been asked for yet"
+        if shortlist_age_minutes is None
+        else (
+            f"the last shortlist is {shortlist_age_minutes:.0f} minutes old, "
+            f"past the {SHORTLIST_FRESH_MINUTES} it stays good for"
         )
+        if shortlist_age_minutes > SHORTLIST_FRESH_MINUTES
+        else ""
+    )
 
-    if shortlist_age_minutes > SHORTLIST_FRESH_MINUTES:
+    if wants_shortlist:
+        # BACKPRESSURE BEFORE THE ASK, NOT AFTER IT. A shortlist row that never
+        # reaches 'delivered' leaves this planner believing none was ever
+        # asked for, and without this gate it would write a fresh one every
+        # pass for as long as the fault lasted.
+        if (
+            shortlist_asked_minutes_ago is not None
+            and shortlist_asked_minutes_ago < SHORTLIST_WAIT_MINUTES
+        ):
+            return _wait(
+                f"a shortlist was asked for {shortlist_asked_minutes_ago:.0f} "
+                "minutes ago and has not come back yet"
+            )
         return RecruitAction(
             verb="shortlist",
             actor=actor,
             command=f"shortlist {SHORTLIST_SIZE}",
             target_arg="",
-            reason=(
-                f"the last shortlist is {shortlist_age_minutes:.0f} minutes old, "
-                f"past the {SHORTLIST_FRESH_MINUTES} it stays good for"
-            ),
+            reason=wants_shortlist,
         )
 
     if not shortlist:

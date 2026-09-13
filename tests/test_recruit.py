@@ -34,6 +34,7 @@ def plan(**kw):
         actors=list(ACTORS),
         shortlist=["Cogwin", "Sprout", "Mirelle"],
         shortlist_age_minutes=1.0,
+        shortlist_asked_minutes_ago=1.0,
         asked=set(),
         minutes_since_last_invite=None,
         member_count=5,
@@ -125,7 +126,7 @@ class EveryRefusalSaysWhichOneItWas(unittest.TestCase):
 class WhenAFreshShortlistIsAskedFor(unittest.TestCase):
 
     def test_a_world_that_has_never_been_shortlisted_asks_for_one(self):
-        action = plan(shortlist_age_minutes=None)
+        action = plan(shortlist_age_minutes=None, shortlist_asked_minutes_ago=None)
         self.assertEqual(action.verb, "shortlist")
         self.assertEqual(action.command, f"shortlist {recruit.SHORTLIST_SIZE}")
 
@@ -133,7 +134,10 @@ class WhenAFreshShortlistIsAskedFor(unittest.TestCase):
         """A candidate on an old list may have joined another guild, levelled
         out of the band or been deleted; an invite drawn from it comes back
         refused for a reason that looks like a fault in this loop."""
-        action = plan(shortlist_age_minutes=recruit.SHORTLIST_FRESH_MINUTES + 1)
+        action = plan(
+            shortlist_age_minutes=recruit.SHORTLIST_FRESH_MINUTES + 1,
+            shortlist_asked_minutes_ago=recruit.SHORTLIST_FRESH_MINUTES + 1,
+        )
         self.assertEqual(action.verb, "shortlist")
 
     def test_a_shortlist_inside_the_window_is_used(self):
@@ -148,6 +152,52 @@ class WhenAFreshShortlistIsAskedFor(unittest.TestCase):
         names it can never use."""
         self.assertEqual(
             plan(member_count=40, target_size=40, shortlist_age_minutes=None).verb,
+            "wait",
+        )
+
+
+class AShortlistNobodyAnswersIsNotReAskedEveryPass(unittest.TestCase):
+    """The unbounded-loop shape this project keeps being burned by.
+
+    A shortlist row that never reaches 'delivered' - worldserver down, mid
+    rollout, or every row coming back 'error' - reads to the planner as "there
+    has never been a shortlist". Without backpressure it writes a fresh one
+    every pass for as long as the fault lasts, each row individually
+    reasonable. The guild-bank pass answers the same hazard the same way.
+    """
+
+    def test_a_question_still_in_flight_is_waited_on_and_not_repeated(self):
+        action = plan(
+            shortlist_age_minutes=None,
+            shortlist_asked_minutes_ago=recruit.SHORTLIST_WAIT_MINUTES - 1,
+        )
+        self.assertEqual(action.verb, "wait")
+        self.assertIn("not come back", action.reason)
+
+    def test_a_question_that_has_been_ignored_long_enough_is_asked_again(self):
+        self.assertEqual(
+            plan(
+                shortlist_age_minutes=None,
+                shortlist_asked_minutes_ago=recruit.SHORTLIST_WAIT_MINUTES,
+            ).verb,
+            "shortlist",
+        )
+
+    def test_backpressure_never_blocks_an_invite(self):
+        """It gates only the ASK. A usable delivered shortlist is still acted
+        on while a newer request is in flight, or a stuck worldserver would
+        also stop recruiting from a list that is perfectly good."""
+        self.assertEqual(
+            plan(shortlist_age_minutes=1.0, shortlist_asked_minutes_ago=0.0).verb,
+            "invite",
+        )
+
+    def test_the_stale_path_is_gated_too_and_not_only_the_never_asked_one(self):
+        self.assertEqual(
+            plan(
+                shortlist_age_minutes=recruit.SHORTLIST_FRESH_MINUTES + 1,
+                shortlist_asked_minutes_ago=0.0,
+            ).verb,
             "wait",
         )
 
@@ -269,6 +319,17 @@ class TheLoopIsActuallyWired(unittest.TestCase):
         self.assertIn("_latest_guild_shortlist", names)
         self.assertIn("_guild_invites_asked", names)
         self.assertIn("_minutes_since_last_guild_invite", names)
+        self.assertIn("_minutes_since_shortlist_asked", names)
+
+    def test_the_backpressure_read_has_no_status_filter(self):
+        """Its whole job is to see rows that never reached 'delivered'. A
+        status filter here would make it a duplicate of the other read and
+        restore the re-ask loop it exists to stop."""
+        fn = next(
+            n for n in ast.walk(self.tree)
+            if isinstance(n, ast.FunctionDef) and n.name == "_minutes_since_shortlist_asked"
+        )
+        self.assertNotIn("status", ast.get_source_segment(self.source, fn).split('"""')[-1])
 
     def test_the_pass_writes_through_insert_guild(self):
         self.assertIn("_insert_guild", self._names_in("_recruit_once"))
