@@ -27,27 +27,33 @@ def member(**kw):
     return base
 
 
+# What `plan_deposits` actually holds back by default, which is NOT just the
+# float any more (infra#3713): until the guild owns a bank tab, the tab's
+# purchase price stays in the members' own purses, because that is where the
+# core takes it from. The tests below name this rather than re-deriving it, so
+# a change to either constant moves every expectation together.
+RESERVE_NO_TAB = guildbank.FLOAT_COPPER + guildbank.TAB0_COST_COPPER
+
+
 class WhoIsCarryingMoreThanTheFloat(unittest.TestCase):
 
-    def test_nothing_below_the_float_is_planned(self):
+    def test_nothing_below_the_reserve_is_planned(self):
         self.assertEqual(
-            guildbank.plan_deposits([member(money=guildbank.FLOAT_COPPER)]), [])
+            guildbank.plan_deposits([member(money=RESERVE_NO_TAB)]), [])
 
-    def test_exactly_the_float_is_not_a_surplus(self):
-        deposits = guildbank.plan_deposits(
-            [member(money=guildbank.FLOAT_COPPER)])
+    def test_exactly_the_reserve_is_not_a_surplus(self):
+        deposits = guildbank.plan_deposits([member(money=RESERVE_NO_TAB)])
         self.assertEqual(deposits, [])
 
-    def test_one_copper_over_the_float_is_the_whole_surplus(self):
-        deposits = guildbank.plan_deposits(
-            [member(money=guildbank.FLOAT_COPPER + 1)])
+    def test_one_copper_over_the_reserve_is_the_whole_surplus(self):
+        deposits = guildbank.plan_deposits([member(money=RESERVE_NO_TAB + 1)])
         self.assertEqual(deposits, [guildbank.Deposit(name="Grug", copper=1)])
 
-    def test_a_large_purse_deposits_everything_above_the_float(self):
-        deposits = guildbank.plan_deposits([member(money=50_000)])
+    def test_a_large_purse_deposits_everything_above_the_reserve(self):
+        purse = RESERVE_NO_TAB + 50_000
+        deposits = guildbank.plan_deposits([member(money=purse)])
         self.assertEqual(deposits,
-                         [guildbank.Deposit(name="Grug",
-                                            copper=50_000 - guildbank.FLOAT_COPPER)])
+                         [guildbank.Deposit(name="Grug", copper=50_000)])
 
 
 class OnlyAGuildMemberIsPlanned(unittest.TestCase):
@@ -65,8 +71,9 @@ class OnlyAGuildMemberIsPlanned(unittest.TestCase):
 
     def test_a_guild_member_alongside_a_non_member_only_plans_the_member(self):
         deposits = guildbank.plan_deposits([
-            member(name="Grug", money=50_000, in_guild=True),
-            member(name="Stranger", money=50_000, in_guild=False),
+            member(name="Grug", money=RESERVE_NO_TAB + 50_000, in_guild=True),
+            member(name="Stranger", money=RESERVE_NO_TAB + 50_000,
+                   in_guild=False),
         ])
         self.assertEqual([d.name for d in deposits], ["Grug"])
 
@@ -98,10 +105,10 @@ class AStaleOrAbsentReadNeverManufacturesADeposit(unittest.TestCase):
 
 class MultipleMembersEachGetTheirOwnDeposit(unittest.TestCase):
 
-    def test_every_member_over_the_float_gets_a_deposit(self):
+    def test_every_member_over_the_reserve_gets_a_deposit(self):
         deposits = guildbank.plan_deposits([
-            member(name="Grug", money=guildbank.FLOAT_COPPER + 100),
-            member(name="Grog", money=guildbank.FLOAT_COPPER + 200),
+            member(name="Grug", money=RESERVE_NO_TAB + 100),
+            member(name="Grog", money=RESERVE_NO_TAB + 200),
         ])
         self.assertEqual({d.name: d.copper for d in deposits},
                          {"Grug": 100, "Grog": 200})
@@ -110,8 +117,8 @@ class MultipleMembersEachGetTheirOwnDeposit(unittest.TestCase):
         """Ordering, like _fetch_guild_money's own read, is the caller's
         concern - this module does not re-sort."""
         deposits = guildbank.plan_deposits([
-            member(name="Ugga", money=guildbank.FLOAT_COPPER + 1),
-            member(name="Bork", money=guildbank.FLOAT_COPPER + 1),
+            member(name="Ugga", money=RESERVE_NO_TAB + 1),
+            member(name="Bork", money=RESERVE_NO_TAB + 1),
         ])
         self.assertEqual([d.name for d in deposits], ["Ugga", "Bork"])
 
@@ -456,6 +463,184 @@ class AVaultOnAnotherMapIsRefusedWithASentenceTests(unittest.TestCase):
                     travel.vault_aim(self.spawn(map_id=530), 1),
                     travel.vault_aim(self.spawn(), None)):
             self.assertGreater(len(got.refused.split()), 8, got.refused)
+
+
+class TheFirstTabPriceIsTheRealisedConfigValueTests(unittest.TestCase):
+    """The price is a CONFIG value, not a core constant, so the only honest
+    source is the config the realm actually runs (infra#3713).
+    `_GetGuildBankTabPrice` (Guild.cpp:94 at the pinned AC_CORE_SHA) returns
+    `sWorld->getIntConfig(CONFIG_GUILD_BANK_TAB_COST_0)`. Read live on
+    2026-09-13 from the deployed worldserver.conf inside the running wow-dev
+    worldserver pod: `Guild.BankTabCost0 = 1000000`. Pinned here so a change
+    to the module's copy has to be a deliberate edit against a re-read, which
+    is the discipline #3713 asked for after a remembered figure was removed
+    from the issue for being unverifiable."""
+
+    def test_the_first_tab_costs_one_hundred_gold(self):
+        self.assertEqual(guildbank.TAB0_COST_COPPER, 1_000_000)
+
+    def test_the_price_is_expressed_in_copper_not_gold(self):
+        """A tab priced at 100 rather than 1_000_000 would reserve a hundredth
+        of what it should, and is exactly the "wrong low" failure the
+        constant's own comment warns about."""
+        self.assertEqual(guildbank.TAB0_COST_COPPER // 10_000, 100)
+
+
+class TheFloatDoesNotDriftFromTheRestOfThePackageTests(unittest.TestCase):
+    """`guildbank.FLOAT_COPPER` deliberately does not import `needs` (that
+    would drag `wealth` -> `bonds`/`family`/`armory`/`panel` into a module the
+    pass wants cheap), so the equality is pinned here instead. If either side
+    is retuned without the other, this fails rather than the two silently
+    parting company."""
+
+    def test_the_float_is_the_same_floor_needs_py_already_measured(self):
+        import needs
+        self.assertEqual(guildbank.FLOAT_COPPER, needs.THIN_COPPER)
+
+    def test_the_float_is_above_the_broke_line_digest_py_reports(self):
+        """It used to BE that line. `digest.py:116` calls one gold the point
+        "under this and a character cannot pay a trainer", and the float was
+        one gold, so the pass deposited every character onto exactly the
+        threshold another module exists to report as a problem (infra#3713)."""
+        import digest
+        self.assertGreater(guildbank.FLOAT_COPPER, digest.BROKE_COPPER)
+
+
+class TheReserveKeepsTheFirstTabAffordableTests(unittest.TestCase):
+    """The infra#3713 regression, and the reason the reserve changed at all.
+
+    A tab is bought with `player->ModifyMoney(-int32(tabCost))`
+    (`Guild::HandleBuyBankTab`, Guild.cpp:1442) - the BUYER'S purse, never
+    `guild.BankMoney`. So a deposit rule that empties the purses does not fund
+    the tab, it makes the tab unbuyable, and the gold is then somewhere the
+    purchase cannot reach it.
+
+    The purses below are the real ones, read from the live `characters` table
+    on 2026-09-13 for the family's guild."""
+
+    LIVE_PURSES = {
+        "Grug": 1_663_413,   # Guild Master
+        "Ugga": 1_718_394,
+        "Grog": 1_782_663,
+        "Bork": 1_557_501,
+        "Og": 1_690_879,
+    }
+
+    def _live_members(self):
+        return [member(name=name, money=money, in_guild=True)
+                for name, money in self.LIVE_PURSES.items()]
+
+    def test_every_member_still_clears_the_tab_price_afterwards(self):
+        deposits = {d.name: d.copper
+                    for d in guildbank.plan_deposits(self._live_members())}
+        for name, purse in self.LIVE_PURSES.items():
+            left = purse - deposits.get(name, 0)
+            self.assertGreaterEqual(
+                left, guildbank.TAB0_COST_COPPER,
+                f"{name} is left with {left} copper, under the "
+                f"{guildbank.TAB0_COST_COPPER} the first tab costs")
+
+    def test_the_old_float_only_rule_would_have_stranded_every_purse(self):
+        """Not a hypothetical: this is what the rule did before #3713, and it
+        is why the issue's own "deposit gold first, then buy a tab" ordering
+        is backwards. With only the float held back, every character is left
+        on the float alone and the tab can never be bought by anyone."""
+        self.assertLess(guildbank.FLOAT_COPPER, guildbank.TAB0_COST_COPPER)
+        for name, purse in self.LIVE_PURSES.items():
+            self.assertGreater(purse, guildbank.TAB0_COST_COPPER,
+                               f"{name} could not have bought a tab anyway")
+
+    def test_a_purse_that_cannot_clear_the_reserve_deposits_nothing(self):
+        """A character poorer than the reserve keeps all of it rather than
+        being taken down to the float - suppression, not a partial raid."""
+        deposits = guildbank.plan_deposits(
+            [member(money=guildbank.TAB0_COST_COPPER)])
+        self.assertEqual(deposits, [])
+
+
+class AGuildThatAlreadyOwnsATabStopsReservingThePriceTests(unittest.TestCase):
+    """Once the tab exists there is nothing left to save up for, so the
+    reserve drops back to the plain working float."""
+
+    def test_guild_has_tab_releases_the_tab_price(self):
+        purse = guildbank.FLOAT_COPPER + guildbank.TAB0_COST_COPPER + 7
+        deposits = guildbank.plan_deposits(
+            [member(money=purse)], guild_has_tab=True)
+        self.assertEqual(
+            deposits,
+            [guildbank.Deposit(name="Grug",
+                               copper=guildbank.TAB0_COST_COPPER + 7)])
+
+    def test_the_default_is_the_cautious_answer(self):
+        """Defaulting to False matters because the caller has not been taught
+        to read `guild_bank_tab` yet: an un-wired caller must get the reserve
+        that keeps the tab affordable, so wiring it later can only release
+        gold, never strand it."""
+        purse = guildbank.FLOAT_COPPER + guildbank.TAB0_COST_COPPER + 7
+        self.assertEqual(guildbank.plan_deposits([member(money=purse)]),
+                         guildbank.plan_deposits([member(money=purse)],
+                                                 guild_has_tab=False))
+        self.assertNotEqual(guildbank.plan_deposits([member(money=purse)]),
+                            guildbank.plan_deposits([member(money=purse)],
+                                                    guild_has_tab=True))
+
+
+class TabDepositBlockersNamesBothSilentRefusalsTests(unittest.TestCase):
+    """Both ways an item deposit fails are silent no-ops in the core, and an
+    operator cannot tell them apart from a walk that never arrived
+    (infra#3713)."""
+
+    def test_the_realm_as_it_stands_reports_the_missing_tab(self):
+        blockers = guildbank.tab_deposit_blockers(purchased_tabs=0,
+                                                  ranks_with_deposit=0)
+        self.assertEqual(len(blockers), 2)
+        self.assertIn("no purchased bank tab", blockers[0])
+        self.assertIn("100 gold", blockers[0])
+        self.assertIn("own purse", blockers[0])
+
+    def test_a_freshly_bought_tab_is_still_blocked_for_four_of_five(self):
+        """`_CreateNewBankTab` -> `CreateMissingTabsIfNeeded` sets
+        `GUILD_BANK_RIGHT_FULL` only `if (m_rankId == GR_GUILDMASTER)`; every
+        other rank defaults to `rights(0), slots(0)` (Guild.h:267). The
+        family's guild is one Guild Master and four Officers, so buying the
+        tab alone leaves exactly one character able to deposit."""
+        blockers = guildbank.tab_deposit_blockers(purchased_tabs=1,
+                                                  ranks_with_deposit=1)
+        self.assertEqual(len(blockers), 1)
+        self.assertIn("Guild Master", blockers[0])
+
+    def test_a_tab_open_to_more_than_one_rank_reports_nothing(self):
+        self.assertEqual(
+            guildbank.tab_deposit_blockers(purchased_tabs=1,
+                                           ranks_with_deposit=2), [])
+
+    def test_a_tab_with_no_rank_rights_at_all_is_reported(self):
+        blockers = guildbank.tab_deposit_blockers(purchased_tabs=1,
+                                                  ranks_with_deposit=0)
+        self.assertEqual(len(blockers), 1)
+        self.assertIn("GUILD_BANK_RIGHT_DEPOSIT_ITEM", blockers[0])
+
+
+class NoTabPurchaseVerbExistsToCallYetTests(unittest.TestCase):
+    """The reason this slice stops where it does. `GuildVerb` in the pinned
+    mod-overseer runs None/Form/View/Shortlist/Invite/Tabard/Bank/
+    BankDepositItem and nothing else - there is no verb that buys a tab and no
+    verb that sets rank rights, so neither step can be driven from Python at
+    all. Building a formatter for a command the executor cannot parse would be
+    an inert mechanism, so this pins the absence instead, and fails the day
+    mod-overseer grows the verb - which is the day to wire the purchase."""
+
+    def setUp(self):
+        if not MOD_OVERSEER.exists():
+            self.skipTest("mod-overseer submodule not checked out")
+        self.cpp = MOD_OVERSEER.read_text(encoding="utf-8")
+
+    def test_the_module_cannot_buy_a_tab_today(self):
+        self.assertNotIn("HandleBuyBankTab", self.cpp)
+        self.assertNotIn("BankBuyTab", self.cpp)
+
+    def test_the_module_cannot_set_rank_bank_rights_today(self):
+        self.assertNotIn("HandleSetRankInfo", self.cpp)
 
 
 if __name__ == "__main__":
