@@ -70,17 +70,31 @@ class ThePassRunsAndInTheRightOrder(unittest.TestCase):
 
     def test_the_travel_errand_is_written_before_any_row_that_needs_it(self):
         """DoBank refuses with `banker not in range`. A queue written before
-        the walk is a queue of refusals."""
+        the walk is a queue of refusals.
+
+        THE AIM MOVED INTO `_settle_bank_errand` (infra#3728) and the invariant
+        did not. Writing the errand and handing it back are one decision - the
+        pass wrote `banker` and nothing anywhere ever wrote the column back to
+        empty, which is a latch with an entry and no exit - so the two ends live
+        together, and what this pins is that the settling still precedes the
+        first insert."""
         body = _block("    async def _bank_once(")
-        self.assertIn("travel_npc=\"banker\"", body)
-        self.assertLess(body.index("_write_trade_errand"), body.index("_insert_bank"))
+        settle = _block("    async def _settle_bank_errand(")
+        self.assertIn("travel_npc=\"banker\"", settle)
+        self.assertIn("_write_trade_errand", settle)
+        self.assertLess(body.index("_settle_bank_errand"), body.index("_insert_bank"))
 
     def test_the_errand_goes_to_the_family_leader(self):
         """Only the leader takes `new rpg`; followers arrive by following.
-        Sending a follower straight to an NPC leaves that character behind."""
+        Sending a follower straight to an NPC leaves that character behind.
+
+        The leader is still read once, here, and handed to the settling - a
+        release from one leader and an aim on another would be two leaders."""
         body = _block("    async def _bank_once(")
         self.assertIn("leader = await asyncio.to_thread(_head_now)", body)
-        self.assertIn("professions.Errand(character=leader", body)
+        self.assertIn("self._settle_bank_errand(names, leader", body)
+        self.assertIn("professions.Errand(character=leader",
+                      _block("    async def _settle_bank_errand("))
 
     def test_the_leader_is_head_now_not_the_static_seniority_answer(self):
         """infra#3553/#3554. `_head_now()`, NOT bonds.head_of_family() directly.

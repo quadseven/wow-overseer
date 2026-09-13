@@ -5398,6 +5398,79 @@ class Bridge(discord.Client):
                 log.exception("economy vendor pass failed; retrying next cycle")
             await asyncio.sleep(cycle)
 
+    async def _settle_bank_errand(self, names: list, leader: str,
+                                  moves_unasked: bool) -> str:
+        """Aim, hold or hand back the bank pass's `banker` errand (infra#3728).
+
+        THE HALF THAT WAS NEVER BUILT, HERE TOO. `banker` is one of the four
+        aims `OverseerDecisions::IsMaintenanceErrand` covers, so mod-overseer
+        reaches "errand done, releasing" on arrival and then deliberately skips
+        the column write (infra#3655) - its own comment names the bridge as the
+        side that "owns the column too and clears it", and the bridge never did
+        in any of the four passes. One writer that only ever sets is a latch.
+
+        LIFTED OUT WHOLE AND CALLED ABOVE THE `no moves` GATE, which is the
+        whole ordering argument of infra#3717 restated for this pass: an errand
+        is finished BECAUSE the moves landed, and moves that landed are moves
+        `bank.plan` no longer proposes, so the very cycle that should hand the
+        column back is the cycle this pass used to return early on.
+
+        IT SETTLES ONLY `banker`. `travel_npc` is one slot several passes write
+        and each must hand back what it wrote; releasing the town trip's
+        `repair` or the sell pass's `vendor` from here is the cross-pass theft
+        `_write_trade_errand`'s guard exists to prevent (mod-overseer#438).
+
+        NO ARRIVAL TEST, AND THAT IS NOT AN OVERSIGHT - see `bank.errand_step`.
+        A bank row is written from wherever the family is standing and waits
+        `pending` until its holder reaches the counter, so the rows and the aim
+        are created in the same pass and a fully answered queue is complete
+        evidence about this errand's own work. The town trip needs an arrival
+        test precisely because its rows cannot be written until it has one.
+        """
+        outstanding = await asyncio.to_thread(_outstanding_bank_moves, names)
+        step = bank.errand_step(outstanding, moves_unasked)
+        if step == bank.BANK_ERRAND_AIM:
+            # THE RETURN VALUE IS READ, the same defect infra#3660 fixed in the
+            # guild bank pass. An economy errand may only retask an IDLE
+            # traveller, so this write is a no-op while another town pass owns
+            # the column - a real, expected refusal (infra#3703) that was
+            # invisible for as long as nobody logged it.
+            aimed = await asyncio.to_thread(
+                _write_trade_errand,
+                professions.Errand(character=leader, travel_npc="banker"),
+            )
+            if not aimed:
+                log.info(
+                    "bank: leader=%s is already on somebody else's errand, so "
+                    "no banker aim was taken this pass", leader,
+                )
+        elif step == bank.BANK_ERRAND_HOLD:
+            log.info(
+                "bank: leader=%s keeps the errand it carries - %s. Re-asserting "
+                "one is what makes the world read a standing errand as a new "
+                "one", leader,
+                "the queue cannot be read" if outstanding < 0
+                else "%d row(s) unanswered" % outstanding,
+            )
+        else:
+            released = await asyncio.to_thread(
+                _release_trade_errand, leader, "banker",
+            )
+            if released:
+                log.info(
+                    "bank: leader=%s has nothing left to ask the counter for "
+                    "and every row this trip queued has been answered, so the "
+                    "errand is handed back and the family walks again", leader,
+                )
+            else:
+                # Not a failure. The column belongs to somebody else now, and
+                # the keyword guard is what stops this pass taking it.
+                log.debug(
+                    "bank: leader=%s is not carrying a banker errand, so there "
+                    "was nothing to hand back", leader,
+                )
+        return step
+
     async def _bank_once(self) -> None:
         """One pass of the bank: park what the family keeps but cannot use.
 
@@ -5418,6 +5491,13 @@ class Bridge(discord.Client):
         the vendor pass writes it first: a queue that outlives the journey is
         the failure this ordering avoids.
 
+        AND THE ERRAND IS HANDED BACK WHEN THE TRIP IS OVER (infra#3728). It
+        never was: `banker` is a maintenance errand as far as mod-overseer is
+        concerned, so the module refuses to clear the column on arrival and
+        expects the bridge to. `_settle_bank_errand` does that, and it runs
+        above the `no moves` return because a finished trip is exactly a trip
+        with no moves left.
+
         NOT IN THE MIDDLE OF A DUNGEON RUN, for the same reason reagents wait.
         A bank trip is a town errand, and pulling the leader out of a run to
         make one is how the party spreads.
@@ -5432,9 +5512,6 @@ class Bridge(discord.Client):
         )
         for note in bank_plan.notes:
             log.info("bank: %s", note)
-        if not bank_plan.moves:
-            log.info("bank: nothing to put down and nothing to fetch back")
-            return
         # `_head_now()` RATHER THAN bonds.head_of_family() (infra#3553, same
         # defect #3554 fixed in _vendor_once). The two differ exactly when it
         # matters: `_head_now` is what `_mark_party_leader` writes into
@@ -5448,15 +5525,29 @@ class Bridge(discord.Client):
         # ("'Grug' was sent to 'banker' but does not carry `new rpg`") burned
         # the errand budget into a 900s refusal every cycle - every personal
         # bank on the realm sat empty because of it.
+        #
+        # READ BEFORE THE `no moves` GATE NOW (infra#3728). An errand this pass
+        # left standing has to be handed back on the cycle it is finished, and
+        # the cycle it is finished is very often the cycle there is nothing left
+        # to bank - so every step of the settling has to sit ABOVE that return
+        # or it could never fire. Same ordering bug, same reasoning, as
+        # infra#3717's `_settle_vendor_errand`.
         leader = await asyncio.to_thread(_head_now)
-        await asyncio.to_thread(
-            _write_trade_errand,
-            professions.Errand(character=leader, travel_npc="banker"),
-        )
+        # THE RETRY WINDOW IS READ BEFORE THE ERRAND IS SETTLED, because it is
+        # half of "has this trip anything left to ask for": a move bank.plan
+        # proposes again because `character_inventory` has not been flushed yet
+        # is not a reason to keep walking to a banker.
         seen = await asyncio.to_thread(_recent_bank_keys, GIVE_RETRY_MINUTES)
+        planned = [(move, bank.command(move)) for move in bank_plan.moves]
+        unasked = [move for move, command in planned
+                   if (move.character, command) not in seen]
+        await self._settle_bank_errand(names, leader, bool(unasked))
+
+        if not bank_plan.moves:
+            log.info("bank: nothing to put down and nothing to fetch back")
+            return
         fresh = []
-        for move in bank_plan.moves:
-            command = bank.command(move)
+        for move, command in planned:
             if (move.character, command) in seen:
                 continue
             if await asyncio.to_thread(_insert_bank, move, command):
@@ -5636,6 +5727,91 @@ class Bridge(discord.Client):
                 log.exception("guild bank pass failed; retrying next cycle")
             await asyncio.sleep(cycle)
 
+    async def _settle_town_errand(self, names: list, leader: str, town,
+                                  work_unasked: bool) -> str:
+        """Aim, hold or hand back the town trip's `repair` errand (infra#3728).
+
+        THE OTHER END OF AN ERRAND THAT ONLY EVER HAD ONE. `_towntrip_once`
+        wrote `travel_npc = 'repair'` unconditionally, before anything was
+        planned, and nothing anywhere ever wrote it back - the same shape
+        infra#3708 found in the sell pass, in the same column, four passes deep.
+        Measured on wow-dev 2026-09-13: the column was cleared by hand for all
+        five at 18:47 and the family walked for the first time in ninety
+        minutes; by about 18:52 the leader was re-armed as `repair` from HERE,
+        not from the sell pass, and all five had stopped again.
+
+        LIFTED OUT WHOLE, FOR THE REASON `_settle_vendor_errand` GIVES. A draft
+        that leaves the release at the bottom of the pass puts it below
+        `if not trip.errands: return`, which is the single most likely state for
+        a FINISHED trip to be in - nothing left to repair and nothing left to
+        buy is exactly what "done" looks like - so the release could never fire
+        on the cycles that matter. One question with one answer belongs in one
+        place, and the pure side already has that shape in
+        `towntrip.errand_step`.
+
+        IT SETTLES ONLY `repair`, AND ONLY THIS PASS'S OWN. `travel_npc` is a
+        single slot several passes write and each of them must hand back what it
+        wrote: releasing the sell pass's `vendor` from here would be exactly the
+        cross-pass theft `_write_trade_errand`'s guard exists to prevent
+        (mod-overseer#438), and tests/test_vendor_errand.py pins the mirror of
+        this on the other side.
+
+        THE AIM STILL GOES BEFORE ANY ROW THAT NEEDS ONE, which is why this is
+        called from above the insert loop rather than after it. What changed is
+        that it is no longer written on every cycle whatever the family needs:
+        an aim asserted at a counter the family is already standing at makes the
+        aim book erase its own state and read a standing errand as brand new,
+        and an aim asserted for work already inside the retry window walks them
+        to a counter this pass will refuse to queue anything at.
+        """
+        outstanding = await asyncio.to_thread(_outstanding_town_work, names)
+        step = towntrip.errand_step(
+            bool(town.repairs), outstanding, work_unasked,
+        )
+        if step == towntrip.TOWN_ERRAND_AIM:
+            # THE RETURN VALUE IS READ, for the reason infra#3464 gave when it
+            # was not: `_write_trade_errand`'s economy guard only retasks an
+            # IDLE traveller, so this write is a no-op while the sell pass owns
+            # `travel_npc = 'vendor'`. That is a legitimate outcome and a
+            # starvation worth seeing in the log (infra#3703), not a failure.
+            aimed = await asyncio.to_thread(
+                _write_trade_errand,
+                professions.Errand(character=leader, travel_npc="repair"),
+            )
+            if not aimed:
+                log.info(
+                    "towntrip: leader=%s is already on somebody else's errand, "
+                    "so no repair aim was taken this pass", leader,
+                )
+        elif step == towntrip.TOWN_ERRAND_HOLD:
+            log.info(
+                "towntrip: leader=%s keeps the errand it carries - %s. "
+                "Re-asserting one is what makes the world read a standing "
+                "errand as a new one", leader,
+                "the queue cannot be read" if outstanding < 0 else
+                "%d counter row(s) unanswered" % outstanding if outstanding else
+                "the rows for this counter are about to be queued",
+            )
+        else:
+            released = await asyncio.to_thread(
+                _release_trade_errand, leader, "repair",
+            )
+            if released:
+                log.info(
+                    "towntrip: leader=%s has nothing left to ask a counter for "
+                    "and every row this trip queued has been answered, so the "
+                    "errand is handed back and the family walks again", leader,
+                )
+            else:
+                # Not a failure. The column belongs to somebody else now - a
+                # profession errand, or another town pass that won it - and the
+                # keyword guard is what stops this pass taking it from them.
+                log.debug(
+                    "towntrip: leader=%s is not carrying a repair errand, so "
+                    "there was nothing to hand back", leader,
+                )
+        return step
+
     async def _towntrip_once(self) -> None:
         """Repair and restock between two dungeon runs.
 
@@ -5659,10 +5835,22 @@ class Bridge(discord.Client):
         NOTHING IS PLANNED UNTIL THEY HAVE ARRIVED, and that falls out of the
         Town read rather than being sequenced here. `_fetch_town` reads what is
         within reach of where the leader is STANDING, so a pass that runs while
-        they are still walking sees an empty Town, plans nothing, and writes the
-        travel errand again. The cycle after they arrive is the one that queues
-        rows. That is why this pass needs no state of its own and survives a
-        restart: every step is re-derived from the world.
+        they are still walking sees an empty Town and plans no counter row. The
+        cycle after they arrive is the one that queues them. That is why this
+        pass needs no state of its own and survives a restart: every step is
+        re-derived from the world.
+
+        AND THE ERRAND THAT GETS THEM THERE NOW HAS AN END (infra#3728). It used
+        to be written unconditionally at the top of this pass and cleared by
+        nobody, which made `travel_npc` a latch with an entry and no exit -
+        mod-overseer reaches "errand done, releasing" on arrival and then
+        deliberately skips the column write for a maintenance errand its aim book
+        never claimed (infra#3655), naming the bridge as the half that clears it.
+        `_settle_town_errand` is that half. It is called ABOVE the insert loop so
+        the aim still precedes any row that needs one, and above the
+        `not trip.errands` return because that return is what a FINISHED trip
+        looks like - which is the ordering bug infra#3717 caught in the sell
+        pass by running its own sequence model.
         """
         names = sorted((await asyncio.to_thread(_protected_guids)).values())
         if not names or await self._mid_run(names):
@@ -5674,13 +5862,6 @@ class Bridge(discord.Client):
         # names this cycle, not the family's resting seniority answer, which
         # can be sitting on somebody else's errand right now.
         leader = await asyncio.to_thread(_head_now)
-        # THE AIM GOES FIRST, before anything is planned, exactly as the bank
-        # pass writes its banker errand first. A row queued for a counter
-        # nobody is walking to is a refusal waiting to be logged.
-        await asyncio.to_thread(
-            _write_trade_errand,
-            professions.Errand(character=leader, travel_npc="repair"),
-        )
 
         town = await asyncio.to_thread(_fetch_town, leader)
         members = towntrip.members_from_rows(
@@ -5695,6 +5876,18 @@ class Bridge(discord.Client):
             log.info("towntrip: %s", note)
         for stopped in trip.blocked:
             log.warning("towntrip: %s", stopped)
+
+        # THE RETRY WINDOW IS READ BEFORE THE ERRAND IS SETTLED NOW, because it
+        # is half of the answer to "has this trip anything left to ask for"
+        # (infra#3728). `_recent_town_keys` is what already stops a walk that
+        # has not finished from filling the queue; the same window is what tells
+        # a trip that is FINISHED from one that is about to start, and reading it
+        # twice would be two answers to one question.
+        seen = await asyncio.to_thread(_recent_town_keys, GIVE_RETRY_MINUTES)
+        unasked = [key for key in towntrip.counter_keys(members, trip)
+                   if key not in seen]
+        await self._settle_town_errand(names, leader, town, bool(unasked))
+
         if not trip.errands:
             log.info(
                 "towntrip: nothing to do at this counter (repairs=%s, %d item(s) stocked)",
@@ -5702,7 +5895,6 @@ class Bridge(discord.Client):
             )
             return
 
-        seen = await asyncio.to_thread(_recent_town_keys, GIVE_RETRY_MINUTES)
         queued = 0
         for errand in trip.errands:
             if (errand.member, errand.command) in seen:
@@ -7249,6 +7441,90 @@ def _outstanding_sales(names: list) -> int:
                 return -1
             raise
     return int(row["waiting"] or 0) if row else 0
+
+
+# The town trip's own version of the query above, and the two differences from
+# it are both deliberate (infra#3728).
+#
+# SCOPED TO source='towntrip', exactly as `_recent_town_keys` is and for the
+# same reason: the materials and bag passes write kind='give' rows of their own,
+# and a count that could not tell them apart would hold the repair errand open
+# on somebody else's hand-off.
+#
+# AND SCOPED TO THE KINDS A COUNTER SERVES. towntrip.COUNTER_KINDS is repair and
+# buy; conjure and give are free, work anywhere, and are not what the travel
+# column is for. The kinds are bound rather than written into the string so that
+# the vocabulary stays towntrip's, which is the one place it is tested.
+_OUTSTANDING_TOWN_SQL = (
+    "SELECT COUNT(*) AS waiting FROM overseer_command "
+    "WHERE kind IN (%s) AND source = 'towntrip' "
+    "AND status IN ('pending', 'claimed') "
+    "AND target_name IN (%s)"
+)
+
+# The bank pass's version. No source scope: kind='bank' has exactly one writer
+# (`_insert_bank`, which stamps source='economy'), so there is nothing to tell
+# apart, and adding a scope that could drift from the insert would be a filter
+# that silently counts nothing.
+_OUTSTANDING_BANK_SQL = (
+    "SELECT COUNT(*) AS waiting FROM overseer_command "
+    "WHERE kind = 'bank' AND status IN ('pending', 'claimed') "
+    "AND target_name IN (%s)"
+)
+
+
+def _outstanding_counts(sql: str, kinds: tuple, names: list, what: str) -> int:
+    """Rows the world still owes an answer on, or -1 if it cannot be read.
+
+    THE SIBLING OF `_outstanding_sales`, GENERALISED ONLY AS FAR AS IT HONESTLY
+    GOES (infra#3728). Every argument that function makes applies here word for
+    word - `pending` and `claimed` are the whole of "unanswered", every other
+    status is an answer including a refusal, and -1 is "could not measure" and
+    is emphatically not 0 - so repeating them in two more docstrings would be
+    three copies of one rule. What differs between the three callers is only
+    WHICH rows belong to the errand being settled, which is what `sql` and
+    `kinds` say. `_outstanding_sales` keeps its own body because its query takes
+    no kind list and its S608 argument is pinned by name in
+    tests/test_vendor_errand.py.
+
+    EVERY VALUE STILL REACHES MYSQL AS A BOUND PARAMETER. What is interpolated
+    is a run of `%s` placeholders whose count comes from `len(kinds)` and
+    `len(names)`; the kinds come from `towntrip.COUNTER_KINDS` and the names from
+    `_protected_guids`, and both are passed to `cur.execute` as parameters.
+    """
+    if not names:
+        return 0
+    marks = [",".join(["%s"] * len(kinds))] if kinds else []
+    marks.append(",".join(["%s"] * len(names)))
+    statement = sql % tuple(marks)  # noqa: S608 - placeholders from a COUNT, values still bound
+    with _connect() as conn, conn.cursor() as cur:
+        try:
+            cur.execute(statement, (*kinds, *names))
+            row = cur.fetchone()
+        except pymysql.err.MySQLError as exc:
+            # 1054 missing column, 1146 missing table, 1265 a `kind` ENUM this
+            # world image does not carry. A queue that cannot be read is not a
+            # finished errand.
+            if exc.args and exc.args[0] in (1054, 1146, 1265):
+                log.warning(
+                    "economy: cannot read the %s queue, so no errand is handed "
+                    "back this pass", what,
+                )
+                return -1
+            raise
+    return int(row["waiting"] or 0) if row else 0
+
+
+def _outstanding_town_work(names: list) -> int:
+    """Counter-bound town-trip rows still unanswered, or -1 if unreadable."""
+    return _outstanding_counts(
+        _OUTSTANDING_TOWN_SQL, towntrip.COUNTER_KINDS, names, "town trip",
+    )
+
+
+def _outstanding_bank_moves(names: list) -> int:
+    """Bank rows still unanswered, or -1 if the queue cannot be read."""
+    return _outstanding_counts(_OUTSTANDING_BANK_SQL, (), names, "bank")
 
 
 def _active_dungeon_run() -> dict | None:

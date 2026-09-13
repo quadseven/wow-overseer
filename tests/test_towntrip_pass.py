@@ -69,10 +69,21 @@ class ThePassRunsAndInTheRightOrder(unittest.TestCase):
 
         Order matters and is asserted by position, not by reading: the aim has
         to appear in the source before the insert does.
+
+        THE AIM MOVED INTO `_settle_town_errand` (infra#3728) and the invariant
+        did not. It is written there because writing it and giving it back are
+        one decision with one answer - the unconditional write at the top of
+        this pass, with nothing anywhere writing the column back, is the whole
+        of the defect - so what this pins now is that the settling still happens
+        before the first insert, and that the aim is still what the settling
+        writes.
         """
         code = _code("    async def _towntrip_once(self)")
-        self.assertLess(code.index("_write_trade_errand"),
+        self.assertLess(code.index("_settle_town_errand"),
                         code.index("_insert_town_errand"))
+        settle = _code("    async def _settle_town_errand(")
+        self.assertIn("_write_trade_errand", settle)
+        self.assertIn('travel_npc="repair"', settle)
 
     def test_the_leader_is_the_one_sent(self):
         """Only the leader carries `new rpg`; an aimed follower wanders."""

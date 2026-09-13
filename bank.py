@@ -517,6 +517,69 @@ def command(move):
     return "%s guid:%d" % (move.verb, move.guid)
 
 
+# WHAT A BANK ERRAND SHOULD DO NEXT (infra#3728). Three words for the same
+# reason towntrip.errand_step and bag_pressure.vendor_errand_step use three:
+# "do not aim" and "hand the column back" are opposite intentions that both
+# read as "no write this pass", and that is how the missing half stayed
+# invisible in all three passes at once.
+BANK_ERRAND_AIM = "aim"
+BANK_ERRAND_HOLD = "hold"
+BANK_ERRAND_RELEASE = "release"
+
+
+def errand_step(rows_outstanding: int, moves_unasked: bool) -> str:
+    """What to do with the leader's `banker` aim this pass (infra#3728).
+
+    THE SAME LATCH AS THE SELL PASS'S, IN THE SAME COLUMN. `_bank_once` wrote
+    `travel_npc = 'banker'` and nothing ever wrote it back; `banker` is one of
+    the four aims `IsMaintenanceErrand` covers, so mod-overseer reaches "errand
+    done, releasing" on arrival and then deliberately SKIPS the column write
+    (infra#3655), naming the bridge as the half that clears it. The bridge never
+    did, in any of the four passes.
+
+    TWO INPUTS RATHER THAN THE TOWN TRIP'S THREE, AND THE DIFFERENCE IS REAL.
+    A town-trip repair row cannot even be WRITTEN until a repairer is in reach,
+    so that pass has to know whether the family has arrived before it can tell a
+    finished trip from one that has not started. A bank row is written from
+    wherever the family happens to be standing and waits `pending` until its
+    holder reaches the counter (mod-overseer#209, infra#3311) - the rows and the
+    aim are created in the SAME pass - so a queue this pass wrote and the world
+    has fully answered is complete evidence about this errand's own work, with
+    no "has not started yet" window for an arrival test to close.
+
+    AND AN ANSWER IS AN ANSWER, INCLUDING A REFUSAL. `banker not in range` is
+    what DoBank says to a holder still on the road, and counting refusals as
+    outstanding would rebuild the latch one table over - the same trap
+    `_outstanding_sales` describes against 17,536 all-time `vendor not in range`
+    rows. The honest consequence, stated rather than hidden: a trip whose rows
+    were all refused for range ends this errand, and the pass tries again once
+    the retry window lets it re-ask. That is a bounded hourly retry instead of a
+    permanent parking space, and on this realm it is not theoretical - measured
+    2026-09-13, `kind='bank'` stands at 141 error against 1 delivered all time,
+    every one of those refusals arriving while the column stayed set.
+
+    NOT KNOWING IS A REASON TO HOLD. A negative count is the bridge reporting
+    that it could not read the queue at all; reading that as "finished" is the
+    fail-open direction and it walks the family away from rows already queued.
+
+    `moves_unasked` IS WHETHER THIS PASS STILL HAS A MOVE TO MAKE that it has
+    not already queued inside the retry window - bank.plan's own answer, minus
+    what `_recent_bank_keys` says was asked recently. It is NOT "the bags look
+    full": `character_inventory` is written on PlayerSaveInterval, measured at
+    900 seconds on this realm, so for up to a quarter of an hour after a deposit
+    lands the item still reads as carried and `plan` proposes it again. That
+    staleness therefore pushes towards AIM and never towards RELEASE, which is
+    the safe direction - it holds a finished errand a few minutes too long
+    rather than ending a live one - and the retry window stops the re-proposal
+    becoming a second row.
+    """
+    if rows_outstanding != 0:
+        return BANK_ERRAND_HOLD
+    if moves_unasked:
+        return BANK_ERRAND_AIM
+    return BANK_ERRAND_RELEASE
+
+
 def lines(moves):
     """One log line per move, for a person reading the pass afterwards.
 

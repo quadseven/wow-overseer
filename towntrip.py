@@ -184,6 +184,40 @@ REAGENT_SPELLS: dict[int, tuple[int, str, int]] = {}
 ANY_DAMAGE = 1.0
 FLOOR = 0.35
 
+# THE ROW KINDS, NAMED ONCE (infra#3728). They were four string literals spread
+# between `_repair`, `_buy`, `_conjure` and `_hand_on`, which was fine while the
+# only reader was the insert. It stopped being fine when the TRAVEL aim needed
+# to know which of them a counter has to serve: a fifth spelling of "repair" in
+# bridge.py would be the vocabulary written down in the one place nothing tests
+# it, and a typo there reads as "this trip has no counter work" - which is a
+# silent release of a live errand rather than a loud failure.
+REPAIR_KIND = "repair"
+BUY_KIND = "buy"
+CONJURE_KIND = "conjure"
+GIVE_KIND = "give"
+
+# `repair all`, which is what DoRepair reads. One row per character mends
+# everything worn, so there has never been a second form of this command.
+REPAIR_COMMAND = "all"
+
+# THE HALF OF THIS TRIP A COUNTER HAS TO SERVE, and the reason the travel aim
+# exists at all. `conjure` and `give` are deliberately absent: both are free,
+# both work anywhere on any map - "needs no town at all", as `_conjure` says of
+# itself - and holding a travel column open for them would hold it for work the
+# column does not serve. Measured consequence of getting this wrong: a slow
+# conjure would have kept `travel_npc = 'repair'` standing, and
+# TravelHoldsTheWheel stands the quest drive down for exactly as long.
+COUNTER_KINDS = (REPAIR_KIND, BUY_KIND)
+
+# WHAT A TOWN-TRIP ERRAND SHOULD DO NEXT (infra#3728). Three words rather than
+# two booleans, for the reason bag_pressure.vendor_errand_step gives about the
+# sell pass's version of the same decision: "not aiming" and "giving the column
+# back" are opposite intentions that both read as "no write this pass", and that
+# is precisely how the missing half stayed invisible for a week.
+TOWN_ERRAND_AIM = "aim"
+TOWN_ERRAND_HOLD = "hold"
+TOWN_ERRAND_RELEASE = "release"
+
 
 @dataclass(frozen=True)
 class Equipped:
@@ -337,12 +371,27 @@ def _tier(table, level: int):
     return best
 
 
+def _damaged(member: Member) -> list[Equipped]:
+    """The worn items a repairer could mend, by the one damage rule.
+
+    LIFTED OUT OF `_repair` SO IT CAN BE ASKED WITHOUT A TOWN (infra#3728).
+    `_repair` can only answer once a repairer is in reach - with an empty Town
+    it turns the same damage into a `blocked` sentence and returns no errand -
+    but "is there anything a repairer could do for this family" is exactly the
+    question the TRAVEL aim has to answer, and it has to answer it while they
+    are still standing somewhere else. Two copies of the rule would be two
+    answers, and the one in the bridge would be the untested one.
+    """
+    return [e for e in member.equipped
+            if 0 < e.max_durability and e.fraction < ANY_DAMAGE]
+
+
 def _repair(member: Member, town: Town) -> tuple[list[Errand], list[str], list[str]]:
     errands: list[Errand] = []
     notes: list[str] = []
     blocked: list[str] = []
 
-    damaged = [e for e in member.equipped if 0 < e.max_durability and e.fraction < ANY_DAMAGE]
+    damaged = _damaged(member)
     if not damaged:
         return errands, notes, blocked
 
@@ -361,7 +410,7 @@ def _repair(member: Member, town: Town) -> tuple[list[Errand], list[str], list[s
     why = f"{len(damaged)} damaged item(s), worst at {worst:.0%}"
     if worst < FLOOR:
         why += f"; below the {FLOOR:.0%} floor, so another run can break it"
-    errands.append(Errand(member.name, "repair", "all", why))
+    errands.append(Errand(member.name, REPAIR_KIND, REPAIR_COMMAND, why))
     return errands, notes, blocked
 
 
@@ -415,7 +464,7 @@ def _buy(member: Member, town: Town, what: str) -> tuple[list[Errand], list[str]
     errands.append(
         Errand(
             member.name,
-            "buy",
+            BUY_KIND,
             f"entry:{entry} count:{short} max:{ceiling}",
             why,
             ceiling,
@@ -446,7 +495,7 @@ def _hand_on(wanted, conjurers, what: str) -> tuple[list[Errand], set]:
             # the same two roles kind='give' already carries everywhere else:
             # DoGive moves an item OUT of target_name's bags INTO target_arg's.
             errands.append(Errand(
-                giver.name, "give", f"guid:{stack.guid}",
+                giver.name, GIVE_KIND, f"guid:{stack.guid}",
                 f"{giver.name} conjured {stack.name} and {member.name} carries "
                 f"{member.carries(what)} {what}",
                 taker=member.name,
@@ -493,7 +542,7 @@ def _conjure(conjurers, dependents, what: str) -> tuple[list[Errand], list[str],
         mouths = (f" and {len(dependents)} other(s) with none"
                   if dependents else "")
         errands.append(Errand(
-            giver.name, "conjure",
+            giver.name, CONJURE_KIND,
             f"{CONJURE_WORD[what]} up_to:{target}",
             f"carries {carried} {what}, wants {target} for itself{mouths}",
         ))
@@ -596,6 +645,110 @@ def plan(members, town: Town) -> Plan:
         notes.extend(said)
 
     return Plan(tuple(errands), tuple(notes), tuple(blocked))
+
+
+def counter_keys(members, trip: Plan) -> tuple[tuple[str, str], ...]:
+    """(character, command) for every row of this trip a COUNTER has to serve.
+
+    THE KEYS ARE `_recent_town_keys`' OWN SHAPE, ON PURPOSE (infra#3728). The
+    bridge already reads back `(target_name, command)` for everything this pass
+    queued inside the retry window, so a caller can subtract one from the other
+    and get the one fact the travel errand turns on: is there counter work this
+    trip has not already asked for. Inventing a second shape here would mean a
+    join nobody tests.
+
+    THE REPAIR KEYS COME FROM THE DAMAGE RULE AND NOT FROM `trip`, and that is
+    the whole reason this exists. `plan` can only emit a repair errand when a
+    repairer is already in reach - with an empty Town the same damage comes back
+    as a `blocked` sentence instead - and "no repairer is in reach" is precisely
+    the state the travel aim exists to END. Reading the errands alone would
+    therefore answer "this trip has no counter work" for every character still
+    walking towards the counter, which is the one answer that must never be
+    given while the walk is the point.
+
+    THE BUY KEYS COME FROM `trip`, and for the mirror-image reason. What a
+    vendor stocks and what a character can afford are only knowable once one is
+    in reach, so a purchase nobody can serve is not a reason to walk anybody
+    anywhere - `_buy` says so itself by returning a note rather than an errand.
+    A buy key therefore only appears once the trip can actually make it, which
+    is exactly when releasing the column would walk the family off its own row.
+
+    CONJURE AND GIVE ARE ABSENT - see COUNTER_KINDS. Both are free and need no
+    town at all, so neither is work the travel column serves.
+    """
+    keys = {(m.name, REPAIR_COMMAND) for m in members if _damaged(m)}
+    keys.update((e.member, e.command) for e in trip.errands
+                if e.kind in COUNTER_KINDS)
+    return tuple(sorted(keys))
+
+
+def errand_step(at_counter: bool, rows_outstanding: int,
+                work_unasked: bool) -> str:
+    """What to do with the leader's `repair` aim this pass (infra#3728).
+
+    THE ERRAND HAD NO TERMINAL PATH, WHICH IS THE WHOLE BUG AND IT IS THE SAME
+    BUG infra#3708 FIXED ONE PASS OVER. `_towntrip_once` wrote
+    `travel_npc = 'repair'` unconditionally, before anything was planned, and
+    nothing anywhere ever wrote it back. mod-overseer will not do it for us and
+    refuses on purpose: `IsMaintenanceErrand` is true for exactly
+    vendor/banker/repair/auctioneer, so `TravelAimBook::Release` reaches "errand
+    done, releasing" on arrival and then SKIPS the column write (infra#3655).
+    Measured on wow-dev 2026-09-13: the column was cleared by hand at 18:47, the
+    family walked for the first time in ninety minutes, and by about 18:52 the
+    leader was re-armed as `repair` and all five had stopped again.
+
+    RELEASED ON COMPLETION, NEVER ON ARRIVAL. "The leader got there" is a guess
+    from outside and it would end an errand that is still transacting - the
+    argument infra#3717 makes at length and the reason a fourth input is not
+    "has it been long enough". The two facts below are not guesses: the queue
+    was written by this pass and answered by the world, and the damage rule is
+    the same one that decides whether to queue a row at all.
+
+    THE FOUR ANSWERS, IN THE ORDER THEY ARE ASKED:
+
+      1. ROWS STILL UNANSWERED -> hold. `pending` and `claimed` are the whole of
+         unanswered; every other status is an answer, refusals included. A
+         negative count is the bridge reporting that it could not read the queue
+         at all, and NOT KNOWING IS A REASON TO HOLD: holding a cycle too long
+         costs a cycle, releasing a live errand costs the rows already queued
+         against the counter the family then walks away from.
+
+      2. NOTHING LEFT TO ASK FOR -> release. This is the terminal path, and the
+         reason it does not also test `at_counter` is worth stating: a counter
+         row can only be WRITTEN from a counter, so "every row this trip wanted
+         has already been asked for" cannot be true of a trip that never
+         arrived. It is also the honest answer to the case the issue flagged as
+         awkward - mod-overseer repairs from its own leg via `RepairAtTheCounter`
+         and `RepairMemberHere` without queueing a row at all, and when it does,
+         the damage is simply gone and this trip has nothing left to do.
+
+      3. SOMETHING TO ASK FOR AND ALREADY AT THE COUNTER -> hold. The arrival
+         cycle, and the one place a naive "queue is quiet" rule would break the
+         working half: the rows are about to be written THIS pass, so handing
+         the column back first would let the quest drive pick the family up and
+         walk them off the rows before the world executes them.
+
+      4. SOMETHING TO ASK FOR AND NOT AT A COUNTER -> aim. The ordinary case,
+         and the only one that existed before.
+
+    AND `hold` IS A REAL ANSWER, NOT A DO-NOTHING. Re-asserting a keyword on a
+    leader already standing at the counter makes the aim book erase its own
+    state and read a standing errand as brand new, which releases and re-takes
+    the 300 second counter hold; measured every fifteen seconds for hours on the
+    sell pass, the ceiling was never once reached.
+
+    WHY THIS IS NOT `bag_pressure.vendor_errand_step` WITH ANOTHER ARGUMENT.
+    The sell pass answers "is there work" with a gate ABOVE its settle -
+    `family_town_run_needed` - and this pass has never had one, which is exactly
+    why it re-armed every five minutes whatever the family needed. The third
+    input is that missing gate, so the two functions have different shapes for a
+    real reason and each lives beside the planner whose trip it ends.
+    """
+    if rows_outstanding != 0:
+        return TOWN_ERRAND_HOLD
+    if not work_unasked:
+        return TOWN_ERRAND_RELEASE
+    return TOWN_ERRAND_HOLD if at_counter else TOWN_ERRAND_AIM
 
 
 # ---------------------------------------------------------------- from rows --
