@@ -309,10 +309,12 @@ def reagent_errand(
 # and npc_vendor; see the module docstring for the full table.
 REAGENTS: dict[int, tuple[tuple[int, str, int, int], ...]] = {
     8776: ((2320, "Coarse Thread", 10, 1),),                # Linen Belt (Tailoring)
-    # 9058 (Handstitched Leather Cloak) deliberately absent - that spell id
-    # could not be verified against this world's live database and was
-    # pulled from craft.RECIPES for the same reason; see that table's own
-    # comment beside the 46-55 Leatherworking bracket.
+    # 9058 IS BACK, because the reason it was absent was a misread rather than
+    # a missing fact: an AcquireMethod 1 ability has no trainer_spell row by
+    # definition, which is what "could not be verified" was actually seeing.
+    # Verified against the worldserver's own SkillLineAbility.dbc/Spell.dbc -
+    # see craft.RECIPES' comment beside the 46-55 Leatherworking bracket.
+    9058: ((2320, "Coarse Thread", 10, 1),),                # Handstitched Leather Cloak
     3756: ((2320, "Coarse Thread", 10, 2),),                # Embossed Leather Gloves
     3763: ((2320, "Coarse Thread", 10, 2),),                # Fine Leather Belt
     2167: (

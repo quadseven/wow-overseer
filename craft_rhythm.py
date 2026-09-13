@@ -334,7 +334,9 @@ GATHERED: dict[int, tuple[Reagent, ...]] = {
     # cheapest possible case for a family-wide mode: one trip serves both.
     2660: (Reagent(2835, "Rough Stone", 1),),
     3320: (Reagent(2835, "Rough Stone", 2),),
-    2665: (Reagent(2836, "Coarse Stone", 1),),
+    # 2665 Coarse Sharpening Stone is GONE from craft.RECIPES - its realm learn
+    # floor is 75, not the guide's 65, and Coarse Grinding Stone already owns
+    # 75-90 with a better grey. See craft.py's COLOUR BANDS block.
     3326: (Reagent(2836, "Coarse Stone", 2),),
     3337: (Reagent(2838, "Heavy Stone", 3),),
     9920: (Reagent(7912, "Solid Stone", 4),),
@@ -345,6 +347,7 @@ GATHERED: dict[int, tuple[Reagent, ...]] = {
     # trip genuinely does restock them and they belong here.
     2881: (Reagent(2934, "Ruined Leather Scraps", 3),),
     2152: (Reagent(2318, "Light Leather", 1),),
+    9058: (Reagent(2318, "Light Leather", 2),),
     3756: (Reagent(2318, "Light Leather", 3),),
     3763: (Reagent(2318, "Light Leather", 6),),
     2167: (Reagent(2319, "Medium Leather", 4),),

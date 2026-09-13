@@ -708,33 +708,96 @@ FOCUS_AIMS = {
 # smelt can never displace a crafting recipe by accident; which of the two a
 # character should actually be casting is a question about held ore and held
 # bars, and that lives in `craft_rhythm.errand` where the inventory counts are.
+# ---------------------------------------------------------------------------
+# COLOUR BANDS: EVERY BRACKET EDGE IN THIS TABLE IS NOW THE REALM'S OWN NUMBER,
+# AND TEN OF THEM WERE NOT (this pass, part of infra#3731).
+#
+# Until now a bracket edge came from a leveling guide's stated range, shifted by
+# a point where two entries collided. That is the right source for the ROUTE -
+# which recipe, in what order - and it is the WRONG source for the edges, because
+# an edge is a fact about this worldserver's own `SkillLineAbility.dbc` and a
+# guide cannot know it. Every entry was re-derived against the md5-verified DBCs
+# (`Spell.dbc` 543b9fe61355b6a77a01714d52fea2e5, `SkillLineAbility.dbc`
+# d8c11abfcfe70596cb9068c0e97a1d9a, both matched against the running
+# worldserver pod's own `md5sum`), with this table's two required anchors
+# asserted before any new fact was read: 2963 -> Reagent[0]=2589,
+# ReagentCount[0]=2, and 2657 -> RequiresSpellFocus=3.
+#
+# TWO RULES, AND TEN ENTRIES BROKE ONE OF THEM:
+#
+#   max_skill < TrivialSkillLineRankHigh (grey). At or past grey the core rolls
+#   NO skill-up, so a bracket that reaches its own grey value spends its last
+#   points casting for free. Seven entries did: Bolt of Silk Cloth, Bolt of
+#   Mageweave, Bolt of Runecloth, Heavy Blasting Powder, Dense Blasting Powder,
+#   Solid Grinding Stone, Dense Sharpening Stone - and Bolt of Linen Cloth,
+#   which ran to 60 against a grey of FIFTY.
+#
+#   min_skill >= MinSkillLineRank (the learn floor). Below it the character
+#   cannot hold the spell at all, so DriveCraft's `!HasSpell` branch drops the
+#   errand and logs "a planner bug" on every poll. Two entries did: Coarse
+#   Sharpening Stone (bracket from 65, floor 75) and Lesser Healing Potion
+#   (bracket from 60, floor 80).
+#
+# THIS IS THE ANSWER TO "THREE CHARACTERS HAVE MADE NO PROGRESS", and it is not
+# the one the table's size suggests. The table is not short of recipes - it
+# holds sixty-one across eight skills and covers 1-75 continuously for every
+# trade the family owns. It was short of CORRECT EDGES, and the three stalls
+# line up exactly with the three broken ones:
+#
+#   Og    Tailoring 50      grey 50    casting Bolt of Linen Cloth for nothing
+#   Ugga  Alchemy 14        floor 80   walls at 60, twenty points early
+#   Grug  Blacksmithing 1   floor 75   walls at 65, ten points early
+#
+# A wrong edge is invisible in a way a missing recipe is not: `recipe_for`
+# answers, `craft_errand` writes a spell id, DriveCraft casts it, and the item
+# even appears in the bag. Only the skill never moves.
+#
+# COARSE SHARPENING STONE IS REMOVED RATHER THAN RE-BRACKETED, which is the one
+# judgement call here. Its realm learn floor is 75 and its grey is 80, so its
+# honest bracket would be 75-79 - a window Coarse Grinding Stone already owns
+# with a grey of 100 and a floor of 1. Keeping it would mean handing Grug the
+# strictly worse of two recipes for five points. Rough Grinding Stone absorbs
+# 65-74 instead (its own grey is 85, so it was never finished at 64), and the
+# ladder stays continuous. The same "remove rather than ship unreachable"
+# precedent Heavy Linen Bandage already set above.
+#
+# `tests/test_craft.py`'s `MEASURED_BANDS` is the checked-in projection that
+# keeps this true, exactly as `MEASURED_FOCUS` does for the focus field, and
+# `tools/spell_bands_from_dbc.py` regenerates it in one command.
 RECIPES: dict = {
     SKILL_IDS["tailoring"]: (
-        Recipe(2963, "Bolt of Linen Cloth", min_skill=1, max_skill=60,
+        Recipe(2963, "Bolt of Linen Cloth", min_skill=1, max_skill=49,
                note="2x Linen Cloth (2589) -> 1x Bolt of Linen Cloth (2996), "
                     "no focus needed. NOT spell 3910 - that id is 'Tailoring', "
                     "the Expert rank profession spell, which creates nothing; "
                     "see this table's own header comment for how that went "
-                    "unnoticed (infra#3689)"),
-        Recipe(8776, "Linen Belt", min_skill=61, max_skill=67,
+                    "unnoticed (infra#3689). max_skill was 60 against a "
+                    "TrivialSkillLineRankHigh of 50 - see the COLOUR BANDS "
+                    "block above; Og sat at exactly 50 casting this for free"),
+        Recipe(8776, "Linen Belt", min_skill=50, max_skill=67,
                note="1x Bolt of Linen Cloth (2996), 1x Coarse Thread (2320, "
                     "vendor-bought) -> 1x Linen Belt (item 7026), no focus "
-                    "needed"),
+                    "needed. min_skill was 61; MinSkillLineRank is 1 and "
+                    "TrivialSkillLineRankLow is 50, so 50 is where this stops "
+                    "being a guess and starts being the yellow band"),
         Recipe(2964, "Bolt of Woolen Cloth", min_skill=68, max_skill=100,
                note="3x Wool Cloth -> 1x Bolt of Woolen Cloth, no focus "
                     "needed; min_skill shifted from the guide's 61 to make "
                     "room for Linen Belt directly above, see this table's "
                     "own header comment"),
-        Recipe(3839, "Bolt of Silk Cloth", min_skill=125, max_skill=145,
-               note="4x Silk Cloth -> 1x Bolt of Silk Cloth, no focus needed"),
-        Recipe(3865, "Bolt of Mageweave", min_skill=175, max_skill=185,
+        Recipe(3839, "Bolt of Silk Cloth", min_skill=125, max_skill=144,
+               note="4x Silk Cloth -> 1x Bolt of Silk Cloth, no focus needed; "
+                    "max_skill was 145, its own grey value"),
+        Recipe(3865, "Bolt of Mageweave", min_skill=175, max_skill=184,
                note="4x Mageweave Cloth -> 1x Bolt of Mageweave, no focus "
                     "needed; FOUR, not the five an earlier pass wrote - "
-                    "Spell.dbc, see this table's header comment"),
-        Recipe(18401, "Bolt of Runecloth", min_skill=250, max_skill=260,
+                    "Spell.dbc, see this table's header comment; max_skill "
+                    "was 185, its own grey value"),
+        Recipe(18401, "Bolt of Runecloth", min_skill=250, max_skill=259,
                note="4x Runecloth -> 1x Bolt of Runecloth, no focus needed; "
                     "FOUR, not the five an earlier pass wrote - Spell.dbc, "
-                    "see this table's header comment"),
+                    "see this table's header comment; max_skill was 260, its "
+                    "own grey value"),
     ),
     # FIRST AID (infra#2757's Cooking/First Aid slice) - a SECONDARY skill,
     # not a CRAFTING one: every one of the five already holds it at 1/75
@@ -951,10 +1014,11 @@ RECIPES: dict = {
                     "max_skill=105. Standard Scope, the guide's next "
                     "bracket, is deliberately NOT added here - see the "
                     "module-level comment above"),
-        Recipe(3945, "Heavy Blasting Powder", min_skill=125, max_skill=150,
+        Recipe(3945, "Heavy Blasting Powder", min_skill=125, max_skill=144,
                note="1x Heavy Stone -> 1x Heavy Blasting Powder (item 4377); "
                     "real trainer skill floor is 125, not the guide's stated "
-                    "135 - also the reagent Hi-Explosive Bomb needs later"),
+                    "135 - also the reagent Hi-Explosive Bomb needs later. "
+                    "max_skill was 150, past its own grey of 145"),
         # 151-174 deliberately empty - Whirring Bronze Gizmo / Bronze
         # Framework / Explosive Sheep, see the module-level comment above.
         Recipe(12585, "Solid Blasting Powder", min_skill=175, max_skill=194,
@@ -984,8 +1048,9 @@ RECIPES: dict = {
                     "reagent data. All three reagents come from the three "
                     "brackets directly above, in order, so this recipe is "
                     "reagent-ready by the time a character reaches it"),
-        Recipe(19788, "Dense Blasting Powder", min_skill=251, max_skill=260,
-               note="2x Dense Stone -> 1x Dense Blasting Powder (item 15992)"),
+        Recipe(19788, "Dense Blasting Powder", min_skill=251, max_skill=259,
+               note="2x Dense Stone -> 1x Dense Blasting Powder (item 15992); "
+                    "max_skill was 260, its own grey value"),
         Recipe(19791, "Thorium Widget", min_skill=261, max_skill=285, focus=1,
                note="3x Thorium Bar, 1x Runecloth (item 14047) -> 1x Thorium "
                     "Widget (item 15994)"),
@@ -1025,13 +1090,17 @@ RECIPES: dict = {
                     "no trainer_spell row exists for it"),
     ),
     SKILL_IDS["alchemy"]: (
-        Recipe(2330, "Minor Healing Potion", min_skill=1, max_skill=59,
+        Recipe(2330, "Minor Healing Potion", min_skill=1, max_skill=79,
                note="1x Peacebloom (2447), 1x Silverleaf (765), "
-                    "1x Empty Vial (3371) -> item 118, no focus needed"),
-        Recipe(2337, "Lesser Healing Potion", min_skill=60, max_skill=109,
+                    "1x Empty Vial (3371) -> item 118, no focus needed; grey "
+                    "at 95, so 79 is conservative. max_skill was 59, which "
+                    "handed Ugga to a recipe she cannot learn until 80"),
+        Recipe(2337, "Lesser Healing Potion", min_skill=80, max_skill=109,
                note="1x Minor Healing Potion (118), 1x Briarthorn (2450) "
                     "-> item 858 - THE POTION-AS-REAGENT BRACKET, see the "
-                    "table's own header comment; no focus needed"),
+                    "table's own header comment; no focus needed. min_skill "
+                    "was 60 against a MinSkillLineRank of 80 - a twenty-point "
+                    "dead zone, see the COLOUR BANDS block above"),
         Recipe(3447, "Healing Potion", min_skill=110, max_skill=139,
                note="1x Bruiseweed (2453), 1x Briarthorn (2450), "
                     "1x Leaded Vial (3372) -> item 929, no focus needed"),
@@ -1063,18 +1132,27 @@ RECIPES: dict = {
     SKILL_IDS["blacksmithing"]: (
         Recipe(2660, "Rough Sharpening Stone", min_skill=1, max_skill=29,
                note="1x Rough Stone -> 1x Rough Sharpening Stone, no focus needed"),
-        Recipe(3320, "Rough Grinding Stone", min_skill=30, max_skill=64,
-               note="2x Rough Stone -> 1x Rough Grinding Stone, no focus needed"),
-        Recipe(2665, "Coarse Sharpening Stone", min_skill=65, max_skill=74,
-               note="1x Coarse Stone -> 1x Coarse Sharpening Stone, no focus needed"),
+        # 30-74, not the 30-64 an earlier pass wrote, and the ten points it
+        # gains are the ten Coarse Sharpening Stone could never have covered.
+        # TrivialSkillLineRankHigh is 85, so this still rolls a skill-up the
+        # whole way; the guide hands off at 65 only because a human can visit a
+        # trainer between casts, which this family cannot.
+        Recipe(3320, "Rough Grinding Stone", min_skill=30, max_skill=74,
+               note="2x Rough Stone -> 1x Rough Grinding Stone, no focus "
+                    "needed; grey at 85, so 74 is conservative and 64 was "
+                    "simply the guide's hand-off to a recipe this realm does "
+                    "not teach until 75"),
         Recipe(3326, "Coarse Grinding Stone", min_skill=75, max_skill=90,
-               note="2x Coarse Stone -> 1x Coarse Grinding Stone, no focus needed"),
+               note="2x Coarse Stone -> 1x Coarse Grinding Stone, no focus "
+                    "needed; MinSkillLineRank 1, grey 100"),
         Recipe(3337, "Heavy Grinding Stone", min_skill=125, max_skill=140,
                note="3x Heavy Stone -> 1x Heavy Grinding Stone, no focus needed"),
-        Recipe(9920, "Solid Grinding Stone", min_skill=200, max_skill=210,
-               note="4x Solid Stone -> 1x Solid Grinding Stone, no focus needed"),
-        Recipe(16641, "Dense Sharpening Stone", min_skill=250, max_skill=260,
-               note="1x Dense Stone -> 1x Dense Sharpening Stone, no focus needed"),
+        Recipe(9920, "Solid Grinding Stone", min_skill=200, max_skill=209,
+               note="4x Solid Stone -> 1x Solid Grinding Stone, no focus "
+                    "needed; max_skill was 210, its own grey value"),
+        Recipe(16641, "Dense Sharpening Stone", min_skill=250, max_skill=259,
+               note="1x Dense Stone -> 1x Dense Sharpening Stone, no focus "
+                    "needed; max_skill was 260, its own grey value"),
     ),
     # LEATHERWORKING'S THREAD/DYE BRACKETS (infra#3611) - the fifteen
     # recipes the issue named, every one now that craft_supply.REAGENTS
@@ -1127,19 +1205,48 @@ RECIPES: dict = {
         # SPELL_EFFECT_CREATE_ITEM effect.
         Recipe(2152, "Light Armor Kit", min_skill=20, max_skill=45,
                note="1x Light Leather -> 1x Light Armor Kit, no focus needed"),
-        # 46-55 DELIBERATELY EMPTY. Handstitched Leather Cloak (the
-        # wow-professions.com guide's own pick for this bracket) creates
-        # item 7276 - that item genuinely exists on this world - but spell
-        # 9058 itself could not be verified against this world's live
-        # database: no `trainer_spell` row teaches it (unlike every other
-        # recipe in this table, all confirmed there) and no pattern item in
-        # `item_template` names it either. The only "verification" behind
-        # it was two external wiki pages, which is exactly the guessed-id
-        # risk this table's own discipline exists to refuse - see the
-        # module-level comment on the 151-174 Engineering gap for the same
-        # reasoning applied there. Left empty rather than shipped unverified;
-        # a future pass should confirm the real teaching spell (trainer or
-        # pattern) before filling this in.
+        # 46-55 IS FILLED NOW, AND THE EVIDENCE THAT EMPTIED IT WAS READ
+        # BACKWARDS (this pass, part of infra#3731).
+        #
+        # The gap's own comment refused spell 9058 because "no `trainer_spell`
+        # row teaches it (unlike every other recipe in this table, all
+        # confirmed there) and no pattern item in `item_template` names it
+        # either", and concluded the id was a wiki guess. Both observations are
+        # true. The conclusion does not follow, and this module already knows
+        # why in two other places: `SkillLineAbility.dbc` gives 9058
+        # `AcquireMethod = 1`, and an auto-learned ability has NO trainer row
+        # and NO pattern item BECAUSE NOBODY EVER NEEDS TO BE TAUGHT IT. That
+        # is the identical argument Smelt Copper's own note makes ("no trainer
+        # visit is needed and no trainer_spell row exists for it") and that
+        # Linen Bandage's makes above. Absence from `trainer_spell` is the
+        # SIGNATURE of an auto-learned recipe, not evidence against its id.
+        #
+        # Read straight out of the md5-verified DBCs the header names, with
+        # both anchors asserted first:
+        #
+        #   9058  Handstitched Leather Cloak   skill 165 (Leatherworking)
+        #         MinSkillLineRank 1   AcquireMethod 1   ClassMask 0
+        #         TrivialSkillLineRankLow 40   TrivialSkillLineRankHigh 70
+        #         RequiresSpellFocus 0   EquippedItemClass -1
+        #         2x Light Leather (2318) + 1x Coarse Thread (2320) -> 7276
+        #
+        # ClassMask 0 is every class, so unlike Heavy Linen Bandage's Death
+        # Knight row this one really is granted to all five. The reagents are
+        # the two this table already buys and gathers for its neighbours
+        # (Coarse Thread is in craft_supply.REAGENTS for Linen Belt and
+        # Embossed Leather Gloves; Light Leather is 2152's own gathered
+        # reagent), so nothing new has to be stocked for it.
+        #
+        # It stops at 55 rather than at its grey of 69 because Embossed
+        # Leather Gloves is ORANGE from 56 (yellow 85) and therefore strictly
+        # the better cast there - the hand-off the guide's route already had
+        # right.
+        Recipe(9058, "Handstitched Leather Cloak", min_skill=46, max_skill=55,
+               note="2x Light Leather (2318), 1x Coarse Thread (2320, "
+                    "vendor-bought) -> 1x Handstitched Leather Cloak (item "
+                    "7276), no focus needed. AcquireMethod 1 / ClassMask 0, "
+                    "which is why no trainer_spell row names it - see the "
+                    "comment directly above for the read that got this wrong"),
         Recipe(3756, "Embossed Leather Gloves", min_skill=56, max_skill=100,
                note="3x Light Leather, 2x Coarse Thread (2320, "
                     "vendor-bought) -> item 4239, no focus needed"),

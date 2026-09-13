@@ -58,7 +58,19 @@ LIVE_SKILLS = {
     "Ugga": {"alchemy": 14, "herbalism": 132,
              "first aid": 1, "cooking": 1, "fishing": 1},
 }
-LIVE_SPELLS = {"Bork": 2881, "Grog": 3918, "Grug": 2660, "Og": 2963, "Ugga": 2330}
+# OG'S ENTRY IS 8776 AND IT USED TO BE 2963, AND THAT CHANGE IS THE WHOLE
+# POINT OF THE BRACKET SWEEP (part of infra#3731). The 2026-09-13 roster really
+# did hold 2963 for him - this table is a faithful snapshot - but 2963 is Bolt
+# of Linen Cloth, whose TrivialSkillLineRankHigh is 50, and Og's Tailoring is
+# exactly 50. He was casting a recipe that cannot roll a skill-up, for ever,
+# and the proof is in his own bags: 151 Bolt of Linen Cloth on 2026-09-13,
+# 151 casts that produced an item and not one point. With the edge corrected
+# he derives Linen Belt (8776) instead, whose reagent is those 151 bolts.
+#
+# So the old value is not the baseline this test should defend - it is the bug
+# it should have caught. Kept here as the DERIVED answer, with the historical
+# column value recorded in the sentence above rather than in the assertion.
+LIVE_SPELLS = {"Bork": 2881, "Grog": 3918, "Grug": 2660, "Og": 8776, "Ugga": 2330}
 LIVE_HELD = {
     "Bork": {2934: 0},
     "Grog": {2835: 0},
@@ -410,12 +422,25 @@ class TheLiveFamilyIsTheOneThatWasStuck(unittest.TestCase):
                 self.assertEqual(craft.craft_errand(name, LIVE_SKILLS[name]),
                                  spell)
 
-    def test_every_one_of_them_reads_as_starved(self):
-        for name in sorted(LIVE_SPELLS):
+    def test_the_four_a_gathering_trip_can_help_read_as_starved(self):
+        """FOUR, not five, and the fifth is not an omission. Og's corrected
+        bracket at Tailoring 50 is Linen Belt, whose reagents are a bought
+        Coarse Thread and an own-crafted Bolt of Linen Cloth - no gathering
+        trip returns with either, so `GATHERED` deliberately holds no entry
+        for 8776 and this pass has no opinion about him."""
+        for name in sorted(set(LIVE_SPELLS) - {"Og"}):
             with self.subTest(name=name):
                 got = _stand(name, LIVE_SPELLS[name], LIVE_HELD[name])
                 self.assertEqual(got.verdict, craft_rhythm.SHORT)
                 self.assertEqual(got.casts, 0)
+
+    def test_og_abstains_rather_than_voting_on_a_trip_that_cannot_help_him(self):
+        """The abstain branch, on the one live character that now reaches it.
+        It must not read as SHORT - that would hold the whole family out
+        gathering for a reagent no node drops."""
+        got = _stand("Og", LIVE_SPELLS["Og"], LIVE_HELD["Og"])
+        self.assertEqual(got.verdict, craft_rhythm.UNJUDGED)
+        self.assertIn("no reagent a gathering trip produces", got.why)
 
     def test_the_family_is_sent_gathering(self):
         stands = [_stand(n, LIVE_SPELLS[n], LIVE_HELD[n]) for n in LIVE_SPELLS]
@@ -603,7 +628,10 @@ class SpendOrSmelt(unittest.TestCase):
 
     def test_nothing_changes_for_a_character_with_no_gathering_trade(self):
         for name, skills, spell in (
-            ("Og", {"tailoring": 50, "enchanting": 1}, 2963),
+            # 8776, not 2963: at Tailoring 50 the bolt is grey. Linen Belt's
+            # reagents are bought and own-crafted, so this pass has no opinion
+            # about him either way - which is the branch being tested.
+            ("Og", {"tailoring": 50, "enchanting": 1}, 8776),
             ("Ugga", {"alchemy": 14, "herbalism": 132}, 2330),
             ("Bork", {"leatherworking": 1, "skinning": 12}, 2881),
         ):
