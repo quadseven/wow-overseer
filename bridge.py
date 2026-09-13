@@ -26,6 +26,7 @@ import pymysql
 
 import achievements
 import armory
+import auction
 import bag_pressure
 import bag_upgrade
 import bank
@@ -1817,7 +1818,39 @@ def _write_declared_professions() -> None:
 # `mod-overseer` source, not assumed - a stale comment in that same file
 # claimed `travel_npc='guild bank'` "already resolves", which was the exact
 # unverified assumption that shipped this bug in the first place.
-ECONOMY_ERRANDS = ("vendor", "banker", "repair", "guild banker")
+# `auctioneer` JOINED FOR infra#3712, AND IT IS A FIX RATHER THAN AN ADDITION.
+# The C++ side has carried this keyword in `CounterRoleForAim` since
+# mod-overseer#402, and that function's own comment says the drift this tuple
+# was on the wrong side of: "`auctioneer` has always been one of the keywords
+# TravelRoles() resolves, so a character could be sent to one and did arrive;
+# the role came back None, the arrival released without a hold, which is why no
+# auction row has ever found its character still standing at the counter."
+# #402 fixed that half. This is the other half, and until it was added an
+# auctioneer aim was in neither vocabulary properly:
+#
+#   IT WOULD HAVE BLANKED A TRAINER ERRAND. `_retaskable_from` returns () for
+#   any aim that is not in this tuple, not a ground aim and not numeric, so
+#   `travel_npc='auctioneer'` took `_write_trade_errand`'s OTHER branch - the
+#   unconditional one that also writes `learn_skill`, `unlearn_skill` and
+#   `unlearn_max`. A `professions.Errand` built for a travel aim leaves those
+#   at 0, so writing an auctioneer aim would have silently zeroed an
+#   outstanding learn errand every single time the auction pass ran. That is
+#   mod-overseer#438's bug, self-inflicted, one file over, and it is exactly
+#   what the comment above warns about for `guild banker`.
+#
+#   AND IT COULD NEVER HAVE BEEN HANDED BACK. `_release_trade_errand` guards on
+#   this same tuple, so an auctioneer errand would have latched the leader
+#   permanently - a fifth fuel line of infra#3728, added by the very change
+#   that needed the column.
+#
+# THE `guild banker` HALF OF infra#3712 IS DELIBERATELY NOT TOUCHED HERE. That
+# entry points the other way (it is Python-only, and since infra#3702 nothing
+# writes the keyword at all because it aims at the vault's own spawn instead),
+# so the honest resolution is probably to drop it from both sides rather than
+# add it to the C++ - which is a judgement about a keyword this change does not
+# use, and it belongs in #3712 with the two-way mirror test that issue asks
+# for. Adding `auctioneer` here is the half that has a caller to prove it.
+ECONOMY_ERRANDS = ("vendor", "banker", "repair", "guild banker", "auctioneer")
 
 
 def _retaskable_from(travel_npc: str) -> tuple:
@@ -2678,6 +2711,7 @@ class Bridge(discord.Client):
                 self._guild_bank_loop,
                 self._craft_supply_loop,
                 self._craft_rhythm_loop,
+                self._auction_loop,
                 self._towntrip_loop,
                 self._restore_lost_lives,
             )
@@ -4305,6 +4339,348 @@ class Bridge(discord.Client):
                 await self._craft_rhythm_once()
             except Exception:
                 log.exception("craft_rhythm failed; retrying next cycle")
+            await asyncio.sleep(cycle)
+
+    async def _settle_auction_errand(self, names: list, leader: str) -> str:
+        """Is the auctioneer errand the leader already carries finished?
+
+        THE SAME THREE-WORD STEP `_settle_vendor_errand` USES, and deliberately
+        the same shape rather than a new one: infra#3708 established that an
+        economy errand with no terminal path is a latch, infra#3717 built the
+        release for `vendor`, and infra#3728 is the standing issue that the
+        other keywords still have none. Adding a fifth aim without its release
+        would be adding a fifth entry to that issue in the same change that
+        needed the column, so the release ships with the aim.
+
+        `bag_pressure.vendor_errand_step` IS REUSED RATHER THAN COPIED, because
+        the question is identical once the two facts are supplied: "am I at the
+        counter" and "does the world still owe me answers". Its name is about
+        where it was born and not about what it decides - a second copy under a
+        different name would be two things to keep in step for no behaviour
+        difference, which is the drift infra#3712 exists to complain about.
+        """
+        at_counter = await asyncio.to_thread(_fetch_auctioneer, leader)
+        outstanding = await asyncio.to_thread(_outstanding_auctions, names)
+        step = bag_pressure.vendor_errand_step(bool(at_counter), outstanding)
+        if step == bag_pressure.VENDOR_ERRAND_HOLD:
+            log.info(
+                "auction: leader=%s is standing at %s with %s purchase(s) "
+                "unanswered, so the aim it carries is left exactly as it is",
+                leader, (at_counter or {}).get("name") or "an auctioneer",
+                "an unreadable number of" if outstanding < 0 else outstanding,
+            )
+        elif step == bag_pressure.VENDOR_ERRAND_RELEASE:
+            # THE AIM IS FOR WALKING AND THIS CHARACTER HAS ARRIVED. It is
+            # mod-overseer's COUNTER HOLD that keeps them at the auctioneer
+            # while rows execute, not this column - and for `auctioneer` that
+            # hold only started existing with mod-overseer#402, which is the
+            # whole reason no auction row had ever found its character still
+            # standing at the counter. An aim left on somebody already there
+            # buys nothing and costs the quest drive everything.
+            released = await asyncio.to_thread(
+                _release_trade_errand, leader, auction.AUCTIONEER_ROLE,
+            )
+            if released:
+                log.info(
+                    "auction: leader=%s has answered every purchase the last "
+                    "trip queued, so the errand is handed back", leader,
+                )
+            else:
+                log.debug(
+                    "auction: leader=%s is not carrying an auctioneer errand, "
+                    "so there was nothing to hand back", leader,
+                )
+        return step
+
+    async def _auction_once(self) -> None:
+        """Buy the gathered reagents a standing craft errand needs (infra#3731).
+
+        THE GAP THIS CLOSES, AND THE ONE IT DOES NOT. All five of the family
+        hold a craft errand naming a reagent they have none of, and
+        `DriveCraft` skips a character with no reagents silently.
+        `craft_supply.py` already buys the reagents a VENDOR sells; none of
+        these five is vendor-bought, which is why that module cannot answer it
+        and this one exists. See auction.py's docstring for the reagent table
+        (which is `craft_rhythm.GATHERED`, deliberately not a second copy), why
+        a table exists at all rather than a query, and the price ceiling.
+
+        IT RUNS ALONGSIDE THE GATHERING MODE RATHER THAN INSTEAD OF IT
+        (infra#3734). `craft_rhythm` sends the family out to gather the moment
+        any of them is short, and that is the right call - a character that
+        gathers its own materials is the better steady state. This pass is what
+        makes the trip cheaper: the same shortfall that starts a gathering
+        rotation is a shortfall a few silver would close outright, and the two
+        answers compose. Which is why the shopper list is read from
+        `craft_spell` and NOT from `job`.
+
+        IT BUYS AND IT DOES NOT FEED, and that is stated here as well as in the
+        module because it is the thing a reader will otherwise assume. A bought
+        auction arrives BY MAIL - `DoAuction` says so on its own success path -
+        and `DriveCraft` reads the bags. Collecting needs a character at a
+        mailbox, which on this world is a gameobject rather than a creature (no
+        creature template carries UNIT_NPC_FLAG_MAILBOX at all), so it is a
+        ground aim, a second counter and a second release: its own issue, not
+        this pass. Until it lands this pass fills mailboxes.
+
+        WHICH IS SAFE ONLY BECAUSE THE MAIL IS COUNTED. `auction.short_of`
+        takes the carried count AND the mail count, so a reagent already bought
+        and not yet collected is not bought again. Without that the shortfall
+        would never fall and this pass would re-buy the same reagent every
+        cycle until the house was empty or the purse was.
+
+        THE HOUSE COMES FROM THE AUCTIONEER AND NOTHING IS PLANNED UNTIL THEY
+        HAVE ARRIVED. The three auction houses are disjoint on this realm
+        (`AllowTwoSide.Interaction.Auction = 0`) and `DoAuction` shops in
+        exactly the one its auctioneer's faction serves, refusing every other
+        id as `WrongHouse`. So the listings are not even read until somebody is
+        standing at a counter, at which point the house is a fact rather than a
+        guess - the same discipline `_towntrip_once` states, and the reason
+        this pass holds no state and survives a restart.
+
+        THE WALK IS THE LEADER'S AND THE PURCHASES ARE EVERYBODY'S, the shape
+        `_craft_supply_once` settled on: a follower aimed at anything does not
+        move (`AimedMover` answers `RefuseInFormation`; the family carries one
+        `new rpg` and it is on the leader), while `DoAuction` acts for whoever
+        `target_name` names, wherever that character is standing. So one aim,
+        five shoppers.
+
+        AND THE AIM IS THE KEYWORD, NOT A CREATURE ENTRY, which is the one
+        place this deliberately differs from `_craft_supply_once`. That pass
+        names an entry because "the nearest vendor" and "the nearest vendor
+        that stocks it" are different questions. Here they are not: any
+        auctioneer reaches a whole house. What a bare entry would cost is real
+        and measured - `IsMaintenanceErrand` answers off `CounterRoleForAim`,
+        which knows keywords only, so a numeric aim is released within a cycle
+        and hand-aiming the leader at 8661 closed only 1,027 to 674 yards
+        before being blanked. The keyword survives the cycle AND takes the
+        counter hold that keeps them there while the rows run.
+        """
+        names = sorted((await asyncio.to_thread(_protected_guids)).values())
+        if not names or await self._mid_run(names):
+            return
+
+        # SETTLING THE LAST ERRAND COMES BEFORE DECIDING ON A NEW ONE AND ABOVE
+        # EVERY GATE BELOW, which is infra#3717's ordering fix rather than
+        # tidiness: an errand is only finished BECAUSE the buying worked, and a
+        # release written below the gates would never fire on the cycles that
+        # matter.
+        leader = await asyncio.to_thread(_head_now)
+        if not leader:
+            log.info(
+                "auction: nobody leads the family right now, and a follower "
+                "aimed at an auctioneer does not walk, so this pass takes no "
+                "trip"
+            )
+            return
+        step = await self._settle_auction_errand(names, leader)
+
+        # NOT `_fetch_craft_spells`, WHICH FILTERS job='craft' (infra#3734).
+        # `craft_rhythm` moves the family to MODE_GATHER the moment any of
+        # them is short, which is exactly when this pass has something to buy,
+        # so gating on the crafting job would make this dark on every cycle
+        # that mattered and green on every cycle with nothing to do.
+        spells = await asyncio.to_thread(_fetch_standing_crafts, names)
+        shoppers = {
+            name: spell_id
+            for name, (spell_id, _money) in spells.items()
+            if spell_id in auction.GATHERED
+        }
+        if not shoppers:
+            log.info("auction: nobody is on a craft errand this pass can supply")
+            return
+
+        # THE SHORTFALL IS ASKED BEFORE THE TRIP, because whether to WALK has
+        # nothing to do with where anybody is standing: a family already
+        # carrying twenty casts' worth needs no journey, and taking one would
+        # be a walk with nothing at the end of it. Same separation
+        # `craft_supply.reagent_need` draws from `reagent_errand`.
+        entries, needs = await self._auction_shortfall(shoppers)
+        if not needs:
+            log.info(
+                "auction: every craft errand is stocked for %d casts, so no "
+                "trip is taken", auction.CASTS_PER_TRIP,
+            )
+            return
+
+        # THE AIM, AND ITS RESULT IS READ RATHER THAN DISCARDED (infra#3464).
+        # A leader already carrying another economy errand is a real and
+        # expected refusal - ECONOMY_ERRANDS only retasks an idle traveller -
+        # and until the guild bank pass logged the same return that starvation
+        # was invisible (infra#3663).
+        aimed = True
+        if step == bag_pressure.VENDOR_ERRAND_AIM:
+            aimed = await asyncio.to_thread(
+                _write_trade_errand,
+                professions.Errand(character=leader,
+                                   travel_npc=auction.AUCTIONEER_ROLE),
+            )
+            if not aimed:
+                log.info(
+                    "auction: leader=%s could not be aimed at an auctioneer - "
+                    "the column already holds %r and an economy errand may "
+                    "only retask an idle traveller, so this pass is starved "
+                    "until that one clears (infra#3703)",
+                    leader, await asyncio.to_thread(_current_travel_npc, leader),
+                )
+
+        # NOTHING IS BOUGHT UNTIL SOMEBODY IS AT A COUNTER, and which counter
+        # decides which house. Asked per shopper rather than of the leader
+        # because `DoAuction` runs for the buyer and looks for an auctioneer
+        # near THAT character - the same per-holder reading `_vendor_once`
+        # already does - so a straggler who has not arrived simply buys nothing
+        # this cycle instead of queueing a row that can only be refused.
+        teams = await asyncio.to_thread(_fetch_teams, list(shoppers))
+        seen = await asyncio.to_thread(_recent_auction_keys, GIVE_RETRY_MINUTES)
+        free_slots = await asyncio.to_thread(_fetch_free_slots, list(shoppers))
+        queued = 0
+        spent = 0
+        for name in sorted(shoppers):
+            mine = [need for need in needs if need.shopper == name]
+            if not mine:
+                continue
+            rows, cost = await self._shop_for(
+                name, mine, entries, teams.get(name, ""),
+                purse=spells[name][1],
+                slots=free_slots.get(name, 0),
+                seen=seen,
+            )
+            queued += rows
+            spent += cost
+
+        log.info(
+            "auction: queued %d purchase(s) worth %d copper across %d "
+            "shopper(s), leader=%s aimed=%s. Bought reagents arrive by MAIL "
+            "and are not craftable until a mailbox pass collects them.",
+            queued, spent, len(shoppers), leader, aimed,
+        )
+
+    async def _auction_shortfall(self, shoppers: dict) -> tuple:
+        """Who is short of what, counting the bags and the mail separately.
+
+        Returns `(entries, needs)` - the distinct item entries worth reading
+        the house for, and one `auction.Need` per (character, reagent)
+        shortfall.
+
+        THE TWO READS MEAN TWO DIFFERENT THINGS AND THAT IS THE POINT. The
+        carried count comes through `character_inventory`, which is what
+        `DriveCraft` can actually cast with; the mail count comes through
+        `mail`/`mail_items`, which is what has been bought and not yet
+        collected. `auction.short_of` adds them, because a reagent already on
+        its way must not be bought twice - without that the shortfall never
+        falls and the pass re-buys every cycle for ever - but they are never
+        read by one query, because an `item_instance.owner_guid` count that
+        quietly means both over-counts on three separate measured grounds.
+
+        BATCHED ACROSS THE FAMILY, not one query per character: two round
+        trips total, whatever the roster size, the same batching discipline
+        `_fetch_item_counts` and `_fetch_free_slots` already hold to.
+        """
+        entries = sorted({
+            reagent.entry
+            for spell_id in shoppers.values()
+            for reagent in auction.GATHERED[spell_id]
+        })
+        names = list(shoppers)
+        carried = await asyncio.to_thread(
+            _fetch_counts, _CARRIED_COUNTS_SQL, names, entries, "bags",
+        )
+        in_mail = await asyncio.to_thread(
+            _fetch_counts, _MAIL_COUNTS_SQL, names, entries, "the mail",
+        )
+        needs: list = []
+        for name, spell_id in sorted(shoppers.items()):
+            short = auction.wanted(
+                spell_id,
+                {e: carried.get((name, e), 0) for e in entries},
+                {e: in_mail.get((name, e), 0) for e in entries},
+            )
+            needs.extend(
+                auction.Need(shopper=name, entry=need.entry,
+                             label=need.label, short=need.short)
+                for need in short
+            )
+        return entries, needs
+
+    async def _shop_for(self, name: str, needs: list, entries: list,
+                        team: str, purse: int, slots: int, seen: set) -> tuple:
+        """Buy one character's outstanding reagents where it is standing.
+
+        LIFTED OUT OF `_auction_once` FOR THE REASON infra#3717 ALREADY
+        RECORDED FOR `_settle_vendor_errand`: the complexity number is the same
+        fact as "one question with one answer belongs in one place", stated as
+        a measurement. The pass above decides WHO is short and walks the family;
+        this decides what ONE character takes from the counter it has actually
+        reached, which is a different question with a different set of ways to
+        answer "nothing".
+
+        Returns `(rows queued, copper committed)` so the caller can total a
+        pass without re-deriving either.
+
+        EVERY EXIT IS A SENTENCE. A character still walking, a counter whose
+        house cannot be named, an empty market - all of them are ordinary and
+        all of them get logged, because the failure this whole family of passes
+        keeps re-learning is the silent one: a pass that does nothing and says
+        nothing looks exactly like a pass that is working.
+        """
+        counter = await asyncio.to_thread(_fetch_auctioneer, name)
+        if not counter:
+            log.info(
+                "auction: %s is not standing at an auctioneer yet, so nothing "
+                "is bought for it this cycle", name,
+            )
+            return 0, 0
+
+        house = auction.reachable_house(team, int(counter.get("faction") or 0))
+        if not house:
+            # NOT A GUESS AND NOT A ROW. `DoAuction` picks the pool from the
+            # auctioneer's faction and refuses everything else as `WrongHouse`,
+            # so a house this side cannot name is a house it must not shop in.
+            log.warning(
+                "auction: %s is at %s (faction %s) but this pass cannot say "
+                "which auction house that serves, so it buys nothing rather "
+                "than queueing rows that would be refused as the wrong house",
+                name, counter.get("name") or "an auctioneer",
+                counter.get("faction"),
+            )
+            return 0, 0
+
+        listings = await asyncio.to_thread(_fetch_auction_listings, entries, house)
+        buys, notes = auction.plan_buys(
+            needs, listings, house, {name: purse}, free_slots={name: slots},
+        )
+        for note in notes:
+            log.info("auction: %s", note)
+
+        queued = 0
+        spent = 0
+        for buy in buys:
+            if (buy.shopper, buy.command) in seen:
+                continue
+            if await asyncio.to_thread(_insert_auction, buy.shopper, buy.command):
+                queued += 1
+                spent += buy.spend
+                log.info("auction: %s %s - %s",
+                         buy.shopper, buy.command, buy.why)
+        return queued, spent
+
+    async def _auction_loop(self) -> None:
+        """Own loop and own clock, the same reasoning _craft_supply_loop gives.
+
+        Staggered LAST, past _vendor_loop (90s), _bank_loop (150s),
+        _guild_bank_loop (240s) and _craft_supply_loop (300s), every one of
+        which also writes `travel_npc` through the same ECONOMY_ERRANDS guard.
+        Last because this is the pass with the least urgent errand: a bag at
+        100 per cent stops the family looting now, while a reagent they have
+        been short of for a day keeps perfectly well for another ten minutes.
+        """
+        await self.wait_until_ready()
+        cycle = float(os.environ.get("AUCTION_CYCLE_SECONDS", "600"))
+        await asyncio.sleep(min(cycle, 360.0))
+        while not self.is_closed():
+            try:
+                await self._auction_once()
+            except Exception:
+                log.exception("auction pass failed; retrying next cycle")
             await asyncio.sleep(cycle)
 
     async def _protect_characters(self) -> None:
@@ -7493,6 +7869,41 @@ def _fetch_craft_spells(names: list) -> dict:
         return {row["name"]: (row["craft_spell"], row["money"]) for row in cur.fetchall()}
 
 
+def _fetch_standing_crafts(names: list) -> dict:
+    """name -> (craft_spell, money) for everyone holding a craft errand at all.
+
+    THE SIBLING OF `_fetch_craft_spells`, AND THE DIFFERENCE IS THE WHOLE
+    REASON IT EXISTS. That one filters `r.job = 'craft'`, which is right for
+    `craft_supply`: it buys a vial for somebody about to sit down and cast.
+    This pass is the opposite case. `craft_rhythm.rhythm` moves the family to
+    `MODE_GATHER` (job='quest') the moment ANY of them is short of a gathered
+    reagent, which is precisely the state in which buying that reagent is the
+    useful thing to do - so a job='craft' filter here would make this pass
+    dark exactly when it was needed, and green on the cycles when there was
+    nothing to buy. That is the "true and meaningless dry run" failure this
+    project has shipped before.
+
+    `craft_spell` IS THE ERRAND AND `job` IS THE MODE, and they are genuinely
+    different facts: the column keeps naming the recipe a character is aimed
+    at while the family is out gathering for it. Reading the errand without
+    the mode is what lets the shopping happen on the way.
+    """
+    if not names:
+        return {}
+    marks = ",".join(["%s"] * len(names))
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT r.name, r.craft_spell, c.money "  # noqa: S608 - placeholders from a COUNT, values still bound
+            "FROM overseer_roster r JOIN characters c ON c.name = r.name "
+            "WHERE r.name IN (%s) AND r.craft_spell > 0" % marks,
+            names,
+        )
+        return {
+            row["name"]: (row["craft_spell"], row["money"])
+            for row in cur.fetchall()
+        }
+
+
 def _fetch_item_counts(pairs: list) -> dict:
     """How many of each (name, item entry) pair this character carries right
     now, summed across every stack - craft_supply's `held` is a total, not a
@@ -7633,6 +8044,320 @@ def _fetch_reagent_vendors(spot: dict, entries: list) -> dict:
                 for row in cur.fetchall()
             ]
     return found
+
+
+# WHICH AUCTIONEER A CHARACTER IS ACTUALLY STANDING AT, AND ITS FACTION
+# (infra#3731's auction half). The same shape as `_TOWN_COUNTERS_SQL` against
+# the same snapshot, narrowed to the auctioneer npcflag, and it returns the
+# FACTION because that is the only thing that decides which auction house the
+# character is shopping in: `DoAuction` asks
+# `GetAuctionsMap(auctioneer->GetFaction())` and refuses every auction id from
+# any other pool as `WrongHouse`.
+#
+# ORDERED BY DISTANCE AND LIMITED TO ONE, because `FindAuctioneerInReach` on
+# the C++ side keeps the NEAREST auctioneer that passes
+# `GetNPCIfCanInteractWith`, so a second candidate a yard further away is not
+# the one the executor will use and planning against it would plan against the
+# wrong house.
+_AUCTIONEER_IN_REACH_SQL = (
+    "SELECT ct.entry AS entry, ct.name AS name, ct.faction AS faction, "
+    "SQRT(POW(cr.position_x - s.pos_x, 2) + POW(cr.position_y - s.pos_y, 2)) AS yards "
+    "FROM overseer_snapshot s "
+    "JOIN acore_world.creature cr ON cr.map = s.map_id "
+    "AND ABS(cr.position_x - s.pos_x) <= %s AND ABS(cr.position_y - s.pos_y) <= %s "
+    "JOIN acore_world.creature_template ct ON ct.entry = cr.id "
+    "WHERE s.name = %s AND s.updated_at > NOW() - INTERVAL 120 SECOND "
+    "AND (ct.npcflag & %s) <> 0 "
+    "ORDER BY yards LIMIT 1"
+)
+
+# UNIT_NPC_FLAG_AUCTIONEER. Named here rather than written as a bare 2097152 in
+# a WHERE clause, the same way towntrip.NPC_FLAG_VENDOR is: it is a fact about
+# the game, and `travel.ROLES` already carries the same flag under its own
+# keyword so the two cannot silently mean different things.
+NPC_FLAG_AUCTIONEER = 0x200000
+
+
+def _fetch_auctioneer(name: str) -> dict | None:
+    """The auctioneer `name` is standing at, or None.
+
+    None means "not at a counter", which is the normal state for most of a
+    trip - it is what the world looks like while they are still walking - and
+    the pass plans nothing from it rather than planning against a guess. That
+    is the same "nothing is planned until they have arrived" discipline
+    `_towntrip_once` states and the reason this pass needs no state of its own.
+    """
+    with _connect() as conn, conn.cursor() as cur:
+        try:
+            cur.execute(
+                _AUCTIONEER_IN_REACH_SQL,
+                (TOWN_COUNTER_YARDS, TOWN_COUNTER_YARDS, name,
+                 NPC_FLAG_AUCTIONEER),
+            )
+            row = cur.fetchone()
+        except pymysql.err.MySQLError as exc:
+            # 1054 missing column, 1146 missing table. A world image without
+            # the snapshot cannot say where anybody is standing, and the honest
+            # reading of that is "nobody is at a counter".
+            if exc.args and exc.args[0] in (1054, 1146):
+                log.warning("auction: cannot see where the family is standing")
+                return None
+            raise
+    return dict(row) if row else None
+
+
+# EVERY LIVE LISTING OF THE REAGENTS THIS PASS WANTS, IN ONE HOUSE.
+#
+# NEITHER THE ITEM ENTRY NOR THE STACK SIZE IS IN `auctionhouse`, and the
+# obvious query is wrong because of it. That table has exactly ten columns and
+# holds neither: no `item_template` column and no `itemcount` column (read off
+# SHOW COLUMNS, not remembered - the same discipline `_REAGENT_VENDOR_SQL`
+# records for `cr.id` versus `cr.id1`). The entry is `item_instance.itemEntry`
+# and the stack size is `item_instance.count`, reached through
+# `auctionhouse.itemguid`, which is UNIQUE and one-to-one with
+# `item_instance.guid`. Join integrity was checked against the live table
+# rather than assumed: 2,248 auction rows produced 2,248 rows after both joins,
+# no orphans, so INNER JOIN is safe.
+#
+# `buyoutprice > 0` IS IN THE WHERE CLAUSE AND ALSO IN `auction.usable`. The
+# duplication is deliberate, the same reason `craft_supply._usable` re-applies
+# its own same-map rule: a bid-only listing is a hard exclusion (a bid buys
+# nothing, and `DoAuction` refuses one by name) and a hard rule belongs where a
+# test with no database can reach it as well as in the query that makes the
+# read cheap.
+_AUCTION_LISTINGS_SQL = (
+    "SELECT a.id AS auction_id, a.houseid AS house, a.buyoutprice AS buyout, "
+    "ii.itemEntry AS entry, ii.count AS count, it.name AS label "
+    "FROM auctionhouse a "
+    "JOIN item_instance ii ON ii.guid = a.itemguid "
+    "JOIN acore_world.item_template it ON it.entry = ii.itemEntry "
+    "WHERE a.houseid = %%s AND a.buyoutprice > 0 AND ii.itemEntry IN (%s)"
+)
+
+
+def _fetch_auction_listings(entries: list, house: int) -> list:
+    """Every live buyout listing of `entries` in one auction house.
+
+    ONE QUERY FOR THE WHOLE PASS rather than one per reagent: the six entries
+    `auction.GATHERED` names are a short IN list against a table holding a
+    couple of thousand rows, so a single read is both cheaper and a consistent
+    snapshot - two reads a second apart can disagree, because the seller bot
+    relists on a one minute cycle.
+    """
+    if not entries or int(house) <= 0:
+        return []
+    marks = ",".join(["%s"] * len(entries))
+    sql = _AUCTION_LISTINGS_SQL % marks  # noqa: S608 - placeholders from a COUNT, values still bound
+    with _connect() as conn, conn.cursor() as cur:
+        try:
+            cur.execute(sql, (int(house), *[int(e) for e in entries]))
+            rows = cur.fetchall()
+        except pymysql.err.MySQLError as exc:
+            if exc.args and exc.args[0] in (1054, 1146):
+                log.warning(
+                    "auction: this world image has no readable auction house, "
+                    "so nothing is bought this pass"
+                )
+                return []
+            raise
+    return [
+        auction.Listing(
+            auction_id=int(row["auction_id"]),
+            entry=int(row["entry"]),
+            label=row["label"] or "",
+            count=int(row["count"] or 0),
+            buyout=int(row["buyout"] or 0),
+            house=int(row["house"] or 0),
+        )
+        for row in rows
+    ]
+
+
+# WHAT A CHARACTER ACTUALLY HOLDS, JOINED THROUGH `character_inventory` AND NOT
+# THROUGH `item_instance.owner_guid` (infra#3731). This is a different query
+# from `_fetch_item_counts` on purpose and the difference is load-bearing here.
+#
+# An owner-keyed count silently includes the mailbox: measured on this realm,
+# all 469 live mail attachments keep a fully populated `item_instance` row with
+# `owner_guid` set, and not one of them has a `character_inventory` row. It
+# over-counts on two further grounds - stale rows owned by a character but in
+# neither the bags, the mail nor the house (three of them on this family), and
+# a letter in flight whose `owner_guid` still names the SENDER, which
+# attributes the item to the wrong character entirely. Ugga reads 54 items by
+# owner and 48 by inventory.
+#
+# For THIS pass the distinction decides whether a reagent that has been bought
+# and not yet collected counts as held. It must - see `auction.short_of` - but
+# it must count as MAIL and not as carried, because `DriveCraft` reads the bags
+# and a reagent in the mailbox cannot be cast with. So the two facts are read
+# by two queries that mean two different things.
+_CARRIED_COUNTS_SQL = (
+    "SELECT c.name AS name, ii.itemEntry AS entry, "
+    "COALESCE(SUM(ii.count), 0) AS n "
+    "FROM characters c "
+    "JOIN character_inventory ci ON ci.guid = c.guid "
+    "JOIN item_instance ii ON ii.guid = ci.item "
+    "WHERE c.name IN (%s) AND ii.itemEntry IN (%s) "
+    "GROUP BY c.name, ii.itemEntry"
+)
+
+# WHAT IS BOUGHT AND NOT YET COLLECTED. `mail_items` joined back to `mail` for
+# the receiver, because `mail_items.receiver` exists but `mail.receiver` is the
+# column with the index and the one that survives a letter being returned.
+# Counted per (character, entry) exactly like the carried side so the two can
+# be added without either knowing about the other.
+_MAIL_COUNTS_SQL = (
+    "SELECT c.name AS name, ii.itemEntry AS entry, "
+    "COALESCE(SUM(ii.count), 0) AS n "
+    "FROM mail m "
+    "JOIN mail_items mi ON mi.mail_id = m.id "
+    "JOIN item_instance ii ON ii.guid = mi.item_guid "
+    "JOIN characters c ON c.guid = m.receiver "
+    "WHERE c.name IN (%s) AND ii.itemEntry IN (%s) "
+    "GROUP BY c.name, ii.itemEntry"
+)
+
+
+def _fetch_counts(sql: str, names: list, entries: list, what: str) -> dict:
+    """`{(name, entry): count}` for one of the two holdings queries above.
+
+    Shared because the two differ only in their FROM clause and the sentence
+    they log when the world image cannot answer; a second copy of the binding
+    and degradation logic would be a second place for the placeholder
+    arithmetic to drift.
+    """
+    if not names or not entries:
+        return {}
+    bound = sql % (",".join(["%s"] * len(names)),  # noqa: S608 - placeholders from a COUNT, values still bound
+                   ",".join(["%s"] * len(entries)))
+    with _connect() as conn, conn.cursor() as cur:
+        try:
+            cur.execute(bound, (*names, *[int(e) for e in entries]))
+            rows = cur.fetchall()
+        except pymysql.err.MySQLError as exc:
+            if exc.args and exc.args[0] in (1054, 1146):
+                log.warning("auction: cannot read %s on this world image", what)
+                return {}
+            raise
+    return {(row["name"], int(row["entry"])): int(row["n"] or 0) for row in rows}
+
+
+_OUTSTANDING_AUCTIONS_SQL = (
+    "SELECT COUNT(*) AS waiting FROM overseer_command "
+    "WHERE kind = 'auction' AND status IN ('pending', 'claimed') "
+    "AND target_name IN (%s)"
+)
+
+
+def _outstanding_auctions(names: list) -> int:
+    """Auction rows the world still owes an answer on, or -1 if unreadable.
+
+    THE ONE FACT THAT ENDS AN AUCTIONEER ERRAND, and the exact shape
+    `_outstanding_sales` already has for the vendor one (infra#3708/#3717).
+    `pending` and `claimed` are the whole of "unanswered"; `delivered` and
+    `error` are both answers, refusals included, and counting the answered ones
+    would hold the errand open for ever on every `auctioneer not in range` row
+    the pass ever wrote - which is the same latch one table over.
+
+    -1 IS "COULD NOT MEASURE" AND IT IS NOT ZERO, for the reason that function
+    gives: returning 0 on a failed read would make an unreadable database look
+    exactly like a finished errand, which is the fail-open direction.
+    """
+    if not names:
+        return 0
+    sql = _OUTSTANDING_AUCTIONS_SQL % ",".join(["%s"] * len(names))  # noqa: S608 - placeholders from a COUNT, values still bound
+    with _connect() as conn, conn.cursor() as cur:
+        try:
+            cur.execute(sql, names)
+            row = cur.fetchone()
+        except pymysql.err.MySQLError as exc:
+            # 1265 is a `kind` ENUM with no 'auction' value: a world whose
+            # image predates the auction migration has been asked for nothing,
+            # so nothing is outstanding.
+            if exc.args and exc.args[0] in (1054, 1146, 1265):
+                log.warning(
+                    "auction: cannot read the auction queue, so no errand is "
+                    "handed back this pass"
+                )
+                return -1
+            raise
+    return int(row["waiting"] or 0) if row else 0
+
+
+def _fetch_teams(names: list) -> dict:
+    """`{name: "alliance"|"horde"|""}` from each character's own race.
+
+    READ FROM THE WORLD RATHER THAN CONFIGURED, because a family's faction is
+    exactly the kind of fact that gets assumed from names and turns out wrong -
+    this one is Gnome, Dwarf and three Humans behind five orcish-sounding
+    names, and another pass had the same mistake corrected in it today.
+    `auction.team_of` owns the race-to-side mapping so there is one copy.
+    """
+    if not names:
+        return {}
+    marks = ",".join(["%s"] * len(names))
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT name, race FROM characters WHERE name IN (%s)" % marks,  # noqa: S608 - placeholders from a COUNT, values still bound
+            names,
+        )
+        return {
+            row["name"]: auction.team_of(int(row["race"] or 0))
+            for row in cur.fetchall()
+        }
+
+
+def _insert_auction(member: str, command: str) -> int:
+    """Queue one kind='auction' row for the world executor.
+
+    `target_arg` is left empty: the auction executor does not read it (the
+    column carries a receiving character for kind='give' and kind='trade', and
+    an auction has no other side this process names).
+    """
+    with _connect() as conn, conn.cursor() as cur:
+        try:
+            cur.execute(
+                "INSERT INTO overseer_command "
+                "(target_name, command, kind, target_arg, source) "
+                "VALUES (%s, %s, %s, %s, %s)",
+                (member, command, auction.AUCTION_KIND, "", "auction"),
+            )
+        except pymysql.err.MySQLError as exc:
+            if exc.args and exc.args[0] in (1146, 1265):
+                log.warning(
+                    "overseer_command.kind has no 'auction' value - %s cannot "
+                    "be sent to the auction house until the worldserver image "
+                    "carrying mod-overseer's auction SQL has shipped",
+                    member,
+                )
+                return 0
+            raise
+        return cur.lastrowid or 0
+
+
+def _recent_auction_keys(minutes: int) -> set:
+    """(character, command) pairs already proposed inside the retry window.
+
+    The auction sibling of `_recent_town_keys`, and it matters more here than
+    it does there: an auction id is bought exactly once, so a second row naming
+    the same id can only ever be refused, and a walk that has not finished yet
+    would otherwise queue an identical row every cycle for as long as the
+    journey takes.
+    """
+    with _connect() as conn, conn.cursor() as cur:
+        try:
+            cur.execute(
+                "SELECT target_name, command FROM overseer_command "
+                "WHERE kind = 'auction' AND source = 'auction' "
+                "AND created_at > NOW() - INTERVAL %s MINUTE",
+                (int(minutes),),
+            )
+        except pymysql.err.MySQLError as exc:
+            if exc.args and exc.args[0] in (1054, 1146, 1265):
+                return set()
+            raise
+        return {(row["target_name"], row["command"]) for row in cur.fetchall()}
+
 
 def _fetch_town(leader: str):
     """What the counters within reach of `leader` can do, as a towntrip.Town.
@@ -8483,6 +9208,7 @@ class HeadlessBridge(Bridge):
                 self._guild_bank_loop,
                 self._craft_supply_loop,
                 self._craft_rhythm_loop,
+                self._auction_loop,
                 self._towntrip_loop,
                 self._restore_lost_lives,
             ) if coro.__name__ not in self.HEADLESS_SKIP
