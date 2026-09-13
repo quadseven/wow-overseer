@@ -293,20 +293,51 @@ class Recipe:
 # the y-axis staying full - the accepted cost of only shipping what this
 # pass could verify.
 #
-# Each spell id and its reagent were checked against two independent public
-# WotLK/classic spell databases (wowhead.com and classicdb.ch), cross-
-# referenced against the wow-professions.com guide's own stated cloth-to-
-# bolt ratios (e.g. 470 Mageweave Cloth -> 94 bolts = 5 cloth/bolt) to catch
-# a source disagreement before trusting it - one source (warcraft.wiki.gg)
-# gave a stale reagent count of 4 for both Mageweave and Runecloth, which the
-# 5-per-bolt ratio from the guide's own totals and both database sources
-# rejected, so the wiki page was NOT used.
+# THIS BLOCK WAS RE-VERIFIED AGAINST THE SERVER ITSELF (infra#3689) and two
+# of the facts it stated were wrong. The earlier pass used "two independent
+# public WotLK/classic spell databases (wowhead.com and classicdb.ch)"
+# cross-referenced against a leveling guide's cumulative reagent totals.
+# This pass read `Spell.dbc` and `SkillLineAbility.dbc` straight out of the
+# RUNNING worldserver pod (/azerothcore/env/dist/data/dbc/) - the files the
+# server itself loaded, and so the only source that cannot disagree with the
+# world the family lives in. Note that `acore_world` still cannot answer
+# this: `skilllineability_dbc` exists but is an empty shell (0 rows) and
+# `spell_dbc` holds only 4492 override rows, none of them these. The DBC
+# FILES, not a SQL table, are the thing to check.
 #
-#   Bolt of Linen Cloth    spell 3910  item 2996  2x Linen Cloth (2589)
-#   Bolt of Woolen Cloth   spell 2964  item 2997  3x Wool Cloth
-#   Bolt of Silk Cloth     spell 3839  item 4305  4x Silk Cloth
-#   Bolt of Mageweave      spell 3865  item 4339  5x Mageweave Cloth
-#   Bolt of Runecloth      spell 18401 item 14048 5x Runecloth
+# WHAT CHANGED, AND WHY IT MATTERED:
+#
+#   * "Bolt of Linen Cloth spell 3910" was NOT Bolt of Linen Cloth. Spell
+#     3910 is named "Tailoring", has no reagents and creates no item: it is
+#     the EXPERT TAILORING rank spell, which a character receives at skill
+#     125. So the 1-60 bracket named a non-recipe, and DriveCraft dropped
+#     every errand built from it - `'Og' has a craft errand for 'Tailoring'
+#     (3910) and does not know the recipe` on a 300-second loop, for as long
+#     as the entry has existed. The real Bolt of Linen Cloth is 2963 (2x
+#     Linen Cloth 2589 -> Bolt of Linen Cloth 2996), exactly as this block's
+#     own reagent note always described. Corroborated three ways: no
+#     `trainer_spell` row teaches 3910; 3 of ~1000 characters hold it, none
+#     below skill 125; and with 2963 written to his roster row Og crafted
+#     six Bolts of Linen Cloth in three minutes and took Tailoring 1 -> 7.
+#
+#   * Mageweave and Runecloth take FOUR cloth per bolt, not five. The
+#     earlier pass found a source (warcraft.wiki.gg) saying 4, rejected it
+#     as "a stale reagent count" on the strength of a guide's arithmetic,
+#     and wrote 5. Spell.dbc says 4 for both. The rejected source was right
+#     and three agreeing secondary sources were wrong. Recorded in full
+#     rather than quietly corrected, because the failure mode is the lesson:
+#     agreement between secondary sources is not evidence, and the note that
+#     wrote the disagreement down is the only reason this was cheap to
+#     settle.
+#
+# Reagent counts below are Spell.dbc's `Reagent[]`/`ReagentCount[]` and the
+# item is its `EffectItemType[]`:
+#
+#   Bolt of Linen Cloth    spell 2963  item 2996  2x Linen Cloth (2589)
+#   Bolt of Woolen Cloth   spell 2964  item 2997  3x Wool Cloth (2592)
+#   Bolt of Silk Cloth     spell 3839  item 4305  4x Silk Cloth (4306)
+#   Bolt of Mageweave      spell 3865  item 4339  4x Mageweave Cloth (4338)
+#   Bolt of Runecloth      spell 18401 item 14048 4x Runecloth (14047)
 #
 # Brackets below are the wow-professions.com guide's own stated ranges for
 # each bolt (a leveling guide's "worth casting here" bracket, same kind of
@@ -334,8 +365,12 @@ class Recipe:
 # covers.
 RECIPES: dict = {
     SKILL_IDS["tailoring"]: (
-        Recipe(3910, "Bolt of Linen Cloth", min_skill=1, max_skill=60,
-               note="2x Linen Cloth -> 1x Bolt of Linen Cloth, no focus needed"),
+        Recipe(2963, "Bolt of Linen Cloth", min_skill=1, max_skill=60,
+               note="2x Linen Cloth (2589) -> 1x Bolt of Linen Cloth (2996), "
+                    "no focus needed. NOT spell 3910 - that id is 'Tailoring', "
+                    "the Expert rank profession spell, which creates nothing; "
+                    "see this table's own header comment for how that went "
+                    "unnoticed (infra#3689)"),
         Recipe(8776, "Linen Belt", min_skill=61, max_skill=67,
                note="1x Bolt of Linen Cloth (2996), 1x Coarse Thread (2320, "
                     "vendor-bought) -> 1x Linen Belt (item 7026), no focus "
@@ -348,9 +383,13 @@ RECIPES: dict = {
         Recipe(3839, "Bolt of Silk Cloth", min_skill=125, max_skill=145,
                note="4x Silk Cloth -> 1x Bolt of Silk Cloth, no focus needed"),
         Recipe(3865, "Bolt of Mageweave", min_skill=175, max_skill=185,
-               note="5x Mageweave Cloth -> 1x Bolt of Mageweave, no focus needed"),
+               note="4x Mageweave Cloth -> 1x Bolt of Mageweave, no focus "
+                    "needed; FOUR, not the five an earlier pass wrote - "
+                    "Spell.dbc, see this table's header comment"),
         Recipe(18401, "Bolt of Runecloth", min_skill=250, max_skill=260,
-               note="5x Runecloth -> 1x Bolt of Runecloth, no focus needed"),
+               note="4x Runecloth -> 1x Bolt of Runecloth, no focus needed; "
+                    "FOUR, not the five an earlier pass wrote - Spell.dbc, "
+                    "see this table's header comment"),
     ),
     # FIRST AID (infra#2757's Cooking/First Aid slice) - a SECONDARY skill,
     # not a CRAFTING one: every one of the five already holds it at 1/75

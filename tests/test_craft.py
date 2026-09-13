@@ -71,9 +71,26 @@ class RecipeForTests(unittest.TestCase):
         self.assertIsNone(craft.recipe_for(goals.SKILL_IDS["enchanting"], 1))
 
     def test_finds_the_bracket_a_skill_value_falls_in(self):
+        # 2963, NOT 3910. Spell 3910 is named "Tailoring" in the
+        # worldserver's own Spell.dbc - the Expert rank profession spell,
+        # no reagents, creates nothing - so this bracket named a non-recipe
+        # for its whole life and DriveCraft dropped every errand built from
+        # it (infra#3689). 2963 is the real Bolt of Linen Cloth, confirmed
+        # by six live casts once the id was corrected.
         recipe = craft.recipe_for(goals.SKILL_IDS["tailoring"], 1)
         self.assertIsNotNone(recipe)
-        self.assertEqual(recipe.spell_id, 3910)
+        self.assertEqual(recipe.spell_id, 2963)
+
+    def test_no_tailoring_bracket_names_a_profession_rank_spell(self):
+        # The exact shape of infra#3689: 3908/3909/3910/3911/12180/26790 are
+        # the Apprentice/Journeyman/Expert/Artisan/Master/Grand Master
+        # Tailoring RANK spells, not recipes. One of them sat in this table
+        # labelled "Bolt of Linen Cloth" because nothing asserted the
+        # difference, and a rank spell creates no item, so the bracket could
+        # never have worked for anyone.
+        rank_spells = {3908, 3909, 3910, 3911, 12180, 26790}
+        for recipe in craft.RECIPES[goals.SKILL_IDS["tailoring"]]:
+            self.assertNotIn(recipe.spell_id, rank_spells)
 
     def test_bracket_boundaries_are_inclusive(self):
         self.assertIsNotNone(craft.recipe_for(goals.SKILL_IDS["tailoring"], 60))
@@ -388,7 +405,7 @@ class CraftErrandTests(unittest.TestCase):
         # deferred in the design doc), so the learned tailoring value must be
         # what answers this.
         spell_id = craft.craft_errand("Og", {"tailoring": 1, "enchanting": 1})
-        self.assertEqual(spell_id, 3910)
+        self.assertEqual(spell_id, 2963)
 
     def test_finds_the_alchemy_recipe_for_uggas_learned_trade(self):
         # Ugga: herbalism + alchemy (professions.ROSTER) - herbalism is a
@@ -476,7 +493,7 @@ class FirstAidAndCookingTests(unittest.TestCase):
         spell_id = craft.craft_errand(
             "Og", {"tailoring": 1, "first aid": 1, "cooking": 1}
         )
-        self.assertEqual(spell_id, 3910)
+        self.assertEqual(spell_id, 2963)
 
     def test_craft_errand_zero_for_first_aid_not_yet_learned(self):
         # A value of 0 means the trainer errand has not landed yet, the same
