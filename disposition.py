@@ -89,6 +89,23 @@ ALL_ROUTES = frozenset({KEEP, VENDOR, AUCTION, DISENCHANT, GIVE, BANK})
 #               landed, and the realm holds 42 kind='bank' rows. BANK stays
 #               out of this set anyway, because bank.py reaches its own
 #               verdicts against ALL_ROUTES and does not read this one.
+#               THE GUILD BANK IS A DIFFERENT PLACE AND IS NOT REACHABLE,
+#               which matters because the shared pile is what an owner
+#               actually asks for - a personal bank is private, so nothing in
+#               it can be claimed by a sibling or disenchanted by Og. The
+#               mechanism is complete on both sides: `guildbank
+#               .format_item_deposit` renders `bank deposit-item guid:<n>`
+#               byte-identically to what GuildVerb::BankDepositItem parses,
+#               and DoGuild calls Guild::SwapItemsWithInventory against tab
+#               GUILD_BANK_DEPOSIT_TAB_V1 = 0. What is missing is the tab
+#               itself: measured 2026-09-13, all 21 guilds on this realm have
+#               ZERO rows in `guild_bank_tab` and BankMoney 0, the family's
+#               own guild ("Cave", guildid 23) included. SwapItemsWithInventory
+#               is void and silently no-ops when the tab is not purchased, so
+#               every deposit would come back on DoGuild's own witness check
+#               as "the core did not move the item". That is infra#3713, it is
+#               somebody else's change tonight, and until it lands a deposit
+#               policy here would write rows that cannot land.
 #   AUCTION     the executor is NOT a draft. mod-overseer#208 merged as
 #               DoAuction (mod_overseer.cpp:24389): it builds a real
 #               CMSG_AUCTION_SELL_ITEM, calls HandleAuctionSellItem, and
@@ -96,13 +113,35 @@ ALL_ROUTES = frozenset({KEEP, VENDOR, AUCTION, DISENCHANT, GIVE, BANK})
 #               out of the house. It stays out of this set for two other
 #               reasons, both facts about THIS process: nothing here writes a
 #               kind='auction' row, and ECONOMY_ERRANDS is ("vendor",
-#               "banker", "repair"), so no pass can put a character within the
-#               5.5 yards of an auctioneer that DoAuction requires.
+#               "banker", "repair", "guild banker") - re-read 2026-09-13, the
+#               fourth keyword landed with infra#3704 and this comment used to
+#               name only three - so STILL no pass can put a character within
+#               the INTERACTION_DISTANCE of an auctioneer that DoAuction's
+#               FindAuctioneerInReach requires. AuctionVerb::List also wants a
+#               `bid:` and a `buyout:` in copper and refuses below the deposit
+#               it charges, and this module's own rule is that an unknown
+#               price is a reason to take the sure thing rather than gamble -
+#               so listing needs a price source as well as a travel keyword.
 #   MAIL        same shape: mod-overseer#219 merged as DoMail, no writer here,
 #               and nothing in this repository knows where a mailbox is.
-#   DISENCHANT  no executor, and `overseer_command.kind` is an ENUM of 18
-#               values that does not contain 'disenchant', so such a row
-#               cannot even be inserted. Og, the family enchanter, is skill
+#   DISENCHANT  NO MECHANISM AT ALL, which is a different and worse answer
+#               than the "shipped but uncalled" pattern every other route
+#               here has. Re-verified 2026-09-13 against the deployed
+#               submodule at production/docker/azerothcore-playerbots/
+#               mod-overseer: `grep -ri disenchant` over all 149 source files
+#               returns ZERO hits - no verb, no handler, no parser, no doc.
+#               `overseer_command.kind` is an ENUM of 20 values (this comment
+#               said 18 and was written before `cast` and `guild` landed; the
+#               live list is in 2026_09_11_00_overseer_guild.sql:149) and
+#               'disenchant' is in none of them, so such a row cannot even be
+#               inserted. NO PYTHON CALLER CAN FIX THIS ONE - it needs the C++
+#               verb, the loot-window resolve and the ENUM migration that
+#               quadseven/mod-overseer#444 (DriveDisenchant) already scopes,
+#               and that issue also reserves the disenchant-vs-vendor rule for
+#               THIS file once there are measured numbers to pick it with. So
+#               the honest thing here is to keep computing the verdict and
+#               keep it out of EXECUTABLE_TODAY, not to build a planner for a
+#               verb that does not exist. Og, the family enchanter, is skill
 #               1 of 75, which would cover 38 of the 155 carried greens.
 #
 # Turning a route on is adding its name here, which is the point of a set
@@ -136,6 +175,71 @@ FIT_HOLDER = "holder"      # the one carrying it would wear it. Keeps.
 FIT_SIBLING = "sibling"    # somebody else would wear it. Hands it over.
 FIT_NOBODY = "nobody"      # asked, and the answer was no. Disposal is open.
 FIT_UNJUDGEABLE = "?"      # the gate ran and could not tell. Keeps.
+
+
+# ---------------------------------------------------------------------------
+# A RECIPE HAS A CLAIMANT TOO, AND IT IS NOT THE ONE `gear.claimant` ANSWERS
+# ABOUT (infra#3731, and the owner's own words: "if others want it they can
+# claim it").
+#
+# `gear.claimant` asks who would WEAR a thing, by slot and item level. That is
+# the right question for a green and a meaningless one for a Pattern: a recipe
+# goes in no slot, so `gear.claimant` refuses it as UNJUDGEABLE (gear.py:632,
+# `item_class not in (WEAPON, ARMOR)`) and `decide` keeps it forever. The
+# mirror question - who could LEARN this - has an exact answer in the item's
+# own `RequiredSkill`, and nothing in this repository was asking it.
+#
+# MEASURED ON THE LIVE REALM, 2026-09-13, reading character_inventory joined to
+# item_template rather than a wiki. The family carries 15 class-9 recipes and
+# THIRTEEN OF THEM ARE IN THE WRONG BAG:
+#
+#     Grog  Pattern: Heavy Woolen Cloak      RequiredSkill 197 tailoring    -> Og
+#     Grog  Plans: Frost Tiger Blade         164 blacksmithing              -> Grug
+#     Grog  Recipe: Elixir of Giant Growth   171 alchemy                    -> Ugga
+#     Grog  Schematic: EZ-Thro Dynamite      202 engineering                -> Grog
+#     Grug  Pattern: White Leather Jerkin    165 leatherworking             -> Bork
+#     Grug  Recipe: Elixir of Minor Agility  171 alchemy                    -> Ugga
+#     Og    Pattern: Dark Leather Tunic      165 leatherworking             -> Bork
+#     Og    Plans: Copper Chain Vest         164 blacksmithing              -> Grug
+#     Og    Plans: Green Iron Boots          164 blacksmithing              -> Grug
+#     Og    Plans: Silvered Bronze Breastpl. 164 blacksmithing              -> Grug
+#     Ugga  Pattern: Gray Woolen Robe        197 tailoring                  -> Og
+#     Ugga  Pattern: Hands of Darkness       197 tailoring                  -> Og
+#     Grug/Og  Manual: Strong Anti-Venom x3  129 first aid                  -> anyone
+#
+# EVERY ONE IS FREELY TRADABLE: `item_template.bonding = 0` and
+# `item_instance.flags & 1 = 0` on all fifteen, checked per copy rather than
+# per template, because a bind-on-equip green somebody wore once is bound
+# while its template still says otherwise (see bag_pressure.item_binding).
+# So the hand-off this opens needs no new verb at all - GIVE has shipped since
+# infra#2597 and has written 137 rows.
+#
+# AND NOTHING WAS EVER GOING TO REACH THEM. Both halves of the economy pass
+# skip a recipe for a different reason, which is why this sat invisible:
+# `_SURPLUS_GEAR_SQL` selects `it.class IN (2, 4)`, so `decide` was never asked;
+# `sellable` requires `quality <= 1` and every recipe above is Quality 2, so the
+# junk half refused them too. They are not mis-routed, they are UNROUTED - the
+# literal "so much crap in their bags" the owner is looking at.
+#
+# THE SKILL RANK IS DELIBERATELY NOT CHECKED HERE. Grug is Blacksmithing 1 and
+# Plans: Green Iron Boots wants 145, so he cannot learn it today - and handing
+# it to him anyway is still right, because he is the only character who will
+# EVER be able to. The alternative is holding it in Og's bag until Grug reaches
+# 145, which is the bag slot the owner is complaining about, spent on an item
+# that can only become more useful where it is going. `character_spell` never
+# receives runtime-granted spells (measured today), so "has he already learned
+# it" is a question this deployment cannot answer at all; the assigned trade is
+# the fact that can be read, and it is the one used.
+LEARNER_UNASKED = "unasked"   # nobody put the question. Keeps, as before.
+LEARNER_HOLDER = "holder"     # the trade is the holder's own. Keeps.
+LEARNER_NOBODY = "nobody"     # no member is assigned the trade. Keeps or banks.
+# Anything else is a NAME: the family member whose assigned trade this teaches.
+
+# `item_template.class` 9 is RECIPE - every Pattern, Plans, Recipe, Schematic,
+# Manual and Formula. Read off acore_world.item_template on 2026-09-13 by
+# sampling what the family actually carries, the same way PROFESSION_BAGS
+# above was derived, and not from a wiki.
+RECIPE_CLASS = 9
 
 # Binding, which decides which routes exist at all.
 BIND_NONE = "none"          # freely tradable and auctionable
@@ -267,6 +371,11 @@ class Item:
     # and 0 is also what the world itself writes for ordinary loot.
     item_class: int = 0
     bag_family: int = 0
+    # `item_template.RequiredSkill`, the skill line a recipe teaches into. 0 is
+    # "no skill gate", which every ordinary green and every vendor trinket
+    # carries, so a caller that has not looked it up gets exactly the behaviour
+    # this module had before the recipe gate existed.
+    required_skill: int = 0
 
 
 @dataclass(frozen=True)
@@ -312,6 +421,19 @@ def trade_tool(item) -> bool:
     and why armour is excluded.
     """
     return _is_tool(item.item_class, item.bag_family)
+
+
+def recipe(item) -> bool:
+    """Is this a recipe that teaches into a named skill line?
+
+    BOTH HALVES ARE REQUIRED. Class 9 alone is not enough: a handful of class-9
+    rows on this world image carry `RequiredSkill = 0`, which means the item
+    gates on nothing and so names no claimant. Those are left to every other
+    rule in this module exactly as they were, because "a recipe for nobody in
+    particular" is not a hand-off, it is ordinary goods.
+    """
+    return bool(int(item.item_class) == RECIPE_CLASS
+                and int(item.required_skill) > 0)
 
 
 def outgrown(item, character_level, margin=10):
@@ -366,7 +488,8 @@ def _auction_is_worth_it(item, family, multiple=AUCTION_BEATS_VENDOR_BY,
 
 
 def decide(item, family, character_level=1, upgrade_for_sibling=False,
-           reagent_held=0, available=ALL_ROUTES, family_fit=FIT_UNASKED):
+           reagent_held=0, available=ALL_ROUTES, family_fit=FIT_UNASKED,
+           learner=LEARNER_UNASKED):
     """One item, one route, with the reason attached.
 
     Order matters and is the argument: every refusal is checked before every
@@ -393,6 +516,15 @@ def decide(item, family, character_level=1, upgrade_for_sibling=False,
     the holder has already reached the required level of. The margin is a
     proxy for the question the gate answers directly, and the branch below
     says why in full.
+
+    `learner` is the recipe half of the same idea and defaults to
+    LEARNER_UNASKED for the same reason: a caller who never asked gets exactly
+    the behaviour this module had before the gate existed. It is the answer to
+    "who in this family could ever learn this", which is a different question
+    from `family_fit`'s "who would wear this" and has a different source - the
+    item's own RequiredSkill against the assigned trade table, rather than
+    slots and item levels. Only a NAME moves anything; both LEARNER_HOLDER and
+    LEARNER_NOBODY keep, and an item that is not a recipe ignores it entirely.
     """
     if not item.known:
         return Verdict(KEEP, "nothing is known about %s, and an unclassified "
@@ -418,6 +550,48 @@ def decide(item, family, character_level=1, upgrade_for_sibling=False,
         # mining, which is what this cost three characters.
         return Verdict(KEEP, "%s is a trade tool, and a tool has no level to "
                              "outgrow" % item.name)
+    if recipe(item) and learner != LEARNER_UNASKED:
+        # ABOVE THE FAMILY-FIT GATE, AND THE WHOLE BRANCH IS DEAD BELOW IT.
+        # This is not a preference about ordering, it is the only position
+        # that works: `gear.claimant` answers UNJUDGEABLE about every class-9
+        # row (it judges by slot, and a Pattern goes in no slot), which
+        # `bag_pressure.family_fits` translates to FIT_UNJUDGEABLE, which
+        # returns KEEP three lines below. A recipe branch written under that
+        # gate could never once have fired.
+        #
+        # IT SITS BESIDE THE TRADE-TOOL REFUSAL FOR THE SAME REASON THAT ONE
+        # GIVES: a recipe is not adventuring loot, so none of the loot
+        # questions underneath - outgrown, binding, the auction multiple -
+        # are about it at all.
+        if learner == LEARNER_HOLDER:
+            return Verdict(KEEP, "%s teaches the trade its holder already "
+                                 "works" % item.name)
+        if learner == LEARNER_NOBODY:
+            # The same judgement, and deliberately the same words, as the
+            # reagent branch below makes about a material for a profession
+            # nobody has taken: the family may still take it, so the item is
+            # not surplus, it is early. `professions.UNASSIGNED` keeps
+            # inscription and jewelcrafting open on purpose for a future
+            # guild recruit, and this is the pile that would be waiting.
+            if family.bank_reachable and BANK in available:
+                return Verdict(BANK, "%s teaches a trade nobody is assigned - "
+                                     "the bank keeps it without spending a bag "
+                                     "slot on a profession the family may "
+                                     "still take" % item.name)
+            return Verdict(KEEP, "%s teaches a trade nobody is assigned - "
+                                 "keeping it rather than selling the family "
+                                 "out of a profession it has not started yet"
+                                 % item.name)
+        if GIVE not in available:
+            return Verdict(KEEP, "%s is %s's trade to learn, and no handover "
+                                 "route is open to it" % (item.name, learner))
+        # CLAIM BEATS EVERY DISPOSAL, which is what the owner asked for out
+        # loud. Reaching this point means the gate ran, named a member, and
+        # that member is not the holder - so the item has an owner inside the
+        # family and disposing of it would be selling the family its own
+        # recipe back later at a vendor's mark-up.
+        return Verdict(GIVE, "%s teaches %s's own trade, and it is sitting in "
+                             "somebody else's bag" % (item.name, learner))
     if family_fit == FIT_HOLDER:
         # Soulbound or not, the character carrying it would wear it. This sits
         # ABOVE the `outgrown` level test on purpose: required level plus a
@@ -541,6 +715,64 @@ def decide(item, family, character_level=1, upgrade_for_sibling=False,
         return Verdict(VENDOR, "%s is outgrown, and vendoring is the only "
                                "route open to it" % item.name)
     return Verdict(KEEP, "%s has no route open to it right now" % item.name)
+
+
+def learners(rows, holders_by_skill) -> dict:
+    """`item_guid -> LEARNER_*`, the recipe half of the family-fit gate.
+
+    `rows` are world rows carrying `item_guid`, `holder`, `item_class` and
+    `required_skill`. `holders_by_skill` maps a skill line id to the ONE family
+    member assigned that trade, and the caller builds it - from
+    `professions.ROSTER` put through `goals.SKILL_IDS` - for the same reason
+    `profession_keeps` takes `worked` and `named` rather than importing the
+    roster: this module is a judgement about items and must not also become the
+    place that knows who the family is. Two spellings of the roster is two
+    answers that can disagree.
+
+    A ROW THIS CANNOT READ IS ABSENT FROM THE RESULT, not defaulted, and a guid
+    that is absent is LEARNER_UNASKED at the point of use - which keeps the
+    item. That is the right answer for every way this comes back short: an
+    older world image without the column, a row with no holder, a class-9 entry
+    that gates on no skill. It is also why this returns only what it positively
+    decided, exactly as `bag_pressure.family_fits` does.
+
+    ONE MEMBER PER TRADE, because `professions.ROSTER` assigns one. If a future
+    roster gives two characters the same trade the caller's mapping collapses
+    them to one name and this hands the recipe to that one, which is a choice
+    about WHO and never about WHETHER - the same distinction `family_gifts`
+    draws between `gear.claims` and `gear.plan`.
+    """
+    by_skill = {}
+    for skill, who in dict(holders_by_skill or {}).items():
+        try:
+            skill_id = int(skill)
+        except (TypeError, ValueError):
+            continue
+        who = str(who or "").strip()
+        if skill_id > 0 and who:
+            by_skill[skill_id] = who
+
+    out = {}
+    for row in rows:
+        try:
+            guid = int(row["item_guid"])
+            holder = str(row["holder"]).strip()
+            item_class = int(row.get("item_class", 0) or 0)
+            required_skill = int(row.get("required_skill", 0) or 0)
+        except (KeyError, TypeError, ValueError):
+            continue
+        if guid <= 0 or not holder:
+            continue
+        if item_class != RECIPE_CLASS or required_skill <= 0:
+            continue
+        who = by_skill.get(required_skill)
+        if not who:
+            out[guid] = LEARNER_NOBODY
+        elif who == holder:
+            out[guid] = LEARNER_HOLDER
+        else:
+            out[guid] = who
+    return out
 
 
 def _trade_of(entry: int, bag_family: int, worked, named) -> str:

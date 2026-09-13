@@ -345,16 +345,50 @@ class TheOneOpinionIsStillTheOnlyOpinion(unittest.TestCase):
         )
         self.assertEqual(importers, ["bag_pressure.py"])
 
+    @staticmethod
+    def _function(name):
+        """One top-level function's source, bounded by the NEXT one.
+
+        THE BOUND IS THE POINT. This used to slice to end of file, which was
+        the same thing only while `family_gifts` happened to be the last
+        function in the module - so adding any function after it silently
+        re-aimed this assertion at code it was never written about. That is
+        the reader being wrong rather than the module, the same way
+        test_ship_manifest's own COPY-block regex once was.
+        """
+        source = (pathlib.Path(__file__).resolve().parents[1]
+                  / "bag_pressure.py").read_text(encoding="utf-8")
+        body = source[source.index("def %s(" % name):]
+        nxt = re.search(r"^def ", body[1:], re.MULTILINE)
+        return body[:nxt.start() + 1] if nxt else body
+
     def test_the_adapter_adds_no_judgement_of_its_own(self):
         """It filters on the owner's mark and then hands everything to
         gear.plan. A threshold here would be the second opinion."""
-        source = (pathlib.Path(__file__).resolve().parents[1]
-                  / "bag_pressure.py").read_text(encoding="utf-8")
-        body = source[source.index("def family_gifts("):]
+        body = self._function("family_gifts")
         self.assertIn("gear.plan(", body)
         for invented in ("item_level", "required_level", "quality"):
             with self.subTest(invented=invented):
                 self.assertNotIn(invented, body)
+
+    def test_the_recipe_adapter_adds_no_judgement_of_its_own_either(self):
+        """The same contract for the recipe half (infra#3731), and the field
+        it must not touch is a different one.
+
+        `recipe_gifts` legitimately plumbs `quality` and `sell_price` into a
+        `disposition.Item`, exactly as `gear_candidates` does - carrying a
+        column is not judging with it. What it must never read is
+        `required_skill_rank`. The SQL selects it, and the decision NOT to gate
+        a hand-off on it is deliberate and argued: Grug is Blacksmithing 1 and
+        Plans: Green Iron Boots wants 145, and he is still the only character
+        who will ever be able to learn it. A rank check here would hold every
+        recipe in the wrong bag until the day it became learnable, which is the
+        bag slot the owner is complaining about.
+        """
+        body = self._function("recipe_gifts")
+        self.assertIn("disposition.learners(", body)
+        self.assertIn("disposition.decide(", body)
+        self.assertNotIn("required_skill_rank", body)
 
 
 if __name__ == "__main__":

@@ -448,3 +448,90 @@ def family_gifts(gear_rows, equipped_rows, names, keep_names=(),
         gear.plan(holdings, characters).grants,
         position_rows=position_rows, free_slots=free_slots,
     )
+
+
+def recipe_gifts(gear_rows, holders_by_skill, keep_names=(),
+                 position_rows=None, free_slots=None):
+    """The carried recipes that belong in another member's bag (infra#3731).
+
+    THE THIRD HAND-OFF, AND THE ONE NOTHING WAS EVEN ASKING ABOUT. `gear.plan`
+    moves a piece somebody would WEAR and `family_fits` guards what may be
+    SOLD; both judge by slot and item level, so both are structurally blind to
+    a Pattern. Measured on the live realm 2026-09-13, that blindness is not
+    theoretical: 13 of the 15 recipes the family carries are in the bag of
+    somebody who can never learn them, and no pass in this process had ever
+    looked at one. See the banner above `disposition.LEARNER_UNASKED` for the
+    full table and for why the skill RANK is deliberately not consulted.
+
+    AN ADAPTER AND NOTHING ELSE, the same contract `family_gifts` above keeps.
+    `disposition.learners` decides who may claim a recipe and
+    `disposition.decide` decides whether that claim beats every other route;
+    this only turns world rows into that question and the answer into the
+    `gear.Grant` shape the insert path already takes. Re-deciding either here
+    is how two answers grow apart.
+
+    IT GOES THROUGH `gear.deliverable` FOR THE SAME REASONS THE GEAR HALF
+    DOES, and not because a recipe is gear: 343 of 755 trade rows died on
+    `characters are too far apart` and Og was measured at 62 of 62 slots used
+    with eight pieces waiting for him. A recipe crossing the family hits both
+    of those walls identically, so it gets the same verb choice and the same
+    room budget rather than a second copy of that hard-won logic.
+
+    `keep_names` is applied before a row is parsed, exactly as it is on every
+    other half of this pass. An owner should not have to know which of four
+    passes would have moved the thing they marked.
+    """
+    kept = [row for row in gear_rows
+            if not owner_keeps(row.get("name", ""), keep_names)]
+    learners = disposition.learners(kept, holders_by_skill)
+    # Nothing is reachable by any route but GIVE for a recipe, and the
+    # module is told exactly that rather than being handed ALL_ROUTES and
+    # trusted to avoid the ones that do not ship.
+    family = disposition.Family()
+    grants = []
+    for row in kept:
+        try:
+            guid = int(row["item_guid"])
+            holder = str(row["holder"]).strip()
+            item_class = int(row["item_class"])
+            item = disposition.Item(
+                name=str(row["name"]),
+                quality=int(row["quality"]),
+                known=True,
+                # A recipe's template bonding is read the same way the gear
+                # half reads it, through the INSTANCE flag, because a recipe
+                # that has been used is soulbound while its template is not.
+                binding=item_binding(row) or disposition.BIND_ON_PICKUP,
+                quest_item=item_class == 12,
+                item_class=item_class,
+                bag_family=int(row.get("bag_family", 0) or 0),
+                required_skill=int(row.get("required_skill", 0) or 0),
+                sell_price=int(row["sell_price"]),
+            )
+            entry = int(row.get("entry", 0) or 0)
+        except (KeyError, TypeError, ValueError):
+            continue
+        if guid <= 0 or not holder:
+            continue
+        learner = learners.get(guid, disposition.LEARNER_UNASKED)
+        verdict = disposition.decide(
+            item, family, available=disposition.EXECUTABLE_TODAY,
+            learner=learner,
+        )
+        if verdict.route != disposition.GIVE:
+            continue
+        # SOULBOUND IS REFUSED HERE AND AGAIN BY THE WORLD. DoGuild and
+        # DoTrade both refuse a bound item on their own side, and so does
+        # this, because a row that can only ever be refused is a row that
+        # should not have been written - the same discipline the gear half
+        # keeps by leaning on `gear.is_upgrade_for`.
+        if item.binding == disposition.BIND_ON_PICKUP:
+            continue
+        grants.append(gear.Grant(
+            holder=holder, taker=learner, entry=entry, name=item.name,
+            guid=guid, reason=verdict.why,
+            said=f"{holder} trade {learner} {item.name}.",
+        ))
+    return gear.deliverable(
+        grants, position_rows=position_rows, free_slots=free_slots,
+    )

@@ -5317,6 +5317,27 @@ class Bridge(discord.Client):
         await self._release_stranded_vendor_errands(names, leader)
 
         free_slots = await asyncio.to_thread(_fetch_free_slots, names)
+
+        # THE RECIPE HAND-OFF RUNS ABOVE THE TOWN-RUN GATE, ON PURPOSE, and it
+        # is the only half of this pass that does (infra#3731).
+        #
+        # WHY IT CANNOT SIT WITH THE OTHERS. The gate below is the right
+        # question for a vendor trip and the wrong one for this: the comment
+        # above it already records that `family_town_run_needed` is False on
+        # MOST cycles now that Og's bags are free, and a Pattern in the wrong
+        # bag is no less misfiled on a quiet cycle. Wiring this underneath
+        # would have shipped a rule that fires only when somebody is nearly
+        # full - which for a family whose bags were just freed is close to
+        # never, and is indistinguishable from not shipping it.
+        #
+        # AND IT COSTS NOTHING THE GATE IS PROTECTING. The gate exists to stop
+        # the family walking to town. This writes kind='trade'/'give' rows
+        # between two characters wherever they already stand: no vendor, no
+        # leader, no counter, and no `travel_npc` - the same argument
+        # `_hand_gear` makes for needing no travel errand, which is why these
+        # two can run on different cycles without racing each other.
+        await self._hand_recipes(names, free_slots)
+
         if not bag_pressure.family_town_run_needed(free_slots):
             log.info("economy: carried vendor goods exist, but bag pressure is below "
                      "the town-run trigger")
@@ -5591,6 +5612,82 @@ class Bridge(discord.Client):
                      grant.taker, grant.verb, grant.name, grant.reason)
         log.info(
             "gear: queued %d/%d hand-off(s) (%d trade, %d give), "
+            "%d held back, %d already queued",
+            len(fresh), decided,
+            sum(1 for g in fresh if g.verb == "trade"),
+            sum(1 for g in fresh if g.verb == "give"),
+            len(plan.notes), len(plan.grants) - len(fresh),
+        )
+
+    async def _hand_recipes(self, names: list, free_slots: dict) -> None:
+        """Move every carried recipe into the bag of whoever works its trade.
+
+        THE CLAIM THE OWNER ASKED FOR, for the one category where "who wants
+        this" has an exact answer instead of a judgement. 13 of the 15 recipes
+        the family carries were measured in the wrong bag on 2026-09-13, and
+        neither half of the economy pass could see one: the gear query selects
+        `class IN (2, 4)` so `decide` was never asked, and `sellable` refuses
+        every Quality 2 so the junk half declined them too. Nothing was
+        mis-routing them - nothing was routing them at all.
+
+        NO NEW VERB AND NO NEW `kind`. Every recipe on the realm is bonding 0
+        with a clear instance flag, so this is kind='trade'/'give' through the
+        hand-off path that has already written 137 rows, and it rides the same
+        `_recent_trade_keys` dedupe so a recipe waiting on a taker who is
+        offline is not re-queued every cycle.
+
+        THE ROOM BUDGET IS THIS PASS'S OWN, and that is a known, bounded
+        imprecision rather than an oversight. `gear.deliverable` budgets free
+        slots across the grants IT is handed, so this pass and `_hand_gear`
+        can each promise the same last slot to the same taker on the same
+        cycle. That is already true between `_hand_gear`, materials.py and
+        bag_upgrade.py - all four read `character_inventory`, which lags
+        fifteen minutes (`PlayerSaveInterval = 900000`), so no reader can see
+        another's queued rows anyway and a shared counter here would be
+        precision the underlying data does not have. The cost when it happens
+        is one refused row and the item staying put, which is the direction
+        every gate in this pass already fails in.
+
+        NO TRAVEL ERRAND IS WRITTEN, deliberately, for exactly the reason
+        `_hand_gear` gives: choosing the verb from the measured distance costs
+        no `travel_npc` column, and #3554 has just finished removing the second
+        writer of travel aims.
+
+        POSITIONS ARE READ HERE rather than passed down, the same choice
+        `_hand_gear` makes and for the same reason: this pass now runs on
+        cycles that return before the vendor half ever reads them.
+        """
+        rows = await asyncio.to_thread(_fetch_surplus_recipes, names)
+        if not rows:
+            log.info("recipes: nobody is carrying a recipe with a skill gate")
+            return
+        positions = await asyncio.to_thread(_fetch_positions, names)
+        plan = bag_pressure.recipe_gifts(
+            rows, _recipe_holders_by_skill(), keep_names=OWNER_KEEPS,
+            position_rows=positions, free_slots=free_slots,
+        )
+        for note in plan.notes:
+            log.info("recipes: %s", note)
+        decided = len(plan.grants) + len(plan.notes)
+        if not plan.grants:
+            log.info(
+                "recipes: considered %d carried recipe(s), decided %d "
+                "hand-off(s), queued none - %d held back above",
+                len(rows), decided, len(plan.notes),
+            )
+            return
+        seen = await asyncio.to_thread(_recent_trade_keys, GIVE_RETRY_MINUTES)
+        fresh = []
+        for grant in plan.grants:
+            if (grant.holder, grant.taker, grant.command) in seen:
+                continue
+            if await asyncio.to_thread(_insert_gear_handoff, grant):
+                fresh.append(grant)
+        for grant in fresh:
+            log.info("recipes: %s -> %s by %s, %s - %s", grant.holder,
+                     grant.taker, grant.verb, grant.name, grant.reason)
+        log.info(
+            "recipes: queued %d/%d hand-off(s) (%d trade, %d give), "
             "%d held back, %d already queued",
             len(fresh), decided,
             sum(1 for g in fresh if g.verb == "trade"),
@@ -7377,6 +7474,87 @@ _SURPLUS_GEAR_SQL = (
     "WHERE bag.guid = ci.guid AND bag.bag = 0 AND bag.slot BETWEEN 19 AND 22)) "
     "AND it.class IN (2, 4) AND it.Quality >= 2"
 )
+
+
+# Carried RECIPES, and a separate query on purpose (infra#3731).
+#
+# WHY NOT JUST WIDEN `_SURPLUS_GEAR_SQL` TO `class IN (2, 4, 9)`. That one read
+# feeds three consumers - `family_fits`, `gear_candidates` and `family_gifts` -
+# and every one of them judges by slot and item level. Class 9 would have been
+# harmless in all three (a recipe answers UNJUDGEABLE, which keeps it), but
+# "harmless today" is exactly the kind of silent input change that the next
+# person to touch a slot rule has no way to see. A recipe is a different
+# question with a different claimant, so it gets its own read and its own pass.
+#
+# THE COLUMN THAT MATTERS IS `RequiredSkill`, which is the skill line the
+# recipe teaches into and the whole basis of the claim. `ii.flags` comes along
+# for the same reason it does on the gear query: a recipe that has been used is
+# soulbound on the INSTANCE while its template still reads bonding 0, and only
+# the instance can say so. Same bag-and-backpack scope as the other two, so
+# nothing equipped and nothing already banked is offered.
+_SURPLUS_RECIPES_SQL = (
+    "SELECT c.name AS holder, ii.guid AS item_guid, ii.itemEntry AS entry, "
+    "ii.count AS count, ii.flags AS instance_flags, it.name AS name, "
+    "it.Quality AS quality, it.SellPrice AS sell_price, it.bonding AS bonding, "
+    "it.class AS item_class, it.BagFamily AS bag_family, "
+    "it.RequiredSkill AS required_skill, "
+    "it.RequiredSkillRank AS required_skill_rank "
+    "FROM character_inventory ci "
+    "JOIN characters c ON c.guid = ci.guid "
+    "JOIN item_instance ii ON ii.guid = ci.item "
+    "JOIN acore_world.item_template it ON it.entry = ii.itemEntry "
+    "WHERE c.name IN (%s) AND ((ci.bag = 0 AND ci.slot BETWEEN 19 AND 38) "
+    "OR ci.bag IN (SELECT bag.item FROM character_inventory bag "
+    "WHERE bag.guid = ci.guid AND bag.bag = 0 AND bag.slot BETWEEN 19 AND 22)) "
+    "AND it.class = 9 AND it.RequiredSkill > 0"
+)
+
+
+def _fetch_surplus_recipes(names: list) -> list:
+    """Read carried recipes; every route decision stays in bag_pressure."""
+    if not names:
+        return []
+    sql = _SURPLUS_RECIPES_SQL % ",".join(["%s"] * len(names))
+    with _connect() as conn, conn.cursor() as cur:
+        try:
+            cur.execute(sql, names)
+        except pymysql.err.MySQLError as exc:
+            # Same two codes the gear read forgives, for the same reason: on a
+            # world image without `item_instance.flags` this side cannot tell a
+            # used recipe from a fresh one, and an empty list keeps everything.
+            if exc.args and exc.args[0] in (1054, 1146):
+                log.warning("carried recipe facts unavailable on this world image")
+                return []
+            raise
+        return [dict(row) for row in cur.fetchall()]
+
+
+def _recipe_holders_by_skill() -> dict:
+    """Skill line id -> the family member assigned that trade.
+
+    Built from `professions.ROSTER` through `professions.skill_id` so the
+    roster is spelled once. `bag_pressure.recipe_gifts` takes this rather than
+    importing professions itself, the same seam `disposition.profession_keeps`
+    already uses for `worked` and `named`.
+
+    PRIMARIES ONLY, AND THAT IS A REFUSAL RATHER THAN AN OVERSIGHT. Nobody is
+    "assigned" First Aid, Cooking or Fishing - all five hold them - so a
+    Manual: Strong Anti-Venom has no single claimant and answers
+    LEARNER_NOBODY, which keeps it exactly where it is. The family carries
+    three of those today. Handing them to an arbitrary member would be this
+    module inventing a roster the roster does not contain, and the fail-closed
+    direction for a claim nobody can name is to move nothing.
+    """
+    out = {}
+    for name in professions.ROSTER:
+        for trade in professions.assigned(name):
+            try:
+                out[professions.skill_id(trade)] = name
+            except KeyError:
+                # A trade with no id in goals.SKILL_IDS names no skill line,
+                # so it can claim nothing. Skipped rather than guessed at.
+                continue
+    return out
 
 
 def _fetch_surplus_gear(names: list) -> list:
