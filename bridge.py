@@ -6061,9 +6061,9 @@ def _recent_guild_bank_keys(minutes: int) -> set:
         try:
             cur.execute(
                 "SELECT target_name, command FROM overseer_command "
-                "WHERE kind = 'guild' AND command LIKE 'bank deposit %' "
+                "WHERE kind = 'guild' AND command LIKE %s "
                 "AND created_at > NOW() - INTERVAL %s MINUTE",
-                (int(minutes),),
+                ("bank deposit %", int(minutes)),
             )
         except pymysql.err.MySQLError as exc:
             # 1054 missing column, 1146 missing table, 1265 a `kind` ENUM with

@@ -143,5 +143,45 @@ class FetchGuildMoneyReadsTheRealSchemaTests(unittest.TestCase):
         self.assertIn("gm.guid = c.guid", self.body)
 
 
+class RecentGuildBankKeysEscapesItsLikePatternTests(unittest.TestCase):
+    """`_recent_guild_bank_keys` crashed every cycle too, right behind
+    `_fetch_guild_money` once that one was fixed - `pymysql.cursors.Cursor.
+    mogrify` runs `query % self._escape_args(args, conn)`, so a literal `%`
+    inside the query string (the `LIKE 'bank deposit %'` clause) collides
+    with pymysql's own %-style substitution: `ValueError: unsupported format
+    character '''`. The fix binds the LIKE pattern as a parameter instead of
+    writing it inline, the same way `minutes` already was - no live pymysql
+    connection is available to this suite, so this pins the query shape as a
+    source-text check, same convention as FetchGuildMoneyReadsTheRealSchemaTests
+    above."""
+
+    def setUp(self):
+        source = BRIDGE.read_text(encoding="utf-8")
+        start = source.index("def _recent_guild_bank_keys(")
+        end = source.index("\ndef ", start + 1)
+        self.body = source[start:end]
+
+    def test_like_pattern_is_bound_not_inlined(self):
+        doc_start = self.body.index('"""')
+        doc_end = self.body.index('"""', doc_start + 3) + 3
+        code = self.body[doc_end:]
+        self.assertNotIn("LIKE 'bank deposit %'", code)
+        self.assertIn("LIKE %s", code)
+        self.assertIn('"bank deposit %"', code)
+
+    def test_the_query_string_itself_has_no_bare_percent(self):
+        # Every '%' the query STRING contains must be one of pymysql's own
+        # placeholders (%s) - a bare one is exactly what crashed live.
+        start = self.body.index('cur.execute(')
+        end = self.body.index(')', self.body.index("MINUTE\""))
+        query_call = self.body[start:end]
+        query_literal = "".join(
+            line.strip().strip('"')
+            for line in query_call.splitlines()
+            if line.strip().startswith('"')
+        )
+        self.assertEqual(query_literal.count("%"), query_literal.count("%s"))
+
+
 if __name__ == "__main__":
     unittest.main()
