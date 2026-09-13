@@ -27,13 +27,25 @@ WHAT THIS DELIVERS IS TRAVEL, NOT TRANSACTION. Aiming a character at a trainer
 makes it walk to the trainer and stand there. It does not train. Buying,
 training, repairing and signing a charter are each their own issue; every one
 of them was blocked on the character being unable to get there at all.
+
+AND ONE OF THE ROLES BELOW IS NOT A CREATURE AT ALL - see the note on
+"guild banker", and `ground_aim`/`vault_aim` at the foot of this file for the
+aim that reaches it instead.
 """
+
+from dataclasses import dataclass
 
 # Canonical keyword -> the UNIT_NPC_FLAG_* the module matches spawns on.
 #
 # Every flag here is in mod-playerbots' own allowed-RPG-target list at the
 # pinned module SHA, so a character standing in front of one of these is a
 # state the rest of the RPG layer already expects and handles.
+#
+# THIS TABLE IS A MIRROR, NOT A WISHLIST. test_travel_npc.py asserts it is
+# EQUAL to mod-overseer's own `TravelAimBook::TravelRoles()` - keys and values,
+# in both directions - so an entry is here because the C++ carries it, and
+# removing one here without removing it there is a test failure, not a fix.
+# That is why the dead entry below is documented rather than deleted.
 ROLES = {
     "trainer": "UNIT_NPC_FLAG_TRAINER",
     "class trainer": "UNIT_NPC_FLAG_TRAINER_CLASS",
@@ -41,6 +53,27 @@ ROLES = {
     "vendor": "UNIT_NPC_FLAG_VENDOR",
     "repair": "UNIT_NPC_FLAG_REPAIR",
     "banker": "UNIT_NPC_FLAG_BANKER",
+    # DEAD ON 3.3.5, AND KEPT ONLY BECAUSE THE MIRROR ABOVE REQUIRES IT
+    # (infra#3702). Counted against the live wow-dev world database rather
+    # than a wiki:
+    #
+    #     SELECT COUNT(*) FROM acore_world.creature_template
+    #      WHERE npcflag & 0x8000000;   -> 0
+    #
+    # Not one creature template in the entire world carries
+    # UNIT_NPC_FLAG_GUILD_BANKER, so `travel_npc = 'guild banker'` can never
+    # resolve to a spawn - not on any map, for any character, ever. The guild
+    # bank in this expansion is a GAMEOBJECT ("Guild Vault",
+    # gameobject_template.type = 34, GUILD_VAULT_GO_TYPE below), of which the
+    # same database has 41 spawns across four maps. `ResolveTravelTarget`'s
+    # role-keyword branch searches `_travelSpawns`, which is built from
+    # creatures, so it searches a table the answer is not in.
+    #
+    # NOTHING IN THIS PROCESS WRITES THIS KEYWORD ANY MORE. The guild bank
+    # pass aims at the vault's own spawn row through `vault_aim` below. This
+    # entry stays so `travel.ROLES == TravelRoles()` keeps holding; making the
+    # C++ side stop claiming the flag is a module change and its own issue,
+    # not something to fake from this side.
     "guild banker": "UNIT_NPC_FLAG_GUILD_BANKER",
     "auctioneer": "UNIT_NPC_FLAG_AUCTIONEER",
     "petitioner": "UNIT_NPC_FLAG_PETITIONER",
@@ -88,6 +121,37 @@ COLUMN_WIDTH = 32
 # Not NULL: mod-overseer reads these with Field::Get<std::string> and a
 # nullable column would put a NULL check in front of every read for no gain.
 NONE = ""
+
+# GAMEOBJECT_TYPE_GUILD_BANK. What a Guild Vault actually is on 3.3.5, and the
+# reason the "guild banker" npcflag above has never matched anything - see its
+# note. Named here rather than written as a bare 34 in a WHERE clause because
+# it is a fact about the game, and facts about the game live in the pure
+# module where a test can reach them.
+GUILD_VAULT_GO_TYPE = 34
+
+# The prefix `ResolveTravelTarget` answers with GROUND instead of a spawn:
+# `at:<map>:<x>,<y>,<z>`, parsed before the NPC index is even built, with
+# `outEntry = 0` because the walk is the whole errand (mod_overseer.cpp).
+GROUND_AIM_PREFIX = "at:"
+
+# HOW MANY DECIMALS A GROUND AIM CARRIES, AND WHY IT IS NOT OUR CHOICE.
+# mod-overseer writes its own `at:` aims with `std::fixed <<
+# std::setprecision(1)` (the berth aim in the crossing coordinator), so one
+# decimal IS the established precision of this column and matching it keeps a
+# Python-written aim byte-identical in shape to a module-written one. It is
+# also what makes the aims FIT: at full float precision the longest Guild
+# Vault spawn in the live world renders as
+#
+#     at:530:-3909.75,-11548.9,-149.957     (33 characters)
+#
+# which is one character past COLUMN_WIDTH and would be TRUNCATED by MySQL
+# outside strict mode - silently turning a real spawn into a coordinate
+# nobody surveyed. At one decimal the same spawn is 30 characters and every
+# one of the 41 live vault spawns fits. Rounding to a tenth of a yard is not
+# hand-authoring a coordinate: the point still comes from the spawn table, and
+# a tenth of a yard is two orders of magnitude inside the 5-yard interact gate
+# `GuildBankInReach` judges arrival by.
+GROUND_AIM_DECIMALS = 1
 
 
 def resolve(text):
@@ -173,3 +237,100 @@ def aim_statements(names, target):
          "WHERE travel_npc <> %%s AND name NOT IN (%s)" % marks,
          (NONE, NONE, *chosen)),
     ]
+
+
+def is_ground_aim(value):
+    """Whether `value` is an `at:<map>:<x>,<y>,<z>` aim rather than a keyword.
+
+    Deliberately a PREFIX test and not a parse: every caller that asks this is
+    asking "which kind of aim am I holding", and the authority on whether the
+    coordinates are readable is `ResolveTravelTarget`, which re-parses them on
+    the other side of the column anyway. A second parser here would be a
+    second opinion that could drift out of step with the first.
+    """
+    return bool(value) and str(value).startswith(GROUND_AIM_PREFIX)
+
+
+def ground_aim(map_id, x, y, z):
+    """The `at:<map>:<x>,<y>,<z>` aim that walks a character to that ground.
+
+    Returns None rather than a too-long or malformed aim, for the same reason
+    mod-overseer's own berth writer refuses one: `overseer_roster.travel_npc`
+    is VARCHAR(32) (`TRAVEL_AIM_COLUMN_CHARS` on that side, COLUMN_WIDTH on
+    this one) and MySQL TRUNCATES rather than refuses outside strict mode. A
+    truncated aim is not a failed aim - it is a DIFFERENT, plausible-looking
+    coordinate that no survey ever produced, which is the one failure this
+    project has already paid for in dead characters. Better to write nothing
+    and say so.
+    """
+    if map_id is None or x is None or y is None or z is None:
+        return None
+    try:
+        where = int(map_id)
+        point = (float(x), float(y), float(z))
+    except (TypeError, ValueError):
+        return None
+    if where < 0:
+        return None
+    aim = "%s%d:%s" % (
+        GROUND_AIM_PREFIX, where,
+        ",".join("%.*f" % (GROUND_AIM_DECIMALS, axis) for axis in point),
+    )
+    return aim if len(aim) <= COLUMN_WIDTH else None
+
+
+@dataclass(frozen=True)
+class VaultAim:
+    """Either the aim that reaches a Guild Vault, or why nobody can be sent.
+
+    Two fields rather than a bare None because the refusals are genuinely
+    different situations and a person reading the log has a different thing to
+    do about each: a vault on another continent is a travel problem, a vault
+    nobody can see is a snapshot problem. `bool(result.aim)` is the success
+    test; `refused` is a whole sentence, already actionable, never a code.
+    """
+
+    aim: str = ""
+    refused: str = ""
+
+
+def vault_aim(spawn, standing_on):
+    """Aim a character standing on map `standing_on` at the Guild Vault `spawn`.
+
+    `spawn` is a row from the live `gameobject` spawn table - {"map_id", "x",
+    "y", "z"} - or None when nothing was found. Reading that row is the same
+    resolution the module already performs for creature spawns, against the
+    table the answer is actually in; it is not hand-authored geometry, and the
+    z is the surveyed one that came with the spawn.
+
+    SAME MAP ONLY, AND THE REFUSAL IS THE POINT. `MoveFarTo` paths through
+    PathGenerator and there is no navmesh across an ocean, so a vault on
+    another map is not a longer walk, it is not a walk. `ResolveTravelTarget`
+    refuses a mismatched map on its own side too; this check exists so the
+    refusal carries a sentence instead of arriving as an aim that silently
+    resolves to nothing.
+    """
+    if standing_on is None:
+        return VaultAim(refused=(
+            "nobody can say which map the leader is standing on - "
+            "overseer_snapshot has no fresh row for it, so the family is "
+            "either offline or the module has stopped writing the snapshot"))
+    if not spawn:
+        return VaultAim(refused=(
+            "no Guild Vault is spawned on map %s, so the family has to travel "
+            "to a map that has one before any deposit can land" % standing_on))
+    where = spawn.get("map_id")
+    if where is None or int(where) != int(standing_on):
+        return VaultAim(refused=(
+            "the nearest Guild Vault is on map %s and the leader is on map %s "
+            "- there is no navmesh between them, so this needs a boat, a "
+            "portal or a flight before an aim can do anything" % (
+                where, standing_on)))
+    aim = ground_aim(where, spawn.get("x"), spawn.get("y"), spawn.get("z"))
+    if not aim:
+        return VaultAim(refused=(
+            "the nearest Guild Vault on map %s cannot be named in the %d "
+            "characters overseer_roster.travel_npc holds, so aiming at it "
+            "would truncate into a coordinate nobody surveyed" % (
+                where, COLUMN_WIDTH)))
+    return VaultAim(aim=aim)

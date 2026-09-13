@@ -58,6 +58,7 @@ import relay
 import tabard
 import towntrip
 import trainjob
+import travel
 import voice
 from transform import Geometry
 
@@ -1799,6 +1800,26 @@ def _retaskable_from(travel_npc: str) -> tuple:
     """
     aim = str(travel_npc or "")
     if aim in ECONOMY_ERRANDS:
+        return ("", aim)
+    # A GROUND AIM IS AN ECONOMY ERRAND TOO (infra#3702). The guild bank pass
+    # no longer writes the `guild banker` keyword - the flag it names matches
+    # no creature in this expansion, see travel.ROLES - it writes the vault's
+    # own spawn as `at:<map>:<x>,<y>,<z>`. That string is in neither
+    # ECONOMY_ERRANDS nor `isdigit`, so without this it would fall through to
+    # the empty tuple and take `_write_trade_errand`'s OTHER branch, blanking
+    # `learn_skill` / `unlearn_skill` on its way past - which is exactly the
+    # bug the ECONOMY_ERRANDS comment above says mod-overseer#438 closed on
+    # the C++ side, re-created one file over.
+    #
+    # IDLE OR THE SAME AIM, AND NOT A REFINEMENT OF ANYTHING. Unlike the
+    # numeric vendor aim below, a vault aim is not a sharper spelling of some
+    # keyword already in the column - the vault is a different errand in a
+    # different place (measured: 121 yards from the vendor counter the leader
+    # was standing at), so overwriting `vendor` with it would be the theft
+    # this guard exists to prevent, not a refinement. That the guild bank is
+    # therefore starved behind a live vendor errand is real, measured, and
+    # infra#3703's to fix - it is not fixed by widening this tuple.
+    if travel.is_ground_aim(aim):
         return ("", aim)
     if aim.isdigit():
         # craft_supply.VENDOR_ROLE rather than a fourth spelling of the word:
@@ -4742,15 +4763,41 @@ class Bridge(discord.Client):
         Deposit only (mod-overseer#437, infra#2831) - see guildbank.py for
         why withdrawal is a separate, harder feature and not attempted here.
 
-        SAME SHAPE AS _bank_once, DELIBERATELY. `travel_npc='guild banker'` is
-        the identical kind of errand: only the leader can be aimed (followers
-        arrive by following, mod-overseer#209), so the errand goes to the
-        leader once and every character's deposit row is queued alongside it,
-        each staying pending until its holder reaches the vault
-        (`GuildBankInReach`, mod-overseer#441). The keyword is `guild banker`,
-        not `guild bank` (infra#3657 follow-up) - `TravelAimBook::TravelRoles()`
-        only defines the former, so the latter never resolved to a walk at
-        all and every deposit came back `no guild bank in reach`.
+        SAME SHAPE AS _bank_once, DELIBERATELY. Only the leader can be aimed
+        (followers arrive by following, mod-overseer#209), so the errand goes
+        to the leader once and every character's deposit row is queued
+        alongside it, each staying pending until its holder reaches the vault
+        (`GuildBankInReach`, mod-overseer#441).
+
+        AND THE AIM IS THE VAULT'S OWN SPAWN, NOT A ROLE KEYWORD (infra#3702).
+        Two previous fixes here argued about which KEYWORD to write - `guild
+        bank` (never defined) and then `guild banker` (defined on both sides,
+        infra#3657) - and both were answering the wrong question, because no
+        keyword can work. Counted against the live world database:
+
+            SELECT COUNT(*) FROM acore_world.creature_template
+             WHERE npcflag & 0x8000000;   -> 0
+
+        Not one creature carries UNIT_NPC_FLAG_GUILD_BANKER, and
+        `ResolveTravelTarget`'s role branch only ever searches creature
+        spawns, so `travel_npc='guild banker'` resolved to nothing for exactly
+        the same reason `guild bank` did - it just did so one layer deeper,
+        which is why the second fix looked right and changed nothing. Every
+        deposit still came back `no guild bank in reach`; measured on the dev
+        realm the night this was found, 20 of them in three hours while five
+        characters carried ~170 gold each.
+
+        A guild bank on 3.3.5 is a GAMEOBJECT - "Guild Vault",
+        `gameobject_template.type = 34` - and the same database has 41 of them
+        spawned across four maps, two of them 123 and 131 yards from where the
+        family was standing. So this pass reads the nearest one out of the
+        live `gameobject` spawn table and writes its own surveyed position as
+        an `at:<map>:<x>,<y>,<z>` aim, which `ResolveTravelTarget` answers with
+        ground before it ever builds the NPC index. That is the same
+        resolution the module already does for creature spawns, against the
+        table the answer is in; see travel.vault_aim for why reading a spawn
+        row is not hand-authoring a coordinate, and _VAULT_SQL for the
+        same-map rule.
 
         NOT IN THE MIDDLE OF A DUNGEON RUN, for the same reason the personal
         bank pass skips one: pulling the leader out to bank is how the party
@@ -4777,15 +4824,58 @@ class Bridge(discord.Client):
             log.info("guild bank: nobody is carrying more than the float")
             return
         leader = await asyncio.to_thread(_head_now)
+        where = (await asyncio.to_thread(_fetch_positions, [leader])).get(leader)
+        spawn = await asyncio.to_thread(_nearest_vault, leader)
+        vault = travel.vault_aim(spawn, where.get("map_id") if where else None)
+        if not vault.aim:
+            # NOT A FAILURE, AND NOT QUEUED EITHER. Every refusal here means
+            # no character can stand at a vault this cycle, and a deposit row
+            # queued into that is a row whose only possible answer is `no
+            # guild bank in reach` - which is precisely the error this pass
+            # has been manufacturing every ten minutes for its whole life.
+            # The sentence comes from travel.vault_aim already actionable.
+            log.info("guild bank: nobody can be sent to a vault - %s", vault.refused)
+            return
         aimed = await asyncio.to_thread(
             _write_trade_errand,
-            professions.Errand(character=leader, travel_npc="guild banker"),
+            professions.Errand(character=leader, travel_npc=vault.aim),
         )
-        if not aimed:
+        # ALREADY STANDING THERE COUNTS AS AIMED, because it is the state the
+        # aim exists to produce. mod-overseer RELEASES a travel aim the moment
+        # the walk arrives (it clears `travel_npc`, which is the signal the
+        # writing pass reads as "arrived"), so the cycle after the family
+        # reaches the vault finds the column empty - and if any other economy
+        # pass claims it in that gap, `aimed` comes back false while five
+        # characters are stood at the vault with gold to hand over. Gating the
+        # queue on the aim alone would skip exactly the cycle that was going
+        # to work. TOWN_COUNTER_YARDS rather than a second threshold of its
+        # own: "is a counter within reach of where this character is standing"
+        # is the same question the town reader already answers, sized to the
+        # core's own interact gate, and one answer to it is better than two.
+        near = spawn.get("d2")
+        at_the_vault = near is not None and float(near) <= TOWN_COUNTER_YARDS ** 2
+        if not aimed and not at_the_vault:
+            # WHAT HOLDS THE COLUMN, NOT JUST THAT SOMETHING DOES (infra#3702).
+            # The predecessor of this line said "already on another errand"
+            # and stopped there, so the one fact needed to tell a starved
+            # pass from a broken one - WHICH errand, and therefore whether it
+            # was live or left behind - was never written down, and the next
+            # reader had to go and measure it by hand. An economy errand may
+            # only retask an IDLE traveller (see _write_trade_errand), so a
+            # leader holding any other one outranks this pass indefinitely.
+            # That starvation is infra#3703 and is NOT fixed here: measured on
+            # wow-dev the leader's `vendor` errand is live and delivering
+            # sales, not a leftover, so the answer is to sequence the town
+            # errands rather than to let this pass steal a working one.
             log.info(
-                "guild bank: leader=%s could not be aimed at the vault - "
-                "already on another errand", leader,
+                "guild bank: leader=%s could not be aimed at the vault (%s) - "
+                "the column already holds %r and an economy errand may only "
+                "retask an idle traveller, so this pass is starved until that "
+                "one clears",
+                leader, vault.aim,
+                await asyncio.to_thread(_current_travel_npc, leader),
             )
+            return
         seen = await asyncio.to_thread(_recent_guild_bank_keys, GIVE_RETRY_MINUTES)
         fresh = []
         for deposit in deposits:
@@ -4794,8 +4884,8 @@ class Bridge(discord.Client):
                 continue
             await asyncio.to_thread(_insert_guild, deposit.name, command, "guildbank")
             fresh.append(deposit)
-        log.info("guild bank: queued %d/%d deposit(s), leader=%s",
-                 len(fresh), len(deposits), leader)
+        log.info("guild bank: queued %d/%d deposit(s), leader=%s aimed at %s",
+                 len(fresh), len(deposits), leader, vault.aim)
 
     async def _guild_bank_loop(self) -> None:
         """Keep the guild bank fed (mod-overseer#437, infra#2831).
@@ -6632,6 +6722,99 @@ def _fetch_guild_money(names: list) -> list:
             names,
         )
         return [dict(row) for row in cur.fetchall()]
+
+
+# The nearest Guild Vault on the map a character is STANDING ON.
+#
+# THE SAME SHAPE AS _TOWN_COUNTERS_SQL, AGAINST A DIFFERENT TABLE, and that is
+# the whole of infra#3702. The town reader joins overseer_snapshot to
+# `acore_world.creature` to find a counter near the leader; a guild bank is not
+# a creature on 3.3.5, so this joins the identical snapshot to
+# `acore_world.gameobject` instead. Everything else is deliberately unchanged:
+# the same live-position source, the same freshness filter, the same reason for
+# both (the `characters` row is written on the player-save timer and can be a
+# quarter of an hour stale, which here would aim the family at a vault near
+# where they USED to be).
+#
+# `g.map = s.map_id` IS THE SAME-MAP RULE, ENFORCED IN THE JOIN. A vault on
+# another continent is not a longer walk - MoveFarTo paths through
+# PathGenerator and there is no navmesh across an ocean - so a cross-map spawn
+# is not a worse candidate, it is not a candidate. travel.vault_aim re-checks
+# it anyway to turn it into a sentence; this is what stops it being found.
+#
+# ORDERED BY THE SQUARE OF THE DISTANCE, NOT THE DISTANCE. The square root is
+# monotonic, so it cannot change which spawn is nearest, and skipping it keeps
+# this a plain arithmetic sort. Z is left out of the ranking on purpose: two
+# vaults a few yards apart in a bank hall differ by a stair, not by a journey,
+# and the walk is planar anyway.
+_VAULT_SQL = (
+    "SELECT g.map AS map_id, g.position_x AS x, g.position_y AS y, "
+    "g.position_z AS z, "
+    "(POW(g.position_x - s.pos_x, 2) + POW(g.position_y - s.pos_y, 2)) AS d2 "
+    "FROM overseer_snapshot s "
+    "JOIN acore_world.gameobject g ON g.map = s.map_id "
+    "JOIN acore_world.gameobject_template gt ON gt.entry = g.id "
+    "WHERE s.name = %s AND s.updated_at > NOW() - INTERVAL 120 SECOND "
+    "AND gt.type = %s "
+    "ORDER BY d2 LIMIT 1"
+)
+
+
+def _nearest_vault(name: str):
+    """The nearest Guild Vault spawn row on `name`'s own map, or None.
+
+    A ROW OUT OF THE SPAWN TABLE, NOT A COORDINATE THIS PROCESS INVENTED.
+    `gameobject.position_x/y/z` is where the world actually put that vault,
+    surveyed with the rest of the map, which is what makes it safe to walk to
+    - see travel.vault_aim, which turns it into the aim.
+
+    None covers three different absences on purpose - no fresh snapshot row,
+    no vault on this map, no gameobject tables at all - because every one of
+    them means the same thing to the caller: nobody can be sent to a vault
+    this pass. travel.vault_aim is where they are told apart for the log.
+    """
+    with _connect() as conn, conn.cursor() as cur:
+        try:
+            cur.execute(_VAULT_SQL, (name, travel.GUILD_VAULT_GO_TYPE))
+        except pymysql.err.MySQLError as exc:
+            # 1054 missing column, 1146 missing table. A world image with no
+            # overseer_snapshot cannot say where anybody is standing, and one
+            # with no gameobject tables has no vaults to find; both are
+            # honestly "no vault in reach" rather than an error to raise.
+            if exc.args and exc.args[0] in (1054, 1146):
+                log.warning("guild bank: cannot see where the family is standing")
+                return None
+            raise
+        row = cur.fetchone()
+        return dict(row) if row else None
+
+
+def _current_travel_npc(name: str) -> str:
+    """Whatever `name`'s travel aim says right now, for a log line.
+
+    READ ONLY, AND ONLY EVER TO SAY SO. This exists because "the leader is on
+    another errand" is not an actionable sentence and "the leader holds
+    'vendor'" is: the first cannot tell a pass that is starved by a live
+    errand from one starved by an errand left behind, and that distinction
+    cost this session an afternoon of guessing. Nothing branches on the
+    answer - `_write_trade_errand` has already decided by the time this is
+    asked, and adding a second reader that could disagree with it would be
+    the "two writers for one aim" fault this file argues against elsewhere.
+
+    The empty string covers every absence - no row, no column, no table -
+    because a log line that cannot say what holds the column should say
+    nothing rather than guess at a reason.
+    """
+    with _connect() as conn, conn.cursor() as cur:
+        try:
+            cur.execute(
+                "SELECT travel_npc FROM overseer_roster WHERE name = %s", (name,))
+        except pymysql.err.MySQLError as exc:
+            if exc.args and exc.args[0] in (1054, 1146):
+                return ""
+            raise
+        row = cur.fetchone()
+        return (row or {}).get("travel_npc") or ""
 
 
 def _recent_guild_bank_keys(minutes: int) -> set:

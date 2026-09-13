@@ -11,8 +11,10 @@ import pathlib
 import unittest
 
 import guildbank
+import travel
 
 BRIDGE = pathlib.Path(__file__).resolve().parents[1] / "bridge.py"
+TRAVEL = pathlib.Path(__file__).resolve().parents[1] / "travel.py"
 MOD_OVERSEER = (
     pathlib.Path(__file__).resolve().parents[3]
     / "docker/azerothcore-playerbots/mod-overseer/src/mod_overseer.cpp"
@@ -244,14 +246,76 @@ class GuildBankTravelAimUsesTheRealKeywordTests(unittest.TestCase):
         self.assertIn('{"guild banker",', self.cpp)
         self.assertNotIn('{"guild bank",', self.cpp)
 
-    def test_bridge_writes_the_real_keyword(self):
+    def test_no_keyword_is_written_because_neither_one_can_work(self):
+        """AND THE KEYWORD ABOVE IS DEAD TOO (infra#3702). This class used to
+        assert bridge.py wrote `travel_npc="guild banker"`, which was the
+        right correction to the previous bug and still could not deposit a
+        copper, because `ResolveTravelTarget`'s role branch searches CREATURE
+        spawns and no creature in the world carries the flag that keyword
+        names:
+
+            SELECT COUNT(*) FROM acore_world.creature_template
+             WHERE npcflag & 0x8000000;   -> 0
+
+        counted against the live wow-dev world database. A guild bank is a
+        gameobject, so the pass now aims at the vault's own spawn row. Both
+        keywords are asserted absent: writing either one back is a return to a
+        mechanism that has never once worked."""
         source = BRIDGE.read_text(encoding="utf-8")
-        self.assertIn('travel_npc="guild banker"', source)
         self.assertNotIn('travel_npc="guild bank"', source)
+        self.assertNotIn('travel_npc="guild banker"', source)
+
+    def test_the_flag_that_keyword_names_is_still_carried_by_no_creature(self):
+        """The C++ table keeps the entry, so travel.ROLES has to keep it too -
+        test_travel_npc.py asserts the two are equal. What must NOT come back
+        is a reader that believes it resolves; travel.py documents it dead at
+        the definition, and this pins that the note stays with it."""
+        self.assertIn("UNIT_NPC_FLAG_GUILD_BANKER", travel.ROLES["guild banker"])
+        note = TRAVEL.read_text(encoding="utf-8")
+        self.assertIn("npcflag & 0x8000000", note)
+
+    def test_the_economy_guard_still_covers_the_ground_aim(self):
+        """`guild banker` stays in ECONOMY_ERRANDS (nothing writes it now, but
+        the set is also the guard against a future writer taking the
+        unconditional branch), and the `at:` aim the pass DOES write has to
+        reach that same branch - otherwise it blanks `learn_skill` on its way
+        past, which is mod-overseer#438's bug re-created one file over.
+
+        THE GUARD MOVED (infra#3692 landed `_retaskable_from` between this
+        being written and merging). It is now a tuple of the values an aim may
+        be written over rather than a condition at the call site, so a ground
+        aim has to be answered THERE - an empty tuple means "not an economy
+        errand" and sends it down the unconditional branch."""
+        source = BRIDGE.read_text(encoding="utf-8")
         self.assertIn('"guild banker"', source[
             source.index("ECONOMY_ERRANDS = ("):
             source.index("\n", source.index("ECONOMY_ERRANDS = ("))
         ])
+        guard = source[source.index("def _retaskable_from("):]
+        guard = guard[:guard.index("\ndef ")]
+        self.assertIn("travel.is_ground_aim(aim)", guard)
+
+    def test_a_ground_aim_may_retask_only_an_idle_traveller(self):
+        """Idle, or already holding this exact aim - and NOT a refinement of
+        anything. The numeric vendor aim may overwrite a plain `vendor`
+        because they are the same errand at two resolutions; a vault is a
+        different errand 121 yards away, so overwriting `vendor` with it would
+        be the theft this guard exists to prevent.
+
+        READ AS SOURCE TEXT, NOT BY CALLING IT, the same as every other
+        bridge assertion in this file: `bridge` imports `discord` and pymysql,
+        which the test environment does not install, so importing it here is
+        an ERROR on CI and passes only on a machine that happens to have them
+        (found exactly that way - green locally, `ModuleNotFoundError: No
+        module named 'discord'` on the runner)."""
+        source = BRIDGE.read_text(encoding="utf-8")
+        guard = source[source.index("def _retaskable_from("):]
+        guard = guard[:guard.index("\ndef ")]
+        branch = guard[guard.index("if travel.is_ground_aim(aim):"):]
+        branch = branch[:branch.index("if aim.isdigit():")]
+        self.assertIn('return ("", aim)', branch)
+        # Not a refinement of `vendor`, unlike the numeric aim below it.
+        self.assertNotIn("VENDOR_ROLE", branch)
 
 
 class GuildBankOnceLogsWhetherTheLeaderWasActuallyAimedTests(unittest.TestCase):
@@ -274,8 +338,124 @@ class GuildBankOnceLogsWhetherTheLeaderWasActuallyAimedTests(unittest.TestCase):
         self.assertIn("_write_trade_errand", self.body)
 
     def test_a_refused_aim_is_logged(self):
-        self.assertIn("if not aimed:", self.body)
+        """Still logged, but the condition gained a second arm (infra#3702):
+        a family already STANDING at the vault is not refused just because
+        some other pass claimed the column in the gap after mod-overseer
+        released the arrived aim. `if not aimed:` alone would skip exactly
+        the cycle that was going to work."""
+        self.assertIn("if not aimed and not at_the_vault:", self.body)
         self.assertIn("log.info(", self.body)
+
+    def test_the_refusal_says_what_holds_the_column(self):
+        """"already on another errand" cannot tell a pass starved by a LIVE
+        errand from one starved by an errand left behind, and that difference
+        is the whole diagnosis. The holder is read and logged."""
+        self.assertIn("_current_travel_npc", self.body)
+
+    def test_nothing_is_queued_when_no_vault_can_be_reached(self):
+        """A deposit queued when nobody can stand at a vault has exactly one
+        possible answer - `no guild bank in reach` - which is the error this
+        pass manufactured every ten minutes for its whole life."""
+        head = self.body[:self.body.index("_recent_guild_bank_keys")]
+        self.assertIn("if not vault.aim:", head)
+        self.assertIn("return", head)
+
+
+class TheVaultAimComesFromTheSpawnTableTests(unittest.TestCase):
+    """infra#3702. The aim is built from a row of `acore_world.gameobject`,
+    which is a surveyed spawn point, and never from a coordinate this process
+    chose - a guessed z has no navmesh and this project has already lost
+    characters to one."""
+
+    def test_the_reader_joins_gameobject_on_the_characters_own_map(self):
+        source = BRIDGE.read_text(encoding="utf-8")
+        sql = source[source.index("_VAULT_SQL = ("):source.index("def _nearest_vault")]
+        self.assertIn("acore_world.gameobject", sql)
+        self.assertIn("overseer_snapshot", sql)
+        # The same-map rule, enforced in the join rather than hoped for.
+        self.assertIn("g.map = s.map_id", sql)
+        # Live position, not the player-save timer.
+        self.assertIn("updated_at >", sql)
+        self.assertNotIn("FROM characters", sql)
+
+    def test_the_gameobject_type_is_the_named_constant_not_a_bare_34(self):
+        source = BRIDGE.read_text(encoding="utf-8")
+        reader = source[source.index("def _nearest_vault"):]
+        reader = reader[:reader.index("\ndef ")]
+        self.assertIn("travel.GUILD_VAULT_GO_TYPE", reader)
+        self.assertEqual(34, travel.GUILD_VAULT_GO_TYPE)
+
+
+class GroundAimFitsTheColumnOrIsRefusedTests(unittest.TestCase):
+    """`overseer_roster.travel_npc` is VARCHAR(32) and MySQL TRUNCATES rather
+    than refuses outside strict mode, so an over-long aim is not a failed aim
+    - it is a different, plausible-looking coordinate nobody surveyed.
+    mod-overseer's own berth writer refuses on the same bound
+    (TRAVEL_AIM_COLUMN_CHARS); this is that rule on the Python side."""
+
+    def test_a_real_vault_spawn_fits(self):
+        # The Gadgetzan vault, read out of the live spawn table.
+        self.assertEqual("at:1:-7203.1,-3821.1,8.6",
+                         travel.ground_aim(1, -7203.14, -3821.13, 8.56098))
+
+    def test_the_longest_live_vault_spawn_still_fits_at_this_precision(self):
+        # At full float precision this one renders as 33 characters, one past
+        # the column; at the precision mod-overseer itself writes, it fits.
+        aim = travel.ground_aim(530, -3909.75, -11548.9, -149.957)
+        self.assertIsNotNone(aim)
+        self.assertLessEqual(len(aim), travel.COLUMN_WIDTH)
+
+    def test_an_aim_too_long_for_the_column_is_refused_not_truncated(self):
+        self.assertIsNone(travel.ground_aim(1000, -17066.66, -17066.66, -17066.66))
+
+    def test_a_missing_coordinate_is_refused(self):
+        self.assertIsNone(travel.ground_aim(1, -7203.14, None, 8.5))
+
+    def test_a_non_numeric_coordinate_is_refused_rather_than_raising(self):
+        self.assertIsNone(travel.ground_aim(1, "over there", -3821.13, 8.5))
+
+    def test_is_ground_aim_tells_an_aim_from_a_keyword(self):
+        self.assertTrue(travel.is_ground_aim("at:1:-7203.1,-3821.1,8.6"))
+        self.assertFalse(travel.is_ground_aim("guild banker"))
+        self.assertFalse(travel.is_ground_aim(""))
+        self.assertFalse(travel.is_ground_aim(None))
+
+
+class AVaultOnAnotherMapIsRefusedWithASentenceTests(unittest.TestCase):
+    """MoveFarTo paths through PathGenerator and there is no navmesh across an
+    ocean, so a cross-map vault is not a longer walk - it is not a walk."""
+
+    def spawn(self, **kw):
+        base = dict(map_id=1, x=-7203.14, y=-3821.13, z=8.56098)
+        base.update(kw)
+        return base
+
+    def test_a_same_map_vault_is_aimed_at(self):
+        got = travel.vault_aim(self.spawn(), 1)
+        self.assertEqual("at:1:-7203.1,-3821.1,8.6", got.aim)
+        self.assertEqual("", got.refused)
+
+    def test_a_cross_map_vault_is_refused(self):
+        got = travel.vault_aim(self.spawn(map_id=530), 1)
+        self.assertEqual("", got.aim)
+        self.assertIn("530", got.refused)
+        self.assertIn("navmesh", got.refused)
+
+    def test_no_spawn_at_all_says_so(self):
+        got = travel.vault_aim(None, 1)
+        self.assertEqual("", got.aim)
+        self.assertIn("map 1", got.refused)
+
+    def test_an_unknown_position_is_its_own_refusal(self):
+        got = travel.vault_aim(self.spawn(), None)
+        self.assertEqual("", got.aim)
+        self.assertIn("overseer_snapshot", got.refused)
+
+    def test_every_refusal_is_a_whole_sentence_and_not_a_code(self):
+        for got in (travel.vault_aim(None, 1),
+                    travel.vault_aim(self.spawn(map_id=530), 1),
+                    travel.vault_aim(self.spawn(), None)):
+            self.assertGreater(len(got.refused.split()), 8, got.refused)
 
 
 if __name__ == "__main__":
