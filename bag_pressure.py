@@ -183,6 +183,70 @@ def vendor_errand_step(at_counter: bool, sales_outstanding: int) -> str:
     """
     if not at_counter:
         return VENDOR_ERRAND_AIM
+    # THE SAME QUESTION `stranded_errand_step` ANSWERS, ASKED IN ONE PLACE. A
+    # leader standing at the counter and a follower nobody is walking differ in
+    # everything EXCEPT what ends the errand, and "a quiet queue is the only
+    # thing that may end one" is the rule this pair of functions exists to
+    # protect. Two copies of it would be two chances for a later edit to make
+    # one of them release on something softer.
+    return stranded_errand_step(sales_outstanding)
+
+
+def stranded_errand_step(sales_outstanding: int) -> str:
+    """What to do with a `vendor` aim nobody is walking to a vendor (infra#3746).
+
+    THE ERRAND THAT IS RELEASED BY NOBODY. `vendor_errand_step` above settles
+    the errand the LEADER carries, and `bridge._settle_vendor_errand` hands it
+    back by naming `_head_now()`. A `vendor` aim that ends up on a FOLLOWER is
+    therefore released by nothing at all: the release names a character that is
+    not the one carrying the column, so the UPDATE matches no row. Measured on
+    wow-dev 2026-09-13 20:20, with infra#3717 deployed, `overseer_roster` held
+    `Bork | lead=0 | travel_npc=vendor` while Grug led - and at 20:45 it still
+    did, with Bork's own sell queue holding 0 `pending` and 0 `claimed` rows
+    against 358 `delivered`.
+
+    IT IS NOT INERT, WHICH IS WHY IT NEEDS A TERMINAL PATH AND NOT A SHRUG.
+    `bridge._aimed_names` counts a non-empty `travel_npc` as aimed,
+    `_give_them_a_life` hands every aimed character `nc +new rpg`, and
+    mod-overseer's `CanBeSentToNpc(botAI)` is exactly
+    `botAI->HasStrategy("new rpg", ...)`. So `TravelHoldsTheWheel` -
+    `!travelTarget.empty() && (CanBeSentToNpc(botAI) || MaySteerItself(name))` -
+    makes itself true off the stale column and stands that follower's quest
+    drive down for ever, exactly as the leader's was. mod-overseer will not
+    clear it either: `vendor` is one of the four aims `IsMaintenanceErrand`
+    covers, so `TravelAimBook::Release` reaches "errand done, releasing" and
+    then skips the column write (the infra#3655 fence). The bridge is the only
+    side that can, and it was naming the wrong character.
+
+    NO `at_counter` ARGUMENT, AND THE ABSENCE IS THE POINT. Arrival is the
+    leader's completion half because the leader is the one the aim WALKS -
+    releasing a leader still on the road would cancel the journey the errand
+    exists to make. A follower's aim walks nobody: mod-overseer's
+    `AimedMover::RefuseInFormation` answers "'Ugga' was sent to 'vendor' but
+    does not carry `new rpg` - nothing walks it anywhere. Followers travel by
+    following the leader; aim the leader instead", and `bridge._head_now` never
+    borrows the lead for an economy errand, so a follower carrying one is not
+    on its way anywhere and will not be. There is no journey to cancel, so
+    asking where it is standing would be asking a question whose answer cannot
+    change what should happen.
+
+    WHICH LEAVES EXACTLY ONE HONEST SIGNAL, AND IT IS THE SAME ONE infra#3717
+    ARGUED FOR: that character's own `kind='sell'` queue going quiet. NOT a
+    timeout, NOT "the column looks stale", NOT "the family is not in town" -
+    every one of those releases an errand for LOOKING finished, which is the
+    half of this the coordinator corrected on infra#3708 and which would break
+    the working half all over again. `bridge._outstanding_sales` returns -1 for
+    "could not read", and a hold on any non-zero covers that with no special
+    case: not knowing is a reason to hold.
+
+    PER CHARACTER AND NOT PER FAMILY, which the leader's half does not need.
+    The leader's errand is settled against the whole family's queue because the
+    leader has to be standing at the counter while ANY holder's rows execute -
+    the family walks as one. A stranded aim is the opposite shape by
+    construction: it is on one row, it moves one character nowhere, and holding
+    it open because a SIBLING still has rows outstanding would leave it latched
+    on exactly the realm state that produced this defect.
+    """
     if sales_outstanding != 0:
         return VENDOR_ERRAND_HOLD
     return VENDOR_ERRAND_RELEASE

@@ -2084,6 +2084,88 @@ def _release_trade_errand(character: str, travel_npc: str) -> bool:
         return bool(cur.rowcount)
 
 
+# HOISTED FOR THE S608 ANCHOR, the same reason `_OUTSTANDING_SALES_SQL` and
+# `_TRADE_CLASS_SQL` are: ruff anchors S608 at the START of the expression, so a
+# noqa on the line carrying the % does not silence a multi-line query. The
+# constant makes the interpolation one short line that can carry its own
+# annotation.
+#
+# `%%s` FOR THE KEYWORD, `%s` FOR THE NAME RUN. Only the second is interpolated
+# by Python; the first survives the `%` as a literal `%s` and reaches MySQL as a
+# bound placeholder, exactly as `_write_trade_errand`'s own guarded UPDATE does
+# it. Getting that backwards formats the keyword into the SQL text, which is
+# what the noqa below would then be lying about.
+_ERRAND_HOLDERS_SQL = (
+    "SELECT name FROM overseer_roster "
+    "WHERE enabled = 1 AND travel_npc = %%s AND name IN (%s)"
+)
+
+
+def _errand_holders(travel_npc: str, names: list) -> list:
+    """Who among `names` is actually carrying this economy errand (infra#3746).
+
+    THE READ THAT WAS MISSING FROM THE RELEASE. `_release_trade_errand` above is
+    a compare-and-swap on one name, and every caller so far has fed it
+    `_head_now()` - which is correct for the errand the leader is walking and
+    silently wrong for one that is not on the leader at all. Nothing in this
+    process ever NAMED the follower, so its column could not empty: measured on
+    wow-dev 2026-09-13, `Bork | lead=0 | travel_npc=vendor` stood for hours
+    while `_settle_vendor_errand` released Grug's column every cycle it could.
+
+    A SECOND READER OF `travel_npc`, AND DELIBERATELY NOT `_standing_travel_aims`.
+    That function reads the same column for the whole roster, and its docstring
+    forbids exactly this: "Nothing in this file may WRITE the column off the
+    back of this read". The prohibition is right for what it guards - a
+    gathering order must not turn a glance at the column into an erase - and
+    re-using it here would either break that rule or quietly weaken it for the
+    gather pass too. One reader per intention is cheaper than one reader with
+    two contracts.
+
+    AND A STALE READ CANNOT BECOME A WRONG ERASE, which is the property that
+    makes a second reader safe here at all (`_current_travel_npc` warns about
+    the opposite case, a second reader that BRANCHES against a decision
+    `_write_trade_errand` has already made). Whatever this returns is only ever
+    a list of candidates: the keyword is asserted again in
+    `_release_trade_errand`'s WHERE clause, so a row that changed hands between
+    this SELECT and that UPDATE matches nothing and is left alone. The worst a
+    stale answer can do is waste one queue read.
+
+    GUARDED ON `ECONOMY_ERRANDS` LIKE THE RELEASE IT FEEDS. Refusing a
+    profession keyword here means no caller can even assemble the list of rows
+    it would need to blank one, which is the same fence one step earlier
+    (mod-overseer#438).
+
+    DEGRADES TO NOBODY. A world image without the column cannot be holding an
+    errand in it, and "nobody is carrying this" is the direction that releases
+    nothing - the safe way to not know, matching every other reader of these
+    columns.
+    """
+    if travel_npc not in ECONOMY_ERRANDS:
+        log.warning(
+            "refusing to look up holders of travel_npc=%r - only an economy "
+            "errand may be handed back, so only one may be hunted for",
+            travel_npc,
+        )
+        return []
+    if not names:
+        return []
+    placeholders = ",".join(["%s"] * len(names))
+    sql = _ERRAND_HOLDERS_SQL % placeholders  # noqa: S608 - placeholders from a COUNT, values still bound
+    with _connect() as conn, conn.cursor() as cur:
+        try:
+            cur.execute(sql, (travel_npc, *names))
+        except pymysql.err.MySQLError as exc:
+            if exc.args and exc.args[0] in (1054, 1146):
+                log.warning(
+                    "overseer_roster is missing the travel errand column - no "
+                    "%s errand can be found to hand back (infra#2757)",
+                    travel_npc,
+                )
+                return []
+            raise
+        return sorted(str(row["name"]) for row in cur.fetchall())
+
+
 def _write_craft_errand(character: str, spell_id: int) -> bool:
     """Put one character's standing craft errand where mod-overseer's
     DriveCraft reads it (infra#440).
@@ -5063,6 +5145,117 @@ class Bridge(discord.Client):
                 )
         return step
 
+    async def _release_stranded_vendor_errands(self, names: list,
+                                               leader: str) -> int:
+        """Hand back a `vendor` aim that is standing on somebody who is not the
+        leader (infra#3746). Returns how many were released.
+
+        THE HALF infra#3717 COULD NOT REACH. `_settle_vendor_errand` above
+        settles the errand `_head_now()` carries and nothing else, and
+        `_release_trade_errand`'s UPDATE is `WHERE name = %s AND travel_npc = %s`
+        - so an aim on any OTHER row is released by nobody, because nobody ever
+        names it. Measured on wow-dev 2026-09-13 20:20 with infra#3717 deployed:
+        `Bork | lead=0 | job=craft | travel_npc=vendor` while Grug led, and at
+        20:45 it was unchanged.
+
+        HOW A FOLLOWER ENDS UP CARRYING ONE, AND WHY IT IS NOT A ONE-OFF. Before
+        infra#3553 the sell pass wrote `travel_npc = 'vendor'` once per HOLDER
+        rather than once per leader, so every follower with something sellable
+        was aimed; that write was fixed and the rows it had already left behind
+        were not. The same state is reachable today without any old row: the
+        errand is written to whoever led at the time, and `overseer_roster.lead`
+        moving while an aim stands leaves the previous leader holding a column
+        the next pass asks a different name to hand back. A sweep, not a
+        migration, because the second cause has no last occurrence.
+
+        IT IS NOT INERT WHILE IT STANDS. `_aimed_names` is
+        `drive_quest <> 0 OR travel_npc <> ''`, `_give_them_a_life` hands every
+        aimed character `nc +new rpg`, and mod-overseer's `CanBeSentToNpc` is
+        exactly `HasStrategy("new rpg")` - so `TravelHoldsTheWheel` makes itself
+        true off the stale column and that follower's quest drive stands down
+        for ever. It is also billed `ERRAND_BUDGET_POLL_SECONDS` on every travel
+        poll for as long as it holds a maintenance errand, unless `job='craft'`
+        exempts it - and the live row was `job='quest'` by 20:45, so the exempt
+        case is not the steady one.
+
+        THE LEADER IS EXCLUDED, AND THAT EXCLUSION IS LOAD-BEARING RATHER THAN
+        TIDY. The two completion predicates are genuinely different, and running
+        this one over the leader would break the working half of infra#3717: a
+        leader that has been AIMED and is still walking has no rows queued yet,
+        because rows are only written for a holder already in reach of a
+        counter - so its own queue reads 0, this rule would say "release", and
+        the journey would be cancelled on the cycle it was ordered. The leader's
+        errand ends on arrival plus a quiet queue and is settled above; a
+        follower's aim walks nobody (`AimedMover::RefuseInFormation`, and
+        `_head_now` never borrows the lead for an economy errand), so it has no
+        journey to cancel and arrival cannot be asked about.
+
+        AND WITHOUT A LEADER IT DOES NOTHING AT ALL. "Stranded" is defined
+        against `_head_now()`; with no answer to that there is no way to tell
+        the one character that can walk from the four that cannot, and every
+        standing aim would be swept including the live one. A cycle that cannot
+        name the leader gives nothing back, which costs 90 seconds.
+
+        ONE QUEUE READ PER CHARACTER, NOT ONE FOR THE SET. The leader's half
+        asks `_outstanding_sales(names)` about the whole family on purpose - the
+        family walks as one, so the leader must stand at the counter while any
+        holder's rows execute. A stranded aim is the opposite shape by
+        construction: it is on one row and moves one character nowhere, so
+        holding it open because a SIBLING still has rows outstanding would latch
+        it on exactly the realm state this defect was found in.
+        """
+        if not leader:
+            log.info(
+                "economy: no character can be named as the family leader this "
+                "pass, so no vendor errand is treated as stranded"
+            )
+            return 0
+        holders = await asyncio.to_thread(_errand_holders, "vendor", names)
+        stranded = [name for name in holders if name != leader]
+        if not stranded:
+            return 0
+        released = 0
+        for name in stranded:
+            # THIS CHARACTER'S OWN QUEUE, NOT THE FAMILY'S. See the docstring:
+            # a sibling's unanswered rows say nothing about whether this row's
+            # errand has work left, and reading them would re-latch the column.
+            outstanding = await asyncio.to_thread(_outstanding_sales, [name])
+            step = bag_pressure.stranded_errand_step(outstanding)
+            if step != bag_pressure.VENDOR_ERRAND_RELEASE:
+                log.info(
+                    "economy: %s carries a vendor errand nobody is walking, but "
+                    "%s sale(s) of its own are still unanswered, so it is left "
+                    "exactly as it is - an errand is given back when its work is "
+                    "done and never because it looks stale", name,
+                    "an unreadable number of" if outstanding < 0 else outstanding,
+                )
+                continue
+            # THE KEYWORD IS NAMED AGAIN HERE, and it is the same word the aim
+            # was written with. `_release_trade_errand` puts it in the WHERE
+            # clause and refuses anything outside ECONOMY_ERRANDS, so this
+            # cannot blank a profession errand however wrong the read above was
+            # (mod-overseer#438), and it cannot take the town trip's `repair` or
+            # the bank pass's `banker` either - each pass hands back what it
+            # wrote.
+            if await asyncio.to_thread(_release_trade_errand, name, "vendor"):
+                released += 1
+                log.info(
+                    "economy: %s was carrying a vendor errand with nothing left "
+                    "to sell and is not the leader=%s anybody is walking, so the "
+                    "column is handed back and its quest drive is free again",
+                    name, leader,
+                )
+            else:
+                # Not a failure, and the same reading the leader's half gives:
+                # the column changed hands between the SELECT and the UPDATE,
+                # and the keyword guard is what stopped this pass taking
+                # somebody else's errand off them.
+                log.debug(
+                    "economy: %s's vendor errand was gone by the time it was "
+                    "handed back, so nothing was written", name,
+                )
+        return released
+
     async def _vendor_once(self) -> None:
         """Queue carried junk and outgrown gear for the world sell executor.
 
@@ -5104,6 +5297,24 @@ class Bridge(discord.Client):
         # one leader and aiming another would be two leaders.
         leader = await asyncio.to_thread(_head_now)
         step = await self._settle_vendor_errand(names, leader)
+        # AND THE SAME SETTLING FOR EVERY OTHER ROW CARRYING THIS PASS'S OWN
+        # KEYWORD (infra#3746). The line above hands back the errand the LEADER
+        # is walking; this one hands back a `vendor` aim that ended up on
+        # somebody who is not walking anywhere, which nothing in this process
+        # ever named and so nothing could clear.
+        #
+        # IT IS ABOVE THE GATES FOR A SHARPER REASON THAN THE SETTLING IS, and
+        # the realm measured the difference. A stranded aim's completion signal
+        # is its own sell queue going quiet - and a quiet queue is precisely the
+        # state in which this pass has nothing to sell and returns early. On
+        # wow-dev the last `kind='sell'` row was written at 18:02:30 and the
+        # roster still read `Bork | lead=0 | travel_npc=vendor` at 20:45, so a
+        # sweep below `family_town_run_needed` would have had roughly 108
+        # consecutive cycles (90 seconds each) in which it never ran at all. A
+        # release under an early return passes every unit test and does nothing,
+        # which is the ordering trap infra#3708's own sequence test caught one
+        # function along.
+        await self._release_stranded_vendor_errands(names, leader)
 
         free_slots = await asyncio.to_thread(_fetch_free_slots, names)
         if not bag_pressure.family_town_run_needed(free_slots):
