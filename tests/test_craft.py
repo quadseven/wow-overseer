@@ -538,5 +538,45 @@ class RecipeTableDisciplineTests(unittest.TestCase):
                 self.assertLess(a.max_skill, b.min_skill)
 
 
+class TheModeConstant(unittest.TestCase):
+    def test_it_matches_the_vocabulary(self):
+        import jobs
+        self.assertEqual(craft.MODE, "craft")
+        self.assertIn(craft.MODE, jobs.MODES)
+        self.assertIn(craft.MODE, jobs.IMPLEMENTED)
+
+
+class NoForecastOfTheWorldserversAnswer(unittest.TestCase):
+    """infra#3695. This pins an ABSENCE, deliberately, because the thing it
+    forbids is the thing two agents reached for on the same afternoon.
+
+    A `craft.readiness()` that asked whether each character knows its recipe -
+    reading `character_spell` - was written, tested, and was WRONG: every row
+    said nobody knew anything while Ugga was crafting Minor Healing Potions
+    (2330) seven times over. mod-playerbots grants recipes at runtime and
+    `Player::_SaveSpells` never persists them, so the saved tables are partial
+    in exactly the direction that turns a guard into a false refusal.
+
+    `Player::HasSpell` is what DriveCraft gates on and it reads live memory.
+    Python cannot see that, so Python must not pretend to predict it. If a
+    readiness answer is ever wanted here it has to consume DriveCraft's own
+    recorded outcome, not forecast it.
+    """
+
+    def test_craft_exposes_no_readiness_predicate(self):
+        self.assertFalse(
+            hasattr(craft, "readiness"),
+            "craft.readiness() forecasts DriveCraft's HasSpell check from "
+            "saved tables that omit runtime-granted recipes - see this class's "
+            "docstring and craft.py's header before re-adding it",
+        )
+
+    def test_the_module_records_why(self):
+        import inspect
+        source = inspect.getsource(craft)
+        self.assertIn("3695", source)
+        self.assertIn("_SaveSpells", source)
+
+
 if __name__ == "__main__":
     unittest.main()

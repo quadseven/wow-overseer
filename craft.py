@@ -59,6 +59,68 @@ import professions
 
 SKILL_IDS = goals.SKILL_IDS
 
+# The job mode this module is the planner for, named here rather than spelled
+# as a literal at each call site - the same shape trainjob.MODE already uses,
+# and for the same reason: `bridge._set_job` asks "is this the craft order"
+# once and must not drift from the string `jobs.MODES` and DriveCraft's own
+# gate both spell.
+MODE = "craft"
+
+# ---------------------------------------------------------------------------
+# WHY THIS MODULE MUST NOT PREDICT WHAT THE WORLDSERVER WILL DO (infra#3695).
+#
+# It is tempting to add a `readiness()` here that answers "can the family
+# craft right now" before the order is written, the way trainjob.readiness
+# does for `train`. It was tried in infra#3687 and it was WRONG, and the
+# reason is worth the space because the next reader will be tempted the same
+# way and the evidence looks convincing right up until it is tested.
+#
+# The check asked whether each character KNOWS the recipe it would be aimed
+# at, by reading `character_spell`. Every row said no - all five characters,
+# not one of their standing `craft_spell` errands present in the table - and
+# on that basis the guard refused the order. Then the worldserver crafted
+# anyway: 2026-09-13 17:15-17:17, `overseer: 'Ugga' crafted 'Minor Healing
+# Potion' (2330)`, seven times, while `character_spell` held no 2330 row for
+# her. Og followed on 2963 shortly after. Both would have been refused.
+#
+# THE CAUSE: these are playerbots. mod-playerbots grants profession recipes
+# at init, and `Player::_SaveSpells` writes only spells whose state is not
+# UNCHANGED, so a runtime-granted recipe never reaches `character_spell` at
+# all - a forced `.saveall` does not move the count. `Player::HasSpell`,
+# which is what DriveCraft actually gates on, reads the in-memory spell map
+# and sees them.
+#
+# SPELLS ARE ABSENT; SKILLS ARE MERELY LATE - and the difference is worth
+# keeping straight, because over-distrusting `character_skills` would be its
+# own wrong conclusion. Both were measured across the SAME fifteen minutes,
+# which is what makes the comparison mean anything:
+#
+#   character_skills  Ugga's Alchemy read 1/75 at 17:15 while she was
+#                     crafting, and 14 by 17:25. It converges.
+#   character_spell   Ugga's total sat at 152 with no 2330 row at 17:15 and
+#                     again at 17:30; Og's 2963 never appeared either, though
+#                     he was casting it. It does not converge, because the
+#                     write never happens.
+#
+# Choosing a recipe bracket from a skill value that is a few points stale is
+# fine, and is all `craft_errand` below does with it. Concluding "this
+# character knows no recipes" from `character_spell` is not fine, ever.
+#
+# HasSpell IS GENUINELY PER-CHARACTER, so this is not a blanket "the table is
+# useless" - it is specifically unreadable from Python. Bork's errand was set
+# to 2963 by hand and refused ("does not know the recipe") in the same minute
+# Og was casting 2963 successfully. The worldserver's answer is precise; the
+# saved copy of it is simply not there.
+#
+# THE RULE THAT FOLLOWS: a guard that refuses the true state is worse than
+# the missing guard it replaced. Anything in Python that needs to know
+# whether a craft can actually happen must consume the worldserver's OWN
+# recorded answer - DriveCraft already decides correctly, clears
+# `craft_spell` when it refuses, and logs why - rather than forecasting that
+# decision from acore_characters. Forecasting is not a weaker version of
+# asking; it is a different and wrong question.
+# ---------------------------------------------------------------------------
+
 
 @dataclass(frozen=True)
 class Recipe:

@@ -1135,6 +1135,18 @@ def _fetch_trade_skills(names: list) -> dict:
 
     READ-ONLY, and that is the whole contract of this function. It is the only
     place in the bridge that touches character_skills at all.
+
+    LATE, BUT IT DOES CONVERGE (infra#3695). Written on the ordinary
+    player-save timer, so it trails live state by minutes: Ugga crafted seven
+    Minor Healing Potions on 2026-09-13 while her Alchemy still read 1/75
+    here, and it had caught up to 14 ten minutes later. That is fine for the
+    one thing this feeds - craft.craft_errand CHOOSING a recipe bracket, where
+    being a few points stale picks a slightly easier recipe and nothing worse.
+
+    Do not generalise that tolerance to `character_spell`, which does not
+    converge at all because the write never happens for a runtime-granted
+    recipe. craft.py's header has the full argument; the short version is that
+    a stale number is usable and a missing row is not.
     """
     if not names:
         return {}
@@ -4796,6 +4808,21 @@ class Bridge(discord.Client):
         # runs them.
         if d.mode == trainjob.MODE and written:
             await self._drive_train()
+        # Same reasoning for craft, and the same idempotence: _craft_once only
+        # re-derives `craft_spell` from each character's current skill, so
+        # running it here and again on the next cycle is the same two writes.
+        # Without it a family put on job='craft' waits up to CRAFT_CYCLE_SECONDS
+        # (default 300) before anybody carries an errand at all.
+        #
+        # NOT PAIRED WITH A READINESS REFUSAL, unlike train directly above, and
+        # that asymmetry is deliberate - see craft.py's own header (infra#3695).
+        # Whether a craft can actually happen is a fact only the worldserver
+        # holds: `character_spell` omits every recipe mod-playerbots granted at
+        # runtime, so a Python guard reading it refuses characters who are
+        # crafting successfully at that moment. Driving the errand and letting
+        # DriveCraft decide is the honest shape; forecasting its answer is not.
+        if d.mode == craft.MODE and written:
+            await self._craft_once()
         await channel.send(
             f"{jobs.describe(d.mode)} ({written}/{len(names)} of the family told)"
         )

@@ -9,8 +9,12 @@ currently be doing, which is the layer this module names.
 
 WHAT SHIPS AND WHAT DOES NOT. `MODES` names the whole vocabulary Evan asked
 for, because a schedule with one slot is not a schedule and a person reading
-this file should see the shape of the thing being built. Two of those modes
-are wired to an actual behaviour change - see IMPLEMENTED. Every other mode is
+this file should see the shape of the thing being built. The modes wired to an
+actual behaviour change are named in IMPLEMENTED, one at a time, each with the
+branch that proves it - deliberately NOT counted in this sentence, because the
+count is the first thing to rot: this paragraph read "two of those modes" for
+as long as IMPLEMENTED held three, and was still saying it when a fourth
+landed. Every other mode is
 a name the roster will accept and remember, and the one thing setting it does
 today is turn OFF the quest drive, honestly, with nothing yet turned on in its
 place. Building farm/grind/etc is the follow-up list, not code here pretending
@@ -83,7 +87,38 @@ MODES = {
 # with travel.aim_statements, which is infra#3270's missing caller. So the
 # branch this entry points at is a Python one, and tests/test_trainjob.py
 # pins it exactly as ImplementedMatchesTheModule pins the two C++ ones.
-IMPLEMENTED = frozenset({"quest", "dungeon", "train"})
+#
+# `craft` JOINED THIS SET at infra#3687, and it is the entry this constant's
+# honesty rule was actually written about. The BLOCKED text removed below said
+# "nothing in the worldserver can make an item" for as long as mod-overseer has
+# been shipping a drive that makes them, so `describe` was answering NOT BUILT
+# YET to the one order the family was already carrying out - the second time
+# this file has done exactly what the `dungeon` paragraph above apologises for.
+#
+# The drive is mod_overseer.cpp's `DriveCraft` (src/mod_overseer.cpp:10910 at
+# AC_OVERSEER_SHA=9dbbd1a8bb51, the SHA UPSTREAM-PINS.env deploys), called from
+# the main poll at :5056 behind CRAFT_POLL_MS. `LoadCraftErrands` reads
+# `overseer_roster.craft_spell` for every enabled row, DriveCraft skips anyone
+# whose `job` is not `craft` - the module's own words are "job='craft' is a
+# PERMISSION, not a hint", because an errand may sit on a row while its
+# character is off questing - and casts what survives with
+# `bot->CastSpell(bot, spellId, false)`, logging `overseer: '{}' crafted '{}'`.
+# So this mode is not decoration on a column: it is the single switch between
+# a standing errand being cast and being ignored.
+#
+# THE PYTHON HALF WAS ALREADY WHOLE, which is why only this line was missing.
+# bridge._craft_once picks each crafter's recipe through craft.craft_errand and
+# writes `craft_spell`; _assign_crafts re-asserts it every cycle so a
+# worldserver restart cannot lose it; _craft_supply_once and craft_supply.py
+# buy the vendor reagents it needs.
+#
+# ImplementedMatchesTheModule pins DriveCraft's gate and its column read as
+# source TEXT, and pins REAL STATEMENTS on purpose - unlike the `dungeon`
+# entry above, whose `leaderJob == "dungeon"` strings survive at the pinned SHA
+# only inside a comment the module labels "compatibility markers for
+# source-contract tests". A pin that a comment can satisfy has stopped being a
+# pin; craft's name executable code or nothing.
+IMPLEMENTED = frozenset({"quest", "dungeon", "train", "craft"})
 
 # What each wired mode actually MAKES HAPPEN, named so `describe` can say it.
 # A mode in IMPLEMENTED with no entry here is a claim with no address, which
@@ -100,24 +135,39 @@ DRIVES = {
         "aims them at the nearest profession trainer, the family following; "
         "mod-overseer buys it there through the core's Trainer::TeachSpell"
     ),
-}
-
-# Why a mode cannot be set, for the one somebody is actually going to try.
-# Every other unimplemented mode gets GENERIC_BLOCK, which is the same fact
-# said less specifically - a bespoke sentence per unbuilt mode would be nine
-# more promises this file cannot keep, which is the habit #3338 asks it to
-# stop.
-BLOCKED = {
     "craft": (
-        "nothing in the worldserver can make an item. mod-overseer's command "
-        "kinds are bot, chat, gm, probe, give, share, trade, job, sell and "
-        "bank, and not one of them casts a tradeskill - \"craft\" in "
-        "JobModes() is a name DoJob accepts and writes to a column nothing "
-        "reads back except the quest gate, which reads it as \"stop\". "
-        "Supplying a crafter (materials.py) and answering for one "
-        "(craftpleas.py) both work, and neither of them is a craft"
+        "mod_overseer.cpp's DriveCraft casts the recipe named by each "
+        "character's own overseer_roster.craft_spell, gated on job='craft'; "
+        "bridge._craft_once and _assign_crafts keep that column pointed at "
+        "the right recipe for the skill the character actually has, and "
+        "craft_supply buys the vendor reagents it needs"
     ),
 }
+
+# Why a particular mode cannot be set, where a bespoke sentence is worth more
+# than the generic one. Every mode with no entry gets GENERIC_BLOCK, which is
+# the same fact said less specifically - a bespoke sentence per unbuilt mode
+# would be eight more promises this file cannot keep, which is the habit #3338
+# asks it to stop.
+#
+# EMPTY ON PURPOSE, and worth more empty than it was full. Its only entry was
+# `craft`, and by infra#3687 every clause of that entry had gone false. It
+# said no command kind casts a tradeskill and then listed ten kinds; the live
+# `overseer_command.kind` ENUM carries twenty (auction, mail, repair, buy,
+# bind, hearth, summon, conjure, cast and guild were all added after that
+# sentence was written - checked against the deployed schema, not a migration
+# file, 2026-09-13). It said nothing in the worldserver can make an item while
+# DriveCraft was casting recipes on the family's behalf every poll.
+#
+# THE LESSON IS ABOUT THE SHAPE, NOT THE TYPO. A bespoke refusal here is a
+# detailed claim about another repo's code, and the more specific it is the
+# faster it rots - this one named a function (`JobModes`), an enum, and a
+# capability, and outlived all three. GENERIC_BLOCK says only what this
+# repository can actually still see: that the column is written and only the
+# quest gate reads it. So the bar for ever re-adding an entry here is a test
+# that pins it against the module source, the same bar
+# ImplementedMatchesTheModule holds a claim to in the opposite direction.
+BLOCKED: dict = {}
 
 GENERIC_BLOCK = (
     "no drive exists for it - DoJob validates the name and writes the "

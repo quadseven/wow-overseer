@@ -137,11 +137,23 @@ class TheWriteGuard(unittest.TestCase):
             for wired in jobs.IMPLEMENTED:
                 self.assertIn(wired, why, mode)
 
-    def test_craft_names_the_verb_that_does_not_exist(self):
-        """The mode the operator actually reaches for gets the specific
-        answer: mod-overseer has no command kind that casts a tradeskill."""
-        why = jobs.why_not("craft")
-        self.assertIn("tradeskill", why)
+    def test_craft_is_no_longer_refused_at_all(self):
+        """infra#3687. This assertion used to demand the OPPOSITE - that
+        `why_not("craft")` explain no command kind casts a tradeskill - and it
+        passed for as long as that sentence was false, because it only ever
+        checked the sentence against itself. `craft` is driven by DriveCraft
+        now, so the only correct refusal is no refusal."""
+        self.assertTrue(jobs.can_set("craft"))
+        self.assertEqual("", jobs.why_not("craft"))
+
+    def test_nothing_claims_a_command_kind_that_no_longer_matches_the_enum(self):
+        """The removed BLOCKED entry listed ten `overseer_command.kind` values
+        and the live ENUM carries twenty. No refusal this module can still
+        produce may enumerate that column, because nothing here can see it."""
+        for mode in jobs.MODES:
+            why = jobs.why_not(mode)
+            self.assertNotIn("tradeskill", why, mode)
+            self.assertNotIn("sell and", why, mode)
 
     def test_a_mode_that_is_not_a_mode_is_refused_with_the_vocabulary(self):
         why = jobs.why_not("interpretive dance")
@@ -191,6 +203,26 @@ class TrainIsWiredInPython(unittest.TestCase):
         self.assertIn("trainjob", jobs.DRIVES["train"])
 
 
+class CraftIsWiredAndSaysWhere(unittest.TestCase):
+    """infra#3687. `craft` is the mode this whole file's honesty rule was
+    written about, and the one it got wrong twice: BLOCKED asserted no
+    worldserver verb could make an item for as long as DriveCraft was making
+    them, so `describe` answered NOT BUILT YET to an order five characters
+    were already carrying out."""
+
+    def test_craft_is_implemented(self):
+        self.assertIn("craft", jobs.IMPLEMENTED)
+
+    def test_its_drive_names_the_function_that_proves_it(self):
+        self.assertIn("DriveCraft", jobs.DRIVES["craft"])
+
+    def test_the_stale_refusal_is_gone(self):
+        self.assertNotIn("craft", jobs.BLOCKED)
+
+    def test_describe_makes_no_not_built_claim_for_craft(self):
+        self.assertNotIn("NOT BUILT", jobs.describe("craft"))
+
+
 class ImplementedMatchesTheModule(unittest.TestCase):
     """IMPLEMENTED is what `describe` tells Discord, so a stale entry makes
     the overseer answer "NOT BUILT YET" to an order it is about to carry out.
@@ -222,6 +254,33 @@ class ImplementedMatchesTheModule(unittest.TestCase):
         absence from that map IS the quest job."""
         self.assertIn("job <> 'quest'", self.source)
         self.assertIn("quest", jobs.IMPLEMENTED)
+
+    def test_the_craft_job_really_does_drive_the_recipe_cast(self):
+        """infra#3687. DriveCraft loads `overseer_roster.craft_spell`, refuses
+        anyone whose `job` is not `craft`, and casts the recipe on the bot.
+
+        EVERY STRING BELOW IS EXECUTABLE CODE, and choosing them that way is
+        the whole point rather than a detail. The dungeon pins above
+        (`leaderJob == "dungeon"`) survive at the deployed SHA only inside a
+        comment the module itself labels "compatibility markers for
+        source-contract tests" - a pin a comment can satisfy has stopped
+        pinning anything, and would go green over a drive that had been
+        deleted. A declaration, a WHERE clause, a job comparison and a cast
+        cannot be left behind as prose by somebody removing the feature.
+        """
+        self.assertIn("void DriveCraft()", self.source)
+        self.assertIn("SELECT name, craft_spell FROM overseer_roster", self.source)
+        self.assertIn("WHERE enabled = 1 AND craft_spell <> 0", self.source)
+        self.assertIn('jobIt->second != "craft"', self.source)
+        self.assertIn("bot->CastSpell(bot, spellId, false)", self.source)
+        self.assertIn("craft", jobs.IMPLEMENTED)
+
+    def test_the_craft_drive_is_actually_called(self):
+        """A drive nothing calls is the same as no drive at all. DriveCraft is
+        invoked from the module's own poll behind CRAFT_POLL_MS; without this
+        the pins above would every one of them still pass over a function that
+        had been orphaned."""
+        self.assertIn("DriveCraft();", self.source)
 
     def test_no_other_mode_claims_to_be_wired(self):
         """DoJob validates the rest against a list and writes the column,
