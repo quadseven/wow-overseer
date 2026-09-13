@@ -132,17 +132,22 @@ class Recipe:
 # `test_brackets_do_not_overlap_within_one_skill` already holds the whole
 # table to this.
 #
-# TWO GAPS ARE LEFT DELIBERATELY EMPTY, not filled with a guessed entry:
-#
-#   106-124 (Bronze Tube / Standard Scope) - both need Weak Flux, and
-#   Standard Scope also needs Moss Agate; neither is a mining/smelting
-#   byproduct or a cloth drop, both are a vendor purchase this module's
-#   reagent model does not reach yet. towntrip.py's `_buy` (mod-overseer#227)
-#   is built entirely around FOOD_KIND/DRINK - a level-tiered stack size and
-#   vendor table - and generalizing it to an arbitrary named reagent and
-#   count is not the "clean small addition" this pass was scoped to attempt.
-#   See the filed follow-up issue for extending `_buy` (or a sibling
-#   mechanism) to name-and-count reagent purchases.
+# 106-124 (infra#3616): Bronze Tube (spell 3938) needs Weak Flux, a plain
+# vendor-bought reagent - craft_supply.REAGENT (infra#3613's reagent-buying
+# module, generalized past Alchemy's vials to cover this) now keeps it
+# stocked, so Bronze Tube is filled in below rather than left empty.
+# Standard Scope (spell 3978, the guide's next bracket) is NOT added: it
+# also needs Moss Agate, which the issue that filed this gap assumed was
+# vendor-bought like Weak Flux - checked directly against
+# acore_world.npc_vendor and found FALSE. Moss Agate carries zero npc_vendor
+# rows on this world; it is `item_template.class=3` (Gem) dropped by mining
+# nodes (gameobject_loot_template: 5% off Tin Vein/Silver Vein) and mob
+# loot, the same GATHERED shape as Blacksmithing's mining-byproduct stones,
+# not a buyable one. Adding Standard Scope here would create exactly the
+# "recipe that can never complete" trap the 151-174 gap below was already
+# left empty to avoid - no drive in this codebase aims a character at a
+# specific gem drop, so it stays deferred rather than shipped broken. See
+# craft_supply.py's own module docstring for the full verification.
 #
 #   151-174 (Whirring Bronze Gizmo, Bronze Framework, Explosive Sheep) -
 #   verified real, but they collide with Heavy Blasting Powder for the SAME
@@ -410,9 +415,15 @@ RECIPES: dict = {
                     "yield could not be independently confirmed for the "
                     "3.3.5a era (a later, Cataclysm-only patch changed it) - "
                     "verify against this deployment's own cast if it matters"),
-        # 106-124 deliberately empty - Bronze Tube / Standard Scope need
-        # Weak Flux / Moss Agate, a vendor purchase this pass does not reach.
-        # See the module-level comment above and the filed follow-up issue.
+        Recipe(3938, "Bronze Tube", min_skill=106, max_skill=124,
+               note="2x Bronze Bar (2841), 1x Weak Flux (2880, vendor-bought "
+                    "- see craft_supply.REAGENT) -> 1x Bronze Tube (item "
+                    "4371); trainer floor is skill 105 (acore_world."
+                    "trainer_spell), guide range 105-125, clipped to 106-124 "
+                    "so it does not collide with Silver Contact's own "
+                    "max_skill=105. Standard Scope, the guide's next "
+                    "bracket, is deliberately NOT added here - see the "
+                    "module-level comment above"),
         Recipe(3945, "Heavy Blasting Powder", min_skill=125, max_skill=150,
                note="1x Heavy Stone -> 1x Heavy Blasting Powder (item 4377); "
                     "real trainer skill floor is 125, not the guide's stated "

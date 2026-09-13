@@ -47,11 +47,39 @@ Alchemy spell id, so no new web verification was needed to trust the pairing:
 All three are confirmed sold with unlimited stock (npc_vendor.maxcount = 0)
 by real vendors on this world (checked live, not assumed).
 
-WHAT IS DELIBERATELY OUT OF SCOPE. Tailoring/Leatherworking thread and dye,
-and Engineering's Weak Flux/Moss Agate, are the same class of gap
-(infra#3609/#3611/#3616) but their item ids and prices were not verified this
-pass - `VIAL` below names only what was checked. A future entry should be
-added with the same live-database verification, not a guessed id.
+WHAT IS DELIBERATELY OUT OF SCOPE. Tailoring/Leatherworking thread and dye
+(infra#3609/#3611) are the same class of gap but their item ids and prices
+were not verified this pass - `REAGENT` below names only what was checked.
+A future entry should be added with the same live-database verification,
+not a guessed id.
+
+ENGINEERING'S WEAK FLUX (infra#3616) - VERIFIED AND ADDED, MOSS AGATE -
+VERIFIED AND DELIBERATELY LEFT OUT. infra#3616 assumed both Weak Flux
+(Bronze Tube, spell 3938) and Moss Agate (Standard Scope, spell 3978) were
+"vendor-only purchases", the same shape as Alchemy's vials. Checking that
+assumption against the live database (not trusting the issue's prose, the
+same discipline this module's own docstring already demands of item ids)
+found it true for only one of the two:
+
+    entry  name         BuyPrice  npc_vendor rows
+    2880   Weak Flux         100  200+ general-goods vendors, maxcount=0
+    1206   Moss Agate       1600  ZERO - no npc_vendor row anywhere
+
+Moss Agate is `item_template.class=3` (Gem), not a general good, and its
+only sources on this world are drop tables - `gameobject_loot_template`
+(5% off Tin Vein/Silver Vein, the same ore nodes mining already gathers
+from as a side effect) and a long tail of `creature_loot_template` rows.
+It is a GATHERED item, the same class as the mining-byproduct stones
+Blacksmithing's recipes already consume, not a buyable one - `REAGENT`
+must never carry an `entry` that `town.stocks` can never contain, since
+`reagent_errand` would then log "no reachable vendor stocks it" on every
+single poll forever rather than the character simply finding one while
+questing/mining. Standard Scope (spell 3978) is therefore NOT added to
+`craft.RECIPES` alongside Bronze Tube - adding a bracket this module can
+never supply would repeat the exact mistake craft.py's own docstring
+already rejected for the 151-174 Explosive Sheep gap (a recipe that can
+never complete, shipped anyway). Bronze Tube's own single reagent (Weak
+Flux) is fully vendor-solvable, so it is added on its own.
 """
 
 from __future__ import annotations
@@ -63,8 +91,9 @@ import towntrip
 # from craft.RECIPES' own reagent notes for the ten (of eleven) Alchemy
 # recipes that name a vial - Lesser Healing Potion (2337) is the one
 # exception, since its second reagent is the previous recipe's own output,
-# not a fresh vial.
-VIAL: dict[int, tuple[int, str, int]] = {
+# not a fresh vial - plus Engineering's Bronze Tube (Weak Flux only; Moss
+# Agate is deliberately absent, see module docstring).
+REAGENT: dict[int, tuple[int, str, int]] = {
     2330: (3371, "Empty Vial", 20),      # Minor Healing Potion
     3173: (3371, "Empty Vial", 20),      # Lesser Mana Potion
     3447: (3372, "Leaded Vial", 200),    # Healing Potion
@@ -75,6 +104,7 @@ VIAL: dict[int, tuple[int, str, int]] = {
     11460: (8925, "Crystal Vial", 2500), # Elixir of Detect Undead
     17553: (8925, "Crystal Vial", 2500), # Superior Mana Potion
     17556: (8925, "Crystal Vial", 2500), # Major Healing Potion
+    3938: (2880, "Weak Flux", 100),      # Bronze Tube (Engineering)
 }
 
 # Vials are cheap and cast-consumed one at a time, so a small standing stock
@@ -100,7 +130,7 @@ def reagent_errand(
     something stopped it - the same two-outcome shape towntrip._buy uses, so
     a caller can log the note exactly like every other town-trip refusal.
     """
-    need = VIAL.get(craft_spell)
+    need = REAGENT.get(craft_spell)
     if not need:
         return None, None  # this recipe needs no vendor reagent this module knows
 

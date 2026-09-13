@@ -133,11 +133,24 @@ class EngineeringRecipeForTests(unittest.TestCase):
         self.assertIsNotNone(recipe)
         self.assertEqual(recipe.spell_id, 19795)  # Thorium Tube
 
-    def test_a_deliberately_deferred_gap_answers_none(self):
-        # 106-124: Bronze Tube / Standard Scope need a vendor-bought reagent
-        # (Weak Flux / Moss Agate) this pass does not reach - see craft.py's
-        # module-level comment. None is the honest answer here, not a guess.
-        self.assertIsNone(craft.recipe_for(goals.SKILL_IDS["engineering"], 115))
+    def test_bronze_tube_now_fills_the_106_124_bracket(self):
+        # infra#3616: Weak Flux is a real, verified vendor purchase (see
+        # craft_supply.REAGENT), so Bronze Tube (spell 3938) now fills the
+        # bracket that used to answer None here.
+        recipe = craft.recipe_for(goals.SKILL_IDS["engineering"], 115)
+        self.assertIsNotNone(recipe)
+        self.assertEqual(recipe.spell_id, 3938)
+
+    def test_standard_scope_is_still_deliberately_deferred(self):
+        # Standard Scope's own reagent, Moss Agate, was checked against
+        # acore_world.npc_vendor directly and found NOT vendor-sold (a mined
+        # gem, not a general good) - so unlike Bronze Tube it stays out of
+        # RECIPES, and skill 125 still answers with Heavy Blasting Powder's
+        # own bracket rather than a Standard Scope entry that could never
+        # complete. See craft.py's module-level comment.
+        recipe = craft.recipe_for(goals.SKILL_IDS["engineering"], 125)
+        self.assertIsNotNone(recipe)
+        self.assertEqual(recipe.spell_id, 3945)  # Heavy Blasting Powder
 
     def test_the_explosive_sheep_chain_gap_answers_none(self):
         # 151-174: Whirring Bronze Gizmo / Bronze Framework / Explosive Sheep

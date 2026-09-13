@@ -3502,7 +3502,7 @@ class Bridge(discord.Client):
         to stall on it: Ugga sat on job='craft' with 20 Silverleaf, 13
         Peacebloom and zero Empty Vials, casting nothing. craft.py's own
         docstring is explicit that it never checks reagents; this is the pass
-        that does, for the one reagent class (craft_supply.VIAL) verified
+        that does, for the reagent classes (craft_supply.REAGENT) verified
         against the live world database rather than guessed.
 
         ONE VENDOR AIM PER CANDIDATE, NOT PER PARTY, unlike _vendor_once's
@@ -3520,28 +3520,29 @@ class Bridge(discord.Client):
         candidates = {
             name: spell_id
             for name, (spell_id, _) in spells.items()
-            if spell_id in craft_supply.VIAL
+            if spell_id in craft_supply.REAGENT
         }
         if not candidates:
             return
 
         free_slots = await asyncio.to_thread(_fetch_free_slots, list(candidates))
         # ONE BATCH, NOT ONE QUERY PER CANDIDATE - holdings for every
-        # candidate's vial are fetched together (at most three round trips,
-        # since craft_supply.VIAL names three entries total), the same
+        # candidate's reagent are fetched together (at most four round trips,
+        # one per DISTINCT item entry craft_supply.REAGENT's eleven recipes
+        # resolve to - three vials plus Weak Flux), the same
         # batching discipline _fetch_free_slots/_fetch_craft_spells already
         # hold to. Town is the one thing that genuinely cannot batch this
         # way: it is a read of wherever `name` is CURRENTLY STANDING, which
         # is exactly as per-character as `_vendor_once`'s own per-holder
         # `_fetch_town` calls already are.
         pairs = [
-            (name, craft_supply.VIAL[craft_spell][0])
+            (name, craft_supply.REAGENT[craft_spell][0])
             for name, craft_spell in candidates.items()
         ]
         held_by = await asyncio.to_thread(_fetch_item_counts, pairs)
         queued = 0
         for name, craft_spell in sorted(candidates.items()):
-            entry, label, _price = craft_supply.VIAL[craft_spell]
+            entry, label, _price = craft_supply.REAGENT[craft_spell]
             town = await asyncio.to_thread(_fetch_town, name)
             if entry not in town.stocks:
                 aimed = await asyncio.to_thread(
@@ -6315,8 +6316,9 @@ def _fetch_item_counts(pairs: list) -> dict:
 
     ONE ROUND TRIP PER DISTINCT ENTRY, NOT PER CHARACTER - the same batching
     discipline `_fetch_free_slots`/`_fetch_craft_spells` already hold to.
-    `craft_supply.VIAL` names three entries total, so a full-family cycle is
-    at most three queries regardless of how many characters are shopping.
+    `craft_supply.REAGENT`'s eleven recipes resolve to four distinct item
+    entries (three vials, Weak Flux), so a full-family cycle is at most four
+    queries regardless of how many characters are shopping.
     """
     if not pairs:
         return {}
