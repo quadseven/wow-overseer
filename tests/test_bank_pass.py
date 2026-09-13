@@ -117,6 +117,25 @@ class ThePassRunsAndInTheRightOrder(unittest.TestCase):
         self.assertIn("\"banker\"", _source()[:_source().index("def _write_trade_errand(")]
                       .rsplit("ECONOMY_ERRANDS = ", 1)[1])
 
+    def test_a_zero_rowcount_is_not_automatically_a_refusal(self):
+        """This connection carries no `CLIENT_FOUND_ROWS`, so MySQL's default
+        UPDATE semantics count rows CHANGED, not rows matched - re-asserting
+        the same keyword a traveller already carries (the idempotent
+        re-write this function's own docstring says happens every cycle)
+        changes nothing, so `rowcount` is 0 even though this errand still
+        owns the column. Measured live (infra#3663 follow-up): a leader who
+        held `travel_npc='vendor'` unchanged for 20+ minutes was reported as
+        refused every single cycle, because `bool(cur.rowcount)` treated
+        "unchanged" identically to "some other keyword owns this". The fix
+        reads the column back and calls it taken when the stored value
+        already matches what was being written, not only when a row
+        actually changed."""
+        body = _block("def _write_trade_errand(")
+        self.assertIn("if cur.rowcount:", body)
+        self.assertIn("return True", body)
+        self.assertIn("SELECT travel_npc FROM overseer_roster", body)
+        self.assertIn("current == errand.travel_npc", body)
+
 
 class TheBridgeDecidesNothingAboutTheBank(unittest.TestCase):
 

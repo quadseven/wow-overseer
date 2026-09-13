@@ -1786,10 +1786,33 @@ def _write_trade_errand(errand) -> bool:
                     "WHERE name = %s AND (travel_npc = '' OR travel_npc = %s)",
                     (errand.travel_npc, errand.character, errand.travel_npc),
                 )
-                # rowcount 0 is "somebody else's errand owns this traveller",
-                # which is a legitimate outcome and not an error - but it means
-                # nobody is walking anywhere, and the caller has to know.
-                return bool(cur.rowcount)
+                # rowcount 0 is AMBIGUOUS, and this connection does not ask
+                # MySQL to resolve it (no CLIENT_FOUND_ROWS): the server's
+                # default UPDATE semantics count ROWS CHANGED, not rows
+                # matched. Re-asserting the SAME keyword this traveller
+                # already carries - the exact idempotent re-write this
+                # function's own docstring says happens "every trade cycle"
+                # - changes nothing, so rowcount is 0 even though the WHERE
+                # matched and this errand is still this caller's own. Live
+                # on the dev realm: `UPDATE ... SET travel_npc='vendor'
+                # WHERE name='Grog' AND travel_npc='vendor'` measured
+                # rowcount=0 while Grog genuinely held 'vendor' the whole
+                # time - not stolen, just unchanged - which is what made
+                # every economy cycle log "already on somebody else's
+                # errand" for a leader that was never actually refused
+                # (infra#3663 follow-up). A real refusal (WHERE matched zero
+                # rows because some OTHER keyword owns the column) is
+                # unaffected by this - it stays a real 0 - so only the
+                # matched-but-unchanged case needs telling apart from it.
+                if cur.rowcount:
+                    return True
+                cur.execute(
+                    "SELECT travel_npc FROM overseer_roster WHERE name = %s",
+                    (errand.character,),
+                )
+                row = cur.fetchone()
+                current = row["travel_npc"] if row else None
+                return current == errand.travel_npc
             else:
                 cur.execute(
                     "UPDATE overseer_roster SET learn_skill = %s, unlearn_skill = %s, "
