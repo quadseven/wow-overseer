@@ -263,6 +263,12 @@ def gear_candidates(rows: Iterable[dict], family, available=None, fits=None,
                 equipment=item_class in EQUIPMENT_CLASSES,
                 required_level=int(row["required_level"]),
                 sell_price=int(row["sell_price"]),
+                # Handed straight through so disposition's trade-tool gate
+                # can read them (infra#3709); missing on an older world image
+                # means 0, which is "not a tool" and leaves this path exactly
+                # as it was.
+                item_class=item_class,
+                bag_family=int(row.get("bag_family", 0) or 0),
             )
             holder = str(row["holder"])
             guid = int(row["item_guid"])

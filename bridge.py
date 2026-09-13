@@ -6333,7 +6333,12 @@ def _give_attempts(hours: int) -> list:
 
 _VENDOR_ITEMS_SQL = (
     "SELECT c.name AS holder, ii.guid AS item_guid, ii.count AS count, "
+    "ii.itemEntry AS entry, "
     "it.name AS name, it.Quality AS quality, it.SellPrice AS sell_price, "
+    # The two columns disposition's trade-tool gate reads (infra#3709). The
+    # bit is handed over raw and read in disposition rather than in SQL, the
+    # same rule _SURPLUS_GEAR_SQL already states for `ii.flags`.
+    "it.class AS item_class, it.BagFamily AS bag_family, "
     "(it.class = 12) AS quest_item, (it.class = 5) AS reagent "
     "FROM character_inventory ci "
     "JOIN characters c ON c.guid = ci.guid "
@@ -6358,6 +6363,13 @@ _SURPLUS_GEAR_SQL = (
     "it.Quality AS quality, it.SellPrice AS sell_price, "
     "it.RequiredLevel AS required_level, it.bonding AS bonding, "
     "it.class AS item_class, it.subclass AS item_subclass, "
+    # The trade-tool gate again (infra#3709). Quality 1 keeps every tool the
+    # family owns TODAY below this query's own `Quality >= 2` floor, so the
+    # junk half of the pass is where that bug actually lives - but Finkle's
+    # Skinner and Brann's Trusty Pick are real, lootable, uncommon-or-better
+    # trade tools, and the two halves of one pass must not answer differently
+    # about the same pick.
+    "it.BagFamily AS bag_family, "
     "it.ItemLevel AS item_level, "
     "it.AllowableClass AS allowable_class, "
     "it.InventoryType AS inventory_type "
@@ -6471,6 +6483,42 @@ def _fetch_positions(names: list) -> dict:
         return {row["name"]: dict(row) for row in cur.fetchall()}
 
 
+# Which item entry each trade's OWN recipes send somebody to a vendor for,
+# derived from the two tables that already hold it rather than restated here
+# (infra#3709). `craft.RECIPES` is keyed by skill id and names the spells;
+# `craft_supply.REAGENT`/`REAGENTS` name what each of those spells has to buy.
+# Joining them is the only way to get "Empty Vial belongs to Alchemy" without
+# writing a third copy of a fact that already exists twice - and a third copy
+# is a third thing that can disagree.
+#
+# THIS IS WHY THE ITEM'S OWN BAG IS NOT ENOUGH. Empty Vial (3371) is bagged as
+# INSCRIPTION supplies, which `professions.UNASSIGNED` says nobody here works,
+# so the bag alone would sell the alchemist's vials - see disposition's
+# PROFESSION_BAGS block. One entry can be claimed by two trades (Coarse Thread
+# is bought for Tailoring's Linen Belt and Leatherworking's gloves), so the
+# value is a tuple and any worked claim is enough to keep it.
+def _reagent_trades() -> dict:
+    """entry -> the trades whose own recipes buy it, from the craft tables."""
+    claims: dict = {}
+    for skill_id, recipes in craft.RECIPES.items():
+        trade = _SKILL_NAMES.get(skill_id, "")
+        if not trade:
+            continue
+        for recipe in recipes:
+            bought = list(craft_supply.REAGENTS.get(recipe.spell_id, ()))
+            single = craft_supply.REAGENT.get(recipe.spell_id)
+            if single:
+                bought.append(single)
+            for reagent in bought:
+                claimed = claims.setdefault(int(reagent[0]), [])
+                if trade not in claimed:
+                    claimed.append(trade)
+    return {entry: tuple(trades) for entry, trades in claims.items()}
+
+
+REAGENT_TRADES = _reagent_trades()
+
+
 def _fetch_vendor_items(names: list) -> list:
     """Read carried sale facts; all routing remains in bag_pressure."""
     if not names:
@@ -6478,17 +6526,37 @@ def _fetch_vendor_items(names: list) -> list:
     sql = _VENDOR_ITEMS_SQL % ",".join(["%s"] * len(names))
     with _connect() as conn, conn.cursor() as cur:
         cur.execute(sql, names)
-        rows = []
-        for row in cur.fetchall():
-            item = dict(row)
-            # Trade goods such as Linen are class 7, not class 5. The
-            # profession roster is the stronger fact and must protect them
-            # even when item_template calls them ordinary trade goods.
-            profession_material = item.get("name") in materials.REAGENTS
-            item["reagent"] = bool(item.get("reagent")) or profession_material
-            item["profession_needed"] = profession_material
-            rows.append(item)
-        return rows
+        rows = [dict(row) for row in cur.fetchall()]
+    # THE FAMILY'S OWN TRADE STOCK IS NOT VENDOR GOODS (infra#3709). The
+    # declared roster is the permission - `professions.assigned` is the end
+    # state the family is being walked towards, and a miner still on his way
+    # to a trainer must not have his pick sold on the journey. Measured live
+    # 2026-09-13: this is what sold Grug's Mining Pick and Blacksmith Hammer
+    # eight times each, Bork's Skinning Knife four times, and Ugga's 25 Empty
+    # Vials ten minutes after craft_supply bought them.
+    worked = {trade for name in names for trade in professions.assigned(name)}
+    keeps = disposition.profession_keeps(
+        rows, worked=worked, named=REAGENT_TRADES,
+    )
+    for item in rows:
+        # Trade goods such as Linen are class 7, not class 5. The
+        # profession roster is the stronger fact and must protect them
+        # even when item_template calls them ordinary trade goods.
+        profession_material = item.get("name") in materials.REAGENTS
+        item["reagent"] = bool(item.get("reagent")) or profession_material
+        item["profession_needed"] = bool(
+            profession_material or item.get("item_guid") in keeps
+        )
+    if keeps:
+        # Said out loud, because a protection nobody can see in the log is
+        # indistinguishable from one that never fired. It counts every stack
+        # the rule CLAIMS, not every sale it prevented - most of these would
+        # have been refused by quality or price anyway, and pretending
+        # otherwise would overstate what this gate does.
+        log.info("economy: %d carried stack(s) are the family's own trade "
+                 "stock and are not vendor goods: %s", len(keeps),
+                 "; ".join(sorted(set(keeps.values()))))
+    return rows
 
 
 def _sell_attempts(hours: int) -> list:
