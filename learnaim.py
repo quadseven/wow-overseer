@@ -69,20 +69,42 @@ import travel
 # to nothing six hours later.
 TRAINER_ROLE = next(role for role in travel.ROLES if role == "profession trainer")
 
-# THESE IDS ARE AN EXEMPTION, NOT A REFUSAL, and the distinction is the whole
-# of mod-overseer#74 restated for secondaries. It is true that no trainer can
-# START First Aid, Cooking or Fishing - every character already holds all
-# three - and it is irrelevant, because `professions.secondary_rank_errand`
-# does not ask one to. It fires when a character sits AT its rank ceiling
-# (SECONDARY_RANK_CEILING, First Aid 75) to buy the NEXT RANK, which trainers
-# do sell. Treating a secondary errand as stale would delete that errand on
-# the protect cycle immediately after it was written, every time, forever.
+# THESE IDS ARE A REFUSAL, AND THEY USED TO BE AN EXEMPTION. The change is the
+# fix for infra#3701 and it is worth reading, because the exemption was written
+# deliberately and the reasoning behind it was sound except for one fact nobody
+# had checked against the deployed image.
 #
-# What they are exempted FROM is the `wanted` test below. `professions` on the
-# roster is built by `professions.wanted_ids` out of `assigned()`, which is the
-# PRIMARY trade assignment - it has never carried a secondary and was never
-# meant to - so measuring a secondary against it is measuring against a
-# permission that is not about it.
+# WHAT THE EXEMPTION SAID. A secondary errand is not asking a trainer to START
+# First Aid - every character already holds it - it is asking for the NEXT
+# RANK, "which trainers do sell". Treating it as stale would delete the errand
+# on the protect cycle immediately after it was written. That is exactly right
+# for a PRIMARY rank-up (mod-overseer#74) and it is why the exemption looked
+# like the same lesson applied one skill wider.
+#
+# WHAT IT MISSED. Trainers do sell those ranks; mod-overseer cannot buy one.
+# `SkillStartedBySpell` hard-gates on `IsPrimaryProfessionSkill`
+# (mod_overseer.cpp:10314), which is false for First Aid (129), Cooking (185)
+# and Fishing (356) - SkillLine category 9, not 11 - so the trainer resolve
+# matches no spawn (:10058) and `TrainerSpellForSkill` matches no spell
+# (:10369). professions.SECONDARY_RANK_REFUSAL carries the full trace.
+#
+# WHY THAT MAKES THE EXEMPTION AN OUTAGE RATHER THAN A KINDNESS. `learn_skill`
+# non-zero makes `TravelAimBook::Claim` refuse EVERY travel aim for that
+# character - this module's whole reason for existing - and the only thing that
+# clears it inside the world is `ClearLearnAim`, reached only from
+# `TrainOnArrival`, which the character can never reach because the resolve
+# gives it nowhere to walk. So the world cannot end a secondary errand, and the
+# exemption stopped THIS module ending it either. Between them they guaranteed
+# that any secondary ever written to the column fences that character out of
+# all travel - dungeons, vendors, trainers - permanently, with no route back
+# but a hand-written UPDATE. Nothing writes one today (infra#3701 removed the
+# function that would have), and this is the guard for the day something does.
+#
+# A CLEAR HERE IS SAFE IN THE WAY THE EXEMPTION WAS TRYING TO BE. It discards
+# no work: there is no transaction to lose, because there is no trainer that
+# would have completed one. When the module learns to sell secondary ranks,
+# this constant is the single place that has to change back, and
+# professions.SECONDARY_RANK_REFUSAL is the thing to re-read first.
 SECONDARY_IDS = tuple(sorted(trainjob.SECONDARY.values()))
 
 # Why an errand is over. Constants rather than inline strings because they are
@@ -90,6 +112,7 @@ SECONDARY_IDS = tuple(sorted(trainjob.SECONDARY.values()))
 # drifts between the two is a reason nobody can grep for.
 SETTLED = "the trade it named has already settled"
 UNASSIGNED = "the roster does not ask for it"
+SECONDARY = "no trainer in this world can sell a secondary rank"
 
 @dataclass(frozen=True)
 class Row:
@@ -144,14 +167,24 @@ class Plan:
 def finished(row) -> str:
     """Why this errand is over, or '' while it is still live.
 
-    TWO REASONS AND NOT THREE. Both are records of a decision rather than
-    readings of the world's current shape - see the module docstring on
-    mod-overseer#74 for the third one that used to be here and why holding a
-    skill is not the same fact as having finished learning it.
+    THREE REASONS. Two are records of a decision rather than readings of the
+    world's current shape - see the module docstring on mod-overseer#74 for the
+    one that used to be here and why holding a skill is not the same fact as
+    having finished learning it. The third, SECONDARY, is neither: it is a
+    property of the deployed worldserver, which cannot complete such an errand
+    at all, so there is no decision to record and nothing to wait for.
     """
     skill = int(getattr(row, "learn_skill", 0) or 0)
     if not skill:
         return ""
+
+    # BEFORE THE SETTLED TEST, because it is unconditional. A secondary errand
+    # is over the moment it exists - the world has no path that completes it -
+    # and the character is fenced out of all travel until this clear runs.
+    # See SECONDARY_IDS above for the full trace and for why this used to be an
+    # exemption pointing the other way.
+    if skill in SECONDARY_IDS:
+        return SECONDARY
 
     # THE ONE THAT ACTUALLY BIT. `_settle_trades` moved this row to 'learned'
     # because it observed the world agreeing, so the errand it names was
@@ -165,14 +198,15 @@ def finished(row) -> str:
     # only permission there is" - made before the journey rather than at the
     # far end of one the fence has made impossible.
     #
-    # SECONDARIES ARE EXEMPT, see SECONDARY_IDS. An empty `professions` column
-    # is exempt too, and for a reason that is not the same: it means
-    # `_write_declared_professions` has not written this row - a realm missing
-    # the column, a character outside bonds.FAMILY, a degraded cycle - and
-    # reading absence as "the roster asks for nothing" would clear every
-    # outstanding errand in the family the first time that write failed.
+    # AN EMPTY `professions` COLUMN IS EXEMPT, and that exemption stays: an
+    # empty column means `_write_declared_professions` has not written this row
+    # - a realm missing the column, a character outside bonds.FAMILY, a
+    # degraded cycle - and reading absence as "the roster asks for nothing"
+    # would clear every outstanding errand in the family the first time that
+    # write failed. Secondaries no longer need naming here; they are already
+    # gone above, on a stronger reason than this one.
     wanted = tuple(getattr(row, "wanted", ()) or ())
-    if skill not in SECONDARY_IDS and wanted and skill not in wanted:
+    if wanted and skill not in wanted:
         return UNASSIGNED
 
     return ""

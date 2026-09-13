@@ -85,8 +85,12 @@ SECONDARY_NOTE = (
     "SkillStartedBySpell, which gates on IsPrimaryProfessionSkill, so a "
     "secondary is never a trainer's answer to one. All five already hold all "
     "three at 1/75 - what is behind is the VALUE, and a trainer does not sell "
-    "that. It is raised by using the skill, and the ceiling at 75 is the "
-    "first thing a trainer could ever be asked for."
+    "that. It is raised by USING the skill: First Aid has 74 points of "
+    "headroom and Cooking 50, both reachable with no trainer at all, and "
+    "that is where the family's secondary progress has to come from. The "
+    "ceiling at 75 is NOT the next thing to ask a trainer for either - "
+    "infra#3701 measured the deployed image and no rank above it can be "
+    "bought at all; see professions.SECONDARY_RANK_REFUSAL."
 )
 
 

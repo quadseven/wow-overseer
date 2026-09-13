@@ -135,41 +135,74 @@ class FinishedAnswersFromWhatWasDecided(unittest.TestCase):
         self.assertEqual("", learnaim.finished(r))
 
 
-class ASecondaryRankUpSurvivesThisPass(unittest.TestCase):
-    """professions.secondary_rank_errand fires when a character sits AT its
-    rank ceiling, to buy the NEXT RANK - which trainers do sell. It is true
-    that no trainer can START First Aid and it is irrelevant, because that
-    errand does not ask one to. Treating a secondary as stale would delete the
-    errand on the protect cycle immediately after it was written, forever.
+class ASecondaryErrandIsLiftedNotPreserved(unittest.TestCase):
+    """infra#3701, and the reversal of this module's original exemption.
+
+    A secondary learn errand used to be EXEMPT from the staleness test, on the
+    reasoning that it asks for a rank rather than a start and trainers do sell
+    ranks. Trainers do; mod-overseer cannot buy one. `SkillStartedBySpell`
+    gates on `IsPrimaryProfessionSkill` (mod_overseer.cpp:10314), false for
+    First Aid, Cooking and Fishing, so the trainer resolve matches no spawn
+    (:10058) and `TrainerSpellForSkill` matches no spell (:10369).
+
+    That makes the exemption an outage rather than a kindness: the world can
+    only clear `learn_skill` from `TrainOnArrival`, which the character can
+    never reach, and a non-zero `learn_skill` makes `TravelAimBook::Claim`
+    refuse EVERY travel aim for that character. Exempting it meant nothing
+    could lift the fence, ever.
     """
 
-    def test_the_ceiling_table_is_real_and_names_first_aid(self):
-        self.assertIn("first aid", professions.SECONDARY_RANK_CEILING)
-        self.assertEqual(FIRST_AID, goals.SKILL_IDS["first aid"])
-
-    def test_the_errand_that_module_builds_is_a_learn_with_a_trainer_walk(self):
-        errand = professions.secondary_rank_errand("Ugga", {"first aid": 75})
-        self.assertIsNotNone(errand)
-        self.assertEqual(FIRST_AID, errand.learn_skill)
-        self.assertEqual(learnaim.TRAINER_ROLE, errand.travel_npc)
-
-    def test_it_is_not_called_finished_merely_for_being_a_secondary(self):
+    def test_a_secondary_errand_is_over_the_moment_it_exists(self):
         r = row("Ugga", learn_skill=FIRST_AID, wanted=(ALCHEMY, HERBALISM))
-        self.assertEqual("", learnaim.finished(r))
-        self.assertEqual(FIRST_AID, learnaim.outstanding(r))
+        self.assertEqual(learnaim.SECONDARY, learnaim.finished(r))
+        self.assertEqual(0, learnaim.outstanding(r))
 
-    def test_the_permission_column_cannot_refuse_it_either(self):
-        """`professions` is built by wanted_ids out of assigned(), which is the
-        PRIMARY trade assignment and has never carried a secondary. Measuring a
-        secondary against it would be measuring against a permission that is
-        not about it, which is why SECONDARY_IDS exempts rather than refuses."""
+    def test_all_three_secondaries_are_lifted(self):
+        for skill in learnaim.SECONDARY_IDS:
+            r = row("Ugga", learn_skill=skill, wanted=(ALCHEMY, HERBALISM))
+            self.assertEqual(learnaim.SECONDARY, learnaim.finished(r), skill)
+
+    def test_it_is_lifted_even_when_the_column_is_empty(self):
+        """An empty `professions` column exempts a PRIMARY, because absence
+        means the write failed rather than that nothing is wanted. A secondary
+        is refused by the worldserver either way, so that exemption must not
+        rescue it."""
+        r = row("Ugga", learn_skill=FIRST_AID, wanted=())
+        self.assertEqual(learnaim.SECONDARY, learnaim.finished(r))
+
+    def test_it_is_lifted_even_if_the_column_somehow_carries_it(self):
+        """Defence in depth. `wanted_ids` cannot emit a secondary and a test
+        pins that, but this module reads a column the worldserver also writes,
+        so it must not depend on the column being sane."""
+        r = row("Ugga", learn_skill=FIRST_AID, wanted=(FIRST_AID, ALCHEMY))
+        self.assertEqual(learnaim.SECONDARY, learnaim.finished(r))
+
+    def test_the_clear_is_actually_written(self):
+        r = row("Ugga", learn_skill=FIRST_AID, wanted=(ALCHEMY,), leads=True)
+        plan = learnaim.plan([r])
+        self.assertEqual(("Ugga",), tuple(s.character for s in plan.clear))
+        self.assertEqual("", plan.aim, "a secondary must never be walked")
+        sql = learnaim.statements(plan)
+        self.assertEqual(1, len(sql))
+        self.assertIn("learn_skill = 0", sql[0][0])
+        self.assertEqual(("Ugga", FIRST_AID), sql[0][1])
+
+    def test_a_primary_is_still_left_alone(self):
+        """The reversal must not catch mod-overseer#74's case: a character
+        holding a primary at its ceiling is not finished, it is stuck, and only
+        a trainer selling the next tier tells those apart."""
+        r = row("Ugga", learn_skill=HERBALISM, wanted=(ALCHEMY, HERBALISM))
+        self.assertEqual("", learnaim.finished(r))
+        self.assertEqual(HERBALISM, learnaim.outstanding(r))
+
+    def test_the_permission_column_never_carries_one_anyway(self):
         ids = professions.wanted_ids("Ugga")
         self.assertNotIn(str(FIRST_AID), ids.split(","))
 
     def test_a_settled_secondary_trade_still_ends_it(self):
         r = row("Ugga", learn_skill=FIRST_AID, wanted=(ALCHEMY,),
                 traded=(FIRST_AID,), settled=(FIRST_AID,))
-        self.assertEqual(learnaim.SETTLED, learnaim.finished(r))
+        self.assertIn(learnaim.finished(r), (learnaim.SECONDARY, learnaim.SETTLED))
 
 class TheBornFrozenErrandIsCarriedOutNotDiscarded(unittest.TestCase):
     """mod-overseer's AimLearnAt writes learn_skill with no trade row behind it

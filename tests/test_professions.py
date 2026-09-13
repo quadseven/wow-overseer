@@ -974,38 +974,100 @@ class BridgeContractTest(unittest.TestCase):
         self._holds("professions.settled")
 
 
-class SecondaryRankErrandTest(unittest.TestCase):
-    """infra#2757's Cooking/First Aid slice. First Aid's Apprentice cap (75,
-    live-verified for all five) gates craft.RECIPES' Wool Bandage bracket -
-    this is the errand that would send a character to lift it, built the
-    same shape as a primary trade's `to_errand` learn half, minus the
-    unlearn a secondary skill never needs."""
+class SecondaryRankRefusalTest(unittest.TestCase):
+    """infra#3701. There is no secondary rank errand and there must not be one.
 
-    def test_none_below_the_ceiling(self):
-        self.assertIsNone(professions.secondary_rank_errand("Grug", {"first aid": 74}))
+    `secondary_rank_errand` and `SECONDARY_RANK_CEILING` were removed rather
+    than wired: the deployed worldserver refuses a secondary training errand in
+    two places Python cannot reach, and a `learn_skill` nothing can clear
+    fences a character out of ALL travel (infra#3686). These tests pin the
+    removal, so that a future pass reintroducing the errand has to delete a
+    test that says why first.
+    """
 
-    def test_none_for_a_skill_with_no_named_ceiling(self):
-        # Cooking's one verified bracket tops out at 50, well short of
-        # Apprentice's own 75 cap - nothing to name a ceiling for yet.
-        self.assertIsNone(professions.secondary_rank_errand("Grug", {"cooking": 75}))
+    def test_the_errand_is_gone_and_stays_gone(self):
+        self.assertFalse(hasattr(professions, "secondary_rank_errand"))
+        self.assertFalse(hasattr(professions, "SECONDARY_RANK_CEILING"))
 
-    def test_fires_at_the_apprentice_ceiling(self):
-        errand = professions.secondary_rank_errand("Grug", {"first aid": 75})
-        self.assertIsNotNone(errand)
-        self.assertEqual(errand.character, "Grug")
-        self.assertEqual(errand.learn_skill, professions.skill_id("first aid"))
-        self.assertEqual(errand.unlearn_skill, 0)
-        self.assertEqual(errand.travel_npc, professions.TRAINER_ROLE)
+    def test_the_refusal_is_never_empty_and_names_the_real_blocker(self):
+        """A caller must get a reason, not None. An empty answer is what let
+        the removed function read as a feature merely waiting for a caller."""
+        said = professions.secondary_rank_refusal({"first aid": 1})
+        self.assertTrue(said)
+        self.assertIn("SkillStartedBySpell", said)
+        self.assertIn("IsPrimaryProfessionSkill", said)
 
-    def test_fires_past_the_ceiling_too(self):
-        # A character cannot actually exceed character_skills.max in the
-        # live engine, but this must not silently miss a stale value above
-        # it either - >= , not ==.
-        errand = professions.secondary_rank_errand("Grug", {"first aid": 76})
-        self.assertIsNotNone(errand)
+    def test_the_refusal_does_not_depend_on_how_close_to_the_ceiling(self):
+        """A character at 1/75 and one at 75/75 are refused by the same two
+        lines of C++. A message that varied would suggest some state could
+        make it succeed."""
+        for value in (1, 74, 75, 76):
+            self.assertIn(professions.SECONDARY_RANK_REFUSAL,
+                          professions.secondary_rank_refusal({"first aid": value}))
 
-    def test_no_errand_for_a_character_holding_nothing_named(self):
-        self.assertIsNone(professions.secondary_rank_errand("Grug", {}))
+    def test_no_secondary_earns_anything_today(self):
+        """Measured, not assumed. The family knows 2550/3273/7620/37836 and no
+        bandage recipe and no Charred Wolf Meat, so every bracket
+        craft.RECIPES carries for a secondary names a spell they cannot cast.
+        An earlier pass of this module said 74 and 50 here and was wrong."""
+        self.assertEqual({0}, set(professions.SECONDARY_HEADROOM.values()))
+
+    def test_it_says_which_wall_each_secondary_is_behind(self):
+        """Three different walls, and none of them is the rank ceiling. That
+        conflation is how "capped at Apprentice" became the accepted story."""
+        said = professions.secondary_rank_refusal({"first aid": 1, "cooking": 1})
+        self.assertIn("first aid is at 1/75", said)
+        self.assertIn("Linen Bandage", said)
+        self.assertIn("cooking is at 1/75", said)
+        self.assertIn("Spice Bread", said)
+
+    def test_fishing_names_the_pole_and_the_missing_drive(self):
+        said = professions.secondary_rank_refusal({"fishing": 1})
+        self.assertIn("Fishing Pole", said)
+        self.assertIn("no fishing drive", said)
+
+    def test_a_skill_the_character_does_not_hold_is_not_reported(self):
+        said = professions.secondary_rank_refusal({"first aid": 1})
+        self.assertNotIn("cooking is at", said)
+
+    def test_every_secondary_is_accounted_for(self):
+        self.assertEqual(set(professions.SECONDARY),
+                         set(professions.SECONDARY_HEADROOM))
+        self.assertEqual(set(professions.SECONDARY),
+                         set(professions.SECONDARY_BLOCKED))
+
+
+class TheProfessionsColumnCarriesPrimariesOnly(unittest.TestCase):
+    """infra#3701's proposed fix, refused with a test.
+
+    Widening `professions` to carry secondaries clears exactly one of three
+    C++ refusals and breaks the primary trade drive as it does it:
+    `HeldPrimaries` (mod_overseer.cpp:10540) filters held skills with
+    `IsPrimaryProfessionSkill`, so a secondary in the column is counted
+    MISSING forever, and `wanted.size() > maxPrimary` sends
+    `NextProfessionStep` down its do-nothing branch permanently.
+    """
+
+    def test_no_secondary_id_ever_reaches_the_column(self):
+        secondary_ids = {str(professions.skill_id(s)) for s in professions.SECONDARY}
+        for name in professions.ROSTER:
+            ids = set(professions.wanted_ids(name).split(","))
+            self.assertFalse(ids & secondary_ids,
+                             "%s's professions column carries a secondary" % name)
+
+    def test_nobody_is_assigned_more_than_the_world_allows(self):
+        """`wanted.size() > maxPrimary` is what trips the C++ into refusing to
+        act at all - "is assigned N primary professions and may hold 2"."""
+        for name in professions.ROSTER:
+            ids = [i for i in professions.wanted_ids(name).split(",") if i]
+            self.assertLessEqual(len(ids), professions.MAX_PRIMARY, name)
+
+    def test_every_id_in_the_column_is_a_primary(self):
+        primary_ids = {professions.skill_id(s) for s in professions.PRIMARY}
+        for name in professions.ROSTER:
+            for raw in professions.wanted_ids(name).split(","):
+                if raw:
+                    self.assertIn(int(raw), primary_ids, name)
 
 
 if __name__ == "__main__":
