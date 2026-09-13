@@ -117,6 +117,41 @@ class MultipleMembersEachGetTheirOwnDeposit(unittest.TestCase):
         self.assertEqual(guildbank.plan_deposits([]), [])
 
 
+class FormatItemDepositIsAPureFormatterTests(unittest.TestCase):
+    """Mechanism only (infra#3647) - this renders the command text
+    `GuildVerb::BankDepositItem` parses, it does not decide anything."""
+
+    def test_guid_form(self):
+        self.assertEqual(
+            guildbank.format_item_deposit(item_guid=494263),
+            "bank deposit-item guid:494263")
+
+    def test_entry_form(self):
+        self.assertEqual(
+            guildbank.format_item_deposit(entry=4562),
+            "bank deposit-item entry:4562")
+
+    def test_neither_is_rejected(self):
+        with self.assertRaises(ValueError):
+            guildbank.format_item_deposit()
+
+    def test_both_is_rejected(self):
+        with self.assertRaises(ValueError):
+            guildbank.format_item_deposit(item_guid=1, entry=1)
+
+    def test_a_zero_guid_is_rejected(self):
+        with self.assertRaises(ValueError):
+            guildbank.format_item_deposit(item_guid=0)
+
+    def test_a_negative_entry_is_rejected(self):
+        with self.assertRaises(ValueError):
+            guildbank.format_item_deposit(entry=-4562)
+
+    def test_a_non_int_guid_is_rejected(self):
+        with self.assertRaises(ValueError):
+            guildbank.format_item_deposit(item_guid="494263")
+
+
 class FetchGuildMoneyReadsTheRealSchemaTests(unittest.TestCase):
     """`_fetch_guild_money` crashed every single cycle in production
     (verified live: `pymysql.err.OperationalError: (1054, "Unknown column
