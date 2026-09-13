@@ -6021,16 +6021,28 @@ def _fetch_bank_items(names: list) -> list:
 def _fetch_guild_money(names: list) -> list:
     """Rows for guildbank.plan_deposits; no judgement and no arithmetic here.
 
-    `guildid <> 0` is the whole membership test - `characters` has no other
-    guild column worth reading for a deposit decision, and a character with
-    no guild has nowhere for the deposit to land regardless of purse."""
+    LIVE BUG, FIXED (infra#3652): this used to read `characters.guildid`,
+    which does not exist on this world - confirmed by `DESCRIBE characters`
+    against the live wow-dev database, not assumed the way the previous
+    docstring's claim was. Guild membership lives in `guild_member` (keyed
+    by `guid`), the same table this session already used elsewhere tonight
+    to check a character's guild. The crash was silent: `_guild_bank_loop`
+    caught the exception every cycle and logged it, so gold sat undeposited
+    for hours with no deposit ever queued and nothing surfacing it as
+    broken until this session checked the live guild_bank_once traceback
+    directly. A LEFT JOIN, not an INNER one - a character with no guild_member
+    row is not in a guild, which the query should say plainly (in_guild=0)
+    rather than silently drop the row and make a caller wonder if they were
+    skipped for a different reason."""
     if not names:
         return []
     marks = ",".join(["%s"] * len(names))
     with _connect() as conn, conn.cursor() as cur:
         cur.execute(
-            "SELECT name, money, guildid <> 0 AS in_guild "  # noqa: S608 - placeholders from a COUNT, values still bound
-            "FROM characters WHERE name IN (%s)" % marks,
+            "SELECT c.name AS name, c.money AS money, "  # noqa: S608 - placeholders from a COUNT, values still bound
+            "gm.guildid IS NOT NULL AS in_guild "
+            "FROM characters c LEFT JOIN guild_member gm ON gm.guid = c.guid "
+            "WHERE c.name IN (%s)" % marks,
             names,
         )
         return [dict(row) for row in cur.fetchall()]

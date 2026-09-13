@@ -7,9 +7,12 @@ writes `travel_npc`, but the caller in bridge.py routes the resulting errand
 through `ECONOMY_ERRANDS`, deliberately, so it inherits the exact same
 idle-traveller guard rather than repeating that mistake one file over.
 """
+import pathlib
 import unittest
 
 import guildbank
+
+BRIDGE = pathlib.Path(__file__).resolve().parents[1] / "bridge.py"
 
 
 def member(**kw):
@@ -108,6 +111,36 @@ class MultipleMembersEachGetTheirOwnDeposit(unittest.TestCase):
 
     def test_an_empty_roster_plans_nothing(self):
         self.assertEqual(guildbank.plan_deposits([]), [])
+
+
+class FetchGuildMoneyReadsTheRealSchemaTests(unittest.TestCase):
+    """`_fetch_guild_money` crashed every single cycle in production
+    (verified live: `pymysql.err.OperationalError: (1054, "Unknown column
+    'guildid' in 'field list'")`, silently, for hours - `characters` has no
+    `guildid` column on this world; guild membership lives in `guild_member`
+    keyed by `guid`, the same table `test_raid_tab.py`'s own
+    `SELECT gm2.guildid FROM guild_member gm2` already proved correct
+    elsewhere in this codebase before this function was ever written. This
+    pins the fix as a source-text check so a future edit cannot reintroduce
+    the same non-existent column - a live pymysql connection is not
+    available to this test suite, so this is the assertion that can
+    actually run."""
+
+    def setUp(self):
+        self.source = BRIDGE.read_text(encoding="utf-8")
+        start = self.source.index("def _fetch_guild_money(")
+        end = self.source.index("\ndef ", start + 1)
+        self.body = self.source[start:end]
+
+    def test_reads_guild_membership_from_guild_member_not_characters(self):
+        self.assertIn("guild_member", self.body)
+        self.assertNotIn("guildid <> 0", self.body)
+        self.assertNotIn("FROM characters WHERE name IN", self.body)
+
+    def test_joins_on_guid_not_name(self):
+        # guild_member has no `name` column at all - joining on it would be
+        # the same class of guessed-schema mistake this fix corrects.
+        self.assertIn("gm.guid = c.guid", self.body)
 
 
 if __name__ == "__main__":
