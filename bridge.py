@@ -41,6 +41,7 @@ import goals
 import bonds
 import guildbank
 import craft
+import craft_rhythm
 import craft_supply
 import item_plan
 import jobs
@@ -1205,6 +1206,64 @@ def _crafting_roster() -> list:
             ("craft",),
         )
         return [row["name"] for row in cur.fetchall()]
+
+
+def _standing_jobs() -> dict:
+    """name -> `job` for every enabled roster row (infra#3696).
+
+    THE SIBLING OF `_crafting_roster`, AND THE REASON IT IS NOT THAT FUNCTION.
+    That one asks "who is on job='craft'" and answers with names, which is
+    exactly right for handing DriveCraft its errands. `_craft_rhythm_once` asks
+    a different question - "what mode is the family in, and do all five agree" -
+    and a list of the rows matching one value cannot answer it: a family half
+    on craft and half on quest is indistinguishable there from a family wholly
+    on craft. `craft_rhythm.standing_mode` needs every row's value to tell
+    those apart, and refuses to act when they disagree.
+
+    READ-ONLY, like every other roster reader here. The only thing that writes
+    this column is mod-overseer's own DoJob, on an `overseer_command` row that
+    `_set_job` inserts.
+    """
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute("SELECT name, job FROM overseer_roster WHERE enabled = 1")
+        return {row["name"]: row["job"] for row in cur.fetchall()}
+
+
+def _standing_travel_aims() -> dict:
+    """name -> `travel_npc` for every enabled roster row, READ ONLY.
+
+    Used for one thing and one thing only: saying out loud that a gathering
+    order will not move a character who is still holding a travel errand,
+    because mod-overseer's `TravelHoldsTheWheel` stands the quest drive down
+    for exactly that. Nothing in this file may WRITE the column off the back of
+    this read - the sanctioned writers are the existing economy passes, and a
+    second one is how the family spent half an hour pinned in a Gadgetzan shop
+    (infra#3703, infra#3708, infra#3728).
+    """
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute("SELECT name, travel_npc FROM overseer_roster WHERE enabled = 1")
+        return {row["name"]: (row["travel_npc"] or "") for row in cur.fetchall()}
+
+
+class _LogChannel:
+    """A stand-in for a Discord channel, for an order nobody asked for.
+
+    `_set_job` reports what it did by speaking - the refusal when `jobs.why_not`
+    turns a mode down, and `jobs.describe` when it lands. An automatic caller
+    has no channel to speak into, and the two ways of dealing with that are to
+    fork the write path or to give it somewhere to talk. Forking it would mean
+    a second place that has to remember to ask `jobs.why_not` first, which is
+    precisely the omission infra#3338 was filed about; this is the cheaper
+    half of that choice.
+
+    IT IS NOT A SILENT SINK. Every sentence reaches the log at INFO, which is
+    where an unattended pass is read from and where DD can alert on it. A null
+    object that threw the text away would turn "the pass explained itself" into
+    "the pass did something" - the shape this codebase keeps meeting.
+    """
+
+    async def send(self, text: str) -> None:
+        log.info("job: %s", text)
 
 
 def _council_family() -> list:
@@ -2618,6 +2677,7 @@ class Bridge(discord.Client):
                 self._bank_loop,
                 self._guild_bank_loop,
                 self._craft_supply_loop,
+                self._craft_rhythm_loop,
                 self._towntrip_loop,
                 self._restore_lost_lives,
             )
@@ -4089,6 +4149,162 @@ class Bridge(discord.Client):
                 await self._craft_supply_once()
             except Exception:
                 log.exception("craft_supply failed; retrying next cycle")
+            await asyncio.sleep(cycle)
+
+    def _rhythm_channel(self):
+        """Where an automatic job order says what it did.
+
+        `_set_job` is the sanctioned write path and it SPEAKS its answers -
+        every refusal, and the `jobs.describe` line at the end. That is right
+        for a person who has just typed an order and is waiting on a reply, and
+        it is why this pass reuses that function rather than growing a second
+        writer next to it: the guard, the fan-out and the report are all things
+        this pass wants and none of them should exist twice.
+
+        An automatic pass has no channel, though, and the honest way to give it
+        one is not to let those sentences fall on the floor. `_LogChannel`
+        below is the null object that keeps every one of them, at INFO, which
+        is where anything running unattended is actually read from. The real
+        overseer channel is preferred when the gateway has one, for the same
+        reason `_goal_channel` prefers it: the operator watches a stream, and a
+        family that just walked away from its anvil should say so where they
+        will see it.
+        """
+        if OVERSEER_CHANNEL_ID:
+            channel = self.get_channel(int(OVERSEER_CHANNEL_ID))
+            if channel is not None:
+                return channel
+        return _LogChannel()
+
+    async def _craft_rhythm_once(self) -> None:
+        """Alternate the family between gathering and crafting (infra#3696).
+
+        THE KEYSTONE OF infra#3731, AND THE ONLY THING HERE THAT WAS MISSING.
+        Every other piece of the loop already worked and was measured working:
+        `craft.craft_errand` picks the right recipe, `_craft_once` writes it,
+        DriveCraft casts it, `craft_supply` buys the vendor half of its
+        reagents, and ordinary `job='quest'` roaming gathers the rest. What
+        nothing did was SWITCH between the two halves, so a family that ran out
+        mid-session stood still until a person changed the column by hand. The
+        operator did exactly that all afternoon on 2026-09-13; this is the pass
+        that ends the need for it.
+
+        THE ERRAND IS DERIVED, NOT READ OFF THE ROSTER, and that is load
+        bearing rather than a shortcut. `overseer_roster.craft_spell` is only
+        written by `_craft_once`, which is itself gated on job='craft'
+        (`_crafting_roster`). So on a family that has never crafted, every
+        craft_spell is 0 - and a pass that judged stock from that column would
+        find nobody to have an opinion about, never order craft, never let
+        `_craft_once` run, and never populate the column. That is a closed
+        loop with no way in. Asking `craft.craft_errand` the same question
+        `_craft_once` asks answers what this pass actually needs to know -
+        "if the family were told to craft, what would each of them cast" -
+        which is a question about a mode they are not currently in and which
+        the column therefore cannot answer at all.
+
+        IT WRITES ONLY A JOB MODE, AND ONLY THROUGH `_set_job`. Nothing here
+        touches `travel_npc`: this project has been pinned in a shop for half
+        an hour by a second writer for that column more than once (infra#3703,
+        infra#3708, infra#3728) and the sanctioned writers are the existing
+        economy passes. Nothing here touches `craft_spell` either - that is
+        `_craft_once`'s, and re-deriving it is a read, not a write.
+
+        AND IT WRITES ONLY ON A CHANGE. `craft_rhythm.rhythm` returns `changed`
+        precisely so this can be a one-line gate: re-asserting the mode the
+        family is already in would insert one `overseer_command` row per
+        character per cycle for ever, which is command spam rather than a
+        decision. The report is still logged every pass, changed or not,
+        because the starvation it names is the half of infra#3696 that has
+        nothing to do with the mode.
+        """
+        names = sorted((await asyncio.to_thread(_protected_guids)).values())
+        if not names:
+            return
+        standing = craft_rhythm.standing_mode(
+            await asyncio.to_thread(_standing_jobs)
+        )
+        skills = await asyncio.to_thread(_fetch_trade_skills, names)
+
+        # ONE BATCH FOR THE WHOLE FAMILY, the same discipline
+        # `_craft_supply_once` already holds `_fetch_item_counts` to: one round
+        # trip per DISTINCT item entry, not one per character. Five characters
+        # short of four distinct materials is four queries, not twenty.
+        spells = {name: craft.craft_errand(name, skills.get(name, {}))
+                  for name in names}
+        wanted = {
+            (name, reagent.entry)
+            for name, spell in spells.items()
+            for reagent in craft_rhythm.GATHERED.get(spell, ())
+        }
+        counts = await asyncio.to_thread(_fetch_item_counts, sorted(wanted))
+
+        stands = [
+            craft_rhythm.stand(
+                name, spells[name],
+                {reagent.entry: counts.get((name, reagent.entry), 0)
+                 for reagent in craft_rhythm.GATHERED.get(spells[name], ())},
+            )
+            for name in names
+        ]
+        plan = craft_rhythm.rhythm(stands, standing)
+        log.info("craft_rhythm: %s", craft_rhythm.report(plan))
+        if not plan.changed:
+            return
+
+        await self._set_job(
+            core.JobDirective(mode=plan.mode, source="overseer:craft_rhythm"),
+            self._rhythm_channel(),
+        )
+
+        # A GATHERING ORDER THAT CANNOT MOVE ANYBODY IS SAID OUT LOUD
+        # (infra#3728). mod-overseer's `TravelHoldsTheWheel` stands the quest
+        # drive down for any character carrying a non-empty `travel_npc` it can
+        # act on - "'{}' is on a travel errand ({}) - the quest drive stands
+        # down until it lands" - so a family told to gather while the economy
+        # passes still hold that column simply does not roam. That is not this
+        # pass's to fix and it must not try: writing the column is exactly the
+        # second-writer mistake above. Naming it is the difference between a
+        # person seeing "we switched to quest and nothing happened" and seeing
+        # why, which cost hours the last time it went unsaid.
+        if plan.mode == craft_rhythm.MODE_GATHER:
+            held = {name: aim for name, aim
+                    in (await asyncio.to_thread(_standing_travel_aims)).items()
+                    if aim}
+            if held:
+                log.info(
+                    "craft_rhythm: the family is told to gather, but %s still "
+                    "carry a travel aim (%s) and a travel aim stands the quest "
+                    "drive down - they will not roam until it clears "
+                    "(infra#3728)",
+                    ", ".join(sorted(held)),
+                    ", ".join("%s=%s" % pair for pair in sorted(held.items())),
+                )
+
+    async def _craft_rhythm_loop(self) -> None:
+        """Own loop and own clock, the same reasoning `_craft_supply_loop`
+        gives for itself.
+
+        THE CADENCE MATCHES `CRAFT_CYCLE_SECONDS` ON PURPOSE (300 by default,
+        the clock `_assign_crafts` already runs on), so the mode decision and
+        the errand refresh see the same world a poll apart rather than
+        interleaving on unrelated clocks. Polling faster than the worldserver's
+        own 900-second `PlayerSaveInterval` re-reads numbers that have not
+        moved, which is harmless here only because the write gate is `changed`:
+        three identical polls produce one order and then two no-ops.
+
+        Staggered LAST, after `_craft_supply_loop`'s own 300-second settle. A
+        vial trip that is already under way should get its pass in before this
+        one considers moving the family off craft, so the two never race over
+        the same cycle.
+        """
+        await self.wait_until_ready()
+        cycle = float(os.environ.get("CRAFT_RHYTHM_CYCLE_SECONDS", "300"))
+        await asyncio.sleep(min(cycle, 330.0))
+        while not self.is_closed():
+            try:
+                await self._craft_rhythm_once()
+            except Exception:
+                log.exception("craft_rhythm failed; retrying next cycle")
             await asyncio.sleep(cycle)
 
     async def _protect_characters(self) -> None:
@@ -8266,6 +8482,7 @@ class HeadlessBridge(Bridge):
                 self._bank_loop,
                 self._guild_bank_loop,
                 self._craft_supply_loop,
+                self._craft_rhythm_loop,
                 self._towntrip_loop,
                 self._restore_lost_lives,
             ) if coro.__name__ not in self.HEADLESS_SKIP
