@@ -45,6 +45,7 @@ import craft_supply
 import item_plan
 import jobs
 import kin
+import learnaim
 import materials
 import overhear
 import persona
@@ -2168,6 +2169,150 @@ def _aim_train_traveller(statements) -> None:
                 raise
 
 
+def _learn_aim_rows() -> list:
+    """The roster and the trade table, as learnaim reads them (infra#3686).
+
+    TWO READS AND NO JOIN, deliberately, and it is the same choice
+    `_train_members` makes one screen down for the same reason. Five rows come
+    back from each, there is no ordering requirement between them - and these
+    two tables sit on opposite sides of the collation split documented above
+    `_errand_traveller`, so a join would need an explicit COLLATE on the trade
+    operand to avoid MySQL 1267. Not joining removes that question rather than
+    answering it. The names are matched in Python, exactly as `_train_members`
+    matches `character_skills`, and it is safe for the same reason: both
+    columns are written from `characters.name`, so they agree byte for byte.
+
+    FAILS CLOSED, and that is not the usual degrade. Every other overseer_*
+    read answers 1054/1146 with an empty or narrowed result and carries on;
+    this one returns nothing at all, because its caller writes to the two most
+    collision-prone columns in the schema and a HALF-read roster would make a
+    live errand look derived and an unsettled one look settled. A cycle that
+    cannot see both tables does nothing, and the next cycle is ten minutes
+    away.
+    """
+    with _connect() as conn, conn.cursor() as cur:
+        try:
+            cur.execute(
+                # `lead` BACKTICKED: reserved word in MySQL 8, the same trap
+                # _mark_party_leader's own comment records.
+                "SELECT name, `lead`, professions, travel_npc, learn_skill "
+                "FROM overseer_roster WHERE enabled = 1"
+            )
+            roster = list(cur.fetchall())
+        except pymysql.err.MySQLError as exc:
+            if exc.args and exc.args[0] in (1054, 1146):
+                return []
+            raise
+        if not roster:
+            return []
+
+        traded: dict = {}
+        settled: dict = {}
+        try:
+            # No alias on the table and no join: tests/test_collation_split.py
+            # expects exactly ONE `overseer_trade t` join in this tree and this
+            # is deliberately not a second one.
+            cur.execute(
+                "SELECT character_name, skill_id, status FROM overseer_trade "
+                "WHERE verb = 'learn'"
+            )
+            for row in cur.fetchall():
+                name = row["character_name"]
+                skill = int(row["skill_id"] or 0)
+                traded.setdefault(name, []).append(skill)
+                if row["status"] == "learned":
+                    settled.setdefault(name, []).append(skill)
+        except pymysql.err.MySQLError as exc:
+            if not (exc.args and exc.args[0] in (1054, 1146)):
+                raise
+            log.warning(
+                "overseer_trade is unreadable; no learn errand can be shown "
+                "to have settled or to be derived this cycle, so none is "
+                "touched"
+            )
+            return []
+
+    return [
+        learnaim.Row(
+            character=row["name"],
+            learn_skill=int(row["learn_skill"] or 0),
+            travel_npc=row["travel_npc"] or "",
+            leads=bool(int(row["lead"] or 0)),
+            wanted=trainjob.parse_wanted(row["professions"]),
+            traded=tuple(sorted(set(traded.get(row["name"], ())))),
+            settled=tuple(sorted(set(settled.get(row["name"], ())))),
+        )
+        for row in roster
+    ]
+
+
+def _derived_errand_traveller() -> str:
+    """Who leads because a learn errand nothing else can see is outstanding.
+
+    THE THIRD AND NARROWEST BORROWER OF THE LEAD (infra#3686). mod-overseer
+    writes `overseer_roster.learn_skill` for itself through `AimLearnAt` and
+    then cannot act on it - nothing in the worldserver ever writes
+    `travel_npc = 'profession trainer'` - so a derived errand is born with no
+    journey attached, and `TravelAimBook::Claim` refuses every other aim for
+    that character while it stands. Aiming it is half the answer; the C++ is
+    explicit that the other half is leadership, because `AimedMover` answers
+    `RefuseInFormation` for a follower and names the remedy itself.
+
+    ASKED LAST BY `_head_now`, behind an order a person gave and a trade the
+    family decided, and ahead only of HOMEWARD_LEAD and seniority - so it
+    borrows the lead only from a family that is otherwise resting, and can
+    never preempt either of the other two.
+
+    NO ERRAND_LEAD_HOURS HERE, and learnaim.derived carries the argument: that
+    bound exists for a worldserver built WITHOUT the professions verbs, which
+    never clears the column - and an errand `AimLearnAt` wrote is proof those
+    verbs are running on this realm.
+
+    Same contract as `_errand_traveller`'s own handler on failure: loudly
+    logged, still answers "nobody", never costs the caller its cycle.
+    """
+    try:
+        return learnaim.traveller(_learn_aim_rows())
+    except pymysql.err.MySQLError:
+        log.exception(
+            "derived errand traveller lookup failed; leading the family by "
+            "seniority this cycle"
+        )
+        return ""
+
+
+def _run_learn_aim_plan(statements) -> int:
+    """Run learnaim's writes, in order, on one cursor. Returns rows changed.
+
+    Same shape and same degrade as `_aim_train_traveller` above, and for the
+    same reasons: the statements are BUILT IN THE PURE MODULE, every value is
+    bound there, and this function has no opinion it could get wrong.
+
+    THE COUNT IS WORTH RETURNING, because every statement is a
+    compare-and-swap (learnaim.statements says why). A zero is not a failure -
+    it is another writer having taken the column between the read and the
+    write, which is exactly the collision the compare-and-swap exists to lose
+    gracefully. The next cycle re-reads and re-decides, and whoever won is
+    untouched.
+    """
+    landed = 0
+    with _connect() as conn, conn.cursor() as cur:
+        for sql, params in statements:
+            try:
+                cur.execute(sql, params)
+            except pymysql.err.MySQLError as exc:
+                if exc.args and exc.args[0] in (1054, 1146):
+                    log.warning(
+                        "overseer_roster is missing the profession errand "
+                        "columns - no learn errand can be reconciled on this "
+                        "realm until the db-import image carrying "
+                        "mod-overseer's SQL has shipped (infra#2757)"
+                    )
+                    return landed
+                raise
+            landed += cur.rowcount
+    return landed
+
 # WHO THE PARTY FOLLOWS WHEN SENIORITY WOULD STRAND IT. Normally None, and
 # then nothing changes: the father leads, as he always has.
 #
@@ -2223,10 +2368,15 @@ def _head_now() -> str:
     two can never be looking at different answers to the same question. Getting
     that wrong is a family following a character that is about to stop leading,
     which is a party split in two. HOMEWARD_LEAD above outranks seniority and
-    is outranked by both borrowers, because a character actually walking
-    somewhere is a better leader for that moment than one merely bound well.
+    is outranked by all three borrowers, because a character actually
+    walking somewhere is a better leader for that moment than one merely
+    bound well. The third borrower is _derived_errand_traveller, and it is
+    asked last of the three: an errand mod-overseer wrote for itself is
+    real, and it is still the weakest claim on the lead of the three,
+    because nobody outside the worldserver asked for it (infra#3686).
     """
     return (_train_traveller() or _errand_traveller()
+            or _derived_errand_traveller()
             or HOMEWARD_LEAD or bonds.head_of_family())
 
 
@@ -3912,7 +4062,13 @@ class Bridge(discord.Client):
                 # ...and, while a trade errand is outstanding, whoever is
                 # going to the trainer leads instead, so the family travels
                 # there together behind its one traveller (infra#2757).
-                await asyncio.to_thread(_mark_party_leader, _head_now())
+                # `_head_now()` INSIDE THE THREAD, not evaluated on the loop
+                # and handed in as an argument. It asks three borrowers and
+                # every one of them reads the database; written the other way
+                # those reads happen on the event loop, which this file's own
+                # docstring forbids, and infra#3686 added the third borrower
+                # that made it worth correcting rather than merely noting.
+                await asyncio.to_thread(lambda: _mark_party_leader(_head_now()))
 
                 # ...and while that job is `train`, the traveller is aimed at
                 # a trainer in the SAME pass, so leadership and destination can
@@ -3926,6 +4082,18 @@ class Bridge(discord.Client):
                 # anything, and it has to be present for characters that have
                 # no errand at all.
                 await asyncio.to_thread(_write_declared_professions)
+
+                # ...and the family's learn errands are reconciled in the same
+                # pass: one that is already over comes off the roster, and one
+                # that nobody is walking gets the journey it was missing.
+                # Leaving either alone is not merely untidy - mod-overseer
+                # refuses EVERY travel aim for a character whose `learn_skill`
+                # is set, and the only thing that clears it inside the
+                # worldserver is arriving at a trainer, which needs a travel
+                # aim. Written here rather than earlier because it reads both
+                # the `professions` permission and the `lead` column that the
+                # two steps above have just written (infra#3686).
+                await self._reconcile_learn_aims()
 
                 # Which tree each of them puts talent points in. Without this
                 # the module leaves talents alone entirely, which is the safe
@@ -5084,6 +5252,61 @@ class Bridge(discord.Client):
             # re-asserts the aim, and this call site has nothing to roll back.
             log.exception("train drive failed; the family keeps its current aim")
 
+    async def _reconcile_learn_aims(self) -> None:
+        """Finish a learn errand that is over, and walk one that nobody is on.
+
+        THE FLAG OUTLIVES THE ERRAND AND NOTHING INSIDE THE WORLDSERVER CAN
+        NOTICE (infra#3686). `overseer_roster.learn_skill` is cleared in
+        exactly one place - mod-overseer's `ClearLearnAim`, reached only from
+        `TrainOnArrival` - so a character must ARRIVE at a trainer to clear it,
+        and `TravelAimBook::Claim` refuses EVERY travel aim while it is set.
+        The gate is behind the fence it is the gate for. One character sat like
+        that for ten days, its aim refused 359 times in six hours, while the
+        family waited twenty minutes for it and then walked off without it.
+
+        THE AIM IS THE HALF THAT MATTERS MORE. Clearing throws an instruction
+        away; aiming carries it out and lets `TrainOnArrival` reach its own
+        verdict - including the verdicts this side cannot reach, because only a
+        trainer standing in front of a character knows whether it has a next
+        tier to sell (mod-overseer#74). learnaim.plan says which rows get
+        which, and it never does both to the same row.
+
+        RUN AFTER `_write_declared_professions` AND AFTER `_mark_party_leader`,
+        and both orderings are load-bearing. The first writes the `professions`
+        permission one of learnaim's two clear reasons is measured against; the
+        second writes the `lead` column the aim is gated on, so the aim lands
+        on the character the worldserver is about to let walk rather than on
+        one this pass merely believes should.
+
+        LOUD, AND STILL NOT FATAL, for the reason `_drive_train` gives one
+        screen up: this sits in the middle of the protect cycle, so an
+        exception escaping here would cost the spec tabs and the randomize
+        guards that come after it. Nothing here has anything to roll back, and
+        the next cycle re-reads the same rows.
+        """
+        try:
+            rows = await asyncio.to_thread(_learn_aim_rows)
+            learn_plan = learnaim.plan(rows)
+            if not (learn_plan.clear or learn_plan.aim or learn_plan.waiting):
+                return
+            landed = await asyncio.to_thread(
+                _run_learn_aim_plan, learnaim.statements(learn_plan)
+            )
+            # WARNING WHEN SOMETHING WAS WRITTEN, and INFO when the only news
+            # is that somebody is waiting for the lead. A row this pass acts on
+            # is a character that had been fenced out of ALL travel - a fault
+            # that happened, not a tidy-up that succeeded, and the number worth
+            # watching is how often it keeps happening once the fence itself is
+            # narrowed (quadseven/mod-overseer#453). A wait is the ordinary
+            # one-traveller queue, and at warning it would be the loudest line
+            # in the log while being the least urgent.
+            say = log.warning if (learn_plan.clear or learn_plan.aim) else log.info
+            say("%s (%d row(s) changed)", learnaim.report(learn_plan), landed)
+        except Exception:
+            log.exception(
+                "learn-aim reconcile failed; an errand may still be fencing a "
+                "character out of all travel until the next cycle"
+            )
     async def _conjure(self, d: core.FanoutDirective, channel) -> None:
         """A conjured event: natural language aimed at a whole band.
 

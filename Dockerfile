@@ -14,6 +14,7 @@ COPY _shared/core.py _shared/bridge.py _shared/voice.py _shared/transform.py \
      _shared/quests.py _shared/overhear.py _shared/questbook.py \
      _shared/questshare.py _shared/travel.py _shared/stream.py _shared/frames.py \
      _shared/professions.py _shared/craft.py _shared/craft_supply.py _shared/jobs.py _shared/trainjob.py \
+     _shared/learnaim.py \
      _shared/craftpleas.py _shared/materials.py \
      _shared/gear.py \
      _shared/armory.py _shared/wealth.py _shared/questlog.py _shared/modelviewer.py \
