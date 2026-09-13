@@ -47,11 +47,66 @@ Alchemy spell id, so no new web verification was needed to trust the pairing:
 All three are confirmed sold with unlimited stock (npc_vendor.maxcount = 0)
 by real vendors on this world (checked live, not assumed).
 
-WHAT IS DELIBERATELY OUT OF SCOPE. Tailoring/Leatherworking thread and dye
-(infra#3609/#3611) are the same class of gap but their item ids and prices
-were not verified this pass - `REAGENT` below names only what was checked.
-A future entry should be added with the same live-database verification,
-not a guessed id.
+TAILORING/LEATHERWORKING THREAD AND DYE (infra#3609/#3611) - VERIFIED AND
+ADDED THIS PASS, as `REAGENTS` (plural) below, a SECOND dict alongside
+`REAGENT` rather than more entries in it. `REAGENT` assumes exactly one
+purchasable reagent per spell, which held for every Alchemy vial and for
+Weak Flux, but not here: three of the fifteen verified Leatherworking
+recipes (Dark Leather Boots, Dark Leather Pants, Wicked Leather Gauntlets)
+need TWO vendor reagents on the same cast (thread AND dye), which a
+`spell_id -> single (entry, label, price)` mapping cannot express without
+either dropping the second reagent or picking one arbitrarily - both wrong.
+`REAGENTS` maps `spell_id` to a TUPLE of reagents instead, and
+`craft_reagent_errands` (the plural sibling of `reagent_errand`) walks every
+one of them, returning every errand and every refusal rather than just the
+first - the same list-returning shape `towntrip._buy`'s own FOOD/DRINK
+callers already use. `REAGENT`/`reagent_errand` are untouched: every recipe
+that already used them still fits the single-reagent shape, and widening it
+for a case it never needed would be a second migration for no behavior
+change.
+
+Every id and price below was read from acore_world.item_template directly
+and cross-checked against npc_vendor for unlimited stock (maxcount = 0), the
+same discipline as `REAGENT`'s own vials:
+
+    entry  name                  BuyPrice  sold unlimited
+    2320   Coarse Thread               10  yes (156 vendor rows)
+    2321   Fine Thread                 100  yes (146 vendor rows)
+    4291   Silken Thread                500  yes (134 vendor rows)
+    8343   Heavy Silken Thread         2000  yes (127 vendor rows)
+    14341  Rune Thread                 5000  yes (186 vendor rows)
+    4340   Gray Dye                     350  yes (127 vendor rows)
+    2325   Black Dye                   1000  yes (127 vendor rows)
+    4289   Salt                          50  yes (121 vendor rows)
+
+`item_template` carries a SECOND "Rune Thread" row (entry 24288, a
+class=11/subclass=11 reagent, BuyPrice 60000) - checked and confirmed it has
+ZERO npc_vendor rows on this world, so 14341 (class=7 Trade Goods) is the
+only one `REAGENTS` may ever name; the wrong one would silently log "no
+reachable vendor stocks it" forever, the same failure mode the module
+docstring already warns about for Moss Agate below.
+
+WHY A PER-RECIPE TARGET (`CASTS_PER_TRIP` x each entry's own per-cast
+quantity), NOT ONE FLAT COUNT LIKE `TARGET`. infra#3609's own body names
+this decision directly: "probably enough for one recipe run, matching the
+batch sizes the guide already states." A vial is consumed exactly once per
+cast, so `TARGET = 5` cheaply covers five casts of ANY vial recipe. Thread
+and dye are not one-per-cast: Nightscape Pants consumes 4x Silken Thread per
+cast while Handstitched Leather Cloak consumes 1x Coarse Thread, and Rune
+Thread costs 5000 copper against Coarse Thread's 10 - a flat unit count
+would either strand the four-per-cast recipes after little more than one
+success, or spend a fortune buying the cheap ones up to the same number
+needed by the priciest. Each `REAGENTS` entry therefore carries its own
+per-cast quantity as a fourth tuple element, and the restock target is
+`CASTS_PER_TRIP` casts' worth of it - small and affordable (the same
+five-casts-of-headroom size `REAGENT`'s own `TARGET` already uses), scaled
+to what the recipe actually consumes instead of assuming every reagent
+behaves like a vial.
+
+Every spell_id named in `REAGENTS` is verified present in `craft.RECIPES`
+by `test_every_reagents_spell_is_a_real_crafting_recipe`, the same
+reverse-lookup discipline `test_every_vial_recipe_is_a_real_crafting_recipe`
+already holds `REAGENT` to.
 
 ENGINEERING'S WEAK FLUX (infra#3616) - VERIFIED AND ADDED, MOSS AGATE -
 VERIFIED AND DELIBERATELY LEFT OUT. infra#3616 assumed both Weak Flux
@@ -162,3 +217,113 @@ def reagent_errand(
         ),
         None,
     )
+
+
+# spell_id -> tuple of (item entry, display name, BuyPrice in copper,
+# quantity consumed PER CAST). See the module docstring for why this is a
+# second dict rather than more entries in REAGENT (some recipes need two
+# vendor reagents on one cast, which REAGENT's single-tuple shape cannot
+# hold) and why the quantity is per-recipe rather than REAGENT's flat
+# TARGET. Every id/price verified live against acore_world.item_template
+# and npc_vendor; see the module docstring for the full table.
+REAGENTS: dict[int, tuple[tuple[int, str, int, int], ...]] = {
+    8776: ((2320, "Coarse Thread", 10, 1),),                # Linen Belt (Tailoring)
+    # 9058 (Handstitched Leather Cloak) deliberately absent - that spell id
+    # could not be verified against this world's live database and was
+    # pulled from craft.RECIPES for the same reason; see that table's own
+    # comment beside the 46-55 Leatherworking bracket.
+    3756: ((2320, "Coarse Thread", 10, 2),),                # Embossed Leather Gloves
+    3763: ((2320, "Coarse Thread", 10, 2),),                # Fine Leather Belt
+    2167: (
+        (2321, "Fine Thread", 100, 2),                      # Dark Leather Boots
+        (4340, "Gray Dye", 350, 1),
+    ),
+    7135: (
+        (2321, "Fine Thread", 100, 1),                      # Dark Leather Pants
+        (4340, "Gray Dye", 350, 1),
+    ),
+    3818: ((4289, "Salt", 50, 3),),                          # Cured Heavy Hide
+    3780: ((2321, "Fine Thread", 100, 1),),                 # Heavy Armor Kit
+    7151: ((2321, "Fine Thread", 100, 2),),                 # Barbaric Shoulders
+    7156: ((4291, "Silken Thread", 500, 1),),               # Guardian Gloves
+    10487: ((4291, "Silken Thread", 500, 1),),              # Thick Armor Kit
+    10507: ((4291, "Silken Thread", 500, 2),),              # Nightscape Headband
+    10548: ((4291, "Silken Thread", 500, 4),),              # Nightscape Pants
+    10558: ((8343, "Heavy Silken Thread", 2000, 2),),       # Nightscape Boots
+    19049: (
+        (2325, "Black Dye", 1000, 1),                       # Wicked Leather Gauntlets
+        (14341, "Rune Thread", 5000, 1),
+    ),
+    19082: ((14341, "Rune Thread", 5000, 1),),              # Runic Leather Headband
+}
+
+# How many casts' worth of a REAGENTS reagent to keep in stock - see the
+# module docstring for why this scales per-recipe (via each entry's own
+# quantity-per-cast) instead of being a flat unit count like REAGENT's
+# TARGET.
+CASTS_PER_TRIP = 5
+
+
+def craft_reagent_errands(
+    name: str,
+    craft_spell: int,
+    held: dict[int, int],
+    money: int,
+    free_slots: int,
+    town: "towntrip.Town",
+) -> tuple[list["towntrip.Errand"], list[str]]:
+    """Every buy errand this character's craft errand needs, from REAGENTS.
+
+    The plural sibling of `reagent_errand`: a recipe in REAGENTS may name one
+    or two vendor reagents (a plain thread-only recipe, or a thread-and-dye
+    one), so this returns every errand it can write and every refusal note
+    it hit, rather than stopping at the first - the same shape
+    `towntrip._buy`'s FOOD/DRINK callers already return in. `held` is
+    `{item entry: count carried}` for every reagent this craft_spell names,
+    read from the world's own item_instance the same as `reagent_errand`'s
+    single `held` int.
+
+    `money` IS CHECKED INDEPENDENTLY PER REAGENT, NOT DEDUCTED ACROSS THEM -
+    the same simplification `towntrip._buy` already makes checking FOOD and
+    DRINK separately for one character. A character who can afford either
+    reagent alone but not both in the same pass may see two errands queued
+    that together exceed their purse; DoBuy's own execution still refuses
+    whichever one actually runs out of money, so this never spends more than
+    the character has - it can just queue a trip that lands partially
+    unfunded rather than a perfectly costed one.
+    """
+    errands: list["towntrip.Errand"] = []
+    notes: list[str] = []
+    for entry, label, price, qty_per_cast in REAGENTS.get(craft_spell, ()):
+        target = CASTS_PER_TRIP * qty_per_cast
+        carried = held.get(entry, 0)
+        short = target - carried
+        if short <= 0:
+            continue
+
+        if entry not in town.stocks:
+            notes.append(f"no reachable vendor stocks {label} ({entry}) for {name}")
+            continue
+
+        if free_slots < 1:
+            notes.append(f"{name} has no free bag slot for {label}")
+            continue
+
+        ceiling = price * short
+        if money < ceiling:
+            notes.append(
+                f"{name} cannot afford {short} x {label} "
+                f"({ceiling} copper against {money})"
+            )
+            continue
+
+        errands.append(
+            towntrip.Errand(
+                name,
+                "buy",
+                f"entry:{entry} count:{short} max:{ceiling}",
+                f"carries {carried} {label}, wants {target} for craft_spell {craft_spell}",
+                ceiling,
+            )
+        )
+    return errands, notes

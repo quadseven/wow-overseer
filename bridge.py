@@ -3502,8 +3502,9 @@ class Bridge(discord.Client):
         to stall on it: Ugga sat on job='craft' with 20 Silverleaf, 13
         Peacebloom and zero Empty Vials, casting nothing. craft.py's own
         docstring is explicit that it never checks reagents; this is the pass
-        that does, for the reagent classes (craft_supply.REAGENT) verified
-        against the live world database rather than guessed.
+        that does, for the reagent classes (craft_supply.REAGENT, single
+        reagent per spell) verified against the live world database rather
+        than guessed.
 
         ONE VENDOR AIM PER CANDIDATE, NOT PER PARTY, unlike _vendor_once's
         leader-only aim. A vial is a personal shopping list keyed to
@@ -3512,6 +3513,16 @@ class Bridge(discord.Client):
         aimed individually, through the same ECONOMY_ERRANDS-guarded
         `_write_trade_errand` every other town errand uses, which is what
         keeps this from stamping on a traveller already on a real errand.
+
+        A SECOND PASS BELOW HANDLES `craft_supply.REAGENTS` (infra#3609/
+        #3611's Tailoring/Leatherworking thread and dye) - kept as its own
+        block rather than folded into the loop above because a REAGENTS
+        recipe can name TWO vendor reagents on one cast (thread AND dye),
+        which needs a per-candidate SET of held counts and can queue more
+        than one buy errand per candidate per pass; craft_supply.py's own
+        docstring explains why REAGENTS is a second dict rather than more
+        REAGENT entries, and the same reasoning is why this is a second
+        block rather than a single loop trying to cover both shapes.
         """
         names = sorted((await asyncio.to_thread(_protected_guids)).values())
         if not names:
@@ -3522,52 +3533,107 @@ class Bridge(discord.Client):
             for name, (spell_id, _) in spells.items()
             if spell_id in craft_supply.REAGENT
         }
-        if not candidates:
+        multi_candidates = {
+            name: spell_id
+            for name, (spell_id, _) in spells.items()
+            if spell_id in craft_supply.REAGENTS
+        }
+        if not candidates and not multi_candidates:
             return
 
-        free_slots = await asyncio.to_thread(_fetch_free_slots, list(candidates))
-        # ONE BATCH, NOT ONE QUERY PER CANDIDATE - holdings for every
-        # candidate's reagent are fetched together (at most four round trips,
-        # one per DISTINCT item entry craft_supply.REAGENT's eleven recipes
-        # resolve to - three vials plus Weak Flux), the same
-        # batching discipline _fetch_free_slots/_fetch_craft_spells already
-        # hold to. Town is the one thing that genuinely cannot batch this
-        # way: it is a read of wherever `name` is CURRENTLY STANDING, which
-        # is exactly as per-character as `_vendor_once`'s own per-holder
-        # `_fetch_town` calls already are.
-        pairs = [
-            (name, craft_supply.REAGENT[craft_spell][0])
-            for name, craft_spell in candidates.items()
-        ]
-        held_by = await asyncio.to_thread(_fetch_item_counts, pairs)
         queued = 0
-        for name, craft_spell in sorted(candidates.items()):
-            entry, label, _price = craft_supply.REAGENT[craft_spell]
-            town = await asyncio.to_thread(_fetch_town, name)
-            if entry not in town.stocks:
-                aimed = await asyncio.to_thread(
-                    _write_trade_errand,
-                    professions.Errand(character=name, travel_npc="vendor"),
+        if candidates:
+            free_slots = await asyncio.to_thread(_fetch_free_slots, list(candidates))
+            # ONE BATCH, NOT ONE QUERY PER CANDIDATE - holdings for every
+            # candidate's reagent are fetched together (at most four round
+            # trips, one per DISTINCT item entry craft_supply.REAGENT's
+            # eleven recipes resolve to - three vials plus Weak Flux), the
+            # same batching discipline _fetch_free_slots/_fetch_craft_spells
+            # already hold to. Town is the one thing that genuinely cannot
+            # batch this way: it is a read of wherever `name` is CURRENTLY
+            # STANDING, which is exactly as per-character as
+            # `_vendor_once`'s own per-holder `_fetch_town` calls already
+            # are.
+            pairs = [
+                (name, craft_supply.REAGENT[craft_spell][0])
+                for name, craft_spell in candidates.items()
+            ]
+            held_by = await asyncio.to_thread(_fetch_item_counts, pairs)
+            for name, craft_spell in sorted(candidates.items()):
+                entry, label, _price = craft_supply.REAGENT[craft_spell]
+                town = await asyncio.to_thread(_fetch_town, name)
+                if entry not in town.stocks:
+                    aimed = await asyncio.to_thread(
+                        _write_trade_errand,
+                        professions.Errand(character=name, travel_npc="vendor"),
+                    )
+                    log.info(
+                        "craft_supply: %s is not near a vendor stocking %s; "
+                        "vendor aim taken=%s", name, label, aimed,
+                    )
+                    continue
+                held = held_by.get((name, entry), 0)
+                _spell_id, money = spells[name]
+                errand, note = craft_supply.reagent_errand(
+                    name, craft_spell, held, money, free_slots.get(name, 0), town,
                 )
-                log.info(
-                    "craft_supply: %s is not near a vendor stocking %s; "
-                    "vendor aim taken=%s", name, label, aimed,
-                )
-                continue
-            held = held_by.get((name, entry), 0)
-            _spell_id, money = spells[name]
-            errand, note = craft_supply.reagent_errand(
-                name, craft_spell, held, money, free_slots.get(name, 0), town,
+                if note:
+                    log.info("craft_supply: %s", note)
+                    continue
+                if errand and await asyncio.to_thread(_insert_town_errand, errand):
+                    queued += 1
+                    log.info(
+                        "craft_supply: %s %s - %s", name, errand.command, errand.why
+                    )
+
+        if multi_candidates:
+            free_slots2 = await asyncio.to_thread(
+                _fetch_free_slots, list(multi_candidates)
             )
-            if note:
-                log.info("craft_supply: %s", note)
-                continue
-            if errand and await asyncio.to_thread(_insert_town_errand, errand):
-                queued += 1
-                log.info("craft_supply: %s %s - %s", name, errand.command, errand.why)
+            pairs2 = [
+                (name, entry)
+                for name, craft_spell in multi_candidates.items()
+                for entry, _label, _price, _qty in craft_supply.REAGENTS[craft_spell]
+            ]
+            held_by2 = await asyncio.to_thread(_fetch_item_counts, pairs2)
+            for name, craft_spell in sorted(multi_candidates.items()):
+                needed = craft_supply.REAGENTS[craft_spell]
+                town = await asyncio.to_thread(_fetch_town, name)
+                missing = [
+                    label for entry, label, _price, _qty in needed
+                    if entry not in town.stocks
+                ]
+                if missing:
+                    aimed = await asyncio.to_thread(
+                        _write_trade_errand,
+                        professions.Errand(character=name, travel_npc="vendor"),
+                    )
+                    log.info(
+                        "craft_supply: %s is not near a vendor stocking %s; "
+                        "vendor aim taken=%s", name, ", ".join(missing), aimed,
+                    )
+                    continue
+                held = {
+                    entry: held_by2.get((name, entry), 0)
+                    for entry, _label, _price, _qty in needed
+                }
+                _spell_id, money = spells[name]
+                errands, notes = craft_supply.craft_reagent_errands(
+                    name, craft_spell, held, money, free_slots2.get(name, 0), town,
+                )
+                for note in notes:
+                    log.info("craft_supply: %s", note)
+                for errand in errands:
+                    if await asyncio.to_thread(_insert_town_errand, errand):
+                        queued += 1
+                        log.info(
+                            "craft_supply: %s %s - %s",
+                            name, errand.command, errand.why,
+                        )
+
         log.info(
             "craft_supply: queued %d buy errand(s) across %d candidate(s)",
-            queued, len(candidates),
+            queued, len(candidates) + len(multi_candidates),
         )
 
     async def _craft_supply_loop(self) -> None:

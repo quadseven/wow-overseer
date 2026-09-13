@@ -16,12 +16,28 @@ import professions
 
 class RecipeForTests(unittest.TestCase):
     def test_returns_none_in_the_gap_between_two_bolt_brackets(self):
-        # 61-124 is a deliberate gap: the recipe worth casting there needs
-        # vendor-bought thread (Linen Belt), which this pass explicitly
-        # deferred rather than guess a spell id for. recipe_for must not
-        # fall back to the Woolen bolt just because it is close by.
+        # 101-124 is a still-deliberate gap: Silk Headband and the rest of
+        # the guide's later thread/dye Tailoring recipes are deferred past
+        # infra#3609's own minimum ask (Linen Belt, added directly below).
+        # recipe_for must not fall back to the Silk bolt just because it is
+        # close by.
         self.assertIsNone(craft.recipe_for(goals.SKILL_IDS["tailoring"], 101))
         self.assertIsNone(craft.recipe_for(goals.SKILL_IDS["tailoring"], 124))
+
+    def test_finds_linen_belt_bracket(self):
+        # infra#3609's own acceptance criteria: the first Tailoring bracket
+        # unblocked once craft_supply.REAGENTS could buy its thread.
+        recipe = craft.recipe_for(goals.SKILL_IDS["tailoring"], 61)
+        self.assertIsNotNone(recipe)
+        self.assertEqual(recipe.spell_id, 8776)
+        self.assertEqual(craft.recipe_for(goals.SKILL_IDS["tailoring"], 67).spell_id, 8776)
+
+    def test_woolen_cloth_bracket_starts_after_linen_belt(self):
+        # Woolen Cloth's own min_skill shifted from the guide's 61 to 68 to
+        # make room for Linen Belt (61-67) directly below it.
+        recipe = craft.recipe_for(goals.SKILL_IDS["tailoring"], 68)
+        self.assertIsNotNone(recipe)
+        self.assertEqual(recipe.spell_id, 2964)
 
     def test_returns_none_above_every_bracket(self):
         self.assertIsNone(craft.recipe_for(goals.SKILL_IDS["tailoring"], 301))
@@ -103,13 +119,98 @@ class RecipeForTests(unittest.TestCase):
         self.assertIsNotNone(recipe)
         self.assertEqual(recipe.spell_id, 20649)
 
-    def test_leatherworking_gap_between_45_and_150_answers_none(self):
-        # The guide's own bracket table has no zero-purchased-reagent recipe
-        # between Light Armor Kit (ends 45) and Heavy Leather (starts 150) -
-        # everything in between needs vendor-bought thread or dye, deferred
-        # per this pass's scoping (see the RECIPES table comment). A gap must
-        # answer None, never a stale or wrong-bracket recipe.
-        self.assertIsNone(craft.recipe_for(goals.SKILL_IDS["leatherworking"], 100))
+    def test_leatherworking_1_to_300_is_covered_except_the_verified_gap(self):
+        # infra#3611 closed every remaining gap EXCEPT 46-55, once
+        # craft_supply.REAGENTS existed to buy thread/dye - 46-55
+        # (Handstitched Leather Cloak, spell 9058) stays empty because that
+        # spell id could not be confirmed against this world's live
+        # database (no trainer_spell row, no pattern item) - see craft.py's
+        # own comment beside that bracket. Every OTHER point in 1-300 is
+        # covered (checked generally by RecipeTableDisciplineTests.
+        # test_brackets_do_not_overlap_within_one_skill).
+        for skill_value in range(1, 301):
+            if 46 <= skill_value <= 55:
+                continue
+            with self.subTest(skill_value=skill_value):
+                self.assertIsNotNone(
+                    craft.recipe_for(goals.SKILL_IDS["leatherworking"], skill_value)
+                )
+
+    def test_the_handstitched_leather_cloak_gap_answers_none(self):
+        # 46-55: spell 9058 has no trainer_spell row and no pattern item
+        # teaching it on this world - unverified, so left out rather than
+        # shipped on wiki-only sourcing. See craft.py's own comment.
+        self.assertIsNone(craft.recipe_for(goals.SKILL_IDS["leatherworking"], 50))
+
+    def test_leatherworking_picks_embossed_leather_gloves(self):
+        recipe = craft.recipe_for(goals.SKILL_IDS["leatherworking"], 100)
+        self.assertIsNotNone(recipe)
+        self.assertEqual(recipe.spell_id, 3756)
+
+    def test_leatherworking_picks_fine_leather_belt(self):
+        recipe = craft.recipe_for(goals.SKILL_IDS["leatherworking"], 125)
+        self.assertIsNotNone(recipe)
+        self.assertEqual(recipe.spell_id, 3763)
+
+    def test_leatherworking_picks_dark_leather_boots(self):
+        recipe = craft.recipe_for(goals.SKILL_IDS["leatherworking"], 126)
+        self.assertIsNotNone(recipe)
+        self.assertEqual(recipe.spell_id, 2167)
+
+    def test_leatherworking_picks_dark_leather_pants(self):
+        recipe = craft.recipe_for(goals.SKILL_IDS["leatherworking"], 149)
+        self.assertIsNotNone(recipe)
+        self.assertEqual(recipe.spell_id, 7135)
+
+    def test_leatherworking_picks_cured_heavy_hide(self):
+        recipe = craft.recipe_for(goals.SKILL_IDS["leatherworking"], 156)
+        self.assertIsNotNone(recipe)
+        self.assertEqual(recipe.spell_id, 3818)
+
+    def test_leatherworking_picks_heavy_armor_kit(self):
+        recipe = craft.recipe_for(goals.SKILL_IDS["leatherworking"], 180)
+        self.assertIsNotNone(recipe)
+        self.assertEqual(recipe.spell_id, 3780)
+
+    def test_leatherworking_picks_barbaric_shoulders(self):
+        recipe = craft.recipe_for(goals.SKILL_IDS["leatherworking"], 181)
+        self.assertIsNotNone(recipe)
+        self.assertEqual(recipe.spell_id, 7151)
+
+    def test_leatherworking_picks_guardian_gloves(self):
+        recipe = craft.recipe_for(goals.SKILL_IDS["leatherworking"], 200)
+        self.assertIsNotNone(recipe)
+        self.assertEqual(recipe.spell_id, 7156)
+
+    def test_leatherworking_picks_thick_armor_kit(self):
+        recipe = craft.recipe_for(goals.SKILL_IDS["leatherworking"], 205)
+        self.assertIsNotNone(recipe)
+        self.assertEqual(recipe.spell_id, 10487)
+
+    def test_leatherworking_picks_nightscape_headband(self):
+        recipe = craft.recipe_for(goals.SKILL_IDS["leatherworking"], 235)
+        self.assertIsNotNone(recipe)
+        self.assertEqual(recipe.spell_id, 10507)
+
+    def test_leatherworking_picks_nightscape_pants(self):
+        recipe = craft.recipe_for(goals.SKILL_IDS["leatherworking"], 250)
+        self.assertIsNotNone(recipe)
+        self.assertEqual(recipe.spell_id, 10548)
+
+    def test_leatherworking_picks_nightscape_boots(self):
+        recipe = craft.recipe_for(goals.SKILL_IDS["leatherworking"], 260)
+        self.assertIsNotNone(recipe)
+        self.assertEqual(recipe.spell_id, 10558)
+
+    def test_leatherworking_picks_wicked_leather_gauntlets(self):
+        recipe = craft.recipe_for(goals.SKILL_IDS["leatherworking"], 290)
+        self.assertIsNotNone(recipe)
+        self.assertEqual(recipe.spell_id, 19049)
+
+    def test_leatherworking_picks_runic_leather_headband_at_the_top(self):
+        recipe = craft.recipe_for(goals.SKILL_IDS["leatherworking"], 300)
+        self.assertIsNotNone(recipe)
+        self.assertEqual(recipe.spell_id, 19082)
 
 
 class EngineeringRecipeForTests(unittest.TestCase):

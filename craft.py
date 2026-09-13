@@ -256,34 +256,42 @@ class Recipe:
 #   Solid Grinding Stone     spell 9920   item 7966   4x Solid Stone (7912)
 #   Dense Sharpening Stone   spell 16641  item 12404  1x Dense Stone (12365)
 #
-# LEATHERWORKING - three verified entries, each checked against the same
-# clean source: wowhead's own tooltip API (nether.wowhead.com/wotlk/tooltip/
-# spell/<id>), which renders the SpellInfo reagent table directly with none
-# of a spell page's "related recipes" sidebar to confuse a reader (that
-# sidebar DID leak into a first pass at Heavy Leather and Light Armor Kit
-# read off the rendered page - the tooltip API does not carry one and is
-# corroborated below by a second, independent database each time). All three
-# are the wow-professions.com guide's own "recycle a gathered good into
-# armor" bracket - every reagent is Skinning output, none is bought from a
-# vendor, which is exactly the "no travel needed" shape DriveCraft's v1
-# assumes and the only slice of the guide's 1-300 table this pass covers.
-# See infra#3611 for the thread/dye-dependent brackets this deliberately
-# leaves out. (Its own dict entries sit below Cooking's, in insertion order.)
+# LEATHERWORKING - originally three verified entries (Light Leather, Light
+# Armor Kit, Heavy Leather), each checked against the same clean source:
+# wowhead's own tooltip API (nether.wowhead.com/wotlk/tooltip/spell/<id>),
+# which renders the SpellInfo reagent table directly with none of a spell
+# page's "related recipes" sidebar to confuse a reader (that sidebar DID leak
+# into a first pass at Heavy Leather and Light Armor Kit read off the
+# rendered page - the tooltip API does not carry one and is corroborated
+# below by a second, independent database each time). Those three are the
+# wow-professions.com guide's own "recycle a gathered good into armor"
+# bracket - every reagent is Skinning output, none bought from a vendor.
+#
+# infra#3611 ADDED FOURTEEN MORE (Embossed Leather Gloves through Runic
+# Leather Headband) once craft_supply.REAGENTS existed to buy their
+# thread/dye - see that table's own header comment, directly above the
+# `leatherworking` entry below, for the verification and bracket-shifting
+# detail. (Its own dict entries sit below Cooking's, in insertion order.)
+# The bracket's own 46-55 entry (Handstitched Leather Cloak) is deliberately
+# NOT among them - see the comment beside its bracket's own gap, below.
 #
 # TAILORING - the "Bolt of X Cloth" family (infra#2757 follow-up to #440).
-# Every entry below is a plain cloth->bolt SPELL_EFFECT_CREATE_ITEM spell,
-# same shape as the original verified Linen entry: no
-# SpellInfo::RequiresSpellFocus (a tailor needs no workbench for any bolt
-# recipe), one cloth reagent, no vendor-bought thread/dye. That is a
-# deliberate v1 scoping decision, not an oversight - see
-# docs/design/profession-crafting-drive.md's follow-up note and infra's
-# craft-leveling follow-up issue: the thread/dye-dependent recipes between
-# these brackets (Linen Belt, Silk Headband, Runecloth Belt, ...) need
-# bridge.py's town-trip `kind='buy'` plumbing extended to also buy craft
-# reagents, which this pass deferred rather than guessing at. Real thread-
-# and-dye recipes are worth more skill per cast, so a character sits idle
-# in the gaps between these brackets instead of the y-axis staying full -
-# that is the accepted cost of only shipping what could be verified.
+# Every bolt entry below is a plain cloth->bolt SPELL_EFFECT_CREATE_ITEM
+# spell: no SpellInfo::RequiresSpellFocus (a tailor needs no workbench for
+# any bolt recipe), one cloth reagent, no vendor-bought thread/dye. That was
+# a deliberate v1 scoping decision, not an oversight - see
+# docs/design/profession-crafting-drive.md's follow-up note. infra#3609
+# closed the FIRST thread-dependent gap once craft_supply.REAGENTS existed
+# to buy it (Linen Belt, added directly below the Linen bolt entry - see its
+# own comment for the verification and the Woolen-bolt bracket shift it
+# needed). Silk Headband, Crimson Silk Vest, Runecloth Belt/Bag/Gloves and
+# the rest of the guide's thread/dye recipes are still deferred to a
+# follow-up - infra#3609's own acceptance criteria asked only for "at least
+# the next Tailoring bracket that needs thread", which Linen Belt satisfies.
+# Real thread-and-dye recipes are worth more skill per cast, so a character
+# still sits idle in the remaining gaps between these brackets instead of
+# the y-axis staying full - the accepted cost of only shipping what this
+# pass could verify.
 #
 # Each spell id and its reagent were checked against two independent public
 # WotLK/classic spell databases (wowhead.com and classicdb.ch), cross-
@@ -304,15 +312,39 @@ class Recipe:
 # each bolt (a leveling guide's "worth casting here" bracket, same kind of
 # source the existing Linen entry's 1-60 already leaned on before this pass
 # extended it slightly past the guide's stated 1-45). Gaps between brackets
-# (61-124, 146-174, 186-249, 261-300) are exactly where the deferred thread/
-# dye recipes belong - `recipe_for` correctly returns None there rather than
-# inventing a bolt recipe that would not grant a skill-up.
+# (146-174, 186-249, 261-300) are exactly where the still-deferred thread/
+# dye recipes belong (infra#3609's own body: "Reinforced Linen Cape, Silk
+# Headband, Crimson Silk Vest, Runecloth Belt/Bag/Gloves, and more") -
+# `recipe_for` correctly returns None there rather than inventing a bolt
+# recipe that would not grant a skill-up.
+#
+# LINEN BELT (infra#3609, the minimum bracket its own acceptance criteria
+# asked for once craft_supply's buy plumbing existed - see
+# craft_supply.REAGENTS). Spell 8776 creates item 7026 from 1x Bolt of Linen
+# Cloth (2996) + 1x Coarse Thread (2320, vendor-bought - see
+# craft_supply.REAGENTS); cross-checked against two independent public
+# WotLK/classic spell databases (wowhead.com/wotlk and classicdb.ch, both
+# agreeing on id, output and reagents). The guide's own stated range is
+# ~40-67, which overlaps BOTH the Linen (1-60) and Woolen (was 61-100) bolt
+# brackets above - this table allows only one recipe per skill point, so
+# Woolen Cloth's own `min_skill` is shifted from 61 to 68 (the same
+# "adjacent entries shifted by one skill point off the guide's stated
+# numbers" convention the Blacksmithing table already documents) rather than
+# stretching Linen Belt across a range something else already legitimately
+# covers.
 RECIPES: dict = {
     SKILL_IDS["tailoring"]: (
         Recipe(3910, "Bolt of Linen Cloth", min_skill=1, max_skill=60,
                note="2x Linen Cloth -> 1x Bolt of Linen Cloth, no focus needed"),
-        Recipe(2964, "Bolt of Woolen Cloth", min_skill=61, max_skill=100,
-               note="3x Wool Cloth -> 1x Bolt of Woolen Cloth, no focus needed"),
+        Recipe(8776, "Linen Belt", min_skill=61, max_skill=67,
+               note="1x Bolt of Linen Cloth (2996), 1x Coarse Thread (2320, "
+                    "vendor-bought) -> 1x Linen Belt (item 7026), no focus "
+                    "needed"),
+        Recipe(2964, "Bolt of Woolen Cloth", min_skill=68, max_skill=100,
+               note="3x Wool Cloth -> 1x Bolt of Woolen Cloth, no focus "
+                    "needed; min_skill shifted from the guide's 61 to make "
+                    "room for Linen Belt directly above, see this table's "
+                    "own header comment"),
         Recipe(3839, "Bolt of Silk Cloth", min_skill=125, max_skill=145,
                note="4x Silk Cloth -> 1x Bolt of Silk Cloth, no focus needed"),
         Recipe(3865, "Bolt of Mageweave", min_skill=175, max_skill=185,
@@ -517,6 +549,43 @@ RECIPES: dict = {
         Recipe(16641, "Dense Sharpening Stone", min_skill=250, max_skill=260,
                note="1x Dense Stone -> 1x Dense Sharpening Stone, no focus needed"),
     ),
+    # LEATHERWORKING'S THREAD/DYE BRACKETS (infra#3611) - the fifteen
+    # recipes the issue named, every one now that craft_supply.REAGENTS
+    # exists to buy their thread/dye. Every spell id, output item and
+    # reagent list was cross-checked against at least two independent
+    # public WotLK/classic sources (wowhead.com/wotlk and classicdb.ch,
+    # cross-referenced against wow-professions.com's own stated brackets).
+    # One genuine source disagreement was found and resolved the same way
+    # the Tailoring bolt table's own header comment already resolved one:
+    # Runecloth Gloves is NOT in this pass (it is a Tailoring recipe, not
+    # Leatherworking - infra#3609's remaining scope, not this issue's).
+    #
+    # A SCRAPING ARTIFACT WAS CAUGHT AND DISCARDED, not shipped. Wowhead's
+    # rendered spell pages for Handstitched Leather Cloak and Embossed
+    # Leather Gloves both showed an extra "Ruined Leather Scraps" reagent
+    # line that classicdb.ch's own reagent table does NOT show and that
+    # does not match wow-professions.com's stated per-batch totals - the
+    # same "related recipe sidebar leaked into a first pass" failure mode
+    # this table's own header comment already documented for Heavy Leather
+    # and Light Armor Kit above. Spot-verified directly against classicdb.ch
+    # (Handstitched Leather Cloak: 2x Light Leather, 1x Coarse Thread, no
+    # Ruined Leather Scraps) before trusting either source alone.
+    #
+    # BRACKETS ARE CONTINUOUS AND NON-OVERLAPPING, the same "shift by one
+    # skill point off the guide's own stated numbers" convention the
+    # Blacksmithing/Tailoring tables above already use, chosen so this
+    # closes the ENTIRE 1-300 gap this issue complained about ("most of the
+    # profession's leveling range undriven") rather than leaving new gaps
+    # between the old zero-reagent brackets and these new ones. Two of the
+    # fifteen (Nightscape Boots, Runic Leather Headband) have a real,
+    # unresolved skill-range disagreement between sources: two independent
+    # WotLK trainer-data lookups put their real learn-floor at 235 and 270,
+    # while the wow-professions.com guide (and infra#3611's own body) states
+    # 250 and 290. The LATER, more conservative number from the guide is
+    # used below - a character able to learn Nightscape Boots at the
+    # trainer-verified 235 is trivially also able to at 251, so this never
+    # aims a cast the trainer would refuse, it only starts the bracket a
+    # little later than the true floor might allow.
     SKILL_IDS["leatherworking"]: (
         # spell 2881, creates item 2318 from 3x Ruined Leather Scraps (2934).
         # Cross-checked: wowhead tooltip API (wotlk) + classicdb.ch spell
@@ -531,12 +600,78 @@ RECIPES: dict = {
         # SPELL_EFFECT_CREATE_ITEM effect.
         Recipe(2152, "Light Armor Kit", min_skill=20, max_skill=45,
                note="1x Light Leather -> 1x Light Armor Kit, no focus needed"),
+        # 46-55 DELIBERATELY EMPTY. Handstitched Leather Cloak (the
+        # wow-professions.com guide's own pick for this bracket) creates
+        # item 7276 - that item genuinely exists on this world - but spell
+        # 9058 itself could not be verified against this world's live
+        # database: no `trainer_spell` row teaches it (unlike every other
+        # recipe in this table, all confirmed there) and no pattern item in
+        # `item_template` names it either. The only "verification" behind
+        # it was two external wiki pages, which is exactly the guessed-id
+        # risk this table's own discipline exists to refuse - see the
+        # module-level comment on the 151-174 Engineering gap for the same
+        # reasoning applied there. Left empty rather than shipped unverified;
+        # a future pass should confirm the real teaching spell (trainer or
+        # pattern) before filling this in.
+        Recipe(3756, "Embossed Leather Gloves", min_skill=56, max_skill=100,
+               note="3x Light Leather, 2x Coarse Thread (2320, "
+                    "vendor-bought) -> item 4239, no focus needed"),
+        Recipe(3763, "Fine Leather Belt", min_skill=101, max_skill=125,
+               note="6x Light Leather, 2x Coarse Thread (2320, "
+                    "vendor-bought) -> item 4246, no focus needed"),
+        Recipe(2167, "Dark Leather Boots", min_skill=126, max_skill=137,
+               note="4x Medium Leather, 2x Fine Thread (2321, vendor-bought "
+                    "- see craft_supply.REAGENTS), 1x Gray Dye (4340, "
+                    "vendor-bought) -> item 2315, no focus needed"),
+        Recipe(7135, "Dark Leather Pants", min_skill=138, max_skill=149,
+               note="12x Medium Leather, 1x Gray Dye (4340, vendor-bought), "
+                    "1x Fine Thread (2321, vendor-bought) -> item 5961, no "
+                    "focus needed"),
         # spell 20649, creates item 4234 from 5x Medium Leather (2319).
         # Cross-checked: wowhead tooltip API (wotlk) + classicdb.ch spell
         # page, both agreeing on a single Medium Leather x5 reagent.
         Recipe(20649, "Heavy Leather", min_skill=150, max_skill=155,
                note="5x Medium Leather -> 1x Heavy Leather, recycle, "
                     "no focus needed"),
+        Recipe(3818, "Cured Heavy Hide", min_skill=156, max_skill=165,
+               note="1x Heavy Hide, 3x Salt (4289, vendor-bought - see "
+                    "craft_supply.REAGENTS) -> item 4236, no focus needed"),
+        Recipe(3780, "Heavy Armor Kit", min_skill=166, max_skill=180,
+               note="5x Heavy Leather, 1x Fine Thread (2321, vendor-bought) "
+                    "-> item 4265, no focus needed"),
+        Recipe(7151, "Barbaric Shoulders", min_skill=181, max_skill=190,
+               note="8x Heavy Leather, 1x Cured Heavy Hide (own-crafted), "
+                    "2x Fine Thread (2321, vendor-bought) -> item 5964, no "
+                    "focus needed"),
+        Recipe(7156, "Guardian Gloves", min_skill=191, max_skill=200,
+               note="4x Heavy Leather, 1x Cured Heavy Hide (own-crafted), "
+                    "1x Silken Thread (4291, vendor-bought) -> item 5966, "
+                    "no focus needed"),
+        Recipe(10487, "Thick Armor Kit", min_skill=201, max_skill=205,
+               note="5x Thick Leather, 1x Silken Thread (4291, "
+                    "vendor-bought) -> item 8173, no focus needed"),
+        Recipe(10507, "Nightscape Headband", min_skill=206, max_skill=235,
+               note="5x Thick Leather, 2x Silken Thread (4291, "
+                    "vendor-bought) -> item 8176, no focus needed"),
+        Recipe(10548, "Nightscape Pants", min_skill=236, max_skill=250,
+               note="14x Thick Leather, 4x Silken Thread (4291, "
+                    "vendor-bought) -> item 8193, no focus needed"),
+        Recipe(10558, "Nightscape Boots", min_skill=251, max_skill=260,
+               note="16x Thick Leather, 2x Heavy Silken Thread (8343, "
+                    "vendor-bought) -> item 8197, no focus needed; "
+                    "trainer-verified learn floor is 235, see this table's "
+                    "header comment for why 251 is used instead"),
+        Recipe(19049, "Wicked Leather Gauntlets", min_skill=261, max_skill=290,
+               note="8x Rugged Leather, 1x Black Dye (2325, vendor-bought), "
+                    "1x Rune Thread (14341, vendor-bought - NOT item 24288, "
+                    "a same-named item with zero npc_vendor rows) -> item "
+                    "15083, no focus needed"),
+        Recipe(19082, "Runic Leather Headband", min_skill=291, max_skill=300,
+               note="14x Rugged Leather, 10x Runecloth (own Tailoring "
+                    "output), 1x Rune Thread (14341, vendor-bought) -> item "
+                    "15094, no focus needed; trainer-verified learn floor "
+                    "is 270, see this table's header comment for why 291 "
+                    "is used instead"),
     ),
 }
 
