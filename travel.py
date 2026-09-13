@@ -129,6 +129,56 @@ NONE = ""
 # module where a test can reach them.
 GUILD_VAULT_GO_TYPE = 34
 
+# GAMEOBJECT_TYPE_SPELL_FOCUS, and the focus id a Forge answers to (infra#3748).
+#
+# THESE ARE TWO DIFFERENT COLUMNS AND infra#3617 READ THE WRONG ONE. That issue
+# investigated the sibling anvil question and recorded: "Every 'Anvil'-named row
+# is `type = 8` (GAMEOBJECT_TYPE_SPELL_FOCUS) with `data1 = 10`
+# (`SPELL_FOCUS_ANVIL`). This is the same field `SpellInfo::RequiresSpellFocus`
+# checks against at cast time." It is not. Counted against the live world
+# database on 2026-09-13:
+#
+#     SELECT Data1, COUNT(*) FROM gameobject_template
+#      WHERE type = 8 AND Data0 = 1 GROUP BY Data1;   -> 10:289  8:4  5:2  17:1
+#     SELECT Data1, COUNT(*) FROM gameobject_template
+#      WHERE type = 8 AND Data0 = 3 GROUP BY Data1;   -> 10:136  8:4  12:3
+#                                                        15:2  30:2  4:1  5:1
+#
+# `Data0` IS THE FOCUS ID (1 Anvil, 2 Loom, 3 Forge - SpellFocusObject.dbc) and
+# `Data1` IS THE RADIUS IN YARDS. Anvils and forges BOTH mostly carry Data1 =
+# 10, which is why reading it as the focus id looked right: entries 1684, 1744
+# and 1748 really are anvils, and really do say 10, and the 10 means ten yards.
+# A query built on that misreading would return every focus object in the world
+# whose radius happens to be ten - forges, anvils and looms alike - and aim a
+# smelter at whichever was nearest.
+SPELL_FOCUS_GO_TYPE = 8
+FORGE_FOCUS_ID = 3
+
+# HOW CLOSE AN `at:` AIM ACTUALLY LANDS A CHARACTER, mirrored from mod-overseer
+# rather than guessed, and load-bearing for the whole forge walk.
+#
+# The travel drive hands a ground errand back once the traveller is within
+# `TRAVEL_ARRIVED_POSITION_YARDS` of it (mod_overseer.cpp: `entry ?
+# TRAVEL_ARRIVED_YARDS : TRAVEL_ARRIVED_POSITION_YARDS`, where `entry` is zero
+# for an `at:` aim) - so "walked to the forge" means "somewhere inside five
+# yards of the forge's own surveyed position", not "on top of it".
+#
+# THAT IS WHY THE RADIUS HAS TO BE CHECKED AND NOT ASSUMED. #3748 records the
+# focus radius as 10, which is true of 136 of the 149 forge templates and false
+# of the rest: one carries 4 and one carries 5. A five-yard arrival at a
+# four-yard forge is a character standing just outside the focus, and CheckCast
+# refuses the smelt with SPELL_FAILED_REQUIRES_SPELL_FOCUS - which DriveCraft
+# logs as a bare numeric SpellCastResult at INFO, indistinguishable from a
+# cooldown, and retries every twenty seconds for ever. `forge_aim` below
+# refuses such a forge with a sentence instead.
+#
+# tests/test_travel_forge.py asserts this equals the constant in the pinned
+# mod-overseer source, the same two-way mirror discipline `ROLES` already has
+# against `TravelRoles()`: if the module ever loosens its arrival tolerance
+# past a forge's radius, the walk stops being enough and CI says so rather than
+# the family standing at a forge casting nothing.
+ARRIVED_POSITION_YARDS = 5
+
 # The prefix `ResolveTravelTarget` answers with GROUND instead of a spawn:
 # `at:<map>:<x>,<y>,<z>`, parsed before the NPC index is even built, with
 # `outEntry = 0` because the walk is the whole errand (mod_overseer.cpp).
@@ -334,3 +384,115 @@ def vault_aim(spawn, standing_on):
             "would truncate into a coordinate nobody surveyed" % (
                 where, COLUMN_WIDTH)))
     return VaultAim(aim=aim)
+
+
+@dataclass(frozen=True)
+class ForgeAim:
+    """Either the aim that stands a character in a Forge's focus, or why not.
+
+    THE SAME TWO-FIELD SHAPE AS `VaultAim`, AND FOR THE SAME REASON: a forge on
+    another continent is a travel problem, a forge nobody can see is a snapshot
+    problem, and a forge whose focus is narrower than the travel drive's own
+    arrival tolerance is a mod-overseer problem - three different things for a
+    person to do, so `refused` is a whole sentence rather than a code.
+
+    `radius` IS CARRIED OUT, not just checked and dropped, because the caller
+    needs it for a question this module cannot answer: "is the character ALREADY
+    inside the focus", which needs a live distance the pure module never sees.
+    `within_focus` below is the judgement; this is the number it judges against.
+    """
+
+    aim: str = ""
+    refused: str = ""
+    radius: int = 0
+
+
+def forge_aim(spawn, standing_on):
+    """Aim a character standing on map `standing_on` at the Forge `spawn`.
+
+    `spawn` is a row from the live `gameobject` spawn table joined to its
+    template - {"map_id", "x", "y", "z", "radius"} - or None when nothing was
+    found. Every field comes out of the table the world itself was built from;
+    the z is the surveyed one that shipped with the spawn, which is the whole
+    reason this is a lookup and not hand-authored geometry.
+
+    THIS IS `vault_aim` WITH ONE EXTRA REFUSAL, and the refusal is the point.
+    infra#3617 parked the forge/anvil question believing a focus object could
+    only be reached by indexing GameObject spawns the way creatures are indexed;
+    infra#3702 had already disproved that by walking the leader to a Guild
+    Vault through `ground_aim`. So the mechanism is settled and shipped. What is
+    NOT settled by copying it is whether arriving is enough: a Guild Vault is
+    judged by `GuildBankInReach`'s own five-yard interact gate, while a smelt is
+    judged by the FORGE's `Data1` radius, which varies from 4 to 30 across this
+    world's 149 forge templates. Arriving within `ARRIVED_POSITION_YARDS` of a
+    four-yard forge puts the character outside the focus, and the refusal that
+    follows is one DriveCraft cannot tell from a cooldown. Better to say so.
+    """
+    if standing_on is None:
+        return ForgeAim(refused=(
+            "nobody can say which map the smelter is standing on - "
+            "overseer_snapshot has no fresh row for it, so the family is "
+            "either offline or the module has stopped writing the snapshot"))
+    if not spawn:
+        return ForgeAim(refused=(
+            "no Forge whose focus is wider than the %d-yard arrival tolerance "
+            "is spawned on map %s, so nothing can be smelted there until the "
+            "family travels to a map that has one" % (
+                ARRIVED_POSITION_YARDS, standing_on)))
+    where = spawn.get("map_id")
+    if where is None or int(where) != int(standing_on):
+        return ForgeAim(refused=(
+            "the nearest Forge is on map %s and the smelter is on map %s - "
+            "there is no navmesh between them, so this needs a boat, a portal "
+            "or a flight before an aim can do anything" % (where, standing_on)))
+    radius = int(spawn.get("radius") or 0)
+    if radius <= ARRIVED_POSITION_YARDS:
+        # RE-CHECKED HERE THOUGH THE QUERY ALREADY FILTERS ON IT, exactly as
+        # `vault_aim` re-checks the same-map rule `_VAULT_SQL`'s own JOIN
+        # enforces. The query decides which spawn is a candidate; this decides
+        # what to SAY when there is none, and a sentence a person can act on is
+        # worth more than a row that silently did not match.
+        return ForgeAim(refused=(
+            "the nearest Forge on map %s has a %d-yard focus and the travel "
+            "drive only promises to land a character within %d yards of an "
+            "`at:` aim, so walking there would not reliably put the smelter "
+            "inside the focus - and CheckCast's refusal for that is one "
+            "DriveCraft logs as a bare SpellCastResult, not as a distance" % (
+                where, radius, ARRIVED_POSITION_YARDS)))
+    aim = ground_aim(where, spawn.get("x"), spawn.get("y"), spawn.get("z"))
+    if not aim:
+        return ForgeAim(refused=(
+            "the nearest Forge on map %s cannot be named in the %d characters "
+            "overseer_roster.travel_npc holds, so aiming at it would truncate "
+            "into a coordinate nobody surveyed" % (where, COLUMN_WIDTH)))
+    return ForgeAim(aim=aim, radius=radius)
+
+
+def within_focus(spawn) -> bool:
+    """Is the character this spawn row was measured for already in the focus?
+
+    `spawn` carries `d2`, the SQUARE of the planar distance from the character
+    to the spawn - squared because that is what the query sorts on and taking a
+    root to compare against a squared threshold would be arithmetic for its own
+    sake (`_VAULT_SQL`'s own comment makes the same argument).
+
+    JUDGED AGAINST THE FORGE'S OWN RADIUS AND NOT A CONSTANT OF OURS. A caller
+    might reasonably reach for `TOWN_COUNTER_YARDS` here the way the guild bank
+    pass does for a vault, and it would be wrong in both directions: 8 is
+    outside a 4-yard forge and needlessly inside a 30-yard one. The radius IS
+    the game's own rule for whether `CheckCast` passes, so it is the only
+    honest threshold, and reading it per spawn is free - the template row is
+    already joined for the query that found the spawn.
+
+    False for a row that cannot answer - no distance, no radius - because the
+    fail-closed reading of "I do not know whether they are close enough" is to
+    walk them there, which costs a walk, rather than to skip the walk and let
+    the cast be refused for ever.
+    """
+    if not spawn:
+        return False
+    near = spawn.get("d2")
+    radius = spawn.get("radius")
+    if near is None or not radius:
+        return False
+    return float(near) <= float(radius) ** 2

@@ -2824,6 +2824,7 @@ class Bridge(discord.Client):
                 self._recruit_loop,
                 self._craft_supply_loop,
                 self._craft_rhythm_loop,
+                self._forge_loop,
                 self._auction_loop,
                 self._towntrip_loop,
                 self._restore_lost_lives,
@@ -3955,16 +3956,40 @@ class Bridge(discord.Client):
         outside every bracket) gets `craft_spell = 0` written - explicit
         "nothing to do" rather than a stale spell id left standing from a
         bracket the character has since grown past.
+
+        AND A MINER MAY BE HANDED ITS SMELT INSTEAD (infra#3748). `craft.py`
+        now carries a Mining bracket, and a character holding mining has TWO
+        recipes it could legally be casting - the crafting one and the smelt.
+        Which of them it should carry depends on what is in its bags, which
+        `craft.craft_errand` deliberately cannot see, so the choice is
+        `craft_rhythm.errand`'s and this pass just writes what it answers. The
+        extra query that costs is `_fetch_item_counts`, already batched one
+        round trip per DISTINCT item entry across the whole family, and only
+        the family's two miners contribute an entry to it at all.
         """
         names = await asyncio.to_thread(_crafting_roster)
         if not names:
             return
         skills = await asyncio.to_thread(_fetch_trade_skills, names)
+        # BOTH CANDIDATES' REAGENTS, FETCHED BEFORE EITHER IS CHOSEN. The choice
+        # compares what is held for the spend against what is held for the
+        # smelt, so counting only the chosen recipe's reagents would need the
+        # choice to have been made already. See craft_rhythm.reagents_to_count.
+        wanted = {
+            (name, entry)
+            for name in names
+            for entry in craft_rhythm.reagents_to_count(name, skills.get(name, {}))
+        }
+        counts = await asyncio.to_thread(_fetch_item_counts, sorted(wanted))
         for name in names:
-            spell_id = craft.craft_errand(name, skills.get(name, {}))
-            await asyncio.to_thread(_write_craft_errand, name, spell_id)
-            if spell_id:
-                log.info("craft: %s aimed at recipe spell %s", name, spell_id)
+            held = {entry: count for (who, entry), count in counts.items()
+                    if who == name}
+            chosen = craft_rhythm.errand(name, skills.get(name, {}), held)
+            await asyncio.to_thread(_write_craft_errand, name, chosen.spell)
+            if chosen.spell:
+                log.info("craft: %s aimed at %s spell %s - %s",
+                         name, "smelt" if chosen.smelting else "recipe",
+                         chosen.spell, chosen.why)
 
     async def _assign_crafts(self) -> None:
         """Same cadence family as _assign_trades - a standing errand needs
@@ -4376,19 +4401,38 @@ class Bridge(discord.Client):
         # `_craft_supply_once` already holds `_fetch_item_counts` to: one round
         # trip per DISTINCT item entry, not one per character. Five characters
         # short of four distinct materials is four queries, not twenty.
-        spells = {name: craft.craft_errand(name, skills.get(name, {}))
-                  for name in names}
+        # BOTH CANDIDATES, NOT JUST THE CRAFTING ONE (infra#3748). A miner may
+        # be carrying its smelt rather than its craft, and judging its stock
+        # against the recipe it is NOT casting would be the same class of error
+        # as reading `craft_spell` off the roster: a sentence about the wrong
+        # reagent. `craft_rhythm.errand` makes the same choice `_craft_once`
+        # makes and from the same counts, so the two passes cannot disagree
+        # about which recipe a character is on.
         wanted = {
-            (name, reagent.entry)
-            for name, spell in spells.items()
-            for reagent in craft_rhythm.GATHERED.get(spell, ())
+            (name, entry)
+            for name in names
+            for entry in craft_rhythm.reagents_to_count(name, skills.get(name, {}))
         }
         counts = await asyncio.to_thread(_fetch_item_counts, sorted(wanted))
+        # `carried` and not `held`: the gather branch at the foot of this
+        # function already binds `held` to the standing travel aims, and one
+        # name meaning two things inside one function is how a later edit
+        # reads the wrong one.
+        carried = {
+            name: {entry: count for (who, entry), count in counts.items()
+                   if who == name}
+            for name in names
+        }
+        spells = {
+            name: craft_rhythm.errand(
+                name, skills.get(name, {}), carried[name]).spell
+            for name in names
+        }
 
         stands = [
             craft_rhythm.stand(
                 name, spells[name],
-                {reagent.entry: counts.get((name, reagent.entry), 0)
+                {reagent.entry: carried[name].get(reagent.entry, 0)
                  for reagent in craft_rhythm.GATHERED.get(spells[name], ())},
             )
             for name in names
@@ -6150,6 +6194,171 @@ class Bridge(discord.Client):
                 await self._guild_bank_once()
             except Exception:
                 log.exception("guild bank pass failed; retrying next cycle")
+            await asyncio.sleep(cycle)
+
+    async def _forge_once(self) -> None:
+        """Stand the family at a Forge when somebody is holding a smelt errand
+        (infra#3748, part of infra#3731).
+
+        THE WALK THAT UNBLOCKS SMELTING, AND IT IS `_guild_bank_once` WITH A
+        DIFFERENT WHERE CLAUSE. infra#3617 parked the forge/anvil question
+        having concluded that reaching a spell-focus GameObject "means indexing
+        GameObject spawns the same way creatures are indexed today - a new
+        second index, not a one-line addition". That was already untrue when it
+        was written: infra#3702 shipped `_guild_bank_once`, which walks the
+        leader to a Guild Vault - a GAMEOBJECT, not a creature - by reading the
+        nearest spawn out of `acore_world.gameobject` and handing its surveyed
+        position to `travel.ground_aim`, producing the `at:<map>:<x>,<y>,<z>`
+        form `ResolveTravelTarget` answers with ground before it ever builds the
+        creature-only `_travelSpawns` index. This pass is that pass with
+        `gt.type = 8 AND gt.Data0 = 3`.
+
+        AND SMELTING IS THE ONE CASE THAT NEEDS ONLY THE WALK. infra#3617's
+        other half is the Blacksmith Hammer: every Anvil-gated recipe also needs
+        a tool equipped, an unsolved "swap it in and put the weapon back"
+        problem, and that issue noted the travel half "could ship alone ... for
+        Anvil-only recipes if any existed without a tool requirement (none do
+        here)". Every smelt spell reads `EquippedItemClass = -1`. So this
+        unblocks the whole smelting chain and leaves the hammer question exactly
+        where it is - `craft.FOCUS_AIMS` is the fence that keeps it there.
+
+        THE LEADER, BECAUSE ONLY THE LEADER CAN BE AIMED. mod-overseer grants
+        `new rpg` to the leader alone and `ReadAimedMover` answers
+        `RefuseInFormation` for a follower, so aiming Grog - who is the family's
+        engineer and the character the bars are FOR - would move nobody. The
+        followers arrive by following, which is the same reason
+        `_guild_bank_once` and `_bank_once` both aim one character and queue
+        five rows.
+
+        DEMAND-DRIVEN, AND THAT IS THE SAFETY PROPERTY RATHER THAN AN
+        OPTIMISATION. `_forge_errands` returns empty unless somebody on
+        `job='craft'` is holding a recipe that actually needs a focus, and this
+        pass then writes nothing at all. A background pass that latched
+        `travel_npc` unconditionally is what pinned the family in a shop for
+        half an hour (infra#3703, infra#3708, infra#3728) and cost four release
+        fixes in one night; this one cannot, because on the overwhelming
+        majority of passes it has nothing to ask for.
+
+        ONE WRITER, AND THE GUARD IT NEEDS IS ALREADY THERE. The aim goes
+        through `_write_trade_errand` like every other travel errand this
+        process issues. No change to `_retaskable_from` is required and none was
+        made: infra#3702 already taught it that a ground aim is an economy
+        errand (`travel.is_ground_aim`), so a forge aim takes the guarded branch
+        that retasks only an IDLE traveller and can never blank an outstanding
+        `learn_skill`/`unlearn_skill` on its way past - which is mod-overseer#438's
+        bug, and the one `ECONOMY_ERRANDS`' own comment warns about re-creating
+        one file over.
+
+        AND IT IS HANDED BACK BY THE MODULE, NOT LATCHED. `TravelAimBook::Release`
+        skips its column write only when the book never claimed the aim AND
+        `LearnSkillPending` or `IsMaintenanceErrand` holds. `CounterRoleForAim`
+        answers `None` for an `at:` aim, so neither holds, and the release
+        clears `travel_npc` the moment the traveller is within
+        `TRAVEL_ARRIVED_POSITION_YARDS` of the forge. That is the same terminal
+        path the vault aim already relies on - measured and documented in
+        `_guild_bank_once`, which reads the emptied column as "arrived" - and it
+        is why this pass adds nothing to `_release_trade_errand`, whose
+        `ECONOMY_ERRANDS` guard is deliberately keyword-only.
+
+        NOT IN THE MIDDLE OF A DUNGEON RUN, for the reason both bank passes skip
+        one: pulling the leader out is how the party spreads.
+        """
+        smelters = await asyncio.to_thread(_forge_errands)
+        if not smelters:
+            return
+        names = sorted((await asyncio.to_thread(_protected_guids)).values())
+        if not names or await self._mid_run(names):
+            return
+        leader = await asyncio.to_thread(_head_now)
+        where = (await asyncio.to_thread(_fetch_positions, [leader])).get(leader)
+        spawn = await asyncio.to_thread(_nearest_forge, leader)
+        forge = travel.forge_aim(spawn, where.get("map_id") if where else None)
+        if not forge.aim:
+            # THE FAILURE IS LEGIBLE HERE BECAUSE IT CANNOT BE LEGIBLE THERE.
+            # DriveCraft does not tell SPELL_FAILED_REQUIRES_SPELL_FOCUS from a
+            # cooldown - it logs a bare numeric SpellCastResult at INFO and
+            # retries every twenty seconds - so a smelt that never lands looks
+            # like a transient for ever. Filed as mod-overseer's own issue; this
+            # is the half that can be said from this side, and it names the
+            # characters it is costing rather than just the refusal.
+            log.info(
+                "forge: %s hold a focus-gated craft errand (%s) and nobody can "
+                "be sent to a forge - %s",
+                ", ".join(sorted(smelters)),
+                ", ".join("%s=%d" % pair for pair in sorted(smelters.items())),
+                forge.refused,
+            )
+            return
+        if travel.within_focus(spawn):
+            # ALREADY THERE, SO THE COLUMN IS LEFT ALONE. Writing an aim for a
+            # walk of nought yards would claim `travel_npc` from whatever
+            # economy pass could otherwise be using it, and would stand the
+            # quest drive down for a journey that is already over - a cost with
+            # no matching benefit. Judged against the FORGE's own radius rather
+            # than a constant of ours, because that is the distance CheckCast
+            # itself measures (see travel.within_focus).
+            log.info(
+                "forge: leader=%s is already inside the %d-yard focus of the "
+                "nearest forge on map %s, so %s can smelt where they stand and "
+                "no aim is written",
+                leader, forge.radius,
+                where.get("map_id") if where else "?",
+                ", ".join(sorted(smelters)),
+            )
+            return
+        aimed = await asyncio.to_thread(
+            _write_trade_errand,
+            professions.Errand(character=leader, travel_npc=forge.aim),
+        )
+        if not aimed:
+            # WHAT HOLDS THE COLUMN, NOT JUST THAT SOMETHING DOES - the same
+            # sentence `_guild_bank_once` learned to write in infra#3702, and
+            # for the same reason: an economy errand may only retask an IDLE
+            # traveller, so a leader on any other one outranks this pass
+            # indefinitely. That starvation is infra#3703's to fix and is NOT
+            # fixed here by widening the guard; naming it is what tells a
+            # starved pass from a broken one.
+            log.info(
+                "forge: leader=%s could not be aimed at the forge (%s) - the "
+                "column already holds %r and an economy errand may only retask "
+                "an idle traveller, so %s cannot smelt until that one clears",
+                leader, forge.aim,
+                await asyncio.to_thread(_current_travel_npc, leader),
+                ", ".join(sorted(smelters)),
+            )
+            return
+        log.info(
+            "forge: leader=%s aimed at %s (%d-yard focus) so %s can smelt - %s",
+            leader, forge.aim, forge.radius, ", ".join(sorted(smelters)),
+            ", ".join("%s=%d" % pair for pair in sorted(smelters.items())),
+        )
+
+    async def _forge_loop(self) -> None:
+        """Keep a smelter standing at a forge (infra#3748).
+
+        Own loop and own clock, the same reasoning `_guild_bank_loop` and
+        `_craft_supply_loop` give for themselves.
+
+        THE CADENCE MATCHES `CRAFT_CYCLE_SECONDS` (300 by default), so the walk
+        and the errand that needs it are decided a poll apart rather than on
+        unrelated clocks - the same argument `_craft_rhythm_loop` makes.
+
+        STAGGERED LAST OF ALL, after `_craft_rhythm_loop`'s own 330-second
+        settle. The order is deliberate and it is the order the decisions
+        happen in: the rhythm decides whether the family crafts at all,
+        `_assign_crafts` writes whichever recipe follows from that, and only
+        then is there a smelt errand for this pass to see. Arriving first would
+        read a stale `craft_spell` and, worse, would put this pass into the same
+        instant as every other writer of `travel_npc`.
+        """
+        await self.wait_until_ready()
+        cycle = float(os.environ.get("CRAFT_FORGE_CYCLE_SECONDS", "300"))
+        await asyncio.sleep(min(cycle, 360.0))
+        while not self.is_closed():
+            try:
+                await self._forge_once()
+            except Exception:
+                log.exception("forge pass failed; retrying next cycle")
             await asyncio.sleep(cycle)
 
     async def _settle_town_errand(self, names: list, leader: str, town,
@@ -8418,6 +8627,138 @@ def _nearest_vault(name: str):
         return dict(row) if row else None
 
 
+# THE FORGE QUERY (infra#3748), AND IT IS `_VAULT_SQL` WITH TWO CHANGES.
+#
+# Same snapshot join, same 120-second freshness filter, same `g.map = s.map_id`
+# same-map rule enforced in the JOIN, same squared-distance ordering with z left
+# out of the ranking - every argument in `_VAULT_SQL`'s own comment above applies
+# here unchanged, which is the point: infra#3617 concluded that walking to a
+# spell-focus GameObject "means indexing GameObject spawns the same way
+# creatures are indexed today - a new second index", and the answer is that the
+# query already written for the Guild Vault answers this one too with a
+# different WHERE.
+#
+# THE TWO CHANGES:
+#
+#   `gt.type = 8 AND gt.Data0 = 3` rather than `gt.type = 34`. Data0 is the
+#   SpellFocusObject id CheckCast matches (3 = Forge); Data1 is the RADIUS.
+#   infra#3617 read Data1 as the focus id, which happens to look right because
+#   anvils and forges both mostly carry Data1 = 10 - see travel.FORGE_FOCUS_ID
+#   for the counts that tell them apart.
+#
+#   `AND gt.Data1 > %s` - the radius filter, which the vault query has no need
+#   of. A Guild Vault is judged by `GuildBankInReach`'s own interact gate, so
+#   any spawn will do; a smelt is judged by the FORGE's own focus radius, and
+#   the travel drive only promises to land an `at:` aim within
+#   TRAVEL_ARRIVED_POSITION_YARDS. Two of this world's 149 forge templates have
+#   a radius at or inside that tolerance, so walking to one would leave the
+#   smelter outside the focus and CheckCast would refuse every cast - as a bare
+#   numeric SpellCastResult at INFO, which reads exactly like a cooldown. A
+#   forge that cannot be reliably stood in is not a worse candidate, it is not
+#   a candidate, the same reasoning that keeps a cross-map spawn out.
+#
+# `gt.Data1 AS radius` IS SELECTED AND NOT JUST FILTERED ON, because
+# `travel.within_focus` needs it to answer "is this character ALREADY in the
+# focus" - a question whose right threshold is per-forge and which a constant of
+# ours would get wrong in both directions.
+_FORGE_SQL = (
+    "SELECT g.map AS map_id, g.position_x AS x, g.position_y AS y, "
+    "g.position_z AS z, gt.Data1 AS radius, "
+    "(POW(g.position_x - s.pos_x, 2) + POW(g.position_y - s.pos_y, 2)) AS d2 "
+    "FROM overseer_snapshot s "
+    "JOIN acore_world.gameobject g ON g.map = s.map_id "
+    "JOIN acore_world.gameobject_template gt ON gt.entry = g.id "
+    "WHERE s.name = %s AND s.updated_at > NOW() - INTERVAL 120 SECOND "
+    "AND gt.type = %s AND gt.Data0 = %s AND gt.Data1 > %s "
+    "ORDER BY d2 LIMIT 1"
+)
+
+
+def _nearest_forge(name: str):
+    """The nearest usable Forge spawn row on `name`'s own map, or None.
+
+    A ROW OUT OF THE SPAWN TABLE, NOT A COORDINATE THIS PROCESS INVENTED - the
+    identical guarantee `_nearest_vault` gives, against the identical tables.
+    `gameobject.position_x/y/z` is where the world actually put that forge,
+    surveyed with the rest of the map.
+
+    None covers four absences on purpose - no fresh snapshot row, no forge on
+    this map, no forge on this map whose focus clears the arrival tolerance, no
+    gameobject tables at all - because every one of them means the same thing to
+    the caller: nobody can be stood at a forge this pass. `travel.forge_aim` is
+    where they are told apart for the log.
+    """
+    with _connect() as conn, conn.cursor() as cur:
+        try:
+            cur.execute(_FORGE_SQL, (
+                name,
+                travel.SPELL_FOCUS_GO_TYPE,
+                travel.FORGE_FOCUS_ID,
+                travel.ARRIVED_POSITION_YARDS,
+            ))
+        except pymysql.err.MySQLError as exc:
+            # 1054 missing column, 1146 missing table. Same degradation as
+            # `_nearest_vault`: a world image that cannot say where anybody is
+            # standing, or that has no gameobject tables, honestly has no forge
+            # in reach rather than an error to raise.
+            if exc.args and exc.args[0] in (1054, 1146):
+                log.warning("forge: cannot see where the family is standing")
+                return None
+            raise
+        row = cur.fetchone()
+        return dict(row) if row else None
+
+
+def _forge_errands() -> dict:
+    """name -> craft_spell, for every `job='craft'` row whose recipe needs a
+    FORGE (infra#3748).
+
+    THE FORGE SPECIFICALLY, NOT "ANY FOCUS", AND THAT IS LOAD-BEARING RATHER
+    THAN PEDANTRY (infra#3760). `craft.RECIPES` carries entries for two
+    different `SpellFocusObject` ids now that the eleven Anvil-gated
+    Engineering brackets declare the value they always needed: Forge is 3 and
+    Anvil is 1, and they are different objects in different places. A pass that
+    read "needs some focus" would walk Grog to a forge for Handful of Copper
+    Bolts, which needs an anvil - a journey that ends in the same silent
+    `SPELL_FAILED_REQUIRES_SPELL_FOCUS` it was supposed to cure, having moved
+    the whole family to do it. `craft.FOCUS_AIMS` is the mapping from a focus
+    id to the pass that serves it, and this is that mapping read backwards.
+
+    THE DEMAND SIGNAL, AND THE WHOLE REASON THE FORGE PASS IS NOT A NEW
+    UNCONDITIONAL WRITER OF `travel_npc`. This project has been pinned in a
+    Gadgetzan shop for half an hour by a background pass that latched that
+    column (infra#3703, infra#3708, infra#3728), and four release fixes shipped
+    in one night because of it. So the forge aim is strictly demand-driven: no
+    standing smelt errand, no aim, no competition for the column at all. When
+    this returns empty - which is every pass until a miner is actually told to
+    smelt - `_forge_once` writes nothing and reads nothing further.
+
+    GATED ON `job='craft'` IN THE SAME QUERY, because that column is DriveCraft's
+    own permission (`jobIt->second != "craft"` skips everyone else). A character
+    walked to a forge while the family is out gathering is a character standing
+    at a forge casting nothing, AND a character whose non-empty `travel_npc`
+    stands the quest drive down (`TravelHoldsTheWheel`), so the walk would cost
+    the gathering trip it was supposed to be paid for by.
+
+    DEGRADES TO NOBODY, matching every other reader of these columns: a world
+    image without the column cannot be holding a smelt errand in it.
+    """
+    with _connect() as conn, conn.cursor() as cur:
+        try:
+            cur.execute(
+                "SELECT name, craft_spell FROM overseer_roster "
+                "WHERE enabled = 1 AND job = %s AND craft_spell > 0",
+                (craft.MODE,),
+            )
+        except pymysql.err.MySQLError as exc:
+            if exc.args and exc.args[0] in (1054, 1146):
+                return {}
+            raise
+        return {row["name"]: int(row["craft_spell"] or 0)
+                for row in cur.fetchall()
+                if craft.focus_for(row["craft_spell"]) == travel.FORGE_FOCUS_ID}
+
+
 def _current_travel_npc(name: str) -> str:
     """Whatever `name`'s travel aim says right now, for a log line.
 
@@ -10158,6 +10499,7 @@ class HeadlessBridge(Bridge):
                 self._recruit_loop,
                 self._craft_supply_loop,
                 self._craft_rhythm_loop,
+                self._forge_loop,
                 self._auction_loop,
                 self._towntrip_loop,
                 self._restore_lost_lives,

@@ -12,6 +12,74 @@ import unittest
 import craft
 import goals
 import professions
+import travel
+
+# ---------------------------------------------------------------------------
+# THE WORLDSERVER'S OWN ANSWER FOR EVERY SPELL `craft.RECIPES` NAMES.
+# `Spell.dbc` field 18, `RequiresSpellFocus`, resolved through
+# `SpellFocusObject.dbc`: 0 none, 1 Anvil, 2 Loom, 3 Forge, 4 Cooking Fire.
+#
+# WHY THIS TABLE EXISTS AT ALL (infra#3760, built as part of infra#3748). The
+# guard this replaces was `assertEqual(recipe.focus, 0)`, and `Recipe.focus`
+# DEFAULTS to 0 - so it compared the declared field against itself and could
+# never fail. Eleven Engineering entries declared 0 while the server required
+# an Anvil, every one of them refused on every twenty-second poll for its whole
+# life, in a table that had a test for exactly this. infra#3758 worked around
+# it by pinning focus-4 spell ids by number and infra#3747 did the same for the
+# smelts; both catch one focus id each and neither catches a wrong value for
+# any spell nobody happened to list. This is the projection infra#3760 asked
+# for instead: every id the table names, against the server's answer, so a new
+# entry cannot be added without stating a measurement in a second place.
+#
+# PROVENANCE, AND IT IS CHECKABLE RATHER THAN ASSERTED. Read on 2026-09-13 from
+# `/azerothcore/env/dist/data/dbc/` copied out of the running worldserver pod
+# and md5-verified byte-identical against the pod's own `md5sum`:
+#
+#     Spell.dbc             543b9fe61355b6a77a01714d52fea2e5   49839 x 234
+#     SkillLineAbility.dbc  d8c11abfcfe70596cb9068c0e97a1d9a   10219 x 14
+#     SpellFocusObject.dbc  797c65a49ae1e6336c9d851eb18011e0
+#
+# `tools/spell_focus_from_dbc.py` regenerates this block from those files, so
+# the next reader re-derives it in one command rather than by hand.
+#
+# THE FIELD INDEX IS THE TRAP, AND THE ANCHOR DOES NOT CATCH IT. infra#3689's
+# anchor - spell 2963 resolves to Reagent[0]=2589, ReagentCount[0]=2 - proves
+# Reagent/ReagentCount/EffectItemType/SpellName and touches neither focus nor
+# tool. `RequiresSpellFocus` is field **18** and `EquippedItemClass` field
+# **68** in the 3.3.5a layout. Read at 23 and 69 - which a first pass at this
+# did, and which infra#3747's own write-up implies - every smelt answers
+# `focus = 0` and only eleven spells in the whole file carry any value at all.
+# The tell is the total: the real field is non-zero for 647 Anvil spells alone.
+MEASURED_FOCUS = {
+    # TAILORING
+    2963: 0, 8776: 0, 2964: 0, 3839: 0, 3865: 0, 18401: 0,
+    # FIRST AID
+    3275: 0,
+    # ENGINEERING - eleven Anvils, and infra#3760 is the issue for them
+    3918: 0, 3922: 1, 7430: 1, 3923: 1, 3929: 0, 3931: 0, 3973: 0,
+    3938: 1, 3945: 0, 12585: 0, 12590: 1, 12589: 1, 12591: 1, 12599: 1,
+    12619: 1, 19788: 0, 19791: 1, 19795: 1,
+    # MINING - the one focus-gated entry that has a walk (infra#3748)
+    2657: 3,
+    # ALCHEMY
+    2330: 0, 2337: 0, 3447: 0, 3173: 0, 7181: 0, 11449: 0, 11450: 0,
+    11457: 0, 11460: 0, 17553: 0, 17556: 0,
+    # BLACKSMITHING
+    2660: 0, 3320: 0, 2665: 0, 3326: 0, 3337: 0, 9920: 0, 16641: 0,
+    # LEATHERWORKING
+    2881: 0, 2152: 0, 3756: 0, 3763: 0, 2167: 0, 7135: 0, 20649: 0,
+    3818: 0, 3780: 0, 7151: 0, 7156: 0, 10487: 0, 10507: 0, 10548: 0,
+    10558: 0, 19049: 0, 19082: 0,
+}
+
+# The eleven entries that declare a focus nothing in this repo walks to yet.
+# NOT an excuse list: the test below asserts this is EXACTLY the set, so a
+# twelfth cannot be added, and each of these is already filed (infra#3760 for
+# the table, infra#3617 for the anvil walk). They are Engineering's whole
+# ladder above Rough Blasting Powder.
+FOCUS_WITHOUT_A_WALK = {
+    3922, 7430, 3923, 3938, 12590, 12589, 12591, 12599, 12619, 19791, 19795,
+}
 
 
 class RecipeForTests(unittest.TestCase):
@@ -585,18 +653,38 @@ class RecipeTableDisciplineTests(unittest.TestCase):
             for recipe in recipes:
                 self.assertGreater(recipe.spell_id, 0)
 
-    def test_every_recipe_key_is_a_real_crafting_or_secondary_skill(self):
+    def test_every_recipe_key_is_a_real_profession_skill(self):
         # CRAFTING (a primary, slot-costing trade) and SECONDARY (First Aid /
-        # Cooking / Fishing, free and held by everyone) are the only two
-        # kinds of skill craft_errand ever answers for - see its own
-        # docstring. A key that is neither is a typo, not a new profession.
+        # Cooking / Fishing, free and held by everyone) are the two kinds of
+        # skill `craft_errand` answers for, and GATHERING joined them as a
+        # RECIPES key in infra#3748 - not as a third thing `craft_errand`
+        # considers (it still does not; see `test_craft_errand_never_answers_
+        # with_a_smelt` below) but because this table is keyed by SKILL ID
+        # rather than by trade class, and Mining's smelt brackets are real
+        # castable recipes on a gathering skill. A key outside all three is a
+        # typo, not a new profession.
         real_ids = {
             goals.SKILL_IDS[name]
-            for name in professions.CRAFTING | professions.SECONDARY
+            for name in (professions.CRAFTING | professions.SECONDARY
+                         | professions.GATHERING)
             if name in goals.SKILL_IDS
         }
         for skill_id in craft.RECIPES:
             self.assertIn(skill_id, real_ids)
+
+    def test_the_only_gathering_key_is_the_one_with_a_walk_behind_it(self):
+        """Widening the key rule above must not become a general permission.
+
+        Herbalism and Skinning have no craftable recipe of their own and no
+        focus object anybody walks to, so a bracket appearing under either
+        would be the key rule being read as "any profession may have recipes"
+        rather than as the one deliberate addition it is."""
+        gathering_keys = {
+            skill_id for skill_id in craft.RECIPES
+            if skill_id in {goals.SKILL_IDS[n] for n in professions.GATHERING
+                            if n in goals.SKILL_IDS}
+        }
+        self.assertEqual(gathering_keys, {goals.SKILL_IDS["mining"]})
 
     def test_brackets_do_not_overlap_within_one_skill(self):
         for recipes in craft.RECIPES.values():
@@ -646,65 +734,194 @@ class NoForecastOfTheWorldserversAnswer(unittest.TestCase):
 
 
 class SpellFocusTests(unittest.TestCase):
-    """No recipe in this table may need a forge, an anvil or a loom.
+    """A recipe may need a spell focus only if something here walks to it.
 
-    WHY THIS IS A TEST AND NOT A COMMENT (infra#3738). DriveCraft casts in
-    place: it does not walk anyone to a spell-focus gameobject, and the core's
-    own CheckCast refuses a recipe that needs one with
-    SPELL_FAILED_REQUIRES_SPELL_FOCUS. mod-overseer does not clear the errand
-    on that refusal and does not distinguish it from a cooldown in the log - it
-    records a bare numeric SpellCastResult at INFO and retries every twenty
-    seconds - so a focus-gated entry added here would not fail loudly. It would
-    sit in the table looking correct and produce nothing, for ever, while the
-    log said something that reads like a transient.
+    WHAT THIS CLASS USED TO ASSERT, AND WHY IT CHANGED (infra#3747 ->
+    infra#3748). infra#3747 added `Recipe.focus` and held the WHOLE table to
+    `focus == 0`, because at that moment nothing anywhere could stand a
+    character next to a focus object: DriveCraft casts in place, CheckCast
+    refuses a focus-gated recipe with SPELL_FAILED_REQUIRES_SPELL_FOCUS, and
+    mod-overseer neither clears the errand on that refusal nor tells it from a
+    cooldown - it logs a bare numeric SpellCastResult at INFO and retries every
+    twenty seconds. So a focus-gated entry would have sat in the table looking
+    correct and produced nothing for ever, while the log read like a transient.
+    "Zero" was the right rule while the true answer was "none of them".
 
-    craft.py has always asserted "no focus needed" in each entry's `note`, but
-    a note is free prose the module's own docstring says is "for a human
-    reading this table, not for anything the code checks". infra#3738 then
-    proposed adding a smelt recipe, every one of which requires a Forge
-    (Spell.dbc RequiresSpellFocus = 3). That is the change this class exists to
-    refuse until something can stand a character next to one.
+    infra#3748 SHIPPED THE WALK FOR EXACTLY ONE OF THE THREE. `bridge._forge_once`
+    stands the leader inside a spawned Forge's focus before a smelt is cast, so
+    `focus = 3` is now honourable. The rule therefore becomes "zero, or a focus
+    id something actually walks to" - `craft.FOCUS_AIMS` - rather than either
+    "zero for ever" (which would refuse the fix) or "any non-zero is fine"
+    (which would let infra#3617's Anvil-gated Blacksmithing recipes in, and
+    those still have no walk AND still need a Blacksmith Hammer equipped).
+
+    THE SECOND TEST IS WHAT STOPS `FOCUS_AIMS` BECOMING A LIST OF INTENTIONS.
+    A mapping that merely CLAIMS a walk exists would re-open the whole hole in
+    one line, so every key is held to a `travel` helper and a `bridge` pass
+    that really exist.
     """
 
-    def test_no_recipe_requires_a_spell_focus(self):
+    def test_every_declared_focus_matches_the_worldservers_own_answer(self):
+        """THE GUARD THAT IS NOT VACUOUS, and the one this class used to lack.
+
+        `assertEqual(recipe.focus, 0)` against a field that DEFAULTS to 0 is a
+        comparison of the declared value with itself. This compares it with
+        `Spell.dbc`'s `RequiresSpellFocus` instead, so a wrong declaration
+        fails whether it was written as 0, left at its default, or typed as the
+        wrong non-zero id."""
         for skill_id, recipes in craft.RECIPES.items():
             for recipe in recipes:
                 with self.subTest(skill=skill_id, recipe=recipe.name):
+                    self.assertIn(
+                        recipe.spell_id, MEASURED_FOCUS,
+                        f"{recipe.name} (spell {recipe.spell_id}) is in "
+                        "RECIPES with no measured RequiresSpellFocus. Pull "
+                        "Spell.dbc from the worldserver pod and run "
+                        "tools/spell_focus_from_dbc.py - a recipe whose focus "
+                        "nobody looked up is how eleven Engineering brackets "
+                        "sat refused for their whole life (infra#3760).")
                     self.assertEqual(
-                        recipe.focus, 0,
+                        recipe.focus, MEASURED_FOCUS[recipe.spell_id],
                         f"{recipe.name} (spell {recipe.spell_id}) declares "
-                        f"focus={recipe.focus}, so CheckCast will refuse it "
-                        "unless the character is standing next to that "
-                        "SpellFocusObject. DriveCraft does not walk anyone "
-                        "anywhere. Land the forge/anvil aim first - see "
-                        "craft.py's MINING AND SMELTING comment - then teach "
-                        "the caller to honour this field.",
-                    )
+                        f"focus={recipe.focus} and the worldserver's own "
+                        f"Spell.dbc says {MEASURED_FOCUS[recipe.spell_id]}. "
+                        "The declaration is what `craft.focus_for` hands the "
+                        "forge pass, so a wrong one either sends nobody to a "
+                        "focus they need or sends them to the wrong object.")
 
-    def test_no_recipe_is_a_smelt_spell(self):
-        # The specific ids infra#3738 proposed, plus the whole classic smelt
-        # chain around them, read off the running worldserver's Spell.dbc.
-        # 2659 is Smelt Bronze, NOT Smelt Copper as that issue states; Smelt
-        # Copper is 2657. Both are Forge-gated, as is every other entry here.
+    def test_the_measured_table_has_no_entries_for_recipes_that_are_gone(self):
+        """A projection that outlives its subject is a projection nobody is
+        reading. Kept exactly in step so the assertion above cannot be
+        satisfied by a stale row."""
+        named = {recipe.spell_id
+                 for recipes in craft.RECIPES.values() for recipe in recipes}
+        self.assertEqual(set(MEASURED_FOCUS), named)
+
+    def test_a_focus_gated_recipe_without_a_walk_is_a_named_counted_debt(self):
+        """The other half: a declaration can be HONEST and still name a focus
+        nothing stands a character in, which is the eleven Engineering entries
+        infra#3760 is filed for. They stay in the table - removing them would
+        hide the gap rather than close it - but the set is pinned to exactly
+        those eleven, so a twelfth cannot be added without a walk."""
+        stranded = {
+            recipe.spell_id
+            for recipes in craft.RECIPES.values() for recipe in recipes
+            if recipe.focus and recipe.focus not in craft.FOCUS_AIMS
+        }
+        self.assertEqual(
+            stranded, FOCUS_WITHOUT_A_WALK,
+            "a recipe declaring a focus nothing walks to sits refused on every "
+            "poll for ever, logged by DriveCraft as a bare SpellCastResult "
+            "that reads like a cooldown. Land the aim and add the focus id to "
+            "craft.FOCUS_AIMS in the same change.")
+
+    def test_the_stranded_ones_are_all_the_anvil_and_all_engineering(self):
+        """Says what the debt IS, so the number above is not just a number:
+        one focus object, one profession, one issue."""
+        stranded = {
+            recipe.spell_id: recipe.focus
+            for recipes in craft.RECIPES.values() for recipe in recipes
+            if recipe.focus and recipe.focus not in craft.FOCUS_AIMS
+        }
+        self.assertEqual(set(stranded.values()), {1})   # Anvil, and only Anvil
+        engineering = {r.spell_id
+                       for r in craft.RECIPES[goals.SKILL_IDS["engineering"]]}
+        self.assertLessEqual(set(stranded), engineering)
+
+    def test_an_anvil_gated_recipe_is_still_refused(self):
+        """infra#3617's half stays fenced. Anvil is focus 1 and there is no
+        anvil walk, so widening the rule above for the forge must not have
+        quietly admitted every other focus object too."""
+        self.assertNotIn(1, craft.FOCUS_AIMS)   # Anvil
+        self.assertNotIn(2, craft.FOCUS_AIMS)   # Loom
+
+    def test_the_forge_aim_is_not_merely_claimed(self):
+        # FOCUS_AIMS says something walks to focus 3. These are the two halves
+        # of that claim: the pure aim builder, and the bridge pass that writes
+        # what it returns. Imported by name rather than by grepping source, so
+        # a rename breaks this instead of silently passing.
+        self.assertEqual(set(craft.FOCUS_AIMS), {3})
+        self.assertEqual(craft.FOCUS_AIMS[3], "forge")
+        self.assertEqual(travel.FORGE_FOCUS_ID, 3)
+        self.assertTrue(callable(travel.forge_aim))
+        self.assertTrue(callable(travel.within_focus))
+
+    def test_a_smelt_spell_may_only_appear_under_mining_with_the_forge_focus(self):
+        """The smelt chain, read off the running worldserver's Spell.dbc.
+
+        infra#3747's version of this refused every one of these ids outright.
+        Now that one of them ships, the pin has to say something sharper than
+        "no smelts": a smelt is Forge-gated and sits on skill line 186, so an
+        entry that named one under Engineering, or named one with `focus` left
+        at its default, would be a recipe DriveCraft could never cast and this
+        is where that is caught. 2659 is Smelt Bronze, NOT Smelt Copper as
+        infra#3738 states; Smelt Copper is 2657."""
         smelt_spells = {
             2657: "Smelt Copper", 2658: "Smelt Silver", 2659: "Smelt Bronze",
             3304: "Smelt Tin", 3307: "Smelt Iron", 3308: "Smelt Gold",
             3569: "Smelt Steel", 10097: "Smelt Mithril",
             10098: "Smelt Truesilver", 16153: "Smelt Thorium",
         }
-        named = {
-            recipe.spell_id
-            for recipes in craft.RECIPES.values()
-            for recipe in recipes
-        }
-        clash = named & set(smelt_spells)
-        self.assertFalse(
-            clash,
-            "RECIPES names %s, which are Forge-gated smelt spells "
-            "(RequiresSpellFocus = 3). See craft.py's MINING AND SMELTING "
-            "comment." % sorted(
-                "%d (%s)" % (spell, smelt_spells[spell]) for spell in clash),
-        )
+        for skill_id, recipes in craft.RECIPES.items():
+            for recipe in recipes:
+                if recipe.spell_id not in smelt_spells:
+                    continue
+                with self.subTest(recipe=recipe.name):
+                    self.assertEqual(
+                        skill_id, goals.SKILL_IDS["mining"],
+                        "%s is a Mining ability (SkillLineAbility.dbc skill "
+                        "line 186) and cannot be cast off any other skill"
+                        % recipe.name)
+                    self.assertEqual(
+                        recipe.focus, 3,
+                        "%s carries RequiresSpellFocus = 3 (Forge) in "
+                        "Spell.dbc; declaring anything else here would skip "
+                        "the walk" % recipe.name)
+
+    def test_the_trainer_taught_smelts_are_deliberately_absent(self):
+        """Only Smelt Copper is `AcquireMethod = 1` - granted with Apprentice
+        Mining. The other nine are taught by a Mining trainer, and nothing in
+        this repo sends anybody to one for an individual recipe, so naming one
+        would make DriveCraft drop the errand with its "does not know the
+        recipe ... a planner bug" WARN. Bronze and Steel are absent for a
+        different reason again: both consume two smelted bars and a character
+        holds one craft_spell, so neither can ever be stocked."""
+        named = {recipe.spell_id
+                 for recipes in craft.RECIPES.values() for recipe in recipes}
+        for spell in (2658, 2659, 3304, 3307, 3308, 3569, 10097, 10098, 16153):
+            with self.subTest(spell=spell):
+                self.assertNotIn(spell, named)
+        self.assertIn(2657, named)
+
+    def test_craft_errand_never_answers_with_a_smelt(self):
+        """The two readers stay separate.
+
+        `professions.assigned` lists both of the family's miners with mining
+        FIRST - Grug ("mining", "blacksmithing"), Grog ("mining",
+        "engineering") - so had the Mining bracket been admitted by widening
+        `craft_errand`'s own loop instead of adding `smelt_errand` beside it,
+        the first matching bracket would have become the smelt for both of
+        them permanently and their crafting trades would have stopped the day
+        it shipped."""
+        skills = {"mining": 8, "blacksmithing": 1}
+        self.assertEqual(craft.craft_errand("Grug", skills), 2660)
+        self.assertEqual(craft.smelt_errand("Grug", skills), 2657)
+
+    def test_smelt_errand_is_zero_for_a_character_with_no_gathering_trade(self):
+        self.assertEqual(craft.smelt_errand("Og", {"tailoring": 1}), 0)
+
+    def test_smelt_errand_is_zero_above_the_one_shipped_bracket(self):
+        """Mining 70 is grey for Smelt Copper and the next bracket is
+        trainer-gated and deliberately unshipped, so this answers nothing
+        rather than naming a spell the character does not hold."""
+        self.assertEqual(craft.smelt_errand("Grug", {"mining": 70}), 0)
+        self.assertEqual(craft.smelt_errand("Grug", {"mining": 69}), 2657)
+
+    def test_focus_for_reads_the_table_so_callers_do_not(self):
+        self.assertEqual(craft.focus_for(2657), 3)
+        self.assertEqual(craft.focus_for(2660), 0)   # Rough Sharpening Stone
+        self.assertEqual(craft.focus_for(0), 0)
+        self.assertEqual(craft.focus_for(999999), 0)  # a spell this table lost
 
     def test_no_cooking_recipe_needs_a_fire(self):
         """The sibling of the smelt refusal, for focus 4 (infra#3614).
@@ -761,13 +978,19 @@ class SpellFocusTests(unittest.TestCase):
         )
 
     def test_the_module_records_the_forge_finding(self):
-        # The measurements behind the refusal above are the expensive part of
-        # infra#3738 and the reason it will not be re-litigated from a wiki.
+        # The measurements behind this are the expensive part of infra#3738,
+        # infra#3747 and infra#3748, and the reason none of it will be
+        # re-litigated from a wiki.
         import inspect
         source = inspect.getsource(craft)
         self.assertIn("3738", source)
+        self.assertIn("3748", source)
         self.assertIn("RequiresSpellFocus", source)
         self.assertIn("2657", source)
+        # The field-index correction, which is the trap the next reader
+        # re-deriving these facts from Spell.dbc will otherwise fall into.
+        self.assertIn("field 18", source)
+        self.assertIn("AcquireMethod", source)
 
     def test_the_module_records_the_cooking_fire_finding(self):
         # Same reason as the forge finding above: the campfire measurement

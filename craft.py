@@ -172,12 +172,17 @@ class Recipe:
     The value is a `SpellFocusObject.dbc` id rather than a boolean, because
     the eventual fix is per-object rather than a flag: 1 is Anvil, 2 is Loom,
     3 is Forge (read out of the running worldserver's own
-    SpellFocusObject.dbc, see the SMELTING comment below). Once something in
-    this system can stand a character next to a named focus object, the
-    recipes that need one become addable by setting this field and teaching
-    the caller to honour it; until then a non-zero value fails the test, which
-    is precisely the refusal that should happen. Zero means "castable
-    anywhere", which is every entry below.
+    SpellFocusObject.dbc, see the SMELTING comment below).
+
+    THAT "UNTIL THEN" HAS ARRIVED FOR EXACTLY ONE OF THE THREE (infra#3748).
+    `bridge._forge_once` now walks the leader to the nearest spawned Forge
+    before a smelt is cast, so `focus = 3` is a value this system can honour
+    and the Mining entries below carry it. Anvil and Loom still have no walk,
+    so `focus = 1` or `focus = 2` remains exactly as refusable as every
+    non-zero value used to be - see `FOCUS_AIMS` directly below, which is the
+    machine-readable list of which focus ids something actually stands a
+    character at, and the test that holds this field to it. Zero still means
+    "castable anywhere", which is every entry but Mining's.
     """
 
     spell_id: int
@@ -187,6 +192,34 @@ class Recipe:
     note: str = ""
     repeatable: bool = True
     focus: int = 0
+
+
+# WHICH SPELL FOCUS OBJECTS SOMETHING IN THIS REPO ACTUALLY WALKS TO
+# (infra#3748). SpellFocusObject.dbc id -> the name of the pass that stands a
+# character in it.
+#
+# THIS IS THE GUARD infra#3747 ASKED FOR, ONE TURN ON. That change added
+# `Recipe.focus` and a test holding the WHOLE table to `focus == 0`, because at
+# the time nothing anywhere could stand a character next to a focus object and
+# a recipe that needed one would have sat refused on every twenty-second poll
+# for ever. "Zero" was the right rule while the true answer was "none of them".
+# It is the wrong rule now that the answer is "one of them", and widening it to
+# "any non-zero value is fine" would be the wrong rule in the other direction -
+# it would let infra#3617's Anvil-gated Blacksmithing recipes in, which still
+# have no walk AND still need a Blacksmith Hammer equipped.
+#
+# So the test now holds every entry's `focus` to zero OR to a key of this dict,
+# and a second test holds every key of this dict to a walk that really exists
+# (tests/test_craft.py's SpellFocusTests). A focus id can only be added here by
+# the change that adds its walk, which is what stops this becoming a list of
+# intentions.
+FOCUS_AIMS = {
+    # 3 = Forge. `bridge._forge_once` reads the nearest spawned forge on the
+    # smelter's own map out of `acore_world.gameobject` and writes its surveyed
+    # position to `travel_npc` as `travel.forge_aim`'s `at:<map>:<x>,<y>,<z>`,
+    # through the one sanctioned writer (`bridge._write_trade_errand`).
+    3: "forge",
+}
 
 
 # One profession, one verified entry, per the module docstring's own
@@ -450,8 +483,14 @@ class Recipe:
 # stretching Linen Belt across a range something else already legitimately
 # covers.
 # ---------------------------------------------------------------------------
-# MINING AND SMELTING ARE NOT IN THIS TABLE, AND THE REASON IS A FORGE
-# (infra#3738, part of infra#3731).
+# MINING AND SMELTING ARE IN THIS TABLE NOW, AND THE FORGE IS WHY THEY WERE NOT
+# (infra#3738 found the gap, infra#3747 proved the cause, infra#3748 shipped
+# the walk; part of infra#3731).
+#
+# Everything from here to "WHAT THIS PASS ADDED" is infra#3747's investigation,
+# kept intact because it is the expensive part and because two of its facts
+# were wrong in ways worth recording. Read it as the argument for the walk, not
+# as a reason the table is still empty.
 #
 # This is the gap that caps Grog's Engineering at skill 31. From that value on,
 # every Engineering bracket above except the four plain blasting powders
@@ -565,16 +604,110 @@ class Recipe:
 # gear-swap, nothing but the ten yards. So the forge aim unblocks the whole
 # smelting chain on its own, with the hammer question still parked.
 #
-# WHAT IS DELIBERATELY NOT DONE HERE. No Mining entry is added to RECIPES and
-# no smelt spell is named anywhere in this module. `craft_errand` only ever
-# considers `professions.CRAFTING`, and Mining is a GATHERING trade, so the
-# table has no shape for smelting even if the forge existed - where a
-# skill-up that consumes ore and feeds a crafter belongs, relative to
-# `craft_rhythm`'s gather/craft alternation, is a design question the forge
-# issue owns rather than one to answer in a comment. The single thing this
-# pass adds to the running system is `Recipe.focus` and the test that holds
-# every entry to zero, so that the next reader who finds this gap cannot close
-# it the way infra#3738 proposed without the test saying no.
+# ---------------------------------------------------------------------------
+# WHAT THIS PASS ADDED, AND THE TWO THINGS ABOVE THAT IT HAD TO CORRECT FIRST
+# (infra#3748).
+#
+# THE DBC FIELD INDEX ABOVE WAS READ FROM THE WRONG COLUMN, AND THE ANSWER WAS
+# RIGHT ANYWAY. Re-deriving the smelt facts from the same md5-verified
+# `Spell.dbc` (543b9fe61355b6a77a01714d52fea2e5, matched against the running
+# worldserver pod's own `md5sum` on 2026-09-13) reproduced infra#3747's
+# conclusion only after the field offsets were fixed: `RequiresSpellFocus` is
+# field 18 and `EquippedItemClass` is field 68 in the 234-field 3.3.5a layout,
+# NOT 23 and 69. Read at 23, every smelt spell answers `focus = 0` and only
+# ELEVEN spells in the whole 49,839-record file carry any value at all - which
+# is the tell, because the real field is non-zero for 647 Anvil-gated spells
+# alone. The anchor infra#3747 used (spell 2963 -> Reagent[0]=2589,
+# ReagentCount[0]=2) proves Reagent/ReagentCount/EffectItemType/SpellName and
+# does NOT touch focus or tool, so it passes either way. Recorded because an
+# anchor only proves the fields it reads, and the next reader re-deriving this
+# will hit the same trap.
+#
+# WITH THE RIGHT FIELDS, infra#3747 AND infra#3748 ARE EXACTLY RIGHT:
+#
+#   29 spells are named "Smelt ..."; 24 of them create an item; all 24 require
+#   a focus and NOT ONE has `focus = 0`. 22 of the 24 need Forge (focus 3); the
+#   other two are Smelt Dark Iron (543, "Black Forge") and Smelt Jagged Shards
+#   (1580, "Malykriss Furnace"). Every one of the 24 reads
+#   `EquippedItemClass = -1`: no tool, which is what makes smelting the
+#   forge-only case infra#3617 said did not exist.
+#
+# THE FOCUS RADIUS IS NOT ALWAYS TEN, which infra#3748's fact table states as a
+# flat value and which matters because the travel drive lands an `at:` aim
+# within five yards, not on top of the point. Counted live:
+#
+#     SELECT Data1, COUNT(*) FROM gameobject_template
+#      WHERE type = 8 AND Data0 = 3 GROUP BY Data1;
+#     -> 10:136   8:4   12:3   15:2   30:2   4:1   5:1      (149 templates)
+#
+# So thirteen forge templates carry a radius other than ten and two of them are
+# at or inside the arrival tolerance. `travel.forge_aim` refuses those with a
+# sentence and `_FORGE_SQL` does not offer them as candidates - see
+# travel.ARRIVED_POSITION_YARDS for the whole argument.
+#
+# AND THE "THEY ALREADY STAND NEAR ONE" MEASUREMENT HAS EXPIRED, which is worth
+# knowing before anyone re-runs infra#3747's coin-flip argument. That pass
+# measured the family 9.02 to 11.65 yards from the Gadgetzan forge and
+# concluded a dry run there would prove nothing. Measured again 2026-09-13
+# 22:21 against a snapshot 25 seconds old: the family is SPLIT, Grug and Ugga
+# 178 yards from that same forge and Bork, Og and Grog 1,435 to 1,659 yards
+# from theirs. Nobody is inside any focus. The walk is not a formality.
+#
+# ONLY SMELT COPPER IS SHIPPED, AND `SkillLineAbility.dbc` IS WHY. Every smelt
+# ability sits on skill line 186 (Mining) with `MinSkillLineRank = 1`, but the
+# ninth field - AcquireMethod - separates them:
+#
+#   spell  name              acquire  yellow  grey   reagent
+#   2657   Smelt Copper       1        25      70    1x Copper Ore (2770)
+#   3304   Smelt Tin          0        65      75    1x Tin Ore (2771)
+#   2658   Smelt Silver       0       115     130    1x Silver Ore (2775)
+#   2659   Smelt Bronze       0        65     115    1x Copper Bar + 1x Tin Bar
+#   3307   Smelt Iron         0       130     160    1x Iron Ore (2772)
+#   3308   Smelt Gold         0       170     185    1x Gold Ore (2776)
+#   3569   Smelt Steel        0       165     165    1x Iron Bar + 1x Coal
+#   10097  Smelt Mithril      0       175     230    1x Mithril Ore (3858)
+#   10098  Smelt Truesilver   0       250     290    1x Truesilver Ore (7911)
+#   16153  Smelt Thorium      0       250     290    1x Thorium Ore (10620)
+#
+# `AcquireMethod = 1` means the ability is granted with the skill line itself.
+# Smelt Copper is the only smelt in the game that carries it, and the live
+# `trainer_spell` table agrees from the other side: the other nine all have
+# trainer rows (ReqSkillLine 186, ReqSkillRank 65 to 230) and 2657 has NONE,
+# because nobody ever needs to be taught it. So Smelt Copper is the one smelt
+# this module may name under its own "never name a spell the character does not
+# yet hold" rule - the same rule that keeps First Aid to the two bandages
+# Apprentice teaches together. DriveCraft's `!HasSpell` branch drops a recipe a
+# character does not hold, with a WARN calling it "a planner bug", so naming a
+# trainer-taught smelt would be loud and wrong rather than quiet and wrong.
+#
+# THE OTHER NINE, AND WHY EACH IS DEFERRED RATHER THAN FORGOTTEN:
+#
+#   2659 Smelt Bronze and 3569 Smelt Steel consume TWO smelted bars each
+#   (Copper+Tin, Iron+Coal). A character holds ONE `craft_spell`, so it can
+#   never stand up two producers at once - the identical "this module can only
+#   stand one recipe up per skill window" argument that leaves the 151-174
+#   Engineering bracket empty above. They are not a trainer problem and adding
+#   a Mining trainer visit would not unblock them.
+#
+#   3304 Tin, 2658 Silver, 3307 Iron, 3308 Gold, 10097 Mithril, 10098
+#   Truesilver, 16153 Thorium are all `AcquireMethod = 0`: a Mining trainer
+#   teaches them and nothing in this repo sends anybody to a Mining trainer for
+#   an individual recipe (`professions.py`'s errand opens a TRADE, it does not
+#   buy a rank's worth of recipes). They become addable the day that exists,
+#   and their brackets are already measured in the table above so that pass
+#   does not have to re-derive them.
+#
+# WHERE MINING SITS RELATIVE TO CRAFTING AND GATHERING, since that was
+# infra#3748's own open question. Mining STAYS in `professions.GATHERING` and
+# nothing about `professions.plan` changes: it is gathered from nodes, it costs
+# a primary slot as a gathering trade, and the family's two miners hold it for
+# that reason. What changes is only that `RECIPES` - which is keyed by SKILL
+# ID, not by trade class - gains a Mining bracket, and a SECOND reader
+# (`smelt_errand` below) answers for it. `craft_errand` is untouched and still
+# considers `professions.CRAFTING` then `professions.SECONDARY` only, so a
+# smelt can never displace a crafting recipe by accident; which of the two a
+# character should actually be casting is a question about held ore and held
+# bars, and that lives in `craft_rhythm.errand` where the inventory counts are.
 RECIPES: dict = {
     SKILL_IDS["tailoring"]: (
         Recipe(2963, "Bolt of Linen Cloth", min_skill=1, max_skill=60,
@@ -735,12 +868,57 @@ RECIPES: dict = {
     # ClassMask 0, both yellow 45 / grey 85. The moment a fire can be lit,
     # Cooking is a 44-point ladder with no trainer and no purchase.
     SKILL_IDS["cooking"]: (),
+    # ELEVEN OF THESE EIGHTEEN NEED AN ANVIL, AND UNTIL NOW EVERY ONE OF THEM
+    # SAID IT DID NOT (infra#3760, corrected here as part of infra#3748).
+    #
+    # `Spell.dbc` gives each of the eleven marked `focus=1` below
+    # `RequiresSpellFocus = 1`, which `SpellFocusObject.dbc` resolves to Anvil.
+    # Each declared `focus=0` for its whole life, and the test that was supposed
+    # to catch that compared `recipe.focus` against 0 while `Recipe.focus`
+    # DEFAULTS to 0 - it compared the declared field against itself and could
+    # never fail. See tests/test_craft.py's `MEASURED_FOCUS`, which is the
+    # projection of the server's own answer that replaces it.
+    #
+    # NOTHING IS REMOVED HERE AND NOTHING IS UNBLOCKED HERE. Correcting the
+    # field makes the table HONEST - `focus_for` now tells the truth about these
+    # eleven, `FOCUS_AIMS` has no anvil walk, and the test below pins them as a
+    # named, counted debt instead of eleven silent lies. Grog's Engineering
+    # therefore still stops at skill 31, for a reason the table now states.
+    #
+    # AND infra#3617'S HAMMER IS NOT WHY, WHICH IS THE EXPENSIVE PART OF THIS
+    # NOTE. That issue parked the whole anvil question on a second blocker -
+    # "every 'worn' Blacksmithing recipe requires an Anvil PLUS an equipped
+    # Blacksmith Hammer (SpellInfo::EquippedItemClass)" - and called the
+    # swap-a-tool-in-and-put-the-weapon-back problem "a new class of problem,
+    # not a known pattern". Counted against the same md5-verified `Spell.dbc`:
+    # of the 647 spells in the entire file that carry `RequiresSpellFocus = 1`,
+    # 645 read `EquippedItemClass = -1`. The only two that need a tool are
+    # Socket Bracer (55628) and Socket Gloves (55641), and they want class 4
+    # (armour), not a hammer. Every one of the eleven below reads -1, and so
+    # does every one of the thirteen Blacksmithing recipes infra#3617 names by
+    # hand - Runed Copper Belt (2666), Silver Rod (7818), Rough Bronze Leggings
+    # (2668), Patterned Bronze Bracers (2672), Golden Rod (14379), Green Iron
+    # Bracers (3501), Green Iron Leggings (3506), Golden Scale Bracers (7223),
+    # Heavy Mithril Gauntlet (9928), Steel Plate Helm (9935), Mithril Spurs
+    # (9964), Imperial Plate Bracers (16649), Imperial Plate Boots (16657). So
+    # the anvil half needs only a walk, exactly as the forge half did, and the
+    # tool half is a blocker that does not exist. That is infra#3617's and
+    # infra#3760's to act on, not this change's - but it is written down here
+    # so nobody pays for the measurement twice.
+    #
+    # THE WALK IS ALSO NEARLY FREE WHEN IT COMES. Counted live against
+    # `acore_world.gameobject` on 2026-09-13: of the 83 Forge spawns on maps 0
+    # and 1, 71 have an Anvil within ten yards and 39 within five. The Gadgetzan
+    # forge the family lives beside (spawn of entry 141838) has Anvil 141839
+    # 2.69 yards away, radius 10 - so the forge aim this change ships already
+    # stands a character inside an anvil's focus there, and the anvil work is a
+    # table correction plus a ranking preference rather than a second journey.
     SKILL_IDS["engineering"]: (
         Recipe(3918, "Rough Blasting Powder", min_skill=1, max_skill=30,
                note="1x Rough Stone -> 1x Rough Blasting Powder (item 4357)"),
-        Recipe(3922, "Handful of Copper Bolts", min_skill=31, max_skill=50,
+        Recipe(3922, "Handful of Copper Bolts", min_skill=31, max_skill=50, focus=1,
                note="1x Copper Bar -> 1x Handful of Copper Bolts (item 4359)"),
-        Recipe(7430, "Arclight Spanner", min_skill=51, max_skill=51,
+        Recipe(7430, "Arclight Spanner", min_skill=51, max_skill=51, focus=1,
                repeatable=False,
                note="TOOL, craft once - 6x Copper Bar -> 1x Arclight Spanner "
                     "(item 6219). Not Unique/Unique-Equipped - verified "
@@ -748,7 +926,7 @@ RECIPES: dict = {
                     "nothing in the core refuses a second cast; the "
                     "single-point bracket is what stops this module from "
                     "recasting it, not an item flag"),
-        Recipe(3923, "Rough Copper Bomb", min_skill=52, max_skill=75,
+        Recipe(3923, "Rough Copper Bomb", min_skill=52, max_skill=75, focus=1,
                note="1x Copper Bar, 1x Handful of Copper Bolts, 2x Rough "
                     "Blasting Powder, 1x Linen Cloth -> 1x Rough Copper Bomb "
                     "(item 4360)"),
@@ -764,7 +942,7 @@ RECIPES: dict = {
                     "yield could not be independently confirmed for the "
                     "3.3.5a era (a later, Cataclysm-only patch changed it) - "
                     "verify against this deployment's own cast if it matters"),
-        Recipe(3938, "Bronze Tube", min_skill=106, max_skill=124,
+        Recipe(3938, "Bronze Tube", min_skill=106, max_skill=124, focus=1,
                note="2x Bronze Bar (2841), 1x Weak Flux (2880, vendor-bought "
                     "- see craft_supply.REAGENT) -> 1x Bronze Tube (item "
                     "4371); trainer floor is skill 105 (acore_world."
@@ -781,7 +959,7 @@ RECIPES: dict = {
         # Framework / Explosive Sheep, see the module-level comment above.
         Recipe(12585, "Solid Blasting Powder", min_skill=175, max_skill=194,
                note="2x Solid Stone -> 1x Solid Blasting Powder (item 10505)"),
-        Recipe(12590, "Gyromatic Micro-Adjustor", min_skill=195, max_skill=195,
+        Recipe(12590, "Gyromatic Micro-Adjustor", min_skill=195, max_skill=195, focus=1,
                repeatable=False,
                note="TOOL, craft once - 4x Steel Bar -> 1x Gyromatic "
                     "Micro-Adjustor (item 10498). Unique-Equipped (toolkit "
@@ -789,16 +967,16 @@ RECIPES: dict = {
                     "cast is not blocked by the core either, same reasoning "
                     "as Arclight Spanner above: the single-point bracket is "
                     "the actual stop"),
-        Recipe(12589, "Mithril Tube", min_skill=196, max_skill=200,
+        Recipe(12589, "Mithril Tube", min_skill=196, max_skill=200, focus=1,
                note="3x Mithril Bar -> 1x Mithril Tube (item 10559)"),
-        Recipe(12591, "Unstable Trigger", min_skill=201, max_skill=215,
+        Recipe(12591, "Unstable Trigger", min_skill=201, max_skill=215, focus=1,
                note="1x Mithril Bar, 1x Mageweave Cloth, 1x Solid Blasting "
                     "Powder -> 1x Unstable Trigger (item 10560); also a Hi-"
                     "Explosive Bomb reagent"),
-        Recipe(12599, "Mithril Casing", min_skill=216, max_skill=238,
+        Recipe(12599, "Mithril Casing", min_skill=216, max_skill=238, focus=1,
                note="3x Mithril Bar -> 1x Mithril Casing (item 10561); also "
                     "a Hi-Explosive Bomb reagent"),
-        Recipe(12619, "Hi-Explosive Bomb", min_skill=239, max_skill=250,
+        Recipe(12619, "Hi-Explosive Bomb", min_skill=239, max_skill=250, focus=1,
                note="2x Mithril Casing, 1x Unstable Trigger, 2x Solid "
                     "Blasting Powder -> 1x Hi-Explosive Bomb (item 10562); "
                     "NOT spell 12543 - that id is the 2022 Classic-relaunch "
@@ -808,11 +986,43 @@ RECIPES: dict = {
                     "reagent-ready by the time a character reaches it"),
         Recipe(19788, "Dense Blasting Powder", min_skill=251, max_skill=260,
                note="2x Dense Stone -> 1x Dense Blasting Powder (item 15992)"),
-        Recipe(19791, "Thorium Widget", min_skill=261, max_skill=285,
+        Recipe(19791, "Thorium Widget", min_skill=261, max_skill=285, focus=1,
                note="3x Thorium Bar, 1x Runecloth (item 14047) -> 1x Thorium "
                     "Widget (item 15994)"),
-        Recipe(19795, "Thorium Tube", min_skill=286, max_skill=300,
+        Recipe(19795, "Thorium Tube", min_skill=286, max_skill=300, focus=1,
                note="6x Thorium Bar -> 1x Thorium Tube (item 16000)"),
+    ),
+    # MINING (Grug 8/75, Grog 1/75 as of 2026-09-13) - the smelt half of a
+    # GATHERING trade, and the only entry in this table that needs a spell
+    # focus. See the MINING AND SMELTING block above for the whole argument:
+    # why only Smelt Copper, what the other nine are waiting on, and why the
+    # ore in the note is judged by `craft_rhythm.GATHERED` while the BAR it
+    # produces deliberately is not.
+    #
+    # THE BRACKET IS THE DBC'S OWN COLOUR BAND, not a guide's. `Spell.dbc` and
+    # `SkillLineAbility.dbc` (both md5-verified against the running worldserver
+    # pod) give Smelt Copper `TrivialSkillLineRankLow = 25` and
+    # `TrivialSkillLineRankHigh = 70` - yellow at 25, grey at 70 - so 1-69 is
+    # "worth casting", ending one point short of the value at which the core
+    # stops rolling a skill-up for it. That is the same conservative reading of
+    # `max_skill` the dataclass docstring already describes for every other
+    # entry, and here it comes from the server rather than from arithmetic over
+    # a leveling guide's totals.
+    #
+    # NOTHING FOLLOWS IT, ON PURPOSE. Smelt Tin's own bracket would be 70-74
+    # (trainer floor 65, grey 75) and Smelt Silver's 115-129, but both are
+    # trainer-taught and unreachable today, so `recipe_for` correctly answers
+    # None above 69 rather than naming a spell the character does not hold -
+    # exactly as it does in Tailoring's 146-174 thread gap.
+    SKILL_IDS["mining"]: (
+        Recipe(2657, "Smelt Copper", min_skill=1, max_skill=69, focus=3,
+               note="1x Copper Ore (2770) -> 1x Copper Bar (2840); "
+                    "RequiresSpellFocus = 3 (Forge), which bridge._forge_once "
+                    "walks the leader to, and EquippedItemClass = -1 (no tool, "
+                    "which is why this ships while infra#3617's Anvil-gated "
+                    "Blacksmithing recipes do not). AcquireMethod = 1: granted "
+                    "with Apprentice Mining, so no trainer visit is needed and "
+                    "no trainer_spell row exists for it"),
     ),
     SKILL_IDS["alchemy"]: (
         Recipe(2330, "Minor Healing Potion", min_skill=1, max_skill=59,
@@ -1009,6 +1219,69 @@ def recipe_for(skill_id: int, skill_value: int):
         if recipe.min_skill <= skill_value <= recipe.max_skill:
             return recipe
     return None
+
+
+def focus_for(spell_id: int) -> int:
+    """The `SpellFocusObject.dbc` id this recipe needs nearby, or 0 for none.
+
+    THE READ THAT LETS A CALLER HONOUR `Recipe.focus` WITHOUT KNOWING THE TABLE
+    (infra#3748). `bridge._forge_once` has to answer "does anybody's standing
+    `craft_spell` need a forge right now" from a roster column holding a bare
+    spell id, and the alternative to this function is that pass walking
+    `RECIPES` itself - a second reader of the table's shape, which is how the
+    reagent map ended up existing twice before `craft_rhythm` unified it.
+
+    0 FOR AN UNKNOWN SPELL, NOT AN ERROR. A roster row can legitimately carry a
+    spell this table no longer names: a bracket was retired, an operator set
+    the column by hand, or mod-overseer has not yet cleared an errand it
+    refused. Every one of those means the same thing to the only caller - this
+    is not a recipe we owe a walk to - and raising would turn a stale column
+    into a dead pass.
+    """
+    wanted = int(spell_id or 0)
+    if not wanted:
+        return 0
+    for recipes in RECIPES.values():
+        for recipe in recipes:
+            if recipe.spell_id == wanted:
+                return recipe.focus
+    return 0
+
+
+def smelt_errand(name: str, skills: dict) -> int:
+    """The smelt `craft_spell` this character could carry, or 0.
+
+    THE GATHERING-TRADE SIBLING OF `craft_errand`, AND DELIBERATELY A SECOND
+    FUNCTION RATHER THAN A WIDER LOOP IN THAT ONE (infra#3748). Both read the
+    same `RECIPES` table; they differ in which of a character's assigned trades
+    they are allowed to answer for, and that difference is the whole safety
+    property. `craft_errand` considers `professions.CRAFTING` then
+    `professions.SECONDARY`; widening it to include `professions.GATHERING`
+    would have silently changed what every existing caller gets, because
+    `professions.assigned` lists Grug as ("mining", "blacksmithing") and Grog as
+    ("mining", "engineering") - mining FIRST in both - so the first matching
+    bracket would have become the smelt for both of the family's miners, for
+    ever, and their crafting trades would have stopped dead the day this
+    shipped. Two readers and an explicit choice between them is the honest
+    shape; `craft_rhythm.errand` is where the choice is made, because it needs
+    held-inventory counts neither of these functions can see.
+
+    0 means "this character has no smeltable gathering trade at a value any
+    bracket covers" - a character with no mining, with mining not yet learned,
+    or with mining above 69 where the next bracket is trainer-gated and
+    deliberately absent. A caller must not invent a fallback, the same
+    permission discipline `recipe_for` and `craft_errand` already hold.
+    """
+    for skill_name in professions.assigned(name):
+        if skill_name not in professions.GATHERING:
+            continue
+        value = skills.get(skill_name, 0)
+        if not value:
+            continue  # not learned yet - professions.py's trainer errand owns this
+        recipe = recipe_for(SKILL_IDS[skill_name], value)
+        if recipe:
+            return recipe.spell_id
+    return 0
 
 
 def craft_errand(name: str, skills: dict) -> int:

@@ -212,22 +212,40 @@ class Reagent:
 #   the family roaming for an item the world will never drop. Filed as its own
 #   gap rather than papered over here.
 #
-#   THAT GAP NOW HAS AN ANSWER, AND IT DOES NOT CHANGE THIS TABLE (infra#3738).
-#   The obvious fix was to name a smelt spell in `craft_spell` and let
+#   THE BARS STAY ABSENT AND THE ORE HAS NOW ARRIVED (infra#3738 -> #3747 ->
+#   #3748). The obvious fix was to name a smelt spell in `craft_spell` and let
 #   DriveCraft cast it, since smelting is the same SPELL_EFFECT_CREATE_ITEM
-#   shape as everything else here. It was checked against the running
-#   worldserver's own Spell.dbc and it does not work: EVERY smelt spell in the
-#   game carries `RequiresSpellFocus = 3`, which SpellFocusObject.dbc resolves
-#   to "Forge", and DriveCraft casts in place without walking anyone to one. So
-#   the bars stay absent from this table and their recipes stay UNJUDGED, for
-#   exactly the reason they already were: a walk still cannot produce a bar. It
-#   is now a forge problem rather than an unexamined one, and the ORE that
-#   feeds it deliberately stays out of this table too - adding Copper Ore here
-#   would make Grog read as SHORT and send the whole family mining for
-#   something he still could not turn into a bar, which is the deadlock
-#   `rhythm`'s own UNJUDGED rule exists to prevent. The ore entries belong in
-#   the same change that lands the forge aim, not before it. See craft.py's
-#   "MINING AND SMELTING ARE NOT IN THIS TABLE" comment for the measurements.
+#   shape as everything else here. Checked against the running worldserver's own
+#   Spell.dbc, that alone does not work: EVERY smelt spell in the game carries
+#   `RequiresSpellFocus = 3`, which SpellFocusObject.dbc resolves to "Forge",
+#   and DriveCraft casts in place. So infra#3747 added the focus field and left
+#   BOTH the bars and the ore out of this table, with an explicit reason for the
+#   ore: "adding Copper Ore here would make Grog read as SHORT and send the
+#   whole family mining for something he still could not turn into a bar, which
+#   is the deadlock `rhythm`'s own UNJUDGED rule exists to prevent. The ore
+#   entries belong in the same change that lands the forge aim, not before it."
+#
+#   THIS IS THAT CHANGE, SO THAT REASONING INVERTS - and it inverts completely
+#   rather than partially, which is the bit worth being precise about. The
+#   deadlock infra#3747 feared needs BOTH halves to be true: the ore must be
+#   judgeable AND the ore must be useless. `bridge._forge_once` walks the
+#   leader to a spawned Forge and `craft.RECIPES` now carries Smelt Copper, so
+#   the second half is false: a mining trip that comes back with Copper Ore
+#   produces Copper Bars, which is the item Grog's Engineering has been stalled
+#   on since skill 31. "Grog is SHORT of Copper Ore, send the family mining" is
+#   now a true and actionable sentence, and 2657's entry below is what lets
+#   this module say it. It is also nearly free: Rough Stone, which Grug's
+#   Blacksmithing and Grog's own blasting powders already want, comes off the
+#   SAME copper veins, so one trip restocks the ore and the stone together.
+#
+#   THE BARS THEMSELVES STILL DO NOT BELONG HERE, and that is not an oversight
+#   left over from the old reasoning. `GATHERED` means "a gathering trip
+#   produces this". Copper Bar is produced by a CAST, so it is an own-crafted
+#   intermediate exactly like Minor Healing Potion and Cured Heavy Hide above,
+#   and a character short of one is still correctly UNJUDGED here - sending the
+#   family roaming would not return with one. What answers a character short of
+#   bars is `errand` below, which hands them the smelt instead of the spend.
+#   See craft.py's "MINING AND SMELTING" comment for the measurements.
 #
 #   PURELY VENDOR-SUPPLIED RECIPES. There are none in craft.RECIPES today -
 #   every recipe that names a bought reagent also names a gathered one - but if
@@ -288,6 +306,14 @@ GATHERED: dict[int, tuple[Reagent, ...]] = {
     3945: (Reagent(2838, "Heavy Stone", 1),),
     12585: (Reagent(7912, "Solid Stone", 2),),
     19788: (Reagent(12365, "Dense Stone", 2),),
+    # MINING - the ore a smelt consumes, which is the entry infra#3747 wrote
+    # down as deferred and this change lands (see the block above). Copper Ore
+    # is gathered exactly the way Rough Stone is - 14 `gameobject_loot_template`
+    # rows, the copper veins the family's two miners already walk past - so a
+    # character short of it reads SHORT and one trip serves every stone-eater in
+    # the family at the same time. The Copper BAR this produces is not here and
+    # must not be: it comes off a cast, not a walk.
+    2657: (Reagent(2770, "Copper Ore", 1),),
     # ALCHEMY - herbs, every one of them a herb-node gather plus a long tail of
     # creature drops. The vial each of these also needs is craft_supply's.
     # Lesser Healing Potion (2337) is absent: its second reagent is the
@@ -487,6 +513,137 @@ def casts_in_hand(craft_spell: int, held: dict) -> int | None:
         int(held.get(r.entry, 0)) // r.per_cast
         for r in reagents
         if r.per_cast > 0
+    )
+
+
+@dataclass(frozen=True)
+class Errand:
+    """Which of a character's two possible recipes it should be casting.
+
+    `smelting` is not derivable from `spell` by the caller without re-reading
+    `craft.RECIPES`, and the one caller that needs it - the forge pass's log
+    line, and `bridge._craft_once`'s - would then be a third reader of that
+    table. Carried here instead.
+
+    `why` is never empty, the same rule `Stand.why` holds and for the same
+    reason: this decision silently swaps what a character spends its whole
+    crafting session on, and a swap nobody can explain is indistinguishable
+    from the planner having lost track of the recipe.
+    """
+
+    name: str
+    spell: int = 0
+    smelting: bool = False
+    why: str = ""
+
+
+def reagents_to_count(name: str, skills: dict) -> set:
+    """Every item entry a decision about this character could need to count.
+
+    THE UNION OF BOTH CANDIDATES, ASKED BEFORE EITHER IS CHOSEN, which is the
+    only order that works: `errand` picks between the spend and the smelt by
+    comparing what is held for each, so a caller that fetched counts for the
+    chosen recipe would have to choose first, and choosing needs the counts.
+    One extra item entry per miner is the whole cost.
+
+    A SET OF ENTRIES RATHER THAN A QUERY, because this module talks to nothing.
+    `bridge._fetch_item_counts` takes (name, entry) pairs and batches one round
+    trip per DISTINCT entry across the family, so handing it a couple more
+    entries costs nothing per character.
+    """
+    wanted = set()
+    for spell in (craft.craft_errand(name, skills), craft.smelt_errand(name, skills)):
+        for reagent in GATHERED.get(int(spell or 0), ()):
+            wanted.add(reagent.entry)
+    return wanted
+
+
+def errand(name: str, skills: dict, held: dict) -> Errand:
+    """Spend, or smelt? The one `craft_spell` this character should carry.
+
+    THE ALTERNATION infra#3748 ASKED FOR, AND IT LIVES HERE RATHER THAN IN
+    `craft` FOR THE REASON THAT ISSUE GAVE: "a character holds one
+    `craft_spell`, so something must choose when Grog smelts ore into bars and
+    when he spends bars on bolts. This needs held-inventory counts that
+    `craft.craft_errand` deliberately cannot see, so it belongs with
+    `craft_rhythm`, not `craft`." This module already reads held counts to
+    decide the family's MODE; deciding one character's recipe from the same
+    numbers is the same question one level down, and it needs no new input.
+
+    THE RULE, IN ONE LINE: SMELT ONLY WHEN THERE IS ORE AND THE CRAFT CANNOT
+    RUN. Spelled out, in the order the branches below take:
+
+      * A character with no smeltable gathering trade keeps its craft errand.
+        Nothing changes for Og, Ugga or Bork, ever.
+      * A miner holding no ore keeps its craft errand. This matters more than
+        it looks: it is what makes a miner short of BOTH read as short of the
+        thing `GATHERED` can send the family after, rather than reading as
+        short of ore for a smelt that would produce a bar nobody is waiting
+        for.
+      * A miner holding ore smelts IF its crafting recipe cannot run - either
+        because it is short of that recipe's own gathered reagent (0 casts in
+        hand) or because `casts_in_hand` has no opinion about it at all. That
+        second case is the one this whole chain of issues is about: every
+        bar-consuming Engineering bracket is UNJUDGED here precisely because a
+        bar is not gathered, so "no opinion" is exactly the signature of a
+        recipe waiting on a smelt.
+      * Otherwise it spends. A miner who CAN craft, crafts.
+
+    WHY THE CRAFT WINS THE TIE RATHER THAN THE SMELT. infra#3731 is about the
+    crafting trades; Mining is the supply line, not the goal. A miner who can
+    cast its real recipe should be casting it, and the bars it is not smelting
+    this session are not lost - the ore keeps. The reverse preference would
+    have every miner smelt down to its last ore before crafting anything, which
+    maximises Mining and stalls Blacksmithing and Engineering, which is the
+    exact complaint infra#3738 was filed about wearing different clothes.
+
+    AND THE SMELT CANNOT STARVE THE CRAFT OF ITS OWN REAGENT, because the two
+    never consume the same item. Copper Ore feeds only the smelt; Rough Stone
+    feeds only the powders and the sharpening stones. They arrive on the same
+    mining trip and are spent by different recipes.
+    """
+    spend = craft.craft_errand(name, skills)
+    smelt = craft.smelt_errand(name, skills)
+
+    if not smelt:
+        return Errand(
+            name=name, spell=spend,
+            why="%s has no smeltable gathering trade at a value any bracket "
+                "covers, so there is no choice to make and its craft errand "
+                "(spell %d) stands" % (name, spend),
+        )
+
+    ore = casts_in_hand(smelt, held) or 0
+    if ore < 1:
+        return Errand(
+            name=name, spell=spend,
+            why="%s could smelt with spell %d but holds ore for %d cast(s), so "
+                "its craft errand (spell %d) stands and the gathering trip that "
+                "restocks one restocks the other" % (name, smelt, ore, spend),
+        )
+
+    casts = casts_in_hand(spend, held)
+    if casts is None:
+        return Errand(
+            name=name, spell=smelt, smelting=True,
+            why="%s smelts (spell %d, ore for %d cast(s)) because no gathering "
+                "trip produces what its craft errand (spell %d) consumes - a "
+                "smelted bar or an own-crafted intermediate - so casting is the "
+                "only thing that can move it" % (name, smelt, ore, spend),
+        )
+    if casts < 1:
+        return Errand(
+            name=name, spell=smelt, smelting=True,
+            why="%s smelts (spell %d, ore for %d cast(s)) because its craft "
+                "errand (spell %d) has reagents for %d cast(s) - the ore is "
+                "here and the craft's own material is not" % (
+                    name, smelt, ore, spend, casts),
+        )
+    return Errand(
+        name=name, spell=spend,
+        why="%s spends rather than smelts: its craft errand (spell %d) has "
+            "reagents for %d cast(s) in hand, and the %d cast(s) of ore keep "
+            "until it runs out" % (name, spend, casts, ore),
     )
 
 

@@ -497,9 +497,27 @@ class TheCallerIsWiredAndWritesOnlyAJobMode(unittest.TestCase):
 
     def test_the_errand_is_derived_and_not_read_off_the_roster(self):
         """craft_spell is only written while the family is already crafting, so
-        a pass that read it could never let a family start."""
-        self.assertIn("craft.craft_errand(", self.body)
+        a pass that read it could never let a family start.
+
+        infra#3748 moved the derivation one step along - from
+        `craft.craft_errand` to `craft_rhythm.errand`, which wraps it and may
+        answer with a miner's smelt instead - but the property being pinned is
+        unchanged and is the reason this test exists: the answer is COMPUTED
+        from skills and bags, never read back out of the column this loop's
+        own sibling writes."""
+        self.assertIn("craft_rhythm.errand(", self.body)
         self.assertNotIn("_fetch_craft_spells", self.body)
+
+    def test_it_judges_stock_against_the_recipe_it_actually_chose(self):
+        """A miner may be carrying its smelt rather than its craft. Judging its
+        stock against the other one would report a shortfall of the wrong
+        reagent and send the family after the wrong material - so the SAME
+        chooser both passes use must feed `stand`, not `craft.craft_errand`
+        directly."""
+        self.assertIn("craft_rhythm.reagents_to_count(", self.body)
+        chose = self.body.index("craft_rhythm.errand(")
+        self.assertLess(chose, self.body.index("craft_rhythm.stand("))
+        self.assertNotIn("craft.craft_errand(", self.body)
 
     def test_the_cadence_is_configurable_like_every_other_pass(self):
         loop = self.source[self.source.index("async def _craft_rhythm_loop"):]
@@ -514,6 +532,148 @@ class TheCallerIsWiredAndWritesOnlyAJobMode(unittest.TestCase):
         sink = sink[:sink.index("def _council_family")]
         self.assertIn("log.info", sink)
         self.assertTrue(re.search(r"async def send\(self, text", sink))
+
+
+class SpendOrSmelt(unittest.TestCase):
+    """infra#3748's alternation: which of a miner's two recipes it carries.
+
+    THE REALM IS NOT IN ANY OF THESE STATES, WHICH IS WHY THEY ARE HERE.
+    Measured 2026-09-13 22:21, Grug holds 3x Silver Ore and nothing else and
+    Grog holds 1x Silver Bar and nothing else - no Copper Ore, no Rough Stone,
+    no Copper Bar between them. Every branch below therefore describes a world
+    no query returns today, and a rule that only worked on today's bags would
+    pass a live dry run and fail the first time the family came back from a
+    mine. `TheLiveFamilyIsTheOneThatWasStuck` above pins the real state; this
+    pins the rule.
+
+    Grug is ("mining", "blacksmithing") and Grog ("mining", "engineering") in
+    `professions.ROSTER`, mining FIRST in both, which is the fact that makes
+    the choice necessary rather than incidental - see craft.smelt_errand.
+    """
+
+    def test_a_miner_who_can_craft_crafts(self):
+        """Mining is the supply line and infra#3731 is about the crafting
+        trades, so the craft wins the tie. The ore keeps."""
+        chosen = craft_rhythm.errand(
+            "Grug", {"mining": 8, "blacksmithing": 1},
+            {2770: 20, 2835: 20},          # 20 Copper Ore AND 20 Rough Stone
+        )
+        self.assertEqual(chosen.spell, 2660)   # Rough Sharpening Stone
+        self.assertFalse(chosen.smelting)
+        self.assertIn("spends rather than smelts", chosen.why)
+
+    def test_a_miner_out_of_its_craft_reagent_smelts_instead_of_idling(self):
+        """This is the whole point: a character with ore and no stone used to
+        stand at zero casts logging nothing (DriveCraft's reagent pre-filter is
+        a bare `continue`). Now it raises Mining and banks bars."""
+        chosen = craft_rhythm.errand(
+            "Grug", {"mining": 8, "blacksmithing": 1},
+            {2770: 20, 2835: 0},
+        )
+        self.assertEqual(chosen.spell, 2657)   # Smelt Copper
+        self.assertTrue(chosen.smelting)
+
+    def test_a_bar_gated_craft_errand_is_answered_by_the_smelt(self):
+        """Grog at Engineering 31 wants Handful of Copper Bolts, whose only
+        reagent is a Copper Bar - which `GATHERED` deliberately cannot judge,
+        because no walk returns with one. `casts_in_hand` answering None is
+        precisely the signature of a recipe waiting on a smelt, and this is the
+        branch that reads it that way."""
+        self.assertIsNone(craft_rhythm.casts_in_hand(3922, {}))
+        chosen = craft_rhythm.errand(
+            "Grog", {"mining": 1, "engineering": 31}, {2770: 5},
+        )
+        self.assertEqual(chosen.spell, 2657)
+        self.assertTrue(chosen.smelting)
+        self.assertIn("no gathering trip produces", chosen.why)
+
+    def test_a_miner_with_no_ore_keeps_its_craft_errand(self):
+        """AND THIS IS WHAT KEEPS THE ORE ENTRY SAFE. infra#3747 refused to add
+        Copper Ore to GATHERED because a character short of it would read as
+        SHORT and hold the family in gathering mode for a bar he could not
+        make. He can make it now - but only if he has ore, so a character with
+        neither ore nor stone must be judged on the reagent the family can
+        actually be sent after, not on the ore for a smelt that would produce
+        a bar nobody is waiting for."""
+        chosen = craft_rhythm.errand(
+            "Grug", {"mining": 8, "blacksmithing": 1}, {2770: 0, 2835: 0},
+        )
+        self.assertEqual(chosen.spell, 2660)
+        self.assertFalse(chosen.smelting)
+
+    def test_nothing_changes_for_a_character_with_no_gathering_trade(self):
+        for name, skills, spell in (
+            ("Og", {"tailoring": 50, "enchanting": 1}, 2963),
+            ("Ugga", {"alchemy": 14, "herbalism": 132}, 2330),
+            ("Bork", {"leatherworking": 1, "skinning": 12}, 2881),
+        ):
+            with self.subTest(name=name):
+                chosen = craft_rhythm.errand(name, skills, {})
+                self.assertEqual(chosen.spell, spell)
+                self.assertFalse(chosen.smelting)
+                self.assertIn("no smeltable gathering trade", chosen.why)
+
+    def test_no_choice_is_ever_silent(self):
+        """Same rule as `Stand.why`: this swaps what a character spends a whole
+        session on, and a swap nobody can explain reads as the planner having
+        lost the recipe."""
+        for held in ({}, {2770: 20}, {2770: 20, 2835: 20}, {2835: 20}):
+            with self.subTest(held=held):
+                chosen = craft_rhythm.errand(
+                    "Grug", {"mining": 8, "blacksmithing": 1}, held)
+                self.assertTrue(chosen.why.strip())
+                self.assertIn("Grug", chosen.why)
+
+    def test_both_candidates_are_counted_before_either_is_chosen(self):
+        """The chicken-and-egg: choosing needs the counts, so the counts cannot
+        be fetched for the chosen recipe only."""
+        wanted = craft_rhythm.reagents_to_count(
+            "Grug", {"mining": 8, "blacksmithing": 1})
+        self.assertEqual(wanted, {2770, 2835})   # Copper Ore AND Rough Stone
+
+    def test_a_character_with_nothing_to_count_asks_for_nothing(self):
+        self.assertEqual(craft_rhythm.reagents_to_count("Og", {}), set())
+
+
+class TheOreEntryTheForgeChangeLands(unittest.TestCase):
+    """infra#3747 wrote down exactly one deferred entry and this is it.
+
+    Its words: "the ORE that feeds it deliberately stays out of this table too
+    - adding Copper Ore here would make Grog read as SHORT and send the whole
+    family mining for something he still could not turn into a bar ... The ore
+    entries belong in the same change that lands the forge aim, not before it."
+    """
+
+    def test_copper_ore_is_judged_now_that_a_bar_can_be_made(self):
+        self.assertIn(2657, craft_rhythm.GATHERED)
+        reagents = craft_rhythm.GATHERED[2657]
+        self.assertEqual([(r.entry, r.label, r.per_cast) for r in reagents],
+                         [(2770, "Copper Ore", 1)])
+
+    def test_the_bar_it_produces_is_still_not_judged(self):
+        """GATHERED means "a gathering trip produces this". A Copper Bar comes
+        off a cast, so it is an own-crafted intermediate exactly like Minor
+        Healing Potion, and a character short of one is correctly UNJUDGED -
+        `errand` hands them the smelt, roaming does not help."""
+        for spell in (3922, 7430, 3923):     # the Copper Bar consumers
+            with self.subTest(spell=spell):
+                self.assertNotIn(spell, craft_rhythm.GATHERED)
+
+    def test_a_miner_short_of_ore_now_reads_as_short_rather_than_unjudged(self):
+        """The inversion, stated as a test. Before this change the smelt was
+        not in RECIPES at all, so there was nothing to be short OF."""
+        verdict = craft_rhythm.stand("Grug", 2657, {2770: 0})
+        self.assertEqual(verdict.verdict, craft_rhythm.SHORT)
+        self.assertEqual(verdict.thinnest, "Copper Ore")
+
+    def test_one_mining_trip_serves_the_smelt_and_the_stone_eaters(self):
+        """Rough Stone comes off the same copper veins, so the SHORT verdict
+        this entry can now produce sends the family somewhere that restocks
+        every miner's other recipe at the same time. That is what makes the
+        entry nearly free rather than a new competing errand."""
+        self.assertEqual(craft_rhythm.GATHERED[2657][0].entry, 2770)
+        for stone_recipe in (2660, 3918):    # Grug's and Grog's own brackets
+            self.assertEqual(craft_rhythm.GATHERED[stone_recipe][0].entry, 2835)
 
 
 if __name__ == "__main__":
