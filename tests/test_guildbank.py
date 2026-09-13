@@ -13,6 +13,10 @@ import unittest
 import guildbank
 
 BRIDGE = pathlib.Path(__file__).resolve().parents[1] / "bridge.py"
+MOD_OVERSEER = (
+    pathlib.Path(__file__).resolve().parents[3]
+    / "docker/azerothcore-playerbots/mod-overseer/src/mod_overseer.cpp"
+)
 
 
 def member(**kw):
@@ -181,6 +185,38 @@ class RecentGuildBankKeysEscapesItsLikePatternTests(unittest.TestCase):
             if line.strip().startswith('"')
         )
         self.assertEqual(query_literal.count("%"), query_literal.count("%s"))
+
+
+class GuildBankTravelAimUsesTheRealKeywordTests(unittest.TestCase):
+    """Even with both prior bugs fixed, every queued deposit came back live
+    tonight as `status='error'`, `detail='no guild bank in reach'` - because
+    the leader was never actually walked anywhere. `travel_npc='guild bank'`
+    does not match anything: mod-overseer's own `TravelAimBook::TravelRoles()`
+    defines exactly one guild-vault keyword, `"guild banker"`, matched WHOLE
+    (see `ResolveTravelTarget`'s own comment: "an aim is a whole keyword or it
+    is not this"). A stale comment beside `DoGuild`'s bank verb even asserted
+    `travel_npc='guild bank'` "already resolves" - the unverified assumption
+    that shipped this bug. This test reads the real submodule source directly,
+    the same cross-repo discipline test_bags.py already holds itself to,
+    rather than trusting a comment in bridge.py to still be true."""
+
+    def setUp(self):
+        if not MOD_OVERSEER.exists():
+            self.skipTest("mod-overseer submodule not checked out")
+        self.cpp = MOD_OVERSEER.read_text(encoding="utf-8")
+
+    def test_the_real_keyword_is_guild_banker_not_guild_bank(self):
+        self.assertIn('{"guild banker",', self.cpp)
+        self.assertNotIn('{"guild bank",', self.cpp)
+
+    def test_bridge_writes_the_real_keyword(self):
+        source = BRIDGE.read_text(encoding="utf-8")
+        self.assertIn('travel_npc="guild banker"', source)
+        self.assertNotIn('travel_npc="guild bank"', source)
+        self.assertIn('"guild banker"', source[
+            source.index("ECONOMY_ERRANDS = ("):
+            source.index("\n", source.index("ECONOMY_ERRANDS = ("))
+        ])
 
 
 if __name__ == "__main__":

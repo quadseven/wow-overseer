@@ -1720,7 +1720,7 @@ def _write_declared_professions() -> None:
 # may be retasked off an idle traveller but must never erase a profession
 # trainer errand somebody is already walking to.
 #
-# `guild bank` joined for infra#2831/mod-overseer#437, and belongs here for
+# `guild banker` joined for infra#2831/mod-overseer#437, and belongs here for
 # the identical reason. It is a town errand the leader runs and comes back
 # from, not a standing plan - and mod-overseer#438 (this same session) is the
 # whole reason to get the categorization right rather than assume: that fix
@@ -1729,10 +1729,22 @@ def _write_declared_professions() -> None:
 # `_write_trade_errand`'s two branches are this file's OWN version of that
 # same fork - the ECONOMY_ERRANDS branch retasks only an idle traveller, the
 # other branch overwrites unconditionally because it exists for a standing
-# plan. Writing "guild bank" down the unconditional branch would silently
+# plan. Writing "guild banker" down the unconditional branch would silently
 # steal a leader's own outstanding profession-trainer errand the moment the
 # guild-bank pass runs - the identical bug, self-inflicted, one file over.
-ECONOMY_ERRANDS = ("vendor", "banker", "repair", "guild bank")
+#
+# THE KEYWORD IS "guild banker", NOT "guild bank" (infra#3657 follow-up,
+# found live the same night the deposit crash itself was fixed): mod-overseer's
+# own `TravelAimBook::TravelRoles()` names exactly one guild-vault keyword,
+# `"guild banker"`, matched whole against `travel_npc` - there is no
+# `"guild bank"` entry in that table. A mismatched keyword resolves to
+# nothing, so the leader was never actually walked anywhere; every deposit
+# queued came back `status='error'`, `detail='no guild bank in reach'`,
+# because nobody was ever in reach of one. Confirmed against the live
+# `mod-overseer` source, not assumed - a stale comment in that same file
+# claimed `travel_npc='guild bank'` "already resolves", which was the exact
+# unverified assumption that shipped this bug in the first place.
+ECONOMY_ERRANDS = ("vendor", "banker", "repair", "guild banker")
 
 
 def _write_trade_errand(errand) -> bool:
@@ -4246,12 +4258,15 @@ class Bridge(discord.Client):
         Deposit only (mod-overseer#437, infra#2831) - see guildbank.py for
         why withdrawal is a separate, harder feature and not attempted here.
 
-        SAME SHAPE AS _bank_once, DELIBERATELY. `travel_npc='guild bank'` is
+        SAME SHAPE AS _bank_once, DELIBERATELY. `travel_npc='guild banker'` is
         the identical kind of errand: only the leader can be aimed (followers
         arrive by following, mod-overseer#209), so the errand goes to the
         leader once and every character's deposit row is queued alongside it,
         each staying pending until its holder reaches the vault
-        (`GuildBankInReach`, mod-overseer#441).
+        (`GuildBankInReach`, mod-overseer#441). The keyword is `guild banker`,
+        not `guild bank` (infra#3657 follow-up) - `TravelAimBook::TravelRoles()`
+        only defines the former, so the latter never resolved to a walk at
+        all and every deposit came back `no guild bank in reach`.
 
         NOT IN THE MIDDLE OF A DUNGEON RUN, for the same reason the personal
         bank pass skips one: pulling the leader out to bank is how the party
@@ -4268,7 +4283,7 @@ class Bridge(discord.Client):
         leader = await asyncio.to_thread(_head_now)
         await asyncio.to_thread(
             _write_trade_errand,
-            professions.Errand(character=leader, travel_npc="guild bank"),
+            professions.Errand(character=leader, travel_npc="guild banker"),
         )
         seen = await asyncio.to_thread(_recent_guild_bank_keys, GIVE_RETRY_MINUTES)
         fresh = []
