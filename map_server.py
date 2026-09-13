@@ -497,7 +497,7 @@ _ITEM_TEMPLATE_COLUMNS = (
     "it.displayid, it.class, it.subclass, it.InventoryType AS inventory_type, "
     "it.armor, it.block, it.bonding, it.itemset, it.SellPrice AS sell_price, "
     "it.AllowableClass AS allowable_class, it.description, "
-    "it.dmg_min1, it.dmg_max1, it.delay, "
+    "it.dmg_min1, it.dmg_max1, it.delay, it.dmg_min2, it.dmg_max2, it.dmg_type2, "
     "it.holy_res, it.fire_res, it.nature_res, it.frost_res, it.shadow_res, it.arcane_res, "
     + ", ".join(f"it.stat_type{n}, it.stat_value{n}" for n in range(1, 11)) + ", "
     + ", ".join(f"it.spellid_{n}, it.spelltrigger_{n}" for n in range(1, 6))

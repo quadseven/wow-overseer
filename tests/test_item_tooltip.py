@@ -65,6 +65,7 @@ def template(**over) -> dict:
         "armor": 48, "block": 0, "bonding": 1, "itemset": 0,
         "sell_price": 4521, "allowable_class": -1, "description": "",
         "dmg_min1": 0, "dmg_max1": 0, "delay": 0,
+        "dmg_min2": 0, "dmg_max2": 0, "dmg_type2": 0,
         "holy_res": 0, "fire_res": 0, "nature_res": 0, "frost_res": 0,
         "shadow_res": 0, "arcane_res": 0,
     }
@@ -119,6 +120,40 @@ class TheLinesComeFromTheWorldDatabase(unittest.TestCase):
         self.assertEqual(tip["damage"]["speed"], 1.7)
         self.assertEqual(tip["damage"]["dps"], 15.3)
         self.assertEqual(tip["kind"], "Dagger")
+        self.assertIsNone(tip["damage"]["elemental"])
+
+    def test_a_weapon_with_elemental_damage_carries_it_alongside_base(self):
+        """Torturing Poker (item_template entry 7682), verified live against
+        acore_world: dmg_min1=26, dmg_max1=49 (base physical, dmg_type1=0),
+        dmg_min2=5, dmg_max2=7, dmg_type2=2 (Fire) - the exact "+5 - 7 Fire
+        Damage" line infra#3513 reported missing."""
+        tip = armory.template_tooltip(template(
+            entry=7682, item_name="Torturing Poker", quality=1,
+            inventory_type=13, armor=0, dmg_min1=26, dmg_max1=49, delay=1800,
+            dmg_min2=5, dmg_max2=7, dmg_type2=2,
+            subclass=0, **{"class": 2}), BOOK)
+        self.assertEqual(tip["damage"]["min"], 26)
+        self.assertEqual(tip["damage"]["max"], 49)
+        self.assertEqual(tip["damage"]["elemental"],
+                         [{"school": "Fire", "min": 5, "max": 7}])
+
+    def test_a_non_fire_elemental_range_is_named_and_not_confused_with_base(self):
+        tip = armory.template_tooltip(template(
+            entry=6472, item_name="Fang of the Crystal Spider", quality=3,
+            inventory_type=13, armor=0, dmg_min1=18, dmg_max1=34, delay=1700,
+            dmg_min2=3, dmg_max2=6, dmg_type2=4,  # Frost
+            subclass=15, **{"class": 2}), BOOK)
+        self.assertEqual(tip["damage"]["min"], 18)
+        self.assertEqual(tip["damage"]["max"], 34)
+        self.assertEqual(tip["damage"]["elemental"],
+                         [{"school": "Frost", "min": 3, "max": 6}])
+
+    def test_an_item_with_no_elemental_damage_reports_none_not_an_empty_line(self):
+        tip = armory.template_tooltip(template(
+            entry=6472, item_name="Fang of the Crystal Spider", quality=3,
+            inventory_type=13, armor=0, dmg_min1=18, dmg_max1=34, delay=1700,
+            subclass=15, **{"class": 2}), BOOK)
+        self.assertIsNone(tip["damage"]["elemental"])
 
     def test_a_resistance_is_named_rather_than_numbered(self):
         tip = armory.template_tooltip(template(frost_res=8), BOOK)
@@ -439,6 +474,12 @@ class ThereIsOnlyOneRenderer(unittest.TestCase):
                       "t.set.pieces", "t.set.bonuses", "t.flavor",
                       "t.sell_price"):
             self.assertIn(field, LINES, field)
+
+    def test_elemental_damage_is_drawn_beside_base_damage_not_folded_into_it(self):
+        """infra#3513: a separate line per school, never merged into
+        t.damage.min/max or the DPS parenthetical."""
+        self.assertIn("t.damage.elemental", LINES)
+        self.assertIn("e.school", LINES)
 
     def test_the_armorys_own_sentence_is_handed_in_and_not_reached_for(self):
         """Where the item was last seen worn is a line only the Armory has: a

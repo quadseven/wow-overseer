@@ -767,13 +767,34 @@ def _spell_effects(row: dict, book: ItemBook) -> list[str]:
     return lines
 
 
+def _elemental_damage(row: dict) -> list[dict] | None:
+    """The `+N - M <School> Damage` line(s), separate from base weapon damage.
+
+    infra#3513: item_template on this world carries exactly one extra
+    damage slot - dmg_min2/dmg_max2/dmg_type2 (verified live: `DESCRIBE
+    item_template` has no dmg_min3.. at all, unlike some other cores) - and
+    dmg_type2 is a SpellSchool id (1 Holy .. 6 Arcane), the same vocabulary
+    RESIST_SCHOOLS already names for resistances. Torturing Poker (entry
+    7682) confirmed the mapping live: dmg_type2=2, dmg_min2=5, dmg_max2=7 -
+    exactly the "+5 - 7 Fire Damage" line missing from the tooltip. A
+    dmg_type2 of 0 is physical, which base `_damage` already carries as
+    dmg_min1/dmg_max1 - listing it again here would double the same number
+    under a second label, so 0 is excluded.
+    """
+    school = RESIST_SCHOOLS.get(row.get("dmg_type2") or 0)
+    if not school or not row.get("dmg_min2"):
+        return None
+    return [{"school": school, "min": row["dmg_min2"], "max": row["dmg_max2"]}]
+
+
 def _damage(row: dict) -> dict | None:
     if not row.get("dmg_min1"):
         return None
     speed = (row.get("delay") or 0) / 1000
     dps = (row["dmg_min1"] + row["dmg_max1"]) / 2 / speed if speed else None
     return {"min": row["dmg_min1"], "max": row["dmg_max1"], "speed": speed,
-            "dps": round(dps, 1) if dps is not None else None}
+            "dps": round(dps, 1) if dps is not None else None,
+            "elemental": _elemental_damage(row)}
 
 
 def _item_kind(row: dict) -> str | None:

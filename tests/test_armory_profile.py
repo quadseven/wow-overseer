@@ -150,7 +150,8 @@ class TheTooltipTest(unittest.TestCase):
     def test_a_weapon_shows_its_damage_and_speed_and_its_enchant_by_name(self):
         t = slot_of(member(build([worn(15, IRONPATCH)])), "main hand")["tooltip"]
         self.assertEqual((t["slot"], t["kind"]), ("One-Hand", "Sword"))
-        self.assertEqual(t["damage"], {"min": 24, "max": 46, "speed": 2.6, "dps": 13.5})
+        self.assertEqual(t["damage"], {"min": 24, "max": 46, "speed": 2.6,
+                                       "dps": 13.5, "elemental": None})
         self.assertEqual(t["stats"], ["+4 Strength", "+2 Stamina"])
         self.assertEqual(t["enchant"], ["Sharpened (+4 Damage)"])
         self.assertEqual(t["binding"], "Binds when picked up")

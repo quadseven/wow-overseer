@@ -8075,6 +8075,15 @@ function itemTipLines(node, t, note) {
     r.append(el("span", "", t.damage.min + " - " + t.damage.max + " Damage"),
              el("span", "", "Speed " + t.damage.speed.toFixed(2)));
     node.appendChild(r);
+    // infra#3513: a second damage range, a different school from the base
+    // physical pair above - "+5 - 7 Fire Damage", never folded into the
+    // base min/max or the DPS line, which stays base-damage-only exactly
+    // as the client's own tooltip keeps them apart.
+    if (t.damage.elemental) {
+      for (const e of t.damage.elemental) {
+        add("", "+" + e.min + " - " + e.max + " " + e.school + " Damage");
+      }
+    }
     if (t.damage.dps !== null) add("", "(" + t.damage.dps.toFixed(1) + " damage per second)");
   }
   if (t.armor) add("", t.armor + " Armor");
