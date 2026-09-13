@@ -4271,6 +4271,18 @@ class Bridge(discord.Client):
         NOT IN THE MIDDLE OF A DUNGEON RUN, for the same reason the personal
         bank pass skips one: pulling the leader out to bank is how the party
         spreads.
+
+        THE AIM RESULT IS LOGGED, NOT DISCARDED (infra#3660 follow-up).
+        `_write_trade_errand` returns whether the aim was actually taken -
+        every other economy pass tonight (craft_supply, the vendor pass) logs
+        that return, and this one silently dropped it, which is exactly the
+        "written and unread" failure mode `_write_trade_errand`'s own
+        docstring already warns about for a different caller (infra#3464).
+        A leader who already carries the party's OWN standing vendor/repair
+        errand is a real, expected reason `_write_trade_errand` refuses -
+        `ECONOMY_ERRANDS` only retasks an idle traveller - but until this
+        logged it, that refusal was invisible: the guild bank could starve
+        for as long as the leader's other errand ran and nothing said so.
         """
         names = sorted((await asyncio.to_thread(_protected_guids)).values())
         if not names or await self._mid_run(names):
@@ -4281,10 +4293,15 @@ class Bridge(discord.Client):
             log.info("guild bank: nobody is carrying more than the float")
             return
         leader = await asyncio.to_thread(_head_now)
-        await asyncio.to_thread(
+        aimed = await asyncio.to_thread(
             _write_trade_errand,
             professions.Errand(character=leader, travel_npc="guild banker"),
         )
+        if not aimed:
+            log.info(
+                "guild bank: leader=%s could not be aimed at the vault - "
+                "already on another errand", leader,
+            )
         seen = await asyncio.to_thread(_recent_guild_bank_keys, GIVE_RETRY_MINUTES)
         fresh = []
         for deposit in deposits:

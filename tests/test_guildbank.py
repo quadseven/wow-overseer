@@ -219,5 +219,29 @@ class GuildBankTravelAimUsesTheRealKeywordTests(unittest.TestCase):
         ])
 
 
+class GuildBankOnceLogsWhetherTheLeaderWasActuallyAimedTests(unittest.TestCase):
+    """`_write_trade_errand` returns whether the aim was actually taken -
+    every other economy pass (craft_supply, the vendor pass) logs that
+    return, and `_guild_bank_once` discarded it, which is the exact
+    "written and unread" failure `_write_trade_errand`'s own docstring
+    already warns about for a different caller (infra#3464). Measured live:
+    the leader sat on a standing vendor/repair errand of its own for 15+
+    minutes while the guild bank pass ran every cycle and said nothing."""
+
+    def setUp(self):
+        source = BRIDGE.read_text(encoding="utf-8")
+        start = source.index("async def _guild_bank_once(")
+        end = source.index("\n    async def ", start + 1)
+        self.body = source[start:end]
+
+    def test_the_aim_result_is_captured_not_discarded(self):
+        self.assertIn("aimed = await asyncio.to_thread(", self.body)
+        self.assertIn("_write_trade_errand", self.body)
+
+    def test_a_refused_aim_is_logged(self):
+        self.assertIn("if not aimed:", self.body)
+        self.assertIn("log.info(", self.body)
+
+
 if __name__ == "__main__":
     unittest.main()
