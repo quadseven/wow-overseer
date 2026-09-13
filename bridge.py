@@ -56,6 +56,7 @@ import protect
 import questbook
 import questshare
 import quests
+import recruit
 import relay
 import tabard
 import towntrip
@@ -173,20 +174,49 @@ def _insert_gm(cmd: relay.GmCommand) -> int:
         return cur.lastrowid
 
 
-def _insert_guild(name: str, command: str, source: str) -> int:
+def _insert_guild(name: str, command: str, source: str, target_arg: str = "") -> int:
     """One overseer_command row for mod-overseer's DoGuild.
 
     kind='guild', for the same reason _insert_job uses its own kind: the guild
     verbs are not mod-playerbots chat commands, so handing one to the bot's own
     parser would be accepted and do nothing.
+
+    `target_arg` IS THE WHOLE OF THE `invite` VERB, and until infra#3651 this
+    function could not write it. The 2026_09_11 guild migration is explicit:
+    "target_arg - the character to invite, for `invite`", and DoGuild's invite
+    branch refuses an empty one outright with "no character to invite (put the
+    name in target_arg)". So every `invite` row written before this change
+    would have been refused on arrival, which is the reason no `invite` had
+    ever been issued from Python. It defaults to the empty string rather than
+    to NULL for the reason _insert_bank spells out for its own kind: a row of
+    another verb carrying a name in `target_arg` would still be delivered and
+    would still be wrong, so the emptiness is written rather than left to a
+    column default nobody re-reads.
+
+    GUARDED LIKE ITS SIBLINGS, which it was not. `_insert_share` and
+    `_insert_bank` both catch the MySQL error a world without their machinery
+    raises and return 0; this one let it out, so a realm whose `kind` ENUM has
+    no 'guild' value (a db-import that has not run 2026_09_11 yet) took down
+    whichever loop called it rather than skipping a pass. 1265 is a truncated
+    ENUM value, 1146 a missing table, 1054 a missing column.
     """
     with _connect() as conn, conn.cursor() as cur:
-        cur.execute(
-            "INSERT INTO overseer_command (target_name, command, kind, source) "
-            "VALUES (%s, %s, 'guild', %s)",
-            (name, command, source),
-        )
-        return cur.lastrowid
+        try:
+            cur.execute(
+                "INSERT INTO overseer_command "
+                "(target_name, command, kind, target_arg, source) "
+                "VALUES (%s, %s, 'guild', %s, %s)",
+                (name, command, target_arg, source),
+            )
+        except pymysql.err.MySQLError as exc:
+            if exc.args and exc.args[0] in (1054, 1146, 1265):
+                log.warning(
+                    "overseer_command has no 'guild' machinery yet - dropping "
+                    "%r for %s rather than failing the pass", command, name,
+                )
+                return 0
+            raise
+        return cur.lastrowid or 0
 
 
 def _fetch_family_kin() -> list[dict]:
@@ -2791,6 +2821,7 @@ class Bridge(discord.Client):
                 self._vendor_loop,
                 self._bank_loop,
                 self._guild_bank_loop,
+                self._recruit_loop,
                 self._craft_supply_loop,
                 self._craft_rhythm_loop,
                 self._auction_loop,
@@ -6017,6 +6048,91 @@ class Bridge(discord.Client):
         log.info("guild bank: queued %d/%d deposit(s), leader=%s aimed at %s",
                  len(fresh), len(deposits), leader, vault.aim)
 
+    async def _recruit_once(self) -> None:
+        """One pass of the recruit sweep: shortlist, or invite, or say why not.
+
+        infra#3651, and the thing it turns from manual into unattended. The
+        `shortlist` and `invite` verbs have existed since mod-overseer#413 but
+        only ever ran when somebody wrote a row by hand, and nobody ever had -
+        measured against the live command log, not one `shortlist` or `invite`
+        row has ever been issued.
+
+        ONE ACTION PER PASS, AND NEVER BOTH. The two verbs are separate
+        commands run asynchronously by the worldserver; this process writes a
+        row and cannot wait for it. So a pass either asks for a shortlist or
+        acts on the newest one that has already come back, which means every
+        invite is drawn from a list a person could have read first. See
+        recruit.plan_recruit for the gate order.
+
+        EVERY OUTCOME IS LOGGED, INCLUDING THE ONES WHERE NOTHING HAPPENS.
+        infra#3651's complaint about the manual path is that a quiet day and a
+        broken loop look identical, so `wait` carries a reason and it is logged
+        at info rather than swallowed.
+
+        THE JUDGEMENT IS NOT HERE AND MUST NOT MOVE HERE. Who is worth asking
+        is mod-overseer's `RecruitVerdictFor` and `RecruitShortlist`, against
+        the guild's real holes. This pass decides pace and turn only.
+        """
+        actors = await asyncio.to_thread(_online_guild_members)
+        result, age = await asyncio.to_thread(_latest_guild_shortlist)
+        members, target = recruit.roster_from_shortlist(result or {})
+        action = recruit.plan_recruit(
+            actors=actors,
+            shortlist=recruit.names_from_shortlist(result or {}),
+            shortlist_age_minutes=age,
+            asked=await asyncio.to_thread(_guild_invites_asked, recruit.ASKED_MEMORY_DAYS),
+            minutes_since_last_invite=await asyncio.to_thread(_minutes_since_last_guild_invite),
+            member_count=members,
+            target_size=target,
+        )
+
+        if action.verb == "wait":
+            log.info("recruit: nothing this pass - %s", action.reason)
+            return
+
+        row = await asyncio.to_thread(
+            _insert_guild, action.actor, action.command, "recruit", action.target_arg,
+        )
+        if not row:
+            # _insert_guild already said why. Logged again here with the verb,
+            # because "the guild machinery is missing" is a different day's
+            # problem from "this pass had nothing to do".
+            log.warning("recruit: %s row was not written", action.verb)
+            return
+        log.info(
+            "recruit: queued %s via %s (%s) - roster %d of %d",
+            action.command, action.actor, action.reason, members, target,
+        )
+
+    async def _recruit_loop(self) -> None:
+        """Recruit toward the guild's target size, unattended (infra#3651).
+
+        THE CADENCE IS THE RATE LIMIT'S PARTNER, NOT A SECOND ONE. The pass
+        runs every five minutes so that a stale shortlist is refreshed
+        promptly and a pass held back by the clock retries soon after it
+        clears; how often an INVITE may actually be written is
+        recruit.MIN_MINUTES_BETWEEN_INVITES, checked against the command log
+        rather than against this timer. A limit that lived in a loop's sleep
+        would be reset by every restart.
+
+        NOT ONCE A DAY, which is what infra#3651 asked for when the target
+        roster was 15. Thirty-five seats at one invite a day is thirty-five
+        days. See recruit.py's docstring for the argument, and the comment on
+        infra#3650.
+
+        No `travel_npc` stagger: this pass never writes that column, so it
+        does not compete with the vendor, bank, guild-bank or craft-supply
+        passes for it.
+        """
+        await self.wait_until_ready()
+        cycle = float(os.environ.get("RECRUIT_CYCLE_SECONDS", "300"))
+        while not self.is_closed():
+            try:
+                await self._recruit_once()
+            except Exception:
+                log.exception("recruit pass failed; retrying next cycle")
+            await asyncio.sleep(cycle)
+
     async def _guild_bank_loop(self) -> None:
         """Keep the guild bank fed (mod-overseer#437, infra#2831).
 
@@ -8356,6 +8472,144 @@ def _recent_guild_bank_keys(minutes: int) -> set:
         return {(row["target_name"], row["command"]) for row in cur.fetchall()}
 
 
+# -- the recruit sweep's reads (infra#3651) ----------------------------------
+#
+# EVERY AGE IS COMPUTED BY MYSQL AND NOT BY THIS PROCESS. The rows were stamped
+# by the database's clock and the bridge runs in a different pod; subtracting a
+# local `time.time()` from a `created_at` would be comparing two clocks that
+# have never agreed and calling the difference a rate limit. TIMESTAMPDIFF asks
+# the one clock that wrote the row.
+
+
+def _latest_guild_shortlist() -> tuple:
+    """(result dict, age in minutes) for the newest delivered shortlist.
+
+    (None, None) when no shortlist has ever come back, which the planner reads
+    as "ask for one" rather than as "there is nobody".
+
+    `status = 'delivered'` IS THE FILTER THAT MATTERS. A shortlist row sits
+    'pending' until the worldserver claims it and only carries a `result` once
+    it has run; reading a pending row would hand the planner an empty shortlist
+    and it would conclude the band admits nobody, which is the same sentence
+    for a completely different fact.
+    """
+    with _connect() as conn, conn.cursor() as cur:
+        try:
+            cur.execute(
+                "SELECT result, TIMESTAMPDIFF(SECOND, created_at, NOW()) AS age_s "
+                "FROM overseer_command "
+                "WHERE kind = 'guild' AND command LIKE %s AND status = 'delivered' "
+                "AND result IS NOT NULL "
+                "ORDER BY id DESC LIMIT 1",
+                ("shortlist%",),
+            )
+        except pymysql.err.MySQLError as exc:
+            if exc.args and exc.args[0] in (1054, 1146, 1265):
+                return (None, None)
+            raise
+        row = cur.fetchone()
+    if not row:
+        return (None, None)
+    try:
+        result = json.loads(row["result"])
+    except (TypeError, ValueError):
+        # A result this loop cannot parse is a module answering something it
+        # does not understand. Treated as "there has never been a shortlist",
+        # so the next pass asks for a fresh one instead of acting on a shape
+        # it guessed at.
+        log.warning("recruit: newest shortlist result did not parse as JSON")
+        return (None, None)
+    return (result, float(row["age_s"] or 0) / 60.0)
+
+
+def _guild_invites_asked(days: int) -> set:
+    """Names invited inside the memory window, however the invite went.
+
+    THE MEMORY infra#3650 ASKED FOR, READ OFF THE COMMAND LOG RATHER THAN A
+    SECOND TABLE. Every invite this loop issues is a row carrying the name in
+    `target_arg`; that row IS the record, and a purpose-built table beside it
+    would be a second answer that could disagree. The same move bonds.py makes
+    for help-history.
+
+    OUTCOME IS DELIBERATELY NOT FILTERED ON. A refused invite will be refused
+    again for the same reason - the band, the faction, the roster being full -
+    so re-asking is waste; and a successful one takes the candidate out of the
+    next shortlist by itself, because they now have a guild.
+    """
+    with _connect() as conn, conn.cursor() as cur:
+        try:
+            cur.execute(
+                "SELECT target_arg FROM overseer_command "
+                "WHERE kind = 'guild' AND command LIKE %s "
+                "AND created_at > NOW() - INTERVAL %s DAY",
+                ("invite %", int(days)),
+            )
+        except pymysql.err.MySQLError as exc:
+            if exc.args and exc.args[0] in (1054, 1146, 1265):
+                return set()
+            raise
+        return {row["target_arg"] for row in cur.fetchall() if row["target_arg"]}
+
+
+def _minutes_since_last_guild_invite() -> float | None:
+    """How long since an invite was last issued, or None if never."""
+    with _connect() as conn, conn.cursor() as cur:
+        try:
+            cur.execute(
+                "SELECT TIMESTAMPDIFF(SECOND, created_at, NOW()) AS age_s "
+                "FROM overseer_command "
+                "WHERE kind = 'guild' AND command LIKE %s "
+                "ORDER BY id DESC LIMIT 1",
+                ("invite %",),
+            )
+        except pymysql.err.MySQLError as exc:
+            if exc.args and exc.args[0] in (1054, 1146, 1265):
+                return None
+            raise
+        row = cur.fetchone()
+    if not row:
+        return None
+    return float(row["age_s"] or 0) / 60.0
+
+
+def _online_guild_members() -> list:
+    """Family names that are in a guild AND in the world right now.
+
+    BOTH HALVES ARE REQUIRED AND FOR DIFFERENT REASONS. In a guild, because
+    DoGuild resolves "which guild this is about" from the acting character's
+    own guild id and answers `not in a guild` otherwise. In the world, because
+    the command executor needs a live Player to run the verb on.
+
+    ONLY THE ACTOR HAS TO BE ONLINE. The candidate does not: mod-overseer's
+    invite is `Guild::AddMember`, the core's own offline-capable path, and not
+    the invite packet - so there is no dialog for an absent character to fail
+    to answer, and an offline candidate joins exactly as well as a present one.
+
+    The 60-second freshness rule is `_fetch_grounding`'s, unchanged: a
+    snapshot row older than that means the character left the world.
+    """
+    names = [n.strip() for n in os.environ.get("OVERSEER_NOTABLE_NAMES", "").split(",") if n.strip()]
+    if not names:
+        return []
+    marks = ",".join(["%s"] * len(names))
+    with _connect() as conn, conn.cursor() as cur:
+        try:
+            cur.execute(
+                "SELECT c.name AS name "  # noqa: S608 - placeholders from a COUNT, values still bound
+                "FROM characters c "
+                "JOIN guild_member gm ON gm.guid = c.guid "
+                "JOIN overseer_snapshot s ON s.name = c.name "
+                "WHERE c.name IN (%s) "
+                "AND s.updated_at > NOW() - INTERVAL 60 SECOND" % marks,
+                names,
+            )
+        except pymysql.err.MySQLError as exc:
+            if exc.args and exc.args[0] in (1054, 1146):
+                return []
+            raise
+        return [row["name"] for row in cur.fetchall()]
+
+
 def _recent_bank_keys(minutes: int) -> set:
     """(character, command) pairs already proposed inside the retry window.
 
@@ -9871,6 +10125,7 @@ class HeadlessBridge(Bridge):
                 self._vendor_loop,
                 self._bank_loop,
                 self._guild_bank_loop,
+                self._recruit_loop,
                 self._craft_supply_loop,
                 self._craft_rhythm_loop,
                 self._auction_loop,
