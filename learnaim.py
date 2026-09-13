@@ -215,9 +215,8 @@ def traveller(rows: Sequence) -> str:
 
     bridge._head_now asks this LAST, behind `_train_traveller` (an order a
     person just gave) and `_errand_traveller` (a trade the family decided), and
-    ahead only of HOMEWARD_LEAD and seniority - which is to say it borrows the
-    lead only when it would otherwise be resting. It can never preempt an order
-    or a plan.
+    ahead only of seniority - which is to say it borrows the lead only when it
+    would otherwise be resting. It can never preempt an order or a plan.
 
     DERIVED ERRANDS ONLY, on purpose. A trade-backed errand already has a
     borrower and that borrower is bounded by ERRAND_LEAD_HOURS; taking the

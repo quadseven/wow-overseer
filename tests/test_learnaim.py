@@ -406,7 +406,7 @@ class TheBridgeReallyRunsIt(unittest.TestCase):
         self.assertIn(
             "return (_train_traveller() or _errand_traveller()\n"
             "            or _derived_errand_traveller()\n"
-            "            or HOMEWARD_LEAD or bonds.head_of_family())",
+            "            or bonds.head_of_family())",
             self.source,
         )
 
@@ -448,9 +448,14 @@ class TheBridgeReallyRunsIt(unittest.TestCase):
         self.assertIn("log.exception", block)
 
     def test_the_reads_and_the_writes_are_guarded_for_a_realm_without_them(self):
+        # END MARKERS ARE `def` LINES, NOT COMMENTS. This second one read
+        # `# WHO THE PARTY FOLLOWS` until infra#3715 retired the HOMEWARD_LEAD
+        # block that comment introduced, and the test then errored with
+        # "substring not found" - which says nothing about the guard it exists
+        # to check. A definition is the real end of the block above it.
         for signature, end in (
             ("def _learn_aim_rows()", "def _derived_errand_traveller()"),
-            ("def _run_learn_aim_plan(statements)", "# WHO THE PARTY FOLLOWS"),
+            ("def _run_learn_aim_plan(statements)", "def _head_now()"),
         ):
             block = self.source[self.source.index(signature):]
             block = block[:block.index(end)]

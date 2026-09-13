@@ -2280,9 +2280,9 @@ def _derived_errand_traveller() -> str:
     `RefuseInFormation` for a follower and names the remedy itself.
 
     ASKED LAST BY `_head_now`, behind an order a person gave and a trade the
-    family decided, and ahead only of HOMEWARD_LEAD and seniority - so it
-    borrows the lead only from a family that is otherwise resting, and can
-    never preempt either of the other two.
+    family decided, and ahead only of seniority - so it borrows the lead only
+    from a family that is otherwise resting, and can never preempt either of
+    the other two.
 
     NO ERRAND_LEAD_HOURS HERE, and learnaim.derived carries the argument: that
     bound exists for a worldserver built WITHOUT the professions verbs, which
@@ -2334,47 +2334,6 @@ def _run_learn_aim_plan(statements) -> int:
             landed += cur.rowcount
     return landed
 
-# WHO THE PARTY FOLLOWS WHEN SENIORITY WOULD STRAND IT. Normally None, and
-# then nothing changes: the father leads, as he always has.
-#
-# Set when the resting head is bound on a continent the family is not working
-# on, because REVIVAL USES THE GROUP LEADER'S BIND AND NEVER THE CHARACTER'S
-# OWN (mod_overseer.cpp, RevivalHome reads group->GetLeaderGUID()). Every
-# death therefore gathers all five wherever the leader is bound, so a leader
-# bound across an ocean turns every death into a party split, and no drive in
-# the module can rejoin one.
-#
-# DELIBERATELY NOT bonds.head_of_family(). That answer is the family's, not
-# the logistics', and other things read it as story: speaking_order puts the
-# head first in every digest, and bonds.SUSPICION is asserted to be the head's
-# because the jealousy is the father's. Overriding there would have made the
-# man he is suspicious of the head of his family, and changed who narrates the
-# day. This seam already exists for exactly this shape: an errand borrows the
-# lead here without anybody's standing changing.
-#
-# WHICH CHARACTER, AND WHY IT MOVED. It is no longer only about the bind.
-# The route to the dungeon door was replayed against the shipped heightmaps
-# from both places the family could stage from, and the same code opens a run
-# or fails purely on which one it walks out of:
-#
-#     from the mountains   7.5 to 24 minutes   against a 12 minute window
-#     from the port town   4 to 7 minutes      against the same window
-#
-# So the lead is the character bound at the port town on the working
-# continent, and the family gathers on flat ground beside the dungeon rather
-# than in a mountain range with a wall between it and the door. The bind
-# argument above still holds and now points the same way: every death sends
-# all five to the leader's bind, and that bind is now somewhere worth being.
-#
-# REMOVE IT once the resting head can be bound on the family's own continent
-# AND can walk out of where it stands. The crossing is no longer the blocker
-# it was when this was written: a character can now reach the other continent
-# on its own hearthstone, and a split party can be rejoined on the game's own
-# summoning stone (quadseven/mod-overseer#308, #313). What remains is routing
-# around terrain (quadseven/mod-overseer#316).
-HOMEWARD_LEAD: str | None = "Grog"
-
-
 def _head_now() -> str:
     """Who leads the family this cycle.
 
@@ -2383,22 +2342,42 @@ def _head_now() -> str:
     the leader is the family's one traveller and an errand is somewhere to
     travel to. A standing `job = train` borrows it FIRST - see
     _train_traveller for why an order a person just gave outranks a plan the
-    family drifted into. Asked in exactly two places - _give_them_a_life,
-    which hands out the strategies, and _mark_party_leader, which writes the
-    flag - so those
-    two can never be looking at different answers to the same question. Getting
-    that wrong is a family following a character that is about to stop leading,
-    which is a party split in two. HOMEWARD_LEAD above outranks seniority and
-    is outranked by all three borrowers, because a character actually
-    walking somewhere is a better leader for that moment than one merely
-    bound well. The third borrower is _derived_errand_traveller, and it is
-    asked last of the three: an errand mod-overseer wrote for itself is
-    real, and it is still the weakest claim on the lead of the three,
-    because nobody outside the worldserver asked for it (infra#3686).
+    family drifted into. The third borrower is _derived_errand_traveller, and
+    it is asked last of the three: an errand mod-overseer wrote for itself is
+    real, and it is still the weakest claim on the lead of the three, because
+    nobody outside the worldserver asked for it (infra#3686).
+
+    EVERY CALLER ASKS THIS FUNCTION AND NOT ITS PARTS, which is the whole
+    point of it existing. Two of those callers must agree or the family
+    splits: _mark_party_leader writes the `lead` flag the module enforces, and
+    _give_them_a_life hands out the strategies, so a family told to follow a
+    character that is about to stop leading is a party in two pieces. The
+    others - the vendor, bank, guild-bank, tabard and repair trips - anchor a
+    walk on "whoever can actually walk" and get the same answer for free. NO
+    COUNT IS GIVEN HERE ON PURPOSE: this docstring said "asked in exactly two
+    places" while there were seven, because a number in prose rots silently
+    every time somebody adds a caller and the invariant above does not.
+
+    WHY THERE IS NO LONGER A BIND OVERRIDE (infra#3420, retired here).
+    REVIVAL USES THE GROUP LEADER'S BIND AND NEVER THE CHARACTER'S OWN
+    (mod_overseer.cpp, RevivalHome reads group->GetLeaderGUID()), so every
+    death gathers all five wherever the leader is bound. That fact is
+    unchanged and is why this answer matters so much. What changed is the
+    binds: on 2026-09-07 the father was bound in Elwynn while the campaign ran
+    on Kalimdor, and a module-level HOMEWARD_LEAD pinned the lead to the one
+    character bound at the port town on the working continent. Read live on
+    2026-09-13, all five are bound in Ratchet (map 1, zone 392) within four
+    yards of each other, beside the same innkeeper. The override was selecting
+    one character for a property every one of them now has, so it could only
+    ever disagree with seniority and never improve on it. Deleted rather than
+    set to None: a constant that cannot change the answer is a third state for
+    the next reader to rule out. If a bind ever strands the head again, the
+    seam to re-add it is the `or` chain below, where three borrowers already
+    demonstrate the shape.
     """
     return (_train_traveller() or _errand_traveller()
             or _derived_errand_traveller()
-            or HOMEWARD_LEAD or bonds.head_of_family())
+            or bonds.head_of_family())
 
 
 def _protected_guids() -> dict:
