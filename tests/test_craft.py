@@ -458,25 +458,64 @@ class FirstAidAndCookingTests(unittest.TestCase):
         self.assertIsNotNone(recipe)
         self.assertEqual(recipe.spell_id, 3275)
 
-    def test_finds_heavy_linen_bandage_bracket(self):
-        recipe = craft.recipe_for(goals.SKILL_IDS["first aid"], 74)
-        self.assertIsNotNone(recipe)
-        self.assertEqual(recipe.spell_id, 3276)
+    def test_linen_bandage_runs_to_its_real_grey_value(self):
+        """59, not 39 (infra#3614).
 
-    def test_nothing_past_apprentice_first_aid_cap(self):
-        # 75 is Apprentice's own live-verified cap (character_skills.max) -
-        # a character sitting there needs a Journeyman trainer visit before
-        # anything else is worth casting, not a wasted recipe that grants no
-        # skill-up.
-        self.assertIsNone(craft.recipe_for(goals.SKILL_IDS["first aid"], 75))
+        `SkillLineAbility.dbc` from the running worldserver gives 3275 a grey
+        (TrivialSkillLineRankHigh) of 60, so 59 is the last value it can still
+        grant a point at. The old 39 was not a measurement of 3275 at all - it
+        was where Heavy Linen Bandage used to take over, and that recipe is a
+        trainer purchase this family cannot reach.
+        """
+        first_aid = goals.SKILL_IDS["first aid"]
+        for value in (1, 39, 40, 59):
+            with self.subTest(value=value):
+                recipe = craft.recipe_for(first_aid, value)
+                self.assertIsNotNone(recipe)
+                self.assertEqual(recipe.spell_id, 3275)
 
-    def test_finds_charred_wolf_meat_bracket(self):
-        recipe = craft.recipe_for(goals.SKILL_IDS["cooking"], 1)
-        self.assertIsNotNone(recipe)
-        self.assertEqual(recipe.spell_id, 2538)
+    def test_nothing_past_linen_bandages_grey(self):
+        # 60 is 3275's grey value: it stops granting skill-ups there, and no
+        # other First Aid recipe is reachable without a Journeyman trainer
+        # (infra#3614, mod-overseer#454). Better no errand than a cast that
+        # consumes cloth for nothing.
+        for value in (60, 74, 75):
+            with self.subTest(value=value):
+                self.assertIsNone(craft.recipe_for(goals.SKILL_IDS["first aid"], value))
 
-    def test_nothing_past_the_one_verified_cooking_bracket(self):
-        self.assertIsNone(craft.recipe_for(goals.SKILL_IDS["cooking"], 51))
+    def test_no_heavy_linen_bandage_bracket_at_any_value(self):
+        """3276 is a trainer purchase for every class this family has.
+
+        Its auto-learn SkillLineAbility row is ClassMask 0x20 - Death Knight
+        and nothing else. The all-class row (ClassMask 0x5DF) is
+        AcquireMethod 0, i.e. `trainer_spell` at ReqSkillRank 40 for 100
+        copper, and the nearest Alliance-usable First Aid trainer is 15,513
+        yards across an ocean `ResolveTravelTarget` refuses (infra#3732).
+        Naming it here produces a `craft_spell` DriveCraft drops as a planner
+        bug, which is how First Aid came to stall silently at 39.
+        """
+        first_aid = goals.SKILL_IDS["first aid"]
+        named = {r.spell_id for r in craft.RECIPES[first_aid]}
+        self.assertNotIn(3276, named)
+        for value in range(1, 76):
+            recipe = craft.recipe_for(first_aid, value)
+            if recipe is not None:
+                self.assertNotEqual(recipe.spell_id, 3276)
+
+    def test_cooking_has_no_reachable_bracket_at_all(self):
+        """Every Cooking recipe below the 75 cap needs a Cooking Fire.
+
+        Read off `SkillLineAbility.dbc` joined to `Spell.dbc` from the running
+        worldserver: all 181 abilities on skill 185, and every one that
+        creates an item and is reachable below 75 carries
+        `RequiresSpellFocus = 4`. DriveCraft casts in place, so an entry here
+        would sit refused for ever. The table carries none rather than one
+        that looks right and produces nothing.
+        """
+        self.assertEqual(craft.RECIPES[goals.SKILL_IDS["cooking"]], ())
+        for value in (1, 50, 51, 75):
+            with self.subTest(value=value):
+                self.assertIsNone(craft.recipe_for(goals.SKILL_IDS["cooking"], value))
 
     def test_craft_errand_finds_first_aid_for_a_character_assigned_no_primary_with_recipe(self):
         # Grug: assigned mining + blacksmithing (professions.ROSTER), neither
@@ -502,11 +541,39 @@ class FirstAidAndCookingTests(unittest.TestCase):
         spell_id = craft.craft_errand("Grug", {"mining": 8, "first aid": 0})
         self.assertEqual(spell_id, 0)
 
-    def test_craft_errand_falls_through_to_cooking_when_first_aid_is_capped(self):
+    def test_craft_errand_is_silent_once_first_aid_is_past_its_grey(self):
+        """There is nothing to fall through TO, and that is the honest answer.
+
+        This test used to assert a fall-through to Charred Wolf Meat (2538).
+        That recipe needed a Cooking Fire the system cannot light, so the
+        fall-through delivered a permanently refused cast dressed as progress.
+        0 means "no standing craft errand" - the schema's own sentinel - and a
+        caller that wants to know WHY asks
+        `professions.SECONDARY_BLOCKED['cooking']`.
+        """
         spell_id = craft.craft_errand(
-            "Grug", {"mining": 8, "first aid": 75, "cooking": 1}
+            "Grug", {"mining": 8, "first aid": 60, "cooking": 1}
         )
-        self.assertEqual(spell_id, 2538)
+        self.assertEqual(spell_id, 0)
+
+    def test_cooking_never_shadows_first_aid_in_the_secondary_fallthrough(self):
+        """The ordering defect the Cooking entry was hiding (infra#3614).
+
+        `craft_errand` walks `sorted(professions.SECONDARY)`, and "cooking"
+        sorts before "first aid". So for as long as Cooking carried a bracket
+        at value 1, every character reaching the secondary fall-through got
+        the focus-gated Cooking recipe and First Aid was never consulted at
+        all - the castable recipe was shadowed by the inert one.
+        """
+        self.assertLess(
+            sorted(professions.SECONDARY).index("cooking"),
+            sorted(professions.SECONDARY).index("first aid"),
+            "if this ever stops being true the shadowing below changes shape",
+        )
+        spell_id = craft.craft_errand(
+            "Grug", {"mining": 8, "first aid": 1, "cooking": 1}
+        )
+        self.assertEqual(spell_id, 3275)
 
 
 class RecipeTableDisciplineTests(unittest.TestCase):
@@ -639,6 +706,60 @@ class SpellFocusTests(unittest.TestCase):
                 "%d (%s)" % (spell, smelt_spells[spell]) for spell in clash),
         )
 
+    def test_no_cooking_recipe_needs_a_fire(self):
+        """The sibling of the smelt refusal, for focus 4 (infra#3614).
+
+        WHY THIS EXISTS SEPARATELY FROM `test_no_recipe_requires_a_spell_focus`
+        ABOVE, and it is the hole that let an inert recipe ship. That test
+        compares `recipe.focus` against 0 - which is to say it compares the
+        declared field against itself. `Recipe.focus` defaults to 0, so an
+        entry written before the field existed, or one added by someone who
+        never looked the spell up, declares 0 and passes while the worldserver
+        refuses it every twenty seconds. Charred Wolf Meat (2538) sat in this
+        table in exactly that state: declared 0, `Spell.dbc` says 4.
+
+        So this test pins ids, the way `test_no_recipe_is_a_smelt_spell` does,
+        because an id is a fact a future edit cannot accidentally re-declare.
+        Every value below was read off `Spell.dbc` and `SpellFocusObject.dbc`
+        pulled from the running worldserver, with the parse proved first
+        against this table's own anchor (2963 -> Reagent[0]=2589,
+        ReagentCount[0]=2).
+
+        37836 (Spice Bread) is on the list deliberately. infra#3732 called it
+        "the cheapest real point of secondary progress available" because the
+        family demonstrably owns it - and it is focus 4 like the rest, with a
+        yellow/grey of 30/40 that is shorter than the Charred Wolf Meat it
+        would have replaced. It is a worse version of the same mistake, and
+        this test is what says no to it.
+        """
+        fire_spells = {
+            2538: "Charred Wolf Meat", 2540: "Roasted Boar Meat",
+            3370: "Crocolisk Steak", 3371: "Blood Sausage",
+            3372: "Murloc Fin Soup", 3373: "Crocolisk Gumbo",
+            3376: "Curiously Tasty Omelet", 3377: "Gooey Spider Cake",
+            3397: "Big Bear Steak", 3398: "Hot Lion Chops",
+            6412: "Kaldorei Spider Kabob", 6413: "Scorpid Surprise",
+            6414: "Roasted Kodo Meat", 6415: "Fillet of Frenzy",
+            6416: "Strider Stew", 6417: "Dig Rat Stew",
+            7751: "Brilliant Smallfish", 7752: "Slitherskin Mackerel",
+            37836: "Spice Bread",
+        }
+        named = {
+            recipe.spell_id
+            for recipes in craft.RECIPES.values()
+            for recipe in recipes
+        }
+        clash = named & set(fire_spells)
+        self.assertFalse(
+            clash,
+            "RECIPES names %s, which require a Cooking Fire "
+            "(RequiresSpellFocus = 4, SpellFocusObject.dbc id 4). Nothing in "
+            "this system lights one. See craft.py's COOKING comment for the "
+            "single cast (spell 818, gameobject 29784, ten-yard radius) that "
+            "would." % sorted(
+                "%d (%s)" % (spell, fire_spells[spell]) for spell in clash),
+        )
+
     def test_the_module_records_the_forge_finding(self):
         # The measurements behind the refusal above are the expensive part of
         # infra#3738 and the reason it will not be re-litigated from a wiki.
@@ -647,6 +768,17 @@ class SpellFocusTests(unittest.TestCase):
         self.assertIn("3738", source)
         self.assertIn("RequiresSpellFocus", source)
         self.assertIn("2657", source)
+
+    def test_the_module_records_the_cooking_fire_finding(self):
+        # Same reason as the forge finding above: the campfire measurement
+        # (spell 818 -> gameobject 29784, type 8 / Data0 4 / Data1 10) is the
+        # expensive part of infra#3614, and it is what stops the next reader
+        # concluding that Cooking is merely missing a bracket.
+        import inspect
+        source = inspect.getsource(craft)
+        self.assertIn("818", source)
+        self.assertIn("29784", source)
+        self.assertIn("Cooking Fire", source)
 
 
 if __name__ == "__main__":

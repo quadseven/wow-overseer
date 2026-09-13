@@ -984,28 +984,51 @@ SECONDARY_RANK_REFUSAL = (
 # spell the caster does not have, and DriveCraft drops an unknown spell as a
 # planner bug. The headroom is zero, not 74 and not 50.
 #
-# THAT READING SURVIVES THE `character_spell` CAVEAT, which is why it is
-# trusted here. `character_spell` never receives a runtime-granted spell, so its
-# absences are usually worthless as evidence - three people were wrong about
-# exactly this today. It is load-bearing in THIS case because 37836 IS present:
-# the table demonstrably persists these characters' learned secondary spells, so
-# 3275's absence is a real absence rather than the save gap.
+# HALF OF THAT READING WAS WRONG, AND infra#3614 CORRECTED IT. The paragraph
+# above used to argue that the absence survives the `character_spell` caveat
+# "because 37836 IS present: the table demonstrably persists these characters'
+# learned secondary spells". That inference does not hold, and the control that
+# breaks it was available the whole time.
 #
-# WHY THEY DO NOT HAVE THEM. Spell.dbc and SkillLineAbility.dbc, pulled from the
-# running worldserver, say 3275 and 2538 are AcquireMethod 1 (auto-learn) at
-# ClassMask 0, so they SHOULD be granted with the rank. They were not - and
-# realm-wide the picture is inverted: 0 of 1175 characters with First Aid know
-# 3275, while 1008 know 3276 and 772 know 3277, both of which are ClassMask
-# 1503 / AcquireMethod 0, i.e. trainer purchases. Auto-learn has never fired on
-# this realm; only explicit grants are present. That is the signature of skills
-# written straight into `character_skills`, which bypasses
-# LearnSkillRewardedSpells.
+# 37836 is AcquireMethod 0 (an explicit grant - `trainer_spell` sells it at
+# ReqSkillRank 1 for 10 copper) and it is held by all 1013 bots identically. It
+# therefore shows that EXPLICIT grants persist. It says nothing whatever about
+# AcquireMethod 1 spells, which are a different write path. Run the same query
+# against two AcquireMethod 1 spells that this project has WATCHED BEING CAST:
 #
-# (craft.RECIPES also states that 3276 is "taught alongside Linen Bandage at
+#   2963 Bolt of Linen Cloth   AcquireMethod 1   0 rows of 457 tailors
+#   2330 Minor Healing Potion  AcquireMethod 1   0 rows of 950 alchemists
+#
+# Og cast 2963 and Ugga cast 2330 seven times on 2026-09-13, both logged by
+# mod-overseer, both with zero rows in `character_spell` - the observation
+# craft.py's own infra#3695 comment records with timestamps. So "auto-learn has
+# never fired on this realm" is false: AcquireMethod 1 spells fire and are
+# simply never written (`Player::_SaveSpells` skips an UNCHANGED spell). Their
+# absence from `character_spell` is the save gap, for everyone, always.
+#
+# WHAT SURVIVES, AND IT IS THE HALF THAT MATTERS. AcquireMethod 0 spells persist
+# perfectly: 1008 of 1008 characters at First Aid 45 or above hold 3276, with no
+# exceptions at any skill value, and the only five characters in the realm with
+# First Aid at 1 and no bandage row at all are this family. So 3276's absence is
+# REAL and 3275's absence is NOT, and the two need opposite readings:
+#
+#   3275 Linen Bandage   AcquireMethod 1, ClassMask 0     HELD (invisibly)
+#   818  Basic Campfire  AcquireMethod 1, ClassMask 0     HELD (invisibly)
+#   2538 Charred Wolf Meat  AcquireMethod 1, ClassMask 0  HELD (invisibly)
+#   3276 Heavy Linen Bandage  AcquireMethod 0 non-DK      GENUINELY ABSENT
+#
+# THE RULE, so the next reader does not have to re-derive it: read the spell's
+# `SkillLineAbility.AcquireMethod` BEFORE reading `character_spell`. A row for
+# an AcquireMethod 0 spell is trustworthy in both directions. For an
+# AcquireMethod 1 spell there will never be a row, so the table cannot answer
+# the question at all and only the worldserver's own refusal can.
+#
+# (craft.RECIPES also stated that 3276 is "taught alongside Linen Bandage at
 # Apprentice". It is not, for anybody in this family: the auto-learn row for
 # 3276 is ClassMask 32, which is Death Knight only. The all-class row is a
-# trainer purchase at ReqSkillRank 40 for 100 copper. Raised on infra#3614 and
-# infra#3693; craft.RECIPES is not this module's table to correct.)
+# trainer purchase at ReqSkillRank 40 for 100 copper. infra#3614 removed the
+# entry, widened Linen Bandage to its real grey of 60, and removed Cooking's
+# only bracket - see below for what that leaves reachable.)
 #
 # FISHING IS STUCK ON SOMETHING ELSE AGAIN, and the asymmetry matters. It has no
 # craft spell at all, nobody owns a Fishing Pole (item 6256, 23 copper, verified
@@ -1014,13 +1037,33 @@ SECONDARY_RANK_REFUSAL = (
 # `grep -i fishing` over the deployed source finds comments and one upstream
 # playerbots strategy name, and nothing that casts. infra#3733.
 #
-# THE ONE LEVER THAT ALREADY EXISTS is Spice Bread: the family owns it, and
-# craft.RECIPES does not carry it. Driving a recipe they already hold needs no
-# purchase mechanism and no C++ change, which makes it the cheapest real point
-# of secondary progress available. Named here rather than acted on, because
-# craft.RECIPES belongs to infra#3696/#3614.
+# SPICE BREAD WAS NAMED HERE AS "THE ONE LEVER THAT ALREADY EXISTS", AND IT IS
+# NOT ONE. The family does own 37836 and craft.RECIPES did not carry it, both
+# true. What was not checked is `Spell.dbc`: 37836 is `RequiresSpellFocus = 4`
+# ("Cooking Fire" in SpellFocusObject.dbc), and DriveCraft casts in place. Its
+# yellow/grey is 30/40, shorter than the Charred Wolf Meat it would have sat
+# beside. It would have been a second inert entry, not a lever;
+# `test_no_cooking_recipe_needs_a_fire` now names its id to keep it out.
+#
+# WHAT THE REAL LEVER TURNED OUT TO BE is one bracket boundary. Linen Bandage
+# (3275) is AcquireMethod 1 / ClassMask 0, so the family holds it invisibly per
+# the rule above, and its grey value is 60 - but craft.RECIPES capped it at 39
+# to hand over to a Heavy Linen Bandage nobody here can cast. Widening it to 59
+# and deleting the hand-off needs no trainer, no purchase, no focus and no C++,
+# and is the whole of First Aid's 58 points below.
+#
+# COOKING IS STILL ZERO AND IT IS A FOCUS PROBLEM, NOT A RECIPE PROBLEM. All 181
+# abilities on skill 185 were read out of SkillLineAbility.dbc and joined to
+# Spell.dbc: every one that creates an item and is reachable below 75 requires
+# focus 4. The family holds the reagents and the recipes; nothing lights a fire.
+# It is cheap to fix and it is C++ - spell 818 "Basic Campfire" (AcquireMethod 1,
+# ClassMask 0, no reagent, no focus of its own) summons gameobject 29784, which
+# `acore_world.gameobject_template` gives type 8 / Data0 4 / Data1 10, i.e. a
+# Cooking Fire with a ten-yard radius centred on the caster. One ordered pair of
+# casts in DriveCraft turns Cooking's 0 into 44. Filed, not faked.
 SECONDARY_HEADROOM = {
-    "first aid": 0,
+    # 1 -> 59, the last value Linen Bandage (3275) can grant a point at.
+    "first aid": 58,
     "cooking": 0,
     "fishing": 0,
 }
@@ -1031,15 +1074,17 @@ SECONDARY_HEADROOM = {
 # accepted story when not one of the three is actually blocked by the cap.
 SECONDARY_BLOCKED = {
     "first aid": (
-        "the family knows no bandage recipe at all - not Heavy Linen Bandage "
-        "(3276), which is a trainer purchase for every class but Death Knight, "
-        "and not even Linen Bandage (3275), which should have been granted with "
-        "the rank and was not"
+        "nothing below 60, which is Linen Bandage's (3275) grey value and the "
+        "58 points SECONDARY_HEADROOM now offers; above it every bandage is a "
+        "trainer purchase for every class but Death Knight, starting with "
+        "Heavy Linen Bandage (3276) at ReqSkillRank 40 for 100 copper, and no "
+        "First Aid trainer is reachable (infra#3614, mod-overseer#454)"
     ),
     "cooking": (
-        "the family does not know Charred Wolf Meat (2538), the only Cooking "
-        "recipe craft.RECIPES carries; it does know Spice Bread (37836), which "
-        "craft.RECIPES does not carry"
+        "every Cooking recipe reachable below 75 requires RequiresSpellFocus 4 "
+        "(a Cooking Fire) and nothing in this system lights one - the family "
+        "holds the recipes and the reagents; Spice Bread (37836) is focus 4 "
+        "too, so it is not the exception it was taken for (infra#3614)"
     ),
     "fishing": (
         "nobody owns a Fishing Pole (item 6256, 23 copper) and mod-overseer has "

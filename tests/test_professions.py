@@ -1005,12 +1005,53 @@ class SecondaryRankRefusalTest(unittest.TestCase):
             self.assertIn(professions.SECONDARY_RANK_REFUSAL,
                           professions.secondary_rank_refusal({"first aid": value}))
 
-    def test_no_secondary_earns_anything_today(self):
-        """Measured, not assumed. The family knows 2550/3273/7620/37836 and no
-        bandage recipe and no Charred Wolf Meat, so every bracket
-        craft.RECIPES carries for a secondary names a spell they cannot cast.
-        An earlier pass of this module said 74 and 50 here and was wrong."""
-        self.assertEqual({0}, set(professions.SECONDARY_HEADROOM.values()))
+    def test_first_aid_earns_the_points_below_linen_bandages_grey(self):
+        """58, and the number has now been wrong in both directions.
+
+        An earlier pass said 74 (Apprentice's cap minus one) and was too
+        optimistic. infra#3732 then said 0, reading `character_spell`'s silence
+        about Linen Bandage (3275) as a real absence - but 3275 is
+        SkillLineAbility AcquireMethod 1, and no AcquireMethod 1 spell is ever
+        written to that table for anybody (0 rows of 457 tailors for 2963, 0 of
+        950 alchemists for 2330, both of which were logged BEING CAST on
+        2026-09-13). The family holds it; its grey value is 60; 1 -> 59 is 58
+        points, with no trainer, no purchase and no spell focus.
+        """
+        self.assertEqual(58, professions.SECONDARY_HEADROOM["first aid"])
+
+    def test_cooking_and_fishing_still_earn_nothing(self):
+        """Two walls, neither of them the rank ceiling and neither the recipe.
+
+        Cooking has the recipes and the reagents and no fire: every ability on
+        skill 185 that creates an item below 75 is RequiresSpellFocus 4.
+        Fishing has no craft spell at all, no pole, and no drive.
+        """
+        self.assertEqual(0, professions.SECONDARY_HEADROOM["cooking"])
+        self.assertEqual(0, professions.SECONDARY_HEADROOM["fishing"])
+
+    def test_the_headroom_matches_what_the_recipe_table_actually_offers(self):
+        """The anti-drift pin between the two modules (infra#3614).
+
+        A headroom this module advertises that `craft.RECIPES` cannot deliver
+        is the exact shape of the failure this whole area keeps repeating:
+        a number that reads as progress with nothing behind it. So the claim
+        is checked against the table rather than restated.
+        """
+        import craft
+        import goals
+        for skill in ("first aid", "cooking"):
+            with self.subTest(skill=skill):
+                top = 0
+                for value in range(1, 76):
+                    if craft.recipe_for(goals.SKILL_IDS[skill], value) is not None:
+                        top = value
+                self.assertEqual(
+                    professions.SECONDARY_HEADROOM[skill],
+                    max(top - 1, 0),
+                    f"SECONDARY_HEADROOM says {skill} can earn "
+                    f"{professions.SECONDARY_HEADROOM[skill]} points, but "
+                    f"craft.RECIPES stops aiming at it above {top}",
+                )
 
     def test_it_says_which_wall_each_secondary_is_behind(self):
         """Three different walls, and none of them is the rank ceiling. That

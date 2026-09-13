@@ -263,11 +263,23 @@ GATHERED: dict[int, tuple[Reagent, ...]] = {
     # FIRST AID - the same Linen the bolts want, which is the competition
     # infra#3731 names between Tailoring and First Aid for one material.
     # Nothing here arbitrates that; both simply read as short at once, and one
-    # gathering trip answers both.
+    # gathering trip answers both. And it is not a hypothetical competition:
+    # live on 2026-09-13 the whole family held ONE Linen Cloth between them
+    # (Og's), because Og's own Bolt of Linen Cloth errand consumes two per cast
+    # of the exact item Linen Bandage consumes one of. One gathering trip does
+    # answer both, but a short trip answers whichever asks first.
     3275: (Reagent(2589, "Linen Cloth", 1),),
-    3276: (Reagent(2589, "Linen Cloth", 2),),
-    # COOKING - a beast kill drop, 19 creature_loot_template rows.
-    2538: (Reagent(2672, "Stringy Wolf Meat", 1),),
+    # 3276 Heavy Linen Bandage is deliberately absent, because craft.RECIPES no
+    # longer carries it: it is a trainer purchase for every class but Death
+    # Knight, and this family has no Death Knight. See craft.RECIPES' First Aid
+    # comment. Do not re-add it here without re-adding it there.
+    #
+    # COOKING is absent for a different reason and it is not a gap in this
+    # table: every Cooking recipe reachable below the family's 75 cap requires
+    # RequiresSpellFocus 4 ("Cooking Fire"), so craft.RECIPES carries none of
+    # them. Charred Wolf Meat (2538, 1x Stringy Wolf Meat 2672) was here and is
+    # removed with it. The reagent was never the blocker - see craft.RECIPES'
+    # Cooking comment for the one cast that unblocks the whole ladder.
     # ENGINEERING - the blasting powders only. Every other bracket consumes a
     # smelted bar; see the module comment above for why they are absent and
     # why that is a real ceiling rather than a gap in this table.

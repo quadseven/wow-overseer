@@ -612,63 +612,129 @@ RECIPES: dict = {
     # reagent, no vendor purchase, no SpellInfo::RequiresSpellFocus - and the
     # family already carries cloth from humanoid kills while questing.
     #
-    # Both entries below are taught TOGETHER the moment Apprentice First Aid
-    # is learned (which the family already has - that is what "1/75" means),
-    # so neither needs a trainer visit before `craft_errand` may aim a
-    # character at it. Capped at 74, one short of Apprentice's own 75 cap
-    # (character_skills.max, live-verified for all five): sitting exactly at
-    # 75/75 with nothing left in this bracket is a `craft_spell = 0` "go
-    # train Journeyman" state (professions.secondary_rank_errand), not a
-    # wasted cast on a recipe that has stopped granting skill-ups.
+    # ONLY ONE ENTRY, AND THE SECOND ONE WAS REMOVED RATHER THAN RE-BRACKETED
+    # (infra#3614). An earlier pass shipped Linen Bandage 1-39 and Heavy Linen
+    # Bandage 40-74 on the belief that both are "taught TOGETHER the moment
+    # Apprentice First Aid is learned". `SkillLineAbility.dbc`, pulled from the
+    # running worldserver and parsed with the anchor this table's header
+    # requires (2963 -> Reagent[0]=2589, ReagentCount[0]=2), says otherwise:
     #
-    # Spell ids and reagents cross-checked against two independent public
-    # WotLK/classic spell databases (wowhead.com and classicdb.ch, both
-    # returning the same id and reagent count for every entry below):
+    #   3275 Linen Bandage        skill 129  req 1   yellow 30  grey 60
+    #                             AcquireMethod 1 (auto-learn)  ClassMask 0
+    #   3276 Heavy Linen Bandage  skill 129  req 1   yellow 50  grey 100
+    #                             AcquireMethod 0 (TRAINER)     ClassMask 0x5DF
+    #                             skill 129  req 40  yellow 50  grey 100
+    #                             AcquireMethod 1 (auto-learn)  ClassMask 0x20
     #
-    #   Linen Bandage        spell 3275  item 1251  1x Linen Cloth (2589)
-    #   Heavy Linen Bandage  spell 3276  item 2581  2x Linen Cloth (2589)
+    # ClassMask 0x20 is 32, which is DEATH KNIGHT AND NOTHING ELSE, and 0x5DF
+    # is every other class - so the row that grants Heavy Linen Bandage for
+    # free is the one row this family can never match. Live: Grug is a Warrior,
+    # Grog a Paladin, Bork a Rogue, Og a Mage, Ugga a Priest (acore_characters,
+    # 2026-09-13). For all five, 3276 is `trainer_spell` at ReqSkillRank 40 for
+    # 100 copper - and the nearest Alliance-usable First Aid trainer is 15,513
+    # yards away across an ocean `ResolveTravelTarget` will not cross
+    # (infra#3732). Naming it here bought a `craft_spell` DriveCraft drops as a
+    # planner bug the moment the bracket is entered, so First Aid stalled dead
+    # at 39 with nothing saying why.
     #
-    # Wool Bandage/Heavy Wool Bandage (spells 3277/3278, verified the same
-    # way) are the next bracket - taught together at Journeyman - and are
-    # deferred to a follow-up issue until `professions.secondary_rank_errand`
-    # actually lands a character at that trainer, per the same "never name a
-    # spell the character does not yet hold" rule DriveCraft enforces
-    # (mod-overseer's own bad-id-vs-not-known distinction in DriveCraft would
-    # otherwise drop the errand as a "planner bug" the moment it were tried).
+    # THE BRACKET WAS ALSO SHORT BY TWENTY POINTS. 3275's own grey value is 60,
+    # not 40; 40 was only ever where the (unreachable) Heavy Linen Bandage was
+    # to take over. With 3276 gone, Linen Bandage runs to 59 - its last
+    # skill-granting value - and First Aid's headroom goes from 0 to 58 points
+    # with no trainer, no purchase, no spell focus and no C++ change. That is
+    # the whole of the reachable First Aid progression today; 60-75 needs the
+    # trainer, which infra#3614 owns and mod-overseer#454 unblocks.
+    #
+    # WHY 3275 IS TREATED AS HELD WHEN `character_spell` HAS NO ROW FOR IT, and
+    # this is the reading infra#3732 got backwards, so the control matters.
+    # That PR concluded "auto-learn has never fired on this realm" from 0 of
+    # 1175 First Aid holders having 3275 while 1008 have 3276, and inferred the
+    # family therefore knows no bandage recipe at all. The same query run
+    # against two spells this repo has WATCHED BEING CAST falsifies it:
+    #
+    #   2963 Bolt of Linen Cloth   AcquireMethod 1   0 rows of 457 tailors
+    #   2330 Minor Healing Potion  AcquireMethod 1   0 rows of 950 alchemists
+    #
+    # Og cast 2963 and Ugga cast 2330 seven times on 2026-09-13, both logged by
+    # mod-overseer, both with zero rows in `character_spell` - see this
+    # module's own infra#3695 comment above. So AcquireMethod 1 spells are
+    # simply never written to that table (`Player::_SaveSpells` skips an
+    # UNCHANGED spell), for anybody, ever; their absence is the save gap and
+    # not evidence. AcquireMethod 0 spells persist perfectly - 1008 of 1008
+    # characters at First Aid 45 or above hold 3276, with no exceptions - which
+    # is why 3276's absence for exactly the five family members at 1/75 IS
+    # real. The two classes of spell need opposite readings, and 37836 being
+    # present proves nothing about 3275: 37836 is AcquireMethod 0 and is held
+    # by all 1013 bots identically.
+    #
+    # Reagent verified the same way: 1x Linen Cloth (2589) -> 1x Linen Bandage
+    # (item 1251), RequiresSpellFocus 0.
     SKILL_IDS["first aid"]: (
-        Recipe(3275, "Linen Bandage", min_skill=1, max_skill=39,
-               note="1x Linen Cloth -> 1x Linen Bandage, taught with "
-                    "Apprentice First Aid"),
-        Recipe(3276, "Heavy Linen Bandage", min_skill=40, max_skill=74,
-               note="2x Linen Cloth -> 1x Heavy Linen Bandage, taught "
-                    "alongside Linen Bandage at Apprentice"),
+        Recipe(3275, "Linen Bandage", min_skill=1, max_skill=59,
+               note="1x Linen Cloth (2589) -> 1x Linen Bandage (item 1251), "
+                    "no focus needed. Auto-learned with Apprentice First Aid "
+                    "for every class (SkillLineAbility AcquireMethod 1, "
+                    "ClassMask 0); grey at 60, so 59 is the last value it can "
+                    "grant a point at. NOT 39 - that was Heavy Linen Bandage's "
+                    "old hand-off, and 3276 is a trainer purchase for every "
+                    "class but Death Knight"),
     ),
     # COOKING (infra#2757's Cooking/First Aid slice) - also SECONDARY, same
     # reasoning as First Aid above: every one of the five holds it at 1/75
     # already (character_skills skill 185, verified live 2026-09-12).
     #
-    # Cooking's own reagents are raw meat, a creature drop rather than a
-    # crafting material - closer to gathering than the cloth/ore-consuming
-    # trades - so v1 ships exactly the one bracket that needs neither a
-    # vendor purchase nor a recipe scroll: Charred Wolf Meat, taught with
-    # Apprentice Cooking (the rank the family already holds), reagent a
-    # common humanoid/beast-kill drop the family already gets from
-    # questing. Every bracket past this one in the wow-professions.com guide
-    # needs either vendor-bought meat (Bear Meat) or a purchased recipe (Crab
-    # Cake, Curiously Tasty Omelet, Roast Raptor, ...) - the same "buy a
-    # recipe scroll first" problem First Aid's Wool Bandage bracket has past
-    # this pass, and is deferred to the same follow-up issue rather than
-    # guessed at.
+    # COOKING HAS NO ENTRY AT ALL, AND THE ONE IT HAD WAS INERT (infra#3614).
+    # Charred Wolf Meat (2538) shipped here reading "taught with Apprentice
+    # Cooking", which is true - AcquireMethod 1, ClassMask 0, req 1. What it
+    # did not say, because nothing checked, is that `Spell.dbc` gives it
+    # `RequiresSpellFocus = 4`, and `SpellFocusObject.dbc` resolves 4 to
+    # "Cooking Fire". DriveCraft casts in place and walks nobody anywhere, so
+    # CheckCast refused it with SPELL_FAILED_REQUIRES_SPELL_FOCUS on every poll
+    # and logged a bare numeric SpellCastResult at INFO - the exact silent
+    # failure `Recipe.focus` was added to prevent (infra#3747), which it did
+    # not catch because the entry predates the field and defaulted to 0.
     #
-    # Cross-checked against two independent public WotLK/classic spell
-    # databases (wowhead.com and classicdb.ch, matching id and reagent):
+    # IT IS NOT ONE RECIPE, IT IS THE WHOLE SKILL LINE. All 181 abilities on
+    # skill 185 were read out of `SkillLineAbility.dbc` and joined to
+    # `Spell.dbc`. Every single one that creates an item and is reachable below
+    # the family's 75 cap carries `RequiresSpellFocus = 4`. The only focus-free
+    # rows are the six "Cooking" rank spells (which create nothing), spell 818,
+    # and three recipes whose yellow values are 100, 350 and 375 - far above 75
+    # and none of them auto-learned. There is no cooking-without-a-fire bracket
+    # to pick instead, at any skill value this family can reach.
     #
-    #   Charred Wolf Meat  spell 2538  item 2679  1x Stringy Wolf Meat
-    SKILL_IDS["cooking"]: (
-        Recipe(2538, "Charred Wolf Meat", min_skill=1, max_skill=50,
-               note="1x Stringy Wolf Meat -> 1x Charred Wolf Meat, taught "
-                    "with Apprentice Cooking"),
-    ),
+    # SO SPICE BREAD IS NOT THE WAY IN EITHER, and it was specifically proposed
+    # as one. infra#3732 named 37836 "the cheapest real point of secondary
+    # progress available" on the strength of the family already owning it. They
+    # do own it - it is the one secondary recipe `character_spell` records for
+    # all five, because it is AcquireMethod 0. But 37836 is
+    # `RequiresSpellFocus = 4` as well, and its bracket is yellow 30 / grey 40,
+    # which is WORSE than the Charred Wolf Meat it would replace (yellow 45 /
+    # grey 85). Adding it would have bought a second inert entry with a shorter
+    # ladder. `test_no_cooking_recipe_needs_a_fire` names its id so the
+    # proposal cannot land again without the drive that makes it castable.
+    #
+    # THE FIX IS SMALL AND IT IS NOT THIS TABLE'S. Unlike the Forge (focus 3),
+    # which is a world spawn a character must be walked to, a Cooking Fire is
+    # something the caster CONJURES WHERE IT STANDS: spell 818 "Basic Campfire"
+    # is on skill 185 at req 1, AcquireMethod 1, ClassMask 0, needs no reagent
+    # and no focus of its own, and summons gameobject 29784 - live in
+    # `acore_world.gameobject_template` as `type = 8`
+    # (GAMEOBJECT_TYPE_SPELL_FOCUS), `Data0 = 4` (Cooking Fire), `Data1 = 10`
+    # (radius, yards). The caster is standing at the centre of its own ten-yard
+    # radius, so no travel, no gameobject index and no proximity race is
+    # involved - the whole of what Cooking needs is for something to cast 818
+    # before the recipe and let the fire stand. That is one ordered pair of
+    # casts in DriveCraft, filed separately rather than faked from here by
+    # naming a spell that cannot go off.
+    #
+    # WHAT DOES NOT BLOCK IT, recorded so the next reader does not re-derive
+    # it: the reagents are fine. 1x Stringy Wolf Meat (2672) -> 1x Charred Wolf
+    # Meat (2679) and 1x Chunk of Boar Meat (769) -> Roasted Boar Meat (2681)
+    # are both ordinary beast drops at the family's level, both AcquireMethod 1
+    # ClassMask 0, both yellow 45 / grey 85. The moment a fire can be lit,
+    # Cooking is a 44-point ladder with no trainer and no purchase.
+    SKILL_IDS["cooking"]: (),
     SKILL_IDS["engineering"]: (
         Recipe(3918, "Rough Blasting Powder", min_skill=1, max_skill=30,
                note="1x Rough Stone -> 1x Rough Blasting Powder (item 4357)"),
