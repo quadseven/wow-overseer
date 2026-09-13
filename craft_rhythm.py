@@ -212,6 +212,23 @@ class Reagent:
 #   the family roaming for an item the world will never drop. Filed as its own
 #   gap rather than papered over here.
 #
+#   THAT GAP NOW HAS AN ANSWER, AND IT DOES NOT CHANGE THIS TABLE (infra#3738).
+#   The obvious fix was to name a smelt spell in `craft_spell` and let
+#   DriveCraft cast it, since smelting is the same SPELL_EFFECT_CREATE_ITEM
+#   shape as everything else here. It was checked against the running
+#   worldserver's own Spell.dbc and it does not work: EVERY smelt spell in the
+#   game carries `RequiresSpellFocus = 3`, which SpellFocusObject.dbc resolves
+#   to "Forge", and DriveCraft casts in place without walking anyone to one. So
+#   the bars stay absent from this table and their recipes stay UNJUDGED, for
+#   exactly the reason they already were: a walk still cannot produce a bar. It
+#   is now a forge problem rather than an unexamined one, and the ORE that
+#   feeds it deliberately stays out of this table too - adding Copper Ore here
+#   would make Grog read as SHORT and send the whole family mining for
+#   something he still could not turn into a bar, which is the deadlock
+#   `rhythm`'s own UNJUDGED rule exists to prevent. The ore entries belong in
+#   the same change that lands the forge aim, not before it. See craft.py's
+#   "MINING AND SMELTING ARE NOT IN THIS TABLE" comment for the measurements.
+#
 #   PURELY VENDOR-SUPPLIED RECIPES. There are none in craft.RECIPES today -
 #   every recipe that names a bought reagent also names a gathered one - but if
 #   one is ever added, it belongs to craft_supply and not here, and the absence

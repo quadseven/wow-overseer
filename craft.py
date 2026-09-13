@@ -155,6 +155,29 @@ class Recipe:
     test in test_craft.py holds every `repeatable=False` entry to that
     single-point shape so a future entry cannot reintroduce a wide "craft one
     of these sixty times" bracket for a tool by mistake.
+
+    `focus` IS `Spell.dbc`'s OWN `RequiresSpellFocus`, AND IT IS THE ONE FACT
+    THIS TABLE USED TO CARRY ONLY AS PROSE (infra#3738). Every entry's `note`
+    has always said "no focus needed", and that claim is load-bearing -
+    DriveCraft casts in place and does NOT walk anyone to a forge or an anvil,
+    so a recipe that needs one sits refused on every poll for ever
+    (SPELL_FAILED_REQUIRES_SPELL_FOCUS) rather than eventually succeeding. But
+    a claim that lives only in free prose is a claim nothing checks, and
+    infra#3738 was filed proposing to add exactly such a recipe on the
+    strength of a spell id that turned out to name a different spell. So the
+    number moved into the dataclass, where
+    `test_no_recipe_requires_a_spell_focus` holds the WHOLE table to
+    `focus == 0` on every pull request.
+
+    The value is a `SpellFocusObject.dbc` id rather than a boolean, because
+    the eventual fix is per-object rather than a flag: 1 is Anvil, 2 is Loom,
+    3 is Forge (read out of the running worldserver's own
+    SpellFocusObject.dbc, see the SMELTING comment below). Once something in
+    this system can stand a character next to a named focus object, the
+    recipes that need one become addable by setting this field and teaching
+    the caller to honour it; until then a non-zero value fails the test, which
+    is precisely the refusal that should happen. Zero means "castable
+    anywhere", which is every entry below.
     """
 
     spell_id: int
@@ -163,6 +186,7 @@ class Recipe:
     max_skill: int
     note: str = ""
     repeatable: bool = True
+    focus: int = 0
 
 
 # One profession, one verified entry, per the module docstring's own
@@ -425,6 +449,132 @@ class Recipe:
 # numbers" convention the Blacksmithing table already documents) rather than
 # stretching Linen Belt across a range something else already legitimately
 # covers.
+# ---------------------------------------------------------------------------
+# MINING AND SMELTING ARE NOT IN THIS TABLE, AND THE REASON IS A FORGE
+# (infra#3738, part of infra#3731).
+#
+# This is the gap that caps Grog's Engineering at skill 31. From that value on,
+# every Engineering bracket above except the four plain blasting powders
+# consumes a SMELTED BAR, and infra#3738 measured that Copper, Steel, Mithril
+# and Thorium Bar have zero `npc_vendor` rows and no loot source anywhere on
+# this world. Re-counted here and confirmed: Copper Bar (2840) has 0 vendor, 0
+# creature-loot and 0 gameobject-loot rows. A bar is smelted from ore by the
+# Mining skill, and nothing in this system smelts.
+#
+# THE EXACT COUNT, RECOUNTED RATHER THAN QUOTED. infra#3738 says "12 of the 19
+# Engineering entries". The table above holds EIGHTEEN Engineering entries, not
+# nineteen, and classifying each one's reagents against Spell.dbc gives ELEVEN
+# that consume a bar directly: Handful of Copper Bolts, Arclight Spanner and
+# Rough Copper Bomb (Copper Bar), Silver Contact (Silver), Bronze Tube
+# (Bronze), Gyromatic Micro-Adjustor (Steel), Mithril Tube, Unstable Trigger
+# and Mithril Casing (Mithril), Thorium Widget and Thorium Tube (Thorium).
+#
+# A TWELFTH IS BLOCKED TRANSITIVELY, which is where the issue's 12 comes from
+# and is worth spelling out because it is the only one not obvious from its own
+# reagent line: Hi-Explosive Bomb (12619) names no bar itself, but both of its
+# crafted reagents - Mithril Casing and Unstable Trigger - are bar-gated, so it
+# cannot be reached either. That leaves SIX brackets genuinely castable today
+# (Rough, Coarse, Heavy, Solid and Dense Blasting Powder, plus Coarse Dynamite,
+# which runs on Coarse Blasting Powder and Linen Cloth). The issue's own list of
+# survivors names only the four plain powders and misses Rough Blasting Powder
+# and Coarse Dynamite.
+#
+# So: 12 of 18 unreachable, 6 reachable, and the ceiling is real.
+#
+# infra#3738 PROPOSED A PLANNER-ONLY FIX AND IT WOULD NOT HAVE WORKED. Its
+# words: "Smelt Copper is spell 2659 ... the same SPELL_EFFECT_CREATE_ITEM
+# shape DriveCraft already handles - so this may be a planner change rather
+# than a C++ one. Worth checking whether `craft_spell` can simply name 2659".
+# It was checked, against the running worldserver's own `Spell.dbc`
+# (/azerothcore/env/dist/data/dbc/Spell.dbc, md5-verified byte-identical to the
+# copy the server loaded, 49839 records x 234 fields), with the parse proved
+# first against infra#3689's known-good anchor: spell 2963 resolves to
+# Reagent[0]=2589, ReagentCount[0]=2. Two things came back, and both of them
+# kill the proposal:
+#
+#   SPELL 2659 IS NOT SMELT COPPER. It is SMELT BRONZE: 1x Copper Bar (2840)
+#   plus 1x Tin Bar (3576) -> 1x Bronze Bar (2841). Naming it would have aimed
+#   Grog at a recipe consuming the very bar he cannot make, which is the
+#   ceiling one rung higher up rather than a way past it. Smelt Copper is
+#   spell 2657 (1x Copper Ore 2770 -> 1x Copper Bar 2840). Recorded rather
+#   than quietly corrected, because the failure mode is the lesson this table's
+#   header already teaches twice: a spell id that "everyone knows" is still a
+#   guess until the server's own DBC agrees.
+#
+#   EVERY SMELT SPELL IN THE GAME REQUIRES A FORGE. All twenty-odd of them,
+#   read straight off Spell.dbc: `RequiresSpellFocus = 3`, and
+#   SpellFocusObject.dbc resolves 3 to "Forge" (1 is Anvil, 2 is Loom). Smelt
+#   Dark Iron wants focus 543 ("Black Forge") and Smelt Jagged Shards 1580
+#   ("Malykriss Furnace"), which are worse, not better. There is no
+#   forge-free smelt recipe at any skill value, so this is not a bracket
+#   problem that a different pick could dodge.
+#
+# WHAT A FORGE ACTUALLY COSTS, MEASURED RATHER THAN ASSUMED. The requirement is
+# proximity, not possession: `acore_world.gameobject_template` rows for the
+# Forge object carry `type = 8` (GAMEOBJECT_TYPE_SPELL_FOCUS), `Data0 = 3` (the
+# focus id CheckCast matches) and `Data1 = 10` (the radius, in yards). So a
+# character must be standing within ten yards of a spawned forge at the moment
+# of the cast.
+#
+# TWO CHEAP-LOOKING WAYS OUT WERE TRIED AND BOTH FAIL, which is why this is
+# filed as a gap rather than shipped:
+#
+#   "THEY ALREADY STAND NEAR ONE." Very nearly true, and that is the trap. The
+#   family camps in Gadgetzan, and forge spawn guid 17240 (entry 141838) sits
+#   at (-7198.8, -3766.4, 9.2) on map 1. Measured against `characters`: Grug
+#   9.02 yards, Grog 9.05, Og 10.01, Ugga 11.65. Two are inside the ten-yard
+#   radius, one is on the boundary and one is outside, and those coordinates
+#   are up to fifteen minutes stale (PlayerSaveInterval = 900000). Worse, the
+#   playerbot AI wanders even on a standing job - the same fact recorded for
+#   job='rest' elsewhere in this project - so a character parked at a forge
+#   does not stay parked. Shipping on this would buy intermittent success that
+#   looks like a flaky bug, which is strictly worse than an honest refusal.
+#
+#   "AIM THEM AT A REPAIR NPC." Blacksmith and repair vendors do tend to stand
+#   at forges, `repair` is already a keyword in `travel.ROLES`, and in
+#   Gadgetzan it would even work: Krinkle Goodsteel (entry 5411, npcflag 4227,
+#   UNIT_NPC_FLAG_REPAIR set) stands 3.8 yards from that forge. It does not
+#   generalise. Counted across both continents: of 947 repair-flagged creature
+#   spawns on maps 0 and 1, exactly 45 stand within ten yards of a forge. That
+#   is 4.8%, so the keyword resolves to the wrong place nineteen times in
+#   twenty. `travel.ROLES` is also a test-enforced mirror of mod-overseer's own
+#   `TravelRoles()`, so a new keyword cannot be added from this side at all.
+#
+# THE ROUTE THAT DOES WORK, AND IT IS SMALLER THAN infra#3617 CONCLUDED. That
+# issue investigated the sibling question for Blacksmithing's anvil and
+# concluded that walking to a focus object "means indexing GameObject spawns
+# the same way creatures are indexed today - a new second index". That is not
+# so, and the counter-example is already shipped: `_guild_bank_once` walks the
+# leader to a Guild Vault, which is a GAMEOBJECT and not a creature, by
+# querying `acore_world.gameobject JOIN gameobject_template` for the nearest
+# spawn on the character's own map and handing its position to
+# `travel.ground_aim`, which produces the `at:<map>:<x>,<y>,<z>` form that
+# `ResolveTravelTarget` already accepts. That path never touches the
+# creature-only `_travelSpawns` index at all. A forge aim is the same shape
+# with `gt.type = 8 AND gt.Data0 = 3`, and it fits the column: the Gadgetzan
+# forge renders as `at:1:-7198.8,-3766.4,9.2`, 24 of the 32 characters
+# `travel_npc` allows.
+#
+# AND SMELTING IS THE ONE CASE THAT NEEDS ONLY THAT HALF. infra#3617 left the
+# forge work parked because every Blacksmithing recipe behind it ALSO needs a
+# Blacksmith Hammer equipped (`EquippedItemClass`), which is an unsolved
+# "swap a tool in and put the weapon back" problem, and it noted that the
+# travel half "could ship alone ... for Anvil-only recipes if any existed
+# without a tool requirement (none do here)". Smelting is that case. Every
+# smelt spell read above carries `EquippedItemClass = -1`: no tool, no
+# gear-swap, nothing but the ten yards. So the forge aim unblocks the whole
+# smelting chain on its own, with the hammer question still parked.
+#
+# WHAT IS DELIBERATELY NOT DONE HERE. No Mining entry is added to RECIPES and
+# no smelt spell is named anywhere in this module. `craft_errand` only ever
+# considers `professions.CRAFTING`, and Mining is a GATHERING trade, so the
+# table has no shape for smelting even if the forge existed - where a
+# skill-up that consumes ore and feeds a crafter belongs, relative to
+# `craft_rhythm`'s gather/craft alternation, is a design question the forge
+# issue owns rather than one to answer in a comment. The single thing this
+# pass adds to the running system is `Recipe.focus` and the test that holds
+# every entry to zero, so that the next reader who finds this gap cannot close
+# it the way infra#3738 proposed without the test saying no.
 RECIPES: dict = {
     SKILL_IDS["tailoring"]: (
         Recipe(2963, "Bolt of Linen Cloth", min_skill=1, max_skill=60,

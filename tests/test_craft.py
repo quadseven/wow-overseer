@@ -578,5 +578,76 @@ class NoForecastOfTheWorldserversAnswer(unittest.TestCase):
         self.assertIn("_SaveSpells", source)
 
 
+class SpellFocusTests(unittest.TestCase):
+    """No recipe in this table may need a forge, an anvil or a loom.
+
+    WHY THIS IS A TEST AND NOT A COMMENT (infra#3738). DriveCraft casts in
+    place: it does not walk anyone to a spell-focus gameobject, and the core's
+    own CheckCast refuses a recipe that needs one with
+    SPELL_FAILED_REQUIRES_SPELL_FOCUS. mod-overseer does not clear the errand
+    on that refusal and does not distinguish it from a cooldown in the log - it
+    records a bare numeric SpellCastResult at INFO and retries every twenty
+    seconds - so a focus-gated entry added here would not fail loudly. It would
+    sit in the table looking correct and produce nothing, for ever, while the
+    log said something that reads like a transient.
+
+    craft.py has always asserted "no focus needed" in each entry's `note`, but
+    a note is free prose the module's own docstring says is "for a human
+    reading this table, not for anything the code checks". infra#3738 then
+    proposed adding a smelt recipe, every one of which requires a Forge
+    (Spell.dbc RequiresSpellFocus = 3). That is the change this class exists to
+    refuse until something can stand a character next to one.
+    """
+
+    def test_no_recipe_requires_a_spell_focus(self):
+        for skill_id, recipes in craft.RECIPES.items():
+            for recipe in recipes:
+                with self.subTest(skill=skill_id, recipe=recipe.name):
+                    self.assertEqual(
+                        recipe.focus, 0,
+                        f"{recipe.name} (spell {recipe.spell_id}) declares "
+                        f"focus={recipe.focus}, so CheckCast will refuse it "
+                        "unless the character is standing next to that "
+                        "SpellFocusObject. DriveCraft does not walk anyone "
+                        "anywhere. Land the forge/anvil aim first - see "
+                        "craft.py's MINING AND SMELTING comment - then teach "
+                        "the caller to honour this field.",
+                    )
+
+    def test_no_recipe_is_a_smelt_spell(self):
+        # The specific ids infra#3738 proposed, plus the whole classic smelt
+        # chain around them, read off the running worldserver's Spell.dbc.
+        # 2659 is Smelt Bronze, NOT Smelt Copper as that issue states; Smelt
+        # Copper is 2657. Both are Forge-gated, as is every other entry here.
+        smelt_spells = {
+            2657: "Smelt Copper", 2658: "Smelt Silver", 2659: "Smelt Bronze",
+            3304: "Smelt Tin", 3307: "Smelt Iron", 3308: "Smelt Gold",
+            3569: "Smelt Steel", 10097: "Smelt Mithril",
+            10098: "Smelt Truesilver", 16153: "Smelt Thorium",
+        }
+        named = {
+            recipe.spell_id
+            for recipes in craft.RECIPES.values()
+            for recipe in recipes
+        }
+        clash = named & set(smelt_spells)
+        self.assertFalse(
+            clash,
+            "RECIPES names %s, which are Forge-gated smelt spells "
+            "(RequiresSpellFocus = 3). See craft.py's MINING AND SMELTING "
+            "comment." % sorted(
+                "%d (%s)" % (spell, smelt_spells[spell]) for spell in clash),
+        )
+
+    def test_the_module_records_the_forge_finding(self):
+        # The measurements behind the refusal above are the expensive part of
+        # infra#3738 and the reason it will not be re-litigated from a wiki.
+        import inspect
+        source = inspect.getsource(craft)
+        self.assertIn("3738", source)
+        self.assertIn("RequiresSpellFocus", source)
+        self.assertIn("2657", source)
+
+
 if __name__ == "__main__":
     unittest.main()
