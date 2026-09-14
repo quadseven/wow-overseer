@@ -336,13 +336,15 @@ class GuildBankOnceLogsWhetherTheLeaderWasActuallyAimedTests(unittest.TestCase):
 
     def setUp(self):
         source = BRIDGE.read_text(encoding="utf-8")
+        self.source = source
         start = source.index("async def _guild_bank_once(")
         end = source.index("\n    async def ", start + 1)
         self.body = source[start:end]
 
     def test_the_aim_result_is_captured_not_discarded(self):
-        self.assertIn("aimed = await asyncio.to_thread(", self.body)
-        self.assertIn("_write_trade_errand", self.body)
+        self.assertIn("aimed = await self._claim_town_slot(", self.body)
+        self.assertIn('self._claim_town_slot("guild bank", leader, vault.aim)',
+                      self.body)
 
     def test_a_refused_aim_is_logged(self):
         """Still logged, but the condition gained a second arm (infra#3702):
@@ -356,8 +358,22 @@ class GuildBankOnceLogsWhetherTheLeaderWasActuallyAimedTests(unittest.TestCase):
     def test_the_refusal_says_what_holds_the_column(self):
         """"already on another errand" cannot tell a pass starved by a LIVE
         errand from one starved by an errand left behind, and that difference
-        is the whole diagnosis. The holder is read and logged."""
-        self.assertIn("_current_travel_npc", self.body)
+        is the whole diagnosis. The holder is read and logged.
+
+        SAID BY THE TOWN SLOT NOW, AND SAID BETTER (infra#3703). This pass used
+        to read `_current_travel_npc` itself just to name the holder; the slot
+        reads it once for every pass, names the holder AND how long it has held
+        the column, how much lease is left and who is queued behind it. What
+        this pins is that the sentence did not go away with the local read: the
+        pass still reports its own cost, and `_claim_town_slot` still reports
+        the holder."""
+        self.assertIn("guild bank: leader=%s could not be aimed at the vault",
+                      self.body)
+        door = self.source[self.source.index(
+            "    async def _claim_town_slot("):]
+        door = door[:door.index("    async def _aim_at_reagent_vendor(")]
+        self.assertIn("_current_travel_npc", door)
+        self.assertIn("townslot.report(decision)", door)
 
     def test_nothing_is_queued_when_no_vault_can_be_reached(self):
         """A deposit queued when nobody can stand at a vault has exactly one

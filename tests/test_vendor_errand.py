@@ -166,10 +166,17 @@ class TheBridgeCanActuallyHandTheColumnBack(unittest.TestCase):
 
     def test_it_refuses_anything_that_is_not_an_economy_errand(self):
         """mod-overseer#438's bug, self-inflicted one file over: blanking a
-        standing profession errand because an economy pass asked."""
+        standing profession errand because an economy pass asked.
+
+        THE GUARD MOVED TO `_is_economy_aim` IN infra#3703 AND THE FENCE DID
+        NOT. It asks `_retaskable_from` - the same tuple the WRITE's WHERE
+        clause is built from - so a ground aim is now releasable, because it
+        was always writable down the same branch. What is still refused is the
+        thing this test exists for, and tests/test_town_slot.py runs the real
+        predicate against `profession trainer` rather than reading it."""
         code = _code("def _release_trade_errand(")
-        self.assertIn("if travel_npc not in ECONOMY_ERRANDS:", code)
-        self.assertLess(code.index("ECONOMY_ERRANDS"), code.index("_connect()"))
+        self.assertIn("if not _is_economy_aim(travel_npc):", code)
+        self.assertLess(code.index("_is_economy_aim"), code.index("_connect()"))
 
     def test_the_guard_covers_every_economy_errand_and_nothing_else(self):
         """The release is allowed exactly where the write is allowed."""
@@ -286,7 +293,7 @@ class ThePassAimsOnceAndReleasesLast(unittest.TestCase):
         """Unchanged from before, and for the same reason the bank pass gives:
         a queue written before the walk is a queue of refusals."""
         body = self._pass()
-        self.assertLess(body.index("_write_trade_errand"),
+        self.assertLess(body.index("_claim_town_slot"),
                         body.index("_insert_sell"))
 
     def test_the_errand_is_settled_above_every_early_return(self):
@@ -312,11 +319,16 @@ class ThePassAimsOnceAndReleasesLast(unittest.TestCase):
 
     def test_the_errand_goes_to_the_family_leader_and_still_only_one(self):
         """infra#3553. Aiming a follower is an update that moves nobody and
-        costs it fifteen seconds of its errand budget every poll."""
+        costs it fifteen seconds of its errand budget every poll.
+
+        SINCE infra#3703 THE AIM GOES THROUGH `_claim_town_slot`, which reads
+        `_head_now` itself and refuses anybody who is not the leader, so the
+        rule is enforced rather than remembered. Still exactly one aim, and
+        still onto `leader`."""
         body = _statements("    async def _vendor_once(")
-        self.assertEqual(body.count("_write_trade_errand"), 1)
+        self.assertEqual(body.count("_claim_town_slot"), 1)
         self.assertEqual(self._settle().count("_release_trade_errand"), 1)
-        self.assertIn('travel_npc="vendor"', body)
+        self.assertIn('self._claim_town_slot("economy", leader, "vendor")', body)
 
     def test_the_release_names_the_same_keyword_it_aimed_with(self):
         """Releasing `repair` because a vendor pass finished would take the
@@ -336,7 +348,7 @@ class ThePassAimsOnceAndReleasesLast(unittest.TestCase):
         any aim, or the family is walked to town on no pressure at all."""
         body = self._pass()
         self.assertLess(body.index("family_town_run_needed"),
-                        body.index("_write_trade_errand"))
+                        body.index("_claim_town_slot"))
         self.assertLess(body.index("family_town_run_needed"),
                         body.index("_insert_sell"))
 

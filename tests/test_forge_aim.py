@@ -287,7 +287,7 @@ class TheCallerIsWiredAndCannotLatchTheColumn(unittest.TestCase):
         read or written, so on every pass where no miner is smelting this
         competes for `travel_npc` not at all."""
         first = self.code.index("_forge_errands")
-        self.assertLess(first, self.code.index("_write_trade_errand"))
+        self.assertLess(first, self.code.index("_claim_town_slot"))
         self.assertLess(first, self.code.index("_head_now"))
         self.assertIn("if not smelters:\n            return", self.code)
 
@@ -330,10 +330,22 @@ class TheCallerIsWiredAndCannotLatchTheColumn(unittest.TestCase):
     def test_it_goes_through_the_one_sanctioned_writer(self):
         """`_write_trade_errand` is the only thing in this process that writes
         `travel_npc`, and its guard is what keeps an economy aim from blanking
-        an outstanding learn errand (mod-overseer#438)."""
-        self.assertIn("_write_trade_errand", self.code)
+        an outstanding learn errand (mod-overseer#438).
+
+        SINCE infra#3703 THE PASS REACHES IT THROUGH `_claim_town_slot`, which
+        is the arbitration every town errand now goes through, and which writes
+        through that same one writer. Both halves are pinned here: this pass may
+        not write the column itself, and the door it does use may not start
+        writing the column some other way."""
+        self.assertIn("self._claim_town_slot(", self.code)
+        self.assertNotIn("_write_trade_errand", self.code)
         self.assertNotIn("UPDATE overseer_roster", self.code)
         self.assertNotIn("travel_npc =", self.code)
+        door = self.source[self.source.index(
+            "    async def _claim_town_slot("):]
+        door = door[:door.index("    async def _aim_at_reagent_vendor(")]
+        self.assertIn("_write_trade_errand", door)
+        self.assertNotIn("UPDATE overseer_roster", door)
 
     def test_a_ground_aim_already_takes_the_guarded_branch(self):
         """So no change to `_retaskable_from` was needed, and none was made:
@@ -351,7 +363,7 @@ class TheCallerIsWiredAndCannotLatchTheColumn(unittest.TestCase):
         journey that is already over."""
         self.assertIn("travel.within_focus(spawn)", self.code)
         self.assertLess(self.code.index("travel.within_focus(spawn)"),
-                        self.code.index("_write_trade_errand"))
+                        self.code.index("_claim_town_slot"))
 
     def test_every_way_out_says_which_characters_it_is_costing(self):
         """DriveCraft cannot say why a focused cast failed, so this is the only

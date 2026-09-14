@@ -199,8 +199,8 @@ class TheBridgeCanFindAnErrandItIsNotCarryingItself(unittest.TestCase):
         of rows carrying a profession keyword cannot go on to blank one
         (mod-overseer#438)."""
         code = _code("def _errand_holders(")
-        self.assertIn("if travel_npc not in ECONOMY_ERRANDS:", code)
-        self.assertLess(code.index("ECONOMY_ERRANDS"), code.index("_connect()"))
+        self.assertIn("if not _is_economy_aim(travel_npc):", code)
+        self.assertLess(code.index("_is_economy_aim"), code.index("_connect()"))
 
     def test_a_world_without_the_column_yields_nobody(self):
         """"Nobody is carrying this" is the direction that releases nothing,
@@ -220,9 +220,15 @@ class TheKeywordGuardOnTheReleaseIsUntouched(unittest.TestCase):
         self.assertIn("WHERE name = %s AND travel_npc = %s", code)
 
     def test_it_still_refuses_anything_outside_the_economy(self):
+        """infra#3703 renamed the question to `_is_economy_aim` and widened it
+        to the aims the WRITE already treated as economy - a ground aim, a bare
+        creature entry - because the two guards disagreeing is what left a
+        vault aim with no way back out of the column. The refusal itself is
+        unchanged and is exercised against a real trainer keyword in
+        tests/test_town_slot.py."""
         code = _code("def _release_trade_errand(")
-        self.assertIn("if travel_npc not in ECONOMY_ERRANDS:", code)
-        self.assertLess(code.index("ECONOMY_ERRANDS"), code.index("_connect()"))
+        self.assertIn("if not _is_economy_aim(travel_npc):", code)
+        self.assertLess(code.index("_is_economy_aim"), code.index("_connect()"))
 
     def test_it_still_writes_the_column_back_to_empty_and_nothing_else(self):
         code = _code("def _release_trade_errand(")
@@ -360,9 +366,9 @@ class TheSweepIsActuallyReached(unittest.TestCase):
         cannot touch the same row in the same cycle."""
         body = self._pass()
         self.assertLess(body.index("_release_stranded_vendor_errands"),
-                        body.index("_write_trade_errand"))
-        self.assertEqual(body.count("_write_trade_errand"), 1)
-        self.assertIn('travel_npc="vendor"', body)
+                        body.index("_claim_town_slot"))
+        self.assertEqual(body.count("_claim_town_slot"), 1)
+        self.assertIn('self._claim_town_slot("economy", leader, "vendor")', body)
 
 
 class TheStrandingIsActuallyBroken(unittest.TestCase):

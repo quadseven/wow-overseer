@@ -344,11 +344,14 @@ class TheBridgeCanActuallyHandBothColumnsBack(unittest.TestCase):
         names, which is worse than the latch it replaces because it looks
         fixed."""
         town = _statements("    async def _settle_town_errand(")
-        self.assertIn('travel_npc="repair"', town)
-        self.assertEqual(town.count("_write_trade_errand"), 1)
+        self.assertIn('self._claim_town_slot("towntrip", leader, "repair")', town)
+        self.assertIn('_release_trade_errand, leader, "repair"', town)
+        self.assertEqual(town.count("_claim_town_slot"), 1)
         bank_settle = _statements("    async def _settle_bank_errand(")
-        self.assertIn('travel_npc="banker"', bank_settle)
-        self.assertEqual(bank_settle.count("_write_trade_errand"), 1)
+        self.assertIn('self._claim_town_slot("bank", leader, "banker")',
+                      bank_settle)
+        self.assertIn('_release_trade_errand, leader, "banker"', bank_settle)
+        self.assertEqual(bank_settle.count("_claim_town_slot"), 1)
 
     def test_both_keywords_are_economy_errands(self):
         """`_release_trade_errand` refuses anything outside ECONOMY_ERRANDS
@@ -369,7 +372,7 @@ class TheBridgeCanActuallyHandBothColumnsBack(unittest.TestCase):
                        "    async def _settle_bank_errand("):
             with self.subTest(settle=settle):
                 code = _statements(settle)
-                self.assertIn("aimed = await asyncio.to_thread(", code)
+                self.assertIn("aimed = await self._claim_town_slot(", code)
                 self.assertIn("if not aimed:", code)
 
 
@@ -565,24 +568,68 @@ class TheGuildBankErrandIsNotOneOfThese(unittest.TestCase):
     AND `_release_trade_errand` COULD NOT RELEASE ONE ANYWAY: it refuses any
     keyword outside ECONOMY_ERRANDS, and a ground aim is not in it - correctly,
     because that tuple is whole keywords too.
+
+    THE LAST PARAGRAPH IS THE ONE infra#3703 CHANGED, AND IT IS LEFT ABOVE
+    RATHER THAN EDITED AWAY BECAUSE IT IS HOW THE HOLE WAS ARGUED INTO
+    EXISTENCE. "The world clears it on ARRIVAL" is true and is not the same
+    sentence as "the world clears it". Measured on wow-dev 2026-09-14:
+
+        01:36:36 guild bank: queued 0/5 deposit(s), leader=Grug aimed at
+                 at:1:-7203.1,-3821.1,8.6
+        01:38:37 auction: leader=Grug could not be aimed at an auctioneer -
+                 the column already holds 'at:1:-7203.1,-3821.1,8.6'
+
+    A walk that has not arrived yet holds the column, and one that never
+    arrives holds it until mod-overseer's own twenty-minute backstop - a clock
+    the module's own comment says "is scoped to the errand's target, the target
+    is rewritten from outside this module, and a rewrite restarts the clock".
+    This pass rewrites the same aim every 600 seconds. So the errand with a
+    terminal path in theory had no bounded one in practice, and NOTHING in this
+    process could hand it back: `_write_trade_errand` called a ground aim an
+    economy errand (`_retaskable_from`, since infra#3702) and
+    `_release_trade_errand` called it a profession errand. An aim that can be
+    written by the economy and released by nobody is infra#3708's latch built
+    out of two guards that half agreed.
+
+    SO THE GUARD IS ONE PREDICATE NOW (`_is_economy_aim`) AND THE FENCE IS
+    UNCHANGED: it is `_retaskable_from`, which returns the empty tuple for a
+    trainer keyword, so blanking a `learn_skill` errand is still impossible.
+    What is now possible is the town slot handing a stuck vault aim back when
+    its lease runs out and another pass has been waiting.
     """
 
     def test_the_pass_writes_a_ground_aim_and_not_the_keyword(self):
         code = _statements("    async def _guild_bank_once(")
-        self.assertIn("travel_npc=vault.aim", code)
+        self.assertIn('self._claim_town_slot("guild bank", leader, vault.aim)',
+                      code)
         self.assertNotIn('"guild banker"', code)
 
     def test_no_settling_was_added_for_it(self):
         """A release keyed on something the world already clears would be a
-        second writer racing the first."""
+        second writer racing the first. Still true: the lease is not a settling
+        step, it fires only when another pass is waiting, and it is in one
+        place for all seven passes rather than one more per-pass release."""
         self.assertNotIn("_settle_guild_bank_errand", _source())
 
-    def test_the_release_guard_still_refuses_a_ground_aim(self):
-        """Widening ECONOMY_ERRANDS to cover one would let an economy pass
-        blank a `learn_skill` errand on its way past - mod-overseer#438's bug
-        re-created one file over."""
+    def test_the_release_guard_now_admits_a_ground_aim(self):
+        """The half of infra#3703 that makes a stuck errand releasable at all.
+
+        `_release_trade_errand` asks `_is_economy_aim`, which asks
+        `_retaskable_from`, which has treated a ground aim as an economy errand
+        since infra#3702. Before this the two disagreed and the vault aim could
+        be written by the economy branch and handed back by nobody."""
         import travel
         self.assertTrue(travel.is_ground_aim("at:1:-705.0,-2045.0,66.0"))
+        release = _statements("def _release_trade_errand(")
+        self.assertIn("if not _is_economy_aim(travel_npc):", release)
+        predicate = _statements("def _is_economy_aim(")
+        self.assertIn("return bool(_retaskable_from(travel_npc))", predicate)
+
+    def test_the_keyword_tuple_itself_is_still_whole_keywords(self):
+        """ECONOMY_ERRANDS is one half of a vocabulary the C++ carries the
+        other half of (`CounterRoleForAim`), so putting an `at:` prefix in it
+        would have been a change to a mirror rather than to a guard. The
+        widening went into the predicate, not into the tuple."""
         line = _source()[_source().index("ECONOMY_ERRANDS = ("):]
         self.assertNotIn("at:", line[: line.index("\n")])
 

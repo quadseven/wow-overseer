@@ -810,10 +810,12 @@ class TheBridgeWalksTheLeaderToTheRightShop(unittest.TestCase):
     def test_the_aim_is_written_onto_the_leader(self):
         body = _bridge_block("    async def _aim_at_reagent_vendor(")
         self.assertIn("_head_now", body)
-        self.assertIn("character=trip.traveller", body)
-        self.assertIn("travel_npc=trip.target", body)
-        # And through the one guarded writer, never a second UPDATE.
-        self.assertIn("_write_trade_errand", body)
+        # THROUGH THE TOWN SLOT SINCE infra#3703, which is the one door every
+        # town errand asks at - and which writes through the same guarded
+        # writer this used to name. Still the traveller the pure module chose,
+        # still the target it chose, still never a second UPDATE.
+        self.assertIn('self._claim_town_slot(\n            "craft_supply", trip.traveller, trip.target)', body)
+        self.assertNotIn("UPDATE overseer_roster", body)
 
     def test_the_bridge_reads_where_the_shoppers_are_standing(self):
         """A shopper on another map cannot arrive by following, and the pure

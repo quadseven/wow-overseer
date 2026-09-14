@@ -80,8 +80,7 @@ class ThePassRunsAndInTheRightOrder(unittest.TestCase):
         first insert."""
         body = _block("    async def _bank_once(")
         settle = _block("    async def _settle_bank_errand(")
-        self.assertIn("travel_npc=\"banker\"", settle)
-        self.assertIn("_write_trade_errand", settle)
+        self.assertIn('self._claim_town_slot("bank", leader, "banker")', settle)
         self.assertLess(body.index("_settle_bank_errand"), body.index("_insert_bank"))
 
     def test_the_errand_goes_to_the_family_leader(self):
@@ -89,12 +88,19 @@ class ThePassRunsAndInTheRightOrder(unittest.TestCase):
         Sending a follower straight to an NPC leaves that character behind.
 
         The leader is still read once, here, and handed to the settling - a
-        release from one leader and an aim on another would be two leaders."""
+        release from one leader and an aim on another would be two leaders.
+
+        AND THE AIM IS NOW ASKED FOR THROUGH THE TOWN SLOT (infra#3703), which
+        reads `_head_now` itself and refuses to write an aim onto anybody who
+        is not the leader. The rule this test names is therefore enforced in
+        one place rather than restated in seven passes, and the release below
+        still names the same leader this pass read."""
         body = _block("    async def _bank_once(")
         self.assertIn("leader = await asyncio.to_thread(_head_now)", body)
         self.assertIn("self._settle_bank_errand(names, leader", body)
-        self.assertIn("professions.Errand(character=leader",
-                      _block("    async def _settle_bank_errand("))
+        settle = _block("    async def _settle_bank_errand(")
+        self.assertIn('self._claim_town_slot("bank", leader, "banker")', settle)
+        self.assertIn('_release_trade_errand, leader, "banker"', settle)
 
     def test_the_leader_is_head_now_not_the_static_seniority_answer(self):
         """infra#3553/#3554. `_head_now()`, NOT bonds.head_of_family() directly.

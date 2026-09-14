@@ -60,6 +60,7 @@ import recruit
 import relay
 import tabard
 import towntrip
+import townslot
 import trainjob
 import travel
 import voice
@@ -412,6 +413,17 @@ def _skip_chat_backlog(seconds: int) -> int:
 # design for several worldservers; there is one, and it owns the row it
 # claimed, so the cheap correct move is to be slow and honest instead.
 CLAIM_STALE_SECONDS = int(os.environ.get("CLAIM_STALE_SECONDS", "300"))
+
+# HOW LONG ONE TOWN PASS MAY KEEP THE FAMILY'S TRAVELLER WHILE ANOTHER WAITS
+# (infra#3703). The argument for the number is on `townslot.LEASE_SECONDS`,
+# which is where it lives; this is the env knob, in the shape every other
+# cadence in this file already has one, so a realm that is walking further
+# between counters than wow-dev can be given a longer lease without a deploy.
+# It is NOT a cycle: nothing sleeps for this. It is the age at which a held
+# errand stops outranking a pass that has been waiting for the column.
+TOWN_SLOT_LEASE_SECONDS = float(
+    os.environ.get("TOWN_SLOT_LEASE_SECONDS", townslot.LEASE_SECONDS)
+)
 
 
 def _expire_stale_claims(seconds: int) -> int:
@@ -1952,6 +1964,40 @@ def _retaskable_from(travel_npc: str) -> tuple:
     return ()
 
 
+def _is_economy_aim(travel_npc: str) -> bool:
+    """Could the ECONOMY have written this aim, and so may it hand it back?
+
+    ONE PREDICATE FOR THE WRITE AND THE RELEASE, because they were two and they
+    disagreed (infra#3703). `_write_trade_errand` decides what is an economy
+    errand by asking `_retaskable_from`, which has answered "yes" for a ground
+    aim since infra#3702 and for a bare creature entry since infra#3692.
+    `_release_trade_errand` decided the same question by testing membership of
+    `ECONOMY_ERRANDS`, which is keywords only. So the guild bank pass and the
+    forge pass could WRITE a ground aim down the economy branch and then no
+    caller anywhere could hand it back:
+
+        guild bank: queued 0/5 deposit(s), leader=Grug aimed at
+        at:1:-7203.1,-3821.1,8.6
+
+    and `_release_trade_errand` would have refused that exact string as "not an
+    economy errand" if anybody had tried. An aim that one guard calls economy
+    and the other calls untouchable is an aim with no terminal path at all,
+    which is infra#3708's latch rebuilt out of two half-agreeing guards.
+
+    THE FENCE IT KEEPS IS THE ONE THAT MATTERS. A profession trainer errand is
+    not in `ECONOMY_ERRANDS`, is not a ground aim and is not numeric, so
+    `_retaskable_from` returns the empty tuple for it and this returns False -
+    exactly as the old membership test did. `learnaim.statements` writes
+    `TRAINER_ROLE`, a keyword, and that keyword is still untouchable by every
+    caller here (mod-overseer#438).
+
+    AND THE EMPTY COLUMN IS NOT AN ERRAND. "" reaches none of
+    `_retaskable_from`'s branches, so releasing nothing is refused rather than
+    run as a blanking UPDATE that would match every idle character.
+    """
+    return bool(_retaskable_from(travel_npc))
+
+
 def _write_trade_errand(errand) -> bool:
     """Put one character's outstanding trade plan where the worldserver reads it.
 
@@ -2083,8 +2129,18 @@ def _release_trade_errand(character: str, travel_npc: str) -> bool:
     must tell "matched but unchanged" from "somebody else owns this", because
     re-asserting a keyword already carried changes no row (infra#3663). Clearing
     has no such case, so a zero here means the column was genuinely not ours.
+
+    THE GUARD IS `_is_economy_aim` AND NO LONGER `ECONOMY_ERRANDS` DIRECTLY
+    (infra#3703). Same fence, asked of the same tuple the WRITE is guarded by,
+    so the two can no longer disagree about a ground aim - which they did, and
+    the disagreement is why a vault aim or a forge aim could be written by an
+    economy pass and then handed back by nobody. See `_is_economy_aim`. The
+    sentence above about a numeric aim stands as a statement about CALLERS: no
+    caller releases craft_supply's refined vendor entry, because it is that
+    pass's errand to end. What has changed is that the guard no longer refuses
+    to let one be named at all.
     """
-    if travel_npc not in ECONOMY_ERRANDS:
+    if not _is_economy_aim(travel_npc):
         # Refused rather than obeyed. A caller asking to blank a profession
         # errand is a caller with a bug, and answering "no" is cheaper to find
         # than an erased trainer errand three passes later.
@@ -2160,17 +2216,20 @@ def _errand_holders(travel_npc: str, names: list) -> list:
     this SELECT and that UPDATE matches nothing and is left alone. The worst a
     stale answer can do is waste one queue read.
 
-    GUARDED ON `ECONOMY_ERRANDS` LIKE THE RELEASE IT FEEDS. Refusing a
-    profession keyword here means no caller can even assemble the list of rows
-    it would need to blank one, which is the same fence one step earlier
-    (mod-overseer#438).
+    GUARDED LIKE THE RELEASE IT FEEDS. Refusing a profession keyword here means
+    no caller can even assemble the list of rows it would need to blank one,
+    which is the same fence one step earlier (mod-overseer#438). It asks
+    `_is_economy_aim` rather than `ECONOMY_ERRANDS` for the reason the release
+    now does (infra#3703): one predicate, the same one the WRITE is guarded by,
+    so a ground aim cannot be economy enough to write and too profession to
+    look for.
 
     DEGRADES TO NOBODY. A world image without the column cannot be holding an
     errand in it, and "nobody is carrying this" is the direction that releases
     nothing - the safe way to not know, matching every other reader of these
     columns.
     """
-    if travel_npc not in ECONOMY_ERRANDS:
+    if not _is_economy_aim(travel_npc):
         log.warning(
             "refusing to look up holders of travel_npc=%r - only an economy "
             "errand may be handed back, so only one may be hunted for",
@@ -2795,6 +2854,21 @@ class Bridge(discord.Client):
         # things to say and must not silence each other, while the SAME
         # handover said twice is the whole of infra#3197.
         self._said: dict = {}
+        # WHO HAS THE FAMILY'S ONE TRAVELLER, AND SINCE WHEN (infra#3703).
+        # `overseer_roster.travel_npc` is a single slot that seven passes write
+        # and, because only the leader carries `new rpg`, it is one slot for the
+        # whole family rather than one per character. Nothing arbitrated between
+        # them: whichever pass ran first held the column and the rest were
+        # refused for their whole cycle. The ledger is in memory because there
+        # is nowhere else to put it - the overseer tables ship in mod-overseer's
+        # db-import image and would not reach the realm with this change - and
+        # townslot.Slot is written to survive that: a restart finds the column
+        # still set, adopts it as an errand with no owner, and gives it the
+        # longer of the two leases.
+        self._town_slot = townslot.Slot(
+            lease=TOWN_SLOT_LEASE_SECONDS,
+            releasable=_is_economy_aim,
+        )
 
     async def setup_hook(self) -> None:
         # Held, not fired and forgotten. asyncio keeps only a weak reference to
@@ -4192,6 +4266,104 @@ class Bridge(discord.Client):
             queued, len(candidates) + len(multi_candidates), len(needs),
         )
 
+    async def _claim_town_slot(self, claimant: str, character: str,
+                               aim: str) -> bool:
+        """Ask for the family's one traveller, and act on the answer (infra#3703).
+
+        THE ONE DOOR EVERY TOWN ERRAND NOW GOES THROUGH. Seven passes write
+        `travel_npc` and each of them used to write it directly, read the
+        refusal, and log its own version of "already on somebody else's
+        errand". Nothing decided between them, so the winner was whichever pass
+        happened to run first and the loser was starved for its whole cycle -
+        measured on wow-dev with the auction pass refused two minutes after the
+        guild bank pass took the column, and the guild bank pass itself starved
+        behind the sell pass for its entire life before that.
+
+        WHAT IS DECIDED HERE AND WHAT IS NOT. `townslot` decides turn and lease
+        out of facts this method reads; the pass itself still decides whether it
+        wants a journey at all, and its own `_settle_*` step still decides when
+        its errand is over. This adds arbitration between passes and nothing
+        else.
+
+        THE LEADER IS READ HERE RATHER THAN TRUSTED FROM THE CALLER, which
+        costs one row and buys the guarantee that "only the leader travels" is
+        enforced in one place instead of remembered in seven. mod-overseer
+        refuses to walk anybody who is not carrying `new rpg` - "nothing walks
+        it anywhere. Followers travel by following the leader" - and a follower
+        aim is not merely inert: it is never released, and it bills that
+        character fifteen seconds of economy errand budget on every travel poll
+        until the character is refused for fifteen minutes.
+
+        THE COLUMN IS READ, AND A STALE READING CANNOT BECOME A WRONG WRITE.
+        `_current_travel_npc` says of itself that nothing branches on its
+        answer; this is the deliberate second caller that does, and it is safe
+        for the reason `_errand_holders` gives for being a second reader. Both
+        effects below are compare-and-swaps: the release names the exact aim it
+        is handing back, and the write carries `_write_trade_errand`'s own
+        `travel_npc IN (...)` guard. A column that changed hands between the
+        read and the write therefore matches nothing, and the worst a stale
+        answer costs is one wasted cycle.
+
+        RETURNS WHETHER THE LEADER NOW CARRIES THIS AIM, which is what every
+        caller already did with `_write_trade_errand`'s return value. `hold`
+        returns True and writes nothing: the column already says what this pass
+        wanted it to say, and re-asserting it makes mod-overseer's aim book
+        erase its own state and read a standing errand as a new one (infra#3708).
+        """
+        leader = await asyncio.to_thread(_head_now)
+        column = await asyncio.to_thread(_current_travel_npc, leader)
+        now = time.monotonic()
+        decision = self._town_slot.want(
+            claimant=claimant, character=character, aim=aim, leader=leader,
+            column=column, retaskable=_retaskable_from(aim), now=now,
+        )
+        if not decision.granted:
+            log.info("%s", townslot.report(decision))
+            return False
+        if decision.release is not None:
+            # HANDED BACK BEFORE IT IS TAKEN, because `_write_trade_errand`'s
+            # economy guard retasks only an IDLE traveller and that guard is
+            # not being weakened here - mod-overseer#438 is why it exists. A
+            # preemption is therefore two statements: give the stuck errand
+            # back, then take the empty column the ordinary way.
+            released = await asyncio.to_thread(
+                _release_trade_errand, decision.release.character,
+                decision.release.aim,
+            )
+            if not released:
+                # Not a failure, and not a reason to stop. The column changed
+                # hands between the read and this write, so there was nothing
+                # of that shape to hand back; the guarded write below is what
+                # decides whether this pass gets the traveller anyway.
+                log.info(
+                    "town slot: %s was no longer carrying %r, so nothing was "
+                    "handed back before %s asked for it",
+                    decision.release.character, decision.release.aim, claimant,
+                )
+        if decision.verdict == townslot.SLOT_HOLD:
+            self._town_slot.settle(decision, True, now)
+            log.debug("%s", townslot.report(decision))
+            return True
+        taken = await asyncio.to_thread(
+            _write_trade_errand,
+            professions.Errand(character=character, travel_npc=aim),
+        )
+        self._town_slot.settle(decision, taken, now)
+        if not taken:
+            # THE SLOT SAID YES AND THE COLUMN SAID NO, which is a race rather
+            # than a contradiction: something wrote the column between the read
+            # above and the UPDATE. The ledger has already been told (settle),
+            # so this pass keeps its place in the order and tries again next
+            # cycle.
+            log.info(
+                "town slot: %s was granted the traveller %s for %r but the "
+                "column had already changed hands, so no aim was written",
+                claimant, character, aim,
+            )
+            return False
+        log.info("%s", townslot.report(decision))
+        return True
+
     async def _aim_at_reagent_vendor(self, needs: list) -> None:
         """Walk the family to a vendor that actually stocks one of the
         outstanding reagents (infra#3692).
@@ -4293,10 +4465,15 @@ class Bridge(discord.Client):
         # was not: the guard in `_write_trade_errand` can legitimately refuse
         # this write, and a caller that assumes it took would report a
         # journey nobody was sent on.
-        aimed = await asyncio.to_thread(
-            _write_trade_errand,
-            professions.Errand(character=trip.traveller, travel_npc=trip.target),
-        )
+        #
+        # THROUGH THE TOWN SLOT SINCE infra#3703, like every other pass that
+        # wants the family's one traveller. The refusal this used to report is
+        # now decided rather than raced: a numeric vendor entry is a REFINEMENT
+        # of a standing `vendor` errand (see `_retaskable_from`), so the slot
+        # grants it while the sell pass holds the column - it would be inert
+        # otherwise - and only a genuinely different errand makes it wait.
+        aimed = await self._claim_town_slot(
+            "craft_supply", trip.traveller, trip.target)
         log.info("craft_supply: %s (aim taken=%s)", craft_supply.report(trip), aimed)
         if not aimed:
             log.info(
@@ -4666,18 +4843,18 @@ class Bridge(discord.Client):
         # was invisible (infra#3663).
         aimed = True
         if step == bag_pressure.VENDOR_ERRAND_AIM:
-            aimed = await asyncio.to_thread(
-                _write_trade_errand,
-                professions.Errand(character=leader,
-                                   travel_npc=auction.AUCTIONEER_ROLE),
-            )
+            # THROUGH THE TOWN SLOT (infra#3703). The line this used to write
+            # here said the pass was "starved until that one clears" and had no
+            # way of knowing whether that would ever happen; the slot answers
+            # the same refusal with how long the holder has had the column, how
+            # much of its lease is left, and who is ahead in the queue.
+            aimed = await self._claim_town_slot(
+                "auction", leader, auction.AUCTIONEER_ROLE)
             if not aimed:
                 log.info(
-                    "auction: leader=%s could not be aimed at an auctioneer - "
-                    "the column already holds %r and an economy errand may "
-                    "only retask an idle traveller, so this pass is starved "
-                    "until that one clears (infra#3703)",
-                    leader, await asyncio.to_thread(_current_travel_npc, leader),
+                    "auction: leader=%s could not be aimed at an auctioneer "
+                    "this pass, so nothing is bought until the town slot comes "
+                    "round to it", leader,
                 )
 
         # NOTHING IS BOUGHT UNTIL SOMEBODY IS AT A COUNTER, and which counter
@@ -5586,10 +5763,11 @@ class Bridge(discord.Client):
             # outcome and the exact thing infra#3464 called silent. It was still
             # silent afterwards: the caller hardcoded `aimed = True` and threw
             # the answer away.
-            aimed = await asyncio.to_thread(
-                _write_trade_errand,
-                professions.Errand(character=leader, travel_npc="vendor"),
-            )
+            #
+            # AND IT GOES THROUGH THE TOWN SLOT (infra#3703), which is where
+            # "somebody else's errand" stopped being the end of the sentence:
+            # the slot says whose, for how long, and what ends it.
+            aimed = await self._claim_town_slot("economy", leader, "vendor")
             if not aimed:
                 log.info(
                     "economy: leader=%s is already on somebody else's errand, so "
@@ -5818,10 +5996,9 @@ class Bridge(discord.Client):
             # traveller, so this write is a no-op while another town pass owns
             # the column - a real, expected refusal (infra#3703) that was
             # invisible for as long as nobody logged it.
-            aimed = await asyncio.to_thread(
-                _write_trade_errand,
-                professions.Errand(character=leader, travel_npc="banker"),
-            )
+            # THROUGH THE TOWN SLOT (infra#3703): the refusal is now a turn in
+            # a queue with a lease on it rather than a race this pass lost.
+            aimed = await self._claim_town_slot("bank", leader, "banker")
             if not aimed:
                 log.info(
                     "bank: leader=%s is already on somebody else's errand, so "
@@ -6041,10 +6218,7 @@ class Bridge(discord.Client):
             # The sentence comes from travel.vault_aim already actionable.
             log.info("guild bank: nobody can be sent to a vault - %s", vault.refused)
             return
-        aimed = await asyncio.to_thread(
-            _write_trade_errand,
-            professions.Errand(character=leader, travel_npc=vault.aim),
-        )
+        aimed = await self._claim_town_slot("guild bank", leader, vault.aim)
         # ALREADY STANDING THERE COUNTS AS AIMED, because it is the state the
         # aim exists to produce. mod-overseer RELEASES a travel aim the moment
         # the walk arrives (it clears `travel_npc`, which is the signal the
@@ -6068,17 +6242,18 @@ class Bridge(discord.Client):
             # reader had to go and measure it by hand. An economy errand may
             # only retask an IDLE traveller (see _write_trade_errand), so a
             # leader holding any other one outranks this pass indefinitely.
-            # That starvation is infra#3703 and is NOT fixed here: measured on
-            # wow-dev the leader's `vendor` errand is live and delivering
-            # sales, not a leftover, so the answer is to sequence the town
-            # errands rather than to let this pass steal a working one.
+            # That starvation was infra#3703's, and the answer it took is the
+            # town slot: this pass is now in a queue with a lease on the
+            # holder, so a live errand still wins - measured on wow-dev the
+            # leader's `vendor` errand was delivering sales, not a leftover -
+            # and one that never finishes stops winning after LEASE_SECONDS.
+            # `_claim_town_slot` has already logged whose errand it is, how
+            # long they have had it and who is ahead in the queue.
             log.info(
-                "guild bank: leader=%s could not be aimed at the vault (%s) - "
-                "the column already holds %r and an economy errand may only "
-                "retask an idle traveller, so this pass is starved until that "
-                "one clears",
+                "guild bank: leader=%s could not be aimed at the vault (%s) "
+                "this pass, so no deposit is queued - every row queued into a "
+                "trip nobody is taking comes back 'no guild bank in reach'",
                 leader, vault.aim,
-                await asyncio.to_thread(_current_travel_npc, leader),
             )
             return
         seen = await asyncio.to_thread(_recent_guild_bank_keys, GIVE_RETRY_MINUTES)
@@ -6306,25 +6481,18 @@ class Bridge(discord.Client):
                 ", ".join(sorted(smelters)),
             )
             return
-        aimed = await asyncio.to_thread(
-            _write_trade_errand,
-            professions.Errand(character=leader, travel_npc=forge.aim),
-        )
+        aimed = await self._claim_town_slot("forge", leader, forge.aim)
         if not aimed:
-            # WHAT HOLDS THE COLUMN, NOT JUST THAT SOMETHING DOES - the same
-            # sentence `_guild_bank_once` learned to write in infra#3702, and
-            # for the same reason: an economy errand may only retask an IDLE
-            # traveller, so a leader on any other one outranks this pass
-            # indefinitely. That starvation is infra#3703's to fix and is NOT
-            # fixed here by widening the guard; naming it is what tells a
-            # starved pass from a broken one.
+            # WHAT IT IS COSTING, WHICH THE SLOT CANNOT SAY. `_claim_town_slot`
+            # has already named the holder, its lease and the queue - that is
+            # the half infra#3702 added here and infra#3703 moved into one
+            # place for all seven passes. What only this pass knows is WHO
+            # cannot smelt because of it, and DriveCraft cannot say that: it
+            # logs a bare numeric SpellCastResult and retries for ever.
             log.info(
-                "forge: leader=%s could not be aimed at the forge (%s) - the "
-                "column already holds %r and an economy errand may only retask "
-                "an idle traveller, so %s cannot smelt until that one clears",
-                leader, forge.aim,
-                await asyncio.to_thread(_current_travel_npc, leader),
-                ", ".join(sorted(smelters)),
+                "forge: leader=%s could not be aimed at the forge (%s) this "
+                "pass, so %s cannot smelt until the town slot comes round",
+                leader, forge.aim, ", ".join(sorted(smelters)),
             )
             return
         log.info(
@@ -6408,10 +6576,9 @@ class Bridge(discord.Client):
             # IDLE traveller, so this write is a no-op while the sell pass owns
             # `travel_npc = 'vendor'`. That is a legitimate outcome and a
             # starvation worth seeing in the log (infra#3703), not a failure.
-            aimed = await asyncio.to_thread(
-                _write_trade_errand,
-                professions.Errand(character=leader, travel_npc="repair"),
-            )
+            # THROUGH THE TOWN SLOT (infra#3703), which is what turns "the sell
+            # pass owns the column" from a permanent answer into a turn.
+            aimed = await self._claim_town_slot("towntrip", leader, "repair")
             if not aimed:
                 log.info(
                     "towntrip: leader=%s is already on somebody else's errand, "
@@ -8771,9 +8938,26 @@ def _current_travel_npc(name: str) -> str:
     asked, and adding a second reader that could disagree with it would be
     the "two writers for one aim" fault this file argues against elsewhere.
 
+    THERE IS NOW ONE CALLER THAT DOES BRANCH ON IT, AND THE PARAGRAPH ABOVE IS
+    LEFT STANDING BECAUSE IT IS THE RULE THE EXCEPTION HAS TO ANSWER TO
+    (infra#3703). `_claim_town_slot` reads this to decide whose errand the
+    column is carrying and whether its lease has run out. What makes that safe
+    is not that the reading is fresh - it is not, and cannot be - but that
+    every effect downstream of it is a compare-and-swap:
+    `_release_trade_errand` names the exact aim it is handing back, and
+    `_write_trade_errand` carries its own `travel_npc IN (...)` guard. A column
+    that changed hands between this SELECT and either UPDATE therefore matches
+    nothing and is left alone, which is the same property `_errand_holders`
+    gives for being the other deliberate second reader. A caller that branched
+    on this and then wrote WITHOUT a guard would be the fault this docstring
+    was written to prevent, and would still be.
+
     The empty string covers every absence - no row, no column, no table -
     because a log line that cannot say what holds the column should say
-    nothing rather than guess at a reason.
+    nothing rather than guess at a reason. It is also the reading that means
+    "the column is free" to the town slot, which is the right way round: a
+    world this process cannot read the column out of is one where it should be
+    asking for the traveller through the guarded write, not refusing to.
     """
     with _connect() as conn, conn.cursor() as cur:
         try:

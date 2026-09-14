@@ -82,8 +82,8 @@ class ThePassRunsAndInTheRightOrder(unittest.TestCase):
         self.assertLess(code.index("_settle_town_errand"),
                         code.index("_insert_town_errand"))
         settle = _code("    async def _settle_town_errand(")
-        self.assertIn("_write_trade_errand", settle)
-        self.assertIn('travel_npc="repair"', settle)
+        self.assertIn('self._claim_town_slot("towntrip", leader, "repair")',
+                      settle)
 
     def test_the_leader_is_the_one_sent(self):
         """Only the leader carries `new rpg`; an aimed follower wanders."""

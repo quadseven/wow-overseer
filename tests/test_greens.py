@@ -457,11 +457,9 @@ class TheBridgeAsksBeforeItSells(unittest.TestCase):
         whole family's vendor errand for fifteen minutes at a time.
         """
         block = self._vendor_pass()
-        self.assertIn(
-            'professions.Errand(character=leader, travel_npc="vendor")', block)
-        self.assertNotIn(
-            'professions.Errand(character=holder, travel_npc="vendor")', block)
-        self.assertEqual(1, block.count('travel_npc="vendor"'))
+        self.assertIn('self._claim_town_slot("economy", leader, "vendor")', block)
+        self.assertNotIn('self._claim_town_slot("economy", holder', block)
+        self.assertEqual(1, block.count("_claim_town_slot"))
 
     def test_the_aim_is_taken_outside_the_per_holder_loop(self):
         """A second aim per holder is the defect, so geometry forbids it.
@@ -489,7 +487,7 @@ class TheBridgeAsksBeforeItSells(unittest.TestCase):
         legitimately does nothing while the town trip owns the column. The
         caller used to hardcode `aimed = True` and log that instead."""
         block = self._vendor_pass()
-        self.assertIn("aimed = await asyncio.to_thread(", block)
+        self.assertIn("aimed = await self._claim_town_slot(", block)
         # Asked of CODE and not of prose: the comment above the call quotes
         # the old line, so a substring search over the whole block would be
         # answered by the explanation of the bug rather than by the bug.
