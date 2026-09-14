@@ -229,15 +229,26 @@ import travel
 # exception, since its second reagent is the previous recipe's own output,
 # not a fresh vial - plus Engineering's Bronze Tube (Weak Flux only; Moss
 # Agate is deliberately absent, see module docstring).
+#
+# TWELVE OF THIRTEEN NOW, and the two that arrived are the raid-consumable
+# brackets craft.RECIPES gained (see its RAID CONSUMABLES block). Neither
+# needs a vial this table did not already buy: Elixir of Fortitude (3450)
+# takes the same Leaded Vial as the Elixir of Greater Defense it sits above,
+# and Elixir of Greater Agility (11467) the same Crystal Vial as the Superior
+# Healing Potion it sits above. Verified the same way every line here was -
+# the reagent read straight out of the running worldserver's own Spell.dbc
+# (543b9fe61355b6a77a01714d52fea2e5), the price out of item_template.
 REAGENT: dict[int, tuple[int, str, int]] = {
     2330: (3371, "Empty Vial", 20),      # Minor Healing Potion
     3173: (3371, "Empty Vial", 20),      # Lesser Mana Potion
     3447: (3372, "Leaded Vial", 200),    # Healing Potion
+    3450: (3372, "Leaded Vial", 200),    # Elixir of Fortitude (raid consumable)
     7181: (3372, "Leaded Vial", 200),    # Greater Healing Potion
     11449: (3372, "Leaded Vial", 200),   # Elixir of Agility
     11450: (3372, "Leaded Vial", 200),   # Elixir of Greater Defense
     11457: (8925, "Crystal Vial", 2500), # Superior Healing Potion
     11460: (8925, "Crystal Vial", 2500), # Elixir of Detect Undead
+    11467: (8925, "Crystal Vial", 2500), # Elixir of Greater Agility (raid)
     17553: (8925, "Crystal Vial", 2500), # Superior Mana Potion
     17556: (8925, "Crystal Vial", 2500), # Major Healing Potion
     3938: (2880, "Weak Flux", 100),      # Bronze Tube (Engineering)

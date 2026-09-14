@@ -21,7 +21,7 @@ COPY _shared/core.py _shared/bridge.py _shared/voice.py _shared/transform.py \
      _shared/armory.py _shared/wealth.py _shared/questlog.py _shared/modelviewer.py \
      _shared/relay.py _shared/digest.py \
      _shared/achievements.py _shared/recap.py _shared/standing.py _shared/agenda.py _shared/eye.py _shared/decree.py \
-     _shared/dungeonplan.py _shared/raidgoals.py \
+     _shared/dungeonplan.py _shared/raidgoals.py _shared/raidcraft.py \
      _shared/guildcraft.py _shared/tradespec.py _shared/guildbank.py _shared/guildshare.py _shared/recruit.py \
      _shared/bag_pressure.py _shared/bag_upgrade.py _shared/bag_economy.py _shared/disposition.py \
      _shared/item_plan.py \

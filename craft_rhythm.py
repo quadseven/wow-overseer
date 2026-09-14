@@ -322,10 +322,20 @@ GATHERED: dict[int, tuple[Reagent, ...]] = {
     3447: (Reagent(2453, "Bruiseweed", 1), Reagent(2450, "Briarthorn", 1)),
     3173: (Reagent(785, "Mageroyal", 1), Reagent(3820, "Stranglekelp", 1)),
     7181: (Reagent(3357, "Liferoot", 1), Reagent(3356, "Kingsblood", 1)),
+    # THE TWO RAID-CONSUMABLE BRACKETS craft.RECIPES GAINED (see its RAID
+    # CONSUMABLES block). Neither adds a material this table did not already
+    # gather for a neighbour: Elixir of Fortitude (3450) names the SAME two
+    # herbs as Elixir of Greater Defense (11450) directly below, and Elixir of
+    # Greater Agility (11467) names Sungrass, which Superior Healing Potion
+    # (11457) already wants, and Goldthorn, which three entries here already
+    # want. So the family gathers exactly what it gathered before and the
+    # output changes from vendor trash to something forty raiders drink.
+    3450: (Reagent(3355, "Wild Steelbloom", 1), Reagent(3821, "Goldthorn", 1)),
     11449: (Reagent(3820, "Stranglekelp", 1), Reagent(3821, "Goldthorn", 1)),
     11450: (Reagent(3355, "Wild Steelbloom", 1), Reagent(3821, "Goldthorn", 1)),
     11457: (Reagent(8838, "Sungrass", 1), Reagent(3358, "Khadgar's Whisker", 1)),
     11460: (Reagent(8836, "Arthas' Tears", 1),),
+    11467: (Reagent(8838, "Sungrass", 1), Reagent(3821, "Goldthorn", 1)),
     17553: (Reagent(8838, "Sungrass", 2), Reagent(8839, "Blindweed", 2)),
     17556: (Reagent(13464, "Golden Sansam", 2),
             Reagent(13465, "Mountain Silversage", 1)),
@@ -339,7 +349,14 @@ GATHERED: dict[int, tuple[Reagent, ...]] = {
     # 75-90 with a better grey. See craft.py's COLOUR BANDS block.
     3326: (Reagent(2836, "Coarse Stone", 2),),
     3337: (Reagent(2838, "Heavy Stone", 3),),
-    9920: (Reagent(7912, "Solid Stone", 4),),
+    # 9920 Solid Grinding Stone is GONE from craft.RECIPES, replaced at the
+    # same 200-209 bracket by 9918 Solid Sharpening Stone - identical rank and
+    # colour band, same Solid Stone, ONE per cast instead of four, and a weapon
+    # buff a raider carries instead of an armour reagent. So this line is
+    # four times cheaper to keep stocked than the one it replaces. See
+    # craft.py's RAID CONSUMABLES block. Do not re-add 9920 here without
+    # re-adding it there.
+    9918: (Reagent(7912, "Solid Stone", 1),),
     16641: (Reagent(12365, "Dense Stone", 1),),
     # LEATHERWORKING - skinning output throughout. Light Leather and Heavy
     # Leather are BOTH own-crafted (2881, 20649) and skinned directly (31 and

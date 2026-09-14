@@ -378,6 +378,59 @@ class CraftReagentErrandsTests(unittest.TestCase):
             )
             self.assertTrue(found, f"spell {spell_id} is not in craft.RECIPES")
 
+    def test_every_recipe_that_names_a_bought_reagent_is_bought_for(self):
+        """THE DIRECTION THE TWO TESTS ABOVE DO NOT COVER, and it was found by
+        deliberately breaking this module rather than by reading it.
+
+        Both of those check craft_supply -> craft.RECIPES: that this module
+        never names a spell craft.py has not heard of. Nothing checked the
+        other way, and the other way is the one that fails SILENTLY. A new
+        Alchemy bracket whose note says "1x Leaded Vial (3372)" and which has
+        no REAGENT row here ships a recipe nobody ever buys a vial for; every
+        cast is refused for insufficient reagents, DriveCraft's pre-filter
+        skips it with a bare `continue` and no log line, and the character sits
+        employed and producing nothing - which is precisely the failure
+        craft_rhythm.py's own module docstring was written about.
+
+        Deleting the Elixir of Fortitude row from REAGENT was caught by NO test
+        in this repo before this one existed. It is caught by name now.
+
+        THE NOTE IS THE ANCHOR, exactly as it is for craft_rhythm.GATHERED's
+        own projection test: craft.Recipe.note spells every reagent as
+        "<n>x <label> (<entry>...", so an entry id that appears in a note AND
+        is something this module knows how to buy is a reagent this module owes
+        that recipe a purchase for. An entry mentioned in prose but not bought
+        anywhere cannot match, because the set below is built from this
+        module's own tables rather than from a list of ids typed here.
+        """
+        import craft
+
+        bought_entries = {entry for entry, _l, _p in craft_supply.REAGENT.values()}
+        for reagents in craft_supply.REAGENTS.values():
+            bought_entries.update(entry for entry, _l, _p, _q in reagents)
+
+        for recipes in craft.RECIPES.values():
+            for recipe in recipes:
+                wanted = {entry for entry in bought_entries
+                          if "(%d" % entry in recipe.note}
+                if not wanted:
+                    continue
+                covered = set()
+                single = craft_supply.REAGENT.get(recipe.spell_id)
+                if single:
+                    covered.add(single[0])
+                for entry, _l, _p, _q in craft_supply.REAGENTS.get(
+                        recipe.spell_id, ()):
+                    covered.add(entry)
+                with self.subTest(spell=recipe.spell_id, name=recipe.name):
+                    self.assertEqual(
+                        sorted(wanted - covered), [],
+                        "%s (%d) names vendor-bought reagent(s) %s in its note "
+                        "and craft_supply buys none of them, so every cast "
+                        "will be refused for reagents with nothing logging why"
+                        % (recipe.name, recipe.spell_id,
+                           sorted(wanted - covered)))
+
     def test_every_reagents_entry_names_a_positive_quantity_per_cast(self):
         for spell_id, needs in craft_supply.REAGENTS.items():
             for entry, label, price, qty_per_cast in needs:

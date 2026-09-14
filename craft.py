@@ -764,6 +764,129 @@ FOCUS_AIMS = {
 # `tests/test_craft.py`'s `MEASURED_BANDS` is the checked-in projection that
 # keeps this true, exactly as `MEASURED_FOCUS` does for the focus field, and
 # `tools/spell_bands_from_dbc.py` regenerates it in one command.
+# ---------------------------------------------------------------------------
+# WHERE TWO RECIPES ARE EQUALLY GOOD FOR SKILL, THE ONE A RAID EATS WINS
+# (this pass, for the operator's "a constant supply of crafted items for raids
+# ... max buffs always in raids"). FOUR BRACKETS CHANGED; see raidcraft.py.
+#
+# THIS TABLE HAS ONLY EVER ASKED ONE QUESTION - which recipe raises this skill
+# fastest at this value - and it has never asked what falls out of the cast.
+# For most of its sixty-one entries that is the right and only question: there
+# is one sane recipe at a given value and the item is whatever it is. But at a
+# handful of values the realm offers TWO recipes with identical or near
+# identical colour bands, one producing vendor trash and one producing
+# something forty people drink on a raid night, and this table has been
+# choosing between them silently and by accident.
+#
+# IT IS A CHOICE MADE WHEN THE TABLE IS WRITTEN, NOT WHEN A CHARACTER CASTS,
+# and that is forced rather than preferred. `recipe_for` returns the FIRST
+# bracket containing a skill value and `test_brackets_do_not_overlap_within_
+# one_skill` holds every skill line to exactly one recipe per point - so a
+# character never has two candidates at one value and there is no runtime
+# choice to make. `raidcraft.preferred` plus
+# `test_raidcraft.ThePreferenceIsTakenWhereItIsFree` is what makes the
+# authoring-time choice checkable instead of accidental.
+#
+# THE RULE, AND EVERY CLAUSE OF IT EARNS ITS PLACE:
+#
+#   LEGAL. `floor <= value < grey`. Below the realm's own rank the character
+#   cannot hold the spell; at or past grey the core rolls no skill-up, so
+#   naming it there would trade a skill point for an item, which is a
+#   different decision and not this table's.
+#
+#   NOT WORSE FOR SKILL. The consumable's `yellow` must be >= the incumbent's.
+#   A cast below its yellow value is ORANGE and rolls a skill-up most
+#   reliably, so a higher yellow is at least as good at EVERY value in the
+#   bracket - which is what makes this comparable without per-value colour
+#   arithmetic the core does not expose. This clause is why Elixir of Fortitude
+#   does NOT take 185-209 from Elixir of Agility (195 against 205): the raid
+#   item is there for the taking and taking it would cost skill.
+#
+#   TRAINER-TAUGHT OR AUTO-LEARNED, NEVER PATTERN-TAUGHT. This is the clause
+#   that keeps the table honest, and without it the rule would have demanded
+#   four more brackets this family can never cast. THIRTEEN of the twenty-two
+#   raid consumables on this realm are taught by a `Recipe:`/`Formula:`/
+#   `Plans:` ITEM and have no `trainer_spell` row at all - including all four
+#   flasks, every Greater Protection Potion, Major Mana Potion, both weapon
+#   oils and Elemental Sharpening Stone. Nothing in this repo buys or learns
+#   from a pattern item (a concurrent change is building exactly that), so
+#   naming one here would buy a `craft_spell` DriveCraft drops with a WARN
+#   calling it a planner bug on every twenty-second poll - the identical trap
+#   Heavy Linen Bandage set for First Aid and that this table already paid for
+#   once. Elixir of the Mongoose (17571) at 280-284 is the bracket that rule
+#   costs, and it is named here so the next reader knows it was measured and
+#   declined rather than missed.
+#
+# THE FOUR THAT PASSED ALL THREE CLAUSES:
+#
+#   175-184  Elixir of Fortitude (3450) takes ten points off Greater Healing
+#            Potion, which had 155-184. Better on BOTH axes: 3450's yellow is
+#            195 against 7181's 175, so those ten points move from YELLOW to
+#            ORANGE, and the output is a +120 health hour-long buff every one
+#            of forty raiders drinks instead of a potion that vendors.
+#   240-264  Elixir of Greater Agility (11467) takes twenty-five points off
+#            Elixir of Detect Undead, which had 230-264. yellow 255 against
+#            245, and Elixir of Detect Undead is the purest vendor trash in
+#            this table - it detects undead.
+#   275-300  Major Healing Potion (17556) reaches down ten points into
+#            Superior Mana Potion's old 265-284. yellow 290 against 275, and
+#            17556 was ALREADY this ladder's top bracket - this is the same
+#            recipe starting at the rank the realm actually teaches it (275,
+#            `trainer_spell`) instead of ten points late.
+#   200-209  Solid Sharpening Stone (9918) REPLACES Solid Grinding Stone
+#            (9920) outright rather than splitting with it. Identical skill
+#            line, identical rank 200, identical yellow 200 and grey 210,
+#            identical reagent - and 9918 eats ONE Solid Stone per cast where
+#            9920 eats FOUR, for a +6 weapon damage buff instead of an armour
+#            reagent nothing in this table consumes. There is no value at
+#            which 9920 was the better pick; it was simply the one a leveling
+#            guide happened to list.
+#
+# AND THE ONE THAT WAS ALREADY RIGHT, WHICH IS WHY THIS IS A GUARD AND NOT A
+# REWRITE. Dense Sharpening Stone (16641) has held Blacksmithing 250-259 since
+# that bracket was written, over its twin Dense Weightstone (16640) - same
+# rank 250, same yellow 255, same grey 260, same one Dense Stone. Somebody
+# picked the raid consumable and nothing anywhere recorded that they had, so
+# the next edit could have flipped it for free. It is pinned by name now.
+#
+# ---------------------------------------------------------------------------
+# A MEASUREMENT THE ABOVE FORCED, AND IT IS ABOUT THIS WHOLE TABLE RATHER THAN
+# ABOUT THE FOUR BRACKETS: NINE OF THESE SIXTY-THREE RECIPES ARE AUTO-LEARNED
+# AND FIFTY-FOUR ARE TAUGHT.
+#
+# The First Aid and Mining comments above both state a rule - "never name a
+# spell the character does not yet hold" - and both enforce it by keeping to
+# `SkillLineAbility.AcquireMethod = 1` entries (Linen Bandage, Smelt Copper).
+# Before adding a trainer-taught recipe to Alchemy and Blacksmithing this pass
+# checked whether that rule was being kept for the PRIMARY trades too. It is
+# not, and it never has been. Every entry in this table was read against the
+# same md5-verified `SkillLineAbility.dbc`, keeping only the rows this family's
+# five classes can match. All nine auto-learned entries carry ClassMask 0:
+#
+#   2963 Bolt of Linen Cloth        3275 Linen Bandage
+#   3918 Rough Blasting Powder      2657 Smelt Copper
+#   2330 Minor Healing Potion       2660 Rough Sharpening Stone
+#   2881 Light Leather              2152 Light Armor Kit
+#   9058 Handstitched Leather Cloak
+#
+# They are exactly the FIRST rung of each ladder - which is what an auto-learn
+# is for - and every rung above the first, on every trade, is AcquireMethod 0.
+# So Lesser Healing Potion at Alchemy 80, Bolt of Woolen Cloth at Tailoring 68
+# and Coarse Grinding Stone at Blacksmithing 75 have all been named here from
+# the beginning and are all taught. What makes that work at all is the fact
+# this module's own infra#3695 comment already establishes from the other side:
+# these are PLAYERBOTS, and mod-playerbots grants profession recipes at init,
+# which is why `character_spell` is empty for recipes the family has been
+# WATCHED casting. The table has always relied on that grant, silently.
+#
+# THE TWO NEW TRAINER ENTRIES ARE THEREFORE NO NEW RISK, AND THAT IS THE POINT
+# OF WRITING THIS DOWN rather than a reason to relax. If the grant turns out
+# not to reach rank 175 recipes, Elixir of Fortitude fails EXACTLY as Lesser
+# Healing Potion at 80 would - DriveCraft's `!HasSpell` branch drops the errand
+# with a WARN calling it a planner bug - and the fix is the same one for both,
+# which is an Alchemy trainer visit `professions.py` already knows how to make.
+# What would have been a NEW risk is a pattern-taught recipe, which no grant
+# and no trainer can supply, and that is the clause `preferred` refuses on.
 RECIPES: dict = {
     SKILL_IDS["tailoring"]: (
         Recipe(2963, "Bolt of Linen Cloth", min_skill=1, max_skill=49,
@@ -1107,9 +1230,31 @@ RECIPES: dict = {
         Recipe(3173, "Lesser Mana Potion", min_skill=140, max_skill=154,
                note="1x Mageroyal (785), 1x Stranglekelp (3820), "
                     "1x Empty Vial (3371) -> item 3385, no focus needed"),
-        Recipe(7181, "Greater Healing Potion", min_skill=155, max_skill=184,
+        Recipe(7181, "Greater Healing Potion", min_skill=155, max_skill=174,
                note="1x Liferoot (3357), 1x Kingsblood (3356), "
-                    "1x Leaded Vial (3372) -> item 1710, no focus needed"),
+                    "1x Leaded Vial (3372) -> item 1710, no focus needed. "
+                    "max_skill was 184; 175-184 went to Elixir of Fortitude "
+                    "directly below, which is ORANGE there where this is "
+                    "YELLOW - see the RAID CONSUMABLES block above"),
+        # THE FIRST RAID CONSUMABLE THIS FAMILY WILL EVER REACH, and the only
+        # one on the whole realm that a TRAINER teaches below Alchemy 200.
+        # Every other raid-tier elixir, potion, flask, oil and stone is either
+        # 240+ or taught by a pattern item nothing here buys - see
+        # raidcraft.CONSUMABLES for all twenty-two, measured.
+        #
+        # ITS REAGENTS ARE THE SAME THREE AS Elixir of Greater Defense (11450)
+        # ALREADY IN THIS TABLE, item for item and count for count, which is
+        # why this bracket costs nothing to supply: `craft_rhythm.GATHERED`
+        # already gathers Wild Steelbloom and Goldthorn for 11450 and
+        # `craft_supply.REAGENT` already buys the Leaded Vial for it.
+        Recipe(3450, "Elixir of Fortitude", min_skill=175, max_skill=184,
+               note="1x Wild Steelbloom (3355), 1x Goldthorn (3821), "
+                    "1x Leaded Vial (3372) -> item 3825, no focus needed. "
+                    "+120 health for an hour, which all forty drink. "
+                    "trainer_spell rank 175 is the realm's own floor - "
+                    "SkillLineAbility.MinSkillLineRank reads 1 for this and "
+                    "cannot be used for it, see raidcraft.py's docstring; "
+                    "yellow 195, grey 235, so 175-184 is entirely orange"),
         Recipe(11449, "Elixir of Agility", min_skill=185, max_skill=209,
                note="1x Stranglekelp (3820), 1x Goldthorn (3821), "
                     "1x Leaded Vial (3372) -> item 8949, no focus needed"),
@@ -1119,15 +1264,38 @@ RECIPES: dict = {
         Recipe(11457, "Superior Healing Potion", min_skill=215, max_skill=229,
                note="1x Sungrass (8838), 1x Khadgar's Whisker (3358), "
                     "1x Crystal Vial (8925) -> item 3928, no focus needed"),
-        Recipe(11460, "Elixir of Detect Undead", min_skill=230, max_skill=264,
+        Recipe(11460, "Elixir of Detect Undead", min_skill=230, max_skill=239,
                note="1x Arthas' Tears (8836), 1x Crystal Vial (8925) "
-                    "-> item 9154 - only two reagent types, no focus needed"),
-        Recipe(17553, "Superior Mana Potion", min_skill=265, max_skill=284,
+                    "-> item 9154 - only two reagent types, no focus needed. "
+                    "max_skill was 264; 240-264 went to Elixir of Greater "
+                    "Agility directly below, which is ORANGE across all "
+                    "twenty-five of them where this is yellow from 245 - see "
+                    "the RAID CONSUMABLES block above"),
+        # A REAL MELEE ELIXIR INSTEAD OF TWENTY-FIVE POINTS OF DETECTING
+        # UNDEAD. trainer_spell rank 240, yellow 255, grey 295, no focus. Its
+        # Sungrass and Crystal Vial are already gathered and bought for
+        # Superior Healing Potion (11457) and Superior Mana Potion (17553)
+        # respectively, and its Goldthorn for Elixir of Agility (11449), so
+        # like Elixir of Fortitude above it costs nothing new to supply.
+        Recipe(11467, "Elixir of Greater Agility", min_skill=240, max_skill=264,
+               note="1x Sungrass (8838), 1x Goldthorn (3821), "
+                    "1x Crystal Vial (8925) -> item 9187, no focus needed. "
+                    "+25 agility for an hour, for every melee and hunter. "
+                    "trainer_spell rank 240 is the realm's own floor; "
+                    "SkillLineAbility.MinSkillLineRank reads 1 and cannot be "
+                    "used for it"),
+        Recipe(17553, "Superior Mana Potion", min_skill=265, max_skill=274,
                note="2x Sungrass (8838), 2x Blindweed (8839), "
-                    "1x Crystal Vial (8925) -> item 13443, no focus needed"),
-        Recipe(17556, "Major Healing Potion", min_skill=285, max_skill=300,
+                    "1x Crystal Vial (8925) -> item 13443, no focus needed. "
+                    "max_skill was 284; 275-284 went to Major Healing Potion "
+                    "below, which the realm teaches at exactly 275 and which "
+                    "is orange to 290 where this is yellow from 275"),
+        Recipe(17556, "Major Healing Potion", min_skill=275, max_skill=300,
                note="2x Golden Sansam (13464), 1x Mountain Silversage (13465), "
-                    "1x Crystal Vial (8925) -> item 13446, no focus needed"),
+                    "1x Crystal Vial (8925) -> item 13446, no focus needed. "
+                    "min_skill was 285, ten points later than the realm's own "
+                    "trainer_spell rank of 275 - the top of this ladder was "
+                    "already a raid consumable and was simply starting late"),
     ),
     SKILL_IDS["blacksmithing"]: (
         Recipe(2660, "Rough Sharpening Stone", min_skill=1, max_skill=29,
@@ -1147,9 +1315,23 @@ RECIPES: dict = {
                     "needed; MinSkillLineRank 1, grey 100"),
         Recipe(3337, "Heavy Grinding Stone", min_skill=125, max_skill=140,
                note="3x Heavy Stone -> 1x Heavy Grinding Stone, no focus needed"),
-        Recipe(9920, "Solid Grinding Stone", min_skill=200, max_skill=209,
-               note="4x Solid Stone -> 1x Solid Grinding Stone, no focus "
-                    "needed; max_skill was 210, its own grey value"),
+        # SOLID SHARPENING STONE REPLACED SOLID GRINDING STONE HERE, and the
+        # two are one word apart in every leveling guide. A SHARPENING stone
+        # goes on a weapon for +6 damage for half an hour and is what a raider
+        # carries; a GRINDING stone is a reagent for armour recipes and does
+        # nothing on its own. Measured against the same md5-verified DBCs: same
+        # skill line 164, same trainer_spell rank 200, same
+        # TrivialSkillLineRankLow 200 and High 210, same Solid Stone (7912)
+        # reagent - and 9918 consumes ONE per cast where 9920 consumed FOUR. So
+        # this is four times cheaper to supply for an item the raid actually
+        # uses, with no skill cost at any value in the bracket. See the RAID
+        # CONSUMABLES block above. max_skill stays 209 for the reason 9920's
+        # own note gave: 210 is the grey value.
+        Recipe(9918, "Solid Sharpening Stone", min_skill=200, max_skill=209,
+               note="1x Solid Stone -> 1x Solid Sharpening Stone (item 7964), "
+                    "no focus needed; max_skill is 209 because 210 is its grey "
+                    "value. NOT 9920 Solid Grinding Stone, which held this "
+                    "bracket and ate 4x Solid Stone for an armour reagent"),
         Recipe(16641, "Dense Sharpening Stone", min_skill=250, max_skill=259,
                note="1x Dense Stone -> 1x Dense Sharpening Stone, no focus "
                     "needed; max_skill was 260, its own grey value"),

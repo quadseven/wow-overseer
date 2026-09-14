@@ -62,11 +62,18 @@ MEASURED_FOCUS = {
     12619: 1, 19788: 0, 19791: 1, 19795: 1,
     # MINING - the one focus-gated entry that has a walk (infra#3748)
     2657: 3,
-    # ALCHEMY
-    2330: 0, 2337: 0, 3447: 0, 3173: 0, 7181: 0, 11449: 0, 11450: 0,
-    11457: 0, 11460: 0, 17553: 0, 17556: 0,
-    # BLACKSMITHING - 2665 is gone, see craft.py's COLOUR BANDS block
-    2660: 0, 3320: 0, 3326: 0, 3337: 0, 9920: 0, 16641: 0,
+    # ALCHEMY - 3450 and 11467 are the raid-consumable brackets, and their
+    # focus is a measurement rather than an inherited assumption: the brief
+    # that asked for them stated that Alchemy's high-tier flasks need an
+    # "Alchemy Lab" focus, and on this realm that is FALSE for every flask,
+    # elixir and potion. Alchemy Lab is focus 663 and exactly six spells in
+    # the whole file want it, all of them Alchemist's Stones.
+    2330: 0, 2337: 0, 3447: 0, 3450: 0, 3173: 0, 7181: 0, 11449: 0, 11450: 0,
+    11457: 0, 11460: 0, 11467: 0, 17553: 0, 17556: 0,
+    # BLACKSMITHING - 2665 is gone, see craft.py's COLOUR BANDS block, and
+    # 9920 Solid Grinding Stone is gone too, replaced at the same bracket by
+    # 9918 Solid Sharpening Stone - see craft.py's RAID CONSUMABLES block
+    2660: 0, 3320: 0, 3326: 0, 3337: 0, 9918: 0, 16641: 0,
     # LEATHERWORKING
     2881: 0, 2152: 0, 9058: 0, 3756: 0, 3763: 0, 2167: 0, 7135: 0, 20649: 0,
     3818: 0, 3780: 0, 7151: 0, 7156: 0, 10487: 0, 10507: 0, 10548: 0,
@@ -103,12 +110,13 @@ MEASURED_BANDS = {
     2657: (1, 25, 70),
     # ALCHEMY - 2337's floor of 80 is the twenty-point wall Ugga walked into
     2330: (1, 55, 95), 2337: (80, 85, 125), 3447: (1, 135, 175),
-    3173: (1, 145, 185), 7181: (1, 175, 215), 11449: (1, 205, 245),
-    11450: (1, 215, 255), 11457: (1, 230, 270), 11460: (1, 245, 285),
-    17553: (1, 275, 315), 17556: (1, 290, 330),
+    3450: (1, 195, 235), 3173: (1, 145, 185), 7181: (1, 175, 215),
+    11449: (1, 205, 245), 11450: (1, 215, 255), 11457: (1, 230, 270),
+    11460: (1, 245, 285), 11467: (1, 255, 295), 17553: (1, 275, 315),
+    17556: (1, 290, 330),
     # BLACKSMITHING
     2660: (1, 15, 55), 3320: (1, 45, 85), 3326: (1, 75, 100),
-    3337: (1, 125, 150), 9920: (1, 200, 210), 16641: (1, 255, 260),
+    3337: (1, 125, 150), 9918: (1, 200, 210), 16641: (1, 255, 260),
     # LEATHERWORKING
     2881: (1, 20, 40), 2152: (1, 30, 60), 9058: (1, 40, 70),
     3756: (1, 85, 115), 3763: (1, 110, 140), 2167: (100, 125, 150),
@@ -494,10 +502,21 @@ class AlchemyRecipeForTests(unittest.TestCase):
         self.assertEqual(craft.recipe_for(alchemy, 140).spell_id, 3173)
         self.assertEqual(craft.recipe_for(alchemy, 154).spell_id, 3173)
 
-    def test_greater_healing_potion_covers_155_to_184(self):
+    def test_greater_healing_potion_covers_155_to_174(self):
+        """WAS 155-184. The last ten points went to Elixir of Fortitude, which
+        is ORANGE across all of them (yellow 195) where this is YELLOW from
+        175 - so the raid consumable is better on skill AND on output. See
+        craft.py's RAID CONSUMABLES block."""
         alchemy = goals.SKILL_IDS["alchemy"]
         self.assertEqual(craft.recipe_for(alchemy, 155).spell_id, 7181)
-        self.assertEqual(craft.recipe_for(alchemy, 184).spell_id, 7181)
+        self.assertEqual(craft.recipe_for(alchemy, 174).spell_id, 7181)
+
+    def test_elixir_of_fortitude_covers_175_to_184(self):
+        """The first raid consumable this family will ever reach, and the only
+        one on this realm a TRAINER teaches below Alchemy 200."""
+        alchemy = goals.SKILL_IDS["alchemy"]
+        self.assertEqual(craft.recipe_for(alchemy, 175).spell_id, 3450)
+        self.assertEqual(craft.recipe_for(alchemy, 184).spell_id, 3450)
 
     def test_elixir_of_agility_covers_185_to_209(self):
         alchemy = goals.SKILL_IDS["alchemy"]
@@ -514,19 +533,31 @@ class AlchemyRecipeForTests(unittest.TestCase):
         self.assertEqual(craft.recipe_for(alchemy, 215).spell_id, 11457)
         self.assertEqual(craft.recipe_for(alchemy, 229).spell_id, 11457)
 
-    def test_elixir_of_detect_undead_covers_230_to_264(self):
+    def test_elixir_of_detect_undead_covers_230_to_239(self):
+        """WAS 230-264. Elixir of Greater Agility took the last twenty-five,
+        being orange across all of them (yellow 255) where this goes yellow at
+        245 - and it makes something a melee raider drinks rather than an
+        elixir that detects undead."""
         alchemy = goals.SKILL_IDS["alchemy"]
         self.assertEqual(craft.recipe_for(alchemy, 230).spell_id, 11460)
-        self.assertEqual(craft.recipe_for(alchemy, 264).spell_id, 11460)
+        self.assertEqual(craft.recipe_for(alchemy, 239).spell_id, 11460)
 
-    def test_superior_mana_potion_covers_265_to_284(self):
+    def test_elixir_of_greater_agility_covers_240_to_264(self):
+        alchemy = goals.SKILL_IDS["alchemy"]
+        self.assertEqual(craft.recipe_for(alchemy, 240).spell_id, 11467)
+        self.assertEqual(craft.recipe_for(alchemy, 264).spell_id, 11467)
+
+    def test_superior_mana_potion_covers_265_to_274(self):
+        """WAS 265-284. Major Healing Potion reaches down to 275, which is the
+        rank this realm's own trainer_spell states for it - the top bracket was
+        already a raid consumable and was simply starting ten points late."""
         alchemy = goals.SKILL_IDS["alchemy"]
         self.assertEqual(craft.recipe_for(alchemy, 265).spell_id, 17553)
-        self.assertEqual(craft.recipe_for(alchemy, 284).spell_id, 17553)
+        self.assertEqual(craft.recipe_for(alchemy, 274).spell_id, 17553)
 
-    def test_major_healing_potion_covers_285_to_300(self):
+    def test_major_healing_potion_covers_275_to_300(self):
         alchemy = goals.SKILL_IDS["alchemy"]
-        self.assertEqual(craft.recipe_for(alchemy, 285).spell_id, 17556)
+        self.assertEqual(craft.recipe_for(alchemy, 275).spell_id, 17556)
         self.assertEqual(craft.recipe_for(alchemy, 300).spell_id, 17556)
 
     def test_nothing_above_300(self):

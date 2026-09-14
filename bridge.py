@@ -60,6 +60,7 @@ import protect
 import questbook
 import questshare
 import quests
+import raidcraft
 import recruit
 import relay
 import tabard
@@ -4622,6 +4623,29 @@ class Bridge(discord.Client):
         ]
         plan = craft_rhythm.rhythm(stands, standing)
         log.info("craft_rhythm: %s", craft_rhythm.report(plan))
+
+        # HOW FAR THE FAMILY IS FROM THE RAID'S OWN SHOPPING LIST, every pass,
+        # on the inputs this function already holds. `raidcraft` is the join
+        # between the LEVELING table this pass drives (craft.RECIPES) and the
+        # RAID plan on the Raid page (raidgoals.RECIPES), and its whole reason
+        # for existing is that a crafter can climb a perfectly good ladder
+        # without a single rung producing anything forty people would drink.
+        #
+        # IT IS LOGGED RATHER THAN ACTED ON, AND THAT IS THE HONEST SHAPE
+        # TODAY. Not one of the twenty-two raid consumables on this realm is
+        # castable by anybody in the family - the cheapest a trainer teaches is
+        # Elixir of Fortitude at Alchemy 175 and Ugga is at 14/75 - so a pass
+        # that BRANCHED on this would be a mechanism with no reachable case,
+        # which this repo has been bitten by before. The preference itself is
+        # exercised where it can be: in craft.RECIPES' own brackets, gated by
+        # test_raidcraft.ThePreferenceIsTakenWhereItIsFree. What this line buys
+        # is that the distance is visible while it closes, the same half of
+        # infra#3696 `craft_rhythm.report` exists for.
+        #
+        # It costs no query: `skills` above is already the whole family's trade
+        # skills, fetched for the rhythm decision itself.
+        log.info("raidcraft: %s", raidcraft.report(names, skills))
+
         if not plan.changed:
             return
 

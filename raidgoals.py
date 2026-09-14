@@ -200,6 +200,27 @@ MAKES_ONE = 1
 # against `item_template` at read time. A reagent this realm does not carry
 # under that name is reported by name as unresolved, on the goal it belongs
 # to, instead of quietly becoming a zero.
+#
+# THAT CAVEAT HAS NOW BEEN SETTLED FOR SEVEN OF THE EIGHT, FROM OUTSIDE THIS
+# MODULE, AND EVERY LINE PROVED CORRECT. The paragraph above is right that
+# checking means opening the database and that this module may not - so the
+# check was done by the pass that built `raidcraft.py`, which reads the running
+# worldserver's own `Spell.dbc` (md5 543b9fe61355b6a77a01714d52fea2e5, matched
+# against the pod's `md5sum` on 2026-09-14) rather than any database at all.
+# Reagent by reagent and count by count, all seven Alchemy recipes below agree
+# with the server: the three flasks, Greater Fire Protection Potion, Major
+# Healing Potion, Major Mana Potion and Stonescale Oil. See the block at the
+# foot of raidcraft.py for the full list of what was read.
+#
+# NOTHING HERE IS EDITED ON THE STRENGTH OF THAT, because there was nothing to
+# correct, and a note is the honest way to record a check that found nothing
+# rather than a change that pretends it found something. The EIGHTH recipe -
+# the Engineering Field Repair Bot (22704) - was not checked and stays exactly
+# as unverified as the footer already says: nobody on the roster holds
+# Engineering at a rank that could cast it, so it was outside that pass's
+# scope. `MAKES_ONE` is also untouched and is still the floor it says it is:
+# how many items one cast produces is a different Spell.dbc field from the
+# reagents, and it was not part of what that pass measured.
 ALCHEMY = "alchemy"
 ENGINEERING = "engineering"
 
