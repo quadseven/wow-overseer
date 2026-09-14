@@ -7316,6 +7316,27 @@ class Bridge(discord.Client):
 
     # --- fan-out (infra#2605): the hive mind -------------------------------
 
+    async def _resolve_band(self, expression: str) -> tuple[list[str], str]:
+        """Read the three live inputs a band needs, and resolve it.
+
+        ONE PLACE, because there are two callers and they must agree. `_muster`
+        and `_conjure` both resolve the same expression - `_conjure` to ground
+        the inner voice in a real member, `_muster` again afterwards so the
+        rows match who is in the world when they are written - and a band that
+        resolved in one and refused in the other would make a natural-language
+        order to a group behave unlike the same group's raw order.
+
+        `family` is the enabled roster names, which only the "recruits"
+        expression reads (see fanout._resolve_recruits). Fetched for every band
+        rather than behind a check on the expression, because which inputs an
+        expression needs is fanout.py's grammar to know and not this class's.
+        It is the same single-table read `_set_job` makes on every job order.
+        """
+        roster = await asyncio.to_thread(_fetch_roster)
+        guild_names = await asyncio.to_thread(_fetch_guild_names)
+        family = await asyncio.to_thread(_fetch_enabled_names)
+        return fanout.resolve_targets(expression, roster, guild_names, family)
+
     async def _muster(self, d, command: str, channel) -> None:
         """Fan one order out to a resolved band, then report what landed.
 
@@ -7329,9 +7350,7 @@ class Bridge(discord.Client):
         report is the acknowledgment for a band, and per-row reporting stays
         the single-character path's job.
         """
-        roster = await asyncio.to_thread(_fetch_roster)
-        guild_names = await asyncio.to_thread(_fetch_guild_names)
-        names, reason = fanout.resolve_targets(d.expression, roster, guild_names)
+        names, reason = await self._resolve_band(d.expression)
         if not names:
             await channel.send(reason[:1990])
             return
@@ -7560,9 +7579,7 @@ class Bridge(discord.Client):
         minute, and the rows must match who is in the world when they are
         written, not who was there when the order was typed.
         """
-        roster = await asyncio.to_thread(_fetch_roster)
-        guild_names = await asyncio.to_thread(_fetch_guild_names)
-        names, reason = fanout.resolve_targets(d.expression, roster, guild_names)
+        names, reason = await self._resolve_band(d.expression)
         if not names:
             await channel.send(reason[:1990])
             return

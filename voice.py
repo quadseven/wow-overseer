@@ -40,9 +40,29 @@ VOCABULARY = {
     "home": "set hearth at the nearest innkeeper",
     "mount": "get on the mount",
     "summon": "come to the speaker",
-    "co +grind": "enable continuous grinding strategy",
-    "co -grind": "disable continuous grinding strategy",
-    "co +loot": "loot everything",
+    # `nc`, NOT `co`, AND THE DIFFERENCE IS THE WHOLE COMMAND. These three
+    # read `co` until infra#3928 and could never work, for the reason
+    # goals.strategy_for spells out with its measurements: mod-playerbots
+    # registers `grind` and `loot` on the NON-combat engine
+    # (AiFactory::AddDefaultNonCombatStrategies, verified at the pinned module
+    # revision - `grind` is added inside the random-bot block and `loot` in
+    # the common one), so `co +grind` adds nothing to the engine that moves
+    # the character. It still delivered, and the character stood exactly where
+    # it spawned:
+    #
+    #     Ugga before        -8950,-132
+    #     after 'co +grind'  -8950,-132   not one unit
+    #     after 'nc +grind'  -8990,-103
+    #
+    # goals.py fixed its own copy and this one was left behind, which is the
+    # same shape as the "sell junk" entry documented above: a vocabulary line
+    # the model is invited to pick that reports success and does nothing.
+    # Re-checked live against a probe of the running engines: `grind` and
+    # `loot` appear in `non_combat` for every character read, and in `combat`
+    # for none.
+    "nc +grind": "enable continuous grinding strategy",
+    "nc -grind": "disable continuous grinding strategy",
+    "nc +loot": "loot everything",
     "drop quest": "abandon a quest",
     "leave": "leave the current group",
     "los": "list what the character can see",
@@ -68,6 +88,15 @@ MULTIWORD = frozenset(v for v in VOCABULARY if " " in v)
 # extra tokens are the rest of mod-playerbots' common chat grammar, so power
 # users typing raw commands keep their pre-#2600 behavior.
 RAW_STARTERS = {v for v in VOCABULARY if " " not in v} | {
+    # `nc` BESIDE `co`, and its absence was not a judgement about safety - it
+    # was an oversight that made the WORKING half of the strategy grammar
+    # untypable. `co` has been a raw starter since #2600, so `@Name co +flee`
+    # went straight to the bot while `@Name nc +stay` - the same shape, on the
+    # engine that actually holds `stay`, `grind`, `follow` and `new rpg`, and
+    # the exact form goals.life_strategies writes on every cycle - detoured
+    # through the inner voice to be re-guessed by a model. The charset gate
+    # below is unchanged and still applies to both.
+    "nc",
     "co", "cast", "castnc", "e", "ue", "equip", "unequip", "talk", "accept",
     "reward", "release", "revive", "emote", "q", "ll", "c", "s", "b", "bank",
     "gb", "rtsc", "rti", "focus", "playerbot", "tank", "heal", "dps", "say",

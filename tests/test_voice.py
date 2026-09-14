@@ -4,8 +4,11 @@ No live LLM anywhere - the model's output is canned JSON, and the prompt is
 asserted as a string. That is the seam the epic pinned (infra#2597).
 """
 import json
+import pathlib
+import re
 import unittest
 
+import goals
 import voice
 from core import InsertCommand, NLDirective, Reply, parse_directive
 
@@ -189,3 +192,87 @@ class SellJunkTest(unittest.TestCase):
         for bad in ("sell everything", "drop everything", "reset everything"):
             d = voice.parse_decision(json.dumps({"command": bad, "say": "..."}))
             self.assertIsNone(d.command, bad)
+
+
+class StrategyEngineTest(unittest.TestCase):
+    """A strategy command must name the engine that HOLDS the strategy.
+
+    mod-playerbots runs two engines and `co` and `nc` address one each.
+    `co +grind` parses, delivers, reports success and changes nothing,
+    because `grind` is registered on the non-combat engine - goals.py's
+    `strategy_for` documents the live measurement ("not one unit") and
+    switched its own copy to `nc`. The vocabulary shown to the model kept
+    saying `co` for another three entries, which is a line the model is
+    INVITED to pick that cannot work: the same shape as the "sell junk"
+    entry voice.py's own comment warns about, twenty lines above it.
+
+    Nothing pinned the engine choice, which is why the two modules were
+    free to disagree. These two tests are that pin. Verified against the
+    live engines the day they were written: a `kind='probe'` read of
+    `strategies` on characters of four different classes put `grind`,
+    `loot`, `stay`, `follow` and `new rpg` in `non_combat` every time and
+    in `combat` never.
+    """
+
+    # A strategy command, split into engine, sign and strategy name.
+    _STRATEGY = re.compile(r"^(nc|co) ([+-])([a-z][a-z ]*)$")
+
+    @classmethod
+    def _strategy_commands(cls, text: str):
+        """Every "<engine> <sign><strategy>" string in a blob of source."""
+        found = {}
+        for line in re.findall(r'"((?:nc|co) [+-][a-z][a-z ]*)"', text):
+            engine, _, strategy = cls._STRATEGY.match(line).groups()
+            found.setdefault(strategy.strip(), set()).add(engine)
+        return found
+
+    def test_the_vocabulary_and_the_life_pass_agree_on_every_engine(self):
+        """The real invariant: two copies of one fact must not disagree.
+
+        goals.py's engine choices are measured against the running world, so
+        they are the repository's own answer. Read out of its source rather
+        than restated here, because a restated constant is a third copy.
+        """
+        driven = self._strategy_commands(
+            pathlib.Path(goals.__file__).read_text(encoding="utf-8")
+        )
+        spoken = self._strategy_commands(
+            "".join(f'"{entry}"' for entry in voice.VOCABULARY)
+        )
+        self.assertTrue(driven, "no strategy commands found in goals.py")
+        shared = sorted(set(driven) & set(spoken))
+        self.assertIn("grind", shared, "the entry this test was written for")
+        for strategy in shared:
+            self.assertEqual(
+                driven[strategy], spoken[strategy],
+                f"goals.py drives '{strategy}' on {sorted(driven[strategy])} and "
+                f"the vocabulary offers it on {sorted(spoken[strategy])}",
+            )
+
+    def test_no_non_combat_strategy_is_offered_on_the_combat_engine(self):
+        """Covers the entries goals.py happens not to drive, `loot` among them.
+
+        The set is mod-playerbots' own, from AiFactory's non-combat defaults
+        at the pinned module revision: `nc`, `food`, `chat`, `follow`,
+        `default`, `force rebuff`, `quest`, `loot`, `gather`, `duel`, `pvp`,
+        `buff`, `mount` and `emote` in the common block, and `grind`, `lfg`,
+        `new rpg` and `bg` in the random-bot one. Only the ones a person
+        would plausibly ask for are listed; a strategy genuinely on both
+        engines (`flee`) is deliberately absent, which is what keeps
+        goals.FLEE_STRATEGY's `co +flee` correct.
+        """
+        non_combat_only = frozenset({
+            "grind", "loot", "gather", "quest", "follow", "stay", "new rpg",
+            "mount", "food", "lfg",
+        })
+        for entry in voice.VOCABULARY:
+            match = self._STRATEGY.match(entry)
+            if not match:
+                continue
+            engine, _, strategy = match.groups()
+            if strategy.strip() in non_combat_only:
+                self.assertEqual(
+                    engine, "nc",
+                    f"'{entry}' aims a non-combat strategy at the combat engine; "
+                    "it will deliver, report success and do nothing",
+                )

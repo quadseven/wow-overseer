@@ -265,6 +265,147 @@ class SplitGroupOrderTest(unittest.TestCase):
         self.assertEqual(split_group_order("guild", '"Rangers of Vengeance follow'),
                          ("guild", ""))
 
+    def test_recruits_needs_no_name_and_takes_the_whole_rest(self):
+        self.assertEqual(split_group_order("recruits", "nc +stay"),
+                         ("recruits", "nc +stay"))
+
+
+# The family, as overseer_roster spells it. Every recruits test subtracts
+# exactly this set, so it is written once.
+FAMILY = ["Grug", "Bork", "Ugga"]
+OURS = 23
+
+
+class RecruitTargetingTest(unittest.TestCase):
+    """@recruits - the family's own guild, minus the family.
+
+    The band exists because `@guild "<ours>" <order>` includes the five
+    characters whose strategies the life pass owns. See fanout.RECRUITS.
+    """
+
+    def test_the_guilds_recruits_answer_and_the_family_does_not(self):
+        roster = [
+            _row("Grug", guild_id=OURS),
+            _row("Bork", guild_id=OURS),
+            _row("Tinceenk", level=41, guild_id=OURS),
+            _row("Selie", level=38, guild_id=OURS),
+        ]
+        names, reason = resolve_targets("recruits", roster, {OURS: "Cave"}, FAMILY)
+        self.assertEqual(names, ["Tinceenk", "Selie"])
+        self.assertIn("recruit", reason.lower())
+
+    def test_another_guilds_members_are_not_recruits(self):
+        # The realm is full of other guilds' bots and they share the world
+        # with ours. Membership of OUR guild is the whole test.
+        roster = [
+            _row("Grug", guild_id=OURS),
+            _row("Tinceenk", guild_id=OURS),
+            _row("Braza", guild_id=20),
+            _row("Vely"),
+        ]
+        names, _ = resolve_targets("recruits", roster, {OURS: "Cave"}, FAMILY)
+        self.assertEqual(names, ["Tinceenk"])
+
+    def test_the_family_is_excluded_case_insensitively(self):
+        # overseer_roster and overseer_snapshot both hold the server's own
+        # spelling, but nothing in the grammar guarantees the two agree, and
+        # a family member swept in by a capital letter is the exact accident
+        # this band exists to prevent.
+        roster = [_row("GRUG", guild_id=OURS), _row("Tinceenk", guild_id=OURS)]
+        names, _ = resolve_targets("recruits", roster, {OURS: "Cave"}, FAMILY)
+        self.assertEqual(names, ["Tinceenk"])
+
+    def test_an_offline_family_member_is_still_excluded(self):
+        # Ugga has no snapshot row this poll. She is still family, and a
+        # missed poll must not enlist her into "everyone but the family".
+        roster = [
+            _row("Grug", guild_id=OURS),
+            _row("Ugga", guild_id=OURS),
+            _row("Tinceenk", guild_id=OURS),
+        ]
+        online_without_ugga = [r for r in roster if r["name"] != "Ugga"]
+        names, _ = resolve_targets(
+            "recruits", online_without_ugga, {OURS: "Cave"}, FAMILY
+        )
+        self.assertEqual(names, ["Tinceenk"])
+
+    def test_no_family_supplied_refuses_rather_than_taking_the_guild(self):
+        # The dangerous default: an empty family would subtract nothing and
+        # resolve to the whole guild - the band this expression exists to
+        # avoid ordering.
+        roster = [_row("Grug", guild_id=OURS), _row("Tinceenk", guild_id=OURS)]
+        names, reason = resolve_targets("recruits", roster, {OURS: "Cave"}, None)
+        self.assertEqual(names, [])
+        self.assertIn("family", reason.lower())
+
+    def test_an_empty_family_list_refuses_too(self):
+        roster = [_row("Grug", guild_id=OURS), _row("Tinceenk", guild_id=OURS)]
+        names, reason = resolve_targets("recruits", roster, {OURS: "Cave"}, [])
+        self.assertEqual(names, [])
+        self.assertIn("family", reason.lower())
+
+    def test_no_family_in_the_world_refuses(self):
+        roster = [_row("Tinceenk", guild_id=OURS), _row("Selie", guild_id=OURS)]
+        names, reason = resolve_targets("recruits", roster, {OURS: "Cave"}, FAMILY)
+        self.assertEqual(names, [])
+        self.assertIn("which guild", reason.lower())
+
+    def test_an_unguilded_family_member_does_not_split_the_family(self):
+        # guild_id 0 is "no guild", not a guild of its own.
+        roster = [
+            _row("Grug", guild_id=OURS),
+            _row("Bork", guild_id=0),
+            _row("Tinceenk", guild_id=OURS),
+        ]
+        names, _ = resolve_targets("recruits", roster, {OURS: "Cave"}, FAMILY)
+        self.assertEqual(names, ["Tinceenk"])
+
+    def test_a_family_split_across_two_guilds_refuses_by_name(self):
+        roster = [
+            _row("Grug", guild_id=OURS),
+            _row("Bork", guild_id=20),
+            _row("Tinceenk", guild_id=OURS),
+        ]
+        names, reason = resolve_targets(
+            "recruits", roster, {OURS: "Cave", 20: "Carpe Diem"}, FAMILY
+        )
+        self.assertEqual(names, [])
+        self.assertIn("Cave", reason)
+        self.assertIn("Carpe Diem", reason)
+
+    def test_a_guild_of_family_only_refuses_and_names_the_guild(self):
+        roster = [_row("Grug", guild_id=OURS), _row("Bork", guild_id=OURS)]
+        names, reason = resolve_targets("recruits", roster, {OURS: "Cave"}, FAMILY)
+        self.assertEqual(names, [])
+        self.assertIn("Cave", reason)
+
+    def test_a_recruit_with_no_playerbot_ai_is_not_called(self):
+        # Same rule the other bands apply: a row for a character
+        # mod-overseer cannot whisper to would make the muster overstate.
+        roster = [
+            _row("Grug", guild_id=OURS),
+            _row("Tinceenk", guild_id=OURS, bot=0),
+            _row("Selie", guild_id=OURS),
+        ]
+        names, _ = resolve_targets("recruits", roster, {OURS: "Cave"}, FAMILY)
+        self.assertEqual(names, ["Selie"])
+
+    def test_the_cap_applies_to_recruits_and_says_who_stayed_home(self):
+        roster = [_row("Grug", guild_id=OURS)] + [
+            _row(f"Rec{i:02d}", level=50 - i, guild_id=OURS)
+            for i in range(MAX_FANOUT_TARGETS + 5)
+        ]
+        names, reason = resolve_targets("recruits", roster, {OURS: "Cave"}, FAMILY)
+        self.assertEqual(len(names), MAX_FANOUT_TARGETS)
+        self.assertNotIn("Grug", names)
+        self.assertIn("5 left behind", reason)
+
+    def test_the_band_is_named_the_same_way_everywhere(self):
+        # The channel's muster report and each character's own thought must
+        # name one band, not two.
+        self.assertEqual(describe_expression("recruits"), "the guild's recruits")
+        self.assertIn("the guild's recruits", thought_text("recruits", "nc +stay"))
+
 
 if __name__ == "__main__":
     unittest.main()

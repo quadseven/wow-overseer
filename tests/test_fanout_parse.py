@@ -45,6 +45,18 @@ class GroupGrammarTest(unittest.TestCase):
         out = parse_directive("@Horde grind", ME, ALLOWED)
         self.assertEqual(out, [FanoutCommand("horde", "grind", SRC)])
 
+    def test_recruits_becomes_a_fanout_with_no_guild_name(self):
+        # Unlike "@guild", this head takes no argument: which guild is ours
+        # is read off the family at resolve time, never typed.
+        out = parse_directive("@recruits nc +stay", ME, ALLOWED)
+        self.assertEqual(out, [FanoutCommand("recruits", "nc +stay", SRC)])
+
+    def test_a_character_called_Recruits_would_lose_its_name(self):
+        # The deliberate cost of a reserved word, pinned so the trade is
+        # visible rather than discovered. Same trade "@horde" already made.
+        out = parse_directive("@Recruits follow", ME, ALLOWED)
+        self.assertEqual(out, [FanoutCommand("recruits", "follow", SRC)])
+
 
 class ConjuredEventTest(unittest.TestCase):
     def test_natural_language_at_a_group_is_a_conjured_event(self):
@@ -69,6 +81,12 @@ class GroupHelpTest(unittest.TestCase):
         self.assertEqual(len(out), 1)
         self.assertIsInstance(out[0], Reply)
         self.assertIn("guild", out[0].text.lower())
+
+    def test_recruits_with_no_order_is_asked_for_one_by_name(self):
+        out = parse_directive("@recruits", ME, ALLOWED)
+        self.assertEqual(len(out), 1)
+        self.assertIsInstance(out[0], Reply)
+        self.assertIn("recruit", out[0].text.lower())
 
     def test_an_overlong_group_order_is_rejected_with_its_length(self):
         long_cmd = "x" * (MAX_COMMAND_LEN + 1)
