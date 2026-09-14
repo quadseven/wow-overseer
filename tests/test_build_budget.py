@@ -27,6 +27,33 @@ that one file bought back about 140KB, thirty times the overage. Trimming
 comments to find 4679 would have bought back the comments, which is the trade
 the paragraph above exists to refuse.
 
+MEASURE THE ARTIFACT, NOT THE CHECKOUT (infra#3812). Its neighbour above
+refuses to shrink the thing being measured; this one is about measuring the
+right thing at all. packed() reads each file's bytes and replaces CRLF with
+LF before handing them to the tar, because .gitattributes is `* text=auto`:
+the repository stores LF, the Linux runner checks out LF, and the LF tarball
+is therefore the one the build actually ships. A Windows working tree is CRLF
+and weighs about 4.8KB more for the same commit - 785237 against 780477 on
+the tree that filed the issue. Without the normalisation this file was
+reading the developer's git config and calling it the artifact.
+
+The error is always pessimistic, which is why it hid for most of this file's
+life: while the margin was 30KB, being 4.8KB over-cautious cost nothing.
+It stopped hiding when infra#3802 took the margin to 1195 bytes, which is
+smaller than the spread. Measured on a real branch that night - PR #3808
+rebased onto PR #3801's head - the same commit read 786454 on CRLF and FAILED
+("786454 not less than 786432") while reading 781624 on LF and passing with
+4808 bytes spare. A guard that answers differently on different machines
+stops being read, which is worse than the thing it guards.
+
+Note what this is NOT, because it looks like the trade the paragraph above
+refuses and is its opposite: not one byte of budget, cap or margin moved, and
+nothing was bought back that anyone can now spend. The numbers below are the
+same numbers they were. The only thing that changed is which bytes get
+weighed - and if a future change here ever needs the budget to go up or a
+comment to come out, that is the signal to split the dir, not to edit this
+paragraph.
+
 THE WHOLE DIR NO LONGER FITS IN ONE CONFIGMAP. Packed as a single tarball it
 is 1083564 bytes gzipped against the 1048576 cap, so the split is not a
 tidiness preference any more - it is load-bearing, and anything that quietly
@@ -70,13 +97,26 @@ last kilobyte. The split this file measures now leaves about 140KB of slack,
 twelve times the spread above, so the verdict is the same wherever it runs.
 A change that trims the slack back toward the noise floor has broken the
 check even while it is passing.
+
+ONE OF THOSE THREE READINGS IS GONE (infra#3812). The three numbers above are
+kept as the record of how wide this can get, but the first two of them no
+longer differ: normalising line endings in packed() collapses the 791111/786473
+pair into a single reading, because that gap was the reader's checkout and
+nothing else. What survives is the compressor - zlib-ng against stock zlib,
+and Python's gzip against the GNU tar the build really runs - so the argument
+for a fat margin is unchanged and so is the rule about reading the number as a
+magnitude. The difference is that the remaining spread is a property of the
+machine's libraries, which a test cannot normalise away, rather than of a
+config setting, which it can.
 """
 import fnmatch
 import gzip
 import io
 import pathlib
 import re
+import shutil
 import tarfile
+import tempfile
 import unittest
 
 HERE = pathlib.Path(__file__).resolve().parent.parent
@@ -109,13 +149,44 @@ def _reproducible(info: tarfile.TarInfo) -> tarfile.TarInfo:
     return info
 
 
-def packed(names) -> int:
+def packed(names, root: pathlib.Path = HERE) -> int:
     """Gzipped size of a tarball of these top-level files, built the way the
-    reusable builds it: sorted names, files only, no directories."""
+    reusable builds it: sorted names, files only, no directories.
+
+    CRLF becomes LF on read, so the number is a property of the committed
+    bytes rather than of the reader's git config - see MEASURE THE ARTIFACT,
+    NOT THE CHECKOUT above. That is why each member is read and added by hand
+    instead of with tar.add(): tar.add() copies the working tree's bytes, and
+    on Windows those are the wrong bytes.
+
+    A member holding a NUL in its first 8000 bytes is left exactly as it sits,
+    which is the same test git's own buffer_is_binary() applies and therefore
+    the same set of files `text=auto` declines to normalise. Nothing at this
+    level is binary today, so the skip changes no number below; it is here
+    because of the DIRECTION its absence would err in. Every other
+    approximation in this file is pessimistic - the CRLF reading was too
+    heavy, so the guard cried wolf and nothing shipped over budget because of
+    it. Normalising a binary is the opposite: it can only make the measurement
+    SMALLER than the artifact, so the assertion could pass while the real
+    tarball is over the cap and the build on main is what finds out. A guard
+    that fails optimistically is worse than no guard, because it is trusted.
+    A font, an icon sprite or a PNG landing in this directory is an ordinary
+    afternoon, and without this line nothing would say the measurement had
+    quietly become wrong.
+
+    `root` exists so the CRLF/LF equality test below can pack a fixture it
+    controls; everything that measures the real build leaves it alone.
+    """
     raw = io.BytesIO()
     with tarfile.open(fileobj=raw, mode="w") as tar:
         for name in sorted(names):
-            tar.add(HERE / name, arcname=name, filter=_reproducible)
+            path = root / name
+            payload = path.read_bytes()
+            if b"\x00" not in payload[:8000]:
+                payload = payload.replace(b"\r\n", b"\n")
+            info = _reproducible(tar.gettarinfo(str(path), arcname=name))
+            info.size = len(payload)
+            tar.addfile(info, io.BytesIO(payload))
     return len(gzip.compress(raw.getvalue(), mtime=0))
 
 
@@ -228,6 +299,154 @@ class TheSourceTarballFitsItsConfigMap(unittest.TestCase):
     def test_the_measurement_is_a_property_of_the_files(self):
         source, _ = split()
         self.assertEqual(packed(source), packed(source))
+
+
+class TheMeasurementIsOfTheArtifactNotTheCheckout(unittest.TestCase):
+    """infra#3812, pinned here because the bug WAS the measurement varying.
+
+    The assertions above weigh the working tree, and a Windows working tree is
+    CRLF while the repository and the Linux runner are LF - about 4.8KB of
+    difference on this package for the same commit. That was invisible against
+    a 30KB margin and decisive against the 1195 bytes infra#3802 left, so the
+    budget assertion started passing on CI and failing on a developer's machine
+    for one commit. These tests pack the same text twice, once in each line
+    ending, and demand a single answer.
+    """
+
+    # Long enough that the two forms cannot gzip to the same size by luck: the
+    # CRLF copy carries one extra byte per line and the bodies are varied
+    # rather than repetitive, so the difference survives compression. A fixture
+    # too small to expose the bug would make the equality below hold for the
+    # wrong reason, which is what the second test is for.
+    LINES = 400
+
+    def _fixture(self, newline: bytes) -> pathlib.Path:
+        """A throwaway directory holding the same two files in one line ending.
+
+        Two files, not one, because the real measurement is a tarball of many
+        members and the per-member size field is part of what packed() has to
+        get right when it stops using tar.add().
+        """
+        root = pathlib.Path(tempfile.mkdtemp(prefix="budget-fixture-"))
+        self.addCleanup(shutil.rmtree, root, ignore_errors=True)
+        code = [f"def step_{i}(n):  # a comment, because comments are the point"
+                for i in range(self.LINES)]
+        data = [f'  {{"zone": {i}, "name": "a name for zone {i}"}},'
+                for i in range(self.LINES)]
+        for name, lines in (("sample.py", code), ("sample.json", data)):
+            # The trailing "" gives the file a final line ending, so the count
+            # of separators matches the count of lines on both forms.
+            body = newline.join(line.encode("utf-8") for line in [*lines, ""])
+            (root / name).write_bytes(body)
+        return root
+
+    def _binary_fixture(self) -> pathlib.Path:
+        """A directory holding one file git would call binary: a NUL inside
+        the first 8000 bytes, then varied CRLF-terminated records.
+
+        Varied rather than one repeated record because the assertion is about
+        gzipped size, and a highly compressible blob can weigh the same with
+        and without its CR bytes - which would let the test pass whether or
+        not packed() skipped it.
+        """
+        root = pathlib.Path(tempfile.mkdtemp(prefix="budget-binary-"))
+        self.addCleanup(shutil.rmtree, root, ignore_errors=True)
+        header = b"\x89SPRITE\x00\x1a\n"
+        records = b"".join(f"tile {i} at offset {i * 37}\r\n".encode("utf-8")
+                           for i in range(self.LINES))
+        (root / "sprite.bin").write_bytes(header + records)
+        return root
+
+    def test_the_same_files_weigh_the_same_in_crlf_and_in_lf(self):
+        """The whole of infra#3812 in one assertion. If this fails, packed()
+        is measuring the reader's checkout again and the budget assertions
+        above answer a different question on Windows than they do on CI."""
+        names = ["sample.json", "sample.py"]
+        crlf = packed(names, self._fixture(b"\r\n"))
+        lf = packed(names, self._fixture(b"\n"))
+        self.assertEqual(
+            crlf, lf,
+            f"the same files measured {crlf} bytes as CRLF and {lf} as LF. "
+            "packed() is weighing the working tree instead of the artifact; "
+            "the build ships LF, so LF is the honest number. Do not close the "
+            "gap by raising the budget.")
+
+    def test_the_crlf_and_lf_fixtures_really_are_different_bytes(self):
+        """Guard the guard. If _fixture ignored its argument, the equality
+        above would pass while proving nothing - the green test asking a
+        question nothing answers that this file's docstring warns about.
+
+        Asserted on line-ending counts and lengths rather than on the blobs
+        themselves: assertNotEqual on two 25KB bodies prints both of them, and
+        a 50KB diff is not a diagnosis. The length gap is one byte per line, so
+        'different' cannot come down to a stray character somewhere.
+        """
+        crlf_root, lf_root = self._fixture(b"\r\n"), self._fixture(b"\n")
+        for name in ("sample.py", "sample.json"):
+            with self.subTest(name=name):
+                crlf = (crlf_root / name).read_bytes()
+                lf = (lf_root / name).read_bytes()
+                self.assertEqual(crlf.count(b"\r\n"), self.LINES,
+                                 f"the CRLF {name} fixture has no CRLF in it")
+                self.assertEqual(lf.count(b"\r"), 0,
+                                 f"the LF {name} fixture has a CR in it")
+                self.assertEqual(len(crlf) - len(lf), self.LINES,
+                                 f"{name} should be exactly one byte per line "
+                                 "heavier as CRLF than as LF")
+
+    def _verbatim(self, names, root: pathlib.Path) -> int:
+        """What packed() would return if it normalised nothing at all: the
+        same tarball, built from the bytes exactly as they sit on disk. Equal
+        to packed() precisely when packed() left every member alone."""
+        raw = io.BytesIO()
+        with tarfile.open(fileobj=raw, mode="w") as tar:
+            for name in sorted(names):
+                tar.add(root / name, arcname=name, filter=_reproducible)
+        return len(gzip.compress(raw.getvalue(), mtime=0))
+
+    def test_normalising_does_not_change_what_an_lf_checkout_already_read(self):
+        """The fix must be a no-op on the runner, which is where the number
+        that matters comes from. An LF fixture packed by packed() has to equal
+        a byte-for-byte tar of the same files, or the normalisation is doing
+        something to the artifact rather than to the reading of it."""
+        root = self._fixture(b"\n")
+        names = ["sample.json", "sample.py"]
+        self.assertEqual(packed(names, root), self._verbatim(names, root))
+
+    def test_a_binary_member_is_weighed_exactly_as_it_sits(self):
+        """The one case where normalising would err OPTIMISTICALLY, so it is
+        the one case worth a test even though no top-level file is binary
+        today. A blanket replace over a sprite or a font would report fewer
+        bytes than the tarball really carries, and an under-reading assertion
+        passes while the apiserver refuses the ConfigMap. git's `text=auto`
+        leaves these files alone and so must this, or the two disagree about
+        what the artifact is.
+
+        The fixture carries CRLF pairs AFTER its NUL on purpose: without the
+        skip there is something for the replace to find, so this fails rather
+        than passing vacuously.
+        """
+        root = self._binary_fixture()
+        names = ["sprite.bin"]
+        self.assertEqual(
+            packed(names, root), self._verbatim(names, root),
+            "packed() rewrote a member that git's text=auto would have left "
+            "alone. That under-reports the artifact, which is the one "
+            "direction this guard must never be wrong in.")
+
+    def test_the_binary_fixture_is_one_git_would_call_binary(self):
+        """Guard this guard too. If the fixture had no NUL in git's window it
+        would be a text file, packed() would rightly normalise it, and the
+        test above would be asserting the opposite of what it claims."""
+        blob = (self._binary_fixture() / "sprite.bin").read_bytes()
+        # assertTrue, not assertIn: assertIn on a 12KB blob prints the blob,
+        # and the answer here is one bit either way.
+        self.assertTrue(b"\x00" in blob[:8000],
+                        "the binary fixture has no NUL in git's 8000-byte "
+                        "window, so git would treat it as text")
+        self.assertTrue(b"\r\n" in blob,
+                        "the binary fixture has no CRLF, so the test above "
+                        "would hold for want of anything to normalise")
 
 
 class TheReusableActuallyShipsTwoTarballs(unittest.TestCase):
