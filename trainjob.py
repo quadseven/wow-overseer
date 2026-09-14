@@ -66,6 +66,18 @@ import travel
 # naming something the vocabulary does not have.
 MODE = "train"
 
+
+def should_activate(jobs: dict, has_assignments: bool) -> bool:
+    """Return whether outstanding training should take over ordinary questing.
+
+    Explicit dungeon or operator modes are never preempted.  A family-wide
+    quest mode is the only passive mode this policy may promote.
+    """
+    if not has_assignments:
+        return False
+    values = {str(value or "").strip() for value in jobs.values()}
+    return values == {"quest"}
+
 # Read from travel.ROLES rather than spelled, for the reason
 # professions.TRAINER_ROLE gives: a third spelling of "profession trainer" is
 # a third thing to get wrong, and a rename becomes an ImportError at startup

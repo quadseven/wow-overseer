@@ -37,6 +37,15 @@ def member(name, **kw):
 
 
 class TheVocabularyAgrees(unittest.TestCase):
+    def test_outstanding_training_promotes_unanimous_questers(self):
+        self.assertTrue(trainjob.should_activate({"Grug": "quest", "Ugga": "quest"}, True))
+
+    def test_training_never_preempts_an_explicit_dungeon(self):
+        self.assertFalse(trainjob.should_activate({"Grug": "dungeon", "Ugga": "dungeon"}, True))
+
+    def test_no_assignments_does_not_change_mode(self):
+        self.assertFalse(trainjob.should_activate({"Grug": "quest"}, False))
+
     def test_the_mode_is_a_real_job_mode(self):
         self.assertIn(trainjob.MODE, jobs.MODES)
 

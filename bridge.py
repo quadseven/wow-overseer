@@ -1365,6 +1365,28 @@ def _record_trade_plan(plan) -> list:
     return fresh
 
 
+def _activate_training() -> bool:
+    """Promote a unanimous questing family when training work is pending."""
+    try:
+        with _connect() as conn, conn.cursor() as cur:
+            cur.execute("SELECT name, job FROM overseer_roster WHERE enabled = 1")
+            jobs = {row["name"]: row["job"] for row in cur.fetchall()}
+            if not trainjob.should_activate(jobs, True):
+                return False
+            for name in jobs:
+                cur.execute(
+                    "INSERT INTO overseer_command "
+                    "(target_name, command, kind, source) VALUES (%s, %s, 'job', %s)",
+                    (name, trainjob.MODE, "overseer:trades"),
+                )
+            return bool(jobs)
+    except pymysql.err.MySQLError as exc:
+        if exc.args and exc.args[0] == 1146:
+            log.warning("training activation skipped: roster table is absent")
+            return False
+        raise
+
+
 def _settle_trades(skills: dict) -> list:
     """Move rows to 'learned' where the WORLD already agrees. Returns those rows.
 
@@ -3994,6 +4016,8 @@ class Bridge(discord.Client):
         if not plan.assignments:
             log.info("trades: nothing to decide")
             return
+
+        await asyncio.to_thread(_activate_training)
 
         # Before the `fresh` check below, which returns early on the common
         # case of a plan that is unchanged and still outstanding.
