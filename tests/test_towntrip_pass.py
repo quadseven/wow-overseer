@@ -50,10 +50,21 @@ def _code(signature: str) -> str:
 
 class ThePassRunsAndInTheRightOrder(unittest.TestCase):
     def test_the_loop_is_registered(self):
-        """An unregistered loop is a pass that never runs and never says so."""
+        """An unregistered loop is a pass that never runs and never says so.
+
+        THE WINDOW IS THE BLOCK, NOT A CHARACTER COUNT. This read
+        `src[start:start + 900]` until infra#3741, and 900 was however long the
+        list happened to be on the day it was written: registering ONE more loop
+        pushed `self._towntrip_loop,` past the cut and failed this test on a
+        change that had nothing to do with the town trip. A slice that stops
+        short is the same defect as a slice that runs to EOF - it decides what
+        the assertion can see - so it now ends where the registration actually
+        ends.
+        """
         src = _source()
         start = src.index("self._loops = {")
-        self.assertIn("self._towntrip_loop,", src[start:start + 900])
+        self.assertIn("self._towntrip_loop,",
+                      src[start:src.index("async def on_ready(", start)])
 
     def test_the_bridge_imports_the_planner(self):
         self.assertIn("\nimport towntrip\n", _source())

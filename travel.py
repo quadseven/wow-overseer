@@ -129,6 +129,34 @@ NONE = ""
 # module where a test can reach them.
 GUILD_VAULT_GO_TYPE = 34
 
+# GAMEOBJECT_TYPE_MAILBOX. What a mailbox actually is on 3.3.5 (infra#3741),
+# and the second time the same shape has bitten this project.
+#
+# THE CREATURE FLAG EXISTS AND NOTHING CARRIES IT, exactly as with the Guild
+# Vault above. mod-overseer's own mailbox sweep looks for creatures as well as
+# gameobjects and its comment says "innkeepers and the like carry
+# UNIT_NPC_FLAG_MAILBOX"; that is true of retail data and false of this world.
+# Counted against the live wow-dev world database rather than a wiki, 2026-09-13:
+#
+#     SELECT COUNT(*) FROM acore_world.creature_template
+#      WHERE npcflag & 0x4000000;                             -> 0
+#     SELECT COUNT(*) FROM acore_world.gameobject_template
+#      WHERE type = 19;                                       -> 216
+#     SELECT COUNT(*) FROM acore_world.gameobject g
+#       JOIN acore_world.gameobject_template t ON t.entry = g.id
+#      WHERE t.type = 19;                                     -> 204 spawns, 8 maps
+#
+# So `travel_npc = 'innkeeper'` does not reach a mailbox and no role keyword
+# ever can, for the same reason `guild banker` cannot: `ResolveTravelTarget`'s
+# role branch searches a creature index, and the answer is in the gameobject
+# table. `mailbox_aim` below reads the spawn row instead.
+#
+# NOT ADDED TO `ROLES`. That table is a mirror of mod-overseer's own
+# `TravelAimBook::TravelRoles()` and test_travel_npc.py asserts the two are
+# EQUAL in both directions, so inventing an entry here would fail that test
+# rather than reach a mailbox.
+MAILBOX_GO_TYPE = 19
+
 # GAMEOBJECT_TYPE_SPELL_FOCUS, and the focus id a Forge answers to (infra#3748).
 #
 # THESE ARE TWO DIFFERENT COLUMNS AND infra#3617 READ THE WRONG ONE. That issue
@@ -384,6 +412,74 @@ def vault_aim(spawn, standing_on):
             "would truncate into a coordinate nobody surveyed" % (
                 where, COLUMN_WIDTH)))
     return VaultAim(aim=aim)
+
+
+@dataclass(frozen=True)
+class MailboxAim:
+    """Either the aim that reaches a mailbox, or why nobody can be sent.
+
+    THE SAME TWO-FIELD SHAPE AS `VaultAim`, AND IT IS THE VAULT'S SHAPE RATHER
+    THAN THE FORGE'S ON PURPOSE. A forge needs a third refusal because its
+    `Data1` focus radius can be narrower than the travel drive's own arrival
+    tolerance, so arriving is not the same as being close enough. A mailbox has
+    no radius of its own: `WorldSession::CanOpenMailBox` asks
+    `GetGameObjectIfCanInteractWith`, the core's own interact gate, which is the
+    same test a Guild Vault is judged by. So any spawn will do and there is
+    nothing extra to refuse.
+    """
+
+    aim: str = ""
+    refused: str = ""
+
+
+def mailbox_aim(spawn, standing_on):
+    """Aim a character standing on map `standing_on` at the mailbox `spawn`.
+
+    `spawn` is a row from the live `gameobject` spawn table - {"map_id", "x",
+    "y", "z"} - or None when nothing was found. Reading that row is the same
+    resolution the module already performs for creature spawns, against the
+    table the answer is actually in; it is not hand-authored geometry, and the
+    z is the surveyed one that came with the spawn.
+
+    SAME MAP ONLY, AND THE REFUSAL IS THE POINT, word for word `vault_aim`'s
+    argument: `MoveFarTo` paths through PathGenerator and there is no navmesh
+    across an ocean, so a mailbox on another map is not a longer walk, it is not
+    a walk. This refusal is not hypothetical for mail in the way it is for the
+    vault - measured 2026-09-13, the nearest mailbox to four of the five family
+    members was 1,530-odd yards away in Mudsprocket and the fifth's was 587
+    yards away on Stonetalon Peak, all on the same map, so what this refuses is
+    the day the family is on a boat or in an instance.
+
+    A SEPARATE FUNCTION RATHER THAN A `type` ARGUMENT TO `vault_aim`. The two
+    differ only in a noun today, and that noun is the whole value: a pass that
+    cannot walk anybody anywhere logs one sentence, and "no Guild Vault is
+    spawned on map 1" and "no mailbox is spawned on map 1" send a reader to two
+    different places. Sharing the body would save eight lines and cost the only
+    part of it that does anything.
+    """
+    if standing_on is None:
+        return MailboxAim(refused=(
+            "nobody can say which map the leader is standing on - "
+            "overseer_snapshot has no fresh row for it, so the family is "
+            "either offline or the module has stopped writing the snapshot"))
+    if not spawn:
+        return MailboxAim(refused=(
+            "no mailbox is spawned on map %s, so the family has to travel to a "
+            "map that has one before any letter can be collected" % standing_on))
+    where = spawn.get("map_id")
+    if where is None or int(where) != int(standing_on):
+        return MailboxAim(refused=(
+            "the nearest mailbox is on map %s and the leader is on map %s - "
+            "there is no navmesh between them, so this needs a boat, a portal "
+            "or a flight before an aim can do anything" % (where, standing_on)))
+    aim = ground_aim(where, spawn.get("x"), spawn.get("y"), spawn.get("z"))
+    if not aim:
+        return MailboxAim(refused=(
+            "the nearest mailbox on map %s cannot be named in the %d "
+            "characters overseer_roster.travel_npc holds, so aiming at it "
+            "would truncate into a coordinate nobody surveyed" % (
+                where, COLUMN_WIDTH)))
+    return MailboxAim(aim=aim)
 
 
 @dataclass(frozen=True)

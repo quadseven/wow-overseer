@@ -48,6 +48,9 @@ import item_plan
 import jobs
 import kin
 import learnaim
+# NOT `mailbox` - that is a Python standard library module, and this package is
+# imported with its own directory first on sys.path. See mailrun.py's docstring.
+import mailrun
 import materials
 import overhear
 import persona
@@ -2895,6 +2898,7 @@ class Bridge(discord.Client):
                 self._vendor_loop,
                 self._bank_loop,
                 self._guild_bank_loop,
+                self._mail_loop,
                 self._recruit_loop,
                 self._craft_supply_loop,
                 self._craft_rhythm_loop,
@@ -6371,6 +6375,148 @@ class Bridge(discord.Client):
                 log.exception("guild bank pass failed; retrying next cycle")
             await asyncio.sleep(cycle)
 
+    async def _mail_once(self) -> None:
+        """One pass of the mail: collect what is already addressed to the family.
+
+        infra#3741, and the third shipped-but-uncalled executor this package has
+        had to go back for. `kind='mail'` has carried five verbs since
+        mod-overseer's mail migration and no process had ever written one row of
+        it; measured 2026-09-13 the family's own mailboxes held 21 letters, 9
+        attachments and 4,100 copper, and the auction pass had spent the day
+        putting bought reagents into a mailbox nothing read. What lands in a bag
+        because of this pass is what `DriveCraft`, the vendor pass and the bank
+        pass can all finally see.
+
+        SAME SHAPE AS _guild_bank_once, DELIBERATELY, DOWN TO THE AIM. Only the
+        leader can be aimed (followers arrive by following, mod-overseer#209), so
+        the errand goes to the leader once and every character's take is queued
+        alongside it, each staying pending until its holder reaches a mailbox.
+        And the aim is a GROUND aim for the same reason the vault's is: a mailbox
+        on 3.3.5 is a gameobject, `TravelRoles()` has no `mailbox` keyword to
+        write and no creature on this world carries UNIT_NPC_FLAG_MAILBOX
+        (travel.MAILBOX_GO_TYPE has the counts), so the only thing that can reach
+        one is the spawn's own surveyed position through `travel.mailbox_aim`.
+
+        AND THERE IS NO ERRAND TO HAND BACK, WHICH IS NOT AN OVERSIGHT. A ground
+        aim is not a maintenance errand: `IsMaintenanceErrand` is
+        `CounterRoleForAim(aim) != CounterRole::None`, and `CounterRoleForAim`
+        matches four whole keywords (`vendor`, `banker`, `repair`, `auctioneer`)
+        and nothing else. So `TravelAimBook::Release` takes its own terminal
+        branch on arrival and blanks `travel_npc` itself, exactly as it already
+        does for the guild bank's vault aim. `_bank_once` needs
+        `_settle_bank_errand` because `banker` IS one of those four; this pass
+        would be inventing a second writer for a column the world already
+        clears.
+
+        NOTHING IS QUEUED UNTIL SOMEBODY CAN ACTUALLY STAND AT A MAILBOX. Every
+        refusal from `travel.mailbox_aim` means no character can reach one this
+        cycle, and a take queued into that is a row whose only possible answer is
+        `mailbox not in range` - which is precisely the queue of 84 dead
+        `no guild bank in reach` rows the guild bank pass manufactured before
+        infra#3702. The plan is still computed first, because its notes are the
+        only thing that can say the mailboxes were empty rather than unreachable.
+
+        NOT IN THE MIDDLE OF A DUNGEON RUN, for the same reason the two bank
+        passes skip one: a mail run is a town errand, and pulling the leader out
+        of a run to make one is how the party spreads.
+        """
+        names = sorted((await asyncio.to_thread(_protected_guids)).values())
+        if not names or await self._mid_run(names):
+            return
+        letters = mailrun.letters_from_rows(
+            await asyncio.to_thread(_fetch_mail, names), names)
+        if not letters:
+            log.info("mail: nothing is waiting in anybody's mailbox")
+            return
+        # THE WINDOW IS READ BEFORE THE PLAN, because it is an input to the
+        # plan and not only a filter on it: `attachments_asked` turns the takes
+        # already queued into spent bag budget, which is what stops a stale
+        # `character_inventory` reading being asked the same optimistic question
+        # every cycle. See mailrun.room_for.
+        seen = await asyncio.to_thread(_recent_mail_keys, GIVE_RETRY_MINUTES)
+        mail_plan = mailrun.plan(
+            letters,
+            await asyncio.to_thread(_fetch_free_slots, names),
+            mailrun.attachments_asked(seen),
+        )
+        for note in mail_plan.notes:
+            log.info("mail: %s", note)
+        if not mail_plan.takes:
+            log.info("mail: %d letter(s) are waiting and none of them can be "
+                     "collected this pass", len(letters))
+            return
+
+        # `_head_now()` RATHER THAN bonds.head_of_family(), the defect infra#3553
+        # found in the vendor pass and infra#3554 fixed: `_head_now` names the
+        # character that actually carries `new rpg` and can therefore walk, where
+        # the seniority answer is a static table that named a follower for six
+        # hours while the real leader was on a trade errand.
+        leader = await asyncio.to_thread(_head_now)
+        where = (await asyncio.to_thread(_fetch_positions, [leader])).get(leader)
+        spawn = await asyncio.to_thread(_nearest_mailbox, leader)
+        post = travel.mailbox_aim(spawn, where.get("map_id") if where else None)
+        if not post.aim:
+            log.info("mail: nobody can be sent to a mailbox - %s", post.refused)
+            return
+        aimed = await asyncio.to_thread(
+            _write_trade_errand,
+            professions.Errand(character=leader, travel_npc=post.aim),
+        )
+        # ALREADY STANDING THERE COUNTS AS AIMED, the reasoning `_guild_bank_once`
+        # sets out: mod-overseer releases a travel aim the moment the walk
+        # arrives, so the cycle AFTER the family reaches the mailbox finds the
+        # column empty, and gating the queue on the aim alone would skip exactly
+        # the cycle that was going to work. TOWN_COUNTER_YARDS rather than a
+        # threshold of this pass's own, because "is a counter within reach of
+        # where this character is standing" is the same question the town reader
+        # already answers, sized to the core's own interact gate - and
+        # `CanOpenMailBox` is that same gate.
+        near = spawn.get("d2")
+        at_the_mailbox = near is not None and float(near) <= TOWN_COUNTER_YARDS ** 2
+        if not aimed and not at_the_mailbox:
+            log.info(
+                "mail: leader=%s could not be aimed at a mailbox (%s) - the "
+                "column already holds %r and an economy errand may only retask "
+                "an idle traveller, so this pass is starved until that one "
+                "clears (infra#3703)",
+                leader, post.aim,
+                await asyncio.to_thread(_current_travel_npc, leader),
+            )
+            return
+
+        fresh = []
+        for take in mail_plan.takes:
+            command = mailrun.command(take)
+            if (take.character, command) in seen:
+                continue
+            if await asyncio.to_thread(_insert_mail, take, command):
+                fresh.append(take)
+        for line in mailrun.lines(fresh):
+            log.info("mail: %s", line)
+        log.info("mail: queued %d/%d take(s) from %d letter(s), leader=%s "
+                 "aimed at %s",
+                 len(fresh), len(mail_plan.takes), len(letters), leader, post.aim)
+
+    async def _mail_loop(self) -> None:
+        """Keep the family's mailboxes emptied (infra#3741).
+
+        Own loop and own clock, the same reasoning as _bank_loop: a failed pass
+        is logged and retried rather than swallowed, because a mail pass that has
+        quietly stopped looks exactly like a family with no post.
+        """
+        await self.wait_until_ready()
+        cycle = float(os.environ.get("MAIL_CYCLE_SECONDS", "600"))
+        # Behind every other loop that writes `travel_npc` (vendor, bank,
+        # towntrip and the guild bank all claim earlier slots) so this pass never
+        # arrives in the same instant and races one of them for the column.
+        await asyncio.sleep(min(cycle, 300.0))
+        while not self.is_closed():
+            try:
+                await self._mail_once()
+            except Exception:
+                log.exception("mail pass failed; retrying next cycle")
+            await asyncio.sleep(cycle)
+
     async def _forge_once(self) -> None:
         """Stand the family at a Forge when somebody is holding a smelt errand
         (infra#3748, part of infra#3731).
@@ -8794,6 +8940,117 @@ def _nearest_vault(name: str):
         return dict(row) if row else None
 
 
+# THE MAILBOX QUERY (infra#3741), AND IT IS `_VAULT_SQL` WITH ONE CHANGE.
+#
+# `gt.type = 19` (GAMEOBJECT_TYPE_MAILBOX) rather than 34, and nothing else:
+# same snapshot join, same 120-second freshness filter, same `g.map = s.map_id`
+# same-map rule enforced in the JOIN, same squared-distance ordering with z left
+# out of the ranking. Every argument in `_VAULT_SQL`'s own comment above applies
+# here word for word, which is the point - infra#3741 recorded reaching a
+# mailbox as the hard, open part of collecting the post, and the query that
+# already walks the family to a Guild Vault answers it with a different WHERE.
+#
+# NO RADIUS FILTER, UNLIKE `_FORGE_SQL`. A forge is judged by its own `Data1`
+# focus radius, which can be narrower than the travel drive's arrival tolerance;
+# a mailbox is judged by `WorldSession::CanOpenMailBox`, which asks
+# `GetGameObjectIfCanInteractWith` - the core's own interact gate, the same one
+# a Guild Vault is judged by. So any spawn will do.
+_MAILBOX_SQL = (
+    "SELECT g.map AS map_id, g.position_x AS x, g.position_y AS y, "
+    "g.position_z AS z, "
+    "(POW(g.position_x - s.pos_x, 2) + POW(g.position_y - s.pos_y, 2)) AS d2 "
+    "FROM overseer_snapshot s "
+    "JOIN acore_world.gameobject g ON g.map = s.map_id "
+    "JOIN acore_world.gameobject_template gt ON gt.entry = g.id "
+    "WHERE s.name = %s AND s.updated_at > NOW() - INTERVAL 120 SECOND "
+    "AND gt.type = %s "
+    "ORDER BY d2 LIMIT 1"
+)
+
+
+def _nearest_mailbox(name: str):
+    """The nearest mailbox spawn row on `name`'s own map, or None.
+
+    A ROW OUT OF THE SPAWN TABLE, NOT A COORDINATE THIS PROCESS INVENTED - the
+    identical guarantee `_nearest_vault` gives, against the identical tables.
+    `gameobject.position_x/y/z` is where the world actually put that mailbox,
+    surveyed with the rest of the map.
+
+    None covers three different absences on purpose - no fresh snapshot row, no
+    mailbox on this map, no gameobject tables at all - because every one of them
+    means the same thing to the caller: nobody can be sent to a mailbox this
+    pass. `travel.mailbox_aim` is where they are told apart for the log.
+    """
+    with _connect() as conn, conn.cursor() as cur:
+        try:
+            cur.execute(_MAILBOX_SQL, (name, travel.MAILBOX_GO_TYPE))
+        except pymysql.err.MySQLError as exc:
+            # 1054 missing column, 1146 missing table. A world image with no
+            # overseer_snapshot cannot say where anybody is standing, and one
+            # with no gameobject tables has no mailboxes to find; both are
+            # honestly "no mailbox in reach" rather than an error to raise.
+            if exc.args and exc.args[0] in (1054, 1146):
+                log.warning("mail: cannot see where the family is standing")
+                return None
+            raise
+        row = cur.fetchone()
+        return dict(row) if row else None
+
+
+# EVERY LETTER IN THE FAMILY'S MAILBOXES, ONE ROW PER ATTACHMENT.
+#
+# A LEFT JOIN ONTO `mail_items`, NOT AN INNER ONE, and that is the whole
+# difference between this query and the one somebody reaches for first. A letter
+# carrying only money has no `mail_items` row at all, and an inner join would
+# drop it - which on this realm means dropping the auction house settlement
+# sitting on 4,100 copper, the single most valuable thing in any of these
+# mailboxes. The fold back into one Letter per id is `mailrun.letters_from_rows`.
+#
+# `deliver_time <= UNIX_TIMESTAMP()` IS ANSWERED IN SQL, where the clock is.
+# The pure module has none, and a Python clock disagreeing with the database's
+# would be a second opinion on a question the executor already answers by
+# refusing `mail has not been delivered yet`. What is passed across is the
+# ANSWER, not the timestamp.
+#
+# NOTHING IS FILTERED OUT HERE. A COD letter, an undelivered one and an empty
+# one are all fetched and all told apart by `mailrun.plan`, which says in a note
+# why each was left alone. A WHERE clause would make those three cases
+# indistinguishable from an empty mailbox, and "nothing to collect" is the one
+# answer this pass must never give by accident.
+_MAIL_SQL = (
+    "SELECT c.name AS holder, m.id AS mail_id, m.money AS money, "
+    "m.cod AS cod, m.expire_time AS expire_time, "
+    "(m.deliver_time <= UNIX_TIMESTAMP()) AS delivered, "
+    "mi.item_guid AS item_guid "
+    "FROM mail m "
+    "JOIN characters c ON c.guid = m.receiver "
+    "LEFT JOIN mail_items mi ON mi.mail_id = m.id "
+    "WHERE c.name IN (%s)"
+)
+
+
+def _fetch_mail(names: list) -> list:
+    """Rows for mailrun.letters_from_rows; no judgement and no arithmetic here.
+
+    A missing `mail` or `mail_items` table is an empty mailbox rather than a
+    dead pass, the same guard `_recent_bank_keys` gives its own read: a world
+    image without the mail schema has nothing to collect, and taking the loop
+    down over it would hide every other pass's log behind a traceback.
+    """
+    if not names:
+        return []
+    marks = ",".join(["%s"] * len(names))
+    with _connect() as conn, conn.cursor() as cur:
+        try:
+            cur.execute(_MAIL_SQL % marks, names)  # noqa: S608 - placeholders from a COUNT, values still bound
+        except pymysql.err.MySQLError as exc:
+            if exc.args and exc.args[0] in (1054, 1146):
+                log.warning("mail: this world image has no mail tables to read")
+                return []
+            raise
+        return [dict(row) for row in cur.fetchall()]
+
+
 # THE FORGE QUERY (infra#3748), AND IT IS `_VAULT_SQL` WITH TWO CHANGES.
 #
 # Same snapshot join, same 120-second freshness filter, same `g.map = s.map_id`
@@ -9220,6 +9477,73 @@ def _insert_bank(move, command: str) -> int:
                     "%s %s until the worldserver image carrying "
                     "mod-overseer's bank SQL has shipped (mod-overseer#207)",
                     move.character, move.verb, move.item,
+                )
+                return 0
+            raise
+        return cur.lastrowid or 0
+
+
+def _recent_mail_keys(minutes: int) -> set:
+    """(character, command) pairs already proposed inside the retry window.
+
+    The mail sibling of `_recent_bank_keys`, and it does two jobs rather than
+    one. The first is the usual: a take whose holder is still walking to the
+    mailbox is refused `mailbox not in range`, and an identical row every cycle
+    would turn one slow journey into a hundred dead commands.
+
+    The second is the bag budget. `mailrun.attachments_asked` counts the
+    `take-item` pairs in this set to work out how much room this pass has
+    already spent on a character, which is what stops a stale
+    `character_inventory` reading being asked the same optimistic question every
+    cycle. See `mailrun.room_for` for why that staleness exists at all and which
+    direction it errs in.
+    """
+    with _connect() as conn, conn.cursor() as cur:
+        try:
+            cur.execute(
+                "SELECT target_name, command FROM overseer_command "
+                "WHERE kind = 'mail' AND created_at > NOW() - INTERVAL %s MINUTE",
+                (int(minutes),),
+            )
+        except pymysql.err.MySQLError as exc:
+            # 1054 missing column, 1146 missing table, 1265 a `kind` ENUM with
+            # no 'mail' value. A world with none of the mail machinery has been
+            # asked for nothing, so nothing is already queued.
+            if exc.args and exc.args[0] in (1054, 1146, 1265):
+                return set()
+            raise
+        return {(row["target_name"], row["command"]) for row in cur.fetchall()}
+
+
+def _insert_mail(take, command: str) -> int:
+    """One overseer_command row taking one thing out of one mailbox.
+
+    THE COLUMNS MEAN WHAT THEY MEAN FOR A BANK ROW, NOT FOR A GIVE.
+    mod-overseer's mail migration puts THE CHARACTER in `target_name` and uses
+    `target_arg` for the RECIPIENT OF A `send` ONLY - the four other verbs leave
+    it unused. A `take-item` row carrying a name in `target_arg` would still be
+    delivered and would still be wrong, which is why the empty string is written
+    literally rather than left to a column default nobody re-reads.
+
+    Guarded on 1146 and 1265 exactly as `_insert_bank` and `_insert_guild` are:
+    a worldserver whose image predates the mail migration must warn rather than
+    take the whole pass down.
+    """
+    with _connect() as conn, conn.cursor() as cur:
+        try:
+            cur.execute(
+                "INSERT INTO overseer_command "
+                "(target_name, command, kind, target_arg, source) "
+                "VALUES (%s, %s, 'mail', '', %s)",
+                (take.character, command, "economy"),
+            )
+        except pymysql.err.MySQLError as exc:
+            if exc.args and exc.args[0] in (1146, 1265):
+                log.warning(
+                    "overseer_command.kind has no 'mail' value - %s cannot %s "
+                    "from letter %d until the worldserver image carrying "
+                    "mod-overseer's mail SQL has shipped",
+                    take.character, take.verb, take.mail_id,
                 )
                 return 0
             raise
@@ -10680,6 +11004,7 @@ class HeadlessBridge(Bridge):
                 self._vendor_loop,
                 self._bank_loop,
                 self._guild_bank_loop,
+                self._mail_loop,
                 self._recruit_loop,
                 self._craft_supply_loop,
                 self._craft_rhythm_loop,
