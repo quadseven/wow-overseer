@@ -27,6 +27,18 @@ that one file bought back about 140KB, thirty times the overage. Trimming
 comments to find 4679 would have bought back the comments, which is the trade
 the paragraph above exists to refuse.
 
+STABLE MODULES RIDE THE FROZEN SIDE TOO (infra#3823). By 2026-09-14 the
+source side was 794KB gzipped against the 786KB budget, every byte of it
+.py except AGENTS.md's 1.5KB, so there was no second index.html to move.
+The caller now also names every module that had gone a week without an
+edit, except bridge.py and map_server.py, which change daily; that left
+the source 207KB under its budget and the frozen side 135KB under.
+"Frozen" means "rarely changing" from here on. A listed module that heats
+up only charges the frozen side, whose own budget below still guards it,
+and a listed name that no longer exists fails
+test_every_name_the_glob_lists_exists, because a glob naming a vanished
+file moves nothing and says nothing.
+
 MEASURE THE ARTIFACT, NOT THE CHECKOUT (infra#3812). Its neighbour above
 refuses to shrink the thing being measured; this one is about measuring the
 right thing at all. packed() reads each file's bytes and replaces CRLF with
@@ -236,7 +248,8 @@ class TheSourceTarballFitsItsConfigMap(unittest.TestCase):
         self.assertLess(
             size, BUDGET,
             f"the frozen tarball is {size} bytes gzipped against {BUDGET}. "
-            "Shrink a book (tools/gen_*.py) before the build on main finds out.")
+            "Shrink a book (tools/gen_*.py) or move a module back to the source "
+            "side before the build on main finds out.")
 
     def test_the_gzipped_frozen_data_is_inside_the_hard_cap(self):
         _, frozen = split()
@@ -245,7 +258,8 @@ class TheSourceTarballFitsItsConfigMap(unittest.TestCase):
             size, CONFIGMAP_CAP,
             f"the frozen tarball is {size} bytes gzipped, past the "
             f"{CONFIGMAP_CAP} ConfigMap cap ITSELF. The build on main is "
-            "failing now; shrink a book (tools/gen_*.py).")
+            "failing now; shrink a book (tools/gen_*.py) or move a module back "
+            "to the source side.")
 
     def test_the_frozen_glob_actually_moves_the_books_and_the_page(self):
         """A glob that matched nothing would put the whole dir back in one
@@ -260,6 +274,26 @@ class TheSourceTarballFitsItsConfigMap(unittest.TestCase):
         self.assertNotIn("bridge.py", frozen)
         self.assertIn("bridge.py", source)
         self.assertTrue(source)
+
+    def test_stable_modules_move_and_the_hot_ones_stay(self):
+        """infra#3823: the caller names rarely edited modules on the frozen
+        side. bridge.py and map_server.py change daily and must stay on the
+        source side, or the frozen side becomes the one that fills up."""
+        source, frozen = split()
+        self.assertIn("core.py", frozen)
+        self.assertIn("bridge.py", source)
+        self.assertIn("map_server.py", source)
+
+    def test_every_name_the_glob_lists_exists(self):
+        """A literal name that no longer exists (a renamed or deleted
+        module) matches nothing and moves nothing, silently. Wildcard
+        patterns are exempt: a '*.json' that matched nothing is caught by
+        the test above."""
+        present = set(top_level_files())
+        missing = [g for g in frozen_globs()
+                   if not any(c in g for c in "*?[") and g not in present]
+        self.assertEqual(missing, [], f"shared-frozen-glob names files "
+                         f"that do not exist: {missing}")
 
     def test_every_frozen_pattern_matches_at_least_one_file(self):
         """A pattern matching nothing is dead weight that reads as protection
@@ -500,7 +534,13 @@ class TheReusableActuallyShipsTwoTarballs(unittest.TestCase):
         self.assertIn("configMap: {name: $JOB-frozen}", self.workflow)
 
     def test_wow_overseer_asks_for_the_split(self):
-        self.assertEqual(frozen_globs(), ["*.json", "*.html"])
+        globs = frozen_globs()
+        self.assertEqual(globs[:2], ["*.json", "*.html"])
+        # infra#3823: after the data patterns come literal names of rarely
+        # edited modules, and never the two that change daily.
+        self.assertTrue(all(g.endswith(".py") for g in globs[2:]), globs[2:])
+        self.assertNotIn("bridge.py", globs)
+        self.assertNotIn("map_server.py", globs)
 
 
 if __name__ == "__main__":
