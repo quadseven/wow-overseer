@@ -42,6 +42,19 @@ def _code(signature: str) -> str:
     return body
 
 
+def _statements(signature: str) -> str:
+    """The same block with its docstring AND its `#` prose removed.
+
+    This codebase argues at length in comments on purpose, so a test that COUNTS
+    a call or asserts a call is ABSENT has to read the statements: the comment
+    above a call names the function it is explaining, and the comment above this
+    pass's per-taker gate quotes the very strings the gate is asserted against
+    (infra#3830).
+    """
+    return "\n".join(line for line in _code(signature).splitlines()
+                     if not line.lstrip().startswith("#"))
+
+
 def _sql(name: str) -> str:
     """One `NAME = (...)` SQL literal, to its closing paren at column zero.
 
@@ -84,7 +97,7 @@ class ThePassRunsAndInTheRightOrder(unittest.TestCase):
         range` when `FindMailboxInReach` comes back empty. A queue written
         before the walk is a queue of refusals."""
         body = _block("    async def _mail_once(")
-        self.assertLess(body.index("_write_trade_errand"), body.index("_insert_mail"))
+        self.assertLess(body.index("_claim_town_slot"), body.index("_insert_mail"))
 
     def test_nothing_is_queued_when_nobody_can_reach_a_mailbox(self):
         """The guild bank pass manufactured 84 `no guild bank in reach` rows
@@ -100,7 +113,7 @@ class ThePassRunsAndInTheRightOrder(unittest.TestCase):
         behind."""
         body = _block("    async def _mail_once(")
         self.assertIn("leader = await asyncio.to_thread(_head_now)", body)
-        self.assertIn("professions.Errand(character=leader, travel_npc=post.aim)", body)
+        self.assertIn('self._claim_town_slot("mail", leader, post.aim)', body)
 
     def test_the_leader_is_head_now_not_the_static_seniority_answer(self):
         """infra#3553/#3554. `_head_now()`, NOT bonds.head_of_family(): the
@@ -115,10 +128,20 @@ class ThePassRunsAndInTheRightOrder(unittest.TestCase):
         """mod-overseer RELEASES a travel aim the moment the walk arrives, so
         the cycle after the family gets there finds the column empty. Gating the
         queue on the aim alone would skip exactly the cycle that was going to
-        work."""
-        body = _block("    async def _mail_once(")
-        self.assertIn("TOWN_COUNTER_YARDS ** 2", body)
-        self.assertIn("if not aimed and not at_the_mailbox:", body)
+        work.
+
+        THROUGH THE SHARED READER SINCE infra#3830, not `spawn["d2"]` and a
+        hand-squared threshold. It is the same distance for the same leader -
+        `d2` is measured from whoever `_nearest_mailbox` was run for - so one
+        answer and one function is strictly better than two ways of getting
+        it."""
+        code = _statements("    async def _mail_once(")
+        self.assertIn(
+            "at_the_mailbox = travel.spawn_in_reach(spawn, where, "
+            "TOWN_COUNTER_YARDS)", code)
+        self.assertNotIn("TOWN_COUNTER_YARDS ** 2", code)
+        self.assertNotIn('spawn.get("d2")', code)
+        self.assertIn("if not aimed and not at_the_mailbox:", code)
 
     def test_the_retry_window_is_read_before_the_plan_not_after(self):
         """It is an INPUT to the plan, not only a filter on it: the takes
@@ -290,9 +313,156 @@ class TheGroundAimIsGuardedLikeTheVaults(unittest.TestCase):
         `CounterRoleForAim(aim) != CounterRole::None` and that matches four
         whole keywords - so `TravelAimBook::Release` blanks `travel_npc` itself
         on arrival. A second writer for a column the world already clears is how
-        a latch gets built."""
-        body = _block("    async def _mail_once(")
-        self.assertNotIn("_release_trade_errand", body)
+        a latch gets built.
+
+        ASKED OF THE STATEMENTS, NOT OF THE BLOCK (infra#3822). Since this pass
+        goes through `_claim_town_slot`, the comment above that call explains
+        what the town slot's lease does with a ground aim and names
+        `_release_trade_errand` while doing it. A block-wide search is answered
+        by that explanation, which is the trap this package's other suites
+        already warn about: a test that COUNTS a call has to read the code,
+        because the prose above a call names the function it is explaining.
+
+        AND THE PROPERTY IS UNCHANGED. Releasing is the town slot's business and
+        happens in one place for all eight passes; this pass still does not
+        write the column back itself."""
+        code = "\n".join(
+            line for line in _code("    async def _mail_once(").splitlines()
+            if not line.lstrip().startswith("#"))
+        self.assertNotIn("_release_trade_errand", code)
+        self.assertNotIn("_write_trade_errand", code)
+
+
+class TheTakeQueueWaitsForTheWalk(unittest.TestCase):
+    """infra#3830, the third pass with this shape after infra#3804's guild vault
+    and infra#3815's bank. The aim and all ten takes went out in one cycle and
+    `DoMail` answered every one of them where the character was standing:
+    measured on wow-dev at 04:22:43, ten rows, ten `mailbox not in range`, 0.8
+    seconds from written to answered, zero delivered all-time, with the five
+    between 1,092 and 1,140 yards of the nearest mailbox on their own map.
+
+    READ AS SOURCE TEXT, for the reason every other bridge suite here gives:
+    bridge imports discord and pymysql, which CI does not install, so importing
+    it is an ERROR on the runner and a pass only on a machine that has them."""
+
+    def setUp(self):
+        self.body = _block("    async def _mail_once(")
+        self.code = _statements("    async def _mail_once(")
+        mark = '"""'
+        self.doc = self.body[:self.body.index(mark, self.body.index(mark) + 3)]
+        self.loop = self.code[self.code.index("        fresh = []"):]
+        self.gate = _statements("def _mail_takes_in_reach(")
+
+    def test_every_taker_is_asked_for_not_just_the_leader(self):
+        """The pass only ever read the leader's position, to name the map. A
+        per-taker gate needs a row per taker, and `_fetch_positions` batches, so
+        this stays one query."""
+        self.assertIn("t.character for t in mail_plan.takes", self.code)
+        self.assertIn("_fetch_positions,\n            sorted({leader}",
+                      self.code)
+        self.assertNotIn("_fetch_positions, [leader]", self.code)
+
+    def test_the_gate_sits_above_the_insert_in_the_take_loop(self):
+        """The gate decides the LIST the loop walks, which is stronger than
+        sitting inside it: a take whose holder has not arrived never reaches
+        `_insert_mail` at all. `mail_plan.takes` goes to the gate and nowhere
+        else, so nothing can iterate the unfiltered plan and write from it."""
+        self.assertIn("for take in _mail_takes_in_reach(\n"
+                      "                mail_plan.takes, spawn, positions, "
+                      "TOWN_COUNTER_YARDS,\n                post.aim):",
+                      self.loop)
+        self.assertLess(self.loop.index("_mail_takes_in_reach("),
+                        self.loop.index("_insert_mail"))
+        self.assertNotIn("for take in mail_plan.takes:", self.code)
+
+    def test_the_gate_reads_the_takers_own_position(self):
+        """`positions.get(take.character)`, never the leader's row and never the
+        spawn's `d2` - `d2` is measured from the leader, and a leader who has
+        arrived says nothing about a follower who has not."""
+        self.assertIn("travel.spawn_in_reach(spawn, "
+                      "positions.get(take.character), yards)", self.gate)
+        self.assertNotIn("positions.get(leader)", self.gate)
+        self.assertNotIn('spawn.get("d2")', self.gate)
+        self.assertNotIn("at_the_mailbox", self.gate)
+
+    def test_a_taker_held_back_is_logged_rather_than_silently_dropped(self):
+        """A pass that writes nothing and a pass that is broken look identical
+        otherwise - the complaint infra#3660 made about the discarded aim
+        result, restated for the rows. One line naming everybody, inside the
+        gate that knows who they are."""
+        self.assertIn("walking.append(take.character)", self.gate)
+        self.assertIn("if walking:", self.gate)
+        self.assertIn("not within %d yards of the mailbox", self.gate)
+        self.assertIn('", ".join(sorted(set(walking)))', self.gate)
+
+    def test_the_gate_answers_once_per_character_not_once_per_row(self):
+        """Several takes share a holder and the mailbox does not move between
+        them, so the log names a person once however many letters they have."""
+        self.assertEqual(self.gate.count("travel.spawn_in_reach("), 1)
+        self.assertIn("sorted(set(walking))", self.gate)
+
+    def test_the_leader_distance_is_only_a_short_circuit_now(self):
+        """`at_the_mailbox` still decides whether the pass continues - a family
+        already standing at the mailbox must not be skipped just because another
+        town pass holds the column - but it no longer decides which rows are
+        written."""
+        head = self.code[:self.code.index("_mail_takes_in_reach(")]
+        self.assertIn("if not aimed and not at_the_mailbox:", head)
+        self.assertNotIn("at_the_mailbox", self.gate)
+        self.assertIn("IT IS THE LEADER'S DISTANCE", self.body)
+
+    def test_the_docstring_no_longer_claims_the_takes_wait(self):
+        """The sentence that was factually wrong, and the reason nobody looked
+        for ten dead rows. `refuse()` ends the row where it stands; a take does
+        not stay pending for anybody."""
+        self.assertIn("WAS FACTUALLY WRONG", self.doc)
+        self.assertIn("NOTHING STAYS PENDING.", self.doc)
+        # The old sentence survives only as a QUOTATION of what this docstring
+        # used to say - it is kept because the correction is unreadable without
+        # it. Anywhere it is still ASSERTED it is still wrong, so there is
+        # exactly one of it and it sits under the correction.
+        flat = " ".join(self.doc.split())
+        self.assertEqual(flat.count("staying pending"), 1)
+        self.assertEqual(
+            flat.count("every character's take is queued alongside"), 1)
+        self.assertGreater(flat.index("staying pending"),
+                           flat.index("WAS FACTUALLY WRONG"))
+
+    def test_the_prs_own_claim_is_quoted_and_answered(self):
+        """#3788's body told a reviewer the pass "fails safe (queues nothing
+        until someone can stand at a mailbox)". It did not, and correcting the
+        record where the next reader will be is the whole of why the wrong
+        sentence is quoted here rather than deleted (infra#3809's precedent)."""
+        quoted = " ".join(self.doc.split())
+        self.assertIn(
+            'this pass "fails safe (queues nothing until someone can stand at '
+            'a mailbox)". Neither is true', quoted)
+        self.assertIn("asks whether a mailbox EXISTS on the leader's map - "
+                      "never whether anybody is at one", quoted)
+
+    def test_the_smaller_claim_of_the_old_heading_is_named(self):
+        """"NOTHING IS QUEUED UNTIL SOMEBODY CAN ACTUALLY STAND AT A MAILBOX" is
+        still in this docstring, still arguing the thing it actually proves - no
+        mailbox on the map means no row - and is answered rather than trimmed,
+        because the gap between what it proves and what it reads as is how ten
+        rows came to be manufactured."""
+        heading = ("NOTHING IS QUEUED UNTIL SOMEBODY CAN ACTUALLY STAND AT A "
+                   "MAILBOX")
+        self.assertIn(heading, self.doc)
+        self.assertIn("AND THAT HEADING IS A SMALLER CLAIM THAN IT READS AS",
+                      self.doc)
+        self.assertGreater(self.doc.index("SMALLER CLAIM"),
+                           self.doc.index(heading))
+
+    def test_the_retryable_flag_is_not_mistaken_for_a_retry(self):
+        """The one way this pass differs from the vault's:
+        `MailRefusalRetryable` DOES class `mailbox not in range` retryable. The
+        docstring says what that
+        is worth here, because a reader who finds it and stops reading would
+        conclude the rows recover on their own."""
+        self.assertIn("MailRefusalRetryable", self.doc)
+        self.assertIn("mod-overseer#230", self.doc)
+        self.assertIn("GIVE_RETRY_MINUTES", self.doc)
 
 
 class TheModuleShips(unittest.TestCase):

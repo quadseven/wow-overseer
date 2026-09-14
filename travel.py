@@ -592,3 +592,69 @@ def within_focus(spawn) -> bool:
     if near is None or not radius:
         return False
     return float(near) <= float(radius) ** 2
+
+
+def spawn_in_reach(spawn, standing, yards) -> bool:
+    """Is the character this snapshot row belongs to standing at that spawn?
+
+    NOT `vault_in_reach`, AND THE NAME IS THE DECISION (infra#3830). infra#3804
+    built this judgement for the guild vault; infra#3830 is its second caller,
+    for a mailbox. The three `*_aim` functions above are near-identical on
+    purpose, and `mailbox_aim`'s own docstring gives the test that kept them
+    apart: they "differ only in a noun today, and that noun is the whole value
+    ... Sharing the body would save eight lines and cost the only part of it
+    that does anything." That noun lives in their REFUSAL SENTENCES - "no Guild
+    Vault is spawned on map 1" and "no mailbox is spawned on map 1" send a
+    reader to two different places. Run the same test on THIS function and it
+    answers the other way: it returns a bare bool, there is no sentence in it to
+    carry a noun, and not one line of it is about vaults or about post. Three
+    identical bodies judged by nothing is the cost, and a name that lies at the
+    second call site is the down payment. The personal bank is NOT a third
+    caller and never will be - a banker is a creature, so `_bank_once` asks
+    `_fetch_town`, which reads npcflags.
+
+    `spawn` IS THE ONE THE AIM NAMED, not "any counter of this kind". The walk
+    was sent to one row out of `gameobject`, so "has the walk landed" is a
+    question about that row. A character at a DIFFERENT mailbox would be
+    accepted by the core - `FindMailboxInReach` sweeps for any of them - which
+    makes this gate tighter than the world's: it costs a cycle, never a bad row.
+
+    `standing` IS THE ROW OF THE CHARACTER BEING JUDGED, never the leader's.
+    The spawn query's own `d2` is measured from whoever the query was run for,
+    so it answers for one character; every executor that refuses for range
+    measures the character its row names, and an arrived leader never meant
+    five.
+
+    SAME MAP, AND PLANAR. Without the map test a character in Outland at (x, y)
+    passes a gate for an Azeroth spawn at the same (x, y). z is left out for
+    the reason the spawn queries leave it out of their ranking: a counter is
+    reached across the floor, not up a tower.
+
+    `yards` IS A RADIUS AND THE CALLER OWNS IT, as `within_focus` reads a
+    forge's own radius rather than a constant of ours. Squared on BOTH sides:
+    an unsquared threshold against a squared distance shrinks an 8-yard gate to
+    2.83, inside the travel drive's own arrival tolerance, so nobody would ever
+    pass it; the other way round opens it to 64.
+
+    FALSE FOR ANYTHING IT CANNOT READ, which is the opposite direction from
+    `within_focus` and deliberately so. There, not knowing means walk them
+    there and the cost is a walk. Here, not knowing means write a row, and a
+    row written early is not late - it is answered where the character stands
+    and is terminal a second later. A character with no snapshot row is not
+    merely unreadable either: `_fetch_positions` returns only rows fresher than
+    a minute, so a missing name is one the world is not ticking, which is the
+    `target not online` refusal one table over.
+    """
+    if not spawn or not standing:
+        return False
+    try:
+        here = spawn.get("map_id")
+        there = standing.get("map_id")
+        if here is None or there is None or int(here) != int(there):
+            return False
+        dx = float(spawn.get("x")) - float(standing.get("pos_x"))
+        dy = float(spawn.get("y")) - float(standing.get("pos_y"))
+        limit = float(yards)
+    except (TypeError, ValueError):
+        return False
+    return dx * dx + dy * dy <= limit * limit

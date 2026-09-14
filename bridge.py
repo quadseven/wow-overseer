@@ -6149,11 +6149,37 @@ class Bridge(discord.Client):
         Deposit only (mod-overseer#437, infra#2831) - see guildbank.py for
         why withdrawal is a separate, harder feature and not attempted here.
 
-        SAME SHAPE AS _bank_once, DELIBERATELY. Only the leader can be aimed
-        (followers arrive by following, mod-overseer#209), so the errand goes
-        to the leader once and every character's deposit row is queued
-        alongside it, each staying pending until its holder reaches the vault
-        (`GuildBankInReach`, mod-overseer#441).
+        THE AIM IS SHAPED LIKE _bank_once'S AND THE ROWS ARE NOT. Only the
+        leader can be aimed (followers arrive by following, mod-overseer#209),
+        so the errand goes to the leader once and the other four arrive behind
+        it - but the rows are not written in the same breath.
+
+        THE SENTENCE THAT USED TO SIT HERE WAS FACTUALLY WRONG, AND IT IS WHY
+        NOBODY LOOKED (infra#3804). It said every character's deposit row was
+        "queued alongside it, each staying pending until its holder reaches
+        the vault (`GuildBankInReach`, mod-overseer#441)". Nothing waits. The
+        row is answered on the next poll from wherever that character stands
+        AT THAT INSTANT - DoGuild's own comment says so, "this executor moves
+        the money where the character already stands, or names why it cannot"
+        - and a failed `GuildBankInReach` goes to `refuse()`, a one-argument
+        lambda that writes `status='refused'` and returns. No retry class of
+        the kind mod-overseer#230 gave `vendor not in range`, and nothing puts
+        the row back to `pending`. It is terminal. So every row this pass ever
+        wrote died about a second later, before anybody had walked a yard: 73
+        of them on wow-dev in 24 hours, and zero deliveries all-time.
+
+        SO IT AIMS ON ONE CYCLE AND QUEUES ON A LATER ONE, the shape
+        `_vendor_once` and `_auction_once` already have, and it asks PER
+        DEPOSITOR because `GuildBankInReach(who, ...)` measures the range of
+        the character whose row it is - which is why `_vendor_once` calls
+        `_fetch_town` per seller. `travel.spawn_in_reach` is that question,
+        judged at TOWN_COUNTER_YARDS: looser than the core's 5-yard
+        INTERACTION_DISTANCE on purpose, because a walk only lands within
+        `travel.ARRIVED_POSITION_YARDS` of its aim and a gate tightened to
+        five would refuse characters that had arrived correctly. It ends a
+        second dead class too: `_fetch_positions` returns only rows fresher
+        than a minute, so a character the world is not ticking is not queued -
+        the other 36 rows in the same day, `target not online`.
 
         AND THE AIM IS THE VAULT'S OWN SPAWN, NOT A ROLE KEYWORD (infra#3702).
         Two previous fixes here argued about which KEYWORD to write - `guild
@@ -6210,7 +6236,12 @@ class Bridge(discord.Client):
             log.info("guild bank: nobody is carrying more than the float")
             return
         leader = await asyncio.to_thread(_head_now)
-        where = (await asyncio.to_thread(_fetch_positions, [leader])).get(leader)
+        # ONE POSITION READ, FOR TWO QUESTIONS (infra#3804): which map the
+        # LEADER aims from, and whether each DEPOSITOR is at the vault now.
+        # `_fetch_positions` batches, so this is the one query it always was.
+        positions = await asyncio.to_thread(
+            _fetch_positions, sorted({leader} | {d.name for d in deposits}))
+        where = positions.get(leader)
         spawn = await asyncio.to_thread(_nearest_vault, leader)
         vault = travel.vault_aim(spawn, where.get("map_id") if where else None)
         if not vault.aim:
@@ -6235,8 +6266,13 @@ class Bridge(discord.Client):
         # own: "is a counter within reach of where this character is standing"
         # is the same question the town reader already answers, sized to the
         # core's own interact gate, and one answer to it is better than two.
-        near = spawn.get("d2")
-        at_the_vault = near is not None and float(near) <= TOWN_COUNTER_YARDS ** 2
+        #
+        # IT IS THE LEADER'S DISTANCE, so it decides only whether the pass
+        # keeps going (infra#3804): which rows get written is asked again
+        # below, per depositor, because an arrived leader never meant five.
+        # Through that same reader rather than `spawn["d2"]`, which is this
+        # same distance for this same leader: one answer, one function.
+        at_the_vault = travel.spawn_in_reach(spawn, where, TOWN_COUNTER_YARDS)
         if not aimed and not at_the_vault:
             # WHAT HOLDS THE COLUMN, NOT JUST THAT SOMETHING DOES (infra#3702).
             # The predecessor of this line said "already on another errand"
@@ -6262,12 +6298,29 @@ class Bridge(discord.Client):
             return
         seen = await asyncio.to_thread(_recent_guild_bank_keys, GIVE_RETRY_MINUTES)
         fresh = []
+        walking = []
         for deposit in deposits:
             command = f"bank deposit {deposit.copper}"
             if (deposit.name, command) in seen:
                 continue
+            # THE ROW IS ONLY WRITTEN WHERE IT CAN WORK, AND THE HOLDER IS WHO
+            # IT HAS TO WORK FOR (infra#3804; the docstring has the reasoning
+            # and the measurement).
+            if not travel.spawn_in_reach(
+                    spawn, positions.get(deposit.name), TOWN_COUNTER_YARDS):
+                walking.append(deposit.name)
+                continue
             await asyncio.to_thread(_insert_guild, deposit.name, command, "guildbank")
             fresh.append(deposit)
+        if walking:
+            # LOGGED: a pass that writes nothing and a broken one look
+            # identical otherwise (infra#3660, restated for the rows).
+            log.info(
+                "guild bank: %s not within %d yards of the vault at %s, so no "
+                "deposit is queued for them until the walk lands - one written "
+                "now comes back 'no guild bank in reach' a second later",
+                ", ".join(sorted(walking)), TOWN_COUNTER_YARDS, vault.aim,
+            )
         log.info("guild bank: queued %d/%d deposit(s), leader=%s aimed at %s",
                  len(fresh), len(deposits), leader, vault.aim)
 
@@ -6387,15 +6440,64 @@ class Bridge(discord.Client):
         because of this pass is what `DriveCraft`, the vendor pass and the bank
         pass can all finally see.
 
-        SAME SHAPE AS _guild_bank_once, DELIBERATELY, DOWN TO THE AIM. Only the
+        THE AIM IS SHAPED LIKE _guild_bank_once'S AND THE ROWS ARE NOT. Only the
         leader can be aimed (followers arrive by following, mod-overseer#209), so
-        the errand goes to the leader once and every character's take is queued
-        alongside it, each staying pending until its holder reaches a mailbox.
+        the errand goes to the leader once and the other four arrive behind it.
         And the aim is a GROUND aim for the same reason the vault's is: a mailbox
         on 3.3.5 is a gameobject, `TravelRoles()` has no `mailbox` keyword to
         write and no creature on this world carries UNIT_NPC_FLAG_MAILBOX
         (travel.MAILBOX_GO_TYPE has the counts), so the only thing that can reach
         one is the spawn's own surveyed position through `travel.mailbox_aim`.
+
+        THE SENTENCE THAT USED TO FINISH THAT PARAGRAPH WAS FACTUALLY WRONG,
+        AND SO WAS THE ONE #3788 PUT IN FRONT OF A REVIEWER (infra#3830). It
+        said the errand went to the leader "and every character's take is
+        queued alongside it, each staying pending until its holder reaches a
+        mailbox"; the PR body said this pass "fails safe (queues nothing until
+        someone can stand at a mailbox)". Neither is true, and the second is
+        why nobody looked: the only gate this pass had was on the AIM being
+        taken, which asks whether a mailbox EXISTS on the leader's map - never
+        whether anybody is at one - so the first cycle that won the column
+        queued the lot.
+
+        NOTHING STAYS PENDING. `DoMail` requires a mailbox for all five verbs
+        (`FindMailboxInReach` runs before the verb branches, because all five
+        handlers open with `CanOpenMailBox`), and an empty sweep goes to
+        `refuse()`, a one-argument lambda that describes the row and returns.
+        mod-overseer#230 took the push-back-to-`pending` path out of every verb
+        in that module - "a retry that keeps its place at the head of a FIFO is
+        not a retry, it is a lock" - so the row is terminal where it stands.
+        `MailRefusalRetryable` DOES class this refusal retryable, and that is
+        the one real difference from infra#3804's vault: it is a flag carried
+        OUT in the result JSON for the SENDER to act on, not something that
+        moves a row. The only thing on this side that acts on it is
+        `_recent_mail_keys`, which suppresses an identical take for
+        GIVE_RETRY_MINUTES and bills it to `mailrun.room_for` as spent bag
+        budget. So a take written early does not merely die - it takes the
+        retry window and the bag room with it.
+
+        MEASURED, MINUTES AFTER THIS PASS FIRST RAN ON THE REALM (infra#3830):
+        ten takes written at 04:22:43, ten `mailbox not in range` answered 0.8
+        seconds later, zero delivered all-time. Ten minutes on, the five were
+        still 1,092 to 1,140 yards from the nearest mailbox on their own map.
+        Half an hour after that, having walked into Gadgetzan, they were 47 to
+        52 - in the town, at the aim, and still six times outside the gate.
+        That second reading is the case this is really for: the extreme one
+        only says the pass can be wrong, the near one says it is wrong on the
+        ordinary cycle where the walk has nearly landed.
+
+        SO IT AIMS ON ONE CYCLE AND QUEUES ON A LATER ONE, the shape
+        `_vendor_once` and `_auction_once` already have and infra#3804 gave the
+        guild vault. The reach question is asked PER TAKER, because
+        `FindMailboxInReach(who, ...)` sweeps around the character whose row it
+        is - the same reason `_vendor_once` calls `_fetch_town` per seller.
+        `travel.spawn_in_reach` is that question, and it is named for neither
+        counter because nothing in it is about either; its docstring has that
+        argument. It is judged at TOWN_COUNTER_YARDS, deliberately looser than
+        the core's five-yard interact gate, because a walk only lands within
+        `travel.ARRIVED_POSITION_YARDS` of its aim and a gate tightened to five
+        would refuse characters that had arrived correctly. Slack costs
+        lateness, never a wrong row.
 
         AND THERE IS NO ERRAND TO HAND BACK, WHICH IS NOT AN OVERSIGHT. A ground
         aim is not a maintenance errand: `IsMaintenanceErrand` is
@@ -6415,6 +6517,14 @@ class Bridge(discord.Client):
         `no guild bank in reach` rows the guild bank pass manufactured before
         infra#3702. The plan is still computed first, because its notes are the
         only thing that can say the mailboxes were empty rather than unreachable.
+
+        AND THAT HEADING IS A SMALLER CLAIM THAN IT READS AS (infra#3830).
+        "Actually stand at a mailbox" is what a reader takes from it and is not
+        what the paragraph under it proves: every refusal it names comes from
+        `travel.mailbox_aim`, which asks whether a mailbox EXISTS on the
+        leader's map. Whether anybody has ARRIVED at one is the per-taker gate
+        above, and reading this paragraph as the whole of the guarantee is how
+        ten rows came to be manufactured in precisely the state it describes.
 
         NOT IN THE MIDDLE OF A DUNGEON RUN, for the same reason the two bank
         passes skip one: a mail run is a town errand, and pulling the leader out
@@ -6452,16 +6562,30 @@ class Bridge(discord.Client):
         # the seniority answer is a static table that named a follower for six
         # hours while the real leader was on a trade errand.
         leader = await asyncio.to_thread(_head_now)
-        where = (await asyncio.to_thread(_fetch_positions, [leader])).get(leader)
+        # ONE POSITION READ, FOR TWO QUESTIONS (infra#3830): which map the
+        # LEADER aims from, and whether each TAKER is at the mailbox now.
+        # `_fetch_positions` batches, so this is the one query it always was.
+        positions = await asyncio.to_thread(
+            _fetch_positions,
+            sorted({leader} | {t.character for t in mail_plan.takes}))
+        where = positions.get(leader)
         spawn = await asyncio.to_thread(_nearest_mailbox, leader)
         post = travel.mailbox_aim(spawn, where.get("map_id") if where else None)
         if not post.aim:
             log.info("mail: nobody can be sent to a mailbox - %s", post.refused)
             return
-        aimed = await asyncio.to_thread(
-            _write_trade_errand,
-            professions.Errand(character=leader, travel_npc=post.aim),
-        )
+        # THROUGH THE TOWN SLOT, LIKE EVERY OTHER TOWN ERRAND (infra#3703,
+        # infra#3822). This pass and the town slot were written in parallel and
+        # merged eighty-six seconds apart, so it landed still writing the column
+        # directly - which is not merely a broken invariant. A direct write is a
+        # third racer for the family's one traveller, it takes no lease, it
+        # answers to no turn order, and the aim it writes is a GROUND aim: the
+        # shape that had no terminal path at all until infra#3703 taught
+        # `_release_trade_errand` to hand one back. Left as it was, the pass that
+        # measured 21 letters waiting would have been the one pass nothing could
+        # ever preempt, holding the column while the auction pass that BUYS what
+        # arrives by mail starved behind it.
+        aimed = await self._claim_town_slot("mail", leader, post.aim)
         # ALREADY STANDING THERE COUNTS AS AIMED, the reasoning `_guild_bank_once`
         # sets out: mod-overseer releases a travel aim the moment the walk
         # arrives, so the cycle AFTER the family reaches the mailbox finds the
@@ -6471,21 +6595,36 @@ class Bridge(discord.Client):
         # where this character is standing" is the same question the town reader
         # already answers, sized to the core's own interact gate - and
         # `CanOpenMailBox` is that same gate.
-        near = spawn.get("d2")
-        at_the_mailbox = near is not None and float(near) <= TOWN_COUNTER_YARDS ** 2
+        #
+        # IT IS THE LEADER'S DISTANCE, so it decides only whether the pass keeps
+        # going (infra#3830): which rows get written is asked again below, per
+        # taker, because an arrived leader never meant five. Through the same
+        # reader rather than the spawn's own `d2`, which is this same distance
+        # for this same leader: one answer, one function.
+        at_the_mailbox = travel.spawn_in_reach(spawn, where, TOWN_COUNTER_YARDS)
         if not aimed and not at_the_mailbox:
+            # WHAT IT IS COSTING, WHICH THE SLOT CANNOT SAY. `_claim_town_slot`
+            # has already named the holder, how long it has had the column, how
+            # much lease is left and who is queued ahead - one sentence, in one
+            # place, for every town pass. What only this pass knows is how much
+            # is sitting in the mailbox going uncollected, and that the auction
+            # pass is buying reagents that arrive there.
             log.info(
-                "mail: leader=%s could not be aimed at a mailbox (%s) - the "
-                "column already holds %r and an economy errand may only retask "
-                "an idle traveller, so this pass is starved until that one "
-                "clears (infra#3703)",
-                leader, post.aim,
-                await asyncio.to_thread(_current_travel_npc, leader),
+                "mail: leader=%s could not be aimed at a mailbox (%s) this "
+                "pass, so %d letter(s) stay uncollected until the town slot "
+                "comes round", leader, post.aim, len(letters),
             )
             return
 
+        # THE ROW IS ONLY WRITTEN WHERE IT CAN WORK, AND THE TAKER IS WHO IT HAS
+        # TO WORK FOR (infra#3830; the docstring has the reasoning and the
+        # measurement). It decides the list this loop walks rather than sitting
+        # inside it, so a take whose holder has not arrived never reaches
+        # `_insert_mail` at all.
         fresh = []
-        for take in mail_plan.takes:
+        for take in _mail_takes_in_reach(
+                mail_plan.takes, spawn, positions, TOWN_COUNTER_YARDS,
+                post.aim):
             command = mailrun.command(take)
             if (take.character, command) in seen:
                 continue
@@ -9481,6 +9620,49 @@ def _insert_bank(move, command: str) -> int:
                 return 0
             raise
         return cur.lastrowid or 0
+
+
+def _mail_takes_in_reach(takes, spawn, positions, yards, aim) -> list:
+    """The takes whose holder is standing at `spawn`, and it says who is not.
+
+    ONE ANSWER PER CHARACTER, NOT ONE PER ROW (infra#3830): several takes share
+    a holder and the mailbox does not move between them. It is asked of the
+    TAKER because `FindMailboxInReach(who, ...)` sweeps around the character
+    whose row it is, so an arrived leader never meant five.
+
+    A FUNCTION OF ITS OWN, AND MAIL-NAMED ON PURPOSE. `travel.spawn_in_reach`
+    below it is geometry with no noun in it, which is why that one is shared
+    between counters. This is the opposite case and the same criterion: it
+    carries mail's own vocabulary - a `take`, its `character`, and a sentence
+    about mailboxes that sends a reader somewhere - so the noun is the value,
+    exactly as `mailbox_aim` argues against sharing a body with `vault_aim`.
+
+    THE HELD-BACK ARE LOGGED HERE RATHER THAN COUNTED AND DROPPED, because a
+    pass that writes nothing and a broken one look identical otherwise
+    (infra#3660, restated for the rows). One line naming everybody, not one per
+    take: a character with four letters is one person walking.
+
+    IT DOES NOT KNOW ABOUT THE RETRY WINDOW, and the caller filters on that
+    afterwards. The consequence, stated rather than hidden: a holder whose takes
+    were all asked for recently AND who is not at the mailbox is named in this
+    line even though no row was going to be written for them this pass. That is
+    the honest sentence - they are not at a mailbox - and the alternative is
+    this function taking a second argument to stay quiet about a true thing.
+    """
+    close, walking = [], []
+    for take in takes:
+        if travel.spawn_in_reach(spawn, positions.get(take.character), yards):
+            close.append(take)
+        else:
+            walking.append(take.character)
+    if walking:
+        log.info(
+            "mail: %s not within %d yards of the mailbox at %s, so no take is "
+            "queued for them until the walk lands - one written now comes back "
+            "'mailbox not in range' a second later",
+            ", ".join(sorted(set(walking))), yards, aim,
+        )
+    return close
 
 
 def _recent_mail_keys(minutes: int) -> set:

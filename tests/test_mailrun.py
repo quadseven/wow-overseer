@@ -321,5 +321,183 @@ class TheLogSaysWhatWasAsked(unittest.TestCase):
         self.assertIn("4100 copper", lines[0])
 
 
+# The Gadgetzan mailbox the failing aim in infra#3830 was built from, read out
+# of the live `acore_world.gameobject` spawn table - guid 17473, entry 144112,
+# the row `_nearest_mailbox` returned for the leader at 04:22. The family's own
+# readings below are live `overseer_snapshot` rows taken while that issue was
+# open, so the distances these tests judge are the distances the realm had.
+# Nothing walks to any of them: this is a measurement fixture, not an aim.
+GADGETZAN_MAILBOX = {"map_id": 1, "x": -7154.4, "y": -3829.52, "z": 8.75029}
+
+
+def standing(name="Grug", map_id=1, pos_x=-7986.9, pos_y=-3051.2):
+    """An `overseer_snapshot` row in the shape `_fetch_positions` returns.
+
+    The default is Grug as measured on wow-dev on 2026-09-14 - about 1,140 yards
+    from the mailbox above, which is the state in which the pass queued ten
+    takes and had all ten refused inside a second."""
+    return {"name": name, "map_id": map_id, "pos_x": pos_x, "pos_y": pos_y}
+
+
+class TheReachGateIsAskedOfTheTaker(unittest.TestCase):
+    """`travel.spawn_in_reach` - the per-character judgement infra#3830 needed,
+    and the sibling of `within_focus`. It takes a position row rather than the
+    spawn's own `d2` because `d2` is measured from whoever the spawn query was
+    run for, and every mail row is range-checked against the character it names.
+
+    NOT `mailbox_in_reach`, AND NOT A COPY OF A VAULT ONE. The decision and its
+    argument are in the function's own docstring; what is pinned here is that
+    the decision survives, because the cheap way to answer the next counter is
+    to paste this body under a third name."""
+
+    def test_the_family_where_the_realm_measured_them_is_not_in_reach(self):
+        """About 1,140 yards out. This is the exact state that produced ten
+        `mailbox not in range` rows 0.8 seconds after the aim was taken."""
+        self.assertFalse(
+            travel.spawn_in_reach(GADGETZAN_MAILBOX, standing(), 8))
+
+    def test_a_character_at_the_mailbox_is_in_reach(self):
+        at_it = standing(pos_x=GADGETZAN_MAILBOX["x"] + 3.0,
+                         pos_y=GADGETZAN_MAILBOX["y"])
+        self.assertTrue(travel.spawn_in_reach(GADGETZAN_MAILBOX, at_it, 8))
+
+    def test_the_threshold_is_a_radius_and_not_a_squared_one(self):
+        """Eight yards means eight yards. Comparing a squared distance against
+        an unsquared threshold would shrink the gate to 2.83 yards - inside the
+        travel drive's own arrival tolerance, so nobody would ever pass it - and
+        comparing an unsquared distance against a squared one would open it
+        to 64."""
+        edge = standing(pos_x=GADGETZAN_MAILBOX["x"] + 8.0,
+                        pos_y=GADGETZAN_MAILBOX["y"])
+        just_out = standing(pos_x=GADGETZAN_MAILBOX["x"] + 8.01,
+                            pos_y=GADGETZAN_MAILBOX["y"])
+        inside = standing(pos_x=GADGETZAN_MAILBOX["x"] + 4.0,
+                          pos_y=GADGETZAN_MAILBOX["y"])
+        far = standing(pos_x=GADGETZAN_MAILBOX["x"] + 20.0,
+                       pos_y=GADGETZAN_MAILBOX["y"])
+        self.assertTrue(travel.spawn_in_reach(GADGETZAN_MAILBOX, edge, 8))
+        self.assertFalse(travel.spawn_in_reach(GADGETZAN_MAILBOX, just_out, 8))
+        self.assertTrue(travel.spawn_in_reach(GADGETZAN_MAILBOX, inside, 8))
+        self.assertFalse(travel.spawn_in_reach(GADGETZAN_MAILBOX, far, 8))
+
+    def test_both_axes_count_not_just_one(self):
+        """A gate that measured x alone would pass a character standing six
+        yards east and six hundred north."""
+        corner = standing(pos_x=GADGETZAN_MAILBOX["x"] + 6.0,
+                          pos_y=GADGETZAN_MAILBOX["y"] + 6.0)
+        self.assertFalse(travel.spawn_in_reach(GADGETZAN_MAILBOX, corner, 8))
+
+    def test_a_spawn_on_another_map_is_never_in_reach(self):
+        """Same coordinates, different continent. Without the map check a
+        character in Outland at (x, y) passes a gate for an Azeroth spawn at the
+        same (x, y), which is the cross-map trap `mailbox_aim` already refuses
+        one step earlier."""
+        elsewhere = standing(map_id=530, pos_x=GADGETZAN_MAILBOX["x"],
+                             pos_y=GADGETZAN_MAILBOX["y"])
+        self.assertFalse(travel.spawn_in_reach(GADGETZAN_MAILBOX, elsewhere, 8))
+
+    def test_a_character_with_no_snapshot_row_is_not_in_reach(self):
+        """`_fetch_positions` only returns rows updated inside 60 seconds, so a
+        missing row means the world is not ticking that character. Fail-closed
+        here is the opposite of `within_focus`'s and deliberately so: not
+        knowing costs one cycle, guessing costs a terminal refusal."""
+        self.assertFalse(travel.spawn_in_reach(GADGETZAN_MAILBOX, None, 8))
+        self.assertFalse(travel.spawn_in_reach(GADGETZAN_MAILBOX, {}, 8))
+
+    def test_nothing_is_in_reach_of_a_spawn_that_was_not_found(self):
+        self.assertFalse(travel.spawn_in_reach(None, standing(), 8))
+
+    def test_an_unreadable_reading_is_refused_rather_than_raising(self):
+        self.assertFalse(
+            travel.spawn_in_reach(GADGETZAN_MAILBOX, standing(pos_x=None), 8))
+        self.assertFalse(travel.spawn_in_reach(
+            GADGETZAN_MAILBOX, standing(pos_x="over there"), 8))
+        self.assertFalse(travel.spawn_in_reach(
+            dict(GADGETZAN_MAILBOX, map_id=None), standing(), 8))
+        self.assertFalse(travel.spawn_in_reach(
+            GADGETZAN_MAILBOX, standing(map_id=None), 8))
+
+    def test_the_caller_owns_the_threshold(self):
+        """`yards` is a parameter for the reason `within_focus` reads a forge's
+        own radius: the pass that owns the reasoning owns the number, and
+        bridge's TOWN_COUNTER_YARDS comment is where that reasoning is."""
+        out_at_eight = standing(pos_x=GADGETZAN_MAILBOX["x"] + 20.0,
+                                pos_y=GADGETZAN_MAILBOX["y"])
+        self.assertFalse(
+            travel.spawn_in_reach(GADGETZAN_MAILBOX, out_at_eight, 8))
+        self.assertTrue(
+            travel.spawn_in_reach(GADGETZAN_MAILBOX, out_at_eight, 25))
+
+    def test_there_is_one_of_it_and_its_name_names_no_counter(self):
+        """THE GENERALISE-OR-COPY DECISION, PINNED (infra#3830). infra#3804
+        wrote this judgement for a guild vault; this is its second caller, for a
+        mailbox; the personal bank is not a third because a banker is a creature
+        and `_bank_once` asks `_fetch_town`. A copy under a second noun is the
+        cheap way to answer the next counter and is what this refuses: the body
+        contains no sentence and no noun, so there is nothing in it for a name
+        to be about."""
+        source = (pathlib.Path(travel.__file__)).read_text(encoding="utf-8")
+        self.assertTrue(hasattr(travel, "spawn_in_reach"))
+        self.assertEqual(source.count("def spawn_in_reach("), 1)
+        for copy in ("def vault_in_reach(", "def mailbox_in_reach(",
+                     "def forge_in_reach(", "def counter_in_reach("):
+            with self.subTest(copy=copy):
+                self.assertNotIn(copy, source)
+
+
+class AMailRowIsAnsweredWhereTheCharacterStandsTests(unittest.TestCase):
+    """infra#3830, and the C++ facts #3788's docstring got backwards.
+
+    `_mail_once` claimed each take stayed "pending until its holder reaches a
+    mailbox". `DoMail` runs `FindMailboxInReach` before any verb branches and
+    hands an empty sweep to `refuse()`. This pins the three properties that make
+    that terminal: the sweep gates every verb rather than `send` alone, `refuse`
+    is a one-argument lambda that describes the row and returns, and the
+    `retryable` flag the classifier does set for this refusal is written into
+    the RESULT JSON for the sender - it moves no row, because mod-overseer#230
+    took the push-back-to-`pending` path out of every verb in the module."""
+
+    def setUp(self):
+        if not MODULE.exists():
+            self.skipTest("mod-overseer submodule not checked out")
+        cpp = MODULE.read_text(encoding="utf-8")
+        start = cpp.index("static char const* DoMail(")
+        self.body = cpp[start:cpp.index("\n    static ", start + 1)]
+        self.refuse = self.body[self.body.index("auto refuse = [&]"):][:300]
+
+    def test_a_mailbox_is_required_before_any_verb_branches(self):
+        gate = self.body.index("FindMailboxInReach(who")
+        self.assertIn("return refuse(R::NoMailbox);", self.body)
+        for verb in ("MailVerb::Send", "MailVerb::TakeItem",
+                     "MailVerb::TakeMoney"):
+            with self.subTest(verb=verb):
+                self.assertLess(
+                    gate, self.body.index("req.verb == D::%s" % verb))
+
+    def test_the_refusal_literal_is_the_one_the_realm_wrote(self):
+        """Asked of the constant rather than of a string this file chose, so a
+        rename on that side cannot leave this test passing about nothing."""
+        header = HEADER.read_text(encoding="utf-8")
+        self.assertIn('NoMailbox         = "mailbox not in range";', header)
+
+    def test_a_refusal_is_terminal_and_carries_no_retry_class(self):
+        """One argument, `describe("refused", ...)`, return. Nothing puts
+        the row back to `pending`, so a take queued early is not late, it is
+        dead."""
+        self.assertIn("auto refuse = [&](char const* reason)", self.refuse)
+        self.assertIn('describe("refused", reason, "")', self.refuse)
+        self.assertNotIn("pending", self.refuse)
+
+    def test_retryable_is_carried_out_to_the_sender_and_moves_no_row(self):
+        """The one real difference from infra#3804's vault refusal, and it does
+        not change the answer: `MailRefusalRetryable` is read only where the
+        result JSON is built."""
+        self.assertEqual(self.body.count("MailRefusalRetryable("), 1)
+        described = self.body[self.body.index("auto describe = [&]"):
+                              self.body.index("auto refuse = [&]")]
+        self.assertIn("MailRefusalRetryable(reason)", described)
+        self.assertIn('",\\"retryable\\":"', described)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -8,6 +8,7 @@ through `ECONOMY_ERRANDS`, deliberately, so it inherits the exact same
 idle-traveller guard rather than repeating that mistake one file over.
 """
 import pathlib
+import re
 import unittest
 
 import guildbank
@@ -657,6 +658,201 @@ class NoTabPurchaseVerbExistsToCallYetTests(unittest.TestCase):
 
     def test_the_module_cannot_set_rank_bank_rights_today(self):
         self.assertNotIn("HandleSetRankInfo", self.cpp)
+
+
+# The Gadgetzan Guild Vault, read out of the live `acore_world.gameobject`
+# spawn table rather than chosen here - the same row `_nearest_vault` returns
+# and the one the failing aim in infra#3804 was built from. The family's own
+# positions below are the live `overseer_snapshot` readings taken while that
+# issue was open, so the distances these tests judge are the distances the
+# realm actually had. Nothing walks to any of them: this is a measurement
+# fixture, not an aim.
+GADGETZAN_VAULT = {"map_id": 1, "x": -7203.14, "y": -3821.13, "z": 8.56098}
+
+
+def standing(name="Grug", map_id=1, pos_x=-7234.6, pos_y=-3804.1):
+    """An `overseer_snapshot` row in the shape `_fetch_positions` returns.
+
+    The default is Grug as measured on wow-dev on 2026-09-14 - about 36 yards
+    from the vault above, which is exactly the state in which the pass queued
+    five deposits and had them all refused."""
+    return {"name": name, "map_id": map_id, "pos_x": pos_x, "pos_y": pos_y}
+
+
+class ADepositIsAnsweredWhereTheCharacterStandsTests(unittest.TestCase):
+    """infra#3804, and the C++ fact the old docstring got backwards.
+
+    `_guild_bank_once` claimed each row stayed "pending until its holder
+    reaches the vault". DoGuild's `GuildVerb::Bank` branch checks
+    `GuildBankInReach(who, ...)` on the poll that picks the row up and hands a
+    failure to `refuse()`. This pins the two properties that make that
+    terminal: the check exists on the money branch, and DoGuild's `refuse` is
+    a one-argument lambda that writes `refused` and returns - no retry class
+    like the one mod-overseer#230 gave `vendor not in range`, and nothing that
+    puts the row back to `pending`."""
+
+    def setUp(self):
+        if not MOD_OVERSEER.exists():
+            self.skipTest("mod-overseer submodule not checked out")
+        cpp = MOD_OVERSEER.read_text(encoding="utf-8")
+        start = cpp.index("if (request.verb == GuildVerb::Bank)")
+        self.money = cpp[start:cpp.index("GuildVerb::BankDepositItem", start)]
+        guild = cpp[cpp.index("static char const* DoGuild("):]
+        self.refuse = guild[guild.index("auto refuse = [&]"):][:400]
+
+    def test_the_money_deposit_measures_range_at_the_moment_it_is_answered(self):
+        self.assertIn("GuildBankInReach(who, anyVaultInRange)", self.money)
+        self.assertIn("return refuse(anyVaultInRange", self.money)
+        self.assertIn('"no guild bank in reach"', self.money)
+
+    def test_the_executor_says_it_acts_where_the_character_already_stands(self):
+        self.assertIn("where the character already stands", self.money)
+
+    def test_a_refusal_is_terminal_and_carries_no_retry_class(self):
+        """One argument, `describe("refused", ...)`, return. A second argument
+        is what a retryable class looks like in this file (DoBank passes one);
+        a deposit has none, so a row queued early is not late, it is dead."""
+        self.assertIn("auto refuse = [&](char const* reason)", self.refuse)
+        self.assertIn('describe("refused", reason)', self.refuse)
+        self.assertNotIn("pending", self.refuse)
+
+
+class TheVaultReachGateAnswersForTheRealFamilyTests(unittest.TestCase):
+    """`travel.spawn_in_reach` judged against the vault and the standoff the
+    realm actually had, which is what makes these a guild-bank regression
+    rather than arithmetic.
+
+    THE FUNCTION IS SHARED AND ITS NAME IS THE DECISION (infra#3830). This
+    judgement was written here for a guild vault, and the mail pass is its
+    second caller; `travel.py` carries ONE of it, named for neither counter,
+    because the body has no refusal sentence for a noun to live in - the test
+    that keeps `vault_aim` and `mailbox_aim` apart answers the other way for
+    a bare bool. `tests/test_mailrun.py` owns the general contract (the map
+    test, the squared threshold, both axes, fail-closed on a row nobody can
+    read) and pins that there is only one body, under no counter's name.
+    Re-asserting all of that here would be the copy that decision refuses.
+    What is guild-bank-specific is below: the real spawn row, the real
+    positions, and the threshold this pass chose."""
+
+    def test_the_family_where_the_realm_measured_them_is_not_in_reach(self):
+        """About 36 yards out. This is the exact state that produced five
+        `no guild bank in reach` rows one second after the aim was taken, so
+        a gate that passes here is a gate that would have written them."""
+        self.assertFalse(
+            travel.spawn_in_reach(GADGETZAN_VAULT, standing(), 8))
+
+    def test_a_depositor_at_the_vault_is_in_reach(self):
+        at_it = standing(pos_x=GADGETZAN_VAULT["x"] + 3.0,
+                         pos_y=GADGETZAN_VAULT["y"])
+        self.assertTrue(travel.spawn_in_reach(GADGETZAN_VAULT, at_it, 8))
+
+    def test_every_one_of_the_five_is_judged_on_its_own_standing(self):
+        """The whole of infra#3804 in one assertion: an arrived leader and a
+        follower still walking get different answers from the same spawn row,
+        which is why the pass asks per depositor rather than once."""
+        arrived = standing(name="Grug", pos_x=GADGETZAN_VAULT["x"] + 2.0,
+                           pos_y=GADGETZAN_VAULT["y"])
+        behind = standing(name="Ugga")
+        self.assertTrue(travel.spawn_in_reach(GADGETZAN_VAULT, arrived, 8))
+        self.assertFalse(travel.spawn_in_reach(GADGETZAN_VAULT, behind, 8))
+
+    def test_the_pass_gates_at_town_counter_yards_and_not_the_cores_five(self):
+        """8, not INTERACTION_DISTANCE's 5, and the looseness is deliberate:
+        a walk only lands within `travel.ARRIVED_POSITION_YARDS` of its aim,
+        so a five-yard gate would refuse a character that had arrived
+        correctly and the deposit would never be attempted at all. Pinned
+        against the constant the pass actually passes in."""
+        source = BRIDGE.read_text(encoding="utf-8")
+        start = source.index("async def _guild_bank_once(")
+        body = source[start:source.index("\n    async def ", start + 1)]
+        self.assertIn("TOWN_COUNTER_YARDS", body)
+        self.assertEqual(8, int(
+            re.search(r"^TOWN_COUNTER_YARDS = (\d+)", source, re.M).group(1)))
+        self.assertGreater(8, travel.ARRIVED_POSITION_YARDS)
+        landed = standing(pos_x=GADGETZAN_VAULT["x"] + 7.0,
+                          pos_y=GADGETZAN_VAULT["y"])
+        self.assertTrue(travel.spawn_in_reach(GADGETZAN_VAULT, landed, 8))
+        self.assertFalse(travel.spawn_in_reach(GADGETZAN_VAULT, landed, 5))
+
+
+class TheDepositQueueWaitsForTheWalkTests(unittest.TestCase):
+    """infra#3804. The pass wrote the aim and all five rows in one breath, and
+    the worldserver answered every row about a second later from where the
+    family was still standing - 73 `no guild bank in reach` in 24 hours and
+    zero deliveries all-time, measured on wow-dev.
+
+    READ AS SOURCE TEXT, for the reason the other bridge assertions in this
+    file give: `bridge` imports discord and pymysql, which CI does not
+    install, so importing it here is an ERROR on the runner and a pass only on
+    a machine that happens to have them."""
+
+    def setUp(self):
+        source = BRIDGE.read_text(encoding="utf-8")
+        start = source.index("async def _guild_bank_once(")
+        end = source.index("\n    async def ", start + 1)
+        self.body = source[start:end]
+        self.doc = self.body[:self.body.index('"""', self.body.index('"""') + 3)]
+        self.loop = self.body[self.body.index("for deposit in deposits:"):]
+
+    def test_every_depositor_is_asked_for_not_just_the_leader(self):
+        """The pass only ever read the leader's position, to name the map. A
+        per-holder gate needs a row per holder, and `_fetch_positions` batches,
+        so this stays one query."""
+        self.assertIn("d.name for d in deposits", self.body)
+        self.assertIn("_fetch_positions, sorted({leader}", self.body)
+        self.assertNotIn("_fetch_positions, [leader]", self.body)
+
+    def test_the_gate_sits_above_the_insert_in_the_deposit_loop(self):
+        """Inside the loop and before the write, so a character who has not
+        arrived is skipped rather than queued. Above `_insert_guild` is the
+        whole assertion: below it, the row is already in the table."""
+        self.assertIn("travel.spawn_in_reach(", self.loop)
+        self.assertLess(self.loop.index("travel.spawn_in_reach("),
+                        self.loop.index("_insert_guild"))
+
+    def test_the_gate_reads_the_depositors_own_position(self):
+        """`positions.get(deposit.name)`, never the leader's row and never the
+        spawn's `d2` - `d2` is measured from the leader, and a leader who has
+        arrived says nothing about a follower who has not."""
+        gate = self.loop[self.loop.index("travel.spawn_in_reach("):]
+        gate = gate[:gate.index("_insert_guild")]
+        self.assertIn("positions.get(deposit.name)", gate)
+        self.assertIn("TOWN_COUNTER_YARDS", gate)
+        self.assertNotIn("at_the_vault", gate)
+        self.assertNotIn('spawn.get("d2")', gate)
+
+    def test_a_holder_held_back_is_logged_rather_than_silently_dropped(self):
+        """A pass that writes nothing and a pass that is broken look identical
+        otherwise - the complaint infra#3660 made about the discarded aim
+        result, restated for the rows."""
+        self.assertIn("walking.append(deposit.name)", self.loop)
+        self.assertIn("if walking:", self.loop)
+        self.assertIn("not within %d yards of the vault", self.loop)
+
+    def test_the_docstring_no_longer_claims_the_rows_wait(self):
+        """The one sentence that was factually wrong, and the reason nobody
+        looked for four hundred dead rows. `refuse()` is terminal; a deposit
+        row does not stay pending for anybody."""
+        self.assertIn("WAS FACTUALLY WRONG", self.doc)
+        self.assertIn("Nothing waits.", self.doc)
+        self.assertIn("It is terminal.", self.doc)
+        # The old sentence survives only as a QUOTATION of what this docstring
+        # used to say - it is kept because the correction is unreadable
+        # without it. Anywhere it is still ASSERTED, it is still wrong, so
+        # there is exactly one of it and it sits under the correction.
+        self.assertEqual(self.doc.count("staying pending"), 1)
+        self.assertGreater(self.doc.index("staying pending"),
+                           self.doc.index("WAS FACTUALLY WRONG"))
+        self.assertNotIn("deposit row is queued", self.doc)
+
+    def test_the_leader_distance_is_only_a_short_circuit_now(self):
+        """`at_the_vault` still decides whether the pass continues - a family
+        already standing at the vault must not be skipped just because another
+        economy pass took the released column - but it no longer decides which
+        rows are written."""
+        head = self.body[:self.body.index("for deposit in deposits:")]
+        self.assertIn("if not aimed and not at_the_vault:", head)
+        self.assertIn("IT IS THE LEADER'S DISTANCE", head)
 
 
 if __name__ == "__main__":
