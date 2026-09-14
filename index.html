@@ -836,6 +836,60 @@
      dungeon plan's slice starts at its own banner below this one. */
   #trades { display:none; padding:.9rem 1rem 1.2rem; }
   #gcrguild, #gcrcoverage, #gcrgapsline, #gcrorder, #gcrbasis { max-width:72ch; }
+  #gclgoal, #gclorder, #gcllimit, #gclgrant, #gclbasis { max-width:72ch; }
+  /* THE LIMIT IS MARKED AND NOT MERELY PRINTED. It says that thirty five of
+     the forty guild members cannot be told to do anything, which is the one
+     sentence on this tab that changes how the ladder under it should be read,
+     and a paragraph in body colour between two other paragraphs is a sentence
+     a reader skims past. The same left rule .gcr-gap uses, for the same job:
+     marking a sentence that explains an absence. */
+  #gcllimit { padding:.55rem .8rem; border-left:2px solid var(--caution-text);
+              color:var(--on-card-dim); font-size:13px; line-height:1.6; }
+  /* THE HUNDRED PER CENT. One row per profession: the name, the module's
+     percentage, a bar and the sentence under it. A bar rather than a number
+     alone because the whole point of the figure is that it is a LONG ROAD and
+     a reader should see fourteen of them at once; fourteen numbers in a column
+     do not compare themselves.
+
+     NO PIXEL WIDTH ANYWHERE IN HERE, including the bar: its fill is a
+     percentage of its own row, so it is the same shape on a phone and on a
+     desk. The grid's first column is sized by its content and the second is
+     minmax(0, 1fr), which is what stops a long profession name taking the page
+     sideways. */
+  #gclbars { display:grid; gap:9px; margin-bottom:.9rem; }
+  .gcl-row { display:grid; grid-template-columns:auto minmax(0, 1fr);
+             gap:.1rem .7rem; align-items:baseline; }
+  .gcl-pc { font-family:var(--mono); font-size:12px; font-weight:700;
+            letter-spacing:.06em; color:var(--on-card-dim); }
+  .gcl-name { font-family:var(--display); font-weight:800; font-size:1rem;
+              line-height:1.25; color:var(--on-card); text-transform:capitalize;
+              overflow-wrap:anywhere; }
+  .gcl-track { grid-column:2; height:5px; border-radius:999px;
+               background:var(--card-line); overflow:hidden; margin-top:5px; }
+  .gcl-fill { display:block; height:100%; background:var(--accent-text); }
+  .gcl-why { grid-column:2; margin-top:5px; color:var(--on-card-dim);
+             font-size:13px; line-height:1.5; overflow-wrap:anywhere; }
+  /* A BRANCH, AND A RUNG OF THE LADDER. Both are cards rather than bare rows,
+     because both carry a paragraph of reasoning underneath a one-line summary
+     and that is exactly what a <details> is for. They take .chr-card wholesale
+     the way a trade card does. */
+  #gclspecs, #gclladder { display:grid; gap:10px; margin-bottom:.9rem; }
+  .gcl-card > summary { list-style:none; cursor:pointer; display:grid;
+                        grid-template-columns:auto minmax(0, 1fr);
+                        gap:.15rem .7rem; align-items:baseline; }
+  .gcl-card > summary::-webkit-details-marker { display:none; }
+  .gcl-card > summary:focus-visible { outline:2px solid var(--accent);
+                                      outline-offset:3px; }
+  .gcl-label { font-family:var(--display); font-weight:800; font-stretch:125%;
+               font-size:1.08rem; line-height:1.2; color:var(--on-card);
+               overflow-wrap:anywhere; }
+  .gcl-sum { grid-column:2; margin-top:4px; color:var(--on-card-dim);
+             font-size:13px; line-height:1.5; overflow-wrap:anywhere; }
+  /* WHY A PERSON WAS PUT HERE, and it is the longest text on the page on
+     purpose: a choice with no reasoning beside it is a preference, and the one
+     thing this view must never look like is somebody's preference. */
+  .gcl-reason { margin-top:.6rem; color:var(--on-card-dim); font-size:13px;
+                line-height:1.6; overflow-wrap:anywhere; }
   #gcrgaps { display:grid; gap:8px; }
   /* A TRADE NOBODY HOLDS IS NOT A CARD. It is one sentence, and giving it the
      same weight as a trade with a hundred recipes under it would make the
@@ -3007,10 +3061,21 @@
   <div id="gcrhead" class="ds-head">reaching the world...</div>
   <p id="gcrguild" class="chr-body"></p>
   <p id="gcrcoverage" class="chr-body"></p>
-  <div class="ds-rule"><span class="ix">01</span><span class="ln"></span><span class="lb">what nobody holds</span></div>
+  <div class="ds-rule"><span class="ix">01</span><span class="ln"></span><span class="lb">the hundred per cent</span></div>
+  <p id="gclgoal" class="chr-body"></p>
+  <div id="gclbars"></div>
+  <div class="ds-rule"><span class="ix">02</span><span class="ln"></span><span class="lb">who takes which branch</span></div>
+  <div id="gclspecs"></div>
+  <p id="gclgrant" class="chr-body"></p>
+  <div class="ds-rule"><span class="ix">03</span><span class="ln"></span><span class="lb">the order of crafters</span></div>
+  <p id="gclorder" class="chr-body"></p>
+  <p id="gcllimit" class="chr-body"></p>
+  <div id="gclladder"></div>
+  <p id="gclbasis" class="chr-body"></p>
+  <div class="ds-rule"><span class="ix">04</span><span class="ln"></span><span class="lb">what nobody holds</span></div>
   <p id="gcrgapsline" class="chr-body"></p>
   <div id="gcrgaps"></div>
-  <div class="ds-rule"><span class="ix">02</span><span class="ln"></span><span class="lb">what each trade still needs</span></div>
+  <div class="ds-rule"><span class="ix">05</span><span class="ln"></span><span class="lb">what each trade still needs</span></div>
   <p id="gcrorder" class="chr-body"></p>
   <div id="gcrlist"></div>
   <p id="gcrbasis" class="chr-body"></p>
@@ -6262,6 +6327,105 @@ function gcrRender(p) {
   gcrbasis.textContent = p.empty_note || p.basis;
   gcrlist.replaceChildren();
   for (const t of p.trades) gcrlist.appendChild(gcrTrade(t));
+  gclRender(p.goal);
+}
+
+// --- the hundred per cent, and who is first in line (infra#3507 follow-up) --
+//
+// THE TWO THINGS THE BLOCK ABOVE COULD NOT ANSWER. It says what the guild can
+// make and where a missing recipe comes from; it cannot say how far along the
+// whole road the family is, and it cannot say who gets a trade when two people
+// want it. Both turn on SPECIALIZATIONS, which nothing on this site knew about
+// before, and both are tradespec.py's answers rather than this block's.
+//
+// THE SAME CONTRACT AS EVERYTHING ELSE ON THIS TAB. Every sentence arrives
+// written: the percentage sentence per profession, the reason a character was
+// put on a branch, the reason a slot is empty, and the admission that thirty
+// five of the forty guild members cannot be told to do anything. This block
+// prints strings, reuses gcrChips for the tones, and the only number it turns
+// into anything is the module's own percent, which becomes the width of a bar.
+//
+// THE LIMIT IS DRAWN IN THE ALARM TONE AND SITS ABOVE THE LADDER, not under
+// it. A ladder of sixteen rungs where eleven are empty slots reads as a plan
+// until somebody reaches the sentence saying nothing can fill them, and a
+// reader who stops early would take it for work in progress.
+const gclgoal = document.getElementById("gclgoal");
+const gclbars = document.getElementById("gclbars");
+const gclspecs = document.getElementById("gclspecs");
+const gclorder = document.getElementById("gclorder");
+const gcllimit = document.getElementById("gcllimit");
+const gclladder = document.getElementById("gclladder");
+const gclgrant = document.getElementById("gclgrant");
+const gclbasis = document.getElementById("gclbasis");
+
+// ONE PROFESSION'S STANDING. The percent, the name, a bar and the module's
+// sentence. The bar's fill is `row.percent` and nothing else: a width worked
+// out here from counts would be a second opinion about a number the module
+// already rounded down on purpose.
+function gclBar(row) {
+  const box = el("div", "gcl-row");
+  box.appendChild(el("span", "gcl-pc", row.percent + "%"));
+  box.appendChild(el("span", "gcl-name", row.name));
+  const track = el("div", "gcl-track");
+  const fill = el("i", "gcl-fill");
+  fill.style.width = row.percent + "%";
+  track.appendChild(fill);
+  box.appendChild(track);
+  box.appendChild(el("div", "gcl-why", row.line));
+  gcrChips(box, row.chips);
+  return box;
+}
+
+// ONE BRANCH ONE OF THE FAMILY IS WALKING TOWARD, collapsed to its summary.
+// Opened, it carries the whole reason that character was put on that branch,
+// which is the part that makes it a decision somebody can argue with rather
+// than a preference.
+function gclSpec(row) {
+  const card = el("details", "chr-card gcl-card");
+  const head = document.createElement("summary");
+  head.appendChild(el("span", "gcr-rank", row.holder));
+  head.appendChild(el("span", "gcl-label", row.label));
+  head.appendChild(el("span", "gcl-sum", row.line));
+  gcrChips(head, row.chips);
+  card.appendChild(head);
+  card.appendChild(el("div", "gcl-reason", row.why));
+  return card;
+}
+
+// ONE RUNG. `row.rank` is the module's place in the order and is never counted
+// off this loop's index, for the reason the trade list already writes out: the
+// two would agree today and disagree the first time somebody filtered the
+// list, with nothing failing. A rung with no reasoning behind it draws no
+// empty paragraph, because an empty slot has no choice to explain.
+function gclRung(row) {
+  const card = el("details", "chr-card gcl-card");
+  const head = document.createElement("summary");
+  head.appendChild(el("span", "gcr-rank", String(row.rank)));
+  head.appendChild(el("span", "gcl-label", row.label));
+  head.appendChild(el("span", "gcl-sum", row.line));
+  gcrChips(head, row.chips);
+  card.appendChild(head);
+  if (row.why) card.appendChild(el("div", "gcl-reason", row.why));
+  return card;
+}
+
+// A PAYLOAD FROM AN OLDER SERVER HAS NO `goal` AT ALL, and this tab is served
+// by two deployments that are promoted separately. Drawing nothing is right
+// then; blanking the four paragraphs to empty strings would make an old server
+// look like a family with no professions and no plan.
+function gclRender(g) {
+  if (!g) return;
+  gclgoal.textContent = g.empty_note || g.line;
+  gclorder.textContent = g.order;
+  gcllimit.textContent = g.limit_line;
+  gclgrant.textContent = g.grant_line;
+  gclbasis.textContent = g.basis;
+  gclbars.replaceChildren();
+  for (const row of g.professions) gclbars.appendChild(gclBar(row));
+  gclspecs.replaceChildren();
+  for (const row of g.specs) gclspecs.appendChild(gclSpec(row));
+  gclladder.replaceChildren();
+  for (const row of g.hierarchy) gclladder.appendChild(gclRung(row));
 }
 
 // ONE PULL AT A TIME, AND A CLOCK ON IT. These are one guard and not two, for

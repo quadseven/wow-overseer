@@ -40,6 +40,7 @@ import recap
 import realm
 import standing
 import stream
+import tradespec
 import voice
 import wealth
 from map_core import build_payload
@@ -66,6 +67,12 @@ ITEMS = armory.ItemBook.load(HERE)
 # does not exist at all, so a name for a skill or a faction can come from
 # nowhere else. Built by tools/gen_standing.py.
 STANDING = standing.StandingBook.load(HERE)
+# And the craft tables, fourth of the frozen books: every ability on every
+# profession's skill line, which is the DENOMINATOR of the Trades view's
+# completion figure. Same reason as the other three - skilllineability_dbc is
+# empty on this realm - and the same read-once-at-import shape. Built by
+# tools/craftbook_from_dbc.py.
+CRAFTBOOK = tradespec.load_craftbook(HERE)
 PORT = int(os.environ.get("PORT", "8080"))
 # WHERE THIS COPY IS MOUNTED. "" at the root, "/dev" under a path. Read
 # once at import exactly as PORT is, and deliberately allowed to raise:
@@ -1552,8 +1559,16 @@ _TRADE_GUILD = (
     "WHERE gm.guildid IN (SELECT guildid FROM guild_member WHERE guid IN "
     "(SELECT guid FROM characters WHERE name IN ({holes})))"
 )
+# `map` IS READ FOR THE SPECIALIZATION VIEW AND NOT FOR THE RECIPE LIST. A
+# specialization is taken by handing a quest in to ONE named NPC, and
+# mod-overseer's ResolveTravelTarget refuses a spawn on another map outright
+# (mod_overseer.cpp:10044) because there is no navmesh across an ocean. So
+# which continent a character is standing on is the difference between "a long
+# walk" and "a refusal", and professions.py's BLOCKERS records that leaving
+# that unmeasured misled an investigation for long enough to matter.
+# Backticked: `map` reads as a keyword to enough tooling to be worth it.
 _TRADE_MEMBERS = (
-    "SELECT name, level, class FROM characters WHERE name IN ({holes})"
+    "SELECT name, level, class, `map` FROM characters WHERE name IN ({holes})"
 )
 # `max` IS THE HALF THAT MAKES THE VALUE MEAN ANYTHING. A tailoring of 1 out of
 # 75 and a tailoring of 1 out of 300 are different characters, and the ceiling
@@ -1595,6 +1610,34 @@ _TRADE_TRAINER = (
     "SELECT DISTINCT SpellId, ReqSkillLine, ReqSkillRank, ReqLevel "
     "FROM acore_world.trainer_spell "
     "WHERE ReqSkillLine IN (" + _TRADE_SKILL_LIST + ")"
+)
+# WHAT SKILL A CRAFT ASKS FOR, AND WHICH SPECIALIZATION GATES IT. Two tables,
+# unioned, because a craft reaches a character by two different roads and each
+# road records the same two facts in its own columns: `trainer_spell` for one
+# bought from a trainer and class-9 `item_template` for one that exists as a
+# pattern or a plan.
+#
+# READING ONLY THE TRAINER TABLE WAS A MEASURED MISTAKE and this comment is the
+# receipt. The three tailoring specializations gate NO trainer row on this
+# realm - their crafts are recipe items carrying `RequiredSpell` - so a gate map
+# built from `trainer_spell` alone reported Spellfire, Mooncloth and Shadoweave
+# as unlocking zero crafts each, and Weaponsmith as unlocking 6 instead of 9, on
+# the one view whose whole job is to count.
+#
+# `ReqSkillRank` FROM THIS READ IS THE ONLY TRUSTWORTHY RANK. The DBC field that
+# looks like it should be the learn gate, SkillLineAbility.ReqSkillValue, is 1
+# for 439 of 439 tailoring abilities and 508 of 525 blacksmithing ones; see
+# tradespec.effective_rank. UNION rather than UNION ALL: one craft sold by
+# nine trainers at the same rank is one row, not nine.
+_TRADE_CRAFT_FACTS = (
+    "SELECT DISTINCT SpellId, ReqSkillRank, ReqAbility1 "  # noqa: S608 - joined fragments are constants, not caller input
+    "FROM acore_world.trainer_spell "
+    "WHERE ReqSkillLine IN (" + _TRADE_SKILL_LIST + ") "
+    "UNION "
+    "SELECT spellid_2, RequiredSkillRank, RequiredSpell "
+    "FROM acore_world.item_template "
+    "WHERE class = " + str(guildcraft.RECIPE_CLASS) + " AND spellid_2 > 0 "
+    "AND RequiredSkill IN (" + _TRADE_SKILL_LIST + ")"
 )
 # WHERE A RECIPE COMES FROM, THREE WAYS. The item filter is a SUBQUERY and not
 # a bound list of entries: binding it would mean reading the recipes first and
@@ -1691,6 +1734,8 @@ def _fetch_guildcraft() -> dict:
                                     "item_template")
             trainer = _wide_guarded(cur, _TRADE_TRAINER, (), "",
                                     "trainer_spell")
+            crafts = _wide_guarded(cur, _TRADE_CRAFT_FACTS, (), "",
+                                   "trainer_spell")
             vendors = _wide_guarded(cur, _TRADE_VENDORS, (), "", "npc_vendor")
             drops = _wide_guarded(cur, _TRADE_DROPS, (), "",
                                   "creature_loot_template")
@@ -1702,6 +1747,13 @@ def _fetch_guildcraft() -> dict:
             "spell_rows": spells, "roster_rows": roster_rows,
             "recipe_rows": recipes, "trainer_rows": trainer,
             "vendor_rows": vendors, "drop_rows": drops, "quest_rows": quests,
+            # NOT A build_guildcraft ARGUMENT. It feeds tradespec, which is the
+            # other half of this view, and the handler lifts it out before the
+            # rest of this dict is splatted. Carried in the same fetch on
+            # purpose: it is one more read on a connection that is already
+            # open, against tables the same trip already visited, and a second
+            # fetch would be a second connection for one query.
+            "craft_rows": crafts,
             "roster_read": bool(roster_rows)}
 
 
@@ -2937,9 +2989,24 @@ class Handler(BaseHTTPRequestHandler):
         """
         try:
             fetched = _fetch_guildcraft()
+            # LIFTED OUT BEFORE THE SPLAT. These rows answer tradespec's two
+            # questions (what rank does a craft ask for, which specialization
+            # gates it) and are not a build_guildcraft argument; leaving them in
+            # would be a TypeError on every poll.
+            crafts = fetched.pop("craft_rows")
+            roster = family.roster()
             payload = guildcraft.build_guildcraft(
                 **fetched, icons=ITEMS.icons, book=ITEMS,
-                roster=family.roster(), names=achievements.MAP_NAMES, geo=GEO)
+                roster=roster, names=achievements.MAP_NAMES, geo=GEO)
+            # THE SECOND HALF OF THE VIEW, and it is built from the SAME rows
+            # rather than from a second read. guildcraft answers "what can the
+            # guild make and where does a missing recipe come from"; this
+            # answers "how far along the whole road are we, and who is first in
+            # line". They are separate modules because they are separate
+            # questions, and one payload because they are one tab.
+            payload["goal"] = tradespec.build_tradespec(
+                CRAFTBOOK, crafts, fetched["skill_rows"],
+                fetched["spell_rows"], fetched["member_rows"], roster)
             self._send(200, "application/json", json.dumps(payload).encode())
         except Exception:
             # Same contract as every other poll: the tab keeps what it has
