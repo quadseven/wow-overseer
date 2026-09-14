@@ -41,6 +41,7 @@ import fanout
 import goals
 import bonds
 import guildbank
+import guildshare
 import craft
 import craft_rhythm
 import craft_supply
@@ -2895,6 +2896,7 @@ class Bridge(discord.Client):
                 self._sample_family,
                 self._share_quests_loop,
                 self._move_materials_loop,
+                self._guild_share_loop,
                 self._vendor_loop,
                 self._bank_loop,
                 self._guild_bank_loop,
@@ -5331,6 +5333,121 @@ class Bridge(discord.Client):
                 await self._move_materials_once()
             except Exception:
                 log.exception("materials pass failed; retrying next cycle")
+            await asyncio.sleep(cycle)
+
+    async def _guild_share_once(self) -> None:
+        """One pass of infra#3908: family surplus goes out to the guild.
+
+        THE MIRROR OF _move_materials_once, AND THE ORDER IS THE SAME: fetch,
+        decide in the pure module, write the command, and only then speak. A
+        gift that could not be written - already queued inside the retry
+        window, or refused enough times to be believed - has nothing to
+        announce.
+
+        IT RUNS AFTER THE FAMILY'S OWN REAGENTS HAVE MOVED, not before, and
+        that ordering is the whole safety argument. `_move_materials_once`
+        gathers the family's cloth into the tailor's bags; this pass then asks
+        what is left over after the family's own twelve-cast reserve. Reversed,
+        the guild would be offered stock the family had not yet collected and
+        `craft_rhythm` would read the family as short a cycle later.
+
+        MID-RUN IS A WAIT, NOT A SKIP TO BE FIXED - the same judgement
+        `_move_materials_once` records for itself. The surplus will still be
+        surplus when the run ends, and a family that stops a boss pull to hand
+        a guildmate some cloth is not reading the room.
+        """
+        names = sorted((await asyncio.to_thread(_protected_guids)).values())
+        if not names:
+            return
+        if await self._mid_run(names):
+            log.info("guildshare: the family is in a dungeon run - "
+                     "the surplus waits")
+            return
+
+        roster = await asyncio.to_thread(_fetch_guild_roster, names)
+        if len(roster) <= len(names):
+            # Not an error and not worth a warning every ten minutes: the
+            # family is in no guild, or in one with nobody else in it. This
+            # pass has nothing to do and says so once per cycle at info.
+            log.info("guildshare: no guildmates outside the family")
+            return
+
+        holdings = await asyncio.to_thread(_fetch_guild_surplus, names)
+        crafts = await asyncio.to_thread(_fetch_standing_crafts, names)
+        spells = tuple(sorted({
+            int(spell or 0) for spell, _money in crafts.values() if spell
+        }))
+        refused = materials.stuck(
+            await asyncio.to_thread(_give_attempts, GIVE_GIVE_UP_HOURS)
+        )
+        share = await asyncio.to_thread(
+            guildshare.plan, holdings, roster,
+            craft_spells=spells, stuck_pairs=refused,
+        )
+        log.info("guildshare: %s", guildshare.headline(share))
+        for note in share.notes:
+            log.info("guildshare: %s", note)
+        for holder, taker, refusal in share.blocked:
+            log.info("guildshare: %s stopped asking %s - %s",
+                     holder, taker, refusal)
+        if not share.gifts:
+            return
+
+        seen = await asyncio.to_thread(
+            _recent_guild_gift_keys, GIVE_RETRY_MINUTES
+        )
+        fresh = []
+        for gift in share.gifts:
+            if (gift.holder, gift.taker, gift.command) in seen:
+                continue
+            if await asyncio.to_thread(_insert_guild_gift, gift):
+                fresh.append(gift)
+        if not fresh:
+            log.info("guildshare: %d gift(s) already queued or refused",
+                     len(share.gifts))
+            return
+
+        for gift in fresh:
+            log.info("guildshare: %s -> %s, %d %s - %s",
+                     gift.holder, gift.taker, gift.count, gift.item,
+                     gift.reason)
+            await self._say_guild_gift(gift)
+
+    async def _say_guild_gift(self, gift) -> None:
+        """Say it in guild chat, because the guild is who it is addressed to.
+
+        `materials.py` speaks its hand-offs in PARTY, which is right for five
+        characters standing together and wrong here: the receiver is a
+        guildmate who is, measured live, usually on another continent and
+        never in the party. A line nobody in earshot can act on is not
+        legibility, it is noise in the family's own channel.
+        """
+        await asyncio.to_thread(
+            _insert_speak,
+            relay.SpeakCommand(gift.holder, "guild", gift.said, "",
+                               "overseer:guildshare"),
+        )
+
+    async def _guild_share_loop(self) -> None:
+        """Own loop and own clock, the same reasoning _move_materials_loop
+        gives for itself.
+
+        Staggered to 420s, which puts it behind every pass that writes
+        `overseer_roster.travel_npc` (vendor 90, bank 150, guild bank 240,
+        craft supply 300) even though this one writes none of them. It is
+        behind `_move_materials_loop` (90) on purpose and for a reason that
+        is not about column contention at all: the family's own reagents must
+        be gathered into the right bags before what is left over can honestly
+        be called spare.
+        """
+        await self.wait_until_ready()
+        cycle = float(os.environ.get("GUILD_SHARE_CYCLE_SECONDS", "600"))
+        await asyncio.sleep(min(cycle, 420.0))
+        while not self.is_closed():
+            try:
+                await self._guild_share_once()
+            except Exception:
+                log.exception("guildshare pass failed; retrying next cycle")
             await asyncio.sleep(cycle)
 
     async def _settle_vendor_errand(self, names: list, leader: str) -> str:
@@ -8098,6 +8215,158 @@ def _fetch_holdings(names: list) -> list:
         ]
 
 
+# Every stack in the family's bags this module is allowed to move outward
+# (infra#3908). Deliberately a WIDER item filter than _HOLDINGS_SQL's
+# `it.name IN (...)` and a NARROWER one than "everything carried".
+#
+# The name list works for `materials.REAGENTS` because that table is six rows
+# a person wrote after looking in five characters' bags. It cannot work here:
+# the point of this pass is items nobody has looked at, so the filter has to
+# be a property the world database states about every item that will ever
+# exist. `it.class` and `it.subclass` are that property.
+#
+# `it.bonding = 0` IS IN THE QUERY AND ALSO IN `guildshare.shareable`, AND THE
+# DUPLICATION IS DELIBERATE. In SQL it keeps the result set small; in Python
+# it is the rule a test can hold. A bound item cannot be given by anybody to
+# anybody, and this pass must never be the reason the family lost a piece of
+# gear, so it is worth stating twice and cheap to.
+#
+# The `NOT (ci.bag = 0 AND ci.slot < 19)` exclusion is _HOLDINGS_SQL's, for
+# _HOLDINGS_SQL's reason: that range is worn equipment, not carried stock.
+_GUILD_SURPLUS_SQL = (
+    "SELECT c.name AS holder, it.name AS item, it.entry AS entry, "
+    "       ii.count AS count, ii.guid AS item_guid, "
+    "       it.class AS item_class, it.subclass AS subclass, "
+    "       it.bonding AS bonding, it.RequiredSkill AS required_skill, "
+    "       it.RequiredSkillRank AS required_rank, "
+    "       it.RequiredLevel AS required_level "
+    "FROM character_inventory ci "
+    "JOIN characters c                  ON c.guid = ci.guid "
+    "JOIN item_instance ii              ON ii.guid = ci.item "
+    "JOIN acore_world.item_template it  ON it.entry = ii.itemEntry "
+    "WHERE c.name IN (%s) "
+    "  AND NOT (ci.bag = 0 AND ci.slot < 19) "
+    "  AND it.bonding = 0 "
+    "  AND (it.class = 7 OR (it.class = 0 AND it.subclass IN (1, 2, 7)))"
+)
+
+
+def _fetch_guild_surplus(names: list) -> list:
+    """guildshare.Holding for every stack the family could hand outward."""
+    if not names:
+        return []
+    sql = _GUILD_SURPLUS_SQL % ",".join(["%s"] * len(names))
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(sql, names)
+        return [
+            guildshare.Holding(
+                holder=row["holder"], item=row["item"],
+                entry=int(row["entry"]), count=int(row["count"]),
+                guid=int(row["item_guid"]),
+                item_class=int(row["item_class"]),
+                subclass=int(row["subclass"]),
+                bonding=int(row["bonding"] or 0),
+                required_skill=int(row["required_skill"] or 0),
+                required_rank=int(row["required_rank"] or 0),
+                required_level=int(row["required_level"] or 0),
+            )
+            for row in cur.fetchall()
+        ]
+
+
+# The guild the family is in, and everyone else in it - the same widening
+# `map_server._RAID_GUILD` does for raid seating (mod-overseer#464), and
+# deliberately the same shape rather than a second way to ask the question.
+#
+# THE GUILD IS FOUND THROUGH THE FAMILY AND IS NEVER NAMED HERE. A literal
+# guildid would be one more thing to change the day the family joins a
+# different guild, and `guild_member` already knows the answer.
+#
+# PRESENCE COMES FROM `overseer_snapshot`, NOT FROM `characters.online`. That
+# is this service's rule everywhere else (_fetch_roster, _fetch_grounding, and
+# ~20 more) and it is the right one here for a measured reason: the snapshot
+# carried a fresh row for all 106 characters in the world when this was
+# written, recruits included, so the wider guild costs no new presence
+# mechanism at all. A LEFT JOIN on the freshness window, so a member with no
+# fresh row reads as absent rather than dropping out of the roster - the
+# difference between "they are not here" and "we did not ask about them",
+# which guildshare.plan needs to keep apart.
+_GUILD_ROSTER_SQL = (
+    "SELECT c.name AS name, c.class AS class_id, c.level AS level, "
+    "       (s.name IS NOT NULL) AS online "
+    "FROM guild_member gm "
+    "JOIN characters c ON c.guid = gm.guid "
+    "LEFT JOIN overseer_snapshot s ON s.name = c.name "
+    "     AND s.updated_at > NOW() - INTERVAL 60 SECOND "
+    "WHERE gm.guildid IN (SELECT gm2.guildid FROM guild_member gm2 "
+    "                     JOIN characters c2 ON c2.guid = gm2.guid "
+    "                     WHERE c2.name IN (%s))"
+)
+
+# What each of them can actually do. `character_skills` IS authoritative for
+# skill LINES, which is a narrower claim than it looks and is why this read is
+# safe where a `character_spell` read would not be: a playerbot's runtime
+# granted RECIPES never persist, so that table is permanently wrong about what
+# a recruit knows how to make. This asks only "do they carry Tailoring, and at
+# what rank", which is exactly what the table does record.
+_GUILD_SKILLS_SQL = (
+    "SELECT c.name AS name, cs.skill AS skill, cs.value AS value "
+    "FROM guild_member gm "
+    "JOIN characters c ON c.guid = gm.guid "
+    "JOIN character_skills cs ON cs.guid = c.guid "
+    "WHERE gm.guildid IN (SELECT gm2.guildid FROM guild_member gm2 "
+    "                     JOIN characters c2 ON c2.guid = gm2.guid "
+    "                     WHERE c2.name IN (%s)) "
+    "  AND cs.skill IN (%s)"
+)
+
+
+def _fetch_guild_roster(names: list) -> list:
+    """guildshare.Member for everyone sharing a guild with the family.
+
+    Two reads and not one per member: the cross product of forty characters
+    against fourteen skill lines is one query, the same batching discipline
+    the recap and the dungeon plan already hold themselves to.
+
+    Degrades to "no guild" rather than raising when `guild_member` is missing,
+    the direction `_wide_guarded` takes on the map-server side: a realm image
+    without the table is a family that shares with nobody, which is exactly
+    what this service did before this pass existed.
+    """
+    if not names:
+        return []
+    marks = ",".join(["%s"] * len(names))
+    skill_ids = sorted(guildshare.SKILL_LINES.values())
+    family = set(names)
+    with _connect() as conn, conn.cursor() as cur:
+        try:
+            cur.execute(_GUILD_ROSTER_SQL % marks, names)
+            rows = list(cur.fetchall())
+            cur.execute(
+                _GUILD_SKILLS_SQL % (marks, ",".join(["%s"] * len(skill_ids))),
+                list(names) + skill_ids,
+            )
+            skills: dict = {}
+            for row in cur.fetchall():
+                skills.setdefault(row["name"], {})[int(row["skill"])] = int(
+                    row["value"] or 0
+                )
+        except pymysql.err.MySQLError as exc:
+            if exc.args and exc.args[0] in (1054, 1146):
+                log.warning("guildshare: no guild tables on this realm - "
+                            "the family shares with nobody")
+                return []
+            raise
+    return [
+        guildshare.Member(
+            name=row["name"], class_id=int(row["class_id"] or 0),
+            level=int(row["level"] or 0), skills=skills.get(row["name"], {}),
+            online=bool(row["online"]), family=row["name"] in family,
+        )
+        for row in rows
+    ]
+
+
 def _fetch_free_slots(names: list) -> dict:
     """Read carried capacity facts; materials decides which refusals reopen."""
     if not names:
@@ -8808,6 +9077,69 @@ def _insert_give(grant: materials.Grant) -> int:
                     "%s from %s to %s needs the worldserver image carrying "
                     "mod-overseer's give SQL (infra#2597)",
                     grant.count, grant.material, grant.holder, grant.taker,
+                )
+                return 0
+            raise
+        return cur.lastrowid or 0
+
+
+def _recent_guild_gift_keys(minutes: int) -> set:
+    """(holder, taker, command) triples this pass already proposed.
+
+    KEYED ON `source` AND NOT ON `kind`, for the reason _recent_trade_keys
+    spells out at length: `kind='give'` is now written by three passes, and a
+    window shared across them would let one pass silence another's retry.
+    `source` is the column that names which pass wrote a row, so it is the one
+    that can answer "did I already ask for this".
+    """
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT target_name, target_arg, command FROM overseer_command "
+            "WHERE source = 'guildshare' "
+            "  AND created_at > NOW() - INTERVAL %s MINUTE",
+            (int(minutes),),
+        )
+        return {
+            (row["target_name"], row["target_arg"], row["command"])
+            for row in cur.fetchall()
+        }
+
+
+def _insert_guild_gift(gift) -> int:
+    """One overseer_command row handing one stack to a guildmate (infra#3908).
+
+    THE SAME VERB `materials.py` USES, AND THE SAME ONE `gear.py` FALLS BACK
+    TO WHEN THE TWO CHARACTERS ARE APART. Nothing new was needed in C++ for
+    this, and that was verified live rather than assumed: four probe gives
+    with an unmovable item guid established that `DoGive` refuses on the ITEM
+    for a receiver on another continent exactly as it does for one standing
+    next to the giver, and refuses on the RECEIVER only when that receiver is
+    not in the world. There is no party, guild, roster or distance gate on the
+    verb - see guildshare.py's module docstring for the full table.
+
+    ALWAYS `give` AND NEVER `trade`. `gear.deliverable` picks between the two
+    on distance because the family is usually standing together; a guildmate
+    is not, and the one online recruit measured while this was written was on
+    a different continent from every one of the five.
+
+    Guarded on 1265 exactly as `_insert_give` is: a worldserver behind the
+    ENUM migration must warn rather than raise.
+    """
+    with _connect() as conn, conn.cursor() as cur:
+        try:
+            cur.execute(
+                "INSERT INTO overseer_command "
+                "(target_name, command, kind, target_arg, source) "
+                "VALUES (%s, %s, 'give', %s, %s)",
+                (gift.holder, gift.command, gift.taker, "guildshare"),
+            )
+        except pymysql.err.MySQLError as exc:
+            if exc.args and exc.args[0] == 1265:
+                log.warning(
+                    "overseer_command.kind has no 'give' value - handing %d "
+                    "%s from %s to %s needs the worldserver image carrying "
+                    "mod-overseer's give SQL (infra#2597)",
+                    gift.count, gift.item, gift.holder, gift.taker,
                 )
                 return 0
             raise
@@ -11183,6 +11515,7 @@ class HeadlessBridge(Bridge):
                 self._sample_family,
                 self._share_quests_loop,
                 self._move_materials_loop,
+                self._guild_share_loop,
                 self._vendor_loop,
                 self._bank_loop,
                 self._guild_bank_loop,
