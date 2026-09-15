@@ -63,6 +63,7 @@ import quests
 import raidcraft
 import recruit
 import relay
+import skillgoal
 import tabard
 import towntrip
 import townslot
@@ -7296,36 +7297,154 @@ class Bridge(discord.Client):
                     log.exception("goal %s reconcile failed; retrying next cycle", row.get("id"))
 
     async def _apply_goal_action(self, row: dict, action) -> None:
-        if isinstance(action, goals.StrategyCommand):
-            await asyncio.to_thread(
-                _insert_command,
-                core.InsertCommand(action.target_name, action.command, "overseer:goal"),
+        """Apply one typed action from goals.reconcile.
+
+        A TABLE RATHER THAN A CHAIN OF `elif isinstance`, and the change bought
+        two things beyond the tangle it untangled (infra#3731). goals.py has
+        grown an action kind roughly per epic - StrategyCommand, DriveQuest,
+        DriveDungeon, now DriveSkill - and each one used to arrive as another
+        limb on a branch that already read past the point a person could hold
+        it in their head.
+
+        THE UNHANDLED ACTION IS NOW LOUD, which the chain could not be. A
+        `goals.reconcile` that emitted a kind this method did not name fell off
+        the end of the `elif` chain and did nothing at all, silently, for ever -
+        a correct mechanism with no caller, which is this repository's single
+        most repeated failure. That is exactly how `DriveSkill` could have
+        shipped inert; tests/test_goals.py walks BOTH modules' ASTs and fails
+        when reconcile can emit something this table does not name, because
+        neither the chain nor the table can be trusted to notice on its own.
+
+        EXACT TYPE AND NOT isinstance, deliberately. Every goals action is a
+        concrete frozen dataclass and none subclasses another, so the two agree
+        today - and a dict keyed on exact type means a future action that DID
+        subclass an existing one would land in the warning below rather than
+        being quietly handled as its parent, which is the safer way round.
+        """
+        handlers = {
+            goals.StrategyCommand: self._goal_strategy,
+            goals.DriveQuest: self._goal_drive_quest,
+            goals.DriveSkill: self._drive_skill,
+            goals.DriveDungeon: self._goal_drive_dungeon,
+            goals.MilestoneThought: self._goal_thought,
+            goals.Report: self._goal_report,
+            goals.RecordProgress: self._goal_record,
+            goals.MarkComplete: self._goal_complete,
+        }
+        handler = handlers.get(type(action))
+        if handler is None:
+            log.warning(
+                "goal %s produced a %s, which nothing here applies - the "
+                "action was decided and then dropped on the floor",
+                row.get("id"), type(action).__name__,
             )
-        elif isinstance(action, goals.DriveQuest):
-            aimed = await asyncio.to_thread(_aim_traveller, action.quest_id)
-            # Logged every time it is renewed, with the count of rows actually
-            # written: this project has been burned repeatedly by "delivered"
-            # meaning nothing happened, and 0 rows here is the difference
-            # between an aim that landed and one that went nowhere.
-            log.info("goal: aiming the party at quest %d for %s (%d row(s))",
-                     action.quest_id, action.beneficiary, aimed)
-        elif isinstance(action, goals.DriveDungeon):
-            # _drive_dungeon is what decides whether bag pressure withholds
-            # this cycle; 0 written either means that, or an empty roster, and
-            # both are already logged there with the reason.
-            await asyncio.to_thread(_drive_dungeon, action.keyword, action.wanted)
-        elif isinstance(action, goals.MilestoneThought):
-            await asyncio.to_thread(_insert_thought, action.character_name, "goal", action.text)
-        elif isinstance(action, goals.Report):
+            return
+        await handler(row, action)
+
+    async def _goal_strategy(self, row: dict, action) -> None:
+        await asyncio.to_thread(
+            _insert_command,
+            core.InsertCommand(action.target_name, action.command, "overseer:goal"),
+        )
+
+    async def _goal_drive_quest(self, row: dict, action) -> None:
+        aimed = await asyncio.to_thread(_aim_traveller, action.quest_id)
+        # Logged every time it is renewed, with the count of rows actually
+        # written: this project has been burned repeatedly by "delivered"
+        # meaning nothing happened, and 0 rows here is the difference
+        # between an aim that landed and one that went nowhere.
+        log.info("goal: aiming the party at quest %d for %s (%d row(s))",
+                 action.quest_id, action.beneficiary, aimed)
+
+    async def _goal_drive_dungeon(self, row: dict, action) -> None:
+        # _drive_dungeon is what decides whether bag pressure withholds
+        # this cycle; 0 written either means that, or an empty roster, and
+        # both are already logged there with the reason.
+        await asyncio.to_thread(_drive_dungeon, action.keyword, action.wanted)
+
+    async def _goal_thought(self, row: dict, action) -> None:
+        await asyncio.to_thread(
+            _insert_thought, action.character_name, "goal", action.text)
+
+    async def _goal_report(self, row: dict, action) -> None:
+        channel = self._goal_channel(row)
+        if channel is not None:
+            await channel.send(action.text[:1990])
+
+    async def _goal_record(self, row: dict, action) -> None:
+        await asyncio.to_thread(
+            _record_goal_progress, action.goal_id, action.value, action.stalls
+        )
+
+    async def _goal_complete(self, row: dict, action) -> None:
+        await asyncio.to_thread(_complete_goal, action.goal_id)
+
+    async def _drive_skill(self, row: dict, action) -> None:
+        """Turn a skill goal into a profession order, or into the sentence
+        saying why there is no order to give (infra#3731).
+
+        THE ADAPTER HALF OF THE FIX. goals.py decided WHEN; this reads the two
+        live facts the decision needs - the skill's rank cap and the mode the
+        family is standing in - hands them to skillgoal.plan, and applies
+        whatever comes back. Nothing is decided here, exactly as nothing is
+        decided in `_drive_dungeon`: the pure module owns the reasoning and this
+        owns the reads and the writes, which is the seam that lets the reasoning
+        be tested without a database.
+
+        THE JOB WRITE GOES THROUGH `_set_job` AND NOTHING ELSE. That is the
+        sanctioned path because it asks `jobs.why_not` first, fans out to the
+        whole enabled roster rather than to one name, and speaks its own answer.
+        A second writer for the `job` column is a mistake this repo has paid for
+        more than once, and `skillgoal.plan` is built so that this can only ever
+        be an ENTRY into the gather/craft rhythm - once the family is inside it,
+        the plan's mode is '' and craft_rhythm keeps sole ownership of the
+        alternation. See that module's handover comment for the full argument.
+
+        IT SPEAKS ONLY WHEN THE ACTION SAYS TO. A blocked goal is blocked on
+        every cycle by definition - fishing will still have no drive in sixty
+        seconds - so narrating it once a minute would bury the channel and teach
+        the operator to ignore it. `goals._reconcile_skill` sets `speak` on the
+        first sighting and then once every SKILL_BARREN_CYCLES, which is a
+        sentence at the moment the goal is set and one every half hour while it
+        is stuck. The full verdict is logged at INFO every pass regardless,
+        which is where an unattended service is actually read from.
+        """
+        cap = await asyncio.to_thread(
+            _fetch_skill_cap, action.beneficiary, action.skill_id
+        )
+        standing = craft_rhythm.standing_mode(
+            await asyncio.to_thread(_standing_jobs)
+        )
+        plan = skillgoal.plan(
+            skill_name=action.skill_name,
+            skill_id=action.skill_id,
+            target=action.target,
+            observed=action.observed,
+            cap=cap,
+            beneficiary=action.beneficiary,
+            standing=standing,
+            stalls=action.stalls,
+        )
+        log.info("goal: %s", skillgoal.report(plan))
+
+        if plan.mode:
+            # `_rhythm_channel` and not `_goal_channel`: this is an automatic
+            # job order and its reply belongs where every other automatic one
+            # goes, and that helper never returns None - a goal whose Discord
+            # channel has been deleted must not take the order down with it.
+            await self._set_job(
+                core.JobDirective(mode=plan.mode, source="overseer:goal"),
+                self._rhythm_channel(),
+            )
+
+        said = plan.blocked or plan.stalled
+        if said and action.speak:
+            await asyncio.to_thread(
+                _insert_thought, action.beneficiary, "goal", said
+            )
             channel = self._goal_channel(row)
             if channel is not None:
-                await channel.send(action.text[:1990])
-        elif isinstance(action, goals.RecordProgress):
-            await asyncio.to_thread(
-                _record_goal_progress, action.goal_id, action.value, action.stalls
-            )
-        elif isinstance(action, goals.MarkComplete):
-            await asyncio.to_thread(_complete_goal, action.goal_id)
+                await channel.send(said[:1990])
 
     def _goal_channel(self, row: dict):
         # The channel the goal was set from, falling back to the overseer's
@@ -7914,6 +8033,41 @@ def _observe_goal(row: dict) -> int | None:
         )
         found = cur.fetchone()
         return int(found["value"]) if found else None
+
+
+def _fetch_skill_cap(name: str, skill_id: int) -> int:
+    """`character_skills.max` for one character's skill, or 0 when unreadable.
+
+    THE RANK CEILING, AND IT IS A DIFFERENT COLUMN FROM THE ONE `_observe_goal`
+    READS. `.value` is what the character has earned; `.max` is the rank they
+    have bought - 75 for Apprentice, 150 Journeyman, 225 Expert - and the engine
+    will not let `.value` exceed it by a single point. A skill goal targeting
+    above the cap is therefore a goal that can only park where it is, and
+    skillgoal.plan refuses it out loud rather than letting it sit on job='craft'
+    for ever reporting health. That is the same bug this whole change is about,
+    one layer along, so it gets its own read rather than an assumption.
+
+    0 FOR AN ABSENT ROW, NOT AN ERROR, and skillgoal treats 0 as "not read" and
+    declines to make a cap argument from it. A character who has never held the
+    skill has no row at all, and inferring a ceiling of zero from that would
+    refuse every goal for a trade somebody is about to learn.
+
+    Lags like every other `character_skills` read - PlayerSaveInterval is 900
+    seconds - and the lag is harmless here for a reason worth stating: a rank is
+    bought once and then never moves, so a stale `.max` is wrong only in the
+    window between a purchase and the next save, and it is wrong in the
+    direction that refuses a goal the family could now pursue. It says so; it
+    does not act.
+    """
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT cs.max FROM character_skills cs "
+            "JOIN characters c ON c.guid = cs.guid "
+            "WHERE c.name = %s AND cs.skill = %s",
+            (name, int(skill_id)),
+        )
+        found = cur.fetchone()
+        return int(found["max"]) if found else 0
 
 
 _LEDGER_MEMBER_SQL = (

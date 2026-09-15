@@ -68,6 +68,33 @@ SKILL_MILESTONE_STEP = 25
 # 'active'.
 REASSERT_AFTER_CYCLES = 5
 
+# How long a SKILL goal may make no progress at all before the supervisor says
+# so out loud, counted in the same supervision cycles as REASSERT_AFTER_CYCLES.
+#
+# THE ARITHMETIC MATTERS MORE THAN THE NUMBER. bridge.GOAL_INTERVAL is 60
+# seconds and `character_skills` is flushed on the worldserver's own
+# PlayerSaveInterval of 900000 ms with PlayerSave.AdditionalSaves = 0, so
+# FIFTEEN cycles can pass during which the skill really has risen and the table
+# has simply not admitted it yet. Thirty is two full save intervals: the
+# smallest value at which "the number has not moved" cannot be an artefact of
+# the save clock. tests/test_goals.py reads bridge.py's own default out of the
+# source and fails if that 60 ever changes without this constant moving with it.
+#
+# THE DRIFT ONLY EVER RUNS ONE WAY, which is why no extra margin is added on
+# top. A stale read UNDER-reports the skill, so this counter climbs when it
+# should have reset - the verdict therefore fires LATE and never early, and the
+# cost of staleness is lateness rather than a false accusation. That is
+# craft_rhythm's own staleness argument (see its SHORT_CASTS/STOCK_CASTS
+# comment) applied to a different table, and it is the reason a threshold may be
+# consulted here at all: it is an EXIT from the state the goal is already in,
+# never a decision about which state to be in.
+#
+# A MULTIPLE OF REASSERT_AFTER_CYCLES, on purpose. Every cycle that speaks is
+# therefore also a cycle that re-drives, so the sentence a person reads is
+# always accompanied by a fresh decision rather than by a stale memory of one.
+# tests/test_goals.py pins that divisibility.
+SKILL_BARREN_CYCLES = 30
+
 # A quest goal's target, always. Quest progress counts DOWN - quests.Progress
 # .left is objectives REMAINING - while reconcile's completion test is
 # `observed >= target`. Rather than invert the test for one kind (which would
@@ -234,6 +261,45 @@ class DriveDungeon:
 
 
 @dataclass(frozen=True)
+class DriveSkill:
+    """Put the family's PROFESSION machinery on one skill, not its combat one.
+
+    THIS IS THE ACTION THAT REPLACES `nc +grind` FOR kind='skill', and it is a
+    typed action rather than a StrategyCommand for exactly the reason DriveQuest
+    is: a strategy command is a whisper to one bot's engine, and raising a
+    profession is not something any engine does. `nc +grind` means "kill what is
+    in front of you". Issued against a mining goal it produced the owner's own
+    complaint word for word - "why are they fighting in tanaris instead of
+    working on their professions like i told you to?" - and the family's most
+    recent deaths are to Wastewander Assassins and Wastewander Shadow Mages in
+    Tanaris, which is what that instruction looks like from the outside.
+
+    IT CARRIES FACTS AND NOT A DECISION. Everything needed to CHOOSE is a live
+    read this pure module cannot make - the skill's rank cap, what mode the
+    family is standing in, whether a recipe bracket exists - so this action is
+    the question, and skillgoal.plan (which may import professions and craft,
+    as goals.py may not) is the answer. bridge._drive_skill is what puts the two
+    together, the same division of labour DriveDungeon already has with its
+    bag-pressure gate.
+
+    `stalls` is how many consecutive supervision cycles the observed value has
+    not moved for, and it rides in the action because skillgoal needs it to
+    decide whether to add the "this drive is standing and starved" sentence.
+    `speak` is whether THIS tick is one a person should be told about; see
+    _reconcile_skill for the two cases that set it, and why a blocked goal must
+    not narrate itself once a minute for ever.
+    """
+
+    skill_name: str
+    skill_id: int
+    target: int
+    observed: int
+    beneficiary: str
+    stalls: int = 0
+    speak: bool = False
+
+
+@dataclass(frozen=True)
 class MilestoneThought:
     """An overseer_thought row (source 'goal') marking progress."""
 
@@ -367,11 +433,42 @@ def strategy_for(goal: Mapping) -> str:
         after 'co +grind'  -8950,-132   not one unit
         after 'nc +grind'  -8990,-103
 
-    Skill goals ride the same strategy: gathering and combat skills rise while
-    grinding, and no profession-specific strategy exists to issue instead -
-    the supervisor's job is staying on task and reporting, not crafting
-    rotations (out of scope on infra#2601).
+    SKILL GOALS NO LONGER RIDE THIS STRATEGY, AND ASKING FOR ONE IS AN ERROR
+    (infra#3731). This docstring used to end here:
+
+        "Skill goals ride the same strategy: gathering and combat skills rise
+        while grinding, and no profession-specific strategy exists to issue
+        instead - the supervisor's job is staying on task and reporting, not
+        crafting rotations (out of scope on infra#2601)."
+
+    Both halves of that were true when it was written and neither is now. There
+    IS a profession-specific drive - mod-overseer's DriveCraft casts real
+    tradeskill spells behind a job='craft' permission, craft.RECIPES picks the
+    bracket, craft_rhythm alternates gathering against crafting - and "the
+    supervisor's job is staying on task" turned out to be the problem rather
+    than the defence: `nc +grind` IS a task, it is just the wrong one. A goal of
+    "get Grug's mining to 75" issued it, Grug walked to Tanaris and fought
+    Wastewander Assassins until they killed him, and the goal row went on
+    reporting itself healthy because a goal that neither completes nor errors
+    looks exactly like a goal that is merely slow. That is the owner's own
+    complaint, three times over, and it was this line.
+
+    So `reconcile` routes kind='skill' to `_reconcile_skill` before it can ever
+    reach here, and this function REFUSES a skill goal rather than returning
+    something plausible. A silent wrong answer is what cost the months; a raised
+    ValueError is caught and logged per-goal by bridge._supervise_goals, so the
+    blast radius is one goal and the evidence is in the log. The measurements
+    above stay because they are the reason this string is `nc` and not `co`,
+    which is a fact about the engine and is still true for every kind that does
+    grind.
     """
+    if str(goal.get("kind") or "") == "skill":
+        raise ValueError(
+            "a skill goal must never be given a combat strategy - see "
+            "_reconcile_skill and skillgoal.plan. This is infra#3731: 'nc "
+            "+grind' against a profession goal is what sent the family to "
+            "fight in Tanaris instead of working their trades."
+        )
     return "nc +grind"
 
 
@@ -707,6 +804,12 @@ def reconcile(row: Mapping, observed: int | None) -> list:
         # LEASE for the same reason a quest aim is - see DriveDungeon and
         # _reconcile_dungeon's docstrings.
         return _reconcile_dungeon(row, observed)
+    if row.get("kind") == "skill":
+        # Its own branch, and the branch that used to be missing. Falling
+        # through to the level branch below is what made every skill goal issue
+        # `nc +grind` - see strategy_for's docstring for what that cost and
+        # _reconcile_skill for what replaces it.
+        return _reconcile_skill(row, observed)
     name = row["character_name"]
     goal_id = int(row["id"])
     target = int(row["target"])
@@ -784,6 +887,94 @@ def _reconcile_quest(row: Mapping, observed: int) -> list:
         actions.append(MilestoneThought(name, text))
         actions.append(Report(text))
     actions.append(RecordProgress(goal_id, observed, 0 if renew else leases + 1))
+    return actions
+
+
+def _reconcile_skill(row: Mapping, observed: int) -> list:
+    """One supervision cycle for a kind='skill' goal (infra#3731).
+
+    `observed` is `character_skills.value`, which rises toward `target` exactly
+    as a level does, so the completion and milestone tests below need no
+    negation the way a quest's do.
+
+    RE-ASSERTED ON A STALL RATHER THAN ON A CLOCK, AND THAT IS THE OPPOSITE OF
+    WHAT quest AND dungeon DO. The argument for a lease there is that the thing
+    being renewed decays while progress looks healthy - mod-playerbots'
+    RPG_DO_QUEST status self-expires after thirty minutes whether or not the
+    family is doing well - so a stall-triggered renewal would never fire in
+    exactly the case that needs it. A profession drive is not like that. The
+    only thing that stops it is the family leaving the gather/craft rhythm, and
+    leaving the rhythm ALWAYS stops the skill rising. So "the number has not
+    moved" is a complete detector here, and it is a strictly better one than a
+    clock: it never re-issues into a family that is already working.
+
+    ONE COUNTER, TWO THRESHOLDS, AND IT IS NEVER RESET BY A RE-ASSERT. The level
+    branch zeroes `stalls` when it re-issues, which is correct there because the
+    counter's only job is pacing the re-issue. Here the same counter also has to
+    reach SKILL_BARREN_CYCLES to say "this has been still for half an hour", and
+    a counter zeroed by its own re-assert can never reach thirty. So it counts
+    consecutive cycles without progress, full stop, and only real progress
+    clears it; the two thresholds read it with `%` instead of `>=`.
+
+    `observed != last` AND NOT `observed > last` IS THE PROGRESS TEST. A skill
+    value cannot fall in the engine, so a fall means the read changed underneath
+    us - a different character row, a reset, a bad join. Treating that as
+    "stalled" would hold a counter high on the strength of a reading nobody
+    trusts; treating it as movement re-opens the question next cycle, which is
+    the conservative direction.
+
+    WHAT IT DOES NOT DO IS DECIDE. `DriveSkill` carries facts; skillgoal.plan
+    turns them into a job mode or into a refusal, because that needs
+    professions.py and craft.py and this module is underneath both of them. See
+    DriveSkill's own docstring.
+    """
+    name = row["character_name"]
+    goal_id = int(row["id"])
+    target = int(row["target"])
+    skill_name = str(row.get("skill_name") or "")
+    if observed >= target:
+        text = completion_text(row, observed)
+        return [MilestoneThought(name, text), Report(text), MarkComplete(goal_id)]
+
+    skill_id = int(SKILL_IDS.get(skill_name, 0))
+    if not skill_id:
+        # A skill goal naming something SKILL_IDS does not have cannot be
+        # observed either (bridge._observe_goal returns None for it and
+        # reconcile never reaches this function), so this is unreachable by the
+        # live path. It is written out anyway rather than assumed away: the
+        # honest answer to "drive a skill I have no id for" is to record what
+        # was seen and command nobody, never to fall through to a strategy.
+        return [RecordProgress(goal_id, observed)]
+
+    last, stalls = _read_report(row)
+    if last is None:
+        stalls = 0
+    elif observed != last:
+        stalls = 0
+    else:
+        stalls += 1
+
+    # First sighting always drives - that is the goal actually being placed.
+    # After that, only a run of stalled cycles does.
+    drive = last is None or (stalls > 0 and stalls % REASSERT_AFTER_CYCLES == 0)
+    speak = last is None or (stalls > 0 and stalls % SKILL_BARREN_CYCLES == 0)
+
+    actions: list = []
+    if drive:
+        actions.append(DriveSkill(
+            skill_name=skill_name,
+            skill_id=skill_id,
+            target=target,
+            observed=observed,
+            beneficiary=name,
+            stalls=stalls,
+            speak=speak,
+        ))
+    if last is not None and _milestone_crossed("skill", last, observed):
+        text = milestone_text(row, observed)
+        actions.append(MilestoneThought(name, text))
+        actions.append(Report(text))
+    actions.append(RecordProgress(goal_id, observed, stalls))
     return actions
 
 

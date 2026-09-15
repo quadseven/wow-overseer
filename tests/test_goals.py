@@ -349,7 +349,11 @@ class StrategyChannelTest(unittest.TestCase):
     """
 
     def test_the_strategy_goes_down_the_non_combat_channel(self):
-        for kind, skill in (("level", None), ("skill", "mining")):
+        # kind='skill' USED TO BE IN THIS LIST, and taking it out is the point
+        # of infra#3731 rather than a narrowing of the test - a skill goal no
+        # longer gets a combat strategy at all, on either channel. The refusal
+        # is asserted by SkillGoalIssuesNoCombatStrategyTest below.
+        for kind, skill in (("level", None), ("dungeon", "scarlet-library")):
             with self.subTest(kind=kind):
                 cmd = goals.strategy_for(make_row(kind=kind, skill_name=skill))
                 self.assertTrue(
@@ -625,4 +629,301 @@ class TheReturnLoopIsActuallyWired(unittest.TestCase):
         default = body.split('LIFE_RECHECK_SECONDS", "')[1].split('"')[0]
         self.assertLessEqual(float(default), 60.0)
         self.assertGreaterEqual(float(default), 5.0)
+
+
+def _skill_row(**over):
+    row = make_row(kind="skill", skill_name="tailoring", target=225)
+    row.update(over)
+    return row
+
+
+class SkillGoalIssuesNoCombatStrategyTest(unittest.TestCase):
+    """The defect, and the only test that would have caught it (infra#3731).
+
+    `strategy_for` answered every kind with `nc +grind` - "kill what is in
+    front of you" - skill goals included, and its own docstring said so as a
+    deliberate scope decision. The result was the owner's own sentence: "why
+    are they fighting in tanaris instead of working on their professions like i
+    told you to?". The family's most recent deaths are to Wastewander Assassins
+    and Wastewander Shadow Mages, in Tanaris, which is that instruction carried
+    out exactly.
+
+    HOW EACH OF THESE FAILS. Route kind='skill' back through the level branch
+    and the first test stops raising; delete the guard in `strategy_for` and the
+    second one returns a string instead; emit a StrategyCommand anywhere in the
+    skill branch and the third one sees it.
+    """
+
+    def test_asking_for_a_combat_strategy_for_a_skill_goal_raises(self):
+        with self.assertRaises(ValueError):
+            goals.strategy_for(_skill_row())
+
+    def test_it_still_answers_every_other_kind(self):
+        """The guard must be narrow. `life_strategies` asks this function for
+        the leader's task strategy on every protect sweep, and a guard that
+        caught more than skill goals would take four followers' leader off his
+        only reason to move."""
+        for kind in ("level", "quest", "dungeon"):
+            with self.subTest(kind=kind):
+                self.assertEqual("nc +grind",
+                                 goals.strategy_for(make_row(kind=kind)))
+
+    def test_a_skill_goal_drives_a_profession_and_never_a_strategy(self):
+        actions = reconcile(_skill_row(), 40)
+        self.assertTrue(
+            any(isinstance(a, goals.DriveSkill) for a in actions),
+            "a skill goal must produce a profession drive: %r" % (actions,),
+        )
+        self.assertFalse(
+            any(isinstance(a, StrategyCommand) for a in actions),
+            "a skill goal must never produce a combat strategy: %r" % (actions,),
+        )
+
+    def test_the_drive_carries_the_facts_the_planner_needs(self):
+        drive = next(a for a in reconcile(_skill_row(), 40)
+                     if isinstance(a, goals.DriveSkill))
+        self.assertEqual(drive.skill_name, "tailoring")
+        self.assertEqual(drive.skill_id, goals.SKILL_IDS["tailoring"])
+        self.assertEqual(drive.observed, 40)
+        self.assertEqual(drive.target, 225)
+        self.assertEqual(drive.beneficiary, "Grug")
+
+    def test_a_skill_with_no_id_commands_nobody(self):
+        """Unreachable on the live path - `_observe_goal` returns None for a
+        name SKILL_IDS does not carry, so reconcile never gets here - but the
+        honest answer is still to record and command nobody. Falling through to
+        a strategy is the whole defect."""
+        actions = reconcile(_skill_row(skill_name="basket weaving"), 3)
+        self.assertEqual(actions, [RecordProgress(7, 3)])
+
+
+class SkillDriveCadenceTest(unittest.TestCase):
+    """When the profession drive is re-issued, and when the goal speaks.
+
+    ONE COUNTER SERVES BOTH, and it is never reset by its own re-assert - that
+    is the difference from the level branch, where zeroing on re-issue is
+    correct because pacing the re-issue is the counter's only job. Here it must
+    also be able to REACH SKILL_BARREN_CYCLES, and a counter its own re-assert
+    zeroes every fifth cycle can never reach thirty.
+    """
+
+    def _drives(self, actions):
+        return [a for a in actions if isinstance(a, goals.DriveSkill)]
+
+    def _recorded(self, actions):
+        return next(a for a in actions if isinstance(a, RecordProgress))
+
+    def test_first_sighting_drives_and_speaks(self):
+        drives = self._drives(reconcile(_skill_row(), 40))
+        self.assertEqual(len(drives), 1)
+        self.assertTrue(drives[0].speak,
+                        "the goal must say what it is going to do when it is set")
+
+    def test_progress_neither_drives_nor_speaks(self):
+        """Steady state is read-only - that is this module's whole contract.
+        A drive on a cycle that made progress would insert a family-wide job
+        fan-out for a family already doing the right thing."""
+        actions = reconcile(_skill_row(last_report="40/3"), 41)
+        self.assertEqual(self._drives(actions), [])
+        self.assertEqual(self._recorded(actions).stalls, 0)
+
+    def test_a_short_stall_counts_and_stays_quiet(self):
+        for stalls in range(1, goals.REASSERT_AFTER_CYCLES - 1):
+            with self.subTest(stalls=stalls):
+                actions = reconcile(_skill_row(last_report="40/%d" % stalls), 40)
+                self.assertEqual(self._drives(actions), [])
+                self.assertEqual(self._recorded(actions).stalls, stalls + 1)
+
+    def test_a_run_of_stalled_cycles_re_drives(self):
+        row = _skill_row(last_report="40/%d" % (goals.REASSERT_AFTER_CYCLES - 1))
+        actions = reconcile(row, 40)
+        self.assertEqual(len(self._drives(actions)), 1)
+        self.assertFalse(self._drives(actions)[0].speak,
+                         "a routine re-assert is a log line, not a Discord line")
+
+    def test_the_re_assert_does_not_reset_the_counter(self):
+        """The bug this guards: zero the counter on re-drive and the barren
+        verdict below becomes unreachable, so a goal that never moves reports
+        healthy for ever - the exact shape of the defect this change fixes."""
+        row = _skill_row(last_report="40/%d" % (goals.REASSERT_AFTER_CYCLES - 1))
+        self.assertEqual(self._recorded(reconcile(row, 40)).stalls,
+                         goals.REASSERT_AFTER_CYCLES)
+
+    def test_a_barren_goal_speaks(self):
+        row = _skill_row(last_report="40/%d" % (goals.SKILL_BARREN_CYCLES - 1))
+        drives = self._drives(reconcile(row, 40))
+        self.assertEqual(len(drives), 1)
+        self.assertTrue(drives[0].speak)
+        self.assertEqual(drives[0].stalls, goals.SKILL_BARREN_CYCLES)
+
+    def test_it_does_not_speak_every_cycle_once_barren(self):
+        """A blocked goal is blocked on every cycle by definition. Narrating it
+        once a minute buries the channel and teaches the operator to stop
+        reading it."""
+        row = _skill_row(last_report="40/%d" % goals.SKILL_BARREN_CYCLES)
+        drives = self._drives(reconcile(row, 40))
+        self.assertEqual(drives, [], "no drive is due on this cycle")
+
+    def test_a_falling_reading_clears_the_counter(self):
+        """A skill value cannot fall in the engine, so a fall means the read
+        changed underneath us. Holding a counter high on a reading nobody
+        trusts is the wrong direction to be wrong in."""
+        row = _skill_row(last_report="40/7")
+        self.assertEqual(self._recorded(reconcile(row, 38)).stalls, 0)
+
+    def test_completion_outranks_every_cadence(self):
+        actions = reconcile(_skill_row(target=50, last_report="49/99"), 50)
+        self.assertEqual(self._drives(actions), [])
+        self.assertEqual(type(actions[-1]), MarkComplete)
+
+
+class SkillBarrenArithmeticTest(unittest.TestCase):
+    """The barren threshold is a number of CYCLES, and the cycle length lives
+    in bridge.py. These two constants have to be read together or the threshold
+    means nothing.
+    """
+
+    # The worldserver's PlayerSaveInterval on this realm, in seconds. With
+    # PlayerSave.AdditionalSaves = 0 this is the full staleness of
+    # `character_skills`, and 30-50 crafts of drift at the family's rate.
+    SAVE_INTERVAL_SECONDS = 900.0
+
+    def _goal_interval(self) -> float:
+        src = (pathlib.Path(__file__).resolve().parent.parent / "bridge.py").read_text()
+        return float(src.split('GOAL_INTERVAL_SECONDS", "')[1].split('"')[0])
+
+    def test_barren_is_a_whole_number_of_re_assert_periods(self):
+        """Every cycle that speaks must also be a cycle that re-drives, so the
+        sentence a person reads is attached to a fresh decision. Break the
+        divisibility and a barren goal speaks on a cycle with no plan behind
+        it."""
+        self.assertEqual(
+            goals.SKILL_BARREN_CYCLES % goals.REASSERT_AFTER_CYCLES, 0)
+
+    def test_barren_outlasts_two_save_intervals(self):
+        """Fifteen cycles can pass with real progress the table has not
+        admitted yet. A threshold below that accuses a working drive of doing
+        nothing on the strength of the save clock alone."""
+        window = goals.SKILL_BARREN_CYCLES * self._goal_interval()
+        self.assertGreaterEqual(
+            window, 2 * self.SAVE_INTERVAL_SECONDS,
+            "SKILL_BARREN_CYCLES x GOAL_INTERVAL is %.0fs, inside two save "
+            "intervals - a stale read alone could trigger it" % window,
+        )
+
+
+class TheSkillDriveIsActuallyWired(unittest.TestCase):
+    """goals.DriveSkill can be perfect and never applied.
+
+    This repo's dominant failure is a correct mechanism with no caller, so the
+    action being emitted is not the deliverable - the bridge acting on it is.
+    bridge.py cannot be imported here (pymysql, discord, a live MySQL), so this
+    walks its AST. An AST walk and not a grep on purpose: a name written in a
+    comment satisfies a grep, and a comment writes no job order.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        src = (pathlib.Path(__file__).resolve().parent.parent / "bridge.py").read_text()
+        cls.tree = ast.parse(src)
+
+    def _fn(self, name):
+        return next(
+            (n for n in ast.walk(self.tree)
+             if isinstance(n, (ast.AsyncFunctionDef, ast.FunctionDef))
+             and n.name == name),
+            None)
+
+    def _names(self, fn):
+        out = set()
+        for node in ast.walk(fn):
+            if isinstance(node, ast.Attribute):
+                out.add(node.attr)
+            elif isinstance(node, ast.Name):
+                out.add(node.id)
+        return out
+
+    def test_bridge_imports_the_planner(self):
+        imported = {n.name for node in ast.walk(self.tree)
+                    if isinstance(node, ast.Import) for n in node.names}
+        self.assertIn("skillgoal", imported)
+
+    def test_the_action_is_dispatched(self):
+        fn = self._fn("_apply_goal_action")
+        self.assertIsNotNone(fn, "no _apply_goal_action in bridge.py")
+        names = self._names(fn)
+        self.assertIn("DriveSkill", names)
+        self.assertIn("_drive_skill", names)
+
+    def test_the_handler_asks_the_planner_rather_than_deciding(self):
+        fn = self._fn("_drive_skill")
+        self.assertIsNotNone(fn, "no _drive_skill in bridge.py")
+        names = self._names(fn)
+        # The two live facts the plan cannot see for itself...
+        self.assertIn("_fetch_skill_cap", names)
+        self.assertIn("standing_mode", names)
+        # ...the decision itself...
+        self.assertIn("skillgoal", names)
+        self.assertIn("plan", names)
+        # ...and the ONE sanctioned writer for the job column.
+        self.assertIn("_set_job", names)
+
+    def test_every_action_reconcile_can_emit_has_a_handler(self):
+        """THE GUARD THE DISPATCH TABLE EXISTS FOR, and the one the old
+        `elif isinstance` chain could not offer.
+
+        An action kind that fell off the end of that chain did nothing at all,
+        silently, for ever - a decision made and dropped on the floor. goals.py
+        has grown roughly one action per epic, so "somebody added a kind and
+        nobody taught the bridge to apply it" is not hypothetical; it is how
+        DriveSkill itself could have shipped inert.
+
+        HOW THIS FAILS: add an action dataclass to goals.py, return it from any
+        reconcile branch, and forget the table entry. Nothing else in the suite
+        would notice.
+        """
+        goals_src = (pathlib.Path(__file__).resolve().parent.parent / "goals.py").read_text()
+        goals_tree = ast.parse(goals_src)
+        declared = {n.name for n in ast.walk(goals_tree)
+                    if isinstance(n, ast.ClassDef)}
+
+        emitted = set()
+        for fn in ast.walk(goals_tree):
+            if not isinstance(fn, ast.FunctionDef):
+                continue
+            if fn.name != "reconcile" and not fn.name.startswith("_reconcile_"):
+                continue
+            for node in ast.walk(fn):
+                if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
+                    if node.func.id in declared:
+                        emitted.add(node.func.id)
+        self.assertTrue(emitted, "found no actions at all - the walk is broken")
+
+        fn = self._fn("_apply_goal_action")
+        handled = {n.attr for n in ast.walk(fn)
+                   if isinstance(n, ast.Attribute)
+                   and isinstance(n.value, ast.Name) and n.value.id == "goals"}
+        missing = sorted(emitted - handled)
+        self.assertEqual(
+            missing, [],
+            "goals.reconcile emits %s and _apply_goal_action applies none of "
+            "them - the decision is made and then dropped" % missing,
+        )
+
+    def test_an_unknown_action_is_not_silently_dropped(self):
+        """The table's other half. A `.get` that returned None and fell through
+        would be the same silence in a tidier shape."""
+        src = (pathlib.Path(__file__).resolve().parent.parent / "bridge.py").read_text()
+        body = src[src.index("async def _apply_goal_action"):]
+        body = body[:body.index("async def _goal_strategy")]
+        self.assertIn("log.warning", body)
+
+    def test_the_handler_never_writes_a_command_row_itself(self):
+        """`_insert_command` here would be a second writer racing `_set_job`'s
+        guard, and `_write_trade_errand` would make this the second writer for
+        travel_npc - the mistake that pinned the family in a Gadgetzan shop for
+        half an hour (infra#3703, infra#3708, infra#3728)."""
+        names = self._names(self._fn("_drive_skill"))
+        for forbidden in ("_insert_command", "_write_trade_errand"):
+            self.assertNotIn(forbidden, names)
 
