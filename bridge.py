@@ -61,6 +61,7 @@ import questbook
 import questshare
 import quests
 import raidcraft
+import recipebook
 import recruit
 import relay
 import skillgoal
@@ -2930,6 +2931,7 @@ class Bridge(discord.Client):
                 self._craft_rhythm_loop,
                 self._forge_loop,
                 self._auction_loop,
+                self._recipebook_loop,
                 self._towntrip_loop,
                 self._restore_lost_lives,
             )
@@ -5070,6 +5072,114 @@ class Bridge(discord.Client):
                 await self._auction_once()
             except Exception:
                 log.exception("auction pass failed; retrying next cycle")
+            await asyncio.sleep(cycle)
+
+    async def _recipebook_once(self) -> None:
+        """Learn the recipes already in the bags, and buy one that is in reach.
+
+        TWO HALVES, AND THE FIRST ONE COSTS NOTHING. A class-9 item - a Pattern,
+        Formula, Manual, Recipe, Plans, Schematic or Design - teaches its recipe
+        when it is USED, and the family loots them constantly and opens none.
+        Measured 2026-09-14: 43 unlearned class-9 items across the five of them
+        (18, 13, 5, 5 and 2), and none of them usable yet - see recipebook's own
+        header for why that is the finding and not a disappointment.
+        That half needs no counter, no walk and no gold, so it runs first and
+        unconditionally.
+
+        THE SECOND HALF ONLY RUNS WHERE SOMEBODY ALREADY IS. This pass writes no
+        `travel_npc` and claims no town slot: `_auction_once` already walks the
+        family to an auctioneer on its own clock, and a second writer of that
+        column is the collision infra#3712 records. So a recipe is bought when a
+        character happens to be standing at a counter, which costs a cycle of
+        latency and no new machinery at all.
+
+        NOTHING HERE DECIDES ANYTHING. recipebook.py holds the reachability
+        rule, the ordering and the caps; this reads rows and writes rows.
+        """
+        names = sorted((await asyncio.to_thread(_protected_guids)).values())
+        if not names or await self._mid_run(names):
+            return
+
+        skills = await asyncio.to_thread(_fetch_recipe_skills, names)
+        verdicts = await asyncio.to_thread(_fetch_recipe_verdicts)
+        settled = recipebook.settled_from_rows(verdicts)
+        seen = await asyncio.to_thread(_recent_recipe_keys, GIVE_RETRY_MINUTES)
+
+        held = await asyncio.to_thread(_fetch_held_recipes, names)
+        learns, skipped = recipebook.plan_learns(held, skills, settled, seen)
+
+        queued = 0
+        for learn in learns:
+            if await asyncio.to_thread(_insert_learn, learn.holder, learn.command):
+                queued += 1
+                log.info("recipebook: %s %s - %s (%s)",
+                         learn.holder, learn.command, learn.label, learn.why)
+
+        # ---- and the shopping, for whoever is at a counter right now ---------
+        counters = {}
+        for name in names:
+            found = await asyncio.to_thread(_fetch_auctioneer, name)
+            if found:
+                counters[name] = found
+        purchases: list = []
+        if counters:
+            teams = await asyncio.to_thread(_fetch_teams, list(counters))
+            houses = {
+                name: auction.reachable_house(teams.get(name, ""),
+                                              int(counters[name].get("faction") or 0))
+                for name in counters
+            }
+            listings = await asyncio.to_thread(
+                _fetch_recipe_listings, list(houses.values()))
+            # `_fetch_guild_money` REUSED FOR ITS PURSE, and the name is the
+            # only awkward thing about it: it reads `characters.money` for a
+            # list of names and happens to carry a guild flag this pass ignores.
+            # A second near-identical reader is the duplication this codebase
+            # keeps paying for, and `characters.money` LAGS either way - which
+            # is safe in this direction, because DoAuction checks the purse
+            # itself and refuses rather than overdrawing.
+            purses = {
+                row["name"]: int(row["money"] or 0)
+                for row in await asyncio.to_thread(_fetch_guild_money, list(counters))
+            }
+            slots = await asyncio.to_thread(_fetch_free_slots, list(counters))
+            # WHAT THEY ALREADY HAVE, from the SAME read the learning half used
+            # rather than a second query: a recipe teaches once and is destroyed
+            # doing it, so buying one that is already in the bag is gold for
+            # nothing - and the overlap is the normal case, because the reason a
+            # character is holding an unlearned Pattern is that the trade is not
+            # high enough yet, and the moment it is, this pass would find the
+            # same recipe on the house.
+            carried = {(item.holder, int(item.entry)) for item in held}
+            purchases, shop_skipped = recipebook.plan_purchases(
+                list(counters), listings, skills, houses, purses, slots,
+                settled, seen, carried)
+            skipped = list(skipped) + list(shop_skipped)
+            for buy in purchases:
+                if await asyncio.to_thread(_insert_recipe_buy, buy.shopper, buy.command):
+                    queued += 1
+                    log.info("recipebook: %s %s - %s for %d copper (%s)",
+                             buy.shopper, buy.command, buy.label, buy.spend,
+                             buy.why)
+
+        log.info("%s", recipebook.report(learns, purchases, skipped))
+
+    async def _recipebook_loop(self) -> None:
+        """Own loop and own clock, the same reasoning _auction_loop gives.
+
+        Staggered past the auction pass rather than before it, because the
+        shopping half only acts on a character already standing at an
+        auctioneer and that pass is what puts one there. The learning half needs
+        no counter at all, so an early cycle is not wasted either way.
+        """
+        await self.wait_until_ready()
+        cycle = float(os.environ.get("RECIPEBOOK_CYCLE_SECONDS", "600"))
+        await asyncio.sleep(min(cycle, 420.0))
+        while not self.is_closed():
+            try:
+                await self._recipebook_once()
+            except Exception:
+                log.exception("recipebook pass failed; retrying next cycle")
             await asyncio.sleep(cycle)
 
     async def _protect_characters(self) -> None:
@@ -10890,6 +11000,311 @@ def _recent_auction_keys(minutes: int) -> set:
         return {(row["target_name"], row["command"]) for row in cur.fetchall()}
 
 
+# ---------------------------------------------------------------------------
+# RECIPES TAUGHT BY AN ITEM (infra#3792's other half, mod-overseer#467).
+#
+# A Pattern, Formula, Manual, Recipe, Plans, Schematic or Design is
+# item_template.class 9, and USING it teaches the recipe and destroys the item.
+# recipebook.py decides which one is worth using or buying; everything here only
+# reads.
+#
+# THE SKILL GATE IS READ AS NUMBERS, NOT AS PROFESSION NAMES, which is why this
+# does not reuse `_fetch_trade_skills`. That function maps skill ids to the
+# words `professions.py` reasons in, and the question here is the CORE's:
+# Player::CanUseItem compares `character_skills`.value against
+# `item_template`.RequiredSkillRank for a skill named by id, so an id is what
+# has to come back. A recipe can also gate on a skill no roster row mentions -
+# Cooking and First Aid are the ones the family can actually reach today - and a
+# profession-name filter would drop exactly those.
+_RECIPE_SKILL_SQL = (
+    "SELECT c.name AS name, cs.skill AS skill, cs.value AS value "
+    "FROM character_skills cs "
+    "JOIN characters c ON c.guid = cs.guid "
+    "WHERE c.name IN (%s)"
+)
+
+
+def _fetch_recipe_skills(names: list) -> dict:
+    """`{name: {skill_id: value}}` for the whole of `character_skills`.
+
+    EVERY SKILL AND NOT A SHORTLIST. Filtering to the profession ids here would
+    be this module deciding which recipes are allowed to exist, and it would be
+    wrong today: the only class-9 items the family can currently use are Cooking
+    ones, and Cooking is a secondary nobody's roster row declares.
+
+    LATE, BUT IT CONVERGES, and the tolerance is safe for the same reason
+    `_fetch_trade_skills` gives: a value a few points stale picks a slightly
+    easier recipe, and the worldserver makes the real decision anyway - the
+    `use` verb asks Player::CanUseItem itself and refuses with `the character
+    skill is too low to use that item` if this was optimistic. Nothing is spent
+    on a wrong guess in that direction.
+    """
+    if not names:
+        return {}
+    sql = _RECIPE_SKILL_SQL % ",".join(["%s"] * len(names))  # noqa: S608 - placeholders from a COUNT, values still bound
+    out: dict = {name: {} for name in names}
+    with _connect() as conn, conn.cursor() as cur:
+        try:
+            cur.execute(sql, names)
+            rows = cur.fetchall()
+        except pymysql.err.MySQLError as exc:
+            # 1054 missing column, 1146 missing table. A world that cannot say
+            # what anybody's skills are has not said they are high enough, and
+            # `within_reach` then refuses everything, which is the safe way to
+            # be wrong.
+            if exc.args and exc.args[0] in (1054, 1146):
+                log.warning("recipebook: cannot read character_skills this pass")
+                return out
+            raise
+    for row in rows:
+        out.setdefault(row["name"], {})[int(row["skill"])] = int(row["value"] or 0)
+    return out
+
+
+# EVERY CLASS-9 ITEM IN THE FAMILY'S BAGS, WITH THE GATE THAT DECIDES IT.
+#
+# `character_inventory` is the carried side only, which is what this wants: the
+# `use` verb reaches worn gear, the backpack and equipped bags and deliberately
+# not the bank, so a recipe sitting in a bank is not one this pass can drive.
+_RECIPE_HELD_SQL = (
+    "SELECT c.name AS holder, ci.item AS item_guid, ii.itemEntry AS entry, "
+    "it.name AS label, it.RequiredSkill AS required_skill, "
+    "it.RequiredSkillRank AS required_rank, it.spellid_2 AS recipe_spell "
+    "FROM character_inventory ci "
+    "JOIN characters c ON c.guid = ci.guid "
+    "JOIN item_instance ii ON ii.guid = ci.item "
+    "JOIN acore_world.item_template it ON it.entry = ii.itemEntry "
+    "WHERE c.name IN (%s) AND it.class = %%s AND it.spellid_2 > 0"
+)
+
+
+def _fetch_held_recipes(names: list) -> list:
+    """Every class-9 item the named characters are carrying."""
+    if not names:
+        return []
+    sql = _RECIPE_HELD_SQL % ",".join(["%s"] * len(names))  # noqa: S608 - placeholders from a COUNT, values still bound
+    with _connect() as conn, conn.cursor() as cur:
+        try:
+            cur.execute(sql, (*names, recipebook.RECIPE_ITEM_CLASS))
+            rows = cur.fetchall()
+        except pymysql.err.MySQLError as exc:
+            if exc.args and exc.args[0] in (1054, 1146):
+                log.warning("recipebook: cannot read the bags this pass")
+                return []
+            raise
+    return [
+        recipebook.Held(
+            holder=row["holder"],
+            item_guid=int(row["item_guid"]),
+            entry=int(row["entry"]),
+            label=row["label"] or "",
+            required_skill=int(row["required_skill"] or 0),
+            required_rank=int(row["required_rank"] or 0),
+            recipe_spell=int(row["recipe_spell"] or 0),
+        )
+        for row in rows
+    ]
+
+
+# EVERY LIVE CLASS-9 LISTING IN THE HOUSES THIS FAMILY CAN REACH.
+#
+# Built on the same join and the same warning `_AUCTION_LISTINGS_SQL` carries:
+# neither the item entry nor anything about the item is in `auctionhouse`, which
+# has ten columns and holds only `itemguid`. The entry comes from
+# `item_instance.itemEntry` and the skill gate from `item_template`.
+_RECIPE_LISTINGS_SQL = (
+    "SELECT a.id AS auction_id, a.houseid AS house, a.buyoutprice AS buyout, "
+    "ii.itemEntry AS entry, it.name AS label, "
+    "it.RequiredSkill AS required_skill, it.RequiredSkillRank AS required_rank, "
+    "it.spellid_2 AS recipe_spell "
+    "FROM auctionhouse a "
+    "JOIN item_instance ii ON ii.guid = a.itemguid "
+    "JOIN acore_world.item_template it ON it.entry = ii.itemEntry "
+    "WHERE a.houseid IN (%s) AND a.buyoutprice > 0 "
+    "AND it.class = %%s AND it.spellid_2 > 0"
+)
+
+
+def _fetch_recipe_listings(houses: list) -> list:
+    """Every live buyout listing of a class-9 item in the given houses.
+
+    ONE QUERY FOR THE WHOLE PASS, the same call `_fetch_auction_listings` makes
+    and for the same reason: two reads a second apart can disagree, because the
+    seller bots relist on their own cycle, and a single read is a consistent
+    snapshot as well as a cheaper one.
+    """
+    houses = sorted({int(h) for h in houses if int(h) > 0})
+    if not houses:
+        return []
+    sql = _RECIPE_LISTINGS_SQL % ",".join(["%s"] * len(houses))  # noqa: S608 - placeholders from a COUNT, values still bound
+    with _connect() as conn, conn.cursor() as cur:
+        try:
+            cur.execute(sql, (*houses, recipebook.RECIPE_ITEM_CLASS))
+            rows = cur.fetchall()
+        except pymysql.err.MySQLError as exc:
+            if exc.args and exc.args[0] in (1054, 1146):
+                log.warning(
+                    "recipebook: this world image has no readable auction "
+                    "house, so no recipe is bought this pass"
+                )
+                return []
+            raise
+    return [
+        recipebook.Listing(
+            auction_id=int(row["auction_id"]),
+            entry=int(row["entry"]),
+            label=row["label"] or "",
+            buyout=int(row["buyout"] or 0),
+            house=int(row["house"] or 0),
+            required_skill=int(row["required_skill"] or 0),
+            required_rank=int(row["required_rank"] or 0),
+            recipe_spell=int(row["recipe_spell"] or 0),
+        )
+        for row in rows
+    ]
+
+
+def _fetch_recipe_verdicts() -> list:
+    """What the worldserver has already said about a recipe this pass sent.
+
+    THE ONLY WAY TO KNOW WHETHER A CHARACTER KNOWS A RECIPE, and the reason is
+    worth the space because the obvious query is not merely useless here but
+    actively dangerous. `character_spell` cannot answer: Player::_SaveSpells
+    writes only spells whose state is not UNCHANGED, so a recipe granted to a
+    playerbot at runtime never reaches that table (craft.py's infra#3695 header
+    has the measurement). A pass that read it would conclude `not known` about a
+    recipe the character has, send the row, and the core would DESTROY the item
+    teaching it again - Spell::TakeCastItem consumes it whether or not anything
+    was learned, and nothing in the core asks the question either.
+
+    So the `use` verb asks Player::HasSpell itself, before it sends anything,
+    and writes its answer into `detail`. This reads those answers back.
+
+    THE ENTRY COMES OUT OF THE RESULT JSON AND NOT OUT OF `command`, because the
+    command names an item_instance guid - `use guid:<n>` - and that guid is gone
+    the moment the item is consumed. The executor puts the entry in its result
+    for exactly this kind of read-back, the same way DoGive reports the guid that
+    actually moved.
+    """
+    with _connect() as conn, conn.cursor() as cur:
+        try:
+            cur.execute(
+                "SELECT target_name, detail, result FROM overseer_command "
+                "WHERE kind = %s AND source = %s "
+                "AND status IN ('delivered', 'applied', 'unchanged', 'error')",
+                (recipebook.LEARN_KIND, recipebook.LEARN_SOURCE),
+            )
+            rows = cur.fetchall()
+        except pymysql.err.MySQLError as exc:
+            if exc.args and exc.args[0] in (1054, 1146, 1265):
+                return []
+            raise
+    out = []
+    for row in rows:
+        entry = 0
+        try:
+            entry = int((json.loads(row["result"] or "{}") or {}).get("entry") or 0)
+        except (ValueError, TypeError):
+            # A result that is not JSON is a row from a world that wrote
+            # something else there. Skipped rather than raised: one unreadable
+            # row must not cost the pass every other verdict it can read.
+            entry = 0
+        out.append({"target_name": row["target_name"],
+                    "detail": row["detail"], "entry": entry})
+    return out
+
+
+def _insert_learn(member: str, command: str) -> int:
+    """Queue one `use` row for the world executor.
+
+    kind='cast' AND NOT A KIND OF ITS OWN. mod-overseer routes on the first
+    word - a cast row begins with a spell id, which is digits, and this one
+    begins with `use` - so the verb needed no ENUM value and this insert needs
+    no migration to have shipped. The 1265 guard is kept anyway, for the same
+    reason `_insert_share` keeps its own: a world whose `kind` ENUM predates
+    'cast' entirely would reject the row, and a pass that never lands must warn
+    rather than kill the loop.
+
+    `target_arg` is empty: the learn executor does not read it.
+    """
+    with _connect() as conn, conn.cursor() as cur:
+        try:
+            cur.execute(
+                "INSERT INTO overseer_command "
+                "(target_name, command, kind, target_arg, source) "
+                "VALUES (%s, %s, %s, %s, %s)",
+                (member, command, recipebook.LEARN_KIND, "",
+                 recipebook.LEARN_SOURCE),
+            )
+        except pymysql.err.MySQLError as exc:
+            if exc.args and exc.args[0] in (1146, 1265):
+                log.warning(
+                    "overseer_command.kind has no 'cast' value - %s cannot be "
+                    "told to use a recipe until the worldserver image carrying "
+                    "mod-overseer's cast SQL has shipped",
+                    member,
+                )
+                return 0
+            raise
+        return cur.lastrowid or 0
+
+
+def _recent_recipe_keys(minutes: int) -> set:
+    """(character, command) pairs already proposed inside the retry window.
+
+    It matters here for the reason it matters to the auction sibling and one
+    more: a `use` row is `verifying` for the length of spell 483's own three
+    second cast plus the window that judges it, so a pass on a shorter clock
+    than that window would queue a second row for an item the first one is
+    about to consume.
+    """
+    with _connect() as conn, conn.cursor() as cur:
+        try:
+            cur.execute(
+                "SELECT target_name, command FROM overseer_command "
+                "WHERE kind IN (%s, 'auction') AND source = %s "
+                "AND created_at > NOW() - INTERVAL %s MINUTE",
+                (recipebook.LEARN_KIND, recipebook.LEARN_SOURCE, int(minutes)),
+            )
+        except pymysql.err.MySQLError as exc:
+            if exc.args and exc.args[0] in (1054, 1146, 1265):
+                return set()
+            raise
+        return {(row["target_name"], row["command"]) for row in cur.fetchall()}
+
+
+def _insert_recipe_buy(member: str, command: str) -> int:
+    """Queue one kind='auction' buyout for a recipe item.
+
+    THE SAME EXECUTOR `_insert_auction` FEEDS, and deliberately not a second
+    one: DoAuction already buys an auction id for a character standing at an
+    auctioneer, and it does not care what the item is. What differs is `source`,
+    so a recipe this pass bought can be told from a reagent the auction pass
+    bought at the same counter in the same minute - which is also what
+    `_recent_recipe_keys` needs to dedupe against.
+    """
+    with _connect() as conn, conn.cursor() as cur:
+        try:
+            cur.execute(
+                "INSERT INTO overseer_command "
+                "(target_name, command, kind, target_arg, source) "
+                "VALUES (%s, %s, %s, %s, %s)",
+                (member, command, auction.AUCTION_KIND, "",
+                 recipebook.LEARN_SOURCE),
+            )
+        except pymysql.err.MySQLError as exc:
+            if exc.args and exc.args[0] in (1146, 1265):
+                log.warning(
+                    "overseer_command.kind has no 'auction' value - %s cannot "
+                    "buy a recipe until the worldserver image carrying "
+                    "mod-overseer's auction SQL has shipped",
+                    member,
+                )
+                return 0
+            raise
+        return cur.lastrowid or 0
+
+
 def _fetch_town(leader: str):
     """What the counters within reach of `leader` can do, as a towntrip.Town.
 
@@ -11744,6 +12159,7 @@ class HeadlessBridge(Bridge):
                 self._craft_rhythm_loop,
                 self._forge_loop,
                 self._auction_loop,
+                self._recipebook_loop,
                 self._towntrip_loop,
                 self._restore_lost_lives,
             ) if coro.__name__ not in self.HEADLESS_SKIP
