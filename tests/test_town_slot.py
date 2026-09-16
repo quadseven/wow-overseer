@@ -241,7 +241,8 @@ class EveryTownPassAsksAtTheSameDoor(unittest.TestCase):
                 ("auction", "    async def _auction_once("),
                 ("forge", "    async def _forge_once("),
                 ("towntrip", "    async def _settle_town_errand("),
-                ("craft_supply", "    async def _aim_at_reagent_vendor(")):
+                ("craft_supply", "    async def _aim_at_reagent_vendor("),
+                ("mail", "    async def _mail_once(")):
             with self.subTest(name=name):
                 body = _statements(signature)
                 claim = body[body.index("_claim_town_slot("):]
