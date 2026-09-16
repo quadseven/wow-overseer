@@ -835,7 +835,7 @@ class UpstreamWallTest(unittest.TestCase):
         #    and nothing inside it is ever unlearned.
         learn = _module_function("bool TrainOnArrival(")
         unlearn = _module_function("void UnlearnProfession(")
-        self.assertIn("if (!plan.wanted.count(skill))", learn)
+        self.assertIn("if (!secondary && !plan.wanted.count(skill))", learn)
         self.assertIn("if (plan.wanted.count(skill))", unlearn)
 
     def test_the_level_up_sweep_cannot_take_a_profession(self):
