@@ -705,7 +705,9 @@ class ADepositIsAnsweredWhereTheCharacterStandsTests(unittest.TestCase):
         if not MOD_OVERSEER.exists():
             self.skipTest("mod-overseer submodule not checked out")
         cpp = MOD_OVERSEER.read_text(encoding="utf-8")
-        start = cpp.index("if (request.verb == GuildVerb::Bank)")
+        start = cpp.index(
+            "if (request.verb == GuildVerb::Bank || request.verb == GuildVerb::BankWithdraw)"
+        )
         self.money = cpp[start:cpp.index("GuildVerb::BankDepositItem", start)]
         guild = cpp[cpp.index("static char const* DoGuild("):]
         self.refuse = guild[guild.index("auto refuse = [&]"):][:400]
