@@ -22,7 +22,9 @@ class AzerothCoreDockerCacheTest(unittest.TestCase):
 
     def test_context_excludes_only_non_build_inputs(self):
         self.assertIn("Prepare a minimal Docker build context", self.workflow)
-        self.assertIn("**/.git", self.workflow)
+        self.assertIn("target=/azerothcore/.git,source=.git", self.workflow)
+        self.assertNotIn("          .git\n", self.workflow)
+        self.assertNotIn("          **/.git\n", self.workflow)
         self.assertIn("docs", self.workflow)
         self.assertIn("tests", self.workflow)
         self.assertIn("source, SQL, scripts, or runtime data", self.workflow)
