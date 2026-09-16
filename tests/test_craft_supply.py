@@ -928,5 +928,141 @@ class TheBridgeWalksTheLeaderToTheRightShop(unittest.TestCase):
         self.assertIn("travel.resolve(", code)
 
 
+def _code_only(body: str) -> str:
+    """The block with its docstring and comments removed.
+
+    Every assertion below is about what the pass DOES. A docstring that
+    explains why `_fetch_craft_spells` is the wrong reader necessarily
+    contains the name, and a comment quoting `job='dungeon'` necessarily
+    contains that - so a text assertion that reads the prose as well as the
+    code is an assertion that the prose exists, which is not what is being
+    pinned. The same separation test_auction.py's RhythmInteractionTest draws
+    when it reads the SQL rather than the docstring.
+    """
+    without_doc = body.split('"""', 2)[-1] if body.count('"""') >= 2 else body
+    return "\n".join(ln.split("#", 1)[0] for ln in without_doc.splitlines())
+
+
+def _unexplained_returns(body: str) -> list:
+    """Line numbers of bare `return`s with no log line in the eight lines
+    above them - `_recruit_once`'s house rule, checked rather than asserted
+    in a docstring. A window rather than a parse because bridge.py cannot be
+    imported here; eight lines is two more than the longest log call in this
+    pass, and short enough that an unrelated earlier branch cannot satisfy it.
+    """
+    lines = _code_only(body).splitlines()
+    return [
+        i + 1 for i, line in enumerate(lines)
+        if line.strip() == "return"
+        and "log.info(" not in "\n".join(lines[max(0, i - 8):i])
+        and "log.warning(" not in "\n".join(lines[max(0, i - 8):i])
+    ]
+
+
+class ThePassIsNotDarkWhileTheFamilyGathers(unittest.TestCase):
+    """infra#3805. `craft_supply` is the pass whose whole job is the vendor
+    reagents, and it emitted ZERO lines in ninety minutes of wow-dev logs on
+    2026-09-14 while `craft_rhythm` logged thirteen and `auction` thirty-five.
+    Two faults, one symptom: it read the candidates through the job='craft'
+    filter that `craft_rhythm` switches off exactly when there is shopping to
+    do, and both of its `return`s sat above its own summary line.
+    """
+
+    def setUp(self):
+        self.body = _bridge_block("    async def _craft_supply_once(")
+        self.code = _code_only(self.body)
+
+    def test_the_candidates_come_from_the_standing_craft_reader(self):
+        """The errand, not the mode. `_fetch_craft_spells` filters
+        job='craft', and the family is on job='quest' whenever anybody is
+        short of a gathered reagent - which is the steady state, and the one
+        in which buying the rest is the useful thing to do."""
+        self.assertIn("to_thread(_fetch_standing_crafts, names)", self.code)
+        self.assertNotIn(
+            "to_thread(_fetch_craft_spells", self.code,
+            "craft_supply reads the job='craft'-filtered candidate list, so "
+            "it is dark on every cycle craft_rhythm sends the family "
+            "gathering - which is every cycle that matters",
+        )
+
+    def test_the_family_mode_is_read_once_and_gates_the_pass(self):
+        """Reading the errand without the mode is not the same as ignoring
+        the mode. The walk is the family's one traveller, so a pass that
+        shopped on any job could walk the leader out of a dungeon run."""
+        self.assertIn("craft_rhythm.standing_mode(", self.code)
+        self.assertIn("_standing_jobs", self.code)
+        self.assertIn("craft_rhythm.MODE_CRAFT", self.code)
+        self.assertIn("craft_rhythm.MODE_GATHER", self.code)
+        self.assertRegex(
+            self.code,
+            r"if mode not in \(\s*craft_rhythm\.MODE_CRAFT,"
+            r"\s*craft_rhythm\.MODE_GATHER,?\s*\)",
+            "the standing mode is read but nothing branches on it, so a "
+            "dungeon or trainer errand no longer keeps this pass off the "
+            "travel column",
+        )
+
+    def test_the_two_allowed_modes_are_the_ones_craft_rhythm_alternates(self):
+        """The judgement, as values rather than as prose: craft and quest,
+        and not the other implemented jobs. `dungeon` is named because it is
+        the expensive one - the run coordinator's SOLE trigger is the
+        leader's job='dungeon', so a reagent trip taken during a run ends
+        it."""
+        import craft_rhythm
+        import jobs
+
+        allowed = {craft_rhythm.MODE_CRAFT, craft_rhythm.MODE_GATHER}
+        self.assertEqual(allowed, {"craft", "quest"})
+        self.assertIn("dungeon", jobs.IMPLEMENTED)
+        self.assertTrue(jobs.IMPLEMENTED - allowed)
+        self.assertNotIn("dungeon", allowed)
+        self.assertNotIn("train", allowed)
+
+    def test_the_gate_spells_no_job_of_its_own(self):
+        """A literal 'quest' here would be craft_rhythm's decision copied,
+        and the copy is the one nobody would think to change."""
+        gate = self.code[self.code.index("if mode not in ("):]
+        gate = gate[: gate.index("return") + len("return")]
+        self.assertNotIn("'quest'", gate)
+        self.assertNotIn('"quest"', gate)
+        self.assertNotIn("'craft'", gate)
+        self.assertNotIn('"craft"', gate)
+
+    def test_every_outcome_is_logged_including_the_empty_ones(self):
+        """`_recruit_once` states the house rule: EVERY OUTCOME IS LOGGED,
+        INCLUDING THE ONES WHERE NOTHING HAPPENS. A pass whose quiet day and
+        whose broken loop look identical is the failure this repo keeps
+        meeting, and it is what hid this bug for ninety minutes."""
+        self.assertEqual(
+            _unexplained_returns(self.body), [],
+            "a `return` in _craft_supply_once with no log line above it - "
+            "that cycle leaves nothing behind to tell a quiet pass from a "
+            "pass that never ran",
+        )
+
+    def test_the_pass_still_has_the_returns_this_rule_is_about(self):
+        """Guards the test above against the cheapest way to pass it. Deleting
+        the early returns would empty the list too, and would be a different
+        bug rather than a fix."""
+        self.assertGreaterEqual(
+            len([ln for ln in self.code.splitlines() if ln.strip() == "return"]),
+            3,
+        )
+
+    def test_the_summary_names_the_job_the_shopping_happened_on(self):
+        """One greppable line proves the fix. `queued ... on job=quest` is
+        this pass working while the family gathers, which is the cycle
+        infra#3805 says it kept missing."""
+        summary = self.code[self.code.index("craft_supply: queued"):]
+        self.assertIn("job=%s", summary)
+        self.assertRegex(summary, r"len\(multi_candidates\), mode,")
+
+    def test_the_recruit_rule_this_pass_now_follows_is_still_written_down(self):
+        """The house rule is quoted in the docstring above; if `_recruit_once`
+        ever stops stating it, the quotation is an appeal to nothing."""
+        recruit_body = _bridge_block("    async def _recruit_once(")
+        self.assertIn("EVERY OUTCOME IS LOGGED", recruit_body)
+
+
 if __name__ == "__main__":
     unittest.main()

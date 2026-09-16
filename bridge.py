@@ -4244,11 +4244,57 @@ class Bridge(discord.Client):
         docstring explains why REAGENTS is a second dict rather than more
         REAGENT entries, and the same reasoning is why this is a second
         block rather than a single loop trying to cover both shapes.
+
+        THE ERRAND IS PER CHARACTER AND THE MODE IS THE FAMILY'S (infra#3805).
+        This used to read `_fetch_craft_spells`, which answers both at once by
+        filtering `job='craft'`, and that is what made the pass dark: the
+        family sits on `job='quest'` whenever anybody is short of a gathered
+        reagent, which is the steady state AND the state in which buying the
+        rest is the useful thing to do. Measured on wow-dev 2026-09-14 - zero
+        `craft_supply:` lines in ninety minutes, four craft errands standing,
+        the auction pass logging thirty-five. `_fetch_standing_crafts` carries
+        the whole argument and names this call site; it is now the caller.
+
+        THE MODE IS STILL READ, AND THE ANSWER IS CRAFT AND QUEST, NOT ANY
+        JOB. A purchase is personal, but `_aim_at_reagent_vendor` asks for the
+        family's ONE traveller, so this pass can pull the leader across a
+        zone. Those two are what `craft_rhythm` alternates between, and in
+        both of them fetching a recipe's reagents is what the family is
+        already doing. `dungeon`, `train` and `rest` are standing orders this
+        pass knows nothing about and must not outrank - the run coordinator's
+        SOLE trigger is the leader's `job='dungeon'` (mod-overseer#88/#144),
+        so widening to any job with no gate would walk the leader out of an
+        instance to buy thread. Read once and family-wide, because jobs.py
+        says a job IS family-wide; rows that disagree are a half-landed
+        fan-out, which `standing_mode` answers with '' - ask again next cycle,
+        and say so rather than shop through the confusion.
+
+        EVERY OUTCOME IS LOGGED, INCLUDING THE ONES WHERE NOTHING HAPPENS -
+        `_recruit_once`'s house rule, and this pass had two silent `return`s
+        above its summary line, which is how a quiet cycle and a pass that
+        never ran looked identical for ninety minutes.
         """
         names = sorted((await asyncio.to_thread(_protected_guids)).values())
         if not names:
+            log.info(
+                "craft_supply: no protected character to shop for, so nothing "
+                "is bought this pass"
+            )
             return
-        spells = await asyncio.to_thread(_fetch_craft_spells, names)
+
+        mode = craft_rhythm.standing_mode(
+            await asyncio.to_thread(_standing_jobs)
+        )
+        if mode not in (craft_rhythm.MODE_CRAFT, craft_rhythm.MODE_GATHER):
+            log.info(
+                "craft_supply: the family is on job=%s rather than %s or %s, "
+                "so no reagent is bought and the traveller is left alone",
+                mode or "nothing agreed", craft_rhythm.MODE_CRAFT,
+                craft_rhythm.MODE_GATHER,
+            )
+            return
+
+        spells = await asyncio.to_thread(_fetch_standing_crafts, names)
         candidates = {
             name: spell_id
             for name, (spell_id, _) in spells.items()
@@ -4260,6 +4306,11 @@ class Bridge(discord.Client):
             if spell_id in craft_supply.REAGENTS
         }
         if not candidates and not multi_candidates:
+            log.info(
+                "craft_supply: %d craft errand(s) standing on job=%s, none of "
+                "which names a vendor-bought reagent, so there is nothing to "
+                "buy this pass", len(spells), mode,
+            )
             return
 
         queued = 0
@@ -4367,10 +4418,13 @@ class Bridge(discord.Client):
         if needs:
             await self._aim_at_reagent_vendor(needs)
 
+        # The mode is named here too, so ONE line proves the fix: `on
+        # job=quest` is this pass shopping while the family gathers, which is
+        # the cycle infra#3805 says it kept missing.
         log.info(
-            "craft_supply: queued %d buy errand(s) across %d candidate(s), "
-            "%d reagent(s) still need a trip",
-            queued, len(candidates) + len(multi_candidates), len(needs),
+            "craft_supply: queued %d buy errand(s) across %d candidate(s) on "
+            "job=%s, %d reagent(s) still need a trip",
+            queued, len(candidates) + len(multi_candidates), mode, len(needs),
         )
 
     async def _claim_town_slot(self, claimant: str, character: str,
@@ -10733,8 +10787,12 @@ def _fetch_standing_crafts(names: list) -> dict:
     """name -> (craft_spell, money) for everyone holding a craft errand at all.
 
     THE SIBLING OF `_fetch_craft_spells`, AND THE DIFFERENCE IS THE WHOLE
-    REASON IT EXISTS. That one filters `r.job = 'craft'`, which is right for
-    `craft_supply`: it buys a vial for somebody about to sit down and cast.
+    REASON IT EXISTS. That one filters `r.job = 'craft'`, which LOOKS right
+    for `craft_supply`: it buys a vial for somebody about to sit down and
+    cast. It was not: this clause excused the pass that then logged nothing
+    at all for ninety measured minutes (infra#3805). `craft_supply` reads
+    THIS function now, so `_fetch_craft_spells` is left with no caller, kept
+    as the contrast below rather than as a reader anything should pick up.
     This pass is the opposite case. `craft_rhythm.rhythm` moves the family to
     `MODE_GATHER` (job='quest') the moment ANY of them is short of a gathered
     reagent, which is precisely the state in which buying that reagent is the
