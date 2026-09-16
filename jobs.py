@@ -42,9 +42,11 @@ import re
 # also a reasonable build order.
 MODES = {
     "quest": "follow the quest log - what the family does today",
+    "raid prep": "get the family ready to raid - professions, recipes, mail, guild-bank raid materials",
     "farm": "gather deliberately for a named material, not opportunistically",
     "dungeon": "run an instance, tank bot leading (mod-dungeon-clear)",
-    "grind": "kill things for experience, no objective (Evan's 'level / grind')",
+    "fish": "toggle the bots' own fishing AI - accumulate food and reagents from water",
+    "grind": "kill things for experience, no objective (Evan's 'level / grind' / 'xp')",
     "gear hunt": "target a specific item from a specific source (infra#2797)",
     "craft": "level a profession, work a queue of things the family needs",
     "town run": "vendor, repair, restock, mail (needs infra#2783)",
@@ -118,7 +120,7 @@ MODES = {
 # only inside a comment the module labels "compatibility markers for
 # source-contract tests". A pin that a comment can satisfy has stopped being a
 # pin; craft's name executable code or nothing.
-IMPLEMENTED = frozenset({"quest", "dungeon", "train", "craft"})
+IMPLEMENTED = frozenset({"quest", "dungeon", "train", "craft", "raid prep", "fish"})
 
 # What each wired mode actually MAKES HAPPEN, named so `describe` can say it.
 # A mode in IMPLEMENTED with no entry here is a claim with no address, which
@@ -141,6 +143,17 @@ DRIVES = {
         "bridge._craft_once and _assign_crafts keep that column pointed at "
         "the right recipe for the skill the character actually has, and "
         "craft_supply buys the vendor reagents it needs"
+    ),
+    "raid prep": (
+        "raidprep.plan decides and the bridge's _drive_raid_prep runs the "
+        "shipped mail, craft and guild-bank sub-passes: collect mail for "
+        "reagents/recipes, re-assert craft spells for profession progress, "
+        "deposit gold above float to the guild bank"
+    ),
+    "fish": (
+        "mod_overseer.cpp's fishing drive (mod-overseer#448): a row whose job "
+        "is 'fish' toggles the bots' own fishing AI, teaches Fishing from a "
+        "trainer and records fish/skill events (mod_overseer.cpp, wantsFishing)"
     ),
 }
 
@@ -230,6 +243,9 @@ COLUMN_WIDTH = 20
 ALIASES = {
     "questing": "quest",
     "quests": "quest",
+    "raiding": "raid prep",
+    "raid ready": "raid prep",
+    "raid preparation": "raid prep",
     "farming": "farm",
     "farming time": "farm",
     "gathering": "farm",

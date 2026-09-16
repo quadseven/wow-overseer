@@ -203,6 +203,22 @@ class TrainIsWiredInPython(unittest.TestCase):
         self.assertIn("trainjob", jobs.DRIVES["train"])
 
 
+class RaidPrepIsWiredInPython(unittest.TestCase):
+    """`raid prep` is the second mode in IMPLEMENTED whose drive is NOT in
+    mod_overseer.cpp, mirroring `train`: it slots off the generic job gate
+    (`job <> 'quest'` stands the quest drive down for ANY non-quest job) and
+    the positive drive composes the shipped mail/craft/guild-bank sub-passes
+    in this process. ImplementedMatchesTheModule pins the two C++ modes;
+    tests/test_raidprep.py pins this one instead. Asserted here too, by name,
+    so the exception to that class's rule is written down where the rule is."""
+
+    def test_raid_prep_is_implemented(self):
+        self.assertIn("raid prep", jobs.IMPLEMENTED)
+
+    def test_its_drive_is_named_and_is_the_python_one(self):
+        self.assertIn("raidprep", jobs.DRIVES["raid prep"])
+
+
 class CraftIsWiredAndSaysWhere(unittest.TestCase):
     """infra#3687. `craft` is the mode this whole file's honesty rule was
     written about, and the one it got wrong twice: BLOCKED asserted no

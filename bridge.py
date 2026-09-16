@@ -61,6 +61,7 @@ import questbook
 import questshare
 import quests
 import raidcraft
+import raidprep
 import recipebook
 import recruit
 import relay
@@ -2492,6 +2493,58 @@ def _train_members() -> list:
                 wanted=trainjob.parse_wanted(row["professions"]),
                 learn_skill=int(row["learn_skill"] or 0),
                 holds=tuple(sorted(held.get(row["name"], ()))),
+            )
+            for row in rows
+        ]
+
+
+def _raidprep_members() -> list:
+    """The roster rows `job = raid prep` is decided from, with the skills observed.
+
+    The same two reads as `_train_members` and no join, for the same reason:
+    `character_skills` is keyed by guid and `overseer_roster` by name, and the
+    collation split documented above this file's other cross-table read makes
+    every such join a thing to get right once and then never notice again.
+
+    Guarded for 1146 and 1054 like every other overseer_* read: a realm whose
+    db-import image predates the profession columns has no errand to drive, and
+    the honest answer there is an empty family rather than an exception that
+    costs the whole protect cycle.
+    """
+    with _connect() as conn, conn.cursor() as cur:
+        try:
+            cur.execute(
+                "SELECT name, job, professions, level "
+                "FROM overseer_roster WHERE enabled = 1"
+            )
+            rows = list(cur.fetchall())
+        except pymysql.err.MySQLError as exc:
+            if exc.args and exc.args[0] in (1054, 1146):
+                return []
+            raise
+        if not rows:
+            return []
+        held: dict = {}
+        try:
+            cur.execute(
+                "SELECT c.name AS name, s.skill AS skill "
+                "FROM character_skills s JOIN characters c ON c.guid = s.guid "
+                "WHERE c.name IN (%s)" % ", ".join(["%s"] * len(rows)),  # noqa: S608 - placeholders from a COUNT, values still bound
+                tuple(r["name"] for r in rows),
+            )
+            for row in cur.fetchall():
+                held.setdefault(row["name"], []).append(int(row["skill"]))
+        except pymysql.err.MySQLError as exc:
+            if not (exc.args and exc.args[0] in (1054, 1146)):
+                raise
+            log.warning("character_skills is unreadable; raid prep can decide nothing")
+        return [
+            raidprep.Member(
+                name=row["name"],
+                job=row["job"] or "",
+                wanted=raidprep.parse_wanted(row["professions"]),
+                holds=tuple(sorted(held.get(row["name"], ()))),
+                level=int(row["level"] or 0),
             )
             for row in rows
         ]
@@ -7678,6 +7731,13 @@ class Bridge(discord.Client):
                 await channel.send(("Refusing to set job=train. " + blocked)[:1990])
                 return
 
+        if d.mode == raidprep.MODE:
+            blocked = raidprep.readiness(await asyncio.to_thread(_raidprep_members))
+            if blocked:
+                log.info("job: refused mode=%r - nothing to prepare", d.mode)
+                await channel.send(("Refusing to set job=raid prep. " + blocked)[:1990])
+                return
+
         names = await asyncio.to_thread(_fetch_enabled_names)
         if not names:
             await channel.send("Nobody is on the roster to give a job to.")
@@ -7717,6 +7777,11 @@ class Bridge(discord.Client):
         # DriveCraft decide is the honest shape; forecasting its answer is not.
         if d.mode == craft.MODE and written:
             await self._craft_once()
+        # Same reasoning for raid prep: drive the shipped sub-passes so a
+        # family put on job='raid prep' does not wait a cycle before the mail,
+        # craft and guild-bank passes run. Each sub-pass is idempotent.
+        if d.mode == raidprep.MODE and written:
+            await self._drive_raid_prep()
         await channel.send(
             f"{jobs.describe(d.mode)} ({written}/{len(names)} of the family told)"
         )
@@ -7763,6 +7828,53 @@ class Bridge(discord.Client):
             # every unrelated thing that comes after it. The next cycle
             # re-asserts the aim, and this call site has nothing to roll back.
             log.exception("train drive failed; the family keeps its current aim")
+
+    async def _drive_raid_prep(self) -> None:
+        """Make `job = raid prep` mean something: drive the shipped sub-passes.
+
+        THE POSITIVE HALF OF A MODE THAT ONLY EVER HAD A NEGATIVE ONE. Setting
+        any non-quest job stands the quest drive down inside the worldserver;
+        until this ran, nothing put anything in its place, which is the whole
+        of infra#3338. What replaces it is composing the passes this process
+        already ships, each one a complete decision module:
+
+          * `_mail_once` collects what is already addressed to the family -
+            the reagents and recipes that let the other passes see the world.
+          * `_craft_once` re-asserts `craft_spell` from each character's
+            current skill, so professions keep progressing toward rank.
+          * `_guild_bank_once` deposits gold above each character's float to
+            the guild bank, growing the raid-materials fund.
+
+        EACH PASS KEEPS ITS OWN GATE. `_mail_once` refuses when nobody can
+        stand at a mailbox (the aim/reach gate of infra#3830); `_craft_once`
+        only acts on characters whose `job` is `craft` (DriveCraft's own
+        permission); `_guild_bank_once` refuses per-depositor on range. This
+        drive does not override those - it is the cadence that lets them run on
+        a family whose job is raid prep, not a new opinion about each one.
+
+        A WIRED MODE WITH NOTHING TO DO IS SAID OUT LOUD. The order was
+        refused at the moment it was given if there was nothing to prepare, but
+        an errand that COMPLETES leaves the family on a mode with no work in
+        it - and that is the idle #3338 is about, arrived at from the other
+        side. Logged at warning rather than silently returned, because the
+        answer is a person deciding what they should do instead.
+        """
+        try:
+            members = await asyncio.to_thread(_raidprep_members)
+            plan = raidprep.plan(members, mail_items=0)
+            if not plan.why_not:
+                log.info("%s", raidprep.report(plan))
+            # Run the shipped sub-passes. None of them decides anything about
+            # job; they act on the world and each carries its own refusal.
+            await self._mail_once()
+            await self._craft_once()
+            await self._guild_bank_once()
+        except Exception:
+            # LOUD, AND STILL NOT FATAL, mirroring _drive_train: an exception
+            # escaping here would cost the protect cycle that runs it. The
+            # next cycle re-asserts the aim, and this call site has nothing to
+            # roll back.
+            log.exception("raid prep drive failed; the family keeps its current aim")
 
     async def _reconcile_learn_aims(self) -> None:
         """Finish a learn errand that is over, and walk one that nobody is on.
