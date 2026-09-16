@@ -247,15 +247,15 @@ class TheArrivalToleranceIsMirroredFromTheModule(unittest.TestCase):
         character, like both bank passes before it."""
         self.assertIn("AimedMover::RefuseInFormation", self.module)
 
-    def test_drive_craft_still_cannot_say_why_a_focused_cast_failed(self):
-        """The reason the Python side has to make the failure legible. Pinned so
-        that when the mod-overseer issue is fixed, this test is what tells
-        somebody the log line here can be retired."""
+    def test_drive_craft_names_why_a_focused_cast_failed(self):
+        """The module names a missing forge or anvil instead of making an
+        operator decode a retrying numeric result."""
         drive = self.module[self.module.index("void DriveCraft()"):]
         drive = drive[:drive.index("DiscoverFlightPointOnArrival")]
         self.assertIn("static_cast<uint32>(result)", drive)
-        self.assertNotIn("SPELL_FAILED_REQUIRES_SPELL_FOCUS", drive.split(
-            "SpellCastResult const result")[-1])
+        self.assertIn("SPELL_FAILED_REQUIRES_SPELL_FOCUS", drive)
+        self.assertIn("info->RequiresSpellFocus", drive)
+        self.assertIn("requires spell focus", drive)
 
 
 class TheCallerIsWiredAndCannotLatchTheColumn(unittest.TestCase):
