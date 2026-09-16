@@ -450,6 +450,30 @@ def family_gifts(gear_rows, equipped_rows, names, keep_names=(),
     )
 
 
+def guild_gear_gifts(gear_holdings, characters, family_names, members):
+    """Return useful BoE gear in family-first, guild-second order.
+
+    `gear.plan` owns the class, slot and upgrade judgement. This adapter keeps
+    that opinion at the existing `bag_pressure` gear boundary: the family
+    gets first claim, then only observed-online non-family guild members see
+    pieces left unclaimed. A guild name without observed presence is never
+    evidence that a `give` can land.
+    """
+    family = {str(name) for name in (family_names or ())}
+    by_name = {str(member.name): member for member in (members or ())}
+    family_chars = [character for character in (characters or ())
+                    if character.name in family]
+    guild_chars = [character for character in (characters or ())
+                   if character.name not in family
+                   and by_name.get(character.name) is not None
+                   and bool(by_name[character.name].online)]
+    first = tuple(gear.plan(gear_holdings, family_chars).grants)
+    claimed = {int(grant.guid) for grant in first}
+    remaining = [holding for holding in gear_holdings
+                 if int(holding.guid) not in claimed]
+    return first + tuple(gear.plan(remaining, guild_chars).grants)
+
+
 def recipe_gifts(gear_rows, holders_by_skill, keep_names=(),
                  position_rows=None, free_slots=None):
     """The carried recipes that belong in another member's bag (infra#3731).

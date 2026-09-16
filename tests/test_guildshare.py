@@ -18,6 +18,8 @@ import pathlib
 import unittest
 
 import craft_rhythm
+import gear
+import bag_pressure
 import guildshare
 
 BRIDGE = pathlib.Path(__file__).resolve().parents[1] / "bridge.py"
@@ -98,6 +100,48 @@ class ReserveIsCraftRhythmsNumberTest(unittest.TestCase):
         # A Bolt of Linen Cloth is the OUTPUT of 2963, never an input, so
         # nothing in the family's rhythm is waiting on one.
         self.assertEqual(guildshare.reserve_for(2996, (2963, 3275)), 0)
+
+
+class GearRecipientPriorityTest(unittest.TestCase):
+    def _gear(self, holder="Grug", guid=1, level=40):
+        return gear.Holding(
+            holder=holder, guid=guid, entry=1000 + guid,
+            name="Useful BoE", quality=2, item_level=level,
+            required_level=1, allowable_class=-1, inventory_type=13,
+            item_class=gear.ITEM_CLASS_WEAPON,
+        )
+
+    def _character(self, name, level=40):
+        return gear.CharacterState(name=name, class_id=1, level=level,
+                                   equipped={"main_hand": 1})
+
+    def test_family_upgrade_wins_before_guildmate(self):
+        members = [_member("Guildie", online=True, family=False)]
+        grants = bag_pressure.guild_gear_gifts(
+            [self._gear(holder="Ugga")],
+            [self._character("Ugga", level=40), self._character("Grug"),
+             self._character("Guildie")],
+            ["Grug"], members,
+        )
+        self.assertEqual([(grant.holder, grant.taker) for grant in grants],
+                         [("Ugga", "Grug")])
+
+    def test_unclaimed_boe_falls_back_to_online_guildmate(self):
+        members = [_member("Guildie", online=True, family=False)]
+        # Grug is not represented as a character, so the family has no
+        # eligible recipient; the observed guild member gets the item.
+        grants = bag_pressure.guild_gear_gifts(
+            [self._gear()], [self._character("Guildie")], ["Grug"], members,
+        )
+        self.assertEqual(len(grants), 1)
+        self.assertEqual(grants[0].taker, "Guildie")
+
+    def test_offline_guildmate_is_never_a_recipient(self):
+        members = [_member("Guildie", online=False, family=False)]
+        grants = bag_pressure.guild_gear_gifts(
+            [self._gear()], [self._character("Guildie")], ["Grug"], members,
+        )
+        self.assertEqual(grants, ())
 
 
 class SurplusNeverBreaksTheReserveTest(unittest.TestCase):
