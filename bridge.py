@@ -6322,8 +6322,9 @@ class Bridge(discord.Client):
             log.info("recipes: nobody is carrying a recipe with a skill gate")
             return
         positions = await asyncio.to_thread(_fetch_positions, names)
+        skills = await asyncio.to_thread(_fetch_recipe_skills, names)
         plan = bag_pressure.recipe_gifts(
-            rows, _recipe_holders_by_skill(), keep_names=OWNER_KEEPS,
+            rows, _recipe_holders_by_skill(skills), keep_names=OWNER_KEEPS,
             position_rows=positions, free_slots=free_slots,
         )
         for note in plan.notes:
@@ -9178,8 +9179,8 @@ def _fetch_surplus_recipes(names: list) -> list:
         return [dict(row) for row in cur.fetchall()]
 
 
-def _recipe_holders_by_skill() -> dict:
-    """Skill line id -> the family member assigned that trade.
+def _recipe_holders_by_skill(skills=None) -> dict:
+    """Skill line id -> master followed by eligible backup crafters.
 
     Built from `professions.ROSTER` through `professions.skill_id` so the
     roster is spelled once. `bag_pressure.recipe_gifts` takes this rather than
@@ -9198,12 +9199,21 @@ def _recipe_holders_by_skill() -> dict:
     for name in professions.ROSTER:
         for trade in professions.assigned(name):
             try:
-                out[professions.skill_id(trade)] = name
+                out[professions.skill_id(trade)] = [name]
             except KeyError:
                 # A trade with no id in goals.SKILL_IDS names no skill line,
                 # so it can claim nothing. Skipped rather than guessed at.
                 continue
-    return out
+    # Backups are observed holders, never invented skill grants. The assigned
+    # master remains first even when a backup currently has a higher rank.
+    for skill_id, names in out.items():
+        observed = []
+        for name, values in (skills or {}).items():
+            rank = int(values.get(int(skill_id), 0) or 0)
+            if rank > 0 and name not in names:
+                observed.append((rank, name))
+        names.extend(name for _, name in sorted(observed, key=lambda x: (-x[0], x[1])))
+    return {skill: tuple(names) for skill, names in out.items()}
 
 
 def _fetch_surplus_gear(names: list) -> list:

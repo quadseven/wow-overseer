@@ -102,6 +102,27 @@ class RecipePredicate(unittest.TestCase):
 
 
 class Learners(unittest.TestCase):
+    def test_master_precedes_observed_backups(self):
+        rows = [_row("Og", 99, "Plans: Green Iron Boots", BLACKSMITHING)]
+        holders = {BLACKSMITHING: ("Grug", "Grog", "Bork")}
+        self.assertEqual(
+            disposition.learner_options(rows, holders),
+            {99: ("Grug", "Grog", "Bork")},
+        )
+
+    def test_string_holder_mapping_remains_compatible(self):
+        rows = [_row("Og", 100, "Plans: Green Iron Boots", BLACKSMITHING)]
+        self.assertEqual(
+            disposition.learner_options(rows, HOLDERS), {100: ("Grug",)}
+        )
+
+    def test_unassigned_trade_is_not_given_to_an_arbitrary_backup(self):
+        rows = [_row("Grug", 101, "Manual: Strong Anti-Venom", FIRST_AID)]
+        self.assertEqual(
+            disposition.learner_options(rows, HOLDERS),
+            {101: (disposition.LEARNER_NOBODY,)},
+        )
+
     def test_a_recipe_in_the_wrong_bag_names_its_trades_owner(self):
         rows = [_row("Og", 1507032, "Plans: Green Iron Boots", BLACKSMITHING)]
         self.assertEqual(disposition.learners(rows, HOLDERS), {1507032: "Grug"})

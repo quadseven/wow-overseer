@@ -766,12 +766,58 @@ def learners(rows, holders_by_skill) -> dict:
         if item_class != RECIPE_CLASS or required_skill <= 0:
             continue
         who = by_skill.get(required_skill)
+        if isinstance(who, (tuple, list)):
+            who = next((str(candidate).strip() for candidate in who
+                        if str(candidate).strip()), "")
         if not who:
             out[guid] = LEARNER_NOBODY
         elif who == holder:
             out[guid] = LEARNER_HOLDER
         else:
             out[guid] = who
+    return out
+
+
+def learner_options(rows, holders_by_skill) -> dict:
+    """`item_guid -> (master, backups...)` for recipe hand-off planning.
+
+    The first name is the designated profession master. Remaining names are
+    explicit backups supplied by the caller in priority order. Keeping the
+    ordering in the input lets the profession roster decide policy while this
+    module only validates recipe rows and preserves the safe refusal for an
+    unassigned skill.
+    """
+    by_skill = {}
+    for skill, candidates in dict(holders_by_skill or {}).items():
+        try:
+            skill_id = int(skill)
+        except (TypeError, ValueError):
+            continue
+        if isinstance(candidates, str):
+            candidates = (candidates,)
+        names = []
+        for candidate in candidates or ():
+            name = str(candidate or "").strip()
+            if name and name not in names:
+                names.append(name)
+        if skill_id > 0 and names:
+            by_skill[skill_id] = tuple(names)
+
+    out = {}
+    for row in rows:
+        try:
+            guid = int(row["item_guid"])
+            holder = str(row["holder"]).strip()
+            item_class = int(row.get("item_class", 0) or 0)
+            required_skill = int(row.get("required_skill", 0) or 0)
+        except (KeyError, TypeError, ValueError):
+            continue
+        if guid <= 0 or not holder or item_class != RECIPE_CLASS:
+            continue
+        if required_skill <= 0:
+            continue
+        candidates = by_skill.get(required_skill, ())
+        out[guid] = tuple(candidates) if candidates else (LEARNER_NOBODY,)
     return out
 
 

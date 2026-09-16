@@ -386,7 +386,7 @@ class TheOneOpinionIsStillTheOnlyOpinion(unittest.TestCase):
         bag slot the owner is complaining about.
         """
         body = self._function("recipe_gifts")
-        self.assertIn("disposition.learners(", body)
+        self.assertIn("disposition.learner_options(", body)
         self.assertIn("disposition.decide(", body)
         self.assertNotIn("required_skill_rank", body)
 

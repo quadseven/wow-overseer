@@ -483,12 +483,13 @@ def recipe_gifts(gear_rows, holders_by_skill, keep_names=(),
     """
     kept = [row for row in gear_rows
             if not owner_keeps(row.get("name", ""), keep_names)]
-    learners = disposition.learners(kept, holders_by_skill)
+    learner_options = disposition.learner_options(kept, holders_by_skill)
     # Nothing is reachable by any route but GIVE for a recipe, and the
     # module is told exactly that rather than being handed ALL_ROUTES and
     # trusted to avoid the ones that do not ship.
     family = disposition.Family()
     grants = []
+    remaining = dict(free_slots or {})
     for row in kept:
         try:
             guid = int(row["item_guid"])
@@ -513,7 +514,17 @@ def recipe_gifts(gear_rows, holders_by_skill, keep_names=(),
             continue
         if guid <= 0 or not holder:
             continue
-        learner = learners.get(guid, disposition.LEARNER_UNASKED)
+        options = learner_options.get(guid, ())
+        if options and free_slots is not None:
+            learner = next(
+                (candidate for candidate in options
+                 if candidate in remaining and int(remaining[candidate]) > 0),
+                options[0],
+            )
+        else:
+            learner = options[0] if options else disposition.LEARNER_UNASKED
+        if learner == holder:
+            continue
         verdict = disposition.decide(
             item, family, available=disposition.EXECUTABLE_TODAY,
             learner=learner,
@@ -532,6 +543,8 @@ def recipe_gifts(gear_rows, holders_by_skill, keep_names=(),
             guid=guid, reason=verdict.why,
             said=f"{holder} trade {learner} {item.name}.",
         ))
+        if free_slots is not None and learner in remaining:
+            remaining[learner] = max(0, int(remaining[learner]) - 1)
     return gear.deliverable(
         grants, position_rows=position_rows, free_slots=free_slots,
     )
