@@ -246,6 +246,10 @@ SPELL_TRIGGERS = {0: "Use", 1: "Equip", 2: "Chance on hit", 5: "Equip"}
 # SpellItemEnchantment effect types.
 ENCHANT_PROC, ENCHANT_DAMAGE, ENCHANT_SPELL, ENCHANT_RESIST, ENCHANT_STAT = 1, 2, 3, 4, 5
 RESIST_SCHOOLS = {1: "Holy", 2: "Fire", 3: "Nature", 4: "Frost", 5: "Shadow", 6: "Arcane"}
+# Public compatibility name used by the tooltip contract. Keep the source of
+# truth beside the resistance vocabulary so a new school cannot drift between
+# the two payloads.
+_DAMAGE_SCHOOLS = RESIST_SCHOOLS
 
 # item_instance.enchantments: twelve slots of (id, duration, charges). The
 # permanent enchant, the temporary one, three gems, the socket bonus, the
@@ -787,6 +791,11 @@ def _elemental_damage(row: dict) -> list[dict] | None:
     return [{"school": school, "min": row["dmg_min2"], "max": row["dmg_max2"]}]
 
 
+def _secondary_damage(row: dict) -> list[dict] | None:
+    """Compatibility spelling for the public secondary-damage contract."""
+    return _elemental_damage(row)
+
+
 def _damage(row: dict) -> dict | None:
     if not row.get("dmg_min1"):
         return None
@@ -848,6 +857,7 @@ def _tooltip(row: dict, book: ItemBook, worn_entries: set[int],
         "slot": INVENTORY_TYPES.get(row.get("inventory_type") or 0),
         "kind": _item_kind(row),
         "damage": _damage(row),
+        "secondary_damage": _secondary_damage(row),
         "armor": armor or None,
         "block": row.get("block") or None,
         "stats": white,
