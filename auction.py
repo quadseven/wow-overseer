@@ -318,6 +318,17 @@ def buy_command(auction_id: int) -> str:
     return f"buy auction:{auction_id}"
 
 
+def list_command(item_guid: int, bid: int, buyout: int, hours: int = 12) -> str:
+    """Render the pinned mod's safe auction-list request."""
+    if not all(isinstance(value, int) for value in
+               (item_guid, bid, buyout, hours)):
+        raise ValueError("auction values must be integers")
+    if item_guid <= 0 or bid <= 0 or buyout < bid or hours not in (12, 24, 48):
+        raise ValueError("invalid auction listing")
+    return (f"list guid:{item_guid} bid:{bid} buyout:{buyout} "
+            f"hours:{hours}")
+
+
 # ---------------------------------------------------------------------------
 # THE HOUSES. Read from the realm's own AuctionHouse.dbc - see the module
 # docstring for why the database cannot answer this (auctionhouse_dbc exists
@@ -514,6 +525,73 @@ class Buy:
     @property
     def command(self) -> str:
         return buy_command(self.auction_id)
+
+
+@dataclass(frozen=True)
+class SaleCandidate:
+    """A carried item that may be listed after recipient claims are settled."""
+
+    holder: str
+    item_guid: int
+    entry: int
+    label: str = ""
+    quality: int = 0
+    binding: str = "boe"
+    quest_item: bool = False
+    recipient: str = ""
+    sell_price: int = 0
+    market_price: int = 0
+
+
+@dataclass(frozen=True)
+class Sale:
+    """One safe auction listing decision."""
+
+    candidate: SaleCandidate
+    bid: int
+    buyout: int
+    hours: int = 12
+
+    @property
+    def command(self) -> str:
+        return list_command(self.candidate.item_guid, self.bid,
+                            self.buyout, self.hours)
+
+
+def plan_sales(rows, *, max_items: int = 10, hours: int = 12) -> tuple:
+    """List safe surplus BoEs, refusing rares and claimed upgrades.
+
+    Recipient claims must already be decided by the gear/recipe planners. A
+    non-empty ``recipient`` therefore blocks listing, as does soulbinding,
+    quest status, an unknown market price, or rare-and-better quality.
+    """
+    if hours not in (12, 24, 48) or max_items <= 0:
+        return ()
+    out = []
+    for row in rows or ():
+        try:
+            item = SaleCandidate(
+                holder=str(row["holder"]).strip(),
+                item_guid=int(row["item_guid"]), entry=int(row["entry"]),
+                label=str(row.get("label", "")), quality=int(row["quality"]),
+                binding=str(row.get("binding", "boe")).lower(),
+                quest_item=bool(row.get("quest_item", False)),
+                recipient=str(row.get("recipient", "")).strip(),
+                sell_price=int(row.get("sell_price", 0)),
+                market_price=int(row.get("market_price", 0)),
+            )
+        except (KeyError, TypeError, ValueError):
+            continue
+        if (item.item_guid <= 0 or not item.holder or item.entry <= 0
+                or item.quality >= 3 or item.binding == "soulbound"
+                or item.quest_item or item.recipient
+                or item.market_price <= 0):
+            continue
+        buyout = max(item.market_price, item.sell_price * 4, 1)
+        bid = max(1, buyout * 80 // 100)
+        out.append(Sale(item, bid, buyout, hours))
+    return tuple(sorted(out, key=lambda sale: (sale.buyout,
+                                                sale.candidate.item_guid))[:max_items])
 
 
 def wanted(craft_spell: int, carried: dict, in_mail: dict,

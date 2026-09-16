@@ -627,6 +627,30 @@ class PlanBuysTest(unittest.TestCase):
             self.assertGreater(len(note), 40)
 
 
+class SalePlannerTest(unittest.TestCase):
+    def test_listing_command_matches_mod_grammar(self):
+        self.assertEqual(
+            auction.list_command(44, 800, 1000),
+            "list guid:44 bid:800 buyout:1000 hours:12",
+        )
+
+    def test_rare_is_never_listed(self):
+        rows = [{"holder": "Bork", "item_guid": 1, "entry": 2,
+                 "quality": 3, "market_price": 1000}]
+        self.assertEqual(auction.plan_sales(rows), ())
+
+    def test_claimed_upgrade_is_never_listed(self):
+        rows = [{"holder": "Bork", "item_guid": 1, "entry": 2,
+                 "quality": 2, "market_price": 1000, "recipient": "Og"}]
+        self.assertEqual(auction.plan_sales(rows), ())
+
+    def test_surplus_boe_gets_a_bounded_price(self):
+        rows = [{"holder": "Bork", "item_guid": 1, "entry": 2,
+                 "quality": 2, "sell_price": 100, "market_price": 500}]
+        sale, = auction.plan_sales(rows)
+        self.assertEqual((sale.bid, sale.buyout), (400, 500))
+
+
 class VocabularyTest(unittest.TestCase):
     """The keyword this module aims with, across its three copies."""
 
