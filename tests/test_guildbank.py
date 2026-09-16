@@ -666,8 +666,8 @@ class TabPurchaseVerbIsAvailableInThePinnedModuleTests(unittest.TestCase):
         self.assertIn("HandleBuyBankTab", self.cpp)
         self.assertIn("BankBuyTab", self.cpp)
 
-    def test_rank_rights_are_still_a_separate_follow_up(self):
-        self.assertNotIn("HandleSetRankInfo", self.cpp)
+    def test_the_module_can_open_rank_deposit_rights(self):
+        self.assertIn("HandleSetRankInfo", self.cpp)
 
 
 # The Gadgetzan Guild Vault, read out of the live `acore_world.gameobject`
