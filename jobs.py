@@ -314,8 +314,14 @@ def resolve(text: str | None) -> str | None:
         return None
     if cleaned in MODES:
         return cleaned
+    if cleaned.startswith("dungeon:"):
+        keyword = cleaned.split(":", 1)[1].strip()
+        return f"dungeon:{keyword}" if keyword in DUNGEONS.values() else None
     if cleaned.startswith("dungeon "):
-        keyword = DUNGEONS.get(cleaned[len("dungeon "):])
+        suffix = cleaned[len("dungeon "):]
+        if suffix in ("run", "clear"):
+            return "dungeon"
+        keyword = DUNGEONS.get(suffix)
         return f"dungeon:{keyword}" if keyword else None
     return ALIASES.get(cleaned)
 
@@ -356,6 +362,9 @@ def parse_order(text: str) -> str | None:
 
 def describe(mode: str) -> str:
     """One sentence for what setting `mode` actually does right now."""
+    if mode.startswith("dungeon:"):
+        keyword = mode.split(":", 1)[1]
+        return f"job set to {mode} - run {keyword}. This drives: {DRIVES['dungeon']}."
     what = MODES.get(mode, "")
     if mode in IMPLEMENTED:
         # `.get` and not `[]`: DRIVES falling behind IMPLEMENTED is a bug, and
