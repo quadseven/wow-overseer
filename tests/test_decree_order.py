@@ -182,6 +182,16 @@ class TheStandingJob(unittest.TestCase):
                                       roster())
             self.assertEqual({r.command for r in order.rows}, {"dungeon"}, said)
 
+    def test_named_dungeon_is_carried_to_every_roster_row(self):
+        order = decree.plan_order({"section": decree.JOB,
+                                   "mode": "dungeon shadowfang"}, roster())
+        self.assertEqual({r.command for r in order.rows}, {"dungeon:shadowfang"})
+
+    def test_unknown_named_dungeon_is_refused(self):
+        order = decree.plan_order({"section": decree.JOB,
+                                   "mode": "dungeon zulfarak"}, roster())
+        self.assertEqual(order.refusal, decree.ORDER_REFUSALS["mode"])
+
     def test_a_mode_nobody_has_heard_of_is_refused_and_never_passed_through(self):
         """An unrecognised mode reaching overseer_roster.job stops the family
         doing anything at all: mod_overseer.cpp compares the string."""
