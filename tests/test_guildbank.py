@@ -650,25 +650,23 @@ class TabDepositBlockersNamesBothSilentRefusalsTests(unittest.TestCase):
         self.assertIn("GUILD_BANK_RIGHT_DEPOSIT_ITEM", blockers[0])
 
 
-class NoTabPurchaseVerbExistsToCallYetTests(unittest.TestCase):
-    """The reason this slice stops where it does. `GuildVerb` in the pinned
-    mod-overseer runs None/Form/View/Shortlist/Invite/Tabard/Bank/
-    BankDepositItem and nothing else - there is no verb that buys a tab and no
-    verb that sets rank rights, so neither step can be driven from Python at
-    all. Building a formatter for a command the executor cannot parse would be
-    an inert mechanism, so this pins the absence instead, and fails the day
-    mod-overseer grows the verb - which is the day to wire the purchase."""
+class TabPurchaseVerbIsAvailableInThePinnedModuleTests(unittest.TestCase):
+    """The pinned module exposes the tab-purchase capability.
+
+    The Python adapter must not claim that a guild-bank tab can be bought until
+    the module parser and executor call the pinned core API.
+    """
 
     def setUp(self):
         if not MOD_OVERSEER.exists():
             self.skipTest("mod-overseer submodule not checked out")
         self.cpp = MOD_OVERSEER.read_text(encoding="utf-8")
 
-    def test_the_module_cannot_buy_a_tab_today(self):
-        self.assertNotIn("HandleBuyBankTab", self.cpp)
-        self.assertNotIn("BankBuyTab", self.cpp)
+    def test_the_module_can_buy_a_tab(self):
+        self.assertIn("HandleBuyBankTab", self.cpp)
+        self.assertIn("BankBuyTab", self.cpp)
 
-    def test_the_module_cannot_set_rank_bank_rights_today(self):
+    def test_rank_rights_are_still_a_separate_follow_up(self):
         self.assertNotIn("HandleSetRankInfo", self.cpp)
 
 
