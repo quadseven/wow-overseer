@@ -13,8 +13,7 @@ class AzerothCoreDockerCacheTest(unittest.TestCase):
 
     def test_build_uses_upstream_multistage_targets(self):
         self.assertIn("-f apps/docker/Dockerfile", self.workflow)
-        for target in ("worldserver", "authserver", "client-data", "db-import"):
-            self.assertIn(f'--target "$target"', self.workflow)
+        self.assertEqual(self.workflow.count('--target "$target"'), 1)
 
     def test_cache_from_is_skipped_for_explicit_cold_build(self):
         self.assertIn('CACHE_FROM_ARG=()', self.workflow)
