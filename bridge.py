@@ -6334,15 +6334,37 @@ class Bridge(discord.Client):
         `repair` or the sell pass's `vendor` from here is the cross-pass theft
         `_write_trade_errand`'s guard exists to prevent (mod-overseer#438).
 
-        NO ARRIVAL TEST, AND THAT IS NOT AN OVERSIGHT - see `bank.errand_step`.
-        A bank row is written from wherever the family is standing and waits
-        `pending` until its holder reaches the counter, so the rows and the aim
-        are created in the same pass and a fully answered queue is complete
-        evidence about this errand's own work. The town trip needs an arrival
-        test precisely because its rows cannot be written until it has one.
+        IT HAS AN ARRIVAL TEST NOW, AND THE SENTENCE THAT SAID IT NEEDED NONE
+        IS QUOTED RATHER THAN DELETED, because the correction is unreadable
+        without it (infra#3815). It said:
+
+            "NO ARRIVAL TEST, AND THAT IS NOT AN OVERSIGHT ... A bank row is
+            written from wherever the family is standing and waits `pending`
+            until its holder reaches the counter ... The town trip needs an
+            arrival test precisely because its rows cannot be written until it
+            has one."
+
+        The premise is false, and `bank.errand_step` now carries the C++ and
+        the measurement. What it cost HERE: the rows went terminal about a
+        second after they were written, so `outstanding` read zero on the very
+        next cycle, this method took that for a finished errand, and the
+        `banker` aim was handed back BEFORE the family arrived - every trip
+        called off at roughly the moment it started. The old reasoning is true
+        now that `_bank_once` writes a row only from the counter: its rows
+        cannot be written until it has arrived either, which is exactly the
+        town trip's shape.
+
+        THE ARRIVAL IS READ THROUGH `_fetch_town`, which is what
+        `_settle_vendor_errand` asks one counter over (`town.vendor`) and reads
+        the live snapshot rather than the quarter-hour-stale save timer. A
+        banker is a creature, so it is this reader and not infra#3804's
+        `travel.vault_in_reach`, which judges a GAMEOBJECT spawn row.
         """
+        leader_town = await asyncio.to_thread(_fetch_town, leader)
         outstanding = await asyncio.to_thread(_outstanding_bank_moves, names)
-        step = bank.errand_step(outstanding, moves_unasked)
+        step = bank.errand_step(
+            bool(leader_town.banker), outstanding, moves_unasked,
+        )
         if step == bank.BANK_ERRAND_AIM:
             # THE RETURN VALUE IS READ, the same defect infra#3660 fixed in the
             # guild bank pass. An economy errand may only retask an IDLE
@@ -6358,12 +6380,18 @@ class Bridge(discord.Client):
                     "no banker aim was taken this pass", leader,
                 )
         elif step == bank.BANK_ERRAND_HOLD:
+            # THE TWO HOLDS READ IDENTICALLY IN A LOG AND ARE DIFFERENT STATES
+            # (infra#3815): "rows are executing" and "the leader has just
+            # arrived and the rows are written below". A person watching a trip
+            # that never lands needs to know which one this is.
             log.info(
                 "bank: leader=%s keeps the errand it carries - %s. Re-asserting "
                 "one is what makes the world read a standing errand as a new "
                 "one", leader,
                 "the queue cannot be read" if outstanding < 0
-                else "%d row(s) unanswered" % outstanding,
+                else "%d row(s) unanswered" % outstanding if outstanding
+                else "it is standing at the counter and the rows are written "
+                     "below this line",
             )
         else:
             released = await asyncio.to_thread(
@@ -6398,11 +6426,35 @@ class Bridge(discord.Client):
         INTERACTION_DISTANCE and will deal with the character, and a follower
         cannot be sent to an NPC on its own - only the family leader takes
         `new rpg`, and the rest arrive by following. So the errand goes to the
-        leader, every character's rows are queued together, and each command
-        stays pending until its holder reaches the counter (mod-overseer#209,
-        infra#3311). The errand is written BEFORE the rows for the same reason
-        the vendor pass writes it first: a queue that outlives the journey is
-        the failure this ordering avoids.
+        leader and the other four arrive behind it. The errand is written
+        BEFORE the rows for the same reason the vendor pass writes it first: a
+        queue that outlives the journey is the failure this ordering avoids.
+
+        BUT THE ROWS ARE NOT WRITTEN IN THE SAME BREATH ANY MORE, AND THE
+        SENTENCE THAT SAID THEY WERE IS THE WHOLE DEFECT (infra#3815). This
+        paragraph used to end:
+
+            "So the errand goes to the leader, every character's rows are
+            queued together, and each command stays pending until its holder
+            reaches the counter (mod-overseer#209, infra#3311)."
+
+        Nothing stays pending - `bank.errand_step` carries the C++ and the
+        measurement, and the short of it is that DoBank refuses the row where
+        the character stands, terminally, 1.05 seconds after it is written.
+        141 error rows against 1 delivered in eight days, while the family
+        stood 437 yards from the nearest banker.
+
+        SO IT AIMS ON ONE CYCLE AND QUEUES ON A LATER ONE, the shape
+        `_vendor_once` and `_auction_once` already have and infra#3804 gave the
+        guild vault. The reach question is asked PER MOVER, because
+        `BankerInReach(who, ...)` measures the character whose row it is - the
+        same reason `_vendor_once` calls `_fetch_town` per seller.
+        `TOWN_COUNTER_YARDS` is deliberately LOOSER than the core's 5-yard
+        INTERACTION_DISTANCE: a walk only lands within
+        `travel.ARRIVED_POSITION_YARDS` of its aim, so a gate tightened to five
+        would hold back characters that had arrived correctly and the move
+        would never be attempted at all. Slack costs lateness, never a wrong
+        decision.
 
         AND THE ERRAND IS HANDED BACK WHEN THE TRIP IS OVER (infra#3728). It
         never was: `banker` is a maintenance errand as far as mod-overseer is
@@ -6451,20 +6503,55 @@ class Bridge(discord.Client):
         # proposes again because `character_inventory` has not been flushed yet
         # is not a reason to keep walking to a banker.
         seen = await asyncio.to_thread(_recent_bank_keys, GIVE_RETRY_MINUTES)
+        # AND WHO THE WORLD CAN SEE AT ALL, THE OTHER HALF OF THAT QUESTION
+        # (infra#3815). Without it the gate below would build a new latch -
+        # `bank.errand_step` has the argument. `_fetch_positions` returns only
+        # snapshot rows fresher than a minute, so this also ends the 17
+        # all-time `target not online` rows.
+        watched = await asyncio.to_thread(_fetch_positions, names)
         planned = [(move, bank.command(move)) for move in bank_plan.moves]
         unasked = [move for move, command in planned
-                   if (move.character, command) not in seen]
+                   if (move.character, command) not in seen
+                   and move.character in watched]
         await self._settle_bank_errand(names, leader, bool(unasked))
 
         if not bank_plan.moves:
             log.info("bank: nothing to put down and nothing to fetch back")
             return
+        # THE ROW IS ONLY WRITTEN WHERE IT CAN WORK, AND "WHERE" IS THE MOVER'S
+        # OWN FEET (infra#3815; the docstring has the reasoning). One answer
+        # per character rather than one per row: several rows share a holder
+        # and the counter does not move between them.
+        #
+        # A READ PER MOVER, AND NOT BATCHED, WHICH IS A DECISION (Grug Elder
+        # marked it as a query in a loop). `_vendor_once` reads the same table
+        # the same way per SELLER, and batching would mean a second town
+        # reader keyed on a name list - the third reader infra#3815 exists to
+        # avoid. The cost is bounded by the family, not by the queue: at most
+        # five reads, once per BANK_CYCLE_SECONDS (600).
+        at_the_counter: dict = {}
+        walking = []
         fresh = []
         for move, command in planned:
             if (move.character, command) in seen:
                 continue
+            if move.character not in at_the_counter:
+                mover_town = await asyncio.to_thread(_fetch_town, move.character)
+                at_the_counter[move.character] = bool(mover_town.banker)
+            if not at_the_counter[move.character]:
+                walking.append(move.character)
+                continue
             if await asyncio.to_thread(_insert_bank, move, command):
                 fresh.append(move)
+        if walking:
+            # LOGGED: a pass that writes nothing and a broken one look
+            # identical otherwise (infra#3660, restated for the rows).
+            log.info(
+                "bank: %s has no banker within %d yards of where the world can "
+                "see them, so no row is queued for them until the walk lands - "
+                "one written now comes back 'banker not in range' a second "
+                "later", ", ".join(sorted(set(walking))), TOWN_COUNTER_YARDS,
+            )
         for line in bank.lines(fresh):
             log.info("bank: %s", line)
         log.info("bank: queued %d/%d move(s), leader=%s",
@@ -11451,8 +11538,16 @@ def _fetch_town(leader: str):
     An empty answer is the normal state for most of a trip: it is what the world
     looks like while they are still walking. towntrip.plan turns that into notes
     rather than errands, which is what keeps the queue clean.
+
+    IT ANSWERS FOR THE BANK COUNTER TOO NOW (infra#3815), which is a third bit
+    in the mask and nothing else: `_bank_once` asks this exact question of this
+    exact table, and one reader for three counters is cheaper to keep true than
+    three. Widening the mask cannot change what the older callers see -
+    `town_from_rows` sets `repairs` and `vendor` off their own bits, and a
+    banker with no npc_vendor rows adds no `stocks`.
     """
-    want = towntrip.NPC_FLAG_VENDOR | towntrip.NPC_FLAG_REPAIR
+    want = (towntrip.NPC_FLAG_VENDOR | towntrip.NPC_FLAG_REPAIR
+            | towntrip.NPC_FLAG_BANKER)
     with _connect() as conn, conn.cursor() as cur:
         try:
             cur.execute(

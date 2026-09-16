@@ -10,9 +10,15 @@ import pathlib
 import re
 import unittest
 
+import towntrip
+
 PACKAGE = pathlib.Path(__file__).resolve().parents[1]
 BRIDGE = PACKAGE / "bridge.py"
 DOCKERFILE = pathlib.Path(__file__).resolve().parents[3] / "docker/wow-overseer/Dockerfile"
+MOD_OVERSEER = (
+    pathlib.Path(__file__).resolve().parents[3]
+    / "docker/azerothcore-playerbots/mod-overseer/src/mod_overseer.cpp"
+)
 
 
 def _source() -> str:
@@ -262,6 +268,194 @@ class TheBankRowIsTheRowDoBankReads(unittest.TestCase):
         body = _block("    async def _bank_once(")
         self.assertIn("_recent_bank_keys, GIVE_RETRY_MINUTES", body)
         self.assertIn("(move.character, command) in seen", body)
+
+
+class ABankRowIsAnsweredWhereTheCharacterStandsTests(unittest.TestCase):
+    """infra#3815, and the C++ fact two paragraphs of the old docstring
+    disagreed about.
+
+    `_bank_once` claimed each command "stays pending until its holder reaches
+    the counter". `DoBank` measures the range on the poll that picks the row
+    up - `BankerInReach` searches INTERACTION_DISTANCE from where the
+    character is standing at that instant - and hands a failure to `refuse`.
+    This pins the three properties that make that terminal: the check is there,
+    `refuse` writes `refused` and returns its second argument, and that second
+    argument is the DETAIL STRING rather than a retry class of the kind
+    mod-overseer#230 gave the sell verb.
+    """
+
+    def setUp(self):
+        if not MOD_OVERSEER.exists():
+            self.skipTest("mod-overseer submodule not checked out")
+        cpp = MOD_OVERSEER.read_text(encoding="utf-8")
+        self.cpp = cpp
+        start = cpp.index("static char const* DoBank(")
+        self.bank = cpp[start:cpp.index("static char const*", start + 10)]
+
+    def test_the_range_is_measured_at_the_moment_the_row_is_answered(self):
+        self.assertIn("BankerInReach(who, anyBankerInRange)", self.bank)
+        self.assertIn('"banker not in range"', self.bank)
+        self.assertIn("INTERACTION_DISTANCE",
+                      self.cpp[self.cpp.index("static Creature* BankerInReach("):]
+                      [:1200])
+
+    def test_the_second_argument_is_the_detail_column_and_not_a_retry_class(self):
+        """`describe("refused", reason); return detail;`. The detail is the
+        text that lands in `overseer_command.detail`, which is why the column
+        reads `banker not in range` - it is not a word anything classifies."""
+        refuse = self.bank[self.bank.index("auto refuse = [&]"):][:300]
+        self.assertIn("auto refuse = [&](char const* reason, char const* detail)",
+                      refuse)
+        self.assertIn('describe("refused", reason)', refuse)
+        self.assertIn("return detail;", refuse)
+        self.assertNotIn("pending", refuse)
+
+    def test_only_the_sell_family_of_verbs_classifies_a_refusal(self):
+        """`SellRefusalRetry` and its siblings exist and no bank row ever
+        reaches one, so nothing can decide a bank refusal is retryable."""
+        self.assertIn("SellRefusalRetry", self.cpp)
+        self.assertNotIn("BankRefusalRetry", self.cpp)
+        self.assertNotIn("retry", self.bank)
+
+    def test_no_verb_puts_a_row_back_on_the_queue_in_place(self):
+        """mod-overseer#230's own diff removed the last of those four lines.
+        A row that is answered is answered; there is no `pending` to wait in."""
+        self.assertIn("NO ROW GOES BACK ON THE QUEUE IN PLACE", self.cpp)
+
+
+class TheBankerBitIsTheWorldsOwnFlag(unittest.TestCase):
+    """`towntrip.Town.banker` (infra#3815) - the same reader, one more bit.
+
+    The value is checked against the live world DB rather than a wiki: every
+    `creature_template` row subnamed 'Banker' on wow-dev carries 0x20000, 55
+    rows carry it in all, and it is the bit `BankerInReach` hands
+    `GetNPCIfCanInteractWith` as UNIT_NPC_FLAG_BANKER.
+    """
+
+    def test_the_bit_is_the_cores_own_value(self):
+        self.assertEqual(towntrip.NPC_FLAG_BANKER, 0x20000)
+
+    def test_a_banker_in_reach_is_read_from_its_own_npcflag(self):
+        town = towntrip.town_from_rows(
+            [{"npcflag": towntrip.NPC_FLAG_BANKER, "item": None}])
+        self.assertTrue(town.banker)
+
+    def test_a_vendor_or_a_repairer_alone_is_not_a_banker(self):
+        """The whole point of the gate: a family standing in a market with no
+        bank must not have bank rows written for it."""
+        for flag in (towntrip.NPC_FLAG_VENDOR, towntrip.NPC_FLAG_REPAIR):
+            with self.subTest(flag=flag):
+                self.assertFalse(
+                    towntrip.town_from_rows([{"npcflag": flag, "item": 787}]).banker)
+
+    def test_one_spawn_can_carry_several_of_the_bits(self):
+        town = towntrip.town_from_rows([{
+            "npcflag": towntrip.NPC_FLAG_BANKER | towntrip.NPC_FLAG_VENDOR,
+            "item": 787,
+        }])
+        self.assertTrue(town.banker)
+        self.assertTrue(town.vendor)
+
+    def test_a_banker_sells_nothing_by_being_a_banker(self):
+        """`stocks` is still gated on the VENDOR bit. A banker with npc_vendor
+        rows it cannot sell from would otherwise promise a purchase."""
+        town = towntrip.town_from_rows(
+            [{"npcflag": towntrip.NPC_FLAG_BANKER, "item": 787}])
+        self.assertEqual(town.stocks, frozenset())
+        self.assertFalse(town.vendor)
+
+    def test_nothing_in_reach_is_no_banker_in_reach(self):
+        """The state the family is in for most of a trip, and the direction
+        that withholds rows rather than writing refusals."""
+        self.assertFalse(towntrip.town_from_rows([]).banker)
+        self.assertFalse(towntrip.Town().banker)
+
+
+class TheBankQueueWaitsForTheWalkTests(unittest.TestCase):
+    """infra#3815. The rows are written on a cycle where somebody is actually
+    at a counter, which is the shape `_vendor_once` and `_auction_once`
+    already have and infra#3804 gave the guild vault one function along."""
+
+    def test_the_reach_read_asks_the_world_for_the_banker_bit_too(self):
+        """One reader for three counters. Drop this bit and the SQL filters
+        every banker spawn out before `town_from_rows` ever sees it, so the
+        gate below would hold every mover back for ever and the pass would
+        write nothing at all."""
+        code = _code("def _fetch_town(leader: str)")
+        self.assertIn("towntrip.NPC_FLAG_BANKER", code)
+
+    def test_the_gate_sits_above_the_insert_in_the_move_loop(self):
+        """THE DEFECT, AS ONE ORDERING. 115 rows were written from wherever
+        the family stood and answered `banker not in range` 1.05 seconds
+        later, 141 error against 1 delivered all time."""
+        body = _block("    async def _bank_once(")
+        self.assertIn("at_the_counter[move.character]", body)
+        self.assertLess(body.index("if not at_the_counter[move.character]:"),
+                        body.index("_insert_bank, move, command"))
+
+    def test_the_gate_reads_the_movers_own_position_and_not_the_leaders(self):
+        """`BankerInReach(who, ...)` measures the character whose row it is.
+        An arrived leader never meant five arrived movers - the same reason
+        `_vendor_once` calls this reader per seller."""
+        code = _code("    async def _bank_once(")
+        self.assertIn("_fetch_town, move.character", code)
+        self.assertNotIn("_fetch_town, leader", code)
+
+    def test_one_reach_read_per_character_and_not_one_per_row(self):
+        """Several moves share a holder and the counter does not move between
+        them."""
+        code = _code("    async def _bank_once(")
+        self.assertLess(code.index("if move.character not in at_the_counter:"),
+                        code.index("_fetch_town, move.character"))
+
+    def test_a_mover_held_back_is_logged_rather_than_silently_dropped(self):
+        """A pass that writes nothing and a broken one look identical
+        otherwise (infra#3660)."""
+        code = _code("    async def _bank_once(")
+        self.assertIn("walking.append(move.character)", code)
+        self.assertIn("if walking:", code)
+        self.assertIn("TOWN_COUNTER_YARDS", code)
+
+    def test_a_holder_the_world_cannot_see_is_not_work_this_trip_can_do(self):
+        """THE LATCH THE GATE COULD HAVE BUILT. A move whose holder never
+        arrives is never written, never enters the retry window, and would
+        hold `unasked` true for ever - so `bank.errand_step` would keep the
+        column on a family that had finished. `_fetch_positions` returns only
+        rows fresher than a minute, so a name missing from it is dropped."""
+        code = _code("    async def _bank_once(")
+        self.assertIn("_fetch_positions, names", code)
+        self.assertIn("and move.character in watched", code)
+        self.assertLess(code.index("_fetch_positions, names"),
+                        code.index("self._settle_bank_errand("))
+
+    def test_the_settling_asks_whether_the_leader_arrived(self):
+        """The third input, and the town trip's own. Without it a queue that
+        went quiet because every row was refused reads as a finished errand,
+        and the aim is handed back before the family gets there."""
+        settle = _code("    async def _settle_bank_errand(")
+        self.assertIn("_fetch_town, leader", settle)
+        self.assertIn("bool(leader_town.banker), outstanding, moves_unasked",
+                      settle)
+
+    def test_the_arrival_is_read_through_the_reader_the_sell_pass_uses(self):
+        """`_settle_vendor_errand` asks the same reader the same question one
+        counter over. A banker is a creature, so this is NOT infra#3804's
+        `travel.vault_in_reach`, which judges a gameobject spawn row."""
+        settle = _code("    async def _settle_bank_errand(")
+        vendor = _code("    async def _settle_vendor_errand(")
+        self.assertIn("_fetch_town, leader", vendor)
+        self.assertNotIn("vault_in_reach", settle)
+        self.assertNotIn("vault_in_reach", _code("    async def _bank_once("))
+
+    def test_the_docstring_no_longer_claims_the_rows_wait(self):
+        """QUOTED AND ANSWERED, NOT DELETED, the way infra#3804 handled the
+        same sentence one pass over: the correction is unreadable without the
+        claim it corrects, and the claim is why nobody looked for years."""
+        doc = " ".join(_block("    async def _bank_once(").split('"""')[1].split())
+        self.assertIn("stays pending until its holder reaches the counter", doc)
+        self.assertIn("Nothing stays pending", doc)
+        self.assertIn("SO IT AIMS ON ONE CYCLE AND QUEUES ON A LATER ONE", doc)
+        self.assertIn("141 error rows against 1 delivered", doc)
 
 
 class TheModuleShips(unittest.TestCase):

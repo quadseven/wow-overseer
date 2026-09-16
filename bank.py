@@ -527,7 +527,8 @@ BANK_ERRAND_HOLD = "hold"
 BANK_ERRAND_RELEASE = "release"
 
 
-def errand_step(rows_outstanding: int, moves_unasked: bool) -> str:
+def errand_step(at_counter: bool, rows_outstanding: int,
+                moves_unasked: bool) -> str:
     """What to do with the leader's `banker` aim this pass (infra#3728).
 
     THE SAME LATCH AS THE SELL PASS'S, IN THE SAME COLUMN. `_bank_once` wrote
@@ -537,30 +538,60 @@ def errand_step(rows_outstanding: int, moves_unasked: bool) -> str:
     (infra#3655), naming the bridge as the half that clears it. The bridge never
     did, in any of the four passes.
 
-    TWO INPUTS RATHER THAN THE TOWN TRIP'S THREE, AND THE DIFFERENCE IS REAL.
-    A town-trip repair row cannot even be WRITTEN until a repairer is in reach,
-    so that pass has to know whether the family has arrived before it can tell a
-    finished trip from one that has not started. A bank row is written from
-    wherever the family happens to be standing and waits `pending` until its
-    holder reaches the counter (mod-overseer#209, infra#3311) - the rows and the
-    aim are created in the SAME pass - so a queue this pass wrote and the world
-    has fully answered is complete evidence about this errand's own work, with
-    no "has not started yet" window for an arrival test to close.
+    THREE INPUTS NOW, BECAUSE THE PARAGRAPH THAT ARGUED FOR TWO WAS WRONG ON A
+    FACT (infra#3815). It said:
 
-    AND AN ANSWER IS AN ANSWER, INCLUDING A REFUSAL. `banker not in range` is
-    what DoBank says to a holder still on the road, and counting refusals as
-    outstanding would rebuild the latch one table over - the same trap
-    `_outstanding_sales` describes against 17,536 all-time `vendor not in range`
-    rows. The honest consequence, stated rather than hidden: a trip whose rows
-    were all refused for range ends this errand, and the pass tries again once
-    the retry window lets it re-ask. That is a bounded hourly retry instead of a
-    permanent parking space, and on this realm it is not theoretical - measured
-    2026-09-13, `kind='bank'` stands at 141 error against 1 delivered all time,
-    every one of those refusals arriving while the column stayed set.
+        "TWO INPUTS RATHER THAN THE TOWN TRIP'S THREE ... A bank row is written
+        from wherever the family happens to be standing and waits `pending`
+        until its holder reaches the counter (mod-overseer#209, infra#3311) ...
+        so a queue this pass wrote and the world has fully answered is complete
+        evidence about this errand's own work, with no 'has not started yet'
+        window for an arrival test to close."
+
+    A bank row does not wait. `DoBank` answers it on the next poll from where
+    that character stands AT THAT INSTANT - `BankerInReach` searches
+    INTERACTION_DISTANCE - and an empty answer goes to `refuse(..., "banker not
+    in range")`, which is `describe("refused", reason); return detail;`. The
+    second argument is the DETAIL COLUMN'S TEXT, not a retry class; only
+    `kind='sell'` has one of those (`SellRefusalRetry`, mod-overseer#230), and
+    nothing anywhere puts a bank row back to `pending`. Measured all-time on
+    wow-dev: 115 `banker not in range` answered 1.05 SECONDS after the row was
+    written, against one delivery in eight days. Nobody walks anywhere in one
+    second, so the difference the paragraph called real runs the other way and
+    the town trip's third input is the one this needs.
+
+    THE PARAGRAPH AFTER IT WAS TRUE, AND ANSWERING IT IS THE POINT. It said:
+
+        "AND AN ANSWER IS AN ANSWER, INCLUDING A REFUSAL ... counting refusals
+        as outstanding would rebuild the latch one table over ... a trip whose
+        rows were all refused for range ends this errand, and the pass tries
+        again once the retry window lets it re-ask."
+
+    Every sentence of that stands, and the bounded retry was the better of the
+    two options ON OFFER - chosen with the measurement in hand and published
+    beside it, which is why it was findable at all. What changed is the menu:
+    `_bank_once` no longer writes a row into a journey that has not happened,
+    so a third option exists that neither counts refusals as outstanding nor
+    pays for them, and the refusals that paragraph was pricing stop being
+    written at all.
 
     NOT KNOWING IS A REASON TO HOLD. A negative count is the bridge reporting
     that it could not read the queue at all; reading that as "finished" is the
     fail-open direction and it walks the family away from rows already queued.
+
+    THE FOUR ANSWERS ARE `towntrip.errand_step`'S OWN, IN ITS ORDER, and its
+    docstring argues each of them at length rather than twice: unanswered rows
+    hold, nothing left to ask for releases, at the counter with work holds
+    because the rows are written THIS pass, and away from it with work aims.
+    The one that reads differently here is the terminal path - a trip that
+    never arrived cannot reach it, because a move `_bank_once` held back for
+    the walk is a move this pass has not asked for.
+
+    `at_counter` IS THE LEADER'S OWN ARRIVAL, for the reason infra#3804 records
+    one pass over: only the leader is aimed, the other four arrive behind it,
+    and WHICH ROWS get written is asked again per mover in `_bank_once`. An
+    arrived leader never meant five arrived movers, and this input does not
+    claim it does - it decides the column, not the queue.
 
     `moves_unasked` IS WHETHER THIS PASS STILL HAS A MOVE TO MAKE that it has
     not already queued inside the retry window - bank.plan's own answer, minus
@@ -572,12 +603,23 @@ def errand_step(rows_outstanding: int, moves_unasked: bool) -> str:
     the safe direction - it holds a finished errand a few minutes too long
     rather than ending a live one - and the retry window stops the re-proposal
     becoming a second row.
+
+    AND IT IS NOW A MOVE THIS TRIP CAN STILL DO, the one place the gate could
+    have built a new latch and did not (infra#3815). A move whose holder never
+    arrives is never written, never enters the retry window, and would hold
+    this input True for ever - the at-the-counter hold would then keep the
+    column on a family that had finished. So `_bank_once` drops a move whose
+    holder the world cannot see at all: `_fetch_positions` returns only
+    snapshot rows fresher than a minute, and a name missing from it is a name
+    nobody can hand anything to. A holder merely FAR AWAY still counts - that
+    is the walk this errand exists to make - while one not in the world is not
+    this trip's work, and used to be the 17 `target not online` rows.
     """
     if rows_outstanding != 0:
         return BANK_ERRAND_HOLD
-    if moves_unasked:
-        return BANK_ERRAND_AIM
-    return BANK_ERRAND_RELEASE
+    if not moves_unasked:
+        return BANK_ERRAND_RELEASE
+    return BANK_ERRAND_HOLD if at_counter else BANK_ERRAND_AIM
 
 
 def lines(moves):

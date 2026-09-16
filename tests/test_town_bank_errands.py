@@ -274,41 +274,101 @@ class TheCounterWorkIsWhatACounterHasToServe(unittest.TestCase):
                          _code("    async def _settle_town_errand("))
 
 
-class TheBankStepNeedsNoArrivalTest(unittest.TestCase):
+class TheBankStepAsksWhetherTheFamilyArrived(unittest.TestCase):
+    """This class was called `TheBankStepNeedsNoArrivalTest` (infra#3815).
+
+    The name was the claim, and the claim was false: a bank row is answered
+    where the character stands, terminally, about a second after it is
+    written, so a queue going quiet never was evidence that a trip had
+    happened. The third input is the town trip's own `at_counter`, and these
+    are the same four cases `TheTownStepEndsAnErrandOnlyOnItsOwnEvidence`
+    exercises above - deliberately, because the two passes now have one shape.
+    """
 
     def test_moves_this_pass_has_not_asked_for_are_aimed(self):
-        self.assertEqual(bank.errand_step(rows_outstanding=0,
+        self.assertEqual(bank.errand_step(at_counter=False, rows_outstanding=0,
                                           moves_unasked=True),
                          bank.BANK_ERRAND_AIM)
 
     def test_rows_still_unanswered_hold(self):
-        self.assertEqual(bank.errand_step(rows_outstanding=2,
+        self.assertEqual(bank.errand_step(at_counter=False, rows_outstanding=2,
                                           moves_unasked=True),
                          bank.BANK_ERRAND_HOLD)
 
     def test_a_fully_answered_queue_with_nothing_left_to_ask_releases(self):
-        self.assertEqual(bank.errand_step(rows_outstanding=0,
+        self.assertEqual(bank.errand_step(at_counter=False, rows_outstanding=0,
                                           moves_unasked=False),
                          bank.BANK_ERRAND_RELEASE)
 
+    def test_the_arrival_cycle_holds_rather_than_releasing(self):
+        """THE BUG, AS ONE ASSERTION. The leader has arrived and the rows are
+        about to be written this pass; the old rule aimed again here, and the
+        cycle after - with the rows dead and inside the retry window - it read
+        a quiet queue plus nothing unasked as a finished trip and handed the
+        column back. Holding is what keeps the family at the counter while
+        the moves are queued against it."""
+        self.assertEqual(bank.errand_step(at_counter=True, rows_outstanding=0,
+                                          moves_unasked=True),
+                         bank.BANK_ERRAND_HOLD)
+
+    def test_an_aim_is_never_written_at_the_counter(self):
+        """Re-asserting a keyword on a leader already standing there makes the
+        aim book erase its own state and read a standing errand as a new one,
+        which releases and re-takes the counter hold."""
+        for outstanding in (-1, 0, 3):
+            for unasked in (True, False):
+                with self.subTest(outstanding=outstanding, unasked=unasked):
+                    self.assertNotEqual(
+                        bank.errand_step(True, outstanding, unasked),
+                        bank.BANK_ERRAND_AIM)
+
     def test_an_unreadable_queue_holds(self):
         """Same fail-closed direction as every other reader of this queue."""
-        for unasked in (True, False):
-            with self.subTest(moves_unasked=unasked):
-                self.assertEqual(bank.errand_step(-1, unasked),
-                                 bank.BANK_ERRAND_HOLD)
+        for at_counter in (True, False):
+            for unasked in (True, False):
+                with self.subTest(at_counter=at_counter, moves_unasked=unasked):
+                    self.assertEqual(bank.errand_step(at_counter, -1, unasked),
+                                     bank.BANK_ERRAND_HOLD)
 
     def test_only_a_quiet_queue_ever_releases(self):
         for outstanding in (-7, -1, 1, 9, 400):
             for unasked in (True, False):
-                with self.subTest(outstanding=outstanding, unasked=unasked):
-                    self.assertNotEqual(bank.errand_step(outstanding, unasked),
-                                        bank.BANK_ERRAND_RELEASE)
+                for at_counter in (True, False):
+                    with self.subTest(outstanding=outstanding, unasked=unasked,
+                                      at_counter=at_counter):
+                        self.assertNotEqual(
+                            bank.errand_step(at_counter, outstanding, unasked),
+                            bank.BANK_ERRAND_RELEASE)
+
+    def test_nothing_left_to_ask_for_releases_wherever_the_leader_is(self):
+        """The terminal path does not also test arrival, and the reason is the
+        gate in `_bank_once`: a move held back for the walk has NOT been asked
+        for, so "nothing left to ask for" cannot be true of a trip that never
+        arrived. A family standing at the counter with an empty plan is simply
+        finished, and so is one that walked off after finishing."""
+        for at_counter in (True, False):
+            with self.subTest(at_counter=at_counter):
+                self.assertEqual(bank.errand_step(at_counter, 0, False),
+                                 bank.BANK_ERRAND_RELEASE)
 
     def test_the_three_answers_are_distinct_words(self):
         self.assertEqual(
             len({bank.BANK_ERRAND_AIM, bank.BANK_ERRAND_HOLD,
                  bank.BANK_ERRAND_RELEASE}), 3)
+
+    def test_the_wrong_sentence_is_quoted_and_answered_rather_than_deleted(self):
+        """infra#3815, the same way infra#3804 handled the same sentence one
+        pass over. The correction is unreadable without the claim it corrects,
+        and "nobody thought about it" would be untrue: the refusals-are-answers
+        paragraph priced this exactly right on the options it had."""
+        doc = " ".join(bank.errand_step.__doc__.split())
+        self.assertIn("TWO INPUTS RATHER THAN THE TOWN TRIP'S THREE", doc)
+        self.assertIn("waits `pending` until its holder reaches the counter",
+                      doc)
+        self.assertIn("A bank row does not wait.", doc)
+        self.assertIn("AND AN ANSWER IS AN ANSWER, INCLUDING A REFUSAL", doc)
+        self.assertIn("Every sentence of that stands, and the bounded retry "
+                      "was the better of the two options ON OFFER", doc)
 
 
 class TheBridgeCanActuallyHandBothColumnsBack(unittest.TestCase):
@@ -751,32 +811,125 @@ class TheLatchIsActuallyBroken(unittest.TestCase):
         self.assertEqual(seen[-1], "")
         self.assertNotIn("repair", seen[2:])
 
+    WALK = 3  # Cycles between taking the aim and standing at the counter.
+
+    # The bank pass as the realm measured it: rows written from wherever the
+    # family stood, and a decision that never asked whether anybody arrived.
+    # Both halves named, because a shorthand for "the old pass" that set one
+    # of them is how the model stopped being able to tell them apart.
+    OLD_PASS = {"gate": False, "arrival_test": False}
+
+    @staticmethod
+    def _bank_step(settle, arrival_test, readable, at_counter, queue, unasked):
+        """What the bank pass decides on one cycle.
+
+        Lifted out of `_bank_run` on Grug Elder's marking, and its arguments
+        are the three knobs a smaller fix would have left out: `settle=False`
+        is the pass before infra#3728, which aimed unconditionally and handed
+        nothing back; `arrival_test=False` is the two-input rule before
+        infra#3815, which never asked whether anybody had arrived;
+        `readable=False` is a queue the bridge cannot count.
+
+        `arrival_test` IS THE ONLY GATE THIS FUNCTION KNOWS ABOUT, which is
+        also a marking answered (Elder read a `gate and arrival_test` here as
+        turning the ROW gate off as well). It never did - the row gate is
+        applied in `_bank_run` against its own flag - but one name standing
+        for two knobs is how that stops being true on the next edit, so the
+        two are separate all the way down now and "the whole old pass" is
+        spelled with both.
+        """
+        if not settle:
+            return bank.BANK_ERRAND_AIM
+        return bank.errand_step(at_counter and arrival_test,
+                                queue if readable else -1, unasked)
+
+    @staticmethod
+    def _column_after(step, column):
+        """`travel_npc` after that decision. `hold` writes nothing, which is
+        the whole of infra#3708: re-asserting a keyword makes the aim book
+        read a standing errand as a new one."""
+        if step == bank.BANK_ERRAND_AIM:
+            return "banker"
+        if step == bank.BANK_ERRAND_RELEASE:
+            return ""
+        return column
+
     @classmethod
-    def _bank_cycles(cls, count, settle=True, queue_answers=True,
-                     moves_return=True, readable=True):
-        """The same model for the bank pass, whose rows are queued from wherever
-        the family is standing rather than only at a counter."""
-        column, queue, moves, window = "banker", 0, True, 0
-        seen = []
+    def _bank_run(cls, count, settle=True, queue_answers=True,
+                  moves_return=True, readable=True, gate=True, watched=True,
+                  arrival_test=True):
+        """The bank pass over `count` cycles.
+
+        Returns (the column after each cycle, rows landed at a counter, times
+        the keyword was re-asserted on a leader ALREADY STANDING THERE).
+
+        THE THIRD NUMBER EXISTS BECAUSE THE OTHER TWO CANNOT SEE A HOLD, and
+        it is the only thing that can. `aim` and `hold` both leave the column
+        reading `banker`, and `_claim_town_slot` writes nothing for either
+        while the column already says it - so the third input's whole effect
+        is on the ARRIVAL cycle, where an `aim` puts this pass back into the
+        slot's queue and a `hold` leaves it alone. Counted only at the
+        counter, because re-asking WHILE WALKING is the ordinary case and is
+        what keeps this pass's turn in the queue alive.
+
+        THE TWO HALVES OF infra#3815 ARE TWO INDEPENDENT KNOBS ON PURPOSE, and
+        neither reaches into the other. `gate` is the ROW gate in
+        `_bank_once`: off, rows are written wherever the family stands.
+        `arrival_test` is the third input to `bank.errand_step`: off, the
+        decision never asks whether anybody arrived. `OLD_PASS` below spells
+        out both, which is what the measured realm did; turning one off alone
+        is what isolates what that half is worth. The row gate is what stops
+        the premature RELEASE - a move held back is a move unasked, so the
+        terminal path is never reached while walking - and the arrival test is
+        what stops the arrival cycle re-arming the aim.
+
+        IT USED TO MODEL A DIFFERENT WORLD, AND THE WORLD WAS NOT LIKE THAT.
+        The predecessor of this method arrived instantly and let the queue
+        answer rows written from anywhere, because the docstring said a row
+        waited `pending` for its holder. It does not: the row is refused where
+        the character stands, terminally, about a second later, and a walk
+        takes cycles. Both facts are modelled now - the arrival the way
+        `_town_cycles` models it, and a row written away from the counter as
+        one that is ALREADY ANSWERED by the time the next cycle reads the
+        queue, which is the whole 1.05 second measurement.
+
+        `watched=False` is a mover the world cannot see - the `target not
+        online` class - which must not be able to hold the column open.
+        """
+        column, queue, walked, moves, window = "banker", 0, 0, True, 0
+        seen, landed, rearmed = [], 0, 0
         for _ in range(count):
-            if queue and queue_answers:
+            # THE WORLD BETWEEN TWO PASSES. An aimed leader walks and
+            # eventually stands at the counter; an unaimed one is picked up by
+            # something else and is not there any more. Rows queued while it
+            # stands there are answered.
+            walked = walked + 1 if column == "banker" else 0
+            at_counter = walked >= cls.WALK
+            if at_counter and queue and queue_answers:
                 queue = 0
                 moves = moves_return
             window = max(0, window - 1)
-            unasked = moves and not window
-            if settle:
-                step = bank.errand_step(queue if readable else -1, unasked)
-            else:
-                step = bank.BANK_ERRAND_AIM
-            if step == bank.BANK_ERRAND_AIM:
-                column = "banker"
-            elif step == bank.BANK_ERRAND_RELEASE:
-                column = ""
-            if unasked:
-                queue += 1
+
+            # THE PASS. `unasked` counts only movers the world can see.
+            unasked = moves and watched and not window
+            step = cls._bank_step(settle, arrival_test, readable,
+                                  at_counter, queue, unasked)
+            rearmed += at_counter and step == bank.BANK_ERRAND_AIM
+            column = cls._column_after(step, column)
+            # ...and then the rows. With the gate they are written only from
+            # the counter; without it they are written anywhere, and the ones
+            # written on the road are refused before the next cycle looks.
+            if unasked and (at_counter or not gate):
                 window = cls.WINDOW
+                if at_counter:
+                    queue += 1
+                    landed += 1
             seen.append(column)
-        return seen
+        return seen, landed, rearmed
+
+    @classmethod
+    def _bank_cycles(cls, count, **kw):
+        return cls._bank_run(count, **kw)[0]
 
     def test_the_old_bank_rule_never_gives_the_column_back(self):
         self.assertEqual(set(self._bank_cycles(24, settle=False)), {"banker"})
@@ -785,6 +938,59 @@ class TheLatchIsActuallyBroken(unittest.TestCase):
         seen = self._bank_cycles(24)
         self.assertIn("", seen)
         self.assertGreater(seen.count(""), seen.count("banker"))
+
+    def test_the_column_is_not_handed_back_before_the_family_arrives(self):
+        """THE RELEASE HALF OF infra#3815, AS A SEQUENCE. A row written on the
+        road is answered in about a second, so `outstanding` read 0 on the
+        very next cycle while the retry window had just swallowed `unasked` -
+        the two-input rule called that a finished errand and handed the column
+        back on cycle two, with the family still walking. It then re-aimed
+        when the window expired and did it again, for ever, which is the
+        measured realm: 141 error rows, 1 delivered, in eight days."""
+        without = self._bank_cycles(24, **self.OLD_PASS)
+        self.assertEqual(without[1], "")
+        self.assertEqual(self._bank_cycles(24)[1], "banker")
+
+    def test_the_old_rule_could_not_land_a_single_row_and_the_new_one_does(self):
+        """THE POINT OF THE WHOLE CHANGE, counted rather than described. A row
+        is only worth writing if a banker can answer it, and in 24 cycles the
+        old pass never once wrote one from a counter."""
+        self.assertEqual(self._bank_run(24, **self.OLD_PASS)[1], 0)
+        self.assertGreater(self._bank_run(24)[1], 0)
+
+    def test_the_keyword_is_never_re_asserted_on_a_leader_that_arrived(self):
+        """WHAT THE THIRD INPUT IS WORTH, ISOLATED FROM THE ROW GATE. With the
+        gate on and the arrival test off, the pass reaches the counter with
+        work still unasked and AIMS there - back into the town slot's queue,
+        on the one cycle it is already standing where it wanted to be. With
+        the arrival test on it holds instead. Nothing else about the trip
+        changes, which is the honest size of this half: the row gate is what
+        ends the premature release, and this is what stops the re-arm."""
+        self.assertEqual(self._bank_run(24)[2], 0)
+        self.assertGreater(self._bank_run(24, arrival_test=False)[2], 0)
+
+    def test_the_row_gate_is_what_keeps_the_column_to_the_counter(self):
+        """THE OTHER HALF, ISOLATED THE SAME WAY, because a reader should not
+        have to take the sentence above on trust. Turning the arrival test off
+        on its own costs no rows and no trip - the column still survives the
+        walk, because a move held back for it is a move this pass has not
+        asked for and the terminal path needs the opposite.
+
+        IT IS ALSO THE ASSERTION THAT THE TWO KNOBS ARE INDEPENDENT, which is
+        a Grug Elder marking answered: rows can only LAND at a counter, so a
+        run with `arrival_test=False` landing rows is proof that flag left the
+        ROW gate alone. Conflate the two again and this goes red."""
+        self.assertGreater(self._bank_run(24, arrival_test=False)[1], 0)
+        self.assertEqual(self._bank_run(24, arrival_test=False)[0][1], "banker")
+
+    def test_a_holder_the_world_cannot_see_never_latches_the_column(self):
+        """THE LATCH THE GATE COULD HAVE BUILT AND DOES NOT. A move whose
+        holder is not in the world is never written, so it never enters the
+        retry window and would keep `unasked` true for ever - with the leader
+        at the counter that is a permanent hold, which is the exact shape of
+        the defect this file exists to punish. `_bank_once` drops it from
+        `unasked` instead, so the trip ends."""
+        self.assertEqual(self._bank_cycles(24, watched=False)[-1], "")
 
     def test_a_bank_queue_that_is_never_answered_keeps_its_errand(self):
         self.assertEqual(set(self._bank_cycles(24, queue_answers=False)),

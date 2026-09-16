@@ -319,9 +319,17 @@ class Town:
 
     Every field is a FACT READ FROM THE WORLD, never an assumption: `repairs`
     is whether a reachable NPC carries the repair npcflag, `vendor` whether one
-    carries the vendor npcflag, and `stocks` the set of item entries a
-    reachable vendor's npc_vendor rows actually list. A planner that assumed
-    any of them would produce rows the executor refuses.
+    carries the vendor npcflag, `banker` whether one carries the banker npcflag,
+    and `stocks` the set of item entries a reachable vendor's npc_vendor rows
+    actually list. A planner that assumed any of them would produce rows the
+    executor refuses.
+
+    `banker` IS HERE FOR A PASS THIS MODULE DOES NOT PLAN (infra#3815), and is
+    deliberate rather than untidy. `_bank_once` needs the question this type
+    already answers - "can the character standing here talk to a counter of
+    kind X" - and `_fetch_town` is what answers it. A second reader of the same
+    table would be a second thing to keep true; a third field on the one answer
+    is not. `plan` below ignores it: a bank move is not a town-trip errand.
 
     WHY `vendor` IS SEPARATE FROM `stocks`, AND NOT DERIVED FROM IT
     (infra#3464). They answer different questions. `stocks` is what a vendor
@@ -336,6 +344,7 @@ class Town:
     repairs: bool = False
     stocks: frozenset[int] = frozenset()
     vendor: bool = False
+    banker: bool = False
 
 
 @dataclass(frozen=True)
@@ -759,12 +768,20 @@ def errand_step(at_counter: bool, rows_outstanding: int,
 # Everything below takes the rows as the bridge's own queries name them and
 # returns the value objects `plan` above already reads.
 
-# The two npcflag bits this trip cares about, as the core defines them
-# (UnitDefines.h: UNIT_NPC_FLAG_VENDOR 0x80, UNIT_NPC_FLAG_REPAIR 0x1000).
-# Named here rather than in the SQL so the bit test is testable and so a reader
-# does not have to decode a hex literal in a WHERE clause.
+# The npcflag bits read off a counter, as the core defines them (UnitDefines.h:
+# UNIT_NPC_FLAG_VENDOR 0x80, UNIT_NPC_FLAG_REPAIR 0x1000, UNIT_NPC_FLAG_BANKER
+# 0x20000). Named here rather than in the SQL so the bit test is testable and so
+# a reader does not have to decode a hex literal in a WHERE clause.
+#
+# THE BANKER BIT IS VERIFIED AGAINST THE WORLD DB AND NOT A WIKI (infra#3815).
+# Every creature_template row subnamed 'Banker' on wow-dev carries 0x20000 - 55
+# rows carry it in all - and it is the bit `BankerInReach` hands
+# GetNPCIfCanInteractWith as UNIT_NPC_FLAG_BANKER, so a spawn this finds is a
+# spawn DoBank would accept. Only the first two are this trip's; `banker` is
+# read for `_bank_once`, whose rows this module does not plan - see Town.
 NPC_FLAG_VENDOR = 0x80
 NPC_FLAG_REPAIR = 0x1000
+NPC_FLAG_BANKER = 0x20000
 
 
 def _int(value, default=0):
@@ -800,6 +817,7 @@ def town_from_rows(rows) -> Town:
     """
     repairs = False
     vendor = False
+    banker = False
     stocks = set()
     for row in rows:
         flags = _int(row.get("npcflag"))
@@ -807,13 +825,20 @@ def town_from_rows(rows) -> Town:
             repairs = True
         if flags & NPC_FLAG_VENDOR:
             vendor = True
+        # ONE SPAWN MAY CARRY SEVERAL OF THESE, so each bit is asked on its
+        # own rather than in an elif chain. Measured on wow-dev: Kiknikle
+        # (3683) and Jeeves (35642) carry npcflag 135298 and 135297, which is
+        # banker AND vendor AND repairer in one row.
+        if flags & NPC_FLAG_BANKER:
+            banker = True
         entry = _int(row.get("item"))
         # A vendor's stock only counts when the spawn is actually a vendor. A
         # repairer that happens to have npc_vendor rows it cannot sell from
         # would otherwise make `plan` promise a purchase nobody can make.
         if entry and flags & NPC_FLAG_VENDOR:
             stocks.add(entry)
-    return Town(repairs=repairs, stocks=frozenset(stocks), vendor=vendor)
+    return Town(repairs=repairs, stocks=frozenset(stocks), vendor=vendor,
+                banker=banker)
 
 
 def members_from_rows(rows, carried, spells, free_slots, names) -> tuple:
