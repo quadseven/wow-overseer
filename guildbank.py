@@ -150,13 +150,13 @@ def plan_deposits(members: list[dict], *, guild_has_tab: bool = False) -> list[D
     and being wrong here is unrecoverable without an operator moving gold by
     hand.
 
-    `money` is read from `characters.money`, which LAGS: at the pinned core
-    there is no immediate gold save (no `SaveGoldToDB` at this revision -
-    `Player::SaveToDB` writes the column, on `PlayerSaveInterval`, 900s), so a
-    reading can be up to fifteen minutes stale in either direction. That is
+    `money` is read from `characters.money`, which LAGS for ordinary play: at
+    the pinned core, only the guild-bank withdraw and mail-money handlers call
+    `SaveGoldToDB` immediately. Quest rewards, vendor sales, loot, and trainer
+    costs are written by `Player::SaveToDB` on `PlayerSaveInterval` (900s), so
+    a reading can be up to fifteen minutes stale in either direction. That is
     the other reason the reserve is generous rather than exact: a purse that
-    reads high because of a stale trainer visit must still clear the tab
-    price.
+    reads high because of a stale trainer visit must still clear the tab price.
     """
     reserve = FLOAT_COPPER if guild_has_tab else FLOAT_COPPER + TAB0_COST_COPPER
     deposits: list[Deposit] = []

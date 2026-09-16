@@ -22,6 +22,18 @@ MOD_OVERSEER = (
 )
 
 
+class ReserveDocumentationMatchesPinnedCore(unittest.TestCase):
+    """Keep the reserve explanation aligned with the pinned core behavior."""
+
+    def test_distinguishes_immediate_handlers_from_periodic_saves(self):
+        source = (pathlib.Path(__file__).resolve().parents[1]
+                  / "guildbank.py").read_text(encoding="utf-8")
+        self.assertIn("only the guild-bank withdraw and mail-money handlers", source)
+        self.assertIn("SaveGoldToDB", source)
+        self.assertIn("Player::SaveToDB", source)
+        self.assertNotIn("there is no immediate gold save", source)
+
+
 def member(**kw):
     base = dict(name="Grug", money=0, in_guild=True)
     base.update(kw)
