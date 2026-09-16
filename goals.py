@@ -525,7 +525,49 @@ def returned_to_ai(previous, current) -> frozenset:
     return frozenset(current) - frozenset(previous)
 
 
-def life_strategies(*, leads: bool, aimed: bool = False, travelling: bool = False) -> list:
+# THE PAIR THAT PICKS A NODE UP, WHICH NOTHING IN THIS REPOSITORY HAS EVER
+# GRANTED (infra#3731).
+#
+# `new rpg` ROAMS BUT IT DOES NOT GATHER. mod-overseer's reading of
+# NewRpgStatusUpdateAction (mod_overseer.cpp:14526-14532, :17706-17712) names
+# the whole status set - IDLE, GO_GRIND, GO_CAMP, WANDER_RANDOM, WANDER_NPC,
+# DO_QUEST, TRAVEL_FLIGHT - and not one of them picks a resource node. A herb
+# or an ore vein is reached by two upstream strategies working as a pair, and
+# mod_overseer.cpp:1867-1875 spells out why both are needed:
+#
+#     gather  "timer" -> "add gathering loot" 5.0
+#     loot    "loot available" -> "loot" 6.0, "far from loot target" ->
+#             "move to loot" 7.0, "can loot" -> "open loot" 8.0
+#     `gather` is what puts a herb or ore node INTO the loot stack and `loot`
+#     is what WALKS to it, so taking one and leaving the other leaves half of
+#     the measured behaviour in place. They are one diverter with two names.
+#
+# MEASURED AGAINST THE LIVE COMMAND TABLE, 2026-09-13: `nc +gather` has been
+# issued five times in three weeks and every one is a hand-typed operator row;
+# `nc +loot` has NEVER been issued, to anybody, once. So the family has been
+# ordered out to gather while carrying at most half of the only mechanism that
+# collects anything, and usually neither half. What that looks like after
+# weeks of it: Grog's Mining 1/75 and zero Rough Stone, Bork's Skinning 12/75
+# and zero Ruined Leather Scraps, Grug's Mining 8/75 and zero Rough Stone.
+#
+# AND IT HAS TO BE RE-ASSERTED, WHICH IS THIS FUNCTION'S WHOLE PURPOSE.
+# PlayerbotAI::ResetStrategies rebuilds from AiFactory on every login, and
+# RandomPlayerbotMgr::OnPlayerLogout calls it on each follower every time the
+# client closes; `follow` survives that because it is an unconditional default
+# (AiFactory.cpp:584), and these two do not. A hand-typed grant is therefore
+# not a fix, it is a fix with an expiry date nobody sees.
+#
+# `nc`, NOT `co`, AND THE DIFFERENCE IS NOT COSMETIC. Both are registered on
+# the non-combat engine (LootNonCombatStrategy.cpp), which is `strategy_for`'s
+# measured `co +grind` lesson said about a different strategy: a command down
+# the wrong channel is delivered cleanly, reports success, and adds nothing to
+# the engine that moves the character. `voice.py` currently documents a
+# `co +loot` phrase that cannot work for exactly that reason.
+GATHER_STRATEGIES = ("nc +gather", "nc +loot")
+
+
+def life_strategies(*, leads: bool, aimed: bool = False, travelling: bool = False,
+                    gathering: bool = False) -> list:
     """What keeps this character playing, given whether it leads the party.
 
     ONE character travels and the rest follow. That asymmetry is the whole
@@ -588,7 +630,59 @@ def life_strategies(*, leads: bool, aimed: bool = False, travelling: bool = Fals
     This is infra#3410 one layer along. That fix made a travel errand count as
     an aim, so a traveller keeps the strategy that MOVES it. This one stops
     the same pass also granting the one that FIGHTS it.
+
+    `gathering` MEANS THE FAMILY IS OUT TO COLLECT SOMETHING, and it is the
+    one parameter here that adds rather than withholds. Every branch above
+    decides what MOVES a character; none of them has ever decided what lets it
+    PICK SOMETHING UP, and until infra#3731 nothing anywhere did - see
+    GATHER_STRATEGIES for the measurement, which is that `nc +loot` has never
+    been issued to anybody in the history of this realm. It is orthogonal to
+    `leads`, `aimed` and `travelling` by construction, which is why it is a
+    fifth flag and not a fifth branch: the leader on a gathering trip needs to
+    be able to loot a node exactly as much as the follower beside it does.
     """
+    return _with_gathering(
+        _life_strategies(leads=leads, aimed=aimed, travelling=travelling),
+        gathering,
+    )
+
+
+def _with_gathering(base: list, gathering: bool) -> list:
+    """Append the node-collecting pair, or leave the set exactly as it was.
+
+    APPENDED RATHER THAN WOVEN IN, so that `gathering=False` returns the list
+    that shipped before this parameter existed, byte for byte, on every one of
+    the four branches. That is what `test_gathering_is_purely_additive` pins:
+    a parameter that changes the answer for a caller that did not pass it is
+    the quiet regression this family of functions cannot afford, and the
+    default argument is the safe one for infra#2812's reason.
+
+    AFTER THE REST, WHICH MATTERS FOR THE FOLLOWER BRANCHES ONLY. Commands are
+    delivered in list order and the unaimed branch opens with `nc -new rpg`; a
+    gather grant ahead of it would spend a tick with the wander strategy still
+    on and the node-chaser newly added, which is the one combination that
+    genuinely does scatter a follower. Adding at the end means every branch
+    has already settled the wander question before anything starts walking to
+    a node.
+
+    NOT GRANTED WHILE THE FAMILY IS CRAFTING, which is the caller's business
+    and is said here because it is the reason this is a parameter rather than
+    a constant added to every set. `gather` and `loot` sit at relevance 5.0 to
+    8.0 against `follow`'s 1.0, so they pull a character off formation by
+    design - which is the point on a gathering trip and is a character
+    wandering away from an anvil on a crafting one. mod-overseer strips both
+    for the duration of any travel errand for the same reason
+    (ESCORT_DIVERT_STRATEGIES, mod_overseer.cpp:1922-1925) and hands back only
+    what it observed coming off, so a grant that this loop keeps re-asserting
+    is restored correctly and one that it does not is lost for good.
+    """
+    if not gathering:
+        return base
+    return base + [cmd for cmd in GATHER_STRATEGIES if cmd not in base]
+
+
+def _life_strategies(*, leads: bool, aimed: bool, travelling: bool) -> list:
+    """The set as it was before `gathering` existed. See `life_strategies`."""
     if leads:
         if travelling:
             # The errand is the task. Everything else the leader branch hands

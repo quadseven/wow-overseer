@@ -877,6 +877,25 @@ def _give_them_a_life(names: list) -> int:
     # character that started an errand halfway through a sweep would otherwise
     # be told twice, contradictorily, in one pass.
     travelling = _travelling_names()
+    # WHO IS OUT GATHERING DECIDES WHO CAN PICK ANYTHING UP (infra#3769).
+    # Read per character rather than reduced to one family-wide answer,
+    # because `overseer_roster.job` IS per row on the far side - DriveCraft
+    # skips anyone whose job is not `craft` and the quest gate stands the
+    # drive down for every non-quest value, both one row at a time - and a
+    # roster that disagrees mid-fan-out would otherwise hand somebody the
+    # strategies for a mode they are no longer in.
+    #
+    # THIS IS THE HALF THAT WAS MISSING RATHER THAN THE HALF THAT WAS WRONG.
+    # `craft_rhythm` has been ordering the family out to gather correctly for
+    # a day; what nothing did was give them `gather` and `loot`, without which
+    # roaming walks past every node it passes. See goals.GATHER_STRATEGIES for
+    # the measurement - `nc +loot` has never been issued on this realm - and
+    # note that this loop is exactly where it belongs, because neither
+    # strategy survives the ResetStrategies that runs on every login.
+    gathering = {
+        name for name, mode in _standing_jobs().items()
+        if mode == craft_rhythm.MODE_GATHER
+    }
     for name in driven:
         # The leader always travels. A follower travels when it has somewhere
         # to be - see goals.life_strategies: an UNAIMED follower given the
@@ -892,6 +911,7 @@ def _give_them_a_life(names: list) -> int:
             leads=(name == head),
             aimed=(name in aimed),
             travelling=(name in travelling),
+            gathering=(name in gathering),
         ):
             _insert_command(core.InsertCommand(name, command, "overseer:life"))
     return len(driven)

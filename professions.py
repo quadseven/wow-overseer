@@ -1132,25 +1132,48 @@ def secondary_rank_refusal(skills: Mapping[str, int]) -> str:
 def traveller(errand) -> str:
     """Who must become the family's one traveller for this errand, or ''.
 
-    THIS IS THE ANSWER TO THE BLOCKER THAT LOOKED UNANSWERABLE, and it is worth
-    stating plainly because the obvious fix is the wrong one. `travel_npc` is
-    the only way to send a character to an NPC, and mod-overseer refuses to
-    send anyone who does not carry `new rpg`. The family carry `new rpg` on the
-    LEADER ALONE, deliberately: it acts at relevance 3.0-11.0 against follow's
-    1.0, so a follower given both wanders off every tick, which is the 937-yard
-    scatter of infra#2812. So the errand column is unusable for exactly the
-    characters that need it.
+    THE CONCLUSION HERE IS STILL RIGHT AND THE REASON IT USED TO GIVE WAS
+    NOT (infra#3731). The paragraph below said `new rpg` is carried by "the
+    LEADER ALONE, deliberately", so `travel_npc` was unusable for exactly the
+    characters that need it, and that giving a follower the strategy would be
+    "the scatter, re-run". Every clause of that was false by the time it was
+    written, and it was cited three times as a reason not to try things:
 
-    The obvious fix is to give the follower `new rpg` for the duration. That is
-    the scatter, re-run, with a reason attached.
+      * infra#2812 IS THE ISSUE IT CITES, and that issue's fix was to GRANT
+        `new rpg` to an aimed follower. Its own table reads "AIMED follower:
+        `-new rpg, +follow` -> `new rpg, +follow`", and its own words are "An
+        *unaimed* follower carrying `new rpg` free-roams its own quest log;
+        that is the scatter. An *aimed* one walks to a destination it shares
+        with everyone aimed at the same quest" - measured at a 253-yard spread
+        against the 937. The scatter was the ABSENCE OF A DESTINATION.
+      * `goals.life_strategies(aimed=True)` has granted it ever since, and
+        `bridge._aimed_names` counts any non-empty `travel_npc` as aimed. Read
+        live on 2026-09-13: FOUR of the five carried `new rpg`, three of them
+        followers holding ground aims, each with its own `nc +new rpg` row
+        from `overseer:life`.
+      * mod-overseer agrees from the other side. `ReadAimedMover` tests
+        `carriesStrategy` FIRST and returns `Walks`
+        (overseer_decisions.cpp:3740-3769), so a follower that carries the
+        strategy is never "in formation" for refusal purposes at all.
 
-    The fix here changes WHO TRAVELS instead of HOW MANY TRAVEL. A character
-    with an errand becomes the leader, and the other four follow it - through
+    WHAT ACTUALLY STOPS A SECOND TRAVELLER IS A LEASH, and it is worth knowing
+    because it is a real constraint and this one was not. `DriveCatchUp` walks
+    any follower past FOLLOW_CATCH_UP_YARDS (500.0f, mod_overseer.cpp:1713)
+    back to the leader, and `CatchUpToward` does it through
+    `_travelAims.Claim`, which fences only a pending `learn_skill` and an
+    exact vendor/banker/repair keyword - so a second traveller's errand is
+    OVERWRITTEN on the way home. That is the thing to change if two characters
+    should ever walk to two places, and it is in the module, not here.
+
+    SO THE FIX IS UNCHANGED: it changes WHO TRAVELS instead of HOW MANY
+    TRAVEL, and that is still the right shape for a TRAINER errand whatever
+    the follower rule is - a trade errand is one transaction at one counter
+    and there is nothing for the other four to do at a second one. A character
+    with an errand becomes the leader, and the other four follow it, through
     machinery that already exists and is not touched: the `lead` column,
     KeepRosterGrouped promoting it, KeepRosterFollowing re-pointing the rest.
-    The invariant survives exactly as it was: one character carries `new rpg`,
-    and it is the group leader. The family stays together and goes to the
-    trainer, which is what "the party must stay together" actually asks for.
+    The family stays together and goes to the trainer, which is what "the
+    party must stay together" actually asks for.
 
     An unlearn-only errand returns '' - nobody has to go anywhere, so nobody
     should be made to lead.
