@@ -450,7 +450,8 @@ def family_gifts(gear_rows, equipped_rows, names, keep_names=(),
     )
 
 
-def guild_gear_gifts(gear_holdings, characters, family_names, members):
+def guild_gear_gifts(gear_holdings, characters, family_names, members,
+                     position_rows=None, free_slots=None):
     """Return useful BoE gear in family-first, guild-second order.
 
     `gear.plan` owns the class, slot and upgrade judgement. This adapter keeps
@@ -471,7 +472,29 @@ def guild_gear_gifts(gear_holdings, characters, family_names, members):
     claimed = {int(grant.guid) for grant in first}
     remaining = [holding for holding in gear_holdings
                  if int(holding.guid) not in claimed]
-    return first + tuple(gear.plan(remaining, guild_chars).grants)
+    guild_grants = tuple(gear.plan(remaining, guild_chars).grants)
+    # Family grants are claims used to reserve an item, not guild gifts. The
+    # guild pass must never duplicate the family handoff writer.
+    return gear.deliverable(
+        guild_grants, position_rows=position_rows, free_slots=free_slots,
+    )
+
+
+def guild_gear_gifts_from_rows(gear_rows, equipped_rows, family_names, members,
+                               position_rows=None, free_slots=None):
+    """Parse bridge rows and apply the guild BoE policy.
+
+    Row parsing stays beside the existing family gear adapter. The bridge
+    supplies facts only; this function owns the conversion and the
+    family-first reservation before a guild recipient is considered.
+    """
+    names = [str(member.name) for member in (members or ())]
+    characters = gear.characters_from_rows(equipped_rows, names)
+    holdings = gear.holdings_from_rows(gear_rows)
+    return guild_gear_gifts(
+        holdings, characters, family_names, members,
+        position_rows=position_rows, free_slots=free_slots,
+    )
 
 
 def recipe_gifts(gear_rows, holders_by_skill, keep_names=(),

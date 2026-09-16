@@ -115,7 +115,7 @@ class GearRecipientPriorityTest(unittest.TestCase):
         return gear.CharacterState(name=name, class_id=1, level=level,
                                    equipped={"main_hand": 1})
 
-    def test_family_upgrade_wins_before_guildmate(self):
+    def test_family_upgrade_is_reserved_before_guildmate_fallback(self):
         members = [_member("Guildie", online=True, family=False)]
         grants = bag_pressure.guild_gear_gifts(
             [self._gear(holder="Ugga")],
@@ -123,8 +123,7 @@ class GearRecipientPriorityTest(unittest.TestCase):
              self._character("Guildie")],
             ["Grug"], members,
         )
-        self.assertEqual([(grant.holder, grant.taker) for grant in grants],
-                         [("Ugga", "Grug")])
+        self.assertEqual(grants.grants, ())
 
     def test_unclaimed_boe_falls_back_to_online_guildmate(self):
         members = [_member("Guildie", online=True, family=False)]
@@ -133,15 +132,15 @@ class GearRecipientPriorityTest(unittest.TestCase):
         grants = bag_pressure.guild_gear_gifts(
             [self._gear()], [self._character("Guildie")], ["Grug"], members,
         )
-        self.assertEqual(len(grants), 1)
-        self.assertEqual(grants[0].taker, "Guildie")
+        self.assertEqual(len(grants.grants), 1)
+        self.assertEqual(grants.grants[0].taker, "Guildie")
 
     def test_offline_guildmate_is_never_a_recipient(self):
         members = [_member("Guildie", online=False, family=False)]
         grants = bag_pressure.guild_gear_gifts(
             [self._gear()], [self._character("Guildie")], ["Grug"], members,
         )
-        self.assertEqual(grants, ())
+        self.assertEqual(grants.grants, ())
 
 
 class SurplusNeverBreaksTheReserveTest(unittest.TestCase):

@@ -5676,6 +5676,7 @@ class Bridge(discord.Client):
         for holder, taker, refusal in share.blocked:
             log.info("guildshare: %s stopped asking %s - %s",
                      holder, taker, refusal)
+        await self._guild_gear_share_once(names, roster)
         if not share.gifts:
             return
 
@@ -5698,6 +5699,47 @@ class Bridge(discord.Client):
                      gift.holder, gift.taker, gift.count, gift.item,
                      gift.reason)
             await self._say_guild_gift(gift)
+
+    async def _guild_gear_share_once(self, family_names: list,
+                                     roster: list) -> None:
+        """Offer unclaimed family BoE upgrades to online guildmates.
+
+        SQL remains a fact fetch. `bag_pressure.guild_gear_gifts_from_rows`
+        owns family-first recipient priority, class/slot eligibility, and the
+        observed presence and room gates. This pass deliberately shares only
+        the guild half of that result; `_hand_gear` remains the sole family
+        gear writer.
+        """
+        gear_rows = await asyncio.to_thread(
+            _fetch_surplus_gear, family_names,
+        )
+        if not gear_rows:
+            return
+        all_names = [str(member.name) for member in roster]
+        equipped = await asyncio.to_thread(_fetch_family_equipped, all_names)
+        positions = await asyncio.to_thread(_fetch_positions, all_names)
+        free_slots = await asyncio.to_thread(_fetch_free_slots, all_names)
+        plan = bag_pressure.guild_gear_gifts_from_rows(
+            gear_rows, equipped, family_names, roster,
+            position_rows=positions, free_slots=free_slots,
+        )
+        for note in plan.notes:
+            log.info("guild gear: %s", note)
+        if not plan.grants:
+            return
+        seen = await asyncio.to_thread(_recent_trade_keys, GIVE_RETRY_MINUTES)
+        fresh = []
+        for grant in plan.grants:
+            if (grant.holder, grant.taker, grant.command) in seen:
+                continue
+            if await asyncio.to_thread(_insert_gear_handoff, grant):
+                fresh.append(grant)
+        for grant in fresh:
+            log.info("guild gear: %s -> %s by %s, %s - %s",
+                     grant.holder, grant.taker, grant.verb, grant.name,
+                     grant.reason)
+        log.info("guild gear: queued %d/%d hand-off(s), %d already queued",
+                 len(fresh), len(plan.grants), len(plan.grants) - len(fresh))
 
     async def _say_guild_gift(self, gift) -> None:
         """Say it in guild chat, because the guild is who it is addressed to.
