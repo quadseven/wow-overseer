@@ -1365,11 +1365,12 @@ def _council_family() -> list:
 
 
 def _record_trade_plan(plan) -> list:
-    """Write the decision down, and return the assignments that are NEW.
+    """Write the decision down, refresh pending leases, and return NEW rows.
 
-    INSERT IGNORE against the unique key, so a plan the family reached last
-    hour and reaches again this hour is not re-decided and - the half that
-    matters - not re-announced. The scene is played once.
+    A duplicate still-planned row refreshes ``decided_at``. The six-hour
+    leadership lease therefore measures time since the bridge last observed
+    the errand, not time since it was first created. A settled duplicate is
+    left untouched, so a completed trade is never revived or re-announced.
     """
     if not plan.assignments:
         return []
@@ -1377,13 +1378,15 @@ def _record_trade_plan(plan) -> list:
     with _connect() as conn, conn.cursor() as cur:
         for assignment in plan.assignments:
             cur.execute(
-                "INSERT IGNORE INTO overseer_trade "
+                "INSERT INTO overseer_trade "
                 "(character_name, verb, skill_name, skill_id, reason) "
-                "VALUES (%s, %s, %s, %s, %s)",
+                "VALUES (%s, %s, %s, %s, %s) "
+                "ON DUPLICATE KEY UPDATE decided_at = "
+                "IF(status = 'planned', NOW(), decided_at)",
                 (assignment.character, assignment.verb, assignment.skill,
                  assignment.skill_id, assignment.reason[:2000]),
             )
-            if cur.rowcount:
+            if cur.rowcount == 1:
                 fresh.append(assignment)
     return fresh
 
