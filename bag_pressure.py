@@ -158,7 +158,8 @@ VENDOR_ERRAND_HOLD = "hold"
 VENDOR_ERRAND_RELEASE = "release"
 
 
-def vendor_errand_step(at_counter: bool, sales_outstanding: int) -> str:
+def vendor_errand_step(at_counter: bool, sales_outstanding: int,
+                       pressure: bool = False) -> str:
     """What to do with the leader's `travel_npc` this pass (infra#3708).
 
     THE ERRAND HAD NO TERMINAL PATH, AND THAT IS THE WHOLE BUG. `travel_npc` was
@@ -189,6 +190,12 @@ def vendor_errand_step(at_counter: bool, sales_outstanding: int) -> str:
     """
     if not at_counter:
         return VENDOR_ERRAND_AIM
+    # A counter reading without a queued sale is not completion while the
+    # family is still under the pressure that caused this trip.  The bridge
+    # can observe the leader at a vendor before follower sellers have arrived;
+    # releasing here would send the party back to questing with the bags full.
+    if pressure:
+        return VENDOR_ERRAND_HOLD
     # THE SAME QUESTION `stranded_errand_step` ANSWERS, ASKED IN ONE PLACE. A
     # leader standing at the counter and a follower nobody is walking differ in
     # everything EXCEPT what ends the errand, and "a quiet queue is the only

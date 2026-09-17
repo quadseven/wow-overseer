@@ -5921,8 +5921,10 @@ class Bridge(discord.Client):
         """
         leader_town = await asyncio.to_thread(_fetch_town, leader)
         outstanding = await asyncio.to_thread(_outstanding_sales, names)
+        free_slots = await asyncio.to_thread(_fetch_free_slots, names)
         step = bag_pressure.vendor_errand_step(
             bool(leader_town.vendor), outstanding,
+            pressure=bag_pressure.family_town_run_needed(free_slots),
         )
         if step == bag_pressure.VENDOR_ERRAND_HOLD:
             log.info(

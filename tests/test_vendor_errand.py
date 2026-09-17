@@ -117,6 +117,24 @@ class TheStepEndsAnErrandOnlyWhenItsQueueIsQuiet(unittest.TestCase):
             bag_pressure.VENDOR_ERRAND_RELEASE,
         )
 
+    def test_a_pressured_family_holds_even_when_the_leaders_queue_is_empty(self):
+        """The leader can arrive before follower sellers; pressure means the
+        town trip is not complete until those sellers have had a chance."""
+        self.assertEqual(
+            bag_pressure.vendor_errand_step(at_counter=True,
+                                            sales_outstanding=0,
+                                            pressure=True),
+            bag_pressure.VENDOR_ERRAND_HOLD,
+        )
+
+    def test_pressure_does_not_change_an_errand_still_on_the_road(self):
+        self.assertEqual(
+            bag_pressure.vendor_errand_step(at_counter=False,
+                                            sales_outstanding=0,
+                                            pressure=True),
+            bag_pressure.VENDOR_ERRAND_AIM,
+        )
+
     def test_an_unreadable_queue_holds_rather_than_releases(self):
         """NOT KNOWING IS A REASON TO HOLD. -1 is what the bridge reports when
         the command table is missing entirely. Reading that as "finished" is
