@@ -221,11 +221,15 @@ class EveryTownPassAsksAtTheSameDoor(unittest.TestCase):
                 self.assertNotIn("_write_trade_errand", body)
                 self.assertNotIn("UPDATE overseer_roster", body)
 
-    def test_exactly_two_callers_write_the_column(self):
-        """The door, and the profession errand - which is not a town errand and
-        must not be leased or arbitrated (see the next class)."""
+    def test_exactly_three_callers_write_the_column(self):
+        """The door, the profession errand and auction hold.
+
+        The profession errand is not a town errand and must not be leased or
+        arbitrated (see the next class). The auction hold reasserts the same
+        guarded keyword while listing rows are still pending.
+        """
         calls = re.findall(r"to_thread\(\s*_write_trade_errand", _source())
-        self.assertEqual(2, len(calls))
+        self.assertEqual(3, len(calls))
         self.assertIn("to_thread(_write_trade_errand",
                       _statements("    async def _send_trade_errand("))
         self.assertIn("_write_trade_errand",

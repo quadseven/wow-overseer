@@ -5024,6 +5024,7 @@ class Bridge(discord.Client):
             )
             return
         step = await self._settle_auction_errand(names, leader)
+        await self._auction_sales_once(names, leader, step)
 
         # NOT `_fetch_craft_spells`, WHICH FILTERS job='craft' (infra#3734).
         # `craft_rhythm` moves the family to MODE_GATHER the moment any of
@@ -5104,6 +5105,86 @@ class Bridge(discord.Client):
             "and are not craftable until a mailbox pass collects them.",
             queued, spent, len(shoppers), leader, aimed,
         )
+
+    async def _auction_sales_once(self, names: list, leader: str,
+                                  step: str) -> None:
+        """List safe surplus BoE gear at the leader's reachable house.
+
+        `auction.plan_sales` owns the sale judgement. This adapter only reads
+        facts, supplies current market prices, and queues its returned rows.
+        """
+        gear_rows = await asyncio.to_thread(_fetch_surplus_gear, names)
+        if not gear_rows:
+            return
+        equipped = await asyncio.to_thread(_fetch_family_equipped, names)
+        fits = bag_pressure.family_fits(gear_rows, equipped, names)
+        candidates = []
+        entries = set()
+        for row in gear_rows:
+            try:
+                guid = int(row["item_guid"])
+                if fits.get(guid) != disposition.FIT_NOBODY:
+                    continue
+                if bag_pressure.item_binding(row) != disposition.BIND_ON_EQUIP:
+                    continue
+                entry = int(row["entry"])
+                entries.add(entry)
+                candidates.append({
+                    "holder": row["holder"], "item_guid": guid,
+                    "entry": entry, "label": row.get("name", ""),
+                    "quality": int(row.get("quality", 0) or 0),
+                    "binding": disposition.BIND_ON_EQUIP,
+                    "quest_item": False,
+                    "sell_price": int(row.get("sell_price", 0) or 0),
+                })
+            except (KeyError, TypeError, ValueError):
+                continue
+        if not candidates:
+            return
+        counter = await asyncio.to_thread(_fetch_auctioneer, leader)
+        if not counter:
+            if step == bag_pressure.VENDOR_ERRAND_AIM and await self._claim_town_slot(
+                    "auction", leader, auction.AUCTIONEER_ROLE):
+                log.info("auction: leader=%s aimed to list %d surplus BoE item(s)",
+                         leader, len(candidates))
+            return
+        teams = await asyncio.to_thread(_fetch_teams, [leader])
+        house = auction.reachable_house(
+            teams.get(leader, ""), int(counter.get("faction") or 0))
+        if not house:
+            log.warning("auction: no reachable house for leader=%s", leader)
+            return
+        listings = await asyncio.to_thread(
+            _fetch_auction_listings, sorted(entries), house)
+        market = {}
+        for listing in listings:
+            market[listing.entry] = min(
+                market.get(listing.entry, listing.per_unit), listing.per_unit)
+        for candidate in candidates:
+            candidate["market_price"] = market.get(candidate["entry"], 0)
+        sales = auction.plan_sales(candidates)
+        seen = await asyncio.to_thread(_recent_auction_keys, GIVE_RETRY_MINUTES)
+        queued = 0
+        for sale in sales:
+            if (sale.candidate.holder, sale.command) in seen:
+                continue
+            if await asyncio.to_thread(_insert_auction,
+                                       sale.candidate.holder, sale.command):
+                queued += 1
+                log.info("auction: %s %s - %s", sale.candidate.holder,
+                         sale.command, sale.candidate.label or "surplus BoE")
+        if queued:
+            # Keep the leader at the counter while the world executor answers
+            # the listing rows. A completed purchase can release the old aim
+            # before this pass discovers a new sale, so reassert the same
+            # guarded keyword whenever work was actually queued.
+            await asyncio.to_thread(
+                _write_trade_errand,
+                professions.Errand(character=leader,
+                                   travel_npc=auction.AUCTIONEER_ROLE),
+            )
+        log.info("auction: listed %d surplus BoE item(s) at house %s",
+                 queued, house)
 
     async def _auction_shortfall(self, shoppers: dict) -> tuple:
         """Who is short of what, counting the bags and the mail separately.
