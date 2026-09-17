@@ -592,7 +592,7 @@ class TheErrandIsBounded(unittest.TestCase):
         # mark has to restart the clock.
         code = _code(_drive())
         self.assertRegex(code, r"OverseerDecisions::Ratchet\(\s*state\.progress,"
-                               r"\s*distance,\s*std::time\(nullptr\),\s*TRAVEL_RATCHET\)")
+                               r"\s*distance,\s*std::time\(nullptr\),\s*limits\)")
         self.assertRegex(_code(_source()),
                          r"RatchetLimits TRAVEL_RATCHET\{\s*"
                          r"OverseerDecisions::RatchetReading::DistanceToTarget,\s*"
