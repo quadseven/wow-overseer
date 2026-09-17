@@ -26,7 +26,11 @@ class BagPressureTests(unittest.TestCase):
     def test_any_family_member_at_the_floor_triggers_town_run(self):
         self.assertTrue(family_town_run_needed({"Grug": 0, "Ugga": 10}))
         self.assertTrue(family_town_run_needed({"Grug": 2}))
-        self.assertFalse(family_town_run_needed({"Grug": 3, "Ugga": 10}))
+        # mod-overseer's town trip starts at three free slots. The bridge must
+        # produce its sale rows at the same boundary or the family reaches the
+        # vendor and waits through the whole dwell with nothing to execute.
+        self.assertTrue(family_town_run_needed({"Grug": 3, "Ugga": 10}))
+        self.assertFalse(family_town_run_needed({"Grug": 4, "Ugga": 10}))
 
     def test_unknown_family_capacity_does_not_trigger_a_blind_trip(self):
         self.assertFalse(family_town_run_needed({}))

@@ -127,8 +127,14 @@ def town_run_needed(used: int, slots: int, minimum_free: int = 2,
     return free <= minimum_free or used * 100 >= slots * pressure_percent
 
 
+# The world-side town trip uses the same boundary. If this is lower, the module
+# can walk the family to a vendor and hold it there while the bridge refuses to
+# write the sale rows that are the trip's transaction.
+TOWN_RUN_FREE_SLOTS = 3
+
+
 def family_town_run_needed(free_slots: dict[str, int],
-                           minimum_free: int = 2) -> bool:
+                           minimum_free: int = TOWN_RUN_FREE_SLOTS) -> bool:
     """Return whether any measured family member needs a vendor visit.
 
     The bridge's capacity query returns free slots rather than used and total
