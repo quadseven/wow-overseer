@@ -4525,6 +4525,37 @@ class Bridge(discord.Client):
         log.info("%s", townslot.report(decision))
         return True
 
+    async def _idle_town_slot(self, claimant: str) -> bool:
+        """Ask for the family's traveller to be idle, with no successor aim."""
+        leader = await asyncio.to_thread(_head_now)
+        column = await asyncio.to_thread(_current_travel_npc, leader)
+        now = time.monotonic()
+        decision = self._town_slot.want_idle(
+            claimant=claimant, character=leader, leader=leader,
+            column=column, now=now,
+        )
+        if not decision.granted:
+            log.info("%s", townslot.report(decision))
+            return False
+        if decision.release is None:
+            self._town_slot.settle(decision, True, now)
+            log.debug("%s", townslot.report(decision))
+            return True
+        released = await asyncio.to_thread(
+            _release_trade_errand, decision.release.character,
+            decision.release.aim,
+        )
+        self._town_slot.settle(decision, released, now)
+        if released:
+            log.info("%s", townslot.report(decision))
+            return True
+        log.info(
+            "town slot: %s was no longer carrying %r, so nothing was handed "
+            "back when %s asked for an idle traveller",
+            decision.release.character, decision.release.aim, claimant,
+        )
+        return False
+
     async def _aim_at_reagent_vendor(self, needs: list) -> None:
         """Walk the family to a vendor that actually stocks one of the
         outstanding reagents (infra#3692).
@@ -4800,6 +4831,9 @@ class Bridge(discord.Client):
         # skills, fetched for the rhythm decision itself.
         log.info("raidcraft: %s", raidcraft.report(names, skills))
 
+        if plan.mode == craft_rhythm.MODE_GATHER:
+            await self._idle_town_slot("craft_rhythm")
+
         if not plan.changed:
             return
 
@@ -4809,15 +4843,11 @@ class Bridge(discord.Client):
         )
 
         # A GATHERING ORDER THAT CANNOT MOVE ANYBODY IS SAID OUT LOUD
-        # (infra#3728). mod-overseer's `TravelHoldsTheWheel` stands the quest
-        # drive down for any character carrying a non-empty `travel_npc` it can
-        # act on - "'{}' is on a travel errand ({}) - the quest drive stands
-        # down until it lands" - so a family told to gather while the economy
-        # passes still hold that column simply does not roam. That is not this
-        # pass's to fix and it must not try: writing the column is exactly the
-        # second-writer mistake above. Naming it is the difference between a
-        # person seeing "we switched to quest and nothing happened" and seeing
-        # why, which cost hours the last time it went unsaid.
+        # (infra#3728). The idle request above leaves a live lease alone and
+        # only hands a stale economy errand back through the same guarded
+        # release path as every town pass. Until that bound is reached,
+        # mod-overseer's `TravelHoldsTheWheel` still stands the quest drive
+        # down, so name the aim that is keeping the family from roaming.
         if plan.mode == craft_rhythm.MODE_GATHER:
             held = {name: aim for name, aim
                     in (await asyncio.to_thread(_standing_travel_aims)).items()

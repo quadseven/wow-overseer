@@ -502,6 +502,12 @@ class TheCallerIsWiredAndWritesOnlyAJobMode(unittest.TestCase):
             with self.subTest(forbidden=forbidden):
                 self.assertNotIn(forbidden, self.body)
 
+    def test_gathering_asks_the_town_slot_for_idleness(self):
+        self.assertIn('self._idle_town_slot("craft_rhythm")', self.body)
+        self.assertLess(self.body.index('self._idle_town_slot("craft_rhythm")'),
+                        self.body.index("if not plan.changed:"),
+                        "an unchanged gather cycle must renew its idle want")
+
     def test_it_goes_through_the_sanctioned_write_path(self):
         """`_set_job` is where `jobs.why_not` is asked. A second writer next to
         it is exactly the omission infra#3338 was filed about."""

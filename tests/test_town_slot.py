@@ -344,6 +344,23 @@ class TheDoorDoesThreeThingsInOneOrder(unittest.TestCase):
         self.assertNotIn("travel_npc =", self.code)
 
 
+class TheIdleDoorClearsWithoutAReplacement(unittest.TestCase):
+
+    def setUp(self):
+        self.code = _statements("    async def _idle_town_slot(")
+
+    def test_it_asks_the_same_ledger_for_an_idle_verdict(self):
+        self.assertIn("self._town_slot.want_idle(", self.code)
+
+    def test_it_compares_and_swaps_the_exact_stale_aim(self):
+        self.assertIn(
+            "_release_trade_errand, decision.release.character,\n"
+            "            decision.release.aim,", self.code)
+
+    def test_it_never_writes_a_successor(self):
+        self.assertNotIn("_write_trade_errand", self.code)
+
+
 class TheSlotIsHeldForTheLifeOfTheProcess(unittest.TestCase):
 
     def test_the_ledger_is_built_once_on_the_client(self):
@@ -392,5 +409,5 @@ class TheStarvationLineIsGreppable(unittest.TestCase):
     def test_the_preemption_sentence_cites_the_issue(self):
         """So the line that proves this shipped can be found by issue number."""
         module = (PACKAGE / "townslot.py").read_text(encoding="utf-8")
-        preempt = module[module.index("verdict=SLOT_PREEMPT"):]
-        self.assertIn("infra#3703", preempt[:600])
+        self.assertIn(
+            'issue = "infra#3728" if clearing else "infra#3703"', module)

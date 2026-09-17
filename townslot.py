@@ -134,6 +134,7 @@ SLOT_TAKE = "take"
 SLOT_HOLD = "hold"
 SLOT_WAIT = "wait"
 SLOT_PREEMPT = "preempt"
+SLOT_CLEAR = "clear"
 SLOT_NOT_THE_LEADER = "not the leader"
 
 # The verdicts under which the caller ends up with the traveller. `SLOT_HOLD`
@@ -141,7 +142,7 @@ SLOT_NOT_THE_LEADER = "not the leader"
 # it to say, and re-writing it makes mod-overseer's aim book erase its own state
 # and read a standing errand as a brand new one, releasing and re-taking the
 # counter hold every time (infra#3708).
-GRANTED = (SLOT_TAKE, SLOT_HOLD, SLOT_PREEMPT)
+GRANTED = (SLOT_TAKE, SLOT_HOLD, SLOT_PREEMPT, SLOT_CLEAR)
 
 
 @dataclasses.dataclass(frozen=True)
@@ -358,6 +359,40 @@ def decide(*, claimant: str, character: str, aim: str, leader: str,
     )
 
 
+def decide_idle(*, claimant: str, character: str, leader: str, column: str,
+                holder: Holder | None, wants, now: float,
+                lease: float = LEASE_SECONDS,
+                orphan_lease: float = ORPHAN_LEASE_SECONDS,
+                want_fresh: float = WANT_FRESH_SECONDS,
+                releasable=None) -> Decision:
+    """May this drive have an empty travel column?"""
+    if releasable is None:
+        def releasable(_aim):
+            return False
+    if character != leader:
+        return Decision(
+            verdict=SLOT_NOT_THE_LEADER,
+            reason="%s asked to idle %s, who is not the leader" %
+                   (claimant, character),
+            claimant=claimant,
+            character=character,
+        )
+    holder = _reconcile(holder, leader=leader, column=column, now=now)
+    if holder is None:
+        return Decision(
+            verdict=SLOT_CLEAR,
+            reason="%s has the idle traveller; the column was already free" %
+                   claimant,
+            claimant=claimant,
+            character=character,
+        )
+    return _held_column(
+        claimant=claimant, character=character, aim="", holder=holder,
+        wants=wants, now=now, lease=lease, orphan_lease=orphan_lease,
+        want_fresh=want_fresh, releasable=releasable, clearing=True,
+    )
+
+
 def _free_column(*, claimant: str, character: str, aim: str, wants,
                  last_served, now: float, want_fresh: float) -> Decision:
     """Nobody is holding the traveller. Is it this pass's turn to take it?
@@ -409,7 +444,7 @@ def _free_column(*, claimant: str, character: str, aim: str, wants,
 
 def _held_column(*, claimant: str, character: str, aim: str, holder: Holder,
                  wants, now: float, lease: float, orphan_lease: float,
-                 want_fresh: float, releasable) -> Decision:
+                 want_fresh: float, releasable, clearing: bool = False) -> Decision:
     """Somebody else has the traveller. Wait, or take it off them?
 
     THE ONLY PLACE A PREEMPTION IS DECIDED, and it takes three things to agree:
@@ -467,13 +502,14 @@ def _held_column(*, claimant: str, character: str, aim: str, holder: Holder,
             character=character,
         )
 
+    issue = "infra#3728" if clearing else "infra#3703"
     return Decision(
-        verdict=SLOT_PREEMPT,
+        verdict=SLOT_CLEAR if clearing else SLOT_PREEMPT,
         reason="%s takes the traveller %s from %s: %r has held the family's "
                "one travel column for %ds, past its %ds lease, and an errand "
-               "that cannot finish must not hold it for ever (infra#3703)"
+               "that cannot finish must not hold it for ever (%s)"
                % (claimant, character, owner, holder.aim, int(held_for),
-                  int(allowed)),
+                  int(allowed), issue),
         claimant=claimant,
         aim=aim,
         character=character,
@@ -566,6 +602,21 @@ class Slot:
             self._note_wait(claimant, now)
         return decision
 
+    def want_idle(self, *, claimant: str, character: str, leader: str,
+                  column: str, now: float) -> Decision:
+        """Ask for the travel column to become empty, without a successor."""
+        self.holder = _reconcile(self.holder, leader=leader, column=column,
+                                 now=now)
+        decision = decide_idle(
+            claimant=claimant, character=character, leader=leader,
+            column=column, holder=self.holder, wants=self.wants, now=now,
+            lease=self.lease, orphan_lease=self.orphan_lease,
+            want_fresh=self.want_fresh, releasable=self.releasable,
+        )
+        if decision.verdict == SLOT_WAIT:
+            self._note_wait(claimant, now)
+        return decision
+
     def settle(self, decision: Decision, taken: bool, now: float) -> None:
         """Record what the world did with the decision.
 
@@ -584,6 +635,11 @@ class Slot:
             # errand nobody is on.
             self.holder = None
             self._note_wait(decision.claimant, now)
+            return
+        if decision.verdict == SLOT_CLEAR:
+            self.holder = None
+            self._wants.pop(decision.claimant, None)
+            self._served[decision.claimant] = now
             return
         name = decision.claimant
         since = decision.inherit_since if decision.inherit_since is not None else now

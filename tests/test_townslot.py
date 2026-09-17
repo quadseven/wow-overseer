@@ -382,6 +382,64 @@ class AnErrandWithNoOwnerGetsTheWorldsOwnClock(unittest.TestCase):
         self.assertGreaterEqual(townslot.LEASE_SECONDS, 300.0)
 
 
+class AStaleErrandCanYieldToAnIdleDrive(unittest.TestCase):
+
+    def test_an_orphaned_vendor_is_cleared_after_the_worlds_backstop(self):
+        slot = townslot.Slot(releasable=economy)
+        waiting = slot.want_idle(
+            claimant="craft_rhythm", character="Grug", leader="Grug",
+            column="vendor", now=0.0,
+        )
+        self.assertEqual(townslot.SLOT_WAIT, waiting.verdict)
+
+        clear = slot.want_idle(
+            claimant="craft_rhythm", character="Grug", leader="Grug",
+            column="vendor", now=townslot.ORPHAN_LEASE_SECONDS,
+        )
+        self.assertEqual(townslot.SLOT_CLEAR, clear.verdict)
+        self.assertEqual(holder("", "vendor", 0.0), clear.release)
+        self.assertFalse(clear.writes)
+        self.assertIn("infra#3728", clear.reason)
+
+    def test_a_live_vendor_inside_its_lease_is_preserved(self):
+        slot = townslot.Slot(releasable=economy)
+        taken = slot.want(
+            claimant="economy", character="Grug", aim="vendor",
+            leader="Grug", column="", retaskable=("", "vendor"), now=0.0,
+        )
+        slot.settle(taken, True, 0.0)
+
+        idle = slot.want_idle(
+            claimant="craft_rhythm", character="Grug", leader="Grug",
+            column="vendor", now=townslot.LEASE_SECONDS - 1,
+        )
+        self.assertEqual(townslot.SLOT_WAIT, idle.verdict)
+        self.assertIsNone(idle.release)
+
+    def test_a_profession_errand_is_never_cleared(self):
+        slot = townslot.Slot(releasable=economy)
+        idle = slot.want_idle(
+            claimant="craft_rhythm", character="Grug", leader="Grug",
+            column="profession trainer", now=99999.0,
+        )
+        self.assertEqual(townslot.SLOT_WAIT, idle.verdict)
+        self.assertIsNone(idle.release)
+
+    def test_settling_a_clear_records_an_empty_slot(self):
+        slot = townslot.Slot(releasable=economy)
+        slot.want_idle(
+            claimant="craft_rhythm", character="Grug", leader="Grug",
+            column="vendor", now=0.0,
+        )
+        clear = slot.want_idle(
+            claimant="craft_rhythm", character="Grug", leader="Grug",
+            column="vendor", now=townslot.ORPHAN_LEASE_SECONDS,
+        )
+        slot.settle(clear, True, townslot.ORPHAN_LEASE_SECONDS)
+        self.assertIsNone(slot.holder)
+        self.assertEqual([], slot.wants)
+
+
 class TheRefinementTheColumnAlreadyAllows(unittest.TestCase):
     """`_retaskable_from` lets a named creature entry be written over a plain
     `vendor`, because they are the same errand at two resolutions (infra#3692).
@@ -645,9 +703,10 @@ class TheLedgerLearnsFromTheColumn(unittest.TestCase):
 
 class TheDecisionSaysWhatToDoWithIt(unittest.TestCase):
 
-    def test_granted_covers_exactly_the_three_ways_to_end_up_with_it(self):
+    def test_granted_covers_every_way_to_end_up_with_or_clear_it(self):
         self.assertEqual(
-            (townslot.SLOT_TAKE, townslot.SLOT_HOLD, townslot.SLOT_PREEMPT),
+            (townslot.SLOT_TAKE, townslot.SLOT_HOLD, townslot.SLOT_PREEMPT,
+             townslot.SLOT_CLEAR),
             townslot.GRANTED)
 
     def test_a_hold_is_granted_but_writes_nothing(self):
