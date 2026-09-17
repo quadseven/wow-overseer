@@ -392,6 +392,14 @@ def reachable_house(team: str, auctioneer_faction: int) -> int:
     return TEAM_HOUSE.get(str(team or "").lower(), 0)
 
 
+def auctioneer_map_available(map_id: int | None,
+                             available_maps: set[int] | frozenset[int]) -> bool:
+    """Whether an auctioneer trip can resolve on the leader's current map."""
+    if map_id is None:
+        return False
+    return int(map_id) in {int(value) for value in available_maps}
+
+
 # ---------------------------------------------------------------------------
 # WHAT EACH RECIPE CONSUMES THAT NOBODY SELLS - AND IT IS `craft_rhythm`'s
 # TABLE, NOT A SECOND ONE.

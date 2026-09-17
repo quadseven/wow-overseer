@@ -5054,6 +5054,27 @@ class Bridge(discord.Client):
             )
             return
 
+        # ResolveTravelTarget can only search auctioneer spawns on the
+        # leader's current map. Do not keep re-arming an aim that the module
+        # must release when the map has no auctioneer at all.
+        live_maps = await asyncio.to_thread(_fetch_live_maps, [leader])
+        auctioneer_maps = await asyncio.to_thread(_fetch_auctioneer_maps)
+        leader_map = live_maps.get(leader) if live_maps is not None else None
+        if (live_maps is not None and leader_map is None) or (
+            auctioneer_maps is not None and
+            not auction.auctioneer_map_available(leader_map, auctioneer_maps)
+        ):
+            if step != bag_pressure.VENDOR_ERRAND_RELEASE:
+                await asyncio.to_thread(
+                    _release_trade_errand, leader, auction.AUCTIONEER_ROLE,
+                )
+            log.info(
+                "auction: no auctioneer spawn is available on leader=%s map=%s; "
+                "skipping the trip instead of re-arming a doomed aim",
+                leader, leader_map if leader_map is not None else "unknown",
+            )
+            return
+
         # THE AIM, AND ITS RESULT IS READ RATHER THAN DISCARDED (infra#3464).
         # A leader already carrying another economy errand is a real and
         # expected refusal - ECONOMY_ERRANDS only retasks an idle traveller -
@@ -11254,6 +11275,26 @@ _AUCTIONEER_IN_REACH_SQL = (
 # the game, and `travel.ROLES` already carries the same flag under its own
 # keyword so the two cannot silently mean different things.
 NPC_FLAG_AUCTIONEER = 0x200000
+
+_AUCTIONEER_MAPS_SQL = (
+    "SELECT DISTINCT cr.map AS map_id "
+    "FROM acore_world.creature cr "
+    "JOIN acore_world.creature_template ct ON ct.entry = cr.id "
+    "WHERE (ct.npcflag & %s) <> 0"
+)
+
+
+def _fetch_auctioneer_maps() -> set[int] | None:
+    """Return maps with an auctioneer, or None when the read is unavailable."""
+    with _connect() as conn, conn.cursor() as cur:
+        try:
+            cur.execute(_AUCTIONEER_MAPS_SQL, (NPC_FLAG_AUCTIONEER,))
+            return {int(row["map_id"]) for row in cur.fetchall()}
+        except pymysql.err.MySQLError as exc:
+            if exc.args and exc.args[0] in (1054, 1146):
+                log.warning("auction: cannot read auctioneer spawns by map")
+                return None
+            raise
 
 
 def _fetch_auctioneer(name: str) -> dict | None:

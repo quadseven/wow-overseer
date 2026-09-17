@@ -175,6 +175,15 @@ class HouseTest(unittest.TestCase):
     def test_an_unknown_team_at_a_faction_counter_fails_closed(self):
         self.assertEqual(auction.reachable_house("", 12), 0)
 
+    def test_map_without_an_auctioneer_is_not_a_trip_target(self):
+        self.assertFalse(auction.auctioneer_map_available(1, {0, 530}))
+
+    def test_map_with_an_auctioneer_remains_eligible(self):
+        self.assertTrue(auction.auctioneer_map_available(0, {0, 530}))
+
+    def test_unknown_map_fails_closed(self):
+        self.assertFalse(auction.auctioneer_map_available(None, {0}))
+
     def test_house_zero_keeps_no_listing_at_all(self):
         # Which is what makes failing closed actually close: an unknown team
         # buys nothing rather than buying from a pool it may not reach.
