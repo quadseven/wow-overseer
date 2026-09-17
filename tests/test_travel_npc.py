@@ -860,7 +860,7 @@ class TheErrandStateIsNotOutlivedByItsClock(unittest.TestCase):
         restarted before it could ever run out. This one is anchored to a
         PLACE, which is why it fires."""
         code = _code(_drive())
-        self.assertEqual(10, code.count("_travelAims.Release(name)"))
+        self.assertEqual(11, code.count("_travelAims.Release(name)"))
         self.assertNotIn("_state.erase(", code)
         # Stronger than "the drive does not erase": it cannot. The memory is a
         # private member of the book, so the only way out is Release.
