@@ -6796,6 +6796,36 @@ class Bridge(discord.Client):
         names = sorted((await asyncio.to_thread(_protected_guids)).values())
         if not names or await self._mid_run(names):
             return
+        setup = await asyncio.to_thread(_fetch_guild_bank_setup, names)
+        if setup:
+            actions = guildbank.plan_setup(
+                leader=await asyncio.to_thread(_head_now),
+                purchased_tabs=setup["purchased_tabs"],
+                rank_ids=setup["rank_ids"],
+                deposit_rank_ids=setup["deposit_rank_ids"],
+            )
+            if actions:
+                leader = await asyncio.to_thread(_head_now)
+                positions = await asyncio.to_thread(
+                    _fetch_positions, sorted({leader}))
+                where = positions.get(leader)
+                spawn = await asyncio.to_thread(_nearest_vault, leader)
+                vault = travel.vault_aim(spawn, where.get("map_id") if where else None)
+                if vault.aim:
+                    aimed = await self._claim_town_slot("guild bank", leader, vault.aim)
+                    at_the_vault = travel.spawn_in_reach(spawn, where, TOWN_COUNTER_YARDS)
+                    if aimed or at_the_vault:
+                        seen = await asyncio.to_thread(_recent_guild_setup_keys, GIVE_RETRY_MINUTES)
+                        action = next((a for a in actions
+                                       if (leader, a.command) not in seen), None)
+                        if action:
+                            await asyncio.to_thread(_insert_guild, leader,
+                                                    action.command, "guildbank-setup")
+                            log.info("guild bank setup: queued %s for %s",
+                                     action.command, leader)
+                        return
+                log.info("guild bank setup: aiming %s at %s", leader, vault.aim)
+                return
         members = await asyncio.to_thread(_fetch_guild_money, names)
         deposits = guildbank.plan_deposits(members)
         if not deposits:
@@ -10031,6 +10061,68 @@ def _fetch_guild_money(names: list) -> list:
             names,
         )
         return [dict(row) for row in cur.fetchall()]
+
+
+def _fetch_guild_bank_setup(names: list) -> dict | None:
+    """Read the persisted guild-bank setup state, or None when unavailable."""
+    if not names:
+        return None
+    marks = ",".join(["%s"] * len(names))
+    with _connect() as conn, conn.cursor() as cur:
+        try:
+            cur.execute(
+                "SELECT gm.guildid FROM guild_member gm "
+                "JOIN characters c ON c.guid = gm.guid "
+                "WHERE c.name IN (%s) ORDER BY gm.guildid LIMIT 1" % marks,
+                names,
+            )
+            guild = cur.fetchone()
+            if not guild:
+                return None
+            cur.execute(
+                "SELECT table_name FROM information_schema.tables "
+                "WHERE table_schema = DATABASE() AND table_name IN "
+                "('guild_bank_tab','guild_bank_right','guild_rank')"
+            )
+            if len(cur.fetchall()) != 3:
+                return None
+            guild_id = guild["guildid"]
+            cur.execute("SELECT COUNT(*) AS n FROM guild_bank_tab WHERE guildid = %s",
+                        (guild_id,))
+            purchased = int(cur.fetchone()["n"])
+            cur.execute("SELECT rid FROM guild_rank WHERE guildid = %s ORDER BY rid",
+                        (guild_id,))
+            rank_ids = tuple(int(row["rid"]) for row in cur.fetchall())
+            cur.execute(
+                "SELECT rid FROM guild_bank_right WHERE guildid = %s "
+                "AND TabId = 0 AND (gbright & 3) = 3",
+                (guild_id,),
+            )
+            deposit_ranks = tuple(int(row["rid"]) for row in cur.fetchall())
+            return {"purchased_tabs": purchased, "rank_ids": rank_ids,
+                    "deposit_rank_ids": deposit_ranks}
+        except pymysql.err.MySQLError as exc:
+            if exc.args and exc.args[0] in (1054, 1146):
+                log.warning("guild bank setup tables are unavailable")
+                return None
+            raise
+
+
+def _recent_guild_setup_keys(minutes: int) -> set[tuple[str, str]]:
+    """Commands already queued for tab purchase or rank setup."""
+    with _connect() as conn, conn.cursor() as cur:
+        try:
+            cur.execute(
+                "SELECT target_name, command FROM overseer_command "
+                "WHERE kind = 'guild' AND created_at > NOW() - INTERVAL %s MINUTE "
+                "AND (command = 'bank buy-tab' OR command LIKE 'bank grant-deposit %')",
+                (int(minutes),),
+            )
+        except pymysql.err.MySQLError as exc:
+            if exc.args and exc.args[0] in (1054, 1146, 1265):
+                return set()
+            raise
+        return {(row["target_name"], row["command"]) for row in cur.fetchall()}
 
 
 # The nearest Guild Vault on the map a character is STANDING ON.

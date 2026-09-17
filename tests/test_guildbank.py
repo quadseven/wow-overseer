@@ -867,5 +867,49 @@ class TheDepositQueueWaitsForTheWalkTests(unittest.TestCase):
         self.assertIn("IT IS THE LEADER'S DISTANCE", head)
 
 
+class BankSetupPlannerTests(unittest.TestCase):
+    def test_missing_tab_is_bought_by_the_leader(self):
+        self.assertEqual(
+            (guildbank.SetupAction("Grug", "bank buy-tab"),),
+            guildbank.plan_setup(leader="Grug", purchased_tabs=0,
+                                 rank_ids=(0, 1, 2), deposit_rank_ids=()),
+        )
+
+    def test_existing_tab_opens_only_missing_non_master_ranks(self):
+        self.assertEqual(
+            (
+                guildbank.SetupAction("Grug", "bank grant-deposit rank:2"),
+                guildbank.SetupAction("Grug", "bank grant-deposit rank:4"),
+            ),
+            guildbank.plan_setup(leader="Grug", purchased_tabs=1,
+                                 rank_ids=(0, 1, 2, 4), deposit_rank_ids=(1,)),
+        )
+
+    def test_invalid_leader_fails_closed(self):
+        self.assertEqual((), guildbank.plan_setup(leader="", purchased_tabs=0))
+
+
+class BankSetupBridgeTests(unittest.TestCase):
+    def setUp(self):
+        self.source = BRIDGE.read_text(encoding="utf-8")
+
+    def test_setup_reads_all_tables_and_handles_old_realms(self):
+        body = self.source[self.source.index("def _fetch_guild_bank_setup("):]
+        body = body[:body.index("\ndef _recent_guild_setup_keys")]
+        self.assertIn("information_schema.tables", body)
+        self.assertIn("guild_bank_tab", body)
+        self.assertIn("guild_bank_right", body)
+        self.assertIn("guild_rank", body)
+        self.assertIn("1146", body)
+
+    def test_setup_pass_uses_new_module_verbs(self):
+        body = self.source[self.source.index("async def _guild_bank_once("):]
+        self.assertIn("plan_setup", body)
+        self.assertIn("_recent_guild_setup_keys", body)
+        self.assertIn("guildbank-setup", body)
+        self.assertIn("bank buy-tab", self.source)
+        self.assertIn("bank grant-deposit", self.source)
+
+
 if __name__ == "__main__":
     unittest.main()

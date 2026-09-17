@@ -119,6 +119,39 @@ class Deposit:
     copper: int
 
 
+@dataclass(frozen=True)
+class SetupAction:
+    """One guild-bank setup command for the already surveyed leader."""
+
+    target: str
+    command: str
+
+
+def plan_setup(*, leader: str, purchased_tabs: int,
+               rank_ids: tuple[int, ...] = (),
+               deposit_rank_ids: tuple[int, ...] = ()) -> tuple[SetupAction, ...]:
+    """Plan the one-time tab and deposit-rights setup, without doing I/O.
+
+    Tab 0 is bought by the guild master from that character's purse. Once it
+    exists, the same master opens tab 0 to every non-master rank that lacks the
+    deposit right. The returned commands are idempotent when the caller reads
+    the persisted state before planning, and malformed state fails closed.
+    """
+    if not isinstance(leader, str) or not leader.strip():
+        return ()
+    if not isinstance(purchased_tabs, int) or purchased_tabs < 0:
+        return ()
+    if purchased_tabs == 0:
+        return (SetupAction(leader, "bank buy-tab"),)
+    try:
+        ranks = sorted({int(r) for r in rank_ids if int(r) > 0})
+        granted = {int(r) for r in deposit_rank_ids if int(r) > 0}
+    except (TypeError, ValueError):
+        return ()
+    return tuple(SetupAction(leader, f"bank grant-deposit rank:{rid}")
+                 for rid in ranks if rid not in granted)
+
+
 def plan_deposits(members: list[dict], *, guild_has_tab: bool = False) -> list[Deposit]:
     """One Deposit per character holding more than the reserve, or none.
 
