@@ -216,6 +216,21 @@ class TheRowsCarryWhatThePlannerReads(unittest.TestCase):
         self.assertIn("overseer_snapshot", sql)
         self.assertIn("updated_at >", sql)
 
+    def test_counter_query_requires_three_dimensional_reachability(self):
+        """A vendor below or above the leader is not an interactable counter.
+
+        The core sale path checks live 3D interaction. The bridge must not
+        queue a transaction from an X/Y-only match that the core will reject.
+        """
+        src = _source()
+        sql = src[src.index("_TOWN_COUNTERS_SQL = ("):src.index("_TOWN_WORN_SQL = (")]
+        self.assertIn("ABS(cr.position_z - s.pos_z) <= %s", sql)
+        fetch = _code("def _fetch_town(leader: str)")
+        self.assertIn(
+            "(TOWN_COUNTER_YARDS, TOWN_COUNTER_YARDS, TOWN_COUNTER_YARDS,",
+            fetch,
+        )
+
 
 class TheRowIsTheRowTheExecutorReads(unittest.TestCase):
     def test_only_kinds_that_have_an_executor_are_written(self):

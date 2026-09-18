@@ -10987,6 +10987,7 @@ _TOWN_COUNTERS_SQL = (
     "FROM overseer_snapshot s "
     "JOIN acore_world.creature cr ON cr.map = s.map_id "
     "AND ABS(cr.position_x - s.pos_x) <= %s AND ABS(cr.position_y - s.pos_y) <= %s "
+    "AND ABS(cr.position_z - s.pos_z) <= %s "
     "JOIN acore_world.creature_template ct ON ct.entry = cr.id "
     "LEFT JOIN acore_world.npc_vendor nv ON nv.entry = cr.id "
     "WHERE s.name = %s AND s.updated_at > NOW() - INTERVAL 120 SECOND "
@@ -11921,7 +11922,8 @@ def _fetch_town(leader: str):
         try:
             cur.execute(
                 _TOWN_COUNTERS_SQL,
-                (TOWN_COUNTER_YARDS, TOWN_COUNTER_YARDS, leader, want),
+                (TOWN_COUNTER_YARDS, TOWN_COUNTER_YARDS, TOWN_COUNTER_YARDS,
+                 leader, want),
             )
             rows = [dict(row) for row in cur.fetchall()]
         except pymysql.err.MySQLError as exc:
