@@ -5948,6 +5948,23 @@ class Bridge(discord.Client):
             bool(leader_town.vendor), outstanding,
             pressure=bag_pressure.family_town_run_needed(free_slots),
         )
+        if (step == bag_pressure.VENDOR_ERRAND_HOLD
+                and outstanding == 0
+                and bag_pressure.family_town_run_needed(free_slots)):
+            # This is deliberately a warning rather than a release. A quiet
+            # queue can mean the holder rows have not reached the counter yet;
+            # releasing here would send the family away with the same full
+            # bags. The snapshot makes the actionable failure visible: the
+            # family is under pressure at a counter, but the executor has no
+            # sell work in flight.
+            log.warning(
+                "economy: vendor aim held with bag pressure but no sell rows "
+                "outstanding; leader=%s counter=%s free_slots=%s pressure=%s",
+                leader, bool(leader_town.vendor),
+                sorted((str(name), int(slots))
+                       for name, slots in free_slots.items()),
+                True,
+            )
         if step == bag_pressure.VENDOR_ERRAND_HOLD:
             log.info(
                 "economy: leader=%s is already standing at a vendor with %s "

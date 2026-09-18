@@ -285,6 +285,19 @@ class ThePassAimsOnceAndReleasesLast(unittest.TestCase):
         self.assertIn("bag_pressure.vendor_errand_step(", self._settle())
         self.assertIn("if step == bag_pressure.VENDOR_ERRAND_AIM:", self._pass())
 
+    def test_pressure_hold_logs_when_no_sell_row_is_in_flight(self):
+        """A vendor arrival with zero outstanding rows must be diagnosable.
+
+        Releasing here would abandon follower rows that have not reached the
+        counter. The warning distinguishes that state from an executor that
+        is still processing a queued sale.
+        """
+        settle = self._settle()
+        self.assertIn("outstanding == 0", settle)
+        self.assertIn("family_town_run_needed(free_slots)", settle)
+        self.assertIn("vendor aim held with bag pressure but no sell rows", settle)
+        self.assertIn("free_slots", settle)
+
     def test_the_settling_is_one_function_with_one_question(self):
         """LIFTED OUT WHOLE. The draft that kept it inline put the release
         below three early returns where it could never fire, which is a
