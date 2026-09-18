@@ -790,3 +790,15 @@ class ThePurityOfTheModule(unittest.TestCase):
                 releasable=lambda _: True,
             ),
         )
+
+    def test_bag_pressure_can_release_ground_aim_outside_a_run(self):
+        self.assertTrue(townslot.urgent_ground_release(
+            aim="at:1:10,20,30", pressure=True, in_run=False,
+            ground=lambda value: value.startswith("at:"),
+        ))
+
+    def test_bag_pressure_never_interrupts_a_run(self):
+        self.assertFalse(townslot.urgent_ground_release(
+            aim="at:1:10,20,30", pressure=True, in_run=True,
+            ground=lambda value: value.startswith("at:"),
+        ))

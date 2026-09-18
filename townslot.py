@@ -250,6 +250,12 @@ def stranded_nonleader_aims(aims, leader: str, *, ground, releasable) -> tuple:
     ))
 
 
+def urgent_ground_release(*, aim: str, pressure: bool, in_run: bool,
+                          ground) -> bool:
+    """Whether bag pressure may interrupt a stale positional town aim."""
+    return bool(pressure and not in_run and str(aim or "") and ground(aim))
+
+
 def _ahead_of(claimant: str, wants, now: float, want_fresh: float) -> list:
     """The live wants that outrank `claimant`'s own."""
     ordered = fresh_wants(wants, now, want_fresh)

@@ -6244,6 +6244,23 @@ class Bridge(discord.Client):
 
         free_slots = await asyncio.to_thread(_fetch_free_slots, names)
 
+        # A stale positional aim on the leader can block the vendor pass just
+        # as surely as one on a follower. Full bags are the urgent case: when
+        # no dungeon run owns the party, hand that economy aim back so the next
+        # arbitration cycle can claim a real vendor target.
+        current_aim = await asyncio.to_thread(_current_travel_npc, leader)
+        if townslot.urgent_ground_release(
+                aim=current_aim,
+                pressure=bag_pressure.family_town_run_needed(free_slots),
+                in_run=in_run,
+                ground=travel.is_ground_aim):
+            if await asyncio.to_thread(_release_trade_errand, leader, current_aim):
+                log.warning(
+                    "economy: released stale leader ground aim %s under bag "
+                    "pressure; vendor maintenance gets the town slot next",
+                    current_aim,
+                )
+
         # THE RECIPE HAND-OFF RUNS ABOVE THE TOWN-RUN GATE, ON PURPOSE, and it
         # is the only half of this pass that does (infra#3731).
         #
