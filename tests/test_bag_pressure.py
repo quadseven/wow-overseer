@@ -3,7 +3,8 @@ import unittest
 import disposition
 from bag_pressure import (ItemForSale, bag_purchase_allowed, family_town_run_needed,
                           gear_candidates, item_binding, sellable, town_run_needed,
-                          protection_counts, vendor_batch, vendor_candidates)
+                          protection_counts, vendor_batch, vendor_candidates,
+                          vendor_holders_to_queue)
 
 # The family in town: a vendor in reach, nothing else built yet.
 IN_TOWN = disposition.Family(vendor_reachable=True)
@@ -93,6 +94,40 @@ class BagPressureTests(unittest.TestCase):
         holder, batch = vendor_batch(rows)
         self.assertEqual(holder, "Grug")
         self.assertEqual([item.holder for item in batch], ["Grug"])
+
+    def test_leader_arrival_queues_followers_for_executor_retry(self):
+        rows = vendor_candidates([
+            {"holder": "Og", "item_guid": 7, "count": 1,
+             "quality": 0, "sell_price": 3, "quest_item": False,
+             "reagent": False, "profession_needed": False},
+            {"holder": "Grug", "item_guid": 8, "count": 1,
+             "quality": 0, "sell_price": 4, "quest_item": False,
+             "reagent": False, "profession_needed": False},
+        ])
+        self.assertEqual(
+            ("Grug", "Og"),
+            vendor_holders_to_queue(
+                rows, leader="Grug", leader_at_counter=True,
+                holder_at_counter=lambda _: False,
+            ),
+        )
+
+    def test_before_leader_arrival_range_gate_is_preserved(self):
+        rows = vendor_candidates([
+            {"holder": "Og", "item_guid": 7, "count": 1,
+             "quality": 0, "sell_price": 3, "quest_item": False,
+             "reagent": False, "profession_needed": False},
+            {"holder": "Grug", "item_guid": 8, "count": 1,
+             "quality": 0, "sell_price": 4, "quest_item": False,
+             "reagent": False, "profession_needed": False},
+        ])
+        self.assertEqual(
+            ("Grug",),
+            vendor_holders_to_queue(
+                rows, leader="Grug", leader_at_counter=False,
+                holder_at_counter=lambda name: name == "Grug",
+            ),
+        )
 
 
 class BindingIsAFactAboutTheCopy(unittest.TestCase):

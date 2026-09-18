@@ -118,6 +118,23 @@ def vendor_batch(candidates: Iterable[SellCandidate]) -> tuple[str, tuple[SellCa
     return holder, tuple(grouped[holder])
 
 
+def vendor_holders_to_queue(candidates: Iterable[SellCandidate], *,
+                            leader: str, leader_at_counter: bool,
+                            holder_at_counter) -> tuple:
+    """Which candidate holders may receive sell rows this pass.
+
+    The leader's arrival owns the family's vendor trip. Once the leader is at
+    the counter, queueing the already-judged rows for followers is safe: the
+    world executor will retry a follower until that character catches up. If
+    the leader is not there yet, retain the old per-holder range gate.
+    """
+    holders = sorted({candidate.holder for candidate in candidates
+                      if getattr(candidate, "holder", "")})
+    if leader_at_counter:
+        return tuple(holders)
+    return tuple(name for name in holders if name == leader or holder_at_counter(name))
+
+
 def town_run_needed(used: int, slots: int, minimum_free: int = 2,
                     pressure_percent: int = 90) -> bool:
     """Return whether bag pressure warrants a vendor run."""

@@ -6469,10 +6469,31 @@ class Bridge(discord.Client):
 
         inserted = 0
         considered = 0
+        holder_town = {}
+        leader_town = await asyncio.to_thread(_fetch_town, leader)
+        holder_town[leader] = leader_town
+        leader_at_counter = bool(leader_town.vendor)
+        for holder in sorted(by_holder):
+            town = await asyncio.to_thread(_fetch_town, holder)
+            holder_town[holder] = town
+        queue_holders = set(bag_pressure.vendor_holders_to_queue(
+            candidates,
+            leader=leader,
+            leader_at_counter=leader_at_counter,
+            holder_at_counter=lambda holder: bool(holder_town[holder].vendor),
+        ))
         for holder in sorted(by_holder):
             holder_candidates = tuple(by_holder[holder])
-            town = await asyncio.to_thread(_fetch_town, holder)
+            town = holder_town[holder]
             if not town.vendor:
+                if holder not in queue_holders:
+                    log.info(
+                        "economy: %d carried candidate(s) for %s but no vendor "
+                        "within reach - leader=%s aim taken=%s",
+                        len(holder_candidates), holder, leader, aimed,
+                    )
+                    continue
+            elif holder not in queue_holders:
                 log.info(
                     "economy: %d carried candidate(s) for %s but no vendor "
                     "within reach - leader=%s aim taken=%s",
