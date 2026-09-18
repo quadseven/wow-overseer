@@ -368,7 +368,8 @@ class TheSweepIsActuallyReached(unittest.TestCase):
         self.assertLess(body.index("_release_stranded_vendor_errands"),
                         body.index("_claim_town_slot"))
         self.assertEqual(body.count("_claim_town_slot"), 1)
-        self.assertIn('self._claim_town_slot("economy", leader, "vendor")', body)
+        self.assertIn('self._claim_town_slot(', body)
+        self.assertIn('"economy", leader, "vendor", urgent=True', body)
 
 
 class TheStrandingIsActuallyBroken(unittest.TestCase):

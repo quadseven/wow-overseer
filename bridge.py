@@ -4431,7 +4431,7 @@ class Bridge(discord.Client):
         )
 
     async def _claim_town_slot(self, claimant: str, character: str,
-                               aim: str) -> bool:
+                               aim: str, urgent: bool = False) -> bool:
         """Ask for the family's one traveller, and act on the answer (infra#3703).
 
         THE ONE DOOR EVERY TOWN ERRAND NOW GOES THROUGH. Seven passes write
@@ -4480,6 +4480,7 @@ class Bridge(discord.Client):
         decision = self._town_slot.want(
             claimant=claimant, character=character, aim=aim, leader=leader,
             column=column, retaskable=_retaskable_from(aim), now=now,
+            urgent=urgent,
         )
         if not decision.granted:
             log.info("%s", townslot.report(decision))
@@ -6353,7 +6354,9 @@ class Bridge(discord.Client):
             # AND IT GOES THROUGH THE TOWN SLOT (infra#3703), which is where
             # "somebody else's errand" stopped being the end of the sentence:
             # the slot says whose, for how long, and what ends it.
-            aimed = await self._claim_town_slot("economy", leader, "vendor")
+            aimed = await self._claim_town_slot(
+                "economy", leader, "vendor", urgent=True,
+            )
             if not aimed:
                 log.info(
                     "economy: leader=%s is already on somebody else's errand, so "

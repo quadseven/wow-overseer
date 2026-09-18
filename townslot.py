@@ -587,15 +587,23 @@ class Slot:
         return list(self._wants.values())
 
     def want(self, *, claimant: str, character: str, aim: str, leader: str,
-             column: str, retaskable, now: float) -> Decision:
+             column: str, retaskable, now: float,
+             urgent: bool = False) -> Decision:
         """Decide, and register the wait if the answer is no."""
         self.holder = _reconcile(self.holder, leader=leader, column=column,
                                  now=now)
+        # A full bag is a loot-blocking failure, not an ordinary queue wait.
+        # An orphaned economy aim can otherwise hold the traveller for the
+        # world's 20-minute backstop after this process restarts. Urgent callers
+        # may shorten only the lease used by the pure decision; the
+        # `releasable` predicate still refuses profession or operator aims.
+        lease = 0.0 if urgent else self.lease
+        orphan_lease = 0.0 if urgent else self.orphan_lease
         decision = decide(
             claimant=claimant, character=character, aim=aim, leader=leader,
             column=column, retaskable=retaskable, holder=self.holder,
             wants=self.wants, last_served=self._served, now=now,
-            lease=self.lease, orphan_lease=self.orphan_lease,
+            lease=lease, orphan_lease=orphan_lease,
             want_fresh=self.want_fresh, releasable=self.releasable,
         )
         if decision.verdict == SLOT_WAIT and decision.aim:

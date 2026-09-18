@@ -457,7 +457,8 @@ class TheBridgeAsksBeforeItSells(unittest.TestCase):
         whole family's vendor errand for fifteen minutes at a time.
         """
         block = self._vendor_pass()
-        self.assertIn('self._claim_town_slot("economy", leader, "vendor")', block)
+        self.assertIn('self._claim_town_slot(', block)
+        self.assertIn('"economy", leader, "vendor", urgent=True', block)
         self.assertNotIn('self._claim_town_slot("economy", holder', block)
         self.assertEqual(1, block.count("_claim_town_slot"))
 

@@ -367,6 +367,27 @@ class TheIdleDoorClearsWithoutAReplacement(unittest.TestCase):
 
 class TheSlotIsHeldForTheLifeOfTheProcess(unittest.TestCase):
 
+    def test_urgent_maintenance_can_preempt_an_orphaned_economy_aim(self):
+        """Zero-room pressure cannot wait for the world's 20-minute fuse."""
+        slot = townslot.Slot(releasable=travel.is_ground_aim)
+        decision = slot.want(
+            claimant="economy", character="Grug", leader="Grug",
+            aim="vendor", column="at:0:1,2,3", retaskable=("", "vendor"),
+            now=100.0, urgent=True,
+        )
+        self.assertEqual(townslot.SLOT_PREEMPT, decision.verdict)
+        self.assertEqual("at:0:1,2,3", decision.release.aim)
+
+    def test_normal_maintenance_keeps_the_orphan_lease(self):
+        """Ordinary town work still leaves an unknown economy aim alone."""
+        slot = townslot.Slot(releasable=travel.is_ground_aim)
+        decision = slot.want(
+            claimant="economy", character="Grug", leader="Grug",
+            aim="vendor", column="at:0:1,2,3", retaskable=("", "vendor"),
+            now=100.0,
+        )
+        self.assertEqual(townslot.SLOT_WAIT, decision.verdict)
+
     def test_the_ledger_is_built_once_on_the_client(self):
         init = _block("    def __init__(self, allowed_ids: frozenset[str]):")
         self.assertIn("self._town_slot = townslot.Slot(", init)
@@ -393,6 +414,13 @@ class TheSlotIsHeldForTheLifeOfTheProcess(unittest.TestCase):
         """One number, argued for in one place. A second default here would be
         a second answer to the same question."""
         self.assertEqual(300.0, townslot.LEASE_SECONDS)
+
+    def test_vendor_pass_marks_pressure_as_urgent(self):
+        body = _statements("    async def _vendor_once(")
+        self.assertIn(
+            'self._claim_town_slot(\n                "economy", leader, "vendor", urgent=True,',
+            body,
+        )
 
 
 class TheStarvationLineIsGreppable(unittest.TestCase):

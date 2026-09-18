@@ -346,7 +346,10 @@ class ThePassAimsOnceAndReleasesLast(unittest.TestCase):
         body = _statements("    async def _vendor_once(")
         self.assertEqual(body.count("_claim_town_slot"), 1)
         self.assertEqual(self._settle().count("_release_trade_errand"), 1)
-        self.assertIn('self._claim_town_slot("economy", leader, "vendor")', body)
+        self.assertIn(
+            'self._claim_town_slot(\n                "economy", leader, "vendor", urgent=True,',
+            body,
+        )
 
     def test_the_release_names_the_same_keyword_it_aimed_with(self):
         """Releasing `repair` because a vendor pass finished would take the
