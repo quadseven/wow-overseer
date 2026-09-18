@@ -2978,6 +2978,11 @@ class Bridge(discord.Client):
         # Leader snapshot history used only to detect a vendor aim that has
         # stopped moving. The decision itself lives in vendor_stall.py.
         self._vendor_movement: dict[str, vendor_stall.Movement] = {}
+        # The leader can keep moving while the family is split across maps or
+        # far enough apart that nobody reaches one usable vendor counter.
+        # vendor_stall owns the pure cohesion clock; this bridge only retains
+        # its last observation between polls.
+        self._vendor_family_movement: vendor_stall.FamilyMovement | None = None
 
     async def setup_hook(self) -> None:
         # Held, not fired and forgotten. asyncio keeps only a weak reference to
@@ -5958,6 +5963,14 @@ class Bridge(discord.Client):
             )
             if stall.current is not None:
                 self._vendor_movement[leader] = stall.current
+            family_stall = vendor_stall.family_progress(
+                self._vendor_family_movement,
+                await asyncio.to_thread(_fetch_positions, names),
+                tuple(names),
+                time.monotonic(),
+            )
+            if family_stall.current is not None:
+                self._vendor_family_movement = family_stall.current
             decision = vendor_stall.decide(
                 pressure=pressure,
                 at_counter=bool(leader_town.vendor),
@@ -5965,6 +5978,10 @@ class Bridge(discord.Client):
                 movement_readable=stall.readable,
                 movement_progressed=stall.progressed,
                 stalled_seconds=stall.stalled_seconds,
+                family_readable=family_stall.readable,
+                family_split=family_stall.split,
+                family_progressed=family_stall.progressed,
+                family_split_seconds=family_stall.split_seconds,
             )
             if decision.action == vendor_stall.RELEASE:
                 released = await asyncio.to_thread(
@@ -5980,6 +5997,7 @@ class Bridge(discord.Client):
                         decision.reason,
                     )
                     self._vendor_movement.pop(leader, None)
+                    self._vendor_family_movement = None
                     return bag_pressure.VENDOR_ERRAND_RELEASE
         step = bag_pressure.vendor_errand_step(
             bool(leader_town.vendor), outstanding,
