@@ -770,3 +770,23 @@ class ThePurityOfTheModule(unittest.TestCase):
         source = pathlib.Path(townslot.__file__).read_text(encoding="utf-8")
         for forbidden in ("time.monotonic", "time.time", "datetime.now"):
             self.assertNotIn(forbidden, source)
+
+    def test_nonleader_ground_economy_aims_are_stranded(self):
+        aims = {"Grug": "", "Og": "at:1:10,20,30", "Ugga": "vendor",
+                "Bork": "profession trainer"}
+        self.assertEqual(
+            ("Og",),
+            townslot.stranded_nonleader_aims(
+                aims, "Grug", ground=lambda value: value.startswith("at:"),
+                releasable=lambda value: value.startswith("at:"),
+            ),
+        )
+
+    def test_no_leader_does_not_release_any_aim(self):
+        self.assertEqual(
+            (),
+            townslot.stranded_nonleader_aims(
+                {"Og": "at:1:10,20,30"}, "", ground=lambda _: True,
+                releasable=lambda _: True,
+            ),
+        )

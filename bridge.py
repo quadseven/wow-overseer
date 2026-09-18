@@ -6149,6 +6149,31 @@ class Bridge(discord.Client):
                 )
         return released
 
+    async def _release_stranded_ground_errands(self, names: list,
+                                               leader: str) -> int:
+        """Release stale positional economy aims left on non-leaders.
+
+        A positional town aim is valid for the leader, but a follower cannot
+        execute it: mod-overseer deliberately refuses to steer followers and
+        leaves their non-empty aim in place. This sweep is only used outside an
+        active dungeon run, so it cannot erase a party staging escort.
+        """
+        aims = await asyncio.to_thread(_standing_travel_aims)
+        stranded = townslot.stranded_nonleader_aims(
+            aims, leader, ground=travel.is_ground_aim, releasable=_is_economy_aim,
+        )
+        released = 0
+        for name in stranded:
+            aim = aims.get(name, "")
+            if await asyncio.to_thread(_release_trade_errand, name, aim):
+                released += 1
+                log.warning(
+                    "economy: released stale ground aim %s from non-leader %s; "
+                    "only %s can walk the family's town errands",
+                    aim, name, leader,
+                )
+        return released
+
     async def _vendor_once(self) -> None:
         """Queue carried junk and outgrown gear for the world sell executor.
 
@@ -6209,6 +6234,14 @@ class Bridge(discord.Client):
         # function along.
         await self._release_stranded_vendor_errands(names, leader)
 
+        # A positional economy aim left on a follower is equally inert, but
+        # unlike the old vendor keyword it can be mistaken for dungeon staging.
+        # Do this only when no run is active; an active coordinator owns every
+        # party escort and must be allowed to hold its barrier points.
+        in_run = await self._mid_run(names)
+        if not in_run:
+            await self._release_stranded_ground_errands(names, leader)
+
         free_slots = await asyncio.to_thread(_fetch_free_slots, names)
 
         # THE RECIPE HAND-OFF RUNS ABOVE THE TOWN-RUN GATE, ON PURPOSE, and it
@@ -6235,7 +6268,7 @@ class Bridge(discord.Client):
             log.info("economy: carried vendor goods exist, but bag pressure is below "
                      "the town-run trigger")
             return
-        if await self._mid_run(names):
+        if in_run:
             # Bag pressure outranks an unfinished dungeon. The world-side
             # coordinator already treats job=quest as the operator's request
             # to exit through the known portal; issuing it here prevents a

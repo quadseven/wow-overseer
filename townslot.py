@@ -232,6 +232,24 @@ def fresh_wants(wants, now: float, want_fresh: float = WANT_FRESH_SECONDS) -> li
     return sorted(live, key=lambda w: (w.waiting_since, w.claimant))
 
 
+def stranded_nonleader_aims(aims, leader: str, *, ground, releasable) -> tuple:
+    """Return stale releasable ground aims held by somebody except ``leader``.
+
+    Only the family leader can walk an economy errand. A prior leader change or
+    an older writer can leave a positional aim on a follower; mod-overseer then
+    refuses to move it, while the non-empty column still suppresses that
+    follower's normal drive. The adapter supplies the two policy predicates so
+    this function remains pure and does not know which aims are safe to hand
+    back.
+    """
+    if not leader:
+        return ()
+    return tuple(sorted(
+        name for name, aim in (aims or {}).items()
+        if name != leader and str(aim or "") and ground(aim) and releasable(aim)
+    ))
+
+
 def _ahead_of(claimant: str, wants, now: float, want_fresh: float) -> list:
     """The live wants that outrank `claimant`'s own."""
     ordered = fresh_wants(wants, now, want_fresh)
