@@ -1106,7 +1106,8 @@ GUILD_BODY = ("The bank's own tabs are not read here yet, so this is still "
 
 
 def build_guild_bank(guild_rows: list[dict],
-                     guild_bank_rows: list[dict] | None = None) -> dict:
+                     guild_bank_rows: list[dict] | None = None,
+                     guild_bank_right_rows: list[dict] | None = None) -> dict:
     """Which guild the family is in, if any, and what stands in front of one.
 
     `guild_rows` is whatever `guild_member` joined to `guild` returns for the
@@ -1117,7 +1118,9 @@ def build_guild_bank(guild_rows: list[dict],
     guilds = sorted({row["guild_name"] for row in guild_rows
                      if row.get("guild_name")})
     observed = guild_bank_rows is not None
+    rights_observed = guild_bank_right_rows is not None
     tabs = list(guild_bank_rows or [])
+    rights = list(guild_bank_right_rows or [])
     tab_count = len(tabs)
     item_count = 0
     for row in tabs:
@@ -1126,6 +1129,14 @@ def build_guild_bank(guild_rows: list[dict],
         except (AttributeError, TypeError, ValueError):
             # A malformed adapter row must not turn a read-only status panel
             # into a 503 or manufacture a count.
+            continue
+    deposit_rank_ids = set()
+    for row in rights:
+        try:
+            if (int(row.get("tab_id")) == 0
+                    and int(row.get("rights", 0)) & 3 == 3):
+                deposit_rank_ids.add(int(row["rank_id"]))
+        except (KeyError, TypeError, ValueError):
             continue
     steps = [{"step": step, "state": state,
               "state_label": GUILD_STEP_WORDS[state],
@@ -1139,6 +1150,10 @@ def build_guild_bank(guild_rows: list[dict],
                     "item%s."
                     % (tab_count, "" if tab_count == 1 else "s", item_count,
                        "" if item_count == 1 else "s"))
+            if rights_observed:
+                body += " Deposit rights are recorded for %d rank%s." % (
+                    len(deposit_rank_ids),
+                    "" if len(deposit_rank_ids) == 1 else "s")
     else:
         lead, body = NO_GUILD_LEAD, NO_GUILD_BODY
     return {
@@ -1146,6 +1161,8 @@ def build_guild_bank(guild_rows: list[dict],
         "bank_observed": observed,
         "purchased_tabs": tab_count if observed else None,
         "stored_items": item_count if observed else None,
+        "rights_observed": rights_observed,
+        "deposit_rank_ids": sorted(deposit_rank_ids) if rights_observed else None,
         "tabs": tabs if observed else [],
         "lead": lead,
         "body": body,
@@ -1180,7 +1197,8 @@ SAVED_NOTE = ("Purses, bags and auctions as the world last saved them, on the "
 def build_wealth(char_rows: list[dict], inventory_rows: list[dict],
                  auction_rows: list[dict], guild_rows: list[dict],
                  icons: dict[int, str],
-                 guild_bank_rows: list[dict] | None = None) -> dict:
+                 guild_bank_rows: list[dict] | None = None,
+                 guild_bank_right_rows: list[dict] | None = None) -> dict:
     """Every member's purse and bags, the family total, the auction house,
     and the guild bank there is not.
 
@@ -1198,7 +1216,8 @@ def build_wealth(char_rows: list[dict], inventory_rows: list[dict],
         "members": members,
         "family": build_family(members),
         "auctions": build_auctions(auction_rows, icons),
-        "guild_bank": build_guild_bank(guild_rows, guild_bank_rows),
+        "guild_bank": build_guild_bank(
+            guild_rows, guild_bank_rows, guild_bank_right_rows),
         "sections": SECTION_HEADERS,
         "saved_note": SAVED_NOTE,
         "expected": len(members),

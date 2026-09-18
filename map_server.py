@@ -494,6 +494,7 @@ def _fetch_wealth() -> dict:
             # empty state. Keep this adapter read-only and fail closed for an
             # old realm whose core predates the guild-bank tables.
             guild_bank_rows = None
+            guild_bank_right_rows = None
             guild_ids = sorted({row.get("guild_id") for row in guild_rows
                                 if row.get("guild_id") is not None})
             if guild_ids:
@@ -517,11 +518,27 @@ def _fetch_wealth() -> dict:
                         log.warning("guild bank tables are unavailable")
                     else:
                         raise
+                try:
+                    cur.execute(
+                        "SELECT guildid AS guild_id, rid AS rank_id, "
+                        "TabId AS tab_id, gbright AS rights "
+                        "FROM guild_bank_right "
+                        f"WHERE guildid IN ({bank_holes}) "
+                        "ORDER BY guildid, TabId, rid",  # noqa: S608
+                        tuple(guild_ids),
+                    )
+                    guild_bank_right_rows = list(cur.fetchall())
+                except pymysql.err.MySQLError as exc:
+                    if exc.args and exc.args[0] in (1054, 1146):
+                        log.warning("guild bank rights are unavailable")
+                    else:
+                        raise
     finally:
         conn.close()
     return {"char_rows": char_rows, "inventory_rows": inventory_rows,
             "auction_rows": auction_rows, "guild_rows": guild_rows,
-            "guild_bank_rows": guild_bank_rows}
+            "guild_bank_rows": guild_bank_rows,
+            "guild_bank_right_rows": guild_bank_right_rows}
 
 
 # Everything a tooltip draws, straight off item_template. Listed once, here,

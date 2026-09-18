@@ -656,6 +656,8 @@ class TheEndpoint(unittest.TestCase):
         self.assertIn("FROM guild_bank_tab t", self.fetch)
         self.assertIn("guild_bank_item i", self.fetch)
         self.assertIn("guild_bank_rows", self.fetch)
+        self.assertIn("guild_bank_right", self.fetch)
+        self.assertIn("guild_bank_right_rows", self.fetch)
         self.assertIn("1146", self.fetch)
 
     def test_the_module_ships_in_the_image(self):

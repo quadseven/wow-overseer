@@ -1059,6 +1059,18 @@ class TheGuildBankThereIsNot(unittest.TestCase):
         self.assertEqual(empty["purchased_tabs"], 0)
         self.assertEqual(empty["stored_items"], 0)
 
+    def test_tab_zero_deposit_rights_are_reported_separately(self):
+        bank = wealth.build_guild_bank(
+            [{"name": FIRST, "guild_name": "Cave"}],
+            [{"guild_id": 23, "tab_id": 0, "item_count": 0}],
+            [{"guild_id": 23, "rank_id": 1, "tab_id": 0, "rights": 3},
+             {"guild_id": 23, "rank_id": 2, "tab_id": 0, "rights": 1},
+             {"guild_id": 23, "rank_id": 1, "tab_id": 1, "rights": 3}],
+        )
+        self.assertTrue(bank["rights_observed"])
+        self.assertEqual(bank["deposit_rank_ids"], [1])
+        self.assertIn("Deposit rights are recorded for 1 rank", bank["body"])
+
     def test_a_row_with_no_guild_name_is_not_a_guild(self):
         bank = wealth.build_guild_bank([{"name": FIRST, "guild_name": None}])
         self.assertEqual(bank["guilds"], [])
