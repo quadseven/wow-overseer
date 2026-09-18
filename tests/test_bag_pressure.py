@@ -3,7 +3,7 @@ import unittest
 import disposition
 from bag_pressure import (ItemForSale, bag_purchase_allowed, family_town_run_needed,
                           gear_candidates, item_binding, sellable, town_run_needed,
-                          vendor_batch, vendor_candidates)
+                          protection_counts, vendor_batch, vendor_candidates)
 
 # The family in town: a vendor in reach, nothing else built yet.
 IN_TOWN = disposition.Family(vendor_reachable=True)
@@ -48,6 +48,20 @@ class BagPressureTests(unittest.TestCase):
     def test_sells_only_positive_value_common_goods(self):
         self.assertTrue(sellable(ItemForSale(quality=0, sell_price=10)))
         self.assertFalse(sellable(ItemForSale(quality=1, sell_price=0)))
+
+    def test_protection_counts_explain_overlapping_bag_pressure(self):
+        rows = [
+            {"quality": 3, "sell_price": 20, "quest_item": True,
+             "reagent": False, "profession_needed": False},
+            {"quality": 1, "sell_price": 3, "quest_item": False,
+             "reagent": True, "profession_needed": True},
+            {"quality": 0, "sell_price": 1},
+        ]
+        self.assertEqual(
+            protection_counts(rows),
+            {"rows": 3, "quest": 1, "reagent": 1, "profession": 1,
+             "rare_or_better": 1, "unknown": 1},
+        )
 
     def test_bag_purchase_requires_empty_position_and_reserve(self):
         self.assertTrue(bag_purchase_allowed(20000, 5000, True))

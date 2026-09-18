@@ -9591,6 +9591,13 @@ def _fetch_vendor_items(names: list) -> list:
         item["profession_needed"] = bool(
             profession_material or item.get("item_guid") in keeps
         )
+    summary = bag_pressure.protection_counts(rows)
+    log.info(
+        "economy: carried inventory protection summary rows=%d quest=%d "
+        "reagent=%d profession=%d rare_or_better=%d unknown=%d",
+        summary["rows"], summary["quest"], summary["reagent"],
+        summary["profession"], summary["rare_or_better"], summary["unknown"],
+    )
     if keeps:
         # Said out loud, because a protection nobody can see in the log is
         # indistinguishable from one that never fired. It counts every stack

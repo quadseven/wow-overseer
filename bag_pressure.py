@@ -271,6 +271,49 @@ def sellable(item: ItemForSale) -> bool:
             and not item.profession_needed and item.sell_price > 0)
 
 
+def protection_counts(rows: Iterable[dict]) -> dict[str, int]:
+    """Summarise why carried rows are protected from the vendor pass.
+
+    This is an observation only.  It does not change the sale decision and it
+    deliberately counts overlapping reasons: a rare quest reagent belongs in
+    all three buckets because each fact is independently important to an
+    operator diagnosing full bags.  Rows missing any sale fact are counted as
+    ``unknown``; the sale selector already fails closed for those rows, and
+    the summary must make that hidden pressure visible rather than calling it
+    junk.
+
+    The bridge supplies rows from the world and logs this result.  Keeping the
+    aggregation here makes the explanation testable without a database and
+    prevents the HTTP or SQL adapters from growing another inventory opinion.
+    """
+    counts = {
+        "rows": 0,
+        "quest": 0,
+        "reagent": 0,
+        "profession": 0,
+        "rare_or_better": 0,
+        "unknown": 0,
+    }
+    required = ("quality", "sell_price", "quest_item", "reagent",
+                "profession_needed")
+    for row in rows:
+        counts["rows"] += 1
+        if any(key not in row for key in required):
+            counts["unknown"] += 1
+        if bool(row.get("quest_item", False)):
+            counts["quest"] += 1
+        if bool(row.get("reagent", False)):
+            counts["reagent"] += 1
+        if bool(row.get("profession_needed", False)):
+            counts["profession"] += 1
+        try:
+            if int(row.get("quality", -1)) >= 3:
+                counts["rare_or_better"] += 1
+        except (TypeError, ValueError):
+            counts["unknown"] += 1
+    return counts
+
+
 def bag_purchase_allowed(money: int, price: int, empty_position: bool,
                          reserve: int = 10000) -> bool:
     """Buy a bag only when a real slot exists and the reserve remains."""
