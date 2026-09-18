@@ -552,6 +552,22 @@ class TheFreeColumnIsYieldedToWhoeverIsOwedIt(unittest.TestCase):
                    last_served={}, now=400.0)
         self.assertEqual(townslot.SLOT_TAKE, d.verdict)
 
+    def test_urgent_bag_pressure_takes_a_free_column(self):
+        d = decide(claimant="economy", aim="vendor",
+                   retaskable=("", "vendor"), column="",
+                   wants=(want("auction", 10.0),),
+                   last_served={"economy": 300.0}, now=400.0,
+                   urgent=True)
+        self.assertEqual(townslot.SLOT_TAKE, d.verdict)
+
+    def test_urgent_bag_pressure_preempts_an_expired_economy_errand(self):
+        d = decide(claimant="economy", aim="vendor",
+                   retaskable=("", "vendor"), column="auctioneer",
+                   holder=holder("auction", "auctioneer", 0.0),
+                   wants=(want("guild bank", 10.0),), now=400.0,
+                   urgent=True)
+        self.assertEqual(townslot.SLOT_PREEMPT, d.verdict)
+
     def test_it_does_not_stand_aside_for_a_pass_it_has_not_outrun(self):
         """The waiter was served more recently than this pass, so this pass is
         the one that is owed the turn."""

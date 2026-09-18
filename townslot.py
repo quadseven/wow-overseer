@@ -270,6 +270,7 @@ def _ahead_of(claimant: str, wants, now: float, want_fresh: float) -> list:
 def decide(*, claimant: str, character: str, aim: str, leader: str,
            column: str, retaskable, holder: Holder | None, wants,
            last_served, now: float,
+           urgent: bool = False,
            lease: float = LEASE_SECONDS,
            orphan_lease: float = ORPHAN_LEASE_SECONDS,
            want_fresh: float = WANT_FRESH_SECONDS,
@@ -375,11 +376,12 @@ def decide(*, claimant: str, character: str, aim: str, leader: str,
         return _free_column(
             claimant=claimant, character=character, aim=aim, wants=wants,
             last_served=last_served, now=now, want_fresh=want_fresh,
+            urgent=urgent,
         )
     return _held_column(
         claimant=claimant, character=character, aim=aim, holder=holder,
         wants=wants, now=now, lease=lease, orphan_lease=orphan_lease,
-        want_fresh=want_fresh, releasable=releasable,
+        want_fresh=want_fresh, releasable=releasable, urgent=urgent,
     )
 
 
@@ -418,7 +420,8 @@ def decide_idle(*, claimant: str, character: str, leader: str, column: str,
 
 
 def _free_column(*, claimant: str, character: str, aim: str, wants,
-                 last_served, now: float, want_fresh: float) -> Decision:
+                 last_served, now: float, want_fresh: float,
+                 urgent: bool = False) -> Decision:
     """Nobody is holding the traveller. Is it this pass's turn to take it?
 
     SPLIT OUT OF `decide` RATHER THAN INLINE, so that the three questions -
@@ -426,7 +429,10 @@ def _free_column(*, claimant: str, character: str, aim: str, wants,
     are three things to read instead of one. `decide` keeps the guards, which
     are the ones a reader has to see first.
     """
-    ahead = _ahead_of(claimant, wants, now, want_fresh)
+    # A loot-blocking bag failure is not an ordinary fairness wait. If the
+    # column is free, urgent maintenance takes it even when an older auction
+    # or bank want is registered.
+    ahead = [] if urgent else _ahead_of(claimant, wants, now, want_fresh)
     mine_served = last_served.get(claimant)
     # WHO IS OWED THE NEXT TURN. Only a pass that has been waiting longer than
     # this one (that is what `ahead` means) AND has not had the traveller since
@@ -468,7 +474,8 @@ def _free_column(*, claimant: str, character: str, aim: str, wants,
 
 def _held_column(*, claimant: str, character: str, aim: str, holder: Holder,
                  wants, now: float, lease: float, orphan_lease: float,
-                 want_fresh: float, releasable, clearing: bool = False) -> Decision:
+                 want_fresh: float, releasable, clearing: bool = False,
+                 urgent: bool = False) -> Decision:
     """Somebody else has the traveller. Wait, or take it off them?
 
     THE ONLY PLACE A PREEMPTION IS DECIDED, and it takes three things to agree:
@@ -508,7 +515,9 @@ def _held_column(*, claimant: str, character: str, aim: str, holder: Holder,
             character=character,
         )
 
-    ahead = _ahead_of(claimant, wants, now, want_fresh)
+    # Urgent bag pressure may preempt an expired releasable errand even when a
+    # different pass has been waiting longer. Ordinary fairness is unchanged.
+    ahead = [] if urgent else _ahead_of(claimant, wants, now, want_fresh)
     if ahead:
         # THE LEASE HAS RUN OUT BUT IT IS NOT THIS PASS'S TURN. Somebody has
         # been starved longer, and handing the column to whoever happened to
@@ -627,6 +636,7 @@ class Slot:
             claimant=claimant, character=character, aim=aim, leader=leader,
             column=column, retaskable=retaskable, holder=self.holder,
             wants=self.wants, last_served=self._served, now=now,
+            urgent=urgent,
             lease=lease, orphan_lease=orphan_lease,
             want_fresh=self.want_fresh, releasable=self.releasable,
         )
