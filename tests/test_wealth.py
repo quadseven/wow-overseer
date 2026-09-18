@@ -1035,6 +1035,30 @@ class TheGuildBankThereIsNot(unittest.TestCase):
         self.assertIn("Cave", bank["lead"])
         self.assertNotIn("no guild", bank["lead"])
 
+    def test_observed_tabs_and_items_are_reported_without_inference(self):
+        bank = wealth.build_guild_bank(
+            [{"name": FIRST, "guild_name": "Cave"}],
+            [{"guild_id": 23, "tab_id": 0, "tab_name": "Raid mats",
+              "item_count": 7},
+             {"guild_id": 23, "tab_id": 1, "tab_name": "Recipes",
+              "item_count": 2}],
+        )
+        self.assertTrue(bank["bank_observed"])
+        self.assertEqual(bank["purchased_tabs"], 2)
+        self.assertEqual(bank["stored_items"], 9)
+        self.assertEqual(len(bank["tabs"]), 2)
+        self.assertIn("2 purchased bank tabs", bank["body"])
+
+    def test_missing_snapshot_is_distinct_from_an_observed_empty_bank(self):
+        guild = [{"name": FIRST, "guild_name": "Cave"}]
+        unknown = wealth.build_guild_bank(guild)
+        empty = wealth.build_guild_bank(guild, [])
+        self.assertFalse(unknown["bank_observed"])
+        self.assertIsNone(unknown["purchased_tabs"])
+        self.assertTrue(empty["bank_observed"])
+        self.assertEqual(empty["purchased_tabs"], 0)
+        self.assertEqual(empty["stored_items"], 0)
+
     def test_a_row_with_no_guild_name_is_not_a_guild(self):
         bank = wealth.build_guild_bank([{"name": FIRST, "guild_name": None}])
         self.assertEqual(bank["guilds"], [])

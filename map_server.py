@@ -482,7 +482,7 @@ def _fetch_wealth() -> dict:
             # somebody makes one - which a constant in the builder could never
             # do. An INNER JOIN, so no rows means nobody is in a guild.
             cur.execute(
-                "SELECT c.name, g.name AS guild_name "  # noqa: S608
+                "SELECT c.name, g.guildid AS guild_id, g.name AS guild_name "  # noqa: S608
                 "FROM characters c "
                 "JOIN guild_member gm ON gm.guid = c.guid "
                 "JOIN guild g ON g.guildid = gm.guildid "
@@ -490,10 +490,38 @@ def _fetch_wealth() -> dict:
                 tuple(names),
             )
             guild_rows = list(cur.fetchall())
+            # The bank panel needs the persisted vault facts, not an inferred
+            # empty state. Keep this adapter read-only and fail closed for an
+            # old realm whose core predates the guild-bank tables.
+            guild_bank_rows = None
+            guild_ids = sorted({row.get("guild_id") for row in guild_rows
+                                if row.get("guild_id") is not None})
+            if guild_ids:
+                bank_holes = ", ".join(["%s"] * len(guild_ids))
+                try:
+                    cur.execute(
+                        "SELECT t.guildid AS guild_id, t.TabId AS tab_id, "
+                        "t.TabName AS tab_name, "
+                        "COUNT(i.item_guid) AS item_count "
+                        "FROM guild_bank_tab t "
+                        "LEFT JOIN guild_bank_item i "
+                        "ON i.guildid = t.guildid AND i.TabId = t.TabId "
+                        f"WHERE t.guildid IN ({bank_holes}) "
+                        "GROUP BY t.guildid, t.TabId, t.TabName "
+                        "ORDER BY t.guildid, t.TabId",  # noqa: S608
+                        tuple(guild_ids),
+                    )
+                    guild_bank_rows = list(cur.fetchall())
+                except pymysql.err.MySQLError as exc:
+                    if exc.args and exc.args[0] in (1054, 1146):
+                        log.warning("guild bank tables are unavailable")
+                    else:
+                        raise
     finally:
         conn.close()
     return {"char_rows": char_rows, "inventory_rows": inventory_rows,
-            "auction_rows": auction_rows, "guild_rows": guild_rows}
+            "auction_rows": auction_rows, "guild_rows": guild_rows,
+            "guild_bank_rows": guild_bank_rows}
 
 
 # Everything a tooltip draws, straight off item_template. Listed once, here,

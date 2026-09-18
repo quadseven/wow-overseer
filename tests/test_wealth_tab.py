@@ -651,6 +651,13 @@ class TheEndpoint(unittest.TestCase):
         self.assertIn("JOIN guild_member gm ON gm.guid = c.guid", self.fetch)
         self.assertIn('"guild_rows": guild_rows', self.fetch)
 
+    def test_the_guild_bank_snapshot_is_read_only_and_old_realms_fail_closed(self):
+        self.assertIn("g.guildid AS guild_id", self.fetch)
+        self.assertIn("FROM guild_bank_tab t", self.fetch)
+        self.assertIn("guild_bank_item i", self.fetch)
+        self.assertIn("guild_bank_rows", self.fetch)
+        self.assertIn("1146", self.fetch)
+
     def test_the_module_ships_in_the_image(self):
         """map_server imports wealth at module scope, so an image without it
         does not start at all - and that failure lands at pod start, long

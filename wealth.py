@@ -1105,7 +1105,8 @@ GUILD_BODY = ("The bank's own tabs are not read here yet, so this is still "
               "the road rather than the contents.")
 
 
-def build_guild_bank(guild_rows: list[dict]) -> dict:
+def build_guild_bank(guild_rows: list[dict],
+                     guild_bank_rows: list[dict] | None = None) -> dict:
     """Which guild the family is in, if any, and what stands in front of one.
 
     `guild_rows` is whatever `guild_member` joined to `guild` returns for the
@@ -1115,6 +1116,17 @@ def build_guild_bank(guild_rows: list[dict]) -> dict:
     """
     guilds = sorted({row["guild_name"] for row in guild_rows
                      if row.get("guild_name")})
+    observed = guild_bank_rows is not None
+    tabs = list(guild_bank_rows or [])
+    tab_count = len(tabs)
+    item_count = 0
+    for row in tabs:
+        try:
+            item_count += max(0, int(row.get("item_count", 0)))
+        except (AttributeError, TypeError, ValueError):
+            # A malformed adapter row must not turn a read-only status panel
+            # into a 503 or manufacture a count.
+            continue
     steps = [{"step": step, "state": state,
               "state_label": GUILD_STEP_WORDS[state],
               "tone": GUILD_STEP_TONES[state]} for step, state in GUILD_STEPS]
@@ -1122,10 +1134,19 @@ def build_guild_bank(guild_rows: list[dict]) -> dict:
     if guilds:
         lead = "The family is in %s." % ", ".join(guilds)
         body = GUILD_BODY
+        if observed:
+            body = ("The guild has %d purchased bank tab%s holding %d stored "
+                    "item%s."
+                    % (tab_count, "" if tab_count == 1 else "s", item_count,
+                       "" if item_count == 1 else "s"))
     else:
         lead, body = NO_GUILD_LEAD, NO_GUILD_BODY
     return {
         "guilds": guilds,
+        "bank_observed": observed,
+        "purchased_tabs": tab_count if observed else None,
+        "stored_items": item_count if observed else None,
+        "tabs": tabs if observed else [],
         "lead": lead,
         "body": body,
         "steps": steps,
@@ -1158,7 +1179,8 @@ SAVED_NOTE = ("Purses, bags and auctions as the world last saved them, on the "
 
 def build_wealth(char_rows: list[dict], inventory_rows: list[dict],
                  auction_rows: list[dict], guild_rows: list[dict],
-                 icons: dict[int, str]) -> dict:
+                 icons: dict[int, str],
+                 guild_bank_rows: list[dict] | None = None) -> dict:
     """Every member's purse and bags, the family total, the auction house,
     and the guild bank there is not.
 
@@ -1176,7 +1198,7 @@ def build_wealth(char_rows: list[dict], inventory_rows: list[dict],
         "members": members,
         "family": build_family(members),
         "auctions": build_auctions(auction_rows, icons),
-        "guild_bank": build_guild_bank(guild_rows),
+        "guild_bank": build_guild_bank(guild_rows, guild_bank_rows),
         "sections": SECTION_HEADERS,
         "saved_note": SAVED_NOTE,
         "expected": len(members),
