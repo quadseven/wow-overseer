@@ -38,6 +38,11 @@ COPY _shared/core.py _shared/bridge.py _shared/voice.py _shared/transform.py \
      _shared/standing.json _shared/craftbook.json \
      _shared/index.html /app/
 
+# Keep the new recovery module's destination explicit: the shared-dir build
+# supplies it under the shared build directory, while bridge.py imports it
+# from /app.
+COPY _shared/vendor_stall.py /app/vendor_stall.py
+
 # jQuery comes from the build CONTEXT, not the shared tarball, and that is a
 # budget decision rather than a tidying one. The shared dir is packed into ONE
 # configMap and handed to EVERY image built from it, so a browser asset there

@@ -69,6 +69,7 @@ import skillgoal
 import tabard
 import towntrip
 import townslot
+import vendor_stall
 import trainjob
 import travel
 import voice
@@ -2974,6 +2975,9 @@ class Bridge(discord.Client):
             lease=TOWN_SLOT_LEASE_SECONDS,
             releasable=_is_economy_aim,
         )
+        # Leader snapshot history used only to detect a vendor aim that has
+        # stopped moving. The decision itself lives in vendor_stall.py.
+        self._vendor_movement: dict[str, vendor_stall.Movement] = {}
 
     async def setup_hook(self) -> None:
         # Held, not fired and forgotten. asyncio keeps only a weak reference to
@@ -5944,9 +5948,42 @@ class Bridge(discord.Client):
         leader_town = await asyncio.to_thread(_fetch_town, leader)
         outstanding = await asyncio.to_thread(_outstanding_sales, names)
         free_slots = await asyncio.to_thread(_fetch_free_slots, names)
+        pressure = bag_pressure.family_town_run_needed(free_slots)
+        current_aim = await asyncio.to_thread(_current_travel_npc, leader)
+        stall = None
+        if current_aim == "vendor":
+            observed = await asyncio.to_thread(_fetch_vendor_position, leader)
+            stall = vendor_stall.progress(
+                self._vendor_movement.get(leader), observed, time.monotonic(),
+            )
+            if stall.current is not None:
+                self._vendor_movement[leader] = stall.current
+            decision = vendor_stall.decide(
+                pressure=pressure,
+                at_counter=bool(leader_town.vendor),
+                sales_outstanding=outstanding,
+                movement_readable=stall.readable,
+                movement_progressed=stall.progressed,
+                stalled_seconds=stall.stalled_seconds,
+            )
+            if decision.action == vendor_stall.RELEASE:
+                released = await asyncio.to_thread(
+                    _release_trade_errand, leader, "vendor",
+                )
+                if released:
+                    log.warning(
+                        "economy: vendor aim recovered after stalled movement; "
+                        "leader=%s stall_seconds=%d free_slots=%s reason=%s",
+                        leader, int(stall.stalled_seconds),
+                        sorted((str(name), int(slots))
+                               for name, slots in free_slots.items()),
+                        decision.reason,
+                    )
+                    self._vendor_movement.pop(leader, None)
+                    return bag_pressure.VENDOR_ERRAND_RELEASE
         step = bag_pressure.vendor_errand_step(
             bool(leader_town.vendor), outstanding,
-            pressure=bag_pressure.family_town_run_needed(free_slots),
+            pressure=pressure,
         )
         if (step == bag_pressure.VENDOR_ERRAND_HOLD
                 and outstanding == 0
@@ -11953,6 +11990,29 @@ def _fetch_town(leader: str):
                 return towntrip.Town()
             raise
     return towntrip.town_from_rows(rows)
+
+
+_VENDOR_POSITION_SQL = (
+    "SELECT map_id, pos_x, pos_y, pos_z FROM overseer_snapshot "
+    "WHERE name = %s AND updated_at > NOW() - INTERVAL 120 SECOND"
+)
+
+
+def _fetch_vendor_position(name: str):
+    """Read the leader position used by the pure vendor stall detector."""
+    with _connect() as conn, conn.cursor() as cur:
+        try:
+            cur.execute(_VENDOR_POSITION_SQL, (name,))
+        except pymysql.err.MySQLError as exc:
+            if exc.args and exc.args[0] in (1054, 1146):
+                log.warning("vendor stall: snapshot position is unavailable")
+                return None
+            raise
+        row = cur.fetchone()
+    if not row:
+        return None
+    return (row.get("map_id"), row.get("pos_x"), row.get("pos_y"),
+            row.get("pos_z"))
 
 
 def _fetch_town_worn(names: list) -> list:

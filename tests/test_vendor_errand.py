@@ -358,7 +358,7 @@ class ThePassAimsOnceAndReleasesLast(unittest.TestCase):
         still onto `leader`."""
         body = _statements("    async def _vendor_once(")
         self.assertEqual(body.count("_claim_town_slot"), 1)
-        self.assertEqual(self._settle().count("_release_trade_errand"), 1)
+        self.assertEqual(self._settle().count("_release_trade_errand"), 2)
         self.assertIn(
             'self._claim_town_slot(\n                "economy", leader, "vendor", urgent=True,',
             body,

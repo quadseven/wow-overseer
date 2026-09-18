@@ -310,7 +310,7 @@ class TheSweepReleasesOnlyWhatItMayRelease(unittest.TestCase):
         still releases one errand - which is the shape infra#3708 lifted it out
         whole to get."""
         settle = _statements("    async def _settle_vendor_errand(")
-        self.assertEqual(settle.count("_release_trade_errand"), 1)
+        self.assertEqual(settle.count("_release_trade_errand"), 2)
         self.assertIn('_release_trade_errand, leader, "vendor"', settle)
         self.assertNotIn("_errand_holders", settle)
 
