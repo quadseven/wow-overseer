@@ -1385,11 +1385,23 @@ def _crafting_roster() -> list:
     to write a craft_spell errand for, never WHETHER anyone should be on
     job='craft' in the first place. That call is an operator/decree/council
     one this module does not make.
+
+    AND ONE COHORT'S CANDIDATES, WHICH IS A DECISION IT DOES MAKE (infra#4221).
+    "Who is on job='craft'" has meant "every row in the table on job='craft'"
+    only because the table has never held anybody else. `craft_rhythm.errand`
+    chooses one name out of what this returns and `_craft_once` writes that
+    character's `craft_spell`, which sends it walking to a `travel_npc` this
+    family's leader logic never accounted for - a second guild's smelter
+    crossing a continent because THIS family wanted something made.
     """
+    cohort = _cohort_of(bonds.head_of_family())
+    scope = " AND family = %s" if cohort else ""
+    scope_args = (cohort,) if cohort else ()
     with _connect() as conn, conn.cursor() as cur:
         cur.execute(
-            "SELECT name FROM overseer_roster WHERE enabled = 1 AND job = %s",
-            ("craft",),
+            "SELECT name FROM overseer_roster WHERE enabled = 1 AND job = %s"  # noqa: S608 - the only variable part is a fixed clause chosen above; every value is still bound
+            + scope,
+            ("craft", *scope_args),
         )
         return [row["name"] for row in cur.fetchall()]
 
@@ -1409,9 +1421,27 @@ def _standing_jobs() -> dict:
     READ-ONLY, like every other roster reader here. The only thing that writes
     this column is mod-overseer's own DoJob, on an `overseer_command` row that
     `_set_job` inserts.
+
+    AND `standing_mode` IS A SECOND `family_mode` THE EPIC NEVER NAMED
+    (infra#4221). The paragraph above already says what makes this dangerous
+    unscoped, two years before there was a second cohort to say it about: this
+    function exists BECAUSE a family half on craft and half on quest must be
+    distinguishable from a family wholly on craft, and `standing_mode` returns
+    `''` when the rows disagree. Two cohorts are a permanent disagreement - the
+    two families are driven by different orders - so the answer becomes `''`
+    for ever, and craft supply, the craft rhythm and the skill-goal pass all
+    stand down. For THIS family, on account of a job somebody else's character
+    is on, with nothing logged that names the cause.
     """
+    cohort = _cohort_of(bonds.head_of_family())
+    scope = " AND family = %s" if cohort else ""
+    scope_args = (cohort,) if cohort else ()
     with _connect() as conn, conn.cursor() as cur:
-        cur.execute("SELECT name, job FROM overseer_roster WHERE enabled = 1")
+        cur.execute(
+            "SELECT name, job FROM overseer_roster WHERE enabled = 1"  # noqa: S608 - the only variable part is a fixed clause chosen above; every value is still bound
+            + scope,
+            scope_args,
+        )
         return {row["name"]: row["job"] for row in cur.fetchall()}
 
 
@@ -1425,9 +1455,29 @@ def _standing_travel_aims() -> dict:
     this read - the sanctioned writers are the existing economy passes, and a
     second one is how the family spent half an hour pinned in a Gadgetzan shop
     (infra#3703, infra#3708, infra#3728).
+
+    ONE CAVEAT ON "READ ONLY", AND IT IS WHY THIS IS SCOPED (infra#4221). The
+    rule above is about this file not adding a WRITER of the column. It is not
+    a claim that nothing downstream writes: `_release_stranded_ground_errands`
+    passes what this returns to `townslot.stranded_nonleader_aims` along with
+    `_head_now()`, and calls `_release_trade_errand` on every name that comes
+    back. "Stranded" is defined as "holding a ground aim and not being the
+    leader" - and every row in another cohort is, by construction, not this
+    family's leader. Unscoped, every legitimate economy aim the other guild
+    holds looks stranded to this family's sweep and is blanked, every 90
+    seconds, for ever. That guild would never complete a town errand and
+    nothing anywhere would say why: a released aim writes no log the other
+    process can see, the character simply stops walking.
     """
+    cohort = _cohort_of(bonds.head_of_family())
+    scope = " AND family = %s" if cohort else ""
+    scope_args = (cohort,) if cohort else ()
     with _connect() as conn, conn.cursor() as cur:
-        cur.execute("SELECT name, travel_npc FROM overseer_roster WHERE enabled = 1")
+        cur.execute(
+            "SELECT name, travel_npc FROM overseer_roster WHERE enabled = 1"  # noqa: S608 - the only variable part is a fixed clause chosen above; every value is still bound
+            + scope,
+            scope_args,
+        )
         return {row["name"]: (row["travel_npc"] or "") for row in cur.fetchall()}
 
 
@@ -1507,10 +1557,31 @@ def _record_trade_plan(plan) -> list:
 
 
 def _activate_training() -> bool:
-    """Promote a unanimous questing family when training work is pending."""
+    """Promote a unanimous questing family when training work is pending.
+
+    BOTH HALVES OF THIS ARE CROSS-COHORT UNSCOPED, AND THEY FAIL IN OPPOSITE
+    DIRECTIONS (infra#4221). `trainjob.should_activate` requires
+    `values == {"quest"}` across the WHOLE dict, so one row in another cohort
+    on any other job means this family can never auto-promote to training - a
+    gate that simply stops opening, with nothing to see. And if it does pass,
+    the loop below inserts a `job train` command for every name in the same
+    dict, which is the other guild's whole roster being ordered to train by a
+    process that does not drive it. A read that is also a fan-out write: the
+    permissive failure and the restrictive one share a query.
+
+    Scoping the read fixes both at once, which is the argument for putting the
+    predicate here rather than filtering `jobs` in Python afterwards.
+    """
+    cohort = _cohort_of(bonds.head_of_family())
+    scope = " AND family = %s" if cohort else ""
+    scope_args = (cohort,) if cohort else ()
     try:
         with _connect() as conn, conn.cursor() as cur:
-            cur.execute("SELECT name, job FROM overseer_roster WHERE enabled = 1")
+            cur.execute(
+                "SELECT name, job FROM overseer_roster WHERE enabled = 1"  # noqa: S608 - the only variable part is a fixed clause chosen above; every value is still bound
+                + scope,
+                scope_args,
+            )
             jobs = {row["name"]: row["job"] for row in cur.fetchall()}
             if not trainjob.should_activate(jobs, True):
                 return False
@@ -10995,10 +11066,27 @@ def _fetch_live_maps(names: list) -> dict[str, int] | None:
 
 
 def _roster_jobs() -> dict:
-    """name -> `overseer_roster.job`, the fallback half of chat.mid_run."""
+    """name -> `overseer_roster.job`, the fallback half of chat.mid_run.
+
+    THE LOWEST BLAST RADIUS OF THE TWELVE, AND SCOPED WITH THE REST ANYWAY
+    (infra#4221). `chat.mid_run` looks names up in this dict, so extra rows from
+    another cohort are names it never asks about and today cost nothing. It is
+    scoped because the alternative is a rule with an exception in it: twelve
+    reads that all mean "this family" and one that means "the table, but it
+    happens not to matter". The next person to add a caller inherits whichever
+    of those two this function actually is, and only one of them is safe to
+    inherit.
+    """
+    cohort = _cohort_of(bonds.head_of_family())
+    scope = " AND family = %s" if cohort else ""
+    scope_args = (cohort,) if cohort else ()
     with _connect() as conn, conn.cursor() as cur:
         try:
-            cur.execute("SELECT name, job FROM overseer_roster WHERE enabled = 1")
+            cur.execute(
+                "SELECT name, job FROM overseer_roster WHERE enabled = 1"  # noqa: S608 - the only variable part is a fixed clause chosen above; every value is still bound
+                + scope,
+                scope_args,
+            )
             return {row["name"]: row["job"] for row in cur.fetchall()}
         except pymysql.err.MySQLError as exc:
             # `job` arrived in a migration (infra#2834); a world without it
@@ -11886,13 +11974,25 @@ def _forge_errands() -> dict:
 
     DEGRADES TO NOBODY, matching every other reader of these columns: a world
     image without the column cannot be holding a smelt errand in it.
+
+    AND ONE COHORT'S SMELTERS, FOR THE REASON THE PARAGRAPH ABOVE ALREADY GIVES
+    (infra#4221). The forge pass is demand-driven precisely so that it does not
+    compete for the travel column unless somebody is actually smelting. A
+    second cohort's miner with `craft_spell > 0` is demand this family never
+    signalled, and aiming it puts a character the other guild drives into
+    contention for the one column - which is exactly the half-hour-in-a-shop
+    failure this function was written to avoid, arriving through the door the
+    design closed.
     """
+    cohort = _cohort_of(bonds.head_of_family())
+    scope = " AND family = %s" if cohort else ""
+    scope_args = (cohort,) if cohort else ()
     with _connect() as conn, conn.cursor() as cur:
         try:
             cur.execute(
-                "SELECT name, craft_spell FROM overseer_roster "
-                "WHERE enabled = 1 AND job = %s AND craft_spell > 0",
-                (craft.MODE,),
+                "SELECT name, craft_spell FROM overseer_roster "  # noqa: S608 - the only variable part is a fixed clause chosen above; every value is still bound
+                "WHERE enabled = 1 AND job = %s AND craft_spell > 0" + scope,
+                (craft.MODE, *scope_args),
             )
         except pymysql.err.MySQLError as exc:
             if exc.args and exc.args[0] in (1054, 1146):
