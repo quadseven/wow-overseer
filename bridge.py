@@ -437,6 +437,23 @@ TOWN_SLOT_LEASE_SECONDS = float(
     os.environ.get("TOWN_SLOT_LEASE_SECONDS", townslot.LEASE_SECONDS)
 )
 
+# THE SAME KNOB FOR THE ONE PASS WHOSE WALK LEAVES TOWN (infra#4183). The
+# argument for 450 is on `townslot.GATHER_LEASE_SECONDS`, measured against the
+# leader's own live distance to the nearest node the weakest gatherer can open.
+# Separate from the constant above because they are dimensioned from different
+# walks, and a realm whose family gathers closer to home should be able to
+# shorten this one without shortening every town errand with it.
+TOWN_SLOT_GATHER_LEASE_SECONDS = float(
+    os.environ.get("TOWN_SLOT_GATHER_LEASE_SECONDS",
+                   townslot.GATHER_LEASE_SECONDS)
+)
+
+# The claimant name the gathering pass asks the column under. A constant
+# because it is written in one place and READ in another - `Slot.long_leases`
+# is keyed on it - and two spellings of the same claimant would silently give
+# the walk a town errand's lease.
+GATHER_CLAIMANT = "gather"
+
 
 def _expire_stale_claims(seconds: int) -> int:
     """Move abandoned claims to a terminal state.
@@ -3001,6 +3018,7 @@ class Bridge(discord.Client):
         self._town_slot = townslot.Slot(
             lease=TOWN_SLOT_LEASE_SECONDS,
             releasable=_is_economy_aim,
+            long_leases={GATHER_CLAIMANT: TOWN_SLOT_GATHER_LEASE_SECONDS},
         )
         # Leader snapshot history used only to detect a vendor aim that has
         # stopped moving. The decision itself lives in vendor_stall.py.
@@ -8208,6 +8226,94 @@ class Bridge(discord.Client):
                                 spawns=spawns, family_level=level,
                                 zone_levels=zone_levels)
 
+    async def _walk_to_gather_field(self, choice) -> None:
+        """Send the family to the field `gatheraim` chose, or say why not.
+
+        THE AIM IS BUILT BY `travel.ground_aim` AND NEVER BY THIS METHOD.
+        That function refuses a malformed or over-long aim rather than
+        truncating one, and `overseer_roster.travel_npc` is VARCHAR(32) with
+        MySQL truncating outside strict mode - a truncated aim is not a failed
+        aim, it is a DIFFERENT plausible coordinate that no survey produced.
+        This project has already paid for that in dead characters, so the
+        coordinate comes from the surveyed spawn and the string comes from the
+        one writer of them.
+
+        ARRIVAL IS ASKED IN ZONES, NOT YARDS. `gatheraim` chooses a NodeField -
+        a zone's worth of nodes and one spawn to aim at - so the question "is
+        the family there yet" is about the zone, not about that one spawn out
+        of hundreds. A radius around the aimed spawn would answer no while the
+        family stood on a node forty yards away, and re-aim them across a zone
+        they had already reached. This is also the test infra#4183 states for
+        itself: "the family actually arrives in the chosen zone, verified from
+        overseer_snapshot.zone_id".
+
+        AND ARRIVAL MATTERS BECAUSE THE WORLD RELEASES THE ERRAND ITSELF.
+        mod-overseer ends a ground errand on arrival - "'Ugga' reached
+        'at:0:...' - errand done, releasing" - so the column is empty again the
+        moment the walk lands. Without this check the next goal cycle, sixty
+        seconds later, would find an empty column and a chosen field and send
+        them off again from inside it, for ever.
+
+        IT ASKS UNDER ITS OWN CLAIMANT so the column can tell a gathering walk
+        from a town errand. `Slot.long_leases` is keyed on that name: this is
+        the pass whose trip is measured in minutes, and the only one given a
+        lease dimensioned for it (`townslot.GATHER_LEASE_SECONDS`).
+        """
+        got = getattr(choice, "chosen", None)
+        if got is None:
+            # A refusal is already a sentence, and `skillgoal.plan` has just
+            # spoken it. Saying it twice in two voices is how a log stops
+            # being read.
+            return
+        leader = await asyncio.to_thread(_head_now)
+        if not leader:
+            return
+        where = (await asyncio.to_thread(_fetch_positions, [leader])).get(leader)
+        if where and where.get("zone_id") is not None:
+            try:
+                arrived = int(where["zone_id"]) == int(got.zone_id)
+            except (TypeError, ValueError):
+                arrived = False
+            if arrived:
+                log.info(
+                    "gather: leader=%s is already standing in zone %d, which "
+                    "holds the %d %s node(s) the weakest gatherer can open, so "
+                    "no aim is written and the column is left to the town "
+                    "errands",
+                    leader, got.zone_id, got.nodes, got.skill_name,
+                )
+                return
+        aim = travel.ground_aim(got.map_id, got.spawn.x, got.spawn.y,
+                                got.spawn.z)
+        if not aim:
+            # `ground_aim` already refused, and it refuses for exactly one
+            # reason worth a line here: the coordinate would not survive the
+            # column's width. Nothing else in this pass can act on that.
+            log.info(
+                "gather: the spawn chosen in zone %d on map %s does not make "
+                "an aim that fits %s, so nobody is sent",
+                got.zone_id, got.map_id, "overseer_roster.travel_npc",
+            )
+            return
+        aimed = await self._claim_town_slot(GATHER_CLAIMANT, leader, aim)
+        if not aimed:
+            # `_claim_town_slot` has already named the holder, its lease and
+            # the queue. What only this pass knows is what the wait costs: the
+            # weakest gatherer stays where no node it can open exists, so the
+            # skill it is stuck on cannot move at all until the column comes
+            # round.
+            log.info(
+                "gather: leader=%s could not be aimed at zone %d this pass, so "
+                "%s stays where nothing it can open is spawned",
+                leader, got.zone_id, got.skill_name,
+            )
+            return
+        log.info(
+            "gather: leader=%s aimed at %s - zone %d on map %d, %d %s node(s) "
+            "in the weakest gatherer's band",
+            leader, aim, got.zone_id, got.map_id, got.nodes, got.skill_name,
+        )
+
     async def _drive_skill(self, row: dict, action) -> None:
         """Turn a skill goal into a profession order, or into the sentence
         saying why there is no order to give (infra#3731).
@@ -8275,6 +8381,21 @@ class Bridge(discord.Client):
                 core.JobDirective(mode=plan.mode, source="overseer:goal"),
                 self._rhythm_channel(),
             )
+
+        # infra#4183. THE WALK, WHICH IS THE HALF #4181 LEFT OUT. The survey
+        # above chose a spawn and the plan's sentence names the zone, but
+        # nothing sent anybody there: `_set_job(MODE_GATHER)` writes
+        # `job='quest'`, which is the job the family is already standing in, so
+        # the chosen coordinate was computed, logged and dropped.
+        #
+        # NOT GATED ON `plan.mode`. The mode is only ever set on the ENTRY into
+        # the rhythm - once the family is inside it, craft_rhythm owns the
+        # alternation and this plan's mode is '' for ever after. Gating the aim
+        # on it would write the walk once and never again, which is the same
+        # inertness one layer up. The destination being chosen, and the goal
+        # not being blocked, is the whole condition.
+        if destination is not None and not plan.blocked:
+            await self._walk_to_gather_field(destination)
 
         said = plan.blocked or plan.stalled
         if said and action.speak:
@@ -9831,8 +9952,15 @@ def _fetch_family_levels(names: list) -> dict:
                 if row.get("level") is not None}
 
 
+# `zone_id` IS READ HERE AND NOWHERE ELSE (infra#4183). The gathering pass
+# needs one question answered - "is the leader already in the zone that was
+# chosen?" - and `gatheraim` chooses a ZONE, so the zone is the honest unit to
+# ask it in rather than a radius around one spawn out of hundreds. Widening
+# this read is what keeps it from becoming a second position reader: the
+# gathering survey already calls `_fetch_positions([leader])` for the map it
+# stands on, so the zone arrives in a query that was already being run.
 _FAMILY_POSITION_SQL = (
-    "SELECT name, map_id, pos_x, pos_y FROM overseer_snapshot "
+    "SELECT name, map_id, zone_id, pos_x, pos_y FROM overseer_snapshot "
     "WHERE name IN (%s) AND updated_at > NOW() - INTERVAL 60 SECOND"
 )
 

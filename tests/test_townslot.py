@@ -818,3 +818,185 @@ class ThePurityOfTheModule(unittest.TestCase):
             aim="at:1:10,20,30", pressure=True, in_run=True,
             ground=lambda value: value.startswith("at:"),
         ))
+
+
+class AWalkThatLeavesTownGetsALeaseDimensionedForIt(unittest.TestCase):
+    """infra#4183. `LEASE_SECONDS` is derived for a town errand and says so -
+    "121 yards apart in the same town ... 300 is four and a half of those
+    walks". A gathering trip is not that walk. The family's crafters
+    out-levelled their professions, so the nearest node the weakest gatherer
+    can open is in another zone: measured twice against the leader's own live
+    position, 2588 and 2344 yards, which at mod-overseer's own measured 416
+    yards a minute is 373 and 338 seconds. Both overrun a 300 second lease, so
+    a gathering walk preempted on it loses nearly the whole trip, every time.
+
+    THE DANGER IN FIXING IT IS REBUILDING THE LATCH infra#3703 CLOSED, which is
+    what the class below pins. A longer lease is still a lease."""
+
+    def test_a_claimant_with_no_long_lease_is_unchanged(self):
+        """The default carries the safety argument: naming one pass's longer
+        walk must not quietly lengthen anybody else's."""
+        self.assertEqual(
+            townslot.LEASE_SECONDS,
+            townslot.lease_for(holder("economy", "vendor", since=0.0),
+                               long_leases={"gather": 450.0}),
+        )
+
+    def test_the_named_claimant_gets_its_own_value(self):
+        self.assertEqual(
+            450.0,
+            townslot.lease_for(holder("gather", "at:1:1,2,3", since=0.0),
+                               long_leases={"gather": 450.0}),
+        )
+
+    def test_an_orphan_is_still_an_orphan(self):
+        """A holder this process cannot name has no claimant to look up, so the
+        world's own backstop outranks the mapping rather than the reverse."""
+        self.assertEqual(
+            townslot.ORPHAN_LEASE_SECONDS,
+            townslot.lease_for(holder("", "at:1:1,2,3", since=0.0),
+                               long_leases={"gather": 450.0, "": 10.0}),
+        )
+
+    def test_a_garbage_value_falls_back_rather_than_raising(self):
+        """The value arrives from an env knob, so it can be anything. Falling
+        back to the town lease is wrong-but-safe; raising here would take the
+        whole goal cycle down with it."""
+        self.assertEqual(
+            townslot.LEASE_SECONDS,
+            townslot.lease_for(holder("gather", "at:1:1,2,3", since=0.0),
+                               long_leases={"gather": "soon"}),
+        )
+
+    def test_the_constant_clears_the_longest_measured_trip(self):
+        """373 seconds of walking, plus one 60 second goal cycle for the
+        arrival to be SEEN. A lease that lapses while the walk is still landing
+        is the treadmill this was chosen over."""
+        self.assertGreaterEqual(townslot.GATHER_LEASE_SECONDS, 373.0 + 60.0)
+
+    def test_it_is_not_so_long_that_it_outlasts_an_unknown_errand(self):
+        """`ORPHAN_LEASE_SECONDS` is mod-overseer's own TRAVEL_BACKSTOP_SECONDS
+        - the point where the world stops believing in the errand. A named pass
+        allowed past it would be held longer than an errand nobody can name at
+        all, inverting the whole argument for the orphan lease."""
+        self.assertLess(townslot.GATHER_LEASE_SECONDS,
+                        townslot.ORPHAN_LEASE_SECONDS)
+
+    def test_a_gathering_walk_survives_the_town_lease_while_a_pass_waits(self):
+        """The behaviour the constant exists for, through the real decision."""
+        slot = townslot.Slot(releasable=economy,
+                             long_leases={"gather": 450.0})
+        taken = slot.want(claimant="gather", character="Grug",
+                          aim="at:1:100,200,30", leader="Grug", column="",
+                          retaskable=("", "at:1:100,200,30"), now=0.0)
+        slot.settle(taken, True, 0.0)
+        # 360 seconds in: past a town errand's 300, inside the walk's 450.
+        waiting = slot.want(claimant="guild bank", character="Grug",
+                            aim="guild banker", leader="Grug",
+                            column="at:1:100,200,30",
+                            retaskable=("", "guild banker"), now=360.0)
+        self.assertEqual(townslot.SLOT_WAIT, waiting.verdict)
+        self.assertFalse(waiting.granted)
+
+    def test_the_same_wait_would_have_preempted_a_town_errand(self):
+        """The control. Identical timing and an identical ground aim, with a
+        claimant that has no long lease - so the test above is proving the
+        mapping rather than merely the clock."""
+        slot = townslot.Slot(releasable=economy,
+                             long_leases={"gather": 450.0})
+        taken = slot.want(claimant="forge", character="Grug",
+                          aim="at:1:100,200,30", leader="Grug", column="",
+                          retaskable=("", "at:1:100,200,30"), now=0.0)
+        slot.settle(taken, True, 0.0)
+        waiting = slot.want(claimant="guild bank", character="Grug",
+                            aim="guild banker", leader="Grug",
+                            column="at:1:100,200,30",
+                            retaskable=("", "guild banker"), now=360.0)
+        self.assertEqual(townslot.SLOT_PREEMPT, waiting.verdict)
+
+
+class ALongerLeaseIsStillALease(unittest.TestCase):
+    """infra#3703's rule, re-proved against the longest holder on the column.
+
+    "An errand that cannot finish must not hold it for ever" is the defect that
+    module exists to end, and the tempting shape for a long walk - exempting it
+    the way a trainer errand is exempted - would rebuild exactly that latch.
+    The trainer exemption works by being a KEYWORD aim `_is_economy_aim`
+    refuses to release; a gathering aim is a ground aim, so it stays releasable
+    and therefore stays preemptible. These fail if that stops being true."""
+
+    def test_a_gathering_walk_is_preempted_once_its_own_lease_runs_out(self):
+        slot = townslot.Slot(releasable=economy,
+                             long_leases={"gather": 450.0})
+        taken = slot.want(claimant="gather", character="Grug",
+                          aim="at:1:100,200,30", leader="Grug", column="",
+                          retaskable=("", "at:1:100,200,30"), now=0.0)
+        slot.settle(taken, True, 0.0)
+        waiting = slot.want(claimant="guild bank", character="Grug",
+                            aim="guild banker", leader="Grug",
+                            column="at:1:100,200,30",
+                            retaskable=("", "guild banker"), now=500.0)
+        self.assertEqual(townslot.SLOT_PREEMPT, waiting.verdict)
+        self.assertTrue(waiting.granted)
+
+    def test_it_cannot_hold_the_column_for_ever_by_re_asserting(self):
+        """The lease runs from when the errand was taken, and the gathering
+        pass re-asserts every 60 seconds like every other pass. An hour of
+        re-assertion must not push it out - the rule
+        `TheLeaseRunsFromWhenItWasTaken` pins for town errands, proved again
+        for the one claimant allowed to outlast them."""
+        slot = townslot.Slot(releasable=economy,
+                             long_leases={"gather": 450.0})
+        first = slot.want(claimant="gather", character="Grug",
+                          aim="at:1:100,200,30", leader="Grug", column="",
+                          retaskable=("", "at:1:100,200,30"), now=0.0)
+        slot.settle(first, True, 0.0)
+        for minute in range(1, 60):
+            again = slot.want(claimant="gather", character="Grug",
+                              aim="at:1:100,200,30", leader="Grug",
+                              column="at:1:100,200,30",
+                              retaskable=("", "at:1:100,200,30"),
+                              now=minute * 60.0)
+            slot.settle(again, True, minute * 60.0)
+        self.assertEqual(0.0, slot.holder.since)
+        waiting = slot.want(claimant="guild bank", character="Grug",
+                            aim="guild banker", leader="Grug",
+                            column="at:1:100,200,30",
+                            retaskable=("", "guild banker"), now=3600.0)
+        self.assertEqual(townslot.SLOT_PREEMPT, waiting.verdict)
+
+    def test_a_full_bag_still_cuts_through_it_immediately(self):
+        """`Slot.want` zeroes every lease for an urgent caller, and this is the
+        one that must not be forgotten when a new lease is added: a gathering
+        walk is the longest hold on the column, so a full bag blocking loot has
+        to take it at once rather than after 450 seconds."""
+        slot = townslot.Slot(releasable=economy,
+                             long_leases={"gather": 450.0})
+        taken = slot.want(claimant="gather", character="Grug",
+                          aim="at:1:100,200,30", leader="Grug", column="",
+                          retaskable=("", "at:1:100,200,30"), now=0.0)
+        slot.settle(taken, True, 0.0)
+        urgent = slot.want(claimant="economy", character="Grug", aim="vendor",
+                           leader="Grug", column="at:1:100,200,30",
+                           retaskable=("", "vendor"), now=1.0, urgent=True)
+        self.assertEqual(townslot.SLOT_PREEMPT, urgent.verdict)
+        self.assertTrue(urgent.granted)
+
+    def test_an_idle_drive_can_still_clear_it_once_the_lease_lapses(self):
+        """`want_idle` reads the same mapping, so the gathering walk is not
+        quietly exempt from the one path that empties the column for a drive
+        that wants no errand at all (infra#3728)."""
+        slot = townslot.Slot(releasable=economy,
+                             long_leases={"gather": 450.0})
+        taken = slot.want(claimant="gather", character="Grug",
+                          aim="at:1:100,200,30", leader="Grug", column="",
+                          retaskable=("", "at:1:100,200,30"), now=0.0)
+        slot.settle(taken, True, 0.0)
+        held = slot.want_idle(claimant="craft_rhythm", character="Grug",
+                              leader="Grug", column="at:1:100,200,30",
+                              now=400.0)
+        self.assertEqual(townslot.SLOT_WAIT, held.verdict)
+        cleared = slot.want_idle(claimant="craft_rhythm", character="Grug",
+                                 leader="Grug", column="at:1:100,200,30",
+                                 now=500.0)
+        self.assertEqual(townslot.SLOT_CLEAR, cleared.verdict)

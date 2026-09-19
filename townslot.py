@@ -114,6 +114,43 @@ LEASE_SECONDS = 300.0
 # too, and taking the column is not a race with anything.
 ORPHAN_LEASE_SECONDS = 1200.0
 
+# THE SAME, FOR A WALK THAT LEAVES TOWN (infra#4183).
+#
+# LEASE_SECONDS is dimensioned for a town errand and says so: "121 yards apart
+# in the same town ... 300 is four and a half of those walks". A gathering trip
+# is not that walk. The family's crafters out-levelled their professions, so
+# the nearest node the weakest gatherer can open is in another zone, and the
+# distance was measured twice against the leader's own live position:
+#
+#     2588 yards  (leader in zone 1377)
+#     2344 yards  (leader in zone 490, four minutes later)
+#
+# mod-overseer logs its own effective rate - straight-line distance against
+# wall-clock arrival, so pathing is already inside the number:
+#
+#     15:41:43  'Ugga' sent to 'at:0:-11208.5,1685.34,25.76' - creature 0 at 2391 yards
+#     15:47:28  'Ugga' reached 'at:0:-11208.5,1685.34,25.76' - errand done, releasing
+#
+# 2391 yards in 345 seconds is 416 yards a minute, which puts those two trips
+# at 373 and 338 seconds - both past a 300 second lease, neither near a
+# different order of magnitude. So this is a mis-dimensioned constant rather
+# than a missing subsystem, and the fix is a value dimensioned for the walk.
+#
+# 373 for the longest measured trip, plus one GOAL_INTERVAL (60) for the
+# arrival to be SEEN, is 433; rounded up to the next half-minute, 450. It is
+# derived rather than generous on purpose: this makes gathering the longest
+# holder of the family's one column, and the guild bank pass has already been
+# measured waiting over twenty minutes for it.
+#
+# IT IS A LEASE AND NOT AN EXEMPTION, which is the distinction infra#3703
+# exists to keep. A gathering aim is a ground aim, so `_is_economy_aim` calls
+# it releasable and it stays preemptible - at 450 seconds by a starved pass,
+# and immediately by an urgent one, because `Slot.want` zeroes every lease
+# when a full bag is blocking loot. The trainer-errand path above is the
+# exemption shape, and this deliberately is not it: an errand that cannot
+# finish still must not hold the column for ever.
+GATHER_LEASE_SECONDS = 450.0
+
 # HOW LONG A WANT COUNTS AS LIVE WITHOUT BEING RENEWED.
 #
 # A want is registered by a pass that ran and was refused, so a living loop
@@ -203,15 +240,33 @@ class Decision:
 
 
 def lease_for(holder: Holder | None, lease: float = LEASE_SECONDS,
-              orphan_lease: float = ORPHAN_LEASE_SECONDS) -> float:
+              orphan_lease: float = ORPHAN_LEASE_SECONDS,
+              long_leases=None) -> float:
     """How long this holder may keep the traveller while somebody waits.
 
     An orphan gets the longer one. See ORPHAN_LEASE_SECONDS: the shorter lease
     is a promise this process can only make about errands it issued itself.
+
+    `long_leases` is {claimant: seconds} for the passes whose walk is longer
+    than a town errand's, and it is keyed on the CLAIMANT rather than on the
+    aim (infra#4183). The aim cannot carry it: a gathering aim and a forge aim
+    are both `at:<map>:<x>,<y>,<z>` and nothing in the string says which walk
+    it is. The claimant is the pass that asked, which is exactly the thing
+    whose trip length is known.
+
+    A claimant with no entry gets `lease`, so adding one pass's longer walk
+    cannot quietly change anybody else's.
     """
     if holder is None:
         return 0.0
-    return orphan_lease if not holder.claimant else lease
+    if not holder.claimant:
+        return orphan_lease
+    if long_leases:
+        try:
+            return float(long_leases.get(holder.claimant, lease))
+        except (TypeError, ValueError):
+            return lease
+    return lease
 
 
 def fresh_wants(wants, now: float, want_fresh: float = WANT_FRESH_SECONDS) -> list:
@@ -273,6 +328,7 @@ def decide(*, claimant: str, character: str, aim: str, leader: str,
            urgent: bool = False,
            lease: float = LEASE_SECONDS,
            orphan_lease: float = ORPHAN_LEASE_SECONDS,
+           long_leases=None,
            want_fresh: float = WANT_FRESH_SECONDS,
            releasable=None) -> Decision:
     """May this pass have the traveller, and what has to happen first.
@@ -381,6 +437,7 @@ def decide(*, claimant: str, character: str, aim: str, leader: str,
     return _held_column(
         claimant=claimant, character=character, aim=aim, holder=holder,
         wants=wants, now=now, lease=lease, orphan_lease=orphan_lease,
+        long_leases=long_leases,
         want_fresh=want_fresh, releasable=releasable, urgent=urgent,
     )
 
@@ -389,6 +446,7 @@ def decide_idle(*, claimant: str, character: str, leader: str, column: str,
                 holder: Holder | None, wants, now: float,
                 lease: float = LEASE_SECONDS,
                 orphan_lease: float = ORPHAN_LEASE_SECONDS,
+                long_leases=None,
                 want_fresh: float = WANT_FRESH_SECONDS,
                 releasable=None) -> Decision:
     """May this drive have an empty travel column?"""
@@ -415,6 +473,7 @@ def decide_idle(*, claimant: str, character: str, leader: str, column: str,
     return _held_column(
         claimant=claimant, character=character, aim="", holder=holder,
         wants=wants, now=now, lease=lease, orphan_lease=orphan_lease,
+        long_leases=long_leases,
         want_fresh=want_fresh, releasable=releasable, clearing=True,
     )
 
@@ -475,7 +534,7 @@ def _free_column(*, claimant: str, character: str, aim: str, wants,
 def _held_column(*, claimant: str, character: str, aim: str, holder: Holder,
                  wants, now: float, lease: float, orphan_lease: float,
                  want_fresh: float, releasable, clearing: bool = False,
-                 urgent: bool = False) -> Decision:
+                 urgent: bool = False, long_leases=None) -> Decision:
     """Somebody else has the traveller. Wait, or take it off them?
 
     THE ONLY PLACE A PREEMPTION IS DECIDED, and it takes three things to agree:
@@ -484,7 +543,7 @@ def _held_column(*, claimant: str, character: str, aim: str, holder: Holder,
     missing is a wait.
     """
     held_for = now - holder.since
-    allowed = lease_for(holder, lease, orphan_lease)
+    allowed = lease_for(holder, lease, orphan_lease, long_leases)
     owner = holder.claimant or "an unknown writer"
 
     if not releasable(holder.aim):
@@ -604,11 +663,15 @@ class Slot:
     def __init__(self, lease: float = LEASE_SECONDS,
                  orphan_lease: float = ORPHAN_LEASE_SECONDS,
                  want_fresh: float = WANT_FRESH_SECONDS,
-                 releasable=None) -> None:
+                 releasable=None, long_leases=None) -> None:
         self.lease = float(lease)
         self.orphan_lease = float(orphan_lease)
         self.want_fresh = float(want_fresh)
         self.releasable = releasable
+        # {claimant: seconds} for passes whose walk leaves town (infra#4183).
+        # Empty by default, so a caller that names none behaves exactly as it
+        # did before this existed.
+        self.long_leases = dict(long_leases or {})
         self.holder: Holder | None = None
         self._wants: dict = {}
         self._served: dict = {}
@@ -632,12 +695,18 @@ class Slot:
         # `releasable` predicate still refuses profession or operator aims.
         lease = 0.0 if urgent else self.lease
         orphan_lease = 0.0 if urgent else self.orphan_lease
+        # ZEROED WITH THE OTHER TWO, and that is the whole reason a long lease
+        # is safe to grant (infra#4183). A gathering walk is the longest hold
+        # on this column, so the one thing that must still cut through it is a
+        # full bag blocking loot. Leaving it out here would make the longer
+        # lease an exemption rather than a lease.
+        long_leases = {} if urgent else self.long_leases
         decision = decide(
             claimant=claimant, character=character, aim=aim, leader=leader,
             column=column, retaskable=retaskable, holder=self.holder,
             wants=self.wants, last_served=self._served, now=now,
             urgent=urgent,
-            lease=lease, orphan_lease=orphan_lease,
+            lease=lease, orphan_lease=orphan_lease, long_leases=long_leases,
             want_fresh=self.want_fresh, releasable=self.releasable,
         )
         if decision.verdict == SLOT_WAIT and decision.aim:
@@ -653,6 +722,7 @@ class Slot:
             claimant=claimant, character=character, leader=leader,
             column=column, holder=self.holder, wants=self.wants, now=now,
             lease=self.lease, orphan_lease=self.orphan_lease,
+            long_leases=self.long_leases,
             want_fresh=self.want_fresh, releasable=self.releasable,
         )
         if decision.verdict == SLOT_WAIT:
