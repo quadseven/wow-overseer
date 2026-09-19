@@ -33,6 +33,7 @@ on:
       - '*.html'
       - 'jquery.min.js'
       - 'Dockerfile'
+      - '.dockerignore'
       - '.github/workflows/build.yml'
   push:
     branches: [main]
@@ -42,6 +43,7 @@ on:
       - '*.html'
       - 'jquery.min.js'
       - 'Dockerfile'
+      - '.dockerignore'
       - '.github/workflows/build.yml'
   workflow_dispatch:
 
