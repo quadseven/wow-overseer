@@ -27,6 +27,7 @@ on:
       - 'patches/**'
       - 'wow-addons/**'
       - 'mod-overseer'
+      - '.dockerignore'
       - '.github/workflows/check.yml'
       - '.github/scripts/compile_check.py'
   pull_request:
@@ -37,6 +38,7 @@ on:
       - 'patches/**'
       - 'wow-addons/**'
       - 'mod-overseer'
+      - '.dockerignore'
       - '.github/workflows/check.yml'
       - '.github/scripts/compile_check.py'
   workflow_dispatch:
