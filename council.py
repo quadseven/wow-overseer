@@ -37,6 +37,7 @@ from datetime import datetime, timedelta
 
 import achievements
 import bonds
+import dungeonprogression
 
 # A member this far below the family's median level is visibly struggling and
 # the family notices. Two is ordinary spread between people playing different
@@ -410,7 +411,8 @@ def _script(tally: list, withheld: list) -> list:
 
 
 def hold(members: list, *, history: list, level_rows: list[dict] | None = None,
-         cards: list[dict] | None = None) -> Council:
+         cards: list[dict] | None = None,
+         completed_wings: dict[str, int] | None = None) -> Council:
     """Run one council. Members in, a conversation and one plan out.
 
     Deterministic: the same state produces the same plan every time, so the
@@ -441,7 +443,9 @@ def hold(members: list, *, history: list, level_rows: list[dict] | None = None,
            if p is not None]
     # The one proposal not spoken for by assess(). See the docstring above
     # for why it lives here instead.
-    dungeon = _dungeon_proposal(speakers, level_rows or [], cards or [])
+    dungeon = _dungeon_proposal(
+        speakers, level_rows or [], cards or [], completed_wings
+    )
     if dungeon is not None:
         raw.append(dungeon)
     if not raw:
@@ -830,8 +834,53 @@ def _scarlet_keyword(level: int) -> str:
     return keyword
 
 
+def _wing_rated_prospects(level_rows: list[dict], cards: list[dict],
+                          level: int) -> list[dict]:
+    """prospects(), with Scarlet Monastery re-rated to the wing this family
+    can actually reach.
+
+    Scarlet Monastery's entry in PLACES carries only the graveyard's level -
+    one number per map id, and it is the LOWEST of the four wings. Comparing
+    that number straight against every other dungeon would have the council
+    always undersell Scarlet Monastery once the family outgrows its door,
+    proposing Zul'Farrak over the cathedral for a family strong enough for
+    both. So the map-189 row is re-rated here to whichever wing the family
+    can ACTUALLY reach, before the frontier is chosen - the same
+    short/ready arithmetic prospects() uses, just aimed at the wing instead
+    of the doorway.
+    """
+    wing_wants = dict(SCARLET_WINGS)[_scarlet_keyword(level)]
+    rated = []
+    for p in prospects(level_rows, cards):
+        if p["map_id"] == SCARLET_MAP_ID:
+            short = wing_wants - level
+            p = dict(p, wants=wing_wants, short=max(short, 0), ready=short <= 0)
+        rated.append(p)
+    return rated
+
+
+def _ready_dungeon_prospects(rated: list[dict], ordered_keyword: str,
+                             completed_wings: dict[str, int] | None) -> list[dict]:
+    """The READY/NEAR_ENOUGH prospects, narrowed to Scarlet's next wing once
+    the run ledger can order its progression.
+
+    Once the run ledger can identify Scarlet's portal, progression outranks
+    the level frontier: the first unfinished wing is the only Scarlet target
+    eligible for this campaign. A missing ledger deliberately preserves the
+    old frontier behaviour until the matching worldserver writer is live.
+    """
+    ready = [p for p in rated if p["short"] <= NEAR_ENOUGH]
+    if completed_wings is None or not ordered_keyword:
+        return ready
+    scarlet = next((p for p in rated if p["map_id"] == SCARLET_MAP_ID), None)
+    if scarlet is None or scarlet["short"] > NEAR_ENOUGH:
+        return []
+    return [scarlet]
+
+
 def _dungeon_proposal(speakers: list, level_rows: list[dict],
-                      cards: list[dict]) -> Proposal | None:
+                      cards: list[dict],
+                      completed_wings: dict[str, int] | None = None) -> Proposal | None:
     """A family-wide proposal to run a dungeon, when one is actually ready.
 
     Built from prospects() - the exact readiness gate the Council tab already
@@ -859,24 +908,11 @@ def _dungeon_proposal(speakers: list, level_rows: list[dict],
     if voice is None:
         return None
 
-    # Scarlet Monastery's entry in PLACES carries only the graveyard's level -
-    # one number per map id, and it is the LOWEST of the four wings. Comparing
-    # that number straight against every other dungeon would have the council
-    # always undersell Scarlet Monastery once the family outgrows its door,
-    # proposing Zul'Farrak over the cathedral for a family strong enough for
-    # both. So the map-189 row is re-rated here to whichever wing the family
-    # can ACTUALLY reach, before the frontier is chosen - the same
-    # short/ready arithmetic prospects() uses, just aimed at the wing instead
-    # of the doorway.
-    wing_wants = dict(SCARLET_WINGS)[_scarlet_keyword(level)]
-    rated = []
-    for p in prospects(level_rows, cards):
-        if p["map_id"] == SCARLET_MAP_ID:
-            short = wing_wants - level
-            p = dict(p, wants=wing_wants, short=max(short, 0), ready=short <= 0)
-        rated.append(p)
-
-    ready = [p for p in rated if p["short"] <= NEAR_ENOUGH]
+    rated = _wing_rated_prospects(level_rows, cards, level)
+    ordered_keyword = dungeonprogression.next_scarlet_wing(
+        completed_wings, DUNGEON_RUNS_WANTED, wings=SCARLET_WINGS,
+    )
+    ready = _ready_dungeon_prospects(rated, ordered_keyword, completed_wings)
     if not ready:
         return None
     # The FRONTIER, not the first entry: prospects() lists everything the
@@ -885,7 +921,11 @@ def _dungeon_proposal(speakers: list, level_rows: list[dict],
     # into - not the easiest. Ties favour Scarlet Monastery, Evan's own
     # stated priority.
     best = max(ready, key=lambda p: (p["wants"], p["map_id"] == SCARLET_MAP_ID))
-    keyword = _scarlet_keyword(level) if best["map_id"] == SCARLET_MAP_ID else ""
+    keyword = (
+        ordered_keyword if completed_wings is not None and ordered_keyword
+        else _scarlet_keyword(level) if best["map_id"] == SCARLET_MAP_ID
+        else ""
+    )
     place = best["place"]
     if best["ready"]:
         said = f"{place} will not trouble us now. We should go in."

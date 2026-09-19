@@ -33,6 +33,7 @@ COPY core.py bridge.py voice.py transform.py \
      relay.py digest.py \
      achievements.py recap.py standing.py agenda.py eye.py decree.py \
      dungeonplan.py raidgoals.py raidcraft.py raidprep.py \
+     dungeonprogression.py \
      guildcraft.py tradespec.py guildbank.py guildshare.py recruit.py \
      bag_pressure.py bag_upgrade.py bag_economy.py disposition.py \
      item_plan.py \

@@ -45,6 +45,7 @@ import guildshare
 import craft
 import craft_rhythm
 import craft_supply
+import dungeonprogression
 import item_plan
 import jobs
 import kin
@@ -1070,6 +1071,30 @@ _COUNCIL_MEMBER_SQL = (
     "       ON s.name = c.name AND s.updated_at > NOW() - INTERVAL 60 SECOND "
     "WHERE c.name IN (%s)"
 )
+
+
+def _fetch_scarlet_completion() -> dict[str, int] | None:
+    """Read the durable per-wing completion ledger when deployed.
+
+    ``portal_keyword`` is added by the matching mod-overseer migration. Older
+    realms must not make the council fail, and must not cause it to guess an
+    ordered campaign from map 189 alone.
+    """
+    try:
+        with _connect() as conn, conn.cursor() as cur:
+            cur.execute(
+                "SELECT portal_keyword, outcome FROM overseer_dungeon_run "
+                "WHERE map_id = 189 AND state = 'ended'"
+            )
+            return dungeonprogression.successful_runs(cur.fetchall())
+    except pymysql.err.MySQLError as exc:
+        if exc.args and exc.args[0] in (1054, 1146):
+            log.info(
+                "dungeon progression ledger unavailable; council keeps the "
+                "legacy dungeon ranking until portal identity is deployed"
+            )
+            return None
+        raise
 
 
 def _fetch_council_members(names: list) -> list:
@@ -3781,8 +3806,10 @@ class Bridge(discord.Client):
         # is the whole of what the proposal acts on. Tracked as a follow-up
         # rather than silently declared complete.
         level_rows = [{"name": m.name, "level": m.level} for m in members]
+        completed_wings = await asyncio.to_thread(_fetch_scarlet_completion)
         held = council.hold(members, history=history,
-                            level_rows=level_rows, cards=[])
+                            level_rows=level_rows, cards=[],
+                            completed_wings=completed_wings)
         if not held.lines:
             log.info("council: %s", held.reason)
             return

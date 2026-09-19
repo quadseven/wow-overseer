@@ -111,6 +111,21 @@ class TheDungeonProposalFiresWhenReady(unittest.TestCase):
         self.assertEqual("dungeon", proposal.kind)
         self.assertEqual("scarlet-cathedral", proposal.keyword)
 
+    def test_durable_scarlet_counts_force_the_first_unfinished_wing(self):
+        proposal = council._dungeon_proposal(
+            self.members, self.rows, [], {"scarlet": 0}
+        )
+        self.assertIsNotNone(proposal)
+        self.assertEqual("scarlet", proposal.keyword)
+
+    def test_durable_scarlet_counts_advance_one_wing_at_a_time(self):
+        proposal = council._dungeon_proposal(
+            self.members, self.rows, [],
+            {"scarlet": 25, "scarlet-library": 25},
+        )
+        self.assertIsNotNone(proposal)
+        self.assertEqual("scarlet-armory", proposal.keyword)
+
     def test_it_is_raised_by_and_for_the_weakest_member(self):
         rows = _levels([("Grug", 45), ("Ugga", 45), ("Grog", 45), ("Bork", 41),
                         ("Og", 45)])
