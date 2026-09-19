@@ -43,6 +43,7 @@ COPY core.py bridge.py voice.py transform.py \
      realm.py basepath.py watchwall.py realmnav.py \
      needs.py partystatus.py lootcard.py towntrip.py \
      townslot.py \
+     enroll.py \
      tabard.py crossing.py \
      vendor_stall.py \
      zones.json entrances.json shapes.json \
