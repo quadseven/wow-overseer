@@ -37,8 +37,7 @@ HERE = pathlib.Path(__file__).resolve().parent.parent
 PAGE = (HERE / "index.html").read_text(encoding="utf-8")
 SERVER = (HERE / "map_server.py").read_text(encoding="utf-8")
 MODULE = (HERE / "raidgoals.py").read_text(encoding="utf-8")
-DOCKERFILE = (HERE.parent.parent / "docker" / "wow-overseer"
-              / "Dockerfile").read_text(encoding="utf-8")
+DOCKERFILE = (HERE / "Dockerfile").read_text(encoding="utf-8")
 
 BANNER = "// --- what the guild still needs before it can raid (infra#3508)"
 CSS_BANNER = "/* --- what the guild still needs before it can raid (infra#3508)"
@@ -287,7 +286,7 @@ class TheEndpoint(unittest.TestCase):
     def test_the_module_ships_in_the_image(self):
         """A module the page imports and the image does not carry is a crash
         at pod start, long after CI went green."""
-        self.assertIn("_shared/raidgoals.py", DOCKERFILE)
+        self.assertIn("raidgoals.py", DOCKERFILE)
 
 
 class TheReads(unittest.TestCase):

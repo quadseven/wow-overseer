@@ -12,7 +12,7 @@ import unittest
 
 PACKAGE = pathlib.Path(__file__).resolve().parents[1]
 BRIDGE = PACKAGE / "bridge.py"
-DOCKERFILE = pathlib.Path(__file__).resolve().parents[1] / "docker/wow-overseer/Dockerfile"
+DOCKERFILE = pathlib.Path(__file__).resolve().parents[1] / "Dockerfile"
 
 
 def _source() -> str:
@@ -468,7 +468,7 @@ class TheTakeQueueWaitsForTheWalk(unittest.TestCase):
 class TheModuleShips(unittest.TestCase):
 
     def test_mailrun_is_in_the_image(self):
-        self.assertIn("_shared/mailrun.py", DOCKERFILE.read_text(encoding="utf-8"))
+        self.assertIn("mailrun.py", DOCKERFILE.read_text(encoding="utf-8"))
 
     def test_the_bridge_imports_it(self):
         self.assertIn("\nimport mailrun\n", _source())

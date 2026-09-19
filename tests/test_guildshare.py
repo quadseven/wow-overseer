@@ -23,8 +23,7 @@ import bag_pressure
 import guildshare
 
 BRIDGE = pathlib.Path(__file__).resolve().parents[1] / "bridge.py"
-DOCKERFILE = (pathlib.Path(__file__).resolve().parents[1]
-              / "docker" / "wow-overseer" / "Dockerfile")
+DOCKERFILE = (pathlib.Path(__file__).resolve().parents[1] / "Dockerfile")
 
 
 def _stack(holder, item, entry, count, guid, item_class=guildshare.TRADE_GOODS,

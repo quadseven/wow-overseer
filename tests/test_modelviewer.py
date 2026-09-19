@@ -180,10 +180,7 @@ class TheEndpoint(unittest.TestCase):
     def setUpClass(cls):
         here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         cls.server = open(os.path.join(here, "map_server.py")).read()
-        cls.manifest = open(os.path.join(here, "..", "..", "oke", "manifests", "wow",
-                                         "80-map.yaml")).read()
-        cls.dockerfile = open(os.path.join(here, "..", "..", "docker", "wow-overseer",
-                                           "Dockerfile")).read()
+        cls.dockerfile = open(os.path.join(here, "Dockerfile")).read()
 
     def test_the_route_is_a_prefix_and_the_prefix_is_the_pages_content_path(self):
         self.assertIn('MODEL_PREFIX = "/modelviewer/"', self.server)
@@ -199,17 +196,14 @@ class TheEndpoint(unittest.TestCase):
         self.assertIn("timeout=modelviewer.UPSTREAM_TIMEOUT_SECONDS", fetch)
         self.assertIn("except urllib.error.HTTPError", fetch)
 
-    def test_the_cache_is_an_emptydir_on_the_pod(self):
-        """The image runs as a non-root user with no writable /app; without
-        a mount the cache silently degrades to fetching every file every
-        time, which is the one thing this route exists to stop."""
-        self.assertIn("name: MODEL_CACHE_DIR", self.manifest)
-        self.assertIn("value: /var/cache/modelviewer", self.manifest)
-        self.assertIn("mountPath: /var/cache/modelviewer", self.manifest)
-        self.assertIn("sizeLimit:", self.manifest)
+    # test_the_cache_is_an_emptydir_on_the_pod removed here: it asserted
+    # against quadseven/infra's production/oke/manifests/wow/80-map.yaml,
+    # which this repo does not carry (infra owns the deployment manifests).
+    # An equivalent assertion should live in infra's own render-test suite
+    # for that manifest instead - see the tracking issue for this split.
 
     def test_the_module_ships_in_the_image(self):
-        self.assertIn("_shared/modelviewer.py", self.dockerfile)
+        self.assertIn("modelviewer.py", self.dockerfile)
 
 
 if __name__ == "__main__":

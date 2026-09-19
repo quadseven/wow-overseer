@@ -340,9 +340,8 @@ class ThePageOnlyDraws(unittest.TestCase):
         self.assertIn("if (view === EYE_VIEW) pollEye();", self.code)
 
     def test_the_module_ships_in_the_image(self):
-        dockerfile = (HERE.parent.parent / "docker" / "wow-overseer"
-                      / "Dockerfile").read_text(encoding="utf-8")
-        self.assertIn("_shared/eye.py", dockerfile)
+        dockerfile = (HERE / "Dockerfile").read_text(encoding="utf-8")
+        self.assertIn("eye.py", dockerfile)
 
     def test_the_one_breakpoint_is_the_one_the_handoff_names(self):
         """Mobile-first, a single breakpoint at 640px, and everything else

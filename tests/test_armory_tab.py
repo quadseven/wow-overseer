@@ -793,8 +793,7 @@ class TheEndpoint(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.server = (HERE / "map_server.py").read_text()
-        cls.dockerfile = (HERE.parent.parent / "docker" / "wow-overseer"
-                          / "Dockerfile").read_text()
+        cls.dockerfile = (HERE / "Dockerfile").read_text()
 
     def test_the_endpoint_is_reachable(self):
         self.assertIn('"/api/armory": _armory,', self.server)
@@ -863,10 +862,10 @@ class TheEndpoint(unittest.TestCase):
         """armory.TalentBook.load runs at IMPORT time, so an image without
         talents.json does not start at all - and that failure lands at pod
         start, long after CI has gone green."""
-        self.assertIn("_shared/talents.json", self.dockerfile)
+        self.assertIn("talents.json", self.dockerfile)
         for book in ("items", "icons", "spells"):
-            self.assertIn(f"_shared/{book}.json", self.dockerfile)
-        self.assertIn("_shared/armory.py", self.dockerfile)
+            self.assertIn(f"{book}.json", self.dockerfile)
+        self.assertIn("armory.py", self.dockerfile)
 
     def test_the_gear_query_carries_the_instance_not_just_the_template(self):
         """enchantments and randomPropertyId are what make a belt a 'Belt
@@ -883,15 +882,11 @@ class TheEndpoint(unittest.TestCase):
         self.assertIn("acore_world.player_class_stats", fetch)
         self.assertIn("acore_world.player_race_stats", fetch)
 
-    def test_the_dev_world_saves_stats_for_external_readers(self):
-        """character_stats is written only when PlayerSave.Stats.MinLevel
-        allows, and only on logout unless SaveOnlyOnLogout is off. The dev
-        overlay turns both on; without them the stat block is derived
-        forever."""
-        conf = (HERE.parent.parent / "oke" / "manifests" / "wow-dev" / "config"
-                / "worldserver.overrides.conf").read_text()
-        self.assertIn("\nPlayerSave.Stats.MinLevel = 1\n", conf)
-        self.assertIn("\nPlayerSave.Stats.SaveOnlyOnLogout = 0\n", conf)
+    # test_the_dev_world_saves_stats_for_external_readers removed here: it
+    # read quadseven/infra's production/oke/manifests/wow-dev/config/
+    # worldserver.overrides.conf, which this repo does not carry. An
+    # equivalent check should live in infra's own wow-dev render-test suite
+    # instead - see the tracking issue for this split.
 
 
 if __name__ == "__main__":

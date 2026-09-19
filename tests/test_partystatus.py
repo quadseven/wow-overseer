@@ -19,7 +19,7 @@ import unittest
 import partystatus
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
-ADDON = ROOT / "hosts/srv-unraid-gpu/wow-addons/PartyStatus"
+ADDON = ROOT / "wow-addons/PartyStatus"
 HERE = pathlib.Path(__file__).resolve().parent.parent
 
 NOW = datetime.datetime(2026, 9, 5, 12, 0, 0)
@@ -410,15 +410,13 @@ class TheAddonMirrorsTheModule(unittest.TestCase):
     def test_the_label_never_takes_a_click_off_the_world(self):
         self.assertIn("frame:EnableMouse(false)", self.lua)
 
-    def test_an_edit_to_the_lua_alone_still_runs_this_suite(self):
-        """Otherwise the mirror guard is decoration on exactly the change it
-        exists to catch: the addon lives outside production/scripts, so its
-        path has to be named in the workflow that runs this file."""
-        flow = (ROOT.parent / ".github" / "workflows"
-                / "check.python-units.yml").read_text()
-        self.assertEqual(
-            flow.count("production/hosts/srv-unraid-gpu/wow-addons/**"), 2,
-            "both the push and the pull_request filters must name it")
+    # test_an_edit_to_the_lua_alone_still_runs_this_suite removed here: it
+    # asserted that quadseven/infra's check.python-units.yml named the
+    # addon's path in its trigger filters, which mattered when this suite
+    # read the addon from infra's tree. It now reads a vendored copy in
+    # this repo (wow-addons/PartyStatus/), which check.yml above already
+    # triggers on via **.py plus the whole suite always running - the
+    # premise this test protected does not apply here any more.
 
     def test_the_toc_is_one_a_335a_client_will_load(self):
         self.assertIn("## Interface: 30300", self.toc)
@@ -449,9 +447,8 @@ class TheEndpointIsWired(unittest.TestCase):
         """The bridge image is built from the shared tarball by name, so a
         module left out of this list imports fine in the suite and crashes the
         map server on the next roll."""
-        dockerfile = (HERE.parent.parent / "docker" / "wow-overseer"
-                      / "Dockerfile").read_text(encoding="utf-8")
-        self.assertIn("_shared/partystatus.py", dockerfile)
+        dockerfile = (HERE / "Dockerfile").read_text(encoding="utf-8")
+        self.assertIn("partystatus.py", dockerfile)
 
 
 

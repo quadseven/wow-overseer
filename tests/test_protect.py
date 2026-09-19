@@ -187,24 +187,11 @@ class RosterWiringTest(unittest.TestCase):
         self.assertIn("OVERSEER_NOTABLE_NAMES", env)
 
 
-class RosterManifestTest(unittest.TestCase):
-    def test_every_family_member_is_notable(self):
-        """A family member missing from OVERSEER_NOTABLE_NAMES is never logged
-        in, so they silently never answer a muster - which reads as the bond
-        rules being wrong rather than as a character who is not there."""
-        import bonds
-
-        manifest = (
-            pathlib.Path(__file__).resolve().parents[1]
-            / "oke/manifests/wow/70-overseer.yaml"
-        ).read_text()
-        m = re.search(
-            r'name:\s*OVERSEER_NOTABLE_NAMES\s*\n\s*value:\s*"([^"]*)"', manifest
-        )
-        self.assertIsNotNone(m, "OVERSEER_NOTABLE_NAMES not found in the manifest")
-        notable = {n.strip().casefold() for n in m.group(1).split(",") if n.strip()}
-        missing = sorted(n for n in bonds.FAMILY if n.casefold() not in notable)
-        self.assertEqual(missing, [], "family members not on the notable list: %s" % missing)
+# RosterManifestTest removed here: its one test read quadseven/infra's
+# production/oke/manifests/wow/70-overseer.yaml (OVERSEER_NOTABLE_NAMES) to
+# check every bonds.FAMILY member is on the notable list. This repo does not
+# carry the k8s manifests; an equivalent check should live in infra's own
+# wow/ render-test suite instead - see the tracking issue for this split.
 
 
 class ReservedWordTest(unittest.TestCase):

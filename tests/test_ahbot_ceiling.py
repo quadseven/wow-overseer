@@ -187,61 +187,15 @@ class WouldListTest(unittest.TestCase):
         self.assertFalse(ahbot_ceiling.would_list(20, 60, self.limits))
 
 
-class DeployedConfTest(unittest.TestCase):
-    """The manifest and this module have to be saying the same thing.
-
-    Without this the module is decoration: somebody would change 34 to 60 in the
-    conf, the realm would deploy it, and the reasoning would still read 34.
-    """
-
-    def setUp(self):
-        self.text = AHBOT_CONF.read_text(encoding="utf-8")
-        self.settings = ahbot_ceiling.parse_conf(self.text)
-
-    def test_the_conf_carries_every_key_this_decision_owns(self):
-        for key, _ in ahbot_ceiling.overrides(_limits()):
-            with self.subTest(key):
-                self.assertIn(key, self.settings)
-
-    def test_the_conf_agrees_with_the_module(self):
-        self.assertEqual(
-            ahbot_ceiling.drift(self.text, ahbot_ceiling.ROSTER_LEVELS_MEASURED),
-            (),
-        )
-
-    def test_the_two_switches_are_actually_on(self):
-        # false is the module's own disabled state AND the dist default, so a
-        # lost key and a disabled filter look identical from the outside.
-        for key in (
-            "AuctionHouseBot.EquipItemUseOrEquipLevelRestrict.Enabled",
-            "AuctionHouseBot.ListedItemLevelRestrict.Enabled",
-        ):
-            with self.subTest(key):
-                self.assertEqual(self.settings.get(key), "true")
-
-    def test_the_expansion_filters_this_change_rejected_stay_off(self):
-        # ListedItemIDRestrict and a hand-written DisabledItemIDs list were both
-        # considered and rejected in favour of the item level ceiling. If one of
-        # them appears here, that decision was reversed and the conf's own
-        # commentary is now wrong.
-        for key in (
-            "AuctionHouseBot.ListedItemIDRestrict.Enabled",
-            "AuctionHouseBot.AdvancedListingRules.UseDropRates.DisabledItemIDs",
-        ):
-            with self.subTest(key):
-                self.assertNotIn(key, self.settings)
+# DeployedConfTest (whole class) and DriftTest's
+# test_a_roster_that_has_outgrown_the_conf_is_named_with_both_numbers
+# removed here: both read quadseven/infra's
+# production/oke/manifests/wow-dev/config/ahbot.overrides.conf, which this
+# repo does not carry. Equivalent checks should live in infra's own wow-dev
+# render-test suite instead - see the tracking issue for this split.
 
 
 class DriftTest(unittest.TestCase):
-    def test_a_roster_that_has_outgrown_the_conf_is_named_with_both_numbers(self):
-        text = AHBOT_CONF.read_text(encoding="utf-8")
-        reasons = ahbot_ceiling.drift(text, [40, 42])
-        self.assertTrue(reasons)
-        self.assertTrue(
-            any("MaxLevel is 34, this roster wants 47" in r for r in reasons),
-            reasons,
-        )
-
     def test_a_missing_key_is_reported_as_the_dist_default_standing(self):
         reasons = ahbot_ceiling.drift("", ahbot_ceiling.ROSTER_LEVELS_MEASURED)
         self.assertTrue(

@@ -30,7 +30,7 @@ MIGRATION = (
     / "mod-overseer/data/sql/characters/base"
     / "2026_08_24_03_overseer_share.sql"
 )
-BRIDGE = ROOT / "scripts/wow-overseer/bridge.py"
+BRIDGE = ROOT / "bridge.py"
 
 BANNER = "// --------------------------------------------------------------- share --"
 

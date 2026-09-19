@@ -21,7 +21,7 @@ import unittest
 import lootcard
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
-ADDON = ROOT / "hosts/srv-unraid-gpu/wow-addons/PartyStatus"
+ADDON = ROOT / "wow-addons/PartyStatus"
 
 GLOBALS_335A = {
     "LOOT_ITEM": "%s receives loot: %s.",

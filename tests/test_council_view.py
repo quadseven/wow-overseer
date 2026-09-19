@@ -424,9 +424,8 @@ class ThePageOnlyDraws(unittest.TestCase):
         self.assertNotIn("@media", self.css)
 
     def test_the_module_ships_in_the_image(self):
-        dockerfile = (HERE.parent.parent / "docker" / "wow-overseer"
-                      / "Dockerfile").read_text(encoding="utf-8")
-        self.assertIn("_shared/council.py", dockerfile)
+        dockerfile = (HERE / "Dockerfile").read_text(encoding="utf-8")
+        self.assertIn("council.py", dockerfile)
 
     def test_no_em_dashes(self):
         for name in ("council.py", "tests/test_council_view.py"):

@@ -11,7 +11,7 @@ import re
 import unittest
 
 BRIDGE = pathlib.Path(__file__).resolve().parents[1] / "bridge.py"
-DOCKERFILE = pathlib.Path(__file__).resolve().parents[1] / "docker/wow-overseer/Dockerfile"
+DOCKERFILE = pathlib.Path(__file__).resolve().parents[1] / "Dockerfile"
 
 
 def _source() -> str:
@@ -113,7 +113,7 @@ class TheGiveRowIsTheGiveRowDoGiveReads(unittest.TestCase):
 class TheModuleShips(unittest.TestCase):
 
     def test_bag_upgrade_is_in_the_image(self):
-        self.assertIn("_shared/bag_upgrade.py", DOCKERFILE.read_text(encoding="utf-8"))
+        self.assertIn("bag_upgrade.py", DOCKERFILE.read_text(encoding="utf-8"))
 
 
 if __name__ == "__main__":

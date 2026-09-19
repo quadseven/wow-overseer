@@ -30,7 +30,7 @@ import travel
 
 PACKAGE = pathlib.Path(__file__).resolve().parents[1]
 BRIDGE = PACKAGE / "bridge.py"
-DOCKERFILE = PACKAGE.parents[1] / "docker" / "wow-overseer" / "Dockerfile"
+DOCKERFILE = PACKAGE / "Dockerfile"
 
 
 def _source() -> str:
@@ -407,7 +407,7 @@ class TheSlotIsHeldForTheLifeOfTheProcess(unittest.TestCase):
 
     def test_the_module_is_imported_and_shipped(self):
         self.assertIn("\nimport townslot\n", _source())
-        self.assertIn("_shared/townslot.py",
+        self.assertIn("townslot.py",
                       DOCKERFILE.read_text(encoding="utf-8"))
 
     def test_the_default_lease_is_the_modules_own(self):

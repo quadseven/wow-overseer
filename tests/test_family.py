@@ -292,32 +292,14 @@ class TheLadderMatchesWhatIsPublished(unittest.TestCase):
     instead of borrowing it.
     """
 
-    @staticmethod
-    def _agent_constants():
-        src = (Path(__file__).resolve().parents[2]
-               / "wow-stream-agent" / "video.py").read_text(encoding="utf-8")
-        out = {}
-        for node in ast.parse(src).body:
-            if isinstance(node, ast.Assign) and isinstance(node.targets[0], ast.Name):
-                try:
-                    out[node.targets[0].id] = ast.literal_eval(node.value)
-                except ValueError:
-                    pass
-        return out
-
-    def test_the_two_sides_agree_about_the_ladder(self):
-        theirs = self._agent_constants()
-        self.assertEqual(family.RENDITION_DEFAULT, theirs["RENDITION_DEFAULT"])
-        mine = {r["id"]: (r["suffix"], r["width"], r["height"])
-                for r in family.RENDITIONS}
-        yours = {r["id"]: (r["suffix"], r["width"], r["height"])
-                 for r in theirs["RENDITIONS"]}
-        self.assertEqual(mine, yours)
-
-    def test_the_gated_constant_survived_the_parse(self):
-        """A value that stops being literal-evaluable blinds its own gate
-        rather than failing it, so its absence is the failure."""
-        self.assertIn("RENDITIONS", self._agent_constants())
+    # _agent_constants, test_the_two_sides_agree_about_the_ladder and
+    # test_the_gated_constant_survived_the_parse removed here: they read
+    # quadseven/infra's production/scripts/wow-stream-agent/video.py (a
+    # different service, on a different machine, not part of this
+    # extraction) to cross-check its RENDITIONS ladder against this
+    # module's. That comparison has no home in this repo now; an equivalent
+    # check should live in infra or in wow-stream-agent's own repo instead -
+    # see the tracking issue for this split.
 
     def test_the_advertised_path_is_one_the_encoder_would_accept(self):
         """This module returns "" for a name it cannot use, so it can never

@@ -21,7 +21,7 @@ import recruit
 
 BRIDGE = pathlib.Path(__file__).resolve().parents[1] / "bridge.py"
 DOCKERFILE = (
-    pathlib.Path(__file__).resolve().parents[1] / "docker/wow-overseer/Dockerfile"
+    pathlib.Path(__file__).resolve().parents[1] / "Dockerfile"
 )
 
 # The family, as the planner sees them: names that are online and in the guild.
@@ -361,7 +361,7 @@ class TheModuleShipsInTheImage(unittest.TestCase):
     def test_recruit_is_copied_into_the_image(self):
         """test_ship_manifest checks this generically; named here too so a
         failure points at the module that moved rather than at a list."""
-        self.assertIn("_shared/recruit.py", DOCKERFILE.read_text(encoding="utf-8"))
+        self.assertIn("recruit.py", DOCKERFILE.read_text(encoding="utf-8"))
 
 
 if __name__ == "__main__":

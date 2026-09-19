@@ -31,8 +31,6 @@ import unittest
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 MODULE = ROOT / "mod-overseer/src/mod_overseer.cpp"
-DB_IMPORT = ROOT / "oke/manifests/wow/30-db-import.yaml"
-WORLDSERVER = ROOT / "oke/manifests/wow/50-worldserver.yaml"
 
 
 def _source() -> str:
@@ -301,51 +299,14 @@ class TheCommentThatCausedThisIsCorrected(unittest.TestCase):
         self.assertIn("db-upgrade", src)
         self.assertIn("DIFFERENT IMAGES", src)
 
-    def test_the_citation_points_at_the_line_that_says_it(self):
-        """A file:line in a comment is a claim, and this one is the whole
-        argument. Check it against the manifest itself."""
-        cited = re.search(r"30-db-import\.yaml:(\d+)", _source())
-        self.assertIsNotNone(cited, "the manifest is cited without a line")
-        lines = DB_IMPORT.read_text(encoding="utf-8").splitlines()
-        self.assertIn("only db-import gets `COPY data data`",
-                      lines[int(cited.group(1)) - 1])
-
-
-class TheTwoImagesReallyAreBumpedIndependently(unittest.TestCase):
-    """The premise of the whole fix, checked against the manifest rather than
-    asserted in prose. If this ever stops being true the fix is merely
-    unnecessary; while it is true, the old comment was a live hazard."""
-
-    def _images(self):
-        """Host-agnostic on purpose. The premise these tests protect is that the
-        manifest runs TWO different images pinned SEPARATELY, which is a fact
-        about the images and not about where they are hosted. The pattern used
-        to require a literal `registry.` prefix, so when production moved to
-        ghcr it matched nothing at all and both assertions below failed about a
-        hostname instead of about the premise."""
-        return re.findall(
-            r"image: \S*?(ac-playerbots-[a-z-]+)@(sha256:[0-9a-f]{64})",
-            WORLDSERVER.read_text(encoding="utf-8"))
-
-    def test_the_worldserver_manifest_runs_two_different_images(self):
-        repos = {repo for repo, _ in self._images()}
-        self.assertIn("ac-playerbots-db-import", repos)
-        self.assertIn("ac-playerbots-worldserver", repos)
-
-    def test_the_sql_is_applied_by_the_db_import_image_not_the_worldserver(self):
-        text = WORLDSERVER.read_text(encoding="utf-8")
-        upgrade = text.index("name: db-upgrade")
-        after = text[upgrade:upgrade + 400]
-        self.assertIn("ac-playerbots-db-import", after)
-        self.assertNotIn("ac-playerbots-worldserver", after)
-
-    def test_they_are_pinned_by_separate_digests(self):
-        digests = {repo: digest for repo, digest in self._images()}
-        self.assertNotEqual(
-            digests["ac-playerbots-db-import"],
-            digests["ac-playerbots-worldserver"],
-            "two independently bumped pins is the reason the schema and the "
-            "reader can disagree")
+    # test_the_citation_points_at_the_line_that_says_it, and the whole of
+    # TheTwoImagesReallyAreBumpedIndependently that followed it, removed
+    # here: both asserted against quadseven/infra's
+    # production/oke/manifests/wow/{30-db-import,50-worldserver}.yaml, which
+    # this repo does not carry (infra owns the deployment manifests and the
+    # ac-playerbots-* images). Equivalent assertions should live in infra's
+    # own wow/ render-test suite instead - see the tracking issue for this
+    # split.
 
 
 if __name__ == "__main__":

@@ -43,7 +43,7 @@ DECISIONS = ROOT / "mod-overseer/src/overseer_decisions.cpp"
 DECISIONS_H = ROOT / "mod-overseer/src/overseer_decisions.h"
 MODULE = ROOT / "mod-overseer/src/mod_overseer.cpp"
 BRIDGE = pathlib.Path(__file__).resolve().parents[1] / "bridge.py"
-DOCKERFILE = ROOT / "docker/wow-overseer/Dockerfile"
+DOCKERFILE = ROOT / "Dockerfile"
 
 
 def _source() -> str:
@@ -661,7 +661,7 @@ class TheExecutorContractThisPassDependsOn(unittest.TestCase):
 class TheModuleShips(unittest.TestCase):
 
     def test_recipebook_is_in_the_image(self):
-        self.assertIn("_shared/recipebook.py",
+        self.assertIn("recipebook.py",
                       DOCKERFILE.read_text(encoding="utf-8"))
 
 

@@ -25,6 +25,8 @@ on:
       - '**.json'
       - 'UPSTREAM-PINS.env'
       - 'patches/**'
+      - 'wow-addons/**'
+      - 'mod-overseer'
       - '.github/workflows/check.yml'
       - '.github/scripts/compile_check.py'
   pull_request:
@@ -33,6 +35,8 @@ on:
       - '**.json'
       - 'UPSTREAM-PINS.env'
       - 'patches/**'
+      - 'wow-addons/**'
+      - 'mod-overseer'
       - '.github/workflows/check.yml'
       - '.github/scripts/compile_check.py'
   workflow_dispatch:

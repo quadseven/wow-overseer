@@ -1,0 +1,7 @@
+## Interface: 30300
+## Title: Party Status
+## Notes: What each family member is doing, beside their name, and a card for what they win.
+## Author: quadseven
+## Version: 1.0
+PartyStatus.lua
+LootCard.lua

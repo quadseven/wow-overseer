@@ -191,9 +191,8 @@ class TheEndpointIsWiredUp(unittest.TestCase):
         self.assertIn("503", handler)
 
     def test_the_module_ships_in_the_image(self):
-        dockerfile = (HERE.parent.parent / "docker" / "wow-overseer"
-                      / "Dockerfile").read_text(encoding="utf-8")
-        self.assertIn("_shared/agenda.py", dockerfile)
+        dockerfile = (HERE / "Dockerfile").read_text(encoding="utf-8")
+        self.assertIn("agenda.py", dockerfile)
 
 
 class EveryOverseerTableReadIsGuarded(unittest.TestCase):

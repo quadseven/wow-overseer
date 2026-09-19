@@ -716,10 +716,9 @@ class WhatMustShip(unittest.TestCase):
     failure lands at pod start long after CI has gone green."""
 
     def test_the_book_is_copied_into_the_image(self):
-        dockerfile = (HERE / ".." / ".." / "docker" / "wow-overseer"
-                      / "Dockerfile").read_text()
-        self.assertIn("_shared/standing.json", dockerfile)
-        self.assertIn("_shared/standing.py", dockerfile)
+        dockerfile = (HERE / "Dockerfile").read_text()
+        self.assertIn("standing.json", dockerfile)
+        self.assertIn("standing.py", dockerfile)
 
     def test_the_generator_that_wrote_it_is_kept_beside_it(self):
         """A frozen book with no generator is a file nobody can ever

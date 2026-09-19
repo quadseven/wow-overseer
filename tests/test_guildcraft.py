@@ -633,9 +633,8 @@ class TheHouseRules(unittest.TestCase):
             self.assertNotIn(forbidden, MODULE, forbidden)
 
     def test_the_module_ships_in_the_image(self):
-        dockerfile = (HERE.parent.parent / "docker" / "wow-overseer"
-                      / "Dockerfile").read_text(encoding="utf-8")
-        self.assertIn("_shared/guildcraft.py", dockerfile)
+        dockerfile = (HERE / "Dockerfile").read_text(encoding="utf-8")
+        self.assertIn("guildcraft.py", dockerfile)
 
 
 if __name__ == "__main__":

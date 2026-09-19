@@ -938,10 +938,9 @@ class TheHouseRules(unittest.TestCase):
         """A module the page imports and the image does not carry is a 503 on
         a tab that was green in CI, and a book it does not carry is fourteen
         professions reported at 0%."""
-        dockerfile = (HERE.parent.parent / "docker" / "wow-overseer"
-                      / "Dockerfile").read_text(encoding="utf-8")
-        self.assertIn("_shared/tradespec.py", dockerfile)
-        self.assertIn("_shared/craftbook.json", dockerfile)
+        dockerfile = (HERE / "Dockerfile").read_text(encoding="utf-8")
+        self.assertIn("tradespec.py", dockerfile)
+        self.assertIn("craftbook.json", dockerfile)
 
     def test_the_module_never_reaches_the_world_itself(self):
         """The same seam professions.plan and guildcraft.build_guildcraft keep:

@@ -239,9 +239,8 @@ class TheEndpointIsWiredUp(unittest.TestCase):
     def test_the_module_ships_in_the_image(self):
         """The build's shared-dir copy names every file explicitly, so a new
         module is one forgotten line away from a pod that crashes on import."""
-        dockerfile = (HERE.parent.parent / "docker" / "wow-overseer"
-                      / "Dockerfile").read_text(encoding="utf-8")
-        self.assertIn("_shared/realm.py", dockerfile)
+        dockerfile = (HERE / "Dockerfile").read_text(encoding="utf-8")
+        self.assertIn("realm.py", dockerfile)
 
 
 class EveryReadIsGuardedWithTheClassThatActuallyFires(unittest.TestCase):

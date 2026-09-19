@@ -201,9 +201,8 @@ class BridgeIntegrationTests(unittest.TestCase):
         self.assertIn("_fetch_positions, names", source)
 
     def test_new_module_is_copied_into_the_image(self):
-        dockerfile = (PACKAGE.parent.parent / "docker" / "wow-overseer"
-                      / "Dockerfile").read_text(encoding="utf-8")
-        self.assertIn("_shared/vendor_stall.py", dockerfile)
+        dockerfile = (PACKAGE / "Dockerfile").read_text(encoding="utf-8")
+        self.assertIn("vendor_stall.py", dockerfile)
 
 
 if __name__ == "__main__":

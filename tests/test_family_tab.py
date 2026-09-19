@@ -707,8 +707,7 @@ class TheNeedsTheHandoversAndTheBonds(unittest.TestCase):
         here = pathlib.Path(__file__).resolve().parent.parent
         cls.page = (here / "index.html").read_text(encoding="utf-8")
         cls.server = (here / "map_server.py").read_text(encoding="utf-8")
-        cls.dockerfile = (here.parent.parent / "docker" / "wow-overseer"
-                          / "Dockerfile").read_text(encoding="utf-8")
+        cls.dockerfile = (here / "Dockerfile").read_text(encoding="utf-8")
         start = cls.page.index("// --- the Family tab (infra#2892)")
         cls.tab = cls.page[start:cls.page.index("loadZones().then(")]
         cls.block = cls.tab[
@@ -1013,4 +1012,4 @@ class TheNeedsTheHandoversAndTheBonds(unittest.TestCase):
         """The build's shared-dir copy takes top-level files only and the
         Dockerfile names them explicitly, so a new module is one forgotten line
         away from a pod that crashes at start, long after CI went green."""
-        self.assertIn("_shared/needs.py", self.dockerfile)
+        self.assertIn("needs.py", self.dockerfile)

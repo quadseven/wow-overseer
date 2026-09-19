@@ -56,8 +56,8 @@ MIGRATION = (
     / "mod-overseer/data/sql/characters/base"
     / "2026_08_24_04_overseer_outcome.sql"
 )
-BRIDGE = (ROOT / "scripts/wow-overseer/bridge.py").read_text(encoding="utf-8")
-PROBE_TOOL = (ROOT / "scripts/wow-overseer/tools/probe.py").read_text(encoding="utf-8")
+BRIDGE = (ROOT / "bridge.py").read_text(encoding="utf-8")
+PROBE_TOOL = (ROOT / "tools/probe.py").read_text(encoding="utf-8")
 
 BANNER = "// ------------------------------------------------------- outcome --"
 
