@@ -1071,9 +1071,29 @@ class TheErrandStateIsNotOutlivedByItsClock(unittest.TestCase):
         anchored to a target and a catch-up walk rewrites its target every
         poll with the leader's live position, so the twenty-minute clock was
         restarted before it could ever run out. This one is anchored to a
-        PLACE, which is why it fires."""
+        PLACE, which is why it fires.
+
+        The newest is mod-overseer#504's water release, and it is the only one
+        that fires because of where the character is STANDING rather than
+        because of anything the walk did or failed to do. The stuck-errand
+        hold above asked CanBeSentToNpc and rpgInfo.stuckAttempts and nothing
+        else, so a leader stuck on an errand was held in place whether or not
+        the ground under it was a lake. Two characters drowned one yard apart
+        in Un'Goro Crater on 2026-09-19 while this module printed "held on the
+        ground instead" eighteen times, and it was still printing after the
+        death and the revival. Being in water now ends the hold and releases
+        the errand on its own named line, so the hold can no longer outlive
+        the traveller. It is a release rather than a refusal-in-place for the
+        same reason #300's route gate is: standing still is the thing doing
+        the killing here, so there is no shorter version of this walk to wait
+        for.
+
+        NOTE: the lead sentence above says "Ten" and this assertion has been
+        12 since #504. That drift predates #504 - the count was already 11
+        against a prose lead of ten - so one release in this census has never
+        been named in prose. The assertion, not the lead, is the authority."""
         code = _code(_drive())
-        self.assertEqual(11, code.count("_travelAims.Release(name)"))
+        self.assertEqual(12, code.count("_travelAims.Release(name)"))
         self.assertNotIn("_state.erase(", code)
         # Stronger than "the drive does not erase": it cannot. The memory is a
         # private member of the book, so the only way out is Release.
