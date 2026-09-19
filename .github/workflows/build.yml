@@ -2,22 +2,23 @@ name: build - overseer image
 
 # Builds AND PUBLISHES the bridge image to GHCR.
 #
-# WHY GHCR AND NOT infra's IN-CLUSTER REGISTRY (registry.ts.ehumps.me). That
-# registry needs the push password at SSM /infra/cluster/registry/push_pass,
+# WHY GHCR AND NOT infra's IN-CLUSTER REGISTRY. That registry needs a push
+# password held in the private SSM parameter store,
 # and infra's own _reusable.build-to-cluster-registry.yml says outright that
 # mechanism is "coupled to this cluster's registry, kubeconfig path, and SSM
 # layout" and stays in infra deliberately - a repo does not get to mint its
 # own deploy credentials into that cluster. GHCR needs no credential beyond
 # this run's own GITHUB_TOKEN plus `packages: write`. quadseven/muster
 # (build.server-image.yml) and quadseven/zippie (build.clienthome-image.yml)
-# both reached the same conclusion for the same reason - a private repo
-# extracted out of infra, needing to publish its own deployable image - and
-# this follows that precedent rather than re-deciding it.
+# both reached the same conclusion for the same reason - a repo extracted out
+# of infra, needing to publish its own deployable image - and this follows
+# that precedent rather than re-deciding it.
 #
-# THE CONSEQUENCE, stated rather than discovered at deploy time: this is a
-# PRIVATE repo, so the package is private, so pulling it into k8s-oke needs
-# an `imagePullSecret` in every namespace that runs it (wow, wow-dev,
-# wow-hardcore) - same shape as muster's `ghcr` secret.
+# THE CONSEQUENCE, stated rather than discovered at deploy time: the PACKAGE
+# is private even though this repo is public - the two visibilities are
+# independent, and the package is deliberately left private. So pulling it
+# into the cluster needs an `imagePullSecret` in every namespace that runs it
+# (wow, wow-dev, wow-hardcore) - same shape as muster's `ghcr` secret.
 #
 # ONE IMMUTABLE TAG PER COMMIT. `sha-<12>`, no :latest, no :main - same
 # convention as muster. infra pins the deployed manifests by DIGEST (see

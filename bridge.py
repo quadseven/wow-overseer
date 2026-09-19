@@ -8820,7 +8820,7 @@ _LEDGER_MEMBER_SQL = (
 # needs both: only a rewarded quest satisfies a prerequisite, while a held one
 # is what the traveller can actually be aimed at.
 _LEDGER_HELD_SQL = (
-    # Spark-authored: qwen3-coder-next:q8_0 on DGX Spark sparkles (10.0.0.66),
+    # Spark-authored: qwen3-coder-next:q8_0 on a DGX Spark,
     # 2026-09-01 -- the filter and its placement are the Spark's; the comment,
     # the string termination and the test were reworked by Claude before merge.
     # Its first pass left this constant an unterminated literal (bridge.py did

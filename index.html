@@ -3849,8 +3849,8 @@ function beat() {
 // explanation.
 //
 // MIXED CONTENT IS THE FAILURE THAT LOOKS EXACTLY LIKE NOTHING. This page is
-// HTTPS. The stream comes from the Caddy vhost wow.stream.ts.ehumps.me, which
-// terminates TLS in front of MediaMTX on the gaming box precisely so this
+// HTTPS. The stream comes from the Caddy vhost fronting the streaming host,
+// which terminates TLS in front of MediaMTX on the gaming box precisely so this
 // fetch is https-to-https. If `detail` ever arrives as plain http:// the
 // browser blocks it silently, the player stays black, and the reason goes
 // only to a console nobody has open - so it is checked here and SAID.

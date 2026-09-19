@@ -2553,8 +2553,8 @@ def _ask_llm(prompt: str) -> str:
     return data["choices"][0]["message"]["content"]
 
 
-# The page is tailnet-only (wow.overseer.ts.ehumps.me, reachable only over
-# the tailnet), so there is deliberately NO auth layer on these endpoints:
+# The page is tailnet-only (reachable only over the tailnet), so there is
+# deliberately NO auth layer on these endpoints:
 # whoever can reach this port is already the Overseer. Every other guard -
 # the name charset, the body bound, the command vocabulary gate in voice.py
 # - holds regardless, because they protect the database and the game rather
