@@ -7569,76 +7569,90 @@ class Bridge(discord.Client):
         `ECONOMY_ERRANDS` only retasks an idle traveller - but until this
         logged it, that refusal was invisible: the guild bank could starve
         for as long as the leader's other errand ran and nothing said so.
+
+        SETUP AND DEPOSIT SHARE ONE WALK, AND THAT IS NEW (infra#4198). The
+        tab purchase and the per-rank `grant-deposit` rows used to be decided
+        in a block ahead of this one that returned on every path, so while
+        `plan_setup` had anything left to ask for, `plan_deposits` was never
+        called - a gate that was not a precondition, because the gold deposit
+        verb checks neither the tab nor the rank bit. The two are now one
+        arbitration, one claim and one arrival, and the in-line comments below
+        carry the measurement.
+
+        IT STILL DEPOSITS GOLD AND ONLY GOLD. `guild_bank_item` cannot move
+        from anything in this pass: `bank deposit <copper>` lands in
+        `guild.BankMoney`, and the item verb `guildbank.format_item_deposit`
+        renders has no caller anywhere in this package. Relief for a member
+        full of PROTECTED ITEMS (infra#4198) is a policy that does not exist
+        yet, not a broken one - see guildbank.py's own docstring for why it
+        was deliberately left unwritten.
         """
         names = sorted((await asyncio.to_thread(_protected_guids)).values())
         if not names or await self._mid_run(names):
             return
+        leader = await asyncio.to_thread(_head_now)
         setup = await asyncio.to_thread(_fetch_guild_bank_setup, names)
-        if setup:
-            actions = guildbank.plan_setup(
-                leader=await asyncio.to_thread(_head_now),
-                purchased_tabs=setup["purchased_tabs"],
-                rank_ids=setup["rank_ids"],
-                deposit_rank_ids=setup["deposit_rank_ids"],
-            )
-            if actions:
-                leader = await asyncio.to_thread(_head_now)
-                positions = await asyncio.to_thread(
-                    _fetch_positions, sorted({leader}))
-                where = positions.get(leader)
-                spawn = await asyncio.to_thread(_nearest_vault, leader)
-                vault = travel.vault_aim(spawn, where.get("map_id") if where else None)
-                if vault.aim:
-                    aimed = await self._claim_town_slot("guild bank", leader, vault.aim)
-                    at_the_vault = travel.spawn_in_reach(spawn, where, TOWN_COUNTER_YARDS)
-                    # THREE STATES, NOT TWO (infra#3713). This read
-                    # `if aimed or at_the_vault:`, which queued the purchase on
-                    # the strength of the CLAIM. `_claim_town_slot` returns True
-                    # the moment this pass wins the right to walk - the start of
-                    # the journey, not the end - so on 2026-09-19 the column was
-                    # claimed at 03:47:08 and `bank buy-tab` queued at 03:47:09
-                    # with the leader 3311 yards from the vault. The core
-                    # refused it ("the core did not buy the next guild bank
-                    # tab"); not permissions (Guild Master, rights 1962495) and
-                    # not funds (198g against a 100g tab) - simply not there.
-                    #
-                    # `aimed` IS STILL READ, because it answers a different and
-                    # still-needed question: whether this pass is STARVED
-                    # (infra#3464 - the pass used to discard it and say nothing
-                    # while the leader sat on another errand for 15+ minutes).
-                    # Starved, walking and arrived are three outcomes and each
-                    # gets its own sentence.
-                    if not aimed and not at_the_vault:
-                        log.info(
-                            "guild bank setup: leader=%s could not be aimed at "
-                            "the vault (%s) this pass, so no setup row is "
-                            "queued", leader, vault.aim)
-                        return
-                    if not at_the_vault:
-                        log.info(
-                            "guild bank setup: %s is walking to the vault (%s) "
-                            "- the row waits for the arrival, because one "
-                            "queued now comes back 'no guild bank in reach'",
-                            leader, vault.aim)
-                        return
-                    if at_the_vault:
-                        seen = await asyncio.to_thread(_recent_guild_setup_keys, GIVE_RETRY_MINUTES)
-                        action = next((a for a in actions
-                                       if (leader, a.command) not in seen), None)
-                        if action:
-                            await asyncio.to_thread(_insert_guild, leader,
-                                                    action.command, "guildbank-setup")
-                            log.info("guild bank setup: queued %s for %s",
-                                     action.command, leader)
-                        return
-                log.info("guild bank setup: aiming %s at %s", leader, vault.aim)
-                return
+        purchased_tabs = int(setup["purchased_tabs"]) if setup else 0
+        # SETUP IS AN ERRAND TO THE SAME PLACE, NOT A GATE IN FRONT OF THE
+        # DEPOSIT (infra#4198). This used to be an `if setup: ... return` block
+        # that ran BEFORE `plan_deposits` and returned on every one of its
+        # paths, so for as long as `plan_setup` had anything left to say,
+        # `plan_deposits` was never called at all - not starved, not refused,
+        # never reached.
+        #
+        # THAT IS NOT A SLOW PATH, IT IS A CLOSED ONE. `plan_setup` asks for a
+        # `grant-deposit` on every non-master rank that lacks the deposit bit,
+        # and it queues AT MOST ONE PER ARRIVAL. Measured on wow-dev
+        # 2026-09-19: guild 23 "Cave" has ranks 0-4, `guild_bank_right` carries
+        # the deposit bit on ranks 0 and 1 only, and ranks 2-4 hold the 68
+        # NON-FAMILY playerbot members. So `plan_setup` returned
+        # `grant-deposit rank:2`, `rank:3`, `rank:4` on every cycle for ever,
+        # each needing its own won-column walk to the vault, while the five
+        # characters the pass exists for sat on ranks 0 and 1 which were
+        # already granted. Every one of the 16 guild-bank lines in the running
+        # pod's log was `guild bank setup:`; the deposit branch produced none,
+        # and no `bank deposit` row has been written since 2026-09-14.
+        #
+        # AND THE GATE WAS NEVER A PRECONDITION OF THE THING IT GATED. A gold
+        # deposit is `GuildVerb::Bank`, whose executor (mod_overseer.cpp,
+        # `DoGuild`) asks `GuildBankInReach` and `HasEnoughMoney` and nothing
+        # else - no purchased tab, no rank right, because
+        # `Guild::HandleMemberDepositMoney` performs no rank check at all (see
+        # guildbank.py's module docstring). Only `BankDepositItem` needs the
+        # tab and the rank bit. Setup and deposit are therefore independent
+        # errands that happen to share a destination, and the honest shape is
+        # ONE walk that does both on arrival - which is why there is now one
+        # `_claim_town_slot("guild bank", ...)` in this pass rather than two.
+        #
+        # A DEPOSIT QUEUED BESIDE AN UNBOUGHT TAB STILL CANNOT STRAND THE
+        # PURCHASE, the one thing the old ordering had to protect.
+        # `plan_deposits` holds `TAB0_COST_COPPER` back from every member while
+        # `guild_has_tab` is False, so the price is still sitting in somebody's
+        # purse after the deposits land. That reserve exists for exactly this.
+        actions = guildbank.plan_setup(
+            leader=leader,
+            purchased_tabs=purchased_tabs,
+            rank_ids=setup["rank_ids"],
+            deposit_rank_ids=setup["deposit_rank_ids"],
+        ) if setup else ()
         members = await asyncio.to_thread(_fetch_guild_money, names)
-        deposits = guildbank.plan_deposits(members)
-        if not deposits:
+        # THE TAB COUNT WAS ALREADY IN HAND AND WAS NEVER PASSED (infra#4198).
+        # `plan_deposits` defaults `guild_has_tab` to False - the cautious
+        # answer, which reserves `FLOAT_COPPER + TAB0_COST_COPPER` - and this
+        # caller never told it otherwise, so every member went on holding 110
+        # gold back for a tab the guild had already bought (one
+        # `guild_bank_tab` row for guild 23 since 2026-09-19). Live that is not
+        # a rounding error: it excluded the leader outright at 98 gold and cut
+        # roughly 100 gold off each of the other four. `_fetch_guild_bank_setup`
+        # has counted `guild_bank_tab` since infra#3713 and the count was being
+        # spent on `plan_setup` alone. Wiring it here is the step
+        # `plan_deposits`' own docstring anticipated: "wiring that read in later
+        # can only ever release gold, never strand it".
+        deposits = guildbank.plan_deposits(
+            members, guild_has_tab=purchased_tabs > 0)
+        if not actions and not deposits:
             log.info("guild bank: nobody is carrying more than the float")
             return
-        leader = await asyncio.to_thread(_head_now)
         # ONE POSITION READ, FOR TWO QUESTIONS (infra#3804): which map the
         # LEADER aims from, and whether each DEPOSITOR is at the vault now.
         # `_fetch_positions` batches, so this is the one query it always was.
@@ -7694,9 +7708,10 @@ class Bridge(discord.Client):
             # long they have had it and who is ahead in the queue.
             log.info(
                 "guild bank: leader=%s could not be aimed at the vault (%s) "
-                "this pass, so no deposit is queued - every row queued into a "
+                "this pass, so no setup row or deposit is queued (%d setup "
+                "action(s), %d deposit(s) waiting) - every row queued into a "
                 "trip nobody is taking comes back 'no guild bank in reach'",
-                leader, vault.aim,
+                leader, vault.aim, len(actions), len(deposits),
             )
             return
         if not at_the_vault:
@@ -7713,9 +7728,35 @@ class Bridge(discord.Client):
             # which rows get written.
             log.info(
                 "guild bank: leader=%s is walking to the vault (%s) - no "
-                "deposit is queued until the walk lands, because one written "
-                "now comes back 'no guild bank in reach' a second later",
-                leader, vault.aim)
+                "setup row or deposit is queued until the walk lands (%d setup "
+                "action(s), %d deposit(s) waiting), because one written now "
+                "comes back 'no guild bank in reach' a second later",
+                leader, vault.aim, len(actions), len(deposits))
+            return
+        # THE ARRIVAL IS SPENT ON BOTH ERRANDS (infra#4198). The leader is at
+        # the vault, which is the one expensive thing this pass ever buys, and
+        # it used to be spent on a single setup row or on deposits but never
+        # on both. Setup keeps its ONE-ACTION-PER-ARRIVAL rate limit - the
+        # rank rights are `Guild::HandleSetRankInfo` writes and there is no
+        # reason to burst them - but it no longer returns, so the deposits
+        # this same trip was also made for are queued below in the same breath.
+        if actions:
+            seen_setup = await asyncio.to_thread(
+                _recent_guild_setup_keys, GIVE_RETRY_MINUTES)
+            action = next((a for a in actions
+                           if (leader, a.command) not in seen_setup), None)
+            if action:
+                await asyncio.to_thread(_insert_guild, leader,
+                                        action.command, "guildbank-setup")
+                log.info("guild bank setup: queued %s for %s",
+                         action.command, leader)
+        if not deposits:
+            # REACHED ONLY WHEN SETUP IS THE WHOLE REASON THIS PASS WALKED.
+            # `not actions and not deposits` already returned far above, so
+            # this arm means the trip was bought by setup alone and nobody is
+            # over their float - which is a complete, uninteresting pass and
+            # not a failure.
+            log.info("guild bank: nobody is carrying more than the float")
             return
         seen = await asyncio.to_thread(_recent_guild_bank_keys, GIVE_RETRY_MINUTES)
         fresh = []

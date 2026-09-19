@@ -1038,22 +1038,43 @@ class TheGuildBankPassActsOnlyWhereItIsStanding(unittest.TestCase):
         infra#3464 exists because this pass used to discard that and say
         nothing while the leader sat on another errand for 15+ minutes. What
         was missing is the middle state: aimed, walking, not there yet. It used
-        to fall through to queueing."""
+        to fall through to queueing.
+
+        THE COUNT IS ONE NOW, AND THAT IS THE POINT OF infra#4198. There were
+        two of every gate because setup and deposit were two mutually
+        exclusive branches, and the setup one returned on every path - so
+        `plan_deposits` was never called while `plan_setup` still had a rank
+        to ask about, which against the live guild was for ever. The three
+        states are unchanged; there is one set of them, in front of one walk
+        that serves both errands.
+        """
         code = _gb_statements()
         self.assertIn("not aimed and not at_the_vault", code)
-        self.assertEqual(code.count("if not at_the_vault:"), 2)
+        self.assertEqual(code.count("if not at_the_vault:"), 1)
 
     def test_the_arrived_branch_is_what_queues(self):
+        """Arrival is the fall-through past both negative gates (infra#4198).
+
+        It used to be a positive `if at_the_vault:` inside the setup branch.
+        The property is the same one and is now asserted where it lives: every
+        row this pass writes is written BELOW the walking gate, so nothing is
+        queued for a leader still on the road.
+        """
         code = _gb_statements()
-        self.assertIn("if at_the_vault:", code)
+        arrived = code[code.index("if not at_the_vault:"):]
+        arrived = arrived[arrived.index("return") + len("return"):]
+        self.assertIn('"guildbank-setup")', arrived)
+        self.assertIn('_insert_guild, deposit.name, command, "guildbank"',
+                      arrived)
 
     def test_the_column_is_still_claimed_so_the_walk_still_starts(self):
         """Dropping the RETURN VALUE must not drop the CALL.
 
         The claim is what writes the aim; without it the leader never sets off
-        and an arrival-only gate would wait for ever.
+        and an arrival-only gate would wait for ever. ONE claim now, not two:
+        see the sibling test above and infra#4198.
         """
-        self.assertEqual(_gb_statements().count("aimed = await self._claim_town_slot("), 2)
+        self.assertEqual(_gb_statements().count("aimed = await self._claim_town_slot("), 1)
 
 
 if __name__ == "__main__":
