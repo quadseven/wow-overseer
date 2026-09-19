@@ -1540,6 +1540,59 @@ def _settle_trades(skills: dict) -> list:
     return done
 
 
+def _cohort_of(name: str) -> str | None:
+    """Which cohort `name`'s roster row belongs to, or None when nothing knows.
+
+    THE BOUND EVERY FAMILY-WIDE ROSTER WRITE HAS BEEN MISSING (infra#4221).
+    `overseer_roster` has held exactly one family's rows since the day it was
+    created, so a write that named no cohort was table-wide and correct at the
+    same time, and three of them in this file drifted into having no
+    per-character bound at all. The instant a second cohort has rows here, a
+    table-wide write is a write into somebody else's state, and those three
+    corrupt it in silence: nothing logs, the column simply goes to zero.
+    mod-overseer#506 added `family` so a second guild can share this machinery
+    instead of forking it; this is how a write asks which rows are its own.
+
+    READ OFF THE ROW, NEVER HARDCODED, and the migration's own comments are
+    explicit that this is the only safe way to resolve it. The column's DEFAULT
+    is the literal 'Grug', but a validation world renames the cast (cast.py),
+    so the head of the family there is not spelled that way and a query pinned
+    to the literal would match no row at all in it - which is a table-wide
+    write's opposite failure and just as silent. The row knows which group it
+    is in. This asks the row.
+
+    None MEANS "CARRY ON EXACTLY AS BEFORE", NOT "WRITE NOTHING". The column
+    arrives with mod-overseer's SQL in the worldserver image, and infra's
+    submodule gitlink does not carry it yet - so in every world running today
+    this returns None and both callers below emit character for character the
+    statement they emitted before this change. That is the same degradation
+    every other roster-column reader in this file performs on 1054, and it is
+    the only safe direction: a family with no leader flag, or a quest aim that
+    can never be cleared, would be a far worse outcome than the cross-cohort
+    bug this closes, and it would be the price of a schema that has not
+    shipped rather than of anything anyone did wrong.
+    """
+    if not name:
+        return None
+    with _connect() as conn, conn.cursor() as cur:
+        try:
+            cur.execute("SELECT family FROM overseer_roster WHERE name = %s", (name,))
+        except pymysql.err.MySQLError as exc:
+            # 1054 is ER_BAD_FIELD_ERROR, 1146 a missing table. Matched on the
+            # code, not the message text, which is localised and has changed
+            # between versions.
+            if exc.args and exc.args[0] in (1054, 1146):
+                log.warning(
+                    "overseer_roster has no family column - roster writes stay "
+                    "table-wide until the worldserver image carries "
+                    "mod-overseer#506's SQL (infra#4221)"
+                )
+                return None
+            raise
+        row = cur.fetchone()
+    return (row or {}).get("family") or None
+
+
 def _mark_party_leader(head: str) -> None:
     """Record which roster character should lead, for mod-overseer to enforce.
 
@@ -1553,14 +1606,38 @@ def _mark_party_leader(head: str) -> None:
     The module cannot decide this itself: it has no idea who these characters
     are to each other. bonds does, so the answer is written down here and
     enforced there.
+
+    SCOPED TO THE HEAD'S OWN COHORT, AND THAT IS THE WHOLE OF THE FIX
+    (infra#4221). This statement had no WHERE clause of any kind: it rewrote
+    the `lead` flag on every row in the table, every protect cycle. One
+    cohort's worth of rows made that indistinguishable from correct. With two,
+    each cohort's cycle zeroes the other's leader and mod-overseer's
+    KeepRosterGrouped enforces whichever write landed last - two guilds
+    fighting over one flag forever, with nothing written down about it.
+
+    THE HEAD'S cohort rather than this process's, deliberately. `_head_now()`
+    can borrow the lead for whoever is carrying a trade errand, and the read
+    that picks that borrower is itself still unscoped (the twelve read sites
+    are the rest of infra#4221, not this change). Scoping to the head's own
+    row keeps the invariant that actually matters no matter which cohort it
+    came from: the row this sets to 1 is always inside the set it sets to 0,
+    so it can never produce a cohort with no leader at all. Scoping to this
+    process's family instead would do exactly that on the day a borrowed
+    traveller came from the other guild.
     """
+    cohort = _cohort_of(head)
+    # An absent `family` column yields None and the statement stays table-wide,
+    # which is today's behaviour in every world - see _cohort_of.
+    scope = " WHERE family = %s" if cohort else ""
     with _connect() as conn, conn.cursor() as cur:
         cur.execute(
             # `lead` BACKTICKED: it is a reserved word in MySQL 8 (the LEAD()
             # window function). Unquoted it is a syntax error - which took the
             # worldserver down in a crash loop when the module's SELECT hit it,
             # because the core treats a malformed query as unrecoverable.
-            "UPDATE overseer_roster SET `lead` = IF(name = %s, 1, 0)", (head,)
+            "UPDATE overseer_roster SET `lead` = IF(name = %s, 1, 0)"  # noqa: S608 - the only variable part is a fixed clause chosen above; every value is still bound
+            + scope,
+            (head, cohort) if cohort else (head,),
         )
 
 
@@ -1600,8 +1677,25 @@ def _aim_traveller(quest_id: int) -> int:
     bridge is a separate deployment with its own restarts. Warned once rather
     than swallowed - an aim that never lands is a real fault and must be
     visible without being fatal.
+
+    "EVERYONE ELSE" MEANS EVERYONE ELSE IN THIS COHORT (infra#4221). Both
+    clears below used to run table-wide. `_holders_of` is bounded by
+    OVERSEER_NOTABLE_NAMES, so the IN-list is this bridge's own family and only
+    the NOT IN half reaches outward - which means a Cave quest aim blanked
+    `drive_quest` on every row of any other cohort, every time the family
+    aimed at anything, and the no-holders branch did it unconditionally. A
+    cleared aim is not a visible event: the character simply free-roams its own
+    quest log again, which is the 937-yard scatter this function exists to
+    prevent, arriving in the other guild with no cause anywhere near it.
     """
     holders = sorted(_holders_of(int(quest_id))) if quest_id else []
+    # WHOSE aims these are. The head of the family is the one identity this
+    # process has that is guaranteed to be on the roster, and the holders are
+    # drawn from the same protected list, so his row's cohort is theirs. None
+    # keeps both statements table-wide, exactly as they are today.
+    cohort = _cohort_of(bonds.head_of_family())
+    scope = " AND family = %s" if cohort else ""
+    scope_args = (cohort,) if cohort else ()
     with _connect() as conn, conn.cursor() as cur:
         try:
             if holders:
@@ -1623,12 +1717,12 @@ def _aim_traveller(quest_id: int) -> int:
                 # avoided by the aim being exactly the set of holders.
                 cur.execute(
                     "UPDATE overseer_roster SET drive_quest = 0 "  # noqa: S608 - placeholders from a COUNT, values still bound
-                    "WHERE drive_quest <> 0 AND name NOT IN (%s)" % marks,
-                    tuple(holders),
+                    "WHERE drive_quest <> 0 AND name NOT IN (%s)%s" % (marks, scope),
+                    (*holders, *scope_args),
                 )
             else:
-                cur.execute("UPDATE overseer_roster SET drive_quest = 0 "
-                            "WHERE drive_quest <> 0")
+                cur.execute("UPDATE overseer_roster SET drive_quest = 0 "  # noqa: S608 - the only variable part is a fixed clause chosen above; every value is still bound
+                            "WHERE drive_quest <> 0" + scope, scope_args)
                 aimed = 0
         except pymysql.err.OperationalError as exc:
             # 1054 is ER_BAD_FIELD_ERROR. Matched on the code, not the message
