@@ -162,6 +162,44 @@ GATHER_LEASE_SECONDS = 450.0
 # bug this module exists to end rather than to re-create facing the other way.
 WANT_FRESH_SECONDS = 900.0
 
+# HOW LONG AN URGENT PASS THAT ACHIEVED NOTHING WAITS BEFORE IT MAY PREEMPT
+# AGAIN (infra#4191).
+#
+# `Slot.want` zeroes every lease for an urgent caller and `_free_column` /
+# `_held_column` let it skip the queue, because a full bag blocks loot and
+# waiting 300 seconds to fix that throws drops away. Both are right. What was
+# missing is the counterpart to infra#3703's rule: an errand that cannot
+# finish must not hold the column for ever. #3703 bounds an ORDINARY holder
+# with a lease; nothing bounded an urgent one, so a pass justified by a
+# pressure it is structurally unable to relieve re-took the traveller every
+# cycle, indefinitely.
+#
+# Measured on wow-dev over 20 minutes (infra#4191): the vendor pass took the
+# column urgently on three consecutive cycles, found no vendor within reach
+# each time, sold nothing, and the family moved 21 yards. `gather` won the
+# column once and lost it 28 seconds later.
+#
+# THE SHAPE IS THE ONE THE PACKAGE ALREADY USES for a repeated action that
+# keeps not working: `SHARE_RETRY_MINUTES * 2**n` capped at
+# `SHARE_BACKOFF_CAP_HOURS`, where "a delivered share resets the streak"
+# (infra#2892, 167 identical attempts). Same three parts here - double on
+# each fruitless grant, cap it, and let a grant that actually did something
+# clear the streak.
+#
+# The base is one vendor cycle (VENDOR_CYCLE_SECONDS is 300), so the first
+# suppression costs exactly one turn rather than a guess. The cap is
+# ORPHAN_LEASE_SECONDS, reusing this file's existing ceiling on the same
+# grounds it was chosen for: past 1200 seconds the world has stopped
+# believing in the errand too.
+#
+# SUPPRESSED URGENCY IS NOT A REFUSAL. The pass still asks, still queues,
+# still gets the ordinary lease and its ordinary place in line. It loses only
+# the right to cut in front of everything else on the strength of a pressure
+# it has repeatedly failed to relieve. That is the difference between a bound
+# and a ban, and it is the same difference infra#3703 drew.
+URGENT_BACKOFF_SECONDS = 300.0
+URGENT_BACKOFF_CAP_SECONDS = ORPHAN_LEASE_SECONDS
+
 
 # The verdicts. Strings rather than an enum for the reason every other decision
 # vocabulary in this package uses strings (`bag_pressure.VENDOR_ERRAND_*`,
@@ -675,6 +713,43 @@ class Slot:
         self.holder: Holder | None = None
         self._wants: dict = {}
         self._served: dict = {}
+        # {claimant: (consecutive fruitless urgent grants, suppressed until)}
+        # for infra#4191. Empty for every pass that never claims urgency, and
+        # cleared the moment one of them achieves something.
+        self._fruitless: dict = {}
+
+    def urgency_suppressed_until(self, claimant: str) -> float:
+        """When this claimant may preempt on urgency again (0.0 = now).
+
+        Read by the caller for its log line, so "this pass is in backoff" is a
+        state somebody can see rather than an absence of one.
+        """
+        return self._fruitless.get(claimant, (0, 0.0))[1]
+
+    def fruitless(self, claimant: str, now: float) -> float:
+        """Record that an urgent grant to `claimant` achieved nothing.
+
+        Returns the moment its urgency comes back. The caller decides what
+        "nothing" means - this module cannot see whether a sale was written -
+        and the streak doubles for as long as the answer keeps being nothing.
+        """
+        if not claimant:
+            return 0.0
+        streak = self._fruitless.get(claimant, (0, 0.0))[0] + 1
+        wait = min(URGENT_BACKOFF_SECONDS * (2 ** (streak - 1)),
+                   URGENT_BACKOFF_CAP_SECONDS)
+        until = now + wait
+        self._fruitless[claimant] = (streak, until)
+        return until
+
+    def productive(self, claimant: str) -> None:
+        """Record that an urgent grant to `claimant` did something.
+
+        Clears the streak outright rather than decrementing it: the pass has
+        demonstrated it can finish, so the next failure starts from one turn
+        again and not from wherever the last bad run left off.
+        """
+        self._fruitless.pop(claimant, None)
 
     @property
     def wants(self) -> list:
@@ -688,6 +763,14 @@ class Slot:
         """Decide, and register the wait if the answer is no."""
         self.holder = _reconcile(self.holder, leader=leader, column=column,
                                  now=now)
+        # AN URGENT PASS THAT KEEPS ACHIEVING NOTHING STOPS BEING URGENT, for
+        # as long as its backoff runs (infra#4191). This is deliberately the
+        # first thing that happens to `urgent`, so everything below - the
+        # zeroed leases, the skipped queue - reads the bounded answer rather
+        # than the claimed one. A pass in backoff is not refused; it falls
+        # back to the ordinary lease and its ordinary turn.
+        if urgent and now < self.urgency_suppressed_until(claimant):
+            urgent = False
         # A full bag is a loot-blocking failure, not an ordinary queue wait.
         # An orphaned economy aim can otherwise hold the traveller for the
         # world's 20-minute backstop after this process restarts. Urgent callers

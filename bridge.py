@@ -6595,6 +6595,30 @@ class Bridge(discord.Client):
         log.info("economy: queued %d/%d vendor sale(s) across %d holder(s), "
                  "one errand on leader=%s (taken=%s)",
                  inserted, considered, len(by_holder), leader, aimed)
+        # WHETHER THAT URGENT CLAIM WAS WORTH TAKING (infra#4191).
+        #
+        # This pass preempts everything on the strength of bag pressure, and
+        # `townslot` cannot see whether a sale came of it - only this loop
+        # knows that `inserted` is the number of sales actually written. So
+        # the pass reports its own outcome, and a run of fruitless ones costs
+        # it the right to preempt for a while.
+        #
+        # ONLY WHEN IT HELD THE COLUMN. `aimed` is False when some other pass
+        # had the traveller, and being refused a turn is an ordinary wait
+        # rather than a wasted one - counting it would back the pass off for
+        # somebody else's errand.
+        if aimed:
+            if inserted:
+                self._town_slot.productive("economy")
+            else:
+                until = self._town_slot.fruitless("economy", time.monotonic())
+                log.warning(
+                    "economy: took the travel column on bag pressure and wrote "
+                    "no sale; urgency suppressed for %.0fs so a pressure this "
+                    "pass cannot relieve stops outranking every other errand "
+                    "(infra#4191)",
+                    max(0.0, until - time.monotonic()),
+                )
 
     async def _hand_gear(self, gear_rows: list, worn: list, names: list) -> None:
         """Move every carried piece that suits a sibling better (infra#3464).

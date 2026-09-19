@@ -1000,3 +1000,107 @@ class ALongerLeaseIsStillALease(unittest.TestCase):
                                  leader="Grug", column="at:1:100,200,30",
                                  now=500.0)
         self.assertEqual(townslot.SLOT_CLEAR, cleared.verdict)
+
+
+class AnUrgentPassThatAchievesNothingStopsOutrankingEverything(unittest.TestCase):
+    """infra#4191. `Slot.want` zeroes every lease for an urgent caller and lets
+    it skip the queue, which is right - a full bag blocks loot. What was
+    missing is infra#3703's other half: an errand that cannot finish must not
+    hold the column for ever. #3703 bounds an ordinary holder with a lease;
+    nothing bounded an urgent one.
+
+    Measured live before the fix: the vendor pass took the column urgently on
+    three consecutive cycles, found no vendor within reach each time, wrote no
+    sale, and the family moved 21 yards in 12 minutes. `gather` won the column
+    once in 20 minutes and lost it 28 seconds later.
+    """
+
+    def _urgent(self, slot, now):
+        """Ask for the column under bag pressure, the way the vendor pass does."""
+        return slot.want(claimant="economy", character="Grug", aim="vendor",
+                         leader="Grug", column="at:1:100,200,30",
+                         retaskable=("", "vendor"), now=now, urgent=True)
+
+    def _gather_holds(self, slot):
+        slot_taken = slot.want(claimant="gather", character="Grug",
+                               aim="at:1:100,200,30", leader="Grug", column="",
+                               retaskable=("", "at:1:100,200,30"), now=0.0)
+        slot.settle(slot_taken, True, 0.0)
+
+    def test_the_first_fruitless_grant_still_preempts(self):
+        """One failure is not a pattern. The pass has to be allowed to try."""
+        slot = townslot.Slot(releasable=economy, long_leases={"gather": 450.0})
+        self._gather_holds(slot)
+        self.assertEqual(townslot.SLOT_PREEMPT, self._urgent(slot, 1.0).verdict)
+
+    def test_a_fruitless_grant_suppresses_the_next_preemption(self):
+        """THE LIVELOCK. Before this, every cycle looked like the first one."""
+        slot = townslot.Slot(releasable=economy, long_leases={"gather": 450.0})
+        self._gather_holds(slot)
+        self.assertEqual(townslot.SLOT_PREEMPT, self._urgent(slot, 1.0).verdict)
+        slot.fruitless("economy", 1.0)
+        # Same pressure, same claim, one second later - and now it waits its
+        # turn behind the gathering walk instead of cutting in front of it.
+        self.assertEqual(townslot.SLOT_WAIT, self._urgent(slot, 2.0).verdict)
+
+    def test_urgency_returns_once_the_backoff_lapses(self):
+        """A bound, not a ban. The pressure is real and may well be relievable
+        by then, so the pass gets its preemption back."""
+        slot = townslot.Slot(releasable=economy, long_leases={"gather": 450.0})
+        self._gather_holds(slot)
+        until = slot.fruitless("economy", 0.0)
+        self.assertEqual(townslot.URGENT_BACKOFF_SECONDS, until)
+        self.assertEqual(townslot.SLOT_WAIT,
+                         self._urgent(slot, until - 1.0).verdict)
+        self.assertEqual(townslot.SLOT_PREEMPT,
+                         self._urgent(slot, until + 1.0).verdict)
+
+    def test_the_streak_doubles_and_is_capped(self):
+        """The shape `SHARE_RETRY_MINUTES * 2**n` capped at
+        `SHARE_BACKOFF_CAP_HOURS` already uses for a repeated action that keeps
+        not working (infra#2892)."""
+        slot = townslot.Slot(releasable=economy)
+        base = townslot.URGENT_BACKOFF_SECONDS
+        self.assertEqual(base, slot.fruitless("economy", 0.0))
+        self.assertEqual(base * 2, slot.fruitless("economy", 0.0))
+        self.assertEqual(base * 4, slot.fruitless("economy", 0.0))
+        for _ in range(20):
+            capped = slot.fruitless("economy", 0.0)
+        self.assertEqual(townslot.URGENT_BACKOFF_CAP_SECONDS, capped)
+
+    def test_a_productive_grant_clears_the_streak(self):
+        """It has demonstrated it can finish, so the next bad run starts from
+        one turn again rather than from wherever the last one ended."""
+        slot = townslot.Slot(releasable=economy)
+        slot.fruitless("economy", 0.0)
+        slot.fruitless("economy", 0.0)
+        slot.productive("economy")
+        self.assertEqual(0.0, slot.urgency_suppressed_until("economy"))
+        self.assertEqual(townslot.URGENT_BACKOFF_SECONDS,
+                         slot.fruitless("economy", 0.0))
+
+    def test_suppressed_urgency_is_not_a_refusal(self):
+        """It loses the right to cut in front, not the right to the column. A
+        free column is still taken the ordinary way."""
+        slot = townslot.Slot(releasable=economy)
+        slot.fruitless("economy", 0.0)
+        taken = slot.want(claimant="economy", character="Grug", aim="vendor",
+                          leader="Grug", column="",
+                          retaskable=("", "vendor"), now=1.0, urgent=True)
+        self.assertEqual(townslot.SLOT_TAKE, taken.verdict)
+        self.assertTrue(taken.granted)
+
+    def test_a_pass_that_never_claims_urgency_is_untouched(self):
+        """The ledger stays empty for the six passes that never preempt."""
+        slot = townslot.Slot(releasable=economy)
+        self.assertEqual(0.0, slot.urgency_suppressed_until("guild bank"))
+        slot.fruitless("economy", 0.0)
+        self.assertEqual(0.0, slot.urgency_suppressed_until("guild bank"))
+
+    def test_one_claimants_backoff_does_not_silence_another(self):
+        slot = townslot.Slot(releasable=economy, long_leases={"gather": 450.0})
+        slot.fruitless("economy", 0.0)
+        other = slot.want(claimant="bank", character="Grug", aim="banker",
+                          leader="Grug", column="at:1:100,200,30",
+                          retaskable=("", "banker"), now=1.0, urgent=True)
+        self.assertEqual(townslot.SLOT_PREEMPT, other.verdict)
