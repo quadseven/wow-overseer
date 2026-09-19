@@ -182,6 +182,15 @@ MAILBOX_GO_TYPE = 19
 SPELL_FOCUS_GO_TYPE = 8
 FORGE_FOCUS_ID = 3
 
+# A GATHERABLE NODE IS A CHEST, NOT A FOCUS (infra#3789). Every ore vein and
+# herb in the world is `GAMEOBJECT_TYPE_CHEST`, and for that type `Data0` is
+# the LOCK ID rather than a focus id - which is the join that makes a node's
+# skill requirement exact, because that lock id is the key into Lock.dbc that
+# `gatherband` projects. The two types are kept apart here rather than left as
+# bare integers at the call sites for the reason the comment above gives about
+# Data1: a type/field pair read against the wrong type returns plausible rows.
+CHEST_GO_TYPE = 3
+
 # HOW CLOSE AN `at:` AIM ACTUALLY LANDS A CHARACTER, mirrored from mod-overseer
 # rather than guessed, and load-bearing for the whole forge walk.
 #

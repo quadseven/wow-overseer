@@ -44,6 +44,8 @@ import guildbank
 import guildshare
 import craft
 import craft_rhythm
+import gatheraim
+import gatherband
 import craft_supply
 import dungeonprogression
 import item_plan
@@ -8098,6 +8100,66 @@ class Bridge(discord.Client):
     async def _goal_complete(self, row: dict, action) -> None:
         await asyncio.to_thread(_complete_goal, action.goal_id)
 
+    async def _gather_destination(self):
+        """Where the family should go to gather, or a Choice saying why not.
+
+        EVERY READ HERE ALREADY EXISTED. `_head_now` is the same leader every
+        town errand uses, `_fetch_positions` is what `_forge_once` asks for a
+        standing map, and `_fetch_trade_skills` is the one place in this bridge
+        that touches `character_skills`. Adding a second reader for any of them
+        would be a second answer to a question already answered.
+
+        THE TWO-PHASE SHAPE IS FORCED BY THE DATA. `gatheraim.choose` wants a
+        danger reading per candidate, but the only danger reading this database
+        can give is a proximity one - `creature.zoneId` is unpopulated for
+        144,944 of 150,063 rows - and a proximity reading needs a point, which
+        is the candidate itself. So candidates are ranked first, each one's own
+        neighbourhood is measured, and the choice is made over the measured
+        set. Only the densest few are measured: the ranking is long and each
+        reading is a creature scan, so measuring all of them every goal cycle
+        would be work about zones the family will never be sent to.
+        """
+        leader = await asyncio.to_thread(_head_now)
+        if not leader:
+            return gatheraim.Choice(
+                refused="no leader is marked on overseer_roster, so there is "
+                        "nobody to aim and no map to aim them on",
+                why="no roster lead.")
+
+        names = await asyncio.to_thread(_fetch_enabled_names)
+        skills = await asyncio.to_thread(_fetch_trade_skills, names)
+        skill_name, value = gatheraim.lowest_gatherer(skills)
+        if skill_name is None:
+            return gatheraim.Choice(
+                refused="nobody enabled on the roster holds mining or "
+                        "herbalism, so there is no gathering destination to "
+                        "choose - skinning comes off corpses, not nodes",
+                why="no aimable gathering skill in the roster.")
+
+        where = (await asyncio.to_thread(_fetch_positions, [leader])).get(leader)
+        standing_on = where.get("map_id") if where else None
+
+        rows = await asyncio.to_thread(_fetch_family_levels, names)
+        # The WEAKEST character sets the danger ceiling, for the same reason
+        # the weakest gatherer sets the band: the family arrives together.
+        level = min(rows.values()) if rows else 0
+
+        locks = gatherband.reachable_locks(skill_name, value)
+        spawns = await asyncio.to_thread(_survey_gather_nodes, leader, locks)
+
+        candidates = gatheraim.fields_in_band(
+            spawns, skill_name, value, standing_on)
+        zone_levels = {}
+        for cand in candidates[:GATHER_DANGER_CANDIDATES]:
+            top = await asyncio.to_thread(
+                _gather_danger, cand.map_id, cand.spawn.x, cand.spawn.y)
+            if top is not None:
+                zone_levels[cand.zone_id] = top
+
+        return gatheraim.choose(skills=skills, standing_on=standing_on,
+                                spawns=spawns, family_level=level,
+                                zone_levels=zone_levels)
+
     async def _drive_skill(self, row: dict, action) -> None:
         """Turn a skill goal into a profession order, or into the sentence
         saying why there is no order to give (infra#3731).
@@ -8134,6 +8196,15 @@ class Bridge(discord.Client):
         standing = craft_rhythm.standing_mode(
             await asyncio.to_thread(_standing_jobs)
         )
+        # infra#3789. A GATHERED skill is answerable only with somewhere to
+        # stand, and the survey that finds it is a database read - so it
+        # happens here and `skillgoal.plan` stays pure. Only gathering pays
+        # for the survey: a crafting goal has no use for a node field, and
+        # this runs on every goal cycle.
+        destination = None
+        if skillgoal.shape_for(action.skill_name) == skillgoal.GATHERED:
+            destination = await self._gather_destination()
+
         plan = skillgoal.plan(
             skill_name=action.skill_name,
             skill_id=action.skill_id,
@@ -8143,6 +8214,7 @@ class Bridge(discord.Client):
             beneficiary=action.beneficiary,
             standing=standing,
             stalls=action.stalls,
+            destination=destination,
         )
         log.info("goal: %s", skillgoal.report(plan))
 
@@ -9681,6 +9753,36 @@ def _fetch_family_equipped(names: list) -> list:
 # The freshness filter is also what makes this ONE read answer both
 # questions: a character who is not online has no fresh row, so a name
 # missing from the result is a name nobody can hand anything to.
+# The family's levels, for the gathering level guard only (infra#3789).
+#
+# NOT folded into _FAMILY_POSITION_SQL, which `gear.spots_from_rows` also
+# reads: widening a shared SELECT to serve one new caller makes every other
+# caller carry a column it has no use for, and the next person trimming that
+# SELECT cannot tell which column anybody still needs. The freshness window is
+# the same 60 seconds for the same reason - a level read from a stale snapshot
+# is a level guard judging a family that has since moved.
+_FAMILY_LEVEL_SQL = (
+    "SELECT name, level FROM overseer_snapshot "
+    "WHERE name IN (%s) AND updated_at > NOW() - INTERVAL 60 SECOND"
+)
+
+
+def _fetch_family_levels(names: list) -> dict:
+    """name -> level for whoever has a fresh snapshot row. Never None."""
+    if not names:
+        return {}
+    sql = _FAMILY_LEVEL_SQL % ",".join(["%s"] * len(names))
+    with _connect() as conn, conn.cursor() as cur:
+        try:
+            cur.execute(sql, names)
+        except pymysql.err.MySQLError as exc:
+            if exc.args and exc.args[0] in (1054, 1146):
+                return {}
+            raise
+        return {row["name"]: int(row["level"]) for row in cur.fetchall()
+                if row.get("level") is not None}
+
+
 _FAMILY_POSITION_SQL = (
     "SELECT name, map_id, pos_x, pos_y FROM overseer_snapshot "
     "WHERE name IN (%s) AND updated_at > NOW() - INTERVAL 60 SECOND"
@@ -10719,6 +10821,105 @@ def _fetch_mail(names: list) -> list:
 # `travel.within_focus` needs it to answer "is this character ALREADY in the
 # focus" - a question whose right threshold is per-forge and which a constant of
 # ours would get wrong in both directions.
+# ---------------------------------------------------------------------------
+# WHERE A GATHERING FAMILY SHOULD STAND (infra#3789).
+#
+# `gatheraim` decides; these two reads are what it decides ON. Both are the
+# same shape as `_FORGE_SQL` and for the same reason: a destination has to be a
+# row the world was built from, never a coordinate this process computed.
+#
+# ZONE FILTER, NOT A ZONE JOIN. `gameobject.zoneId` is populated for only
+# 38,990 of 96,628 rows on this realm, so `zoneId <> 0` is a filter on what can
+# be grouped at all rather than an assumption that it is complete. A node whose
+# zone the world never recorded is dropped - it cannot be ranked against the
+# others, and inventing a zone for it would be the same class of guess as
+# inventing its Z.
+_GATHER_NODE_SQL = (
+    "SELECT g.map AS map_id, g.zoneId AS zone_id, g.position_x AS x, "
+    "g.position_y AS y, g.position_z AS z, gt.Data0 AS lock_id, "
+    "gt.name AS name "
+    "FROM overseer_snapshot s "
+    "JOIN acore_world.gameobject g ON g.map = s.map_id "
+    "JOIN acore_world.gameobject_template gt ON gt.entry = g.id "
+    "WHERE s.name = %s AND s.updated_at > NOW() - INTERVAL 120 SECOND "
+    "AND gt.type = %s AND gt.Data0 IN ({placeholders}) AND g.zoneId <> 0"
+)
+
+# THE LEVEL GUARD MEASURES A NEIGHBOURHOOD, NOT A ZONE, because it has to:
+# `creature.zoneId` is unpopulated on this realm for 144,944 of 150,063 rows,
+# so "the top level in zone 17" is not a number this database can answer. What
+# it CAN answer is "the top level within N yards of this exact spawn", which is
+# the better question anyway - a zone's average says nothing about the elite
+# standing on the vein. A ground `at:` aim early-returns before every level
+# check in mod_overseer.cpp (9839-9857), so this is the only guard there is.
+_GATHER_DANGER_SQL = (
+    "SELECT MAX(ct.maxlevel) AS top, COUNT(*) AS mobs "
+    "FROM acore_world.creature c "
+    "JOIN acore_world.creature_template ct ON ct.entry = c.id "
+    "WHERE c.map = %s "
+    "AND POW(c.position_x - %s, 2) + POW(c.position_y - %s, 2) < POW(%s, 2)"
+)
+
+# How wide a circle around the destination counts as "there". 400 yards is
+# roughly the distance a character will wander working a field of nodes, and it
+# is wide enough that a quiet pocket inside a dangerous zone does not read as
+# safe.
+GATHER_DANGER_YARDS = 400
+
+# How many of the densest candidate fields get a danger reading. Each reading
+# is a creature-table scan, and the ranking below the top few is academic - the
+# family is sent to the densest field that passes, so measuring the twentieth
+# is work about a zone nothing will choose.
+GATHER_DANGER_CANDIDATES = 5
+
+
+def _survey_gather_nodes(leader: str, lock_ids):
+    """Every in-band node spawn on the leader's own map.
+
+    `lock_ids` is what `gatherband` says this family can open, so the filter is
+    applied in SQL rather than in Python - the unfiltered table is 96,628 rows
+    and almost none of them are reachable by a Mining 1 character.
+    """
+    if not lock_ids:
+        return []
+    placeholders = ",".join(["%s"] * len(lock_ids))
+    sql = _GATHER_NODE_SQL.format(placeholders=placeholders)
+    with _connect() as conn, conn.cursor() as cur:
+        try:
+            cur.execute(sql, (leader, travel.CHEST_GO_TYPE, *lock_ids))
+        except pymysql.err.MySQLError as exc:
+            if exc.args and exc.args[0] in (1054, 1146, 1265):
+                return []
+            raise
+        return [gatheraim.Spawn(
+            map_id=int(row["map_id"]), zone_id=int(row["zone_id"]),
+            x=float(row["x"]), y=float(row["y"]), z=float(row["z"]),
+            lock_id=int(row["lock_id"]), name=str(row["name"] or ""))
+            for row in cur.fetchall()]
+
+
+def _gather_danger(map_id: int, x: float, y: float):
+    """Highest creature level spawned within GATHER_DANGER_YARDS of a point.
+
+    None when nothing was measured, and the caller treats None as "refuse"
+    rather than "safe" - the asymmetry is deliberate, because the failure it
+    exists to prevent already happened: five characters at 43-48 wiped twice on
+    a level 61 elite, eight deaths in four minutes.
+    """
+    with _connect() as conn, conn.cursor() as cur:
+        try:
+            cur.execute(_GATHER_DANGER_SQL,
+                        (int(map_id), float(x), float(y), GATHER_DANGER_YARDS))
+        except pymysql.err.MySQLError as exc:
+            if exc.args and exc.args[0] in (1054, 1146, 1265):
+                return None
+            raise
+        row = cur.fetchone()
+    if not row or row.get("top") is None or not row.get("mobs"):
+        return None
+    return int(row["top"])
+
+
 _FORGE_SQL = (
     "SELECT g.map AS map_id, g.position_x AS x, g.position_y AS y, "
     "g.position_z AS z, gt.Data1 AS radius, "
