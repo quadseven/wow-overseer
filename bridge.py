@@ -7494,8 +7494,16 @@ class Bridge(discord.Client):
             # problem from "this pass had nothing to do".
             log.warning("recruit: %s row was not written", action.verb)
             return
+        # "AS THE LAST SHORTLIST REPORTED IT" IS NOT PADDING. These two numbers
+        # come off `result`, which on a `shortlist` action is by definition the
+        # STALE one being replaced - so this line can read "queued shortlist 20
+        # ... - roster 40 of 40" while the whole point of the row is that 40 of
+        # 40 is no longer believed. infra#4215 cost a day to a log line that was
+        # true about its own cache and silent about being one; saying whose
+        # number it is costs six words.
         log.info(
-            "recruit: queued %s via %s (%s) - roster %d of %d",
+            "recruit: queued %s via %s (%s) - roster %d of %d as the last "
+            "shortlist reported it",
             action.command, action.actor, action.reason, members, target,
         )
 
