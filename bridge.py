@@ -7105,7 +7105,37 @@ class Bridge(discord.Client):
                 if vault.aim:
                     aimed = await self._claim_town_slot("guild bank", leader, vault.aim)
                     at_the_vault = travel.spawn_in_reach(spawn, where, TOWN_COUNTER_YARDS)
-                    if aimed or at_the_vault:
+                    # THREE STATES, NOT TWO (infra#3713). This read
+                    # `if aimed or at_the_vault:`, which queued the purchase on
+                    # the strength of the CLAIM. `_claim_town_slot` returns True
+                    # the moment this pass wins the right to walk - the start of
+                    # the journey, not the end - so on 2026-09-19 the column was
+                    # claimed at 03:47:08 and `bank buy-tab` queued at 03:47:09
+                    # with the leader 3311 yards from the vault. The core
+                    # refused it ("the core did not buy the next guild bank
+                    # tab"); not permissions (Guild Master, rights 1962495) and
+                    # not funds (198g against a 100g tab) - simply not there.
+                    #
+                    # `aimed` IS STILL READ, because it answers a different and
+                    # still-needed question: whether this pass is STARVED
+                    # (infra#3464 - the pass used to discard it and say nothing
+                    # while the leader sat on another errand for 15+ minutes).
+                    # Starved, walking and arrived are three outcomes and each
+                    # gets its own sentence.
+                    if not aimed and not at_the_vault:
+                        log.info(
+                            "guild bank setup: leader=%s could not be aimed at "
+                            "the vault (%s) this pass, so no setup row is "
+                            "queued", leader, vault.aim)
+                        return
+                    if not at_the_vault:
+                        log.info(
+                            "guild bank setup: %s is walking to the vault (%s) "
+                            "- the row waits for the arrival, because one "
+                            "queued now comes back 'no guild bank in reach'",
+                            leader, vault.aim)
+                        return
+                    if at_the_vault:
                         seen = await asyncio.to_thread(_recent_guild_setup_keys, GIVE_RETRY_MINUTES)
                         action = next((a for a in actions
                                        if (leader, a.command) not in seen), None)
@@ -7182,6 +7212,24 @@ class Bridge(discord.Client):
                 "trip nobody is taking comes back 'no guild bank in reach'",
                 leader, vault.aim,
             )
+            return
+        if not at_the_vault:
+            # AIMED BUT STILL WALKING, WHICH IS ITS OWN ANSWER (infra#3713).
+            # The arm above reports STARVATION - no column, nobody moving. This
+            # one reports a journey in progress, and the two used to be one
+            # branch that fell through to queueing. The leader-level gate is
+            # what the setup path needed too: a purchase queued mid-walk is
+            # refused by the core on range, exactly as a deposit would be.
+            #
+            # The per-depositor `spawn_in_reach` below is NOT made redundant by
+            # this: an arrived leader never meant five (infra#3804), so this
+            # decides whether the pass proceeds at all and that one decides
+            # which rows get written.
+            log.info(
+                "guild bank: leader=%s is walking to the vault (%s) - no "
+                "deposit is queued until the walk lands, because one written "
+                "now comes back 'no guild bank in reach' a second later",
+                leader, vault.aim)
             return
         seen = await asyncio.to_thread(_recent_guild_bank_keys, GIVE_RETRY_MINUTES)
         fresh = []

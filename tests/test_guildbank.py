@@ -983,5 +983,78 @@ class ParameterisedQueriesSurviveMogrify(unittest.TestCase):
         self.assertGreater(checked, 5, "parsed too few execute() calls to trust")
 
 
+def _gb_block() -> str:
+    """`_guild_bank_once`'s body, to the next def at the same indent."""
+    src = BRIDGE.read_text(encoding="utf-8")
+    signature = "    async def _guild_bank_once(self) -> None:"
+    start = src.index(signature)
+    rest = src[start:]
+    match = re.search(r"\n {0,4}(async def |def |class )", rest[1:])
+    return rest[: match.start() + 1] if match else rest
+
+
+def _gb_statements() -> str:
+    """The same body with docstrings and `#` commentary stripped.
+
+    Required here, not optional. The fix this guards quotes the exact buggy
+    expressions (`aimed or at_the_vault`) in its own explanatory comments, so a
+    test reading raw source would match the prose that documents the bug and
+    pass while the bug was live. `test_town_bank_errands._statements` exists
+    for the same reason and says it was caught by this twice.
+    """
+    body = _gb_block()
+    marker = '"""'
+    if body.count(marker) >= 2:
+        body = body.split(marker, 2)[2]
+    return "\n".join(line for line in body.splitlines()
+                     if not line.lstrip().startswith("#"))
+
+
+class TheGuildBankPassActsOnlyWhereItIsStanding(unittest.TestCase):
+    """Winning the travel column is not the same as having walked it.
+
+    infra#3713. Both gates in `_guild_bank_once` read the claim as though it
+    were an arrival - the setup path as `if aimed or at_the_vault`, the deposit
+    path as `if not aimed and not at_the_vault`. `_claim_town_slot` returns
+    True the moment the pass wins the RIGHT TO WALK, which is the start of the
+    journey; so on 2026-09-19 the column was claimed at 03:47:08 and
+    `bank buy-tab` was queued at 03:47:09 with the leader 3311 yards from the
+    vault. The core refused it, correctly, and `guild_bank_tab` stayed empty
+    for the whole life of the pass.
+
+    This is the same correction infra#3815 already made one pass over, where
+    `TheBankStepNeedsNoArrivalTest` was renamed
+    `TheBankStepAsksWhetherTheFamilyArrived` because, in its own words, "the
+    name was the claim, and the claim was false".
+    """
+
+    def test_the_claim_is_never_a_substitute_for_the_arrival(self):
+        """THE BUG, AS ONE ASSERTION. `aimed or at_the_vault` let a pass that
+        had merely won the column queue a row for a leader still on the road."""
+        self.assertNotIn("aimed or at_the_vault", _gb_statements())
+
+    def test_starved_walking_and_arrived_are_three_separate_answers(self):
+        """`not aimed and not at_the_vault` STAYS - it reports starvation, and
+        infra#3464 exists because this pass used to discard that and say
+        nothing while the leader sat on another errand for 15+ minutes. What
+        was missing is the middle state: aimed, walking, not there yet. It used
+        to fall through to queueing."""
+        code = _gb_statements()
+        self.assertIn("not aimed and not at_the_vault", code)
+        self.assertEqual(code.count("if not at_the_vault:"), 2)
+
+    def test_the_arrived_branch_is_what_queues(self):
+        code = _gb_statements()
+        self.assertIn("if at_the_vault:", code)
+
+    def test_the_column_is_still_claimed_so_the_walk_still_starts(self):
+        """Dropping the RETURN VALUE must not drop the CALL.
+
+        The claim is what writes the aim; without it the leader never sets off
+        and an arrival-only gate would wait for ever.
+        """
+        self.assertEqual(_gb_statements().count("aimed = await self._claim_town_slot("), 2)
+
+
 if __name__ == "__main__":
     unittest.main()
