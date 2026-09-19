@@ -26,6 +26,7 @@ COPY core.py bridge.py voice.py transform.py \
      professions.py craft.py craft_supply.py auction.py jobs.py trainjob.py \
      craft_rhythm.py \
      skillgoal.py gatheraim.py gatherband.py \
+     flightlearn.py \
      learnaim.py recipebook.py \
      craftpleas.py materials.py \
      gear.py \
@@ -46,7 +47,7 @@ COPY core.py bridge.py voice.py transform.py \
      vendor_stall.py \
      zones.json entrances.json shapes.json \
      talents.json items.json icons.json spells.json \
-     standing.json craftbook.json \
+     standing.json craftbook.json taxinodes.json \
      index.html /app/
 
 # It stays VENDORED. map_server._jquery_file says why - the page reaches no

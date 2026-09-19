@@ -38,6 +38,7 @@ import digest
 import disposition
 import events
 import fanout
+import flightlearn
 import goals
 import bonds
 import guildbank
@@ -453,6 +454,49 @@ TOWN_SLOT_GATHER_LEASE_SECONDS = float(
 # is keyed on it - and two spellings of the same claimant would silently give
 # the walk a town errand's lease.
 GATHER_CLAIMANT = "gather"
+
+# THE SAME, FOR THE PASS THAT GROWS THE FLIGHT NETWORK (infra#4206). Its walk
+# is the gathering walk's shape rather than a town errand's - measured at 1880
+# to 4226 yards to the nearest flight point any member of the family could
+# learn - so it is bounded by the same lease and by `flightlearn.REACH_YARDS`,
+# which is derived from that lease. A lease and NOT an exemption: infra#3703's
+# rule is that an errand which cannot finish must not hold the column for ever,
+# and a discovery walk is exactly the kind that can fail to finish.
+FLIGHT_CLAIMANT = "flight"
+
+# How far the flight-network pass will send somebody, and how long it may keep
+# the column while it does.
+#
+# THE LEASE IS DERIVED FROM THE BOUND AND NOT CHOSEN BESIDE IT. They are one
+# number expressed twice - "the longest walk this pass will ask for" and "how
+# long that walk takes" - and `flightlearn.lease_for` is the conversion, at
+# mod-overseer's own measured rate for a long walk. Set separately they could
+# drift into a bound the lease cannot cover, which is an errand that cannot
+# finish holding the family's one travel column, which is infra#3703 exactly.
+# So the env knob is on the DISTANCE, and the lease follows it.
+FLIGHT_LEARN_REACH_YARDS = float(
+    os.environ.get("FLIGHT_LEARN_REACH_YARDS", flightlearn.REACH_YARDS)
+)
+TOWN_SLOT_FLIGHT_LEASE_SECONDS = flightlearn.lease_for(FLIGHT_LEARN_REACH_YARDS)
+
+# How often the flight-network pass looks. Deliberately the slowest of the town
+# cadences: a node learned is learned for ever, so there is nothing to re-check
+# quickly, and the column belongs to the passes whose work comes back every
+# cycle. It is also longer than the lease above, so this pass can never be
+# queueing for the column it is already holding.
+FLIGHT_LEARN_CYCLE_SECONDS = float(
+    os.environ.get("FLIGHT_LEARN_CYCLE_SECONDS", "900")
+)
+
+# HOW MANY TIMES ONE NODE MAY BE ASKED FOR BEFORE THE PASS STOPS ASKING.
+#
+# The same bound infra#4191 put on an urgent pass that keeps achieving nothing,
+# and for the same reason: a walk that has been sent three times and has not
+# set the bit is a walk something is refusing - terrain, a despawned flight
+# master, a faction this process read wrongly - and repeating it every cycle
+# spends the family's one travel column on it for ever. The node is remembered
+# rather than the character, because it is the NODE that is not being learned.
+FLIGHT_LEARN_ATTEMPTS = int(os.environ.get("FLIGHT_LEARN_ATTEMPTS", "3"))
 
 
 def _expire_stale_claims(seconds: int) -> int:
@@ -2053,6 +2097,30 @@ def _retaskable_from(travel_npc: str) -> tuple:
     # infra#3703's to fix - it is not fixed by widening this tuple.
     if travel.is_ground_aim(aim):
         return ("", aim)
+    # A FLIGHT-DISCOVERY ERRAND IS AN ECONOMY ERRAND TOO (infra#4206), and it
+    # is here for exactly the reason the ground aim above is. `flight
+    # master:<nodeId>` is in neither ECONOMY_ERRANDS nor `isdigit`, so without
+    # this line it would fall through to the empty tuple, take
+    # `_write_trade_errand`'s OTHER branch and blank `learn_skill` /
+    # `unlearn_skill` on its way past - mod-overseer#438's bug re-created one
+    # more time - and `_is_economy_aim` would then call it untouchable, so
+    # nothing could ever hand it back. An aim one guard calls economy and the
+    # other calls untouchable is an aim with no terminal path at all, which is
+    # the exact shape infra#3703 found between the write and the release.
+    #
+    # THAT IT IS RELEASABLE IS THE POINT, NOT A SIDE EFFECT. A discovery walk
+    # is thousands of yards long and can be refused by terrain the whole way,
+    # so it is precisely the errand infra#3703's rule is about: it must be
+    # preemptible by a starved pass once its lease runs out. Making it
+    # untouchable - the shape a profession errand has - would buy the family's
+    # flight network with the family's town work.
+    #
+    # IDLE OR THE SAME AIM, AND NOT A REFINEMENT OF ANYTHING. A flight master
+    # standing at one particular node is not a sharper spelling of `vendor` or
+    # of a ground walk; it is a different errand in a different place, so
+    # overwriting one of those with it would be theft rather than refinement.
+    if travel.is_flight_master_aim(aim):
+        return ("", aim)
     if aim.isdigit():
         # craft_supply.VENDOR_ROLE rather than a fourth spelling of the word:
         # it is read from travel.ROLES there, and the numeric aim exists only
@@ -3018,8 +3086,19 @@ class Bridge(discord.Client):
         self._town_slot = townslot.Slot(
             lease=TOWN_SLOT_LEASE_SECONDS,
             releasable=_is_economy_aim,
-            long_leases={GATHER_CLAIMANT: TOWN_SLOT_GATHER_LEASE_SECONDS},
+            long_leases={
+                GATHER_CLAIMANT: TOWN_SLOT_GATHER_LEASE_SECONDS,
+                FLIGHT_CLAIMANT: TOWN_SLOT_FLIGHT_LEASE_SECONDS,
+            },
         )
+        # WHICH NODE HAS BEEN ASKED FOR, HOW OFTEN, AND WITH WHAT MASK BEHIND
+        # IT (infra#4206). {node id: (attempts, the taximask before the last
+        # one)}. In memory for the reason the town slot's own ledger is: the
+        # overseer tables ship in mod-overseer's db-import image and a new one
+        # would not reach the realm with this change. A restart forgets the
+        # streak and costs at most one repeated walk, which is cheaper than
+        # the walk being repeated for ever.
+        self._flight_attempts: dict = {}
         # Leader snapshot history used only to detect a vendor aim that has
         # stopped moving. The decision itself lives in vendor_stall.py.
         self._vendor_movement: dict[str, vendor_stall.Movement] = {}
@@ -3063,6 +3142,7 @@ class Bridge(discord.Client):
                 self._auction_loop,
                 self._recipebook_loop,
                 self._towntrip_loop,
+                self._flight_learn_loop,
                 self._restore_lost_lives,
             )
         }
@@ -7852,6 +7932,183 @@ class Bridge(discord.Client):
                 log.exception("forge pass failed; retrying next cycle")
             await asyncio.sleep(cycle)
 
+    def _settle_flight_attempts(self, name: str, taximask) -> None:
+        """Say what became of every discovery walk this pass has sent.
+
+        THE BIT IS THE PROOF AND NOTHING ELSE IS. `overseer_command.status`
+        never enters this pass, and an emptied `travel_npc` proves nothing
+        either: mod-overseer releases a flight errand whether or not the node
+        was learned, and its own log line says which - "node {} was {learned |
+        not learned - see the line above}". So the only thing counted here is
+        `characters.taximask` gaining the bit, read before the walk and after
+        it, and `flightlearn.learned` answers False for every reading it cannot
+        make - an unreadable mask either side, a node already held before the
+        walk, an unchanged mask. A check that can only report good news is
+        worse than no check.
+
+        AN UNCHANGED MASK IS "NOT YET" AND NOT "FAILED". The column this reads
+        is written on PlayerSaveInterval, so a node learned in the last quarter
+        of an hour is genuinely not in it yet. The attempt is left standing and
+        counted; `FLIGHT_LEARN_ATTEMPTS` is what eventually gives up on it, and
+        it is a count of WALKS SENT rather than of polls taken, so a slow save
+        cannot spend it.
+        """
+        for node, (tried, before) in sorted(self._flight_attempts.items()):
+            if flightlearn.learned(before, taximask, node):
+                self._flight_attempts.pop(node, None)
+                log.info(
+                    "flight: %s now holds taxi node %d - the bit is set in "
+                    "characters.taximask, which is the only thing that proves "
+                    "it, after %d walk(s)", name, node, tried,
+                )
+            elif tried >= FLIGHT_LEARN_ATTEMPTS:
+                log.info(
+                    "flight: taxi node %d has been walked to %d time(s) and "
+                    "%s's taximask bit is still clear, so this pass has given "
+                    "up on that node and will offer the next one out - "
+                    "repeating a walk that does not set the bit would spend "
+                    "the family's one travel column on it for ever",
+                    node, tried, name,
+                )
+            else:
+                log.info(
+                    "flight: %s was sent to learn taxi node %d %d time(s) and "
+                    "the bit is not set yet - characters is written on the "
+                    "world's save interval, so this is 'not yet' rather than "
+                    "'no'", name, node, tried,
+                )
+
+    async def _flight_learn_once(self) -> None:
+        """Send the family's traveller to learn one taxi node (infra#4206).
+
+        THE CALLER THAT NEVER EXISTED. mod-overseer has understood
+        `travel_npc = 'flight master:<nodeId>'` since mod-overseer#388 and
+        prints the exact aim it wants issued when a route is refused for a node
+        nobody has discovered - "'flight master:40' would go learn it". In
+        200,000 worldserver log lines the only aim kind this process has ever
+        written at all is `vendor`, so the family's flight network has never
+        grown by one node and every trip that needs a node nobody holds ends as
+        a walk. That is the whole of the defect: a working verb with nothing
+        calling it.
+
+        WHAT IS DECIDED HERE AND WHAT IS NOT. `flightlearn` owns the choice -
+        which node, on whose network, with whom standing at it, and whether the
+        walk is short enough to finish inside a lease - out of facts this
+        method reads. Nothing is decided here, exactly as nothing is decided in
+        `_forge_once`: this owns the reads, the arbitration and the write.
+
+        THE LEADER, BECAUSE ONLY THE LEADER CAN BE AIMED, and unusually that
+        is not merely a mechanical restriction here. A node is discovered by
+        the character that stands in front of the flight master, so a walk the
+        followers make by following teaches THEM nothing - mod-overseer's
+        opportunistic `DiscoverFlightPointOnArrival` runs for every character
+        that ends up beside a flight master, which is how the followers pick up
+        the same node for free when they arrive with the leader. So this aims
+        one character and the family's network grows by up to five.
+
+        THROUGH THE TOWN SLOT, AND ON A LEASE. This is a long walk - measured
+        at 1880 to 4226 yards to the nearest node any member of the family
+        could learn - so it is the gathering pass's shape rather than a town
+        errand's, and it takes `TOWN_SLOT_FLIGHT_LEASE_SECONDS` for the same
+        reason the gathering walk takes its own. It stays preemptible:
+        `_retaskable_from` calls a flight aim an economy errand, so a starved
+        pass can take the column back once the lease lapses, which is
+        infra#3703's rule and not an exception to it.
+
+        BOUNDED, AND THE BOUND IS A COUNT OF WALKS. A node that has been walked
+        to `FLIGHT_LEARN_ATTEMPTS` times without the taximask bit appearing is
+        given up on and the next candidate is offered instead. Without that the
+        pass would re-issue the same refused walk every cycle for ever, which
+        is the same failure with a flight master in it.
+
+        NOT IN THE MIDDLE OF A DUNGEON RUN, for the reason every other pass
+        that aims the leader skips one: pulling the leader out is how the party
+        spreads.
+        """
+        names = sorted((await asyncio.to_thread(_protected_guids)).values())
+        if not names or await self._mid_run(names):
+            return
+        leader = await asyncio.to_thread(_head_now)
+        if not leader:
+            return
+        where = (await asyncio.to_thread(_fetch_positions, [leader])).get(leader)
+        saved = (await asyncio.to_thread(_fetch_taximasks, [leader])).get(leader) or {}
+        taximask = saved.get("taximask")
+        # SETTLED BEFORE ANYTHING NEW IS ASKED FOR, so a node that HAS been
+        # learned is out of the give-up memory before `choose` is asked which
+        # node comes next. The other order would let a freshly learned node
+        # count a walk against itself one more time.
+        self._settle_flight_attempts(leader, taximask)
+        masters = await asyncio.to_thread(
+            _fetch_flight_masters, where.get("map_id") if where else None,
+        )
+        spent = tuple(node for node, (tried, _before) in
+                      self._flight_attempts.items()
+                      if tried >= FLIGHT_LEARN_ATTEMPTS)
+        errand = flightlearn.choose(
+            character=leader, standing=where, taximask=taximask,
+            race=saved.get("race"), masters=masters,
+            reach_yards=FLIGHT_LEARN_REACH_YARDS, skip=spent,
+        )
+        if not errand.aim:
+            # A refusal is already a whole sentence and it is the only thing
+            # this pass has to say on a cycle where it wants nothing. Said at
+            # INFO rather than swallowed: "the family holds every flight point
+            # it can reach" and "nobody can say where the leader is standing"
+            # are different answers and a reader has a different thing to do
+            # about each.
+            log.info("flight: %s", flightlearn.report(errand))
+            return
+        aimed = await self._claim_town_slot(FLIGHT_CLAIMANT, leader,
+                                            errand.aim)
+        if not aimed:
+            # `_claim_town_slot` has already named the holder, its lease and
+            # the queue. What only this pass knows is what the wait costs: the
+            # family's flight network does not grow this cycle, so the next
+            # long trip is another walk.
+            log.info(
+                "flight: leader=%s could not be aimed at the flight master "
+                "teaching taxi node %d this pass, so the family's flight "
+                "network does not grow and the next long trip is another walk",
+                leader, errand.node,
+            )
+            return
+        tried, _before = self._flight_attempts.get(errand.node, (0, None))
+        # THE MASK IS REMEMBERED AS IT WAS BEFORE THIS WALK, because "the bit
+        # flipped" is a question about a pair of readings and a single reading
+        # cannot answer it. Re-stamped on every walk sent for the same node, so
+        # a node learned and somehow lost again is still judged against the
+        # reading that this particular walk started from.
+        self._flight_attempts[errand.node] = (tried + 1, taximask)
+        log.info("flight: leader=%s - %s", leader, flightlearn.report(errand))
+
+    async def _flight_learn_loop(self) -> None:
+        """Grow the family's flight network, one node at a time (infra#4206).
+
+        Own loop and own clock, the same reasoning `_forge_loop` and
+        `_guild_bank_loop` give for themselves.
+
+        THE SLOWEST CADENCE OF ALL OF THEM, deliberately. A node learned is
+        learned for ever, so there is nothing here to re-check quickly, and the
+        walk it asks for is the longest any pass asks for. Running it as often
+        as the town errands would make it a competitor for the column rather
+        than an occasional one - and the column belongs to the passes whose
+        work comes back every cycle.
+
+        STAGGERED LAST, after every town pass has had its settle, so the first
+        thing this pass sees is a column that already says what the town work
+        wanted it to say rather than one mid-decision.
+        """
+        await self.wait_until_ready()
+        cycle = FLIGHT_LEARN_CYCLE_SECONDS
+        await asyncio.sleep(min(cycle, 420.0))
+        while not self.is_closed():
+            try:
+                await self._flight_learn_once()
+            except Exception:
+                log.exception("flight pass failed; retrying next cycle")
+            await asyncio.sleep(cycle)
+
     async def _settle_town_errand(self, names: list, leader: str, town,
                                   work_unasked: bool) -> str:
         """Aim, hold or hand back the town trip's `repair` errand (infra#3728).
@@ -11214,6 +11471,100 @@ def _gather_danger(map_id: int, x: float, y: float):
     return int(row["top"])
 
 
+# WHO IS STANDING AT A FLIGHT POINT (infra#4206), read live rather than
+# projected. The node TABLE is frozen client data and ships beside the code
+# (`taxinodes.json`), but which creatures are actually spawned is a fact about
+# THIS world's database, and mod-overseer resolves the same question against
+# the same rows when it turns the aim back into a walk. Reading them apart is
+# what keeps a node nothing stands at - the DBC is full of them - from becoming
+# an errand.
+#
+# `id` IS THE TEMPLATE ENTRY ON THIS SCHEMA, not `id1`: measured against the
+# live world database, `acore_world.creature` has no `id1` column at all.
+_FLIGHT_MASTER_SQL = (
+    "SELECT c.map AS map_id, c.position_x AS x, c.position_y AS y, "
+    "c.id AS entry, ct.name AS name "
+    "FROM acore_world.creature c "
+    "JOIN acore_world.creature_template ct ON ct.entry = c.id "
+    "WHERE c.map = %s AND (ct.npcflag & %s)"
+)
+
+
+def _fetch_flight_masters(map_id):
+    """Every flight master spawned on one map, as `flightlearn.Master` rows.
+
+    An empty list is an ordinary answer and it is the SAFE one: with nobody
+    standing anywhere, `flightlearn.choose` finds no candidate and refuses,
+    which is the direction a missing reading has to fail in - the alternative
+    would be walking the family to a node the module will then refuse to
+    resolve.
+    """
+    if map_id is None:
+        return []
+    with _connect() as conn, conn.cursor() as cur:
+        try:
+            cur.execute(_FLIGHT_MASTER_SQL,
+                        (int(map_id), flightlearn.FLIGHT_MASTER_NPC_FLAG))
+        except pymysql.err.MySQLError as exc:
+            # 1054 missing column, 1146 missing table. Same degradation every
+            # other reader of the world tables takes: a world image without
+            # them honestly has no flight master to find.
+            if exc.args and exc.args[0] in (1054, 1146):
+                log.warning("flight: this world image has no creature tables "
+                            "to find a flight master in")
+                return []
+            raise
+        return [flightlearn.Master(
+            map_id=int(row["map_id"]), x=float(row["x"]), y=float(row["y"]),
+            entry=int(row["entry"]), name=str(row["name"] or ""))
+            for row in cur.fetchall()]
+
+
+# WHAT A CHARACTER HAS DISCOVERED, AND HOW STALE THE ANSWER IS.
+#
+# `characters` is written on PlayerSaveInterval, which is 900000 ms, so a
+# taximask read here can be a quarter of an hour behind the walk that changed
+# it - the same lag `overseer_event`'s own migration note gives as the reason
+# it records a level at the moment of the event. That is survivable in both
+# directions and it is worth saying which:
+#
+#   * A node learned but not yet saved reads as still missing, so the pass can
+#     send somebody to a flight master they have already been to. mod-overseer
+#     answers that with "is at flight master ... and already knows node N" and
+#     releases, so it costs one walk and never a wrong state.
+#   * It can never invent a node. A bit that is SET in this column was set by
+#     the world, so the confirmation half (`flightlearn.learned`) is slow
+#     rather than wrong - which is the direction a proof has to be late in.
+_TAXIMASK_SQL = (
+    "SELECT name, race, taximask FROM acore_characters.characters "
+    "WHERE name IN (%s)"
+)
+
+
+def _fetch_taximasks(names: list) -> dict:
+    """name -> {"race", "taximask"} for each character, as saved.
+
+    Returns a MAPPING and never None. A name missing from it is a character
+    the world has not saved, and `flightlearn.choose` refuses on an absent
+    mask rather than treating it as an empty one.
+    """
+    if not names:
+        return {}
+    sql = _TAXIMASK_SQL % ",".join(["%s"] * len(names))
+    with _connect() as conn, conn.cursor() as cur:
+        try:
+            cur.execute(sql, names)
+        except pymysql.err.MySQLError as exc:
+            if exc.args and exc.args[0] in (1054, 1146):
+                log.warning("flight: this world image does not carry "
+                            "characters.taximask")
+                return {}
+            raise
+        return {row["name"]: {"race": row["race"],
+                              "taximask": row["taximask"]}
+                for row in cur.fetchall()}
+
+
 _FORGE_SQL = (
     "SELECT g.map AS map_id, g.position_x AS x, g.position_y AS y, "
     "g.position_z AS z, gt.Data1 AS radius, "
@@ -13547,6 +13898,7 @@ class HeadlessBridge(Bridge):
                 self._auction_loop,
                 self._recipebook_loop,
                 self._towntrip_loop,
+                self._flight_learn_loop,
                 self._restore_lost_lives,
             ) if coro.__name__ not in self.HEADLESS_SKIP
         ]

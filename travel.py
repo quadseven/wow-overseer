@@ -241,11 +241,110 @@ GROUND_AIM_PREFIX = "at:"
 GROUND_AIM_DECIMALS = 1
 
 
+# A SPECIFIC TAXI NODE: `flight master:<nodeId>` (mod-overseer#388, infra#4206).
+#
+# THE BARE KEYWORD ABOVE STILL MEANS "THE NEAREST ONE", and that is the wrong
+# answer for a deliberate discovery errand exactly as often as the nearest
+# flight master is not the one standing at the node that is missing. This
+# prefixed form names the NODE, and `ResolveTravelTarget` answers it before it
+# builds the creature index at all - the same way `at:` and `trigger:` are
+# answered - by looking the node up in TaxiNodes.dbc and then finding the
+# flight master that stands at it.
+#
+# SPELLED HERE BECAUSE THE MODULE SPELLS IT ONCE TOO. mod-overseer keeps this
+# string in exactly one place (`FLIGHT_MASTER_NODE_AIM_PREFIX` in
+# overseer_decisions.h) so that its own parser and the actionable refusal line
+# that suggests the aim cannot drift apart. This is the third copy and the same
+# two-way mirror discipline `ROLES` already has against `TravelRoles()` applies
+# to it: tests/test_travel_npc.py asserts these characters are the module's
+# own, in both directions.
+FLIGHT_MASTER_ROLE = "flight master"
+FLIGHT_MASTER_NODE_AIM_PREFIX = "flight master:"
+
+# HOW MANY DIGITS `ParseFlightMasterNodeAim` WILL READ, and the ceiling it
+# refuses past. Mirrored rather than chosen: that parser takes at most ten
+# decimal digits, refuses a value above a uint32, and refuses node 0 outright
+# because "node 0 names no row in TaxiNodes.dbc". An aim this side writes that
+# the module's parser would refuse is a written-and-unread bug, which is the
+# one failure the whole of this file's mirror discipline exists to prevent.
+FLIGHT_MASTER_NODE_DIGITS = 10
+FLIGHT_MASTER_NODE_MAX = 4294967295
+
+# HOW CLOSE A FLIGHT MASTER HAS TO STAND TO A TAXI NODE TO ANSWER FOR IT,
+# mirrored from mod-overseer's `TRAVEL_FLIGHT_NODE_MATCH_YARDS` rather than
+# guessed. `ResolveTravelTarget`'s `flight master:<nodeId>` branch refuses a
+# node that no spawn within this radius answers for, and `ConsiderFlight` uses
+# the identical number when it decides whose creature the departure node is -
+# so a caller that picks a node by any looser rule picks nodes the module will
+# refuse. TaxiNodes.dbc carries rows that pass every other mechanical test and
+# have no flight master anywhere near them (the module's own example is node
+# 168, "Filming", in Elwynn Forest), and this is the distance that tells them
+# apart. tests/test_travel_npc.py asserts it equals the module's constant.
+FLIGHT_NODE_MATCH_YARDS = 100
+
+
+def flight_master_node(value):
+    """The taxi node id a `flight master:<nodeId>` aim names, or None.
+
+    A PARSER AND NOT A PREFIX TEST, unlike `is_ground_aim`, and the asymmetry
+    is deliberate. There the authority on whether the coordinates are readable
+    is `ResolveTravelTarget`, which re-parses them anyway, so a second parser
+    would be a second opinion. Here the number is the thing this side CHOOSES -
+    nothing downstream can pick a different node - so the refusals have to be
+    made where the choosing happens, and they are made to the module's own
+    rules (see FLIGHT_MASTER_NODE_DIGITS).
+    """
+    if value is None:
+        return None
+    text = str(value)
+    if not text.startswith(FLIGHT_MASTER_NODE_AIM_PREFIX):
+        return None
+    digits = text[len(FLIGHT_MASTER_NODE_AIM_PREFIX):]
+    if not digits or len(digits) > FLIGHT_MASTER_NODE_DIGITS:
+        return None
+    # `str.isdigit` is True for superscripts and other unicode digit forms that
+    # `int()` then refuses or reads differently; the module reads bytes out of
+    # "0123456789" and nothing else, so this does too.
+    if any(c not in "0123456789" for c in digits):
+        return None
+    node = int(digits)
+    if node <= 0 or node > FLIGHT_MASTER_NODE_MAX:
+        return None
+    return node
+
+
+def is_flight_master_aim(value) -> bool:
+    """Whether `value` is a deliberate go-learn-this-node errand."""
+    return flight_master_node(value) is not None
+
+
+def flight_master_aim(node_id):
+    """The aim that walks a character to the flight master teaching `node_id`.
+
+    None rather than a malformed or too-long aim, for the reason `ground_aim`
+    refuses one: `overseer_roster.travel_npc` is VARCHAR(32) and MySQL
+    TRUNCATES outside strict mode, so a node id this could not name in full
+    would arrive on the other side as a DIFFERENT node that nobody chose. At
+    ten digits the longest possible aim is 24 characters, so nothing a real
+    DBC holds can reach that - which is precisely why the check is cheap
+    enough to keep.
+    """
+    try:
+        node = int(node_id)
+    except (TypeError, ValueError):
+        return None
+    if node <= 0 or node > FLIGHT_MASTER_NODE_MAX:
+        return None
+    aim = "%s%d" % (FLIGHT_MASTER_NODE_AIM_PREFIX, node)
+    return aim if len(aim) <= COLUMN_WIDTH else None
+
+
 def resolve(text):
     """The canonical travel target named by `text`, or None.
 
-    Accepts a role keyword, one of its aliases, or a bare creature entry.
-    Returns the exact string to store in overseer_roster.travel_npc.
+    Accepts a role keyword, one of its aliases, a `flight master:<nodeId>`
+    errand, or a bare creature entry. Returns the exact string to store in
+    overseer_roster.travel_npc.
 
     Returning None rather than raising is deliberate: this is fed by chat and
     by council decisions, and "that is not somewhere I can send you" is an
@@ -256,6 +355,12 @@ def resolve(text):
     cleaned = " ".join(str(text).strip().lower().split())
     if not cleaned:
         return None
+    node = flight_master_node(cleaned)
+    if node is not None:
+        # RE-BUILT RATHER THAN RETURNED AS TYPED, so a leading zero or any
+        # other spelling of the same number canonicalises to the one string
+        # the module's parser and this file's writer both produce.
+        return flight_master_aim(node)
     if cleaned.isdigit():
         # A creature entry. Rejecting 0 matters: it is the sentinel the
         # worldserver uses for "no creature", so an aim at entry 0 would
@@ -281,6 +386,12 @@ def describe(value):
     target = resolve(value)
     if target is None:
         return "nowhere"
+    node = flight_master_node(target)
+    if node is not None:
+        # NOT "the nearest flight master", which is what the bare keyword
+        # means and is a different errand. Saying the node out loud is the
+        # whole point of the prefixed form.
+        return "the flight master who teaches taxi node %d" % node
     if target.isdigit():
         return "creature %s" % target
     return "the nearest %s" % target
