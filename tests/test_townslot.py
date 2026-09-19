@@ -33,6 +33,7 @@ AND THE TWO WAYS THIS FIX COULD ITSELF BE THE BUG ARE PINNED HARDEST:
 """
 import ast
 import pathlib
+import re
 import unittest
 
 import townslot
@@ -661,6 +662,227 @@ class TheYieldIsBounded(unittest.TestCase):
         self.assertEqual(townslot.SLOT_WAIT, d.verdict)
         self.assertFalse(d.granted)
         self.assertEqual([], slot.wants)
+
+
+class ASlowPassIsRankedByItsWaitAndNotByItsLastAsk(unittest.TestCase):
+    """infra#4208. `WANT_FRESH_SECONDS` answers "is this loop still asking?",
+    and `_ahead_of` used it to answer a different question: "where does the
+    pass that is asking RIGHT NOW stand in the queue?" A pass whose cycle is
+    longer than the freshness window fell off the end of that loop and was
+    ranked behind every other waiter however long it had actually been starved.
+
+    MEASURED ON wow-dev 2026-09-19, three minutes apart, with a dead
+    `auctioneer` aim on an expired 300s lease sitting between them:
+
+        14:36:49 guild bank waits: ... but flight has been waiting 1020s
+                 longer and takes the slot first
+        14:39:48 flight waits: ... but guild bank has been waiting -1020s
+                 longer and takes the slot first
+
+    THE SAME MAGNITUDE WITH OPPOSITE SIGNS IS THE PROOF. `flight` began waiting
+    at 13:39:48 and `guild bank` at 13:56:48, so 1020 seconds is the real gap
+    and `flight` is the older of the two. The first line reads it correctly;
+    the second has the roles the wrong way round, because `flight`'s own last
+    ask had just gone stale and it was ranked behind every live want. Each is
+    told in turn to stand aside for the other, neither takes the column, and
+    the dead errand went on being held for another eight minutes.
+    """
+
+    def test_a_pass_whose_own_ask_went_stale_still_outranks_a_later_waiter(self):
+        """THE FIX, STATED ONCE. `flight` asked at 0 and again at 1000, so its
+        own want is stale by `WANT_FRESH_SECONDS`; `guild bank` began waiting
+        at 600, six hundred seconds AFTER it. Ranking by the recorded wait
+        puts `flight` first, which is what it is."""
+        d = decide(claimant="flight", aim="at:1:9,9,9",
+                   retaskable=("", "at:1:9,9,9"), column="auctioneer",
+                   holder=holder("auction", "auctioneer", 0.0),
+                   wants=(want("flight", 0.0, last_asked=0.0),
+                          want("guild bank", 600.0, last_asked=990.0)),
+                   now=1000.0)
+        self.assertEqual(townslot.SLOT_PREEMPT, d.verdict)
+
+    def test_nothing_ahead_of_a_pass_started_waiting_after_it(self):
+        """THE PROPERTY, RATHER THAN ONE CASE OF IT. Whatever the freshness of
+        anybody's last ask, `ahead` may only ever contain passes that really
+        did start waiting earlier. The old reading could not say that: a stale
+        claimant was handed the whole live queue regardless of the clock."""
+        wants = (want("flight", 0.0, last_asked=0.0),
+                 want("guild bank", 600.0, last_asked=990.0),
+                 want("gather", 800.0, last_asked=995.0))
+        for moment in range(900, 1400, 20):
+            for claimant in ("flight", "guild bank", "gather"):
+                mine = next(w for w in wants if w.claimant == claimant)
+                ahead = townslot._ahead_of(
+                    claimant, wants, float(moment),
+                    townslot.WANT_FRESH_SECONDS)
+                later = [w.claimant for w in ahead
+                         if w.waiting_since > mine.waiting_since]
+                self.assertEqual(
+                    [], later,
+                    "at now=%d, %s was told to yield to %s, which started "
+                    "waiting after it" % (moment, claimant, later))
+
+    def test_the_refusal_never_claims_a_negative_wait(self):
+        """`-1020s longer` was in the live log. It cannot be produced by an
+        ordering where everything `ahead` really is ahead."""
+        wants = (want("flight", 0.0, last_asked=0.0),
+                 want("guild bank", 600.0, last_asked=990.0))
+        for claimant in ("flight", "guild bank"):
+            d = decide(claimant=claimant, aim="at:1:9,9,9",
+                       retaskable=("", "at:1:9,9,9"), column="auctioneer",
+                       holder=holder("auction", "auctioneer", 0.0),
+                       wants=wants, now=1000.0)
+            for number in re.findall(r"waiting (-?\d+)s longer", d.reason):
+                self.assertGreaterEqual(
+                    int(number), 0,
+                    "%s was told somebody had waited %ss longer" %
+                    (claimant, number))
+
+    def test_a_first_ask_still_queues_behind_everybody(self):
+        """The claimant with NO want at all is the case this must not change:
+        `_own_wait` answers `now` for it, every live want sorts before that,
+        and it takes its turn at the back exactly as it did before."""
+        ahead = townslot._ahead_of(
+            "craft_supply",
+            (want("guild bank", 10.0, last_asked=900.0),
+             want("auction", 200.0, last_asked=900.0)),
+            now=1000.0, want_fresh=townslot.WANT_FRESH_SECONDS)
+        self.assertEqual(["guild bank", "auction"],
+                         [w.claimant for w in ahead])
+
+
+class NoPassGoesUnservedOverAWholeShift(unittest.TestCase):
+    """THE STARVATION TEST, AND IT IS WRITTEN TO FAIL ON THE OLD CODE.
+
+    infra#4208's measured complaint is a rate: 15 grants per 6 hours on
+    2026-09-19. Re-measured the same day over 2h43m after the arrival fixes
+    landed, it was 9 grants - 19.9 per 6 hours - with a worst wait of 6906
+    seconds, nearly three times the 2341s the issue recorded. A rate cannot be
+    asserted from a single `decide` call, and a suite of single calls is
+    exactly what let a pass that never wins look healthy branch by branch. So
+    this drives a real `Slot` through the seven passes on their real cycles and
+    asks the two questions the log asks: how many grants, and did anybody get
+    nothing.
+
+    WHAT THE OLD CODE DID ON THIS SIMULATION, with one pass on a cycle longer
+    than `WANT_FRESH_SECONDS` - which `flight` really is, measured at 15 and 30
+    minute gaps between asks:
+
+        flight cycle  900s   25 grants / 3.3h   nobody starved
+        flight cycle 1000s    3 grants / 3.3h   flight, guild bank, mail
+                                                and towntrip never served
+        flight cycle 1200s    2 grants / 3.3h   five of seven never served
+
+    One slow consumer took the whole column down. That is not a fairness
+    tuning question, it is the arbitration deadlocking, and the cliff sits
+    exactly at the freshness window.
+    """
+
+    # The seven passes that write `travel_npc`, on the cycle each really runs.
+    # 300s: VENDOR_CYCLE_SECONDS, TOWNTRIP_CYCLE_SECONDS,
+    # CRAFT_FORGE_CYCLE_SECONDS. 600s: the bank, guild bank and auction passes.
+    # `flight` is the slow one and is the pass the defect was measured on.
+    CYCLES = {"towntrip": 300.0, "gather": 300.0, "craft_rhythm": 300.0,
+              "guild bank": 600.0, "auction": 600.0, "mail": 600.0,
+              "flight": 1200.0}
+
+    HOURS = 6.0
+    STEP = 30.0
+
+    def _run(self, cycles):
+        """Six hours of seven passes asking, with nothing ever arriving.
+
+        THE WORST CASE ON PURPOSE. No errand is handed back voluntarily, so
+        every hold ends at its lease - which is what the live log showed for
+        all five holders in the measured window. Arrival working would only
+        make this kinder.
+        """
+        aims = {name: "at:1:%d,0,0" % index
+                for index, name in enumerate(sorted(cycles))}
+        slot = townslot.Slot(
+            releasable=economy,
+            long_leases={"gather": townslot.GATHER_LEASE_SECONDS})
+        column = ""
+        grants = {name: 0 for name in cycles}
+        next_ask = {name: 0.0 for name in cycles}
+        waiting_from = {}
+        worst_wait = 0.0
+        now = 0.0
+        for _ in range(int(self.HOURS * 3600.0 / self.STEP)):
+            for name in sorted(cycles):
+                if now < next_ask[name]:
+                    continue
+                next_ask[name] = now + cycles[name]
+                decision = slot.want(
+                    claimant=name, character="Grug", aim=aims[name],
+                    leader="Grug", column=column,
+                    retaskable=("", aims[name]), now=now)
+                if decision.writes:
+                    column = aims[name]
+                    slot.settle(decision, True, now)
+                    grants[name] += 1
+                    if name in waiting_from:
+                        worst_wait = max(worst_wait,
+                                         now - waiting_from.pop(name))
+                elif decision.granted:
+                    slot.settle(decision, True, now)
+                else:
+                    slot.settle(decision, False, now)
+                    waiting_from.setdefault(name, now)
+            now += self.STEP
+        for started in waiting_from.values():
+            worst_wait = max(worst_wait, now - started)
+        return grants, worst_wait
+
+    def test_every_pass_is_served_at_least_once(self):
+        """THE ASSERTION THE ISSUE ASKED FOR. A consumer that never wins across
+        the whole run is a FAILURE, not a slow start."""
+        grants, _ = self._run(self.CYCLES)
+        starved = sorted(name for name, count in grants.items() if count == 0)
+        self.assertEqual(
+            [], starved,
+            "these passes asked for the traveller for %g hours and never got "
+            "it: %s (grants: %s)" % (self.HOURS, starved, sorted(grants.items())))
+
+    def test_a_slow_pass_does_not_take_the_whole_column_down_with_it(self):
+        """The cliff was at `WANT_FRESH_SECONDS`: a consumer whose cycle
+        crossed it collapsed everybody's throughput, not only its own. Both
+        sides of the old cliff must now behave the same."""
+        inside, _ = self._run(dict(self.CYCLES, flight=900.0))
+        outside, _ = self._run(dict(self.CYCLES, flight=1200.0))
+        self.assertEqual([], [n for n, c in outside.items() if c == 0])
+        self.assertGreater(
+            sum(outside.values()), sum(inside.values()) * 0.75,
+            "a pass slower than the freshness window still costs the column "
+            "most of its throughput: %d grants against %d"
+            % (sum(outside.values()), sum(inside.values())))
+
+    def test_the_grant_rate_clears_the_measured_baseline(self):
+        """THE FLOOR IS CHOSEN TO CATCH A REGRESSION, NOT TO PIN THE NUMBER.
+        This arbitration produces 42 on this run and the old one produced 2, so
+        35 catches anything worse than a one-sixth slide while leaving room for
+        a lease change that is a deliberate trade. It is also comfortably above
+        the 19.9 per 6 hours measured live, which matters because this
+        simulation is HARSHER than the realm - nothing ever arrives here, so
+        every hold runs its whole lease."""
+        grants, _ = self._run(self.CYCLES)
+        self.assertGreater(
+            sum(grants.values()), 35,
+            "grants per %g hours: %d, against 42 for this arbitration, 2 for "
+            "the one it replaced and 19.9 measured live"
+            % (self.HOURS, sum(grants.values())))
+
+    def test_the_worst_wait_is_bounded_and_the_bound_is_recorded(self):
+        """infra#4208 asks for a stated bound rather than a hope. THE BOUND
+        THIS ARBITRATION CLAIMS IS ONE HOUR for any one consumer. Simulated
+        worst case here is 3300s; the old ordering's was 21600s, the whole run,
+        because five of seven were never served at all. Live before the change,
+        `towntrip` waited 6906 seconds for one turn."""
+        _, worst = self._run(self.CYCLES)
+        self.assertLess(
+            worst, 3600.0,
+            "a pass waited %ds, past the hour this arbitration is willing to "
+            "claim as its bound" % int(worst))
 
 
 class TheLedgerLearnsFromTheColumn(unittest.TestCase):

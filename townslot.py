@@ -65,6 +65,16 @@ THE THREE RULES, IN THE ORDER THEY MATTER.
      `WANT_FRESH_SECONDS`) and the column is never held empty for a loop that
      has stopped asking.
 
+     AND THE ORDER IS THE WAIT ITSELF, NOT THE FRESHNESS OF THE LAST ASK
+     (infra#4208). Those are two different questions and the second one is
+     only ever asked about the passes being yielded TO. `_ahead_of` asked it
+     about the ASKER as well, so a pass whose cycle is longer than the
+     freshness window was ranked behind every other waiter however long it
+     had really been starved - and, measured on wow-dev 2026-09-19, that one
+     pass took the whole column down: 3 grants in 3.3 hours against 25, with
+     four of seven consumers never served at all. Rule 3 is only worth
+     anything if the order it names is the real one.
+
 WHY A LEASE AND NOT A QUEUE OF ERRANDS. A queue would need this process to own
 the errands themselves - to hold them, re-issue them and know when each is done
 - and every one of those things already exists once per pass, in the pass, with
@@ -161,6 +171,44 @@ GATHER_LEASE_SECONDS = 450.0
 # whole family's town work still for ever, having walked nowhere, which is the
 # bug this module exists to end rather than to re-create facing the other way.
 WANT_FRESH_SECONDS = 900.0
+
+# WHY THERE IS NO GRACE ON THE HANDOVER, WHICH WAS MEASURED RATHER THAN
+# ASSUMED (infra#4208).
+#
+# When a lease lapses and somebody has been starved longer than the pass that
+# is asking, the asker is refused and the column is kept for the pass whose
+# turn it is. The obvious complaint is that nothing bounds that: the dead
+# errand goes on holding the family's one column while the pass that is owed
+# the turn waits for its own cycle to come round. Measured on wow-dev
+# 2026-09-19 over 80 minutes, five holders and every one of them preempted
+# rather than handed back, 1742 of 4560 seconds were an errand past its lease
+# that nobody was allowed to take.
+#
+# SO A GRACE WAS BUILT AND IT MADE BOTH NUMBERS WORSE. Simulating the seven
+# real pass cycles over six hours, "the asker takes it once the owed pass has
+# had N seconds to turn up":
+#
+#     no grace    42 grants / 6h   worst wait  3300s   nobody starved
+#     1200s       42 grants / 6h   worst wait  3300s   nobody starved
+#      600s       40 grants / 6h   worst wait  4500s   nobody starved
+#      300s       36 grants / 6h   worst wait 21600s   4 of 7 never served
+#
+# The grace is rule 3 being repealed by degrees: every turn it takes from a
+# slow pass is handed to a fast one, so the slow pass waits another whole
+# round, and at a short enough value it never wins at all. That is the failure
+# `TheFreeColumnIsYieldedToWhoeverIsOwedIt` exists to prevent, arriving through
+# a different door.
+#
+# WHAT ACTUALLY BOUNDED IT was `_ahead_of` ranking a pass by its own recorded
+# wait instead of by the freshness of its last ask. The unbounded hold in that
+# 80 minute window - 840 seconds and still running when the window closed -
+# was not the honest deferral at all. It was two passes being told in turn to
+# stand aside for each other, which needed one of them to be ranked behind a
+# pass that started waiting later, and `_ahead_of` can no longer say that. The
+# deferrals that remain are bounded by the owed pass's own cycle, which is the
+# thing that ends them; the three in that window ran 330, 204 and 362 seconds.
+# A safety valve for a state the ordering can no longer reach would be a
+# mechanism with nothing behind it.
 
 # HOW LONG AN URGENT PASS THAT ACHIEVED NOTHING WAITS BEFORE IT MAY PREEMPT
 # AGAIN (infra#4191).
@@ -350,14 +398,46 @@ def urgent_ground_release(*, aim: str, pressure: bool, in_run: bool,
 
 
 def _ahead_of(claimant: str, wants, now: float, want_fresh: float) -> list:
-    """The live wants that outrank `claimant`'s own."""
-    ordered = fresh_wants(wants, now, want_fresh)
-    ahead = []
-    for want in ordered:
-        if want.claimant == claimant:
-            break
-        ahead.append(want)
-    return ahead
+    """The live wants that outrank `claimant`'s own.
+
+    RANKED BY THIS PASS'S OWN RECORDED WAIT, NOT BY WHETHER ITS LAST ASK IS
+    STILL FRESH (infra#4208). Freshness answers "is this loop still asking?",
+    which is the right filter for the passes being yielded TO. It is the wrong
+    filter for the pass DOING the asking, because a pass that is asking right
+    now is by definition still asking.
+
+    WHAT THE OLD READING COST. The previous version walked `fresh_wants` and
+    stopped at the claimant's own entry - so a claimant whose entry was not in
+    that list, because its cycle is longer than `WANT_FRESH_SECONDS`, fell off
+    the end of the loop and was handed the WHOLE live queue as "ahead of me",
+    however long it had actually been starved. Measured on wow-dev 2026-09-19,
+    three minutes apart, with a dead `auctioneer` aim on an expired 300s lease
+    sitting between the two passes the whole time:
+
+        14:36:49 guild bank waits: ... but flight has been waiting 1020s
+                 longer and takes the slot first
+        14:39:48 flight waits: ... but guild bank has been waiting -1020s
+                 longer and takes the slot first
+
+    THE TWO NUMBERS ARE THE SAME MAGNITUDE WITH OPPOSITE SIGNS, and that is the
+    whole proof. `flight` began waiting at 13:39:48 and `guild bank` at
+    13:56:48, so the gap between them really is 1020 seconds and `flight` really
+    is the older. The first line reads that correctly. The second has the two
+    roles the wrong way round, because `flight`'s own last ask had just gone
+    stale and it was therefore ranked behind every live want - including one
+    that started seventeen minutes after it. Each pass is told in turn to stand
+    aside for the other, neither ever takes the column, and that dead errand
+    went on being held for another eight minutes. In a seven-pass simulation of
+    the same cycles one such pass drops the whole column from 25 grants in 3.3
+    hours to 3, with four of the seven never served at all.
+
+    A claimant with no want AT ALL is unchanged: `_own_wait` answers `now` for
+    it, every live want sorts before that, and a first ask still queues behind
+    everybody exactly as it did before.
+    """
+    mine = (_own_wait(claimant, wants, now), claimant)
+    return [want for want in fresh_wants(wants, now, want_fresh)
+            if (want.waiting_since, want.claimant) < mine]
 
 
 def decide(*, claimant: str, character: str, aim: str, leader: str,
@@ -579,6 +659,13 @@ def _held_column(*, claimant: str, character: str, aim: str, holder: Holder,
     the aim must be one this process could hand back, the lease must have run
     out, and no other pass may have been starved longer. Any one of them
     missing is a wait.
+
+    THE THIRD ONE RANKS ON THE WAIT AND NOT ON THE ASK (infra#4208). `ahead`
+    comes from `_ahead_of`, which compares every live want against this
+    claimant's own recorded `waiting_since`, so nothing in it can be a pass
+    that started waiting later. When that was not true, two passes each got
+    told in turn to stand aside for the other and a lapsed lease stayed held by
+    nobody's errand for as long as both kept asking.
     """
     held_for = now - holder.since
     allowed = lease_for(holder, lease, orphan_lease, long_leases)
