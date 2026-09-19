@@ -388,11 +388,18 @@ class WhatThisConsoleMayWrite(unittest.TestCase):
                 self.assertTrue(section.instead, section.key)
 
     def test_the_console_does_not_aim_through_aim_statements(self):
-        """travel.aim_statements is STILL called by nothing, and the travel
-        order deliberately does not become its first caller: its second
-        statement clears everybody who was not named, which is right for a
-        council deciding where the whole family stands and wrong for a console
-        aiming one person. Standing the others down is its own order here."""
+        """The travel order deliberately does not aim through
+        travel.aim_statements: its second statement clears everybody who was
+        not named, which is right for a council deciding where the whole
+        family stands and wrong for a console aiming one person. Standing the
+        others down is its own order here.
+
+        This docstring used to claim aim_statements "is STILL called by
+        nothing". That stopped being true when `trainjob.statements` landed,
+        and the stale claim is part of why its roster-wide clear went
+        unaudited (infra#4195). The ASSERTION below is unchanged and still
+        correct - these four files are not callers - it is only the reason
+        that needed correcting."""
         for name in ("bridge.py", "map_server.py", "council.py", "decree.py"):
             source = (HERE / name).read_text(encoding="utf-8")
             self.assertNotIn("travel.aim_statements(", source, name)

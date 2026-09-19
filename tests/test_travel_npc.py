@@ -283,14 +283,52 @@ class TheAimIsWrittenAndEveryoneElseIsCleared(unittest.TestCase):
         self.assertEqual(2, len(stmts))
         self.assertIn("NOT IN", stmts[1][0])
 
-    def test_an_empty_target_clears_everybody(self):
+    def test_an_empty_target_stands_down_only_the_named(self):
+        """A falsy target is an explicit stand-down, and it stands down the
+        characters the caller NAMED - not the roster.
+
+        This used to clear every row (`WHERE travel_npc <> ''` with no name
+        clause at all), so a request about one character wiped the column for
+        everybody, including a leader carrying an unrelated ground aim that
+        another pass legitimately owned (infra#4195)."""
         stmts = travel.aim_statements(["Grug"], "")
         self.assertEqual(1, len(stmts))
-        self.assertIn("travel_npc <> ", stmts[0][0])
+        sql, params = stmts[0]
+        self.assertIn("travel_npc <> ", sql)
+        self.assertIn("name IN (", sql)
+        self.assertIn("Grug", params)
 
-    def test_naming_nobody_clears_everybody(self):
-        stmts = travel.aim_statements([], "vendor")
-        self.assertEqual(1, len(stmts))
+    def test_an_empty_target_leaves_a_character_nobody_named_alone(self):
+        """The guard that matters: Ugga is not mentioned, so Ugga's aim is not
+        this call's business. Reverting the name scope fails here."""
+        sql, params = travel.aim_statements(["Grug"], "")[0]
+        self.assertIn("name IN (", sql)
+        self.assertNotIn("Ugga", params)
+
+    def test_naming_nobody_writes_nothing(self):
+        """Naming nobody is not naming everybody. A caller that named no
+        characters has asked for nothing, so the honest answer is no
+        statements rather than a roster-wide clear."""
+        self.assertEqual([], travel.aim_statements([], "vendor"))
+        self.assertEqual([], travel.aim_statements([], ""))
+        self.assertEqual([], travel.aim_statements(None, None))
+
+    def test_the_named_and_target_path_still_clears_everyone_else(self):
+        """Unchanged on purpose: when a target IS given, clearing everyone not
+        named is the deliberate 'one traveller at a time' semantics the
+        docstring argues for, and this fix does not touch it."""
+        stmts = travel.aim_statements(["Grug"], "vendor")
+        self.assertEqual(2, len(stmts))
+        self.assertIn("NOT IN", stmts[1][0])
+        self.assertIn("Grug", stmts[1][1])
+
+    def test_the_stand_down_binds_its_names(self):
+        """Same binding discipline as every other statement here."""
+        sql, params = travel.aim_statements(["Grug", "Ugga"], "")[0]
+        self.assertNotIn("Grug", sql)
+        self.assertNotIn("Ugga", sql)
+        self.assertIn("Grug", params)
+        self.assertIn("Ugga", params)
 
     def test_an_unresolvable_target_raises_rather_than_writing_junk(self):
         with self.assertRaises(ValueError):

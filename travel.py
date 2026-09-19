@@ -307,9 +307,27 @@ def aim_statements(names, target):
         raise ValueError("travel target too long for the column: %r" % (resolved,))
 
     chosen = sorted({str(n) for n in (names or [])})
-    if not resolved or not chosen:
-        return [("UPDATE overseer_roster SET travel_npc = %s "
-                 "WHERE travel_npc <> %s", (NONE, NONE))]
+    if not chosen:
+        # NAMING NOBODY IS NOT THE SAME AS NAMING EVERYBODY, and this branch
+        # used to treat it as if it were: it cleared `travel_npc` for the whole
+        # roster with no `WHERE name` clause at all. A caller that names nobody
+        # has asked for nothing, so the honest answer is no statements, not a
+        # write that stands the entire family down. Nothing in production
+        # reaches this today - `trainjob.statements` returns early on an absent
+        # traveller, which is the only caller - so this is a guard against the
+        # next caller, not a live bug (infra#4195).
+        return []
+    if not resolved:
+        # A FALSY TARGET IS AN EXPLICIT STAND-DOWN, not a lookup that failed:
+        # a truthy target that does not resolve raises above, so reaching here
+        # means the caller passed no target on purpose. Stand down exactly the
+        # characters they named and leave every other aim alone - the column
+        # belongs to whoever else is travelling, and this function has no
+        # opinion about them.
+        marks = ", ".join(["%s"] * len(chosen))
+        return [("UPDATE overseer_roster SET travel_npc = %%s "  # noqa: S608 - placeholders from a COUNT, values still bound
+                 "WHERE travel_npc <> %%s AND name IN (%s)" % marks,
+                 (NONE, NONE, *chosen))]
 
     # `marks` is a run of "%s" placeholders whose LENGTH comes from a count of
     # names - no name and no target reaches the SQL text. Every value is bound,

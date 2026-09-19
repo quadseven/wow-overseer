@@ -1000,11 +1000,19 @@ def _plan_campaign(request: dict, standing: dict) -> Order:
 def _plan_travel(request: dict, standing: dict) -> Order:
     """One character aimed at one role, or stood down.
 
-    NOT travel.aim_statements, which is still called by nothing and still
-    should be: its second statement clears everybody who was not named, which
-    is right for a council that decides where the whole family stands and
-    wrong for a console aiming one person. Standing the others down is an
-    order in its own right here, and it is given one character at a time.
+    NOT travel.aim_statements: its second statement clears everybody who was
+    not named, which is right for a council that decides where the whole
+    family stands and wrong for a console aiming one person. Standing the
+    others down is an order in its own right here, and it is given one
+    character at a time.
+
+    That function IS called - `trainjob.statements` (trainjob.py) delegates to
+    it whole. This comment used to say it "is still called by nothing and
+    still should be", which was true when written and stopped being true when
+    the trainjob caller landed. A writer of `travel_npc` documented as uncalled
+    is a writer nobody audits, and that is exactly what happened: it kept the
+    function off the list while its no-target branch cleared the column for
+    the entire roster with no `WHERE name` clause (infra#4195).
     """
     names = list(standing["roster"])
     if not names:
