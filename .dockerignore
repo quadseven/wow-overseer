@@ -1,0 +1,14 @@
+# The Dockerfile COPYs an explicit list of top-level .py/.json/.html files -
+# it never reaches into any of these - but keeping them out of the build
+# context anyway makes `docker build .` faster and stops a stray secret in
+# .git history or a local .env from ever being sendable to a daemon.
+.git/
+.github/
+tests/
+tools/
+mod-overseer/
+patches/
+wow-addons/
+__pycache__/
+*.pyc
+.ruff_cache/
