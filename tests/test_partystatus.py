@@ -18,7 +18,7 @@ import unittest
 
 import partystatus
 
-ROOT = pathlib.Path(__file__).resolve().parents[3]
+ROOT = pathlib.Path(__file__).resolve().parents[1]
 ADDON = ROOT / "hosts/srv-unraid-gpu/wow-addons/PartyStatus"
 HERE = pathlib.Path(__file__).resolve().parent.parent
 

@@ -1,0 +1,130 @@
+name: build - overseer image
+
+# Builds AND PUBLISHES the bridge image to GHCR.
+#
+# WHY GHCR AND NOT infra's IN-CLUSTER REGISTRY (registry.ts.ehumps.me). That
+# registry needs the push password at SSM /infra/cluster/registry/push_pass,
+# and infra's own _reusable.build-to-cluster-registry.yml says outright that
+# mechanism is "coupled to this cluster's registry, kubeconfig path, and SSM
+# layout" and stays in infra deliberately - a repo does not get to mint its
+# own deploy credentials into that cluster. GHCR needs no credential beyond
+# this run's own GITHUB_TOKEN plus `packages: write`. quadseven/muster
+# (build.server-image.yml) and quadseven/zippie (build.clienthome-image.yml)
+# both reached the same conclusion for the same reason - a private repo
+# extracted out of infra, needing to publish its own deployable image - and
+# this follows that precedent rather than re-deciding it.
+#
+# THE CONSEQUENCE, stated rather than discovered at deploy time: this is a
+# PRIVATE repo, so the package is private, so pulling it into k8s-oke needs
+# an `imagePullSecret` in every namespace that runs it (wow, wow-dev,
+# wow-hardcore) - same shape as muster's `ghcr` secret.
+#
+# ONE IMMUTABLE TAG PER COMMIT. `sha-<12>`, no :latest, no :main - same
+# convention as muster. infra pins the deployed manifests by DIGEST (see
+# production/oke/manifests/wow/tests/test_core_image_digests.py's pattern),
+# so the tag exists for humans reading `docker images`, not as the thing
+# anything actually pins to.
+
+on:
+  pull_request:
+    paths:
+      - '**.py'
+      - '**.json'
+      - '*.html'
+      - 'jquery.min.js'
+      - 'Dockerfile'
+      - '.github/workflows/build.yml'
+  push:
+    branches: [main]
+    paths:
+      - '**.py'
+      - '**.json'
+      - '*.html'
+      - 'jquery.min.js'
+      - 'Dockerfile'
+      - '.github/workflows/build.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: overseer image (build + publish)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+          # The Dockerfile COPYs an explicit list of top-level .py/.json/
+          # .html files only - it never reaches into mod-overseer/, tests/,
+          # tools/ or patches/. No submodule content is needed to build it.
+          submodules: false
+
+      - name: Resolve image ref and whether to publish
+        id: meta
+        env:
+          OWNER: ${{ github.repository_owner }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+          THIS_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          image="ghcr.io/$(printf '%s' "$OWNER" | tr '[:upper:]' '[:lower:]')/wow-overseer"
+          sha="${PR_HEAD_SHA:-$GITHUB_SHA}"
+
+          head="$(git rev-parse HEAD)"
+          if [ "$head" != "$sha" ]; then
+            echo "::error::checked out $head but would tag $sha"
+            exit 1
+          fi
+
+          publish=true
+          if [ -n "$PR_HEAD_REPO" ] && [ "$PR_HEAD_REPO" != "$THIS_REPO" ]; then
+            publish=false
+            echo "fork PR ($PR_HEAD_REPO): building without publishing"
+          fi
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            publish=false
+          fi
+
+          {
+            echo "image=$image"
+            echo "tag=sha-${sha:0:12}"
+            echo "publish=$publish"
+          } >> "$GITHUB_OUTPUT"
+          echo "will build $image:sha-${sha:0:12} (publish=$publish)"
+
+      - name: Build
+        run: docker build -t '${{ steps.meta.outputs.image }}:${{ steps.meta.outputs.tag }}' .
+
+      - name: The image must actually run python and hold the interpreter this needs
+        # No live Discord/MySQL to smoke-test against in CI, and starting
+        # bridge.py for real needs both plus DISCORD_TOKEN. What is proven
+        # here instead: the image the pip install actually produced has a
+        # working interpreter and can import the two third-party deps
+        # bridge.py needs at module scope, before anything is deployed.
+        run: |
+          set -euo pipefail
+          docker run --rm '${{ steps.meta.outputs.image }}:${{ steps.meta.outputs.tag }}' \
+            python -c "import sys; assert sys.version_info[:2] == (3, 12), sys.version_info; import discord, pymysql; print('interpreter + deps OK:', sys.version)"
+
+      - name: Log in to GHCR
+        if: steps.meta.outputs.publish == 'true'
+        run: echo "${{ github.token }}" | docker login ghcr.io -u '${{ github.actor }}' --password-stdin
+
+      - name: Push
+        if: steps.meta.outputs.publish == 'true'
+        run: |
+          set -euo pipefail
+          docker push '${{ steps.meta.outputs.image }}:${{ steps.meta.outputs.tag }}'
+          digest="$(docker inspect --format '{{index .RepoDigests 0}}' '${{ steps.meta.outputs.image }}:${{ steps.meta.outputs.tag }}')"
+          echo "::notice::published $digest"
+          echo "$digest" >> "$GITHUB_STEP_SUMMARY"

@@ -48,9 +48,9 @@ import re
 import sys
 import unittest
 
-ROOT = pathlib.Path(__file__).resolve().parents[3]
-MODULE = ROOT / "docker/azerothcore-playerbots/mod-overseer/src/mod_overseer.cpp"
-DECISIONS = ROOT / "docker/azerothcore-playerbots/mod-overseer/src/overseer_decisions.cpp"
+ROOT = pathlib.Path(__file__).resolve().parents[1]
+MODULE = ROOT / "mod-overseer/src/mod_overseer.cpp"
+DECISIONS = ROOT / "mod-overseer/src/overseer_decisions.cpp"
 BRIDGE = pathlib.Path(__file__).resolve().parents[1] / "bridge.py"
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
@@ -235,7 +235,7 @@ class TheArrivalToleranceIsMirroredFromTheModule(unittest.TestCase):
         self.assertIn("return CounterRoleForAim(aim) != CounterRole::None;",
                       self.decisions)
         self.assertIn("None,      // not a counter: a trainer, an innkeeper, an `at:`, a portal",
-                      (ROOT / "docker/azerothcore-playerbots/mod-overseer/src"
+                      (ROOT / "mod-overseer/src"
                        / "overseer_decisions.h").read_text(
                           encoding="utf-8", errors="replace"))
 

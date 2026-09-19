@@ -17,11 +17,11 @@ import re
 import sys
 import unittest
 
-ROOT = pathlib.Path(__file__).resolve().parents[3]
-MODULE = ROOT / "docker/azerothcore-playerbots/mod-overseer/src/mod_overseer.cpp"
+ROOT = pathlib.Path(__file__).resolve().parents[1]
+MODULE = ROOT / "mod-overseer/src/mod_overseer.cpp"
 MIGRATION = (
     ROOT
-    / "docker/azerothcore-playerbots/mod-overseer/data/sql/characters/base"
+    / "mod-overseer/data/sql/characters/base"
     / "2026_08_26_01_overseer_roster_job.sql"
 )
 

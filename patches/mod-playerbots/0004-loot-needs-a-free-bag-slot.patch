@@ -1,0 +1,123 @@
+Subject: [PATCH] loot: a gathering node needs a free bag slot
+
+WHY THIS PATCH EXISTS
+
+infra#2813, and the freeze on infra#2800. `LootObject::IsLootPossible`
+(src/Mgr/Item/LootObjectStack.cpp:280-348 at the pinned SHA) checks the
+gameobject's flags, the bot's skill, the required skill value, and whether it
+is carrying a mining pick or a skinning knife. It never once asks whether the
+bot has anywhere to put what it is about to gather.
+
+With zero free bag slots that makes the action NON-TERMINATING. `add all loot`
+re-adds the node on the next tick, `IsLootPossible` says yes again, and inside
+INTERACTION_DISTANCE - 2 (3.33 yards) `open loot` fires at relevance 8.0 and
+preempts `new rpg do quest` at 3.0 forever. Engine.cpp:220 breaks on the first
+successful action, so nothing below 8.0 ever gets a turn.
+
+Measured on the live realm (infra#2800, verified against acore_world.gameobject
+and characters):
+
+    gameobject guid 206507, entry 1617 "Silverleaf"  (-9329.5, -801.2, 66.0)
+    Grug                                             (-9328.2, -803.9, 66.017)
+    distance 2.98 yards
+
+Grug held that position to within 0.1 yard for 8 hours 31 minutes, across a
+worldserver restart, with 40 of 40 bag slots used. The other four likewise. It
+reads as a pathfinding bug or a questing bug and it is neither: he is not
+walking anywhere, he is re-casting on a herb three yards away that he has
+nowhere to put.
+
+WHY THE FIX IS HERE AND NOT ON THE RELEVANCE NUMBERS
+
+The obvious lever is the 8.0. infra#2800 investigated exactly that and DECLINED
+it: `nc -loot` removes CORPSE looting too - AddAllLootAction::Execute iterates
+nearest game objects AND nearest corpses (AddLootAction.cpp:25-38) - and 10 of
+the family's 14 open quests are item-collection quests, including quest 60
+"Kobold Candles", whose Large Candles drop off kobold corpses. The cheaper
+`nc -gather` is provably inert, because herb nodes enter through `loot`'s own
+`add all loot`, which has no skill filter at all.
+
+So the relevance side is untouchable, and this is the other half of the
+product: an action at 8.0 only starves everything below it because it never
+terminates. Make it terminate and the contest resolves itself, with no priority
+changed anywhere.
+
+WHY IT IS SCOPED TO GATHERING NODES AND NOT TO ALL LOOT
+
+The guard sits BELOW the `skillId == SKILL_NONE` early return, so corpses and
+ordinary chests are not affected. That is deliberate, and it is the whole
+reason this check is exact rather than a heuristic:
+
+  * A CORPSE can hold MONEY, and money needs no bag slot. A bot with full bags
+    should still walk over and take the copper, and it still can.
+  * A GATHERING NODE yields items only - there is no money in a herb. With no
+    free slot there is nothing it can produce that the bot can accept, so
+    refusing it is not a policy, it is arithmetic.
+
+WHAT IT DELIBERATELY GETS WRONG, STATED PLAINLY
+
+At exactly zero free slots a bot will also refuse a node whose herb would have
+STACKED onto a partial stack it already carries. `IsLootPossible` runs before
+the object is opened, so the loot contents are not knowable at this seam and a
+precise test is not available here. The error is in the safe direction - a
+refusal to loot can never destroy or lose anything - and it only bites at zero,
+which is a state nothing should be sitting in for eight and a half hours
+anyway. The alternative, which is checking nothing, is what this patch exists
+to fix.
+
+`GetFreeInventorySpace` is the core's own count of the backpack plus every
+equipped bag (PlayerStorage.cpp:470-490). Counting it here by hand would be a
+second and worse copy of it.
+
+WHAT WOULD LET THIS PATCH BE DELETED
+
+Any free-slot or CanStoreNewItem check landing in `IsLootPossible` upstream, or
+upstream gaining a general "do not queue loot the bot cannot accept" filter in
+AddAllLootAction. No upstream PR is open for this yet.
+
+APPLIES TO
+
+    mod-playerbots @ 60e6555e4e4b552ee4c6551b466aff648916f38b
+    src/Mgr/Item/LootObjectStack.cpp, LootObject::IsLootPossible
+
+    This uses NO new upstream member. `Player::GetFreeInventorySpace()` is
+    public in the pinned core fork (Player.h:1269 at
+    47960183bb03b83e8943eb2f0f39c16df9710c9d) and `bot` is already a complete
+    `Player*` everywhere else in this function, which calls `bot->HasItemCount`
+    and `bot->GetSkillValue` a few lines further down.
+
+diff --git a/src/Mgr/Item/LootObjectStack.cpp b/src/Mgr/Item/LootObjectStack.cpp
+index 6911b5c..90376e8 100644
+--- a/src/Mgr/Item/LootObjectStack.cpp
++++ b/src/Mgr/Item/LootObjectStack.cpp
+@@ -315,12 +315,30 @@ bool LootObject::IsLootPossible(Player* bot)
+     if (go && go->HasFlag(GAMEOBJECT_FLAGS, GO_FLAG_INTERACT_COND) && !go->ActivateToQuest(bot))
+         return false;
+ 
++    // BELOW THIS LINE IS GATHERING ONLY. A corpse or a plain chest returns
++    // here, and it must: a corpse can hold MONEY, which needs no bag slot,
++    // so a bot with full bags should still walk over and take the copper.
+     if (skillId == SKILL_NONE)
+         return true;
+ 
+     if (skillId == SKILL_FISHING)
+         return false;
+ 
++    // infra#2813 / infra#2800: a gathering node yields ITEMS ONLY, so with
++    // no free bag slot there is nothing it can produce that the bot can
++    // accept. Without this the loot never completes, `add all loot` re-adds
++    // the node every tick, and `open loot` at relevance 8.0 preempts
++    // `new rpg do quest` at 3.0 forever - measured as one character
++    // motionless within 2.98 yards of a Silverleaf node for 8h31m with
++    // 40/40 bag slots used.
++    //
++    // At exactly zero this also refuses a node whose herb would have
++    // stacked onto a partial stack already carried; the loot contents are
++    // not knowable before the object is opened, and erring toward refusing
++    // to loot can never lose anything.
++    if (bot->GetFreeInventorySpace() == 0)
++        return false;
++
+     if (!botAI->HasSkill((SkillType)skillId))
+         return false;
+ 

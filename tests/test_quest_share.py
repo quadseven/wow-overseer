@@ -23,11 +23,11 @@ import unittest
 
 import questshare
 
-ROOT = pathlib.Path(__file__).resolve().parents[3]
-MODULE = ROOT / "docker/azerothcore-playerbots/mod-overseer/src/mod_overseer.cpp"
+ROOT = pathlib.Path(__file__).resolve().parents[1]
+MODULE = ROOT / "mod-overseer/src/mod_overseer.cpp"
 MIGRATION = (
     ROOT
-    / "docker/azerothcore-playerbots/mod-overseer/data/sql/characters/base"
+    / "mod-overseer/data/sql/characters/base"
     / "2026_08_24_03_overseer_share.sql"
 )
 BRIDGE = ROOT / "scripts/wow-overseer/bridge.py"
@@ -440,11 +440,11 @@ class TheShareRetryLogic(unittest.TestCase):
         same commit, and that commit must carry the migration."""
         import subprocess
 
-        pins = (ROOT / "docker/azerothcore-playerbots/UPSTREAM-PINS.env").read_text(encoding="utf-8")
+        pins = (ROOT / "UPSTREAM-PINS.env").read_text(encoding="utf-8")
         pinned = re.search(r"^AC_OVERSEER_SHA=([0-9a-f]{40})$", pins, re.MULTILINE)
         self.assertIsNotNone(pinned, "AC_OVERSEER_SHA missing from UPSTREAM-PINS.env")
         gitlink = subprocess.run(
-            ["git", "-C", str(ROOT), "ls-files", "-s", "--", "docker/azerothcore-playerbots/mod-overseer"],
+            ["git", "-C", str(ROOT), "ls-files", "-s", "--", "mod-overseer"],
             capture_output=True, text=True, check=True,
         ).stdout.split()
         self.assertEqual(gitlink[:1], ["160000"], "mod-overseer is not a gitlink here")

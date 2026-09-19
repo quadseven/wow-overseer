@@ -1,0 +1,44 @@
+Subject: [PATCH] a mage only conjures food and water it can use
+
+WHY THIS PATCH EXISTS
+
+The mage strategy added by 0015 asks for conjure food and water, but the
+highest known spell rank can produce a product above the mage's level. The
+normal CanUseItem check intentionally permits conjured products in that path,
+so the no-food/no-drink trigger never sees a usable stack and the mage casts
+again forever. Bound the rank choice by the product's RequiredLevel as well as
+the normal item usability check. Lower ranks remain available, so a level 47
+mage with rank 7 also knows how to make the level 45 product it can consume.
+
+WHAT THIS PATCH DELIBERATELY DOES NOT DO
+
+It does not change the trigger, the action names, or the party's surplus
+conjure rows. It only prevents the spell-name resolver from selecting a
+product the caster cannot use.
+
+WHEN THIS PATCH SHOULD BE DELETED
+
+The moment upstream rejects a conjure product whose RequiredLevel is above the
+caster's level in this selection path, this hunk is redundant and should be
+removed with the corresponding source-contract test.
+
+diff --git a/src/Ai/Base/Actions/GenericSpellActions.cpp b/src/Ai/Base/Actions/GenericSpellActions.cpp
+index 57c69ed6..ca9df56a 100644
+--- a/src/Ai/Base/Actions/GenericSpellActions.cpp
++++ b/src/Ai/Base/Actions/GenericSpellActions.cpp
+@@ -167,7 +167,14 @@ bool CastSpellAction::Execute(Event /*event*/)
+ 
+             uint32 itemId = spellInfo->Effects[0].ItemType;
+             ItemTemplate const* proto = sObjectMgr->GetItemTemplate(itemId);
+-            if (!proto || bot->CanUseItem(proto) != EQUIP_ERR_OK)
++            // CanUseItem deliberately treats conjured food and drink as usable
++            // before the character has reached the product's RequiredLevel.
++            // That makes a mage with a higher-rank spell create items it cannot
++            // consume, so the no-food/no-drink trigger never clears. Keep the
++            // rank selection bounded by both the normal item check and the
++            // product's explicit level requirement.
++            if (!proto || proto->RequiredLevel > bot->GetLevel() ||
++                bot->CanUseItem(proto) != EQUIP_ERR_OK)
+                 continue;
+ 
+             if (spellInfo->Id > castId)

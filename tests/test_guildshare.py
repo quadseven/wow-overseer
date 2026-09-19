@@ -23,7 +23,7 @@ import bag_pressure
 import guildshare
 
 BRIDGE = pathlib.Path(__file__).resolve().parents[1] / "bridge.py"
-DOCKERFILE = (pathlib.Path(__file__).resolve().parents[3]
+DOCKERFILE = (pathlib.Path(__file__).resolve().parents[1]
               / "docker" / "wow-overseer" / "Dockerfile")
 
 

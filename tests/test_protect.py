@@ -195,7 +195,7 @@ class RosterManifestTest(unittest.TestCase):
         import bonds
 
         manifest = (
-            pathlib.Path(__file__).resolve().parents[3]
+            pathlib.Path(__file__).resolve().parents[1]
             / "oke/manifests/wow/70-overseer.yaml"
         ).read_text()
         m = re.search(

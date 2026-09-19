@@ -49,8 +49,8 @@ class TheSellCommandIsOneThatExists(unittest.TestCase):
 
 
 MODULE = (
-    pathlib.Path(__file__).resolve().parents[3]
-    / "docker/azerothcore-playerbots/mod-overseer/src/mod_overseer.cpp"
+    pathlib.Path(__file__).resolve().parents[1]
+    / "mod-overseer/src/mod_overseer.cpp"
 )
 
 

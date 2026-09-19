@@ -1,0 +1,61 @@
+name: check
+
+# Unit tests for the overseer bridge's decision core (infra#2598's original
+# framing: pure stdlib functions, with the Discord/MySQL/LLM adapters left
+# outside the tested seam by design). Extracted from quadseven/infra's
+# check.python-units.yml matrix entry for production/scripts/wow-overseer,
+# which ran this exact test-cmd on the arc-infrastructure self-hosted pool;
+# this repo has no access to that pool, so it runs the identical command on
+# a GitHub-hosted runner via infra-public's shared reusable instead.
+#
+# submodules: true - a large minority of this suite reads
+# mod-overseer/src/mod_overseer.cpp as TEXT to assert that a Python-side
+# assumption (a factory method that must never re-roll a named character, a
+# loot guard that must never destroy an item, ...) still matches what the
+# pinned C++ module actually does. That coupling is inherited from infra
+# (check.python-units.yml carried the same `submodules: true` for the same
+# reason) - it is not new here, just relocated from infra's submodule to
+# this repo's own.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '**.py'
+      - '**.json'
+      - 'UPSTREAM-PINS.env'
+      - 'patches/**'
+      - '.github/workflows/check.yml'
+      - '.github/scripts/compile_check.py'
+  pull_request:
+    paths:
+      - '**.py'
+      - '**.json'
+      - 'UPSTREAM-PINS.env'
+      - 'patches/**'
+      - '.github/workflows/check.yml'
+      - '.github/scripts/compile_check.py'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: check-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  unittest:
+    uses: quadseven/infra-public/.github/workflows/check.python.yml@f7adaca4271f8c14c15ac1f5f2a709f78d003b70
+    with:
+      runner: ubuntu-latest
+      working-directory: .
+      submodules: true
+      install-cmd: "true" # stdlib-only suite (discord.py/pymysql are imported lazily inside adapters, never at module import time in a test)
+      ruff: false
+      # The declared interpreter floor, same convention as infra
+      # (check.python-units.yml / compile_check.py) - fails on the file and
+      # line a `unittest discover` SyntaxError would otherwise blame on "a
+      # broken test" rather than on an old interpreter.
+      test-cmd: "python3 .github/scripts/compile_check.py --min-python 3.12 && python3 -m unittest discover -s tests -p 'test_*.py' -v"
+      timeout-minutes: 10

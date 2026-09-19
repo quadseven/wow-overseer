@@ -29,7 +29,7 @@ field name that did not exist once broke the build for three PRs' worth of
 work. So these are contract tests over the source text, in the pattern
 test_quest_share.py established and test_quest_aim.py continued.
 
-Pins (production/docker/azerothcore-playerbots/UPSTREAM-PINS.env):
+Pins (production/UPSTREAM-PINS.env):
     core   efe123fab543c5faf3c477674ec17a18fd59f09f
     module 8d9f6aa6bc6d45f9ae0ee0675b9b1f8aa6937312
 
@@ -47,8 +47,8 @@ import re
 import unittest
 
 MODULE = (
-    pathlib.Path(__file__).resolve().parents[3]
-    / "docker/azerothcore-playerbots/mod-overseer/src/mod_overseer.cpp"
+    pathlib.Path(__file__).resolve().parents[1]
+    / "mod-overseer/src/mod_overseer.cpp"
 )
 
 

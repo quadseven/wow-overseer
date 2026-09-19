@@ -12,7 +12,7 @@ import unittest
 
 PACKAGE = pathlib.Path(__file__).resolve().parents[1]
 BRIDGE = PACKAGE / "bridge.py"
-DOCKERFILE = pathlib.Path(__file__).resolve().parents[3] / "docker/wow-overseer/Dockerfile"
+DOCKERFILE = pathlib.Path(__file__).resolve().parents[1] / "docker/wow-overseer/Dockerfile"
 
 
 def _source() -> str:

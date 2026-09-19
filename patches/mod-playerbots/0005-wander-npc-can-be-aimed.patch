@@ -1,0 +1,214 @@
+Subject: [PATCH] new rpg: WANDER_NPC can be aimed at a named NPC
+
+infra#2783. The family can walk to a quest objective and nowhere else. Not a
+trainer, not a vendor, not a repair NPC, not a bank, not the guild-charter
+petitioner, not the tabard designer. That one gap is what blocks #2757
+(professions), #2829/#2830 (crafting and materials), #2831 (the guild) and the
+`town run` and `train` modes of #2834.
+
+THE GAP IS AIMING, NOT TARGETS. Every one of those NPCs is already an allowed
+RPG target. PossibleRpgTargetsValue.cpp:23-46 is a single unconditional block
+with no config gate, and it contains TRAINER (:43), VENDOR (:44), REPAIR (:45),
+BANKER (:29), GUILD_BANKER (:30), TRAINER_PROFESSION (:32), PETITIONER (:39) and
+TABARDDESIGNER (:40). The bots are allowed to stand in front of all of them.
+What is missing is any way to say WHICH one.
+
+    void ChangeToDoQuest(uint32 questId, const Quest* quest);   // takes a target
+    void ChangeToWanderNpc();                                   // takes nothing
+
+(NewRpgInfo.h:104-106 at this pin.) RPG_WANDER_NPC already holds a target -
+`ObjectGuid npcOrGo` - so the state can name an NPC; the only way into the state
+cannot. The bot always picks for itself.
+
+WHY THE OBVIOUS ONE-LINE VERSION DOES NOT WORK, MEASURED FROM THE SOURCE
+
+`rpgInfo.data` is a public std::variant and NewRpgWanderNpcAction::Execute only
+self-selects when `npcOrGo` is EMPTY, so writing a guid into the variant from
+outside looks like it needs no patch at all. It does not survive contact with
+the movement layer:
+
+  * NewRpgAction.cpp:412 walks to that guid with MoveWorldObjectTo.
+  * NewRpgBaseAction.cpp:205 resolves it with botAI->GetWorldObject, which is
+    ObjectAccessor::GetWorldObject (PlayerbotAI.cpp:2677-2683), which finds a
+    creature only while its grid is loaded.
+  * A trainer in Stormwind, with the bot in Elwynn, is not in a loaded grid.
+    The lookup returns null, MoveWorldObjectTo returns false, and the bot falls
+    to MoveRandomNear(15.0f) at :417.
+
+So the guid-only aim produces a bot that shuffles inside a fifteen-yard circle
+for five minutes and then goes IDLE. It would have been set, it would have read
+back as set, and it would have moved nobody - which is the exact failure this
+epic keeps producing and the reason this is a patch rather than a one-liner in
+our own module.
+
+WHAT IT DOES INSTEAD, AND WHOSE PATTERN IT IS
+
+The same thing RPG_TRAVEL_FLIGHT already does in this very file. TravelFlight
+carries `flightMasterEntry` + `flightMasterPos` (NewRpgInfo.h:56-63), walks the
+long leg by POSITION with MoveFarTo (NewRpgAction.cpp:645-646), and only then
+resolves the actual creature with FindNearestCreature (:648). Position pathing
+has no grid requirement; MoveFarTo routes any same-map destination through
+PathGenerator and teleport-recovers a wedged path after five failures
+(NewRpgBaseAction.cpp:97-113), which is the same machinery patch 0003 relies on
+for cross-zone turn-ins.
+
+WanderNpc therefore gains `npcEntry` + `pos`, and Execute gains one guarded
+block ahead of the existing logic. Both new fields default to unset, and the
+block is skipped entirely when they are - a wander the bot chose for itself is
+unchanged, byte for byte.
+
+THE EIGHT-SECOND CONSUME, WHICH FORCED A DESIGN DECISION
+
+After npcStayTime (8s, NewRpgAction.h:99) inside interaction distance the
+existing code clears `npcOrGo` and re-selects. That is right for a wander: the
+bot mills around a town. It is wrong for an errand - eight seconds after
+arriving at the trainer it was sent to, the bot would wander off to the next
+NPC. Because the aimed block re-resolves `npcEntry` on the next tick, an AIMED
+bot stays where it was sent, while an unaimed one keeps its old behaviour. This
+is deliberately NOT an endless hold: the status still self-expires to IDLE after
+statusWanderNpcDuration (5 minutes, NewRpgAction.h:65, checked at :278), so an
+aim that is not renewed releases itself through upstream's own clock rather than
+through a special case.
+
+WHAT THIS DELIVERS, STATED NARROWLY: TRAVEL, NOT TRANSACTION. The only
+interaction on arrival is upstream's existing CanInteractWithQuestGiver branch.
+Nothing here trains a skill, buys a bag, repairs armour or signs a charter. A
+character that can stand in front of a trainer is the prerequisite for all of
+those and is none of them.
+
+WHAT DEPENDS ON THIS, SAID PLAINLY. Unlike patches 0001-0004, this one is not
+only a fix upstream might take - mod-overseer CALLS the overload it adds
+(DriveTravel, mod_overseer.cpp). Deleting this patch without also removing that
+call breaks OUR build, not just the feature. If a pin bump makes it stop
+applying, rebase it; if upstream ever adds an aimable ChangeToWanderNpc of its
+own, delete this and adapt the call to upstream's signature in the same commit.
+
+Verified against the pins in UPSTREAM-PINS.env:
+  module 60e6555e4e4b552ee4c6551b466aff648916f38b
+Every upstream member used here is already used by this same file at this same
+pin: MoveFarTo, INTERACTION_DISTANCE, Player::FindNearestCreature,
+Unit::IsAlive and WorldPosition's default-comparison all appear in
+NewRpgTravelFlightAction at :645-655, and `WorldPosition() !=` in the GO_GRIND
+assert at :244. Nothing new is asked of the compiler.
+
+diff --git a/src/Ai/World/Rpg/Action/NewRpgAction.cpp b/src/Ai/World/Rpg/Action/NewRpgAction.cpp
+index 8880159..8b521d3 100644
+--- a/src/Ai/World/Rpg/Action/NewRpgAction.cpp
++++ b/src/Ai/World/Rpg/Action/NewRpgAction.cpp
+@@ -375,6 +375,47 @@ bool NewRpgWanderNpcAction::Execute(Event /*event*/)
+     if (!dataPtr)
+         return false;
+     auto& data = *dataPtr;
++
++    // infra#2783: AN AIMED WANDER. `npcEntry` is only ever set by a caller that
++    // named the NPC (NewRpgInfo::ChangeToWanderNpc(entry, pos)); a wander the
++    // bot chose for itself leaves it 0 and falls straight through to the block
++    // below, byte for byte the behaviour this status always had.
++    //
++    // WHY THIS IS NOT SIMPLY "SET data.npcOrGo AND LET THE OLD CODE RUN". The
++    // old code walks to the NPC through MoveWorldObjectTo, which resolves the
++    // guid with ObjectAccessor and so finds a creature only while its grid is
++    // loaded. Aim a bot standing in Elwynn at a trainer in Stormwind that way
++    // and the lookup returns null, MoveWorldObjectTo returns false, and the
++    // MoveRandomNear(15.0f) fallback below shuffles it in a circle until the
++    // lease lapses - an aim that is set, looks set, and moves nobody. The long
++    // walk is therefore done by POSITION through MoveFarTo, exactly as
++    // NewRpgTravelFlightAction walks to its flight master, and the guid is
++    // resolved only on arrival, when the creature really is in the grid.
++    //
++    // THE AIM IS NOT CONSUMED ON ARRIVAL. Below, eight seconds inside
++    // interaction distance clears `npcOrGo` so a self-selecting wander moves on
++    // to the next NPC; for an errand that would undo the thing the bot was sent
++    // to do. Re-entering here re-resolves the same entry, so an aimed bot STAYS
++    // where it was sent. It is still bounded, and by upstream's own clock: the
++    // status self-expires to IDLE after statusWanderNpcDuration, which releases
++    // the aim with no special case anywhere.
++    if (data.npcEntry && data.pos != WorldPosition())
++    {
++        if (bot->GetDistance(data.pos) > INTERACTION_DISTANCE)
++            return MoveFarTo(data.pos);
++
++        Creature* aimedNpc = bot->FindNearestCreature(data.npcEntry, INTERACTION_DISTANCE * 3);
++        if (!aimedNpc || !aimedNpc->IsAlive())
++        {
++            // Standing on the recorded spawn point with nothing there - the
++            // creature is despawned, phased or dead. Idle rather than stare at
++            // an empty patch of ground; whoever set the aim can set it again.
++            info.ChangeToIdle();
++            return true;
++        }
++        data.npcOrGo = aimedNpc->GetGUID();
++    }
++
+     if (!data.npcOrGo)
+     {
+         // No npc can be found, switch to IDLE
+diff --git a/src/Ai/World/Rpg/NewRpgInfo.cpp b/src/Ai/World/Rpg/NewRpgInfo.cpp
+index a01bcec..7db0ba8 100644
+--- a/src/Ai/World/Rpg/NewRpgInfo.cpp
++++ b/src/Ai/World/Rpg/NewRpgInfo.cpp
+@@ -26,6 +26,21 @@ void NewRpgInfo::ChangeToWanderNpc()
+     data = WanderNpc{};
+ }
+ 
++// infra#2783. The same bookkeeping as the no-argument form - `startT` is the
++// status clock the five-minute WANDER_NPC lease is measured against
++// (statusWanderNpcDuration, checked in NewRpgStatusUpdateAction) - plus the
++// target the bot was sent to. Writing the variant WITHOUT this would leave
++// HasStatusPersisted measuring from whenever the PREVIOUS status began, so the
++// aim would expire early or late for reasons nothing in the state explains.
++void NewRpgInfo::ChangeToWanderNpc(uint32 npcEntry, WorldPosition pos)
++{
++    startT = getMSTime();
++    WanderNpc wander;
++    wander.npcEntry = npcEntry;
++    wander.pos = pos;
++    data = wander;
++}
++
+ void NewRpgInfo::ChangeToWanderRandom()
+ {
+     startT = getMSTime();
+@@ -146,6 +161,11 @@ std::string NewRpgInfo::ToString()
+         else if constexpr (std::is_same_v<T, WanderNpc>)
+         {
+             out << "WANDER_NPC";
++            // infra#2783: which NPC it was SENT to, 0 when it is choosing
++            // for itself. Without this an aimed and an unaimed wander look
++            // identical in `rpg status`, and telling those two apart is the
++            // whole diagnostic.
++            out << "\naimedNpcEntry: " << arg.npcEntry;
+             out << "\nnpcOrGoEntry: " << arg.npcOrGo.GetCounter();
+             out << "\nlastWanderNpc: " << startT;
+             out << "\nlastReachNpcOrGo: " << arg.lastReach;
+diff --git a/src/Ai/World/Rpg/NewRpgInfo.h b/src/Ai/World/Rpg/NewRpgInfo.h
+index 53a4c62..415002c 100644
+--- a/src/Ai/World/Rpg/NewRpgInfo.h
++++ b/src/Ai/World/Rpg/NewRpgInfo.h
+@@ -37,6 +37,17 @@ struct NewRpgInfo
+     {
+         ObjectGuid npcOrGo{};
+         uint32 lastReach{0};
++        // infra#2783. AN AIMED WANDER. Both default to "unset", which is the
++        // self-selecting wander this status has always been; set together they
++        // name the NPC the bot was SENT to, and NewRpgWanderNpcAction walks
++        // there instead of picking for itself. Entry-plus-position rather than
++        // an ObjectGuid because a guid is not resolvable at range: the action's
++        // MoveWorldObjectTo goes through ObjectAccessor, which finds a creature
++        // only while its grid is loaded, so an aim carrying only a guid moves a
++        // bot exactly as far as it can already see. TravelFlight solved the
++        // same problem the same way and is the model here.
++        uint32 npcEntry{0};
++        WorldPosition pos{};
+     };
+     // RPG_WANDER_RANDOM
+     struct WanderRandom
+@@ -102,6 +113,8 @@ struct NewRpgInfo
+     void ChangeToGoGrind(WorldPosition pos);
+     void ChangeToGoCamp(WorldPosition pos);
+     void ChangeToWanderNpc();
++    // infra#2783: the aimable form. See WanderNpc above.
++    void ChangeToWanderNpc(uint32 npcEntry, WorldPosition pos);
+     void ChangeToWanderRandom();
+     void ChangeToDoQuest(uint32 questId, const Quest* quest);
+     void ChangeToTravelFlight(uint32 flightMasterEntry, WorldPosition flightMasterPos, std::vector<uint32> path);

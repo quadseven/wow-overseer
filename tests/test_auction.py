@@ -42,9 +42,9 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 import auction  # noqa: E402
 import travel  # noqa: E402
 
-ROOT = pathlib.Path(__file__).resolve().parents[3]
-DECISIONS = ROOT / "docker/azerothcore-playerbots/mod-overseer/src/overseer_decisions.cpp"
-MODULE = ROOT / "docker/azerothcore-playerbots/mod-overseer/src/mod_overseer.cpp"
+ROOT = pathlib.Path(__file__).resolve().parents[1]
+DECISIONS = ROOT / "mod-overseer/src/overseer_decisions.cpp"
+MODULE = ROOT / "mod-overseer/src/mod_overseer.cpp"
 BRIDGE = pathlib.Path(__file__).resolve().parents[1] / "bridge.py"
 
 

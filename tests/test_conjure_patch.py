@@ -3,8 +3,8 @@ import unittest
 
 
 PATCH = (
-    pathlib.Path(__file__).parents[3]
-    / "docker/azerothcore-playerbots/patches/mod-playerbots"
+    pathlib.Path(__file__).parents[1]
+    / "patches/mod-playerbots"
     / "0016-a-mage-only-conjures-food-at-a-usable-rank.patch"
 )
 

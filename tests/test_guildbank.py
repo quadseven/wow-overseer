@@ -17,8 +17,8 @@ import travel
 BRIDGE = pathlib.Path(__file__).resolve().parents[1] / "bridge.py"
 TRAVEL = pathlib.Path(__file__).resolve().parents[1] / "travel.py"
 MOD_OVERSEER = (
-    pathlib.Path(__file__).resolve().parents[3]
-    / "docker/azerothcore-playerbots/mod-overseer/src/mod_overseer.cpp"
+    pathlib.Path(__file__).resolve().parents[1]
+    / "mod-overseer/src/mod_overseer.cpp"
 )
 
 

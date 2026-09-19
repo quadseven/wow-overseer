@@ -21,8 +21,8 @@ import pathlib
 import sys
 import unittest
 
-ROOT = pathlib.Path(__file__).resolve().parents[3]
-MODULE = ROOT / "docker/azerothcore-playerbots/mod-overseer/src/mod_overseer.cpp"
+ROOT = pathlib.Path(__file__).resolve().parents[1]
+MODULE = ROOT / "mod-overseer/src/mod_overseer.cpp"
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 

@@ -658,8 +658,8 @@ class BackingOffIsForPermanentRefusalsOnly(unittest.TestCase):
         import re
 
         src = (
-            pathlib.Path(__file__).resolve().parents[3]
-            / "docker/azerothcore-playerbots/mod-overseer/src/mod_overseer.cpp"
+            pathlib.Path(__file__).resolve().parents[1]
+            / "mod-overseer/src/mod_overseer.cpp"
         ).read_text(encoding="utf-8")
         body = src[src.index("static char const* DoShare(") : src.index("void WriteSnapshot()")]
         found = [

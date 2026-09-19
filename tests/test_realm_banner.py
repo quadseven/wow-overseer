@@ -33,8 +33,8 @@ FAMILY_CSS = "--- the Family tab (infra#2892)"
 # The C++ module that writes the table this banner reads, through the submodule
 # infra pins it at.
 MODULE_SRC = (
-    pathlib.Path(__file__).resolve().parents[3]
-    / "docker/azerothcore-playerbots/mod-overseer/src/overseer_decisions.h"
+    pathlib.Path(__file__).resolve().parents[1]
+    / "mod-overseer/src/overseer_decisions.h"
 )
 
 

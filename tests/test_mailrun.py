@@ -23,10 +23,10 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 import mailrun  # noqa: E402
 import travel  # noqa: E402
 
-ROOT = pathlib.Path(__file__).resolve().parents[3]
-DECISIONS = ROOT / "docker/azerothcore-playerbots/mod-overseer/src/overseer_decisions.cpp"
-HEADER = ROOT / "docker/azerothcore-playerbots/mod-overseer/src/overseer_decisions.h"
-MODULE = ROOT / "docker/azerothcore-playerbots/mod-overseer/src/mod_overseer.cpp"
+ROOT = pathlib.Path(__file__).resolve().parents[1]
+DECISIONS = ROOT / "mod-overseer/src/overseer_decisions.cpp"
+HEADER = ROOT / "mod-overseer/src/overseer_decisions.h"
+MODULE = ROOT / "mod-overseer/src/mod_overseer.cpp"
 
 
 def _row(holder, mail_id, *, money=0, cod=0, delivered=1, expire=0, item=None):

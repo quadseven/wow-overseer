@@ -30,7 +30,7 @@ change could be shipped and still move nobody:
   * a keyword this side accepts and the module silently ignores - written and
     unread, exactly #2776.
 
-Pins (production/docker/azerothcore-playerbots/UPSTREAM-PINS.env):
+Pins (production/UPSTREAM-PINS.env):
     core   efe123fab543c5faf3c477674ec17a18fd59f09f
     module 8d9f6aa6bc6d45f9ae0ee0675b9b1f8aa6937312
 Neither is vendored here. Every line number quoted was read from those two.
@@ -40,18 +40,18 @@ import re
 import sys
 import unittest
 
-ROOT = pathlib.Path(__file__).resolve().parents[3]
-MODULE = ROOT / "docker/azerothcore-playerbots/mod-overseer/src/mod_overseer.cpp"
-DECISIONS = ROOT / "docker/azerothcore-playerbots/mod-overseer/src/overseer_decisions.cpp"
+ROOT = pathlib.Path(__file__).resolve().parents[1]
+MODULE = ROOT / "mod-overseer/src/mod_overseer.cpp"
+DECISIONS = ROOT / "mod-overseer/src/overseer_decisions.cpp"
 PATCH = (
     ROOT
-    / "docker/azerothcore-playerbots/patches/mod-playerbots"
+    / "patches/mod-playerbots"
     / "0005-wander-npc-can-be-aimed.patch"
 )
-PINS = ROOT / "docker/azerothcore-playerbots/UPSTREAM-PINS.env"
+PINS = ROOT / "UPSTREAM-PINS.env"
 MIGRATION = (
     ROOT
-    / "docker/azerothcore-playerbots/mod-overseer/data/sql/characters/base"
+    / "mod-overseer/data/sql/characters/base"
     / "2026_08_25_00_overseer_roster_travel_npc.sql"
 )
 

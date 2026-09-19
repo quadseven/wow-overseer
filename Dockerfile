@@ -1,55 +1,53 @@
 # wow-overseer bridge: Discord <-> overseer_command / overseer_snapshot.
-# Service code arrives via the reusable's shared-dir mechanism as _shared/
-# (source of truth: production/scripts/wow-overseer/, where its tests live).
+#
+# Extracted 2026-09-18 from quadseven/infra (production/docker/wow-overseer/
+# + production/scripts/wow-overseer/), history preserved via `git filter-repo`.
+# infra built this image itself, inside its own cluster, via a k8s buildkit
+# Job whose context arrived split across three ConfigMaps (a 1MiB-per-object
+# limit that does not exist here) - hence the old Dockerfile COPYing from a
+# synthetic `_shared/` directory. This build is a plain `docker build .`
+# against this repo's own tree (build.yml, GitHub-hosted runner), so that
+# indirection is gone; the explicit file list below is unchanged in spirit -
+# still hand-maintained, still excludes tests/, tools/, mod-overseer/ and
+# patches/ on purpose, so the image ships only what bridge.py imports.
 FROM python:3.12-slim
 
 RUN pip install --no-cache-dir discord.py==2.4.0 PyMySQL==1.1.1
 
 WORKDIR /app
 
-COPY _shared/core.py _shared/bridge.py _shared/voice.py _shared/transform.py \
-     _shared/map_core.py _shared/map_server.py _shared/events.py \
-     _shared/panel.py _shared/family.py _shared/goals.py _shared/protect.py _shared/fanout.py _shared/chat.py \
-     _shared/kin.py _shared/cast.py _shared/bonds.py _shared/council.py _shared/persona.py \
-     _shared/bonkers.py \
-     _shared/quests.py _shared/overhear.py _shared/questbook.py \
-     _shared/questshare.py _shared/travel.py _shared/stream.py _shared/frames.py \
-     _shared/professions.py _shared/craft.py _shared/craft_supply.py _shared/auction.py _shared/jobs.py _shared/trainjob.py \
-     _shared/craft_rhythm.py \
-     _shared/skillgoal.py \
-     _shared/learnaim.py _shared/recipebook.py \
-     _shared/craftpleas.py _shared/materials.py \
-     _shared/gear.py \
-     _shared/armory.py _shared/wealth.py _shared/questlog.py _shared/modelviewer.py \
-     _shared/relay.py _shared/digest.py \
-     _shared/achievements.py _shared/recap.py _shared/standing.py _shared/agenda.py _shared/eye.py _shared/decree.py \
-     _shared/dungeonplan.py _shared/raidgoals.py _shared/raidcraft.py _shared/raidprep.py \
-     _shared/guildcraft.py _shared/tradespec.py _shared/guildbank.py _shared/guildshare.py _shared/recruit.py \
-     _shared/bag_pressure.py _shared/bag_upgrade.py _shared/bag_economy.py _shared/disposition.py \
-     _shared/item_plan.py \
-     _shared/bank.py \
-     _shared/mailrun.py \
-     _shared/realm.py _shared/basepath.py _shared/watchwall.py _shared/realmnav.py \
-     _shared/needs.py _shared/partystatus.py _shared/lootcard.py _shared/towntrip.py \
-     _shared/townslot.py \
-     _shared/tabard.py _shared/crossing.py \
-     _shared/zones.json _shared/entrances.json _shared/shapes.json \
-     _shared/talents.json _shared/items.json _shared/icons.json _shared/spells.json \
-     _shared/standing.json _shared/craftbook.json \
-     _shared/index.html /app/
+COPY core.py bridge.py voice.py transform.py \
+     map_core.py map_server.py events.py \
+     panel.py family.py goals.py protect.py fanout.py chat.py \
+     kin.py cast.py bonds.py council.py persona.py \
+     bonkers.py \
+     quests.py overhear.py questbook.py \
+     questshare.py travel.py stream.py frames.py \
+     professions.py craft.py craft_supply.py auction.py jobs.py trainjob.py \
+     craft_rhythm.py \
+     skillgoal.py \
+     learnaim.py recipebook.py \
+     craftpleas.py materials.py \
+     gear.py \
+     armory.py wealth.py questlog.py modelviewer.py \
+     relay.py digest.py \
+     achievements.py recap.py standing.py agenda.py eye.py decree.py \
+     dungeonplan.py raidgoals.py raidcraft.py raidprep.py \
+     guildcraft.py tradespec.py guildbank.py guildshare.py recruit.py \
+     bag_pressure.py bag_upgrade.py bag_economy.py disposition.py \
+     item_plan.py \
+     bank.py \
+     mailrun.py \
+     realm.py basepath.py watchwall.py realmnav.py \
+     needs.py partystatus.py lootcard.py towntrip.py \
+     townslot.py \
+     tabard.py crossing.py \
+     vendor_stall.py \
+     zones.json entrances.json shapes.json \
+     talents.json items.json icons.json spells.json \
+     standing.json craftbook.json \
+     index.html /app/
 
-# Keep the new recovery module's destination explicit: the shared-dir build
-# supplies it under the shared build directory, while bridge.py imports it
-# from /app.
-COPY _shared/vendor_stall.py /app/vendor_stall.py
-
-# jQuery comes from the build CONTEXT, not the shared tarball, and that is a
-# budget decision rather than a tidying one. The shared dir is packed into ONE
-# configMap and handed to EVERY image built from it, so a browser asset there
-# is 30KB gzipped charged to the bridge as well as the map, for a file only
-# the map serves. The context configMap holds this image's own files and had
-# nothing in it but this Dockerfile.
-#
 # It stays VENDORED. map_server._jquery_file says why - the page reaches no
 # third host for it - and moving it to a CDN to save the same bytes would have
 # traded that away. Same file, same served path, same origin.

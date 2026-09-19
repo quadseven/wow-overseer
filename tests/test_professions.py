@@ -127,8 +127,8 @@ def _module_function(signature: str) -> str:
     its source text is the only check that runs before a forty-five minute
     build finds out.
     """
-    source = (pathlib.Path(__file__).resolve().parents[3]
-              / "docker/azerothcore-playerbots/mod-overseer/src/mod_overseer.cpp"
+    source = (pathlib.Path(__file__).resolve().parents[1]
+              / "mod-overseer/src/mod_overseer.cpp"
               ).read_text(encoding="utf-8")
     start = source.index(signature)
     depth = 0
@@ -783,8 +783,8 @@ class UpstreamWallTest(unittest.TestCase):
     this suite should be what tells them the premise changed.
     """
 
-    ROOT = pathlib.Path(__file__).resolve().parents[3]
-    MODULE = ROOT / "docker/azerothcore-playerbots/mod-overseer/src/mod_overseer.cpp"
+    ROOT = pathlib.Path(__file__).resolve().parents[1]
+    MODULE = ROOT / "mod-overseer/src/mod_overseer.cpp"
 
     def test_train_roster_still_calls_initskills(self):
         source = self.MODULE.read_text(encoding="utf-8")

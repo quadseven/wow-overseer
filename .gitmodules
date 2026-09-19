@@ -1,0 +1,3 @@
+[submodule "mod-overseer"]
+	path = mod-overseer
+	url = https://github.com/quadseven/mod-overseer.git

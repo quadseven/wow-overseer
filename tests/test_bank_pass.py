@@ -14,10 +14,10 @@ import towntrip
 
 PACKAGE = pathlib.Path(__file__).resolve().parents[1]
 BRIDGE = PACKAGE / "bridge.py"
-DOCKERFILE = pathlib.Path(__file__).resolve().parents[3] / "docker/wow-overseer/Dockerfile"
+DOCKERFILE = pathlib.Path(__file__).resolve().parents[1] / "docker/wow-overseer/Dockerfile"
 MOD_OVERSEER = (
-    pathlib.Path(__file__).resolve().parents[3]
-    / "docker/azerothcore-playerbots/mod-overseer/src/mod_overseer.cpp"
+    pathlib.Path(__file__).resolve().parents[1]
+    / "mod-overseer/src/mod_overseer.cpp"
 )
 
 

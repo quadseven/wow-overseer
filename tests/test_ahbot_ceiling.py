@@ -24,7 +24,7 @@ import ahbot_ceiling  # noqa: E402
 
 
 AHBOT_CONF = (
-    pathlib.Path(__file__).resolve().parents[3]
+    pathlib.Path(__file__).resolve().parents[1]
     / "oke"
     / "manifests"
     / "wow-dev"

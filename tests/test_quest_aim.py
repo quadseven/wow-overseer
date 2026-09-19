@@ -14,7 +14,7 @@ test_quest_share.py established: they assert the shape of the change and that
 every core and module member it touches was read out of the pinned headers and
 cited in place.
 
-Pins (production/docker/azerothcore-playerbots/UPSTREAM-PINS.env):
+Pins (production/UPSTREAM-PINS.env):
     core   efe123fab543c5faf3c477674ec17a18fd59f09f
     module 8d9f6aa6bc6d45f9ae0ee0675b9b1f8aa6937312
 Neither is vendored here. Every line number below was read from those two.
@@ -24,12 +24,12 @@ import re
 import unittest
 
 MODULE = (
-    pathlib.Path(__file__).resolve().parents[3]
-    / "docker/azerothcore-playerbots/mod-overseer/src/mod_overseer.cpp"
+    pathlib.Path(__file__).resolve().parents[1]
+    / "mod-overseer/src/mod_overseer.cpp"
 )
 MIGRATION = (
-    pathlib.Path(__file__).resolve().parents[3]
-    / "docker/azerothcore-playerbots/mod-overseer/data/sql/characters/base"
+    pathlib.Path(__file__).resolve().parents[1]
+    / "mod-overseer/data/sql/characters/base"
     / "2026_08_24_00_overseer_roster_drive_quest.sql"
 )
 

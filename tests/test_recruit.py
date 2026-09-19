@@ -21,7 +21,7 @@ import recruit
 
 BRIDGE = pathlib.Path(__file__).resolve().parents[1] / "bridge.py"
 DOCKERFILE = (
-    pathlib.Path(__file__).resolve().parents[3] / "docker/wow-overseer/Dockerfile"
+    pathlib.Path(__file__).resolve().parents[1] / "docker/wow-overseer/Dockerfile"
 )
 
 # The family, as the planner sees them: names that are online and in the guild.

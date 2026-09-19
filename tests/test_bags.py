@@ -41,10 +41,10 @@ import pathlib
 import re
 import unittest
 
-ROOT = pathlib.Path(__file__).resolve().parents[3]
-MODULE = ROOT / "docker/azerothcore-playerbots/mod-overseer/src/mod_overseer.cpp"
-PATCHES = ROOT / "docker/azerothcore-playerbots/patches/mod-playerbots"
-PINS = ROOT / "docker/azerothcore-playerbots/UPSTREAM-PINS.env"
+ROOT = pathlib.Path(__file__).resolve().parents[1]
+MODULE = ROOT / "mod-overseer/src/mod_overseer.cpp"
+PATCHES = ROOT / "patches/mod-playerbots"
+PINS = ROOT / "UPSTREAM-PINS.env"
 LOOT_PATCH = PATCHES / "0004-loot-needs-a-free-bag-slot.patch"
 
 # Everything that can make an item leave a bag. None of these may appear in
