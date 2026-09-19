@@ -151,7 +151,8 @@ TOWN_RUN_FREE_SLOTS = 3
 
 
 def family_town_run_needed(free_slots: dict[str, int],
-                           minimum_free: int = TOWN_RUN_FREE_SLOTS) -> bool:
+                           minimum_free: int = TOWN_RUN_FREE_SLOTS,
+                           sellable: dict[str, int] | None = None) -> bool:
     """Return whether any measured family member needs a vendor visit.
 
     The bridge's capacity query returns free slots rather than used and total
@@ -159,11 +160,43 @@ def family_town_run_needed(free_slots: dict[str, int],
     member at or below it can no longer reliably receive loot or materials.
     Unknown and negative readings fail closed, so a broken read cannot send
     the family on a blind trip.
+
+    `sellable` IS THE "COULD A VENDOR EVEN HELP?" HALF (infra#4190), and
+    without it this predicate asks only half the question. Measured live
+    2026-09-19: Og sat at 0 free slots of 62 while carrying 20 recipes, 16
+    quest items, 7 green armour pieces and 6 gems - every one of them
+    deliberately protected - plus a single spare bag. Selling everything a
+    vendor would accept lifts him to 1, still under a trigger of 3, so the
+    pressure he raised could never be answered and never cleared. The vendor
+    pass took the travel column on that pressure every cycle, wrote no sale,
+    and starved gathering for hours; infra#4191 had to bound the urgent path
+    precisely because this predicate kept re-arming it.
+
+    So a member only counts when a vendor trip could actually lift them past
+    the trigger: `free + sellable > minimum_free`. A member nobody can
+    relieve is a real problem - it is just not a VENDOR problem, and the
+    relief has to come from the guild bank or a hand-off instead.
+
+    Omitting a name from `sellable` reads as "nothing to sell", which keeps
+    the existing fail-closed bias: an unknown read must not send the family
+    on a blind trip. Passing `None` disables the half entirely and preserves
+    the original behaviour for callers that only want "is anyone low".
     """
     if not free_slots or minimum_free < 0:
         return False
-    return any(isinstance(free, int) and free >= 0 and free <= minimum_free
-               for free in free_slots.values())
+    low = [(name, free) for name, free in free_slots.items()
+           if isinstance(free, int) and free >= 0 and free <= minimum_free]
+    if not low:
+        return False
+    if sellable is None:
+        return True
+    for name, free in low:
+        offered = sellable.get(name, 0)
+        if not isinstance(offered, int) or offered < 0:
+            continue
+        if free + offered > minimum_free:
+            return True
+    return False
 
 
 # WHAT A VENDOR ERRAND SHOULD DO NEXT. Three words rather than two booleans at

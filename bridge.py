@@ -6309,6 +6309,36 @@ class Bridge(discord.Client):
 
         free_slots = await asyncio.to_thread(_fetch_free_slots, names)
 
+        # WHAT A VENDOR COULD ACTUALLY TAKE, READ BEFORE THE PRESSURE IS
+        # JUDGED (infra#4190). These two reads used to sit below the town-run
+        # gate, which meant every pressure decision above was made without
+        # knowing whether a vendor trip could answer it. Measured live
+        # 2026-09-19: Og at 0 free slots of 62, carrying 20 recipes, 16 quest
+        # items, 7 green armour pieces and 6 gems - all protected - plus one
+        # spare bag. A perfect trip lifts him to 1 against a trigger of 3, so
+        # his pressure could never clear, and the vendor pass took the travel
+        # column on it every cycle and wrote no sale. That is what starved
+        # gathering and what infra#4191 had to bound.
+        #
+        # THE COST IS TWO READS ON A QUIET CYCLE. They already ran on every
+        # pressured cycle; `rows` and `bag_rows` are reused below rather than
+        # fetched twice, so a cycle that reaches the vendor half costs exactly
+        # what it did before. A cycle that does not now pays two extra reads
+        # to avoid a trip that could not have helped anybody.
+        #
+        # GEAR IS DELIBERATELY NOT COUNTED. `_fetch_surplus_gear` feeds the
+        # hand-off path first and only reaches a vendor when all five have
+        # refused a piece; counting it here would let an upgrade that is about
+        # to be handed to somebody justify a town trip on its holder's behalf.
+        rows = await asyncio.to_thread(_fetch_vendor_items, names)
+        bag_rows = await asyncio.to_thread(_fetch_surplus_bags, names)
+        equipped_bag_slots = await asyncio.to_thread(
+            _fetch_equipped_bag_slots, names
+        )
+        sellable_counts = _sellable_per_holder(
+            rows, bag_rows, equipped_bag_slots, names,
+        )
+
         # A stale positional aim on the leader can block the vendor pass just
         # as surely as one on a follower. Full bags are the urgent case: when
         # no dungeon run owns the party, hand that economy aim back so the next
@@ -6316,7 +6346,8 @@ class Bridge(discord.Client):
         current_aim = await asyncio.to_thread(_current_travel_npc, leader)
         if townslot.urgent_ground_release(
                 aim=current_aim,
-                pressure=bag_pressure.family_town_run_needed(free_slots),
+                pressure=bag_pressure.family_town_run_needed(
+                    free_slots, sellable=sellable_counts),
                 in_run=in_run,
                 ground=travel.is_ground_aim):
             if await asyncio.to_thread(_release_trade_errand, leader, current_aim):
@@ -6346,9 +6377,15 @@ class Bridge(discord.Client):
         # two can run on different cycles without racing each other.
         await self._hand_recipes(names, free_slots)
 
-        if not bag_pressure.family_town_run_needed(free_slots):
-            log.info("economy: carried vendor goods exist, but bag pressure is below "
-                     "the town-run trigger")
+        if not bag_pressure.family_town_run_needed(
+                free_slots, sellable=sellable_counts):
+            # Said with the counts, because "below the trigger" and "nobody a
+            # vendor could lift past it" are different reasons to stay home and
+            # the second one used to be invisible (infra#4190).
+            log.info("economy: no vendor trip is worth taking - free slots %s "
+                     "against sellable %s at a trigger of %d",
+                     free_slots, sellable_counts,
+                     bag_pressure.TOWN_RUN_FREE_SLOTS)
             return
         if in_run:
             # Bag pressure outranks an unfinished dungeon. The world-side
@@ -6365,13 +6402,11 @@ class Bridge(discord.Client):
                 len(names),
             )
             return
-        rows = await asyncio.to_thread(_fetch_vendor_items, names)
+        # `rows`, `bag_rows` and `equipped_bag_slots` were read above the
+        # pressure judgement (infra#4190) and are reused here rather than
+        # fetched a second time.
         gear_rows = await asyncio.to_thread(_fetch_surplus_gear, names)
         worn = await asyncio.to_thread(_fetch_family_equipped, names)
-        bag_rows = await asyncio.to_thread(_fetch_surplus_bags, names)
-        equipped_bag_slots = await asyncio.to_thread(
-            _fetch_equipped_bag_slots, names
-        )
         # THE SAME OPINION THAT DECIDES HAND-OFFS DECIDES WHAT MAY BE SOLD.
         # gear.py judges who would wear a carried piece; only the answer
         # "nobody, and we asked all five" lets it reach a vendor. An empty
@@ -10153,6 +10188,39 @@ _SURPLUS_BAGS_SQL = (
     "OR ci.bag IN (SELECT bag.item FROM character_inventory bag "
     "WHERE bag.guid = ci.guid AND bag.bag = 0 AND bag.slot BETWEEN 19 AND 22))"
 )
+
+
+def _sellable_per_holder(rows: list, bag_rows: list,
+                         equipped_bag_slots: dict, names: list) -> dict:
+    """How many carried stacks a vendor would actually take, per holder.
+
+    THE "COULD A TRIP EVEN HELP?" INPUT to `bag_pressure.family_town_run_needed`
+    (infra#4190). It reuses the same two selectors the vendor half runs below,
+    so the count cannot drift from what the pass would really queue - a count
+    derived from its own rules would eventually disagree with the sale it is
+    predicting, and the disagreement would be invisible.
+
+    GEAR IS NOT COUNTED, deliberately. `gear_candidates` only lets a piece
+    reach a vendor once all five have refused it, so it is a hand-off queue
+    first; counting it would let an upgrade on its way to somebody else
+    justify a town trip on its holder's behalf.
+
+    Every measured name gets an entry, including zero. An absent name reads as
+    "nothing to sell" to the predicate, so filling them in explicitly is what
+    keeps a holder with genuinely nothing from being confused with a holder
+    nobody measured.
+    """
+    counts = {str(name): 0 for name in names}
+    selected = bag_pressure.vendor_candidates(
+        rows, keep_names=OWNER_KEEPS,
+    ) + bag_pressure.bag_candidates(
+        bag_rows, equipped_bag_slots, keep_names=OWNER_KEEPS,
+    )
+    for candidate in selected:
+        holder = str(getattr(candidate, "holder", "") or "")
+        if holder:
+            counts[holder] = counts.get(holder, 0) + 1
+    return counts
 
 
 def _fetch_surplus_bags(names: list) -> list:

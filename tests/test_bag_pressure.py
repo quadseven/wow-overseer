@@ -1,3 +1,5 @@
+import ast
+import pathlib
 import unittest
 
 import disposition
@@ -55,6 +57,7 @@ class BagPressureTests(unittest.TestCase):
         self.assertFalse(family_town_run_needed({}))
         self.assertFalse(family_town_run_needed({"Grug": -1}))
         self.assertFalse(family_town_run_needed({"Grug": None}))
+
 
     def test_never_sells_a_rare(self):
         self.assertFalse(sellable(ItemForSale(quality=3, sell_price=500)))
@@ -259,3 +262,101 @@ class RedundantCarriedBags(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+BRIDGE = pathlib.Path(__file__).resolve().parents[1] / "bridge.py"
+
+
+class TheVendorPassAsksBothHalvesTests(unittest.TestCase):
+    """infra#4190: the wiring, not the predicate.
+
+    `family_town_run_needed` grew a `sellable` half, but a caller that omits
+    it still compiles and still returns the old answer - which is exactly how
+    this would silently regress. bridge.py imports discord and cannot be
+    imported here, so this parses it instead. Parsed rather than grepped
+    because the comments around these calls quote the old one-argument shape
+    verbatim, and a text match would find the prose describing the bug and
+    pass while the bug was live.
+    """
+
+    def _vendor_once(self):
+        tree = ast.parse(BRIDGE.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if (isinstance(node, (ast.AsyncFunctionDef, ast.FunctionDef))
+                    and node.name == "_vendor_once"):
+                return node
+        self.fail("_vendor_once not found in bridge.py")
+
+    def test_every_pressure_question_in_the_vendor_pass_supplies_sellable(self):
+        calls = []
+        for node in ast.walk(self._vendor_once()):
+            if not isinstance(node, ast.Call):
+                continue
+            func = node.func
+            if isinstance(func, ast.Attribute) and func.attr == "family_town_run_needed":
+                calls.append(node)
+        self.assertTrue(calls, "the vendor pass asks no pressure question")
+        for call in calls:
+            kwargs = {kw.arg for kw in call.keywords}
+            self.assertIn(
+                "sellable", kwargs,
+                f"bridge.py line {call.lineno}: family_town_run_needed without "
+                "`sellable=` asks only whether somebody is full, not whether a "
+                "vendor could help - which is infra#4190",
+            )
+
+
+class AVendorTripMustBeAbleToHelpTests(unittest.TestCase):
+    """infra#4190: pressure nobody can answer starved the travel column.
+
+    Og's measured position on 2026-09-19 is the case these pin: 0 free slots
+    of 62, one sellable spare bag, everything else protected. Selling all a
+    vendor would take reaches 1 free slot against a trigger of 3, so the
+    pressure could never clear and the vendor pass re-took the column for
+    hours writing no sale.
+    """
+
+    def test_a_member_a_vendor_cannot_lift_past_the_trigger_is_not_pressure(self):
+        # Og: 0 free, exactly one thing a vendor would accept. 0 + 1 = 1,
+        # which is still under the trigger, so the trip cannot answer him.
+        self.assertFalse(
+            family_town_run_needed({"Og": 0}, sellable={"Og": 1}))
+
+    def test_a_member_a_vendor_can_lift_past_the_trigger_is_pressure(self):
+        # 0 + 4 clears a trigger of 3, so the trip is worth taking.
+        self.assertTrue(
+            family_town_run_needed({"Og": 0}, sellable={"Og": 4}))
+
+    def test_exactly_reaching_the_trigger_is_not_enough(self):
+        # `free <= minimum_free` is what RAISED the pressure, so landing back
+        # on the boundary would re-raise it on the next cycle - the trip has
+        # to get them past it or it buys nothing.
+        self.assertFalse(
+            family_town_run_needed({"Og": 0}, sellable={"Og": 3}))
+        self.assertTrue(
+            family_town_run_needed({"Og": 1}, sellable={"Og": 3}))
+
+    def test_one_relievable_member_is_enough_even_beside_a_hopeless_one(self):
+        # Og cannot be helped; Ugga can. The family should still go.
+        self.assertTrue(family_town_run_needed(
+            {"Og": 0, "Ugga": 1}, sellable={"Og": 1, "Ugga": 9}))
+
+    def test_a_member_with_room_is_never_pressure_however_much_he_carries(self):
+        self.assertFalse(family_town_run_needed(
+            {"Bork": 11}, sellable={"Bork": 40}))
+
+    def test_an_unlisted_member_reads_as_nothing_to_sell(self):
+        # Fail closed, matching the existing unknown-capacity bias: a name the
+        # caller could not measure must not send the family on a blind trip.
+        self.assertFalse(family_town_run_needed({"Og": 0}, sellable={}))
+
+    def test_a_broken_sellable_count_is_skipped_rather_than_trusted(self):
+        self.assertFalse(
+            family_town_run_needed({"Og": 0}, sellable={"Og": -5}))
+        self.assertFalse(
+            family_town_run_needed({"Og": 0}, sellable={"Og": None}))
+
+    def test_omitting_the_argument_preserves_the_original_behaviour(self):
+        # Every caller that only wants "is anyone low" is unchanged.
+        self.assertTrue(family_town_run_needed({"Og": 0}))
+        self.assertTrue(family_town_run_needed({"Og": 0}, sellable=None))
