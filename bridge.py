@@ -6348,6 +6348,10 @@ class Bridge(discord.Client):
         rows = await asyncio.to_thread(_fetch_vendor_items, names)
         gear_rows = await asyncio.to_thread(_fetch_surplus_gear, names)
         worn = await asyncio.to_thread(_fetch_family_equipped, names)
+        bag_rows = await asyncio.to_thread(_fetch_surplus_bags, names)
+        equipped_bag_slots = await asyncio.to_thread(
+            _fetch_equipped_bag_slots, names
+        )
         # THE SAME OPINION THAT DECIDES HAND-OFFS DECIDES WHAT MAY BE SOLD.
         # gear.py judges who would wear a carried piece; only the answer
         # "nobody, and we asked all five" lets it reach a vendor. An empty
@@ -6369,6 +6373,14 @@ class Bridge(discord.Client):
             bag_pressure.gear_candidates(
                 gear_rows, disposition.Family(vendor_reachable=True),
                 available=SELL_ROUTES, fits=fits, keep_names=OWNER_KEEPS,
+            )
+        ) + (
+            # Redundant spare bags nobody has equipped (infra#4163): dead
+            # weight in the exact shape `it.class <> 1` in `_VENDOR_ITEMS_SQL`
+            # was written to never see, so they never reached this pass at
+            # all until now.
+            bag_pressure.bag_candidates(
+                bag_rows, equipped_bag_slots, keep_names=OWNER_KEEPS,
             )
         )
         if not candidates:
@@ -9778,6 +9790,83 @@ def _fetch_vendor_items(names: list) -> list:
                  "stock and are not vendor goods: %s", len(keeps),
                  "; ".join(sorted(set(keeps.values()))))
     return rows
+
+
+# The four bags each holder has EQUIPPED right now (bag 0, slots 19-22), read
+# for their ContainerSlots alone (infra#4163). `bag_pressure.bag_candidates`
+# never touches an equipped bag itself - this is only the yardstick it uses
+# to tell a redundant spare from an upgrade nobody has worn yet.
+_EQUIPPED_BAG_SLOTS_SQL = (
+    "SELECT c.name AS holder, it.ContainerSlots AS container_slots "
+    "FROM character_inventory ci "
+    "JOIN characters c ON c.guid = ci.guid "
+    "JOIN item_instance ii ON ii.guid = ci.item "
+    "JOIN acore_world.item_template it ON it.entry = ii.itemEntry "
+    "WHERE c.name IN (%s) AND ci.bag = 0 AND ci.slot BETWEEN 19 AND 22 "
+    "AND it.class = 1"
+)
+
+
+def _fetch_equipped_bag_slots(names: list) -> dict:
+    """holder -> the ContainerSlots of every bag they have equipped now.
+
+    A holder missing from the result has no known equipped bags, and
+    `bag_candidates` keeps everything of theirs rather than guess a size to
+    compare against - the same fail-closed shape `_fetch_family_equipped`
+    already states for worn gear.
+    """
+    if not names:
+        return {}
+    sql = _EQUIPPED_BAG_SLOTS_SQL % ",".join(["%s"] * len(names))
+    with _connect() as conn, conn.cursor() as cur:
+        try:
+            cur.execute(sql, names)
+        except pymysql.err.MySQLError as exc:
+            if exc.args and exc.args[0] in (1054, 1146):
+                log.warning("equipped bag facts unavailable on this world image")
+                return {}
+            raise
+        rows = cur.fetchall()
+    out: dict = {}
+    for row in rows:
+        out.setdefault(row["holder"], []).append(int(row["container_slots"]))
+    return {holder: tuple(sizes) for holder, sizes in out.items()}
+
+
+# Carried CONTAINERS (class 1) that are not equipped right now: the exact
+# complement of `_EQUIPPED_BAG_SLOTS_SQL`'s scope (infra#4163). Slots 19-22
+# are deliberately excluded here - that range is where the equipped bags
+# THEMSELVES sit, and this query is only for the ones nobody is using.
+_SURPLUS_BAGS_SQL = (
+    "SELECT c.name AS holder, ii.guid AS item_guid, ii.count AS count, "
+    "ii.flags AS instance_flags, it.name AS name, it.Quality AS quality, "
+    "it.SellPrice AS sell_price, it.bonding AS bonding, "
+    "it.class AS item_class, it.ContainerSlots AS container_slots "
+    "FROM character_inventory ci "
+    "JOIN characters c ON c.guid = ci.guid "
+    "JOIN item_instance ii ON ii.guid = ci.item "
+    "JOIN acore_world.item_template it ON it.entry = ii.itemEntry "
+    "WHERE c.name IN (%s) AND it.class = 1 AND ("
+    "(ci.bag = 0 AND ci.slot BETWEEN 23 AND 38) "
+    "OR ci.bag IN (SELECT bag.item FROM character_inventory bag "
+    "WHERE bag.guid = ci.guid AND bag.bag = 0 AND bag.slot BETWEEN 19 AND 22))"
+)
+
+
+def _fetch_surplus_bags(names: list) -> list:
+    """Read carried-but-unequipped bag facts; bag_pressure decides the route."""
+    if not names:
+        return []
+    sql = _SURPLUS_BAGS_SQL % ",".join(["%s"] * len(names))
+    with _connect() as conn, conn.cursor() as cur:
+        try:
+            cur.execute(sql, names)
+        except pymysql.err.MySQLError as exc:
+            if exc.args and exc.args[0] in (1054, 1146):
+                log.warning("surplus bag facts unavailable on this world image")
+                return []
+            raise
+        return [dict(row) for row in cur.fetchall()]
 
 
 def _sell_attempts(hours: int) -> list:

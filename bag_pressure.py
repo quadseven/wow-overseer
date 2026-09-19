@@ -433,6 +433,60 @@ def gear_candidates(rows: Iterable[dict], family, available=None, fits=None,
     return tuple(out)
 
 
+def bag_candidates(rows: Iterable[dict], equipped_slots: dict,
+                   keep_names=()) -> tuple[SellCandidate, ...]:
+    """Redundant carried bags whose only honest route is a vendor (infra#4163).
+
+    A carried Container (item_class 1) is a candidate only when it is
+    unbound AND would be no better than every bag its holder already has
+    equipped - selling it can never cost capacity, only reclaim the slot it
+    occupies. `equipped_slots` maps holder name to the ContainerSlots of
+    every bag that holder currently has equipped; a holder missing from it
+    is unknown and every row of theirs is kept, the same fail-closed default
+    as the rest of this module.
+
+    THE UPGRADE QUESTION IS NOT ANSWERED HERE. A bag that beats the smallest
+    bag its holder has equipped is not a vendor candidate even if nobody has
+    equipped it yet - it should be equipped instead, and that decision is
+    deliberately left to a separate path. Refusing it here rather than
+    guessing "nobody wants it" is the same fail-closed shape `gear_candidates`
+    already uses for the equipment it is unsure about.
+
+    Only BIND_NONE bags are offered. A bind-on-equip bag that happens not to
+    be an upgrade is still withheld - it is one accidental `/equip` away from
+    being useful, and that judgement is out of scope for this pass.
+    """
+    out = []
+    for row in rows:
+        if owner_keeps(row.get("name", ""), keep_names):
+            continue
+        try:
+            if int(row["item_class"]) != 1:
+                continue
+            if item_binding(row) != disposition.BIND_NONE:
+                continue
+            holder = str(row["holder"])
+            guid = int(row["item_guid"])
+            count = int(row.get("count", 0))
+            container_slots = int(row["container_slots"])
+            sell_price = int(row["sell_price"])
+            quality = int(row["quality"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if guid <= 0 or count <= 0 or not holder or sell_price <= 0:
+            continue
+        sizes = equipped_slots.get(holder)
+        if not sizes:
+            continue
+        if container_slots > min(sizes):
+            continue
+        out.append(SellCandidate(
+            holder=holder, item_guid=guid, count=count,
+            item=ItemForSale(quality=quality, sell_price=sell_price),
+        ))
+    return tuple(out)
+
+
 # ---------------------------------------------------------------------------
 # THE FAMILY-FIT GATE, TRANSLATED (infra#3449)
 #

@@ -1,10 +1,10 @@
 import unittest
 
 import disposition
-from bag_pressure import (ItemForSale, bag_purchase_allowed, family_town_run_needed,
-                          gear_candidates, item_binding, sellable, town_run_needed,
-                          protection_counts, vendor_batch, vendor_candidates,
-                          vendor_holders_to_queue)
+from bag_pressure import (ItemForSale, bag_candidates, bag_purchase_allowed,
+                          family_town_run_needed, gear_candidates, item_binding,
+                          sellable, town_run_needed, protection_counts,
+                          vendor_batch, vendor_candidates, vendor_holders_to_queue)
 
 # The family in town: a vendor in reach, nothing else built yet.
 IN_TOWN = disposition.Family(vendor_reachable=True)
@@ -17,6 +17,24 @@ def gear(**kw):
                 sell_price=966, required_level=16, bonding=2, item_class=4)
     base.update(kw)
     return base
+
+
+def bag(**kw):
+    """One carried container row, shaped as the vendor SQL returns it.
+
+    Defaults are Grug's real "Green Leather Bag" (infra#4163): 8 slots,
+    common quality, unbound, worth 875 copper - a redundant duplicate of one
+    of his two equipped 8-slot bags.
+    """
+    base = dict(holder="Grug", item_guid=9001, count=1, instance_flags=0,
+                name="Green Leather Bag", quality=1, sell_price=875,
+                item_class=1, container_slots=8, bonding=0)
+    base.update(kw)
+    return base
+
+
+# Grug's real four equipped bags (infra#4163): two 16-slot, two 8-slot.
+GRUG_EQUIPPED_BAGS = {"Grug": (16, 16, 8, 8)}
 
 
 class BagPressureTests(unittest.TestCase):
@@ -193,6 +211,50 @@ class OnlyGearNobodyElseCouldEverUse(unittest.TestCase):
         got = gear_candidates([gear(instance_flags=1, required_level=15)],
                               IN_TOWN, available=both)
         self.assertEqual(len(got), 1)
+
+
+class RedundantCarriedBags(unittest.TestCase):
+    """Bags that duplicate what a holder already wears (infra#4163)."""
+
+    def test_a_bag_no_better_than_the_smallest_equipped_one_is_sold(self):
+        got = bag_candidates([bag()], GRUG_EQUIPPED_BAGS)
+        self.assertEqual([c.item_guid for c in got], [9001])
+        self.assertEqual(got[0].holder, "Grug")
+
+    def test_a_bag_that_beats_the_smallest_equipped_one_is_kept(self):
+        """Grug's real Netherweave Bag: 16 slots beats his two 8-slot bags -
+        an upgrade, not vendor trash, even though it is still unbound."""
+        self.assertEqual(
+            bag_candidates([bag(container_slots=16, quality=2,
+                                sell_price=10000)], GRUG_EQUIPPED_BAGS), ())
+
+    def test_a_bind_on_equip_bag_is_kept_even_when_it_is_no_upgrade(self):
+        """One accidental /equip from being useful - out of scope here."""
+        self.assertEqual(
+            bag_candidates([bag(bonding=2)], GRUG_EQUIPPED_BAGS), ())
+
+    def test_a_holder_with_no_known_equipped_bags_keeps_everything(self):
+        self.assertEqual(bag_candidates([bag()], {}), ())
+        self.assertEqual(
+            bag_candidates([bag(holder="Ugga")], GRUG_EQUIPPED_BAGS), ())
+
+    def test_the_owners_never_dispose_mark_protects_a_bag(self):
+        self.assertEqual(
+            bag_candidates([bag()], GRUG_EQUIPPED_BAGS,
+                           keep_names=("Green Leather Bag",)), ())
+
+    def test_a_worthless_bag_is_not_walked_to_a_vendor(self):
+        self.assertEqual(
+            bag_candidates([bag(sell_price=0)], GRUG_EQUIPPED_BAGS), ())
+
+    def test_a_non_container_item_class_is_never_treated_as_a_bag(self):
+        self.assertEqual(
+            bag_candidates([bag(item_class=12)], GRUG_EQUIPPED_BAGS), ())
+
+    def test_a_row_missing_the_facts_is_dropped_not_guessed_at(self):
+        broken = bag()
+        del broken["container_slots"]
+        self.assertEqual(bag_candidates([broken], GRUG_EQUIPPED_BAGS), ())
 
 
 if __name__ == "__main__":
