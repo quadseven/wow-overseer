@@ -10486,9 +10486,20 @@ def _recent_guild_setup_keys(minutes: int) -> set[tuple[str, str]]:
     with _connect() as conn, conn.cursor() as cur:
         try:
             cur.execute(
+                # `%%` IS NOT A TYPO. pymysql renders a parameterised query with
+                # `query % args`, so every literal percent in the SQL has to be
+                # doubled or it is read as a format spec. This LIKE pattern's
+                # trailing `%` was bare, which made the whole string demand two
+                # arguments when one is passed, and `mogrify` raised
+                # `TypeError: not enough arguments for format string` before the
+                # query ever reached MySQL. That is also why the handler below
+                # did not save it: TypeError is not a `MySQLError`, so it escaped
+                # this function and killed the entire guild-bank pass on every
+                # cycle - which is why no guild on the realm had ever bought a
+                # bank tab (infra#3713).
                 "SELECT target_name, command FROM overseer_command "
                 "WHERE kind = 'guild' AND created_at > NOW() - INTERVAL %s MINUTE "
-                "AND (command = 'bank buy-tab' OR command LIKE 'bank grant-deposit %')",
+                "AND (command = 'bank buy-tab' OR command LIKE 'bank grant-deposit %%')",
                 (int(minutes),),
             )
         except pymysql.err.MySQLError as exc:

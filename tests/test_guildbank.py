@@ -7,6 +7,7 @@ writes `travel_npc`, but the caller in bridge.py routes the resulting errand
 through `ECONOMY_ERRANDS`, deliberately, so it inherits the exact same
 idle-traveller guard rather than repeating that mistake one file over.
 """
+import ast
 import pathlib
 import re
 import unittest
@@ -909,6 +910,77 @@ class BankSetupBridgeTests(unittest.TestCase):
         self.assertIn("guildbank-setup", body)
         self.assertIn("bank buy-tab", self.source)
         self.assertIn("bank grant-deposit", self.source)
+
+
+class ParameterisedQueriesSurviveMogrify(unittest.TestCase):
+    """Every `cur.execute(sql, args)` in bridge.py must render with its args.
+
+    pymysql builds a parameterised query as `sql % escaped_args`, so a literal
+    percent in the SQL - the wildcard in a LIKE pattern, almost always - has to
+    be doubled. Get it wrong and `mogrify` raises `TypeError: not enough
+    arguments for format string` BEFORE the query reaches MySQL, which also
+    means an `except pymysql.err.MySQLError` handler does not catch it.
+
+    infra#3713 is what that cost. `_recent_guild_setup_keys` had
+    `LIKE 'bank grant-deposit %'` with a bare percent, so the guild-bank pass
+    raised on every cycle and no guild on the realm ever bought a bank tab. The
+    pass only runs once it wins the family's single travel column, which it
+    waited roughly twenty minutes for, so the traceback was rare enough in the
+    log to read as incidental - three investigations blamed a missing C++ verb,
+    an offline client and an unmet prerequisite before anyone read it.
+
+    The sibling `_recent_guild_bank_keys` two hundred lines away shows the
+    other correct answer: pass the pattern as an argument
+    (`command LIKE %s`, `("bank deposit %", ...)`) so the percent never sits in
+    the format string at all.
+
+    Parsed with `ast` rather than grepped, so a percent inside a docstring or a
+    comment cannot raise a false alarm.
+    """
+
+    @staticmethod
+    def _literal(node):
+        """The SQL text if this argument is a plain (possibly joined) literal."""
+        if isinstance(node, ast.Constant) and isinstance(node.value, str):
+            return node.value
+        if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
+            left = ParameterisedQueriesSurviveMogrify._literal(node.left)
+            right = ParameterisedQueriesSurviveMogrify._literal(node.right)
+            if left is not None and right is not None:
+                return left + right
+        return None
+
+    def test_no_execute_call_raises_on_its_own_placeholders(self):
+        tree = ast.parse(BRIDGE.read_text(encoding="utf-8"))
+        checked = 0
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            func = node.func
+            if not (isinstance(func, ast.Attribute) and func.attr == "execute"):
+                continue
+            if len(node.args) != 2:
+                continue
+            sql = self._literal(node.args[0])
+            if sql is None:
+                continue
+            # How many arguments the call actually supplies.
+            args = node.args[1]
+            if isinstance(args, (ast.Tuple, ast.List)):
+                supplied = len(args.elts)
+            else:
+                continue  # built at runtime; cannot count statically
+            checked += 1
+            try:
+                sql % tuple("x" * supplied)
+            except TypeError as exc:
+                self.fail(
+                    f"bridge.py line {node.lineno}: query supplies {supplied} "
+                    f"argument(s) but does not render ({exc}). A literal % in "
+                    f"the SQL must be doubled to %%, or passed as an argument. "
+                    f"Query: {sql[:120]!r}"
+                )
+        self.assertGreater(checked, 5, "parsed too few execute() calls to trust")
 
 
 if __name__ == "__main__":
