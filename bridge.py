@@ -374,9 +374,35 @@ def _fetch_enabled_names() -> list[str]:
     requires the target to be in the world to act on the row (same rule every
     other command kind follows), so an offline member's row comes back
     'target not online' rather than silently landing later; the muster-style
-    report in _set_job says exactly what was written, not what was intended."""
+    report in _set_job says exactly what was written, not what was intended.
+
+    ONE COHORT'S WORTH OF NAMES, AND THIS IS THE SHARPEST OF THE TWELVE READS
+    infra#4221 left open. "Family-wide" was a synonym for "every row in the
+    table" only because the table has never held anybody else. What comes back
+    here is fanned out into WRITES: `_set_job` inserts one `overseer_command`
+    row per name, and the dungeon campaign path writes `dungeon_runs_wanted` to
+    each of them. Unscoped with a second cohort present, one operator typing
+    `job train` for this family would queue a job command for every character
+    in the other guild as well. That is not a silent stand-down that a later
+    cycle undoes - it is an active cross-cohort write, and the other guild's
+    own bridge would have no idea where the order came from.
+
+    THE HEAD OF THE FAMILY IS THE IDENTITY, for the same reason `_aim_traveller`
+    uses it: it is the one name this process is certain is on the roster, and it
+    is resolved from the ROW rather than from a literal, so a validation world
+    that renames the cast still scopes to whatever that world calls this family.
+    None means the `family` column has not shipped to this realm yet, and the
+    statement is then character for character the one that ran before.
+    """
+    cohort = _cohort_of(bonds.head_of_family())
+    scope = " AND family = %s" if cohort else ""
+    scope_args = (cohort,) if cohort else ()
     with _connect() as conn, conn.cursor() as cur:
-        cur.execute("SELECT name FROM overseer_roster WHERE enabled = 1")
+        cur.execute(
+            "SELECT name FROM overseer_roster WHERE enabled = 1"  # noqa: S608 - the only variable part is a fixed clause chosen above; every value is still bound
+            + scope,
+            scope_args,
+        )
         return [row["name"] for row in cur.fetchall()]
 
 
@@ -1562,15 +1588,29 @@ def _cohort_of(name: str) -> str | None:
     is in. This asks the row.
 
     None MEANS "CARRY ON EXACTLY AS BEFORE", NOT "WRITE NOTHING". The column
-    arrives with mod-overseer's SQL in the worldserver image, and infra's
-    submodule gitlink does not carry it yet - so in every world running today
-    this returns None and both callers below emit character for character the
-    statement they emitted before this change. That is the same degradation
-    every other roster-column reader in this file performs on 1054, and it is
-    the only safe direction: a family with no leader flag, or a quest aim that
-    can never be cleared, would be a far worse outcome than the cross-cohort
-    bug this closes, and it would be the price of a schema that has not
-    shipped rather than of anything anyone did wrong.
+    arrives with mod-overseer's SQL in the worldserver image. infra#4234 has
+    pinned a submodule gitlink that carries that SQL, and that is not the same
+    as a world having the column: `worldserver` and `db-import` are absent from
+    `deploy.wow-image-tags.yml`, so the migration ships inert with nothing red
+    until the image is rebuilt and the running digest is checked by hand. In
+    every world running today this returns None and every caller emits,
+    character for character, the statement it emitted before it asked. That is
+    the same degradation every other roster-column reader in this file performs
+    on 1054, and it is the only safe direction: a family with no leader flag, a
+    quest aim that can never be cleared, or a roster read that came back empty
+    would each be a far worse outcome than the cross-cohort bug being closed,
+    and it would be the price of a schema that has not shipped rather than of
+    anything anyone did wrong.
+
+    ASKED BY THE READS AS WELL AS THE WRITES NOW (infra#4221). This shipped
+    with two callers, both of them writes. The family-wide READS resolve their
+    cohort through it too, so there is one statement in this file that knows
+    how to ask which cohort a row is in, and one place to change if the
+    one-process-per-cohort question resolves the other way. Each call is its
+    own short-lived connection, which is the cost of not caching an answer that
+    changes the moment a migration lands - a stale cohort key would scope a
+    statement to a cohort that no longer exists and match no row at all, which
+    is precisely the silent failure the paragraph above is about.
     """
     if not name:
         return None
@@ -2488,6 +2528,19 @@ def _errand_holders(travel_npc: str, names: list) -> list:
     errand in it, and "nobody is carrying this" is the direction that releases
     nothing - the safe way to not know, matching every other reader of these
     columns.
+
+    AND SCOPED TO ONE COHORT, WHICH `names` ALREADY DOES TODAY AND WILL STOP
+    DOING (infra#4221). Every caller passes a list derived from
+    `_protected_guids()`, so the `IN` clause is this family and the cohort bound
+    is inherited from the argument - for exactly as long as that list stays one
+    family's. It is built from OVERSEER_NOTABLE_NAMES, one flat environment
+    variable that also drives reroll protection, the story filter and the chat
+    watch list, so the day a second guild is added to any one of those four it
+    is added to all four, and this list quietly widens. What this returns is then
+    fed to `_release_trade_errand`, so a widened list is a read that becomes a
+    write into the other cohort's `travel_npc`. The predicate below says the
+    bound in SQL instead of relying on a config value to keep meaning what it
+    means.
     """
     if not _is_economy_aim(travel_npc):
         log.warning(
@@ -2498,11 +2551,19 @@ def _errand_holders(travel_npc: str, names: list) -> list:
         return []
     if not names:
         return []
+    cohort = _cohort_of(bonds.head_of_family())
+    scope = " AND family = %s" if cohort else ""
+    scope_args = (cohort,) if cohort else ()
     placeholders = ",".join(["%s"] * len(names))
-    sql = _ERRAND_HOLDERS_SQL % placeholders  # noqa: S608 - placeholders from a COUNT, values still bound
+    # PARENTHESISED DELIBERATELY. `%` binds tighter than `+`, so the two would
+    # compose correctly either way - but `scope` must never be inside the `%`
+    # operand, or a cohort whose name contained a `%` would be read as a format
+    # specifier. The parentheses say the interpolation is finished before the
+    # clause is appended.
+    sql = (_ERRAND_HOLDERS_SQL % placeholders) + scope  # noqa: S608 - placeholders from a COUNT and a fixed clause chosen above; every value is still bound
     with _connect() as conn, conn.cursor() as cur:
         try:
-            cur.execute(sql, (travel_npc, *names))
+            cur.execute(sql, (travel_npc, *names, *scope_args))
         except pymysql.err.MySQLError as exc:
             if exc.args and exc.args[0] in (1054, 1146):
                 log.warning(
@@ -2612,11 +2673,32 @@ def _errand_traveller() -> str:
     hands leadership back to bonds.head_of_family() on the next protect cycle -
     which is what makes an undeployed worldserver a no-op rather than a
     permanent reorganisation of the family around an errand nothing can finish.
+
+    `ORDER BY t.id LIMIT 1` MAKES THE COHORT BOUND LOAD-BEARING (infra#4221).
+    The one row this returns is the lowest trade id in the whole result, and
+    unscoped the result is every cohort's rows. A second guild's learn errand
+    created before this family's would simply win, and `_head_now` would hand
+    THIS family's `new rpg` and `lead` flag to a character in the other guild -
+    on another continent, by default. Nothing about that reads as a fault: one
+    row came back, a traveller was named, the family followed it. Every other
+    unscoped read on this epic stands something down or widens a candidate
+    pool; this one silently answers the wrong question with a straight face.
+
+    THE COHORT IS ASKED INSIDE THIS FUNCTION'S OWN GUARD, not above the
+    `with`, and that placement is the point. The handler below is a contract -
+    "loudly logged, still answers nobody, never costs the caller its cycle" -
+    and `_head_now` has no guard of its own, so a lookup that raised outside
+    this try would take the protect cycle with it. The cost is one extra
+    short-lived connection open at the same time as this one, which is the same
+    price `_mark_party_leader` and `_aim_traveller` already pay per call.
     """
     with _connect() as conn, conn.cursor() as cur:
         try:
+            cohort = _cohort_of(bonds.head_of_family())
+            scope = " AND r.family = %s" if cohort else ""
+            scope_args = (cohort,) if cohort else ()
             cur.execute(
-                "SELECT r.name FROM overseer_roster r "
+                "SELECT r.name FROM overseer_roster r "  # noqa: S608 - the only variable part is a fixed clause chosen above; every value is still bound
                 # overseer_roster is utf8mb4_unicode_ci and overseer_trade is
                 # utf8mb4_0900_ai_ci, so this predicate crosses the split - see
                 # the block above the def. Without the COLLATE this is MySQL
@@ -2626,9 +2708,16 @@ def _errand_traveller() -> str:
                 "WHERE r.enabled = 1 AND r.learn_skill <> 0 "
                 "AND t.verb = 'learn' AND t.skill_id = r.learn_skill "
                 "AND t.status = 'planned' "
-                "AND t.decided_at > NOW() - INTERVAL %s HOUR "
-                "ORDER BY t.id LIMIT 1",
-                (ERRAND_LEAD_HOURS,),
+                # `r.family`, NOT `t.family`. `overseer_trade` has no cohort of
+                # its own and whether it needs one is still open on infra#4221
+                # (it depends on whether one bridge serves both cohorts or one
+                # each). Scoping the ROSTER half of the join bounds the result
+                # either way: a trade row for a character this family does not
+                # contain no longer has a roster row to join to.
+                "AND t.decided_at > NOW() - INTERVAL %s HOUR"
+                + scope
+                + " ORDER BY t.id LIMIT 1",
+                (ERRAND_LEAD_HOURS, *scope_args),
             )
             row = cur.fetchone()
         except pymysql.err.MySQLError as exc:
@@ -2683,12 +2772,28 @@ def _train_members() -> list:
     db-import image predates the profession columns has no errand to drive, and
     the honest answer there is an empty family rather than an exception that
     costs the whole protect cycle.
+
+    ONE COHORT, BECAUSE `trainjob.plan` ASKS FOR UNANIMITY (infra#4221). What
+    these rows reach is `family_mode(members)`, which returns the one job every
+    member shares and `''` the moment any two disagree - the exact function the
+    epic is named after. A second cohort's rows in this list can only ever
+    disagree, because the two families are driven by different orders, so
+    `family_mode` would return `''` for ever and `trainjob.plan` would refuse
+    with "The family's job is not agreed across the roster." Training would stop
+    for THIS family on account of a job somebody else's character is on. The
+    same rows also carry `learn_skill`, which the plan then writes, so the
+    stand-down is not the only cost: an un-refused plan built from a mixed
+    roster aims a character the other guild owns.
     """
+    cohort = _cohort_of(bonds.head_of_family())
+    scope = " AND family = %s" if cohort else ""
+    scope_args = (cohort,) if cohort else ()
     with _connect() as conn, conn.cursor() as cur:
         try:
             cur.execute(
-                "SELECT name, job, professions, learn_skill "
-                "FROM overseer_roster WHERE enabled = 1"
+                "SELECT name, job, professions, learn_skill "  # noqa: S608 - the only variable part is a fixed clause chosen above; every value is still bound
+                "FROM overseer_roster WHERE enabled = 1" + scope,
+                scope_args,
             )
             rows = list(cur.fetchall())
         except pymysql.err.MySQLError as exc:
@@ -2740,12 +2845,24 @@ def _raidprep_members() -> list:
     db-import image predates the profession columns has no errand to drive, and
     the honest answer there is an empty family rather than an exception that
     costs the whole protect cycle.
+
+    ONE COHORT, AND THE SAME REASON AS `_train_members` ONE SCREEN UP
+    (infra#4221). `raidprep.plan` calls its own copy of `family_mode` - the two
+    modules carry near-verbatim duplicates of it - so a mixed roster returns
+    `''` here too and raid prep stands the family down. It reads `level` rather
+    than `learn_skill`, which makes the cross-cohort answer worse rather than
+    better: the other guild's levels decide whether THIS family is judged ready
+    to prepare for a raid.
     """
+    cohort = _cohort_of(bonds.head_of_family())
+    scope = " AND family = %s" if cohort else ""
+    scope_args = (cohort,) if cohort else ()
     with _connect() as conn, conn.cursor() as cur:
         try:
             cur.execute(
-                "SELECT name, job, professions, level "
-                "FROM overseer_roster WHERE enabled = 1"
+                "SELECT name, job, professions, level "  # noqa: S608 - the only variable part is a fixed clause chosen above; every value is still bound
+                "FROM overseer_roster WHERE enabled = 1" + scope,
+                scope_args,
             )
             rows = list(cur.fetchall())
         except pymysql.err.MySQLError as exc:
@@ -2846,14 +2963,35 @@ def _learn_aim_rows() -> list:
     live errand look derived and an unsettled one look settled. A cycle that
     cannot see both tables does nothing, and the next cycle is ten minutes
     away.
+
+    AND A CROSS-COHORT READ IS THAT HALF-READ WITH EXTRA STEPS (infra#4221).
+    The paragraph above is the argument for scoping this one, stated before
+    there was a second cohort to state it about: a roster this function cannot
+    read correctly makes `learnaim.plan` write the wrong thing to `travel_npc`
+    and `learn_skill`. Unscoped, every row it reads is correct in itself and the
+    SET is still wrong - it contains characters this process does not drive, and
+    the plan built from it aims them. Reading another guild's `lead` column is
+    the sharpest part: `learnaim` uses it to tell the character that can walk
+    from the four that cannot, and with two cohorts present there are two rows
+    flagged `lead` and only one of them is this family's.
+
+    THE TRADE READ BELOW IS LEFT WHOLE-TABLE ON PURPOSE. `overseer_trade` has no
+    cohort column and whether it needs one is still open on infra#4221. It does
+    not need to be scoped for this function to be correct: the two tables are
+    matched by name in Python, so a trade row for a character no longer in
+    `roster` is simply never looked up. Scoping the roster read contains it.
     """
+    cohort = _cohort_of(bonds.head_of_family())
+    scope = " AND family = %s" if cohort else ""
+    scope_args = (cohort,) if cohort else ()
     with _connect() as conn, conn.cursor() as cur:
         try:
             cur.execute(
                 # `lead` BACKTICKED: reserved word in MySQL 8, the same trap
                 # _mark_party_leader's own comment records.
-                "SELECT name, `lead`, professions, travel_npc, learn_skill "
-                "FROM overseer_roster WHERE enabled = 1"
+                "SELECT name, `lead`, professions, travel_npc, learn_skill "  # noqa: S608 - the only variable part is a fixed clause chosen above; every value is still bound
+                "FROM overseer_roster WHERE enabled = 1" + scope,
+                scope_args,
             )
             roster = list(cur.fetchall())
         except pymysql.err.MySQLError as exc:

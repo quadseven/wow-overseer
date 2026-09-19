@@ -485,8 +485,15 @@ class AgainstTheOnlyCohortThatExistsTodayNothingChangesAtAll(RosterCase):
 
 class UntilTheColumnShipsTheStatementsAreUnchangedCharacterForCharacter(
         unittest.TestCase):
-    """mod-overseer#506 is merged, and infra's submodule gitlink does not carry
-    it: no running world has the `family` column yet.
+    """No running world has the `family` column yet.
+
+    Corrected in place (infra#4221): when this was written the submodule
+    gitlink did not carry mod-overseer#506's SQL at all. infra#4234 has since
+    pinned one that does - and that is still not a deployment, because
+    `worldserver` and `db-import` are absent from `deploy.wow-image-tags.yml`,
+    so the migration ships inert until the image is rebuilt and the running
+    digest is checked by hand. The conclusion below is unchanged; only the
+    reason it is true has moved one stage down the pipeline.
 
     So the path that actually executes in production today is the degraded one,
     and "degraded" has to mean today's statement exactly - not a narrower one,
