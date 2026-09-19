@@ -843,6 +843,44 @@ class Slot:
         self._wants.pop(name, None)
         self._served[name] = now
 
+    def adopt(self, *, claimant: str, character: str, aim: str,
+              now: float) -> None:
+        """Record a write this ledger did not arbitrate (infra#4194).
+
+        NOT A CLAIM, AND DELIBERATELY NOT ONE. `want` decides whose turn it is;
+        this says only "that value in the column is mine" about a write that
+        has already happened. Three passes write `travel_npc` without asking
+        for a turn - `_aim_for_plea`, `_send_trade_errand` and
+        `_goal_drive_quest` - because none of them is a town errand queueing
+        for the traveller. Making them queue would be a different change with a
+        different argument; this one only stops the ledger mistaking their
+        writes for a stranger's.
+
+        WHAT IT COSTS TO LEAVE THEM UNRECORDED, measured on wow-dev. `_reconcile`
+        rebuilds the holder from the column on every `want()`, and any value it
+        does not recognise becomes `Holder(claimant="", since=now)` - an ORPHAN
+        on the 1200s lease, with the clock starting again. So an unledgered
+        write does not merely go unnoticed: it evicts the pass that legitimately
+        held the column and re-arms a twenty-minute lease against nobody. Three
+        passes doing that on their ordinary cycle is why the stall had no upper
+        bound rather than costing one lease per restart.
+
+        A RELEASE NEEDS NO EQUIVALENT. An unledgered release empties the column,
+        and `_reconcile`'s first branch already turns an empty column into
+        `None` - the honest answer, and the same one the world's own clearing
+        produces. Only writes manufacture orphans, which is why this takes an
+        aim and there is no `disown`.
+
+        THE LEASE IS THE ORDINARY ONE. An adopted holder is a real holder with a
+        real owner, so it expires like any other and `long_leases` applies if the
+        claimant has one. That is the point: the column stops being held by a
+        stranger nobody can out-wait.
+        """
+        if not claimant or not character or not aim:
+            return
+        self.holder = Holder(claimant=claimant, character=character,
+                             aim=aim, since=now)
+
     def forget(self, claimant: str) -> None:
         """Drop a pass's want without serving it.
 

@@ -4108,6 +4108,20 @@ class Bridge(discord.Client):
         if not errand:
             return
         await asyncio.to_thread(_write_trade_errand, errand)
+        # AND TELL THE LEDGER WHEN THIS ONE MOVES SOMEBODY (infra#4194). A
+        # trade errand is written every cycle and usually names no traveller at
+        # all, but when it does it writes `travel_npc` outside
+        # `_claim_town_slot`. `_reconcile` rebuilds the holder from the column
+        # on every `want()`, so a value it does not recognise becomes
+        # `Holder(claimant="", since=now)` - an ORPHAN on the 1200s lease with
+        # the clock restarted. A trainer aim is not an economy aim and nothing
+        # else would hand it back, so an unrecorded one parks the whole family
+        # behind a stranger for twenty minutes at a time, repeatedly.
+        if errand.travel_npc:
+            self._town_slot.adopt(
+                claimant="trades", character=errand.character,
+                aim=errand.travel_npc, now=time.monotonic(),
+            )
         log.info(
             "trades: errand on the roster - %s learn=%s unlearn=%s "
             "(price %s) travel=%r; traveller=%s",
@@ -5260,6 +5274,18 @@ class Bridge(discord.Client):
                 _write_trade_errand,
                 professions.Errand(character=leader,
                                    travel_npc=auction.AUCTIONEER_ROLE),
+            )
+            # AND TELL THE LEDGER, because this write did not go through
+            # `_claim_town_slot` (infra#4194). `_reconcile` rebuilds the holder
+            # from the column on every `want()`, and a value it does not
+            # recognise becomes `Holder(claimant="", since=now)` - an ORPHAN on
+            # the 1200s lease with the clock started again. This pass already
+            # owns the column and is only re-asserting its own keyword;
+            # staying silent would evict itself and hand a twenty-minute lease
+            # to nobody, which is the unbounded stall infra#4194 measured.
+            self._town_slot.adopt(
+                claimant="auction", character=leader,
+                aim=auction.AUCTIONEER_ROLE, now=time.monotonic(),
             )
         log.info("auction: listed %d surplus BoE item(s) at house %s",
                  queued, house)

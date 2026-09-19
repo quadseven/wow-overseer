@@ -31,6 +31,8 @@ AND THE TWO WAYS THIS FIX COULD ITSELF BE THE BUG ARE PINNED HARDEST:
   * FAIRNESS THAT STARVES THE OTHER WAY - a rare pass holding the column still
     for a frequent one that has stopped asking - is `TheYieldIsBounded`.
 """
+import ast
+import pathlib
 import unittest
 
 import townslot
@@ -1104,3 +1106,138 @@ class AnUrgentPassThatAchievesNothingStopsOutrankingEverything(unittest.TestCase
                           leader="Grug", column="at:1:100,200,30",
                           retaskable=("", "banker"), now=1.0, urgent=True)
         self.assertEqual(townslot.SLOT_PREEMPT, other.verdict)
+
+
+class AnUnledgeredWriteDoesNotOrphanTheColumn(unittest.TestCase):
+    """`adopt` is what stops a pass evicting itself (infra#4194).
+
+    `_reconcile` rebuilds the holder from the column on every `want()`, and any
+    value it does not recognise becomes `Holder(claimant="", since=now)` - an
+    orphan on the long lease, with the clock started AGAIN rather than
+    continued. Two passes write `travel_npc` without going through
+    `_claim_town_slot`: the auction pass re-asserting its own keyword while it
+    still owns the column, and the trade pass writing a trainer aim. Left
+    unrecorded, each of those evicts whoever legitimately held the traveller
+    and hands a 1200s lease to nobody - and because the clock restarts on every
+    unrecognised value, the stall has no upper bound at all.
+
+    Measured on wow-dev before the fix: five passes queued behind an
+    `unknown writer` whose lease read `held 0s of a 1200s lease` fourteen
+    minutes into a pod that had never restarted.
+    """
+
+    def test_an_unledgered_write_orphans_the_column_without_adopt(self):
+        slot = townslot.Slot()
+        taken = slot.want(claimant="gather", character="Grug",
+                          aim="at:1:-1175.1,-2532.8,123.9", leader="Grug",
+                          column="", retaskable=(), now=1000.0)
+        slot.settle(taken, True, 1000.0)
+        self.assertEqual("gather", slot.holder.claimant)
+        # Somebody writes the column without telling the ledger.
+        slot.want(claimant="mail", character="Grug", aim="mailbox",
+                  leader="Grug", column="auctioneer", retaskable=(), now=1060.0)
+        self.assertEqual("", slot.holder.claimant,
+                         "an unrecorded write should orphan - this is the bug")
+
+    def test_adopt_makes_the_write_recognised_instead(self):
+        slot = townslot.Slot()
+        taken = slot.want(claimant="gather", character="Grug",
+                          aim="at:1:-1175.1,-2532.8,123.9", leader="Grug",
+                          column="", retaskable=(), now=1000.0)
+        slot.settle(taken, True, 1000.0)
+        slot.adopt(claimant="auction", character="Grug", aim="auctioneer",
+                   now=1060.0)
+        slot.want(claimant="mail", character="Grug", aim="mailbox",
+                  leader="Grug", column="auctioneer", retaskable=(), now=1061.0)
+        self.assertEqual("auction", slot.holder.claimant)
+
+    def test_an_adopted_holder_is_on_the_ordinary_lease_not_the_orphan_one(self):
+        """The whole point: a known owner can be out-waited, a stranger cannot."""
+        slot = townslot.Slot(lease=300.0, orphan_lease=1200.0)
+        slot.adopt(claimant="auction", character="Grug", aim="auctioneer",
+                   now=1000.0)
+        # Past the ordinary lease but far inside the orphan one.
+        d = slot.want(claimant="mail", character="Grug", aim="mailbox",
+                      leader="Grug", column="auctioneer", retaskable=("auctioneer",),
+                      now=1000.0 + 400.0)
+        self.assertTrue(
+            d.granted,
+            "an adopted holder must expire on the ordinary lease; if this "
+            "fails the adopted write is still unassailable for 1200s")
+
+    def test_the_clock_does_not_restart_once_the_write_is_adopted(self):
+        slot = townslot.Slot()
+        slot.adopt(claimant="auction", character="Grug", aim="auctioneer",
+                   now=1000.0)
+        slot.want(claimant="mail", character="Grug", aim="mailbox",
+                  leader="Grug", column="auctioneer", retaskable=(), now=1300.0)
+        first = slot.holder.since
+        slot.want(claimant="bank", character="Grug", aim="banker",
+                  leader="Grug", column="auctioneer", retaskable=(), now=1600.0)
+        self.assertEqual(first, slot.holder.since,
+                         "the lease must continue, not re-arm on every poll")
+
+    def test_adopt_refuses_an_incomplete_record(self):
+        """A half-known holder is worse than an honest orphan."""
+        slot = townslot.Slot()
+        for kw in ({"claimant": ""}, {"character": ""}, {"aim": ""}):
+            args = {"claimant": "auction", "character": "Grug",
+                    "aim": "auctioneer", "now": 1.0}
+            args.update(kw)
+            slot.adopt(**args)
+            self.assertIsNone(slot.holder, f"adopt should ignore {kw}")
+
+
+class EveryUnledgeredTravelWriteTellsTheLedger(unittest.TestCase):
+    """Pinned with `ast`, never a text search (infra#4194).
+
+    `bridge.py`'s comments quote `_write_trade_errand` and `_claim_town_slot`
+    verbatim while explaining this very bug, so a grep for those names matches
+    the prose describing the problem and passes while the problem is live. This
+    parses the module and asks the only question that matters: does every
+    function that calls `_write_trade_errand` outside `_claim_town_slot` also
+    tell the ledger about the write?
+    """
+
+    BRIDGE = pathlib.Path(__file__).resolve().parents[1] / "bridge.py"
+
+    # `_claim_town_slot` IS the ledgered door - it calls `settle` itself, which
+    # is the recording step. It is exempt by construction, not by exception.
+    LEDGERED_DOOR = "_claim_town_slot"
+
+    @staticmethod
+    def _names(node) -> set:
+        """Every name this function MENTIONS, not only the ones it calls.
+
+        `_write_trade_errand` is never called directly - every site passes it
+        to `asyncio.to_thread`, so it appears as an ARGUMENT and a collector
+        that only reads `Call.func` finds nothing at all. A first draft of this
+        test did exactly that, reported zero offenders, and stayed green when
+        the fix was reverted. It measured nothing.
+        """
+        out = set()
+        for sub in ast.walk(node):
+            if isinstance(sub, ast.Name):
+                out.add(sub.id)
+            elif isinstance(sub, ast.Attribute):
+                out.add(sub.attr)
+        return out
+
+    def test_no_function_writes_the_column_without_recording_it(self):
+        tree = ast.parse(self.BRIDGE.read_text(encoding="utf-8"))
+        offenders = []
+        for node in ast.walk(tree):
+            if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            if node.name == self.LEDGERED_DOOR:
+                continue
+            calls = self._names(node)
+            if "_write_trade_errand" not in calls:
+                continue
+            if "adopt" in calls or "settle" in calls:
+                continue
+            offenders.append(f"{node.name} (line {node.lineno})")
+        self.assertEqual(
+            [], offenders,
+            "these write travel_npc without telling the ledger, so the next "
+            f"want() orphans the column on the long lease: {offenders}")
