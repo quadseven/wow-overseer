@@ -1162,18 +1162,34 @@ _COUNCIL_MEMBER_SQL = (
 )
 
 
-def _fetch_scarlet_completion() -> dict[str, int] | None:
-    """Read the durable per-wing completion ledger when deployed.
+# The maps whose ended runs the council counts, as a literal for the SQL
+# below. Built from dungeonprogression's own table rather than written out
+# again: this read used to say `map_id = 189` in-line, and when Blackrock
+# Depths joined the campaigns (infra#4247) that literal would have gone on
+# reporting zero completed BRD runs for ever, with nothing failing.
+#
+# int() on every element is not ceremony. These ids are interpolated into the
+# statement rather than bound, because a variable-length IN list cannot be a
+# single placeholder, and the one rule that keeps that safe is that nothing
+# but an integer can reach it.
+_CAMPAIGN_MAP_IDS_SQL = ",".join(
+    str(int(map_id)) for map_id in dungeonprogression.CAMPAIGN_MAP_IDS
+)
+
+
+def _fetch_dungeon_completion() -> dict[str, int] | None:
+    """Read the durable per-stage completion ledger when deployed.
 
     ``portal_keyword`` is added by the matching mod-overseer migration. Older
     realms must not make the council fail, and must not cause it to guess an
-    ordered campaign from map 189 alone.
+    ordered campaign from a map id alone.
     """
     try:
         with _connect() as conn, conn.cursor() as cur:
             cur.execute(
-                "SELECT portal_keyword, outcome FROM overseer_dungeon_run "
-                "WHERE map_id = 189 AND state = 'ended'"
+                "SELECT portal_keyword, outcome FROM overseer_dungeon_run "  # noqa: S608 - the only variable part is a list of int()ed map ids; no value comes from outside this module
+                "WHERE map_id IN (" + _CAMPAIGN_MAP_IDS_SQL + ") "
+                "AND state = 'ended'"
             )
             return dungeonprogression.successful_runs(cur.fetchall())
     except pymysql.err.MySQLError as exc:
@@ -4209,10 +4225,10 @@ class Bridge(discord.Client):
         # is the whole of what the proposal acts on. Tracked as a follow-up
         # rather than silently declared complete.
         level_rows = [{"name": m.name, "level": m.level} for m in members]
-        completed_wings = await asyncio.to_thread(_fetch_scarlet_completion)
+        completed_runs = await asyncio.to_thread(_fetch_dungeon_completion)
         held = council.hold(members, history=history,
                             level_rows=level_rows, cards=[],
-                            completed_wings=completed_wings)
+                            completed_runs=completed_runs)
         if not held.lines:
             log.info("council: %s", held.reason)
             return

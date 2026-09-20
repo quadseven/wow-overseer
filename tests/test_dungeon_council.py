@@ -157,6 +157,97 @@ class TheDungeonProposalFiresWhenReady(unittest.TestCase):
         self.assertEqual("", proposal.keyword)
 
 
+class ALevelSixtyFamilyIsNotSentBackToScarletMonastery(unittest.TestCase):
+    """infra#4247, and the shape of the defect matters more than the fix.
+
+    THE OLD CODE HAD TWO SEPARATE WAYS TO SAY `scarlet-cathedral` FOR EVER, and
+    both of them fired at level 60. Reproduced against the live state as it
+    actually was on 2026-09-19 - all five of the family at 60, four dungeon
+    goals on record and every one of them carrying skill_name
+    'scarlet-cathedral', a wing 21 levels below them:
+
+      1. LEDGER ABSENT. overseer_dungeon_run on wow-dev has no portal_keyword
+         column, so the read fails with MySQL 1054 and hands the council None.
+         The old code then fell through to _scarlet_keyword(60), whose highest
+         wing is the cathedral. Nothing about it could ever return anything
+         else, at any level, for ever.
+
+      2. LEDGER PRESENT AND THE CAMPAIGN FINISHED. next_scarlet_wing returned
+         None once all four wings were at 25, and the same fallback ran. Also
+         for ever.
+
+    PLACES topping out at Zul'Farrak (36) is what made both of those the END of
+    the road rather than a stale rung: there was no harder place for the level
+    frontier to name, so the frontier agreed with the stuck answer.
+    """
+
+    def setUp(self):
+        self.members = _members_at(60)
+        self.rows = _levels([(n, 60) for n in FAMILY_NAMES])
+
+    def test_the_frontier_now_reaches_past_scarlet_monastery(self):
+        self.assertIn(230, council.PLACES)
+        self.assertGreater(council.PLACES[230], council.PLACES[189])
+        self.assertGreater(council.PLACES[230], max(
+            wants for _, wants in council.SCARLET_WINGS))
+
+    def test_a_missing_ledger_no_longer_means_the_cathedral_for_ever(self):
+        proposal = council._dungeon_proposal(self.members, self.rows, [], None)
+        self.assertIsNotNone(proposal)
+        self.assertEqual("blackrock-depths", proposal.keyword)
+        self.assertIn("Blackrock Depths", proposal.said)
+
+    def test_a_finished_scarlet_campaign_no_longer_means_the_cathedral_either(self):
+        done = {keyword: council.DUNGEON_RUNS_WANTED
+                for keyword, _ in council.SCARLET_WINGS}
+        proposal = council._dungeon_proposal(self.members, self.rows, [], done)
+        self.assertIsNotNone(proposal)
+        self.assertEqual("blackrock-depths", proposal.keyword)
+
+    def test_an_unfinished_scarlet_campaign_does_not_drag_a_sixty_back(self):
+        """The ledger used to OUTRANK the level frontier outright, so a single
+        uncleared graveyard run pinned the whole family to map 189 whatever
+        they had outgrown. The frontier picks the place now."""
+        proposal = council._dungeon_proposal(
+            self.members, self.rows, [], {"scarlet": 0})
+        self.assertIsNotNone(proposal)
+        self.assertEqual("blackrock-depths", proposal.keyword)
+
+    def test_it_repeats_rather_than_standing_down_once_the_count_is_met(self):
+        """The operator asked for Blackrock Depths "over and over ...
+        incrementally get better gear". A campaign at its target means run it
+        again, not stop - the repeat was never the defect."""
+        done = {"blackrock-depths": council.DUNGEON_RUNS_WANTED}
+        proposal = council._dungeon_proposal(self.members, self.rows, [], done)
+        self.assertIsNotNone(proposal)
+        self.assertEqual("blackrock-depths", proposal.keyword)
+        self.assertEqual(council.DUNGEON_RUNS_WANTED, proposal.target)
+
+    def test_the_campaign_size_is_the_one_the_operator_set(self):
+        proposal = council._dungeon_proposal(self.members, self.rows, [], None)
+        self.assertEqual(25, proposal.target)
+
+    def test_a_family_too_low_for_it_is_never_sent_there(self):
+        """Blackrock Depths joining PLACES must not put a level 41 family in
+        front of a 52-60 instance. The same readiness gate every other place
+        is held to, and nothing new."""
+        members = _members_at(41)
+        rows = _levels([(n, 41) for n in FAMILY_NAMES])
+        proposal = council._dungeon_proposal(members, rows, [], None)
+        self.assertIsNotNone(proposal)
+        self.assertEqual("scarlet-cathedral", proposal.keyword)
+
+    def test_the_weakest_member_still_gates_the_whole_family(self):
+        """Four at 60 and one at 41 is a family that goes to Scarlet, because
+        the gate is asked of whoever would die at the door."""
+        members = [_m(n, 60) for n in FAMILY_NAMES[:-1]] + [_m("Og", 41)]
+        rows = _levels([(n, 60) for n in FAMILY_NAMES[:-1]] + [("Og", 41)])
+        proposal = council._dungeon_proposal(members, rows, [], None)
+        self.assertIsNotNone(proposal)
+        self.assertEqual("scarlet-cathedral", proposal.keyword)
+        self.assertEqual("Og", proposal.beneficiary)
+
+
 class TheProposalReachesHold(unittest.TestCase):
     """hold()'s own signature is additive - existing callers see nothing new
     unless they hand in level_rows and cards."""
