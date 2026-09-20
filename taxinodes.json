@@ -1,0 +1,3644 @@
+{
+ "nodes": [
+  {
+   "alliance": 0,
+   "horde": 308,
+   "id": 1,
+   "map": 0,
+   "name": "Northshire Abbey",
+   "x": -8888.98046875,
+   "y": -0.5400000214576721,
+   "z": 94.38999938964844
+  },
+  {
+   "alliance": 541,
+   "horde": 0,
+   "id": 2,
+   "map": 0,
+   "name": "Stormwind, Elwynn",
+   "x": -8840.5595703125,
+   "y": 489.70001220703125,
+   "z": 109.61000061035156
+  },
+  {
+   "alliance": 0,
+   "horde": 308,
+   "id": 3,
+   "map": 0,
+   "name": "Programmer Isle",
+   "x": 16391.810546875,
+   "y": 16341.2099609375,
+   "z": 69.44000244140625
+  },
+  {
+   "alliance": 541,
+   "horde": 0,
+   "id": 4,
+   "map": 0,
+   "name": "Sentinel Hill, Westfall",
+   "x": -10629.2900390625,
+   "y": 1036.949951171875,
+   "z": 34.02000045776367
+  },
+  {
+   "alliance": 541,
+   "horde": 0,
+   "id": 5,
+   "map": 0,
+   "name": "Lakeshire, Redridge",
+   "x": -9429.099609375,
+   "y": -2231.39990234375,
+   "z": 68.6500015258789
+  },
+  {
+   "alliance": 541,
+   "horde": 0,
+   "id": 6,
+   "map": 0,
+   "name": "Ironforge, Dun Morogh",
+   "x": -4821.77978515625,
+   "y": -1155.43994140625,
+   "z": 502.2099914550781
+  },
+  {
+   "alliance": 541,
+   "horde": 0,
+   "id": 7,
+   "map": 0,
+   "name": "Menethil Harbor, Wetlands",
+   "x": -3792.260009765625,
+   "y": -783.2899780273438,
+   "z": 9.0600004196167
+  },
+  {
+   "alliance": 541,
+   "horde": 0,
+   "id": 8,
+   "map": 0,
+   "name": "Thelsamar, Loch Modan",
+   "x": -5421.91015625,
+   "y": -2930.010009765625,
+   "z": 347.25
+  },
+  {
+   "alliance": 0,
+   "horde": 541,
+   "id": 9,
+   "map": 0,
+   "name": "Booty Bay, Stranglethorn",
+   "x": -14271.76953125,
+   "y": 299.8699951171875,
+   "z": 31.09000015258789
+  },
+  {
+   "alliance": 0,
+   "horde": 3574,
+   "id": 10,
+   "map": 0,
+   "name": "The Sepulcher, Silverpine Forest",
+   "x": 478.8599853515625,
+   "y": 1536.5899658203125,
+   "z": 131.32000732421875
+  },
+  {
+   "alliance": 0,
+   "horde": 3574,
+   "id": 11,
+   "map": 0,
+   "name": "Undercity, Tirisfal",
+   "x": 1568.6199951171875,
+   "y": 267.9700012207031,
+   "z": -43.099998474121094
+  },
+  {
+   "alliance": 541,
+   "horde": 0,
+   "id": 12,
+   "map": 0,
+   "name": "Darkshire, Duskwood",
+   "x": -10515.4599609375,
+   "y": -1261.6500244140625,
+   "z": 41.34000015258789
+  },
+  {
+   "alliance": 0,
+   "horde": 3574,
+   "id": 13,
+   "map": 0,
+   "name": "Tarren Mill, Hillsbrad",
+   "x": -0.05999999865889549,
+   "y": -859.9099731445312,
+   "z": 58.83000183105469
+  },
+  {
+   "alliance": 541,
+   "horde": 0,
+   "id": 14,
+   "map": 0,
+   "name": "Southshore, Hillsbrad",
+   "x": -711.47998046875,
+   "y": -515.47998046875,
+   "z": 26.110000610351562
+  },
+  {
+   "alliance": 0,
+   "horde": 541,
+   "id": 15,
+   "map": 0,
+   "name": "Eastern Plaguelands",
+   "x": 2253.39990234375,
+   "y": -5344.89990234375,
+   "z": 83.37999725341797
+  },
+  {
+   "alliance": 541,
+   "horde": 0,
+   "id": 16,
+   "map": 0,
+   "name": "Refuge Pointe, Arathi",
+   "x": -1240.530029296875,
+   "y": -2515.110107421875,
+   "z": 22.15999984741211
+  },
+  {
+   "alliance": 0,
+   "horde": 2224,
+   "id": 17,
+   "map": 0,
+   "name": "Hammerfall, Arathi",
+   "x": -916.2899780273438,
+   "y": -3496.889892578125,
+   "z": 70.44999694824219
+  },
+  {
+   "alliance": 0,
+   "horde": 2224,
+   "id": 18,
+   "map": 0,
+   "name": "Booty Bay, Stranglethorn",
+   "x": -14444.2900390625,
+   "y": 509.6199951171875,
+   "z": 26.200000762939453
+  },
+  {
+   "alliance": 541,
+   "horde": 0,
+   "id": 19,
+   "map": 0,
+   "name": "Booty Bay, Stranglethorn",
+   "x": -14473.0498046875,
+   "y": 464.1499938964844,
+   "z": 36.43000030517578
+  },
+  {
+   "alliance": 0,
+   "horde": 2224,
+   "id": 20,
+   "map": 0,
+   "name": "Grom'gol, Stranglethorn",
+   "x": -12414.1796875,
+   "y": 146.2899932861328,
+   "z": 3.2799999713897705
+  },
+  {
+   "alliance": 0,
+   "horde": 2224,
+   "id": 21,
+   "map": 0,
+   "name": "Kargath, Badlands",
+   "x": -6633.990234375,
+   "y": -2180.050048828125,
+   "z": 244.13999938964844
+  },
+  {
+   "alliance": 0,
+   "horde": 2224,
+   "id": 22,
+   "map": 1,
+   "name": "Thunder Bluff, Mulgore",
+   "x": -1197.2099609375,
+   "y": 29.709999084472656,
+   "z": 176.9499969482422
+  },
+  {
+   "alliance": 0,
+   "horde": 2224,
+   "id": 23,
+   "map": 1,
+   "name": "Orgrimmar, Durotar",
+   "x": 1677.5899658203125,
+   "y": -4315.7099609375,
+   "z": 61.16999816894531
+  },
+  {
+   "alliance": 0,
+   "horde": 0,
+   "id": 24,
+   "map": 0,
+   "name": "Generic, World Target 002",
+   "x": -6666.0,
+   "y": -2222.300048828125,
+   "z": 278.6000061035156
+  },
+  {
+   "alliance": 0,
+   "horde": 2224,
+   "id": 25,
+   "map": 1,
+   "name": "Crossroads, The Barrens",
+   "x": -441.79998779296875,
+   "y": -2596.080078125,
+   "z": 96.05999755859375
+  },
+  {
+   "alliance": 3837,
+   "horde": 0,
+   "id": 26,
+   "map": 1,
+   "name": "Auberdine, Darkshore",
+   "x": 6341.3798828125,
+   "y": 557.6799926757812,
+   "z": 16.290000915527344
+  },
+  {
+   "alliance": 3837,
+   "horde": 0,
+   "id": 27,
+   "map": 1,
+   "name": "Rut'theran Village, Teldrassil",
+   "x": 8643.58984375,
+   "y": 841.0499877929688,
+   "z": 23.299999237060547
+  },
+  {
+   "alliance": 3837,
+   "horde": 0,
+   "id": 28,
+   "map": 1,
+   "name": "Astranaar, Ashenvale",
+   "x": 2827.340087890625,
+   "y": -289.239990234375,
+   "z": 107.16000366210938
+  },
+  {
+   "alliance": 0,
+   "horde": 2224,
+   "id": 29,
+   "map": 1,
+   "name": "Sun Rock Retreat, Stonetalon Mountains",
+   "x": 966.5700073242188,
+   "y": 1040.3199462890625,
+   "z": 104.2699966430664
+  },
+  {
+   "alliance": 0,
+   "horde": 2224,
+   "id": 30,
+   "map": 1,
+   "name": "Freewind Post, Thousand Needles",
+   "x": -5407.7099609375,
+   "y": -2414.300048828125,
+   "z": 90.31999969482422
+  },
+  {
+   "alliance": 3837,
+   "horde": 0,
+   "id": 31,
+   "map": 1,
+   "name": "Thalanaar, Feralas",
+   "x": -4491.8798828125,
+   "y": -775.8900146484375,
+   "z": -39.52000045776367
+  },
+  {
+   "alliance": 541,
+   "horde": 0,
+   "id": 32,
+   "map": 1,
+   "name": "Theramore, Dustwallow Marsh",
+   "x": -3825.3701171875,
+   "y": -4516.580078125,
+   "z": 10.4399995803833
+  },
+  {
+   "alliance": 3837,
+   "horde": 0,
+   "id": 33,
+   "map": 1,
+   "name": "Stonetalon Peak, Stonetalon Mountains",
+   "x": 2681.1298828125,
+   "y": 1461.6800537109375,
+   "z": 232.8800048828125
+  },
+  {
+   "alliance": 0,
+   "horde": 0,
+   "id": 34,
+   "map": 1,
+   "name": "Transport, Booty Bay",
+   "x": -1965.1700439453125,
+   "y": -5824.2900390625,
+   "z": -1.059999942779541
+  },
+  {
+   "alliance": 0,
+   "horde": 0,
+   "id": 35,
+   "map": 1,
+   "name": "Transport, Orgrimmar",
+   "x": 1320.0699462890625,
+   "y": -4649.2001953125,
+   "z": 21.56999969482422
+  },
+  {
+   "alliance": 0,
+   "horde": 15665,
+   "id": 36,
+   "map": 0,
+   "name": "Generic, World Target 001",
+   "x": -8644.6201171875,
+   "y": 433.2799987792969,
+   "z": 59.459999084472656
+  },
+  {
+   "alliance": 3837,
+   "horde": 0,
+   "id": 37,
+   "map": 1,
+   "name": "Nijel's Point, Desolace",
+   "x": 139.24000549316406,
+   "y": 1325.8199462890625,
+   "z": 193.5
+  },
+  {
+   "alliance": 0,
+   "horde": 2224,
+   "id": 38,
+   "map": 1,
+   "name": "Shadowprey Village, Desolace",
+   "x": -1767.6400146484375,
+   "y": 3263.889892578125,
+   "z": 4.940000057220459
+  },
+  {
+   "alliance": 541,
+   "horde": 0,
+   "id": 39,
+   "map": 1,
+   "name": "Gadgetzan, Tanaris",
+   "x": -7223.97021484375,
+   "y": -3734.590087890625,
+   "z": 8.390000343322754
+  },
+  {
+   "alliance": 0,
+   "horde": 2224,
+   "id": 40,
+   "map": 1,
+   "name": "Gadgetzan, Tanaris",
+   "x": -7048.89013671875,
+   "y": -3780.360107421875,
+   "z": 10.1899995803833
+  },
+  {
+   "alliance": 3837,
+   "horde": 0,
+   "id": 41,
+   "map": 1,
+   "name": "Feathermoon, Feralas",
+   "x": -4373.7998046875,
+   "y": 3338.64990234375,
+   "z": 12.270000457763672
+  },
+  {
+   "alliance": 0,
+   "horde": 2224,
+   "id": 42,
+   "map": 1,
+   "name": "Camp Mojache, Feralas",
+   "x": -4419.85986328125,
+   "y": 199.30999755859375,
+   "z": 25.059999465942383
+  },
+  {
+   "alliance": 541,
+   "horde": 0,
+   "id": 43,
+   "map": 0,
+   "name": "Aerie Peak, The Hinterlands",
+   "x": 283.739990234375,
+   "y": -2002.760009765625,
+   "z": 194.74000549316406
+  },
+  {
+   "alliance": 0,
+   "horde": 2224,
+   "id": 44,
+   "map": 1,
+   "name": "Valormok, Azshara",
+   "x": 3661.52001953125,
+   "y": -4390.3798828125,
+   "z": 113.05000305175781
+  },
+  {
+   "alliance": 541,
+   "horde": 0,
+   "id": 45,
+   "map": 0,
+   "name": "Nethergarde Keep, Blasted Lands",
+   "x": -11112.25,
+   "y": -3435.739990234375,
+   "z": 79.08999633789062
+  },
+  {
+   "alliance": 0,
+   "horde": 0,
+   "id": 46,
+   "map": 0,
+   "name": "Transport, Southshore",
+   "x": -986.4299926757812,
+   "y": -547.8599853515625,
+   "z": -3.859999895095825
+  },
+  {
+   "alliance": 0,
+   "horde": 0,
+   "id": 47,
+   "map": 0,
+   "name": "Transport, Grom'gol",
+   "x": -12418.76953125,
+   "y": 235.42999267578125,
+   "z": 1.1200000047683716
+  },
+  {
+   "alliance": 0,
+   "horde": 2224,
+   "id": 48,
+   "map": 1,
+   "name": "Bloodvenom Post, Felwood",
+   "x": 5068.39990234375,
+   "y": -337.2200012207031,
+   "z": 367.4100036621094
+  },
+  {
+   "alliance": 3837,
+   "horde": 0,
+   "id": 49,
+   "map": 1,
+   "name": "Moonglade",
+   "x": 7458.4501953125,
+   "y": -2487.2099609375,
+   "z": 462.3299865722656
+  },
+  {
+   "alliance": 0,
+   "horde": 0,
+   "id": 50,
+   "map": 0,
+   "name": "Transport, Menethil Harbor",
+   "x": 0.0,
+   "y": 0.0,
+   "z": 0.0
+  },
+  {
+   "alliance": 0,
+   "horde": 0,
+   "id": 51,
+   "map": 0,
+   "name": "Transport, Auberdine",
+   "x": 0.0,
+   "y": 0.0,
+   "z": 0.0
+  },
+  {
+   "alliance": 3837,
+   "horde": 0,
+   "id": 52,
+   "map": 1,
+   "name": "Everlook, Winterspring",
+   "x": 6796.7998046875,
+   "y": -4742.39013671875,
+   "z": 701.5
+  },
+  {
+   "alliance": 0,
+   "horde": 2224,
+   "id": 53,
+   "map": 1,
+   "name": "Everlook, Winterspring",
+   "x": 6813.06005859375,
+   "y": -4611.1201171875,
+   "z": 710.6699829101562
+  },
+  {
+   "alliance": 0,
+   "horde": 0,
+   "id": 54,
+   "map": 1,
+   "name": "Transport, Feathermoon",
+   "x": -4203.8701171875,
+   "y": 3284.0,
+   "z": -12.859999656677246
+  },
+  {
+   "alliance": 0,
+   "horde": 2224,
+   "id": 55,
+   "map": 1,
+   "name": "Brackenwall Village, Dustwallow Marsh",
+   "x": -3147.389892578125,
+   "y": -2842.179931640625,
+   "z": 34.61000061035156
+  },
+  {
+   "alliance": 0,
+   "horde": 2224,
+   "id": 56,
+   "map": 0,
+   "name": "Stonard, Swamp of Sorrows",
+   "x": -10456.9697265625,
+   "y": -3279.25,
+   "z": 21.350000381469727
+  },
+  {
+   "alliance": 3837,
+   "horde": 0,
+   "id": 57,
+   "map": 1,
+   "name": "Fishing Village, Teldrassil",
+   "x": 8701.509765625,
+   "y": 991.3699951171875,
+   "z": 14.210000038146973
+  },
+  {
+   "alliance": 0,
+   "horde": 2224,
+   "id": 58,
+   "map": 1,
+   "name": "Zoram'gar Outpost, Ashenvale",
+   "x": 3374.7099609375,
+   "y": 996.969970703125,
+   "z": 5.190000057220459
+  },
+  {
+   "alliance": 541,
+   "horde": 0,
+   "id": 59,
+   "map": 30,
+   "name": "Dun Baldar, Alterac Valley",
+   "x": 574.2100219726562,
+   "y": -46.650001525878906,
+   "z": 37.61000061035156
+  },
+  {
+   "alliance": 0,
+   "horde": 3574,
+   "id": 60,
+   "map": 30,
+   "name": "Frostwolf Keep, Alterac Valley",
+   "x": -1335.43994140625,
+   "y": -319.69000244140625,
+   "z": 90.66000366210938
+  },
+  {
+   "alliance": 0,
+   "horde": 2224,
+   "id": 61,
+   "map": 1,
+   "name": "Splintertree Post, Ashenvale",
+   "x": 2302.389892578125,
+   "y": -2524.550048828125,
+   "z": 104.4000015258789
+  },
+  {
+   "alliance": 3837,
+   "horde": 0,
+   "id": 62,
+   "map": 1,
+   "name": "Nighthaven, Moonglade",
+   "x": 7793.60986328125,
+   "y": -2403.469970703125,
+   "z": 489.32000732421875
+  },
+  {
+   "alliance": 0,
+   "horde": 2224,
+   "id": 63,
+   "map": 1,
+   "name": "Nighthaven, Moonglade",
+   "x": 7787.72021484375,
+   "y": -2404.10009765625,
+   "z": 489.55999755859375
+  },
+  {
+   "alliance": 3837,
+   "horde": 0,
+   "id": 64,
+   "map": 1,
+   "name": "Talrendis Point, Azshara",
+   "x": 2721.989990234375,
+   "y": -3880.639892578125,
+   "z": 100.87000274658203
+  },
+  {
+   "alliance": 3837,
+   "horde": 0,
+   "id": 65,
+   "map": 1,
+   "name": "Talonbranch Glade, Felwood",
+   "x": 6205.8798828125,
+   "y": -1949.6300048828125,
+   "z": 571.2899780273438
+  },
+  {
+   "alliance": 541,
+   "horde": 0,
+   "id": 66,
+   "map": 0,
+   "name": "Chillwind Camp, Western Plaguelands",
+   "x": 931.3200073242188,
+   "y": -1430.1099853515625,
+   "z": 64.66999816894531
+  },
+  {
+   "alliance": 541,
+   "horde": 0,
+   "id": 67,
+   "map": 0,
+   "name": "Light's Hope Chapel, Eastern Plaguelands",
+   "x": 2271.090087890625,
+   "y": -5340.7998046875,
+   "z": 87.11000061035156
+  },
+  {
+   "alliance": 0,
+   "horde": 3574,
+   "id": 68,
+   "map": 0,
+   "name": "Light's Hope Chapel, Eastern Plaguelands",
+   "x": 2327.409912109375,
+   "y": -5286.89013671875,
+   "z": 81.77999877929688
+  },
+  {
+   "alliance": 0,
+   "horde": 2224,
+   "id": 69,
+   "map": 1,
+   "name": "Moonglade",
+   "x": 7470.39013671875,
+   "y": -2123.3798828125,
+   "z": 492.3399963378906
+  },
+  {
+   "alliance": 0,
+   "horde": 2224,
+   "id": 70,
+   "map": 0,
+   "name": "Flame Crest, Burning Steppes",
+   "x": -7504.02978515625,
+   "y": -2187.5400390625,
+   "z": 165.52999877929688
+  },
+  {
+   "alliance": 541,
+   "horde": 0,
+   "id": 71,
+   "map": 0,
+   "name": "Morgan's Vigil, Burning Steppes",
+   "x": -8364.6103515625,
+   "y": -2738.35009765625,
+   "z": 185.4600067138672
+  },
+  {
+   "alliance": 0,
+   "horde": 2224,
+   "id": 72,
+   "map": 1,
+   "name": "Cenarion Hold, Silithus",
+   "x": -6811.39013671875,
+   "y": 836.739990234375,
+   "z": 49.810001373291016
+  },
+  {
+   "alliance": 3837,
+   "horde": 0,
+   "id": 73,
+   "map": 1,
+   "name": "Cenarion Hold, Silithus",
+   "x": -6761.830078125,
+   "y": 772.030029296875,
+   "z": 88.91000366210938
+  },
+  {
+   "alliance": 541,
+   "horde": 0,
+   "id": 74,
+   "map": 0,
+   "name": "Thorium Point, Searing Gorge",
+   "x": -6552.58984375,
+   "y": -1168.27001953125,
+   "z": 309.30999755859375
+  },
+  {
+   "alliance": 0,
+   "horde": 2224,
+   "id": 75,
+   "map": 0,
+   "name": "Thorium Point, Searing Gorge",
+   "x": -6554.93017578125,
+   "y": -1100.050048828125,
+   "z": 309.57000732421875
+  },
+  {
+   "alliance": 0,
+   "horde": 2224,
+   "id": 76,
+   "map": 0,
+   "name": "Revantusk Village, The Hinterlands",
+   "x": -635.260009765625,
+   "y": -4720.5,
+   "z": 5.380000114440918
+  },
+  {
+   "alliance": 0,
+   "horde": 2224,
+   "id": 77,
+   "map": 1,
+   "name": "Camp Taurajo, The Barrens",
+   "x": -2380.669921875,
+   "y": -1882.6700439453125,
+   "z": 95.8499984741211
+  },
+  {
+   "alliance": 0,
+   "horde": 0,
+   "id": 78,
+   "map": 0,
+   "name": "Naxxramas",
+   "x": 3133.31005859375,
+   "y": -3399.929931640625,
+   "z": 139.52999877929688
+  },
+  {
+   "alliance": 541,
+   "horde": 2224,
+   "id": 79,
+   "map": 1,
+   "name": "Marshal's Refuge, Un'Goro Crater",
+   "x": -6113.81982421875,
+   "y": -1142.699951171875,
+   "z": -187.6300048828125
+  },
+  {
+   "alliance": 541,
+   "horde": 2224,
+   "id": 80,
+   "map": 1,
+   "name": "Ratchet, The Barrens",
+   "x": -894.5900268554688,
+   "y": -3773.010009765625,
+   "z": 11.479999542236328
+  },
+  {
+   "alliance": 0,
+   "horde": 0,
+   "id": 81,
+   "map": 131074,
+   "name": "Filming",
+   "x": 0.0,
+   "y": 0.0,
+   "z": 0.0
+  },
+  {
+   "alliance": 0,
+   "horde": 19917,
+   "id": 82,
+   "map": 530,
+   "name": "Silvermoon City",
+   "x": 9375.240234375,
+   "y": -7165.89013671875,
+   "z": 9.029999732971191
+  },
+  {
+   "alliance": 0,
+   "horde": 19917,
+   "id": 83,
+   "map": 530,
+   "name": "Tranquillien, Ghostlands",
+   "x": 7594.47021484375,
+   "y": -6784.2900390625,
+   "z": 86.45999908447266
+  },
+  {
+   "alliance": 32942,
+   "horde": 32942,
+   "id": 84,
+   "map": 0,
+   "name": "Plaguewood Tower, Eastern Plaguelands",
+   "x": 2998.7099609375,
+   "y": -3050.10009765625,
+   "z": 117.19000244140625
+  },
+  {
+   "alliance": 541,
+   "horde": 3574,
+   "id": 85,
+   "map": 0,
+   "name": "Northpass Tower, Eastern Plaguelands",
+   "x": 3109.31005859375,
+   "y": -4285.1298828125,
+   "z": 109.44999694824219
+  },
+  {
+   "alliance": 541,
+   "horde": 3574,
+   "id": 86,
+   "map": 0,
+   "name": "Eastwall Tower, Eastern Plaguelands",
+   "x": 2499.22998046875,
+   "y": -4742.85009765625,
+   "z": 93.5
+  },
+  {
+   "alliance": 541,
+   "horde": 3574,
+   "id": 87,
+   "map": 0,
+   "name": "Crown Guard Tower, Eastern Plaguelands",
+   "x": 1857.56005859375,
+   "y": -3658.469970703125,
+   "z": 143.72999572753906
+  },
+  {
+   "alliance": 0,
+   "horde": 0,
+   "id": 88,
+   "map": 530,
+   "name": "Transport, Exodar",
+   "x": -4284.009765625,
+   "y": -11194.740234375,
+   "z": 13.010000228881836
+  },
+  {
+   "alliance": 0,
+   "horde": 0,
+   "id": 89,
+   "map": 0,
+   "name": "Transport, Theramore",
+   "x": 0.0,
+   "y": 0.0,
+   "z": 0.0
+  },
+  {
+   "alliance": 0,
+   "horde": 0,
+   "id": 90,
+   "map": 9770568,
+   "name": "Transport, Undercity",
+   "x": 0.0,
+   "y": 0.0,
+   "z": 0.0
+  },
+  {
+   "alliance": 0,
+   "horde": 0,
+   "id": 91,
+   "map": 530,
+   "name": "Quest - Azuremyst Shaman Target",
+   "x": -3996.010009765625,
+   "y": -11892.9697265625,
+   "z": 0.2199999988079071
+  },
+  {
+   "alliance": 0,
+   "horde": 0,
+   "id": 92,
+   "map": 530,
+   "name": "Quest - Azuremyst Shaman Start",
+   "x": -3679.31005859375,
+   "y": -11413.0400390625,
+   "z": 310.57000732421875
+  },
+  {
+   "alliance": 3837,
+   "horde": 0,
+   "id": 93,
+   "map": 530,
+   "name": "Blood Watch, Bloodmyst Isle",
+   "x": -1933.27001953125,
+   "y": -11954.6103515625,
+   "z": 57.189998626708984
+  },
+  {
+   "alliance": 3837,
+   "horde": 0,
+   "id": 94,
+   "map": 530,
+   "name": "The Exodar",
+   "x": -4054.889892578125,
+   "y": -11793.349609375,
+   "z": 9.050000190734863
+  },
+  {
+   "alliance": 0,
+   "horde": 17972,
+   "id": 95,
+   "map": 530,
+   "name": "Zangarmarsh - Quest - As the Crow Flies",
+   "x": -146.2899932861328,
+   "y": 5532.56005859375,
+   "z": 30.889999389648438
+  },
+  {
+   "alliance": 0,
+   "horde": 0,
+   "id": 96,
+   "map": 530,
+   "name": "Zangarmarsh - Quest - As the Crow Flies - End",
+   "x": -145.22999572753906,
+   "y": 5533.02978515625,
+   "z": 30.950000762939453
+  },
+  {
+   "alliance": 18167,
+   "horde": 0,
+   "id": 97,
+   "map": 530,
+   "name": "Quest - Elekk Path to Kessel",
+   "x": -3968.3701171875,
+   "y": -11929.150390625,
+   "z": -1.2200000286102295
+  },
+  {
+   "alliance": 0,
+   "horde": 0,
+   "id": 98,
+   "map": 530,
+   "name": "Quest - Elekk to Kessel Target",
+   "x": -2662.300048828125,
+   "y": -12144.599609375,
+   "z": 16.90999984741211
+  },
+  {
+   "alliance": 0,
+   "horde": 2224,
+   "id": 99,
+   "map": 530,
+   "name": "Thrallmar, Hellfire Peninsula",
+   "x": 228.5,
+   "y": 2633.570068359375,
+   "z": 87.66999816894531
+  },
+  {
+   "alliance": 541,
+   "horde": 0,
+   "id": 100,
+   "map": 530,
+   "name": "Honor Hold, Hellfire Peninsula",
+   "x": -673.4199829101562,
+   "y": 2717.27001953125,
+   "z": 94.18000030517578
+  },
+  {
+   "alliance": 3837,
+   "horde": 0,
+   "id": 101,
+   "map": 530,
+   "name": "Temple of Telhamat, Hellfire Peninsula",
+   "x": 199.16000366210938,
+   "y": 4241.56005859375,
+   "z": 121.75
+  },
+  {
+   "alliance": 0,
+   "horde": 2224,
+   "id": 102,
+   "map": 530,
+   "name": "Falcon Watch, Hellfire Peninsula",
+   "x": -587.4099731445312,
+   "y": 4101.009765625,
+   "z": 91.37000274658203
+  },
+  {
+   "alliance": 18345,
+   "horde": 18345,
+   "id": 103,
+   "map": 530,
+   "name": "Nagrand - PvP - Attack Run Start 1 ",
+   "x": -1810.1600341796875,
+   "y": 8032.10986328125,
+   "z": -25.950000762939453
+  },
+  {
+   "alliance": 13161,
+   "horde": 13161,
+   "id": 104,
+   "map": 530,
+   "name": "Nagrand - PvP - Attack Run End 1",
+   "x": -1824.1800537109375,
+   "y": 8049.2900390625,
+   "z": -26.850000381469727
+  },
+  {
+   "alliance": 18345,
+   "horde": 18345,
+   "id": 105,
+   "map": 530,
+   "name": "Nagrand - PvP - Attack Run Start 2",
+   "x": -1513.4000244140625,
+   "y": 8140.93017578125,
+   "z": -19.600000381469727
+  },
+  {
+   "alliance": 541,
+   "horde": 541,
+   "id": 106,
+   "map": 530,
+   "name": "Nagrand - PvP - Attack Run End 2",
+   "x": -1511.260009765625,
+   "y": 8149.7099609375,
+   "z": -18.579999923706055
+  },
+  {
+   "alliance": 18345,
+   "horde": 18345,
+   "id": 107,
+   "map": 530,
+   "name": "Nagrand - PvP - Attack Run Start 3",
+   "x": -1387.0699462890625,
+   "y": 7782.41015625,
+   "z": -11.470000267028809
+  },
+  {
+   "alliance": 541,
+   "horde": 541,
+   "id": 108,
+   "map": 530,
+   "name": "Nagrand - PvP - Attack Run End 3",
+   "x": -1376.719970703125,
+   "y": 7771.169921875,
+   "z": -10.079999923706055
+  },
+  {
+   "alliance": 18345,
+   "horde": 18345,
+   "id": 109,
+   "map": 530,
+   "name": "Nagrand - PvP - Attack Run Start 4",
+   "x": -1656.5999755859375,
+   "y": 7724.91015625,
+   "z": -15.59000015258789
+  },
+  {
+   "alliance": 541,
+   "horde": 541,
+   "id": 110,
+   "map": 530,
+   "name": "Nagrand - PvP - Attack Run End 4",
+   "x": -1658.9000244140625,
+   "y": 7724.7099609375,
+   "z": -15.789999961853027
+  },
+  {
+   "alliance": 18392,
+   "horde": 18392,
+   "id": 111,
+   "map": 530,
+   "name": "Eversong - Duskwither Teleport",
+   "x": 9335.830078125,
+   "y": -7883.06982421875,
+   "z": 74.91000366210938
+  },
+  {
+   "alliance": 17972,
+   "horde": 17972,
+   "id": 112,
+   "map": 530,
+   "name": "Eversong - Duskwither Teleport End",
+   "x": 9335.669921875,
+   "y": -7809.7099609375,
+   "z": 136.57000732421875
+  },
+  {
+   "alliance": 18543,
+   "horde": 18543,
+   "id": 113,
+   "map": 530,
+   "name": "Quest - Nethrandamus Start",
+   "x": -1544.3599853515625,
+   "y": 8792.0703125,
+   "z": 35.220001220703125
+  },
+  {
+   "alliance": 0,
+   "horde": 0,
+   "id": 114,
+   "map": 530,
+   "name": "Quest - Nethrandamus End Target",
+   "x": -1544.3599853515625,
+   "y": 8792.08984375,
+   "z": 35.220001220703125
+  },
+  {
+   "alliance": 18768,
+   "horde": 18768,
+   "id": 115,
+   "map": 560,
+   "name": "Quest - Caverns of Time OH - Begin",
+   "x": 2384.72998046875,
+   "y": 1169.3800048828125,
+   "z": 66.86000061035156
+  },
+  {
+   "alliance": 0,
+   "horde": 0,
+   "id": 116,
+   "map": 560,
+   "name": "Quest - Caverns of Time OH - End",
+   "x": 2014.6500244140625,
+   "y": 239.64999389648438,
+   "z": 68.5199966430664
+  },
+  {
+   "alliance": 3837,
+   "horde": 0,
+   "id": 117,
+   "map": 530,
+   "name": "Telredor, Zangarmarsh",
+   "x": 213.75,
+   "y": 6063.75,
+   "z": 148.30999755859375
+  },
+  {
+   "alliance": 2224,
+   "horde": 2224,
+   "id": 118,
+   "map": 530,
+   "name": "Zabra'jin, Zangarmarsh",
+   "x": 219.4499969482422,
+   "y": 7816.0,
+   "z": 22.719999313354492
+  },
+  {
+   "alliance": 3837,
+   "horde": 0,
+   "id": 119,
+   "map": 530,
+   "name": "Telaar, Nagrand",
+   "x": -2729.0,
+   "y": 7305.2998046875,
+   "z": 88.63999938964844
+  },
+  {
+   "alliance": 0,
+   "horde": 2224,
+   "id": 120,
+   "map": 530,
+   "name": "Garadar, Nagrand",
+   "x": -1261.0899658203125,
+   "y": 7133.39013671875,
+   "z": 57.34000015258789
+  },
+  {
+   "alliance": 541,
+   "horde": 0,
+   "id": 121,
+   "map": 530,
+   "name": "Allerian Stronghold, Terokkar Forest",
+   "x": -2987.239990234375,
+   "y": 3872.780029296875,
+   "z": 9.130000114440918
+  },
+  {
+   "alliance": 541,
+   "horde": 2224,
+   "id": 122,
+   "map": 530,
+   "name": "Area 52, Netherstorm",
+   "x": 3082.31005859375,
+   "y": 3596.110107421875,
+   "z": 144.02000427246094
+  },
+  {
+   "alliance": 0,
+   "horde": 2224,
+   "id": 123,
+   "map": 530,
+   "name": "Shadowmoon Village, Shadowmoon Valley",
+   "x": -3018.6201171875,
+   "y": 2557.090087890625,
+   "z": 79.08999633789062
+  },
+  {
+   "alliance": 541,
+   "horde": 0,
+   "id": 124,
+   "map": 530,
+   "name": "Wildhammer Stronghold, Shadowmoon Valley",
+   "x": -3982.070068359375,
+   "y": 2156.469970703125,
+   "z": 105.1500015258789
+  },
+  {
+   "alliance": 3837,
+   "horde": 0,
+   "id": 125,
+   "map": 530,
+   "name": "Sylvanaar, Blade's Edge Mountains",
+   "x": 2183.64990234375,
+   "y": 6794.4599609375,
+   "z": 183.27999877929688
+  },
+  {
+   "alliance": 0,
+   "horde": 2224,
+   "id": 126,
+   "map": 530,
+   "name": "Thunderlord Stronghold, Blade's Edge Mountains",
+   "x": 2446.3701171875,
+   "y": 6020.93017578125,
+   "z": 154.33999633789062
+  },
+  {
+   "alliance": 0,
+   "horde": 2224,
+   "id": 127,
+   "map": 530,
+   "name": "Stonebreaker Hold, Terokkar Forest",
+   "x": -2567.330078125,
+   "y": 4423.830078125,
+   "z": 39.33000183105469
+  },
+  {
+   "alliance": 541,
+   "horde": 2224,
+   "id": 128,
+   "map": 530,
+   "name": "Shattrath, Terokkar Forest",
+   "x": -1837.22998046875,
+   "y": 5301.89990234375,
+   "z": -12.430000305175781
+  },
+  {
+   "alliance": 541,
+   "horde": 0,
+   "id": 129,
+   "map": 530,
+   "name": "Hellfire Peninsula, The Dark Portal, Alliance",
+   "x": -327.3500061035156,
+   "y": 1020.489990234375,
+   "z": 54.25
+  },
+  {
+   "alliance": 0,
+   "horde": 2224,
+   "id": 130,
+   "map": 530,
+   "name": "Hellfire Peninsula, The Dark Portal, Horde",
+   "x": -178.08999633789062,
+   "y": 1026.719970703125,
+   "z": 54.189998626708984
+  },
+  {
+   "alliance": 18376,
+   "horde": 19275,
+   "id": 131,
+   "map": 530,
+   "name": "Quest - Horde Hellfire Start",
+   "x": -25.510000228881836,
+   "y": 2133.449951171875,
+   "z": 112.5999984741211
+  },
+  {
+   "alliance": 0,
+   "horde": 19275,
+   "id": 132,
+   "map": 530,
+   "name": "Quest - Horde Hellfire End",
+   "x": -25.600000381469727,
+   "y": 2133.39990234375,
+   "z": 112.58000183105469
+  },
+  {
+   "alliance": 19324,
+   "horde": 19324,
+   "id": 133,
+   "map": 530,
+   "name": "Quest - Hellfire Peninsula (Alliance Path) Start",
+   "x": -673.72998046875,
+   "y": 1855.2900390625,
+   "z": 68.97000122070312
+  },
+  {
+   "alliance": 19324,
+   "horde": 19324,
+   "id": 134,
+   "map": 530,
+   "name": "Quest - Hellfire Peninsula (Alliance) End",
+   "x": -673.75,
+   "y": 1855.3199462890625,
+   "z": 68.95999908447266
+  },
+  {
+   "alliance": 19324,
+   "horde": 19275,
+   "id": 135,
+   "map": 530,
+   "name": "Quest - Hellfire, Aerial Mission (Horde) Start",
+   "x": -27.649999618530273,
+   "y": 2126.570068359375,
+   "z": 111.8499984741211
+  },
+  {
+   "alliance": 19324,
+   "horde": 19275,
+   "id": 136,
+   "map": 530,
+   "name": "Quest - Hellfire, Aerial Mission (Horde) End",
+   "x": -27.520000457763672,
+   "y": 2126.5,
+   "z": 111.87999725341797
+  },
+  {
+   "alliance": 19324,
+   "horde": 19275,
+   "id": 137,
+   "map": 530,
+   "name": "Quest - Hellfire, Aerial Mission (Alliance) Start",
+   "x": 298.5,
+   "y": 1501.260009765625,
+   "z": -14.279999732971191
+  },
+  {
+   "alliance": 19324,
+   "horde": 19275,
+   "id": 138,
+   "map": 530,
+   "name": "Quest - Hellfire, Aerial Mission (Alliance) End",
+   "x": 298.5899963378906,
+   "y": 1501.1300048828125,
+   "z": -14.25
+  },
+  {
+   "alliance": 541,
+   "horde": 2224,
+   "id": 139,
+   "map": 530,
+   "name": "The Stormspire, Netherstorm",
+   "x": 4157.580078125,
+   "y": 2959.68994140625,
+   "z": 352.0799865722656
+  },
+  {
+   "alliance": 541,
+   "horde": 2224,
+   "id": 140,
+   "map": 530,
+   "name": "Altar of Sha'tar, Shadowmoon Valley",
+   "x": -3065.60009765625,
+   "y": 749.4199829101562,
+   "z": -10.100000381469727
+  },
+  {
+   "alliance": 0,
+   "horde": 2224,
+   "id": 141,
+   "map": 530,
+   "name": "Spinebreaker Ridge, Hellfire Peninsula",
+   "x": -1316.8399658203125,
+   "y": 2358.6201171875,
+   "z": 88.95999908447266
+  },
+  {
+   "alliance": 0,
+   "horde": 2224,
+   "id": 142,
+   "map": 530,
+   "name": "Hellfire Peninsula - Reaver's Fall",
+   "x": -29.15999984741211,
+   "y": 2125.719970703125,
+   "z": 111.47000122070312
+  },
+  {
+   "alliance": 16081,
+   "horde": 16081,
+   "id": 143,
+   "map": 1,
+   "name": "Quest - Caverns of Time (Intro Flight Path) (End)",
+   "x": -8360.73046875,
+   "y": -4327.72998046875,
+   "z": -208.3300018310547
+  },
+  {
+   "alliance": 18768,
+   "horde": 18768,
+   "id": 144,
+   "map": 1,
+   "name": "Quest - Caverns of Time (Intro Flight Path) (Start)",
+   "x": -8162.009765625,
+   "y": -4796.22998046875,
+   "z": 35.779998779296875
+  },
+  {
+   "alliance": 0,
+   "horde": 2224,
+   "id": 145,
+   "map": 530,
+   "name": "Quest - Netherstorm - Stealth Flight - Begin",
+   "x": 3079.010009765625,
+   "y": 3599.080078125,
+   "z": 144.07000732421875
+  },
+  {
+   "alliance": 0,
+   "horde": 0,
+   "id": 146,
+   "map": 530,
+   "name": "Quest - Netherstorm - Stealth Flight - End",
+   "x": 2235.340087890625,
+   "y": 2793.77001953125,
+   "z": 128.02999877929688
+  },
+  {
+   "alliance": 19324,
+   "horde": 0,
+   "id": 147,
+   "map": 530,
+   "name": "Hellfire Peninsula - Force Camp Beach Head",
+   "x": 509.1700134277344,
+   "y": 1988.68994140625,
+   "z": 109.62000274658203
+  },
+  {
+   "alliance": 19324,
+   "horde": 0,
+   "id": 148,
+   "map": 530,
+   "name": "Shatter Point, Hellfire Peninsula (Beach Assault)",
+   "x": 298.4599914550781,
+   "y": 1501.1800537109375,
+   "z": -14.279999732971191
+  },
+  {
+   "alliance": 541,
+   "horde": 0,
+   "id": 149,
+   "map": 530,
+   "name": "Shatter Point, Hellfire Peninsula",
+   "x": 276.20001220703125,
+   "y": 1486.9100341796875,
+   "z": -15.100000381469727
+  },
+  {
+   "alliance": 541,
+   "horde": 2224,
+   "id": 150,
+   "map": 530,
+   "name": "Cosmowrench, Netherstorm",
+   "x": 2974.949951171875,
+   "y": 1848.239990234375,
+   "z": 141.27999877929688
+  },
+  {
+   "alliance": 0,
+   "horde": 2224,
+   "id": 151,
+   "map": 530,
+   "name": "Swamprat Post, Zangarmarsh",
+   "x": 91.66999816894531,
+   "y": 5214.919921875,
+   "z": 23.100000381469727
+  },
+  {
+   "alliance": 20903,
+   "horde": 20903,
+   "id": 152,
+   "map": 530,
+   "name": "Quest - Netherstorm - Manaforge Ultris (Start)",
+   "x": 4262.39013671875,
+   "y": 2136.919921875,
+   "z": 139.44000244140625
+  },
+  {
+   "alliance": 20903,
+   "horde": 20903,
+   "id": 153,
+   "map": 530,
+   "name": "Quest - Netherstorm - Manaforge Ultris (End)",
+   "x": 4266.7001953125,
+   "y": 2133.3798828125,
+   "z": 138.82000732421875
+  },
+  {
+   "alliance": 20903,
+   "horde": 20903,
+   "id": 154,
+   "map": 0,
+   "name": "Quest - Netherstorm - Manaforge Ultris (Second Pass) Start",
+   "x": 20047.880859375,
+   "y": 5200.68994140625,
+   "z": 19742.779296875
+  },
+  {
+   "alliance": 0,
+   "horde": 0,
+   "id": 155,
+   "map": 530,
+   "name": "Quest - Netherstorm - Manaforge Ultris (Second Pass) End",
+   "x": 4267.14013671875,
+   "y": 2133.030029296875,
+   "z": 138.77000427246094
+  },
+  {
+   "alliance": 541,
+   "horde": 0,
+   "id": 156,
+   "map": 530,
+   "name": "Toshley's Station, Blade's Edge Mountains",
+   "x": 1857.3499755859375,
+   "y": 5531.8701171875,
+   "z": 277.010009765625
+  },
+  {
+   "alliance": 0,
+   "horde": 21396,
+   "id": 157,
+   "map": 530,
+   "name": "Quest - Blade's Edge - Vision Guide - Start",
+   "x": 2277.739990234375,
+   "y": 5983.35009765625,
+   "z": 142.60000610351562
+  },
+  {
+   "alliance": 0,
+   "horde": 0,
+   "id": 158,
+   "map": 530,
+   "name": "Quest - Blade's Edge - Vision Guide - End",
+   "x": 2278.56005859375,
+   "y": 5983.7099609375,
+   "z": 142.57000732421875
+  },
+  {
+   "alliance": 541,
+   "horde": 2224,
+   "id": 159,
+   "map": 530,
+   "name": "Sanctum of the Stars, Shadowmoon Valley",
+   "x": -4073.169921875,
+   "y": 1123.6099853515625,
+   "z": 42.470001220703125
+  },
+  {
+   "alliance": 541,
+   "horde": 2224,
+   "id": 160,
+   "map": 530,
+   "name": "Evergrove, Blade's Edge Mountains",
+   "x": 2976.010009765625,
+   "y": 5501.1298828125,
+   "z": 143.6699981689453
+  },
+  {
+   "alliance": 22360,
+   "horde": 22360,
+   "id": 161,
+   "map": 654135852,
+   "name": "Quest - Nether Dragon Ally - Start",
+   "x": 0.0,
+   "y": 0.0,
+   "z": 0.0
+  },
+  {
+   "alliance": 0,
+   "horde": 0,
+   "id": 162,
+   "map": 530,
+   "name": "Quest - Nether Dragon Ally - End",
+   "x": -4100.27001953125,
+   "y": 950.3800048828125,
+   "z": 22.110000610351562
+  },
+  {
+   "alliance": 0,
+   "horde": 2224,
+   "id": 163,
+   "map": 530,
+   "name": "Mok'Nathal Village, Blade's Edge Mountains",
+   "x": 2028.7900390625,
+   "y": 4705.27001953125,
+   "z": 150.50999450683594
+  },
+  {
+   "alliance": 3837,
+   "horde": 3837,
+   "id": 164,
+   "map": 530,
+   "name": "Orebor Harborage, Zangarmarsh",
+   "x": 966.6699829101562,
+   "y": 7399.16015625,
+   "z": 29.139999389648438
+  },
+  {
+   "alliance": 0,
+   "horde": 0,
+   "id": 165,
+   "map": 3,
+   "name": "Transport, Northrend 2",
+   "x": 0.0,
+   "y": 0.0,
+   "z": 0.0
+  },
+  {
+   "alliance": 3837,
+   "horde": 2224,
+   "id": 166,
+   "map": 1,
+   "name": "Emerald Sanctuary, Felwood",
+   "x": 3978.739990234375,
+   "y": -1316.4200439453125,
+   "z": 250.11000061035156
+  },
+  {
+   "alliance": 3837,
+   "horde": 0,
+   "id": 167,
+   "map": 1,
+   "name": "Forest Song, Ashenvale",
+   "x": 3000.25,
+   "y": -3202.409912109375,
+   "z": 189.77000427246094
+  },
+  {
+   "alliance": 3837,
+   "horde": 0,
+   "id": 168,
+   "map": 0,
+   "name": "Filming",
+   "x": -9441.1796875,
+   "y": 65.05000305175781,
+   "z": 56.18000030517578
+  },
+  {
+   "alliance": 23372,
+   "horde": 23372,
+   "id": 169,
+   "map": 530,
+   "name": "Quest - Netherwing Ledge - Mine Cart Ride - South - Start",
+   "x": -5224.52978515625,
+   "y": 631.8499755859375,
+   "z": 48.36000061035156
+  },
+  {
+   "alliance": 23289,
+   "horde": 23289,
+   "id": 170,
+   "map": 530,
+   "name": "Quest - Netherwing Ledge - Mine Cart Ride - South - End",
+   "x": -5185.7099609375,
+   "y": 172.9499969482422,
+   "z": -11.569999694824219
+  },
+  {
+   "alliance": 23422,
+   "horde": 23422,
+   "id": 171,
+   "map": 530,
+   "name": "Skettis",
+   "x": -3364.679931640625,
+   "y": 3650.179931640625,
+   "z": 284.7799987792969
+  },
+  {
+   "alliance": 23422,
+   "horde": 23422,
+   "id": 172,
+   "map": 530,
+   "name": "Ogri'La",
+   "x": 2531.10009765625,
+   "y": 7322.08984375,
+   "z": 373.6400146484375
+  },
+  {
+   "alliance": 23468,
+   "horde": 23468,
+   "id": 173,
+   "map": 530,
+   "name": "Quest - Yarzill Flight Start",
+   "x": -5141.35986328125,
+   "y": 620.1099853515625,
+   "z": 82.69999694824219
+  },
+  {
+   "alliance": 0,
+   "horde": 0,
+   "id": 174,
+   "map": 530,
+   "name": "Quest - Yarzill Flight Start End",
+   "x": -1636.0899658203125,
+   "y": 5275.8701171875,
+   "z": -41.099998474121094
+  },
+  {
+   "alliance": 0,
+   "horde": 0,
+   "id": 175,
+   "map": 571,
+   "name": "Transport, Howling Fjord",
+   "x": 784.8900146484375,
+   "y": -5066.18017578125,
+   "z": -7.880000114440918
+  },
+  {
+   "alliance": 23518,
+   "horde": 23518,
+   "id": 176,
+   "map": 571,
+   "name": "Quest - Howling Fjord Tauren Canoe (Start)",
+   "x": 245.36000061035156,
+   "y": -3309.199951171875,
+   "z": 0.9100000262260437
+  },
+  {
+   "alliance": 23518,
+   "horde": 23518,
+   "id": 177,
+   "map": 571,
+   "name": "Quest - Howling Fjord Tauren Canoe (End)",
+   "x": -147.47000122070312,
+   "y": -3587.360107421875,
+   "z": 0.3400000035762787
+  },
+  {
+   "alliance": 0,
+   "horde": 0,
+   "id": 178,
+   "map": 3,
+   "name": "Transport, Borean Tundra",
+   "x": 0.0,
+   "y": 0.0,
+   "z": 0.0
+  },
+  {
+   "alliance": 541,
+   "horde": 2224,
+   "id": 179,
+   "map": 1,
+   "name": "Mudsprocket, Dustwallow Marsh",
+   "x": -4566.22998046875,
+   "y": -3226.050048828125,
+   "z": 34.70000076293945
+  },
+  {
+   "alliance": 541,
+   "horde": 0,
+   "id": 180,
+   "map": 1,
+   "name": "Quest - Dustwallow - Alcaz Survey Start",
+   "x": -3822.659912109375,
+   "y": -4511.330078125,
+   "z": 10.84000015258789
+  },
+  {
+   "alliance": 541,
+   "horde": 0,
+   "id": 181,
+   "map": 1,
+   "name": "Quest - Dustwallow - Alcaz Survey End",
+   "x": -3822.7099609375,
+   "y": -4509.64990234375,
+   "z": 10.979999542236328
+  },
+  {
+   "alliance": 0,
+   "horde": 0,
+   "id": 182,
+   "map": 571,
+   "name": "Quest - Howling Fjord - Break the Blockade Zeppelin",
+   "x": 1415.8900146484375,
+   "y": -3082.489990234375,
+   "z": 121.91000366210938
+  },
+  {
+   "alliance": 541,
+   "horde": 0,
+   "id": 183,
+   "map": 571,
+   "name": "Valgarde Port, Howling Fjord",
+   "x": 567.4099731445312,
+   "y": -5010.97021484375,
+   "z": 11.5
+  },
+  {
+   "alliance": 541,
+   "horde": 0,
+   "id": 184,
+   "map": 571,
+   "name": "Fort Wildervar, Howling Fjord",
+   "x": 2468.77001953125,
+   "y": -5029.81982421875,
+   "z": 283.489990234375
+  },
+  {
+   "alliance": 541,
+   "horde": 0,
+   "id": 185,
+   "map": 571,
+   "name": "Westguard Keep, Howling Fjord",
+   "x": 1342.8399658203125,
+   "y": -3287.89990234375,
+   "z": 174.4499969482422
+  },
+  {
+   "alliance": 0,
+   "horde": 3574,
+   "id": 186,
+   "map": 571,
+   "name": "Quest - Howling Fjord - Flight to the Windrunner - Start",
+   "x": 1911.8199462890625,
+   "y": -6179.06982421875,
+   "z": 24.610000610351562
+  },
+  {
+   "alliance": 0,
+   "horde": 3574,
+   "id": 187,
+   "map": 571,
+   "name": "Quest - Howling Fjord - Flight to the Windrunner - End",
+   "x": 1652.8299560546875,
+   "y": -6512.10986328125,
+   "z": 18.479999542236328
+  },
+  {
+   "alliance": 0,
+   "horde": 3574,
+   "id": 188,
+   "map": 571,
+   "name": "Quest - Howling Fjord - Test at Sea - Start",
+   "x": 1912.780029296875,
+   "y": -6178.81005859375,
+   "z": 24.639999389648438
+  },
+  {
+   "alliance": 0,
+   "horde": 0,
+   "id": 189,
+   "map": 571,
+   "name": "Quest - Howling Fjord - Test at Sea - End",
+   "x": 1913.9000244140625,
+   "y": -6177.8701171875,
+   "z": 24.6200008392334
+  },
+  {
+   "alliance": 0,
+   "horde": 3574,
+   "id": 190,
+   "map": 571,
+   "name": "New Agamand, Howling Fjord",
+   "x": 401.1199951171875,
+   "y": -4544.2998046875,
+   "z": 244.5399932861328
+  },
+  {
+   "alliance": 0,
+   "horde": 3574,
+   "id": 191,
+   "map": 571,
+   "name": "Vengeance Landing, Howling Fjord",
+   "x": 1918.5999755859375,
+   "y": -6175.89013671875,
+   "z": 24.40999984741211
+  },
+  {
+   "alliance": 0,
+   "horde": 2224,
+   "id": 192,
+   "map": 571,
+   "name": "Camp Winterhoof, Howling Fjord",
+   "x": 2652.889892578125,
+   "y": -4392.7099609375,
+   "z": 283.32000732421875
+  },
+  {
+   "alliance": 541,
+   "horde": 0,
+   "id": 193,
+   "map": 571,
+   "name": "Quest - Howling Fjord - Mission: Plague This! - End",
+   "x": 1341.43994140625,
+   "y": -3288.570068359375,
+   "z": 174.4499969482422
+  },
+  {
+   "alliance": 541,
+   "horde": 0,
+   "id": 194,
+   "map": 571,
+   "name": "Quest - Howling Fjord - Mission: Plague This! - Start",
+   "x": 1341.0799560546875,
+   "y": -3288.3701171875,
+   "z": 174.4499969482422
+  },
+  {
+   "alliance": 541,
+   "horde": 0,
+   "id": 195,
+   "map": 0,
+   "name": "Rebel Camp, Stranglethorn Vale",
+   "x": -11343.9697265625,
+   "y": -216.8300018310547,
+   "z": 75.22000122070312
+  },
+  {
+   "alliance": 541,
+   "horde": 12374,
+   "id": 196,
+   "map": 451,
+   "name": "Test - SP",
+   "x": 9283.099609375,
+   "y": -9749.8095703125,
+   "z": 62.15999984741211
+  },
+  {
+   "alliance": 0,
+   "horde": 0,
+   "id": 197,
+   "map": 0,
+   "name": "Test SP2",
+   "x": -9148.6201171875,
+   "y": 243.0399932861328,
+   "z": 87.38999938964844
+  },
+  {
+   "alliance": 541,
+   "horde": 24489,
+   "id": 198,
+   "map": 451,
+   "name": "Test SP1",
+   "x": 9405.830078125,
+   "y": -9882.6904296875,
+   "z": 0.0
+  },
+  {
+   "alliance": 24716,
+   "horde": 24716,
+   "id": 199,
+   "map": 571,
+   "name": "Quest - Howling Fjord - McGoyver Start",
+   "x": 638.3400268554688,
+   "y": -5074.56982421875,
+   "z": -0.23000000417232513
+  },
+  {
+   "alliance": 24716,
+   "horde": 24716,
+   "id": 200,
+   "map": 571,
+   "name": "Quest - Howling Fjord - McGoyver End",
+   "x": 483.9200134277344,
+   "y": -5913.10009765625,
+   "z": 308.6099853515625
+  },
+  {
+   "alliance": 23468,
+   "horde": 23468,
+   "id": 201,
+   "map": 451,
+   "name": "Development Land - Kyle Radue Start",
+   "x": 15992.4404296875,
+   "y": -16371.9404296875,
+   "z": 76.7300033569336
+  },
+  {
+   "alliance": 0,
+   "horde": 0,
+   "id": 202,
+   "map": 451,
+   "name": "Development Land - Kyle Radue End",
+   "x": 15991.6796875,
+   "y": -16371.9501953125,
+   "z": 76.69999694824219
+  },
+  {
+   "alliance": 27127,
+   "horde": 0,
+   "id": 203,
+   "map": 571,
+   "name": "Quest - Stars' Rest -> Wintergarde",
+   "x": 3505.300048828125,
+   "y": 1990.8299560546875,
+   "z": 65.0999984741211
+  },
+  {
+   "alliance": 0,
+   "horde": 27179,
+   "id": 204,
+   "map": 12,
+   "name": "Quest - New Agamand -> Venomspite",
+   "x": 0.0,
+   "y": 0.0,
+   "z": 0.0
+  },
+  {
+   "alliance": 541,
+   "horde": 3574,
+   "id": 205,
+   "map": 530,
+   "name": "Zul'Aman, Ghostlands",
+   "x": 6789.7900390625,
+   "y": -7747.580078125,
+   "z": 126.51000213623047
+  },
+  {
+   "alliance": 0,
+   "horde": 0,
+   "id": 206,
+   "map": 1,
+   "name": "Transport, Feathermoon (NE Ship)",
+   "x": -4348.009765625,
+   "y": 2427.2900390625,
+   "z": 6.639999866485596
+  },
+  {
+   "alliance": 0,
+   "horde": 0,
+   "id": 207,
+   "map": 571,
+   "name": "Quest - Howling Fjord - Sister Mercy (Start)",
+   "x": 15.319999694824219,
+   "y": -4043.7900390625,
+   "z": 0.10000000149011612
+  },
+  {
+   "alliance": 0,
+   "horde": 0,
+   "id": 208,
+   "map": 571,
+   "name": "Quest - Howling Fjord - Sister Mercy (End)",
+   "x": 15.319999694824219,
+   "y": -4043.7099609375,
+   "z": 0.10000000149011612
+  },
+  {
+   "alliance": 0,
+   "horde": 25044,
+   "id": 209,
+   "map": 530,
+   "name": "Quest - Sunwell Daily - Dead Scar Bombing - Start",
+   "x": 13008.3798828125,
+   "y": -6911.81005859375,
+   "z": 9.579999923706055
+  },
+  {
+   "alliance": 0,
+   "horde": 25044,
+   "id": 210,
+   "map": 530,
+   "name": "Quest - Sunwell Daily - Dead Scar Bombing - End",
+   "x": 13008.509765625,
+   "y": -6912.2001953125,
+   "z": 9.579999923706055
+  },
+  {
+   "alliance": 0,
+   "horde": 25044,
+   "id": 211,
+   "map": 530,
+   "name": "Quest - Sunwell Daily - Ship Bombing - Start",
+   "x": 13007.5,
+   "y": -6911.81005859375,
+   "z": 9.579999923706055
+  },
+  {
+   "alliance": 0,
+   "horde": 25044,
+   "id": 212,
+   "map": 530,
+   "name": "Quest - Sunwell Daily - Ship Bombing - End",
+   "x": 13188.0400390625,
+   "y": -7047.0400390625,
+   "z": 4.789999961853027
+  },
+  {
+   "alliance": 28361,
+   "horde": 19917,
+   "id": 213,
+   "map": 530,
+   "name": "Shattered Sun Staging Area",
+   "x": 13012.7001953125,
+   "y": -6908.3701171875,
+   "z": 9.579999923706055
+  },
+  {
+   "alliance": 0,
+   "horde": 0,
+   "id": 214,
+   "map": 0,
+   "name": "Quest - Howling Fjord - Naglfar (Start)",
+   "x": 0.0,
+   "y": 0.0,
+   "z": 0.0
+  },
+  {
+   "alliance": 0,
+   "horde": 0,
+   "id": 215,
+   "map": 0,
+   "name": "Quest - Howling Fjord - Naglfar (Nodes)",
+   "x": 0.0,
+   "y": 0.0,
+   "z": 0.0
+  },
+  {
+   "alliance": 0,
+   "horde": 0,
+   "id": 216,
+   "map": 0,
+   "name": "",
+   "x": 0.0,
+   "y": 0.0,
+   "z": 0.0
+  },
+  {
+   "alliance": 0,
+   "horde": 0,
+   "id": 217,
+   "map": 0,
+   "name": "",
+   "x": 0.0,
+   "y": 0.0,
+   "z": 0.0
+  },
+  {
+   "alliance": 0,
+   "horde": 0,
+   "id": 218,
+   "map": 571,
+   "name": "Transport, Howling Fjord (Gondola, Top)",
+   "x": 690.989990234375,
+   "y": -3819.60009765625,
+   "z": 249.05999755859375
+  },
+  {
+   "alliance": 0,
+   "horde": 0,
+   "id": 219,
+   "map": 571,
+   "name": "Transport, Howling Fjord (Gondola, Bottom)",
+   "x": 607.9600219726562,
+   "y": -2906.169921875,
+   "z": 38.540000915527344
+  },
+  {
+   "alliance": 0,
+   "horde": 5403,
+   "id": 220,
+   "map": 530,
+   "name": "",
+   "x": 3051.760009765625,
+   "y": 3690.409912109375,
+   "z": 142.6300048828125
+  },
+  {
+   "alliance": 0,
+   "horde": 26088,
+   "id": 221,
+   "map": 571,
+   "name": "Amber Ledge, Borean (To Beryl)",
+   "x": 3465.659912109375,
+   "y": 5901.759765625,
+   "z": 144.1699981689453
+  },
+  {
+   "alliance": 0,
+   "horde": 25695,
+   "id": 222,
+   "map": 571,
+   "name": "Beryl Point, Borean",
+   "x": 3213.739990234375,
+   "y": 6084.72021484375,
+   "z": 138.0
+  },
+  {
+   "alliance": 0,
+   "horde": 0,
+   "id": 223,
+   "map": 0,
+   "name": "Quest - Naglevar",
+   "x": 0.0,
+   "y": 0.0,
+   "z": 0.0
+  },
+  {
+   "alliance": 0,
+   "horde": 0,
+   "id": 224,
+   "map": 0,
+   "name": "Borean Tundra, Naglevar",
+   "x": 0.0,
+   "y": 0.0,
+   "z": 0.0
+  },
+  {
+   "alliance": 0,
+   "horde": 25695,
+   "id": 225,
+   "map": 571,
+   "name": "Amber Ledge, Borean (to Coldarra)",
+   "x": 3574.06005859375,
+   "y": 5971.0400390625,
+   "z": 136.11000061035156
+  },
+  {
+   "alliance": 26899,
+   "horde": 26899,
+   "id": 226,
+   "map": 571,
+   "name": "Transitus Shield, Coldarra",
+   "x": 3575.43994140625,
+   "y": 6661.64013671875,
+   "z": 195.19000244140625
+  },
+  {
+   "alliance": 25968,
+   "horde": 28901,
+   "id": 227,
+   "map": 451,
+   "name": "Transport, PattyMacDevTest",
+   "x": 16625.630859375,
+   "y": 16862.900390625,
+   "z": 46.97999954223633
+  },
+  {
+   "alliance": 0,
+   "horde": 0,
+   "id": 228,
+   "map": 0,
+   "name": "Development Land - Pat Test Start",
+   "x": 0.0,
+   "y": 0.0,
+   "z": 0.0
+  },
+  {
+   "alliance": 0,
+   "horde": 0,
+   "id": 229,
+   "map": 0,
+   "name": "Development Land - Pat Test End",
+   "x": 0.0,
+   "y": 0.0,
+   "z": 0.0
+  },
+  {
+   "alliance": 0,
+   "horde": 0,
+   "id": 230,
+   "map": 571,
+   "name": "Transport, Tuskarr 01",
+   "x": 2690.260009765625,
+   "y": 889.8099975585938,
+   "z": 4.610000133514404
+  },
+  {
+   "alliance": 0,
+   "horde": 0,
+   "id": 231,
+   "map": 571,
+   "name": "Transport, Tuskarr 02",
+   "x": 2690.330078125,
+   "y": 897.6300048828125,
+   "z": 4.619999885559082
+  },
+  {
+   "alliance": 0,
+   "horde": 26128,
+   "id": 232,
+   "map": 571,
+   "name": "Borean Tundra - Warsong Hold Wolf Start",
+   "x": 2774.68994140625,
+   "y": 6258.14013671875,
+   "z": 83.68000030517578
+  },
+  {
+   "alliance": 0,
+   "horde": 0,
+   "id": 233,
+   "map": 571,
+   "name": "Borean Tundra - Warsong Hold Wolf End",
+   "x": 3443.52001953125,
+   "y": 4103.9501953125,
+   "z": 16.010000228881836
+  },
+  {
+   "alliance": 0,
+   "horde": 26263,
+   "id": 234,
+   "map": 571,
+   "name": "Coldarra Ledge, Coldarra",
+   "x": 4130.6201171875,
+   "y": 7372.31005859375,
+   "z": 534.1099853515625
+  },
+  {
+   "alliance": 0,
+   "horde": 25695,
+   "id": 235,
+   "map": 571,
+   "name": "Transitus Shield, Coldarra (NOT USED)",
+   "x": 3575.56005859375,
+   "y": 6651.83984375,
+   "z": 195.2100067138672
+  },
+  {
+   "alliance": 0,
+   "horde": 26263,
+   "id": 236,
+   "map": 571,
+   "name": "Coldarra, Keristrasza to Malygos",
+   "x": 4026.949951171875,
+   "y": 7085.5400390625,
+   "z": 165.5399932861328
+  },
+  {
+   "alliance": 0,
+   "horde": 0,
+   "id": 237,
+   "map": 571,
+   "name": "Coldarra, Keristrasza Landing",
+   "x": 3929.39990234375,
+   "y": 6590.740234375,
+   "z": 170.33999633789062
+  },
+  {
+   "alliance": 0,
+   "horde": 0,
+   "id": 238,
+   "map": 0,
+   "name": "",
+   "x": 0.0,
+   "y": 0.0,
+   "z": 0.0
+  },
+  {
+   "alliance": 0,
+   "horde": 26404,
+   "id": 239,
+   "map": 571,
+   "name": "Borean Tundra - Quest - Dusk Start",
+   "x": 3109.0,
+   "y": 3819.5400390625,
+   "z": 23.239999771118164
+  },
+  {
+   "alliance": 0,
+   "horde": 11195,
+   "id": 240,
+   "map": 571,
+   "name": "Borean Tundra - Quest - Dusk - End",
+   "x": 3614.300048828125,
+   "y": 3670.1201171875,
+   "z": 35.779998779296875
+  },
+  {
+   "alliance": 0,
+   "horde": 0,
+   "id": 241,
+   "map": 0,
+   "name": "Transport, Valiance Keep",
+   "x": 0.0,
+   "y": 0.0,
+   "z": 0.0
+  },
+  {
+   "alliance": 0,
+   "horde": 21396,
+   "id": 242,
+   "map": 571,
+   "name": "Quest - Dragonblight - Spiritual Vision - Begin",
+   "x": 2739.72998046875,
+   "y": 882.3699951171875,
+   "z": 6.639999866485596
+  },
+  {
+   "alliance": 0,
+   "horde": 0,
+   "id": 243,
+   "map": 571,
+   "name": "Quest - Dragonblight - Spiritual Vision - End",
+   "x": 2738.469970703125,
+   "y": 882.4600219726562,
+   "z": 6.5
+  },
+  {
+   "alliance": 541,
+   "horde": 0,
+   "id": 244,
+   "map": 571,
+   "name": "Wintergarde Keep, Dragonblight",
+   "x": 3712.429931640625,
+   "y": -694.8599853515625,
+   "z": 215.57000732421875
+  },
+  {
+   "alliance": 541,
+   "horde": 0,
+   "id": 245,
+   "map": 571,
+   "name": "Valiance Keep, Borean Tundra",
+   "x": 2269.5400390625,
+   "y": 5173.68994140625,
+   "z": 11.100000381469727
+  },
+  {
+   "alliance": 28360,
+   "horde": 0,
+   "id": 246,
+   "map": 571,
+   "name": "Fizzcrank Airstrip, Borean Tundra",
+   "x": 4127.22998046875,
+   "y": 5313.06982421875,
+   "z": 28.670000076293945
+  },
+  {
+   "alliance": 3837,
+   "horde": 0,
+   "id": 247,
+   "map": 571,
+   "name": "Stars' Rest, Dragonblight",
+   "x": 3504.1298828125,
+   "y": 1992.030029296875,
+   "z": 64.95999908447266
+  },
+  {
+   "alliance": 0,
+   "horde": 3574,
+   "id": 248,
+   "map": 571,
+   "name": "Apothecary Camp, Howling Fjord",
+   "x": 2108.110107421875,
+   "y": -2970.6201171875,
+   "z": 148.5800018310547
+  },
+  {
+   "alliance": 0,
+   "horde": 2224,
+   "id": 249,
+   "map": 571,
+   "name": "Camp Oneqwah, Grizzly Hills",
+   "x": 3876.340087890625,
+   "y": -4520.080078125,
+   "z": 217.32000732421875
+  },
+  {
+   "alliance": 0,
+   "horde": 2224,
+   "id": 250,
+   "map": 571,
+   "name": "Conquest Hold, Grizzly Hills",
+   "x": 3258.89990234375,
+   "y": -2263.090087890625,
+   "z": 114.37000274658203
+  },
+  {
+   "alliance": 541,
+   "horde": 0,
+   "id": 251,
+   "map": 571,
+   "name": "Fordragon Hold, Dragonblight",
+   "x": 4612.2099609375,
+   "y": 1406.5999755859375,
+   "z": 195.05999755859375
+  },
+  {
+   "alliance": 26899,
+   "horde": 26899,
+   "id": 252,
+   "map": 571,
+   "name": "Wyrmrest Temple, Dragonblight",
+   "x": 3653.2099609375,
+   "y": 247.5800018310547,
+   "z": 52.2599983215332
+  },
+  {
+   "alliance": 541,
+   "horde": 0,
+   "id": 253,
+   "map": 571,
+   "name": "Amberpine Lodge, Grizzly Hills",
+   "x": 3446.35009765625,
+   "y": -2754.10009765625,
+   "z": 199.39999389648438
+  },
+  {
+   "alliance": 0,
+   "horde": 3574,
+   "id": 254,
+   "map": 571,
+   "name": "Venomspite, Dragonblight",
+   "x": 3242.9599609375,
+   "y": -666.1599731445312,
+   "z": 166.7899932861328
+  },
+  {
+   "alliance": 541,
+   "horde": 0,
+   "id": 255,
+   "map": 571,
+   "name": "Westfall Brigade, Grizzly Hills",
+   "x": 4584.97998046875,
+   "y": -4254.68994140625,
+   "z": 182.2100067138672
+  },
+  {
+   "alliance": 0,
+   "horde": 2224,
+   "id": 256,
+   "map": 571,
+   "name": "Agmar's Hammer, Dragonblight",
+   "x": 3865.8701171875,
+   "y": 1525.6300048828125,
+   "z": 90.04000091552734
+  },
+  {
+   "alliance": 0,
+   "horde": 2224,
+   "id": 257,
+   "map": 571,
+   "name": "Warsong Hold, Borean Tundra",
+   "x": 2920.2900390625,
+   "y": 6242.85009765625,
+   "z": 208.8000030517578
+  },
+  {
+   "alliance": 0,
+   "horde": 2224,
+   "id": 258,
+   "map": 571,
+   "name": "Taunka'le Village, Borean Tundra",
+   "x": 3449.510009765625,
+   "y": 4089.52001953125,
+   "z": 16.639999389648438
+  },
+  {
+   "alliance": 0,
+   "horde": 2224,
+   "id": 259,
+   "map": 571,
+   "name": "Bor'gorok Outpost, Borean Tundra",
+   "x": 4474.7900390625,
+   "y": 5712.1298828125,
+   "z": 81.27999877929688
+  },
+  {
+   "alliance": 0,
+   "horde": 2224,
+   "id": 260,
+   "map": 571,
+   "name": "Kor'koron Vanguard, Dragonblight",
+   "x": 4946.669921875,
+   "y": 1165.93994140625,
+   "z": 239.57000732421875
+  },
+  {
+   "alliance": 27127,
+   "horde": 0,
+   "id": 261,
+   "map": 571,
+   "name": "Quest - Stars' Rest to Wintergarde End",
+   "x": 3711.31005859375,
+   "y": -698.1799926757812,
+   "z": 215.57000732421875
+  },
+  {
+   "alliance": 0,
+   "horde": 29878,
+   "id": 262,
+   "map": 571,
+   "name": "Grizzly Hills, Alliance Log Ride Start 01",
+   "x": 4267.39013671875,
+   "y": -3050.929931640625,
+   "z": 318.1600036621094
+  },
+  {
+   "alliance": 0,
+   "horde": 0,
+   "id": 263,
+   "map": 571,
+   "name": "Grizzly Hills, Alliance Log Ride End 01",
+   "x": 2663.669921875,
+   "y": -2181.449951171875,
+   "z": 3.430000066757202
+  },
+  {
+   "alliance": 0,
+   "horde": 0,
+   "id": 264,
+   "map": 0,
+   "name": "Transport, Auberdine (NEW)",
+   "x": 0.0,
+   "y": 0.0,
+   "z": 0.0
+  },
+  {
+   "alliance": 0,
+   "horde": 0,
+   "id": 265,
+   "map": 0,
+   "name": "Transport, Theramore (NEW)",
+   "x": 0.0,
+   "y": 0.0,
+   "z": 0.0
+  },
+  {
+   "alliance": 0,
+   "horde": 0,
+   "id": 266,
+   "map": 0,
+   "name": "Transport, Menethil (NEW)",
+   "x": 0.0,
+   "y": 0.0,
+   "z": 0.0
+  },
+  {
+   "alliance": 0,
+   "horde": 29878,
+   "id": 267,
+   "map": 571,
+   "name": "Grizzly Hills, Alliance Log Ride Start",
+   "x": 4272.08984375,
+   "y": -3248.260009765625,
+   "z": 324.92999267578125
+  },
+  {
+   "alliance": 0,
+   "horde": 0,
+   "id": 268,
+   "map": 571,
+   "name": "Grizzly Hills, Alliance Log Ride End",
+   "x": 2664.219970703125,
+   "y": -2344.6298828125,
+   "z": 21.700000762939453
+  },
+  {
+   "alliance": 27491,
+   "horde": 0,
+   "id": 269,
+   "map": 571,
+   "name": "Quest - Westguard Keep to Wintergarde Keep Begin",
+   "x": 1341.6700439453125,
+   "y": -3288.739990234375,
+   "z": 174.4499969482422
+  },
+  {
+   "alliance": 27491,
+   "horde": 0,
+   "id": 270,
+   "map": 571,
+   "name": "Quest - Westguard Keep to Wintergarde Keep End",
+   "x": 3712.22998046875,
+   "y": -693.8499755859375,
+   "z": 215.4199981689453
+  },
+  {
+   "alliance": 0,
+   "horde": 29879,
+   "id": 271,
+   "map": 571,
+   "name": "Grizzly Hills, Horde Log Ride Start",
+   "x": 4311.25,
+   "y": -2956.610107421875,
+   "z": 317.30999755859375
+  },
+  {
+   "alliance": 0,
+   "horde": 0,
+   "id": 272,
+   "map": 571,
+   "name": "Grizzly Hills, Horde Log Ride End",
+   "x": 2883.75,
+   "y": -1673.7099609375,
+   "z": 6.480000019073486
+  },
+  {
+   "alliance": 26899,
+   "horde": 26899,
+   "id": 273,
+   "map": 571,
+   "name": "Wyrmrest Temple - bottom to top, Dragonblight - Begin",
+   "x": 3547.219970703125,
+   "y": 381.489990234375,
+   "z": 52.2599983215332
+  },
+  {
+   "alliance": 0,
+   "horde": 0,
+   "id": 274,
+   "map": 571,
+   "name": "Wyrmrest Temple - bottom to top, Dragonblight - End",
+   "x": 3590.3798828125,
+   "y": 277.5400085449219,
+   "z": 340.8500061035156
+  },
+  {
+   "alliance": 26899,
+   "horde": 26899,
+   "id": 275,
+   "map": 571,
+   "name": "Wyrmrest Temple - top to bottom, Dragonblight - Begin",
+   "x": 3587.64990234375,
+   "y": 279.2099914550781,
+   "z": 340.8299865722656
+  },
+  {
+   "alliance": 0,
+   "horde": 0,
+   "id": 276,
+   "map": 571,
+   "name": "Wyrmrest Temple - top to bottom, Dragonblight - End",
+   "x": 3511.47998046875,
+   "y": 373.92999267578125,
+   "z": 52.2599983215332
+  },
+  {
+   "alliance": 26899,
+   "horde": 26899,
+   "id": 277,
+   "map": 571,
+   "name": "Wyrmrest Temple - top to middle, Dragonblight - Begin",
+   "x": 3587.550048828125,
+   "y": 279.1400146484375,
+   "z": 340.8299865722656
+  },
+  {
+   "alliance": 0,
+   "horde": 0,
+   "id": 278,
+   "map": 571,
+   "name": "Wyrmrest Temple - top to middle, Dragonblight - End",
+   "x": 3543.239990234375,
+   "y": 307.0400085449219,
+   "z": 116.7300033569336
+  },
+  {
+   "alliance": 0,
+   "horde": 0,
+   "id": 279,
+   "map": 571,
+   "name": "Wyrmrest Temple - middle to top, Dragonblight - End",
+   "x": 3587.0400390625,
+   "y": 277.1400146484375,
+   "z": 340.82000732421875
+  },
+  {
+   "alliance": 26899,
+   "horde": 26899,
+   "id": 280,
+   "map": 571,
+   "name": "Wyrmrest Temple - middle to top, Dragonblight - Begin",
+   "x": 3545.6201171875,
+   "y": 273.6000061035156,
+   "z": 116.83999633789062
+  },
+  {
+   "alliance": 0,
+   "horde": 0,
+   "id": 281,
+   "map": 571,
+   "name": "Wyrmrest Temple - middle to bottom, Dragonblight - End",
+   "x": 3512.219970703125,
+   "y": 373.57000732421875,
+   "z": 52.2599983215332
+  },
+  {
+   "alliance": 26899,
+   "horde": 26899,
+   "id": 282,
+   "map": 571,
+   "name": "Wyrmrest Temple - middle to bottom, Dragonblight - Begin",
+   "x": 3545.610107421875,
+   "y": 273.6000061035156,
+   "z": 116.83999633789062
+  },
+  {
+   "alliance": 0,
+   "horde": 0,
+   "id": 283,
+   "map": 571,
+   "name": "Wyrmrest Temple - bottom to middle, Dragonblight - End",
+   "x": 3543.3701171875,
+   "y": 307.05999755859375,
+   "z": 116.7300033569336
+  },
+  {
+   "alliance": 26899,
+   "horde": 26899,
+   "id": 284,
+   "map": 571,
+   "name": "Wyrmrest Temple - bottom to middle, Dragonblight - Begin",
+   "x": 3548.14990234375,
+   "y": 381.010009765625,
+   "z": 52.2599983215332
+  },
+  {
+   "alliance": 27764,
+   "horde": 0,
+   "id": 285,
+   "map": 0,
+   "name": "Quest - Wintergarde -> Stars' Rest (Start)",
+   "x": 0.0,
+   "y": 0.0,
+   "z": 0.0
+  },
+  {
+   "alliance": 0,
+   "horde": 0,
+   "id": 286,
+   "map": 571,
+   "name": "Quest - Wintergarde -> Stars' Rest (End)",
+   "x": 3503.760009765625,
+   "y": 1990.1099853515625,
+   "z": 65.12000274658203
+  },
+  {
+   "alliance": 27491,
+   "horde": 0,
+   "id": 287,
+   "map": 0,
+   "name": "Quest - Valgarde -> Westguard Keep Start",
+   "x": 0.0,
+   "y": 0.0,
+   "z": 0.0
+  },
+  {
+   "alliance": 0,
+   "horde": 0,
+   "id": 288,
+   "map": 571,
+   "name": "Quest - Valgarde -> Westguard Keep End",
+   "x": 1341.22998046875,
+   "y": -3288.909912109375,
+   "z": 174.4600067138672
+  },
+  {
+   "alliance": 26899,
+   "horde": 26899,
+   "id": 289,
+   "map": 571,
+   "name": "Amber Ledge, Borean Tundra",
+   "x": 3587.840087890625,
+   "y": 5973.2998046875,
+   "z": 136.22000122070312
+  },
+  {
+   "alliance": 0,
+   "horde": 28172,
+   "id": 290,
+   "map": 571,
+   "name": "Argent Stand, Zul'Drak",
+   "x": 5450.2998046875,
+   "y": -2606.27001953125,
+   "z": 306.9100036621094
+  },
+  {
+   "alliance": 0,
+   "horde": 0,
+   "id": 291,
+   "map": 571,
+   "name": "Ruined City Post 01, Zul'Drak",
+   "x": 5028.68994140625,
+   "y": -3020.3798828125,
+   "z": 292.4200134277344
+  },
+  {
+   "alliance": 0,
+   "horde": 541,
+   "id": 292,
+   "map": 0,
+   "name": "Flavor - Stormwind Harbor  - Start",
+   "x": -8338.3603515625,
+   "y": 1107.010009765625,
+   "z": 57.2599983215332
+  },
+  {
+   "alliance": 0,
+   "horde": 0,
+   "id": 293,
+   "map": 0,
+   "name": "Flavor - Stormwind Harbor - Stop",
+   "x": -8341.08984375,
+   "y": 1101.8499755859375,
+   "z": 57.2599983215332
+  },
+  {
+   "alliance": 541,
+   "horde": 2224,
+   "id": 294,
+   "map": 571,
+   "name": "Moa'ki, Dragonblight",
+   "x": 2792.449951171875,
+   "y": 908.9600219726562,
+   "z": 22.329999923706055
+  },
+  {
+   "alliance": 541,
+   "horde": 2224,
+   "id": 295,
+   "map": 571,
+   "name": "Kamagua, Howling Fjord",
+   "x": 785.27001953125,
+   "y": -2887.7099609375,
+   "z": 5.889999866485596
+  },
+  {
+   "alliance": 541,
+   "horde": 2224,
+   "id": 296,
+   "map": 571,
+   "name": "Unu'pe, Borean Tundra",
+   "x": 2919.18994140625,
+   "y": 4046.090087890625,
+   "z": 1.850000023841858
+  },
+  {
+   "alliance": 0,
+   "horde": 0,
+   "id": 297,
+   "map": 571,
+   "name": "Sholazar Basin - Quest - Reconnaisance - Start",
+   "x": 5557.56982421875,
+   "y": 5802.0498046875,
+   "z": -66.08999633789062
+  },
+  {
+   "alliance": 0,
+   "horde": 0,
+   "id": 298,
+   "map": 571,
+   "name": "Sholazar Basin - Quest - Reconnaisance - End",
+   "x": 5505.35009765625,
+   "y": 4747.7900390625,
+   "z": -194.42999267578125
+  },
+  {
+   "alliance": 0,
+   "horde": 0,
+   "id": 299,
+   "map": 0,
+   "name": "Transport: Menethil <-> Valgarde",
+   "x": 0.0,
+   "y": 0.0,
+   "z": 0.0
+  },
+  {
+   "alliance": 0,
+   "horde": 0,
+   "id": 300,
+   "map": 0,
+   "name": "Transport, Stormwind",
+   "x": 0.0,
+   "y": 0.0,
+   "z": 0.0
+  },
+  {
+   "alliance": 28360,
+   "horde": 0,
+   "id": 301,
+   "map": 571,
+   "name": "Quest - Borean Tundra - Check In With Bixie - Begin",
+   "x": 4125.509765625,
+   "y": 5310.990234375,
+   "z": 28.68000030517578
+  },
+  {
+   "alliance": 0,
+   "horde": 0,
+   "id": 302,
+   "map": 571,
+   "name": "Quest - Borean Tundra - Check In With Bixie - End",
+   "x": 4171.830078125,
+   "y": 4335.6298828125,
+   "z": 36.22999954223633
+  },
+  {
+   "alliance": 541,
+   "horde": 0,
+   "id": 303,
+   "map": 571,
+   "name": "Valiance Landing Camp, Wintergrasp",
+   "x": 5100.81005859375,
+   "y": 2185.64990234375,
+   "z": 365.6199951171875
+  },
+  {
+   "alliance": 541,
+   "horde": 2224,
+   "id": 304,
+   "map": 571,
+   "name": "The Argent Stand, Zul'Drak",
+   "x": 5521.6298828125,
+   "y": -2672.25,
+   "z": 303.95001220703125
+  },
+  {
+   "alliance": 32981,
+   "horde": 32981,
+   "id": 305,
+   "map": 571,
+   "name": "Ebon Watch, Zul'Drak",
+   "x": 5218.89990234375,
+   "y": -1302.219970703125,
+   "z": 242.16000366210938
+  },
+  {
+   "alliance": 541,
+   "horde": 2224,
+   "id": 306,
+   "map": 571,
+   "name": "Light's Breach, Zul'Drak",
+   "x": 5190.10986328125,
+   "y": -2206.4599609375,
+   "z": 239.39999389648438
+  },
+  {
+   "alliance": 541,
+   "horde": 2224,
+   "id": 307,
+   "map": 571,
+   "name": "Zim'Torga, Zul'Drak",
+   "x": 5777.39990234375,
+   "y": -3594.93994140625,
+   "z": 386.69000244140625
+  },
+  {
+   "alliance": 28625,
+   "horde": 28625,
+   "id": 308,
+   "map": 571,
+   "name": "River's Heart, Sholazar Basin",
+   "x": 5506.22998046875,
+   "y": 4748.10009765625,
+   "z": -194.42999267578125
+  },
+  {
+   "alliance": 28625,
+   "horde": 28625,
+   "id": 309,
+   "map": 571,
+   "name": "Nesingwary Base Camp, Sholazar Basin",
+   "x": 5596.10009765625,
+   "y": 5824.3701171875,
+   "z": -67.7300033569336
+  },
+  {
+   "alliance": 541,
+   "horde": 2224,
+   "id": 310,
+   "map": 571,
+   "name": "Dalaran",
+   "x": 5813.89013671875,
+   "y": 449.1300048828125,
+   "z": 658.75
+  },
+  {
+   "alliance": 0,
+   "horde": 2224,
+   "id": 311,
+   "map": 571,
+   "name": "Camp Onequah, Grizzly Hills (Quest)",
+   "x": 3877.909912109375,
+   "y": -4519.58984375,
+   "z": 217.2899932861328
+  },
+  {
+   "alliance": 0,
+   "horde": 0,
+   "id": 312,
+   "map": 571,
+   "name": "Light's Breach, Zul'Drak (Quest)",
+   "x": 5189.669921875,
+   "y": -2206.85009765625,
+   "z": 239.39999389648438
+  },
+  {
+   "alliance": 541,
+   "horde": 0,
+   "id": 313,
+   "map": 571,
+   "name": "Westfall Brigade, Grizzly Hills (Quest)",
+   "x": 4584.009765625,
+   "y": -4250.3798828125,
+   "z": 182.1699981689453
+  },
+  {
+   "alliance": 0,
+   "horde": 3574,
+   "id": 314,
+   "map": 571,
+   "name": "Zim'Torga, Zul'Drak (Quest)",
+   "x": 5779.1298828125,
+   "y": -3596.419921875,
+   "z": 386.8500061035156
+  },
+  {
+   "alliance": 0,
+   "horde": 32981,
+   "id": 315,
+   "map": 0,
+   "name": "Acherus: The Ebon Hold",
+   "x": 2352.3701171875,
+   "y": -5666.91015625,
+   "z": 382.239990234375
+  },
+  {
+   "alliance": 29488,
+   "horde": 29488,
+   "id": 316,
+   "map": 0,
+   "name": "Ebon Hold - Acherus -> Death's Breach Start",
+   "x": 0.0,
+   "y": 0.0,
+   "z": 0.0
+  },
+  {
+   "alliance": 0,
+   "horde": 0,
+   "id": 317,
+   "map": 609,
+   "name": "Ebon Hold - Acherus -> Death's Breach End",
+   "x": 2431.0,
+   "y": -5730.2099609375,
+   "z": 157.94000244140625
+  },
+  {
+   "alliance": 29501,
+   "horde": 29501,
+   "id": 318,
+   "map": 0,
+   "name": "Ebon Hold - Death's Breach -> Acherus Start",
+   "x": 0.0,
+   "y": 0.0,
+   "z": 0.0
+  },
+  {
+   "alliance": 0,
+   "horde": 0,
+   "id": 319,
+   "map": 609,
+   "name": "Ebon Hold - Death's Breach -> Acherus End",
+   "x": 2356.510009765625,
+   "y": -5664.18017578125,
+   "z": 382.25
+  },
+  {
+   "alliance": 541,
+   "horde": 2224,
+   "id": 320,
+   "map": 571,
+   "name": "K3, The Storm Peaks",
+   "x": 6186.75,
+   "y": -1052.9100341796875,
+   "z": 410.20001220703125
+  },
+  {
+   "alliance": 541,
+   "horde": 0,
+   "id": 321,
+   "map": 571,
+   "name": "Frosthold, The Storm Peaks",
+   "x": 6667.0400390625,
+   "y": -258.70001220703125,
+   "z": 961.9000244140625
+  },
+  {
+   "alliance": 32585,
+   "horde": 32585,
+   "id": 322,
+   "map": 571,
+   "name": "Dun Nifflelem, The Storm Peaks",
+   "x": 7308.0400390625,
+   "y": -2607.60009765625,
+   "z": 814.7999877929688
+  },
+  {
+   "alliance": 0,
+   "horde": 2224,
+   "id": 323,
+   "map": 571,
+   "name": "Grom'arsh Crash-Site, The Storm Peaks",
+   "x": 7857.2998046875,
+   "y": -735.02001953125,
+   "z": 1177.1500244140625
+  },
+  {
+   "alliance": 0,
+   "horde": 2224,
+   "id": 324,
+   "map": 571,
+   "name": "Camp Tunka'lo, The Storm Peaks",
+   "x": 7793.85009765625,
+   "y": -2810.090087890625,
+   "z": 1217.030029296875
+  },
+  {
+   "alliance": 32981,
+   "horde": 32981,
+   "id": 325,
+   "map": 571,
+   "name": "Death's Rise, Icecrown",
+   "x": 7427.31982421875,
+   "y": 4224.16015625,
+   "z": 314.1099853515625
+  },
+  {
+   "alliance": 541,
+   "horde": 2224,
+   "id": 326,
+   "map": 571,
+   "name": "Ulduar, The Storm Peaks",
+   "x": 8864.740234375,
+   "y": -1324.3299560546875,
+   "z": 1032.8199462890625
+  },
+  {
+   "alliance": 541,
+   "horde": 2224,
+   "id": 327,
+   "map": 571,
+   "name": "Bouldercrag's Refuge, The Storm Peaks",
+   "x": 8472.4599609375,
+   "y": -335.95001220703125,
+   "z": 906.47998046875
+  },
+  {
+   "alliance": 0,
+   "horde": 0,
+   "id": 328,
+   "map": 571,
+   "name": "Transport, Icecrown Airship (A)",
+   "x": 7501.64990234375,
+   "y": 1140.280029296875,
+   "z": 682.22998046875
+  },
+  {
+   "alliance": 0,
+   "horde": 0,
+   "id": 329,
+   "map": 571,
+   "name": "Transport, Icecrown Airship (H)",
+   "x": 7561.81005859375,
+   "y": 1724.5899658203125,
+   "z": 683.5599975585938
+  },
+  {
+   "alliance": 0,
+   "horde": 0,
+   "id": 330,
+   "map": 571,
+   "name": "Transport, Icecrown (Target)",
+   "x": 7489.64013671875,
+   "y": 1477.719970703125,
+   "z": 328.6400146484375
+  },
+  {
+   "alliance": 541,
+   "horde": 2224,
+   "id": 331,
+   "map": 571,
+   "name": "Gundrak, Zul'Drak",
+   "x": 6897.64990234375,
+   "y": -4118.22998046875,
+   "z": 467.3500061035156
+  },
+  {
+   "alliance": 0,
+   "horde": 2224,
+   "id": 332,
+   "map": 571,
+   "name": "Warsong Camp, Wintergrasp",
+   "x": 5024.990234375,
+   "y": 3685.550048828125,
+   "z": 362.94000244140625
+  },
+  {
+   "alliance": 0,
+   "horde": 32981,
+   "id": 333,
+   "map": 571,
+   "name": "The Shadow Vault, Icecrown",
+   "x": 8408.08984375,
+   "y": 2702.659912109375,
+   "z": 655.1099853515625
+  },
+  {
+   "alliance": 541,
+   "horde": 2224,
+   "id": 334,
+   "map": 571,
+   "name": "The Argent Vanguard, Icecrown",
+   "x": 6164.490234375,
+   "y": -61.310001373291016,
+   "z": 388.17999267578125
+  },
+  {
+   "alliance": 32586,
+   "horde": 32586,
+   "id": 335,
+   "map": 571,
+   "name": "Crusaders' Pinnacle, Icecrown",
+   "x": 6402.06005859375,
+   "y": 467.8599853515625,
+   "z": 511.2900085449219
+  },
+  {
+   "alliance": 31315,
+   "horde": 0,
+   "id": 336,
+   "map": 571,
+   "name": "Windrunner's Overlook, Crystalsong Forest",
+   "x": 5035.64990234375,
+   "y": -519.9600219726562,
+   "z": 225.41000366210938
+  },
+  {
+   "alliance": 0,
+   "horde": 34709,
+   "id": 337,
+   "map": 571,
+   "name": "Sunreaver's Command, Crystalsong Forest",
+   "x": 5590.490234375,
+   "y": -693.22998046875,
+   "z": 206.6300048828125
+  },
+  {
+   "alliance": 31315,
+   "horde": 34709,
+   "id": 340,
+   "map": 571,
+   "name": "Argent Tournament Grounds, Icecrown",
+   "x": 8475.7900390625,
+   "y": 891.2000122070312,
+   "z": 547.2899780273438
+  },
+  {
+   "alliance": 25968,
+   "horde": 25968,
+   "id": 341,
+   "map": 603,
+   "name": "Ulduar Raid - Interior - Insertion Point",
+   "x": -749.2000122070312,
+   "y": -99.98999786376953,
+   "z": 429.67999267578125
+  },
+  {
+   "alliance": 25968,
+   "horde": 25968,
+   "id": 342,
+   "map": 603,
+   "name": "Ulduar Raid - Iron Concourse",
+   "x": 119.95999908447266,
+   "y": -71.62000274658203,
+   "z": 409.79998779296875
+  },
+  {
+   "alliance": 0,
+   "horde": 0,
+   "id": 348,
+   "map": 0,
+   "name": "Transport: Thunder Bluff <-> Org (Zep)",
+   "x": 0.0,
+   "y": 0.0,
+   "z": 0.0
+  },
+  {
+   "alliance": 0,
+   "horde": 0,
+   "id": 352,
+   "map": 0,
+   "name": "Isle of Conquest - Gunships",
+   "x": 0.0,
+   "y": 0.0,
+   "z": 0.0
+  },
+  {
+   "alliance": 0,
+   "horde": 0,
+   "id": 353,
+   "map": 0,
+   "name": "",
+   "x": 0.0,
+   "y": 0.0,
+   "z": 0.0
+  },
+  {
+   "alliance": 0,
+   "horde": 0,
+   "id": 357,
+   "map": 0,
+   "name": "",
+   "x": 0.0,
+   "y": 0.0,
+   "z": 0.0
+  },
+  {
+   "alliance": 35146,
+   "horde": 35146,
+   "id": 358,
+   "map": 571,
+   "name": "Quest - Icecrown - North Sea Kraken Bombing - Start",
+   "x": 8498.3203125,
+   "y": 1066.3199462890625,
+   "z": 552.1900024414062
+  },
+  {
+   "alliance": 33857,
+   "horde": 33857,
+   "id": 359,
+   "map": 571,
+   "name": "Quest - Icecrown - North Sea Kraken Bombing - End",
+   "x": 8501.5302734375,
+   "y": 1064.02001953125,
+   "z": 552.1900024414062
+  },
+  {
+   "alliance": 0,
+   "horde": 0,
+   "id": 375,
+   "map": 0,
+   "name": "REUSEME",
+   "x": 0.0,
+   "y": 0.0,
+   "z": 0.0
+  },
+  {
+   "alliance": 0,
+   "horde": 0,
+   "id": 376,
+   "map": 0,
+   "name": "AAAIcecrown Raid - Airship Battle Taxi Paths",
+   "x": 0.0,
+   "y": 0.0,
+   "z": 0.0
+  },
+  {
+   "alliance": 0,
+   "horde": 0,
+   "id": 377,
+   "map": 0,
+   "name": "Icecrown Dungeon - Gunships",
+   "x": 0.0,
+   "y": 0.0,
+   "z": 0.0
+  },
+  {
+   "alliance": 0,
+   "horde": 0,
+   "id": 379,
+   "map": 631,
+   "name": "AAAAIcecrown Raid - Saurfang's Ship (End)",
+   "x": -200.58999633789062,
+   "y": 1437.530029296875,
+   "z": -452.2699890136719
+  },
+  {
+   "alliance": 0,
+   "horde": 0,
+   "id": 380,
+   "map": 0,
+   "name": "AAAAIcecrown Raid - Saurfang's Ship (Start)",
+   "x": 0.0,
+   "y": 0.0,
+   "z": 0.0
+  },
+  {
+   "alliance": 0,
+   "horde": 0,
+   "id": 381,
+   "map": 0,
+   "name": "AAAAQuest [Transport] Icecrown Raid - Saurfang Ship (START)",
+   "x": 0.0,
+   "y": 0.0,
+   "z": 0.0
+  },
+  {
+   "alliance": 0,
+   "horde": 0,
+   "id": 382,
+   "map": 0,
+   "name": "Quest [Transport] Icecrown Raid - Saurfang Ship (END)",
+   "x": 0.0,
+   "y": 0.0,
+   "z": 0.0
+  },
+  {
+   "alliance": 541,
+   "horde": 2224,
+   "id": 383,
+   "map": 0,
+   "name": "Thondoril River, Western Plaguelands",
+   "x": 1942.5400390625,
+   "y": -2559.179931640625,
+   "z": 61.11000061035156
+  },
+  {
+   "alliance": 0,
+   "horde": 3574,
+   "id": 384,
+   "map": 0,
+   "name": "The Bulwark, Tirisfal",
+   "x": 1726.8599853515625,
+   "y": -740.760009765625,
+   "z": 59.029998779296875
+  },
+  {
+   "alliance": 28625,
+   "horde": 28625,
+   "id": 392,
+   "map": 0,
+   "name": "CC Prologue - GT - Quest - Vent Horizon - Start",
+   "x": -5448.5,
+   "y": -665.0800170898438,
+   "z": 392.95001220703125
+  },
+  {
+   "alliance": 35146,
+   "horde": 35146,
+   "id": 393,
+   "map": 0,
+   "name": "CC Prologue - GT - Quest - Vent Horizon - End",
+   "x": -5447.85009765625,
+   "y": -665.5900268554688,
+   "z": 393.1600036621094
+  },
+  {
+   "alliance": 28625,
+   "horde": 28625,
+   "id": 394,
+   "map": 0,
+   "name": "CC Prologue - GT - Battle Flight - Start",
+   "x": -5451.47998046875,
+   "y": -667.72998046875,
+   "z": 393.010009765625
+  },
+  {
+   "alliance": 0,
+   "horde": 0,
+   "id": 395,
+   "map": 0,
+   "name": "CC Prologue - GT - Battle Flight - End",
+   "x": -5434.7099609375,
+   "y": 523.0900268554688,
+   "z": 388.29998779296875
+  },
+  {
+   "alliance": 0,
+   "horde": 40203,
+   "id": 404,
+   "map": 1,
+   "name": "Durotar - ET - CC Prologue Spy Frog Start",
+   "x": -839.6400146484375,
+   "y": -4985.35009765625,
+   "z": 14.649999618530273
+  },
+  {
+   "alliance": 0,
+   "horde": 40203,
+   "id": 405,
+   "map": 1,
+   "name": "Durotar - ET - CC Prologue Spy Frog End",
+   "x": -838.010009765625,
+   "y": -4986.27978515625,
+   "z": 14.75
+  },
+  {
+   "alliance": 0,
+   "horde": 3574,
+   "id": 438,
+   "map": 1,
+   "name": "Durotar - ET - CC Prologue Troll Taxi Bat Start",
+   "x": -838.8499755859375,
+   "y": -4985.990234375,
+   "z": 14.710000038146973
+  },
+  {
+   "alliance": 0,
+   "horde": 3574,
+   "id": 439,
+   "map": 1,
+   "name": "Durotar - ET - CC Prologue Troll Recruit End",
+   "x": 284.3800048828125,
+   "y": -4762.35986328125,
+   "z": 12.5600004196167
+  },
+  {
+   "alliance": 0,
+   "horde": 0,
+   "id": 440,
+   "map": 1,
+   "name": "Durotar - ET - CC Prologue - Troll Battle End",
+   "x": -848.2000122070312,
+   "y": -5339.4599609375,
+   "z": 3.069999933242798
+  }
+ ]
+}

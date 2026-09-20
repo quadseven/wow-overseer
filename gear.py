@@ -250,6 +250,18 @@ class Grant:
     core to run a real trade, GIVE when they are not. `plan` does not set it -
     it answers WHO and WHAT and has never been able to see the world - so it
     stays TRADE until `deliverable` has looked.
+
+    `alternates` is the REST of the ranking, best first, as fully formed
+    Grants for the same item with a different taker. It exists because a
+    ranking and a refusal are different jobs and were being done by one value
+    (infra#4198): `plan` collapsed four eligible siblings to the one who gained
+    most, and `deliverable` then found that one had no bag room and dropped the
+    item, with three siblings who had room never asked. Carrying the runners-up
+    keeps the split the two functions already have - `plan` says who SHOULD
+    have it and cannot see the world, `deliverable` says who CAN take it right
+    now and is the only half that looks - instead of teaching `plan` about bag
+    slots. `deliverable` empties this on whatever it emits, so a Grant that
+    reaches the insert path carries one taker and nothing else.
     """
 
     holder: str
@@ -260,6 +272,7 @@ class Grant:
     reason: str
     said: str
     verb: str = TRADE
+    alternates: tuple = ()
 
     @property
     def command(self) -> str:
@@ -400,6 +413,18 @@ def plan(holdings, characters) -> Plan:
     never the smallest beneficiary - handing dead weight to whoever benefits
     most is the only rule that cannot regress into shuffling gear sideways
     forever.
+
+    THE RUNNERS-UP ARE CARRIED RATHER THAN DISCARDED (infra#4198). One taker
+    per item is still the answer this function gives; what changed is that
+    "whoever benefits most" is no longer allowed to double as "and if that one
+    cannot take it, nobody does". Measured on wow-dev 2026-09-19: Arachnidian
+    Pauldrons sat in Og's bags, four siblings could wear them, this function
+    picked Ugga (gain 12) and `deliverable` dropped the item because Ugga was
+    at 0 free slots of 62 - while Grog (gain 10, 6 free), Grug (gain 10, 12
+    free) and Bork (gain 1, 11 free) were never asked. One grant proposed, one
+    grant withheld, nothing moved. The ranking is still this function's and
+    still space-blind; `deliverable` walks it in order and takes the first
+    taker the world will actually accept.
     """
     by_name = {c.name: c for c in characters}
     grants = []
@@ -431,19 +456,30 @@ def plan(holdings, characters) -> Plan:
             continue
 
         candidates.sort(key=lambda c: (-c[0], c[1]))
-        _, taker_name, reason = candidates[0]
-        taker = by_name[taker_name]
-        grants.append(Grant(
-            holder=holding.holder, taker=taker.name, entry=holding.entry,
-            name=holding.name, guid=holding.guid,
-            reason=(
-                f"{holding.holder} is holding {holding.name} (item level "
-                f"{holding.item_level}) with no use for it, and {taker.name} "
-                f"can: {reason}."
-            ),
-            said=f"{holding.holder} trade {taker.name} {holding.name}.",
-        ))
+        ranked = [_grant_for(holding, by_name[name], reason)
+                  for _, name, reason in candidates]
+        grants.append(replace(ranked[0], alternates=tuple(ranked[1:])))
     return Plan(grants=tuple(grants), notes=tuple(notes))
+
+
+def _grant_for(holding: Holding, taker: CharacterState, reason: str) -> Grant:
+    """One item and one named taker, as the sentence an operator will read.
+
+    Lifted out of `plan` so that the runners-up are spelled exactly like the
+    front-runner: `deliverable` may promote any of them, and a promoted grant
+    whose `reason` still named somebody else would be a log line that lies
+    about what just happened.
+    """
+    return Grant(
+        holder=holding.holder, taker=taker.name, entry=holding.entry,
+        name=holding.name, guid=holding.guid,
+        reason=(
+            f"{holding.holder} is holding {holding.name} (item level "
+            f"{holding.item_level}) with no use for it, and {taker.name} "
+            f"can: {reason}."
+        ),
+        said=f"{holding.holder} trade {taker.name} {holding.name}.",
+    )
 
 
 def lines(gear_plan: Plan) -> list:
@@ -553,6 +589,20 @@ def deliverable(grants, position_rows=None, free_slots=None) -> Plan:
     checking "has room" eight times against one free slot writes seven rows
     that were doomed when they were written. Unknown capacity counts as no
     room, the direction `materials.retryable_stuck` already takes.
+
+    A FULL TAKER NOW COSTS THAT TAKER THE ITEM AND NOT THE ITEM ITS MOVE
+    (infra#4198). The room test itself was right and is unchanged: one free
+    slot on the RECEIVER, never "more room than the giver", never a comparison
+    between the two. What was wrong is what a failed test did - it withheld the
+    piece entirely, because `plan` had already thrown away every other sibling
+    who could wear it. `grant.alternates` is that ranking, so this walks it and
+    takes the first taker who is both in the world and has a slot. The gain
+    ordering still decides BETWEEN takers; it no longer decides WHETHER.
+
+    STILL EXACTLY ONE NOTE PER WITHHELD ITEM. An item is withheld only when
+    every ranked taker was refused, and the note names them all with the wall
+    each one hit, so "nobody had room" and "nobody was online" stay tellable
+    apart at a glance.
     """
     asked_where = position_rows is not None
     asked_room = free_slots is not None
@@ -561,29 +611,64 @@ def deliverable(grants, position_rows=None, free_slots=None) -> Plan:
 
     out, notes = [], []
     for grant in grants:
-        verb = TRADE
-        if asked_where:
-            here, there = spots.get(grant.holder), spots.get(grant.taker)
-            absent = ([] if here else [grant.holder]) + ([] if there else [grant.taker])
-            if absent:
-                notes.append(
-                    f"{grant.name} stays with {grant.holder}: "
-                    f"{' and '.join(absent)} "
-                    f"{'are' if len(absent) > 1 else 'is'} "
-                    f"not in the world right now"
-                )
+        here = spots.get(grant.holder)
+        if asked_where and here is None:
+            # The GIVER is one fact about the item, not about a taker, so it
+            # refuses the whole ranking at once rather than once per name.
+            notes.append(
+                f"{grant.name} stays with {grant.holder}: {grant.holder} "
+                f"is not in the world right now"
+            )
+            continue
+        chosen, verb, absent, crowded = None, TRADE, [], []
+        for option in (grant,) + tuple(grant.alternates):
+            there = spots.get(option.taker)
+            if asked_where and there is None:
+                absent.append(option.taker)
                 continue
-            verb = TRADE if _within_trade_range(here, there) else GIVE
+            if asked_room and room.get(option.taker, 0) <= 0:
+                crowded.append(option.taker)
+                continue
+            chosen = option
+            if asked_where:
+                verb = TRADE if _within_trade_range(here, there) else GIVE
+            break
+        if chosen is None:
+            notes.append(_withheld(grant, crowded, absent))
+            continue
         if asked_room:
-            if room.get(grant.taker, 0) <= 0:
-                notes.append(
-                    f"{grant.name} stays with {grant.holder}: {grant.taker} "
-                    f"has no free bag slot to receive it"
-                )
-                continue
-            room[grant.taker] -= 1
-        out.append(replace(grant, verb=verb))
+            room[chosen.taker] -= 1
+        out.append(replace(chosen, verb=verb, alternates=()))
     return Plan(grants=tuple(out), notes=tuple(notes))
+
+
+def _joined(names: list) -> str:
+    """"Ugga", "Ugga and Grog", "Ugga, Grog and Grug"."""
+    if len(names) <= 1:
+        return "".join(names)
+    return "%s and %s" % (", ".join(names[:-1]), names[-1])
+
+
+def _withheld(grant: Grant, crowded: list, absent: list) -> str:
+    """The one note for an item every ranked taker refused.
+
+    Both walls are named when both were hit. A note that said only "no free
+    bag slot" for a ranking where two takers were offline and one was full
+    would send the next reader looking at bags for a presence problem.
+    """
+    walls = []
+    if crowded:
+        walls.append(
+            "%s %s no free bag slot to receive it"
+            % (_joined(crowded), "have" if len(crowded) > 1 else "has")
+        )
+    if absent:
+        walls.append(
+            "%s %s not in the world right now"
+            % (_joined(absent), "are" if len(absent) > 1 else "is")
+        )
+    return "%s stays with %s: %s" % (grant.name, grant.holder,
+                                     ", and ".join(walls))
 
 
 # ---------------------------------------------------------------------------

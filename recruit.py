@@ -156,19 +156,47 @@ def plan_recruit(
     `member_count`    the guild's size as the module last reported it.
     `target_size`     the size it is aiming at, as the module last reported it.
 
-    THE ORDER OF THE GATES IS THE DESIGN. Roster-full is asked before anything
-    about candidates, because a full guild has no question to answer and a
-    sweep that shortlisted first would keep asking the world for names it can
-    never use.
+    THE ORDER OF THE GATES IS THE DESIGN, AND FRESHNESS COMES BEFORE
+    ROSTER-FULL. The order is: is anybody online, is the shortlist still good,
+    is the roster full, is there anybody left to ask, is it too soon.
+
+    Roster-full used to be asked first, on the reasoning that a full guild has
+    no question to answer and a sweep that shortlisted first would keep asking
+    the world for names it can never use. That reasoning is still right about a
+    FRESH shortlist and it is why the gate is still here, one step further
+    down. It was wrong about a stale one, and infra#4215 measured what that
+    costs.
+
+    BOTH ROSTER NUMBERS ARRIVE ON THE SHORTLIST. `member_count` and
+    `target_size` are not read live - `roster_from_shortlist` lifts them off
+    the newest delivered shortlist, because `target_size` is worldserver
+    configuration this process does not hold. So the roster-full gate is only
+    ever as current as the shortlist it is reading, and asking it first made it
+    self-sealing: a cached `40 of 40` returned before the freshness check that
+    would have asked for the shortlist that carries the new number. When
+    `Overseer.Recruit.TargetSize` was raised from 40 to 71 (infra#4173,
+    infra#4209) the loop logged "the roster is at its target size (40 of 40)"
+    every five minutes for forty-five minutes, issued zero `kind='guild'` rows,
+    and never once asked for the shortlist that would have disproved it. A
+    configurable target made "the cached target might be out of date" reachable
+    for the first time; when it was a constant, this could not happen.
+
+    So a stale shortlist must not be able to suppress its own refresh. What a
+    full guild costs now is one `shortlist` row every SHORTLIST_FRESH_MINUTES
+    rather than none at all, which is the price of a target that can be raised
+    while the loop is running. It is bounded by that constant and by the
+    backpressure below, not by how full the guild is, and it is far cheaper
+    than the original fear: the concern was a sweep asking for names every
+    pass, and this asks twice an hour.
+
+    A FULL GUILD WITH A FRESH SHORTLIST STILL WAITS, which is the half of the
+    old design that has to survive. Nothing below shortlists, invites or spends
+    a name once `member_count >= target_size` off numbers that are known
+    current. tests/test_recruit.py asserts that case on purpose, so this cannot
+    pass by having quietly deleted the gate.
     """
     if not actors:
         return _wait("no guild member is online to carry the row")
-
-    # A target size of 0 means the module was configured with no size gate;
-    # trust it rather than inventing a ceiling here. Two places deciding when
-    # the roster is full is exactly one place too many.
-    if target_size and member_count >= target_size:
-        return _wait(f"the roster is at its target size ({member_count} of {target_size})")
 
     actor = sorted(actors)[0]
 
@@ -202,6 +230,24 @@ def plan_recruit(
             command=f"shortlist {SHORTLIST_SIZE}",
             target_arg="",
             reason=wants_shortlist,
+        )
+
+    # ROSTER-FULL, ASKED OF NUMBERS THAT ARE KNOWN CURRENT. Reaching this line
+    # means `shortlist_age_minutes` is a real number inside
+    # SHORTLIST_FRESH_MINUTES, so `member_count` and `target_size` came off a
+    # shortlist a person could have read minutes ago rather than off whatever
+    # the module last happened to say. The age goes in the reason for that
+    # reason: infra#4215's log line was true about its own cache and useless
+    # about the world, and "40 of 40" read identically whether it was seconds
+    # or hours old.
+    #
+    # A target size of 0 means the module was configured with no size gate;
+    # trust it rather than inventing a ceiling here. Two places deciding when
+    # the roster is full is exactly one place too many.
+    if target_size and member_count >= target_size:
+        return _wait(
+            f"the roster is at its target size ({member_count} of {target_size}), "
+            f"off a shortlist {shortlist_age_minutes:.0f} minutes old"
         )
 
     if not shortlist:

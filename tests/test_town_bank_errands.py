@@ -1004,5 +1004,208 @@ class TheLatchIsActuallyBroken(unittest.TestCase):
         self.assertEqual(seen[-1], "")
 
 
+# The wow-dev guild-bank state as it actually stood on 2026-09-19 23:40, read
+# out of the live database rather than imagined, because the defect below is
+# only visible against real numbers:
+#
+#   SELECT rid, gbright FROM guild_bank_right WHERE guildid = 23 AND TabId = 0;
+#     -> 0/255, 1/3, 2/0, 3/0, 4/0        (the deposit bit is `gbright & 3 = 3`)
+#   SELECT COUNT(*) FROM guild_bank_tab WHERE guildid = 23;   -> 1
+#   SELECT rid FROM guild_rank WHERE guildid = 23;            -> 0,1,2,3,4
+#
+# The five characters the pass exists for are guild ranks 0 (Grug, master) and
+# 1 (the other four). Ranks 2-4 carry the 68 NON-FAMILY playerbot members.
+LIVE_RANK_IDS = (0, 1, 2, 3, 4)
+LIVE_DEPOSIT_RANK_IDS = (0, 1)
+LIVE_PURCHASED_TABS = 1
+LIVE_PURSES = {
+    "Grug": 984_896, "Ugga": 1_806_583, "Grog": 1_936_955,
+    "Bork": 1_788_091, "Og": 1_964_293,
+}
+
+
+def _live_members() -> list:
+    return [{"name": name, "money": money, "in_guild": True}
+            for name, money in sorted(LIVE_PURSES.items())]
+
+
+class TheSetupBranchClosedTheDepositBranch(unittest.TestCase):
+    """infra#4198/#4230: the guild bank deposited nothing, and not from travel.
+
+    MEASURED, NOT INFERRED. The wow-overseer pod serving the private
+    registry's `wow-overseer:95dc9c06` image logged 16 `guild bank setup:`
+    lines and ZERO deposit-branch lines. The last `bank deposit <copper>` row
+    of any kind was written 2026-09-14 13:54:14; every one of the five is
+    `status='error', detail='no guild bank in reach'`, and none has been
+    attempted in the five days since. `guild.BankMoney` for guild 23 is 0.
+
+    THE CAUSE IS AN ORDERING, AND ORDERINGS ARE INVISIBLE TO SINGLE-STATE
+    TESTS. `_guild_bank_once` decided setup in a block ahead of the deposit
+    code that `return`ed on all four of its paths - starved, walking, queued,
+    and the fall-through. So `plan_deposits` was not starved and was not
+    refused; it was never called. The gate stays shut for as long as
+    `plan_setup` has anything left to ask for, and against the live rights
+    above it has three things to ask for, each costing its own won-travel-
+    column walk to the vault, for ranks no family member holds.
+
+    AND THE GATE GUARDED SOMETHING THAT DID NOT NEED GUARDING. A gold deposit
+    is `GuildVerb::Bank`; its executor in mod_overseer.cpp asks
+    `GuildBankInReach` and `HasEnoughMoney` and reads no tab and no rank bit,
+    because `Guild::HandleMemberDepositMoney` has no rank check. Only
+    `GuildVerb::BankDepositItem` needs either.
+    """
+
+    def _pass(self) -> str:
+        return _statements("    async def _guild_bank_once(")
+
+    def test_the_live_rights_leave_plan_setup_permanently_unsatisfied(self):
+        """The fact that makes the old gate permanent rather than slow."""
+        import guildbank
+        actions = guildbank.plan_setup(
+            leader="Grug", purchased_tabs=LIVE_PURCHASED_TABS,
+            rank_ids=LIVE_RANK_IDS, deposit_rank_ids=LIVE_DEPOSIT_RANK_IDS)
+        self.assertEqual(
+            ["bank grant-deposit rank:2", "bank grant-deposit rank:3",
+             "bank grant-deposit rank:4"],
+            [a.command for a in actions])
+
+    def test_the_old_rule_plans_no_deposit_for_as_long_as_setup_has_work(self):
+        """The defect itself, run as a sequence over the live world.
+
+        The old rule is one line - `if plan_setup(...): return` before
+        `plan_deposits` - and the model below is that line and nothing else.
+        Setup clears at most ONE rank per arrival, so even a leader who
+        reaches the vault on every single cycle deposits nothing for the
+        first three; on the realm, which reached the vault once in the 19
+        hours after `grant-deposit rank:1` applied, it is unbounded.
+        """
+        import guildbank
+        granted = set(LIVE_DEPOSIT_RANK_IDS)
+        deposits_per_cycle = []
+        for _ in range(3):
+            actions = guildbank.plan_setup(
+                leader="Grug", purchased_tabs=LIVE_PURCHASED_TABS,
+                rank_ids=LIVE_RANK_IDS,
+                deposit_rank_ids=tuple(sorted(granted)))
+            if actions:
+                # The old branch: queue one setup row and RETURN.
+                deposits_per_cycle.append(0)
+                granted.add(int(actions[0].command.rsplit(":", 1)[1]))
+                continue
+            deposits_per_cycle.append(len(guildbank.plan_deposits(
+                _live_members(), guild_has_tab=True)))
+        self.assertEqual([0, 0, 0], deposits_per_cycle)
+
+    def test_the_new_rule_plans_every_deposit_on_the_first_arrival(self):
+        """The same world, with setup no longer standing in front."""
+        import guildbank
+        self.assertEqual(
+            5, len(guildbank.plan_deposits(_live_members(), guild_has_tab=True)))
+
+    def test_setup_and_deposit_share_one_arbitration(self):
+        """TWO CLAIMS MEANT TWO MUTUALLY EXCLUSIVE BRANCHES.
+
+        `_claim_town_slot("guild bank", ...)` appeared twice, once per branch,
+        which is the structural signature of the bug: each branch bought its
+        own walk and only one of them could run. One claim means one walk that
+        does both errands on arrival.
+        """
+        self.assertEqual(1, self._pass().count(
+            '_claim_town_slot("guild bank"'))
+
+    def test_the_deposit_is_planned_before_setup_is_queued(self):
+        """`plan_deposits` must be reached on a cycle that also has setup work.
+
+        Ordering, not presence: `plan_deposits` was always in the source. It
+        sat BELOW a block that returned, so the only proof that it is reachable
+        while `plan_setup` is unsatisfied is that it is decided above the
+        setup queue rather than below it.
+        """
+        body = self._pass()
+        self.assertLess(body.index("plan_deposits"),
+                        body.index("_recent_guild_setup_keys"))
+
+    def test_the_setup_queue_does_not_return(self):
+        """The queued setup row must fall through to the deposit rows.
+
+        The old block ended `return` inside `if at_the_vault:` - the one cycle
+        that had already paid for the walk was the cycle that threw the
+        deposits away. The only `return` allowed between queueing setup and
+        queueing deposits is the `if not deposits:` arm, which is the honest
+        "setup was the whole reason we walked" case.
+        """
+        body = self._pass()
+        after = body[body.index("_recent_guild_setup_keys"):]
+        self.assertIn("_recent_guild_bank_keys", after)
+        queue_block = after[: after.index("if not deposits:")]
+        self.assertNotIn("return", queue_block)
+        self.assertLess(after.index("if not deposits:"),
+                        after.index("_recent_guild_bank_keys"))
+
+
+class ThePurchasedTabCountReachesTheReserve(unittest.TestCase):
+    """infra#4198: the guild bought its tab and nobody told `plan_deposits`.
+
+    `plan_deposits` defaults `guild_has_tab` to False - deliberately, so an
+    un-taught caller reserves the tab price rather than spending it - and
+    `_guild_bank_once` was that un-taught caller for the whole life of the
+    pass. `_fetch_guild_bank_setup` has counted `guild_bank_tab` since
+    infra#3713; the count was spent on `plan_setup` and dropped on the floor
+    on the way to `plan_deposits`.
+
+    Live on 2026-09-19 the guild HAS tab 0, so the reserve should be
+    `FLOAT_COPPER` (10 gold) and was `FLOAT_COPPER + TAB0_COST_COPPER` (110
+    gold). At the purses above that is not a rounding error: it excludes the
+    leader from depositing at all.
+    """
+
+    def test_the_stale_default_excludes_the_leader_outright(self):
+        import guildbank
+        stale = {d.name for d in guildbank.plan_deposits(_live_members())}
+        self.assertNotIn("Grug", stale)
+
+    def test_the_tab_the_guild_owns_lets_the_leader_deposit(self):
+        import guildbank
+        fresh = {d.name: d.copper for d in guildbank.plan_deposits(
+            _live_members(), guild_has_tab=True)}
+        self.assertIn("Grug", fresh)
+        self.assertEqual(LIVE_PURSES["Grug"] - guildbank.FLOAT_COPPER,
+                         fresh["Grug"])
+
+    def test_the_pass_passes_the_count_it_already_read(self):
+        body = _statements("    async def _guild_bank_once(")
+        self.assertIn("guild_has_tab=purchased_tabs > 0", body)
+        self.assertIn('purchased_tabs = int(setup["purchased_tabs"]) '
+                      "if setup else 0", body)
+
+
+class TheItemDepositStillHasNoCaller(unittest.TestCase):
+    """infra#4230's `guild_bank_item` criterion cannot be met by this pass.
+
+    NOT A REGRESSION AND NOT FIXED HERE - pinned so the next reader does not
+    spend the day this one nearly spent. `bank deposit <copper>` lands in
+    `guild.BankMoney`; `guild_bank_item` only ever moves for
+    `bank deposit-item`, whose command text `guildbank.format_item_deposit`
+    renders correctly and which NOTHING in this package ever enqueues.
+
+    So `guild_bank_item = 0` is not evidence about the travel column, the
+    arbitration or this fix. It is the absence of a policy that decides WHICH
+    items to hand over, which guildbank.py's own docstring says was left
+    unwritten on purpose. That is the work infra#4198's item-relief path
+    actually needs.
+    """
+
+    def test_nothing_outside_tests_enqueues_an_item_deposit(self):
+        callers = [path.name for path in PACKAGE.glob("*.py")
+                   if "format_item_deposit(" in path.read_text(encoding="utf-8")]
+        self.assertEqual(["guildbank.py"], callers)
+
+    def test_the_pass_only_ever_writes_a_money_deposit(self):
+        self.assertIn('f"bank deposit {deposit.copper}"',
+                      _statements("    async def _guild_bank_once("))
+        self.assertNotIn("deposit-item",
+                         _statements("    async def _guild_bank_once("))
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -25,7 +25,8 @@ COPY core.py bridge.py voice.py transform.py \
      questshare.py travel.py stream.py frames.py \
      professions.py craft.py craft_supply.py auction.py jobs.py trainjob.py \
      craft_rhythm.py \
-     skillgoal.py \
+     skillgoal.py gatheraim.py gatherband.py \
+     flightlearn.py \
      learnaim.py recipebook.py \
      craftpleas.py materials.py \
      gear.py \
@@ -33,6 +34,7 @@ COPY core.py bridge.py voice.py transform.py \
      relay.py digest.py \
      achievements.py recap.py standing.py agenda.py eye.py decree.py \
      dungeonplan.py raidgoals.py raidcraft.py raidprep.py \
+     dungeonprogression.py \
      guildcraft.py tradespec.py guildbank.py guildshare.py recruit.py \
      bag_pressure.py bag_upgrade.py bag_economy.py disposition.py \
      item_plan.py \
@@ -41,11 +43,12 @@ COPY core.py bridge.py voice.py transform.py \
      realm.py basepath.py watchwall.py realmnav.py \
      needs.py partystatus.py lootcard.py towntrip.py \
      townslot.py \
+     enroll.py \
      tabard.py crossing.py \
      vendor_stall.py \
      zones.json entrances.json shapes.json \
      talents.json items.json icons.json spells.json \
-     standing.json craftbook.json \
+     standing.json craftbook.json taxinodes.json \
      index.html /app/
 
 # It stays VENDORED. map_server._jquery_file says why - the page reaches no

@@ -188,11 +188,22 @@ class TheBridgeCanFindAnErrandItIsNotCarryingItself(unittest.TestCase):
         `len(names)`; the keyword is spelled `%%s` so it survives the `%` as a
         placeholder, and both it and the names are passed to `cur.execute`. If
         a future edit formats a VALUE into this string the noqa becomes a lie,
-        and this is the test that says so."""
+        and this is the test that says so.
+
+        THE COHORT CLAUSE IS THE SECOND THING THAT COULD MAKE IT A LIE
+        (infra#4221). `scope` is a fixed string chosen from two literals, so it
+        is safe to append - but the cohort NAME it stands for is a value read
+        off a roster row, and it must arrive as a bound parameter like every
+        other value here. Both halves are pinned: the clause is appended
+        AFTER the `%` has finished, so a cohort name containing a `%` can never
+        be read as a format specifier, and the name itself is spread into the
+        execute's tuple.
+        """
         code = _code("def _errand_holders(")
         self.assertIn('placeholders = ",".join(["%s"] * len(names))', code)
-        self.assertIn("_ERRAND_HOLDERS_SQL % placeholders", code)
-        self.assertIn("cur.execute(sql, (travel_npc, *names))", code)
+        self.assertIn("(_ERRAND_HOLDERS_SQL % placeholders) + scope", code)
+        self.assertIn("cur.execute(sql, (travel_npc, *names, *scope_args))", code)
+        self.assertIn('scope = " AND family = %s" if cohort else ""', code)
 
     def test_it_refuses_to_hunt_for_anything_but_an_economy_errand(self):
         """The fence one step earlier: a caller that cannot assemble the list

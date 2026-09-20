@@ -151,7 +151,8 @@ TOWN_RUN_FREE_SLOTS = 3
 
 
 def family_town_run_needed(free_slots: dict[str, int],
-                           minimum_free: int = TOWN_RUN_FREE_SLOTS) -> bool:
+                           minimum_free: int = TOWN_RUN_FREE_SLOTS,
+                           sellable: dict[str, int] | None = None) -> bool:
     """Return whether any measured family member needs a vendor visit.
 
     The bridge's capacity query returns free slots rather than used and total
@@ -159,11 +160,43 @@ def family_town_run_needed(free_slots: dict[str, int],
     member at or below it can no longer reliably receive loot or materials.
     Unknown and negative readings fail closed, so a broken read cannot send
     the family on a blind trip.
+
+    `sellable` IS THE "COULD A VENDOR EVEN HELP?" HALF (infra#4190), and
+    without it this predicate asks only half the question. Measured live
+    2026-09-19: Og sat at 0 free slots of 62 while carrying 20 recipes, 16
+    quest items, 7 green armour pieces and 6 gems - every one of them
+    deliberately protected - plus a single spare bag. Selling everything a
+    vendor would accept lifts him to 1, still under a trigger of 3, so the
+    pressure he raised could never be answered and never cleared. The vendor
+    pass took the travel column on that pressure every cycle, wrote no sale,
+    and starved gathering for hours; infra#4191 had to bound the urgent path
+    precisely because this predicate kept re-arming it.
+
+    So a member only counts when a vendor trip could actually lift them past
+    the trigger: `free + sellable > minimum_free`. A member nobody can
+    relieve is a real problem - it is just not a VENDOR problem, and the
+    relief has to come from the guild bank or a hand-off instead.
+
+    Omitting a name from `sellable` reads as "nothing to sell", which keeps
+    the existing fail-closed bias: an unknown read must not send the family
+    on a blind trip. Passing `None` disables the half entirely and preserves
+    the original behaviour for callers that only want "is anyone low".
     """
     if not free_slots or minimum_free < 0:
         return False
-    return any(isinstance(free, int) and free >= 0 and free <= minimum_free
-               for free in free_slots.values())
+    low = [(name, free) for name, free in free_slots.items()
+           if isinstance(free, int) and free >= 0 and free <= minimum_free]
+    if not low:
+        return False
+    if sellable is None:
+        return True
+    for name, free in low:
+        offered = sellable.get(name, 0)
+        if not isinstance(offered, int) or offered < 0:
+            continue
+        if free + offered > minimum_free:
+            return True
+    return False
 
 
 # WHAT A VENDOR ERRAND SHOULD DO NEXT. Three words rather than two booleans at
@@ -429,6 +462,60 @@ def gear_candidates(rows: Iterable[dict], family, available=None, fits=None,
             # decision above is disposition's, not `sellable`'s, which refuses
             # every uncommon on purpose and would refuse these too.
             item=ItemForSale(quality=item.quality, sell_price=item.sell_price),
+        ))
+    return tuple(out)
+
+
+def bag_candidates(rows: Iterable[dict], equipped_slots: dict,
+                   keep_names=()) -> tuple[SellCandidate, ...]:
+    """Redundant carried bags whose only honest route is a vendor (infra#4163).
+
+    A carried Container (item_class 1) is a candidate only when it is
+    unbound AND would be no better than every bag its holder already has
+    equipped - selling it can never cost capacity, only reclaim the slot it
+    occupies. `equipped_slots` maps holder name to the ContainerSlots of
+    every bag that holder currently has equipped; a holder missing from it
+    is unknown and every row of theirs is kept, the same fail-closed default
+    as the rest of this module.
+
+    THE UPGRADE QUESTION IS NOT ANSWERED HERE. A bag that beats the smallest
+    bag its holder has equipped is not a vendor candidate even if nobody has
+    equipped it yet - it should be equipped instead, and that decision is
+    deliberately left to a separate path. Refusing it here rather than
+    guessing "nobody wants it" is the same fail-closed shape `gear_candidates`
+    already uses for the equipment it is unsure about.
+
+    Only BIND_NONE bags are offered. A bind-on-equip bag that happens not to
+    be an upgrade is still withheld - it is one accidental `/equip` away from
+    being useful, and that judgement is out of scope for this pass.
+    """
+    out = []
+    for row in rows:
+        if owner_keeps(row.get("name", ""), keep_names):
+            continue
+        try:
+            if int(row["item_class"]) != 1:
+                continue
+            if item_binding(row) != disposition.BIND_NONE:
+                continue
+            holder = str(row["holder"])
+            guid = int(row["item_guid"])
+            count = int(row.get("count", 0))
+            container_slots = int(row["container_slots"])
+            sell_price = int(row["sell_price"])
+            quality = int(row["quality"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if guid <= 0 or count <= 0 or not holder or sell_price <= 0:
+            continue
+        sizes = equipped_slots.get(holder)
+        if not sizes:
+            continue
+        if container_slots > min(sizes):
+            continue
+        out.append(SellCandidate(
+            holder=holder, item_guid=guid, count=count,
+            item=ItemForSale(quality=quality, sell_price=sell_price),
         ))
     return tuple(out)
 

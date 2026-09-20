@@ -150,27 +150,29 @@ class Plan:
 # "why is my mining goal not doing anything" gets the same words in Discord,
 # in the thought log and in this file.
 
+# All three holes this refusal used to name are now closed, and the text is
+# kept only for the state where nobody handed `plan` a destination to judge.
+#
+# (1) `nc +loot` IS granted now - measured 2026-09-19 at 2,356 issuances and
+#     2,315 applied, all five characters inside two hours, source
+#     `overseer:life`. infra#3769 is closed. The old sentence said it "has
+#     never been issued to anybody, once", which was true when written on
+#     2026-09-14 and has been false since; it printed to Discord and the
+#     thought log the whole time, which is the cost of a refusal nobody
+#     re-measures.
+# (2) and (3) are infra#3789, which is this change: `gatherband` projects
+#     Lock.dbc's per-node requirement (the world DB's `lock_dbc` is empty, so
+#     it comes from the worldserver's own client data) and `gatheraim` picks
+#     the zone.
 GATHERING_REFUSAL = (
-    "No drive in this system raises a gathering skill, and there are three "
-    "independent holes rather than one. (1) NOTHING GRANTS THE STRATEGY PAIR "
-    "THAT PICKS A NODE UP: mod-overseer's own reading is that `gather` puts a "
-    "node into the loot stack and `loot` is what walks to it, and measured "
-    "against the live overseer_command table `nc +loot` has never been issued "
-    "to anybody, once - infra#3769. (2) NOTHING DECIDES WHERE: not one status "
-    "in NewRpgStatusUpdateAction is a node picker, so a family told to gather "
-    "roams wherever the leader's quest log happens to point, which is nobody's "
-    "material by construction. Measured 2026-09-14: the family stands in "
-    "Tanaris (zone 440) and Un'Goro (zone 490), and acore_world.gameobject "
-    "carries ZERO Copper Vein and ZERO Tin Vein spawns in either - the lowest "
-    "node present is Silver. (3) AND THE BAND IS NOT EVEN COMPUTABLE: deciding "
-    "'is anything here within reach of this skill value' needs the per-node "
-    "requirement out of Lock.dbc, and acore_world.lock_dbc is EMPTY on this "
-    "realm exactly like skillline_dbc and skilllineability_dbc, so it is not a "
-    "number Python can read at all today. Holes 2 and 3 are infra#3789, which "
-    "carries the live vein census and the one low-level copper zone the family "
-    "could reach without crossing an ocean; it is blocked on infra#3769, "
-    "because a destination with no pickup strategy is a long walk to stand "
-    "next to an ore vein."
+    "Nothing surveyed a gathering destination for this pass, so there is no "
+    "zone to judge. This is not the old three-hole refusal: granting "
+    "gather/loot is closed (infra#3769, measured at 2,356 issuances), the "
+    "per-node band is now projected from the worldserver's own Lock.dbc "
+    "because acore_world.lock_dbc is empty (gatherband), and choosing a zone "
+    "is gatheraim - so a destination CAN be computed. It simply was not passed "
+    "in here, which means the caller did not run the survey rather than that "
+    "the family has nowhere to go (infra#3789)."
 )
 
 SMELT_CAVEAT = (
@@ -292,7 +294,8 @@ def _stalled_sentence(skill_name: str, beneficiary: str, shape: str,
 
 
 def plan(*, skill_name: str, skill_id: int, target: int, observed: int,
-         cap: int, beneficiary: str, standing: str, stalls: int = 0) -> Plan:
+         cap: int, beneficiary: str, standing: str, stalls: int = 0,
+         destination=None) -> Plan:
     """The one decision: what should the family do about this skill goal.
 
     Every argument is a fact somebody else read, and that is the seam. `cap` is
@@ -301,6 +304,12 @@ def plan(*, skill_name: str, skill_id: int, target: int, observed: int,
     the rows disagree; `stalls` is how many consecutive supervision cycles the
     observed value has not moved for, which goals.py counts on the goal row
     because the row is the only memory a restart preserves.
+
+    `destination` is a `gatheraim.Choice` for a GATHERED skill and None
+    otherwise, and None is not the same as a refusal - see the branch.
+    Passing it in rather than computing it keeps this module pure: the
+    survey it comes from is a database read and a clock, and neither
+    belongs behind a function whose whole value is that a test can call it.
 
     THE ORDER OF THE BRANCHES IS LOAD-BEARING, and each one is here because a
     later branch would give a true-but-useless answer for the same state:
@@ -336,18 +345,47 @@ def plan(*, skill_name: str, skill_id: int, target: int, observed: int,
         )
 
     if shape == GATHERED:
-        refusal = GATHERING_REFUSAL
-        if craft.recipe_for(skill_id, observed) is not None:
-            # Mining, below 69. The bracket is real and the forge walk that
-            # honours it is real, so saying "no mechanism exists" flat would be
-            # a refusal a reader can disprove in one grep - and a refusal that
-            # can be disproved is one nobody trusts the next time.
-            refusal += SMELT_CAVEAT
+        # infra#3789. A gathering goal is answerable now, and what decides it
+        # is whether the caller surveyed somewhere to stand. `destination` is a
+        # `gatheraim.Choice` or None, and the three states are kept apart on
+        # purpose: None means nobody looked, `refused` means somebody looked
+        # and the world said no, and `chosen` means go. Collapsing the first
+        # two is how the old refusal came to claim something false for five
+        # days.
+        if destination is None:
+            refusal = GATHERING_REFUSAL
+            if craft.recipe_for(skill_id, observed) is not None:
+                # Mining, below 69. The bracket is real and the forge walk that
+                # honours it is real, so saying "no mechanism exists" flat
+                # would be a refusal a reader can disprove in one grep - and a
+                # refusal that can be disproved is one nobody trusts the next
+                # time.
+                refusal += SMELT_CAVEAT
+            return Plan(
+                skill_name=skill_name, beneficiary=beneficiary, shape=shape,
+                blocked=refusal,
+                why="no destination was surveyed for %s this pass." % skill_name,
+            )
+
+        if getattr(destination, "refused", ""):
+            return Plan(
+                skill_name=skill_name, beneficiary=beneficiary, shape=shape,
+                blocked=destination.refused,
+                why=getattr(destination, "why", "") or
+                    "the world offers nowhere to raise %s." % skill_name,
+            )
+
+        # A real field, on this map, inside the band, past the level guard.
+        # MODE_GATHER is craft_rhythm's own constant and job='quest' IS that
+        # mode - writing anything else here would read to mod_overseer.cpp as
+        # "the quest drive stands down, full stop".
+        got = destination.chosen
         return Plan(
             skill_name=skill_name, beneficiary=beneficiary, shape=shape,
-            blocked=refusal,
-            why="no pass grants gather/loot and no pass chooses a node, so "
-                "there is no order that raises %s." % skill_name,
+            mode=MODE_GATHER,
+            why="zone %d on map %d holds %d %s node(s) the weakest gatherer "
+                "can open; aiming the family at a surveyed spawn there."
+                % (got.zone_id, got.map_id, got.nodes, got.skill_name),
         )
 
     # --- CRAFTED from here down ------------------------------------------

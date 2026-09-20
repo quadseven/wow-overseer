@@ -43,6 +43,7 @@ import unittest
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 MODULE = ROOT / "mod-overseer/src/mod_overseer.cpp"
 DECISIONS = ROOT / "mod-overseer/src/overseer_decisions.cpp"
+DECISIONS_H = ROOT / "mod-overseer/src/overseer_decisions.h"
 PATCH = (
     ROOT
     / "patches/mod-playerbots"
@@ -227,6 +228,180 @@ class TheVocabularyIsSharedBetweenPythonAndTheModule(unittest.TestCase):
             self.assertIn(keyword, travel.ROLES, keyword)
 
 
+class TheDeliberateFlightErrandIsSpeltTheSameOnBothSides(unittest.TestCase):
+    """`flight master:<nodeId>` (mod-overseer#388, infra#4206).
+
+    THE BARE KEYWORD ABOVE STILL MEANS "THE NEAREST ONE". This prefixed form
+    names a NODE, and it is the same two-way mirror problem `ROLES` has: the
+    module spells the prefix once, in `FLIGHT_MASTER_NODE_AIM_PREFIX`, so that
+    its own parser and the actionable refusal line that SUGGESTS the aim cannot
+    drift apart. travel.py is the third copy, and a third copy that disagrees
+    is an aim written and never read - exactly #2776.
+
+    AND THE AIM EXISTED HERE WITH NO CALLER FOR LONGER THAN IT EXISTED THERE.
+    infra#4206 measured 200,000 worldserver log lines in which the only travel
+    aim this process has ever written is `vendor`, while the module was
+    printing "'flight master:40' would go learn it" into the same log. The
+    caller's own suite is tests/test_flight_learn.py; these are the vocabulary
+    it is built on.
+    """
+
+    def test_the_prefix_is_the_modules_own_string(self):
+        header = DECISIONS_H.read_text(encoding="utf-8")
+        match = re.search(
+            r'FLIGHT_MASTER_NODE_AIM_PREFIX\s*=\s*"([^"]+)"', header)
+        self.assertIsNotNone(
+            match, "the module no longer declares the prefix this side writes")
+        self.assertEqual(travel.FLIGHT_MASTER_NODE_AIM_PREFIX, match.group(1))
+
+    def test_the_prefix_starts_with_the_role_it_refines(self):
+        """A reader of the column has to be able to tell at a glance that this
+        is a flight errand, and `ResolveTravelTarget` answers the prefixed form
+        BEFORE it reaches the role table - so the two must not be able to drift
+        into different words."""
+        self.assertIn(travel.FLIGHT_MASTER_ROLE, travel.ROLES)
+        self.assertTrue(travel.FLIGHT_MASTER_NODE_AIM_PREFIX.startswith(
+            travel.FLIGHT_MASTER_ROLE))
+
+    def test_the_node_match_radius_is_the_modules_own(self):
+        """`ResolveTravelTarget` refuses a node no flight master stands within
+        `TRAVEL_FLIGHT_NODE_MATCH_YARDS` of, and `ConsiderFlight` uses the same
+        number for the same question. A caller that picks candidates by a
+        looser rule picks nodes the module will then decline."""
+        match = re.search(
+            r"TRAVEL_FLIGHT_NODE_MATCH_YARDS\s*=\s*([0-9.]+)f", _source())
+        self.assertIsNotNone(match)
+        self.assertEqual(float(travel.FLIGHT_NODE_MATCH_YARDS),
+                         float(match.group(1)))
+
+    def test_the_module_parses_what_this_side_writes(self):
+        """The parser is `ParseFlightMasterNodeAim`, and these are its own
+        stated rules: at most ten decimal digits, nothing but 0-9, and node 0
+        refused because it "names no row in TaxiNodes.dbc"."""
+        parser = DECISIONS.read_text(encoding="utf-8")
+        body = parser[parser.index("bool ParseFlightMasterNodeAim("):]
+        body = body[:body.index("std::string FlightMasterNodeAim(")]
+        self.assertIn("FLIGHT_MASTER_NODE_AIM_PREFIX", body)
+        self.assertIn('digits.find_first_not_of("0123456789")', body)
+        self.assertIn("digits.size() > %d" % travel.FLIGHT_MASTER_NODE_DIGITS,
+                      body)
+        self.assertIn("parsed > %dULL" % travel.FLIGHT_MASTER_NODE_MAX, body)
+        self.assertIn("parsed == 0", body)
+
+    def test_the_module_builds_the_same_string_this_side_does(self):
+        parser = DECISIONS.read_text(encoding="utf-8")
+        builder = parser[parser.index("std::string FlightMasterNodeAim("):]
+        builder = builder[:builder.index("}", builder.index("{")) + 1]
+        self.assertIn("FLIGHT_MASTER_NODE_AIM_PREFIX", builder)
+        self.assertIn("std::to_string(nodeId)", builder)
+
+    def test_an_aim_round_trips_through_resolve(self):
+        aim = travel.flight_master_aim(40)
+        self.assertEqual(aim, "flight master:40")
+        self.assertEqual(travel.resolve(aim), aim)
+        self.assertTrue(travel.is_target(aim))
+        self.assertTrue(travel.is_flight_master_aim(aim))
+        self.assertEqual(travel.flight_master_node(aim), 40)
+
+    def test_the_bare_keyword_is_still_the_nearest_one(self):
+        """Two different errands, and the distinction is the whole reason the
+        prefixed form exists: "the nearest flight master" is the wrong answer
+        for a discovery walk exactly as often as the nearest one is not the one
+        standing at the missing node."""
+        self.assertEqual(travel.resolve("flight master"), "flight master")
+        self.assertFalse(travel.is_flight_master_aim("flight master"))
+        self.assertIsNone(travel.flight_master_node("flight master"))
+        self.assertEqual(travel.resolve("flightmaster"), "flight master")
+
+    def test_the_aim_fits_the_column_it_has_to_live_in(self):
+        """VARCHAR(32), and MySQL truncates rather than refuses outside strict
+        mode. A truncated node id is not a failed aim - it is a DIFFERENT node
+        that nobody chose."""
+        widest = travel.flight_master_aim(travel.FLIGHT_MASTER_NODE_MAX)
+        self.assertLessEqual(len(widest), travel.COLUMN_WIDTH)
+
+    def test_a_node_id_the_module_would_refuse_is_never_written(self):
+        """0 is the module's own sentinel - it "names no row in TaxiNodes.dbc"
+        - and anything past a uint32 is a value neither side can represent."""
+        for bad in (0, -1, None, "", "forty", "4e1",
+                    travel.FLIGHT_MASTER_NODE_MAX + 1):
+            with self.subTest(node=bad):
+                self.assertIsNone(travel.flight_master_aim(bad))
+
+    def test_whatever_it_does_write_is_something_the_module_can_read(self):
+        """The one property that matters. `ParseFlightMasterNodeAim` reads
+        bytes out of "0123456789" and nothing else, so an aim built from a
+        caller's looser spelling of a number has to come out in the module's
+        own form or not at all."""
+        for given in (1, 40, "40", "+40", " 40 ",
+                      travel.FLIGHT_MASTER_NODE_MAX):
+            with self.subTest(node=given):
+                aim = travel.flight_master_aim(given)
+                self.assertIsNotNone(aim)
+                self.assertEqual(travel.flight_master_node(aim), int(given))
+                self.assertEqual(travel.resolve(aim), aim)
+
+    def test_a_malformed_aim_is_refused_rather_than_guessed(self):
+        for bad in ("flight master:", "flight master:0", "flight master:-1",
+                    "flight master:40x", "flight master: 40",
+                    "flight master:00000000004", "flight master:4294967296",
+                    "flight:40", "flightmaster:40"):
+            with self.subTest(aim=bad):
+                self.assertIsNone(travel.flight_master_node(bad))
+                self.assertIsNone(travel.resolve(bad))
+
+    def test_a_leading_zero_canonicalises_to_the_one_spelling(self):
+        """Two spellings of the same node would be two aims to the column, two
+        holders to the town slot and one node."""
+        self.assertEqual(travel.resolve("flight master:040"),
+                         "flight master:40")
+
+    def test_describe_names_the_node_and_not_the_nearest_master(self):
+        self.assertEqual(travel.describe("flight master:40"),
+                         "the flight master who teaches taxi node 40")
+        self.assertEqual(travel.describe("flight master"),
+                         "the nearest flight master")
+
+    def test_it_can_be_aimed_at_somebody(self):
+        """`aim_statements` refuses a target it cannot resolve, so this is what
+        stops the new vocabulary being a string nothing can write."""
+        stmts = travel.aim_statements(["Grug"], "flight master:40")
+        self.assertIn("SET travel_npc", stmts[0][0])
+        self.assertEqual(stmts[0][1][0], "flight master:40")
+
+    def test_the_module_resolves_it_before_it_builds_the_creature_index(self):
+        """The node is a fact out of TaxiNodes.dbc, not a role the candidate
+        search knows how to rank, so it is answered early - the same way `at:`
+        and `trigger:` are."""
+        resolve = _code(_resolve())
+        self.assertIn("ParseFlightMasterNodeAim(target, wantedNode)", resolve)
+        self.assertLess(resolve.index("ParseFlightMasterNodeAim"),
+                        resolve.index("TravelRoles()"))
+
+    def test_the_module_refuses_a_node_no_flight_master_answers_for(self):
+        """TaxiNodes.dbc carries rows nothing stands at, so an aim at one would
+        resolve to no spawn at all and read as an aim that merely did not
+        work."""
+        resolve = _code(_resolve())
+        self.assertIn("FlightMasterAnswersForNode(", resolve)
+        self.assertIn("TRAVEL_FLIGHT_NODE_MATCH_YARDS", resolve)
+        self.assertIn("if (!nodeSpawnEntry)", resolve)
+
+    def test_the_module_still_applies_its_own_faction_gate(self):
+        """A flight master this character is unfriendly to cannot teach it a
+        node however well the walk goes - which is why the caller does not
+        offer the other side's nodes in the first place (infra#4206)."""
+        resolve = _code(_resolve())
+        self.assertIn("MayInteractAt(", resolve)
+
+    def test_the_errand_is_released_whether_or_not_the_node_was_learned(self):
+        """Which is precisely why an emptied column proves nothing, and why the
+        caller's only proof of success is the taximask bit."""
+        drive = _code(_drive())
+        self.assertIn("LearnFlightNodeDeliberately(", drive)
+        self.assertIn("learned ? \"learned\" : \"not learned", _drive())
+
+
 class TheTargetVocabulary(unittest.TestCase):
     def test_a_canonical_keyword_resolves_to_itself(self):
         self.assertEqual("profession trainer",
@@ -283,14 +458,52 @@ class TheAimIsWrittenAndEveryoneElseIsCleared(unittest.TestCase):
         self.assertEqual(2, len(stmts))
         self.assertIn("NOT IN", stmts[1][0])
 
-    def test_an_empty_target_clears_everybody(self):
+    def test_an_empty_target_stands_down_only_the_named(self):
+        """A falsy target is an explicit stand-down, and it stands down the
+        characters the caller NAMED - not the roster.
+
+        This used to clear every row (`WHERE travel_npc <> ''` with no name
+        clause at all), so a request about one character wiped the column for
+        everybody, including a leader carrying an unrelated ground aim that
+        another pass legitimately owned (infra#4195)."""
         stmts = travel.aim_statements(["Grug"], "")
         self.assertEqual(1, len(stmts))
-        self.assertIn("travel_npc <> ", stmts[0][0])
+        sql, params = stmts[0]
+        self.assertIn("travel_npc <> ", sql)
+        self.assertIn("name IN (", sql)
+        self.assertIn("Grug", params)
 
-    def test_naming_nobody_clears_everybody(self):
-        stmts = travel.aim_statements([], "vendor")
-        self.assertEqual(1, len(stmts))
+    def test_an_empty_target_leaves_a_character_nobody_named_alone(self):
+        """The guard that matters: Ugga is not mentioned, so Ugga's aim is not
+        this call's business. Reverting the name scope fails here."""
+        sql, params = travel.aim_statements(["Grug"], "")[0]
+        self.assertIn("name IN (", sql)
+        self.assertNotIn("Ugga", params)
+
+    def test_naming_nobody_writes_nothing(self):
+        """Naming nobody is not naming everybody. A caller that named no
+        characters has asked for nothing, so the honest answer is no
+        statements rather than a roster-wide clear."""
+        self.assertEqual([], travel.aim_statements([], "vendor"))
+        self.assertEqual([], travel.aim_statements([], ""))
+        self.assertEqual([], travel.aim_statements(None, None))
+
+    def test_the_named_and_target_path_still_clears_everyone_else(self):
+        """Unchanged on purpose: when a target IS given, clearing everyone not
+        named is the deliberate 'one traveller at a time' semantics the
+        docstring argues for, and this fix does not touch it."""
+        stmts = travel.aim_statements(["Grug"], "vendor")
+        self.assertEqual(2, len(stmts))
+        self.assertIn("NOT IN", stmts[1][0])
+        self.assertIn("Grug", stmts[1][1])
+
+    def test_the_stand_down_binds_its_names(self):
+        """Same binding discipline as every other statement here."""
+        sql, params = travel.aim_statements(["Grug", "Ugga"], "")[0]
+        self.assertNotIn("Grug", sql)
+        self.assertNotIn("Ugga", sql)
+        self.assertIn("Grug", params)
+        self.assertIn("Ugga", params)
 
     def test_an_unresolvable_target_raises_rather_than_writing_junk(self):
         with self.assertRaises(ValueError):
@@ -858,9 +1071,29 @@ class TheErrandStateIsNotOutlivedByItsClock(unittest.TestCase):
         anchored to a target and a catch-up walk rewrites its target every
         poll with the leader's live position, so the twenty-minute clock was
         restarted before it could ever run out. This one is anchored to a
-        PLACE, which is why it fires."""
+        PLACE, which is why it fires.
+
+        The newest is mod-overseer#504's water release, and it is the only one
+        that fires because of where the character is STANDING rather than
+        because of anything the walk did or failed to do. The stuck-errand
+        hold above asked CanBeSentToNpc and rpgInfo.stuckAttempts and nothing
+        else, so a leader stuck on an errand was held in place whether or not
+        the ground under it was a lake. Two characters drowned one yard apart
+        in Un'Goro Crater on 2026-09-19 while this module printed "held on the
+        ground instead" eighteen times, and it was still printing after the
+        death and the revival. Being in water now ends the hold and releases
+        the errand on its own named line, so the hold can no longer outlive
+        the traveller. It is a release rather than a refusal-in-place for the
+        same reason #300's route gate is: standing still is the thing doing
+        the killing here, so there is no shorter version of this walk to wait
+        for.
+
+        NOTE: the lead sentence above says "Ten" and this assertion has been
+        12 since #504. That drift predates #504 - the count was already 11
+        against a prose lead of ten - so one release in this census has never
+        been named in prose. The assertion, not the lead, is the authority."""
         code = _code(_drive())
-        self.assertEqual(11, code.count("_travelAims.Release(name)"))
+        self.assertEqual(12, code.count("_travelAims.Release(name)"))
         self.assertNotIn("_state.erase(", code)
         # Stronger than "the drive does not erase": it cannot. The memory is a
         # private member of the book, so the only way out is Release.

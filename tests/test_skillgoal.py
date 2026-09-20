@@ -14,6 +14,7 @@ import unittest
 
 import craft
 import craft_rhythm
+import gatheraim
 import goals
 import professions
 import skillgoal
@@ -213,31 +214,90 @@ class RankCapTest(unittest.TestCase):
 
 
 class GatheringPathTest(unittest.TestCase):
-    """Refused, and the refusal is the deliverable.
+    """Inverted by infra#3789: a gathering goal now DRIVES when it has a field.
 
-    Setting job='quest' and calling it a gathering drive is exactly the
-    half-built path this change exists to avoid: nothing has EVER granted
-    `gather` or `loot` to this family (`nc +loot` has never been issued to
-    anybody, once), and nothing chooses where to roam, so the goal would sit in
-    the roaming mode reporting health while the number never moved.
+    This class used to assert the refusal and call it the deliverable, which was
+    right while all three holes were open. They are closed: `nc +loot` is
+    granted (infra#3769, measured at 2,356 issuances), the per-node band is
+    projected from the worldserver's own Lock.dbc because `acore_world.lock_dbc`
+    is empty (`gatherband`), and the zone is chosen by `gatheraim`.
+
+    THE THREE STATES ARE KEPT APART ON PURPOSE. `destination=None` means nobody
+    surveyed; a refused Choice means somebody surveyed and the world said no;
+    a chosen Choice means go. Collapsing the first two is how the old refusal
+    came to tell the operator something false for five days, in Discord.
     """
 
-    def test_every_gathering_skill_is_refused(self):
+    @staticmethod
+    def _field(zone=148, lock=38, nodes=3, level=12):
+        rows = [gatheraim.Spawn(map_id=1, zone_id=zone, x=float(i), y=0.0,
+                                z=5.0, lock_id=lock) for i in range(nodes)]
+        return gatheraim.choose(skills={"Grog": {"mining": 1}}, standing_on=1,
+                                spawns=rows, family_level=60,
+                                zone_levels={zone: level})
+
+    def test_a_surveyed_field_drives_instead_of_refusing(self):
+        got = plan(skill_name="mining", skill_id=goals.SKILL_IDS["mining"],
+                   observed=8, target=75, cap=75, beneficiary="Grug",
+                   standing="quest", destination=self._field())
+        self.assertFalse(got.blocked)
+        self.assertEqual(got.mode, skillgoal.MODE_GATHER)
+        self.assertIn("zone 148", got.why)
+
+    def test_the_mode_is_craft_rhythms_own_gather_constant(self):
+        """job='quest' IS MODE_GATHER.
+
+        Writing anything else reads to mod_overseer.cpp as "the quest drive
+        stands down, full stop" - so this asserts the constant rather than the
+        string, and asserts the string too, because the two drifting apart is
+        the failure that would stand the whole family down.
+        """
+        self.assertEqual(skillgoal.MODE_GATHER, "quest")
+        got = plan(skill_name="mining", skill_id=goals.SKILL_IDS["mining"],
+                   observed=8, target=75, cap=75, beneficiary="Grug",
+                   standing="quest", destination=self._field())
+        self.assertEqual(got.mode, "quest")
+
+    def test_a_refused_destination_surfaces_the_worlds_reason(self):
+        """Not the generic sentence - the specific one the survey produced."""
+        nowhere = gatheraim.choose(skills={"Grog": {"mining": 1}},
+                                   standing_on=1, spawns=[], family_level=60,
+                                   zone_levels={})
+        got = plan(skill_name="mining", skill_id=goals.SKILL_IDS["mining"],
+                   observed=8, target=75, cap=75, beneficiary="Grug",
+                   standing="quest", destination=nowhere)
+        self.assertTrue(got.blocked)
+        self.assertEqual(got.mode, "")
+        self.assertIn("no zone on map 1", got.blocked)
+
+    def test_no_survey_is_distinct_from_the_world_saying_no(self):
+        got = plan(skill_name="mining", skill_id=goals.SKILL_IDS["mining"],
+                   observed=8, target=75, cap=75, beneficiary="Grug",
+                   standing="quest", destination=None)
+        self.assertTrue(got.blocked)
+        self.assertIn("did not run the survey", got.blocked)
+
+    def test_the_refusal_no_longer_claims_loot_was_never_granted(self):
+        """The stale sentence that printed to Discord for five days.
+
+        infra#3769 closed on measurement. A refusal that outlives its cause is
+        worse than no refusal, because it sends the next reader at a fixed bug.
+        """
+        got = plan(skill_name="mining", skill_id=goals.SKILL_IDS["mining"],
+                   observed=8, target=75, cap=75, beneficiary="Grug",
+                   standing="quest", destination=None)
+        self.assertNotIn("never been issued", got.blocked)
+        self.assertIn("infra#3789", got.blocked)
+
+    def test_every_gathering_skill_still_answers_without_a_destination(self):
+        """Including skinning, which no destination can ever serve."""
         for name in sorted(professions.GATHERING):
             with self.subTest(skill=name):
                 got = plan(skill_name=name, skill_id=goals.SKILL_IDS[name],
-                           observed=8, target=75, cap=75, beneficiary="Grug")
+                           observed=8, target=75, cap=75, beneficiary="Grug",
+                           standing="quest")
                 self.assertTrue(got.blocked)
                 self.assertEqual(got.mode, "")
-
-    def test_the_refusal_names_both_missing_halves(self):
-        got = plan(skill_name="mining", skill_id=goals.SKILL_IDS["mining"],
-                   observed=8, target=75, cap=75, beneficiary="Grug")
-        self.assertIn("infra#3769", got.blocked)
-        self.assertIn("lock_dbc", got.blocked)
-        # And the issue that would lift the refusal, so a reader who wants it
-        # fixed is not left to search for where the work is tracked.
-        self.assertIn("infra#3789", got.blocked)
 
     def test_mining_says_out_loud_that_the_smelt_exists(self):
         """A refusal a reader can disprove in one grep is one nobody trusts the

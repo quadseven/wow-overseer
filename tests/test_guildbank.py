@@ -7,6 +7,7 @@ writes `travel_npc`, but the caller in bridge.py routes the resulting errand
 through `ECONOMY_ERRANDS`, deliberately, so it inherits the exact same
 idle-traveller guard rather than repeating that mistake one file over.
 """
+import ast
 import pathlib
 import re
 import unittest
@@ -909,6 +910,171 @@ class BankSetupBridgeTests(unittest.TestCase):
         self.assertIn("guildbank-setup", body)
         self.assertIn("bank buy-tab", self.source)
         self.assertIn("bank grant-deposit", self.source)
+
+
+class ParameterisedQueriesSurviveMogrify(unittest.TestCase):
+    """Every `cur.execute(sql, args)` in bridge.py must render with its args.
+
+    pymysql builds a parameterised query as `sql % escaped_args`, so a literal
+    percent in the SQL - the wildcard in a LIKE pattern, almost always - has to
+    be doubled. Get it wrong and `mogrify` raises `TypeError: not enough
+    arguments for format string` BEFORE the query reaches MySQL, which also
+    means an `except pymysql.err.MySQLError` handler does not catch it.
+
+    infra#3713 is what that cost. `_recent_guild_setup_keys` had
+    `LIKE 'bank grant-deposit %'` with a bare percent, so the guild-bank pass
+    raised on every cycle and no guild on the realm ever bought a bank tab. The
+    pass only runs once it wins the family's single travel column, which it
+    waited roughly twenty minutes for, so the traceback was rare enough in the
+    log to read as incidental - three investigations blamed a missing C++ verb,
+    an offline client and an unmet prerequisite before anyone read it.
+
+    The sibling `_recent_guild_bank_keys` two hundred lines away shows the
+    other correct answer: pass the pattern as an argument
+    (`command LIKE %s`, `("bank deposit %", ...)`) so the percent never sits in
+    the format string at all.
+
+    Parsed with `ast` rather than grepped, so a percent inside a docstring or a
+    comment cannot raise a false alarm.
+    """
+
+    @staticmethod
+    def _literal(node):
+        """The SQL text if this argument is a plain (possibly joined) literal."""
+        if isinstance(node, ast.Constant) and isinstance(node.value, str):
+            return node.value
+        if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
+            left = ParameterisedQueriesSurviveMogrify._literal(node.left)
+            right = ParameterisedQueriesSurviveMogrify._literal(node.right)
+            if left is not None and right is not None:
+                return left + right
+        return None
+
+    def test_no_execute_call_raises_on_its_own_placeholders(self):
+        tree = ast.parse(BRIDGE.read_text(encoding="utf-8"))
+        checked = 0
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            func = node.func
+            if not (isinstance(func, ast.Attribute) and func.attr == "execute"):
+                continue
+            if len(node.args) != 2:
+                continue
+            sql = self._literal(node.args[0])
+            if sql is None:
+                continue
+            # How many arguments the call actually supplies.
+            args = node.args[1]
+            if isinstance(args, (ast.Tuple, ast.List)):
+                supplied = len(args.elts)
+            else:
+                continue  # built at runtime; cannot count statically
+            checked += 1
+            try:
+                sql % tuple("x" * supplied)
+            except TypeError as exc:
+                self.fail(
+                    f"bridge.py line {node.lineno}: query supplies {supplied} "
+                    f"argument(s) but does not render ({exc}). A literal % in "
+                    f"the SQL must be doubled to %%, or passed as an argument. "
+                    f"Query: {sql[:120]!r}"
+                )
+        self.assertGreater(checked, 5, "parsed too few execute() calls to trust")
+
+
+def _gb_block() -> str:
+    """`_guild_bank_once`'s body, to the next def at the same indent."""
+    src = BRIDGE.read_text(encoding="utf-8")
+    signature = "    async def _guild_bank_once(self) -> None:"
+    start = src.index(signature)
+    rest = src[start:]
+    match = re.search(r"\n {0,4}(async def |def |class )", rest[1:])
+    return rest[: match.start() + 1] if match else rest
+
+
+def _gb_statements() -> str:
+    """The same body with docstrings and `#` commentary stripped.
+
+    Required here, not optional. The fix this guards quotes the exact buggy
+    expressions (`aimed or at_the_vault`) in its own explanatory comments, so a
+    test reading raw source would match the prose that documents the bug and
+    pass while the bug was live. `test_town_bank_errands._statements` exists
+    for the same reason and says it was caught by this twice.
+    """
+    body = _gb_block()
+    marker = '"""'
+    if body.count(marker) >= 2:
+        body = body.split(marker, 2)[2]
+    return "\n".join(line for line in body.splitlines()
+                     if not line.lstrip().startswith("#"))
+
+
+class TheGuildBankPassActsOnlyWhereItIsStanding(unittest.TestCase):
+    """Winning the travel column is not the same as having walked it.
+
+    infra#3713. Both gates in `_guild_bank_once` read the claim as though it
+    were an arrival - the setup path as `if aimed or at_the_vault`, the deposit
+    path as `if not aimed and not at_the_vault`. `_claim_town_slot` returns
+    True the moment the pass wins the RIGHT TO WALK, which is the start of the
+    journey; so on 2026-09-19 the column was claimed at 03:47:08 and
+    `bank buy-tab` was queued at 03:47:09 with the leader 3311 yards from the
+    vault. The core refused it, correctly, and `guild_bank_tab` stayed empty
+    for the whole life of the pass.
+
+    This is the same correction infra#3815 already made one pass over, where
+    `TheBankStepNeedsNoArrivalTest` was renamed
+    `TheBankStepAsksWhetherTheFamilyArrived` because, in its own words, "the
+    name was the claim, and the claim was false".
+    """
+
+    def test_the_claim_is_never_a_substitute_for_the_arrival(self):
+        """THE BUG, AS ONE ASSERTION. `aimed or at_the_vault` let a pass that
+        had merely won the column queue a row for a leader still on the road."""
+        self.assertNotIn("aimed or at_the_vault", _gb_statements())
+
+    def test_starved_walking_and_arrived_are_three_separate_answers(self):
+        """`not aimed and not at_the_vault` STAYS - it reports starvation, and
+        infra#3464 exists because this pass used to discard that and say
+        nothing while the leader sat on another errand for 15+ minutes. What
+        was missing is the middle state: aimed, walking, not there yet. It used
+        to fall through to queueing.
+
+        THE COUNT IS ONE NOW, AND THAT IS THE POINT OF infra#4198. There were
+        two of every gate because setup and deposit were two mutually
+        exclusive branches, and the setup one returned on every path - so
+        `plan_deposits` was never called while `plan_setup` still had a rank
+        to ask about, which against the live guild was for ever. The three
+        states are unchanged; there is one set of them, in front of one walk
+        that serves both errands.
+        """
+        code = _gb_statements()
+        self.assertIn("not aimed and not at_the_vault", code)
+        self.assertEqual(code.count("if not at_the_vault:"), 1)
+
+    def test_the_arrived_branch_is_what_queues(self):
+        """Arrival is the fall-through past both negative gates (infra#4198).
+
+        It used to be a positive `if at_the_vault:` inside the setup branch.
+        The property is the same one and is now asserted where it lives: every
+        row this pass writes is written BELOW the walking gate, so nothing is
+        queued for a leader still on the road.
+        """
+        code = _gb_statements()
+        arrived = code[code.index("if not at_the_vault:"):]
+        arrived = arrived[arrived.index("return") + len("return"):]
+        self.assertIn('"guildbank-setup")', arrived)
+        self.assertIn('_insert_guild, deposit.name, command, "guildbank"',
+                      arrived)
+
+    def test_the_column_is_still_claimed_so_the_walk_still_starts(self):
+        """Dropping the RETURN VALUE must not drop the CALL.
+
+        The claim is what writes the aim; without it the leader never sets off
+        and an arrival-only gate would wait for ever. ONE claim now, not two:
+        see the sibling test above and infra#4198.
+        """
+        self.assertEqual(_gb_statements().count("aimed = await self._claim_town_slot("), 1)
 
 
 if __name__ == "__main__":

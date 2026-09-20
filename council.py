@@ -37,6 +37,7 @@ from datetime import datetime, timedelta
 
 import achievements
 import bonds
+import dungeonprogression
 
 # A member this far below the family's median level is visibly struggling and
 # the family notices. Two is ordinary spread between people playing different
@@ -410,7 +411,8 @@ def _script(tally: list, withheld: list) -> list:
 
 
 def hold(members: list, *, history: list, level_rows: list[dict] | None = None,
-         cards: list[dict] | None = None) -> Council:
+         cards: list[dict] | None = None,
+         completed_runs: dict[str, int] | None = None) -> Council:
     """Run one council. Members in, a conversation and one plan out.
 
     Deterministic: the same state produces the same plan every time, so the
@@ -441,7 +443,9 @@ def hold(members: list, *, history: list, level_rows: list[dict] | None = None,
            if p is not None]
     # The one proposal not spoken for by assess(). See the docstring above
     # for why it lives here instead.
-    dungeon = _dungeon_proposal(speakers, level_rows or [], cards or [])
+    dungeon = _dungeon_proposal(
+        speakers, level_rows or [], cards or [], completed_runs
+    )
     if dungeon is not None:
         raw.append(dungeon)
     if not raw:
@@ -538,6 +542,17 @@ PLACES = {
     129: 33,   # Razorfen Downs
     70: 34,    # Uldaman
     209: 36,   # Zul'Farrak
+    # EXTENDED AGAIN 2026-09-19 (infra#4247), for the same reason and one level
+    # range further on: the table topped out at Zul'Farrak (36) while all five
+    # of the family sat at 60, so the hardest place `prospects()` could name
+    # was 21 levels below them and the council re-proposed it every hour.
+    #
+    # 52 is this module's own recommendation and NOT the core's gate, exactly
+    # like every number above it: `dungeon_access_template` row 14 lets a level
+    # 40 walk in, and what is spawned on map 230 on this pinned core is trash
+    # at 48 to 60 and rare elites at 52 to 56. See dungeonprogression.py, where
+    # the same number is quoted beside the world rows it was read from.
+    230: 52,   # Blackrock Depths
 }
 
 # The four wings of Scarlet Monastery (map 189, PLACES above), by the level
@@ -822,16 +837,76 @@ def _scarlet_keyword(level: int) -> str:
     prospects() uses everywhere else - a family ready for the cathedral is not
     sent back to the graveyard, and one only ready for the graveyard is not
     sent past its door.
+
+    Kept as a named function after infra#4247 generalized the rule, because
+    `_wing_rated_prospects` below asks a question that really is about Scarlet
+    Monastery and nowhere else: PLACES carries one number per map id and map
+    189 has four doors behind it.
     """
-    keyword = SCARLET_WINGS[0][0]
-    for name, wants in SCARLET_WINGS:
-        if level + NEAR_ENOUGH >= wants:
-            keyword = name
-    return keyword
+    return dungeonprogression.frontier_stage(SCARLET_WINGS, level,
+                                             slack=NEAR_ENOUGH)
+
+
+def _wing_rated_prospects(level_rows: list[dict], cards: list[dict],
+                          level: int) -> list[dict]:
+    """prospects(), with Scarlet Monastery re-rated to the wing this family
+    can actually reach.
+
+    Scarlet Monastery's entry in PLACES carries only the graveyard's level -
+    one number per map id, and it is the LOWEST of the four wings. Comparing
+    that number straight against every other dungeon would have the council
+    always undersell Scarlet Monastery once the family outgrows its door,
+    proposing Zul'Farrak over the cathedral for a family strong enough for
+    both. So the map-189 row is re-rated here to whichever wing the family
+    can ACTUALLY reach, before the frontier is chosen - the same
+    short/ready arithmetic prospects() uses, just aimed at the wing instead
+    of the doorway.
+    """
+    wing_wants = dict(SCARLET_WINGS)[_scarlet_keyword(level)]
+    rated = []
+    for p in prospects(level_rows, cards):
+        if p["map_id"] == SCARLET_MAP_ID:
+            short = wing_wants - level
+            p = dict(p, wants=wing_wants, short=max(short, 0), ready=short <= 0)
+        rated.append(p)
+    return rated
+
+
+def _campaign_keyword(map_id: int, level: int,
+                      completed_runs: dict[str, int] | None) -> str:
+    """The job keyword for the dungeon the frontier picked, or "" for none.
+
+    THE FRONTIER PICKS THE DUNGEON AND THIS PICKS THE DOOR, and getting those
+    two the wrong way round is infra#4247 in one sentence. The run ledger used
+    to outrank the frontier outright - "the first unfinished Scarlet wing is
+    the only target eligible for this campaign" - so a family that had walked
+    past Scarlet Monastery entirely could never be sent anywhere else. At level
+    60, 21 levels above the cathedral, that is what the council actually did,
+    every hour, for as long as it was asked.
+
+    A campaign the ledger says is FINISHED falls through to the frontier stage
+    of the same map rather than to None, and that is deliberate: the operator's
+    ask for Blackrock Depths is "over and over ... incrementally get better
+    gear", so a campaign at its target means run it again, not stand down. The
+    repeat was never the defect; the dungeon being 21 levels stale was.
+    """
+    stages = dungeonprogression.campaign_stages(map_id)
+    if not stages:
+        # No named doors on this map. The bare `dungeon` job, which is
+        # mod-overseer's own default rather than a target this module chose.
+        return ""
+    if completed_runs is not None:
+        ordered = dungeonprogression.next_stage(
+            completed_runs, DUNGEON_RUNS_WANTED, stages=stages,
+        )
+        if ordered:
+            return ordered
+    return dungeonprogression.frontier_stage(stages, level, slack=NEAR_ENOUGH)
 
 
 def _dungeon_proposal(speakers: list, level_rows: list[dict],
-                      cards: list[dict]) -> Proposal | None:
+                      cards: list[dict],
+                      completed_runs: dict[str, int] | None = None) -> Proposal | None:
     """A family-wide proposal to run a dungeon, when one is actually ready.
 
     Built from prospects() - the exact readiness gate the Council tab already
@@ -859,23 +934,7 @@ def _dungeon_proposal(speakers: list, level_rows: list[dict],
     if voice is None:
         return None
 
-    # Scarlet Monastery's entry in PLACES carries only the graveyard's level -
-    # one number per map id, and it is the LOWEST of the four wings. Comparing
-    # that number straight against every other dungeon would have the council
-    # always undersell Scarlet Monastery once the family outgrows its door,
-    # proposing Zul'Farrak over the cathedral for a family strong enough for
-    # both. So the map-189 row is re-rated here to whichever wing the family
-    # can ACTUALLY reach, before the frontier is chosen - the same
-    # short/ready arithmetic prospects() uses, just aimed at the wing instead
-    # of the doorway.
-    wing_wants = dict(SCARLET_WINGS)[_scarlet_keyword(level)]
-    rated = []
-    for p in prospects(level_rows, cards):
-        if p["map_id"] == SCARLET_MAP_ID:
-            short = wing_wants - level
-            p = dict(p, wants=wing_wants, short=max(short, 0), ready=short <= 0)
-        rated.append(p)
-
+    rated = _wing_rated_prospects(level_rows, cards, level)
     ready = [p for p in rated if p["short"] <= NEAR_ENOUGH]
     if not ready:
         return None
@@ -885,7 +944,12 @@ def _dungeon_proposal(speakers: list, level_rows: list[dict],
     # into - not the easiest. Ties favour Scarlet Monastery, Evan's own
     # stated priority.
     best = max(ready, key=lambda p: (p["wants"], p["map_id"] == SCARLET_MAP_ID))
-    keyword = _scarlet_keyword(level) if best["map_id"] == SCARLET_MAP_ID else ""
+    # AND THE DOOR ONLY AFTER THE PLACE (infra#4247). The run ledger used to be
+    # consulted first and allowed to narrow `ready` to Scarlet Monastery, which
+    # is why a level 60 family could never be sent past a level 39 wing. It now
+    # answers the question it can actually answer: given the dungeon the
+    # frontier picked, which of ITS doors is next.
+    keyword = _campaign_keyword(int(best["map_id"]), level, completed_runs)
     place = best["place"]
     if best["ready"]:
         said = f"{place} will not trouble us now. We should go in."

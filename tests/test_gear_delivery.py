@@ -195,6 +195,185 @@ class NobodyIsSentAnythingTheyCannotHold(unittest.TestCase):
         self.assertTrue(plan.notes)
 
 
+# ---------------------------------------------------------------------------
+# THE RANKING DECIDED WHETHER, WHEN IT WAS ONLY EVER ASKED TO DECIDE BETWEEN
+#
+# Measured on wow-dev 2026-09-19, with the family carrying 23 pieces of
+# uncommon-or-better gear and free slots reading Bork 11, Grug 12, Grog 6,
+# Og 3, Ugga 0:
+#
+#     Arachnidian Pauldrons  held by Og (3 free)
+#         gain 12   Ugga   0 free
+#         gain 10   Grog   6 free
+#         gain 10   Grug  12 free
+#         gain  1   Bork  11 free
+#
+# One grant proposed, one grant withheld, nothing moved - while three siblings
+# who could wear it had room between them for 29 items. `gear.plan` collapsed
+# the four to Ugga because she gained most, and `gear.deliverable` found Ugga
+# full and dropped the piece, having no way to reach the other three.
+#
+# THE ROOM RULE ITSELF WAS NEVER WRONG and is not touched: one free slot on the
+# RECEIVER, never a comparison against the giver's. A 0-free-slot holder handing
+# to an 11-free-slot sibling must always be tried, and is. What is fixed is that
+# a full front-runner now costs that front-runner the item rather than costing
+# the item its move.
+SHOULDER = 3
+THE_FAMILY = (worn("Og", MAGE, 60, i3=60)         # holder, already better
+              + worn("Ugga", PRIEST, 60, i3=40)   # gain 12
+              + worn("Grog", PALADIN, 60, i3=42)  # gain 10, ties broken by name
+              + worn("Grug", WARRIOR, 60, i3=42)  # gain 10
+              + worn("Bork", ROGUE, 60, i3=51))   # gain 1
+
+ALL_PRESENT = {name: at(KALIMDOR, 100.0 + i * 400.0, 100.0)
+               for i, name in enumerate(["Og", "Ugga", "Grog", "Grug", "Bork"])}
+
+# The live free-slot reading, to the slot.
+MEASURED_ROOM = {"Og": 3, "Ugga": 0, "Grog": 6, "Grug": 12, "Bork": 11}
+
+
+def pauldrons(**kw):
+    """The measured row: cloth shoulders in the bag of somebody wearing better.
+
+    Cloth on purpose, so that all four siblings are genuinely eligible and the
+    ranking is the only thing choosing between them - the armour-proficiency
+    rule below is a separate guard and must not be what makes this test pass.
+    """
+    base = dict(holder="Og", level=60, item_guid=7411, entry=15452, count=1,
+                instance_flags=0, name="Arachnidian Pauldrons", quality=2,
+                sell_price=2400, required_level=47, bonding=2, item_class=4,
+                item_subclass=gear.ARMOR_CLOTH, item_level=52,
+                allowable_class=ANY_CLASS, inventory_type=SHOULDER)
+    base.update(kw)
+    return base
+
+
+class TheRankingChoosesBetweenTakersAndNotWhether(unittest.TestCase):
+    """infra#4198. Each of these fails on the code before it, by returning
+    zero grants and one note, which is the whole defect stated as a test."""
+
+    def test_the_piece_reaches_the_runner_up_when_the_best_taker_is_full(self):
+        plan = hand_off([pauldrons()], THE_FAMILY, positions=ALL_PRESENT,
+                        free_slots=MEASURED_ROOM)
+        self.assertEqual(len(plan.grants), 1)
+        self.assertEqual((plan.grants[0].holder, plan.grants[0].taker),
+                         ("Og", "Grog"))
+        self.assertEqual(plan.notes, ())
+
+    def test_a_zero_slot_holder_may_still_hand_to_an_eleven_slot_sibling(self):
+        """The rule is one free slot on the RECEIVER, not more room than the
+        giver. Og at 0 handing to Bork at 11 is the move this issue is about,
+        and a "must gain room" rule would refuse it by arithmetic."""
+        only_bork = {"Og": 0, "Ugga": 0, "Grog": 0, "Grug": 0, "Bork": 11}
+        plan = hand_off([pauldrons()], THE_FAMILY, positions=ALL_PRESENT,
+                        free_slots=only_bork)
+        self.assertEqual([(g.holder, g.taker) for g in plan.grants],
+                         [("Og", "Bork")])
+
+    def test_the_biggest_beneficiary_still_wins_when_they_have_room(self):
+        """The fallback must not become a reason the ranking stops mattering:
+        with a slot, Ugga is still the right answer."""
+        plan = hand_off([pauldrons()], THE_FAMILY, positions=ALL_PRESENT,
+                        free_slots=dict(MEASURED_ROOM, Ugga=2))
+        self.assertEqual(plan.grants[0].taker, "Ugga")
+
+    def test_a_promoted_grant_says_who_is_actually_getting_it(self):
+        """The reason and the spoken line are what reach the log and party
+        chat. A promoted grant still naming the front-runner would be a line
+        that lies about what just happened."""
+        grant = hand_off([pauldrons()], THE_FAMILY, positions=ALL_PRESENT,
+                         free_slots=MEASURED_ROOM).grants[0]
+        self.assertIn("Grog", grant.reason)
+        self.assertNotIn("Ugga", grant.reason)
+        self.assertIn("Grog", grant.said)
+        self.assertNotIn("Ugga", grant.said)
+
+    def test_the_verb_is_measured_from_the_taker_who_actually_gets_it(self):
+        """Og stands beside Grug, not beside Grog. A verb chosen from the
+        front-runner's position and then applied to a different receiver is
+        the `characters are too far apart` class of refusal all over again."""
+        beside_grug = dict(ALL_PRESENT, Grug=at(KALIMDOR, 103.0, 100.0))
+        plan = hand_off([pauldrons()], THE_FAMILY, positions=beside_grug,
+                        free_slots={"Og": 3, "Ugga": 0, "Grog": 0, "Grug": 12,
+                                    "Bork": 0})
+        self.assertEqual((plan.grants[0].taker, plan.grants[0].verb),
+                         ("Grug", gear.TRADE))
+
+    def test_an_absent_runner_up_is_stepped_over_as_well(self):
+        """Presence and room are two walls in front of the same ranking, and
+        walking past one must not mean walking into the other."""
+        without_grog = {k: v for k, v in ALL_PRESENT.items() if k != "Grog"}
+        plan = hand_off([pauldrons()], THE_FAMILY, positions=without_grog,
+                        free_slots=MEASURED_ROOM)
+        self.assertEqual([(g.holder, g.taker) for g in plan.grants],
+                         [("Og", "Grug")])
+
+    def test_the_room_budget_still_bites_across_the_whole_ranking(self):
+        """Two pieces, one slot on the first taker with room. The second must
+        fall through to the next, not be promised the slot the first took."""
+        rows = [pauldrons(), pauldrons(item_guid=7412, entry=15453)]
+        plan = hand_off(rows, THE_FAMILY, positions=ALL_PRESENT,
+                        free_slots={"Og": 3, "Ugga": 0, "Grog": 1, "Grug": 12,
+                                    "Bork": 0})
+        self.assertEqual(sorted(g.taker for g in plan.grants),
+                         ["Grog", "Grug"])
+
+    def test_a_grant_that_is_written_carries_no_leftover_ranking(self):
+        """The insert path reads one taker. A Grant arriving there still
+        carrying three more is an invitation to write four rows."""
+        grant = hand_off([pauldrons()], THE_FAMILY, positions=ALL_PRESENT,
+                         free_slots=MEASURED_ROOM).grants[0]
+        self.assertEqual(grant.alternates, ())
+
+
+class EverybodyRefusingIsStillOneRefusal(unittest.TestCase):
+    """The withheld path keeps its contract: one note per ITEM, never one per
+    taker tried, or "decided N, queued M, held back K" stops adding up."""
+
+    def test_nobody_with_room_withholds_the_piece(self):
+        plan = hand_off([pauldrons()], THE_FAMILY, positions=ALL_PRESENT,
+                        free_slots={"Og": 3, "Ugga": 0, "Grog": 0, "Grug": 0,
+                                    "Bork": 0})
+        self.assertEqual(plan.grants, ())
+        self.assertEqual(len(plan.notes), 1)
+
+    def test_the_note_names_every_taker_that_was_tried(self):
+        """Naming only the front-runner sends the next reader looking at one
+        character's bags for a problem all four of them have."""
+        plan = hand_off([pauldrons()], THE_FAMILY, positions=ALL_PRESENT,
+                        free_slots={"Og": 3, "Ugga": 0, "Grog": 0, "Grug": 0,
+                                    "Bork": 0})
+        note = plan.notes[0]
+        self.assertIn("Arachnidian Pauldrons", note)
+        for name in ("Ugga", "Grog", "Grug", "Bork"):
+            with self.subTest(name=name):
+                self.assertIn(name, note)
+        self.assertIn("no free bag slot", note)
+
+    def test_both_walls_are_named_when_both_were_hit(self):
+        """A note saying only "no free bag slot" for a ranking where two were
+        offline and two were full is a note that sends the reader to the wrong
+        table."""
+        without_the_pair = {k: v for k, v in ALL_PRESENT.items()
+                            if k not in ("Grug", "Bork")}
+        plan = hand_off([pauldrons()], THE_FAMILY, positions=without_the_pair,
+                        free_slots={"Og": 3, "Ugga": 0, "Grog": 0, "Grug": 12,
+                                    "Bork": 11})
+        self.assertEqual(len(plan.notes), 1)
+        self.assertIn("no free bag slot", plan.notes[0])
+        self.assertIn("not in the world", plan.notes[0])
+
+    def test_an_absent_giver_is_one_note_about_the_giver(self):
+        """The holder is a fact about the item, not about any taker, so it
+        refuses the whole ranking at once and says so."""
+        without_og = {k: v for k, v in ALL_PRESENT.items() if k != "Og"}
+        plan = hand_off([pauldrons()], THE_FAMILY, positions=without_og,
+                        free_slots=MEASURED_ROOM)
+        self.assertEqual(plan.grants, ())
+        self.assertEqual(len(plan.notes), 1)
+        self.assertIn("Og", plan.notes[0])
+
+
 class SomebodyWhoIsNotInTheWorldIsNotSentAnything(unittest.TestCase):
     """169 `target not online` plus 29 `receiver not online`. A fresh
     overseer_snapshot row IS the online fact - the module refreshes it about

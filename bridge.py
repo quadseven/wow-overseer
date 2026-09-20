@@ -38,13 +38,17 @@ import digest
 import disposition
 import events
 import fanout
+import flightlearn
 import goals
 import bonds
 import guildbank
 import guildshare
 import craft
 import craft_rhythm
+import gatheraim
+import gatherband
 import craft_supply
+import dungeonprogression
 import item_plan
 import jobs
 import kin
@@ -370,9 +374,35 @@ def _fetch_enabled_names() -> list[str]:
     requires the target to be in the world to act on the row (same rule every
     other command kind follows), so an offline member's row comes back
     'target not online' rather than silently landing later; the muster-style
-    report in _set_job says exactly what was written, not what was intended."""
+    report in _set_job says exactly what was written, not what was intended.
+
+    ONE COHORT'S WORTH OF NAMES, AND THIS IS THE SHARPEST OF THE TWELVE READS
+    infra#4221 left open. "Family-wide" was a synonym for "every row in the
+    table" only because the table has never held anybody else. What comes back
+    here is fanned out into WRITES: `_set_job` inserts one `overseer_command`
+    row per name, and the dungeon campaign path writes `dungeon_runs_wanted` to
+    each of them. Unscoped with a second cohort present, one operator typing
+    `job train` for this family would queue a job command for every character
+    in the other guild as well. That is not a silent stand-down that a later
+    cycle undoes - it is an active cross-cohort write, and the other guild's
+    own bridge would have no idea where the order came from.
+
+    THE HEAD OF THE FAMILY IS THE IDENTITY, for the same reason `_aim_traveller`
+    uses it: it is the one name this process is certain is on the roster, and it
+    is resolved from the ROW rather than from a literal, so a validation world
+    that renames the cast still scopes to whatever that world calls this family.
+    None means the `family` column has not shipped to this realm yet, and the
+    statement is then character for character the one that ran before.
+    """
+    cohort = _cohort_of(bonds.head_of_family())
+    scope = " AND family = %s" if cohort else ""
+    scope_args = (cohort,) if cohort else ()
     with _connect() as conn, conn.cursor() as cur:
-        cur.execute("SELECT name FROM overseer_roster WHERE enabled = 1")
+        cur.execute(
+            "SELECT name FROM overseer_roster WHERE enabled = 1"  # noqa: S608 - the only variable part is a fixed clause chosen above; every value is still bound
+            + scope,
+            scope_args,
+        )
         return [row["name"] for row in cur.fetchall()]
 
 
@@ -433,6 +463,66 @@ CLAIM_STALE_SECONDS = int(os.environ.get("CLAIM_STALE_SECONDS", "300"))
 TOWN_SLOT_LEASE_SECONDS = float(
     os.environ.get("TOWN_SLOT_LEASE_SECONDS", townslot.LEASE_SECONDS)
 )
+
+# THE SAME KNOB FOR THE ONE PASS WHOSE WALK LEAVES TOWN (infra#4183). The
+# argument for 450 is on `townslot.GATHER_LEASE_SECONDS`, measured against the
+# leader's own live distance to the nearest node the weakest gatherer can open.
+# Separate from the constant above because they are dimensioned from different
+# walks, and a realm whose family gathers closer to home should be able to
+# shorten this one without shortening every town errand with it.
+TOWN_SLOT_GATHER_LEASE_SECONDS = float(
+    os.environ.get("TOWN_SLOT_GATHER_LEASE_SECONDS",
+                   townslot.GATHER_LEASE_SECONDS)
+)
+
+# The claimant name the gathering pass asks the column under. A constant
+# because it is written in one place and READ in another - `Slot.long_leases`
+# is keyed on it - and two spellings of the same claimant would silently give
+# the walk a town errand's lease.
+GATHER_CLAIMANT = "gather"
+
+# THE SAME, FOR THE PASS THAT GROWS THE FLIGHT NETWORK (infra#4206). Its walk
+# is the gathering walk's shape rather than a town errand's - measured at 1880
+# to 4226 yards to the nearest flight point any member of the family could
+# learn - so it is bounded by the same lease and by `flightlearn.REACH_YARDS`,
+# which is derived from that lease. A lease and NOT an exemption: infra#3703's
+# rule is that an errand which cannot finish must not hold the column for ever,
+# and a discovery walk is exactly the kind that can fail to finish.
+FLIGHT_CLAIMANT = "flight"
+
+# How far the flight-network pass will send somebody, and how long it may keep
+# the column while it does.
+#
+# THE LEASE IS DERIVED FROM THE BOUND AND NOT CHOSEN BESIDE IT. They are one
+# number expressed twice - "the longest walk this pass will ask for" and "how
+# long that walk takes" - and `flightlearn.lease_for` is the conversion, at
+# mod-overseer's own measured rate for a long walk. Set separately they could
+# drift into a bound the lease cannot cover, which is an errand that cannot
+# finish holding the family's one travel column, which is infra#3703 exactly.
+# So the env knob is on the DISTANCE, and the lease follows it.
+FLIGHT_LEARN_REACH_YARDS = float(
+    os.environ.get("FLIGHT_LEARN_REACH_YARDS", flightlearn.REACH_YARDS)
+)
+TOWN_SLOT_FLIGHT_LEASE_SECONDS = flightlearn.lease_for(FLIGHT_LEARN_REACH_YARDS)
+
+# How often the flight-network pass looks. Deliberately the slowest of the town
+# cadences: a node learned is learned for ever, so there is nothing to re-check
+# quickly, and the column belongs to the passes whose work comes back every
+# cycle. It is also longer than the lease above, so this pass can never be
+# queueing for the column it is already holding.
+FLIGHT_LEARN_CYCLE_SECONDS = float(
+    os.environ.get("FLIGHT_LEARN_CYCLE_SECONDS", "900")
+)
+
+# HOW MANY TIMES ONE NODE MAY BE ASKED FOR BEFORE THE PASS STOPS ASKING.
+#
+# The same bound infra#4191 put on an urgent pass that keeps achieving nothing,
+# and for the same reason: a walk that has been sent three times and has not
+# set the bit is a walk something is refusing - terrain, a despawned flight
+# master, a faction this process read wrongly - and repeating it every cycle
+# spends the family's one travel column on it for ever. The node is remembered
+# rather than the character, because it is the NODE that is not being learned.
+FLIGHT_LEARN_ATTEMPTS = int(os.environ.get("FLIGHT_LEARN_ATTEMPTS", "3"))
 
 
 def _expire_stale_claims(seconds: int) -> int:
@@ -1072,6 +1162,46 @@ _COUNCIL_MEMBER_SQL = (
 )
 
 
+# The maps whose ended runs the council counts, as a literal for the SQL
+# below. Built from dungeonprogression's own table rather than written out
+# again: this read used to say `map_id = 189` in-line, and when Blackrock
+# Depths joined the campaigns (infra#4247) that literal would have gone on
+# reporting zero completed BRD runs for ever, with nothing failing.
+#
+# int() on every element is not ceremony. These ids are interpolated into the
+# statement rather than bound, because a variable-length IN list cannot be a
+# single placeholder, and the one rule that keeps that safe is that nothing
+# but an integer can reach it.
+_CAMPAIGN_MAP_IDS_SQL = ",".join(
+    str(int(map_id)) for map_id in dungeonprogression.CAMPAIGN_MAP_IDS
+)
+
+
+def _fetch_dungeon_completion() -> dict[str, int] | None:
+    """Read the durable per-stage completion ledger when deployed.
+
+    ``portal_keyword`` is added by the matching mod-overseer migration. Older
+    realms must not make the council fail, and must not cause it to guess an
+    ordered campaign from a map id alone.
+    """
+    try:
+        with _connect() as conn, conn.cursor() as cur:
+            cur.execute(
+                "SELECT portal_keyword, outcome FROM overseer_dungeon_run "  # noqa: S608 - the only variable part is a list of int()ed map ids; no value comes from outside this module
+                "WHERE map_id IN (" + _CAMPAIGN_MAP_IDS_SQL + ") "
+                "AND state = 'ended'"
+            )
+            return dungeonprogression.successful_runs(cur.fetchall())
+    except pymysql.err.MySQLError as exc:
+        if exc.args and exc.args[0] in (1054, 1146):
+            log.info(
+                "dungeon progression ledger unavailable; council keeps the "
+                "legacy dungeon ranking until portal identity is deployed"
+            )
+            return None
+        raise
+
+
 def _fetch_council_members(names: list) -> list:
     """The state each family member brings to a council.
 
@@ -1271,11 +1401,23 @@ def _crafting_roster() -> list:
     to write a craft_spell errand for, never WHETHER anyone should be on
     job='craft' in the first place. That call is an operator/decree/council
     one this module does not make.
+
+    AND ONE COHORT'S CANDIDATES, WHICH IS A DECISION IT DOES MAKE (infra#4221).
+    "Who is on job='craft'" has meant "every row in the table on job='craft'"
+    only because the table has never held anybody else. `craft_rhythm.errand`
+    chooses one name out of what this returns and `_craft_once` writes that
+    character's `craft_spell`, which sends it walking to a `travel_npc` this
+    family's leader logic never accounted for - a second guild's smelter
+    crossing a continent because THIS family wanted something made.
     """
+    cohort = _cohort_of(bonds.head_of_family())
+    scope = " AND family = %s" if cohort else ""
+    scope_args = (cohort,) if cohort else ()
     with _connect() as conn, conn.cursor() as cur:
         cur.execute(
-            "SELECT name FROM overseer_roster WHERE enabled = 1 AND job = %s",
-            ("craft",),
+            "SELECT name FROM overseer_roster WHERE enabled = 1 AND job = %s"  # noqa: S608 - the only variable part is a fixed clause chosen above; every value is still bound
+            + scope,
+            ("craft", *scope_args),
         )
         return [row["name"] for row in cur.fetchall()]
 
@@ -1295,9 +1437,27 @@ def _standing_jobs() -> dict:
     READ-ONLY, like every other roster reader here. The only thing that writes
     this column is mod-overseer's own DoJob, on an `overseer_command` row that
     `_set_job` inserts.
+
+    AND `standing_mode` IS A SECOND `family_mode` THE EPIC NEVER NAMED
+    (infra#4221). The paragraph above already says what makes this dangerous
+    unscoped, two years before there was a second cohort to say it about: this
+    function exists BECAUSE a family half on craft and half on quest must be
+    distinguishable from a family wholly on craft, and `standing_mode` returns
+    `''` when the rows disagree. Two cohorts are a permanent disagreement - the
+    two families are driven by different orders - so the answer becomes `''`
+    for ever, and craft supply, the craft rhythm and the skill-goal pass all
+    stand down. For THIS family, on account of a job somebody else's character
+    is on, with nothing logged that names the cause.
     """
+    cohort = _cohort_of(bonds.head_of_family())
+    scope = " AND family = %s" if cohort else ""
+    scope_args = (cohort,) if cohort else ()
     with _connect() as conn, conn.cursor() as cur:
-        cur.execute("SELECT name, job FROM overseer_roster WHERE enabled = 1")
+        cur.execute(
+            "SELECT name, job FROM overseer_roster WHERE enabled = 1"  # noqa: S608 - the only variable part is a fixed clause chosen above; every value is still bound
+            + scope,
+            scope_args,
+        )
         return {row["name"]: row["job"] for row in cur.fetchall()}
 
 
@@ -1311,9 +1471,29 @@ def _standing_travel_aims() -> dict:
     this read - the sanctioned writers are the existing economy passes, and a
     second one is how the family spent half an hour pinned in a Gadgetzan shop
     (infra#3703, infra#3708, infra#3728).
+
+    ONE CAVEAT ON "READ ONLY", AND IT IS WHY THIS IS SCOPED (infra#4221). The
+    rule above is about this file not adding a WRITER of the column. It is not
+    a claim that nothing downstream writes: `_release_stranded_ground_errands`
+    passes what this returns to `townslot.stranded_nonleader_aims` along with
+    `_head_now()`, and calls `_release_trade_errand` on every name that comes
+    back. "Stranded" is defined as "holding a ground aim and not being the
+    leader" - and every row in another cohort is, by construction, not this
+    family's leader. Unscoped, every legitimate economy aim the other guild
+    holds looks stranded to this family's sweep and is blanked, every 90
+    seconds, for ever. That guild would never complete a town errand and
+    nothing anywhere would say why: a released aim writes no log the other
+    process can see, the character simply stops walking.
     """
+    cohort = _cohort_of(bonds.head_of_family())
+    scope = " AND family = %s" if cohort else ""
+    scope_args = (cohort,) if cohort else ()
     with _connect() as conn, conn.cursor() as cur:
-        cur.execute("SELECT name, travel_npc FROM overseer_roster WHERE enabled = 1")
+        cur.execute(
+            "SELECT name, travel_npc FROM overseer_roster WHERE enabled = 1"  # noqa: S608 - the only variable part is a fixed clause chosen above; every value is still bound
+            + scope,
+            scope_args,
+        )
         return {row["name"]: (row["travel_npc"] or "") for row in cur.fetchall()}
 
 
@@ -1393,10 +1573,31 @@ def _record_trade_plan(plan) -> list:
 
 
 def _activate_training() -> bool:
-    """Promote a unanimous questing family when training work is pending."""
+    """Promote a unanimous questing family when training work is pending.
+
+    BOTH HALVES OF THIS ARE CROSS-COHORT UNSCOPED, AND THEY FAIL IN OPPOSITE
+    DIRECTIONS (infra#4221). `trainjob.should_activate` requires
+    `values == {"quest"}` across the WHOLE dict, so one row in another cohort
+    on any other job means this family can never auto-promote to training - a
+    gate that simply stops opening, with nothing to see. And if it does pass,
+    the loop below inserts a `job train` command for every name in the same
+    dict, which is the other guild's whole roster being ordered to train by a
+    process that does not drive it. A read that is also a fan-out write: the
+    permissive failure and the restrictive one share a query.
+
+    Scoping the read fixes both at once, which is the argument for putting the
+    predicate here rather than filtering `jobs` in Python afterwards.
+    """
+    cohort = _cohort_of(bonds.head_of_family())
+    scope = " AND family = %s" if cohort else ""
+    scope_args = (cohort,) if cohort else ()
     try:
         with _connect() as conn, conn.cursor() as cur:
-            cur.execute("SELECT name, job FROM overseer_roster WHERE enabled = 1")
+            cur.execute(
+                "SELECT name, job FROM overseer_roster WHERE enabled = 1"  # noqa: S608 - the only variable part is a fixed clause chosen above; every value is still bound
+                + scope,
+                scope_args,
+            )
             jobs = {row["name"]: row["job"] for row in cur.fetchall()}
             if not trainjob.should_activate(jobs, True):
                 return False
@@ -1452,6 +1653,73 @@ def _settle_trades(skills: dict) -> list:
     return done
 
 
+def _cohort_of(name: str) -> str | None:
+    """Which cohort `name`'s roster row belongs to, or None when nothing knows.
+
+    THE BOUND EVERY FAMILY-WIDE ROSTER WRITE HAS BEEN MISSING (infra#4221).
+    `overseer_roster` has held exactly one family's rows since the day it was
+    created, so a write that named no cohort was table-wide and correct at the
+    same time, and three of them in this file drifted into having no
+    per-character bound at all. The instant a second cohort has rows here, a
+    table-wide write is a write into somebody else's state, and those three
+    corrupt it in silence: nothing logs, the column simply goes to zero.
+    mod-overseer#506 added `family` so a second guild can share this machinery
+    instead of forking it; this is how a write asks which rows are its own.
+
+    READ OFF THE ROW, NEVER HARDCODED, and the migration's own comments are
+    explicit that this is the only safe way to resolve it. The column's DEFAULT
+    is the literal 'Grug', but a validation world renames the cast (cast.py),
+    so the head of the family there is not spelled that way and a query pinned
+    to the literal would match no row at all in it - which is a table-wide
+    write's opposite failure and just as silent. The row knows which group it
+    is in. This asks the row.
+
+    None MEANS "CARRY ON EXACTLY AS BEFORE", NOT "WRITE NOTHING". The column
+    arrives with mod-overseer's SQL in the worldserver image. infra#4234 has
+    pinned a submodule gitlink that carries that SQL, and that is not the same
+    as a world having the column: `worldserver` and `db-import` are absent from
+    `deploy.wow-image-tags.yml`, so the migration ships inert with nothing red
+    until the image is rebuilt and the running digest is checked by hand. In
+    every world running today this returns None and every caller emits,
+    character for character, the statement it emitted before it asked. That is
+    the same degradation every other roster-column reader in this file performs
+    on 1054, and it is the only safe direction: a family with no leader flag, a
+    quest aim that can never be cleared, or a roster read that came back empty
+    would each be a far worse outcome than the cross-cohort bug being closed,
+    and it would be the price of a schema that has not shipped rather than of
+    anything anyone did wrong.
+
+    ASKED BY THE READS AS WELL AS THE WRITES NOW (infra#4221). This shipped
+    with two callers, both of them writes. The family-wide READS resolve their
+    cohort through it too, so there is one statement in this file that knows
+    how to ask which cohort a row is in, and one place to change if the
+    one-process-per-cohort question resolves the other way. Each call is its
+    own short-lived connection, which is the cost of not caching an answer that
+    changes the moment a migration lands - a stale cohort key would scope a
+    statement to a cohort that no longer exists and match no row at all, which
+    is precisely the silent failure the paragraph above is about.
+    """
+    if not name:
+        return None
+    with _connect() as conn, conn.cursor() as cur:
+        try:
+            cur.execute("SELECT family FROM overseer_roster WHERE name = %s", (name,))
+        except pymysql.err.MySQLError as exc:
+            # 1054 is ER_BAD_FIELD_ERROR, 1146 a missing table. Matched on the
+            # code, not the message text, which is localised and has changed
+            # between versions.
+            if exc.args and exc.args[0] in (1054, 1146):
+                log.warning(
+                    "overseer_roster has no family column - roster writes stay "
+                    "table-wide until the worldserver image carries "
+                    "mod-overseer#506's SQL (infra#4221)"
+                )
+                return None
+            raise
+        row = cur.fetchone()
+    return (row or {}).get("family") or None
+
+
 def _mark_party_leader(head: str) -> None:
     """Record which roster character should lead, for mod-overseer to enforce.
 
@@ -1465,14 +1733,38 @@ def _mark_party_leader(head: str) -> None:
     The module cannot decide this itself: it has no idea who these characters
     are to each other. bonds does, so the answer is written down here and
     enforced there.
+
+    SCOPED TO THE HEAD'S OWN COHORT, AND THAT IS THE WHOLE OF THE FIX
+    (infra#4221). This statement had no WHERE clause of any kind: it rewrote
+    the `lead` flag on every row in the table, every protect cycle. One
+    cohort's worth of rows made that indistinguishable from correct. With two,
+    each cohort's cycle zeroes the other's leader and mod-overseer's
+    KeepRosterGrouped enforces whichever write landed last - two guilds
+    fighting over one flag forever, with nothing written down about it.
+
+    THE HEAD'S cohort rather than this process's, deliberately. `_head_now()`
+    can borrow the lead for whoever is carrying a trade errand, and the read
+    that picks that borrower is itself still unscoped (the twelve read sites
+    are the rest of infra#4221, not this change). Scoping to the head's own
+    row keeps the invariant that actually matters no matter which cohort it
+    came from: the row this sets to 1 is always inside the set it sets to 0,
+    so it can never produce a cohort with no leader at all. Scoping to this
+    process's family instead would do exactly that on the day a borrowed
+    traveller came from the other guild.
     """
+    cohort = _cohort_of(head)
+    # An absent `family` column yields None and the statement stays table-wide,
+    # which is today's behaviour in every world - see _cohort_of.
+    scope = " WHERE family = %s" if cohort else ""
     with _connect() as conn, conn.cursor() as cur:
         cur.execute(
             # `lead` BACKTICKED: it is a reserved word in MySQL 8 (the LEAD()
             # window function). Unquoted it is a syntax error - which took the
             # worldserver down in a crash loop when the module's SELECT hit it,
             # because the core treats a malformed query as unrecoverable.
-            "UPDATE overseer_roster SET `lead` = IF(name = %s, 1, 0)", (head,)
+            "UPDATE overseer_roster SET `lead` = IF(name = %s, 1, 0)"  # noqa: S608 - the only variable part is a fixed clause chosen above; every value is still bound
+            + scope,
+            (head, cohort) if cohort else (head,),
         )
 
 
@@ -1512,8 +1804,25 @@ def _aim_traveller(quest_id: int) -> int:
     bridge is a separate deployment with its own restarts. Warned once rather
     than swallowed - an aim that never lands is a real fault and must be
     visible without being fatal.
+
+    "EVERYONE ELSE" MEANS EVERYONE ELSE IN THIS COHORT (infra#4221). Both
+    clears below used to run table-wide. `_holders_of` is bounded by
+    OVERSEER_NOTABLE_NAMES, so the IN-list is this bridge's own family and only
+    the NOT IN half reaches outward - which means a Cave quest aim blanked
+    `drive_quest` on every row of any other cohort, every time the family
+    aimed at anything, and the no-holders branch did it unconditionally. A
+    cleared aim is not a visible event: the character simply free-roams its own
+    quest log again, which is the 937-yard scatter this function exists to
+    prevent, arriving in the other guild with no cause anywhere near it.
     """
     holders = sorted(_holders_of(int(quest_id))) if quest_id else []
+    # WHOSE aims these are. The head of the family is the one identity this
+    # process has that is guaranteed to be on the roster, and the holders are
+    # drawn from the same protected list, so his row's cohort is theirs. None
+    # keeps both statements table-wide, exactly as they are today.
+    cohort = _cohort_of(bonds.head_of_family())
+    scope = " AND family = %s" if cohort else ""
+    scope_args = (cohort,) if cohort else ()
     with _connect() as conn, conn.cursor() as cur:
         try:
             if holders:
@@ -1535,12 +1844,12 @@ def _aim_traveller(quest_id: int) -> int:
                 # avoided by the aim being exactly the set of holders.
                 cur.execute(
                     "UPDATE overseer_roster SET drive_quest = 0 "  # noqa: S608 - placeholders from a COUNT, values still bound
-                    "WHERE drive_quest <> 0 AND name NOT IN (%s)" % marks,
-                    tuple(holders),
+                    "WHERE drive_quest <> 0 AND name NOT IN (%s)%s" % (marks, scope),
+                    (*holders, *scope_args),
                 )
             else:
-                cur.execute("UPDATE overseer_roster SET drive_quest = 0 "
-                            "WHERE drive_quest <> 0")
+                cur.execute("UPDATE overseer_roster SET drive_quest = 0 "  # noqa: S608 - the only variable part is a fixed clause chosen above; every value is still bound
+                            "WHERE drive_quest <> 0" + scope, scope_args)
                 aimed = 0
         except pymysql.err.OperationalError as exc:
             # 1054 is ER_BAD_FIELD_ERROR. Matched on the code, not the message
@@ -2009,6 +2318,30 @@ def _retaskable_from(travel_npc: str) -> tuple:
     # infra#3703's to fix - it is not fixed by widening this tuple.
     if travel.is_ground_aim(aim):
         return ("", aim)
+    # A FLIGHT-DISCOVERY ERRAND IS AN ECONOMY ERRAND TOO (infra#4206), and it
+    # is here for exactly the reason the ground aim above is. `flight
+    # master:<nodeId>` is in neither ECONOMY_ERRANDS nor `isdigit`, so without
+    # this line it would fall through to the empty tuple, take
+    # `_write_trade_errand`'s OTHER branch and blank `learn_skill` /
+    # `unlearn_skill` on its way past - mod-overseer#438's bug re-created one
+    # more time - and `_is_economy_aim` would then call it untouchable, so
+    # nothing could ever hand it back. An aim one guard calls economy and the
+    # other calls untouchable is an aim with no terminal path at all, which is
+    # the exact shape infra#3703 found between the write and the release.
+    #
+    # THAT IT IS RELEASABLE IS THE POINT, NOT A SIDE EFFECT. A discovery walk
+    # is thousands of yards long and can be refused by terrain the whole way,
+    # so it is precisely the errand infra#3703's rule is about: it must be
+    # preemptible by a starved pass once its lease runs out. Making it
+    # untouchable - the shape a profession errand has - would buy the family's
+    # flight network with the family's town work.
+    #
+    # IDLE OR THE SAME AIM, AND NOT A REFINEMENT OF ANYTHING. A flight master
+    # standing at one particular node is not a sharper spelling of `vendor` or
+    # of a ground walk; it is a different errand in a different place, so
+    # overwriting one of those with it would be theft rather than refinement.
+    if travel.is_flight_master_aim(aim):
+        return ("", aim)
     if aim.isdigit():
         # craft_supply.VENDOR_ROLE rather than a fourth spelling of the word:
         # it is read from travel.ROLES there, and the numeric aim exists only
@@ -2282,6 +2615,19 @@ def _errand_holders(travel_npc: str, names: list) -> list:
     errand in it, and "nobody is carrying this" is the direction that releases
     nothing - the safe way to not know, matching every other reader of these
     columns.
+
+    AND SCOPED TO ONE COHORT, WHICH `names` ALREADY DOES TODAY AND WILL STOP
+    DOING (infra#4221). Every caller passes a list derived from
+    `_protected_guids()`, so the `IN` clause is this family and the cohort bound
+    is inherited from the argument - for exactly as long as that list stays one
+    family's. It is built from OVERSEER_NOTABLE_NAMES, one flat environment
+    variable that also drives reroll protection, the story filter and the chat
+    watch list, so the day a second guild is added to any one of those four it
+    is added to all four, and this list quietly widens. What this returns is then
+    fed to `_release_trade_errand`, so a widened list is a read that becomes a
+    write into the other cohort's `travel_npc`. The predicate below says the
+    bound in SQL instead of relying on a config value to keep meaning what it
+    means.
     """
     if not _is_economy_aim(travel_npc):
         log.warning(
@@ -2292,11 +2638,19 @@ def _errand_holders(travel_npc: str, names: list) -> list:
         return []
     if not names:
         return []
+    cohort = _cohort_of(bonds.head_of_family())
+    scope = " AND family = %s" if cohort else ""
+    scope_args = (cohort,) if cohort else ()
     placeholders = ",".join(["%s"] * len(names))
-    sql = _ERRAND_HOLDERS_SQL % placeholders  # noqa: S608 - placeholders from a COUNT, values still bound
+    # PARENTHESISED DELIBERATELY. `%` binds tighter than `+`, so the two would
+    # compose correctly either way - but `scope` must never be inside the `%`
+    # operand, or a cohort whose name contained a `%` would be read as a format
+    # specifier. The parentheses say the interpolation is finished before the
+    # clause is appended.
+    sql = (_ERRAND_HOLDERS_SQL % placeholders) + scope  # noqa: S608 - placeholders from a COUNT and a fixed clause chosen above; every value is still bound
     with _connect() as conn, conn.cursor() as cur:
         try:
-            cur.execute(sql, (travel_npc, *names))
+            cur.execute(sql, (travel_npc, *names, *scope_args))
         except pymysql.err.MySQLError as exc:
             if exc.args and exc.args[0] in (1054, 1146):
                 log.warning(
@@ -2406,11 +2760,32 @@ def _errand_traveller() -> str:
     hands leadership back to bonds.head_of_family() on the next protect cycle -
     which is what makes an undeployed worldserver a no-op rather than a
     permanent reorganisation of the family around an errand nothing can finish.
+
+    `ORDER BY t.id LIMIT 1` MAKES THE COHORT BOUND LOAD-BEARING (infra#4221).
+    The one row this returns is the lowest trade id in the whole result, and
+    unscoped the result is every cohort's rows. A second guild's learn errand
+    created before this family's would simply win, and `_head_now` would hand
+    THIS family's `new rpg` and `lead` flag to a character in the other guild -
+    on another continent, by default. Nothing about that reads as a fault: one
+    row came back, a traveller was named, the family followed it. Every other
+    unscoped read on this epic stands something down or widens a candidate
+    pool; this one silently answers the wrong question with a straight face.
+
+    THE COHORT IS ASKED INSIDE THIS FUNCTION'S OWN GUARD, not above the
+    `with`, and that placement is the point. The handler below is a contract -
+    "loudly logged, still answers nobody, never costs the caller its cycle" -
+    and `_head_now` has no guard of its own, so a lookup that raised outside
+    this try would take the protect cycle with it. The cost is one extra
+    short-lived connection open at the same time as this one, which is the same
+    price `_mark_party_leader` and `_aim_traveller` already pay per call.
     """
     with _connect() as conn, conn.cursor() as cur:
         try:
+            cohort = _cohort_of(bonds.head_of_family())
+            scope = " AND r.family = %s" if cohort else ""
+            scope_args = (cohort,) if cohort else ()
             cur.execute(
-                "SELECT r.name FROM overseer_roster r "
+                "SELECT r.name FROM overseer_roster r "  # noqa: S608 - the only variable part is a fixed clause chosen above; every value is still bound
                 # overseer_roster is utf8mb4_unicode_ci and overseer_trade is
                 # utf8mb4_0900_ai_ci, so this predicate crosses the split - see
                 # the block above the def. Without the COLLATE this is MySQL
@@ -2420,9 +2795,16 @@ def _errand_traveller() -> str:
                 "WHERE r.enabled = 1 AND r.learn_skill <> 0 "
                 "AND t.verb = 'learn' AND t.skill_id = r.learn_skill "
                 "AND t.status = 'planned' "
-                "AND t.decided_at > NOW() - INTERVAL %s HOUR "
-                "ORDER BY t.id LIMIT 1",
-                (ERRAND_LEAD_HOURS,),
+                # `r.family`, NOT `t.family`. `overseer_trade` has no cohort of
+                # its own and whether it needs one is still open on infra#4221
+                # (it depends on whether one bridge serves both cohorts or one
+                # each). Scoping the ROSTER half of the join bounds the result
+                # either way: a trade row for a character this family does not
+                # contain no longer has a roster row to join to.
+                "AND t.decided_at > NOW() - INTERVAL %s HOUR"
+                + scope
+                + " ORDER BY t.id LIMIT 1",
+                (ERRAND_LEAD_HOURS, *scope_args),
             )
             row = cur.fetchone()
         except pymysql.err.MySQLError as exc:
@@ -2477,12 +2859,28 @@ def _train_members() -> list:
     db-import image predates the profession columns has no errand to drive, and
     the honest answer there is an empty family rather than an exception that
     costs the whole protect cycle.
+
+    ONE COHORT, BECAUSE `trainjob.plan` ASKS FOR UNANIMITY (infra#4221). What
+    these rows reach is `family_mode(members)`, which returns the one job every
+    member shares and `''` the moment any two disagree - the exact function the
+    epic is named after. A second cohort's rows in this list can only ever
+    disagree, because the two families are driven by different orders, so
+    `family_mode` would return `''` for ever and `trainjob.plan` would refuse
+    with "The family's job is not agreed across the roster." Training would stop
+    for THIS family on account of a job somebody else's character is on. The
+    same rows also carry `learn_skill`, which the plan then writes, so the
+    stand-down is not the only cost: an un-refused plan built from a mixed
+    roster aims a character the other guild owns.
     """
+    cohort = _cohort_of(bonds.head_of_family())
+    scope = " AND family = %s" if cohort else ""
+    scope_args = (cohort,) if cohort else ()
     with _connect() as conn, conn.cursor() as cur:
         try:
             cur.execute(
-                "SELECT name, job, professions, learn_skill "
-                "FROM overseer_roster WHERE enabled = 1"
+                "SELECT name, job, professions, learn_skill "  # noqa: S608 - the only variable part is a fixed clause chosen above; every value is still bound
+                "FROM overseer_roster WHERE enabled = 1" + scope,
+                scope_args,
             )
             rows = list(cur.fetchall())
         except pymysql.err.MySQLError as exc:
@@ -2534,12 +2932,24 @@ def _raidprep_members() -> list:
     db-import image predates the profession columns has no errand to drive, and
     the honest answer there is an empty family rather than an exception that
     costs the whole protect cycle.
+
+    ONE COHORT, AND THE SAME REASON AS `_train_members` ONE SCREEN UP
+    (infra#4221). `raidprep.plan` calls its own copy of `family_mode` - the two
+    modules carry near-verbatim duplicates of it - so a mixed roster returns
+    `''` here too and raid prep stands the family down. It reads `level` rather
+    than `learn_skill`, which makes the cross-cohort answer worse rather than
+    better: the other guild's levels decide whether THIS family is judged ready
+    to prepare for a raid.
     """
+    cohort = _cohort_of(bonds.head_of_family())
+    scope = " AND family = %s" if cohort else ""
+    scope_args = (cohort,) if cohort else ()
     with _connect() as conn, conn.cursor() as cur:
         try:
             cur.execute(
-                "SELECT name, job, professions, level "
-                "FROM overseer_roster WHERE enabled = 1"
+                "SELECT name, job, professions, level "  # noqa: S608 - the only variable part is a fixed clause chosen above; every value is still bound
+                "FROM overseer_roster WHERE enabled = 1" + scope,
+                scope_args,
             )
             rows = list(cur.fetchall())
         except pymysql.err.MySQLError as exc:
@@ -2640,14 +3050,35 @@ def _learn_aim_rows() -> list:
     live errand look derived and an unsettled one look settled. A cycle that
     cannot see both tables does nothing, and the next cycle is ten minutes
     away.
+
+    AND A CROSS-COHORT READ IS THAT HALF-READ WITH EXTRA STEPS (infra#4221).
+    The paragraph above is the argument for scoping this one, stated before
+    there was a second cohort to state it about: a roster this function cannot
+    read correctly makes `learnaim.plan` write the wrong thing to `travel_npc`
+    and `learn_skill`. Unscoped, every row it reads is correct in itself and the
+    SET is still wrong - it contains characters this process does not drive, and
+    the plan built from it aims them. Reading another guild's `lead` column is
+    the sharpest part: `learnaim` uses it to tell the character that can walk
+    from the four that cannot, and with two cohorts present there are two rows
+    flagged `lead` and only one of them is this family's.
+
+    THE TRADE READ BELOW IS LEFT WHOLE-TABLE ON PURPOSE. `overseer_trade` has no
+    cohort column and whether it needs one is still open on infra#4221. It does
+    not need to be scoped for this function to be correct: the two tables are
+    matched by name in Python, so a trade row for a character no longer in
+    `roster` is simply never looked up. Scoping the roster read contains it.
     """
+    cohort = _cohort_of(bonds.head_of_family())
+    scope = " AND family = %s" if cohort else ""
+    scope_args = (cohort,) if cohort else ()
     with _connect() as conn, conn.cursor() as cur:
         try:
             cur.execute(
                 # `lead` BACKTICKED: reserved word in MySQL 8, the same trap
                 # _mark_party_leader's own comment records.
-                "SELECT name, `lead`, professions, travel_npc, learn_skill "
-                "FROM overseer_roster WHERE enabled = 1"
+                "SELECT name, `lead`, professions, travel_npc, learn_skill "  # noqa: S608 - the only variable part is a fixed clause chosen above; every value is still bound
+                "FROM overseer_roster WHERE enabled = 1" + scope,
+                scope_args,
             )
             roster = list(cur.fetchall())
         except pymysql.err.MySQLError as exc:
@@ -2974,7 +3405,19 @@ class Bridge(discord.Client):
         self._town_slot = townslot.Slot(
             lease=TOWN_SLOT_LEASE_SECONDS,
             releasable=_is_economy_aim,
+            long_leases={
+                GATHER_CLAIMANT: TOWN_SLOT_GATHER_LEASE_SECONDS,
+                FLIGHT_CLAIMANT: TOWN_SLOT_FLIGHT_LEASE_SECONDS,
+            },
         )
+        # WHICH NODE HAS BEEN ASKED FOR, HOW OFTEN, AND WITH WHAT MASK BEHIND
+        # IT (infra#4206). {node id: (attempts, the taximask before the last
+        # one)}. In memory for the reason the town slot's own ledger is: the
+        # overseer tables ship in mod-overseer's db-import image and a new one
+        # would not reach the realm with this change. A restart forgets the
+        # streak and costs at most one repeated walk, which is cheaper than
+        # the walk being repeated for ever.
+        self._flight_attempts: dict = {}
         # Leader snapshot history used only to detect a vendor aim that has
         # stopped moving. The decision itself lives in vendor_stall.py.
         self._vendor_movement: dict[str, vendor_stall.Movement] = {}
@@ -3018,6 +3461,7 @@ class Bridge(discord.Client):
                 self._auction_loop,
                 self._recipebook_loop,
                 self._towntrip_loop,
+                self._flight_learn_loop,
                 self._restore_lost_lives,
             )
         }
@@ -3781,8 +4225,10 @@ class Bridge(discord.Client):
         # is the whole of what the proposal acts on. Tracked as a follow-up
         # rather than silently declared complete.
         level_rows = [{"name": m.name, "level": m.level} for m in members]
+        completed_runs = await asyncio.to_thread(_fetch_dungeon_completion)
         held = council.hold(members, history=history,
-                            level_rows=level_rows, cards=[])
+                            level_rows=level_rows, cards=[],
+                            completed_runs=completed_runs)
         if not held.lines:
             log.info("council: %s", held.reason)
             return
@@ -4061,6 +4507,20 @@ class Bridge(discord.Client):
         if not errand:
             return
         await asyncio.to_thread(_write_trade_errand, errand)
+        # AND TELL THE LEDGER WHEN THIS ONE MOVES SOMEBODY (infra#4194). A
+        # trade errand is written every cycle and usually names no traveller at
+        # all, but when it does it writes `travel_npc` outside
+        # `_claim_town_slot`. `_reconcile` rebuilds the holder from the column
+        # on every `want()`, so a value it does not recognise becomes
+        # `Holder(claimant="", since=now)` - an ORPHAN on the 1200s lease with
+        # the clock restarted. A trainer aim is not an economy aim and nothing
+        # else would hand it back, so an unrecorded one parks the whole family
+        # behind a stranger for twenty minutes at a time, repeatedly.
+        if errand.travel_npc:
+            self._town_slot.adopt(
+                claimant="trades", character=errand.character,
+                aim=errand.travel_npc, now=time.monotonic(),
+            )
         log.info(
             "trades: errand on the roster - %s learn=%s unlearn=%s "
             "(price %s) travel=%r; traveller=%s",
@@ -5214,6 +5674,18 @@ class Bridge(discord.Client):
                 professions.Errand(character=leader,
                                    travel_npc=auction.AUCTIONEER_ROLE),
             )
+            # AND TELL THE LEDGER, because this write did not go through
+            # `_claim_town_slot` (infra#4194). `_reconcile` rebuilds the holder
+            # from the column on every `want()`, and a value it does not
+            # recognise becomes `Holder(claimant="", since=now)` - an ORPHAN on
+            # the 1200s lease with the clock started again. This pass already
+            # owns the column and is only re-asserting its own keyword;
+            # staying silent would evict itself and hand a twenty-minute lease
+            # to nobody, which is the unbounded stall infra#4194 measured.
+            self._town_slot.adopt(
+                claimant="auction", character=leader,
+                aim=auction.AUCTIONEER_ROLE, now=time.monotonic(),
+            )
         log.info("auction: listed %d surplus BoE item(s) at house %s",
                  queued, house)
 
@@ -6262,6 +6734,36 @@ class Bridge(discord.Client):
 
         free_slots = await asyncio.to_thread(_fetch_free_slots, names)
 
+        # WHAT A VENDOR COULD ACTUALLY TAKE, READ BEFORE THE PRESSURE IS
+        # JUDGED (infra#4190). These two reads used to sit below the town-run
+        # gate, which meant every pressure decision above was made without
+        # knowing whether a vendor trip could answer it. Measured live
+        # 2026-09-19: Og at 0 free slots of 62, carrying 20 recipes, 16 quest
+        # items, 7 green armour pieces and 6 gems - all protected - plus one
+        # spare bag. A perfect trip lifts him to 1 against a trigger of 3, so
+        # his pressure could never clear, and the vendor pass took the travel
+        # column on it every cycle and wrote no sale. That is what starved
+        # gathering and what infra#4191 had to bound.
+        #
+        # THE COST IS TWO READS ON A QUIET CYCLE. They already ran on every
+        # pressured cycle; `rows` and `bag_rows` are reused below rather than
+        # fetched twice, so a cycle that reaches the vendor half costs exactly
+        # what it did before. A cycle that does not now pays two extra reads
+        # to avoid a trip that could not have helped anybody.
+        #
+        # GEAR IS DELIBERATELY NOT COUNTED. `_fetch_surplus_gear` feeds the
+        # hand-off path first and only reaches a vendor when all five have
+        # refused a piece; counting it here would let an upgrade that is about
+        # to be handed to somebody justify a town trip on its holder's behalf.
+        rows = await asyncio.to_thread(_fetch_vendor_items, names)
+        bag_rows = await asyncio.to_thread(_fetch_surplus_bags, names)
+        equipped_bag_slots = await asyncio.to_thread(
+            _fetch_equipped_bag_slots, names
+        )
+        sellable_counts = _sellable_per_holder(
+            rows, bag_rows, equipped_bag_slots, names,
+        )
+
         # A stale positional aim on the leader can block the vendor pass just
         # as surely as one on a follower. Full bags are the urgent case: when
         # no dungeon run owns the party, hand that economy aim back so the next
@@ -6269,7 +6771,8 @@ class Bridge(discord.Client):
         current_aim = await asyncio.to_thread(_current_travel_npc, leader)
         if townslot.urgent_ground_release(
                 aim=current_aim,
-                pressure=bag_pressure.family_town_run_needed(free_slots),
+                pressure=bag_pressure.family_town_run_needed(
+                    free_slots, sellable=sellable_counts),
                 in_run=in_run,
                 ground=travel.is_ground_aim):
             if await asyncio.to_thread(_release_trade_errand, leader, current_aim):
@@ -6279,8 +6782,10 @@ class Bridge(discord.Client):
                     current_aim,
                 )
 
-        # THE RECIPE HAND-OFF RUNS ABOVE THE TOWN-RUN GATE, ON PURPOSE, and it
-        # is the only half of this pass that does (infra#3731).
+        # THE RECIPE HAND-OFF RUNS ABOVE THE TOWN-RUN GATE, ON PURPOSE
+        # (infra#3731). It was the only half of this pass that did until
+        # infra#4198 measured what that cost the gear half, which now runs
+        # beside it for the reason its own banner gives below.
         #
         # WHY IT CANNOT SIT WITH THE OTHERS. The gate below is the right
         # question for a vendor trip and the wrong one for this: the comment
@@ -6295,13 +6800,50 @@ class Bridge(discord.Client):
         # the family walking to town. This writes kind='trade'/'give' rows
         # between two characters wherever they already stand: no vendor, no
         # leader, no counter, and no `travel_npc` - the same argument
-        # `_hand_gear` makes for needing no travel errand, which is why these
-        # two can run on different cycles without racing each other.
+        # `_hand_gear` makes for needing no travel errand. They share a room
+        # budget only in the sense every reader of `character_inventory` does,
+        # which the `_hand_recipes` docstring prices out in full.
         await self._hand_recipes(names, free_slots)
 
-        if not bag_pressure.family_town_run_needed(free_slots):
-            log.info("economy: carried vendor goods exist, but bag pressure is below "
-                     "the town-run trigger")
+        # AND SO DOES THE GEAR HAND-OFF, FOR THE SAME REASON AND ONE MORE
+        # (infra#4198). It used to sit below the two returns beneath this
+        # comment, which made a hand-off between two characters standing where
+        # they already stand conditional on a VENDOR TRIP being worth taking.
+        # infra#4190 and infra#4197 then made that gate correctly answer "no"
+        # for a family carrying nothing a vendor would buy, and this pass went
+        # dark with it. Measured on wow-dev 2026-09-19: 2,460 log lines over
+        # 30 consecutive cycles contain the word `recipes:` every cycle and the
+        # word `gear:` not once, while Ugga sat at 0 free slots, Og at 3 and
+        # Bork at 11. Not "decided nothing" - never asked.
+        #
+        # ABOVE THE DUNGEON RETURN TOO, and deliberately. `_hand_recipes` has
+        # always been, and a give is a database move that does not care which
+        # map anybody is on; a party stuck in an instance with full bags is
+        # precisely when moving one item to the member with eleven free slots
+        # is worth most.
+        #
+        # THE TWO READS IT NEEDS MOVE WITH IT. They are the same two `fits`
+        # and the vendor half read below, reused rather than fetched twice,
+        # so a cycle that reaches the vendor half costs exactly what it did
+        # before and a quiet cycle pays for the pass it is now running.
+        gear_rows = await asyncio.to_thread(_fetch_surplus_gear, names)
+        worn = await asyncio.to_thread(_fetch_family_equipped, names)
+        # THE HAND-OFF IS TRIED FIRST, AND IT IS TRIED WHETHER OR NOT ANYTHING
+        # IS FOR SALE. A piece a sibling should be wearing is worth more on
+        # that sibling than in anybody's purse, and it needs no vendor, no
+        # leader, no counter and no `travel_npc` - the same argument
+        # `_hand_recipes` makes just above.
+        await self._hand_gear(gear_rows, worn, names)
+
+        if not bag_pressure.family_town_run_needed(
+                free_slots, sellable=sellable_counts):
+            # Said with the counts, because "below the trigger" and "nobody a
+            # vendor could lift past it" are different reasons to stay home and
+            # the second one used to be invisible (infra#4190).
+            log.info("economy: no vendor trip is worth taking - free slots %s "
+                     "against sellable %s at a trigger of %d",
+                     free_slots, sellable_counts,
+                     bag_pressure.TOWN_RUN_FREE_SLOTS)
             return
         if in_run:
             # Bag pressure outranks an unfinished dungeon. The world-side
@@ -6318,9 +6860,10 @@ class Bridge(discord.Client):
                 len(names),
             )
             return
-        rows = await asyncio.to_thread(_fetch_vendor_items, names)
-        gear_rows = await asyncio.to_thread(_fetch_surplus_gear, names)
-        worn = await asyncio.to_thread(_fetch_family_equipped, names)
+        # `rows`, `bag_rows` and `equipped_bag_slots` were read above the
+        # pressure judgement (infra#4190), and `gear_rows` and `worn` above the
+        # gear hand-off (infra#4198). All five are reused here rather than
+        # fetched a second time.
         # THE SAME OPINION THAT DECIDES HAND-OFFS DECIDES WHAT MAY BE SOLD.
         # gear.py judges who would wear a carried piece; only the answer
         # "nobody, and we asked all five" lets it reach a vendor. An empty
@@ -6328,20 +6871,27 @@ class Bridge(discord.Client):
         # every piece is UNASKED, and the gear half of this pass offers
         # nothing - which is the safe way to not know.
         fits = bag_pressure.family_fits(gear_rows, worn, names)
-        # THE HAND-OFF IS TRIED FIRST, AND IT IS TRIED WHETHER OR NOT ANYTHING
-        # IS FOR SALE. A piece a sibling should be wearing is worth more on
-        # that sibling than in anybody's purse, and the two answers come from
-        # one gate over one read of the world, so asking for them in one place
-        # is what stops a sale and a hand-off ever being proposed for the same
-        # item. It sits above the `no candidates` return because a family with
-        # nothing to sell can still be carrying somebody else's upgrade.
-        await self._hand_gear(gear_rows, worn, names)
+        # THE HAND-OFF WAS TRIED FIRST, ABOVE THE TOWN-RUN GATE, and it is not
+        # repeated here (infra#4198). The two answers still come from one gate
+        # over one read of the world - `gear_rows` and `worn` are the same two
+        # lists `_hand_gear` was handed - which is what stops a sale and a
+        # hand-off ever being proposed for the same item. Calling it twice on a
+        # cycle that reaches this far would double every log line and hand the
+        # room budget out twice.
         candidates = bag_pressure.vendor_candidates(
             rows, keep_names=OWNER_KEEPS,
         ) + (
             bag_pressure.gear_candidates(
                 gear_rows, disposition.Family(vendor_reachable=True),
                 available=SELL_ROUTES, fits=fits, keep_names=OWNER_KEEPS,
+            )
+        ) + (
+            # Redundant spare bags nobody has equipped (infra#4163): dead
+            # weight in the exact shape `it.class <> 1` in `_VENDOR_ITEMS_SQL`
+            # was written to never see, so they never reached this pass at
+            # all until now.
+            bag_pressure.bag_candidates(
+                bag_rows, equipped_bag_slots, keep_names=OWNER_KEEPS,
             )
         )
         if not candidates:
@@ -6536,6 +7086,30 @@ class Bridge(discord.Client):
         log.info("economy: queued %d/%d vendor sale(s) across %d holder(s), "
                  "one errand on leader=%s (taken=%s)",
                  inserted, considered, len(by_holder), leader, aimed)
+        # WHETHER THAT URGENT CLAIM WAS WORTH TAKING (infra#4191).
+        #
+        # This pass preempts everything on the strength of bag pressure, and
+        # `townslot` cannot see whether a sale came of it - only this loop
+        # knows that `inserted` is the number of sales actually written. So
+        # the pass reports its own outcome, and a run of fruitless ones costs
+        # it the right to preempt for a while.
+        #
+        # ONLY WHEN IT HELD THE COLUMN. `aimed` is False when some other pass
+        # had the traveller, and being refused a turn is an ordinary wait
+        # rather than a wasted one - counting it would back the pass off for
+        # somebody else's errand.
+        if aimed:
+            if inserted:
+                self._town_slot.productive("economy")
+            else:
+                until = self._town_slot.fruitless("economy", time.monotonic())
+                log.warning(
+                    "economy: took the travel column on bag pressure and wrote "
+                    "no sale; urgency suppressed for %.0fs so a pressure this "
+                    "pass cannot relieve stops outranking every other errand "
+                    "(infra#4191)",
+                    max(0.0, until - time.monotonic()),
+                )
 
     async def _hand_gear(self, gear_rows: list, worn: list, names: list) -> None:
         """Move every carried piece that suits a sibling better (infra#3464).
@@ -7042,46 +7616,90 @@ class Bridge(discord.Client):
         `ECONOMY_ERRANDS` only retasks an idle traveller - but until this
         logged it, that refusal was invisible: the guild bank could starve
         for as long as the leader's other errand ran and nothing said so.
+
+        SETUP AND DEPOSIT SHARE ONE WALK, AND THAT IS NEW (infra#4198). The
+        tab purchase and the per-rank `grant-deposit` rows used to be decided
+        in a block ahead of this one that returned on every path, so while
+        `plan_setup` had anything left to ask for, `plan_deposits` was never
+        called - a gate that was not a precondition, because the gold deposit
+        verb checks neither the tab nor the rank bit. The two are now one
+        arbitration, one claim and one arrival, and the in-line comments below
+        carry the measurement.
+
+        IT STILL DEPOSITS GOLD AND ONLY GOLD. `guild_bank_item` cannot move
+        from anything in this pass: `bank deposit <copper>` lands in
+        `guild.BankMoney`, and the item verb `guildbank.format_item_deposit`
+        renders has no caller anywhere in this package. Relief for a member
+        full of PROTECTED ITEMS (infra#4198) is a policy that does not exist
+        yet, not a broken one - see guildbank.py's own docstring for why it
+        was deliberately left unwritten.
         """
         names = sorted((await asyncio.to_thread(_protected_guids)).values())
         if not names or await self._mid_run(names):
             return
+        leader = await asyncio.to_thread(_head_now)
         setup = await asyncio.to_thread(_fetch_guild_bank_setup, names)
-        if setup:
-            actions = guildbank.plan_setup(
-                leader=await asyncio.to_thread(_head_now),
-                purchased_tabs=setup["purchased_tabs"],
-                rank_ids=setup["rank_ids"],
-                deposit_rank_ids=setup["deposit_rank_ids"],
-            )
-            if actions:
-                leader = await asyncio.to_thread(_head_now)
-                positions = await asyncio.to_thread(
-                    _fetch_positions, sorted({leader}))
-                where = positions.get(leader)
-                spawn = await asyncio.to_thread(_nearest_vault, leader)
-                vault = travel.vault_aim(spawn, where.get("map_id") if where else None)
-                if vault.aim:
-                    aimed = await self._claim_town_slot("guild bank", leader, vault.aim)
-                    at_the_vault = travel.spawn_in_reach(spawn, where, TOWN_COUNTER_YARDS)
-                    if aimed or at_the_vault:
-                        seen = await asyncio.to_thread(_recent_guild_setup_keys, GIVE_RETRY_MINUTES)
-                        action = next((a for a in actions
-                                       if (leader, a.command) not in seen), None)
-                        if action:
-                            await asyncio.to_thread(_insert_guild, leader,
-                                                    action.command, "guildbank-setup")
-                            log.info("guild bank setup: queued %s for %s",
-                                     action.command, leader)
-                        return
-                log.info("guild bank setup: aiming %s at %s", leader, vault.aim)
-                return
+        purchased_tabs = int(setup["purchased_tabs"]) if setup else 0
+        # SETUP IS AN ERRAND TO THE SAME PLACE, NOT A GATE IN FRONT OF THE
+        # DEPOSIT (infra#4198). This used to be an `if setup: ... return` block
+        # that ran BEFORE `plan_deposits` and returned on every one of its
+        # paths, so for as long as `plan_setup` had anything left to say,
+        # `plan_deposits` was never called at all - not starved, not refused,
+        # never reached.
+        #
+        # THAT IS NOT A SLOW PATH, IT IS A CLOSED ONE. `plan_setup` asks for a
+        # `grant-deposit` on every non-master rank that lacks the deposit bit,
+        # and it queues AT MOST ONE PER ARRIVAL. Measured on wow-dev
+        # 2026-09-19: guild 23 "Cave" has ranks 0-4, `guild_bank_right` carries
+        # the deposit bit on ranks 0 and 1 only, and ranks 2-4 hold the 68
+        # NON-FAMILY playerbot members. So `plan_setup` returned
+        # `grant-deposit rank:2`, `rank:3`, `rank:4` on every cycle for ever,
+        # each needing its own won-column walk to the vault, while the five
+        # characters the pass exists for sat on ranks 0 and 1 which were
+        # already granted. Every one of the 16 guild-bank lines in the running
+        # pod's log was `guild bank setup:`; the deposit branch produced none,
+        # and no `bank deposit` row has been written since 2026-09-14.
+        #
+        # AND THE GATE WAS NEVER A PRECONDITION OF THE THING IT GATED. A gold
+        # deposit is `GuildVerb::Bank`, whose executor (mod_overseer.cpp,
+        # `DoGuild`) asks `GuildBankInReach` and `HasEnoughMoney` and nothing
+        # else - no purchased tab, no rank right, because
+        # `Guild::HandleMemberDepositMoney` performs no rank check at all (see
+        # guildbank.py's module docstring). Only `BankDepositItem` needs the
+        # tab and the rank bit. Setup and deposit are therefore independent
+        # errands that happen to share a destination, and the honest shape is
+        # ONE walk that does both on arrival - which is why there is now one
+        # `_claim_town_slot("guild bank", ...)` in this pass rather than two.
+        #
+        # A DEPOSIT QUEUED BESIDE AN UNBOUGHT TAB STILL CANNOT STRAND THE
+        # PURCHASE, the one thing the old ordering had to protect.
+        # `plan_deposits` holds `TAB0_COST_COPPER` back from every member while
+        # `guild_has_tab` is False, so the price is still sitting in somebody's
+        # purse after the deposits land. That reserve exists for exactly this.
+        actions = guildbank.plan_setup(
+            leader=leader,
+            purchased_tabs=purchased_tabs,
+            rank_ids=setup["rank_ids"],
+            deposit_rank_ids=setup["deposit_rank_ids"],
+        ) if setup else ()
         members = await asyncio.to_thread(_fetch_guild_money, names)
-        deposits = guildbank.plan_deposits(members)
-        if not deposits:
+        # THE TAB COUNT WAS ALREADY IN HAND AND WAS NEVER PASSED (infra#4198).
+        # `plan_deposits` defaults `guild_has_tab` to False - the cautious
+        # answer, which reserves `FLOAT_COPPER + TAB0_COST_COPPER` - and this
+        # caller never told it otherwise, so every member went on holding 110
+        # gold back for a tab the guild had already bought (one
+        # `guild_bank_tab` row for guild 23 since 2026-09-19). Live that is not
+        # a rounding error: it excluded the leader outright at 98 gold and cut
+        # roughly 100 gold off each of the other four. `_fetch_guild_bank_setup`
+        # has counted `guild_bank_tab` since infra#3713 and the count was being
+        # spent on `plan_setup` alone. Wiring it here is the step
+        # `plan_deposits`' own docstring anticipated: "wiring that read in later
+        # can only ever release gold, never strand it".
+        deposits = guildbank.plan_deposits(
+            members, guild_has_tab=purchased_tabs > 0)
+        if not actions and not deposits:
             log.info("guild bank: nobody is carrying more than the float")
             return
-        leader = await asyncio.to_thread(_head_now)
         # ONE POSITION READ, FOR TWO QUESTIONS (infra#3804): which map the
         # LEADER aims from, and whether each DEPOSITOR is at the vault now.
         # `_fetch_positions` batches, so this is the one query it always was.
@@ -7137,10 +7755,55 @@ class Bridge(discord.Client):
             # long they have had it and who is ahead in the queue.
             log.info(
                 "guild bank: leader=%s could not be aimed at the vault (%s) "
-                "this pass, so no deposit is queued - every row queued into a "
+                "this pass, so no setup row or deposit is queued (%d setup "
+                "action(s), %d deposit(s) waiting) - every row queued into a "
                 "trip nobody is taking comes back 'no guild bank in reach'",
-                leader, vault.aim,
+                leader, vault.aim, len(actions), len(deposits),
             )
+            return
+        if not at_the_vault:
+            # AIMED BUT STILL WALKING, WHICH IS ITS OWN ANSWER (infra#3713).
+            # The arm above reports STARVATION - no column, nobody moving. This
+            # one reports a journey in progress, and the two used to be one
+            # branch that fell through to queueing. The leader-level gate is
+            # what the setup path needed too: a purchase queued mid-walk is
+            # refused by the core on range, exactly as a deposit would be.
+            #
+            # The per-depositor `spawn_in_reach` below is NOT made redundant by
+            # this: an arrived leader never meant five (infra#3804), so this
+            # decides whether the pass proceeds at all and that one decides
+            # which rows get written.
+            log.info(
+                "guild bank: leader=%s is walking to the vault (%s) - no "
+                "setup row or deposit is queued until the walk lands (%d setup "
+                "action(s), %d deposit(s) waiting), because one written now "
+                "comes back 'no guild bank in reach' a second later",
+                leader, vault.aim, len(actions), len(deposits))
+            return
+        # THE ARRIVAL IS SPENT ON BOTH ERRANDS (infra#4198). The leader is at
+        # the vault, which is the one expensive thing this pass ever buys, and
+        # it used to be spent on a single setup row or on deposits but never
+        # on both. Setup keeps its ONE-ACTION-PER-ARRIVAL rate limit - the
+        # rank rights are `Guild::HandleSetRankInfo` writes and there is no
+        # reason to burst them - but it no longer returns, so the deposits
+        # this same trip was also made for are queued below in the same breath.
+        if actions:
+            seen_setup = await asyncio.to_thread(
+                _recent_guild_setup_keys, GIVE_RETRY_MINUTES)
+            action = next((a for a in actions
+                           if (leader, a.command) not in seen_setup), None)
+            if action:
+                await asyncio.to_thread(_insert_guild, leader,
+                                        action.command, "guildbank-setup")
+                log.info("guild bank setup: queued %s for %s",
+                         action.command, leader)
+        if not deposits:
+            # REACHED ONLY WHEN SETUP IS THE WHOLE REASON THIS PASS WALKED.
+            # `not actions and not deposits` already returned far above, so
+            # this arm means the trip was bought by setup alone and nobody is
+            # over their float - which is a complete, uninteresting pass and
+            # not a failure.
+            log.info("guild bank: nobody is carrying more than the float")
             return
         seen = await asyncio.to_thread(_recent_guild_bank_keys, GIVE_RETRY_MINUTES)
         fresh = []
@@ -7222,8 +7885,16 @@ class Bridge(discord.Client):
             # problem from "this pass had nothing to do".
             log.warning("recruit: %s row was not written", action.verb)
             return
+        # "AS THE LAST SHORTLIST REPORTED IT" IS NOT PADDING. These two numbers
+        # come off `result`, which on a `shortlist` action is by definition the
+        # STALE one being replaced - so this line can read "queued shortlist 20
+        # ... - roster 40 of 40" while the whole point of the row is that 40 of
+        # 40 is no longer believed. infra#4215 cost a day to a log line that was
+        # true about its own cache and silent about being one; saying whose
+        # number it is costs six words.
         log.info(
-            "recruit: queued %s via %s (%s) - roster %d of %d",
+            "recruit: queued %s via %s (%s) - roster %d of %d as the last "
+            "shortlist reported it",
             action.command, action.actor, action.reason, members, target,
         )
 
@@ -7660,6 +8331,183 @@ class Bridge(discord.Client):
                 log.exception("forge pass failed; retrying next cycle")
             await asyncio.sleep(cycle)
 
+    def _settle_flight_attempts(self, name: str, taximask) -> None:
+        """Say what became of every discovery walk this pass has sent.
+
+        THE BIT IS THE PROOF AND NOTHING ELSE IS. `overseer_command.status`
+        never enters this pass, and an emptied `travel_npc` proves nothing
+        either: mod-overseer releases a flight errand whether or not the node
+        was learned, and its own log line says which - "node {} was {learned |
+        not learned - see the line above}". So the only thing counted here is
+        `characters.taximask` gaining the bit, read before the walk and after
+        it, and `flightlearn.learned` answers False for every reading it cannot
+        make - an unreadable mask either side, a node already held before the
+        walk, an unchanged mask. A check that can only report good news is
+        worse than no check.
+
+        AN UNCHANGED MASK IS "NOT YET" AND NOT "FAILED". The column this reads
+        is written on PlayerSaveInterval, so a node learned in the last quarter
+        of an hour is genuinely not in it yet. The attempt is left standing and
+        counted; `FLIGHT_LEARN_ATTEMPTS` is what eventually gives up on it, and
+        it is a count of WALKS SENT rather than of polls taken, so a slow save
+        cannot spend it.
+        """
+        for node, (tried, before) in sorted(self._flight_attempts.items()):
+            if flightlearn.learned(before, taximask, node):
+                self._flight_attempts.pop(node, None)
+                log.info(
+                    "flight: %s now holds taxi node %d - the bit is set in "
+                    "characters.taximask, which is the only thing that proves "
+                    "it, after %d walk(s)", name, node, tried,
+                )
+            elif tried >= FLIGHT_LEARN_ATTEMPTS:
+                log.info(
+                    "flight: taxi node %d has been walked to %d time(s) and "
+                    "%s's taximask bit is still clear, so this pass has given "
+                    "up on that node and will offer the next one out - "
+                    "repeating a walk that does not set the bit would spend "
+                    "the family's one travel column on it for ever",
+                    node, tried, name,
+                )
+            else:
+                log.info(
+                    "flight: %s was sent to learn taxi node %d %d time(s) and "
+                    "the bit is not set yet - characters is written on the "
+                    "world's save interval, so this is 'not yet' rather than "
+                    "'no'", name, node, tried,
+                )
+
+    async def _flight_learn_once(self) -> None:
+        """Send the family's traveller to learn one taxi node (infra#4206).
+
+        THE CALLER THAT NEVER EXISTED. mod-overseer has understood
+        `travel_npc = 'flight master:<nodeId>'` since mod-overseer#388 and
+        prints the exact aim it wants issued when a route is refused for a node
+        nobody has discovered - "'flight master:40' would go learn it". In
+        200,000 worldserver log lines the only aim kind this process has ever
+        written at all is `vendor`, so the family's flight network has never
+        grown by one node and every trip that needs a node nobody holds ends as
+        a walk. That is the whole of the defect: a working verb with nothing
+        calling it.
+
+        WHAT IS DECIDED HERE AND WHAT IS NOT. `flightlearn` owns the choice -
+        which node, on whose network, with whom standing at it, and whether the
+        walk is short enough to finish inside a lease - out of facts this
+        method reads. Nothing is decided here, exactly as nothing is decided in
+        `_forge_once`: this owns the reads, the arbitration and the write.
+
+        THE LEADER, BECAUSE ONLY THE LEADER CAN BE AIMED, and unusually that
+        is not merely a mechanical restriction here. A node is discovered by
+        the character that stands in front of the flight master, so a walk the
+        followers make by following teaches THEM nothing - mod-overseer's
+        opportunistic `DiscoverFlightPointOnArrival` runs for every character
+        that ends up beside a flight master, which is how the followers pick up
+        the same node for free when they arrive with the leader. So this aims
+        one character and the family's network grows by up to five.
+
+        THROUGH THE TOWN SLOT, AND ON A LEASE. This is a long walk - measured
+        at 1880 to 4226 yards to the nearest node any member of the family
+        could learn - so it is the gathering pass's shape rather than a town
+        errand's, and it takes `TOWN_SLOT_FLIGHT_LEASE_SECONDS` for the same
+        reason the gathering walk takes its own. It stays preemptible:
+        `_retaskable_from` calls a flight aim an economy errand, so a starved
+        pass can take the column back once the lease lapses, which is
+        infra#3703's rule and not an exception to it.
+
+        BOUNDED, AND THE BOUND IS A COUNT OF WALKS. A node that has been walked
+        to `FLIGHT_LEARN_ATTEMPTS` times without the taximask bit appearing is
+        given up on and the next candidate is offered instead. Without that the
+        pass would re-issue the same refused walk every cycle for ever, which
+        is the same failure with a flight master in it.
+
+        NOT IN THE MIDDLE OF A DUNGEON RUN, for the reason every other pass
+        that aims the leader skips one: pulling the leader out is how the party
+        spreads.
+        """
+        names = sorted((await asyncio.to_thread(_protected_guids)).values())
+        if not names or await self._mid_run(names):
+            return
+        leader = await asyncio.to_thread(_head_now)
+        if not leader:
+            return
+        where = (await asyncio.to_thread(_fetch_positions, [leader])).get(leader)
+        saved = (await asyncio.to_thread(_fetch_taximasks, [leader])).get(leader) or {}
+        taximask = saved.get("taximask")
+        # SETTLED BEFORE ANYTHING NEW IS ASKED FOR, so a node that HAS been
+        # learned is out of the give-up memory before `choose` is asked which
+        # node comes next. The other order would let a freshly learned node
+        # count a walk against itself one more time.
+        self._settle_flight_attempts(leader, taximask)
+        masters = await asyncio.to_thread(
+            _fetch_flight_masters, where.get("map_id") if where else None,
+        )
+        spent = tuple(node for node, (tried, _before) in
+                      self._flight_attempts.items()
+                      if tried >= FLIGHT_LEARN_ATTEMPTS)
+        errand = flightlearn.choose(
+            character=leader, standing=where, taximask=taximask,
+            race=saved.get("race"), masters=masters,
+            reach_yards=FLIGHT_LEARN_REACH_YARDS, skip=spent,
+        )
+        if not errand.aim:
+            # A refusal is already a whole sentence and it is the only thing
+            # this pass has to say on a cycle where it wants nothing. Said at
+            # INFO rather than swallowed: "the family holds every flight point
+            # it can reach" and "nobody can say where the leader is standing"
+            # are different answers and a reader has a different thing to do
+            # about each.
+            log.info("flight: %s", flightlearn.report(errand))
+            return
+        aimed = await self._claim_town_slot(FLIGHT_CLAIMANT, leader,
+                                            errand.aim)
+        if not aimed:
+            # `_claim_town_slot` has already named the holder, its lease and
+            # the queue. What only this pass knows is what the wait costs: the
+            # family's flight network does not grow this cycle, so the next
+            # long trip is another walk.
+            log.info(
+                "flight: leader=%s could not be aimed at the flight master "
+                "teaching taxi node %d this pass, so the family's flight "
+                "network does not grow and the next long trip is another walk",
+                leader, errand.node,
+            )
+            return
+        tried, _before = self._flight_attempts.get(errand.node, (0, None))
+        # THE MASK IS REMEMBERED AS IT WAS BEFORE THIS WALK, because "the bit
+        # flipped" is a question about a pair of readings and a single reading
+        # cannot answer it. Re-stamped on every walk sent for the same node, so
+        # a node learned and somehow lost again is still judged against the
+        # reading that this particular walk started from.
+        self._flight_attempts[errand.node] = (tried + 1, taximask)
+        log.info("flight: leader=%s - %s", leader, flightlearn.report(errand))
+
+    async def _flight_learn_loop(self) -> None:
+        """Grow the family's flight network, one node at a time (infra#4206).
+
+        Own loop and own clock, the same reasoning `_forge_loop` and
+        `_guild_bank_loop` give for themselves.
+
+        THE SLOWEST CADENCE OF ALL OF THEM, deliberately. A node learned is
+        learned for ever, so there is nothing here to re-check quickly, and the
+        walk it asks for is the longest any pass asks for. Running it as often
+        as the town errands would make it a competitor for the column rather
+        than an occasional one - and the column belongs to the passes whose
+        work comes back every cycle.
+
+        STAGGERED LAST, after every town pass has had its settle, so the first
+        thing this pass sees is a column that already says what the town work
+        wanted it to say rather than one mid-decision.
+        """
+        await self.wait_until_ready()
+        cycle = FLIGHT_LEARN_CYCLE_SECONDS
+        await asyncio.sleep(min(cycle, 420.0))
+        while not self.is_closed():
+            try:
+                await self._flight_learn_once()
+            except Exception:
+                log.exception("flight pass failed; retrying next cycle")
+            await asyncio.sleep(cycle)
+
     async def _settle_town_errand(self, names: list, leader: str, town,
                                   work_unasked: bool) -> str:
         """Aim, hold or hand back the town trip's `repair` errand (infra#3728).
@@ -8059,6 +8907,154 @@ class Bridge(discord.Client):
     async def _goal_complete(self, row: dict, action) -> None:
         await asyncio.to_thread(_complete_goal, action.goal_id)
 
+    async def _gather_destination(self):
+        """Where the family should go to gather, or a Choice saying why not.
+
+        EVERY READ HERE ALREADY EXISTED. `_head_now` is the same leader every
+        town errand uses, `_fetch_positions` is what `_forge_once` asks for a
+        standing map, and `_fetch_trade_skills` is the one place in this bridge
+        that touches `character_skills`. Adding a second reader for any of them
+        would be a second answer to a question already answered.
+
+        THE TWO-PHASE SHAPE IS FORCED BY THE DATA. `gatheraim.choose` wants a
+        danger reading per candidate, but the only danger reading this database
+        can give is a proximity one - `creature.zoneId` is unpopulated for
+        144,944 of 150,063 rows - and a proximity reading needs a point, which
+        is the candidate itself. So candidates are ranked first, each one's own
+        neighbourhood is measured, and the choice is made over the measured
+        set. Only the densest few are measured: the ranking is long and each
+        reading is a creature scan, so measuring all of them every goal cycle
+        would be work about zones the family will never be sent to.
+        """
+        leader = await asyncio.to_thread(_head_now)
+        if not leader:
+            return gatheraim.Choice(
+                refused="no leader is marked on overseer_roster, so there is "
+                        "nobody to aim and no map to aim them on",
+                why="no roster lead.")
+
+        names = await asyncio.to_thread(_fetch_enabled_names)
+        skills = await asyncio.to_thread(_fetch_trade_skills, names)
+        skill_name, value = gatheraim.lowest_gatherer(skills)
+        if skill_name is None:
+            return gatheraim.Choice(
+                refused="nobody enabled on the roster holds mining or "
+                        "herbalism, so there is no gathering destination to "
+                        "choose - skinning comes off corpses, not nodes",
+                why="no aimable gathering skill in the roster.")
+
+        where = (await asyncio.to_thread(_fetch_positions, [leader])).get(leader)
+        standing_on = where.get("map_id") if where else None
+
+        rows = await asyncio.to_thread(_fetch_family_levels, names)
+        # The WEAKEST character sets the danger ceiling, for the same reason
+        # the weakest gatherer sets the band: the family arrives together.
+        level = min(rows.values()) if rows else 0
+
+        locks = gatherband.reachable_locks(skill_name, value)
+        spawns = await asyncio.to_thread(_survey_gather_nodes, leader, locks)
+
+        candidates = gatheraim.fields_in_band(
+            spawns, skill_name, value, standing_on)
+        zone_levels = {}
+        for cand in candidates[:GATHER_DANGER_CANDIDATES]:
+            top = await asyncio.to_thread(
+                _gather_danger, cand.map_id, cand.spawn.x, cand.spawn.y)
+            if top is not None:
+                zone_levels[cand.zone_id] = top
+
+        return gatheraim.choose(skills=skills, standing_on=standing_on,
+                                spawns=spawns, family_level=level,
+                                zone_levels=zone_levels)
+
+    async def _walk_to_gather_field(self, choice) -> None:
+        """Send the family to the field `gatheraim` chose, or say why not.
+
+        THE AIM IS BUILT BY `travel.ground_aim` AND NEVER BY THIS METHOD.
+        That function refuses a malformed or over-long aim rather than
+        truncating one, and `overseer_roster.travel_npc` is VARCHAR(32) with
+        MySQL truncating outside strict mode - a truncated aim is not a failed
+        aim, it is a DIFFERENT plausible coordinate that no survey produced.
+        This project has already paid for that in dead characters, so the
+        coordinate comes from the surveyed spawn and the string comes from the
+        one writer of them.
+
+        ARRIVAL IS ASKED IN ZONES, NOT YARDS. `gatheraim` chooses a NodeField -
+        a zone's worth of nodes and one spawn to aim at - so the question "is
+        the family there yet" is about the zone, not about that one spawn out
+        of hundreds. A radius around the aimed spawn would answer no while the
+        family stood on a node forty yards away, and re-aim them across a zone
+        they had already reached. This is also the test infra#4183 states for
+        itself: "the family actually arrives in the chosen zone, verified from
+        overseer_snapshot.zone_id".
+
+        AND ARRIVAL MATTERS BECAUSE THE WORLD RELEASES THE ERRAND ITSELF.
+        mod-overseer ends a ground errand on arrival - "'Ugga' reached
+        'at:0:...' - errand done, releasing" - so the column is empty again the
+        moment the walk lands. Without this check the next goal cycle, sixty
+        seconds later, would find an empty column and a chosen field and send
+        them off again from inside it, for ever.
+
+        IT ASKS UNDER ITS OWN CLAIMANT so the column can tell a gathering walk
+        from a town errand. `Slot.long_leases` is keyed on that name: this is
+        the pass whose trip is measured in minutes, and the only one given a
+        lease dimensioned for it (`townslot.GATHER_LEASE_SECONDS`).
+        """
+        got = getattr(choice, "chosen", None)
+        if got is None:
+            # A refusal is already a sentence, and `skillgoal.plan` has just
+            # spoken it. Saying it twice in two voices is how a log stops
+            # being read.
+            return
+        leader = await asyncio.to_thread(_head_now)
+        if not leader:
+            return
+        where = (await asyncio.to_thread(_fetch_positions, [leader])).get(leader)
+        if where and where.get("zone_id") is not None:
+            try:
+                arrived = int(where["zone_id"]) == int(got.zone_id)
+            except (TypeError, ValueError):
+                arrived = False
+            if arrived:
+                log.info(
+                    "gather: leader=%s is already standing in zone %d, which "
+                    "holds the %d %s node(s) the weakest gatherer can open, so "
+                    "no aim is written and the column is left to the town "
+                    "errands",
+                    leader, got.zone_id, got.nodes, got.skill_name,
+                )
+                return
+        aim = travel.ground_aim(got.map_id, got.spawn.x, got.spawn.y,
+                                got.spawn.z)
+        if not aim:
+            # `ground_aim` already refused, and it refuses for exactly one
+            # reason worth a line here: the coordinate would not survive the
+            # column's width. Nothing else in this pass can act on that.
+            log.info(
+                "gather: the spawn chosen in zone %d on map %s does not make "
+                "an aim that fits %s, so nobody is sent",
+                got.zone_id, got.map_id, "overseer_roster.travel_npc",
+            )
+            return
+        aimed = await self._claim_town_slot(GATHER_CLAIMANT, leader, aim)
+        if not aimed:
+            # `_claim_town_slot` has already named the holder, its lease and
+            # the queue. What only this pass knows is what the wait costs: the
+            # weakest gatherer stays where no node it can open exists, so the
+            # skill it is stuck on cannot move at all until the column comes
+            # round.
+            log.info(
+                "gather: leader=%s could not be aimed at zone %d this pass, so "
+                "%s stays where nothing it can open is spawned",
+                leader, got.zone_id, got.skill_name,
+            )
+            return
+        log.info(
+            "gather: leader=%s aimed at %s - zone %d on map %d, %d %s node(s) "
+            "in the weakest gatherer's band",
+            leader, aim, got.zone_id, got.map_id, got.nodes, got.skill_name,
+        )
+
     async def _drive_skill(self, row: dict, action) -> None:
         """Turn a skill goal into a profession order, or into the sentence
         saying why there is no order to give (infra#3731).
@@ -8095,6 +9091,15 @@ class Bridge(discord.Client):
         standing = craft_rhythm.standing_mode(
             await asyncio.to_thread(_standing_jobs)
         )
+        # infra#3789. A GATHERED skill is answerable only with somewhere to
+        # stand, and the survey that finds it is a database read - so it
+        # happens here and `skillgoal.plan` stays pure. Only gathering pays
+        # for the survey: a crafting goal has no use for a node field, and
+        # this runs on every goal cycle.
+        destination = None
+        if skillgoal.shape_for(action.skill_name) == skillgoal.GATHERED:
+            destination = await self._gather_destination()
+
         plan = skillgoal.plan(
             skill_name=action.skill_name,
             skill_id=action.skill_id,
@@ -8104,6 +9109,7 @@ class Bridge(discord.Client):
             beneficiary=action.beneficiary,
             standing=standing,
             stalls=action.stalls,
+            destination=destination,
         )
         log.info("goal: %s", skillgoal.report(plan))
 
@@ -8116,6 +9122,21 @@ class Bridge(discord.Client):
                 core.JobDirective(mode=plan.mode, source="overseer:goal"),
                 self._rhythm_channel(),
             )
+
+        # infra#4183. THE WALK, WHICH IS THE HALF #4181 LEFT OUT. The survey
+        # above chose a spawn and the plan's sentence names the zone, but
+        # nothing sent anybody there: `_set_job(MODE_GATHER)` writes
+        # `job='quest'`, which is the job the family is already standing in, so
+        # the chosen coordinate was computed, logged and dropped.
+        #
+        # NOT GATED ON `plan.mode`. The mode is only ever set on the ENTRY into
+        # the rhythm - once the family is inside it, craft_rhythm owns the
+        # alternation and this plan's mode is '' for ever after. Gating the aim
+        # on it would write the walk once and never again, which is the same
+        # inertness one layer up. The destination being chosen, and the goal
+        # not being blocked, is the whole condition.
+        if destination is not None and not plan.blocked:
+            await self._walk_to_gather_field(destination)
 
         said = plan.blocked or plan.stalled
         if said and action.speak:
@@ -9642,8 +10663,45 @@ def _fetch_family_equipped(names: list) -> list:
 # The freshness filter is also what makes this ONE read answer both
 # questions: a character who is not online has no fresh row, so a name
 # missing from the result is a name nobody can hand anything to.
+# The family's levels, for the gathering level guard only (infra#3789).
+#
+# NOT folded into _FAMILY_POSITION_SQL, which `gear.spots_from_rows` also
+# reads: widening a shared SELECT to serve one new caller makes every other
+# caller carry a column it has no use for, and the next person trimming that
+# SELECT cannot tell which column anybody still needs. The freshness window is
+# the same 60 seconds for the same reason - a level read from a stale snapshot
+# is a level guard judging a family that has since moved.
+_FAMILY_LEVEL_SQL = (
+    "SELECT name, level FROM overseer_snapshot "
+    "WHERE name IN (%s) AND updated_at > NOW() - INTERVAL 60 SECOND"
+)
+
+
+def _fetch_family_levels(names: list) -> dict:
+    """name -> level for whoever has a fresh snapshot row. Never None."""
+    if not names:
+        return {}
+    sql = _FAMILY_LEVEL_SQL % ",".join(["%s"] * len(names))
+    with _connect() as conn, conn.cursor() as cur:
+        try:
+            cur.execute(sql, names)
+        except pymysql.err.MySQLError as exc:
+            if exc.args and exc.args[0] in (1054, 1146):
+                return {}
+            raise
+        return {row["name"]: int(row["level"]) for row in cur.fetchall()
+                if row.get("level") is not None}
+
+
+# `zone_id` IS READ HERE AND NOWHERE ELSE (infra#4183). The gathering pass
+# needs one question answered - "is the leader already in the zone that was
+# chosen?" - and `gatheraim` chooses a ZONE, so the zone is the honest unit to
+# ask it in rather than a radius around one spawn out of hundreds. Widening
+# this read is what keeps it from becoming a second position reader: the
+# gathering survey already calls `_fetch_positions([leader])` for the map it
+# stands on, so the zone arrives in a query that was already being run.
 _FAMILY_POSITION_SQL = (
-    "SELECT name, map_id, pos_x, pos_y FROM overseer_snapshot "
+    "SELECT name, map_id, zone_id, pos_x, pos_y FROM overseer_snapshot "
     "WHERE name IN (%s) AND updated_at > NOW() - INTERVAL 60 SECOND"
 )
 
@@ -9751,6 +10809,116 @@ def _fetch_vendor_items(names: list) -> list:
                  "stock and are not vendor goods: %s", len(keeps),
                  "; ".join(sorted(set(keeps.values()))))
     return rows
+
+
+# The four bags each holder has EQUIPPED right now (bag 0, slots 19-22), read
+# for their ContainerSlots alone (infra#4163). `bag_pressure.bag_candidates`
+# never touches an equipped bag itself - this is only the yardstick it uses
+# to tell a redundant spare from an upgrade nobody has worn yet.
+_EQUIPPED_BAG_SLOTS_SQL = (
+    "SELECT c.name AS holder, it.ContainerSlots AS container_slots "
+    "FROM character_inventory ci "
+    "JOIN characters c ON c.guid = ci.guid "
+    "JOIN item_instance ii ON ii.guid = ci.item "
+    "JOIN acore_world.item_template it ON it.entry = ii.itemEntry "
+    "WHERE c.name IN (%s) AND ci.bag = 0 AND ci.slot BETWEEN 19 AND 22 "
+    "AND it.class = 1"
+)
+
+
+def _fetch_equipped_bag_slots(names: list) -> dict:
+    """holder -> the ContainerSlots of every bag they have equipped now.
+
+    A holder missing from the result has no known equipped bags, and
+    `bag_candidates` keeps everything of theirs rather than guess a size to
+    compare against - the same fail-closed shape `_fetch_family_equipped`
+    already states for worn gear.
+    """
+    if not names:
+        return {}
+    sql = _EQUIPPED_BAG_SLOTS_SQL % ",".join(["%s"] * len(names))
+    with _connect() as conn, conn.cursor() as cur:
+        try:
+            cur.execute(sql, names)
+        except pymysql.err.MySQLError as exc:
+            if exc.args and exc.args[0] in (1054, 1146):
+                log.warning("equipped bag facts unavailable on this world image")
+                return {}
+            raise
+        rows = cur.fetchall()
+    out: dict = {}
+    for row in rows:
+        out.setdefault(row["holder"], []).append(int(row["container_slots"]))
+    return {holder: tuple(sizes) for holder, sizes in out.items()}
+
+
+# Carried CONTAINERS (class 1) that are not equipped right now: the exact
+# complement of `_EQUIPPED_BAG_SLOTS_SQL`'s scope (infra#4163). Slots 19-22
+# are deliberately excluded here - that range is where the equipped bags
+# THEMSELVES sit, and this query is only for the ones nobody is using.
+_SURPLUS_BAGS_SQL = (
+    "SELECT c.name AS holder, ii.guid AS item_guid, ii.count AS count, "
+    "ii.flags AS instance_flags, it.name AS name, it.Quality AS quality, "
+    "it.SellPrice AS sell_price, it.bonding AS bonding, "
+    "it.class AS item_class, it.ContainerSlots AS container_slots "
+    "FROM character_inventory ci "
+    "JOIN characters c ON c.guid = ci.guid "
+    "JOIN item_instance ii ON ii.guid = ci.item "
+    "JOIN acore_world.item_template it ON it.entry = ii.itemEntry "
+    "WHERE c.name IN (%s) AND it.class = 1 AND ("
+    "(ci.bag = 0 AND ci.slot BETWEEN 23 AND 38) "
+    "OR ci.bag IN (SELECT bag.item FROM character_inventory bag "
+    "WHERE bag.guid = ci.guid AND bag.bag = 0 AND bag.slot BETWEEN 19 AND 22))"
+)
+
+
+def _sellable_per_holder(rows: list, bag_rows: list,
+                         equipped_bag_slots: dict, names: list) -> dict:
+    """How many carried stacks a vendor would actually take, per holder.
+
+    THE "COULD A TRIP EVEN HELP?" INPUT to `bag_pressure.family_town_run_needed`
+    (infra#4190). It reuses the same two selectors the vendor half runs below,
+    so the count cannot drift from what the pass would really queue - a count
+    derived from its own rules would eventually disagree with the sale it is
+    predicting, and the disagreement would be invisible.
+
+    GEAR IS NOT COUNTED, deliberately. `gear_candidates` only lets a piece
+    reach a vendor once all five have refused it, so it is a hand-off queue
+    first; counting it would let an upgrade on its way to somebody else
+    justify a town trip on its holder's behalf.
+
+    Every measured name gets an entry, including zero. An absent name reads as
+    "nothing to sell" to the predicate, so filling them in explicitly is what
+    keeps a holder with genuinely nothing from being confused with a holder
+    nobody measured.
+    """
+    counts = {str(name): 0 for name in names}
+    selected = bag_pressure.vendor_candidates(
+        rows, keep_names=OWNER_KEEPS,
+    ) + bag_pressure.bag_candidates(
+        bag_rows, equipped_bag_slots, keep_names=OWNER_KEEPS,
+    )
+    for candidate in selected:
+        holder = str(getattr(candidate, "holder", "") or "")
+        if holder:
+            counts[holder] = counts.get(holder, 0) + 1
+    return counts
+
+
+def _fetch_surplus_bags(names: list) -> list:
+    """Read carried-but-unequipped bag facts; bag_pressure decides the route."""
+    if not names:
+        return []
+    sql = _SURPLUS_BAGS_SQL % ",".join(["%s"] * len(names))
+    with _connect() as conn, conn.cursor() as cur:
+        try:
+            cur.execute(sql, names)
+        except pymysql.err.MySQLError as exc:
+            if exc.args and exc.args[0] in (1054, 1146):
+                log.warning("surplus bag facts unavailable on this world image")
+                return []
+            raise
+        return [dict(row) for row in cur.fetchall()]
 
 
 def _sell_attempts(hours: int) -> list:
@@ -9986,10 +11154,27 @@ def _fetch_live_maps(names: list) -> dict[str, int] | None:
 
 
 def _roster_jobs() -> dict:
-    """name -> `overseer_roster.job`, the fallback half of chat.mid_run."""
+    """name -> `overseer_roster.job`, the fallback half of chat.mid_run.
+
+    THE LOWEST BLAST RADIUS OF THE TWELVE, AND SCOPED WITH THE REST ANYWAY
+    (infra#4221). `chat.mid_run` looks names up in this dict, so extra rows from
+    another cohort are names it never asks about and today cost nothing. It is
+    scoped because the alternative is a rule with an exception in it: twelve
+    reads that all mean "this family" and one that means "the table, but it
+    happens not to matter". The next person to add a caller inherits whichever
+    of those two this function actually is, and only one of them is safe to
+    inherit.
+    """
+    cohort = _cohort_of(bonds.head_of_family())
+    scope = " AND family = %s" if cohort else ""
+    scope_args = (cohort,) if cohort else ()
     with _connect() as conn, conn.cursor() as cur:
         try:
-            cur.execute("SELECT name, job FROM overseer_roster WHERE enabled = 1")
+            cur.execute(
+                "SELECT name, job FROM overseer_roster WHERE enabled = 1"  # noqa: S608 - the only variable part is a fixed clause chosen above; every value is still bound
+                + scope,
+                scope_args,
+            )
             return {row["name"]: row["job"] for row in cur.fetchall()}
         except pymysql.err.MySQLError as exc:
             # `job` arrived in a migration (infra#2834); a world without it
@@ -10370,9 +11555,20 @@ def _recent_guild_setup_keys(minutes: int) -> set[tuple[str, str]]:
     with _connect() as conn, conn.cursor() as cur:
         try:
             cur.execute(
+                # `%%` IS NOT A TYPO. pymysql renders a parameterised query with
+                # `query % args`, so every literal percent in the SQL has to be
+                # doubled or it is read as a format spec. This LIKE pattern's
+                # trailing `%` was bare, which made the whole string demand two
+                # arguments when one is passed, and `mogrify` raised
+                # `TypeError: not enough arguments for format string` before the
+                # query ever reached MySQL. That is also why the handler below
+                # did not save it: TypeError is not a `MySQLError`, so it escaped
+                # this function and killed the entire guild-bank pass on every
+                # cycle - which is why no guild on the realm had ever bought a
+                # bank tab (infra#3713).
                 "SELECT target_name, command FROM overseer_command "
                 "WHERE kind = 'guild' AND created_at > NOW() - INTERVAL %s MINUTE "
-                "AND (command = 'bank buy-tab' OR command LIKE 'bank grant-deposit %')",
+                "AND (command = 'bank buy-tab' OR command LIKE 'bank grant-deposit %%')",
                 (int(minutes),),
             )
         except pymysql.err.MySQLError as exc:
@@ -10592,6 +11788,199 @@ def _fetch_mail(names: list) -> list:
 # `travel.within_focus` needs it to answer "is this character ALREADY in the
 # focus" - a question whose right threshold is per-forge and which a constant of
 # ours would get wrong in both directions.
+# ---------------------------------------------------------------------------
+# WHERE A GATHERING FAMILY SHOULD STAND (infra#3789).
+#
+# `gatheraim` decides; these two reads are what it decides ON. Both are the
+# same shape as `_FORGE_SQL` and for the same reason: a destination has to be a
+# row the world was built from, never a coordinate this process computed.
+#
+# ZONE FILTER, NOT A ZONE JOIN. `gameobject.zoneId` is populated for only
+# 38,990 of 96,628 rows on this realm, so `zoneId <> 0` is a filter on what can
+# be grouped at all rather than an assumption that it is complete. A node whose
+# zone the world never recorded is dropped - it cannot be ranked against the
+# others, and inventing a zone for it would be the same class of guess as
+# inventing its Z.
+_GATHER_NODE_SQL = (
+    "SELECT g.map AS map_id, g.zoneId AS zone_id, g.position_x AS x, "
+    "g.position_y AS y, g.position_z AS z, gt.Data0 AS lock_id, "
+    "gt.name AS name "
+    "FROM overseer_snapshot s "
+    "JOIN acore_world.gameobject g ON g.map = s.map_id "
+    "JOIN acore_world.gameobject_template gt ON gt.entry = g.id "
+    "WHERE s.name = %s AND s.updated_at > NOW() - INTERVAL 120 SECOND "
+    "AND gt.type = %s AND gt.Data0 IN ({placeholders}) AND g.zoneId <> 0"
+)
+
+# THE LEVEL GUARD MEASURES A NEIGHBOURHOOD, NOT A ZONE, because it has to:
+# `creature.zoneId` is unpopulated on this realm for 144,944 of 150,063 rows,
+# so "the top level in zone 17" is not a number this database can answer. What
+# it CAN answer is "the top level within N yards of this exact spawn", which is
+# the better question anyway - a zone's average says nothing about the elite
+# standing on the vein. A ground `at:` aim early-returns before every level
+# check in mod_overseer.cpp (9839-9857), so this is the only guard there is.
+_GATHER_DANGER_SQL = (
+    "SELECT MAX(ct.maxlevel) AS top, COUNT(*) AS mobs "
+    "FROM acore_world.creature c "
+    "JOIN acore_world.creature_template ct ON ct.entry = c.id "
+    "WHERE c.map = %s "
+    "AND POW(c.position_x - %s, 2) + POW(c.position_y - %s, 2) < POW(%s, 2)"
+)
+
+# How wide a circle around the destination counts as "there". 400 yards is
+# roughly the distance a character will wander working a field of nodes, and it
+# is wide enough that a quiet pocket inside a dangerous zone does not read as
+# safe.
+GATHER_DANGER_YARDS = 400
+
+# How many of the densest candidate fields get a danger reading. Each reading
+# is a creature-table scan, and the ranking below the top few is academic - the
+# family is sent to the densest field that passes, so measuring the twentieth
+# is work about a zone nothing will choose.
+GATHER_DANGER_CANDIDATES = 5
+
+
+def _survey_gather_nodes(leader: str, lock_ids):
+    """Every in-band node spawn on the leader's own map.
+
+    `lock_ids` is what `gatherband` says this family can open, so the filter is
+    applied in SQL rather than in Python - the unfiltered table is 96,628 rows
+    and almost none of them are reachable by a Mining 1 character.
+    """
+    if not lock_ids:
+        return []
+    placeholders = ",".join(["%s"] * len(lock_ids))
+    sql = _GATHER_NODE_SQL.format(placeholders=placeholders)
+    with _connect() as conn, conn.cursor() as cur:
+        try:
+            cur.execute(sql, (leader, travel.CHEST_GO_TYPE, *lock_ids))
+        except pymysql.err.MySQLError as exc:
+            if exc.args and exc.args[0] in (1054, 1146, 1265):
+                return []
+            raise
+        return [gatheraim.Spawn(
+            map_id=int(row["map_id"]), zone_id=int(row["zone_id"]),
+            x=float(row["x"]), y=float(row["y"]), z=float(row["z"]),
+            lock_id=int(row["lock_id"]), name=str(row["name"] or ""))
+            for row in cur.fetchall()]
+
+
+def _gather_danger(map_id: int, x: float, y: float):
+    """Highest creature level spawned within GATHER_DANGER_YARDS of a point.
+
+    None when nothing was measured, and the caller treats None as "refuse"
+    rather than "safe" - the asymmetry is deliberate, because the failure it
+    exists to prevent already happened: five characters at 43-48 wiped twice on
+    a level 61 elite, eight deaths in four minutes.
+    """
+    with _connect() as conn, conn.cursor() as cur:
+        try:
+            cur.execute(_GATHER_DANGER_SQL,
+                        (int(map_id), float(x), float(y), GATHER_DANGER_YARDS))
+        except pymysql.err.MySQLError as exc:
+            if exc.args and exc.args[0] in (1054, 1146, 1265):
+                return None
+            raise
+        row = cur.fetchone()
+    if not row or row.get("top") is None or not row.get("mobs"):
+        return None
+    return int(row["top"])
+
+
+# WHO IS STANDING AT A FLIGHT POINT (infra#4206), read live rather than
+# projected. The node TABLE is frozen client data and ships beside the code
+# (`taxinodes.json`), but which creatures are actually spawned is a fact about
+# THIS world's database, and mod-overseer resolves the same question against
+# the same rows when it turns the aim back into a walk. Reading them apart is
+# what keeps a node nothing stands at - the DBC is full of them - from becoming
+# an errand.
+#
+# `id` IS THE TEMPLATE ENTRY ON THIS SCHEMA, not `id1`: measured against the
+# live world database, `acore_world.creature` has no `id1` column at all.
+_FLIGHT_MASTER_SQL = (
+    "SELECT c.map AS map_id, c.position_x AS x, c.position_y AS y, "
+    "c.id AS entry, ct.name AS name "
+    "FROM acore_world.creature c "
+    "JOIN acore_world.creature_template ct ON ct.entry = c.id "
+    "WHERE c.map = %s AND (ct.npcflag & %s)"
+)
+
+
+def _fetch_flight_masters(map_id):
+    """Every flight master spawned on one map, as `flightlearn.Master` rows.
+
+    An empty list is an ordinary answer and it is the SAFE one: with nobody
+    standing anywhere, `flightlearn.choose` finds no candidate and refuses,
+    which is the direction a missing reading has to fail in - the alternative
+    would be walking the family to a node the module will then refuse to
+    resolve.
+    """
+    if map_id is None:
+        return []
+    with _connect() as conn, conn.cursor() as cur:
+        try:
+            cur.execute(_FLIGHT_MASTER_SQL,
+                        (int(map_id), flightlearn.FLIGHT_MASTER_NPC_FLAG))
+        except pymysql.err.MySQLError as exc:
+            # 1054 missing column, 1146 missing table. Same degradation every
+            # other reader of the world tables takes: a world image without
+            # them honestly has no flight master to find.
+            if exc.args and exc.args[0] in (1054, 1146):
+                log.warning("flight: this world image has no creature tables "
+                            "to find a flight master in")
+                return []
+            raise
+        return [flightlearn.Master(
+            map_id=int(row["map_id"]), x=float(row["x"]), y=float(row["y"]),
+            entry=int(row["entry"]), name=str(row["name"] or ""))
+            for row in cur.fetchall()]
+
+
+# WHAT A CHARACTER HAS DISCOVERED, AND HOW STALE THE ANSWER IS.
+#
+# `characters` is written on PlayerSaveInterval, which is 900000 ms, so a
+# taximask read here can be a quarter of an hour behind the walk that changed
+# it - the same lag `overseer_event`'s own migration note gives as the reason
+# it records a level at the moment of the event. That is survivable in both
+# directions and it is worth saying which:
+#
+#   * A node learned but not yet saved reads as still missing, so the pass can
+#     send somebody to a flight master they have already been to. mod-overseer
+#     answers that with "is at flight master ... and already knows node N" and
+#     releases, so it costs one walk and never a wrong state.
+#   * It can never invent a node. A bit that is SET in this column was set by
+#     the world, so the confirmation half (`flightlearn.learned`) is slow
+#     rather than wrong - which is the direction a proof has to be late in.
+_TAXIMASK_SQL = (
+    "SELECT name, race, taximask FROM acore_characters.characters "
+    "WHERE name IN (%s)"
+)
+
+
+def _fetch_taximasks(names: list) -> dict:
+    """name -> {"race", "taximask"} for each character, as saved.
+
+    Returns a MAPPING and never None. A name missing from it is a character
+    the world has not saved, and `flightlearn.choose` refuses on an absent
+    mask rather than treating it as an empty one.
+    """
+    if not names:
+        return {}
+    sql = _TAXIMASK_SQL % ",".join(["%s"] * len(names))
+    with _connect() as conn, conn.cursor() as cur:
+        try:
+            cur.execute(sql, names)
+        except pymysql.err.MySQLError as exc:
+            if exc.args and exc.args[0] in (1054, 1146):
+                log.warning("flight: this world image does not carry "
+                            "characters.taximask")
+                return {}
+            raise
+        return {row["name"]: {"race": row["race"],
+                              "taximask": row["taximask"]}
+                for row in cur.fetchall()}
+
+
 _FORGE_SQL = (
     "SELECT g.map AS map_id, g.position_x AS x, g.position_y AS y, "
     "g.position_z AS z, gt.Data1 AS radius, "
@@ -10673,13 +12062,25 @@ def _forge_errands() -> dict:
 
     DEGRADES TO NOBODY, matching every other reader of these columns: a world
     image without the column cannot be holding a smelt errand in it.
+
+    AND ONE COHORT'S SMELTERS, FOR THE REASON THE PARAGRAPH ABOVE ALREADY GIVES
+    (infra#4221). The forge pass is demand-driven precisely so that it does not
+    compete for the travel column unless somebody is actually smelting. A
+    second cohort's miner with `craft_spell > 0` is demand this family never
+    signalled, and aiming it puts a character the other guild drives into
+    contention for the one column - which is exactly the half-hour-in-a-shop
+    failure this function was written to avoid, arriving through the door the
+    design closed.
     """
+    cohort = _cohort_of(bonds.head_of_family())
+    scope = " AND family = %s" if cohort else ""
+    scope_args = (cohort,) if cohort else ()
     with _connect() as conn, conn.cursor() as cur:
         try:
             cur.execute(
-                "SELECT name, craft_spell FROM overseer_roster "
-                "WHERE enabled = 1 AND job = %s AND craft_spell > 0",
-                (craft.MODE,),
+                "SELECT name, craft_spell FROM overseer_roster "  # noqa: S608 - the only variable part is a fixed clause chosen above; every value is still bound
+                "WHERE enabled = 1 AND job = %s AND craft_spell > 0" + scope,
+                (craft.MODE, *scope_args),
             )
         except pymysql.err.MySQLError as exc:
             if exc.args and exc.args[0] in (1054, 1146):
@@ -12925,6 +14326,7 @@ class HeadlessBridge(Bridge):
                 self._auction_loop,
                 self._recipebook_loop,
                 self._towntrip_loop,
+                self._flight_learn_loop,
                 self._restore_lost_lives,
             ) if coro.__name__ not in self.HEADLESS_SKIP
         ]

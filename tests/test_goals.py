@@ -927,3 +927,108 @@ class TheSkillDriveIsActuallyWired(unittest.TestCase):
         for forbidden in ("_insert_command", "_write_trade_errand"):
             self.assertNotIn(forbidden, names)
 
+
+class TheChosenFieldIsActuallyWalkedTo(unittest.TestCase):
+    """infra#4183. #4181 shipped the picker and stopped one step short: the
+    destination was computed, named in the verdict sentence, and dropped.
+
+    `_set_job(MODE_GATHER)` writes `job='quest'`, which is the job the family
+    is ALREADY standing in, so the net effect of choosing a field was nothing
+    at all. That is the inert-mechanism shape this repo keeps hitting, and
+    these tests are the ones that fail if it comes back."""
+
+    def setUp(self):
+        src = (pathlib.Path(__file__).resolve().parent.parent
+               / "bridge.py").read_text()
+        self.src = src
+        self.tree = ast.parse(src)
+
+    def _fn(self, name):
+        return next(
+            (n for n in ast.walk(self.tree)
+             if isinstance(n, (ast.AsyncFunctionDef, ast.FunctionDef))
+             and n.name == name),
+            None)
+
+    def _names(self, fn):
+        out = set()
+        for node in ast.walk(fn):
+            if isinstance(node, ast.Attribute):
+                out.add(node.attr)
+            elif isinstance(node, ast.Name):
+                out.add(node.id)
+        return out
+
+    def test_the_skill_drive_sends_somebody_to_the_field_it_chose(self):
+        """THE WHOLE POINT. Without this call the coordinate is computed and
+        thrown away, which is what #4181 shipped."""
+        self.assertIn("_walk_to_gather_field",
+                      self._names(self._fn("_drive_skill")))
+
+    def test_the_walk_is_not_gated_on_the_job_mode(self):
+        """`plan.mode` is set only on the ENTRY into the rhythm - once the
+        family is inside it, craft_rhythm owns the alternation and the mode is
+        '' for ever after. A walk gated on it would be written once and never
+        again, which is the same inertness one layer up."""
+        fn = self._fn("_drive_skill")
+        self.assertIsNotNone(fn)
+        walk = next((n for n in ast.walk(fn)
+                     if isinstance(n, ast.Attribute)
+                     and n.attr == "_walk_to_gather_field"), None)
+        self.assertIsNotNone(walk, "no call to _walk_to_gather_field")
+        # The guarding `if` must not read plan.mode.
+        for node in ast.walk(fn):
+            if not isinstance(node, ast.If):
+                continue
+            guards = {n.attr for n in ast.walk(node.test)
+                      if isinstance(n, ast.Attribute)}
+            calls = {n.attr for n in ast.walk(node)
+                     if isinstance(n, ast.Attribute)}
+            if "_walk_to_gather_field" in calls:
+                self.assertNotIn(
+                    "mode", guards,
+                    "the walk is gated on plan.mode, so it happens once and "
+                    "never again once craft_rhythm owns the alternation")
+
+    def test_the_aim_string_is_built_by_travel_and_never_here(self):
+        """`travel.ground_aim` refuses a malformed or over-long aim rather than
+        truncating one, and `travel_npc` is VARCHAR(32) with MySQL truncating
+        outside strict mode. A truncated aim is not a failed aim - it is a
+        DIFFERENT plausible coordinate no survey produced, which this project
+        has already paid for in dead characters."""
+        names = self._names(self._fn("_walk_to_gather_field"))
+        self.assertIn("ground_aim", names)
+
+    def test_the_walk_goes_through_the_town_slot_and_not_round_it(self):
+        """One writer for travel_npc. Writing the column directly would make
+        this the second, which is the mistake infra#3703 and infra#3708 were
+        both filed for."""
+        names = self._names(self._fn("_walk_to_gather_field"))
+        self.assertIn("_claim_town_slot", names)
+        self.assertNotIn("_write_trade_errand", names)
+
+    def test_it_asks_under_its_own_claimant_so_it_gets_its_own_lease(self):
+        """`Slot.long_leases` is keyed on the claimant name, so a gathering
+        walk asking as anything else would silently be given a town errand's
+        300 second lease and be preempted mid-trip every time."""
+        names = self._names(self._fn("_walk_to_gather_field"))
+        self.assertIn("GATHER_CLAIMANT", names)
+
+    def test_arrival_is_checked_so_the_family_is_not_re_sent_from_inside(self):
+        """mod-overseer ends a ground errand on arrival and empties the column
+        itself. Without an arrival check the next goal cycle, sixty seconds
+        later, finds a free column and a chosen field and sends them off again
+        from inside the zone they already reached - for ever."""
+        names = self._names(self._fn("_walk_to_gather_field"))
+        self.assertIn("zone_id", names)
+
+    def test_the_arrival_check_has_a_zone_to_read(self):
+        """The check is only as real as the column it reads. `zone_id` absent
+        from the position query would make `where.get("zone_id")` None on every
+        pass, the check would never fire, and the family would be re-aimed from
+        inside the field with nothing in the log to say so."""
+        sql = self.src[self.src.index("_FAMILY_POSITION_SQL = ("):]
+        sql = sql[:sql.index(")")]
+        self.assertIn("zone_id", sql)
+        self.assertIn("overseer_snapshot", sql)
+

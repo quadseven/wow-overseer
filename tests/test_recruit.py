@@ -146,14 +146,24 @@ class WhenAFreshShortlistIsAskedFor(unittest.TestCase):
             "invite",
         )
 
-    def test_a_shortlist_is_never_asked_for_while_the_roster_is_full(self):
-        """The gate order is the design: a full guild has no question to ask
-        the world, and a sweep that shortlisted first would keep asking for
-        names it can never use."""
-        self.assertEqual(
-            plan(member_count=40, target_size=40, shortlist_age_minutes=None).verb,
-            "wait",
+    def test_a_shortlist_is_never_asked_for_while_a_FRESH_roster_is_full(self):
+        """Half of the gate order is still the design, and this is the half.
+
+        A full guild whose numbers are CURRENT has no question to ask the
+        world, and a sweep that shortlisted anyway would keep asking for names
+        it can never use. infra#4215 moved freshness above roster-full; it did
+        not remove roster-full, and this is what says so. Written with an
+        explicitly fresh shortlist, because the same assertion against a stale
+        one would pass for the opposite reason.
+        """
+        action = plan(
+            member_count=40,
+            target_size=40,
+            shortlist_age_minutes=recruit.SHORTLIST_FRESH_MINUTES - 1,
+            shortlist_asked_minutes_ago=recruit.SHORTLIST_WAIT_MINUTES + 1,
         )
+        self.assertEqual(action.verb, "wait")
+        self.assertIn("target size", action.reason)
 
 
 class AShortlistNobodyAnswersIsNotReAskedEveryPass(unittest.TestCase):
@@ -200,6 +210,130 @@ class AShortlistNobodyAnswersIsNotReAskedEveryPass(unittest.TestCase):
             ).verb,
             "wait",
         )
+
+
+class AStaleRosterCountCannotSuppressTheRefreshThatWouldDisproveIt(unittest.TestCase):
+    """infra#4215, and the self-sealing gate it measured on wow-dev.
+
+    BOTH ROSTER NUMBERS RIDE IN ON THE SHORTLIST. `roster_from_shortlist`
+    lifts `member_count` and `target_size` off the newest delivered one,
+    because the target is worldserver configuration this process does not
+    hold. So while roster-full was asked FIRST, a cached "40 of 40" returned
+    before the freshness check that would have asked for the shortlist
+    carrying the new number - the only thing that could have refreshed it.
+    Raising `Overseer.Recruit.TargetSize` to 71 therefore changed nothing: the
+    loop logged "the roster is at its target size (40 of 40)" every five
+    minutes for forty-five minutes and issued no rows at all.
+
+    The fix is an ordering, not a deletion, so these tests come in pairs: the
+    stale case must refresh AND the fresh case must still refuse. A suite that
+    only asserted the first half would go green if somebody deleted the
+    roster-full gate outright, which is the failure this class is shaped to
+    make impossible.
+    """
+
+    def test_a_stale_full_roster_asks_for_a_fresh_shortlist(self):
+        """The reported bug, exactly: cached 40 of 40, nothing in flight."""
+        action = plan(
+            member_count=40,
+            target_size=40,
+            shortlist_age_minutes=recruit.SHORTLIST_FRESH_MINUTES + 1,
+            shortlist_asked_minutes_ago=recruit.SHORTLIST_WAIT_MINUTES + 1,
+        )
+        self.assertEqual(action.verb, "shortlist")
+        self.assertEqual(action.command, f"shortlist {recruit.SHORTLIST_SIZE}")
+
+    def test_a_stale_roster_over_its_cached_target_refreshes_too(self):
+        """Not only the `==` case. A target LOWERED under the live roster is
+        the same cache with the sign flipped, and it must not wedge either."""
+        self.assertEqual(
+            plan(
+                member_count=71,
+                target_size=40,
+                shortlist_age_minutes=recruit.SHORTLIST_FRESH_MINUTES + 1,
+                shortlist_asked_minutes_ago=recruit.SHORTLIST_WAIT_MINUTES + 1,
+            ).verb,
+            "shortlist",
+        )
+
+    def test_a_FRESH_full_roster_still_waits_and_still_says_roster_full(self):
+        """THE NEGATIVE CASE, and the reason this fix is not just a deletion.
+
+        A guild that really is at its target, on numbers minutes old, has no
+        question for the world. Break the fix by removing the roster-full gate
+        and this test fails: the verb becomes `invite`, not `wait`.
+        """
+        action = plan(
+            member_count=71,
+            target_size=71,
+            shortlist_age_minutes=recruit.SHORTLIST_FRESH_MINUTES - 1,
+            shortlist_asked_minutes_ago=recruit.SHORTLIST_WAIT_MINUTES + 1,
+        )
+        self.assertEqual(action.verb, "wait")
+        self.assertIn("71 of 71", action.reason)
+        self.assertEqual(action.target_arg, "")
+        self.assertEqual(action.command, "")
+
+    def test_the_line_between_the_two_is_the_published_constant(self):
+        """Asserted against SHORTLIST_FRESH_MINUTES rather than against 30, so
+        moving the constant moves the behaviour instead of breaking this."""
+        full = dict(
+            member_count=71,
+            target_size=71,
+            shortlist_asked_minutes_ago=recruit.SHORTLIST_WAIT_MINUTES + 1,
+        )
+        self.assertEqual(
+            plan(shortlist_age_minutes=recruit.SHORTLIST_FRESH_MINUTES, **full).verb,
+            "wait",
+        )
+        self.assertEqual(
+            plan(shortlist_age_minutes=recruit.SHORTLIST_FRESH_MINUTES + 0.1, **full).verb,
+            "shortlist",
+        )
+
+    def test_backpressure_still_holds_over_a_stale_full_roster(self):
+        """The refresh is now reachable from roster-full, which means the
+        unbounded-ask hazard is reachable from it too. A shortlist already
+        asked for and not yet back must still hold, or a full guild with a
+        stuck worldserver writes a row every pass for as long as the fault
+        lasts - the exact shape infra#3650 was written about."""
+        action = plan(
+            member_count=40,
+            target_size=40,
+            shortlist_age_minutes=recruit.SHORTLIST_FRESH_MINUTES + 1,
+            shortlist_asked_minutes_ago=0.0,
+        )
+        self.assertEqual(action.verb, "wait")
+        self.assertIn("not come back", action.reason)
+
+    def test_a_raised_target_on_a_fresh_shortlist_actually_recruits(self):
+        """The end the whole issue is about: once the refresh lands and says
+        40 of 71, the sweep invites instead of reporting itself full."""
+        action = plan(member_count=40, target_size=71, shortlist_age_minutes=1.0)
+        self.assertEqual(action.verb, "invite")
+        self.assertEqual(action.target_arg, "Cogwin")
+
+    def test_the_full_roster_reason_says_how_old_its_numbers_are(self):
+        """infra#4215's log line was true about its own cache and useless
+        about the world: "40 of 40" read identically at one minute and at four
+        hours, and forty-five minutes of it told nobody anything. The age is
+        in the reason now, and the reason is what gets logged."""
+        action = plan(member_count=40, target_size=40, shortlist_age_minutes=3.0)
+        self.assertEqual(action.verb, "wait")
+        self.assertIn("3 minutes old", action.reason)
+
+    def test_nobody_online_still_outranks_everything(self):
+        """The first gate did not move. A pass with no carrier writes nothing,
+        including no shortlist, however stale the numbers are."""
+        action = plan(
+            actors=[],
+            member_count=40,
+            target_size=40,
+            shortlist_age_minutes=recruit.SHORTLIST_FRESH_MINUTES + 1,
+            shortlist_asked_minutes_ago=recruit.SHORTLIST_WAIT_MINUTES + 1,
+        )
+        self.assertEqual(action.verb, "wait")
+        self.assertIn("online", action.reason)
 
 
 class AlreadyAskedIsSkippedAndNotBlocked(unittest.TestCase):

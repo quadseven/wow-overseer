@@ -318,6 +318,69 @@ class TheSaleIsOnlyOfferedWhereItCanWork(unittest.TestCase):
                         body.index("_fetch_town, holder"))
 
 
+class TheHandOffIsNotGatedOnAVendorTripBeingWorthTaking(unittest.TestCase):
+    """infra#4198. The gate above it is the right question for a VENDOR TRIP
+    and never was the question for this pass, which writes a row between two
+    characters standing where they already stand.
+
+    MEASURED ON wow-dev 2026-09-19, over 30 consecutive cycles and 2,460 log
+    lines: the word `recipes:` appears every cycle - infra#3731 hoisted that
+    half above the same gate, for the same reason - and the word `gear:`
+    appears NOT ONCE, while Ugga sat at 0 free slots, Og at 3 and Bork at 11.
+    Every cycle logged `economy: no vendor trip is worth taking` and returned.
+    infra#4190 and infra#4197 made that gate correctly answer "no" for a
+    family carrying nothing a vendor would buy, and this pass went dark with
+    it. It had not decided nothing; it had never been asked.
+    """
+
+    def test_it_runs_above_the_town_run_gate(self):
+        body = _block("    async def _vendor_once(self")
+        self.assertLess(body.index("self._hand_gear("),
+                        body.index("no vendor trip is worth taking"))
+
+    def test_it_runs_above_the_mid_dungeon_return_too(self):
+        """A give is a database move that does not care which map anybody is
+        on, and a party stuck in an instance with full bags is exactly when
+        moving one item to the member with eleven free slots is worth most.
+        `_hand_recipes` has always sat above this return."""
+        body = _block("    async def _vendor_once(self")
+        self.assertLess(body.index("self._hand_gear("),
+                        body.index("bag pressure is urgent during a dungeon"))
+
+    def test_it_is_still_called_exactly_once_a_cycle(self):
+        """Hoisting a call and leaving the old one behind runs the pass
+        twice: every log line doubled, and the room budget handed out twice
+        over one read of `character_inventory`."""
+        body = _block("    async def _vendor_once(self")
+        self.assertEqual(body.count("await self._hand_gear("), 1)
+
+    def test_the_two_reads_it_needs_moved_up_with_it_and_are_read_once(self):
+        """A pass hoisted above the reads it depends on is a NameError on the
+        first quiet cycle; a pass hoisted with a second copy of them is two
+        extra queries on every cycle that reaches the vendor half."""
+        body = _block("    async def _vendor_once(self")
+        # Comments may name either read while arguing about it; no statement
+        # may run it twice. The same split test_the_gate_reads_the_vendor_and
+        # _not_the_stock already makes between prose and branches.
+        code = "\n".join(line for line in body.splitlines()
+                         if not line.strip().startswith("#"))
+        for read in ("_fetch_surplus_gear", "_fetch_family_equipped"):
+            with self.subTest(read=read):
+                self.assertEqual(code.count(read), 1)
+                self.assertLess(code.index(read),
+                                code.index("no vendor trip is worth taking"))
+
+    def test_the_vendor_half_still_reuses_those_two_reads(self):
+        """`family_fits` and `gear_candidates` are the sell side of the same
+        one opinion over the same one read of the world. A second read here
+        is how a sale and a hand-off get proposed for the same item."""
+        body = _block("    async def _vendor_once(self")
+        self.assertLess(body.index("self._hand_gear("),
+                        body.index("bag_pressure.family_fits("))
+        self.assertLess(body.index("bag_pressure.family_fits("),
+                        body.index("bag_pressure.gear_candidates("))
+
+
 class TheSupplyPlannerStaysReadable(unittest.TestCase):
     """Grug Elder flagged `_supply` at cyclomatic 20 against a cap of 15, as a
     NEW function landing over it. The three routes it chooses between are now
