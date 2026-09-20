@@ -1032,8 +1032,8 @@ def _live_members() -> list:
 class TheSetupBranchClosedTheDepositBranch(unittest.TestCase):
     """infra#4198/#4230: the guild bank deposited nothing, and not from travel.
 
-    MEASURED, NOT INFERRED. The wow-overseer pod serving
-    `registry.ts.ehumps.me/wow-overseer:95dc9c06` logged 16 `guild bank setup:`
+    MEASURED, NOT INFERRED. The wow-overseer pod serving the private
+    registry's `wow-overseer:95dc9c06` image logged 16 `guild bank setup:`
     lines and ZERO deposit-branch lines. The last `bank deposit <copper>` row
     of any kind was written 2026-09-14 13:54:14; every one of the five is
     `status='error', detail='no guild bank in reach'`, and none has been
