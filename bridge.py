@@ -6766,8 +6766,10 @@ class Bridge(discord.Client):
                     current_aim,
                 )
 
-        # THE RECIPE HAND-OFF RUNS ABOVE THE TOWN-RUN GATE, ON PURPOSE, and it
-        # is the only half of this pass that does (infra#3731).
+        # THE RECIPE HAND-OFF RUNS ABOVE THE TOWN-RUN GATE, ON PURPOSE
+        # (infra#3731). It was the only half of this pass that did until
+        # infra#4198 measured what that cost the gear half, which now runs
+        # beside it for the reason its own banner gives below.
         #
         # WHY IT CANNOT SIT WITH THE OTHERS. The gate below is the right
         # question for a vendor trip and the wrong one for this: the comment
@@ -6782,9 +6784,40 @@ class Bridge(discord.Client):
         # the family walking to town. This writes kind='trade'/'give' rows
         # between two characters wherever they already stand: no vendor, no
         # leader, no counter, and no `travel_npc` - the same argument
-        # `_hand_gear` makes for needing no travel errand, which is why these
-        # two can run on different cycles without racing each other.
+        # `_hand_gear` makes for needing no travel errand. They share a room
+        # budget only in the sense every reader of `character_inventory` does,
+        # which the `_hand_recipes` docstring prices out in full.
         await self._hand_recipes(names, free_slots)
+
+        # AND SO DOES THE GEAR HAND-OFF, FOR THE SAME REASON AND ONE MORE
+        # (infra#4198). It used to sit below the two returns beneath this
+        # comment, which made a hand-off between two characters standing where
+        # they already stand conditional on a VENDOR TRIP being worth taking.
+        # infra#4190 and infra#4197 then made that gate correctly answer "no"
+        # for a family carrying nothing a vendor would buy, and this pass went
+        # dark with it. Measured on wow-dev 2026-09-19: 2,460 log lines over
+        # 30 consecutive cycles contain the word `recipes:` every cycle and the
+        # word `gear:` not once, while Ugga sat at 0 free slots, Og at 3 and
+        # Bork at 11. Not "decided nothing" - never asked.
+        #
+        # ABOVE THE DUNGEON RETURN TOO, and deliberately. `_hand_recipes` has
+        # always been, and a give is a database move that does not care which
+        # map anybody is on; a party stuck in an instance with full bags is
+        # precisely when moving one item to the member with eleven free slots
+        # is worth most.
+        #
+        # THE TWO READS IT NEEDS MOVE WITH IT. They are the same two `fits`
+        # and the vendor half read below, reused rather than fetched twice,
+        # so a cycle that reaches the vendor half costs exactly what it did
+        # before and a quiet cycle pays for the pass it is now running.
+        gear_rows = await asyncio.to_thread(_fetch_surplus_gear, names)
+        worn = await asyncio.to_thread(_fetch_family_equipped, names)
+        # THE HAND-OFF IS TRIED FIRST, AND IT IS TRIED WHETHER OR NOT ANYTHING
+        # IS FOR SALE. A piece a sibling should be wearing is worth more on
+        # that sibling than in anybody's purse, and it needs no vendor, no
+        # leader, no counter and no `travel_npc` - the same argument
+        # `_hand_recipes` makes just above.
+        await self._hand_gear(gear_rows, worn, names)
 
         if not bag_pressure.family_town_run_needed(
                 free_slots, sellable=sellable_counts):
@@ -6812,10 +6845,9 @@ class Bridge(discord.Client):
             )
             return
         # `rows`, `bag_rows` and `equipped_bag_slots` were read above the
-        # pressure judgement (infra#4190) and are reused here rather than
+        # pressure judgement (infra#4190), and `gear_rows` and `worn` above the
+        # gear hand-off (infra#4198). All five are reused here rather than
         # fetched a second time.
-        gear_rows = await asyncio.to_thread(_fetch_surplus_gear, names)
-        worn = await asyncio.to_thread(_fetch_family_equipped, names)
         # THE SAME OPINION THAT DECIDES HAND-OFFS DECIDES WHAT MAY BE SOLD.
         # gear.py judges who would wear a carried piece; only the answer
         # "nobody, and we asked all five" lets it reach a vendor. An empty
@@ -6823,14 +6855,13 @@ class Bridge(discord.Client):
         # every piece is UNASKED, and the gear half of this pass offers
         # nothing - which is the safe way to not know.
         fits = bag_pressure.family_fits(gear_rows, worn, names)
-        # THE HAND-OFF IS TRIED FIRST, AND IT IS TRIED WHETHER OR NOT ANYTHING
-        # IS FOR SALE. A piece a sibling should be wearing is worth more on
-        # that sibling than in anybody's purse, and the two answers come from
-        # one gate over one read of the world, so asking for them in one place
-        # is what stops a sale and a hand-off ever being proposed for the same
-        # item. It sits above the `no candidates` return because a family with
-        # nothing to sell can still be carrying somebody else's upgrade.
-        await self._hand_gear(gear_rows, worn, names)
+        # THE HAND-OFF WAS TRIED FIRST, ABOVE THE TOWN-RUN GATE, and it is not
+        # repeated here (infra#4198). The two answers still come from one gate
+        # over one read of the world - `gear_rows` and `worn` are the same two
+        # lists `_hand_gear` was handed - which is what stops a sale and a
+        # hand-off ever being proposed for the same item. Calling it twice on a
+        # cycle that reaches this far would double every log line and hand the
+        # room budget out twice.
         candidates = bag_pressure.vendor_candidates(
             rows, keep_names=OWNER_KEEPS,
         ) + (
