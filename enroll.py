@@ -370,16 +370,27 @@ def plan(candidates, *, cohort: str, home_cohort: str | None,
     the column does not produce a scoped system, it produces the unscoped one
     with a second cohort in it.
 
-    `module_reads_family` is the half that is easy to forget, and it is the
-    binding one today. The BRIDGE is cohort-aware; `mod_overseer.cpp` is not.
-    It carries about twenty `SELECT ... FROM overseer_roster WHERE enabled = 1`
-    reads and no query in it names `family` - mod-overseer#506 shipped the
-    column with no reader, deliberately and in as many words. `KeepRosterGrouped`
-    is one of those reads: it takes every enabled row, orders by `lead`, and
-    keeps them in one permanent party. A second cohort's rows enrolled into
-    such a world are not merely unscoped, they are conscripted into the first
-    cohort's party on every poll - which for a Horde cohort and an Alliance
-    family is a party the core will not form, attempted for ever.
+    `module_reads_family` is the half that is easy to forget. The BRIDGE has
+    been cohort-aware for a while; `mod_overseer.cpp` was not. It carried about
+    twenty `SELECT ... FROM overseer_roster WHERE enabled = 1` reads and no query
+    in it named `family` - mod-overseer#506 shipped the column with no reader,
+    deliberately and in as many words. `KeepRosterGrouped` was one of those
+    reads: it took every enabled row, ordered by `lead`, and kept them in one
+    permanent party, so a second cohort's rows enrolled into such a world were
+    not merely unscoped, they were conscripted into the first cohort's party on
+    every poll - which for a Horde cohort and an Alliance family is a party the
+    core will not form, attempted for ever.
+
+    mod-overseer#550-#553 changed that for the parts that matter to a cohort
+    that has to be PLAYED: parties form per family, the quest drive runs once
+    per family, and the one-campaign machinery (home binds, town trips, dungeon
+    runs, guild founding) reads exactly one family and cannot be handed another
+    family's characters. What it does NOT do yet is run two dungeon campaigns at
+    once - that is one state machine - so a second cohort enrolled today is
+    driven for parties and quests, not through dungeons. The flag is still an
+    explicit operator assertion about the DEPLOYED module, not about the
+    submodule this repository is pinned to; the source-reading tests below pin
+    what the pin does, and only the operator knows what is rolled.
 
     So enrollment is gated on the deploy, and says so, rather than being
     something that works and then quietly breaks the family it was told not to

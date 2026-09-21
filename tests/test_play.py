@@ -69,9 +69,8 @@ def _live_source() -> str:
     return "\n".join(out)
 
 
-def _drive_quests() -> str:
-    src = MODULE.read_text(encoding="utf-8")
-    start = src.index("void DriveQuests()")
+def _function_from(src: str, name: str) -> str:
+    start = src.index(name)
     depth = 0
     for i in range(src.index("{", start), len(src)):
         if src[i] == "{":
@@ -80,7 +79,15 @@ def _drive_quests() -> str:
             depth -= 1
             if depth == 0:
                 return src[start:i + 1]
-    raise AssertionError("DriveQuests has no closing brace")
+    raise AssertionError("%s has no closing brace" % name)
+
+
+def _drive_quests() -> str:
+    # mod-overseer#552 split DriveQuests into a census and dispatch plus the
+    # per-family body it always had. The drive this file describes is both.
+    src = MODULE.read_text(encoding="utf-8")
+    return (_function_from(src, "void DriveQuests()")
+            + _function_from(src, "void DriveFamilyQuests("))
 
 
 class TheQuestDriverPointsThemAtTheObjective(unittest.TestCase):

@@ -78,7 +78,10 @@ def _walks_before_the_leader_gate_are_leader_only(body: str) -> None:
 
 
 def _drive() -> str:
-    return _function("void DriveQuests()")
+    # mod-overseer#552 split DriveQuests into a census and dispatch plus the
+    # per-family body it always had. The drive these tests describe is both.
+    return (_function("void DriveQuests()")
+            + _function("void DriveFamilyQuests("))
 
 
 def _chosen() -> str:

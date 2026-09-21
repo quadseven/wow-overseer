@@ -84,7 +84,10 @@ def _following() -> str:
 
 
 def _grouped() -> str:
-    return _function("void KeepRosterGrouped()")
+    # mod-overseer#550 split KeepRosterGrouped into a census-and-partition and
+    # the per-family party it always formed. The pass these tests describe is both.
+    return (_function("void KeepRosterGrouped()")
+            + _function("void KeepFamilyGrouped("))
 
 
 class SomebodyIsActuallyAssignedAMaster(unittest.TestCase):

@@ -24,15 +24,15 @@ production/oke/manifests/wow-dev/README.md).
 
 THE ONE FACT THIS TOOL CANNOT PROBE, AND SO REFUSES TO GUESS. Whether the
 running worldserver's mod-overseer reads the `family` column is a property of
-a container image, not of a table, and no SELECT can answer it. It is also the
-gate that actually binds today: `mod_overseer.cpp` carries about twenty
-`SELECT ... FROM overseer_roster WHERE enabled = 1` reads and no query in it
-names `family`, so `KeepRosterGrouped` would take a newly enrolled Horde
-cohort and try to keep it in the Alliance family's one party, on every poll.
-`--module-is-cohort-aware` is therefore an explicit operator assertion that
-defaults to off, and `tests/test_enroll.py` pins what the PINNED submodule
-actually does so that the day it changes is a failing test rather than a
-discovery.
+a container image, not of a table, and no SELECT can answer it. It used to be
+the gate that bound outright: `KeepRosterGrouped` took every enabled row into
+one party, so a newly enrolled Horde cohort would have been kept in the
+Alliance family's party on every poll. mod-overseer#550-#553 changed that for
+parties, quests and the one-campaign machinery (see `enroll.plan` for what is
+and is not yet true). `--module-is-cohort-aware` remains an explicit operator
+assertion about the DEPLOYED image and defaults to off, and
+`tests/test_enroll.py` pins what the PINNED submodule actually does so that a
+change is a failing test rather than a discovery.
 """
 from __future__ import annotations
 
