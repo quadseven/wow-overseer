@@ -103,10 +103,60 @@ class TheFamilyTab(unittest.TestCase):
             self.assertNotIn('"' + name + '"', self.tab)
 
     def test_the_endpoint_takes_no_roster_from_the_caller(self):
+        """A caller may choose a FAMILY. It may never supply a NAME.
+
+        This used to forbid `query.get` outright, which was the simplest way
+        to say "no roster from the request" while there was one family. There
+        are two now - an Alliance five and a Horde five - so the tab has to be
+        able to ask for one of them, and a flat ban on reading the query would
+        have meant hard-coding a second roster in the page instead. That is
+        the very thing test_the_roster_is_not_retyped_into_the_page forbids.
+
+        So the invariant is enforced where it actually lives: whatever the
+        caller sends is matched against the set of families the DATABASE
+        reports, and the names handed to _fetch_family come from that lookup.
+        A request cannot name a character, which is what this has always been
+        about.
+        """
         handler = self.server[self.server.index("def _family"):]
         handler = handler[:handler.index("def _thoughts")]
-        self.assertIn("family.build_family(_fetch_family(), GEO)", handler)
-        self.assertNotIn("query.get", handler)
+        # the roster reaching the query comes from the lookup, not the request
+        self.assertIn("_fetch_family_names(", handler)
+        self.assertIn("family.build_family(_fetch_family(names), GEO)", handler)
+        # the only thing taken from the request is the family key
+        self.assertIn('query.get("family"', handler)
+        self.assertNotIn("query.get(\"name", handler)
+
+        lookup = self.server[self.server.index("def _fetch_family_names"):]
+        lookup = lookup[:lookup.index("def _default_family")]
+        # an unrecognised key falls back rather than reaching SQL
+        self.assertIn("which if which in by_family else", lookup)
+
+    def test_one_tab_per_family_comes_from_the_server(self):
+        """The page must not be edited the day a third family exists.
+
+        The families are read off the payload and the buttons built from
+        them, so a world with one family still shows a single "Family" tab
+        and a world with three shows three - without this file naming any of
+        them, which is the same rule that keeps the roster out of the page.
+        """
+        sync = self.tab[self.tab.index("function syncFamilyTabs"):]
+        sync = sync[:sync.index("function markTabs")]
+        self.assertIn("payload.families", sync)
+        self.assertIn("known.length < 2", sync,
+                      "one family must still render the plain Family tab")
+        for name in family.roster():
+            self.assertNotIn('"' + name + '"', sync,
+                             "a family name spelled here is a second answer "
+                             "to who the families are")
+
+    def test_the_tabs_are_not_rebuilt_under_a_thumb(self):
+        """Rebuilding the row every poll would destroy the button a person is
+        tapping. The set is compared first and usually nothing happens."""
+        sync = self.tab[self.tab.index("function syncFamilyTabs"):]
+        sync = sync[:sync.index("function markTabs")]
+        self.assertIn("familiesKnown.join", sync)
+        self.assertIn("return", sync)
 
     def test_a_failed_poll_keeps_the_cards_it_has(self):
         """A Family tab that blanks on a failed poll is indistinguishable

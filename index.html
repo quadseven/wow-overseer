@@ -3306,9 +3306,13 @@ async function loadZones() {
   wb.dataset.view = WATCH_VIEW;
   wb.onclick = () => showView(WATCH_VIEW);
   tabs.appendChild(wb);
+  // ONE TAB PER FAMILY. Until there were two families this was a single
+  // "Family" button; it stays exactly that while the server reports one, so
+  // nothing moves for a world that has not grown a second.
   const fb = document.createElement("button");
   fb.textContent = "Family";
   fb.dataset.view = FAMILY_VIEW;
+  fb.dataset.family = "";
   fb.onclick = () => showView(FAMILY_VIEW);
   tabs.appendChild(fb);
   // FIRST NOW, AND THIS REVERSES A DECISION THIS FILE ARGUED FOR. infra#2892
@@ -4438,6 +4442,11 @@ function refreshMind() { if (mind.name && !mind.busy) fetchThoughts(null); }
 // view is so tiny". The five feeds are now the whole width of the tab, and
 // the five quest logs became one board beneath them.
 const FAMILY_VIEW = "family";
+// WHICH family the Family tab is showing, and every family the server knows.
+// Both come from /api/family rather than being spelled here: the page should
+// not need editing the day a third family exists.
+let familyKey = "";
+let familiesKnown = [];
 const WATCH_VIEW = "watch";
 const fsection = document.getElementById("family");
 const watchsection = document.getElementById("watch");
@@ -5615,9 +5624,12 @@ async function refreshFamilyWatch() {
 async function pollFamily() {
   if (view !== FAMILY_VIEW && view !== WATCH_VIEW) return;
   try {
-    const r = await fetch(u("/api/family"));
+    const q = familyKey ? ("?family=" + encodeURIComponent(familyKey)) : "";
+    const r = await fetch(u("/api/family" + q));
     if (!r.ok) throw new Error(r.status);
-    renderFamily(await r.json());
+    const payload = await r.json();
+    syncFamilyTabs(payload);
+    renderFamily(payload);
   } catch (e) {
     // Keep the cards that are drawn. A Family tab that blanks on a failed
     // poll is indistinguishable from a family who all logged out at once.
@@ -5626,14 +5638,52 @@ async function pollFamily() {
   }
 }
 
+// Rebuild the Family tabs when the server reports a different set of
+// families than the row currently shows. Rebuilding on every poll would
+// destroy the button under a thumb mid-tap, so this compares first and
+// usually does nothing.
+function syncFamilyTabs(payload) {
+  const known = Array.isArray(payload.families) ? payload.families : [];
+  if (payload.family && !familyKey) familyKey = payload.family;
+  if (known.join("|") === familiesKnown.join("|")) return;
+  familiesKnown = known;
+  const existing = [...document.querySelectorAll('#tabs button[data-view="' + FAMILY_VIEW + '"]')];
+  if (!existing.length) return;
+  const anchor = existing[0];
+  // One family is the old world: leave the single "Family" button alone.
+  if (known.length < 2) {
+    for (const b of existing.slice(1)) b.remove();
+    anchor.textContent = "Family";
+    anchor.dataset.family = "";
+    return;
+  }
+  for (const b of existing.slice(1)) b.remove();
+  let prev = anchor;
+  known.forEach((fam, i) => {
+    const b = i === 0 ? anchor : document.createElement("button");
+    b.textContent = fam + "'s family";
+    b.dataset.view = FAMILY_VIEW;
+    b.dataset.family = fam;
+    b.onclick = () => { familyKey = fam; showView(FAMILY_VIEW); pollFamily(); };
+    if (i > 0) { prev.after(b); }
+    prev = b;
+  });
+  markTabs();
+}
+
 function markTabs() {
   for (const b of document.querySelectorAll("#tabs button")) {
     // This was a two-view ternary hard-coded to the Family tab, which meant a
     // third button fell into the map branch, compared an undefined dataset.id
     // against `current`, and could never light up at all. Now a button either
     // names its own view or it is a continent.
+    // STILL NAMES NO VIEW, and the test above this one reads the whole
+    // function as text to be sure of it - a comment naming a view fails it
+    // just as a branch would. A button that carries a family lights up only
+    // for ITS family; one that carries none behaves exactly as before.
     const on = b.dataset.view
       ? view === b.dataset.view
+        && (!b.dataset.family || b.dataset.family === familyKey)
       : view === MAP_VIEW && b.dataset.id === current;
     b.classList.toggle("on", on);
     if (on) revealTab(b);
