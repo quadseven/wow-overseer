@@ -381,3 +381,72 @@ class TheRollbackLever(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ASecondFamilyIsNotTheFirstOneRenamed(unittest.TestCase):
+    """The Family tab could only ever draw the family `bonds` holds.
+
+    THE BUG, EXACTLY. `build_family` enumerated `roster()` - which is
+    `bonds.speaking_order(bonds.FAMILY)`, one family, five keys - no matter
+    whose snapshot rows it was handed. Asking for the Horde family returned
+    `family: "Zug"` in the payload and then listed GRUG, UGGA, OG, GROG and
+    BORK as its tiles, every one of them "logged out", because not one of
+    those names appeared in the rows it had been given. The header said one
+    family and the wall showed another, which is worse than either failing:
+    it is a page confidently mislabelling five characters.
+
+    And it could not have been caught by asking for the default family, which
+    is the only thing every earlier test did.
+    """
+
+    HORDE = ["Zug", "Uzza", "Zrog", "Zork", "Oz"]
+    # class/race ids as the characters table spells them: orc warrior,
+    # troll priest, orc shaman, tauren druid, troll mage.
+    PROFILES = {
+        "Zug": {"class": 1, "race": 2}, "Uzza": {"class": 5, "race": 8},
+        "Zrog": {"class": 7, "race": 2}, "Zork": {"class": 11, "race": 6},
+        "Oz": {"class": 8, "race": 8},
+    }
+
+    def test_the_cards_are_the_family_that_was_asked_for(self):
+        payload = family.build_family([], GEO, self.HORDE, self.PROFILES)
+        self.assertEqual([m["name"] for m in payload["members"]], self.HORDE)
+        for name in family.roster():
+            self.assertNotIn(name, [m["name"] for m in payload["members"]],
+                             f"{name} belongs to the other family")
+
+    def test_the_wall_follows_the_cards(self):
+        """The wall is composed from the same members list, so a wall that
+        disagreed with the cards would mean two rosters in one payload."""
+        payload = family.build_family([], GEO, self.HORDE, self.PROFILES)
+        self.assertEqual([t["name"] for t in payload["wall"]["tiles"]],
+                         [m["name"] for m in payload["members"]])
+
+    def test_a_logged_out_member_still_has_a_class_and_a_race(self):
+        """This is what `profiles` is for. These five have no persona, and
+        a family that is deliberately not being driven yet is logged out on
+        EVERY card - so a persona-only answer left the whole tab blank."""
+        payload = family.build_family([], GEO, self.HORDE, self.PROFILES)
+        oz = card(payload, "Oz")
+        self.assertFalse(oz["present"])
+        self.assertEqual(oz["class"], "Mage")
+        self.assertNotEqual(oz["class_colour"], "#ffffff")
+        self.assertTrue(oz["mark"], "a troll should still get a race mark")
+
+    def test_a_present_member_is_described_by_the_world_not_the_persona(self):
+        """Everything but `role` comes off the snapshot row, so a character
+        bonds has never heard of renders completely when it is online."""
+        payload = family.build_family(
+            [row(name="Zug", race=2, **{"class": 1})], GEO,
+            self.HORDE, self.PROFILES)
+        zug = card(payload, "Zug")
+        self.assertTrue(zug["present"])
+        self.assertEqual(zug["class"], "Warrior")
+        self.assertEqual(zug["race"], "Orc")
+        self.assertEqual(zug["faction"], "horde")
+
+    def test_the_default_is_still_the_family_bonds_holds(self):
+        """Every existing caller passes no names and must be unaffected."""
+        payload = family.build_family([], GEO)
+        self.assertEqual([m["name"] for m in payload["members"]],
+                         family.roster())

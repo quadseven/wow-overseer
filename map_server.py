@@ -409,6 +409,40 @@ def _default_family(known):
     return known[0]
 
 
+def _fetch_profiles(names) -> dict:
+    """{name: {"class": id, "race": id}} for a family, from `characters`.
+
+    WHY THIS EXISTS AT ALL. A card for a logged-out member has no snapshot row
+    to describe it, so its class and race used to come from the persona table
+    - which holds one family. A second family's logged-out members would
+    otherwise render with no class and no race mark at all, which on a family
+    that is deliberately not being driven yet is EVERY card on the tab.
+
+    `characters` is the right source: it is where the class and race were
+    decided at creation and it does not care whether anyone is logged in.
+
+    No name from a request reaches this SQL. `names` comes from the roster,
+    the same fixed list `_fetch_family` is given.
+    """
+    if not names:
+        return {}
+    holes = ", ".join(["%s"] * len(names))
+    conn = _connect()
+    try:
+        with conn.cursor() as cur:
+            # S608: `holes` is placeholders only, one per roster name; every
+            # value is bound by the driver.
+            cur.execute(
+                "SELECT name, class, race FROM characters "  # noqa: S608
+                f"WHERE name IN ({holes})",
+                tuple(names),
+            )
+            return {r["name"]: {"class": r["class"], "race": r["race"]}
+                    for r in cur.fetchall()}
+    finally:
+        conn.close()
+
+
 def _fetch_family(names=None) -> list[dict]:
     """The family's fresh snapshot rows, in one query.
 
@@ -2946,7 +2980,8 @@ class Handler(BaseHTTPRequestHandler):
         """
         try:
             names, chosen, known = _fetch_family_names(query.get("family", [""])[0])
-            payload = family.build_family(_fetch_family(names), GEO)
+            payload = family.build_family(
+                _fetch_family(names), GEO, names, _fetch_profiles(names))
             # The page builds one tab per family off these, so it never has to
             # be told in advance how many there are.
             payload["family"] = chosen
