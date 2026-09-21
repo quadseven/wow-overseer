@@ -124,11 +124,21 @@ TERMINAL = ("stopping", "ended")
 # that yesterday's teardown does not greet you on open.
 OUTCOME_RECENT_SECONDS = 120
 
-# ONE GPU, AND infra#2663 SAYS SO: "one or two channels is the realistic
-# target on one GPU". Two is the cap because the second channel is what makes
-# a follow-cam and a POV watchable at the same time; a third is a queue, not a
-# feature.
-MAX_CHANNELS = 2
+# TWO WAS RIGHT WHEN A CHANNEL MEANT STARTING A CLIENT. infra#2663 measured
+# it on the old Windows box - "one or two channels is the realistic target on
+# one GPU" - and on that box a channel really did cost a client launch, a
+# login, and an NVENC session shared with the game.
+#
+# NEITHER HALF OF THAT PREMISE SURVIVES (infra#4266). The clients are not
+# started on demand any more: all ten are the two families, and they are
+# logged in whether anyone is watching or not. And the encoder is no longer
+# expensive - capture goes compositor-to-Quick-Sync without touching system
+# memory, and each running stream measures 0.02 cores. Ten of them cost less
+# than one of the old ones did.
+#
+# So the cap is the roster, not the hardware. It still exists: it is what
+# stops a bug requesting a channel for something that is not a character.
+MAX_CHANNELS = 10
 
 # HOW LONG "STARTING" HONESTLY TAKES, measured rather than hoped for: the
 # Windows agent needs 45-60 seconds to launch a client, type a login, reach
