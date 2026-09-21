@@ -5038,8 +5038,49 @@ function stopBroadcasts() {
   }
 }
 
+// THE PAGE KEEPS THREE THINGS PER CHARACTER, ALL KEYED BY NAME ALONE, AND ONLY
+// EVER ADDED TO THEM. A live stream tile (broadcasts.tiles), a wall tile
+// (wall.slots) and a family card (fam.cards). That was invisible while there
+// was one family, because the names never changed. With two families the tab
+// switch renders the new family's five and leaves the previous family's five
+// exactly where they were - first, since they were created first. The
+// operator opened the second family's tab and found the FIRST family's head
+// on top, paused at 00:00, with the head they had come to watch below it.
+//
+// So whoever is not in this payload is removed. A stream tile owns a live
+// PeerConnection to the encoder, which is why it is stopped and not merely
+// detached: a removed node with a running player is a stream nobody can see
+// still being pulled across the tailnet.
+//
+// Everything here is keyed by name, so a character that is in the new payload
+// keeps its tile, its card and its connection untouched - a poll that changed
+// nothing still leaves the DOM alone, which is the rule the rest of this file
+// follows.
+function retainOnlyThese(names) {
+  const keep = new Set(names);
+  for (const [name, t] of broadcasts.tiles) {
+    if (keep.has(name)) continue;
+    t.player.stop();
+    t.tile.remove();
+    broadcasts.tiles.delete(name);
+  }
+  for (const [name, s] of wall.slots) {
+    if (keep.has(name)) continue;
+    s.slot.remove();
+    wall.slots.delete(name);
+    wall.tones.delete(name);
+  }
+  for (const [name, c] of fam.cards) {
+    if (keep.has(name)) continue;
+    if (c.player) c.player.stop();
+    c.card.remove();
+    fam.cards.delete(name);
+  }
+}
+
 function renderFamily(p) {
   fam.byName = new Map(p.members.map((m) => [m.name, m]));
+  retainOnlyThese(p.members.map((m) => m.name));
   renderBroadcasts(p);
   // Drawn on every poll rather than only while the wall is open, so switching
   // to it shows the current five instead of a blank grid for up to five

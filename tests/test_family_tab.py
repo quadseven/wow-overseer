@@ -451,6 +451,57 @@ class ThumbSized(unittest.TestCase):
         self.assertIn("min-width:820px", self.css)
 
 
+class SwitchingFamilyDropsTheOtherFamilysTiles(unittest.TestCase):
+    """The second family's tab opened with the FIRST family's head on top.
+
+    The page keeps three things per character, all keyed by name alone: the live
+    stream tile, the wall tile and the family card. Each was only ever added to.
+    With one family the names never changed so nothing showed; with two, a tab
+    switch rendered the new family's five and left the previous five where they
+    were - first, since they were created first. The operator opened the Horde
+    family's tab to watch its head and found the Alliance head paused at 00:00
+    above it.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        import pathlib
+        here = pathlib.Path(__file__).resolve().parent.parent
+        cls.page = (here / "index.html").read_text(encoding="utf-8")
+        start = cls.page.index("function retainOnlyThese(")
+        cls.prune = cls.page[start:cls.page.index("function renderFamily(")]
+        cls.render = cls.page[cls.page.index("function renderFamily("):][:600]
+
+    def test_all_three_per_character_stores_are_pruned(self):
+        for store in ("broadcasts.tiles", "wall.slots", "fam.cards"):
+            self.assertIn("of " + store, self.prune, store + " is never pruned")
+            self.assertIn(store + ".delete(name)", self.prune)
+
+    def test_a_removed_stream_is_stopped_not_merely_detached(self):
+        """A tile owns a live PeerConnection to the encoder. Removing the node
+        with the player still running leaves a stream nobody can see being
+        pulled across the tailnet."""
+        self.assertIn("t.player.stop()", self.prune)
+        self.assertIn("c.player.stop()", self.prune)
+
+    def test_the_nodes_leave_the_page(self):
+        for node in ("t.tile.remove()", "s.slot.remove()", "c.card.remove()"):
+            self.assertIn(node, self.prune)
+
+    def test_a_character_in_the_new_payload_is_left_alone(self):
+        """Pruning must be by absence. Rebuilding a tile that is staying would
+        drop and re-establish its connection for a change nobody asked to pay
+        for."""
+        self.assertIn("if (keep.has(name)) continue;", self.prune)
+
+    def test_it_runs_before_anything_is_drawn(self):
+        """Pruning after the render would draw the new family beside the old
+        one for a frame, and the old one is what a thumbnail catches."""
+        self.assertIn("retainOnlyThese(", self.render)
+        self.assertLess(self.render.index("retainOnlyThese("),
+                        self.render.index("renderBroadcasts(p)"))
+
+
 if __name__ == "__main__":
     unittest.main()
 
