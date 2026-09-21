@@ -10,6 +10,13 @@ import unittest
 import stream
 
 
+def _rows_to_the_cap():
+    """Exactly MAX_CHANNELS live rows, every character distinct - a repeat
+    would be refused as "already watching" and prove nothing about the cap."""
+    return [{"state": "live", "character": "Filler%d" % i, "mode": "pov"}
+            for i in range(stream.MAX_CHANNELS)]
+
+
 class Staleness(unittest.TestCase):
     """Silence is the signal. Everything that can stop a viewer watching -
     closed tab, crashed browser, slept laptop, dropped tailnet - stops the
@@ -168,11 +175,17 @@ class AShotIsAWatchThatEnds(unittest.TestCase):
 
     def test_a_shot_holds_a_channel_like_anything_else(self):
         """It is a logged-in client for a minute. Pretending otherwise is how
-        three clients end up on a two-client GPU."""
+        the cap gets overrun by the one mode nobody is watching."""
         rows = [{"state": "live", "character": "Grug", "mode": "pov"},
                 {"state": "starting", "character": "Og", "mode": "shot"}]
         self.assertEqual(2, stream.channels_in_use(rows))
-        self.assertFalse(stream.can_start(rows, "Bork", stream.SHOT)[0])
+
+        # Fill to the cap with the last one a shot, and the next is refused -
+        # written against MAX_CHANNELS, not against whatever it is today.
+        full = _rows_to_the_cap()
+        full[-1]["mode"] = stream.SHOT
+        self.assertEqual(stream.MAX_CHANNELS, stream.channels_in_use(full))
+        self.assertFalse(stream.can_start(full, "Bork", stream.SHOT)[0])
 
     def test_a_shot_expects_no_viewer(self):
         self.assertFalse(stream.needs_a_viewer({"mode": stream.SHOT}))
@@ -214,17 +227,26 @@ class AShotIsAWatchThatEnds(unittest.TestCase):
 
 
 class Channels(unittest.TestCase):
-    """One GPU. infra#2663: 'one or two channels is the realistic target'."""
+    """There is a cap, and one past it is refused. These tests are written
+    against MAX_CHANNELS and never against its value: it was 2 when a channel
+    meant launching a client on one GPU, and it is the roster now that the
+    clients are always up and each encoder costs 0.02 cores (infra#4266)."""
 
-    def test_two_channels_can_be_in_use(self):
+    def test_several_channels_can_be_in_use(self):
         rows = [{"state": "live", "character": "Grug"},
                 {"state": "starting", "character": "Ugga"}]
         self.assertEqual(2, stream.channels_in_use(rows))
 
-    def test_a_third_is_refused_with_a_reason_a_person_can_read(self):
-        rows = [{"state": "live", "character": "Grug"},
-                {"state": "live", "character": "Ugga"}]
-        ok, why = stream.can_start(rows, "Bork", "cam")
+    def test_the_cap_can_actually_be_filled(self):
+        """The arithmetic below only means something if a full house is
+        reachable - a cap of 0 would pass every refusal test for free."""
+        self.assertGreaterEqual(stream.MAX_CHANNELS, 2)
+        full = _rows_to_the_cap()
+        self.assertEqual(stream.MAX_CHANNELS, stream.channels_in_use(full))
+        self.assertTrue(stream.can_start(full[:-1], "Bork", "cam")[0])
+
+    def test_one_past_the_cap_is_refused_with_a_reason_a_person_can_read(self):
+        ok, why = stream.can_start(_rows_to_the_cap(), "Bork", "cam")
         self.assertFalse(ok)
         self.assertIn("channel", why.lower())
 

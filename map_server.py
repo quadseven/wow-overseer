@@ -356,7 +356,60 @@ def _fetch_character(name: str) -> dict:
         conn.close()
 
 
-def _fetch_family() -> list[dict]:
+def _fetch_family_names(which=None):
+    """Who is in `which` family, which one that resolved to, and all of them.
+
+    WHY THIS READS overseer_roster AND NOT bonds. bonds knows ONE family: it
+    is a table of personas, renamed per world, and it is the right answer to
+    "how does Ugga speak". It is the wrong answer to "who is in the world"
+    now that there are two - an Alliance five and a Horde five - and the
+    roster has carried a `family` column all along for exactly this.
+
+    THE CALLER STILL CANNOT PASS A ROSTER, which is the rule /api/family was
+    written with and which this keeps. `which` selects among families the
+    SERVER knows; anything else falls back to the default. No name from a
+    request reaches the SQL below - only a key matched against a list the
+    database produced.
+    """
+    conn = _connect()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT name, family, `lead` FROM overseer_roster "
+                "WHERE family IS NOT NULL AND family <> '' "
+                "ORDER BY `lead` DESC, name"
+            )
+            rows = cur.fetchall()
+    finally:
+        conn.close()
+
+    by_family = {}
+    for row in rows:
+        by_family.setdefault(row["family"], []).append(row["name"])
+    if not by_family:
+        # No roster rows at all: degrade to exactly the old behaviour rather
+        # than serving a blank tab.
+        return family.roster(), "", []
+
+    known = sorted(by_family)
+    chosen = which if which in by_family else _default_family(known)
+    return by_family[chosen], chosen, known
+
+
+def _default_family(known):
+    """Which family the tab opens on when the request names none.
+
+    bonds' own leader wins when it is one of them, so the world this process
+    was configured for is still what a person sees first; otherwise the first
+    alphabetically, which at least does not vary between polls.
+    """
+    for name in family.roster():
+        if name in known:
+            return name
+    return known[0]
+
+
+def _fetch_family(names=None) -> list[dict]:
     """The family's fresh snapshot rows, in one query.
 
     Deliberately the same 60s freshness rule as /api/map and /api/character:
@@ -367,13 +420,15 @@ def _fetch_family() -> list[dict]:
     Names come from bonds via family.roster(), never from the request, so
     this is a fixed IN list of five - there is no user input in this SQL.
     """
-    names = family.roster()
+    names = family.roster() if names is None else names
+    if not names:
+        return []
     holes = ", ".join(["%s"] * len(names))
     conn = _connect()
     try:
         with conn.cursor() as cur:
             # S608: `holes` is a run of "%s" placeholders whose only input is
-            # the LENGTH of family.roster() - a constant five, from bonds.
+            # the LENGTH of the roster - five per family, from the database.
             # Every VALUE is still bound by the driver on the line below,
             # nothing from the request reaches this string, and this endpoint
             # takes no name parameter at all. Hard-coding five placeholders
@@ -2879,14 +2934,23 @@ class Handler(BaseHTTPRequestHandler):
             self._send(503, "application/json", b'{"error": "world unreachable"}')
 
     def _family(self, query: dict) -> None:
-        """GET /api/family - the five, with enough to decide whether to look.
+        """GET /api/family[?family=X] - a five, with enough to decide whether to look.
 
-        No name parameter on purpose: WHO the family is belongs to bonds, and
-        letting a caller pass a roster would make this a general character
-        query with a friendly name.
+        STILL NO NAME PARAMETER, which was the original rule here and is worth
+        restating because this now takes a parameter at all. `family` is not a
+        roster: it is a key matched against the set the DATABASE reports, and
+        anything unrecognised falls back to the default. A caller cannot name
+        a character, so this has not become a general character query wearing
+        a friendly name - it has become a choice between families the server
+        already knows about.
         """
         try:
-            payload = family.build_family(_fetch_family(), GEO)
+            names, chosen, known = _fetch_family_names(query.get("family", [""])[0])
+            payload = family.build_family(_fetch_family(names), GEO)
+            # The page builds one tab per family off these, so it never has to
+            # be told in advance how many there are.
+            payload["family"] = chosen
+            payload["families"] = known
             self._send(200, "application/json", json.dumps(payload).encode())
         except Exception:
             # Same contract as /api/map: the tab shows its stale banner on a
