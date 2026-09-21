@@ -122,10 +122,20 @@ class TheFamilyTab(unittest.TestCase):
         handler = handler[:handler.index("def _thoughts")]
         # the roster reaching the query comes from the lookup, not the request
         self.assertIn("_fetch_family_names(", handler)
-        self.assertIn("family.build_family(_fetch_family(names), GEO)", handler)
+        # Every reader here is handed `names`, the list that lookup produced.
+        # Matched as a call ARGUMENT rather than as one exact line, because
+        # pinning the whole spelling makes this fail on any rewording of the
+        # call - which it did, the first time the call gained an argument.
+        for reader in ("_fetch_family(", "_fetch_profiles("):
+            self.assertIn(reader + "names)", handler,
+                          reader + " must be given the looked-up roster")
+        self.assertIn("family.build_family(", handler)
         # the only thing taken from the request is the family key
         self.assertIn('query.get("family"', handler)
         self.assertNotIn("query.get(\"name", handler)
+        # and nothing from the request is passed to a reader
+        self.assertNotIn("_fetch_family(query", handler)
+        self.assertNotIn("build_family(query", handler)
 
         lookup = self.server[self.server.index("def _fetch_family_names"):]
         lookup = lookup[:lookup.index("def _default_family")]

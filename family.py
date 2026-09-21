@@ -264,23 +264,71 @@ def _condition(health: int, max_health: int) -> str:
     return HURT if health / max_health < HURT_BELOW else OK
 
 
-def _member(name: str, row: dict | None, geo, leader_name: str | None) -> dict:
-    bond = bonds.FAMILY[name]
+# --- what a card knows about someone who is not logged in -----------------
+#
+# A persona (bonds) spells its class and race as WORDS; the database spells
+# them as ids. Both are answers to the same question, so each of these takes
+# the persona when there is one and the database when there is not, and a
+# character neither knows renders blank rather than wrong.
+
+def _class_name_of(bond, profile: dict) -> str:
+    if bond:
+        return bond.char_class.title()
+    class_id = profile.get("class")
+    return _CLASS_NAMES.get(class_id, "") if class_id is not None else ""
+
+
+def _class_colour_of(bond, profile: dict) -> str:
+    if bond:
+        return class_colour_by_name(bond.char_class)
+    class_id = profile.get("class")
+    return CLASS_COLOURS.get(class_id, "#ffffff")
+
+
+def _race_name_of(bond, profile: dict) -> str:
+    if bond:
+        return bond.race
+    race_id = profile.get("race")
+    return _RACE_NAMES.get(race_id, "") if race_id is not None else ""
+
+
+def _member(name: str, row: dict | None, geo, leader_name: str | None,
+            profile: dict | None = None) -> dict:
+    """One card. `profile` is what the DATABASE knows about this character's
+    class and race, and it is what makes this work for a second family.
+
+    WHY bonds IS NO LONGER INDEXED DIRECTLY. `bonds.FAMILY` is ONE family's
+    persona table - five keys, renamed per world - so `bonds.FAMILY[name]`
+    was a KeyError for every member of any other family, which is to say the
+    Family tab could only ever render the family bonds happened to hold.
+    `bonds.member` returns None for anyone outside it instead, and everything
+    that used to come from the bond has a database answer behind it:
+
+      role   - bonds only. A family bonds does not know has no persona and
+               therefore no role, and "" is the honest answer rather than a
+               guess. The card shows the class, which is a fact.
+      class  - the snapshot row when present, `profile` when logged out.
+      race   - the same.
+
+    So a persona enriches a card here; it no longer gates one existing.
+    """
+    bond = bonds.member(name)
+    profile = profile or {}
     if row is None:
         # Logged out, or the worldserver dropped them. NOT an error and NOT a
         # dead character: the snapshot sweep removes rows for anyone who is
         # not there, so an absent row is the ordinary way to be offline.
         return {
             "name": name,
-            "role": bond.role,
-            "class": bond.char_class.title(),
-            "class_colour": class_colour_by_name(bond.char_class),
+            "role": bond.role if bond else "",
+            "class": _class_name_of(bond, profile),
+            "class_colour": _class_colour_of(bond, profile),
             # The glyph tile is drawn for a logged-out member too. The card
             # still carries their name, and a card whose picture, bars and
             # zone have all gone quiet is exactly the one that needs a mark
             # on it to still read as somebody.
             "initials": initials(name),
-            "mark": race_mark(bond.race),
+            "mark": race_mark(_race_name_of(bond, profile)),
             "present": False,
             "condition": GONE,
             # A logged-out character can still be mid-broadcast for a beat -
@@ -297,7 +345,7 @@ def _member(name: str, row: dict | None, geo, leader_name: str | None) -> dict:
     in_instance = placed is not None and str(row["map_id"]) != placed[0]
     return {
         "name": row["name"],
-        "role": bond.role,
+        "role": bond.role if bond else "",
         "present": True,
         "level": row["level"],
         "class": _CLASS_NAMES.get(class_id, f"class {class_id}"),
@@ -359,14 +407,27 @@ def _health_pct(health: int, max_health: int) -> int:
     return pct
 
 
-def build_family(rows: list[dict], geo) -> dict:
-    """The five family cards, oldest first, from whatever the snapshot has.
+def build_family(rows: list[dict], geo, names=None, profiles=None) -> dict:
+    """One family's cards, in roster order, from whatever the snapshot has.
 
     `rows` is every fresh snapshot row for a family name; anyone missing is
     rendered as GONE rather than dropped, because a card that vanishes is how
     a logged-out character stops being noticed - which is the whole complaint
     this tab answers.
+
+    `names` IS THE FAMILY AND THE CALLER OWNS IT. This used to enumerate
+    `roster()`, which is bonds, which knows exactly one family - so asking for
+    a second family returned the SECOND family's snapshot rows rendered
+    against the FIRST family's five names, and every card came out "logged
+    out" because none of those names was in the rows. The wall said Zug's
+    family and listed Grug's. Defaulting to `roster()` keeps every existing
+    caller on the family bonds holds.
+
+    `profiles` is {name: {"class": id, "race": id}} from the characters table,
+    for members with no snapshot row to describe them - see `_member`.
     """
+    names = roster() if names is None else names
+    profiles = profiles or {}
     by_name = {r["name"]: r for r in rows}
     by_guid = {r["guid"]: r for r in rows}
     # The leader as the WORLD has it, not as the family table remembers it:
@@ -378,7 +439,8 @@ def build_family(rows: list[dict], geo) -> dict:
         if holder is not None:
             leader_name = holder["name"]
             break
-    members = [_member(n, by_name.get(n), geo, leader_name) for n in roster()]
+    members = [_member(n, by_name.get(n), geo, leader_name, profiles.get(n))
+               for n in names]
     present = [m for m in members if m["present"]]
     return {
         "members": members,
