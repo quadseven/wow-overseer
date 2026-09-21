@@ -191,7 +191,8 @@ class ThePollIsRegisteredAndSeparateFromTheTravellerArchitecture(unittest.TestCa
         """This is a text-shape check, not a full regression suite: the two
         functions this PR must not touch still open with the same guarded
         roster/aim reads test_schema_degrade.py already pins down."""
-        quests = _code(_function("void DriveQuests()"))
+        quests = _code(_function("void DriveQuests()")
+                       + _function("void DriveFamilyQuests("))
         self.assertIn("TravelHoldsTheWheel(", quests)
         self.assertNotIn("DriveEngagementSafety", quests)
         travel = _code(_function("void DriveTravel()"))

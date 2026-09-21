@@ -375,15 +375,26 @@ def _code(text: str) -> str:
     return _JOIN_RE.sub("", text)
 
 
-class TheModuleStillReadsTheRosterAsOneParty(unittest.TestCase):
-    """Why `module_reads_family` defaults to off, read off the pinned source.
+class TheModuleReadsTheRosterPerFamily(unittest.TestCase):
+    """What the pinned module now does about a second cohort, read off its source.
 
-    THIS TEST IS A TRIPWIRE AND IS MEANT TO FAIL ONE DAY. It asserts what the
-    submodule mod-overseer is pinned at actually does. When mod-overseer gains
-    a cohort-scoped roster read, these fail, and the failure is the signal that
-    the second gate can be opened. That is the opposite of a check that can
-    only report good news: it reports the bad news that is true today, and it
-    stops being able to once the news changes.
+    THIS CLASS WAS A TRIPWIRE AND IT WENT OFF, which is what it was for. It used
+    to assert that no roster query in the module named `family` and that
+    `KeepRosterGrouped` took every enabled row into one party, and its docstring
+    said it was meant to fail the day mod-overseer gained a cohort-scoped read.
+    mod-overseer#550-#553 are that day, so it is rewritten to pin the NEW truth
+    rather than deleted: a test that could only ever report the old bad news
+    would stop protecting anything the moment the news changed.
+
+    What is pinned is what the module now guarantees, and, just as important,
+    what it deliberately does NOT yet:
+
+      * GUARANTEED: parties, quest drives and the one-campaign machinery
+        (home binds, town trips, dungeon runs, guild founding) each read one
+        family, never the whole table.
+      * NOT YET: two families running their own dungeon campaigns at once. The
+        dungeon run is still a single state machine, so a second family is
+        driven for parties and quests and is not yet driven through dungeons.
     """
 
     def setUp(self):
@@ -391,30 +402,47 @@ class TheModuleStillReadsTheRosterAsOneParty(unittest.TestCase):
         self.queries = [q for q in _LITERAL_RE.findall(self.code)
                         if "overseer_roster" in q]
 
-    def test_no_roster_query_in_the_module_names_the_family_column(self):
-        self.assertTrue(self.queries, "no roster SQL found in mod_overseer.cpp")
+    def test_the_family_column_is_read_by_a_query_of_its_own(self):
+        """`family` is a LATE column, so it is read alone and never inside a
+        drive's main roster query: an older schema then costs the second-family
+        feature and nothing else (test_schema_degrade pins the other half)."""
         naming = [q for q in self.queries if "family" in q]
-        self.assertEqual(
-            naming, [],
-            "mod-overseer now reads `family`. The second enrollment gate can "
-            "be reconsidered, and enroll.py's docstring about it is stale.")
+        self.assertTrue(naming, "no roster query names `family` any more")
+        for query in naming:
+            self.assertNotIn("`lead`", query,
+                             "the family read has crept into a main roster query")
 
-    def test_keep_roster_grouped_takes_every_enabled_row(self):
-        """The read that conscripts a second cohort into the first's party."""
+    def test_keep_roster_grouped_partitions_by_family(self):
+        """The read that used to conscript a second cohort into the first's party."""
         start = self.code.index("void KeepRosterGrouped()")
-        body = self.code[start:start + 3000]
-        query = next(q for q in _LITERAL_RE.findall(body)
-                     if "overseer_roster" in q)
-        self.assertIn("FROM overseer_roster WHERE enabled = 1", query)
-        self.assertNotIn("family", query)
+        body = self.code[start:start + 3500]
+        self.assertIn("PartitionRosterByFamily", body)
+        self.assertIn("KeepFamilyGrouped", body)
 
-    def test_many_roster_reads_select_on_enabled_alone(self):
-        """Not one read, a class of them. Scoping is mod-overseer's own slice."""
+    def test_the_campaign_drives_read_one_family(self):
+        """Home binds, town trips, dungeon runs and guild founding go through
+        one census that returns a single family's roster."""
+        uses = self.code.count("LoadCampaignRoster(")
+        self.assertGreaterEqual(
+            uses, 5,
+            "expected the census plus its four callers (home bind, town trip, "
+            "dungeon run, guild founding); a caller has gone back to reading "
+            "the whole table")
+
+    def test_the_quest_drive_runs_once_per_family(self):
+        self.assertIn("DriveFamilyQuests(", self.code)
+        start = self.code.index("void DriveQuests()")
+        self.assertIn("PartitionRosterByFamily", self.code[start:start + 6000])
+
+    def test_many_roster_reads_still_select_on_enabled_alone(self):
+        """Not one read, a class of them, and most are correct as they are:
+        event hooks that want every name. Scoping the rest is mod-overseer's own
+        slice; this only notices if the class vanishes without anyone deciding."""
         unscoped = [q for q in self.queries
                     if "FROM overseer_roster WHERE enabled = 1" in q]
         self.assertGreater(
-            len(unscoped), 5,
-            "the module's unscoped roster reads have largely gone; re-read "
+            len(unscoped), 3,
+            "the module's whole-table roster reads have largely gone; re-read "
             "enroll.plan's second gate")
 
 

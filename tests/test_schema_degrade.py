@@ -63,7 +63,10 @@ def _code(text: str) -> str:
 
 
 def _quests() -> str:
-    return _function("void DriveQuests()")
+    # mod-overseer#552 split DriveQuests into a census and dispatch plus the
+    # per-family body it always had. The drive these tests describe is both.
+    return (_function("void DriveQuests()")
+            + _function("void DriveFamilyQuests("))
 
 
 def _travel() -> str:

@@ -248,7 +248,8 @@ class HealthAtDeathIsNeverTheLiveZero(unittest.TestCase):
         self.assertIn("RememberHealth(", snapshot)
 
     def test_the_aim_cache_is_fed_from_drive_quests_not_a_new_query(self):
-        quests = _code(_function("void DriveQuests()"))
+        quests = _code(_function("void DriveQuests()")
+                       + _function("void DriveFamilyQuests("))
         self.assertIn("RememberAim(", quests)
 
 
