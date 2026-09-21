@@ -379,6 +379,61 @@ class TheRollbackLever(unittest.TestCase):
         mod = self._reloaded(None)
         self.assertEqual(len(mod.broadcast_renditions("Grug")), 2)
 
+class OnlyStreamedCharactersHaveAVideo(unittest.TestCase):
+    """Two game clients are streamed and the other eight characters are headless
+    bots with nothing publishing, but every character HAS a stream path (it is a
+    pure function of the name), so the page drew a video tile for all ten: eight
+    black rectangles beside the two that work.
+
+    `WOW_STREAMED_CHARACTERS` names who is streamed. Unset or empty means
+    EVERYONE, which is what every deployment did before it existed, so nothing
+    changes anywhere that does not set it. A character not on it has no URL, and
+    `watchwall.playable` already means "a URL exists to try", so the wall and the
+    cards follow without a second rule.
+    """
+
+    STREAMED = ("Grug", "Zug")
+
+    def test_a_listed_character_is_streamed(self):
+        self.assertTrue(family.is_streamed("Grug", self.STREAMED))
+        self.assertTrue(family.is_streamed("Zug", self.STREAMED))
+
+    def test_an_unlisted_character_is_not(self):
+        for name in ("Bork", "Grog", "Og", "Ugga", "Oz", "Uzza", "Zork", "Zrog"):
+            self.assertFalse(family.is_streamed(name, self.STREAMED), name)
+
+    def test_unset_means_everyone(self):
+        """The floor. A deployment that never set this must not lose a picture."""
+        self.assertTrue(family.is_streamed("Bork", ()))
+        from unittest import mock
+        with mock.patch.object(family, "_STREAMED", frozenset()):
+            self.assertTrue(family.is_streamed("Bork"))
+            self.assertTrue(family.broadcast_url("Bork"))
+
+    def test_a_near_miss_does_not_match_somebody_else(self):
+        """A character name IS its spelling."""
+        self.assertFalse(family.is_streamed("grug", self.STREAMED))
+        self.assertFalse(family.is_streamed("Gru", self.STREAMED))
+        self.assertFalse(family.is_streamed("", self.STREAMED))
+
+    def test_an_unstreamed_character_gets_no_url_and_no_renditions(self):
+        """Through the real public functions, with the list patched in: a tile
+        with no URL is what the page keys off, so this is the seam that matters."""
+        from unittest import mock
+        with mock.patch.object(family, "_STREAMED", frozenset(self.STREAMED)):
+            self.assertIsNone(family.broadcast_url("Bork"))
+            self.assertEqual(family.broadcast_renditions("Bork"), [])
+            self.assertTrue(family.broadcast_url("Grug"))
+            self.assertTrue(family.broadcast_renditions("Grug"))
+
+    def test_the_wall_calls_an_unstreamed_tile_unplayable(self):
+        from unittest import mock
+        import watchwall
+        with mock.patch.object(family, "_STREAMED", frozenset(self.STREAMED)):
+            self.assertFalse(watchwall.playable({"broadcast_url": family.broadcast_url("Bork")}))
+            self.assertTrue(watchwall.playable({"broadcast_url": family.broadcast_url("Grug")}))
+
+
 if __name__ == "__main__":
     unittest.main()
 

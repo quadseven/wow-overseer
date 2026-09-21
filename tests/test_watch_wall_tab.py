@@ -417,8 +417,17 @@ class TheStoredPreferencesAreHandledLikeStorage(unittest.TestCase):
         self.assertIn("w.modes.indexOf(stored) >= 0 ? stored : w.default_mode",
                       PAGE)
 
-    def test_a_stored_hero_is_validated_against_the_five_on_the_wall(self):
-        self.assertIn("names.indexOf(chosen) >= 0 ? chosen : w.hero", PAGE)
+    def test_a_stored_hero_is_validated_against_the_tiles_on_the_wall(self):
+        """The stored name is honoured ONLY when it is one of the tiles actually
+        on the wall, and the module's own hero is the fallback. The wall is the
+        tiles that can play - a character with no stream has no tile - so
+        "the five" became "whoever is shown", and the validation is against that
+        list. The stored value must never reach the wall unchecked."""
+        self.assertIn("const shown = w.tiles.filter((t) => t.playable);", PAGE)
+        self.assertIn("const names = shown.map((t) => t.name);", PAGE)
+        self.assertIn("names.indexOf(chosen) >= 0 ? chosen", PAGE)
+        # The module's hero is still the fallback, and only if it is shown.
+        self.assertIn("names.indexOf(w.hero) >= 0 ? w.hero", PAGE)
 
 
 def _module_source():
@@ -491,7 +500,7 @@ class ThePageFitsThePhoneItIsReadOn(unittest.TestCase):
         # Composed in watchwall, never assembled out of two fields here.
         # Scoped to the wall's own render loop: `.level` is read legitimately
         # elsewhere on the page, and an unscoped search finds those instead.
-        loop = PAGE[PAGE.index("for (const t of w.tiles) {"):]
+        loop = PAGE[PAGE.index("for (const t of shown) {"):]
         loop = loop[:loop.index("\n  }")]
         # ("t.class" is not checked here: it is a substring of
         # "slot.classList", which the same loop uses legitimately.)

@@ -502,6 +502,48 @@ class SwitchingFamilyDropsTheOtherFamilysTiles(unittest.TestCase):
                         self.render.index("renderBroadcasts(p)"))
 
 
+class OnlyStreamedCharactersHaveAVideo(unittest.TestCase):
+    """The page half: nobody without a stream gets a tile, a wall slot or an open
+    video box. See the server-side class of the same name in test_family.py."""
+
+    @classmethod
+    def setUpClass(cls):
+        import pathlib
+        here = pathlib.Path(__file__).resolve().parent.parent
+        cls.page = (here / "index.html").read_text(encoding="utf-8")
+        start = cls.page.index("function renderBroadcasts(")
+        cls.broadcasts = cls.page[start:cls.page.index("function retainOnlyThese(")
+                                  if cls.page.index("function retainOnlyThese(") > start
+                                  else start + 3000]
+        cls.wall = cls.page[cls.page.index("function renderWall(p)"):][:3000]
+
+    def test_no_stream_tile_is_built_for_a_member_without_a_url(self):
+        body = self.broadcasts[:900]
+        self.assertIn("if (!m.broadcast_url) continue;", body)
+        self.assertLess(body.index("if (!m.broadcast_url) continue;"),
+                        body.index("broadcastTile(m.name)"))
+
+    def test_the_wall_draws_only_the_tiles_that_can_play(self):
+        self.assertIn("w.tiles.filter((t) => t.playable)", self.wall)
+        self.assertIn("for (const t of shown) {", self.wall)
+        self.assertNotIn("for (const t of w.tiles) {", self.wall)
+
+    def test_an_empty_video_box_on_a_card_closes(self):
+        self.assertIn(".fstream:empty { display:none; }", self.page)
+
+    def test_a_wall_of_one_or_two_is_not_laid_out_as_five_up(self):
+        for count in ("1", "2"):
+            self.assertIn('#wall.m-five-up[data-count="%s"]' % count, self.page)
+        self.assertIn("wallEl.dataset.count = String(shown.length);", self.wall)
+
+    def test_the_narrow_layout_is_left_alone(self):
+        """The few-tiles grid is wide-screens only. On a phone the wall is already
+        one column, and an attribute selector outranks the rule that makes it so."""
+        start = self.page.index('#wall.m-five-up[data-count="1"]')
+        before = self.page[:start]
+        self.assertIn("@media (min-width:641px) {", before[before.rindex("@media"):])
+
+
 if __name__ == "__main__":
     unittest.main()
 

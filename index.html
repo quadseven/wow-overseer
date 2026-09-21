@@ -2214,6 +2214,9 @@
      that appears half a second later shoves the strip down under a thumb
      that is already reaching for it. So the empty slot holds the space. */
   .fstream { width:100%; aspect-ratio:16/9; background:#000; }
+  /* A character with no stream has nothing in this box. Left open it is a black
+     16:9 rectangle at the top of every card that has no picture to show. */
+  .fstream:empty { display:none; }
   .ftile { position:relative; background:#000; overflow:hidden;
            aspect-ratio:16/9; width:100%; height:100%; }
   /* Letterboxed, never cropped: a cropped POV hides the hotbars, which is
@@ -2580,6 +2583,16 @@
      array instead would make promoting read as the wall dealing itself again,
      and roster order is seniority. */
   #wall.m-five-up > .povslot.hero { grid-area:1 / 1 / 2 / 5; }
+  /* ONE OR TWO TILES ARE NOT A FIVE-UP. The grid is four columns wide with a hero
+     across the top for five tiles; with two it would be one tile spanning the row
+     and one quarter-width tile under it. Two streams are side by side and equal.
+     Wide screens only: the narrow layout below is already one column. */
+  @media (min-width:641px) {
+    #wall.m-five-up[data-count="1"], #wall.m-five-up[data-count="2"] {
+      grid-template-columns:repeat(2, 1fr); }
+    #wall.m-five-up[data-count="1"] > .povslot.hero,
+    #wall.m-five-up[data-count="2"] > .povslot.hero { grid-area:auto; }
+  }
   #wall.m-stacked { grid-template-columns:1fr; gap:0; }
   #wall.m-hero { grid-template-columns:repeat(auto-fit, minmax(150px, 1fr)); }
   /* HERO + WALL is a 16:9 frame ABOVE the strip rather than a big cell inside
@@ -4883,14 +4896,22 @@ function renderWall(p) {
   // The hero the module named is the FALLBACK, never an override: watchwall already
   // decided who leads when nobody has chosen, and a stored name is honoured
   // only when it is one of the five actually on the wall.
-  const names = w.tiles.map((t) => t.name);
+  //
+  // ONLY THE TILES THAT CAN PLAY. A character with no stream is a caption with
+  // nothing under it, and the wall is a place to watch. Their status is still on
+  // their family card. If the module named a hero who is not shown, the first
+  // shown tile leads instead, rather than a hero with no tile.
+  const shown = w.tiles.filter((t) => t.playable);
+  const names = shown.map((t) => t.name);
   const chosen = wall.hero || wallStored(WALL_HERO_KEY);
-  wall.hero = names.indexOf(chosen) >= 0 ? chosen : w.hero;
+  wall.hero = names.indexOf(chosen) >= 0 ? chosen
+    : (names.indexOf(w.hero) >= 0 ? w.hero : (names[0] || w.hero));
+  wallEl.dataset.count = String(shown.length);
 
   // ROSTER ORDER, STRAIGHT FROM THE PAYLOAD, never sorted here. The module
   // has tests pinning that the wall does not reorder, and re-sorting in the
   // page would move that guarantee somewhere no test can see it.
-  for (const t of w.tiles) {
+  for (const t of shown) {
     const s = wallSlot(t.name);
     s.slot.classList.remove("t-dead", "t-combat", "t-hurt", "t-gone", "t-calm");
     s.slot.classList.add("t-" + t.tone);
@@ -4975,6 +4996,11 @@ function renderBroadcasts(p) {
   wallLines.clear();
   for (const t of (p.wall && p.wall.tiles) || []) wallLines.set(t.name, t.line);
   for (const m of p.members) {
+    // NOBODY WITHOUT A STREAM GETS A TILE. A character that is not streamed has
+    // no URL, and a tile with nothing to connect to is a black rectangle that
+    // reads as a broken feature. It is skipped before the tile is built, so it
+    // never exists to be laid out, pruned or connected.
+    if (!m.broadcast_url) continue;
     const t = broadcastTile(m.name);
     // classList operations, never a className RESET: "offline" is set from
     // elsewhere between polls (the WHEP note callback) and a wholesale

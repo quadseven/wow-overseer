@@ -72,6 +72,33 @@ _STREAM_BASE = os.environ.get(
 # Same shape restriction as the stream agent's own _NAME_RE (video.py): a
 # name that lands in a URL gets the same treatment frames._NAME_RE gives it.
 _BROADCAST_NAME_RE = re.compile(r"^[A-Za-z]{2,12}$")
+
+# WHO IS ACTUALLY STREAMED. Every character has a stream PATH, because the path
+# is a pure function of the name, but only some have anything publishing to it.
+# On a host that can render two game clients, the other eight characters are
+# headless bots: there is no picture to show, and drawing a video tile for each
+# put eight black rectangles beside the two that work. The operator asked for
+# them to go.
+#
+# A comma-separated list of names. UNSET OR EMPTY MEANS EVERYONE, which is what
+# every deployment did before this existed, so nothing changes anywhere that does
+# not set it. A character on the list keeps the URL it always had; a character not
+# on it has none, and `watchwall.playable` already means "a URL exists to try", so
+# the wall and the cards follow without a second rule.
+_STREAMED = frozenset(
+    name.strip()
+    for name in os.environ.get("WOW_STREAMED_CHARACTERS", "").split(",")
+    if name.strip())
+
+
+def is_streamed(character: str, streamed=None) -> bool:
+    """Does this character have a picture to watch?
+
+    Case-sensitive on purpose: a character name IS its spelling, and a near-miss
+    must read as not streamed rather than quietly matching somebody else's.
+    """
+    listed = _STREAMED if streamed is None else frozenset(streamed)
+    return not listed or (character or "").strip() in listed
 _BROADCAST_PREFIX_RE = re.compile(r"^[a-z]{0,8}$")
 
 
@@ -156,7 +183,10 @@ _LADDER = os.environ.get("WOW_STREAM_LADDER", "1").strip().lower() not in (
 
 def _rendition_url(character: str, rendition_id: str, base: str | None = None,
                    prefix: str | None = None) -> str | None:
-    """One rendition's WHEP base URL, or None if the path cannot be built."""
+    """One rendition's WHEP base URL, or None if the path cannot be built OR the
+    character is not streamed."""
+    if not is_streamed(character):
+        return None
     path = broadcast_path(character, prefix)
     if not path:
         return None
