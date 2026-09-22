@@ -7083,7 +7083,12 @@ class Bridge(discord.Client):
             # not be proposed again: 819 of 822 `item not carried` refusals in
             # one day were re-issues of an item that had already been sold
             # (infra#3330).
-            plan = item_plan.plan(holder_candidates, attempts)
+            #
+            # A HOLDER STANDING AT A VENDOR IS NOT HELD BACK FOR RANGE (#149).
+            # `town.vendor` is this holder's own reading, so a range refusal
+            # from somewhere else no longer describes where it stands.
+            plan = item_plan.plan(holder_candidates, attempts,
+                                  at_vendor=bool(town.vendor))
             considered += len(holder_candidates)
             for candidate in plan.write:
                 if await asyncio.to_thread(_insert_sell, candidate):
@@ -10954,7 +10959,11 @@ def _sell_attempts(hours: int) -> list:
             cur.execute(
                 "SELECT target_name, command, status, detail, result "
                 "FROM overseer_command "
-                "WHERE kind = 'sell' AND created_at > NOW() - INTERVAL %s HOUR",
+                "WHERE kind = 'sell' AND created_at > NOW() - INTERVAL %s HOUR "
+                # In the order the world wrote them: item_plan.refused_here
+                # reads a delivered sale as ending the range refusals BEFORE
+                # it, so the order is part of the answer (#149).
+                "ORDER BY id",
                 (int(hours),),
             )
             rows = cur.fetchall()
