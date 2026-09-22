@@ -375,6 +375,16 @@
                              color:var(--pale-green);
                              border-bottom-color:var(--deep-green); }
   #realm.rk-non-production #rklabel { color:var(--paper); }
+  /* The quiet state, made quiet: one line, not three plus a row of hashes.
+     A reader who wants the build still gets it on hover or keyboard focus. */
+  #realm.rk-non-production { display:flex; flex-wrap:wrap; align-items:baseline;
+                             gap:.15rem .9rem; padding:6px var(--gutter) 7px; }
+  #realm.rk-non-production #rklabel { font-size:.78rem; letter-spacing:.16em; }
+  #realm.rk-non-production #rkwhere { margin:0; font-size:12px; opacity:.8; }
+  #realm.rk-non-production #rkwarn:empty { display:none; }
+  #realm.rk-non-production #rkbuild { display:none; margin:0; flex-basis:100%; }
+  #realm.rk-non-production:hover #rkbuild,
+  #realm.rk-non-production:focus-within #rkbuild { display:block; }
 
   /* CANNOT SAY. Vermilion, which in this palette is reserved for live badges,
      alarms and refusals - and "this page cannot tell you which world you are
@@ -393,16 +403,16 @@
      three tab suites slice this file by their own banners and the earliest
      window starts there - CSS dropped after it is swept into assertions
      about a tab it has nothing to do with. */
-  #agenda { margin:0; padding:.85rem var(--gutter) .9rem; background:var(--panel);
+  #agenda { margin:0; padding:.6rem var(--gutter) .65rem; background:var(--panel);
             border-bottom:1px solid var(--line); }
   /* THE HEADLINE IS THE FEATURE. Deliberately the largest text on the page,
      larger than the h1 above it: this is read from across a room while five
      streams play, and half a second is the whole budget. */
   #agline { font-size:1.35rem; line-height:1.3; color:var(--text); }
   #agline .agverb { color:var(--gold); }
-  #agdetail { color:var(--dim); margin-top:.35rem; font-size:.92rem; }
+  #agdetail { color:var(--dim); margin-top:.2rem; font-size:.92rem; }
   #agdetail div { margin-top:.15rem; }
-  #agwhen { color:var(--dim); margin-top:.4rem; font-size:.85rem;
+  #agwhen { color:var(--dim); margin-top:.25rem; font-size:.85rem;
             display:flex; gap:.9rem; flex-wrap:wrap; }
   /* Colour carries the activity so the shape of the answer is legible before
      the words are: a split party and a stalled run are the two states worth
@@ -427,7 +437,7 @@
   /* The other family's goal: one line, the same colour rules in miniature, so
      a split or a stall on the second family still stands out. */
   #agother:empty { display:none; }
-  #agother { margin-top:.6rem; padding-top:.5rem; border-top:1px solid var(--line); }
+  #agother { margin-top:.4rem; padding-top:.35rem; border-top:1px solid var(--line); }
   .agrow { display:flex; gap:.6rem; flex-wrap:wrap; align-items:baseline;
            padding:.15rem 0 .15rem .5rem; border-left:3px solid var(--alliance); }
   .agrow.split { border-left-color:var(--neutral); }
@@ -2359,7 +2369,6 @@
   .fcard .note.warn { color:var(--caution-text); }
   .fcard .note.live { color:var(--mortal); }
   .fcard .note { margin-top:.35rem; white-space:pre-wrap; overflow-wrap:anywhere; }
-  .fwarn { color:var(--neutral); margin-top:.35rem; }
   /* Same 16:9 reservation as the panel player, for the same reason: a box
      that grows when the first frame lands makes the card jump under a thumb
      that is already reaching for it. */
@@ -2602,6 +2611,9 @@
             text-transform:uppercase; color:var(--on-card-dim); }
   .fsaidt { margin-top:.2rem; overflow-wrap:anywhere; color:var(--on-card); }
   .fsaid.quiet .fsaidt { color:var(--on-card-dim); font-style:italic; }
+  /* A box that only says nobody spoke is a frame around nothing, on every
+     card. Shown when there is a line to show. */
+  .fsaid.quiet { display:none; }
 
   /* THE NEEDS BARS: a motive panel, four rows, one column. A FULL BAR ALWAYS
      MEANS THE NEED IS MET (needs.py's docstring argues it out) - room left,
@@ -5006,7 +5018,6 @@ function familyCard(name) {
   const needbox = el("div", "fneeds");
   const worst = el("div", "fworst");
   const slots = el("div", "fslots");
-  const warn = el("div", "fwarn");
   const bond = el("div", "fbond");
   const btn = el("button", "fwatch", "watch");
   const note = noteNode("note");
@@ -5027,14 +5038,14 @@ function familyCard(name) {
   btns.append(full, stop);
   const vnote = noteNode("note");
   box.append(video, btns, vnote);
-  strip.append(head, bar, hp, where, saidbox, needbox, worst, slots, warn, bond, btn, note, box);
+  strip.append(head, bar, hp, where, saidbox, needbox, worst, slots, bond, btn, note, box);
   // ORDER IS THE FEATURE. Their picture, then who they are and how they
   // are, then the POV controls. A viewer reads one character top to bottom
   // instead of matching a wall of video to a list of names by position.
   card.append(stream, strip);
   ffeeds.appendChild(card);
   c = { card, nm, chip, combat, lead, meta, stream, bar, fill, hp, where, slots,
-        warn, btn, note, box, video, vnote, full, stop,
+        btn, note, box, video, vnote, full, stop,
         ginit, gmark, saidbox, said, needbox, needbars: new Map(), worst, bond };
   c.player = makePlayer(video, (t, cls) => setNote(vnote, t, cls), box);
   btn.onclick = () => familyWatch(name);
@@ -5631,7 +5642,6 @@ function renderFamily(p) {
       c.hp.textContent = "";
       c.where.textContent = "not in the world - logged out, or the "
         + "worldserver dropped them.";
-      c.warn.style.display = "none";
       continue;
     }
     c.meta.textContent = ["L" + m.level + " " + m["class"], m.role].filter(Boolean).join(" - ");
@@ -5641,13 +5651,6 @@ function renderFamily(p) {
       ? "dead - 0 / " + m.max_health
       : m.health + " / " + m.max_health + "  (" + m.health_pct + "%)";
     c.where.textContent = m.zone;
-    // stream.pov_changes_the_family says in as many words that the UI must
-    // not hide this, and until now nothing on this page said it out loud.
-    c.warn.style.display = m.pov_changes_the_family ? "" : "none";
-    c.warn.textContent = m.pov_changes_the_family
-      ? "watching " + m.name + " in POV makes him a selfbot, and the other "
-        + "four take him as their master and follow. It stops when you stop."
-      : "";
   }
   updateFamilyButtons();
 }

@@ -164,68 +164,6 @@ def playable(member) -> bool:
     return bool((member.get("broadcast_url") or "").strip())
 
 
-def leader_warning(members) -> dict | None:
-    """What watching costs, in the one case where watching costs something.
-
-    `stream.pov_changes_the_family` says in as many words that the UI must not
-    hide this, and `family._member` has already asked it per member, so this
-    reads that answer rather than re-deriving it. Nobody flagged means no
-    sentence: the party may be led by someone the snapshot has not got, and a
-    warning naming nobody is worse than no warning.
-
-    WORDED FOR AN ALWAYS-ON CLIENT. The design handoff is explicit about this
-    and about the wording that must NOT come back: `pov_changes_the_family`'s
-    own docstring says the effect stops when you stop watching, and that
-    framing predates the five clients streaming continuously. They do not log
-    out, so the condition is true right now whether or not anybody has this
-    page open, and saying otherwise invites a reader to believe they can turn
-    it off by closing a tab.
-
-    RETURNED AS A TITLE AND A BODY, not one paragraph. It is five sentences of
-    genuinely important text, the operator reads this on a phone, and five
-    sentences above the video is how a warning gets scrolled past unread. The
-    title is the whole claim in four words; the body is why. The page collapses
-    to the title on a narrow screen and this is what lets it.
-    """
-    named = [m.get("name") for m in members if m.get("pov_changes_the_family")]
-    named = [n for n in named if n]
-    if not named:
-        return None
-    if len(named) > 1:
-        # THE WALL OF HEADS carries one leader per family, and each of them
-        # is a selfbot for the same reason. Naming only the first would tell
-        # a viewer the second family was acting on its own when it is not.
-        who = " and ".join(named)
-        return {
-            "title": "THE LEADERS ARE SELFBOTS",
-            "body": (
-                who + " each have a client logged in as them, which makes "
-                "each a selfbot, and FindNewMaster hands the rest of each "
-                "family a master, so they follow and obey their head. That "
-                "is true right now whether or not you are looking at these "
-                "tiles, and it does not stop, because the clients never log "
-                "out. Any cohesion you see is the streamed configuration, "
-                "not the families on their own. Only a POV login does this; "
-                "a follow-cam is a GM watching from outside and changes "
-                "nothing."
-            ),
-        }
-    who = named[0]
-    return {
-        "title": "THE LEADER IS A SELFBOT",
-        "body": (
-            who + "'s client is logged in as him, which makes him a selfbot, "
-            "and FindNewMaster hands the other four a master, so they follow "
-            "and obey him. That is true right now whether or not you are "
-            "looking at this tile, and it does not stop, because the client "
-            "never logs out. Any cohesion you see is the streamed "
-            "configuration, not the family on their own. Only a POV login "
-            "does this; a follow-cam is a GM watching from outside and "
-            "changes nothing."
-        ),
-    }
-
-
 def hero_of(members, chosen=None) -> str | None:
     """Who is big in HERO mode.
 
@@ -332,6 +270,10 @@ def build_wall(members, chosen=None) -> dict:
         "default_mode": DEFAULT_MODE,
         "headline": headline(members),
         "hero": hero_of(members, chosen),
-        "warning": leader_warning(members),
+        # No standing notice. The operator removed the selfbot explanation
+        # from the wall: it restated a fixed fact about how the heads are
+        # streamed in five sentences above the video. The key stays, empty,
+        # so the page's `hidden` guard keeps working.
+        "warning": None,
         "tiles": tiles,
     }
