@@ -367,26 +367,6 @@ def _fetch_rosters() -> dict:
     One read, shared by the per-family lookup below and by /api/heads, which
     needs every family at once. Empty when no roster row carries a family.
     """
-    by_family = _fetch_families()
-    if not by_family:
-        # No roster rows at all: degrade to exactly the old behaviour rather
-        # than serving a blank tab.
-        return family.roster(), "", []
-
-    known = sorted(by_family)
-    chosen = which if which in by_family else _default_family(known)
-    return by_family[chosen], chosen, known
-
-
-def _fetch_families() -> dict:
-    """{family: [names]} for every family on overseer_roster, default first.
-
-    The one read of the roster's `family` column, shared by the Family tab and
-    by every view that has to show BOTH families rather than the one bonds
-    holds. Empty when the roster carries no families at all; a caller that
-    needs somebody falls back to family.roster() and says nothing about a
-    second family it cannot see.
-    """
     conn = _connect()
     try:
         with conn.cursor() as cur:
@@ -398,7 +378,8 @@ def _fetch_families() -> dict:
             rows = cur.fetchall()
     finally:
         conn.close()
-    by_family: dict = {}
+
+    by_family = {}
     for row in rows:
         by_family.setdefault(row["family"], []).append(row["name"])
     return by_family
@@ -418,6 +399,25 @@ def _fetch_family_names(which=None):
     SERVER knows; anything else falls back to the default. No name from a
     request reaches the SQL below - only a key matched against a list the
     database produced.
+    """
+    by_family = _fetch_rosters()
+    if not by_family:
+        # No roster rows at all: degrade to exactly the old behaviour rather
+        # than serving a blank tab.
+        return family.roster(), "", []
+
+    known = sorted(by_family)
+    chosen = which if which in by_family else _default_family(known)
+    return by_family[chosen], chosen, known
+
+
+def _fetch_families() -> dict:
+    """{family: [names]} for every family on overseer_roster, default first.
+
+    The same read as the Family tab's, ordered for views that have to show
+    BOTH families rather than the one bonds holds. Empty when the roster
+    carries no families at all; a caller that needs somebody falls back to
+    family.roster() and says nothing about a second family it cannot see.
     """
     by_family = _fetch_rosters()
     if not by_family:
