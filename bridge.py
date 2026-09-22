@@ -10188,8 +10188,8 @@ def _fetch_family_quests(names: list) -> tuple:
     # START of the expression, so a noqa on the line carrying the % does not
     # silence a multi-line query. Only the NUMBER of placeholders is
     # interpolated; every name reaches MySQL as a bound parameter.
-    member_sql = _LEDGER_MEMBER_SQL % placeholders  
-    held_sql = _LEDGER_HELD_SQL % placeholders      
+    member_sql = _LEDGER_MEMBER_SQL % placeholders
+    held_sql = _LEDGER_HELD_SQL % placeholders
     rewarded_sql = _LEDGER_REWARDED_SQL % placeholders
     with _connect() as conn, conn.cursor() as cur:
         cur.execute(member_sql, names)
