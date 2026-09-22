@@ -2548,6 +2548,35 @@
      above it, rather than the tab's invisible box starting there and the
      word sitting .8rem further in. A tap target that reaches nearer the
      screen edge is the right trade on the row a thumb drives. */
+  /* THE LINEUP, DRAWN THE WAY THE GAME DRAWS A RAID: small boxes of five,
+     name then level then class, one colour per class. Wide screens get four
+     boxes across so eight groups read as two rows; a phone gets one column,
+     because five names on a 360px screen is already the full width. */
+  .ln-guild { margin-bottom:1.4rem; }
+  .ln-grid { display:grid; gap:.5rem; grid-template-columns:1fr; }
+  @media (min-width:641px) {
+    .ln-grid { grid-template-columns:repeat(2, 1fr); }
+  }
+  @media (min-width:961px) {
+    .ln-grid { grid-template-columns:repeat(4, 1fr); }
+  }
+  .ln-box { border:1px solid var(--card-line); border-radius:6px; padding:.45rem .55rem;
+            background:var(--card); }
+  .ln-boxhead { font-size:.72rem; letter-spacing:.08em; text-transform:uppercase;
+                color:var(--muted); margin-bottom:.3rem; }
+  .ln-note { font-size:.68rem; color:var(--muted); margin:-.15rem 0 .3rem; }
+  .ln-row { display:flex; align-items:baseline; gap:.4rem; padding:.1rem 0;
+            font-size:.82rem; }
+  .ln-name { flex:1 1 auto; min-width:0; overflow:hidden; text-overflow:ellipsis;
+             white-space:nowrap; }
+  .ln-lvl { flex:none; font-variant-numeric:tabular-nums; color:var(--muted); }
+  .ln-cls { flex:none; font-size:.7rem; color:var(--muted); }
+  /* The tank and the healer are what make five people a group rather than a
+     crowd, so they are marked. Everyone else is deliberately unmarked. */
+  .ln-row.r-tank .ln-cls::after { content:" tank"; color:var(--accent); }
+  .ln-row.r-healer .ln-cls::after { content:" heal"; color:var(--accent); }
+  .ln-short { font-size:.76rem; color:var(--rust); margin:.2rem 0 .5rem; }
+  .ln-gname { font-weight:600; }
   #tabs { display:flex; flex-wrap:nowrap; gap:.2rem;
           padding:0 calc(var(--gutter) - .8rem);
           background:var(--card); border-bottom:1px solid var(--card-line);
@@ -3070,6 +3099,11 @@
      of the list come from guildcraft.py; this markup holds no judgement of its
      own, and the rule the list is in is printed on the page rather than left
      implied. -->
+<section id="lineup">
+  <div id="lnhead" class="ds-head">reaching the world...</div>
+  <div id="lnbody"></div>
+</section>
+
 <section id="trades">
   <div id="gcrhead" class="ds-head">reaching the world...</div>
   <p id="gcrguild" class="chr-body"></p>
@@ -3285,6 +3319,10 @@ const DUNGEONS_VIEW = "dungeons";
 // before forty of them can walk into Molten Core. Same subject, one rung up,
 // so it sits next to it in the tab strip.
 const RAID_VIEW = "raid";
+// The lineup is a SEPARATE view from the raid goals above it on purpose:
+// that one asks what the guild still has to farm, this one asks who the
+// guild is. They share a word and nothing else.
+const LINEUP_VIEW = "lineup";
 const TRADES_VIEW = "trades";
 const DECREE_VIEW = "decree";
 const CONTINENT_ORDER = ["0", "1", "530", "571", "quelthalas", "azuremyst"];
@@ -3378,6 +3416,13 @@ async function loadZones() {
   rb.dataset.view = RAID_VIEW;
   rb.onclick = () => showView(RAID_VIEW);
   tabs.appendChild(rb);
+  // Beside the raid goals, because the two halves of "can we raid" are what
+  // the guild still needs and who the guild actually is.
+  const lb = document.createElement("button");
+  lb.textContent = "Lineup";
+  lb.dataset.view = LINEUP_VIEW;
+  lb.onclick = () => showView(LINEUP_VIEW);
+  tabs.appendChild(lb);
   // Seventh, straight after the dungeon plan, because it is the same kind of
   // question about the same five: that one says which place is worth walking
   // to for a drop, this one says which place is worth walking to for a recipe
@@ -5814,6 +5859,7 @@ function showView(v) {
   const isEye = v === EYE_VIEW;
   const isDgn = v === DUNGEONS_VIEW;
   const isRaid = v === RAID_VIEW;
+  const isLineup = v === LINEUP_VIEW;
   const isTrd = v === TRADES_VIEW;
   const isDec = v === DECREE_VIEW;
   fsection.style.display = isFam ? "block" : "none";
@@ -5825,6 +5871,7 @@ function showView(v) {
   eyesection.style.display = isEye ? "block" : "none";
   dgnsection.style.display = isDgn ? "block" : "none";
   rgsection.style.display = isRaid ? "block" : "none";
+  lnsection.style.display = isLineup ? "block" : "none";
   gcrsection.style.display = isTrd ? "block" : "none";
   dcrSection.style.display = isDec ? "block" : "none";
   // Every non-map view hides the canvas and its legend. This used to read
@@ -6026,6 +6073,127 @@ window.addEventListener("resize", render);
 // finished evaluating, which is the arrangement showView already has with the
 // Armory's and the console's consts.
 const rgsection = document.getElementById("raid");
+const lnsection = document.getElementById("lineup");
+const lnhead = document.getElementById("lnhead");
+const lnbody = document.getElementById("lnbody");
+
+// The game draws a raid as eight boxes of five, name and level and class, one
+// colour per class. This draws the same thing from the same facts, so a
+// structure decided here can be recognised in the window it will appear in.
+function lnCard(m, classes) {
+  const row = document.createElement("div");
+  row.className = "ln-row r-" + (m.role || "dps");
+  const name = document.createElement("span");
+  name.className = "ln-name";
+  name.textContent = m.name || "";
+  // The colour comes from the server, exactly as the Family cards and the
+  // watch wall take theirs - there is no class palette in this page.
+  name.style.color = m.class_colour || "";
+  const lvl = document.createElement("span");
+  lvl.className = "ln-lvl";
+  lvl.textContent = m.level == null ? "" : m.level;
+  const cls = document.createElement("span");
+  cls.className = "ln-cls";
+  cls.textContent = classes[m.class_id] || "";
+  row.append(name, lvl, cls);
+  return row;
+}
+
+function lnList(title, members, classes, note) {
+  const box = document.createElement("div");
+  box.className = "ln-box";
+  const h = document.createElement("div");
+  h.className = "ln-boxhead";
+  h.textContent = title;
+  box.appendChild(h);
+  if (note) {
+    const n = document.createElement("div");
+    n.className = "ln-note";
+    n.textContent = note;
+    box.appendChild(n);
+  }
+  for (const m of members) box.appendChild(lnCard(m, classes));
+  return box;
+}
+
+function lnRender(payload) {
+  const classes = payload.classes || {};
+  lnbody.textContent = "";
+  const guilds = payload.guilds || [];
+  if (!guilds.length) {
+    lnhead.textContent = "no guild holds any of the roster yet";
+    lnhead.className = "ds-head";
+    return;
+  }
+  lnhead.textContent = guilds.map(
+    (g) => g.guild + " " + g.counts.considered + "/" + g.wanted.total).join("  |  ");
+  lnhead.className = "ds-head";
+  for (const g of guilds) {
+    const sec = document.createElement("div");
+    sec.className = "ln-guild";
+    const head = document.createElement("div");
+    head.className = "ds-rule";
+    head.innerHTML = '<span class="ln-gname"></span><span class="ln"></span>' +
+                     '<span class="lb"></span>';
+    head.querySelector(".ln-gname").textContent = g.guild || "(unnamed guild)";
+    head.querySelector(".lb").textContent =
+      g.counts.raiders + " raiding, " + g.counts.maintenance + " maintenance, " +
+      g.counts.summoners + " summoning, " + g.counts.surplus + " surplus";
+    sec.appendChild(head);
+
+    // THE SHORTFALL IS SAID BEFORE THE GROUPS, not after them. A page that
+    // drew eight neat boxes and mentioned underneath that the summoner corps
+    // is sixteen short would read as a finished lineup.
+    const short = Object.entries(g.shortfall || {}).filter(([, n]) => n > 0);
+    if (short.length) {
+      const warn = document.createElement("div");
+      warn.className = "ln-short";
+      warn.textContent = "short: " +
+        short.map(([what, n]) => n + " " + what).join(", ");
+      sec.appendChild(warn);
+    }
+
+    const grid = document.createElement("div");
+    grid.className = "ln-grid";
+    for (const group of g.groups || []) {
+      grid.appendChild(lnList("Group " + group.number, group.members || [],
+                              classes, ""));
+    }
+    sec.appendChild(grid);
+
+    const extras = document.createElement("div");
+    extras.className = "ln-grid";
+    extras.appendChild(lnList("Maintenance", g.maintenance || [], classes,
+                              "bank, crafting, auction - never raids"));
+    extras.appendChild(lnList("Summoners", g.summoners || [], classes,
+                              "warlocks, summoning only"));
+    if ((g.surplus || []).length) {
+      extras.appendChild(lnList("Surplus - not in the lineup", g.surplus,
+                                classes, "chosen for no place"));
+    }
+    sec.appendChild(extras);
+    lnbody.appendChild(sec);
+  }
+}
+
+let lnPulling = false;
+
+async function pollLineup() {
+  if (view !== LINEUP_VIEW || lnPulling) return;
+  lnPulling = true;
+  try {
+    const r = await fetch(u("/api/lineup"), {signal: AbortSignal.timeout(20000)});
+    if (!r.ok) throw new Error(r.status);
+    lnRender(await r.json());
+  } catch (e) {
+    // Whatever is drawn stays drawn. A blanked lineup reads as "the guild is
+    // empty", and there is a kick list on this page.
+    lnhead.textContent = "the world is unreachable - this may be stale";
+    lnhead.className = "ds-head alarm";
+  } finally {
+    lnPulling = false;
+  }
+}
 const rghead = document.getElementById("rghead");
 const rgroster = document.getElementById("rgroster");
 const rgraid = document.getElementById("rgraid");
@@ -9683,7 +9851,8 @@ function adoptContinent() {
 // The map is still separate below, because it is the one view whose hash
 // carries state (which continent) and so needs more than a name.
 const HASH_VIEWS = [FAMILY_VIEW, WATCH_VIEW, ARMORY_VIEW, BAGS_VIEW,
-                    CHRONICLE_VIEW, DUNGEONS_VIEW, RAID_VIEW, TRADES_VIEW,
+                    CHRONICLE_VIEW, DUNGEONS_VIEW, RAID_VIEW, LINEUP_VIEW,
+                    TRADES_VIEW,
                     COUNCIL_VIEW, EYE_VIEW, DECREE_VIEW];
 
 // ADDRESSES A VIEW USED TO HAVE. The Achievements tab was renamed to the
