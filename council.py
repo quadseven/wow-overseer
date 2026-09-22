@@ -710,6 +710,41 @@ def _runs(target: int) -> str:
     return "1 run" if target == 1 else "%d runs" % target
 
 
+def _level_sentence(who: str, row: dict, _titles: dict) -> str:
+    return "The family will help %s reach level %d." % (
+        who, int(row.get("target") or 0))
+
+
+def _quest_sentence(who: str, row: dict, titles: dict) -> str:
+    title = titles.get(int(row.get("quest_id") or 0))
+    if title:
+        return "The family will help %s finish %s." % (who, title)
+    return "The family will help %s finish a quest the world could not name." % who
+
+
+def _skill_sentence(who: str, row: dict, _titles: dict) -> str:
+    skill = str(row.get("skill_name") or "").strip() or "a trade"
+    target = int(row.get("target") or 0)
+    if target:
+        return "%s will train %s to %d." % (who, skill, target)
+    return "%s will learn %s." % (who, skill)
+
+
+def _dungeon_sentence(who: str, row: dict, _titles: dict) -> str:
+    place = keyword_place(str(row.get("skill_name") or ""))
+    target = int(row.get("target") or 0)
+    runs = ", %s" % _runs(target) if target else ""
+    return "%s will lead the family into %s%s." % (who, place, runs)
+
+
+_SENTENCES = {
+    "level": _level_sentence,
+    "quest": _quest_sentence,
+    "skill": _skill_sentence,
+    "dungeon": _dungeon_sentence,
+}
+
+
 def decision_line(row: dict, quest_titles: dict | None = None) -> str:
     """What the goal asks for, as a plain sentence with a subject and a verb.
 
@@ -725,26 +760,9 @@ def decision_line(row: dict, quest_titles: dict | None = None) -> str:
     """
     who = str(row.get("character_name") or "").strip() or "The family"
     kind = str(row.get("kind") or "")
-    target = int(row.get("target") or 0)
-    if kind == "level":
-        return "The family will help %s reach level %d." % (who, target)
-    if kind == "quest":
-        title = (quest_titles or {}).get(int(row.get("quest_id") or 0))
-        if title:
-            return "The family will help %s finish %s." % (who, title)
-        return ("The family will help %s finish a quest the world could not "
-                "name." % who)
-    if kind == "skill":
-        skill = str(row.get("skill_name") or "").strip() or "a trade"
-        if target:
-            return "%s will train %s to %d." % (who, skill, target)
-        return "%s will learn %s." % (who, skill)
-    if kind == "dungeon":
-        place = keyword_place(str(row.get("skill_name") or ""))
-        if target:
-            return "%s will lead the family into %s, %s." % (
-                who, place, _runs(target))
-        return "%s will lead the family into %s." % (who, place)
+    sentence = _SENTENCES.get(kind)
+    if sentence is not None:
+        return sentence(who, row, quest_titles or {})
     return "%s will work on a %s goal." % (who, kind or "new")
 
 
@@ -847,12 +865,53 @@ def _older(active: list[dict], won: dict,
                       reverse=True):
         if row is won:
             continue
-        when = row.get("created_at")
-        since = (ago((now - when).total_seconds())
-                 if now is not None and hasattr(when, "year") else "")
-        out.append(decision_line(row, quest_titles)
-                   + (" Set %s." % since if since else ""))
+        since = _since(now, row.get("created_at"))
+        out.append(decision_line(row, quest_titles) + (" " + since if since else ""))
     return out
+
+
+def _since(now: datetime | None, when) -> str:
+    """"Set 3 hours ago." off two datetimes, or "" when either is missing."""
+    if now is None or not hasattr(when, "year"):
+        return ""
+    return "Set %s." % ago((now - when).total_seconds())
+
+
+def _rows_of(lines: list[dict]) -> list[dict]:
+    """Transcript lines back into thought rows, for callers without rows."""
+    return [{"character_name": line["who"], "text": line["text"],
+             "created_at": datetime.fromisoformat(line["at"])}
+            for line in lines if line.get("at")]
+
+
+def _who_line(proposer: str, spoke: list[str], silent: list[str]) -> str:
+    """Who proposed it, who else spoke, who did not, and that no vote exists."""
+    line = "%s proposed it." % proposer
+    others = [name for name in spoke if name != proposer]
+    if others:
+        line += " %s also spoke." % _names(others)
+    if silent:
+        line += " %s did not speak at that sitting." % _names(silent)
+    return line + (" The council does not record a vote; the proposal with "
+                   "the most backing carries.")
+
+
+OUTSIDE_LABEL = "SET OUTSIDE THE COUNCIL"
+OUTSIDE_LINE = (
+    "No council sitting ended just before this goal was set, so it came from "
+    "somewhere else: an order in Discord or from the operator. Nobody voted "
+    "on it.")
+
+
+def _active(goal_rows: list[dict], members: list[str] | None) -> list[dict]:
+    """The goals still marked active, narrowed to one family when named."""
+    active = [row for row in goal_rows
+              if str(row.get("status") or "") == "active"]
+    if members is None:
+        return active
+    allowed = set(members)
+    return [row for row in active
+            if str(row.get("character_name") or "") in allowed]
 
 
 def consensus(goal_rows: list[dict], lines: list[dict],
@@ -881,51 +940,22 @@ def consensus(goal_rows: list[dict], lines: list[dict],
     `lines` is kept for the callers that still hand in only a transcript: with
     no `thought_rows`, the deciding sitting is looked for in those lines.
     """
-    active = [row for row in goal_rows
-              if str(row.get("status") or "") == "active"]
-    if members is not None:
-        allowed = set(members)
-        active = [row for row in active
-                  if str(row.get("character_name") or "") in allowed]
+    active = _active(goal_rows, members)
     if not active:
         return None
     won = max(active, key=lambda row: row.get("created_at") or "")
     decided_at = won.get("created_at")
     family = list(members) if members is not None else list(bonds.FAMILY)
 
-    source = thought_rows if thought_rows is not None else [
-        {"character_name": line["who"], "text": line["text"],
-         "created_at": datetime.fromisoformat(line["at"])}
-        for line in lines if line.get("at")]
+    source = thought_rows if thought_rows is not None else _rows_of(lines)
     sitting = deciding_sitting(source, decided_at)
     said = transcript(sitting) if sitting else []
-    speakers = [line["who"] for line in said]
-    spoke = list(dict.fromkeys(speakers))
+    spoke = list(dict.fromkeys(line["who"] for line in said))
     proposer = (bonds.canon(sitting[-1]["character_name"]) or "") if sitting else ""
-    silent = [name for name in bonds.speaking_order(family)
-              if name not in spoke] if family else []
-
-    if sitting:
-        label = "DECIDED BY THE COUNCIL"
-        others = [name for name in spoke if name != proposer]
-        who_line = "%s proposed it." % proposer
-        if others:
-            who_line += " %s also spoke." % _names(others)
-        if silent:
-            who_line += " %s did not speak at that sitting." % _names(silent)
-        who_line += (" The council does not record a vote; the proposal "
-                     "with the most backing carries.")
-    else:
-        label = "SET OUTSIDE THE COUNCIL"
-        who_line = ("No council sitting ended just before this goal was set, "
-                    "so it came from somewhere else: an order in Discord or "
-                    "from the operator. Nobody voted on it.")
-
+    silent = [name for name in bonds.speaking_order(family) if name not in spoke]
     acted, next_line = _in_effect(won, standing)
-    since = (ago((now - decided_at).total_seconds())
-             if now is not None and hasattr(decided_at, "year") else "")
     return {
-        "label": label,
+        "label": "DECIDED BY THE COUNCIL" if sitting else OUTSIDE_LABEL,
         "decision": decision_line(won, quest_titles),
         "beneficiary": str(won.get("character_name") or ""),
         "kind": str(won.get("kind") or ""),
@@ -934,8 +964,8 @@ def consensus(goal_rows: list[dict], lines: list[dict],
         "speakers": spoke,
         "silent": silent,
         "family": len(family),
-        "who_line": who_line,
-        "when_line": ("Set %s." % since) if since else "",
+        "who_line": _who_line(proposer, spoke, silent) if sitting else OUTSIDE_LINE,
+        "when_line": _since(now, decided_at),
         "in_effect": acted,
         "next_line": next_line,
         "sitting": said,
