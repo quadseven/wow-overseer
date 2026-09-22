@@ -984,8 +984,24 @@
      banner below, and the shared furniture is above both so this cannot take
      it hostage. */
   #dungeons { display:none; padding:.9rem 1rem 1.2rem; }
-  #dgnfamily, #dgncoverage, #dgnorder, #dgnbasis { max-width:72ch; }
-  #dgnlist { display:grid; gap:10px; }
+  #dgnrunnable, #dgnorder, #dgnbasis { max-width:72ch; }
+  /* ONE COLUMN PER FAMILY WHERE THERE IS ROOM, one above the other on a
+     phone, and no breakpoint of its own: min(100%, 30rem) is what lets the
+     same rule do both. */
+  #dgnfamilies { display:grid; gap:1.4rem;
+                 grid-template-columns:repeat(auto-fit, minmax(min(100%, 30rem), 1fr)); }
+  .dgn-family { min-width:0; }
+  .dgn-title { margin:.2rem 0 .3rem; font-family:var(--display);
+               font-weight:800; font-size:1.3rem; overflow-wrap:anywhere; }
+  .dgn-next { margin:.4rem 0; padding-left:.7rem; font-weight:700;
+              border-left:3px solid var(--accent-text); line-height:1.5;
+              overflow-wrap:anywhere; }
+  .dgn-list { display:grid; gap:10px; margin-top:.8rem; }
+  /* Where the family stands only changes how loud a step is. Outgrown and
+     unreachable steps stay on the path, quieter, so the order stays honest. */
+  .dgn-card.dgn-behind, .dgn-card.dgn-off { opacity:.62; }
+  .dgn-card.dgn-next { border-color:var(--accent-text); }
+  .dgn-fold > .dgn-list { margin-top:.8rem; }
   .dgn-card > summary { list-style:none; cursor:pointer; display:grid;
                         grid-template-columns:auto minmax(0, 1fr);
                         gap:.15rem .7rem; align-items:baseline; }
@@ -3143,19 +3159,18 @@
   <div id="chrline"></div>
   <button id="chrmore">show older</button>
 </section>
-<!-- WHERE TO GO NEXT (infra#3500). The operator asked for a page that shows
-     every dungeon and what upgrades they can get at each, because that is the
-     choice being made a hundred times and the site could only answer it one
-     dungeon at a time. Every sentence, every chip and the ORDER of the list
-     come from dungeonplan.py; this markup holds no judgement of its own, and
-     the rule it ranked on is printed on the page rather than left implied. -->
+<!-- WHERE TO GO NEXT (infra#3500). The order to run dungeons in, one path per
+     family, Alliance and Horde both, with the upgrades each step holds for the
+     family and for its guild and whether the overseer can run it today. Every
+     sentence, every chip and the ORDER of the path come from dungeonpath.py;
+     this markup holds no judgement of its own, and the rule the path follows
+     is printed on the page rather than left implied. -->
 <section id="dungeons">
   <div id="dgnhead" class="ds-head">reaching the world...</div>
-  <p id="dgnfamily" class="chr-body"></p>
-  <p id="dgncoverage" class="chr-body"></p>
-  <div class="ds-rule"><span class="ix">01</span><span class="ln"></span><span class="lb">where to go next</span></div>
+  <p id="dgnrunnable" class="chr-body"></p>
+  <div class="ds-rule"><span class="ix">01</span><span class="ln"></span><span class="lb">the path, family by family</span></div>
   <p id="dgnorder" class="chr-body"></p>
-  <div id="dgnlist"></div>
+  <div id="dgnfamilies"></div>
   <p id="dgnbasis" class="chr-body"></p>
 </section>
 <!-- WHAT THE GUILD STILL NEEDS BEFORE IT CAN RAID (infra#3508). The operator
@@ -7059,11 +7074,10 @@ setInterval(() => { if (view === TRADES_VIEW) pollTrades(); }, 120000);
 // showView already has with the Armory's and the console's consts.
 const dgnsection = document.getElementById("dungeons");
 const dgnhead = document.getElementById("dgnhead");
-const dgnfamily = document.getElementById("dgnfamily");
-const dgncoverage = document.getElementById("dgncoverage");
+const dgnrunnable = document.getElementById("dgnrunnable");
 const dgnorder = document.getElementById("dgnorder");
 const dgnbasis = document.getElementById("dgnbasis");
-const dgnlist = document.getElementById("dgnlist");
+const dgnfamilies = document.getElementById("dgnfamilies");
 
 // An empty string is a real answer from the module and means "there is
 // nothing to say here", so it draws nothing rather than an empty line.
@@ -7073,8 +7087,7 @@ function dgnNote(parent, text) {
 
 // ONE GAIN: the item as the Chronicle draws it, then the module's sentence
 // about what it replaces, then whatever that verdict did NOT check. The
-// caveats are printed and never composed - a weapon nobody here can rule on
-// has to say so beside itself, not in a footer at the bottom of twenty rows.
+// caveats are printed and never composed.
 function dgnGain(gain) {
   const row = el("div", "dgn-gain");
   row.appendChild(chrItem(gain, ""));
@@ -7088,57 +7101,106 @@ function dgnMember(found) {
   box.appendChild(el("div", "sect", found.line));
   dgnNote(box, found.delta_note);
   for (const gain of found.gains) box.appendChild(dgnGain(gain));
+  dgnNote(box, found.more_line);
   return box;
 }
 
-// ONE DUNGEON, COLLAPSED BY DEFAULT. The summary carries the place in the
-// order the module decided, the name, the count sentence and the chips; the
-// body carries the context and every gain. `d.rank` is the module's number
-// and is never counted off the position this loop drew the row at: the page
-// would agree with it today and disagree the first time this list was
-// filtered, with nothing failing and the tie lines still naming the old one.
-function dgnCard(d) {
-  const card = el("details", "chr-card dgn-card");
-  const head = document.createElement("summary");
-  head.appendChild(el("span", "dgn-rank", String(d.rank)));
-  head.appendChild(el("span", "dgn-name", d.name));
-  head.appendChild(el("span", "dgn-sum", d.line));
+// `tone` is a ROLE NAME the module chose, never a colour and never a state
+// worked out here. An unknown tone draws in the body colour rather than being
+// dropped, so a new one shows up as a plain chip instead of vanishing.
+function dgnChips(list) {
   const chips = el("div", "dgn-chips");
-  for (const chip of d.chips) {
-    // `tone` is a ROLE NAME the module chose, never a colour and never a
-    // state worked out here. An unknown tone draws in the body colour rather
-    // than being dropped, so a new one shows up as a plain chip instead of
-    // vanishing off the page.
+  for (const chip of list) {
     chips.appendChild(el("span", "chip" + (chip.tone ? " " + chip.tone : ""),
                          chip.text));
   }
-  head.appendChild(chips);
+  return chips;
+}
+
+// ONE STEP ON THE PATH, COLLAPSED BY DEFAULT. The summary carries the step's
+// place on the path, its name, where the family stands on it and the chips;
+// the body carries the reasons and every gain. `d.rank` is the module's
+// number and is never counted off the position this loop drew the row at.
+// `d.state` is the module's word for where the family stands and only picks
+// a class, so an outgrown step can be drawn quieter than the next one.
+function dgnCard(d) {
+  const card = el("details", "chr-card dgn-card dgn-" + d.state);
+  const head = document.createElement("summary");
+  head.appendChild(el("span", "dgn-rank", d.rank));
+  head.appendChild(el("span", "dgn-name", d.name));
+  head.appendChild(el("span", "dgn-sum", d.state_line));
+  head.appendChild(dgnChips(d.chips));
   card.appendChild(head);
   const body = el("div", "dgn-body");
-  dgnNote(body, d.source_line);
-  dgnNote(body, d.level_line);
-  dgnNote(body, d.where_line);
-  dgnNote(body, d.entry_line);
-  dgnNote(body, d.tie_line);
+  dgnNote(body, d.overseer.line);
+  dgnNote(body, d.raid_line);
+  dgnNote(body, d.runs_line);
+  dgnNote(body, d.family_line);
+  dgnNote(body, d.guild_line);
   for (const found of d.members) body.appendChild(dgnMember(found));
   card.appendChild(body);
   return card;
 }
 
+// What lies off the classic path: a name, the module's count sentence and its
+// chips, all inside one closed box so it never reads as a next step.
+function dgnOffPath(f) {
+  const box = el("details", "chr-card dgn-card dgn-off");
+  const head = document.createElement("summary");
+  head.appendChild(el("span", "dgn-rank", ""));
+  head.appendChild(el("span", "dgn-sum", f.off_path_line));
+  box.appendChild(head);
+  const body = el("div", "dgn-body");
+  for (const d of f.off_path) {
+    const row = el("div", "dgn-who");
+    row.appendChild(el("div", "sect", d.name));
+    row.appendChild(el("div", "dgn-why", d.line));
+    row.appendChild(dgnChips(d.chips));
+    body.appendChild(row);
+  }
+  box.appendChild(body);
+  return box;
+}
+
+// ONE FAMILY: who they are, what is next, the upgrades for them and for their
+// guild, then the path in the module's order.
+function dgnFamily(f) {
+  const box = el("div", "dgn-family");
+  box.appendChild(el("h3", "dgn-title", f.title));
+  box.appendChild(el("p", "chr-body", f.who_line));
+  box.appendChild(el("p", "dgn-next", f.next_line));
+  dgnNote(box, f.family_upgrades);
+  dgnNote(box, f.guild_upgrades);
+  const list = el("div", "dgn-list");
+  if (f.behind_line) {
+    // The start of the path, already behind them, folded into one closed box
+    // so "next" is the first thing under the family's name.
+    const back = el("details", "chr-card dgn-card dgn-fold");
+    const head = document.createElement("summary");
+    head.appendChild(el("span", "dgn-rank", ""));
+    head.appendChild(el("span", "dgn-sum", f.behind_line));
+    back.appendChild(head);
+    const inner = el("div", "dgn-list");
+    for (const d of f.behind) inner.appendChild(dgnCard(d));
+    back.appendChild(inner);
+    list.appendChild(back);
+  }
+  for (const d of f.steps) list.appendChild(dgnCard(d));
+  if (f.off_path_line) list.appendChild(dgnOffPath(f));
+  box.appendChild(list);
+  return box;
+}
+
 function dgnRender(p) {
   dgnhead.textContent = p.line;
   dgnhead.className = "ds-head";
-  dgnfamily.textContent = p.family_line;
-  // WHAT THE LIST HAD TO WORK WITH. A list that is simply short reads exactly
-  // like a complete one, so the count of what was offered is the only thing
-  // that can tell a reader their dungeon was never listed rather than empty.
-  dgncoverage.textContent = p.coverage;
+  dgnrunnable.textContent = p.runnable;
   dgnorder.textContent = p.order;
-  // The basis describes how a list was built, so it must not stand over one
-  // that was not built at all.
+  // The basis describes how a path was built, so it must not stand under a
+  // page where none was.
   dgnbasis.textContent = p.empty_note || p.basis;
-  dgnlist.replaceChildren();
-  for (const d of p.dungeons) dgnlist.appendChild(dgnCard(d));
+  dgnfamilies.replaceChildren();
+  for (const f of p.families) dgnfamilies.appendChild(dgnFamily(f));
 }
 
 // ONE PULL AT A TIME, AND A CLOCK ON IT. These are one guard and not two.
