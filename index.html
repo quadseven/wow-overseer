@@ -1322,7 +1322,7 @@
   .cn-cols { display:grid; gap:14px;
              grid-template-columns:repeat(auto-fit, minmax(320px, 1fr));
              align-items:start; }
-  #cnlines { display:grid; gap:8px; }
+  .cn-lines { display:grid; gap:8px; }
   /* Tighter than the shared card: a council line is one sentence, and eight
      of them at card padding is a page of scrolling on a phone. */
   .cn-line { border-radius:12px; padding:14px 16px; }
@@ -1334,7 +1334,7 @@
      "this works" in, and a decision that carried is the one thing on this
      view that did. It is a panel and not a chip: the decision is a sentence,
      and the vote beside it is the part a reader checks. */
-  #cnagreed { margin-top:12px; }
+  .cn-agreedslot { margin-bottom:12px; }
   .cn-agreed { background:var(--pale-green); border:1px solid var(--accent);
                border-radius:14px; padding:16px 18px; }
   .cn-agreed .lbl { font-family:var(--mono); font-size:10px; font-weight:700;
@@ -1342,17 +1342,39 @@
   .cn-agreed .what { margin-top:6px; font-family:var(--display);
                      font-weight:700; font-stretch:125%; font-size:1.05rem;
                      line-height:1.3; color:var(--ink); }
-  .cn-agreed .vote { margin-top:8px; font-family:var(--mono); font-size:11px;
-                     letter-spacing:.12em; color:var(--deep-green); }
+  /* THE CARD IS SENTENCES NOW, not a status word over a count. The operator
+     could not read "CARRIED / ... / 1 OF 5 SPOKE"; what they needed was who
+     proposed it, who spoke, when, and whether anything is happening because
+     of it, and council.py writes each of those as a sentence. */
+  .cn-agreed .who, .cn-agreed .when, .cn-agreed .next {
+    margin-top:8px; color:var(--ink); font-size:13px; line-height:1.55; }
+  .cn-agreed .when { font-family:var(--mono); font-size:11px;
+                     letter-spacing:.08em; color:var(--deep-green); }
+  /* In effect or not is said in words first; the colour only repeats it.
+     Both inks are fixed tokens because this panel keeps one ground in both
+     themes (below). */
+  .cn-agreed .next { font-weight:700; }
+  .cn-agreed .next.is-on { color:var(--deep-green); }
+  .cn-agreed .next.is-off { color:var(--amber-text); }
+  .cn-agreed .older { margin:8px 0 0; padding-left:1.1rem; color:var(--ink);
+                      font-size:12px; line-height:1.5; }
+  .cn-agreed details { margin-top:10px; color:var(--ink); font-size:13px; }
+  .cn-agreed summary { cursor:pointer; font-family:var(--mono); font-size:11px;
+                       letter-spacing:.08em; color:var(--deep-green); }
+  .cn-agreed .said { margin-top:6px; line-height:1.5; }
+  /* ONE BLOCK PER FAMILY, both factions, one above the other. */
+  .cn-family + .cn-family { margin-top:26px; }
+  .cn-famtitle { margin:0 0 8px; font-family:var(--display); font-weight:700;
+                 font-stretch:125%; font-size:1.2rem; color:var(--on-card); }
+  .cn-note { max-width:72ch; margin:0 0 10px; color:var(--on-card-dim);
+             font-size:13px; line-height:1.55; }
   /* The consensus block keeps ONE ground in both themes, and says so. Its
      colours are the palette's success pair (pale green under deep green) and
      they read correctly on either page ground; re-tinting it for dark would
      be inventing a second thing green means. */
-  #cnquiet, #cnundecided { max-width:72ch; margin-top:10px;
-                           color:var(--on-card-dim); font-size:13px;
-                           line-height:1.55; }
-  #cnquiet[hidden], #cnundecided[hidden] { display:none; }
-  #cnplaces { display:grid; gap:10px; }
+  .cn-quiet { max-width:72ch; margin-top:10px; color:var(--on-card-dim);
+              font-size:13px; line-height:1.55; }
+  .cn-places { display:grid; gap:10px; }
   /* .cn-place takes the shared card recipe from the furniture above. */
   .cn-place .top { display:flex; align-items:baseline; gap:.8rem;
                    flex-wrap:wrap; }
@@ -3192,26 +3214,14 @@
   <div id="gcrlist"></div>
   <p id="gcrbasis" class="chr-body"></p>
 </section>
-<!-- THE COUNCIL. The family working out what today is for: the transcript on
-     the left in the family's own speaking order, what it carried underneath
-     it, and on the right what they know about where to go next. Every
-     sentence, every gate word and the ORDER of the transcript come from
-     council.py; this markup holds no judgement of its own. -->
+<!-- THE COUNCIL. One block per family, both factions: what the family last
+     decided and whether it is in effect, the last sitting in the family's own
+     speaking order, and where they could go next. Every sentence, every gate
+     word and the ORDER of the transcript come from council.py; this markup
+     holds no judgement of its own. -->
 <section id="council">
   <div id="cnhead" class="ds-head">reaching the world...</div>
-  <div class="cn-cols">
-    <div>
-      <div class="ds-rule"><span class="ix">01</span><span class="ln"></span><span class="lb">the last sitting</span></div>
-      <div id="cnlines"></div>
-      <p id="cnquiet" hidden></p>
-      <div id="cnagreed"></div>
-      <p id="cnundecided" hidden></p>
-    </div>
-    <div>
-      <div class="ds-rule"><span class="ix">02</span><span class="ln"></span><span class="lb">what they know drops where</span></div>
-      <div id="cnplaces"></div>
-    </div>
-  </div>
+  <div id="cnfamilies"></div>
 </section>
 <!-- THE EYE. A server rollup for a server that is one family, and the point
      of it is what it refuses to draw: no population curve, no guild ladder,
@@ -8443,41 +8453,59 @@ setInterval(() => { if (view === CHRONICLE_VIEW) pollRecap(); }, 30000);
 
 const cnsection = document.getElementById("council");
 const cnhead = document.getElementById("cnhead");
-const cnlines = document.getElementById("cnlines");
-const cnquiet = document.getElementById("cnquiet");
-const cnagreed = document.getElementById("cnagreed");
-const cnundecided = document.getElementById("cnundecided");
-const cnplaces = document.getElementById("cnplaces");
+const cnfamilies = document.getElementById("cnfamilies");
 
-function renderCouncilLines(lines) {
-  cnlines.replaceChildren();
+function renderCouncilLines(into, lines) {
   // NO SORT, NO REVERSE, NO COMPARATOR. See the banner above.
   for (const line of lines || []) {
     const box = el("div", "cn-line");
     box.appendChild(el("div", "cn-who h-" + line.hue, line.who));
     box.appendChild(el("div", "cn-said", line.text));
-    cnlines.appendChild(box);
+    into.appendChild(box);
   }
 }
 
+// WHAT THEY DECIDED, as sentences. What, who proposed it and who spoke,
+// when, and whether it is in effect: each is a line council.py wrote, and
+// the lines of the sitting that decided it sit folded underneath.
 function renderConsensus(agreed) {
-  cnagreed.replaceChildren();
-  if (!agreed) return;
   const box = el("div", "cn-agreed");
-  box.appendChild(el("div", "lbl", "CARRIED"));
+  box.appendChild(el("div", "lbl", agreed.label));
   box.appendChild(el("div", "what", agreed.decision));
-  box.appendChild(el("div", "vote", agreed.vote));
-  cnagreed.appendChild(box);
+  box.appendChild(el("div", "who", agreed.who_line));
+  if (agreed.when_line) box.appendChild(el("div", "when", agreed.when_line));
+  const state = agreed.in_effect === true ? " is-on"
+    : agreed.in_effect === false ? " is-off" : "";
+  box.appendChild(el("div", "next" + state, agreed.next_line));
+  if ((agreed.older || []).length) {
+    const list = el("ul", "older");
+    for (const line of agreed.older) list.appendChild(el("li", "", line));
+    const more = el("details");
+    more.appendChild(el("summary", "", "other goals still marked open"));
+    more.appendChild(list);
+    box.appendChild(more);
+  }
+  if ((agreed.sitting || []).length) {
+    const said = el("details");
+    said.appendChild(el("summary", "", "what was said at that sitting"));
+    for (const line of agreed.sitting) {
+      const one = el("div", "said");
+      one.appendChild(el("span", "cn-who h-" + line.hue, line.who + " "));
+      one.appendChild(el("span", "", line.text));
+      said.appendChild(one);
+    }
+    box.appendChild(said);
+  }
+  return box;
 }
 
 // A place, its gate, what the family has watched drop there, and whether to
 // go in anyway. The gate is a WORD - "READY", "4 LEVELS SHORT" - so it
 // survives a screenshot, a colourblind reader and being read out loud; the
 // hue only repeats what the word already says.
-function renderPlaces(places) {
-  cnplaces.replaceChildren();
+function renderPlaces(into, places) {
   if (!(places || []).length) {
-    cnplaces.appendChild(el("div", "cn-place",
+    into.appendChild(el("div", "cn-place",
       "Nowhere to say anything about yet."));
     return;
   }
@@ -8498,18 +8526,54 @@ function renderPlaces(places) {
       box.appendChild(el("div", "none", "nothing has come out of here yet"));
     }
     box.appendChild(el("div", "verdict", p.verdict));
-    cnplaces.appendChild(box);
+    into.appendChild(box);
   }
 }
 
+function councilRule(ix, label) {
+  const rule = el("div", "ds-rule");
+  rule.appendChild(el("span", "ix", ix));
+  rule.appendChild(el("span", "ln"));
+  rule.appendChild(el("span", "lb", label));
+  return rule;
+}
+
+// ONE FAMILY. The title, a note when this family holds no councils, then two
+// columns: what they decided and the last sitting, and where they could go.
+function renderCouncilFamily(f) {
+  const block = el("div", "cn-family");
+  block.appendChild(el("h3", "cn-famtitle", f.title));
+  if (f.note) block.appendChild(el("p", "cn-note", f.note));
+  const cols = el("div", "cn-cols");
+  const left = el("div");
+  if (f.holds_council) {
+    left.appendChild(councilRule("01", "what they decided"));
+    const slot = el("div", "cn-agreedslot");
+    if (f.consensus) slot.appendChild(renderConsensus(f.consensus));
+    if (f.undecided) slot.appendChild(el("p", "cn-quiet", f.undecided));
+    left.appendChild(slot);
+    left.appendChild(councilRule("02", "the last sitting"));
+    const lines = el("div", "cn-lines");
+    renderCouncilLines(lines, f.transcript);
+    left.appendChild(lines);
+    if (f.quiet) left.appendChild(el("p", "cn-quiet", f.quiet));
+    cols.appendChild(left);
+  }
+  const right = el("div");
+  right.appendChild(councilRule(f.holds_council ? "03" : "01",
+                                "where they could go next"));
+  const places = el("div", "cn-places");
+  renderPlaces(places, f.prospects);
+  right.appendChild(places);
+  cols.appendChild(right);
+  block.appendChild(cols);
+  return block;
+}
+
 function renderCouncil(p) {
-  renderCouncilLines(p.transcript);
-  cnquiet.textContent = p.quiet || "";
-  cnquiet.hidden = !p.quiet;
-  renderConsensus(p.consensus);
-  cnundecided.textContent = p.undecided || "";
-  cnundecided.hidden = !p.undecided;
-  renderPlaces(p.prospects);
+  cnfamilies.replaceChildren();
+  // In the order the payload lists them. The families are not re-ranked here.
+  for (const f of p.families || []) cnfamilies.appendChild(renderCouncilFamily(f));
   cnhead.textContent = "read " + new Date().toLocaleTimeString();
   cnhead.className = "ds-head";
 }

@@ -1334,23 +1334,41 @@ def _ensure_stream_store() -> None:
 # lines. Enough to hold the last sitting several times over, so the module can
 # find the sitting boundary rather than being handed a truncated one.
 _COUNCIL_LINES = 60
+# Who is in which family, and what the leader's job reads. The thinner read is
+# a realm whose roster predates the job and campaign columns: the families
+# still split, and a dungeon decision says its state could not be read.
+_COUNCIL_FAMILIES = (
+    "SELECT name, family, enabled, `lead`, job, dungeon_runs_wanted, "
+    "dungeon_runs_done FROM overseer_roster"
+)
+_COUNCIL_FAMILIES_THIN = "SELECT name, family, enabled, `lead` FROM overseer_roster"
 
 
 def _fetch_council() -> dict:
     """Everything the Council view reads, in one connection.
 
-    Names come from bonds via family.roster(), never from the request, so
-    every roster clause is a fixed IN list of five with no user input in it.
+    Names come from overseer_roster (both families) and fall back to bonds
+    via family.roster(), never from the request, so every roster clause is a
+    fixed IN list with no user input in it.
 
     Not subject to the 60s snapshot freshness rule and deliberately so: a
     council is a thing that HAPPENED, and it is still worth reading an hour
     after everybody logged out.
+
+    THE ROSTER IS READ FIRST because it answers two questions the view could
+    not ask before: who is in each family (the Horde five have no persona in
+    bonds, so bonds alone never shows them), and what the family leader's job
+    column reads, which is how a dungeon decision is checked for being in
+    effect rather than only announced.
     """
-    names = family.roster()
-    holes = ", ".join(["%s"] * len(names))
     conn = _connect()
     try:
         with conn.cursor() as cur:
+            roster_rows = _guarded(cur, _COUNCIL_FAMILIES, (),
+                                   _COUNCIL_FAMILIES_THIN, "overseer_roster")
+            names = sorted({str(r["name"]) for r in roster_rows}
+                           | set(family.roster()))
+            holes = ", ".join(["%s"] * len(names))
             # S608: `holes` is a run of placeholders sized by the roster, and
             # every VALUE is bound by the driver on the line below.
             thought_rows = _guarded(
@@ -1372,7 +1390,7 @@ def _fetch_council() -> dict:
             # member at level 0 and every door shut.
             level_rows = _guarded(
                 cur,
-                f"SELECT name, level FROM characters WHERE name IN ({holes})",  # noqa: S608
+                f"SELECT name, level, race FROM characters WHERE name IN ({holes})",  # noqa: S608
                 tuple(names), "", "characters")
             wanted = {int(r["quest_id"]) for r in goal_rows
                       if int(r.get("quest_id") or 0)}
@@ -1389,7 +1407,8 @@ def _fetch_council() -> dict:
     finally:
         conn.close()
     return {"thought_rows": thought_rows, "goal_rows": goal_rows,
-            "level_rows": level_rows, "quest_titles": quest_titles}
+            "level_rows": level_rows, "quest_titles": quest_titles,
+            "roster_rows": roster_rows}
 
 
 def _fetch_eye() -> dict:

@@ -668,53 +668,279 @@ def transcript(rows: list[dict]) -> list[dict]:
     } for row in ordered]
 
 
+# WHICH PLACE A DUNGEON GOAL NAMES. The goal row carries the job keyword in
+# `skill_name` (the same keyword mod-overseer's DoJob reads for
+# job='dungeon:<keyword>'), and a keyword is not something a reader should
+# have to decode. The map's own name comes from achievements.dungeon_name, the
+# one table that names dungeons; only the WING is written here, because four
+# of these keywords share one map.
+DUNGEON_KEYWORDS = {
+    "deadmines": (36, ""),
+    "shadowfang": (33, ""),
+    "stockades": (34, ""),
+    "wailing": (43, ""),
+    "scarlet": (189, "the Graveyard"),
+    "scarlet-library": (189, "the Library"),
+    "scarlet-armory": (189, "the Armory"),
+    "scarlet-cathedral": (189, "the Cathedral"),
+    "blackrock-depths": (230, ""),
+}
+
+
+def keyword_place(keyword: str) -> str:
+    """A dungeon job keyword as a reader would say the place.
+
+    "" is the bare `dungeon` job, whose place belongs to mod-overseer, so it
+    reads as "a dungeon" rather than a guess. An unknown keyword is shown as
+    written rather than dropped: a new portal row the site has not heard of is
+    still a real place.
+    """
+    keyword = (keyword or "").strip().lower()
+    if not keyword:
+        return "a dungeon"
+    known = DUNGEON_KEYWORDS.get(keyword)
+    if known is None:
+        return keyword.replace("-", " ")
+    map_id, wing = known
+    name = achievements.dungeon_name(map_id)
+    return "%s (%s)" % (name, wing) if wing else name
+
+
+def _runs(target: int) -> str:
+    return "1 run" if target == 1 else "%d runs" % target
+
+
 def decision_line(row: dict, quest_titles: dict | None = None) -> str:
-    """What the council carried, as a sentence.
+    """What the goal asks for, as a plain sentence with a subject and a verb.
 
     Read off the goal the council persisted, which is the only part of a
     council that survives it: the ARGUMENT is written to overseer_thought in
     the model's words, and the outcome is written as a goal the supervisor can
     drive. So this reads the outcome and never tries to parse the argument.
+
+    EVERY KIND THE TABLE CAN HOLD HAS ITS OWN SENTENCE. The old fallback was
+    "<who> is to see to <kind>", which is what every dungeon goal fell into:
+    "Grug is to see to dungeon." named neither the place nor the size of the
+    campaign, and the operator could not read it.
     """
     who = str(row.get("character_name") or "").strip() or "The family"
     kind = str(row.get("kind") or "")
+    target = int(row.get("target") or 0)
     if kind == "level":
-        return "%s is to reach level %d." % (who, int(row.get("target") or 0))
+        return "The family will help %s reach level %d." % (who, target)
     if kind == "quest":
         title = (quest_titles or {}).get(int(row.get("quest_id") or 0))
         if title:
-            return "%s is to finish %s." % (who, title)
-        return "%s is to finish the quest the council picked." % who
+            return "The family will help %s finish %s." % (who, title)
+        return ("The family will help %s finish a quest the world could not "
+                "name." % who)
     if kind == "skill":
-        return "%s is to learn %s." % (
-            who, str(row.get("skill_name") or "a trade"))
-    return "%s is to see to %s." % (who, kind or "what was agreed")
+        skill = str(row.get("skill_name") or "").strip() or "a trade"
+        if target:
+            return "%s will train %s to %d." % (who, skill, target)
+        return "%s will learn %s." % (who, skill)
+    if kind == "dungeon":
+        place = keyword_place(str(row.get("skill_name") or ""))
+        if target:
+            return "%s will lead the family into %s, %s." % (
+                who, place, _runs(target))
+        return "%s will lead the family into %s." % (who, place)
+    return "%s will work on a %s goal." % (who, kind or "new")
+
+
+def _names(names: list) -> str:
+    """"Ugga", "Ugga and Og", "Ugga, Og and Bork"."""
+    names = list(names)
+    if not names:
+        return ""
+    if len(names) == 1:
+        return names[0]
+    return ", ".join(names[:-1]) + " and " + names[-1]
+
+
+def ago(seconds: float | None) -> str:
+    """How long ago, in the words a person would use. "" when unknown."""
+    if seconds is None:
+        return ""
+    seconds = max(int(seconds), 0)
+    if seconds < 90:
+        return "just now"
+    minutes = seconds // 60
+    if minutes < 90:
+        return "%d minutes ago" % minutes
+    hours = minutes // 60
+    if hours < 36:
+        return "%d hours ago" % hours
+    days = hours // 24
+    return "1 day ago" if days == 1 else "%d days ago" % days
+
+
+def deciding_sitting(rows: list[dict], decided_at) -> list[dict]:
+    """The council rows of the sitting that produced a goal, or [].
+
+    THE SITTING THAT DECIDED IT, NOT THE LAST ONE. The bridge persists the plan
+    in the same pass that writes the sitting's lines, so the goal's
+    created_at lands on or just after that sitting's last line. The page used
+    to count the speakers of the LAST sitting instead, and on the dev realm
+    that was a one-line sitting about a robe held a day after the dungeon
+    decision it was printed under.
+
+    [] means no sitting ended within SITTING_GAP before the goal: it was set
+    some other way (an order in Discord, the operator), or the sitting has
+    scrolled out of the rows this view reads. Both say "no council to show",
+    and the caller says so rather than borrowing a different sitting.
+    """
+    if decided_at is None or not hasattr(decided_at, "__sub__"):
+        return []
+    found: list[dict] = []
+    for sitting in sittings(rows):
+        last = sitting[-1]["created_at"]
+        if last <= decided_at + timedelta(minutes=1) \
+                and decided_at - last <= SITTING_GAP:
+            found = sitting
+    return found
+
+
+def _in_effect(row: dict, standing: dict | None) -> tuple[bool | None, str]:
+    """Whether a decided goal is being acted on, and the sentence saying so.
+
+    ONLY A DUNGEON GOAL CAN BE CHECKED, because it is the only kind with a
+    column to check it against: the run coordinator starts a campaign when the
+    family leader's `overseer_roster.job` reads `dungeon` or
+    `dungeon:<keyword>`, and reads nothing else. A level, quest or skill goal
+    is steered by the bridge's goal loop and has no column of its own, so the
+    sentence says what happens next rather than claiming it happened.
+
+    `standing` is {"leader": name, "job": text, "done": n, "wanted": n} for
+    the goal's family, or None when the roster could not be read.
+    """
+    kind = str(row.get("kind") or "")
+    who = str(row.get("character_name") or "") or "the family"
+    if kind != "dungeon":
+        return None, ("Next: the goal loop steers %s toward it until it is done "
+                      "or cancelled." % who)
+    place = keyword_place(str(row.get("skill_name") or ""))
+    if not standing or not standing.get("job"):
+        return None, ("Whether the family is on its way to %s could not be "
+                      "read this time." % place)
+    keyword = str(row.get("skill_name") or "").strip().lower()
+    job = str(standing["job"]).strip().lower()
+    wanted = {"dungeon:%s" % keyword} if keyword else {"dungeon"}
+    if job in wanted:
+        done = standing.get("done")
+        of = standing.get("wanted")
+        tally = (" %d of %d runs done." % (done, of)
+                 if done is not None and of else "")
+        return True, ("In effect: %s's job reads %s, so the run coordinator is "
+                      "working on it.%s" % (standing["leader"], job, tally))
+    return False, ("Not in effect yet: %s's job still reads %s, and the run "
+                   "coordinator starts %s only when it reads %s. Nobody is "
+                   "heading there." % (standing["leader"], job, place,
+                                       sorted(wanted)[0]))
+
+
+def _older(active: list[dict], won: dict,
+           quest_titles: dict | None, now: datetime | None) -> list[str]:
+    """Every other goal still marked active, newest first, one line each."""
+    out = []
+    for row in sorted(active, key=lambda r: r.get("created_at") or "",
+                      reverse=True):
+        if row is won:
+            continue
+        when = row.get("created_at")
+        since = (ago((now - when).total_seconds())
+                 if now is not None and hasattr(when, "year") else "")
+        out.append(decision_line(row, quest_titles)
+                   + (" Set %s." % since if since else ""))
+    return out
 
 
 def consensus(goal_rows: list[dict], lines: list[dict],
-              quest_titles: dict | None = None) -> dict | None:
-    """The decision and the vote, or None when nothing is on record.
+              quest_titles: dict | None = None, *,
+              thought_rows: list[dict] | None = None,
+              members: list[str] | None = None,
+              standing: dict | None = None,
+              now: datetime | None = None) -> dict | None:
+    """The newest decision, in plain words, or None when nothing is on record.
 
-    THE VOTE IS WHO SPOKE, and it says so in those words. The tally itself is
-    not written down anywhere - `hold` scores the proposals and then throws
-    the numbers away, keeping only the winner - so a count of ayes here would
-    be a number this module invented about a vote it did not see. How many of
-    the family turned up to argue is a fact it does have.
+    WHAT A READER NEEDS FROM THE CARD, in the order they need it: what was
+    decided, who proposed it, who else spoke and who did not, when, and
+    whether it is in effect. Every one of those is a sentence here.
+
+    WHO PROPOSED IT IS STRUCTURAL, NOT PARSED. council._script always closes a
+    sitting with the winner's proposer saying "Then it is settled", so the
+    speaker of the deciding sitting's LAST line is the proposer, whatever words
+    the voice layer put in their mouth.
+
+    WHO AGREED IS NOT RECORDED, and the card does not pretend it is. hold()
+    scores the backing and keeps only the winner, and the backing lines are
+    voiced by a language model, so reading "yes" out of them would be parsing
+    an argument this module promised never to parse. What IS known is who
+    spoke at that sitting and who did not, and that is what the card says.
+
+    `lines` is kept for the callers that still hand in only a transcript: with
+    no `thought_rows`, the deciding sitting is looked for in those lines.
     """
     active = [row for row in goal_rows
               if str(row.get("status") or "") == "active"]
+    if members is not None:
+        allowed = set(members)
+        active = [row for row in active
+                  if str(row.get("character_name") or "") in allowed]
     if not active:
         return None
     won = max(active, key=lambda row: row.get("created_at") or "")
-    spoke = len({line["who"] for line in lines})
+    decided_at = won.get("created_at")
+    family = list(members) if members is not None else list(bonds.FAMILY)
+
+    source = thought_rows if thought_rows is not None else [
+        {"character_name": line["who"], "text": line["text"],
+         "created_at": datetime.fromisoformat(line["at"])}
+        for line in lines if line.get("at")]
+    sitting = deciding_sitting(source, decided_at)
+    said = transcript(sitting) if sitting else []
+    speakers = [line["who"] for line in said]
+    spoke = list(dict.fromkeys(speakers))
+    proposer = (bonds.canon(sitting[-1]["character_name"]) or "") if sitting else ""
+    silent = [name for name in bonds.speaking_order(family)
+              if name not in spoke] if family else []
+
+    if sitting:
+        label = "DECIDED BY THE COUNCIL"
+        others = [name for name in spoke if name != proposer]
+        who_line = "%s proposed it." % proposer
+        if others:
+            who_line += " %s also spoke." % _names(others)
+        if silent:
+            who_line += " %s did not speak at that sitting." % _names(silent)
+        who_line += (" The council does not record a vote; the proposal "
+                     "with the most backing carries.")
+    else:
+        label = "SET OUTSIDE THE COUNCIL"
+        who_line = ("No council sitting ended just before this goal was set, "
+                    "so it came from somewhere else: an order in Discord or "
+                    "from the operator. Nobody voted on it.")
+
+    acted, next_line = _in_effect(won, standing)
+    since = (ago((now - decided_at).total_seconds())
+             if now is not None and hasattr(decided_at, "year") else "")
     return {
+        "label": label,
         "decision": decision_line(won, quest_titles),
         "beneficiary": str(won.get("character_name") or ""),
         "kind": str(won.get("kind") or ""),
-        "spoke": spoke,
-        "family": len(bonds.FAMILY),
-        "vote": "%d OF %d SPOKE" % (spoke, len(bonds.FAMILY)),
-        "at": _iso(won.get("created_at")),
+        "proposer": proposer,
+        "spoke": len(spoke),
+        "speakers": spoke,
+        "silent": silent,
+        "family": len(family),
+        "who_line": who_line,
+        "when_line": ("Set %s." % since) if since else "",
+        "in_effect": acted,
+        "next_line": next_line,
+        "sitting": said,
+        "older": _older(active, won, quest_titles, now),
+        "at": _iso(decided_at),
     }
 
 
@@ -992,32 +1218,151 @@ def undecided_line(agreed: dict | None) -> str:
             "simply not written as a goal, so this block has nothing to show.")
 
 
+# Race -> faction, 3.3.5a, the same two sets core.py counts a census by.
+_ALLIANCE_RACES = frozenset({1, 3, 4, 7, 11})
+_HORDE_RACES = frozenset({2, 5, 6, 8, 10})
+
+
+def _faction(level_rows: list[dict], names: list[str]) -> str:
+    """"Alliance", "Horde" or "" off the family's own races."""
+    races = {int(row.get("race") or 0) for row in level_rows
+             if str(row.get("name") or "") in set(names)}
+    if races and races <= _ALLIANCE_RACES:
+        return "Alliance"
+    if races and races <= _HORDE_RACES:
+        return "Horde"
+    return ""
+
+
+def families_of(roster_rows: list[dict] | None) -> list[tuple[str, list[str]]]:
+    """[(family, [names, leader first])] off overseer_roster, bonds' first.
+
+    THE ROSTER, NOT bonds, says who is in the world: bonds holds personas for
+    ONE family, and the second family (the Horde five) is enrolled in
+    overseer_roster with no persona at all. With no roster rows the answer
+    degrades to bonds' own family, which is what this view always showed.
+    """
+    grouped: dict[str, list[tuple[int, str]]] = {}
+    for row in roster_rows or []:
+        fam = str(row.get("family") or "").strip()
+        name = str(row.get("name") or "").strip()
+        if not fam or not name:
+            continue
+        grouped.setdefault(fam, []).append(
+            (0 if int(row.get("lead") or 0) else 1, name))
+    if not grouped:
+        roster = bonds.speaking_order(list(bonds.FAMILY))
+        return [(roster[0] if roster else "", roster)]
+    out = [(fam, [name for _, name in sorted(members)])
+           for fam, members in grouped.items()]
+    # The family bonds knows first, so the tab opens on the one that holds
+    # councils; then by name, so the order does not move between polls.
+    out.sort(key=lambda pair: (not any(bonds.canon(n) for n in pair[1]),
+                               pair[0]))
+    return out
+
+
+def _standing(roster_rows: list[dict] | None, names: list[str]) -> dict | None:
+    """The family leader's job and campaign counter, or None if unread."""
+    rows = [row for row in roster_rows or []
+            if str(row.get("name") or "") in set(names)
+            and int(row.get("enabled", 1) or 0)]
+    if not rows or "job" not in rows[0]:
+        return None
+    lead = next((row for row in rows if int(row.get("lead") or 0)), rows[0])
+
+    def number(key):
+        value = lead.get(key)
+        return None if value is None else int(value)
+
+    return {"leader": str(lead["name"]),
+            "job": str(lead.get("job") or "quest"),
+            "done": number("dungeon_runs_done"),
+            "wanted": number("dungeon_runs_wanted")}
+
+
+NO_COUNCIL = (
+    "%s's family does not hold councils. A council needs every speaker to "
+    "have a written persona, and only one family has them, so nothing on "
+    "this tab was decided for %s's family. Where they could go next is still "
+    "worked out from their levels below.")
+
+
+def _family_view(fam: str, names: list[str], thought_rows: list[dict],
+                 goal_rows: list[dict], level_rows: list[dict],
+                 cards: list[dict], quest_titles: dict | None,
+                 roster_rows: list[dict] | None, now: datetime) -> dict:
+    """One family's half of the tab."""
+    holds = any(bonds.canon(name) for name in names)
+    mine = [row for row in level_rows
+            if str(row.get("name") or "") in set(names)]
+    if holds:
+        lines = transcript(thought_rows)
+        agreed = consensus(goal_rows, lines, quest_titles,
+                           thought_rows=thought_rows, members=names,
+                           standing=_standing(roster_rows, names), now=now)
+        quiet = quiet_line(lines)
+        undecided = undecided_line(agreed)
+        note = ""
+    else:
+        lines, agreed, quiet, undecided = [], None, "", ""
+        note = NO_COUNCIL % (fam, fam)
+    # What has been SEEN to drop comes from the Chronicle's cards, which are
+    # built for the family bonds knows. Handing them to the other family
+    # would credit it with runs it never did.
+    faction = _faction(level_rows, names)
+    return {
+        "family": fam,
+        "title": ("%s's family, %s" % (fam, faction)) if faction
+                 else "%s's family" % fam,
+        "faction": faction,
+        "members": names,
+        "holds_council": holds,
+        "note": note,
+        "transcript": lines,
+        "spoke": sorted({line["who"] for line in lines}),
+        "consensus": agreed,
+        "quiet": quiet,
+        "undecided": undecided,
+        "prospects": prospects(mine, cards if holds else []),
+    }
+
+
 def build_council(thought_rows: list[dict], goal_rows: list[dict],
                   level_rows: list[dict], cards: list[dict],
                   quest_titles: dict | None = None,
-                  now: datetime | None = None) -> dict:
+                  now: datetime | None = None,
+                  roster_rows: list[dict] | None = None) -> dict:
     """Rows in, the Council tab's JSON out.
 
     thought_rows  overseer_thought rows with source 'council', any order
     goal_rows     overseer_goal rows, any status
-    level_rows    name -> level for the family, from `characters`
+    level_rows    name, level and race for every rostered character
     cards         the Chronicle's cards, for what the family has seen drop
     quest_titles  quest id -> LogTitle, so a quest decision can be named
     now           the clock, injectable so the suite can stand still
+    roster_rows   overseer_roster rows: who is in which family, and the
+                  leader's job, which is how a dungeon decision is checked
 
     EVERY ONE OF THOSE MAY BE EMPTY, exactly as build_agenda's may. A realm
     whose schema predates a table hands in [] for it and gets a thinner view,
     never an exception.
+
+    `families` is the tab: one entry per family, both factions. The top-level
+    keys repeat the first family's for any older reader of this payload.
     """
     now = now or datetime.now()
-    lines = transcript(thought_rows)
-    agreed = consensus(goal_rows, lines, quest_titles)
+    families = [_family_view(fam, names, thought_rows, goal_rows, level_rows,
+                             cards, quest_titles, roster_rows, now)
+                for fam, names in families_of(roster_rows)]
+    first = families[0]
     return {
         "generated_at": _iso(now),
-        "transcript": lines,
-        "spoke": sorted({line["who"] for line in lines}),
-        "consensus": agreed,
-        "quiet": quiet_line(lines),
-        "undecided": undecided_line(agreed),
-        "prospects": prospects(level_rows, cards),
+        "families": families,
+        "transcript": first["transcript"],
+        "spoke": first["spoke"],
+        "consensus": first["consensus"],
+        "quiet": first["quiet"],
+        "undecided": first["undecided"],
+        "prospects": first["prospects"],
     }
