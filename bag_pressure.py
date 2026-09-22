@@ -698,6 +698,27 @@ def family_gifts(
     )
 
 
+def holder_equips(gear_rows, equipped_rows, names, keep_names=()) -> tuple:
+    """The carried pieces their own holder should put on now (#146).
+
+    An adapter and nothing else, the same contract `family_gifts` keeps:
+    `gear.equips` decides, from `gear.claimant` naming the holder. The
+    owner's never-dispose mark is honoured here too, because a marked item is
+    one to leave alone and wearing it is not leaving it alone.
+    """
+    kept = [
+        row for row in gear_rows if not owner_keeps(row.get("name", ""), keep_names)
+    ]
+    characters = gear.characters_from_rows(equipped_rows, names)
+    return gear.equips(gear.holdings_from_rows(kept), characters)
+
+
+# Re-exported so the bridge never imports gear itself (this module is its one
+# adapter); see gear.equips_to_queue and gear.equip_entry.
+equips_to_queue = gear.equips_to_queue
+equip_entry = gear.equip_entry
+
+
 def guild_gear_gifts(
     gear_holdings,
     characters,
