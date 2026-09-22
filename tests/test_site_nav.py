@@ -194,7 +194,8 @@ class ThePanelsReadTheFamilyOnScreen(unittest.TestCase):
     def test_the_needs_poll_names_the_family_and_drops_stale_replies(self):
         poll = between(PAGE, "async function pollNeeds()", "\n}\n")
         self.assertIn('u("/api/needs" + familyQuery(asked))', poll)
-        self.assertIn("if (asked !== familyKey || view !== FAMILY_VIEW) return;", poll)
+        self.assertIn("if ((p.family || asked) !== familyKey || view !== FAMILY_VIEW) return;",
+                      poll)
 
     def test_a_family_tab_is_an_address(self):
         self.assertIn('return v === FAMILY_VIEW ? familyKey : "";', PAGE)

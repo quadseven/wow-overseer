@@ -768,7 +768,10 @@ class TheQuestBoard(unittest.TestCase):
         poll = self.block[self.block.index("async function pollQuests"):]
         poll = poll[:poll.index("unreachable")]
         self.assertIn('u("/api/questlog" + familyQuery(asked))', poll)
-        self.assertIn("if (asked !== familyKey || view !== FAMILY_VIEW) return;", poll)
+        # Judged by the family the server DREW (#161): a bare load asks for ""
+        # and /api/family resolves the key to a name before this reply lands.
+        self.assertIn("if ((p.family || asked) !== familyKey || view !== FAMILY_VIEW) return;",
+                      poll)
 
     def test_the_endpoint_is_wired_into_the_route_table(self):
         """do_GET is a lookup and nothing else, so a handler that is never
