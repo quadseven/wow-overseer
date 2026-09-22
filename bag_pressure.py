@@ -1055,3 +1055,42 @@ def recipe_gifts(
         position_rows=position_rows,
         free_slots=free_slots,
     )
+
+
+# ---------------------------------------------------------------------------
+# WHAT JEV'S SHADOW PASS READS OFF GEAR (#95)
+#
+# jev_items asks Jev the questions the gear passes answer, and records both
+# answers. It needs the same Holdings and CharacterStates, and gear.py's own
+# reasons, so it reads them HERE: this module stays the one place a world row
+# becomes a Holding, and jev_items never grows a second opinion on gear.
+
+WEAPON_CLASS = gear.ITEM_CLASS_WEAPON
+
+
+def family_characters(equipped_rows, names) -> list:
+    """gear.CharacterState per family member, as family_fits reads them."""
+    return gear.characters_from_rows(equipped_rows, names)
+
+
+def carried_holdings(gear_rows) -> list:
+    """gear.Holding per carried piece, as family_fits reads them."""
+    return gear.holdings_from_rows(gear_rows)
+
+
+def can_wear(holding, character) -> bool:
+    """Class mask, armour training and required level: gear.py's rules for
+    whether a character can put a piece on at all, better or not."""
+    return bool(
+        gear.usable_by_class(holding, character.class_id)
+        and gear.wearable_armor(holding, character)
+        and int(character.level) >= int(holding.required_level)
+    )
+
+
+def wear_reason(holding, character) -> tuple:
+    """gear.py's (yes, why) for this character: `would_wear` for the holder,
+    who needs no hand-off, and `is_upgrade_for` for anybody else."""
+    if character.name == holding.holder:
+        return gear.would_wear(holding, character)
+    return gear.is_upgrade_for(holding, character)

@@ -76,6 +76,10 @@ COLLATIONS = {
     # `DEFAULT CHARSET=utf8mb4` form came out utf8mb4_0900_ai_ci, which is where
     # the split above comes from in the first place.
     "overseer_build": "utf8mb4_unicode_ci",
+    # Bridge-owned (#95), and fixed the same way: its CREATE TABLE in
+    # bridge._ensure_jev_store NAMES utf8mb4_0900_ai_ci, the collation every
+    # other bridge-owned table carries, rather than inheriting a default.
+    "overseer_jev_judgment": "utf8mb4_0900_ai_ci",
     # Not an overseer table, and the reason every join to it is safe. A binary
     # collation wins against any non-binary one of the same charset without
     # anybody writing COLLATE.
@@ -139,6 +143,22 @@ STRING_COLUMNS = {
     "overseer_thought": frozenset({"character_name", "source", "text"}),
     "overseer_trade": frozenset(
         {"character_name", "reason", "skill_name", "status", "verb"}
+    ),
+    # From its own DDL (bridge._ensure_jev_store): every VARCHAR column.
+    "overseer_jev_judgment": frozenset(
+        {
+            "heuristic",
+            "heuristic_why",
+            "holder",
+            "item_name",
+            "jev",
+            "kind",
+            "mode",
+            "model",
+            "probabilities",
+            "status",
+            "subject",
+        }
     ),
 }
 

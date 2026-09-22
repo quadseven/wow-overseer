@@ -50,6 +50,8 @@ import gatherband
 import craft_supply
 import dungeonprogression
 import item_plan
+import jev
+import jev_items
 import jobs
 import kin
 import learnaim
@@ -127,6 +129,12 @@ LLM_URL = os.environ.get(
 )
 LLM_MODEL = os.environ.get("LLM_MODEL", "spark:warm-any")
 LLM_TIMEOUT = float(os.environ.get("LLM_TIMEOUT_SECONDS", "120"))
+# Jev in shadow (#95): how many questions one family's pass may send, and how
+# long the comparison record is kept. The client's own knobs (timeout,
+# concurrency, model, per-kind mode) are read by jev.Client.from_env and
+# jev.mode, where they are documented.
+JEV_SHADOW_LIMIT = int(os.environ.get("JEV_SHADOW_LIMIT", "16"))
+JEV_RETENTION_DAYS = int(os.environ.get("JEV_RETENTION_DAYS", "30"))
 # What gets said in game when NOBODY in the family could answer an order Evan
 # gave - the voice is down, or none of them are in the world. Said once, by the
 # most senior of them, and in the family's own register because it is one of
@@ -3443,6 +3451,18 @@ class Bridge(discord.Client):
         # Equip rows whose outcome has already been logged, by row id, so each
         # answer is said once (#146).
         self._equip_reported: set = set()
+        # JEV, IN SHADOW (#95). One client for the process, so its cache and
+        # its in-flight limit are shared by every family. With no
+        # TYPESAFE_API_KEY it answers every question with `no_key` and the
+        # heuristic keeps deciding, which is also what it does when Jev is
+        # slow or down.
+        self._jev = jev.Client.from_env()
+        # The last comparison written per (kind, subject, item guid), so an
+        # unchanged answer is recorded once rather than every economy cycle.
+        self._jev_recorded: dict = {}
+        # One shadow pass per family at a time, held so it is never collected
+        # mid-flight (see setup_hook) and never waited on by the economy pass.
+        self._jev_tasks: dict = {}
 
     async def setup_hook(self) -> None:
         # Held, not fired and forgotten. asyncio keeps only a weak reference to
@@ -3494,6 +3514,7 @@ class Bridge(discord.Client):
         await asyncio.to_thread(_ensure_goal_store)
         await asyncio.to_thread(_ensure_sample_store)
         await asyncio.to_thread(_ensure_trade_store)
+        await asyncio.to_thread(_ensure_jev_store)
 
     async def on_message(self, message: discord.Message) -> None:
         if message.author.bot:
@@ -6904,6 +6925,11 @@ class Bridge(discord.Client):
         # town-run gate. The piece it takes off is carried from then on and
         # meets the ordinary disposition on a later cycle.
         await self._equip_upgrades(gear_rows, worn, names)
+        # AND JEV IS ASKED THE SAME QUESTIONS, IN SHADOW (#95). The same two
+        # reads again; the pass runs beside this one rather than inside it, so
+        # a slow or absent Jev never delays a sale, a hand-off or an equip.
+        # Nothing it answers is written anywhere but the comparison record.
+        self._jev_shadow(gear_rows, worn, names)
 
         if not bag_pressure.family_town_run_needed(
                 free_slots, sellable=sellable_counts):
@@ -7308,6 +7334,69 @@ class Bridge(discord.Client):
             "%d already asked inside %d minutes, %d held back",
             len(wanted), written, len(wanted) - len(queue) - len(notes),
             EQUIP_RETRY_MINUTES, len(notes),
+        )
+
+    def _jev_shadow(self, gear_rows: list, worn: list, names: list) -> None:
+        """Start this family's Jev shadow pass unless one is still running (#95).
+
+        Scheduled, not awaited: the economy pass goes on to its vendor half at
+        once. A family whose previous pass has not finished is skipped this
+        cycle rather than queued, so passes can never stack up behind a slow
+        API.
+        """
+        modes = {
+            kind: jev.effective_mode(kind, act_supported=False)
+            for kind in (jev_items.KIND_DISPOSITION, jev_items.KIND_WEAPON)
+        }
+        if all(m == jev.OFF for m in modes.values()):
+            return
+        key = tuple(sorted(names))
+        running = self._jev_tasks.get(key)
+        if running is not None and not running.done():
+            return
+        task = asyncio.create_task(
+            self._jev_shadow_once(list(gear_rows), list(worn), list(names), modes))
+        self._jev_tasks[key] = task
+        task.add_done_callback(_jev_task_done)
+
+    async def _jev_shadow_once(self, gear_rows: list, worn: list,
+                               names: list, modes: dict) -> None:
+        """Ask, compare, record. `jev_items.shadow_pass` decides everything;
+        this reads the two extra facts it needs and writes what changed."""
+        if not gear_rows or not self._jev.ready(jev_items.KIND_DISPOSITION):
+            # No key: the client says so once, and no read is spent on it.
+            return
+        worn_items = await asyncio.to_thread(_fetch_jev_worn, names)
+        entries = {int(r["entry"]) for r in gear_rows if r.get("entry")}
+        entries |= {int(r["entry"]) for r in worn_items if r.get("entry")}
+        facts = await asyncio.to_thread(_fetch_jev_item_facts, sorted(entries))
+        book = _jev_item_book()
+        specs = jev_items.specs_for(names, bonds.FAMILY, _jev_trees_for)
+
+        def describe(entry: int):
+            row = facts.get(int(entry))
+            if row is None or book is None:
+                return None
+            return jev_items.item_card(armory.template_tooltip(row, book))
+
+        judgments = await jev_items.shadow_pass(
+            self._jev, gear_rows=gear_rows, worn_rows=worn,
+            worn_items=worn_items, names=names, describe=describe,
+            specs=specs, keep_names=OWNER_KEEPS, modes=modes,
+            limit=JEV_SHADOW_LIMIT,
+        )
+        fresh = [j for j in judgments
+                 if self._jev_recorded.get(j.key) != j.signature]
+        for judgment in fresh:
+            log.info("%s", judgment.line())
+            await asyncio.to_thread(_insert_jev_judgment, judgment)
+            self._jev_recorded[judgment.key] = judgment.signature
+        answered = [j for j in judgments if j.jev]
+        log.info(
+            "jev-shadow: %d question(s) for %s, %d answered, %d agree, "
+            "%d new record(s)",
+            len(judgments), ",".join(names), len(answered),
+            sum(1 for j in answered if j.agree), len(fresh),
         )
 
     async def _hand_recipes(self, names: list, free_slots: dict) -> None:
@@ -10943,6 +11032,174 @@ def _fetch_family_equipped(names: list) -> list:
                 return []
             raise
         return [dict(row) for row in cur.fetchall()]
+
+
+# JEV'S TWO EXTRA READS (#95). The shadow pass shows Jev what each member
+# WEARS, by item, where the family-fit gate only needs item levels - a
+# question about a ring or a two-hander is meaningless without the rings and
+# the shield it would sit beside. bag 0 and slot < 19 is the worn range, the
+# same one _FAMILY_EQUIPPED_SQL reads.
+_JEV_WORN_SQL = (
+    "SELECT c.name AS name, ci.slot AS slot, ii.itemEntry AS entry "
+    "FROM characters c "
+    "JOIN character_inventory ci ON ci.guid = c.guid "
+    "AND ci.bag = 0 AND ci.slot < 19 "
+    "JOIN item_instance ii ON ii.guid = ci.item "
+    "WHERE c.name IN (%s)"
+)
+
+# The template columns armory.template_tooltip draws, so Jev reads an item the
+# way the Armory page shows it: damage, speed, stats and the green effect
+# lines ("Chance on hit: ..."), which is exactly what item level cannot say.
+_JEV_ITEM_FACTS_SQL = (
+    "SELECT it.entry, it.name AS item_name, it.Quality AS quality, "  # noqa: S608 - fixed column names from range(); the IN list is placeholders and every value is bound
+    "it.ItemLevel AS item_level, it.RequiredLevel AS required_level, "
+    "it.class, it.subclass, it.InventoryType AS inventory_type, "
+    "it.armor, it.block, it.bonding, it.AllowableClass AS allowable_class, "
+    "it.dmg_min1, it.dmg_max1, it.delay, it.dmg_min2, it.dmg_max2, it.dmg_type2, "
+    "it.holy_res, it.fire_res, it.nature_res, it.frost_res, it.shadow_res, "
+    "it.arcane_res, "
+    + ", ".join(f"it.stat_type{n}, it.stat_value{n}" for n in range(1, 11)) + ", "
+    + ", ".join(f"it.spellid_{n}, it.spelltrigger_{n}" for n in range(1, 6))
+    + " FROM acore_world.item_template it WHERE it.entry IN (%s)"
+)
+
+
+def _fetch_jev_worn(names: list) -> list:
+    """(name, slot, entry) for everything the family wears."""
+    if not names:
+        return []
+    sql = _JEV_WORN_SQL % ",".join(["%s"] * len(names))
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(sql, names)
+        return [dict(row) for row in cur.fetchall()]
+
+
+def _fetch_jev_item_facts(entries: list) -> dict:
+    """entry -> item_template row, for the Armory's tooltip reader."""
+    if not entries:
+        return {}
+    sql = _JEV_ITEM_FACTS_SQL % ",".join(["%s"] * len(entries))
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(sql, list(entries))
+        return {int(row["entry"]): dict(row) for row in cur.fetchall()}
+
+
+_JEV_BOOKS: dict = {}
+
+
+def _jev_book(which: str):
+    """armory's ItemBook or TalentBook, loaded once from the image's own
+    JSON. None when the files cannot be read: the pass then describes items by
+    name and item level only, and says nothing about specializations."""
+    if which not in _JEV_BOOKS:
+        here = os.path.dirname(os.path.abspath(__file__))
+        loader = armory.ItemBook if which == "items" else armory.TalentBook
+        try:
+            _JEV_BOOKS[which] = loader.load(here)
+        except (OSError, ValueError, KeyError):
+            log.exception("jev-shadow: could not load the %s book", which)
+            _JEV_BOOKS[which] = None
+    return _JEV_BOOKS[which]
+
+
+def _jev_item_book():
+    return _jev_book("items")
+
+
+def _jev_trees_for(class_id: int) -> list:
+    book = _jev_book("talents")
+    return book.trees_for(class_id) if book is not None else []
+
+
+def _jev_task_done(task: asyncio.Task) -> None:
+    """A shadow pass that failed says so; it never takes the bridge down."""
+    if task.cancelled():
+        return
+    exc = task.exception()
+    if exc is not None:
+        log.error("jev-shadow: pass failed; the heuristic is unaffected",
+                  exc_info=exc)
+
+
+def _ensure_jev_store() -> None:
+    """The Jev comparison record, created the way the sample store is (#95).
+
+    Bridge-owned state for the reason _ensure_thought_store gives: the
+    worldserver never reads it, so it is not module SQL. ONE ROW PER CHANGED
+    COMPARISON - the heuristic's answer and Jev's for one question about one
+    item - so the Decree or Chronicle can later show where the two agree and
+    where they differ. `agree` is NULL when Jev gave no answer (no key,
+    timeout, busy), which is different from disagreeing.
+
+    Rows older than JEV_RETENTION_DAYS are pruned here, at start-up, which
+    every deploy runs.
+
+    A FAILURE HERE IS LOGGED AND SWALLOWED, unlike the stores above it. They
+    hold state the bridge runs on; this holds a comparison nothing acts on,
+    and a start-up that raised over it would stop every loop the bridge runs.
+    The shadow pass then fails on its insert, and says so, each cycle.
+    """
+    try:
+        _create_jev_store()
+    except pymysql.err.MySQLError:
+        log.exception("jev-shadow: comparison store unavailable; the heuristic "
+                      "is unaffected and nothing will be recorded")
+
+
+def _create_jev_store() -> None:
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(
+            "CREATE TABLE IF NOT EXISTS overseer_jev_judgment ("
+            " id INT UNSIGNED NOT NULL AUTO_INCREMENT,"
+            " kind VARCHAR(32) NOT NULL,"
+            " subject VARCHAR(12) NOT NULL,"
+            " holder VARCHAR(12) NOT NULL,"
+            " item_guid INT UNSIGNED NOT NULL,"
+            " item_entry INT UNSIGNED NOT NULL,"
+            " item_name VARCHAR(120) NOT NULL,"
+            " heuristic VARCHAR(40) NOT NULL,"
+            " heuristic_why VARCHAR(300) NOT NULL,"
+            " jev VARCHAR(40) NULL DEFAULT NULL,"
+            " confidence FLOAT NULL DEFAULT NULL,"
+            " probabilities VARCHAR(1000) NULL DEFAULT NULL,"
+            " agree TINYINT NULL DEFAULT NULL,"
+            " status VARCHAR(16) NOT NULL,"
+            " latency_ms INT UNSIGNED NOT NULL DEFAULT 0,"
+            " model VARCHAR(40) NOT NULL DEFAULT '',"
+            " mode VARCHAR(8) NOT NULL,"
+            " created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,"
+            " PRIMARY KEY (id), KEY idx_kind_time (kind, created_at),"
+            " KEY idx_item (item_guid, id)"
+            ") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci"
+        )
+        cur.execute(
+            "DELETE FROM overseer_jev_judgment "
+            "WHERE created_at < NOW() - INTERVAL %s DAY",
+            (JEV_RETENTION_DAYS,),
+        )
+
+
+def _insert_jev_judgment(judgment) -> None:
+    """One jev_items.Judgment as one row. Writes nothing else, anywhere."""
+    agree = judgment.agree
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(
+            "INSERT INTO overseer_jev_judgment (kind, subject, holder, "
+            "item_guid, item_entry, item_name, heuristic, heuristic_why, jev, "
+            "confidence, probabilities, agree, status, latency_ms, model, mode) "
+            "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+            (
+                judgment.kind, judgment.subject[:12], judgment.holder[:12],
+                judgment.item_guid, judgment.item_entry,
+                judgment.item_name[:120], judgment.heuristic[:40],
+                judgment.heuristic_why[:300], judgment.jev[:40] or None,
+                judgment.confidence, judgment.probabilities_json() or None,
+                None if agree is None else int(agree), judgment.status[:16],
+                max(0, judgment.latency_ms), judgment.model[:40],
+                judgment.mode[:8],
+            ),
+        )
 
 
 # Where each of the family is standing, and therefore whether they are in the
@@ -14721,6 +14978,7 @@ class HeadlessBridge(Bridge):
         await asyncio.to_thread(_ensure_goal_store)
         await asyncio.to_thread(_ensure_sample_store)
         await asyncio.to_thread(_ensure_trade_store)
+        await asyncio.to_thread(_ensure_jev_store)
 
         loops = [
             coro for coro in (
