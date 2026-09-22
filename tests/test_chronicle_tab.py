@@ -135,10 +135,10 @@ class TheChronicle(unittest.TestCase):
     def test_a_missing_run_table_degrades_rather_than_failing(self):
         """The live realm's schema predates overseer_dungeon_run. Error 1146
         on that one query must leave quests and levels standing."""
-        fetch = self.server[self.server.index("def _fetch_achievements"):]
-        fetch = fetch[:fetch.index("def _ensure_stream_store")]
-        self.assertIn("1146", fetch)
-        self.assertIn("run_rows = []", fetch)
+        runs = self.server[self.server.index("def _fetch_family_runs"):]
+        runs = runs[:runs.index("def _fetch_achievements")]
+        self.assertIn("1146", runs)
+        self.assertIn("return []", runs)
 
     def test_nothing_from_the_payload_is_rendered_as_markup(self):
         """Item names, quest titles and character names come from tables the
@@ -360,7 +360,7 @@ class BothFamiliesAndNoGearInTheWay(unittest.TestCase):
         cls.section = section[:section.index("</section>")]
 
     def test_the_endpoint_builds_a_chapter_for_every_family_in_the_roster(self):
-        self.assertIn("_fetch_family_names()", self.handler)
+        self.assertIn("_fetch_rosters()", self.handler)
         self.assertIn("for which in order:", self.handler)
         self.assertIn("achievements.chapter(", self.handler)
         self.assertIn('payload["chapters"] = chapters', self.handler)
@@ -370,9 +370,10 @@ class BothFamiliesAndNoGearInTheWay(unittest.TestCase):
         self.assertIn("_fetch_profiles(names)", self.handler)
 
     def test_a_familys_runs_are_its_own(self):
-        fetch = self.server[self.server.index("def _fetch_achievements"):]
-        fetch = fetch[:fetch.index("def _ensure_stream_store")]
-        self.assertIn('r.get("leader_name") in names', fetch)
+        runs = self.server[self.server.index("def _fetch_family_runs"):]
+        runs = runs[:runs.index("def _fetch_achievements")]
+        self.assertIn("WHERE leader_name IN ({holes})", runs)
+        self.assertIn("run_rows = _fetch_family_runs(cur, names, holes)", self.server)
 
     def test_the_page_draws_every_chapter_it_is_sent(self):
         self.assertIn("chr.chapters = p.chapters || [];", self.code)

@@ -1084,6 +1084,19 @@ def _level_entries(cluster: list[dict], roster: list[str]) -> list[dict]:
     } for level, who in sorted(by_level.items(), reverse=True)]
 
 
+def _moments(quests: list[dict], levels: list[dict]) -> dict[str, list[dict]]:
+    """Dated quest and level cards, split by what kind of sentence they make."""
+    by_kind: dict[str, list[dict]] = {QUEST: [], _QUEST_DONE: [], LEVEL: []}
+    for q in (q for q in quests if q.get("at")):
+        by_kind[QUEST if q["turned_in"] else _QUEST_DONE].append({
+            "at": datetime.fromisoformat(q["at"]), "who": q["who"],
+            "name": q.get("quest_name") or q["title"]})
+    for lv in (lv for lv in levels if lv.get("at")):
+        by_kind[LEVEL].append({"at": datetime.fromisoformat(lv["at"]),
+                               "who": lv["who"], "level": lv["level"]})
+    return by_kind
+
+
 def story(runs: list[dict], quests: list[dict], levels: list[dict],
           firsts: list[dict], roster: list[str]) -> list[dict]:
     """The family's story, newest first, as the page draws it.
@@ -1107,17 +1120,7 @@ def story(runs: list[dict], quests: list[dict], levels: list[dict],
                 "word": first["word"], "hue": first["hue"],
                 "text": "%s. %s." % (first["title"], first["body"]),
             })
-    by_kind: dict[str, list[dict]] = {QUEST: [], _QUEST_DONE: [], LEVEL: []}
-    for q in quests:
-        if not q.get("at"):
-            continue
-        by_kind[QUEST if q["turned_in"] else _QUEST_DONE].append({
-            "at": datetime.fromisoformat(q["at"]), "who": q["who"],
-            "name": q.get("quest_name") or q["title"]})
-    for lv in levels:
-        if lv.get("at"):
-            by_kind[LEVEL].append({"at": datetime.fromisoformat(lv["at"]),
-                                   "who": lv["who"], "level": lv["level"]})
+    by_kind = _moments(quests, levels)
     for cluster in _clusters(by_kind[QUEST]):
         entries += _quest_entries(cluster, True, roster)
     for cluster in _clusters(by_kind[_QUEST_DONE]):

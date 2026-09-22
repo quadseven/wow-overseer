@@ -1008,6 +1008,30 @@ def _fetch_questlog(names=None) -> dict:
             "done_rows": done_rows, "party_rows": party_rows}
 
 
+def _fetch_family_runs(cur, names, holes) -> list:
+    """The family's own dungeon runs, newest first, or [] on a realm whose
+    schema predates overseer_dungeon_run (error 1146).
+
+    BY LEADER, IN THE SQL. overseer_dungeon_run has no family column, and
+    with two families in one world an unfiltered read would put one family's
+    runs in the other's chapter. `holes` is placeholders only, one per name.
+    """
+    try:
+        cur.execute(
+            "SELECT id, leader_name, map_id, state, started_at, "  # noqa: S608
+            "last_progress_at, ended_at, ended_reason "
+            f"FROM overseer_dungeon_run WHERE leader_name IN ({holes}) "
+            "ORDER BY started_at DESC LIMIT 500",
+            tuple(names),
+        )
+        return list(cur.fetchall())
+    except pymysql.err.ProgrammingError as exc:
+        if not (exc.args and exc.args[0] == 1146):
+            raise
+        log.info("overseer_dungeon_run absent; achievements run without it")
+        return []
+
+
 def _fetch_achievements(names=None) -> dict:
     """What the family has done: runs, events, deaths, and the world rows
     that name what they gained.
@@ -1021,28 +1045,14 @@ def _fetch_achievements(names=None) -> dict:
     Names come from the roster table (one family at a time, see
     _achievements) or from bonds via family.roster(), never from the request.
 
-    RUNS ARE THE FAMILY'S OWN, by leader. overseer_dungeon_run has no family
-    column, and with two families in one world an unfiltered read would put
-    the Alliance's runs in the Horde's chapter.
+    RUNS ARE THE FAMILY'S OWN, by leader (_fetch_family_runs).
     """
     names = family.roster() if names is None else list(names)
     holes = ", ".join(["%s"] * len(names))
     conn = _connect()
     try:
         with conn.cursor() as cur:
-            try:
-                cur.execute(
-                    "SELECT id, leader_name, map_id, state, started_at, "
-                    "last_progress_at, ended_at, ended_reason "
-                    "FROM overseer_dungeon_run ORDER BY started_at DESC LIMIT 500"
-                )
-                run_rows = [r for r in cur.fetchall()
-                            if r.get("leader_name") in names]
-            except pymysql.err.ProgrammingError as exc:
-                if not (exc.args and exc.args[0] == 1146):
-                    raise
-                log.info("overseer_dungeon_run absent; achievements run without it")
-                run_rows = []
+            run_rows = _fetch_family_runs(cur, names, holes)
             # S608 on the three below: `holes` is a run of placeholders sized
             # by the roster, and every VALUE is bound by the driver. Deaths
             # come from overseer_death, the un-coalesced record, so the
@@ -3379,12 +3389,16 @@ class Handler(BaseHTTPRequestHandler):
         before changes; `chapters` is what the Chronicle draws.
         """
         try:
-            _names, default, known = _fetch_family_names()
-            order = [default] + [f for f in known if f != default] if known else [""]
+            # ONE roster read for every family, the same one /api/heads uses.
+            # No roster rows at all is the old single family, from bonds.
+            by_family = _fetch_rosters() or {"": family.roster()}
+            known = sorted(by_family)
+            default = _default_family(known) if known != [""] else ""
+            order = [default] + [f for f in known if f != default]
             payload = None
             chapters = []
             for which in order:
-                names = _fetch_family_names(which)[0] if which else family.roster()
+                names = by_family[which]
                 built = achievements.build_achievements(**_fetch_achievements(names))
                 faction = achievements.faction_of(
                     p.get("race") for p in _fetch_profiles(names).values())
