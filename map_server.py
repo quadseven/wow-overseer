@@ -533,11 +533,16 @@ def _fetch_family(names=None) -> list[dict]:
 _WEALTH_ITEM_COLUMNS = (
     "it.name AS item_name, it.Quality AS quality, it.ItemLevel AS item_level, "
     "it.SellPrice AS sell_price, it.class, it.subclass, it.displayid, "
-    "it.ContainerSlots AS container_slots"
+    "it.ContainerSlots AS container_slots, "
+    # For the gear check behind the Bags tab's piles (bagfate.py): the same
+    # facts the bridge's own gear rows carry.
+    "it.RequiredLevel AS required_level, it.AllowableClass AS allowable_class, "
+    "it.InventoryType AS inventory_type, it.bonding, ii.flags AS instance_flags, "
+    "it.BagFamily AS bag_family"
 )
 
 
-def _fetch_wealth() -> dict:
+def _fetch_wealth(names: list[str] | None = None) -> dict:
     """The family's purse, every inventory row they own, and the auction house.
 
     NOT read from overseer_snapshot and, like /api/armory, deliberately not
@@ -553,9 +558,10 @@ def _fetch_wealth() -> dict:
     it. Filtering here would move that decision into SQL nothing tests.
 
     Names come from bonds via family.roster(), never from the request, so
-    every IN list here is a fixed five with no user input in it.
+    every IN list here is a fixed five with no user input in it. `names`
+    widens that to every family the roster knows (_fetch_family_groups).
     """
-    names = family.roster()
+    names = family.roster() if names is None else names
     holes = ", ".join(["%s"] * len(names))
     conn = _connect()
     try:
@@ -565,7 +571,7 @@ def _fetch_wealth() -> dict:
             # from bonds. Every VALUE is still bound by the driver, and this
             # endpoint takes no parameters at all.
             cur.execute(
-                "SELECT c.name, c.level, c.class, c.money "  # noqa: S608
+                "SELECT c.name, c.level, c.class, c.race, c.money "  # noqa: S608
                 f"FROM characters c WHERE c.name IN ({holes})",
                 tuple(names),
             )
@@ -689,7 +695,110 @@ _ITEM_TEMPLATE_COLUMNS = (
 )
 
 
-def _fetch_armory() -> dict:
+def _fetch_family_groups() -> list[tuple[str, list[str]]]:
+    """Every family the roster knows, as (key, names), lead first.
+
+    The Armory draws all of them side by side, where the Family tab draws
+    one at a time; the read and its fallback are _fetch_family_names', so
+    the two tabs cannot disagree about who is in which family. No roster
+    rows at all degrades to the one family bonds holds.
+    """
+    conn = _connect()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT name, family, `lead` FROM overseer_roster "
+                "WHERE family IS NOT NULL AND family <> '' "
+                "ORDER BY `lead` DESC, name"
+            )
+            rows = cur.fetchall()
+    finally:
+        conn.close()
+    by_family: dict[str, list[str]] = {}
+    for row in rows:
+        by_family.setdefault(row["family"], []).append(row["name"])
+    if not by_family:
+        return [("", family.roster())]
+    return [(key, by_family[key]) for key in sorted(by_family)]
+
+
+# The guild sections under the Armory's pairs: how big each family guild is,
+# who is in one (for the collapsed list) and whether a name belongs to one
+# (the only names /api/armory/member will draw). All three are bound to the
+# guilds the FAMILIES are in, read from the database; a name or a guild from
+# the request is only ever compared against that set, never trusted.
+_ARMORY_GUILD_SIZES = (
+    "SELECT g.name, COUNT(*) AS size FROM guild g "
+    "JOIN guild_member gm ON gm.guildid = g.guildid "
+    "WHERE g.guildid IN (SELECT gm2.guildid FROM guild_member gm2 "
+    "JOIN characters c2 ON c2.guid = gm2.guid WHERE c2.name IN ({holes})) "
+    "GROUP BY g.guildid, g.name"
+)
+_ARMORY_GUILD_ROSTER = (
+    "SELECT c.name, c.level, c.class, c.race, c.online, "
+    "COUNT(it.entry) AS worn, AVG(it.ItemLevel) AS avg_item_level "
+    "FROM guild g JOIN guild_member gm ON gm.guildid = g.guildid "
+    "JOIN characters c ON c.guid = gm.guid "
+    "LEFT JOIN character_inventory ci ON ci.guid = c.guid "
+    "AND ci.bag = 0 AND ci.slot < %s "
+    "LEFT JOIN item_instance ii ON ii.guid = ci.item "
+    "LEFT JOIN acore_world.item_template it ON it.entry = ii.itemEntry "
+    "WHERE g.name = %s "
+    "GROUP BY c.guid, c.name, c.level, c.class, c.race, c.online"
+)
+
+
+def _fetch_guild_sizes(names: list[str]) -> dict[str, int]:
+    if not names:
+        return {}
+    holes = ", ".join(["%s"] * len(names))
+    conn = _connect()
+    try:
+        with conn.cursor() as cur:
+            # S608: placeholders only, one per roster name.
+            cur.execute(_ARMORY_GUILD_SIZES.format(holes=holes),  # noqa: S608
+                        tuple(names))
+            return {r["name"]: int(r["size"]) for r in cur.fetchall()}
+    finally:
+        conn.close()
+
+
+# One read: is this name in a guild any family member is in?
+_ARMORY_IS_GUILDMATE = (
+    "SELECT 1 FROM characters c JOIN guild_member gm ON gm.guid = c.guid "
+    "WHERE c.name = %s AND gm.guildid IN (SELECT gm2.guildid FROM guild_member gm2 "
+    "JOIN characters c2 ON c2.guid = gm2.guid WHERE c2.name IN ({holes})) LIMIT 1"
+)
+
+
+def _is_family_guildmate(name: str, family_names: list[str]) -> bool:
+    if not family_names:
+        return False
+    holes = ", ".join(["%s"] * len(family_names))
+    conn = _connect()
+    try:
+        with conn.cursor() as cur:
+            # S608: placeholders only; the name and every roster name are bound.
+            cur.execute(_ARMORY_IS_GUILDMATE.format(holes=holes),  # noqa: S608
+                        (name, *family_names))
+            return cur.fetchone() is not None
+    finally:
+        conn.close()
+
+
+def _fetch_guild_roster(guild: str) -> list[dict]:
+    """The compact list for one family guild. `guild` is already checked."""
+    conn = _connect()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(_ARMORY_GUILD_ROSTER,
+                        (len(armory.EQUIPPED_SLOTS), guild))
+            return list(cur.fetchall())
+    finally:
+        conn.close()
+
+
+def _fetch_armory(names: list[str] | None = None) -> dict:
     """The family's saved gear, talents and stats, in a handful of queries.
 
     NOT read from overseer_snapshot, and deliberately NOT subject to its 60s
@@ -701,8 +810,11 @@ def _fetch_armory() -> dict:
 
     Names come from bonds via family.roster(), never from the request, so all
     three of these are a fixed IN list of five with no user input in them.
+    `names` widens that to every family the roster knows, or narrows it to
+    one guildmate the handler has already checked; neither comes from the
+    request as such.
     """
-    names = family.roster()
+    names = family.roster() if names is None else names
     holes = ", ".join(["%s"] * len(names))
     conn = _connect()
     try:
@@ -3345,13 +3457,18 @@ class Handler(BaseHTTPRequestHandler):
         into a general character query wearing a friendly name.
         """
         try:
-            fetched = _fetch_armory()
+            # BOTH FAMILIES, from the roster, never from the request.
+            groups = _fetch_family_groups()
+            names = [n for _key, group in groups for n in group]
+            fetched = _fetch_armory(names)
             # WHERE each worn item was first seen worn, from the same equip
             # record the Chronicle reads and by the same rule. The adapter
             # hands over rows; recap decides which row is the first one, what
             # the place is called and what to say when there is no row at all.
             equip_rows = fetched.pop("equip_event_rows")
-            payload = armory.build_armory(**fetched, book=BOOK, items=ITEMS)
+            payload = armory.build_armory(**fetched, book=BOOK, items=ITEMS,
+                                          families=groups,
+                                          guild_sizes=_fetch_guild_sizes(names))
             payload["provenance"] = recap.provenance_index(
                 equip_rows, fetched["equipment_rows"], achievements.MAP_NAMES,
                 recap.zone_names(GEO.continents))
@@ -3724,7 +3841,11 @@ class Handler(BaseHTTPRequestHandler):
         friendly name.
         """
         try:
-            payload = wealth.build_wealth(**_fetch_wealth(), icons=ITEMS.icons)
+            # Both families, from the roster, never from the request.
+            groups = _fetch_family_groups()
+            names = [n for _key, group in groups for n in group]
+            payload = wealth.build_wealth(**_fetch_wealth(names), icons=ITEMS.icons,
+                                          families=groups)
             self._send(200, "application/json", json.dumps(payload).encode())
         except Exception:
             # Same contract as every other poll: the view keeps the bags it
@@ -4201,6 +4322,64 @@ class Handler(BaseHTTPRequestHandler):
             log.exception("party status query failed")
             self._send(503, "application/json", b'{"error": "world unreachable"}')
 
+    def _armory_guild(self, query: dict) -> None:
+        """GET /api/armory/guild?guild=X - one family guild, as a short list.
+
+        HERE, NEAR THE FOOT OF THE CLASS, ON PURPOSE: several suites slice
+        this class between two handlers and assert no request parameter is
+        read inside the slice. These two take one each, so they sit below
+        every such window.
+
+        Fetched only when its section is opened, so the default Armory never
+        carries a seventy-member guild. `guild` is matched against the guilds
+        the FAMILIES are in, as the database reports them; anything else is
+        a 404 and never reaches SQL as a guild name.
+        """
+        try:
+            groups = _fetch_family_groups()
+            names = [n for _key, group in groups for n in group]
+            wanted = query.get("guild", [""])[0]
+            if wanted not in _fetch_guild_sizes(names):
+                self._send(404, "application/json", b'{"error": "not a family guild"}')
+                return
+            payload = {"guild": wanted,
+                       "empty_note": armory.GUILD_EMPTY_NOTE,
+                       "members": armory.guild_roster(
+                           _fetch_guild_roster(wanted), exclude=names)}
+            self._send(200, "application/json", json.dumps(payload).encode())
+        except Exception:
+            log.exception("armory guild query failed")
+            self._send(503, "application/json", b'{"error": "world unreachable"}')
+
+    def _armory_member(self, query: dict) -> None:
+        """GET /api/armory/member?name=X - one guildmate's full profile.
+
+        The same profile a family member gets, for one member of a family
+        guild at a time. `name` must pass the world's name rule AND be on
+        the roster of a family guild as the database reports it; anything
+        else is a 404. This is what keeps it from being a general character
+        query: the set it can answer about is the families' guilds.
+        """
+        try:
+            wanted = query.get("name", [""])[0]
+            if not _NAME_RE.fullmatch(wanted):
+                self._send(404, "application/json", b'{"error": "not a guild member"}')
+                return
+            groups = _fetch_family_groups()
+            names = [n for _key, group in groups for n in group]
+            if not _is_family_guildmate(wanted, names):
+                self._send(404, "application/json", b'{"error": "not a guild member"}')
+                return
+            fetched = _fetch_armory([wanted])
+            fetched.pop("equip_event_rows")
+            payload = armory.build_armory(**fetched, book=BOOK, items=ITEMS,
+                                          families=[("", [wanted])])
+            self._send(200, "application/json", json.dumps(
+                {"member": payload["members"][0], "doll": payload["doll"]}).encode())
+        except Exception:
+            log.exception("armory member query failed")
+            self._send(503, "application/json", b'{"error": "world unreachable"}')
+
     def _read_json_body(self) -> dict | None:
         """The POST body as a dict, or None after sending the error itself."""
         try:
@@ -4272,6 +4451,8 @@ class Handler(BaseHTTPRequestHandler):
         "/api/family": _family,
         "/api/wall": _wall,
         "/api/armory": _armory,
+        "/api/armory/guild": _armory_guild,
+        "/api/armory/member": _armory_member,
         "/api/standing": _standing,
         "/api/wealth": _wealth,
         "/api/questlog": _questlog,

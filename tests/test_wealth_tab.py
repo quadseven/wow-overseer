@@ -387,7 +387,8 @@ class ThePurseCard(unittest.TestCase):
     def test_the_cards_are_built_once_and_updated_in_place(self):
         """Five cards rebuilt every poll would throw away the scroll position
         mid-read on a phone, which is the one device this is checked from."""
-        self.assertIn("const wlth = { cards: new Map(), note: \"\" };", self.tab)
+        self.assertIn("const wlth = { cards: new Map(), note: \"\", sides: new Map() };",
+                      self.tab)
         self.assertIn("let c = wlth.cards.get(name);", self.tab)
 
     def test_a_failed_poll_keeps_the_bags_it_has_and_says_they_are_old(self):
@@ -596,8 +597,11 @@ class TheEndpoint(unittest.TestCase):
     def test_the_endpoint_takes_no_roster_from_the_caller(self):
         """WHO the family is belongs to bonds. Accepting a roster would make
         this a general character query wearing a friendly name."""
-        self.assertIn("wealth.build_wealth(**_fetch_wealth(), icons=ITEMS.icons)",
+        # Both families now (#88), and still from the roster alone.
+        self.assertIn("groups = _fetch_family_groups()", self.handler)
+        self.assertIn("wealth.build_wealth(**_fetch_wealth(names), icons=ITEMS.icons,",
                       self.handler)
+        self.assertIn("families=groups)", self.handler)
         self.assertNotIn("query.get", self.handler)
         self.assertIn("names = family.roster()", self.fetch)
 
@@ -672,6 +676,40 @@ class TheEndpoint(unittest.TestCase):
         self.assertNotIn("build_finding", self.server)
         self.assertNotIn("split_inventory", self.handler)
         self.assertEqual(self.server.count("wealth.build_wealth"), 1)
+
+
+class BothFamiliesAndWhereItIsGoing(unittest.TestCase):
+    """The Horde beside the Alliance, and each card's piles (#88)."""
+
+    @classmethod
+    def setUpClass(cls):
+        page = (HERE / "index.html").read_text(encoding="utf-8")
+        start = page.index("// --- the Bags tab (quadseven/mod-overseer#88, infra#2597)")
+        cls.tab = page[start:page.index("// --- the front door (infra#3110)")]
+
+    def test_the_columns_come_from_the_payloads_sides(self):
+        """Which family is on which side is armory.family_sides', not the page's."""
+        sides = self.tab[self.tab.index("function wealthSides"):]
+        sides = sides[:sides.index("function wealthCard")]
+        self.assertIn("p.sides.forEach((side, i) =>", sides)
+        self.assertIn("col.head.textContent = side.heading;", sides)
+        self.assertIn("for (const name of side.names)", sides)
+        self.assertIn("wealthSides(p);", self.tab)
+
+    def test_every_word_of_a_pile_is_the_modules(self):
+        fates = self.tab[self.tab.index("function renderFates"):]
+        fates = fates[:fates.index("function waucRow")]
+        for field in ("f.heading", "f.unmanaged.text", "pile.label", "pile.count",
+                      "pile.route", "pile.blocker", "pile.examples"):
+            self.assertIn(field, fates)
+        self.assertIn("wticket(pile.ticket)", fates)
+        self.assertNotIn("innerHTML", fates)
+
+    def test_the_piles_are_drawn_on_every_present_card_and_cleared_on_a_gone_one(self):
+        member = self.tab[self.tab.index("function renderWealthMember"):]
+        member = member[:member.index("function wticket")]
+        self.assertIn("renderFates(c, m.fates);", member)
+        self.assertIn("c.fates.replaceChildren();", member[:member.index("return;")])
 
 
 if __name__ == "__main__":
