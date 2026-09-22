@@ -420,6 +420,23 @@
      refresh must not look like an answer it just gave. */
   .agstale { color:var(--amber-text); }
   @media (max-width:600px) { #agline { font-size:1.12rem; } }
+  /* WHOSE GOAL, said small above it, now that there are two families. */
+  #agfam { color:var(--dim); font-family:var(--mono); font-size:.72rem;
+           letter-spacing:.08em; text-transform:uppercase; margin-bottom:.2rem; }
+  #agfam:empty { display:none; }
+  /* The other family's goal: one line, the same colour rules in miniature, so
+     a split or a stall on the second family still stands out. */
+  #agother:empty { display:none; }
+  #agother { margin-top:.6rem; padding-top:.5rem; border-top:1px solid var(--line); }
+  .agrow { display:flex; gap:.6rem; flex-wrap:wrap; align-items:baseline;
+           padding:.15rem 0 .15rem .5rem; border-left:3px solid var(--alliance); }
+  .agrow.split { border-left-color:var(--neutral); }
+  .agrow.stalled { border-left-color:var(--horde); }
+  .agrow.dungeon { border-left-color:var(--gold); }
+  .agrow.idle { border-left-color:var(--line); }
+  .agrowfam { color:var(--dim); font-family:var(--mono); font-size:.72rem;
+              letter-spacing:.08em; text-transform:uppercase; }
+  .agrowline { color:var(--text); }
   nav { display:flex; gap:.4rem; padding:.6rem 1rem; flex-wrap:wrap; }
   nav button { background:transparent; color:var(--shell-text);
                border:1px solid var(--shell-line);
@@ -2957,9 +2974,14 @@
      Achievements page alike, and the question it answers ("what are they
      even doing right now") is the one this page could not answer at all. -->
 <div id="agenda">
+  <div id="agfam"></div>
   <div id="agline">reaching the world...</div>
   <div id="agdetail"></div>
   <div id="agwhen"></div>
+  <!-- EVERY OTHER FAMILY, one line each. The banner above is one family's
+       goal in full; a second family's goal used to be folded into it, and
+       then split out of it with nowhere to go. -->
+  <div id="agother"></div>
 </div>
 <nav id="tabs"></nav>
 <div id="tabsub"></div>
@@ -5991,7 +6013,9 @@ function syncFamilyTabs(payload) {
     b.textContent = fam + "'s family";
     b.dataset.view = FAMILY_VIEW;
     b.dataset.family = fam;
-    b.onclick = () => { familyKey = fam; showView(FAMILY_VIEW); pollFamily(); };
+    // pollAgenda too, so the banner's big line moves to this family now
+    // rather than on its next ten-second tick.
+    b.onclick = () => { familyKey = fam; showView(FAMILY_VIEW); pollFamily(); pollAgenda(); };
     if (i > 0) { prev.after(b); }
     prev = b;
   });
@@ -7709,6 +7733,11 @@ const agEl = document.getElementById("agenda");
 const agLine = document.getElementById("agline");
 const agDetail = document.getElementById("agdetail");
 const agWhen = document.getElementById("agwhen");
+const agFam = document.getElementById("agfam");
+const agOther = document.getElementById("agother");
+// One compact row per other family, built on first sight and written into
+// after, keyed by family - the same build-once rule the rest of the page keeps.
+const agRows = new Map();
 // Every class the banner can wear, so a state change clears the last one
 // rather than accumulating them.
 const AG_STATES = ["dungeon", "travel", "job", "quest", "idle", "split", "stalled"];
@@ -7734,6 +7763,10 @@ function agStamp(label, seconds, stale) {
 }
 
 function renderAgenda(p) {
+  // Whose goal this is, once there is more than one family to be confused
+  // between. A world with one family keeps the banner exactly as it was.
+  agFam.textContent = (p.families || []).length > 1 && p.family
+    ? p.family + "'s family" : "";
   agLine.textContent = p.headline;
   agDetail.replaceChildren();
   for (const line of p.detail || []) {
@@ -7767,11 +7800,61 @@ function renderAgenda(p) {
   if (p.stalled) agEl.classList.add("stalled");
 }
 
+// The other families' rows. Their clocks are not drawn - the full banner is
+// one tap away on that family's tab - but a stall is said in words, because
+// colour alone is not a warning.
+function renderAgendaRow(p) {
+  let row = agRows.get(p.family);
+  if (!row) {
+    row = { el: document.createElement("div"), fam: document.createElement("span"),
+            line: document.createElement("span"), when: document.createElement("span") };
+    row.fam.className = "agrowfam";
+    row.line.className = "agrowline";
+    row.el.append(row.fam, row.line, row.when);
+    agRows.set(p.family, row);
+  }
+  row.el.className = "agrow " + p.activity + (p.stalled ? " stalled" : "");
+  row.fam.textContent = p.family + "'s family";
+  row.line.textContent = p.headline;
+  row.when.textContent = p.stalled ? "STALLED" : "";
+  row.when.className = p.stalled ? "agstale" : "";
+  return row.el;
+}
+
+// Only when the set of rows changed: a poll that changed nothing leaves the
+// DOM alone. Never called on a failed read, so a failure blanks nothing.
+function placeAgendaRows(keep) {
+  const same = keep.length === agOther.children.length
+    && keep.every((node, i) => agOther.children[i] === node);
+  if (!same) agOther.replaceChildren(...keep);
+}
+
+// EVERY FAMILY, the viewed one in full. The key is the family on screen (or
+// the server's default before the first family poll), so opening the other
+// family's tab moves its goal into the big line on the next poll.
 async function pollAgenda() {
+  const asked = familyKey;
   try {
-    const r = await fetch(u("/api/agenda"));
+    const r = await fetch(u("/api/agenda" + familyQuery(asked)));
     if (!r.ok) throw new Error(r.status);
-    renderAgenda(await r.json());
+    const p = await r.json();
+    renderAgenda(p);
+    const others = (p.families || []).filter((f) => f !== p.family);
+    const rows = await Promise.all(others.map(async (f) => {
+      try {
+        const o = await fetch(u("/api/agenda" + familyQuery(f)));
+        if (!o.ok) throw new Error(o.status);
+        return renderAgendaRow(await o.json());
+      } catch (e) {
+        // Keep the row it had and mark it, as the big line does.
+        const had = agRows.get(f);
+        if (!had) return null;
+        had.when.textContent = "may be stale";
+        had.when.className = "agstale";
+        return had.el;
+      }
+    }));
+    placeAgendaRows(rows.filter(Boolean));
   } catch (e) {
     // Keep the sentence; mark the clocks. There is nothing to redraw here -
     // an unreachable world does not change what the family was last trying
@@ -7780,7 +7863,9 @@ async function pollAgenda() {
   }
 }
 
-pollAgenda();
+// The first read is made at the foot of the file, after applyHash, so a
+// #family/<key> link opens with that family's goal in the big line rather
+// than the default family's for the first ten seconds.
 // Ten seconds. The underlying rows change on the order of minutes (a job is
 // set by hand, a run number ticks once an hour), so the 5s snapshot cadence
 // would be six reads of five tables per minute to redraw the same sentence.
@@ -10188,6 +10273,7 @@ buildViewTabs();
 // own elements, which are `const`s declared in the block above this one -
 // calling it any earlier than here is a temporal-dead-zone ReferenceError.
 applyHash();
+pollAgenda();
 
 // --- light and dark -------------------------------------------------------
 // The button reports what it will DO, not what is currently set. "Light" on a

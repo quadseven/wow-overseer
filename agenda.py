@@ -657,7 +657,8 @@ def stalled(moved_at: datetime | None, now: datetime) -> bool:
 def build_agenda(roster_rows: list[dict], run_rows: list[dict],
                  instance_rows: list[dict], goal_rows: list[dict],
                  trade_rows: list[dict], event_rows: list[dict],
-                 quest_titles: dict, now: datetime | None = None) -> dict:
+                 quest_titles: dict, now: datetime | None = None,
+                 members: list[str] | None = None) -> dict:
     """Rows in, the current-goal banner's JSON out.
 
     roster_rows   overseer_roster, every column this reads
@@ -675,8 +676,22 @@ def build_agenda(roster_rows: list[dict], run_rows: list[dict],
     this is the half of that contract that has to do something sensible with
     one - the Achievements tab's 503 on production (infra#3172) was the same
     contract broken at the other end.
+
+    `members` is ONE family's roster. The roster, goal, trade and run tables
+    hold every family, and reading them whole made one banner out of two
+    families: "the rest (Zug, Bork, Grog, ...) hold their quests" put the
+    Horde into the Alliance's sentence. Given a family, every row is narrowed
+    to it here - by character for the roster, goals and trades, by leader for
+    runs - so the SQL stays a plain read. None keeps every row, which is what
+    every caller did before there were two families.
     """
     now = now or datetime.now()
+    if members is not None:
+        ours = set(members)
+        roster_rows = [r for r in roster_rows if str(r.get("name")) in ours]
+        goal_rows = [r for r in goal_rows if str(r.get("character_name")) in ours]
+        trade_rows = [r for r in trade_rows if str(r.get("character_name")) in ours]
+        run_rows = [r for r in run_rows if str(r.get("leader_name")) in ours]
     rows = _enabled(roster_rows)
     names = [str(r["name"]) for r in rows]
     counter = campaign(rows)

@@ -583,3 +583,51 @@ class WhatTheColumnsSayIsSet(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class OneFamilyPerBanner(unittest.TestCase):
+    """The roster, goal, trade and run tables hold every family. Read whole,
+    the banner was one family made of two: "the rest (Zug, Bork, ...)"."""
+
+    HORDE = ("Zug", "Oz")
+
+    def rows(self):
+        horde = [{"name": n, "enabled": 1, "lead": 1 if n == "Zug" else 0,
+                  "job": "quest", "drive_quest": 246, "travel_npc": "",
+                  "learn_skill": 0, "dungeon_runs_wanted": 0,
+                  "dungeon_runs_done": 0} for n in self.HORDE]
+        return roster() + horde
+
+    def scoped(self, members, **kw):
+        return agenda.build_agenda(
+            self.rows(), list(kw.get("run_rows", ())), [],
+            list(kw.get("goal_rows", ())), [],
+            [{"kind": "quest_accept", "last_seen": NOW - timedelta(minutes=1)}],
+            {101: "The Totem of Infliction", 246: "Assessing the Threat"},
+            now=NOW, members=list(members))
+
+    def test_unscoped_the_two_families_are_one_roster_which_is_the_bug(self):
+        out = agenda.build_agenda(
+            self.rows(), [], [], [], [],
+            [{"kind": "quest_accept", "last_seen": NOW - timedelta(minutes=1)}],
+            {101: "a", 246: "b"}, now=NOW)
+        self.assertEqual(len(out["roster"]), len(FAMILY) + len(self.HORDE))
+
+    def test_each_family_reads_only_its_own_roster(self):
+        self.assertEqual(sorted(self.scoped(self.HORDE)["roster"]), sorted(self.HORDE))
+        self.assertEqual(sorted(self.scoped(FAMILY)["roster"]), sorted(FAMILY))
+
+    def test_one_family_is_not_split_by_the_other(self):
+        """Each family is on one quest, so neither banner is a split."""
+        self.assertIsNone(self.scoped(FAMILY)["quest_split"])
+        self.assertIsNone(self.scoped(self.HORDE)["quest_split"])
+
+    def test_an_order_and_a_run_belong_to_the_family_that_has_them(self):
+        order = dict(DiscordOrders.GOAL[0])
+        run = run_row()
+        horde = self.scoped(self.HORDE, goal_rows=[order], run_rows=[run])
+        self.assertIsNone(horde["orders"])
+        self.assertNotEqual(horde["activity"], agenda.DUNGEON)
+        alliance = self.scoped(FAMILY, goal_rows=[order], run_rows=[run])
+        self.assertEqual(alliance["orders"]["who"], "Grug")
+        self.assertEqual(alliance["activity"], agenda.DUNGEON)
