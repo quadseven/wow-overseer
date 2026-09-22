@@ -1568,7 +1568,7 @@ _RAID_TRAINER = (
     "SELECT SpellId AS spell, ReqSkillRank AS skill_rank "
     "FROM acore_world.trainer_spell WHERE SpellId IN ({holes})"
 )
-_RAID_CHARS = "SELECT name, level, class FROM characters WHERE name IN ({holes})"
+_RAID_CHARS = "SELECT name, level, class, race FROM characters WHERE name IN ({holes})"
 # WHO HOLDS THE ATTUNEMENT SHORTCUT. Both quest rows the core carries under
 # that title are bound, and the list is raidready's own so the two cannot
 # drift apart.

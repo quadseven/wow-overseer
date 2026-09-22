@@ -66,6 +66,17 @@ class TwoFamiliesAreTwoGuilds(unittest.TestCase):
         self.assertEqual(raidready.faction_of([]), "")
 
 
+class AFamilyInNoGuildStillHasAFaction(unittest.TestCase):
+    def test_the_race_comes_from_the_character_rows(self):
+        group = raidready.group_guilds([], {"Zug": ["Zug", "Oz"]})[0]
+        card = raidready.build_guild(
+            group, [{"name": "Zug", "level": 15, "class": WARRIOR, "race": 2},
+                    {"name": "Oz", "level": 10, "class": MAGE, "race": 5}],
+            [], [], 50, NO_GOALS)
+        self.assertEqual(card["faction"], "Horde")
+        self.assertEqual(card["title"], "Zug's family (Horde)")
+
+
 class HardBlockers(unittest.TestCase):
     def test_a_full_staffed_guild_with_a_raid_portal_is_ready(self):
         rows = _guild("Cave", 23, FULL)
