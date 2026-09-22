@@ -425,6 +425,164 @@ def bag_purchase_allowed(
     return empty_position and price > 0 and money >= price + reserve
 
 
+# ---------------------------------------------------------------------------
+# BUYING A BAG (#150)
+#
+# `bag_purchase_allowed` had no caller. Measured on wow-dev 2026-09-22 the
+# second family (levels 12 to 16) carried only the 16-slot backpack each,
+# four empty bag positions apiece, 8 to 20 silver in their purses, and Zug's
+# client was showing the "Full Bags" tutorial. The cheapest general bag in
+# this realm's vendor tables is the 6-slot Small Brown Pouch at 5 silver.
+#
+# BOUGHT, NEVER GRANTED. Every purchase is a kind='buy' row that mod-overseer's
+# DoBuy executes as the character at a vendor in reach, paying the vendor's
+# price. Nothing here writes a GM command or creates an item.
+
+# What stays in the purse after a bag is bought: 100 copper (1 silver) per
+# character level. A level 13 keeps 1300 copper (13 silver) back for repairs,
+# food and training; a level 60 keeps 6000 copper (60 silver). A judgement,
+# not a measurement: it is the floor below which a bag stops being worth more
+# than the next repair bill.
+BAG_RESERVE_PER_LEVEL = 100
+
+
+def bag_reserve(level: int) -> int:
+    """The copper a character keeps after buying a bag."""
+    return BAG_RESERVE_PER_LEVEL * max(1, int(level))
+
+
+@dataclass(frozen=True)
+class BagOffer:
+    """One general-purpose bag a vendor in reach stocks, at its list price."""
+
+    entry: int
+    name: str
+    slots: int
+    price: int
+
+
+@dataclass(frozen=True)
+class BagBuyer:
+    """One character's side of a purchase, as the caller measured it.
+
+    `stocks` is what the vendors in reach of THIS character sell, because
+    DoBuy answers on the buyer's own range. `open_positions` is empty bag
+    positions less the spare bags already coming to fill them.
+    """
+
+    name: str
+    level: int
+    money: int
+    open_positions: int
+    free_slots: int
+    stocks: frozenset = frozenset()
+
+
+@dataclass(frozen=True)
+class BagPurchase:
+    """One bag to buy: a kind='buy' row, then an equip into the position."""
+
+    buyer: str
+    entry: int
+    name: str
+    slots: int
+    price: int
+    why: str
+
+    @property
+    def command(self) -> str:
+        """What mod-overseer's ParseBuyRequest reads. `max` caps the spend at
+        the list price, which a reputation discount can only lower."""
+        return "entry:%d count:1 max:%d" % (int(self.entry), int(self.price))
+
+    @property
+    def equip_command(self) -> str:
+        """The playerbot equip verb that moves it into the empty position."""
+        return "e Hitem:%d:0" % int(self.entry)
+
+
+def open_bag_positions(members) -> dict:
+    """name -> empty bag positions the family's own spare bags will not fill.
+
+    `members` are bag_upgrade.Member values. A spare bag anybody in the family
+    carries empty is going to be handed to (or put on by) somebody with an
+    empty position, so buying one while a spare exists spends coin on a bag the
+    family already owns. The spares are counted against the family's open
+    positions in name order, the order bag_upgrade.plan_family_bags fills them.
+    """
+    spares = sum(1 for m in members for bag in m.carried if bag.used == 0)
+    out = {}
+    for member in sorted(members, key=lambda m: m.name):
+        empty = max(0, int(member.positions) - len(member.worn))
+        filled = min(empty, spares)
+        spares -= filled
+        out[member.name] = empty - filled
+    return out
+
+
+def bag_purchases(buyers, offers) -> tuple:
+    """The cheapest bag each buyer can afford, and a note for each who cannot.
+
+    One bag per buyer per pass: the next pass sees the bag it bought. The
+    cheapest offer the buyer's own vendors stock is the only one considered
+    (ties go to the bigger bag, then the lower entry), and it is bought only
+    when `bag_purchase_allowed` says the reserve survives it and there is a
+    free slot for it to land in. Returns (purchases, notes).
+    """
+    by_entry = {}
+    for offer in offers:
+        if offer.price > 0 and offer.slots > 0:
+            by_entry[int(offer.entry)] = offer
+    purchases, notes = [], []
+    for buyer in sorted(buyers, key=lambda b: b.name):
+        if buyer.open_positions <= 0:
+            continue
+        stocked = sorted(
+            (by_entry[e] for e in buyer.stocks if e in by_entry),
+            key=lambda o: (o.price, -o.slots, o.entry),
+        )
+        if not stocked:
+            notes.append(
+                "%s has an empty bag position and no vendor in reach "
+                "stocks a bag" % buyer.name
+            )
+            continue
+        offer = stocked[0]
+        reserve = bag_reserve(buyer.level)
+        if not bag_purchase_allowed(buyer.money, offer.price, True, reserve=reserve):
+            notes.append(
+                "%s cannot spare %d copper for %s (%d in the purse, "
+                "%d kept back at level %d)"
+                % (
+                    buyer.name,
+                    offer.price,
+                    offer.name,
+                    buyer.money,
+                    reserve,
+                    buyer.level,
+                )
+            )
+            continue
+        if buyer.free_slots < 1:
+            notes.append(
+                "%s has no free slot for %s to land in; a sell pass "
+                "has to run first" % (buyer.name, offer.name)
+            )
+            continue
+        purchases.append(
+            BagPurchase(
+                buyer=buyer.name,
+                entry=offer.entry,
+                name=offer.name,
+                slots=offer.slots,
+                price=offer.price,
+                why="%d empty bag position(s), %d copper in the purse, %d kept "
+                "back" % (buyer.open_positions, buyer.money, reserve),
+            )
+        )
+    return tuple(purchases), tuple(notes)
+
+
 def item_binding(row) -> str:
     """How this particular copy is bound, which is not what the template says.
 

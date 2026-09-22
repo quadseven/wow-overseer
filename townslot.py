@@ -401,6 +401,59 @@ def stranded_nonleader_aims(aims, leader: str, *, ground, releasable) -> tuple:
     )
 
 
+@dataclasses.dataclass(frozen=True)
+class Cohort:
+    """One family from `overseer_roster.family`, and who walks it (#150).
+
+    `key` is the roster's own `family` value, `leader` the character carrying
+    `lead = 1` in that family (the one mod-overseer walks), and `names` every
+    enabled member. The bridge keeps one `Slot` per key, because each family
+    has its own traveller and its own column.
+    """
+
+    key: str
+    leader: str
+    names: tuple = ()
+
+
+def other_cohorts(rows, own_names) -> tuple:
+    """Every roster family this bridge does not already drive, with a leader.
+
+    `rows` carry name, family and lead, one per enabled roster row. A family
+    sharing any name with `own_names` is this bridge's own and is left out, so
+    no character is passed twice. The leader is the `lead = 1` row; failing
+    that, the member whose name is the family key (the column defaults to the
+    head's name); failing both, the family is left out, because without a
+    traveller a vendor errand has nobody to walk and every aim would be
+    stranded.
+    """
+    own = {str(name) for name in own_names}
+    grouped: dict = {}
+    leads: dict = {}
+    for row in rows:
+        key = str(row.get("family") or "").strip()
+        name = str(row.get("name") or "").strip()
+        if not key or not name:
+            continue
+        grouped.setdefault(key, set()).add(name)
+        try:
+            if int(row.get("lead") or 0) == 1:
+                leads.setdefault(key, set()).add(name)
+        except (TypeError, ValueError):
+            continue
+    out = []
+    for key in sorted(grouped):
+        names = grouped[key]
+        if names & own:
+            continue
+        lead = sorted(leads.get(key, ()))
+        leader = lead[0] if lead else (key if key in names else "")
+        if not leader:
+            continue
+        out.append(Cohort(key=key, leader=leader, names=tuple(sorted(names))))
+    return tuple(out)
+
+
 def urgent_ground_release(*, aim: str, pressure: bool, in_run: bool, ground) -> bool:
     """Whether bag pressure may interrupt a stale positional town aim."""
     return bool(pressure and not in_run and str(aim or "") and ground(aim))

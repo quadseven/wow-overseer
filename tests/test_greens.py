@@ -603,14 +603,14 @@ class TheBridgeAsksBeforeItSells(unittest.TestCase):
         self.assertIn("it.class IN (2, 4)", self._gear_sql())
 
     def test_the_pass_asks_the_gate_and_passes_the_owners_mark(self):
-        start = self.src.index("    async def _vendor_once(self)")
+        start = self.src.index("    async def _vendor_once(self")
         block = self.src[start : self.src.index("    async def _vendor_loop(")]
         self.assertIn("bag_pressure.family_fits(gear_rows, worn, names)", block)
         self.assertIn("fits=fits", block)
         self.assertIn("keep_names=OWNER_KEEPS", block)
 
     def _vendor_pass(self):
-        start = self.src.index("    async def _vendor_once(self)")
+        start = self.src.index("    async def _vendor_once(self")
         return self.src[start : self.src.index("    async def _vendor_loop(")]
 
     def test_the_vendor_errand_is_written_once_and_to_the_leader(self):
