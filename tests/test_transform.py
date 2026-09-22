@@ -102,3 +102,17 @@ class TransformTest(unittest.TestCase):
         # client's own data, not the display spelling.
         self.assertEqual(self.geo.zone_name(1, *ORGRIMMAR), "Ogrimmar")
         self.assertEqual(self.geo.zone_name(0, *STORMWIND), "Stormwind")
+
+
+class ZoneById(unittest.TestCase):
+    def setUp(self):
+        from transform import Geometry
+        self.geo = Geometry.load(".")
+
+    def test_a_zone_id_names_its_zone(self):
+        self.assertEqual(self.geo.zone_by_id(618), "Winterspring")
+        self.assertEqual(self.geo.zone_by_id("361"), "Felwood")
+
+    def test_nothing_usable_is_none(self):
+        for bad in (None, 0, "", "x", 999999):
+            self.assertIsNone(self.geo.zone_by_id(bad), bad)

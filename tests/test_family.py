@@ -505,3 +505,40 @@ class ASecondFamilyIsNotTheFirstOneRenamed(unittest.TestCase):
         payload = family.build_family([], GEO)
         self.assertEqual([m["name"] for m in payload["members"]],
                          family.roster())
+
+
+class TheZoneIsTheWorldsAnswerFirst(unittest.TestCase):
+    """The Watch tile read "in Felwood" while the client on the same screen was
+    in Winterspring. The zone came from bounding rectangles, and Felwood's box
+    is smaller than Winterspring's and covers the west of it. The snapshot row
+    carries the core's own zone id, which is the world's answer."""
+
+    # A point both rectangles contain: west Winterspring by the world's
+    # reckoning, Felwood by the smallest-box guess.
+    OVERLAP = dict(map_id=1, pos_x=6000.0, pos_y=-2000.0)
+
+    def test_the_guess_alone_says_felwood_which_is_the_bug(self):
+        self.assertEqual(GEO.zone_name(1, 6000.0, -2000.0), "Felwood")
+
+    def test_the_live_zone_id_wins_over_the_rectangle_guess(self):
+        c = card(family.build_family([row(zone_id=618, **self.OVERLAP)], GEO), "Grug")
+        self.assertEqual(c["zone"], "Winterspring")
+
+    def test_no_zone_id_still_falls_back_to_the_guess(self):
+        c = card(family.build_family([row(**self.OVERLAP)], GEO), "Grug")
+        self.assertEqual(c["zone"], "Felwood")
+
+    def test_an_unknown_zone_id_falls_back_rather_than_printing_nothing(self):
+        c = card(family.build_family([row(zone_id=999999, **self.OVERLAP)], GEO), "Grug")
+        self.assertEqual(c["zone"], "Felwood")
+
+    def test_the_wall_caption_says_the_same_zone(self):
+        p = family.build_family([row(zone_id=618, **self.OVERLAP)], GEO)
+        tile = next(t for t in p["wall"]["tiles"] if t["name"] == "Grug")
+        self.assertEqual(tile["line"], "in Winterspring")
+
+    def test_the_adapter_selects_the_zone_id(self):
+        server = Path(__file__).resolve().parent.parent.joinpath("map_server.py").read_text()
+        fetch = server[server.index("def _fetch_family(names=None)"):]
+        fetch = fetch[:fetch.index("# --- the Wealth and Bags view")]
+        self.assertIn("zone_id", fetch)

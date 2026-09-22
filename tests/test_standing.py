@@ -811,13 +811,13 @@ class ThePagePanel(unittest.TestCase):
         """WHO the family is belongs to bonds. Accepting a roster here would
         turn it into a general character query wearing a friendly name."""
         handler = self.server[self.server.index("def _standing"):]
-        handler = handler[:handler.index("def _questlog")]
+        handler = handler[:handler.index("def _lineup")]
         self.assertNotIn("query.get", handler)
         self.assertIn("family.roster()", self.server)
 
     def test_a_failed_query_keeps_the_contract_the_other_endpoints_hold(self):
         handler = self.server[self.server.index("def _standing"):]
-        handler = handler[:handler.index("def _questlog")]
+        handler = handler[:handler.index("def _lineup")]
         self.assertIn("503", handler)
         self.assertIn("world unreachable", handler)
 

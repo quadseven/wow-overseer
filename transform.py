@@ -78,6 +78,29 @@ class Geometry:
             return None
         return self.place(entrance["map"], entrance["x"], entrance["y"])
 
+    def zone_by_id(self, zone_id) -> str | None:
+        """The zone the WORLD says a character is in, by its area id.
+
+        The core writes `GetZoneId()` into the snapshot beside the position,
+        and that id is the game's own answer. zone_name() below is a guess
+        from bounding rectangles, and the rectangles overlap: Felwood's box
+        is smaller than Winterspring's and covers the west of it, so a
+        character standing in Winterspring was captioned "in Felwood". None
+        when the id is 0 or not a zone this file draws, so the caller can
+        fall back to the guess rather than print nothing.
+        """
+        try:
+            wanted = int(zone_id or 0)
+        except (TypeError, ValueError):
+            return None
+        if not wanted:
+            return None
+        for region in self.continents.values():
+            for z in region["zones"]:
+                if z.get("area_id") == wanted:
+                    return z["name"]
+        return None
+
     def zone_name(self, map_id: int, x: float, y: float) -> str:
         """Smallest zone rectangle containing the point, or the region name.
 
