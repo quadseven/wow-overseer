@@ -17,6 +17,12 @@ import unittest
 # nothing). It must carry the real hierarchy, because the point of this file is
 # which CLASS a missing column arrives as: OperationalError and
 # ProgrammingError are both MySQLError subclasses.
+try:
+    import pymysql  # noqa: F401  (the real library, when this machine has it)
+
+    REAL_PYMYSQL = hasattr(pymysql, "connect")
+except ImportError:
+    REAL_PYMYSQL = False
 sys.modules.setdefault("pymysql", types.ModuleType("pymysql"))
 if not hasattr(sys.modules["pymysql"], "err"):
     _err = types.ModuleType("pymysql.err")
@@ -71,6 +77,32 @@ class AMissingColumnFallsBack(unittest.TestCase):
         cur, _ = self._cursor(err)
         with self.assertRaises(ERR.OperationalError):
             self.ms._guarded(cur, "wide", (), fallback="thin")
+
+
+@unittest.skipUnless(REAL_PYMYSQL, "needs the real pymysql to read its error map")
+class ThePremiseHoldsInTheRealLibrary(unittest.TestCase):
+    """The whole fix rests on pymysql raising 1054 as OperationalError. Asked
+    of the real library's own raise path, not of a stub built to agree."""
+
+    def _raised(self, errno, text):
+        import struct
+
+        import pymysql.err as real
+
+        packet = b"\xff" + struct.pack("<H", errno) + b"#42S22" + text.encode()
+        with self.assertRaises(real.MySQLError) as ctx:
+            real.raise_mysql_exception(packet)
+        return type(ctx.exception)
+
+    def test_a_missing_column_is_an_operational_error(self):
+        import pymysql.err as real
+
+        self.assertIs(self._raised(1054, "Unknown column"), real.OperationalError)
+
+    def test_a_missing_table_is_a_programming_error(self):
+        import pymysql.err as real
+
+        self.assertIs(self._raised(1146, "Table missing"), real.ProgrammingError)
 
 
 if __name__ == "__main__":
