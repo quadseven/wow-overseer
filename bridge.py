@@ -11052,7 +11052,7 @@ _JEV_WORN_SQL = (
 # way the Armory page shows it: damage, speed, stats and the green effect
 # lines ("Chance on hit: ..."), which is exactly what item level cannot say.
 _JEV_ITEM_FACTS_SQL = (
-    "SELECT it.entry, it.name AS item_name, it.Quality AS quality, "
+    "SELECT it.entry, it.name AS item_name, it.Quality AS quality, "  # noqa: S608 - fixed column names from range(); the IN list is placeholders and every value is bound
     "it.ItemLevel AS item_level, it.RequiredLevel AS required_level, "
     "it.class, it.subclass, it.InventoryType AS inventory_type, "
     "it.armor, it.block, it.bonding, it.AllowableClass AS allowable_class, "

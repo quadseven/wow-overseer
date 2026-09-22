@@ -180,6 +180,38 @@ def _distribution(raw, keys) -> dict | None:
     return out
 
 
+def _parse_choice(question: dict, answer: dict) -> Choice | None:
+    options = list(question["criteria"])
+    picked = answer.get("choice")
+    probabilities = _distribution(answer.get("probabilities"), options)
+    confidence = _unit(answer.get("confidence"))
+    if picked not in options or probabilities is None or confidence is None:
+        return None
+    return Choice(picked, probabilities, confidence)
+
+
+def _parse_score(question: dict, answer: dict) -> Score | None:
+    levels = [str(n) for n in range(len(question["criteria"]))]
+    probabilities = _distribution(answer.get("probabilities"), levels)
+    confidence = _unit(answer.get("confidence"))
+    value = answer.get("score")
+    if probabilities is None or confidence is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    if not 0 <= float(value) <= len(levels) - 1:
+        return None
+    return Score(float(value), probabilities, confidence)
+
+
+def _parse_noul(_question: dict, answer: dict) -> Noul | None:
+    value = _unit(answer.get("noul"))
+    return None if value is None else Noul(value)
+
+
+_PARSERS = {"choice": _parse_choice, "score": _parse_score, "noul": _parse_noul}
+
+
 def parse(question: dict, answer) -> Choice | Score | Noul | None:
     """One answer, checked against the question that was asked, or None.
 
@@ -190,33 +222,8 @@ def parse(question: dict, answer) -> Choice | Score | Noul | None:
     """
     if not isinstance(answer, dict) or answer.get("type") != question.get("type"):
         return None
-    kind = question["type"]
-    if kind == "choice":
-        options = list(question["criteria"])
-        picked = answer.get("choice")
-        probabilities = _distribution(answer.get("probabilities"), options)
-        confidence = _unit(answer.get("confidence"))
-        if picked not in options or probabilities is None or confidence is None:
-            return None
-        return Choice(picked, probabilities, confidence)
-    if kind == "score":
-        levels = [str(n) for n in range(len(question["criteria"]))]
-        probabilities = _distribution(answer.get("probabilities"), levels)
-        confidence = _unit(answer.get("confidence"))
-        value = answer.get("score")
-        if (
-            probabilities is None
-            or confidence is None
-            or isinstance(value, bool)
-            or not isinstance(value, (int, float))
-            or not 0 <= float(value) <= len(levels) - 1
-        ):
-            return None
-        return Score(float(value), probabilities, confidence)
-    if kind == "noul":
-        value = _unit(answer.get("noul"))
-        return None if value is None else Noul(value)
-    return None
+    parser = _PARSERS.get(question["type"])
+    return parser(question, answer) if parser else None
 
 
 # ---------------------------------------------------------------------------
@@ -236,10 +243,15 @@ class Outcome:
 
 
 def _urllib_post(url: str, body: bytes, headers: dict, timeout: float) -> tuple:
-    """POST and return (http status, body bytes). Runs in a worker thread."""
-    request = urllib.request.Request(url, data=body, headers=headers, method="POST")
+    """POST and return (http status, body bytes). Runs in a worker thread.
+
+    Only an https URL is ever opened: `Client` refuses any other scheme when
+    it is built, so a `file:` or custom scheme from the environment cannot
+    reach urlopen.
+    """
+    request = urllib.request.Request(url, data=body, headers=headers, method="POST")  # noqa: S310 - https only, enforced in Client.__init__
     try:
-        with urllib.request.urlopen(request, timeout=timeout) as response:
+        with urllib.request.urlopen(request, timeout=timeout) as response:  # noqa: S310 - https only, enforced in Client.__init__
             return response.status, response.read()
     except urllib.error.HTTPError as exc:
         try:
@@ -273,6 +285,8 @@ class Client:
         transport=None,
         clock=time.monotonic,
     ):
+        if not str(url).lower().startswith("https://"):
+            raise ValueError("Jev URL must be https: %r" % url)
         self._key = (api_key or "").strip()
         self.url = url
         self.model = model

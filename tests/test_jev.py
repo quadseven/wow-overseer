@@ -269,6 +269,11 @@ class ModeTest(unittest.TestCase):
         self.assertIn("no act path", logs.output[0])
         self.assertEqual(jev.effective_mode("item_disposition", True, env), jev.ACT)
 
+    def test_only_an_https_url_is_accepted(self):
+        for url in ("file:///etc/passwd", "http://api.typesafe.ai/v1/systemone"):
+            with self.subTest(url=url), self.assertRaises(ValueError):
+                jev.Client("k", url=url)
+
     def test_from_env_reads_the_key_and_the_knobs(self):
         client = jev.Client.from_env(
             {

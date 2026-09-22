@@ -213,71 +213,86 @@ def options(row: dict, holding, characters) -> dict:
     return out
 
 
-def heuristic(gear_rows, worn_rows, names, keep_names=()) -> dict:
-    """item guid -> (route, why): what the shipped pipeline does with each piece.
+@dataclass(frozen=True)
+class Pipeline:
+    """What the shipped passes decided about this family's carried gear.
 
     Read off the same opinions the passes act on, never re-decided here:
-    `gear.claims` (through bag_pressure) for who would wear it,
-    `bag_pressure.holder_equips` for what the equip pass puts on,
-    `bag_pressure.gear_candidates` for what the vendor pass sells, and the
-    auction pass's filter for what it lists. When both the auction and the
-    vendor pass would take a piece, whichever counter the leader reaches first
-    wins; it is recorded as `auction` because that is the pass that asks
-    first when both are open.
+    `gear.claims` (through bag_pressure) for who would wear a piece,
+    `bag_pressure.holder_equips` for what the equip pass puts on, and
+    `bag_pressure.gear_candidates` for what the vendor pass sells.
     """
-    claimants = bag_pressure.family_claimants(gear_rows, worn_rows, names)
-    fits = bag_pressure.family_fits(gear_rows, worn_rows, names)
-    equipping = {
-        e.guid
-        for e in bag_pressure.holder_equips(
+
+    claimants: dict  # item guid -> a name, CLAIM_NOBODY or CLAIM_UNJUDGEABLE
+    equipping: frozenset  # item guids the equip pass puts on
+    selling: frozenset  # item guids the vendor pass sells
+    keep_names: tuple = ()
+
+    @classmethod
+    def read(cls, gear_rows, worn_rows, names, keep_names=()) -> "Pipeline":
+        fits = bag_pressure.family_fits(gear_rows, worn_rows, names)
+        equips = bag_pressure.holder_equips(
             gear_rows, worn_rows, names, keep_names=keep_names
         )
-    }
-    selling = {
-        c.item_guid
-        for c in bag_pressure.gear_candidates(
+        sales = bag_pressure.gear_candidates(
             gear_rows,
             disposition.Family(vendor_reachable=True),
             available=disposition.EXECUTABLE_TODAY,
             fits=fits,
             keep_names=keep_names,
         )
-    }
-    out = {}
-    for row in gear_rows:
-        try:
-            guid = int(row["item_guid"])
-            holder = str(row["holder"])
-        except (KeyError, TypeError, ValueError):
-            continue
-        who = claimants.get(guid, bag_pressure.CLAIM_UNJUDGEABLE)
-        if bag_pressure.owner_keeps(row.get("name", ""), keep_names):
-            out[guid] = (KEEP, "the operator marked it never to be disposed of")
-        elif guid in equipping:
-            out[guid] = (EQUIP, "an upgrade its holder would wear")
-        elif who == holder:
-            out[guid] = (
+        return cls(
+            claimants=bag_pressure.family_claimants(gear_rows, worn_rows, names),
+            equipping=frozenset(e.guid for e in equips),
+            selling=frozenset(c.item_guid for c in sales),
+            keep_names=tuple(keep_names),
+        )
+
+    def route(self, row: dict, guid: int, holder: str) -> tuple:
+        """(route, why) for one carried piece.
+
+        When both the auction and the vendor pass would take a piece,
+        whichever counter the leader reaches first wins; it is recorded as
+        `auction`, the pass that asks first when both are open.
+        """
+        who = self.claimants.get(guid, bag_pressure.CLAIM_UNJUDGEABLE)
+        if bag_pressure.owner_keeps(row.get("name", ""), self.keep_names):
+            return KEEP, "the operator marked it never to be disposed of"
+        if guid in self.equipping:
+            return EQUIP, "an upgrade its holder would wear"
+        if who == holder:
+            return (
                 KEEP,
                 "its holder would wear it, but the equip pass puts on a "
                 "better carried piece for that slot or will not judge this "
                 "weapon-hand swap",
             )
-        elif who == bag_pressure.CLAIM_UNJUDGEABLE:
-            out[guid] = (
-                KEEP,
-                "cannot be settled from the numbers: no slot rule covers it",
-            )
-        elif who != bag_pressure.CLAIM_NOBODY:
-            out[guid] = (GIVE_PREFIX + who, "an upgrade for %s" % who)
-        elif auctionable(row):
-            out[guid] = (
-                AUCTION,
-                "nobody in the family would wear it, and it can be listed",
-            )
-        elif guid in selling:
-            out[guid] = (VENDOR, "nobody in the family would wear it")
-        else:
-            out[guid] = (KEEP, "nobody would wear it, and no route is open to it")
+        if who == bag_pressure.CLAIM_UNJUDGEABLE:
+            return KEEP, "cannot be settled from the numbers: no slot rule covers it"
+        if who != bag_pressure.CLAIM_NOBODY:
+            return GIVE_PREFIX + who, "an upgrade for %s" % who
+        if auctionable(row):
+            return AUCTION, "nobody in the family would wear it, and it can be listed"
+        if guid in self.selling:
+            return VENDOR, "nobody in the family would wear it"
+        return KEEP, "nobody would wear it, and no route is open to it"
+
+
+def _guid_holder(row: dict):
+    try:
+        return int(row["item_guid"]), str(row["holder"])
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
+def heuristic(gear_rows, worn_rows, names, keep_names=()) -> dict:
+    """item guid -> (route, why): what the shipped pipeline does with each piece."""
+    pipeline = Pipeline.read(gear_rows, worn_rows, names, keep_names)
+    out = {}
+    for row in gear_rows:
+        key = _guid_holder(row)
+        if key is not None:
+            out[key[0]] = pipeline.route(row, *key)
     return out
 
 
@@ -425,19 +440,19 @@ def weapon_question(holding, item: dict, wardrobe: Wardrobe):
     return state, {"better": jev.choice(instructions, criteria)}
 
 
-def weapon_heuristic(holding, character, equipping, claimants) -> tuple:
+def weapon_heuristic(holding, character, pipeline: Pipeline) -> tuple:
     """(carried|worn, why): what the pipeline does, and what it cannot see.
 
-    For the holder, `carried` only when the equip pass puts it on
-    (`equipping`, item guids from bag_pressure.holder_equips), which already
-    refuses the weapon-hand swaps item level cannot judge. For anybody else,
-    `carried` only when the gear hand-off names them (`claimants`, item guid
-    to name). The reason is gear.py's own, with what it leaves out said.
+    For the holder, `carried` only when the equip pass puts it on, which
+    already refuses the weapon-hand swaps item level cannot judge. For
+    anybody else, `carried` only when the gear hand-off names them. The
+    reason is gear.py's own, with what it leaves out said.
     """
     if character.name == holding.holder:
-        answer = CARRIED if int(holding.guid) in equipping else WORN
+        answer = CARRIED if int(holding.guid) in pipeline.equipping else WORN
     else:
-        answer = CARRIED if claimants.get(int(holding.guid)) == character.name else WORN
+        named = pipeline.claimants.get(int(holding.guid))
+        answer = CARRIED if named == character.name else WORN
     _, why = bag_pressure.wear_reason(holding, character)
     return (
         answer,
@@ -534,6 +549,100 @@ def _judged(base: Judgment, outcome: jev.Outcome, qid: str) -> Judgment:
     )
 
 
+@dataclass(frozen=True)
+class _Family:
+    """Everything one pass reads once and every question consults."""
+
+    characters: tuple
+    closet: dict  # name -> Wardrobe
+    pipeline: Pipeline
+    modes: dict
+
+    def mode(self, kind: str) -> str:
+        return self.modes.get(kind, jev.SHADOW)
+
+
+def _disposition_ask(family: _Family, holding, row: dict, item: dict, base: dict):
+    """The item_disposition question for one piece, or None when not asked."""
+    mode = family.mode(KIND_DISPOSITION)
+    if mode == jev.OFF:
+        return None
+    offered = options(row, holding, family.characters)
+    if len(offered) < 2:
+        return None
+    route, why = family.pipeline.route(row, int(holding.guid), holding.holder)
+    state, questions = disposition_question(holding, item, family.closet, offered)
+    judgment = Judgment(
+        kind=KIND_DISPOSITION,
+        subject=holding.holder,
+        heuristic=route,
+        heuristic_why=why,
+        mode=mode,
+        status="",
+        **base,
+    )
+    return judgment, state, questions, "route"
+
+
+def _weapon_asks(family: _Family, holding, item: dict, base: dict) -> list:
+    """The weapon_choice question for each member it is a real question for."""
+    mode = family.mode(KIND_WEAPON)
+    if mode == jev.OFF:
+        return []
+    asks = []
+    for character in sorted(family.characters, key=lambda c: c.name):
+        wardrobe = family.closet.get(character.name)
+        if wardrobe is None or not can_wield(holding, character):
+            continue
+        if character.name != holding.holder and holding.soulbound:
+            continue
+        if not needs_weapon_question(item, holding, wardrobe):
+            continue
+        state, questions = weapon_question(holding, item, wardrobe)
+        answer, why = weapon_heuristic(holding, character, family.pipeline)
+        judgment = Judgment(
+            kind=KIND_WEAPON,
+            subject=character.name,
+            heuristic=answer,
+            heuristic_why=why,
+            mode=mode,
+            status="",
+            **base,
+        )
+        asks.append((judgment, state, questions, "better"))
+    return asks
+
+
+def _questions(family: _Family, gear_rows, describe) -> list:
+    """Every (Judgment, state, questions, qid) this pass would ask, in order."""
+    rows = {}
+    for row in gear_rows:
+        key = _guid_holder(row)
+        if key is not None:
+            rows[key[0]] = row
+    holdings = bag_pressure.carried_holdings(gear_rows)
+    asks = []
+    for holding in sorted(holdings, key=lambda h: (h.holder, int(h.guid))):
+        row = rows.get(int(holding.guid))
+        if row is None or holding.holder not in family.closet:
+            continue
+        item = describe(int(holding.entry)) or {
+            "name": holding.name,
+            "item_level": holding.item_level,
+        }
+        base = dict(
+            holder=holding.holder,
+            item_guid=int(holding.guid),
+            item_entry=int(holding.entry),
+            item_name=holding.name,
+        )
+        ask = _disposition_ask(family, holding, row, item, base)
+        if ask is not None:
+            asks.append(ask)
+        asks.extend(_weapon_asks(family, holding, item, base))
+    return asks
+
+
 async def shadow_pass(
     client: jev.Client,
     *,
@@ -555,97 +664,14 @@ async def shadow_pass(
     newly full bag is judged over a few passes rather than in one burst; the
     order is fixed (holder, then item guid) so every piece gets its turn.
     """
-    modes = modes or {}
-    specs = specs or {}
-    characters = bag_pressure.family_characters(worn_rows, names)
-    holdings = {int(h.guid): h for h in bag_pressure.carried_holdings(gear_rows)}
-    rows = {}
-    for row in gear_rows:
-        try:
-            rows[int(row["item_guid"])] = row
-        except (KeyError, TypeError, ValueError):
-            continue
-    closet = wardrobes(characters, worn_items, describe, specs)
-    by_name = {c.name: c for c in characters}
-    routes = heuristic(gear_rows, worn_rows, names, keep_names)
-    equipping = {
-        e.guid
-        for e in bag_pressure.holder_equips(
-            gear_rows, worn_rows, names, keep_names=keep_names
-        )
-    }
-    claimants = bag_pressure.family_claimants(gear_rows, worn_rows, names)
-
-    asks = []  # (Judgment base, state, questions, qid)
-    for guid in sorted(holdings, key=lambda g: (holdings[g].holder, g)):
-        holding = holdings[guid]
-        row = rows.get(guid)
-        if row is None or holding.holder not in closet:
-            continue
-        item = describe(int(holding.entry)) or {
-            "name": holding.name,
-            "item_level": holding.item_level,
-        }
-        base = dict(
-            holder=holding.holder,
-            item_guid=guid,
-            item_entry=int(holding.entry),
-            item_name=holding.name,
-        )
-        disposition_mode = modes.get(KIND_DISPOSITION, jev.SHADOW)
-        if disposition_mode != jev.OFF and guid in routes:
-            offered = options(row, holding, characters)
-            route, why = routes[guid]
-            if len(offered) > 1:
-                state, questions = disposition_question(holding, item, closet, offered)
-                asks.append(
-                    (
-                        Judgment(
-                            kind=KIND_DISPOSITION,
-                            subject=holding.holder,
-                            heuristic=route,
-                            heuristic_why=why,
-                            mode=disposition_mode,
-                            status="",
-                            **base,
-                        ),
-                        state,
-                        questions,
-                        "route",
-                    )
-                )
-        weapon_mode = modes.get(KIND_WEAPON, jev.SHADOW)
-        if weapon_mode == jev.OFF:
-            continue
-        for name in sorted(closet):
-            character = by_name.get(name)
-            if character is None or not can_wield(holding, character):
-                continue
-            if name != holding.holder and holding.soulbound:
-                continue
-            wardrobe = closet[name]
-            if not needs_weapon_question(item, holding, wardrobe):
-                continue
-            state, questions = weapon_question(holding, item, wardrobe)
-            answer, why = weapon_heuristic(holding, character, equipping, claimants)
-            asks.append(
-                (
-                    Judgment(
-                        kind=KIND_WEAPON,
-                        subject=name,
-                        heuristic=answer,
-                        heuristic_why=why,
-                        mode=weapon_mode,
-                        status="",
-                        **base,
-                    ),
-                    state,
-                    questions,
-                    "better",
-                )
-            )
-
-    asks = asks[: max(0, int(limit))]
+    characters = tuple(bag_pressure.family_characters(worn_rows, names))
+    family = _Family(
+        characters=characters,
+        closet=wardrobes(characters, worn_items, describe, specs or {}),
+        pipeline=Pipeline.read(gear_rows, worn_rows, names, keep_names),
+        modes=dict(modes or {}),
+    )
+    asks = _questions(family, gear_rows, describe)[: max(0, int(limit))]
     gate = asyncio.Semaphore(max(1, int(getattr(client, "concurrency", 1))))
 
     async def one(ask):
