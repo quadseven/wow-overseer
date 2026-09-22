@@ -26,6 +26,7 @@ import basepath
 import chat
 import council
 import decree
+import dungeonpath
 import dungeonplan
 import eye
 import family
@@ -45,6 +46,7 @@ import tradespec
 import voice
 import watchwall
 import wealth
+from core import _ALLIANCE_RACES, _HORDE_RACES
 from map_core import build_payload
 from panel import build_character_panel
 from transform import Geometry
@@ -2041,44 +2043,53 @@ _PLAN_LOOT = (
 # the characters row already, so this is _RECAP_CHARS with one more column
 # rather than a second read.
 _PLAN_CHARS = (
+    "SELECT name, level, class, map, race FROM characters WHERE name IN ({holes})"
+)
+_PLAN_CHARS_OLD = (
     "SELECT name, level, class, map FROM characters WHERE name IN ({holes})"
 )
+# BOTH FAMILIES, BY THE ROSTER'S OWN `family` COLUMN (#81). bonds knows one
+# family; the roster knows who is in the world. The path is drawn once per
+# family, so the Horde family is not a second page somebody has to find.
+_PLAN_FAMILIES = (
+    "SELECT name, family FROM overseer_roster "
+    "WHERE family IS NOT NULL AND family <> '' ORDER BY `lead` DESC, name"
+)
+# WHICH RUNS EACH FAMILY HAS ALREADY MADE, so a step can say "started 12, cleared
+# 1" rather than leaving the operator to remember. Only three columns, because
+# the path needs nothing else; the thinner fallback is for a realm whose table
+# predates `outcome`, and it reads as "never cleared" rather than a 503.
+_PLAN_RUNS = ("SELECT leader_name, map_id, outcome FROM overseer_dungeon_run "
+              "WHERE leader_name IN ({holes})")
+_PLAN_RUNS_OLD = ("SELECT leader_name, map_id FROM overseer_dungeon_run "
+                  "WHERE leader_name IN ({holes})")
 
 
 def _fetch_dungeonplan() -> dict:
-    """Every dungeon, every boss drop, and what the five are wearing.
+    """Every dungeon, every boss drop, and what both families and their guilds
+    are wearing.
 
-    One connection, six reads, none of them per dungeon. Names come from bonds
-    via family.roster() and never from the request, exactly as /api/armory and
-    /api/family refuse a name parameter.
+    One connection, and none of the reads is per dungeon. Names come from the
+    roster and the guild tables and never from the request, exactly as
+    /api/armory and /api/family refuse a name parameter.
 
     `_wide_guarded` and the two roster reads this borrows are defined with the
     loot board's below, and this section sits ABOVE that one deliberately. The
     recap suite slices its own fetch window from that function to the
     current-goal banner and forbids an unguarded read anywhere inside it, so a
     section dropped in there would be asserted about by a suite that knows
-    nothing of it - and naming that function here would move the START of
-    their window into this docstring, which is a subtler version of the same
-    fault.
+    nothing of it.
     """
-    names = family.roster()
-    holes = ", ".join(["%s"] * len(names))
     conn = _connect()
     try:
         with conn.cursor() as cur:
             catalogue = _wide_guarded(cur, _PLAN_CATALOGUE, (),
                                       _PLAN_CATALOGUE_OLD,
                                       "dungeon_access_template")
-            # THE UNION, AND THE MODULE DECIDES IT. The page draws a row per
-            # access-table map AND per map this site already names, so binding
-            # the access table's maps alone would leave a site-named dungeon
-            # rendering "no boss loot" over loot that was simply never asked
-            # for. dungeonplan.map_ids is the one answer to which maps get a
-            # row, and it is asked here so the reads cannot fall behind it.
-            #
-            # NO MAPS MEANS NOTHING TO BIND, and `IN ()` is a syntax error
-            # rather than an empty result. The page says the world listed no
-            # dungeons it could read, which is what happened.
+            # THE UNION, AND THE MODULE DECIDES IT. dungeonplan.map_ids is the
+            # one answer to which maps get a row, and it is asked here so the
+            # reads cannot fall behind it. NO MAPS MEANS NOTHING TO BIND, and
+            # `IN ()` is a syntax error rather than an empty result.
             maps = dungeonplan.map_ids(catalogue, achievements.MAP_NAMES)
             encounters: list = []
             loot: list = []
@@ -2090,26 +2101,117 @@ def _fetch_dungeonplan() -> dict:
                 loot = _wide_guarded(
                     cur, _PLAN_LOOT.format(holes=mholes),  # noqa: S608
                     tuple(maps), "", "creature_loot_template")
-            # S608 on the roster reads: `holes` is a run of placeholders sized
-            # by len(family.roster()), and every VALUE is still bound by the
-            # driver.
-            chars = _wide_guarded(cur, _PLAN_CHARS.format(holes=holes),  # noqa: S608
-                                  tuple(names), "", "characters")
-            worn = _wide_guarded(cur, _RECAP_WORN.format(holes=holes),  # noqa: S608
-                                 (len(armory.EQUIPPED_SLOTS), *names), "",
-                                 "character_inventory")
-            # Guarded like everything else, and the empty list this hands back
-            # on a degraded schema is a real answer: recap.family_members
-            # turns "no rows for this character" into an unknown, an unknown
-            # proficiency ranks the page the way it was ranked before, and the
-            # basis keeps printing the line that says so.
-            skills = _wide_guarded(cur, _RECAP_SKILLS.format(holes=holes),  # noqa: S608
-                                   tuple(names), "", "character_skills")
+            families: dict = {}
+            for row in _wide_guarded(cur, _PLAN_FAMILIES, (), "",
+                                     "overseer_roster"):
+                if row.get("family") and row.get("name"):
+                    families.setdefault(row["family"], []).append(row["name"])
+            if not families:
+                # No roster rows: the one family bonds knows, exactly as the
+                # Family tab degrades, and no family at all when bonds has
+                # none either.
+                roster = family.roster()
+                families = {roster[0]: roster} if roster else {}
+            names = [n for members in families.values() for n in members]
+            # NOBODY TO BIND MEANS NOTHING TO READ: `IN ()` is a syntax error,
+            # not an empty result, so the character reads are skipped and the
+            # page says the roster names no family.
+            guild_rows: list = []
+            chars: list = []
+            worn: list = []
+            skills: list = []
+            runs: list = []
+            if names:
+                holes = ", ".join(["%s"] * len(names))
+                # S608 on the roster reads: `holes` is a run of placeholders
+                # sized by the roster, and every VALUE is bound by the driver.
+                guild_rows = _wide_guarded(
+                    cur, _LINEUP_GUILD.format(holes=holes),  # noqa: S608
+                    tuple(names), "", "guild_member")
+                # THE GUILD'S MEMBERS TOO, because the page counts who in the
+                # guild would gain. Measured on the dev realm with a guild of
+                # 71 and a second of 5: the whole fetch takes about 0.2s.
+                everyone = sorted(set(names) | {r["name"] for r in guild_rows})
+                eholes = ", ".join(["%s"] * len(everyone))
+                chars = _wide_guarded(
+                    cur, _PLAN_CHARS.format(holes=eholes),  # noqa: S608
+                    tuple(everyone), _PLAN_CHARS_OLD.format(holes=eholes),  # noqa: S608
+                    "characters")
+                worn = _wide_guarded(
+                    cur, _RECAP_WORN.format(holes=eholes),  # noqa: S608
+                    (len(armory.EQUIPPED_SLOTS), *everyone), "",
+                    "character_inventory")
+                # Guarded like everything else, and the empty list this hands
+                # back on a degraded schema is a real answer: an unknown
+                # proficiency, which the basis says out loud.
+                skills = _wide_guarded(
+                    cur, _RECAP_SKILLS.format(holes=eholes),  # noqa: S608
+                    tuple(everyone), "", "character_skills")
+                # Bound to the roster: only runs the families led are drawn.
+                runs = _wide_guarded(
+                    cur, _PLAN_RUNS.format(holes=holes),  # noqa: S608
+                    tuple(names), _PLAN_RUNS_OLD.format(holes=holes),  # noqa: S608
+                    "overseer_dungeon_run")
     finally:
         conn.close()
     return {"catalogue_rows": catalogue, "encounter_rows": encounters,
             "loot_rows": loot, "char_rows": chars, "equipped_rows": worn,
-            "skill_rows": skills}
+            "skill_rows": skills, "families": families,
+            "guild_rows": guild_rows, "run_rows": runs}
+
+
+def _dungeon_paths(fetched: dict) -> dict:
+    """One path per family, from one set of world reads.
+
+    THE WORLD ROWS ARE SHARED AND THE ROSTERS ARE NOT. dungeonplan ranks one
+    family's gains, so it runs once per family over the same catalogue, loot
+    and worn rows; the guild's count runs over the same rows again with the
+    guild's names, bounded to the maps the path draws.
+    """
+    portals = dungeonpath.portals_by_map()
+    by_guild: dict = {}
+    guild_of: dict = {}
+    for row in fetched["guild_rows"]:
+        by_guild.setdefault(row["guildid"], []).append(row["name"])
+        guild_of[row["name"]] = (row["guildid"], row.get("guild_name") or "")
+    chars = {row["name"]: row for row in fetched["char_rows"]}
+    families = []
+    basis = ""
+    for head, roster in fetched["families"].items():
+        plan = dungeonplan.build_dungeonplan(
+            fetched["catalogue_rows"], fetched["encounter_rows"],
+            fetched["loot_rows"], fetched["char_rows"],
+            fetched["equipped_rows"], ITEMS.icons, roster,
+            achievements.MAP_NAMES, GEO.entrances, GEO.continents,
+            fetched["skill_rows"], ITEMS)
+        guild_id, guild_name = next(
+            (guild_of[n] for n in roster if n in guild_of), (None, ""))
+        guild_counts = {}
+        if guild_id is not None:
+            guild_counts = dungeonplan.gainer_counts(
+                fetched["encounter_rows"], fetched["loot_rows"],
+                fetched["char_rows"], fetched["equipped_rows"],
+                sorted(by_guild[guild_id]), list(dungeonpath.PATH_MAPS),
+                fetched["skill_rows"])
+        faction = dungeonpath.faction_of(
+            [int(chars[n].get("race") or 0) for n in roster if n in chars],
+            _ALLIANCE_RACES, _HORDE_RACES)
+        members = [{"name": n, "level": chars[n].get("level")}
+                   for n in roster if n in chars]
+        families.append(dungeonpath.build_family_path(
+            head, faction, members, plan, guild_name, guild_counts,
+            [r for r in fetched["run_rows"] if r.get("leader_name") in roster],
+            portals, achievements.MAP_NAMES))
+        basis = plan["basis"]
+    return {
+        "line": dungeonpath.headline(families),
+        "runnable": dungeonpath.runnable_line(portals, achievements.MAP_NAMES),
+        "order": dungeonpath.ORDER,
+        "families": families,
+        "basis": dungeonpath.BASIS + " " + basis,
+        "empty_note": ("the roster names no family, so there is no path to draw"
+                       if not families else ""),
+    }
 
 
 # --- the live dungeon recap and the loot board (infra#2597) ------------------
@@ -3342,19 +3444,17 @@ class Handler(BaseHTTPRequestHandler):
             self._send(503, "application/json", b'{"error": "world unreachable"}')
 
     def _dungeons(self, _query: dict) -> None:
-        """GET /api/dungeons - every dungeon, and who would gain by running it.
+        """GET /api/dungeons - the order to run dungeons in, for each family.
 
         NO PARAMETERS AT ALL, and that is the shape of the view rather than an
-        omission: it asks about every dungeon in the world at once, so there
-        is nothing for a caller to steer and no map id to validate. WHO the
-        family is belongs to bonds, exactly as /api/armory and /api/family
-        refuse a name.
+        omission: it asks about every dungeon for every family at once, so
+        there is nothing for a caller to steer and no map id to validate. WHO
+        the families are belongs to the roster, exactly as /api/armory and
+        /api/family refuse a name.
         """
         try:
-            payload = dungeonplan.build_dungeonplan(
-                **_fetch_dungeonplan(), icons=ITEMS.icons, book=ITEMS,
-                roster=family.roster(), names=achievements.MAP_NAMES,
-                entrances=GEO.entrances, continents=GEO.continents)
+            fetched = _fetch_dungeonplan()
+            payload = _dungeon_paths(fetched)
             self._send(200, "application/json", json.dumps(payload).encode())
         except Exception:
             # Same contract as every other poll: the tab keeps what it has

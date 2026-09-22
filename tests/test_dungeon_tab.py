@@ -113,22 +113,21 @@ class WhereTheCodeIsAllowedToSit(unittest.TestCase):
 
 class TheMarkup(unittest.TestCase):
     def test_the_section_exists_beside_the_other_views(self):
-        for element in ('id="dgnhead"', 'id="dgnfamily"', 'id="dgncoverage"',
-                        'id="dgnorder"', 'id="dgnlist"', 'id="dgnbasis"'):
+        for element in ('id="dgnhead"', 'id="dgnrunnable"', 'id="dgnorder"',
+                        'id="dgnfamilies"', 'id="dgnbasis"'):
             self.assertIn(element, SECTION, element)
 
-    def test_the_coverage_count_is_above_the_list_too(self):
-        """It is the answer to "why is the one we are running not in here",
-        and that question is asked while scanning the list rather than after
-        reaching the bottom of it."""
-        self.assertLess(SECTION.index('id="dgncoverage"'),
-                        SECTION.index('id="dgnlist"'))
+    def test_what_the_overseer_can_run_is_above_the_paths(self):
+        """The operator's first question of every step is whether the overseer
+        can run it at all, so the list of portals is read before the paths."""
+        self.assertLess(SECTION.index('id="dgnrunnable"'),
+                        SECTION.index('id="dgnfamilies"'))
 
-    def test_the_rule_it_ranked_by_is_above_the_list_and_not_below_it(self):
+    def test_the_rule_the_path_follows_is_above_it_and_not_below_it(self):
         """A list in an order is read as a finding. The rule that produced the
         order has to be readable before the list, not after twenty rows."""
         self.assertLess(SECTION.index('id="dgnorder"'),
-                        SECTION.index('id="dgnlist"'))
+                        SECTION.index('id="dgnfamilies"'))
 
     def test_the_basis_is_on_the_page_at_all(self):
         """The loot board's footer is the precedent: a list that does not say
@@ -141,7 +140,7 @@ class TheMarkup(unittest.TestCase):
         text = re.sub(r"<[^>]+>", " ", SECTION)
         text = re.sub(r"<!--.*?-->", " ", text, flags=re.S)
         words = " ".join(text.split())
-        self.assertIn("where to go next", words)
+        self.assertIn("the path, family by family", words)
         for invented in ("upgrade", "worth", "should", "recommend", "item level"):
             self.assertNotIn(invented, words, invented)
 
@@ -150,11 +149,22 @@ class ThePageDecidesNothing(unittest.TestCase):
     """Every sentence arrives written. The same contract the Chronicle
     redesign established, and the reason dungeonplan.py is its own module."""
 
-    def test_the_headline_and_the_family_line_are_the_modules(self):
+    def test_the_headline_and_the_family_lines_are_the_modules(self):
         self.assertIn("p.line", CODE)
-        self.assertIn("p.family_line", CODE)
-        for invented in ('" dungeons"', '" of them"', '"; all of them on "'):
+        for key in ("f.title", "f.who_line", "f.next_line",
+                    "f.family_upgrades", "f.guild_upgrades"):
+            self.assertIn(key, CODE, key)
+        for invented in ('" dungeons"', '" of them"', '"Next: "',
+                         '"\'s family"', '"Alliance"', '"Horde"'):
             self.assertNotIn(invented, CODE, invented)
+
+    def test_every_family_is_drawn_and_none_is_named_here(self):
+        """Both factions: the page draws whatever families the payload
+        carries, so the Horde family is not a second page somebody has to
+        find, and no family name is written into the page."""
+        self.assertIn("for (const f of p.families)", CODE)
+        for name in ('"Grug"', '"Zug"', '"Cave"', '"Bonkers"'):
+            self.assertNotIn(name, CODE, name)
 
     def test_the_rule_and_the_basis_are_printed_and_not_written(self):
         self.assertIn("p.order", CODE)
@@ -163,7 +173,8 @@ class ThePageDecidesNothing(unittest.TestCase):
             self.assertNotIn(invented, CODE, invented)
 
     def test_the_count_on_each_row_is_the_modules_sentence(self):
-        self.assertIn("d.line", CODE)
+        self.assertIn("d.family_line", CODE)
+        self.assertIn("d.guild_line", CODE)
         for invented in ('" of the "', '" would gain"', '"nothing in here"'):
             self.assertNotIn(invented, CODE, invented)
 
@@ -175,23 +186,29 @@ class ThePageDecidesNothing(unittest.TestCase):
         self.assertNotIn("index + 1", CODE)
         self.assertNotIn("i + 1", CODE)
 
-    def test_the_coverage_count_above_the_list_is_the_modules(self):
-        """The only thing on the page that can tell a reader their dungeon was
-        never offered, as opposed to offered and empty. A count composed here
-        would be a count of the rows this loop drew, which is the one number
-        that cannot answer that."""
-        self.assertIn("p.coverage", CODE)
-        for invented in ('" dungeons listed"', '"dungeons.length"',
-                         '"does not appear"'):
+    def test_what_the_overseer_can_run_is_the_modules(self):
+        """Which dungeons have a portal is jobs.PORTAL_KEYWORDS's answer, read
+        by dungeonpath.py; a list written here would drift the day a portal
+        is added."""
+        self.assertIn("p.runnable", CODE)
+        self.assertIn("d.overseer.line", CODE)
+        for invented in ('"deadmines"', '"portal"', '"can run"'):
             self.assertNotIn(invented, CODE, invented)
 
     def test_the_context_lines_are_all_the_modules(self):
-        for key in ("d.level_line", "d.where_line", "d.entry_line",
-                    "d.tie_line", "d.source_line"):
+        for key in ("d.state_line", "d.runs_line", "d.raid_line",
+                    "f.off_path_line"):
             self.assertIn(key, CODE, key)
-        for invented in ('"levels "', '"too low"', '"tied with"',
-                         '"across the ocean"', '"Kalimdor"'):
+        for invented in ('"levels "', '"outgrown"', '"later"', '"raid"',
+                         '"cleared"', '"Kalimdor"'):
             self.assertNotIn(invented, CODE, invented)
+
+    def test_where_the_family_stands_only_picks_a_class(self):
+        """`d.state` is the module's word, turned into a class name and
+        nothing else; the page does not compare levels itself."""
+        self.assertIn('"chr-card dgn-card dgn-" + d.state', CODE)
+        for compared in (".level", "weakest", "floor"):
+            self.assertNotIn(compared, CODE, compared)
 
     def test_each_members_line_is_printed_whole(self):
         """Not the name and the count joined here: that is a sentence about a
@@ -238,7 +255,7 @@ class TheListStaysScannableOnAPhone(unittest.TestCase):
     characters times their gains does not fit a thumb expanded."""
 
     def test_a_dungeon_row_is_collapsed_until_it_is_asked_for(self):
-        self.assertIn('el("details", "chr-card dgn-card")', CODE)
+        self.assertIn('el("details", "chr-card dgn-card dgn-" + d.state)', CODE)
         self.assertIn('document.createElement("summary")', CODE)
 
     def test_the_name_and_the_count_are_visible_while_it_is_collapsed(self):
@@ -246,7 +263,7 @@ class TheListStaysScannableOnAPhone(unittest.TestCase):
         and opening all twenty is the thing this view exists to replace."""
         head = CODE[CODE.index('createElement("summary")'):
                     CODE.index("card.appendChild(head)")]
-        for key in ("d.rank", "d.name", "d.line", "d.chips"):
+        for key in ("d.rank", "d.name", "d.state_line", "d.chips"):
             self.assertIn(key, head, key)
 
     def test_it_takes_the_shared_card_recipe_rather_than_a_second_one(self):
@@ -375,12 +392,29 @@ class TheEndpoint(unittest.TestCase):
         self.assertIn('fetch(u("/api/dungeons"),', BLOCK)
 
     def test_the_handler_takes_nothing_from_the_caller(self):
-        """WHO the family is belongs to bonds, exactly as /api/armory and
-        /api/family refuse a name. This one asks about every dungeon at once,
-        so there is no map id to steer either."""
+        """WHO the families are belongs to the roster, exactly as /api/armory
+        and /api/family refuse a name. This one asks about every dungeon at
+        once, so there is no map id to steer either."""
         handler = SERVER[SERVER.index("def _dungeons"):SERVER.index("def _recap")]
-        self.assertIn("family.roster()", handler)
         self.assertNotIn("query.get", handler)
+        fetch = SERVER[SERVER.index("def _fetch_dungeonplan"):
+                       SERVER.index("# --- the live dungeon recap")]
+        self.assertIn("_PLAN_FAMILIES", fetch)
+
+    def test_an_empty_roster_binds_no_empty_in_list(self):
+        """`IN ()` is a syntax error, so no family means no character read."""
+        fetch = SERVER[SERVER.index("def _fetch_dungeonplan"):
+                       SERVER.index("# --- the live dungeon recap")]
+        self.assertIn("if names:", fetch)
+        self.assertLess(fetch.index("if names:"), fetch.index("_LINEUP_GUILD.format"))
+
+    def test_both_families_come_from_the_roster_and_not_from_bonds(self):
+        """bonds knows one family. The roster's own `family` column knows the
+        Alliance family and the Horde one, so that is what the path reads."""
+        self.assertIn("SELECT name, family FROM overseer_roster", SERVER)
+        paths = SERVER[SERVER.index("def _dungeon_paths"):
+                       SERVER.index("# --- the live dungeon recap")]
+        self.assertIn('for head, roster in fetched["families"].items():', paths)
 
     def test_a_dead_database_is_a_503_that_keeps_what_is_drawn(self):
         handler = SERVER[SERVER.index("def _dungeons"):SERVER.index("def _recap")]
@@ -424,7 +458,9 @@ class TheReads(unittest.TestCase):
         realm for a feature it has nothing to do with."""
         for table in ("dungeon_access_template", "instance_encounters",
                       "creature_loot_template", "characters",
-                      "character_inventory", "character_skills"):
+                      "character_inventory", "character_skills",
+                      "overseer_roster", "guild_member",
+                      "overseer_dungeon_run"):
             self.assertIn('"%s"' % table, self.fetch, table)
         # Nothing in the fetch may call execute directly: the guard is the
         # only way rows come back, so a read added later cannot skip it.
@@ -494,8 +530,9 @@ class TheReads(unittest.TestCase):
         self.assertNotIn("GroupId", sql)
 
     def test_the_handler_hands_the_book_over(self):
-        handler = SERVER[SERVER.index("def _dungeons"):SERVER.index("def _recap")]
-        self.assertIn("book=ITEMS", handler)
+        paths = SERVER[SERVER.index("def _dungeon_paths"):
+                       SERVER.index("# --- the live dungeon recap")]
+        self.assertIn('fetched["skill_rows"], ITEMS)', paths)
 
     def test_the_worn_and_skill_reads_are_the_loot_boards_own(self):
         """What a character wears and what they may hold are one question with

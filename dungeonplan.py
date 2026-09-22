@@ -669,6 +669,54 @@ def _score(dungeon: dict) -> tuple:
     return (dungeon["shut"], len(dungeon["gainers"]), dungeon["total"])
 
 
+def _index(encounter_rows: list[dict], loot_rows: list[dict]) -> tuple:
+    """The three lookups every cross product here is built from: a boss's
+    name, the bosses spawned on each map, and each boss's loot rows."""
+    boss_name: dict = {}
+    bosses_on: dict = {}
+    for row in encounter_rows:
+        creature = int(row["creature"])
+        boss_name[creature] = row["name"]
+        bosses_on.setdefault(int(row["map_id"]), set()).add(creature)
+    by_creature: dict = {}
+    for row in loot_rows:
+        by_creature.setdefault(int(row["creature"]), []).append(row)
+    return boss_name, bosses_on, by_creature
+
+
+def gainer_counts(encounter_rows: list[dict], loot_rows: list[dict],
+                  char_rows: list[dict], equipped_rows: list[dict],
+                  roster: list[str], maps: list[int],
+                  skill_rows: list[dict] | None = None) -> dict:
+    """map id -> who in `roster` would gain something there, and out of how many.
+
+    THE GUILD'S HALF OF "WHAT UPGRADES ARE THERE". The family's cards carry
+    every gain with its tooltip; a guild of seventy carrying the same would be
+    a payload nobody could scroll, so this keeps only the names. It is the SAME
+    verdict over the same drops (`_drops_on`, `recap.verdict`), so "would gain"
+    means one thing for a family and for its guild.
+
+    `maps` bounds the work to the maps a caller will draw a count on, because
+    this is the one cross product here whose roster is not five.
+    """
+    members = recap.family_members(char_rows, equipped_rows, roster, skill_rows)
+    proficiency_checked = bool(members) and all(
+        member["skills"] is not None for member in members)
+    boss_name, bosses_on, by_creature = _index(encounter_rows, loot_rows)
+    out: dict = {}
+    for map_id in maps:
+        drops = _drops_on(int(map_id), bosses_on, by_creature, boss_name,
+                          members, {}, proficiency_checked)
+        gained = {verdict["who"] for _, verdict, _ in drops
+                  if verdict["verdict"] in GAIN_VERDICTS}
+        out[int(map_id)] = {
+            "gainers": [m["name"] for m in members if m["name"] in gained],
+            "of": len(members),
+            "pieces": len({payload["entry"] for payload, _, _ in drops}),
+        }
+    return out
+
+
 def build_dungeonplan(catalogue_rows: list[dict], encounter_rows: list[dict],
                       loot_rows: list[dict], char_rows: list[dict],
                       equipped_rows: list[dict], icons: dict,
@@ -711,16 +759,7 @@ def build_dungeonplan(catalogue_rows: list[dict], encounter_rows: list[dict],
         member["skills"] is not None for member in members)
     catalogue = _catalogue(catalogue_rows, names)
 
-    boss_name: dict = {}
-    bosses_on: dict = {}
-    for row in encounter_rows:
-        creature = int(row["creature"])
-        boss_name[creature] = row["name"]
-        bosses_on.setdefault(int(row["map_id"]), set()).add(creature)
-
-    by_creature: dict = {}
-    for row in loot_rows:
-        by_creature.setdefault(int(row["creature"]), []).append(row)
+    boss_name, bosses_on, by_creature = _index(encounter_rows, loot_rows)
 
     dungeons = [
         _dungeon_card(entry,
