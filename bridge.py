@@ -1160,7 +1160,7 @@ _TRADE_SKILL_IDS = ",".join(
 )
 
 _COUNCIL_MEMBER_SQL = (
-    "SELECT c.name, c.class, c.money, "
+    "SELECT c.name, c.class, c.race, c.money, "
     "       (SELECT COUNT(*) FROM character_skills k "
     "         WHERE k.guid = c.guid AND k.skill IN (" + _TRADE_SKILL_IDS + ")"
     "       ) AS trades, "
@@ -1264,6 +1264,7 @@ def _fetch_council_members(names: list) -> list:
                 quest=said,
                 quest_left=left,
                 quest_id=quest_id,
+                race=int(row.get("race") or 0),
             )
         )
     return members
@@ -4275,7 +4276,10 @@ class Bridge(discord.Client):
         # dungeon in the family's current level range reads as ready, which
         # is the whole of what the proposal acts on. Tracked as a follow-up
         # rather than silently declared complete.
-        level_rows = [{"name": m.name, "level": m.level} for m in members]
+        # race rides along so the council can tell which capital's doors
+        # this family can walk to (#202).
+        level_rows = [{"name": m.name, "level": m.level, "race": m.race}
+                      for m in members]
         completed_runs = await asyncio.to_thread(_fetch_dungeon_completion)
         held = council.hold(members, history=history,
                             level_rows=level_rows, cards=[],

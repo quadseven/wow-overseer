@@ -11,8 +11,11 @@ proposal, and that proposal only ever fires for a REAL, ready-or-near target.
 """
 
 import unittest
+from pathlib import Path
 
 import council
+import dungeonpath
+import jobs
 
 
 def _m(name, level, **over):
@@ -163,12 +166,14 @@ class TheDungeonProposalFiresWhenReady(unittest.TestCase):
         self.assertIsNotNone(proposal)
         self.assertIn("close enough", proposal.said)
 
-    def test_a_non_scarlet_target_carries_no_keyword(self):
+    def test_a_non_scarlet_target_carries_its_own_door(self):
+        """#202: this used to be "", the bare `dungeon` job, which runs the
+        Deadmines whatever the council had chosen."""
         rows = _levels([(n, 30) for n in FAMILY_NAMES])
         members = _members_at(30)
         proposal = council._dungeon_proposal(members, rows, [])
         self.assertIsNotNone(proposal)
-        self.assertEqual("", proposal.keyword)
+        self.assertEqual("razorfen-kraul", proposal.keyword)
 
 
 class ALevelSixtyFamilyIsNotSentBackToScarletMonastery(unittest.TestCase):
@@ -207,10 +212,12 @@ class ALevelSixtyFamilyIsNotSentBackToScarletMonastery(unittest.TestCase):
         )
 
     def test_a_missing_ledger_no_longer_means_the_cathedral_for_ever(self):
+        """Stratholme since #202 put it in PLACES: the hardest door a level 60
+        family can walk into is now its main gate, not Blackrock Depths."""
         proposal = council._dungeon_proposal(self.members, self.rows, [], None)
         self.assertIsNotNone(proposal)
-        self.assertEqual("blackrock-depths", proposal.keyword)
-        self.assertIn("Blackrock Depths", proposal.said)
+        self.assertEqual("stratholme-live", proposal.keyword)
+        self.assertIn("Stratholme", proposal.said)
 
     def test_a_finished_scarlet_campaign_no_longer_means_the_cathedral_either(self):
         done = {
@@ -218,7 +225,7 @@ class ALevelSixtyFamilyIsNotSentBackToScarletMonastery(unittest.TestCase):
         }
         proposal = council._dungeon_proposal(self.members, self.rows, [], done)
         self.assertIsNotNone(proposal)
-        self.assertEqual("blackrock-depths", proposal.keyword)
+        self.assertEqual("stratholme-live", proposal.keyword)
 
     def test_an_unfinished_scarlet_campaign_does_not_drag_a_sixty_back(self):
         """The ledger used to OUTRANK the level frontier outright, so a single
@@ -228,14 +235,19 @@ class ALevelSixtyFamilyIsNotSentBackToScarletMonastery(unittest.TestCase):
             self.members, self.rows, [], {"scarlet": 0}
         )
         self.assertIsNotNone(proposal)
-        self.assertEqual("blackrock-depths", proposal.keyword)
+        self.assertEqual("stratholme-live", proposal.keyword)
 
     def test_it_repeats_rather_than_standing_down_once_the_count_is_met(self):
         """The operator asked for Blackrock Depths "over and over ...
         incrementally get better gear". A campaign at its target means run it
-        again, not stop - the repeat was never the defect."""
+        again, not stop - the repeat was never the defect.
+
+        At 52, where Blackrock Depths is the frontier: since #202 a level 60
+        family's frontier is Stratholme."""
         done = {"blackrock-depths": council.DUNGEON_RUNS_WANTED}
-        proposal = council._dungeon_proposal(self.members, self.rows, [], done)
+        members = _members_at(52)
+        rows = _levels([(n, 52) for n in FAMILY_NAMES])
+        proposal = council._dungeon_proposal(members, rows, [], done)
         self.assertIsNotNone(proposal)
         self.assertEqual("blackrock-depths", proposal.keyword)
         self.assertEqual(council.DUNGEON_RUNS_WANTED, proposal.target)
@@ -323,6 +335,168 @@ class TheProposalReachesHold(unittest.TestCase):
             ),
             held.lines,
         )
+
+
+# --- #202: the right door, and only doors the family can walk to -----------
+
+ALLIANCE_RACE = 1  # Human
+HORDE_RACE = 2  # Orc
+
+
+def _family(level, race):
+    members = [
+        council.Member(
+            name=n,
+            level=level,
+            class_name="Warrior",
+            gold=999999,
+            trades=5,
+            race=race,
+        )
+        for n in FAMILY_NAMES
+    ]
+    rows = [{"name": n, "level": level, "race": race} for n in FAMILY_NAMES]
+    return members, rows
+
+
+class EveryPortalMapGetsItsOwnDoor(unittest.TestCase):
+    """The bare `dungeon` job runs the Deadmines, so "" for any other map sent
+    the family to the wrong dungeon."""
+
+    def test_the_councils_keywords_are_the_portal_keywords(self):
+        self.assertEqual(set(jobs.PORTAL_KEYWORDS), set(council.DUNGEON_KEYWORDS))
+        for keyword, map_id in dungeonpath.PORTAL_MAPS.items():
+            self.assertEqual(map_id, council.DUNGEON_KEYWORDS[keyword][0], keyword)
+
+    def test_every_portal_map_is_sent_by_a_keyword_that_opens_it(self):
+        for map_id in sorted(set(dungeonpath.PORTAL_MAPS.values())):
+            with self.subTest(map_id=map_id):
+                keyword = council._campaign_keyword(map_id, 60, None)
+                self.assertIn(keyword, jobs.PORTAL_KEYWORDS)
+                self.assertEqual(map_id, dungeonpath.PORTAL_MAPS[keyword])
+
+    def test_a_map_with_two_doors_is_sent_to_the_front_one(self):
+        for map_id, keyword in (
+            (90, "gnomeregan"),
+            (70, "uldaman"),
+            (329, "stratholme-live"),
+        ):
+            self.assertEqual(keyword, council._campaign_keyword(map_id, 60, None))
+
+    def test_a_map_without_a_portal_has_no_door(self):
+        self.assertEqual("", council.front_door(389))  # Ragefire Chasm
+
+    def test_the_new_classic_doors_are_in_places_at_the_pages_floors(self):
+        lows = {step.map_id: step.low for step in dungeonpath.PATH}
+        for map_id in (109, 229, 329):
+            self.assertEqual(lows[map_id], council.PLACES[map_id])
+
+
+class ALevelTwentyFourAllianceFamily(unittest.TestCase):
+    def setUp(self):
+        self.members, self.rows = _family(24, ALLIANCE_RACE)
+
+    def test_it_is_sent_to_blackfathom_deeps_not_the_deadmines(self):
+        proposal = council._dungeon_proposal(self.members, self.rows, [])
+        self.assertIsNotNone(proposal)
+        self.assertEqual("blackfathom", proposal.keyword)
+        self.assertIn("Blackfathom Deeps", proposal.said)
+
+    def test_the_plan_that_carries_names_the_same_door(self):
+        held = council.hold(self.members, history=[], level_rows=self.rows, cards=[])
+        self.assertIsNotNone(held.plan)
+        self.assertEqual("dungeon", held.plan.kind)
+        self.assertEqual("blackfathom", held.plan.keyword)
+        self.assertEqual("dungeon:blackfathom", jobs.dungeon_job(held.plan.keyword))
+
+    def test_its_own_capital_stays_on_its_list(self):
+        self.assertIn(34, [p["map_id"] for p in council.prospects(self.rows, [])])
+
+
+class AHordeFamilyIsNeverSentIntoStormwind(unittest.TestCase):
+    def test_a_level_sixteen_family_never_proposes_the_stockade(self):
+        members, rows = _family(16, HORDE_RACE)
+        proposal = council._dungeon_proposal(members, rows, [])
+        self.assertIsNotNone(proposal)
+        self.assertNotEqual("stockades", proposal.keyword)
+        self.assertIn(proposal.keyword, jobs.PORTAL_KEYWORDS)
+
+    def test_no_level_proposes_the_stockade(self):
+        for level in range(10, 61):
+            members, rows = _family(level, HORDE_RACE)
+            proposal = council._dungeon_proposal(members, rows, [])
+            if proposal is None:
+                continue
+            with self.subTest(level=level):
+                self.assertNotEqual("stockades", proposal.keyword)
+                self.assertNotIn("Stockade", proposal.said)
+
+    def test_the_stockade_is_off_its_list(self):
+        _, rows = _family(24, HORDE_RACE)
+        self.assertNotIn(34, [p["map_id"] for p in council.prospects(rows, [])])
+
+    def test_an_alliance_family_is_never_sent_into_orgrimmar(self):
+        for level in range(10, 61):
+            members, rows = _family(level, ALLIANCE_RACE)
+            proposal = council._dungeon_proposal(members, rows, [])
+            if proposal is None:
+                continue
+            with self.subTest(level=level):
+                self.assertNotIn("Ragefire", proposal.said)
+
+
+class AnUnknownFactionIsNotSentIntoACapital(unittest.TestCase):
+    def test_a_roster_without_races_gets_the_door_outside_the_city(self):
+        members = _members_at(24)
+        rows = _levels([(n, 24) for n in FAMILY_NAMES])
+        proposal = council._dungeon_proposal(members, rows, [])
+        self.assertIsNotNone(proposal)
+        self.assertEqual("blackfathom", proposal.keyword)
+
+
+class ADungeonWithoutAPortalIsNeverProposed(unittest.TestCase):
+    def test_ragefire_chasm_alone_in_range_proposes_nothing(self):
+        """Ragefire Chasm has no portal row. Written anyway, it used to become
+        the bare `dungeon` job, which is the Deadmines."""
+        members, rows = _family(13, HORDE_RACE)
+        self.assertIsNone(council._dungeon_proposal(members, rows, []))
+
+    def test_every_proposal_at_every_level_is_a_real_job(self):
+        for race in (ALLIANCE_RACE, HORDE_RACE, 0):
+            for level in range(10, 61):
+                members, rows = _family(level, race)
+                proposal = council._dungeon_proposal(members, rows, [])
+                if proposal is None:
+                    continue
+                with self.subTest(race=race, level=level):
+                    self.assertTrue(proposal.keyword)
+                    self.assertIsNotNone(jobs.dungeon_job(proposal.keyword))
+
+
+class TheLedgerCannotSendAFamilyAboveItsLevel(unittest.TestCase):
+    def test_an_unfinished_cathedral_waits_for_the_level(self):
+        """Three wings done at 34: the ledger says the Cathedral (39) is next,
+        five levels over the weakest member. The family keeps to the Armory,
+        the highest wing it can walk into."""
+        members, rows = _family(34, ALLIANCE_RACE)
+        done = {
+            "scarlet": council.DUNGEON_RUNS_WANTED,
+            "scarlet-library": council.DUNGEON_RUNS_WANTED,
+            "scarlet-armory": council.DUNGEON_RUNS_WANTED,
+        }
+        proposal = council._dungeon_proposal(members, rows, [], done)
+        self.assertIsNotNone(proposal)
+        self.assertEqual("scarlet-armory", proposal.keyword)
+
+
+class TheBridgeHandsTheCouncilTheFamilysRaces(unittest.TestCase):
+    def test_the_member_read_selects_race_and_passes_it_on(self):
+        source = (Path(__file__).resolve().parent.parent / "bridge.py").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn('"SELECT c.name, c.class, c.race, c.money, "', source)
+        self.assertIn('race=int(row.get("race") or 0),', source)
+        self.assertIn('"race": m.race}', source)
 
 
 if __name__ == "__main__":

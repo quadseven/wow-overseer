@@ -32,12 +32,16 @@ rule - the LLM is never asked to restate data we hold.
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 
 import achievements
 import bonds
 import dungeonprogression
+import jobs
+
+log = logging.getLogger(__name__)
 
 # A member this far below the family's median level is visibly struggling and
 # the family notices. Two is ordinary spread between people playing different
@@ -98,6 +102,10 @@ class Member:
     # beneficiary's rows at persist time can pick a DIFFERENT quest than the
     # one the council actually talked about. 0 is "no quest in view".
     quest_id: int = 0
+    # PUBLIC, like level: a race is read off a portrait. 0 is "not read".
+    # Carried so the bridge can hand the council the family's faction, which
+    # decides whether a door inside a capital is one they can walk to (#202).
+    race: int = 0
 
 
 @dataclass(frozen=True)
@@ -588,6 +596,13 @@ PLACES = {
     # at 48 to 60 and rare elites at 52 to 56. See dungeonprogression.py, where
     # the same number is quoted beside the world rows it was read from.
     230: 52,  # Blackrock Depths
+    # EXTENDED 2026-09-22 (#202): the three classic doors mod-overseer gained a
+    # portal row for (quadseven/mod-overseer#581) that this table did not
+    # name, at the Dungeons page's own floors (dungeonpath.PATH), so the
+    # council and that page agree about when a family is ready for them.
+    109: 50,  # Sunken Temple
+    229: 55,  # Blackrock Spire (the Lower Spire; the Upper Spire has no portal)
+    329: 58,  # Stratholme
 }
 
 # The four wings of Scarlet Monastery (map 189, PLACES above), by the level
@@ -710,6 +725,9 @@ def transcript(rows: list[dict]) -> list[dict]:
 # have to decode. The map's own name comes from achievements.dungeon_name, the
 # one table that names dungeons; only the WING is written here, because four
 # of these keywords share one map.
+#
+# ORDER IS LOAD-BEARING (#202): where a map has more than one door, its FRONT
+# door is listed first, and front_door() below answers with it.
 DUNGEON_KEYWORDS = {
     "deadmines": (36, ""),
     "shadowfang": (33, ""),
@@ -752,6 +770,43 @@ def keyword_place(keyword: str) -> str:
     map_id, wing = known
     name = achievements.dungeon_name(map_id)
     return "%s (%s)" % (name, wing) if wing else name
+
+
+def front_door(map_id: int) -> str:
+    """The job keyword for a map's front door, or "" when it has no portal.
+
+    "" here means "the overseer cannot send a family there", NOT the bare
+    `dungeon` job: that job runs the Deadmines, so writing it for any other
+    map sends the family to the wrong place (#202). A caller that gets ""
+    must refuse, never write a goal.
+    """
+    for keyword, (door_map, _) in DUNGEON_KEYWORDS.items():
+        if door_map == int(map_id) and keyword in jobs.PORTAL_KEYWORDS:
+            return keyword
+    return ""
+
+
+def _inside_capital() -> dict:
+    """map id -> the faction whose capital the entrance stands inside.
+
+    Read off dungeonpath.PATH's `Step.inside`, the same fact the Dungeons page
+    marks a step OFF by, so the council and that page cannot disagree about
+    which doors a family can walk to. Imported here rather than at the top
+    because dungeonpath imports this module for PLACES.
+    """
+    import dungeonpath
+
+    return {step.map_id: step.inside for step in dungeonpath.PATH if step.inside}
+
+
+def _other_capital(map_id: int, faction: str) -> bool:
+    """True when the door is inside a capital this family cannot walk into.
+
+    An unknown faction ("", a mixed or unread roster) counts as the other
+    one: a door nobody can show is reachable is not one to send them to.
+    """
+    inside = _inside_capital().get(int(map_id), "")
+    return bool(inside) and inside != faction
 
 
 def _runs(target: int) -> str:
@@ -1138,9 +1193,17 @@ def prospects(level_rows: list[dict], cards: list[dict]) -> list[dict]:
     who, level = weakest
     drops = _drops_seen(cards)
     been = set(drops)
+    # A door inside the other faction's capital is not a place this family
+    # can go (#202). Only skipped when the faction is KNOWN: this list is
+    # also what the Council tab draws, and a roster whose races were not
+    # read is shown everything rather than guessed at. _dungeon_proposal
+    # holds the stricter line before anything is written.
+    faction = _faction(level_rows, [str(row.get("name") or "") for row in level_rows])
     out = []
     for map_id, wants in sorted(PLACES.items(), key=lambda pair: (pair[1], pair[0])):
         if map_id not in been and wants > level + HORIZON:
+            continue
+        if faction and _other_capital(map_id, faction):
             continue
         short = wants - level
         seen = drops.get(map_id, [])
@@ -1216,7 +1279,8 @@ def _wing_rated_prospects(
 def _campaign_keyword(
     map_id: int, level: int, completed_runs: dict[str, int] | None
 ) -> str:
-    """The job keyword for the dungeon the frontier picked, or "" for none.
+    """The job keyword for the dungeon the frontier picked, or "" when the
+    overseer has no portal for that map and the family must not be sent.
 
     THE FRONTIER PICKS THE DUNGEON AND THIS PICKS THE DOOR, and getting those
     two the wrong way round is infra#4247 in one sentence. The run ledger used
@@ -1231,19 +1295,26 @@ def _campaign_keyword(
     ask for Blackrock Depths is "over and over ... incrementally get better
     gear", so a campaign at its target means run it again, not stand down. The
     repeat was never the defect; the dungeon being 21 levels stale was.
+
+    A MAP WITH NO CAMPAIGN GETS ITS FRONT DOOR, NOT THE BARE `dungeon` JOB
+    (#202). The bare job runs the Deadmines, so answering "" here used to
+    send a family that chose Blackfathom Deeps to the Deadmines instead.
+
+    THE LEDGER CANNOT PUSH PAST THE FAMILY'S LEVEL. The first unfinished
+    stage is only taken when the weakest member is within NEAR_ENOUGH of it;
+    otherwise the family keeps to the highest stage it can walk into, which
+    is the same gate prospects() holds every place to.
     """
     stages = dungeonprogression.campaign_stages(map_id)
     if not stages:
-        # No named doors on this map. The bare `dungeon` job, which is
-        # mod-overseer's own default rather than a target this module chose.
-        return ""
+        return front_door(map_id)
     if completed_runs is not None:
         ordered = dungeonprogression.next_stage(
             completed_runs,
             DUNGEON_RUNS_WANTED,
             stages=stages,
         )
-        if ordered:
+        if ordered and dict(stages)[ordered] <= level + NEAR_ENOUGH:
             return ordered
     return dungeonprogression.frontier_stage(stages, level, slack=NEAR_ENOUGH)
 
@@ -1282,21 +1353,61 @@ def _dungeon_proposal(
         return None
 
     rated = _wing_rated_prospects(level_rows, cards, level)
-    ready = [p for p in rated if p["short"] <= NEAR_ENOUGH]
+    # WHERE THE FAMILY CAN ACTUALLY BE SENT (#202). prospects() skips the
+    # other faction's capital only when the faction is known; a proposal is
+    # stricter, because it becomes a job. A door with no portal row is
+    # refused here rather than written as the bare `dungeon` job, which is
+    # the Deadmines whatever the council meant.
+    faction = _faction(level_rows, [str(row.get("name") or "") for row in level_rows])
+    ready = []
+    for p in rated:
+        if p["short"] > NEAR_ENOUGH:
+            continue
+        if _other_capital(p["map_id"], faction):
+            continue
+        if not front_door(p["map_id"]):
+            log.info(
+                "council: not proposing %s (map %d) - no dungeon portal "
+                "answers for it, so no job could send the family there",
+                p["place"],
+                p["map_id"],
+            )
+            continue
+        ready.append(p)
     if not ready:
         return None
     # The FRONTIER, not the first entry: prospects() lists everything the
     # family has already been to as well, however far past it they now are,
     # and the honest next target is the hardest one they can currently walk
-    # into - not the easiest. Ties favour Scarlet Monastery, Evan's own
-    # stated priority.
-    best = max(ready, key=lambda p: (p["wants"], p["map_id"] == SCARLET_MAP_ID))
+    # into - not the easiest. Ties favour Scarlet Monastery, the operator's
+    # own stated priority, then a door outside any capital: Blackfathom
+    # Deeps and the Stockade both want 24, and the city door is the one a
+    # family of the other faction could never have taken.
+    inside = _inside_capital()
+    best = max(
+        ready,
+        key=lambda p: (
+            p["wants"],
+            p["map_id"] == SCARLET_MAP_ID,
+            p["map_id"] not in inside,
+        ),
+    )
     # AND THE DOOR ONLY AFTER THE PLACE (infra#4247). The run ledger used to be
     # consulted first and allowed to narrow `ready` to Scarlet Monastery, which
     # is why a level 60 family could never be sent past a level 39 wing. It now
     # answers the question it can actually answer: given the dungeon the
     # frontier picked, which of ITS doors is next.
     keyword = _campaign_keyword(int(best["map_id"]), level, completed_runs)
+    if jobs.dungeon_job(keyword) is None or not keyword:
+        # Unreachable after the filter above, and kept so a future table edit
+        # cannot quietly turn a missing keyword back into the Deadmines.
+        log.warning(
+            "council: refusing a dungeon proposal for %s - keyword %r has no "
+            "portal row",
+            best["place"],
+            keyword,
+        )
+        return None
     place = best["place"]
     if best["ready"]:
         said = f"{place} will not trouble us now. We should go in."
@@ -1316,7 +1427,7 @@ def _dungeon_proposal(
         target=DUNGEON_RUNS_WANTED,
         # Above a half-finished quest (60): the whole family being gated on
         # one dungeon is a bigger fact than one character's errand, and it is
-        # the fact Evan's own priority named. Below a laggard rescue, whose
+        # the fact the operator's own priority named. Below a laggard rescue, whose
         # weight (100 - level) reflects how far behind somebody actually is -
         # nobody left behind outranks anywhere the family could go next. See
         # the PR for the full argument.
