@@ -19,6 +19,7 @@ PURE MODULE: no MySQL and no clock. Times are passed in.
 
 from __future__ import annotations
 
+import json
 import math
 import re
 from dataclasses import dataclass
@@ -119,14 +120,18 @@ def view(rows, item_names=None) -> dict:
 # nothing else. It is never a `give`: when no walk is possible the item stays
 # where it is and one note says why.
 #
-# WHO CAN BE WALKED. mod-overseer walks a character through
-# `overseer_roster.travel_npc`, and only a family's LEADER, the one carrying
-# `new rpg` (the town slot refuses anybody else). A guild bot off the roster
-# cannot be walked by anything in the module today: the aim book reads roster
-# rows only, and upstream's `go` command returns at its first line for a bot
-# with no master. quadseven/mod-overseer#569 is the module gap. Until it lands
-# such a holder waits for a mailbox or a receiver it reaches by itself, and
-# the note says so.
+# WHO CAN BE WALKED, AND HOW. A roster family's LEADER, the one carrying
+# `new rpg`, is walked through `overseer_roster.travel_npc` by the town slot's
+# ground aim. A guild bot OFF the roster is walked by the module's own
+# `kind='mail'` `walk-to-mailbox` row (quadseven/mod-overseer#570): the row
+# reads 'verifying' while the bot walks, 'applied' with `reached` when it
+# stands at the box (held there MAIL_WALK_HOLD_SECONDS), 'unchanged' when the
+# walk timed out, stalled or the ground refused, and 'error' otherwise. The
+# `send` row is written from the same bot as soon as the walk reads 'applied'
+# (see `judge_walk`). A worldserver older than #570 answers the row as a
+# malformed mail command; that is read as "cannot walk bots here yet", and
+# the pass backs off for WALK_UNSUPPORTED_SECONDS instead of asking again.
+# A roster member who is not its family's leader is not walked at all.
 #
 # THE BOUNDS. One run per holder at a time. The nearest mailbox on the
 # holder's own map, and only within MAIL_RUN_YARDS. At most MAIL_RUNS_PER_DAY
@@ -146,11 +151,27 @@ MAIL_RUNS_PER_DAY = 6
 MAIL_RUN_SECONDS = 1800.0
 DAY_SECONDS = 86400.0
 
-# Why a holder off the roster waits (the module gap above).
+# Why a holder off the roster waits while the worldserver cannot walk one:
+# it answered the walk row as a malformed mail command (before #570).
 OFF_ROSTER = (
-    "a guild bot off the roster, which nothing in mod-overseer can walk yet "
-    "(quadseven/mod-overseer#569)"
+    "a guild bot off the roster, and this worldserver cannot walk one to a "
+    "mailbox yet (quadseven/mod-overseer#570)"
 )
+
+# The module's walk row (quadseven/mod-overseer#570), capped at the run's own
+# distance cap, which the module also enforces (MAIL_WALK_MAX_YARDS, 600).
+WALK_VERB = "walk-to-mailbox"
+# How long the module holds an arrived bot at the box for the letter.
+MAIL_WALK_HOLD_SECONDS = 120
+# How long the bridge follows one walk row before it stops asking: the
+# module's own ceiling (300 s) plus a margin for the poll.
+WALK_FOLLOW_SECONDS = 360.0
+# How long a worldserver that does not know the walk is left alone before
+# the pass asks once more (it may have been updated meanwhile).
+WALK_UNSUPPORTED_SECONDS = 3600.0
+# What a worldserver older than #570 answers a `walk-to-mailbox` row with:
+# DoMail's parser, which knows only its five verbs.
+UNKNOWN_MAIL_VERB = "malformed mail command"
 NOT_LEADING = "follows its family's leader, and only a leader can be walked"
 
 
@@ -160,8 +181,10 @@ class Walker:
 
     `unwalkable` is "" when the module can walk this holder, else the reason
     it cannot. `cohort` names the family whose town slot the walk goes
-    through. `yards` and `aim` describe the nearest mailbox on the holder's
-    map; `aim` is "" when there is none that can be named.
+    through; `by_row` is True for a bot off the roster, walked by the
+    module's `walk-to-mailbox` row instead. `yards` and `aim` describe the
+    nearest mailbox on the holder's map; `aim` is "" when there is none that
+    can be named.
     """
 
     name: str
@@ -172,25 +195,30 @@ class Walker:
     yards: float | None = None
     aim: str = ""
     no_aim: str = ""
+    by_row: bool = False
 
 
-def walker_from(name, state, leader_of, roster, spawn) -> Walker:
+def walker_from(name, state, leader_of, roster, spawn, row_walks=True) -> Walker:
     """One Walker out of the facts the bridge read.
 
     `state` is the holder's fresh snapshot row (map_id, in_combat) or None.
     `leader_of` maps a roster family leader to its family key; `roster` holds
     every roster name. `spawn` is the nearest mailbox row, with `d2` measured
-    from this holder, or None.
+    from this holder, or None. `row_walks` is False while the worldserver is
+    known not to carry the walk row (see WALK_UNSUPPORTED_SECONDS).
     """
     name = str(name)
+    by_row = False
     if name in leader_of:
         unwalkable, cohort = "", str(leader_of[name])
     elif name in roster:
         unwalkable, cohort = NOT_LEADING, ""
+    elif row_walks:
+        unwalkable, cohort, by_row = "", "", True
     else:
         unwalkable, cohort = OFF_ROSTER, ""
     if not state:
-        return Walker(name=name, unwalkable=unwalkable, cohort=cohort)
+        return Walker(name=name, unwalkable=unwalkable, cohort=cohort, by_row=by_row)
     try:
         map_id = int(state.get("map_id"))
     except (TypeError, ValueError):
@@ -214,12 +242,18 @@ def walker_from(name, state, leader_of, roster, spawn) -> Walker:
         yards=yards,
         aim=post.aim or "",
         no_aim=no_aim,
+        by_row=by_row,
     )
 
 
 @dataclass(frozen=True)
 class MailRun:
-    """One holder walked to one mailbox to post one item to one receiver."""
+    """One holder walked to one mailbox to post one item to one receiver.
+
+    Shaped like a posted route where the bridge's route writer reads one
+    (`verb`, `name`, `command`, `gain`), so the letter written on arrival goes
+    through the same `_insert_route` and the same retry window.
+    """
 
     holder: str
     taker: str
@@ -229,6 +263,23 @@ class MailRun:
     cohort: str
     aim: str
     yards: float
+    by_row: bool = False
+
+    verb = MAIL
+
+    @property
+    def name(self) -> str:
+        return self.item
+
+    @property
+    def command(self) -> str:
+        """The letter: the same `send` a posted route writes."""
+        return "send item:%d subject:%s" % (int(self.guid), self.item)
+
+    @property
+    def walk_command(self) -> str:
+        """The module's walk row for a bot off the roster (#570)."""
+        return "%s max:%d" % (WALK_VERB, int(MAIL_RUN_YARDS))
 
     @property
     def said(self) -> str:
@@ -331,6 +382,7 @@ def plan_mail_runs(
                 cohort=walker.cohort,
                 aim=walker.aim,
                 yards=float(walker.yards),
+                by_row=walker.by_row,
             )
         )
         busy.add(holder)
@@ -355,3 +407,76 @@ def _cannot_walk(walker, holder, max_yards) -> str:
             int(max_yards),
         )
     return ""
+
+
+# ---------------------------------------------------------------------------
+# WHAT THE WALK ROW ANSWERED (#185, quadseven/mod-overseer#570)
+
+WALKING = "walking"
+ARRIVED = "arrived"
+ENDED = "ended"
+UNSUPPORTED = "unsupported"
+
+
+@dataclass(frozen=True)
+class WalkAnswer:
+    """One reading of a walk row: `state` and the sentence for the log.
+
+    WALKING: not answered yet, ask again. ARRIVED: the bot stands at
+    `mailbox` and the letter may be written now. ENDED: the walk is over
+    without arriving (`retryable` says whether a later run may try again).
+    UNSUPPORTED: the worldserver does not know the walk row at all.
+    """
+
+    state: str
+    said: str = ""
+    mailbox: str = ""
+    retryable: bool = False
+
+
+def _result_of(result) -> dict:
+    """The row's result JSON as a dict, {} when absent or unreadable."""
+    if isinstance(result, dict):
+        return result
+    try:
+        parsed = json.loads(result or "{}")
+    except (TypeError, ValueError):
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def judge_walk(holder, status, detail, result) -> WalkAnswer:
+    """What one `walk-to-mailbox` row's status, detail and result say."""
+    status = str(status or "").strip().lower()
+    detail = str(detail or "").strip()
+    body = _result_of(result)
+    if status in ("pending", "claimed", "verifying", ""):
+        return WalkAnswer(WALKING)
+    if status == "applied":
+        # The module answers 'applied' only on arrival, and says so in the
+        # result. A body that does not say "arrived" is not trusted as one.
+        reached = body.get("reached") if isinstance(body.get("reached"), dict) else {}
+        if body.get("outcome") != "arrived" or not reached.get("name"):
+            return WalkAnswer(
+                ENDED,
+                "%s's walk row read 'applied' without an arrival in its result"
+                % holder,
+            )
+        box = str(reached["name"])
+        return WalkAnswer(ARRIVED, "%s stands at %s" % (holder, box), mailbox=box)
+    if status == "unchanged":
+        why = detail or str(body.get("reason") or "did not reach the mailbox")
+        return WalkAnswer(ENDED, "%s %s" % (holder, why), retryable=True)
+    if status == "error" and UNKNOWN_MAIL_VERB in detail:
+        return WalkAnswer(
+            UNSUPPORTED,
+            "this worldserver answered the walk as %r, so it cannot walk a "
+            "guild bot yet; not asking again for %d minutes"
+            % (detail, int(WALK_UNSUPPORTED_SECONDS // 60)),
+        )
+    why = detail or "the world refused the walk and said nothing about why"
+    return WalkAnswer(
+        ENDED,
+        "%s cannot walk to a mailbox: %s" % (holder, why),
+        retryable=bool(body.get("retryable")),
+    )

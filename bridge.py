@@ -44,6 +44,7 @@ import bonds
 import guildbank
 import guildshare
 import guildroute
+import handover
 import craft
 import craft_rhythm
 import gatheraim
@@ -3443,6 +3444,11 @@ class Bridge(discord.Client):
         # does not forget (guildroute.runs_today).
         self._guild_mail_runs: dict = {}
         self._guild_mail_run_starts: list = []
+        # A guild bot off the roster walks by the module's walk row (#185).
+        # Until when this worldserver is known not to carry it (monotonic),
+        # and the follow tasks, held so none is collected mid-walk.
+        self._mail_walk_unsupported_until: float = 0.0
+        self._mail_walk_tasks: set = set()
         # Leader snapshot history used only to detect a vendor aim that has
         # stopped moving. The decision itself lives in vendor_stall.py.
         self._vendor_movement: dict[str, vendor_stall.Movement] = {}
@@ -6148,16 +6154,26 @@ class Bridge(discord.Client):
             return
 
         seen = await asyncio.to_thread(_recent_give_keys, GIVE_RETRY_MINUTES)
-        fresh = []
+        # ONLY TOGETHER (#189): the crafter and the holder walk together, so a
+        # reagent whose two are apart waits for them to meet rather than
+        # writing a give mod-overseer#566 refuses.
+        where = handover.spots(await asyncio.to_thread(_fetch_positions, names))
+        fresh, waits = [], []
         for grant in material_plan.grants:
             key = (grant.holder, grant.taker, grant.command)
             if key in seen:
                 continue
+            how = handover.verdict(grant.holder, grant.taker, where)
+            if how.verb != handover.GIVE:
+                waits.append(handover.waiting(
+                    grant.material, grant.holder, grant.taker, how.why))
+                continue
             if await asyncio.to_thread(_insert_give, grant):
                 fresh.append(grant)
+        _log_capped("materials", waits)
         if not fresh:
             log.info(
-                "materials: %d grant(s) already queued or refused",
+                "materials: %d grant(s) already queued, refused or waiting",
                 len(material_plan.grants),
             )
             return
@@ -6193,10 +6209,19 @@ class Bridge(discord.Client):
         if not moves:
             log.info("bags: nothing to hand over")
             return
+        # ONLY TOGETHER (#189). mod-overseer#566 refuses a give outside trade
+        # range, and a bag is handed over to be worn, never posted: apart, it
+        # waits for the family to regroup, and the log says so.
+        where = handover.spots(await asyncio.to_thread(_fetch_positions, names))
         seen = await asyncio.to_thread(_recent_give_keys, GIVE_RETRY_MINUTES)
+        waits = []
         for move in moves:
             command = bag_upgrade.give_command(move)
             if (move.giver, move.receiver, command) in seen:
+                continue
+            how = handover.verdict(move.giver, move.receiver, where)
+            if how.verb != handover.GIVE:
+                waits.append(handover.waiting(move.bag, move.giver, move.receiver, how.why))
                 continue
             if await asyncio.to_thread(_insert_bag_give, move, command):
                 log.info(
@@ -6204,6 +6229,7 @@ class Bridge(discord.Client):
                     move.giver, move.receiver, move.bag, command,
                     move.slots_gained, move.why,
                 )
+        _log_capped("bags", waits)
 
     async def _mid_run(self, names: list) -> bool:
         """Is any of these characters in the middle of a dungeon run?"""
@@ -6376,28 +6402,51 @@ class Bridge(discord.Client):
             # Its own writer and its own failure: a broken route read must not
             # stop the surplus below from going out.
             log.exception("guild route pass failed; retrying next cycle")
-        if not share.gifts:
-            return
+        if share.gifts:
+            await self._write_guild_gifts(share.gifts)
 
+    async def _write_guild_gifts(self, gifts) -> None:
+        """Write each gift the way it can move now, then speak the written ones."""
         seen = await asyncio.to_thread(
             _recent_guild_gift_keys, GIVE_RETRY_MINUTES
         )
-        fresh = []
-        for gift in share.gifts:
-            if (gift.holder, gift.taker, gift.command) in seen:
+        # A GIFT MOVES THE WAY A PLAYER'S WOULD (#189): a give when the two
+        # stand together, a letter when the family holder stands at a
+        # mailbox, and otherwise it waits and the log says for what. Never a
+        # give across a distance, which mod-overseer#566 refuses.
+        where, posting = await self._guild_gift_facts(gifts)
+        fresh, waits = [], []
+        for gift in gifts:
+            how = handover.verdict(
+                gift.holder, gift.taker, where, posting=posting, mailable=True,
+            )
+            if not how.verb:
+                waits.append(handover.waiting(gift.item, gift.holder, gift.taker, how.why))
                 continue
-            if await asyncio.to_thread(_insert_guild_gift, gift):
-                fresh.append(gift)
+            command = gift.post_command if how.verb == handover.MAIL else gift.command
+            if (gift.holder, gift.taker, command) in seen:
+                continue
+            if await asyncio.to_thread(_insert_guild_gift, gift, how.verb):
+                fresh.append((gift, how.verb))
+        _log_capped("guildshare", waits)
         if not fresh:
-            log.info("guildshare: %d gift(s) already queued or refused",
-                     len(share.gifts))
+            log.info("guildshare: %d gift(s) already queued, refused or waiting",
+                     len(gifts))
             return
 
-        for gift in fresh:
-            log.info("guildshare: %s -> %s, %d %s - %s",
-                     gift.holder, gift.taker, gift.count, gift.item,
+        for gift, verb in fresh:
+            log.info("guildshare: %s -> %s by %s, %d %s - %s",
+                     gift.holder, gift.taker, verb, gift.count, gift.item,
                      gift.reason)
             await self._say_guild_gift(gift)
+
+    async def _guild_gift_facts(self, gifts) -> tuple:
+        """Where each gift's two characters stand, and which holders are at a mailbox."""
+        names = sorted({g.holder for g in gifts} | {g.taker for g in gifts})
+        positions = await asyncio.to_thread(_fetch_positions, names)
+        holders = sorted({g.holder for g in gifts})
+        posting = await asyncio.to_thread(_holders_at_mailbox, holders, positions)
+        return handover.spots(positions), posting
 
     async def _guild_gear_share_once(self, family_names: list,
                                      roster: list) -> None:
@@ -6418,9 +6467,15 @@ class Bridge(discord.Client):
         equipped = await asyncio.to_thread(_fetch_family_equipped, all_names)
         positions = await asyncio.to_thread(_fetch_positions, all_names)
         free_slots = await asyncio.to_thread(_fetch_free_slots, all_names)
+        # A family holder at a mailbox posts the piece; apart otherwise, it
+        # waits (#189). Never a give across a distance.
+        at_mailbox = await asyncio.to_thread(
+            _holders_at_mailbox, list(family_names), positions,
+        )
         plan = bag_pressure.guild_gear_gifts_from_rows(
             gear_rows, equipped, family_names, roster,
             position_rows=positions, free_slots=free_slots,
+            at_mailbox=at_mailbox,
         )
         for note in plan.notes:
             log.info("guild gear: %s", note)
@@ -6515,13 +6570,13 @@ class Bridge(discord.Client):
 
         guildroute.plan_mail_runs decides who walks, within its bounds: one
         run per holder, the nearest mailbox within a distance cap, a daily
-        cap, never in combat or inside an instance. The walk is the town
-        slot's ground aim, the one the family's own mail pass uses, so only a
-        roster family's leader can be walked; a guild bot off the roster
-        waits and the note says why (quadseven/mod-overseer#569). The letter
-        is written by `_guild_route_once` on the cycle the holder stands at
-        the box. Nothing here writes an overseer_command row, and never a
-        give.
+        cap, never in combat or inside an instance. A roster family's leader
+        walks by the town slot's ground aim, the one the family's own mail
+        pass uses, and its letter is written by `_guild_route_once` on the
+        cycle it stands at the box. A guild bot off the roster walks by the
+        module's own `walk-to-mailbox` row (quadseven/mod-overseer#570), the
+        only row this writes, and `_follow_mail_walk` posts its letter the
+        moment the walk reads 'applied'. Never a give.
         """
         now = time.monotonic()
         self._guild_mail_runs = guildroute.live_runs(self._guild_mail_runs, now)
@@ -6533,8 +6588,14 @@ class Bridge(discord.Client):
             return
         holders = list(dict.fromkeys(r.holder for r in waiting))
         holders = holders[:GUILD_ROUTE_MAILBOX_CHECKS]
-        walkers = await asyncio.to_thread(_route_walkers, holders, family_names)
-        posted = await asyncio.to_thread(_route_letters_today)
+        row_walks = now >= self._mail_walk_unsupported_until
+        walkers = await asyncio.to_thread(
+            _route_walkers, holders, family_names, row_walks
+        )
+        posted = max(
+            await asyncio.to_thread(_route_letters_today),
+            await asyncio.to_thread(_route_walks_today),
+        )
         plan = guildroute.plan_mail_runs(
             waiting, walkers, self._guild_mail_runs,
             guildroute.runs_today(self._guild_mail_run_starts, now, posted),
@@ -6544,6 +6605,9 @@ class Bridge(discord.Client):
             # Reserved before the await and handed back on a refusal, so the
             # holder is never read as free while its claim is in flight.
             self._guild_mail_runs[run.holder] = now
+            if run.by_row:
+                await self._start_mail_walk(run, now)
+                continue
             taken = await self._claim_town_slot(
                 guildroute.MAIL_RUN_CLAIMANT, run.holder, run.aim, cohort=run.cohort,
             )
@@ -6552,6 +6616,94 @@ class Bridge(discord.Client):
                 continue
             self._guild_mail_run_starts.append(now)
             log.info("guild route: %s", run.said)
+
+    async def _start_mail_walk(self, run, now: float) -> None:
+        """Write one walk row for a bot off the roster and follow it (#185)."""
+        row_id = await asyncio.to_thread(_insert_mail_walk, run)
+        if not row_id:
+            self._guild_mail_runs.pop(run.holder, None)
+            return
+        self._guild_mail_run_starts.append(now)
+        log.info("guild route: %s (walk row %d)", run.said, row_id)
+        task = asyncio.create_task(self._follow_mail_walk(run, row_id))
+        self._mail_walk_tasks.add(task)
+        task.add_done_callback(self._mail_walk_task_done)
+
+    def _mail_walk_task_done(self, task) -> None:
+        """Drop a finished follow task, and make any bug in it loud."""
+        self._mail_walk_tasks.discard(task)
+        if task.cancelled():
+            return
+        exc = task.exception()
+        if exc is not None:
+            log.error("guild route: a mailbox walk follow task failed",
+                      exc_info=(type(exc), exc, exc.__traceback__))
+
+    async def _follow_mail_walk(self, run, row_id: int) -> None:
+        """Read one walk row until it answers, then act on the answer (#185).
+
+        Bounded: WALK_FOLLOW_SECONDS at MAIL_WALK_POLL_SECONDS, one read each.
+        guildroute.judge_walk decides what the row says. Every ending is
+        logged, and none of them loops: a failed or unanswered walk keeps its
+        holder in `_guild_mail_runs` until the run's time is up, and a
+        worldserver that does not know the walk is left alone for
+        WALK_UNSUPPORTED_SECONDS.
+        """
+        try:
+            answer = guildroute.WalkAnswer(guildroute.WALKING)
+            deadline = time.monotonic() + guildroute.WALK_FOLLOW_SECONDS
+            while time.monotonic() < deadline:
+                await asyncio.sleep(MAIL_WALK_POLL_SECONDS)
+                row = await asyncio.to_thread(_command_answer, row_id)
+                if row is None:
+                    answer = guildroute.WalkAnswer(
+                        guildroute.ENDED, "walk row %d cannot be read" % row_id
+                    )
+                    break
+                answer = guildroute.judge_walk(
+                    run.holder, row.get("status"), row.get("detail"), row.get("result")
+                )
+                if answer.state != guildroute.WALKING:
+                    break
+            await self._end_mail_walk(run, row_id, answer)
+        except pymysql.err.MySQLError:
+            # A database fault ends this follow; the holder keeps its run
+            # slot until the run's time is up, so nothing loops. Anything
+            # else is a bug and reaches _mail_walk_task_done.
+            log.exception("guild route: following walk row %d failed", row_id)
+
+    async def _end_mail_walk(self, run, row_id: int, answer) -> None:
+        """Post the letter on arrival; otherwise say why the route waits."""
+        if answer.state == guildroute.ARRIVED:
+            seen = await asyncio.to_thread(_recent_route_keys, GIVE_RETRY_MINUTES)
+            if (run.holder, run.command) in seen:
+                log.info("guild route: %s; the letter is already written", answer.said)
+            elif await asyncio.to_thread(_insert_route, run):
+                log.info(
+                    "guild route: %s; posts %s (item %d) to %s, +%d item levels",
+                    answer.said, run.item, int(run.guid), run.taker, int(run.gain),
+                )
+                self._guild_mail_runs.pop(run.holder, None)
+            return
+        if answer.state == guildroute.UNSUPPORTED:
+            self._mail_walk_unsupported_until = (
+                time.monotonic() + guildroute.WALK_UNSUPPORTED_SECONDS
+            )
+            log.warning("guild route: walk row %d: %s", row_id, answer.said)
+            return
+        if answer.state == guildroute.WALKING:
+            log.info(
+                "guild route: walk row %d for %s had no answer in %d seconds; "
+                "%s stays with %s",
+                row_id, run.holder, int(guildroute.WALK_FOLLOW_SECONDS),
+                run.item, run.holder,
+            )
+            return
+        log.info(
+            "guild route: walk row %d: %s; %s stays with %s%s",
+            row_id, answer.said, run.item, run.holder,
+            " and may walk again later" if answer.retryable else "",
+        )
 
     async def _say_guild_gift(self, gift) -> None:
         """Say it in guild chat, because the guild is who it is addressed to.
@@ -9122,15 +9274,30 @@ class Bridge(discord.Client):
             return
 
         queued = 0
+        # A CONJURED ITEM IS HANDED OVER IN PERSON OR NOT AT ALL (#189): the
+        # post refuses conjured items and mod-overseer#566 refuses a give
+        # outside trade range, so a follower standing apart waits for the
+        # next pass.
+        where = {}
+        if any(e.kind == towntrip.GIVE_KIND for e in trip.errands):
+            where = handover.spots(await asyncio.to_thread(_fetch_positions, names))
+        waits = []
         for errand in trip.errands:
             if (errand.member, errand.command) in seen:
                 continue
+            if errand.kind == towntrip.GIVE_KIND:
+                how = handover.verdict(errand.member, errand.taker, where)
+                if how.verb != handover.GIVE:
+                    waits.append(handover.waiting(
+                        errand.command, errand.member, errand.taker, how.why))
+                    continue
             if await asyncio.to_thread(_insert_town_errand, errand):
                 queued += 1
                 log.info("towntrip: %s %s%s - %s",
                          errand.member, errand.kind,
                          " -> %s" % errand.taker if errand.taker else "",
                          errand.why)
+        _log_capped("towntrip", waits)
         log.info("towntrip: queued %d/%d errand(s), leader=%s",
                  queued, len(trip.errands), leader)
 
@@ -11943,41 +12110,37 @@ def _recent_guild_gift_keys(minutes: int) -> set:
         }
 
 
-def _insert_guild_gift(gift) -> int:
+def _insert_guild_gift(gift, verb=handover.GIVE) -> int:
     """One overseer_command row handing one stack to a guildmate (infra#3908).
 
-    THE SAME VERB `materials.py` USES, AND THE SAME ONE `gear.py` FALLS BACK
-    TO WHEN THE TWO CHARACTERS ARE APART. Nothing new was needed in C++ for
-    this, and that was verified live rather than assumed: four probe gives
-    with an unmovable item guid established that `DoGive` refuses on the ITEM
-    for a receiver on another continent exactly as it does for one standing
-    next to the giver, and refuses on the RECEIVER only when that receiver is
-    not in the world. There is no party, guild, roster or distance gate on the
-    verb - see guildshare.py's module docstring for the full table.
-
-    ALWAYS `give` AND NEVER `trade`. `gear.deliverable` picks between the two
-    on distance because the family is usually standing together; a guildmate
-    is not, and the one online recruit measured while this was written was on
-    a different continent from every one of the five.
+    `verb` is what `handover.verdict` answered (#189): 'give' when the two
+    stand together, or 'mail' when the family holder stands at a mailbox,
+    which writes `gift.post_command`. It used to be always 'give', at any
+    distance; mod-overseer#566 made DoGive refuse outside trade range, and a
+    guildmate is rarely beside the family. Any other verb is refused here, so
+    no future caller can slip a far give through this writer.
 
     Guarded on 1265 exactly as `_insert_give` is: a worldserver behind the
     ENUM migration must warn rather than raise.
     """
+    if verb not in (handover.GIVE, handover.MAIL):
+        log.warning("guildshare: refusing to write kind=%r for %s", verb, gift.item)
+        return 0
+    command = gift.post_command if verb == handover.MAIL else gift.command
     with _connect() as conn, conn.cursor() as cur:
         try:
             cur.execute(
                 "INSERT INTO overseer_command "
                 "(target_name, command, kind, target_arg, source) "
-                "VALUES (%s, %s, 'give', %s, %s)",
-                (gift.holder, gift.command, gift.taker, "guildshare"),
+                "VALUES (%s, %s, %s, %s, %s)",
+                (gift.holder, command, verb, gift.taker, "guildshare"),
             )
         except pymysql.err.MySQLError as exc:
             if exc.args and exc.args[0] == 1265:
                 log.warning(
-                    "overseer_command.kind has no 'give' value - handing %d "
-                    "%s from %s to %s needs the worldserver image carrying "
-                    "mod-overseer's give SQL (infra#2597)",
-                    gift.count, gift.item, gift.holder, gift.taker,
+                    "overseer_command.kind has no '%s' value - handing %d "
+                    "%s from %s to %s needs a newer worldserver image",
+                    verb, gift.count, gift.item, gift.holder, gift.taker,
                 )
                 return 0
             raise
@@ -12070,13 +12233,14 @@ _ROUTE_WALKER_SQL = (
 )
 
 
-def _route_walkers(holders: list, family_names: list) -> dict:
+def _route_walkers(holders: list, family_names: list, row_walks: bool = True) -> dict:
     """holder -> guildroute.Walker; guildroute decides everything.
 
     Which roster family each holder leads comes from the same roster read the
     town slot uses (`townslot.other_cohorts`). The nearest mailbox is only
-    looked up for a holder that can be walked at all, so a guild of bots off
-    the roster costs one snapshot read and no spawn reads.
+    looked up for a holder that can be walked at all: a roster leader, or a
+    bot off the roster while `row_walks` says the worldserver can walk one
+    (#185). A roster follower costs no spawn read.
     """
     if not holders:
         return {}
@@ -12099,8 +12263,11 @@ def _route_walkers(holders: list, family_names: list) -> dict:
     out = {}
     for holder in holders:
         state = states.get(holder)
-        spawn = _nearest_mailbox(holder) if state and holder in leader_of else None
-        out[holder] = guildroute.walker_from(holder, state, leader_of, roster, spawn)
+        walkable = holder in leader_of or (row_walks and holder not in roster)
+        spawn = _nearest_mailbox(holder) if state and walkable else None
+        out[holder] = guildroute.walker_from(
+            holder, state, leader_of, roster, spawn, row_walks=row_walks
+        )
     return out
 
 
@@ -12120,6 +12287,73 @@ def _route_letters_today() -> int:
             raise
         row = cur.fetchone()
         return int((row or {}).get("n") or 0)
+
+
+# The `source` prefix of a walk row (#185): its own, so the route letters'
+# retry window and count never read a walk as a letter.
+MAIL_WALK_SOURCE = "guildwalk"
+# How often a walk row is read while its bot walks.
+MAIL_WALK_POLL_SECONDS = 5.0
+
+
+def _route_walks_today() -> int:
+    """Walk rows the command log holds for the last 24 hours (#185)."""
+    with _connect() as conn, conn.cursor() as cur:
+        try:
+            cur.execute(
+                "SELECT COUNT(*) AS n FROM overseer_command "
+                "WHERE source LIKE %s AND created_at > NOW() - INTERVAL 1 DAY",
+                (MAIL_WALK_SOURCE + ":%",),
+            )
+        except pymysql.err.MySQLError as exc:
+            if exc.args and exc.args[0] in (1054, 1146):
+                return 0
+            raise
+        row = cur.fetchone()
+        return int((row or {}).get("n") or 0)
+
+
+def _insert_mail_walk(run) -> int:
+    """One `kind='mail'` walk-to-mailbox row for a bot off the roster (#185).
+
+    The bot in target_name; the receiver in target_arg only so an operator
+    reading the queue sees who the walk is for (the module ignores it).
+    Guarded on 1265 like every other kind written here.
+    """
+    with _connect() as conn, conn.cursor() as cur:
+        try:
+            cur.execute(
+                "INSERT INTO overseer_command "
+                "(target_name, command, kind, target_arg, source) "
+                "VALUES (%s, %s, 'mail', %s, %s)",
+                (run.holder, run.walk_command, run.taker,
+                 "%s:%d" % (MAIL_WALK_SOURCE, max(0, int(run.gain)))),
+            )
+        except pymysql.err.MySQLError as exc:
+            if exc.args and exc.args[0] in (1146, 1265):
+                log.warning(
+                    "guild route: cannot queue a mailbox walk for %s on this "
+                    "worldserver image", run.holder,
+                )
+                return 0
+            raise
+        return cur.lastrowid or 0
+
+
+def _command_answer(row_id: int):
+    """One command row's status, detail and result, or None if unreadable."""
+    with _connect() as conn, conn.cursor() as cur:
+        try:
+            cur.execute(
+                "SELECT status, detail, result FROM overseer_command WHERE id = %s",
+                (int(row_id),),
+            )
+        except pymysql.err.MySQLError as exc:
+            if exc.args and exc.args[0] in (1054, 1146):
+                return None
+            raise
+        row = cur.fetchone()
+        return dict(row) if row else None
 
 
 def _recent_route_keys(minutes: int) -> set:

@@ -59,6 +59,13 @@ Two things follow, and both shape this module:
   never `trade` - `gear.py` picks between the two on distance, and a guildmate
   is essentially never inside `gear.TRADE_YARDS`.
 
+  NO LONGER TRUE OF THE MODULE (#189). mod-overseer#566 added the distance
+  gate: a give now needs the two on one map and inside trade range. The plan
+  here is unchanged; the bridge asks `handover.verdict` how each gift moves,
+  which is a give when the two stand together, a `kind='mail'` send
+  (`Gift.post_command`) when the family holder stands at a mailbox, and
+  otherwise a logged wait.
+
   AN ABSENT NAME AND AN OFFLINE ONE ARE THE SAME REFUSAL, so this module may
   never treat "I have a name for them" as evidence they are there.
   `ObjectAccessor::FindPlayerByName` returns null for both, and a typo, a
@@ -294,6 +301,16 @@ class Gift:
     def command(self) -> str:
         """What mod-overseer's `DoGive` parses out of `overseer_command.command`."""
         return "guid:%d" % int(self.guid)
+
+    @property
+    def post_command(self) -> str:
+        """The `kind='mail'` send that posts the same stack from a mailbox (#189).
+
+        A guildmate is rarely within trade range of the family, and
+        mod-overseer#566 refuses a give outside it, so the surplus goes by
+        post when its holder stands at a mailbox.
+        """
+        return "send item:%d subject:%s" % (int(self.guid), self.item)
 
     @property
     def said(self) -> str:

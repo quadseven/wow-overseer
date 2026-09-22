@@ -167,12 +167,26 @@ class TheVerbFollowsWhereTheyAreStanding(unittest.TestCase):
         got = hand_off([carried()], THE_HAND_OFF, positions=TOGETHER).grants
         self.assertEqual(got[0].verb, gear.TRADE)
 
-    def test_apart_it_is_a_give_that_actually_lands(self):
-        """744 yards. A trade issued across it becomes `characters are too
-        far apart to trade` - 343 of the 755 measured rows - and renders
-        nothing at all, so there is no spectacle to protect."""
-        got = hand_off([carried()], THE_HAND_OFF, positions=APART).grants
-        self.assertEqual(got[0].verb, gear.GIVE)
+    def test_apart_it_waits_and_never_gives(self):
+        """744 yards. mod-overseer#566 refuses a give outside trade range as
+        it refuses a trade (#189), so the piece waits for the family to
+        regroup, with a note saying so, and no row is written."""
+        plan = hand_off([carried()], THE_HAND_OFF, positions=APART)
+        self.assertEqual(plan.grants, ())
+        self.assertEqual(len(plan.notes), 1)
+        self.assertIn("Grog is beside none of Bork", plan.notes[0])
+        self.assertIn("waits until they stand together", plan.notes[0])
+
+    def test_apart_at_a_mailbox_it_is_posted(self):
+        """A holder standing at a mailbox posts the piece instead (#189)."""
+        got = gear.deliverable(
+            hand_off([carried()], THE_HAND_OFF, positions=TOGETHER).grants,
+            position_rows=APART,
+            free_slots=ROOM,
+            at_mailbox={"Grog"},
+        ).grants
+        self.assertEqual(got[0].verb, gear.MAIL)
+        self.assertEqual(got[0].command, "send item:7101 subject:Archer's Gloves")
 
     def test_a_different_map_is_never_a_trade(self):
         """Three of the five hearth to Eastern Kingdoms while the dungeon is
@@ -182,8 +196,9 @@ class TheVerbFollowsWhereTheyAreStanding(unittest.TestCase):
             "Grog": at(KALIMDOR, 100.0, 100.0),
             "Bork": at(EASTERN_KINGDOMS, 100.0, 100.0),
         }
-        got = hand_off([carried()], THE_HAND_OFF, positions=split).grants
-        self.assertEqual(got[0].verb, gear.GIVE)
+        plan = hand_off([carried()], THE_HAND_OFF, positions=split)
+        self.assertEqual(plan.grants, ())
+        self.assertNotIn(gear.GIVE, [g.verb for g in plan.grants])
 
     def test_the_range_is_the_cores_own_trade_distance(self):
         """TRADE_DISTANCE is 11.11 yards (ObjectDefines.h:29) and DoTrade
@@ -196,8 +211,7 @@ class TheVerbFollowsWhereTheyAreStanding(unittest.TestCase):
             gear.TRADE,
         )
         self.assertEqual(
-            hand_off([carried()], THE_HAND_OFF, positions=outside).grants[0].verb,
-            gear.GIVE,
+            hand_off([carried()], THE_HAND_OFF, positions=outside).grants, ()
         )
 
 
@@ -262,8 +276,11 @@ THE_FAMILY = (
     + worn("Bork", ROGUE, 60, i3=51)
 )  # gain 1
 
+# Standing together at a vendor, two yards apart in a row, so every pair is
+# inside trade range: the ranking tests below are about room and presence,
+# not distance (#189 made apart a wait).
 ALL_PRESENT = {
-    name: at(KALIMDOR, 100.0 + i * 400.0, 100.0)
+    name: at(KALIMDOR, 100.0 + i * 2.0, 100.0)
     for i, name in enumerate(["Og", "Ugga", "Grog", "Grug", "Bork"])
 }
 
