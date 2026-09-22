@@ -670,7 +670,8 @@ class BackingOffIsForPermanentRefusalsOnly(unittest.TestCase):
             "taker already holds it",
             "taker cannot take it in its current state",
             "taker quest log is full",
-            "taker is not eligible (level, race, class, prerequisite or exclusive group)",
+            # Not "taker is not eligible": since #170 it is permanent itself
+            # and starts its own streak (pinned in the next test class).
             "no bag space for the quest starting item",
             "the quest did not land in the taker log",
         ):

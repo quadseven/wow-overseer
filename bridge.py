@@ -9182,11 +9182,24 @@ class Bridge(discord.Client):
         # the weakest gatherer sets the band: the family arrives together.
         level = min(rows.values()) if rows else 0
 
-        locks = gatherband.reachable_locks(skill_name, value)
+        # NEAR THE LEADER, WITHIN SOMEBODY'S BAND (#170). The survey reads
+        # every lock any gatherer can open, and `gatheraim.near_fields` keeps
+        # only the fields within `gatheraim.MAX_YARDS` of where the leader
+        # stands, nearest first. Without a position there is nothing to
+        # measure from, and the old weakest-band ranking is kept.
+        origin = None
+        if where and where.get("pos_x") is not None and where.get("pos_y") is not None:
+            origin = (float(where["pos_x"]), float(where["pos_y"]))
+        locks = sorted({lock for name, best in gatheraim.strongest_gatherers(skills)
+                        for lock in gatherband.reachable_locks(name, best)})
         spawns = await asyncio.to_thread(_survey_gather_nodes, leader, locks)
 
-        candidates = gatheraim.fields_in_band(
-            spawns, skill_name, value, standing_on)
+        if origin is not None:
+            candidates, _beyond = gatheraim.near_fields(
+                spawns, skills, standing_on, origin)
+        else:
+            candidates = gatheraim.fields_in_band(
+                spawns, skill_name, value, standing_on)
         zone_levels = {}
         for cand in candidates[:GATHER_DANGER_CANDIDATES]:
             top = await asyncio.to_thread(
@@ -9196,7 +9209,30 @@ class Bridge(discord.Client):
 
         return gatheraim.choose(skills=skills, standing_on=standing_on,
                                 spawns=spawns, family_level=level,
-                                zone_levels=zone_levels)
+                                zone_levels=zone_levels, origin=origin)
+
+    async def _yield_gather_aim(self, why: str) -> bool:
+        """Hand back a gathering walk this pass holds, and say why (#170).
+
+        Only the pass's OWN aim: the slot's holder must be GATHER_CLAIMANT and
+        the column must still read the aim it wrote. The release is the same
+        compare-and-swap every errand uses, so a column that changed hands in
+        between matches nothing.
+        """
+        holder = self._town_slot.holder
+        if holder is None or holder.claimant != GATHER_CLAIMANT:
+            log.info("gather: %s", why)
+            return False
+        column = await asyncio.to_thread(_current_travel_npc, holder.character)
+        if column != holder.aim:
+            log.info("gather: %s", why)
+            return False
+        released = await asyncio.to_thread(
+            _release_trade_errand, holder.character, holder.aim)
+        log.info("gather: %s; %s", why,
+                 "the walk to %s is handed back" % holder.aim if released
+                 else "the walk to %s had already ended" % holder.aim)
+        return bool(released)
 
     async def _walk_to_gather_field(self, choice) -> None:
         """Send the family to the field `gatheraim` chose, or say why not.
@@ -9231,11 +9267,27 @@ class Bridge(discord.Client):
         the pass whose trip is measured in minutes, and the only one given a
         lease dimensioned for it (`townslot.GATHER_LEASE_SECONDS`).
         """
+        # FULL BAGS COME FIRST (#170). Measured on wow-dev 2026-09-22 the
+        # gather walk held the column for Grug at 3 free slots of 64 while the
+        # module refused his vendor trip 33 times in five minutes. A member who
+        # cannot loot makes the walk worthless and the town trip urgent, so the
+        # walk neither takes the column nor keeps one it already holds.
+        try:
+            names = await asyncio.to_thread(_fetch_enabled_names)
+            free = await asyncio.to_thread(_fetch_free_slots, names)
+        except Exception:
+            # An unreadable bag is a reason not to walk, and it is said: an
+            # empty reading makes `bags_block_gathering` refuse and yield.
+            log.exception("gather: the family's free bag slots could not be read")
+            free = {}
+        full = gatheraim.bags_block_gathering(free)
         got = getattr(choice, "chosen", None)
-        if got is None:
+        if full or got is None:
             # A refusal is already a sentence, and `skillgoal.plan` has just
             # spoken it. Saying it twice in two voices is how a log stops
-            # being read.
+            # being read. But a walk this pass started earlier must not keep
+            # the column once there is no field to walk to (#170).
+            await self._yield_gather_aim(full or "no gathering field is chosen")
             return
         leader = await asyncio.to_thread(_head_now)
         if not leader:
