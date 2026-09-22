@@ -9706,7 +9706,7 @@ async function renderModel(c, m) {
     c.portrait.classList.remove("live");
     c.modelKey = null;
     c.viewer = null;
-    console.warn("armory model not drawn, will retry:", e);
+    console.warn("armory model build failed; retrying on the next poll", e);
   }
 }
 
