@@ -1160,7 +1160,7 @@ _TRADE_SKILL_IDS = ",".join(
 )
 
 _COUNCIL_MEMBER_SQL = (
-    "SELECT c.name, c.class, c.race, c.money, "
+    "SELECT c.name, c.class, c.race, c.money, "  # noqa: S608 - the only variable parts are _TRADE_SKILL_IDS, a module constant of ints, and a placeholder list; every value is still bound
     "       (SELECT COUNT(*) FROM character_skills k "
     "         WHERE k.guid = c.guid AND k.skill IN (" + _TRADE_SKILL_IDS + ")"
     "       ) AS trades, "
