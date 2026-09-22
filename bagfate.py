@@ -25,9 +25,12 @@ same facts and the same rules the bridge uses:
               run over the holder's own family: a piece the holder would
               wear, a piece for a named relative,
               a piece nobody would wear, and a piece it cannot judge.
+  quests      bag_pressure.QUEST_NEEDED_SQL, the vendor pass's own test:
+              a quest-class stack no quest in the holder's log needs is
+              ordinary goods, and junk when it has a price (#144).
   the rest    by item class, because the pipeline routes them by class
-              too: quest-class items are never sold, recipes are kept for
-              the holder's trade, gems have no route at all.
+              too: recipes are kept for the holder's trade, gems have no
+              route at all.
 
 WHAT IT DOES NOT CLAIM. It does not know which sales `item_plan` is holding
 back, or what a guildmate is short of: those are the bridge's live state and
@@ -69,6 +72,7 @@ VENDOR_GEAR = "vendor_gear"
 DUST = "dust"
 UNJUDGED = "unjudged"
 QUESTS = "quest"
+LEFTOVERS = "quest_leftover"
 RECIPES = "recipe"
 GEMS = "gem"
 MISC_PILE = "misc"
@@ -96,8 +100,10 @@ PILES = {
            "through a guild enchanter", ALARM, 147),
     GEMS: ("gems", "kept - not sold, not shared with a guildmate, "
            "not auctioned", ALARM, 148),
-    QUESTS: ("quest items", "kept - never sold, and nothing checks whether "
-             "an open quest still needs them", CAUTION, 144),
+    QUESTS: ("quest items an open quest still needs", "kept for the quest",
+             PLAIN, None),
+    LEFTOVERS: ("quest leftovers no vendor will buy", "kept - nothing "
+                "destroys an item that has no sale price", CAUTION, 144),
     RECIPES: ("recipes", "kept for the holder's own trade, even when the "
               "skill it needs is far off", CAUTION, 145),
     UNJUDGED: ("gear the family check cannot judge (rings, trinkets, relics)",
@@ -114,7 +120,7 @@ PILES = {
     OTHER: ("other", "kept", PLAIN, None),
 }
 ORDER = (JUNK, FOR_RELATIVE, AUCTION, VENDOR_GEAR, FOR_HOLDER, DUST, GEMS,
-         QUESTS, RECIPES, UNJUDGED, MISC_PILE, TRADE, TOOLS, CONSUMABLES, BAGS,
+         LEFTOVERS, QUESTS, RECIPES, UNJUDGED, MISC_PILE, TRADE, TOOLS, CONSUMABLES, BAGS,
          OTHER)
 
 # What a character no pass manages says, instead of a verdict per pile: the
@@ -162,7 +168,15 @@ def _gear_pile(row: dict, claimant: str | None, holder: str, quality,
 
 
 def _quest_pile(row: dict, quality, price: int) -> tuple[str, str]:
-    return QUESTS, ""
+    """A quest-class stack, by whether a quest in the holder's log needs it.
+
+    That is bag_pressure.QUEST_NEEDED_SQL's answer, the vendor pass's own. A
+    row that does not carry the answer is treated as needed: the fail-closed
+    reading, as the vendor's.
+    """
+    if row.get("quest_needed", True):
+        return QUESTS, ""
+    return (JUNK, "") if _junk(quality, price) else (LEFTOVERS, "")
 
 
 def pile_of(row: dict, claimant: str | None, holder: str) -> tuple[str, str]:

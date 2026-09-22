@@ -10467,7 +10467,9 @@ _VENDOR_ITEMS_SQL = (
     # bit is handed over raw and read in disposition rather than in SQL, the
     # same rule _SURPLUS_GEAR_SQL already states for `ii.flags`.
     "it.class AS item_class, it.BagFamily AS bag_family, "
-    "(it.class = 12) AS quest_item, (it.class = 5) AS reagent "
+    # A quest item is one an open quest still needs (#144), not every
+    # class-12 stack: see bag_pressure.QUEST_NEEDED_SQL.
+    + bag_pressure.QUEST_NEEDED_SQL + " AS quest_item, (it.class = 5) AS reagent "
     "FROM character_inventory ci "
     "JOIN characters c ON c.guid = ci.guid "
     "JOIN item_instance ii ON ii.guid = ci.item "
