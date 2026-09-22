@@ -671,8 +671,22 @@ class TheStory(unittest.TestCase):
         told = build(events=events)["story"]
         self.assertEqual([e["kind"] for e in told], [ach.QUEST, ach.LEVEL])
 
+    def test_a_card_with_no_date_is_left_out_rather_than_sorted(self):
+        dated = {"at": "2026-09-02T15:00:00", "who": "Og", "turned_in": True,
+                 "title": "Quest: A", "quest_name": "A"}
+        undated = dict(dated, at=None, who="Bork")
+        told = ach.story([], [dated, undated], [{"at": None, "who": "Og",
+                                                 "level": 7}], [], ROSTER)
+        self.assertEqual([e["text"] for e in told], ["Og turned in A."])
+
 
 class TheChapters(unittest.TestCase):
+    def test_a_family_whose_read_failed_says_so(self):
+        ch = ach.unread_chapter("Zug")
+        self.assertEqual(ch["story"], [])
+        self.assertEqual(ch["empty"], ach.UNREAD_CHAPTER)
+        self.assertEqual(ch["heading"], "Zug's family")
+
     def test_the_faction_is_read_from_the_races(self):
         self.assertEqual(ach.faction_of([1, 3, 7]), ach.ALLIANCE)
         self.assertEqual(ach.faction_of([2, 5, 6, 8]), ach.HORDE)

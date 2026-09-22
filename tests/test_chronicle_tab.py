@@ -128,7 +128,8 @@ class TheChronicle(unittest.TestCase):
 
     def test_the_endpoint_is_routed_and_the_builder_is_pure(self):
         self.assertIn('"/api/achievements": _achievements,', self.server)
-        self.assertIn("achievements.build_achievements(**_fetch_achievements(names))",
+        self.assertIn("achievements.build_achievements(\n"
+                      "                        **_fetch_achievements(names))",
                       self.server)
         self.assertIn('fetch(u("/api/achievements"))', self.tab)
 
@@ -364,6 +365,11 @@ class BothFamiliesAndNoGearInTheWay(unittest.TestCase):
         self.assertIn("for which in order:", self.handler)
         self.assertIn("achievements.chapter(", self.handler)
         self.assertIn('payload["chapters"] = chapters', self.handler)
+
+    def test_one_familys_failed_read_does_not_blank_the_other(self):
+        self.assertIn("achievements.unread_chapter(which)", self.handler)
+        self.assertIn('log.exception("achievements query failed for family %r", which)',
+                      self.handler)
 
     def test_the_side_is_read_from_the_characters_table(self):
         self.assertIn("achievements.faction_of(", self.handler)

@@ -3398,13 +3398,24 @@ class Handler(BaseHTTPRequestHandler):
             payload = None
             chapters = []
             for which in order:
-                names = by_family[which]
-                built = achievements.build_achievements(**_fetch_achievements(names))
-                faction = achievements.faction_of(
-                    p.get("race") for p in _fetch_profiles(names).values())
+                # EACH FAMILY ON ITS OWN, so a failed read of one says so in
+                # its own chapter rather than blanking the other one too. The
+                # traceback is logged with the family it belongs to.
+                try:
+                    names = by_family[which]
+                    built = achievements.build_achievements(
+                        **_fetch_achievements(names))
+                    faction = achievements.faction_of(
+                        p.get("race") for p in _fetch_profiles(names).values())
+                except Exception:
+                    log.exception("achievements query failed for family %r", which)
+                    chapters.append(achievements.unread_chapter(which))
+                    continue
                 chapters.append(achievements.chapter(built, which, faction))
                 if payload is None:
                     payload = built
+            if payload is None:
+                raise RuntimeError("no family's record could be read")
             payload["chapters"] = chapters
             self._send(200, "application/json", json.dumps(payload).encode())
         except Exception:

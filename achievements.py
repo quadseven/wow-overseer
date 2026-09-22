@@ -974,8 +974,11 @@ def timeline(cards: list[dict]) -> list[dict]:
 #
 # "TOGETHER" IS A WINDOW, NOT A GUESS. Events of one kind whose stamps sit
 # within STORY_WINDOW of the one before are one moment; a gap longer than that
-# starts a new sentence. Ten minutes is a turn-in walk for a party that shares
-# its quests, and short enough that two separate trips are never merged.
+# starts a new sentence. The window bounds the GAP, not the moment: a party
+# handing in quests every few minutes stays one sentence however long the
+# round takes. Ten minutes of silence is longer than a turn-in walk for a
+# party that shares its quests, and short enough that two separate trips
+# are never merged.
 
 STORY_WINDOW = timedelta(minutes=10)
 # The most entries a chapter carries. The page shows them a day at a time.
@@ -1084,6 +1087,23 @@ def _level_entries(cluster: list[dict], roster: list[str]) -> list[dict]:
     } for level, who in sorted(by_level.items(), reverse=True)]
 
 
+def _run_entries(runs: list[dict]) -> list[dict]:
+    """A run keeps its whole card: it is the richest thing on the page."""
+    return [{"kind": RUN, "at": run["at"], "card": run,
+             "who": list(run.get("members") or [])}
+            for run in runs if run.get("at")]
+
+
+def _first_entries(firsts: list[dict]) -> list[dict]:
+    """A first is one sentence: its title, then who and what."""
+    return [{"kind": FIRST, "at": first["at"],
+             "who": first["who"] if isinstance(first["who"], list)
+             else [first["who"]],
+             "word": first["word"], "hue": first["hue"],
+             "text": "%s. %s." % (first["title"], first["body"])}
+            for first in firsts if first.get("at")]
+
+
 def _moments(quests: list[dict], levels: list[dict]) -> dict[str, list[dict]]:
     """Dated quest and level cards, split by what kind of sentence they make."""
     by_kind: dict[str, list[dict]] = {QUEST: [], _QUEST_DONE: [], LEVEL: []}
@@ -1106,20 +1126,7 @@ def story(runs: list[dict], quests: list[dict], levels: list[dict],
     story at level 11 is mostly levels. A run entry carries its whole card
     under `card`; every other entry is one sentence under `text`.
     """
-    entries: list[dict] = []
-    for run in runs:
-        if run.get("at"):
-            entries.append({"kind": RUN, "at": run["at"], "card": run,
-                            "who": list(run.get("members") or [])})
-    for first in firsts:
-        if first.get("at"):
-            entries.append({
-                "kind": FIRST, "at": first["at"],
-                "who": first["who"] if isinstance(first["who"], list)
-                else [first["who"]],
-                "word": first["word"], "hue": first["hue"],
-                "text": "%s. %s." % (first["title"], first["body"]),
-            })
+    entries = _run_entries(runs) + _first_entries(firsts)
     by_kind = _moments(quests, levels)
     for cluster in _clusters(by_kind[QUEST]):
         entries += _quest_entries(cluster, True, roster)
@@ -1130,6 +1137,18 @@ def story(runs: list[dict], quests: list[dict], levels: list[dict],
     entries.sort(key=lambda e: (e["at"], -_KIND_ORDER.get(e["kind"], 9)),
                  reverse=True)
     return entries[:STORY_LIMIT]
+
+
+UNREAD_CHAPTER = ("this family's record could not be read this time; the "
+                  "other chapters are current")
+
+
+def unread_chapter(family_name: str) -> dict:
+    """The chapter for a family whose own read failed, said out loud rather
+    than dropped, so one bad read does not blank the other family too."""
+    return {"family": family_name, "faction": "",
+            "heading": chapter_heading(family_name, ""), "roster": [],
+            "strip": [], "story": [], "empty": UNREAD_CHAPTER}
 
 
 def chapter(payload: dict, family_name: str, faction: str) -> dict:
