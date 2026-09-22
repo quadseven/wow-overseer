@@ -83,6 +83,19 @@ PORTAL_KEYWORDS = frozenset(
         "scarlet-cathedral",
         "stockades",
         "wailing",
+        "blackfathom",
+        "razorfen-kraul",
+        "razorfen-downs",
+        "gnomeregan",
+        "gnomeregan-depot",
+        "uldaman",
+        "uldaman-back",
+        "zulfarrak",
+        "sunken-temple",
+        "blackrock-depths",
+        "lower-blackrock-spire",
+        "stratholme-live",
+        "stratholme-undead",
     }
 )
 

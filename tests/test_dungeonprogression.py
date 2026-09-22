@@ -11,8 +11,8 @@ import unittest
 
 import dungeonprogression
 
-ROOT = pathlib.Path(__file__).resolve().parents[3]
-MODULE = ROOT / "docker/azerothcore-playerbots/mod-overseer/src/mod_overseer.cpp"
+ROOT = pathlib.Path(__file__).resolve().parents[1]
+MODULE = ROOT / "mod-overseer/src/mod_overseer.cpp"
 
 
 class SuccessfulRuns(unittest.TestCase):
@@ -187,8 +187,7 @@ class ThePortalKeywordsTheWorldserverActuallyKnows(unittest.TestCase):
         if not MODULE.exists():
             raise unittest.SkipTest(
                 "mod-overseer submodule is not checked out: "
-                "git submodule update --init "
-                "production/docker/azerothcore-playerbots/mod-overseer"
+                "git submodule update --init mod-overseer"
             )
         cls.source = MODULE.read_text(encoding="utf-8", errors="replace")
 
@@ -204,28 +203,15 @@ class ThePortalKeywordsTheWorldserverActuallyKnows(unittest.TestCase):
                 "never be sent there" % keyword,
             )
 
-    @unittest.expectedFailure
-    def test_blackrock_depths_has_no_portal_row_yet(self):
-        """THE KNOWN CROSS-REPO GAP, pinned rather than described (infra#4247).
-
-        AC_OVERSEER_SHA c929cb15 carries eight portal rows - deadmines,
-        shadowfang, the four Scarlet wings, stockades and wailing - and no
-        Blackrock Depths. The infra half of this issue decides the target; the
-        row that lets the coordinator walk to it belongs to mod-overseer, and
-        the numbers it needs were read off this same pinned core:
-
-            {"blackrock-depths", 0, 1466, 230, 1472, <inn x,y,z on map 0>}
-
-        areatrigger 1466 stands on map 0 at (-7176.63, -937.667, 170.206) with
-        radius 13 and lands on map 230; areatrigger 1472 stands inside on map
-        230 at (456.969, 48.368, -65.2753) with radius 12 and lands back on
-        map 0.
-
-        expectedFailure and not a skip on purpose: the day that row lands this
-        test reports an UNEXPECTED SUCCESS and fails the suite, so the gap
-        cannot quietly stay described after it has been closed.
-        """
-        self.assertTrue(self._has_portal_row("blackrock-depths"))
+    def test_every_campaign_keyword_has_a_portal_row(self):
+        """THE CROSS-REPO GAP THIS CLASS USED TO PIN AS AN expectedFailure,
+        now closed (mod-overseer#510): DungeonPortals() carries a
+        `blackrock-depths` row keyed on areatriggers 1466 (in) and 1472 (out).
+        The pin flipped to an assertion when the submodule was bumped past it,
+        which is the handshake it was written for."""
+        for stages in dungeonprogression.CAMPAIGNS.values():
+            for keyword, _ in stages:
+                self.assertTrue(self._has_portal_row(keyword), keyword)
 
 
 if __name__ == "__main__":
