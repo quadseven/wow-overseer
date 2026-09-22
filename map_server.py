@@ -38,6 +38,7 @@ import partystatus
 import questlog
 import raidgoals
 import raidlineup
+import raidready
 import recap
 import realm
 import standing
@@ -408,6 +409,35 @@ def _fetch_family_names(which=None):
     known = sorted(by_family)
     chosen = which if which in by_family else _default_family(known)
     return by_family[chosen], chosen, known
+
+
+def _fetch_families() -> dict:
+    """{family: [names]} for every family on overseer_roster, default first.
+
+    The same read as the Family tab's, ordered for views that have to show
+    BOTH families rather than the one bonds holds. Empty when the roster
+    carries no families at all; a caller that needs somebody falls back to
+    family.roster() and says nothing about a second family it cannot see.
+    """
+    by_family = _fetch_rosters()
+    if not by_family:
+        return {}
+    first = _default_family(sorted(by_family))
+    return {name: by_family[name]
+            for name in [first] + sorted(k for k in by_family if k != first)}
+
+
+def _all_roster_names() -> list:
+    """Every family's names, or bonds' five when the roster names no family.
+
+    WHY NOT family.roster(). That is bonds' one family, and a guild read bound
+    to it can only ever find that family's guild: the Horde guild was missing
+    from the Lineup and the Raid tab for exactly that reason.
+    """
+    families = _fetch_families()
+    if not families:
+        return list(family.roster())
+    return [name for names in families.values() for name in names]
 
 
 def _default_family(known):
@@ -1513,7 +1543,8 @@ _LINEUP_GUILD = (
 )
 
 _RAID_GUILD = (
-    "SELECT c.name, c.level, g.name AS guild_name, g.guildid "
+    "SELECT c.name, c.level, c.class AS class_id, c.race, "
+    "       g.name AS guild_name, g.guildid "
     "FROM characters c "
     "JOIN guild_member gm ON gm.guid = c.guid "
     "JOIN guild g ON g.guildid = gm.guildid "
@@ -1553,7 +1584,22 @@ _RAID_TRAINER = (
     "SELECT SpellId AS spell, ReqSkillRank AS skill_rank "
     "FROM acore_world.trainer_spell WHERE SpellId IN ({holes})"
 )
-_RAID_CHARS = "SELECT name, level, class FROM characters WHERE name IN ({holes})"
+_RAID_CHARS = "SELECT name, level, class, race FROM characters WHERE name IN ({holes})"
+# WHO HOLDS THE ATTUNEMENT SHORTCUT. Both quest rows the core carries under
+# that title are bound, and the list is raidready's own so the two cannot
+# drift apart.
+_RAID_ATTUNED = (
+    "SELECT DISTINCT c.name FROM characters c "
+    "JOIN character_queststatus_rewarded q ON q.guid = c.guid "
+    "WHERE c.name IN ({holes}) AND q.quest IN ({quests})"
+)
+# THE LOWEST LEVEL THE INSTANCE ADMITS, from its own access row rather than a
+# number remembered here. No row is None, and the page then says nothing about
+# a level gate rather than inventing one.
+_RAID_ACCESS = (
+    "SELECT min_level FROM acore_world.dungeon_access_template "
+    "WHERE map_id = %s ORDER BY difficulty LIMIT 1"
+)
 # WHICH CRAFTS ARE ACTUALLY LEARNED, bound to the plan's own spells. Unbounded
 # this is every spell every character knows, which is thousands of rows to
 # answer a question about eight.
@@ -1587,7 +1633,18 @@ _RAID_HOLDINGS = (
 # raid, and five unread columns would invite the five sentences this view has
 # not earned.
 _RAID_WORN = (
-    "SELECT c.name, it.fire_res FROM characters c "
+    "SELECT c.name, ci.slot, it.fire_res, it.ItemLevel AS item_level "
+    "FROM characters c "
+    "JOIN character_inventory ci ON ci.guid = c.guid AND ci.bag = 0 "
+    "AND ci.slot < %s JOIN item_instance ii ON ii.guid = ci.item "
+    "JOIN acore_world.item_template it ON it.entry = ii.itemEntry "
+    "WHERE c.name IN ({holes})"
+)
+# The resistance half alone, for a realm whose item_template predates the
+# ItemLevel column: the readiness card then says the gear could not be read
+# rather than the whole worn read dropping to nothing.
+_RAID_WORN_OLD = (
+    "SELECT c.name, ci.slot, it.fire_res FROM characters c "
     "JOIN character_inventory ci ON ci.guid = c.guid AND ci.bag = 0 "
     "AND ci.slot < %s JOIN item_instance ii ON ii.guid = ci.item "
     "JOIN acore_world.item_template it ON it.entry = ii.itemEntry "
@@ -1629,7 +1686,7 @@ def _fetch_lineup() -> dict:
     an exception, which is what lets a world with no guild at all answer this
     endpoint honestly instead of 503-ing.
     """
-    names = family.roster()
+    names = _all_roster_names()
     holes = ", ".join(["%s"] * len(names))
     conn = _connect()
     try:
@@ -1663,8 +1720,16 @@ def _fetch_raidgoals() -> dict:
     START of their window into this docstring, which is a subtler version of
     the same fault and is how this paragraph came to be worded around it. The
     dungeon plan's fetch carries the same warning for the same reason.
+
+    EVERY FAMILY, NOT bonds' ONE. The families are what find the guilds, and
+    each guild gets its own readiness card, so the roster bound here is every
+    family's names; `families` rides along for the handler to split by.
     """
-    names = family.roster()
+    families = _fetch_families()
+    if not families:
+        five = list(family.roster())
+        families = {five[0] if five else "": five}
+    names = [name for group in families.values() for name in group]
     holes = ", ".join(["%s"] * len(names))
     plan_names = raidgoals.plan_item_names()
     name_holes = ", ".join(["%s"] * len(plan_names))
@@ -1704,8 +1769,18 @@ def _fetch_raidgoals() -> dict:
                 cur, _RAID_HOLDINGS.format(holes=rholes),  # noqa: S608
                 tuple(roster), "", "character_inventory")
             worn = _wide_guarded(cur, _RAID_WORN.format(holes=rholes),  # noqa: S608
-                                 (len(armory.EQUIPPED_SLOTS), *roster), "",
+                                 (len(armory.EQUIPPED_SLOTS), *roster),
+                                 _RAID_WORN_OLD.format(holes=rholes),  # noqa: S608
                                  "character_inventory worn")
+            quests = raidready.ATTUNEMENT_QUESTS
+            attuned = _wide_guarded(
+                cur,
+                _RAID_ATTUNED.format(  # noqa: S608
+                    holes=rholes, quests=", ".join(["%s"] * len(quests))),
+                (*roster, *quests), "", "character_queststatus_rewarded")
+            access = _wide_guarded(cur, _RAID_ACCESS,
+                                   (raidgoals.MOLTEN_CORE,), "",
+                                   "dungeon_access_template")
             # NO ENTRIES MEANS NOTHING TO BIND, and `IN ()` is a syntax error
             # rather than an empty result. Every reagent then reports that
             # this realm carries no item under its name, which is what
@@ -1733,7 +1808,10 @@ def _fetch_raidgoals() -> dict:
             "skill_rows": skills, "spell_rows": known,
             "holding_rows": holdings, "worn_rows": worn,
             "vendor_rows": vendor, "creature_rows": creature,
-            "object_rows": objects, "guild_rows": guild}
+            "object_rows": objects, "guild_rows": guild,
+            "attuned_rows": attuned, "families": families,
+            "min_level": (int(access[0]["min_level"])
+                          if access and access[0].get("min_level") else None)}
 # --- what the guild can make, and what it cannot (infra#3507) ---------------
 #
 # TEN WHOLE-SET READS IN TWO PHASES, AND THAT IS THE WHOLE COST STORY. This
@@ -3367,8 +3445,24 @@ class Handler(BaseHTTPRequestHandler):
         /api/family refuse a name.
         """
         try:
-            payload = raidgoals.build_raidgoals(**_fetch_raidgoals(),
-                                                roster=family.roster())
+            fetched = _fetch_raidgoals()
+            families = fetched.pop("families")
+            attuned = fetched.pop("attuned_rows")
+            min_level = fetched.pop("min_level")
+            guild_rows = fetched.pop("guild_rows")
+            # ONE CARD PER GUILD. raidgoals counts one roster at a time, so it
+            # is handed one guild's rows and that guild's family as the
+            # fallback; handed both guilds at once it would see a family split
+            # across two guilds and count neither.
+            cards = []
+            for group in raidready.group_guilds(guild_rows, families):
+                goals = raidgoals.build_raidgoals(
+                    **fetched, guild_rows=group["rows"],
+                    roster=group["family_names"])
+                cards.append(raidready.build_guild(
+                    group, fetched["char_rows"], fetched["worn_rows"],
+                    attuned, min_level, goals))
+            payload = raidready.build_readiness(cards)
             self._send(200, "application/json", json.dumps(payload).encode())
         except Exception:
             # Same contract as every other poll: the tab keeps what it has
