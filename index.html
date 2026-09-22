@@ -2952,6 +2952,16 @@
             font-weight:700; cursor:pointer; }
   .povbig:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
   .povbig[hidden] { display:none; }
+  /* The HEAR chip, top left, opposite BIG. Pressed reads as the one stream
+     being heard. */
+  .povear { position:absolute; top:8px; left:8px; z-index:1; min-height:28px;
+            padding:0 .6rem; border-radius:999px; border:0;
+            background:var(--card); color:var(--on-card-dim);
+            font-family:var(--mono); font-size:10px; letter-spacing:.14em;
+            font-weight:700; cursor:pointer; }
+  .povear[aria-pressed="true"] { background:var(--ink); color:var(--pale-green); }
+  .povear:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
+  #wallsoundnote { font-size:12px; color:var(--dim); }
   /* The tones colour the STATUS WORD, never the picture: a wash over a game
      capture is the one thing on this page nobody can read through. */
   .povslot.t-dead .povstatus { color:var(--warn-text); }
@@ -3197,8 +3207,9 @@
   <div class="wbar">
     <div id="wallmodes" role="group" aria-label="wall layout"></div>
     <span class="wspacer"></span>
+    <span id="wallsoundnote" role="status" aria-live="polite"></span>
     <button id="wallsound" type="button" aria-pressed="false"
-            title="A short synthesised tone when a character enters combat or dies. Off until you ask for it: a page that makes noise on load is a page that gets closed.">sound off</button>
+            title="Hear the game on one stream: the large tile, or whichever tile you pressed HEAR on. Off until you press it: a page that makes noise on load is a page that gets closed.">sound off</button>
   </div>
   <details id="wallwarn" hidden></details>
   <div id="wall"></div>
@@ -4842,19 +4853,21 @@ const wallmodes = document.getElementById("wallmodes");
 const wallwarn = document.getElementById("wallwarn");
 const wallhead = document.getElementById("wallhead");
 const wallsound = document.getElementById("wallsound");
-// OFF UNTIL ASKED FOR, and the stored value has to say "on" in as many words
-// rather than merely being present. A page that makes a noise on load is a
-// page that gets closed, and a viewer who once turned it on for a Deadmines
-// run should not be startled by it a week later on a phone in a meeting.
+const wallsoundnote = document.getElementById("wallsoundnote");
+// SOUND IS THE GAME, NOT THE PAGE. The toggle used to synthesise a tone on
+// every fight and every death, and the operator heard it as a stream of
+// random pings over the game they actually wanted to hear. It now unmutes
+// ONE stream: the game client's own audio, on the tile the operator chose.
+//
+// OFF ON EVERY LOAD, whatever was stored. Unmuting has to happen inside a
+// click (autoplay policy), and a viewer who once turned it on should not be
+// startled by it a week later on a phone in a meeting. The stored "on" only
+// changes what the button offers: "resume sound" rather than "sound off".
 wallsound.onclick = () => {
   wall.sound = !wall.sound;
   wallStore(WALL_SOUND_KEY, wall.sound ? "on" : "off");
-  wallsound.textContent = wall.sound ? "sound on" : "sound off";
-  wallsound.setAttribute("aria-pressed", String(wall.sound));
-  // Built inside the click, because an AudioContext created any earlier
-  // starts suspended under every autoplay policy and the first real cue
-  // would be silent with nothing on screen to explain it.
-  if (wall.sound) wallCue("combat");
+  wallSoundButton();
+  wallApplyAudio();
 };
 const ffeeds = document.getElementById("ffeeds");
 const fheadline = document.getElementById("fheadline");
@@ -5109,11 +5122,14 @@ function broadcastTile(name) {
 // tone it carries, who may be the hero and whether the leader warning applies
 // are all judgement, and judgement lives in a module the stdlib suite can
 // reach with no browser and no database. The code below places nodes and
-// makes noises. If you find yourself about to write
+// chooses which one stream is heard. The sound note is the one sentence
+// written here, because it is about this browser's own media tracks, which no
+// server module can see. If you find yourself about to write
 // `m.condition === "dead" ? ... : ...` in here, it belongs in the module.
 const WALL_MODE_KEY = "overseer-wall-mode";
 const WALL_HERO_KEY = "overseer-wall-hero";
 const WALL_SOUND_KEY = "overseer-wall-sound";
+const WALL_EAR_KEY = "overseer-wall-ear";
 // WHAT EACH TONE IS CALLED ON SCREEN. Deliberately not returned by the module:
 // the module's job is to decide the STATE, and these are five English words for
 // a wall in a browser. If a second surface ever needs them they move to
@@ -5124,8 +5140,8 @@ const WALL_SOUND_KEY = "overseer-wall-sound";
 // watching them right now.
 const WALL_STATUS = { dead: "DEAD", combat: "FIGHTING", hurt: "HURT",
                       gone: "OFFLINE", calm: "LIVE" };
-const wall = { mode: null, hero: null, sound: false, modeList: [],
-               slots: new Map(), tones: new Map(), audio: null };
+const wall = { mode: null, hero: null, sound: false, ear: null, modeList: [],
+               names: [], slots: new Map() };
 
 // localStorage THROWS rather than returning null in a private window or with
 // site data blocked, and an unwrapped read here would stop the wall drawing
@@ -5140,7 +5156,72 @@ function wallStore(key, value) {
 function promote(name) {
   wall.hero = name;
   wallStore(WALL_HERO_KEY, name);
+  // The tile the operator just made large is the one they are looking at,
+  // so it is the one they hear. Pressing HEAR on another tile overrides it.
+  wallHear(name);
   applyWallLayout();
+}
+
+// WHICH ONE TILE IS HEARD. Two game clients at once is noise, so exactly one
+// is ever unmuted: the tile the operator last chose (a HEAR press or a
+// promotion), else the large tile. A stored choice is honoured only when it is
+// one of the tiles on the wall, the same rule the stored hero follows.
+function wallEarName() {
+  const chosen = wall.ear || wallStored(WALL_EAR_KEY);
+  return wall.names.indexOf(chosen) >= 0 ? chosen : wall.hero;
+}
+
+function wallHear(name) {
+  wall.ear = name;
+  wallStore(WALL_EAR_KEY, name);
+}
+
+function wallSoundButton() {
+  const wanted = wallStored(WALL_SOUND_KEY) === "on";
+  wallsound.textContent = wall.sound ? "sound on"
+    : (wanted ? "resume sound" : "sound off");
+  wallsound.setAttribute("aria-pressed", String(wall.sound));
+}
+
+// WHETHER A STREAM CARRIES SOUND AT ALL. The tiles are WebRTC, so the answer
+// is on the MediaStream: an audio track that is live and not muted is sound
+// arriving. A remote track reports muted while no packets flow, which is also
+// what a publisher with no audio looks like, so both read as "no sound yet".
+// Saying so beats unmuting a silent stream and leaving the operator to wonder.
+function streamHasSound(video) {
+  const src = video.srcObject;
+  if (!src || typeof src.getAudioTracks !== "function") return false;
+  return src.getAudioTracks().some((tr) => tr.readyState === "live" && !tr.muted);
+}
+
+// MUTES EVERY TILE BUT ONE, and that one only while sound is on and the wall
+// is the view. Called from the toggle and HEAR clicks, which is what lets an
+// unmute through the autoplay policy, and from every layout pass, so a stream
+// that reconnects, or gains its audio track later, is put right within one
+// poll. Leaving the wall mutes everything: the same tiles move into the
+// Family cards, and that tab has no control to silence them.
+function wallApplyAudio() {
+  const ear = wall.sound && view === WATCH_VIEW ? wallEarName() : null;
+  for (const [name, t] of broadcasts.tiles) {
+    const audible = name === ear;
+    if (t.video.muted === audible) t.video.muted = !audible;
+    if (audible && t.video.paused && t.video.srcObject) {
+      t.video.play().catch(() => { /* the tile's own note already says so */ });
+    }
+  }
+  for (const [name, s] of wall.slots) {
+    const on = name === wallEarName();
+    s.ear.setAttribute("aria-pressed", String(on));
+    s.ear.textContent = on && wall.sound ? "HEARING" : "HEAR";
+  }
+  let say = "";
+  if (ear) {
+    const t = broadcasts.tiles.get(ear);
+    if (!t || !t.video.srcObject) say = "waiting for " + ear + "'s stream";
+    else if (!streamHasSound(t.video)) say = ear + "'s stream has no sound yet";
+    else say = "hearing " + ear;
+  }
+  if (wallsoundnote.textContent !== say) wallsoundnote.textContent = say;
 }
 
 function wallSlot(name) {
@@ -5186,44 +5267,29 @@ function wallSlot(name) {
     e.stopPropagation();
     promote(name);
   };
-  shot.append(hit, big);
+  // THE SPEAKER, on the picture, top left: which tile is heard. A press
+  // also turns sound on, because pressing HEAR and hearing nothing would be
+  // a control that lies. It is a click, so the unmute is allowed.
+  const ear = el("button", "povear", "HEAR");
+  ear.type = "button";
+  ear.title = "Hear " + name + "'s game sound (one stream at a time)";
+  ear.setAttribute("aria-pressed", "false");
+  ear.onclick = (e) => {
+    e.stopPropagation();
+    wallHear(name);
+    if (!wall.sound) {
+      wall.sound = true;
+      wallStore(WALL_SOUND_KEY, "on");
+      wallSoundButton();
+    }
+    wallApplyAudio();
+  };
+  shot.append(hit, big, ear);
   slot.append(shot, strip);
   wall.slots.set(name, { slot: slot, shot: shot, standing: standing,
-                         line: line, status: status, big: big, hit: hit });
+                         line: line, status: status, big: big, hit: hit,
+                         ear: ear });
   return wall.slots.get(name);
-}
-
-// A SHORT SYNTHESISED TONE, not a file: this page ships as one HTML document
-// with no build step, and an audio asset would be a second thing to deploy
-// and a second way to 404. Two notes, and they differ in DIRECTION rather
-// than only in pitch - a fall for a death, a rise for a fight - because
-// somebody who is not looking at the screen can tell those apart without
-// having been taught them.
-function wallCue(kind) {
-  if (!wall.sound) return;
-  try {
-    const Ctx = window.AudioContext || window.webkitAudioContext;
-    if (!Ctx) return;
-    if (!wall.audio) wall.audio = new Ctx();
-    const ctx = wall.audio;
-    // A context built before the first real click starts suspended, by
-    // design, in every browser that has an autoplay policy.
-    if (ctx.state === "suspended") ctx.resume();
-    const osc = ctx.createOscillator(), gain = ctx.createGain();
-    const t0 = ctx.currentTime;
-    osc.type = "sine";
-    osc.frequency.setValueAtTime(kind === "dead" ? 440 : 330, t0);
-    osc.frequency.exponentialRampToValueAtTime(kind === "dead" ? 220 : 494,
-                                               t0 + 0.18);
-    // Ramped rather than stopped flat: an oscillator cut at full amplitude
-    // clicks, and a click is what a broken page sounds like.
-    gain.gain.setValueAtTime(0.0001, t0);
-    gain.gain.exponentialRampToValueAtTime(0.09, t0 + 0.02);
-    gain.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.42);
-    osc.connect(gain).connect(ctx.destination);
-    osc.start(t0);
-    osc.stop(t0 + 0.45);
-  } catch (e) { /* a wall that cannot make a noise is still a wall */ }
 }
 
 function applyWallLayout() {
@@ -5281,6 +5347,7 @@ function renderWall(p) {
   wall.hero = names.indexOf(chosen) >= 0 ? chosen
     : (names.indexOf(w.hero) >= 0 ? w.hero : (names[0] || w.hero));
   wallEl.dataset.count = String(shown.length);
+  wall.names = names;
 
   // ROSTER ORDER, STRAIGHT FROM THE PAYLOAD, never sorted here. The module
   // has tests pinning that the wall does not reorder, and re-sorting in the
@@ -5300,14 +5367,6 @@ function renderWall(p) {
     s.line.textContent = t.line;
     s.status.textContent = WALL_STATUS[t.tone] || "";
     if (s.slot.parentElement !== wallEl) wallEl.appendChild(s.slot);
-    // A TONE CHANGE, not a tone. Cueing on the state itself would sound the
-    // alarm every five seconds for as long as a fight lasted, which is how a
-    // sound feature gets switched off and never switched back on.
-    const was = wall.tones.get(t.name);
-    if (was && was !== t.tone && (t.tone === "dead" || t.tone === "combat")) {
-      wallCue(t.tone);
-    }
-    wall.tones.set(t.name, t.tone);
   }
   // A TITLE AND A BODY, because it is five sentences of genuinely important
   // text and this is read on a phone. Open on a wide screen where it costs
@@ -5357,6 +5416,7 @@ function layoutBroadcasts() {
       else target.appendChild(t.tile);
     }
   }
+  wallApplyAudio();
 }
 
 // The tile captions, keyed by name, taken from the wall the module composed.
@@ -5468,7 +5528,6 @@ function retainOnlyThese(names) {
     if (keep.has(name)) continue;
     s.slot.remove();
     wall.slots.delete(name);
-    wall.tones.delete(name);
   }
   for (const [name, c] of fam.cards) {
     if (keep.has(name)) continue;
@@ -6432,10 +6491,10 @@ function showView(v) {
   }
 }
 
-// Read once, at startup, and only "on" counts - see the toggle above.
-wall.sound = wallStored(WALL_SOUND_KEY) === "on";
-wallsound.textContent = wall.sound ? "sound on" : "sound off";
-wallsound.setAttribute("aria-pressed", String(wall.sound));
+// Read once, at startup: never audible on load, whatever was stored - see
+// the toggle above.
+wall.sound = false;
+wallSoundButton();
 setInterval(pollFamily, 5000);         // the family rides the same 5s cadence
 setInterval(refreshFamilyWatch, 5000); // and so does the watch it owns
 setInterval(pollQuests, 30000);        // quest rows are a save, not a stream

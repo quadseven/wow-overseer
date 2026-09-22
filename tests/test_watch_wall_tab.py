@@ -304,7 +304,7 @@ class TheTilesAreMovedAndNeverRebuilt(unittest.TestCase):
         controls swallows clicks that land on it, which is why the tile is
         INSERTED FIRST rather than appended."""
         self.assertIn('el("button", "povhit")', PAGE)
-        self.assertIn("shot.append(hit, big);", PAGE)
+        self.assertIn("shot.append(hit, big, ear);", PAGE)
         self.assertIn("target.insertBefore(t.tile, target.firstChild)", PAGE)
         css = PAGE[PAGE.index(".povhit {") :]
         self.assertIn("inset:0", css[: css.index("}")])
@@ -381,27 +381,18 @@ class HeroModeDoesNotWalkBackIntoTheTinyTwitchView(unittest.TestCase):
 
 class TheSoundIsOffUntilAskedFor(unittest.TestCase):
     def test_nothing_makes_a_noise_before_a_click(self):
-        """A page that makes a noise on load is a page that gets closed."""
-        self.assertIn('wall.sound = wallStored(WALL_SOUND_KEY) === "on";', PAGE)
+        """A page that makes a noise on load is a page that gets closed. The
+        stored preference no longer switches sound on at startup at all: an
+        unmute has to happen inside a click. tests/test_wall_sound.py covers
+        what the toggle does now."""
+        self.assertIn("wall.sound = false;", PAGE)
+        absent(
+            self,
+            'wall.sound = wallStored(WALL_SOUND_KEY) === "on";',
+            PAGE,
+            "index.html",
+        )
         self.assertIn('aria-pressed="false"', PAGE)
-
-    def test_it_cues_a_change_and_not_a_state(self):
-        """Cueing the state would sound the alarm every five seconds for as
-        long as a fight lasted, which is how a sound feature gets switched off
-        and never switched back on."""
-        self.assertIn("was && was !== t.tone", PAGE)
-
-    def test_the_cue_is_synthesised_rather_than_fetched(self):
-        """One HTML file, no build step. An audio asset would be a second
-        thing to deploy and a second way to 404."""
-        self.assertIn("createOscillator", PAGE)
-        absent(self, "<audio", PAGE, "index.html")
-
-    def test_a_browser_with_no_audio_does_not_take_the_wall_down(self):
-        cue = PAGE[PAGE.index("function wallCue") :]
-        cue = cue[: cue.index("\n}")]
-        self.assertIn("try {", cue)
-        self.assertIn("catch", cue)
 
 
 class TheStoredPreferencesAreHandledLikeStorage(unittest.TestCase):
