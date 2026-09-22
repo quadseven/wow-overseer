@@ -79,9 +79,9 @@ BLACKROCK_DEPTHS_MAP_ID = 230
 BLACKROCK_DEPTHS = (("blackrock-depths", 52),)
 
 # Map id -> the ordered stages of that map's campaign.  A map that is NOT in
-# here has no named campaign, which is an ordinary answer and not a gap: it
-# means the bare `dungeon` job, whose meaning belongs to mod-overseer rather
-# than to this module.
+# here has no named campaign, which is an ordinary answer and not a gap: the
+# council sends that map's own front door (council.front_door), never the
+# bare `dungeon` job, which is the Deadmines (#202).
 CAMPAIGNS = {
     SCARLET_MAP_ID: SCARLET_WINGS,
     BLACKROCK_DEPTHS_MAP_ID: BLACKROCK_DEPTHS,
@@ -99,8 +99,8 @@ def campaign_stages(map_id: int) -> tuple[tuple[str, int], ...]:
     """The ordered stages of the campaign on this map, or () for no campaign.
 
     () is "this module names no doors on that map", NOT "that map cannot be
-    run".  The caller sends the bare `dungeon` job in that case, which is what
-    it already did for every map outside Scarlet Monastery.
+    run".  The caller sends that map's front door in that case
+    (council.front_door), and refuses a map with no portal row at all.
     """
     return tuple(CAMPAIGNS.get(int(map_id), ()))
 
