@@ -2102,34 +2102,48 @@ def _fetch_dungeonplan() -> dict:
             families: dict = {}
             for row in _wide_guarded(cur, _PLAN_FAMILIES, (), "",
                                      "overseer_roster"):
-                families.setdefault(row["family"], []).append(row["name"])
+                if row.get("family") and row.get("name"):
+                    families.setdefault(row["family"], []).append(row["name"])
             if not families:
                 # No roster rows: the one family bonds knows, exactly as the
-                # Family tab degrades.
+                # Family tab degrades, and no family at all when bonds has
+                # none either.
                 roster = family.roster()
-                families = {roster[0] if roster else "": roster}
+                families = {roster[0]: roster} if roster else {}
             names = [n for members in families.values() for n in members]
-            holes = ", ".join(["%s"] * len(names))
-            # S608 on the roster reads: `holes` is a run of placeholders sized
-            # by the roster, and every VALUE is still bound by the driver.
-            guild_rows = _wide_guarded(
-                cur, _LINEUP_GUILD.format(holes=holes),  # noqa: S608
-                tuple(names), "", "guild_member")
-            everyone = sorted(set(names) | {r["name"] for r in guild_rows})
-            eholes = ", ".join(["%s"] * len(everyone))
-            chars = _wide_guarded(
-                cur, _PLAN_CHARS.format(holes=eholes),  # noqa: S608
-                tuple(everyone), _PLAN_CHARS_OLD.format(holes=eholes),  # noqa: S608
-                "characters")
-            worn = _wide_guarded(cur, _RECAP_WORN.format(holes=eholes),  # noqa: S608
-                                 (len(armory.EQUIPPED_SLOTS), *everyone), "",
-                                 "character_inventory")
-            # Guarded like everything else, and the empty list this hands back
-            # on a degraded schema is a real answer: recap.family_members
-            # turns "no rows for this character" into an unknown, and the
-            # basis keeps printing the line that says so.
-            skills = _wide_guarded(cur, _RECAP_SKILLS.format(holes=eholes),  # noqa: S608
-                                   tuple(everyone), "", "character_skills")
+            # NOBODY TO BIND MEANS NOTHING TO READ: `IN ()` is a syntax error,
+            # not an empty result, so the character reads are skipped and the
+            # page says the roster names no family.
+            guild_rows: list = []
+            chars: list = []
+            worn: list = []
+            skills: list = []
+            if names:
+                holes = ", ".join(["%s"] * len(names))
+                # S608 on the roster reads: `holes` is a run of placeholders
+                # sized by the roster, and every VALUE is bound by the driver.
+                guild_rows = _wide_guarded(
+                    cur, _LINEUP_GUILD.format(holes=holes),  # noqa: S608
+                    tuple(names), "", "guild_member")
+                # THE GUILD'S MEMBERS TOO, because the page counts who in the
+                # guild would gain. Measured on the dev realm with a guild of
+                # 71 and a second of 5: the whole fetch takes about 0.2s.
+                everyone = sorted(set(names) | {r["name"] for r in guild_rows})
+                eholes = ", ".join(["%s"] * len(everyone))
+                chars = _wide_guarded(
+                    cur, _PLAN_CHARS.format(holes=eholes),  # noqa: S608
+                    tuple(everyone), _PLAN_CHARS_OLD.format(holes=eholes),  # noqa: S608
+                    "characters")
+                worn = _wide_guarded(
+                    cur, _RECAP_WORN.format(holes=eholes),  # noqa: S608
+                    (len(armory.EQUIPPED_SLOTS), *everyone), "",
+                    "character_inventory")
+                # Guarded like everything else, and the empty list this hands
+                # back on a degraded schema is a real answer: an unknown
+                # proficiency, which the basis says out loud.
+                skills = _wide_guarded(
+                    cur, _RECAP_SKILLS.format(holes=eholes),  # noqa: S608
+                    tuple(everyone), "", "character_skills")
             runs = _wide_guarded(cur, _PLAN_RUNS, (), _PLAN_RUNS_OLD,
                                  "overseer_dungeon_run")
     finally:

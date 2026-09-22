@@ -401,6 +401,13 @@ class TheEndpoint(unittest.TestCase):
                        SERVER.index("# --- the live dungeon recap")]
         self.assertIn("_PLAN_FAMILIES", fetch)
 
+    def test_an_empty_roster_binds_no_empty_in_list(self):
+        """`IN ()` is a syntax error, so no family means no character read."""
+        fetch = SERVER[SERVER.index("def _fetch_dungeonplan"):
+                       SERVER.index("# --- the live dungeon recap")]
+        self.assertIn("if names:", fetch)
+        self.assertLess(fetch.index("if names:"), fetch.index("_LINEUP_GUILD.format"))
+
     def test_both_families_come_from_the_roster_and_not_from_bonds(self):
         """bonds knows one family. The roster's own `family` column knows the
         Alliance family and the Horde one, so that is what the path reads."""

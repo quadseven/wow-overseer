@@ -68,7 +68,7 @@ class ThePathIsInLevelOrder(unittest.TestCase):
         floors = [s.floor for s in dungeonpath.PATH if s.kind == dungeonpath.DUNGEON]
         # Scarlet Monastery's floor is its first wing's, so it may sit a level
         # ahead of a dungeon whose band starts one lower; nothing drops by more.
-        for before, after in zip(floors, floors[1:]):
+        for before, after in zip(floors, floors[1:], strict=False):
             self.assertLessEqual(before - after, 1, (before, after))
 
     def test_a_floor_the_council_recommends_is_the_councils(self):

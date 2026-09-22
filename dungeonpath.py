@@ -362,6 +362,89 @@ def _upgrades_line(steps: list[dict], key: str, who: str,
             % (who, _names(named)))
 
 
+@dataclass(frozen=True)
+class _Family:
+    """What every step of one family's path is judged against."""
+    faction: str
+    size: int
+    weakest: int | None
+    weakest_name: str
+    guild: str
+    guild_counts: dict
+    run_rows: list
+    portals: dict
+    names: dict
+
+
+def _weakest(members: list[dict]) -> tuple[int | None, str]:
+    levelled = [m for m in members if m.get("level")]
+    if not levelled:
+        return None, ""
+    low = min(levelled, key=lambda m: int(m["level"]))
+    return int(low["level"]), low["name"]
+
+
+def _step_name(step: Step, card: dict | None, names: dict) -> str:
+    return (step.name or names.get(step.map_id)
+            or (card.get("name") if card else None) or "map %d" % step.map_id)
+
+
+def _step(rank: int, step: Step, card: dict | None, fam: _Family) -> dict:
+    """One step on the path, for one family."""
+    state = _state(step, fam.weakest, fam.faction)
+    overseer = _overseer(step, fam.portals)
+    counts = fam.guild_counts.get(step.map_id)
+    gained = card["gainers"] if card else []
+    return {
+        "rank": str(rank),
+        "map_id": step.map_id,
+        "name": _step_name(step, card, fam.names),
+        "kind": step.kind,
+        "band": _band(step),
+        "floor": step.floor,
+        "state": state,
+        "state_line": _state_line(step, state, fam.weakest_name, fam.weakest,
+                                  fam.faction),
+        "overseer": overseer,
+        "runs_line": _runs(step.map_id, fam.run_rows),
+        "raid_line": ("A raid for %d players: that is the guild's job, not "
+                      "a family's, and the Raid tab tracks it." % step.players
+                      if step.kind == RAID else ""),
+        "family_line": _family_gain_line(card),
+        "family_gainers": len(gained),
+        "family_total": card["total"] if card else 0,
+        "guild_line": _guild_line(fam.guild, counts),
+        "guild_gainers": len(counts["gainers"]) if counts else 0,
+        "members": [_trim(found) for found in (card["members"] if card else [])],
+        "chips": _chips(step, state, overseer, card, fam.size, counts, fam.guild),
+    }
+
+
+def _fold(steps: list[dict]) -> tuple[list[dict], list[dict]]:
+    """THE STEPS ALREADY BEHIND THEM FOLD AWAY. A level 60 family has thirteen
+    outgrown dungeons before the first one that matters, and scrolling past
+    them to reach "next" is the old page's problem in a new order. They stay
+    on the payload, in order, so the path is still whole when opened."""
+    first_live = next((i for i, s in enumerate(steps)
+                       if s["state"] not in (BEHIND, OFF)), len(steps))
+    return steps[:first_live], steps[first_live:]
+
+
+def _off_path(cards: dict) -> list[dict]:
+    """Maps outside the classic path that still hold something, most first."""
+    found = [card for map_id, card in cards.items()
+             if map_id not in PATH_MAPS and card["gainers"]]
+    found.sort(key=lambda c: (-len(c["gainers"]), -c["total"], c["name"]))
+    return found
+
+
+def _who_line(members: list[dict], faction: str, guild: str) -> str:
+    who = ", ".join("%s %s" % (m["name"], m.get("level") or "?") for m in members)
+    return "%s%s%s." % (faction + ": " if faction else "",
+                        who or "nobody on the roster",
+                        (", in the guild %s" % guild) if guild else ", in no guild")
+
+
 def build_family_path(head: str, faction: str, members: list[dict],
                       plan: dict, guild: str, guild_counts: dict,
                       run_rows: list[dict], portals: dict,
@@ -378,63 +461,19 @@ def build_family_path(head: str, faction: str, members: list[dict],
     portals       portals_by_map()
     """
     cards = {int(card["map_id"]): card for card in plan.get("dungeons", [])}
-    levelled = [m for m in members if m.get("level")]
-    weakest_member = min(levelled, key=lambda m: int(m["level"])) if levelled else None
-    weakest = int(weakest_member["level"]) if weakest_member else None
-    weakest_name = weakest_member["name"] if weakest_member else ""
-    size = len(members)
-
-    steps: list[dict] = []
-    for rank, step in enumerate(PATH, start=1):
-        card = cards.get(step.map_id)
-        state = _state(step, weakest, faction)
-        overseer = _overseer(step, portals)
-        counts = guild_counts.get(step.map_id)
-        steps.append({
-            "rank": str(rank),
-            "map_id": step.map_id,
-            "name": (step.name or (names or {}).get(step.map_id)
-                     or (card["name"] if card else "map %d" % step.map_id)),
-            "kind": step.kind,
-            "band": _band(step),
-            "floor": step.floor,
-            "state": state,
-            "state_line": _state_line(step, state, weakest_name, weakest, faction),
-            "overseer": overseer,
-            "runs_line": _runs(step.map_id, run_rows),
-            "raid_line": ("A raid for %d players: that is the guild's job, not "
-                          "a family's, and the Raid tab tracks it."
-                          % step.players if step.kind == RAID else ""),
-            "family_line": _family_gain_line(card),
-            "family_gainers": len(card["gainers"]) if card else 0,
-            "family_total": card["total"] if card else 0,
-            "guild_line": _guild_line(guild, counts),
-            "guild_gainers": len(counts["gainers"]) if counts else 0,
-            "members": [_trim(found) for found in (card["members"] if card else [])],
-            "chips": _chips(step, state, overseer, card, size, counts, guild),
-        })
+    weakest, weakest_name = _weakest(members)
+    fam = _Family(faction, len(members), weakest, weakest_name, guild,
+                  guild_counts, run_rows, portals, names or {})
+    steps = [_step(rank, step, cards.get(step.map_id), fam)
+             for rank, step in enumerate(PATH, start=1)]
     _pick_next(steps)
-
-    off_path = [card for map_id, card in cards.items()
-                if map_id not in PATH_MAPS and card["gainers"]]
-    off_path.sort(key=lambda c: (-len(c["gainers"]), -c["total"], c["name"]))
-
-    # THE STEPS ALREADY BEHIND THEM FOLD AWAY. A level 60 family has thirteen
-    # outgrown dungeons before the first one that matters, and scrolling past
-    # them to reach "next" is the old page's problem in a new order. They stay
-    # on the payload, in order, so the path is still whole when opened.
-    first_live = next((i for i, s in enumerate(steps)
-                       if s["state"] not in (BEHIND, OFF)), len(steps))
-    behind, steps = steps[:first_live], steps[first_live:]
-
-    who = ", ".join("%s %s" % (m["name"], m.get("level") or "?") for m in members)
+    behind, steps = _fold(steps)
+    off_path = _off_path(cards)
     return {
         "family": head,
         "title": "%s's family" % head if head else "The family",
         "faction": faction,
-        "who_line": "%s%s%s." % (
-            faction + ": " if faction else "", who or "nobody on the roster",
-            (", in the guild %s" % guild) if guild else ", in no guild"),
+        "who_line": _who_line(members, faction, guild),
         "next_line": _next_line(steps, weakest_name, weakest),
         "next_short": _next_short(steps),
         "family_upgrades": _upgrades_line(steps, "family_gainers", "the family",
