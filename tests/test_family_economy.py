@@ -229,9 +229,9 @@ class TheBridgeRunsEveryFamily(unittest.TestCase):
 
     def test_another_family_walks_its_own_leader_on_its_own_slot(self):
         body = _statements("    async def _vendor_once(")
-        self.assertIn("leader = cohort.leader", body)
+        self.assertIn("names, leader = sorted(cohort.names), cohort.leader", body)
         self.assertIn("slot = self._cohort_town_slot(cohort)", body)
-        self.assertIn("cohort=None if cohort is None else cohort.key", body)
+        self.assertIn('cohort=getattr(cohort, "key", None)', body)
         self.assertIn('slot.productive("economy")', body)
         self.assertNotIn("self._town_slot", body)
 

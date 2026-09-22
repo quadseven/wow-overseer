@@ -6739,8 +6739,9 @@ class Bridge(discord.Client):
         """
         if cohort is None:
             names = sorted((await asyncio.to_thread(_protected_guids)).values())
+            leader = await asyncio.to_thread(_head_now) if names else ""
         else:
-            names = sorted(cohort.names)
+            names, leader = sorted(cohort.names), cohort.leader
         if not names:
             return
         slot = self._cohort_town_slot(cohort)
@@ -6767,10 +6768,6 @@ class Bridge(discord.Client):
         # `_drive_train` gives: it names the character that can actually walk.
         # Read once and used for both halves, because releasing an errand from
         # one leader and aiming another would be two leaders.
-        if cohort is None:
-            leader = await asyncio.to_thread(_head_now)
-        else:
-            leader = cohort.leader
         step = await self._settle_vendor_errand(names, leader)
         # AND THE SAME SETTLING FOR EVERY OTHER ROW CARRYING THIS PASS'S OWN
         # KEYWORD (infra#3746). The line above hands back the errand the LEADER
@@ -7101,7 +7098,7 @@ class Bridge(discord.Client):
             # the slot says whose, for how long, and what ends it.
             aimed = await self._claim_town_slot(
                 "economy", leader, "vendor", urgent=True,
-                cohort=None if cohort is None else cohort.key,
+                cohort=getattr(cohort, "key", None),
             )
             if not aimed:
                 log.info(

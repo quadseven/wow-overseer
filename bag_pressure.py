@@ -438,10 +438,11 @@ def bag_purchase_allowed(
 # DoBuy executes as the character at a vendor in reach, paying the vendor's
 # price. Nothing here writes a GM command or creates an item.
 
-# What stays in the purse, per character level, after a bag is bought. A
-# level 13 keeps 13 silver back for repairs, food and training; a level 60
-# keeps 60 silver. A judgement, not a measurement: it is the floor below which
-# a bag stops being worth more than the next repair bill.
+# What stays in the purse after a bag is bought: 100 copper (1 silver) per
+# character level. A level 13 keeps 1300 copper (13 silver) back for repairs,
+# food and training; a level 60 keeps 6000 copper (60 silver). A judgement,
+# not a measurement: it is the floor below which a bag stops being worth more
+# than the next repair bill.
 BAG_RESERVE_PER_LEVEL = 100
 
 
