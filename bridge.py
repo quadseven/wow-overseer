@@ -9121,9 +9121,15 @@ class Bridge(discord.Client):
         # module refused his vendor trip 33 times in five minutes. A member who
         # cannot loot makes the walk worthless and the town trip urgent, so the
         # walk neither takes the column nor keeps one it already holds.
-        names = await asyncio.to_thread(_fetch_enabled_names)
-        full = gatheraim.bags_block_gathering(
-            await asyncio.to_thread(_fetch_free_slots, names))
+        try:
+            names = await asyncio.to_thread(_fetch_enabled_names)
+            free = await asyncio.to_thread(_fetch_free_slots, names)
+        except Exception:
+            # An unreadable bag is a reason not to walk, and it is said: an
+            # empty reading makes `bags_block_gathering` refuse and yield.
+            log.exception("gather: the family's free bag slots could not be read")
+            free = {}
+        full = gatheraim.bags_block_gathering(free)
         got = getattr(choice, "chosen", None)
         if full or got is None:
             # A refusal is already a sentence, and `skillgoal.plan` has just

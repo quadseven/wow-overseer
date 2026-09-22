@@ -281,6 +281,43 @@ def _below_floor(top, family_level) -> bool:
     return bool(family_level) and int(top) < int(family_level) - LEVEL_FLOOR_BELOW
 
 
+def _safe_fields(candidates, levels, ceiling):
+    """([(field, top level)] measured and under `ceiling`, considered rows).
+
+    A field missing from `levels` is unmeasured and never safe.
+    """
+    considered, safe = [], []
+    for cand in candidates:
+        top = levels.get(cand.zone_id)
+        considered.append((cand.zone_id, cand.nodes, top))
+        if top is None or (ceiling and int(top) > ceiling):
+            continue
+        safe.append((cand, top))
+    return safe, considered
+
+
+def _near_or_refused(spawns, skills, standing_on, origin, max_yards):
+    """(fields near the leader, None), or ([], the Choice refusing) (#170)."""
+    candidates, beyond = near_fields(spawns, skills, standing_on, origin, max_yards)
+    if candidates:
+        return candidates, None
+    return [], Choice(
+        refused=(
+            "no field on map %s that anybody in the family can gather "
+            "lies within %d yards of the leader%s, and a walk further "
+            "than that is not worth the travel column"
+            % (
+                standing_on,
+                int(max_yards),
+                ""
+                if beyond is None
+                else " - the nearest is %d yards away" % int(beyond),
+            )
+        ),
+        why="no in-band field within range of the leader.",
+    )
+
+
 def choose(
     *,
     skills,
@@ -331,23 +368,11 @@ def choose(
         )
 
     if origin is not None:
-        candidates, beyond = near_fields(spawns, skills, standing_on, origin, max_yards)
-        if not candidates:
-            return Choice(
-                refused=(
-                    "no field on map %s that anybody in the family can gather "
-                    "lies within %d yards of the leader%s, and a walk further "
-                    "than that is not worth the travel column"
-                    % (
-                        standing_on,
-                        int(max_yards),
-                        ""
-                        if beyond is None
-                        else " - the nearest is %d yards away" % int(beyond),
-                    )
-                ),
-                why="no in-band field within range of the leader.",
-            )
+        candidates, refusal = _near_or_refused(
+            spawns, skills, standing_on, origin, max_yards
+        )
+        if refusal is not None:
+            return refusal
     else:
         candidates = fields_in_band(spawns, skill_name, value, standing_on)
     if not candidates:
@@ -363,16 +388,7 @@ def choose(
 
     levels = zone_levels or {}
     ceiling = int(family_level) + LEVEL_MARGIN if family_level else 0
-    considered = []
-    safe = []
-    for cand in candidates:
-        top = levels.get(cand.zone_id)
-        considered.append((cand.zone_id, cand.nodes, top))
-        if top is None:
-            continue
-        if ceiling and int(top) > ceiling:
-            continue
-        safe.append((cand, top))
+    safe, considered = _safe_fields(candidates, levels, ceiling)
     # A field near the family's own level before one far below it (#170).
     preferred = [pair for pair in safe if not _below_floor(pair[1], family_level)]
     for cand, top in (preferred or safe)[:1]:
