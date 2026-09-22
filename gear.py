@@ -435,7 +435,9 @@ class Grant:
 
     `verb` is how it moves, and it is a fact about where the two of them are
     standing rather than a taste: TRADE while they are close enough for the
-    core to run a real trade, GIVE when they are not. `plan` does not set it -
+    core to run a real trade, MAIL when they are apart and the holder stands
+    at a mailbox, and never GIVE, which mod-overseer#566 refuses outside trade
+    range (#189). `plan` does not set it -
     it answers WHO and WHAT and has never been able to see the world - so it
     stays TRADE until `deliverable` has looked.
 
@@ -473,6 +475,8 @@ class Grant:
         too, for the same accuracy reason) and for a unique drop is a silent
         chance to hand over the wrong copy.
         """
+        if self.verb == MAIL:
+            return "send item:%d subject:%s" % (int(self.guid), self.name)
         return "guid:%d" % int(self.guid)
 
 
@@ -878,6 +882,12 @@ def lines(gear_plan: Plan) -> list:
 # nothing is given up by moving that one to give. Trade when it can be
 # watched, give when it cannot.
 #
+# SUPERSEDED BY THE MODULE ITSELF (#189). mod-overseer#566 made DoGive refuse
+# exactly that far case: a give now needs the two on one map and inside
+# TRADE_DISTANCE, like a trade. So apart is a wait (the family walks together
+# and trades on a later pass), or a letter when the holder already stands at
+# a mailbox. `deliverable` never answers GIVE.
+#
 # WHY NO TRAVEL ERRAND IS WRITTEN TO CLOSE THE DISTANCE INSTEAD. Because the
 # family already has one writer for travel aims and adding a second is the
 # bug this repo most recently fixed (#3554, "aim only the leader at the
@@ -929,7 +939,7 @@ def spots_from_rows(rows) -> dict:
     return spots
 
 
-def deliverable(grants, position_rows=None, free_slots=None) -> Plan:
+def deliverable(grants, position_rows=None, free_slots=None, at_mailbox=None) -> Plan:
     """The hand-offs that can land right now, each carrying the verb to use.
 
     EXACTLY ONE NOTE PER WITHHELD GRANT, so a caller can report "decided N,
@@ -961,11 +971,18 @@ def deliverable(grants, position_rows=None, free_slots=None) -> Plan:
     every ranked taker was refused, and the note names them all with the wall
     each one hit, so "nobody had room" and "nobody was online" stay tellable
     apart at a glance.
+
+    APART IS NO LONGER A GIVE (#189). mod-overseer#566 made DoGive refuse
+    outside trade range, so a taker who is seen but not beside the holder is
+    either posted to, when `at_mailbox` names the holder as standing at a
+    mailbox now, or waits with a note: a family walks together and the trade
+    happens on a later pass. `at_mailbox=None` means nobody offered the post.
     """
     asked_where = position_rows is not None
     asked_room = free_slots is not None
     spots = spots_from_rows(position_rows)
     room = {str(k): int(v or 0) for k, v in dict(free_slots or {}).items()}
+    posting = {str(n) for n in (at_mailbox or ())}
 
     out, notes = [], []
     for grant in grants:
@@ -978,7 +995,7 @@ def deliverable(grants, position_rows=None, free_slots=None) -> Plan:
                 f"is not in the world right now"
             )
             continue
-        chosen, verb, absent, crowded = None, TRADE, [], []
+        chosen, verb, absent, crowded, apart = None, TRADE, [], [], []
         for option in (grant,) + tuple(grant.alternates):
             there = spots.get(option.taker)
             if asked_where and there is None:
@@ -987,12 +1004,15 @@ def deliverable(grants, position_rows=None, free_slots=None) -> Plan:
             if asked_room and room.get(option.taker, 0) <= 0:
                 crowded.append(option.taker)
                 continue
+            if asked_where and not _within_trade_range(here, there):
+                if grant.holder not in posting:
+                    apart.append(option.taker)
+                    continue
+                verb = MAIL
             chosen = option
-            if asked_where:
-                verb = TRADE if _within_trade_range(here, there) else GIVE
             break
         if chosen is None:
-            notes.append(_withheld(grant, crowded, absent))
+            notes.append(_withheld(grant, crowded, absent, apart))
             continue
         if asked_room:
             room[chosen.taker] -= 1
@@ -1007,7 +1027,7 @@ def _joined(names: list) -> str:
     return "%s and %s" % (", ".join(names[:-1]), names[-1])
 
 
-def _withheld(grant: Grant, crowded: list, absent: list) -> str:
+def _withheld(grant: Grant, crowded: list, absent: list, apart=()) -> str:
     """The one note for an item every ranked taker refused.
 
     Both walls are named when both were hit. A note that said only "no free
@@ -1024,6 +1044,11 @@ def _withheld(grant: Grant, crowded: list, absent: list) -> str:
         walls.append(
             "%s %s not in the world right now"
             % (_joined(absent), "are" if len(absent) > 1 else "is")
+        )
+    if apart:
+        walls.append(
+            "%s is beside none of %s, so it waits until they stand together"
+            % (grant.holder, _joined(list(apart)))
         )
     return "%s stays with %s: %s" % (grant.name, grant.holder, ", and ".join(walls))
 
@@ -1394,10 +1419,10 @@ def holdings_from_rows(rows) -> list:
 #             nothing makes a guildmate's bot collect post.
 #
 # Neither is arranged here. `guildroute.plan_mail_runs` walks a waiting
-# holder to the nearest mailbox when the module can walk it (a roster
-# family's leader, #185). A guildmate's bot off the roster cannot be walked
-# yet (quadseven/mod-overseer#569), so for it the pass waits for the meeting
-# or the mailbox and says which one it is waiting on.
+# holder to the nearest mailbox: a roster family's leader by the town slot,
+# a guildmate's bot off the roster by the module's `walk-to-mailbox` row
+# (quadseven/mod-overseer#570, #185). A worldserver without that row makes
+# the pass wait for the meeting or the mailbox and say which one.
 
 MAIL = "mail"
 

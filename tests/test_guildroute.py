@@ -536,10 +536,16 @@ def _walker(name="Avenah", **over):
         leader_of={"Avenah": "Bonkers"},
         roster={"Avenah"},
         spawn=_box(),
+        row_walks=True,
     )
     base.update(over)
     return guildroute.walker_from(
-        name, base["state"], base["leader_of"], base["roster"], base["spawn"]
+        name,
+        base["state"],
+        base["leader_of"],
+        base["roster"],
+        base["spawn"],
+        row_walks=base["row_walks"],
     )
 
 
@@ -570,16 +576,30 @@ class HoldersWalkToAMailbox(unittest.TestCase):
             "(item 4909901) to Grog, +%d item levels" % (run.aim, self.route.gain),
         )
 
-    def test_a_guild_bot_off_the_roster_waits_and_names_the_module_gap(self):
-        walker = _walker(leader_of={}, roster=set())
+    def test_a_guild_bot_off_the_roster_walks_by_the_module_row(self):
+        """#185 with mod-overseer#570: the bot walks by its own walk row."""
+        plan = self.plan(_walker(leader_of={}, roster=set()))
+        self.assertEqual(len(plan.runs), 1)
+        run = plan.runs[0]
+        self.assertTrue(run.by_row)
+        self.assertEqual(run.cohort, "")
+        self.assertEqual(run.walk_command, "walk-to-mailbox max:600")
+        self.assertEqual(run.verb, gear.MAIL)
+        self.assertEqual(run.command, "send item:4909901 subject:Destiny")
+
+    def test_a_roster_leader_is_not_walked_by_row(self):
+        self.assertFalse(self.plan().runs[0].by_row)
+
+    def test_off_the_roster_waits_while_the_world_cannot_walk_one(self):
+        walker = _walker(leader_of={}, roster=set(), row_walks=False)
         plan = self.plan(walker)
         self.assertEqual(plan.runs, ())
         self.assertEqual(
             plan.notes,
             (
                 "Destiny stays with Avenah: Avenah is a guild bot off the roster, "
-                "which nothing in mod-overseer can walk yet "
-                "(quadseven/mod-overseer#569)",
+                "and this worldserver cannot walk one to a mailbox yet "
+                "(quadseven/mod-overseer#570)",
             ),
         )
 
@@ -659,11 +679,13 @@ class TheBridgeWalksAndNeverGives(unittest.TestCase):
         body = bridge[bridge.index(name) :]
         return body[: body.index("\n    async def ")]
 
-    def test_the_walk_goes_through_the_town_slot_and_writes_no_row(self):
+    def test_the_walk_goes_through_the_town_slot_or_the_walk_row(self):
         body = self.body("async def _walk_route_holders(")
         self.assertIn("guildroute.plan_mail_runs(", body)
         self.assertIn("self._claim_town_slot(", body)
         self.assertIn("cohort=run.cohort", body)
+        self.assertIn("if run.by_row:", body)
+        self.assertIn("await self._start_mail_walk(run, now)", body)
         self.assertNotIn("INSERT", body)
         self.assertNotIn("_insert_", body)
         self.assertNotIn("'give'", body)

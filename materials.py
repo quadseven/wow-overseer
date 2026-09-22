@@ -78,6 +78,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 
 import chat
+import handover
 import professions
 
 # Which profession consumes which material, restricted to what infra#2830
@@ -258,6 +259,11 @@ def refusal_counts(attempts) -> dict:
             counts[pair] = 0
             continue
         if status != "error":
+            continue
+        # The module's distance wall (#189) is about where two characters
+        # stood for one second, not about the pair: it neither counts toward
+        # giving up nor clears a count, and the pass waits for them to meet.
+        if handover.is_range_refusal(attempt.detail):
             continue
         counts[pair] = counts.get(pair, 0) + 1
         detail = (attempt.detail or "").strip()

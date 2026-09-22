@@ -390,7 +390,9 @@ class RecipeGifts(unittest.TestCase):
         self.assertEqual(grant.guid, 1507032)
         self.assertEqual(grant.command, "guid:1507032")
 
-    def test_standing_together_trades_and_standing_apart_gives(self):
+    def test_standing_together_trades_and_standing_apart_waits(self):
+        # mod-overseer#566 refuses a give outside trade range (#189), so apart
+        # is a wait with a note, never a give.
         rows = [_row("Og", 1507032, "Plans: Green Iron Boots", BLACKSMITHING)]
         near = self._plan(rows)
         self.assertEqual(near.grants[0].verb, gear.TRADE)
@@ -401,9 +403,10 @@ class RecipeGifts(unittest.TestCase):
                 "Grug": {"map_id": 1, "pos_x": 800.0, "pos_y": 0.0},
             },
         )
-        self.assertEqual(far.grants[0].verb, gear.GIVE)
+        self.assertEqual(far.grants, ())
+        self.assertIn("waits until they stand together", " ".join(far.notes))
 
-    def test_a_taker_on_another_map_is_still_a_give_not_a_bad_distance(self):
+    def test_a_taker_on_another_map_waits_not_a_bad_distance(self):
         # Three of the five hearth to Eastern Kingdoms while the dungeon is on
         # Kalimdor; subtracting coordinates across maps yields a number and
         # that number would put an ocean inside eleven yards.
@@ -415,7 +418,8 @@ class RecipeGifts(unittest.TestCase):
                 "Grug": {"map_id": 1, "pos_x": 0.0, "pos_y": 0.0},
             },
         )
-        self.assertEqual(plan.grants[0].verb, gear.GIVE)
+        self.assertEqual(plan.grants, ())
+        self.assertIn("Og is beside none of Grug", " ".join(plan.notes))
 
     def test_a_recipe_in_the_right_bag_moves_nothing(self):
         rows = [_row("Grog", 1508070, "Schematic: EZ-Thro Dynamite", ENGINEERING)]

@@ -9,6 +9,14 @@ import disposition
 import gear
 import raidlineup
 
+# The trade-range judgement, re-exported for `handover` (#189) so there is one
+# opinion about "standing together" and gear keeps its single importer.
+TRADE_YARDS = gear.TRADE_YARDS
+GIVE = gear.GIVE
+MAIL = gear.MAIL
+spots_from_rows = gear.spots_from_rows
+within_trade_range = gear._within_trade_range
+
 # The two item classes that are worn: weapons and armour. A bag is class 1 and
 # is deliberately not here, because an empty bag is still slots.
 EQUIPMENT_CLASSES = frozenset({2, 4})
@@ -905,6 +913,7 @@ def guild_gear_gifts(
     members,
     position_rows=None,
     free_slots=None,
+    at_mailbox=None,
 ):
     """Return useful BoE gear in family-first, guild-second order.
 
@@ -934,15 +943,24 @@ def guild_gear_gifts(
     guild_grants = tuple(gear.plan(remaining, guild_chars).grants)
     # Family grants are claims used to reserve an item, not guild gifts. The
     # guild pass must never duplicate the family handoff writer.
+    # A guildmate is rarely beside the family, so a holder standing at a
+    # mailbox posts it instead (#189); otherwise the piece waits.
     return gear.deliverable(
         guild_grants,
         position_rows=position_rows,
         free_slots=free_slots,
+        at_mailbox=at_mailbox,
     )
 
 
 def guild_gear_gifts_from_rows(
-    gear_rows, equipped_rows, family_names, members, position_rows=None, free_slots=None
+    gear_rows,
+    equipped_rows,
+    family_names,
+    members,
+    position_rows=None,
+    free_slots=None,
+    at_mailbox=None,
 ):
     """Parse bridge rows and apply the guild BoE policy.
 
@@ -966,6 +984,7 @@ def guild_gear_gifts_from_rows(
         members,
         position_rows=position_rows,
         free_slots=free_slots,
+        at_mailbox=at_mailbox,
     )
 
 

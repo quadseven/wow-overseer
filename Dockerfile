@@ -29,7 +29,7 @@ COPY core.py bridge.py voice.py transform.py \
      flightlearn.py \
      learnaim.py recipebook.py \
      craftpleas.py materials.py \
-     gear.py \
+     gear.py handover.py \
      armory.py wealth.py questlog.py modelviewer.py \
      relay.py digest.py \
      achievements.py recap.py standing.py agenda.py eye.py decree.py \
