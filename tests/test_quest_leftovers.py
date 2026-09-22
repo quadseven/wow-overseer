@@ -38,7 +38,7 @@ class TheExpression(unittest.TestCase):
         self.assertTrue(sql.startswith("(it.class = 12 AND"))
         self.assertIn("it.startquest > 0", sql)
         self.assertIn("FROM character_queststatus qs", sql)
-        self.assertIn("WHERE qs.guid = ci.guid", sql)
+        self.assertIn("WHERE qs.guid = ci.guid AND qs.status <> 0", sql)
         for n in range(1, 7):
             self.assertIn("qt.RequiredItemId%d" % n, sql)
         for n in range(1, 5):

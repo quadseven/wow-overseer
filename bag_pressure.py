@@ -36,8 +36,10 @@ _INSTANCE_SOULBOUND = 0x1
 # quest item for ever: measured on the dev family 2026-09-22, 85 of 259
 # carried stacks were quest-class and 43 of them were asked for by no quest
 # in the holder's log. A class-12 stack is a quest item when it starts a
-# quest, or when a quest in the holder's log (any row of
-# character_queststatus: complete-but-not-turned-in still needs the item)
+# quest, or when a quest in the holder's log (a character_queststatus row
+# whose status is not 0, QUEST_STATUS_NONE: complete-but-not-turned-in and
+# failed-but-retryable still need the item; rewarded quests live in
+# character_queststatus_rewarded and never appear here)
 # names it as required, as a drop it collects, or as the item it hands out
 # at the start. Anything else is ordinary goods, and `sellable` still asks
 # for quality 1 or less and a vendor price, so a leftover with no price is
@@ -47,7 +49,7 @@ QUEST_NEEDED_SQL = (
     "(it.class = 12 AND (it.startquest > 0 OR EXISTS ("
     "SELECT 1 FROM character_queststatus qs "
     "JOIN acore_world.quest_template qt ON qt.ID = qs.quest "
-    "WHERE qs.guid = ci.guid AND ii.itemEntry IN ("
+    "WHERE qs.guid = ci.guid AND qs.status <> 0 AND ii.itemEntry IN ("
     "qt.RequiredItemId1, qt.RequiredItemId2, qt.RequiredItemId3, "
     "qt.RequiredItemId4, qt.RequiredItemId5, qt.RequiredItemId6, "
     "qt.ItemDrop1, qt.ItemDrop2, qt.ItemDrop3, qt.ItemDrop4, qt.StartItem))))"
