@@ -3398,16 +3398,18 @@ class Handler(BaseHTTPRequestHandler):
             payload = None
             chapters = []
             for which in order:
-                # EACH FAMILY ON ITS OWN, so a failed read of one says so in
+                # EACH FAMILY ON ITS OWN, so a failed READ of one says so in
                 # its own chapter rather than blanking the other one too. The
-                # traceback is logged with the family it belongs to.
+                # traceback is logged with the family it belongs to. Only
+                # database faults are caught here: a bug in the code rises to
+                # the handler's own 503 rather than posing as an unread record.
                 try:
                     names = by_family[which]
                     built = achievements.build_achievements(
                         **_fetch_achievements(names))
                     faction = achievements.faction_of(
                         p.get("race") for p in _fetch_profiles(names).values())
-                except Exception:
+                except (pymysql.err.MySQLError, OSError):
                     log.exception("achievements query failed for family %r", which)
                     chapters.append(achievements.unread_chapter(which))
                     continue

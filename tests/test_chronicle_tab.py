@@ -368,6 +368,7 @@ class BothFamiliesAndNoGearInTheWay(unittest.TestCase):
 
     def test_one_familys_failed_read_does_not_blank_the_other(self):
         self.assertIn("achievements.unread_chapter(which)", self.handler)
+        self.assertIn("except (pymysql.err.MySQLError, OSError):", self.handler)
         self.assertIn('log.exception("achievements query failed for family %r", which)',
                       self.handler)
 
