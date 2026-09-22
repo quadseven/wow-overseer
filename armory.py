@@ -47,7 +47,7 @@ from __future__ import annotations
 
 import json
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import bonds
 import family
@@ -503,6 +503,10 @@ class ItemBook:
     suffixes: dict[int, list]
     properties: dict[int, list]
     points: dict[int, list]
+    # item entry -> the MODEL HOST's display id, where it is not the world's
+    # own (tools/gen_viewer_displays.py says why the two numberings differ).
+    # Defaulted so a book built by hand in a test still constructs.
+    viewer_displays: dict[int, int] = field(default_factory=dict)
 
     @classmethod
     def load(cls, static_dir: str) -> "ItemBook":
@@ -521,7 +525,32 @@ class ItemBook:
             suffixes={int(k): v for k, v in book["suffixes"].items()},
             properties={int(k): v for k, v in book["properties"].items()},
             points={int(k): v for k, v in book["points"].items()},
+            viewer_displays=load_viewer_displays(static_dir),
         )
+
+
+def load_viewer_displays(static_dir: str) -> dict[int, int]:
+    """viewerdisplays.json -> {item entry: model host display id}."""
+    with open(os.path.join(static_dir, "viewerdisplays.json")) as f:
+        return {int(k): v for k, v in json.load(f)["display"].items()}
+
+
+def viewer_display(row: dict, displays: dict[int, int] | None) -> int | None:
+    """The display id the MODEL HOST keeps this item's art under.
+
+    THE WORLD'S NUMBER IS THE WRONG ONE FOR ABOUT HALF THE ITEMS. The world
+    database carries the 3.3.5a client's display ids; the model host keys its
+    art by the modern Wrath Classic client's, and that client renumbered
+    roughly half of the equippable items. Sending the world's number for one
+    of those is a 404 the viewer swallows, and the character is drawn without
+    the piece - which is how the family came to be drawn nearly naked while
+    wearing a full set. The frozen table holds only the entries that differ,
+    so an entry that is absent keeps the world's number.
+    """
+    world = row.get("displayid") or None
+    if not world:
+        return None
+    return (displays or {}).get(row.get("entry"), world)
 
 
 def viewer_slot(slot_name: str, inventory_type: int | None) -> int | None:
@@ -539,7 +568,8 @@ def viewer_slot(slot_name: str, inventory_type: int | None) -> int | None:
     return VIEWER_SLOTS.get(slot_name)
 
 
-def viewer_model(char_row: dict, equipment_rows: list[dict]) -> dict | None:
+def viewer_model(char_row: dict, equipment_rows: list[dict],
+                 displays: dict[int, int] | None = None) -> dict | None:
     """The character as the model viewer wants it, or None if it cannot be drawn.
 
     `gender` is sent as the database stores it (0 male, 1 female): the
@@ -549,7 +579,8 @@ def viewer_model(char_row: dict, equipment_rows: list[dict]) -> dict | None:
     or a fixture) rather than defaulted, so the viewer picks its own
     first choice instead of drawing a face the character does not have.
     `items` are [viewer slot, display id] pairs for every drawn slot that
-    holds an item the world database knows a display for.
+    holds an item the world database knows a display for. The display id is
+    the MODEL HOST's (viewer_display, via `displays`), not the world's own.
 
     `assets` is the SAME list read the other way round: one entry per pair,
     carrying the model host's own path for that piece's metadata and the
@@ -574,12 +605,12 @@ def viewer_model(char_row: dict, equipment_rows: list[dict]) -> dict | None:
         slot_name = EQUIPPED_SLOTS[row["slot"]]
         slot = viewer_slot(slot_name, row.get("inventory_type"))
         if slot is not None:
-            items.append([slot, row["displayid"]])
+            display = viewer_display(row, displays)
+            items.append([slot, display])
             assets.append({
                 "slot": slot_name,
-                "path": viewer_asset(slot, row["displayid"]),
-                "note": _model_gap_note(slot_name, row.get("item_name"),
-                                        row["displayid"]),
+                "path": viewer_asset(slot, display),
+                "note": _model_gap_note(slot_name, row.get("item_name"), display),
             })
     model["items"] = items
     model["assets"] = assets
@@ -1322,7 +1353,7 @@ def _member(name: str, char_row: dict | None, equipment_rows: list[dict],
         "slots": slots,
         # What the 3D viewer draws, or None when the race is one the
         # viewer has no model for; the page keeps the portrait then.
-        "model": viewer_model(char_row, equipment_rows),
+        "model": viewer_model(char_row, equipment_rows, items.viewer_displays),
         "gear": _build_gear(slots),
         "stats": stats,
         "spec": _build_spec(class_id, char_row["level"], in_play, book),

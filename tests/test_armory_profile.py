@@ -575,7 +575,9 @@ class TheModelTest(unittest.TestCase):
     def test_the_model_and_the_display_id_reach_the_payload(self):
         rows = [worn(0, SCOUTING_BELT, displayid=1170, inventory_type=1)]
         m = member(build(rows, char_rows=[char(gender=0, skin=1)]))
-        self.assertEqual(m["model"]["items"], [[1, 1170]])
+        # The MODEL gets the model host's number for entry 6581; the doll
+        # keeps the world's own, because that is what the icon is keyed by.
+        self.assertEqual(m["model"]["items"], [[1, 14853]])
         self.assertEqual(m["model"]["skin"], 1)
         self.assertEqual(slot_of(m, "head")["display_id"], 1170)
 
@@ -659,6 +661,73 @@ class TheModelTest(unittest.TestCase):
     def test_the_heading_over_the_undrawn_pieces_is_the_modules(self):
         """The page prints it; it does not write it."""
         self.assertEqual(build()["model_gap_hint"], armory.MODEL_GAP_HINT)
+
+
+class TheModelHostNumberingTest(unittest.TestCase):
+    """The model host keys art by the MODERN client's display ids.
+
+    The operator saw the family drawn nearly naked, with "Worn, but not
+    drawn" listing a shirt, a chestplate, a cloak and greaves. Every one of
+    those world display ids is a 404 on the model host and every modern one
+    is there; these pin the translation that closes it.
+    """
+
+    SHIRT = dict(SCOUTING_BELT, entry=53, item_name="Neophyte's Shirt",
+                 displayid=9944, inventory_type=4)
+
+    def test_a_renumbered_item_is_sent_under_the_model_hosts_number(self):
+        model = armory.viewer_model(char(), [worn(3, self.SHIRT)],
+                                    ITEMS.viewer_displays)
+        self.assertEqual(model["items"], [[4, 8370]])
+        self.assertEqual(model["assets"][0]["path"], "meta/armor/4/8370.json")
+        self.assertIn("(display 8370)", model["assets"][0]["note"])
+
+    def test_an_item_the_table_does_not_name_keeps_the_worlds_number(self):
+        row = worn(15, IRONPATCH, displayid=8272, inventory_type=13)
+        model = armory.viewer_model(char(), [row], ITEMS.viewer_displays)
+        self.assertEqual(model["items"], [[21, 8272]])
+
+    def test_the_payload_uses_the_table_and_not_only_the_function(self):
+        m = member(build([worn(3, self.SHIRT)]))
+        self.assertEqual(m["model"]["items"], [[4, 8370]])
+        self.assertEqual(slot_of(m, "shirt")["display_id"], 9944)
+
+    def test_the_committed_table_covers_the_pieces_the_operator_saw_missing(self):
+        # entry -> the model host's display, each checked against the host.
+        for entry, display in ((53, 8370), (8157, 13028), (9838, 26018),
+                               (11919, 16408), (20640, 15304)):
+            self.assertEqual(ITEMS.viewer_displays.get(entry), display, entry)
+
+    def test_a_book_built_by_hand_still_constructs_with_no_table(self):
+        self.assertEqual(armory.viewer_display({"entry": 53, "displayid": 9944},
+                                               None), 9944)
+        self.assertIsNone(armory.viewer_display({"entry": 53, "displayid": 0},
+                                                ITEMS.viewer_displays))
+
+
+class TheDisplayGeneratorTest(unittest.TestCase):
+    """tools/gen_viewer_displays.py: modifier-0 appearance, and only diffs."""
+
+    @classmethod
+    def setUpClass(cls):
+        spec = importlib.util.spec_from_file_location(
+            "gen_viewer_displays", HERE / "tools" / "gen_viewer_displays.py")
+        cls.gen = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(cls.gen)
+
+    def test_the_base_look_is_the_modifier_zero_appearance(self):
+        modified = [
+            {"ItemID": "53", "ItemAppearanceModifierID": "1", "ItemAppearanceID": "9"},
+            {"ItemID": "53", "ItemAppearanceModifierID": "0", "ItemAppearanceID": "7"},
+        ]
+        appearances = [{"ID": "7", "ItemDisplayInfoID": "8370"},
+                       {"ID": "9", "ItemDisplayInfoID": "1"}]
+        self.assertEqual(self.gen.base_displays(modified, appearances), {53: 8370})
+
+    def test_only_the_items_whose_number_changed_are_kept(self):
+        world = [(53, 9944, 4), (54, 500, 4), (55, 600, 4)]
+        modern = {53: 8370, 54: 500}
+        self.assertEqual(self.gen.differing(world, modern), {53: 8370})
 
 
 if __name__ == "__main__":

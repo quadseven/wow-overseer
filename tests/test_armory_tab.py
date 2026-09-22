@@ -863,7 +863,7 @@ class TheEndpoint(unittest.TestCase):
         talents.json does not start at all - and that failure lands at pod
         start, long after CI has gone green."""
         self.assertIn("talents.json", self.dockerfile)
-        for book in ("items", "icons", "spells"):
+        for book in ("items", "icons", "spells", "viewerdisplays"):
             self.assertIn(f"{book}.json", self.dockerfile)
         self.assertIn("armory.py", self.dockerfile)
 
