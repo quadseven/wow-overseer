@@ -2059,8 +2059,10 @@ _PLAN_FAMILIES = (
 # 1" rather than leaving the operator to remember. Only three columns, because
 # the path needs nothing else; the thinner fallback is for a realm whose table
 # predates `outcome`, and it reads as "never cleared" rather than a 503.
-_PLAN_RUNS = "SELECT leader_name, map_id, outcome FROM overseer_dungeon_run"
-_PLAN_RUNS_OLD = "SELECT leader_name, map_id FROM overseer_dungeon_run"
+_PLAN_RUNS = ("SELECT leader_name, map_id, outcome FROM overseer_dungeon_run "
+              "WHERE leader_name IN ({holes})")
+_PLAN_RUNS_OLD = ("SELECT leader_name, map_id FROM overseer_dungeon_run "
+                  "WHERE leader_name IN ({holes})")
 
 
 def _fetch_dungeonplan() -> dict:
@@ -2118,6 +2120,7 @@ def _fetch_dungeonplan() -> dict:
             chars: list = []
             worn: list = []
             skills: list = []
+            runs: list = []
             if names:
                 holes = ", ".join(["%s"] * len(names))
                 # S608 on the roster reads: `holes` is a run of placeholders
@@ -2144,8 +2147,11 @@ def _fetch_dungeonplan() -> dict:
                 skills = _wide_guarded(
                     cur, _RECAP_SKILLS.format(holes=eholes),  # noqa: S608
                     tuple(everyone), "", "character_skills")
-            runs = _wide_guarded(cur, _PLAN_RUNS, (), _PLAN_RUNS_OLD,
-                                 "overseer_dungeon_run")
+                # Bound to the roster: only runs the families led are drawn.
+                runs = _wide_guarded(
+                    cur, _PLAN_RUNS.format(holes=holes),  # noqa: S608
+                    tuple(names), _PLAN_RUNS_OLD.format(holes=holes),  # noqa: S608
+                    "overseer_dungeon_run")
     finally:
         conn.close()
     return {"catalogue_rows": catalogue, "encounter_rows": encounters,
