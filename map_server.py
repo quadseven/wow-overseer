@@ -2832,7 +2832,11 @@ def _guarded(cur, sql: str, params: tuple = (), fallback: str = "",
         try:
             cur.execute(attempt, params)
             return list(cur.fetchall())
-        except pymysql.err.ProgrammingError as exc:
+        # MySQLError, not ProgrammingError: pymysql has no error_map entry for
+        # 1054, so a missing COLUMN arrives as OperationalError (see
+        # _wide_guarded). Catching only ProgrammingError made every fallback
+        # here dead for missing columns; the loot story 503'd on it.
+        except pymysql.err.MySQLError as exc:
             if not (exc.args and exc.args[0] in (1054, 1146)):
                 raise
             log.info("agenda: %s unavailable (%s) - trying a thinner read",
