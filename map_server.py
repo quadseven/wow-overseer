@@ -34,6 +34,7 @@ import family
 import frames
 import guildcraft
 import guildroute
+import lootstory
 import modelviewer
 import needs
 import partystatus
@@ -1298,6 +1299,61 @@ def _fetch_achievements(names=None) -> dict:
             "items": items, "icons": ITEMS.icons, "book": ITEMS,
             "boss_drops": boss_drops,
             "quest_rewards": quest_rewards, "roster": names}
+
+
+def _fetch_loot() -> dict:
+    """Every notable item the families' guilds looted, handed over or put on
+    (mod-overseer#567), as rows for lootstory.build_loot.
+
+    NO NAMES FROM THE ROSTER HERE, AND THAT IS DELIBERATE. The module decides
+    who these rows are about when it writes them: members of the guilds roster
+    characters belong to, which is a wider set than the roster. Filtering by
+    roster names here would drop exactly the guild members the record exists
+    to include. The guild name rides along from guild_member so the page can
+    say which guild a story belongs to.
+
+    THE COLUMNS ARRIVE IN A LATER MIGRATION than the table. A realm that has
+    not applied 2026_09_22_00_overseer_event_item_story (error 1054) still
+    gets its equips, joined by entry instead of by guid, and a realm with no
+    event table at all (1146) gets an empty list.
+    """
+    conn = _connect()
+    try:
+        with conn.cursor() as cur:
+            base = (
+                "SELECT e.id, e.character_name, e.kind, e.subject_id, e.subject_name, "
+                "e.subject_quality, e.detail, e.map, e.zone, e.first_seen, e.last_seen, "
+                "{story}g.name AS guild "
+                "FROM overseer_event e "
+                "LEFT JOIN characters c ON c.name = e.character_name "
+                "LEFT JOIN guild_member gm ON gm.guid = c.guid "
+                "LEFT JOIN guild g ON g.guildid = gm.guildid "
+                "WHERE e.kind IN ('item_loot', 'item_given', 'item_equip') "
+                "AND e.subject_quality >= %s "
+                "AND e.last_seen >= NOW() - INTERVAL 14 DAY "
+                "ORDER BY e.last_seen DESC LIMIT 2000"
+            )
+            rows = _guarded(
+                cur,
+                base.format(story="e.item_guid, e.counterpart, e.via, e.source, "),
+                (lootstory.NOTABLE_QUALITY,),
+                fallback=base.format(story=""),
+                what="the loot story",
+            )
+            entries = lootstory.wanted_entries(rows)
+            items = {}
+            if entries:
+                iholes = ", ".join(["%s"] * len(entries))
+                cur.execute(
+                    f"SELECT it.entry, {_ITEM_TEMPLATE_COLUMNS} "  # noqa: S608
+                    "FROM acore_world.item_template it "
+                    f"WHERE it.entry IN ({iholes})",
+                    tuple(entries),
+                )
+                items = {int(r["entry"]): r for r in cur.fetchall()}
+    finally:
+        conn.close()
+    return {"rows": rows, "items": items, "icons": ITEMS.icons, "book": ITEMS}
 
 
 # --- the Family view's needs, handovers and bonds (infra#2597) ------------
@@ -3643,6 +3699,25 @@ class Handler(BaseHTTPRequestHandler):
             log.exception("raid goals query failed")
             self._send(503, "application/json", b'{"error": "world unreachable"}')
 
+    def _loot(self, query: dict) -> None:
+        """GET /api/loot - the story of every notable item, newest first.
+
+        Both guilds in one list, because an item can cross between families
+        and its story should not be cut in half at the border. Every sentence
+        comes from lootstory; the page draws them.
+        """
+        try:
+            fetched = _fetch_loot()
+            payload = lootstory.build_loot(
+                fetched["rows"], recap.zone_names(GEO.continents),
+                items=fetched["items"], icons=fetched["icons"], book=fetched["book"])
+            self._send(200, "application/json", json.dumps(payload).encode())
+        except Exception:
+            # The Chronicle keeps the list it has drawn and says it may be
+            # stale, like every other poll on the page.
+            log.exception("loot query failed")
+            self._send(503, "application/json", b'{"error": "world unreachable"}')
+
     def _achievements(self, query: dict) -> None:
         """GET /api/achievements - what the families have done, newest first.
 
@@ -4513,6 +4588,7 @@ class Handler(BaseHTTPRequestHandler):
         "/api/questlog": _questlog,
         "/api/needs": _needs,
         "/api/achievements": _achievements,
+        "/api/loot": _loot,
         "/api/dungeons": _dungeons,
         "/api/raidgoals": _raidgoals,
         "/api/lineup": _lineup,

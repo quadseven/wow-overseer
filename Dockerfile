@@ -42,7 +42,7 @@ COPY core.py bridge.py voice.py transform.py \
      bank.py \
      mailrun.py \
      realm.py basepath.py watchwall.py realmnav.py \
-     needs.py partystatus.py lootcard.py towntrip.py \
+     needs.py partystatus.py lootcard.py lootstory.py towntrip.py \
      townslot.py \
      enroll.py \
      tabard.py crossing.py \
