@@ -775,6 +775,170 @@ def claims(holdings, characters) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# PUTTING ON WHAT THE HOLDER WOULD WEAR (#146)
+#
+# `claimant` has answered "the holder" about a carried piece since infra#3449,
+# and that answer KEEPS the piece: it is never sold and never handed on. But
+# nothing ever put it on. Measured on wow-dev 2026-09-22, 15 of 24 carried
+# gear pieces across the family came back FIT_HOLDER - Grog carrying Cabalist
+# Chestpiece (item level 50) over a worn 41, Bork Dervish Boots (28) over 23,
+# Ugga Watcher's Handwraps (28) over 22 - riding in the bags and costing a
+# slot each.
+#
+# THE SAME OPINION, ASKED ONCE MORE. A piece is equipped only when `claimant`
+# names its own holder, which is `would_wear` on the holder: class, armour
+# training, level, a known slot, the off-hand guard and a strict item level
+# gain. Nothing new decides whether it is an upgrade.
+#
+# WHAT IS LEFT ALONE, ON PURPOSE. UNJUDGEABLE stays in the bag: rings, necks,
+# trinkets and idols have no slot in `_SLOT_BY_INVTYPE`, and "cannot be
+# settled from the numbers" is not a licence to guess. On top of that, the
+# weapon hands are a place where one item level comparison per bucket is not
+# the whole story, so three shapes are refused rather than judged:
+#
+#   * a one-hander or an off-hand piece while a two-hander is worn - putting
+#     it on takes the two-hander off, and the bucket comparison cannot see it;
+#   * a two-hander that does not beat the worn main hand - the two-hand
+#     bucket reads empty for anyone holding a one-hander, which would make any
+#     two-hander look like a free upgrade;
+#   * an off-hand piece in a plan that also puts on a two-hander.
+#
+# ONE PIECE PER SLOT PER HOLDER, the best one. Two carried chests are one
+# equip, and the loser stays for the ordinary disposition next cycle.
+
+# The weapon buckets that share a character's hands. Main hand and two hand
+# are one choice, because wearing either replaces the other.
+_WEAPON_GROUP = {_MAIN_HAND: "weapon", _TWO_HAND: "weapon"}
+
+
+@dataclass(frozen=True)
+class Equip:
+    """One carried piece its own holder should be wearing, and why."""
+
+    holder: str
+    guid: int
+    entry: int
+    name: str
+    slot: str
+    item_level: int
+    worn_level: int
+    reason: str
+
+    @property
+    def command(self) -> str:
+        """The mod-playerbots chat command that puts it on (kind='bot').
+
+        `e` is EquipAction, which reads item ids out of `Hitem:<id>:` through
+        ChatHelper::parseItems and equips the first carried copy it finds.
+        mod-overseer hands a kind='bot' row to PlayerbotAI::HandleCommand as
+        a whisper from the character itself, the same road `nc +new rpg`
+        takes. The entry and not the guid, because that is all the verb
+        reads; two carried copies of one entry are the same piece to wear.
+        """
+        return "e Hitem:%d:0" % int(self.entry)
+
+
+def equip_entry(command) -> int:
+    """The item entry an `Equip.command` names, or 0 for anything else."""
+    text = str(command or "")
+    marker = "Hitem:"
+    at = text.find(marker)
+    if at < 0:
+        return 0
+    digits = text[at + len(marker) :].split(":", 1)[0]
+    return int(digits) if digits.isdigit() else 0
+
+
+def _hand_refusal(holding: Holding, character: CharacterState) -> str:
+    """Why this weapon-hand piece is not a clear upgrade, or "" if it is."""
+    slot = _slot_for(holding)
+    if slot in (_MAIN_HAND, _OFF_HAND) and character.equipped_level(_TWO_HAND):
+        return "would take off the two-hander worn now"
+    if slot == _TWO_HAND and holding.item_level <= character.equipped_level(_MAIN_HAND):
+        return (
+            "does not beat the main hand worn now (item level %d)"
+            % character.equipped_level(_MAIN_HAND)
+        )
+    return ""
+
+
+def equips(holdings, characters) -> tuple:
+    """Every carried piece its holder should put on now, best per slot.
+
+    Deterministic: holders by name, then one pick per slot (highest item
+    level, then lowest guid), so an unchanged bag proposes the same rows and
+    the caller's dedupe sees the same key.
+    """
+    by_name = {c.name: c for c in characters}
+    best: dict = {}
+    for holding in holdings:
+        character = by_name.get(holding.holder)
+        if character is None:
+            continue
+        if claimant(holding, characters) != holding.holder:
+            continue
+        if _hand_refusal(holding, character):
+            continue
+        slot = _slot_for(holding)
+        group = _WEAPON_GROUP.get(slot, slot)
+        key = (holding.holder, group)
+        worn = character.equipped_level(slot)
+        if slot == _TWO_HAND:
+            worn = max(worn, character.equipped_level(_MAIN_HAND))
+        pick = Equip(
+            holder=holding.holder,
+            guid=int(holding.guid),
+            entry=int(holding.entry),
+            name=holding.name,
+            slot=slot,
+            item_level=int(holding.item_level),
+            worn_level=int(worn),
+            reason=would_wear(holding, character)[1],
+        )
+        held = best.get(key)
+        if held is None or (pick.item_level, -pick.guid) > (
+            held.item_level,
+            -held.guid,
+        ):
+            best[key] = pick
+    two_handed = {e.holder for e in best.values() if e.slot == _TWO_HAND}
+    out = [
+        e for e in best.values() if not (e.slot == _OFF_HAND and e.holder in two_handed)
+    ]
+    return tuple(sorted(out, key=lambda e: (e.holder, e.slot, e.guid)))
+
+
+def equips_to_queue(wanted, recent, tries, give_up=3) -> tuple:
+    """Which equips to write now, and a note for each one held back.
+
+    `recent` is the (holder, command) pairs already written inside the retry
+    window. The world's save lags the bags by up to fifteen minutes
+    (PlayerSaveInterval), so a piece put on a minute ago still reads as
+    carried, and asking again inside the window would be the duplicate.
+
+    `tries` counts (holder, command) over the longer memory window. A piece
+    asked for `give_up` times and still carried is one the world will not put
+    on for a reason this side cannot see - combat, a proficiency the numbers
+    do not show - so it is held and said, rather than asked for every window
+    for ever.
+    """
+    queue, notes = [], []
+    least = max(1, int(give_up))
+    for equip in wanted:
+        key = (equip.holder, equip.command)
+        if key in recent:
+            continue
+        if int(tries.get(key, 0)) >= least:
+            notes.append(
+                "%s still carries %s after %d equip command(s); held until the "
+                "memory window passes" % (equip.holder, equip.name, int(tries[key]))
+            )
+            continue
+        queue.append(equip)
+    return tuple(queue), tuple(notes)
+
+
+# ---------------------------------------------------------------------------
 # FROM ROWS TO THE TWO SHAPES ABOVE
 #
 # The same seam bag_upgrade.members_from_rows and bank.members_from_rows use,

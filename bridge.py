@@ -3436,6 +3436,9 @@ class Bridge(discord.Client):
         # vendor_stall owns the pure cohesion clock; this bridge only retains
         # its last observation between polls.
         self._vendor_family_movement: vendor_stall.FamilyMovement | None = None
+        # Equip rows whose outcome has already been logged, by row id, so each
+        # answer is said once (#146).
+        self._equip_reported: set = set()
 
     async def setup_hook(self) -> None:
         # Held, not fired and forgotten. asyncio keeps only a weak reference to
@@ -6844,6 +6847,12 @@ class Bridge(discord.Client):
         # leader, no counter and no `travel_npc` - the same argument
         # `_hand_recipes` makes just above.
         await self._hand_gear(gear_rows, worn, names)
+        # AND WHAT THE HOLDER WOULD WEAR IS PUT ON (#146). The same two reads,
+        # the same opinion (`gear.claimant` naming the holder), and like the
+        # hand-off it needs no vendor, leader or counter, so it runs above the
+        # town-run gate. The piece it takes off is carried from then on and
+        # meets the ordinary disposition on a later cycle.
+        await self._equip_upgrades(gear_rows, worn, names)
 
         if not bag_pressure.family_town_run_needed(
                 free_slots, sellable=sellable_counts):
@@ -7191,6 +7200,62 @@ class Bridge(discord.Client):
             sum(1 for g in fresh if g.verb == "trade"),
             sum(1 for g in fresh if g.verb == "give"),
             len(plan.notes), len(plan.grants) - len(fresh),
+        )
+
+    async def _equip_upgrades(self, gear_rows: list, worn: list,
+                              names: list) -> None:
+        """Put on every carried piece its own holder would wear (#146).
+
+        `bag_pressure.holder_equips` (gear.equips) decides which pieces;
+        this writes one kind='bot' `e` row per piece and logs each one, and
+        logs what the world answered to the rows written on earlier cycles.
+        A `delivered` bot row only says
+        the command was handed over, so the outcome line also says whether
+        the piece still sat in the holder's bags at the last save.
+        """
+        history = await asyncio.to_thread(_equip_history, EQUIP_MEMORY_HOURS,
+                                          EQUIP_RETRY_MINUTES)
+        carried = {(str(row.get("holder")), int(row.get("entry") or 0))
+                   for row in gear_rows}
+        for row in history:
+            if row["id"] in self._equip_reported:
+                continue
+            if row["status"] in item_plan.OPEN_STATUSES:
+                continue
+            self._equip_reported.add(row["id"])
+            entry = bag_pressure.equip_entry(row["command"])
+            log.info(
+                "equip: %s %r answered %s%s; the piece %s in the bags at the "
+                "last save", row["target_name"], row["command"], row["status"],
+                (" (%s)" % row["detail"]) if row["detail"] else "",
+                "was still" if (row["target_name"], entry) in carried
+                else "was no longer",
+            )
+        wanted = bag_pressure.holder_equips(
+            gear_rows, worn, names, keep_names=OWNER_KEEPS)
+        recent = {(row["target_name"], row["command"]) for row in history
+                  if row["recent"]}
+        tries: dict = {}
+        for row in history:
+            key = (row["target_name"], row["command"])
+            tries[key] = tries.get(key, 0) + 1
+        queue, notes = bag_pressure.equips_to_queue(wanted, recent, tries)
+        for note in notes:
+            log.info("equip: %s", note)
+        written = 0
+        for equip in queue:
+            if await asyncio.to_thread(_insert_equip, equip):
+                written += 1
+                log.info(
+                    "equip: %s puts on %s (%s, item level %d over %d) - %s",
+                    equip.holder, equip.name, equip.slot.replace("_", " "),
+                    equip.item_level, equip.worn_level, equip.reason,
+                )
+        log.info(
+            "equip: %d carried piece(s) the holder would wear, queued %d, "
+            "%d already asked inside %d minutes, %d held back",
+            len(wanted), written, len(wanted) - len(queue) - len(notes),
+            EQUIP_RETRY_MINUTES, len(notes),
         )
 
     async def _hand_recipes(self, names: list, free_slots: dict) -> None:
@@ -10415,6 +10480,13 @@ GIVE_GIVE_UP_HOURS = int(os.environ.get("GIVE_GIVE_UP_HOURS", "24"))
 # are eventually recycled by the core, and a day is far longer than any
 # vendor errand.
 SELL_MEMORY_HOURS = int(os.environ.get("SELL_MEMORY_HOURS", "24"))
+# How long an equip command is left to land before it is asked again (#146).
+# Longer than the world's fifteen minute save interval, because a piece put on
+# a minute ago still reads as carried until the next save.
+EQUIP_RETRY_MINUTES = int(os.environ.get("EQUIP_RETRY_MINUTES", "30"))
+# How far back equip attempts are counted towards gear.equips_to_queue's
+# give-up, and how far back their outcomes are read for the log.
+EQUIP_MEMORY_HOURS = int(os.environ.get("EQUIP_MEMORY_HOURS", "24"))
 
 # The routes the family can actually carry out today. Adding AUCTION here is
 # the whole of the change when mod-overseer#208 lands, and BANK when the
@@ -11357,6 +11429,52 @@ def _recent_trade_keys(minutes: int) -> set:
             (row["target_name"], row["target_arg"], row["command"])
             for row in cur.fetchall()
         }
+
+
+# The `source` every equip row carries, which is what its history reads by.
+EQUIP_SOURCE = "overseer:equip"
+
+
+def _equip_history(hours: int, recent_minutes: int) -> list:
+    """Every equip row inside the memory window, oldest first (#146).
+
+    `recent` marks the rows inside the retry window. Degrades to "nothing
+    was asked" on a world without the table or column, the direction every
+    other history reader here takes.
+    """
+    with _connect() as conn, conn.cursor() as cur:
+        try:
+            cur.execute(
+                "SELECT id, target_name, command, status, detail, "
+                "created_at > NOW() - INTERVAL %s MINUTE AS recent "
+                "FROM overseer_command "
+                "WHERE source = %s AND created_at > NOW() - INTERVAL %s HOUR "
+                "ORDER BY id",
+                (int(recent_minutes), EQUIP_SOURCE, int(hours)),
+            )
+        except pymysql.err.MySQLError as exc:
+            if exc.args and exc.args[0] in (1054, 1146):
+                return []
+            raise
+        return [{
+            "id": int(row["id"]),
+            "target_name": str(row["target_name"] or ""),
+            "command": str(row["command"] or ""),
+            "status": str(row["status"] or ""),
+            "detail": str(row["detail"] or ""),
+            "recent": bool(row["recent"]),
+        } for row in cur.fetchall()]
+
+
+def _insert_equip(equip) -> int:
+    """One kind='bot' row asking the holder to put a carried piece on."""
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(
+            "INSERT INTO overseer_command (target_name, command, kind, source) "
+            "VALUES (%s, %s, 'bot', %s)",
+            (equip.holder, equip.command, EQUIP_SOURCE),
+        )
+        return cur.lastrowid or 0
 
 
 def _insert_gear_handoff(grant) -> int:
