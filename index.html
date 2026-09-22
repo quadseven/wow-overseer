@@ -2369,7 +2369,6 @@
   .fcard .note.warn { color:var(--caution-text); }
   .fcard .note.live { color:var(--mortal); }
   .fcard .note { margin-top:.35rem; white-space:pre-wrap; overflow-wrap:anywhere; }
-  .fwarn { color:var(--neutral); margin-top:.35rem; }
   /* Same 16:9 reservation as the panel player, for the same reason: a box
      that grows when the first frame lands makes the card jump under a thumb
      that is already reaching for it. */
@@ -5019,7 +5018,6 @@ function familyCard(name) {
   const needbox = el("div", "fneeds");
   const worst = el("div", "fworst");
   const slots = el("div", "fslots");
-  const warn = el("div", "fwarn");
   const bond = el("div", "fbond");
   const btn = el("button", "fwatch", "watch");
   const note = noteNode("note");
@@ -5040,14 +5038,14 @@ function familyCard(name) {
   btns.append(full, stop);
   const vnote = noteNode("note");
   box.append(video, btns, vnote);
-  strip.append(head, bar, hp, where, saidbox, needbox, worst, slots, warn, bond, btn, note, box);
+  strip.append(head, bar, hp, where, saidbox, needbox, worst, slots, bond, btn, note, box);
   // ORDER IS THE FEATURE. Their picture, then who they are and how they
   // are, then the POV controls. A viewer reads one character top to bottom
   // instead of matching a wall of video to a list of names by position.
   card.append(stream, strip);
   ffeeds.appendChild(card);
   c = { card, nm, chip, combat, lead, meta, stream, bar, fill, hp, where, slots,
-        warn, btn, note, box, video, vnote, full, stop,
+        btn, note, box, video, vnote, full, stop,
         ginit, gmark, saidbox, said, needbox, needbars: new Map(), worst, bond };
   c.player = makePlayer(video, (t, cls) => setNote(vnote, t, cls), box);
   btn.onclick = () => familyWatch(name);
@@ -5644,7 +5642,6 @@ function renderFamily(p) {
       c.hp.textContent = "";
       c.where.textContent = "not in the world - logged out, or the "
         + "worldserver dropped them.";
-      c.warn.style.display = "none";
       continue;
     }
     c.meta.textContent = ["L" + m.level + " " + m["class"], m.role].filter(Boolean).join(" - ");
@@ -5654,10 +5651,6 @@ function renderFamily(p) {
       ? "dead - 0 / " + m.max_health
       : m.health + " / " + m.max_health + "  (" + m.health_pct + "%)";
     c.where.textContent = m.zone;
-    // The operator removed the "watching makes him a selfbot" line: the
-    // heads are always streamed, so it was a standing sentence on every card
-    // saying the same fixed thing. pov_changes_the_family stays in the API.
-    c.warn.style.display = "none";
   }
   updateFamilyButtons();
 }
