@@ -200,7 +200,8 @@ class TheKeywordSurvivesTheCouncil(unittest.TestCase):
     def test_a_dungeon_proposal_carries_the_keyword(self):
         members = [_m(n, 41) for n in ("Grug", "Ugga", "Grog", "Bork", "Og")]
         rows = [
-            {"name": n, "level": 41} for n in ("Grug", "Ugga", "Grog", "Bork", "Og")
+            {"name": n, "level": 41, "map_id": 0}
+            for n in ("Grug", "Ugga", "Grog", "Bork", "Og")
         ]
         proposal = council._dungeon_proposal(members, rows, [])
         self.assertIsNotNone(proposal)
@@ -209,7 +210,8 @@ class TheKeywordSurvivesTheCouncil(unittest.TestCase):
     def test_the_keyword_reaches_the_agreed_plan(self):
         members = [_m(n, 41) for n in ("Grug", "Ugga", "Grog", "Bork", "Og")]
         rows = [
-            {"name": n, "level": 41} for n in ("Grug", "Ugga", "Grog", "Bork", "Og")
+            {"name": n, "level": 41, "map_id": 0}
+            for n in ("Grug", "Ugga", "Grog", "Bork", "Og")
         ]
         held = council.hold(members, history=[], level_rows=rows, cards=[])
         self.assertIsNotNone(held.plan)

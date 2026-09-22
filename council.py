@@ -32,12 +32,16 @@ rule - the LLM is never asked to restate data we hold.
 
 from __future__ import annotations
 
+import functools
+import json
 import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
+from pathlib import Path
 
 import achievements
 import bonds
+import crossing
 import dungeonprogression
 import jobs
 
@@ -106,6 +110,12 @@ class Member:
     # Carried so the bridge can hand the council the family's faction, which
     # decides whether a door inside a capital is one they can walk to (#202).
     race: int = 0
+    # PUBLIC: where a character stands is what the map shows. None is "not
+    # read", never map 0, which is the Eastern Kingdoms. `lead` is the roster's
+    # lead flag. Together they say which continent the family is on, which
+    # decides whether a door is one they can reach without a crossing (#205).
+    map_id: int | None = None
+    lead: bool = False
 
 
 @dataclass(frozen=True)
@@ -779,11 +789,85 @@ def front_door(map_id: int) -> str:
     `dungeon` job: that job runs the Deadmines, so writing it for any other
     map sends the family to the wrong place (#202). A caller that gets ""
     must refuse, never write a goal.
+
+    A door in dungeonpath.WITHHELD_DOORS is skipped the same way (#205): the
+    module can stage a party there, but the party may never walk back out.
     """
+    import dungeonpath
+
     for keyword, (door_map, _) in DUNGEON_KEYWORDS.items():
-        if door_map == int(map_id) and keyword in jobs.PORTAL_KEYWORDS:
+        if (
+            door_map == int(map_id)
+            and keyword in jobs.PORTAL_KEYWORDS
+            and keyword not in dungeonpath.WITHHELD_DOORS
+        ):
             return keyword
     return ""
+
+
+def _withheld_door(keyword: str) -> bool:
+    import dungeonpath
+
+    return keyword in dungeonpath.WITHHELD_DOORS
+
+
+def _withheld(map_id: int) -> str:
+    """dungeonpath.WITHHELD_DOORS's reason when every door into the map is
+    withheld, "" otherwise."""
+    import dungeonpath
+
+    doors = [
+        keyword
+        for keyword, (door_map, _) in DUNGEON_KEYWORDS.items()
+        if door_map == int(map_id) and keyword in jobs.PORTAL_KEYWORDS
+    ]
+    if doors and all(keyword in dungeonpath.WITHHELD_DOORS for keyword in doors):
+        return dungeonpath.WITHHELD_DOORS[doors[0]]
+    return ""
+
+
+# The continents, by the map id a character stands on there.
+CONTINENT_NAMES = {
+    0: "the Eastern Kingdoms",
+    1: "Kalimdor",
+    530: "Outland",
+    571: "Northrend",
+}
+
+
+@functools.lru_cache(maxsize=1)
+def _entrances() -> dict:
+    """entrances.json, the committed instance doors: map id -> {map, x, y}."""
+    with open(Path(__file__).resolve().parent / "entrances.json") as f:
+        return json.load(f)
+
+
+def continent_of(map_id: int | None) -> int | None:
+    """The continent a map is, or the one its entrance stands on; None when
+    unread or unplaced. A character inside Zul'Farrak is on Kalimdor."""
+    import dungeonplan
+
+    return dungeonplan._continent_of(map_id, _entrances())
+
+
+def _home_continent(level_rows: list[dict]) -> int | None:
+    """The continent the family is on: its leader's, read off the leader's
+    map. With no leader row readable, the one continent every readable member
+    shares. None when nothing says, or the family stands on two."""
+    named = [row for row in level_rows if str(row.get("name") or "")]
+    lead = next((row for row in named if row.get("lead")), None)
+    if lead is not None:
+        home = continent_of(lead.get("map_id"))
+        if home is not None:
+            return home
+    seen = {continent_of(row.get("map_id")) for row in named}
+    seen.discard(None)
+    return seen.pop() if len(seen) == 1 else None
+
+
+def _no_crossing() -> bool:
+    """True while crossing.py says a continent crossing cannot be made."""
+    return crossing.first_blocked_leg() is not None
 
 
 def _inside_capital() -> dict:
@@ -1319,6 +1403,54 @@ def _campaign_keyword(
     return dungeonprogression.frontier_stage(stages, level, slack=NEAR_ENOUGH)
 
 
+def _refusal(p: dict, faction: str, home: int | None) -> str:
+    """Why the family cannot be sent to prospect `p`, or "" when it can.
+
+    Said to the family, so a reader of the council's reasoning line learns
+    why a harder place was passed over (#205).
+    """
+    map_id = int(p["map_id"])
+    if _other_capital(map_id, faction):
+        return "inside the other faction's capital"
+    withheld = _withheld(map_id)
+    if withheld:
+        return "withheld, since " + withheld
+    if not front_door(map_id):
+        log.info(
+            "council: not proposing %s (map %d) - no dungeon portal "
+            "answers for it, so no job could send the family there",
+            p["place"],
+            map_id,
+        )
+        return "no door the overseer can use"
+    door = continent_of(map_id)
+    if home is None:
+        return "nothing says which continent we are on"
+    if door != home and _no_crossing():
+        return "on %s while we are on %s, with no way across yet" % (
+            CONTINENT_NAMES.get(door, "another continent"),
+            CONTINENT_NAMES.get(home, "another continent"),
+        )
+    return ""
+
+
+def _passed_over(best: dict, passed: list) -> str:
+    """The reasoning line's account of every harder place passed over for
+    `best`, grouped by reason, hardest first. "" when none was."""
+    grouped: dict[str, list[str]] = {}
+    for p, why in sorted(passed, key=lambda pair: -pair[0]["wants"]):
+        if p["wants"] > best["wants"] and p["place"] not in grouped.get(why, []):
+            grouped.setdefault(why, []).append(p["place"])
+    return "".join(
+        " Not %s: %s." % (_either(places), why) for why, places in grouped.items()
+    )
+
+
+def _either(names: list) -> str:
+    """ "Ugga", "Ugga or Og", "Ugga, Og or Bork"."""
+    return names[0] if len(names) == 1 else ", ".join(names[:-1]) + " or " + names[-1]
+
+
 def _dungeon_proposal(
     speakers: list,
     level_rows: list[dict],
@@ -1358,23 +1490,30 @@ def _dungeon_proposal(
     # stricter, because it becomes a job. A door with no portal row is
     # refused here rather than written as the bare `dungeon` job, which is
     # the Deadmines whatever the council meant.
+    #
+    # AND ONLY WHERE THEY CAN WALK (#205). A door on another continent from
+    # the family's leader is refused while crossing.py says no crossing can
+    # be made, and a door dungeonpath.WITHHELD_DOORS names is refused
+    # outright. A family whose continent is unread is sent nowhere: a door
+    # nobody can show is reachable is not one to send them to.
     faction = _faction(level_rows, [str(row.get("name") or "") for row in level_rows])
+    home = _home_continent(level_rows)
     ready = []
+    passed = []
     for p in rated:
         if p["short"] > NEAR_ENOUGH:
             continue
-        if _other_capital(p["map_id"], faction):
-            continue
-        if not front_door(p["map_id"]):
-            log.info(
-                "council: not proposing %s (map %d) - no dungeon portal "
-                "answers for it, so no job could send the family there",
-                p["place"],
-                p["map_id"],
-            )
+        why = _refusal(p, faction, home)
+        if why:
+            passed.append((p, why))
             continue
         ready.append(p)
     if not ready:
+        if home is None and passed:
+            log.info(
+                "council: not proposing a dungeon - the family's continent "
+                "is unread, so no door can be shown reachable"
+            )
         return None
     # The FRONTIER, not the first entry: prospects() lists everything the
     # family has already been to as well, however far past it they now are,
@@ -1398,12 +1537,13 @@ def _dungeon_proposal(
     # answers the question it can actually answer: given the dungeon the
     # frontier picked, which of ITS doors is next.
     keyword = _campaign_keyword(int(best["map_id"]), level, completed_runs)
-    if jobs.dungeon_job(keyword) is None or not keyword:
+    if jobs.dungeon_job(keyword) is None or not keyword or _withheld_door(keyword):
         # Unreachable after the filter above, and kept so a future table edit
-        # cannot quietly turn a missing keyword back into the Deadmines.
+        # cannot quietly turn a missing keyword back into the Deadmines, or a
+        # campaign stage into a withheld door.
         log.warning(
             "council: refusing a dungeon proposal for %s - keyword %r has no "
-            "portal row",
+            "portal row or is withheld",
             best["place"],
             keyword,
         )
@@ -1416,6 +1556,7 @@ def _dungeon_proposal(
             f"{place} is close enough to try. {who} would be carried, "
             f"and I would rather we went than waited."
         )
+    said += _passed_over(best, passed)
     return Proposal(
         proposer=voice.name,
         kind="dungeon",

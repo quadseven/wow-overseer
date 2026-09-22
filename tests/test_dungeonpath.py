@@ -226,9 +226,23 @@ class WhatTheOverseerCanRun(unittest.TestCase):
             109,
             230,
             229,
-            329,
         ):
             self.assertTrue(step(path, map_id)["overseer"]["can"], map_id)
+
+    def test_a_withheld_dungeon_is_not_marked_runnable(self):
+        """#205: Stratholme has two portal rows and neither is safe while
+        quadseven/mod-overseer#582 is open, so the page says it is withheld
+        and why, from the same list the council refuses by."""
+        self.assertEqual(
+            {"stratholme-live", "stratholme-undead"}, set(dungeonpath.WITHHELD_DOORS)
+        )
+        overseer = step(build(), 329)["overseer"]
+        self.assertFalse(overseer["can"])
+        self.assertIn("withheld", overseer["line"])
+        self.assertIn("portcullis", overseer["line"])
+        self.assertNotIn(
+            "Stratholme", dungeonpath.runnable_line(PORTALS, {329: "Stratholme"})
+        )
 
     def test_a_new_portal_says_what_still_stands_in_the_way(self):
         """A portal row is not the same claim as a run that works, so each
@@ -259,7 +273,8 @@ class WhatTheOverseerCanRun(unittest.TestCase):
 
     def test_the_page_line_counts_dungeons_not_portals(self):
         line = dungeonpath.runnable_line(PORTALS, {36: "The Deadmines"})
-        self.assertIn("5 dungeons", line)
+        # Stratholme is withheld (#205), so 14 of the 15 portal maps.
+        self.assertIn("can run 14 dungeons", line)
         self.assertIn("The Deadmines", line)
 
 

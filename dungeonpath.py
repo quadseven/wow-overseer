@@ -173,6 +173,28 @@ PORTAL_CAVEATS = {
     ),
 }
 
+# DOORS THE OVERSEER MUST NOT BE SENT THROUGH YET, though mod-overseer carries
+# a portal row for each. A portal row says the module can stage a party at the
+# door; it does not say the party walks back out. Keyed by portal keyword, each
+# with the reason in a reader's words.
+#
+# THE ONE LIST. The council refuses to propose these doors (council.front_door
+# skips them) and the Dungeons page says they are withheld (_overseer below),
+# both reading this dict, so the two cannot disagree. Remove an entry when the
+# issue it cites is settled. The reason is also spoken in the council's
+# reasoning line, so it carries no issue number; the citation lives here.
+#
+# Stratholme: quadseven/mod-overseer#582.
+_STRATHOLME_WITHHELD = (
+    "both Stratholme exits probably land in a yard closed by a locked gate "
+    "and a portcullis, and bots do not press buttons, so a run may never walk "
+    "out"
+)
+WITHHELD_DOORS = {
+    "stratholme-live": _STRATHOLME_WITHHELD,
+    "stratholme-undead": _STRATHOLME_WITHHELD,
+}
+
 # Where a family stands on a step.
 BEHIND = "behind"  # the band tops out below the weakest member
 NOW = "now"  # the weakest member is in the band, or near enough
@@ -286,8 +308,22 @@ def _state_line(
     return "In range: every one of them is at least %d." % step.floor
 
 
+def _open_doors(keywords: list) -> list:
+    """The keywords a family may be sent through: WITHHELD_DOORS left out."""
+    return [k for k in keywords if k not in WITHHELD_DOORS]
+
+
 def _overseer(step: Step, portals: dict) -> dict:
     keywords = portals.get(step.map_id, [])
+    if keywords and not _open_doors(keywords):
+        return {
+            "can": False,
+            "line": (
+                "The overseer will not run this one yet: mod-overseer has a "
+                "portal for it (%s), but it is withheld because %s."
+                % (", ".join(keywords), WITHHELD_DOORS[keywords[0]])
+            ),
+        }
     if keywords:
         caveat = PORTAL_CAVEATS.get(step.map_id)
         return {
@@ -295,7 +331,7 @@ def _overseer(step: Step, portals: dict) -> dict:
             "line": (
                 "The overseer can run this one: mod-overseer has a "
                 "portal for it (%s)%s."
-                % (", ".join(keywords), "; " + caveat if caveat else "")
+                % (", ".join(_open_doors(keywords)), "; " + caveat if caveat else "")
             ),
         }
     return {
@@ -673,15 +709,17 @@ ORDER = (
 
 def runnable_line(portals: dict, names: dict) -> str:
     """Which dungeons the overseer can drive today, said once for the page."""
-    if not portals:
-        return "The overseer cannot run any dungeon on its own yet."
     listed = []
     for map_id in sorted(
         portals, key=lambda m: PATH_MAPS.index(m) if m in PATH_MAPS else 999
     ):
+        wings = len(_open_doors(portals[map_id]))
+        if not wings:
+            continue
         name = names.get(map_id) or "map %d" % map_id
-        wings = len(portals[map_id])
         listed.append(name if wings == 1 else "%s (%d wings)" % (name, wings))
+    if not listed:
+        return "The overseer cannot run any dungeon on its own yet."
     return (
         "The overseer can run %s on its own today, through the portals "
         "mod-overseer carries: %s. Every other step is marked as one it "
