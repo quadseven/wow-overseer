@@ -33,6 +33,7 @@ import eye
 import family
 import frames
 import guildcraft
+import guildroute
 import modelviewer
 import needs
 import partystatus
@@ -1470,6 +1471,54 @@ def _ensure_stream_store() -> None:
         for sql in stream.stream_migrations(have):
             log.info("stream: migrating - %s", sql)
             cur.execute(sql)
+
+
+# --- the guild hand-overs on the Bags tab (#174) ---------------------------
+# The rows the bridge's guild route pass wrote, newest first, and the item
+# names their guids point at. Outside the Wealth and Armory fetch windows on
+# purpose: both suites read those windows as their own contract. What each
+# row SAYS is guildroute.view's, where the suite can reach it.
+GUILD_ROUTE_HOURS = 24
+GUILD_ROUTE_ROWS = 20
+
+
+def _fetch_guild_routes() -> dict:
+    """guildroute.view over the recent hand-over rows; never raises.
+
+    A read that fails is an empty list rather than a 503, because this is one
+    strip at the foot of the Bags tab and must not take the bags down with it.
+    """
+    try:
+        conn = _connect()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT target_name, target_arg, kind, command, status, "
+                    "detail, source FROM overseer_command "
+                    "WHERE source LIKE %s "
+                    "AND created_at > NOW() - INTERVAL %s HOUR "
+                    "ORDER BY id DESC LIMIT %s",
+                    (guildroute.SOURCE + ":%", GUILD_ROUTE_HOURS, GUILD_ROUTE_ROWS),
+                )
+                rows = list(cur.fetchall())
+                guids = sorted({g for g in map(guildroute.guid_of,
+                                               (r["command"] for r in rows)) if g})
+                names = {}
+                if guids:
+                    holes = ", ".join(["%s"] * len(guids))
+                    cur.execute(
+                        "SELECT ii.guid, it.name FROM item_instance ii "  # noqa: S608
+                        "JOIN acore_world.item_template it ON it.entry = ii.itemEntry "
+                        f"WHERE ii.guid IN ({holes})",
+                        tuple(guids),
+                    )
+                    names = {int(r["guid"]): r["name"] for r in cur.fetchall()}
+        finally:
+            conn.close()
+    except Exception:
+        log.exception("guild route rows unreadable; the Bags tab shows none")
+        return guildroute.view([])
+    return guildroute.view(rows, names)
 
 
 # --- the Council and the Eye (infra#2597) -----------------------------------
@@ -3851,6 +3900,7 @@ class Handler(BaseHTTPRequestHandler):
             names = [n for _key, group in groups for n in group]
             payload = wealth.build_wealth(**_fetch_wealth(names), icons=ITEMS.icons,
                                           families=groups)
+            payload["guild_routes"] = _fetch_guild_routes()
             self._send(200, "application/json", json.dumps(payload).encode())
         except Exception:
             # Same contract as every other poll: the view keeps the bags it

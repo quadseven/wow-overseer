@@ -3257,6 +3257,8 @@
   <div id="wauction"></div>
   <div id="wguildhead" class="brule"></div>
   <div id="wguild"></div>
+  <div id="wroutehead" class="brule"></div>
+  <div id="wroute"></div>
 </section>
 <!-- THE CHRONICLE. What they have DONE, and the redesign of the Achievements
      tab rather than a second view beside it: same endpoint, same module, a
@@ -10435,6 +10437,8 @@ const wguild = document.getElementById("wguild");
 const wcardshead = document.getElementById("wcardshead");
 const wauchead = document.getElementById("wauchead");
 const wguildhead = document.getElementById("wguildhead");
+const wroute = document.getElementById("wroute");
+const wroutehead = document.getElementById("wroutehead");
 
 // THE ONE SENTENCE THIS FILE OWNS, and it is about the FETCH rather than about
 // the family: there is no payload during the failure it exists for, so it
@@ -10827,6 +10831,16 @@ function renderWealth(p) {
   for (const m of p.members) renderWealthMember(wealthCard(m.name), m);
   renderAuctions(p.auctions);
   renderGuild(p.guild_bank);
+  renderRoutes(p.guild_routes);
+}
+
+// The guild hand-overs (#174): every sentence is guildroute.view's.
+function renderRoutes(g) {
+  if (!g) return;
+  wrule(wroutehead, g);
+  wroute.replaceChildren();
+  if (!g.lines.length) wroute.append(el("p", "", g.empty));
+  for (const line of g.lines) wroute.append(el("p", "", line));
 }
 
 async function pollWealth() {
