@@ -596,5 +596,117 @@ class WithoutTheRunTable(unittest.TestCase):
                          [ach.FIRST, ach.LEVEL, ach.QUEST])
 
 
+class TheStory(unittest.TestCase):
+    """The same rows told as sentences (#135): what happened together is one
+    line naming everyone in it, and a run keeps its whole card."""
+
+    def quest(self, who, qid, name, at, kind=ach.QUEST_REWARD, level=60):
+        return ev(kind, who, qid, name, level=level, map_id=1, at=at)
+
+    def test_three_characters_turning_in_together_is_one_sentence(self):
+        a = T
+        events = [self.quest(w, 1, "Enraged Wildkin", a + timedelta(seconds=i))
+                  for i, w in enumerate(["Bork", "Og", "Grog"])]
+        told = build(events=events)["story"]
+        self.assertEqual(len(told), 1)
+        self.assertEqual(told[0]["text"],
+                         "Og, Grog and Bork turned in Enraged Wildkin.")
+        self.assertEqual(told[0]["who"], ["Og", "Grog", "Bork"])
+        self.assertEqual(told[0]["word"], "QUEST")
+
+    def test_two_quests_by_the_same_people_are_listed_in_one_sentence(self):
+        events = [self.quest("Grog", 1, "Enraged Wildkin", T),
+                  self.quest("Grog", 2, "The Ruins of Kel'Theril", T)]
+        told = build(events=events)["story"]
+        self.assertEqual([e["text"] for e in told],
+                         ["Grog turned in Enraged Wildkin and The Ruins of Kel'Theril."])
+
+    def test_moments_further_apart_than_the_window_stay_apart(self):
+        events = [self.quest("Og", 1, "A Little Luck", T),
+                  self.quest("Bork", 1, "A Little Luck",
+                             T + ach.STORY_WINDOW + timedelta(minutes=1))]
+        told = build(events=events)["story"]
+        self.assertEqual([e["text"] for e in told],
+                         ["Bork turned in A Little Luck.",
+                          "Og turned in A Little Luck."])
+
+    def test_objectives_without_a_turn_in_say_it_is_still_owed(self):
+        events = [self.quest("Og", 3, "Samophlange", T, kind=ach.QUEST_COMPLETE),
+                  self.quest("Bork", 3, "Samophlange", T, kind=ach.QUEST_COMPLETE)]
+        told = build(events=events)["story"]
+        self.assertEqual(told[0]["text"],
+                         "Og and Bork finished the objectives of Samophlange, "
+                         "and still have to hand it in.")
+
+    def test_every_level_is_in_the_story_not_only_the_milestones(self):
+        # 7: no milestone card and no "first to level 10" either.
+        events = [ev(ach.LEVEL_UP, w, level=7, at=T) for w in ("Og", "Grug")]
+        result = build(events=events)
+        self.assertEqual(result["cards"], [])
+        self.assertEqual([e["text"] for e in result["story"]],
+                         ["Grug and Og reached level 7."])
+
+    def test_several_levels_in_one_moment_report_the_highest(self):
+        events = [ev(ach.LEVEL_UP, "Og", level=lv, at=T + timedelta(seconds=lv))
+                  for lv in (2, 3, 4)]
+        told = build(events=events)["story"]
+        self.assertEqual([e["text"] for e in told], ["Og reached level 4."])
+
+    def test_a_long_quest_list_is_counted_rather_than_printed(self):
+        events = [self.quest("Og", i, "Quest %d" % i, T) for i in range(1, 7)]
+        told = build(events=events)["story"]
+        self.assertEqual(told[0]["text"],
+                         "Og turned in Quest 1, Quest 2, Quest 3 and 3 more.")
+
+    def test_a_run_keeps_its_whole_card(self):
+        told = build(runs=[RUN], events=[equip(7230, at=T + timedelta(minutes=30))])["story"]
+        runs = [e for e in told if e["kind"] == ach.RUN]
+        self.assertEqual(len(runs), 1)
+        self.assertEqual(runs[0]["card"]["dungeon"], "The Deadmines")
+        self.assertIn("word", runs[0]["card"])
+
+    def test_newest_first(self):
+        events = [ev(ach.LEVEL_UP, "Og", level=7, at=T),
+                  self.quest("Og", 1, "Later", T + timedelta(hours=2))]
+        told = build(events=events)["story"]
+        self.assertEqual([e["kind"] for e in told], [ach.QUEST, ach.LEVEL])
+
+    def test_a_card_with_no_date_is_left_out_rather_than_sorted(self):
+        dated = {"at": "2026-09-02T15:00:00", "who": "Og", "turned_in": True,
+                 "title": "Quest: A", "quest_name": "A"}
+        undated = dict(dated, at=None, who="Bork")
+        told = ach.story([], [dated, undated], [{"at": None, "who": "Og",
+                                                 "level": 7}], [], ROSTER)
+        self.assertEqual([e["text"] for e in told], ["Og turned in A."])
+
+
+class TheChapters(unittest.TestCase):
+    def test_a_family_whose_read_failed_says_so(self):
+        ch = ach.unread_chapter("Zug")
+        self.assertEqual(ch["story"], [])
+        self.assertEqual(ch["empty"], ach.UNREAD_CHAPTER)
+        self.assertEqual(ch["heading"], "Zug's family")
+
+    def test_the_faction_is_read_from_the_races(self):
+        self.assertEqual(ach.faction_of([1, 3, 7]), ach.ALLIANCE)
+        self.assertEqual(ach.faction_of([2, 5, 6, 8]), ach.HORDE)
+        self.assertEqual(ach.faction_of([1, 2]), "")
+        self.assertEqual(ach.faction_of([]), "")
+
+    def test_the_heading_names_the_family_and_its_side(self):
+        self.assertEqual(ach.chapter_heading("Zug", ach.HORDE),
+                         "Zug's family, Horde")
+        self.assertEqual(ach.chapter_heading("", ""), "The family")
+
+    def test_a_chapter_carries_its_story_and_strip(self):
+        built = build(events=[ev(ach.LEVEL_UP, "Og", level=11, at=T)])
+        ch = ach.chapter(built, "Grug", ach.ALLIANCE)
+        self.assertEqual(ch["heading"], "Grug's family, Alliance")
+        self.assertEqual(ch["story"], built["story"])
+        self.assertEqual(ch["strip"], built["strip"])
+        self.assertEqual(ch["empty"], "")
+        self.assertTrue(ach.chapter(build(), "Zug", ach.HORDE)["empty"])
+
+
 if __name__ == "__main__":
     unittest.main()

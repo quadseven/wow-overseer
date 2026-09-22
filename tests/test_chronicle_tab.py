@@ -128,16 +128,18 @@ class TheChronicle(unittest.TestCase):
 
     def test_the_endpoint_is_routed_and_the_builder_is_pure(self):
         self.assertIn('"/api/achievements": _achievements,', self.server)
-        self.assertIn("achievements.build_achievements(**_fetch_achievements())", self.server)
+        self.assertIn("achievements.build_achievements(\n"
+                      "                        **_fetch_achievements(names))",
+                      self.server)
         self.assertIn('fetch(u("/api/achievements"))', self.tab)
 
     def test_a_missing_run_table_degrades_rather_than_failing(self):
         """The live realm's schema predates overseer_dungeon_run. Error 1146
         on that one query must leave quests and levels standing."""
-        fetch = self.server[self.server.index("def _fetch_achievements"):]
-        fetch = fetch[:fetch.index("def _ensure_stream_store")]
-        self.assertIn("1146", fetch)
-        self.assertIn("run_rows = []", fetch)
+        runs = self.server[self.server.index("def _fetch_family_runs"):]
+        runs = runs[:runs.index("def _fetch_achievements")]
+        self.assertIn("1146", runs)
+        self.assertIn("return []", runs)
 
     def test_nothing_from_the_payload_is_rendered_as_markup(self):
         """Item names, quest titles and character names come from tables the
@@ -279,7 +281,7 @@ class TheCardSaysNothingThePageWrote(unittest.TestCase):
     def test_the_stat_strip_is_counted_by_the_module(self):
         """A number with a word beside it is a claim. The page is handed
         label/value pairs and lays them out."""
-        self.assertIn("renderChrStrip(p.strip)", self.code)
+        self.assertIn("renderChrStrip(strip, ch.strip)", self.code)
         for invented in ("p.runs +", "p.attempts +", "p.visits +",
                          "p.firsts.length +"):
             self.assertNotIn(invented, self.code, invented)
@@ -341,6 +343,77 @@ class TheModuleOwnsTheWordsAndTheHues(unittest.TestCase):
             self.assertGreaterEqual(
                 style.count(role + ":"), 3,
                 role + " is not defined in all three theme states")
+
+
+class BothFamiliesAndNoGearInTheWay(unittest.TestCase):
+    """#135: the Chronicle told one family's story, and a loot board for the
+    last dungeon filled most of the screen above it."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.page = (HERE / "index.html").read_text(encoding="utf-8")
+        cls.server = (HERE / "map_server.py").read_text(encoding="utf-8")
+        start = cls.page.index(BANNER)
+        cls.code = code(cls.page[start:cls.page.index(NEXT, start)])
+        handler = cls.server[cls.server.index("    def _achievements("):]
+        cls.handler = handler[:handler.index("    def _thoughts(")]
+        section = cls.page[cls.page.index('<section id="chronicle">'):]
+        cls.section = section[:section.index("</section>")]
+
+    def test_the_endpoint_builds_a_chapter_for_every_family_in_the_roster(self):
+        self.assertIn("_fetch_rosters()", self.handler)
+        self.assertIn("for which in order:", self.handler)
+        self.assertIn("achievements.chapter(", self.handler)
+        self.assertIn('payload["chapters"] = chapters', self.handler)
+
+    def test_one_familys_failed_read_does_not_blank_the_other(self):
+        self.assertIn("achievements.unread_chapter(which)", self.handler)
+        self.assertIn("except (pymysql.err.MySQLError, OSError):", self.handler)
+        self.assertIn('log.exception("achievements query failed for family %r", which)',
+                      self.handler)
+
+    def test_the_side_is_read_from_the_characters_table(self):
+        self.assertIn("achievements.faction_of(", self.handler)
+        self.assertIn("_fetch_profiles(names)", self.handler)
+
+    def test_a_familys_runs_are_its_own(self):
+        runs = self.server[self.server.index("def _fetch_family_runs"):]
+        runs = runs[:runs.index("def _fetch_achievements")]
+        self.assertIn("WHERE leader_name IN ({holes})", runs)
+        self.assertIn("run_rows = _fetch_family_runs(cur, names, holes)", self.server)
+
+    def test_the_page_draws_every_chapter_it_is_sent(self):
+        self.assertIn("chr.chapters = p.chapters || [];", self.code)
+        self.assertIn("for (const ch of chr.chapters)", self.code)
+        self.assertIn("ch.heading", self.code)
+
+    def test_a_story_line_is_the_modules_sentence(self):
+        line = self.code[self.code.index("function chrLine"):]
+        line = line[:line.index("\n}")]
+        self.assertIn("e.text", line)
+        self.assertIn('"chr-kind h-" + e.hue', line)
+        story = self.code[self.code.index("function chrLine"):
+                          self.code.index("async function pollChronicle")]
+        for invented in ("turned in", "reached level", "finished the objectives"):
+            self.assertNotIn(invented, story, invented)
+
+    def test_a_run_in_the_story_keeps_its_card(self):
+        self.assertIn('e.kind === "run" ? chrRunCard(e.card) : chrLine(e)', self.code)
+
+    def test_the_loot_board_is_folded_below_the_story(self):
+        fold = self.section[self.section.index('<details id="rcfold">'):]
+        self.assertIn('id="rcboard"', fold)
+        self.assertIn('id="rcbasis"', fold)
+        self.assertNotIn("<details id=\"rcfold\" open", self.section)
+        self.assertLess(self.section.index('id="chrline"'),
+                        self.section.index('<details id="rcfold">'))
+
+    def test_the_fold_points_at_the_dungeons_tab(self):
+        fold = self.section[self.section.index('<details id="rcfold">'):]
+        self.assertIn('href="#dungeons"', fold)
+
+    def test_there_is_no_single_family_strip_above_the_chapters(self):
+        self.assertNotIn('id="chrstrip"', self.section)
 
 
 if __name__ == "__main__":
