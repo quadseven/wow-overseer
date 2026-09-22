@@ -115,6 +115,17 @@ class TheBagsPayloadTest(unittest.TestCase):
         self.assertEqual(by["Zed"]["fates"]["unmanaged"]["ticket"]["label"], "#150")
         self.assertEqual(by["Zed"]["who"], "10 Warrior")
 
+    def test_a_roster_name_with_no_saved_character_still_gets_a_card(self):
+        """Every roster name gets a member (an absent one when there is no
+        `characters` row), so the side lists never reach for a missing key."""
+        managed = next(iter(bonds.FAMILY))
+        chars = [{"name": managed, "level": 60, "class": 1, "race": 1, "money": 0}]
+        p = wealth.build_wealth(chars, [], [], [], {},
+                                families=[("A", [managed, "Gone"])])
+        self.assertEqual(p["sides"][0]["names"], [managed, "Gone"])
+        gone = next(m for m in p["members"] if m["name"] == "Gone")
+        self.assertFalse(gone["present"])
+
 
 if __name__ == "__main__":
     unittest.main()
