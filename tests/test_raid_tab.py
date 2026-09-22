@@ -155,7 +155,9 @@ class TheTabIsReachable(unittest.TestCase):
     def test_the_markup_exists_and_every_box_the_script_fills_is_in_it(self):
         for element in ('id="rghead"', 'id="rgroster"', 'id="rgraid"',
                         'id="rgstrip"', 'id="rgorder"', 'id="rglist"',
-                        'id="rgothers"', 'id="rgotherlist"', 'id="rgbasis"'):
+                        'id="rgothers"', 'id="rgotherlist"', 'id="rgbasis"',
+                        'id="rrgoal"', 'id="rrlist"', 'id="rrbasis"',
+                        'id="rgpick"', 'id="rgline"'):
             self.assertIn(element, SECTION, element)
 
     def test_the_markup_holds_no_sentence_of_its_own(self):
@@ -163,8 +165,8 @@ class TheTabIsReachable(unittest.TestCase):
         other word on this tab arrives from the module."""
         text = re.sub(r"<[^>]+>", " ", SECTION)
         words = [w for w in text.split() if w not in
-                 ("reaching", "the", "world...", "01", "02", "before",
-                  "molten", "core", "rest", "of", "tier")]
+                 ("reaching", "the", "world...", "01", "02", "consumables,",
+                  "per", "guild", "rest", "of", "tier")]
         self.assertEqual(words, [], words)
 
 
@@ -274,7 +276,7 @@ class TheEndpoint(unittest.TestCase):
         steer either."""
         handler = SERVER[SERVER.index("def _raidgoals"):
                          SERVER.index("def _achievements")]
-        self.assertIn("family.roster()", handler)
+        self.assertIn("_fetch_raidgoals()", handler)
         self.assertNotIn("query.get", handler)
 
     def test_a_dead_database_is_a_503_that_keeps_what_is_drawn(self):
@@ -432,9 +434,10 @@ class TheMobileRules(unittest.TestCase):
         self.assertEqual(CSS.count("::-webkit-details-marker"), 2)
 
     def test_a_summary_keeps_a_visible_focus_ring(self):
-        """It is the only control on this tab, and list-style:none on a
-        summary is where a focus ring usually goes missing."""
-        self.assertEqual(CSS.count(":focus-visible"), 2)
+        """The two summaries and the guild picker are the controls on this
+        tab, and list-style:none on a summary is where a focus ring usually
+        goes missing."""
+        self.assertEqual(CSS.count(":focus-visible"), 3)
 
     def test_it_draws_no_item_quality_colour(self):
         """A quality colour is designed for the dark ground the Armory and the
@@ -476,6 +479,56 @@ class ThePollIsGuarded(unittest.TestCase):
         self.assertNotIn("replaceChildren()", block[:block.index("\n}")])
 
 
+class BothGuildsGetAReadinessCard(unittest.TestCase):
+    """The operator called the old tab pointless: one guild's shopping list and
+    no verdict. It now opens on one readiness card per guild, both factions,
+    each saying whether its first raid can happen and what stops it."""
+
+    def test_the_payload_is_per_guild_and_the_page_draws_every_one(self):
+        self.assertIn("raidready.group_guilds(", SERVER)
+        self.assertIn("raidready.build_guild(", SERVER)
+        self.assertIn("raidready.build_readiness(", SERVER)
+        self.assertIn("for (const g of p.guilds) rrlist.appendChild(rrCard(g));",
+                      CODE)
+
+    def test_every_readiness_sentence_is_the_modules(self):
+        for key in ("g.title", "g.headline", "g.roster_line", "g.gear_line",
+                    "g.blockers_line", "b.text", "tile.value", "tile.label",
+                    "p.goal_line"):
+            self.assertIn(key, CODE, key)
+
+    def test_a_hard_blocker_and_a_soft_one_are_drawn_apart(self):
+        self.assertIn('b.tone === "hard" ? "rg-block" : "rr-soft"', CODE)
+        self.assertIn(".rr-soft", CSS)
+
+    def test_the_consumables_are_drawn_for_the_guild_picked(self):
+        self.assertIn("rgRender(chosen.goals);", CODE)
+        self.assertIn("rrRender(await r.json());", CODE)
+
+    def test_the_guild_reads_are_bound_to_every_family_not_bonds_five(self):
+        """family.roster() is bonds' one family, so a guild read bound to it
+        can only ever find the Alliance guild. That is why the Horde guild
+        was missing from both the Lineup and the Raid tab."""
+        for fetch in ("def _fetch_raidgoals", "def _fetch_lineup"):
+            body = SERVER[SERVER.index(fetch):]
+            body = body[:body.index("\ndef ")]
+            self.assertNotIn("names = family.roster()", body, fetch)
+        lineup = SERVER[SERVER.index("def _fetch_lineup"):]
+        self.assertIn("names = _all_roster_names()",
+                      lineup[:lineup.index("\ndef ")])
+
+    def test_the_new_reads_are_guarded(self):
+        fetch = SERVER[SERVER.index("def _fetch_raidgoals"):
+                       SERVER.index("# --- which dungeon is worth running")]
+        self.assertIn('"character_queststatus_rewarded")', fetch)
+        self.assertIn('"dungeon_access_template")', fetch)
+        self.assertIn("raidready.ATTUNEMENT_QUESTS", fetch)
+        self.assertIn("_RAID_WORN_OLD.format(holes=rholes)", fetch)
+
+    def test_the_module_ships_in_the_image(self):
+        self.assertIn("raidready.py", DOCKERFILE)
+
+
 class TheModuleAndThePageAgree(unittest.TestCase):
     """A key the page reads and the module does not write is an undefined on a
     phone, which renders as a blank line rather than as an error."""
@@ -502,6 +555,25 @@ class TheModuleAndThePageAgree(unittest.TestCase):
                     "members", "products", "recipes"):
             self.assertIn("goal." + key, CODE, key)
             self.assertIn(key, goal, key)
+
+    def test_every_readiness_key_the_script_reads_is_one_the_module_writes(self):
+        import raidready
+        group = {"guildid": None, "guild": "", "family": "Ugga",
+                 "family_names": ["Ugga"], "rows": []}
+        goals = raidgoals.build_raidgoals(
+            item_rows=[], recipe_rows=[], trainer_rows=[], char_rows=[],
+            skill_rows=[], spell_rows=[], holding_rows=[], worn_rows=[],
+            vendor_rows=[], creature_rows=[], object_rows=[], guild_rows=[],
+            roster=["Ugga"])
+        card = raidready.build_guild(group, [], [], [], None, goals)
+        payload = raidready.build_readiness([card])
+        for key in ("line", "goal_line", "guilds", "basis"):
+            self.assertIn("p." + key, CODE, key)
+            self.assertIn(key, payload, key)
+        for key in ("title", "headline", "tiles", "roster_line", "gear_line",
+                    "blockers_line", "blockers"):
+            self.assertIn("g." + key, CODE, key)
+            self.assertIn(key, card, key)
 
 
 if __name__ == "__main__":

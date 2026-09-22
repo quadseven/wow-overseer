@@ -753,6 +753,30 @@
   .rg-sub { margin-left:.75rem; }
   .rg-other { font-size:13px; line-height:1.5; color:var(--on-card);
               overflow-wrap:anywhere; }
+  /* ONE READINESS CARD PER GUILD, side by side where there is room and
+     stacked on a phone. auto-fit with a minmax floor in ch rather than a
+     breakpoint, so the page's one media query stays the only one. */
+  #rrlist { display:grid; gap:10px; margin:.9rem 0 .4rem;
+            grid-template-columns:repeat(auto-fit, minmax(min(100%, 38ch), 1fr)); }
+  #rrgoal, #rrbasis { max-width:72ch; }
+  .rr-card .ds-strip { margin:.7rem 0 .2rem; }
+  /* A SOFT BLOCKER makes the night worse and stops nothing, so it is drawn
+     like the page's other "not in your way" line: body colour, dashed rule. */
+  .rr-soft { margin-top:.35rem; padding:.1rem 0 .1rem .75rem;
+             border-left:2px dashed var(--card-line);
+             color:var(--on-card); font-size:12.5px; line-height:1.5;
+             overflow-wrap:anywhere; }
+  .rr-card .ds-tile.up .v { color:var(--accent-text); }
+  .rr-card .ds-tile.no .v { color:var(--caution-text); }
+  #rgpick { margin:.6rem 0 .4rem; }
+  #rgpick button { font:inherit; font-size:12px; cursor:pointer;
+                   background:none; border:1px solid var(--card-line);
+                   border-radius:999px; padding:2px .7rem;
+                   color:var(--on-card-dim); }
+  #rgpick button.on { border-color:var(--accent-text);
+                      color:var(--accent-text); }
+  #rgpick button:focus-visible { outline:2px solid var(--accent);
+                                 outline-offset:3px; }
 
   /* --- the item tooltip, on every gear name (infra#3501) -----------------
      WHAT THIS REPLACED, and it is the whole reason it exists. A gear name
@@ -3182,10 +3206,15 @@
      players agreed on is the most important thing on the page. -->
 <section id="raid">
   <div id="rghead" class="ds-head">reaching the world...</div>
+  <p id="rrgoal" class="chr-body"></p>
+  <div id="rrlist"></div>
+  <p id="rrbasis" class="chr-body"></p>
+  <div class="ds-rule"><span class="ix">01</span><span class="ln"></span><span class="lb">consumables, per guild</span></div>
+  <div id="rgpick" class="rg-chips"></div>
+  <div id="rgline" class="ds-head"></div>
   <p id="rgroster" class="chr-body"></p>
   <p id="rgraid" class="chr-body"></p>
   <div id="rgstrip" class="ds-strip"></div>
-  <div class="ds-rule"><span class="ix">01</span><span class="ln"></span><span class="lb">before molten core</span></div>
   <p id="rgorder" class="chr-body"></p>
   <div id="rglist"></div>
   <div class="ds-rule"><span class="ix">02</span><span class="ln"></span><span class="lb">the rest of the tier</span></div>
@@ -6491,6 +6520,11 @@ async function pollLineup() {
   }
 }
 const rghead = document.getElementById("rghead");
+const rrgoal = document.getElementById("rrgoal");
+const rrlist = document.getElementById("rrlist");
+const rrbasis = document.getElementById("rrbasis");
+const rgpick = document.getElementById("rgpick");
+const rgline = document.getElementById("rgline");
 const rgroster = document.getElementById("rgroster");
 const rgraid = document.getElementById("rgraid");
 const rgstrip = document.getElementById("rgstrip");
@@ -6595,8 +6629,7 @@ function rgOther(raid) {
 }
 
 function rgRender(p) {
-  rghead.textContent = p.line;
-  rghead.className = "ds-head";
+  rgline.textContent = p.line;
   rgroster.textContent = p.roster_line;
   rgraid.textContent = p.raid_line;
   rgstrip.replaceChildren();
@@ -6617,6 +6650,61 @@ function rgRender(p) {
   rgbasis.textContent = p.empty_note || p.basis;
 }
 
+// ONE GUILD'S READINESS CARD. The headline, every tile, every blocker and
+// its tone are raidready.py's; a HARD blocker stops the first raid and is
+// drawn in the warning role, a SOFT one only makes the night harder and is
+// drawn like the page's other "not in your way" line. Which is which is the
+// module's call, carried on `b.tone`, never worked out here.
+function rrCard(g) {
+  const card = el("div", "chr-card rr-card");
+  card.appendChild(el("div", "rg-name", g.title));
+  card.appendChild(el("div", "rg-sum", g.headline));
+  const strip = el("div", "ds-strip");
+  for (const tile of g.tiles) {
+    const box = el("div", "ds-tile" + (tile.tone ? " " + tile.tone : ""));
+    box.appendChild(el("span", "v", tile.value));
+    box.appendChild(el("span", "k", tile.label));
+    strip.appendChild(box);
+  }
+  card.appendChild(strip);
+  rgNote(card, g.roster_line);
+  rgNote(card, g.gear_line);
+  card.appendChild(el("div", "rg-sect", "what stands in the way"));
+  rgNote(card, g.blockers_line);
+  for (const b of g.blockers) {
+    rgNote(card, b.text, b.tone === "hard" ? "rg-block" : "rr-soft");
+  }
+  return card;
+}
+
+// WHICH GUILD'S CONSUMABLES ARE DRAWN BELOW, remembered by name across polls
+// so a refresh does not snap the list back to the first guild.
+let rgChosen = "";
+
+function rrPick(guilds) {
+  rgpick.replaceChildren();
+  let chosen = guilds.find((g) => g.title === rgChosen) || guilds[0];
+  if (!chosen) return;
+  rgChosen = chosen.title;
+  for (const g of guilds) {
+    const b = el("button", g === chosen ? "on" : "", g.title);
+    b.type = "button";
+    b.onclick = () => { rgChosen = g.title; rrPick(guilds); };
+    rgpick.appendChild(b);
+  }
+  rgRender(chosen.goals);
+}
+
+function rrRender(p) {
+  rghead.textContent = p.line;
+  rghead.className = "ds-head";
+  rrgoal.textContent = p.goal_line;
+  rrlist.replaceChildren();
+  for (const g of p.guilds) rrlist.appendChild(rrCard(g));
+  rrbasis.textContent = p.basis;
+  rrPick(p.guilds);
+}
+
 // ONE PULL AT A TIME, AND A CLOCK ON IT, the same one guard the dungeon plan
 // carries and for the same two reasons. This poll is started from two places -
 // showView on the way into the tab, and the interval below - so two can be in
@@ -6635,7 +6723,7 @@ async function pollRaid() {
     const r = await fetch(u("/api/raidgoals"),
                           {signal: AbortSignal.timeout(20000)});
     if (!r.ok) throw new Error(r.status);
-    rgRender(await r.json());
+    rrRender(await r.json());
   } catch (e) {
     // Whatever is drawn stays drawn, like every other poll on this page. A
     // blanked list here reads as "there is nothing left to farm", which is
