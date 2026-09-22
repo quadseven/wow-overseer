@@ -843,6 +843,7 @@ def _in_effect(row: dict, standing: dict | None) -> tuple[bool | None, str]:
                       "read this time." % place)
     keyword = str(row.get("skill_name") or "").strip().lower()
     job = str(standing["job"]).strip().lower()
+    leader = str(standing.get("leader") or "") or who
     wanted = {"dungeon:%s" % keyword} if keyword else {"dungeon"}
     if job in wanted:
         done = standing.get("done")
@@ -850,10 +851,10 @@ def _in_effect(row: dict, standing: dict | None) -> tuple[bool | None, str]:
         tally = (" %d of %d runs done." % (done, of)
                  if done is not None and of else "")
         return True, ("In effect: %s's job reads %s, so the run coordinator is "
-                      "working on it.%s" % (standing["leader"], job, tally))
+                      "working on it.%s" % (leader, job, tally))
     return False, ("Not in effect yet: %s's job still reads %s, and the run "
                    "coordinator starts %s only when it reads %s. Nobody is "
-                   "heading there." % (standing["leader"], job, place,
+                   "heading there." % (leader, job, place,
                                        sorted(wanted)[0]))
 
 

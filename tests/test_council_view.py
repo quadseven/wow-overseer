@@ -331,6 +331,12 @@ class TheCardSaysWhetherItIsInEffect(unittest.TestCase):
         self.assertIn("still reads quest", agreed["next_line"])
         self.assertIn("dungeon:blackrock-depths", agreed["next_line"])
 
+    def test_a_standing_with_no_leader_names_the_goal_holder(self):
+        agreed = council.consensus([dgoal("Grug", "blackrock-depths")], [],
+                                   thought_rows=[], standing={"job": "quest"},
+                                   now=T0)
+        self.assertIn("Grug's job still reads quest", agreed["next_line"])
+
     def test_an_unread_roster_is_unknown_and_not_a_guess(self):
         agreed = council.consensus([dgoal("Grug", "blackrock-depths")], [],
                                    thought_rows=[], standing=None, now=T0)
