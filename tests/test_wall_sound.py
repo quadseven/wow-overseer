@@ -24,7 +24,7 @@ import unittest
 HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 with open(os.path.join(HERE, "index.html"), encoding="utf-8") as _fh:
     PAGE = _fh.read()
-SCRIPTS = re.findall(r"<script(?:\s[^>]*)?>(.*?)</script>", PAGE, re.S)
+SCRIPTS = re.findall(r"<script(?:\s[^>]*)?>(.*?)</script[^>]*>", PAGE, re.S | re.I)
 APP = max(SCRIPTS, key=len)
 
 

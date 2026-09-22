@@ -5209,8 +5209,9 @@ function wallApplyAudio() {
       t.video.play().catch(() => { /* the tile's own note already says so */ });
     }
   }
+  const heard = wallEarName();
   for (const [name, s] of wall.slots) {
-    const on = name === wallEarName();
+    const on = name === heard;
     s.ear.setAttribute("aria-pressed", String(on));
     s.ear.textContent = on && wall.sound ? "HEARING" : "HEAR";
   }
