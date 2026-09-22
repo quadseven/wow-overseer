@@ -22,6 +22,7 @@ import pymysql
 import achievements
 import agenda
 import armory
+import bag_pressure
 import basepath
 import chat
 import council
@@ -540,6 +541,10 @@ _WEALTH_ITEM_COLUMNS = (
     "it.InventoryType AS inventory_type, it.bonding, ii.flags AS instance_flags, "
     "it.BagFamily AS bag_family"
 )
+# The Bags read adds whether a quest still needs the stack, by the vendor
+# pass's own expression (bag_pressure.QUEST_NEEDED_SQL). Not in the shared
+# column list above: the auction read uses that list and has no `ci`.
+_WEALTH_QUEST_NEEDED = ", " + bag_pressure.QUEST_NEEDED_SQL + " AS quest_needed "
 
 
 def _fetch_wealth(names: list[str] | None = None) -> dict:
@@ -587,7 +592,7 @@ def _fetch_wealth(names: list[str] | None = None) -> dict:
             cur.execute(
                 "SELECT c.name, ci.bag, ci.slot, ci.item AS item_guid, "  # noqa: S608
                 "ii.itemEntry AS entry, ii.count, "
-                f"{_WEALTH_ITEM_COLUMNS} "
+                f"{_WEALTH_ITEM_COLUMNS}{_WEALTH_QUEST_NEEDED}"
                 "FROM characters c "
                 "JOIN character_inventory ci ON ci.guid = c.guid "
                 "JOIN item_instance ii ON ii.guid = ci.item "

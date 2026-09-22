@@ -15,12 +15,22 @@ def row(guid, cls, quality=1, price=10, **kw):
 
 
 class ThePilesTest(unittest.TestCase):
-    def test_quest_items_are_kept_and_say_nothing_checks_the_quest(self):
-        key, _ = bagfate.pile_of(row(1, bagfate.QUEST), None, "A")
-        self.assertEqual(key, bagfate.QUESTS)
-        label, route, tone, ticket = bagfate.PILES[key]
-        self.assertEqual(ticket, 144)
-        self.assertIn("never sold", route)
+    def test_a_quest_item_an_open_quest_needs_is_kept(self):
+        self.assertEqual(bagfate.pile_of(row(1, bagfate.QUEST, quest_needed=1),
+                                         None, "A")[0], bagfate.QUESTS)
+        # No answer at all is read as needed, the vendor's fail-closed way.
+        self.assertEqual(bagfate.pile_of(row(1, bagfate.QUEST), None, "A")[0],
+                         bagfate.QUESTS)
+
+    def test_a_quest_leftover_with_a_price_is_junk(self):
+        self.assertEqual(bagfate.pile_of(row(1, bagfate.QUEST, quest_needed=0),
+                                         None, "A")[0], bagfate.JUNK)
+
+    def test_a_priceless_quest_leftover_says_nothing_destroys_it(self):
+        key = bagfate.pile_of(row(1, bagfate.QUEST, price=0, quest_needed=0),
+                              None, "A")[0]
+        self.assertEqual(key, bagfate.LEFTOVERS)
+        self.assertEqual(bagfate.PILES[key][3], 144)
 
     def test_grey_trash_is_junk_and_a_priceless_one_is_not(self):
         self.assertEqual(bagfate.pile_of(row(1, 15, quality=0), None, "A")[0], bagfate.JUNK)
@@ -65,15 +75,16 @@ class TheTablesAgreeTest(unittest.TestCase):
 
 class TheCardTest(unittest.TestCase):
     def test_piles_are_counted_ordered_and_carry_their_ticket(self):
-        rows = [row(1, bagfate.QUEST), row(2, bagfate.QUEST), row(3, 15, quality=0),
-                row(4, bagfate.GEM, quality=2)]
+        rows = [row(1, bagfate.QUEST, price=0, quest_needed=0),
+                row(2, bagfate.QUEST, price=0, quest_needed=0),
+                row(3, 15, quality=0), row(4, bagfate.GEM, quality=2)]
         f = bagfate.build_fates("A", rows, {}, free_slots=1, managed=True)
         keys = [p["key"] for p in f["piles"]]
-        self.assertEqual(keys, [bagfate.JUNK, bagfate.GEMS, bagfate.QUESTS])
-        quests = f["piles"][2]
-        self.assertEqual(quests["count"], "2 stacks")
-        self.assertEqual(quests["ticket"]["label"], "#144")
-        self.assertIn("/issues/144", quests["ticket"]["url"])
+        self.assertEqual(keys, [bagfate.JUNK, bagfate.GEMS, bagfate.LEFTOVERS])
+        leftovers = f["piles"][2]
+        self.assertEqual(leftovers["count"], "2 stacks")
+        self.assertEqual(leftovers["ticket"]["label"], "#144")
+        self.assertIn("/issues/144", leftovers["ticket"]["url"])
         self.assertEqual(f["piles"][1]["tone"], bagfate.ALARM)
 
     def test_junk_waits_for_the_trip_while_there_is_still_room(self):

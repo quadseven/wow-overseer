@@ -27,6 +27,33 @@ _BONDING = {
 _INSTANCE_SOULBOUND = 0x1
 
 
+# WHETHER A QUEST ITEM IS STILL A QUEST ITEM (#144), as one SQL expression
+# both readers splice in: bridge._VENDOR_ITEMS_SQL, which decides the sale,
+# and map_server's Bags read, which says on the page what will happen. One
+# spelling, so the page and the vendor cannot disagree about a stack.
+#
+# It used to be `it.class = 12` alone, which made every turn-in leftover a
+# quest item for ever: measured on the dev family 2026-09-22, 85 of 259
+# carried stacks were quest-class and 43 of them were asked for by no quest
+# in the holder's log. A class-12 stack is a quest item when it starts a
+# quest, or when a quest in the holder's log (any row of
+# character_queststatus: complete-but-not-turned-in still needs the item)
+# names it as required, as a drop it collects, or as the item it hands out
+# at the start. Anything else is ordinary goods, and `sellable` still asks
+# for quality 1 or less and a vendor price, so a leftover with no price is
+# never offered. Expects the aliases `it` (item_template), `ii`
+# (item_instance) and `ci` (character_inventory).
+QUEST_NEEDED_SQL = (
+    "(it.class = 12 AND (it.startquest > 0 OR EXISTS ("
+    "SELECT 1 FROM character_queststatus qs "
+    "JOIN acore_world.quest_template qt ON qt.ID = qs.quest "
+    "WHERE qs.guid = ci.guid AND ii.itemEntry IN ("
+    "qt.RequiredItemId1, qt.RequiredItemId2, qt.RequiredItemId3, "
+    "qt.RequiredItemId4, qt.RequiredItemId5, qt.RequiredItemId6, "
+    "qt.ItemDrop1, qt.ItemDrop2, qt.ItemDrop3, qt.ItemDrop4, qt.StartItem))))"
+)
+
+
 def owner_keeps(name: str, keep_names) -> bool:
     """Has the owner marked this item by name as never-dispose (infra#3449)?
 
