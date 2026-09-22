@@ -109,6 +109,19 @@ PORTAL_MAPS = {
     "scarlet-cathedral": 189,
     "stockades": 34,
     "wailing": 43,
+    "blackfathom": 48,
+    "razorfen-kraul": 47,
+    "razorfen-downs": 129,
+    "gnomeregan": 90,
+    "gnomeregan-depot": 90,
+    "uldaman": 70,
+    "uldaman-back": 70,
+    "zulfarrak": 209,
+    "sunken-temple": 109,
+    "blackrock-depths": 230,
+    "lower-blackrock-spire": 229,
+    "stratholme-live": 329,
+    "stratholme-undead": 329,
 }
 
 # What mod-overseer's own portal table says about a row that exists and still
@@ -123,6 +136,40 @@ PORTAL_CAVEATS = {
     189: (
         "the Armory and Cathedral doors need the Scarlet Key, which drops in "
         "the Library, so the Library wing comes first"
+    ),
+    48: (
+        "the door is at the bottom of a sunken temple with no surveyed "
+        "approach yet, so a run may be refused before it stages"
+    ),
+    47: (
+        "the approach has no surveyed corridor yet, and the short way up "
+        "from Thalanaar is the Great Lift, which the walker cannot ride"
+    ),
+    129: (
+        "the approach has no surveyed corridor yet, and the short way up "
+        "from Thalanaar is the Great Lift, which the walker cannot ride"
+    ),
+    90: (
+        "the doors are under Dun Morogh down a lift the walker cannot ride "
+        "yet, and the train depot door also needs the Workshop Key"
+    ),
+    70: (
+        "the front door is at the bottom of a deep cave with no surveyed "
+        "descent yet, and the Badlands door opens at the far end"
+    ),
+    209: (
+        "the entrance is as wide as the staging standoff, which has not "
+        "been confirmed live"
+    ),
+    109: "the door is at the bottom of a flooded pit with no surveyed descent yet",
+    230: (
+        "the way through the mountain has no surveyed corridor yet, and the "
+        "Upper City needs the Shadowforge Key"
+    ),
+    229: "the portal covers the Lower Spire only; the Upper Spire has none",
+    329: (
+        "the service entrance needs the Key to the City from the main gate "
+        "side, and the main gate has no way out of its own"
     ),
 }
 

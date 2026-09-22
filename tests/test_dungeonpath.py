@@ -211,15 +211,40 @@ class WhatTheOverseerCanRun(unittest.TestCase):
 
     def test_a_portal_dungeon_is_marked_runnable(self):
         path = build()
-        for map_id in (36, 33, 189, 34, 43):
+        for map_id in (
+            36,
+            33,
+            189,
+            34,
+            43,
+            48,
+            47,
+            129,
+            90,
+            70,
+            209,
+            109,
+            230,
+            229,
+            329,
+        ):
             self.assertTrue(step(path, map_id)["overseer"]["can"], map_id)
 
+    def test_a_new_portal_says_what_still_stands_in_the_way(self):
+        """A portal row is not the same claim as a run that works, so each
+        new one carries mod-overseer's own caveat beside "can run it"."""
+        for map_id in (48, 47, 129, 90, 70, 209, 109, 230, 229, 329):
+            self.assertIn(map_id, dungeonpath.PORTAL_CAVEATS, map_id)
+        line = step(build(), 90)["overseer"]["line"]
+        self.assertIn("gnomeregan, gnomeregan-depot", line)
+        self.assertIn("Workshop Key", line)
+
     def test_a_dungeon_without_a_portal_says_so(self):
-        brd = step(build(), 230)
-        self.assertFalse(brd["overseer"]["can"])
-        self.assertIn("cannot run this one yet", brd["overseer"]["line"])
+        dire_maul = step(build(), 429)
+        self.assertFalse(dire_maul["overseer"]["can"])
+        self.assertIn("cannot run this one yet", dire_maul["overseer"]["line"])
         self.assertIn(
-            {"text": "overseer cannot run it yet", "tone": "no"}, brd["chips"]
+            {"text": "overseer cannot run it yet", "tone": "no"}, dire_maul["chips"]
         )
 
     def test_scarlet_names_all_four_wings(self):

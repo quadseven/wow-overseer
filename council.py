@@ -720,6 +720,18 @@ DUNGEON_KEYWORDS = {
     "scarlet-armory": (189, "the Armory"),
     "scarlet-cathedral": (189, "the Cathedral"),
     "blackrock-depths": (230, ""),
+    "blackfathom": (48, ""),
+    "razorfen-kraul": (47, ""),
+    "razorfen-downs": (129, ""),
+    "gnomeregan": (90, ""),
+    "gnomeregan-depot": (90, "the train depot door"),
+    "uldaman": (70, ""),
+    "uldaman-back": (70, "the Badlands door"),
+    "zulfarrak": (209, ""),
+    "sunken-temple": (109, ""),
+    "lower-blackrock-spire": (229, "the Lower Spire"),
+    "stratholme-live": (329, "the main gate"),
+    "stratholme-undead": (329, "the service entrance"),
 }
 
 
