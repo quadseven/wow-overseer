@@ -919,6 +919,20 @@ def _batch_verdict(lines: list, command: str, who: str) -> str:
     return "%s: %s" % (head, said)
 
 
+def _batch_who(names: list, family_of: dict) -> str:
+    """"Grug's family" when every name is in one family, else the names."""
+    fams = {family_of.get(n, "") for n in names}
+    if len(names) > 1 and len(fams) == 1 and "" not in fams:
+        return family_label(fams.pop())
+    return ", ".join(names)
+
+
+def _batch_tone(members: list) -> str:
+    """The worst tone in the order, so one refusal colours the whole line."""
+    return min((o["tone"] for o in members),
+               key=lambda t: _TONE_RANK.index(t) if t in _TONE_RANK else 0)
+
+
 def batches(rows: list, lines: tuple, family_of: dict | None = None) -> tuple:
     """The console lines grouped into the orders that were actually given.
 
@@ -934,20 +948,13 @@ def batches(rows: list, lines: tuple, family_of: dict | None = None) -> tuple:
         groups.setdefault(key, []).append(line)
     out = []
     for members in groups.values():
-        names = [o["name"] for o in members]
-        fams = {family_of.get(n, "") for n in names}
-        if len(names) > 1 and len(fams) == 1 and "" not in fams:
-            who = family_label(fams.pop())
-        else:
-            who = ", ".join(names)
-        tone = min((o["tone"] for o in members),
-                   key=lambda t: _TONE_RANK.index(t) if t in _TONE_RANK else 0)
+        who = _batch_who([o["name"] for o in members], family_of)
         out.append({
             "id": max(o["id"] for o in members),
             "command": members[0]["command"],
             "kind": members[0]["kind"],
             "who": who,
-            "tone": tone,
+            "tone": _batch_tone(members),
             "success": all(o["success"] for o in members),
             "ago": members[0]["ago"],
             "when": members[0]["when"],
