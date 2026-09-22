@@ -36,6 +36,7 @@ import needs
 import partystatus
 import questlog
 import raidgoals
+import raidlineup
 import recap
 import realm
 import standing
@@ -1442,6 +1443,24 @@ def _fetch_eye() -> dict:
 # random population has guilds of its own, and counting those would be a raid
 # group nobody is in. An empty result is "no guild", and raidgoals falls back
 # to the family and says on the page that it did.
+# EVERY GUILD THE ROSTER TOUCHES, AND THE CLASS OF EVERY MEMBER IN IT. The
+# lineup is a selection by ROLE, so unlike the raid-goal read above this one
+# cannot stop at names and levels - a roster without classes cannot be told
+# which five make a group that can hold a dungeon up.
+#
+# BY GUILD ID AND NOT BY GUILD NAME. Two families mean two guilds, and naming
+# them here would put a deployment's own words in the server. The subquery is
+# the same one the raid-goal read uses: whichever guilds the roster is in.
+_LINEUP_GUILD = (
+    "SELECT g.guildid, g.name AS guild_name, c.name, c.class AS class_id, "
+    "       c.level, c.race "
+    "FROM characters c "
+    "JOIN guild_member gm ON gm.guid = c.guid "
+    "JOIN guild g ON g.guildid = gm.guildid "
+    "WHERE g.guildid IN (SELECT gm2.guildid FROM guild_member gm2 "
+    "JOIN characters c2 ON c2.guid = gm2.guid WHERE c2.name IN ({holes}))"
+)
+
 _RAID_GUILD = (
     "SELECT c.name, c.level, g.name AS guild_name, g.guildid "
     "FROM characters c "
@@ -1548,6 +1567,27 @@ _RAID_CREATURE = ("SELECT DISTINCT Item AS item FROM "
 _RAID_OBJECT = ("SELECT DISTINCT Item AS item FROM "
                 "acore_world.gameobject_loot_template "
                 "WHERE Reference = 0 AND Item IN ({holes})")
+
+
+def _fetch_lineup() -> dict:
+    """Every guild the roster is in, with the class of every member.
+
+    ONE READ AND ONE GUARD. There is nothing to bind but the roster's own
+    names, so unlike the raid-goal fetch below this needs no second phase.
+    `_wide_guarded` degrades a missing `guild_member` to no rows rather than
+    an exception, which is what lets a world with no guild at all answer this
+    endpoint honestly instead of 503-ing.
+    """
+    names = family.roster()
+    holes = ", ".join(["%s"] * len(names))
+    conn = _connect()
+    try:
+        with conn.cursor() as cur:
+            rows = _wide_guarded(cur, _LINEUP_GUILD.format(holes=holes),  # noqa: S608
+                                 tuple(names), "", "guild_member")
+    finally:
+        conn.close()
+    return {"rows": rows, "roster": names}
 
 
 def _fetch_raidgoals() -> dict:
@@ -3058,6 +3098,59 @@ class Handler(BaseHTTPRequestHandler):
             log.exception("questlog query failed")
             self._send(503, "application/json", b'{"error": "world unreachable"}')
 
+    def _lineup(self, _query: dict) -> None:
+        """GET /api/lineup - the guild's places, filled, and who is surplus.
+
+        NO PARAMETERS, for the same reason /api/raidgoals takes none: it asks
+        one question about whole guilds, so there is nothing for a caller to
+        steer. WHO the roster is belongs to bonds.
+
+        ONE LINEUP PER GUILD, because two families are two guilds and a single
+        merged lineup would put a Horde character in an Alliance group - a
+        party the game itself would refuse to form.
+        """
+        try:
+            fetched = _fetch_lineup()
+            roster = set(fetched["roster"])
+            guilds = {}
+            for row in fetched["rows"]:
+                guild = guilds.setdefault(
+                    row.get("guildid"),
+                    {"guildid": row.get("guildid"),
+                     "name": row.get("guild_name") or "",
+                     "members": []})
+                class_name = raidlineup.CLASS_NAMES.get(row.get("class_id"), "")
+                guild["members"].append({
+                    "name": row.get("name"),
+                    "class_id": row.get("class_id"),
+                    "level": row.get("level"),
+                    "race": row.get("race"),
+                    # Resolved here rather than in the page, because every
+                    # other view on this site takes its class colour from the
+                    # server and a second palette could disagree with the
+                    # first.
+                    "class_colour": family.class_colour_by_name(class_name),
+                })
+            payload = []
+            for guild in guilds.values():
+                lineup = raidlineup.build_lineup(
+                    guild["members"],
+                    guaranteed=[m["name"] for m in guild["members"]
+                                if m["name"] in roster])
+                lineup["guild"] = guild["name"]
+                lineup["guildid"] = guild["guildid"]
+                payload.append(lineup)
+            payload.sort(key=lambda g: (-g["counts"]["considered"], g["guild"]))
+            self._send(200, "application/json",
+                       json.dumps({"guilds": payload,
+                                   "classes": raidlineup.CLASS_NAMES}).encode())
+        except Exception:
+            # Same contract as every other poll: the tab keeps what it has and
+            # says it may be stale. A blanked lineup would read as "nobody is
+            # in the guild", and the list under it is a kick list.
+            log.exception("raid lineup query failed")
+            self._send(503, "application/json", b'{"error": "world unreachable"}')
+
     def _raidgoals(self, _query: dict) -> None:
         """GET /api/raidgoals - what the guild still needs before it can raid.
 
@@ -3810,6 +3903,7 @@ class Handler(BaseHTTPRequestHandler):
         "/api/achievements": _achievements,
         "/api/dungeons": _dungeons,
         "/api/raidgoals": _raidgoals,
+        "/api/lineup": _lineup,
         "/api/trades": _trades,
         "/api/recap": _recap,
         "/api/council": _council,
