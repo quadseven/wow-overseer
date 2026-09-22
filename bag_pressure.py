@@ -1156,13 +1156,10 @@ def recipe_gifts(
 # answers. It needs the same Holdings and CharacterStates, and gear.py's own
 # reasons, so it reads them HERE: this module stays the one place a world row
 # becomes a Holding, and jev_items never grows a second opinion on gear.
+# Its CharacterStates come from `family_characters` above, the one builder
+# family_fits reads too, party roles included (#174).
 
 WEAPON_CLASS = gear.ITEM_CLASS_WEAPON
-
-
-def family_characters(equipped_rows, names) -> list:
-    """gear.CharacterState per family member, as family_fits reads them."""
-    return gear.characters_from_rows(equipped_rows, names)
 
 
 def carried_holdings(gear_rows) -> list:

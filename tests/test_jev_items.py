@@ -165,20 +165,22 @@ def characters():
 
 class DestinyTest(unittest.TestCase):
     def test_the_weapon_question_is_asked_where_the_numbers_cannot_settle_it(self):
-        fake = FakeJev(picks={"better": jev_items.CARRIED, "route": jev_items.EQUIP})
+        fake = FakeJev(picks={"better": jev_items.WORN, "route": jev_items.EQUIP})
         judgments = run([carried()], fake)
         weapon = [j for j in judgments if j.kind == jev_items.KIND_WEAPON]
         grog = [j for j in weapon if j.subject == "Grog"]
         self.assertEqual(len(grog), 1)
         judgment = grog[0]
-        # The heuristic refuses a two-hander over the worn shield ...
-        self.assertEqual(judgment.heuristic, jev_items.WORN)
+        # The heuristic now reads the party role (#174): a damage-role
+        # paladin takes the two-hander over a spare shield, by item level,
+        # and still says the proc is beyond the numbers ...
+        self.assertEqual(judgment.heuristic, jev_items.CARRIED)
         self.assertIn("cannot be settled from the numbers", judgment.heuristic_why)
-        # ... Jev weighed the proc and chose the sword, and both are recorded.
-        self.assertEqual(judgment.jev, jev_items.CARRIED)
+        # ... and when Jev weighs it the other way, both are recorded.
+        self.assertEqual(judgment.jev, jev_items.WORN)
         self.assertFalse(judgment.agree)
         self.assertIn("verdict=differ", judgment.line())
-        self.assertIn("heuristic=worn", judgment.line())
+        self.assertIn("heuristic=carried", judgment.line())
 
     def test_jev_is_shown_the_proc_the_shield_and_the_specialization(self):
         fake = FakeJev()
