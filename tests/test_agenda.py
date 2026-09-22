@@ -391,6 +391,18 @@ class Staleness(unittest.TestCase):
         self.assertEqual(out["moved_seconds"], 0)
 
 
+class TheStallSentence(unittest.TestCase):
+
+    def test_it_carries_the_real_gap_and_not_the_threshold(self):
+        out = build(event_rows=[{"kind": "quest_accept",
+                                 "last_seen": NOW - timedelta(hours=13)}])
+        self.assertEqual(out["stall_line"],
+                         "STALLED: no quest, level or gear change for 13 hours.")
+
+    def test_a_busy_family_has_none(self):
+        self.assertEqual(build()["stall_line"], "")
+
+
 class TheRunProgressColumnIsNotAProgressSignal(unittest.TestCase):
     """The single most important thing this module gets right.
 
