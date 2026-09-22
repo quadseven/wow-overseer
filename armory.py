@@ -1278,6 +1278,26 @@ def _build_spec(class_id: int, level: int, talent_rows: list[dict],
 ABSENT_NOTE = "no saved character - deleted, or never made."
 
 
+UNKNOWN_CLASS = "unknown class"
+
+
+def _absent_member(name: str, bond) -> dict:
+    """No `characters` row at all - the character was deleted or never made.
+
+    Unlike the Family tab there is no freshness window here: gear and talents
+    are what is SAVED, so a logged-out character still has both and still
+    gets a full column; only a missing row lands here.
+    """
+    return {
+        "name": name,
+        "role": bond.role if bond else UNKNOWN_ROLE,
+        "class": bond.char_class.title() if bond else UNKNOWN_CLASS,
+        "class_id": None,
+        "present": False,
+        "identity": ABSENT_NOTE,
+    }
+
+
 def _member(name: str, char_row: dict | None, equipment_rows: list[dict],
             talent_rows: list[dict], stats_row: dict | None, base_row: dict | None,
             set_names: dict[int, str], book: TalentBook, items: ItemBook) -> dict:
@@ -1286,18 +1306,7 @@ def _member(name: str, char_row: dict | None, equipment_rows: list[dict],
     # party role party_roles gives it from its class.
     bond = bonds.FAMILY.get(name)
     if char_row is None:
-        # No `characters` row at all - the character was deleted or never
-        # made. Unlike the Family tab there is no freshness window here:
-        # gear and talents are what is SAVED, so a logged-out character still
-        # has both and still gets a full column.
-        return {
-            "name": name,
-            "role": bond.role if bond else UNKNOWN_ROLE,
-            "class": bond.char_class.title() if bond else UNKNOWN_ROLE,
-            "class_id": None,
-            "present": False,
-            "identity": ABSENT_NOTE,
-        }
+        return _absent_member(name, bond)
     class_id, race = char_row["class"], char_row["race"]
     by_slot = {r["slot"]: r for r in equipment_rows}
     worn_entries = {r["entry"] for r in equipment_rows}
@@ -1329,11 +1338,12 @@ def _member(name: str, char_row: dict | None, equipment_rows: list[dict],
         identity.append(guild)
     if kills:
         identity.append(f"{kills} honourable kill" + ("" if kills == 1 else "s"))
+    role = bond.role if bond else UNKNOWN_ROLE
     return {
         "name": char_row["name"],
         # The family role ("father") where there is one; party_roles
         # overwrites this with the party role for anyone without a bond.
-        "role": bond.role if bond else UNKNOWN_ROLE,
+        "role": role,
         "present": True,
         "class_id": class_id,
         "identity": " - ".join(identity),
@@ -1433,6 +1443,43 @@ def _style(m: dict) -> str:
     return "ranged"
 
 
+def _zip_rows(role: str, left: list[str], right: list[str]) -> list[dict]:
+    """Two name lists side by side, the shorter padded with None."""
+    return [{"role": role,
+             "left": left[i] if i < len(left) else None,
+             "right": right[i] if i < len(right) else None}
+            for i in range(max(len(left), len(right)))]
+
+
+# How the damage row is matched, tightest first: the same class, then the
+# same style, then anyone left.
+_DAMAGE_RULES = (
+    lambda a, b: a.get("class_id") == b.get("class_id"),
+    lambda a, b: _style(a) == _style(b),
+    lambda a, b: True,
+)
+
+
+def _match_damage(left: list[dict], right: list[dict]) -> list[dict]:
+    """The damage rows: matched pairs in left roster order, then the rest."""
+    partner: dict[int, dict] = {}
+    spare = list(right)
+    for rule in _DAMAGE_RULES:
+        for i, a in enumerate(left):
+            if i in partner:
+                continue
+            b = next((b for b in spare if rule(a, b)), None)
+            if b is not None:
+                partner[i] = b
+                spare.remove(b)
+    rows = [{"role": DAMAGE, "left": a["name"], "right": partner[i]["name"]}
+            for i, a in enumerate(left) if i in partner]
+    rows += [{"role": DAMAGE, "left": a["name"], "right": None}
+             for i, a in enumerate(left) if i not in partner]
+    rows += [{"role": DAMAGE, "left": None, "right": b["name"]} for b in spare]
+    return rows
+
+
 def pair_by_role(left: list[dict], right: list[dict]) -> list[dict]:
     """Rows of {role, left, right}: tank, healer, then damage, then absent.
 
@@ -1443,43 +1490,17 @@ def pair_by_role(left: list[dict], right: list[dict]) -> list[dict]:
     def by_role(side, role):
         return [m for m in side if m.get("party_role") == role]
 
-    rows = []
-    for role in (TANK, HEALER):
-        ls, rs = by_role(left, role), by_role(right, role)
-        for i in range(max(len(ls), len(rs))):
-            rows.append({"role": role,
-                         "left": ls[i]["name"] if i < len(ls) else None,
-                         "right": rs[i]["name"] if i < len(rs) else None})
-    ld, rd = by_role(left, DAMAGE), list(by_role(right, DAMAGE))
-    matched = []
-    for rule in (lambda a, b: a.get("class_id") == b.get("class_id"),
-                 lambda a, b: _style(a) == _style(b),
-                 lambda a, b: True):
-        for a in ld:
-            if any(a is x for x, _ in matched):
-                continue
-            for b in rd:
-                if rule(a, b):
-                    matched.append((a, b))
-                    rd.remove(b)
-                    break
-    order = {id(a): i for i, a in enumerate(ld)}
-    matched.sort(key=lambda pair: order[id(pair[0])])
-    for a, b in matched:
-        rows.append({"role": DAMAGE, "left": a["name"], "right": b["name"]})
-    unmatched = [a for a in ld if not any(a is x for x, _ in matched)]
-    for a in unmatched:
-        rows.append({"role": DAMAGE, "left": a["name"], "right": None})
-    for b in rd:
-        rows.append({"role": DAMAGE, "left": None, "right": b["name"]})
+    def names(side, role):
+        return [m["name"] for m in by_role(side, role)]
+
+    rows = _zip_rows(TANK, names(left, TANK), names(right, TANK))
+    rows += _zip_rows(HEALER, names(left, HEALER), names(right, HEALER))
+    rows += _match_damage(by_role(left, DAMAGE), by_role(right, DAMAGE))
     # A member with no role (no saved character) still gets a row: a
     # comparison that quietly drops somebody is the failure this tab is for.
-    la = [m["name"] for m in left if not m.get("party_role")]
-    ra = [m["name"] for m in right if not m.get("party_role")]
-    for i in range(max(len(la), len(ra))):
-        rows.append({"role": UNKNOWN_ROLE,
-                     "left": la[i] if i < len(la) else None,
-                     "right": ra[i] if i < len(ra) else None})
+    rows += _zip_rows(UNKNOWN_ROLE,
+                      [m["name"] for m in left if not m.get("party_role")],
+                      [m["name"] for m in right if not m.get("party_role")])
     return rows
 
 
@@ -1616,6 +1637,29 @@ TREES_EXPANDED = False
 TREES_SHOW, TREES_HIDE = "show trees", "hide trees"
 
 
+def _by_name(rows: list[dict]) -> dict[str, list[dict]]:
+    out: dict[str, list[dict]] = {}
+    for row in rows:
+        out.setdefault(row["name"], []).append(row)
+    return out
+
+
+def _assign_roles(members: list[dict], families) -> list[tuple[str, list[dict]]]:
+    """Give every member its party role, family by family; return the groups.
+
+    A member with no family role (no bond) takes the party role as its role
+    line too, so a Horde card says "tank" where an Alliance one says "father".
+    """
+    by_name = {m["name"]: m for m in members}
+    groups = [(key, [by_name[n] for n in names]) for key, names in families]
+    for _key, group in groups:
+        for name, role in party_roles(group).items():
+            by_name[name]["party_role"] = role
+            if by_name[name]["role"] == UNKNOWN_ROLE:
+                by_name[name]["role"] = role
+    return groups
+
+
 def build_armory(char_rows: list[dict], equipment_rows: list[dict],
                  talent_rows: list[dict], book: TalentBook, items: ItemBook,
                  stats_rows: list[dict] | None = None,
@@ -1641,12 +1685,8 @@ def build_armory(char_rows: list[dict], equipment_rows: list[dict],
     and `set_rows` the names of every item in a set anybody is wearing.
     """
     chars = {r["name"]: r for r in char_rows}
-    equipment: dict[str, list[dict]] = {}
-    for row in equipment_rows:
-        equipment.setdefault(row["name"], []).append(row)
-    talents: dict[str, list[dict]] = {}
-    for row in talent_rows:
-        talents.setdefault(row["name"], []).append(row)
+    equipment = _by_name(equipment_rows)
+    talents = _by_name(talent_rows)
     stats = {r["name"]: r for r in (stats_rows or [])}
     base = {(r["race"], r["class"], r["level"]): r for r in (base_rows or [])}
     set_names = {r["entry"]: r["item_name"] for r in (set_rows or [])}
@@ -1661,14 +1701,7 @@ def build_armory(char_rows: list[dict], equipment_rows: list[dict],
         members.append(_member(name, char_row, equipment.get(name, []),
                                talents.get(name, []), stats.get(name), base_row,
                                set_names, book, items))
-    by_name = {m["name"]: m for m in members}
-    groups = [(key, [by_name[n] for n in names]) for key, names in families]
-    for _key, group in groups:
-        for name, role in party_roles(group).items():
-            by_name[name]["party_role"] = role
-            if by_name[name]["role"] == UNKNOWN_ROLE:
-                by_name[name]["role"] = role
-    sides = family_sides(groups)
+    sides = family_sides(_assign_roles(members, families))
     pairs = pair_by_role(sides[0]["members"] if sides else [],
                          sides[1]["members"] if len(sides) > 1 else [])
     # The profiles travel once, in `members`; a side names its own.

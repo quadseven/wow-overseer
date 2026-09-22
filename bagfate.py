@@ -133,6 +133,38 @@ NOTE = ("Each carried stack in one pile. A pile that goes nowhere says why, "
         "and links the open ticket for it.")
 
 
+# Classes whose pile does not depend on anything but the class.
+_BY_CLASS = {RECIPE: RECIPES, CONTAINER: BAGS, TRADE_GOODS: TRADE,
+             REAGENT: TRADE}
+# What is left over once junk is ruled out, by class.
+_KEPT_BY_CLASS = {GEM: GEMS, MISC: MISC_PILE, CONSUMABLE: CONSUMABLES}
+
+
+def _junk(quality, price: int) -> bool:
+    """bag_pressure.sellable's price-and-quality half: 0 or 1, and a price."""
+    return quality is not None and quality <= 1 and price > 0
+
+
+def _gear_pile(row: dict, claimant: str | None, holder: str, quality,
+               price: int) -> tuple[str, str]:
+    """A weapon or armour piece, by what gear.claims said about it."""
+    if claimant is None or claimant == bag_pressure.CLAIM_UNJUDGEABLE:
+        return (JUNK, "") if quality == 0 and price > 0 else (UNJUDGED, "")
+    if claimant == holder:
+        return FOR_HOLDER, holder
+    if claimant != bag_pressure.CLAIM_NOBODY:
+        return FOR_RELATIVE, claimant
+    if quality is not None and quality <= 1:
+        return (VENDOR_GEAR, "") if price > 0 else (OTHER, "")
+    soulbound = bool(int(row.get("instance_flags") or 0) & 0x1)
+    tradable = not soulbound and row.get("bonding") == BIND_ON_EQUIP
+    return (AUCTION, "") if tradable and quality < RARE else (DUST, "")
+
+
+def _quest_pile(row: dict, quality, price: int) -> tuple[str, str]:
+    return QUESTS, ""
+
+
 def pile_of(row: dict, claimant: str | None, holder: str) -> tuple[str, str]:
     """One carried row -> (pile key, who it is for, or "").
 
@@ -143,11 +175,9 @@ def pile_of(row: dict, claimant: str | None, holder: str) -> tuple[str, str]:
     quality = row.get("quality")
     price = int(row.get("sell_price") or 0)
     if item_class == QUEST:
-        return QUESTS, ""
-    if item_class == RECIPE:
-        return RECIPES, ""
-    if item_class == CONTAINER:
-        return BAGS, ""
+        return _quest_pile(row, quality, price)
+    if item_class in _BY_CLASS:
+        return _BY_CLASS[item_class], ""
     # A Mining Pick is a weapon to the gear check and a tool to the pipeline,
     # which never sells one (disposition.trade_tool); the pipeline wins.
     if disposition.trade_tool(disposition.Item(
@@ -155,32 +185,10 @@ def pile_of(row: dict, claimant: str | None, holder: str) -> tuple[str, str]:
             bag_family=int(row.get("bag_family") or 0))):
         return TOOLS, ""
     if item_class in GEAR_CLASSES:
-        if claimant is None or claimant == bag_pressure.CLAIM_UNJUDGEABLE:
-            if quality == 0 and price > 0:
-                return JUNK, ""
-            return UNJUDGED, ""
-        if claimant == holder:
-            return FOR_HOLDER, holder
-        if claimant != bag_pressure.CLAIM_NOBODY:
-            return FOR_RELATIVE, claimant
-        if quality is not None and quality <= 1:
-            return (VENDOR_GEAR, "") if price > 0 else (OTHER, "")
-        soulbound = bool(int(row.get("instance_flags") or 0) & 0x1)
-        if (not soulbound and row.get("bonding") == BIND_ON_EQUIP
-                and quality is not None and quality < RARE):
-            return AUCTION, ""
-        return DUST, ""
-    if item_class in (TRADE_GOODS, REAGENT):
-        return TRADE, ""
-    if quality is not None and quality <= 1 and price > 0 and item_class != GEM:
+        return _gear_pile(row, claimant, holder, quality, price)
+    if item_class != GEM and _junk(quality, price):
         return JUNK, ""
-    if item_class == GEM:
-        return GEMS, ""
-    if item_class == MISC:
-        return MISC_PILE, ""
-    if item_class == CONSUMABLE:
-        return CONSUMABLES, ""
-    return OTHER, ""
+    return _KEPT_BY_CLASS.get(item_class, OTHER), ""
 
 
 def family_claims(carried: dict[str, list[dict]], equipped: dict[str, list[dict]],

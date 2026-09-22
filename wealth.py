@@ -695,7 +695,7 @@ def worth_naming(equipped: list[dict], carried: list[dict]) -> list[dict]:
 
 def build_member(name: str, char_row: dict | None, inventory_rows: list[dict],
                  icons: dict[int, str], claims: dict[int, str] | None = None,
-                 managed: bool = True) -> dict:
+                 managed: bool = True, split: dict | None = None) -> dict:
     """One member's purse, containers and holdings.
 
     A member with no `characters` row still gets an entry. A family view that
@@ -715,7 +715,10 @@ def build_member(name: str, char_row: dict | None, inventory_rows: list[dict],
             "who": "%s - %s" % (klass, bond.role) if bond else klass,
             "absent_note": ABSENT_NOTE,
         }
-    split = split_inventory(inventory_rows, icons)
+    # Handed in when the caller has already split these rows (build_wealth
+    # does, for the gear check), so the piles and the tallies read one split.
+    if split is None:
+        split = split_inventory(inventory_rows, icons)
     carried = [i for bag in split["containers"] for i in bag["items"]]
     held = split["equipped"] + carried
     class_id = char_row.get("class")
@@ -1220,6 +1223,22 @@ SAVED_NOTE = ("Purses, bags and auctions as the world last saved them, on the "
               "same timer as the gear in the Armory.")
 
 
+def _claims_by_family(chars: dict, splits: dict, families) -> dict[int, str]:
+    """gear.claims over each family on its own, as the pipeline's hand-offs
+    run: a Horde relative is not an Alliance one."""
+    claims: dict[int, str] = {}
+    for _key, names in families:
+        present = [n for n in names
+                   if n in splits and chars[n].get("class") is not None]
+        if not present:
+            continue
+        claims.update(bagfate.family_claims(
+            {n: splits[n]["carried_rows"] for n in present},
+            {n: splits[n]["worn_rows"] for n in present},
+            {n: (chars[n]["class"], chars[n].get("level") or 1) for n in present}))
+    return claims
+
+
 def build_wealth(char_rows: list[dict], inventory_rows: list[dict],
                  auction_rows: list[dict], guild_rows: list[dict],
                  icons: dict[int, str],
@@ -1242,26 +1261,15 @@ def build_wealth(char_rows: list[dict], inventory_rows: list[dict],
     guild_of = {r["name"]: r.get("guild_name") for r in guild_rows}
     for name, row in chars.items():
         row.setdefault("guild", guild_of.get(name))
-    # The gear check runs over each family on its own, as the pipeline's
-    # hand-offs do: a Horde relative is not an Alliance one.
-    claims: dict[int, str] = {}
-    for _key, names in families:
-        carried, worn, levels = {}, {}, {}
-        for name in names:
-            row = chars.get(name)
-            if row is None or row.get("class") is None:
-                continue
-            split = split_inventory(inventory.get(name, []), {})
-            carried[name] = split["carried_rows"]
-            worn[name] = split["worn_rows"]
-            levels[name] = (row["class"], row.get("level") or 1)
-        if levels:
-            claims.update(bagfate.family_claims(carried, worn, levels))
+    splits = {name: split_inventory(inventory.get(name, []), icons)
+              for _key, names in families for name in names if name in chars}
+    claims = _claims_by_family(chars, splits, families)
     # A character the economy passes do not cover gets one sentence instead
     # of piles. The passes cover the persona family (bonds), which is the
     # roster they are configured with; #150 is widening that.
     members = [build_member(name, chars.get(name), inventory.get(name, []), icons,
-                            claims=claims, managed=name in bonds.FAMILY)
+                            claims=claims, managed=name in bonds.FAMILY,
+                            split=splits.get(name))
                for _key, names in families for name in names]
     # BOTH FAMILIES, Alliance on the left and Horde on the right, by the
     # Armory's own rule for which side a family is on (armory.family_sides),

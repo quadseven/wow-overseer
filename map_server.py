@@ -733,6 +733,29 @@ def _fetch_guild_sizes(names: list[str]) -> dict[str, int]:
         conn.close()
 
 
+# One read: is this name in a guild any family member is in?
+_ARMORY_IS_GUILDMATE = (
+    "SELECT 1 FROM characters c JOIN guild_member gm ON gm.guid = c.guid "
+    "WHERE c.name = %s AND gm.guildid IN (SELECT gm2.guildid FROM guild_member gm2 "
+    "JOIN characters c2 ON c2.guid = gm2.guid WHERE c2.name IN ({holes})) LIMIT 1"
+)
+
+
+def _is_family_guildmate(name: str, family_names: list[str]) -> bool:
+    if not family_names:
+        return False
+    holes = ", ".join(["%s"] * len(family_names))
+    conn = _connect()
+    try:
+        with conn.cursor() as cur:
+            # S608: placeholders only; the name and every roster name are bound.
+            cur.execute(_ARMORY_IS_GUILDMATE.format(holes=holes),  # noqa: S608
+                        (name, *family_names))
+            return cur.fetchone() is not None
+    finally:
+        conn.close()
+
+
 def _fetch_guild_roster(guild: str) -> list[dict]:
     """The compact list for one family guild. `guild` is already checked."""
     conn = _connect()
@@ -4250,9 +4273,7 @@ class Handler(BaseHTTPRequestHandler):
                 return
             groups = _fetch_family_groups()
             names = [n for _key, group in groups for n in group]
-            members = {r["name"] for g in _fetch_guild_sizes(names)
-                       for r in _fetch_guild_roster(g)}
-            if wanted not in members:
+            if not _is_family_guildmate(wanted, names):
                 self._send(404, "application/json", b'{"error": "not a guild member"}')
                 return
             fetched = _fetch_armory([wanted])

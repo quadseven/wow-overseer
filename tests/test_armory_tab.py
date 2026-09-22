@@ -987,7 +987,7 @@ class TheTwoFamiliesAndTheGuilds(unittest.TestCase):
         member = self.server[self.server.index("def _armory_member"):]
         member = member[:member.index("def _read_json_body")]
         self.assertIn("if not _NAME_RE.fullmatch(wanted):", member)
-        self.assertIn("if wanted not in members:", member)
+        self.assertIn("if not _is_family_guildmate(wanted, names):", member)
         self.assertIn("self._send(404", member)
 
 
