@@ -309,7 +309,7 @@ _GATE_RANK = {reason: rank for rank, reason in enumerate(SHARE_GATES)}
 # the read now excludes - and the reason this exists at all: 167 hourly
 # retries of a share that could never land. Every other gate is transient
 # ("taker offline", "not in the same party", "not on the same map", a full
-# log, a prerequisite not yet turned in, "taker already holds it" - the next
+# log, "taker already holds it" - the next
 # pass recomputes from live rows and simply stops proposing that one). A
 # reason not in SHARE_GATES at all proves nothing and counts for nothing.
 PERMANENT_REFUSALS = frozenset(
@@ -319,6 +319,12 @@ PERMANENT_REFUSALS = frozenset(
         "malformed request",
         "same character",
         "taker already turned it in",
+        # #170. Measured on wow-dev 2026-09-22: Bork -> Ugga quest:4861 was
+        # refused for eligibility 21 times in a day, hourly, and three quest
+        # 5082 shares 4 times each. Level, race, class, a prerequisite or an
+        # exclusive group do not change in an hour; a level can in a day, and
+        # the doubling (capped at a week) offers it again once it might.
+        "taker is not eligible (level, race, class, prerequisite or exclusive group)",
     }
 )
 
