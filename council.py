@@ -808,7 +808,7 @@ def deciding_sitting(rows: list[dict], decided_at) -> list[dict]:
     scrolled out of the rows this view reads. Both say "no council to show",
     and the caller says so rather than borrowing a different sitting.
     """
-    if decided_at is None or not hasattr(decided_at, "__sub__"):
+    if not isinstance(decided_at, datetime):
         return []
     found: list[dict] = []
     for sitting in sittings(rows):
@@ -878,10 +878,20 @@ def _since(now: datetime | None, when) -> str:
 
 
 def _rows_of(lines: list[dict]) -> list[dict]:
-    """Transcript lines back into thought rows, for callers without rows."""
-    return [{"character_name": line["who"], "text": line["text"],
-             "created_at": datetime.fromisoformat(line["at"])}
-            for line in lines if line.get("at")]
+    """Transcript lines back into thought rows, for callers without rows.
+
+    A line whose time cannot be read is left out rather than allowed to take
+    the whole card down: it cannot be placed in a sitting either way.
+    """
+    rows = []
+    for line in lines:
+        try:
+            at = datetime.fromisoformat(str(line.get("at") or ""))
+        except ValueError:
+            continue
+        rows.append({"character_name": line["who"], "text": line["text"],
+                     "created_at": at})
+    return rows
 
 
 def _who_line(proposer: str, spoke: list[str], silent: list[str]) -> str:

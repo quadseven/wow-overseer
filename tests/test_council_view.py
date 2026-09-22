@@ -242,6 +242,9 @@ class TheDecisionIsAPlainSentence(unittest.TestCase):
                              council.decision_line(goal("Grug", kind)), kind)
 
 
+OUTSIDE = council.OUTSIDE_LABEL
+
+
 class TheCardReadsTheSittingThatDecidedIt(unittest.TestCase):
     """The card used to count the speakers of the LAST sitting, which on the
     dev realm was a one-line sitting about a robe held a day after the dungeon
@@ -288,6 +291,15 @@ class TheCardReadsTheSittingThatDecidedIt(unittest.TestCase):
         self.assertEqual("SET OUTSIDE THE COUNCIL", agreed["label"])
         self.assertIn("Nobody voted", agreed["who_line"])
         self.assertEqual([], agreed["sitting"])
+
+    def test_a_goal_time_that_is_not_a_time_finds_no_sitting(self):
+        self.assertEqual([], council.deciding_sitting(self.rows, "2026-09-03"))
+
+    def test_an_unreadable_line_time_is_skipped_not_raised(self):
+        lines = [{"who": "Grug", "text": "g", "at": "not a time"},
+                 {"who": "Ugga", "text": "u", "at": None}]
+        agreed = council.consensus([goal("Bork")], lines, now=T0)
+        self.assertEqual(OUTSIDE, agreed["label"])
 
     def test_other_open_goals_are_listed_not_hidden(self):
         agreed = council.consensus(
