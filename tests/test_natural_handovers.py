@@ -158,7 +158,11 @@ class EveryGiveWriterAsksFirst(unittest.TestCase):
         self.assertIn('_log_capped("materials", waits)', body)
 
     def test_guild_surplus_gives_together_posts_or_waits(self):
-        body = _block("    async def _guild_share_once(")
+        self.assertIn(
+            "await self._write_guild_gifts(share.gifts)",
+            _block("    async def _guild_share_once("),
+        )
+        body = _block("    async def _write_guild_gifts(")
         ask = body.index("handover.verdict(")
         self.assertIn("posting=posting, mailable=True", body)
         self.assertLess(ask, body.index("_insert_guild_gift, gift, how.verb"))
@@ -258,11 +262,16 @@ class TheWalkRowIsReadForEveryAnswer(unittest.TestCase):
         self.assertEqual(got.state, guildroute.UNSUPPORTED)
         self.assertIn("60 minutes", got.said)
 
-    def test_an_unreadable_result_is_not_a_crash(self):
+    def test_an_unreadable_result_is_not_a_crash_nor_an_arrival(self):
         got = guildroute.judge_walk("Avenah", "applied", "", "{not json")
-        self.assertEqual((got.state, got.mailbox), (guildroute.ARRIVED, "a mailbox"))
+        self.assertEqual((got.state, got.retryable), (guildroute.ENDED, False))
+        self.assertIn("without an arrival", got.said)
         got = guildroute.judge_walk("Avenah", "error", "", None)
         self.assertEqual(got.state, guildroute.ENDED)
+
+    def test_a_wrapped_unknown_verb_is_still_unsupported(self):
+        got = self.judge("error", "refused: malformed mail command.")
+        self.assertEqual(got.state, guildroute.UNSUPPORTED)
 
     def test_the_hold_and_the_follow_are_bounded(self):
         self.assertEqual(guildroute.MAIL_WALK_HOLD_SECONDS, 120)
@@ -284,7 +293,8 @@ class TheBridgeFollowsTheWalk(unittest.TestCase):
         self.assertIn("await asyncio.sleep(MAIL_WALK_POLL_SECONDS)", body)
         self.assertIn("_command_answer, row_id", body)
         self.assertIn("guildroute.judge_walk(", body)
-        self.assertIn("log.exception(", body)
+        self.assertIn("except pymysql.err.MySQLError:", body)
+        self.assertNotIn("except Exception", body)
 
     def test_arrival_posts_through_the_route_writer_once(self):
         body = _block("    async def _end_mail_walk(")
@@ -305,6 +315,9 @@ class TheBridgeFollowsTheWalk(unittest.TestCase):
     def test_the_follow_task_is_held(self):
         body = _block("    async def _start_mail_walk(")
         self.assertIn("self._mail_walk_tasks.add(task)", body)
+        self.assertIn("task.add_done_callback(self._mail_walk_task_done)", body)
+        done = _block("    def _mail_walk_task_done(")
+        self.assertIn("log.error(", done)
         self.assertIn("self._guild_mail_runs.pop(run.holder, None)", body)
 
     def test_handover_ships(self):

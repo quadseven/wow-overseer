@@ -995,24 +995,20 @@ def deliverable(grants, position_rows=None, free_slots=None, at_mailbox=None) ->
                 f"is not in the world right now"
             )
             continue
-        chosen, verb, absent, crowded, apart = None, TRADE, [], [], []
+        chosen, verb = None, TRADE
+        walls = {"absent": [], "crowded": [], "apart": []}
+        facts = (here, spots, room, posting, asked_where, asked_room)
         for option in (grant,) + tuple(grant.alternates):
-            there = spots.get(option.taker)
-            if asked_where and there is None:
-                absent.append(option.taker)
+            verb, wall = _delivery_wall(option, *facts)
+            if wall:
+                walls[wall].append(option.taker)
                 continue
-            if asked_room and room.get(option.taker, 0) <= 0:
-                crowded.append(option.taker)
-                continue
-            if asked_where and not _within_trade_range(here, there):
-                if grant.holder not in posting:
-                    apart.append(option.taker)
-                    continue
-                verb = MAIL
             chosen = option
             break
         if chosen is None:
-            notes.append(_withheld(grant, crowded, absent, apart))
+            notes.append(
+                _withheld(grant, walls["crowded"], walls["absent"], walls["apart"])
+            )
             continue
         if asked_room:
             room[chosen.taker] -= 1
@@ -1025,6 +1021,24 @@ def _joined(names: list) -> str:
     if len(names) <= 1:
         return "".join(names)
     return "%s and %s" % (", ".join(names[:-1]), names[-1])
+
+
+def _delivery_wall(option, here, spots, room, posting, asked_where, asked_room):
+    """(verb, "") when this taker can have the item now, else ("", wall).
+
+    The wall is "absent" (not in the world), "crowded" (no free slot) or
+    "apart" (outside trade range with the holder at no mailbox, #189).
+    """
+    there = spots.get(option.taker)
+    if asked_where and there is None:
+        return "", "absent"
+    if asked_room and room.get(option.taker, 0) <= 0:
+        return "", "crowded"
+    if not asked_where or _within_trade_range(here, there):
+        return TRADE, ""
+    if option.holder in posting:
+        return MAIL, ""
+    return "", "apart"
 
 
 def _withheld(grant: Grant, crowded: list, absent: list, apart=()) -> str:

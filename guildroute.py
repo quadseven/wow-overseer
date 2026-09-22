@@ -453,13 +453,21 @@ def judge_walk(holder, status, detail, result) -> WalkAnswer:
     if status in ("pending", "claimed", "verifying", ""):
         return WalkAnswer(WALKING)
     if status == "applied":
+        # The module answers 'applied' only on arrival, and says so in the
+        # result. A body that does not say "arrived" is not trusted as one.
         reached = body.get("reached") if isinstance(body.get("reached"), dict) else {}
-        box = str(reached.get("name") or "a mailbox")
+        if body.get("outcome") != "arrived" or not reached.get("name"):
+            return WalkAnswer(
+                ENDED,
+                "%s's walk row read 'applied' without an arrival in its result"
+                % holder,
+            )
+        box = str(reached["name"])
         return WalkAnswer(ARRIVED, "%s stands at %s" % (holder, box), mailbox=box)
     if status == "unchanged":
         why = detail or str(body.get("reason") or "did not reach the mailbox")
         return WalkAnswer(ENDED, "%s %s" % (holder, why), retryable=True)
-    if status == "error" and detail == UNKNOWN_MAIL_VERB:
+    if status == "error" and UNKNOWN_MAIL_VERB in detail:
         return WalkAnswer(
             UNSUPPORTED,
             "this worldserver answered the walk as %r, so it cannot walk a "

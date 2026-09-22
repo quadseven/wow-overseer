@@ -6402,9 +6402,11 @@ class Bridge(discord.Client):
             # Its own writer and its own failure: a broken route read must not
             # stop the surplus below from going out.
             log.exception("guild route pass failed; retrying next cycle")
-        if not share.gifts:
-            return
+        if share.gifts:
+            await self._write_guild_gifts(share.gifts)
 
+    async def _write_guild_gifts(self, gifts) -> None:
+        """Write each gift the way it can move now, then speak the written ones."""
         seen = await asyncio.to_thread(
             _recent_guild_gift_keys, GIVE_RETRY_MINUTES
         )
@@ -6412,9 +6414,9 @@ class Bridge(discord.Client):
         # stand together, a letter when the family holder stands at a
         # mailbox, and otherwise it waits and the log says for what. Never a
         # give across a distance, which mod-overseer#566 refuses.
-        where, posting = await self._guild_gift_facts(share.gifts)
+        where, posting = await self._guild_gift_facts(gifts)
         fresh, waits = [], []
-        for gift in share.gifts:
+        for gift in gifts:
             how = handover.verdict(
                 gift.holder, gift.taker, where, posting=posting, mailable=True,
             )
@@ -6429,7 +6431,7 @@ class Bridge(discord.Client):
         _log_capped("guildshare", waits)
         if not fresh:
             log.info("guildshare: %d gift(s) already queued, refused or waiting",
-                     len(share.gifts))
+                     len(gifts))
             return
 
         for gift, verb in fresh:
@@ -6625,7 +6627,17 @@ class Bridge(discord.Client):
         log.info("guild route: %s (walk row %d)", run.said, row_id)
         task = asyncio.create_task(self._follow_mail_walk(run, row_id))
         self._mail_walk_tasks.add(task)
-        task.add_done_callback(self._mail_walk_tasks.discard)
+        task.add_done_callback(self._mail_walk_task_done)
+
+    def _mail_walk_task_done(self, task) -> None:
+        """Drop a finished follow task, and make any bug in it loud."""
+        self._mail_walk_tasks.discard(task)
+        if task.cancelled():
+            return
+        exc = task.exception()
+        if exc is not None:
+            log.error("guild route: a mailbox walk follow task failed",
+                      exc_info=(type(exc), exc, exc.__traceback__))
 
     async def _follow_mail_walk(self, run, row_id: int) -> None:
         """Read one walk row until it answers, then act on the answer (#185).
@@ -6654,7 +6666,10 @@ class Bridge(discord.Client):
                 if answer.state != guildroute.WALKING:
                     break
             await self._end_mail_walk(run, row_id, answer)
-        except Exception:
+        except pymysql.err.MySQLError:
+            # A database fault ends this follow; the holder keeps its run
+            # slot until the run's time is up, so nothing loops. Anything
+            # else is a bug and reaches _mail_walk_task_done.
             log.exception("guild route: following walk row %d failed", row_id)
 
     async def _end_mail_walk(self, run, row_id: int, answer) -> None:
