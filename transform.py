@@ -10,6 +10,7 @@ Regions are almost continents: maps 0/1/530/571 plus the two exile regions
 Outland proper. place() routes a map-530 character to whichever region's
 extent contains them.
 """
+
 from __future__ import annotations
 
 import json
@@ -20,7 +21,10 @@ CONTINENT_IDS = {0, 1, 530, 571}
 
 
 def _inside(region: dict, x: float, y: float) -> bool:
-    return region["right"] <= y <= region["left"] and region["bottom"] <= x <= region["top"]
+    return (
+        region["right"] <= y <= region["left"]
+        and region["bottom"] <= x <= region["top"]
+    )
 
 
 def _fraction(region: dict, x: float, y: float) -> tuple[float, float]:

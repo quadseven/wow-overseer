@@ -1,6 +1,7 @@
 """The lineup is a selection, and the things it must never get wrong are the
 ones a person would act on: who is benched, and what cannot be staffed at all.
 """
+
 import os
 import sys
 import unittest
@@ -8,8 +9,14 @@ import unittest
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import raidlineup  # noqa: E402
-from raidlineup import (DRUID, HUNTER, MAGE, PALADIN, PRIEST,  # noqa: E402
-                        ROGUE, SHAMAN, WARLOCK, WARRIOR)
+from raidlineup import (
+    MAGE,
+    PALADIN,
+    PRIEST,  # noqa: E402
+    ROGUE,
+    WARLOCK,
+    WARRIOR,
+)
 
 
 def _member(name, class_id, level=60):
@@ -28,9 +35,19 @@ def _roster(**counts):
 
 class AFullRosterFillsEveryPlace(unittest.TestCase):
     def setUp(self):
-        self.lineup = raidlineup.build_lineup(_roster(
-            WARRIOR=10, PRIEST=12, PALADIN=9, DRUID=6, SHAMAN=6,
-            WARLOCK=25, MAGE=9, HUNTER=8, ROGUE=6))
+        self.lineup = raidlineup.build_lineup(
+            _roster(
+                WARRIOR=10,
+                PRIEST=12,
+                PALADIN=9,
+                DRUID=6,
+                SHAMAN=6,
+                WARLOCK=25,
+                MAGE=9,
+                HUNTER=8,
+                ROGUE=6,
+            )
+        )
 
     def test_eight_groups_of_five(self):
         self.assertEqual(len(self.lineup["groups"]), 8)
@@ -65,13 +82,22 @@ class ASummonerCorpsIsOnlyEverWarlocks(unittest.TestCase):
     another class, because a mage in the corps would summon nobody."""
 
     def test_a_five_warlock_guild_reports_sixteen_missing(self):
-        lineup = raidlineup.build_lineup(_roster(
-            WARLOCK=5, WARRIOR=10, PRIEST=12, PALADIN=9, DRUID=6, SHAMAN=6,
-            MAGE=9, HUNTER=8, ROGUE=6))
+        lineup = raidlineup.build_lineup(
+            _roster(
+                WARLOCK=5,
+                WARRIOR=10,
+                PRIEST=12,
+                PALADIN=9,
+                DRUID=6,
+                SHAMAN=6,
+                MAGE=9,
+                HUNTER=8,
+                ROGUE=6,
+            )
+        )
         self.assertEqual(len(lineup["summoners"]), 5)
         self.assertEqual(lineup["shortfall"]["summoners"], 16)
-        self.assertTrue(
-            all(m["class_id"] == WARLOCK for m in lineup["summoners"]))
+        self.assertTrue(all(m["class_id"] == WARLOCK for m in lineup["summoners"]))
 
     def test_no_warlocks_at_all_is_a_corps_of_none_not_a_crash(self):
         lineup = raidlineup.build_lineup(_roster(WARRIOR=10, PRIEST=12))
@@ -81,13 +107,27 @@ class ASummonerCorpsIsOnlyEverWarlocks(unittest.TestCase):
 
 class TheFamilyIsNeverBenched(unittest.TestCase):
     def test_guaranteed_names_are_placed_even_from_the_back_of_a_crowd(self):
-        crowd = _roster(WARRIOR=10, PRIEST=12, PALADIN=9, DRUID=6, SHAMAN=6,
-                        WARLOCK=25, MAGE=9, HUNTER=8, ROGUE=6)
-        family = [_member("Grug", WARRIOR, 60), _member("Ugga", PRIEST, 60),
-                  _member("Og", MAGE, 60), _member("Bork", ROGUE, 60),
-                  _member("Grog", PALADIN, 60)]
+        crowd = _roster(
+            WARRIOR=10,
+            PRIEST=12,
+            PALADIN=9,
+            DRUID=6,
+            SHAMAN=6,
+            WARLOCK=25,
+            MAGE=9,
+            HUNTER=8,
+            ROGUE=6,
+        )
+        family = [
+            _member("Grug", WARRIOR, 60),
+            _member("Ugga", PRIEST, 60),
+            _member("Og", MAGE, 60),
+            _member("Bork", ROGUE, 60),
+            _member("Grog", PALADIN, 60),
+        ]
         lineup = raidlineup.build_lineup(
-            crowd + family, guaranteed=[m["name"] for m in family])
+            crowd + family, guaranteed=[m["name"] for m in family]
+        )
         raiding = {m["name"] for g in lineup["groups"] for m in g["members"]}
         for member in family:
             self.assertIn(member["name"], raiding, member["name"])
@@ -97,8 +137,17 @@ class TheFamilyIsNeverBenched(unittest.TestCase):
     def test_a_guaranteed_warlock_raids_rather_than_joining_the_corps(self):
         """The corps is filled before the raid, so a family warlock would
         otherwise be swallowed by it and never appear in a group."""
-        roster = _roster(WARLOCK=25, WARRIOR=10, PRIEST=12, PALADIN=9,
-                         DRUID=6, SHAMAN=6, MAGE=9, HUNTER=8, ROGUE=6)
+        roster = _roster(
+            WARLOCK=25,
+            WARRIOR=10,
+            PRIEST=12,
+            PALADIN=9,
+            DRUID=6,
+            SHAMAN=6,
+            MAGE=9,
+            HUNTER=8,
+            ROGUE=6,
+        )
         roster.append(_member("Zrog", WARLOCK, 60))
         lineup = raidlineup.build_lineup(roster, guaranteed=["Zrog"])
         raiding = {m["name"] for g in lineup["groups"] for m in g["members"]}
@@ -110,16 +159,36 @@ class TheSurplusIsTheKickList(unittest.TestCase):
     """Whoever the lineup cannot place is named, because a person acts on it."""
 
     def test_a_guild_of_exactly_seventy_one_benches_nobody(self):
-        lineup = raidlineup.build_lineup(_roster(
-            WARLOCK=21, WARRIOR=8, PRIEST=8, PALADIN=6, DRUID=4, SHAMAN=4,
-            MAGE=8, HUNTER=7, ROGUE=5))
+        lineup = raidlineup.build_lineup(
+            _roster(
+                WARLOCK=21,
+                WARRIOR=8,
+                PRIEST=8,
+                PALADIN=6,
+                DRUID=4,
+                SHAMAN=4,
+                MAGE=8,
+                HUNTER=7,
+                ROGUE=5,
+            )
+        )
         self.assertEqual(lineup["counts"]["considered"], 71)
         self.assertEqual(lineup["surplus"], [])
 
     def test_an_oversized_guild_names_every_extra_character(self):
-        lineup = raidlineup.build_lineup(_roster(
-            WARLOCK=25, WARRIOR=10, PRIEST=12, PALADIN=9, DRUID=6, SHAMAN=6,
-            MAGE=9, HUNTER=8, ROGUE=6))
+        lineup = raidlineup.build_lineup(
+            _roster(
+                WARLOCK=25,
+                WARRIOR=10,
+                PRIEST=12,
+                PALADIN=9,
+                DRUID=6,
+                SHAMAN=6,
+                MAGE=9,
+                HUNTER=8,
+                ROGUE=6,
+            )
+        )
         self.assertEqual(lineup["counts"]["considered"], 91)
         self.assertEqual(len(lineup["surplus"]), 91 - 71)
         self.assertTrue(all(m.get("name") for m in lineup["surplus"]))
@@ -130,17 +199,20 @@ class AThinRosterDegradesHonestly(unittest.TestCase):
         """Two warriors and no hybrids cannot tank eight groups. Six groups go
         without, and the number six is the recruiting ask - it must appear,
         not be smoothed away by promoting a mage."""
-        lineup = raidlineup.build_lineup(_roster(
-            WARRIOR=2, PRIEST=12, MAGE=30, WARLOCK=21))
+        lineup = raidlineup.build_lineup(
+            _roster(WARRIOR=2, PRIEST=12, MAGE=30, WARLOCK=21)
+        )
         self.assertEqual(lineup["shortfall"]["tanks"], 6)
-        tanks = [m for g in lineup["groups"] for m in g["members"]
-                 if m["role"] == "tank"]
+        tanks = [
+            m for g in lineup["groups"] for m in g["members"] if m["role"] == "tank"
+        ]
         self.assertEqual(len(tanks), 2)
         self.assertTrue(all(m["class_id"] in raidlineup.TANKS for m in tanks))
 
     def test_dps_are_dealt_round_robin_so_groups_stay_even(self):
-        lineup = raidlineup.build_lineup(_roster(
-            WARRIOR=8, PRIEST=8, MAGE=8, WARLOCK=21))
+        lineup = raidlineup.build_lineup(
+            _roster(WARRIOR=8, PRIEST=8, MAGE=8, WARLOCK=21)
+        )
         sizes = sorted(len(g["members"]) for g in lineup["groups"])
         self.assertLessEqual(sizes[-1] - sizes[0], 1)
 
@@ -156,13 +228,25 @@ class TheLineupIsStable(unittest.TestCase):
     means nothing."""
 
     def test_the_same_roster_produces_the_same_lineup_twice(self):
-        roster = _roster(WARLOCK=25, WARRIOR=10, PRIEST=12, PALADIN=9,
-                         DRUID=6, SHAMAN=6, MAGE=9, HUNTER=8, ROGUE=6)
+        roster = _roster(
+            WARLOCK=25,
+            WARRIOR=10,
+            PRIEST=12,
+            PALADIN=9,
+            DRUID=6,
+            SHAMAN=6,
+            MAGE=9,
+            HUNTER=8,
+            ROGUE=6,
+        )
         first = raidlineup.build_lineup(roster, guaranteed=["Warrior0"])
-        second = raidlineup.build_lineup(list(reversed(roster)),
-                                         guaranteed=["Warrior0"])
-        self.assertEqual([m["name"] for m in first["surplus"]],
-                         [m["name"] for m in second["surplus"]])
+        second = raidlineup.build_lineup(
+            list(reversed(roster)), guaranteed=["Warrior0"]
+        )
+        self.assertEqual(
+            [m["name"] for m in first["surplus"]],
+            [m["name"] for m in second["surplus"]],
+        )
 
 
 if __name__ == "__main__":

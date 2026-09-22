@@ -50,6 +50,7 @@ is what named them:
 
 Tickets: infra#2604, infra#3197; mod-overseer#169.
 """
+
 from __future__ import annotations
 
 import json
@@ -120,7 +121,9 @@ def outage_line(name: str) -> str:
     The human's message is already in the stream by this point; leaving the
     exchange half-written would read as the character ignoring them.
     """
-    return f"{name} hears you, but the voice that speaks for them is silent right now."[:MAX_TEXT]
+    return f"{name} hears you, but the voice that speaks for them is silent right now."[
+        :MAX_TEXT
+    ]
 
 
 def relative_when(created_at: datetime, now: datetime) -> str:
@@ -147,7 +150,7 @@ def relative_when(created_at: datetime, now: datetime) -> str:
 def _speaker_and_text(source: str, text: str) -> tuple[str, str]:
     """Who said this line, and the line without its bookkeeping marker."""
     if text.startswith(OVERSEER_PREFIX):
-        return "overseer", text[len(OVERSEER_PREFIX):]
+        return "overseer", text[len(OVERSEER_PREFIX) :]
     # A Discord directive persists as source 'command' with the raw order
     # as its text - that is the Overseer speaking too, on the other surface.
     if source == "command":
@@ -166,14 +169,16 @@ def build_timeline(name: str, rows: list[dict], now: datetime, limit: int) -> di
     thoughts = []
     for row in rows:
         speaker, text = _speaker_and_text(row["source"], row["text"])
-        thoughts.append({
-            "id": row["id"],
-            "source": row["source"],
-            "speaker": speaker,
-            "text": text,
-            "created_at": row["created_at"].isoformat(),
-            "when": relative_when(row["created_at"], now),
-        })
+        thoughts.append(
+            {
+                "id": row["id"],
+                "source": row["source"],
+                "speaker": speaker,
+                "text": text,
+                "created_at": row["created_at"].isoformat(),
+                "when": relative_when(row["created_at"], now),
+            }
+        )
     # A full page might be the exact end of history; the next request
     # returning nothing is cheaper than counting the whole table here.
     full = len(rows) == limit and limit > 0
@@ -186,10 +191,20 @@ def build_timeline(name: str, rows: list[dict], now: datetime, limit: int) -> di
     }
 
 
-def build_chat_prompt(*, name: str, level: int, race_name: str, class_name: str,
-                      zone: str, personality: str | None, health: int,
-                      max_health: int, in_combat: bool, recent: list[dict],
-                      text: str) -> str:
+def build_chat_prompt(
+    *,
+    name: str,
+    level: int,
+    race_name: str,
+    class_name: str,
+    zone: str,
+    personality: str | None,
+    health: int,
+    max_health: int,
+    in_combat: bool,
+    recent: list[dict],
+    text: str,
+) -> str:
     """Everything the inner voice needs to answer as this character.
 
     Grounding, not invention: identity, body, place, and the character's own
@@ -214,7 +229,7 @@ def build_chat_prompt(*, name: str, level: int, race_name: str, class_name: str,
         f"{body}\n"
         "Your recent thoughts, oldest first:\n"
         f"{history}\n\n"
-        f"The Overseer speaks to you: \"{text}\"\n\n"
+        f'The Overseer speaks to you: "{text}"\n\n'
         "Answer them in character - one or two short sentences, your own voice, "
         "grounded in where you are and what just happened to you.\n"
         "If they asked you to DO something, also pick the ONE command from this "
@@ -223,7 +238,7 @@ def build_chat_prompt(*, name: str, level: int, race_name: str, class_name: str,
         "Answer with ONLY a JSON object, no other text:\n"
         '{"command": "<exactly one command from the list, or none>", '
         '"say": "<what you say back, in character>"}\n'
-        "If they are only talking, use \"none\" for the command."
+        'If they are only talking, use "none" for the command.'
     )
 
 
@@ -242,7 +257,8 @@ def _last_prose(body: str) -> str:
     """The last paragraph that reads like an answer rather than JSON debris."""
     for block in reversed(re.split(r"\n\s*\n", body)):
         lines = [
-            line.strip() for line in block.splitlines()
+            line.strip()
+            for line in block.splitlines()
             # A truncated object ('{"say": ') is debris, not something to
             # put in a character's mouth.
             if line.strip() and not line.strip().startswith(("{", "}", '"'))
@@ -278,7 +294,7 @@ def parse_reply(content: str) -> voice.Decision:
         return voice.parse_decision(body)
     prose = _last_prose(body)
     if prose:
-        return voice.Decision(None, prose[:voice.MAX_SAY])
+        return voice.Decision(None, prose[: voice.MAX_SAY])
     if isinstance(data, dict):
         # A well-formed answer with no words in it: keep the command gate's
         # verdict, but say something rather than showing an empty bubble.
@@ -328,8 +344,9 @@ def say_key(*, speaker: str, subject: str, listener: str = "") -> tuple:
     )
 
 
-def should_say(said: Mapping, key: tuple, *, now: float,
-               cooldown: float = SAY_ONCE_SECONDS) -> bool:
+def should_say(
+    said: Mapping, key: tuple, *, now: float, cooldown: float = SAY_ONCE_SECONDS
+) -> bool:
     """Has this intent gone quiet long enough to be said again?
 
     `said` is the caller's ledger of key -> the monotonic moment it was last
@@ -344,8 +361,9 @@ def should_say(said: Mapping, key: tuple, *, now: float,
     return (now - last) >= cooldown
 
 
-def remember_said(said: MutableMapping, key: tuple, *, now: float,
-                  cooldown: float = SAY_ONCE_SECONDS) -> None:
+def remember_said(
+    said: MutableMapping, key: tuple, *, now: float, cooldown: float = SAY_ONCE_SECONDS
+) -> None:
     """Stamp this intent as just said, and forget the ones that have expired.
 
     Pruning here rather than in a sweep keeps the ledger bounded by what is
@@ -389,8 +407,7 @@ def _for(table: Mapping, who: str) -> Collection:
     return ()
 
 
-def skill_state(name: str, skill: str, *, held: Mapping,
-                planned: Mapping) -> str:
+def skill_state(name: str, skill: str, *, held: Mapping, planned: Mapping) -> str:
     """Does this character HAVE this trade, is it only planned, or neither?
 
     `held` is name -> the professions `character_skills` actually gives them,
@@ -503,14 +520,19 @@ def _leader_left_run(run: Mapping, live_maps: Mapping[str, int], map_id: int) ->
     if not leader:
         return False
     leader_map = next(
-        (int(member_map) for name, member_map in live_maps.items()
-         if str(name).strip().casefold() == leader),
+        (
+            int(member_map)
+            for name, member_map in live_maps.items()
+            if str(name).strip().casefold() == leader
+        ),
         None,
     )
     return leader_map is not None and leader_map != map_id
 
 
-def run_has_present_member(run: Mapping | None, live_maps: Mapping[str, int] | None) -> bool:
+def run_has_present_member(
+    run: Mapping | None, live_maps: Mapping[str, int] | None
+) -> bool:
     """Whether an active run still contains a member in its instance.
 
     The durable run row can outlive the party after a crash or an incomplete

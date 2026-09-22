@@ -4,6 +4,7 @@ the exact set of characters that will get command rows out.
 No Discord, no MySQL, no LLM - resolution is pure, which is what makes the
 cap, the ordering and the muster arithmetic provable (infra#2605).
 """
+
 import unittest
 
 from fanout import (
@@ -107,7 +108,11 @@ class FactionTargetingTest(unittest.TestCase):
 
 class EveryoneTest(unittest.TestCase):
     def test_everyone_takes_the_whole_world(self):
-        roster = [_row("Grug", race=2), _row("Aldo", race=HUMAN), _row("Thing", race=99)]
+        roster = [
+            _row("Grug", race=2),
+            _row("Aldo", race=HUMAN),
+            _row("Thing", race=99),
+        ]
         names, _ = resolve_targets("everyone", roster, GUILDS)
         self.assertEqual(sorted(names), ["Aldo", "Grug", "Thing"])
 
@@ -143,7 +148,9 @@ class CapTest(unittest.TestCase):
         return [_row(f"Bot{i:03d}", level=1 + i % 60) for i in range(size)]
 
     def test_the_band_never_exceeds_the_cap(self):
-        names, _ = resolve_targets("everyone", self._crowd(MAX_FANOUT_TARGETS + 25), GUILDS)
+        names, _ = resolve_targets(
+            "everyone", self._crowd(MAX_FANOUT_TARGETS + 25), GUILDS
+        )
         self.assertEqual(len(names), MAX_FANOUT_TARGETS)
 
     def test_truncation_is_never_silent(self):
@@ -158,7 +165,11 @@ class CapTest(unittest.TestCase):
         self.assertNotIn("left behind", reason)
 
     def test_the_cap_keeps_the_strongest(self):
-        roster = [_row("Weak", level=5), _row("Mid", level=40), _row("Strong", level=60)]
+        roster = [
+            _row("Weak", level=5),
+            _row("Mid", level=40),
+            _row("Strong", level=60),
+        ]
         names, _ = resolve_targets("everyone", roster, GUILDS)
         self.assertEqual(names, ["Strong", "Mid", "Weak"])
 
@@ -183,7 +194,9 @@ class UnknownExpressionTest(unittest.TestCase):
 
 class MusterReportTest(unittest.TestCase):
     def test_report_counts_rows_written_not_rows_intended(self):
-        text = muster_report(reason="the guild Argentum", command="follow", called=15, written=12)
+        text = muster_report(
+            reason="the guild Argentum", command="follow", called=15, written=12
+        )
         self.assertIn("12", text)
         self.assertIn("3 could not be queued", text)
 
@@ -198,15 +211,22 @@ class MusterReportTest(unittest.TestCase):
         self.assertIn("not one order", text)
 
     def test_a_band_of_one_reads_as_one_order(self):
-        text = muster_report(reason="the guild Argentum", command="stay", called=1, written=1)
+        text = muster_report(
+            reason="the guild Argentum", command="stay", called=1, written=1
+        )
         self.assertIn("1 order queued", text)
 
     def test_the_reason_carries_the_cap_arithmetic_into_the_report(self):
         _, reason = resolve_targets(
-            "everyone", [_row(f"Bot{i:03d}") for i in range(MAX_FANOUT_TARGETS + 7)], GUILDS
+            "everyone",
+            [_row(f"Bot{i:03d}") for i in range(MAX_FANOUT_TARGETS + 7)],
+            GUILDS,
         )
         text = muster_report(
-            reason=reason, command="follow", called=MAX_FANOUT_TARGETS, written=MAX_FANOUT_TARGETS
+            reason=reason,
+            command="follow",
+            called=MAX_FANOUT_TARGETS,
+            written=MAX_FANOUT_TARGETS,
         )
         self.assertIn("7 left behind", text)
 
@@ -236,15 +256,18 @@ class SplitGroupOrderTest(unittest.TestCase):
         self.assertIsNone(split_group_order("Grug", "follow"))
 
     def test_faction_head_keeps_the_whole_rest_as_the_order(self):
-        self.assertEqual(split_group_order("horde", "raid Astranaar tonight"),
-                         ("horde", "raid Astranaar tonight"))
+        self.assertEqual(
+            split_group_order("horde", "raid Astranaar tonight"),
+            ("horde", "raid Astranaar tonight"),
+        )
 
     def test_group_words_are_recognized_whatever_the_case(self):
         self.assertEqual(split_group_order("HORDE", "grind"), ("horde", "grind"))
 
     def test_single_word_guild_name_splits_off_the_order(self):
-        self.assertEqual(split_group_order("guild", "Argentum follow"),
-                         ("guild Argentum", "follow"))
+        self.assertEqual(
+            split_group_order("guild", "Argentum follow"), ("guild Argentum", "follow")
+        )
 
     def test_quoted_guild_name_keeps_its_spaces(self):
         self.assertEqual(
@@ -262,12 +285,14 @@ class SplitGroupOrderTest(unittest.TestCase):
         self.assertEqual(split_group_order("guild", ""), ("guild", ""))
 
     def test_unterminated_quote_yields_a_nameless_expression(self):
-        self.assertEqual(split_group_order("guild", '"Rangers of Vengeance follow'),
-                         ("guild", ""))
+        self.assertEqual(
+            split_group_order("guild", '"Rangers of Vengeance follow'), ("guild", "")
+        )
 
     def test_recruits_needs_no_name_and_takes_the_whole_rest(self):
-        self.assertEqual(split_group_order("recruits", "nc +stay"),
-                         ("recruits", "nc +stay"))
+        self.assertEqual(
+            split_group_order("recruits", "nc +stay"), ("recruits", "nc +stay")
+        )
 
 
 # The family, as overseer_roster spells it. Every recruits test subtracts

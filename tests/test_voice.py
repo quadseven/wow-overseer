@@ -3,6 +3,7 @@
 No live LLM anywhere - the model's output is canned JSON, and the prompt is
 asserted as a string. That is the seam the epic pinned (infra#2597).
 """
+
 import json
 import pathlib
 import re
@@ -10,7 +11,7 @@ import unittest
 
 import goals
 import voice
-from core import InsertCommand, NLDirective, Reply, parse_directive
+from core import InsertCommand, NLDirective, parse_directive
 
 ME = "1000"
 ALLOWED = frozenset({ME})
@@ -26,8 +27,17 @@ class RoutingTest(unittest.TestCase):
         self.assertEqual(out, [InsertCommand("Grug", "drop quest", "discord:1000")])
 
     def test_natural_language_becomes_an_nl_directive(self):
-        out = parse_directive("@Grug go kill boars until you feel stronger", ME, ALLOWED)
-        self.assertEqual(out, [NLDirective("Grug", "go kill boars until you feel stronger", "discord:1000")])
+        out = parse_directive(
+            "@Grug go kill boars until you feel stronger", ME, ALLOWED
+        )
+        self.assertEqual(
+            out,
+            [
+                NLDirective(
+                    "Grug", "go kill boars until you feel stronger", "discord:1000"
+                )
+            ],
+        )
 
     def test_nl_directive_respects_caps_and_gates(self):
         self.assertEqual(parse_directive("@Grug do something", "9999", ALLOWED), [])
@@ -36,18 +46,34 @@ class RoutingTest(unittest.TestCase):
 class PromptTest(unittest.TestCase):
     def test_prompt_contains_identity_situation_vocabulary_and_ask(self):
         p = voice.build_prompt(
-            name="Grug", level=1, race_name="Orc", class_name="Warrior",
-            zone="Durotar", personality=None,
+            name="Grug",
+            level=1,
+            race_name="Orc",
+            class_name="Warrior",
+            zone="Durotar",
+            personality=None,
             text="go kill boars until you feel stronger",
         )
-        for needle in ("Grug", "level 1", "Orc", "Warrior", "Durotar",
-                       "go kill boars until you feel stronger", "grind", "JSON"):
+        for needle in (
+            "Grug",
+            "level 1",
+            "Orc",
+            "Warrior",
+            "Durotar",
+            "go kill boars until you feel stronger",
+            "grind",
+            "JSON",
+        ):
             self.assertIn(needle, p, needle)
 
     def test_personality_is_woven_in_when_present(self):
         p = voice.build_prompt(
-            name="Gimli", level=40, race_name="Dwarf", class_name="Warrior",
-            zone="Ironforge", personality="gruff axe-proud dwarf",
+            name="Gimli",
+            level=40,
+            race_name="Dwarf",
+            class_name="Warrior",
+            zone="Ironforge",
+            personality="gruff axe-proud dwarf",
             text="say hello",
         )
         self.assertIn("gruff axe-proud dwarf", p)
@@ -60,8 +86,12 @@ class PromptTest(unittest.TestCase):
         import persona
 
         p = voice.build_prompt(
-            name="Bork", level=8, race_name="Gnome", class_name="Rogue",
-            zone="Elwynn Forest", personality=persona.characterisation("Bork"),
+            name="Bork",
+            level=8,
+            race_name="Gnome",
+            class_name="Rogue",
+            zone="Elwynn Forest",
+            personality=persona.characterisation("Bork"),
             text="lets go sell junk in town",
         )
         self.assertIn("Worships Grog", p)
@@ -76,7 +106,9 @@ class DecisionTest(unittest.TestCase):
         return voice.parse_decision(content)
 
     def test_valid_decision_yields_command_and_say(self):
-        d = self._decide(json.dumps({"command": "grind", "say": "Grug smash boars now."}))
+        d = self._decide(
+            json.dumps({"command": "grind", "say": "Grug smash boars now."})
+        )
         self.assertEqual(d.command, "grind")
         self.assertEqual(d.say, "Grug smash boars now.")
 
@@ -86,7 +118,9 @@ class DecisionTest(unittest.TestCase):
         self.assertIn("not know", d.say)
 
     def test_json_wrapped_in_prose_still_parses(self):
-        d = self._decide('Here you go:\n```json\n{"command": "follow", "say": "Grug follow."}\n```')
+        d = self._decide(
+            'Here you go:\n```json\n{"command": "follow", "say": "Grug follow."}\n```'
+        )
         self.assertEqual(d.command, "follow")
 
     def test_garbage_yields_no_command_and_a_fallback_say(self):
@@ -112,7 +146,9 @@ class GateTest(unittest.TestCase):
     """The select-and-parameterize contract from infra#2600."""
 
     def test_parameterized_known_command_is_allowed(self):
-        d = voice.parse_decision(json.dumps({"command": "co +grind,-loot", "say": "ok"}))
+        d = voice.parse_decision(
+            json.dumps({"command": "co +grind,-loot", "say": "ok"})
+        )
         self.assertEqual(d.command, "co +grind,-loot")
 
     def test_well_formed_but_unknown_command_is_rejected(self):
@@ -141,7 +177,9 @@ class ReasoningPreambleTest(unittest.TestCase):
         self.assertIn("boars", d.say)
 
     def test_truncated_mid_thought_still_degrades_honestly(self):
-        d = voice.parse_decision("We need to answer the request. The list includes grind which")
+        d = voice.parse_decision(
+            "We need to answer the request. The list includes grind which"
+        )
         self.assertIsNone(d.command)
         self.assertTrue(d.say)
 
@@ -163,7 +201,9 @@ class SellJunkTest(unittest.TestCase):
     """
 
     def test_sell_junk_is_refused(self):
-        d = voice.parse_decision(json.dumps({"command": "sell junk", "say": "On my way."}))
+        d = voice.parse_decision(
+            json.dumps({"command": "sell junk", "say": "On my way."})
+        )
         self.assertIsNone(d.command)
         self.assertEqual(d.say, "On my way.")
 
@@ -184,7 +224,9 @@ class SellJunkTest(unittest.TestCase):
         self.assertTrue(voice.is_raw_command("  DROP   QUEST  "))
 
     def test_explicitly_listed_starters_still_parameterize(self):
-        d = voice.parse_decision(json.dumps({"command": "co +grind,-loot", "say": "Aye."}))
+        d = voice.parse_decision(
+            json.dumps({"command": "co +grind,-loot", "say": "Aye."})
+        )
         self.assertEqual(d.command, "co +grind,-loot")
 
     def test_invented_second_word_on_a_multiword_verb_is_refused(self):
@@ -244,7 +286,8 @@ class StrategyEngineTest(unittest.TestCase):
         self.assertIn("grind", shared, "the entry this test was written for")
         for strategy in shared:
             self.assertEqual(
-                driven[strategy], spoken[strategy],
+                driven[strategy],
+                spoken[strategy],
                 f"goals.py drives '{strategy}' on {sorted(driven[strategy])} and "
                 f"the vocabulary offers it on {sorted(spoken[strategy])}",
             )
@@ -261,10 +304,20 @@ class StrategyEngineTest(unittest.TestCase):
         engines (`flee`) is deliberately absent, which is what keeps
         goals.FLEE_STRATEGY's `co +flee` correct.
         """
-        non_combat_only = frozenset({
-            "grind", "loot", "gather", "quest", "follow", "stay", "new rpg",
-            "mount", "food", "lfg",
-        })
+        non_combat_only = frozenset(
+            {
+                "grind",
+                "loot",
+                "gather",
+                "quest",
+                "follow",
+                "stay",
+                "new rpg",
+                "mount",
+                "food",
+                "lfg",
+            }
+        )
         for entry in voice.VOCABULARY:
             match = self._STRATEGY.match(entry)
             if not match:
@@ -272,7 +325,8 @@ class StrategyEngineTest(unittest.TestCase):
             engine, _, strategy = match.groups()
             if strategy.strip() in non_combat_only:
                 self.assertEqual(
-                    engine, "nc",
+                    engine,
+                    "nc",
                     f"'{entry}' aims a non-combat strategy at the combat engine; "
                     "it will deliver, report success and do nothing",
                 )

@@ -6,6 +6,7 @@ text the way test_digest and test_party_chat do. What is pinned is the seam
 decision about which bag goes where is bag_upgrade's, and the pass runs
 BEFORE reagents move because a give into full bags is what kept failing.
 """
+
 import pathlib
 import re
 import unittest
@@ -29,7 +30,6 @@ def _block(signature: str) -> str:
 
 
 class BagsMoveBeforeReagents(unittest.TestCase):
-
     def test_the_materials_pass_hands_bags_over_first(self):
         body = _block("    async def _move_materials_once(")
         self.assertIn("await self._hand_bags_once(names)", body)
@@ -42,7 +42,6 @@ class BagsMoveBeforeReagents(unittest.TestCase):
 
 
 class TheBridgeDecidesNothingAboutBags(unittest.TestCase):
-
     def test_the_plan_comes_from_the_pure_module(self):
         body = _block("    async def _hand_bags_once(")
         self.assertIn("bag_upgrade.plan_family_bags(", body)
@@ -65,25 +64,31 @@ class TheBridgeDecidesNothingAboutBags(unittest.TestCase):
 
 
 class TheRowsCarryWhatThePlannerReads(unittest.TestCase):
-
     def test_the_sql_names_every_column_members_from_rows_uses(self):
         src = _source()
-        sql = src[src.index("_BAG_STATE_SQL = ("):src.index("def _fetch_bag_state(")]
-        for column in ("AS holder", "AS guid", "AS name", "AS slots", "AS bag",
-                       "AS slot", "AS used"):
+        sql = src[src.index("_BAG_STATE_SQL = (") : src.index("def _fetch_bag_state(")]
+        for column in (
+            "AS holder",
+            "AS guid",
+            "AS name",
+            "AS slots",
+            "AS bag",
+            "AS slot",
+            "AS used",
+        ):
             self.assertIn(column, sql)
 
     def test_only_real_bags(self):
         """ITEM_CLASS_CONTAINER is 1. Quivers and ammo pouches also have
         ContainerSlots and would be handed to a warrior as loot room."""
         src = _source()
-        sql = src[src.index("_BAG_STATE_SQL = ("):src.index("def _fetch_bag_state(")]
+        sql = src[src.index("_BAG_STATE_SQL = (") : src.index("def _fetch_bag_state(")]
         self.assertIn("it.class = 1", sql)
         self.assertIn("it.ContainerSlots > 0", sql)
 
     def test_fill_counts_what_is_inside_each_bag(self):
         src = _source()
-        sql = src[src.index("_BAG_STATE_SQL = ("):src.index("def _fetch_bag_state(")]
+        sql = src[src.index("_BAG_STATE_SQL = (") : src.index("def _fetch_bag_state(")]
         self.assertIn("COUNT(*) AS n FROM character_inventory", sql)
         self.assertIn("fill.bag = ii.guid", sql)
 
@@ -97,7 +102,7 @@ class TheGiveRowIsTheGiveRowDoGiveReads(unittest.TestCase):
         body = _block("def _insert_bag_give(")
         self.assertIn("(target_name, command, kind, target_arg, source)", body)
         self.assertIn("'give'", body)
-        self.assertIn("(move.giver, command, move.receiver, \"bags\")", body)
+        self.assertIn('(move.giver, command, move.receiver, "bags")', body)
 
     def test_a_world_without_the_enum_warns_instead_of_raising(self):
         body = _block("def _insert_bag_give(")
@@ -111,7 +116,6 @@ class TheGiveRowIsTheGiveRowDoGiveReads(unittest.TestCase):
 
 
 class TheModuleShips(unittest.TestCase):
-
     def test_bag_upgrade_is_in_the_image(self):
         self.assertIn("bag_upgrade.py", DOCKERFILE.read_text(encoding="utf-8"))
 

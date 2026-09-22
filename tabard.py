@@ -229,8 +229,10 @@ def claim(who: Kin) -> Claim | None:
         "neighbour": "{me} not blood, but {me} wear it too:",
     }
     template = openings.get(bond.role, "{me} have thought on it:")
-    said = (template.format(me=canonical)
-            + f" {bond.race} {bond.char_class}. That what {canonical} is.")
+    said = (
+        template.format(me=canonical)
+        + f" {bond.race} {bond.char_class}. That what {canonical} is."
+    )
     return Claim(member=canonical, wants=wants, said=said)
 
 
@@ -266,8 +268,9 @@ def _weight(name: str, field: Field, claims: list) -> tuple:
     """
     wants = {c.member: c.wants[field.name] for c in claims}
     mine = wants[name]
-    agreeing = sum(1 for other, value in wants.items()
-                   if other != name and value == mine)
+    agreeing = sum(
+        1 for other, value in wants.items() if other != name and value == mine
+    )
     feeling = abs(mine - _median(list(wants.values())))
     bond = bonds.member(name)
     return (agreeing, feeling, bond.seniority if bond else 0)
@@ -292,8 +295,7 @@ def debate(kin: list) -> Debate:
     # it again. Saying so is the difference between a family with no opinion
     # and a module that fell over.
     if not claims:
-        return Debate(lines=[], design=None,
-                      reason="nobody to argue about it")
+        return Debate(lines=[], design=None, reason="nobody to argue about it")
     # Sorted by name so the ARGUMENT does not depend on the caller's list
     # order; seniority decides who WINS, further down, and the two are
     # deliberately different orders.
@@ -301,8 +303,7 @@ def debate(kin: list) -> Debate:
 
     fields, won_by = {}, {}
     for field in FIELDS:
-        best = max(claims, key=lambda c: (_weight(c.member, field, claims),
-                                          c.member))
+        best = max(claims, key=lambda c: (_weight(c.member, field, claims), c.member))
         fields[field.name] = best.wants[field.name]
         won_by[field.name] = best.member
 
@@ -312,11 +313,15 @@ def debate(kin: list) -> Debate:
         winner = won_by[field.name]
         backing, feeling, _ = _weight(winner, field, claims)
         if backing:
-            lines.append(f"{winner}: {backing + 1} of us want same for "
-                         f"{field.spoken}. That settled.")
+            lines.append(
+                f"{winner}: {backing + 1} of us want same for "
+                f"{field.spoken}. That settled."
+            )
         elif feeling:
-            lines.append(f"{winner}: Nobody care about {field.spoken} like "
-                         f"{winner} care. {winner} take it.")
+            lines.append(
+                f"{winner}: Nobody care about {field.spoken} like "
+                f"{winner} care. {winner} take it."
+            )
         else:
             lines.append(f"{winner}: Then {field.spoken} is mine.")
     # The numbers stay OUT of the closing line. They are palette indices and
@@ -328,6 +333,8 @@ def debate(kin: list) -> Debate:
 
     design = Design(fields=fields, won_by=won_by, applied_by=head)
     winners = len(set(won_by.values()))
-    reason = (f"{winners} of {len(claims)} got their way; "
-              f"{head} carries it to the tabard designer.")
+    reason = (
+        f"{winners} of {len(claims)} got their way; "
+        f"{head} carries it to the tabard designer."
+    )
     return Debate(lines=lines, design=design, reason=reason)

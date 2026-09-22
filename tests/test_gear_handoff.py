@@ -21,6 +21,7 @@ class-eligibility bitmask. What is pinned here is that the answer REACHES the
 world, that it cannot contradict the sell half, and that every refusal the sell
 half honours is honoured here too.
 """
+
 import pathlib
 import re
 import unittest
@@ -53,11 +54,25 @@ def _block(signature: str) -> str:
 def worn(name, class_id, level, **slots):
     """Equipped rows for one character, as _FAMILY_EQUIPPED_SQL returns them."""
     if not slots:
-        return [dict(name=name, class_id=class_id, level=level,
-                     inventory_type=None, item_level=None)]
-    return [dict(name=name, class_id=class_id, level=level,
-                 inventory_type=int(inv.lstrip("i")), item_level=int(ilvl))
-            for inv, ilvl in slots.items()]
+        return [
+            dict(
+                name=name,
+                class_id=class_id,
+                level=level,
+                inventory_type=None,
+                item_level=None,
+            )
+        ]
+    return [
+        dict(
+            name=name,
+            class_id=class_id,
+            level=level,
+            inventory_type=int(inv.lstrip("i")),
+            item_level=int(ilvl),
+        )
+        for inv, ilvl in slots.items()
+    ]
 
 
 def carried(**kw):
@@ -68,10 +83,23 @@ def carried(**kw):
     whole module exists for - group loot lands on whoever won the roll, never
     on whoever can use it.
     """
-    base = dict(holder="Ugga", level=27, item_guid=7002, entry=9002, count=1,
-                instance_flags=0, name="Mystic's Woolies", quality=2,
-                sell_price=402, required_level=14, bonding=2, item_class=4,
-                item_level=19, allowable_class=MAGE_ONLY, inventory_type=7)
+    base = dict(
+        holder="Ugga",
+        level=27,
+        item_guid=7002,
+        entry=9002,
+        count=1,
+        instance_flags=0,
+        name="Mystic's Woolies",
+        quality=2,
+        sell_price=402,
+        required_level=14,
+        bonding=2,
+        item_class=4,
+        item_level=19,
+        allowable_class=MAGE_ONLY,
+        inventory_type=7,
+    )
     base.update(kw)
     return base
 
@@ -86,8 +114,9 @@ def gifts(gear_rows, equipped_rows, keep_names=()):
     tests/test_gear_delivery.py pins whether it can land and by which verb.
     Neither position nor capacity is passed, which means "nobody asked" and
     keeps every case below about the decision it was written for."""
-    return bag_pressure.family_gifts(gear_rows, equipped_rows, THE_FIVE,
-                                     keep_names=keep_names).grants
+    return bag_pressure.family_gifts(
+        gear_rows, equipped_rows, THE_FIVE, keep_names=keep_names
+    ).grants
 
 
 class TheAnswerReachesSomebody(unittest.TestCase):
@@ -108,8 +137,10 @@ class TheAnswerReachesSomebody(unittest.TestCase):
         plan that shuffled would never match itself and would re-queue every
         cycle."""
         rows = [carried(), carried(item_guid=7003, entry=9003)]
-        self.assertEqual([g.command for g in gifts(rows, THE_HAND_OFF)],
-                         [g.command for g in gifts(rows, THE_HAND_OFF)])
+        self.assertEqual(
+            [g.command for g in gifts(rows, THE_HAND_OFF)],
+            [g.command for g in gifts(rows, THE_HAND_OFF)],
+        )
 
 
 class ItCannotDisagreeWithTheSellHalf(unittest.TestCase):
@@ -121,9 +152,15 @@ class ItCannotDisagreeWithTheSellHalf(unittest.TestCase):
 
     def _both(self, rows, equipped):
         fits = bag_pressure.family_fits(rows, equipped, THE_FIVE)
-        sold = {c.item_guid for c in bag_pressure.gear_candidates(
-            rows, disposition.Family(vendor_reachable=True),
-            available=disposition.EXECUTABLE_TODAY, fits=fits)}
+        sold = {
+            c.item_guid
+            for c in bag_pressure.gear_candidates(
+                rows,
+                disposition.Family(vendor_reachable=True),
+                available=disposition.EXECUTABLE_TODAY,
+                fits=fits,
+            )
+        }
         handed = {int(g.guid) for g in gifts(rows, equipped)}
         return fits, sold, handed
 
@@ -134,19 +171,24 @@ class ItCannotDisagreeWithTheSellHalf(unittest.TestCase):
         self.assertEqual(sold, set())
 
     def test_a_piece_nobody_wants_is_sold_and_never_handed_on(self):
-        nobody = carried(item_guid=7020, name="Ridge Cloak",
-                         allowable_class=ANY_CLASS, inventory_type=16,
-                         required_level=25, item_level=10)
-        equipped = (worn("Ugga", PRIEST, 27, i16=30)
-                    + worn("Og", MAGE, 28, i16=30))
+        nobody = carried(
+            item_guid=7020,
+            name="Ridge Cloak",
+            allowable_class=ANY_CLASS,
+            inventory_type=16,
+            required_level=25,
+            item_level=10,
+        )
+        equipped = worn("Ugga", PRIEST, 27, i16=30) + worn("Og", MAGE, 28, i16=30)
         fits, sold, handed = self._both([nobody], equipped)
         self.assertEqual(fits[7020], disposition.FIT_NOBODY)
         self.assertEqual(sold, {7020})
         self.assertEqual(handed, set())
 
     def test_the_holders_own_upgrade_is_neither(self):
-        mine = carried(holder="Og", item_guid=7021, allowable_class=MAGE_ONLY,
-                       item_level=19)
+        mine = carried(
+            holder="Og", item_guid=7021, allowable_class=MAGE_ONLY, item_level=19
+        )
         equipped = worn("Og", MAGE, 28, i7=12) + worn("Ugga", PRIEST, 27, i7=30)
         fits, sold, handed = self._both([mine], equipped)
         self.assertEqual(fits[7021], disposition.FIT_HOLDER)
@@ -156,8 +198,7 @@ class ItCannotDisagreeWithTheSellHalf(unittest.TestCase):
     def test_a_ring_nothing_can_judge_is_neither(self):
         """InventoryType 11 has no entry in the slot map, deliberately, and
         "no slot for it" must never read as "nobody wants it"."""
-        ring = carried(item_guid=7022, inventory_type=11,
-                       allowable_class=ANY_CLASS)
+        ring = carried(item_guid=7022, inventory_type=11, allowable_class=ANY_CLASS)
         fits, sold, handed = self._both([ring], THE_HAND_OFF)
         self.assertEqual(fits[7022], disposition.FIT_UNJUDGEABLE)
         self.assertEqual(sold, set())
@@ -177,8 +218,8 @@ class EveryRefusalTheSellHalfHonoursIsHonouredHere(unittest.TestCase):
         should not have to know which of three passes would have moved it."""
         self.assertEqual(len(gifts([carried()], THE_HAND_OFF)), 1)
         self.assertEqual(
-            gifts([carried()], THE_HAND_OFF,
-                  keep_names=("mystic's woolies",)), ())
+            gifts([carried()], THE_HAND_OFF, keep_names=("mystic's woolies",)), ()
+        )
 
     def test_no_equipped_rows_at_all_hands_nothing_over(self):
         """The same fail-closed answer the sell half gives: a world image
@@ -218,8 +259,9 @@ class TheRowIsTheRowTheExecutorReads(unittest.TestCase):
         """A family with nothing to sell can still be carrying somebody
         else's upgrade, so this must sit above the `no candidates` return."""
         body = _block("    async def _vendor_once(self")
-        self.assertLess(body.index("self._hand_gear("),
-                        body.index("no safe carried vendor goods"))
+        self.assertLess(
+            body.index("self._hand_gear("), body.index("no safe carried vendor goods")
+        )
 
     def test_the_row_carries_its_verb_and_its_receiver(self):
         """The kind is `grant.verb` and no longer a literal: which verb can
@@ -278,8 +320,7 @@ class TheSaleIsOnlyOfferedWhereItCanWork(unittest.TestCase):
         body = _block("    async def _vendor_once(self")
         self.assertIn("if not town.vendor:", body)
         # Comments may argue about `stocks`; no branch may read it.
-        code = [line for line in body.splitlines()
-                if not line.strip().startswith("#")]
+        code = [line for line in body.splitlines() if not line.strip().startswith("#")]
         self.assertNotIn("town.stocks", " ".join(code))
 
     def test_the_aim_is_written_before_the_gate_is_read(self):
@@ -295,8 +336,9 @@ class TheSaleIsOnlyOfferedWhereItCanWork(unittest.TestCase):
         have failed this test for a change that kept its invariant exactly.
         """
         body = _block("    async def _vendor_once(self")
-        self.assertLess(body.index("_write_trade_errand"),
-                        body.index("_fetch_town, holder"))
+        self.assertLess(
+            body.index("_write_trade_errand"), body.index("_fetch_town, holder")
+        )
 
     def test_an_aim_nobody_took_is_reported_rather_than_assumed(self):
         """The economy guard only retasks an IDLE traveller, so a vendor aim
@@ -314,8 +356,9 @@ class TheSaleIsOnlyOfferedWhereItCanWork(unittest.TestCase):
         for a vendor would be inventing a dependency the executor does not
         have."""
         body = _block("    async def _vendor_once(self")
-        self.assertLess(body.index("self._hand_gear("),
-                        body.index("_fetch_town, holder"))
+        self.assertLess(
+            body.index("self._hand_gear("), body.index("_fetch_town, holder")
+        )
 
 
 class TheHandOffIsNotGatedOnAVendorTripBeingWorthTaking(unittest.TestCase):
@@ -335,8 +378,9 @@ class TheHandOffIsNotGatedOnAVendorTripBeingWorthTaking(unittest.TestCase):
 
     def test_it_runs_above_the_town_run_gate(self):
         body = _block("    async def _vendor_once(self")
-        self.assertLess(body.index("self._hand_gear("),
-                        body.index("no vendor trip is worth taking"))
+        self.assertLess(
+            body.index("self._hand_gear("), body.index("no vendor trip is worth taking")
+        )
 
     def test_it_runs_above_the_mid_dungeon_return_too(self):
         """A give is a database move that does not care which map anybody is
@@ -344,8 +388,10 @@ class TheHandOffIsNotGatedOnAVendorTripBeingWorthTaking(unittest.TestCase):
         moving one item to the member with eleven free slots is worth most.
         `_hand_recipes` has always sat above this return."""
         body = _block("    async def _vendor_once(self")
-        self.assertLess(body.index("self._hand_gear("),
-                        body.index("bag pressure is urgent during a dungeon"))
+        self.assertLess(
+            body.index("self._hand_gear("),
+            body.index("bag pressure is urgent during a dungeon"),
+        )
 
     def test_it_is_still_called_exactly_once_a_cycle(self):
         """Hoisting a call and leaving the old one behind runs the pass
@@ -362,23 +408,28 @@ class TheHandOffIsNotGatedOnAVendorTripBeingWorthTaking(unittest.TestCase):
         # Comments may name either read while arguing about it; no statement
         # may run it twice. The same split test_the_gate_reads_the_vendor_and
         # _not_the_stock already makes between prose and branches.
-        code = "\n".join(line for line in body.splitlines()
-                         if not line.strip().startswith("#"))
+        code = "\n".join(
+            line for line in body.splitlines() if not line.strip().startswith("#")
+        )
         for read in ("_fetch_surplus_gear", "_fetch_family_equipped"):
             with self.subTest(read=read):
                 self.assertEqual(code.count(read), 1)
-                self.assertLess(code.index(read),
-                                code.index("no vendor trip is worth taking"))
+                self.assertLess(
+                    code.index(read), code.index("no vendor trip is worth taking")
+                )
 
     def test_the_vendor_half_still_reuses_those_two_reads(self):
         """`family_fits` and `gear_candidates` are the sell side of the same
         one opinion over the same one read of the world. A second read here
         is how a sale and a hand-off get proposed for the same item."""
         body = _block("    async def _vendor_once(self")
-        self.assertLess(body.index("self._hand_gear("),
-                        body.index("bag_pressure.family_fits("))
-        self.assertLess(body.index("bag_pressure.family_fits("),
-                        body.index("bag_pressure.gear_candidates("))
+        self.assertLess(
+            body.index("self._hand_gear("), body.index("bag_pressure.family_fits(")
+        )
+        self.assertLess(
+            body.index("bag_pressure.family_fits("),
+            body.index("bag_pressure.gear_candidates("),
+        )
 
 
 class TheSupplyPlannerStaysReadable(unittest.TestCase):
@@ -387,10 +438,16 @@ class TheSupplyPlannerStaysReadable(unittest.TestCase):
     three functions, which is also how they are argued about."""
 
     def test_each_route_is_its_own_function(self):
-        source = (pathlib.Path(__file__).resolve().parents[1]
-                  / "towntrip.py").read_text(encoding="utf-8")
-        for name in ("def _hand_on(", "def _conjure(", "def _conjure_target(",
-                     "def _buy(", "def _supply("):
+        source = (
+            pathlib.Path(__file__).resolve().parents[1] / "towntrip.py"
+        ).read_text(encoding="utf-8")
+        for name in (
+            "def _hand_on(",
+            "def _conjure(",
+            "def _conjure_target(",
+            "def _buy(",
+            "def _supply(",
+        ):
             with self.subTest(name=name):
                 self.assertIn(name, source)
 
@@ -402,9 +459,11 @@ class TheOneOpinionIsStillTheOnlyOpinion(unittest.TestCase):
         be a second place where a row becomes a Holding."""
         package = pathlib.Path(__file__).resolve().parents[1]
         importers = sorted(
-            path.name for path in package.glob("*.py")
-            if re.search(r"^import gear$", path.read_text(encoding="utf-8"),
-                         re.MULTILINE)
+            path.name
+            for path in package.glob("*.py")
+            if re.search(
+                r"^import gear$", path.read_text(encoding="utf-8"), re.MULTILINE
+            )
         )
         self.assertEqual(importers, ["bag_pressure.py"])
 
@@ -419,11 +478,12 @@ class TheOneOpinionIsStillTheOnlyOpinion(unittest.TestCase):
         the reader being wrong rather than the module, the same way
         test_ship_manifest's own COPY-block regex once was.
         """
-        source = (pathlib.Path(__file__).resolve().parents[1]
-                  / "bag_pressure.py").read_text(encoding="utf-8")
-        body = source[source.index("def %s(" % name):]
+        source = (
+            pathlib.Path(__file__).resolve().parents[1] / "bag_pressure.py"
+        ).read_text(encoding="utf-8")
+        body = source[source.index("def %s(" % name) :]
         nxt = re.search(r"^def ", body[1:], re.MULTILINE)
-        return body[:nxt.start() + 1] if nxt else body
+        return body[: nxt.start() + 1] if nxt else body
 
     def test_the_adapter_adds_no_judgement_of_its_own(self):
         """It filters on the owner's mark and then hands everything to

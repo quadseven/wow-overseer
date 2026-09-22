@@ -31,6 +31,7 @@ live next to each other.
 PURE MODULE, same seam as the rest: no MySQL, no core, no browser. Everything
 here is arithmetic over what the caller measured.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -44,6 +45,7 @@ class Bag:
     be refused: emptying a bag that is holding things requires somewhere to put
     them.
     """
+
     name: str
     slots: int
     used: int = 0
@@ -62,10 +64,11 @@ class BagMove:
     moves, and it is what a caller reports afterwards to say whether the plan
     did what it said.
     """
-    action: str            # "equip" into an empty position, or "swap"
-    bag: str               # the carried bag being put on
-    position: int          # which bag position it goes into
-    replaces: str | None   # the worn bag it displaces, on a swap
+
+    action: str  # "equip" into an empty position, or "swap"
+    bag: str  # the carried bag being put on
+    position: int  # which bag position it goes into
+    replaces: str | None  # the worn bag it displaces, on a swap
     slots_gained: int
     why: str
 
@@ -92,11 +95,17 @@ def fill_empty_positions(positions, worn, carried):
     empty = [p for p in range(positions) if p >= len(worn)]
     moves = []
     for position, bag in zip(empty, _biggest_first(carried)):
-        moves.append(BagMove(
-            action="equip", bag=bag.name, position=position, replaces=None,
-            slots_gained=bag.slots + 1,
-            why="position %d was empty while this bag was being carried, so it "
-                "cost a slot and gave none" % position))
+        moves.append(
+            BagMove(
+                action="equip",
+                bag=bag.name,
+                position=position,
+                replaces=None,
+                slots_gained=bag.slots + 1,
+                why="position %d was empty while this bag was being carried, so it "
+                "cost a slot and gave none" % position,
+            )
+        )
     return moves
 
 
@@ -135,14 +144,18 @@ def upgrade_swaps(worn, carried, free_slots, already_used=()):
             if not _swap_is_safe(worn_bag, candidate, free_slots):
                 continue
             spent.add(candidate.name)
-            moves.append(BagMove(
-                action="swap", bag=candidate.name, position=position,
-                replaces=worn_bag.name,
-                slots_gained=candidate.slots - worn_bag.slots,
-                why="%s holds %d slots where %s holds %d, and there is room to "
+            moves.append(
+                BagMove(
+                    action="swap",
+                    bag=candidate.name,
+                    position=position,
+                    replaces=worn_bag.name,
+                    slots_gained=candidate.slots - worn_bag.slots,
+                    why="%s holds %d slots where %s holds %d, and there is room to "
                     "land what comes out"
-                    % (candidate.name, candidate.slots, worn_bag.name,
-                       worn_bag.slots)))
+                    % (candidate.name, candidate.slots, worn_bag.name, worn_bag.slots),
+                )
+            )
             break
     return moves
 
@@ -214,6 +227,7 @@ def slots_gained(moves):
 @dataclass(frozen=True)
 class Member:
     """One character's bag situation, as the caller measured it."""
+
     name: str
     positions: int
     worn: tuple = ()
@@ -227,6 +241,7 @@ class Handover:
     `guid` is the item_instance guid, because that is what the give command
     names. A move without one cannot be executed, so it is not optional.
     """
+
     giver: str
     receiver: str
     bag: str
@@ -247,8 +262,10 @@ def _spares(members):
     # real recovery look like another receiver-full loop.  `used` comes from
     # the bridge's fill count and is deliberately part of this pure seam.
     held = [(m, b) for m in members for b in m.carried if b.used == 0]
-    return sorted(held, key=lambda pair: (-pair[1].slots, pair[0].name,
-                                          pair[1].name, pair[1].guid))
+    return sorted(
+        held,
+        key=lambda pair: (-pair[1].slots, pair[0].name, pair[1].name, pair[1].guid),
+    )
 
 
 def plan_family_bags(members):
@@ -265,19 +282,30 @@ def plan_family_bags(members):
     for member in sorted(members, key=lambda m: m.name):
         empty = member.positions - len(member.worn)
         for _ in range(max(0, empty)):
-            choice = next(((holder, bag) for holder, bag in spares
-                           if bag.guid not in taken and holder.name != member.name),
-                          None)
+            choice = next(
+                (
+                    (holder, bag)
+                    for holder, bag in spares
+                    if bag.guid not in taken and holder.name != member.name
+                ),
+                None,
+            )
             if choice is None:
                 break
             holder, bag = choice
             taken.add(bag.guid)
-            moves.append(Handover(
-                giver=holder.name, receiver=member.name, bag=bag.name,
-                guid=bag.guid, slots_gained=bag.slots + 1,
-                why="%s has an empty bag position and %s is carrying %s as "
+            moves.append(
+                Handover(
+                    giver=holder.name,
+                    receiver=member.name,
+                    bag=bag.name,
+                    guid=bag.guid,
+                    slots_gained=bag.slots + 1,
+                    why="%s has an empty bag position and %s is carrying %s as "
                     "cargo, where it costs a slot and gives none"
-                    % (member.name, holder.name, bag.name)))
+                    % (member.name, holder.name, bag.name),
+                )
+            )
     return moves
 
 
@@ -338,15 +366,25 @@ def members_from_rows(rows, names, positions=len(BAG_POSITIONS)):
         holder = row["holder"]
         if holder not in by_name:
             continue
-        bag = Bag(row["name"], int(row["slots"]), used=int(row.get("used", 0)),
-                  guid=int(row["guid"]))
+        bag = Bag(
+            row["name"],
+            int(row["slots"]),
+            used=int(row.get("used", 0)),
+            guid=int(row["guid"]),
+        )
         container, slot = int(row["bag"]), int(row["slot"])
         if container == 0 and slot in BAG_POSITIONS:
             by_name[holder]["worn"].append(bag)
-        elif ((container == 0 and slot in BACKPACK_POSITIONS)
-              or container in worn_guids.get(holder, ())):
+        elif (
+            container == 0 and slot in BACKPACK_POSITIONS
+        ) or container in worn_guids.get(holder, ()):
             by_name[holder]["carried"].append(bag)
-    return [Member(name, positions,
-                   worn=tuple(sorted(by_name[name]["worn"], key=lambda b: b.guid)),
-                   carried=tuple(sorted(by_name[name]["carried"], key=lambda b: b.guid)))
-            for name in sorted(by_name)]
+    return [
+        Member(
+            name,
+            positions,
+            worn=tuple(sorted(by_name[name]["worn"], key=lambda b: b.guid)),
+            carried=tuple(sorted(by_name[name]["carried"], key=lambda b: b.guid)),
+        )
+        for name in sorted(by_name)
+    ]

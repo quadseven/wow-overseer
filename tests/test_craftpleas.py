@@ -4,6 +4,7 @@ Same bar kin.py's plea parsing sets for itself: the near-misses are worth as
 much as the hits, because a false positive here is a fabricated voice line in
 party chat and not a dropped feature.
 """
+
 import unittest
 
 import chat
@@ -42,9 +43,15 @@ class ParseAskTest(unittest.TestCase):
         who makes what is the thing under test, and it has not changed.
         """
         cases = {
-            "bag": "Og", "robe": "Og", "cloth": "Og",
-            "potion": "Ugga", "elixir": "Ugga", "flask": "Ugga",
-            "armor": "Grug", "plate": "Grug", "sword": "Grug",
+            "bag": "Og",
+            "robe": "Og",
+            "cloth": "Og",
+            "potion": "Ugga",
+            "elixir": "Ugga",
+            "flask": "Ugga",
+            "armor": "Grug",
+            "plate": "Grug",
+            "sword": "Grug",
             "leathers": "Bork",
             "enchant": "Og",
         }
@@ -111,7 +118,9 @@ class SelfAddressTest(unittest.TestCase):
     crafter was Og.
     """
 
-    ANSWER = "Og need cloth? Og know tailoring. Og make it, family just bring the stuff."
+    ANSWER = (
+        "Og need cloth? Og know tailoring. Og make it, family just bring the stuff."
+    )
 
     def test_the_crafters_own_answer_is_not_a_new_ask(self):
         self.assertIsNone(craftpleas.parse_ask("Og", self.ANSWER))
@@ -141,15 +150,19 @@ class HandoverIsNotARequestTest(unittest.TestCase):
     """materials.py's own line carries both trigger words (infra#3197)."""
 
     def test_a_character_narrating_its_own_handover_asks_nothing(self):
-        self.assertIsNone(craftpleas.parse_ask(
-            "Grog", "Grog give Og 20 Linen Cloth. Og need it for tailoring."
-        ))
+        self.assertIsNone(
+            craftpleas.parse_ask(
+                "Grog", "Grog give Og 20 Linen Cloth. Og need it for tailoring."
+            )
+        )
 
     def test_the_other_stack_of_the_same_handover_asks_nothing_either(self):
         """The two lines that read as a loop: 20 and then 19."""
-        self.assertIsNone(craftpleas.parse_ask(
-            "Grug", "Grug give Og 19 Linen Cloth. Og need it for tailoring."
-        ))
+        self.assertIsNone(
+            craftpleas.parse_ask(
+                "Grug", "Grug give Og 19 Linen Cloth. Og need it for tailoring."
+            )
+        )
 
     def test_asking_somebody_else_to_give_you_something_is_still_an_ask(self):
         """Anchored on the SPEAKER's own name, so only a character narrating
@@ -167,7 +180,7 @@ class AskKeyTest(unittest.TestCase):
         self.assertEqual(craftpleas.ask_key(ask), ("og", "tailoring", "grug"))
 
     def test_two_products_of_one_trade_are_one_conversation(self):
-        """"bag" and "robe" are the same thing to say to the same person."""
+        """ "bag" and "robe" are the same thing to say to the same person."""
         bag = craftpleas.parse_ask("Grug", "Grug need a bag")
         robe = craftpleas.parse_ask("Grug", "Grug need a robe")
         self.assertEqual(craftpleas.ask_key(bag), craftpleas.ask_key(robe))
@@ -207,8 +220,12 @@ class SkillStateTest(unittest.TestCase):
         ask = craftpleas.parse_ask("Grug", "Grug need a bag")
         self.assertEqual(ask.crafter, "Og")
         self.assertEqual(
-            chat.skill_state("Og", "cooking", held={"Og": {"herbalism": 1}},
-                             planned={"Og": ("tailoring",)}),
+            chat.skill_state(
+                "Og",
+                "cooking",
+                held={"Og": {"herbalism": 1}},
+                planned={"Og": ("tailoring",)},
+            ),
             chat.UNSKILLED,
         )
         self.assertEqual(craftpleas.state(ask, {"Og": {}}), chat.LEARNING)
@@ -234,15 +251,14 @@ class AnswerTest(unittest.TestCase):
         said = craftpleas.answer(ask, held={"Og": {"herbalism": 30}})
         self.assertNotIn("Og know tailoring", said)
         self.assertIn("learning", said)
-        self.assertTrue(
-            chat.honest_claim(said, skill="tailoring", state=chat.LEARNING)
-        )
+        self.assertTrue(chat.honest_claim(said, skill="tailoring", state=chat.LEARNING))
 
     def test_a_trade_nobody_is_getting_says_nothing_at_all(self):
         """Silence is a real answer. A sentence a viewer cannot tell is false
         is worse than a question that goes unanswered."""
-        ask = craftpleas.Ask(asker="Grug", product="bag", skill="cooking",
-                             crafter="Bork")
+        ask = craftpleas.Ask(
+            asker="Grug", product="bag", skill="cooking", crafter="Bork"
+        )
         self.assertEqual(craftpleas.answer(ask, held={"Bork": {}}), "")
 
     def test_every_answer_it_does_give_passes_its_own_honesty_gate(self):
@@ -254,9 +270,7 @@ class AnswerTest(unittest.TestCase):
             with self.subTest(state=state):
                 said = craftpleas.answer(ask, held=held)
                 self.assertTrue(said)
-                self.assertTrue(
-                    chat.honest_claim(said, skill=ask.skill, state=state)
-                )
+                self.assertTrue(chat.honest_claim(said, skill=ask.skill, state=state))
 
     def test_the_answer_never_addresses_the_crafter_as_the_asker(self):
         """parse_ask refuses the self case, so no answer can ever be built

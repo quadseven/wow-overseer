@@ -18,6 +18,7 @@ new endpoint is added to the page with a root-anchored URL.
 
 Ticket: infra#3239.
 """
+
 import pathlib
 import re
 import sys
@@ -121,7 +122,7 @@ class PageTest(unittest.TestCase):
         # anybody remembering this file exists.
         routes = set(map_server.Handler.GET_ROUTES)
         routes |= set(map_server.Handler.POST_ROUTES)
-        routes.discard("/")            # the root is not a literal the page writes
+        routes.discard("/")  # the root is not a literal the page writes
         routes.discard("/index.html")  # nor is the page's own name
         routes.add(map_server.MODEL_PREFIX)
         routes.update(EXTRA_SAME_ORIGIN)
@@ -133,7 +134,7 @@ class PageTest(unittest.TestCase):
                     checked += 1
                     start = max(0, match.start() - 2)
                     self.assertEqual(
-                        line[start:match.start() + 1],
+                        line[start : match.start() + 1],
                         'u("',
                         f"index.html writes {route!r} outside u() at code line "
                         f"{number}. A root-anchored URL on a page served under "

@@ -54,6 +54,7 @@ PURE MODULE, same seam as trainjob.py, travel.py and professions.py: rows in,
 a decision and some statements out. No MySQL, no Discord, no LLM. bridge.py
 reads the rows, runs the statements and logs the sentence.
 """
+
 from __future__ import annotations
 
 from collections.abc import Sequence
@@ -113,6 +114,7 @@ SECONDARY_IDS = tuple(sorted(trainjob.SECONDARY.values()))
 SETTLED = "the trade it named has already settled"
 UNASSIGNED = "the roster does not ask for it"
 SECONDARY = "no trainer in this world can sell a secondary rank"
+
 
 @dataclass(frozen=True)
 class Row:
@@ -238,6 +240,7 @@ def derived(row) -> bool:
     skill = int(getattr(row, "learn_skill", 0) or 0)
     return bool(skill) and skill not in tuple(getattr(row, "traded", ()) or ())
 
+
 def traveller(rows: Sequence) -> str:
     """Who must lead the family because a DERIVED learn errand is outstanding.
 
@@ -268,11 +271,20 @@ def traveller(rows: Sequence) -> str:
 def plan(rows: Sequence) -> Plan:
     """The clears, and the one aim, for this family this cycle."""
     rows = list(rows or ())
-    clear = tuple(sorted(
-        (Stale(character=str(r.character), skill=int(r.learn_skill or 0),
-               why=finished(r)) for r in rows if finished(r)),
-        key=lambda s: s.character,
-    ))
+    clear = tuple(
+        sorted(
+            (
+                Stale(
+                    character=str(r.character),
+                    skill=int(r.learn_skill or 0),
+                    why=finished(r),
+                )
+                for r in rows
+                if finished(r)
+            ),
+            key=lambda s: s.character,
+        )
+    )
 
     # UNWALKED IS AN EMPTY COLUMN AND NOTHING ELSE. A character already aimed
     # somewhere - at a trainer by `_write_trade_errand`, at a vendor by the
@@ -280,8 +292,7 @@ def plan(rows: Sequence) -> Plan:
     # writing over it is the second-writer collision this codebase has paid
     # for on this exact column.
     unwalked = sorted(
-        (r for r in rows
-         if outstanding(r) and not str(r.travel_npc or "").strip()),
+        (r for r in rows if outstanding(r) and not str(r.travel_npc or "").strip()),
         key=lambda r: r.character,
     )
     if not unwalked:
@@ -295,8 +306,7 @@ def plan(rows: Sequence) -> Plan:
         # aimed a follower anyway would write a column the C++ answers with
         # RefuseInFormation, which is the "written and unread" failure this
         # whole issue is about, self-inflicted.
-        return Plan(clear=clear,
-                    waiting=tuple(r.character for r in unwalked))
+        return Plan(clear=clear, waiting=tuple(r.character for r in unwalked))
 
     chosen = leading[0]
     return Plan(
@@ -327,17 +337,21 @@ def statements(learn_plan) -> list:
     in the cycle asks the worldserver to move it.
     """
     out = [
-        ("UPDATE overseer_roster SET learn_skill = 0 "
-         "WHERE name = %s AND learn_skill = %s",
-         (row.character, int(row.skill)))
+        (
+            "UPDATE overseer_roster SET learn_skill = 0 "
+            "WHERE name = %s AND learn_skill = %s",
+            (row.character, int(row.skill)),
+        )
         for row in getattr(learn_plan, "clear", ()) or ()
     ]
     if getattr(learn_plan, "aim", ""):
-        out.append((
-            "UPDATE overseer_roster SET travel_npc = %s "
-            "WHERE name = %s AND learn_skill = %s AND travel_npc = ''",
-            (TRAINER_ROLE, learn_plan.aim, int(learn_plan.skill)),
-        ))
+        out.append(
+            (
+                "UPDATE overseer_roster SET travel_npc = %s "
+                "WHERE name = %s AND learn_skill = %s AND travel_npc = ''",
+                (TRAINER_ROLE, learn_plan.aim, int(learn_plan.skill)),
+            )
+        )
     return out
 
 

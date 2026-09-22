@@ -80,6 +80,7 @@ WHAT THIS MODULE DELIBERATELY DOES NOT DO:
   It does not price anything. What a Black Lotus costs on this realm's auction
   house is a real question and wealth.py is where it would be asked.
 """
+
 from __future__ import annotations
 
 import bank
@@ -113,7 +114,8 @@ OUT_OF_TIER = (
     "Onyxia's Lair and Naxxramas are in this client but are its level 80 "
     "rebuilds, so neither is part of the level 60 tier and neither is listed "
     "above. The realm's own worldserver override config proves that against "
-    "creature_template rather than from memory.")
+    "creature_template rather than from memory."
+)
 
 # --- the statuses a goal can be in -----------------------------------------
 #
@@ -165,8 +167,7 @@ class Recipe:
 
     __slots__ = ("spell", "product", "trade", "reagents")
 
-    def __init__(self, spell: int, product: str, trade: str,
-                 reagents: tuple = ()):
+    def __init__(self, spell: int, product: str, trade: str, reagents: tuple = ()):
         self.spell = spell
         self.product = product
         self.trade = trade
@@ -244,24 +245,61 @@ MAJOR_MANA_POTION = "Major Mana Potion"
 FIELD_REPAIR_BOT = "Field Repair Bot 74A"
 
 RECIPES = (
-    Recipe(17637, FLASK_OF_SUPREME_POWER, ALCHEMY, (
-        Reagent(DREAMFOIL, 7), Reagent(MOUNTAIN_SILVERSAGE, 3),
-        Reagent(BLACK_LOTUS), Reagent(CRYSTAL_VIAL))),
-    Recipe(17636, FLASK_OF_DISTILLED_WISDOM, ALCHEMY, (
-        Reagent(DREAMFOIL, 7), Reagent(ICECAP, 3),
-        Reagent(BLACK_LOTUS), Reagent(CRYSTAL_VIAL))),
-    Recipe(17635, FLASK_OF_THE_TITANS, ALCHEMY, (
-        Reagent(GROMSBLOOD, 7), Reagent(STONESCALE_OIL, 3),
-        Reagent(BLACK_LOTUS), Reagent(CRYSTAL_VIAL))),
-    Recipe(17574, GREATER_FIRE_PROTECTION, ALCHEMY, (
-        Reagent(ELEMENTAL_FIRE), Reagent(DREAMFOIL),
-        Reagent(CRYSTAL_VIAL))),
-    Recipe(17556, MAJOR_HEALING_POTION, ALCHEMY, (
-        Reagent(GOLDEN_SANSAM, 2), Reagent(MOUNTAIN_SILVERSAGE),
-        Reagent(CRYSTAL_VIAL))),
-    Recipe(17580, MAJOR_MANA_POTION, ALCHEMY, (
-        Reagent(DREAMFOIL, 3), Reagent(ICECAP, 2),
-        Reagent(CRYSTAL_VIAL))),
+    Recipe(
+        17637,
+        FLASK_OF_SUPREME_POWER,
+        ALCHEMY,
+        (
+            Reagent(DREAMFOIL, 7),
+            Reagent(MOUNTAIN_SILVERSAGE, 3),
+            Reagent(BLACK_LOTUS),
+            Reagent(CRYSTAL_VIAL),
+        ),
+    ),
+    Recipe(
+        17636,
+        FLASK_OF_DISTILLED_WISDOM,
+        ALCHEMY,
+        (
+            Reagent(DREAMFOIL, 7),
+            Reagent(ICECAP, 3),
+            Reagent(BLACK_LOTUS),
+            Reagent(CRYSTAL_VIAL),
+        ),
+    ),
+    Recipe(
+        17635,
+        FLASK_OF_THE_TITANS,
+        ALCHEMY,
+        (
+            Reagent(GROMSBLOOD, 7),
+            Reagent(STONESCALE_OIL, 3),
+            Reagent(BLACK_LOTUS),
+            Reagent(CRYSTAL_VIAL),
+        ),
+    ),
+    Recipe(
+        17574,
+        GREATER_FIRE_PROTECTION,
+        ALCHEMY,
+        (Reagent(ELEMENTAL_FIRE), Reagent(DREAMFOIL), Reagent(CRYSTAL_VIAL)),
+    ),
+    Recipe(
+        17556,
+        MAJOR_HEALING_POTION,
+        ALCHEMY,
+        (
+            Reagent(GOLDEN_SANSAM, 2),
+            Reagent(MOUNTAIN_SILVERSAGE),
+            Reagent(CRYSTAL_VIAL),
+        ),
+    ),
+    Recipe(
+        17580,
+        MAJOR_MANA_POTION,
+        ALCHEMY,
+        (Reagent(DREAMFOIL, 3), Reagent(ICECAP, 2), Reagent(CRYSTAL_VIAL)),
+    ),
     # THE ONE REAGENT HERE THAT IS ITSELF A CRAFT. Every other reagent above
     # is picked, fished, bought or killed for; this one is an alchemy cast in
     # its own right, and a plan that stopped at "you need three Stonescale
@@ -272,12 +310,23 @@ RECIPES = (
     # because "what would it take" is a real question even when the answer is
     # "a profession nobody took", and a goal that vanished from the page
     # because it was impossible would read as a goal already met.
-    Recipe(22704, FIELD_REPAIR_BOT, ENGINEERING, (
-        Reagent("Thorium Bar", 16), Reagent("Fused Wiring", 2),
-        Reagent("Delicate Copper Wire"), Reagent("Copper Bar"),
-        Reagent("Essence of Fire"), Reagent("Essence of Air"),
-        Reagent("Essence of Water"), Reagent("Essence of Earth"),
-        Reagent("Living Essence"), Reagent("Essence of Undeath"))),
+    Recipe(
+        22704,
+        FIELD_REPAIR_BOT,
+        ENGINEERING,
+        (
+            Reagent("Thorium Bar", 16),
+            Reagent("Fused Wiring", 2),
+            Reagent("Delicate Copper Wire"),
+            Reagent("Copper Bar"),
+            Reagent("Essence of Fire"),
+            Reagent("Essence of Air"),
+            Reagent("Essence of Water"),
+            Reagent("Essence of Earth"),
+            Reagent("Living Essence"),
+            Reagent("Essence of Undeath"),
+        ),
+    ),
 )
 
 RECIPE_BY_PRODUCT = {recipe.product: recipe for recipe in RECIPES}
@@ -338,7 +387,7 @@ def craft_spells() -> tuple:
 
 
 def _a(word: str) -> str:
-    """"a flask" or "an engineering craft".
+    """ "a flask" or "an engineering craft".
 
     A HELPER FOR ONE LETTER, and it is here because the trade names are DATA
     rather than literals: the sentences below are assembled from
@@ -364,7 +413,7 @@ def casts_for(short: int) -> int:
 
 
 def _count(count: int, one: str, many: str) -> str:
-    """"1 flask" or "7 flasks", counted rather than suffixed.
+    """ "1 flask" or "7 flasks", counted rather than suffixed.
 
     A HELPER FOR THE REASON dungeonplan._dungeon_count IS ONE. Every number on
     this page comes from a list the world handed over, so every one of them
@@ -387,12 +436,14 @@ def _members(char_rows: list, roster: list) -> list:
     out = []
     for name in roster:
         row = by_name.get(name) or {}
-        out.append({
-            "name": name,
-            "level": int(row["level"]) if row.get("level") is not None else None,
-            "class": row.get("class"),
-            "known": bool(row),
-        })
+        out.append(
+            {
+                "name": name,
+                "level": int(row["level"]) if row.get("level") is not None else None,
+                "class": row.get("class"),
+                "known": bool(row),
+            }
+        )
     return out
 
 
@@ -411,20 +462,21 @@ def roster_from_guild(guild_rows: list, family: list) -> dict:
     because no guild exists to count.
     """
     names = sorted({row["name"] for row in guild_rows if row.get("name")})
-    guilds = sorted({row["guild_name"] for row in guild_rows
-                     if row.get("guild_name")})
+    guilds = sorted({row["guild_name"] for row in guild_rows if row.get("guild_name")})
     if names and len(guilds) == 1:
-        return {"names": names, "guild": guilds[0], "from_guild": True,
-                "split": False}
+        return {"names": names, "guild": guilds[0], "from_guild": True, "split": False}
     if names and len(guilds) > 1:
         # THE FAMILY IN TWO GUILDS IS NOT A GUILD ROSTER. Counting the union
         # would invent a raid group nobody is in, and picking one would be
         # this page choosing which guild is the real one. It counts the family
         # and says what it saw.
-        return {"names": sorted(family), "guild": "", "from_guild": False,
-                "split": True}
-    return {"names": sorted(family), "guild": "", "from_guild": False,
-            "split": False}
+        return {
+            "names": sorted(family),
+            "guild": "",
+            "from_guild": False,
+            "split": True,
+        }
+    return {"names": sorted(family), "guild": "", "from_guild": False, "split": False}
 
 
 def _roster_line(roster: dict, members: list) -> str:
@@ -436,16 +488,22 @@ def _roster_line(roster: dict, members: list) -> str:
     """
     who = _count(len(members), "member", "members")
     if not members:
-        return ("nothing here knows who would be raiding, so there is nobody "
-                "to count consumables for")
+        return (
+            "nothing here knows who would be raiding, so there is nobody "
+            "to count consumables for"
+        )
     if roster.get("from_guild"):
         return "counting %s of %s" % (who, roster["guild"])
     if roster.get("split"):
-        return ("the family are in more than one guild, so this counts the "
-                "family itself: %s. A guild roster would replace it." % who)
-    return ("there is no guild yet, so this counts the family itself: %s. "
-            "Every total below is per member, so a guild replaces this number "
-            "without anything here being rewritten." % who)
+        return (
+            "the family are in more than one guild, so this counts the "
+            "family itself: %s. A guild roster would replace it." % who
+        )
+    return (
+        "there is no guild yet, so this counts the family itself: %s. "
+        "Every total below is per member, so a guild replaces this number "
+        "without anything here being rewritten." % who
+    )
 
 
 def _items(item_rows: list) -> dict:
@@ -588,8 +646,7 @@ def _sources(vendor_rows: list, creature_rows: list, object_rows: list) -> dict:
 def _source_line(where: list) -> str:
     """How a reagent is come by, in this realm's own terms."""
     if not where:
-        return ("nothing this page reads sells it, drops it or grows it on "
-                "this realm")
+        return "nothing this page reads sells it, drops it or grows it on this realm"
     said = []
     if NODE in where:
         said.append("gathered from a node")
@@ -638,28 +695,30 @@ def _resistance_line(values: dict, members: list) -> str:
         return "there is nobody to measure"
     wearing = [m["name"] for m in members if values.get(m["name"], 0) > 0]
     if not wearing:
-        return ("not one of the %d is wearing anything with fire resistance "
-                "on it" % len(members))
+        return "not one of the %d is wearing anything with fire resistance on it" % len(
+            members
+        )
     if len(wearing) == len(members):
         best = max(values.get(m["name"], 0) for m in members)
-        return ("all %d are wearing some, the highest %d"
-                % (len(members), best))
-    return ("%d of the %d %s wearing some: %s"
-            % (len(wearing), len(members),
-               "is" if len(wearing) == 1 else "are",
-               ", ".join(sorted(wearing))))
+        return "all %d are wearing some, the highest %d" % (len(members), best)
+    return "%d of the %d %s wearing some: %s" % (
+        len(wearing),
+        len(members),
+        "is" if len(wearing) == 1 else "are",
+        ", ".join(sorted(wearing)),
+    )
 
 
 def _resistance_convention() -> str:
     """What the number beside the measurement is, and what it is not."""
-    return ("Molten Core admits a party at any resistance and this realm's "
-            "tables state no requirement, because there is not one. What "
-            "guilds asked for was %d to %d unbuffed on whoever tanks the last "
-            "boss and nothing at all on everybody else. Who tanks is not "
-            "decided on this page, so nobody above is called short."
-            % (TANK_FIRE_RESISTANCE_LOW, TANK_FIRE_RESISTANCE_HIGH))
-
-
+    return (
+        "Molten Core admits a party at any resistance and this realm's "
+        "tables state no requirement, because there is not one. What "
+        "guilds asked for was %d to %d unbuffed on whoever tanks the last "
+        "boss and nothing at all on everybody else. Who tanks is not "
+        "decided on this page, so nobody above is called short."
+        % (TANK_FIRE_RESISTANCE_LOW, TANK_FIRE_RESISTANCE_HIGH)
+    )
 
 
 def _holders(trade: str, members: list, skills: dict) -> list:
@@ -671,13 +730,19 @@ def _holders(trade: str, members: list, skills: dict) -> list:
     herbalism. The roster's assignment is a plan; this is what is true.
     """
     skill = professions.skill_id(trade)
-    return sorted(m["name"] for m in members
-                  if skills.get(m["name"], {}).get(skill))
+    return sorted(m["name"] for m in members if skills.get(m["name"], {}).get(skill))
 
 
-def _recipe_blockers(recipe: Recipe, members: list, skills: dict, known: dict,
-                     ranks: dict, items: dict, sources: dict,
-                     skills_read: bool = True) -> tuple:
+def _recipe_blockers(
+    recipe: Recipe,
+    members: list,
+    skills: dict,
+    known: dict,
+    ranks: dict,
+    items: dict,
+    sources: dict,
+    skills_read: bool = True,
+) -> tuple:
     """Everything standing between this roster and one more of this item.
 
     THE MOST USEFUL OUTPUT ON THE PAGE, because a blocked reason turns into an
@@ -716,23 +781,34 @@ def _recipe_blockers(recipe: Recipe, members: list, skills: dict, known: dict,
     blocked = []
     unknown = []
     if not skills_read:
-        return BLOCKED, (
-            "this realm's character_skills read came back empty, so who holds "
-            "%s cannot be answered here and nothing below about skill is "
-            "reliable" % recipe.trade,), ()
+        return (
+            BLOCKED,
+            (
+                "this realm's character_skills read came back empty, so who holds "
+                "%s cannot be answered here and nothing below about skill is "
+                "reliable" % recipe.trade,
+            ),
+            (),
+        )
     holders = _holders(recipe.trade, members, skills)
     if not holders:
-        return UNREACHABLE, (
-            "nobody on this roster has %s, and %s is %s craft: no amount of "
-            "gathering finishes this one, somebody has to take the trade"
-            % (recipe.trade, recipe.product, _a(recipe.trade)),), ()
+        return (
+            UNREACHABLE,
+            (
+                "nobody on this roster has %s, and %s is %s craft: no amount of "
+                "gathering finishes this one, somebody has to take the trade"
+                % (recipe.trade, recipe.product, _a(recipe.trade)),
+            ),
+            (),
+        )
 
     learned = [name for name in holders if recipe.spell in known.get(name, ())]
     if not learned:
         blocked.append(
             "nobody has learned this recipe yet: %s is held by %s, and the "
             "craft itself is on nobody's spell list"
-            % (recipe.trade, ", ".join(holders)))
+            % (recipe.trade, ", ".join(holders))
+        )
 
     rank = ranks.get(recipe.spell)
     skill = professions.skill_id(recipe.trade)
@@ -740,25 +816,29 @@ def _recipe_blockers(recipe: Recipe, members: list, skills: dict, known: dict,
         unknown.append(
             "this realm states no %s rank for this recipe, in item_template "
             "or in trainer_spell, so whether anybody is high enough is not a "
-            "question this page can answer" % recipe.trade)
+            "question this page can answer" % recipe.trade
+        )
     else:
         best = max(skills.get(name, {}).get(skill, 0) for name in holders)
         if best < rank:
             blocked.append(
                 "the recipe needs %s %d and the best on this roster is %d"
-                % (recipe.trade, rank, best))
+                % (recipe.trade, rank, best)
+            )
 
     for reagent in recipe.reagents:
         row = items.get(reagent.name)
         if row is None:
             blocked.append(
                 "this realm carries no item called %s, so that reagent is "
-                "missing from the count below rather than zero" % reagent.name)
+                "missing from the count below rather than zero" % reagent.name
+            )
             continue
         if row["twin"]:
             blocked.append(
                 "this realm carries more than one item called %s, so a "
-                "holding of it cannot be matched to one entry" % reagent.name)
+                "holding of it cannot be matched to one entry" % reagent.name
+            )
         if not sources.get(row["entry"]) and reagent.name not in RECIPE_BY_PRODUCT:
             # A REAGENT THAT IS ITSELF A CRAFT IS NOT SOURCELESS, and the
             # first version said it was: Stonescale Oil is in no vendor, loot
@@ -768,14 +848,15 @@ def _recipe_blockers(recipe: Recipe, members: list, skills: dict, known: dict,
             # found. Its own recipe is printed on the reagent row instead.
             unknown.append(
                 "nothing this page reads sells, drops or grows %s on this "
-                "realm, so where it comes from is unanswered here"
-                % reagent.name)
+                "realm, so where it comes from is unanswered here" % reagent.name
+            )
 
     return (BLOCKED if blocked else MET), tuple(blocked), tuple(unknown)
 
 
-def _reagent_row(reagent: Reagent, casts: int, items: dict, sources: dict,
-                 totals: dict, depth: int) -> dict:
+def _reagent_row(
+    reagent: Reagent, casts: int, items: dict, sources: dict, totals: dict, depth: int
+) -> dict:
     """One reagent line, counted against what the roster already holds.
 
     ONE CRAFT DEEP AND THE ROW SAYS SO WHEN IT STOPS. A reagent that is itself
@@ -806,9 +887,10 @@ def _reagent_row(reagent: Reagent, casts: int, items: dict, sources: dict,
     }
     if made_by is not None and depth > 0:
         out["made_line"] = _made_line(reagent.name, short, made_by.trade)
-        out["made"] = [_reagent_row(sub, short, items, sources, totals,
-                                    depth - 1)
-                       for sub in made_by.reagents]
+        out["made"] = [
+            _reagent_row(sub, short, items, sources, totals, depth - 1)
+            for sub in made_by.reagents
+        ]
     return out
 
 
@@ -838,29 +920,42 @@ def _made_line(name: str, short: int, trade: str) -> str:
     careful.
     """
     if short == 1:
-        return ("%s is made rather than found: the one that is short is "
-                "itself %s craft, and this is what it takes"
-                % (name, _a(trade)))
-    return ("%s is made rather than found: the %d that are short are each %s "
-            "craft, and this is what they take" % (name, short, _a(trade)))
+        return (
+            "%s is made rather than found: the one that is short is "
+            "itself %s craft, and this is what it takes" % (name, _a(trade))
+        )
+    return (
+        "%s is made rather than found: the %d that are short are each %s "
+        "craft, and this is what they take" % (name, short, _a(trade))
+    )
 
 
 def _reagent_line(name: str, wanted: int, have: int, known_here: bool) -> str:
     """One reagent, counted against what is already in the bags and the bank."""
     if not known_here:
-        return ("%s: this realm carries no item under that name, so nothing "
-                "here can count it" % name)
+        return (
+            "%s: this realm carries no item under that name, so nothing "
+            "here can count it" % name
+        )
     if not wanted:
         return "%s: none needed, %d held" % (name, have)
     if have >= wanted:
         return "%s: %d needed, %d already held" % (name, wanted, have)
-    return ("%s: %d needed, %d held, %d short"
-            % (name, wanted, have, wanted - have))
+    return "%s: %d needed, %d held, %d short" % (name, wanted, have, wanted - have)
 
 
-def _recipe_card(recipe: Recipe, casts: int, members: list, skills: dict,
-                 known: dict, ranks: dict, items: dict, sources: dict,
-                 totals: dict, skills_read: bool = True) -> dict:
+def _recipe_card(
+    recipe: Recipe,
+    casts: int,
+    members: list,
+    skills: dict,
+    known: dict,
+    ranks: dict,
+    items: dict,
+    sources: dict,
+    totals: dict,
+    skills_read: bool = True,
+) -> dict:
     """One way of making up a shortfall, and everything in the way of it.
 
     A CARD PER RECIPE AND NOT ONE PER GOAL, because three flasks satisfy one
@@ -868,9 +963,9 @@ def _recipe_card(recipe: Recipe, casts: int, members: list, skills: dict,
     goal like that would be one of the three presented as the answer, and a
     reader would farm to it.
     """
-    status, blocked, unknown = _recipe_blockers(recipe, members, skills, known,
-                                                ranks, items, sources,
-                                                skills_read)
+    status, blocked, unknown = _recipe_blockers(
+        recipe, members, skills, known, ranks, items, sources, skills_read
+    )
     rank = ranks.get(recipe.spell)
     return {
         "product": recipe.product,
@@ -882,8 +977,10 @@ def _recipe_card(recipe: Recipe, casts: int, members: list, skills: dict,
         "line": _cast_line(recipe, casts),
         "rank_line": _rank_line(recipe, rank),
         "who_line": _who_line(recipe, members, skills, known),
-        "reagents": [_reagent_row(reagent, casts, items, sources, totals, 1)
-                     for reagent in recipe.reagents],
+        "reagents": [
+            _reagent_row(reagent, casts, items, sources, totals, 1)
+            for reagent in recipe.reagents
+        ],
     }
 
 
@@ -895,11 +992,16 @@ def _cast_line(recipe: Recipe, casts: int) -> str:
     which number to halve, on the row it is on.
     """
     if not casts:
-        return ("nothing is short, so this is what one more would take"
-                if recipe.reagents else "nothing is short")
-    return ("made entirely as %s that is %s, counting one per cast because "
-            "how much a cast makes is not readable on this deployment"
-            % (recipe.product, _count(casts, "cast", "casts")))
+        return (
+            "nothing is short, so this is what one more would take"
+            if recipe.reagents
+            else "nothing is short"
+        )
+    return (
+        "made entirely as %s that is %s, counting one per cast because "
+        "how much a cast makes is not readable on this deployment"
+        % (recipe.product, _count(casts, "cast", "casts"))
+    )
 
 
 def _rank_line(recipe: Recipe, rank) -> str:
@@ -910,13 +1012,14 @@ def _rank_line(recipe: Recipe, rank) -> str:
     row means.
     """
     if rank is None:
-        return ("this realm states no %s rank for it, in item_template or in "
-                "trainer_spell" % recipe.trade)
+        return (
+            "this realm states no %s rank for it, in item_template or in "
+            "trainer_spell" % recipe.trade
+        )
     return "this realm asks for %s %d" % (recipe.trade, rank)
 
 
-def _who_line(recipe: Recipe, members: list, skills: dict,
-              known: dict) -> str:
+def _who_line(recipe: Recipe, members: list, skills: dict, known: dict) -> str:
     """Who could cast this today, by the world's own answer rather than a plan.
 
     NAMED RATHER THAN COUNTED when somebody can, because the next thing a
@@ -931,14 +1034,16 @@ def _who_line(recipe: Recipe, members: list, skills: dict,
     if learned:
         return "already known by %s" % ", ".join(learned)
     if len(holders) == 1:
-        return ("%s holds %s and has not learned this craft"
-                % (holders[0], recipe.trade))
-    return ("%s is held by %s, and none of them has learned this craft"
-            % (recipe.trade, ", ".join(holders)))
+        return "%s holds %s and has not learned this craft" % (holders[0], recipe.trade)
+    return "%s is held by %s, and none of them has learned this craft" % (
+        recipe.trade,
+        ", ".join(holders),
+    )
 
 
-def _supply_members(members: list, products: tuple, per_member: int,
-                    held: dict, banked: dict) -> list:
+def _supply_members(
+    members: list, products: tuple, per_member: int, held: dict, banked: dict
+) -> list:
     """What each member holds toward this goal, against what it asks of them.
 
     PER MEMBER AND NOT JUST A TOTAL, because a bank with forty flasks in it
@@ -947,20 +1052,19 @@ def _supply_members(members: list, products: tuple, per_member: int,
     """
     out = []
     for member in members:
-        have = sum(held.get((member["name"], product), 0)
-                   for product in products)
-        in_bank = sum(banked.get((member["name"], product), 0)
-                      for product in products)
-        out.append({
-            "who": member["name"],
-            "level": member["level"],
-            "need": per_member,
-            "held": have,
-            "banked": in_bank,
-            "short": max(per_member - have, 0),
-            "line": _supply_member_line(member["name"], per_member, have,
-                                        in_bank),
-        })
+        have = sum(held.get((member["name"], product), 0) for product in products)
+        in_bank = sum(banked.get((member["name"], product), 0) for product in products)
+        out.append(
+            {
+                "who": member["name"],
+                "level": member["level"],
+                "need": per_member,
+                "held": have,
+                "banked": in_bank,
+                "short": max(per_member - have, 0),
+                "line": _supply_member_line(member["name"], per_member, have, in_bank),
+            }
+        )
     return out
 
 
@@ -973,16 +1077,25 @@ def _supply_member_line(who: str, need: int, have: int, in_bank: int) -> str:
     which it is.
     """
     if have >= need and in_bank:
-        return ("%s holds %d of the %d asked for, %d of them in the bank"
-                % (who, have, need, in_bank))
+        return "%s holds %d of the %d asked for, %d of them in the bank" % (
+            who,
+            have,
+            need,
+            in_bank,
+        )
     if have >= need:
         return "%s holds %d of the %d asked for" % (who, have, need)
     if in_bank:
-        return ("%s holds %d of the %d asked for and is %d short, %d of what "
-                "they do hold in the bank"
-                % (who, have, need, need - have, in_bank))
-    return ("%s holds %d of the %d asked for and is %d short"
-            % (who, have, need, need - have))
+        return (
+            "%s holds %d of the %d asked for and is %d short, %d of what "
+            "they do hold in the bank" % (who, have, need, need - have, in_bank)
+        )
+    return "%s holds %d of the %d asked for and is %d short" % (
+        who,
+        have,
+        need,
+        need - have,
+    )
 
 
 def _product_rows(products: tuple, items: dict, held: dict) -> list:
@@ -997,17 +1110,18 @@ def _product_rows(products: tuple, items: dict, held: dict) -> list:
     rows = []
     for product in products:
         row = items.get(product)
-        total = sum(count for (_, name), count in held.items()
-                    if name == product)
-        rows.append({
-            "name": product,
-            "entry": row["entry"] if row else 0,
-            "quality": row["quality"] if row else None,
-            "item_level": row["item_level"] if row else None,
-            "known_here": bool(row),
-            "held": total,
-            "line": _product_line(product, total, bool(row)),
-        })
+        total = sum(count for (_, name), count in held.items() if name == product)
+        rows.append(
+            {
+                "name": product,
+                "entry": row["entry"] if row else 0,
+                "quality": row["quality"] if row else None,
+                "item_level": row["item_level"] if row else None,
+                "known_here": bool(row),
+                "held": total,
+                "line": _product_line(product, total, bool(row)),
+            }
+        )
     return rows
 
 
@@ -1029,8 +1143,10 @@ def _supply_line(name: str, need: int, have: int, status: str) -> str:
     evenings, and the number alone cannot tell them apart.
     """
     if status == UNREACHABLE:
-        return ("%s: nobody on this roster can make it, so the %d it asks for "
-                "is not a farming problem" % (name, need))
+        return (
+            "%s: nobody on this roster can make it, so the %d it asks for "
+            "is not a farming problem" % (name, need)
+        )
     if have >= need:
         return "%s: %d needed, %d held" % (name, need, have)
     return "%s: %d needed, %d held, %d short" % (name, need, have, need - have)
@@ -1046,9 +1162,11 @@ def _need_line(per_member: int, members: int, need: int) -> str:
     """
     if not members:
         return "there is nobody to count for, so the total is nothing"
-    return ("%d per member, times %s, is %d. The per-member number is a "
-            "convention rather than anything this realm states."
-            % (per_member, _count(members, "member", "members"), need))
+    return (
+        "%d per member, times %s, is %d. The per-member number is a "
+        "convention rather than anything this realm states."
+        % (per_member, _count(members, "member", "members"), need)
+    )
 
 
 def _goal_status(cards: list, short: int) -> str:
@@ -1100,8 +1218,7 @@ def _chips(status: str, need: int, have: int, blockers: int) -> list:
         out.append({"text": "%d needed" % need, "tone": ""})
     out.append({"text": "%d held" % have, "tone": "up" if have else ""})
     if blockers:
-        out.append({"text": _count(blockers, "blocker", "blockers"),
-                    "tone": "no"})
+        out.append({"text": _count(blockers, "blocker", "blockers"), "tone": "no"})
     return out
 
 
@@ -1115,16 +1232,29 @@ def _recipes_line(products: tuple) -> str:
     """
     if len(products) == 1:
         return ""
-    return ("%s satisfy this goal and they do not share a recipe. Each list "
-            "below is the whole shortfall made as that one, so they are "
-            "alternatives and not a sum; any mix lands between them."
-            % _count(len(products), "item", "items"))
+    return (
+        "%s satisfy this goal and they do not share a recipe. Each list "
+        "below is the whole shortfall made as that one, so they are "
+        "alternatives and not a sum; any mix lands between them."
+        % _count(len(products), "item", "items")
+    )
 
 
-def _supply_goal(key: str, name: str, products: tuple, per_member: int,
-                 members: list, items: dict, held: dict, banked: dict,
-                 skills: dict, known: dict, ranks: dict, sources: dict,
-                 skills_read: bool = True) -> dict:
+def _supply_goal(
+    key: str,
+    name: str,
+    products: tuple,
+    per_member: int,
+    members: list,
+    items: dict,
+    held: dict,
+    banked: dict,
+    skills: dict,
+    known: dict,
+    ranks: dict,
+    sources: dict,
+    skills_read: bool = True,
+) -> dict:
     """One "enough of this for everybody" goal, whole.
 
     `products` is every item that satisfies it, and each gets its own recipe
@@ -1136,9 +1266,21 @@ def _supply_goal(key: str, name: str, products: tuple, per_member: int,
     short = max(need - have, 0)
     totals = _totals(held)
     casts = casts_for(short)
-    cards = [_recipe_card(RECIPE_BY_PRODUCT[product], casts, members, skills,
-                          known, ranks, items, sources, totals, skills_read)
-             for product in products]
+    cards = [
+        _recipe_card(
+            RECIPE_BY_PRODUCT[product],
+            casts,
+            members,
+            skills,
+            known,
+            ranks,
+            items,
+            sources,
+            totals,
+            skills_read,
+        )
+        for product in products
+    ]
     status = _goal_status(cards, short)
     blockers = sum(len(card["blocked"]) for card in cards)
     return {
@@ -1153,8 +1295,7 @@ def _supply_goal(key: str, name: str, products: tuple, per_member: int,
         "line": _supply_line(name, need, have, status),
         "need_line": _need_line(per_member, len(members), need),
         "recipes_line": _recipes_line(products),
-        "members": _supply_members(members, products, per_member, held,
-                                   banked),
+        "members": _supply_members(members, products, per_member, held, banked),
         "products": _product_rows(products, items, held),
         "recipes": cards,
         "chips": _chips(status, need, have, blockers),
@@ -1169,9 +1310,17 @@ def _totals(held: dict) -> dict:
     return out
 
 
-def _repair_goal(members: list, items: dict, held: dict, banked: dict,
-                 skills: dict, known: dict, ranks: dict, sources: dict,
-                 skills_read: bool = True) -> dict:
+def _repair_goal(
+    members: list,
+    items: dict,
+    held: dict,
+    banked: dict,
+    skills: dict,
+    known: dict,
+    ranks: dict,
+    sources: dict,
+    skills_read: bool = True,
+) -> dict:
     """The repair bot, which is a goal this roster cannot finish.
 
     NOT PER MEMBER. One bot serves whoever stands near it, so the number is
@@ -1185,12 +1334,21 @@ def _repair_goal(members: list, items: dict, held: dict, banked: dict,
     goal already met.
     """
     recipe = RECIPE_BY_PRODUCT[FIELD_REPAIR_BOT]
-    have = sum(count for (_, item), count in held.items()
-               if item == FIELD_REPAIR_BOT)
+    have = sum(count for (_, item), count in held.items() if item == FIELD_REPAIR_BOT)
     need = REPAIR_BOTS_PER_NIGHT
     short = max(need - have, 0)
-    card = _recipe_card(recipe, casts_for(short), members, skills, known,
-                        ranks, items, sources, _totals(held), skills_read)
+    card = _recipe_card(
+        recipe,
+        casts_for(short),
+        members,
+        skills,
+        known,
+        ranks,
+        items,
+        sources,
+        _totals(held),
+        skills_read,
+    )
     status = _goal_status([card], short)
     return {
         "key": "repair",
@@ -1202,9 +1360,11 @@ def _repair_goal(members: list, items: dict, held: dict, banked: dict,
         "short": short,
         "per_member": 0,
         "line": _supply_line(recipe.product, need, have, status),
-        "need_line": ("one per raid night rather than one each: a bot serves "
-                      "whoever stands near it. That it is one and not one "
-                      "apiece is a convention like every other count here."),
+        "need_line": (
+            "one per raid night rather than one each: a bot serves "
+            "whoever stands near it. That it is one and not one "
+            "apiece is a convention like every other count here."
+        ),
         "recipes_line": "",
         "members": [],
         "products": _product_rows((FIELD_REPAIR_BOT,), items, held),
@@ -1236,32 +1396,45 @@ def _resistance_goal(members: list, worn_rows: list, roster: set) -> dict:
         "line": _resistance_line(values, members),
         "need_line": _resistance_convention(),
         "recipes_line": "",
-        "members": [{"who": m["name"], "level": m["level"],
-                     "need": 0, "held": values.get(m["name"], 0),
-                     "banked": 0, "short": 0,
-                     "line": _resistance_member_line(
-                         m["name"], values.get(m["name"], 0))}
-                    for m in members],
+        "members": [
+            {
+                "who": m["name"],
+                "level": m["level"],
+                "need": 0,
+                "held": values.get(m["name"], 0),
+                "banked": 0,
+                "short": 0,
+                "line": _resistance_member_line(m["name"], values.get(m["name"], 0)),
+            }
+            for m in members
+        ],
         "products": [],
         "recipes": [],
-        "chips": [{"text": FIRE_RESISTANCE, "tone": ""},
-                  {"text": "measured, not scored", "tone": "unsure"}],
+        "chips": [
+            {"text": FIRE_RESISTANCE, "tone": ""},
+            {"text": "measured, not scored", "tone": "unsure"},
+        ],
     }
 
 
 def _headline(goals: list, members: list) -> str:
     """The one line at the top. Counts, never a recommendation."""
     if not members:
-        return ("nothing here knows who would be raiding, so there is nothing "
-                "to count consumables against")
+        return (
+            "nothing here knows who would be raiding, so there is nothing "
+            "to count consumables against"
+        )
     unreachable = len([g for g in goals if g["status"] == UNREACHABLE])
     met = len([g for g in goals if g["status"] == MET])
-    line = ("%d of %s met toward Molten Core"
-            % (met, _count(len(goals), "goal", "goals")))
+    line = "%d of %s met toward Molten Core" % (
+        met,
+        _count(len(goals), "goal", "goals"),
+    )
     if unreachable:
-        return ("%s, and %s cannot be finished by this roster at all"
-                % (line, "one of them" if unreachable == 1
-                   else "%d of them" % unreachable))
+        return "%s, and %s cannot be finished by this roster at all" % (
+            line,
+            "one of them" if unreachable == 1 else "%d of them" % unreachable,
+        )
     return line
 
 
@@ -1272,14 +1445,15 @@ def _strip(goals: list, members: list) -> list:
     the strip, so a reader who distrusts a tile can go and count what it came
     from.
     """
+
     def many(status):
         return str(len([g for g in goals if g["status"] == status]))
+
     return [
         {"label": "members counted", "value": str(len(members)), "tone": ""},
         {"label": "goals met", "value": many(MET), "tone": "up"},
         {"label": "goals short", "value": many(SHORT), "tone": "unsure"},
-        {"label": "cannot be finished", "value": many(UNREACHABLE),
-         "tone": "no"},
+        {"label": "cannot be finished", "value": many(UNREACHABLE), "tone": "no"},
     ]
 
 
@@ -1291,20 +1465,30 @@ def _others() -> list:
     so every raid at the cap gets one and four of the five say plainly that
     nothing above counted anything toward them.
     """
-    return [{"name": raid["name"], "map_id": raid["map_id"],
-             "modelled": raid["modelled"],
-             "line": ("modelled above" if raid["modelled"] else
-                      "not modelled: nothing on this page counts anything "
-                      "toward it, and an empty goal list would read as "
-                      "readiness")}
-            for raid in RAIDS]
+    return [
+        {
+            "name": raid["name"],
+            "map_id": raid["map_id"],
+            "modelled": raid["modelled"],
+            "line": (
+                "modelled above"
+                if raid["modelled"]
+                else "not modelled: nothing on this page counts anything "
+                "toward it, and an empty goal list would read as "
+                "readiness"
+            ),
+        }
+        for raid in RAIDS
+    ]
 
 
 def _others_line() -> str:
     """Why there is one raid above and five rows below it."""
-    return ("Molten Core is the only raid modelled here. The rest of the tier "
-            "is listed so a reader can see it was left out on purpose rather "
-            "than forgotten. " + OUT_OF_TIER)
+    return (
+        "Molten Core is the only raid modelled here. The rest of the tier "
+        "is listed so a reader can see it was left out on purpose rather "
+        "than forgotten. " + OUT_OF_TIER
+    )
 
 
 def _order(goals: list) -> None:
@@ -1318,11 +1502,21 @@ def _order(goals: list) -> None:
     goals.sort(key=lambda g: (STATUS_ORDER.index(g["status"]), g["name"]))
 
 
-def build_raidgoals(item_rows: list, recipe_rows: list, trainer_rows: list,
-                    char_rows: list, skill_rows: list, spell_rows: list,
-                    holding_rows: list, worn_rows: list, vendor_rows: list,
-                    creature_rows: list, object_rows: list,
-                    guild_rows: list, roster: list) -> dict:
+def build_raidgoals(
+    item_rows: list,
+    recipe_rows: list,
+    trainer_rows: list,
+    char_rows: list,
+    skill_rows: list,
+    spell_rows: list,
+    holding_rows: list,
+    worn_rows: list,
+    vendor_rows: list,
+    creature_rows: list,
+    object_rows: list,
+    guild_rows: list,
+    roster: list,
+) -> dict:
     """What the guild still needs before Molten Core, and how far along it is.
 
     `roster` is bonds' family and is the FALLBACK rather than the answer:
@@ -1364,24 +1558,71 @@ def build_raidgoals(item_rows: list, recipe_rows: list, trainer_rows: list,
     # own failure to read.
     skills_read = bool(skill_rows)
 
-    flasks = (FLASK_OF_SUPREME_POWER, FLASK_OF_DISTILLED_WISDOM,
-              FLASK_OF_THE_TITANS)
+    flasks = (FLASK_OF_SUPREME_POWER, FLASK_OF_DISTILLED_WISDOM, FLASK_OF_THE_TITANS)
     goals = [
-        _supply_goal("flasks", "A flask each", flasks, PER_MEMBER_PER_NIGHT,
-                     members, items, held, banked, skills, known, ranks,
-                     sources, skills_read),
-        _supply_goal("fireprot", "Fire protection potions",
-                     (GREATER_FIRE_PROTECTION,), FIRE_PROTECTION_PER_MEMBER,
-                     members, items, held, banked, skills, known, ranks,
-                     sources, skills_read),
-        _supply_goal("healing", "Healing potions", (MAJOR_HEALING_POTION,),
-                     HEALING_POTIONS_PER_MEMBER, members, items, held, banked,
-                     skills, known, ranks, sources, skills_read),
-        _supply_goal("mana", "Mana potions", (MAJOR_MANA_POTION,),
-                     MANA_POTIONS_PER_MEMBER, members, items, held, banked,
-                     skills, known, ranks, sources, skills_read),
-        _repair_goal(members, items, held, banked, skills, known, ranks,
-                     sources, skills_read),
+        _supply_goal(
+            "flasks",
+            "A flask each",
+            flasks,
+            PER_MEMBER_PER_NIGHT,
+            members,
+            items,
+            held,
+            banked,
+            skills,
+            known,
+            ranks,
+            sources,
+            skills_read,
+        ),
+        _supply_goal(
+            "fireprot",
+            "Fire protection potions",
+            (GREATER_FIRE_PROTECTION,),
+            FIRE_PROTECTION_PER_MEMBER,
+            members,
+            items,
+            held,
+            banked,
+            skills,
+            known,
+            ranks,
+            sources,
+            skills_read,
+        ),
+        _supply_goal(
+            "healing",
+            "Healing potions",
+            (MAJOR_HEALING_POTION,),
+            HEALING_POTIONS_PER_MEMBER,
+            members,
+            items,
+            held,
+            banked,
+            skills,
+            known,
+            ranks,
+            sources,
+            skills_read,
+        ),
+        _supply_goal(
+            "mana",
+            "Mana potions",
+            (MAJOR_MANA_POTION,),
+            MANA_POTIONS_PER_MEMBER,
+            members,
+            items,
+            held,
+            banked,
+            skills,
+            known,
+            ranks,
+            sources,
+            skills_read,
+        ),
+        _repair_goal(
+            members, items, held, banked, skills, known, ranks, sources, skills_read
+        ),
         _resistance_goal(members, worn_rows, names),
     ]
     _order(goals)
@@ -1393,21 +1634,25 @@ def build_raidgoals(item_rows: list, recipe_rows: list, trainer_rows: list,
             "Molten Core, map %d, is the level 60 tier's first raid and the "
             "one this page models. It gates nobody on consumables and nobody "
             "on resistance: everything counted below is what a group brings "
-            "so the night goes better, not what the instance demands."
-            % MOLTEN_CORE),
+            "so the night goes better, not what the instance demands." % MOLTEN_CORE
+        ),
         "strip": _strip(goals, members),
         "order": (
             "Ordered by what a reader can act on: what this roster cannot "
             "finish at all first, then what is blocked on a recipe or a "
             "skill, then what is merely short, then what is already enough, "
-            "and by name inside each so the list does not move on its own."),
+            "and by name inside each so the list does not move on its own."
+        ),
         "goals": goals,
         "others": _others(),
         "others_line": _others_line(),
         "basis": _basis(),
-        "empty_note": ("nothing here knows who would be raiding, so there is "
-                       "nothing to count consumables against"
-                       if not members else ""),
+        "empty_note": (
+            "nothing here knows who would be raiding, so there is "
+            "nothing to count consumables against"
+            if not members
+            else ""
+        ),
     }
 
 
@@ -1464,4 +1709,5 @@ def _basis() -> str:
         "raise a skill from one value to another, which flask suits which "
         "character, and who tanks. The last two are choices, and a page that "
         "made them would be deciding the thing it went out of its way not to "
-        "decide.")
+        "decide."
+    )

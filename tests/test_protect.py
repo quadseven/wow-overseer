@@ -10,6 +10,7 @@ the character Evan is actually growing (infra#2656).
 Suppression is therefore just: keep a row whose validIn has not elapsed.
 This module decides WHICH rows need writing; bridge.py does the writing.
 """
+
 import ast
 import pathlib
 import re
@@ -23,9 +24,7 @@ NOW = 1_800_000_000
 
 class NeedsRefreshTest(unittest.TestCase):
     def test_a_character_with_no_row_needs_one(self):
-        self.assertEqual(
-            protect.rows_needing_refresh({101: "Grug"}, {}, NOW), [101]
-        )
+        self.assertEqual(protect.rows_needing_refresh({101: "Grug"}, {}, NOW), [101])
 
     def test_a_freshly_written_row_is_left_alone(self):
         rows = {101: {"time": NOW - 10, "validIn": HORIZON}}
@@ -90,9 +89,12 @@ class RosterWiringTest(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        cls.src = (pathlib.Path(__file__).resolve().parent.parent / "bridge.py").read_text()
+        cls.src = (
+            pathlib.Path(__file__).resolve().parent.parent / "bridge.py"
+        ).read_text()
         fn = next(
-            n for n in ast.walk(ast.parse(cls.src))
+            n
+            for n in ast.walk(ast.parse(cls.src))
             if isinstance(n, ast.AsyncFunctionDef) and n.name == "_protect_characters"
         )
         # Every bare name in the function, not just callees: the bridge does
@@ -103,7 +105,8 @@ class RosterWiringTest(unittest.TestCase):
 
     def test_the_protect_loop_also_puts_them_on_the_roster(self):
         self.assertIn(
-            "_ensure_roster", self.called,
+            "_ensure_roster",
+            self.called,
             "nothing seeds overseer_roster, so mod-overseer logs nobody in",
         )
 
@@ -122,8 +125,11 @@ class RosterWiringTest(unittest.TestCase):
         import pathlib
 
         src = (pathlib.Path(__file__).resolve().parent.parent / "bridge.py").read_text()
-        fn = next(n for n in ast.walk(ast.parse(src))
-                  if isinstance(n, ast.FunctionDef) and n.name == "_give_them_a_life")
+        fn = next(
+            n
+            for n in ast.walk(ast.parse(src))
+            if isinstance(n, ast.FunctionDef) and n.name == "_give_them_a_life"
+        )
         names = {n.id for n in ast.walk(fn) if isinstance(n, ast.Name)}
         self.assertIn("_bot_held_names", names)
 
@@ -134,10 +140,14 @@ class RosterWiringTest(unittest.TestCase):
         import pathlib
 
         src = (pathlib.Path(__file__).resolve().parent.parent / "bridge.py").read_text()
-        fn = next(n for n in ast.walk(ast.parse(src))
-                  if isinstance(n, ast.FunctionDef) and n.name == "_give_them_a_life")
+        fn = next(
+            n
+            for n in ast.walk(ast.parse(src))
+            if isinstance(n, ast.FunctionDef) and n.name == "_give_them_a_life"
+        )
         names = {n.id for n in ast.walk(fn) if isinstance(n, ast.Name)} | {
-            n.attr for n in ast.walk(fn) if isinstance(n, ast.Attribute)}
+            n.attr for n in ast.walk(fn) if isinstance(n, ast.Attribute)
+        }
         self.assertIn("life_strategies", names)
         # `_head_now`, NOT bonds.head_of_family directly, since infra#2757. A
         # character running a trade errand borrows the lead for the duration,
@@ -151,24 +161,30 @@ class RosterWiringTest(unittest.TestCase):
         # falling back to head_of_family, an ordinary afternoon with no errand
         # would have no leader at all - which is five characters each holding
         # `new rpg`, or none of them holding it.
-        head_now = next(n for n in ast.walk(ast.parse(src))
-                        if isinstance(n, ast.FunctionDef) and n.name == "_head_now")
-        self.assertIn("head_of_family",
-                      {n.attr for n in ast.walk(head_now)
-                       if isinstance(n, ast.Attribute)})
+        head_now = next(
+            n
+            for n in ast.walk(ast.parse(src))
+            if isinstance(n, ast.FunctionDef) and n.name == "_head_now"
+        )
+        self.assertIn(
+            "head_of_family",
+            {n.attr for n in ast.walk(head_now) if isinstance(n, ast.Attribute)},
+        )
 
         # And that `leads` is DECIDED per character rather than passed a
         # literal. Checking the names alone let a mutant through that gave
         # every character the leader's set - which is the scattering bug
         # restored in full.
         call = next(
-            n for n in ast.walk(fn)
+            n
+            for n in ast.walk(fn)
             if isinstance(n, ast.Call)
             and getattr(n.func, "attr", None) == "life_strategies"
         )
         leads = next(k.value for k in call.keywords if k.arg == "leads")
         self.assertIsInstance(
-            leads, ast.Compare,
+            leads,
+            ast.Compare,
             "leads= is a constant, so every character gets the same strategies",
         )
 
@@ -176,13 +192,18 @@ class RosterWiringTest(unittest.TestCase):
         """Two lists drift, and both failures are quiet: protected but not
         rostered never appears, rostered but not protected gets re-rolled."""
         fn = next(
-            n for n in ast.walk(ast.parse(self.src))
+            n
+            for n in ast.walk(ast.parse(self.src))
             if isinstance(n, ast.FunctionDef) and n.name == "_protected_guids"
         )
         env = [
-            n.args[0].value for n in ast.walk(fn)
-            if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
-            and n.func.attr == "get" and n.args and isinstance(n.args[0], ast.Constant)
+            n.args[0].value
+            for n in ast.walk(fn)
+            if isinstance(n, ast.Call)
+            and isinstance(n.func, ast.Attribute)
+            and n.func.attr == "get"
+            and n.args
+            and isinstance(n.args[0], ast.Constant)
         ]
         self.assertIn("OVERSEER_NOTABLE_NAMES", env)
 
@@ -209,7 +230,6 @@ class ReservedWordTest(unittest.TestCase):
 
     def _sql_strings(self, path):
         import ast
-        import re
 
         for node in ast.walk(ast.parse(pathlib.Path(path).read_text())):
             if isinstance(node, ast.Constant) and isinstance(node.value, str):
@@ -219,11 +239,12 @@ class ReservedWordTest(unittest.TestCase):
                 # Adjacent string literals are concatenated by the parser, so a
                 # multi-line query arrives here as one constant beginning with
                 # its verb.
-                if re.match(r"(SELECT|UPDATE|INSERT|DELETE|ALTER|CREATE)\b", text, re.I):
+                if re.match(
+                    r"(SELECT|UPDATE|INSERT|DELETE|ALTER|CREATE)\b", text, re.I
+                ):
                     yield text
 
     def test_no_reserved_word_is_used_as_a_bare_identifier(self):
-        import re
 
         here = pathlib.Path(__file__).resolve().parent.parent
         offenders = []
@@ -233,4 +254,6 @@ class ReservedWordTest(unittest.TestCase):
                     # Bare use: the word with no backtick immediately before it.
                     if re.search(r"(?<![`\w.])%s(?![`\w])" % word, sql, re.I):
                         offenders.append("%s: %s" % (path.name, sql[:70]))
-        self.assertEqual(offenders, [], "reserved words used unquoted:\n" + "\n".join(offenders))
+        self.assertEqual(
+            offenders, [], "reserved words used unquoted:\n" + "\n".join(offenders)
+        )

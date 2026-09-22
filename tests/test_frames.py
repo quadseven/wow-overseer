@@ -4,6 +4,7 @@ The whole point of the status field is that three different things look
 identical on a panel otherwise: a bot that is genuinely standing still, a
 capture that came back black, and a capture that never happened.
 """
+
 import pathlib
 import unittest
 
@@ -40,11 +41,14 @@ class WhatIsAccepted(unittest.TestCase):
 
     def test_a_failure_needs_no_frame(self):
         for status in (frames.BLACK, frames.FAILED):
-            self.assertEqual("", frames.refusal("Grug", status, b"", "no client"), status)
+            self.assertEqual(
+                "", frames.refusal("Grug", status, b"", "no client"), status
+            )
 
     def test_an_overlong_reason_is_refused_rather_than_silently_cut(self):
-        self.assertIn("longer than",
-                      frames.refusal("Grug", frames.FAILED, b"", "x" * 500))
+        self.assertIn(
+            "longer than", frames.refusal("Grug", frames.FAILED, b"", "x" * 500)
+        )
 
 
 class AFailureKeepsTheLastGoodPicture(unittest.TestCase):
@@ -86,8 +90,9 @@ class AFailureKeepsTheLastGoodPicture(unittest.TestCase):
 
 class ReasonsAreReadable(unittest.TestCase):
     def test_whitespace_is_collapsed_not_rendered(self):
-        self.assertEqual("no client logged in",
-                         frames.clean_detail("  no   client\nlogged in  "))
+        self.assertEqual(
+            "no client logged in", frames.clean_detail("  no   client\nlogged in  ")
+        )
 
     def test_a_reason_is_capped(self):
         self.assertEqual(frames.MAX_DETAIL_CHARS, len(frames.clean_detail("x" * 900)))
@@ -108,10 +113,10 @@ class TheEndpointIsWired(unittest.TestCase):
         cls.page = (here / "index.html").read_text()
 
     def test_both_verbs_reach_the_right_half(self):
-        get = self.server[self.server.index("GET_ROUTES = {"):]
-        get = get[:get.index("}")]
-        post = self.server[self.server.index("POST_ROUTES = {"):]
-        post = post[:post.index("}")]
+        get = self.server[self.server.index("GET_ROUTES = {") :]
+        get = get[: get.index("}")]
+        post = self.server[self.server.index("POST_ROUTES = {") :]
+        post = post[: post.index("}")]
         self.assertIn('"/api/frame": _frame_get', get)
         self.assertIn('"/api/frame": _frame_post', post)
 

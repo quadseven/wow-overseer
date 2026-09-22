@@ -8,6 +8,7 @@ That matters because the two decisions this module makes are both about
 thresholds, and a threshold tested only against numbers chosen to make it
 fire proves nothing.
 """
+
 import unittest
 
 import towntrip
@@ -20,13 +21,22 @@ def worn(fraction, maximum=100):
 
 # What a reachable neutral town actually stocks: the food and drink tiers a
 # general-goods vendor, a fisherman and an innkeeper carry between them.
-RATCHET = Town(repairs=True, stocks=frozenset({787, 4592, 4593, 4594, 159, 1179, 1205, 1708}))
+RATCHET = Town(
+    repairs=True, stocks=frozenset({787, 4592, 4593, 4594, 159, 1179, 1205, 1708})
+)
 
 # The five, as measured. Og's spells are the six conjure ranks he really has.
 GRUG = Member("Grug", "warrior", 29, 1706343, 14, (worn(0.943, 35), worn(0.985, 65)))
 GROG = Member("Grog", "paladin", 27, 1724617, 7, (worn(0.967, 30), worn(0.971, 35)))
-OG = Member("Og", "mage", 26, 1595527, 9, (worn(0.95, 20),),
-            spells=frozenset({587, 597, 990, 5504, 5505, 5506}))
+OG = Member(
+    "Og",
+    "mage",
+    26,
+    1595527,
+    9,
+    (worn(0.95, 20),),
+    spells=frozenset({587, 597, 990, 5504, 5505, 5506}),
+)
 BORK = Member("Bork", "rogue", 26, 1458619, 4, (worn(1.0, 50),), food_carried=1)
 UGGA = Member("Ugga", "priest", 24, 1689925, 4, (worn(0.95, 20), worn(0.975, 40)))
 FAMILY = (GRUG, GROG, OG, BORK, UGGA)
@@ -52,18 +62,23 @@ class TheMeasuredRoster(unittest.TestCase):
 
     def test_the_floor_is_about_deaths_and_not_about_looks(self):
         """A death costs 10% of an item. The floor leaves room for three."""
-        fine = towntrip.plan((Member("A", "warrior", 29, 10 ** 6, 8, (worn(0.40),)),), RATCHET)
+        fine = towntrip.plan(
+            (Member("A", "warrior", 29, 10**6, 8, (worn(0.40),)),), RATCHET
+        )
         self.assertNotIn("floor", fine.errands[0].why)
 
-        thin = towntrip.plan((Member("A", "warrior", 29, 10 ** 6, 8, (worn(0.30),)),), RATCHET)
+        thin = towntrip.plan(
+            (Member("A", "warrior", 29, 10**6, 8, (worn(0.30),)),), RATCHET
+        )
         self.assertIn("floor", thin.errands[0].why)
         self.assertEqual(thin.errands[0].kind, "repair")
 
     def test_the_worst_item_and_not_the_average_is_what_the_floor_reads(self):
         """A character in one broken boot and nine perfect pieces averages
         well above the floor and is still one death from losing the boot."""
-        member = Member("A", "warrior", 29, 10 ** 6, 8,
-                        tuple([worn(0.20)] + [worn(1.0)] * 9))
+        member = Member(
+            "A", "warrior", 29, 10**6, 8, tuple([worn(0.20)] + [worn(1.0)] * 9)
+        )
         self.assertGreater(member.durability, towntrip.FLOOR)
         self.assertLess(member.worst, towntrip.FLOOR)
         self.assertIn("floor", towntrip.plan((member,), RATCHET).errands[0].why)
@@ -95,10 +110,12 @@ class WhatTheTownCanAndCannotSupply(unittest.TestCase):
         has had an executor since mod-overseer#147 and had no producer.
         """
         got = towntrip.plan((OG,), RATCHET)
-        self.assertEqual([e.kind for e in got.errands],
-                         ["repair", "conjure", "conjure"])
-        self.assertEqual([e.command for e in got.errands[1:]],
-                         ["food up_to:20", "water up_to:20"])
+        self.assertEqual(
+            [e.kind for e in got.errands], ["repair", "conjure", "conjure"]
+        )
+        self.assertEqual(
+            [e.command for e in got.errands[1:]], ["food up_to:20", "water up_to:20"]
+        )
 
     def test_a_warrior_is_bought_food_and_never_drink(self):
         got = towntrip.plan((GRUG,), RATCHET)
@@ -118,8 +135,9 @@ class WhatTheTownCanAndCannotSupply(unittest.TestCase):
         got = towntrip.plan(FAMILY, bare)
         # The four repairs, and the mage conjuring for a party a town that
         # will not trade with them cannot feed. Nothing is bought.
-        self.assertEqual([e.kind for e in got.errands],
-                         ["repair"] * 4 + ["conjure", "conjure"])
+        self.assertEqual(
+            [e.kind for e in got.errands], ["repair"] * 4 + ["conjure", "conjure"]
+        )
         self.assertTrue(any("no reachable vendor stocks" in n for n in got.notes))
 
     def test_the_reagent_table_is_empty_on_purpose(self):
@@ -141,7 +159,7 @@ class WhatIsSaidInsteadOfQueued(unittest.TestCase):
         self.assertIn("no repairer is reachable", got.blocked[0])
 
     def test_full_bags_are_a_sell_problem_and_are_named_as_one(self):
-        packed = Member("A", "priest", 24, 10 ** 6, 0, (worn(1.0),))
+        packed = Member("A", "priest", 24, 10**6, 0, (worn(1.0),))
         got = towntrip.plan((packed,), RATCHET)
         self.assertEqual(got.errands, ())
         self.assertEqual(len(got.notes), 2)
@@ -243,17 +261,26 @@ class TheFreeRoutesComeBeforeTheCounter(unittest.TestCase):
     """
 
     def _mage(self, food=0, drink=0, stacks=(), slots=9, level=26):
-        return Member("Og", "mage", level, 10 ** 6, slots, (),
-                      food_carried=food, drink_carried=drink,
-                      spells=frozenset({990, 5506}), stacks=tuple(stacks))
+        return Member(
+            "Og",
+            "mage",
+            level,
+            10**6,
+            slots,
+            (),
+            food_carried=food,
+            drink_carried=drink,
+            spells=frozenset({990, 5506}),
+            stacks=tuple(stacks),
+        )
 
     def _warrior(self, food=0, slots=8):
-        return Member("Grug", "warrior", 33, 10 ** 6, slots, (),
-                      food_carried=food)
+        return Member("Grug", "warrior", 33, 10**6, slots, (), food_carried=food)
 
     def _conjured(self, guid, what, count=20, name="Conjured Bread"):
-        return towntrip.Stack(guid=guid, entry=1113, name=name, count=count,
-                              what=what, conjured=True)
+        return towntrip.Stack(
+            guid=guid, entry=1113, name=name, count=count, what=what, conjured=True
+        )
 
     def test_the_conjurer_is_asked_for_a_stack_per_mouth(self):
         """One for the caster and one for everybody with none. A row sized for
@@ -270,14 +297,16 @@ class TheFreeRoutesComeBeforeTheCounter(unittest.TestCase):
         """mod-overseer refuses a row above CONJURE_UNITS_MAX as malformed
         rather than clamping it, so a family of nine would be a dead row."""
         many = [self._mage(slots=20)] + [
-            Member(name, "warrior", 30, 10 ** 6, 8, ())
+            Member(name, "warrior", 30, 10**6, 8, ())
             for name in ("A", "B", "C", "D", "E", "F", "G")
         ]
         got = towntrip.plan(tuple(many), RATCHET)
-        food = [e for e in got.errands
-                if e.kind == "conjure" and e.command.startswith("food")][0]
-        self.assertEqual(food.command,
-                         "food up_to:%d" % towntrip.CONJURE_UNITS_MAX)
+        food = [
+            e
+            for e in got.errands
+            if e.kind == "conjure" and e.command.startswith("food")
+        ][0]
+        self.assertEqual(food.command, "food up_to:%d" % towntrip.CONJURE_UNITS_MAX)
 
     def test_the_ask_is_held_under_the_bag_slots_that_exist(self):
         """A stack is a slot. Conjuring into bags that cannot take it ends in
@@ -285,8 +314,11 @@ class TheFreeRoutesComeBeforeTheCounter(unittest.TestCase):
         conjure's clothes."""
         crowded = self._mage(slots=2)
         got = towntrip.plan((crowded, self._warrior(), self._warrior()), RATCHET)
-        food = [e for e in got.errands
-                if e.kind == "conjure" and e.command.startswith("food")][0]
+        food = [
+            e
+            for e in got.errands
+            if e.kind == "conjure" and e.command.startswith("food")
+        ][0]
         self.assertEqual(food.command, "food up_to:40")
 
     def test_no_free_slot_at_all_is_said_and_not_cast_into(self):
@@ -297,8 +329,9 @@ class TheFreeRoutesComeBeforeTheCounter(unittest.TestCase):
     def test_a_spare_conjured_stack_is_handed_to_somebody_with_none(self):
         """Conjured items are BIND_NONE, measured, so kind='give' moves them
         and nothing new had to be built for the hand-off."""
-        mage = self._mage(food=40, stacks=[self._conjured(11, "food"),
-                                           self._conjured(12, "food")])
+        mage = self._mage(
+            food=40, stacks=[self._conjured(11, "food"), self._conjured(12, "food")]
+        )
         got = towntrip.plan((mage, self._warrior()), RATCHET)
         gives = [e for e in got.errands if e.kind == "give"]
         self.assertEqual(len(gives), 1)
@@ -317,16 +350,24 @@ class TheFreeRoutesComeBeforeTheCounter(unittest.TestCase):
     def test_a_looted_stack_is_never_handed_on(self):
         """Only the conjured ones are free to remake. Somebody's real food is
         theirs, and a looted stack may not even be tradable."""
-        looted = towntrip.Stack(guid=13, entry=4594, name="Rockscale Cod",
-                                count=20, what="food", conjured=False)
-        rogue = Member("Bork", "rogue", 30, 10 ** 6, 8, (),
-                       food_carried=40, stacks=(looted, looted))
+        looted = towntrip.Stack(
+            guid=13,
+            entry=4594,
+            name="Rockscale Cod",
+            count=20,
+            what="food",
+            conjured=False,
+        )
+        rogue = Member(
+            "Bork", "rogue", 30, 10**6, 8, (), food_carried=40, stacks=(looted, looted)
+        )
         got = towntrip.plan((rogue, self._warrior()), RATCHET)
         self.assertEqual([e for e in got.errands if e.kind == "give"], [])
 
     def test_somebody_handed_a_stack_is_not_also_sold_one(self):
-        mage = self._mage(food=40, stacks=[self._conjured(11, "food"),
-                                           self._conjured(12, "food")])
+        mage = self._mage(
+            food=40, stacks=[self._conjured(11, "food"), self._conjured(12, "food")]
+        )
         got = towntrip.plan((mage, self._warrior()), RATCHET)
         buys = [e for e in got.errands if e.kind == "buy" and e.member == "Grug"]
         self.assertEqual(buys, [])
@@ -349,15 +390,21 @@ class TheFreeRoutesComeBeforeTheCounter(unittest.TestCase):
         """A drink restores mana and nothing else, so it is a bag slot spent
         on a decoration for a class that runs on rage."""
         got = towntrip.plan((self._mage(), self._warrior()), RATCHET)
-        water = [e for e in got.errands
-                 if e.kind == "conjure" and e.command.startswith("water")][0]
+        water = [
+            e
+            for e in got.errands
+            if e.kind == "conjure" and e.command.startswith("water")
+        ][0]
         self.assertEqual(water.command, "water up_to:20")
 
     def test_a_priest_is_counted_as_a_mouth_that_drinks(self):
-        priest = Member("Ugga", "priest", 30, 10 ** 6, 8, ())
+        priest = Member("Ugga", "priest", 30, 10**6, 8, ())
         got = towntrip.plan((self._mage(), priest), RATCHET)
-        water = [e for e in got.errands
-                 if e.kind == "conjure" and e.command.startswith("water")][0]
+        water = [
+            e
+            for e in got.errands
+            if e.kind == "conjure" and e.command.startswith("water")
+        ][0]
         self.assertEqual(water.command, "water up_to:40")
 
     def test_a_conjurer_already_stocked_is_asked_for_nothing(self):
@@ -365,12 +412,14 @@ class TheFreeRoutesComeBeforeTheCounter(unittest.TestCase):
         self.assertEqual(towntrip.plan((alone,), RATCHET).errands, ())
 
     def test_the_plan_is_the_same_however_the_family_is_ordered(self):
-        mage = self._mage(food=40, stacks=[self._conjured(11, "food"),
-                                           self._conjured(12, "food")])
-        family = (mage, self._warrior(),
-                  Member("Ugga", "priest", 30, 10 ** 6, 8, ()))
-        self.assertEqual(towntrip.plan(family, RATCHET),
-                         towntrip.plan(tuple(reversed(family)), RATCHET))
+        mage = self._mage(
+            food=40, stacks=[self._conjured(11, "food"), self._conjured(12, "food")]
+        )
+        family = (mage, self._warrior(), Member("Ugga", "priest", 30, 10**6, 8, ()))
+        self.assertEqual(
+            towntrip.plan(family, RATCHET),
+            towntrip.plan(tuple(reversed(family)), RATCHET),
+        )
 
 
 class TheEmptyCases(unittest.TestCase):
@@ -378,7 +427,7 @@ class TheEmptyCases(unittest.TestCase):
         self.assertEqual(towntrip.plan((), RATCHET), towntrip.Plan())
 
     def test_a_character_wearing_nothing_that_wears_out_is_not_repaired(self):
-        naked = Member("A", "mage", 26, 10 ** 6, 8, (), spells=frozenset({990, 5506}))
+        naked = Member("A", "mage", 26, 10**6, 8, (), spells=frozenset({990, 5506}))
         got = towntrip.plan((naked,), RATCHET)
         self.assertNotIn("repair", [e.kind for e in got.errands])
         # He still eats. Nothing worn is a repair question and not a food one.

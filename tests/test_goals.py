@@ -4,6 +4,7 @@ No MySQL and no Discord anywhere - the store is a dict a tiny fake mutates
 by applying the typed actions reconcile returns, which is exactly the seam
 bridge.py implements against the real store (infra#2601).
 """
+
 import ast
 import pathlib
 import unittest
@@ -24,7 +25,9 @@ from goals import (
 
 class ParseLevelTest(unittest.TestCase):
     def test_reach_level(self):
-        self.assertEqual(parse_goal("reach level 5 before you continue"), Goal("level", 5))
+        self.assertEqual(
+            parse_goal("reach level 5 before you continue"), Goal("level", 5)
+        )
 
     def test_hit_level(self):
         self.assertEqual(parse_goal("hit level 10"), Goal("level", 10))
@@ -57,10 +60,18 @@ class ParseSkillTest(unittest.TestCase):
         # The ids below were verified live against character_skills on
         # 2026-08-21; this pins the dict against silent edits.
         expected = {
-            "first aid": 129, "blacksmithing": 164, "leatherworking": 165,
-            "alchemy": 171, "herbalism": 182, "cooking": 185, "mining": 186,
-            "tailoring": 197, "engineering": 202, "enchanting": 333,
-            "fishing": 356, "skinning": 393,
+            "first aid": 129,
+            "blacksmithing": 164,
+            "leatherworking": 165,
+            "alchemy": 171,
+            "herbalism": 182,
+            "cooking": 185,
+            "mining": 186,
+            "tailoring": 197,
+            "engineering": 202,
+            "enchanting": 333,
+            "fishing": 356,
+            "skinning": 393,
             # Added for the family's trade plan (infra#2757), and with a
             # DIFFERENT provenance that the module says out loud: nobody on
             # this realm holds either, so there was no live row to check them
@@ -69,7 +80,8 @@ class ParseSkillTest(unittest.TestCase):
             # mod-playerbots/azerothcore-wotlk@efe123fa - which also matches
             # every one of the twelve above, which is how the two sources were
             # checked against each other rather than assumed to agree.
-            "jewelcrafting": 755, "inscription": 773,
+            "jewelcrafting": 755,
+            "inscription": 773,
         }
         self.assertEqual(goals.SKILL_IDS, expected)
         for name in expected:
@@ -77,13 +89,19 @@ class ParseSkillTest(unittest.TestCase):
             self.assertEqual(parsed, Goal("skill", 75, name), name)
 
     def test_two_word_profession_with_extra_spaces(self):
-        self.assertEqual(parse_goal("get first  aid to 150"), Goal("skill", 150, "first aid"))
+        self.assertEqual(
+            parse_goal("get first  aid to 150"), Goal("skill", 150, "first aid")
+        )
 
     def test_skill_up_to(self):
-        self.assertEqual(parse_goal("push mining up to 75"), Goal("skill", 75, "mining"))
+        self.assertEqual(
+            parse_goal("push mining up to 75"), Goal("skill", 75, "mining")
+        )
 
     def test_level_your_profession_is_a_skill_goal_not_a_level_goal(self):
-        self.assertEqual(parse_goal("level your cooking to 150"), Goal("skill", 150, "cooking"))
+        self.assertEqual(
+            parse_goal("level your cooking to 150"), Goal("skill", 150, "cooking")
+        )
 
     def test_skill_above_cap_is_not_a_goal(self):
         self.assertIsNone(parse_goal("get mining to 451"))
@@ -114,8 +132,12 @@ class ParseCancelTest(unittest.TestCase):
 
 class ParseNonGoalTest(unittest.TestCase):
     def test_plain_orders_are_not_goals(self):
-        for text in ("follow", "go kill boars until you feel stronger",
-                     "stats", "sell your junk and repair"):
+        for text in (
+            "follow",
+            "go kill boars until you feel stronger",
+            "stats",
+            "sell your junk and repair",
+        ):
             self.assertIsNone(parse_goal(text), text)
 
 
@@ -150,18 +172,20 @@ class ReconcileTest(unittest.TestCase):
 
     def test_first_sighting_issues_strategy_and_records(self):
         actions = reconcile(make_row(), 1)
-        self.assertEqual(actions, [
-            StrategyCommand("Grug", "nc +grind"),
-            RecordProgress(7, 1),
-        ])
+        self.assertEqual(
+            actions,
+            [
+                StrategyCommand("Grug", "nc +grind"),
+                RecordProgress(7, 1),
+            ],
+        )
 
     def test_a_stalled_goal_records_the_stall_and_stays_quiet(self):
         """No progress is usually just a slow grind, so it must not chatter -
         but it must be counted, because it is also what a lost strategy looks
         like."""
         row = make_row(last_report="3")
-        self.assertEqual(reconcile(row, 3),
-                         [RecordProgress(7, 3, stalls=1)])
+        self.assertEqual(reconcile(row, 3), [RecordProgress(7, 3, stalls=1)])
 
     def test_a_goal_stalled_long_enough_is_put_back_on_task(self):
         """PlayerbotAI::ResetStrategies runs on login and rebuilds strategies
@@ -176,8 +200,7 @@ class ReconcileTest(unittest.TestCase):
 
     def test_the_stall_counter_resets_when_progress_resumes(self):
         row = make_row(last_report="3/%d" % (goals.REASSERT_AFTER_CYCLES - 1))
-        recorded = [a for a in reconcile(row, 4)
-                    if isinstance(a, goals.RecordProgress)]
+        recorded = [a for a in reconcile(row, 4) if isinstance(a, goals.RecordProgress)]
         self.assertEqual(recorded, [RecordProgress(7, 4)])
         self.assertEqual(recorded[0].stalls, 0)
 
@@ -368,8 +391,10 @@ class StrategyChannelTest(unittest.TestCase):
         cmd = goals.strategy_for(make_row())
         verb, _, rest = cmd.partition(" ")
         self.assertIn(verb, ("nc", "co"))
-        self.assertTrue(rest.startswith(("+", "-", "~", "!", "?")),
-                        "strategy changes are sign-prefixed: %r" % cmd)
+        self.assertTrue(
+            rest.startswith(("+", "-", "~", "!", "?")),
+            "strategy changes are sign-prefixed: %r" % cmd,
+        )
 
 
 class LifeStrategyTest(unittest.TestCase):
@@ -426,7 +451,9 @@ class DuplicateGoalTest(unittest.TestCase):
     def test_a_target_stored_as_text_still_matches(self):
         """MySQL hands back what the column type gives; the rule must not
         depend on which."""
-        self.assertTrue(goals.already_working("level", 7, [{"kind": "level", "target": "7"}]))
+        self.assertTrue(
+            goals.already_working("level", 7, [{"kind": "level", "target": "7"}])
+        )
 
 
 class PartyThatTravelsTest(unittest.TestCase):
@@ -488,8 +515,10 @@ class PartyThatTravelsTest(unittest.TestCase):
         """Otherwise there is a tick where both are set and the follower is
         gone again."""
         cmds = goals.life_strategies(leads=False)
-        self.assertLess(cmds.index("nc -new rpg"),
-                        next(i for i, c in enumerate(cmds) if "+follow" in c))
+        self.assertLess(
+            cmds.index("nc -new rpg"),
+            next(i for i, c in enumerate(cmds) if "+follow" in c),
+        )
 
     def test_fleeing_is_a_combat_strategy(self):
         """FleeStrategy's triggers are panic and critical health - combat
@@ -531,7 +560,8 @@ class StrategiesReturnWithTheCharacter(unittest.TestCase):
     def test_a_character_back_under_the_ai_is_reported(self):
         self.assertEqual(
             frozenset({"Grug"}),
-            goals.returned_to_ai(frozenset({"Bork"}), frozenset({"Bork", "Grug"})))
+            goals.returned_to_ai(frozenset({"Bork"}), frozenset({"Bork", "Grug"})),
+        )
 
     def test_nobody_new_means_nobody_is_re_issued(self):
         """These commands reach the game as whispers. Re-issuing to characters
@@ -544,8 +574,8 @@ class StrategiesReturnWithTheCharacter(unittest.TestCase):
         already covers startup; firing here too would re-issue to all five on
         every restart of the bridge."""
         self.assertEqual(
-            frozenset(),
-            goals.returned_to_ai(None, frozenset({"Grug", "Bork", "Og"})))
+            frozenset(), goals.returned_to_ai(None, frozenset({"Grug", "Bork", "Og"}))
+        )
 
     def test_a_character_taken_BY_a_person_is_not_a_return(self):
         """Losing AI control is the start of the problem, not the end of it -
@@ -554,7 +584,8 @@ class StrategiesReturnWithTheCharacter(unittest.TestCase):
         errors."""
         self.assertEqual(
             frozenset(),
-            goals.returned_to_ai(frozenset({"Grug", "Bork"}), frozenset({"Bork"})))
+            goals.returned_to_ai(frozenset({"Grug", "Bork"}), frozenset({"Bork"})),
+        )
 
     def test_a_full_round_trip_fires_exactly_once(self):
         """Human takes Grug, human gives him back. One re-issue, on the way
@@ -586,9 +617,14 @@ class TheReturnLoopIsActuallyWired(unittest.TestCase):
         src = (pathlib.Path(__file__).resolve().parent.parent / "bridge.py").read_text()
         cls.tree = ast.parse(src)
         cls.fn = next(
-            (n for n in ast.walk(cls.tree)
-             if isinstance(n, ast.AsyncFunctionDef) and n.name == "_restore_lost_lives"),
-            None)
+            (
+                n
+                for n in ast.walk(cls.tree)
+                if isinstance(n, ast.AsyncFunctionDef)
+                and n.name == "_restore_lost_lives"
+            ),
+            None,
+        )
 
     def _calls(self):
         out = set()
@@ -606,8 +642,11 @@ class TheReturnLoopIsActuallyWired(unittest.TestCase):
         """asyncio keeps only a weak reference to a running task, so a loop
         created and not held can be collected mid-flight - and it stops with
         no error and nothing in the log."""
-        hook = next(n for n in ast.walk(self.tree)
-                    if isinstance(n, ast.AsyncFunctionDef) and n.name == "setup_hook")
+        hook = next(
+            n
+            for n in ast.walk(self.tree)
+            if isinstance(n, ast.AsyncFunctionDef) and n.name == "setup_hook"
+        )
         started = {n.attr for n in ast.walk(hook) if isinstance(n, ast.Attribute)}
         self.assertIn("_restore_lost_lives", started)
 
@@ -623,8 +662,8 @@ class TheReturnLoopIsActuallyWired(unittest.TestCase):
         """The whole point is closing a 600-second hole. A recheck on the same
         cadence would close nothing."""
         src = (pathlib.Path(__file__).resolve().parent.parent / "bridge.py").read_text()
-        body = src[src.index("async def _restore_lost_lives"):]
-        body = body[:body.index("async def _protect_characters")]
+        body = src[src.index("async def _restore_lost_lives") :]
+        body = body[: body.index("async def _protect_characters")]
         self.assertIn("LIFE_RECHECK_SECONDS", body)
         default = body.split('LIFE_RECHECK_SECONDS", "')[1].split('"')[0]
         self.assertLessEqual(float(default), 60.0)
@@ -665,8 +704,7 @@ class SkillGoalIssuesNoCombatStrategyTest(unittest.TestCase):
         only reason to move."""
         for kind in ("level", "quest", "dungeon"):
             with self.subTest(kind=kind):
-                self.assertEqual("nc +grind",
-                                 goals.strategy_for(make_row(kind=kind)))
+                self.assertEqual("nc +grind", goals.strategy_for(make_row(kind=kind)))
 
     def test_a_skill_goal_drives_a_profession_and_never_a_strategy(self):
         actions = reconcile(_skill_row(), 40)
@@ -680,8 +718,9 @@ class SkillGoalIssuesNoCombatStrategyTest(unittest.TestCase):
         )
 
     def test_the_drive_carries_the_facts_the_planner_needs(self):
-        drive = next(a for a in reconcile(_skill_row(), 40)
-                     if isinstance(a, goals.DriveSkill))
+        drive = next(
+            a for a in reconcile(_skill_row(), 40) if isinstance(a, goals.DriveSkill)
+        )
         self.assertEqual(drive.skill_name, "tailoring")
         self.assertEqual(drive.skill_id, goals.SKILL_IDS["tailoring"])
         self.assertEqual(drive.observed, 40)
@@ -716,8 +755,9 @@ class SkillDriveCadenceTest(unittest.TestCase):
     def test_first_sighting_drives_and_speaks(self):
         drives = self._drives(reconcile(_skill_row(), 40))
         self.assertEqual(len(drives), 1)
-        self.assertTrue(drives[0].speak,
-                        "the goal must say what it is going to do when it is set")
+        self.assertTrue(
+            drives[0].speak, "the goal must say what it is going to do when it is set"
+        )
 
     def test_progress_neither_drives_nor_speaks(self):
         """Steady state is read-only - that is this module's whole contract.
@@ -738,16 +778,19 @@ class SkillDriveCadenceTest(unittest.TestCase):
         row = _skill_row(last_report="40/%d" % (goals.REASSERT_AFTER_CYCLES - 1))
         actions = reconcile(row, 40)
         self.assertEqual(len(self._drives(actions)), 1)
-        self.assertFalse(self._drives(actions)[0].speak,
-                         "a routine re-assert is a log line, not a Discord line")
+        self.assertFalse(
+            self._drives(actions)[0].speak,
+            "a routine re-assert is a log line, not a Discord line",
+        )
 
     def test_the_re_assert_does_not_reset_the_counter(self):
         """The bug this guards: zero the counter on re-drive and the barren
         verdict below becomes unreachable, so a goal that never moves reports
         healthy for ever - the exact shape of the defect this change fixes."""
         row = _skill_row(last_report="40/%d" % (goals.REASSERT_AFTER_CYCLES - 1))
-        self.assertEqual(self._recorded(reconcile(row, 40)).stalls,
-                         goals.REASSERT_AFTER_CYCLES)
+        self.assertEqual(
+            self._recorded(reconcile(row, 40)).stalls, goals.REASSERT_AFTER_CYCLES
+        )
 
     def test_a_barren_goal_speaks(self):
         row = _skill_row(last_report="40/%d" % (goals.SKILL_BARREN_CYCLES - 1))
@@ -797,8 +840,7 @@ class SkillBarrenArithmeticTest(unittest.TestCase):
         sentence a person reads is attached to a fresh decision. Break the
         divisibility and a barren goal speaks on a cycle with no plan behind
         it."""
-        self.assertEqual(
-            goals.SKILL_BARREN_CYCLES % goals.REASSERT_AFTER_CYCLES, 0)
+        self.assertEqual(goals.SKILL_BARREN_CYCLES % goals.REASSERT_AFTER_CYCLES, 0)
 
     def test_barren_outlasts_two_save_intervals(self):
         """Fifteen cycles can pass with real progress the table has not
@@ -806,7 +848,8 @@ class SkillBarrenArithmeticTest(unittest.TestCase):
         nothing on the strength of the save clock alone."""
         window = goals.SKILL_BARREN_CYCLES * self._goal_interval()
         self.assertGreaterEqual(
-            window, 2 * self.SAVE_INTERVAL_SECONDS,
+            window,
+            2 * self.SAVE_INTERVAL_SECONDS,
             "SKILL_BARREN_CYCLES x GOAL_INTERVAL is %.0fs, inside two save "
             "intervals - a stale read alone could trigger it" % window,
         )
@@ -829,10 +872,14 @@ class TheSkillDriveIsActuallyWired(unittest.TestCase):
 
     def _fn(self, name):
         return next(
-            (n for n in ast.walk(self.tree)
-             if isinstance(n, (ast.AsyncFunctionDef, ast.FunctionDef))
-             and n.name == name),
-            None)
+            (
+                n
+                for n in ast.walk(self.tree)
+                if isinstance(n, (ast.AsyncFunctionDef, ast.FunctionDef))
+                and n.name == name
+            ),
+            None,
+        )
 
     def _names(self, fn):
         out = set()
@@ -844,8 +891,12 @@ class TheSkillDriveIsActuallyWired(unittest.TestCase):
         return out
 
     def test_bridge_imports_the_planner(self):
-        imported = {n.name for node in ast.walk(self.tree)
-                    if isinstance(node, ast.Import) for n in node.names}
+        imported = {
+            n.name
+            for node in ast.walk(self.tree)
+            if isinstance(node, ast.Import)
+            for n in node.names
+        }
         self.assertIn("skillgoal", imported)
 
     def test_the_action_is_dispatched(self):
@@ -882,10 +933,11 @@ class TheSkillDriveIsActuallyWired(unittest.TestCase):
         reconcile branch, and forget the table entry. Nothing else in the suite
         would notice.
         """
-        goals_src = (pathlib.Path(__file__).resolve().parent.parent / "goals.py").read_text()
+        goals_src = (
+            pathlib.Path(__file__).resolve().parent.parent / "goals.py"
+        ).read_text()
         goals_tree = ast.parse(goals_src)
-        declared = {n.name for n in ast.walk(goals_tree)
-                    if isinstance(n, ast.ClassDef)}
+        declared = {n.name for n in ast.walk(goals_tree) if isinstance(n, ast.ClassDef)}
 
         emitted = set()
         for fn in ast.walk(goals_tree):
@@ -900,12 +952,17 @@ class TheSkillDriveIsActuallyWired(unittest.TestCase):
         self.assertTrue(emitted, "found no actions at all - the walk is broken")
 
         fn = self._fn("_apply_goal_action")
-        handled = {n.attr for n in ast.walk(fn)
-                   if isinstance(n, ast.Attribute)
-                   and isinstance(n.value, ast.Name) and n.value.id == "goals"}
+        handled = {
+            n.attr
+            for n in ast.walk(fn)
+            if isinstance(n, ast.Attribute)
+            and isinstance(n.value, ast.Name)
+            and n.value.id == "goals"
+        }
         missing = sorted(emitted - handled)
         self.assertEqual(
-            missing, [],
+            missing,
+            [],
             "goals.reconcile emits %s and _apply_goal_action applies none of "
             "them - the decision is made and then dropped" % missing,
         )
@@ -914,8 +971,8 @@ class TheSkillDriveIsActuallyWired(unittest.TestCase):
         """The table's other half. A `.get` that returned None and fell through
         would be the same silence in a tidier shape."""
         src = (pathlib.Path(__file__).resolve().parent.parent / "bridge.py").read_text()
-        body = src[src.index("async def _apply_goal_action"):]
-        body = body[:body.index("async def _goal_strategy")]
+        body = src[src.index("async def _apply_goal_action") :]
+        body = body[: body.index("async def _goal_strategy")]
         self.assertIn("log.warning", body)
 
     def test_the_handler_never_writes_a_command_row_itself(self):
@@ -938,17 +995,20 @@ class TheChosenFieldIsActuallyWalkedTo(unittest.TestCase):
     these tests are the ones that fail if it comes back."""
 
     def setUp(self):
-        src = (pathlib.Path(__file__).resolve().parent.parent
-               / "bridge.py").read_text()
+        src = (pathlib.Path(__file__).resolve().parent.parent / "bridge.py").read_text()
         self.src = src
         self.tree = ast.parse(src)
 
     def _fn(self, name):
         return next(
-            (n for n in ast.walk(self.tree)
-             if isinstance(n, (ast.AsyncFunctionDef, ast.FunctionDef))
-             and n.name == name),
-            None)
+            (
+                n
+                for n in ast.walk(self.tree)
+                if isinstance(n, (ast.AsyncFunctionDef, ast.FunctionDef))
+                and n.name == name
+            ),
+            None,
+        )
 
     def _names(self, fn):
         out = set()
@@ -962,8 +1022,7 @@ class TheChosenFieldIsActuallyWalkedTo(unittest.TestCase):
     def test_the_skill_drive_sends_somebody_to_the_field_it_chose(self):
         """THE WHOLE POINT. Without this call the coordinate is computed and
         thrown away, which is what #4181 shipped."""
-        self.assertIn("_walk_to_gather_field",
-                      self._names(self._fn("_drive_skill")))
+        self.assertIn("_walk_to_gather_field", self._names(self._fn("_drive_skill")))
 
     def test_the_walk_is_not_gated_on_the_job_mode(self):
         """`plan.mode` is set only on the ENTRY into the rhythm - once the
@@ -972,23 +1031,30 @@ class TheChosenFieldIsActuallyWalkedTo(unittest.TestCase):
         again, which is the same inertness one layer up."""
         fn = self._fn("_drive_skill")
         self.assertIsNotNone(fn)
-        walk = next((n for n in ast.walk(fn)
-                     if isinstance(n, ast.Attribute)
-                     and n.attr == "_walk_to_gather_field"), None)
+        walk = next(
+            (
+                n
+                for n in ast.walk(fn)
+                if isinstance(n, ast.Attribute) and n.attr == "_walk_to_gather_field"
+            ),
+            None,
+        )
         self.assertIsNotNone(walk, "no call to _walk_to_gather_field")
         # The guarding `if` must not read plan.mode.
         for node in ast.walk(fn):
             if not isinstance(node, ast.If):
                 continue
-            guards = {n.attr for n in ast.walk(node.test)
-                      if isinstance(n, ast.Attribute)}
-            calls = {n.attr for n in ast.walk(node)
-                     if isinstance(n, ast.Attribute)}
+            guards = {
+                n.attr for n in ast.walk(node.test) if isinstance(n, ast.Attribute)
+            }
+            calls = {n.attr for n in ast.walk(node) if isinstance(n, ast.Attribute)}
             if "_walk_to_gather_field" in calls:
                 self.assertNotIn(
-                    "mode", guards,
+                    "mode",
+                    guards,
                     "the walk is gated on plan.mode, so it happens once and "
-                    "never again once craft_rhythm owns the alternation")
+                    "never again once craft_rhythm owns the alternation",
+                )
 
     def test_the_aim_string_is_built_by_travel_and_never_here(self):
         """`travel.ground_aim` refuses a malformed or over-long aim rather than
@@ -1027,8 +1093,7 @@ class TheChosenFieldIsActuallyWalkedTo(unittest.TestCase):
         from the position query would make `where.get("zone_id")` None on every
         pass, the check would never fire, and the family would be re-aimed from
         inside the field with nothing in the log to say so."""
-        sql = self.src[self.src.index("_FAMILY_POSITION_SQL = ("):]
-        sql = sql[:sql.index(")")]
+        sql = self.src[self.src.index("_FAMILY_POSITION_SQL = (") :]
+        sql = sql[: sql.index(")")]
         self.assertIn("zone_id", sql)
         self.assertIn("overseer_snapshot", sql)
-

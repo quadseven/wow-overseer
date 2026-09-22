@@ -31,6 +31,7 @@ AND THE TWO WAYS THIS FIX COULD ITSELF BE THE BUG ARE PINNED HARDEST:
   * FAIRNESS THAT STARVES THE OTHER WAY - a rare pass holding the column still
     for a frequent one that has stopped asking - is `TheYieldIsBounded`.
 """
+
 import ast
 import pathlib
 import re
@@ -40,14 +41,15 @@ import townslot
 
 
 def want(name, waiting_since, last_asked=None):
-    return townslot.Want(claimant=name, waiting_since=waiting_since,
-                         last_asked=waiting_since if last_asked is None
-                         else last_asked)
+    return townslot.Want(
+        claimant=name,
+        waiting_since=waiting_since,
+        last_asked=waiting_since if last_asked is None else last_asked,
+    )
 
 
 def holder(name, aim, since, character="Grug"):
-    return townslot.Holder(claimant=name, character=character, aim=aim,
-                           since=since)
+    return townslot.Holder(claimant=name, character=character, aim=aim, since=since)
 
 
 def economy(aim):
@@ -56,16 +58,28 @@ def economy(aim):
     Keywords the economy writes, a surveyed ground aim, a bare creature entry.
     A trainer errand is none of those and is the one this must refuse.
     """
-    return (aim in ("vendor", "banker", "repair", "guild banker", "auctioneer")
-            or aim.startswith("at:") or aim.isdigit())
+    return (
+        aim in ("vendor", "banker", "repair", "guild banker", "auctioneer")
+        or aim.startswith("at:")
+        or aim.isdigit()
+    )
 
 
 def decide(**kw):
     """`townslot.decide` with the arguments a live caller always supplies."""
-    base = dict(claimant="guild bank", character="Grug", aim="at:1:1,2,3",
-                leader="Grug", column="", retaskable=("", "at:1:1,2,3"),
-                holder=None, wants=(), last_served={}, now=0.0,
-                releasable=economy)
+    base = dict(
+        claimant="guild bank",
+        character="Grug",
+        aim="at:1:1,2,3",
+        leader="Grug",
+        column="",
+        retaskable=("", "at:1:1,2,3"),
+        holder=None,
+        wants=(),
+        last_served={},
+        now=0.0,
+        releasable=economy,
+    )
     base.update(kw)
     return townslot.decide(**base)
 
@@ -97,8 +111,13 @@ class OnlyTheLeaderTravels(unittest.TestCase):
         self.assertIn("nobody", d.reason)
 
     def test_a_follower_request_never_preempts_the_leader_s_errand(self):
-        d = decide(character="Ugga", leader="Grug", column="vendor",
-                   holder=holder("economy", "vendor", since=0.0), now=99999.0)
+        d = decide(
+            character="Ugga",
+            leader="Grug",
+            column="vendor",
+            holder=holder("economy", "vendor", since=0.0),
+            now=99999.0,
+        )
         self.assertIsNone(d.release)
 
     def test_the_leader_himself_is_granted(self):
@@ -107,7 +126,6 @@ class OnlyTheLeaderTravels(unittest.TestCase):
 
 
 class AFreeColumnIsTakenAndRecorded(unittest.TestCase):
-
     def test_an_empty_column_is_taken(self):
         d = decide()
         self.assertEqual(townslot.SLOT_TAKE, d.verdict)
@@ -120,9 +138,15 @@ class AFreeColumnIsTakenAndRecorded(unittest.TestCase):
 
     def test_a_taken_slot_is_recorded_against_the_pass_that_took_it(self):
         slot = townslot.Slot(releasable=economy)
-        d = slot.want(claimant="economy", character="Grug", aim="vendor",
-                      leader="Grug", column="", retaskable=("", "vendor"),
-                      now=10.0)
+        d = slot.want(
+            claimant="economy",
+            character="Grug",
+            aim="vendor",
+            leader="Grug",
+            column="",
+            retaskable=("", "vendor"),
+            now=10.0,
+        )
         slot.settle(d, True, 10.0)
         self.assertEqual("economy", slot.holder.claimant)
         self.assertEqual("vendor", slot.holder.aim)
@@ -134,9 +158,15 @@ class AFreeColumnIsTakenAndRecorded(unittest.TestCase):
         would hand this pass a lease it is not using and tell every other pass
         to wait for an errand nobody is on."""
         slot = townslot.Slot(releasable=economy)
-        d = slot.want(claimant="economy", character="Grug", aim="vendor",
-                      leader="Grug", column="", retaskable=("", "vendor"),
-                      now=10.0)
+        d = slot.want(
+            claimant="economy",
+            character="Grug",
+            aim="vendor",
+            leader="Grug",
+            column="",
+            retaskable=("", "vendor"),
+            now=10.0,
+        )
         slot.settle(d, False, 10.0)
         self.assertIsNone(slot.holder)
         self.assertEqual(["economy"], [w.claimant for w in slot.wants])
@@ -145,13 +175,25 @@ class AFreeColumnIsTakenAndRecorded(unittest.TestCase):
         """It waited, so it is a waiter. Starting it again from the back on
         every lost race is how a pass with a slow cycle never gets a turn."""
         slot = townslot.Slot(releasable=economy)
-        d = slot.want(claimant="bank", character="Grug", aim="banker",
-                      leader="Grug", column="vendor", retaskable=("", "banker"),
-                      now=5.0)
+        d = slot.want(
+            claimant="bank",
+            character="Grug",
+            aim="banker",
+            leader="Grug",
+            column="vendor",
+            retaskable=("", "banker"),
+            now=5.0,
+        )
         self.assertEqual(townslot.SLOT_WAIT, d.verdict)
-        granted = slot.want(claimant="bank", character="Grug", aim="banker",
-                            leader="Grug", column="",
-                            retaskable=("", "banker"), now=600.0)
+        granted = slot.want(
+            claimant="bank",
+            character="Grug",
+            aim="banker",
+            leader="Grug",
+            column="",
+            retaskable=("", "banker"),
+            now=600.0,
+        )
         slot.settle(granted, False, 600.0)
         self.assertEqual([5.0], [w.waiting_since for w in slot.wants])
 
@@ -163,67 +205,96 @@ class TheLeaseRunsFromWhenItWasTaken(unittest.TestCase):
     extra mechanism in front of it."""
 
     def test_the_same_pass_asking_again_holds_rather_than_rewrites(self):
-        d = decide(claimant="economy", aim="vendor", column="vendor",
-                   retaskable=("", "vendor"),
-                   holder=holder("economy", "vendor", since=0.0), now=100.0)
+        d = decide(
+            claimant="economy",
+            aim="vendor",
+            column="vendor",
+            retaskable=("", "vendor"),
+            holder=holder("economy", "vendor", since=0.0),
+            now=100.0,
+        )
         self.assertEqual(townslot.SLOT_HOLD, d.verdict)
         self.assertTrue(d.granted)
         self.assertFalse(d.writes)
 
     def test_a_hold_carries_the_original_start_time_forward(self):
-        d = decide(claimant="economy", aim="vendor", column="vendor",
-                   retaskable=("", "vendor"),
-                   holder=holder("economy", "vendor", since=0.0), now=100.0)
+        d = decide(
+            claimant="economy",
+            aim="vendor",
+            column="vendor",
+            retaskable=("", "vendor"),
+            holder=holder("economy", "vendor", since=0.0),
+            now=100.0,
+        )
         self.assertEqual(0.0, d.inherit_since)
 
     def test_re_asserting_for_an_hour_does_not_push_the_lease_out(self):
         slot = townslot.Slot(releasable=economy)
-        d = slot.want(claimant="economy", character="Grug", aim="vendor",
-                      leader="Grug", column="", retaskable=("", "vendor"),
-                      now=0.0)
+        d = slot.want(
+            claimant="economy",
+            character="Grug",
+            aim="vendor",
+            leader="Grug",
+            column="",
+            retaskable=("", "vendor"),
+            now=0.0,
+        )
         slot.settle(d, True, 0.0)
         for minute in range(1, 60):
-            again = slot.want(claimant="economy", character="Grug",
-                              aim="vendor", leader="Grug", column="vendor",
-                              retaskable=("", "vendor"), now=minute * 60.0)
+            again = slot.want(
+                claimant="economy",
+                character="Grug",
+                aim="vendor",
+                leader="Grug",
+                column="vendor",
+                retaskable=("", "vendor"),
+                now=minute * 60.0,
+            )
             slot.settle(again, True, minute * 60.0)
         self.assertEqual(0.0, slot.holder.since)
-        starved = slot.want(claimant="guild bank", character="Grug",
-                            aim="at:1:1,2,3", leader="Grug", column="vendor",
-                            retaskable=("", "at:1:1,2,3"), now=3600.0)
+        starved = slot.want(
+            claimant="guild bank",
+            character="Grug",
+            aim="at:1:1,2,3",
+            leader="Grug",
+            column="vendor",
+            retaskable=("", "at:1:1,2,3"),
+            now=3600.0,
+        )
         self.assertEqual(townslot.SLOT_PREEMPT, starved.verdict)
 
     def test_a_hold_is_logged_and_writes_nothing(self):
         """Re-writing the same word makes mod-overseer's aim book erase its own
         state and read a standing errand as a brand new one, releasing and
         re-taking the counter hold every time (infra#3708)."""
-        d = decide(claimant="economy", aim="vendor", column="vendor",
-                   retaskable=("", "vendor"),
-                   holder=holder("economy", "vendor", since=0.0), now=30.0)
+        d = decide(
+            claimant="economy",
+            aim="vendor",
+            column="vendor",
+            retaskable=("", "vendor"),
+            holder=holder("economy", "vendor", since=0.0),
+            now=30.0,
+        )
         self.assertIn("already holds", d.reason)
         self.assertFalse(d.writes)
 
 
 class AHeldErrandIsWaitedFor(unittest.TestCase):
-
     def test_a_live_errand_inside_its_lease_is_left_alone(self):
-        d = decide(column="vendor", holder=holder("economy", "vendor", 0.0),
-                   now=120.0)
+        d = decide(column="vendor", holder=holder("economy", "vendor", 0.0), now=120.0)
         self.assertEqual(townslot.SLOT_WAIT, d.verdict)
         self.assertFalse(d.granted)
         self.assertIsNone(d.release)
 
     def test_the_wait_says_how_much_lease_is_left(self):
-        d = decide(column="vendor", holder=holder("economy", "vendor", 0.0),
-                   now=120.0)
+        d = decide(column="vendor", holder=holder("economy", "vendor", 0.0), now=120.0)
         self.assertIn("held 120s of a 300s lease", d.reason)
         self.assertIn("180s left", d.reason)
 
     def test_the_wait_names_the_pass_that_holds_it(self):
-        """"Already on another errand" cannot tell a pass starved by a live
+        """ "Already on another errand" cannot tell a pass starved by a live
         errand from one starved by an errand left behind."""
-        d = decide(column="repair", holder=holder("towntrip", "repair", 0.0),
-                   now=10.0)
+        d = decide(column="repair", holder=holder("towntrip", "repair", 0.0), now=10.0)
         self.assertIn("towntrip", d.reason)
         self.assertIn("'repair'", d.reason)
 
@@ -234,8 +305,7 @@ class AStuckErrandLosesTheSlot(unittest.TestCase):
     behind it."""
 
     def test_the_lease_expiring_hands_the_slot_over(self):
-        d = decide(column="vendor", holder=holder("economy", "vendor", 0.0),
-                   now=301.0)
+        d = decide(column="vendor", holder=holder("economy", "vendor", 0.0), now=301.0)
         self.assertEqual(townslot.SLOT_PREEMPT, d.verdict)
         self.assertTrue(d.granted)
         self.assertTrue(d.writes)
@@ -250,26 +320,27 @@ class AStuckErrandLosesTheSlot(unittest.TestCase):
         self.assertEqual("vendor", d.release.aim)
 
     def test_the_preemption_says_how_long_and_cites_the_issue(self):
-        d = decide(column="vendor", holder=holder("economy", "vendor", 0.0),
-                   now=612.0)
+        d = decide(column="vendor", holder=holder("economy", "vendor", 0.0), now=612.0)
         self.assertIn("612s", d.reason)
         self.assertIn("past its 300s lease", d.reason)
         self.assertIn("infra#3703", d.reason)
 
     def test_one_second_before_the_lease_is_still_a_wait(self):
-        d = decide(column="vendor", holder=holder("economy", "vendor", 0.0),
-                   now=299.0)
+        d = decide(column="vendor", holder=holder("economy", "vendor", 0.0), now=299.0)
         self.assertEqual(townslot.SLOT_WAIT, d.verdict)
 
     def test_the_lease_boundary_itself_hands_over(self):
-        d = decide(column="vendor", holder=holder("economy", "vendor", 0.0),
-                   now=300.0)
+        d = decide(column="vendor", holder=holder("economy", "vendor", 0.0), now=300.0)
         self.assertEqual(townslot.SLOT_PREEMPT, d.verdict)
 
     def test_a_longer_lease_can_be_configured_without_changing_the_rule(self):
         """The realm's walks are what the number is about, so it is a knob."""
-        d = decide(column="vendor", holder=holder("economy", "vendor", 0.0),
-                   now=301.0, lease=900.0)
+        d = decide(
+            column="vendor",
+            holder=holder("economy", "vendor", 0.0),
+            now=301.0,
+            lease=900.0,
+        )
         self.assertEqual(townslot.SLOT_WAIT, d.verdict)
 
     def test_asking_is_waiting_so_the_first_ask_may_preempt(self):
@@ -277,15 +348,27 @@ class AStuckErrandLosesTheSlot(unittest.TestCase):
         it is allowed to take a lapsed lease. Its cycle is ten minutes; making
         it wait two would be the starvation with a politer name."""
         slot = townslot.Slot(releasable=economy)
-        d = slot.want(claimant="guild bank", character="Grug",
-                      aim="at:1:1,2,3", leader="Grug", column="vendor",
-                      retaskable=("", "at:1:1,2,3"), now=400.0)
+        d = slot.want(
+            claimant="guild bank",
+            character="Grug",
+            aim="at:1:1,2,3",
+            leader="Grug",
+            column="vendor",
+            retaskable=("", "at:1:1,2,3"),
+            now=400.0,
+        )
         # The ledger has never seen this column, so it adopts it as an orphan
         # on the long lease - the honest answer for an errand it cannot name.
         self.assertEqual(townslot.SLOT_WAIT, d.verdict)
-        later = slot.want(claimant="guild bank", character="Grug",
-                          aim="at:1:1,2,3", leader="Grug", column="vendor",
-                          retaskable=("", "at:1:1,2,3"), now=1700.0)
+        later = slot.want(
+            claimant="guild bank",
+            character="Grug",
+            aim="at:1:1,2,3",
+            leader="Grug",
+            column="vendor",
+            retaskable=("", "at:1:1,2,3"),
+            now=1700.0,
+        )
         self.assertEqual(townslot.SLOT_PREEMPT, later.verdict)
 
 
@@ -295,28 +378,44 @@ class AnErrandTheEconomyMayNotTouchIsNeverTaken(unittest.TestCase):
     bug the whole guarded branch exists to prevent."""
 
     def test_a_trainer_errand_is_waited_for_however_long_it_runs(self):
-        d = decide(column="profession trainer",
-                   holder=holder("", "profession trainer", 0.0), now=99999.0)
+        d = decide(
+            column="profession trainer",
+            holder=holder("", "profession trainer", 0.0),
+            now=99999.0,
+        )
         self.assertEqual(townslot.SLOT_WAIT, d.verdict)
         self.assertIsNone(d.release)
 
     def test_the_reason_says_it_is_not_the_economy_s_to_hand_back(self):
-        d = decide(column="profession trainer",
-                   holder=holder("", "profession trainer", 0.0), now=99999.0)
+        d = decide(
+            column="profession trainer",
+            holder=holder("", "profession trainer", 0.0),
+            now=99999.0,
+        )
         self.assertIn("not an errand the economy may hand back", d.reason)
 
     def test_with_no_predicate_supplied_nothing_is_ever_preempted(self):
         """Fail closed. A caller that forgets to wire the guard gets a module
         that arbitrates turn order and never takes anything from anybody."""
-        d = decide(column="vendor", holder=holder("economy", "vendor", 0.0),
-                   now=99999.0, releasable=None)
+        d = decide(
+            column="vendor",
+            holder=holder("economy", "vendor", 0.0),
+            now=99999.0,
+            releasable=None,
+        )
         self.assertEqual(townslot.SLOT_WAIT, d.verdict)
 
     def test_the_default_slot_is_fail_closed_too(self):
         slot = townslot.Slot()
-        d = slot.want(claimant="bank", character="Grug", aim="banker",
-                      leader="Grug", column="vendor", retaskable=("", "banker"),
-                      now=99999.0)
+        d = slot.want(
+            claimant="bank",
+            character="Grug",
+            aim="banker",
+            leader="Grug",
+            column="vendor",
+            retaskable=("", "banker"),
+            now=99999.0,
+        )
         self.assertEqual(townslot.SLOT_WAIT, d.verdict)
 
 
@@ -329,9 +428,15 @@ class AnErrandWithNoOwnerGetsTheWorldsOwnClock(unittest.TestCase):
 
     def test_an_unrecorded_column_becomes_a_holder_rather_than_nothing(self):
         slot = townslot.Slot(releasable=economy)
-        d = slot.want(claimant="bank", character="Grug", aim="banker",
-                      leader="Grug", column="repair", retaskable=("", "banker"),
-                      now=50.0)
+        d = slot.want(
+            claimant="bank",
+            character="Grug",
+            aim="banker",
+            leader="Grug",
+            column="repair",
+            retaskable=("", "banker"),
+            now=50.0,
+        )
         self.assertEqual(townslot.SLOT_WAIT, d.verdict)
         self.assertEqual("repair", slot.holder.aim)
         self.assertEqual("", slot.holder.claimant)
@@ -342,23 +447,23 @@ class AnErrandWithNoOwnerGetsTheWorldsOwnClock(unittest.TestCase):
         self.assertIn("1200s lease", d.reason)
 
     def test_an_orphan_is_preempted_once_the_world_has_given_up_too(self):
-        d = decide(column="repair", holder=holder("", "repair", 0.0),
-                   now=1201.0)
+        d = decide(column="repair", holder=holder("", "repair", 0.0), now=1201.0)
         self.assertEqual(townslot.SLOT_PREEMPT, d.verdict)
 
     def test_an_orphan_is_named_as_one(self):
-        d = decide(column="repair", holder=holder("", "repair", 0.0),
-                   now=1201.0)
+        d = decide(column="repair", holder=holder("", "repair", 0.0), now=1201.0)
         self.assertIn("an unknown writer", d.reason)
 
     def test_lease_for_answers_zero_for_nobody(self):
         self.assertEqual(0.0, townslot.lease_for(None))
 
     def test_lease_for_separates_the_two_cases(self):
-        self.assertEqual(townslot.LEASE_SECONDS,
-                         townslot.lease_for(holder("economy", "vendor", 0.0)))
-        self.assertEqual(townslot.ORPHAN_LEASE_SECONDS,
-                         townslot.lease_for(holder("", "vendor", 0.0)))
+        self.assertEqual(
+            townslot.LEASE_SECONDS, townslot.lease_for(holder("economy", "vendor", 0.0))
+        )
+        self.assertEqual(
+            townslot.ORPHAN_LEASE_SECONDS, townslot.lease_for(holder("", "vendor", 0.0))
+        )
 
     def test_the_orphan_lease_matches_the_worlds_own_backstop(self):
         """mod_overseer.cpp: TRAVEL_BACKSTOP_SECONDS = 20 * 60. Past it the
@@ -386,18 +491,23 @@ class AnErrandWithNoOwnerGetsTheWorldsOwnClock(unittest.TestCase):
 
 
 class AStaleErrandCanYieldToAnIdleDrive(unittest.TestCase):
-
     def test_an_orphaned_vendor_is_cleared_after_the_worlds_backstop(self):
         slot = townslot.Slot(releasable=economy)
         waiting = slot.want_idle(
-            claimant="craft_rhythm", character="Grug", leader="Grug",
-            column="vendor", now=0.0,
+            claimant="craft_rhythm",
+            character="Grug",
+            leader="Grug",
+            column="vendor",
+            now=0.0,
         )
         self.assertEqual(townslot.SLOT_WAIT, waiting.verdict)
 
         clear = slot.want_idle(
-            claimant="craft_rhythm", character="Grug", leader="Grug",
-            column="vendor", now=townslot.ORPHAN_LEASE_SECONDS,
+            claimant="craft_rhythm",
+            character="Grug",
+            leader="Grug",
+            column="vendor",
+            now=townslot.ORPHAN_LEASE_SECONDS,
         )
         self.assertEqual(townslot.SLOT_CLEAR, clear.verdict)
         self.assertEqual(holder("", "vendor", 0.0), clear.release)
@@ -407,14 +517,22 @@ class AStaleErrandCanYieldToAnIdleDrive(unittest.TestCase):
     def test_a_live_vendor_inside_its_lease_is_preserved(self):
         slot = townslot.Slot(releasable=economy)
         taken = slot.want(
-            claimant="economy", character="Grug", aim="vendor",
-            leader="Grug", column="", retaskable=("", "vendor"), now=0.0,
+            claimant="economy",
+            character="Grug",
+            aim="vendor",
+            leader="Grug",
+            column="",
+            retaskable=("", "vendor"),
+            now=0.0,
         )
         slot.settle(taken, True, 0.0)
 
         idle = slot.want_idle(
-            claimant="craft_rhythm", character="Grug", leader="Grug",
-            column="vendor", now=townslot.LEASE_SECONDS - 1,
+            claimant="craft_rhythm",
+            character="Grug",
+            leader="Grug",
+            column="vendor",
+            now=townslot.LEASE_SECONDS - 1,
         )
         self.assertEqual(townslot.SLOT_WAIT, idle.verdict)
         self.assertIsNone(idle.release)
@@ -422,8 +540,11 @@ class AStaleErrandCanYieldToAnIdleDrive(unittest.TestCase):
     def test_a_profession_errand_is_never_cleared(self):
         slot = townslot.Slot(releasable=economy)
         idle = slot.want_idle(
-            claimant="craft_rhythm", character="Grug", leader="Grug",
-            column="profession trainer", now=99999.0,
+            claimant="craft_rhythm",
+            character="Grug",
+            leader="Grug",
+            column="profession trainer",
+            now=99999.0,
         )
         self.assertEqual(townslot.SLOT_WAIT, idle.verdict)
         self.assertIsNone(idle.release)
@@ -431,12 +552,18 @@ class AStaleErrandCanYieldToAnIdleDrive(unittest.TestCase):
     def test_settling_a_clear_records_an_empty_slot(self):
         slot = townslot.Slot(releasable=economy)
         slot.want_idle(
-            claimant="craft_rhythm", character="Grug", leader="Grug",
-            column="vendor", now=0.0,
+            claimant="craft_rhythm",
+            character="Grug",
+            leader="Grug",
+            column="vendor",
+            now=0.0,
         )
         clear = slot.want_idle(
-            claimant="craft_rhythm", character="Grug", leader="Grug",
-            column="vendor", now=townslot.ORPHAN_LEASE_SECONDS,
+            claimant="craft_rhythm",
+            character="Grug",
+            leader="Grug",
+            column="vendor",
+            now=townslot.ORPHAN_LEASE_SECONDS,
         )
         slot.settle(clear, True, townslot.ORPHAN_LEASE_SECONDS)
         self.assertIsNone(slot.holder)
@@ -450,88 +577,136 @@ class TheRefinementTheColumnAlreadyAllows(unittest.TestCase):
     inert, which is exactly what it was measured doing before it landed."""
 
     def test_a_sharper_aim_may_take_the_errand_it_refines(self):
-        d = decide(claimant="craft_supply", aim="5594",
-                   retaskable=("", "5594", "vendor"), column="vendor",
-                   holder=holder("economy", "vendor", 0.0), now=60.0)
+        d = decide(
+            claimant="craft_supply",
+            aim="5594",
+            retaskable=("", "5594", "vendor"),
+            column="vendor",
+            holder=holder("economy", "vendor", 0.0),
+            now=60.0,
+        )
         self.assertEqual(townslot.SLOT_TAKE, d.verdict)
 
     def test_the_refinement_says_what_it_is(self):
-        d = decide(claimant="craft_supply", aim="5594",
-                   retaskable=("", "5594", "vendor"), column="vendor",
-                   holder=holder("economy", "vendor", 0.0), now=60.0)
+        d = decide(
+            claimant="craft_supply",
+            aim="5594",
+            retaskable=("", "5594", "vendor"),
+            column="vendor",
+            holder=holder("economy", "vendor", 0.0),
+            now=60.0,
+        )
         self.assertIn("refines", d.reason)
         self.assertIn("sharper resolution", d.reason)
 
     def test_a_different_errand_is_not_a_refinement(self):
-        d = decide(claimant="bank", aim="banker", retaskable=("", "banker"),
-                   column="vendor", holder=holder("economy", "vendor", 0.0),
-                   now=60.0)
+        d = decide(
+            claimant="bank",
+            aim="banker",
+            retaskable=("", "banker"),
+            column="vendor",
+            holder=holder("economy", "vendor", 0.0),
+            now=60.0,
+        )
         self.assertEqual(townslot.SLOT_WAIT, d.verdict)
 
     def test_a_refinement_inherits_the_lease_it_refines(self):
         """Two passes refining each other's aims must not be able to launder a
         lease between them and keep the column for ever."""
-        d = decide(claimant="craft_supply", aim="5594",
-                   retaskable=("", "5594", "vendor"), column="vendor",
-                   holder=holder("economy", "vendor", 0.0), now=200.0)
+        d = decide(
+            claimant="craft_supply",
+            aim="5594",
+            retaskable=("", "5594", "vendor"),
+            column="vendor",
+            holder=holder("economy", "vendor", 0.0),
+            now=200.0,
+        )
         self.assertEqual(0.0, d.inherit_since)
 
     def test_the_inherited_lease_really_does_expire_on_the_old_clock(self):
         slot = townslot.Slot(releasable=economy)
-        first = slot.want(claimant="economy", character="Grug", aim="vendor",
-                          leader="Grug", column="", retaskable=("", "vendor"),
-                          now=0.0)
+        first = slot.want(
+            claimant="economy",
+            character="Grug",
+            aim="vendor",
+            leader="Grug",
+            column="",
+            retaskable=("", "vendor"),
+            now=0.0,
+        )
         slot.settle(first, True, 0.0)
-        refined = slot.want(claimant="craft_supply", character="Grug",
-                            aim="5594", leader="Grug", column="vendor",
-                            retaskable=("", "5594", "vendor"), now=200.0)
+        refined = slot.want(
+            claimant="craft_supply",
+            character="Grug",
+            aim="5594",
+            leader="Grug",
+            column="vendor",
+            retaskable=("", "5594", "vendor"),
+            now=200.0,
+        )
         slot.settle(refined, True, 200.0)
         self.assertEqual(0.0, slot.holder.since)
-        third = slot.want(claimant="guild bank", character="Grug",
-                          aim="at:1:1,2,3", leader="Grug", column="5594",
-                          retaskable=("", "at:1:1,2,3"), now=310.0)
+        third = slot.want(
+            claimant="guild bank",
+            character="Grug",
+            aim="at:1:1,2,3",
+            leader="Grug",
+            column="5594",
+            retaskable=("", "at:1:1,2,3"),
+            now=310.0,
+        )
         self.assertEqual(townslot.SLOT_PREEMPT, third.verdict)
 
 
 class TheTurnGoesToWhoeverHasWaitedLongest(unittest.TestCase):
-
     def test_a_lapsed_lease_goes_to_the_longest_waiter_and_not_to_the_asker(self):
-        d = decide(claimant="auction", aim="auctioneer",
-                   retaskable=("", "auctioneer"), column="vendor",
-                   holder=holder("economy", "vendor", 0.0),
-                   wants=(want("guild bank", 10.0), want("auction", 200.0)),
-                   now=400.0)
+        d = decide(
+            claimant="auction",
+            aim="auctioneer",
+            retaskable=("", "auctioneer"),
+            column="vendor",
+            holder=holder("economy", "vendor", 0.0),
+            wants=(want("guild bank", 10.0), want("auction", 200.0)),
+            now=400.0,
+        )
         self.assertEqual(townslot.SLOT_WAIT, d.verdict)
         self.assertIn("guild bank", d.reason)
 
     def test_and_the_longest_waiter_itself_is_granted(self):
-        d = decide(claimant="guild bank", aim="at:1:1,2,3",
-                   retaskable=("", "at:1:1,2,3"), column="vendor",
-                   holder=holder("economy", "vendor", 0.0),
-                   wants=(want("guild bank", 10.0), want("auction", 200.0)),
-                   now=400.0)
+        d = decide(
+            claimant="guild bank",
+            aim="at:1:1,2,3",
+            retaskable=("", "at:1:1,2,3"),
+            column="vendor",
+            holder=holder("economy", "vendor", 0.0),
+            wants=(want("guild bank", 10.0), want("auction", 200.0)),
+            now=400.0,
+        )
         self.assertEqual(townslot.SLOT_PREEMPT, d.verdict)
 
     def test_the_refusal_says_how_much_longer_the_other_has_waited(self):
-        d = decide(claimant="auction", aim="auctioneer",
-                   retaskable=("", "auctioneer"), column="vendor",
-                   holder=holder("economy", "vendor", 0.0),
-                   wants=(want("guild bank", 10.0), want("auction", 200.0)),
-                   now=400.0)
+        d = decide(
+            claimant="auction",
+            aim="auctioneer",
+            retaskable=("", "auctioneer"),
+            column="vendor",
+            holder=holder("economy", "vendor", 0.0),
+            wants=(want("guild bank", 10.0), want("auction", 200.0)),
+            now=400.0,
+        )
         self.assertIn("190s longer", d.reason)
 
     def test_the_order_is_the_wait_and_not_the_alphabet(self):
         ordered = townslot.fresh_wants(
-            [want("auction", 5.0), want("bank", 1.0), want("towntrip", 3.0)],
-            now=10.0)
-        self.assertEqual(["bank", "towntrip", "auction"],
-                         [w.claimant for w in ordered])
+            [want("auction", 5.0), want("bank", 1.0), want("towntrip", 3.0)], now=10.0
+        )
+        self.assertEqual(["bank", "towntrip", "auction"], [w.claimant for w in ordered])
 
     def test_a_tie_is_broken_the_same_way_every_run(self):
         ordered = townslot.fresh_wants(
-            [want("towntrip", 1.0), want("auction", 1.0)], now=10.0)
-        self.assertEqual(["auction", "towntrip"],
-                         [w.claimant for w in ordered])
+            [want("towntrip", 1.0), want("auction", 1.0)], now=10.0
+        )
+        self.assertEqual(["auction", "towntrip"], [w.claimant for w in ordered])
 
 
 class TheFreeColumnIsYieldedToWhoeverIsOwedIt(unittest.TestCase):
@@ -541,70 +716,126 @@ class TheFreeColumnIsYieldedToWhoeverIsOwedIt(unittest.TestCase):
     pass takes it again, and the rare one samples a held column every time."""
 
     def test_a_pass_that_was_just_served_stands_aside(self):
-        d = decide(claimant="economy", aim="vendor", retaskable=("", "vendor"),
-                   column="", wants=(want("guild bank", 10.0),),
-                   last_served={"economy": 300.0}, now=400.0)
+        d = decide(
+            claimant="economy",
+            aim="vendor",
+            retaskable=("", "vendor"),
+            column="",
+            wants=(want("guild bank", 10.0),),
+            last_served={"economy": 300.0},
+            now=400.0,
+        )
         self.assertEqual(townslot.SLOT_WAIT, d.verdict)
         self.assertIn("stands aside", d.reason)
         self.assertIn("guild bank", d.reason)
 
     def test_a_pass_that_has_never_been_served_takes_the_free_column(self):
         """It cannot owe anybody a turn it has never had."""
-        d = decide(claimant="economy", aim="vendor", retaskable=("", "vendor"),
-                   column="", wants=(want("guild bank", 10.0),),
-                   last_served={}, now=400.0)
+        d = decide(
+            claimant="economy",
+            aim="vendor",
+            retaskable=("", "vendor"),
+            column="",
+            wants=(want("guild bank", 10.0),),
+            last_served={},
+            now=400.0,
+        )
         self.assertEqual(townslot.SLOT_TAKE, d.verdict)
 
     def test_urgent_bag_pressure_takes_a_free_column(self):
-        d = decide(claimant="economy", aim="vendor",
-                   retaskable=("", "vendor"), column="",
-                   wants=(want("auction", 10.0),),
-                   last_served={"economy": 300.0}, now=400.0,
-                   urgent=True)
+        d = decide(
+            claimant="economy",
+            aim="vendor",
+            retaskable=("", "vendor"),
+            column="",
+            wants=(want("auction", 10.0),),
+            last_served={"economy": 300.0},
+            now=400.0,
+            urgent=True,
+        )
         self.assertEqual(townslot.SLOT_TAKE, d.verdict)
 
     def test_urgent_bag_pressure_preempts_an_expired_economy_errand(self):
-        d = decide(claimant="economy", aim="vendor",
-                   retaskable=("", "vendor"), column="auctioneer",
-                   holder=holder("auction", "auctioneer", 0.0),
-                   wants=(want("guild bank", 10.0),), now=400.0,
-                   urgent=True)
+        d = decide(
+            claimant="economy",
+            aim="vendor",
+            retaskable=("", "vendor"),
+            column="auctioneer",
+            holder=holder("auction", "auctioneer", 0.0),
+            wants=(want("guild bank", 10.0),),
+            now=400.0,
+            urgent=True,
+        )
         self.assertEqual(townslot.SLOT_PREEMPT, d.verdict)
 
     def test_it_does_not_stand_aside_for_a_pass_it_has_not_outrun(self):
         """The waiter was served more recently than this pass, so this pass is
         the one that is owed the turn."""
-        d = decide(claimant="economy", aim="vendor", retaskable=("", "vendor"),
-                   column="", wants=(want("guild bank", 10.0),),
-                   last_served={"economy": 100.0, "guild bank": 200.0},
-                   now=400.0)
+        d = decide(
+            claimant="economy",
+            aim="vendor",
+            retaskable=("", "vendor"),
+            column="",
+            wants=(want("guild bank", 10.0),),
+            last_served={"economy": 100.0, "guild bank": 200.0},
+            now=400.0,
+        )
         self.assertEqual(townslot.SLOT_TAKE, d.verdict)
 
     def test_it_does_not_stand_aside_for_a_shorter_wait(self):
-        d = decide(claimant="economy", aim="vendor", retaskable=("", "vendor"),
-                   column="", wants=(want("economy", 10.0),
-                                     want("guild bank", 300.0)),
-                   last_served={"economy": 305.0}, now=400.0)
+        d = decide(
+            claimant="economy",
+            aim="vendor",
+            retaskable=("", "vendor"),
+            column="",
+            wants=(want("economy", 10.0), want("guild bank", 300.0)),
+            last_served={"economy": 305.0},
+            now=400.0,
+        )
         self.assertEqual(townslot.SLOT_TAKE, d.verdict)
 
     def test_the_pass_that_was_yielded_to_then_takes_it(self):
         slot = townslot.Slot(releasable=economy)
-        first = slot.want(claimant="economy", character="Grug", aim="vendor",
-                          leader="Grug", column="", retaskable=("", "vendor"),
-                          now=0.0)
+        first = slot.want(
+            claimant="economy",
+            character="Grug",
+            aim="vendor",
+            leader="Grug",
+            column="",
+            retaskable=("", "vendor"),
+            now=0.0,
+        )
         slot.settle(first, True, 0.0)
-        starved = slot.want(claimant="guild bank", character="Grug",
-                            aim="at:1:1,2,3", leader="Grug", column="vendor",
-                            retaskable=("", "at:1:1,2,3"), now=60.0)
+        starved = slot.want(
+            claimant="guild bank",
+            character="Grug",
+            aim="at:1:1,2,3",
+            leader="Grug",
+            column="vendor",
+            retaskable=("", "at:1:1,2,3"),
+            now=60.0,
+        )
         self.assertEqual(townslot.SLOT_WAIT, starved.verdict)
         # The world clears the column when the sell queue drains.
-        again = slot.want(claimant="economy", character="Grug", aim="vendor",
-                          leader="Grug", column="", retaskable=("", "vendor"),
-                          now=300.0)
+        again = slot.want(
+            claimant="economy",
+            character="Grug",
+            aim="vendor",
+            leader="Grug",
+            column="",
+            retaskable=("", "vendor"),
+            now=300.0,
+        )
         self.assertEqual(townslot.SLOT_WAIT, again.verdict)
-        theirs = slot.want(claimant="guild bank", character="Grug",
-                           aim="at:1:1,2,3", leader="Grug", column="",
-                           retaskable=("", "at:1:1,2,3"), now=360.0)
+        theirs = slot.want(
+            claimant="guild bank",
+            character="Grug",
+            aim="at:1:1,2,3",
+            leader="Grug",
+            column="",
+            retaskable=("", "at:1:1,2,3"),
+            now=360.0,
+        )
         self.assertEqual(townslot.SLOT_TAKE, theirs.verdict)
 
 
@@ -614,29 +845,48 @@ class TheYieldIsBounded(unittest.TestCase):
     town work still for ever, on behalf of a loop that has stopped asking."""
 
     def test_a_want_nobody_renews_goes_stale(self):
-        live = townslot.fresh_wants([want("guild bank", 0.0, last_asked=0.0)],
-                                    now=901.0)
+        live = townslot.fresh_wants(
+            [want("guild bank", 0.0, last_asked=0.0)], now=901.0
+        )
         self.assertEqual([], live)
 
     def test_a_stale_want_is_not_yielded_to(self):
-        d = decide(claimant="economy", aim="vendor", retaskable=("", "vendor"),
-                   column="", wants=(want("guild bank", 0.0, last_asked=0.0),),
-                   last_served={"economy": 300.0}, now=1000.0)
+        d = decide(
+            claimant="economy",
+            aim="vendor",
+            retaskable=("", "vendor"),
+            column="",
+            wants=(want("guild bank", 0.0, last_asked=0.0),),
+            last_served={"economy": 300.0},
+            now=1000.0,
+        )
         self.assertEqual(townslot.SLOT_TAKE, d.verdict)
 
     def test_a_want_renewed_by_a_living_loop_stays_live(self):
-        d = decide(claimant="economy", aim="vendor", retaskable=("", "vendor"),
-                   column="", wants=(want("guild bank", 0.0, last_asked=900.0),),
-                   last_served={"economy": 300.0}, now=1000.0)
+        d = decide(
+            claimant="economy",
+            aim="vendor",
+            retaskable=("", "vendor"),
+            column="",
+            wants=(want("guild bank", 0.0, last_asked=900.0),),
+            last_served={"economy": 300.0},
+            now=1000.0,
+        )
         self.assertEqual(townslot.SLOT_WAIT, d.verdict)
 
     def test_a_stale_want_does_not_hold_up_a_lapsed_lease_either(self):
-        d = decide(claimant="auction", aim="auctioneer",
-                   retaskable=("", "auctioneer"), column="vendor",
-                   holder=holder("economy", "vendor", 0.0),
-                   wants=(want("guild bank", 0.0, last_asked=0.0),
-                          want("auction", 500.0, last_asked=1000.0)),
-                   now=1000.0)
+        d = decide(
+            claimant="auction",
+            aim="auctioneer",
+            retaskable=("", "auctioneer"),
+            column="vendor",
+            holder=holder("economy", "vendor", 0.0),
+            wants=(
+                want("guild bank", 0.0, last_asked=0.0),
+                want("auction", 500.0, last_asked=1000.0),
+            ),
+            now=1000.0,
+        )
         self.assertEqual(townslot.SLOT_PREEMPT, d.verdict)
 
     def test_the_freshness_window_outlasts_the_longest_pass_cycle(self):
@@ -646,9 +896,15 @@ class TheYieldIsBounded(unittest.TestCase):
 
     def test_a_pass_can_give_up_its_turn_without_waiting_for_the_clock(self):
         slot = townslot.Slot(releasable=economy)
-        d = slot.want(claimant="bank", character="Grug", aim="banker",
-                      leader="Grug", column="vendor", retaskable=("", "banker"),
-                      now=0.0)
+        d = slot.want(
+            claimant="bank",
+            character="Grug",
+            aim="banker",
+            leader="Grug",
+            column="vendor",
+            retaskable=("", "banker"),
+            now=0.0,
+        )
         self.assertEqual(townslot.SLOT_WAIT, d.verdict)
         slot.forget("bank")
         self.assertEqual([], slot.wants)
@@ -657,8 +913,15 @@ class TheYieldIsBounded(unittest.TestCase):
         """A pass with nothing to ask for is not a waiter, and must not be able
         to hold the column still for a journey nobody wants taken."""
         slot = townslot.Slot(releasable=economy)
-        d = slot.want(claimant="forge", character="Grug", aim="",
-                      leader="Grug", column="vendor", retaskable=(), now=0.0)
+        d = slot.want(
+            claimant="forge",
+            character="Grug",
+            aim="",
+            leader="Grug",
+            column="vendor",
+            retaskable=(),
+            now=0.0,
+        )
         self.assertEqual(townslot.SLOT_WAIT, d.verdict)
         self.assertFalse(d.granted)
         self.assertEqual([], slot.wants)
@@ -693,12 +956,18 @@ class ASlowPassIsRankedByItsWaitAndNotByItsLastAsk(unittest.TestCase):
         own want is stale by `WANT_FRESH_SECONDS`; `guild bank` began waiting
         at 600, six hundred seconds AFTER it. Ranking by the recorded wait
         puts `flight` first, which is what it is."""
-        d = decide(claimant="flight", aim="at:1:9,9,9",
-                   retaskable=("", "at:1:9,9,9"), column="auctioneer",
-                   holder=holder("auction", "auctioneer", 0.0),
-                   wants=(want("flight", 0.0, last_asked=0.0),
-                          want("guild bank", 600.0, last_asked=990.0)),
-                   now=1000.0)
+        d = decide(
+            claimant="flight",
+            aim="at:1:9,9,9",
+            retaskable=("", "at:1:9,9,9"),
+            column="auctioneer",
+            holder=holder("auction", "auctioneer", 0.0),
+            wants=(
+                want("flight", 0.0, last_asked=0.0),
+                want("guild bank", 600.0, last_asked=990.0),
+            ),
+            now=1000.0,
+        )
         self.assertEqual(townslot.SLOT_PREEMPT, d.verdict)
 
     def test_nothing_ahead_of_a_pass_started_waiting_after_it(self):
@@ -706,37 +975,50 @@ class ASlowPassIsRankedByItsWaitAndNotByItsLastAsk(unittest.TestCase):
         anybody's last ask, `ahead` may only ever contain passes that really
         did start waiting earlier. The old reading could not say that: a stale
         claimant was handed the whole live queue regardless of the clock."""
-        wants = (want("flight", 0.0, last_asked=0.0),
-                 want("guild bank", 600.0, last_asked=990.0),
-                 want("gather", 800.0, last_asked=995.0))
+        wants = (
+            want("flight", 0.0, last_asked=0.0),
+            want("guild bank", 600.0, last_asked=990.0),
+            want("gather", 800.0, last_asked=995.0),
+        )
         for moment in range(900, 1400, 20):
             for claimant in ("flight", "guild bank", "gather"):
                 mine = next(w for w in wants if w.claimant == claimant)
                 ahead = townslot._ahead_of(
-                    claimant, wants, float(moment),
-                    townslot.WANT_FRESH_SECONDS)
-                later = [w.claimant for w in ahead
-                         if w.waiting_since > mine.waiting_since]
+                    claimant, wants, float(moment), townslot.WANT_FRESH_SECONDS
+                )
+                later = [
+                    w.claimant for w in ahead if w.waiting_since > mine.waiting_since
+                ]
                 self.assertEqual(
-                    [], later,
+                    [],
+                    later,
                     "at now=%d, %s was told to yield to %s, which started "
-                    "waiting after it" % (moment, claimant, later))
+                    "waiting after it" % (moment, claimant, later),
+                )
 
     def test_the_refusal_never_claims_a_negative_wait(self):
         """`-1020s longer` was in the live log. It cannot be produced by an
         ordering where everything `ahead` really is ahead."""
-        wants = (want("flight", 0.0, last_asked=0.0),
-                 want("guild bank", 600.0, last_asked=990.0))
+        wants = (
+            want("flight", 0.0, last_asked=0.0),
+            want("guild bank", 600.0, last_asked=990.0),
+        )
         for claimant in ("flight", "guild bank"):
-            d = decide(claimant=claimant, aim="at:1:9,9,9",
-                       retaskable=("", "at:1:9,9,9"), column="auctioneer",
-                       holder=holder("auction", "auctioneer", 0.0),
-                       wants=wants, now=1000.0)
+            d = decide(
+                claimant=claimant,
+                aim="at:1:9,9,9",
+                retaskable=("", "at:1:9,9,9"),
+                column="auctioneer",
+                holder=holder("auction", "auctioneer", 0.0),
+                wants=wants,
+                now=1000.0,
+            )
             for number in re.findall(r"waiting (-?\d+)s longer", d.reason):
                 self.assertGreaterEqual(
-                    int(number), 0,
-                    "%s was told somebody had waited %ss longer" %
-                    (claimant, number))
+                    int(number),
+                    0,
+                    "%s was told somebody had waited %ss longer" % (claimant, number),
+                )
 
     def test_a_first_ask_still_queues_behind_everybody(self):
         """The claimant with NO want at all is the case this must not change:
@@ -744,11 +1026,14 @@ class ASlowPassIsRankedByItsWaitAndNotByItsLastAsk(unittest.TestCase):
         and it takes its turn at the back exactly as it did before."""
         ahead = townslot._ahead_of(
             "craft_supply",
-            (want("guild bank", 10.0, last_asked=900.0),
-             want("auction", 200.0, last_asked=900.0)),
-            now=1000.0, want_fresh=townslot.WANT_FRESH_SECONDS)
-        self.assertEqual(["guild bank", "auction"],
-                         [w.claimant for w in ahead])
+            (
+                want("guild bank", 10.0, last_asked=900.0),
+                want("auction", 200.0, last_asked=900.0),
+            ),
+            now=1000.0,
+            want_fresh=townslot.WANT_FRESH_SECONDS,
+        )
+        self.assertEqual(["guild bank", "auction"], [w.claimant for w in ahead])
 
 
 class NoPassGoesUnservedOverAWholeShift(unittest.TestCase):
@@ -782,9 +1067,15 @@ class NoPassGoesUnservedOverAWholeShift(unittest.TestCase):
     # 300s: VENDOR_CYCLE_SECONDS, TOWNTRIP_CYCLE_SECONDS,
     # CRAFT_FORGE_CYCLE_SECONDS. 600s: the bank, guild bank and auction passes.
     # `flight` is the slow one and is the pass the defect was measured on.
-    CYCLES = {"towntrip": 300.0, "gather": 300.0, "craft_rhythm": 300.0,
-              "guild bank": 600.0, "auction": 600.0, "mail": 600.0,
-              "flight": 1200.0}
+    CYCLES = {
+        "towntrip": 300.0,
+        "gather": 300.0,
+        "craft_rhythm": 300.0,
+        "guild bank": 600.0,
+        "auction": 600.0,
+        "mail": 600.0,
+        "flight": 1200.0,
+    }
 
     HOURS = 6.0
     STEP = 30.0
@@ -797,11 +1088,12 @@ class NoPassGoesUnservedOverAWholeShift(unittest.TestCase):
         all five holders in the measured window. Arrival working would only
         make this kinder.
         """
-        aims = {name: "at:1:%d,0,0" % index
-                for index, name in enumerate(sorted(cycles))}
+        aims = {
+            name: "at:1:%d,0,0" % index for index, name in enumerate(sorted(cycles))
+        }
         slot = townslot.Slot(
-            releasable=economy,
-            long_leases={"gather": townslot.GATHER_LEASE_SECONDS})
+            releasable=economy, long_leases={"gather": townslot.GATHER_LEASE_SECONDS}
+        )
         column = ""
         grants = {name: 0 for name in cycles}
         next_ask = {name: 0.0 for name in cycles}
@@ -814,16 +1106,20 @@ class NoPassGoesUnservedOverAWholeShift(unittest.TestCase):
                     continue
                 next_ask[name] = now + cycles[name]
                 decision = slot.want(
-                    claimant=name, character="Grug", aim=aims[name],
-                    leader="Grug", column=column,
-                    retaskable=("", aims[name]), now=now)
+                    claimant=name,
+                    character="Grug",
+                    aim=aims[name],
+                    leader="Grug",
+                    column=column,
+                    retaskable=("", aims[name]),
+                    now=now,
+                )
                 if decision.writes:
                     column = aims[name]
                     slot.settle(decision, True, now)
                     grants[name] += 1
                     if name in waiting_from:
-                        worst_wait = max(worst_wait,
-                                         now - waiting_from.pop(name))
+                        worst_wait = max(worst_wait, now - waiting_from.pop(name))
                 elif decision.granted:
                     slot.settle(decision, True, now)
                 else:
@@ -840,9 +1136,11 @@ class NoPassGoesUnservedOverAWholeShift(unittest.TestCase):
         grants, _ = self._run(self.CYCLES)
         starved = sorted(name for name, count in grants.items() if count == 0)
         self.assertEqual(
-            [], starved,
+            [],
+            starved,
             "these passes asked for the traveller for %g hours and never got "
-            "it: %s (grants: %s)" % (self.HOURS, starved, sorted(grants.items())))
+            "it: %s (grants: %s)" % (self.HOURS, starved, sorted(grants.items())),
+        )
 
     def test_a_slow_pass_does_not_take_the_whole_column_down_with_it(self):
         """The cliff was at `WANT_FRESH_SECONDS`: a consumer whose cycle
@@ -852,10 +1150,12 @@ class NoPassGoesUnservedOverAWholeShift(unittest.TestCase):
         outside, _ = self._run(dict(self.CYCLES, flight=1200.0))
         self.assertEqual([], [n for n, c in outside.items() if c == 0])
         self.assertGreater(
-            sum(outside.values()), sum(inside.values()) * 0.75,
+            sum(outside.values()),
+            sum(inside.values()) * 0.75,
             "a pass slower than the freshness window still costs the column "
             "most of its throughput: %d grants against %d"
-            % (sum(outside.values()), sum(inside.values())))
+            % (sum(outside.values()), sum(inside.values())),
+        )
 
     def test_the_grant_rate_clears_the_measured_baseline(self):
         """THE FLOOR IS CHOSEN TO CATCH A REGRESSION, NOT TO PIN THE NUMBER.
@@ -867,10 +1167,12 @@ class NoPassGoesUnservedOverAWholeShift(unittest.TestCase):
         every hold runs its whole lease."""
         grants, _ = self._run(self.CYCLES)
         self.assertGreater(
-            sum(grants.values()), 35,
+            sum(grants.values()),
+            35,
             "grants per %g hours: %d, against 42 for this arbitration, 2 for "
             "the one it replaced and 19.9 measured live"
-            % (self.HOURS, sum(grants.values())))
+            % (self.HOURS, sum(grants.values())),
+        )
 
     def test_the_worst_wait_is_bounded_and_the_bound_is_recorded(self):
         """infra#4208 asks for a stated bound rather than a hope. THE BOUND
@@ -880,9 +1182,11 @@ class NoPassGoesUnservedOverAWholeShift(unittest.TestCase):
         `towntrip` waited 6906 seconds for one turn."""
         _, worst = self._run(self.CYCLES)
         self.assertLess(
-            worst, 3600.0,
+            worst,
+            3600.0,
             "a pass waited %ds, past the hour this arbitration is willing to "
-            "claim as its bound" % int(worst))
+            "claim as its bound" % int(worst),
+        )
 
 
 class TheLedgerLearnsFromTheColumn(unittest.TestCase):
@@ -893,24 +1197,48 @@ class TheLedgerLearnsFromTheColumn(unittest.TestCase):
 
     def test_an_emptied_column_ends_the_errand_whoever_ended_it(self):
         slot = townslot.Slot(releasable=economy)
-        first = slot.want(claimant="economy", character="Grug", aim="vendor",
-                          leader="Grug", column="", retaskable=("", "vendor"),
-                          now=0.0)
+        first = slot.want(
+            claimant="economy",
+            character="Grug",
+            aim="vendor",
+            leader="Grug",
+            column="",
+            retaskable=("", "vendor"),
+            now=0.0,
+        )
         slot.settle(first, True, 0.0)
-        theirs = slot.want(claimant="bank", character="Grug", aim="banker",
-                           leader="Grug", column="", retaskable=("", "banker"),
-                           now=60.0)
+        theirs = slot.want(
+            claimant="bank",
+            character="Grug",
+            aim="banker",
+            leader="Grug",
+            column="",
+            retaskable=("", "banker"),
+            now=60.0,
+        )
         self.assertEqual(townslot.SLOT_TAKE, theirs.verdict)
 
     def test_a_column_somebody_else_wrote_replaces_the_remembered_holder(self):
         slot = townslot.Slot(releasable=economy)
-        first = slot.want(claimant="economy", character="Grug", aim="vendor",
-                          leader="Grug", column="", retaskable=("", "vendor"),
-                          now=0.0)
+        first = slot.want(
+            claimant="economy",
+            character="Grug",
+            aim="vendor",
+            leader="Grug",
+            column="",
+            retaskable=("", "vendor"),
+            now=0.0,
+        )
         slot.settle(first, True, 0.0)
-        slot.want(claimant="bank", character="Grug", aim="banker",
-                  leader="Grug", column="profession trainer",
-                  retaskable=("", "banker"), now=60.0)
+        slot.want(
+            claimant="bank",
+            character="Grug",
+            aim="banker",
+            leader="Grug",
+            column="profession trainer",
+            retaskable=("", "banker"),
+            now=60.0,
+        )
         self.assertEqual("profession trainer", slot.holder.aim)
         self.assertEqual("", slot.holder.claimant)
         self.assertEqual(60.0, slot.holder.since)
@@ -919,35 +1247,63 @@ class TheLedgerLearnsFromTheColumn(unittest.TestCase):
         """The aim on that row moves nobody now, and it is not this slot's to
         arbitrate: only the leader travels."""
         slot = townslot.Slot(releasable=economy)
-        first = slot.want(claimant="economy", character="Grug", aim="vendor",
-                          leader="Grug", column="", retaskable=("", "vendor"),
-                          now=0.0)
+        first = slot.want(
+            claimant="economy",
+            character="Grug",
+            aim="vendor",
+            leader="Grug",
+            column="",
+            retaskable=("", "vendor"),
+            now=0.0,
+        )
         slot.settle(first, True, 0.0)
-        d = slot.want(claimant="bank", character="Bork", aim="banker",
-                      leader="Bork", column="", retaskable=("", "banker"),
-                      now=60.0)
+        d = slot.want(
+            claimant="bank",
+            character="Bork",
+            aim="banker",
+            leader="Bork",
+            column="",
+            retaskable=("", "banker"),
+            now=60.0,
+        )
         self.assertEqual(townslot.SLOT_TAKE, d.verdict)
         self.assertIsNone(slot.holder)
 
     def test_an_unchanged_column_keeps_the_clock_running(self):
         slot = townslot.Slot(releasable=economy)
-        first = slot.want(claimant="economy", character="Grug", aim="vendor",
-                          leader="Grug", column="", retaskable=("", "vendor"),
-                          now=0.0)
+        first = slot.want(
+            claimant="economy",
+            character="Grug",
+            aim="vendor",
+            leader="Grug",
+            column="",
+            retaskable=("", "vendor"),
+            now=0.0,
+        )
         slot.settle(first, True, 0.0)
-        slot.want(claimant="bank", character="Grug", aim="banker",
-                  leader="Grug", column="vendor", retaskable=("", "banker"),
-                  now=120.0)
+        slot.want(
+            claimant="bank",
+            character="Grug",
+            aim="banker",
+            leader="Grug",
+            column="vendor",
+            retaskable=("", "banker"),
+            now=120.0,
+        )
         self.assertEqual(0.0, slot.holder.since)
 
 
 class TheDecisionSaysWhatToDoWithIt(unittest.TestCase):
-
     def test_granted_covers_every_way_to_end_up_with_or_clear_it(self):
         self.assertEqual(
-            (townslot.SLOT_TAKE, townslot.SLOT_HOLD, townslot.SLOT_PREEMPT,
-             townslot.SLOT_CLEAR),
-            townslot.GRANTED)
+            (
+                townslot.SLOT_TAKE,
+                townslot.SLOT_HOLD,
+                townslot.SLOT_PREEMPT,
+                townslot.SLOT_CLEAR,
+            ),
+            townslot.GRANTED,
+        )
 
     def test_a_hold_is_granted_but_writes_nothing(self):
         d = townslot.Decision(verdict=townslot.SLOT_HOLD, reason="x")
@@ -968,11 +1324,17 @@ class TheDecisionSaysWhatToDoWithIt(unittest.TestCase):
     def test_every_decision_names_the_pass_that_asked(self):
         """The ledger records the outcome against this name, so a decision that
         lost it would settle the holder as nobody."""
-        for kw in ({}, {"character": "Ugga"},
-                   {"column": "vendor", "holder": holder("economy", "vendor", 0.0)},
-                   {"column": "vendor", "holder": holder("economy", "vendor", 0.0),
-                    "now": 9000.0},
-                   {"aim": ""}):
+        for kw in (
+            {},
+            {"character": "Ugga"},
+            {"column": "vendor", "holder": holder("economy", "vendor", 0.0)},
+            {
+                "column": "vendor",
+                "holder": holder("economy", "vendor", 0.0),
+                "now": 9000.0,
+            },
+            {"aim": ""},
+        ):
             with self.subTest(kw=sorted(kw)):
                 self.assertEqual("guild bank", decide(**kw).claimant)
 
@@ -992,8 +1354,8 @@ class ThePurityOfTheModule(unittest.TestCase):
     def test_it_imports_nothing_but_the_standard_library(self):
         import ast
         import pathlib
-        tree = ast.parse(
-            pathlib.Path(townslot.__file__).read_text(encoding="utf-8"))
+
+        tree = ast.parse(pathlib.Path(townslot.__file__).read_text(encoding="utf-8"))
         names = set()
         for node in ast.walk(tree):
             if isinstance(node, ast.Import):
@@ -1007,17 +1369,24 @@ class ThePurityOfTheModule(unittest.TestCase):
         module that asked the clock itself could not be tested at an hour's
         distance, which is most of this file."""
         import pathlib
+
         source = pathlib.Path(townslot.__file__).read_text(encoding="utf-8")
         for forbidden in ("time.monotonic", "time.time", "datetime.now"):
             self.assertNotIn(forbidden, source)
 
     def test_nonleader_ground_economy_aims_are_stranded(self):
-        aims = {"Grug": "", "Og": "at:1:10,20,30", "Ugga": "vendor",
-                "Bork": "profession trainer"}
+        aims = {
+            "Grug": "",
+            "Og": "at:1:10,20,30",
+            "Ugga": "vendor",
+            "Bork": "profession trainer",
+        }
         self.assertEqual(
             ("Og",),
             townslot.stranded_nonleader_aims(
-                aims, "Grug", ground=lambda value: value.startswith("at:"),
+                aims,
+                "Grug",
+                ground=lambda value: value.startswith("at:"),
                 releasable=lambda value: value.startswith("at:"),
             ),
         )
@@ -1026,22 +1395,32 @@ class ThePurityOfTheModule(unittest.TestCase):
         self.assertEqual(
             (),
             townslot.stranded_nonleader_aims(
-                {"Og": "at:1:10,20,30"}, "", ground=lambda _: True,
+                {"Og": "at:1:10,20,30"},
+                "",
+                ground=lambda _: True,
                 releasable=lambda _: True,
             ),
         )
 
     def test_bag_pressure_can_release_ground_aim_outside_a_run(self):
-        self.assertTrue(townslot.urgent_ground_release(
-            aim="at:1:10,20,30", pressure=True, in_run=False,
-            ground=lambda value: value.startswith("at:"),
-        ))
+        self.assertTrue(
+            townslot.urgent_ground_release(
+                aim="at:1:10,20,30",
+                pressure=True,
+                in_run=False,
+                ground=lambda value: value.startswith("at:"),
+            )
+        )
 
     def test_bag_pressure_never_interrupts_a_run(self):
-        self.assertFalse(townslot.urgent_ground_release(
-            aim="at:1:10,20,30", pressure=True, in_run=True,
-            ground=lambda value: value.startswith("at:"),
-        ))
+        self.assertFalse(
+            townslot.urgent_ground_release(
+                aim="at:1:10,20,30",
+                pressure=True,
+                in_run=True,
+                ground=lambda value: value.startswith("at:"),
+            )
+        )
 
 
 class AWalkThatLeavesTownGetsALeaseDimensionedForIt(unittest.TestCase):
@@ -1062,15 +1441,17 @@ class AWalkThatLeavesTownGetsALeaseDimensionedForIt(unittest.TestCase):
         walk must not quietly lengthen anybody else's."""
         self.assertEqual(
             townslot.LEASE_SECONDS,
-            townslot.lease_for(holder("economy", "vendor", since=0.0),
-                               long_leases={"gather": 450.0}),
+            townslot.lease_for(
+                holder("economy", "vendor", since=0.0), long_leases={"gather": 450.0}
+            ),
         )
 
     def test_the_named_claimant_gets_its_own_value(self):
         self.assertEqual(
             450.0,
-            townslot.lease_for(holder("gather", "at:1:1,2,3", since=0.0),
-                               long_leases={"gather": 450.0}),
+            townslot.lease_for(
+                holder("gather", "at:1:1,2,3", since=0.0), long_leases={"gather": 450.0}
+            ),
         )
 
     def test_an_orphan_is_still_an_orphan(self):
@@ -1078,8 +1459,10 @@ class AWalkThatLeavesTownGetsALeaseDimensionedForIt(unittest.TestCase):
         world's own backstop outranks the mapping rather than the reverse."""
         self.assertEqual(
             townslot.ORPHAN_LEASE_SECONDS,
-            townslot.lease_for(holder("", "at:1:1,2,3", since=0.0),
-                               long_leases={"gather": 450.0, "": 10.0}),
+            townslot.lease_for(
+                holder("", "at:1:1,2,3", since=0.0),
+                long_leases={"gather": 450.0, "": 10.0},
+            ),
         )
 
     def test_a_garbage_value_falls_back_rather_than_raising(self):
@@ -1088,8 +1471,10 @@ class AWalkThatLeavesTownGetsALeaseDimensionedForIt(unittest.TestCase):
         whole goal cycle down with it."""
         self.assertEqual(
             townslot.LEASE_SECONDS,
-            townslot.lease_for(holder("gather", "at:1:1,2,3", since=0.0),
-                               long_leases={"gather": "soon"}),
+            townslot.lease_for(
+                holder("gather", "at:1:1,2,3", since=0.0),
+                long_leases={"gather": "soon"},
+            ),
         )
 
     def test_the_constant_clears_the_longest_measured_trip(self):
@@ -1103,22 +1488,31 @@ class AWalkThatLeavesTownGetsALeaseDimensionedForIt(unittest.TestCase):
         - the point where the world stops believing in the errand. A named pass
         allowed past it would be held longer than an errand nobody can name at
         all, inverting the whole argument for the orphan lease."""
-        self.assertLess(townslot.GATHER_LEASE_SECONDS,
-                        townslot.ORPHAN_LEASE_SECONDS)
+        self.assertLess(townslot.GATHER_LEASE_SECONDS, townslot.ORPHAN_LEASE_SECONDS)
 
     def test_a_gathering_walk_survives_the_town_lease_while_a_pass_waits(self):
         """The behaviour the constant exists for, through the real decision."""
-        slot = townslot.Slot(releasable=economy,
-                             long_leases={"gather": 450.0})
-        taken = slot.want(claimant="gather", character="Grug",
-                          aim="at:1:100,200,30", leader="Grug", column="",
-                          retaskable=("", "at:1:100,200,30"), now=0.0)
+        slot = townslot.Slot(releasable=economy, long_leases={"gather": 450.0})
+        taken = slot.want(
+            claimant="gather",
+            character="Grug",
+            aim="at:1:100,200,30",
+            leader="Grug",
+            column="",
+            retaskable=("", "at:1:100,200,30"),
+            now=0.0,
+        )
         slot.settle(taken, True, 0.0)
         # 360 seconds in: past a town errand's 300, inside the walk's 450.
-        waiting = slot.want(claimant="guild bank", character="Grug",
-                            aim="guild banker", leader="Grug",
-                            column="at:1:100,200,30",
-                            retaskable=("", "guild banker"), now=360.0)
+        waiting = slot.want(
+            claimant="guild bank",
+            character="Grug",
+            aim="guild banker",
+            leader="Grug",
+            column="at:1:100,200,30",
+            retaskable=("", "guild banker"),
+            now=360.0,
+        )
         self.assertEqual(townslot.SLOT_WAIT, waiting.verdict)
         self.assertFalse(waiting.granted)
 
@@ -1126,16 +1520,26 @@ class AWalkThatLeavesTownGetsALeaseDimensionedForIt(unittest.TestCase):
         """The control. Identical timing and an identical ground aim, with a
         claimant that has no long lease - so the test above is proving the
         mapping rather than merely the clock."""
-        slot = townslot.Slot(releasable=economy,
-                             long_leases={"gather": 450.0})
-        taken = slot.want(claimant="forge", character="Grug",
-                          aim="at:1:100,200,30", leader="Grug", column="",
-                          retaskable=("", "at:1:100,200,30"), now=0.0)
+        slot = townslot.Slot(releasable=economy, long_leases={"gather": 450.0})
+        taken = slot.want(
+            claimant="forge",
+            character="Grug",
+            aim="at:1:100,200,30",
+            leader="Grug",
+            column="",
+            retaskable=("", "at:1:100,200,30"),
+            now=0.0,
+        )
         slot.settle(taken, True, 0.0)
-        waiting = slot.want(claimant="guild bank", character="Grug",
-                            aim="guild banker", leader="Grug",
-                            column="at:1:100,200,30",
-                            retaskable=("", "guild banker"), now=360.0)
+        waiting = slot.want(
+            claimant="guild bank",
+            character="Grug",
+            aim="guild banker",
+            leader="Grug",
+            column="at:1:100,200,30",
+            retaskable=("", "guild banker"),
+            now=360.0,
+        )
         self.assertEqual(townslot.SLOT_PREEMPT, waiting.verdict)
 
 
@@ -1150,16 +1554,26 @@ class ALongerLeaseIsStillALease(unittest.TestCase):
     and therefore stays preemptible. These fail if that stops being true."""
 
     def test_a_gathering_walk_is_preempted_once_its_own_lease_runs_out(self):
-        slot = townslot.Slot(releasable=economy,
-                             long_leases={"gather": 450.0})
-        taken = slot.want(claimant="gather", character="Grug",
-                          aim="at:1:100,200,30", leader="Grug", column="",
-                          retaskable=("", "at:1:100,200,30"), now=0.0)
+        slot = townslot.Slot(releasable=economy, long_leases={"gather": 450.0})
+        taken = slot.want(
+            claimant="gather",
+            character="Grug",
+            aim="at:1:100,200,30",
+            leader="Grug",
+            column="",
+            retaskable=("", "at:1:100,200,30"),
+            now=0.0,
+        )
         slot.settle(taken, True, 0.0)
-        waiting = slot.want(claimant="guild bank", character="Grug",
-                            aim="guild banker", leader="Grug",
-                            column="at:1:100,200,30",
-                            retaskable=("", "guild banker"), now=500.0)
+        waiting = slot.want(
+            claimant="guild bank",
+            character="Grug",
+            aim="guild banker",
+            leader="Grug",
+            column="at:1:100,200,30",
+            retaskable=("", "guild banker"),
+            now=500.0,
+        )
         self.assertEqual(townslot.SLOT_PREEMPT, waiting.verdict)
         self.assertTrue(waiting.granted)
 
@@ -1169,24 +1583,38 @@ class ALongerLeaseIsStillALease(unittest.TestCase):
         re-assertion must not push it out - the rule
         `TheLeaseRunsFromWhenItWasTaken` pins for town errands, proved again
         for the one claimant allowed to outlast them."""
-        slot = townslot.Slot(releasable=economy,
-                             long_leases={"gather": 450.0})
-        first = slot.want(claimant="gather", character="Grug",
-                          aim="at:1:100,200,30", leader="Grug", column="",
-                          retaskable=("", "at:1:100,200,30"), now=0.0)
+        slot = townslot.Slot(releasable=economy, long_leases={"gather": 450.0})
+        first = slot.want(
+            claimant="gather",
+            character="Grug",
+            aim="at:1:100,200,30",
+            leader="Grug",
+            column="",
+            retaskable=("", "at:1:100,200,30"),
+            now=0.0,
+        )
         slot.settle(first, True, 0.0)
         for minute in range(1, 60):
-            again = slot.want(claimant="gather", character="Grug",
-                              aim="at:1:100,200,30", leader="Grug",
-                              column="at:1:100,200,30",
-                              retaskable=("", "at:1:100,200,30"),
-                              now=minute * 60.0)
+            again = slot.want(
+                claimant="gather",
+                character="Grug",
+                aim="at:1:100,200,30",
+                leader="Grug",
+                column="at:1:100,200,30",
+                retaskable=("", "at:1:100,200,30"),
+                now=minute * 60.0,
+            )
             slot.settle(again, True, minute * 60.0)
         self.assertEqual(0.0, slot.holder.since)
-        waiting = slot.want(claimant="guild bank", character="Grug",
-                            aim="guild banker", leader="Grug",
-                            column="at:1:100,200,30",
-                            retaskable=("", "guild banker"), now=3600.0)
+        waiting = slot.want(
+            claimant="guild bank",
+            character="Grug",
+            aim="guild banker",
+            leader="Grug",
+            column="at:1:100,200,30",
+            retaskable=("", "guild banker"),
+            now=3600.0,
+        )
         self.assertEqual(townslot.SLOT_PREEMPT, waiting.verdict)
 
     def test_a_full_bag_still_cuts_through_it_immediately(self):
@@ -1194,15 +1622,27 @@ class ALongerLeaseIsStillALease(unittest.TestCase):
         one that must not be forgotten when a new lease is added: a gathering
         walk is the longest hold on the column, so a full bag blocking loot has
         to take it at once rather than after 450 seconds."""
-        slot = townslot.Slot(releasable=economy,
-                             long_leases={"gather": 450.0})
-        taken = slot.want(claimant="gather", character="Grug",
-                          aim="at:1:100,200,30", leader="Grug", column="",
-                          retaskable=("", "at:1:100,200,30"), now=0.0)
+        slot = townslot.Slot(releasable=economy, long_leases={"gather": 450.0})
+        taken = slot.want(
+            claimant="gather",
+            character="Grug",
+            aim="at:1:100,200,30",
+            leader="Grug",
+            column="",
+            retaskable=("", "at:1:100,200,30"),
+            now=0.0,
+        )
         slot.settle(taken, True, 0.0)
-        urgent = slot.want(claimant="economy", character="Grug", aim="vendor",
-                           leader="Grug", column="at:1:100,200,30",
-                           retaskable=("", "vendor"), now=1.0, urgent=True)
+        urgent = slot.want(
+            claimant="economy",
+            character="Grug",
+            aim="vendor",
+            leader="Grug",
+            column="at:1:100,200,30",
+            retaskable=("", "vendor"),
+            now=1.0,
+            urgent=True,
+        )
         self.assertEqual(townslot.SLOT_PREEMPT, urgent.verdict)
         self.assertTrue(urgent.granted)
 
@@ -1210,19 +1650,32 @@ class ALongerLeaseIsStillALease(unittest.TestCase):
         """`want_idle` reads the same mapping, so the gathering walk is not
         quietly exempt from the one path that empties the column for a drive
         that wants no errand at all (infra#3728)."""
-        slot = townslot.Slot(releasable=economy,
-                             long_leases={"gather": 450.0})
-        taken = slot.want(claimant="gather", character="Grug",
-                          aim="at:1:100,200,30", leader="Grug", column="",
-                          retaskable=("", "at:1:100,200,30"), now=0.0)
+        slot = townslot.Slot(releasable=economy, long_leases={"gather": 450.0})
+        taken = slot.want(
+            claimant="gather",
+            character="Grug",
+            aim="at:1:100,200,30",
+            leader="Grug",
+            column="",
+            retaskable=("", "at:1:100,200,30"),
+            now=0.0,
+        )
         slot.settle(taken, True, 0.0)
-        held = slot.want_idle(claimant="craft_rhythm", character="Grug",
-                              leader="Grug", column="at:1:100,200,30",
-                              now=400.0)
+        held = slot.want_idle(
+            claimant="craft_rhythm",
+            character="Grug",
+            leader="Grug",
+            column="at:1:100,200,30",
+            now=400.0,
+        )
         self.assertEqual(townslot.SLOT_WAIT, held.verdict)
-        cleared = slot.want_idle(claimant="craft_rhythm", character="Grug",
-                                 leader="Grug", column="at:1:100,200,30",
-                                 now=500.0)
+        cleared = slot.want_idle(
+            claimant="craft_rhythm",
+            character="Grug",
+            leader="Grug",
+            column="at:1:100,200,30",
+            now=500.0,
+        )
         self.assertEqual(townslot.SLOT_CLEAR, cleared.verdict)
 
 
@@ -1241,14 +1694,27 @@ class AnUrgentPassThatAchievesNothingStopsOutrankingEverything(unittest.TestCase
 
     def _urgent(self, slot, now):
         """Ask for the column under bag pressure, the way the vendor pass does."""
-        return slot.want(claimant="economy", character="Grug", aim="vendor",
-                         leader="Grug", column="at:1:100,200,30",
-                         retaskable=("", "vendor"), now=now, urgent=True)
+        return slot.want(
+            claimant="economy",
+            character="Grug",
+            aim="vendor",
+            leader="Grug",
+            column="at:1:100,200,30",
+            retaskable=("", "vendor"),
+            now=now,
+            urgent=True,
+        )
 
     def _gather_holds(self, slot):
-        slot_taken = slot.want(claimant="gather", character="Grug",
-                               aim="at:1:100,200,30", leader="Grug", column="",
-                               retaskable=("", "at:1:100,200,30"), now=0.0)
+        slot_taken = slot.want(
+            claimant="gather",
+            character="Grug",
+            aim="at:1:100,200,30",
+            leader="Grug",
+            column="",
+            retaskable=("", "at:1:100,200,30"),
+            now=0.0,
+        )
         slot.settle(slot_taken, True, 0.0)
 
     def test_the_first_fruitless_grant_still_preempts(self):
@@ -1274,10 +1740,8 @@ class AnUrgentPassThatAchievesNothingStopsOutrankingEverything(unittest.TestCase
         self._gather_holds(slot)
         until = slot.fruitless("economy", 0.0)
         self.assertEqual(townslot.URGENT_BACKOFF_SECONDS, until)
-        self.assertEqual(townslot.SLOT_WAIT,
-                         self._urgent(slot, until - 1.0).verdict)
-        self.assertEqual(townslot.SLOT_PREEMPT,
-                         self._urgent(slot, until + 1.0).verdict)
+        self.assertEqual(townslot.SLOT_WAIT, self._urgent(slot, until - 1.0).verdict)
+        self.assertEqual(townslot.SLOT_PREEMPT, self._urgent(slot, until + 1.0).verdict)
 
     def test_the_streak_doubles_and_is_capped(self):
         """The shape `SHARE_RETRY_MINUTES * 2**n` capped at
@@ -1300,17 +1764,25 @@ class AnUrgentPassThatAchievesNothingStopsOutrankingEverything(unittest.TestCase
         slot.fruitless("economy", 0.0)
         slot.productive("economy")
         self.assertEqual(0.0, slot.urgency_suppressed_until("economy"))
-        self.assertEqual(townslot.URGENT_BACKOFF_SECONDS,
-                         slot.fruitless("economy", 0.0))
+        self.assertEqual(
+            townslot.URGENT_BACKOFF_SECONDS, slot.fruitless("economy", 0.0)
+        )
 
     def test_suppressed_urgency_is_not_a_refusal(self):
         """It loses the right to cut in front, not the right to the column. A
         free column is still taken the ordinary way."""
         slot = townslot.Slot(releasable=economy)
         slot.fruitless("economy", 0.0)
-        taken = slot.want(claimant="economy", character="Grug", aim="vendor",
-                          leader="Grug", column="",
-                          retaskable=("", "vendor"), now=1.0, urgent=True)
+        taken = slot.want(
+            claimant="economy",
+            character="Grug",
+            aim="vendor",
+            leader="Grug",
+            column="",
+            retaskable=("", "vendor"),
+            now=1.0,
+            urgent=True,
+        )
         self.assertEqual(townslot.SLOT_TAKE, taken.verdict)
         self.assertTrue(taken.granted)
 
@@ -1324,9 +1796,16 @@ class AnUrgentPassThatAchievesNothingStopsOutrankingEverything(unittest.TestCase
     def test_one_claimants_backoff_does_not_silence_another(self):
         slot = townslot.Slot(releasable=economy, long_leases={"gather": 450.0})
         slot.fruitless("economy", 0.0)
-        other = slot.want(claimant="bank", character="Grug", aim="banker",
-                          leader="Grug", column="at:1:100,200,30",
-                          retaskable=("", "banker"), now=1.0, urgent=True)
+        other = slot.want(
+            claimant="bank",
+            character="Grug",
+            aim="banker",
+            leader="Grug",
+            column="at:1:100,200,30",
+            retaskable=("", "banker"),
+            now=1.0,
+            urgent=True,
+        )
         self.assertEqual(townslot.SLOT_PREEMPT, other.verdict)
 
 
@@ -1350,61 +1829,115 @@ class AnUnledgeredWriteDoesNotOrphanTheColumn(unittest.TestCase):
 
     def test_an_unledgered_write_orphans_the_column_without_adopt(self):
         slot = townslot.Slot()
-        taken = slot.want(claimant="gather", character="Grug",
-                          aim="at:1:-1175.1,-2532.8,123.9", leader="Grug",
-                          column="", retaskable=(), now=1000.0)
+        taken = slot.want(
+            claimant="gather",
+            character="Grug",
+            aim="at:1:-1175.1,-2532.8,123.9",
+            leader="Grug",
+            column="",
+            retaskable=(),
+            now=1000.0,
+        )
         slot.settle(taken, True, 1000.0)
         self.assertEqual("gather", slot.holder.claimant)
         # Somebody writes the column without telling the ledger.
-        slot.want(claimant="mail", character="Grug", aim="mailbox",
-                  leader="Grug", column="auctioneer", retaskable=(), now=1060.0)
-        self.assertEqual("", slot.holder.claimant,
-                         "an unrecorded write should orphan - this is the bug")
+        slot.want(
+            claimant="mail",
+            character="Grug",
+            aim="mailbox",
+            leader="Grug",
+            column="auctioneer",
+            retaskable=(),
+            now=1060.0,
+        )
+        self.assertEqual(
+            "",
+            slot.holder.claimant,
+            "an unrecorded write should orphan - this is the bug",
+        )
 
     def test_adopt_makes_the_write_recognised_instead(self):
         slot = townslot.Slot()
-        taken = slot.want(claimant="gather", character="Grug",
-                          aim="at:1:-1175.1,-2532.8,123.9", leader="Grug",
-                          column="", retaskable=(), now=1000.0)
+        taken = slot.want(
+            claimant="gather",
+            character="Grug",
+            aim="at:1:-1175.1,-2532.8,123.9",
+            leader="Grug",
+            column="",
+            retaskable=(),
+            now=1000.0,
+        )
         slot.settle(taken, True, 1000.0)
-        slot.adopt(claimant="auction", character="Grug", aim="auctioneer",
-                   now=1060.0)
-        slot.want(claimant="mail", character="Grug", aim="mailbox",
-                  leader="Grug", column="auctioneer", retaskable=(), now=1061.0)
+        slot.adopt(claimant="auction", character="Grug", aim="auctioneer", now=1060.0)
+        slot.want(
+            claimant="mail",
+            character="Grug",
+            aim="mailbox",
+            leader="Grug",
+            column="auctioneer",
+            retaskable=(),
+            now=1061.0,
+        )
         self.assertEqual("auction", slot.holder.claimant)
 
     def test_an_adopted_holder_is_on_the_ordinary_lease_not_the_orphan_one(self):
         """The whole point: a known owner can be out-waited, a stranger cannot."""
         slot = townslot.Slot(lease=300.0, orphan_lease=1200.0)
-        slot.adopt(claimant="auction", character="Grug", aim="auctioneer",
-                   now=1000.0)
+        slot.adopt(claimant="auction", character="Grug", aim="auctioneer", now=1000.0)
         # Past the ordinary lease but far inside the orphan one.
-        d = slot.want(claimant="mail", character="Grug", aim="mailbox",
-                      leader="Grug", column="auctioneer", retaskable=("auctioneer",),
-                      now=1000.0 + 400.0)
+        d = slot.want(
+            claimant="mail",
+            character="Grug",
+            aim="mailbox",
+            leader="Grug",
+            column="auctioneer",
+            retaskable=("auctioneer",),
+            now=1000.0 + 400.0,
+        )
         self.assertTrue(
             d.granted,
             "an adopted holder must expire on the ordinary lease; if this "
-            "fails the adopted write is still unassailable for 1200s")
+            "fails the adopted write is still unassailable for 1200s",
+        )
 
     def test_the_clock_does_not_restart_once_the_write_is_adopted(self):
         slot = townslot.Slot()
-        slot.adopt(claimant="auction", character="Grug", aim="auctioneer",
-                   now=1000.0)
-        slot.want(claimant="mail", character="Grug", aim="mailbox",
-                  leader="Grug", column="auctioneer", retaskable=(), now=1300.0)
+        slot.adopt(claimant="auction", character="Grug", aim="auctioneer", now=1000.0)
+        slot.want(
+            claimant="mail",
+            character="Grug",
+            aim="mailbox",
+            leader="Grug",
+            column="auctioneer",
+            retaskable=(),
+            now=1300.0,
+        )
         first = slot.holder.since
-        slot.want(claimant="bank", character="Grug", aim="banker",
-                  leader="Grug", column="auctioneer", retaskable=(), now=1600.0)
-        self.assertEqual(first, slot.holder.since,
-                         "the lease must continue, not re-arm on every poll")
+        slot.want(
+            claimant="bank",
+            character="Grug",
+            aim="banker",
+            leader="Grug",
+            column="auctioneer",
+            retaskable=(),
+            now=1600.0,
+        )
+        self.assertEqual(
+            first,
+            slot.holder.since,
+            "the lease must continue, not re-arm on every poll",
+        )
 
     def test_adopt_refuses_an_incomplete_record(self):
         """A half-known holder is worse than an honest orphan."""
         slot = townslot.Slot()
         for kw in ({"claimant": ""}, {"character": ""}, {"aim": ""}):
-            args = {"claimant": "auction", "character": "Grug",
-                    "aim": "auctioneer", "now": 1.0}
+            args = {
+                "claimant": "auction",
+                "character": "Grug",
+                "aim": "auctioneer",
+                "now": 1.0,
+            }
             args.update(kw)
             slot.adopt(**args)
             self.assertIsNone(slot.holder, f"adopt should ignore {kw}")
@@ -1460,6 +1993,8 @@ class EveryUnledgeredTravelWriteTellsTheLedger(unittest.TestCase):
                 continue
             offenders.append(f"{node.name} (line {node.lineno})")
         self.assertEqual(
-            [], offenders,
+            [],
+            offenders,
             "these write travel_npc without telling the ledger, so the next "
-            f"want() orphans the column on the long lease: {offenders}")
+            f"want() orphans the column on the long lease: {offenders}",
+        )

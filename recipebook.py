@@ -62,6 +62,7 @@ leatherworker at 1. Buying by profession alone would have spent gold on a wall.
 NOTHING HERE READS A DATABASE. Rows in, decisions out, the same seam auction.py
 and craft_supply.py keep.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -135,7 +136,11 @@ def use_command(*, item_guid: int | None = None, entry: int | None = None) -> st
     if (item_guid is None) == (entry is None):
         raise ValueError("use_command takes exactly one of item_guid or entry")
     if item_guid is not None:
-        if not isinstance(item_guid, int) or isinstance(item_guid, bool) or item_guid <= 0:
+        if (
+            not isinstance(item_guid, int)
+            or isinstance(item_guid, bool)
+            or item_guid <= 0
+        ):
             raise ValueError("item guid must be a positive integer")
         return f"use guid:{item_guid}"
     if not isinstance(entry, int) or isinstance(entry, bool) or entry <= 0:
@@ -272,42 +277,68 @@ def plan_learns(held, skills: dict, settled=None, seen=None):
     out: list = []
     skipped: list = []
 
-    for item in sorted(held, key=lambda h: (h.holder, -int(h.required_rank), int(h.item_guid))):
+    for item in sorted(
+        held, key=lambda h: (h.holder, -int(h.required_rank), int(h.item_guid))
+    ):
         mine = skills.get(item.holder, {})
         if (item.holder, int(item.entry)) in settled:
-            skipped.append(Skipped(
-                item.holder, int(item.entry), item.label,
-                "the worldserver has already refused this one and said why"))
+            skipped.append(
+                Skipped(
+                    item.holder,
+                    int(item.entry),
+                    item.label,
+                    "the worldserver has already refused this one and said why",
+                )
+            )
             continue
         if not within_reach(item.required_skill, item.required_rank, mine):
             have = int(mine.get(int(item.required_skill), 0) or 0)
-            skipped.append(Skipped(
-                item.holder, int(item.entry), item.label,
-                "needs skill %d at %d and %s has %d"
-                % (int(item.required_skill), int(item.required_rank),
-                   item.holder, have)))
+            skipped.append(
+                Skipped(
+                    item.holder,
+                    int(item.entry),
+                    item.label,
+                    "needs skill %d at %d and %s has %d"
+                    % (
+                        int(item.required_skill),
+                        int(item.required_rank),
+                        item.holder,
+                        have,
+                    ),
+                )
+            )
             continue
         command = use_command(item_guid=int(item.item_guid))
         if (item.holder, command) in seen:
-            skipped.append(Skipped(
-                item.holder, int(item.entry), item.label,
-                "already queued inside the retry window"))
+            skipped.append(
+                Skipped(
+                    item.holder,
+                    int(item.entry),
+                    item.label,
+                    "already queued inside the retry window",
+                )
+            )
             continue
-        out.append(Learn(
-            holder=item.holder,
-            command=command,
-            entry=int(item.entry),
-            label=item.label,
-            why="carried, and skill %d is at %d against the %d it needs"
-                % (int(item.required_skill),
-                   int(mine.get(int(item.required_skill), 0) or 0),
-                   int(item.required_rank)),
-        ))
+        out.append(
+            Learn(
+                holder=item.holder,
+                command=command,
+                entry=int(item.entry),
+                label=item.label,
+                why="carried, and skill %d is at %d against the %d it needs"
+                % (
+                    int(item.required_skill),
+                    int(mine.get(int(item.required_skill), 0) or 0),
+                    int(item.required_rank),
+                ),
+            )
+        )
     return out, skipped
 
 
-def usable(listings, house: int, skills: dict, settled=None,
-           cap: int = PER_RECIPE_CAP_COPPER) -> list:
+def usable(
+    listings, house: int, skills: dict, settled=None, cap: int = PER_RECIPE_CAP_COPPER
+) -> list:
     """The listings one character could actually buy AND then use, cheapest last.
 
     `buyout > 0` is re-applied here as well as in the query that fetched them,
@@ -323,20 +354,31 @@ def usable(listings, house: int, skills: dict, settled=None,
     """
     settled = settled or set()
     out = [
-        listing for listing in listings
+        listing
+        for listing in listings
         if int(listing.house) == int(house)
         and int(listing.buyout) > 0
         and int(listing.buyout) <= int(cap)
         and within_reach(listing.required_skill, listing.required_rank, skills)
         and int(listing.entry) not in settled
     ]
-    return sorted(out, key=lambda x: (int(x.required_rank), -int(x.buyout),
-                                      -int(x.auction_id)))
+    return sorted(
+        out, key=lambda x: (int(x.required_rank), -int(x.buyout), -int(x.auction_id))
+    )
 
 
-def plan_purchases(shoppers, listings, skills: dict, houses: dict, purses: dict,
-                   slots: dict, settled=None, seen=None, carried=None,
-                   cap: int = SPEND_CAP_COPPER):
+def plan_purchases(
+    shoppers,
+    listings,
+    skills: dict,
+    houses: dict,
+    purses: dict,
+    slots: dict,
+    settled=None,
+    seen=None,
+    carried=None,
+    cap: int = SPEND_CAP_COPPER,
+):
     """Every recipe worth buying this pass, and a sentence for each refusal.
 
     `shoppers` the characters standing at an auctioneer RIGHT NOW. Nobody else
@@ -389,23 +431,31 @@ def plan_purchases(shoppers, listings, skills: dict, houses: dict, purses: dict,
     for name in sorted(shoppers):
         house = int(houses.get(name, 0) or 0)
         if house <= 0:
-            skipped.append(Skipped(name, 0, "",
-                                   "no auction house is reachable from this counter"))
+            skipped.append(
+                Skipped(name, 0, "", "no auction house is reachable from this counter")
+            )
             continue
         mine = skills.get(name, {})
         # ONE EXCLUSION LIST, TWO REASONS, and they are folded together because
         # `usable` only needs to know that this entry is not worth buying for
         # this character - not which of the two answers said so.
-        settled_here = ({entry for who, entry in settled if who == name}
-                        | {entry for who, entry in carried if who == name})
+        settled_here = {entry for who, entry in settled if who == name} | {
+            entry for who, entry in carried if who == name
+        }
         market = [
-            listing for listing in usable(listings, house, mine, settled_here)
+            listing
+            for listing in usable(listings, house, mine, settled_here)
             if int(listing.auction_id) not in taken
         ]
         if not market:
-            skipped.append(Skipped(name, 0, "",
-                                   "nothing on house %d is both usable and affordable"
-                                   % house))
+            skipped.append(
+                Skipped(
+                    name,
+                    0,
+                    "",
+                    "nothing on house %d is both usable and affordable" % house,
+                )
+            )
             continue
 
         best = market[-1]
@@ -414,41 +464,68 @@ def plan_purchases(shoppers, listings, skills: dict, houses: dict, purses: dict,
         free = int(slots.get(name, 0) or 0)
 
         if spent + price > int(cap):
-            skipped.append(Skipped(name, int(best.entry), best.label,
-                                   "the pass has already spent %d of its %d"
-                                   % (spent, int(cap))))
+            skipped.append(
+                Skipped(
+                    name,
+                    int(best.entry),
+                    best.label,
+                    "the pass has already spent %d of its %d" % (spent, int(cap)),
+                )
+            )
             continue
         if price > purse:
-            skipped.append(Skipped(name, int(best.entry), best.label,
-                                   "costs %d and %s carries %d"
-                                   % (price, name, purse)))
+            skipped.append(
+                Skipped(
+                    name,
+                    int(best.entry),
+                    best.label,
+                    "costs %d and %s carries %d" % (price, name, purse),
+                )
+            )
             continue
         if free <= SLOTS_KEPT_FREE:
-            skipped.append(Skipped(name, int(best.entry), best.label,
-                                   "%s has %d free bag slots and this pass keeps %d"
-                                   % (name, free, SLOTS_KEPT_FREE)))
+            skipped.append(
+                Skipped(
+                    name,
+                    int(best.entry),
+                    best.label,
+                    "%s has %d free bag slots and this pass keeps %d"
+                    % (name, free, SLOTS_KEPT_FREE),
+                )
+            )
             continue
 
         command = auction.buy_command(int(best.auction_id))
         if (name, command) in seen:
-            skipped.append(Skipped(name, int(best.entry), best.label,
-                                   "already queued inside the retry window"))
+            skipped.append(
+                Skipped(
+                    name,
+                    int(best.entry),
+                    best.label,
+                    "already queued inside the retry window",
+                )
+            )
             continue
 
         taken.add(int(best.auction_id))
         spent += price
-        out.append(Purchase(
-            shopper=name,
-            command=command,
-            auction_id=int(best.auction_id),
-            entry=int(best.entry),
-            label=best.label,
-            spend=price,
-            why="skill %d is at %d and this needs %d, for %d copper"
-                % (int(best.required_skill),
-                   int(mine.get(int(best.required_skill), 0) or 0),
-                   int(best.required_rank), price),
-        ))
+        out.append(
+            Purchase(
+                shopper=name,
+                command=command,
+                auction_id=int(best.auction_id),
+                entry=int(best.entry),
+                label=best.label,
+                spend=price,
+                why="skill %d is at %d and this needs %d, for %d copper"
+                % (
+                    int(best.required_skill),
+                    int(mine.get(int(best.required_skill), 0) or 0),
+                    int(best.required_rank),
+                    price,
+                ),
+            )
+        )
     return out, skipped
 
 
@@ -500,16 +577,26 @@ def report(learns, purchases, skipped) -> str:
     if not learns and not purchases:
         if not skipped:
             return "recipebook: nobody is carrying a recipe item this pass"
-        return ("recipebook: nothing to learn or buy; %d looked at, first: %s"
-                % (len(skipped), skipped[0].why))
+        return "recipebook: nothing to learn or buy; %d looked at, first: %s" % (
+            len(skipped),
+            skipped[0].why,
+        )
     parts = []
     if learns:
-        parts.append("%d to learn (%s)"
-                     % (len(learns), ", ".join(
-                         "%s uses %s" % (x.holder, x.label) for x in learns[:3])))
+        parts.append(
+            "%d to learn (%s)"
+            % (
+                len(learns),
+                ", ".join("%s uses %s" % (x.holder, x.label) for x in learns[:3]),
+            )
+        )
     if purchases:
-        parts.append("%d to buy for %d copper (%s)"
-                     % (len(purchases), sum(p.spend for p in purchases),
-                        ", ".join("%s buys %s" % (p.shopper, p.label)
-                                  for p in purchases[:3])))
+        parts.append(
+            "%d to buy for %d copper (%s)"
+            % (
+                len(purchases),
+                sum(p.spend for p in purchases),
+                ", ".join("%s buys %s" % (p.shopper, p.label) for p in purchases[:3]),
+            )
+        )
     return "recipebook: " + "; ".join(parts)

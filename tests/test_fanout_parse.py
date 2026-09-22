@@ -6,6 +6,7 @@ Two things are being pinned here at once: that "@guild X", "@horde",
 was before group targeting existed - the devious whisper into a raid is
 just an ordinary command, and must stay one.
 """
+
 import unittest
 
 from core import (
@@ -31,7 +32,9 @@ class GroupGrammarTest(unittest.TestCase):
 
     def test_quoted_guild_name_survives_parsing(self):
         out = parse_directive('@guild "Rangers of Vengeance" stay', ME, ALLOWED)
-        self.assertEqual(out, [FanoutCommand("guild Rangers of Vengeance", "stay", SRC)])
+        self.assertEqual(
+            out, [FanoutCommand("guild Rangers of Vengeance", "stay", SRC)]
+        )
 
     def test_faction_order_becomes_a_fanout(self):
         out = parse_directive("@horde grind", ME, ALLOWED)
@@ -96,7 +99,9 @@ class GroupHelpTest(unittest.TestCase):
         self.assertIn(str(MAX_COMMAND_LEN + 1), out[0].text)
 
     def test_a_flood_of_group_orders_is_capped_like_any_other(self):
-        lines = "\n".join(f"@horde order{i}" for i in range(MAX_COMMANDS_PER_MESSAGE + 1))
+        lines = "\n".join(
+            f"@horde order{i}" for i in range(MAX_COMMANDS_PER_MESSAGE + 1)
+        )
         out = parse_directive(lines, ME, ALLOWED)
         self.assertEqual(len(out), 1)
         self.assertIsInstance(out[0], Reply)
@@ -116,7 +121,8 @@ class SingleTargetIsUnchangedTest(unittest.TestCase):
         # must not become a fan-out just because a fan-out is in flight.
         out = parse_directive("@horde attack\n@Grug flee", ME, ALLOWED)
         self.assertEqual(
-            out, [FanoutCommand("horde", "attack", SRC), InsertCommand("Grug", "flee", SRC)]
+            out,
+            [FanoutCommand("horde", "attack", SRC), InsertCommand("Grug", "flee", SRC)],
         )
 
     def test_an_unaddressed_message_is_still_silence(self):

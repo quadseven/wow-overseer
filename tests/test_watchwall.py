@@ -7,6 +7,7 @@ five reordering themselves under the cursor the moment a fight starts. Every
 one of those renders fine and reads as a working feature. So these assert on
 the WORDS and the ORDER, which is where a wall goes wrong.
 """
+
 import unittest
 
 import watchwall
@@ -24,7 +25,6 @@ def member(name, **kw):
 
 
 class TheSentenceSaysTheMostUrgentTrueThing(unittest.TestCase):
-
     def test_logged_out_is_not_death(self):
         """The snapshot sweep drops the row of anyone not logged in, so an
         absent row is the ordinary way to be offline. Calling that dead is the
@@ -38,8 +38,9 @@ class TheSentenceSaysTheMostUrgentTrueThing(unittest.TestCase):
         self.assertEqual(watchwall.status_line(m), "dead in Westfall")
 
     def test_a_fight_outranks_an_injury(self):
-        m = member("Bork", condition="hurt", health_pct=20, combat=True,
-                   zone="Westfall")
+        m = member(
+            "Bork", condition="hurt", health_pct=20, combat=True, zone="Westfall"
+        )
         self.assertEqual(watchwall.status_line(m), "fighting in Westfall")
 
     def test_an_injury_carries_the_percentage_the_family_module_rounded(self):
@@ -52,8 +53,7 @@ class TheSentenceSaysTheMostUrgentTrueThing(unittest.TestCase):
     def test_an_instance_is_not_prefixed_with_in(self):
         """`family._member` composes "inside an instance" as a whole phrase.
         Prefixing it produces "fighting in inside an instance"."""
-        m = member("Grug", combat=True, zone="inside an instance",
-                   instance=True)
+        m = member("Grug", combat=True, zone="inside an instance", instance=True)
         self.assertEqual(watchwall.status_line(m), "fighting inside an instance")
 
     def test_a_placeless_character_still_gets_a_sentence(self):
@@ -75,18 +75,21 @@ class TheCaptionSaysWhatTheyAreAndNotOnlyWhoTheyAre(unittest.TestCase):
     def test_it_says_the_level_and_the_class(self):
         self.assertEqual(
             watchwall.standing(member("Grug", level=33, **{"class": "Warrior"})),
-            "L33 Warrior")
+            "L33 Warrior",
+        )
 
     def test_a_missing_level_says_the_class_alone(self):
         """Never "L None Warrior", and never a bare "L" with nothing after
         it. An absent field is the ordinary case on this payload, not an
         error, so it has to read as a shorter sentence rather than as a
         broken one."""
-        self.assertEqual(watchwall.standing(member("Grug", **{"class": "Warrior"})),
-                         "Warrior")
-        self.assertEqual(watchwall.standing(member("Grug", level=0,
-                                                   **{"class": "Warrior"})),
-                         "Warrior")
+        self.assertEqual(
+            watchwall.standing(member("Grug", **{"class": "Warrior"})), "Warrior"
+        )
+        self.assertEqual(
+            watchwall.standing(member("Grug", level=0, **{"class": "Warrior"})),
+            "Warrior",
+        )
 
     def test_a_missing_class_still_says_the_level(self):
         self.assertEqual(watchwall.standing(member("Grug", level=33)), "L33")
@@ -104,8 +107,9 @@ class TheCaptionSaysWhatTheyAreAndNotOnlyWhoTheyAre(unittest.TestCase):
         self.assertEqual(watchwall.status_line(row), "logged out")
 
     def test_it_rides_on_the_tile(self):
-        tile = watchwall.build_wall(
-            [member("Grug", level=33, **{"class": "Warrior"})])["tiles"][0]
+        tile = watchwall.build_wall([member("Grug", level=33, **{"class": "Warrior"})])[
+            "tiles"
+        ][0]
         self.assertEqual(tile["standing"], "L33 Warrior")
 
 
@@ -145,8 +149,11 @@ class APlayerIsDrawnOnlyOverARealUrl(unittest.TestCase):
         the encoder are not the same clock, so a character can be logged out
         and mid-broadcast for a beat. The tile learns the truth from the WHEP
         handshake rather than guessing offline from absence."""
-        row = {"name": "Ugga", "present": False,
-               "broadcast_url": "https://example.invalid/devugga"}
+        row = {
+            "name": "Ugga",
+            "present": False,
+            "broadcast_url": "https://example.invalid/devugga",
+        }
         self.assertTrue(watchwall.playable(row))
 
     def test_the_tile_carries_none_rather_than_an_empty_string(self):
@@ -157,17 +164,17 @@ class APlayerIsDrawnOnlyOverARealUrl(unittest.TestCase):
 
 
 class TheLeaderWarningIsAccurateOrAbsent(unittest.TestCase):
-
     def test_nobody_flagged_means_no_sentence(self):
         """The party can be led by someone the snapshot has not got, and
         `family._member` then flags nobody. A warning naming nobody is worse
         than no warning."""
-        self.assertIsNone(watchwall.leader_warning(
-            [member("Grug"), member("Ugga")]))
+        self.assertIsNone(watchwall.leader_warning([member("Grug"), member("Ugga")]))
 
     def test_it_names_the_leader_and_what_changes(self):
-        rows = [member("Grug", leader=True, pov_changes_the_family=True),
-                member("Ugga")]
+        rows = [
+            member("Grug", leader=True, pov_changes_the_family=True),
+            member("Ugga"),
+        ]
         warning = watchwall.leader_warning(rows)
         self.assertIn("Grug", warning["body"])
         self.assertIn("selfbot", warning["body"])
@@ -202,7 +209,6 @@ class TheLeaderWarningIsAccurateOrAbsent(unittest.TestCase):
 
 
 class TheHeroIsChosenNeverRanked(unittest.TestCase):
-
     def test_a_name_from_storage_is_validated_against_the_roster(self):
         """It arrives from the browser, which is to say from anywhere. An
         unknown name would empty the big slot and leave five in the rail."""
@@ -216,8 +222,7 @@ class TheHeroIsChosenNeverRanked(unittest.TestCase):
 
     def test_an_all_absent_family_still_has_a_hero(self):
         """A hero mode with no hero has no layout at all."""
-        rows = [{"name": "Grug", "present": False},
-                {"name": "Ugga", "present": False}]
+        rows = [{"name": "Grug", "present": False}, {"name": "Ugga", "present": False}]
         self.assertEqual(watchwall.hero_of(rows), "Grug")
 
     def test_an_empty_roster_does_not_raise(self):
@@ -235,16 +240,21 @@ class TheHeroIsChosenNeverRanked(unittest.TestCase):
         rather than the code. `ast` sees calls and never sees prose.
         """
         import ast
+
         with open(watchwall.__file__, encoding="utf-8") as fh:
             tree = ast.parse(fh.read())
-        called = {node.func.id for node in ast.walk(tree)
-                  if isinstance(node, ast.Call)
-                  and isinstance(node.func, ast.Name)}
+        called = {
+            node.func.id
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+        }
         for ranking in ("sorted", "max", "min"):
             self.assertNotIn(ranking, called, ranking)
-        attrs = {node.func.attr for node in ast.walk(tree)
-                 if isinstance(node, ast.Call)
-                 and isinstance(node.func, ast.Attribute)}
+        attrs = {
+            node.func.attr
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+        }
         self.assertNotIn("sort", attrs)
 
 
@@ -284,13 +294,17 @@ class TheHeadlineClaimsOnlyWhatThePayloadKnows(unittest.TestCase):
     def test_an_empty_world_says_so_in_words(self):
         """Zero of five is a statistic; nobody being there is the thing worth
         reading, and it is the production case."""
-        rows = [{"name": n, "present": False, "broadcast_url": "u"}
-                for n in ("Grug", "Ugga", "Og")]
+        rows = [
+            {"name": n, "present": False, "broadcast_url": "u"}
+            for n in ("Grug", "Ugga", "Og")
+        ]
         self.assertEqual(watchwall.headline(rows), "nobody is in the world")
 
     def test_it_counts_presence_and_not_urls(self):
-        rows = [member("Grug", broadcast_url="u"),
-                {"name": "Ugga", "present": False, "broadcast_url": "u"}]
+        rows = [
+            member("Grug", broadcast_url="u"),
+            {"name": "Ugga", "present": False, "broadcast_url": "u"},
+        ]
         self.assertEqual(watchwall.headline(rows), "1 of 2 in the world")
 
     def test_an_empty_roster_does_not_divide_by_anything(self):
@@ -321,7 +335,6 @@ class TheWallCarriesNoneOfTheChannelBudget(unittest.TestCase):
 
 
 class TheShapeTheFamilyPayloadPromises(unittest.TestCase):
-
     def test_the_three_modes_are_all_there(self):
         wall = watchwall.build_wall([member("Grug")])
         self.assertEqual(len(wall["modes"]), 3)
@@ -330,24 +343,36 @@ class TheShapeTheFamilyPayloadPromises(unittest.TestCase):
             self.assertIn(mode, wall["mode_labels"])
 
     def test_every_tile_carries_what_a_tile_needs_to_draw(self):
-        wall = watchwall.build_wall([member("Grug", role="father",
-                                            class_colour="#C79C6E")])
+        wall = watchwall.build_wall(
+            [member("Grug", role="father", class_colour="#C79C6E")]
+        )
         tile = wall["tiles"][0]
-        for key in ("name", "role", "class", "class_colour", "leader",
-                    "playable", "url", "standing", "line", "tone"):
+        for key in (
+            "name",
+            "role",
+            "class",
+            "class_colour",
+            "leader",
+            "playable",
+            "url",
+            "standing",
+            "line",
+            "tone",
+        ):
             self.assertIn(key, tile, key)
 
     def test_it_is_json_serialisable(self):
         """It rides on /api/family, so anything that is not JSON here is a 500
         on the tab that is the page's homepage."""
         import json
+
         json.dumps(watchwall.build_wall([member("Grug", broadcast_url="u")]))
 
 
 class TheHouseRules(unittest.TestCase):
-
     def test_no_em_dashes(self):
         import os
+
         here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         for name in ("watchwall.py", "tests/test_watchwall.py"):
             with open(os.path.join(here, name), encoding="utf-8") as fh:
@@ -364,15 +389,29 @@ class TheWallIsEveryFamilysHeads(unittest.TestCase):
     realm with two game clients, the two heads, side by side."""
 
     def families(self):
-        alliance = {"members": [
-            member("Grug", broadcast_url="https://streams.example/grug",
-                   leader=True, pov_changes_the_family=True),
-            member("Ugga", broadcast_url=None),
-            member("Og", broadcast_url=None)]}
-        horde = {"members": [
-            member("Zug", broadcast_url="https://streams.example/zug",
-                   leader=True, pov_changes_the_family=True),
-            member("Oz", broadcast_url=None)]}
+        alliance = {
+            "members": [
+                member(
+                    "Grug",
+                    broadcast_url="https://streams.example/grug",
+                    leader=True,
+                    pov_changes_the_family=True,
+                ),
+                member("Ugga", broadcast_url=None),
+                member("Og", broadcast_url=None),
+            ]
+        }
+        horde = {
+            "members": [
+                member(
+                    "Zug",
+                    broadcast_url="https://streams.example/zug",
+                    leader=True,
+                    pov_changes_the_family=True,
+                ),
+                member("Oz", broadcast_url=None),
+            ]
+        }
         return [("Grug", alliance), ("Zug", horde)]
 
     def test_both_heads_and_only_the_heads(self):
@@ -382,8 +421,10 @@ class TheWallIsEveryFamilysHeads(unittest.TestCase):
 
     def test_each_head_says_which_family_it_leads(self):
         heads = watchwall.build_heads(self.families())
-        self.assertEqual({m["name"]: m["family"] for m in heads["members"]},
-                         {"Grug": "Grug", "Zug": "Zug"})
+        self.assertEqual(
+            {m["name"]: m["family"] for m in heads["members"]},
+            {"Grug": "Grug", "Zug": "Zug"},
+        )
         self.assertEqual(heads["families"], ["Grug", "Zug"])
 
     def test_the_headline_counts_the_heads_not_the_families(self):

@@ -52,6 +52,7 @@ PURE MODULE, same seam as travel.py, jobs.py and professions.py: rows in, a
 decision and some statements out. No MySQL, no Discord, no LLM. `bridge.py`
 reads the rows, runs the statements and speaks the sentences.
 """
+
 from __future__ import annotations
 
 from collections.abc import Sequence
@@ -78,6 +79,7 @@ def should_activate(jobs: dict, has_assignments: bool) -> bool:
     values = {str(value or "").strip() for value in jobs.values()}
     return values == {"quest"}
 
+
 # Read from travel.ROLES rather than spelled, for the reason
 # professions.TRAINER_ROLE gives: a third spelling of "profession trainer" is
 # a third thing to get wrong, and a rename becomes an ImportError at startup
@@ -87,7 +89,9 @@ TRAINER_ROLE = next(role for role in travel.ROLES if role == "profession trainer
 # The three the operator asked for by name. Ids come from goals.SKILL_IDS,
 # which is the one place in this codebase that holds them; restating the
 # numbers here would be a second spelling whose only power is to disagree.
-SECONDARY = {name: goals.SKILL_IDS[name] for name in ("first aid", "cooking", "fishing")}
+SECONDARY = {
+    name: goals.SKILL_IDS[name] for name in ("first aid", "cooking", "fishing")
+}
 
 # Said back verbatim when somebody asks for the three by name, because "no
 # errand was produced" is not an answer to "make them go train fishing".
@@ -196,7 +200,8 @@ def nothing_to_train(members: Sequence) -> str:
     """
     held = sorted({s for m in members for s in tuple(m.holds)})
     capped = sorted(
-        m.name for m in members
+        m.name
+        for m in members
         if int(m.learn_skill or 0) and int(m.learn_skill) in tuple(m.holds)
     )
     said = [
@@ -207,8 +212,7 @@ def nothing_to_train(members: Sequence) -> str:
         said.append(
             "%s already hold the trade the roster asked them to learn - that "
             "is a CAP, not a learn, and the trainer resolve cannot find a "
-            "trainer for it until quadseven/mod-overseer#196 lands."
-            % ", ".join(capped)
+            "trainer for it until quadseven/mod-overseer#196 lands." % ", ".join(capped)
         )
     if not held:
         said.append(
@@ -259,7 +263,7 @@ def plan(members: Sequence) -> TrainPlan:
     if mode != MODE:
         return TrainPlan(
             why_not="The family's job is %s, not %s."
-                    % (mode or "not agreed across the roster", MODE)
+            % (mode or "not agreed across the roster", MODE)
         )
     blocked = readiness(members)
     if blocked:
@@ -290,12 +294,17 @@ def report(train_plan) -> str:
         return train_plan.why_not
     waiting = (
         " %s wait their turn." % ", ".join(train_plan.waiting)
-        if train_plan.waiting else ""
+        if train_plan.waiting
+        else ""
     )
     return (
         "job train: %s is aimed at %s to learn skill %d, and the family "
         "follows.%s Arriving is not learning - mod-overseer buys the trade "
         "through Trainer::TeachSpell, and only character_skills settles it."
-        % (train_plan.traveller, travel.describe(TRAINER_ROLE),
-           train_plan.skill, waiting)
+        % (
+            train_plan.traveller,
+            travel.describe(TRAINER_ROLE),
+            train_plan.skill,
+            waiting,
+        )
     )

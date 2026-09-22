@@ -22,6 +22,7 @@ since 2026-08-26 and `character_skills` gives him herbalism (mod-overseer#160,
 (mod-overseer#169), which is why silencing the chatter alone would have been a
 worse bug than the noise.
 """
+
 import inspect
 import pathlib
 import re
@@ -69,8 +70,10 @@ class SkillClaimsAreCheckedLiveTest(unittest.TestCase):
     def test_a_reworded_line_is_checked_before_it_is_spoken(self):
         """persona hands the sentence to an LLM between the decision and the
         chat window, and a hedge can come back as a boast."""
-        for signature in ("    async def _answer_craft_ask(",
-                          "    async def _speak_handovers("):
+        for signature in (
+            "    async def _answer_craft_ask(",
+            "    async def _speak_handovers(",
+        ):
             with self.subTest(signature=signature):
                 self.assertIn("chat.honest_claim", _block(signature))
 
@@ -83,9 +86,9 @@ class SkillClaimsAreCheckedLiveTest(unittest.TestCase):
         """`grant.said` was the false sentence; what is spoken is a Handover
         built from what the taker can actually do."""
         self.assertNotIn("grant.said", _source())
-        self.assertFalse(any(
-            field == "said" for field in materials.Grant.__dataclass_fields__
-        ))
+        self.assertFalse(
+            any(field == "said" for field in materials.Grant.__dataclass_fields__)
+        )
 
 
 class SaidOnceTest(unittest.TestCase):
@@ -95,10 +98,12 @@ class SaidOnceTest(unittest.TestCase):
         self.assertIn("self._said: dict = {}", _source())
 
     def test_every_speaking_path_asks_before_it_speaks(self):
-        for signature in ("    async def _speak_craft_asks(",
-                          "    async def _stood_down_for_craft(",
-                          "    async def _speak_handovers(",
-                          "    async def _say_blocked("):
+        for signature in (
+            "    async def _speak_craft_asks(",
+            "    async def _stood_down_for_craft(",
+            "    async def _speak_handovers(",
+            "    async def _say_blocked(",
+        ):
             with self.subTest(signature=signature):
                 self.assertIn("chat.should_say", _block(signature))
 
@@ -106,15 +111,19 @@ class SaidOnceTest(unittest.TestCase):
         """A should_say with no remember_said is a cooldown that never
         starts - the mechanism-that-does-nothing shape this repo keeps
         meeting."""
-        for signature in ("    async def _answer_craft_ask(",
-                          "    async def _stood_down_for_craft(",
-                          "    async def _speak_handovers(",
-                          "    async def _say_blocked("):
+        for signature in (
+            "    async def _answer_craft_ask(",
+            "    async def _stood_down_for_craft(",
+            "    async def _speak_handovers(",
+            "    async def _say_blocked(",
+        ):
             with self.subTest(signature=signature):
                 self.assertIn("chat.remember_said", _block(signature))
 
     def test_the_craft_answer_is_keyed_on_the_intent(self):
-        self.assertIn("craftpleas.ask_key(ask)", _block("    async def _speak_craft_asks("))
+        self.assertIn(
+            "craftpleas.ask_key(ask)", _block("    async def _speak_craft_asks(")
+        )
 
     def test_the_bridge_ignores_its_own_echo(self):
         """Every line the family says comes back through this relay, and an
@@ -124,11 +133,13 @@ class SaidOnceTest(unittest.TestCase):
 
 class NeverAddressYourselfTest(unittest.TestCase):
     def test_a_crafter_never_answers_its_own_line(self):
-        self.assertIsNone(craftpleas.parse_ask(
-            "Og",
-            "Og need cloth? Og know tailoring. Og make it, family just bring "
-            "the stuff.",
-        ))
+        self.assertIsNone(
+            craftpleas.parse_ask(
+                "Og",
+                "Og need cloth? Og know tailoring. Og make it, family just bring "
+                "the stuff.",
+            )
+        )
 
     def test_the_module_uses_the_shared_rule_rather_than_a_private_copy(self):
         source = pathlib.Path(craftpleas.__file__).read_text(encoding="utf-8")
@@ -171,10 +182,12 @@ class ReadTheRoomTest(unittest.TestCase):
     def test_the_stand_down_is_remembered_like_any_other_line(self):
         """Every path that speaks also writes the thought, so the timeline
         shows why the answer never came rather than a gap."""
-        for signature in ("    async def _answer_craft_ask(",
-                          "    async def _stood_down_for_craft(",
-                          "    async def _speak_handovers(",
-                          "    async def _say_blocked("):
+        for signature in (
+            "    async def _answer_craft_ask(",
+            "    async def _stood_down_for_craft(",
+            "    async def _speak_handovers(",
+            "    async def _say_blocked(",
+        ):
             with self.subTest(signature=signature):
                 self.assertIn("_insert_thought", _block(signature))
 

@@ -50,6 +50,7 @@ and `profession_keeps` is the half of it the junk-sale path reads.
 
 PURE MODULE: no MySQL, no core, no auction house, no browser.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -170,11 +171,11 @@ EXECUTABLE_TODAY = frozenset({KEEP, VENDOR, GIVE})
 #   five already carry, while two of the five sit at 100% of their bag slots.
 #   The difference being thrown away is real and it is a rounding error; the
 #   bag slot is the thing actually at stake.
-FIT_UNASKED = "unasked"    # nobody put the question. Keeps, as before.
-FIT_HOLDER = "holder"      # the one carrying it would wear it. Keeps.
-FIT_SIBLING = "sibling"    # somebody else would wear it. Hands it over.
-FIT_NOBODY = "nobody"      # asked, and the answer was no. Disposal is open.
-FIT_UNJUDGEABLE = "?"      # the gate ran and could not tell. Keeps.
+FIT_UNASKED = "unasked"  # nobody put the question. Keeps, as before.
+FIT_HOLDER = "holder"  # the one carrying it would wear it. Keeps.
+FIT_SIBLING = "sibling"  # somebody else would wear it. Hands it over.
+FIT_NOBODY = "nobody"  # asked, and the answer was no. Disposal is open.
+FIT_UNJUDGEABLE = "?"  # the gate ran and could not tell. Keeps.
 
 
 # ---------------------------------------------------------------------------
@@ -230,9 +231,9 @@ FIT_UNJUDGEABLE = "?"      # the gate ran and could not tell. Keeps.
 # receives runtime-granted spells (measured today), so "has he already learned
 # it" is a question this deployment cannot answer at all; the assigned trade is
 # the fact that can be read, and it is the one used.
-LEARNER_UNASKED = "unasked"   # nobody put the question. Keeps, as before.
-LEARNER_HOLDER = "holder"     # the trade is the holder's own. Keeps.
-LEARNER_NOBODY = "nobody"     # no member is assigned the trade. Keeps or banks.
+LEARNER_UNASKED = "unasked"  # nobody put the question. Keeps, as before.
+LEARNER_HOLDER = "holder"  # the trade is the holder's own. Keeps.
+LEARNER_NOBODY = "nobody"  # no member is assigned the trade. Keeps or banks.
 # Anything else is a NAME: the family member whose assigned trade this teaches.
 
 # `item_template.class` 9 is RECIPE - every Pattern, Plans, Recipe, Schematic,
@@ -242,8 +243,8 @@ LEARNER_NOBODY = "nobody"     # no member is assigned the trade. Keeps or banks.
 RECIPE_CLASS = 9
 
 # Binding, which decides which routes exist at all.
-BIND_NONE = "none"          # freely tradable and auctionable
-BIND_ON_EQUIP = "boe"       # auctionable until somebody wears it
+BIND_NONE = "none"  # freely tradable and auctionable
+BIND_ON_EQUIP = "boe"  # auctionable until somebody wears it
 BIND_ON_PICKUP = "soulbound"  # vendor or dust, nothing else
 
 # How much better an auction has to be than the vendor price before it is worth
@@ -354,16 +355,17 @@ class Item:
     sold. `known` is the master switch: an item the caller could not look up at
     all must not be routed anywhere.
     """
+
     name: str
     quality: int = 0
     known: bool = False
     binding: str = BIND_ON_PICKUP
     quest_item: bool = True
-    equipment: bool = False          # armour or a weapon, so disenchantable
+    equipment: bool = False  # armour or a weapon, so disenchantable
     required_level: int = 0
     sell_price: int = 0
     auction_value: int | None = None
-    reagent_for: str | None = None   # the profession that uses it, if any
+    reagent_for: str | None = None  # the profession that uses it, if any
     disenchant_skill_required: int | None = None
     # The two `item_template` columns the trade-tool gate reads. Both default
     # to 0, which is "not a tool", so a caller that has not looked them up
@@ -381,6 +383,7 @@ class Item:
 @dataclass(frozen=True)
 class Family:
     """What the family can actually do today, not what it could in principle."""
+
     enchanting_skill: int = 0
     # profession -> the skill somebody in the family actually has
     professions: dict = field(default_factory=dict)
@@ -432,8 +435,7 @@ def recipe(item) -> bool:
     rule in this module exactly as they were, because "a recipe for nobody in
     particular" is not a hand-off, it is ordinary goods.
     """
-    return bool(int(item.item_class) == RECIPE_CLASS
-                and int(item.required_skill) > 0)
+    return bool(int(item.item_class) == RECIPE_CLASS and int(item.required_skill) > 0)
 
 
 def outgrown(item, character_level, margin=10):
@@ -473,23 +475,31 @@ def _can_disenchant(item, family):
     return family.enchanting_skill >= needed
 
 
-def _auction_is_worth_it(item, family, multiple=AUCTION_BEATS_VENDOR_BY,
-                         available=ALL_ROUTES):
+def _auction_is_worth_it(
+    item, family, multiple=AUCTION_BEATS_VENDOR_BY, available=ALL_ROUTES
+):
     """Worth a listing slot and the wait, and legal to list at all."""
     if AUCTION not in available:
-        return False          # no executor: a listing verdict would sit forever
+        return False  # no executor: a listing verdict would sit forever
     if not family.auction_reachable:
         return False
     if item.binding == BIND_ON_PICKUP:
-        return False          # the whole point: soulbound cannot be listed
+        return False  # the whole point: soulbound cannot be listed
     if item.auction_value is None:
-        return False          # unknown price is a reason to take the sure thing
+        return False  # unknown price is a reason to take the sure thing
     return item.auction_value >= max(1, item.sell_price) * multiple
 
 
-def decide(item, family, character_level=1, upgrade_for_sibling=False,
-           reagent_held=0, available=ALL_ROUTES, family_fit=FIT_UNASKED,
-           learner=LEARNER_UNASKED):
+def decide(
+    item,
+    family,
+    character_level=1,
+    upgrade_for_sibling=False,
+    reagent_held=0,
+    available=ALL_ROUTES,
+    family_fit=FIT_UNASKED,
+    learner=LEARNER_UNASKED,
+):
     """One item, one route, with the reason attached.
 
     Order matters and is the argument: every refusal is checked before every
@@ -527,8 +537,11 @@ def decide(item, family, character_level=1, upgrade_for_sibling=False,
     LEARNER_NOBODY keep, and an item that is not a recipe ignores it entirely.
     """
     if not item.known:
-        return Verdict(KEEP, "nothing is known about %s, and an unclassified "
-                             "item is kept rather than risked" % item.name)
+        return Verdict(
+            KEEP,
+            "nothing is known about %s, and an unclassified "
+            "item is kept rather than risked" % item.name,
+        )
     if item.quest_item:
         return Verdict(KEEP, "%s is a quest item" % item.name)
     if trade_tool(item):
@@ -548,8 +561,9 @@ def decide(item, family, character_level=1, upgrade_for_sibling=False,
         # this module already refuses elsewhere. A tool nobody works costs one
         # bag slot and sixteen copper; the miner who lost his pick stops
         # mining, which is what this cost three characters.
-        return Verdict(KEEP, "%s is a trade tool, and a tool has no level to "
-                             "outgrow" % item.name)
+        return Verdict(
+            KEEP, "%s is a trade tool, and a tool has no level to outgrow" % item.name
+        )
     if recipe(item) and learner != LEARNER_UNASKED:
         # ABOVE THE FAMILY-FIT GATE, AND THE WHOLE BRANCH IS DEAD BELOW IT.
         # This is not a preference about ordering, it is the only position
@@ -564,8 +578,9 @@ def decide(item, family, character_level=1, upgrade_for_sibling=False,
         # questions underneath - outgrown, binding, the auction multiple -
         # are about it at all.
         if learner == LEARNER_HOLDER:
-            return Verdict(KEEP, "%s teaches the trade its holder already "
-                                 "works" % item.name)
+            return Verdict(
+                KEEP, "%s teaches the trade its holder already works" % item.name
+            )
         if learner == LEARNER_NOBODY:
             # The same judgement, and deliberately the same words, as the
             # reagent branch below makes about a material for a profession
@@ -574,76 +589,116 @@ def decide(item, family, character_level=1, upgrade_for_sibling=False,
             # inscription and jewelcrafting open on purpose for a future
             # guild recruit, and this is the pile that would be waiting.
             if family.bank_reachable and BANK in available:
-                return Verdict(BANK, "%s teaches a trade nobody is assigned - "
-                                     "the bank keeps it without spending a bag "
-                                     "slot on a profession the family may "
-                                     "still take" % item.name)
-            return Verdict(KEEP, "%s teaches a trade nobody is assigned - "
-                                 "keeping it rather than selling the family "
-                                 "out of a profession it has not started yet"
-                                 % item.name)
+                return Verdict(
+                    BANK,
+                    "%s teaches a trade nobody is assigned - "
+                    "the bank keeps it without spending a bag "
+                    "slot on a profession the family may "
+                    "still take" % item.name,
+                )
+            return Verdict(
+                KEEP,
+                "%s teaches a trade nobody is assigned - "
+                "keeping it rather than selling the family "
+                "out of a profession it has not started yet" % item.name,
+            )
         if GIVE not in available:
-            return Verdict(KEEP, "%s is %s's trade to learn, and no handover "
-                                 "route is open to it" % (item.name, learner))
+            return Verdict(
+                KEEP,
+                "%s is %s's trade to learn, and no handover "
+                "route is open to it" % (item.name, learner),
+            )
         # CLAIM BEATS EVERY DISPOSAL, which is what the owner asked for out
         # loud. Reaching this point means the gate ran, named a member, and
         # that member is not the holder - so the item has an owner inside the
         # family and disposing of it would be selling the family its own
         # recipe back later at a vendor's mark-up.
-        return Verdict(GIVE, "%s teaches %s's own trade, and it is sitting in "
-                             "somebody else's bag" % (item.name, learner))
+        return Verdict(
+            GIVE,
+            "%s teaches %s's own trade, and it is sitting in "
+            "somebody else's bag" % (item.name, learner),
+        )
     if family_fit == FIT_HOLDER:
         # Soulbound or not, the character carrying it would wear it. This sits
         # ABOVE the `outgrown` level test on purpose: required level plus a
         # margin is a proxy for "still wanted", and this is the real answer,
         # so it must not be reachable only when the proxy happens to agree.
-        return Verdict(KEEP, "%s is an upgrade for the character already "
-                             "carrying it" % item.name)
+        return Verdict(
+            KEEP, "%s is an upgrade for the character already carrying it" % item.name
+        )
     if family_fit == FIT_UNJUDGEABLE:
-        return Verdict(KEEP, "nothing here can judge whether anybody would "
-                             "wear %s, and an unjudged item is kept rather "
-                             "than risked" % item.name)
+        return Verdict(
+            KEEP,
+            "nothing here can judge whether anybody would "
+            "wear %s, and an unjudged item is kept rather "
+            "than risked" % item.name,
+        )
     if upgrade_for_sibling or family_fit == FIT_SIBLING:
         # Deferred to the sibling-upgrade gate rather than re-decided here;
         # two modules answering "is this better" is how they drift apart.
         if GIVE not in available:
-            return Verdict(KEEP, "%s suits somebody in the family better, and "
-                                 "no handover route is open to it" % item.name)
-        return Verdict(GIVE, "%s suits somebody in the family better than what "
-                             "they are wearing" % item.name)
+            return Verdict(
+                KEEP,
+                "%s suits somebody in the family better, and "
+                "no handover route is open to it" % item.name,
+            )
+        return Verdict(
+            GIVE,
+            "%s suits somebody in the family better than what "
+            "they are wearing" % item.name,
+        )
 
     if item.reagent_for:
         needed = family.professions.get(item.reagent_for)
         if needed is None:
             if family.bank_reachable and BANK in available:
-                return Verdict(BANK, "%s feeds %s, which nobody has yet - the "
-                                     "bank keeps it without spending a bag slot "
-                                     "on a profession the family may still take"
-                                     % (item.name, item.reagent_for))
-            return Verdict(KEEP, "%s feeds %s, which nobody has yet - keeping "
-                                 "it rather than selling the family into a "
-                                 "profession it cannot start"
-                                 % (item.name, item.reagent_for))
+                return Verdict(
+                    BANK,
+                    "%s feeds %s, which nobody has yet - the "
+                    "bank keeps it without spending a bag slot "
+                    "on a profession the family may still take"
+                    % (item.name, item.reagent_for),
+                )
+            return Verdict(
+                KEEP,
+                "%s feeds %s, which nobody has yet - keeping "
+                "it rather than selling the family into a "
+                "profession it cannot start" % (item.name, item.reagent_for),
+            )
         if reagent_held <= family.reagent_keep:
-            return Verdict(KEEP, "%s feeds %s and the family holds %d of the "
-                                 "%d it keeps"
-                                 % (item.name, item.reagent_for, reagent_held,
-                                    family.reagent_keep))
+            return Verdict(
+                KEEP,
+                "%s feeds %s and the family holds %d of the "
+                "%d it keeps"
+                % (item.name, item.reagent_for, reagent_held, family.reagent_keep),
+            )
         # Surplus beyond what the profession can use is ordinary goods, and
         # cloth and ore are exactly what sells on the auction house.
         if _auction_is_worth_it(item, family, available=available):
-            return Verdict(AUCTION, "%s is %d past the %d of %s the family "
-                                    "keeps, and it is worth more listed"
-                                    % (item.name, reagent_held - family.reagent_keep,
-                                       family.reagent_keep, item.reagent_for))
+            return Verdict(
+                AUCTION,
+                "%s is %d past the %d of %s the family "
+                "keeps, and it is worth more listed"
+                % (
+                    item.name,
+                    reagent_held - family.reagent_keep,
+                    family.reagent_keep,
+                    item.reagent_for,
+                ),
+            )
         if VENDOR in available and family.vendor_reachable and item.sell_price > 0:
-            return Verdict(VENDOR, "%s is surplus to %s"
-                                   % (item.name, item.reagent_for))
+            return Verdict(
+                VENDOR, "%s is surplus to %s" % (item.name, item.reagent_for)
+            )
         if family.bank_reachable and BANK in available:
-            return Verdict(BANK, "%s is surplus with no buyer in reach, and the "
-                                 "bank costs nothing to use" % item.name)
-        return Verdict(KEEP, "%s is surplus but there is nowhere to take it"
-                             % item.name)
+            return Verdict(
+                BANK,
+                "%s is surplus with no buyer in reach, and the "
+                "bank costs nothing to use" % item.name,
+            )
+        return Verdict(
+            KEEP, "%s is surplus but there is nowhere to take it" % item.name
+        )
 
     if item.quality == 0:
         if VENDOR in available and family.vendor_reachable and item.sell_price > 0:
@@ -680,20 +735,28 @@ def decide(item, family, character_level=1, upgrade_for_sibling=False,
         # rest of this module takes: a wrong KEEP costs a bag slot, a wrong sale
         # costs the item.
         if family_fit != FIT_NOBODY or item.required_level > character_level:
-            return Verdict(KEEP, "%s is still close enough to level to be worn"
-                                 % item.name)
+            return Verdict(
+                KEEP, "%s is still close enough to level to be worn" % item.name
+            )
 
     # An old green. This is the branch the whole module exists for, and
     # binding decides which routes are even open.
     if _auction_is_worth_it(item, family, available=available):
-        return Verdict(AUCTION, "%s is bind-on-equip and worth more listed "
-                                "than vendored" % item.name)
+        return Verdict(
+            AUCTION,
+            "%s is bind-on-equip and worth more listed than vendored" % item.name,
+        )
     if DISENCHANT in available and _can_disenchant(item, family):
-        return Verdict(DISENCHANT, "%s cannot be listed or is not worth "
-                                   "listing, and the family can break it down"
-                                   % item.name)
-    if (item.binding != BIND_ON_PICKUP and AUCTION not in available
-            and family_fit != FIT_NOBODY):
+        return Verdict(
+            DISENCHANT,
+            "%s cannot be listed or is not worth "
+            "listing, and the family can break it down" % item.name,
+        )
+    if (
+        item.binding != BIND_ON_PICKUP
+        and AUCTION not in available
+        and family_fit != FIT_NOBODY
+    ):
         # A tradable green is the auction's item and, if somebody in the
         # family should be wearing it, the family-fit gate's item. Vendoring
         # it merely because no listing route is BUILT YET throws the
@@ -708,12 +771,17 @@ def decide(item, family, character_level=1, upgrade_for_sibling=False,
         # Waiting then no longer costs one bag slot for a while; it costs the
         # slot indefinitely, for a green nobody will wear and no pass in this
         # process can list.
-        return Verdict(KEEP, "%s is still tradable and nothing here can list "
-                             "or hand it on yet, so vendoring it now would "
-                             "throw away the difference" % item.name)
+        return Verdict(
+            KEEP,
+            "%s is still tradable and nothing here can list "
+            "or hand it on yet, so vendoring it now would "
+            "throw away the difference" % item.name,
+        )
     if VENDOR in available and family.vendor_reachable and item.sell_price > 0:
-        return Verdict(VENDOR, "%s is outgrown, and vendoring is the only "
-                               "route open to it" % item.name)
+        return Verdict(
+            VENDOR,
+            "%s is outgrown, and vendoring is the only route open to it" % item.name,
+        )
     return Verdict(KEEP, "%s has no route open to it right now" % item.name)
 
 
@@ -767,8 +835,10 @@ def learners(rows, holders_by_skill) -> dict:
             continue
         who = by_skill.get(required_skill)
         if isinstance(who, (tuple, list)):
-            who = next((str(candidate).strip() for candidate in who
-                        if str(candidate).strip()), "")
+            who = next(
+                (str(candidate).strip() for candidate in who if str(candidate).strip()),
+                "",
+            )
         if not who:
             out[guid] = LEARNER_NOBODY
         elif who == holder:
@@ -878,8 +948,7 @@ def profession_keeps(rows, worked=(), named=None, reagent_keep=REAGENT_KEEP):
     one stack and then offers nothing more. A single stack of 60 is kept
     entire, because selling it would empty the shelf.
     """
-    worked = {str(trade).strip().lower() for trade in worked
-              if str(trade).strip()}
+    worked = {str(trade).strip().lower() for trade in worked if str(trade).strip()}
     named = named or {}
     stacks: dict = {}
     for row in rows:
@@ -893,15 +962,17 @@ def profession_keeps(rows, worked=(), named=None, reagent_keep=REAGENT_KEEP):
         if guid <= 0 or count <= 0:
             continue
         stacks.setdefault(entry, []).append(
-            (count, guid, str(row.get("name", "")), fact))
+            (count, guid, str(row.get("name", "")), fact)
+        )
 
     keeps: dict = {}
     for entry, held in stacks.items():
         item_class, bag_family = held[0][3]
         if _is_tool(item_class, bag_family):
             for _, guid, name, _fact in held:
-                keeps[guid] = ("%s is a trade tool, and a tool has no level "
-                               "to outgrow" % name)
+                keeps[guid] = (
+                    "%s is a trade tool, and a tool has no level to outgrow" % name
+                )
             continue
         trade = _trade_of(entry, bag_family, worked, named)
         if not trade:
@@ -913,6 +984,9 @@ def profession_keeps(rows, worked=(), named=None, reagent_keep=REAGENT_KEEP):
             if kept and kept + count > reagent_keep:
                 continue
             kept += count
-            keeps[guid] = ("%s feeds %s, and the family keeps up to %d of it"
-                           % (name, trade, reagent_keep))
+            keeps[guid] = "%s feeds %s, and the family keeps up to %d of it" % (
+                name,
+                trade,
+                reagent_keep,
+            )
     return keeps

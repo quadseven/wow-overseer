@@ -49,8 +49,14 @@ BRIDGE = pathlib.Path(__file__).resolve().parents[1] / "bridge.py"
 
 
 def _listing(auction_id, entry, label, count, buyout, house):
-    return auction.Listing(auction_id=auction_id, entry=entry, label=label,
-                           count=count, buyout=buyout, house=house)
+    return auction.Listing(
+        auction_id=auction_id,
+        entry=entry,
+        label=label,
+        count=count,
+        buyout=buyout,
+        house=house,
+    )
 
 
 # The ten measured listings, in the order the table above lists them.
@@ -67,8 +73,13 @@ LIVE = [
     _listing(116679, 2934, "Ruined Leather Scraps", 5, 1605, 6),
 ]
 
-PURSES = {"Grug": 1663413, "Grog": 1782663, "Bork": 1557501,
-          "Og": 1690879, "Ugga": 1718394}
+PURSES = {
+    "Grug": 1663413,
+    "Grog": 1782663,
+    "Bork": 1557501,
+    "Og": 1690879,
+    "Ugga": 1718394,
+}
 
 SLOTS = {name: 8 for name in PURSES}
 
@@ -140,7 +151,8 @@ class HouseTest(unittest.TestCase):
         source = MODULE.read_text(encoding="utf-8", errors="ignore")
         self.assertIn(
             "{AuctionHouseId::Alliance, AuctionHouseId::Horde, "
-            "AuctionHouseId::Neutral}", source,
+            "AuctionHouseId::Neutral}",
+            source,
         )
 
     def test_the_family_is_alliance(self):
@@ -160,9 +172,7 @@ class HouseTest(unittest.TestCase):
     def test_the_same_neutral_counter_serves_a_horde_character_too(self):
         # The goblin house is open to both sides, so the team does not enter
         # into it. This is not a hole in the fail-closed rule below.
-        self.assertEqual(
-            auction.reachable_house("horde", 474), auction.HOUSE_NEUTRAL
-        )
+        self.assertEqual(auction.reachable_house("horde", 474), auction.HOUSE_NEUTRAL)
 
     def test_a_faction_auctioneer_serves_that_faction_house(self):
         # 12 is Stormwind, 55 Ironforge, 80 Darnassus.
@@ -350,7 +360,8 @@ class GatheredTableTest(unittest.TestCase):
         for reagents in auction.GATHERED.values():
             for reagent in reagents:
                 self.assertNotIn(
-                    reagent.entry, vendor_bought,
+                    reagent.entry,
+                    vendor_bought,
                     "%s (%d) is bought from a vendor by craft_supply already"
                     % (reagent.label, reagent.entry),
                 )
@@ -387,7 +398,7 @@ class RhythmInteractionTest(unittest.TestCase):
         reader = body[start:end]
         # The SQL, not the docstring, which necessarily quotes the filter it
         # is explaining the absence of.
-        sql = reader[reader.index("cur.execute("):]
+        sql = reader[reader.index("cur.execute(") :]
         self.assertIn("r.craft_spell > 0", sql)
         self.assertFalse(
             "job = 'craft'" in sql,
@@ -424,7 +435,11 @@ class PlanBuysTest(unittest.TestCase):
     def test_grug_buys_the_one_rough_stone_stack_at_a_neutral_counter(self):
         needs = [auction.Need("Grug", 2835, "Rough Stone", 20)]
         buys, _notes = auction.plan_buys(
-            needs, LIVE, auction.HOUSE_NEUTRAL, PURSES, free_slots=SLOTS,
+            needs,
+            LIVE,
+            auction.HOUSE_NEUTRAL,
+            PURSES,
+            free_slots=SLOTS,
         )
         self.assertEqual([b.auction_id for b in buys], [116858])
         self.assertEqual(buys[0].spend, 3520)
@@ -435,14 +450,22 @@ class PlanBuysTest(unittest.TestCase):
         # pool this family can never shop in.
         needs = [auction.Need("Grug", 2835, "Rough Stone", 20)]
         buys, _notes = auction.plan_buys(
-            needs, LIVE, auction.HOUSE_NEUTRAL, PURSES, free_slots=SLOTS,
+            needs,
+            LIVE,
+            auction.HOUSE_NEUTRAL,
+            PURSES,
+            free_slots=SLOTS,
         )
         self.assertNotIn(116856, [b.auction_id for b in buys])
 
     def test_cheapest_first_within_the_reachable_house(self):
         needs = [auction.Need("Grug", 2835, "Rough Stone", 20)]
         buys, _notes = auction.plan_buys(
-            needs, LIVE, auction.HOUSE_ALLIANCE, PURSES, free_slots=SLOTS,
+            needs,
+            LIVE,
+            auction.HOUSE_ALLIANCE,
+            PURSES,
+            free_slots=SLOTS,
         )
         # 171/unit before 180/unit, and the 15-stack alone does not cover 20,
         # so the single is taken as well.
@@ -457,7 +480,11 @@ class PlanBuysTest(unittest.TestCase):
         """
         needs = [auction.Need("Bork", 2934, "Ruined Leather Scraps", 60)]
         buys, notes = auction.plan_buys(
-            needs, LIVE, auction.HOUSE_NEUTRAL, PURSES, free_slots=SLOTS,
+            needs,
+            LIVE,
+            auction.HOUSE_NEUTRAL,
+            PURSES,
+            free_slots=SLOTS,
         )
         self.assertEqual(buys, [])
         self.assertEqual(len(notes), 1)
@@ -470,7 +497,11 @@ class PlanBuysTest(unittest.TestCase):
             auction.Need("Grug", 2835, "Rough Stone", 20),
         ]
         buys, notes = auction.plan_buys(
-            needs, LIVE, auction.HOUSE_NEUTRAL, PURSES, free_slots=SLOTS,
+            needs,
+            LIVE,
+            auction.HOUSE_NEUTRAL,
+            PURSES,
+            free_slots=SLOTS,
         )
         self.assertEqual([b.shopper for b in buys], ["Grug"])
         self.assertTrue(any("Bork" in note for note in notes))
@@ -487,7 +518,10 @@ class PlanBuysTest(unittest.TestCase):
         absurd = [_listing(999, 2835, "Rough Stone", 1, 5_187_000, 7)]
         buys, notes = auction.plan_buys(
             [auction.Need("Grug", 2835, "Rough Stone", 20)],
-            absurd, auction.HOUSE_NEUTRAL, PURSES, free_slots=SLOTS,
+            absurd,
+            auction.HOUSE_NEUTRAL,
+            PURSES,
+            free_slots=SLOTS,
         )
         self.assertEqual(buys, [])
         self.assertTrue(any("beyond" in note for note in notes))
@@ -499,7 +533,10 @@ class PlanBuysTest(unittest.TestCase):
         pricey = [_listing(1, 2835, "Rough Stone", 1, 100_000, 7)]
         buys, _notes = auction.plan_buys(
             [auction.Need("Grug", 2835, "Rough Stone", 20)],
-            pricey, auction.HOUSE_NEUTRAL, PURSES, free_slots=SLOTS,
+            pricey,
+            auction.HOUSE_NEUTRAL,
+            PURSES,
+            free_slots=SLOTS,
         )
         self.assertEqual(buys, [])
 
@@ -510,14 +547,20 @@ class PlanBuysTest(unittest.TestCase):
         ]
         buys, _notes = auction.plan_buys(
             [auction.Need("Grug", 2835, "Rough Stone", 20)],
-            market, auction.HOUSE_NEUTRAL, PURSES, free_slots=SLOTS,
+            market,
+            auction.HOUSE_NEUTRAL,
+            PURSES,
+            free_slots=SLOTS,
         )
         self.assertEqual([b.auction_id for b in buys], [1])
 
     def test_a_poor_character_is_capped_by_its_purse_not_the_allowance(self):
         buys, notes = auction.plan_buys(
             [auction.Need("Skint", 2835, "Rough Stone", 20)],
-            LIVE, auction.HOUSE_NEUTRAL, {"Skint": 5}, free_slots={"Skint": 8},
+            LIVE,
+            auction.HOUSE_NEUTRAL,
+            {"Skint": 5},
+            free_slots={"Skint": 8},
         )
         self.assertEqual(buys, [])
         self.assertTrue(notes)
@@ -525,7 +568,10 @@ class PlanBuysTest(unittest.TestCase):
     def test_no_free_slot_means_no_purchase(self):
         buys, notes = auction.plan_buys(
             [auction.Need("Grug", 2835, "Rough Stone", 20)],
-            LIVE, auction.HOUSE_NEUTRAL, PURSES, free_slots={"Grug": 0},
+            LIVE,
+            auction.HOUSE_NEUTRAL,
+            PURSES,
+            free_slots={"Grug": 0},
         )
         self.assertEqual(buys, [])
         self.assertTrue(any("bag slot" in note for note in notes))
@@ -536,7 +582,11 @@ class PlanBuysTest(unittest.TestCase):
             auction.Need("Grog", 2835, "Rough Stone", 20),
         ]
         buys, _notes = auction.plan_buys(
-            needs, LIVE, auction.HOUSE_NEUTRAL, PURSES, free_slots=SLOTS,
+            needs,
+            LIVE,
+            auction.HOUSE_NEUTRAL,
+            PURSES,
+            free_slots=SLOTS,
         )
         ids = [b.auction_id for b in buys]
         self.assertEqual(len(ids), len(set(ids)))
@@ -560,13 +610,15 @@ class PlanBuysTest(unittest.TestCase):
             auction.Need("Ugga", 2447, "Peacebloom", 20),
         ]
         buys, _notes = auction.plan_buys(
-            needs, market, auction.HOUSE_NEUTRAL, PURSES, free_slots=SLOTS,
+            needs,
+            market,
+            auction.HOUSE_NEUTRAL,
+            PURSES,
+            free_slots=SLOTS,
         )
         # Each is affordable alone (15,000 < 20,000) and together they are not.
         self.assertEqual(len(buys), 1)
-        self.assertLessEqual(
-            sum(b.spend for b in buys), auction.SPEND_CAP_COPPER
-        )
+        self.assertLessEqual(sum(b.spend for b in buys), auction.SPEND_CAP_COPPER)
 
     def test_two_characters_are_never_queued_against_one_auction(self):
         """One auction is one stack; the second row could only ever be
@@ -577,7 +629,11 @@ class PlanBuysTest(unittest.TestCase):
             auction.Need("Grog", 2835, "Rough Stone", 20),
         ]
         buys, _notes = auction.plan_buys(
-            needs, market, auction.HOUSE_NEUTRAL, PURSES, free_slots=SLOTS,
+            needs,
+            market,
+            auction.HOUSE_NEUTRAL,
+            PURSES,
+            free_slots=SLOTS,
         )
         self.assertEqual(len(buys), 1)
 
@@ -591,7 +647,10 @@ class PlanBuysTest(unittest.TestCase):
             auction.Need("Ugga", 2447, "Peacebloom", 20),
         ]
         buys, notes = auction.plan_buys(
-            needs, market, auction.HOUSE_NEUTRAL, PURSES,
+            needs,
+            market,
+            auction.HOUSE_NEUTRAL,
+            PURSES,
             free_slots={"Ugga": 1},
         )
         self.assertEqual(len(buys), 1)
@@ -609,14 +668,21 @@ class PlanBuysTest(unittest.TestCase):
             auction.Need("Grog", 2835, "Rough Stone", 20),
         ]
         buys, _notes = auction.plan_buys(
-            needs, market, auction.HOUSE_NEUTRAL, PURSES, free_slots=SLOTS,
+            needs,
+            market,
+            auction.HOUSE_NEUTRAL,
+            PURSES,
+            free_slots=SLOTS,
         )
         self.assertEqual(sorted(b.shopper for b in buys), ["Grog", "Grug"])
 
     def test_a_satisfied_need_buys_nothing(self):
         buys, notes = auction.plan_buys(
             [auction.Need("Grug", 2835, "Rough Stone", 0)],
-            LIVE, auction.HOUSE_NEUTRAL, PURSES, free_slots=SLOTS,
+            LIVE,
+            auction.HOUSE_NEUTRAL,
+            PURSES,
+            free_slots=SLOTS,
         )
         self.assertEqual(buys, [])
         self.assertEqual(notes, [])
@@ -629,7 +695,11 @@ class PlanBuysTest(unittest.TestCase):
     def test_every_refusal_carries_a_whole_sentence_naming_the_shopper(self):
         needs = [auction.Need("Bork", 2934, "Ruined Leather Scraps", 60)]
         _buys, notes = auction.plan_buys(
-            needs, LIVE, auction.HOUSE_NEUTRAL, PURSES, free_slots=SLOTS,
+            needs,
+            LIVE,
+            auction.HOUSE_NEUTRAL,
+            PURSES,
+            free_slots=SLOTS,
         )
         for note in notes:
             self.assertIn("Bork", note)
@@ -644,19 +714,42 @@ class SalePlannerTest(unittest.TestCase):
         )
 
     def test_rare_is_never_listed(self):
-        rows = [{"holder": "Bork", "item_guid": 1, "entry": 2,
-                 "quality": 3, "market_price": 1000}]
+        rows = [
+            {
+                "holder": "Bork",
+                "item_guid": 1,
+                "entry": 2,
+                "quality": 3,
+                "market_price": 1000,
+            }
+        ]
         self.assertEqual(auction.plan_sales(rows), ())
 
     def test_claimed_upgrade_is_never_listed(self):
-        rows = [{"holder": "Bork", "item_guid": 1, "entry": 2,
-                 "quality": 2, "market_price": 1000, "recipient": "Og"}]
+        rows = [
+            {
+                "holder": "Bork",
+                "item_guid": 1,
+                "entry": 2,
+                "quality": 2,
+                "market_price": 1000,
+                "recipient": "Og",
+            }
+        ]
         self.assertEqual(auction.plan_sales(rows), ())
 
     def test_surplus_boe_gets_a_bounded_price(self):
-        rows = [{"holder": "Bork", "item_guid": 1, "entry": 2,
-                 "quality": 2, "sell_price": 100, "market_price": 500}]
-        sale, = auction.plan_sales(rows)
+        rows = [
+            {
+                "holder": "Bork",
+                "item_guid": 1,
+                "entry": 2,
+                "quality": 2,
+                "sell_price": 100,
+                "market_price": 500,
+            }
+        ]
+        (sale,) = auction.plan_sales(rows)
         self.assertEqual((sale.bid, sale.buyout), (400, 500))
 
 
@@ -709,9 +802,7 @@ class ExecutorContractTest(unittest.TestCase):
         necessary, and this test is what would say so.
         """
         source = MODULE.read_text(encoding="utf-8", errors="ignore")
-        self.assertIn(
-            'describe("bought", "", "the item arrives by mail', source
-        )
+        self.assertIn('describe("bought", "", "the item arrives by mail', source)
 
     def test_the_executor_enforces_no_price_ceiling_of_its_own(self):
         """Nothing but HasEnoughMoney stands between a row and the purse.
@@ -728,12 +819,14 @@ class ExecutorContractTest(unittest.TestCase):
         end = source.index('describe("bid", "", "");', start)
         body = source[start:end]
         self.assertIn(
-            "HasEnoughMoney(price)", body,
+            "HasEnoughMoney(price)",
+            body,
             "DoAuction no longer gates the buy on the purse alone",
         )
         for invented in ("priceCeiling", "spendLimit", "maxSpend", "goldGuard"):
             self.assertNotIn(
-                invented, body,
+                invented,
+                body,
                 "the executor grew a %s; auction.py's ceiling may now be "
                 "redundant or in conflict" % invented,
             )

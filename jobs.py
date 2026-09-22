@@ -33,6 +33,7 @@ every enabled roster row in one pass (see bridge._set_job).
 PURE MODULE, same seam as travel.py: no MySQL, no Discord, no LLM. Vocabulary
 and parsing in, a canonical mode string or None out.
 """
+
 from __future__ import annotations
 
 import re
@@ -72,16 +73,18 @@ DUNGEONS = {
 # purpose: DUNGEONS is what chat accepts, while the council's own goals already
 # send the Scarlet wings and the rest. tests/test_dungeon_goal.py pins this set
 # to the C++ table, so a portal added there fails here until it is listed.
-PORTAL_KEYWORDS = frozenset({
-    "deadmines",
-    "shadowfang",
-    "scarlet",
-    "scarlet-library",
-    "scarlet-armory",
-    "scarlet-cathedral",
-    "stockades",
-    "wailing",
-})
+PORTAL_KEYWORDS = frozenset(
+    {
+        "deadmines",
+        "shadowfang",
+        "scarlet",
+        "scarlet-library",
+        "scarlet-armory",
+        "scarlet-cathedral",
+        "stockades",
+        "wailing",
+    }
+)
 
 
 def dungeon_job(keyword: str) -> str | None:
@@ -97,6 +100,7 @@ def dungeon_job(keyword: str) -> str | None:
     if keyword in PORTAL_KEYWORDS:
         return "dungeon:%s" % keyword
     return None
+
 
 # The modes that change behaviour. Every other key in MODES is accepted,
 # stored, and said back honestly as "not built yet" - see `describe`. Kept as
@@ -226,7 +230,7 @@ BLOCKED: dict = {}
 GENERIC_BLOCK = (
     "no drive exists for it - DoJob validates the name and writes the "
     "column, and the only thing that reads the column back is the quest "
-    "gate, which reads every non-quest value as \"stop\""
+    'gate, which reads every non-quest value as "stop"'
 )
 
 
@@ -253,17 +257,17 @@ def why_not(mode: str) -> str:
     if can_set(mode):
         return ""
     if mode not in MODES:
-        return (
-            "%r is not a job mode. The vocabulary is: %s."
-            % (mode, ", ".join(sorted(MODES)))
+        return "%r is not a job mode. The vocabulary is: %s." % (
+            mode,
+            ", ".join(sorted(MODES)),
         )
     return (
         "Refusing to set job=%s: %s. Setting it would stand the quest drive "
         "down and put nothing in its place (infra#3338) - the family would go "
         "idle, not %s. Modes that drive something today: %s."
-        % (mode, BLOCKED.get(mode, GENERIC_BLOCK), mode,
-           ", ".join(sorted(IMPLEMENTED)))
+        % (mode, BLOCKED.get(mode, GENERIC_BLOCK), mode, ", ".join(sorted(IMPLEMENTED)))
     )
+
 
 # The state every character starts in and returns to when nobody has an
 # opinion. Matches overseer_roster.job's column default (migration
@@ -350,7 +354,7 @@ def resolve(text: str | None) -> str | None:
         keyword = cleaned.split(":", 1)[1].strip()
         return f"dungeon:{keyword}" if keyword in DUNGEONS.values() else None
     if cleaned.startswith("dungeon "):
-        suffix = cleaned[len("dungeon "):]
+        suffix = cleaned[len("dungeon ") :]
         if suffix in ("run", "clear"):
             return "dungeon"
         keyword = DUNGEONS.get(suffix)
@@ -365,7 +369,7 @@ def _explicit(text: str) -> str | None:
     cleaned = " ".join(text.strip().lower().split())
     if not cleaned.startswith("job"):
         return None
-    rest = cleaned[len("job"):].strip(" :=")
+    rest = cleaned[len("job") :].strip(" :=")
     return resolve(rest) if rest else None
 
 
@@ -404,8 +408,11 @@ def describe(mode: str) -> str:
         # raised through `describe`, which is what the console renders every
         # chip with and what Discord hears back for every order.
         drive = DRIVES.get(mode)
-        return (f"job set to {mode} - {what}. This drives: {drive}."
-                if drive else f"job set to {mode} - {what}.")
+        return (
+            f"job set to {mode} - {what}. This drives: {drive}."
+            if drive
+            else f"job set to {mode} - {what}."
+        )
     return (
         f"job set to {mode} - {what}. NOT BUILT YET: this only stands the "
         f"quest drive down; nothing positive replaces it until {mode} is "

@@ -194,7 +194,10 @@ def overrides(limits: Ceilings) -> Tuple[Tuple[str, str], ...]:
             str(limits.max_required_level),
         ),
         ("AuctionHouseBot.ListedItemLevelRestrict.Enabled", "true"),
-        ("AuctionHouseBot.ListedItemLevelRestrict.UseCraftedItemForCalculation", "true"),
+        (
+            "AuctionHouseBot.ListedItemLevelRestrict.UseCraftedItemForCalculation",
+            "true",
+        ),
         ("AuctionHouseBot.ListedItemLevelRestrict.MinItemLevel", str(MIN_ITEM_LEVEL)),
         (
             "AuctionHouseBot.ListedItemLevelRestrict.MaxItemLevel",
@@ -235,7 +238,9 @@ def drift(
     reasons = []
     for key, value in wanted:
         if key not in actual:
-            reasons.append("{} is not set at all, so the dist default stands".format(key))
+            reasons.append(
+                "{} is not set at all, so the dist default stands".format(key)
+            )
         elif actual[key] != value:
             reasons.append(
                 "{} is {}, this roster wants {}".format(key, actual[key], value)

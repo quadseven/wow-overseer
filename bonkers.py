@@ -18,6 +18,7 @@ from typing import Iterable
 
 HORDE = "horde"
 
+
 # WotLK player races/classes used here are each legal Horde combinations.  The
 # names are the proposal in infra#4110/4111 and remain operator-checkable before
 # any character is created in the dev realm.
@@ -57,8 +58,10 @@ def validate(members: Iterable[Member] = COHORT) -> tuple[Member, ...]:
         raise ValueError("Bonkers must contain exactly five members")
     if len(set(names)) != len(names):
         raise ValueError("Bonkers member names must be unique")
-    if any(not name.isascii() or not name.isalpha() or not 2 <= len(name) <= 12
-           for name in names):
+    if any(
+        not name.isascii() or not name.isalpha() or not 2 <= len(name) <= 12
+        for name in names
+    ):
         raise ValueError("Bonkers names must be ASCII WoW character names")
     if any(member.faction != HORDE for member in result):
         raise ValueError("Bonkers members must all be Horde")

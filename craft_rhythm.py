@@ -337,8 +337,10 @@ GATHERED: dict[int, tuple[Reagent, ...]] = {
     11460: (Reagent(8836, "Arthas' Tears", 1),),
     11467: (Reagent(8838, "Sungrass", 1), Reagent(3821, "Goldthorn", 1)),
     17553: (Reagent(8838, "Sungrass", 2), Reagent(8839, "Blindweed", 2)),
-    17556: (Reagent(13464, "Golden Sansam", 2),
-            Reagent(13465, "Mountain Silversage", 1)),
+    17556: (
+        Reagent(13464, "Golden Sansam", 2),
+        Reagent(13465, "Mountain Silversage", 1),
+    ),
     # BLACKSMITHING - the stone family, mining byproduct. Grug and Grog are
     # short of the same Rough Stone from different trades, which is the
     # cheapest possible case for a family-wide mode: one trip serves both.
@@ -377,8 +379,7 @@ GATHERED: dict[int, tuple[Reagent, ...]] = {
     10548: (Reagent(4304, "Thick Leather", 14),),
     10558: (Reagent(4304, "Thick Leather", 16),),
     19049: (Reagent(8170, "Rugged Leather", 8),),
-    19082: (Reagent(8170, "Rugged Leather", 14),
-            Reagent(14047, "Runecloth", 10)),
+    19082: (Reagent(8170, "Rugged Leather", 14), Reagent(14047, "Runecloth", 10)),
 }
 
 
@@ -530,9 +531,7 @@ def casts_in_hand(craft_spell: int, held: dict) -> int | None:
     if not reagents:
         return None
     return min(
-        int(held.get(r.entry, 0)) // r.per_cast
-        for r in reagents
-        if r.per_cast > 0
+        int(held.get(r.entry, 0)) // r.per_cast for r in reagents if r.per_cast > 0
     )
 
 
@@ -627,43 +626,50 @@ def errand(name: str, skills: dict, held: dict) -> Errand:
 
     if not smelt:
         return Errand(
-            name=name, spell=spend,
+            name=name,
+            spell=spend,
             why="%s has no smeltable gathering trade at a value any bracket "
-                "covers, so there is no choice to make and its craft errand "
-                "(spell %d) stands" % (name, spend),
+            "covers, so there is no choice to make and its craft errand "
+            "(spell %d) stands" % (name, spend),
         )
 
     ore = casts_in_hand(smelt, held) or 0
     if ore < 1:
         return Errand(
-            name=name, spell=spend,
+            name=name,
+            spell=spend,
             why="%s could smelt with spell %d but holds ore for %d cast(s), so "
-                "its craft errand (spell %d) stands and the gathering trip that "
-                "restocks one restocks the other" % (name, smelt, ore, spend),
+            "its craft errand (spell %d) stands and the gathering trip that "
+            "restocks one restocks the other" % (name, smelt, ore, spend),
         )
 
     casts = casts_in_hand(spend, held)
     if casts is None:
         return Errand(
-            name=name, spell=smelt, smelting=True,
+            name=name,
+            spell=smelt,
+            smelting=True,
             why="%s smelts (spell %d, ore for %d cast(s)) because no gathering "
-                "trip produces what its craft errand (spell %d) consumes - a "
-                "smelted bar or an own-crafted intermediate - so casting is the "
-                "only thing that can move it" % (name, smelt, ore, spend),
+            "trip produces what its craft errand (spell %d) consumes - a "
+            "smelted bar or an own-crafted intermediate - so casting is the "
+            "only thing that can move it" % (name, smelt, ore, spend),
         )
     if casts < 1:
         return Errand(
-            name=name, spell=smelt, smelting=True,
+            name=name,
+            spell=smelt,
+            smelting=True,
             why="%s smelts (spell %d, ore for %d cast(s)) because its craft "
-                "errand (spell %d) has reagents for %d cast(s) - the ore is "
-                "here and the craft's own material is not" % (
-                    name, smelt, ore, spend, casts),
+            "errand (spell %d) has reagents for %d cast(s) - the ore is "
+            "here and the craft's own material is not"
+            % (name, smelt, ore, spend, casts),
         )
     return Errand(
-        name=name, spell=spend,
+        name=name,
+        spell=spend,
         why="%s spends rather than smelts: its craft errand (spell %d) has "
-            "reagents for %d cast(s) in hand, and the %d cast(s) of ore keep "
-            "until it runs out" % (name, spend, casts, ore),
+        "reagents for %d cast(s) in hand, and the %d cast(s) of ore keep "
+        "until it runs out" % (name, spend, casts, ore),
     )
 
 
@@ -674,19 +680,20 @@ def stand(name: str, craft_spell: int, held: dict) -> Stand:
         return Stand(
             name=name,
             why="%s has no standing craft errand, so there is nothing to be "
-                "short of - craft.craft_errand found no recipe in any bracket "
-                "this character's skills reach" % name,
+            "short of - craft.craft_errand found no recipe in any bracket "
+            "this character's skills reach" % name,
         )
 
     reagents = GATHERED.get(spell)
     if not reagents:
         return Stand(
-            name=name, craft_spell=spell,
+            name=name,
+            craft_spell=spell,
             why="%s's recipe (spell %d) names no reagent a gathering trip "
-                "produces - every reagent it needs is vendor-bought "
-                "(craft_supply's business), own-crafted, or a smelted bar, so "
-                "this pass has no opinion about %s and leaves the rest of the "
-                "family to decide" % (name, spell, name),
+            "produces - every reagent it needs is vendor-bought "
+            "(craft_supply's business), own-crafted, or a smelted bar, so "
+            "this pass has no opinion about %s and leaves the rest of the "
+            "family to decide" % (name, spell, name),
         )
 
     # THE THINNEST REAGENT DECIDES, and it is named, because "Ugga is short"
@@ -698,25 +705,36 @@ def stand(name: str, craft_spell: int, held: dict) -> Stand:
 
     if casts < SHORT_CASTS:
         verdict = SHORT
-        why = ("%s holds %d %s against %d per cast of spell %d, which is %d "
-               "more cast(s) - short of the %d it takes to be worth staying "
-               "put" % (name, carried, thin.label, thin.per_cast, spell,
-                        casts, SHORT_CASTS))
+        why = (
+            "%s holds %d %s against %d per cast of spell %d, which is %d "
+            "more cast(s) - short of the %d it takes to be worth staying "
+            "put"
+            % (name, carried, thin.label, thin.per_cast, spell, casts, SHORT_CASTS)
+        )
     elif casts >= STOCK_CASTS:
         verdict = STOCKED
-        why = ("%s holds %d %s, enough for %d casts of spell %d - at or past "
-               "the %d that makes a crafting session worth sitting down for"
-               % (name, carried, thin.label, casts, spell, STOCK_CASTS))
+        why = (
+            "%s holds %d %s, enough for %d casts of spell %d - at or past "
+            "the %d that makes a crafting session worth sitting down for"
+            % (name, carried, thin.label, casts, spell, STOCK_CASTS)
+        )
     else:
         verdict = BETWEEN
-        why = ("%s holds %d %s, enough for %d casts of spell %d - between the "
-               "%d that would send the family gathering and the %d that would "
-               "sit it down, so %s argues for neither"
-               % (name, carried, thin.label, casts, spell, SHORT_CASTS,
-                  STOCK_CASTS, name))
+        why = (
+            "%s holds %d %s, enough for %d casts of spell %d - between the "
+            "%d that would send the family gathering and the %d that would "
+            "sit it down, so %s argues for neither"
+            % (name, carried, thin.label, casts, spell, SHORT_CASTS, STOCK_CASTS, name)
+        )
 
-    return Stand(name=name, craft_spell=spell, verdict=verdict, casts=casts,
-                 thinnest=thin.label, why=why)
+    return Stand(
+        name=name,
+        craft_spell=spell,
+        verdict=verdict,
+        casts=casts,
+        thinnest=thin.label,
+        why=why,
+    )
 
 
 def standing_mode(job_by_name: dict) -> str:
@@ -778,9 +796,9 @@ def rhythm(stands, standing: str) -> Rhythm:
     if standing not in (MODE_GATHER, MODE_CRAFT):
         return Rhythm(
             why="The family is on job=%r, which this pass does not arbitrate - "
-                "it alternates %s and %s and nothing else, so a standing order "
-                "for anything else is left exactly where it is."
-                % (standing or "nothing agreed", MODE_GATHER, MODE_CRAFT),
+            "it alternates %s and %s and nothing else, so a standing order "
+            "for anything else is left exactly where it is."
+            % (standing or "nothing agreed", MODE_GATHER, MODE_CRAFT),
             stands=stands,
         )
 
@@ -788,34 +806,41 @@ def rhythm(stands, standing: str) -> Rhythm:
     if not judged:
         return Rhythm(
             why="Nobody in the family holds a recipe whose reagents a "
-                "gathering trip produces, so there is no reason here to change "
-                "job=%s." % standing,
+            "gathering trip produces, so there is no reason here to change "
+            "job=%s." % standing,
             stands=stands,
         )
 
     short = [s for s in judged if s.verdict == SHORT]
     if short:
         wanted = MODE_GATHER
-        why = ("%s cannot cast: %s. One walk restocks all of them at once, so "
-               "the family gathers." % (
-                   ", ".join(s.name for s in short),
-                   "; ".join(s.why for s in short)))
+        why = (
+            "%s cannot cast: %s. One walk restocks all of them at once, so "
+            "the family gathers."
+            % (", ".join(s.name for s in short), "; ".join(s.why for s in short))
+        )
     elif all(s.verdict == STOCKED for s in judged):
         wanted = MODE_CRAFT
-        why = ("Every crafter with a gathered recipe is stocked for at least "
-               "%d casts (%s), so the family sits down and crafts." % (
-                   STOCK_CASTS,
-                   "; ".join("%s %d" % (s.name, s.casts) for s in judged)))
+        why = (
+            "Every crafter with a gathered recipe is stocked for at least "
+            "%d casts (%s), so the family sits down and crafts."
+            % (STOCK_CASTS, "; ".join("%s %d" % (s.name, s.casts) for s in judged))
+        )
     else:
         wanted = standing
-        why = ("Nobody is under %d casts and not everybody is over %d, so the "
-               "family stays on job=%s rather than re-aiming across the band "
-               "(%s)." % (SHORT_CASTS, STOCK_CASTS, standing,
-                          "; ".join("%s %d" % (s.name, s.casts)
-                                    for s in judged)))
+        why = (
+            "Nobody is under %d casts and not everybody is over %d, so the "
+            "family stays on job=%s rather than re-aiming across the band "
+            "(%s)."
+            % (
+                SHORT_CASTS,
+                STOCK_CASTS,
+                standing,
+                "; ".join("%s %d" % (s.name, s.casts) for s in judged),
+            )
+        )
 
-    return Rhythm(mode=wanted, changed=wanted != standing, why=why,
-                  stands=stands)
+    return Rhythm(mode=wanted, changed=wanted != standing, why=why, stands=stands)
 
 
 def report(plan: Rhythm) -> str:

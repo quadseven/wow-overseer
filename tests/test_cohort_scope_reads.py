@@ -58,6 +58,7 @@ bridge process should serve both cohorts or one each is still open on
 infra#4221; it decides whether `overseer_trade` and `overseer_goal` need
 columns of their own, and it does not change whether these six reads are right.
 """
+
 import ast
 import re
 import sqlite3
@@ -85,13 +86,11 @@ from test_cohort_scope import (
 HISTORIC_ENABLED_NAMES = "SELECT name FROM overseer_roster WHERE enabled = 1"
 
 HISTORIC_TRAIN_MEMBERS = (
-    "SELECT name, job, professions, learn_skill "
-    "FROM overseer_roster WHERE enabled = 1"
+    "SELECT name, job, professions, learn_skill FROM overseer_roster WHERE enabled = 1"
 )
 
 HISTORIC_RAIDPREP_MEMBERS = (
-    "SELECT name, job, professions, level "
-    "FROM overseer_roster WHERE enabled = 1"
+    "SELECT name, job, professions, level FROM overseer_roster WHERE enabled = 1"
 )
 
 HISTORIC_LEARN_AIM_ROWS = (
@@ -127,8 +126,9 @@ def _module_constant(name: str):
     the constant reaches these tests instead of being shadowed by a copy.
     """
     for node in ast.parse(_bridge_source()).body:
-        if (isinstance(node, ast.Assign)
-                and any(getattr(t, "id", "") == name for t in node.targets)):
+        if isinstance(node, ast.Assign) and any(
+            getattr(t, "id", "") == name for t in node.targets
+        ):
             return _evaluate(node.value, {})
     raise AssertionError("%s is not a module-level constant in bridge.py" % name)
 
@@ -154,7 +154,8 @@ def _sqlite_join(sql: str) -> str:
     out, collated = _COLLATE.subn("", out)
     assert collated == 1, "expected exactly one COLLATE to rewrite: %r" % sql
     out, bounded = _INTERVAL.subn(
-        "datetime('now', '-' || ? || ' hours')", out,
+        "datetime('now', '-' || ? || ' hours')",
+        out,
     )
     assert bounded == 1, "expected exactly one INTERVAL bound to rewrite: %r" % sql
     return out
@@ -171,17 +172,17 @@ def _sqlite_join(sql: str) -> str:
 
 # name, enabled, lead, job, professions, learn_skill, level, travel_npc, family
 _TWO_COHORTS = (
-    ("Grug",     1, 1, "quest", "blacksmithing", 164, 60, "",       CAVE),
-    ("Ugga",     1, 0, "quest", "tailoring",       0, 60, "",       CAVE),
-    ("Grog",     1, 0, "quest", "mining",          0, 60, "vendor", CAVE),
-    ("Bork",     1, 0, "quest", "skinning",        0, 60, "",       CAVE),
-    ("Og",       1, 0, "quest", "alchemy",         0, 60, "",       CAVE),
+    ("Grug", 1, 1, "quest", "blacksmithing", 164, 60, "", CAVE),
+    ("Ugga", 1, 0, "quest", "tailoring", 0, 60, "", CAVE),
+    ("Grog", 1, 0, "quest", "mining", 0, 60, "vendor", CAVE),
+    ("Bork", 1, 0, "quest", "skinning", 0, 60, "", CAVE),
+    ("Og", 1, 0, "quest", "alchemy", 0, 60, "", CAVE),
     # Disabled, and in this cohort: proves `enabled = 1` is still doing its own
     # job and has not been replaced by the cohort predicate.
-    ("Snik",     0, 0, "quest", "herbalism",       0, 60, "",       CAVE),
-    ("Blammo",   1, 1, "craft", "engineering",   202, 41, "",       OTHER),
-    ("Hexmama",  1, 0, "raid prep", "enchanting",  0, 44, "vendor", OTHER),
-    ("Moojuice", 1, 0, "gather", "leatherworking", 0, 38, "",       OTHER),
+    ("Snik", 0, 0, "quest", "herbalism", 0, 60, "", CAVE),
+    ("Blammo", 1, 1, "craft", "engineering", 202, 41, "", OTHER),
+    ("Hexmama", 1, 0, "raid prep", "enchanting", 0, 44, "vendor", OTHER),
+    ("Moojuice", 1, 0, "gather", "leatherworking", 0, 38, "", OTHER),
 )
 
 _ONE_COHORT = tuple(row for row in _TWO_COHORTS if row[8] == CAVE)
@@ -196,7 +197,7 @@ _ALL_ENABLED = sorted(r[0] for r in _TWO_COHORTS if r[1])
 # decided before this family's simply wins the lead.
 _TRADES = (
     (11, "Blammo", "learn", 202, "planned"),
-    (12, "Grug",   "learn", 164, "planned"),
+    (12, "Grug", "learn", 164, "planned"),
 )
 
 
@@ -299,7 +300,8 @@ class TheJobFanOutListUsedToCrossCohorts(RosterCase):
         got = self.names(db, _sqlite(HISTORIC_ENABLED_NAMES))
 
         self.assertEqual(
-            _ALL_ENABLED, got,
+            _ALL_ENABLED,
+            got,
             "the unscoped read was supposed to return both cohorts - if it no "
             "longer does, this reproduction has stopped reproducing",
         )
@@ -313,7 +315,8 @@ class TheJobFanOutListUsedToCrossCohorts(RosterCase):
 
         self.assertEqual(_CAVE_ENABLED, got)
         self.assertNotIn(
-            "Blammo", got,
+            "Blammo",
+            got,
             "a job order for this family would have been written for the other "
             "guild's characters as well",
         )
@@ -336,7 +339,8 @@ class TheJobFanOutListUsedToCrossCohorts(RosterCase):
         db = self.roster()
 
         self.assertEqual(
-            ["Blammo", "Hexmama", "Moojuice"], self.names(db, _sqlite(sql), params),
+            ["Blammo", "Hexmama", "Moojuice"],
+            self.names(db, _sqlite(sql), params),
         )
 
 
@@ -358,14 +362,18 @@ class TheErrandHolderListUsedToCrossCohorts(RosterCase):
     NAMES = ["Grog", "Hexmama"]
 
     def _historic(self):
-        placeholders = _assigned("_errand_holders", "placeholders",
-                                 {"names": self.NAMES})
+        placeholders = _assigned(
+            "_errand_holders", "placeholders", {"names": self.NAMES}
+        )
         return _module_constant("_ERRAND_HOLDERS_SQL") % placeholders
 
     def _emitted(self, cohort=CAVE, names=None):
         return _emit(
-            "_errand_holders", 0, cohort,
-            travel_npc="vendor", names=self.NAMES if names is None else names,
+            "_errand_holders",
+            0,
+            cohort,
+            travel_npc="vendor",
+            names=self.NAMES if names is None else names,
             _ERRAND_HOLDERS_SQL=_module_constant("_ERRAND_HOLDERS_SQL"),
         )
 
@@ -373,11 +381,14 @@ class TheErrandHolderListUsedToCrossCohorts(RosterCase):
         db = self.roster()
 
         got = self.names(
-            db, _sqlite(self._historic()), ("vendor", *self.NAMES),
+            db,
+            _sqlite(self._historic()),
+            ("vendor", *self.NAMES),
         )
 
         self.assertEqual(
-            ["Grog", "Hexmama"], got,
+            ["Grog", "Hexmama"],
+            got,
             "the unscoped read was supposed to offer both cohorts' holders to "
             "the release - if it no longer does, this stopped reproducing",
         )
@@ -390,7 +401,8 @@ class TheErrandHolderListUsedToCrossCohorts(RosterCase):
 
         self.assertEqual(["Grog"], got)
         self.assertNotIn(
-            "Hexmama", got,
+            "Hexmama",
+            got,
             "the other cohort's vendor errand was about to be handed back by "
             "this cohort's economy pass",
         )
@@ -435,25 +447,30 @@ class TheErrandLeadUsedToCrossCohorts(RosterCase):
         db = self.roster()
 
         got = self.names(
-            db, _sqlite_join(HISTORIC_ERRAND_TRAVELLER), (ERRAND_LEAD_HOURS,),
+            db,
+            _sqlite_join(HISTORIC_ERRAND_TRAVELLER),
+            (ERRAND_LEAD_HOURS,),
         )
 
         self.assertEqual(
-            ["Blammo"], got,
+            ["Blammo"],
+            got,
             "the unscoped join was supposed to let the lower trade id win "
             "across cohorts - if it no longer does, this stopped reproducing",
         )
 
     def test_the_statement_the_bridge_emits_keeps_the_lead_in_this_cohort(self):
         sql, params = self.scoped(
-            "_errand_traveller", ERRAND_LEAD_HOURS=ERRAND_LEAD_HOURS,
+            "_errand_traveller",
+            ERRAND_LEAD_HOURS=ERRAND_LEAD_HOURS,
         )
         db = self.roster()
 
         got = self.names(db, _sqlite_join(sql), params)
 
         self.assertEqual(
-            ["Grug"], got,
+            ["Grug"],
+            got,
             "this family's lead was handed to a character in the other guild",
         )
 
@@ -462,11 +479,10 @@ class TheErrandLeadUsedToCrossCohorts(RosterCase):
         and the LIMIT both still apply. A scoped statement that had lost either
         would reorganise the family around an errand nothing can finish."""
         db = self.roster()
-        db.execute(
-            "UPDATE overseer_trade SET decided_at = datetime('now', '-30 days')"
-        )
+        db.execute("UPDATE overseer_trade SET decided_at = datetime('now', '-30 days')")
         sql, params = self.scoped(
-            "_errand_traveller", ERRAND_LEAD_HOURS=ERRAND_LEAD_HOURS,
+            "_errand_traveller",
+            ERRAND_LEAD_HOURS=ERRAND_LEAD_HOURS,
         )
 
         self.assertEqual([], self.names(db, _sqlite_join(sql), params))
@@ -492,7 +508,8 @@ class TheTrainRosterUsedToCrossCohorts(RosterCase):
         modes = self._jobs(db, _sqlite(HISTORIC_TRAIN_MEMBERS))
 
         self.assertGreater(
-            len(modes), 1,
+            len(modes),
+            1,
             "the unscoped read was supposed to mix jobs across cohorts, which "
             "is what makes family_mode return '' - if it no longer does, this "
             "reproduction has stopped reproducing",
@@ -503,7 +520,8 @@ class TheTrainRosterUsedToCrossCohorts(RosterCase):
         db = self.roster()
 
         self.assertEqual(
-            {"quest"}, self._jobs(db, _sqlite(sql), params),
+            {"quest"},
+            self._jobs(db, _sqlite(sql), params),
             "a job in the other guild was deciding whether this family's job "
             "counts as agreed",
         )
@@ -526,11 +544,11 @@ class TheRaidPrepRosterUsedToCrossCohorts(RosterCase):
     def test_the_old_statement_mixes_both_guilds_levels_in(self):
         db = self.roster()
 
-        levels = {int(row[3]) for row in db.execute(
-            _sqlite(HISTORIC_RAIDPREP_MEMBERS))}
+        levels = {int(row[3]) for row in db.execute(_sqlite(HISTORIC_RAIDPREP_MEMBERS))}
 
         self.assertIn(
-            41, levels,
+            41,
+            levels,
             "the unscoped read was supposed to bring the other cohort's levels "
             "into this family's readiness answer",
         )
@@ -568,7 +586,8 @@ class TheLearnAimRosterUsedToCrossCohorts(RosterCase):
         db = self.roster()
 
         self.assertEqual(
-            ["Blammo", "Grug"], self._leads(db, _sqlite(HISTORIC_LEARN_AIM_ROWS)),
+            ["Blammo", "Grug"],
+            self._leads(db, _sqlite(HISTORIC_LEARN_AIM_ROWS)),
             "the unscoped read was supposed to see both cohorts' leader flags - "
             "if it no longer does, this reproduction has stopped reproducing",
         )
@@ -586,7 +605,8 @@ class TheLearnAimRosterUsedToCrossCohorts(RosterCase):
         db = self.roster()
 
         self.assertNotIn(
-            "Hexmama", self.names(db, _sqlite(sql), params),
+            "Hexmama",
+            self.names(db, _sqlite(sql), params),
         )
         self.assertIn("Hexmama", self.names(db, _sqlite(HISTORIC_LEARN_AIM_ROWS)))
 
@@ -623,11 +643,13 @@ class AgainstTheOnlyCohortThatExistsTodayNothingChangesAtAll(RosterCase):
 
     def test_the_errand_lead_picks_the_same_character_as_before(self):
         old = self.roster(_ONE_COHORT)
-        before = list(old.execute(
-            _sqlite_join(HISTORIC_ERRAND_TRAVELLER), (ERRAND_LEAD_HOURS,)))
+        before = list(
+            old.execute(_sqlite_join(HISTORIC_ERRAND_TRAVELLER), (ERRAND_LEAD_HOURS,))
+        )
 
         sql, params = self.scoped(
-            "_errand_traveller", ERRAND_LEAD_HOURS=ERRAND_LEAD_HOURS)
+            "_errand_traveller", ERRAND_LEAD_HOURS=ERRAND_LEAD_HOURS
+        )
         new = self.roster(_ONE_COHORT)
 
         self.assertEqual(before, list(new.execute(_sqlite_join(sql), params)))
@@ -635,16 +657,18 @@ class AgainstTheOnlyCohortThatExistsTodayNothingChangesAtAll(RosterCase):
 
     def test_the_errand_holder_list_returns_the_same_holders_as_before(self):
         names = ["Grog", "Ugga"]
-        placeholders = _assigned("_errand_holders", "placeholders",
-                                 {"names": names})
+        placeholders = _assigned("_errand_holders", "placeholders", {"names": names})
         constant = _module_constant("_ERRAND_HOLDERS_SQL")
 
         old = self.roster(_ONE_COHORT)
-        before = list(old.execute(
-            _sqlite(constant % placeholders), ("vendor", *names)))
+        before = list(old.execute(_sqlite(constant % placeholders), ("vendor", *names)))
 
         sql, params = _emit(
-            "_errand_holders", 0, CAVE, travel_npc="vendor", names=names,
+            "_errand_holders",
+            0,
+            CAVE,
+            travel_npc="vendor",
+            names=names,
             _ERRAND_HOLDERS_SQL=constant,
         )
         new = self.roster(_ONE_COHORT)
@@ -654,7 +678,8 @@ class AgainstTheOnlyCohortThatExistsTodayNothingChangesAtAll(RosterCase):
 
 
 class UntilTheColumnShipsTheStatementsAreUnchangedCharacterForCharacter(
-        unittest.TestCase):
+    unittest.TestCase
+):
     """NO RUNNING WORLD HAS THE `family` COLUMN YET.
 
     mod-overseer#506 is merged and infra#4234 has pinned the submodule to a
@@ -682,8 +707,13 @@ class UntilTheColumnShipsTheStatementsAreUnchangedCharacterForCharacter(
         ("_train_members", 0, HISTORIC_TRAIN_MEMBERS, (), {}),
         ("_raidprep_members", 0, HISTORIC_RAIDPREP_MEMBERS, (), {}),
         ("_learn_aim_rows", 0, HISTORIC_LEARN_AIM_ROWS, (), {}),
-        ("_errand_traveller", 0, HISTORIC_ERRAND_TRAVELLER, (ERRAND_LEAD_HOURS,),
-         {"ERRAND_LEAD_HOURS": ERRAND_LEAD_HOURS}),
+        (
+            "_errand_traveller",
+            0,
+            HISTORIC_ERRAND_TRAVELLER,
+            (ERRAND_LEAD_HOURS,),
+            {"ERRAND_LEAD_HOURS": ERRAND_LEAD_HOURS},
+        ),
     )
 
     def _degraded(self, func: str, index: int = 0, **extra):
@@ -699,11 +729,12 @@ class UntilTheColumnShipsTheStatementsAreUnchangedCharacterForCharacter(
     def test_the_errand_holder_list_falls_back_to_the_statement_it_replaced(self):
         names = ["Grog", "Ugga"]
         constant = _module_constant("_ERRAND_HOLDERS_SQL")
-        placeholders = _assigned("_errand_holders", "placeholders",
-                                 {"names": names})
+        placeholders = _assigned("_errand_holders", "placeholders", {"names": names})
 
         sql, params = self._degraded(
-            "_errand_holders", travel_npc="vendor", names=names,
+            "_errand_holders",
+            travel_npc="vendor",
+            names=names,
             _ERRAND_HOLDERS_SQL=constant,
         )
 

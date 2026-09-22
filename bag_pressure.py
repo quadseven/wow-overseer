@@ -1,4 +1,5 @@
 """Pure bag-pressure and vendor-sale decisions for the family economy loop."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -87,14 +88,14 @@ class ItemForSale:
 @dataclass(frozen=True)
 class SellCandidate:
     """A carried stack the world executor may offer to a vendor."""
+
     holder: str
     item_guid: int
     count: int
     item: ItemForSale
 
 
-def vendor_candidates(rows: Iterable[dict], keep_names=()
-                     ) -> tuple[SellCandidate, ...]:
+def vendor_candidates(rows: Iterable[dict], keep_names=()) -> tuple[SellCandidate, ...]:
     """Select only explicitly classified, safe carried vendor goods.
 
     The adapter supplies flags from world data. Missing flags are dangerous
@@ -118,8 +119,10 @@ def vendor_candidates(rows: Iterable[dict], keep_names=()
                 sell_price=int(row["sell_price"]),
             )
             candidate = SellCandidate(
-                holder=str(row["holder"]), item_guid=int(row["item_guid"]),
-                count=int(row.get("count", 0)), item=item,
+                holder=str(row["holder"]),
+                item_guid=int(row["item_guid"]),
+                count=int(row.get("count", 0)),
+                item=item,
             )
         except (KeyError, TypeError, ValueError):
             continue
@@ -128,7 +131,9 @@ def vendor_candidates(rows: Iterable[dict], keep_names=()
     return tuple(out)
 
 
-def vendor_batch(candidates: Iterable[SellCandidate]) -> tuple[str, tuple[SellCandidate, ...]]:
+def vendor_batch(
+    candidates: Iterable[SellCandidate],
+) -> tuple[str, tuple[SellCandidate, ...]]:
     """Choose one holder's safe stacks for a single vendor errand.
 
     The world executor sells items carried by the character named on each
@@ -147,9 +152,13 @@ def vendor_batch(candidates: Iterable[SellCandidate]) -> tuple[str, tuple[SellCa
     return holder, tuple(grouped[holder])
 
 
-def vendor_holders_to_queue(candidates: Iterable[SellCandidate], *,
-                            leader: str, leader_at_counter: bool,
-                            holder_at_counter) -> tuple:
+def vendor_holders_to_queue(
+    candidates: Iterable[SellCandidate],
+    *,
+    leader: str,
+    leader_at_counter: bool,
+    holder_at_counter,
+) -> tuple:
     """Which candidate holders may receive sell rows this pass.
 
     The leader's arrival owns the family's vendor trip. Once the leader is at
@@ -157,15 +166,21 @@ def vendor_holders_to_queue(candidates: Iterable[SellCandidate], *,
     world executor will retry a follower until that character catches up. If
     the leader is not there yet, retain the old per-holder range gate.
     """
-    holders = sorted({candidate.holder for candidate in candidates
-                      if getattr(candidate, "holder", "")})
+    holders = sorted(
+        {
+            candidate.holder
+            for candidate in candidates
+            if getattr(candidate, "holder", "")
+        }
+    )
     if leader_at_counter:
         return tuple(holders)
     return tuple(name for name in holders if name == leader or holder_at_counter(name))
 
 
-def town_run_needed(used: int, slots: int, minimum_free: int = 2,
-                    pressure_percent: int = 90) -> bool:
+def town_run_needed(
+    used: int, slots: int, minimum_free: int = 2, pressure_percent: int = 90
+) -> bool:
     """Return whether bag pressure warrants a vendor run."""
     if slots <= 0 or used < 0 or used > slots:
         return False
@@ -179,9 +194,11 @@ def town_run_needed(used: int, slots: int, minimum_free: int = 2,
 TOWN_RUN_FREE_SLOTS = 3
 
 
-def family_town_run_needed(free_slots: dict[str, int],
-                           minimum_free: int = TOWN_RUN_FREE_SLOTS,
-                           sellable: dict[str, int] | None = None) -> bool:
+def family_town_run_needed(
+    free_slots: dict[str, int],
+    minimum_free: int = TOWN_RUN_FREE_SLOTS,
+    sellable: dict[str, int] | None = None,
+) -> bool:
     """Return whether any measured family member needs a vendor visit.
 
     The bridge's capacity query returns free slots rather than used and total
@@ -213,8 +230,11 @@ def family_town_run_needed(free_slots: dict[str, int],
     """
     if not free_slots or minimum_free < 0:
         return False
-    low = [(name, free) for name, free in free_slots.items()
-           if isinstance(free, int) and free >= 0 and free <= minimum_free]
+    low = [
+        (name, free)
+        for name, free in free_slots.items()
+        if isinstance(free, int) and free >= 0 and free <= minimum_free
+    ]
     if not low:
         return False
     if sellable is None:
@@ -237,8 +257,9 @@ VENDOR_ERRAND_HOLD = "hold"
 VENDOR_ERRAND_RELEASE = "release"
 
 
-def vendor_errand_step(at_counter: bool, sales_outstanding: int,
-                       pressure: bool = False) -> str:
+def vendor_errand_step(
+    at_counter: bool, sales_outstanding: int, pressure: bool = False
+) -> str:
     """What to do with the leader's `travel_npc` this pass (infra#3708).
 
     THE ERRAND HAD NO TERMINAL PATH, AND THAT IS THE WHOLE BUG. `travel_npc` was
@@ -346,8 +367,13 @@ def stranded_errand_step(sales_outstanding: int) -> str:
 
 def sellable(item: ItemForSale) -> bool:
     """Sell only safe vendor goods: never rare, quest, reagent, or needed."""
-    return (item.quality <= 1 and not item.quest_item and not item.reagent
-            and not item.profession_needed and item.sell_price > 0)
+    return (
+        item.quality <= 1
+        and not item.quest_item
+        and not item.reagent
+        and not item.profession_needed
+        and item.sell_price > 0
+    )
 
 
 def protection_counts(rows: Iterable[dict]) -> dict[str, int]:
@@ -373,8 +399,7 @@ def protection_counts(rows: Iterable[dict]) -> dict[str, int]:
         "rare_or_better": 0,
         "unknown": 0,
     }
-    required = ("quality", "sell_price", "quest_item", "reagent",
-                "profession_needed")
+    required = ("quality", "sell_price", "quest_item", "reagent", "profession_needed")
     for row in rows:
         counts["rows"] += 1
         if any(key not in row for key in required):
@@ -393,8 +418,9 @@ def protection_counts(rows: Iterable[dict]) -> dict[str, int]:
     return counts
 
 
-def bag_purchase_allowed(money: int, price: int, empty_position: bool,
-                         reserve: int = 10000) -> bool:
+def bag_purchase_allowed(
+    money: int, price: int, empty_position: bool, reserve: int = 10000
+) -> bool:
     """Buy a bag only when a real slot exists and the reserve remains."""
     return empty_position and price > 0 and money >= price + reserve
 
@@ -415,8 +441,9 @@ def item_binding(row) -> str:
     return _BONDING.get(int(row.get("bonding", -1) or 0), "")
 
 
-def gear_candidates(rows: Iterable[dict], family, available=None, fits=None,
-                    keep_names=()) -> tuple[SellCandidate, ...]:
+def gear_candidates(
+    rows: Iterable[dict], family, available=None, fits=None, keep_names=()
+) -> tuple[SellCandidate, ...]:
     """Carried equipment whose only honest route is a vendor (infra#3330).
 
     `disposition.decide` makes every judgement; this is the adapter that turns
@@ -478,25 +505,33 @@ def gear_candidates(rows: Iterable[dict], family, available=None, fits=None,
         if guid <= 0 or count <= 0 or not holder:
             continue
         verdict = disposition.decide(
-            item, family, character_level=level, available=available,
+            item,
+            family,
+            character_level=level,
+            available=available,
             # An item the gate never reached is UNASKED, not "nobody wants
             # it": the two answers differ by exactly one irreversible sale.
             family_fit=fits.get(guid, disposition.FIT_UNASKED),
         )
         if verdict.route != disposition.VENDOR:
             continue
-        out.append(SellCandidate(
-            holder=holder, item_guid=guid, count=count,
-            # Carried only so the insert path has one shape to write. The
-            # decision above is disposition's, not `sellable`'s, which refuses
-            # every uncommon on purpose and would refuse these too.
-            item=ItemForSale(quality=item.quality, sell_price=item.sell_price),
-        ))
+        out.append(
+            SellCandidate(
+                holder=holder,
+                item_guid=guid,
+                count=count,
+                # Carried only so the insert path has one shape to write. The
+                # decision above is disposition's, not `sellable`'s, which refuses
+                # every uncommon on purpose and would refuse these too.
+                item=ItemForSale(quality=item.quality, sell_price=item.sell_price),
+            )
+        )
     return tuple(out)
 
 
-def bag_candidates(rows: Iterable[dict], equipped_slots: dict,
-                   keep_names=()) -> tuple[SellCandidate, ...]:
+def bag_candidates(
+    rows: Iterable[dict], equipped_slots: dict, keep_names=()
+) -> tuple[SellCandidate, ...]:
     """Redundant carried bags whose only honest route is a vendor (infra#4163).
 
     A carried Container (item_class 1) is a candidate only when it is
@@ -542,10 +577,14 @@ def bag_candidates(rows: Iterable[dict], equipped_slots: dict,
             continue
         if container_slots > min(sizes):
             continue
-        out.append(SellCandidate(
-            holder=holder, item_guid=guid, count=count,
-            item=ItemForSale(quality=quality, sell_price=sell_price),
-        ))
+        out.append(
+            SellCandidate(
+                holder=holder,
+                item_guid=guid,
+                count=count,
+                item=ItemForSale(quality=quality, sell_price=sell_price),
+            )
+        )
     return tuple(out)
 
 
@@ -602,8 +641,9 @@ def family_claimants(gear_rows, equipped_rows, names) -> dict:
     return gear.claims(gear.holdings_from_rows(gear_rows), characters)
 
 
-def family_gifts(gear_rows, equipped_rows, names, keep_names=(),
-                 position_rows=None, free_slots=None):
+def family_gifts(
+    gear_rows, equipped_rows, names, keep_names=(), position_rows=None, free_slots=None
+):
     """The carried pieces a sibling should be handed, and who should have them.
 
     THE OTHER HALF OF THE SAME PASS, AND THE BIGGER ONE (infra#3464). The
@@ -646,18 +686,26 @@ def family_gifts(gear_rows, equipped_rows, names, keep_names=(),
     the bag and is the VENDOR half's business - it is already reported there,
     and repeating it here would bury the six lines that are actionable.
     """
-    kept = [row for row in gear_rows
-            if not owner_keeps(row.get("name", ""), keep_names)]
+    kept = [
+        row for row in gear_rows if not owner_keeps(row.get("name", ""), keep_names)
+    ]
     characters = gear.characters_from_rows(equipped_rows, names)
     holdings = gear.holdings_from_rows(kept)
     return gear.deliverable(
         gear.plan(holdings, characters).grants,
-        position_rows=position_rows, free_slots=free_slots,
+        position_rows=position_rows,
+        free_slots=free_slots,
     )
 
 
-def guild_gear_gifts(gear_holdings, characters, family_names, members,
-                     position_rows=None, free_slots=None):
+def guild_gear_gifts(
+    gear_holdings,
+    characters,
+    family_names,
+    members,
+    position_rows=None,
+    free_slots=None,
+):
     """Return useful BoE gear in family-first, guild-second order.
 
     `gear.plan` owns the class, slot and upgrade judgement. This adapter keeps
@@ -668,26 +716,34 @@ def guild_gear_gifts(gear_holdings, characters, family_names, members,
     """
     family = {str(name) for name in (family_names or ())}
     by_name = {str(member.name): member for member in (members or ())}
-    family_chars = [character for character in (characters or ())
-                    if character.name in family]
-    guild_chars = [character for character in (characters or ())
-                   if character.name not in family
-                   and by_name.get(character.name) is not None
-                   and bool(by_name[character.name].online)]
+    family_chars = [
+        character for character in (characters or ()) if character.name in family
+    ]
+    guild_chars = [
+        character
+        for character in (characters or ())
+        if character.name not in family
+        and by_name.get(character.name) is not None
+        and bool(by_name[character.name].online)
+    ]
     first = tuple(gear.plan(gear_holdings, family_chars).grants)
     claimed = {int(grant.guid) for grant in first}
-    remaining = [holding for holding in gear_holdings
-                 if int(holding.guid) not in claimed]
+    remaining = [
+        holding for holding in gear_holdings if int(holding.guid) not in claimed
+    ]
     guild_grants = tuple(gear.plan(remaining, guild_chars).grants)
     # Family grants are claims used to reserve an item, not guild gifts. The
     # guild pass must never duplicate the family handoff writer.
     return gear.deliverable(
-        guild_grants, position_rows=position_rows, free_slots=free_slots,
+        guild_grants,
+        position_rows=position_rows,
+        free_slots=free_slots,
     )
 
 
-def guild_gear_gifts_from_rows(gear_rows, equipped_rows, family_names, members,
-                               position_rows=None, free_slots=None):
+def guild_gear_gifts_from_rows(
+    gear_rows, equipped_rows, family_names, members, position_rows=None, free_slots=None
+):
     """Parse bridge rows and apply the guild BoE policy.
 
     Row parsing stays beside the existing family gear adapter. The bridge
@@ -698,13 +754,18 @@ def guild_gear_gifts_from_rows(gear_rows, equipped_rows, family_names, members,
     characters = gear.characters_from_rows(equipped_rows, names)
     holdings = gear.holdings_from_rows(gear_rows)
     return guild_gear_gifts(
-        holdings, characters, family_names, members,
-        position_rows=position_rows, free_slots=free_slots,
+        holdings,
+        characters,
+        family_names,
+        members,
+        position_rows=position_rows,
+        free_slots=free_slots,
     )
 
 
-def recipe_gifts(gear_rows, holders_by_skill, keep_names=(),
-                 position_rows=None, free_slots=None):
+def recipe_gifts(
+    gear_rows, holders_by_skill, keep_names=(), position_rows=None, free_slots=None
+):
     """The carried recipes that belong in another member's bag (infra#3731).
 
     THE THIRD HAND-OFF, AND THE ONE NOTHING WAS EVEN ASKING ABOUT. `gear.plan`
@@ -734,8 +795,9 @@ def recipe_gifts(gear_rows, holders_by_skill, keep_names=(),
     other half of this pass. An owner should not have to know which of four
     passes would have moved the thing they marked.
     """
-    kept = [row for row in gear_rows
-            if not owner_keeps(row.get("name", ""), keep_names)]
+    kept = [
+        row for row in gear_rows if not owner_keeps(row.get("name", ""), keep_names)
+    ]
     learner_options = disposition.learner_options(kept, holders_by_skill)
     # Nothing is reachable by any route but GIVE for a recipe, and the
     # module is told exactly that rather than being handed ALL_ROUTES and
@@ -770,8 +832,11 @@ def recipe_gifts(gear_rows, holders_by_skill, keep_names=(),
         options = learner_options.get(guid, ())
         if options and free_slots is not None:
             learner = next(
-                (candidate for candidate in options
-                 if candidate in remaining and int(remaining[candidate]) > 0),
+                (
+                    candidate
+                    for candidate in options
+                    if candidate in remaining and int(remaining[candidate]) > 0
+                ),
                 options[0],
             )
         else:
@@ -779,7 +844,9 @@ def recipe_gifts(gear_rows, holders_by_skill, keep_names=(),
         if learner == holder:
             continue
         verdict = disposition.decide(
-            item, family, available=disposition.EXECUTABLE_TODAY,
+            item,
+            family,
+            available=disposition.EXECUTABLE_TODAY,
             learner=learner,
         )
         if verdict.route != disposition.GIVE:
@@ -791,13 +858,21 @@ def recipe_gifts(gear_rows, holders_by_skill, keep_names=(),
         # keeps by leaning on `gear.is_upgrade_for`.
         if item.binding == disposition.BIND_ON_PICKUP:
             continue
-        grants.append(gear.Grant(
-            holder=holder, taker=learner, entry=entry, name=item.name,
-            guid=guid, reason=verdict.why,
-            said=f"{holder} trade {learner} {item.name}.",
-        ))
+        grants.append(
+            gear.Grant(
+                holder=holder,
+                taker=learner,
+                entry=entry,
+                name=item.name,
+                guid=guid,
+                reason=verdict.why,
+                said=f"{holder} trade {learner} {item.name}.",
+            )
+        )
         if free_slots is not None and learner in remaining:
             remaining[learner] = max(0, int(remaining[learner]) - 1)
     return gear.deliverable(
-        grants, position_rows=position_rows, free_slots=free_slots,
+        grants,
+        position_rows=position_rows,
+        free_slots=free_slots,
     )

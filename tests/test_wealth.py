@@ -15,6 +15,7 @@ suite was written against too.
 
 Tickets: quadseven/mod-overseer#88, quadseven/mod-overseer#147.
 """
+
 import pathlib
 import unittest
 
@@ -34,8 +35,8 @@ POOR, COMMON, UNCOMMON, RARE, EPIC = 0, 1, 2, 3, 4
 
 # The three geographies, read off panel's own ranges so this suite cannot
 # drift from the module it is testing.
-EQUIPPED_SLOT = 15                     # a weapon slot on the paper doll
-BAG_SLOT = panel._BAG_SLOTS.start      # the first carried bag slot
+EQUIPPED_SLOT = 15  # a weapon slot on the paper doll
+BAG_SLOT = panel._BAG_SLOTS.start  # the first carried bag slot
 BACKPACK_SLOT = panel._BACKPACK_SLOTS.start
 BANK_BAG_SLOT = panel._BANK_BAG_SLOTS.start
 BANK_SLOT = panel._BACKPACK_SLOTS.stop  # a bank slot: owned, not carried
@@ -52,29 +53,57 @@ def char(**kw):
 def item(bag=0, slot=BACKPACK_SLOT, **kw):
     """One character_inventory row joined to its template, as the adapter sends it."""
     row = {
-        "name": FIRST, "bag": bag, "slot": slot, "item_guid": 900 + slot,
-        "entry": 1234, "count": 1, "item_name": "Linen Cloth",
-        "quality": COMMON, "item_level": 1, "sell_price": 10,
-        "class": 7, "subclass": 5, "displayid": 55, "container_slots": 0,
+        "name": FIRST,
+        "bag": bag,
+        "slot": slot,
+        "item_guid": 900 + slot,
+        "entry": 1234,
+        "count": 1,
+        "item_name": "Linen Cloth",
+        "quality": COMMON,
+        "item_level": 1,
+        "sell_price": 10,
+        "class": 7,
+        "subclass": 5,
+        "displayid": 55,
+        "container_slots": 0,
     }
     row.update(kw)
     return row
 
 
 def bag(slot=BAG_SLOT, guid=7001, slots=6, **kw):
-    return item(bag=0, slot=slot, item_guid=guid, entry=805,
-                item_name="Small Red Pouch", quality=COMMON, sell_price=100,
-                **{"class": 1, "subclass": 0, "displayid": 60,
-                   "container_slots": slots, **kw})
+    return item(
+        bag=0,
+        slot=slot,
+        item_guid=guid,
+        entry=805,
+        item_name="Small Red Pouch",
+        quality=COMMON,
+        sell_price=100,
+        **{"class": 1, "subclass": 0, "displayid": 60, "container_slots": slots, **kw},
+    )
 
 
 def auction(**kw):
     row = {
-        "id": 1, "startbid": 5000, "lastbid": 0, "buyoutprice": 20000,
-        "deposit": 300, "time": 1770000000, "owner_name": FIRST,
-        "buyer_name": None, "entry": 1234, "count": 2,
-        "item_name": "Linen Cloth", "quality": COMMON, "item_level": 1,
-        "sell_price": 10, "class": 7, "subclass": 5, "displayid": 55,
+        "id": 1,
+        "startbid": 5000,
+        "lastbid": 0,
+        "buyoutprice": 20000,
+        "deposit": 300,
+        "time": 1770000000,
+        "owner_name": FIRST,
+        "buyer_name": None,
+        "entry": 1234,
+        "count": 2,
+        "item_name": "Linen Cloth",
+        "quality": COMMON,
+        "item_level": 1,
+        "sell_price": 10,
+        "class": 7,
+        "subclass": 5,
+        "displayid": 55,
         "container_slots": 0,
     }
     row.update(kw)
@@ -86,17 +115,25 @@ ICONS = {55: "inv_fabric_linen_01", 60: "inv_misc_bag_09", 61: "inv_sword_04"}
 
 class Coins(unittest.TestCase):
     def test_copper_becomes_three_coins(self):
-        self.assertEqual(wealth.coins(1666355),
-                         {"gold": 166, "silver": 63, "copper": 55,
-                          "total": 1666355, "text": "166g 63s 55c"})
+        self.assertEqual(
+            wealth.coins(1666355),
+            {
+                "gold": 166,
+                "silver": 63,
+                "copper": 55,
+                "total": 1666355,
+                "text": "166g 63s 55c",
+            },
+        )
 
     def test_nothing_is_a_real_answer_rather_than_no_answer(self):
         """A quest item is worth nothing to a vendor and the panel must be
         able to say so. armory.money() returns None for this, which is right
         for a tooltip line it should not draw and wrong for a total."""
-        self.assertEqual(wealth.coins(0),
-                         {"gold": 0, "silver": 0, "copper": 0, "total": 0,
-                          "text": wealth.NOTHING})
+        self.assertEqual(
+            wealth.coins(0),
+            {"gold": 0, "silver": 0, "copper": 0, "total": 0, "text": wealth.NOTHING},
+        )
         self.assertEqual(wealth.coins(None)["total"], 0)
 
     def test_the_word_for_an_amount_is_the_modules_and_not_the_pages(self):
@@ -115,8 +152,10 @@ class Coins(unittest.TestCase):
         """One silver is a hundred copper and one gold a hundred silver. The
         one bug this arithmetic can have is a factor of a hundred, and it
         would render as a plausible number."""
-        self.assertEqual(wealth.coins(99), {"gold": 0, "silver": 0, "copper": 99,
-                                            "total": 99, "text": "99c"})
+        self.assertEqual(
+            wealth.coins(99),
+            {"gold": 0, "silver": 0, "copper": 99, "total": 99, "text": "99c"},
+        )
         self.assertEqual(wealth.coins(100)["silver"], 1)
         self.assertEqual(wealth.coins(9999)["gold"], 0)
         self.assertEqual(wealth.coins(10000)["gold"], 1)
@@ -183,10 +222,10 @@ class QualityAndKind(unittest.TestCase):
     def test_an_unnamed_item_says_which_item_it_is(self):
         """A custom or removed item genuinely occupies a slot. Rendering it
         as a blank square would understate how full the bag is."""
-        self.assertEqual(wealth.item_name({"item_name": None, "entry": 77}),
-                         "Item #77")
-        self.assertEqual(wealth.item_name({"item_name": "Linen Cloth", "entry": 77}),
-                         "Linen Cloth")
+        self.assertEqual(wealth.item_name({"item_name": None, "entry": 77}), "Item #77")
+        self.assertEqual(
+            wealth.item_name({"item_name": "Linen Cloth", "entry": 77}), "Linen Cloth"
+        )
 
 
 class StackValue(unittest.TestCase):
@@ -208,7 +247,8 @@ class StackValue(unittest.TestCase):
 class ItemPayload(unittest.TestCase):
     def setUp(self):
         self.payload = wealth.item_payload(
-            item(count=20, sell_price=10), ICONS, wealth.CARRIED, "Backpack", 3)
+            item(count=20, sell_price=10), ICONS, wealth.CARRIED, "Backpack", 3
+        )
 
     def test_the_page_gets_the_stack_value_not_the_unit_price(self):
         self.assertEqual(self.payload["sell_price"], 10)
@@ -221,12 +261,14 @@ class ItemPayload(unittest.TestCase):
     def test_an_item_with_no_known_display_gets_no_icon_rather_than_a_broken_one(self):
         """A blank square reads as a broken picture. The page draws the name
         instead, exactly as the Armory paper doll does."""
-        self.assertIsNone(wealth.item_payload(item(displayid=9999), ICONS,
-                                              wealth.CARRIED)["icon"])
+        self.assertIsNone(
+            wealth.item_payload(item(displayid=9999), ICONS, wealth.CARRIED)["icon"]
+        )
 
     def test_the_tooltip_link_is_the_items_own_page(self):
-        self.assertEqual(self.payload["wowhead"],
-                         "https://www.wowhead.com/wotlk/item=1234")
+        self.assertEqual(
+            self.payload["wowhead"], "https://www.wowhead.com/wotlk/item=1234"
+        )
 
     def test_where_and_which_container_travel_with_the_item(self):
         self.assertEqual(self.payload["where"], wealth.CARRIED)
@@ -251,8 +293,9 @@ class WhereEverythingIs(unittest.TestCase):
 
     def test_a_worn_item_is_labelled_with_the_slot_it_is_worn_in(self):
         split = wealth.split_inventory([item(slot=EQUIPPED_SLOT)], ICONS)
-        self.assertEqual(split["equipped"][0]["container"],
-                         wealth.EQUIPPED_SLOTS[EQUIPPED_SLOT])
+        self.assertEqual(
+            split["equipped"][0]["container"], wealth.EQUIPPED_SLOTS[EQUIPPED_SLOT]
+        )
 
     def test_the_backpack_is_always_there_even_with_nothing_in_it(self):
         """Every character has one and it is sixteen slots. A container list
@@ -292,8 +335,10 @@ class WhereEverythingIs(unittest.TestCase):
     def test_an_item_inside_a_bag_lands_in_that_bag(self):
         """`bag` is the item_instance guid of the CONTAINER, not a bag index.
         Reading it as an index would file everything under bag 377158."""
-        rows = [bag(guid=7001, slots=6),
-                item(bag=7001, slot=2, entry=999, item_name="Copper Ore")]
+        rows = [
+            bag(guid=7001, slots=6),
+            item(bag=7001, slot=2, entry=999, item_name="Copper Ore"),
+        ]
         split = wealth.split_inventory(rows, ICONS)
         pouch = split["containers"][1]
         self.assertEqual(pouch["used"], 1)
@@ -302,9 +347,11 @@ class WhereEverythingIs(unittest.TestCase):
         self.assertEqual(pouch["items"][0]["position"], 2)
 
     def test_items_in_a_bag_are_drawn_in_slot_order(self):
-        rows = [bag(guid=7001, slots=6),
-                item(bag=7001, slot=4, entry=2, item_name="Second"),
-                item(bag=7001, slot=1, entry=1, item_name="First")]
+        rows = [
+            bag(guid=7001, slots=6),
+            item(bag=7001, slot=4, entry=2, item_name="Second"),
+            item(bag=7001, slot=1, entry=1, item_name="First"),
+        ]
         pouch = wealth.split_inventory(rows, ICONS)["containers"][1]
         self.assertEqual([i["name"] for i in pouch["items"]], ["First", "Second"])
 
@@ -327,17 +374,21 @@ class WhereEverythingIs(unittest.TestCase):
     def test_the_contents_of_a_bank_bag_are_elsewhere_not_lost(self):
         """A row whose container is not carried must still be counted, or the
         panel silently understates what somebody owns."""
-        rows = [item(slot=BANK_BAG_SLOT, item_guid=8001),
-                item(bag=8001, slot=0, entry=5)]
+        rows = [
+            item(slot=BANK_BAG_SLOT, item_guid=8001),
+            item(bag=8001, slot=0, entry=5),
+        ]
         split = wealth.split_inventory(rows, ICONS)
         self.assertEqual(split["elsewhere"], 2)
 
     def test_a_bag_holding_more_than_its_template_allows_never_reads_as_negative(self):
         """The world database and the core disagreeing about a container size
         is a data problem. Minus two free slots looks like a rendering bug."""
-        rows = [bag(guid=7001, slots=1),
-                item(bag=7001, slot=0, entry=1),
-                item(bag=7001, slot=1, entry=2)]
+        rows = [
+            bag(guid=7001, slots=1),
+            item(bag=7001, slot=0, entry=1),
+            item(bag=7001, slot=1, entry=2),
+        ]
         pouch = wealth.split_inventory(rows, ICONS)["containers"][1]
         self.assertEqual(pouch["used"], 2)
         self.assertEqual(pouch["free"], 0)
@@ -345,9 +396,11 @@ class WhereEverythingIs(unittest.TestCase):
 
 class Capacity(unittest.TestCase):
     def test_room_is_the_backpack_plus_every_bag(self):
-        rows = [bag(slot=BAG_SLOT, guid=7001, slots=6),
-                bag(slot=BAG_SLOT + 1, guid=7002, slots=8),
-                item(bag=7001, slot=0, entry=1)]
+        rows = [
+            bag(slot=BAG_SLOT, guid=7001, slots=6),
+            bag(slot=BAG_SLOT + 1, guid=7002, slots=8),
+            item(bag=7001, slot=0, entry=1),
+        ]
         cap = wealth.build_capacity(wealth.split_inventory(rows, ICONS)["containers"])
         self.assertEqual(cap["slots"], wealth.BACKPACK_SLOTS + 14)
         self.assertEqual(cap["used"], 1)
@@ -373,15 +426,18 @@ class Capacity(unittest.TestCase):
         """A bot with no room can never finish a loot, so this is the one
         state on the view a person acts on, and deciding it here is what
         stops two surfaces disagreeing about who is stuck."""
-        rows = [item(slot=BACKPACK_SLOT + n, entry=n)
-                for n in range(wealth.BACKPACK_SLOTS)]
+        rows = [
+            item(slot=BACKPACK_SLOT + n, entry=n) for n in range(wealth.BACKPACK_SLOTS)
+        ]
         cap = wealth.build_capacity(wealth.split_inventory(rows, ICONS)["containers"])
         self.assertEqual(cap["free"], 0)
         self.assertTrue(cap["full"])
 
     def test_one_free_slot_is_not_full(self):
-        rows = [item(slot=BACKPACK_SLOT + n, entry=n)
-                for n in range(wealth.BACKPACK_SLOTS - 1)]
+        rows = [
+            item(slot=BACKPACK_SLOT + n, entry=n)
+            for n in range(wealth.BACKPACK_SLOTS - 1)
+        ]
         cap = wealth.build_capacity(wealth.split_inventory(rows, ICONS)["containers"])
         self.assertEqual(cap["free"], 1)
         self.assertFalse(cap["full"])
@@ -389,8 +445,9 @@ class Capacity(unittest.TestCase):
 
 class Tally(unittest.TestCase):
     def items(self, *specs):
-        return [wealth.item_payload(item(**spec), ICONS, wealth.CARRIED)
-                for spec in specs]
+        return [
+            wealth.item_payload(item(**spec), ICONS, wealth.CARRIED) for spec in specs
+        ]
 
     def test_stacks_and_units_are_different_numbers_and_both_are_reported(self):
         """One stack of twenty linen is one slot and twenty items. Saying
@@ -400,34 +457,56 @@ class Tally(unittest.TestCase):
         self.assertEqual(t["units"], 21)
 
     def test_the_vendor_total_is_the_sum_of_the_stacks(self):
-        t = wealth.tally(self.items({"count": 20, "sell_price": 10},
-                                    {"count": 1, "sell_price": 1770, "entry": 2}))
+        t = wealth.tally(
+            self.items(
+                {"count": 20, "sell_price": 10},
+                {"count": 1, "sell_price": 1770, "entry": 2},
+            )
+        )
         self.assertEqual(t["vendor_copper"], 1970)
         self.assertEqual(t["vendor"], wealth.coins(1970))
 
     def test_the_quality_breakdown_reads_best_first(self):
         """'One rare, fifteen greens' answers the question. The other order
         makes a person hunt for the number that matters."""
-        t = wealth.tally(self.items({"quality": COMMON}, {"quality": RARE, "entry": 2},
-                                    {"quality": UNCOMMON, "entry": 3}))
-        self.assertEqual([q["quality"] for q in t["by_quality"]],
-                         [RARE, UNCOMMON, COMMON])
-        self.assertEqual([q["name"] for q in t["by_quality"]],
-                         ["rare", "uncommon", "common"])
+        t = wealth.tally(
+            self.items(
+                {"quality": COMMON},
+                {"quality": RARE, "entry": 2},
+                {"quality": UNCOMMON, "entry": 3},
+            )
+        )
+        self.assertEqual(
+            [q["quality"] for q in t["by_quality"]], [RARE, UNCOMMON, COMMON]
+        )
+        self.assertEqual(
+            [q["name"] for q in t["by_quality"]], ["rare", "uncommon", "common"]
+        )
 
     def test_an_unknown_quality_is_counted_last_rather_than_dropped(self):
         """A custom item is still in the bag. Dropping it from the breakdown
         would make the counts disagree with the grid beside them."""
         t = wealth.tally(self.items({"quality": None}, {"quality": COMMON, "entry": 2}))
-        self.assertEqual(t["by_quality"][-1],
-                         {"quality": None, "name": wealth.UNKNOWN_QUALITY,
-                          "count": 1, "label": "1 unknown"})
+        self.assertEqual(
+            t["by_quality"][-1],
+            {
+                "quality": None,
+                "name": wealth.UNKNOWN_QUALITY,
+                "count": 1,
+                "label": "1 unknown",
+            },
+        )
 
     def test_green_and_better_are_counted_separately_from_rare_and_better(self):
-        t = wealth.tally(self.items({"quality": POOR}, {"quality": COMMON, "entry": 2},
-                                    {"quality": UNCOMMON, "entry": 3},
-                                    {"quality": RARE, "entry": 4},
-                                    {"quality": EPIC, "entry": 5}))
+        t = wealth.tally(
+            self.items(
+                {"quality": POOR},
+                {"quality": COMMON, "entry": 2},
+                {"quality": UNCOMMON, "entry": 3},
+                {"quality": RARE, "entry": 4},
+                {"quality": EPIC, "entry": 5},
+            )
+        )
         self.assertEqual(t["notable"], 3)
         self.assertEqual(t["rare_or_better"], 2)
 
@@ -439,9 +518,15 @@ class Tally(unittest.TestCase):
         t = wealth.tally(self.items({"quality": 99}, {"quality": RARE, "entry": 2}))
         self.assertEqual(t["rare_or_better"], 1)
         self.assertEqual(t["notable"], 1)
-        self.assertEqual(t["by_quality"][-1],
-                         {"quality": None, "name": wealth.UNKNOWN_QUALITY,
-                          "count": 1, "label": "1 unknown"})
+        self.assertEqual(
+            t["by_quality"][-1],
+            {
+                "quality": None,
+                "name": wealth.UNKNOWN_QUALITY,
+                "count": 1,
+                "label": "1 unknown",
+            },
+        )
 
     def test_an_empty_list_tallies_to_zero_rather_than_to_nothing(self):
         t = wealth.tally([])
@@ -452,31 +537,41 @@ class Tally(unittest.TestCase):
 
 class Notable(unittest.TestCase):
     def items(self, *specs):
-        return [wealth.item_payload(item(**spec), ICONS, wealth.CARRIED)
-                for spec in specs]
+        return [
+            wealth.item_payload(item(**spec), ICONS, wealth.CARRIED) for spec in specs
+        ]
 
     def test_only_green_and_better_are_named(self):
         """A stack of linen is worth more copper than most of the greens they
         haul. The question this list answers is a quality question."""
-        picked = wealth.notable_items(self.items(
-            {"quality": POOR, "sell_price": 99999},
-            {"quality": COMMON, "entry": 2, "sell_price": 99999},
-            {"quality": UNCOMMON, "entry": 3, "sell_price": 1}))
+        picked = wealth.notable_items(
+            self.items(
+                {"quality": POOR, "sell_price": 99999},
+                {"quality": COMMON, "entry": 2, "sell_price": 99999},
+                {"quality": UNCOMMON, "entry": 3, "sell_price": 1},
+            )
+        )
         self.assertEqual([i["quality"] for i in picked], [UNCOMMON])
 
     def test_the_best_comes_first_then_the_most_valuable(self):
-        picked = wealth.notable_items(self.items(
-            {"quality": UNCOMMON, "entry": 1, "sell_price": 500},
-            {"quality": RARE, "entry": 2, "sell_price": 10},
-            {"quality": UNCOMMON, "entry": 3, "sell_price": 900}))
+        picked = wealth.notable_items(
+            self.items(
+                {"quality": UNCOMMON, "entry": 1, "sell_price": 500},
+                {"quality": RARE, "entry": 2, "sell_price": 10},
+                {"quality": UNCOMMON, "entry": 3, "sell_price": 900},
+            )
+        )
         self.assertEqual([i["entry"] for i in picked], [2, 3, 1])
 
     def test_ties_are_broken_by_name_so_the_list_does_not_reshuffle(self):
         """A list that reorders itself every thirty seconds is a list nobody
         can read on a phone."""
-        picked = wealth.notable_items(self.items(
-            {"quality": RARE, "entry": 1, "sell_price": 5, "item_name": "Zed"},
-            {"quality": RARE, "entry": 2, "sell_price": 5, "item_name": "Abe"}))
+        picked = wealth.notable_items(
+            self.items(
+                {"quality": RARE, "entry": 1, "sell_price": 5, "item_name": "Zed"},
+                {"quality": RARE, "entry": 2, "sell_price": 5, "item_name": "Abe"},
+            )
+        )
         self.assertEqual([i["name"] for i in picked], ["Abe", "Zed"])
 
     def test_an_item_of_unknown_quality_is_never_promoted_into_the_list(self):
@@ -490,12 +585,14 @@ class Notable(unittest.TestCase):
 
 class WorthNaming(unittest.TestCase):
     def worn(self, quality, entry):
-        return wealth.item_payload(item(quality=quality, entry=entry), ICONS,
-                                   wealth.EQUIPPED)
+        return wealth.item_payload(
+            item(quality=quality, entry=entry), ICONS, wealth.EQUIPPED
+        )
 
     def carried(self, quality, entry):
-        return wealth.item_payload(item(quality=quality, entry=entry), ICONS,
-                                   wealth.CARRIED)
+        return wealth.item_payload(
+            item(quality=quality, entry=entry), ICONS, wealth.CARRIED
+        )
 
     def test_a_green_in_a_bag_is_named(self):
         picked = wealth.worth_naming([], [self.carried(UNCOMMON, 1)])
@@ -529,8 +626,7 @@ class WorthNaming(unittest.TestCase):
     def test_the_two_sources_end_up_in_one_list_sorted_together(self):
         """A rare in a bag next to a rare on a body is exactly the comparison
         somebody is trying to make, so they cannot be two lists."""
-        picked = wealth.worth_naming([self.worn(RARE, 1)],
-                                     [self.carried(UNCOMMON, 2)])
+        picked = wealth.worth_naming([self.worn(RARE, 1)], [self.carried(UNCOMMON, 2)])
         self.assertEqual([i["entry"] for i in picked], [1, 2])
 
 
@@ -553,8 +649,10 @@ class OneMember(unittest.TestCase):
     def test_carried_counts_the_bags_and_the_backpack_and_not_what_is_worn(self):
         """The money story is what a trip to a vendor is worth. A worn sword
         is not on that trip."""
-        rows = [item(slot=EQUIPPED_SLOT, sell_price=1770, entry=1),
-                item(slot=BACKPACK_SLOT, sell_price=10, count=20, entry=2)]
+        rows = [
+            item(slot=EQUIPPED_SLOT, sell_price=1770, entry=1),
+            item(slot=BACKPACK_SLOT, sell_price=10, count=20, entry=2),
+        ]
         m = self.build(rows)
         self.assertEqual(m["carried"]["items"], 1)
         self.assertEqual(m["carried"]["vendor_copper"], 200)
@@ -562,8 +660,10 @@ class OneMember(unittest.TestCase):
     def test_held_counts_everything_on_the_character_including_what_is_worn(self):
         """'How many rares has this family got' has one honest denominator,
         and it is not 'the ones that happen to be loose in a bag'."""
-        rows = [item(slot=EQUIPPED_SLOT, quality=RARE, entry=1),
-                item(slot=BACKPACK_SLOT, quality=RARE, entry=2)]
+        rows = [
+            item(slot=EQUIPPED_SLOT, quality=RARE, entry=1),
+            item(slot=BACKPACK_SLOT, quality=RARE, entry=2),
+        ]
         m = self.build(rows)
         self.assertEqual(m["held"]["rare_or_better"], 2)
         self.assertEqual(m["carried"]["rare_or_better"], 1)
@@ -571,8 +671,10 @@ class OneMember(unittest.TestCase):
     def test_the_notable_list_says_whether_a_thing_is_worn_or_carried(self):
         """A rare in a bag is a question ('why is he not wearing it, and can
         somebody else use it'). The same rare on his body is an answer."""
-        rows = [item(slot=EQUIPPED_SLOT, quality=RARE, entry=1, item_name="Worn One"),
-                item(slot=BACKPACK_SLOT, quality=RARE, entry=2, item_name="Bagged One")]
+        rows = [
+            item(slot=EQUIPPED_SLOT, quality=RARE, entry=1, item_name="Worn One"),
+            item(slot=BACKPACK_SLOT, quality=RARE, entry=2, item_name="Bagged One"),
+        ]
         by_name = {i["name"]: i for i in self.build(rows)["notable"]}
         self.assertEqual(by_name["Worn One"]["where"], wealth.EQUIPPED)
         self.assertEqual(by_name["Bagged One"]["where"], wealth.CARRIED)
@@ -589,9 +691,13 @@ class OneMember(unittest.TestCase):
 
 class TheWholeFamily(unittest.TestCase):
     def build(self, rows=(), chars=None, auctions=(), guilds=()):
-        return wealth.build_wealth(list(chars if chars is not None else [char()]),
-                                   list(rows), list(auctions), list(guilds),
-                                   ICONS)
+        return wealth.build_wealth(
+            list(chars if chars is not None else [char()]),
+            list(rows),
+            list(auctions),
+            list(guilds),
+            ICONS,
+        )
 
     def test_everybody_on_the_roster_gets_a_card_in_roster_order(self):
         p = self.build()
@@ -604,8 +710,12 @@ class TheWholeFamily(unittest.TestCase):
         self.assertEqual(len(absent), len(ROSTER) - 1)
 
     def test_the_family_purse_is_the_sum_of_the_purses(self):
-        p = self.build(chars=[char(name=FIRST, money=100 * 10000),
-                              char(name=SECOND, money=70 * 10000)])
+        p = self.build(
+            chars=[
+                char(name=FIRST, money=100 * 10000),
+                char(name=SECOND, money=70 * 10000),
+            ]
+        )
         self.assertEqual(p["family"]["money"]["gold"], 170)
 
     def test_the_family_room_is_the_sum_of_the_rooms(self):
@@ -616,14 +726,18 @@ class TheWholeFamily(unittest.TestCase):
     def test_who_is_out_of_room_is_a_list_of_names_not_a_count(self):
         """The fix is per character: this one needs a bag, that one needs to
         sell something. A number cannot be acted on."""
-        rows = [item(name=FIRST, slot=BACKPACK_SLOT + n, entry=n)
-                for n in range(wealth.BACKPACK_SLOTS)]
+        rows = [
+            item(name=FIRST, slot=BACKPACK_SLOT + n, entry=n)
+            for n in range(wealth.BACKPACK_SLOTS)
+        ]
         p = self.build(rows=rows, chars=[char(name=FIRST), char(name=SECOND)])
         self.assertEqual(p["family"]["full"], [FIRST])
 
     def test_the_family_rare_count_is_over_everything_they_hold(self):
-        rows = [item(name=FIRST, slot=EQUIPPED_SLOT, quality=RARE, entry=1),
-                item(name=SECOND, slot=BACKPACK_SLOT, quality=EPIC, entry=2)]
+        rows = [
+            item(name=FIRST, slot=EQUIPPED_SLOT, quality=RARE, entry=1),
+            item(name=SECOND, slot=BACKPACK_SLOT, quality=EPIC, entry=2),
+        ]
         p = self.build(rows=rows, chars=[char(name=FIRST), char(name=SECOND)])
         self.assertEqual(p["family"]["rare_or_better"], 2)
 
@@ -639,8 +753,10 @@ class TheWholeFamily(unittest.TestCase):
         self.assertEqual(p["family"]["full"], [])
 
     def test_rows_are_split_by_name_so_nobody_carries_anybody_elses_bags(self):
-        rows = [item(name=FIRST, slot=BACKPACK_SLOT, entry=1),
-                item(name=SECOND, slot=BACKPACK_SLOT, entry=2)]
+        rows = [
+            item(name=FIRST, slot=BACKPACK_SLOT, entry=1),
+            item(name=SECOND, slot=BACKPACK_SLOT, entry=2),
+        ]
         p = self.build(rows=rows, chars=[char(name=FIRST), char(name=SECOND)])
         by_name = {m["name"]: m for m in p["members"]}
         self.assertEqual(by_name[FIRST]["carried"]["items"], 1)
@@ -674,7 +790,8 @@ class TheAuctionHouse(unittest.TestCase):
 
     def test_a_listing_with_a_winning_bidder_is_the_closest_thing_to_sold(self):
         a = wealth.build_auctions(
-            [auction(owner_name=FIRST, lastbid=9000, buyer_name="Somebody")], ICONS)
+            [auction(owner_name=FIRST, lastbid=9000, buyer_name="Somebody")], ICONS
+        )
         self.assertEqual(len(a["sold"]), 1)
         self.assertEqual(a["sold"][0]["buyer"], "Somebody")
 
@@ -687,7 +804,8 @@ class TheAuctionHouse(unittest.TestCase):
         """Their own listing with their own bid on it would be a nonsense,
         and counting it in both lists would double the activity."""
         a = wealth.build_auctions(
-            [auction(owner_name="Stranger", buyer_name=FIRST, lastbid=800)], ICONS)
+            [auction(owner_name="Stranger", buyer_name=FIRST, lastbid=800)], ICONS
+        )
         self.assertEqual(len(a["bids"]), 1)
         self.assertEqual(a["listings"], [])
         self.assertTrue(a["bids"][0]["we_bid"])
@@ -697,8 +815,16 @@ class TheAuctionHouse(unittest.TestCase):
         'four hours left' would be untestable for the sake of a phrase the
         page can build itself."""
         row = wealth.auction_payload(
-            auction(startbid=5000, lastbid=0, buyoutprice=20000, deposit=300,
-                    time=1770000000), {FIRST}, ICONS)
+            auction(
+                startbid=5000,
+                lastbid=0,
+                buyoutprice=20000,
+                deposit=300,
+                time=1770000000,
+            ),
+            {FIRST},
+            ICONS,
+        )
         self.assertEqual(row["start"], wealth.coins(5000))
         self.assertEqual(row["buyout"], wealth.coins(20000))
         self.assertEqual(row["deposit"], wealth.coins(300))
@@ -710,8 +836,9 @@ class TheAuctionHouse(unittest.TestCase):
         self.assertEqual(row["item"]["name"], "Linen Cloth")
         self.assertEqual(row["item"]["count"], 2)
         self.assertEqual(row["item"]["icon"], "inv_fabric_linen_01")
-        self.assertEqual(row["item"]["wowhead"],
-                         "https://www.wowhead.com/wotlk/item=1234")
+        self.assertEqual(
+            row["item"]["wowhead"], "https://www.wowhead.com/wotlk/item=1234"
+        )
 
 
 class TheWordsAroundTheNumbers(unittest.TestCase):
@@ -752,15 +879,18 @@ class TheFinding(unittest.TestCase):
     different thing the family can be doing, and each one has to be reachable
     from the numbers alone."""
 
-    def find(self, present=5, slots=190, used=189, full=(), rares=0,
-             richest=FIRST):
+    def find(self, present=5, slots=190, used=189, full=(), rares=0, richest=FIRST):
         totals = {
             "present": present,
             "money": wealth.coins(0),
             "vendor": wealth.coins(0),
-            "capacity": {"slots": slots, "used": used,
-                         "free": max(0, slots - used), "bags": 4 * present,
-                         "empty_bag_slots": 0},
+            "capacity": {
+                "slots": slots,
+                "used": used,
+                "free": max(0, slots - used),
+                "bags": 4 * present,
+                "empty_bag_slots": 0,
+            },
             "by_quality": [],
             "rare_or_better": rares,
             "richest": richest,
@@ -769,7 +899,7 @@ class TheFinding(unittest.TestCase):
         return wealth.build_finding(totals)
 
     def test_nobody_saved_is_a_finding_of_its_own_rather_than_a_zero(self):
-        """"No free slot anywhere in the family" would be TRUE of an empty
+        """ "No free slot anywhere in the family" would be TRUE of an empty
         realm and completely misleading about it."""
         f = self.find(present=0, slots=0, used=0)
         self.assertIn("saved character", f["lead"])
@@ -809,10 +939,14 @@ class TheFinding(unittest.TestCase):
         """Five per cent of 190 slots is nine, and nine slots is one quest
         turn-in away from nothing. A backpack is a real unit of room here."""
         self.assertEqual(wealth.FAMILY_TIGHT_SLOTS, wealth.BACKPACK_SLOTS)
-        self.assertEqual(self.find(slots=190, used=190 - wealth.BACKPACK_SLOTS)
-                         ["tone"], wealth.CAUTION)
-        self.assertEqual(self.find(slots=190, used=190 - wealth.BACKPACK_SLOTS - 1)
-                         ["tone"], wealth.PLAIN)
+        self.assertEqual(
+            self.find(slots=190, used=190 - wealth.BACKPACK_SLOTS)["tone"],
+            wealth.CAUTION,
+        )
+        self.assertEqual(
+            self.find(slots=190, used=190 - wealth.BACKPACK_SLOTS - 1)["tone"],
+            wealth.PLAIN,
+        )
 
     def test_somebody_full_with_room_elsewhere_names_how_many(self):
         f = self.find(slots=190, used=100, full=[FIRST, SECOND])
@@ -852,8 +986,13 @@ class TheStatStrip(unittest.TestCase):
             "present": 5,
             "money": wealth.coins(166 * GOLD),
             "vendor": wealth.coins(150),
-            "capacity": {"slots": 190, "used": 189, "free": 1, "bags": 17,
-                         "empty_bag_slots": 3},
+            "capacity": {
+                "slots": 190,
+                "used": 189,
+                "free": 1,
+                "bags": 17,
+                "empty_bag_slots": 3,
+            },
             "by_quality": [],
             "rare_or_better": 11,
             "richest": FIRST,
@@ -866,10 +1005,22 @@ class TheStatStrip(unittest.TestCase):
         """A strip that drops a reading when it is zero changes shape as the
         data changes, and a reader loses the one thing a strip is good for."""
         labels = [s["label"] for s in self.strip()]
-        self.assertEqual(labels, [s["label"] for s in self.strip(
-            rare_or_better=0,
-            capacity={"slots": 190, "used": 10, "free": 180, "bags": 20,
-                      "empty_bag_slots": 0})])
+        self.assertEqual(
+            labels,
+            [
+                s["label"]
+                for s in self.strip(
+                    rare_or_better=0,
+                    capacity={
+                        "slots": 190,
+                        "used": 10,
+                        "free": 180,
+                        "bags": 20,
+                        "empty_bag_slots": 0,
+                    },
+                )
+            ],
+        )
         self.assertEqual(len(labels), 7)
 
     def test_money_readings_carry_coins_and_not_a_string(self):
@@ -880,8 +1031,15 @@ class TheStatStrip(unittest.TestCase):
         self.assertIsNone(purse["value"])
 
     def test_a_family_with_no_room_left_reads_as_an_alarm(self):
-        tight = self.strip(capacity={"slots": 190, "used": 190, "free": 0,
-                                     "bags": 20, "empty_bag_slots": 0})
+        tight = self.strip(
+            capacity={
+                "slots": 190,
+                "used": 190,
+                "free": 0,
+                "bags": 20,
+                "empty_bag_slots": 0,
+            }
+        )
         slots = [s for s in tight if s["label"] == "slots"][0]
         self.assertEqual(slots["tone"], wealth.ALARM)
         self.assertEqual(slots["value"], "190 of 190")
@@ -897,8 +1055,11 @@ class TheStatStrip(unittest.TestCase):
         rares = [s for s in self.strip() if s["label"] == "rare or better"][0]
         self.assertEqual(rares["tone"], wealth.GOOD)
         self.assertEqual(
-            [s for s in self.strip(rare_or_better=0)
-             if s["label"] == "rare or better"][0]["tone"], wealth.PLAIN)
+            [s for s in self.strip(rare_or_better=0) if s["label"] == "rare or better"][
+                0
+            ]["tone"],
+            wealth.PLAIN,
+        )
 
     def test_the_richest_is_a_person_and_an_empty_realm_is_not(self):
         self.assertEqual(self.strip()[-1]["value"], FIRST)
@@ -907,11 +1068,17 @@ class TheStatStrip(unittest.TestCase):
 
 class TheRoomLine(unittest.TestCase):
     def room(self, slots=44, used=40, bags=4, spare=0):
-        return wealth.build_room({"slots": slots, "used": used,
-                                  "free": max(0, slots - used), "bags": bags,
-                                  "bag_slots": wealth.BAG_POSITIONS,
-                                  "empty_bag_slots": spare,
-                                  "full": used >= slots})
+        return wealth.build_room(
+            {
+                "slots": slots,
+                "used": used,
+                "free": max(0, slots - used),
+                "bags": bags,
+                "bag_slots": wealth.BAG_POSITIONS,
+                "empty_bag_slots": spare,
+                "full": used >= slots,
+            }
+        )
 
     def test_the_bar_is_a_percentage_of_the_room_that_exists(self):
         self.assertEqual(self.room(slots=44, used=22)["percent"], 50)
@@ -928,17 +1095,18 @@ class TheRoomLine(unittest.TestCase):
     def test_no_room_left_is_said_in_words_rather_than_as_a_zero(self):
         """Zero is a number a reader has to interpret, and this is the state
         the whole tab exists to report."""
-        self.assertEqual(self.room(slots=44, used=44)["free_label"],
-                         "no room left")
+        self.assertEqual(self.room(slots=44, used=44)["free_label"], "no room left")
         self.assertEqual(self.room(slots=44, used=44)["free_tone"], wealth.ALARM)
         self.assertEqual(self.room(slots=44, used=40)["free_label"], "4 free")
         self.assertEqual(self.room(slots=44, used=40)["free_tone"], wealth.PLAIN)
 
     def test_a_character_carrying_no_bags_says_so_rather_than_saying_zero(self):
-        self.assertEqual(self.room(bags=0)["bags_label"],
-                         "the backpack alone, no bags carried")
-        self.assertEqual(self.room(bags=1)["bags_label"],
-                         "across 1 bag and the backpack")
+        self.assertEqual(
+            self.room(bags=0)["bags_label"], "the backpack alone, no bags carried"
+        )
+        self.assertEqual(
+            self.room(bags=1)["bags_label"], "across 1 bag and the backpack"
+        )
 
     def test_an_empty_bag_position_is_its_own_line_in_amber(self):
         self.assertIsNone(self.room(spare=0)["spare_label"])
@@ -958,21 +1126,19 @@ class TheWordsOnAnItem(unittest.TestCase):
         self.assertEqual(self.one(count=20)["stack"], "Linen Cloth x20")
 
     def test_where_a_thing_is_is_a_word_and_not_an_inference(self):
-        self.assertEqual(self.one(where=wealth.EQUIPPED)["place"],
-                         wealth.PLACE_WORN)
-        self.assertEqual(self.one(container="Small Red Pouch")["place"],
-                         "in Small Red Pouch")
+        self.assertEqual(self.one(where=wealth.EQUIPPED)["place"], wealth.PLACE_WORN)
+        self.assertEqual(
+            self.one(container="Small Red Pouch")["place"], "in Small Red Pouch"
+        )
 
     def test_only_a_bagged_item_is_drawn_in_amber(self):
         """An item on a body is where it belongs; the same item loose in a
         bag is a spare, a mistake, or gold nobody has banked."""
-        self.assertEqual(self.one(where=wealth.EQUIPPED)["place_tone"],
-                         wealth.PLAIN)
+        self.assertEqual(self.one(where=wealth.EQUIPPED)["place_tone"], wealth.PLAIN)
         self.assertEqual(self.one()["place_tone"], wealth.CAUTION)
 
     def test_the_tooltip_line_says_quality_kind_level_and_price(self):
-        tip = self.one(count=20, quality=UNCOMMON, item_level=14,
-                       sell_price=10)["tip"]
+        tip = self.one(count=20, quality=UNCOMMON, item_level=14, sell_price=10)["tip"]
         self.assertIn("Linen Cloth x20", tip)
         self.assertIn("uncommon", tip)
         self.assertIn("Trade Goods", tip)
@@ -992,14 +1158,15 @@ class TheContainerLabel(unittest.TestCase):
 
     def test_a_bag_says_how_full_it_is(self):
         backpack = self.containers([item(slot=BACKPACK_SLOT)])[0]
-        self.assertEqual(backpack["room_label"],
-                         "1 of %d" % wealth.BACKPACK_SLOTS)
+        self.assertEqual(backpack["room_label"], "1 of %d" % wealth.BACKPACK_SLOTS)
         self.assertFalse(backpack["full"])
         self.assertEqual(backpack["tone"], wealth.PLAIN)
 
     def test_a_full_bag_is_an_alarm_of_its_own(self):
-        rows = [bag(slots=1, guid=7001),
-                item(bag=7001, slot=0, entry=9, item_name="Gold Dust")]
+        rows = [
+            bag(slots=1, guid=7001),
+            item(bag=7001, slot=0, entry=9, item_name="Gold Dust"),
+        ]
         pouch = [c for c in self.containers(rows) if c["key"] != wealth.BACKPACK][0]
         self.assertTrue(pouch["full"])
         self.assertEqual(pouch["tone"], wealth.ALARM)
@@ -1009,8 +1176,10 @@ class TheContainerLabel(unittest.TestCase):
         """ContainerSlots comes through a LEFT JOIN, so a custom or removed
         bag arrives with no size at all - and "1 of 0" reads as a broken
         count rather than as the missing template it is."""
-        rows = [bag(slots=0, guid=7001),
-                item(bag=7001, slot=0, entry=9, item_name="Gold Dust")]
+        rows = [
+            bag(slots=0, guid=7001),
+            item(bag=7001, slot=0, entry=9, item_name="Gold Dust"),
+        ]
         pouch = [c for c in self.containers(rows) if c["key"] != wealth.BACKPACK][0]
         self.assertEqual(pouch["room_label"], "1 carried, size unknown")
         self.assertFalse(pouch["full"])
@@ -1038,10 +1207,10 @@ class TheGuildBankThereIsNot(unittest.TestCase):
     def test_observed_tabs_and_items_are_reported_without_inference(self):
         bank = wealth.build_guild_bank(
             [{"name": FIRST, "guild_name": "Cave"}],
-            [{"guild_id": 23, "tab_id": 0, "tab_name": "Raid mats",
-              "item_count": 7},
-             {"guild_id": 23, "tab_id": 1, "tab_name": "Recipes",
-              "item_count": 2}],
+            [
+                {"guild_id": 23, "tab_id": 0, "tab_name": "Raid mats", "item_count": 7},
+                {"guild_id": 23, "tab_id": 1, "tab_name": "Recipes", "item_count": 2},
+            ],
         )
         self.assertTrue(bank["bank_observed"])
         self.assertEqual(bank["purchased_tabs"], 2)
@@ -1063,9 +1232,11 @@ class TheGuildBankThereIsNot(unittest.TestCase):
         bank = wealth.build_guild_bank(
             [{"name": FIRST, "guild_name": "Cave"}],
             [{"guild_id": 23, "tab_id": 0, "item_count": 0}],
-            [{"guild_id": 23, "rank_id": 1, "tab_id": 0, "rights": 3},
-             {"guild_id": 23, "rank_id": 2, "tab_id": 0, "rights": 1},
-             {"guild_id": 23, "rank_id": 1, "tab_id": 1, "rights": 3}],
+            [
+                {"guild_id": 23, "rank_id": 1, "tab_id": 0, "rights": 3},
+                {"guild_id": 23, "rank_id": 2, "tab_id": 0, "rights": 1},
+                {"guild_id": 23, "rank_id": 1, "tab_id": 1, "rights": 3},
+            ],
         )
         self.assertTrue(bank["rights_observed"])
         self.assertEqual(bank["deposit_rank_ids"], [1])
@@ -1083,8 +1254,7 @@ class TheGuildBankThereIsNot(unittest.TestCase):
         bank = wealth.build_guild_bank([])
         works = [s["step"] for s in bank["steps"] if s["state"] == wealth.WORKS]
         missing = [s["step"] for s in bank["steps"] if s["state"] == wealth.MISSING]
-        self.assertEqual(works, ["travel to a petitioner",
-                                 "travel to a guild banker"])
+        self.assertEqual(works, ["travel to a petitioner", "travel to a guild banker"])
         self.assertIn("buy a charter", missing)
         self.assertIn("collect the signatures", missing)
         self.assertIn("register the guild", missing)
@@ -1099,12 +1269,13 @@ class TheGuildBankThereIsNot(unittest.TestCase):
             self.assertIn(step["tone"], (wealth.GOOD, wealth.CAUTION))
 
     def test_the_blocked_sentence_counts_the_table_rather_than_a_number(self):
-        """"Five of the seven" has to come from the table, or the day a sixth
+        """ "Five of the seven" has to come from the table, or the day a sixth
         blocked step is added the sentence quietly starts lying."""
         blocked = wealth.build_guild_bank([])["blocked"]
-        self.assertEqual(blocked["before"],
-                         "Five of the seven steps are not written, and all of "
-                         "them are blocked on ")
+        self.assertEqual(
+            blocked["before"],
+            "Five of the seven steps are not written, and all of them are blocked on ",
+        )
         self.assertEqual(blocked["ticket"], wealth.GUILD_TICKET)
         self.assertEqual(blocked["after"], ".")
 
@@ -1115,8 +1286,9 @@ class TheEmptyAuctionPanel(unittest.TestCase):
         to hold the words that told them apart."""
         a = wealth.build_auctions([], ICONS)
         self.assertIn("Nothing listed", a["empty"]["lead"])
-        self.assertIn("empty auction house rather than an empty panel",
-                      a["empty"]["body"])
+        self.assertIn(
+            "empty auction house rather than an empty panel", a["empty"]["body"]
+        )
         self.assertEqual(a["empty"]["why"]["ticket"], wealth.AUCTION_TICKET)
         self.assertIn("lists, buys, bids or sells", a["empty"]["why"]["before"])
 
@@ -1130,9 +1302,10 @@ class TheEmptyAuctionPanel(unittest.TestCase):
 
     def test_the_three_lists_arrive_labelled_and_counted(self):
         a = wealth.build_auctions([auction()], ICONS)
-        self.assertEqual([s["label"] for s in a["sections"]],
-                         ["listed by the family", "sold, gold in the post",
-                          "bid on by the family"])
+        self.assertEqual(
+            [s["label"] for s in a["sections"]],
+            ["listed by the family", "sold, gold in the post", "bid on by the family"],
+        )
         self.assertEqual(a["sections"][0]["count"], 1)
         self.assertEqual(a["sections"][1]["count"], 0)
         self.assertEqual(a["sections"][1]["empty"], wealth.NONE)

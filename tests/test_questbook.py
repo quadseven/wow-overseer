@@ -11,6 +11,7 @@ AllowableRaces=1101 reads as "race locked" and is not, `characters.class`
 reads as a bitmask and is not, a chain reads as a set and is not, and Bork's
 Coldridge Valley rows read as "everyone else is behind" and are not.
 """
+
 import unittest
 
 import questbook
@@ -18,16 +19,19 @@ import questbook
 
 # The family, with the class and race IDs the characters table really stores.
 # NOT bitmasks - that conversion is the point of half these tests.
-GRUG = questbook.Member(name="Grug", class_id=1, race_id=1, level=12,
-                        zones=frozenset({12}))
-BORK = questbook.Member(name="Bork", class_id=4, race_id=3, level=11,
-                        zones=frozenset({12}))
-GROG = questbook.Member(name="Grog", class_id=2, race_id=3, level=10,
-                        zones=frozenset({12}))
-OG = questbook.Member(name="Og", class_id=8, race_id=7, level=10,
-                      zones=frozenset({12}))
-UGGA = questbook.Member(name="Ugga", class_id=5, race_id=1, level=10,
-                        zones=frozenset({12}))
+GRUG = questbook.Member(
+    name="Grug", class_id=1, race_id=1, level=12, zones=frozenset({12})
+)
+BORK = questbook.Member(
+    name="Bork", class_id=4, race_id=3, level=11, zones=frozenset({12})
+)
+GROG = questbook.Member(
+    name="Grog", class_id=2, race_id=3, level=10, zones=frozenset({12})
+)
+OG = questbook.Member(name="Og", class_id=8, race_id=7, level=10, zones=frozenset({12}))
+UGGA = questbook.Member(
+    name="Ugga", class_id=5, race_id=1, level=10, zones=frozenset({12})
+)
 
 # Elwynn Forest, where the family actually is; Coldridge Valley and Dun
 # Morogh, where Bork's quest log thinks it is.
@@ -46,32 +50,36 @@ def _quest(qid, title="", **over):
     return questbook.Quest(id=qid, title=title, **fields)
 
 
-CATALOG = {q.id: q for q in [
-    # Elwynn work the whole family can do.
-    _quest(62, "A Threat Within"),
-    _quest(40, "The Fargodeep Mine"),
-    # The chain. 35 needs 40, 37 needs 35 - so catching up is ORDERED.
-    _quest(35, "Further Concerns", prev_quest_id=40),
-    _quest(37, "Find the Lost Guards", prev_quest_id=35),
-    # Class-locked, verified live: 1 is warrior, 16 is priest.
-    _quest(1638, "A Warrior's Training", allowable_classes=1),
-    _quest(5624, "Garments of the Light", allowable_classes=16),
-    # Too high for the three level-10s.
-    _quest(76, "The Jasperlode Mine", min_level=11),
-    # Bork's dwarf starting-zone dead weight, a continent away.
-    _quest(218, "The Stolen Journal", zone=COLDRIDGE),
-    _quest(234, "Coldridge Valley Mail Delivery", zone=COLDRIDGE),
-    _quest(400, "Tools for Steelgrill", zone=COLDRIDGE),
-    _quest(3361, "A Refugee's Quandary", zone=DUN_MOROGH),
-]}
+CATALOG = {
+    q.id: q
+    for q in [
+        # Elwynn work the whole family can do.
+        _quest(62, "A Threat Within"),
+        _quest(40, "The Fargodeep Mine"),
+        # The chain. 35 needs 40, 37 needs 35 - so catching up is ORDERED.
+        _quest(35, "Further Concerns", prev_quest_id=40),
+        _quest(37, "Find the Lost Guards", prev_quest_id=35),
+        # Class-locked, verified live: 1 is warrior, 16 is priest.
+        _quest(1638, "A Warrior's Training", allowable_classes=1),
+        _quest(5624, "Garments of the Light", allowable_classes=16),
+        # Too high for the three level-10s.
+        _quest(76, "The Jasperlode Mine", min_level=11),
+        # Bork's dwarf starting-zone dead weight, a continent away.
+        _quest(218, "The Stolen Journal", zone=COLDRIDGE),
+        _quest(234, "Coldridge Valley Mail Delivery", zone=COLDRIDGE),
+        _quest(400, "Tools for Steelgrill", zone=COLDRIDGE),
+        _quest(3361, "A Refugee's Quandary", zone=DUN_MOROGH),
+    ]
+}
 
 # The lopsided state: three of them have run the Elwynn chain, two have not,
 # and Bork is carrying four quests he will never hand in.
 AHEAD = frozenset({62, 40, 35, 37})
 FAMILY = [
     questbook.Member(**{**GRUG.__dict__, "rewarded": AHEAD | {1638}}),
-    questbook.Member(**{**BORK.__dict__, "rewarded": AHEAD,
-                        "held": frozenset({218, 234, 400, 3361})}),
+    questbook.Member(
+        **{**BORK.__dict__, "rewarded": AHEAD, "held": frozenset({218, 234, 400, 3361})}
+    ),
     questbook.Member(**{**OG.__dict__, "rewarded": AHEAD}),
     questbook.Member(**{**GROG.__dict__, "held": frozenset({37})}),
     questbook.Member(**{**UGGA.__dict__, "held": frozenset({35})}),
@@ -95,9 +103,9 @@ class BitmaskTest(unittest.TestCase):
             self.assertEqual(bit, 1 << (class_id - 1), class_id)
 
     def test_race_ids_convert_the_same_way(self):
-        self.assertEqual(questbook.race_bit(1), 1)     # human
-        self.assertEqual(questbook.race_bit(3), 4)     # dwarf
-        self.assertEqual(questbook.race_bit(7), 64)    # gnome
+        self.assertEqual(questbook.race_bit(1), 1)  # human
+        self.assertEqual(questbook.race_bit(3), 4)  # dwarf
+        self.assertEqual(questbook.race_bit(7), 64)  # gnome
         self.assertEqual(questbook.race_bit(11), 1024)  # draenei
 
     def test_a_rogue_quest_admits_the_rogue_and_not_the_mage(self):
@@ -133,15 +141,15 @@ class AllianceMaskTest(unittest.TestCase):
 
     def test_a_mask_that_really_does_exclude_says_who(self):
         human_only = _quest(9998, "Human Business", allowable_races=1)
-        self.assertEqual(questbook.restricted_for(human_only, FAMILY),
-                         ("Bork", "Grog", "Og"))
+        self.assertEqual(
+            questbook.restricted_for(human_only, FAMILY), ("Bork", "Grog", "Og")
+        )
 
     def test_zero_means_no_restriction_not_nobody(self):
         """39 of the family's 41 held quests have AllowableClasses=0."""
         self.assertTrue(questbook.mask_allows(0, 1))
         self.assertTrue(questbook.mask_allows(0, 1024))
-        open_to_all = _quest(9997, "Anyone", allowable_classes=0,
-                             allowable_races=0)
+        open_to_all = _quest(9997, "Anyone", allowable_classes=0, allowable_races=0)
         self.assertEqual(len(questbook.participants(open_to_all, FAMILY)), 5)
 
 
@@ -173,12 +181,10 @@ class EligibilityTest(unittest.TestCase):
         self.assertTrue(questbook.eligible(BORK, q))
 
     def test_a_rewarded_quest_is_not_eligible_again(self):
-        self.assertIn(questbook.DONE,
-                      questbook.blockers(BY_NAME["Grug"], CATALOG[62]))
+        self.assertIn(questbook.DONE, questbook.blockers(BY_NAME["Grug"], CATALOG[62]))
 
     def test_blockers_reports_all_of_them_at_once(self):
-        q = _quest(9994, "Hard", allowable_classes=1, min_level=40,
-                   prev_quest_id=62)
+        q = _quest(9994, "Hard", allowable_classes=1, min_level=40, prev_quest_id=62)
         self.assertEqual(
             questbook.blockers(UGGA, q),
             (questbook.CLASS, questbook.PREREQUISITE, questbook.TOO_LOW),
@@ -187,22 +193,20 @@ class EligibilityTest(unittest.TestCase):
 
 class PrerequisiteTest(unittest.TestCase):
     def test_a_positive_prev_quest_needs_it_rewarded(self):
-        self.assertEqual(questbook.blockers(GROG, CATALOG[35]),
-                         (questbook.PREREQUISITE,))
-        done40 = questbook.Member(**{**GROG.__dict__,
-                                     "rewarded": frozenset({40})})
+        self.assertEqual(
+            questbook.blockers(GROG, CATALOG[35]), (questbook.PREREQUISITE,)
+        )
+        done40 = questbook.Member(**{**GROG.__dict__, "rewarded": frozenset({40})})
         self.assertTrue(questbook.eligible(done40, CATALOG[35]))
 
     def test_holding_the_prev_quest_is_not_the_same_as_finishing_it(self):
         """Only a turn-in satisfies a positive PrevQuestID."""
-        holding = questbook.Member(**{**GROG.__dict__,
-                                      "held": frozenset({40})})
+        holding = questbook.Member(**{**GROG.__dict__, "held": frozenset({40})})
         self.assertFalse(questbook.eligible(holding, CATALOG[35]))
 
     def test_a_negative_prev_quest_accepts_it_merely_being_in_the_log(self):
         q = _quest(9993, "Optional Follow-up", prev_quest_id=-40)
-        holding = questbook.Member(**{**GROG.__dict__,
-                                      "held": frozenset({40})})
+        holding = questbook.Member(**{**GROG.__dict__, "held": frozenset({40})})
         self.assertTrue(questbook.eligible(holding, q))
         self.assertFalse(questbook.eligible(GROG, q))
 
@@ -214,8 +218,7 @@ class ExclusiveGroupTest(unittest.TestCase):
             1: _quest(1, "Left", exclusive_group=77),
             2: _quest(2, "Right", exclusive_group=77),
         }
-        took_left = questbook.Member(**{**GROG.__dict__,
-                                        "rewarded": frozenset({1})})
+        took_left = questbook.Member(**{**GROG.__dict__, "rewarded": frozenset({1})})
         self.assertEqual(
             questbook.blockers(took_left, catalog[2], catalog=catalog),
             (questbook.EXCLUSIVE,),
@@ -226,10 +229,8 @@ class ExclusiveGroupTest(unittest.TestCase):
             1: _quest(1, "Left", exclusive_group=77),
             2: _quest(2, "Right", exclusive_group=77),
         }
-        holding = questbook.Member(**{**GROG.__dict__,
-                                      "held": frozenset({1})})
-        self.assertFalse(questbook.eligible(holding, catalog[2],
-                                            catalog=catalog))
+        holding = questbook.Member(**{**GROG.__dict__, "held": frozenset({1})})
+        self.assertFalse(questbook.eligible(holding, catalog[2], catalog=catalog))
 
     def test_a_negative_group_is_deliberately_not_a_blocker(self):
         """AC returns true immediately for ExclusiveGroup <= 0; the negative
@@ -240,10 +241,8 @@ class ExclusiveGroupTest(unittest.TestCase):
             1: _quest(1, "Left", exclusive_group=-77),
             2: _quest(2, "Right", exclusive_group=-77),
         }
-        took_left = questbook.Member(**{**GROG.__dict__,
-                                        "rewarded": frozenset({1})})
-        self.assertTrue(questbook.eligible(took_left, catalog[2],
-                                           catalog=catalog))
+        took_left = questbook.Member(**{**GROG.__dict__, "rewarded": frozenset({1})})
+        self.assertTrue(questbook.eligible(took_left, catalog[2], catalog=catalog))
 
     def test_without_a_catalog_no_group_can_be_checked(self):
         q = _quest(2, "Right", exclusive_group=77)
@@ -263,8 +262,7 @@ class SharedAndPersonalTest(unittest.TestCase):
         self.assertIn(35, [q.id for q in questbook.shared_quests(FAMILY, CATALOG)])
 
     def test_class_locked_quests_belong_to_exactly_one_character(self):
-        owners = {q.id: who
-                  for q, who in questbook.personal_quests(FAMILY, CATALOG)}
+        owners = {q.id: who for q, who in questbook.personal_quests(FAMILY, CATALOG)}
         self.assertEqual(owners[1638], "Grug")
         self.assertEqual(owners[5624], "Ugga")
 
@@ -288,8 +286,7 @@ class SharedAndPersonalTest(unittest.TestCase):
 
 class BehindTest(unittest.TestCase):
     def test_the_two_who_are_behind_are_the_two_evan_named(self):
-        counts = {m.name: len(questbook.behind(m, FAMILY, CATALOG))
-                  for m in FAMILY}
+        counts = {m.name: len(questbook.behind(m, FAMILY, CATALOG)) for m in FAMILY}
         self.assertEqual(counts["Grug"], 0)
         self.assertEqual(counts["Bork"], 0)
         self.assertEqual(counts["Og"], 0)
@@ -332,10 +329,10 @@ class UnreachableTest(unittest.TestCase):
             self.assertEqual(s.reason, questbook.ELSEWHERE)
 
     def test_a_stalled_quest_is_never_also_behind(self):
-        stalled = {s.quest_id
-                   for m in FAMILY for s in questbook.unreachable(m, CATALOG)}
-        missed = {q.id
-                  for m in FAMILY for q in questbook.behind(m, FAMILY, CATALOG)}
+        stalled = {
+            s.quest_id for m in FAMILY for s in questbook.unreachable(m, CATALOG)
+        }
+        missed = {q.id for m in FAMILY for q in questbook.behind(m, FAMILY, CATALOG)}
         self.assertEqual(stalled & missed, set())
 
     def test_being_a_step_down_a_chain_is_not_a_stall(self):
@@ -347,16 +344,17 @@ class UnreachableTest(unittest.TestCase):
     def test_a_chain_hanging_off_something_out_of_reach_is_a_stall(self):
         catalog = dict(CATALOG)
         catalog[9991] = _quest(9991, "Follow-up", prev_quest_id=218)
-        bork = questbook.Member(**{**BY_NAME["Bork"].__dict__,
-                                   "held": frozenset({9991})})
+        bork = questbook.Member(
+            **{**BY_NAME["Bork"].__dict__, "held": frozenset({9991})}
+        )
         stalls = questbook.unreachable(bork, catalog)
-        self.assertEqual([(s.quest_id, s.reason) for s in stalls],
-                         [(9991, questbook.PREREQUISITE)])
+        self.assertEqual(
+            [(s.quest_id, s.reason) for s in stalls], [(9991, questbook.PREREQUISITE)]
+        )
 
     def test_an_unknown_zone_never_stalls_anything(self):
         """Unknown facts stay quiet. A false 'drop it' costs real work."""
-        nowhere = questbook.Member(**{**BY_NAME["Bork"].__dict__,
-                                      "zones": frozenset()})
+        nowhere = questbook.Member(**{**BY_NAME["Bork"].__dict__, "zones": frozenset()})
         self.assertEqual(questbook.unreachable(nowhere, CATALOG), ())
 
     def test_a_held_quest_the_catalog_does_not_know_is_skipped(self):
@@ -367,20 +365,17 @@ class UnreachableTest(unittest.TestCase):
 class CatchUpPlanTest(unittest.TestCase):
     def test_the_chain_comes_out_in_an_order_that_works(self):
         """35 before 37, always. You cannot hand someone 37 first."""
-        ids = [q.id for q in questbook.catch_up_plan(BY_NAME["Grog"], FAMILY,
-                                                     CATALOG)]
+        ids = [q.id for q in questbook.catch_up_plan(BY_NAME["Grog"], FAMILY, CATALOG)]
         self.assertEqual(ids, [40, 35, 37, 62])
         self.assertLess(ids.index(35), ids.index(37))
         self.assertLess(ids.index(40), ids.index(35))
 
     def test_the_plan_covers_everything_they_missed(self):
-        ids = {q.id for q in questbook.catch_up_plan(BY_NAME["Ugga"], FAMILY,
-                                                     CATALOG)}
+        ids = {q.id for q in questbook.catch_up_plan(BY_NAME["Ugga"], FAMILY, CATALOG)}
         self.assertEqual(ids, {35, 37, 40, 62})
 
     def test_somebody_who_is_not_behind_has_nothing_to_do(self):
-        self.assertEqual(questbook.catch_up_plan(BY_NAME["Og"], FAMILY,
-                                                 CATALOG), ())
+        self.assertEqual(questbook.catch_up_plan(BY_NAME["Og"], FAMILY, CATALOG), ())
 
     def test_the_plan_never_contains_a_stalled_quest(self):
         for m in FAMILY:
@@ -398,12 +393,13 @@ class CatchUpPlanTest(unittest.TestCase):
         'missed' - a plan without it is a plan that cannot be followed."""
         catalog = dict(CATALOG)
         catalog[9990] = _quest(9990, "Deep Step", prev_quest_id=37)
-        family = [questbook.Member(**{**m.__dict__,
-                                      "rewarded": m.rewarded | {9990}})
-                  if m.name in ("Grug", "Bork", "Og") else m
-                  for m in FAMILY]
-        ids = [q.id for q in questbook.catch_up_plan(
-            BY_NAME["Grog"], family, catalog)]
+        family = [
+            questbook.Member(**{**m.__dict__, "rewarded": m.rewarded | {9990}})
+            if m.name in ("Grug", "Bork", "Og")
+            else m
+            for m in FAMILY
+        ]
+        ids = [q.id for q in questbook.catch_up_plan(BY_NAME["Grog"], family, catalog)]
         self.assertEqual(ids[-1], 9990)
         self.assertLess(ids.index(37), ids.index(9990))
 
@@ -423,15 +419,22 @@ class LedgerTest(unittest.TestCase):
 
     def test_every_member_appears_in_every_map(self):
         names = {m.name for m in FAMILY}
-        for field in (self.ledger.behind, self.ledger.stalled,
-                      self.ledger.plans, self.ledger.rewarded_counts):
+        for field in (
+            self.ledger.behind,
+            self.ledger.stalled,
+            self.ledger.plans,
+            self.ledger.rewarded_counts,
+        ):
             self.assertEqual(set(field), names)
 
     def test_the_ledger_agrees_with_the_functions_it_is_built_from(self):
-        self.assertEqual(self.ledger.behind["Grog"],
-                         questbook.behind(BY_NAME["Grog"], FAMILY, CATALOG))
-        self.assertEqual(self.ledger.stalled["Bork"],
-                         questbook.unreachable(BY_NAME["Bork"], CATALOG))
+        self.assertEqual(
+            self.ledger.behind["Grog"],
+            questbook.behind(BY_NAME["Grog"], FAMILY, CATALOG),
+        )
+        self.assertEqual(
+            self.ledger.stalled["Bork"], questbook.unreachable(BY_NAME["Bork"], CATALOG)
+        )
 
     def test_an_empty_ledger_names_nobody(self):
         self.assertEqual(questbook.Ledger().furthest_behind, "")
@@ -453,8 +456,10 @@ class SayTest(unittest.TestCase):
         self.assertIn("Coldridge Valley Mail Delivery", line)
 
     def test_somebody_with_nothing_wrong_gets_a_plain_sentence(self):
-        self.assertEqual(questbook.say(self.ledger, "Og"),
-                         "Og is not behind on anything we can help with.")
+        self.assertEqual(
+            questbook.say(self.ledger, "Og"),
+            "Og is not behind on anything we can help with.",
+        )
 
     def test_an_unknown_name_does_not_raise(self):
         self.assertIn("Nobody", questbook.say(self.ledger, "Nobody"))
@@ -464,18 +469,20 @@ class FromRowTest(unittest.TestCase):
     """The verified column spellings live in exactly one place."""
 
     def test_a_joined_row_becomes_a_quest(self):
-        q = questbook.Quest.from_row({
-            "ID": 1638,
-            "LogTitle": "A Warrior's Training",
-            "QuestLevel": 10,
-            "MinLevel": 10,
-            "AllowableRaces": 1101,
-            "MaxLevel": 0,
-            "AllowableClasses": 1,
-            "PrevQuestID": 0,
-            "NextQuestID": 1665,
-            "ExclusiveGroup": 0,
-        })
+        q = questbook.Quest.from_row(
+            {
+                "ID": 1638,
+                "LogTitle": "A Warrior's Training",
+                "QuestLevel": 10,
+                "MinLevel": 10,
+                "AllowableRaces": 1101,
+                "MaxLevel": 0,
+                "AllowableClasses": 1,
+                "PrevQuestID": 0,
+                "NextQuestID": 1665,
+                "ExclusiveGroup": 0,
+            }
+        )
         self.assertEqual(q.id, 1638)
         self.assertEqual(q.title, "A Warrior's Training")
         self.assertEqual(q.allowable_classes, 1)
@@ -484,8 +491,7 @@ class FromRowTest(unittest.TestCase):
         self.assertFalse(questbook.eligible(UGGA, q))
 
     def test_null_columns_read_as_zero(self):
-        q = questbook.Quest.from_row({"ID": 35, "LogTitle": None,
-                                      "PrevQuestID": None})
+        q = questbook.Quest.from_row({"ID": 35, "LogTitle": None, "PrevQuestID": None})
         self.assertEqual(q.title, "")
         self.assertEqual(q.prev_quest_id, 0)
         self.assertEqual(q.max_level, 0)
@@ -497,6 +503,7 @@ class PurityTest(unittest.TestCase):
         handle in here would put the decision core behind a live server."""
         import ast
         import pathlib
+
         src = pathlib.Path(questbook.__file__).read_text(encoding="utf-8")
         imported = set()
         for node in ast.walk(ast.parse(src)):

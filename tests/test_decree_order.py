@@ -34,6 +34,7 @@ session already:
 The read side is tests/test_decree.py and the page contract is
 tests/test_decree_tab.py.
 """
+
 import io
 import json
 import logging
@@ -99,7 +100,6 @@ def roster(overrides=None) -> list:
 
 
 class WhichCardGivesTheOrder(unittest.TestCase):
-
     def test_a_section_nobody_has_heard_of_is_refused_and_not_guessed(self):
         for body in ({"section": "muster"}, {"section": ""}, {}, {"section": 7}):
             order = decree.plan_order(body, roster())
@@ -137,20 +137,24 @@ class WhichCardGivesTheOrder(unittest.TestCase):
         """A stale page carrying its own idea of the family would fan an
         order out over characters the worldserver no longer drives."""
         order = decree.plan_order(
-            {"section": decree.JOB, "mode": "dungeon",
-             "roster": ["Thrall"], "names": ["Thrall"]},
+            {
+                "section": decree.JOB,
+                "mode": "dungeon",
+                "roster": ["Thrall"],
+                "names": ["Thrall"],
+            },
             roster({"Ugga": {"enabled": 0}}),
         )
-        self.assertEqual([r.target_name for r in order.rows],
-                         ["Og", "Bork", "Grog", "Grug"])
+        self.assertEqual(
+            [r.target_name for r in order.rows], ["Og", "Bork", "Grog", "Grug"]
+        )
 
 
 class TheStandingJob(unittest.TestCase):
     """One kind='job' row per enabled character, the shape the bridge writes."""
 
     def test_it_writes_one_row_per_enabled_character(self):
-        order = decree.plan_order({"section": decree.JOB, "mode": "dungeon"},
-                                  roster())
+        order = decree.plan_order({"section": decree.JOB, "mode": "dungeon"}, roster())
         self.assertEqual([r.target_name for r in order.rows], list(FAMILY))
         self.assertEqual({r.command for r in order.rows}, {"dungeon"})
         self.assertEqual({r.kind for r in order.rows}, {decree.JOB_KIND})
@@ -165,8 +169,9 @@ class TheStandingJob(unittest.TestCase):
         self.assertIn("VALUES (%s, %s, 'job', %s)", BRIDGE)
 
     def test_a_disabled_row_is_nobody(self):
-        order = decree.plan_order({"section": decree.JOB, "mode": "quest"},
-                                  roster({"Grug": {"enabled": 0}}))
+        order = decree.plan_order(
+            {"section": decree.JOB, "mode": "quest"}, roster({"Grug": {"enabled": 0}})
+        )
         self.assertNotIn("Grug", [r.target_name for r in order.rows])
         self.assertEqual(len(order.rows), 4)
 
@@ -178,26 +183,26 @@ class TheStandingJob(unittest.TestCase):
         """jobs.resolve, not a second recognizer. A console that took only the
         canonical noun would be a third vocabulary for the same column."""
         for said in ("dungeon", "dungeons", "Dungeon Run", "  DUNGEON  "):
-            order = decree.plan_order({"section": decree.JOB, "mode": said},
-                                      roster())
+            order = decree.plan_order({"section": decree.JOB, "mode": said}, roster())
             self.assertEqual({r.command for r in order.rows}, {"dungeon"}, said)
 
     def test_named_dungeon_is_carried_to_every_roster_row(self):
-        order = decree.plan_order({"section": decree.JOB,
-                                   "mode": "dungeon shadowfang"}, roster())
+        order = decree.plan_order(
+            {"section": decree.JOB, "mode": "dungeon shadowfang"}, roster()
+        )
         self.assertEqual({r.command for r in order.rows}, {"dungeon:shadowfang"})
 
     def test_unknown_named_dungeon_is_refused(self):
-        order = decree.plan_order({"section": decree.JOB,
-                                   "mode": "dungeon zulfarak"}, roster())
+        order = decree.plan_order(
+            {"section": decree.JOB, "mode": "dungeon zulfarak"}, roster()
+        )
         self.assertEqual(order.refusal, decree.ORDER_REFUSALS["mode"])
 
     def test_a_mode_nobody_has_heard_of_is_refused_and_never_passed_through(self):
         """An unrecognised mode reaching overseer_roster.job stops the family
         doing anything at all: mod_overseer.cpp compares the string."""
         for said in ("dungon", "", "   ", None, 7, ["dungeon"]):
-            order = decree.plan_order({"section": decree.JOB, "mode": said},
-                                      roster())
+            order = decree.plan_order({"section": decree.JOB, "mode": said}, roster())
             self.assertEqual(order.refusal, decree.ORDER_REFUSALS["mode"], said)
 
     def test_every_unwired_mode_is_refused_from_this_page(self):
@@ -206,8 +211,7 @@ class TheStandingJob(unittest.TestCase):
         that. Read off jobs.IMPLEMENTED, never a second list here, so wiring a
         mode in mod-overseer opens this console in the same commit."""
         for mode in jobs.MODES:
-            order = decree.plan_order({"section": decree.JOB, "mode": mode},
-                                      roster())
+            order = decree.plan_order({"section": decree.JOB, "mode": mode}, roster())
             if mode in jobs.IMPLEMENTED:
                 self.assertEqual(order.refusal, "", mode)
                 self.assertEqual(len(order.rows), 5, mode)
@@ -229,8 +233,7 @@ class TheStandingJob(unittest.TestCase):
         self.assertIn('"job town run"', why)
 
     def test_what_it_says_is_what_the_bridge_says(self):
-        order = decree.plan_order({"section": decree.JOB, "mode": "dungeon"},
-                                  roster())
+        order = decree.plan_order({"section": decree.JOB, "mode": "dungeon"}, roster())
         self.assertEqual(order.says, jobs.describe("dungeon"))
 
 
@@ -241,11 +244,9 @@ class TheCampaignCounter(unittest.TestCase):
         """Not the leader's alone. The coordinator reads the leader's row, the
         crown moves in world, and the count does not travel with it - so a cap
         on one row is a campaign that restarts when somebody else takes over."""
-        order = decree.plan_order({"section": decree.CAMPAIGN, "wanted": 40},
-                                  roster())
+        order = decree.plan_order({"section": decree.CAMPAIGN, "wanted": 40}, roster())
         self.assertEqual([u.name for u in order.updates], list(FAMILY))
-        self.assertEqual({u.column for u in order.updates},
-                         {decree.CAMPAIGN_WANTED})
+        self.assertEqual({u.column for u in order.updates}, {decree.CAMPAIGN_WANTED})
         self.assertEqual({u.value for u in order.updates}, {40})
         self.assertEqual(order.rows, ())
 
@@ -255,14 +256,16 @@ class TheCampaignCounter(unittest.TestCase):
         setting done to 0."""
         order = decree.plan_order(
             {"section": decree.CAMPAIGN, "restart": True},
-            roster({"Og": {"dungeon_runs_done": 30}}))
+            roster({"Og": {"dungeon_runs_done": 30}}),
+        )
         self.assertEqual({u.column for u in order.updates}, {decree.CAMPAIGN_DONE})
         self.assertEqual({u.value for u in order.updates}, {0})
         self.assertEqual(len(order.updates), 5)
 
     def test_both_at_once_is_one_order(self):
         order = decree.plan_order(
-            {"section": decree.CAMPAIGN, "wanted": 60, "restart": True}, roster())
+            {"section": decree.CAMPAIGN, "wanted": 60, "restart": True}, roster()
+        )
         self.assertEqual(order.asked, 10)
         columns = [u.column for u in order.updates]
         self.assertEqual(columns.count(decree.CAMPAIGN_WANTED), 5)
@@ -271,8 +274,10 @@ class TheCampaignCounter(unittest.TestCase):
     def test_an_order_that_asks_for_nothing_is_refused(self):
         """A press that wrote nothing and reported success is the failure this
         view is named after."""
-        for body in ({"section": decree.CAMPAIGN},
-                     {"section": decree.CAMPAIGN, "restart": False}):
+        for body in (
+            {"section": decree.CAMPAIGN},
+            {"section": decree.CAMPAIGN, "restart": False},
+        ):
             order = decree.plan_order(body, roster())
             self.assertEqual(order.refusal, decree.ORDER_REFUSALS["campaign"])
 
@@ -281,23 +286,25 @@ class TheCampaignCounter(unittest.TestCase):
         a cap of 1 and pass every range check below it."""
         for wanted in (True, False, 3.5, "40", None if False else "", [40]):
             order = decree.plan_order(
-                {"section": decree.CAMPAIGN, "wanted": wanted}, roster())
-            self.assertEqual(order.refusal, decree.ORDER_REFUSALS["wanted"],
-                             repr(wanted))
+                {"section": decree.CAMPAIGN, "wanted": wanted}, roster()
+            )
+            self.assertEqual(
+                order.refusal, decree.ORDER_REFUSALS["wanted"], repr(wanted)
+            )
 
     def test_the_ceiling_is_the_columns_own_and_not_one_this_module_invented(self):
         """SMALLINT UNSIGNED, from mod-overseer's own migration. A cap above
         it is refused by the database, and an operator would read that as the
         console being broken."""
         self.assertEqual(decree.CAMPAIGN_CEILING, 65535)
-        for wanted in (-1, decree.CAMPAIGN_CEILING + 1, 10 ** 9):
+        for wanted in (-1, decree.CAMPAIGN_CEILING + 1, 10**9):
             order = decree.plan_order(
-                {"section": decree.CAMPAIGN, "wanted": wanted}, roster())
-            self.assertEqual(order.refusal, decree.ORDER_REFUSALS["ceiling"],
-                             wanted)
+                {"section": decree.CAMPAIGN, "wanted": wanted}, roster()
+            )
+            self.assertEqual(order.refusal, decree.ORDER_REFUSALS["ceiling"], wanted)
         edge = decree.plan_order(
-            {"section": decree.CAMPAIGN, "wanted": decree.CAMPAIGN_CEILING},
-            roster())
+            {"section": decree.CAMPAIGN, "wanted": decree.CAMPAIGN_CEILING}, roster()
+        )
         self.assertEqual(edge.refusal, "")
 
     def test_a_cap_of_zero_is_legal_and_is_said_to_be_a_full_stop(self):
@@ -305,7 +312,8 @@ class TheCampaignCounter(unittest.TestCase):
         least wanted before it starts a run, so 0 is true on the first
         comparison and no run ever begins."""
         order = decree.plan_order(
-            {"section": decree.CAMPAIGN, "wanted": decree.CAMPAIGN_STOP}, roster())
+            {"section": decree.CAMPAIGN, "wanted": decree.CAMPAIGN_STOP}, roster()
+        )
         self.assertEqual(order.refusal, "")
         self.assertIn("stopped outright", order.says)
 
@@ -313,8 +321,7 @@ class TheCampaignCounter(unittest.TestCase):
         """dungeon_runs_done is the coordinator's record of runs that closed.
         A console that let a person type into it would be forging that."""
         self.assertEqual(decree.CAMPAIGN_RESTART, 0)
-        order = decree.plan_order(
-            {"section": decree.CAMPAIGN, "restart": 12}, roster())
+        order = decree.plan_order({"section": decree.CAMPAIGN, "restart": 12}, roster())
         self.assertEqual({u.value for u in order.updates}, {0})
 
     def test_an_empty_roster_is_said_rather_than_written_to_nobody(self):
@@ -325,7 +332,8 @@ class TheCampaignCounter(unittest.TestCase):
         """A counter is a number to be set, not an intent that might already
         be held by somebody else's plan."""
         order = decree.plan_order(
-            {"section": decree.CAMPAIGN, "wanted": 40, "restart": True}, roster())
+            {"section": decree.CAMPAIGN, "wanted": 40, "restart": True}, roster()
+        )
         self.assertEqual({u.if_free for u in order.updates}, {False})
 
 
@@ -334,7 +342,8 @@ class SendingThemSomewhere(unittest.TestCase):
 
     def test_an_aim_is_one_character_and_one_column(self):
         order = decree.plan_order(
-            {"section": decree.TRAVEL, "name": "Og", "role": "banker"}, roster())
+            {"section": decree.TRAVEL, "name": "Og", "role": "banker"}, roster()
+        )
         self.assertEqual(len(order.updates), 1)
         up = order.updates[0]
         self.assertEqual((up.name, up.column, up.value), ("Og", "travel_npc", "banker"))
@@ -356,7 +365,8 @@ class SendingThemSomewhere(unittest.TestCase):
         been told it may - is unchanged, and map_server's own copy above is
         untouched."""
         order = decree.plan_order(
-            {"section": decree.TRAVEL, "name": "Og", "role": "vendor"}, roster())
+            {"section": decree.TRAVEL, "name": "Og", "role": "vendor"}, roster()
+        )
         self.assertTrue(order.updates[0].if_free)
         self.assertIn("WHERE name = %%s AND travel_npc IN (", BRIDGE)
         self.assertIn("def _retaskable_from(", BRIDGE)
@@ -368,7 +378,8 @@ class SendingThemSomewhere(unittest.TestCase):
         is needed."""
         order = decree.plan_order(
             {"section": decree.TRAVEL, "name": "Og", "role": travel.NONE},
-            roster({"Og": {"travel_npc": "profession trainer"}}))
+            roster({"Og": {"travel_npc": "profession trainer"}}),
+        )
         up = order.updates[0]
         self.assertEqual(up.value, travel.NONE)
         self.assertFalse(up.if_free)
@@ -377,13 +388,15 @@ class SendingThemSomewhere(unittest.TestCase):
         for name in ("Thrall", "", "  ", None, 7, "Grug"):
             order = decree.plan_order(
                 {"section": decree.TRAVEL, "name": name, "role": "banker"},
-                roster({"Grug": {"enabled": 0}}))
+                roster({"Grug": {"enabled": 0}}),
+            )
             self.assertEqual(order.refusal, decree.ORDER_REFUSALS["name"], name)
 
     def test_a_role_nobody_has_heard_of_is_refused(self):
         for role in ("the pub", "somewhere", "0", None, 7, ["banker"]):
             order = decree.plan_order(
-                {"section": decree.TRAVEL, "name": "Og", "role": role}, roster())
+                {"section": decree.TRAVEL, "name": "Og", "role": role}, roster()
+            )
             self.assertEqual(order.refusal, decree.ORDER_REFUSALS["role"], role)
 
     def test_the_vocabulary_is_travels_own_and_not_a_third_copy(self):
@@ -392,15 +405,20 @@ class SendingThemSomewhere(unittest.TestCase):
         think to check."""
         for role in travel.ROLES:
             order = decree.plan_order(
-                {"section": decree.TRAVEL, "name": "Og", "role": role}, roster())
+                {"section": decree.TRAVEL, "name": "Og", "role": role}, roster()
+            )
             self.assertEqual(order.refusal, "", role)
             self.assertEqual(order.updates[0].value, role)
 
     def test_an_alias_and_a_creature_entry_both_resolve(self):
-        for said, stored in (("auction house", "auctioneer"), ("inn", "innkeeper"),
-                             ("1234", "1234")):
+        for said, stored in (
+            ("auction house", "auctioneer"),
+            ("inn", "innkeeper"),
+            ("1234", "1234"),
+        ):
             order = decree.plan_order(
-                {"section": decree.TRAVEL, "name": "Og", "role": said}, roster())
+                {"section": decree.TRAVEL, "name": "Og", "role": said}, roster()
+            )
             self.assertEqual(order.updates[0].value, stored, said)
 
     def test_nothing_wider_than_the_column_is_ever_planned(self):
@@ -410,7 +428,8 @@ class SendingThemSomewhere(unittest.TestCase):
             self.assertLessEqual(len(role), travel.COLUMN_WIDTH)
         long_entry = "9" * (travel.COLUMN_WIDTH + 1)
         order = decree.plan_order(
-            {"section": decree.TRAVEL, "name": "Og", "role": long_entry}, roster())
+            {"section": decree.TRAVEL, "name": "Og", "role": long_entry}, roster()
+        )
         self.assertEqual(order.refusal, decree.ORDER_REFUSALS["role"])
 
     def test_what_it_says_repeats_the_caveat_where_it_is_read(self):
@@ -418,7 +437,8 @@ class SendingThemSomewhere(unittest.TestCase):
         stands in front of it, and the sentence says so at the moment somebody
         has just pressed send."""
         order = decree.plan_order(
-            {"section": decree.TRAVEL, "name": "Og", "role": "vendor"}, roster())
+            {"section": decree.TRAVEL, "name": "Og", "role": "vendor"}, roster()
+        )
         self.assertIn("is not using it", order.says)
 
 
@@ -428,7 +448,8 @@ class WhatCameOfIt(unittest.TestCase):
 
     def setUp(self):
         self.order = decree.plan_order(
-            {"section": decree.JOB, "mode": "dungeon"}, roster())
+            {"section": decree.JOB, "mode": "dungeon"}, roster()
+        )
 
     def test_everything_landing_is_counted_and_said(self):
         out = decree.order_result(self.order, 5)
@@ -474,12 +495,12 @@ class TheAdapterRunsAndDoesNotDecide(unittest.TestCase):
     was handed, and serialises the answer."""
 
     def handler(self) -> str:
-        body = SERVER[SERVER.index("    def _decree_post(self)"):]
-        return body[:body.index("    def _watch_state(self")]
+        body = SERVER[SERVER.index("    def _decree_post(self)") :]
+        return body[: body.index("    def _watch_state(self")]
 
     def applier(self) -> str:
-        body = SERVER[SERVER.index("def _apply_order("):]
-        return body[:body.index("class Handler")]
+        body = SERVER[SERVER.index("def _apply_order(") :]
+        return body[: body.index("class Handler")]
 
     def test_the_handler_asks_the_module_and_runs_what_it_gets_back(self):
         handler = self.handler()
@@ -491,8 +512,17 @@ class TheAdapterRunsAndDoesNotDecide(unittest.TestCase):
         """Not one comparison against a mode, a role, a name or a bound. Every
         one of those is a judgement, and they all live in the pure module."""
         handler = self.handler()
-        for forbidden in ("jobs.", "travel.", "IMPLEMENTED", "int(", "strip()",
-                          "CEILING", '"mode"', '"role"', '"wanted"'):
+        for forbidden in (
+            "jobs.",
+            "travel.",
+            "IMPLEMENTED",
+            "int(",
+            "strip()",
+            "CEILING",
+            '"mode"',
+            '"role"',
+            '"wanted"',
+        ):
             self.assertNotIn(forbidden, handler, forbidden)
 
     def test_a_refusal_is_a_400_carrying_the_modules_own_sentence(self):
@@ -531,14 +561,17 @@ class TheAdapterRunsAndDoesNotDecide(unittest.TestCase):
             {"section": decree.TRAVEL, "name": "Og", "role": "banker"},
             {"section": decree.TRAVEL, "name": "Og", "role": travel.NONE},
         )
-        plain = SERVER[SERVER.index("_ROSTER_SET = {"):]
-        plain = plain[:plain.index("}")]
-        guarded = SERVER[SERVER.index("_ROSTER_SET_IF_FREE = {"):]
-        guarded = guarded[:guarded.index("}")]
+        plain = SERVER[SERVER.index("_ROSTER_SET = {") :]
+        plain = plain[: plain.index("}")]
+        guarded = SERVER[SERVER.index("_ROSTER_SET_IF_FREE = {") :]
+        guarded = guarded[: guarded.index("}")]
         # The constant a planned column was named by, so the assertion reads
         # the adapter the way the adapter reads the module.
-        named = {value: key for key, value in vars(decree).items()
-                 if key.isupper() and isinstance(value, str)}
+        named = {
+            value: key
+            for key, value in vars(decree).items()
+            if key.isupper() and isinstance(value, str)
+        }
         for body in plans:
             order = decree.plan_order(body, roster())
             self.assertEqual(order.refusal, "", body)
@@ -551,14 +584,17 @@ class TheAdapterRunsAndDoesNotDecide(unittest.TestCase):
         """Never by a literal. A column renamed in decree.py and not here
         would be a lookup miss, which is loud, rather than a statement that
         writes the wrong column."""
-        tables = SERVER[SERVER.index("_ROSTER_SET = {"):SERVER.index("_DECREE_LOCK")]
-        for constant in ("decree.CAMPAIGN_WANTED", "decree.CAMPAIGN_DONE",
-                         "decree.TRAVEL_COLUMN"):
+        tables = SERVER[SERVER.index("_ROSTER_SET = {") : SERVER.index("_DECREE_LOCK")]
+        for constant in (
+            "decree.CAMPAIGN_WANTED",
+            "decree.CAMPAIGN_DONE",
+            "decree.TRAVEL_COLUMN",
+        ):
             self.assertIn(constant, tables)
 
     def test_the_guarded_statement_is_the_bridges_own_where_clause(self):
-        guarded = SERVER[SERVER.index("_ROSTER_SET_IF_FREE = {"):]
-        guarded = guarded[:guarded.index("}")]
+        guarded = SERVER[SERVER.index("_ROSTER_SET_IF_FREE = {") :]
+        guarded = guarded[: guarded.index("}")]
         self.assertIn("AND (travel_npc = '' OR travel_npc = %s)", guarded)
 
     def test_every_value_is_bound_and_no_name_is_interpolated(self):
@@ -598,8 +634,8 @@ class TheAdapterRunsAndDoesNotDecide(unittest.TestCase):
     def test_the_roster_read_uses_the_same_statements_the_console_does(self):
         """A plan and the page must agree about who is enabled, so the order
         is planned off the statements the console was drawn from."""
-        fetch = SERVER[SERVER.index("def _fetch_roster_rows"):]
-        fetch = fetch[:fetch.index("def _apply_order")]
+        fetch = SERVER[SERVER.index("def _fetch_roster_rows") :]
+        fetch = fetch[: fetch.index("def _apply_order")]
         self.assertIn("for attempt in (_ROSTER_FULL, _ROSTER_OLD):", fetch)
 
     def test_the_roster_read_does_not_inherit_the_1054_gap(self):
@@ -607,8 +643,8 @@ class TheAdapterRunsAndDoesNotDecide(unittest.TestCase):
         pymysql's error_map so a missing COLUMN arrives as an
         OperationalError. On the read side that gap costs a banner; here it
         would 503 every order on the realm most likely to need the fallback."""
-        fetch = SERVER[SERVER.index("def _fetch_roster_rows"):]
-        fetch = fetch[:fetch.index("def _apply_order")]
+        fetch = SERVER[SERVER.index("def _fetch_roster_rows") :]
+        fetch = fetch[: fetch.index("def _apply_order")]
         self.assertNotIn("_guarded(", fetch)
         self.assertIn("exc.args[0] in _DEGRADED", fetch)
 
@@ -679,7 +715,8 @@ class TheWritesThatActuallyRun(unittest.TestCase):
 
     def test_a_job_order_inserts_one_attributable_row_per_character(self):
         order, cursor, changed = self.run_order(
-            {"section": decree.JOB, "mode": "dungeon"})
+            {"section": decree.JOB, "mode": "dungeon"}
+        )
         self.assertEqual(changed, 5)
         self.assertEqual(len(cursor.calls), 5)
         for (sql, params), name in zip(cursor.calls, FAMILY):
@@ -696,7 +733,8 @@ class TheWritesThatActuallyRun(unittest.TestCase):
 
     def test_a_campaign_order_runs_the_plain_statement_per_row(self):
         order, cursor, changed = self.run_order(
-            {"section": decree.CAMPAIGN, "wanted": 40, "restart": True})
+            {"section": decree.CAMPAIGN, "wanted": 40, "restart": True}
+        )
         self.assertEqual(changed, 10)
         self.assertEqual(len(cursor.calls), 10)
         wanted = [c for c in cursor.calls if "dungeon_runs_wanted" in c[0]]
@@ -713,7 +751,8 @@ class TheWritesThatActuallyRun(unittest.TestCase):
         ProgrammingError on a live realm and nothing here would have caught it
         without watching the pair go past."""
         order, cursor, changed = self.run_order(
-            {"section": decree.TRAVEL, "name": "Grug", "role": "banker"})
+            {"section": decree.TRAVEL, "name": "Grug", "role": "banker"}
+        )
         self.assertEqual(changed, 1)
         sql, params = cursor.calls[0]
         self.assertIn("AND (travel_npc = '' OR travel_npc = %s)", sql)
@@ -722,7 +761,8 @@ class TheWritesThatActuallyRun(unittest.TestCase):
 
     def test_standing_somebody_down_runs_the_unguarded_statement(self):
         order, cursor, changed = self.run_order(
-            {"section": decree.TRAVEL, "name": "Grug", "role": travel.NONE})
+            {"section": decree.TRAVEL, "name": "Grug", "role": travel.NONE}
+        )
         sql, params = cursor.calls[0]
         self.assertNotIn("AND (", sql)
         self.assertEqual(sql.count("%s"), len(params))
@@ -733,7 +773,8 @@ class TheWritesThatActuallyRun(unittest.TestCase):
         Reporting that as a success is the failure this view is named after."""
         order, cursor, changed = self.run_order(
             {"section": decree.TRAVEL, "name": "Grug", "role": "banker"},
-            {"travel_npc": 0})
+            {"travel_npc": 0},
+        )
         self.assertEqual(changed, 0)
         out = decree.order_result(order, changed)
         self.assertFalse(out["ok"])
@@ -745,28 +786,32 @@ class TheWritesThatActuallyRun(unittest.TestCase):
         separately. The order comes back short rather than as a 503."""
         order, cursor, changed = self.run_order(
             {"section": decree.JOB, "mode": "dungeon"},
-            {"INSERT INTO overseer_command": MYSQL_ERROR(1265, "truncated")})
+            {"INSERT INTO overseer_command": MYSQL_ERROR(1265, "truncated")},
+        )
         self.assertEqual(changed, 0)
         self.assertEqual(len(cursor.calls), 5, "it stopped at the first refusal")
 
     def test_a_missing_campaign_column_is_survived_the_same_way(self):
         order, cursor, changed = self.run_order(
             {"section": decree.CAMPAIGN, "wanted": 40},
-            {"dungeon_runs_wanted": MYSQL_ERROR(1054, "unknown column")})
+            {"dungeon_runs_wanted": MYSQL_ERROR(1054, "unknown column")},
+        )
         self.assertEqual(changed, 0)
         self.assertEqual(len(cursor.calls), 5)
 
     def test_a_missing_table_is_survived_the_same_way(self):
         order, cursor, changed = self.run_order(
             {"section": decree.TRAVEL, "name": "Og", "role": "vendor"},
-            {"UPDATE overseer_roster": MYSQL_ERROR(1146, "no such table")})
+            {"UPDATE overseer_roster": MYSQL_ERROR(1146, "no such table")},
+        )
         self.assertEqual(changed, 0)
 
     def test_a_thin_roster_falls_back_instead_of_failing_every_order(self):
         """The realm whose overseer_roster predates the campaign columns is
         the one that most needs an order to go through."""
-        cursor = FakeCursor({"dungeon_runs_wanted":
-                             MYSQL_ERROR(1054, "unknown column")})
+        cursor = FakeCursor(
+            {"dungeon_runs_wanted": MYSQL_ERROR(1054, "unknown column")}
+        )
         conn = FakeConn(cursor)
         with mock.patch.object(map_server, "_connect", return_value=conn):
             rows = map_server._fetch_roster_rows()
@@ -779,8 +824,9 @@ class TheWritesThatActuallyRun(unittest.TestCase):
         self.assertTrue(conn.closed)
 
     def test_a_roster_read_that_is_not_a_schema_problem_still_raises(self):
-        cursor = FakeCursor({"FROM overseer_roster":
-                             MYSQL_ERROR(2013, "lost connection")})
+        cursor = FakeCursor(
+            {"FROM overseer_roster": MYSQL_ERROR(2013, "lost connection")}
+        )
         conn = FakeConn(cursor)
         with mock.patch.object(map_server, "_connect", return_value=conn):
             with self.assertRaises(MYSQL_ERROR):
@@ -791,8 +837,13 @@ class TheWritesThatActuallyRun(unittest.TestCase):
         """A syntax error or a dead socket must not be rendered as an order
         that quietly wrote nothing. Only the three degraded codes are
         swallowed."""
-        cursor = FakeCursor({"INSERT INTO overseer_command":
-                             MYSQL_ERROR(1064, "you have an error in your SQL")})
+        cursor = FakeCursor(
+            {
+                "INSERT INTO overseer_command": MYSQL_ERROR(
+                    1064, "you have an error in your SQL"
+                )
+            }
+        )
         conn = FakeConn(cursor)
         order = decree.plan_order({"section": decree.JOB, "mode": "quest"}, roster())
         with mock.patch.object(map_server, "_connect", return_value=conn):
@@ -877,12 +928,12 @@ class TheEndpointFromTheOutside(unittest.TestCase):
         self.assertEqual(handler.code, 503)
 
     def test_the_order_is_planned_against_the_roster_that_was_read(self):
-        self.mocks["_fetch_roster_rows"].return_value = roster(
-            {"Ugga": {"enabled": 0}})
+        self.mocks["_fetch_roster_rows"].return_value = roster({"Ugga": {"enabled": 0}})
         order(section=decree.JOB, mode="quest")
         planned = self.mocks["_apply_order"].call_args[0][0]
-        self.assertEqual([r.target_name for r in planned.rows],
-                         ["Og", "Bork", "Grog", "Grug"])
+        self.assertEqual(
+            [r.target_name for r in planned.rows], ["Og", "Bork", "Grog", "Grug"]
+        )
 
     def test_the_same_order_twice_is_reported_as_the_no_op_it_is(self):
         """Two taps a second apart. The second changes nothing because every
@@ -892,8 +943,7 @@ class TheEndpointFromTheOutside(unittest.TestCase):
         handler = order(section=decree.CAMPAIGN, wanted=40)
         self.assertEqual(handler.code, 200)
         self.assertFalse(handler.payload["ok"])
-        self.assertEqual(handler.payload["note"],
-                         decree.ORDER_NOTHING[decree.CAMPAIGN])
+        self.assertEqual(handler.payload["note"], decree.ORDER_NOTHING[decree.CAMPAIGN])
 
 
 if __name__ == "__main__":

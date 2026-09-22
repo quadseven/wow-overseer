@@ -34,6 +34,7 @@ assertion about the DEPLOYED image and defaults to off, and
 `tests/test_enroll.py` pins what the PINNED submodule actually does so that a
 change is a failing test rather than a discovery.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -200,25 +201,28 @@ def candidates(cur, names: list[str], *, present: bool) -> list[enroll.Candidate
     facts = {row["name"]: row for row in cur.fetchall()}
     roster_sql = _ROSTER_SQL if present else _ROSTER_SQL_NO_FAMILY
     cur.execute(roster_sql % marks, tuple(names))  # noqa: S608
-    enrolled = {row["name"]: (row.get("family") if present else "")
-                for row in cur.fetchall()}
+    enrolled = {
+        row["name"]: (row.get("family") if present else "") for row in cur.fetchall()
+    }
     out = []
     for name in names:
         fact = facts.get(name)
         if fact is None:
             out.append(enroll.Candidate(name=name, exists=False))
             continue
-        out.append(enroll.Candidate(
-            name=fact["name"],
-            exists=True,
-            race=int(fact["race"]),
-            level=int(fact["level"]),
-            guild_id=int(fact["guild_id"]),
-            # `.get` with a default of None distinguishes "has a roster row
-            # whose family is unset" from "has no roster row at all"; only the
-            # second is enrollable.
-            cohort=enrolled.get(name),
-        ))
+        out.append(
+            enroll.Candidate(
+                name=fact["name"],
+                exists=True,
+                race=int(fact["race"]),
+                level=int(fact["level"]),
+                guild_id=int(fact["guild_id"]),
+                # `.get` with a default of None distinguishes "has a roster row
+                # whose family is unset" from "has no roster row at all"; only the
+                # second is enrollable.
+                cohort=enrolled.get(name),
+            )
+        )
     return out
 
 
@@ -244,43 +248,67 @@ def apply(cur, plan_: enroll.Plan) -> int:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("--cohort", required=True,
-                        help="the `family` value the new rows carry")
-    parser.add_argument("--name", action="append", default=[],
-                        help="a character to enrol; repeatable")
-    parser.add_argument("--from-pool", type=int, default=0,
-                        help="instead of --name, take this many guildless "
-                             "un-enrolled Horde characters")
-    parser.add_argument("--min-level", type=int, default=1,
-                        help="lowest level --from-pool will draw (default 1)")
-    parser.add_argument("--head", default="",
-                        help="the head of the family this process drives, used "
-                             "only to read the home cohort off its own row so "
-                             "this tool refuses to enrol into it")
-    parser.add_argument("--limit", type=int, default=enroll.DEFAULT_LIMIT,
-                        help="refuse a batch larger than this "
-                             "(default %(default)s)")
-    parser.add_argument("--module-is-cohort-aware", action="store_true",
-                        help="assert that the RUNNING worldserver's "
-                             "mod-overseer scopes its roster reads by `family`. "
-                             "No SELECT can check this. It is false for every "
-                             "image built to date: mod-overseer#506 shipped the "
-                             "column with no reader.")
-    parser.add_argument("--apply", action="store_true",
-                        help="execute the plan instead of printing it")
+    parser.add_argument(
+        "--cohort", required=True, help="the `family` value the new rows carry"
+    )
+    parser.add_argument(
+        "--name", action="append", default=[], help="a character to enrol; repeatable"
+    )
+    parser.add_argument(
+        "--from-pool",
+        type=int,
+        default=0,
+        help="instead of --name, take this many guildless un-enrolled Horde characters",
+    )
+    parser.add_argument(
+        "--min-level",
+        type=int,
+        default=1,
+        help="lowest level --from-pool will draw (default 1)",
+    )
+    parser.add_argument(
+        "--head",
+        default="",
+        help="the head of the family this process drives, used "
+        "only to read the home cohort off its own row so "
+        "this tool refuses to enrol into it",
+    )
+    parser.add_argument(
+        "--limit",
+        type=int,
+        default=enroll.DEFAULT_LIMIT,
+        help="refuse a batch larger than this (default %(default)s)",
+    )
+    parser.add_argument(
+        "--module-is-cohort-aware",
+        action="store_true",
+        help="assert that the RUNNING worldserver's "
+        "mod-overseer scopes its roster reads by `family`. "
+        "No SELECT can check this. It is false for every "
+        "image built to date: mod-overseer#506 shipped the "
+        "column with no reader.",
+    )
+    parser.add_argument(
+        "--apply", action="store_true", help="execute the plan instead of printing it"
+    )
     args = parser.parse_args(argv)
 
     if args.name and args.from_pool:
-        parser.error("--name and --from-pool choose the batch two different "
-                     "ways; pass one of them")
+        parser.error(
+            "--name and --from-pool choose the batch two different "
+            "ways; pass one of them"
+        )
     if not args.name and not args.from_pool:
         parser.error("nothing to enrol: pass --name or --from-pool")
 
     with _connect() as conn, conn.cursor() as cur:
         family_column = has_family_column(cur)
         home = home_cohort(cur, args.head, present=family_column)
-        names = (pool(cur, args.from_pool, args.min_level) if args.from_pool
-                 else list(args.name))
+        names = (
+            pool(cur, args.from_pool, args.min_level)
+            if args.from_pool
+            else list(args.name)
+        )
         found = candidates(cur, names, present=family_column)
         plan_ = enroll.plan(
             found,

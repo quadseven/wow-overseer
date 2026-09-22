@@ -65,6 +65,7 @@ asserts FOUR anchors against known-good values before it reads a single new
 fact, and refuses to write anything if one of them moves - a parse that cannot
 find a value it already knows is not a parse to read new facts off.
 """
+
 from __future__ import annotations
 
 import json
@@ -165,12 +166,14 @@ def _load(path: pathlib.Path):
             "could not read %s: %s. The usage in this file's docstring says "
             "how to copy it out of the running worldserver, and warns to "
             "md5sum the result against the pod's own before trusting it."
-            % (path, problem)) from None
+            % (path, problem)
+        ) from None
     if len(blob) < 20:
         raise SystemExit(
             "%s is %d bytes, which is shorter than a DBC header. That is what "
             "a failed `kubectl exec` looks like: the redirect still creates "
-            "the file." % (path, len(blob)))
+            "the file." % (path, len(blob))
+        )
     magic, rows, fields, rowsize, _strings = struct.unpack_from("<4siiii", blob, 0)
     if magic != b"WDBC":
         raise SystemExit("%s is not a DBC (magic %r) - a bad copy?" % (path, magic))
@@ -180,7 +183,8 @@ def _load(path: pathlib.Path):
         raise SystemExit(
             "%s claims %d rows of %d bytes (%d bytes of body) and holds only "
             "%d bytes: the copy is TRUNCATED. md5sum it against the pod."
-            % (path, rows, rowsize, end, len(blob)))
+            % (path, rows, rowsize, end, len(blob))
+        )
     return blob, rows, fields, rowsize, body, end
 
 
@@ -189,8 +193,9 @@ def _field(blob, body, rowsize, row, index):
 
 
 def _text(blob, strings, offset):
-    return blob[strings + offset:blob.index(b"\0", strings + offset)].decode(
-        "utf-8", "replace")
+    return blob[strings + offset : blob.index(b"\0", strings + offset)].decode(
+        "utf-8", "replace"
+    )
 
 
 def _anchor(spell, body, rowsize, strings, index, ability):
@@ -235,11 +240,13 @@ def _anchor(spell, body, rowsize, strings, index, ability):
     if got != 2996:
         raise SystemExit(
             "Spell.dbc anchor: 2963 creates item %d, not 2996 (2997 here would "
-            "mean the row index is off by one, not the field index)" % got)
+            "mean the row index is off by one, not the field index)" % got
+        )
     if ability != (197, 1, 1):
         raise SystemExit(
             "SkillLineAbility.dbc anchor: 2963 read as skill %d rank %d "
-            "acquire %d, not (197, 1, 1)" % ability)
+            "acquire %d, not (197, 1, 1)" % ability
+        )
 
 
 def main(argv):
@@ -250,12 +257,15 @@ def main(argv):
     sla, arows, _af, arowsize, abody, _astr = _load(where / "SkillLineAbility.dbc")
 
     def ability(row):
-        return (_field(sla, abody, arowsize, row, A_SKILL_LINE),
-                _field(sla, abody, arowsize, row, A_MIN_RANK),
-                _field(sla, abody, arowsize, row, A_ACQUIRE))
+        return (
+            _field(sla, abody, arowsize, row, A_SKILL_LINE),
+            _field(sla, abody, arowsize, row, A_MIN_RANK),
+            _field(sla, abody, arowsize, row, A_ACQUIRE),
+        )
 
-    anchor_row = next(r for r in range(arows)
-                      if _field(sla, abody, arowsize, r, A_SPELL) == 2963)
+    anchor_row = next(
+        r for r in range(arows) if _field(sla, abody, arowsize, r, A_SPELL) == 2963
+    )
     _anchor(spell, body, rowsize, strings, index, ability(anchor_row))
 
     book: dict = {}
@@ -273,8 +283,7 @@ def main(argv):
             # would make 100% unreachable by construction.
             absent += 1
             continue
-        effects = [_field(spell, body, rowsize, row, F_EFFECT + i)
-                   for i in range(3)]
+        effects = [_field(spell, body, rowsize, row, F_EFFECT + i) for i in range(3)]
         created = _field(spell, body, rowsize, row, F_EFFECT_ITEM_TYPE)
         # EVERY ability on the line is kept, not only the ones that create an
         # item. Enchanting creates almost nothing (32 of its 306 abilities
@@ -290,14 +299,20 @@ def main(argv):
             created if effects[0] == SPELL_EFFECT_CREATE_ITEM else 0,
         ]
 
-    out = where.parent / "craftbook.json" if len(argv) > 2 else pathlib.Path(
-        __file__).resolve().parents[1] / "craftbook.json"
-    out.write_text(json.dumps(book, sort_keys=True, separators=(",", ":")),
-                   encoding="utf-8")
+    out = (
+        where.parent / "craftbook.json"
+        if len(argv) > 2
+        else pathlib.Path(__file__).resolve().parents[1] / "craftbook.json"
+    )
+    out.write_text(
+        json.dumps(book, sort_keys=True, separators=(",", ":")), encoding="utf-8"
+    )
     total = sum(len(v) for v in book.values())
-    print("wrote %s: %d professions, %d crafts (%d skill-line rows named a "
-          "spell absent from Spell.dbc and were dropped)"
-          % (out, len(book), total, absent))
+    print(
+        "wrote %s: %d professions, %d crafts (%d skill-line rows named a "
+        "spell absent from Spell.dbc and were dropped)"
+        % (out, len(book), total, absent)
+    )
     for skill, word in sorted(SKILL_LINES.items(), key=lambda kv: kv[1]):
         print("  %-16s %d" % (word, len(book.get(str(skill), {}))))
     return 0

@@ -889,38 +889,68 @@ FOCUS_AIMS = {
 # and no trainer can supply, and that is the clause `preferred` refuses on.
 RECIPES: dict = {
     SKILL_IDS["tailoring"]: (
-        Recipe(2963, "Bolt of Linen Cloth", min_skill=1, max_skill=49,
-               note="2x Linen Cloth (2589) -> 1x Bolt of Linen Cloth (2996), "
-                    "no focus needed. NOT spell 3910 - that id is 'Tailoring', "
-                    "the Expert rank profession spell, which creates nothing; "
-                    "see this table's own header comment for how that went "
-                    "unnoticed (infra#3689). max_skill was 60 against a "
-                    "TrivialSkillLineRankHigh of 50 - see the COLOUR BANDS "
-                    "block above; Og sat at exactly 50 casting this for free"),
-        Recipe(8776, "Linen Belt", min_skill=50, max_skill=67,
-               note="1x Bolt of Linen Cloth (2996), 1x Coarse Thread (2320, "
-                    "vendor-bought) -> 1x Linen Belt (item 7026), no focus "
-                    "needed. min_skill was 61; MinSkillLineRank is 1 and "
-                    "TrivialSkillLineRankLow is 50, so 50 is where this stops "
-                    "being a guess and starts being the yellow band"),
-        Recipe(2964, "Bolt of Woolen Cloth", min_skill=68, max_skill=100,
-               note="3x Wool Cloth -> 1x Bolt of Woolen Cloth, no focus "
-                    "needed; min_skill shifted from the guide's 61 to make "
-                    "room for Linen Belt directly above, see this table's "
-                    "own header comment"),
-        Recipe(3839, "Bolt of Silk Cloth", min_skill=125, max_skill=144,
-               note="4x Silk Cloth -> 1x Bolt of Silk Cloth, no focus needed; "
-                    "max_skill was 145, its own grey value"),
-        Recipe(3865, "Bolt of Mageweave", min_skill=175, max_skill=184,
-               note="4x Mageweave Cloth -> 1x Bolt of Mageweave, no focus "
-                    "needed; FOUR, not the five an earlier pass wrote - "
-                    "Spell.dbc, see this table's header comment; max_skill "
-                    "was 185, its own grey value"),
-        Recipe(18401, "Bolt of Runecloth", min_skill=250, max_skill=259,
-               note="4x Runecloth -> 1x Bolt of Runecloth, no focus needed; "
-                    "FOUR, not the five an earlier pass wrote - Spell.dbc, "
-                    "see this table's header comment; max_skill was 260, its "
-                    "own grey value"),
+        Recipe(
+            2963,
+            "Bolt of Linen Cloth",
+            min_skill=1,
+            max_skill=49,
+            note="2x Linen Cloth (2589) -> 1x Bolt of Linen Cloth (2996), "
+            "no focus needed. NOT spell 3910 - that id is 'Tailoring', "
+            "the Expert rank profession spell, which creates nothing; "
+            "see this table's own header comment for how that went "
+            "unnoticed (infra#3689). max_skill was 60 against a "
+            "TrivialSkillLineRankHigh of 50 - see the COLOUR BANDS "
+            "block above; Og sat at exactly 50 casting this for free",
+        ),
+        Recipe(
+            8776,
+            "Linen Belt",
+            min_skill=50,
+            max_skill=67,
+            note="1x Bolt of Linen Cloth (2996), 1x Coarse Thread (2320, "
+            "vendor-bought) -> 1x Linen Belt (item 7026), no focus "
+            "needed. min_skill was 61; MinSkillLineRank is 1 and "
+            "TrivialSkillLineRankLow is 50, so 50 is where this stops "
+            "being a guess and starts being the yellow band",
+        ),
+        Recipe(
+            2964,
+            "Bolt of Woolen Cloth",
+            min_skill=68,
+            max_skill=100,
+            note="3x Wool Cloth -> 1x Bolt of Woolen Cloth, no focus "
+            "needed; min_skill shifted from the guide's 61 to make "
+            "room for Linen Belt directly above, see this table's "
+            "own header comment",
+        ),
+        Recipe(
+            3839,
+            "Bolt of Silk Cloth",
+            min_skill=125,
+            max_skill=144,
+            note="4x Silk Cloth -> 1x Bolt of Silk Cloth, no focus needed; "
+            "max_skill was 145, its own grey value",
+        ),
+        Recipe(
+            3865,
+            "Bolt of Mageweave",
+            min_skill=175,
+            max_skill=184,
+            note="4x Mageweave Cloth -> 1x Bolt of Mageweave, no focus "
+            "needed; FOUR, not the five an earlier pass wrote - "
+            "Spell.dbc, see this table's header comment; max_skill "
+            "was 185, its own grey value",
+        ),
+        Recipe(
+            18401,
+            "Bolt of Runecloth",
+            min_skill=250,
+            max_skill=259,
+            note="4x Runecloth -> 1x Bolt of Runecloth, no focus needed; "
+            "FOUR, not the five an earlier pass wrote - Spell.dbc, "
+            "see this table's header comment; max_skill was 260, its "
+            "own grey value",
+        ),
     ),
     # FIRST AID (infra#2757's Cooking/First Aid slice) - a SECONDARY skill,
     # not a CRAFTING one: every one of the five already holds it at 1/75
@@ -989,14 +1019,19 @@ RECIPES: dict = {
     # Reagent verified the same way: 1x Linen Cloth (2589) -> 1x Linen Bandage
     # (item 1251), RequiresSpellFocus 0.
     SKILL_IDS["first aid"]: (
-        Recipe(3275, "Linen Bandage", min_skill=1, max_skill=59,
-               note="1x Linen Cloth (2589) -> 1x Linen Bandage (item 1251), "
-                    "no focus needed. Auto-learned with Apprentice First Aid "
-                    "for every class (SkillLineAbility AcquireMethod 1, "
-                    "ClassMask 0); grey at 60, so 59 is the last value it can "
-                    "grant a point at. NOT 39 - that was Heavy Linen Bandage's "
-                    "old hand-off, and 3276 is a trainer purchase for every "
-                    "class but Death Knight"),
+        Recipe(
+            3275,
+            "Linen Bandage",
+            min_skill=1,
+            max_skill=59,
+            note="1x Linen Cloth (2589) -> 1x Linen Bandage (item 1251), "
+            "no focus needed. Auto-learned with Apprentice First Aid "
+            "for every class (SkillLineAbility AcquireMethod 1, "
+            "ClassMask 0); grey at 60, so 59 is the last value it can "
+            "grant a point at. NOT 39 - that was Heavy Linen Bandage's "
+            "old hand-off, and 3276 is a trainer purchase for every "
+            "class but Death Knight",
+        ),
     ),
     # COOKING (infra#2757's Cooking/First Aid slice) - also SECONDARY, same
     # reasoning as First Aid above: every one of the five holds it at 1/75
@@ -1100,85 +1135,186 @@ RECIPES: dict = {
     # stands a character inside an anvil's focus there, and the anvil work is a
     # table correction plus a ranking preference rather than a second journey.
     SKILL_IDS["engineering"]: (
-        Recipe(3918, "Rough Blasting Powder", min_skill=1, max_skill=30,
-               note="1x Rough Stone -> 1x Rough Blasting Powder (item 4357)"),
-        Recipe(3922, "Handful of Copper Bolts", min_skill=31, max_skill=50, focus=1,
-               note="1x Copper Bar -> 1x Handful of Copper Bolts (item 4359)"),
-        Recipe(7430, "Arclight Spanner", min_skill=51, max_skill=51, focus=1,
-               repeatable=False,
-               note="TOOL, craft once - 6x Copper Bar -> 1x Arclight Spanner "
-                    "(item 6219). Not Unique/Unique-Equipped - verified "
-                    "against wowhead+classicdb tooltip data, not assumed - so "
-                    "nothing in the core refuses a second cast; the "
-                    "single-point bracket is what stops this module from "
-                    "recasting it, not an item flag"),
-        Recipe(3923, "Rough Copper Bomb", min_skill=52, max_skill=75, focus=1,
-               note="1x Copper Bar, 1x Handful of Copper Bolts, 2x Rough "
-                    "Blasting Powder, 1x Linen Cloth -> 1x Rough Copper Bomb "
-                    "(item 4360)"),
-        Recipe(3929, "Coarse Blasting Powder", min_skill=76, max_skill=90,
-               note="1x Coarse Stone -> 1x Coarse Blasting Powder (item 4364)"),
-        Recipe(3931, "Coarse Dynamite", min_skill=91, max_skill=100,
-               note="3x Coarse Blasting Powder, 1x Linen Cloth -> 1x Coarse "
-                    "Dynamite (item 4365). NOT spell 4061 - that id is the "
-                    "crafted item's own throw/damage spell, a different "
-                    "spell that happens to share the display name"),
-        Recipe(3973, "Silver Contact", min_skill=101, max_skill=105,
-               note="1x Silver Bar -> Silver Contact (item 4404); per-cast "
-                    "yield could not be independently confirmed for the "
-                    "3.3.5a era (a later, Cataclysm-only patch changed it) - "
-                    "verify against this deployment's own cast if it matters"),
-        Recipe(3938, "Bronze Tube", min_skill=106, max_skill=124, focus=1,
-               note="2x Bronze Bar (2841), 1x Weak Flux (2880, vendor-bought "
-                    "- see craft_supply.REAGENT) -> 1x Bronze Tube (item "
-                    "4371); trainer floor is skill 105 (acore_world."
-                    "trainer_spell), guide range 105-125, clipped to 106-124 "
-                    "so it does not collide with Silver Contact's own "
-                    "max_skill=105. Standard Scope, the guide's next "
-                    "bracket, is deliberately NOT added here - see the "
-                    "module-level comment above"),
-        Recipe(3945, "Heavy Blasting Powder", min_skill=125, max_skill=144,
-               note="1x Heavy Stone -> 1x Heavy Blasting Powder (item 4377); "
-                    "real trainer skill floor is 125, not the guide's stated "
-                    "135 - also the reagent Hi-Explosive Bomb needs later. "
-                    "max_skill was 150, past its own grey of 145"),
+        Recipe(
+            3918,
+            "Rough Blasting Powder",
+            min_skill=1,
+            max_skill=30,
+            note="1x Rough Stone -> 1x Rough Blasting Powder (item 4357)",
+        ),
+        Recipe(
+            3922,
+            "Handful of Copper Bolts",
+            min_skill=31,
+            max_skill=50,
+            focus=1,
+            note="1x Copper Bar -> 1x Handful of Copper Bolts (item 4359)",
+        ),
+        Recipe(
+            7430,
+            "Arclight Spanner",
+            min_skill=51,
+            max_skill=51,
+            focus=1,
+            repeatable=False,
+            note="TOOL, craft once - 6x Copper Bar -> 1x Arclight Spanner "
+            "(item 6219). Not Unique/Unique-Equipped - verified "
+            "against wowhead+classicdb tooltip data, not assumed - so "
+            "nothing in the core refuses a second cast; the "
+            "single-point bracket is what stops this module from "
+            "recasting it, not an item flag",
+        ),
+        Recipe(
+            3923,
+            "Rough Copper Bomb",
+            min_skill=52,
+            max_skill=75,
+            focus=1,
+            note="1x Copper Bar, 1x Handful of Copper Bolts, 2x Rough "
+            "Blasting Powder, 1x Linen Cloth -> 1x Rough Copper Bomb "
+            "(item 4360)",
+        ),
+        Recipe(
+            3929,
+            "Coarse Blasting Powder",
+            min_skill=76,
+            max_skill=90,
+            note="1x Coarse Stone -> 1x Coarse Blasting Powder (item 4364)",
+        ),
+        Recipe(
+            3931,
+            "Coarse Dynamite",
+            min_skill=91,
+            max_skill=100,
+            note="3x Coarse Blasting Powder, 1x Linen Cloth -> 1x Coarse "
+            "Dynamite (item 4365). NOT spell 4061 - that id is the "
+            "crafted item's own throw/damage spell, a different "
+            "spell that happens to share the display name",
+        ),
+        Recipe(
+            3973,
+            "Silver Contact",
+            min_skill=101,
+            max_skill=105,
+            note="1x Silver Bar -> Silver Contact (item 4404); per-cast "
+            "yield could not be independently confirmed for the "
+            "3.3.5a era (a later, Cataclysm-only patch changed it) - "
+            "verify against this deployment's own cast if it matters",
+        ),
+        Recipe(
+            3938,
+            "Bronze Tube",
+            min_skill=106,
+            max_skill=124,
+            focus=1,
+            note="2x Bronze Bar (2841), 1x Weak Flux (2880, vendor-bought "
+            "- see craft_supply.REAGENT) -> 1x Bronze Tube (item "
+            "4371); trainer floor is skill 105 (acore_world."
+            "trainer_spell), guide range 105-125, clipped to 106-124 "
+            "so it does not collide with Silver Contact's own "
+            "max_skill=105. Standard Scope, the guide's next "
+            "bracket, is deliberately NOT added here - see the "
+            "module-level comment above",
+        ),
+        Recipe(
+            3945,
+            "Heavy Blasting Powder",
+            min_skill=125,
+            max_skill=144,
+            note="1x Heavy Stone -> 1x Heavy Blasting Powder (item 4377); "
+            "real trainer skill floor is 125, not the guide's stated "
+            "135 - also the reagent Hi-Explosive Bomb needs later. "
+            "max_skill was 150, past its own grey of 145",
+        ),
         # 151-174 deliberately empty - Whirring Bronze Gizmo / Bronze
         # Framework / Explosive Sheep, see the module-level comment above.
-        Recipe(12585, "Solid Blasting Powder", min_skill=175, max_skill=194,
-               note="2x Solid Stone -> 1x Solid Blasting Powder (item 10505)"),
-        Recipe(12590, "Gyromatic Micro-Adjustor", min_skill=195, max_skill=195, focus=1,
-               repeatable=False,
-               note="TOOL, craft once - 4x Steel Bar -> 1x Gyromatic "
-                    "Micro-Adjustor (item 10498). Unique-Equipped (toolkit "
-                    "slot, limit 1) - verified, not assumed - so a duplicate "
-                    "cast is not blocked by the core either, same reasoning "
-                    "as Arclight Spanner above: the single-point bracket is "
-                    "the actual stop"),
-        Recipe(12589, "Mithril Tube", min_skill=196, max_skill=200, focus=1,
-               note="3x Mithril Bar -> 1x Mithril Tube (item 10559)"),
-        Recipe(12591, "Unstable Trigger", min_skill=201, max_skill=215, focus=1,
-               note="1x Mithril Bar, 1x Mageweave Cloth, 1x Solid Blasting "
-                    "Powder -> 1x Unstable Trigger (item 10560); also a Hi-"
-                    "Explosive Bomb reagent"),
-        Recipe(12599, "Mithril Casing", min_skill=216, max_skill=238, focus=1,
-               note="3x Mithril Bar -> 1x Mithril Casing (item 10561); also "
-                    "a Hi-Explosive Bomb reagent"),
-        Recipe(12619, "Hi-Explosive Bomb", min_skill=239, max_skill=250, focus=1,
-               note="2x Mithril Casing, 1x Unstable Trigger, 2x Solid "
-                    "Blasting Powder -> 1x Hi-Explosive Bomb (item 10562); "
-                    "NOT spell 12543 - that id is the 2022 Classic-relaunch "
-                    "tree's id for the same name and carries no 3.3.5a "
-                    "reagent data. All three reagents come from the three "
-                    "brackets directly above, in order, so this recipe is "
-                    "reagent-ready by the time a character reaches it"),
-        Recipe(19788, "Dense Blasting Powder", min_skill=251, max_skill=259,
-               note="2x Dense Stone -> 1x Dense Blasting Powder (item 15992); "
-                    "max_skill was 260, its own grey value"),
-        Recipe(19791, "Thorium Widget", min_skill=261, max_skill=285, focus=1,
-               note="3x Thorium Bar, 1x Runecloth (item 14047) -> 1x Thorium "
-                    "Widget (item 15994)"),
-        Recipe(19795, "Thorium Tube", min_skill=286, max_skill=300, focus=1,
-               note="6x Thorium Bar -> 1x Thorium Tube (item 16000)"),
+        Recipe(
+            12585,
+            "Solid Blasting Powder",
+            min_skill=175,
+            max_skill=194,
+            note="2x Solid Stone -> 1x Solid Blasting Powder (item 10505)",
+        ),
+        Recipe(
+            12590,
+            "Gyromatic Micro-Adjustor",
+            min_skill=195,
+            max_skill=195,
+            focus=1,
+            repeatable=False,
+            note="TOOL, craft once - 4x Steel Bar -> 1x Gyromatic "
+            "Micro-Adjustor (item 10498). Unique-Equipped (toolkit "
+            "slot, limit 1) - verified, not assumed - so a duplicate "
+            "cast is not blocked by the core either, same reasoning "
+            "as Arclight Spanner above: the single-point bracket is "
+            "the actual stop",
+        ),
+        Recipe(
+            12589,
+            "Mithril Tube",
+            min_skill=196,
+            max_skill=200,
+            focus=1,
+            note="3x Mithril Bar -> 1x Mithril Tube (item 10559)",
+        ),
+        Recipe(
+            12591,
+            "Unstable Trigger",
+            min_skill=201,
+            max_skill=215,
+            focus=1,
+            note="1x Mithril Bar, 1x Mageweave Cloth, 1x Solid Blasting "
+            "Powder -> 1x Unstable Trigger (item 10560); also a Hi-"
+            "Explosive Bomb reagent",
+        ),
+        Recipe(
+            12599,
+            "Mithril Casing",
+            min_skill=216,
+            max_skill=238,
+            focus=1,
+            note="3x Mithril Bar -> 1x Mithril Casing (item 10561); also "
+            "a Hi-Explosive Bomb reagent",
+        ),
+        Recipe(
+            12619,
+            "Hi-Explosive Bomb",
+            min_skill=239,
+            max_skill=250,
+            focus=1,
+            note="2x Mithril Casing, 1x Unstable Trigger, 2x Solid "
+            "Blasting Powder -> 1x Hi-Explosive Bomb (item 10562); "
+            "NOT spell 12543 - that id is the 2022 Classic-relaunch "
+            "tree's id for the same name and carries no 3.3.5a "
+            "reagent data. All three reagents come from the three "
+            "brackets directly above, in order, so this recipe is "
+            "reagent-ready by the time a character reaches it",
+        ),
+        Recipe(
+            19788,
+            "Dense Blasting Powder",
+            min_skill=251,
+            max_skill=259,
+            note="2x Dense Stone -> 1x Dense Blasting Powder (item 15992); "
+            "max_skill was 260, its own grey value",
+        ),
+        Recipe(
+            19791,
+            "Thorium Widget",
+            min_skill=261,
+            max_skill=285,
+            focus=1,
+            note="3x Thorium Bar, 1x Runecloth (item 14047) -> 1x Thorium "
+            "Widget (item 15994)",
+        ),
+        Recipe(
+            19795,
+            "Thorium Tube",
+            min_skill=286,
+            max_skill=300,
+            focus=1,
+            note="6x Thorium Bar -> 1x Thorium Tube (item 16000)",
+        ),
     ),
     # MINING (Grug 8/75, Grog 1/75 as of 2026-09-13) - the smelt half of a
     # GATHERING trade, and the only entry in this table that needs a spell
@@ -1203,39 +1339,70 @@ RECIPES: dict = {
     # None above 69 rather than naming a spell the character does not hold -
     # exactly as it does in Tailoring's 146-174 thread gap.
     SKILL_IDS["mining"]: (
-        Recipe(2657, "Smelt Copper", min_skill=1, max_skill=69, focus=3,
-               note="1x Copper Ore (2770) -> 1x Copper Bar (2840); "
-                    "RequiresSpellFocus = 3 (Forge), which bridge._forge_once "
-                    "walks the leader to, and EquippedItemClass = -1 (no tool, "
-                    "which is why this ships while infra#3617's Anvil-gated "
-                    "Blacksmithing recipes do not). AcquireMethod = 1: granted "
-                    "with Apprentice Mining, so no trainer visit is needed and "
-                    "no trainer_spell row exists for it"),
+        Recipe(
+            2657,
+            "Smelt Copper",
+            min_skill=1,
+            max_skill=69,
+            focus=3,
+            note="1x Copper Ore (2770) -> 1x Copper Bar (2840); "
+            "RequiresSpellFocus = 3 (Forge), which bridge._forge_once "
+            "walks the leader to, and EquippedItemClass = -1 (no tool, "
+            "which is why this ships while infra#3617's Anvil-gated "
+            "Blacksmithing recipes do not). AcquireMethod = 1: granted "
+            "with Apprentice Mining, so no trainer visit is needed and "
+            "no trainer_spell row exists for it",
+        ),
     ),
     SKILL_IDS["alchemy"]: (
-        Recipe(2330, "Minor Healing Potion", min_skill=1, max_skill=79,
-               note="1x Peacebloom (2447), 1x Silverleaf (765), "
-                    "1x Empty Vial (3371) -> item 118, no focus needed; grey "
-                    "at 95, so 79 is conservative. max_skill was 59, which "
-                    "handed Ugga to a recipe she cannot learn until 80"),
-        Recipe(2337, "Lesser Healing Potion", min_skill=80, max_skill=109,
-               note="1x Minor Healing Potion (118), 1x Briarthorn (2450) "
-                    "-> item 858 - THE POTION-AS-REAGENT BRACKET, see the "
-                    "table's own header comment; no focus needed. min_skill "
-                    "was 60 against a MinSkillLineRank of 80 - a twenty-point "
-                    "dead zone, see the COLOUR BANDS block above"),
-        Recipe(3447, "Healing Potion", min_skill=110, max_skill=139,
-               note="1x Bruiseweed (2453), 1x Briarthorn (2450), "
-                    "1x Leaded Vial (3372) -> item 929, no focus needed"),
-        Recipe(3173, "Lesser Mana Potion", min_skill=140, max_skill=154,
-               note="1x Mageroyal (785), 1x Stranglekelp (3820), "
-                    "1x Empty Vial (3371) -> item 3385, no focus needed"),
-        Recipe(7181, "Greater Healing Potion", min_skill=155, max_skill=174,
-               note="1x Liferoot (3357), 1x Kingsblood (3356), "
-                    "1x Leaded Vial (3372) -> item 1710, no focus needed. "
-                    "max_skill was 184; 175-184 went to Elixir of Fortitude "
-                    "directly below, which is ORANGE there where this is "
-                    "YELLOW - see the RAID CONSUMABLES block above"),
+        Recipe(
+            2330,
+            "Minor Healing Potion",
+            min_skill=1,
+            max_skill=79,
+            note="1x Peacebloom (2447), 1x Silverleaf (765), "
+            "1x Empty Vial (3371) -> item 118, no focus needed; grey "
+            "at 95, so 79 is conservative. max_skill was 59, which "
+            "handed Ugga to a recipe she cannot learn until 80",
+        ),
+        Recipe(
+            2337,
+            "Lesser Healing Potion",
+            min_skill=80,
+            max_skill=109,
+            note="1x Minor Healing Potion (118), 1x Briarthorn (2450) "
+            "-> item 858 - THE POTION-AS-REAGENT BRACKET, see the "
+            "table's own header comment; no focus needed. min_skill "
+            "was 60 against a MinSkillLineRank of 80 - a twenty-point "
+            "dead zone, see the COLOUR BANDS block above",
+        ),
+        Recipe(
+            3447,
+            "Healing Potion",
+            min_skill=110,
+            max_skill=139,
+            note="1x Bruiseweed (2453), 1x Briarthorn (2450), "
+            "1x Leaded Vial (3372) -> item 929, no focus needed",
+        ),
+        Recipe(
+            3173,
+            "Lesser Mana Potion",
+            min_skill=140,
+            max_skill=154,
+            note="1x Mageroyal (785), 1x Stranglekelp (3820), "
+            "1x Empty Vial (3371) -> item 3385, no focus needed",
+        ),
+        Recipe(
+            7181,
+            "Greater Healing Potion",
+            min_skill=155,
+            max_skill=174,
+            note="1x Liferoot (3357), 1x Kingsblood (3356), "
+            "1x Leaded Vial (3372) -> item 1710, no focus needed. "
+            "max_skill was 184; 175-184 went to Elixir of Fortitude "
+            "directly below, which is ORANGE there where this is "
+            "YELLOW - see the RAID CONSUMABLES block above",
+        ),
         # THE FIRST RAID CONSUMABLE THIS FAMILY WILL EVER REACH, and the only
         # one on the whole realm that a TRAINER teaches below Alchemy 200.
         # Every other raid-tier elixir, potion, flask, oil and stone is either
@@ -1247,74 +1414,134 @@ RECIPES: dict = {
         # why this bracket costs nothing to supply: `craft_rhythm.GATHERED`
         # already gathers Wild Steelbloom and Goldthorn for 11450 and
         # `craft_supply.REAGENT` already buys the Leaded Vial for it.
-        Recipe(3450, "Elixir of Fortitude", min_skill=175, max_skill=184,
-               note="1x Wild Steelbloom (3355), 1x Goldthorn (3821), "
-                    "1x Leaded Vial (3372) -> item 3825, no focus needed. "
-                    "+120 health for an hour, which all forty drink. "
-                    "trainer_spell rank 175 is the realm's own floor - "
-                    "SkillLineAbility.MinSkillLineRank reads 1 for this and "
-                    "cannot be used for it, see raidcraft.py's docstring; "
-                    "yellow 195, grey 235, so 175-184 is entirely orange"),
-        Recipe(11449, "Elixir of Agility", min_skill=185, max_skill=209,
-               note="1x Stranglekelp (3820), 1x Goldthorn (3821), "
-                    "1x Leaded Vial (3372) -> item 8949, no focus needed"),
-        Recipe(11450, "Elixir of Greater Defense", min_skill=210, max_skill=214,
-               note="1x Wild Steelbloom (3355), 1x Goldthorn (3821), "
-                    "1x Leaded Vial (3372) -> item 8951, no focus needed"),
-        Recipe(11457, "Superior Healing Potion", min_skill=215, max_skill=229,
-               note="1x Sungrass (8838), 1x Khadgar's Whisker (3358), "
-                    "1x Crystal Vial (8925) -> item 3928, no focus needed"),
-        Recipe(11460, "Elixir of Detect Undead", min_skill=230, max_skill=239,
-               note="1x Arthas' Tears (8836), 1x Crystal Vial (8925) "
-                    "-> item 9154 - only two reagent types, no focus needed. "
-                    "max_skill was 264; 240-264 went to Elixir of Greater "
-                    "Agility directly below, which is ORANGE across all "
-                    "twenty-five of them where this is yellow from 245 - see "
-                    "the RAID CONSUMABLES block above"),
+        Recipe(
+            3450,
+            "Elixir of Fortitude",
+            min_skill=175,
+            max_skill=184,
+            note="1x Wild Steelbloom (3355), 1x Goldthorn (3821), "
+            "1x Leaded Vial (3372) -> item 3825, no focus needed. "
+            "+120 health for an hour, which all forty drink. "
+            "trainer_spell rank 175 is the realm's own floor - "
+            "SkillLineAbility.MinSkillLineRank reads 1 for this and "
+            "cannot be used for it, see raidcraft.py's docstring; "
+            "yellow 195, grey 235, so 175-184 is entirely orange",
+        ),
+        Recipe(
+            11449,
+            "Elixir of Agility",
+            min_skill=185,
+            max_skill=209,
+            note="1x Stranglekelp (3820), 1x Goldthorn (3821), "
+            "1x Leaded Vial (3372) -> item 8949, no focus needed",
+        ),
+        Recipe(
+            11450,
+            "Elixir of Greater Defense",
+            min_skill=210,
+            max_skill=214,
+            note="1x Wild Steelbloom (3355), 1x Goldthorn (3821), "
+            "1x Leaded Vial (3372) -> item 8951, no focus needed",
+        ),
+        Recipe(
+            11457,
+            "Superior Healing Potion",
+            min_skill=215,
+            max_skill=229,
+            note="1x Sungrass (8838), 1x Khadgar's Whisker (3358), "
+            "1x Crystal Vial (8925) -> item 3928, no focus needed",
+        ),
+        Recipe(
+            11460,
+            "Elixir of Detect Undead",
+            min_skill=230,
+            max_skill=239,
+            note="1x Arthas' Tears (8836), 1x Crystal Vial (8925) "
+            "-> item 9154 - only two reagent types, no focus needed. "
+            "max_skill was 264; 240-264 went to Elixir of Greater "
+            "Agility directly below, which is ORANGE across all "
+            "twenty-five of them where this is yellow from 245 - see "
+            "the RAID CONSUMABLES block above",
+        ),
         # A REAL MELEE ELIXIR INSTEAD OF TWENTY-FIVE POINTS OF DETECTING
         # UNDEAD. trainer_spell rank 240, yellow 255, grey 295, no focus. Its
         # Sungrass and Crystal Vial are already gathered and bought for
         # Superior Healing Potion (11457) and Superior Mana Potion (17553)
         # respectively, and its Goldthorn for Elixir of Agility (11449), so
         # like Elixir of Fortitude above it costs nothing new to supply.
-        Recipe(11467, "Elixir of Greater Agility", min_skill=240, max_skill=264,
-               note="1x Sungrass (8838), 1x Goldthorn (3821), "
-                    "1x Crystal Vial (8925) -> item 9187, no focus needed. "
-                    "+25 agility for an hour, for every melee and hunter. "
-                    "trainer_spell rank 240 is the realm's own floor; "
-                    "SkillLineAbility.MinSkillLineRank reads 1 and cannot be "
-                    "used for it"),
-        Recipe(17553, "Superior Mana Potion", min_skill=265, max_skill=274,
-               note="2x Sungrass (8838), 2x Blindweed (8839), "
-                    "1x Crystal Vial (8925) -> item 13443, no focus needed. "
-                    "max_skill was 284; 275-284 went to Major Healing Potion "
-                    "below, which the realm teaches at exactly 275 and which "
-                    "is orange to 290 where this is yellow from 275"),
-        Recipe(17556, "Major Healing Potion", min_skill=275, max_skill=300,
-               note="2x Golden Sansam (13464), 1x Mountain Silversage (13465), "
-                    "1x Crystal Vial (8925) -> item 13446, no focus needed. "
-                    "min_skill was 285, ten points later than the realm's own "
-                    "trainer_spell rank of 275 - the top of this ladder was "
-                    "already a raid consumable and was simply starting late"),
+        Recipe(
+            11467,
+            "Elixir of Greater Agility",
+            min_skill=240,
+            max_skill=264,
+            note="1x Sungrass (8838), 1x Goldthorn (3821), "
+            "1x Crystal Vial (8925) -> item 9187, no focus needed. "
+            "+25 agility for an hour, for every melee and hunter. "
+            "trainer_spell rank 240 is the realm's own floor; "
+            "SkillLineAbility.MinSkillLineRank reads 1 and cannot be "
+            "used for it",
+        ),
+        Recipe(
+            17553,
+            "Superior Mana Potion",
+            min_skill=265,
+            max_skill=274,
+            note="2x Sungrass (8838), 2x Blindweed (8839), "
+            "1x Crystal Vial (8925) -> item 13443, no focus needed. "
+            "max_skill was 284; 275-284 went to Major Healing Potion "
+            "below, which the realm teaches at exactly 275 and which "
+            "is orange to 290 where this is yellow from 275",
+        ),
+        Recipe(
+            17556,
+            "Major Healing Potion",
+            min_skill=275,
+            max_skill=300,
+            note="2x Golden Sansam (13464), 1x Mountain Silversage (13465), "
+            "1x Crystal Vial (8925) -> item 13446, no focus needed. "
+            "min_skill was 285, ten points later than the realm's own "
+            "trainer_spell rank of 275 - the top of this ladder was "
+            "already a raid consumable and was simply starting late",
+        ),
     ),
     SKILL_IDS["blacksmithing"]: (
-        Recipe(2660, "Rough Sharpening Stone", min_skill=1, max_skill=29,
-               note="1x Rough Stone -> 1x Rough Sharpening Stone, no focus needed"),
+        Recipe(
+            2660,
+            "Rough Sharpening Stone",
+            min_skill=1,
+            max_skill=29,
+            note="1x Rough Stone -> 1x Rough Sharpening Stone, no focus needed",
+        ),
         # 30-74, not the 30-64 an earlier pass wrote, and the ten points it
         # gains are the ten Coarse Sharpening Stone could never have covered.
         # TrivialSkillLineRankHigh is 85, so this still rolls a skill-up the
         # whole way; the guide hands off at 65 only because a human can visit a
         # trainer between casts, which this family cannot.
-        Recipe(3320, "Rough Grinding Stone", min_skill=30, max_skill=74,
-               note="2x Rough Stone -> 1x Rough Grinding Stone, no focus "
-                    "needed; grey at 85, so 74 is conservative and 64 was "
-                    "simply the guide's hand-off to a recipe this realm does "
-                    "not teach until 75"),
-        Recipe(3326, "Coarse Grinding Stone", min_skill=75, max_skill=90,
-               note="2x Coarse Stone -> 1x Coarse Grinding Stone, no focus "
-                    "needed; MinSkillLineRank 1, grey 100"),
-        Recipe(3337, "Heavy Grinding Stone", min_skill=125, max_skill=140,
-               note="3x Heavy Stone -> 1x Heavy Grinding Stone, no focus needed"),
+        Recipe(
+            3320,
+            "Rough Grinding Stone",
+            min_skill=30,
+            max_skill=74,
+            note="2x Rough Stone -> 1x Rough Grinding Stone, no focus "
+            "needed; grey at 85, so 74 is conservative and 64 was "
+            "simply the guide's hand-off to a recipe this realm does "
+            "not teach until 75",
+        ),
+        Recipe(
+            3326,
+            "Coarse Grinding Stone",
+            min_skill=75,
+            max_skill=90,
+            note="2x Coarse Stone -> 1x Coarse Grinding Stone, no focus "
+            "needed; MinSkillLineRank 1, grey 100",
+        ),
+        Recipe(
+            3337,
+            "Heavy Grinding Stone",
+            min_skill=125,
+            max_skill=140,
+            note="3x Heavy Stone -> 1x Heavy Grinding Stone, no focus needed",
+        ),
         # SOLID SHARPENING STONE REPLACED SOLID GRINDING STONE HERE, and the
         # two are one word apart in every leveling guide. A SHARPENING stone
         # goes on a weapon for +6 damage for half an hour and is what a raider
@@ -1327,14 +1554,24 @@ RECIPES: dict = {
         # uses, with no skill cost at any value in the bracket. See the RAID
         # CONSUMABLES block above. max_skill stays 209 for the reason 9920's
         # own note gave: 210 is the grey value.
-        Recipe(9918, "Solid Sharpening Stone", min_skill=200, max_skill=209,
-               note="1x Solid Stone -> 1x Solid Sharpening Stone (item 7964), "
-                    "no focus needed; max_skill is 209 because 210 is its grey "
-                    "value. NOT 9920 Solid Grinding Stone, which held this "
-                    "bracket and ate 4x Solid Stone for an armour reagent"),
-        Recipe(16641, "Dense Sharpening Stone", min_skill=250, max_skill=259,
-               note="1x Dense Stone -> 1x Dense Sharpening Stone, no focus "
-                    "needed; max_skill was 260, its own grey value"),
+        Recipe(
+            9918,
+            "Solid Sharpening Stone",
+            min_skill=200,
+            max_skill=209,
+            note="1x Solid Stone -> 1x Solid Sharpening Stone (item 7964), "
+            "no focus needed; max_skill is 209 because 210 is its grey "
+            "value. NOT 9920 Solid Grinding Stone, which held this "
+            "bracket and ate 4x Solid Stone for an armour reagent",
+        ),
+        Recipe(
+            16641,
+            "Dense Sharpening Stone",
+            min_skill=250,
+            max_skill=259,
+            note="1x Dense Stone -> 1x Dense Sharpening Stone, no focus "
+            "needed; max_skill was 260, its own grey value",
+        ),
     ),
     # LEATHERWORKING'S THREAD/DYE BRACKETS (infra#3611) - the fifteen
     # recipes the issue named, every one now that craft_supply.REAGENTS
@@ -1378,15 +1615,25 @@ RECIPES: dict = {
         # Cross-checked: wowhead tooltip API (wotlk) + classicdb.ch spell
         # search naming the same id for the same name. Every leatherworker
         # knows this from skill 1 - it is not trainer-gated separately.
-        Recipe(2881, "Light Leather", min_skill=1, max_skill=19,
-               note="3x Ruined Leather Scraps -> 1x Light Leather, recycle, "
-                    "no focus needed"),
+        Recipe(
+            2881,
+            "Light Leather",
+            min_skill=1,
+            max_skill=19,
+            note="3x Ruined Leather Scraps -> 1x Light Leather, recycle, "
+            "no focus needed",
+        ),
         # spell 2152, creates item 2304 from 1x Light Leather (2318).
         # Cross-checked: wowhead tooltip API (wotlk) + classicdb.ch spell
         # page, both agreeing on a single Light Leather reagent and a
         # SPELL_EFFECT_CREATE_ITEM effect.
-        Recipe(2152, "Light Armor Kit", min_skill=20, max_skill=45,
-               note="1x Light Leather -> 1x Light Armor Kit, no focus needed"),
+        Recipe(
+            2152,
+            "Light Armor Kit",
+            min_skill=20,
+            max_skill=45,
+            note="1x Light Leather -> 1x Light Armor Kit, no focus needed",
+        ),
         # 46-55 IS FILLED NOW, AND THE EVIDENCE THAT EMPTIED IT WAS READ
         # BACKWARDS (this pass, part of infra#3731).
         #
@@ -1423,71 +1670,150 @@ RECIPES: dict = {
         # Leather Gloves is ORANGE from 56 (yellow 85) and therefore strictly
         # the better cast there - the hand-off the guide's route already had
         # right.
-        Recipe(9058, "Handstitched Leather Cloak", min_skill=46, max_skill=55,
-               note="2x Light Leather (2318), 1x Coarse Thread (2320, "
-                    "vendor-bought) -> 1x Handstitched Leather Cloak (item "
-                    "7276), no focus needed. AcquireMethod 1 / ClassMask 0, "
-                    "which is why no trainer_spell row names it - see the "
-                    "comment directly above for the read that got this wrong"),
-        Recipe(3756, "Embossed Leather Gloves", min_skill=56, max_skill=100,
-               note="3x Light Leather, 2x Coarse Thread (2320, "
-                    "vendor-bought) -> item 4239, no focus needed"),
-        Recipe(3763, "Fine Leather Belt", min_skill=101, max_skill=125,
-               note="6x Light Leather, 2x Coarse Thread (2320, "
-                    "vendor-bought) -> item 4246, no focus needed"),
-        Recipe(2167, "Dark Leather Boots", min_skill=126, max_skill=137,
-               note="4x Medium Leather, 2x Fine Thread (2321, vendor-bought "
-                    "- see craft_supply.REAGENTS), 1x Gray Dye (4340, "
-                    "vendor-bought) -> item 2315, no focus needed"),
-        Recipe(7135, "Dark Leather Pants", min_skill=138, max_skill=149,
-               note="12x Medium Leather, 1x Gray Dye (4340, vendor-bought), "
-                    "1x Fine Thread (2321, vendor-bought) -> item 5961, no "
-                    "focus needed"),
+        Recipe(
+            9058,
+            "Handstitched Leather Cloak",
+            min_skill=46,
+            max_skill=55,
+            note="2x Light Leather (2318), 1x Coarse Thread (2320, "
+            "vendor-bought) -> 1x Handstitched Leather Cloak (item "
+            "7276), no focus needed. AcquireMethod 1 / ClassMask 0, "
+            "which is why no trainer_spell row names it - see the "
+            "comment directly above for the read that got this wrong",
+        ),
+        Recipe(
+            3756,
+            "Embossed Leather Gloves",
+            min_skill=56,
+            max_skill=100,
+            note="3x Light Leather, 2x Coarse Thread (2320, "
+            "vendor-bought) -> item 4239, no focus needed",
+        ),
+        Recipe(
+            3763,
+            "Fine Leather Belt",
+            min_skill=101,
+            max_skill=125,
+            note="6x Light Leather, 2x Coarse Thread (2320, "
+            "vendor-bought) -> item 4246, no focus needed",
+        ),
+        Recipe(
+            2167,
+            "Dark Leather Boots",
+            min_skill=126,
+            max_skill=137,
+            note="4x Medium Leather, 2x Fine Thread (2321, vendor-bought "
+            "- see craft_supply.REAGENTS), 1x Gray Dye (4340, "
+            "vendor-bought) -> item 2315, no focus needed",
+        ),
+        Recipe(
+            7135,
+            "Dark Leather Pants",
+            min_skill=138,
+            max_skill=149,
+            note="12x Medium Leather, 1x Gray Dye (4340, vendor-bought), "
+            "1x Fine Thread (2321, vendor-bought) -> item 5961, no "
+            "focus needed",
+        ),
         # spell 20649, creates item 4234 from 5x Medium Leather (2319).
         # Cross-checked: wowhead tooltip API (wotlk) + classicdb.ch spell
         # page, both agreeing on a single Medium Leather x5 reagent.
-        Recipe(20649, "Heavy Leather", min_skill=150, max_skill=155,
-               note="5x Medium Leather -> 1x Heavy Leather, recycle, "
-                    "no focus needed"),
-        Recipe(3818, "Cured Heavy Hide", min_skill=156, max_skill=165,
-               note="1x Heavy Hide, 3x Salt (4289, vendor-bought - see "
-                    "craft_supply.REAGENTS) -> item 4236, no focus needed"),
-        Recipe(3780, "Heavy Armor Kit", min_skill=166, max_skill=180,
-               note="5x Heavy Leather, 1x Fine Thread (2321, vendor-bought) "
-                    "-> item 4265, no focus needed"),
-        Recipe(7151, "Barbaric Shoulders", min_skill=181, max_skill=190,
-               note="8x Heavy Leather, 1x Cured Heavy Hide (own-crafted), "
-                    "2x Fine Thread (2321, vendor-bought) -> item 5964, no "
-                    "focus needed"),
-        Recipe(7156, "Guardian Gloves", min_skill=191, max_skill=200,
-               note="4x Heavy Leather, 1x Cured Heavy Hide (own-crafted), "
-                    "1x Silken Thread (4291, vendor-bought) -> item 5966, "
-                    "no focus needed"),
-        Recipe(10487, "Thick Armor Kit", min_skill=201, max_skill=205,
-               note="5x Thick Leather, 1x Silken Thread (4291, "
-                    "vendor-bought) -> item 8173, no focus needed"),
-        Recipe(10507, "Nightscape Headband", min_skill=206, max_skill=235,
-               note="5x Thick Leather, 2x Silken Thread (4291, "
-                    "vendor-bought) -> item 8176, no focus needed"),
-        Recipe(10548, "Nightscape Pants", min_skill=236, max_skill=250,
-               note="14x Thick Leather, 4x Silken Thread (4291, "
-                    "vendor-bought) -> item 8193, no focus needed"),
-        Recipe(10558, "Nightscape Boots", min_skill=251, max_skill=260,
-               note="16x Thick Leather, 2x Heavy Silken Thread (8343, "
-                    "vendor-bought) -> item 8197, no focus needed; "
-                    "trainer-verified learn floor is 235, see this table's "
-                    "header comment for why 251 is used instead"),
-        Recipe(19049, "Wicked Leather Gauntlets", min_skill=261, max_skill=290,
-               note="8x Rugged Leather, 1x Black Dye (2325, vendor-bought), "
-                    "1x Rune Thread (14341, vendor-bought - NOT item 24288, "
-                    "a same-named item with zero npc_vendor rows) -> item "
-                    "15083, no focus needed"),
-        Recipe(19082, "Runic Leather Headband", min_skill=291, max_skill=300,
-               note="14x Rugged Leather, 10x Runecloth (own Tailoring "
-                    "output), 1x Rune Thread (14341, vendor-bought) -> item "
-                    "15094, no focus needed; trainer-verified learn floor "
-                    "is 270, see this table's header comment for why 291 "
-                    "is used instead"),
+        Recipe(
+            20649,
+            "Heavy Leather",
+            min_skill=150,
+            max_skill=155,
+            note="5x Medium Leather -> 1x Heavy Leather, recycle, no focus needed",
+        ),
+        Recipe(
+            3818,
+            "Cured Heavy Hide",
+            min_skill=156,
+            max_skill=165,
+            note="1x Heavy Hide, 3x Salt (4289, vendor-bought - see "
+            "craft_supply.REAGENTS) -> item 4236, no focus needed",
+        ),
+        Recipe(
+            3780,
+            "Heavy Armor Kit",
+            min_skill=166,
+            max_skill=180,
+            note="5x Heavy Leather, 1x Fine Thread (2321, vendor-bought) "
+            "-> item 4265, no focus needed",
+        ),
+        Recipe(
+            7151,
+            "Barbaric Shoulders",
+            min_skill=181,
+            max_skill=190,
+            note="8x Heavy Leather, 1x Cured Heavy Hide (own-crafted), "
+            "2x Fine Thread (2321, vendor-bought) -> item 5964, no "
+            "focus needed",
+        ),
+        Recipe(
+            7156,
+            "Guardian Gloves",
+            min_skill=191,
+            max_skill=200,
+            note="4x Heavy Leather, 1x Cured Heavy Hide (own-crafted), "
+            "1x Silken Thread (4291, vendor-bought) -> item 5966, "
+            "no focus needed",
+        ),
+        Recipe(
+            10487,
+            "Thick Armor Kit",
+            min_skill=201,
+            max_skill=205,
+            note="5x Thick Leather, 1x Silken Thread (4291, "
+            "vendor-bought) -> item 8173, no focus needed",
+        ),
+        Recipe(
+            10507,
+            "Nightscape Headband",
+            min_skill=206,
+            max_skill=235,
+            note="5x Thick Leather, 2x Silken Thread (4291, "
+            "vendor-bought) -> item 8176, no focus needed",
+        ),
+        Recipe(
+            10548,
+            "Nightscape Pants",
+            min_skill=236,
+            max_skill=250,
+            note="14x Thick Leather, 4x Silken Thread (4291, "
+            "vendor-bought) -> item 8193, no focus needed",
+        ),
+        Recipe(
+            10558,
+            "Nightscape Boots",
+            min_skill=251,
+            max_skill=260,
+            note="16x Thick Leather, 2x Heavy Silken Thread (8343, "
+            "vendor-bought) -> item 8197, no focus needed; "
+            "trainer-verified learn floor is 235, see this table's "
+            "header comment for why 251 is used instead",
+        ),
+        Recipe(
+            19049,
+            "Wicked Leather Gauntlets",
+            min_skill=261,
+            max_skill=290,
+            note="8x Rugged Leather, 1x Black Dye (2325, vendor-bought), "
+            "1x Rune Thread (14341, vendor-bought - NOT item 24288, "
+            "a same-named item with zero npc_vendor rows) -> item "
+            "15083, no focus needed",
+        ),
+        Recipe(
+            19082,
+            "Runic Leather Headband",
+            min_skill=291,
+            max_skill=300,
+            note="14x Rugged Leather, 10x Runecloth (own Tailoring "
+            "output), 1x Rune Thread (14341, vendor-bought) -> item "
+            "15094, no focus needed; trainer-verified learn floor "
+            "is 270, see this table's header comment for why 291 "
+            "is used instead",
+        ),
     ),
 }
 

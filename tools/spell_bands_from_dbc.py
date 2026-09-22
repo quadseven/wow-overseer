@@ -58,6 +58,7 @@ conclude they get it free at 40. `_row_for` below keeps only rows this family
 can actually match, and a spell whose only rows are Death-Knight-shaped is
 reported rather than quietly given somebody else's numbers.
 """
+
 from __future__ import annotations
 
 import pathlib
@@ -93,15 +94,15 @@ def _field(blob, body, rowsize, row, index):
 
 
 def _text(blob, strings, offset):
-    return blob[strings + offset:blob.index(b"\0", strings + offset)].decode(
-        "utf-8", "replace")
+    return blob[strings + offset : blob.index(b"\0", strings + offset)].decode(
+        "utf-8", "replace"
+    )
 
 
 def _row_for(rows, skill_id):
     """The ability row THIS FAMILY matches, or None. See the module docstring."""
     same_skill = [r for r in rows if r["skill"] == skill_id] or rows
-    usable = [r for r in same_skill
-              if r["cm"] == 0 or (r["cm"] & FAMILY_CLASSES)]
+    usable = [r for r in same_skill if r["cm"] == 0 or (r["cm"] & FAMILY_CLASSES)]
     return usable[0] if usable else None
 
 
@@ -114,17 +115,26 @@ def main(argv):
     anchor = index[2963]
     assert _field(spell, body, rowsize, anchor, F_REAGENT) == 2589
     assert _field(spell, body, rowsize, anchor, F_REAGENT_COUNT) == 2
-    assert _text(spell, strings, _field(
-        spell, body, rowsize, anchor, F_NAME)) == "Bolt of Linen Cloth"
+    assert (
+        _text(spell, strings, _field(spell, body, rowsize, anchor, F_NAME))
+        == "Bolt of Linen Cloth"
+    )
     assert _field(spell, body, rowsize, index[2657], F_REQUIRES_SPELL_FOCUS) == 3
 
     abil, arows, _af, arowsize, abody, _as = _load(where / "SkillLineAbility.dbc")
     by_spell: dict = {}
     for r in range(arows):
         get = lambda i: _field(abil, abody, arowsize, r, i)  # noqa: E731
-        by_spell.setdefault(get(A_SPELL), []).append(dict(
-            skill=get(A_SKILL), cm=get(A_CLASSMASK), req=get(A_REQ),
-            acquire=get(A_ACQUIRE), grey=get(A_GREY), yellow=get(A_YELLOW)))
+        by_spell.setdefault(get(A_SPELL), []).append(
+            dict(
+                skill=get(A_SKILL),
+                cm=get(A_CLASSMASK),
+                req=get(A_REQ),
+                acquire=get(A_ACQUIRE),
+                grey=get(A_GREY),
+                yellow=get(A_YELLOW),
+            )
+        )
 
     # A THIRD ANCHOR, for the ability layout specifically - the Spell.dbc ones
     # above prove nothing about this file. Linen Bandage is req 1 / yellow 30 /
@@ -134,8 +144,8 @@ def main(argv):
     assert len(by_spell[3276]) == 2, by_spell[3276]
 
     sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
-    import craft      # noqa: E402
-    import goals      # noqa: E402
+    import craft  # noqa: E402
+    import goals  # noqa: E402
 
     by_id = {v: k for k, v in goals.SKILL_IDS.items()}
     print("MEASURED_BANDS = {")
@@ -146,12 +156,15 @@ def main(argv):
         for recipe in recipes:
             row = _row_for(by_spell.get(recipe.spell_id, []), skill_id)
             if row is None:
-                print("    # !! spell %d has no ability row this family matches"
-                      % recipe.spell_id)
+                print(
+                    "    # !! spell %d has no ability row this family matches"
+                    % recipe.spell_id
+                )
                 continue
-            print("    %d: (%d, %d, %d),   # %s" % (
-                recipe.spell_id, row["req"], row["yellow"], row["grey"],
-                recipe.name))
+            print(
+                "    %d: (%d, %d, %d),   # %s"
+                % (recipe.spell_id, row["req"], row["yellow"], row["grey"], recipe.name)
+            )
     print("}")
     return 0
 

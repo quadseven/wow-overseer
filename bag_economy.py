@@ -74,6 +74,7 @@ and guessing it would be exactly the kind of invented number the rest of this
 docstring exists to avoid. The plan is expressed in crafts and in cloth per
 craft, both of which are exact.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -90,6 +91,7 @@ TAILORING = 197
 @dataclass(frozen=True)
 class Reagent:
     """One line of a recipe, with the realm's item entry for it."""
+
     item: str
     entry: int
     count: int
@@ -108,6 +110,7 @@ class Bolt:
     repeatable thing in the trade, and its grey says exactly how far it can
     carry a tailor before something else has to.
     """
+
     name: str
     entry: int
     cloth: str
@@ -128,6 +131,7 @@ class Rung:
     pattern being a world drop. A planner that treated the two alike would
     queue an errand that cannot be finished.
     """
+
     bag: str
     entry: int
     slots: int
@@ -142,6 +146,7 @@ class Rung:
 @dataclass(frozen=True)
 class Tier:
     """One tailoring training step: what it needs and what it unlocks."""
+
     name: str
     spell: int
     rank: int
@@ -159,6 +164,7 @@ class Band:
     humanoids, so "who is likely to get this" is a question about who fights
     things in this band.
     """
+
     cloth: str
     entry: int
     lo: int
@@ -184,18 +190,14 @@ TIERS = (
 # That is also why it is the only thing a skill-1 tailor can make, and its grey
 # of 50 lands exactly on the rank Journeyman is gated at.
 BOLTS = {
-    2996: Bolt("Bolt of Linen Cloth", 2996, "Linen Cloth", 2589, 2, 2963, 1,
-               50),
-    2997: Bolt("Bolt of Woolen Cloth", 2997, "Wool Cloth", 2592, 3, 2964, 75,
-               105),
-    4305: Bolt("Bolt of Silk Cloth", 4305, "Silk Cloth", 4306, 4, 3839, 125,
-               145),
-    4339: Bolt("Bolt of Mageweave", 4339, "Mageweave Cloth", 4338, 4, 3865,
-               175, 185),
-    14048: Bolt("Bolt of Runecloth", 14048, "Runecloth", 14047, 4, 18401, 250,
-                260),
-    21840: Bolt("Bolt of Netherweave", 21840, "Netherweave Cloth", 21877, 5,
-                26745, 300, 325),
+    2996: Bolt("Bolt of Linen Cloth", 2996, "Linen Cloth", 2589, 2, 2963, 1, 50),
+    2997: Bolt("Bolt of Woolen Cloth", 2997, "Wool Cloth", 2592, 3, 2964, 75, 105),
+    4305: Bolt("Bolt of Silk Cloth", 4305, "Silk Cloth", 4306, 4, 3839, 125, 145),
+    4339: Bolt("Bolt of Mageweave", 4339, "Mageweave Cloth", 4338, 4, 3865, 175, 185),
+    14048: Bolt("Bolt of Runecloth", 14048, "Runecloth", 14047, 4, 18401, 250, 260),
+    21840: Bolt(
+        "Bolt of Netherweave", 21840, "Netherweave Cloth", 21877, 5, 26745, 300, 325
+    ),
 }
 
 # Vendors stock threads and dyes in bulk on this realm (87 to 186 vendors
@@ -211,38 +213,145 @@ def _r(item, entry, count=1):
 
 # Ordered by the rank that unlocks it, which is the order Og meets them in.
 LADDER = (
-    Rung("Linen Bag", 4238, 6, 45, 3755, "trainer", cost=100, reagents=(
-        _r("Bolt of Linen Cloth", 2996, 3), _r("Coarse Thread", 2320, 3))),
-    Rung("Red Linen Bag", 5762, 6, 70, 6686, "pattern", pattern=5771,
-         reagents=(_r("Bolt of Linen Cloth", 2996, 4), _r("Fine Thread", 2321),
-                   _r("Red Dye", 2604))),
-    Rung("Woolen Bag", 4240, 8, 80, 3757, "trainer", cost=200, reagents=(
-        _r("Bolt of Woolen Cloth", 2997, 3), _r("Fine Thread", 2321))),
-    Rung("Green Woolen Bag", 4241, 8, 95, 3758, "pattern", pattern=4292,
-         reagents=(_r("Bolt of Woolen Cloth", 2997, 4), _r("Green Dye", 2605),
-                   _r("Fine Thread", 2321))),
-    Rung("Red Woolen Bag", 5763, 8, 115, 6688, "pattern", pattern=5772,
-         reagents=(_r("Bolt of Woolen Cloth", 2997, 4), _r("Red Dye", 2604),
-                   _r("Fine Thread", 2321))),
-    Rung("Small Silk Pack", 4245, 10, 150, 3813, "trainer", cost=800,
-         reagents=(_r("Bolt of Silk Cloth", 4305, 3),
-                   _r("Heavy Leather", 4234, 2), _r("Fine Thread", 2321, 3))),
-    Rung("Green Silk Pack", 5764, 10, 175, 6693, "pattern", pattern=5774,
-         reagents=(_r("Bolt of Silk Cloth", 4305, 4),
-                   _r("Heavy Leather", 4234, 3), _r("Fine Thread", 2321, 3),
-                   _r("Green Dye", 2605))),
-    Rung("Black Silk Pack", 5765, 10, 185, 6695, "pattern", pattern=5775,
-         reagents=(_r("Bolt of Silk Cloth", 4305, 5), _r("Black Dye", 2325),
-                   _r("Fine Thread", 2321, 4))),
-    Rung("Mageweave Bag", 10050, 12, 225, 12065, "trainer", cost=5000,
-         reagents=(_r("Bolt of Mageweave", 4339, 4),
-                   _r("Silken Thread", 4291, 2))),
-    Rung("Runecloth Bag", 14046, 14, 260, 18405, "pattern", pattern=14468,
-         reagents=(_r("Bolt of Runecloth", 14048, 5),
-                   _r("Rugged Leather", 8170, 2), _r("Rune Thread", 14341))),
-    Rung("Netherweave Bag", 21841, 16, 315, 26746, "trainer", cost=15000,
-         reagents=(_r("Bolt of Netherweave", 21840, 4),
-                   _r("Rune Thread", 14341))),
+    Rung(
+        "Linen Bag",
+        4238,
+        6,
+        45,
+        3755,
+        "trainer",
+        cost=100,
+        reagents=(_r("Bolt of Linen Cloth", 2996, 3), _r("Coarse Thread", 2320, 3)),
+    ),
+    Rung(
+        "Red Linen Bag",
+        5762,
+        6,
+        70,
+        6686,
+        "pattern",
+        pattern=5771,
+        reagents=(
+            _r("Bolt of Linen Cloth", 2996, 4),
+            _r("Fine Thread", 2321),
+            _r("Red Dye", 2604),
+        ),
+    ),
+    Rung(
+        "Woolen Bag",
+        4240,
+        8,
+        80,
+        3757,
+        "trainer",
+        cost=200,
+        reagents=(_r("Bolt of Woolen Cloth", 2997, 3), _r("Fine Thread", 2321)),
+    ),
+    Rung(
+        "Green Woolen Bag",
+        4241,
+        8,
+        95,
+        3758,
+        "pattern",
+        pattern=4292,
+        reagents=(
+            _r("Bolt of Woolen Cloth", 2997, 4),
+            _r("Green Dye", 2605),
+            _r("Fine Thread", 2321),
+        ),
+    ),
+    Rung(
+        "Red Woolen Bag",
+        5763,
+        8,
+        115,
+        6688,
+        "pattern",
+        pattern=5772,
+        reagents=(
+            _r("Bolt of Woolen Cloth", 2997, 4),
+            _r("Red Dye", 2604),
+            _r("Fine Thread", 2321),
+        ),
+    ),
+    Rung(
+        "Small Silk Pack",
+        4245,
+        10,
+        150,
+        3813,
+        "trainer",
+        cost=800,
+        reagents=(
+            _r("Bolt of Silk Cloth", 4305, 3),
+            _r("Heavy Leather", 4234, 2),
+            _r("Fine Thread", 2321, 3),
+        ),
+    ),
+    Rung(
+        "Green Silk Pack",
+        5764,
+        10,
+        175,
+        6693,
+        "pattern",
+        pattern=5774,
+        reagents=(
+            _r("Bolt of Silk Cloth", 4305, 4),
+            _r("Heavy Leather", 4234, 3),
+            _r("Fine Thread", 2321, 3),
+            _r("Green Dye", 2605),
+        ),
+    ),
+    Rung(
+        "Black Silk Pack",
+        5765,
+        10,
+        185,
+        6695,
+        "pattern",
+        pattern=5775,
+        reagents=(
+            _r("Bolt of Silk Cloth", 4305, 5),
+            _r("Black Dye", 2325),
+            _r("Fine Thread", 2321, 4),
+        ),
+    ),
+    Rung(
+        "Mageweave Bag",
+        10050,
+        12,
+        225,
+        12065,
+        "trainer",
+        cost=5000,
+        reagents=(_r("Bolt of Mageweave", 4339, 4), _r("Silken Thread", 4291, 2)),
+    ),
+    Rung(
+        "Runecloth Bag",
+        14046,
+        14,
+        260,
+        18405,
+        "pattern",
+        pattern=14468,
+        reagents=(
+            _r("Bolt of Runecloth", 14048, 5),
+            _r("Rugged Leather", 8170, 2),
+            _r("Rune Thread", 14341),
+        ),
+    ),
+    Rung(
+        "Netherweave Bag",
+        21841,
+        16,
+        315,
+        26746,
+        "trainer",
+        cost=15000,
+        reagents=(_r("Bolt of Netherweave", 21840, 4), _r("Rune Thread", 14341)),
+    ),
 )
 
 CLOTH_BANDS = {
@@ -256,6 +365,7 @@ CLOTH_BANDS = {
 
 
 # ---------------------------------------------------------------- the ladder
+
 
 def tier_for(cap: int) -> Tier:
     """The training tier a measured `character_skills.max` corresponds to.
@@ -313,9 +423,11 @@ def craftable(skill: int, *, known=()) -> tuple:
     collapsing it would make the planner promise bags nobody can start.
     """
     known = set(known)
-    return tuple(r for r in LADDER
-                 if r.rank <= skill
-                 and (r.taught_by == "trainer" or r.spell in known))
+    return tuple(
+        r
+        for r in LADDER
+        if r.rank <= skill and (r.taught_by == "trainer" or r.spell in known)
+    )
 
 
 def within_reach(level: int) -> tuple:
@@ -342,6 +454,7 @@ def levelling_craft(skill: int) -> Bolt | None:
 
 # --------------------------------------------------------------- the deficit
 
+
 @dataclass(frozen=True)
 class Deficit:
     """What one character would gain from one more bag of a given size.
@@ -351,6 +464,7 @@ class Deficit:
     full size, and a character whose smallest worn bag is already bigger gains
     nothing at all and must not be sent one.
     """
+
     who: str
     worn_slots: int
     weakest: int
@@ -385,8 +499,7 @@ def worth_making(members, slots: int) -> tuple:
     return tuple(d for d in deficit(members, slots) if d.gain > 0)
 
 
-def first_useful_rung(members, level: int | None = None, *,
-                      known=()) -> Rung | None:
+def first_useful_rung(members, level: int | None = None, *, known=()) -> Rung | None:
     """The lowest rung that would be an upgrade for somebody.
 
     LOWEST, not biggest, on purpose. The biggest bag is what the family wants
@@ -411,6 +524,7 @@ def first_useful_rung(members, level: int | None = None, *,
 
 
 # ------------------------------------------------------------- the gathering
+
 
 def cloth_for(rung: Rung) -> Band | None:
     """The cloth a rung eats, walked through its bolt."""
@@ -464,8 +578,14 @@ def shopping_list(rung: Rung, count: int = 1, held=None) -> tuple:
     for entry, want in sorted(raw_cost(rung, count).items()):
         short = want - held.get(entry, 0)
         if short > 0:
-            rows.append((entry, names.get(entry, str(entry)), short,
-                         "buy" if entry in _STOCKED else "gather"))
+            rows.append(
+                (
+                    entry,
+                    names.get(entry, str(entry)),
+                    short,
+                    "buy" if entry in _STOCKED else "gather",
+                )
+            )
     return tuple(rows)
 
 
@@ -477,13 +597,12 @@ def gatherers(band: Band, levels) -> tuple:
     the band, not "the highest level", and it comes back in the order the
     family should be asked.
     """
-    inside = [(name, lvl) for name, lvl in levels.items()
-              if band.lo <= lvl <= band.hi]
-    return tuple(name for name, _ in sorted(inside, key=lambda p: (-p[1],
-                                                                  p[0])))
+    inside = [(name, lvl) for name, lvl in levels.items() if band.lo <= lvl <= band.hi]
+    return tuple(name for name, _ in sorted(inside, key=lambda p: (-p[1], p[0])))
 
 
 # ------------------------------------------------------------- the next step
+
 
 @dataclass(frozen=True)
 class Step:
@@ -493,6 +612,7 @@ class Step:
     none of them should still be able to show `said`, which is why the
     sentence is part of the answer rather than something a UI reassembles.
     """
+
     kind: str
     said: str
     rung: Rung | None = None
@@ -514,8 +634,9 @@ def coin(amount: int) -> str:
     return " ".join(parts)
 
 
-def next_step(*, tailor, skill, cap, level, money, members, levels,
-              held=None, known=()) -> Step:
+def next_step(
+    *, tailor, skill, cap, level, money, members, levels, held=None, known=()
+) -> Step:
     """One recommendation, chosen in the order the world imposes.
 
     The order is not a preference, it is the sequence of gates: a tailor
@@ -526,54 +647,89 @@ def next_step(*, tailor, skill, cap, level, money, members, levels,
     """
     target = first_useful_rung(members, known=known)
     if target is None:
-        return Step("craft", f"{tailor} has no bag worth making: every rung "
-                             "within reach is already matched or beaten by "
-                             "what the family wears.")
+        return Step(
+            "craft",
+            f"{tailor} has no bag worth making: every rung "
+            "within reach is already matched or beaten by "
+            "what the family wears.",
+        )
 
     if target.rank > cap:
         tier = next_tier(cap)
         if tier is None:
-            return Step("train", f"{tailor} needs tailoring {target.rank} for "
-                                 f"{target.bag} and has no tier left to "
-                                 "train.", rung=target)
+            return Step(
+                "train",
+                f"{tailor} needs tailoring {target.rank} for "
+                f"{target.bag} and has no tier left to "
+                "train.",
+                rung=target,
+            )
         if can_train(tier, skill, level, money):
-            return Step("train", f"{tailor} trains {tier.name} for "
-                                 f"{coin(tier.cost)}, raising his cap from "
-                                 f"{cap} to {tier.cap} and putting "
-                                 f"{target.bag} at tailoring {target.rank} in "
-                                 "reach.", rung=target, tier=tier)
+            return Step(
+                "train",
+                f"{tailor} trains {tier.name} for "
+                f"{coin(tier.cost)}, raising his cap from "
+                f"{cap} to {tier.cap} and putting "
+                f"{target.bag} at tailoring {target.rank} in "
+                "reach.",
+                rung=target,
+                tier=tier,
+            )
         if skill < tier.rank:
             bolt = levelling_craft(skill)
-            how = (f" {bolt.name} still pays at this skill and stops at "
-                   f"{bolt.grey}; each one eats {bolt.per_bolt} "
-                   f"{bolt.cloth}." if bolt else
-                   " No bolt pays at this skill, so the climb has to come "
-                   "off the trainer's garment recipes.")
-            return Step("train", f"{tailor} must raise tailoring from {skill} "
-                                 f"to {tier.rank} before a trainer will teach "
-                                 f"{tier.name}. He is capped at {cap} until "
-                                 f"then, and {target.bag} needs "
-                                 f"{target.rank}.{how}",
-                        rung=target, tier=tier,
-                        item=bolt.cloth_entry if bolt else 0)
+            how = (
+                f" {bolt.name} still pays at this skill and stops at "
+                f"{bolt.grey}; each one eats {bolt.per_bolt} "
+                f"{bolt.cloth}."
+                if bolt
+                else " No bolt pays at this skill, so the climb has to come "
+                "off the trainer's garment recipes."
+            )
+            return Step(
+                "train",
+                f"{tailor} must raise tailoring from {skill} "
+                f"to {tier.rank} before a trainer will teach "
+                f"{tier.name}. He is capped at {cap} until "
+                f"then, and {target.bag} needs "
+                f"{target.rank}.{how}",
+                rung=target,
+                tier=tier,
+                item=bolt.cloth_entry if bolt else 0,
+            )
         if level < tier.level:
-            return Step("train", f"{tailor} is level {level} and {tier.name} "
-                                 f"needs level {tier.level}, so {target.bag} "
-                                 "is out of reach until he levels.",
-                        rung=target, tier=tier)
-        return Step("train", f"{tailor} cannot afford {tier.name} at "
-                             f"{coin(tier.cost)}.", rung=target, tier=tier)
+            return Step(
+                "train",
+                f"{tailor} is level {level} and {tier.name} "
+                f"needs level {tier.level}, so {target.bag} "
+                "is out of reach until he levels.",
+                rung=target,
+                tier=tier,
+            )
+        return Step(
+            "train",
+            f"{tailor} cannot afford {tier.name} at {coin(tier.cost)}.",
+            rung=target,
+            tier=tier,
+        )
 
     if target.taught_by == "pattern" and target.spell not in set(known):
-        return Step("learn", f"{tailor} needs the pattern for {target.bag} "
-                             f"(item {target.pattern}); it is a world drop, "
-                             "not a trainer purchase.", rung=target)
+        return Step(
+            "learn",
+            f"{tailor} needs the pattern for {target.bag} "
+            f"(item {target.pattern}); it is a world drop, "
+            "not a trainer purchase.",
+            rung=target,
+        )
 
     if target.rank > skill:
-        return Step("train", f"{tailor} is at tailoring {skill} and "
-                             f"{target.bag} needs {target.rank}. His cap is "
-                             f"{cap}, so the skill is the only thing in the "
-                             "way.", rung=target)
+        return Step(
+            "train",
+            f"{tailor} is at tailoring {skill} and "
+            f"{target.bag} needs {target.rank}. His cap is "
+            f"{cap}, so the skill is the only thing in the "
+            "way.",
+            rung=target,
+        )
 
     missing = shopping_list(target, 1, held)
     for entry, name, short, how in missing:
@@ -581,18 +737,33 @@ def next_step(*, tailor, skill, cap, level, money, members, levels,
             continue
         band = CLOTH_BANDS.get(entry)
         who = gatherers(band, levels) if band else ()
-        where = (f", which drops from humanoids level {band.lo} to {band.hi}"
-                 if band else "")
-        asked = (f" Ask {', '.join(who)}." if who
-                 else " Nobody in the family is in that level band.")
-        return Step("gather", f"{tailor} needs {short} more {name}{where}, "
-                              f"for one {target.bag}.{asked}",
-                    rung=target, item=entry, count=short, who=who)
+        where = (
+            f", which drops from humanoids level {band.lo} to {band.hi}" if band else ""
+        )
+        asked = (
+            f" Ask {', '.join(who)}."
+            if who
+            else " Nobody in the family is in that level band."
+        )
+        return Step(
+            "gather",
+            f"{tailor} needs {short} more {name}{where}, for one {target.bag}.{asked}",
+            rung=target,
+            item=entry,
+            count=short,
+            who=who,
+        )
     if missing:
         entry, name, short, _ = missing[0]
-        return Step("gather", f"{tailor} needs {short} more {name} for one "
-                              f"{target.bag}; a trade supplier stocks it.",
-                    rung=target, item=entry, count=short)
+        return Step(
+            "gather",
+            f"{tailor} needs {short} more {name} for one "
+            f"{target.bag}; a trade supplier stocks it.",
+            rung=target,
+            item=entry,
+            count=short,
+        )
 
-    return Step("craft", f"{tailor} makes one {target.bag} "
-                         f"({target.slots} slots).", rung=target)
+    return Step(
+        "craft", f"{tailor} makes one {target.bag} ({target.slots} slots).", rung=target
+    )

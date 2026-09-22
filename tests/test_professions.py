@@ -39,6 +39,7 @@ they assert anything, that this module DECIDES and never GRANTS: there is no
 write path to a skill anywhere in it, and an assignment is only ever recorded
 as settled once the world is observed to already agree.
 """
+
 import inspect
 import pathlib
 import re
@@ -70,8 +71,11 @@ def _family():
         # were learned and have never been used. Herbalism is the only one
         # anyone has worked.
         return {
-            "herbalism": herbalism, "alchemy": 1,
-            "first aid": 1, "cooking": 1, "fishing": 1,
+            "herbalism": herbalism,
+            "alchemy": 1,
+            "first aid": 1,
+            "cooking": 1,
+            "fishing": 1,
         }
 
     return [
@@ -97,9 +101,10 @@ def _walk(family, limit=40):
     skills = {m.name: dict(m.skills) for m in family}
     steps = []
     for _ in range(limit):
-        current = [professions.Member(m.name, m.class_name, skills[m.name],
-                                      m.seniority)
-                   for m in family]
+        current = [
+            professions.Member(m.name, m.class_name, skills[m.name], m.seniority)
+            for m in family
+        ]
         issued = professions.plan(current).assignments
         if not issued:
             return steps, skills
@@ -110,7 +115,6 @@ def _walk(family, limit=40):
             else:
                 skills[assignment.character][assignment.skill] = 1
     raise AssertionError("the plan never finished - it is looping")
-
 
 
 def _strip_comments(text: str) -> str:
@@ -127,9 +131,10 @@ def _module_function(signature: str) -> str:
     its source text is the only check that runs before a forty-five minute
     build finds out.
     """
-    source = (pathlib.Path(__file__).resolve().parents[1]
-              / "mod-overseer/src/mod_overseer.cpp"
-              ).read_text(encoding="utf-8")
+    source = (
+        pathlib.Path(__file__).resolve().parents[1]
+        / "mod-overseer/src/mod_overseer.cpp"
+    ).read_text(encoding="utf-8")
     start = source.index(signature)
     depth = 0
     for i in range(source.index("{", start), len(source)):
@@ -138,8 +143,9 @@ def _module_function(signature: str) -> str:
         elif source[i] == "}":
             depth -= 1
             if depth == 0:
-                return source[start:i + 1]
+                return source[start : i + 1]
     raise AssertionError("%s has no closing brace" % signature)
+
 
 class SkillFactsTest(unittest.TestCase):
     """The tables, and their agreement with the ones already in the tree."""
@@ -152,7 +158,9 @@ class SkillFactsTest(unittest.TestCase):
         """
         for name in professions.PRIMARY | professions.SECONDARY:
             self.assertIn(name, goals.SKILL_IDS)
-        self.assertEqual(professions.skill_id("tailoring"), goals.SKILL_IDS["tailoring"])
+        self.assertEqual(
+            professions.skill_id("tailoring"), goals.SKILL_IDS["tailoring"]
+        )
 
     def test_the_two_ids_nobody_on_the_realm_holds_are_the_core_s_own(self):
         """Jewelcrafting and inscription could not be verified the way the
@@ -172,9 +180,7 @@ class SkillFactsTest(unittest.TestCase):
         self.assertIn("tailoring", professions.CRAFTING)
 
     def test_secondaries_cost_no_primary_slot(self):
-        self.assertEqual(
-            professions.SECONDARY, {"first aid", "cooking", "fishing"}
-        )
+        self.assertEqual(professions.SECONDARY, {"first aid", "cooking", "fishing"})
         self.assertFalse(professions.SECONDARY & professions.PRIMARY)
         me = _m("Ugga", "priest", {"first aid": 1, "cooking": 1, "fishing": 1})
         self.assertEqual(professions.free_primary_slots(me), professions.MAX_PRIMARY)
@@ -187,8 +193,9 @@ class RosterTest(unittest.TestCase):
     def test_every_member_of_the_family_is_assigned_a_pair(self):
         self.assertEqual(set(professions.ROSTER), set(bonds.FAMILY))
         for name in professions.ROSTER:
-            self.assertEqual(len(professions.assigned(name)),
-                             professions.MAX_PRIMARY, name)
+            self.assertEqual(
+                len(professions.assigned(name)), professions.MAX_PRIMARY, name
+            )
 
     def test_the_assignment_is_exactly_what_evan_wrote(self):
         self.assertEqual(professions.assigned("Grug"), ("mining", "blacksmithing"))
@@ -203,23 +210,20 @@ class RosterTest(unittest.TestCase):
         assigned it: Grog's engineering needs its own ore rather than
         depending on Grug's, and that redundancy is named and accepted in
         Grog's `why`, not an accident this test should catch."""
-        taken = [s for name in professions.ROSTER
-                 for s in professions.assigned(name)]
+        taken = [s for name in professions.ROSTER for s in professions.assigned(name)]
         self.assertEqual(taken.count("mining"), 2)
         crafts = [s for s in taken if s in professions.CRAFTING]
         self.assertEqual(len(crafts), len(set(crafts)))
 
     def test_all_three_gathering_trades_are_covered(self):
-        taken = {s for name in professions.ROSTER
-                 for s in professions.assigned(name)}
+        taken = {s for name in professions.ROSTER for s in professions.assigned(name)}
         self.assertEqual(professions.GATHERING - taken, set())
 
     def test_inscription_and_jewelcrafting_are_left_unassigned_on_purpose(self):
         """#2831: Evan wants the guild to cover these two professions - Grog's
         old pair, before he asked for engineering over jewelcrafting. A future
         reader counting the crafts must not 'fix' this."""
-        taken = {s for name in professions.ROSTER
-                 for s in professions.assigned(name)}
+        taken = {s for name in professions.ROSTER for s in professions.assigned(name)}
         self.assertEqual(professions.CRAFTING - taken, set(professions.UNASSIGNED))
         self.assertEqual(professions.UNASSIGNED, ("inscription", "jewelcrafting"))
 
@@ -263,7 +267,8 @@ class SlotsTest(unittest.TestCase):
     def test_the_measured_family_has_no_free_primary_slot(self):
         for member in _family():
             self.assertEqual(
-                professions.free_primary_slots(member), 0,
+                professions.free_primary_slots(member),
+                0,
                 f"{member.name} holds herbalism AND alchemy - both slots are full",
             )
 
@@ -297,7 +302,8 @@ class GuardTest(unittest.TestCase):
         family = _family()
         original = professions.ROSTER["Ugga"]
         professions.ROSTER["Ugga"] = professions._Trade(
-            primaries=("tailoring", "enchanting"), why="test",
+            primaries=("tailoring", "enchanting"),
+            why="test",
         )
         try:
             grug = next(m for m in family if m.name == "Grug")
@@ -330,7 +336,8 @@ class GuardTest(unittest.TestCase):
         # Drive Grug to the point where herbalism is the only room he has.
         family = [
             _m("Grug", "warrior", {"herbalism": 34, "mining": 1})
-            if m.name == "Grug" else m
+            if m.name == "Grug"
+            else m
             for m in family
         ]
         plan = professions.plan(family)
@@ -354,15 +361,17 @@ class PlanTest(unittest.TestCase):
         bags - so tailoring is the one trade that pays out the day it lands."""
         plan = professions.plan(_family())
         learns = [a for a in plan.assignments if a.verb == "learn"]
-        self.assertEqual([(a.character, a.skill) for a in learns],
-                         [("Og", "tailoring")])
+        self.assertEqual(
+            [(a.character, a.skill) for a in learns], [("Og", "tailoring")]
+        )
 
     def test_only_one_trade_is_opened_at_a_time(self):
         """Each learn is a journey to a trainer the family cannot currently
         make. Queueing eight of them would be eight things not happening
         instead of one."""
-        learns = [a for a in professions.plan(_family()).assignments
-                  if a.verb == "learn"]
+        learns = [
+            a for a in professions.plan(_family()).assignments if a.verb == "learn"
+        ]
         self.assertEqual(len(learns), 1)
 
     def test_making_room_is_its_own_errand_and_comes_first(self):
@@ -370,9 +379,10 @@ class PlanTest(unittest.TestCase):
         different trainers. Recording it as one would hide the half that costs
         somebody something."""
         rows = professions.plan(_family()).assignments
-        self.assertEqual([(a.character, a.verb, a.skill) for a in rows],
-                         [("Og", "unlearn", "alchemy"),
-                          ("Og", "learn", "tailoring")])
+        self.assertEqual(
+            [(a.character, a.verb, a.skill) for a in rows],
+            [("Og", "unlearn", "alchemy"), ("Og", "learn", "tailoring")],
+        )
 
     def test_the_sequence_terminates_at_exactly_the_assignment(self):
         """The whole economy, walked end to end. No guard deadlocks it, it
@@ -403,8 +413,10 @@ class PlanTest(unittest.TestCase):
         family = _family()
         skills = {m.name: dict(m.skills) for m in family}
         for _ in range(40):
-            current = [professions.Member(m.name, m.class_name, skills[m.name],
-                                          m.seniority) for m in family]
+            current = [
+                professions.Member(m.name, m.class_name, skills[m.name], m.seniority)
+                for m in family
+            ]
             issued = professions.plan(current).assignments
             if not issued:
                 break
@@ -443,8 +455,9 @@ class PlanTest(unittest.TestCase):
         for assignment in steps:
             if assignment.verb != "unlearn":
                 continue
-            self.assertNotIn(assignment.skill,
-                             professions.assigned(assignment.character))
+            self.assertNotIn(
+                assignment.skill, professions.assigned(assignment.character)
+            )
 
     def test_the_plan_is_deterministic_under_reordering(self):
         family = _family()
@@ -491,8 +504,9 @@ class CostTest(unittest.TestCase):
 
     def test_the_loss_is_priced_on_the_errand(self):
         steps, _ = _walk(_family())
-        drop = next(a for a in steps
-                    if a.character == "Grug" and a.skill == "herbalism")
+        drop = next(
+            a for a in steps if a.character == "Grug" and a.skill == "herbalism"
+        )
         self.assertEqual(drop.cost, 34)
         self.assertIn("34/75", drop.reason)
 
@@ -531,8 +545,9 @@ class ErrandTest(unittest.TestCase):
             self.assertIn("trainer", professions.errand(assignment).lower())
 
     def test_the_errand_names_the_character_and_the_skill(self):
-        assignment = next(a for a in professions.plan(_family()).assignments
-                          if a.verb == "learn")
+        assignment = next(
+            a for a in professions.plan(_family()).assignments if a.verb == "learn"
+        )
         errand = professions.errand(assignment)
         self.assertIn(assignment.character, errand)
         self.assertIn("tailoring", errand.lower())
@@ -570,13 +585,14 @@ class NoMagicTest(unittest.TestCase):
         "cursor",
         "SetSkill",
         "learnSpell",
-        ".learn ",              # the GM dot-command
+        ".learn ",  # the GM dot-command
     ]
 
     def test_the_module_cannot_write_a_skill(self):
         for needle in self.FORBIDDEN:
             self.assertNotIn(
-                needle, SOURCE,
+                needle,
+                SOURCE,
                 f"professions.py must not contain {needle!r} - a profession is "
                 "learned at a trainer, not written into the database",
             )
@@ -585,8 +601,14 @@ class NoMagicTest(unittest.TestCase):
         """Pure decision module, same seam as council.py and goals.py. It is
         importable with nothing running, which is also what makes this suite
         able to assert anything at all about it."""
-        for banned in ("pymysql", "import os", "requests", "urllib", "socket",
-                       "subprocess"):
+        for banned in (
+            "pymysql",
+            "import os",
+            "requests",
+            "urllib",
+            "socket",
+            "subprocess",
+        ):
             self.assertNotIn(banned, SOURCE, banned)
 
     def test_settled_reads_the_world_and_never_changes_it(self):
@@ -597,16 +619,18 @@ class NoMagicTest(unittest.TestCase):
         self.assertEqual(list(signature.parameters), ["assignment", "skills"])
 
     def test_a_learn_is_settled_only_once_the_skill_exists(self):
-        assignment = next(a for a in professions.plan(_family()).assignments
-                          if a.verb == "learn")
+        assignment = next(
+            a for a in professions.plan(_family()).assignments if a.verb == "learn"
+        )
         self.assertFalse(professions.settled(assignment, {"herbalism": 17}))
         self.assertTrue(
             professions.settled(assignment, {"herbalism": 17, "tailoring": 1})
         )
 
     def test_an_unlearn_is_settled_only_once_the_skill_is_gone(self):
-        assignment = next(a for a in professions.plan(_family()).assignments
-                          if a.verb == "unlearn")
+        assignment = next(
+            a for a in professions.plan(_family()).assignments if a.verb == "unlearn"
+        )
         self.assertFalse(professions.settled(assignment, {"alchemy": 1}))
         self.assertTrue(professions.settled(assignment, {"herbalism": 17}))
 
@@ -627,8 +651,10 @@ class NoMagicTest(unittest.TestCase):
         """
         blockers = professions.BLOCKERS
         self.assertTrue(blockers)
-        self.assertTrue(any("1054" in b for b in blockers),
-                        "the undeployed-schema failure must stay named")
+        self.assertTrue(
+            any("1054" in b for b in blockers),
+            "the undeployed-schema failure must stay named",
+        )
         self.assertTrue(any("2846" in b for b in blockers))
 
     def test_the_transaction_is_no_longer_claimed_to_be_missing(self):
@@ -649,9 +675,13 @@ class NoMagicTest(unittest.TestCase):
         underneath them to the core's own Trainer object.
         """
         blob = "\n".join(professions.BLOCKERS)
-        for stale in ("TRAVEL, NOT TRANSACTION", "TrainerAction.cpp:22-24",
-                      "NewRpgAction.cpp:398-400", "NOTHING LEARNS FROM A TRAINER",
-                      "it is one verb wide"):
+        for stale in (
+            "TRAVEL, NOT TRANSACTION",
+            "TrainerAction.cpp:22-24",
+            "NewRpgAction.cpp:398-400",
+            "NOTHING LEARNS FROM A TRAINER",
+            "it is one verb wide",
+        ):
             self.assertNotIn(stale, blob, stale)
 
     def test_a_plan_becomes_roster_columns_and_nothing_else(self):
@@ -728,7 +758,9 @@ class NoMagicTest(unittest.TestCase):
         An unlearn needs no journey - it is a spellbook action - so it moves
         nobody, and `traveller` says so.
         """
-        walk = professions.Errand("Og", learn_skill=197, travel_npc="profession trainer")
+        walk = professions.Errand(
+            "Og", learn_skill=197, travel_npc="profession trainer"
+        )
         self.assertEqual(professions.traveller(walk), "Og")
 
         no_walk = professions.Errand("Og", unlearn_skill=171, unlearn_max=1)
@@ -742,8 +774,15 @@ class NoMagicTest(unittest.TestCase):
         third spelling can add is a way to disagree."""
         self.assertEqual(
             professions.wanted_ids("Og"),
-            "%d,%d" % tuple(sorted((professions.skill_id("tailoring"),
-                                    professions.skill_id("enchanting")))),
+            "%d,%d"
+            % tuple(
+                sorted(
+                    (
+                        professions.skill_id("tailoring"),
+                        professions.skill_id("enchanting"),
+                    )
+                )
+            ),
         )
         # A character nobody has decided about declares nothing - and an empty
         # column is what makes mod-overseer refuse to touch it at all.
@@ -760,9 +799,13 @@ class NoMagicTest(unittest.TestCase):
         tree. So the old wording may not come back.
         """
         blob = "\n".join(professions.BLOCKERS)
-        for stale in ("ChangeToWanderNpc()", "NewRpgInfo.h:104",
-                      "picks its own", "SetMoveFarTo",
-                      "there is no word for travel"):
+        for stale in (
+            "ChangeToWanderNpc()",
+            "NewRpgInfo.h:104",
+            "picks its own",
+            "SetMoveFarTo",
+            "there is no word for travel",
+        ):
             self.assertNotIn(stale, blob, stale)
 
     def test_the_aim_this_plan_needs_is_a_role_travel_actually_offers(self):
@@ -771,8 +814,9 @@ class NoMagicTest(unittest.TestCase):
         the profession-trainer role, the follow-up this PR defers to has lost
         its footing and BLOCKERS is wrong again."""
         self.assertIn("profession trainer", travel.ROLES)
-        self.assertEqual(travel.ROLES["profession trainer"],
-                         "UNIT_NPC_FLAG_TRAINER_PROFESSION")
+        self.assertEqual(
+            travel.ROLES["profession trainer"], "UNIT_NPC_FLAG_TRAINER_PROFESSION"
+        )
 
 
 class UpstreamWallTest(unittest.TestCase):
@@ -827,8 +871,12 @@ class UpstreamWallTest(unittest.TestCase):
         #    value would be a granted skill wearing an unlearn's clothes.
         self.assertEqual(
             ["bot->SetSkill(static_cast<uint16>(skill), 0, 0, 0);"],
-            [line.strip() for line in code.splitlines()
-             if "->SetSkill(" in line and not line.lstrip().startswith("//")])
+            [
+                line.strip()
+                for line in code.splitlines()
+                if "->SetSkill(" in line and not line.lstrip().startswith("//")
+            ],
+        )
 
         # 3. THE DECLARED END STATE IS THE ONLY PERMISSION. Both verbs consult
         #    it, in opposite directions: nothing outside `wanted` is learned,
@@ -857,7 +905,8 @@ class UpstreamWallTest(unittest.TestCase):
         shut = train.index("bot->SetFreePrimaryProfessions(0);")
         sweep = train.index("factory.InitAvailableSpells();")
         restore = train.index(
-            "bot->SetFreePrimaryProfessions(static_cast<uint16>(freeProfessionSlots));")
+            "bot->SetFreePrimaryProfessions(static_cast<uint16>(freeProfessionSlots));"
+        )
         self.assertLess(shut, sweep, "the slots must be shut BEFORE the sweep")
         self.assertLess(sweep, restore, "and reopened after it")
 
@@ -871,8 +920,8 @@ class UpstreamWallTest(unittest.TestCase):
         self.assertIn("if (value > plan.unlearnMax)", unlearn)
         # Refused, not cleared: the three refusals that can never become right
         # clear the request; this one is a disagreement and must survive.
-        refusal = unlearn[unlearn.index("if (value > plan.unlearnMax)"):]
-        self.assertNotIn("ClearUnlearnRequest", refusal[:refusal.index("return;")])
+        refusal = unlearn[unlearn.index("if (value > plan.unlearnMax)") :]
+        self.assertNotIn("ClearUnlearnRequest", refusal[: refusal.index("return;")])
 
     def test_a_trainer_errand_is_narrowed_to_a_trainer_that_teaches_it(self):
         """UNIT_NPC_FLAG_TRAINER_PROFESSION is worn by cooking instructors and
@@ -883,7 +932,8 @@ class UpstreamWallTest(unittest.TestCase):
         self.assertIn("uint32 wantSkill = 0", resolve)
         self.assertIn(
             "if (narrowToSkill && !TrainerStartedSkills(spawn.entry).count(wantSkill))",
-            resolve)
+            resolve,
+        )
 
 
 class CouncilTest(unittest.TestCase):
@@ -899,23 +949,33 @@ class CouncilTest(unittest.TestCase):
     """
 
     def test_a_member_who_owes_the_family_a_trade_says_so(self):
-        me = council.Member(name="Og", level=12, class_name="Mage",
-                            trades=5, trade_wanted="tailoring")
+        me = council.Member(
+            name="Og", level=12, class_name="Mage", trades=5, trade_wanted="tailoring"
+        )
         proposal = council.assess(me, public_levels={"Og": 12, "Grug": 14})
         self.assertEqual((proposal.kind, proposal.beneficiary), ("trades", "Og"))
         self.assertIn("tailoring", proposal.said.lower())
 
     def test_it_outranks_an_idle_afternoon_and_loses_to_a_quest(self):
-        wanted = council.Member(name="Og", level=12, class_name="Mage",
-                                trades=5, trade_wanted="tailoring")
-        questing = council.Member(name="Og", level=12, class_name="Mage",
-                                  trades=5, trade_wanted="tailoring",
-                                  quest="I must find the candles.", quest_left=2,
-                                  quest_id=60)
-        self.assertEqual(council.assess(
-            questing, public_levels={"Og": 12, "Grug": 14}).kind, "quest")
-        self.assertEqual(council.assess(
-            wanted, public_levels={"Og": 12, "Grug": 14}).kind, "trades")
+        wanted = council.Member(
+            name="Og", level=12, class_name="Mage", trades=5, trade_wanted="tailoring"
+        )
+        questing = council.Member(
+            name="Og",
+            level=12,
+            class_name="Mage",
+            trades=5,
+            trade_wanted="tailoring",
+            quest="I must find the candles.",
+            quest_left=2,
+            quest_id=60,
+        )
+        self.assertEqual(
+            council.assess(questing, public_levels={"Og": 12, "Grug": 14}).kind, "quest"
+        )
+        self.assertEqual(
+            council.assess(wanted, public_levels={"Og": 12, "Grug": 14}).kind, "trades"
+        )
 
     def test_a_member_with_nothing_owed_is_unaffected(self):
         me = council.Member(name="Ugga", level=12, class_name="Priest", trades=5)
@@ -929,8 +989,10 @@ class CouncilTest(unittest.TestCase):
         trade healthy - the exact 'reports success, does nothing' shape this
         epic keeps rediscovering. So it stays out of DRIVEN_KINDS.
         """
-        bridge = pathlib.Path(bonds.__file__).with_name("bridge.py").read_text(
-            encoding="utf-8"
+        bridge = (
+            pathlib.Path(bonds.__file__)
+            .with_name("bridge.py")
+            .read_text(encoding="utf-8")
         )
         driven = re.search(r"^DRIVEN_KINDS = \((.*)\)$", bridge, re.MULTILINE)
         self.assertIsNotNone(driven)
@@ -941,8 +1003,8 @@ class BridgeContractTest(unittest.TestCase):
     """What bridge.py must be doing with all this, asserted against its source
     because the bridge itself is not importable without a database."""
 
-    BRIDGE = pathlib.Path(bonds.__file__).with_name("bridge.py").read_text(
-        encoding="utf-8"
+    BRIDGE = (
+        pathlib.Path(bonds.__file__).with_name("bridge.py").read_text(encoding="utf-8")
     )
 
     def _holds(self, needle):
@@ -951,8 +1013,9 @@ class BridgeContractTest(unittest.TestCase):
         self.assertTrue(needle in self.BRIDGE, f"bridge.py should contain {needle!r}")
 
     def _lacks(self, needle):
-        self.assertFalse(needle in self.BRIDGE,
-                         f"bridge.py should no longer contain {needle!r}")
+        self.assertFalse(
+            needle in self.BRIDGE, f"bridge.py should no longer contain {needle!r}"
+        )
 
     def test_the_trade_count_the_council_sees_counts_only_trades(self):
         """`COUNT(*) FROM character_skills` counts languages, Defense and every
@@ -1002,8 +1065,10 @@ class SecondaryRankRefusalTest(unittest.TestCase):
         lines of C++. A message that varied would suggest some state could
         make it succeed."""
         for value in (1, 74, 75, 76):
-            self.assertIn(professions.SECONDARY_RANK_REFUSAL,
-                          professions.secondary_rank_refusal({"first aid": value}))
+            self.assertIn(
+                professions.SECONDARY_RANK_REFUSAL,
+                professions.secondary_rank_refusal({"first aid": value}),
+            )
 
     def test_first_aid_earns_the_points_below_linen_bandages_grey(self):
         """58, and the number has now been wrong in both directions.
@@ -1039,6 +1104,7 @@ class SecondaryRankRefusalTest(unittest.TestCase):
         """
         import craft
         import goals
+
         for skill in ("first aid", "cooking"):
             with self.subTest(skill=skill):
                 top = 0
@@ -1072,10 +1138,10 @@ class SecondaryRankRefusalTest(unittest.TestCase):
         self.assertNotIn("cooking is at", said)
 
     def test_every_secondary_is_accounted_for(self):
-        self.assertEqual(set(professions.SECONDARY),
-                         set(professions.SECONDARY_HEADROOM))
-        self.assertEqual(set(professions.SECONDARY),
-                         set(professions.SECONDARY_BLOCKED))
+        self.assertEqual(
+            set(professions.SECONDARY), set(professions.SECONDARY_HEADROOM)
+        )
+        self.assertEqual(set(professions.SECONDARY), set(professions.SECONDARY_BLOCKED))
 
 
 class TheProfessionsColumnCarriesPrimariesOnly(unittest.TestCase):
@@ -1093,8 +1159,10 @@ class TheProfessionsColumnCarriesPrimariesOnly(unittest.TestCase):
         secondary_ids = {str(professions.skill_id(s)) for s in professions.SECONDARY}
         for name in professions.ROSTER:
             ids = set(professions.wanted_ids(name).split(","))
-            self.assertFalse(ids & secondary_ids,
-                             "%s's professions column carries a secondary" % name)
+            self.assertFalse(
+                ids & secondary_ids,
+                "%s's professions column carries a secondary" % name,
+            )
 
     def test_nobody_is_assigned_more_than_the_world_allows(self):
         """`wanted.size() > maxPrimary` is what trips the C++ into refusing to

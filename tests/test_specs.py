@@ -12,6 +12,7 @@ that can silently go wrong with that: a family that fields no tank or no healer
 because somebody edited a number, and a training pass that "improves" itself
 into calling the factory methods that re-roll a character's level and gear.
 """
+
 import ast
 import pathlib
 import unittest
@@ -23,17 +24,17 @@ import bonds
 # rather than assumed, because the whole point of the test is to catch a tab
 # number that no longer means what whoever typed it thought it meant.
 TANK_SPECS = {
-    ("warrior", 2),   # protection
-    ("paladin", 1),   # protection
-    ("druid", 1),     # feral
-    ("dk", 0),        # blood
+    ("warrior", 2),  # protection
+    ("paladin", 1),  # protection
+    ("druid", 1),  # feral
+    ("dk", 0),  # blood
 }
 HEALER_SPECS = {
-    ("priest", 0),    # discipline
-    ("priest", 1),    # holy
-    ("paladin", 0),   # holy
-    ("druid", 2),     # restoration
-    ("shaman", 2),    # restoration
+    ("priest", 0),  # discipline
+    ("priest", 1),  # holy
+    ("paladin", 0),  # holy
+    ("druid", 2),  # restoration
+    ("shaman", 2),  # restoration
 }
 
 
@@ -75,7 +76,9 @@ class FamilyRoles(unittest.TestCase):
         self.assertEqual([], missing, f"no talent tree chosen for: {missing}")
 
     def test_tabs_are_in_the_range_the_dbc_has(self):
-        bad = {n: b.spec_tab for n, b in bonds.FAMILY.items() if not -1 <= b.spec_tab <= 2}
+        bad = {
+            n: b.spec_tab for n, b in bonds.FAMILY.items() if not -1 <= b.spec_tab <= 2
+        }
         self.assertEqual({}, bad, f"talent tab out of range 0-2: {bad}")
 
     def test_spec_tabs_omits_anyone_undecided(self):
@@ -92,8 +95,7 @@ class FamilyRoles(unittest.TestCase):
 
 
 MODULE = (
-    pathlib.Path(__file__).resolve().parents[1]
-    / "mod-overseer/src/mod_overseer.cpp"
+    pathlib.Path(__file__).resolve().parents[1] / "mod-overseer/src/mod_overseer.cpp"
 )
 
 # PlayerbotFactory methods that re-roll a character. The roster exists to keep
@@ -114,7 +116,7 @@ def _train_roster_source() -> str:
         elif src[i] == "}":
             depth -= 1
             if depth == 0:
-                return src[start:i + 1]
+                return src[start : i + 1]
     raise AssertionError("TrainRoster has no closing brace")
 
 
@@ -123,7 +125,8 @@ class TrainingIsAdditive(unittest.TestCase):
         body = _train_roster_source()
         for call in DESTRUCTIVE:
             self.assertNotIn(
-                call, body,
+                call,
+                body,
                 f"TrainRoster calls {call}, which re-rolls the character it is "
                 "supposed to be teaching",
             )
@@ -159,8 +162,12 @@ def _handler(func_name: str):
     tree = ast.parse(BRIDGE.read_text(encoding="utf-8"))
     for node in ast.walk(tree):
         if isinstance(node, ast.FunctionDef) and node.name == func_name:
-            handlers = [h for n in ast.walk(node) if isinstance(n, ast.Try) for h in n.handlers]
-            assert len(handlers) == 1, f"{func_name} has {len(handlers)} handlers, expected 1"
+            handlers = [
+                h for n in ast.walk(node) if isinstance(n, ast.Try) for h in n.handlers
+            ]
+            assert len(handlers) == 1, (
+                f"{func_name} has {len(handlers)} handlers, expected 1"
+            )
             return handlers[0]
     raise AssertionError(f"{func_name} not found in bridge.py")
 
@@ -185,7 +192,11 @@ class SpecWriterSurvivesAMissingColumn(unittest.TestCase):
         once fire.
         """
         caught = _handler("_mark_specs").type
-        name = caught.attr if isinstance(caught, ast.Attribute) else getattr(caught, "id", None)
+        name = (
+            caught.attr
+            if isinstance(caught, ast.Attribute)
+            else getattr(caught, "id", None)
+        )
         self.assertEqual("OperationalError", name)
 
     def test_it_matches_on_the_error_number(self):

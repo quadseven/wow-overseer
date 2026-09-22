@@ -43,6 +43,7 @@ THE RADIUS FIXTURES ARE MEASURED, NOT INVENTED. Counted live against
 which is the counter-example to infra#3617's reading of `Data1` as the focus id:
 anvils and forges BOTH mostly say 10, and the 10 is ten yards.
 """
+
 import pathlib
 import re
 import sys
@@ -78,8 +79,13 @@ class TheAimItself(unittest.TestCase):
         self.assertTrue(travel.is_ground_aim(forge.aim))
 
     def test_an_aim_too_long_for_the_column_is_refused_not_truncated(self):
-        far = {"map_id": 530, "x": -39091.75, "y": -115489.5,
-               "z": -14995.7, "radius": 10}
+        far = {
+            "map_id": 530,
+            "x": -39091.75,
+            "y": -115489.5,
+            "z": -14995.7,
+            "radius": 10,
+        }
         forge = travel.forge_aim(far, 530)
         self.assertFalse(forge.aim)
         self.assertIn("truncate", forge.refused)
@@ -121,9 +127,12 @@ class TheAimItself(unittest.TestCase):
                 self.assertEqual(forge.radius, radius)
 
     def test_no_refusal_is_ever_a_bare_no(self):
-        for spawn, standing in ((None, None), (None, 1),
-                                (dict(GADGETZAN), 0),
-                                (dict(GADGETZAN, radius=4), 1)):
+        for spawn, standing in (
+            (None, None),
+            (None, 1),
+            (dict(GADGETZAN), 0),
+            (dict(GADGETZAN, radius=4), 1),
+        ):
             with self.subTest(spawn=spawn, standing=standing):
                 refused = travel.forge_aim(spawn, standing).refused
                 self.assertTrue(refused)
@@ -135,18 +144,18 @@ class AlreadyStandingInIt(unittest.TestCase):
     of ours, because that radius IS the rule CheckCast applies."""
 
     def test_inside_the_radius_needs_no_walk(self):
-        self.assertTrue(travel.within_focus(dict(GADGETZAN, d2=81.0)))   # 9y
+        self.assertTrue(travel.within_focus(dict(GADGETZAN, d2=81.0)))  # 9y
 
     def test_outside_the_radius_does(self):
         self.assertFalse(travel.within_focus(dict(GADGETZAN, d2=136.0)))  # 11.6y
 
     def test_the_boundary_counts_as_inside(self):
-        self.assertTrue(travel.within_focus(dict(GADGETZAN, d2=100.0)))   # 10y
+        self.assertTrue(travel.within_focus(dict(GADGETZAN, d2=100.0)))  # 10y
 
     def test_a_narrow_forge_is_judged_narrowly(self):
         """8 yards is inside a 10-yard focus and outside a 4-yard one, which is
         exactly why a single constant would be wrong in both directions."""
-        near = dict(GADGETZAN, d2=64.0)                       # 8 yards
+        near = dict(GADGETZAN, d2=64.0)  # 8 yards
         self.assertTrue(travel.within_focus(near))
         self.assertFalse(travel.within_focus(dict(near, radius=4)))
 
@@ -154,20 +163,21 @@ class AlreadyStandingInIt(unittest.TestCase):
         """Not knowing whether they are close enough costs a walk; guessing
         that they are costs every cast, for ever, invisibly."""
         self.assertFalse(travel.within_focus(None))
-        self.assertFalse(travel.within_focus(dict(GADGETZAN)))          # no d2
-        self.assertFalse(travel.within_focus({"d2": 1.0}))              # no radius
+        self.assertFalse(travel.within_focus(dict(GADGETZAN)))  # no d2
+        self.assertFalse(travel.within_focus({"d2": 1.0}))  # no radius
 
 
 class TheFactsAboutTheGame(unittest.TestCase):
     def test_the_focus_object_type_and_id_are_the_measured_ones(self):
-        self.assertEqual(travel.SPELL_FOCUS_GO_TYPE, 8)   # GAMEOBJECT_TYPE_SPELL_FOCUS
-        self.assertEqual(travel.FORGE_FOCUS_ID, 3)        # SpellFocusObject.dbc
+        self.assertEqual(travel.SPELL_FOCUS_GO_TYPE, 8)  # GAMEOBJECT_TYPE_SPELL_FOCUS
+        self.assertEqual(travel.FORGE_FOCUS_ID, 3)  # SpellFocusObject.dbc
 
     def test_the_module_records_that_data1_is_the_radius(self):
         """infra#3617 read `Data1` as the focus id and parked the whole
         forge/anvil question on the strength of it. The counts that tell the two
         columns apart live in the module so the misreading is not repeated."""
         import inspect
+
         source = inspect.getsource(travel)
         self.assertIn("3617", source)
         self.assertIn("Data0", source)
@@ -191,33 +201,38 @@ class TheArrivalToleranceIsMirroredFromTheModule(unittest.TestCase):
         if not MODULE.exists():
             raise unittest.SkipTest(
                 "mod-overseer submodule is not initialised; run "
-                "`git submodule update --init` (CI does)")
+                "`git submodule update --init` (CI does)"
+            )
         cls.module = MODULE.read_text(encoding="utf-8", errors="replace")
         cls.decisions = DECISIONS.read_text(encoding="utf-8", errors="replace")
 
     def test_it_equals_the_constant_the_travel_drive_actually_uses(self):
         found = re.search(
             r"constexpr\s+float\s+TRAVEL_ARRIVED_POSITION_YARDS\s*=\s*"
-            r"([0-9.]+)f\s*;", self.module)
+            r"([0-9.]+)f\s*;",
+            self.module,
+        )
         self.assertIsNotNone(
-            found, "TRAVEL_ARRIVED_POSITION_YARDS is gone from mod_overseer.cpp")
-        self.assertEqual(float(found.group(1)),
-                         float(travel.ARRIVED_POSITION_YARDS))
+            found, "TRAVEL_ARRIVED_POSITION_YARDS is gone from mod_overseer.cpp"
+        )
+        self.assertEqual(float(found.group(1)), float(travel.ARRIVED_POSITION_YARDS))
 
     def test_a_ground_aim_is_the_tolerance_this_constant_names(self):
         """The module picks between two tolerances on whether the aim resolved
         a creature. An `at:` aim resolves `outEntry = 0`, so it takes the
         position one - which is the one mirrored above."""
         self.assertIn(
-            "entry ? TRAVEL_ARRIVED_YARDS : TRAVEL_ARRIVED_POSITION_YARDS",
-            self.module)
-        self.assertIn("outEntry = 0;  // deliberately: the walk is the whole errand",
-                      self.module)
+            "entry ? TRAVEL_ARRIVED_YARDS : TRAVEL_ARRIVED_POSITION_YARDS", self.module
+        )
+        self.assertIn(
+            "outEntry = 0;  // deliberately: the walk is the whole errand", self.module
+        )
 
     def test_the_column_width_agrees_with_the_module(self):
         found = re.search(
             r"constexpr\s+std::size_t\s+TRAVEL_AIM_COLUMN_CHARS\s*=\s*(\d+)\s*;",
-            self.module)
+            self.module,
+        )
         self.assertIsNotNone(found)
         self.assertEqual(int(found.group(1)), travel.COLUMN_WIDTH)
 
@@ -230,14 +245,18 @@ class TheArrivalToleranceIsMirroredFromTheModule(unittest.TestCase):
         That is the terminal path `_guild_bank_once` already relies on, and it
         is why adding a forge keyword to `_release_trade_errand`'s
         `ECONOMY_ERRANDS` guard would be wrong rather than merely unnecessary."""
-        self.assertIn("bool IsMaintenanceErrand(std::string const& aim)",
-                      self.decisions)
-        self.assertIn("return CounterRoleForAim(aim) != CounterRole::None;",
-                      self.decisions)
-        self.assertIn("None,      // not a counter: a trainer, an innkeeper, an `at:`, a portal",
-                      (ROOT / "mod-overseer/src"
-                       / "overseer_decisions.h").read_text(
-                          encoding="utf-8", errors="replace"))
+        self.assertIn(
+            "bool IsMaintenanceErrand(std::string const& aim)", self.decisions
+        )
+        self.assertIn(
+            "return CounterRoleForAim(aim) != CounterRole::None;", self.decisions
+        )
+        self.assertIn(
+            "None,      // not a counter: a trainer, an innkeeper, an `at:`, a portal",
+            (ROOT / "mod-overseer/src" / "overseer_decisions.h").read_text(
+                encoding="utf-8", errors="replace"
+            ),
+        )
 
     def test_only_the_leader_can_be_aimed(self):
         """Grog is the family's engineer and the character the bars are FOR, and
@@ -250,8 +269,8 @@ class TheArrivalToleranceIsMirroredFromTheModule(unittest.TestCase):
     def test_drive_craft_names_why_a_focused_cast_failed(self):
         """The module names a missing forge or anvil instead of making an
         operator decode a retrying numeric result."""
-        drive = self.module[self.module.index("void DriveCraft()"):]
-        drive = drive[:drive.index("DiscoverFlightPointOnArrival")]
+        drive = self.module[self.module.index("void DriveCraft()") :]
+        drive = drive[: drive.index("DiscoverFlightPointOnArrival")]
         self.assertIn("static_cast<uint32>(result)", drive)
         self.assertIn("SPELL_FAILED_REQUIRES_SPELL_FOCUS", drive)
         self.assertIn("info->RequiresSpellFocus", drive)
@@ -267,14 +286,13 @@ class TheCallerIsWiredAndCannotLatchTheColumn(unittest.TestCase):
     def setUpClass(cls):
         cls.source = BRIDGE.read_text(encoding="utf-8", errors="replace")
         start = cls.source.index("async def _forge_once(self)")
-        cls.body = cls.source[start:cls.source.index(
-            "async def _forge_loop(self)")]
+        cls.body = cls.source[start : cls.source.index("async def _forge_loop(self)")]
         # THE CODE, WITHOUT THE DOCSTRING. The ordering assertions below are
         # about which statement runs first, and that docstring names several of
         # these functions while explaining why - so searching the whole body
         # would find the prose and answer a question nobody asked.
         opened = cls.body.index('"""')
-        cls.code = cls.body[cls.body.index('"""', opened + 3) + 3:]
+        cls.code = cls.body[cls.body.index('"""', opened + 3) + 3 :]
 
     def test_the_loop_runs_under_the_gateway_and_headless_alike(self):
         """Two lists, and a loop registered in only one of them is a feature
@@ -295,8 +313,8 @@ class TheCallerIsWiredAndCannotLatchTheColumn(unittest.TestCase):
         """`job='craft'` is DriveCraft's own permission. Walking somebody to a
         forge while the family is out gathering stands the quest drive down
         (`TravelHoldsTheWheel`) for a cast that cannot happen anyway."""
-        reader = self.source[self.source.index("def _forge_errands()"):]
-        reader = reader[:reader.index("def _current_travel_npc")]
+        reader = self.source[self.source.index("def _forge_errands()") :]
+        reader = reader[: reader.index("def _current_travel_npc")]
         self.assertIn("job = %s", reader)
         self.assertIn("craft.MODE", reader)
         self.assertIn("craft.focus_for(", reader)
@@ -312,20 +330,21 @@ class TheCallerIsWiredAndCannotLatchTheColumn(unittest.TestCase):
         supposed to cure. A truthiness test on `focus_for` is that bug, and it
         is a one-character edit away, so it is pinned rather than reasoned
         about."""
-        reader = self.source[self.source.index("def _forge_errands()"):]
-        reader = reader[:reader.index("def _current_travel_npc")]
+        reader = self.source[self.source.index("def _forge_errands()") :]
+        reader = reader[: reader.index("def _current_travel_npc")]
         self.assertIn("== travel.FORGE_FOCUS_ID", reader)
         # And the mapping the comparison relies on really does name the forge.
         self.assertEqual(craft.FOCUS_AIMS[travel.FORGE_FOCUS_ID], "forge")
         # Anvil-gated Engineering recipes exist in the table and must not match.
-        anvil = [r.spell_id for r in
-                 craft.RECIPES[goals.SKILL_IDS["engineering"]]
-                 if r.focus == 1]
+        anvil = [
+            r.spell_id
+            for r in craft.RECIPES[goals.SKILL_IDS["engineering"]]
+            if r.focus == 1
+        ]
         self.assertTrue(anvil, "infra#3760's anvil entries have gone missing")
         for spell in anvil:
             with self.subTest(spell=spell):
-                self.assertNotEqual(craft.focus_for(spell),
-                                    travel.FORGE_FOCUS_ID)
+                self.assertNotEqual(craft.focus_for(spell), travel.FORGE_FOCUS_ID)
 
     def test_it_goes_through_the_one_sanctioned_writer(self):
         """`_write_trade_errand` is the only thing in this process that writes
@@ -341,9 +360,8 @@ class TheCallerIsWiredAndCannotLatchTheColumn(unittest.TestCase):
         self.assertNotIn("_write_trade_errand", self.code)
         self.assertNotIn("UPDATE overseer_roster", self.code)
         self.assertNotIn("travel_npc =", self.code)
-        door = self.source[self.source.index(
-            "    async def _claim_town_slot("):]
-        door = door[:door.index("    async def _aim_at_reagent_vendor(")]
+        door = self.source[self.source.index("    async def _claim_town_slot(") :]
+        door = door[: door.index("    async def _aim_at_reagent_vendor(")]
         self.assertIn("_write_trade_errand", door)
         self.assertNotIn("UPDATE overseer_roster", door)
 
@@ -352,8 +370,8 @@ class TheCallerIsWiredAndCannotLatchTheColumn(unittest.TestCase):
         infra#3702 taught it that an `at:` aim is an economy errand when the
         vault pass shipped. Pinned because deleting that branch would silently
         turn this pass into one that zeroes learn errands."""
-        guard = self.source[self.source.index("def _retaskable_from("):]
-        guard = guard[:guard.index("def _write_trade_errand(")]
+        guard = self.source[self.source.index("def _retaskable_from(") :]
+        guard = guard[: guard.index("def _write_trade_errand(")]
         self.assertIn("if travel.is_ground_aim(aim):", guard)
         self.assertIn('return ("", aim)', guard)
 
@@ -362,16 +380,20 @@ class TheCallerIsWiredAndCannotLatchTheColumn(unittest.TestCase):
         whatever else could use it, and stands the quest drive down for a
         journey that is already over."""
         self.assertIn("travel.within_focus(spawn)", self.code)
-        self.assertLess(self.code.index("travel.within_focus(spawn)"),
-                        self.code.index("_claim_town_slot"))
+        self.assertLess(
+            self.code.index("travel.within_focus(spawn)"),
+            self.code.index("_claim_town_slot"),
+        )
 
     def test_every_way_out_says_which_characters_it_is_costing(self):
         """DriveCraft cannot say why a focused cast failed, so this is the only
         place a person can find out. Each of the three exits names the smelters
         it is leaving stuck."""
-        for exit_line in ("forge: %s hold a focus-gated craft errand",
-                          "forge: leader=%s could not be aimed at the forge",
-                          "forge: leader=%s aimed at %s"):
+        for exit_line in (
+            "forge: %s hold a focus-gated craft errand",
+            "forge: leader=%s could not be aimed at the forge",
+            "forge: leader=%s aimed at %s",
+        ):
             with self.subTest(exit=exit_line):
                 self.assertIn(exit_line, self.code)
         self.assertGreaterEqual(self.code.count('", ".join(sorted(smelters))'), 3)
@@ -380,8 +402,8 @@ class TheCallerIsWiredAndCannotLatchTheColumn(unittest.TestCase):
         self.assertIn("self._mid_run(names)", self.code)
 
     def test_the_cadence_is_configurable_like_every_other_pass(self):
-        loop = self.source[self.source.index("async def _forge_loop"):]
-        loop = loop[:loop.index("async def _settle_town_errand")]
+        loop = self.source[self.source.index("async def _forge_loop") :]
+        loop = loop[: loop.index("async def _settle_town_errand")]
         self.assertIn('os.environ.get("CRAFT_FORGE_CYCLE_SECONDS"', loop)
 
     def test_it_claims_the_last_stagger_slot(self):
@@ -389,11 +411,11 @@ class TheCallerIsWiredAndCannotLatchTheColumn(unittest.TestCase):
         the recipe that follows, and only then is there a smelt errand to see.
         Arriving first would read a stale `craft_spell` - and would put this
         pass into the same instant as every other writer of the column."""
-        loop = self.source[self.source.index("async def _forge_loop"):]
-        loop = loop[:loop.index("async def _settle_town_errand")]
+        loop = self.source[self.source.index("async def _forge_loop") :]
+        loop = loop[: loop.index("async def _settle_town_errand")]
         mine = re.search(r"asyncio\.sleep\(min\(cycle,\s*([0-9.]+)\)\)", loop)
         self.assertIsNotNone(mine)
-        rhythm = self.source[self.source.index("async def _craft_rhythm_loop"):]
+        rhythm = self.source[self.source.index("async def _craft_rhythm_loop") :]
         theirs = re.search(r"asyncio\.sleep\(min\(cycle,\s*([0-9.]+)\)\)", rhythm)
         self.assertGreater(float(mine.group(1)), float(theirs.group(1)))
 
@@ -417,11 +439,11 @@ class TheFocusVocabularyCannotDriftFromTheWalk(unittest.TestCase):
         infra#3617's reading would return every focus object whose radius
         happens to be ten - forges, anvils and looms alike."""
         source = BRIDGE.read_text(encoding="utf-8", errors="replace")
-        sql = source[source.index("_FORGE_SQL = ("):]
-        sql = sql[:sql.index("def _nearest_forge")]
+        sql = source[source.index("_FORGE_SQL = (") :]
+        sql = sql[: sql.index("def _nearest_forge")]
         self.assertIn("gt.type = %s AND gt.Data0 = %s AND gt.Data1 > %s", sql)
         self.assertIn("gt.Data1 AS radius", sql)
-        self.assertIn("g.map = s.map_id", sql)          # the same-map rule
+        self.assertIn("g.map = s.map_id", sql)  # the same-map rule
         self.assertIn("ORDER BY d2 LIMIT 1", sql)
 
 

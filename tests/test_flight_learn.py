@@ -44,6 +44,7 @@ projection of the worldserver's own TaxiNodes.dbc (md5
 3a870df7039a76607e31846237a1daec on 2026-09-19), so the Gadgetzan pair and the
 Un'Goro node are asserted against it rather than restated.
 """
+
 import pathlib
 import re
 import sys
@@ -64,21 +65,43 @@ MARSHALS_REFUGE = 79
 # Two nodes and two flight masters, built by hand so a rule cannot pass by
 # accident on the real table's density. Positions are the DBC's own.
 ALLIANCE_NODE = flightlearn.Node(
-    id=39, map_id=1, x=-7224.0, y=-3734.6, z=8.4,
-    name="Gadgetzan, Tanaris", horde=0, alliance=541)
+    id=39,
+    map_id=1,
+    x=-7224.0,
+    y=-3734.6,
+    z=8.4,
+    name="Gadgetzan, Tanaris",
+    horde=0,
+    alliance=541,
+)
 HORDE_NODE = flightlearn.Node(
-    id=40, map_id=1, x=-7048.9, y=-3780.4, z=10.2,
-    name="Gadgetzan, Tanaris", horde=2224, alliance=0)
+    id=40,
+    map_id=1,
+    x=-7048.9,
+    y=-3780.4,
+    z=10.2,
+    name="Gadgetzan, Tanaris",
+    horde=2224,
+    alliance=0,
+)
 NEUTRAL_NODE = flightlearn.Node(
-    id=79, map_id=1, x=-6113.8, y=-1142.7, z=-187.6,
-    name="Marshal's Refuge, Un'Goro Crater", horde=2224, alliance=541)
+    id=79,
+    map_id=1,
+    x=-6113.8,
+    y=-1142.7,
+    z=-187.6,
+    name="Marshal's Refuge, Un'Goro Crater",
+    horde=2224,
+    alliance=541,
+)
 
-BERA = flightlearn.Master(map_id=1, x=-7224.9, y=-3738.2, entry=7823,
-                          name="Bera Stonehammer")
-BULKREK = flightlearn.Master(map_id=1, x=-7045.2, y=-3779.4, entry=7824,
-                             name="Bulkrek Ragefist")
-GRYFE = flightlearn.Master(map_id=1, x=-6110.5, y=-1140.3, entry=10583,
-                           name="Gryfe")
+BERA = flightlearn.Master(
+    map_id=1, x=-7224.9, y=-3738.2, entry=7823, name="Bera Stonehammer"
+)
+BULKREK = flightlearn.Master(
+    map_id=1, x=-7045.2, y=-3779.4, entry=7824, name="Bulkrek Ragefist"
+)
+GRYFE = flightlearn.Master(map_id=1, x=-6110.5, y=-1140.3, entry=10583, name="Gryfe")
 MASTERS = (BERA, BULKREK, GRYFE)
 
 # A human standing in Gadgetzan, a hundred yards from both nodes.
@@ -107,8 +130,9 @@ class TheTaximaskIsReadTheWayTheGameWritesIt(unittest.TestCase):
     def test_a_single_node_round_trips(self):
         for node in (1, 32, 33, 39, 40, 79, 80, 448):
             with self.subTest(node=node):
-                self.assertEqual(flightlearn.known_nodes(_mask(node)),
-                                 frozenset({node}))
+                self.assertEqual(
+                    flightlearn.known_nodes(_mask(node)), frozenset({node})
+                )
 
     def test_the_live_reading_that_opened_this_issue(self):
         """Grug's own column, read off wow-dev on 2026-09-19. The issue's table
@@ -201,37 +225,48 @@ class SomethingHasToBeStandingAtTheNode(unittest.TestCase):
     by any looser rule is a candidate the module will decline after the walk."""
 
     def test_the_nearest_spawn_to_the_node_answers_for_it(self):
-        self.assertIs(flightlearn.answering_master(ALLIANCE_NODE, MASTERS),
-                      BERA)
-        self.assertIs(flightlearn.answering_master(HORDE_NODE, MASTERS),
-                      BULKREK)
+        self.assertIs(flightlearn.answering_master(ALLIANCE_NODE, MASTERS), BERA)
+        self.assertIs(flightlearn.answering_master(HORDE_NODE, MASTERS), BULKREK)
 
     def test_a_node_with_nothing_near_it_answers_none(self):
         """node 168, "Filming", is mod_overseer.cpp's own example: it carries a
         mount id and a real taxi path and the nearest flight master is 740
         yards away, so nothing can ever discover it."""
-        filming = flightlearn.Node(id=168, map_id=1, x=-9441.0, y=65.0, z=0.0,
-                                   name="Filming", horde=0, alliance=3837)
+        filming = flightlearn.Node(
+            id=168,
+            map_id=1,
+            x=-9441.0,
+            y=65.0,
+            z=0.0,
+            name="Filming",
+            horde=0,
+            alliance=3837,
+        )
         self.assertIsNone(flightlearn.answering_master(filming, MASTERS))
 
     def test_a_spawn_on_another_map_does_not_answer(self):
-        elsewhere = flightlearn.Master(map_id=0, x=ALLIANCE_NODE.x,
-                                       y=ALLIANCE_NODE.y, entry=1)
-        self.assertIsNone(
-            flightlearn.answering_master(ALLIANCE_NODE, (elsewhere,)))
+        elsewhere = flightlearn.Master(
+            map_id=0, x=ALLIANCE_NODE.x, y=ALLIANCE_NODE.y, entry=1
+        )
+        self.assertIsNone(flightlearn.answering_master(ALLIANCE_NODE, (elsewhere,)))
 
     def test_the_radius_is_the_modules_own(self):
         just_outside = flightlearn.Master(
-            map_id=1, x=ALLIANCE_NODE.x + travel.FLIGHT_NODE_MATCH_YARDS + 1,
-            y=ALLIANCE_NODE.y, entry=1)
+            map_id=1,
+            x=ALLIANCE_NODE.x + travel.FLIGHT_NODE_MATCH_YARDS + 1,
+            y=ALLIANCE_NODE.y,
+            entry=1,
+        )
         just_inside = flightlearn.Master(
-            map_id=1, x=ALLIANCE_NODE.x + travel.FLIGHT_NODE_MATCH_YARDS - 1,
-            y=ALLIANCE_NODE.y, entry=2)
-        self.assertIsNone(
-            flightlearn.answering_master(ALLIANCE_NODE, (just_outside,)))
+            map_id=1,
+            x=ALLIANCE_NODE.x + travel.FLIGHT_NODE_MATCH_YARDS - 1,
+            y=ALLIANCE_NODE.y,
+            entry=2,
+        )
+        self.assertIsNone(flightlearn.answering_master(ALLIANCE_NODE, (just_outside,)))
         self.assertIs(
-            flightlearn.answering_master(ALLIANCE_NODE, (just_inside,)),
-            just_inside)
+            flightlearn.answering_master(ALLIANCE_NODE, (just_inside,)), just_inside
+        )
 
 
 class SceneryIsNotAFlightPoint(unittest.TestCase):
@@ -243,19 +278,39 @@ class SceneryIsNotAFlightPoint(unittest.TestCase):
     yards and the family's one travel column to walk to Theramore and learn a
     row that is scenery, while Theramore's own node goes on being missing."""
 
-    THERAMORE = flightlearn.Node(id=32, map_id=1, x=-3827.0, y=-4523.0, z=10.0,
-                                 name="Theramore, Dustwallow Marsh",
-                                 horde=0, alliance=541)
-    SURVEY_START = flightlearn.Node(id=180, map_id=1, x=-3822.0, y=-4530.0,
-                                    z=10.0,
-                                    name="Quest - Dustwallow - Alcaz Survey "
-                                         "Start", horde=0, alliance=541)
-    SURVEY_END = flightlearn.Node(id=181, map_id=1, x=-3819.0, y=-4531.0,
-                                  z=10.0,
-                                  name="Quest - Dustwallow - Alcaz Survey End",
-                                  horde=0, alliance=541)
-    KELLY = flightlearn.Master(map_id=1, x=-3826.0, y=-4525.0, entry=4321,
-                               name="the Theramore flight master")
+    THERAMORE = flightlearn.Node(
+        id=32,
+        map_id=1,
+        x=-3827.0,
+        y=-4523.0,
+        z=10.0,
+        name="Theramore, Dustwallow Marsh",
+        horde=0,
+        alliance=541,
+    )
+    SURVEY_START = flightlearn.Node(
+        id=180,
+        map_id=1,
+        x=-3822.0,
+        y=-4530.0,
+        z=10.0,
+        name="Quest - Dustwallow - Alcaz Survey Start",
+        horde=0,
+        alliance=541,
+    )
+    SURVEY_END = flightlearn.Node(
+        id=181,
+        map_id=1,
+        x=-3819.0,
+        y=-4531.0,
+        z=10.0,
+        name="Quest - Dustwallow - Alcaz Survey End",
+        horde=0,
+        alliance=541,
+    )
+    KELLY = flightlearn.Master(
+        map_id=1, x=-3826.0, y=-4525.0, entry=4321, name="the Theramore flight master"
+    )
     TABLE = (THERAMORE, SURVEY_START, SURVEY_END)
 
     def test_all_three_rows_pass_the_match_radius(self):
@@ -263,8 +318,8 @@ class SceneryIsNotAFlightPoint(unittest.TestCase):
         for node in self.TABLE:
             with self.subTest(node=node.id):
                 self.assertIs(
-                    flightlearn.answering_master(node, (self.KELLY,)),
-                    self.KELLY)
+                    flightlearn.answering_master(node, (self.KELLY,)), self.KELLY
+                )
 
     def test_the_master_stands_at_exactly_one_of_them(self):
         self.assertEqual(flightlearn.node_of(self.KELLY, self.TABLE), 32)
@@ -272,15 +327,21 @@ class SceneryIsNotAFlightPoint(unittest.TestCase):
     def test_only_that_one_is_ever_offered(self):
         found = flightlearn.candidates(
             standing={"map_id": 1, "pos_x": -3900.0, "pos_y": -4600.0},
-            known=frozenset(), team=flightlearn.TEAM_ALLIANCE,
-            nodes=self.TABLE, masters=(self.KELLY,))
+            known=frozenset(),
+            team=flightlearn.TEAM_ALLIANCE,
+            nodes=self.TABLE,
+            masters=(self.KELLY,),
+        )
         self.assertEqual([node.id for _yards, node, _master in found], [32])
 
     def test_once_it_is_known_the_scenery_is_still_not_offered(self):
         found = flightlearn.candidates(
             standing={"map_id": 1, "pos_x": -3900.0, "pos_y": -4600.0},
-            known=frozenset({32}), team=flightlearn.TEAM_ALLIANCE,
-            nodes=self.TABLE, masters=(self.KELLY,))
+            known=frozenset({32}),
+            team=flightlearn.TEAM_ALLIANCE,
+            nodes=self.TABLE,
+            masters=(self.KELLY,),
+        )
         self.assertEqual(found, [])
 
     def test_the_pairing_is_the_modules_own_tie_break_read_backwards(self):
@@ -288,10 +349,12 @@ class SceneryIsNotAFlightPoint(unittest.TestCase):
         nearest the node. This picks, out of the nodes near a spawn, the one
         nearest the spawn - so the pairing is a one-to-one neither side can
         disagree about."""
-        self.assertEqual(flightlearn.node_of(BERA, (ALLIANCE_NODE, HORDE_NODE)),
-                         GADGETZAN_ALLIANCE)
-        self.assertEqual(flightlearn.node_of(BULKREK, (ALLIANCE_NODE, HORDE_NODE)),
-                         GADGETZAN_HORDE)
+        self.assertEqual(
+            flightlearn.node_of(BERA, (ALLIANCE_NODE, HORDE_NODE)), GADGETZAN_ALLIANCE
+        )
+        self.assertEqual(
+            flightlearn.node_of(BULKREK, (ALLIANCE_NODE, HORDE_NODE)), GADGETZAN_HORDE
+        )
 
     def test_a_master_with_no_node_on_its_map_answers_for_nothing(self):
         stray = flightlearn.Master(map_id=571, x=0.0, y=0.0, entry=1)
@@ -316,8 +379,10 @@ class TheWalkIsBoundedByTheLeaseItWillBeGiven(unittest.TestCase):
         same 1200 for the same reason: "past it, the world has stopped
         believing in the errand too". A lease past that is one this process
         would be alone in believing."""
-        self.assertLess(flightlearn.lease_for(flightlearn.REACH_YARDS),
-                        townslot.ORPHAN_LEASE_SECONDS)
+        self.assertLess(
+            flightlearn.lease_for(flightlearn.REACH_YARDS),
+            townslot.ORPHAN_LEASE_SECONDS,
+        )
 
     def test_the_bound_is_wide_enough_to_ever_fire(self):
         """A caller that ships and never fires is the same written-and-never-
@@ -341,9 +406,14 @@ class ExactlyOneAimAndOnlyWhenThereIsSomethingToLearn(unittest.TestCase):
 
     def _choose(self, taximask, race=HUMAN, **kwargs):
         return flightlearn.choose(
-            character="Grug", standing=IN_TOWN, taximask=taximask, race=race,
-            nodes=(ALLIANCE_NODE, HORDE_NODE, NEUTRAL_NODE), masters=MASTERS,
-            **kwargs)
+            character="Grug",
+            standing=IN_TOWN,
+            taximask=taximask,
+            race=race,
+            nodes=(ALLIANCE_NODE, HORDE_NODE, NEUTRAL_NODE),
+            masters=MASTERS,
+            **kwargs,
+        )
 
     def test_an_undiscovered_node_produces_exactly_one_aim(self):
         errand = self._choose(NOTHING_KNOWN)
@@ -373,20 +443,35 @@ class ExactlyOneAimAndOnlyWhenThereIsSomethingToLearn(unittest.TestCase):
 
     def test_a_node_nothing_stands_at_is_never_offered(self):
         errand = flightlearn.choose(
-            character="Grug", standing=IN_TOWN, taximask=NOTHING_KNOWN,
-            race=HUMAN, nodes=(ALLIANCE_NODE,), masters=(),
+            character="Grug",
+            standing=IN_TOWN,
+            taximask=NOTHING_KNOWN,
+            race=HUMAN,
+            nodes=(ALLIANCE_NODE,),
+            masters=(),
         )
         self.assertEqual(errand.aim, "")
         self.assertIn("flight master actually stands at", errand.refused)
 
     def test_a_node_on_another_map_is_not_a_longer_walk_it_is_not_one(self):
-        far = flightlearn.Node(id=100, map_id=0, x=IN_TOWN["pos_x"],
-                               y=IN_TOWN["pos_y"], z=0.0, name="Elsewhere",
-                               horde=1, alliance=1)
+        far = flightlearn.Node(
+            id=100,
+            map_id=0,
+            x=IN_TOWN["pos_x"],
+            y=IN_TOWN["pos_y"],
+            z=0.0,
+            name="Elsewhere",
+            horde=1,
+            alliance=1,
+        )
         elsewhere = flightlearn.Master(map_id=0, x=far.x, y=far.y, entry=3)
         errand = flightlearn.choose(
-            character="Grug", standing=IN_TOWN, taximask=NOTHING_KNOWN,
-            race=HUMAN, nodes=(far,), masters=(elsewhere,),
+            character="Grug",
+            standing=IN_TOWN,
+            taximask=NOTHING_KNOWN,
+            race=HUMAN,
+            nodes=(far,),
+            masters=(elsewhere,),
         )
         self.assertEqual(errand.aim, "")
 
@@ -407,10 +492,16 @@ class ExactlyOneAimAndOnlyWhenThereIsSomethingToLearn(unittest.TestCase):
         errand = self._choose(NOTHING_KNOWN, race=ORC)
         self.assertEqual(errand.node, GADGETZAN_HORDE)
         near = flightlearn.candidates(
-            standing=IN_TOWN, known=frozenset(), team=flightlearn.TEAM_HORDE,
-            nodes=(HORDE_NODE, NEUTRAL_NODE), masters=MASTERS)
-        self.assertEqual([node.id for _yards, node, _master in near],
-                         [GADGETZAN_HORDE, MARSHALS_REFUGE])
+            standing=IN_TOWN,
+            known=frozenset(),
+            team=flightlearn.TEAM_HORDE,
+            nodes=(HORDE_NODE, NEUTRAL_NODE),
+            masters=MASTERS,
+        )
+        self.assertEqual(
+            [node.id for _yards, node, _master in near],
+            [GADGETZAN_HORDE, MARSHALS_REFUGE],
+        )
 
     def test_a_node_given_up_on_is_passed_over_not_treated_as_known(self):
         """A give-up memory that folded into the taximask would be fabricated
@@ -420,18 +511,22 @@ class ExactlyOneAimAndOnlyWhenThereIsSomethingToLearn(unittest.TestCase):
         self.assertEqual(errand.aim, "flight master:79")
 
     def test_every_candidate_passed_over_leaves_a_refusal_that_says_so(self):
-        errand = self._choose(NOTHING_KNOWN,
-                              skip=(GADGETZAN_ALLIANCE, MARSHALS_REFUGE))
+        errand = self._choose(NOTHING_KNOWN, skip=(GADGETZAN_ALLIANCE, MARSHALS_REFUGE))
         self.assertEqual(errand.aim, "")
         self.assertIn("given up on", errand.refused)
 
     def test_no_standing_row_is_a_refusal_with_a_sentence(self):
-        for row in (None, {}, {"map_id": 1},
-                    {"map_id": 1, "pos_x": -7150.0},
-                    {"map_id": None, "pos_x": -7150.0, "pos_y": -3760.0}):
+        for row in (
+            None,
+            {},
+            {"map_id": 1},
+            {"map_id": 1, "pos_x": -7150.0},
+            {"map_id": None, "pos_x": -7150.0, "pos_y": -3760.0},
+        ):
             with self.subTest(standing=row):
-                errand = flightlearn.choose(character="Grug", standing=row,
-                                            taximask=NOTHING_KNOWN, race=HUMAN)
+                errand = flightlearn.choose(
+                    character="Grug", standing=row, taximask=NOTHING_KNOWN, race=HUMAN
+                )
                 self.assertEqual(errand.aim, "")
                 self.assertIn("overseer_snapshot", errand.refused)
                 # And never the OTHER refusal, which would claim the family
@@ -459,8 +554,11 @@ class ExactlyOneAimAndOnlyWhenThereIsSomethingToLearn(unittest.TestCase):
                 self.assertLessEqual(len(errand.aim), travel.COLUMN_WIDTH)
 
     def test_a_refusal_never_carries_an_aim_and_an_aim_never_a_refusal(self):
-        for errand in (self._choose(NOTHING_KNOWN), self._choose("nonsense"),
-                       self._choose(_mask(39, 79))):
+        for errand in (
+            self._choose(NOTHING_KNOWN),
+            self._choose("nonsense"),
+            self._choose(_mask(39, 79)),
+        ):
             with self.subTest(why=errand.why):
                 self.assertNotEqual(bool(errand.aim), bool(errand.refused))
 
@@ -512,10 +610,11 @@ class TheCallerIsWiredAndCannotLatchTheColumn(unittest.TestCase):
     def setUpClass(cls):
         cls.source = BRIDGE.read_text(encoding="utf-8", errors="replace")
         start = cls.source.index("async def _flight_learn_once(self)")
-        cls.body = cls.source[start:cls.source.index(
-            "async def _flight_learn_loop(self)")]
+        cls.body = cls.source[
+            start : cls.source.index("async def _flight_learn_loop(self)")
+        ]
         opened = cls.body.index('"""')
-        cls.code = cls.body[cls.body.index('"""', opened + 3) + 3:]
+        cls.code = cls.body[cls.body.index('"""', opened + 3) + 3 :]
 
     def test_the_pass_exists_and_asks_the_pure_module(self):
         self.assertIn("flightlearn.choose(", self.code)
@@ -538,8 +637,8 @@ class TheCallerIsWiredAndCannotLatchTheColumn(unittest.TestCase):
         an errand that cannot finish must not hold the column for ever. An aim
         `_retaskable_from` does not recognise is untouchable by `_is_economy_aim`
         and has no terminal path at all."""
-        guard = self.source[self.source.index("def _retaskable_from("):]
-        guard = guard[:guard.index("def _is_economy_aim(")]
+        guard = self.source[self.source.index("def _retaskable_from(") :]
+        guard = guard[: guard.index("def _is_economy_aim(")]
         self.assertIn("travel.is_flight_master_aim(aim)", guard)
 
     def test_the_claimant_has_a_lease_of_its_own(self):
@@ -548,8 +647,7 @@ class TheCallerIsWiredAndCannotLatchTheColumn(unittest.TestCase):
         `long_leases` under its own claimant, which is the mechanism
         infra#4183 built for exactly this and NOT an exemption from the
         lease."""
-        self.assertIn("FLIGHT_CLAIMANT: TOWN_SLOT_FLIGHT_LEASE_SECONDS",
-                      self.source)
+        self.assertIn("FLIGHT_CLAIMANT: TOWN_SLOT_FLIGHT_LEASE_SECONDS", self.source)
         self.assertIn('FLIGHT_CLAIMANT = "flight"', self.source)
 
     def test_the_lease_is_derived_from_the_bound_and_not_chosen_beside_it(self):
@@ -557,17 +655,18 @@ class TheCallerIsWiredAndCannotLatchTheColumn(unittest.TestCase):
         drifting here means a bound the lease cannot cover - an errand that
         cannot finish holding the column, which is infra#3703 exactly."""
         self.assertIn(
-            "TOWN_SLOT_FLIGHT_LEASE_SECONDS = flightlearn.lease_for(",
-            self.source)
+            "TOWN_SLOT_FLIGHT_LEASE_SECONDS = flightlearn.lease_for(", self.source
+        )
         self.assertIn("FLIGHT_LEARN_REACH_YARDS", self.source)
 
     def test_the_cadence_is_longer_than_the_lease_it_takes(self):
         """Otherwise the pass queues for a column it is already holding."""
-        cycle = float(re.search(
-            r'FLIGHT_LEARN_CYCLE_SECONDS.*?"([0-9.]+)"',
-            self.source, re.DOTALL).group(1))
-        self.assertGreater(cycle,
-                           flightlearn.lease_for(flightlearn.REACH_YARDS))
+        cycle = float(
+            re.search(
+                r'FLIGHT_LEARN_CYCLE_SECONDS.*?"([0-9.]+)"', self.source, re.DOTALL
+            ).group(1)
+        )
+        self.assertGreater(cycle, flightlearn.lease_for(flightlearn.REACH_YARDS))
 
     def test_the_walk_is_bounded_by_the_same_lease_it_will_be_given(self):
         self.assertIn("reach_yards=FLIGHT_LEARN_REACH_YARDS", self.code)
@@ -583,20 +682,23 @@ class TheCallerIsWiredAndCannotLatchTheColumn(unittest.TestCase):
         step asks `flightlearn.learned`, which needs a bit that was absent
         before and present after, and answers False for every reading it
         cannot make."""
-        settle = self.source[self.source.index("def _settle_flight_attempts("):]
-        settle = settle[:settle.index("async def _flight_learn_once(")]
+        settle = self.source[self.source.index("def _settle_flight_attempts(") :]
+        settle = settle[: settle.index("async def _flight_learn_once(")]
         self.assertIn("flightlearn.learned(", settle)
         self.assertNotIn("delivered", settle)
         # And the settle runs before anything new is asked for, so a node that
         # HAS been learned leaves the give-up memory first.
-        self.assertLess(self.code.index("_settle_flight_attempts"),
-                        self.code.index("flightlearn.choose("))
+        self.assertLess(
+            self.code.index("_settle_flight_attempts"),
+            self.code.index("flightlearn.choose("),
+        )
 
     def test_it_reads_the_mask_before_the_walk_it_will_judge(self):
-        """"The bit flipped" is a question about a pair of readings, and a
+        """ "The bit flipped" is a question about a pair of readings, and a
         single reading cannot answer it."""
-        self.assertIn("self._flight_attempts[errand.node] = (tried + 1, taximask)",
-                      self.code)
+        self.assertIn(
+            "self._flight_attempts[errand.node] = (tried + 1, taximask)", self.code
+        )
 
     def test_only_the_leader_is_aimed(self):
         """A follower aim is an UPDATE that moves nobody and is never released.
@@ -628,18 +730,21 @@ class TheCallerIsWiredAndCannotLatchTheColumn(unittest.TestCase):
                 self.assertNotIn(verb, self.body)
         # The taximask half IS repository-wide: nothing in this process has
         # ever written that column and nothing may start.
-        for writer in ("UPDATE characters", "SET taximask",
-                       "UPDATE acore_characters.characters"):
+        for writer in (
+            "UPDATE characters",
+            "SET taximask",
+            "UPDATE acore_characters.characters",
+        ):
             with self.subTest(writer=writer):
                 self.assertNotIn(writer, self.source)
         # The one statement this path builds against `characters` is a SELECT.
-        reader = self.source[self.source.index("_TAXIMASK_SQL = ("):]
-        reader = reader[:reader.index("def _fetch_taximasks")]
+        reader = self.source[self.source.index("_TAXIMASK_SQL = (") :]
+        reader = reader[: reader.index("def _fetch_taximasks")]
         self.assertIn("SELECT name, race, taximask", reader)
 
     def test_the_survey_asks_for_the_flag_the_module_keys_the_role_on(self):
-        sql = self.source[self.source.index("_FLIGHT_MASTER_SQL = ("):]
-        sql = sql[:sql.index("def _fetch_taximasks")]
+        sql = self.source[self.source.index("_FLIGHT_MASTER_SQL = (") :]
+        sql = sql[: sql.index("def _fetch_taximasks")]
         self.assertIn("ct.npcflag & %s", sql)
         self.assertIn("flightlearn.FLIGHT_MASTER_NPC_FLAG", sql)
         self.assertIn("c.map = %s", sql)

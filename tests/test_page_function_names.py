@@ -21,6 +21,7 @@ it fails loudly the moment a second declaration of an existing name lands.
 
 Ticket: infra#3398.
 """
+
 import collections
 import pathlib
 import re
@@ -41,11 +42,12 @@ class EveryTopLevelFunctionHasItsOwnName(unittest.TestCase):
         counts = collections.Counter(DECLARATION.findall(source))
         repeated = sorted(name for name, n in counts.items() if n > 1)
         self.assertEqual(
-            [], repeated,
+            [],
+            repeated,
             "declared more than once at the top level of index.html, so the "
             "later declaration silently replaces the earlier one and every "
-            "caller of the earlier reaches the wrong function: "
-            + ", ".join(repeated))
+            "caller of the earlier reaches the wrong function: " + ", ".join(repeated),
+        )
 
     def test_it_can_see_the_functions_it_is_meant_to_guard(self):
         """A regex that matches nothing would pass the test above forever."""

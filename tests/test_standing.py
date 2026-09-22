@@ -21,6 +21,7 @@ world database IS empty.
 
 Tickets: quadseven/mod-overseer#88, quadseven/mod-overseer#160.
 """
+
 import json
 import pathlib
 import unittest
@@ -77,18 +78,25 @@ def rep(faction, value, flags=standing.FLAG_VISIBLE, name=FIRST):
 
 
 def char(name=FIRST, level=27, race=HUMAN, class_id=WARRIOR, group=0):
-    return {"name": name, "level": level, "race": race, "class": class_id,
-            "activeTalentGroup": group}
+    return {
+        "name": name,
+        "level": level,
+        "race": race,
+        "class": class_id,
+        "activeTalentGroup": group,
+    }
 
 
 class TheWowheadLink(unittest.TestCase):
     def test_it_is_the_one_format_this_service_already_uses(self):
         """achievements.py builds the same link for items. Two spellings of
         one URL is two things to fix when wowhead moves."""
-        self.assertEqual(standing.wowhead("skill", 171),
-                         "https://www.wowhead.com/wotlk/skill=171")
-        self.assertEqual(standing.wowhead("faction", 72),
-                         "https://www.wowhead.com/wotlk/faction=72")
+        self.assertEqual(
+            standing.wowhead("skill", 171), "https://www.wowhead.com/wotlk/skill=171"
+        )
+        self.assertEqual(
+            standing.wowhead("faction", 72), "https://www.wowhead.com/wotlk/faction=72"
+        )
 
 
 class WhichSkillIsATrade(unittest.TestCase):
@@ -98,30 +106,39 @@ class WhichSkillIsATrade(unittest.TestCase):
         ids = standing.profession_ids()
         self.assertEqual(ids[ALCHEMY], "alchemy")
         self.assertEqual(ids[ENCHANTING], "enchanting")
-        self.assertEqual(set(ids.values()),
-                         professions.PRIMARY | professions.SECONDARY)
+        self.assertEqual(set(ids.values()), professions.PRIMARY | professions.SECONDARY)
 
     def test_a_primary_trade_is_grouped_as_one(self):
-        self.assertEqual(standing.skill_group(ALCHEMY, standing.CATEGORY_PROFESSION),
-                         standing.GROUP_PROFESSION)
+        self.assertEqual(
+            standing.skill_group(ALCHEMY, standing.CATEGORY_PROFESSION),
+            standing.GROUP_PROFESSION,
+        )
 
     def test_a_secondary_trade_is_told_from_a_racial_passive(self):
         """THE TRAP THIS FUNCTION EXISTS FOR. SkillLine files first aid,
         cooking and fishing in the SAME category as `Racial - Gnome` and
         `Riding`, so a category rule reports a gnome's racial as a trade."""
-        self.assertEqual(standing.skill_group(FIRST_AID, standing.CATEGORY_SECONDARY),
-                         standing.GROUP_SECONDARY)
+        self.assertEqual(
+            standing.skill_group(FIRST_AID, standing.CATEGORY_SECONDARY),
+            standing.GROUP_SECONDARY,
+        )
         gnome_racial = 753
-        self.assertEqual(standing.skill_group(gnome_racial, standing.CATEGORY_SECONDARY),
-                         standing.GROUP_OTHER)
+        self.assertEqual(
+            standing.skill_group(gnome_racial, standing.CATEGORY_SECONDARY),
+            standing.GROUP_OTHER,
+        )
 
     def test_defence_is_pulled_out_of_the_weapon_pile(self):
         """It is the one defensive number in the table, and fifteen weapon
         rows is where it goes to stop being read."""
-        self.assertEqual(standing.skill_group(DEFENCE, standing.CATEGORY_WEAPON),
-                         standing.GROUP_DEFENCE)
-        self.assertEqual(standing.skill_group(SWORDS, standing.CATEGORY_WEAPON),
-                         standing.GROUP_WEAPON)
+        self.assertEqual(
+            standing.skill_group(DEFENCE, standing.CATEGORY_WEAPON),
+            standing.GROUP_DEFENCE,
+        )
+        self.assertEqual(
+            standing.skill_group(SWORDS, standing.CATEGORY_WEAPON),
+            standing.GROUP_WEAPON,
+        )
 
     def test_an_unknown_category_still_lands_somewhere(self):
         self.assertEqual(standing.skill_group(999999, 4242), standing.GROUP_OTHER)
@@ -240,8 +257,9 @@ class WhatATradeCanMake(unittest.TestCase):
 
     def test_a_spell_the_character_knows_from_another_trade_is_not_counted(self):
         spice_bread = 37836
-        built = standing.trade_entry(self.entry, "alchemy", BOOK,
-                                     frozenset({spice_bread}))
+        built = standing.trade_entry(
+            self.entry, "alchemy", BOOK, frozenset({spice_bread})
+        )
         self.assertEqual(built["recipes"]["known"], 0)
 
 
@@ -250,28 +268,35 @@ class TheReputationLadder(unittest.TestCase):
         """The floors are the core's own (ReputationMgr::PointsInRank). One
         off by a point puts a character in the wrong rank at the boundary,
         which is exactly where anybody would be looking."""
-        for total, expected in ((EXALTED_FLOOR, "Exalted"),
-                                (EXALTED_FLOOR - 1, "Revered"),
-                                (REVERED_FLOOR, "Revered"),
-                                (REVERED_FLOOR - 1, "Honored"),
-                                (HONORED_FLOOR, "Honored"),
-                                (HONORED_FLOOR - 1, "Friendly"),
-                                (FRIENDLY_FLOOR, "Friendly"),
-                                (FRIENDLY_FLOOR - 1, "Neutral"),
-                                (NEUTRAL_FLOOR, "Neutral"),
-                                (-1, "Unfriendly"),
-                                (-3000, "Unfriendly"),
-                                (-3001, "Hostile"),
-                                (-6000, "Hostile"),
-                                (-6001, "Hated"),
-                                (standing.REPUTATION_BOTTOM, "Hated")):
-            self.assertEqual(standing.RANK_NAMES[standing.reputation_rank(total)],
-                             expected, total)
+        for total, expected in (
+            (EXALTED_FLOOR, "Exalted"),
+            (EXALTED_FLOOR - 1, "Revered"),
+            (REVERED_FLOOR, "Revered"),
+            (REVERED_FLOOR - 1, "Honored"),
+            (HONORED_FLOOR, "Honored"),
+            (HONORED_FLOOR - 1, "Friendly"),
+            (FRIENDLY_FLOOR, "Friendly"),
+            (FRIENDLY_FLOOR - 1, "Neutral"),
+            (NEUTRAL_FLOOR, "Neutral"),
+            (-1, "Unfriendly"),
+            (-3000, "Unfriendly"),
+            (-3001, "Hostile"),
+            (-6000, "Hostile"),
+            (-6001, "Hated"),
+            (standing.REPUTATION_BOTTOM, "Hated"),
+        ):
+            self.assertEqual(
+                standing.RANK_NAMES[standing.reputation_rank(total)], expected, total
+            )
 
     def test_the_floor_of_a_rank_is_where_the_rank_starts(self):
-        for index, floor in ((3, NEUTRAL_FLOOR), (4, FRIENDLY_FLOOR),
-                             (5, HONORED_FLOOR), (6, REVERED_FLOOR),
-                             (7, EXALTED_FLOOR)):
+        for index, floor in (
+            (3, NEUTRAL_FLOOR),
+            (4, FRIENDLY_FLOOR),
+            (5, HONORED_FLOOR),
+            (6, REVERED_FLOOR),
+            (7, EXALTED_FLOOR),
+        ):
             self.assertEqual(standing.rank_floor(index), floor, index)
             self.assertEqual(standing.reputation_rank(floor), index)
 
@@ -299,10 +324,12 @@ class TheBaseReputation(unittest.TestCase):
         entry = BOOK.factions[STORMWIND]
         stored = 7186
         with_base = stored + standing.base_reputation(entry, HUMAN, WARRIOR)
-        self.assertEqual(standing.RANK_NAMES[standing.reputation_rank(with_base)],
-                         "Honored")
-        self.assertEqual(standing.RANK_NAMES[standing.reputation_rank(stored)],
-                         "Friendly")
+        self.assertEqual(
+            standing.RANK_NAMES[standing.reputation_rank(with_base)], "Honored"
+        )
+        self.assertEqual(
+            standing.RANK_NAMES[standing.reputation_rank(stored)], "Friendly"
+        )
 
     def test_a_faction_with_no_base_table_is_simply_zero(self):
         self.assertEqual(standing.base_reputation({}, HUMAN, WARRIOR), 0)
@@ -322,8 +349,9 @@ class TheBaseReputation(unittest.TestCase):
         would hand every unmatched character a base of zero by a route that
         also swallows the real entries below it - Stormwind's fourth slot is
         exactly this shape."""
-        self.assertEqual(standing.base_reputation({"base": [[0, 0, 7]]},
-                                                  HUMAN, WARRIOR), 0)
+        self.assertEqual(
+            standing.base_reputation({"base": [[0, 0, 7]]}, HUMAN, WARRIOR), 0
+        )
 
     def test_the_first_matching_entry_wins(self):
         entry = {"base": [[1 << (HUMAN - 1), 0, 11], [0, 0, 22]]}
@@ -343,8 +371,9 @@ class WhichFactionsHaveBeenMet(unittest.TestCase):
 
     def test_either_hiding_flag_overrides_visible(self):
         self.assertFalse(standing.met(standing.FLAG_VISIBLE | standing.FLAG_HIDDEN))
-        self.assertFalse(standing.met(standing.FLAG_VISIBLE
-                                      | standing.FLAG_INVISIBLE_FORCED))
+        self.assertFalse(
+            standing.met(standing.FLAG_VISIBLE | standing.FLAG_INVISIBLE_FORCED)
+        )
 
     def test_the_flag_combination_the_family_actually_carries_is_met(self):
         """MEASURED LIVE: all twenty-five of the family's real standings are
@@ -391,7 +420,8 @@ class TheSpecSummary(unittest.TestCase):
 
     def test_a_learned_rank_is_named_placed_and_counted_as_points(self):
         spec = standing.spec_summary(
-            WARRIOR, 27, [{"spell": PUNCTURE_R2, "specMask": 1}], TALENTS)
+            WARRIOR, 27, [{"spell": PUNCTURE_R2, "specMask": 1}], TALENTS
+        )
         self.assertEqual(spec["primary"], "Protection")
         self.assertEqual(spec["spent"], 2, "rank 2 is TWO points, not one talent")
         self.assertEqual(spec["distribution"], "0/0/2")
@@ -402,14 +432,17 @@ class TheSpecSummary(unittest.TestCase):
 
     def test_the_talent_links_to_the_rank_actually_held(self):
         spec = standing.spec_summary(
-            WARRIOR, 27, [{"spell": PUNCTURE_R2, "specMask": 1}], TALENTS)
+            WARRIOR, 27, [{"spell": PUNCTURE_R2, "specMask": 1}], TALENTS
+        )
         protection = [t for t in spec["trees"] if t["name"] == "Protection"][0]
-        self.assertEqual(protection["talents"][0]["wowhead"],
-                         standing.wowhead("spell", PUNCTURE_R2))
+        self.assertEqual(
+            protection["talents"][0]["wowhead"], standing.wowhead("spell", PUNCTURE_R2)
+        )
 
     def test_unspent_points_are_the_budget_minus_what_is_spent(self):
         spec = standing.spec_summary(
-            WARRIOR, 27, [{"spell": PUNCTURE_R1, "specMask": 1}], TALENTS)
+            WARRIOR, 27, [{"spell": PUNCTURE_R1, "specMask": 1}], TALENTS
+        )
         self.assertEqual(spec["available"], armory.talent_points_at(27, WARRIOR))
         self.assertEqual(spec["unspent"], spec["available"] - 1)
 
@@ -422,7 +455,8 @@ class TheSpecSummary(unittest.TestCase):
         """A build that silently reads a point short is worse than one that
         admits which point it cannot explain."""
         spec = standing.spec_summary(
-            WARRIOR, 27, [{"spell": 999999, "specMask": 1}], TALENTS)
+            WARRIOR, 27, [{"spell": 999999, "specMask": 1}], TALENTS
+        )
         self.assertEqual(spec["spent"], 1)
         self.assertEqual(spec["unknown"], ["spell 999999"])
 
@@ -431,7 +465,8 @@ class TheSpecSummary(unittest.TestCase):
         silently type-sensitive fails by producing an EMPTY spec, which is
         indistinguishable from a character who has spent nothing."""
         spec = standing.spec_summary(
-            WARRIOR, 27, [{"spell": str(PUNCTURE_R2), "specMask": 1}], TALENTS)
+            WARRIOR, 27, [{"spell": str(PUNCTURE_R2), "specMask": 1}], TALENTS
+        )
         self.assertEqual(spec["spent"], 2)
         self.assertEqual(spec["unknown"], [])
 
@@ -477,42 +512,58 @@ class TheFourPanels(unittest.TestCase):
     """The seams `_member` assembles, each reachable on its own."""
 
     def entries(self, *rows, level=27):
-        return sorted((standing.skill_entry(r, level, BOOK) for r in rows),
-                      key=lambda e: (-e["value"], e["name"]))
+        return sorted(
+            (standing.skill_entry(r, level, BOOK) for r in rows),
+            key=lambda e: (-e["value"], e["name"]),
+        )
 
     def test_the_trade_panel_splits_primary_from_secondary(self):
         panel = standing.trade_panel(
-            self.entries(skill(HERBALISM, 15, 75), skill(ALCHEMY, 1, 75),
-                         skill(FIRST_AID, 1, 75), skill(SWORDS, 135, 135)),
-            BOOK, frozenset())
-        self.assertEqual([t["trade"] for t in panel["primary"]],
-                         ["herbalism", "alchemy"])
+            self.entries(
+                skill(HERBALISM, 15, 75),
+                skill(ALCHEMY, 1, 75),
+                skill(FIRST_AID, 1, 75),
+                skill(SWORDS, 135, 135),
+            ),
+            BOOK,
+            frozenset(),
+        )
+        self.assertEqual(
+            [t["trade"] for t in panel["primary"]], ["herbalism", "alchemy"]
+        )
         self.assertEqual([t["trade"] for t in panel["secondary"]], ["first aid"])
 
     def test_the_trade_panel_reports_the_ceiling_that_blocks_a_new_trade(self):
         panel = standing.trade_panel(
             self.entries(skill(HERBALISM, 15, 75), skill(ALCHEMY, 1, 75)),
-            BOOK, frozenset())
+            BOOK,
+            frozenset(),
+        )
         self.assertEqual(panel["slots_free"], 0)
         self.assertEqual(panel["max_primary"], professions.MAX_PRIMARY)
 
     def test_a_character_with_one_primary_has_a_slot_free(self):
         panel = standing.trade_panel(
-            self.entries(skill(HERBALISM, 15, 75)), BOOK, frozenset())
+            self.entries(skill(HERBALISM, 15, 75)), BOOK, frozenset()
+        )
         self.assertEqual(panel["slots_free"], 1)
         self.assertEqual(panel["blocking"], ["herbalism"])
 
     def test_the_skill_panel_leaves_the_trades_out(self):
         panel = standing.skill_panel(
-            self.entries(skill(ALCHEMY, 1, 75), skill(SWORDS, 135, 135)), 27)
+            self.entries(skill(ALCHEMY, 1, 75), skill(SWORDS, 135, 135)), 27
+        )
         groups = {g["group"] for g in panel["groups"]}
         self.assertEqual(groups, {standing.GROUP_WEAPON})
 
     def test_the_skill_panel_totals_only_the_graded_combat_skills(self):
         """A proficiency in the pile would poison this number by 134."""
         panel = standing.skill_panel(
-            self.entries(skill(SWORDS, 100, 135), skill(DEFENCE, 135, 135),
-                         skill(CLOTH, 1, 1)), 27)
+            self.entries(
+                skill(SWORDS, 100, 135), skill(DEFENCE, 135, 135), skill(CLOTH, 1, 1)
+            ),
+            27,
+        )
         self.assertEqual(panel["short_by"], 35)
         self.assertFalse(panel["at_cap"])
 
@@ -522,14 +573,12 @@ class TheFourPanels(unittest.TestCase):
         self.assertTrue(panel["at_cap"])
 
     def test_the_reputation_panel_filters_then_sorts(self):
-        rows = [rep(IRONFORGE, 100), rep(STORMWIND, 7186),
-                rep(999998, 9999, flags=0)]
+        rows = [rep(IRONFORGE, 100), rep(STORMWIND, 7186), rep(999998, 9999, flags=0)]
         panel = standing.reputation_panel(rows, BOOK, HUMAN, WARRIOR)
         self.assertEqual([r["name"] for r in panel], ["Stormwind", "Ironforge"])
 
     def test_only_the_build_being_played_is_returned(self):
-        rows = [{"spell": PUNCTURE_R1, "specMask": 1},
-                {"spell": 12282, "specMask": 2}]
+        rows = [{"spell": PUNCTURE_R1, "specMask": 1}, {"spell": 12282, "specMask": 2}]
         self.assertEqual(standing.active_talents(char(group=0), rows), rows[:1])
         self.assertEqual(standing.active_talents(char(group=1), rows), rows[1:])
 
@@ -542,11 +591,19 @@ class TheWholePayload(unittest.TestCase):
     def build(self, **kw):
         rows = {
             "char_rows": [char()],
-            "skill_rows": [skill(HERBALISM, 15, 75), skill(ALCHEMY, 1, 75),
-                           skill(FIRST_AID, 1, 75), skill(SWORDS, 135, 135),
-                           skill(DEFENCE, 135, 135), skill(CLOTH, 1, 1)],
-            "reputation_rows": [rep(STORMWIND, 7186), rep(IRONFORGE, 1889),
-                                rep(999998, 500, flags=0)],
+            "skill_rows": [
+                skill(HERBALISM, 15, 75),
+                skill(ALCHEMY, 1, 75),
+                skill(FIRST_AID, 1, 75),
+                skill(SWORDS, 135, 135),
+                skill(DEFENCE, 135, 135),
+                skill(CLOTH, 1, 1),
+            ],
+            "reputation_rows": [
+                rep(STORMWIND, 7186),
+                rep(IRONFORGE, 1889),
+                rep(999998, 500, flags=0),
+            ],
             "talent_rows": [{"name": FIRST, "spell": PUNCTURE_R2, "specMask": 1}],
             "spell_rows": [{"name": FIRST, "spell": 37836}],
         }
@@ -567,16 +624,20 @@ class TheWholePayload(unittest.TestCase):
         member = self.build()["members"][0]
         self.assertTrue(member["present"])
         self.assertEqual(member["class"], "Warrior")
-        self.assertEqual([t["trade"] for t in member["professions"]["primary"]],
-                         ["herbalism", "alchemy"])
-        self.assertEqual([t["trade"] for t in member["professions"]["secondary"]],
-                         ["first aid"])
+        self.assertEqual(
+            [t["trade"] for t in member["professions"]["primary"]],
+            ["herbalism", "alchemy"],
+        )
+        self.assertEqual(
+            [t["trade"] for t in member["professions"]["secondary"]], ["first aid"]
+        )
         self.assertEqual(member["spec"]["primary"], "Protection")
 
     def test_only_factions_that_have_been_met_appear(self):
         member = self.build()["members"][0]
-        self.assertEqual([r["name"] for r in member["reputations"]],
-                         ["Stormwind", "Ironforge"])
+        self.assertEqual(
+            [r["name"] for r in member["reputations"]], ["Stormwind", "Ironforge"]
+        )
 
     def test_reputations_are_deepest_first(self):
         member = self.build()["members"][0]
@@ -628,10 +689,12 @@ class TheWholePayload(unittest.TestCase):
     def test_the_second_talent_build_is_not_summed_into_the_first(self):
         """character_talent holds BOTH specs, told apart by specMask.
         Summing them reports twice the points actually spent."""
-        payload = self.build(talent_rows=[
-            {"name": FIRST, "spell": PUNCTURE_R2, "specMask": 1},
-            {"name": FIRST, "spell": 12282, "specMask": 2},
-        ])
+        payload = self.build(
+            talent_rows=[
+                {"name": FIRST, "spell": PUNCTURE_R2, "specMask": 1},
+                {"name": FIRST, "spell": 12282, "specMask": 2},
+            ]
+        )
         self.assertEqual(payload["members"][0]["spec"]["spent"], 2)
 
     def test_the_payload_is_json(self):
@@ -654,10 +717,16 @@ class TheStandingBookItself(unittest.TestCase):
         self.assertGreater(len(BOOK.recipes), 1000)
 
     def test_it_names_the_skills_the_family_actually_hold(self):
-        for skill_id, name in ((ALCHEMY, "Alchemy"), (HERBALISM, "Herbalism"),
-                               (FIRST_AID, "First Aid"), (COOKING, "Cooking"),
-                               (FISHING, "Fishing"), (ENCHANTING, "Enchanting"),
-                               (SWORDS, "Swords"), (DEFENCE, "Defense")):
+        for skill_id, name in (
+            (ALCHEMY, "Alchemy"),
+            (HERBALISM, "Herbalism"),
+            (FIRST_AID, "First Aid"),
+            (COOKING, "Cooking"),
+            (FISHING, "Fishing"),
+            (ENCHANTING, "Enchanting"),
+            (SWORDS, "Swords"),
+            (DEFENCE, "Defense"),
+        ):
             self.assertEqual(BOOK.skill_name(skill_id), name)
 
     def test_every_trade_this_service_knows_about_is_in_the_book(self):
@@ -697,9 +766,13 @@ class TheStandingBookItself(unittest.TestCase):
         self.assertTrue(all(f["index"] >= 0 for f in BOOK.factions.values()))
 
     def test_it_names_the_factions_the_family_have_actually_met(self):
-        for faction_id, name in ((STORMWIND, "Stormwind"), (IRONFORGE, "Ironforge"),
-                                 (54, "Gnomeregan Exiles"), (69, "Darnassus"),
-                                 (930, "Exodar")):
+        for faction_id, name in (
+            (STORMWIND, "Stormwind"),
+            (IRONFORGE, "Ironforge"),
+            (54, "Gnomeregan Exiles"),
+            (69, "Darnassus"),
+            (930, "Exodar"),
+        ):
             self.assertEqual(BOOK.faction_name(faction_id), name)
 
     def test_every_faction_carries_four_base_entries(self):
@@ -736,28 +809,28 @@ class ThePagePanel(unittest.TestCase):
         cls.page = (HERE / "index.html").read_text()
         cls.server = (HERE / "map_server.py").read_text()
         start = cls.page.index("// --- the standing panel (mod-overseer#88")
-        cls.js = cls.page[start:cls.page.index("// --- the front door", start)]
+        cls.js = cls.page[start : cls.page.index("// --- the front door", start)]
 
     def test_the_panel_lives_inside_the_armory_tab(self):
         """It is the same question about the same five. A sixth tab button
         is one more thing to find on a phone."""
-        armory_section = self.page[self.page.index('<section id="armory">'):]
-        armory_section = armory_section[:armory_section.index("</section>")]
+        armory_section = self.page[self.page.index('<section id="armory">') :]
+        armory_section = armory_section[: armory_section.index("</section>")]
         self.assertIn('<div id="standing">', armory_section)
 
     def test_opening_the_tab_does_not_wait_for_the_timer(self):
-        show = self.page[self.page.index("function showView"):]
-        show = show[:show.index("setInterval(pollFamily")]
-        arm = show[show.index("if (isArm) {"):]
-        self.assertIn("pollStanding();", arm[:arm.index("return;")])
+        show = self.page[self.page.index("function showView") :]
+        show = show[: show.index("setInterval(pollFamily")]
+        arm = show[show.index("if (isArm) {") :]
+        self.assertIn("pollStanding();", arm[: arm.index("return;")])
 
     def test_the_poll_is_gated_on_the_tab_being_open(self):
-        poll = self.js[self.js.index("async function pollStanding"):]
+        poll = self.js[self.js.index("async function pollStanding") :]
         self.assertIn("if (view !== ARMORY_VIEW) return;", poll)
 
     def test_a_failed_poll_keeps_the_cards_it_has_already_drawn(self):
         """A blank panel reads as 'they have learned nothing'."""
-        poll = self.js[self.js.index("async function pollStanding"):]
+        poll = self.js[self.js.index("async function pollStanding") :]
         self.assertIn("may be stale", poll)
         self.assertNotIn("stcards.textContent", poll)
 
@@ -798,10 +871,11 @@ class ThePagePanel(unittest.TestCase):
     def test_the_gap_is_drawn_before_any_card(self):
         """Five cards each listing two trades look complete. Only the union
         shows that nobody can disenchant."""
-        render = self.js[self.js.index("function renderStanding"):]
-        render = render[:render.index("async function pollStanding")]
-        self.assertLess(render.index("renderGap(p.gap)"),
-                        render.index("for (const m of p.members)"))
+        render = self.js[self.js.index("function renderStanding") :]
+        render = render[: render.index("async function pollStanding")]
+        self.assertLess(
+            render.index("renderGap(p.gap)"), render.index("for (const m of p.members)")
+        )
 
     def test_the_endpoint_is_routed(self):
         self.assertIn('"/api/standing": _standing,', self.server)
@@ -810,14 +884,14 @@ class ThePagePanel(unittest.TestCase):
     def test_the_endpoint_takes_no_name(self):
         """WHO the family is belongs to bonds. Accepting a roster here would
         turn it into a general character query wearing a friendly name."""
-        handler = self.server[self.server.index("def _standing"):]
-        handler = handler[:handler.index("def _lineup")]
+        handler = self.server[self.server.index("def _standing") :]
+        handler = handler[: handler.index("def _lineup")]
         self.assertNotIn("query.get", handler)
         self.assertIn("family.roster()", self.server)
 
     def test_a_failed_query_keeps_the_contract_the_other_endpoints_hold(self):
-        handler = self.server[self.server.index("def _standing"):]
-        handler = handler[:handler.index("def _lineup")]
+        handler = self.server[self.server.index("def _standing") :]
+        handler = handler[: handler.index("def _lineup")]
         self.assertIn("503", handler)
         self.assertIn("world unreachable", handler)
 
@@ -825,10 +899,15 @@ class ThePagePanel(unittest.TestCase):
         """Every one of them is EMPTY on this realm, and an empty table
         joins to nothing WITHOUT erroring - which is how a panel ends up
         blank and confident. The names come from the frozen book."""
-        fetch = self.server[self.server.index("def _fetch_standing"):]
-        fetch = fetch[:fetch.index("# The quest log query")]
-        for table in ("faction_dbc", "skillline_dbc", "talent_dbc",
-                      "talenttab_dbc", "skilllineability_dbc"):
+        fetch = self.server[self.server.index("def _fetch_standing") :]
+        fetch = fetch[: fetch.index("# The quest log query")]
+        for table in (
+            "faction_dbc",
+            "skillline_dbc",
+            "talent_dbc",
+            "talenttab_dbc",
+            "skilllineability_dbc",
+        ):
             self.assertNotIn(table, fetch, table)
 
 

@@ -17,7 +17,7 @@ def _block(signature):
     start = source.index(signature)
     rest = source[start:]
     match = re.search(r"\n {0,3}(?:async )?def |\n {0,3}class ", rest[1:])
-    return rest[:match.start() + 1] if match else rest
+    return rest[: match.start() + 1] if match else rest
 
 
 class VendorStallDecisionTests(unittest.TestCase):
@@ -136,17 +136,26 @@ class MovementTests(unittest.TestCase):
 
     def test_family_is_cohesive_within_radius(self):
         result = vendor_stall.family_progress(
-            None, self._rows(), ("Grug", "Ugga"), 10.0,
+            None,
+            self._rows(),
+            ("Grug", "Ugga"),
+            10.0,
         )
         self.assertTrue(result.readable)
         self.assertFalse(result.split)
 
     def test_family_split_clock_accumulates_when_stationary(self):
         first = vendor_stall.family_progress(
-            None, self._rows(far=True), ("Grug", "Ugga"), 10.0,
+            None,
+            self._rows(far=True),
+            ("Grug", "Ugga"),
+            10.0,
         )
         result = vendor_stall.family_progress(
-            first.current, self._rows(far=True), ("Grug", "Ugga"), 1210.0,
+            first.current,
+            self._rows(far=True),
+            ("Grug", "Ugga"),
+            1210.0,
         )
         self.assertTrue(result.split)
         self.assertFalse(result.progressed)
@@ -154,33 +163,48 @@ class MovementTests(unittest.TestCase):
 
     def test_family_split_progress_keeps_split_clock(self):
         first = vendor_stall.family_progress(
-            None, self._rows(far=True), ("Grug", "Ugga"), 10.0,
+            None,
+            self._rows(far=True),
+            ("Grug", "Ugga"),
+            10.0,
         )
         result = vendor_stall.family_progress(
             first.current,
-            {"Grug": {"map_id": 0, "pos_x": 1, "pos_y": 0},
-             "Ugga": {"map_id": 0, "pos_x": 151, "pos_y": 0}},
-            ("Grug", "Ugga"), 1210.0,
+            {
+                "Grug": {"map_id": 0, "pos_x": 1, "pos_y": 0},
+                "Ugga": {"map_id": 0, "pos_x": 151, "pos_y": 0},
+            },
+            ("Grug", "Ugga"),
+            1210.0,
         )
         self.assertTrue(result.progressed)
         self.assertEqual(result.split_seconds, 1200.0)
 
     def test_family_regrouping_resets_split_clock(self):
         first = vendor_stall.family_progress(
-            None, self._rows(far=True), ("Grug", "Ugga"), 10.0,
+            None,
+            self._rows(far=True),
+            ("Grug", "Ugga"),
+            10.0,
         )
         result = vendor_stall.family_progress(
             first.current,
-            {"Grug": {"map_id": 0, "pos_x": 0, "pos_y": 0},
-             "Ugga": {"map_id": 0, "pos_x": 10, "pos_y": 0}},
-            ("Grug", "Ugga"), 1210.0,
+            {
+                "Grug": {"map_id": 0, "pos_x": 0, "pos_y": 0},
+                "Ugga": {"map_id": 0, "pos_x": 10, "pos_y": 0},
+            },
+            ("Grug", "Ugga"),
+            1210.0,
         )
         self.assertFalse(result.split)
         self.assertEqual(result.split_seconds, 0.0)
 
     def test_missing_family_member_is_unreadable(self):
         result = vendor_stall.family_progress(
-            None, self._rows(), ("Grug", "Ugga", "Og"), 10.0,
+            None,
+            self._rows(),
+            ("Grug", "Ugga", "Og"),
+            10.0,
         )
         self.assertFalse(result.readable)
 

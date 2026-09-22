@@ -47,6 +47,7 @@ classifier.
 
 PURE MODULE: no MySQL, no core, no clock.
 """
+
 from __future__ import annotations
 
 import dataclasses
@@ -90,22 +91,26 @@ RETRY_ELSEWHERE = "elsewhere"
 ELSEWHERE_GIVE_UP = 3
 
 # How far a terminal refusal reaches.
-ITEM = "item"        # the item is gone or unsellable: never ask for it again
+ITEM = "item"  # the item is gone or unsellable: never ask for it again
 REQUEST = "request"  # this exact guid+count is wrong; a corrected one may work
 
 # The `SellRefusalRetry` NEVER literals, split by scope. Only consulted when a
 # row carries no `retry` word of its own. `item not in bank` is the bank pass's
 # sibling refusal (mod_overseer.cpp DoBank) and costs nothing to honour now.
-TERMINAL_ITEM = frozenset({
-    "item not carried",
-    "item is a quest item",
-    "item cannot be sold",
-    "item not in bank",
-})
-TERMINAL_REQUEST = frozenset({
-    "count exceeds stack",
-    "malformed sell: want guid:<item_instance.guid>[ count:<n>]",
-})
+TERMINAL_ITEM = frozenset(
+    {
+        "item not carried",
+        "item is a quest item",
+        "item cannot be sold",
+        "item not in bank",
+    }
+)
+TERMINAL_REQUEST = frozenset(
+    {
+        "count exceeds stack",
+        "malformed sell: want guid:<item_instance.guid>[ count:<n>]",
+    }
+)
 
 # A row the world finished successfully. The item left the bags, so it is as
 # gone as one the world says is not carried.
@@ -119,18 +124,20 @@ _REQUEST_RE = re.compile(r"guid:(\d+)(?:\s+count:(\d+))?")
 @dataclass(frozen=True)
 class Attempt:
     """One finished or in-flight command, as the world answered it."""
+
     holder: str
     item_guid: int
     status: str = ""
     detail: str = ""
-    retry: str = ""           # the world's own verdict, when it wrote one
-    count: int = 0            # the count that was asked for
+    retry: str = ""  # the world's own verdict, when it wrote one
+    count: int = 0  # the count that was asked for
     stack: int | None = None  # the true stack the world reported, if it did
 
 
 @dataclass(frozen=True)
 class Plan:
     """What may be written now, and what was dropped and why."""
+
     write: tuple = ()
     skipped: dict = field(default_factory=dict)
 
@@ -173,10 +180,13 @@ def attempt_from_row(row) -> Attempt | None:
             # the detail literals still classify it.
             retry, stack = "", None
     return Attempt(
-        holder=str(row.get("target_name") or ""), item_guid=guid,
+        holder=str(row.get("target_name") or ""),
+        item_guid=guid,
         status=str(row.get("status") or ""),
         detail=str(row.get("detail") or ""),
-        retry=retry, count=count, stack=stack,
+        retry=retry,
+        count=count,
+        stack=stack,
     )
 
 
@@ -208,12 +218,12 @@ def settled(attempts) -> tuple:
             items.setdefault((attempt.holder, attempt.item_guid), reason)
         else:
             requests.setdefault(
-                (attempt.holder, attempt.item_guid, attempt.count), reason)
+                (attempt.holder, attempt.item_guid, attempt.count), reason
+            )
     return items, requests
 
 
-def refused_here(attempts, give_up=ELSEWHERE_GIVE_UP,
-                 at_vendor=False) -> dict:
+def refused_here(attempts, give_up=ELSEWHERE_GIVE_UP, at_vendor=False) -> dict:
     """(holder, item) -> reason, for items the world keeps refusing on PLACE.
 
     An ELSEWHERE refusal is not terminal, and must not be treated as one: the
@@ -260,14 +270,16 @@ def refused_here(attempts, give_up=ELSEWHERE_GIVE_UP,
         key = (attempt.holder, attempt.item_guid)
         tally[key] = tally.get(key, 0) + 1
     least = max(1, int(give_up))
-    return {key: "refused %d times for want of a reachable vendor" % count
-            for key, count in tally.items() if count >= least}
+    return {
+        key: "refused %d times for want of a reachable vendor" % count
+        for key, count in tally.items()
+        if count >= least
+    }
 
 
 def open_requests(attempts) -> set:
     """Keys with a row nobody has answered yet, which must not be doubled."""
-    return {(a.holder, a.item_guid) for a in attempts
-            if a.status in OPEN_STATUSES}
+    return {(a.holder, a.item_guid) for a in attempts if a.status in OPEN_STATUSES}
 
 
 def true_stacks(attempts) -> dict:
@@ -288,8 +300,10 @@ def reasons(skipped) -> str:
     """
     if not skipped:
         return "nothing"
-    return ", ".join("%d %s" % (count, reason) for reason, count
-                     in sorted(skipped.items(), key=lambda kv: (-kv[1], kv[0])))
+    return ", ".join(
+        "%d %s" % (count, reason)
+        for reason, count in sorted(skipped.items(), key=lambda kv: (-kv[1], kv[0]))
+    )
 
 
 def plan(candidates, attempts, at_vendor=False) -> Plan:
@@ -343,6 +357,9 @@ def plan(candidates, attempts, at_vendor=False) -> Plan:
             drop(done_requests[request_key])
             continue
         seen.add(key)
-        write.append(candidate if count == candidate.count
-                     else dataclasses.replace(candidate, count=count))
+        write.append(
+            candidate
+            if count == candidate.count
+            else dataclasses.replace(candidate, count=count)
+        )
     return Plan(write=tuple(write), skipped=skipped)

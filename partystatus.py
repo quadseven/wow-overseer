@@ -74,6 +74,7 @@ needed no change for this.
 PURE MODULE: rows in, lines out. No MySQL, no client, and no clock of its own
 unless one is not handed to it.
 """
+
 from __future__ import annotations
 
 from datetime import datetime
@@ -194,8 +195,11 @@ def line(members: list[dict]) -> str:
     """
     out = [PREFIX, VERSION]
     for member in members:
-        fields = [_clean(member.get("name")), _clean(member.get("code")),
-                  _short(_clean(member.get("label")))]
+        fields = [
+            _clean(member.get("name")),
+            _clean(member.get("code")),
+            _short(_clean(member.get("label"))),
+        ]
         if len(SEP.join(out + fields)) > MAX_LINE_CHARS:
             break
         out.extend(fields)
@@ -232,6 +236,7 @@ def parse(text) -> list[dict] | None:
 
 # --- the decision ------------------------------------------------------------
 
+
 def decide(facts: dict, pushed: dict | None = None) -> dict:
     """What one character's label says, given what is known about them.
 
@@ -266,6 +271,7 @@ def decide(facts: dict, pushed: dict | None = None) -> dict:
 
 # --- composing the pushed half -----------------------------------------------
 
+
 def _job_label(job: str) -> str:
     """The job column said in the space beside a name.
 
@@ -292,13 +298,16 @@ def _in_run(run: dict | None, roster: list[str]) -> set:
     """
     if run is None:
         return set()
-    stamped = [n.strip() for n in str(run.get("members") or "").split(",")
-               if n.strip()]
+    stamped = [n.strip() for n in str(run.get("members") or "").split(",") if n.strip()]
     return set(stamped) if stamped else set(roster)
 
 
-def build_push(roster_rows: list[dict], run_rows: list[dict],
-               event_rows: list[dict], now: datetime | None = None) -> dict:
+def build_push(
+    roster_rows: list[dict],
+    run_rows: list[dict],
+    event_rows: list[dict],
+    now: datetime | None = None,
+) -> dict:
     """The pushed half of every label, plus the command rows that carry it.
 
     Reads what the agenda banner already reads, through agenda's own functions,
@@ -333,8 +342,7 @@ def build_push(roster_rows: list[dict], run_rows: list[dict],
     run = agenda.active_run(run_rows)
     is_stalled = agenda.stalled(agenda.last_movement(event_rows), now)
     inside = _in_run(run, roster)
-    aims = {t["name"]: str(t.get("target") or "").strip()
-            for t in orders["travel"]}
+    aims = {t["name"]: str(t.get("target") or "").strip() for t in orders["travel"]}
     job = _job_label(orders["job"])
 
     members = []
@@ -381,9 +389,11 @@ def commands(text: str, speaker: str | None) -> list[dict]:
     """
     if not speaker or not text:
         return []
-    return [{
-        "target_name": speaker,
-        "command": text,
-        "kind": "chat",
-        "channel": "party_addon",
-    }]
+    return [
+        {
+            "target_name": speaker,
+            "command": text,
+            "kind": "chat",
+            "channel": "party_addon",
+        }
+    ]

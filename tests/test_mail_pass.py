@@ -6,6 +6,7 @@ fetches letters and free slots and writes `mail` rows, every decision about what
 is worth collecting is mailrun.py's, and the ground aim that puts a mailbox
 within reach is written BEFORE any row that needs one.
 """
+
 import pathlib
 import re
 import unittest
@@ -51,8 +52,11 @@ def _statements(signature: str) -> str:
     pass's per-taker gate quotes the very strings the gate is asserted against
     (infra#3830).
     """
-    return "\n".join(line for line in _code(signature).splitlines()
-                     if not line.lstrip().startswith("#"))
+    return "\n".join(
+        line
+        for line in _code(signature).splitlines()
+        if not line.lstrip().startswith("#")
+    )
 
 
 def _sql(name: str) -> str:
@@ -65,18 +69,17 @@ def _sql(name: str) -> str:
     """
     src = _source()
     start = src.index("%s = (" % name)
-    return src[start:src.index("\n)\n", start)]
+    return src[start : src.index("\n)\n", start)]
 
 
 class ThePassRunsAndInTheRightOrder(unittest.TestCase):
-
     def test_the_loop_is_started_with_the_others(self):
         """A loop nobody creates is a feature that ships and never runs, which
         is the exact failure this pass exists to undo one table over."""
         src = _source()
-        gateway = src[src.index("self._loops = {"):src.index("async def on_ready(")]
+        gateway = src[src.index("self._loops = {") : src.index("async def on_ready(")]
         self.assertIn("self._mail_loop,", gateway)
-        headless = src[src.index("loops = ["):src.index("log.info(\"headless:")]
+        headless = src[src.index("loops = [") : src.index('log.info("headless:')]
         self.assertIn("self._mail_loop,", headless)
 
     def test_the_loop_calls_the_pass_and_survives_a_failed_one(self):
@@ -103,7 +106,7 @@ class ThePassRunsAndInTheRightOrder(unittest.TestCase):
         """The guild bank pass manufactured 84 `no guild bank in reach` rows
         this way before infra#3702. A refused aim must return, not queue."""
         body = _block("    async def _mail_once(")
-        refusal = body[body.index("if not post.aim:"):body.index("aimed = await")]
+        refusal = body[body.index("if not post.aim:") : body.index("aimed = await")]
         self.assertIn("return", refusal)
         self.assertNotIn("_insert_mail", refusal)
 
@@ -137,8 +140,9 @@ class ThePassRunsAndInTheRightOrder(unittest.TestCase):
         it."""
         code = _statements("    async def _mail_once(")
         self.assertIn(
-            "at_the_mailbox = travel.spawn_in_reach(spawn, where, "
-            "TOWN_COUNTER_YARDS)", code)
+            "at_the_mailbox = travel.spawn_in_reach(spawn, where, TOWN_COUNTER_YARDS)",
+            code,
+        )
         self.assertNotIn("TOWN_COUNTER_YARDS ** 2", code)
         self.assertNotIn('spawn.get("d2")', code)
         self.assertIn("if not aimed and not at_the_mailbox:", code)
@@ -157,7 +161,6 @@ class ThePassRunsAndInTheRightOrder(unittest.TestCase):
 
 
 class TheBridgeDecidesNothingAboutTheMail(unittest.TestCase):
-
     def test_the_plan_comes_from_the_pure_module(self):
         body = _block("    async def _mail_once(")
         self.assertIn("mailrun.letters_from_rows(", body)
@@ -169,8 +172,15 @@ class TheBridgeDecidesNothingAboutTheMail(unittest.TestCase):
         """Which letter, which verb and which reason are all decided in the
         pure module. The bridge must not name a verb, a wall or a threshold."""
         body = _code("    async def _mail_once(")
-        for word in ("take-item", "take-money", "delete", "return mail",
-                     "cod", "deliver_time", "disposition."):
+        for word in (
+            "take-item",
+            "take-money",
+            "delete",
+            "return mail",
+            "cod",
+            "deliver_time",
+            "disposition.",
+        ):
             self.assertNotIn(word, body)
 
     def test_no_slot_or_visit_arithmetic_in_the_bridge(self):
@@ -187,11 +197,17 @@ class TheBridgeDecidesNothingAboutTheMail(unittest.TestCase):
 
 
 class TheRowsCarryWhatThePlannerReads(unittest.TestCase):
-
     def test_the_sql_names_every_column_letters_from_rows_uses(self):
         sql = _sql("_MAIL_SQL")
-        for column in ("AS holder", "AS mail_id", "AS money", "AS cod",
-                       "AS expire_time", "AS delivered", "AS item_guid"):
+        for column in (
+            "AS holder",
+            "AS mail_id",
+            "AS money",
+            "AS cod",
+            "AS expire_time",
+            "AS delivered",
+            "AS item_guid",
+        ):
             self.assertIn(column, sql)
 
     def test_the_attachment_join_is_a_left_join(self):
@@ -228,7 +244,6 @@ class TheRowsCarryWhatThePlannerReads(unittest.TestCase):
 
 
 class TheMailboxIsFoundInTheSpawnTable(unittest.TestCase):
-
     def test_the_query_is_the_vault_query_with_one_different_type(self):
         """infra#3741 recorded reaching a mailbox as the hard, open part. The
         query that already walks the family to a Guild Vault answers it."""
@@ -276,7 +291,7 @@ class TheMailRowIsTheRowDoMailReads(unittest.TestCase):
         body = _block("def _insert_mail(")
         self.assertIn("(target_name, command, kind, target_arg, source)", body)
         self.assertIn("'mail'", body)
-        self.assertIn("(take.character, command, \"economy\")", body)
+        self.assertIn('(take.character, command, "economy")', body)
 
     def test_target_arg_is_written_empty_rather_than_defaulted(self):
         body = _block("def _insert_mail(")
@@ -299,7 +314,6 @@ class TheMailRowIsTheRowDoMailReads(unittest.TestCase):
 
 
 class TheGroundAimIsGuardedLikeTheVaults(unittest.TestCase):
-
     def test_a_ground_aim_may_only_retask_an_idle_traveller(self):
         """Without this an `at:` aim falls through `_retaskable_from` to the
         unconditional branch and blanks `learn_skill` on its way past - the bug
@@ -327,8 +341,10 @@ class TheGroundAimIsGuardedLikeTheVaults(unittest.TestCase):
         happens in one place for all eight passes; this pass still does not
         write the column back itself."""
         code = "\n".join(
-            line for line in _code("    async def _mail_once(").splitlines()
-            if not line.lstrip().startswith("#"))
+            line
+            for line in _code("    async def _mail_once(").splitlines()
+            if not line.lstrip().startswith("#")
+        )
         self.assertNotIn("_release_trade_errand", code)
         self.assertNotIn("_write_trade_errand", code)
 
@@ -349,8 +365,8 @@ class TheTakeQueueWaitsForTheWalk(unittest.TestCase):
         self.body = _block("    async def _mail_once(")
         self.code = _statements("    async def _mail_once(")
         mark = '"""'
-        self.doc = self.body[:self.body.index(mark, self.body.index(mark) + 3)]
-        self.loop = self.code[self.code.index("        fresh = []"):]
+        self.doc = self.body[: self.body.index(mark, self.body.index(mark) + 3)]
+        self.loop = self.code[self.code.index("        fresh = []") :]
         self.gate = _statements("def _mail_takes_in_reach(")
 
     def test_every_taker_is_asked_for_not_just_the_leader(self):
@@ -358,8 +374,7 @@ class TheTakeQueueWaitsForTheWalk(unittest.TestCase):
         per-taker gate needs a row per taker, and `_fetch_positions` batches, so
         this stays one query."""
         self.assertIn("t.character for t in mail_plan.takes", self.code)
-        self.assertIn("_fetch_positions,\n            sorted({leader}",
-                      self.code)
+        self.assertIn("_fetch_positions,\n            sorted({leader}", self.code)
         self.assertNotIn("_fetch_positions, [leader]", self.code)
 
     def test_the_gate_sits_above_the_insert_in_the_take_loop(self):
@@ -367,20 +382,25 @@ class TheTakeQueueWaitsForTheWalk(unittest.TestCase):
         sitting inside it: a take whose holder has not arrived never reaches
         `_insert_mail` at all. `mail_plan.takes` goes to the gate and nowhere
         else, so nothing can iterate the unfiltered plan and write from it."""
-        self.assertIn("for take in _mail_takes_in_reach(\n"
-                      "                mail_plan.takes, spawn, positions, "
-                      "TOWN_COUNTER_YARDS,\n                post.aim):",
-                      self.loop)
-        self.assertLess(self.loop.index("_mail_takes_in_reach("),
-                        self.loop.index("_insert_mail"))
+        self.assertIn(
+            "for take in _mail_takes_in_reach(\n"
+            "                mail_plan.takes, spawn, positions, "
+            "TOWN_COUNTER_YARDS,\n                post.aim):",
+            self.loop,
+        )
+        self.assertLess(
+            self.loop.index("_mail_takes_in_reach("), self.loop.index("_insert_mail")
+        )
         self.assertNotIn("for take in mail_plan.takes:", self.code)
 
     def test_the_gate_reads_the_takers_own_position(self):
         """`positions.get(take.character)`, never the leader's row and never the
         spawn's `d2` - `d2` is measured from the leader, and a leader who has
         arrived says nothing about a follower who has not."""
-        self.assertIn("travel.spawn_in_reach(spawn, "
-                      "positions.get(take.character), yards)", self.gate)
+        self.assertIn(
+            "travel.spawn_in_reach(spawn, positions.get(take.character), yards)",
+            self.gate,
+        )
         self.assertNotIn("positions.get(leader)", self.gate)
         self.assertNotIn('spawn.get("d2")', self.gate)
         self.assertNotIn("at_the_mailbox", self.gate)
@@ -406,7 +426,7 @@ class TheTakeQueueWaitsForTheWalk(unittest.TestCase):
         already standing at the mailbox must not be skipped just because another
         town pass holds the column - but it no longer decides which rows are
         written."""
-        head = self.code[:self.code.index("_mail_takes_in_reach(")]
+        head = self.code[: self.code.index("_mail_takes_in_reach(")]
         self.assertIn("if not aimed and not at_the_mailbox:", head)
         self.assertNotIn("at_the_mailbox", self.gate)
         self.assertIn("IT IS THE LEADER'S DISTANCE", self.body)
@@ -423,10 +443,10 @@ class TheTakeQueueWaitsForTheWalk(unittest.TestCase):
         # exactly one of it and it sits under the correction.
         flat = " ".join(self.doc.split())
         self.assertEqual(flat.count("staying pending"), 1)
-        self.assertEqual(
-            flat.count("every character's take is queued alongside"), 1)
-        self.assertGreater(flat.index("staying pending"),
-                           flat.index("WAS FACTUALLY WRONG"))
+        self.assertEqual(flat.count("every character's take is queued alongside"), 1)
+        self.assertGreater(
+            flat.index("staying pending"), flat.index("WAS FACTUALLY WRONG")
+        )
 
     def test_the_prs_own_claim_is_quoted_and_answered(self):
         """#3788's body told a reviewer the pass "fails safe (queues nothing
@@ -436,23 +456,25 @@ class TheTakeQueueWaitsForTheWalk(unittest.TestCase):
         quoted = " ".join(self.doc.split())
         self.assertIn(
             'this pass "fails safe (queues nothing until someone can stand at '
-            'a mailbox)". Neither is true', quoted)
-        self.assertIn("asks whether a mailbox EXISTS on the leader's map - "
-                      "never whether anybody is at one", quoted)
+            'a mailbox)". Neither is true',
+            quoted,
+        )
+        self.assertIn(
+            "asks whether a mailbox EXISTS on the leader's map - "
+            "never whether anybody is at one",
+            quoted,
+        )
 
     def test_the_smaller_claim_of_the_old_heading_is_named(self):
-        """"NOTHING IS QUEUED UNTIL SOMEBODY CAN ACTUALLY STAND AT A MAILBOX" is
+        """ "NOTHING IS QUEUED UNTIL SOMEBODY CAN ACTUALLY STAND AT A MAILBOX" is
         still in this docstring, still arguing the thing it actually proves - no
         mailbox on the map means no row - and is answered rather than trimmed,
         because the gap between what it proves and what it reads as is how ten
         rows came to be manufactured."""
-        heading = ("NOTHING IS QUEUED UNTIL SOMEBODY CAN ACTUALLY STAND AT A "
-                   "MAILBOX")
+        heading = "NOTHING IS QUEUED UNTIL SOMEBODY CAN ACTUALLY STAND AT A MAILBOX"
         self.assertIn(heading, self.doc)
-        self.assertIn("AND THAT HEADING IS A SMALLER CLAIM THAN IT READS AS",
-                      self.doc)
-        self.assertGreater(self.doc.index("SMALLER CLAIM"),
-                           self.doc.index(heading))
+        self.assertIn("AND THAT HEADING IS A SMALLER CLAIM THAN IT READS AS", self.doc)
+        self.assertGreater(self.doc.index("SMALLER CLAIM"), self.doc.index(heading))
 
     def test_the_retryable_flag_is_not_mistaken_for_a_retry(self):
         """The one way this pass differs from the vault's:
@@ -466,7 +488,6 @@ class TheTakeQueueWaitsForTheWalk(unittest.TestCase):
 
 
 class TheModuleShips(unittest.TestCase):
-
     def test_mailrun_is_in_the_image(self):
         self.assertIn("mailrun.py", DOCKERFILE.read_text(encoding="utf-8"))
 

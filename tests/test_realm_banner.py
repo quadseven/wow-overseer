@@ -17,6 +17,7 @@ The first class is about WHERE the code sits, and it is not bookkeeping. Four
 suites slice these two files by their own banners, and code dropped inside one
 of those windows silently becomes part of a contract about something else.
 """
+
 import pathlib
 import re
 import unittest
@@ -67,8 +68,15 @@ class WhereTheCodeIsAllowedToSit(unittest.TestCase):
         above all of them, which is also where it belongs: it answers which
         world, and the rest only mean something inside that answer."""
         realm_at = self.server.index("    def _realm(")
-        for later in ("def _map", "def _family", "def _armory", "def _standing",
-                      "def _thoughts", "def _agenda", "def do_POST"):
+        for later in (
+            "def _map",
+            "def _family",
+            "def _armory",
+            "def _standing",
+            "def _thoughts",
+            "def _agenda",
+            "def do_POST",
+        ):
             self.assertLess(realm_at, self.server.index(later), later)
 
     def test_the_fetch_sits_above_every_fetch_window(self):
@@ -77,9 +85,13 @@ class WhereTheCodeIsAllowedToSit(unittest.TestCase):
         above _connect."""
         fetch_at = self.server.index("def _fetch_realm")
         self.assertGreater(fetch_at, self.server.index("def _connect"))
-        for later in ("def _fetch_rows", "def _fetch_armory",
-                      "def _fetch_achievements", "def _fetch_agenda",
-                      "def _guarded"):
+        for later in (
+            "def _fetch_rows",
+            "def _fetch_armory",
+            "def _fetch_achievements",
+            "def _fetch_agenda",
+            "def _guarded",
+        ):
             self.assertLess(fetch_at, self.server.index(later), later)
 
 
@@ -93,8 +105,12 @@ class TheBannerIsAlwaysVisible(unittest.TestCase):
 
     def test_it_is_not_inside_any_section(self):
         realm_at = self.page.index('<div id="realm"')
-        for section in ('<section id="family">', '<section id="armory">',
-                        '<section id="chronicle">', '<div id="wrap">'):
+        for section in (
+            '<section id="family">',
+            '<section id="armory">',
+            '<section id="chronicle">',
+            '<div id="wrap">',
+        ):
             self.assertLess(realm_at, self.page.index(section), section)
 
     def test_it_is_the_first_thing_in_the_body_and_above_every_other_banner(self):
@@ -109,8 +125,8 @@ class TheBannerIsAlwaysVisible(unittest.TestCase):
         self.assertLess(realm_at, self.page.index('<nav id="tabs">'))
 
     def test_showview_never_hides_it(self):
-        show = self.page[self.page.index("function showView"):]
-        show = show[:show.index("setInterval(pollFamily")]
+        show = self.page[self.page.index("function showView") :]
+        show = show[: show.index("setInterval(pollFamily")]
         for name in ("realm", "rklabel", "realmEl"):
             self.assertNotIn(name, show, name)
 
@@ -121,7 +137,7 @@ class TheBannerIsAlwaysVisible(unittest.TestCase):
 
     def _tab(self):
         start = self.page.index(JS_BANNER)
-        return self.page[start:self.page.index(AGENDA_JS, start)]
+        return self.page[start : self.page.index(AGENDA_JS, start)]
 
 
 class TheMarkupShipsTheAlarmState(unittest.TestCase):
@@ -140,8 +156,9 @@ class TheMarkupShipsTheAlarmState(unittest.TestCase):
     def setUpClass(cls):
         cls.page = (HERE / "index.html").read_text(encoding="utf-8")
         start = cls.page.index('<div id="realm"')
-        cls.markup = cls.page[start:cls.page.index("</div>", cls.page.index(
-            'id="rkbuild"'))]
+        cls.markup = cls.page[
+            start : cls.page.index("</div>", cls.page.index('id="rkbuild"'))
+        ]
 
     def test_the_default_class_is_the_unverified_one(self):
         self.assertIn('class="rk-unknown"', self.markup)
@@ -165,7 +182,7 @@ class TheMarkupShipsTheAlarmState(unittest.TestCase):
         """A colourblind reader, a monochrome screenshot, or a stylesheet that
         failed to load all have to leave the word standing."""
         self.assertIn("REALM NOT VERIFIED", self.page)
-        self.assertIn('rkLabel.textContent = d.label;', self.page)
+        self.assertIn("rkLabel.textContent = d.label;", self.page)
 
 
 class TheBannerDrawsWhatItIsGiven(unittest.TestCase):
@@ -177,7 +194,7 @@ class TheBannerDrawsWhatItIsGiven(unittest.TestCase):
     def setUpClass(cls):
         page = (HERE / "index.html").read_text(encoding="utf-8")
         start = page.index(JS_BANNER)
-        cls.tab = page[start:page.index(AGENDA_JS, start)]
+        cls.tab = page[start : page.index(AGENDA_JS, start)]
 
     def test_every_string_it_shows_is_set_as_text(self):
         self.assertNotIn("innerHTML", self.tab)
@@ -187,23 +204,28 @@ class TheBannerDrawsWhatItIsGiven(unittest.TestCase):
     def test_it_decides_no_realm_kind_of_its_own(self):
         """No comparison against a kind, no label text, no name-to-kind map.
         Everything it draws was named by realm.py."""
-        for decided in ('"production"', "'production'", '"NOT PRODUCTION"',
-                        "REALM NOT VERIFIED", '"stale"', "Homelab"):
+        for decided in (
+            '"production"',
+            "'production'",
+            '"NOT PRODUCTION"',
+            "REALM NOT VERIFIED",
+            '"stale"',
+            "Homelab",
+        ):
             self.assertNotIn(decided, self.tab, decided)
 
     def test_it_composes_no_sentence_of_its_own(self):
         """realm.py returns realm_line, build_line and warning_text already
         written, precisely so the suite can assert on what a reader sees."""
-        for field in ("d.label", "d.realm_line", "d.build_line",
-                      "d.warning_text"):
+        for field in ("d.label", "d.realm_line", "d.build_line", "d.warning_text"):
             self.assertIn(field, self.tab, field)
 
     def test_a_failed_poll_leaves_the_banner_exactly_as_it_was(self):
         """The realm has not changed because a query timed out. Blanking a
         correct PRODUCTION label over a network blip would be the page throwing
         away the one fact it is here to hold on to."""
-        catch = self.tab[self.tab.index("catch (e)"):]
-        catch = catch[:catch.index("pollRealm();")]
+        catch = self.tab[self.tab.index("catch (e)") :]
+        catch = catch[: catch.index("pollRealm();")]
         for wipe in ("textContent", "className", "renderRealm"):
             self.assertNotIn(wipe, catch, wipe)
 
@@ -218,14 +240,14 @@ class TheEndpointIsWiredUp(unittest.TestCase):
         self.assertIn('"/api/realm": _realm,', self.server)
 
     def test_the_builder_is_pure_and_takes_nothing_from_the_caller(self):
-        handler = self.server[self.server.index("    def _realm("):]
-        handler = handler[:handler.index("def _healthz")]
+        handler = self.server[self.server.index("    def _realm(") :]
+        handler = handler[: handler.index("def _healthz")]
         self.assertIn("realm.build_realm(**_fetch_realm())", handler)
         self.assertNotIn("query.get", handler)
 
     def test_a_failed_query_is_a_503_and_not_a_wrong_banner(self):
-        handler = self.server[self.server.index("    def _realm("):]
-        handler = handler[:handler.index("def _healthz")]
+        handler = self.server[self.server.index("    def _realm(") :]
+        handler = handler[: handler.index("def _healthz")]
         self.assertIn("503", handler)
 
     def test_the_page_asks_for_it(self):
@@ -269,7 +291,7 @@ class EveryReadIsGuardedWithTheClassThatActuallyFires(unittest.TestCase):
     def setUpClass(cls):
         cls.server = (HERE / "map_server.py").read_text(encoding="utf-8")
         start = cls.server.index("def _realm_guarded")
-        cls.guard = cls.server[start:cls.server.index("def _fetch_rows", start)]
+        cls.guard = cls.server[start : cls.server.index("def _fetch_rows", start)]
 
     def test_the_guard_catches_the_base_class_and_not_programmingerror(self):
         self.assertIn("except pymysql.err.MySQLError", self.guard)
@@ -289,11 +311,10 @@ class EveryReadIsGuardedWithTheClassThatActuallyFires(unittest.TestCase):
         bothers to guard. That rule is right elsewhere and wrong here: this is
         the one banner whose whole job is to be trustworthy when something is
         already wrong."""
-        fetch = self.server[self.server.index("def _fetch_realm"):]
-        fetch = fetch[:fetch.index("def _fetch_rows")]
+        fetch = self.server[self.server.index("def _fetch_realm") :]
+        fetch = fetch[: fetch.index("def _fetch_rows")]
         self.assertEqual(fetch.count("_realm_guarded("), 3)
-        for table in ("overseer_build", "acore_world.version",
-                      "acore_auth.realmlist"):
+        for table in ("overseer_build", "acore_world.version", "acore_auth.realmlist"):
             self.assertIn(table, self.server, table)
 
     def test_the_read_names_no_column_that_could_go_missing_on_an_older_realm(self):
@@ -303,7 +324,8 @@ class EveryReadIsGuardedWithTheClassThatActuallyFires(unittest.TestCase):
         only holds while the SELECT stays this narrow."""
         select = re.search(r'_BUILD_SQL = "([^"]+)"', self.server).group(1)
         self.assertEqual(
-            select, "SELECT name, value, source, reported_at FROM overseer_build")
+            select, "SELECT name, value, source, reported_at FROM overseer_build"
+        )
 
 
 class TheTwoSidesAgreeOnTheStrings(unittest.TestCase):
@@ -324,30 +346,35 @@ class TheTwoSidesAgreeOnTheStrings(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        cls.source = (MODULE_SRC.read_text(encoding="utf-8")
-                      if MODULE_SRC.exists() else "")
+        cls.source = (
+            MODULE_SRC.read_text(encoding="utf-8") if MODULE_SRC.exists() else ""
+        )
         cls.has_feature = "REALM_PRODUCTION" in cls.source
 
     def test_the_three_realm_kinds_are_spelled_the_same_on_both_sides(self):
         if not self.has_feature:
             self.skipTest("the pinned module predates the build report")
         import realm
-        for constant, value in (("REALM_PRODUCTION", realm.PRODUCTION),
-                                ("REALM_NON_PRODUCTION", realm.NON_PRODUCTION),
-                                ("REALM_UNKNOWN", realm.UNKNOWN)):
-            declaration = r'%s\[\]\s*=\s*"%s"' % (
-                re.escape(constant), re.escape(value))
+
+        for constant, value in (
+            ("REALM_PRODUCTION", realm.PRODUCTION),
+            ("REALM_NON_PRODUCTION", realm.NON_PRODUCTION),
+            ("REALM_UNKNOWN", realm.UNKNOWN),
+        ):
+            declaration = r'%s\[\]\s*=\s*"%s"' % (re.escape(constant), re.escape(value))
             self.assertRegex(self.source, declaration, constant)
 
     def test_the_pin_verdicts_are_spelled_the_same_on_both_sides(self):
         if not self.has_feature:
             self.skipTest("the pinned module predates the build report")
         import realm
-        for constant, value in (("PINS_MATCH", realm.PINS_MATCH),
-                                ("PINS_STALE", realm.PINS_STALE),
-                                ("PINS_UNKNOWN", realm.PINS_UNKNOWN)):
-            declaration = r'%s\[\]\s*=\s*"%s"' % (
-                re.escape(constant), re.escape(value))
+
+        for constant, value in (
+            ("PINS_MATCH", realm.PINS_MATCH),
+            ("PINS_STALE", realm.PINS_STALE),
+            ("PINS_UNKNOWN", realm.PINS_UNKNOWN),
+        ):
+            declaration = r'%s\[\]\s*=\s*"%s"' % (re.escape(constant), re.escape(value))
             self.assertRegex(self.source, declaration, constant)
 
 

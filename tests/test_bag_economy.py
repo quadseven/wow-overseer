@@ -7,38 +7,85 @@ is that those Netherweave Bags are unreachable and something else is not, so
 the tests are written from the real inventories rather than from convenient
 ones.
 """
+
 import unittest
 
 from bag_upgrade import Bag, Member
 
 import bag_economy as be
-from bag_economy import (LADDER, TIERS, can_train, cloth_for, coin, craftable,
-                         deficit, first_useful_rung, gatherers, levelling_craft,
-                         next_step, next_tier, raw_cost, reachable_cap,
-                         shopping_list, tier_for, within_reach, worth_making)
+from bag_economy import (
+    LADDER,
+    TIERS,
+    can_train,
+    cloth_for,
+    coin,
+    craftable,
+    deficit,
+    first_useful_rung,
+    gatherers,
+    levelling_craft,
+    next_step,
+    next_tier,
+    raw_cost,
+    reachable_cap,
+    shopping_list,
+    tier_for,
+    within_reach,
+    worth_making,
+)
 
 # The worn bags, exactly as `character_inventory` slots 19 to 22 held them.
 FAMILY = (
-    Member("Bork", 4, worn=(Bag("Small Red Pouch", 6),
-                            Bag("Netherweave Bag", 16),
-                            Bag("Netherweave Bag", 16),
-                            Bag("Green Leather Bag", 8))),
-    Member("Grog", 4, worn=(Bag("Small Green Pouch", 6),
-                            Bag("Red Leather Bag", 8),
-                            Bag("Large Brown Sack", 10),
-                            Bag("Green Leather Bag", 8))),
-    Member("Grug", 4, worn=(Bag("Netherweave Bag", 16),
-                            Bag("Netherweave Bag", 16),
-                            Bag("Green Leather Bag", 8),
-                            Bag("Green Leather Bag", 8))),
-    Member("Og", 4, worn=(Bag("Small Red Pouch", 6),
-                          Bag("Old Blanchy's Feed Pouch", 8),
-                          Bag("Netherweave Bag", 16),
-                          Bag("Netherweave Bag", 16))),
-    Member("Ugga", 4, worn=(Bag("Small Brown Pouch", 6),
-                            Bag("Red Leather Bag", 8),
-                            Bag("Green Leather Bag", 8),
-                            Bag("Old Blanchy's Feed Pouch", 8))),
+    Member(
+        "Bork",
+        4,
+        worn=(
+            Bag("Small Red Pouch", 6),
+            Bag("Netherweave Bag", 16),
+            Bag("Netherweave Bag", 16),
+            Bag("Green Leather Bag", 8),
+        ),
+    ),
+    Member(
+        "Grog",
+        4,
+        worn=(
+            Bag("Small Green Pouch", 6),
+            Bag("Red Leather Bag", 8),
+            Bag("Large Brown Sack", 10),
+            Bag("Green Leather Bag", 8),
+        ),
+    ),
+    Member(
+        "Grug",
+        4,
+        worn=(
+            Bag("Netherweave Bag", 16),
+            Bag("Netherweave Bag", 16),
+            Bag("Green Leather Bag", 8),
+            Bag("Green Leather Bag", 8),
+        ),
+    ),
+    Member(
+        "Og",
+        4,
+        worn=(
+            Bag("Small Red Pouch", 6),
+            Bag("Old Blanchy's Feed Pouch", 8),
+            Bag("Netherweave Bag", 16),
+            Bag("Netherweave Bag", 16),
+        ),
+    ),
+    Member(
+        "Ugga",
+        4,
+        worn=(
+            Bag("Small Brown Pouch", 6),
+            Bag("Red Leather Bag", 8),
+            Bag("Green Leather Bag", 8),
+            Bag("Old Blanchy's Feed Pouch", 8),
+        ),
+    ),
 )
 LEVELS = {"Grug": 29, "Bork": 26, "Grog": 26, "Og": 26, "Ugga": 24}
 OG_PURSE = 1594393
@@ -49,7 +96,6 @@ def rung(name):
 
 
 class TheLadderIsTheRealmsLadder(unittest.TestCase):
-
     def test_the_ranks_only_ever_go_up(self):
         """The order is the order Og meets them in, so a caller can stop at the
         first one that fits instead of scanning the whole table."""
@@ -84,7 +130,6 @@ class TheLadderIsTheRealmsLadder(unittest.TestCase):
 
 
 class TheTrainingTiersGateEverything(unittest.TestCase):
-
     def test_each_tier_is_gated_one_hundred_below_the_cap_it_grants(self):
         """This is how the caps were derived at all, `skilltiers_dbc` being
         empty, so it is worth a test rather than a comment."""
@@ -120,7 +165,6 @@ class TheTrainingTiersGateEverything(unittest.TestCase):
 
 
 class WhatOgCanActuallyMake(unittest.TestCase):
-
     def test_a_skill_one_tailor_can_make_no_bag_at_all(self):
         self.assertEqual(craftable(1), ())
 
@@ -134,7 +178,6 @@ class WhatOgCanActuallyMake(unittest.TestCase):
 
 
 class TheFamilysDeficit(unittest.TestCase):
-
     def test_ugga_is_first_in_line_for_a_ten(self):
         """Fewest worn slots of the five (30) and a 6-slot pouch to displace."""
         self.assertEqual(deficit(FAMILY, 10)[0].who, "Ugga")
@@ -173,13 +216,13 @@ class TheFamilysDeficit(unittest.TestCase):
         self.assertEqual(target.bag, "Woolen Bag")
 
     def test_a_family_that_needs_nothing_gets_no_target(self):
-        rich = [Member("Grug", 4, worn=tuple(Bag("Netherweave Bag", 16)
-                                             for _ in range(4)))]
+        rich = [
+            Member("Grug", 4, worn=tuple(Bag("Netherweave Bag", 16) for _ in range(4)))
+        ]
         self.assertIsNone(first_useful_rung(rich, 26))
 
 
 class TheGathering(unittest.TestCase):
-
     def test_a_woolen_bag_costs_nine_wool_cloth(self):
         """Three Bolt of Woolen Cloth at three Wool Cloth each. The family
         loots cloth and never bolts, so the plan has to be in cloth."""
@@ -198,14 +241,14 @@ class TheGathering(unittest.TestCase):
         self.assertEqual([name for _, name, _, _ in rows], ["Fine Thread"])
 
     def test_nothing_is_asked_for_when_everything_is_held(self):
-        self.assertEqual(shopping_list(rung("Woolen Bag"), 1,
-                                       {2592: 9, 2321: 1}), ())
+        self.assertEqual(shopping_list(rung("Woolen Bag"), 1, {2592: 9, 2321: 1}), ())
 
     def test_wool_is_the_cloth_the_whole_family_is_the_right_level_for(self):
         band = cloth_for(rung("Woolen Bag"))
         self.assertEqual(band.cloth, "Wool Cloth")
-        self.assertEqual(gatherers(band, LEVELS),
-                         ("Grug", "Bork", "Grog", "Og", "Ugga"))
+        self.assertEqual(
+            gatherers(band, LEVELS), ("Grug", "Bork", "Grog", "Og", "Ugga")
+        )
 
     def test_grug_has_outgrown_the_humanoids_that_drop_linen(self):
         """Linen tops out at level 26 on this realm and Grug is 29. Sending the
@@ -217,7 +260,6 @@ class TheGathering(unittest.TestCase):
 
 
 class TheLevellingCraft(unittest.TestCase):
-
     def test_linen_bolts_are_the_only_thing_a_skill_one_tailor_can_make(self):
         bolt = levelling_craft(1)
         self.assertEqual(bolt.name, "Bolt of Linen Cloth")
@@ -236,10 +278,17 @@ class TheLevellingCraft(unittest.TestCase):
 
 
 class TheNextConcreteStep(unittest.TestCase):
-
     def step(self, skill, cap, held=None, money=OG_PURSE, level=26):
-        return next_step(tailor="Og", skill=skill, cap=cap, level=level,
-                         money=money, members=FAMILY, levels=LEVELS, held=held)
+        return next_step(
+            tailor="Og",
+            skill=skill,
+            cap=cap,
+            level=level,
+            money=money,
+            members=FAMILY,
+            levels=LEVELS,
+            held=held,
+        )
 
     def test_the_measured_family_is_told_to_raise_tailoring_to_fifty(self):
         step = self.step(1, 75)
@@ -283,26 +332,41 @@ class TheNextConcreteStep(unittest.TestCase):
         """A family already in 12s can only be helped by a Runecloth Bag, and
         that is behind Artisan Tailoring, which is behind character level 35.
         Naming the wall is the answer; "nothing to do" would not be."""
-        kitted = [Member("Ugga", 4, worn=tuple(Bag("Mageweave Bag", 12)
-                                               for _ in range(4)))]
-        step = next_step(tailor="Og", skill=200, cap=225, level=26,
-                         money=OG_PURSE, members=kitted, levels=LEVELS,
-                         known=[rung("Runecloth Bag").spell])
+        kitted = [
+            Member("Ugga", 4, worn=tuple(Bag("Mageweave Bag", 12) for _ in range(4)))
+        ]
+        step = next_step(
+            tailor="Og",
+            skill=200,
+            cap=225,
+            level=26,
+            money=OG_PURSE,
+            members=kitted,
+            levels=LEVELS,
+            known=[rung("Runecloth Bag").spell],
+        )
         self.assertEqual(step.rung.bag, "Runecloth Bag")
         self.assertIn("level 26", step.said)
         self.assertIn("Artisan Tailoring", step.said)
 
     def test_a_family_needing_nothing_gets_told_that_and_not_a_craft(self):
-        rich = [Member("Grug", 4, worn=tuple(Bag("Netherweave Bag", 16)
-                                             for _ in range(4)))]
-        step = next_step(tailor="Og", skill=225, cap=225, level=26,
-                         money=OG_PURSE, members=rich, levels=LEVELS)
+        rich = [
+            Member("Grug", 4, worn=tuple(Bag("Netherweave Bag", 16) for _ in range(4)))
+        ]
+        step = next_step(
+            tailor="Og",
+            skill=225,
+            cap=225,
+            level=26,
+            money=OG_PURSE,
+            members=rich,
+            levels=LEVELS,
+        )
         self.assertIn("no bag worth making", step.said)
         self.assertIsNone(step.rung)
 
 
 class TheSentencesAreReadable(unittest.TestCase):
-
     def test_copper_is_spoken_the_way_the_game_shows_it(self):
         self.assertEqual(coin(500), "5s")
         self.assertEqual(coin(15000), "1g 50s")
@@ -311,9 +375,15 @@ class TheSentencesAreReadable(unittest.TestCase):
 
     def test_no_step_carries_an_em_dash(self):
         for skill, cap in ((1, 75), (50, 75), (80, 150)):
-            said = next_step(tailor="Og", skill=skill, cap=cap, level=26,
-                             money=OG_PURSE, members=FAMILY,
-                             levels=LEVELS).said
+            said = next_step(
+                tailor="Og",
+                skill=skill,
+                cap=cap,
+                level=26,
+                money=OG_PURSE,
+                members=FAMILY,
+                levels=LEVELS,
+            ).said
             self.assertNotIn(chr(0x2014), said)
 
 

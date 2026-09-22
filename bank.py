@@ -59,6 +59,7 @@ that is the change that should add it, with the purse read at the time.
 PURE MODULE: no MySQL, no core, no auction house, no browser. Every number
 here is arithmetic over rows somebody else fetched.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -159,9 +160,10 @@ class Holding:
     AND in the bank at once and a move by entry would then have two right
     answers on opposite sides of the counter.
     """
+
     holder: str
     guid: int
-    place: str            # BAGS or BANK
+    place: str  # BAGS or BANK
     count: int
     container_slots: int  # >0 when the stack is itself a bag
     item: disposition.Item
@@ -177,6 +179,7 @@ class Member:
     answer that plans nothing rather than the answer that plans something
     wrong.
     """
+
     name: str
     level: int
     bag_free: int
@@ -188,8 +191,9 @@ class Member:
 @dataclass(frozen=True)
 class Move:
     """One bank command, with the reason it is worth sending written into it."""
+
     character: str
-    verb: str        # DEPOSIT or WITHDRAW
+    verb: str  # DEPOSIT or WITHDRAW
     guid: int
     item: str
     count: int
@@ -205,6 +209,7 @@ class Plan:
     bank is full - and those three want three different responses from a
     person reading the log.
     """
+
     moves: tuple = ()
     notes: tuple = ()
 
@@ -242,8 +247,7 @@ def item_from_row(row):
         name=name,
         quality=_int(row.get("quality")),
         known=True,
-        binding=_BONDING.get(_int(row.get("bonding"), 1),
-                             disposition.BIND_ON_PICKUP),
+        binding=_BONDING.get(_int(row.get("bonding"), 1), disposition.BIND_ON_PICKUP),
         quest_item=item_class == ITEM_CLASS_QUEST,
         equipment=item_class in (ITEM_CLASS_WEAPON, ITEM_CLASS_ARMOR),
         required_level=_int(row.get("required_level")),
@@ -353,23 +357,37 @@ def members_from_rows(rows, names):
             # above - but nothing can be said about what is in it, so it is
             # not a candidate for anything.
             continue
-        holding = Holding(holder=holder, guid=guid, place=place,
-                          count=max(1, _int(row.get("count"), 1)),
-                          container_slots=slots, item=item)
+        holding = Holding(
+            holder=holder,
+            guid=guid,
+            place=place,
+            count=max(1, _int(row.get("count"), 1)),
+            container_slots=slots,
+            item=item,
+        )
         (carried if place == BAGS else banked)[holder].append(holding)
 
     return tuple(
-        Member(name=name, level=levels[name],
-               bag_free=max(0, bag_room[name]),
-               bank_free=max(0, bank_room[name]),
-               carried=tuple(sorted(carried[name], key=_stack_order)),
-               banked=tuple(sorted(banked[name], key=_stack_order)))
+        Member(
+            name=name,
+            level=levels[name],
+            bag_free=max(0, bag_room[name]),
+            bank_free=max(0, bank_room[name]),
+            carried=tuple(sorted(carried[name], key=_stack_order)),
+            banked=tuple(sorted(banked[name], key=_stack_order)),
+        )
         for name in sorted(wanted)
     )
 
 
-def family_from_skills(held, *, vendor_reachable=True, auction_reachable=False,
-                       bank_reachable=True, reagent_keep=None):
+def family_from_skills(
+    held,
+    *,
+    vendor_reachable=True,
+    auction_reachable=False,
+    bank_reachable=True,
+    reagent_keep=None,
+):
     """The `disposition.Family` this family actually is today.
 
     `held` is name -> {profession: value}, as the bridge reads it out of
@@ -431,7 +449,9 @@ def reagent_totals(members):
 def _verdict(holding, family, level, totals):
     """What disposition says about this stack, in this family, right now."""
     return disposition.decide(
-        holding.item, family, character_level=level,
+        holding.item,
+        family,
+        character_level=level,
         upgrade_for_sibling=False,
         reagent_held=totals.get(holding.item.name, holding.count),
     )
@@ -458,8 +478,10 @@ def plan(members, family, *, visit_limit=VISIT_LIMIT):
         room = member.bank_free
         for holding in member.carried:
             if len(deposits) >= visit_limit:
-                notes.append("%s has more to bank than one visit carries; the "
-                             "rest waits for the next trip" % member.name)
+                notes.append(
+                    "%s has more to bank than one visit carries; the "
+                    "rest waits for the next trip" % member.name
+                )
                 break
             if holding.container_slots > 0:
                 # An empty spare bag belongs in somebody's empty bag position
@@ -470,14 +492,22 @@ def plan(members, family, *, visit_limit=VISIT_LIMIT):
             if verdict.route != disposition.BANK:
                 continue
             if room <= 0:
-                notes.append("%s's bank is full, so %s stays in the bags"
-                             % (member.name, holding.item.name))
+                notes.append(
+                    "%s's bank is full, so %s stays in the bags"
+                    % (member.name, holding.item.name)
+                )
                 continue
             room -= 1
-            deposits.append(Move(
-                character=member.name, verb=DEPOSIT, guid=holding.guid,
-                item=holding.item.name, count=holding.count,
-                why=verdict.why))
+            deposits.append(
+                Move(
+                    character=member.name,
+                    verb=DEPOSIT,
+                    guid=holding.guid,
+                    item=holding.item.name,
+                    count=holding.count,
+                    why=verdict.why,
+                )
+            )
 
         withdrawals = []
         # Every deposit hands a bag slot back, so the room to receive a
@@ -492,15 +522,23 @@ def plan(members, family, *, visit_limit=VISIT_LIMIT):
             if verdict.route not in WITHDRAW_ROUTES:
                 continue
             if space <= 0:
-                notes.append("%s has no room to take %s back out"
-                             % (member.name, holding.item.name))
+                notes.append(
+                    "%s has no room to take %s back out"
+                    % (member.name, holding.item.name)
+                )
                 continue
             space -= 1
-            withdrawals.append(Move(
-                character=member.name, verb=WITHDRAW, guid=holding.guid,
-                item=holding.item.name, count=holding.count,
-                why="%s is wanted in the bags again - %s"
-                    % (holding.item.name, verdict.why)))
+            withdrawals.append(
+                Move(
+                    character=member.name,
+                    verb=WITHDRAW,
+                    guid=holding.guid,
+                    item=holding.item.name,
+                    count=holding.count,
+                    why="%s is wanted in the bags again - %s"
+                    % (holding.item.name, verdict.why),
+                )
+            )
         moves.extend(deposits)
         moves.extend(withdrawals)
     return Plan(moves=tuple(moves), notes=tuple(dict.fromkeys(notes)))
@@ -527,8 +565,7 @@ BANK_ERRAND_HOLD = "hold"
 BANK_ERRAND_RELEASE = "release"
 
 
-def errand_step(at_counter: bool, rows_outstanding: int,
-                moves_unasked: bool) -> str:
+def errand_step(at_counter: bool, rows_outstanding: int, moves_unasked: bool) -> str:
     """What to do with the leader's `banker` aim this pass (infra#3728).
 
     THE SAME LATCH AS THE SELL PASS'S, IN THE SAME COLUMN. `_bank_once` wrote
@@ -630,7 +667,8 @@ def lines(moves):
     the other half was already queued inside the retry window, is a log that
     lies about what the family did.
     """
-    return ["%s: %s %d %s (%s) - %s"
-            % (move.character, move.verb, move.count, move.item,
-               command(move), move.why)
-            for move in moves]
+    return [
+        "%s: %s %d %s (%s) - %s"
+        % (move.character, move.verb, move.count, move.item, command(move), move.why)
+        for move in moves
+    ]

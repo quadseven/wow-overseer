@@ -45,9 +45,9 @@ GRUG_VOICE = (
     "  Grug no like.\n"
     "  Grug club wolf into next cave!\n"
     "  Grug no understand.\n"
-    "Rules: say your own name instead of \"I\". Drop the words \"a\", "
-    "\"an\" and \"the\". Use \"no\" instead of \"do not\" or \"does "
-    "not\". Short words only. Never sound clever or modern."
+    'Rules: say your own name instead of "I". Drop the words "a", '
+    '"an" and "the". Use "no" instead of "do not" or "does '
+    'not". Short words only. Never sound clever or modern.'
 )
 
 
@@ -60,8 +60,7 @@ def _relationships(speaker: str) -> str:
     for other, bond in bonds.FAMILY.items():
         if other == speaker:
             continue
-        lines.append(
-            f"  {other} - {bond.role}, a {bond.char_class}")
+        lines.append(f"  {other} - {bond.role}, a {bond.char_class}")
     return "\n".join(lines)
 
 
@@ -95,7 +94,7 @@ def build_prompt(speaker: str, plain: str, *, context: str = "") -> str | None:
         f"{chr(10) + 'What is happening: ' + context + chr(10) if context else ''}"
         f"\n{GRUG_VOICE}\n"
         f"\nYou are about to say this to your family:\n"
-        f"  \"{plain}\"\n\n"
+        f'  "{plain}"\n\n'
         "Say the SAME thing in caveman talk, in your own voice. Keep the meaning "
         "exactly - if it names a person, a number or a place, keep them. One "
         "short sentence.\n"
@@ -125,7 +124,7 @@ def _from_json(text: str) -> str | None:
     if start < 0 or end <= start:
         return None
     try:
-        obj = json.loads(text[start:end + 1])
+        obj = json.loads(text[start : end + 1])
     except (ValueError, TypeError):
         return None
     if not isinstance(obj, dict):

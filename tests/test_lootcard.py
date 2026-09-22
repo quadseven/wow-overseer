@@ -14,6 +14,7 @@ indices in MESSAGE_FORMS can be checked against the real strings rather than
 against somebody's memory of them, which is where a mistake would actually
 hide.
 """
+
 import pathlib
 import re
 import unittest
@@ -59,7 +60,6 @@ def card(link="[robe]", winner="Og", verb=lootcard.WON, at=0.0):
 
 
 class WhichDropsEarnACard(unittest.TestCase):
-
     def test_a_green_and_better_is_worth_showing(self):
         for quality in (2, 3, 4, 5, 6):
             self.assertTrue(lootcard.worth_showing(quality), quality)
@@ -82,21 +82,19 @@ class WhichDropsEarnACard(unittest.TestCase):
 
 
 class WhoGotIt(unittest.TestCase):
-
     def test_it_names_the_winner_and_what_happened(self):
-        self.assertEqual(lootcard.headline("Og", lootcard.WON, "Grug"),
-                         "Og won")
+        self.assertEqual(lootcard.headline("Og", lootcard.WON, "Grug"), "Og won")
 
     def test_a_plain_pickup_is_said_differently_from_a_win(self):
-        self.assertEqual(lootcard.headline("Grug", lootcard.LOOTED, "Grug"),
-                         "Grug looted")
+        self.assertEqual(
+            lootcard.headline("Grug", lootcard.LOOTED, "Grug"), "Grug looted"
+        )
 
     def test_nobody_is_called_you_on_a_stream(self):
         """The self forms carry no name. A viewer watching a video has no way
         to know whose screen it is, and "You won" beside four other people's
         names could be about any of them."""
-        self.assertEqual(lootcard.headline("", lootcard.WON, "Grug"),
-                         "Grug won")
+        self.assertEqual(lootcard.headline("", lootcard.WON, "Grug"), "Grug won")
 
     def test_it_says_nothing_rather_than_something_empty(self):
         self.assertEqual(lootcard.headline("", lootcard.WON, ""), "")
@@ -108,7 +106,6 @@ class WhoGotIt(unittest.TestCase):
 
 
 class HowTheStackBehaves(unittest.TestCase):
-
     def test_a_drop_opens_a_card_stamped_with_the_time(self):
         stack = lootcard.admit([], card(), 100.0)
         self.assertEqual(len(stack), 1)
@@ -125,8 +122,7 @@ class HowTheStackBehaves(unittest.TestCase):
         stack = lootcard.admit([], card(link="[a]"), 0.0)
         stack = lootcard.admit(stack, card(link="[b]"), 100.0)
         self.assertEqual([c["at"] for c in stack], [0.0, 100.0])
-        self.assertEqual([c["link"] for c in lootcard.expire(stack, 121.0)],
-                         ["[b]"])
+        self.assertEqual([c["link"] for c in lootcard.expire(stack, 121.0)], ["[b]"])
 
     def test_group_loot_saying_one_drop_twice_is_one_card(self):
         """The roll result and then the loot itself, a fraction of a second
@@ -202,14 +198,20 @@ class TheFormsMatchTheClientsRealStrings(unittest.TestCase):
 
     def test_the_item_argument_is_always_a_string_specifier(self):
         for name, _, item, _ in lootcard.MESSAGE_FORMS:
-            self.assertEqual(specifiers(GLOBALS_335A[name]).get(item), "s",
-                             "%s argument %d" % (name, item))
+            self.assertEqual(
+                specifiers(GLOBALS_335A[name]).get(item),
+                "s",
+                "%s argument %d" % (name, item),
+            )
 
     def test_the_winner_argument_is_a_string_when_there_is_one(self):
         for name, winner, _, _ in lootcard.MESSAGE_FORMS:
             if winner:
-                self.assertEqual(specifiers(GLOBALS_335A[name]).get(winner),
-                                 "s", "%s argument %d" % (name, winner))
+                self.assertEqual(
+                    specifiers(GLOBALS_335A[name]).get(winner),
+                    "s",
+                    "%s argument %d" % (name, winner),
+                )
 
     def test_a_form_with_no_winner_really_has_no_name_in_it(self):
         """Argument 0 means the client wrote the line about itself, so there
@@ -248,35 +250,48 @@ class TheOrderIsLoadBearing(unittest.TestCase):
     def test_the_no_spam_roll_forms_come_before_the_plain_one(self):
         for kind in ("NEED", "GREED", "DE"):
             self.before(
-                "LOOT_ROLL_WON_NO_SPAM_" + kind, "LOOT_ROLL_WON",
+                "LOOT_ROLL_WON_NO_SPAM_" + kind,
+                "LOOT_ROLL_WON",
                 '"%s won: %s" also matches the (Need - 76) line, swallowing '
-                "the whole suffix into the item")
+                "the whole suffix into the item",
+            )
 
     def test_the_self_roll_forms_come_before_the_third_person_one(self):
         self.before(
-            "LOOT_ROLL_YOU_WON", "LOOT_ROLL_WON",
-            '"%s won: %s" matches "You won: ..." with a winner called "You"')
+            "LOOT_ROLL_YOU_WON",
+            "LOOT_ROLL_WON",
+            '"%s won: %s" matches "You won: ..." with a winner called "You"',
+        )
 
     def test_the_multiple_forms_come_before_their_singulars(self):
-        self.before("LOOT_ITEM_MULTIPLE", "LOOT_ITEM",
-                    '"...loot: %s." would swallow the "x3" into the item')
-        self.before("LOOT_ITEM_SELF_MULTIPLE", "LOOT_ITEM_SELF",
-                    "same, for the self form")
-        self.before("LOOT_ITEM_PUSHED_SELF_MULTIPLE", "LOOT_ITEM_PUSHED_SELF",
-                    "same, for the pushed form")
+        self.before(
+            "LOOT_ITEM_MULTIPLE",
+            "LOOT_ITEM",
+            '"...loot: %s." would swallow the "x3" into the item',
+        )
+        self.before(
+            "LOOT_ITEM_SELF_MULTIPLE", "LOOT_ITEM_SELF", "same, for the self form"
+        )
+        self.before(
+            "LOOT_ITEM_PUSHED_SELF_MULTIPLE",
+            "LOOT_ITEM_PUSHED_SELF",
+            "same, for the pushed form",
+        )
 
     def test_rolls_in_progress_are_not_listed_at_all(self):
         """START_LOOT_ROLL already puts a roll frame on screen with its own
         timer. A card for the roll and another for its result would double
         every drop's screen time to say the same thing twice."""
         names = [f[0] for f in lootcard.MESSAGE_FORMS]
-        for rolled in ("LOOT_ROLL_ROLLED_NEED", "LOOT_ROLL_ROLLED_GREED",
-                       "LOOT_ROLL_ROLLED_DE"):
+        for rolled in (
+            "LOOT_ROLL_ROLLED_NEED",
+            "LOOT_ROLL_ROLLED_GREED",
+            "LOOT_ROLL_ROLLED_DE",
+        ):
             self.assertNotIn(rolled, names)
 
 
 class TheAddonMirrorsTheModule(unittest.TestCase):
-
     @classmethod
     def setUpClass(cls):
         cls.lua = (ADDON / "LootCard.lua").read_text()
@@ -286,27 +301,34 @@ class TheAddonMirrorsTheModule(unittest.TestCase):
         # hardcode one, and a test that could not tell prose from code would
         # fail on the sentence saying it does the right thing.
         cls.code = "".join(
-            line for line in cls.lua.splitlines(True)
-            if not line.strip().startswith("--"))
+            line
+            for line in cls.lua.splitlines(True)
+            if not line.strip().startswith("--")
+        )
 
     def test_the_addon_tries_the_forms_in_the_modules_order(self):
-        block = self.lua[self.lua.index("local MESSAGE_FORMS = {"):]
-        block = block[:block.index("\n}")]
+        block = self.lua[self.lua.index("local MESSAGE_FORMS = {") :]
+        block = block[: block.index("\n}")]
         found = re.findall(r'\{ "(\w+)", (\d+), (\d+), (\w+) \}', block)
         self.assertEqual(
             [(n, int(w), int(i), v) for n, w, i, v in found],
-            [(n, w, i, "WON" if verb == lootcard.WON else "LOOTED")
-             for n, w, i, verb in lootcard.MESSAGE_FORMS])
+            [
+                (n, w, i, "WON" if verb == lootcard.WON else "LOOTED")
+                for n, w, i, verb in lootcard.MESSAGE_FORMS
+            ],
+        )
 
     def test_every_number_the_module_decided_is_the_number_the_addon_uses(self):
-        for name, value in (("MIN_QUALITY", lootcard.MIN_QUALITY),
-                            ("DWELL_SECONDS", lootcard.DWELL_SECONDS),
-                            ("MAX_CARDS", lootcard.MAX_CARDS),
-                            ("MAX_EXPANDED", lootcard.MAX_EXPANDED),
-                            ("DEDUPE_SECONDS", lootcard.DEDUPE_SECONDS),
-                            ("HEADLINE_SIZE", lootcard.HEADLINE_SIZE),
-                            ("ANCHOR_X", lootcard.ANCHOR_X),
-                            ("ANCHOR_Y", lootcard.ANCHOR_Y)):
+        for name, value in (
+            ("MIN_QUALITY", lootcard.MIN_QUALITY),
+            ("DWELL_SECONDS", lootcard.DWELL_SECONDS),
+            ("MAX_CARDS", lootcard.MAX_CARDS),
+            ("MAX_EXPANDED", lootcard.MAX_EXPANDED),
+            ("DEDUPE_SECONDS", lootcard.DEDUPE_SECONDS),
+            ("HEADLINE_SIZE", lootcard.HEADLINE_SIZE),
+            ("ANCHOR_X", lootcard.ANCHOR_X),
+            ("ANCHOR_Y", lootcard.ANCHOR_Y),
+        ):
             self.assertIn("local %s = %d" % (name, value), self.lua, name)
 
     def test_the_two_verbs_are_spelled_the_same_on_both_sides(self):
@@ -330,10 +352,12 @@ class TheAddonMirrorsTheModule(unittest.TestCase):
         busy stack in empty sky rather than over the bar."""
         self.assertIn(
             'anchor:SetPoint("BOTTOMRIGHT", UIParent, "BOTTOMRIGHT", ANCHOR_X, ANCHOR_Y)',
-            self.lua)
+            self.lua,
+        )
         self.assertIn(
             'card:SetPoint("BOTTOMRIGHT", cards[slot - 1], "TOPRIGHT", 0, CARD_GAP)',
-            self.lua)
+            self.lua,
+        )
 
     def test_a_card_never_takes_a_click_off_the_world(self):
         self.assertIn("card:EnableMouse(false)", self.lua)

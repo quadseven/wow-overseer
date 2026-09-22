@@ -18,6 +18,7 @@ the reason is that it is the one guard whose failure is silent in both
 directions: too narrow and an errand latches forever, too wide and an economy
 pass blanks a profession errand (mod-overseer#438).
 """
+
 import ast
 import pathlib
 import re
@@ -58,8 +59,9 @@ def _statements(signature: str) -> str:
     marker = '"""'
     if body.count(marker) >= 2:
         body = body.split(marker, 2)[2]
-    return "\n".join(line for line in body.splitlines()
-                     if not line.lstrip().startswith("#"))
+    return "\n".join(
+        line for line in body.splitlines() if not line.lstrip().startswith("#")
+    )
 
 
 def _guard_namespace():
@@ -78,14 +80,18 @@ def _guard_namespace():
     for node in tree.body:
         if isinstance(node, ast.FunctionDef) and node.name in wanted:
             out.append(node)
-        elif (isinstance(node, ast.Assign) and len(node.targets) == 1
-              and isinstance(node.targets[0], ast.Name)
-              and node.targets[0].id == "ECONOMY_ERRANDS"):
+        elif (
+            isinstance(node, ast.Assign)
+            and len(node.targets) == 1
+            and isinstance(node.targets[0], ast.Name)
+            and node.targets[0].id == "ECONOMY_ERRANDS"
+        ):
             out.append(node)
     if len(out) != 3:
         raise AssertionError(
             "expected ECONOMY_ERRANDS, _retaskable_from and _is_economy_aim at "
-            "bridge.py's top level, found %d" % len(out))
+            "bridge.py's top level, found %d" % len(out)
+        )
     namespace = {"travel": travel, "craft_supply": craft_supply}
     # S102 is `exec`, and the answer to it is the argument in this file's
     # docstring rather than a wider rule. What is executed is not a string this
@@ -96,8 +102,10 @@ def _guard_namespace():
     # failure is silent in both directions. If bridge.py ever becomes importable
     # here (it needs discord and pymysql, which CI does not install), this goes
     # away and the tests call the functions directly.
-    exec(compile(ast.Module(body=out, type_ignores=[]), str(BRIDGE), "exec"),  # noqa: S102 - bridge.py's own AST, by name, in a test
-         namespace)
+    exec(
+        compile(ast.Module(body=out, type_ignores=[]), str(BRIDGE), "exec"),  # noqa: S102 - bridge.py's own AST, by name, in a test
+        namespace,
+    )
     return namespace
 
 
@@ -165,9 +173,19 @@ class TheReleaseGuardAnswersRealAims(unittest.TestCase):
         """The whole point: one predicate, so the two can no longer disagree
         about any aim at all."""
         retaskable = self.ns["_retaskable_from"]
-        for aim in ("vendor", "banker", "repair", "guild banker", "auctioneer",
-                    "at:1:-7203.1,-3821.1,8.6", "5594", "profession trainer",
-                    "trainer", "", "innkeeper"):
+        for aim in (
+            "vendor",
+            "banker",
+            "repair",
+            "guild banker",
+            "auctioneer",
+            "at:1:-7203.1,-3821.1,8.6",
+            "5594",
+            "profession trainer",
+            "trainer",
+            "",
+            "innkeeper",
+        ):
             with self.subTest(aim=aim):
                 self.assertEqual(bool(retaskable(aim)), self.economy(aim))
 
@@ -175,8 +193,7 @@ class TheReleaseGuardAnswersRealAims(unittest.TestCase):
         """Releasable is not the same as retaskable-over, and widening the one
         must not widen the other: a vault aim may be handed BACK, and it still
         only ever goes into an idle column or over its own self."""
-        self.assertEqual(("", "at:1:1,2,3"),
-                         self.ns["_retaskable_from"]("at:1:1,2,3"))
+        self.assertEqual(("", "at:1:1,2,3"), self.ns["_retaskable_from"]("at:1:1,2,3"))
 
     def test_the_numeric_aim_may_still_refine_a_vendor_errand(self):
         self.assertIn(craft_supply.VENDOR_ROLE, self.ns["_retaskable_from"]("5594"))
@@ -230,27 +247,31 @@ class EveryTownPassAsksAtTheSameDoor(unittest.TestCase):
         """
         calls = re.findall(r"to_thread\(\s*_write_trade_errand", _source())
         self.assertEqual(3, len(calls))
-        self.assertIn("to_thread(_write_trade_errand",
-                      _statements("    async def _send_trade_errand("))
-        self.assertIn("_write_trade_errand",
-                      _statements("    async def _claim_town_slot("))
+        self.assertIn(
+            "to_thread(_write_trade_errand",
+            _statements("    async def _send_trade_errand("),
+        )
+        self.assertIn(
+            "_write_trade_errand", _statements("    async def _claim_town_slot(")
+        )
 
     def test_the_pass_names_are_the_words_they_already_log_with(self):
         """A log a person greps has to join up: `guild bank: ...` and `town
         slot: guild bank waits ...` are the same pass or the line is useless."""
         for name, signature in (
-                ("economy", "    async def _vendor_once("),
-                ("bank", "    async def _settle_bank_errand("),
-                ("guild bank", "    async def _guild_bank_once("),
-                ("auction", "    async def _auction_once("),
-                ("forge", "    async def _forge_once("),
-                ("towntrip", "    async def _settle_town_errand("),
-                ("craft_supply", "    async def _aim_at_reagent_vendor("),
-                ("mail", "    async def _mail_once(")):
+            ("economy", "    async def _vendor_once("),
+            ("bank", "    async def _settle_bank_errand("),
+            ("guild bank", "    async def _guild_bank_once("),
+            ("auction", "    async def _auction_once("),
+            ("forge", "    async def _forge_once("),
+            ("towntrip", "    async def _settle_town_errand("),
+            ("craft_supply", "    async def _aim_at_reagent_vendor("),
+            ("mail", "    async def _mail_once("),
+        ):
             with self.subTest(name=name):
                 body = _statements(signature)
-                claim = body[body.index("_claim_town_slot("):]
-                self.assertIn('"%s"' % name, claim[:len(name) + 40])
+                claim = body[body.index("_claim_town_slot(") :]
+                self.assertIn('"%s"' % name, claim[: len(name) + 40])
                 self.assertIn('"%s: ' % name, body)
 
 
@@ -273,7 +294,6 @@ class TheProfessionErrandIsNotATownErrand(unittest.TestCase):
 
 
 class TheDoorDoesThreeThingsInOneOrder(unittest.TestCase):
-
     def setUp(self):
         self.body = _block("    async def _claim_town_slot(")
         self.code = _statements("    async def _claim_town_slot(")
@@ -283,13 +303,16 @@ class TheDoorDoesThreeThingsInOneOrder(unittest.TestCase):
         for it to be forgotten; one place that reads `_head_now` and refuses
         anybody else is the rule enforced."""
         self.assertIn("leader = await asyncio.to_thread(_head_now)", self.code)
-        self.assertLess(self.code.index("_head_now"),
-                        self.code.index("self._town_slot.want("))
+        self.assertLess(
+            self.code.index("_head_now"), self.code.index("self._town_slot.want(")
+        )
 
     def test_it_reads_the_column_before_it_decides(self):
         self.assertIn("_current_travel_npc, leader", self.code)
-        self.assertLess(self.code.index("_current_travel_npc"),
-                        self.code.index("self._town_slot.want("))
+        self.assertLess(
+            self.code.index("_current_travel_npc"),
+            self.code.index("self._town_slot.want("),
+        )
 
     def test_it_hands_the_write_s_own_guard_to_the_decision(self):
         """The slot must never grant a write the UPDATE would refuse, so it is
@@ -297,8 +320,8 @@ class TheDoorDoesThreeThingsInOneOrder(unittest.TestCase):
         self.assertIn("retaskable=_retaskable_from(aim)", self.code)
 
     def test_a_refusal_writes_nothing_and_says_so(self):
-        refusal = self.code[self.code.index("if not decision.granted:"):]
-        refusal = refusal[:refusal.index("if decision.release")]
+        refusal = self.code[self.code.index("if not decision.granted:") :]
+        refusal = refusal[: refusal.index("if decision.release")]
         self.assertIn("townslot.report(decision)", refusal)
         self.assertIn("return False", refusal)
         self.assertNotIn("_write_trade_errand", refusal)
@@ -307,8 +330,10 @@ class TheDoorDoesThreeThingsInOneOrder(unittest.TestCase):
         """`_write_trade_errand`'s economy guard retasks only an IDLE traveller
         and is not being weakened, so a preemption is two statements: hand the
         stuck errand back, then take the empty column the ordinary way."""
-        self.assertLess(self.code.index("_release_trade_errand"),
-                        self.code.index("_write_trade_errand"))
+        self.assertLess(
+            self.code.index("_release_trade_errand"),
+            self.code.index("_write_trade_errand"),
+        )
 
     def test_the_release_names_the_errand_that_was_read(self):
         """Not the aim being asked for. Releasing anything else would be the
@@ -321,25 +346,29 @@ class TheDoorDoesThreeThingsInOneOrder(unittest.TestCase):
         draft of this test passed a mutation that did exactly that."""
         self.assertIn(
             "_release_trade_errand, decision.release.character,\n"
-            "                decision.release.aim,", self.code)
+            "                decision.release.aim,",
+            self.code,
+        )
 
     def test_a_hold_returns_true_without_writing_anything(self):
         """Re-writing a word the column already carries makes mod-overseer's
         aim book erase its own state and read a standing errand as a brand new
         one, releasing and re-taking the counter hold (infra#3708)."""
-        hold = self.code[self.code.index("townslot.SLOT_HOLD"):]
-        hold = hold[:hold.index("taken = await")]
+        hold = self.code[self.code.index("townslot.SLOT_HOLD") :]
+        hold = hold[: hold.index("taken = await")]
         self.assertIn("return True", hold)
         self.assertNotIn("_write_trade_errand", hold)
 
     def test_the_ledger_records_the_outcome_and_not_the_intention(self):
         """A write can lose a race the decision could not see. A ledger that
         recorded the intention would hand this pass a lease it is not using."""
-        self.assertLess(self.code.index("taken = await"),
-                        self.code.index("self._town_slot.settle(decision, taken"))
+        self.assertLess(
+            self.code.index("taken = await"),
+            self.code.index("self._town_slot.settle(decision, taken"),
+        )
 
     def test_a_lost_race_returns_false_rather_than_claiming_the_aim(self):
-        tail = self.code[self.code.index("settle(decision, taken"):]
+        tail = self.code[self.code.index("settle(decision, taken") :]
         self.assertIn("if not taken:", tail)
         self.assertIn("return False", tail)
 
@@ -349,7 +378,6 @@ class TheDoorDoesThreeThingsInOneOrder(unittest.TestCase):
 
 
 class TheIdleDoorClearsWithoutAReplacement(unittest.TestCase):
-
     def setUp(self):
         self.code = _statements("    async def _idle_town_slot(")
 
@@ -359,21 +387,27 @@ class TheIdleDoorClearsWithoutAReplacement(unittest.TestCase):
     def test_it_compares_and_swaps_the_exact_stale_aim(self):
         self.assertIn(
             "_release_trade_errand, decision.release.character,\n"
-            "            decision.release.aim,", self.code)
+            "            decision.release.aim,",
+            self.code,
+        )
 
     def test_it_never_writes_a_successor(self):
         self.assertNotIn("_write_trade_errand", self.code)
 
 
 class TheSlotIsHeldForTheLifeOfTheProcess(unittest.TestCase):
-
     def test_urgent_maintenance_can_preempt_an_orphaned_economy_aim(self):
         """Zero-room pressure cannot wait for the world's 20-minute fuse."""
         slot = townslot.Slot(releasable=travel.is_ground_aim)
         decision = slot.want(
-            claimant="economy", character="Grug", leader="Grug",
-            aim="vendor", column="at:0:1,2,3", retaskable=("", "vendor"),
-            now=100.0, urgent=True,
+            claimant="economy",
+            character="Grug",
+            leader="Grug",
+            aim="vendor",
+            column="at:0:1,2,3",
+            retaskable=("", "vendor"),
+            now=100.0,
+            urgent=True,
         )
         self.assertEqual(townslot.SLOT_PREEMPT, decision.verdict)
         self.assertEqual("at:0:1,2,3", decision.release.aim)
@@ -382,8 +416,12 @@ class TheSlotIsHeldForTheLifeOfTheProcess(unittest.TestCase):
         """Ordinary town work still leaves an unknown economy aim alone."""
         slot = townslot.Slot(releasable=travel.is_ground_aim)
         decision = slot.want(
-            claimant="economy", character="Grug", leader="Grug",
-            aim="vendor", column="at:0:1,2,3", retaskable=("", "vendor"),
+            claimant="economy",
+            character="Grug",
+            leader="Grug",
+            aim="vendor",
+            column="at:0:1,2,3",
+            retaskable=("", "vendor"),
             now=100.0,
         )
         self.assertEqual(townslot.SLOT_WAIT, decision.verdict)
@@ -400,15 +438,15 @@ class TheSlotIsHeldForTheLifeOfTheProcess(unittest.TestCase):
 
     def test_the_lease_is_an_env_knob_like_every_other_cadence(self):
         source = _source()
-        self.assertIn('os.environ.get("TOWN_SLOT_LEASE_SECONDS", '
-                      'townslot.LEASE_SECONDS)', source)
+        self.assertIn(
+            'os.environ.get("TOWN_SLOT_LEASE_SECONDS", townslot.LEASE_SECONDS)', source
+        )
         init = _block("    def __init__(self, allowed_ids: frozenset[str]):")
         self.assertIn("lease=TOWN_SLOT_LEASE_SECONDS", init)
 
     def test_the_module_is_imported_and_shipped(self):
         self.assertIn("\nimport townslot\n", _source())
-        self.assertIn("townslot.py",
-                      DOCKERFILE.read_text(encoding="utf-8"))
+        self.assertIn("townslot.py", DOCKERFILE.read_text(encoding="utf-8"))
 
     def test_the_default_lease_is_the_modules_own(self):
         """One number, argued for in one place. A second default here would be
@@ -435,11 +473,12 @@ class TheStarvationLineIsGreppable(unittest.TestCase):
                 self.assertTrue(line.startswith('"town slot: '))
 
     def test_the_report_helper_is_what_the_passes_log(self):
-        self.assertIn('return "town slot: %s" % decision.reason',
-                      (PACKAGE / "townslot.py").read_text(encoding="utf-8"))
+        self.assertIn(
+            'return "town slot: %s" % decision.reason',
+            (PACKAGE / "townslot.py").read_text(encoding="utf-8"),
+        )
 
     def test_the_preemption_sentence_cites_the_issue(self):
         """So the line that proves this shipped can be found by issue number."""
         module = (PACKAGE / "townslot.py").read_text(encoding="utf-8")
-        self.assertIn(
-            'issue = "infra#3728" if clearing else "infra#3703"', module)
+        self.assertIn('issue = "infra#3728" if clearing else "infra#3703"', module)

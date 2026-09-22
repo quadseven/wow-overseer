@@ -7,6 +7,7 @@ bridge.py's SQL produces those inputs correctly against a live server:
 materials.py's own docstring says so. See tests/test_give.py for what IS
 proven about the mechanism the decision here is turned into (kind='give').
 """
+
 import unittest
 
 import chat
@@ -111,9 +112,7 @@ class PlanTest(unittest.TestCase):
     def test_the_give_command_addresses_the_guid_not_the_name(self):
         """DoGive (infra#2597) parses `guid:<item_instance.guid>` - a name or
         a count in this field would be a malformed spec it refuses outright."""
-        grant = materials.plan(
-            [_holding("Bork", "Linen Cloth", 19, 101)]
-        ).grants[0]
+        grant = materials.plan([_holding("Bork", "Linen Cloth", 19, 101)]).grants[0]
         self.assertEqual(grant.command, "guid:101")
 
     def test_an_unmapped_material_is_left_alone(self):
@@ -176,10 +175,12 @@ class HandoverTest(unittest.TestCase):
     def test_two_stacks_of_one_material_are_one_sentence(self):
         """What Evan watched: 20 and then 19, a minute apart, which reads as
         a loop re-evaluating rather than as a bundle changing hands."""
-        grants = materials.plan([
-            _holding("Grug", "Linen Cloth", 20, 501),
-            _holding("Grug", "Linen Cloth", 19, 502),
-        ]).grants
+        grants = materials.plan(
+            [
+                _holding("Grug", "Linen Cloth", 20, 501),
+                _holding("Grug", "Linen Cloth", 19, 502),
+            ]
+        ).grants
         self.assertEqual(len(grants), 2)
         said = materials.handovers(grants, held=LIVE_SKILLS)
         self.assertEqual(len(said), 1)
@@ -188,26 +189,36 @@ class HandoverTest(unittest.TestCase):
 
     def test_both_stacks_still_move_even_though_one_line_is_said(self):
         """The world's half stays exact: DoGive moves one guid at a time."""
-        grants = materials.plan([
-            _holding("Grug", "Linen Cloth", 20, 501),
-            _holding("Grug", "Linen Cloth", 19, 502),
-        ]).grants
-        self.assertEqual(
-            [g.command for g in grants], ["guid:501", "guid:502"]
-        )
+        grants = materials.plan(
+            [
+                _holding("Grug", "Linen Cloth", 20, 501),
+                _holding("Grug", "Linen Cloth", 19, 502),
+            ]
+        ).grants
+        self.assertEqual([g.command for g in grants], ["guid:501", "guid:502"])
 
     def test_different_materials_are_different_things_to_say(self):
-        said = materials.handovers(materials.plan([
-            _holding("Grug", "Linen Cloth", 20, 501),
-            _holding("Grug", "Silverleaf", 4, 503),
-        ]).grants, held=LIVE_SKILLS)
+        said = materials.handovers(
+            materials.plan(
+                [
+                    _holding("Grug", "Linen Cloth", 20, 501),
+                    _holding("Grug", "Silverleaf", 4, 503),
+                ]
+            ).grants,
+            held=LIVE_SKILLS,
+        )
         self.assertEqual(len(said), 2)
 
     def test_different_holders_are_different_things_to_say(self):
-        said = materials.handovers(materials.plan([
-            _holding("Grug", "Linen Cloth", 20, 501),
-            _holding("Grog", "Linen Cloth", 18, 401),
-        ]).grants, held=LIVE_SKILLS)
+        said = materials.handovers(
+            materials.plan(
+                [
+                    _holding("Grug", "Linen Cloth", 20, 501),
+                    _holding("Grog", "Linen Cloth", 18, 401),
+                ]
+            ).grants,
+            held=LIVE_SKILLS,
+        )
         self.assertEqual({h.holder for h in said}, {"Grug", "Grog"})
 
     def test_the_key_is_the_intent_and_survives_a_changed_count(self):
@@ -228,16 +239,16 @@ class HandoverTest(unittest.TestCase):
             materials.plan([_holding("Grug", "Linen Cloth", 20, 501)]).grants,
             held=LIVE_SKILLS,
         )[0]
-        self.assertEqual(hand.key, chat.say_key(
-            speaker="Grug", subject="Linen Cloth", listener="Og"
-        ))
+        self.assertEqual(
+            hand.key, chat.say_key(speaker="Grug", subject="Linen Cloth", listener="Og")
+        )
 
     def test_no_grants_is_nothing_to_say(self):
         self.assertEqual(materials.handovers((), held=LIVE_SKILLS), ())
 
 
 class HonestHandoverTest(unittest.TestCase):
-    """"Og need it for tailoring" was a fact about ROSTER, not about Og."""
+    """ "Og need it for tailoring" was a fact about ROSTER, not about Og."""
 
     def _said(self, held):
         return materials.handovers(
@@ -264,8 +275,13 @@ class HonestHandoverTest(unittest.TestCase):
         future REAGENTS entry, or a roster edit, reaches it.
         """
         grant = materials.Grant(
-            holder="Grug", taker="Bork", material="Mystery Powder", count=4,
-            guid=503, skill="cooking", reason="constructed",
+            holder="Grug",
+            taker="Bork",
+            material="Mystery Powder",
+            count=4,
+            guid=503,
+            skill="cooking",
+            reason="constructed",
         )
         said = materials.handovers([grant], held={"Bork": {"herbalism": 7}})[0].said
         self.assertEqual(said, "Grug give Bork 4 Mystery Powder.")
@@ -290,7 +306,9 @@ class HonestHandoverTest(unittest.TestCase):
                     held=held,
                 )[0]
                 state = chat.skill_state(
-                    "Og", "tailoring", held=held,
+                    "Og",
+                    "tailoring",
+                    held=held,
                     planned={"Og": ("tailoring", "enchanting")},
                 )
                 self.assertTrue(
@@ -309,8 +327,7 @@ class StuckTest(unittest.TestCase):
     identical `receiver bags are full` errors each, over six hours.
     """
 
-    def _errors(self, n, holder="Grug", taker="Og",
-                detail="receiver bags are full"):
+    def _errors(self, n, holder="Grug", taker="Og", detail="receiver bags are full"):
         return [materials.Attempt(holder, taker, "error", detail)] * n
 
     def test_a_pair_refused_enough_times_is_stuck(self):
@@ -327,15 +344,15 @@ class StuckTest(unittest.TestCase):
         self.assertEqual(materials.stuck(pending), {})
 
     def test_a_delivered_give_clears_the_count(self):
-        attempts = self._errors(2) + [
-            materials.Attempt("Grug", "Og", "delivered", "")
-        ] + self._errors(2)
+        attempts = (
+            self._errors(2)
+            + [materials.Attempt("Grug", "Og", "delivered", "")]
+            + self._errors(2)
+        )
         self.assertEqual(materials.stuck(attempts), {})
 
     def test_a_refusal_with_no_detail_still_says_something(self):
-        refused = materials.stuck(
-            self._errors(materials.GIVE_UP_AFTER, detail="")
-        )
+        refused = materials.stuck(self._errors(materials.GIVE_UP_AFTER, detail=""))
         self.assertTrue(refused[("Grug", "Og")].strip())
 
     def test_each_pair_is_counted_on_its_own(self):
@@ -361,8 +378,10 @@ class StuckTest(unittest.TestCase):
 class BlockedTest(unittest.TestCase):
     def _plan(self):
         return materials.plan(
-            [_holding("Grug", "Linen Cloth", 20, 501),
-             _holding("Grug", "Linen Cloth", 19, 502)],
+            [
+                _holding("Grug", "Linen Cloth", 20, 501),
+                _holding("Grug", "Linen Cloth", 19, 502),
+            ],
             stuck_pairs={("Grug", "Og"): "receiver bags are full"},
         )
 
@@ -383,13 +402,13 @@ class BlockedTest(unittest.TestCase):
 
     def test_an_unaffected_pair_still_moves(self):
         plan = materials.plan(
-            [_holding("Grug", "Linen Cloth", 20, 501),
-             _holding("Bork", "Silverleaf", 19, 102)],
+            [
+                _holding("Grug", "Linen Cloth", 20, 501),
+                _holding("Bork", "Silverleaf", 19, 102),
+            ],
             stuck_pairs={("Grug", "Og"): "receiver bags are full"},
         )
-        self.assertEqual(
-            [(g.holder, g.taker) for g in plan.grants], [("Bork", "Ugga")]
-        )
+        self.assertEqual([(g.holder, g.taker) for g in plan.grants], [("Bork", "Ugga")])
 
     def test_the_blocked_key_is_not_the_handover_key(self):
         """Giving up is a different thing to say from handing over, so one
@@ -407,7 +426,6 @@ class BlockedTest(unittest.TestCase):
         self.assertTrue(said[0].startswith("Grug: "))
 
 
-
 class RefusalCountsTest(unittest.TestCase):
     """`stuck` used to be the only reading of the give rows, and it answers one
     question: has this pair been refused enough times to be believed. A view
@@ -415,32 +433,36 @@ class RefusalCountsTest(unittest.TestCase):
     which is a different question over the same rows."""
 
     def test_a_pair_nobody_has_refused_is_absent(self):
-        counts = materials.refusal_counts(
-            [materials.Attempt("Grug", "Og", "pending")])
+        counts = materials.refusal_counts([materials.Attempt("Grug", "Og", "pending")])
         self.assertEqual(counts, {})
 
     def test_one_refusal_is_counted_even_though_nothing_is_stuck_yet(self):
         attempts = [materials.Attempt("Grug", "Og", "error", "bags are full")]
-        self.assertEqual(materials.refusal_counts(attempts)[("Grug", "Og")],
-                         (1, "bags are full"))
+        self.assertEqual(
+            materials.refusal_counts(attempts)[("Grug", "Og")], (1, "bags are full")
+        )
         self.assertEqual(materials.stuck(attempts), {})
 
     def test_a_delivery_starts_the_count_again(self):
-        attempts = [materials.Attempt("Grug", "Og", "error", "bags are full"),
-                    materials.Attempt("Grug", "Og", "error", "bags are full"),
-                    materials.Attempt("Grug", "Og", "delivered")]
+        attempts = [
+            materials.Attempt("Grug", "Og", "error", "bags are full"),
+            materials.Attempt("Grug", "Og", "error", "bags are full"),
+            materials.Attempt("Grug", "Og", "delivered"),
+        ]
         self.assertEqual(materials.refusal_counts(attempts)[("Grug", "Og")][0], 0)
 
     def test_a_refusal_with_no_reason_still_says_something(self):
         attempts = [materials.Attempt("Grug", "Og", "error", "")]
-        self.assertEqual(materials.refusal_counts(attempts)[("Grug", "Og")][1],
-                         materials.NO_REASON_GIVEN)
+        self.assertEqual(
+            materials.refusal_counts(attempts)[("Grug", "Og")][1],
+            materials.NO_REASON_GIVEN,
+        )
 
     def test_stuck_is_this_with_the_threshold_applied(self):
-        attempts = [materials.Attempt("Grug", "Og", "error", "bags are full")
-                    ] * materials.GIVE_UP_AFTER
-        self.assertEqual(materials.stuck(attempts),
-                         {("Grug", "Og"): "bags are full"})
+        attempts = [
+            materials.Attempt("Grug", "Og", "error", "bags are full")
+        ] * materials.GIVE_UP_AFTER
+        self.assertEqual(materials.stuck(attempts), {("Grug", "Og"): "bags are full"})
 
 
 class TheBoardTest(unittest.TestCase):
@@ -469,8 +491,9 @@ class TheBoardTest(unittest.TestCase):
             self.assertEqual(row.refusal_line, "")
 
     def test_a_refused_pair_is_a_different_kind_of_row(self):
-        attempts = [materials.Attempt("Grug", "Og", "error", "receiver bags are full")
-                    ] * materials.GIVE_UP_AFTER
+        attempts = [
+            materials.Attempt("Grug", "Og", "error", "receiver bags are full")
+        ] * materials.GIVE_UP_AFTER
         rows = materials.board(self.holdings(), attempts=attempts)["rows"]
         grug = next(r for r in rows if r.holder == "Grug")
         self.assertTrue(grug.blocked)
@@ -479,10 +502,11 @@ class TheBoardTest(unittest.TestCase):
         self.assertIn(str(materials.GIVE_UP_AFTER), grug.word)
 
     def test_a_blocked_row_still_says_how_much_is_stuck(self):
-        """"Og bags full" is worth reading. "39 Linen Cloth is stuck in Grug's
+        """ "Og bags full" is worth reading. "39 Linen Cloth is stuck in Grug's
         bags because Og bags full" is worth acting on."""
-        attempts = [materials.Attempt("Grug", "Og", "error", "full")
-                    ] * materials.GIVE_UP_AFTER
+        attempts = [
+            materials.Attempt("Grug", "Og", "error", "full")
+        ] * materials.GIVE_UP_AFTER
         rows = materials.board(self.holdings(), attempts=attempts)["rows"]
         grug = next(r for r in rows if r.holder == "Grug")
         self.assertEqual(grug.count, 39)
@@ -491,8 +515,9 @@ class TheBoardTest(unittest.TestCase):
     def test_a_refused_pair_is_never_also_proposed(self):
         """The family has stopped asking. A row that said both would be the
         loop mod-overseer#169 is about, drawn twice."""
-        attempts = [materials.Attempt("Grug", "Og", "error", "full")
-                    ] * materials.GIVE_UP_AFTER
+        attempts = [
+            materials.Attempt("Grug", "Og", "error", "full")
+        ] * materials.GIVE_UP_AFTER
         rows = materials.board(self.holdings(), attempts=attempts)["rows"]
         self.assertEqual(len([r for r in rows if r.holder == "Grug"]), 1)
 
@@ -501,8 +526,9 @@ class TheBoardTest(unittest.TestCase):
         on screen nobody ever spoke."""
         plan = materials.plan(self.holdings())
         spoken = [h.said for h in materials.handovers(plan.grants)]
-        self.assertEqual([r.said for r in materials.board(self.holdings())["rows"]],
-                         spoken)
+        self.assertEqual(
+            [r.said for r in materials.board(self.holdings())["rows"]], spoken
+        )
 
     def test_nothing_to_move_is_said_rather_than_left_empty(self):
         board = materials.board([])
@@ -517,9 +543,18 @@ class TheBoardTest(unittest.TestCase):
         self.assertIn("7", materials.giving_up_rule(threshold=7))
 
     def test_a_title_with_no_count_does_not_claim_zero(self):
-        row = materials.Move(holder="Grug", taker="Og", material="Linen Cloth",
-                             skill="tailoring", count=0, said="", word="",
-                             blocked=True, refusals=3, refusal="full")
+        row = materials.Move(
+            holder="Grug",
+            taker="Og",
+            material="Linen Cloth",
+            skill="tailoring",
+            count=0,
+            said="",
+            word="",
+            blocked=True,
+            refusals=3,
+            refusal="full",
+        )
         self.assertNotIn("0", row.title)
 
     def test_the_row_key_is_stable_across_two_identical_reads(self):
@@ -529,6 +564,7 @@ class TheBoardTest(unittest.TestCase):
         second = [r.key for r in materials.board(self.holdings())["rows"]]
         self.assertEqual(first, second)
         self.assertEqual(len(set(first)), len(first))
+
 
 if __name__ == "__main__":
     unittest.main()

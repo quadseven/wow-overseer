@@ -25,6 +25,7 @@ whole-world and batched.
 
 Tickets: infra#3500, infra#2597, mod-overseer#411.
 """
+
 import pathlib
 import re
 import unittest
@@ -39,8 +40,8 @@ CSS_BANNER = "/* --- where to go next (infra#3500)"
 NEXT = "// --- the Decree console (infra#2597)"
 NEXT_CSS = "/* --- the Decree console (infra#2597)"
 
-BLOCK = PAGE[PAGE.index(BANNER):PAGE.index(NEXT, PAGE.index(BANNER))]
-CSS = PAGE[PAGE.index(CSS_BANNER):PAGE.index(NEXT_CSS, PAGE.index(CSS_BANNER))]
+BLOCK = PAGE[PAGE.index(BANNER) : PAGE.index(NEXT, PAGE.index(BANNER))]
+CSS = PAGE[PAGE.index(CSS_BANNER) : PAGE.index(NEXT_CSS, PAGE.index(CSS_BANNER))]
 
 
 def code(block: str) -> str:
@@ -50,13 +51,14 @@ def code(block: str) -> str:
     its own explanation can trip is a guard that gets weakened until it passes.
     Several assertions below name the sentence they forbid.
     """
-    return "\n".join(line for line in block.splitlines()
-                     if not line.lstrip().startswith("//"))
+    return "\n".join(
+        line for line in block.splitlines() if not line.lstrip().startswith("//")
+    )
 
 
 CODE = code(BLOCK)
-SECTION = PAGE[PAGE.index('<section id="dungeons">'):]
-SECTION = SECTION[:SECTION.index("</section>")]
+SECTION = PAGE[PAGE.index('<section id="dungeons">') :]
+SECTION = SECTION[: SECTION.index("</section>")]
 
 
 class WhereTheCodeIsAllowedToSit(unittest.TestCase):
@@ -74,30 +76,31 @@ class WhereTheCodeIsAllowedToSit(unittest.TestCase):
     def test_the_script_sits_below_the_routing_slice(self):
         """test_decree_tab and test_recap_tab both slice showView to
         setInterval(pollFamily. Code inside that window is read as routing."""
-        self.assertGreater(PAGE.index(BANNER),
-                           PAGE.index("setInterval(pollFamily"))
+        self.assertGreater(PAGE.index(BANNER), PAGE.index("setInterval(pollFamily"))
 
     def test_the_styles_sit_between_the_furniture_and_the_first_view(self):
         """The shared furniture has to stay above every view window or the
         first view to claim it takes the other four hostage; the Decree
         console's window is the first that starts at a banner."""
-        self.assertLess(PAGE.index("/* --- the redesign furniture (infra#2597)"),
-                        PAGE.index(CSS_BANNER))
+        self.assertLess(
+            PAGE.index("/* --- the redesign furniture (infra#2597)"),
+            PAGE.index(CSS_BANNER),
+        )
         self.assertLess(PAGE.index(CSS_BANNER), PAGE.index(NEXT_CSS))
 
     def test_the_styles_sit_below_the_current_goal_banners_window(self):
         """That window runs from its own banner to the `nav` rule and sweeps in
         anything between."""
-        self.assertGreater(PAGE.index(CSS_BANNER),
-                           PAGE.index("  nav { display:flex"))
+        self.assertGreater(PAGE.index(CSS_BANNER), PAGE.index("  nav { display:flex"))
 
     def test_the_styles_sit_above_every_other_views_window(self):
-        for banner in ("/* --- the Chronicle (infra#2597, mod-overseer#88,"
-                       " mod-overseer#152)",
-                       "/* --- the Council (infra#2597)",
-                       "/* --- the Eye (infra#2597)",
-                       "--- the Armory tab (infra#3096",
-                       "--- the Family tab (infra#2892)"):
+        for banner in (
+            "/* --- the Chronicle (infra#2597, mod-overseer#88, mod-overseer#152)",
+            "/* --- the Council (infra#2597)",
+            "/* --- the Eye (infra#2597)",
+            "--- the Armory tab (infra#3096",
+            "--- the Family tab (infra#2892)",
+        ):
             self.assertLess(PAGE.index(CSS_BANNER), PAGE.index(banner), banner)
 
     def test_the_handler_sits_above_the_recaps_own_window(self):
@@ -107,27 +110,35 @@ class WhereTheCodeIsAllowedToSit(unittest.TestCase):
     def test_the_fetch_sits_above_the_recaps_fetch_window(self):
         """test_recap_tab slices `def _fetch_recap` to the current-goal
         banner and forbids a bare cur.execute anywhere inside it."""
-        self.assertLess(SERVER.index("def _fetch_dungeonplan"),
-                        SERVER.index("def _fetch_recap"))
+        self.assertLess(
+            SERVER.index("def _fetch_dungeonplan"), SERVER.index("def _fetch_recap")
+        )
 
 
 class TheMarkup(unittest.TestCase):
     def test_the_section_exists_beside_the_other_views(self):
-        for element in ('id="dgnhead"', 'id="dgnrunnable"', 'id="dgnorder"',
-                        'id="dgnfamilies"', 'id="dgnbasis"'):
+        for element in (
+            'id="dgnhead"',
+            'id="dgnrunnable"',
+            'id="dgnorder"',
+            'id="dgnfamilies"',
+            'id="dgnbasis"',
+        ):
             self.assertIn(element, SECTION, element)
 
     def test_what_the_overseer_can_run_is_above_the_paths(self):
         """The operator's first question of every step is whether the overseer
         can run it at all, so the list of portals is read before the paths."""
-        self.assertLess(SECTION.index('id="dgnrunnable"'),
-                        SECTION.index('id="dgnfamilies"'))
+        self.assertLess(
+            SECTION.index('id="dgnrunnable"'), SECTION.index('id="dgnfamilies"')
+        )
 
     def test_the_rule_the_path_follows_is_above_it_and_not_below_it(self):
         """A list in an order is read as a finding. The rule that produced the
         order has to be readable before the list, not after twenty rows."""
-        self.assertLess(SECTION.index('id="dgnorder"'),
-                        SECTION.index('id="dgnfamilies"'))
+        self.assertLess(
+            SECTION.index('id="dgnorder"'), SECTION.index('id="dgnfamilies"')
+        )
 
     def test_the_basis_is_on_the_page_at_all(self):
         """The loot board's footer is the precedent: a list that does not say
@@ -151,11 +162,22 @@ class ThePageDecidesNothing(unittest.TestCase):
 
     def test_the_headline_and_the_family_lines_are_the_modules(self):
         self.assertIn("p.line", CODE)
-        for key in ("f.title", "f.who_line", "f.next_line",
-                    "f.family_upgrades", "f.guild_upgrades"):
+        for key in (
+            "f.title",
+            "f.who_line",
+            "f.next_line",
+            "f.family_upgrades",
+            "f.guild_upgrades",
+        ):
             self.assertIn(key, CODE, key)
-        for invented in ('" dungeons"', '" of them"', '"Next: "',
-                         '"\'s family"', '"Alliance"', '"Horde"'):
+        for invented in (
+            '" dungeons"',
+            '" of them"',
+            '"Next: "',
+            '"\'s family"',
+            '"Alliance"',
+            '"Horde"',
+        ):
             self.assertNotIn(invented, CODE, invented)
 
     def test_every_family_is_drawn_and_none_is_named_here(self):
@@ -196,11 +218,16 @@ class ThePageDecidesNothing(unittest.TestCase):
             self.assertNotIn(invented, CODE, invented)
 
     def test_the_context_lines_are_all_the_modules(self):
-        for key in ("d.state_line", "d.runs_line", "d.raid_line",
-                    "f.off_path_line"):
+        for key in ("d.state_line", "d.runs_line", "d.raid_line", "f.off_path_line"):
             self.assertIn(key, CODE, key)
-        for invented in ('"levels "', '"outgrown"', '"later"', '"raid"',
-                         '"cleared"', '"Kalimdor"'):
+        for invented in (
+            '"levels "',
+            '"outgrown"',
+            '"later"',
+            '"raid"',
+            '"cleared"',
+            '"Kalimdor"',
+        ):
             self.assertNotIn(invented, CODE, invented)
 
     def test_where_the_family_stands_only_picks_a_class(self):
@@ -240,7 +267,7 @@ class ThePageDecidesNothing(unittest.TestCase):
         self.assertNotIn("new Map([", CODE)
 
     def test_an_empty_string_from_the_module_draws_nothing(self):
-        """"There is nothing to say here" is a real answer, and an empty line
+        """ "There is nothing to say here" is a real answer, and an empty line
         under a heading reads as a broken page."""
         self.assertIn("if (text) parent.appendChild", CODE)
 
@@ -261,8 +288,11 @@ class TheListStaysScannableOnAPhone(unittest.TestCase):
     def test_the_name_and_the_count_are_visible_while_it_is_collapsed(self):
         """A list of twenty closed rows that only show a name answers nothing,
         and opening all twenty is the thing this view exists to replace."""
-        head = CODE[CODE.index('createElement("summary")'):
-                    CODE.index("card.appendChild(head)")]
+        head = CODE[
+            CODE.index('createElement("summary")') : CODE.index(
+                "card.appendChild(head)"
+            )
+        ]
         for key in ("d.rank", "d.name", "d.state_line", "d.chips"):
             self.assertIn(key, head, key)
 
@@ -304,39 +334,41 @@ class TheTabAndItsAddress(unittest.TestCase):
     def test_it_sits_after_the_chronicle_and_before_the_continents(self):
         """The Chronicle says where they have been; this says which of the
         places they have not been is worth the walk."""
-        self.assertLess(PAGE.index("tabs.appendChild(hb);"),
-                        PAGE.index("tabs.appendChild(gb);"))
-        self.assertLess(PAGE.index("tabs.appendChild(gb);"),
-                        PAGE.index("for (const id of CONTINENT_ORDER)"))
+        self.assertLess(
+            PAGE.index("tabs.appendChild(hb);"), PAGE.index("tabs.appendChild(gb);")
+        )
+        self.assertLess(
+            PAGE.index("tabs.appendChild(gb);"),
+            PAGE.index("for (const id of CONTINENT_ORDER)"),
+        )
 
     def test_the_view_is_an_address(self):
         """A *_VIEW constant missing from HASH_VIEWS gets no error and no
         warning: its deep link quietly opens the Family tab."""
-        listed = PAGE[PAGE.index("const HASH_VIEWS = ["):]
-        listed = listed[:listed.index("]")]
+        listed = PAGE[PAGE.index("const HASH_VIEWS = [") :]
+        listed = listed[: listed.index("]")]
         self.assertIn("DUNGEONS_VIEW", listed)
 
     def test_showview_toggles_the_section(self):
-        show = PAGE[PAGE.index("function showView"):]
-        show = show[:show.index("setInterval(pollFamily")]
-        self.assertIn('dgnsection.style.display = isDgn ? "block" : "none";',
-                      show)
+        show = PAGE[PAGE.index("function showView") :]
+        show = show[: show.index("setInterval(pollFamily")]
+        self.assertIn('dgnsection.style.display = isDgn ? "block" : "none";', show)
 
     def test_opening_the_tab_does_not_wait_for_the_timer(self):
         """A minute of empty list under a heading is indistinguishable from a
         broken one, and this is the slowest poll on the page."""
-        show = PAGE[PAGE.index("function showView"):]
-        show = show[:show.index("setInterval(pollFamily")]
-        head = show[show.index("if (isDgn) {"):]
-        self.assertIn("pollDungeons();", head[:head.index("return;")])
+        show = PAGE[PAGE.index("function showView") :]
+        show = show[: show.index("setInterval(pollFamily")]
+        head = show[show.index("if (isDgn) {") :]
+        self.assertIn("pollDungeons();", head[: head.index("return;")])
 
     def test_opening_it_stops_the_things_that_belong_to_other_views(self):
         """The panel keeps a second player alive off screen and the broadcast
         grid keeps pulling video nobody can see."""
-        show = PAGE[PAGE.index("function showView"):]
-        show = show[:show.index("setInterval(pollFamily")]
-        head = show[show.index("if (isDgn) {"):]
-        head = head[:head.index("return;")]
+        show = PAGE[PAGE.index("function showView") :]
+        show = show[: show.index("setInterval(pollFamily")]
+        head = show[show.index("if (isDgn) {") :]
+        head = head[: head.index("return;")]
         self.assertIn("closePanel();", head)
         self.assertIn("stopBroadcasts();", head)
 
@@ -359,8 +391,8 @@ class ThePoll(unittest.TestCase):
     def test_the_guard_is_released_even_when_the_read_throws(self):
         """Cleared at the end of the try it would be skipped by the very
         failure that most needs the next poll to be allowed to run."""
-        poll = CODE[CODE.index("async function pollDungeons"):]
-        poll = poll[:poll.index("setInterval")]
+        poll = CODE[CODE.index("async function pollDungeons") :]
+        poll = poll[: poll.index("setInterval")]
         finally_at = poll.index("} finally {")
         self.assertLess(poll.index("} catch (e) {"), finally_at)
         self.assertIn("dgnPulling = false;", poll[finally_at:])
@@ -375,7 +407,7 @@ class ThePoll(unittest.TestCase):
     def test_a_failed_poll_keeps_what_is_drawn_and_says_it_may_be_stale(self):
         """A blanked list reads as "there is nothing worth running anywhere",
         which is the one claim this view must never make by accident."""
-        catch = CODE[CODE.index("} catch (e) {"):]
+        catch = CODE[CODE.index("} catch (e) {") :]
         self.assertIn("may be stale", catch)
         self.assertNotIn("replaceChildren", catch)
 
@@ -395,16 +427,22 @@ class TheEndpoint(unittest.TestCase):
         """WHO the families are belongs to the roster, exactly as /api/armory
         and /api/family refuse a name. This one asks about every dungeon at
         once, so there is no map id to steer either."""
-        handler = SERVER[SERVER.index("def _dungeons"):SERVER.index("def _recap")]
+        handler = SERVER[SERVER.index("def _dungeons") : SERVER.index("def _recap")]
         self.assertNotIn("query.get", handler)
-        fetch = SERVER[SERVER.index("def _fetch_dungeonplan"):
-                       SERVER.index("# --- the live dungeon recap")]
+        fetch = SERVER[
+            SERVER.index("def _fetch_dungeonplan") : SERVER.index(
+                "# --- the live dungeon recap"
+            )
+        ]
         self.assertIn("_PLAN_FAMILIES", fetch)
 
     def test_an_empty_roster_binds_no_empty_in_list(self):
         """`IN ()` is a syntax error, so no family means no character read."""
-        fetch = SERVER[SERVER.index("def _fetch_dungeonplan"):
-                       SERVER.index("# --- the live dungeon recap")]
+        fetch = SERVER[
+            SERVER.index("def _fetch_dungeonplan") : SERVER.index(
+                "# --- the live dungeon recap"
+            )
+        ]
         self.assertIn("if names:", fetch)
         self.assertLess(fetch.index("if names:"), fetch.index("_LINEUP_GUILD.format"))
 
@@ -412,12 +450,15 @@ class TheEndpoint(unittest.TestCase):
         """bonds knows one family. The roster's own `family` column knows the
         Alliance family and the Horde one, so that is what the path reads."""
         self.assertIn("SELECT name, family FROM overseer_roster", SERVER)
-        paths = SERVER[SERVER.index("def _dungeon_paths"):
-                       SERVER.index("# --- the live dungeon recap")]
+        paths = SERVER[
+            SERVER.index("def _dungeon_paths") : SERVER.index(
+                "# --- the live dungeon recap"
+            )
+        ]
         self.assertIn('for head, roster in fetched["families"].items():', paths)
 
     def test_a_dead_database_is_a_503_that_keeps_what_is_drawn(self):
-        handler = SERVER[SERVER.index("def _dungeons"):SERVER.index("def _recap")]
+        handler = SERVER[SERVER.index("def _dungeons") : SERVER.index("def _recap")]
         self.assertIn("self._send(503", handler)
 
 
@@ -428,16 +469,20 @@ class TheReads(unittest.TestCase):
         # SQL constants and the shared `_wide_guarded` sit between the two, and
         # a window that swept them in would be asserting about somebody else's
         # code.
-        cls.fetch = SERVER[SERVER.index("def _fetch_dungeonplan"):
-                           SERVER.index("# --- the live dungeon recap")]
+        cls.fetch = SERVER[
+            SERVER.index("def _fetch_dungeonplan") : SERVER.index(
+                "# --- the live dungeon recap"
+            )
+        ]
 
     def test_the_bound_map_list_is_the_modules_union(self):
         """The page draws a row per access-table map AND per map this site
         names, so binding the access table's maps alone would leave a
         site-named dungeon rendering "no boss loot" over loot that was never
         asked for."""
-        self.assertIn("dungeonplan.map_ids(catalogue, achievements.MAP_NAMES)",
-                      self.fetch)
+        self.assertIn(
+            "dungeonplan.map_ids(catalogue, achievements.MAP_NAMES)", self.fetch
+        )
 
     def test_the_dungeon_list_is_the_worlds_own_table(self):
         """A hand list cannot follow the family into a dungeon nobody
@@ -449,18 +494,24 @@ class TheReads(unittest.TestCase):
         """`difficulty` is what picks one row per map. A world that predates
         it must still get its dungeons."""
         self.assertIn("_PLAN_CATALOGUE_OLD", SERVER)
-        old = SERVER[SERVER.index("_PLAN_CATALOGUE_OLD"):]
-        self.assertNotIn("difficulty", old[:old.index(")\n")])
+        old = SERVER[SERVER.index("_PLAN_CATALOGUE_OLD") :]
+        self.assertNotIn("difficulty", old[: old.index(")\n")])
 
     def test_every_world_read_is_guarded_for_both_errors(self):
         """1146 is a missing TABLE and 1054 a missing COLUMN, and production
         lacks tables dev has. An unguarded read here is a 503 on the live
         realm for a feature it has nothing to do with."""
-        for table in ("dungeon_access_template", "instance_encounters",
-                      "creature_loot_template", "characters",
-                      "character_inventory", "character_skills",
-                      "overseer_roster", "guild_member",
-                      "overseer_dungeon_run"):
+        for table in (
+            "dungeon_access_template",
+            "instance_encounters",
+            "creature_loot_template",
+            "characters",
+            "character_inventory",
+            "character_skills",
+            "overseer_roster",
+            "guild_member",
+            "overseer_dungeon_run",
+        ):
             self.assertIn('"%s"' % table, self.fetch, table)
         # Nothing in the fetch may call execute directly: the guard is the
         # only way rows come back, so a read added later cannot skip it.
@@ -472,7 +523,7 @@ class TheReads(unittest.TestCase):
         self.assertEqual(self.fetch.count("_PLAN_LOOT"), 1)
         self.assertEqual(self.fetch.count("_PLAN_ENCOUNTERS"), 1)
         self.assertIn("map IN ({holes})", SERVER)
-        body = self.fetch[self.fetch.index("with conn.cursor()"):]
+        body = self.fetch[self.fetch.index("with conn.cursor()") :]
         self.assertNotIn("for map", body)
 
     def test_an_empty_catalogue_does_not_bind_an_empty_in_list(self):
@@ -483,31 +534,31 @@ class TheReads(unittest.TestCase):
     def test_the_spawn_test_stays_a_subquery(self):
         """Joined, a boss with two spawn rows would multiply every one of its
         loot rows by two and count the same sword twice."""
-        sql = SERVER[SERVER.index("_PLAN_LOOT = ("):]
-        sql = sql[:sql.index(")\n")]
+        sql = SERVER[SERVER.index("_PLAN_LOOT = (") :]
+        sql = sql[: sql.index(")\n")]
         self.assertIn("(SELECT DISTINCT id FROM acore_world.creature", sql)
 
     def test_loot_behind_a_reference_is_not_joined_as_an_item(self):
         """A row with a Reference points at reference_loot_template rather
         than at an item, so joining it on `it.entry = clt.Item` surfaces
         something unrelated as a boss drop."""
-        sql = SERVER[SERVER.index("_PLAN_LOOT = ("):]
-        sql = sql[:sql.index(")\n")]
+        sql = SERVER[SERVER.index("_PLAN_LOOT = (") :]
+        sql = sql[: sql.index(")\n")]
         self.assertIn("clt.Reference = 0", sql)
 
     def test_a_spell_credit_is_not_read_as_a_creature(self):
         """creditType 1 is a SPELL, and without the filter the join names an
         encounter after whatever creature shares the number."""
-        sql = SERVER[SERVER.index("_PLAN_ENCOUNTERS = ("):]
-        sql = sql[:sql.index(")\n")]
+        sql = SERVER[SERVER.index("_PLAN_ENCOUNTERS = (") :]
+        sql = sql[: sql.index(")\n")]
         self.assertIn("ie.creditType = 0", sql)
         self.assertIn("SELECT DISTINCT", sql)
 
     def test_where_the_family_stand_comes_back_with_them(self):
         """`map` is on the characters row already, so this is one column and
         not a second read."""
-        sql = SERVER[SERVER.index("_PLAN_CHARS = ("):]
-        sql = sql[:sql.index(")\n")]
+        sql = SERVER[SERVER.index("_PLAN_CHARS = (") :]
+        sql = sql[: sql.index(")\n")]
         self.assertIn("map", sql)
 
     def test_the_loot_read_carries_what_a_tooltip_draws(self):
@@ -516,22 +567,25 @@ class TheReads(unittest.TestCase):
         unable to say anything a reader could act on - and this page ranks by
         item level and refuses to weight stats, so the tooltip is how the
         reader does the weighting it will not do."""
-        sql = SERVER[SERVER.index("_PLAN_LOOT = ("):]
-        sql = sql[:sql.index(")" + chr(10))]
+        sql = SERVER[SERVER.index("_PLAN_LOOT = (") :]
+        sql = sql[: sql.index(")" + chr(10))]
         self.assertIn("_ITEM_TEMPLATE_COLUMNS", sql)
 
     def test_the_chance_columns_stay_out_of_the_widened_read(self):
         """_ITEM_TEMPLATE_COLUMNS is item_template only, so the reason Chance
         and GroupId were dropped survives the widening: this page does not ask
         how likely a drop is and must not be able to start."""
-        sql = SERVER[SERVER.index("_PLAN_LOOT = ("):]
-        sql = sql[:sql.index(")" + chr(10))]
+        sql = SERVER[SERVER.index("_PLAN_LOOT = (") :]
+        sql = sql[: sql.index(")" + chr(10))]
         self.assertNotIn("Chance", sql)
         self.assertNotIn("GroupId", sql)
 
     def test_the_handler_hands_the_book_over(self):
-        paths = SERVER[SERVER.index("def _dungeon_paths"):
-                       SERVER.index("# --- the live dungeon recap")]
+        paths = SERVER[
+            SERVER.index("def _dungeon_paths") : SERVER.index(
+                "# --- the live dungeon recap"
+            )
+        ]
         self.assertIn('fetched["skill_rows"], ITEMS)', paths)
 
     def test_the_worn_and_skill_reads_are_the_loot_boards_own(self):
@@ -559,8 +613,12 @@ class TheVerdictIsBorrowedAndNotCopied(unittest.TestCase):
     def test_it_does_not_keep_a_second_armour_or_proficiency_table(self):
         """mod-overseer#411 lives in recap.py, read from the core's own
         subclass-to-skill map. A copy here would go stale silently."""
-        for copied in ("WEAPON_SKILLS = {", "ARMOUR_SKILLS = {",
-                       "ARMOUR_GRADES = {", "WEARABLE_SLOTS = {"):
+        for copied in (
+            "WEAPON_SKILLS = {",
+            "ARMOUR_SKILLS = {",
+            "ARMOUR_GRADES = {",
+            "WEARABLE_SLOTS = {",
+        ):
             self.assertNotIn(copied, MODULE, copied)
 
     def test_it_does_not_compare_item_levels_itself(self):

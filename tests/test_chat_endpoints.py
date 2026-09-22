@@ -14,6 +14,7 @@ _connect(), which no test here reaches.
 
 Ticket: infra#2604.
 """
+
 import io
 import json
 import logging
@@ -38,9 +39,17 @@ map_server.log.addHandler(logging.NullHandler())
 NOW = datetime(2026, 8, 21, 12, 0, 0)
 
 SNAPSHOT = {
-    "name": "Odo", "level": 5, "race": 2, "class": 1, "map_id": 1,
-    "pos_x": -600.0, "pos_y": -4200.0, "health": 100, "max_health": 146,
-    "in_combat": 0, "personality": "gruff and loyal",
+    "name": "Odo",
+    "level": 5,
+    "race": 2,
+    "class": 1,
+    "map_id": 1,
+    "pos_x": -600.0,
+    "pos_y": -4200.0,
+    "health": 100,
+    "max_health": 146,
+    "in_combat": 0,
+    "personality": "gruff and loyal",
 }
 
 
@@ -98,17 +107,26 @@ class ThoughtsEndpointTest(unittest.TestCase):
         self.assertEqual(handler.code, 404)
 
     def test_a_page_is_fetched_with_a_clamped_limit_and_the_cursor(self):
-        rows = [{"id": 4, "source": "event", "text": "Odo entered combat.",
-                 "created_at": NOW}]
-        with mock.patch.object(map_server, "_fetch_thoughts",
-                               return_value=(rows, NOW)) as fetch:
+        rows = [
+            {
+                "id": 4,
+                "source": "event",
+                "text": "Odo entered combat.",
+                "created_at": NOW,
+            }
+        ]
+        with mock.patch.object(
+            map_server, "_fetch_thoughts", return_value=(rows, NOW)
+        ) as fetch:
             handler = self.get("/api/thoughts?name=Odo&before=9&limit=99999")
         fetch.assert_called_once_with("Odo", 9, chat.MAX_PAGE)
         self.assertEqual(handler.code, 200)
         self.assertEqual(handler.payload["thoughts"][0]["id"], 4)
 
     def test_a_dead_database_is_a_503_not_a_hang_or_a_blank(self):
-        with mock.patch.object(map_server, "_fetch_thoughts", side_effect=OSError("gone")):
+        with mock.patch.object(
+            map_server, "_fetch_thoughts", side_effect=OSError("gone")
+        ):
             handler = self.get("/api/thoughts?name=Odo")
         self.assertEqual(handler.code, 503)
 
@@ -127,23 +145,30 @@ class ChatEndpointTest(unittest.TestCase):
         self.mocks = self.patcher.start()
         self.addCleanup(self.patcher.stop)
         self.mocks["_fetch_chat_grounding"].return_value = {
-            "snapshot_row": dict(SNAPSHOT), "recent": [],
+            "snapshot_row": dict(SNAPSHOT),
+            "recent": [],
         }
-        self.mocks["_insert_thought"].side_effect = \
-            lambda name, source, text: self.thoughts.append((name, source, text))
-        self.mocks["_insert_command"].side_effect = \
-            lambda name, command, source: self.commands.append((name, command, source)) or 1
-        self.mocks["_ask_llm"].return_value = \
-            '{"command": "grind", "say": "I will hunt, Overseer."}'
+        self.mocks["_insert_thought"].side_effect = lambda name, source, text: (
+            self.thoughts.append((name, source, text))
+        )
+        self.mocks["_insert_command"].side_effect = lambda name, command, source: (
+            self.commands.append((name, command, source)) or 1
+        )
+        self.mocks[
+            "_ask_llm"
+        ].return_value = '{"command": "grind", "say": "I will hunt, Overseer."}'
 
     def test_a_reply_persists_both_sides_of_the_exchange(self):
         handler = post(text="go get stronger")
         self.assertEqual(handler.code, 200)
         self.assertEqual(handler.payload["say"], "I will hunt, Overseer.")
-        self.assertEqual(self.thoughts, [
-            ("Odo", "chat", chat.overseer_line("go get stronger")),
-            ("Odo", "chat", "I will hunt, Overseer."),
-        ])
+        self.assertEqual(
+            self.thoughts,
+            [
+                ("Odo", "chat", chat.overseer_line("go get stronger")),
+                ("Odo", "chat", "I will hunt, Overseer."),
+            ],
+        )
 
     def test_a_sanctioned_command_travels_the_discord_path(self):
         # Same table, same worldserver poller: a directive typed on the web
@@ -153,8 +178,9 @@ class ChatEndpointTest(unittest.TestCase):
         self.assertEqual(handler.payload["command"], "grind")
 
     def test_an_invented_command_never_reaches_the_queue(self):
-        self.mocks["_ask_llm"].return_value = \
-            '{"command": "delete azeroth", "say": "As you wish."}'
+        self.mocks[
+            "_ask_llm"
+        ].return_value = '{"command": "delete azeroth", "say": "As you wish."}'
         handler = post()
         self.assertEqual(self.commands, [])
         self.assertIsNone(handler.payload["command"])
@@ -164,10 +190,13 @@ class ChatEndpointTest(unittest.TestCase):
         handler = post(text="are you well?")
         self.assertEqual(handler.code, 200)
         self.assertTrue(handler.payload["degraded"])
-        self.assertEqual(self.thoughts, [
-            ("Odo", "chat", chat.overseer_line("are you well?")),
-            ("Odo", "chat", chat.outage_line("Odo")),
-        ])
+        self.assertEqual(
+            self.thoughts,
+            [
+                ("Odo", "chat", chat.overseer_line("are you well?")),
+                ("Odo", "chat", chat.outage_line("Odo")),
+            ],
+        )
 
     def test_the_overseer_line_is_written_before_the_model_is_asked(self):
         # The ordering IS the guarantee: whatever the model does next, the
@@ -181,18 +210,31 @@ class ChatEndpointTest(unittest.TestCase):
     def test_the_prompt_carries_the_grounding_the_page_promised(self):
         self.mocks["_fetch_chat_grounding"].return_value = {
             "snapshot_row": dict(SNAPSHOT),
-            "recent": [{"id": 3, "source": "event", "text": "Odo entered combat.",
-                        "created_at": NOW}],
+            "recent": [
+                {
+                    "id": 3,
+                    "source": "event",
+                    "text": "Odo entered combat.",
+                    "created_at": NOW,
+                }
+            ],
         }
         post(text="what happened?")
         prompt = self.mocks["_ask_llm"].call_args[0][0]
-        for fragment in ("Odo", "Orc", "Warrior", "gruff and loyal",
-                         "Odo entered combat.", "what happened?"):
+        for fragment in (
+            "Odo",
+            "Orc",
+            "Warrior",
+            "gruff and loyal",
+            "Odo entered combat.",
+            "what happened?",
+        ):
             self.assertIn(fragment, prompt)
 
     def test_a_logged_out_character_is_told_plainly_not_ventriloquized(self):
         self.mocks["_fetch_chat_grounding"].return_value = {
-            "snapshot_row": None, "recent": [],
+            "snapshot_row": None,
+            "recent": [],
         }
         handler = post(text="where are you?")
         self.assertEqual(handler.code, 200)
@@ -200,7 +242,9 @@ class ChatEndpointTest(unittest.TestCase):
         self.mocks["_ask_llm"].assert_not_called()
         # The message still persists: the Overseer spoke, and that belongs
         # in the stream even though nobody was home to answer.
-        self.assertEqual(self.thoughts, [("Odo", "chat", chat.overseer_line("where are you?"))])
+        self.assertEqual(
+            self.thoughts, [("Odo", "chat", chat.overseer_line("where are you?"))]
+        )
 
     def test_an_unknown_character_is_a_clean_404_with_nothing_written(self):
         self.mocks["_fetch_chat_grounding"].return_value = None
@@ -244,15 +288,19 @@ class ChatEndpointTest(unittest.TestCase):
 
     def test_a_long_message_is_bounded_before_it_is_stored(self):
         post(text="y" * 4000)
-        self.assertLessEqual(len(self.thoughts[0][2]), len(chat.OVERSEER_PREFIX) + chat.MAX_MESSAGE)
+        self.assertLessEqual(
+            len(self.thoughts[0][2]), len(chat.OVERSEER_PREFIX) + chat.MAX_MESSAGE
+        )
 
 
 class ParseGateTest(unittest.TestCase):
     def test_the_endpoint_and_the_bridge_share_one_command_gate(self):
         # Not a duplicate of the chat.py suite: this pins that the web
         # surface delegates to voice.py rather than growing its own rule.
-        self.assertIs(chat.parse_reply('{"command": "grind", "say": "ok"}').__class__,
-                      voice.Decision)
+        self.assertIs(
+            chat.parse_reply('{"command": "grind", "say": "ok"}').__class__,
+            voice.Decision,
+        )
 
 
 if __name__ == "__main__":

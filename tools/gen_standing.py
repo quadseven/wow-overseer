@@ -76,6 +76,7 @@ its own premise. The effect ids are the core's own SpellEffects enum.
 
 Usage: python3 gen_standing.py <dbc_dir> <out_dir>
 """
+
 from __future__ import annotations
 
 import json
@@ -95,13 +96,15 @@ SPELL_ITEM_FIELDS = slice(107, 110)
 # or wear. CREATE_ITEM_2 is the "make several" variant; the three enchant
 # effects are how an enchanter's whole recipe list is spelled, since an
 # enchant produces no item at all.
-MAKES_SOMETHING = frozenset({
-    24,   # SPELL_EFFECT_CREATE_ITEM
-    53,   # SPELL_EFFECT_ENCHANT_ITEM
-    54,   # SPELL_EFFECT_ENCHANT_ITEM_TEMPORARY
-    156,  # SPELL_EFFECT_ENCHANT_ITEM_PRISMATIC
-    157,  # SPELL_EFFECT_CREATE_ITEM_2
-})
+MAKES_SOMETHING = frozenset(
+    {
+        24,  # SPELL_EFFECT_CREATE_ITEM
+        53,  # SPELL_EFFECT_ENCHANT_ITEM
+        54,  # SPELL_EFFECT_ENCHANT_ITEM_TEMPORARY
+        156,  # SPELL_EFFECT_ENCHANT_ITEM_PRISMATIC
+        157,  # SPELL_EFFECT_CREATE_ITEM_2
+    }
+)
 
 # SkillLine.dbc: ID, CategoryID, SkillCostsID, DisplayName_Lang[16] + mask,
 # Description_Lang[16] + mask, SpellIconID, AlternateVerb_Lang[16] + mask,
@@ -135,22 +138,24 @@ FACTION_NAME_FIELD = 23
 # and a category-shaped rule would sweep them in. These ids are the same
 # ones goals.SKILL_IDS carries, which is the module that already owns
 # "which number is which profession" for this service.
-TRADE_SKILLS = frozenset({
-    129,  # First Aid
-    164,  # Blacksmithing
-    165,  # Leatherworking
-    171,  # Alchemy
-    182,  # Herbalism
-    185,  # Cooking
-    186,  # Mining
-    197,  # Tailoring
-    202,  # Engineering
-    333,  # Enchanting
-    356,  # Fishing
-    393,  # Skinning
-    755,  # Jewelcrafting
-    773,  # Inscription
-})
+TRADE_SKILLS = frozenset(
+    {
+        129,  # First Aid
+        164,  # Blacksmithing
+        165,  # Leatherworking
+        171,  # Alchemy
+        182,  # Herbalism
+        185,  # Cooking
+        186,  # Mining
+        197,  # Tailoring
+        202,  # Engineering
+        333,  # Enchanting
+        356,  # Fishing
+        393,  # Skinning
+        755,  # Jewelcrafting
+        773,  # Inscription
+    }
+)
 
 
 def read_dbc(path: str) -> tuple[list[tuple], bytes]:
@@ -241,9 +246,12 @@ def load_factions(dbc_dir: str) -> dict[str, dict]:
         # match a character the client would have stopped at zero for.
         base = [
             [race, cls, signed(value)]
-            for race, cls, value in zip(r[FACTION_RACE_MASK_FIELDS],
-                                        r[FACTION_CLASS_MASK_FIELDS],
-                                        r[FACTION_BASE_FIELDS], strict=True)
+            for race, cls, value in zip(
+                r[FACTION_RACE_MASK_FIELDS],
+                r[FACTION_CLASS_MASK_FIELDS],
+                r[FACTION_BASE_FIELDS],
+                strict=True,
+            )
         ]
         out[str(r[0])] = {
             "name": cstr(strings, r[FACTION_NAME_FIELD]),
@@ -304,12 +312,22 @@ def main(dbc_dir: str, out_dir: str) -> None:
         # for the same reason: machine-written, machine-read, nobody hand
         # edits it, and indentation nobody reads is the difference between
         # a file a reviewer can hold in one pass and one they cannot.
-        json.dump({"icons": pool.names, "skills": skills,
-                   "factions": factions, "recipes": recipes}, f,
-                  separators=(",", ":"), sort_keys=True)
+        json.dump(
+            {
+                "icons": pool.names,
+                "skills": skills,
+                "factions": factions,
+                "recipes": recipes,
+            },
+            f,
+            separators=(",", ":"),
+            sort_keys=True,
+        )
         f.write("\n")
-    print(f"skills: {len(skills)}  factions: {len(factions)}  "
-          f"recipes: {len(recipes)}  icons: {len(pool.names)}")
+    print(
+        f"skills: {len(skills)}  factions: {len(factions)}  "
+        f"recipes: {len(recipes)}  icons: {len(pool.names)}"
+    )
 
 
 if __name__ == "__main__":

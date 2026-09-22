@@ -48,6 +48,7 @@ tested here. Neither is whether one bridge process should serve both cohorts
 or one each, which is still open on infra#4221 and decides more of that epic
 than the schema does.
 """
+
 import ast
 import builtins
 import pathlib
@@ -70,9 +71,7 @@ HISTORIC_CLEAR_OTHERS = (
     "UPDATE overseer_roster SET drive_quest = 0 "
     "WHERE drive_quest <> 0 AND name NOT IN (%s)"
 )
-HISTORIC_CLEAR_ALL = (
-    "UPDATE overseer_roster SET drive_quest = 0 WHERE drive_quest <> 0"
-)
+HISTORIC_CLEAR_ALL = "UPDATE overseer_roster SET drive_quest = 0 WHERE drive_quest <> 0"
 
 
 # --- reading the statements back out of bridge.py ---------------------------
@@ -99,9 +98,12 @@ def _function_code(name: str) -> str:
     """
     node = _function(name)
     body = list(node.body)
-    if (body and isinstance(body[0], ast.Expr)
-            and isinstance(body[0].value, ast.Constant)
-            and isinstance(body[0].value.value, str)):
+    if (
+        body
+        and isinstance(body[0], ast.Expr)
+        and isinstance(body[0].value, ast.Constant)
+        and isinstance(body[0].value.value, str)
+    ):
         body = body[1:]
     return "\n".join(ast.dump(stmt) for stmt in body)
 
@@ -130,8 +132,9 @@ def _assigned(func: str, target: str, names: dict):
     against a bridge that had stopped choosing one.
     """
     for stmt in ast.walk(_function(func)):
-        if (isinstance(stmt, ast.Assign)
-                and any(getattr(t, "id", "") == target for t in stmt.targets)):
+        if isinstance(stmt, ast.Assign) and any(
+            getattr(t, "id", "") == target for t in stmt.targets
+        ):
             return _evaluate(stmt.value, names)
     raise AssertionError(
         "%s assigns no %s - the cohort clause is gone from bridge.py" % (func, target)
@@ -141,7 +144,8 @@ def _assigned(func: str, target: str, names: dict):
 def _executes(func: str) -> list:
     """Every `cur.execute(...)` in `func`, in source order."""
     calls = [
-        node for node in ast.walk(_function(func))
+        node
+        for node in ast.walk(_function(func))
         if isinstance(node, ast.Call)
         and isinstance(node.func, ast.Attribute)
         and node.func.attr == "execute"
@@ -223,9 +227,11 @@ def _roster(rows) -> sqlite3.Connection:
 
 
 def _dump(db: sqlite3.Connection) -> list:
-    return list(db.execute(
-        "SELECT name, `lead`, drive_quest, family FROM overseer_roster ORDER BY name"
-    ))
+    return list(
+        db.execute(
+            "SELECT name, `lead`, drive_quest, family FROM overseer_roster ORDER BY name"
+        )
+    )
 
 
 def _cell(db: sqlite3.Connection, name: str, column: str) -> int:
@@ -256,8 +262,9 @@ class TheHarnessCanActuallyRunTheseStatements(RosterCase):
         """iif() arrived in SQLite 3.32 (2020). Asserted rather than skipped:
         a suite that quietly skips on an old engine is a check that can only
         report good news."""
-        self.assertGreaterEqual(sqlite3.sqlite_version_info, (3, 32),
-                                sqlite3.sqlite_version)
+        self.assertGreaterEqual(
+            sqlite3.sqlite_version_info, (3, 32), sqlite3.sqlite_version
+        )
 
     def test_the_translation_of_the_leader_write_is_total(self):
         self.assertEqual(
@@ -273,8 +280,10 @@ class TheHarnessCanActuallyRunTheseStatements(RosterCase):
         """
         db = self.roster(_ONE_COHORT)
         with self.assertRaises(sqlite3.OperationalError):
-            db.execute("UPDATE overseer_roster SET drive_quest = 0 "
-                       "WHERE updated_at > NOW() - INTERVAL 60 SECOND")
+            db.execute(
+                "UPDATE overseer_roster SET drive_quest = 0 "
+                "WHERE updated_at > NOW() - INTERVAL 60 SECOND"
+            )
 
 
 class TheLeaderFlagWriteUsedToCrossCohorts(RosterCase):
@@ -293,7 +302,8 @@ class TheLeaderFlagWriteUsedToCrossCohorts(RosterCase):
         db.execute(_sqlite(HISTORIC_LEAD), ("Ugga",))
 
         self.assertEqual(
-            0, _cell(db, "Blammo", "lead"),
+            0,
+            _cell(db, "Blammo", "lead"),
             "the unscoped write was supposed to reach into the other cohort - "
             "if it no longer does, this reproduction has stopped reproducing",
         )
@@ -303,14 +313,19 @@ class TheLeaderFlagWriteUsedToCrossCohorts(RosterCase):
     def test_the_statement_the_bridge_emits_leaves_the_other_cohort_alone(self):
         scope = _assigned("_mark_party_leader", "scope", {"cohort": CAVE})
         sql, params = _statement(
-            "_mark_party_leader", 0, head="Ugga", cohort=CAVE, scope=scope,
+            "_mark_party_leader",
+            0,
+            head="Ugga",
+            cohort=CAVE,
+            scope=scope,
         )
         db = self.roster()
 
         db.execute(_sqlite(sql), params)
 
         self.assertEqual(
-            1, _cell(db, "Blammo", "lead"),
+            1,
+            _cell(db, "Blammo", "lead"),
             "the other cohort's leader flag was rewritten by this cohort's pass",
         )
         self.assertEqual(1, _cell(db, "Ugga", "lead"))
@@ -322,7 +337,11 @@ class TheLeaderFlagWriteUsedToCrossCohorts(RosterCase):
         leave a cohort with no leader at all."""
         scope = _assigned("_mark_party_leader", "scope", {"cohort": OTHER})
         sql, params = _statement(
-            "_mark_party_leader", 0, head="Hexmama", cohort=OTHER, scope=scope,
+            "_mark_party_leader",
+            0,
+            head="Hexmama",
+            cohort=OTHER,
+            scope=scope,
         )
         db = self.roster()
 
@@ -351,11 +370,13 @@ class TheQuestAimClearUsedToCrossCohorts(RosterCase):
         self.assertEqual(554, _cell(db, "Hexmama", "drive_quest"), "precondition")
 
         db.execute(
-            _sqlite(HISTORIC_CLEAR_OTHERS % self._marks()), tuple(self.HOLDERS),
+            _sqlite(HISTORIC_CLEAR_OTHERS % self._marks()),
+            tuple(self.HOLDERS),
         )
 
         self.assertEqual(
-            0, _cell(db, "Hexmama", "drive_quest"),
+            0,
+            _cell(db, "Hexmama", "drive_quest"),
             "the unscoped clear was supposed to reach the other cohort",
         )
         self.assertEqual(0, _cell(db, "Og", "drive_quest"), "own cohort, not a holder")
@@ -374,11 +395,13 @@ class TheQuestAimClearUsedToCrossCohorts(RosterCase):
         db.execute(_sqlite(sql), params)
 
         self.assertEqual(
-            554, _cell(db, "Hexmama", "drive_quest"),
+            554,
+            _cell(db, "Hexmama", "drive_quest"),
             "this cohort's aim pass blanked the other cohort's quest aim",
         )
         self.assertEqual(
-            0, _cell(db, "Og", "drive_quest"),
+            0,
+            _cell(db, "Og", "drive_quest"),
             "a non-holder in this cohort must still be cleared - that is what "
             "keeps an unaimed follower off its own quest log",
         )
@@ -389,8 +412,11 @@ class TheQuestAimClearUsedToCrossCohorts(RosterCase):
         a second place for the rule to drift, and this change deliberately did
         not add one."""
         sql, _ = _statement(
-            "_aim_traveller", 0,
-            holders=self.HOLDERS, quest_id=3109, marks=self._marks(),
+            "_aim_traveller",
+            0,
+            holders=self.HOLDERS,
+            quest_id=3109,
+            marks=self._marks(),
         )
         self.assertIn("WHERE name IN", sql)
         self.assertNotIn("family", sql)
@@ -408,8 +434,11 @@ class TheUnconditionalQuestAimClearUsedToCrossCohorts(RosterCase):
 
         db.execute(_sqlite(HISTORIC_CLEAR_ALL))
 
-        self.assertEqual(0, _cell(db, "Hexmama", "drive_quest"),
-                         "the unscoped clear was supposed to reach the other cohort")
+        self.assertEqual(
+            0,
+            _cell(db, "Hexmama", "drive_quest"),
+            "the unscoped clear was supposed to reach the other cohort",
+        )
         self.assertEqual(0, _cell(db, "Og", "drive_quest"))
 
     def test_the_statement_the_bridge_emits_leaves_the_other_cohort_alone(self):
@@ -422,11 +451,15 @@ class TheUnconditionalQuestAimClearUsedToCrossCohorts(RosterCase):
         db.execute(_sqlite(sql), params)
 
         self.assertEqual(
-            554, _cell(db, "Hexmama", "drive_quest"),
+            554,
+            _cell(db, "Hexmama", "drive_quest"),
             "this cohort having no holder cleared the other cohort's aim",
         )
-        self.assertEqual(0, _cell(db, "Og", "drive_quest"),
-                         "this cohort's own stale aim must still be cleared")
+        self.assertEqual(
+            0,
+            _cell(db, "Og", "drive_quest"),
+            "this cohort's own stale aim must still be cleared",
+        )
 
 
 class AgainstTheOnlyCohortThatExistsTodayNothingChangesAtAll(RosterCase):
@@ -446,7 +479,11 @@ class AgainstTheOnlyCohortThatExistsTodayNothingChangesAtAll(RosterCase):
 
         scope = _assigned("_mark_party_leader", "scope", {"cohort": CAVE})
         sql, params = _statement(
-            "_mark_party_leader", 0, head="Ugga", cohort=CAVE, scope=scope,
+            "_mark_party_leader",
+            0,
+            head="Ugga",
+            cohort=CAVE,
+            scope=scope,
         )
         new = self.roster(_ONE_COHORT)
         new.execute(_sqlite(sql), params)
@@ -484,7 +521,8 @@ class AgainstTheOnlyCohortThatExistsTodayNothingChangesAtAll(RosterCase):
 
 
 class UntilTheColumnShipsTheStatementsAreUnchangedCharacterForCharacter(
-        unittest.TestCase):
+    unittest.TestCase
+):
     """No running world has the `family` column yet.
 
     Corrected in place (infra#4221): when this was written the submodule
@@ -505,7 +543,11 @@ class UntilTheColumnShipsTheStatementsAreUnchangedCharacterForCharacter(
     def test_the_leader_write_falls_back_to_the_statement_it_replaced(self):
         scope = _assigned("_mark_party_leader", "scope", {"cohort": None})
         sql, params = _statement(
-            "_mark_party_leader", 0, head="Ugga", cohort=None, scope=scope,
+            "_mark_party_leader",
+            0,
+            head="Ugga",
+            cohort=None,
+            scope=scope,
         )
         self.assertEqual(HISTORIC_LEAD, sql)
         self.assertEqual(("Ugga",), params)

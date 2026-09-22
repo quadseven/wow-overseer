@@ -49,6 +49,7 @@ bandage above Linen Bandage carries the Death-Knight split, so a reader that
 took the auto-learn row would conclude the family gets the whole First Aid
 ladder for free.
 """
+
 from __future__ import annotations
 
 import pathlib
@@ -92,15 +93,15 @@ def _field(blob, body, rowsize, row, index):
 def _text(blob, strings, offset):
     if offset <= 0:
         return ""
-    return blob[strings + offset:blob.index(b"\0", strings + offset)].decode(
-        "utf-8", "replace")
+    return blob[strings + offset : blob.index(b"\0", strings + offset)].decode(
+        "utf-8", "replace"
+    )
 
 
 def _row_for(rows, skill_id):
     """The ability row THIS FAMILY matches, or None. See the module docstring."""
     same_skill = [r for r in rows if r["skill"] == skill_id] or rows
-    usable = [r for r in same_skill
-              if r["cm"] == 0 or (r["cm"] & FAMILY_CLASSES)]
+    usable = [r for r in same_skill if r["cm"] == 0 or (r["cm"] & FAMILY_CLASSES)]
     return usable[0] if usable else None
 
 
@@ -116,17 +117,19 @@ def main(argv):
     anchor = index[2963]
     assert _field(spell, body, rowsize, anchor, F_REAGENT) == 2589
     assert _field(spell, body, rowsize, anchor, F_REAGENT_COUNT) == 2
-    assert _text(spell, strings, _field(
-        spell, body, rowsize, anchor, F_NAME)) == "Bolt of Linen Cloth"
+    assert (
+        _text(spell, strings, _field(spell, body, rowsize, anchor, F_NAME))
+        == "Bolt of Linen Cloth"
+    )
     assert _field(spell, body, rowsize, index[2657], F_REQUIRES_SPELL_FOCUS) == 3
     assert _field(spell, body, rowsize, anchor, F_EFFECT) == CREATE_ITEM
     assert _field(spell, body, rowsize, anchor, F_EFFECT_ITEM_TYPE) == 2996
 
-    focus, frows, _ff, frowsize, fbody, fstrings = _load(
-        where / "SpellFocusObject.dbc")
+    focus, frows, _ff, frowsize, fbody, fstrings = _load(where / "SpellFocusObject.dbc")
     focus_names = {
         _field(focus, fbody, frowsize, r, 0): _text(
-            focus, fstrings, _field(focus, fbody, frowsize, r, 1))
+            focus, fstrings, _field(focus, fbody, frowsize, r, 1)
+        )
         for r in range(frows)
     }
     # The one focus the brief claimed the flasks need. Asserted rather than
@@ -138,32 +141,54 @@ def main(argv):
     by_spell: dict = {}
     for r in range(arows):
         get = lambda i: _field(abil, abody, arowsize, r, i)  # noqa: E731
-        by_spell.setdefault(get(A_SPELL), []).append(dict(
-            skill=get(A_SKILL), cm=get(A_CLASSMASK), req=get(A_REQ),
-            acquire=get(A_ACQUIRE), grey=get(A_GREY), yellow=get(A_YELLOW)))
+        by_spell.setdefault(get(A_SPELL), []).append(
+            dict(
+                skill=get(A_SKILL),
+                cm=get(A_CLASSMASK),
+                req=get(A_REQ),
+                acquire=get(A_ACQUIRE),
+                grey=get(A_GREY),
+                yellow=get(A_YELLOW),
+            )
+        )
 
     sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
-    import goals       # noqa: E402
-    import raidcraft   # noqa: E402
+    import goals  # noqa: E402
+    import raidcraft  # noqa: E402
 
     print("MEASURED_CONSUMABLES = {")
     for c in raidcraft.CONSUMABLES:
         row = index.get(c.spell_id)
         if row is None:
-            print("    # !! spell %d (%s) is not in Spell.dbc at all"
-                  % (c.spell_id, c.name))
+            print(
+                "    # !! spell %d (%s) is not in Spell.dbc at all"
+                % (c.spell_id, c.name)
+            )
             continue
         get = lambda i: _field(spell, body, rowsize, row, i)  # noqa: E731
-        made = [get(F_EFFECT_ITEM_TYPE + i) for i in range(3)
-                if get(F_EFFECT + i) == CREATE_ITEM and get(F_EFFECT_ITEM_TYPE + i)]
+        made = [
+            get(F_EFFECT_ITEM_TYPE + i)
+            for i in range(3)
+            if get(F_EFFECT + i) == CREATE_ITEM and get(F_EFFECT_ITEM_TYPE + i)
+        ]
         band = _row_for(by_spell.get(c.spell_id, []), goals.SKILL_IDS[c.skill])
         if band is None:
-            print("    # !! spell %d has no ability row this family matches"
-                  % c.spell_id)
+            print(
+                "    # !! spell %d has no ability row this family matches" % c.spell_id
+            )
             continue
-        print("    %d: (%d, %d, %d, %d, %d),   # %s" % (
-            c.spell_id, band["skill"], made[0] if made else 0,
-            band["yellow"], band["grey"], get(F_REQUIRES_SPELL_FOCUS), c.name))
+        print(
+            "    %d: (%d, %d, %d, %d, %d),   # %s"
+            % (
+                c.spell_id,
+                band["skill"],
+                made[0] if made else 0,
+                band["yellow"],
+                band["grey"],
+                get(F_REQUIRES_SPELL_FOCUS),
+                c.name,
+            )
+        )
     print("}")
 
     # THE HALF THIS SCRIPT CANNOT PRINT, spelled as the queries that do, so the
@@ -171,8 +196,7 @@ def main(argv):
     spells = ",".join(str(c.spell_id) for c in raidcraft.CONSUMABLES)
     print()
     print("# MEASURED_RANKS needs the live world database - run these:")
-    print("#   SELECT SpellId, ReqSkillLine, ReqSkillRank, COUNT(*) FROM "
-          "trainer_spell")
+    print("#   SELECT SpellId, ReqSkillLine, ReqSkillRank, COUNT(*) FROM trainer_spell")
     print("#    WHERE SpellId IN (%s)" % spells)
     print("#    GROUP BY SpellId, ReqSkillLine, ReqSkillRank;")
     print("#   SELECT entry, name, RequiredSkill, RequiredSkillRank, spellid_2")

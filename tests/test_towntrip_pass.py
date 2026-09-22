@@ -12,13 +12,16 @@ neither was reachable from anything: two working executors and a working
 planner with no writer between them. Nothing failed, because nothing ran. So
 the assertions below are mostly about the wiring being present at all.
 """
+
 import pathlib
 import re
 import unittest
 
 PACKAGE = pathlib.Path(__file__).resolve().parents[1]
 BRIDGE = PACKAGE / "bridge.py"
-DOCKERFILE = pathlib.Path(__file__).resolve().parents[1] / "docker/wow-overseer/Dockerfile"
+DOCKERFILE = (
+    pathlib.Path(__file__).resolve().parents[1] / "docker/wow-overseer/Dockerfile"
+)
 
 
 def _source() -> str:
@@ -63,8 +66,9 @@ class ThePassRunsAndInTheRightOrder(unittest.TestCase):
         """
         src = _source()
         start = src.index("self._loops = {")
-        self.assertIn("self._towntrip_loop,",
-                      src[start:src.index("async def on_ready(", start)])
+        self.assertIn(
+            "self._towntrip_loop,", src[start : src.index("async def on_ready(", start)]
+        )
 
     def test_the_bridge_imports_the_planner(self):
         self.assertIn("\nimport towntrip\n", _source())
@@ -90,11 +94,11 @@ class ThePassRunsAndInTheRightOrder(unittest.TestCase):
         writes.
         """
         code = _code("    async def _towntrip_once(self)")
-        self.assertLess(code.index("_settle_town_errand"),
-                        code.index("_insert_town_errand"))
+        self.assertLess(
+            code.index("_settle_town_errand"), code.index("_insert_town_errand")
+        )
         settle = _code("    async def _settle_town_errand(")
-        self.assertIn('self._claim_town_slot("towntrip", leader, "repair")',
-                      settle)
+        self.assertIn('self._claim_town_slot("towntrip", leader, "repair")', settle)
 
     def test_the_leader_is_the_one_sent(self):
         """Only the leader carries `new rpg`; an aimed follower wanders."""
@@ -122,7 +126,7 @@ class ThePassRunsAndInTheRightOrder(unittest.TestCase):
         economy one, so the aim would silently never be written."""
         src = _source()
         start = src.index("ECONOMY_ERRANDS = (")
-        self.assertIn('"repair"', src[start:start + 120])
+        self.assertIn('"repair"', src[start : start + 120])
 
     def test_the_loop_does_not_race_its_two_siblings_for_the_column(self):
         """Three passes write `travel_npc` and only an idle traveller may be
@@ -181,23 +185,40 @@ class TheRowsCarryWhatThePlannerReads(unittest.TestCase):
 
     def test_the_worn_query_names_every_column_the_constructor_reads(self):
         src = _source()
-        sql = src[src.index("_TOWN_WORN_SQL = ("):src.index("_TOWN_CARRIED_SQL = (")]
-        for column in ("holder", "klass_id", "money", "level", "entry",
-                       "item_name", "durability", "max_durability"):
+        sql = src[src.index("_TOWN_WORN_SQL = (") : src.index("_TOWN_CARRIED_SQL = (")]
+        for column in (
+            "holder",
+            "klass_id",
+            "money",
+            "level",
+            "entry",
+            "item_name",
+            "durability",
+            "max_durability",
+        ):
             with self.subTest(column=column):
                 self.assertIn("AS %s" % column, sql)
 
     def test_the_carried_query_names_its_columns(self):
         src = _source()
-        sql = src[src.index("_TOWN_CARRIED_SQL = ("):src.index("_TOWN_SPELLS_SQL = (")]
-        for column in ("holder", "guid", "entry", "name", "carried",
-                       "spell_category", "item_flags"):
+        sql = src[
+            src.index("_TOWN_CARRIED_SQL = (") : src.index("_TOWN_SPELLS_SQL = (")
+        ]
+        for column in (
+            "holder",
+            "guid",
+            "entry",
+            "name",
+            "carried",
+            "spell_category",
+            "item_flags",
+        ):
             with self.subTest(column=column):
                 self.assertIn("AS %s" % column, sql)
 
     def test_the_counter_query_names_its_columns(self):
         src = _source()
-        sql = src[src.index("_TOWN_COUNTERS_SQL = ("):src.index("_TOWN_WORN_SQL = (")]
+        sql = src[src.index("_TOWN_COUNTERS_SQL = (") : src.index("_TOWN_WORN_SQL = (")]
         for column in ("npcflag", "item"):
             with self.subTest(column=column):
                 self.assertIn("AS %s" % column, sql)
@@ -212,7 +233,7 @@ class TheRowsCarryWhatThePlannerReads(unittest.TestCase):
         """`characters` is written on PlayerSaveInterval and can be a quarter
         of an hour stale, which would read the wrong town's counters."""
         src = _source()
-        sql = src[src.index("_TOWN_COUNTERS_SQL = ("):src.index("_TOWN_WORN_SQL = (")]
+        sql = src[src.index("_TOWN_COUNTERS_SQL = (") : src.index("_TOWN_WORN_SQL = (")]
         self.assertIn("overseer_snapshot", sql)
         self.assertIn("updated_at >", sql)
 
@@ -223,7 +244,7 @@ class TheRowsCarryWhatThePlannerReads(unittest.TestCase):
         queue a transaction from an X/Y-only match that the core will reject.
         """
         src = _source()
-        sql = src[src.index("_TOWN_COUNTERS_SQL = ("):src.index("_TOWN_WORN_SQL = (")]
+        sql = src[src.index("_TOWN_COUNTERS_SQL = (") : src.index("_TOWN_WORN_SQL = (")]
         self.assertIn("ABS(cr.position_z - s.pos_z) <= %s", sql)
         fetch = _code("def _fetch_town(leader: str)")
         self.assertIn(

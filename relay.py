@@ -18,6 +18,7 @@ whole feature.
 
 Ticket: infra#2597.
 """
+
 from __future__ import annotations
 
 import re
@@ -36,6 +37,8 @@ MAX_DISCORD_UNITS = 1900
 def discord_len(text: str) -> int:
     """Length as Discord counts it: UTF-16 code units."""
     return len(text.encode("utf-16-le")) // 2
+
+
 # One relay post must not become a wall. Older lines are still in the table.
 MAX_LINES_PER_POST = 20
 
@@ -44,21 +47,40 @@ _NAME_RE = re.compile(r"^[A-Za-z]{2,12}$")
 # WoW's slash commands -> the channel names mod_overseer.cpp dispatches on.
 # The long and short forms a player actually types both map to one channel.
 SLASH_CHANNELS = {
-    "s": "say", "say": "say",
-    "y": "yell", "yell": "yell", "shout": "yell",
-    "e": "emote", "em": "emote", "emote": "emote", "me": "emote",
-    "w": "whisper", "whisper": "whisper", "t": "whisper", "tell": "whisper",
-    "p": "party", "party": "party",
-    "raid": "raid", "ra": "raid",
-    "g": "guild", "guild": "guild",
-    "o": "officer", "officer": "officer",
+    "s": "say",
+    "say": "say",
+    "y": "yell",
+    "yell": "yell",
+    "shout": "yell",
+    "e": "emote",
+    "em": "emote",
+    "emote": "emote",
+    "me": "emote",
+    "w": "whisper",
+    "whisper": "whisper",
+    "t": "whisper",
+    "tell": "whisper",
+    "p": "party",
+    "party": "party",
+    "raid": "raid",
+    "ra": "raid",
+    "g": "guild",
+    "guild": "guild",
+    "o": "officer",
+    "officer": "officer",
 }
 
 # How each channel is labelled when it reaches Discord. Mirrors the client's
 # own bracket convention so the log reads like the chat frame it came from.
 CHANNEL_LABELS = {
-    "say": "", "yell": "yell", "emote": "", "whisper": "whisper",
-    "party": "Party", "raid": "Raid", "guild": "Guild", "officer": "Officer",
+    "say": "",
+    "yell": "yell",
+    "emote": "",
+    "whisper": "whisper",
+    "party": "Party",
+    "raid": "Raid",
+    "guild": "Guild",
+    "officer": "Officer",
     "channel": "",
 }
 
@@ -90,18 +112,44 @@ class SpeakCommand:
 GM_ALLOWED_PREFIXES = frozenset(
     {
         # Getting a character somewhere, which is most of the point.
-        "appear", "summon", "revive", "recall", "unstuck", "go", "tele",
+        "appear",
+        "summon",
+        "revive",
+        "recall",
+        "unstuck",
+        "go",
+        "tele",
         # Handing a character to the bot AI, and grouping it up.
-        "playerbots", "group",
+        "playerbots",
+        "group",
         # Its own state. None of these destroy anything persistent.
-        "gm", "modify", "learn", "unlearn", "cast", "aura", "unaura",
-        "maxskill", "levelup", "die", "damage", "freeze", "unfreeze",
+        "gm",
+        "modify",
+        "learn",
+        "unlearn",
+        "cast",
+        "aura",
+        "unaura",
+        "maxskill",
+        "levelup",
+        "die",
+        "damage",
+        "freeze",
+        "unfreeze",
         "additem",
         # Read-only. `npc` and `gobject` are NOT here as whole trees on
         # purpose: `.npc delete` and `.gobject delete` permanently remove
         # world objects, so only their info leaves are admitted.
-        "npc info", "gobject info", "server info",
-        "pinfo", "lookup", "list", "gps", "distance", "cooldown", "help",
+        "npc info",
+        "gobject info",
+        "server info",
+        "pinfo",
+        "lookup",
+        "list",
+        "gps",
+        "distance",
+        "cooldown",
+        "help",
     }
 )
 
@@ -118,15 +166,25 @@ GM_ALLOWED_PREFIXES = frozenset(
 # a delete along with it.
 GM_DENIED_LEAVES = frozenset(
     {
-        "tele del", "tele delete",
-        "npc delete", "npc del",
-        "gobject delete", "gobject del",
-        "character delete", "character erase",
-        "account delete", "guild delete",
-        "server exit", "server shutdown", "server restart", "server idlerestart",
-        "reload", "titles reset",
+        "tele del",
+        "tele delete",
+        "npc delete",
+        "npc del",
+        "gobject delete",
+        "gobject del",
+        "character delete",
+        "character erase",
+        "account delete",
+        "guild delete",
+        "server exit",
+        "server shutdown",
+        "server restart",
+        "server idlerestart",
+        "reload",
+        "titles reset",
     }
 )
+
 
 def _abbreviations(leaf: str) -> set:
     """Every spelling AzerothCore would resolve to this denied leaf.
@@ -268,7 +326,9 @@ _ID_MENTION = re.compile(r"<(@[!&]?|#)(\d+)>")
 def sanitize(text: str) -> str:
     """Make world text safe to post, without changing what it says."""
     text = _MASS_MENTION.sub(lambda m: "@" + ZERO_WIDTH + m.group(1), text)
-    text = _ID_MENTION.sub(lambda m: "<" + ZERO_WIDTH + m.group(1) + m.group(2) + ">", text)
+    text = _ID_MENTION.sub(
+        lambda m: "<" + ZERO_WIDTH + m.group(1) + m.group(2) + ">", text
+    )
     # Backticks would break out of the code fence the relay posts inside.
     return text.replace("`", "'")
 

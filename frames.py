@@ -21,6 +21,7 @@ tailnet can post a frame under any name, so what the panel shows is whatever
 the last poster said it was. Fine for a homelab, and NOT attestation - nothing
 should ever be built on a frame proving whose screen it was.
 """
+
 from __future__ import annotations
 
 MAX_FRAME_BYTES = 512 * 1024
@@ -78,8 +79,14 @@ def describe(record, now: float) -> dict:
     hour stale because of a timezone would be maddening to chase.
     """
     if not record:
-        return {"has_frame": False, "bytes": 0, "status": None, "detail": "",
-                "captured_seconds_ago": None, "tried_seconds_ago": None}
+        return {
+            "has_frame": False,
+            "bytes": 0,
+            "status": None,
+            "detail": "",
+            "captured_seconds_ago": None,
+            "tried_seconds_ago": None,
+        }
     jpeg = record.get("jpeg")
     frame_at = record.get("frame_at")
     at = record.get("at")
@@ -88,7 +95,9 @@ def describe(record, now: float) -> dict:
         "bytes": len(jpeg) if jpeg else 0,
         "status": record.get("status"),
         "detail": record.get("detail") or "",
-        "captured_seconds_ago": None if frame_at is None else max(0, int(now - frame_at)),
+        "captured_seconds_ago": None
+        if frame_at is None
+        else max(0, int(now - frame_at)),
         "tried_seconds_ago": None if at is None else max(0, int(now - at)),
     }
 

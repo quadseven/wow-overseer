@@ -67,6 +67,7 @@ cohorts or one each is still open on infra#4221; it decides whether
 `overseer_trade` and `overseer_goal` need columns of their own, and it does not
 change whether these six reads are right.
 """
+
 import sqlite3
 import unittest
 
@@ -145,26 +146,28 @@ QUEST = craft_rhythm.MODE_GATHER
 
 # name, enabled, job, travel_npc, craft_spell, family
 _TWO_COHORTS = (
-    ("Grug",     1, QUEST, "",       0,     CAVE),
-    ("Ugga",     1, QUEST, "",       0,     CAVE),
-    ("Grog",     1, QUEST, "vendor", 0,     CAVE),
-    ("Bork",     1, QUEST, "",       0,     CAVE),
-    ("Og",       1, QUEST, "",       0,     CAVE),
+    ("Grug", 1, QUEST, "", 0, CAVE),
+    ("Ugga", 1, QUEST, "", 0, CAVE),
+    ("Grog", 1, QUEST, "vendor", 0, CAVE),
+    ("Bork", 1, QUEST, "", 0, CAVE),
+    ("Og", 1, QUEST, "", 0, CAVE),
     # Disabled, and in this cohort: proves `enabled = 1` is still doing its own
     # job and has not been quietly replaced by the cohort predicate.
-    ("Snik",     0, QUEST, "",       0,     CAVE),
-    ("Blammo",   1, CRAFT, "",       3304,  OTHER),
-    ("Hexmama",  1, "raid prep", "banker", 0, OTHER),
-    ("Moojuice", 1, "gather", "",    0,     OTHER),
+    ("Snik", 0, QUEST, "", 0, CAVE),
+    ("Blammo", 1, CRAFT, "", 3304, OTHER),
+    ("Hexmama", 1, "raid prep", "banker", 0, OTHER),
+    ("Moojuice", 1, "gather", "", 0, OTHER),
 )
 
 _ONE_COHORT = tuple(row for row in _TWO_COHORTS if row[5] == CAVE)
 
 # A crafter and a smelter in THIS cohort, so the candidate-pool tests have
 # something to find rather than asserting against an empty set both ways.
-_WITH_OWN_CRAFTER = _ONE_COHORT + (
-    ("Thok", 1, CRAFT, "", 2660, CAVE),
-) + tuple(row for row in _TWO_COHORTS if row[5] == OTHER)
+_WITH_OWN_CRAFTER = (
+    _ONE_COHORT
+    + (("Thok", 1, CRAFT, "", 2660, CAVE),)
+    + tuple(row for row in _TWO_COHORTS if row[5] == OTHER)
+)
 
 _CAVE_ENABLED = sorted(r[0] for r in _TWO_COHORTS if r[5] == CAVE and r[1])
 
@@ -224,7 +227,8 @@ class TheCraftCandidatePoolUsedToCrossCohorts(RosterCase):
         got = self.names(db, _sqlite(HISTORIC_CRAFTING_ROSTER), (CRAFT,))
 
         self.assertEqual(
-            ["Blammo", "Thok"], got,
+            ["Blammo", "Thok"],
+            got,
             "the unscoped read was supposed to pool both cohorts' crafters - if "
             "it no longer does, this reproduction has stopped reproducing",
         )
@@ -237,7 +241,8 @@ class TheCraftCandidatePoolUsedToCrossCohorts(RosterCase):
 
         self.assertEqual(["Thok"], got)
         self.assertNotIn(
-            "Blammo", got,
+            "Blammo",
+            got,
             "a character in the other guild was a candidate for this family's "
             "craft errand",
         )
@@ -274,7 +279,8 @@ class TheStandingModeUsedToCrossCohorts(RosterCase):
         jobs = self.pairs(db, _sqlite(HISTORIC_STANDING_JOBS))
 
         self.assertEqual(
-            "", craft_rhythm.standing_mode(jobs),
+            "",
+            craft_rhythm.standing_mode(jobs),
             "the unscoped read was supposed to mix jobs across cohorts, which "
             "is what makes standing_mode refuse - if it no longer does, this "
             "reproduction has stopped reproducing",
@@ -320,7 +326,8 @@ class TheStandingTravelAimsUsedToCrossCohorts(RosterCase):
         aims = self.pairs(db, _sqlite(HISTORIC_STANDING_TRAVEL_AIMS))
 
         self.assertEqual(
-            "banker", aims.get("Hexmama"),
+            "banker",
+            aims.get("Hexmama"),
             "the unscoped read was supposed to expose the other cohort's live "
             "errand to this family's stranded-aim sweep",
         )
@@ -332,12 +339,14 @@ class TheStandingTravelAimsUsedToCrossCohorts(RosterCase):
         aims = self.pairs(db, _sqlite(sql), params)
 
         self.assertNotIn(
-            "Hexmama", aims,
+            "Hexmama",
+            aims,
             "the other cohort's town errand was about to be released by this "
             "cohort's sweep, and nothing would have said so",
         )
         self.assertEqual(
-            "vendor", aims["Grog"],
+            "vendor",
+            aims["Grog"],
             "this cohort's own stranded aim must still be visible - a sweep "
             "that can see nothing releases nothing",
         )
@@ -394,7 +403,8 @@ class TheTrainingPromotionUsedToCrossCohorts(RosterCase):
         code = _function_code("_activate_training")
         self.assertIn("_cohort_of", code)
         self.assertEqual(
-            1, code.count("FROM overseer_roster"),
+            1,
+            code.count("FROM overseer_roster"),
             "the promotion must read the roster once and serve both halves "
             "from that read; a second read is a second place to forget the "
             "cohort",
@@ -438,7 +448,8 @@ class TheForgeDemandSignalUsedToCrossCohorts(RosterCase):
         got = self.names(db, _sqlite(HISTORIC_FORGE_ERRANDS), (CRAFT,))
 
         self.assertEqual(
-            ["Blammo", "Thok"], got,
+            ["Blammo", "Thok"],
+            got,
             "the unscoped read was supposed to see both cohorts' outstanding "
             "craft errands",
         )
@@ -494,7 +505,8 @@ class AgainstTheOnlyCohortThatExistsTodayNothingChangesAtAll(RosterCase):
 
 
 class UntilTheColumnShipsTheStatementsAreUnchangedCharacterForCharacter(
-        unittest.TestCase):
+    unittest.TestCase
+):
     """NO RUNNING WORLD HAS THE `family` COLUMN YET.
 
     mod-overseer#506 is merged and infra#4234 has pinned a submodule gitlink

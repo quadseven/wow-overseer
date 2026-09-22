@@ -35,6 +35,7 @@ Pins (production/UPSTREAM-PINS.env):
     module 8d9f6aa6bc6d45f9ae0ee0675b9b1f8aa6937312
 Neither is vendored here. Every line number quoted was read from those two.
 """
+
 import pathlib
 import re
 import sys
@@ -44,11 +45,7 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 MODULE = ROOT / "mod-overseer/src/mod_overseer.cpp"
 DECISIONS = ROOT / "mod-overseer/src/overseer_decisions.cpp"
 DECISIONS_H = ROOT / "mod-overseer/src/overseer_decisions.h"
-PATCH = (
-    ROOT
-    / "patches/mod-playerbots"
-    / "0005-wander-npc-can-be-aimed.patch"
-)
+PATCH = ROOT / "patches/mod-playerbots" / "0005-wander-npc-can-be-aimed.patch"
 PINS = ROOT / "UPSTREAM-PINS.env"
 MIGRATION = (
     ROOT
@@ -75,7 +72,7 @@ def _function(signature: str) -> str:
         elif src[i] == "}":
             depth -= 1
             if depth == 0:
-                return src[start:i + 1]
+                return src[start : i + 1]
     raise AssertionError("%s has no closing brace" % signature)
 
 
@@ -96,8 +93,7 @@ def _drive() -> str:
 def _quests() -> str:
     # mod-overseer#552 split DriveQuests into a census and dispatch plus the
     # per-family body it always had. The drive these tests describe is both.
-    return (_function("void DriveQuests()")
-            + _function("void DriveFamilyQuests("))
+    return _function("void DriveQuests()") + _function("void DriveFamilyQuests(")
 
 
 def _wheel() -> str:
@@ -142,7 +138,7 @@ def _ratchet() -> str:
             elif src[i] == "}":
                 depth -= 1
                 if depth == 0:
-                    out.append(src[start:i + 1])
+                    out.append(src[start : i + 1])
                     break
     return "\n".join(out)
 
@@ -173,7 +169,8 @@ def _patch_added() -> str:
     the whole file would let a claim in the argument pass for an implementation.
     """
     return "\n".join(
-        line[1:] for line in _patch().splitlines()
+        line[1:]
+        for line in _patch().splitlines()
         if line.startswith("+") and not line.startswith("+++")
     )
 
@@ -200,15 +197,19 @@ class TheVocabularyIsSharedBetweenPythonAndTheModule(unittest.TestCase):
 
     def test_every_python_keyword_is_one_the_module_accepts(self):
         missing = sorted(set(travel.ROLES) - set(_cpp_roles()))
-        self.assertEqual([], missing,
-                         "travel.py offers keywords mod_overseer.cpp will "
-                         "ignore: %s" % missing)
+        self.assertEqual(
+            [],
+            missing,
+            "travel.py offers keywords mod_overseer.cpp will ignore: %s" % missing,
+        )
 
     def test_every_module_keyword_is_one_python_can_produce(self):
         missing = sorted(set(_cpp_roles()) - set(travel.ROLES))
-        self.assertEqual([], missing,
-                         "mod_overseer.cpp accepts keywords nothing can "
-                         "write: %s" % missing)
+        self.assertEqual(
+            [],
+            missing,
+            "mod_overseer.cpp accepts keywords nothing can write: %s" % missing,
+        )
 
     def test_the_two_tables_agree_on_which_npc_flag_each_keyword_means(self):
         self.assertEqual(travel.ROLES, _cpp_roles())
@@ -225,9 +226,16 @@ class TheVocabularyIsSharedBetweenPythonAndTheModule(unittest.TestCase):
 
     def test_the_epic_blocking_targets_are_all_reachable(self):
         """The specific NPCs the blocked issues need to stand in front of."""
-        for keyword in ("profession trainer", "class trainer", "vendor",
-                        "repair", "banker", "guild banker", "petitioner",
-                        "tabard designer"):
+        for keyword in (
+            "profession trainer",
+            "class trainer",
+            "vendor",
+            "repair",
+            "banker",
+            "guild banker",
+            "petitioner",
+            "tabard designer",
+        ):
             self.assertIn(keyword, travel.ROLES, keyword)
 
 
@@ -251,10 +259,10 @@ class TheDeliberateFlightErrandIsSpeltTheSameOnBothSides(unittest.TestCase):
 
     def test_the_prefix_is_the_modules_own_string(self):
         header = DECISIONS_H.read_text(encoding="utf-8")
-        match = re.search(
-            r'FLIGHT_MASTER_NODE_AIM_PREFIX\s*=\s*"([^"]+)"', header)
+        match = re.search(r'FLIGHT_MASTER_NODE_AIM_PREFIX\s*=\s*"([^"]+)"', header)
         self.assertIsNotNone(
-            match, "the module no longer declares the prefix this side writes")
+            match, "the module no longer declares the prefix this side writes"
+        )
         self.assertEqual(travel.FLIGHT_MASTER_NODE_AIM_PREFIX, match.group(1))
 
     def test_the_prefix_starts_with_the_role_it_refines(self):
@@ -263,38 +271,36 @@ class TheDeliberateFlightErrandIsSpeltTheSameOnBothSides(unittest.TestCase):
         BEFORE it reaches the role table - so the two must not be able to drift
         into different words."""
         self.assertIn(travel.FLIGHT_MASTER_ROLE, travel.ROLES)
-        self.assertTrue(travel.FLIGHT_MASTER_NODE_AIM_PREFIX.startswith(
-            travel.FLIGHT_MASTER_ROLE))
+        self.assertTrue(
+            travel.FLIGHT_MASTER_NODE_AIM_PREFIX.startswith(travel.FLIGHT_MASTER_ROLE)
+        )
 
     def test_the_node_match_radius_is_the_modules_own(self):
         """`ResolveTravelTarget` refuses a node no flight master stands within
         `TRAVEL_FLIGHT_NODE_MATCH_YARDS` of, and `ConsiderFlight` uses the same
         number for the same question. A caller that picks candidates by a
         looser rule picks nodes the module will then decline."""
-        match = re.search(
-            r"TRAVEL_FLIGHT_NODE_MATCH_YARDS\s*=\s*([0-9.]+)f", _source())
+        match = re.search(r"TRAVEL_FLIGHT_NODE_MATCH_YARDS\s*=\s*([0-9.]+)f", _source())
         self.assertIsNotNone(match)
-        self.assertEqual(float(travel.FLIGHT_NODE_MATCH_YARDS),
-                         float(match.group(1)))
+        self.assertEqual(float(travel.FLIGHT_NODE_MATCH_YARDS), float(match.group(1)))
 
     def test_the_module_parses_what_this_side_writes(self):
         """The parser is `ParseFlightMasterNodeAim`, and these are its own
         stated rules: at most ten decimal digits, nothing but 0-9, and node 0
         refused because it "names no row in TaxiNodes.dbc"."""
         parser = DECISIONS.read_text(encoding="utf-8")
-        body = parser[parser.index("bool ParseFlightMasterNodeAim("):]
-        body = body[:body.index("std::string FlightMasterNodeAim(")]
+        body = parser[parser.index("bool ParseFlightMasterNodeAim(") :]
+        body = body[: body.index("std::string FlightMasterNodeAim(")]
         self.assertIn("FLIGHT_MASTER_NODE_AIM_PREFIX", body)
         self.assertIn('digits.find_first_not_of("0123456789")', body)
-        self.assertIn("digits.size() > %d" % travel.FLIGHT_MASTER_NODE_DIGITS,
-                      body)
+        self.assertIn("digits.size() > %d" % travel.FLIGHT_MASTER_NODE_DIGITS, body)
         self.assertIn("parsed > %dULL" % travel.FLIGHT_MASTER_NODE_MAX, body)
         self.assertIn("parsed == 0", body)
 
     def test_the_module_builds_the_same_string_this_side_does(self):
         parser = DECISIONS.read_text(encoding="utf-8")
-        builder = parser[parser.index("std::string FlightMasterNodeAim("):]
-        builder = builder[:builder.index("}", builder.index("{")) + 1]
+        builder = parser[parser.index("std::string FlightMasterNodeAim(") :]
+        builder = builder[: builder.index("}", builder.index("{")) + 1]
         self.assertIn("FLIGHT_MASTER_NODE_AIM_PREFIX", builder)
         self.assertIn("std::to_string(nodeId)", builder)
 
@@ -326,8 +332,7 @@ class TheDeliberateFlightErrandIsSpeltTheSameOnBothSides(unittest.TestCase):
     def test_a_node_id_the_module_would_refuse_is_never_written(self):
         """0 is the module's own sentinel - it "names no row in TaxiNodes.dbc"
         - and anything past a uint32 is a value neither side can represent."""
-        for bad in (0, -1, None, "", "forty", "4e1",
-                    travel.FLIGHT_MASTER_NODE_MAX + 1):
+        for bad in (0, -1, None, "", "forty", "4e1", travel.FLIGHT_MASTER_NODE_MAX + 1):
             with self.subTest(node=bad):
                 self.assertIsNone(travel.flight_master_aim(bad))
 
@@ -336,8 +341,7 @@ class TheDeliberateFlightErrandIsSpeltTheSameOnBothSides(unittest.TestCase):
         bytes out of "0123456789" and nothing else, so an aim built from a
         caller's looser spelling of a number has to come out in the module's
         own form or not at all."""
-        for given in (1, 40, "40", "+40", " 40 ",
-                      travel.FLIGHT_MASTER_NODE_MAX):
+        for given in (1, 40, "40", "+40", " 40 ", travel.FLIGHT_MASTER_NODE_MAX):
             with self.subTest(node=given):
                 aim = travel.flight_master_aim(given)
                 self.assertIsNotNone(aim)
@@ -345,10 +349,17 @@ class TheDeliberateFlightErrandIsSpeltTheSameOnBothSides(unittest.TestCase):
                 self.assertEqual(travel.resolve(aim), aim)
 
     def test_a_malformed_aim_is_refused_rather_than_guessed(self):
-        for bad in ("flight master:", "flight master:0", "flight master:-1",
-                    "flight master:40x", "flight master: 40",
-                    "flight master:00000000004", "flight master:4294967296",
-                    "flight:40", "flightmaster:40"):
+        for bad in (
+            "flight master:",
+            "flight master:0",
+            "flight master:-1",
+            "flight master:40x",
+            "flight master: 40",
+            "flight master:00000000004",
+            "flight master:4294967296",
+            "flight:40",
+            "flightmaster:40",
+        ):
             with self.subTest(aim=bad):
                 self.assertIsNone(travel.flight_master_node(bad))
                 self.assertIsNone(travel.resolve(bad))
@@ -356,14 +367,14 @@ class TheDeliberateFlightErrandIsSpeltTheSameOnBothSides(unittest.TestCase):
     def test_a_leading_zero_canonicalises_to_the_one_spelling(self):
         """Two spellings of the same node would be two aims to the column, two
         holders to the town slot and one node."""
-        self.assertEqual(travel.resolve("flight master:040"),
-                         "flight master:40")
+        self.assertEqual(travel.resolve("flight master:040"), "flight master:40")
 
     def test_describe_names_the_node_and_not_the_nearest_master(self):
-        self.assertEqual(travel.describe("flight master:40"),
-                         "the flight master who teaches taxi node 40")
-        self.assertEqual(travel.describe("flight master"),
-                         "the nearest flight master")
+        self.assertEqual(
+            travel.describe("flight master:40"),
+            "the flight master who teaches taxi node 40",
+        )
+        self.assertEqual(travel.describe("flight master"), "the nearest flight master")
 
     def test_it_can_be_aimed_at_somebody(self):
         """`aim_statements` refuses a target it cannot resolve, so this is what
@@ -378,8 +389,9 @@ class TheDeliberateFlightErrandIsSpeltTheSameOnBothSides(unittest.TestCase):
         and `trigger:` are."""
         resolve = _code(_resolve())
         self.assertIn("ParseFlightMasterNodeAim(target, wantedNode)", resolve)
-        self.assertLess(resolve.index("ParseFlightMasterNodeAim"),
-                        resolve.index("TravelRoles()"))
+        self.assertLess(
+            resolve.index("ParseFlightMasterNodeAim"), resolve.index("TravelRoles()")
+        )
 
     def test_the_module_refuses_a_node_no_flight_master_answers_for(self):
         """TaxiNodes.dbc carries rows nothing stands at, so an aim at one would
@@ -402,17 +414,15 @@ class TheDeliberateFlightErrandIsSpeltTheSameOnBothSides(unittest.TestCase):
         caller's only proof of success is the taximask bit."""
         drive = _code(_drive())
         self.assertIn("LearnFlightNodeDeliberately(", drive)
-        self.assertIn("learned ? \"learned\" : \"not learned", _drive())
+        self.assertIn('learned ? "learned" : "not learned', _drive())
 
 
 class TheTargetVocabulary(unittest.TestCase):
     def test_a_canonical_keyword_resolves_to_itself(self):
-        self.assertEqual("profession trainer",
-                         travel.resolve("profession trainer"))
+        self.assertEqual("profession trainer", travel.resolve("profession trainer"))
 
     def test_case_and_spacing_do_not_matter(self):
-        self.assertEqual("tabard designer",
-                         travel.resolve("  Tabard   Designer "))
+        self.assertEqual("tabard designer", travel.resolve("  Tabard   Designer "))
 
     def test_the_way_a_person_says_it_resolves(self):
         self.assertEqual("petitioner", travel.resolve("guild charter"))
@@ -437,12 +447,15 @@ class TheTargetVocabulary(unittest.TestCase):
     def test_is_target_rejects_the_cleared_state(self):
         self.assertFalse(travel.is_target(travel.NONE))
         self.assertTrue(travel.is_target("vendor"))
-        self.assertFalse(travel.is_target("merchant"),
-                         "an alias is not what gets stored; resolve() first")
+        self.assertFalse(
+            travel.is_target("merchant"),
+            "an alias is not what gets stored; resolve() first",
+        )
 
     def test_describe_says_it_out_loud(self):
-        self.assertEqual("the nearest profession trainer",
-                         travel.describe("professions"))
+        self.assertEqual(
+            "the nearest profession trainer", travel.describe("professions")
+        )
         self.assertEqual("creature 5511", travel.describe("5511"))
         self.assertEqual("nowhere", travel.describe(""))
 
@@ -539,8 +552,9 @@ class ThePatchExistsAndIsTheThingThatMakesAimingPossible(unittest.TestCase):
         self.assertIn(pinned.group(1), _patch())
 
     def test_it_adds_the_aimable_overload(self):
-        self.assertIn("void ChangeToWanderNpc(uint32 npcEntry, WorldPosition pos)",
-                      _patch_added())
+        self.assertIn(
+            "void ChangeToWanderNpc(uint32 npcEntry, WorldPosition pos)", _patch_added()
+        )
 
     def test_the_overload_sets_the_status_clock(self):
         """`startT` is what HasStatusPersisted measures the five-minute lease
@@ -572,8 +586,9 @@ class ThePatchExistsAndIsTheThingThatMakesAimingPossible(unittest.TestCase):
         """The block is skipped entirely when npcEntry is 0, which is every
         wander the bot chose for itself. A patch that changed those too would be
         a behaviour change to every bot on the realm, not a new verb."""
-        self.assertIn("if (data.npcEntry && data.pos != WorldPosition())",
-                      _code(_patch_added()))
+        self.assertIn(
+            "if (data.npcEntry && data.pos != WorldPosition())", _code(_patch_added())
+        )
 
     def test_the_patch_never_clears_the_entry(self):
         """The eight-second stay-timer clears `npcOrGo` so a wandering bot moves
@@ -617,7 +632,8 @@ class TheModuleActuallyReadsTheColumn(unittest.TestCase):
         # at TRAVEL_POLL_MS - exactly as before - whenever it is not.
         self.assertIn("_travelTimer >= travelPoll", code)
         self.assertRegex(
-            code, r"travelPoll =\s*_dungeonEscorts\.empty\(\) \? TRAVEL_POLL_MS")
+            code, r"travelPoll =\s*_dungeonEscorts\.empty\(\) \? TRAVEL_POLL_MS"
+        )
         self.assertIn("_travelTimer += diff;", code)
 
     def test_the_poll_is_faster_than_the_lease_it_renews(self):
@@ -657,16 +673,20 @@ class TheModuleActuallyReadsTheColumn(unittest.TestCase):
         self.assertIn("ChangeToWanderNpc(entry, aimAt)", code)
         grounded = re.search(r"GroundedStep\(bot, (\w+), aimAt\)", code)
         self.assertIsNotNone(
-            grounded, "a place aim must be grounded before it is walked to")
+            grounded, "a place aim must be grounded before it is walked to"
+        )
         walked = grounded.group(1)
         # No regex here on purpose: the point is that the grounded position is
         # ASSIGNED FROM the errand destination, and a line carrying all three
         # of the name, an assignment and `pos` is the whole of that claim.
-        origin = [line for line in code.splitlines()
-                  if walked in line and "=" in line and "pos" in line]
+        origin = [
+            line
+            for line in code.splitlines()
+            if walked in line and "=" in line and "pos" in line
+        ]
         self.assertTrue(
-            origin,
-            "what is grounded must originate from the errand destination")
+            origin, "what is grounded must originate from the errand destination"
+        )
 
     def test_it_does_not_reach_for_setmovefarto(self):
         """SetMoveFarTo only RECORDS a destination for stuck-tracking; the
@@ -710,17 +730,24 @@ class TheTargetIsResolvedWhereTheAnswerIsKnown(unittest.TestCase):
         main to discover. Every one of these is read by mod-playerbots itself at
         the pin (TravelMgr.cpp:4648-4661)."""
         code = _code(_index())
-        for member in ("data.id", "data.mapid", "data.posX", "data.posY",
-                       "data.posZ", "GetAllCreatureData()",
-                       "GetCreatureTemplate("):
+        for member in (
+            "data.id",
+            "data.mapid",
+            "data.posX",
+            "data.posY",
+            "data.posZ",
+            "GetAllCreatureData()",
+            "GetCreatureTemplate(",
+        ):
             self.assertIn(member, code, member)
 
     def test_a_per_spawn_npcflag_override_wins_over_the_template(self):
         """`creature.npcflag` is a per-spawn override; 0 means "use the
         template". Reading only the template would index a spawn deliberately
         stripped of the flag and send somebody to it."""
-        self.assertIn("data.npcflag ? data.npcflag : creatureTemplate->npcflag",
-                      _code(_index()))
+        self.assertIn(
+            "data.npcflag ? data.npcflag : creatureTemplate->npcflag", _code(_index())
+        )
 
     def test_the_index_is_built_once_and_not_per_poll(self):
         """A quarter of a million spawns, on the world thread, to answer a
@@ -755,10 +782,13 @@ class TheEightSecondConsumeDidNotEatTheErrand(unittest.TestCase):
         # minutes that way. So "already walking there" now also asks whether
         # the character can act on the walk at all: it cannot have one in
         # flight if it cannot act, whatever its own state says.
-        self.assertIn("atSameDestination = wander->npcEntry == entry && samePlace", code)
+        self.assertIn(
+            "atSameDestination = wander->npcEntry == entry && samePlace", code
+        )
         self.assertRegex(
             code,
-            r"WalkAlreadyInFlight\([^;]*?atSameDestination[^;]*?\)\s*\)?\s*\n\s*continue;")
+            r"WalkAlreadyInFlight\([^;]*?atSameDestination[^;]*?\)\s*\)?\s*\n\s*continue;",
+        )
 
     def test_a_lapsed_lease_falls_through_to_a_fresh_aim(self):
         """Case 3. Once the five-minute lease expires the status is no longer
@@ -779,8 +809,9 @@ class TheErrandIsBounded(unittest.TestCase):
         """The bot's own state stops naming the target eight seconds after it
         gets there, so it cannot be asked "did you arrive". Distance can be, and
         it is what the errand actually means."""
-        self.assertIn("GetDistance2d(pos.GetPositionX(), pos.GetPositionY())",
-                      _code(_drive()))
+        self.assertIn(
+            "GetDistance2d(pos.GetPositionX(), pos.GetPositionY())", _code(_drive())
+        )
 
     def test_an_unreachable_target_is_given_up_on(self):
         code = _code(_drive())
@@ -807,15 +838,20 @@ class TheErrandIsBounded(unittest.TestCase):
         # travel limits, the limits have to carry the yardage, and beating the
         # mark has to restart the clock.
         code = _code(_drive())
-        self.assertRegex(code, r"OverseerDecisions::Ratchet\(\s*state\.progress,"
-                               r"\s*distance,\s*std::time\(nullptr\),\s*limits\)")
-        self.assertRegex(_code(_source()),
-                         r"RatchetLimits TRAVEL_RATCHET\{\s*"
-                         r"OverseerDecisions::RatchetReading::DistanceToTarget,\s*"
-                         r"TRAVEL_PROGRESS_YARDS, TRAVEL_BACKSTOP_SECONDS\}")
+        self.assertRegex(
+            code,
+            r"OverseerDecisions::Ratchet\(\s*state\.progress,"
+            r"\s*distance,\s*std::time\(nullptr\),\s*limits\)",
+        )
+        self.assertRegex(
+            _code(_source()),
+            r"RatchetLimits TRAVEL_RATCHET\{\s*"
+            r"OverseerDecisions::RatchetReading::DistanceToTarget,\s*"
+            r"TRAVEL_PROGRESS_YARDS, TRAVEL_BACKSTOP_SECONDS\}",
+        )
         ratchet = _code(_ratchet())
         progressed = ratchet.index("if (verdict.progressed)")
-        self.assertIn("state.since = now;", ratchet[progressed:progressed + 200])
+        self.assertIn("state.since = now;", ratchet[progressed : progressed + 200])
 
     def test_progress_is_measured_against_the_best_ever_not_the_last_poll(self):
         """What makes a small threshold safe. `closest` only ratchets DOWNWARD,
@@ -850,7 +886,7 @@ class TheErrandIsBounded(unittest.TestCase):
         self.assertIn("now - state.since > limits.patienceSeconds", ratchet)
         code = _code(_drive())
         stalled = code.index("if (progress.stalled)")
-        self.assertIn("_travelAims.Release(name)", code[stalled:stalled + 600])
+        self.assertIn("_travelAims.Release(name)", code[stalled : stalled + 600])
 
     def test_the_best_distance_is_forgotten_when_the_errand_changes(self):
         """A closest approach carried into the NEXT errand is a clock that never
@@ -863,7 +899,7 @@ class TheErrandIsBounded(unittest.TestCase):
         # the errand grows a new piece of per-errand state, and a window sized
         # to today's block turns every such addition into a failure about
         # something else. mod-overseer#293 added two and broke it at 600.
-        self.assertIn("state.progress.best = 0.f", code[reset:reset + 1400])
+        self.assertIn("state.progress.best = 0.f", code[reset : reset + 1400])
 
     def test_a_target_that_does_not_exist_here_releases_rather_than_pins(self):
         code = _code(_drive())
@@ -874,7 +910,9 @@ class TheErrandIsBounded(unittest.TestCase):
         # character cannot trade with. The behaviour this test is about is
         # unchanged: a target that resolves to nothing releases the errand
         # instead of pinning it.
-        self.assertIn("!ResolveTravelTarget(bot, target, entry, pos, wantSkill, &said)", code)
+        self.assertIn(
+            "!ResolveTravelTarget(bot, target, entry, pos, wantSkill, &said)", code
+        )
 
     def test_the_clear_escapes_the_name(self):
         """The name came out of a table a person edits by hand."""
@@ -892,8 +930,10 @@ class AnAimNothingCanActOnIsSaidOutLoud(unittest.TestCase):
         937-yard scatter. So a follower cannot be sent anywhere; it arrives by
         following."""
         self.assertIn("CanBeSentToNpc(botAI)", _code(_drive()))
-        self.assertIn('HasStrategy("new rpg", BOT_STATE_NON_COMBAT)',
-                      _code(_function("bool CanBeSentToNpc(")))
+        self.assertIn(
+            'HasStrategy("new rpg", BOT_STATE_NON_COMBAT)',
+            _code(_function("bool CanBeSentToNpc(")),
+        )
 
     def test_it_logs_rather_than_silently_skipping(self):
         drive = _drive()
@@ -904,8 +944,12 @@ class AnAimNothingCanActOnIsSaidOutLoud(unittest.TestCase):
         a character that cannot act - and an operator has to tell them apart
         from the log alone."""
         drive = _drive()
-        for phrase in ("errand done", "no such spawn", "as unreachable",
-                       "does not carry"):
+        for phrase in (
+            "errand done",
+            "no such spawn",
+            "as unreachable",
+            "does not carry",
+        ):
             self.assertIn(phrase, drive, phrase)
 
 
@@ -956,7 +1000,7 @@ class TheTwoDriversDoNotFightOverTheWheel(unittest.TestCase):
         wheel = quests.index("TravelHoldsTheWheel(")
         self.assertLess(wheel, quests.index("DriveChosenQuest("))
         self.assertLess(wheel, quests.index("ChangeToDoQuest("))
-        self.assertIn("continue;", quests[wheel:wheel + 900])
+        self.assertIn("continue;", quests[wheel : wheel + 900])
 
     def test_standing_down_is_logged_once_per_transition_not_once_per_poll(self):
         quests = _quests()
@@ -986,8 +1030,7 @@ class TheTwoDriversDoNotFightOverTheWheel(unittest.TestCase):
         self.assertIn("_handback[name] = std::time(nullptr);", _code(_clear()))
 
     def test_the_grace_outlasts_a_whole_quest_poll_and_the_arrival_dwell(self):
-        seconds = int(re.search(r"TRAVEL_HANDBACK_SECONDS = (\d+)",
-                                _source()).group(1))
+        seconds = int(re.search(r"TRAVEL_HANDBACK_SECONDS = (\d+)", _source()).group(1))
         poll = int(re.search(r"QUEST_POLL_MS = (\d+)", _source()).group(1))
         self.assertGreater(seconds, poll // 1000 + 8)
 
@@ -1002,8 +1045,9 @@ class TheTwoDriversDoNotFightOverTheWheel(unittest.TestCase):
         code = _code(_wheel())
         self.assertIn("travelTarget.empty()", code)
         self.assertIn("return _travelAims.WithinHandbackGrace(name);", code)
-        self.assertRegex(_code(_grace()),
-                         r"if \(it == _handback\.end\(\)\)\s*\n\s*return false;")
+        self.assertRegex(
+            _code(_grace()), r"if \(it == _handback\.end\(\)\)\s*\n\s*return false;"
+        )
 
     def test_an_errand_nothing_can_act_on_does_not_freeze_the_questing(self):
         """A follower's row is left set by design when it does not carry `new
@@ -1101,8 +1145,10 @@ class TheErrandStateIsNotOutlivedByItsClock(unittest.TestCase):
         # Stronger than "the drive does not erase": it cannot. The memory is a
         # private member of the book, so the only way out is Release.
         book = _code(_book())
-        self.assertLess(book.index("private:"),
-                        book.index("std::map<std::string, TravelState> _state;"))
+        self.assertLess(
+            book.index("private:"),
+            book.index("std::map<std::string, TravelState> _state;"),
+        )
 
     def test_a_row_cleared_bridge_side_mid_walk_is_noticed(self):
         """The bridge clears the column itself when it re-aims the family. That
@@ -1133,12 +1179,16 @@ class TheResolvedSpawnIsPinnedForTheLifeOfTheErrand(unittest.TestCase):
     def test_the_pin_is_dropped_when_the_target_changes(self):
         code = _code(_drive())
         reset = code.index("state.target = target")
-        self.assertIn("state.pinned = false", code[reset:reset + 400])
+        self.assertIn("state.pinned = false", code[reset : reset + 400])
 
     def test_a_pinned_errand_does_not_resolve_again(self):
         code = _code(_drive())
-        self.assertLess(code.index("state.pinned"),
-                        code.index("!ResolveTravelTarget(bot, target, entry, pos, wantSkill, &said)"))
+        self.assertLess(
+            code.index("state.pinned"),
+            code.index(
+                "!ResolveTravelTarget(bot, target, entry, pos, wantSkill, &said)"
+            ),
+        )
 
 
 class TheMigrationMatchesWhatTheModuleReads(unittest.TestCase):
@@ -1168,7 +1218,8 @@ class TheMigrationMatchesWhatTheModuleReads(unittest.TestCase):
         Comments stripped first: the prose above the statement argues about
         CREATE TABLE at length, and an argument is not a statement."""
         sql = "\n".join(
-            line for line in MIGRATION.read_text(encoding="utf-8").splitlines()
+            line
+            for line in MIGRATION.read_text(encoding="utf-8").splitlines()
             if not line.lstrip().startswith("--")
         )
         self.assertIn("ALTER TABLE", sql)

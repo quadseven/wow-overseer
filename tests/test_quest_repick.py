@@ -42,13 +42,13 @@ accessibility. Everything else it reads - `GetQuestSlotQuestId`,
 already being called from this file before #2801. That matters because the
 compiler cannot be run on a PR.
 """
+
 import pathlib
 import re
 import unittest
 
 MODULE = (
-    pathlib.Path(__file__).resolve().parents[1]
-    / "mod-overseer/src/mod_overseer.cpp"
+    pathlib.Path(__file__).resolve().parents[1] / "mod-overseer/src/mod_overseer.cpp"
 )
 
 
@@ -63,7 +63,7 @@ def _function(name: str) -> str:
         elif src[i] == "}":
             depth -= 1
             if depth == 0:
-                return src[start:i + 1]
+                return src[start : i + 1]
     raise AssertionError("%s has no closing brace" % name)
 
 
@@ -86,19 +86,20 @@ def _walks_before_the_leader_gate_are_leader_only(body: str) -> None:
     gate = body.index("if (!isLead)")
     before = body[:gate]
     for m in re.finditer(r"MAX_QUEST_LOG_SIZE", before):
-        head = before[max(0, m.start() - 600):m.start()]
+        head = before[max(0, m.start() - 600) : m.start()]
         assert "isLead &&" in head, (
             "a slot walk before the leader gate is not itself leader-gated; "
-            "every follower would free-roam its own log")
+            "every follower would free-roam its own log"
+        )
     assert "MAX_QUEST_LOG_SIZE" in body[gate:], (
-        "the fallback slot walk must still sit behind the leader gate")
+        "the fallback slot walk must still sit behind the leader gate"
+    )
 
 
 def _drive() -> str:
     # mod-overseer#552 split DriveQuests into a census and dispatch plus the
     # per-family body it always had. The drive these tests describe is both.
-    return (_function("void DriveQuests()")
-            + _function("void DriveFamilyQuests("))
+    return _function("void DriveQuests()") + _function("void DriveFamilyQuests(")
 
 
 def _aimstate() -> str:
@@ -118,14 +119,19 @@ class UpstreamsOwnGiveUpSetIsHonoured(unittest.TestCase):
 
     def test_the_slot_walk_consults_lowpriorityquest(self):
         body = _code(_drive())
-        self.assertIn("lowPriorityQuest", body,
-                      "upstream's picker skips these; ours must too, or we "
-                      "hand back the quest it just rejected")
+        self.assertIn(
+            "lowPriorityQuest",
+            body,
+            "upstream's picker skips these; ours must too, or we "
+            "hand back the quest it just rejected",
+        )
 
     def test_it_is_cited_against_the_pin(self):
-        self.assertIn("PlayerbotAI.h:605", _drive(),
-                      "a member the build cannot check on a PR has to be "
-                      "cited where it is used")
+        self.assertIn(
+            "PlayerbotAI.h:605",
+            _drive(),
+            "a member the build cannot check on a PR has to be cited where it is used",
+        )
 
 
 class TheFailureIsRemembered(unittest.TestCase):
@@ -142,21 +148,28 @@ class TheFailureIsRemembered(unittest.TestCase):
     """
 
     def test_aimstate_records_the_quest_that_was_last_picked(self):
-        self.assertIn("lastPicked", _aimstate(),
-                      "AimState must remember which quest it last chose, or a "
-                      "repeat pick is indistinguishable from a first one")
+        self.assertIn(
+            "lastPicked",
+            _aimstate(),
+            "AimState must remember which quest it last chose, or a "
+            "repeat pick is indistinguishable from a first one",
+        )
 
     def test_aimstate_counts_consecutive_failures(self):
-        self.assertIn("strikes", _aimstate(),
-                      "one idle-out is normal (combat, death, an objective "
-                      "completing); a wedge is the SAME quest failing again "
-                      "and again, so it has to be counted")
+        self.assertIn(
+            "strikes",
+            _aimstate(),
+            "one idle-out is normal (combat, death, an objective "
+            "completing); a wedge is the SAME quest failing again "
+            "and again, so it has to be counted",
+        )
 
     def test_aimstate_holds_the_quests_it_has_given_up_on(self):
         state = _aimstate()
         self.assertIn("givenUp", state)
-        self.assertRegex(state, r"(map|set)<uint32",
-                         "the given-up quests are quest ids")
+        self.assertRegex(
+            state, r"(map|set)<uint32", "the given-up quests are quest ids"
+        )
 
 
 class AQuestThatJustFailedIsNotPickedAgain(unittest.TestCase):
@@ -165,22 +178,29 @@ class AQuestThatJustFailedIsNotPickedAgain(unittest.TestCase):
     def test_the_slot_walk_skips_a_given_up_quest(self):
         body = _code(_drive())
         self.assertRegex(
-            body, r"givenUp\.(count|find)\(",
+            body,
+            r"givenUp\.(count|find)\(",
             "the fallback walk has to consult the given-up set, or it will "
-            "pick quest 109 again on the very next poll")
+            "pick quest 109 again on the very next poll",
+        )
 
     def test_a_repeat_pick_of_the_same_quest_is_detected(self):
         body = _code(_drive())
-        self.assertIn("lastPicked", body,
-                      "DriveQuests has to compare what it is about to pick "
-                      "against what it picked last time")
+        self.assertIn(
+            "lastPicked",
+            body,
+            "DriveQuests has to compare what it is about to pick "
+            "against what it picked last time",
+        )
 
     def test_the_strike_count_gates_the_give_up(self):
         body = _code(_drive())
         self.assertRegex(
-            body, r"strikes\s*(\+\+|\+=|>=)",
+            body,
+            r"strikes\s*(\+\+|\+=|>=)",
             "strikes must be incremented and compared, so one ordinary "
-            "idle-out does not condemn a healthy quest")
+            "idle-out does not condemn a healthy quest",
+        )
 
     def test_a_strike_requires_the_bot_to_have_NOT_MOVED(self):
         """The discriminator, and the reason a bare counter is wrong.
@@ -195,16 +215,20 @@ class AQuestThatJustFailedIsNotPickedAgain(unittest.TestCase):
         """
         body = _code(_drive())
         self.assertRegex(
-            body, r"fromX|movedSincePick|GetPositionX",
+            body,
+            r"fromX|movedSincePick|GetPositionX",
             "a strike has to be gated on the bot not having moved since the "
-            "quest was chosen, or slow-but-working quests get given up on")
+            "quest was chosen, or slow-but-working quests get given up on",
+        )
 
     def test_there_is_a_named_threshold_rather_than_a_bare_number(self):
         src = _code(MODULE.read_text(encoding="utf-8"))
         self.assertRegex(
-            src, r"constexpr\s+\w+\s+QUEST_REPICK_STRIKES\s*=",
+            src,
+            r"constexpr\s+\w+\s+QUEST_REPICK_STRIKES\s*=",
             "the number of strikes is a policy decision and belongs at the "
-            "top with QUEST_POLL_MS, not buried in the loop")
+            "top with QUEST_POLL_MS, not buried in the loop",
+        )
 
 
 class GivingUpIsRecordedNotSilent(unittest.TestCase):
@@ -223,19 +247,23 @@ class GivingUpIsRecordedNotSilent(unittest.TestCase):
     def test_the_give_up_line_names_the_quest_and_the_reason(self):
         body = _drive()
         idx = body.lower().index("gave up")
-        window = body[idx - 200:idx + 400]
+        window = body[idx - 200 : idx + 400]
         self.assertIn("{}", window, "the log line has to interpolate the quest")
         self.assertRegex(
-            window, r"(strike|without progress|never got|idled)",
-            "a bare 'gave up' is not a named reason; say what was observed")
+            window,
+            r"(strike|without progress|never got|idled)",
+            "a bare 'gave up' is not a named reason; say what was observed",
+        )
 
     def test_the_all_given_up_case_says_so_once(self):
         body = _code(_drive())
         self.assertRegex(
-            body, r"(every|all).{0,60}(quest|log)",
+            body,
+            r"(every|all).{0,60}(quest|log)",
             "Grug's whole backlog is cross-zone, so the case where EVERY "
             "eligible quest has been given up is his actual state and must "
-            "not be a silent no-op")
+            "not be a silent no-op",
+        )
 
 
 class TheMemorySurvivesAnAimBeingReleased(unittest.TestCase):
@@ -252,14 +280,19 @@ class TheMemorySurvivesAnAimBeingReleased(unittest.TestCase):
     def test_no_release_path_wholesale_resets_the_state(self):
         body = _code(_drive())
         self.assertNotIn(
-            "state = AimState();", body,
+            "state = AimState();",
+            body,
             "a wholesale reset takes givenUp/strikes/lastPicked with it; clear "
-            "the aim fields explicitly instead")
+            "the aim fields explicitly instead",
+        )
 
     def test_the_aim_fields_are_cleared_individually(self):
         body = _code(_drive())
-        self.assertRegex(body, r"state\.questId\s*=\s*0",
-                         "the aim itself still has to be forgotten on release")
+        self.assertRegex(
+            body,
+            r"state\.questId\s*=\s*0",
+            "the aim itself still has to be forgotten on release",
+        )
 
 
 class TheStrikeWindowIsWiderThanTheFailurePathsOwnNudge(unittest.TestCase):
@@ -286,9 +319,11 @@ class TheStrikeWindowIsWiderThanTheFailurePathsOwnNudge(unittest.TestCase):
         self.assertIsNotNone(match, "QUEST_PROGRESS_YARDS must be a literal")
         yards = float(match.group(1) if match else 0)
         self.assertGreaterEqual(
-            yards, 40.0,
+            yards,
+            40.0,
             "MoveRandomNear(10.0f) is the failure path's own nudge; a random "
-            "walk of those inside one poll will clear a small threshold")
+            "walk of those inside one poll will clear a small threshold",
+        )
 
     def test_the_nudge_is_cited_so_the_number_is_not_mistaken_for_arbitrary(self):
         src = MODULE.read_text(encoding="utf-8")
@@ -301,10 +336,12 @@ class TheStrikeWindowIsWiderThanTheFailurePathsOwnNudge(unittest.TestCase):
         bounded random walk over the full sixty."""
         body = _code(_drive())
         pick = body.index("repick.lastPicked = questId")
-        window = body[pick - 400:pick + 400]
+        window = body[pick - 400 : pick + 400]
         self.assertRegex(
-            window, r"if\s*\(\s*questId\s*!=\s*repick\.lastPicked\s*\)[\s\S]{0,400}fromX",
-            "pickedX/pickedY must be set only when the chosen quest CHANGES")
+            window,
+            r"if\s*\(\s*questId\s*!=\s*repick\.lastPicked\s*\)[\s\S]{0,400}fromX",
+            "pickedX/pickedY must be set only when the chosen quest CHANGES",
+        )
 
 
 class AnUntriedQuestIsPreferredImmediately(unittest.TestCase):
@@ -320,10 +357,12 @@ class AnUntriedQuestIsPreferredImmediately(unittest.TestCase):
     def test_the_walk_can_defer_the_quest_that_just_failed(self):
         body = _code(_drive())
         self.assertRegex(
-            body, r"(deferred|justFailed|fallbackQuest)",
+            body,
+            r"(deferred|justFailed|fallbackQuest)",
             "the walk needs to hold back the quest that just failed and take "
             "an untried one first, using the failed one only if nothing else "
-            "is eligible")
+            "is eligible",
+        )
 
     def test_the_deferred_quest_is_status_checked_before_it_is_played(self):
         """The deferral `continue`s past the walk's own status check, so the
@@ -334,17 +373,22 @@ class AnUntriedQuestIsPreferredImmediately(unittest.TestCase):
         not the quest's real problem."""
         body = _code(_drive())
         retry = body.index("deferred)")
-        window = body[retry:retry + 700]
+        window = body[retry : retry + 700]
         self.assertRegex(
-            window, r"GetQuestStatus\(\s*deferred\s*\)",
-            "the deferred quest must be re-checked for an actionable status")
+            window,
+            r"GetQuestStatus\(\s*deferred\s*\)",
+            "the deferred quest must be re-checked for an actionable status",
+        )
 
     def test_the_failed_quest_is_still_used_when_it_is_the_only_option(self):
         """Never picking it at all would be worse than the bug: a leader with
         one quest would stop questing entirely."""
         body = _code(_drive())
-        self.assertRegex(body, r"(deferred|fallbackQuest)\b[\s\S]{0,600}ChangeToDoQuest",
-                         "the deferred quest is still played if nothing else is")
+        self.assertRegex(
+            body,
+            r"(deferred|fallbackQuest)\b[\s\S]{0,600}ChangeToDoQuest",
+            "the deferred quest is still played if nothing else is",
+        )
 
 
 class TheStrikeOnlyCountsAgainstAQuestStillWorthStriking(unittest.TestCase):
@@ -363,9 +407,13 @@ class TheStrikeOnlyCountsAgainstAQuestStillWorthStriking(unittest.TestCase):
         strike = body.index("++repick.strikes")
         check = re.search(r"GetQuestStatus\(\s*repick\.lastPicked\s*\)", body)
         self.assertIsNotNone(
-            check, "only strike a quest the bot still holds in an actionable state")
-        self.assertLess(check.start(), strike,
-                        "the status check has to come before the strike is counted")
+            check, "only strike a quest the bot still holds in an actionable state"
+        )
+        self.assertLess(
+            check.start(),
+            strike,
+            "the status check has to come before the strike is counted",
+        )
 
 
 class TheThresholdsAreSaneAndNotJustPresent(unittest.TestCase):
@@ -383,9 +431,11 @@ class TheThresholdsAreSaneAndNotJustPresent(unittest.TestCase):
         strikes = int(match.group(1) if match else 0)
         self.assertGreaterEqual(strikes, 2, "one idle-out is ordinary churn")
         self.assertLessEqual(
-            strikes, 4,
+            strikes,
+            4,
             "at a twenty-second poll, more than four strikes is more than a "
-            "minute of a character doing nothing before anything is noticed")
+            "minute of a character doing nothing before anything is noticed",
+        )
 
     def test_the_cooldown_is_long_enough_to_stop_churn_and_short_enough_to_retry(self):
         src = _code(MODULE.read_text(encoding="utf-8"))
@@ -414,15 +464,20 @@ class TheNestedTypeIsNotNamedUnqualified(unittest.TestCase):
     def test_the_repick_reference_does_not_name_the_nested_type_unqualified(self):
         body = _code(_drive())
         self.assertNotRegex(
-            body, r"(?<!::)\bRepickMemory&",
+            body,
+            r"(?<!::)\bRepickMemory&",
             "name it `auto&` or `AimState::RepickMemory&`; the bare nested "
-            "name does not compile from the outer class")
+            "name does not compile from the outer class",
+        )
 
     def test_the_reference_is_still_taken_by_reference_not_by_value(self):
         """A copy would silently drop every strike and give-up on return."""
         body = _code(_drive())
-        self.assertRegex(body, r"auto&\s+repick\s*=\s*state\.repick",
-                         "a by-value copy would discard the memory each poll")
+        self.assertRegex(
+            body,
+            r"auto&\s+repick\s*=\s*state\.repick",
+            "a by-value copy would discard the memory each poll",
+        )
 
 
 class TheLogLineCannotBreakTheBuild(unittest.TestCase):
@@ -437,17 +492,21 @@ class TheLogLineCannotBreakTheBuild(unittest.TestCase):
     def test_the_strike_count_is_cast_before_it_is_logged(self):
         body = _code(_drive())
         self.assertRegex(
-            body, r"static_cast<uint32>\(\s*repick\.strikes\s*\)",
+            body,
+            r"static_cast<uint32>\(\s*repick\.strikes\s*\)",
             "uint8 goes through static_cast<uint32> before fmt sees it, as "
-            "the spec_tab log already does")
+            "the spec_tab log already does",
+        )
 
     def test_no_float_format_spec_was_introduced(self):
         """There was no precedent for one in this file before #2801."""
         body = _code(_drive())
         self.assertNotRegex(
-            body, r"\{:\.\d+f\}",
+            body,
+            r"\{:\.\d+f\}",
             "positions are logged as cast integers; every other argument in "
-            "this file is an integer or a string")
+            "this file is an integer or a string",
+        )
 
 
 class TheGiveUpExpires(unittest.TestCase):
@@ -460,9 +519,11 @@ class TheGiveUpExpires(unittest.TestCase):
     def test_the_given_up_set_has_a_cooldown(self):
         src = _code(MODULE.read_text(encoding="utf-8"))
         self.assertRegex(
-            src, r"constexpr\s+\w+\s+QUEST_GIVE_UP_COOLDOWN\w*\s*=",
+            src,
+            r"constexpr\s+\w+\s+QUEST_GIVE_UP_COOLDOWN\w*\s*=",
             "a give-up has to expire, or one bad poll condemns a quest for "
-            "the lifetime of the process")
+            "the lifetime of the process",
+        )
 
     def test_the_cooldown_is_actually_consulted(self):
         body = _code(_drive())
@@ -506,15 +567,23 @@ class NoNewUpstreamMemberWasIntroduced(unittest.TestCase):
         "lowPriorityQuest": "PlayerbotAI.h:605",
     }
     # Members the build has already proven by using them elsewhere in this file.
-    ALREADY_PROVEN = {"Fetch", "NextRow", "Get", "GetTitle", "GetQuestTemplate",
-                      "FindPlayerByName",
-                      # the snapshot writer already reads these
-                      "GetPositionX", "GetPositionY",
-                      # module 89878284: the leader-serves-the-youngest log
-                      # line names the youngest and its level. Both are used
-                      # dozens of times elsewhere in this file (58 and 14
-                      # call sites), so the build has long since proven them.
-                      "GetName", "GetLevel"}
+    ALREADY_PROVEN = {
+        "Fetch",
+        "NextRow",
+        "Get",
+        "GetTitle",
+        "GetQuestTemplate",
+        "FindPlayerByName",
+        # the snapshot writer already reads these
+        "GetPositionX",
+        "GetPositionY",
+        # module 89878284: the leader-serves-the-youngest log
+        # line names the youngest and its level. Both are used
+        # dozens of times elsewhere in this file (58 and 14
+        # call sites), so the build has long since proven them.
+        "GetName",
+        "GetLevel",
+    }
 
     def test_the_new_member_is_cited_where_it_is_used(self):
         self.assertIn("PlayerbotAI.h:605", _drive())
@@ -529,7 +598,9 @@ class NoNewUpstreamMemberWasIntroduced(unittest.TestCase):
         body = _code(_drive())
         used = set(re.findall(r"rpgInfo\.([A-Za-z_][A-Za-z0-9_]*)", body))
         unknown = used - set(self.VERIFIED)
-        self.assertEqual(unknown, set(), "unverified rpgInfo members: %s" % sorted(unknown))
+        self.assertEqual(
+            unknown, set(), "unverified rpgInfo members: %s" % sorted(unknown)
+        )
 
 
 class NothingElseWasQuietlyChanged(unittest.TestCase):
@@ -537,15 +608,20 @@ class NothingElseWasQuietlyChanged(unittest.TestCase):
 
     def test_the_aim_is_still_preferred_over_the_fallback(self):
         body = _code(_drive())
-        self.assertIn("DriveChosenQuest", body,
-                      "the council's aim still outranks the bot's own log")
+        self.assertIn(
+            "DriveChosenQuest",
+            body,
+            "the council's aim still outranks the bot's own log",
+        )
 
     def test_the_onquest_guard_survives(self):
         body = _code(_drive())
         self.assertRegex(
-            body, r"if\s*\(onQuest(?:\s*&&\s*!preempted)?\)\s*\n?\s*continue;",
+            body,
+            r"if\s*\(onQuest(?:\s*&&\s*!preempted)?\)\s*\n?\s*continue;",
             "removing this reinstates the every-poll re-issue that #2798 and "
-            "#2799 exist to prevent")
+            "#2799 exist to prevent",
+        )
 
     def test_the_driver_is_still_on_the_quest_poll(self):
         src = _code(MODULE.read_text(encoding="utf-8"))
@@ -583,14 +659,17 @@ class TheWholeFamilyCanBeAimed(unittest.TestCase):
     def test_the_aim_query_is_not_restricted_to_the_leader(self):
         body = _code(_drive())
         self.assertNotRegex(
-            body, r"WHERE enabled = 1 AND `lead` = 1",
+            body,
+            r"WHERE enabled = 1 AND `lead` = 1",
             "a leader-only query means a follower's aim is written and never "
-            "read - the same unread-column failure this epic started with")
+            "read - the same unread-column failure this epic started with",
+        )
 
     def test_every_enabled_member_is_considered(self):
         body = _code(_drive())
-        self.assertRegex(body, r"WHERE enabled = 1",
-                         "all enabled roster members, aimed or not")
+        self.assertRegex(
+            body, r"WHERE enabled = 1", "all enabled roster members, aimed or not"
+        )
 
     def test_the_leader_flag_is_still_selected_because_the_fallback_needs_it(self):
         """Only the leader may free-roam its own quest log. A follower without
@@ -598,8 +677,9 @@ class TheWholeFamilyCanBeAimed(unittest.TestCase):
         the 937-yard scatter, and the aim is the only thing holding the party
         to one destination."""
         body = _code(_drive())
-        self.assertRegex(body, r"SELECT name, `lead`",
-                         "the query has to bring back who leads")
+        self.assertRegex(
+            body, r"SELECT name, `lead`", "the query has to bring back who leads"
+        )
         self.assertIn("isLead", body)
 
     def test_the_first_eligible_fallback_is_leader_only(self):
@@ -620,5 +700,7 @@ class AFollowerWithoutAnAimDoesNotRoam(unittest.TestCase):
     def test_an_unaimed_follower_reaches_no_movement_call(self):
         body = _code(_drive())
         self.assertRegex(
-            body, r"if\s*\(\s*!\s*isLead\s*\)\s*\n?\s*continue;",
-            "an unaimed non-leader has to fall out before the log walk")
+            body,
+            r"if\s*\(\s*!\s*isLead\s*\)\s*\n?\s*continue;",
+            "an unaimed non-leader has to fall out before the log walk",
+        )

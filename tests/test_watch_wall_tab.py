@@ -15,6 +15,7 @@ Neither is reachable from Python and neither shows up in a diff. They show up
 as a blank site. So they are asserted here, over the file, for every id and
 every top-level const on the page rather than only the ones this view added.
 """
+
 import os
 import re
 import unittest
@@ -34,8 +35,8 @@ def _wall_js():
     storage calls and the on-demand panel's copy as the wall's, which is a
     test that fails for something another view is doing.
     """
-    js = APP[APP.index("// --- the Watch wall"):]
-    return js[:js.index("function layoutBroadcasts")]
+    js = APP[APP.index("// --- the Watch wall") :]
+    return js[: js.index("function layoutBroadcasts")]
 
 
 def _wall_code():
@@ -47,21 +48,23 @@ def _wall_code():
     the comment at all. Anything asserting that a bad pattern is GONE reads
     this; anything asserting a good pattern is PRESENT can read the source.
     """
-    return LF.join(l for l in _wall_js().splitlines()
-                   if not l.strip().startswith("//"))
+    return LF.join(
+        line for line in _wall_js().splitlines() if not line.strip().startswith("//")
+    )
 
 
 def absent(case, needle, haystack, where):
     """assertNotIn against a 200KB page prints the WHOLE page on failure, which
     buries the one line that matters. This prints the needle."""
     case.assertFalse(needle in haystack, "%r found in %s" % (needle, where))
+
+
 # The last block is the application. The three before it are the pre-paint
 # theme script and the map bootstraps, and they have their own scopes.
 APP = max(SCRIPTS, key=len)
 
 
 class TheDocumentIsWellFormedEnoughToRun(unittest.TestCase):
-
     def test_no_id_is_used_twice(self):
         """getElementById returns the FIRST match and reports no error, so a
         collision silently rewires one view into another."""
@@ -79,13 +82,11 @@ class TheDocumentIsWellFormedEnoughToRun(unittest.TestCase):
     def test_every_wall_element_the_script_reaches_for_exists(self):
         """getElementById on a missing id returns null, and the first property
         access on it throws where the whole script stops."""
-        for name in ("watch", "wall", "wallmodes", "wallwarn", "wallhead",
-                     "wallsound"):
+        for name in ("watch", "wall", "wallmodes", "wallwarn", "wallhead", "wallsound"):
             self.assertIn('id="%s"' % name, PAGE, name)
 
 
 class TheWallIsItsOwnView(unittest.TestCase):
-
     def test_it_has_a_tab_that_names_its_view(self):
         self.assertIn('const WATCH_VIEW = "watch";', PAGE)
         self.assertIn("wb.dataset.view = WATCH_VIEW;", PAGE)
@@ -103,14 +104,15 @@ class TheWallIsItsOwnView(unittest.TestCase):
         Family is one tap away and still answers the health question better
         than five video tiles can, which is why it is second rather than
         moved down the row."""
-        self.assertLess(PAGE.index("wb.dataset.view = WATCH_VIEW;"),
-                        PAGE.index("fb.dataset.view = FAMILY_VIEW;"))
+        self.assertLess(
+            PAGE.index("wb.dataset.view = WATCH_VIEW;"),
+            PAGE.index("fb.dataset.view = FAMILY_VIEW;"),
+        )
 
     def test_the_two_views_read_one_payload(self):
         """A second endpoint would let the wall and the cards disagree about
         who is dead, and only one of them is ever on screen to be checked."""
-        self.assertIn("if (view !== FAMILY_VIEW && view !== WATCH_VIEW) return;",
-                      PAGE)
+        self.assertIn("if (view !== FAMILY_VIEW && view !== WATCH_VIEW) return;", PAGE)
 
 
 class EveryViewIsReachableByItsOwnHash(unittest.TestCase):
@@ -127,8 +129,8 @@ class EveryViewIsReachableByItsOwnHash(unittest.TestCase):
 
     def test_every_view_constant_is_routable(self):
         names = set(re.findall(r"^const ([A-Z]+_VIEW) = ", APP, re.M))
-        listed = PAGE[PAGE.index("const HASH_VIEWS = ["):]
-        listed = listed[:listed.index("]")]
+        listed = PAGE[PAGE.index("const HASH_VIEWS = [") :]
+        listed = listed[: listed.index("]")]
         for name in sorted(names):
             if name == "MAP_VIEW":
                 # The map is routed separately because its hash carries which
@@ -140,8 +142,7 @@ class EveryViewIsReachableByItsOwnHash(unittest.TestCase):
     def test_an_unknown_hash_falls_back_to_family(self):
         """An empty hash, a typo and a stale bookmark should all land on the
         page that answers "are my five all right"."""
-        self.assertIn("HASH_VIEWS.indexOf(name) >= 0 ? name : FAMILY_VIEW",
-                      PAGE)
+        self.assertIn("HASH_VIEWS.indexOf(name) >= 0 ? name : FAMILY_VIEW", PAGE)
 
 
 class NoJudgementLivesInTheScript(unittest.TestCase):
@@ -157,7 +158,7 @@ class NoJudgementLivesInTheScript(unittest.TestCase):
         comment above quoting it, which is a test that punishes the
         explanation rather than the code."""
         assign = "t.zone.textContent = "
-        line = APP[APP.index(assign):APP.index(assign) + 80]
+        line = APP[APP.index(assign) : APP.index(assign) + 80]
         absent(self, "m.present", line, "the zone caption")
         self.assertIn("wallLines.get(m.name)", line)
 
@@ -172,7 +173,7 @@ class NoJudgementLivesInTheScript(unittest.TestCase):
     def test_the_headline_is_printed_not_written(self):
         """It used to be built in the page out of `playable` and said
         "5 of 5 broadcasting" over a production realm with nobody logged in."""
-        self.assertIn('wallhead.textContent = w.headline', PAGE)
+        self.assertIn("wallhead.textContent = w.headline", PAGE)
         absent(self, "broadcasting", _wall_code(), "the wall view")
 
     def test_the_warning_is_printed_not_written(self):
@@ -207,8 +208,13 @@ class TheChannelBudgetIsNotOnThisWall(unittest.TestCase):
     not involved."""
 
     def test_the_wall_view_names_none_of_it(self):
-        for word in ("max_channels", "channels_in_use", "startup_seconds",
-                     "unclaimed", "heartbeat"):
+        for word in (
+            "max_channels",
+            "channels_in_use",
+            "startup_seconds",
+            "unclaimed",
+            "heartbeat",
+        ):
             absent(self, word, _wall_code(), "the wall view")
 
     def test_the_wall_asks_for_no_stream(self):
@@ -224,8 +230,8 @@ class TheTilesAreMovedAndNeverRebuilt(unittest.TestCase):
     across the tailnet, for a layout change nobody asked to pay for."""
 
     def test_the_layout_chooses_a_parent_rather_than_making_a_tile(self):
-        fn = APP[APP.index("function layoutBroadcasts"):]
-        fn = fn[:fn.index("\n}")]
+        fn = APP[APP.index("function layoutBroadcasts") :]
+        fn = fn[: fn.index("\n}")]
         self.assertIn("view === WATCH_VIEW", fn)
         self.assertIn("appendChild(t.tile)", fn)
         absent(self, "broadcastTile(", fn, "layoutBroadcasts")
@@ -248,8 +254,8 @@ class TheTilesAreMovedAndNeverRebuilt(unittest.TestCase):
         for - the name still belongs to Bags and the wall still does not touch
         it - is unchanged, so it is asserted against the rules that are there
         now."""
-        wall_css = PAGE[PAGE.index("/* --- THE WATCH WALL"):]
-        wall_css = wall_css[:wall_css.index("</style>")]
+        wall_css = PAGE[PAGE.index("/* --- THE WATCH WALL") :]
+        wall_css = wall_css[: wall_css.index("</style>")]
         absent(self, ".wslot", wall_css, "the wall CSS")
         self.assertIn(".povslot", wall_css)
         # And the incumbent is still there, still Bags'.
@@ -265,15 +271,16 @@ class TheTilesAreMovedAndNeverRebuilt(unittest.TestCase):
         Scoped to classes the WALL introduces, because plenty of shared
         utility classes legitimately appear in several places; what must not
         happen is a wall-specific name colliding with a view-specific one."""
-        style = PAGE[PAGE.index("<style>"):PAGE.index("</style>")]
-        block = style[style.index("/* --- THE WATCH WALL"):]
-        block = block[:block.index("#wallhead {")]
+        style = PAGE[PAGE.index("<style>") : PAGE.index("</style>")]
+        block = style[style.index("/* --- THE WATCH WALL") :]
+        block = block[: block.index("#wallhead {")]
         outside = style.replace(block, "")
         mine = set(re.findall(r"\.(pov[a-z-]+)", block))
         self.assertTrue(mine, "the wall defines no pov- classes at all")
         for name in sorted(mine):
-            self.assertNotIn("." + name, outside,
-                             ".%s is styled outside the wall too" % name)
+            self.assertNotIn(
+                "." + name, outside, ".%s is styled outside the wall too" % name
+            )
 
     def test_promoting_a_tile_is_offered_and_not_just_possible(self):
         """The tiles were clickable from the day hero mode existed and nothing
@@ -299,11 +306,11 @@ class TheTilesAreMovedAndNeverRebuilt(unittest.TestCase):
         self.assertIn('el("button", "povhit")', PAGE)
         self.assertIn("shot.append(hit, big);", PAGE)
         self.assertIn("target.insertBefore(t.tile, target.firstChild)", PAGE)
-        css = PAGE[PAGE.index(".povhit {"):]
-        self.assertIn("inset:0", css[:css.index("}")])
+        css = PAGE[PAGE.index(".povhit {") :]
+        self.assertIn("inset:0", css[: css.index("}")])
 
     def test_it_is_offered_only_where_it_means_something(self):
-        """"Make this the big one" says nothing when there is no big one, and
+        """ "Make this the big one" says nothing when there is no big one, and
         nothing on the tile that already is it. FIVE UP and HERO both have a
         big tile; STACKED does not, so there the chip would be a promise the
         layout does not keep."""
@@ -317,13 +324,14 @@ class TheTilesAreMovedAndNeverRebuilt(unittest.TestCase):
     def test_hero_is_promoted_by_span_not_by_order(self):
         """`order` would move tiles past each other visually, which is
         reordering the roster by another name."""
-        self.assertIn("#wall.m-hero > .povslot.hero { grid-column:1 / -1; }",
-                      PAGE)
-        wall_css = PAGE[PAGE.index("#wall { display:grid"):][:1400]
+        self.assertIn("#wall.m-hero > .povslot.hero { grid-column:1 / -1; }", PAGE)
+        wall_css = PAGE[PAGE.index("#wall { display:grid") :][:1400]
         # Anchored, because "order:" is a substring of "border:" and the
         # unanchored version could never pass.
-        self.assertIsNone(re.search(r"[;{\s]order\s*:", wall_css),
-                          "the wall CSS reorders tiles with `order`")
+        self.assertIsNone(
+            re.search(r"[;{\s]order\s*:", wall_css),
+            "the wall CSS reorders tiles with `order`",
+        )
 
 
 class HeroModeDoesNotWalkBackIntoTheTinyTwitchView(unittest.TestCase):
@@ -332,7 +340,7 @@ class HeroModeDoesNotWalkBackIntoTheTinyTwitchView(unittest.TestCase):
     operator said so in as many words. It is back only as a choice."""
 
     def test_the_default_is_not_hero(self):
-        self.assertIn('DEFAULT_MODE = FIVE_UP', _module_source())
+        self.assertIn("DEFAULT_MODE = FIVE_UP", _module_source())
 
     def test_hero_collapses_to_one_column_on_a_narrow_screen(self):
         """ONE COLUMN, and that is what this test has been named all along.
@@ -350,10 +358,11 @@ class HeroModeDoesNotWalkBackIntoTheTinyTwitchView(unittest.TestCase):
         # 640px, which is the handoff's single breakpoint. The first version
         # of the wall invented 760 along with the rest of its geometry.
         self.assertIn("@media (max-width: 640px) {", PAGE)
-        narrow = PAGE[PAGE.index("@media (max-width: 640px) {"):]
+        narrow = PAGE[PAGE.index("@media (max-width: 640px) {") :]
         head = narrow[:400]
         self.assertIn(
-            "#wall.m-five-up, #wall.m-hero { grid-template-columns:1fr;", head)
+            "#wall.m-five-up, #wall.m-hero { grid-template-columns:1fr;", head
+        )
         # No mode is left out: a mode with no rule here is a mode that keeps
         # its desktop column count on a phone, which is how m-hero was missed.
         for mode in ("m-five-up", "m-hero"):
@@ -366,12 +375,11 @@ class HeroModeDoesNotWalkBackIntoTheTinyTwitchView(unittest.TestCase):
         with `order`, which is also why it is a grid property and not a DOM
         move - layoutBroadcasts re-parents live PeerConnections, and
         reordering the array would tear one down to change a layout."""
-        narrow = PAGE[PAGE.index("@media (max-width: 640px) {"):][:400]
+        narrow = PAGE[PAGE.index("@media (max-width: 640px) {") :][:400]
         self.assertIn("order:-1", narrow)
 
 
 class TheSoundIsOffUntilAskedFor(unittest.TestCase):
-
     def test_nothing_makes_a_noise_before_a_click(self):
         """A page that makes a noise on load is a page that gets closed."""
         self.assertIn('wall.sound = wallStored(WALL_SOUND_KEY) === "on";', PAGE)
@@ -390,32 +398,33 @@ class TheSoundIsOffUntilAskedFor(unittest.TestCase):
         absent(self, "<audio", PAGE, "index.html")
 
     def test_a_browser_with_no_audio_does_not_take_the_wall_down(self):
-        cue = PAGE[PAGE.index("function wallCue"):]
-        cue = cue[:cue.index("\n}")]
+        cue = PAGE[PAGE.index("function wallCue") :]
+        cue = cue[: cue.index("\n}")]
         self.assertIn("try {", cue)
         self.assertIn("catch", cue)
 
 
 class TheStoredPreferencesAreHandledLikeStorage(unittest.TestCase):
-
     def test_every_access_goes_through_the_wrapped_helpers(self):
         """localStorage THROWS rather than returning null in a private window,
         and an unwrapped read would stop the wall drawing at all."""
         for helper in ("function wallStored", "function wallStore"):
-            body = PAGE[PAGE.index(helper):]
+            body = PAGE[PAGE.index(helper) :]
             self.assertIn("try {", body[:260])
             self.assertIn("catch", body[:260])
         # Counted over CODE, not comments: the block comment above the
         # helpers explains why localStorage is wrapped, and counting the word
         # there punishes the explanation instead of the thing explained.
-        self.assertEqual(_wall_code().count("localStorage"), 2,
-                         "raw localStorage use outside the two helpers")
+        self.assertEqual(
+            _wall_code().count("localStorage"),
+            2,
+            "raw localStorage use outside the two helpers",
+        )
 
     def test_a_stored_mode_is_validated_against_the_server(self):
         """It arrives from browser storage, which is to say from anywhere, and
         an unknown mode is a wall with no layout at all."""
-        self.assertIn("w.modes.indexOf(stored) >= 0 ? stored : w.default_mode",
-                      PAGE)
+        self.assertIn("w.modes.indexOf(stored) >= 0 ? stored : w.default_mode", PAGE)
 
     def test_a_stored_hero_is_validated_against_the_tiles_on_the_wall(self):
         """The stored name is honoured ONLY when it is one of the tiles actually
@@ -453,8 +462,8 @@ class ThePageFitsThePhoneItIsReadOn(unittest.TestCase):
         to scroll. The row has to say nowrap itself."""
         # Anchored on the declaration rather than on "#tabs {", because the
         # phone block sets a mask on the same id and comes first in the file.
-        rule = PAGE[PAGE.index("#tabs { display:flex"):]
-        rule = rule[:rule.index("}")]
+        rule = PAGE[PAGE.index("#tabs { display:flex") :]
+        rule = rule[: rule.index("}")]
         self.assertIn("flex-wrap:nowrap", rule)
         self.assertIn("overflow-x:auto", rule)
 
@@ -462,12 +471,12 @@ class ThePageFitsThePhoneItIsReadOn(unittest.TestCase):
         """The fix is stated on #tabs rather than taken off `nav`, because
         #realmnav and #ajump are both still dressed by that rule and both
         want to wrap. This asserts the fix did not become a deletion."""
-        self.assertIn("flex-wrap:wrap; }", PAGE[PAGE.index("  nav {"):][:120])
+        self.assertIn("flex-wrap:wrap; }", PAGE[PAGE.index("  nav {") :][:120])
 
     def test_a_tab_never_breaks_across_two_lines(self):
-        """"Eastern Kingdoms" in a scrolling row with nowhere to wrap to."""
-        rule = PAGE[PAGE.index("  #tabs button {"):]
-        self.assertIn("white-space:nowrap", rule[:rule.index("}")])
+        """ "Eastern Kingdoms" in a scrolling row with nowhere to wrap to."""
+        rule = PAGE[PAGE.index("  #tabs button {") :]
+        self.assertIn("white-space:nowrap", rule[: rule.index("}")])
 
     def test_the_selected_tab_is_scrolled_back_into_its_own_row(self):
         """Fourteen tabs on a row narrower than half of them. Opening the
@@ -482,8 +491,8 @@ class ThePageFitsThePhoneItIsReadOn(unittest.TestCase):
         row is below the fold, so the first version of this scrolled the page
         430px down and left it there, every load landing halfway through the
         header. scrollLeft touches one axis of one element."""
-        fn = PAGE[PAGE.index("function revealTab(b) {"):]
-        fn = fn[:fn.index("\n}")]
+        fn = PAGE[PAGE.index("function revealTab(b) {") :]
+        fn = fn[: fn.index("\n}")]
         self.assertIn("row.scrollLeft", fn)
         absent(self, "scrollIntoView", fn, "revealTab")
         absent(self, "scrollTop", fn, "revealTab")
@@ -500,8 +509,8 @@ class ThePageFitsThePhoneItIsReadOn(unittest.TestCase):
         # Composed in watchwall, never assembled out of two fields here.
         # Scoped to the wall's own render loop: `.level` is read legitimately
         # elsewhere on the page, and an unscoped search finds those instead.
-        loop = PAGE[PAGE.index("for (const t of shown) {"):]
-        loop = loop[:loop.index("\n  }")]
+        loop = PAGE[PAGE.index("for (const t of shown) {") :]
+        loop = loop[: loop.index("\n  }")]
         # ("t.class" is not checked here: it is a substring of
         # "slot.classList", which the same loop uses legitimately.)
         absent(self, "t.level", loop, "the wall render loop")
@@ -511,18 +520,17 @@ class ThePageFitsThePhoneItIsReadOn(unittest.TestCase):
         re-parented, so without this the name and the sentence are printed
         twice - once over the game and once beneath it - and the overlay's
         `fullscreen` button lands on top of the BIG chip."""
-        block = PAGE[PAGE.index("/* --- THE WATCH WALL"):]
-        block = block[:block.index("#wallhead {")]
-        for hidden in (".povshot .fovname", ".povshot .fovzone",
-                       ".povshot .ffull"):
+        block = PAGE[PAGE.index("/* --- THE WATCH WALL") :]
+        block = block[: block.index("#wallhead {")]
+        for hidden in (".povshot .fovname", ".povshot .fovzone", ".povshot .ffull"):
             self.assertIn(hidden, block, hidden)
 
     def test_health_survives_the_overlay_coming_off(self):
         """It is the one thing the overlay carried that the caption does not,
         and five bars in the same place on five tiles is the whole reason to
         look at a wall rather than five cards."""
-        block = PAGE[PAGE.index("/* --- THE WATCH WALL"):]
-        block = block[:block.index("#wallhead {")]
+        block = PAGE[PAGE.index("/* --- THE WATCH WALL") :]
+        block = block[: block.index("#wallhead {")]
         self.assertIn(".povshot .fovbar", block)
 
     def test_a_tile_can_be_narrower_than_its_own_contents(self):
@@ -531,22 +539,23 @@ class ThePageFitsThePhoneItIsReadOn(unittest.TestCase):
         boxes: 360px, measured, whatever column it was handed. Without this
         the wall could not shrink to a 320px screen and stood 72px wider than
         the element containing it."""
-        rule = PAGE[PAGE.index("  .povslot {"):]
-        self.assertIn("min-width:0", rule[:rule.index("}")])
+        rule = PAGE[PAGE.index("  .povslot {") :]
+        self.assertIn("min-width:0", rule[: rule.index("}")])
 
     def test_the_wall_declares_no_track_it_cannot_honour(self):
         """The general form of the rule above. Every track floor on the wall
         has to be reachable on the narrowest screen the page has."""
-        block = PAGE[PAGE.index("/* --- THE WATCH WALL"):]
-        block = block[:block.index("#wallhead {")]
+        block = PAGE[PAGE.index("/* --- THE WATCH WALL") :]
+        block = block[: block.index("#wallhead {")]
         for floor in re.findall(r"minmax\(\s*(\d+)px", block):
             self.assertLessEqual(
-                int(floor), 320,
-                "a %spx track floor cannot be met on a 320px screen" % floor)
+                int(floor),
+                320,
+                "a %spx track floor cannot be met on a 320px screen" % floor,
+            )
 
 
 class TheHouseRules(unittest.TestCase):
-
     def test_no_em_dashes(self):
         for name in ("index.html", "tests/test_watch_wall_tab.py"):
             with open(os.path.join(HERE, name), encoding="utf-8") as fh:

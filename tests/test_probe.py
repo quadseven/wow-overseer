@@ -9,7 +9,7 @@ So the two failures worth pinning are: an answer that belongs to a different
 probe, and a probe nobody answered being reported as though it had nothing to
 say.
 """
-import ast
+
 import json
 import pathlib
 import sys
@@ -53,10 +53,14 @@ class CollectReadsTheRightRow(unittest.TestCase):
         which is what a real batched SELECT is free to do.
         """
         ids = {1: ("Grug", "state"), 2: ("Grug", "talents")}
-        cur = FakeCursor([[
-            _row(2, result=json.dumps({"spec_tab": 2})),
-            _row(1, result=json.dumps({"level": 11})),
-        ]])
+        cur = FakeCursor(
+            [
+                [
+                    _row(2, result=json.dumps({"spec_tab": 2})),
+                    _row(1, result=json.dumps({"level": 11})),
+                ]
+            ]
+        )
         out = probe.collect(cur, ids, deadline=probe.time.monotonic() + 5)
         self.assertEqual(2, out["Grug"]["talents"]["spec_tab"])
         self.assertEqual(11, out["Grug"]["state"]["level"])
@@ -64,10 +68,12 @@ class CollectReadsTheRightRow(unittest.TestCase):
     def test_a_row_still_running_is_not_read_as_an_answer(self):
         """`claimed` means in-flight. Reading it would report a half-done probe."""
         ids = {1: ("Grug", "state")}
-        cur = FakeCursor([
-            [_row(1, status="claimed")],
-            [_row(1, result=json.dumps({"level": 11}))],
-        ])
+        cur = FakeCursor(
+            [
+                [_row(1, status="claimed")],
+                [_row(1, result=json.dumps({"level": 11}))],
+            ]
+        )
         out = probe.collect(cur, ids, deadline=probe.time.monotonic() + 5)
         self.assertEqual(11, out["Grug"]["state"]["level"])
 
@@ -104,7 +110,9 @@ class PlaceholdersCarryNoData(unittest.TestCase):
     def test_it_emits_only_markers_and_commas(self):
         for n in (1, 2, 5, 50):
             got = probe.placeholders(n)
-            self.assertEqual(set(got) - {"%", "s", ","}, set(), f"unexpected chars in {got!r}")
+            self.assertEqual(
+                set(got) - {"%", "s", ","}, set(), f"unexpected chars in {got!r}"
+            )
             self.assertEqual(n, got.count("%s"))
             self.assertEqual(n - 1, got.count(","))
 
@@ -119,8 +127,7 @@ class PlaceholdersCarryNoData(unittest.TestCase):
 
 
 MODULE = (
-    pathlib.Path(__file__).resolve().parents[1]
-    / "mod-overseer/src/mod_overseer.cpp"
+    pathlib.Path(__file__).resolve().parents[1] / "mod-overseer/src/mod_overseer.cpp"
 )
 
 
@@ -137,9 +144,19 @@ def _probe_source() -> str:
 # the reason an experiment appeared to work, which destroys the only property
 # that makes it trustworthy as an instrument.
 MUTATORS = [
-    "learnSpell", "LearnTalent", "removeSpell", "SetSkill", "resetTalents",
-    "TeleportTo", "DurabilityRepair", "SetMoney", "DestroyItem", "AddItem",
-    "HandleCommand", "addStrategy", "removeStrategy",
+    "learnSpell",
+    "LearnTalent",
+    "removeSpell",
+    "SetSkill",
+    "resetTalents",
+    "TeleportTo",
+    "DurabilityRepair",
+    "SetMoney",
+    "DestroyItem",
+    "AddItem",
+    "HandleCommand",
+    "addStrategy",
+    "removeStrategy",
 ]
 
 
@@ -147,7 +164,9 @@ class ProbesAreReadOnly(unittest.TestCase):
     def test_no_probe_mutates_the_character(self):
         body = _probe_source()
         for call in MUTATORS:
-            self.assertNotIn(call, body, f"a probe calls {call}, which changes the world")
+            self.assertNotIn(
+                call, body, f"a probe calls {call}, which changes the world"
+            )
 
     def test_every_probe_the_tool_offers_is_handled_by_the_module(self):
         """A verb the tool sends and the module does not know is a silent gap."""

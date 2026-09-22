@@ -28,6 +28,7 @@ getting that wrong looks like working code, which is what this file pins:
   * proposing a share the server will refuse, because the quest does not carry
     QUEST_FLAGS_SHARABLE and Player::CanShareQuest says no.
 """
+
 import json
 import unittest
 
@@ -41,16 +42,21 @@ DUN_MOROGH = 1
 
 # The family, with the class and race IDs the characters table really stores.
 # NOT bitmasks - that conversion is the point of several tests below.
-GRUG = questbook.Member(name="Grug", class_id=1, race_id=1, level=14,
-                        zones=frozenset({ELWYNN}))
-BORK = questbook.Member(name="Bork", class_id=4, race_id=3, level=11,
-                        zones=frozenset({ELWYNN}))
-GROG = questbook.Member(name="Grog", class_id=2, race_id=3, level=10,
-                        zones=frozenset({ELWYNN}))
-OG = questbook.Member(name="Og", class_id=8, race_id=7, level=10,
-                      zones=frozenset({ELWYNN}))
-UGGA = questbook.Member(name="Ugga", class_id=5, race_id=1, level=11,
-                        zones=frozenset({ELWYNN}))
+GRUG = questbook.Member(
+    name="Grug", class_id=1, race_id=1, level=14, zones=frozenset({ELWYNN})
+)
+BORK = questbook.Member(
+    name="Bork", class_id=4, race_id=3, level=11, zones=frozenset({ELWYNN})
+)
+GROG = questbook.Member(
+    name="Grog", class_id=2, race_id=3, level=10, zones=frozenset({ELWYNN})
+)
+OG = questbook.Member(
+    name="Og", class_id=8, race_id=7, level=10, zones=frozenset({ELWYNN})
+)
+UGGA = questbook.Member(
+    name="Ugga", class_id=5, race_id=1, level=11, zones=frozenset({ELWYNN})
+)
 
 
 def _quest(qid, title="", **over):
@@ -64,21 +70,24 @@ def _quest(qid, title="", **over):
     return questbook.Quest(id=qid, title=title, **fields)
 
 
-CATALOG = {q.id: q for q in [
-    _quest(62, "A Threat Within"),
-    _quest(40, "The Fargodeep Mine"),
-    # The chain. 35 needs 40, 37 needs 35 - so catching up is ORDERED.
-    _quest(35, "Further Concerns", prev_quest_id=40),
-    _quest(37, "Find the Lost Guards", prev_quest_id=35),
-    # Class-locked, verified live: 1 is warrior, 16 is priest.
-    _quest(1638, "A Warrior's Training", allowable_classes=1),
-    _quest(5624, "Garments of the Light", allowable_classes=16),
-    # Bork's dwarf starting-zone dead weight, a continent away.
-    _quest(218, "The Stolen Journal", zone=COLDRIDGE),
-    _quest(3361, "A Refugee's Quandary", zone=DUN_MOROGH),
-    # A real Elwynn quest the server will not let anyone share.
-    _quest(83, "Cloth and Leather Armor", flags=0),
-]}
+CATALOG = {
+    q.id: q
+    for q in [
+        _quest(62, "A Threat Within"),
+        _quest(40, "The Fargodeep Mine"),
+        # The chain. 35 needs 40, 37 needs 35 - so catching up is ORDERED.
+        _quest(35, "Further Concerns", prev_quest_id=40),
+        _quest(37, "Find the Lost Guards", prev_quest_id=35),
+        # Class-locked, verified live: 1 is warrior, 16 is priest.
+        _quest(1638, "A Warrior's Training", allowable_classes=1),
+        _quest(5624, "Garments of the Light", allowable_classes=16),
+        # Bork's dwarf starting-zone dead weight, a continent away.
+        _quest(218, "The Stolen Journal", zone=COLDRIDGE),
+        _quest(3361, "A Refugee's Quandary", zone=DUN_MOROGH),
+        # A real Elwynn quest the server will not let anyone share.
+        _quest(83, "Cloth and Leather Armor", flags=0),
+    ]
+}
 
 # Elwynn work the whole family has already turned in, and the lopsided
 # turn-in counts that are the reason this module exists: Og 17, Grug 13,
@@ -86,21 +95,22 @@ CATALOG = {q.id: q for q in [
 # they are never candidates - but the COUNTS are the live ones, and they are
 # what decides who the pass serves first.
 AHEAD = frozenset({62, 40})
-MANY = AHEAD | frozenset(range(100, 115))     # 17, Og
-MOST = AHEAD | frozenset(range(100, 111))     # 13, Grug and Bork
-FEW = AHEAD | frozenset({100})                # 3, Grog and Ugga
+MANY = AHEAD | frozenset(range(100, 115))  # 17, Og
+MOST = AHEAD | frozenset(range(100, 111))  # 13, Grug and Bork
+FEW = AHEAD | frozenset({100})  # 3, Grog and Ugga
 
 FAMILY = [
     # Grug carries the chain and his warrior-only quest.
-    questbook.Member(**{**GRUG.__dict__, "rewarded": MOST,
-                        "held": frozenset({35, 37, 1638, 83})}),
-    questbook.Member(**{**BORK.__dict__, "rewarded": MOST,
-                        "held": frozenset({218, 3361})}),
+    questbook.Member(
+        **{**GRUG.__dict__, "rewarded": MOST, "held": frozenset({35, 37, 1638, 83})}
+    ),
+    questbook.Member(
+        **{**BORK.__dict__, "rewarded": MOST, "held": frozenset({218, 3361})}
+    ),
     questbook.Member(**{**OG.__dict__, "rewarded": MANY, "held": frozenset({35})}),
     # The two who are behind, holding almost nothing.
     questbook.Member(**{**GROG.__dict__, "rewarded": FEW, "held": frozenset()}),
-    questbook.Member(**{**UGGA.__dict__, "rewarded": FEW,
-                        "held": frozenset({5624})}),
+    questbook.Member(**{**UGGA.__dict__, "rewarded": FEW, "held": frozenset({5624})}),
 ]
 BY_NAME = {m.name: m for m in FAMILY}
 
@@ -114,9 +124,12 @@ def _ids_for(name, plan):
 
 
 def _reasons_for(name, quest_id, plan):
-    return {r for ref in plan.refusals
-            if ref.taker == name and ref.quest_id == quest_id
-            for r in ref.reasons}
+    return {
+        r
+        for ref in plan.refusals
+        if ref.taker == name and ref.quest_id == quest_id
+        for r in ref.reasons
+    }
 
 
 class TheLaggardsGetHandedTheWork(unittest.TestCase):
@@ -203,8 +216,12 @@ class TheClassIdIsNotTheClassBit(unittest.TestCase):
         catalog = dict(CATALOG)
         catalog[9999] = _quest(9999, "Rogue Business", allowable_classes=8)
         family = [
-            questbook.Member(**{**m.__dict__,
-                                "held": m.held | ({9999} if m.name == "Bork" else set())})
+            questbook.Member(
+                **{
+                    **m.__dict__,
+                    "held": m.held | ({9999} if m.name == "Bork" else set()),
+                }
+            )
             for m in FAMILY
         ]
         plan = questshare.plan(family, catalog)
@@ -212,11 +229,13 @@ class TheClassIdIsNotTheClassBit(unittest.TestCase):
 
     def test_and_a_mage_quest_never_reaches_the_rogue(self):
         catalog = dict(CATALOG)
-        catalog[9998] = _quest(9998, "Mage Business",
-                               allowable_classes=questbook.CLASS_BIT[8])
+        catalog[9998] = _quest(
+            9998, "Mage Business", allowable_classes=questbook.CLASS_BIT[8]
+        )
         family = [
-            questbook.Member(**{**m.__dict__,
-                                "held": m.held | ({9998} if m.name == "Og" else set())})
+            questbook.Member(
+                **{**m.__dict__, "held": m.held | ({9998} if m.name == "Og" else set())}
+            )
             for m in FAMILY
         ]
         plan = questshare.plan(family, catalog)
@@ -244,7 +263,8 @@ class PrerequisiteOrderIsRespected(unittest.TestCase):
         cannot show."""
         family = [
             questbook.Member(**{**m.__dict__, "rewarded": m.rewarded | {35}})
-            if m.name == "Grog" else m
+            if m.name == "Grog"
+            else m
             for m in FAMILY
         ]
         plan = questshare.plan(family, CATALOG)
@@ -264,8 +284,7 @@ class PrerequisiteOrderIsRespected(unittest.TestCase):
         catalog = dict(CATALOG)
         catalog[40] = _quest(40, "The Fargodeep Mine", min_level=60)
         family = [
-            questbook.Member(**{**m.__dict__,
-                                "rewarded": m.rewarded - {40}})
+            questbook.Member(**{**m.__dict__, "rewarded": m.rewarded - {40}})
             for m in FAMILY
         ]
         plan = questshare.plan(family, catalog)
@@ -322,14 +341,16 @@ class TheServerHasToAgreeItIsSharable(unittest.TestCase):
 class NothingAlreadyOwnedIsProposed(unittest.TestCase):
     def test_a_quest_already_in_the_log_is_not_re_shared(self):
         plan = questshare.plan(FAMILY, CATALOG)
-        self.assertEqual([g for g in plan.grants
-                          if g.taker == "Grug" and g.quest_id == 35], [])
+        self.assertEqual(
+            [g for g in plan.grants if g.taker == "Grug" and g.quest_id == 35], []
+        )
 
     def test_a_quest_already_turned_in_is_not_re_shared(self):
         catalog = dict(CATALOG)
         family = [
-            questbook.Member(**{**m.__dict__,
-                                "held": m.held | ({62} if m.name == "Og" else set())})
+            questbook.Member(
+                **{**m.__dict__, "held": m.held | ({62} if m.name == "Og" else set())}
+            )
             for m in FAMILY
         ]
         plan = questshare.plan(family, catalog)
@@ -344,20 +365,22 @@ class TheQuestLogHasTwentyFiveSlots(unittest.TestCase):
     def test_a_full_log_gets_no_grants_and_one_honest_refusal(self):
         full = frozenset(range(9000, 9025))
         family = [
-            questbook.Member(**{**m.__dict__, "held": full})
-            if m.name == "Grog" else m
+            questbook.Member(**{**m.__dict__, "held": full}) if m.name == "Grog" else m
             for m in FAMILY
         ]
         plan = questshare.plan(family, CATALOG)
         self.assertEqual(_ids_for("Grog", plan), [])
-        self.assertTrue(any(r.taker == "Grog" and questshare.LOG_FULL in r.reasons
-                            for r in plan.refusals))
+        self.assertTrue(
+            any(
+                r.taker == "Grog" and questshare.LOG_FULL in r.reasons
+                for r in plan.refusals
+            )
+        )
 
     def test_grants_never_exceed_the_room_left(self):
         held = frozenset(range(9000, 9023))  # 23 of 25 used
         family = [
-            questbook.Member(**{**m.__dict__, "held": held})
-            if m.name == "Grog" else m
+            questbook.Member(**{**m.__dict__, "held": held}) if m.name == "Grog" else m
             for m in FAMILY
         ]
         plan = questshare.plan(family, CATALOG)
@@ -419,16 +442,41 @@ class TheLiveShapeConverges(unittest.TestCase):
     """Og 17 / Grug 13 / Bork 13 / Ugga 3 / Grog 3, the state on the server."""
 
     LIVE = [
-        questbook.Member(**{**OG.__dict__, "rewarded": frozenset(range(100, 117)),
-                            "held": frozenset({35, 37})}),
-        questbook.Member(**{**GRUG.__dict__, "rewarded": frozenset(range(100, 113)),
-                            "held": frozenset({35, 1638})}),
-        questbook.Member(**{**BORK.__dict__, "rewarded": frozenset(range(100, 113)),
-                            "held": frozenset({218})}),
-        questbook.Member(**{**UGGA.__dict__, "rewarded": frozenset(range(100, 103)),
-                            "held": frozenset({5624})}),
-        questbook.Member(**{**GROG.__dict__, "rewarded": frozenset(range(100, 103)),
-                            "held": frozenset()}),
+        questbook.Member(
+            **{
+                **OG.__dict__,
+                "rewarded": frozenset(range(100, 117)),
+                "held": frozenset({35, 37}),
+            }
+        ),
+        questbook.Member(
+            **{
+                **GRUG.__dict__,
+                "rewarded": frozenset(range(100, 113)),
+                "held": frozenset({35, 1638}),
+            }
+        ),
+        questbook.Member(
+            **{
+                **BORK.__dict__,
+                "rewarded": frozenset(range(100, 113)),
+                "held": frozenset({218}),
+            }
+        ),
+        questbook.Member(
+            **{
+                **UGGA.__dict__,
+                "rewarded": frozenset(range(100, 103)),
+                "held": frozenset({5624}),
+            }
+        ),
+        questbook.Member(
+            **{
+                **GROG.__dict__,
+                "rewarded": frozenset(range(100, 103)),
+                "held": frozenset(),
+            }
+        ),
     ]
     CAT = dict(CATALOG)
     CAT.update({q.id: q for q in [_quest(i) for i in range(100, 117)]})
@@ -469,7 +517,10 @@ class BackingOffIsForPermanentRefusalsOnly(unittest.TestCase):
     day."""
 
     PERMANENT = json.dumps(
-        {"outcome": "refused", "reason": "holder cannot share it (not held, or not flagged sharable)"}
+        {
+            "outcome": "refused",
+            "reason": "holder cannot share it (not held, or not flagged sharable)",
+        }
     )
     TRANSIENT = json.dumps({"outcome": "refused", "reason": "taker offline"})
     KEY = ("Bork", "Aiyla", "share 1234")
@@ -478,28 +529,38 @@ class BackingOffIsForPermanentRefusalsOnly(unittest.TestCase):
 
     def rows(self, result, ages_h, key=None, status="error"):
         holder, taker, command = key or self.KEY
-        return [(holder, taker, command, status, result, age * self.H) for age in ages_h]
+        return [
+            (holder, taker, command, status, result, age * self.H) for age in ages_h
+        ]
 
     def delivered(self, ages_h, key=None):
-        return self.rows(json.dumps({"outcome": "shared"}), ages_h, key, status="delivered")
+        return self.rows(
+            json.dumps({"outcome": "shared"}), ages_h, key, status="delivered"
+        )
 
     def held(self, rows):
         return questshare.backed_off(rows, self.BASE, self.CAP)
 
     def test_one_permanent_refusal_holds_for_two_hours(self):
-        self.assertEqual(self.held(self.rows(self.PERMANENT, [1])), frozenset({self.KEY}))
+        self.assertEqual(
+            self.held(self.rows(self.PERMANENT, [1])), frozenset({self.KEY})
+        )
         self.assertEqual(self.held(self.rows(self.PERMANENT, [2])), frozenset())
 
     def test_the_wait_doubles_with_each_refusal(self):
         # five refusals: 2**5 hours = 32h of quiet, measured from the youngest
         ages = [31, 40, 50, 60, 70]
-        self.assertEqual(self.held(self.rows(self.PERMANENT, ages)), frozenset({self.KEY}))
+        self.assertEqual(
+            self.held(self.rows(self.PERMANENT, ages)), frozenset({self.KEY})
+        )
         ages = [32, 40, 50, 60, 70]
         self.assertEqual(self.held(self.rows(self.PERMANENT, ages)), frozenset())
 
     def test_the_wait_is_capped_at_a_week(self):
         ages = [167] + [200 + 10 * i for i in range(30)]
-        self.assertEqual(self.held(self.rows(self.PERMANENT, ages)), frozenset({self.KEY}))
+        self.assertEqual(
+            self.held(self.rows(self.PERMANENT, ages)), frozenset({self.KEY})
+        )
         ages = [168] + [200 + 10 * i for i in range(30)]
         self.assertEqual(self.held(self.rows(self.PERMANENT, ages)), frozenset())
 
@@ -543,7 +604,9 @@ class BackingOffIsForPermanentRefusalsOnly(unittest.TestCase):
         rows = self.rows(self.PERMANENT, [1, 40, 50]) + self.delivered([20], other)
         self.assertEqual(self.held(rows), frozenset({self.KEY}))
         rows = self.rows(self.PERMANENT, [1, 40, 50]) + self.delivered([20])
-        self.assertEqual(self.held(rows), frozenset({self.KEY}))  # 1h < 2h: streak of one
+        self.assertEqual(
+            self.held(rows), frozenset({self.KEY})
+        )  # 1h < 2h: streak of one
         rows = self.rows(self.PERMANENT, [3, 40, 50]) + self.delivered([20])
         self.assertEqual(self.held(rows), frozenset())
 
@@ -566,11 +629,15 @@ class BackingOffIsForPermanentRefusalsOnly(unittest.TestCase):
         self.assertEqual(self.held(self.rows(None, range(9))), frozenset())
 
     def test_malformed_result_counts_for_nothing(self):
-        rows = self.rows("not json", [0]) + self.rows("[1, 2]", [0]) + self.rows("", [0])
+        rows = (
+            self.rows("not json", [0]) + self.rows("[1, 2]", [0]) + self.rows("", [0])
+        )
         self.assertEqual(self.held(rows), frozenset())
 
     def test_a_result_with_no_reason_counts_for_nothing(self):
-        self.assertEqual(self.held(self.rows(json.dumps({"outcome": "refused"}), [0])), frozenset())
+        self.assertEqual(
+            self.held(self.rows(json.dumps({"outcome": "refused"}), [0])), frozenset()
+        )
 
     def test_triples_are_held_separately(self):
         other = ("Bork", "Ilhan", "share 1234")
@@ -581,7 +648,9 @@ class BackingOffIsForPermanentRefusalsOnly(unittest.TestCase):
         self.assertEqual(self.held([]), frozenset())
 
     def refused(self, reason, ages_h, key=None):
-        return self.rows(json.dumps({"outcome": "refused", "reason": reason}), ages_h, key)
+        return self.rows(
+            json.dumps({"outcome": "refused", "reason": reason}), ages_h, key
+        )
 
     def test_a_later_gate_refusal_ends_an_earlier_permanent_streak(self):
         """Codex, round 5: five 'holder cannot share it' refusals, then the
@@ -590,25 +659,44 @@ class BackingOffIsForPermanentRefusalsOnly(unittest.TestCase):
         CanShareQuest passed. The holder problem is over; when the party
         regroups the share must be offered within the hour, not held for
         the 32h the dead streak would have charged."""
-        streak = self.refused("holder cannot share it (not held, or not flagged sharable)", [4, 5, 6, 7, 8])
+        streak = self.refused(
+            "holder cannot share it (not held, or not flagged sharable)",
+            [4, 5, 6, 7, 8],
+        )
         self.assertEqual(self.held(streak), frozenset({self.KEY}))
-        for later in ("not in the same party", "not on the same map", "taker already holds it",
-                      "taker cannot take it in its current state", "taker quest log is full",
-                      "taker is not eligible (level, race, class, prerequisite or exclusive group)",
-                      "no bag space for the quest starting item",
-                      "the quest did not land in the taker log"):
-            self.assertEqual(self.held(streak + self.refused(later, [1])), frozenset(), later)
+        for later in (
+            "not in the same party",
+            "not on the same map",
+            "taker already holds it",
+            "taker cannot take it in its current state",
+            "taker quest log is full",
+            "taker is not eligible (level, race, class, prerequisite or exclusive group)",
+            "no bag space for the quest starting item",
+            "the quest did not land in the taker log",
+        ):
+            self.assertEqual(
+                self.held(streak + self.refused(later, [1])), frozenset(), later
+            )
 
     def test_an_earlier_gate_refusal_ends_nothing(self):
         """'taker offline' is tested BEFORE the holder is, so a taker who
         logged off says nothing about whether the holder can share now."""
-        streak = self.refused("holder cannot share it (not held, or not flagged sharable)", [4, 5, 6, 7, 8])
+        streak = self.refused(
+            "holder cannot share it (not held, or not flagged sharable)",
+            [4, 5, 6, 7, 8],
+        )
         for earlier in ("taker offline", "no taker"):
-            self.assertEqual(self.held(streak + self.refused(earlier, [1])), frozenset({self.KEY}), earlier)
+            self.assertEqual(
+                self.held(streak + self.refused(earlier, [1])),
+                frozenset({self.KEY}),
+                earlier,
+            )
 
     def test_the_same_gate_refused_again_extends_the_streak(self):
         holder = "holder cannot share it (not held, or not flagged sharable)"
-        self.assertEqual(self.held(self.refused(holder, [3, 5])), frozenset({self.KEY}))  # 4h
+        self.assertEqual(
+            self.held(self.refused(holder, [3, 5])), frozenset({self.KEY})
+        )  # 4h
         self.assertEqual(self.held(self.refused(holder, [4, 5])), frozenset())
 
     def test_a_later_permanent_gate_starts_its_own_streak(self):
@@ -616,9 +704,13 @@ class BackingOffIsForPermanentRefusalsOnly(unittest.TestCase):
         the holder streak and begins a streak of one, so the wait is 2h from
         it, not 2**6 h from the six refusals together."""
         holder = "holder cannot share it (not held, or not flagged sharable)"
-        rows = self.refused(holder, [3, 4, 5, 6, 7]) + self.refused("taker already turned it in", [1])
+        rows = self.refused(holder, [3, 4, 5, 6, 7]) + self.refused(
+            "taker already turned it in", [1]
+        )
         self.assertEqual(self.held(rows), frozenset({self.KEY}))
-        rows = self.refused(holder, [3, 4, 5, 6, 7]) + self.refused("taker already turned it in", [2])
+        rows = self.refused(holder, [3, 4, 5, 6, 7]) + self.refused(
+            "taker already turned it in", [2]
+        )
         self.assertEqual(self.held(rows), frozenset())
 
     def test_recovery_then_a_transient_refusal_then_a_prompt_retry(self):
@@ -637,7 +729,14 @@ class BackingOffIsForPermanentRefusalsOnly(unittest.TestCase):
                 answer = split  # the holder has the quest again; the party is apart
             if self.KEY not in self.held(rows):
                 offers.append((hour, answer))
-                rows.append((*self.KEY, "error", json.dumps({"outcome": "refused", "reason": answer}), 0))
+                rows.append(
+                    (
+                        *self.KEY,
+                        "error",
+                        json.dumps({"outcome": "refused", "reason": answer}),
+                        0,
+                    )
+                )
             hour += 1
         after = [h for h, a in offers if a == split]
         self.assertGreaterEqual(len(after), 2)
@@ -645,9 +744,17 @@ class BackingOffIsForPermanentRefusalsOnly(unittest.TestCase):
         self.assertTrue(all(b - a == 1 for a, b in zip(after, after[1:], strict=False)))
 
     def test_an_unknown_reason_proves_nothing_and_counts_for_nothing(self):
-        streak = self.refused("holder cannot share it (not held, or not flagged sharable)", [4, 5, 6, 7, 8])
-        self.assertEqual(self.held(streak + self.refused("a gate added next year", [1])), frozenset({self.KEY}))
-        self.assertEqual(self.held(self.refused("a gate added next year", [1])), frozenset())
+        streak = self.refused(
+            "holder cannot share it (not held, or not flagged sharable)",
+            [4, 5, 6, 7, 8],
+        )
+        self.assertEqual(
+            self.held(streak + self.refused("a gate added next year", [1])),
+            frozenset({self.KEY}),
+        )
+        self.assertEqual(
+            self.held(self.refused("a gate added next year", [1])), frozenset()
+        )
 
     def test_the_gate_order_is_the_worldservers(self):
         """SHARE_GATES is only right while it matches the order DoShare tests
@@ -661,10 +768,14 @@ class BackingOffIsForPermanentRefusalsOnly(unittest.TestCase):
             pathlib.Path(__file__).resolve().parents[1]
             / "mod-overseer/src/mod_overseer.cpp"
         ).read_text(encoding="utf-8")
-        body = src[src.index("static char const* DoShare(") : src.index("void WriteSnapshot()")]
+        body = src[
+            src.index("static char const* DoShare(") : src.index("void WriteSnapshot()")
+        ]
         found = [
             "".join(re.findall(r'"([^"]*)"', literals))
-            for literals in re.findall(r'describe\("(?:refused|error)",\s*((?:"[^"]*"\s*)+)', body)
+            for literals in re.findall(
+                r'describe\("(?:refused|error)",\s*((?:"[^"]*"\s*)+)', body
+            )
         ]
         self.assertEqual(found, list(questshare.SHARE_GATES))
         self.assertTrue(questshare.PERMANENT_REFUSALS <= set(questshare.SHARE_GATES))
@@ -686,16 +797,29 @@ class BackingOffIsForPermanentRefusalsOnly(unittest.TestCase):
 
         rng = random.Random(2892)
         depth = questshare.history_depth(self.BASE, self.CAP)
-        outcomes = [("error", json.dumps({"outcome": "refused", "reason": g})) for g in questshare.SHARE_GATES]
-        outcomes += [("delivered", json.dumps({"outcome": "shared"})), ("error", None), ("error", "{not json")]
-        keys = [self.KEY, ("Bork", "Ilhan", "share 1234"), ("Aiyla", "Bork", "share 77")]
+        outcomes = [
+            ("error", json.dumps({"outcome": "refused", "reason": g}))
+            for g in questshare.SHARE_GATES
+        ]
+        outcomes += [
+            ("delivered", json.dumps({"outcome": "shared"})),
+            ("error", None),
+            ("error", "{not json"),
+        ]
+        keys = [
+            self.KEY,
+            ("Bork", "Ilhan", "share 1234"),
+            ("Aiyla", "Bork", "share 77"),
+        ]
         disagreements = 0
         for _ in range(400):
             rows = []
             for key in keys:
                 for _ in range(rng.randrange(0, 60)):
                     status, result = rng.choice(outcomes)
-                    rows.append((*key, status, result, rng.randrange(0, 90 * 24 * self.H)))
+                    rows.append(
+                        (*key, status, result, rng.randrange(0, 90 * 24 * self.H))
+                    )
             rng.shuffle(rows)
             kept, seen = [], {}
             for row in sorted(rows, key=lambda r: r[5]):
@@ -744,26 +868,33 @@ class AnAbandonedQuestIsNotHeld(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         import pathlib
-        cls.src = (pathlib.Path(__file__).resolve().parent.parent
-                   / "bridge.py").read_text(encoding="utf-8")
+
+        cls.src = (
+            pathlib.Path(__file__).resolve().parent.parent / "bridge.py"
+        ).read_text(encoding="utf-8")
 
     def _quest_sql(self):
         start = self.src.index("_QUEST_SQL = ")
-        return self.src[start:self.src.index('"""', self.src.index('"""', start) + 3)]
+        return self.src[start : self.src.index('"""', self.src.index('"""', start) + 3)]
 
     def test_the_read_only_counts_quests_actually_held(self):
-        self.assertIn("q.status IN (1, 3)", self._quest_sql(),
-                      "an abandoned row must not read as a held quest")
+        self.assertIn(
+            "q.status IN (1, 3)",
+            self._quest_sql(),
+            "an abandoned row must not read as a held quest",
+        )
 
     def test_the_single_quest_read_carries_the_same_filter(self):
         # _QUEST_ONE_SQL is DERIVED from _QUEST_SQL by swapping the WHERE
         # clause, so the filter must live where the swap cannot drop it.
-        derive = self.src[self.src.index("_QUEST_ONE_SQL = "):]
-        derive = derive[:derive.index(chr(10) + chr(10))]
+        derive = self.src[self.src.index("_QUEST_ONE_SQL = ") :]
+        derive = derive[: derive.index(chr(10) + chr(10))]
         self.assertIn("c.name = %s", derive)
-        self.assertNotIn("q.status", derive,
-                         "the status filter must survive the WHERE swap, not "
-                         "be re-stated in it")
+        self.assertNotIn(
+            "q.status",
+            derive,
+            "the status filter must survive the WHERE swap, not be re-stated in it",
+        )
 
     def test_the_derivation_tripwire_still_holds(self):
         # The import-time guard exists because a silent drift here fails once
@@ -776,7 +907,7 @@ class AnAbandonedQuestIsNotHeld(unittest.TestCase):
         # parenthesis inside it (an issue number, the status tuple) truncated
         # the slice before the SQL and made this read pass or fail on prose.
         start = self.src.index("_LEDGER_HELD_SQL = (")
-        return self.src[start:self.src.index(chr(10) + ")", start)]
+        return self.src[start : self.src.index(chr(10) + ")", start)]
 
     def test_the_ledger_read_carries_the_same_filter(self):
         # The ledger read is what questshare aims at, so it must agree with
@@ -784,12 +915,17 @@ class AnAbandonedQuestIsNotHeld(unittest.TestCase):
         # read as held and the same impossible share was retried 167 times
         # (#2892) -- the worldserver's refusal is not an error anywhere it
         # would be seen.
-        self.assertIn("q.status IN (1, 3)", self._ledger_held_sql(),
-                      "an abandoned row must not read as a held quest")
+        self.assertIn(
+            "q.status IN (1, 3)",
+            self._ledger_held_sql(),
+            "an abandoned row must not read as a held quest",
+        )
 
     def test_the_rewarded_read_is_deliberately_unfiltered(self):
         # character_queststatus_rewarded has no status column: a row there IS
         # the completion record. Pinning that so a future sweep does not
         # "consistently" add a filter to a table that cannot support one.
         start = self.src.index("_LEDGER_REWARDED_SQL = (")
-        self.assertNotIn("q.status", self.src[start:self.src.index(chr(10) + ")", start)])
+        self.assertNotIn(
+            "q.status", self.src[start : self.src.index(chr(10) + ")", start)]
+        )

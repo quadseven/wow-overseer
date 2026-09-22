@@ -22,6 +22,7 @@ for a day; they went, walked past everything, and came back with nothing.
 
 Ticket: infra#3769.
 """
+
 import pathlib
 import re
 import unittest
@@ -57,8 +58,8 @@ class TheStrategyPairThatPicksThingsUp(unittest.TestCase):
             for aimed in (True, False):
                 for travelling in (True, False):
                     got = goals.life_strategies(
-                        leads=leads, aimed=aimed, travelling=travelling,
-                        gathering=True)
+                        leads=leads, aimed=aimed, travelling=travelling, gathering=True
+                    )
                     for command in goals.GATHER_STRATEGIES:
                         self.assertIn(command, got)
 
@@ -71,13 +72,13 @@ class TheStrategyPairThatPicksThingsUp(unittest.TestCase):
             for aimed in (True, False):
                 for travelling in (True, False):
                     base = goals.life_strategies(
-                        leads=leads, aimed=aimed, travelling=travelling)
+                        leads=leads, aimed=aimed, travelling=travelling
+                    )
                     withit = goals.life_strategies(
-                        leads=leads, aimed=aimed, travelling=travelling,
-                        gathering=True)
-                    self.assertEqual(withit[:len(base)], base)
-                    self.assertEqual(
-                        withit[len(base):], list(goals.GATHER_STRATEGIES))
+                        leads=leads, aimed=aimed, travelling=travelling, gathering=True
+                    )
+                    self.assertEqual(withit[: len(base)], base)
+                    self.assertEqual(withit[len(base) :], list(goals.GATHER_STRATEGIES))
 
     def test_the_default_is_the_safe_one(self):
         """infra#2812's rule: an un-updated caller cannot hand out a strategy
@@ -85,7 +86,8 @@ class TheStrategyPairThatPicksThingsUp(unittest.TestCase):
         for leads in (True, False):
             self.assertEqual(
                 goals.life_strategies(leads=leads),
-                goals.life_strategies(leads=leads, gathering=False))
+                goals.life_strategies(leads=leads, gathering=False),
+            )
 
     def test_the_node_chaser_is_added_after_the_wander_is_dropped(self):
         """The unaimed follower branch opens with `nc -new rpg`. A gather grant
@@ -93,8 +95,7 @@ class TheStrategyPairThatPicksThingsUp(unittest.TestCase):
         node chaser newly added, which is the one combination that genuinely
         does scatter a follower."""
         commands = goals.life_strategies(leads=False, gathering=True)
-        self.assertLess(commands.index("nc -new rpg"),
-                        commands.index("nc +gather"))
+        self.assertLess(commands.index("nc -new rpg"), commands.index("nc +gather"))
 
     def test_nothing_is_added_twice(self):
         """Adding a strategy already present is a no-op at the game's end, but a
@@ -106,8 +107,7 @@ class TheStrategyPairThatPicksThingsUp(unittest.TestCase):
     def test_every_command_still_reaches_an_engine_that_can_act(self):
         for leads in (True, False):
             for gathering in (True, False):
-                for cmd in goals.life_strategies(leads=leads,
-                                                 gathering=gathering):
+                for cmd in goals.life_strategies(leads=leads, gathering=gathering):
                     verb, _, rest = cmd.partition(" ")
                     self.assertIn(verb, ("nc", "co"), cmd)
                     self.assertTrue(rest.startswith(("+", "-")), cmd)

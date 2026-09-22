@@ -55,6 +55,7 @@ gold 42 -> 155, mithril 379 -> 175, earthroot 30 -> herbalism 15.
 Note truesilver (380) reads **205**, not the 230 that is widely repeated for
 it - which is exactly why this is measured rather than typed.
 """
+
 from __future__ import annotations
 
 import pathlib
@@ -93,20 +94,22 @@ def load(path: pathlib.Path) -> dict:
     if magic != b"WDBC":
         raise SystemExit("%s is not a DBC (magic %r)" % (path, magic))
     if fields * 4 != record_size:
-        raise SystemExit("field count %d disagrees with record size %d"
-                         % (fields, record_size))
+        raise SystemExit(
+            "field count %d disagrees with record size %d" % (fields, record_size)
+        )
     if fields != 33:
-        raise SystemExit("expected the 33-field 3.3.5a Lock.dbc, got %d fields"
-                         % fields)
+        raise SystemExit(
+            "expected the 33-field 3.3.5a Lock.dbc, got %d fields" % fields
+        )
 
     out: dict = {}
     for i in range(count):
         off = 20 + i * record_size
-        row = struct.unpack("<%dI" % fields, blob[off:off + record_size])
+        row = struct.unpack("<%dI" % fields, blob[off : off + record_size])
         lock_id = row[0]
-        types = row[1:1 + N_SLOTS]
-        index = row[1 + N_SLOTS:1 + 2 * N_SLOTS]
-        skills = row[1 + 2 * N_SLOTS:1 + 3 * N_SLOTS]
+        types = row[1 : 1 + N_SLOTS]
+        index = row[1 + N_SLOTS : 1 + 2 * N_SLOTS]
+        skills = row[1 + 2 * N_SLOTS : 1 + 3 * N_SLOTS]
         for slot in range(N_SLOTS):
             if types[slot] != TYPE_LOCKTYPE:
                 continue
@@ -124,12 +127,19 @@ def check_anchors(table: dict) -> None:
             raise SystemExit(
                 "anchor failed: lock %d %s should read %d, read %r. The parse "
                 "is wrong; do not use this output."
-                % (lock_id, skill_name, expected, got))
+                % (lock_id, skill_name, expected, got)
+            )
 
 
 def emit(table: dict, skill_name: str) -> str:
-    pairs = sorted(((lock, bands[skill_name]) for lock, bands in table.items()
-                    if skill_name in bands), key=lambda kv: (kv[1], kv[0]))
+    pairs = sorted(
+        (
+            (lock, bands[skill_name])
+            for lock, bands in table.items()
+            if skill_name in bands
+        ),
+        key=lambda kv: (kv[1], kv[0]),
+    )
     return "\n".join("    %d: %d," % pair for pair in pairs)
 
 

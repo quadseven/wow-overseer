@@ -12,6 +12,7 @@ is pinned the same way and for the same reason.
 Nothing here has been run against a live worldserver, and nothing in this file
 claims it has.
 """
+
 import pathlib
 import sys
 import unittest
@@ -38,10 +39,14 @@ def member(name, **kw):
 
 class TheVocabularyAgrees(unittest.TestCase):
     def test_outstanding_training_promotes_unanimous_questers(self):
-        self.assertTrue(trainjob.should_activate({"Grug": "quest", "Ugga": "quest"}, True))
+        self.assertTrue(
+            trainjob.should_activate({"Grug": "quest", "Ugga": "quest"}, True)
+        )
 
     def test_training_never_preempts_an_explicit_dungeon(self):
-        self.assertFalse(trainjob.should_activate({"Grug": "dungeon", "Ugga": "dungeon"}, True))
+        self.assertFalse(
+            trainjob.should_activate({"Grug": "dungeon", "Ugga": "dungeon"}, True)
+        )
 
     def test_no_assignments_does_not_change_mode(self):
         self.assertFalse(trainjob.should_activate({"Grug": "quest"}, False))
@@ -78,8 +83,12 @@ class ParseWantedTest(unittest.TestCase):
 
 class OutstandingRefusesEveryErrandTheWorldWouldRefuse(unittest.TestCase):
     def test_a_wanted_unheld_primary_is_the_errand(self):
-        m = member("Grog", wanted=(JEWELCRAFTING, INSCRIPTION),
-                   learn_skill=JEWELCRAFTING, holds=(INSCRIPTION,))
+        m = member(
+            "Grog",
+            wanted=(JEWELCRAFTING, INSCRIPTION),
+            learn_skill=JEWELCRAFTING,
+            holds=(INSCRIPTION,),
+        )
         self.assertEqual(JEWELCRAFTING, trainjob.outstanding(m))
 
     def test_no_learn_column_is_no_errand(self):
@@ -103,16 +112,13 @@ class OutstandingRefusesEveryErrandTheWorldWouldRefuse(unittest.TestCase):
         """The trainer resolve narrows on TrainerStartedSkills - what a spawn
         can START somebody in - so a held skill resolves to a trainer that
         cannot help until quadseven/mod-overseer#196 lands."""
-        m = member("Og", wanted=(TAILORING,), learn_skill=TAILORING,
-                   holds=(TAILORING,))
+        m = member("Og", wanted=(TAILORING,), learn_skill=TAILORING, holds=(TAILORING,))
         self.assertEqual(0, trainjob.outstanding(m))
 
 
 class FamilyModeTest(unittest.TestCase):
     def test_one_shared_mode_is_the_answer(self):
-        self.assertEqual(
-            "train", trainjob.family_mode([member("Og"), member("Grog")])
-        )
+        self.assertEqual("train", trainjob.family_mode([member("Og"), member("Grog")]))
 
     def test_a_split_family_has_no_mode(self):
         self.assertEqual(
@@ -124,8 +130,12 @@ class FamilyModeTest(unittest.TestCase):
 class PlanTest(unittest.TestCase):
     def setUp(self):
         self.family = [
-            member("Grog", wanted=(JEWELCRAFTING, INSCRIPTION),
-                   learn_skill=JEWELCRAFTING, holds=(INSCRIPTION,)),
+            member(
+                "Grog",
+                wanted=(JEWELCRAFTING, INSCRIPTION),
+                learn_skill=JEWELCRAFTING,
+                holds=(INSCRIPTION,),
+            ),
             member("Og", wanted=(TAILORING,), holds=(TAILORING,)),
         ]
 
@@ -135,8 +145,12 @@ class PlanTest(unittest.TestCase):
         self.assertEqual(JEWELCRAFTING, p.skill)
 
     def test_a_family_on_another_mode_is_left_alone(self):
-        others = [trainjob.Member(m.name, "dungeon:deadmines", m.wanted,
-                                  m.learn_skill, m.holds) for m in self.family]
+        others = [
+            trainjob.Member(
+                m.name, "dungeon:deadmines", m.wanted, m.learn_skill, m.holds
+            )
+            for m in self.family
+        ]
         p = trainjob.plan(others)
         self.assertEqual("", p.traveller)
         self.assertIn("dungeon:deadmines", p.why_not)
@@ -167,38 +181,53 @@ class ReadinessIsAskedBeforeTheOrderIsWritten(unittest.TestCase):
     def test_an_outstanding_errand_is_ready(self):
         self.assertEqual(
             "",
-            trainjob.readiness([
-                member("Grog", job="quest", wanted=(JEWELCRAFTING,),
-                       learn_skill=JEWELCRAFTING)
-            ]),
+            trainjob.readiness(
+                [
+                    member(
+                        "Grog",
+                        job="quest",
+                        wanted=(JEWELCRAFTING,),
+                        learn_skill=JEWELCRAFTING,
+                    )
+                ]
+            ),
         )
 
     def test_readiness_does_not_require_the_family_to_already_be_training(self):
         """The order has not been written yet when this is asked, so a check
         that needed job=train would refuse every first order."""
-        ready = member("Grog", job="dungeon:deadmines", wanted=(JEWELCRAFTING,),
-                       learn_skill=JEWELCRAFTING)
+        ready = member(
+            "Grog",
+            job="dungeon:deadmines",
+            wanted=(JEWELCRAFTING,),
+            learn_skill=JEWELCRAFTING,
+        )
         self.assertEqual("", trainjob.readiness([ready]))
 
     def test_nothing_outstanding_is_refused_with_a_reason(self):
-        why = trainjob.readiness([member("Og", wanted=(TAILORING,),
-                                         holds=(TAILORING,))])
+        why = trainjob.readiness(
+            [member("Og", wanted=(TAILORING,), holds=(TAILORING,))]
+        )
         self.assertIn("stand the quest drive down", why)
 
     def test_the_refusal_names_the_secondary_professions(self):
         """The operator asked for First Aid, Cooking and Fishing by name. An
         empty answer to a named request is the silence this module exists to
         stop."""
-        why = trainjob.readiness([member("Og", wanted=(TAILORING,),
-                                         holds=(TAILORING,))])
+        why = trainjob.readiness(
+            [member("Og", wanted=(TAILORING,), holds=(TAILORING,))]
+        )
         for word in ("First Aid", "Cooking", "Fishing"):
             self.assertIn(word, why)
 
     def test_a_capped_character_is_named_in_the_refusal(self):
-        why = trainjob.readiness([
-            member("Og", wanted=(TAILORING,), learn_skill=TAILORING,
-                   holds=(TAILORING,))
-        ])
+        why = trainjob.readiness(
+            [
+                member(
+                    "Og", wanted=(TAILORING,), learn_skill=TAILORING, holds=(TAILORING,)
+                )
+            ]
+        )
         self.assertIn("Og", why)
         self.assertIn("196", why)
 
@@ -208,9 +237,9 @@ class ReadinessIsAskedBeforeTheOrderIsWritten(unittest.TestCase):
 
 class StatementsAreTheAimAndItsClearingHalf(unittest.TestCase):
     def setUp(self):
-        self.plan = trainjob.plan([
-            member("Grog", wanted=(JEWELCRAFTING,), learn_skill=JEWELCRAFTING)
-        ])
+        self.plan = trainjob.plan(
+            [member("Grog", wanted=(JEWELCRAFTING,), learn_skill=JEWELCRAFTING)]
+        )
 
     def test_nobody_travelling_writes_nothing(self):
         self.assertEqual([], trainjob.statements(trainjob.TrainPlan()))
@@ -232,9 +261,9 @@ class StatementsAreTheAimAndItsClearingHalf(unittest.TestCase):
 
 class ReportSaysWhatWasDoneAndNeverOverclaims(unittest.TestCase):
     def test_it_names_the_traveller_and_the_role(self):
-        p = trainjob.plan([
-            member("Grog", wanted=(JEWELCRAFTING,), learn_skill=JEWELCRAFTING)
-        ])
+        p = trainjob.plan(
+            [member("Grog", wanted=(JEWELCRAFTING,), learn_skill=JEWELCRAFTING)]
+        )
         line = trainjob.report(p)
         self.assertIn("Grog", line)
         self.assertIn(trainjob.TRAINER_ROLE, line)
@@ -242,9 +271,11 @@ class ReportSaysWhatWasDoneAndNeverOverclaims(unittest.TestCase):
     def test_it_never_claims_anybody_learned_anything(self):
         """Aiming is not arriving and arriving is not learning. Only
         character_skills settles a trade, and this module cannot read it."""
-        line = trainjob.report(trainjob.plan([
-            member("Grog", wanted=(JEWELCRAFTING,), learn_skill=JEWELCRAFTING)
-        ]))
+        line = trainjob.report(
+            trainjob.plan(
+                [member("Grog", wanted=(JEWELCRAFTING,), learn_skill=JEWELCRAFTING)]
+            )
+        )
         self.assertIn("Arriving is not learning", line)
         for lie in ("has learned", "trained ", "now knows"):
             self.assertNotIn(lie, line)
@@ -293,14 +324,14 @@ class TheBridgeReallyDrivesIt(unittest.TestCase):
         cycle that still has the declared professions, the spec tabs and the
         randomize guards to do. An exception escaping here would take all of
         them with it."""
-        drive = self.source[self.source.index("async def _drive_train(self)"):]
-        drive = drive[:drive.index("async def _conjure")]
+        drive = self.source[self.source.index("async def _drive_train(self)") :]
+        drive = drive[: drive.index("async def _conjure")]
         self.assertIn("except Exception:", drive)
         self.assertIn("log.exception", drive)
 
     def test_the_reads_are_guarded_for_a_realm_without_the_columns(self):
-        reader = self.source[self.source.index("def _train_members()"):]
-        reader = reader[:reader.index("def _train_traveller()")]
+        reader = self.source[self.source.index("def _train_members()") :]
+        reader = reader[: reader.index("def _train_traveller()")]
         self.assertIn("(1054, 1146)", reader)
 
 
@@ -312,7 +343,7 @@ class TheWritePathRefusesAnUnimplementedMode(unittest.TestCase):
     def setUpClass(cls):
         cls.source = BRIDGE.read_text(encoding="utf-8", errors="replace")
         start = cls.source.index("async def _set_job(self")
-        cls.body = cls.source[start:cls.source.index("async def _drive_train")]
+        cls.body = cls.source[start : cls.source.index("async def _drive_train")]
 
     def test_set_job_asks_jobs_why_not_before_writing_anything(self):
         self.assertIn("jobs.why_not(d.mode)", self.body)

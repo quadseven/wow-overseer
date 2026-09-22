@@ -12,6 +12,7 @@ reasoned from the source, not observed - stated here rather than left
 implicit, per the epic's own rule about `delivered` meaning nothing was
 verified.
 """
+
 import pathlib
 import re
 import sys
@@ -55,8 +56,7 @@ def _code(text: str) -> str:
 def _drive_quests() -> str:
     # mod-overseer#552 split DriveQuests into a census and dispatch plus the
     # per-family body it always had. The drive these tests describe is both.
-    return (_function("void DriveQuests()")
-            + _function("void DriveFamilyQuests("))
+    return _function("void DriveQuests()") + _function("void DriveFamilyQuests(")
 
 
 def _load_jobs() -> str:
@@ -89,7 +89,9 @@ class TheVocabularyMatchesPython(unittest.TestCase):
     def test_the_module_names_nothing_python_does_not(self):
         cpp = _cpp_modes()
         extra = cpp - set(jobs.MODES)
-        self.assertFalse(extra, f"the module accepts modes jobs.py never named: {extra}")
+        self.assertFalse(
+            extra, f"the module accepts modes jobs.py never named: {extra}"
+        )
 
 
 class TheGateStandsDownEverythingButQuest(unittest.TestCase):
@@ -105,7 +107,9 @@ class TheGateStandsDownEverythingButQuest(unittest.TestCase):
         body = _code(_drive_quests())
         gate = body.index("jobIt")
         aim = body.index("aimIt")
-        self.assertLess(gate, aim, "the job gate must run before the quest aim is consulted")
+        self.assertLess(
+            gate, aim, "the job gate must run before the quest aim is consulted"
+        )
 
     def test_load_jobs_excludes_quest_from_the_result(self):
         # LoadJobs only returns characters NOT on 'quest' - see its own

@@ -60,6 +60,7 @@ dungeon plan's are: whole-set queries in two phases, none of them per recipe
 and none of them per character, and nothing in this module goes back to the
 database.
 """
+
 from __future__ import annotations
 
 import goals
@@ -135,8 +136,9 @@ def recipe_skills() -> list[int]:
     return sorted(goals.SKILL_IDS.values())
 
 
-def covered_names(roster: list[str], guild_rows: list[dict],
-                  ceiling: int = MEMBER_CEILING) -> list[str]:
+def covered_names(
+    roster: list[str], guild_rows: list[dict], ceiling: int = MEMBER_CEILING
+) -> list[str]:
     """Who this page reads, family first and then their guild.
 
     PUBLIC FOR THE SAME REASON `recipe_skills` IS: the skills and spells reads
@@ -164,8 +166,7 @@ def _guild_of(guild_rows: list[dict]) -> str:
     return names[0] if len(names) == 1 else ""
 
 
-def _guild_line(guild_rows: list[dict], roster: list[str],
-                covered: list[str]) -> str:
+def _guild_line(guild_rows: list[dict], roster: list[str], covered: list[str]) -> str:
     """Who this page is about, and whether that is a guild at all.
 
     THE HONEST SHAPE OF "THERE IS NO GUILD YET". The family is in none of the
@@ -177,22 +178,32 @@ def _guild_line(guild_rows: list[dict], roster: list[str],
     guild = _guild_of(guild_rows)
     kin = len(roster)
     if not guild_rows:
-        return ("%d characters, and not one of them is in a guild, so this is "
-                "the family rather than a guild" % kin)
+        return (
+            "%d characters, and not one of them is in a guild, so this is "
+            "the family rather than a guild" % kin
+        )
     if not guild:
         names = sorted({row["guild"] for row in guild_rows if row.get("guild")})
-        return ("the family is split across %d guilds (%s), so this covers "
-                "everybody in all of them" % (len(names), ", ".join(names)))
+        return (
+            "the family is split across %d guilds (%s), so this covers "
+            "everybody in all of them" % (len(names), ", ".join(names))
+        )
     extra = len(covered) - kin
     if extra <= 0:
-        return ("the guild %s, whose only members are the %d this site already "
-                "follows" % (guild, kin))
-    return ("the guild %s: the %d this site follows and %d more who share it"
-            % (guild, kin, extra))
+        return (
+            "the guild %s, whose only members are the %d this site already "
+            "follows" % (guild, kin)
+        )
+    return "the guild %s: the %d this site follows and %d more who share it" % (
+        guild,
+        kin,
+        extra,
+    )
 
 
-def _coverage_line(covered: list[str], guild_rows: list[dict], ceiling: int,
-                   recipes: int, trades: int) -> str:
+def _coverage_line(
+    covered: list[str], guild_rows: list[dict], ceiling: int, recipes: int, trades: int
+) -> str:
     """What the list had to work with, and what it could not reach.
 
     THE ANSWER TO "WHY IS THE ONE I WANT NOT IN HERE", which is a question
@@ -203,12 +214,17 @@ def _coverage_line(covered: list[str], guild_rows: list[dict], ceiling: int,
     """
     everyone = len({row["name"] for row in guild_rows} | set(covered))
     cut = everyone - len(covered)
-    said = ("%d characters read against %d trades, and %d recipe items"
-            % (len(covered), trades, recipes))
+    said = "%d characters read against %d trades, and %d recipe items" % (
+        len(covered),
+        trades,
+        recipes,
+    )
     if cut > 0:
-        return (said + ". %d more share the guild and were NOT read: this page "
-                "stops at %d characters, so those are missing from every count "
-                "above rather than known to hold nothing." % (cut, ceiling))
+        return (
+            said + ". %d more share the guild and were NOT read: this page "
+            "stops at %d characters, so those are missing from every count "
+            "above rather than known to hold nothing." % (cut, ceiling)
+        )
     return said + ". Every character this page covers was read."
 
 
@@ -264,16 +280,20 @@ def _chance_line(chance) -> str:
     value = float(chance or 0)
     if value > 0:
         return "%g%% on the table's own row" % value
-    return ("the loot table gives no chance on this row, which is what a row "
-            "sharing one roll with others in its group looks like")
+    return (
+        "the loot table gives no chance on this row, which is what a row "
+        "sharing one roll with others in its group looks like"
+    )
 
 
 def _vendor_line(row: dict, geo, names: dict) -> str:
     """One vendor, named and placed."""
     return "sold by %s in %s" % (
         row.get("name") or "an unnamed vendor",
-        _place(row.get("map"), row.get("position_x"), row.get("position_y"),
-               geo, names))
+        _place(
+            row.get("map"), row.get("position_x"), row.get("position_y"), geo, names
+        ),
+    )
 
 
 def _drop_line(row: dict, geo, names: dict) -> str:
@@ -292,10 +312,13 @@ def _drop_line(row: dict, geo, names: dict) -> str:
     else:
         band = "a level this page cannot read"
     return "drops from %s, %s, in %s: %s" % (
-        row.get("name") or "an unnamed creature", band,
-        _place(row.get("map"), row.get("position_x"), row.get("position_y"),
-               geo, names),
-        _chance_line(row.get("Chance")))
+        row.get("name") or "an unnamed creature",
+        band,
+        _place(
+            row.get("map"), row.get("position_x"), row.get("position_y"), geo, names
+        ),
+        _chance_line(row.get("Chance")),
+    )
 
 
 def _quest_line(row: dict) -> str:
@@ -304,12 +327,12 @@ def _quest_line(row: dict) -> str:
     title = row.get("LogTitle") or "an unnamed quest"
     if level > 0:
         return "rewarded by the quest %s, written for level %d" % (title, level)
-    return ("rewarded by the quest %s, which carries no level in the quest "
-            "table" % title)
+    return "rewarded by the quest %s, which carries no level in the quest table" % title
 
 
-def _sources_for(entry: int, vendors: dict, drops: dict, quests: dict, geo,
-                 names: dict) -> list[dict]:
+def _sources_for(
+    entry: int, vendors: dict, drops: dict, quests: dict, geo, names: dict
+) -> list[dict]:
     """Every way this database says the recipe item can be got.
 
     VENDOR FIRST, THEN QUEST, THEN DROP, and that is a COST order rather than a
@@ -339,16 +362,20 @@ def _source_line(sources: list[dict], shown: int) -> str:
     the absence of a thing it declined to look for.
     """
     if not sources:
-        return ("no vendor, quest or direct drop row in this database carries "
-                "it, which is also what a world drop behind a reference loot "
-                "table looks like from here")
+        return (
+            "no vendor, quest or direct drop row in this database carries "
+            "it, which is also what a world drop behind a reference loot "
+            "table looks like from here"
+        )
     where = ", ".join(sorted({source["kind"] for source in sources}))
-    rows = ("1 source row" if len(sources) == 1
-            else "%d source rows" % len(sources))
+    rows = "1 source row" if len(sources) == 1 else "%d source rows" % len(sources)
     if len(sources) <= shown:
         return "%s read, all listed here (%s)" % (rows, where)
-    return ("%s read (%s); the %d cheapest to reach are listed here"
-            % (rows, where, shown))
+    return "%s read (%s); the %d cheapest to reach are listed here" % (
+        rows,
+        where,
+        shown,
+    )
 
 
 def _reach(rank: int, level_needed: int, best: dict | None) -> str:
@@ -364,8 +391,7 @@ def _reach(rank: int, level_needed: int, best: dict | None) -> str:
     return NOW if int(best.get("value") or 0) >= rank else SHORT
 
 
-def _reach_line(word: str, rank: int, level_needed: int,
-                best: dict | None) -> str:
+def _reach_line(word: str, rank: int, level_needed: int, best: dict | None) -> str:
     """What it would take to learn this one, counted against a real character.
 
     THE WHOLE POINT OF THE SENTENCE IS THAT A RECIPE OUT OF REACH LOOKS OUT OF
@@ -379,18 +405,21 @@ def _reach_line(word: str, rank: int, level_needed: int,
     one is not made reachable by any amount of cloth.
     """
     if best is None:
-        return ("nobody in the guild holds %s, so nothing here can learn it yet"
-                % word)
+        return "nobody in the guild holds %s, so nothing here can learn it yet" % word
     who = best["who"]
     have = int(best.get("value") or 0)
     ceiling = int(best.get("max") or 0)
     level = int(best.get("level") or 0)
     if level_needed and level < level_needed:
-        return ("it asks for character level %d and %s is %d, so no amount of "
-                "%s gets to it" % (level_needed, who, level, word))
+        return (
+            "it asks for character level %d and %s is %d, so no amount of "
+            "%s gets to it" % (level_needed, who, level, word)
+        )
     if have >= rank:
-        return ("it asks for %s %d and %s has %d, so it can be used the day it "
-                "is in their bags" % (word, rank, who, have))
+        return (
+            "it asks for %s %d and %s has %d, so it can be used the day it "
+            "is in their bags" % (word, rank, who, have)
+        )
     if ceiling and rank > ceiling:
         # REACHED WHEN ANOTHER HOLDER HAS TRAINED FURTHER. The listed recipes
         # are bounded by the HIGHEST ceiling in the guild and this sentence is
@@ -399,15 +428,21 @@ def _reach_line(word: str, rank: int, level_needed: int,
         # else's is listed, and saying it flatly needs a trainer tier would be
         # untrue of the guild. It says whose training stops where, and the
         # holder lines above it are what name the other one.
-        return ("it asks for %s %d; %s has %d and their own training stops at "
-                "%d, so a trainer tier has to come before any crafting does"
-                % (word, rank, who, have, ceiling))
-    return ("it asks for %s %d; %s has %d, which is %d short"
-            % (word, rank, who, have, rank - have))
+        return (
+            "it asks for %s %d; %s has %d and their own training stops at "
+            "%d, so a trainer tier has to come before any crafting does"
+            % (word, rank, who, have, ceiling)
+        )
+    return "it asks for %s %d; %s has %d, which is %d short" % (
+        word,
+        rank,
+        who,
+        have,
+        rank - have,
+    )
 
 
-def _recipe_chips(rank: int, word: str, reach: str,
-                  sources: list[dict]) -> list[dict]:
+def _recipe_chips(rank: int, word: str, reach: str, sources: list[dict]) -> list[dict]:
     """The three or four words that have to survive being collapsed on a phone.
 
     Cut from the sentences below them and cut HERE, so a page that trimmed
@@ -442,9 +477,18 @@ def _required_level(row: dict) -> int:
     return int(row.get("RequiredLevel") or row.get("required_level") or 0)
 
 
-def _recipe_card(row: dict, word: str, best: dict | None, vendors: dict,
-                 drops: dict, quests: dict, icons: dict, geo, names: dict,
-                 book) -> dict:
+def _recipe_card(
+    row: dict,
+    word: str,
+    best: dict | None,
+    vendors: dict,
+    drops: dict,
+    quests: dict,
+    icons: dict,
+    geo,
+    names: dict,
+    book,
+) -> dict:
     """One recipe nobody in the guild knows, as the page draws it."""
     entry = int(row["entry"])
     rank = int(row.get("RequiredSkillRank") or 0)
@@ -464,8 +508,7 @@ def _recipe_card(row: dict, word: str, best: dict | None, vendors: dict,
     return payload
 
 
-def _known_card(row: dict, word: str, knowers: list[str], icons: dict,
-                book) -> dict:
+def _known_card(row: dict, word: str, knowers: list[str], icons: dict, book) -> dict:
     """One recipe somebody in the guild already knows.
 
     NAMED BY WHO KNOWS IT rather than by the trade, because the question this
@@ -478,8 +521,10 @@ def _known_card(row: dict, word: str, knowers: list[str], icons: dict,
     payload.update(
         rank=rank,
         knowers=knowers,
-        line=("%s can make this, and it asks for %s %d"
-              % (" and ".join(knowers), word, rank)),
+        line=(
+            "%s can make this, and it asks for %s %d"
+            % (" and ".join(knowers), word, rank)
+        ),
     )
     return payload
 
@@ -495,11 +540,18 @@ def _holder_line(holder: dict, word: str) -> str:
     value = int(holder.get("value") or 0)
     ceiling = int(holder.get("max") or 0)
     if not ceiling:
-        return ("%s holds %s at %d, and this database gives no ceiling for it"
-                % (holder["who"], word, value))
+        return "%s holds %s at %d, and this database gives no ceiling for it" % (
+            holder["who"],
+            word,
+            value,
+        )
     if value >= ceiling:
-        return ("%s holds %s at %d of %d, which is as far as their training "
-                "goes" % (holder["who"], word, value, ceiling))
+        return "%s holds %s at %d of %d, which is as far as their training goes" % (
+            holder["who"],
+            word,
+            value,
+            ceiling,
+        )
     return "%s holds %s at %d of %d" % (holder["who"], word, value, ceiling)
 
 
@@ -515,8 +567,9 @@ def _trade_line(word: str, holders: list[dict], kind: str) -> str:
     return "%d of them hold %s: %s" % (len(holders), word, who)
 
 
-def _recipes_line(kind: str, known: int, missing: int, listed: int,
-                  holders: list[dict], total: int) -> str:
+def _recipes_line(
+    kind: str, known: int, missing: int, listed: int, holders: list[dict], total: int
+) -> str:
     """What this trade can and cannot make, counted rather than judged.
 
     FOUR ANSWERS AND THEY MUST NOT COLLAPSE INTO ONE. A gathering trade has no
@@ -532,20 +585,25 @@ def _recipes_line(kind: str, known: int, missing: int, listed: int,
     the trade the whole page exists to point at.
     """
     if kind == "gathering":
-        return ("a gathering trade: nothing is crafted from it, so there are "
-                "no recipes here to be missing")
+        return (
+            "a gathering trade: nothing is crafted from it, so there are "
+            "no recipes here to be missing"
+        )
     if not holders:
-        return ("%d recipe items exist for it in this database and nobody here "
-                "can learn one until somebody takes the trade" % total)
+        return (
+            "%d recipe items exist for it in this database and nobody here "
+            "can learn one until somebody takes the trade" % total
+        )
     said = "%d of its recipe items are already known" % known
     if not missing:
-        return (said + ", and none of the rest sit under the training already "
-                "held")
-    under = ("1 more sits under the training already held" if missing == 1
-             else "%d more sit under the training already held" % missing)
+        return said + ", and none of the rest sit under the training already held"
+    under = (
+        "1 more sits under the training already held"
+        if missing == 1
+        else "%d more sit under the training already held" % missing
+    )
     if missing > listed:
-        return "%s, and %s; the %d cheapest to reach are listed" % (said, under,
-                                                                    listed)
+        return "%s, and %s; the %d cheapest to reach are listed" % (said, under, listed)
     return "%s, and %s, all listed" % (said, under)
 
 
@@ -561,25 +619,26 @@ def _trainer_line(word: str, taught: int, held: int, ceiling: int) -> str:
     if not taught:
         return ""
     if not ceiling:
-        return ("this realm's trainers teach %d %s crafts; nobody here holds "
-                "the trade, so none of them are counted as known"
-                % (taught, word))
+        return (
+            "this realm's trainers teach %d %s crafts; nobody here holds "
+            "the trade, so none of them are counted as known" % (taught, word)
+        )
     left = taught - held
     if left <= 0:
-        return ("every one of the %d %s crafts a trainer teaches at or under "
-                "skill %d is already known" % (taught, word, ceiling))
-    known = ("1 of them is known" if held == 1
-             else "%d of them are known" % held)
-    visits = ("1 is a trainer visit" if left == 1
-              else "%d are a trainer visit" % left)
-    return ("a trainer teaches %d %s crafts at or under skill %d and %s, so %s "
-            "rather than a farm run. This page can count them and cannot name "
-            "them: the basis below says why"
-            % (taught, word, ceiling, known, visits))
+        return (
+            "every one of the %d %s crafts a trainer teaches at or under "
+            "skill %d is already known" % (taught, word, ceiling)
+        )
+    known = "1 of them is known" if held == 1 else "%d of them are known" % held
+    visits = "1 is a trainer visit" if left == 1 else "%d are a trainer visit" % left
+    return (
+        "a trainer teaches %d %s crafts at or under skill %d and %s, so %s "
+        "rather than a farm run. This page can count them and cannot name "
+        "them: the basis below says why" % (taught, word, ceiling, known, visits)
+    )
 
 
-def _assigned_line(word: str, assigned_to: list[str],
-                   holders: list[dict]) -> str:
+def _assigned_line(word: str, assigned_to: list[str], holders: list[dict]) -> str:
     """The difference between a trade the family MEANT to have and one it HAS.
 
     TWO TABLES THAT ARE ALLOWED TO DISAGREE, AND THE GAP IS THE FINDING.
@@ -596,13 +655,15 @@ def _assigned_line(word: str, assigned_to: list[str],
     waiting = [who for who in assigned_to if who not in held_by]
     if not waiting:
         return "assigned to %s in the roster, and held" % ", ".join(assigned_to)
-    return ("assigned to %s in the roster, and %s does not hold it in "
-            "character_skills yet"
-            % (", ".join(assigned_to), " nor ".join(waiting)))
+    return (
+        "assigned to %s in the roster, and %s does not hold it in "
+        "character_skills yet" % (", ".join(assigned_to), " nor ".join(waiting))
+    )
 
 
-def _trade_chips(word: str, kind: str, holders: list[dict], known: int,
-                 missing: int) -> list[dict]:
+def _trade_chips(
+    word: str, kind: str, holders: list[dict], known: int, missing: int
+) -> list[dict]:
     """The chips a collapsed trade row carries.
 
     Facts already in the sentences below it, cut to chip length HERE so the two
@@ -614,14 +675,20 @@ def _trade_chips(word: str, kind: str, holders: list[dict], known: int,
         return chips
     best = max(int(holder.get("value") or 0) for holder in holders)
     ceiling = max(int(holder.get("max") or 0) for holder in holders)
-    chips.append({"text": ("%s %d of %d" % (word, best, ceiling) if ceiling
-                           else "%s %d" % (word, best)),
-                  "tone": "up" if ceiling and best >= ceiling else ""})
+    chips.append(
+        {
+            "text": (
+                "%s %d of %d" % (word, best, ceiling)
+                if ceiling
+                else "%s %d" % (word, best)
+            ),
+            "tone": "up" if ceiling and best >= ceiling else "",
+        }
+    )
     if kind == "gathering":
         return chips
     chips.append({"text": "%d known" % known, "tone": "up" if known else ""})
-    chips.append({"text": "%d to find" % missing,
-                  "tone": "" if missing else "up"})
+    chips.append({"text": "%d to find" % missing, "tone": "" if missing else "up"})
     return chips
 
 
@@ -635,9 +702,10 @@ def _best_holder(holders: list[dict]) -> dict | None:
     """
     if not holders:
         return None
-    return sorted(holders, key=lambda h: (-int(h.get("value") or 0),
-                                          -int(h.get("max") or 0),
-                                          h["who"]))[0]
+    return sorted(
+        holders,
+        key=lambda h: (-int(h.get("value") or 0), -int(h.get("max") or 0), h["who"]),
+    )[0]
 
 
 def _gap_line(word: str, kind: str, assigned_to: list[str]) -> str:
@@ -655,40 +723,56 @@ def _gap_line(word: str, kind: str, assigned_to: list[str]) -> str:
     if word in professions.UNASSIGNED:
         claimed = len(professions.PRIMARY) - len(professions.UNASSIGNED)
         this_one = "this one" if len(professions.UNASSIGNED) == 1 else "these"
-        return ("%s: left open on purpose. The family's own trade table gives "
-                "its five characters the other %d primaries and names %s as "
-                "the gap a guild is meant to fill, so it is a decision "
-                "waiting on members rather than a mistake"
-                % (word, claimed, this_one))
+        return (
+            "%s: left open on purpose. The family's own trade table gives "
+            "its five characters the other %d primaries and names %s as "
+            "the gap a guild is meant to fill, so it is a decision "
+            "waiting on members rather than a mistake" % (word, claimed, this_one)
+        )
     if assigned_to:
-        return ("%s: assigned to %s in the roster, and not held by anybody in "
-                "character_skills yet" % (word, ", ".join(assigned_to)))
+        return (
+            "%s: assigned to %s in the roster, and not held by anybody in "
+            "character_skills yet" % (word, ", ".join(assigned_to))
+        )
     if kind == "gathering":
-        return ("%s: nobody gathers it, so every craft that runs on it runs on "
-                "the auction house or on nothing" % word)
+        return (
+            "%s: nobody gathers it, so every craft that runs on it runs on "
+            "the auction house or on nothing" % word
+        )
     if kind == "secondary":
-        return ("%s: a secondary trade, which costs nobody a profession slot "
-                "and which nobody here has picked up" % word)
-    return ("%s: nobody holds it and nobody is assigned it, so nothing the "
-            "guild makes can come from it" % word)
+        return (
+            "%s: a secondary trade, which costs nobody a profession slot "
+            "and which nobody here has picked up" % word
+        )
+    return (
+        "%s: nobody holds it and nobody is assigned it, so nothing the "
+        "guild makes can come from it" % word
+    )
 
 
 def _headline(trades: list[dict], gaps: list[dict], covered: list[str]) -> str:
     """The one line at the top. Counts, never a recommendation."""
     if not covered:
-        return ("nothing here knows who the guild are, so it cannot say what "
-                "they can make")
+        return (
+            "nothing here knows who the guild are, so it cannot say what they can make"
+        )
     if not trades:
-        return ("this database listed no trades this page could read, so there "
-                "is nothing to compare")
+        return (
+            "this database listed no trades this page could read, so there "
+            "is nothing to compare"
+        )
     held = len([trade for trade in trades if trade["holders"]])
     to_find = sum(trade["missing_count"] for trade in trades)
     if not to_find:
-        return ("%d of %d trades held, and not one recipe under the training "
-                "already held is missing" % (held, len(trades)))
-    return ("%d of %d trades held, %d recipes missing that the training "
-            "already allows, and %d trades nobody holds at all"
-            % (held, len(trades), to_find, len(gaps)))
+        return (
+            "%d of %d trades held, and not one recipe under the training "
+            "already held is missing" % (held, len(trades))
+        )
+    return (
+        "%d of %d trades held, %d recipes missing that the training "
+        "already allows, and %d trades nobody holds at all"
+        % (held, len(trades), to_find, len(gaps))
+    )
 
 
 def _gaps_line(gaps: list[dict]) -> str:
@@ -714,14 +798,16 @@ def _order() -> str:
     reads as the trade to work on, which is a recommendation this module does
     not make.
     """
-    return ("Trades the guild holds first, then the ones nobody holds; within "
-            "each, the crafting trades before the gathering and secondary "
-            "ones, then most missing recipes first, then by name so the order "
-            "does not move on its own. Inside a trade, a missing recipe with a "
-            "source read comes before one without, then the lowest skill "
-            "requirement, then the name. A source is listed vendor first, then "
-            "quest, then drop: a vendor is a walk with a known ending and a "
-            "drop is a number of kills nothing here can predict.")
+    return (
+        "Trades the guild holds first, then the ones nobody holds; within "
+        "each, the crafting trades before the gathering and secondary "
+        "ones, then most missing recipes first, then by name so the order "
+        "does not move on its own. Inside a trade, a missing recipe with a "
+        "source read comes before one without, then the lowest skill "
+        "requirement, then the name. A source is listed vendor first, then "
+        "quest, then drop: a vendor is a walk with a known ending and a "
+        "drop is a number of kills nothing here can predict."
+    )
 
 
 def _basis(trainer_rows: list[dict], roster_read: bool) -> str:
@@ -731,26 +817,29 @@ def _basis(trainer_rows: list[dict], roster_read: bool) -> str:
     board's own footer is the precedent. The weakest claim goes first, because
     a reader who takes a short list for a complete one will act on it.
     """
-    named = ("A craft a TRAINER teaches is counted and never named. "
-             "skilllineability_dbc is empty on this realm and spell_dbc holds "
-             "custom rows only, because that data ships inside the client "
-             "files the worldserver reads and this service never sees them, so "
-             "a craft spell can be turned back into a name here only when a "
-             "recipe ITEM teaches it. The trainer counts come from "
-             "trainer_spell, which does carry the skill line and the rank."
-             if trainer_rows else
-             "This realm's trainer_spell returned nothing readable, so the "
-             "trainer counts are absent rather than zero: a trade with no "
-             "trainer line is not a trade whose trainer teaches nothing.")
+    named = (
+        "A craft a TRAINER teaches is counted and never named. "
+        "skilllineability_dbc is empty on this realm and spell_dbc holds "
+        "custom rows only, because that data ships inside the client "
+        "files the worldserver reads and this service never sees them, so "
+        "a craft spell can be turned back into a name here only when a "
+        "recipe ITEM teaches it. The trainer counts come from "
+        "trainer_spell, which does carry the skill line and the rank."
+        if trainer_rows
+        else "This realm's trainer_spell returned nothing readable, so the "
+        "trainer counts are absent rather than zero: a trade with no "
+        "trainer line is not a trade whose trainer teaches nothing."
+    )
     assignment = (
         "The trade a character is ASSIGNED comes from "
         "overseer_roster.professions, which is what the family decided and "
         "never what the world granted: a trade assigned and not held is "
         "printed as exactly that."
-        if roster_read else
-        "overseer_roster.professions could not be read this time, so no trade "
+        if roster_read
+        else "overseer_roster.professions could not be read this time, so no trade "
         "is reported as assigned; that is a missing column and not a family "
-        "that has decided nothing.")
+        "that has decided nothing."
+    )
     return (
         "Recipes are item_template rows of class 9, which is every recipe, "
         "pattern, plan, formula, design, technique and manual in this world "
@@ -777,7 +866,8 @@ def _basis(trainer_rows: list[dict], roster_read: bool) -> str:
         "a plan says. " + assignment + " What a recipe COSTS in materials is "
         "not read here at all: this page answers where a recipe comes from, "
         "and the reagent list lives in Spell.dbc, which this deployment does "
-        "not import.")
+        "not import."
+    )
 
 
 def _by_item(rows: list[dict]) -> dict:
@@ -803,12 +893,14 @@ def _holders_of(skill: int, skills: dict, members: dict) -> list[dict]:
         row = rows.get(skill)
         if row is None:
             continue
-        found.append({
-            "who": who,
-            "value": int(row.get("value") or 0),
-            "max": int(row.get("max") or 0),
-            "level": int((members.get(who) or {}).get("level") or 0),
-        })
+        found.append(
+            {
+                "who": who,
+                "value": int(row.get("value") or 0),
+                "max": int(row.get("max") or 0),
+                "level": int((members.get(who) or {}).get("level") or 0),
+            }
+        )
     found.sort(key=lambda h: (-h["value"], -h["max"], h["who"]))
     return found
 
@@ -843,12 +935,14 @@ def _beyond_line(word: str, beyond: int, ceiling: int) -> str:
     if not beyond or not ceiling:
         return ""
     if beyond == 1:
-        return ("1 more recipe item exists for it above skill %d, which is "
-                "behind the next trainer tier rather than behind a farm run"
-                % ceiling)
-    return ("%d more recipe items exist for it above skill %d, which are "
-            "behind the next trainer tier rather than behind a farm run"
-            % (beyond, ceiling))
+        return (
+            "1 more recipe item exists for it above skill %d, which is "
+            "behind the next trainer tier rather than behind a farm run" % ceiling
+        )
+    return (
+        "%d more recipe items exist for it above skill %d, which are "
+        "behind the next trainer tier rather than behind a farm run" % (beyond, ceiling)
+    )
 
 
 def _known_head(count: int, listed: int) -> str:
@@ -863,10 +957,15 @@ def _known_head(count: int, listed: int) -> str:
     if not count:
         return ""
     if count > listed:
-        return ("what somebody here can already make: %d of them, and the %d "
-                "cheapest to learn are shown" % (count, listed))
-    return ("what somebody here can already make" if count > 1 else
-            "the one thing somebody here can already make")
+        return (
+            "what somebody here can already make: %d of them, and the %d "
+            "cheapest to learn are shown" % (count, listed)
+        )
+    return (
+        "what somebody here can already make"
+        if count > 1
+        else "the one thing somebody here can already make"
+    )
 
 
 def _missing_head(count: int, listed: int) -> str:
@@ -874,16 +973,32 @@ def _missing_head(count: int, listed: int) -> str:
     if not count:
         return ""
     if count > listed:
-        return ("what nobody here knows yet: %d of them, and the %d cheapest "
-                "to reach are shown" % (count, listed))
-    return ("what nobody here knows yet" if count > 1 else
-            "the one thing nobody here knows yet")
+        return (
+            "what nobody here knows yet: %d of them, and the %d cheapest "
+            "to reach are shown" % (count, listed)
+        )
+    return (
+        "what nobody here knows yet"
+        if count > 1
+        else "the one thing nobody here knows yet"
+    )
 
 
-def _trade_card(skill: int, recipes: list[dict], holders: list[dict],
-                known_spells: dict, assigned_to: list[str],
-                trainer: list[dict], vendors: dict, drops: dict, quests: dict,
-                icons: dict, geo, names: dict, book) -> dict:
+def _trade_card(
+    skill: int,
+    recipes: list[dict],
+    holders: list[dict],
+    known_spells: dict,
+    assigned_to: list[str],
+    trainer: list[dict],
+    vendors: dict,
+    drops: dict,
+    quests: dict,
+    icons: dict,
+    geo,
+    names: dict,
+    book,
+) -> dict:
     """One trade as the page draws it, minus its place in the order.
 
     ONE PASS OVER THE RECIPES, which is what keeps a cross product cheap: the
@@ -902,8 +1017,9 @@ def _trade_card(skill: int, recipes: list[dict], holders: list[dict],
     beyond = 0
     for row in recipes:
         spell = int(row.get("spellid_2") or 0)
-        knowers = sorted(who for who in held_by
-                         if spell and spell in known_spells.get(who, ()))
+        knowers = sorted(
+            who for who in held_by if spell and spell in known_spells.get(who, ())
+        )
         if knowers:
             known.append(_known_card(row, word, knowers, icons, book))
             continue
@@ -918,18 +1034,31 @@ def _trade_card(skill: int, recipes: list[dict], holders: list[dict],
         if ceiling and int(row.get("RequiredSkillRank") or 0) > ceiling:
             beyond += 1
             continue
-        missing.append(_recipe_card(row, word, best, vendors, drops, quests,
-                                    icons, geo, names, book))
+        missing.append(
+            _recipe_card(
+                row, word, best, vendors, drops, quests, icons, geo, names, book
+            )
+        )
     # SOURCED FIRST, THEN CLOSEST TO REACH. A recipe this page can point at is
     # the one a reader can do something about tonight; one with no source read
     # is still listed, below the rest, saying so on its own row.
     missing.sort(key=lambda r: (not r["sources"], r["rank"], r["name"]))
     known.sort(key=lambda r: (r["rank"], r["name"]))
-    in_band = [row for row in trainer
-               if not ceiling or int(row.get("ReqSkillRank") or 0) <= ceiling]
-    trainer_known = len([row for row in in_band
-                         if any(int(row.get("SpellId") or 0)
-                                in known_spells.get(who, ()) for who in held_by)])
+    in_band = [
+        row
+        for row in trainer
+        if not ceiling or int(row.get("ReqSkillRank") or 0) <= ceiling
+    ]
+    trainer_known = len(
+        [
+            row
+            for row in in_band
+            if any(
+                int(row.get("SpellId") or 0) in known_spells.get(who, ())
+                for who in held_by
+            )
+        ]
+    )
     return {
         "skill": skill,
         "name": word,
@@ -941,8 +1070,11 @@ def _trade_card(skill: int, recipes: list[dict], holders: list[dict],
         # so emitting both printed the same sentence twice under its own
         # heading. With two or more, `line` names them and these say how far
         # each has got, which is the thing the count cannot carry.
-        "holder_lines": ([_holder_line(holder, word) for holder in holders]
-                         if len(holders) > 1 else []),
+        "holder_lines": (
+            [_holder_line(holder, word) for holder in holders]
+            if len(holders) > 1
+            else []
+        ),
         "line": _trade_line(word, holders, kind),
         "assigned": assigned_to,
         "assigned_line": _assigned_line(word, assigned_to, holders),
@@ -952,11 +1084,11 @@ def _trade_card(skill: int, recipes: list[dict], holders: list[dict],
         "missing": missing[:LISTED_MISSING],
         "missing_count": len(missing),
         "missing_head": _missing_head(len(missing), LISTED_MISSING),
-        "recipes_line": _recipes_line(kind, len(known), len(missing),
-                                      LISTED_MISSING, holders, len(recipes)),
+        "recipes_line": _recipes_line(
+            kind, len(known), len(missing), LISTED_MISSING, holders, len(recipes)
+        ),
         "beyond_line": _beyond_line(word, beyond, ceiling) if holders else "",
-        "trainer_line": _trainer_line(word, len(in_band), trainer_known,
-                                      ceiling),
+        "trainer_line": _trainer_line(word, len(in_band), trainer_known, ceiling),
         "chips": _trade_chips(word, kind, holders, len(known), len(missing)),
     }
 
@@ -971,19 +1103,36 @@ def _place_them(trades: list[dict]) -> None:
     first time somebody filtered the list, with nothing failing.
     """
     kinds = {"crafting": 0, "secondary": 1, "gathering": 2, "trade": 3}
-    trades.sort(key=lambda t: (not t["held"], kinds.get(t["kind"], 3),
-                               -t["missing_count"], t["name"]))
+    trades.sort(
+        key=lambda t: (
+            not t["held"],
+            kinds.get(t["kind"], 3),
+            -t["missing_count"],
+            t["name"],
+        )
+    )
     for place, trade in enumerate(trades, start=1):
         trade["rank"] = place
 
 
-def build_guildcraft(guild_rows: list[dict], member_rows: list[dict],
-                     skill_rows: list[dict], spell_rows: list[dict],
-                     roster_rows: list[dict], recipe_rows: list[dict],
-                     trainer_rows: list[dict], vendor_rows: list[dict],
-                     drop_rows: list[dict], quest_rows: list[dict],
-                     icons: dict, roster: list[str], names: dict, geo,
-                     book=None, roster_read: bool = True) -> dict:
+def build_guildcraft(
+    guild_rows: list[dict],
+    member_rows: list[dict],
+    skill_rows: list[dict],
+    spell_rows: list[dict],
+    roster_rows: list[dict],
+    recipe_rows: list[dict],
+    trainer_rows: list[dict],
+    vendor_rows: list[dict],
+    drop_rows: list[dict],
+    quest_rows: list[dict],
+    icons: dict,
+    roster: list[str],
+    names: dict,
+    geo,
+    book=None,
+    roster_read: bool = True,
+) -> dict:
     """Who can make what, what nobody can make, and where to go and get it.
 
     `guild_rows` are the guild the covered characters share, and an empty list
@@ -1012,8 +1161,7 @@ def build_guildcraft(guild_rows: list[dict], member_rows: list[dict],
     """
     covered = covered_names(roster, guild_rows)
     wanted = set(covered)
-    members = {row["name"]: row for row in member_rows
-               if row["name"] in wanted}
+    members = {row["name"]: row for row in member_rows if row["name"] in wanted}
     skills: dict = {}
     for row in skill_rows:
         if row["name"] in wanted:
@@ -1029,34 +1177,55 @@ def build_guildcraft(guild_rows: list[dict], member_rows: list[dict],
         by_skill.setdefault(int(row.get("RequiredSkill") or 0), []).append(row)
     trainer_by_skill: dict = {}
     for row in trainer_rows:
-        trainer_by_skill.setdefault(int(row.get("ReqSkillLine") or 0),
-                                    []).append(row)
+        trainer_by_skill.setdefault(int(row.get("ReqSkillLine") or 0), []).append(row)
     vendors = _by_item(vendor_rows)
     drops = _by_item(drop_rows)
     quests = _by_item(quest_rows)
 
     trades = [
-        _trade_card(skill, by_skill.get(skill, []),
-                    _holders_of(skill, skills, members), known_spells,
-                    assigned.get(skill, []), trainer_by_skill.get(skill, []),
-                    vendors, drops, quests, icons, geo, names, book)
-        for skill in recipe_skills()]
+        _trade_card(
+            skill,
+            by_skill.get(skill, []),
+            _holders_of(skill, skills, members),
+            known_spells,
+            assigned.get(skill, []),
+            trainer_by_skill.get(skill, []),
+            vendors,
+            drops,
+            quests,
+            icons,
+            geo,
+            names,
+            book,
+        )
+        for skill in recipe_skills()
+    ]
     _place_them(trades)
-    gaps = [{"name": trade["name"], "skill": trade["skill"],
-             "line": _gap_line(trade["name"], trade["kind"],
-                               trade["assigned"])}
-            for trade in trades if not trade["holders"]]
+    gaps = [
+        {
+            "name": trade["name"],
+            "skill": trade["skill"],
+            "line": _gap_line(trade["name"], trade["kind"], trade["assigned"]),
+        }
+        for trade in trades
+        if not trade["holders"]
+    ]
 
     return {
         "line": _headline(trades, gaps, covered),
         "guild_line": _guild_line(guild_rows, roster, covered),
-        "coverage": _coverage_line(covered, guild_rows, MEMBER_CEILING,
-                                   len(recipe_rows), len(trades)),
+        "coverage": _coverage_line(
+            covered, guild_rows, MEMBER_CEILING, len(recipe_rows), len(trades)
+        ),
         "gaps": gaps,
         "gaps_line": _gaps_line(gaps),
         "order": _order(),
         "trades": trades,
         "basis": _basis(trainer_rows, roster_read),
-        "empty_note": ("this database listed no trades this page could read, "
-                       "so there is nothing to compare" if not trades else ""),
+        "empty_note": (
+            "this database listed no trades this page could read, "
+            "so there is nothing to compare"
+            if not trades
+            else ""
+        ),
     }

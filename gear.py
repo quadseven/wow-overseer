@@ -76,8 +76,16 @@ TRADE_YARDS = 11.11
 # Duplicated rather than imported so this stays a pure, dependency-free
 # decision module the way materials.py and professions.py are.
 _CLASS_NAMES = {
-    1: "Warrior", 2: "Paladin", 3: "Hunter", 4: "Rogue", 5: "Priest",
-    6: "Death Knight", 7: "Shaman", 8: "Mage", 9: "Warlock", 11: "Druid",
+    1: "Warrior",
+    2: "Paladin",
+    3: "Hunter",
+    4: "Rogue",
+    5: "Priest",
+    6: "Death Knight",
+    7: "Shaman",
+    8: "Mage",
+    9: "Warlock",
+    11: "Druid",
 }
 
 ITEM_CLASS_WEAPON = 2
@@ -91,16 +99,32 @@ ITEM_CLASS_ARMOR = 4
 _HEAD, _SHOULDER, _CHEST, _WAIST = "head", "shoulder", "chest", "waist"
 _LEGS, _FEET, _WRIST, _HANDS, _BACK = "legs", "feet", "wrist", "hands", "back"
 _MAIN_HAND, _OFF_HAND, _TWO_HAND, _RANGED = (
-    "main_hand", "off_hand", "two_hand", "ranged",
+    "main_hand",
+    "off_hand",
+    "two_hand",
+    "ranged",
 )
 
 _SLOT_BY_INVTYPE = {
-    1: _HEAD, 3: _SHOULDER, 5: _CHEST, 6: _WAIST, 7: _LEGS, 8: _FEET,
-    9: _WRIST, 10: _HANDS, 16: _BACK, 20: _CHEST,
-    13: _MAIN_HAND, 21: _MAIN_HAND,
-    14: _OFF_HAND, 22: _OFF_HAND, 23: _OFF_HAND,
+    1: _HEAD,
+    3: _SHOULDER,
+    5: _CHEST,
+    6: _WAIST,
+    7: _LEGS,
+    8: _FEET,
+    9: _WRIST,
+    10: _HANDS,
+    16: _BACK,
+    20: _CHEST,
+    13: _MAIN_HAND,
+    21: _MAIN_HAND,
+    14: _OFF_HAND,
+    22: _OFF_HAND,
+    23: _OFF_HAND,
     17: _TWO_HAND,
-    15: _RANGED, 25: _RANGED, 26: _RANGED,
+    15: _RANGED,
+    25: _RANGED,
+    26: _RANGED,
 }
 
 # The slot bucket(s) that occupy a character's off hand. A two-hander
@@ -134,16 +158,16 @@ ARMOR_SHIELD = 6
 # at 38-39: a warrior or paladin is in MAIL until Plate Mail at 40, and a
 # hunter or shaman is in LEATHER until Mail at 40.
 _ARMOR_TRAINED_AT = {
-    1: ((ARMOR_MAIL, 1), (ARMOR_PLATE, 40)),    # Warrior
-    2: ((ARMOR_MAIL, 1), (ARMOR_PLATE, 40)),    # Paladin
+    1: ((ARMOR_MAIL, 1), (ARMOR_PLATE, 40)),  # Warrior
+    2: ((ARMOR_MAIL, 1), (ARMOR_PLATE, 40)),  # Paladin
     3: ((ARMOR_LEATHER, 1), (ARMOR_MAIL, 40)),  # Hunter
-    4: ((ARMOR_LEATHER, 1),),                   # Rogue
-    5: (),                                      # Priest - cloth only
-    6: ((ARMOR_PLATE, 1),),                     # Death Knight
+    4: ((ARMOR_LEATHER, 1),),  # Rogue
+    5: (),  # Priest - cloth only
+    6: ((ARMOR_PLATE, 1),),  # Death Knight
     7: ((ARMOR_LEATHER, 1), (ARMOR_MAIL, 40)),  # Shaman
-    8: (),                                      # Mage - cloth only
-    9: (),                                      # Warlock - cloth only
-    11: ((ARMOR_LEATHER, 1),),                  # Druid
+    8: (),  # Mage - cloth only
+    9: (),  # Warlock - cloth only
+    11: ((ARMOR_LEATHER, 1),),  # Druid
 }
 
 # A shield is not "heavier armour", it is its own proficiency.
@@ -332,7 +356,10 @@ def would_wear(holding: Holding, character: CharacterState) -> tuple:
     returns and for the same reason: a False is logged as often as a True.
     """
     if holding.item_class not in (ITEM_CLASS_WEAPON, ITEM_CLASS_ARMOR):
-        return False, "not gear (quest items, reagents and consumables are never considered)"
+        return (
+            False,
+            "not gear (quest items, reagents and consumables are never considered)",
+        )
     if not usable_by_class(holding, character.class_id):
         cls = _CLASS_NAMES.get(character.class_id, "class %d" % character.class_id)
         return False, f"{cls} cannot equip it"
@@ -347,7 +374,9 @@ def would_wear(holding: Holding, character: CharacterState) -> tuple:
 
     slot = _slot_for(holding)
     if not slot:
-        return False, "inventory type %d has no known slot" % int(holding.inventory_type)
+        return False, "inventory type %d has no known slot" % int(
+            holding.inventory_type
+        )
 
     # THE ROLE GUARD (the Severing Axe test, #2813). A two-hander is never an
     # upgrade for anyone currently wearing something in the off hand: taking
@@ -365,7 +394,8 @@ def would_wear(holding: Holding, character: CharacterState) -> tuple:
         return False, f"not an upgrade (currently equipped is item level {current})"
 
     return True, (
-        f"empty {slot.replace('_', ' ')} slot" if not current
+        f"empty {slot.replace('_', ' ')} slot"
+        if not current
         else f"item level {holding.item_level} beats the equipped {current}"
     )
 
@@ -384,7 +414,10 @@ def is_upgrade_for(holding: Holding, character: CharacterState) -> tuple:
     move.
     """
     if holding.item_class not in (ITEM_CLASS_WEAPON, ITEM_CLASS_ARMOR):
-        return False, "not gear (quest items, reagents and consumables are never considered)"
+        return (
+            False,
+            "not gear (quest items, reagents and consumables are never considered)",
+        )
     if holding.soulbound:
         return False, "soulbound to the current holder"
     return would_wear(holding, character)
@@ -456,8 +489,9 @@ def plan(holdings, characters) -> Plan:
             continue
 
         candidates.sort(key=lambda c: (-c[0], c[1]))
-        ranked = [_grant_for(holding, by_name[name], reason)
-                  for _, name, reason in candidates]
+        ranked = [
+            _grant_for(holding, by_name[name], reason) for _, name, reason in candidates
+        ]
         grants.append(replace(ranked[0], alternates=tuple(ranked[1:])))
     return Plan(grants=tuple(grants), notes=tuple(notes))
 
@@ -471,8 +505,11 @@ def _grant_for(holding: Holding, taker: CharacterState, reason: str) -> Grant:
     about what just happened.
     """
     return Grant(
-        holder=holding.holder, taker=taker.name, entry=holding.entry,
-        name=holding.name, guid=holding.guid,
+        holder=holding.holder,
+        taker=taker.name,
+        entry=holding.entry,
+        name=holding.name,
+        guid=holding.guid,
         reason=(
             f"{holding.holder} is holding {holding.name} (item level "
             f"{holding.item_level}) with no use for it, and {taker.name} "
@@ -563,9 +600,9 @@ def spots_from_rows(rows) -> dict:
     spots = {}
     for name, row in dict(rows or {}).items():
         try:
-            spots[str(name)] = Spot(map_id=int(row["map_id"]),
-                                    x=float(row["pos_x"]),
-                                    y=float(row["pos_y"]))
+            spots[str(name)] = Spot(
+                map_id=int(row["map_id"]), x=float(row["pos_x"]), y=float(row["pos_y"])
+            )
         except (KeyError, TypeError, ValueError):
             continue
     return spots
@@ -643,7 +680,7 @@ def deliverable(grants, position_rows=None, free_slots=None) -> Plan:
 
 
 def _joined(names: list) -> str:
-    """"Ugga", "Ugga and Grog", "Ugga, Grog and Grug"."""
+    """ "Ugga", "Ugga and Grog", "Ugga, Grog and Grug"."""
     if len(names) <= 1:
         return "".join(names)
     return "%s and %s" % (", ".join(names[:-1]), names[-1])
@@ -667,8 +704,7 @@ def _withheld(grant: Grant, crowded: list, absent: list) -> str:
             "%s %s not in the world right now"
             % (_joined(absent), "are" if len(absent) > 1 else "is")
         )
-    return "%s stays with %s: %s" % (grant.name, grant.holder,
-                                     ", and ".join(walls))
+    return "%s stays with %s: %s" % (grant.name, grant.holder, ", and ".join(walls))
 
 
 # ---------------------------------------------------------------------------
@@ -789,9 +825,16 @@ def characters_from_rows(rows, names) -> list:
             # one bucket. The BEST of them is what an upgrade has to beat,
             # because the worst is the one a new piece would displace.
             equipped[slot] = max(equipped.get(slot, 0), item_level)
-    return [CharacterState(name=name, class_id=seen[name][0],
-                           level=seen[name][1], equipped=seen[name][2])
-            for name in names if name in seen]
+    return [
+        CharacterState(
+            name=name,
+            class_id=seen[name][0],
+            level=seen[name][1],
+            equipped=seen[name][2],
+        )
+        for name in names
+        if name in seen
+    ]
 
 
 def holdings_from_rows(rows) -> list:
@@ -805,17 +848,22 @@ def holdings_from_rows(rows) -> list:
     out = []
     for row in rows:
         try:
-            out.append(Holding(
-                holder=str(row["holder"]), guid=int(row["item_guid"]),
-                entry=int(row.get("entry", 0)), name=str(row["name"]),
-                quality=int(row["quality"]), item_level=int(row["item_level"]),
-                required_level=int(row["required_level"]),
-                allowable_class=int(row["allowable_class"]),
-                inventory_type=int(row["inventory_type"]),
-                item_class=int(row["item_class"]),
-                soulbound=bool(int(row.get("instance_flags", 0) or 0) & 0x1),
-                item_subclass=int(row.get("item_subclass", SUBCLASS_UNSTATED)),
-            ))
+            out.append(
+                Holding(
+                    holder=str(row["holder"]),
+                    guid=int(row["item_guid"]),
+                    entry=int(row.get("entry", 0)),
+                    name=str(row["name"]),
+                    quality=int(row["quality"]),
+                    item_level=int(row["item_level"]),
+                    required_level=int(row["required_level"]),
+                    allowable_class=int(row["allowable_class"]),
+                    inventory_type=int(row["inventory_type"]),
+                    item_class=int(row["item_class"]),
+                    soulbound=bool(int(row.get("instance_flags", 0) or 0) & 0x1),
+                    item_subclass=int(row.get("item_subclass", SUBCLASS_UNSTATED)),
+                )
+            )
         except (KeyError, TypeError, ValueError):
             continue
     return out

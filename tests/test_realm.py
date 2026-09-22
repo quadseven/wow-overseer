@@ -22,6 +22,7 @@ invented, including the older one on the live realm. The gap between them is the
 thing this feature was built to make visible, so a suite that used one made-up
 revision everywhere would be testing a world that does not exist.
 """
+
 import unittest
 from datetime import datetime, timedelta
 
@@ -30,10 +31,14 @@ import realm
 NOW = datetime(2026, 9, 3, 12, 0, 0)
 
 # The live realm is twelve days and one commit behind the other two. Real.
-LIVE_CORE = ("AzerothCore rev. efe123fab543+ 2026-08-14 08:34:16 -0700 "
-             "(HEAD branch) (Unix, RelWithDebInfo, Static)")
-NEWER_CORE = ("AzerothCore rev. 47960183bb03+ 2026-08-28 21:04:11 +0200 "
-              "(HEAD branch) (Unix, RelWithDebInfo, Static)")
+LIVE_CORE = (
+    "AzerothCore rev. efe123fab543+ 2026-08-14 08:34:16 -0700 "
+    "(HEAD branch) (Unix, RelWithDebInfo, Static)"
+)
+NEWER_CORE = (
+    "AzerothCore rev. 47960183bb03+ 2026-08-28 21:04:11 +0200 "
+    "(HEAD branch) (Unix, RelWithDebInfo, Static)"
+)
 
 UPSTREAMS = (
     ("mod-playerbots", "2f7d9f774987d0157c6a0d0cc08c40bec3db3945"),
@@ -43,8 +48,14 @@ UPSTREAMS = (
 )
 
 
-def build_rows(name="wow-dev", kind="non-production", core=NEWER_CORE,
-               pins="match", reported_at=NOW, upstreams=UPSTREAMS):
+def build_rows(
+    name="wow-dev",
+    kind="non-production",
+    core=NEWER_CORE,
+    pins="match",
+    reported_at=NOW,
+    upstreams=UPSTREAMS,
+):
     """One realm's overseer_build, as the module writes it."""
     rows = [
         ("module", "0.1.0", "compiled"),
@@ -54,8 +65,10 @@ def build_rows(name="wow-dev", kind="non-production", core=NEWER_CORE,
         ("pins", pins, "derived"),
     ]
     rows += [(component, sha, "declared") for component, sha in upstreams]
-    return [{"name": n, "value": v, "source": s, "reported_at": reported_at}
-            for n, v, s in rows]
+    return [
+        {"name": n, "value": v, "source": s, "reported_at": reported_at}
+        for n, v, s in rows
+    ]
 
 
 def world(core=NEWER_CORE):
@@ -77,8 +90,11 @@ def build(rows=None, version_rows=None, realmlist_rows=None, now=NOW):
 
 class ARealmThatHasSaidWhatItIs(unittest.TestCase):
     def test_a_declared_production_realm_says_production(self):
-        out = build(build_rows(name="wow", kind="production", core=LIVE_CORE),
-                    world(LIVE_CORE), realmlist("Homelab"))
+        out = build(
+            build_rows(name="wow", kind="production", core=LIVE_CORE),
+            world(LIVE_CORE),
+            realmlist("Homelab"),
+        )
         self.assertEqual(out["kind"], realm.PRODUCTION)
         self.assertEqual(out["label"], "PRODUCTION")
 
@@ -111,8 +127,9 @@ class ARealmThatHasSaidWhatItIs(unittest.TestCase):
         list that reshuffles between polls is unreadable."""
         shuffled = list(reversed(build_rows()))
         out = build(shuffled)
-        self.assertEqual([u["name"] for u in out["upstreams"]],
-                         list(realm.UPSTREAM_ORDER))
+        self.assertEqual(
+            [u["name"] for u in out["upstreams"]], list(realm.UPSTREAM_ORDER)
+        )
 
 
 class ARealmThatHasSaidNothing(unittest.TestCase):
@@ -172,18 +189,36 @@ class NothingUNCERTAINEverRendersAsSafe(unittest.TestCase):
     prevent, and it is the only outcome here that is actually dangerous."""
 
     def _kinds_that_are_not_a_kind(self):
-        return ["", "   ", "prod", "PROD", "prd", "live", "dev", "canary",
-                "nonproduction", "Production!", "staging", "0", "null"]
+        return [
+            "",
+            "   ",
+            "prod",
+            "PROD",
+            "prd",
+            "live",
+            "dev",
+            "canary",
+            "nonproduction",
+            "Production!",
+            "staging",
+            "0",
+            "null",
+        ]
 
     def test_no_mistyped_realm_kind_reads_as_a_real_answer(self):
         for kind in self._kinds_that_are_not_a_kind():
-            out = build(build_rows(name="wow", kind=kind, core=LIVE_CORE),
-                        world(LIVE_CORE), realmlist("Homelab"))
+            out = build(
+                build_rows(name="wow", kind=kind, core=LIVE_CORE),
+                world(LIVE_CORE),
+                realmlist("Homelab"),
+            )
             self.assertEqual(out["kind"], realm.UNKNOWN, kind)
             self.assertNotEqual(out["kind"], realm.NON_PRODUCTION, kind)
             self.assertEqual(out["label"], "REALM NOT VERIFIED", kind)
 
-    def test_a_reported_realm_with_no_kind_is_told_apart_from_one_that_never_reported(self):
+    def test_a_reported_realm_with_no_kind_is_told_apart_from_one_that_never_reported(
+        self,
+    ):
         """Both are unknown, and both are alarms, but they are different
         problems and the sentence has to say which one it is: a realm that never
         reported needs a worldserver, a realm that reported without a kind needs
@@ -193,8 +228,7 @@ class NothingUNCERTAINEverRendersAsSafe(unittest.TestCase):
         self.assertFalse(silent["reported"])
         self.assertTrue(partial["reported"])
         self.assertIn("has not reported a build", silent["warning_text"])
-        self.assertIn("did not say whether it is production",
-                      partial["warning_text"])
+        self.assertIn("did not say whether it is production", partial["warning_text"])
 
     def test_a_kind_this_page_has_never_heard_of_is_unknown_not_passed_through(self):
         """A worldserver newer than this file, reporting a fourth kind. The page
@@ -218,9 +252,11 @@ class ADeclarationThatDescribesAnotherBuild(unittest.TestCase):
     and that is the live realm's situation today."""
 
     def test_stale_pins_are_called_out_rather_than_printed_as_fact(self):
-        out = build(build_rows(name="wow", kind="production", core=LIVE_CORE,
-                               pins="stale"),
-                    world(LIVE_CORE), realmlist("Homelab"))
+        out = build(
+            build_rows(name="wow", kind="production", core=LIVE_CORE, pins="stale"),
+            world(LIVE_CORE),
+            realmlist("Homelab"),
+        )
         self.assertEqual(out["pins"], realm.PINS_STALE)
         self.assertIn("describe another image", out["warning_text"])
         self.assertIn("pins STALE", out["build_line"])
@@ -229,9 +265,11 @@ class ADeclarationThatDescribesAnotherBuild(unittest.TestCase):
         """A production realm with a stale declaration is still production.
         Downgrading the label because a secondary fact is suspect would be the
         banner making the reader's most important answer less reliable."""
-        out = build(build_rows(name="wow", kind="production", core=LIVE_CORE,
-                               pins="stale"),
-                    world(LIVE_CORE), realmlist("Homelab"))
+        out = build(
+            build_rows(name="wow", kind="production", core=LIVE_CORE, pins="stale"),
+            world(LIVE_CORE),
+            realmlist("Homelab"),
+        )
         self.assertEqual(out["kind"], realm.PRODUCTION)
 
     def test_the_commits_are_still_shown_so_the_reader_can_see_the_evidence(self):
@@ -243,8 +281,7 @@ class ADeclarationThatDescribesAnotherBuild(unittest.TestCase):
         impossible. If it happens, the report is left over from an earlier
         binary and everything derived from it is suspect."""
         out = build(build_rows(core=LIVE_CORE), world(NEWER_CORE), realmlist())
-        self.assertIn("left over from an earlier worldserver",
-                      out["warning_text"])
+        self.assertIn("left over from an earlier worldserver", out["warning_text"])
 
     def test_the_world_is_believed_over_the_report_about_the_core(self):
         """acore_world.version needs less to go right: the core writes it with
@@ -261,22 +298,29 @@ class ASchemaOrARowThatIsNotTHEShapeExpected(unittest.TestCase):
     degrade rather than raise."""
 
     def test_a_fact_this_file_does_not_know_is_shown_rather_than_dropped(self):
-        rows = build_rows() + [{"name": "mod-something-new", "value": "abc123def456",
-                                "source": "declared", "reported_at": NOW}]
+        rows = build_rows() + [
+            {
+                "name": "mod-something-new",
+                "value": "abc123def456",
+                "source": "declared",
+                "reported_at": NOW,
+            }
+        ]
         names = [u["name"] for u in build(rows)["upstreams"]]
         self.assertIn("mod-something-new", names)
-        self.assertEqual(names[:len(realm.UPSTREAM_ORDER)],
-                         list(realm.UPSTREAM_ORDER))
+        self.assertEqual(names[: len(realm.UPSTREAM_ORDER)], list(realm.UPSTREAM_ORDER))
 
     def test_a_row_with_no_name_is_skipped_and_not_an_exception(self):
-        rows = build_rows() + [{"name": "", "value": "x", "source": "declared",
-                                "reported_at": NOW}]
+        rows = build_rows() + [
+            {"name": "", "value": "x", "source": "declared", "reported_at": NOW}
+        ]
         self.assertEqual(build(rows)["kind"], realm.NON_PRODUCTION)
 
     def test_a_null_value_reads_as_absent_rather_than_as_the_word_none(self):
         rows = [r for r in build_rows() if r["name"] != "module"]
-        rows.append({"name": "module", "value": None, "source": "compiled",
-                     "reported_at": NOW})
+        rows.append(
+            {"name": "module", "value": None, "source": "compiled", "reported_at": NOW}
+        )
         out = build(rows)
         self.assertEqual(out["module_version"], "")
         self.assertNotIn("None", out["build_line"])
@@ -290,8 +334,9 @@ class ASchemaOrARowThatIsNotTHEShapeExpected(unittest.TestCase):
             self.assertIsNone(out["reported_at"], repr(stamp))
 
     def test_an_unparseable_core_banner_shows_the_sentence_rather_than_nothing(self):
-        out = build([], [{"core_version": "some future banner format"}],
-                    realmlist("Homelab"))
+        out = build(
+            [], [{"core_version": "some future banner format"}], realmlist("Homelab")
+        )
         self.assertEqual(out["core_revision"], "")
         self.assertIn("some future banner format", out["build_line"])
 

@@ -17,6 +17,7 @@ half that cannot be unit-tested because it only compiles on push to main:
   * an ENUM value added by editing CREATE TABLE IF NOT EXISTS, which does
     nothing at all to a table that already exists.
 """
+
 import pathlib
 import re
 import unittest
@@ -26,9 +27,7 @@ import questshare
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 MODULE = ROOT / "mod-overseer/src/mod_overseer.cpp"
 MIGRATION = (
-    ROOT
-    / "mod-overseer/data/sql/characters/base"
-    / "2026_08_24_03_overseer_share.sql"
+    ROOT / "mod-overseer/data/sql/characters/base" / "2026_08_24_03_overseer_share.sql"
 )
 BRIDGE = ROOT / "bridge.py"
 
@@ -91,8 +90,9 @@ class TheCrashIsUnreachableByConstruction(unittest.TestCase):
         self.assertNotIn("CMSG_PUSHQUESTTOPARTY", code, "the share packet is built")
 
     def test_no_packet_is_ever_fed_to_a_bot(self):
-        self.assertNotIn("HandleMasterIncomingPacket", _code(_source()),
-                         "a packet is fed to a bot")
+        self.assertNotIn(
+            "HandleMasterIncomingPacket", _code(_source()), "a packet is fed to a bot"
+        )
 
     def test_the_reason_is_written_down_where_the_next_reader_will_look(self):
         """A rule with no reason beside it gets 'simplified' away."""
@@ -131,7 +131,9 @@ class EveryCoreCallWasVerifiedAgainstThePinnedHeaders(unittest.TestCase):
         share = _code(_share_source())
         used = set(re.findall(r"->([A-Z][A-Za-z]+)\(", share))
         unknown = used - set(self.VERIFIED) - self.ALREADY_PROVEN
-        self.assertEqual(unknown, set(), "unverified core members: %s" % sorted(unknown))
+        self.assertEqual(
+            unknown, set(), "unverified core members: %s" % sorted(unknown)
+        )
 
     def test_each_one_is_cited_with_a_header_and_a_line(self):
         share = _share_source()
@@ -191,11 +193,11 @@ class NoRefusalIsSilent(unittest.TestCase):
         """Every `return "...";` in DoShare, with the code since the previous
         one - which is the window a `describe()` for THAT exit has to be in."""
         share = _share_source()
-        body = share[share.index("static char const* DoShare"):]
+        body = share[share.index("static char const* DoShare") :]
         out = []
         cursor = 0
         for match in re.finditer(r'return "((?:[^"\\]|\\.)*)";', body, re.S):
-            out.append((body[cursor:match.start()], match.group(1)))
+            out.append((body[cursor : match.start()], match.group(1)))
             cursor = match.end()
         return out
 
@@ -240,7 +242,7 @@ class NoRefusalIsSilent(unittest.TestCase):
         # each key are escaped in the source and the needle carries them too.
         share = _share_source()
         for field in ("outcome", "reason", "from", "to", "quest_id", "taker_status"):
-            self.assertIn(r'\"%s\":' % field, share, field)
+            self.assertIn(r"\"%s\":" % field, share, field)
 
 
 class DeliveredMeansItIsInTheLog(unittest.TestCase):
@@ -253,7 +255,9 @@ class DeliveredMeansItIsInTheLog(unittest.TestCase):
     def test_the_takers_log_is_read_back_after_the_add(self):
         share = _share_source()
         add = share.index("AddQuestAndCheckCompletion(quest, holder)")
-        readback = share.index("QuestStatus const after = taker->GetQuestStatus(questId)")
+        readback = share.index(
+            "QuestStatus const after = taker->GetQuestStatus(questId)"
+        )
         self.assertGreater(readback, add)
 
     def test_and_the_success_is_written_after_that_read(self):
@@ -293,8 +297,11 @@ class TheEnumNeedsAnAlter(unittest.TestCase):
             self.assertIn(value, sql, value)
 
     def test_it_does_not_try_to_do_it_with_a_create(self):
-        self.assertNotIn("CREATE TABLE", self._statements(),
-                         "an ENUM value cannot be added by a CREATE")
+        self.assertNotIn(
+            "CREATE TABLE",
+            self._statements(),
+            "an ENUM value cannot be added by a CREATE",
+        )
 
     def test_the_default_survives(self):
         self.assertIn("NOT NULL DEFAULT 'bot'", self._statements())
@@ -324,7 +331,9 @@ class TheBridgeAsksForWhatTheDecisionNeeds(unittest.TestCase):
         """Every eligibility rule must come from questshare/questbook, or the
         two halves will describe different families."""
         bridge = self._bridge()
-        share = bridge[bridge.index("def _share_quests("):bridge.index("def _choose_drive_quest")]
+        share = bridge[
+            bridge.index("def _share_quests(") : bridge.index("def _choose_drive_quest")
+        ]
         for smell in ("allowable_classes", "prev_quest_id", "1101", "class_bit"):
             self.assertNotIn(smell, share, smell)
         self.assertIn("questshare.plan(members, catalog)", share)
@@ -384,8 +393,12 @@ class TheShareRetryLogic(unittest.TestCase):
         worldserver's reason and keeps that decision under real tests. The
         age comes from the database's clock, not the container's."""
         bridge = self._bridge()
-        helper = bridge[bridge.index("def _answered_share_rows") : bridge.index("def _insert_share")]
-        self.assertIn("SELECT target_name, target_arg, command, status, result, ", helper)
+        helper = bridge[
+            bridge.index("def _answered_share_rows") : bridge.index("def _insert_share")
+        ]
+        self.assertIn(
+            "SELECT target_name, target_arg, command, status, result, ", helper
+        )
         # the answer's age, not the ask's: a row can sit pending or claimed
         # before the worldserver reaches it, and measured from created_at a
         # queue delay would eat the quiet time (Codex, round 4)
@@ -413,7 +426,9 @@ class TheShareRetryLogic(unittest.TestCase):
         reason is extracted behind JSON_VALID because JSON_EXTRACT on a
         non-JSON result is an error rather than a NULL."""
         bridge = self._bridge()
-        helper = bridge[bridge.index("def _answered_share_rows") : bridge.index("def _insert_share")]
+        helper = bridge[
+            bridge.index("def _answered_share_rows") : bridge.index("def _insert_share")
+        ]
         self.assertIn("def _answered_share_rows(days: int, depth: int)", helper)
         self.assertIn("ROW_NUMBER() OVER (", helper)
         self.assertIn("PARTITION BY target_name, target_arg, command, status, ", helper)
@@ -428,8 +443,12 @@ class TheShareRetryLogic(unittest.TestCase):
         a five-minute read of kind + status + updated_at range would walk
         every answered row the table ever held. The migration's key must
         match the predicate, columns in that order."""
-        sql = (MIGRATION.parent / "2026_09_02_00_overseer_share_backoff.sql").read_text(encoding="utf-8")
-        self.assertIn("ADD KEY `idx_kind_status_updated` (`kind`, `status`, `updated_at`)", sql)
+        sql = (MIGRATION.parent / "2026_09_02_00_overseer_share_backoff.sql").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn(
+            "ADD KEY `idx_kind_status_updated` (`kind`, `status`, `updated_at`)", sql
+        )
 
     def test_the_index_ships_in_the_image_that_is_built(self):
         """Codex, round 6: the worldserver image is built from
@@ -445,16 +464,24 @@ class TheShareRetryLogic(unittest.TestCase):
         self.assertIsNotNone(pinned, "AC_OVERSEER_SHA missing from UPSTREAM-PINS.env")
         gitlink = subprocess.run(
             ["git", "-C", str(ROOT), "ls-files", "-s", "--", "mod-overseer"],
-            capture_output=True, text=True, check=True,
+            capture_output=True,
+            text=True,
+            check=True,
         ).stdout.split()
         self.assertEqual(gitlink[:1], ["160000"], "mod-overseer is not a gitlink here")
         self.assertEqual(pinned.group(1), gitlink[1])
         checked_out = subprocess.run(
             ["git", "-C", str(MIGRATION.parents[4]), "rev-parse", "HEAD"],
-            capture_output=True, text=True, check=True,
+            capture_output=True,
+            text=True,
+            check=True,
         ).stdout.strip()
-        self.assertEqual(checked_out, gitlink[1], "the submodule checkout is not at the gitlink")
-        self.assertTrue((MIGRATION.parent / "2026_09_02_00_overseer_share_backoff.sql").is_file())
+        self.assertEqual(
+            checked_out, gitlink[1], "the submodule checkout is not at the gitlink"
+        )
+        self.assertTrue(
+            (MIGRATION.parent / "2026_09_02_00_overseer_share_backoff.sql").is_file()
+        )
 
     def test_the_constants_are_environment_overridable(self):
         bridge = self._bridge()

@@ -27,6 +27,7 @@ are: the catalogue, the encounters and the loot arrive as three whole-world
 queries rather than one query per dungeon, and nothing in here goes back to the
 database. The verdict itself is arithmetic over rows already in memory.
 """
+
 from __future__ import annotations
 
 import re
@@ -86,7 +87,7 @@ def party_size(comment: str | None) -> str:
 
 
 def _dungeon_count(count: int) -> str:
-    """"1 dungeon" or "7 dungeons".
+    """ "1 dungeon" or "7 dungeons".
 
     A HELPER FOR A REASON A ONE-LINE FORMAT DOES NOT HAVE. Every count on this
     page comes from a list the world handed over, so every one of them can be
@@ -190,8 +191,7 @@ def _continent_name(continent: int | None, continents: dict) -> str:
     return region["name"] if region else "map %d" % continent
 
 
-def _where_line(continent: int | None, members: list[dict],
-                continents: dict) -> str:
+def _where_line(continent: int | None, members: list[dict], continents: dict) -> str:
     """Whether this dungeon is on the ground the family is already standing on.
 
     THE CROSSING IS THE EXPENSIVE PART for this family, which is why this is on
@@ -208,8 +208,11 @@ def _where_line(continent: int | None, members: list[dict],
         return "its entrance is on %s, where all %d of them are" % (name, len(members))
     if not here:
         return "its entrance is on %s, and not one of them is on that continent" % name
-    return ("its entrance is on %s, where %d of the %d are"
-            % (name, len(here), len(members)))
+    return "its entrance is on %s, where %d of the %d are" % (
+        name,
+        len(here),
+        len(members),
+    )
 
 
 def _gain_line(count: int, best: int | None, name: str) -> str:
@@ -237,8 +240,7 @@ def _drop_line(verdict: dict, boss: str) -> str:
     return "%s, from %s: %s" % (verdict["slot"], boss, verdict["why"])
 
 
-def _dungeon_line(gainers: list[str], members: list[dict],
-                  pieces: int) -> str:
+def _dungeon_line(gainers: list[str], members: list[dict], pieces: int) -> str:
     """The headline on a dungeon card. The count first, because the count is
     what a reader scans a list of twenty for.
 
@@ -252,14 +254,19 @@ def _dungeon_line(gainers: list[str], members: list[dict],
     if not total:
         return "nothing here knows who the family are, so it cannot say"
     if not pieces:
-        return ("the world database lists no boss loot for this one, so "
-                "there was nothing to compare")
+        return (
+            "the world database lists no boss loot for this one, so "
+            "there was nothing to compare"
+        )
     if not gainers:
         return "nothing in here beats what is already worn"
     if len(gainers) == total:
         return "all %d would gain something: %s" % (total, ", ".join(gainers))
-    return ("%d of the %d would gain something: %s"
-            % (len(gainers), total, ", ".join(gainers)))
+    return "%d of the %d would gain something: %s" % (
+        len(gainers),
+        total,
+        ", ".join(gainers),
+    )
 
 
 def _tie_line(name: str, peers: list[str]) -> str:
@@ -292,16 +299,26 @@ def _delta_note(empties: int) -> str:
     if not empties:
         return ""
     if empties == 1:
-        return ("1 of these goes into an empty slot, which is all gain and has "
-                "no item level to measure it against, so it is counted here "
-                "and not in the total")
-    return ("%d of these go into empty slots, which are all gain and have no "
-            "item level to measure them against, so they are counted here and "
-            "not in the total" % empties)
+        return (
+            "1 of these goes into an empty slot, which is all gain and has "
+            "no item level to measure it against, so it is counted here "
+            "and not in the total"
+        )
+    return (
+        "%d of these go into empty slots, which are all gain and have no "
+        "item level to measure them against, so they are counted here and "
+        "not in the total" % empties
+    )
 
 
-def _chips(entry: dict, continent: int | None, members: list[dict],
-           continents: dict, total: int, shut: bool) -> list[dict]:
+def _chips(
+    entry: dict,
+    continent: int | None,
+    members: list[dict],
+    continents: dict,
+    total: int,
+    shut: bool,
+) -> list[dict]:
     """The three or four words that have to survive being collapsed.
 
     THE LIST IS TWENTY ROWS LONG ON A PHONE, and a reader scanning it is not
@@ -337,9 +354,18 @@ def _chips(entry: dict, continent: int | None, members: list[dict],
         out.append({"text": "entrance not placed", "tone": "unsure"})
     else:
         here = len([m for m in members if m.get("continent") == continent])
-        out.append({"text": _continent_name(continent, continents),
-                    "tone": ("up" if members and here == len(members)
-                             else "no" if not here else "")})
+        out.append(
+            {
+                "text": _continent_name(continent, continents),
+                "tone": (
+                    "up"
+                    if members and here == len(members)
+                    else "no"
+                    if not here
+                    else ""
+                ),
+            }
+        )
     if total:
         out.append({"text": "%d item levels" % total, "tone": "up"})
     if shut:
@@ -396,8 +422,7 @@ def _member_gains(drops: list[dict], member: dict) -> dict:
     }
 
 
-def _member_places(char_rows: list[dict], members: list[dict],
-                   entrances: dict) -> None:
+def _member_places(char_rows: list[dict], members: list[dict], entrances: dict) -> None:
     """Stamp each member with the continent they are standing on.
 
     Mutates `members` rather than returning a second list keyed by name,
@@ -418,8 +443,7 @@ def _family_line(members: list[dict], continents: dict) -> str:
     """
     if not members:
         return "nothing here knows who the family are"
-    who = ", ".join("%s %s" % (m["name"], m.get("level") or "?")
-                    for m in members)
+    who = ", ".join("%s %s" % (m["name"], m.get("level") or "?") for m in members)
     places = {m.get("continent") for m in members}
     if len(places) == 1:
         only = places.pop()
@@ -431,15 +455,18 @@ def _family_line(members: list[dict], continents: dict) -> str:
 def _headline(ranked: list[dict], members: list[dict]) -> str:
     """The one line at the top. Counts, never a recommendation."""
     if not ranked:
-        return ("the world database listed no dungeons this page could read, "
-                "so there is nothing to compare")
+        return (
+            "the world database listed no dungeons this page could read, "
+            "so there is nothing to compare"
+        )
     worth = len([d for d in ranked if d["gainers"]])
     if not worth:
-        return ("%s read, and not one of them holds anything that beats what "
-                "is already worn" % _dungeon_count(len(ranked)))
+        return (
+            "%s read, and not one of them holds anything that beats what "
+            "is already worn" % _dungeon_count(len(ranked))
+        )
     holds = "1 of them holds" if worth == 1 else "%d of them hold" % worth
-    return "%s read, %s something for somebody" % (_dungeon_count(len(ranked)),
-                                                   holds)
+    return "%s read, %s something for somebody" % (_dungeon_count(len(ranked)), holds)
 
 
 def map_ids(catalogue_rows: list[dict], names: dict) -> list[int]:
@@ -453,8 +480,10 @@ def map_ids(catalogue_rows: list[dict], names: dict) -> list[int]:
     page but missing from the reads would have rendered as "no boss loot" over
     a dungeon whose loot was simply never asked for.
     """
-    return sorted({int(row["map_id"]) for row in catalogue_rows}
-                  | {int(map_id) for map_id in names})
+    return sorted(
+        {int(row["map_id"]) for row in catalogue_rows}
+        | {int(map_id) for map_id in names}
+    )
 
 
 def _catalogue(catalogue_rows: list[dict], names: dict) -> dict:
@@ -493,8 +522,13 @@ def _catalogue(catalogue_rows: list[dict], names: dict) -> dict:
     for map_id in names:
         map_id = int(map_id)
         best[map_id] = {
-            "map_id": map_id, "difficulty": 0, "min_level": 0, "max_level": 0,
-            "name": names[map_id], "source": SITE_LIST, "party_size": "",
+            "map_id": map_id,
+            "difficulty": 0,
+            "min_level": 0,
+            "max_level": 0,
+            "name": names[map_id],
+            "source": SITE_LIST,
+            "party_size": "",
         }
     for row in catalogue_rows:
         map_id = int(row["map_id"])
@@ -503,8 +537,11 @@ def _catalogue(catalogue_rows: list[dict], names: dict) -> dict:
         # higher difficulty; a placeholder seeded from the site's list above
         # always loses, because a real row is what this page would rather have.
         seated = best.get(map_id)
-        if (seated is not None and seated["source"] == ACCESS_TABLE
-                and seated["difficulty"] <= difficulty):
+        if (
+            seated is not None
+            and seated["source"] == ACCESS_TABLE
+            and seated["difficulty"] <= difficulty
+        ):
             continue
         comment = (row.get("comment") or "").strip()
         best[map_id] = {
@@ -525,9 +562,11 @@ def _source_line(entry: dict) -> str:
     than captioning twenty rows with the same unremarkable fact."""
     if entry.get("source") == ACCESS_TABLE:
         return ""
-    return ("the world's dungeon access table does not list this one, so it is "
-            "here because this site names it; its level range is unknown "
-            "rather than absent")
+    return (
+        "the world's dungeon access table does not list this one, so it is "
+        "here because this site names it; its level range is unknown "
+        "rather than absent"
+    )
 
 
 def _coverage_line(dungeons: list[dict], catalogue_rows: list[dict]) -> str:
@@ -551,20 +590,33 @@ def _coverage_line(dungeons: list[dict], catalogue_rows: list[dict]) -> str:
     from_access = len({int(row["map_id"]) for row in catalogue_rows})
     added = len([d for d in dungeons if d["source"] == SITE_LIST])
     readable = len([d for d in dungeons if d["pieces"]])
-    where = ("%s listed: %d from the world's own dungeon access table"
-             % (_dungeon_count(len(dungeons)), from_access))
+    where = "%s listed: %d from the world's own dungeon access table" % (
+        _dungeon_count(len(dungeons)),
+        from_access,
+    )
     if added:
-        where += (" and 1 more this site names that the table does not"
-                  if added == 1 else
-                  " and %d more this site names that the table does not" % added)
-    return ("%s. %d of them had boss loot this page could read, and the rest "
-            "say so on their own row. A map on neither list does not appear "
-            "here at all." % (where, readable))
+        where += (
+            " and 1 more this site names that the table does not"
+            if added == 1
+            else " and %d more this site names that the table does not" % added
+        )
+    return (
+        "%s. %d of them had boss loot this page could read, and the rest "
+        "say so on their own row. A map on neither list does not appear "
+        "here at all." % (where, readable)
+    )
 
 
-def _drops_on(map_id: int, bosses_on: dict, by_creature: dict,
-              boss_name: dict, members: list[dict], icons: dict,
-              proficiency_checked: bool, book=None) -> list[tuple]:
+def _drops_on(
+    map_id: int,
+    bosses_on: dict,
+    by_creature: dict,
+    boss_name: dict,
+    members: list[dict],
+    icons: dict,
+    proficiency_checked: bool,
+    book=None,
+) -> list[tuple]:
     """One (payload, verdict, boss) per drop per member, on one map.
 
     ONE VERDICT PER PAIR, COMPUTED ONCE. The per-member gain lists are filtered
@@ -593,8 +645,14 @@ def _drops_on(map_id: int, bosses_on: dict, by_creature: dict,
     return drops
 
 
-def _dungeon_card(entry: dict, drops: list[tuple], members: list[dict],
-                  bosses: int, entrances: dict, continents: dict) -> dict:
+def _dungeon_card(
+    entry: dict,
+    drops: list[tuple],
+    members: list[dict],
+    bosses: int,
+    entrances: dict,
+    continents: dict,
+) -> dict:
     """One dungeon as the page draws it, minus its place in the order.
 
     `rank` and `tie_line` are stamped on afterwards, because neither is a fact
@@ -602,11 +660,14 @@ def _dungeon_card(entry: dict, drops: list[tuple], members: list[dict],
     the others, and a card that filled them in here would be guessing at an
     order that has not been decided yet.
     """
-    per_member = [found for found in
-                  (_member_gains([d for d in drops
-                                  if d[1]["who"] == member["name"]], member)
-                   for member in members)
-                  if found["gains"]]
+    per_member = [
+        found
+        for found in (
+            _member_gains([d for d in drops if d[1]["who"] == member["name"]], member)
+            for member in members
+        )
+        if found["gains"]
+    ]
     gainers = [found["who"] for found in per_member]
     pieces = len({payload["entry"] for payload, _, _ in drops})
     blocked = _under_minimum(entry, members)
@@ -643,8 +704,7 @@ def _place_them(dungeons: list[dict]) -> None:
     last, then how many would gain, then the item levels that gain would add,
     then the name so the list does not move on its own.
     """
-    dungeons.sort(key=lambda d: (d["shut"], -len(d["gainers"]), -d["total"],
-                                 d["name"]))
+    dungeons.sort(key=lambda d: (d["shut"], -len(d["gainers"]), -d["total"], d["name"]))
     scores: dict = {}
     for dungeon in dungeons:
         scores.setdefault(_score(dungeon), []).append(dungeon["name"])
@@ -653,8 +713,11 @@ def _place_them(dungeons: list[dict]) -> None:
         # Without this the fifteen dungeons that hold nothing each print a
         # fourteen-name tie line, which is noise standing where a finding
         # should be and is also not what "tied" means.
-        dungeon["tie_line"] = (_tie_line(dungeon["name"], scores[_score(dungeon)])
-                               if dungeon["gainers"] else "")
+        dungeon["tie_line"] = (
+            _tie_line(dungeon["name"], scores[_score(dungeon)])
+            if dungeon["gainers"]
+            else ""
+        )
         # THE PLACE IN THE LIST IS DECIDED HERE, not counted by the page off
         # the position it drew a row at. The page would get the same number
         # today, and a different one the first time it filtered or paged the
@@ -684,10 +747,15 @@ def _index(encounter_rows: list[dict], loot_rows: list[dict]) -> tuple:
     return boss_name, bosses_on, by_creature
 
 
-def gainer_counts(encounter_rows: list[dict], loot_rows: list[dict],
-                  char_rows: list[dict], equipped_rows: list[dict],
-                  roster: list[str], maps: list[int],
-                  skill_rows: list[dict] | None = None) -> dict:
+def gainer_counts(
+    encounter_rows: list[dict],
+    loot_rows: list[dict],
+    char_rows: list[dict],
+    equipped_rows: list[dict],
+    roster: list[str],
+    maps: list[int],
+    skill_rows: list[dict] | None = None,
+) -> dict:
     """map id -> who in `roster` would gain something there, and out of how many.
 
     THE GUILD'S HALF OF "WHAT UPGRADES ARE THERE". The family's cards carry
@@ -701,14 +769,25 @@ def gainer_counts(encounter_rows: list[dict], loot_rows: list[dict],
     """
     members = recap.family_members(char_rows, equipped_rows, roster, skill_rows)
     proficiency_checked = bool(members) and all(
-        member["skills"] is not None for member in members)
+        member["skills"] is not None for member in members
+    )
     boss_name, bosses_on, by_creature = _index(encounter_rows, loot_rows)
     out: dict = {}
     for map_id in maps:
-        drops = _drops_on(int(map_id), bosses_on, by_creature, boss_name,
-                          members, {}, proficiency_checked)
-        gained = {verdict["who"] for _, verdict, _ in drops
-                  if verdict["verdict"] in GAIN_VERDICTS}
+        drops = _drops_on(
+            int(map_id),
+            bosses_on,
+            by_creature,
+            boss_name,
+            members,
+            {},
+            proficiency_checked,
+        )
+        gained = {
+            verdict["who"]
+            for _, verdict, _ in drops
+            if verdict["verdict"] in GAIN_VERDICTS
+        }
         out[int(map_id)] = {
             "gainers": [m["name"] for m in members if m["name"] in gained],
             "of": len(members),
@@ -717,13 +796,20 @@ def gainer_counts(encounter_rows: list[dict], loot_rows: list[dict],
     return out
 
 
-def build_dungeonplan(catalogue_rows: list[dict], encounter_rows: list[dict],
-                      loot_rows: list[dict], char_rows: list[dict],
-                      equipped_rows: list[dict], icons: dict,
-                      roster: list[str], names: dict,
-                      entrances: dict, continents: dict,
-                      skill_rows: list[dict] | None = None,
-                      book=None) -> dict:
+def build_dungeonplan(
+    catalogue_rows: list[dict],
+    encounter_rows: list[dict],
+    loot_rows: list[dict],
+    char_rows: list[dict],
+    equipped_rows: list[dict],
+    icons: dict,
+    roster: list[str],
+    names: dict,
+    entrances: dict,
+    continents: dict,
+    skill_rows: list[dict] | None = None,
+    book=None,
+) -> dict:
     """Every dungeon, who would gain in it, and what they would gain.
 
     `catalogue_rows` are `dungeon_access_template` rows and are the list of
@@ -756,18 +842,32 @@ def build_dungeonplan(catalogue_rows: list[dict], encounter_rows: list[dict],
     # are the old item-level ones, and that is a fact about the page rather
     # than about that character.
     proficiency_checked = bool(members) and all(
-        member["skills"] is not None for member in members)
+        member["skills"] is not None for member in members
+    )
     catalogue = _catalogue(catalogue_rows, names)
 
     boss_name, bosses_on, by_creature = _index(encounter_rows, loot_rows)
 
     dungeons = [
-        _dungeon_card(entry,
-                      _drops_on(map_id, bosses_on, by_creature, boss_name,
-                                members, icons, proficiency_checked, book),
-                      members, len(bosses_on.get(map_id, ())), entrances,
-                      continents)
-        for map_id, entry in catalogue.items()]
+        _dungeon_card(
+            entry,
+            _drops_on(
+                map_id,
+                bosses_on,
+                by_creature,
+                boss_name,
+                members,
+                icons,
+                proficiency_checked,
+                book,
+            ),
+            members,
+            len(bosses_on.get(map_id, ())),
+            entrances,
+            continents,
+        )
+        for map_id, entry in catalogue.items()
+    ]
     _place_them(dungeons)
 
     return {
@@ -782,10 +882,14 @@ def build_dungeonplan(catalogue_rows: list[dict], encounter_rows: list[dict],
             "not move on its own. A dungeon the access table says nobody is "
             "high enough for is ordered last whatever it holds. A tie says so "
             "on the card it is tied on, rather than letting the one printed "
-            "higher read as the better answer."),
-        "empty_note": ("the world database listed no dungeons this page could "
-                       "read, so there is nothing to compare"
-                       if not dungeons else ""),
+            "higher read as the better answer."
+        ),
+        "empty_note": (
+            "the world database listed no dungeons this page could "
+            "read, so there is nothing to compare"
+            if not dungeons
+            else ""
+        ),
     }
 
 
@@ -823,11 +927,14 @@ def _basis(proficiency_checked: bool) -> str:
         "that it takes five. The list of dungeons is the world's "
         "dungeon_access_template plus any map this site already names, and a "
         "map on neither list does not appear above at all, which is not the "
-        "same as a map that appears saying nothing in it was readable. " + (
+        "same as a map that appears saying nothing in it was readable. "
+        + (
             "Whether a character can hold a thing is read from their own "
             "character_skills rows, using the core's own subclass-to-skill "
             "map, so a weapon or a shield nobody can use is refused by name "
             "rather than counted as a gain."
-            if proficiency_checked else
-            "Proficiency could not be read for every character this time, so "
-            "a weapon is ranked on item level alone and the drop says so."))
+            if proficiency_checked
+            else "Proficiency could not be read for every character this time, so "
+            "a weapon is ranked on item level alone and the drop says so."
+        )
+    )

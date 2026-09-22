@@ -5,21 +5,39 @@ decided in panel.py from plain dicts, so the whole in-game reality of a
 character (hotbar, bags, vitals, target, guild, group) is testable without
 MySQL. The HTTP adapter only fetches rows and calls build_character_panel.
 """
+
 import unittest
 
 from panel import build_character_panel
 
 SNAP = {
-    "guid": 7, "name": "Odo", "level": 5, "race": 2, "class": 1,
-    "map_id": 1, "zone_id": 14, "area_id": 0,
-    "health": 100, "max_health": 146, "in_combat": 0, "is_bot": 1,
-    "guild_id": 0, "group_leader": 0, "target_guid": 0, "age_seconds": 3,
+    "guid": 7,
+    "name": "Odo",
+    "level": 5,
+    "race": 2,
+    "class": 1,
+    "map_id": 1,
+    "zone_id": 14,
+    "area_id": 0,
+    "health": 100,
+    "max_health": 146,
+    "in_combat": 0,
+    "is_bot": 1,
+    "guild_id": 0,
+    "group_leader": 0,
+    "target_guid": 0,
+    "age_seconds": 3,
 }
 
 CHAR = {
     "activeTalentGroup": 0,
-    "power1": 0, "power2": 350, "power3": 0, "power4": 0,
-    "power5": 0, "power6": 0, "power7": 0,
+    "power1": 0,
+    "power2": 350,
+    "power3": 0,
+    "power4": 0,
+    "power5": 0,
+    "power6": 0,
+    "power7": 0,
 }
 
 
@@ -87,7 +105,9 @@ class IdentityAndVitalsTest(unittest.TestCase):
         self.assertEqual(v["power"], {"kind": "Rage", "value": 35})
 
     def test_mana_class_reads_power1_unscaled(self):
-        v = build(snapshot_row=snap(**{"class": 8}), char_row=char(power1=284))["vitals"]
+        v = build(snapshot_row=snap(**{"class": 8}), char_row=char(power1=284))[
+            "vitals"
+        ]
         self.assertEqual(v["power"], {"kind": "Mana", "value": 284})
 
     def test_missing_characters_row_means_no_power_not_a_crash(self):
@@ -104,8 +124,13 @@ class HotbarTest(unittest.TestCase):
         ]
         bars = build(action_rows=rows)["hotbar"]
         self.assertEqual([b["bar"] for b in bars], [1, 7])
-        self.assertEqual(bars[0]["buttons"][0], {"slot": 0, "label": "Spell #6603", "kind": "spell", "id": 6603})
-        self.assertEqual(bars[1]["buttons"][0]["slot"], 0)  # button 72 is slot 0 of bar 7
+        self.assertEqual(
+            bars[0]["buttons"][0],
+            {"slot": 0, "label": "Spell #6603", "kind": "spell", "id": 6603},
+        )
+        self.assertEqual(
+            bars[1]["buttons"][0]["slot"], 0
+        )  # button 72 is slot 0 of bar 7
 
     def test_only_the_active_spec_is_shown(self):
         rows = [
@@ -126,23 +151,36 @@ class HotbarTest(unittest.TestCase):
 
 
 def inv(bag, slot, item_guid, entry, count, name):
-    return {"bag": bag, "slot": slot, "item_guid": item_guid,
-            "entry": entry, "count": count, "name": name}
+    return {
+        "bag": bag,
+        "slot": slot,
+        "item_guid": item_guid,
+        "entry": entry,
+        "count": count,
+        "name": name,
+    }
 
 
 class InventoryTest(unittest.TestCase):
     def test_equipment_slots_get_their_worn_names(self):
-        rows = [inv(0, 4, 900, 3471, 1, "Copper Chain Vest"),
-                inv(0, 15, 901, 8178, 1, "Training Sword")]
+        rows = [
+            inv(0, 4, 900, 3471, 1, "Copper Chain Vest"),
+            inv(0, 15, 901, 8178, 1, "Training Sword"),
+        ]
         eq = build(inventory_rows=rows)["equipment"]
-        self.assertEqual(eq, [{"slot": "chest", "name": "Copper Chain Vest"},
-                              {"slot": "main hand", "name": "Training Sword"}])
+        self.assertEqual(
+            eq,
+            [
+                {"slot": "chest", "name": "Copper Chain Vest"},
+                {"slot": "main hand", "name": "Training Sword"},
+            ],
+        )
 
     def test_backpack_and_bag_contents_group_under_their_container(self):
         rows = [
-            inv(0, 19, 500, 51809, 1, "Portable Hole"),   # equipped bag
+            inv(0, 19, 500, 51809, 1, "Portable Hole"),  # equipped bag
             inv(500, 0, 501, 118, 13, "Minor Healing Potion"),
-            inv(0, 23, 502, 117, 1, "Tough Jerky"),        # backpack
+            inv(0, 23, 502, 117, 1, "Tough Jerky"),  # backpack
         ]
         p = build(inventory_rows=rows)
         self.assertEqual(p["backpack"], [{"name": "Tough Jerky", "count": 1}])
@@ -164,21 +202,23 @@ class InventoryTest(unittest.TestCase):
 
     def test_bank_buyback_and_keyring_are_counted_not_listed(self):
         rows = [
-            inv(0, 39, 600, 117, 5, "Tough Jerky"),        # bank slot
-            inv(0, 67, 601, 51809, 1, "Portable Hole"),    # bank bag
+            inv(0, 39, 600, 117, 5, "Tough Jerky"),  # bank slot
+            inv(0, 67, 601, 51809, 1, "Portable Hole"),  # bank bag
             inv(601, 0, 602, 118, 2, "Minor Healing Potion"),  # inside bank bag
-            inv(0, 80, 603, 117, 1, "Tough Jerky"),        # buyback
+            inv(0, 80, 603, 117, 1, "Tough Jerky"),  # buyback
             inv(0, 90, 604, 6219, 1, "Arclight Spanner"),  # keyring range
         ]
         p = build(inventory_rows=rows)
         self.assertEqual(p["stored_elsewhere"], 4)  # the bank BAG itself is not cargo
-        self.assertEqual(p["bags"], [])             # bank bags are not carried bags
+        self.assertEqual(p["bags"], [])  # bank bags are not carried bags
 
     def test_unknown_item_name_falls_back_to_its_entry(self):
         # LEFT JOIN miss on acore_world.item_template (custom/removed item).
         rows = [inv(0, 23, 700, 99999, 1, None)]
-        self.assertEqual(build(inventory_rows=rows)["backpack"],
-                         [{"name": "Item #99999", "count": 1}])
+        self.assertEqual(
+            build(inventory_rows=rows)["backpack"],
+            [{"name": "Item #99999", "count": 1}],
+        )
 
 
 class SocialTest(unittest.TestCase):
@@ -208,14 +248,18 @@ class TargetTest(unittest.TestCase):
     def test_player_target_wins_over_creature_with_the_same_counter(self):
         # target_guid is a bare counter: player guids and creature spawn
         # guids overlap below ~1061, so a live player match must win.
-        t = build(snapshot_row=snap(target_guid=25),
-                  target_player={"name": "Paen", "level": 3},
-                  target_creature_name="Stabled Argent Warhorse")["target"]
+        t = build(
+            snapshot_row=snap(target_guid=25),
+            target_player={"name": "Paen", "level": 3},
+            target_creature_name="Stabled Argent Warhorse",
+        )["target"]
         self.assertEqual(t, {"kind": "player", "name": "Paen", "level": 3})
 
     def test_creature_target_is_named(self):
-        t = build(snapshot_row=snap(target_guid=873),
-                  target_creature_name="Frostmane Troll Whelp")["target"]
+        t = build(
+            snapshot_row=snap(target_guid=873),
+            target_creature_name="Frostmane Troll Whelp",
+        )["target"]
         self.assertEqual(t, {"kind": "creature", "name": "Frostmane Troll Whelp"})
 
     def test_unresolvable_target_is_admitted_not_hidden(self):

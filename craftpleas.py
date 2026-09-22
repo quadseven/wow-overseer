@@ -124,7 +124,9 @@ _NEED_RE = re.compile(
 # though somebody had asked for cloth. Anchored on the SPEAKER's own name so
 # it only ever silences a character narrating their own handover: "Og give me
 # cloth?" from anybody else is still a request and still gets an answer.
-_GIVING_RE = re.compile(r"^\s*(?P<who>[A-Za-z]{2,12})\s+(?:give|gives|hand|hands|handing)\b", re.I)
+_GIVING_RE = re.compile(
+    r"^\s*(?P<who>[A-Za-z]{2,12})\s+(?:give|gives|hand|hands|handing)\b", re.I
+)
 
 # The same negation shape kin._NEGATIVE_RE guards with, aimed at this
 # module's own trigger words instead of "help".
@@ -216,7 +218,8 @@ def state(ask: Ask, held: Mapping) -> str:
     apart here is the whole fix for "Og know tailoring".
     """
     return chat.skill_state(
-        ask.crafter, ask.skill,
+        ask.crafter,
+        ask.skill,
         held=held,
         planned={ask.crafter: professions.assigned(ask.crafter)},
     )

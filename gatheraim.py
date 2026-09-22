@@ -38,6 +38,7 @@ SKINNING IS NOT HERE AND CANNOT BE. Skinning comes off creature corpses, not
 never aim at it. Bork's Skinning 12 is not addressed by any destination; saying
 so is better than silently treating him as served.
 """
+
 from __future__ import annotations
 
 import dataclasses
@@ -153,11 +154,18 @@ def fields_in_band(spawns, skill_name, value, standing_on):
         # The centroid ranks and selects; it is never itself a destination.
         # `min` over real rows guarantees the coordinate that leaves here was
         # surveyed by the world, not computed by this process.
-        central = min(rows, key=lambda r: (float(r.x) - cx) ** 2
-                      + (float(r.y) - cy) ** 2)
-        out.append(NodeField(zone_id=zone_id, map_id=int(standing_on),
-                             skill_name=skill_name, nodes=len(rows),
-                             spawn=central))
+        central = min(
+            rows, key=lambda r: (float(r.x) - cx) ** 2 + (float(r.y) - cy) ** 2
+        )
+        out.append(
+            NodeField(
+                zone_id=zone_id,
+                map_id=int(standing_on),
+                skill_name=skill_name,
+                nodes=len(rows),
+                spawn=central,
+            )
+        )
     out.sort(key=lambda f: (-f.nodes, f.zone_id))
     return out
 
@@ -173,27 +181,36 @@ def choose(*, skills, standing_on, spawns, family_level=0, zone_levels=None):
     """
     skill_name, value = lowest_gatherer(skills)
     if skill_name is None:
-        return Choice(refused=(
-            "nobody in the family holds mining or herbalism, so there is no "
-            "gathering destination to choose - skinning comes off corpses "
-            "rather than nodes and no walk addresses it"),
-            why="no aimable gathering skill in the roster.")
+        return Choice(
+            refused=(
+                "nobody in the family holds mining or herbalism, so there is no "
+                "gathering destination to choose - skinning comes off corpses "
+                "rather than nodes and no walk addresses it"
+            ),
+            why="no aimable gathering skill in the roster.",
+        )
 
     if standing_on is None:
-        return Choice(refused=(
-            "nobody can say which map the family is standing on - "
-            "overseer_snapshot has no fresh row for the leader, so the family "
-            "is either offline or the module has stopped writing the snapshot"),
-            why="no standing map for the leader.")
+        return Choice(
+            refused=(
+                "nobody can say which map the family is standing on - "
+                "overseer_snapshot has no fresh row for the leader, so the family "
+                "is either offline or the module has stopped writing the snapshot"
+            ),
+            why="no standing map for the leader.",
+        )
 
     candidates = fields_in_band(spawns, skill_name, value, standing_on)
     if not candidates:
-        return Choice(refused=(
-            "no zone on map %s holds a single node %s %d can open; every node "
-            "in reach needs more skill than the family's weakest gatherer has, "
-            "and an off-map field is not a candidate because the family never "
-            "learned its flight nodes" % (standing_on, skill_name, value)),
-            why="no in-band node on this map.")
+        return Choice(
+            refused=(
+                "no zone on map %s holds a single node %s %d can open; every node "
+                "in reach needs more skill than the family's weakest gatherer has, "
+                "and an off-map field is not a candidate because the family never "
+                "learned its flight nodes" % (standing_on, skill_name, value)
+            ),
+            why="no in-band node on this map.",
+        )
 
     levels = zone_levels or {}
     ceiling = int(family_level) + LEVEL_MARGIN if family_level else 0
@@ -205,23 +222,31 @@ def choose(*, skills, standing_on, spawns, family_level=0, zone_levels=None):
             continue
         if ceiling and int(top) > ceiling:
             continue
-        return Choice(chosen=NodeField(zone_id=cand.zone_id, map_id=cand.map_id,
-                                   skill_name=cand.skill_name,
-                                   nodes=cand.nodes, spawn=cand.spawn,
-                                   top_level=int(top)),
-                      why="zone %d holds %d node(s) %s %d can open and tops out "
-                          "at level %d, within the family's %d."
-                          % (cand.zone_id, cand.nodes, skill_name, value,
-                             int(top), ceiling),
-                      considered=tuple(considered))
+        return Choice(
+            chosen=NodeField(
+                zone_id=cand.zone_id,
+                map_id=cand.map_id,
+                skill_name=cand.skill_name,
+                nodes=cand.nodes,
+                spawn=cand.spawn,
+                top_level=int(top),
+            ),
+            why="zone %d holds %d node(s) %s %d can open and tops out "
+            "at level %d, within the family's %d."
+            % (cand.zone_id, cand.nodes, skill_name, value, int(top), ceiling),
+            considered=tuple(considered),
+        )
 
-    return Choice(refused=(
-        "every zone on map %s holding a node %s %d can open is either unmeasured "
-        "for danger or tops out above level %d, and a ground aim is not "
-        "level-checked anywhere in the module - so none of them may be walked "
-        "to (infra#3789)" % (standing_on, skill_name, value, ceiling)),
+    return Choice(
+        refused=(
+            "every zone on map %s holding a node %s %d can open is either unmeasured "
+            "for danger or tops out above level %d, and a ground aim is not "
+            "level-checked anywhere in the module - so none of them may be walked "
+            "to (infra#3789)" % (standing_on, skill_name, value, ceiling)
+        ),
         why="all in-band fields failed the level guard.",
-        considered=tuple(considered))
+        considered=tuple(considered),
+    )
 
 
 def report(choice):
@@ -229,8 +254,18 @@ def report(choice):
     if choice.refused:
         return choice.refused
     got = choice.chosen
-    return ("aiming the family at zone %d on map %d, where %d %s node(s) sit "
-            "within reach of the weakest gatherer; the destination is a "
-            "surveyed spawn at %.1f,%.1f,%.1f and the zone tops out at level %d"
-            % (got.zone_id, got.map_id, got.nodes, got.skill_name,
-               got.spawn.x, got.spawn.y, got.spawn.z, got.top_level))
+    return (
+        "aiming the family at zone %d on map %d, where %d %s node(s) sit "
+        "within reach of the weakest gatherer; the destination is a "
+        "surveyed spawn at %.1f,%.1f,%.1f and the zone tops out at level %d"
+        % (
+            got.zone_id,
+            got.map_id,
+            got.nodes,
+            got.skill_name,
+            got.spawn.x,
+            got.spawn.y,
+            got.spawn.z,
+            got.top_level,
+        )
+    )

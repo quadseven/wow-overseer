@@ -79,8 +79,7 @@ def _plural(n: int, one: str, many: str) -> str:
     return one if n == 1 else many
 
 
-def tier(name: str, state: str, value: str, headline: str,
-         switch: str = "") -> dict:
+def tier(name: str, state: str, value: str, headline: str, switch: str = "") -> dict:
     """One rung. `switch` is what would turn it on, and only an off rung has one.
 
     An ON tier carrying a switch would read as a suggestion to change
@@ -102,14 +101,18 @@ def character_tier(family_rows: list[dict], realm_characters: int) -> dict:
     held = len(family_rows)
     if not held:
         return tier(
-            CHARACTER, OFF, "0",
+            CHARACTER,
+            OFF,
+            "0",
             "The module holds no characters on this realm.",
             "One character saved by the module. Until then every tier above "
             "this one is counting nothing.",
         )
     rest = max(realm_characters - held, 0)
     headline = "%d %s the module knows by name" % (
-        held, _plural(held, "character", "characters"))
+        held,
+        _plural(held, "character", "characters"),
+    )
     if rest:
         headline += ", of %d on the realm" % realm_characters
     else:
@@ -122,12 +125,13 @@ def family_tier(family_rows: list[dict]) -> dict:
     names = sorted(str(row["name"]) for row in family_rows)
     if not names:
         return tier(
-            FAMILY, OFF, "0",
+            FAMILY,
+            OFF,
+            "0",
             "No family is in the world.",
             "The five characters logged in and saved by the module.",
         )
-    return tier(FAMILY, ON, "1",
-                "One family: %s." % ", ".join(names))
+    return tier(FAMILY, ON, "1", "One family: %s." % ", ".join(names))
 
 
 def party_tier(snapshot_rows: list[dict], family: set) -> dict:
@@ -142,24 +146,30 @@ def party_tier(snapshot_rows: list[dict], family: set) -> dict:
     Read off the LIVE snapshot and not off the saved rows, because a party is
     the one thing on this ladder that stops existing when everybody logs out.
     """
-    leaders = {str(row.get("group_leader") or "") for row in snapshot_rows
-               if str(row.get("name") or "") in family}
+    leaders = {
+        str(row.get("group_leader") or "")
+        for row in snapshot_rows
+        if str(row.get("name") or "") in family
+    }
     leaders.discard("")
     if not leaders:
         return tier(
-            PARTY, OFF, "0",
+            PARTY,
+            OFF,
+            "0",
             "Nobody is following anybody.",
             "A party leader in the snapshot. The module writes one the moment "
             "the family groups up, and writes none while they are logged out.",
         )
     if len(leaders) > 1:
         return tier(
-            PARTY, PARTIAL, str(len(leaders)),
+            PARTY,
+            PARTIAL,
+            str(len(leaders)),
             "%d groups, not one: the family is split." % len(leaders),
             "The family behind one leader again.",
         )
-    return tier(PARTY, ON, "1",
-                "One party, behind %s." % sorted(leaders)[0])
+    return tier(PARTY, ON, "1", "One party, behind %s." % sorted(leaders)[0])
 
 
 def guild_tier(guilds: int, realm_characters: int) -> dict:
@@ -171,19 +181,29 @@ def guild_tier(guilds: int, realm_characters: int) -> dict:
     because it names the thing that has to change first.
     """
     if guilds:
-        return tier(GUILD, ON, str(guilds),
-                    "%d %s on the realm." % (guilds, _plural(guilds, "guild",
-                                                             "guilds")))
+        return tier(
+            GUILD,
+            ON,
+            str(guilds),
+            "%d %s on the realm." % (guilds, _plural(guilds, "guild", "guilds")),
+        )
     short = max(CHARTER_SIGNATURES - realm_characters, 0)
     if short:
-        switch = ("A charter with %d signatures. The realm has %d %s in "
-                  "total, so it is %d short of being able to sign one at all."
-                  % (CHARTER_SIGNATURES, realm_characters,
-                     _plural(realm_characters, "character", "characters"),
-                     short))
+        switch = (
+            "A charter with %d signatures. The realm has %d %s in "
+            "total, so it is %d short of being able to sign one at all."
+            % (
+                CHARTER_SIGNATURES,
+                realm_characters,
+                _plural(realm_characters, "character", "characters"),
+                short,
+            )
+        )
     else:
-        switch = ("A charter with %d signatures. The realm has the characters "
-                  "for it; nobody has taken one round." % CHARTER_SIGNATURES)
+        switch = (
+            "A charter with %d signatures. The realm has the characters "
+            "for it; nobody has taken one round." % CHARTER_SIGNATURES
+        )
     return tier(GUILD, OFF, "0", "No guild exists on this realm.", switch)
 
 
@@ -196,21 +216,28 @@ def realm_tier(souls: int, mortals: int) -> dict:
     """
     if not souls:
         return tier(
-            REALM, OFF, "0",
+            REALM,
+            OFF,
+            "0",
             "Nobody walks the world right now.",
             "Anyone logged in. An empty realm is a real state here - the "
             "module sweeps logged-out rows, so the table drains.",
         )
     bots = max(souls - mortals, 0)
     headline = "%d %s in the world, %d of them played by the machine." % (
-        souls, _plural(souls, "soul", "souls"), bots)
+        souls,
+        _plural(souls, "soul", "souls"),
+        bots,
+    )
     if souls >= CROWD:
         return tier(REALM, ON, str(souls), headline)
     return tier(
-        REALM, PARTIAL, str(souls), headline,
+        REALM,
+        PARTIAL,
+        str(souls),
+        headline,
         "%d at once. Below that the population IS the family, and a "
-        "population chart would be a chart of whether they are logged in."
-        % CROWD,
+        "population chart would be a chart of whether they are logged in." % CROWD,
     )
 
 
@@ -222,18 +249,31 @@ def honest_line(on: int, total: int) -> str:
     refuses; what a reader needs is the shape of what is missing.
     """
     if on >= total:
-        return ("Every tier is real. Nothing on this page is a placeholder "
-                "for something that does not exist yet.")
+        return (
+            "Every tier is real. Nothing on this page is a placeholder "
+            "for something that does not exist yet."
+        )
     off = total - on
-    return ("%d of %d tiers are real. The other %d %s drawn as a chart, "
-            "because %s not there yet; each one names what would turn it on."
-            % (on, total, off, _plural(off, "is not", "are not"),
-               _plural(off, "it is", "they are")))
+    return (
+        "%d of %d tiers are real. The other %d %s drawn as a chart, "
+        "because %s not there yet; each one names what would turn it on."
+        % (
+            on,
+            total,
+            off,
+            _plural(off, "is not", "are not"),
+            _plural(off, "it is", "they are"),
+        )
+    )
 
 
-def build_eye(snapshot_rows: list[dict], family_rows: list[dict],
-              realm_rows: list[dict], guild_rows: list[dict],
-              now: datetime | None = None) -> dict:
+def build_eye(
+    snapshot_rows: list[dict],
+    family_rows: list[dict],
+    realm_rows: list[dict],
+    guild_rows: list[dict],
+    now: datetime | None = None,
+) -> dict:
     """Rows in, the Eye's JSON out.
 
     snapshot_rows overseer_snapshot, the live world (name, is_bot, group_leader)

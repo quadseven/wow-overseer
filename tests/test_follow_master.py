@@ -45,12 +45,12 @@ Pins (production/UPSTREAM-PINS.env):
 Neither is vendored here. Every line number above and below was read from those
 two trees at those SHAs.
 """
+
 import pathlib
 import unittest
 
 MODULE = (
-    pathlib.Path(__file__).resolve().parents[1]
-    / "mod-overseer/src/mod_overseer.cpp"
+    pathlib.Path(__file__).resolve().parents[1] / "mod-overseer/src/mod_overseer.cpp"
 )
 
 
@@ -65,7 +65,7 @@ def _function(name: str) -> str:
         elif src[i] == "}":
             depth -= 1
             if depth == 0:
-                return src[start:i + 1]
+                return src[start : i + 1]
     raise AssertionError("%s has no closing brace" % name)
 
 
@@ -86,8 +86,7 @@ def _following() -> str:
 def _grouped() -> str:
     # mod-overseer#550 split KeepRosterGrouped into a census-and-partition and
     # the per-family party it always formed. The pass these tests describe is both.
-    return (_function("void KeepRosterGrouped()")
-            + _function("void KeepFamilyGrouped("))
+    return _function("void KeepRosterGrouped()") + _function("void KeepFamilyGrouped(")
 
 
 class SomebodyIsActuallyAssignedAMaster(unittest.TestCase):
@@ -121,7 +120,8 @@ class SomebodyIsActuallyAssignedAMaster(unittest.TestCase):
         that is about to stop being leader."""
         body = _code(_grouped())
         self.assertLess(
-            body.index("ChangeLeader("), body.index("KeepRosterFollowing("),
+            body.index("ChangeLeader("),
+            body.index("KeepRosterFollowing("),
             "the follow pass runs before the leadership correction, so it can "
             "hand out a master that is about to be replaced",
         )
@@ -228,9 +228,12 @@ class AMasterNobodyWalksTowardIsNotCohesion(unittest.TestCase):
         self.assertLess(assign, check)
         # ...and the check must not be nested inside the assignment branch.
         between = body[assign:check]
-        self.assertIn("}", between,
-                      "the follow check sits inside the `master is wrong` branch, "
-                      "so a correct master with no follow strategy is never noticed")
+        self.assertIn(
+            "}",
+            between,
+            "the follow check sits inside the `master is wrong` branch, "
+            "so a correct master with no follow strategy is never noticed",
+        )
 
     def test_a_missing_strategy_is_reported_distinguishably(self):
         """Not the same line as a healthy assignment. `follow` is an AiFactory
@@ -253,12 +256,14 @@ class AMasterNobodyWalksTowardIsNotCohesion(unittest.TestCase):
         body = _code(_following())
         guard = body.index("IsRealPlayer(botAI->GetMaster())")
         self.assertLess(
-            guard, body.index("botAI->SetMaster(leader)"),
+            guard,
+            body.index("botAI->SetMaster(leader)"),
             "the poll assigns a master before checking whether a human owns this "
             "character",
         )
         self.assertLess(
-            guard, body.index('HasStrategy("follow"'),
+            guard,
+            body.index('HasStrategy("follow"'),
             "the poll edits strategies before checking whether a human owns this "
             "character",
         )

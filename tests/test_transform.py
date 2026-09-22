@@ -6,14 +6,15 @@ assertions are positional truths - which half of which continent - so a
 sign flip or axis swap in the transform fails loudly, while small numeric
 drift does not.
 """
+
 import unittest
 
 from transform import Geometry
 
 # .gps readings, city centers, 3.3.5a
-ORGRIMMAR = (1573.0, -4399.0)   # map 1  (x north+, y west+)
-STORMWIND = (-8842.0, 626.0)    # map 0
-STOCKADE_MAP = 34               # instance inside Stormwind
+ORGRIMMAR = (1573.0, -4399.0)  # map 1  (x north+, y west+)
+STORMWIND = (-8842.0, 626.0)  # map 0
+STOCKADE_MAP = 34  # instance inside Stormwind
 
 
 class TransformTest(unittest.TestCase):
@@ -86,7 +87,9 @@ class TransformTest(unittest.TestCase):
         continent, u, v = placed
         self.assertEqual(continent, "0")
         su, sv = self.geo.to_fraction(0, *STORMWIND)
-        self.assertLess(abs(u - su) + abs(v - sv), 0.05, "Stockade surfaces beside Stormwind")
+        self.assertLess(
+            abs(u - su) + abs(v - sv), 0.05, "Stockade surfaces beside Stormwind"
+        )
 
     def test_continent_dwellers_place_directly(self):
         self.assertEqual(
@@ -107,6 +110,7 @@ class TransformTest(unittest.TestCase):
 class ZoneById(unittest.TestCase):
     def setUp(self):
         from transform import Geometry
+
         self.geo = Geometry.load(".")
 
     def test_a_zone_id_names_its_zone(self):

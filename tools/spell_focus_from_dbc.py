@@ -43,6 +43,7 @@ This script asserts the anchor anyway - a parse that cannot find a known-good
 value is not one to read new facts off - and then sanity-checks the focus field
 against a second known value: spell 2657 (Smelt Copper) must read 3, Forge.
 """
+
 from __future__ import annotations
 
 import pathlib
@@ -71,8 +72,9 @@ def _field(blob, body, rowsize, row, index):
 
 
 def _text(blob, strings, offset):
-    return blob[strings + offset:blob.index(b"\0", strings + offset)].decode(
-        "utf-8", "replace")
+    return blob[strings + offset : blob.index(b"\0", strings + offset)].decode(
+        "utf-8", "replace"
+    )
 
 
 def main(argv):
@@ -84,8 +86,10 @@ def main(argv):
     anchor = index[2963]
     assert _field(spell, body, rowsize, anchor, F_REAGENT) == 2589
     assert _field(spell, body, rowsize, anchor, F_REAGENT_COUNT) == 2
-    assert _text(spell, strings, _field(
-        spell, body, rowsize, anchor, F_NAME)) == "Bolt of Linen Cloth"
+    assert (
+        _text(spell, strings, _field(spell, body, rowsize, anchor, F_NAME))
+        == "Bolt of Linen Cloth"
+    )
     # AND A SECOND ONE FOR THE FIELD THE ANCHOR DOES NOT COVER. Smelt Copper is
     # Forge-gated; a layout that answers anything else here is the wrong layout.
     assert _field(spell, body, rowsize, index[2657], F_REQUIRES_SPELL_FOCUS) == 3
@@ -94,13 +98,16 @@ def main(argv):
     focus_file = where / "SpellFocusObject.dbc"
     if focus_file.exists():
         foc, frows, _ff, frowsize, fbody, fstrings = _load(focus_file)
-        names = {_field(foc, fbody, frowsize, r, 0):
-                 _text(foc, fstrings, _field(foc, fbody, frowsize, r, 1))
-                 for r in range(frows)}
+        names = {
+            _field(foc, fbody, frowsize, r, 0): _text(
+                foc, fstrings, _field(foc, fbody, frowsize, r, 1)
+            )
+            for r in range(frows)
+        }
 
     sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
-    import craft      # noqa: E402
-    import goals      # noqa: E402
+    import craft  # noqa: E402
+    import goals  # noqa: E402
 
     by_id = {v: k for k, v in goals.SKILL_IDS.items()}
     print("MEASURED_FOCUS = {")
@@ -111,14 +118,18 @@ def main(argv):
         for recipe in recipes:
             row = index.get(recipe.spell_id)
             if row is None:
-                print("    # !! spell %d is not in Spell.dbc at all"
-                      % recipe.spell_id)
+                print("    # !! spell %d is not in Spell.dbc at all" % recipe.spell_id)
                 continue
             focus = _field(spell, body, rowsize, row, F_REQUIRES_SPELL_FOCUS)
-            print("    %d: %d,   # %s%s" % (
-                recipe.spell_id, focus,
-                _text(spell, strings, _field(spell, body, rowsize, row, F_NAME)),
-                " (%s)" % names[focus] if focus and focus in names else ""))
+            print(
+                "    %d: %d,   # %s%s"
+                % (
+                    recipe.spell_id,
+                    focus,
+                    _text(spell, strings, _field(spell, body, rowsize, row, F_NAME)),
+                    " (%s)" % names[focus] if focus and focus in names else "",
+                )
+            )
     print("}")
     return 0
 

@@ -34,6 +34,7 @@ test_trades_tab already applies to the other half of this tab: every sentence a
 reader sees arrives written from Python, because a sentence composed in
 JavaScript is a judgement no Python test can reach.
 """
+
 import json
 import pathlib
 import re
@@ -51,9 +52,9 @@ CRAFTBOOK = json.loads((HERE / "craftbook.json").read_text(encoding="utf-8"))
 
 BANNER = "// --- the hundred per cent, and who is first in line (infra#3507"
 NEXT = "// --- where to go next (infra#3500)"
-BLOCK = PAGE[PAGE.index(BANNER):PAGE.index(NEXT, PAGE.index(BANNER))]
-SECTION = PAGE[PAGE.index('<section id="trades">'):]
-SECTION = SECTION[:SECTION.index("</section>")]
+BLOCK = PAGE[PAGE.index(BANNER) : PAGE.index(NEXT, PAGE.index(BANNER))]
+SECTION = PAGE[PAGE.index('<section id="trades">') :]
+SECTION = SECTION[: SECTION.index("</section>")]
 
 
 def code(block: str) -> str:
@@ -64,8 +65,9 @@ def code(block: str) -> str:
     weakened until it passes. Several assertions below name the words they
     forbid, and those words appear in the comments that explain them.
     """
-    return "\n".join(line for line in block.splitlines()
-                     if not line.lstrip().startswith("//"))
+    return "\n".join(
+        line for line in block.splitlines() if not line.lstrip().startswith("//")
+    )
 
 
 CODE = code(BLOCK)
@@ -77,10 +79,8 @@ class TheCatalogue(unittest.TestCase):
     def test_every_key_and_every_spell_is_unique(self):
         """Two rows sharing a spell id would silently merge in BY_SPELL and one
         of them would vanish from every count on the page."""
-        self.assertEqual(len({s.key for s in tradespec.SPECS}),
-                         len(tradespec.SPECS))
-        self.assertEqual(len({s.spell for s in tradespec.SPECS}),
-                         len(tradespec.SPECS))
+        self.assertEqual(len({s.key for s in tradespec.SPECS}), len(tradespec.SPECS))
+        self.assertEqual(len({s.spell for s in tradespec.SPECS}), len(tradespec.SPECS))
 
     def test_a_grant_is_never_its_own_specialization(self):
         """THE MISTAKE THIS CATCHES IS THE ONE THE OFFSETS INVITE. The quest
@@ -106,8 +106,7 @@ class TheCatalogue(unittest.TestCase):
         that a later reader does not "simplify" it into spell + 1. Measured off
         Spell.dbc: blacksmithing's grant is spec + 2, leatherworking's is
         spec + 1, and Goblin Engineering's is spec MINUS one."""
-        offsets = {spec.grant - spec.spell for spec in tradespec.SPECS
-                   if spec.grant}
+        offsets = {spec.grant - spec.spell for spec in tradespec.SPECS if spec.grant}
         self.assertGreater(len(offsets), 1, offsets)
         self.assertIn(2, offsets)
         self.assertIn(-1, offsets)
@@ -127,8 +126,7 @@ class TheCatalogue(unittest.TestCase):
         their branch is still open after the other has shut it."""
         for spec in tradespec.SPECS:
             for rival in tradespec.rivals_of(spec):
-                self.assertIn(spec, tradespec.rivals_of(rival),
-                              (spec.key, rival.key))
+                self.assertIn(spec, tradespec.rivals_of(rival), (spec.key, rival.key))
 
     def test_nothing_is_its_own_rival(self):
         for spec in tradespec.SPECS:
@@ -150,7 +148,7 @@ class TheCatalogue(unittest.TestCase):
             self.assertIn(spec.skill, known, spec.key)
 
     def test_an_unreachable_row_carries_its_evidence_and_no_grant(self):
-        """"Nobody can take this" is the strongest claim on the page. It has to
+        """ "Nobody can take this" is the strongest claim on the page. It has to
         carry what was measured, and a row claiming it while also naming a
         grant spell would be contradicting itself."""
         for spec in tradespec.SPECS:
@@ -174,21 +172,22 @@ class TheCatalogue(unittest.TestCase):
         Grumnus's trainer gate all say Armorsmith. Pinned by id so a later
         "correction" back to the remembered version fails here."""
         armor = tradespec.BY_KEY["armorsmith"]
-        self.assertEqual((armor.npc, armor.npc_name, armor.quest, armor.grant,
-                          armor.spell),
-                         (5164, "Grumnus Steelshaper", 5283, 9790, 9788))
+        self.assertEqual(
+            (armor.npc, armor.npc_name, armor.quest, armor.grant, armor.spell),
+            (5164, "Grumnus Steelshaper", 5283, 9790, 9788),
+        )
         weapon = tradespec.BY_KEY["weaponsmith"]
-        self.assertEqual((weapon.npc, weapon.npc_name, weapon.quest,
-                          weapon.grant, weapon.spell),
-                         (11146, "Ironus Coldsteel", 5284, 9789, 9787))
+        self.assertEqual(
+            (weapon.npc, weapon.npc_name, weapon.quest, weapon.grant, weapon.spell),
+            (11146, "Ironus Coldsteel", 5284, 9789, 9787),
+        )
         self.assertIn(weapon, tradespec.rivals_of(armor))
 
 
 class TheFamilysChoices(unittest.TestCase):
     def test_grug_is_the_armorsmith_because_the_operator_said_so(self):
         """The one line in this feature that was not a choice."""
-        self.assertEqual(tradespec.chosen_spec("Grug"),
-                         tradespec.BY_KEY["armorsmith"])
+        self.assertEqual(tradespec.chosen_spec("Grug"), tradespec.BY_KEY["armorsmith"])
 
     def test_every_slot_names_a_specialization_that_exists(self):
         for slot in tradespec.FAMILY_SLOTS:
@@ -204,15 +203,15 @@ class TheFamilysChoices(unittest.TestCase):
         for slot in tradespec.FAMILY_SLOTS:
             spec = tradespec.BY_KEY[slot.spec_key]
             word = tradespec._skill_word(spec.skill)
-            self.assertIn(word, professions.assigned(slot.holder),
-                          (slot.holder, spec.label, word))
+            self.assertIn(
+                word, professions.assigned(slot.holder), (slot.holder, spec.label, word)
+            )
 
     def test_no_two_of_the_family_take_the_same_profession(self):
         """professions.ROSTER assigns each primary to exactly one person, so
         two slots on one profession would mean one of them was typed against
         the wrong name."""
-        skills = [tradespec.BY_KEY[s.spec_key].skill
-                  for s in tradespec.FAMILY_SLOTS]
+        skills = [tradespec.BY_KEY[s.spec_key].skill for s in tradespec.FAMILY_SLOTS]
         self.assertEqual(len(set(skills)), len(skills), skills)
 
     def test_the_family_never_takes_a_branch_nothing_can_reach(self):
@@ -220,8 +219,9 @@ class TheFamilysChoices(unittest.TestCase):
         Assigning one to a family member would put a goal on the page that can
         never be completed, under a heading that says first in line."""
         for slot in tradespec.FAMILY_SLOTS:
-            self.assertEqual(tradespec.BY_KEY[slot.spec_key].unreachable, "",
-                             slot.spec_key)
+            self.assertEqual(
+                tradespec.BY_KEY[slot.spec_key].unreachable, "", slot.spec_key
+            )
 
     def test_every_choice_carries_its_reasoning(self):
         """A choice with no reason beside it is a preference, and the page
@@ -239,8 +239,7 @@ class TheFamilysChoices(unittest.TestCase):
         was measured has to go with it."""
         bork = tradespec.chosen_spec("Bork")
         self.assertEqual(bork.skill, goals.SKILL_IDS["leatherworking"])
-        slot = next(s for s in tradespec.FAMILY_SLOTS
-                    if s.spec_key == bork.key)
+        slot = next(s for s in tradespec.FAMILY_SLOTS if s.spec_key == bork.key)
         for evidence in ("mail", "leather", "agility", "rogue"):
             self.assertIn(evidence, slot.why.lower(), evidence)
 
@@ -250,8 +249,7 @@ class TheFamilysChoices(unittest.TestCase):
         the one thing this page must not do."""
         ugga = tradespec.chosen_spec("Ugga")
         slot = next(s for s in tradespec.FAMILY_SLOTS if s.spec_key == ugga.key)
-        self.assertIn("no alchemy specialization gates a single craft",
-                      slot.why)
+        self.assertIn("no alchemy specialization gates a single craft", slot.why)
 
 
 class TheRankArithmetic(unittest.TestCase):
@@ -272,8 +270,7 @@ class TheRankArithmetic(unittest.TestCase):
         50 could learn 421 of them. The yellow value is always at or above the
         true learn rank, so falling back to it can only under-report."""
         self.assertEqual(tradespec.effective_rank(["x", 1, 25, 0, 0], None), 25)
-        self.assertEqual(tradespec.effective_rank(["x", 200, 25, 0, 0], None),
-                         200)
+        self.assertEqual(tradespec.effective_rank(["x", 200, 25, 0, 0], None), 200)
 
     def test_the_dbc_field_really_is_useless_on_its_own(self):
         """Pinned against the committed projection, so this argument stays true
@@ -285,8 +282,8 @@ class TheRankArithmetic(unittest.TestCase):
 class TheCraftStates(unittest.TestCase):
     def test_a_spell_in_the_book_is_known_however_high_its_rank(self):
         self.assertEqual(
-            tradespec._craft_state(400, 0, 0, 1, frozenset({7}), 7, ()),
-            tradespec.KNOWN)
+            tradespec._craft_state(400, 0, 0, 1, frozenset({7}), 7, ()), tradespec.KNOWN
+        )
 
     def test_an_auto_learned_craft_under_the_skill_is_counted_known(self):
         """THE RULE professions.py MEASURED AND THIS PAGE DEPENDS ON. An
@@ -295,37 +292,44 @@ class TheCraftStates(unittest.TestCase):
         casting it - so asking the spellbook gets "no" forever. Counting that
         as missing would hold the completion figure down permanently."""
         self.assertEqual(
-            tradespec._craft_state(50, tradespec.ACQUIRE_AUTOMATIC, 0, 75,
-                                   frozenset(), 7, ()),
-            tradespec.KNOWN)
+            tradespec._craft_state(
+                50, tradespec.ACQUIRE_AUTOMATIC, 0, 75, frozenset(), 7, ()
+            ),
+            tradespec.KNOWN,
+        )
 
     def test_an_auto_learned_craft_above_the_skill_is_not(self):
         self.assertEqual(
-            tradespec._craft_state(200, tradespec.ACQUIRE_AUTOMATIC, 0, 75,
-                                   frozenset(), 7, ()),
-            tradespec.BLOCKED_SKILL)
+            tradespec._craft_state(
+                200, tradespec.ACQUIRE_AUTOMATIC, 0, 75, frozenset(), 7, ()
+            ),
+            tradespec.BLOCKED_SKILL,
+        )
 
     def test_a_trained_craft_under_the_skill_is_learnable_and_not_known(self):
         """The opposite rule for AcquireMethod 0, and the two must not be
         merged: an explicit grant PERSISTS, so the absence of a row is real and
         counting it as known would invent progress."""
         self.assertEqual(
-            tradespec._craft_state(50, tradespec.ACQUIRE_TRAINED, 0, 75,
-                                   frozenset(), 7, ()),
-            tradespec.LEARNABLE)
+            tradespec._craft_state(
+                50, tradespec.ACQUIRE_TRAINED, 0, 75, frozenset(), 7, ()
+            ),
+            tradespec.LEARNABLE,
+        )
 
     def test_a_craft_behind_an_unheld_branch_is_blocked_on_the_branch(self):
         armor = tradespec.BY_KEY["armorsmith"]
         self.assertEqual(
             tradespec._craft_state(1, 0, armor.spell, 450, frozenset(), 7, ()),
-            tradespec.BLOCKED_SPEC)
+            tradespec.BLOCKED_SPEC,
+        )
 
     def test_holding_the_branch_lets_the_skill_decide_again(self):
         armor = tradespec.BY_KEY["armorsmith"]
         self.assertEqual(
-            tradespec._craft_state(1, 0, armor.spell, 450, frozenset(), 7,
-                                   (armor,)),
-            tradespec.LEARNABLE)
+            tradespec._craft_state(1, 0, armor.spell, 450, frozenset(), 7, (armor,)),
+            tradespec.LEARNABLE,
+        )
 
     def test_a_craft_behind_a_branch_with_no_route_is_unreachable(self):
         """And it must NOT read as "behind a branch nobody took", because that
@@ -333,14 +337,16 @@ class TheCraftStates(unittest.TestCase):
         sword = tradespec.BY_KEY["swordsmith"]
         self.assertEqual(
             tradespec._craft_state(1, 0, sword.spell, 450, frozenset(), 7, ()),
-            tradespec.UNREACHABLE)
+            tradespec.UNREACHABLE,
+        )
 
     def test_a_gate_this_catalogue_does_not_know_is_not_a_branch(self):
         """`ReqAbility1` also carries ordinary prerequisites - a rank-2 enchant
         requiring its rank-1. Reading one of those as a specialization would
         report a craft as blocked behind a branch that does not exist."""
         ranks, gates = tradespec.craft_facts(
-            [{"SpellId": 7, "ReqSkillRank": 10, "ReqAbility1": 12345}])
+            [{"SpellId": 7, "ReqSkillRank": 10, "ReqAbility1": 12345}]
+        )
         self.assertEqual(gates, {})
         self.assertEqual(ranks, {7: 10})
 
@@ -355,10 +361,16 @@ class TheCraftFacts(unittest.TestCase):
         listing the dearest first passes whether the code takes the lowest or
         the last, which is how this assertion first shipped catching nothing.
         """
-        for rows in ([{"SpellId": 7, "ReqSkillRank": 260, "ReqAbility1": 0},
-                      {"SpellId": 7, "ReqSkillRank": 250, "ReqAbility1": 0}],
-                     [{"SpellId": 7, "ReqSkillRank": 250, "ReqAbility1": 0},
-                      {"SpellId": 7, "ReqSkillRank": 260, "ReqAbility1": 0}]):
+        for rows in (
+            [
+                {"SpellId": 7, "ReqSkillRank": 260, "ReqAbility1": 0},
+                {"SpellId": 7, "ReqSkillRank": 250, "ReqAbility1": 0},
+            ],
+            [
+                {"SpellId": 7, "ReqSkillRank": 250, "ReqAbility1": 0},
+                {"SpellId": 7, "ReqSkillRank": 260, "ReqAbility1": 0},
+            ],
+        ):
             ranks, _gates = tradespec.craft_facts(rows)
             self.assertEqual(ranks[7], 250, rows)
 
@@ -369,19 +381,19 @@ class TheCraftFacts(unittest.TestCase):
         couple of hundred points higher, so a craft anybody could learn would
         report as behind more skill."""
         ranks, _gates = tradespec.craft_facts(
-            [{"SpellId": 7, "ReqSkillRank": 0, "ReqAbility1": 0}])
+            [{"SpellId": 7, "ReqSkillRank": 0, "ReqAbility1": 0}]
+        )
         self.assertEqual(ranks, {7: 0})
-        self.assertEqual(tradespec.effective_rank(["x", 1, 300, 0, 0],
-                                                  ranks.get(7)), 0)
+        self.assertEqual(tradespec.effective_rank(["x", 1, 300, 0, 0], ranks.get(7)), 0)
 
     def test_a_row_with_no_rank_at_all_leaves_the_craft_to_the_fallback(self):
         """Distinct from the case above: None is "this table said nothing",
         and only then may the DBC number stand in."""
-        ranks, _gates = tradespec.craft_facts(
-            [{"SpellId": 7, "ReqAbility1": 0}])
+        ranks, _gates = tradespec.craft_facts([{"SpellId": 7, "ReqAbility1": 0}])
         self.assertEqual(ranks, {})
-        self.assertEqual(tradespec.effective_rank(["x", 1, 300, 0, 0],
-                                                  ranks.get(7)), 300)
+        self.assertEqual(
+            tradespec.effective_rank(["x", 1, 300, 0, 0], ranks.get(7)), 300
+        )
 
     def test_a_gate_from_a_recipe_item_counts_as_much_as_one_from_a_trainer(self):
         """THE BUG THIS EXISTS TO STOP, measured during the change that added
@@ -390,8 +402,8 @@ class TheCraftFacts(unittest.TestCase):
         unlocking zero crafts."""
         spellfire = tradespec.BY_KEY["spellfire"]
         _ranks, gates = tradespec.craft_facts(
-            [{"SpellId": 26752, "ReqSkillRank": 355,
-              "ReqAbility1": spellfire.spell}])
+            [{"SpellId": 26752, "ReqSkillRank": 355, "ReqAbility1": spellfire.spell}]
+        )
         self.assertEqual(gates, {26752: spellfire.spell})
 
 
@@ -413,7 +425,8 @@ class ThePercentage(unittest.TestCase):
         somebody taking the trade, not that the guild knows none of them for
         some other reason."""
         done = tradespec.profession_completion(
-            164, {"7": ["Big Black Mace", 1, 25, 0, 1]}, [], {}, {}, {})
+            164, {"7": ["Big Black Mace", 1, 25, 0, 1]}, [], {}, {}, {}
+        )
         self.assertEqual(done["known"], 0)
         self.assertEqual(done["percent"], 0)
         self.assertIn("nobody holds", done["line"])
@@ -421,11 +434,19 @@ class ThePercentage(unittest.TestCase):
     def test_the_counts_add_up_to_the_total(self):
         """Every craft lands in exactly one state. A craft counted twice or
         dropped would move the denominator without moving the page."""
-        crafts = {"1": ["a", 1, 25, 0, 0], "2": ["b", 1, 400, 0, 0],
-                  "3": ["c", 1, 25, 1, 0]}
+        crafts = {
+            "1": ["a", 1, 25, 0, 0],
+            "2": ["b", 1, 400, 0, 0],
+            "3": ["c", 1, 25, 1, 0],
+        }
         done = tradespec.profession_completion(
-            164, crafts, [{"who": "Grug", "value": 30, "max": 75, "level": 51}],
-            {}, {}, {"Grug": {1}})
+            164,
+            crafts,
+            [{"who": "Grug", "value": 30, "max": 75, "level": 51}],
+            {},
+            {},
+            {"Grug": {1}},
+        )
         self.assertEqual(sum(done["counts"].values()), len(crafts))
         self.assertEqual(done["total"], len(crafts))
 
@@ -434,9 +455,14 @@ class ThePercentage(unittest.TestCase):
         branch nobody took" beside a profession with no branches sends a reader
         looking for something that is not there."""
         chips = tradespec._count_chips(
-            {tradespec.KNOWN: 3, tradespec.LEARNABLE: 0,
-             tradespec.BLOCKED_SKILL: 0, tradespec.BLOCKED_SPEC: 0,
-             tradespec.UNREACHABLE: 0})
+            {
+                tradespec.KNOWN: 3,
+                tradespec.LEARNABLE: 0,
+                tradespec.BLOCKED_SKILL: 0,
+                tradespec.BLOCKED_SPEC: 0,
+                tradespec.UNREACHABLE: 0,
+            }
+        )
         self.assertEqual(len(chips), 1)
         self.assertIn("3", chips[0]["text"])
 
@@ -458,17 +484,20 @@ class TheLadder(unittest.TestCase):
         # Three crafts behind Armorsmith, one behind Weaponsmith, none behind
         # anything else, so the order under test is one this fixture decides
         # rather than one the live world happens to produce.
-        self.gates = {1: armor.spell, 2: armor.spell, 3: armor.spell,
-                      4: weapon.spell, 5: elemental.spell}
+        self.gates = {
+            1: armor.spell,
+            2: armor.spell,
+            3: armor.spell,
+            4: weapon.spell,
+            5: elemental.spell,
+        }
         self.ladder = tradespec.hierarchy(self.gates)
 
     def test_the_family_comes_before_every_empty_slot(self):
         """FIRST DIBS, which is the operator's word for it. A backup rung above a
         family rung would read as the guild's crafter outranking the family's."""
-        last_family = max(i for i, row in enumerate(self.ladder)
-                          if row["family"])
-        first_backup = min(i for i, row in enumerate(self.ladder)
-                           if not row["family"])
+        last_family = max(i for i, row in enumerate(self.ladder) if row["family"])
+        first_backup = min(i for i, row in enumerate(self.ladder) if not row["family"])
         self.assertLess(last_family, first_backup)
 
     def test_a_family_rung_worth_less_still_outranks_a_backup_worth_more(self):
@@ -489,15 +518,16 @@ class TheLadder(unittest.TestCase):
     def test_the_ones_with_no_route_are_last(self):
         """No amount of recruiting fills those, so a reader scanning for
         something to act on should reach them only after everything actionable."""
-        unreachable = [i for i, row in enumerate(self.ladder)
-                       if not row["reachable"]]
-        self.assertEqual(unreachable,
-                         list(range(len(self.ladder) - len(unreachable),
-                                    len(self.ladder))))
+        unreachable = [i for i, row in enumerate(self.ladder) if not row["reachable"]]
+        self.assertEqual(
+            unreachable,
+            list(range(len(self.ladder) - len(unreachable), len(self.ladder))),
+        )
 
     def test_rank_is_dense_and_starts_at_one(self):
-        self.assertEqual([row["rank"] for row in self.ladder],
-                         list(range(1, len(self.ladder) + 1)))
+        self.assertEqual(
+            [row["rank"] for row in self.ladder], list(range(1, len(self.ladder) + 1))
+        )
 
     def test_no_specialization_appears_twice(self):
         keys = [row["spec"] for row in self.ladder]
@@ -527,7 +557,7 @@ class TheLadder(unittest.TestCase):
         self.assertIn("recruited", weapon["line"])
 
     def test_an_empty_rung_worth_nothing_says_so_in_words_rather_than_a_zero(self):
-        """"0 crafts" reads like a page that failed to count. The two call for
+        """ "0 crafts" reads like a page that failed to count. The two call for
         opposite responses: one is a bug and the other is a slot nobody should
         spend a recruit on."""
         potion = next(r for r in self.ladder if r["spec"] == "potion")
@@ -555,26 +585,27 @@ class TheLadder(unittest.TestCase):
 class TheSpecStates(unittest.TestCase):
     def test_meeting_both_gates_is_ready_to_take(self):
         armor = tradespec.BY_KEY["armorsmith"]
-        self.assertEqual(tradespec.spec_state(armor, 200, 40, ()),
-                         tradespec.LEARNABLE)
+        self.assertEqual(tradespec.spec_state(armor, 200, 40, ()), tradespec.LEARNABLE)
 
     def test_short_on_either_gate_is_not(self):
         armor = tradespec.BY_KEY["armorsmith"]
-        self.assertEqual(tradespec.spec_state(armor, 199, 40, ()),
-                         tradespec.BLOCKED_SKILL)
-        self.assertEqual(tradespec.spec_state(armor, 200, 39, ()),
-                         tradespec.BLOCKED_SKILL)
+        self.assertEqual(
+            tradespec.spec_state(armor, 199, 40, ()), tradespec.BLOCKED_SKILL
+        )
+        self.assertEqual(
+            tradespec.spec_state(armor, 200, 39, ()), tradespec.BLOCKED_SKILL
+        )
 
     def test_a_held_rival_shuts_it_for_good(self):
         armor = tradespec.BY_KEY["armorsmith"]
         weapon = tradespec.BY_KEY["weaponsmith"]
-        self.assertEqual(tradespec.spec_state(armor, 450, 80, (weapon,)),
-                         tradespec.BLOCKED_SPEC)
+        self.assertEqual(
+            tradespec.spec_state(armor, 450, 80, (weapon,)), tradespec.BLOCKED_SPEC
+        )
 
     def test_holding_it_beats_every_other_answer(self):
         armor = tradespec.BY_KEY["armorsmith"]
-        self.assertEqual(tradespec.spec_state(armor, 0, 1, (armor,)),
-                         tradespec.KNOWN)
+        self.assertEqual(tradespec.spec_state(armor, 0, 1, (armor,)), tradespec.KNOWN)
 
     def test_a_branch_with_no_route_says_so_however_good_the_character_is(self):
         """AND IT MUST NOT READ AS "not yet". A character at blacksmithing 450
@@ -583,17 +614,18 @@ class TheSpecStates(unittest.TestCase):
         realm at all. Reporting that as a skill problem would put eight crafts
         on a list of things more grinding fixes."""
         sword = tradespec.BY_KEY["swordsmith"]
-        self.assertEqual(tradespec.spec_state(sword, 450, 80, ()),
-                         tradespec.UNREACHABLE)
-        self.assertEqual(tradespec.spec_state(sword, 0, 1, ()),
-                         tradespec.UNREACHABLE)
+        self.assertEqual(
+            tradespec.spec_state(sword, 450, 80, ()), tradespec.UNREACHABLE
+        )
+        self.assertEqual(tradespec.spec_state(sword, 0, 1, ()), tradespec.UNREACHABLE)
 
     def test_a_branch_with_no_route_is_still_reported_as_held_if_held(self):
         """Somebody could have been granted it by hand. An observation always
         beats a claim about what the world data allows."""
         sword = tradespec.BY_KEY["swordsmith"]
-        self.assertEqual(tradespec.spec_state(sword, 450, 80, (sword,)),
-                         tradespec.KNOWN)
+        self.assertEqual(
+            tradespec.spec_state(sword, 450, 80, (sword,)), tradespec.KNOWN
+        )
 
     def test_held_specs_reads_the_specialization_and_not_the_grant(self):
         """The grant is cast once by the quest and character_spell is not where
@@ -623,17 +655,25 @@ class TheWholeView(unittest.TestCase):
     """build_tradespec end to end, on rows shaped like the live reads."""
 
     def setUp(self):
-        self.book = {"164": {"7": ["Big Black Mace", 1, 25, 0, 1],
-                             "8": ["Breastplate of Kings", 1, 350, 0, 2]}}
+        self.book = {
+            "164": {
+                "7": ["Big Black Mace", 1, 25, 0, 1],
+                "8": ["Breastplate of Kings", 1, 350, 0, 2],
+            }
+        }
         self.crafts = [
             {"SpellId": 7, "ReqSkillRank": 30, "ReqAbility1": 0},
-            {"SpellId": 8, "ReqSkillRank": 350,
-             "ReqAbility1": tradespec.BY_KEY["armorsmith"].spell},
+            {
+                "SpellId": 8,
+                "ReqSkillRank": 350,
+                "ReqAbility1": tradespec.BY_KEY["armorsmith"].spell,
+            },
         ]
         self.members = [{"name": "Grug", "level": 51, "map": 1}]
         self.skills = [{"name": "Grug", "skill": 164, "value": 30, "max": 75}]
         self.out = tradespec.build_tradespec(
-            self.book, self.crafts, self.skills, [], self.members, ["Grug"])
+            self.book, self.crafts, self.skills, [], self.members, ["Grug"]
+        )
 
     def test_it_counts_the_whole_book_and_not_only_what_was_read(self):
         black = self.out["professions"][0]
@@ -645,10 +685,14 @@ class TheWholeView(unittest.TestCase):
         """The roster is the family, and a guild member's skills arriving here
         would put somebody nobody can steer at the top of a profession."""
         out = tradespec.build_tradespec(
-            self.book, self.crafts,
-            self.skills + [{"name": "Stranger", "skill": 164, "value": 400,
-                            "max": 450}],
-            [], self.members, ["Grug"])
+            self.book,
+            self.crafts,
+            self.skills
+            + [{"name": "Stranger", "skill": 164, "value": 400, "max": 450}],
+            [],
+            self.members,
+            ["Grug"],
+        )
         self.assertEqual(out["professions"][0]["holder"], "Grug")
 
     def test_an_absent_craftbook_says_so_rather_than_drawing_zeroes(self):
@@ -677,7 +721,8 @@ class TheWholeView(unittest.TestCase):
 
     def test_a_missing_gate_read_is_admitted_and_not_reported_as_no_branches(self):
         out = tradespec.build_tradespec(
-            self.book, [], self.skills, [], self.members, ["Grug"])
+            self.book, [], self.skills, [], self.members, ["Grug"]
+        )
         self.assertIn("no ReqAbility1 rows", out["basis"])
 
     def test_the_load_of_an_absent_craftbook_is_an_empty_book(self):
@@ -691,17 +736,14 @@ class TheCommittedProjection(unittest.TestCase):
         """A skill in goals and not in the book is a profession whose
         completion is silently never reported; one in the book and not in goals
         renders as "skill 773"."""
-        self.assertEqual({int(key) for key in CRAFTBOOK},
-                         set(goals.SKILL_IDS.values()))
+        self.assertEqual({int(key) for key in CRAFTBOOK}, set(goals.SKILL_IDS.values()))
 
     def test_the_generator_scopes_itself_to_the_same_professions(self):
         """The tool deliberately does not import goals, so that an unrelated
         edit cannot re-scope every completion figure on the site. This is that
         check made explicit rather than assumed."""
-        tool = (HERE / "tools" / "craftbook_from_dbc.py").read_text(
-            encoding="utf-8")
-        listed = {int(found) for found in
-                  re.findall(r"^    (\d+): \"", tool, re.M)}
+        tool = (HERE / "tools" / "craftbook_from_dbc.py").read_text(encoding="utf-8")
+        listed = {int(found) for found in re.findall(r"^    (\d+): \"", tool, re.M)}
         self.assertEqual(listed, set(goals.SKILL_IDS.values()))
 
     def test_every_entry_has_the_five_fields_the_module_reads(self):
@@ -709,10 +751,15 @@ class TheCommittedProjection(unittest.TestCase):
             for spell, entry in crafts.items():
                 self.assertEqual(len(entry), 5, (skill, spell))
                 self.assertTrue(entry[0], (skill, spell))
-                self.assertIn(entry[3], (tradespec.ACQUIRE_TRAINED,
-                                         tradespec.ACQUIRE_AUTOMATIC,
-                                         tradespec.ACQUIRE_AUTOMATIC_AT_RANK),
-                              (skill, spell))
+                self.assertIn(
+                    entry[3],
+                    (
+                        tradespec.ACQUIRE_TRAINED,
+                        tradespec.ACQUIRE_AUTOMATIC,
+                        tradespec.ACQUIRE_AUTOMATIC_AT_RANK,
+                    ),
+                    (skill, spell),
+                )
 
     def test_the_rare_third_acquire_method_really_is_in_here(self):
         """EXACTLY ONE ROW IN THE WHOLE BOOK, which is precisely the shape of
@@ -720,11 +767,11 @@ class TheCommittedProjection(unittest.TestCase):
         today's data never catches. It is asserted to EXIST so that
         `is_automatic` stays a rule about "not trained" rather than a pair of
         literals somebody tidies back down to one."""
-        methods = {entry[3] for crafts in CRAFTBOOK.values()
-                   for entry in crafts.values()}
+        methods = {
+            entry[3] for crafts in CRAFTBOOK.values() for entry in crafts.values()
+        }
         self.assertIn(tradespec.ACQUIRE_AUTOMATIC_AT_RANK, methods)
-        self.assertTrue(tradespec.is_automatic(
-            tradespec.ACQUIRE_AUTOMATIC_AT_RANK))
+        self.assertTrue(tradespec.is_automatic(tradespec.ACQUIRE_AUTOMATIC_AT_RANK))
         self.assertTrue(tradespec.is_automatic(tradespec.ACQUIRE_AUTOMATIC))
         self.assertFalse(tradespec.is_automatic(tradespec.ACQUIRE_TRAINED))
 
@@ -733,7 +780,8 @@ class TheCommittedProjection(unittest.TestCase):
         and the whole file would be plausible nonsense."""
         self.assertEqual(
             CRAFTBOOK[str(goals.SKILL_IDS["tailoring"])]["2963"],
-            ["Bolt of Linen Cloth", 1, 25, 1, 2996])
+            ["Bolt of Linen Cloth", 1, 25, 1, 2996],
+        )
 
     def test_every_specialization_the_catalogue_names_gates_a_real_skill_line(self):
         for spec in tradespec.SPECS:
@@ -744,8 +792,7 @@ class ThePageDecidesNothing(unittest.TestCase):
     """Every sentence arrives written, the contract test_recap_tab set."""
 
     def test_the_four_paragraphs_are_printed_and_not_composed(self):
-        for printed in ("g.line", "g.order", "g.limit_line", "g.grant_line",
-                        "g.basis"):
+        for printed in ("g.line", "g.order", "g.limit_line", "g.grant_line", "g.basis"):
             self.assertIn(printed, CODE, printed)
 
     def test_the_headline_stands_down_for_the_empty_note(self):
@@ -754,14 +801,26 @@ class ThePageDecidesNothing(unittest.TestCase):
         self.assertIn("g.empty_note || g.line", CODE)
 
     def test_no_sentence_about_a_branch_is_built_here(self):
-        for invented in ('"crafts"', '"recipes"', '" of "', '"behind"',
-                         '"nobody"', '"backup"', '"Armorsmith"',
-                         'row.unlocks +', 'row.holder +'):
+        for invented in (
+            '"crafts"',
+            '"recipes"',
+            '" of "',
+            '"behind"',
+            '"nobody"',
+            '"backup"',
+            '"Armorsmith"',
+            "row.unlocks +",
+            "row.holder +",
+        ):
             self.assertNotIn(invented, CODE, invented)
 
     def test_the_counts_are_the_modules_and_not_a_length(self):
-        for counted in ("g.professions.length", "g.hierarchy.length",
-                        "g.specs.length", "row.counts"):
+        for counted in (
+            "g.professions.length",
+            "g.hierarchy.length",
+            "g.specs.length",
+            "row.counts",
+        ):
             self.assertNotIn(counted, CODE, counted)
 
     def test_the_place_in_the_order_is_the_modules_and_not_a_loop_index(self):
@@ -795,30 +854,35 @@ class ThePageDecidesNothing(unittest.TestCase):
 
 class TheMarkup(unittest.TestCase):
     def test_every_element_the_render_writes_into_exists(self):
-        for element in ('id="gclgoal"', 'id="gclbars"', 'id="gclspecs"',
-                        'id="gclorder"', 'id="gcllimit"', 'id="gclladder"',
-                        'id="gclgrant"', 'id="gclbasis"'):
+        for element in (
+            'id="gclgoal"',
+            'id="gclbars"',
+            'id="gclspecs"',
+            'id="gclorder"',
+            'id="gcllimit"',
+            'id="gclladder"',
+            'id="gclgrant"',
+            'id="gclbasis"',
+        ):
             self.assertIn(element, SECTION, element)
 
     def test_the_completion_figure_is_above_everything_it_explains(self):
         """It is the answer to the question the whole tab was asked, and a
         reader who has scrolled past sixteen ladder rungs has stopped looking
         for it."""
-        self.assertLess(SECTION.index('id="gclgoal"'),
-                        SECTION.index('id="gclladder"'))
-        self.assertLess(SECTION.index('id="gclgoal"'),
-                        SECTION.index('id="gcrlist"'))
+        self.assertLess(SECTION.index('id="gclgoal"'), SECTION.index('id="gclladder"'))
+        self.assertLess(SECTION.index('id="gclgoal"'), SECTION.index('id="gcrlist"'))
 
     def test_the_limit_sits_above_the_ladder_and_not_below_it(self):
         """A ladder of sixteen rungs where eleven are empty slots reads as work
         in progress until the sentence saying nothing can fill them, and a
         reader who stops early takes it for a plan."""
-        self.assertLess(SECTION.index('id="gcllimit"'),
-                        SECTION.index('id="gclladder"'))
+        self.assertLess(SECTION.index('id="gcllimit"'), SECTION.index('id="gclladder"'))
 
     def test_the_basis_sits_below_the_ladder_it_describes(self):
-        self.assertGreater(SECTION.index('id="gclbasis"'),
-                           SECTION.index('id="gclladder"'))
+        self.assertGreater(
+            SECTION.index('id="gclbasis"'), SECTION.index('id="gclladder"')
+        )
 
     def test_the_rules_are_numbered_without_a_gap_or_a_repeat(self):
         """Five blocks now stand where two did. A duplicated index reads as two
@@ -832,8 +896,9 @@ class TheMobileRules(unittest.TestCase):
     """The page is read on a phone. Nothing scrolls sideways."""
 
     CSS_BANNER = "  #gclgoal, #gclorder, #gcllimit, #gclgrant, #gclbasis"
-    CSS = PAGE[PAGE.index(CSS_BANNER):
-               PAGE.index("  .gcr-body {", PAGE.index(CSS_BANNER))]
+    CSS = PAGE[
+        PAGE.index(CSS_BANNER) : PAGE.index("  .gcr-body {", PAGE.index(CSS_BANNER))
+    ]
 
     def test_nothing_in_the_new_styles_sets_a_width_in_pixels(self):
         """Including the progress bar, whose fill is a percentage of its own
@@ -846,15 +911,14 @@ class TheMobileRules(unittest.TestCase):
         rule rather than counted: this window also holds the trade card's own
         grid, so a count would pass on the strength of somebody else's rule."""
         for rule in (".gcl-row", ".gcl-card > summary"):
-            block = self.CSS[self.CSS.index(rule + " {"):]
-            block = block[:block.index("}")]
+            block = self.CSS[self.CSS.index(rule + " {") :]
+            block = block[: block.index("}")]
             self.assertIn("minmax(0, 1fr)", block, rule)
 
     def test_long_names_break_rather_than_scroll(self):
-        for rule in (".gcl-name", ".gcl-why", ".gcl-label", ".gcl-sum",
-                     ".gcl-reason"):
-            block = self.CSS[self.CSS.index(rule + " {"):]
-            block = block[:block.index("}")]
+        for rule in (".gcl-name", ".gcl-why", ".gcl-label", ".gcl-sum", ".gcl-reason"):
+            block = self.CSS[self.CSS.index(rule + " {") :]
+            block = block[: block.index("}")]
             self.assertIn("overflow-wrap:anywhere", block, rule)
 
     def test_the_new_cards_hide_their_marker_in_both_engines(self):
@@ -877,8 +941,8 @@ class TheEndpoint(unittest.TestCase):
         """THE BUG THIS EXISTS TO STOP. The three tailoring branches gate no
         trainer row, so reading trainer_spell alone reported all three as
         unlocking nothing."""
-        block = SERVER[SERVER.index("_TRADE_CRAFT_FACTS = ("):]
-        block = block[:block.index(")\n")]
+        block = SERVER[SERVER.index("_TRADE_CRAFT_FACTS = (") :]
+        block = block[: block.index(")\n")]
         self.assertIn("trainer_spell", block)
         self.assertIn("item_template", block)
         self.assertIn("ReqAbility1", block)
@@ -888,23 +952,26 @@ class TheEndpoint(unittest.TestCase):
 
     def test_it_is_deduplicated_rather_than_unioned_all(self):
         """One craft sold by nine trainers at the same rank is one row."""
-        block = SERVER[SERVER.index("_TRADE_CRAFT_FACTS = ("):]
-        block = block[:block.index(")\n")]
+        block = SERVER[SERVER.index("_TRADE_CRAFT_FACTS = (") :]
+        block = block[: block.index(")\n")]
         self.assertIn("UNION ", block)
         self.assertNotIn("UNION ALL", block)
 
     def test_the_read_is_guarded_like_every_other_one_on_this_endpoint(self):
         """production lacks tables dev has, and an unguarded read here is a 503
         on the live realm for a feature it has nothing to do with."""
-        fetch = SERVER[SERVER.index("def _fetch_guildcraft"):
-                       SERVER.index("# --- which dungeon is worth running next")]
+        fetch = SERVER[
+            SERVER.index("def _fetch_guildcraft") : SERVER.index(
+                "# --- which dungeon is worth running next"
+            )
+        ]
         self.assertIn("_TRADE_CRAFT_FACTS", fetch)
         self.assertNotIn("cur.execute", fetch)
 
     def test_the_craft_rows_are_lifted_out_before_the_splat(self):
         """They are not a build_guildcraft argument, and leaving them in the
         dict would be a TypeError on every poll."""
-        handler = SERVER[SERVER.index("def _trades"):SERVER.index("def _dungeons")]
+        handler = SERVER[SERVER.index("def _trades") : SERVER.index("def _dungeons")]
         self.assertIn('crafts = fetched.pop("craft_rows")', handler)
         self.assertIn("tradespec.build_tradespec(", handler)
 
@@ -919,11 +986,16 @@ class TheEndpoint(unittest.TestCase):
 
 class TheHouseRules(unittest.TestCase):
     def test_no_em_dashes(self):
-        for name in ("tradespec.py", "index.html", "map_server.py",
-                     "tools/craftbook_from_dbc.py",
-                     "tests/test_tradespec.py"):
-            self.assertNotIn(chr(0x2014),
-                             (HERE / name).read_text(encoding="utf-8"), name)
+        for name in (
+            "tradespec.py",
+            "index.html",
+            "map_server.py",
+            "tools/craftbook_from_dbc.py",
+            "tests/test_tradespec.py",
+        ):
+            self.assertNotIn(
+                chr(0x2014), (HERE / name).read_text(encoding="utf-8"), name
+            )
 
     def test_the_page_reaches_no_new_outside_host(self):
         self.assertNotIn("http", BLOCK)

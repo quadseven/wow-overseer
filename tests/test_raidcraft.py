@@ -17,6 +17,7 @@ instead. test_craft.py's MEASURED_BANDS reads 1 for seventeen of craft.py's
 entries for exactly that reason and cannot catch a bracket that starts below a
 trainer's rank; this is the projection that can.
 """
+
 import unittest
 
 import craft
@@ -156,8 +157,9 @@ class TheTableIsTheServersAnswer(unittest.TestCase):
     def test_every_skill_line_matches(self):
         for c in raidcraft.CONSUMABLES:
             with self.subTest(spell=c.spell_id):
-                self.assertEqual(goals.SKILL_IDS[c.skill],
-                                 MEASURED_CONSUMABLES[c.spell_id][0])
+                self.assertEqual(
+                    goals.SKILL_IDS[c.skill], MEASURED_CONSUMABLES[c.spell_id][0]
+                )
 
     def test_every_created_item_matches(self):
         for c in raidcraft.CONSUMABLES:
@@ -207,9 +209,9 @@ class TheTableIsTheServersAnswer(unittest.TestCase):
     def test_every_taught_value_is_one_of_the_three(self):
         for c in raidcraft.CONSUMABLES:
             with self.subTest(spell=c.spell_id):
-                self.assertIn(c.taught, (raidcraft.TRAINER,
-                                         raidcraft.RECIPE_ITEM,
-                                         raidcraft.AUTO))
+                self.assertIn(
+                    c.taught, (raidcraft.TRAINER, raidcraft.RECIPE_ITEM, raidcraft.AUTO)
+                )
 
     def test_the_source_column_agrees_with_how_it_is_taught(self):
         """A RECIPE_ITEM entry whose rank came out of `trainer_spell` would be
@@ -227,8 +229,9 @@ class TheTableIsTheServersAnswer(unittest.TestCase):
         for c in raidcraft.CONSUMABLES:
             with self.subTest(spell=c.spell_id):
                 self.assertIn(c.skill, goals.SKILL_IDS)
-                self.assertTrue(c.skill in professions.CRAFTING
-                                or c.skill in professions.SECONDARY)
+                self.assertTrue(
+                    c.skill in professions.CRAFTING or c.skill in professions.SECONDARY
+                )
 
     def test_every_entry_says_something(self):
         """`note` is never empty, the same rule craft.Recipe's own table keeps:
@@ -253,8 +256,9 @@ class ThePatternTaughtMajorityIsCountedRatherThanAssumed(unittest.TestCase):
     unblocks it rather than duplicating it."""
 
     def test_the_majority_of_the_list_is_pattern_taught(self):
-        pattern = [c for c in raidcraft.CONSUMABLES
-                   if c.taught == raidcraft.RECIPE_ITEM]
+        pattern = [
+            c for c in raidcraft.CONSUMABLES if c.taught == raidcraft.RECIPE_ITEM
+        ]
         self.assertEqual(len(raidcraft.CONSUMABLES), 22)
         self.assertEqual(len(pattern), 13)
 
@@ -263,8 +267,9 @@ class ThePatternTaughtMajorityIsCountedRatherThanAssumed(unittest.TestCase):
         the reason "Ugga should craft flasks" is not a skill problem."""
         for spell in (17635, 17636, 17637, 17638):
             with self.subTest(spell=spell):
-                self.assertEqual(raidcraft.by_spell(spell).taught,
-                                 raidcraft.RECIPE_ITEM)
+                self.assertEqual(
+                    raidcraft.by_spell(spell).taught, raidcraft.RECIPE_ITEM
+                )
                 self.assertEqual(raidcraft.by_spell(spell).floor, 300)
 
     def test_both_weapon_oils_are_enchanting_and_pattern_taught(self):
@@ -273,8 +278,9 @@ class ThePatternTaughtMajorityIsCountedRatherThanAssumed(unittest.TestCase):
         for spell in (25129, 25130):
             with self.subTest(spell=spell):
                 self.assertEqual(raidcraft.by_spell(spell).skill, "enchanting")
-                self.assertEqual(raidcraft.by_spell(spell).taught,
-                                 raidcraft.RECIPE_ITEM)
+                self.assertEqual(
+                    raidcraft.by_spell(spell).taught, raidcraft.RECIPE_ITEM
+                )
 
     def test_elemental_sharpening_stone_is_blacksmithing_and_pattern_taught(self):
         stone = raidcraft.by_spell(22757)
@@ -317,13 +323,13 @@ class TheBriefsListWasCheckedAndNineOfItWasWrong(unittest.TestCase):
                 self.assertIn(name, raidcraft.MISNAMED)
 
     def test_the_two_that_do_exist_name_the_realms_own_spelling(self):
-        self.assertIn("Potion of Petrification",
-                      raidcraft.MISNAMED["Flask of Petrification"])
+        self.assertIn(
+            "Potion of Petrification", raidcraft.MISNAMED["Flask of Petrification"]
+        )
         self.assertIn("Shadow Oil", raidcraft.MISNAMED["Shadowoil"])
 
     def test_the_one_that_is_genuinely_absent_says_so(self):
-        self.assertIn("genuinely absent",
-                      raidcraft.MISNAMED["Dreamshard Elixir"])
+        self.assertIn("genuinely absent", raidcraft.MISNAMED["Dreamshard Elixir"])
 
 
 class ThePreferenceIsTakenWhereItIsFree(unittest.TestCase):
@@ -359,15 +365,24 @@ class ThePreferenceIsTakenWhereItIsFree(unittest.TestCase):
                     want = raidcraft.preferred(skill, value)
                     if want is None or want.spell_id == recipe.spell_id:
                         continue
-                    with self.subTest(skill=skill, value=value,
-                                      named=recipe.name, wanted=want.name):
+                    with self.subTest(
+                        skill=skill, value=value, named=recipe.name, wanted=want.name
+                    ):
                         self.assertLess(
-                            want.yellow, incumbent,
+                            want.yellow,
+                            incumbent,
                             "%s is legal at %s %d and is not worse for skill "
                             "(yellow %d against %s's %d), so the bracket "
-                            "should name it" % (want.name, skill, value,
-                                                want.yellow, recipe.name,
-                                                incumbent))
+                            "should name it"
+                            % (
+                                want.name,
+                                skill,
+                                value,
+                                want.yellow,
+                                recipe.name,
+                                incumbent,
+                            ),
+                        )
 
     def test_the_four_brackets_this_rule_moved_are_pinned_by_name(self):
         """Named individually so a later edit that quietly reverts one fails
@@ -383,8 +398,8 @@ class ThePreferenceIsTakenWhereItIsFree(unittest.TestCase):
         """Dense Sharpening Stone over Dense Weightstone - same rank, same
         band, same reagent, and nothing recorded the choice until now."""
         self.assertEqual(
-            craft.recipe_for(goals.SKILL_IDS["blacksmithing"], 250).spell_id,
-            16641)
+            craft.recipe_for(goals.SKILL_IDS["blacksmithing"], 250).spell_id, 16641
+        )
 
     def test_elixir_of_fortitude_does_not_take_185_to_209(self):
         """The clause that keeps this rule honest in the other direction.
@@ -416,10 +431,8 @@ class ThePreferenceIsTakenWhereItIsFree(unittest.TestCase):
         something here can learn from a pattern item."""
         mongoose = raidcraft.by_spell(17571)
         self.assertEqual(mongoose.taught, raidcraft.RECIPE_ITEM)
-        self.assertGreater(mongoose.yellow,
-                           raidcraft.by_spell(17556).yellow)
-        named = {r.spell_id
-                 for recipes in craft.RECIPES.values() for r in recipes}
+        self.assertGreater(mongoose.yellow, raidcraft.by_spell(17556).yellow)
+        named = {r.spell_id for recipes in craft.RECIPES.values() for r in recipes}
         self.assertNotIn(17571, named)
 
 
@@ -509,8 +522,7 @@ class TheReachAnswersAreExact(unittest.TestCase):
     def test_castable_still_answers_past_grey(self):
         """Castable and skill-granting are different questions. At 300 a flask
         is makeable; whether making it raises anybody is `preferred`'s."""
-        self.assertIn(raidcraft.by_spell(3450),
-                      raidcraft.castable("alchemy", 300))
+        self.assertIn(raidcraft.by_spell(3450), raidcraft.castable("alchemy", 300))
 
     def test_nearest_answers_none_above_the_last_floor(self):
         want, short = raidcraft.nearest("alchemy", 300)
@@ -561,14 +573,17 @@ class TheStockpileTargetIsDataAndSaysWhatItIs(unittest.TestCase):
     is."""
 
     def test_the_shared_conventions_are_raidgoals_own(self):
-        self.assertEqual(raidcraft.FLASKS_PER_RAIDER,
-                         raidgoals.PER_MEMBER_PER_NIGHT)
-        self.assertEqual(raidcraft.PROTECTION_POTIONS_PER_RAIDER,
-                         raidgoals.FIRE_PROTECTION_PER_MEMBER)
-        self.assertEqual(raidcraft.HEALING_POTIONS_PER_RAIDER,
-                         raidgoals.HEALING_POTIONS_PER_MEMBER)
-        self.assertEqual(raidcraft.MANA_POTIONS_PER_RAIDER,
-                         raidgoals.MANA_POTIONS_PER_MEMBER)
+        self.assertEqual(raidcraft.FLASKS_PER_RAIDER, raidgoals.PER_MEMBER_PER_NIGHT)
+        self.assertEqual(
+            raidcraft.PROTECTION_POTIONS_PER_RAIDER,
+            raidgoals.FIRE_PROTECTION_PER_MEMBER,
+        )
+        self.assertEqual(
+            raidcraft.HEALING_POTIONS_PER_RAIDER, raidgoals.HEALING_POTIONS_PER_MEMBER
+        )
+        self.assertEqual(
+            raidcraft.MANA_POTIONS_PER_RAIDER, raidgoals.MANA_POTIONS_PER_MEMBER
+        )
 
     def test_a_forty_man_night_is_forty_flasks_and_two_hundred_fire_potions(self):
         want = dict(raidcraft.stockpile(40))
@@ -614,8 +629,9 @@ class TheStockpileTargetIsDataAndSaysWhatItIs(unittest.TestCase):
 
     def test_the_default_horizon_is_one_night(self):
         self.assertEqual(raidcraft.NIGHTS_STOCKED, 1)
-        self.assertEqual(dict(raidcraft.stockpile(40)),
-                         dict(raidcraft.stockpile(40, 1)))
+        self.assertEqual(
+            dict(raidcraft.stockpile(40)), dict(raidcraft.stockpile(40, 1))
+        )
 
 
 class TheReportIsNeverSilent(unittest.TestCase):
@@ -624,8 +640,8 @@ class TheReportIsNeverSilent(unittest.TestCase):
 
     def test_it_names_every_crafter_and_the_distance(self):
         said = raidcraft.report(
-            ["Ugga", "Grug"],
-            {"Ugga": {"alchemy": 14}, "Grug": {"blacksmithing": 1}})
+            ["Ugga", "Grug"], {"Ugga": {"alchemy": 14}, "Grug": {"blacksmithing": 1}}
+        )
         self.assertIn("Ugga", said)
         self.assertIn("Grug", said)
         self.assertIn("Elixir of Fortitude", said)
@@ -666,8 +682,7 @@ class TheFirstAidLadderIsRecordedAndBlocked(unittest.TestCase):
     def test_the_blocker_is_the_one_professions_py_already_names(self):
         """Not a second opinion about the same wall. If that sentence ever
         stops naming the trainer, this fails and the two are reconciled."""
-        self.assertIn("trainer",
-                      professions.SECONDARY_BLOCKED["first aid"])
+        self.assertIn("trainer", professions.SECONDARY_BLOCKED["first aid"])
 
     def test_no_bandage_is_reachable_below_first_aids_ceiling(self):
         """All five are at First Aid 1/75 and the cheapest bandage on this list

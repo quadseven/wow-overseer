@@ -52,6 +52,7 @@ from typing import Mapping, Sequence
 
 import cast
 import goals
+
 # The travel vocabulary, imported rather than re-spelled. `to_errand` needs
 # the exact keyword mod-overseer resolves, and tests/test_travel_npc.py
 # already compares travel.ROLES against the C++ table in both directions -
@@ -64,9 +65,18 @@ import travel
 # service's answer to "what number is tailoring"; a second copy is a second
 # thing to get wrong, and the two would drift the first time one was edited.
 GATHERING = frozenset({"herbalism", "mining", "skinning"})
-CRAFTING = frozenset({"alchemy", "blacksmithing", "enchanting", "engineering",
-                      "inscription", "jewelcrafting", "leatherworking",
-                      "tailoring"})
+CRAFTING = frozenset(
+    {
+        "alchemy",
+        "blacksmithing",
+        "enchanting",
+        "engineering",
+        "inscription",
+        "jewelcrafting",
+        "leatherworking",
+        "tailoring",
+    }
+)
 PRIMARY = GATHERING | CRAFTING
 
 # Free. They cost no primary slot, and every one of the five already holds all
@@ -108,10 +118,16 @@ FLOOR = 1
 # roster below rather than to build it (see `suits_wearer`), because a table
 # handed down by a person should still be answerable to a rule.
 ARMOUR = {
-    "warrior": "plate", "paladin": "plate", "death knight": "plate",
-    "hunter": "mail", "shaman": "mail",
-    "rogue": "leather", "druid": "leather",
-    "priest": "cloth", "mage": "cloth", "warlock": "cloth",
+    "warrior": "plate",
+    "paladin": "plate",
+    "death knight": "plate",
+    "hunter": "mail",
+    "shaman": "mail",
+    "rogue": "leather",
+    "druid": "leather",
+    "priest": "cloth",
+    "mage": "cloth",
+    "warlock": "cloth",
 }
 
 # The crafting trades that make wearable armour, and what they make it out of.
@@ -269,6 +285,7 @@ _LIVE_ROSTER = {
     ),
 }
 
+
 def roster_for(which: str | None = None) -> dict:
     """The trade table as `which` world spells it. Live is the identity.
 
@@ -320,8 +337,11 @@ UNASSIGNED = ("inscription", "jewelcrafting")
 #                   spends his second slot.
 OPEN_ORDER = (
     "tailoring",
-    "mining", "blacksmithing", "engineering",
-    "skinning", "leatherworking",
+    "mining",
+    "blacksmithing",
+    "engineering",
+    "skinning",
+    "leatherworking",
     "enchanting",
 )
 
@@ -404,8 +424,9 @@ def suits_wearer(name: str, class_name: str) -> bool:
     a vacuous one.
     """
     worn = armour_for(class_name)
-    return all(CRAFT_ARMOUR[skill] == worn
-               for skill in assigned(name) if skill in CRAFT_ARMOUR)
+    return all(
+        CRAFT_ARMOUR[skill] == worn for skill in assigned(name) if skill in CRAFT_ARMOUR
+    )
 
 
 def primaries(member: Member) -> tuple:
@@ -570,28 +591,35 @@ def plan(family: Sequence) -> TradePlan:
 def _drop(taker: Member, skill: str, family: Sequence) -> Assignment:
     cost = int(taker.skills.get(skill, 0))
     keeper = ", ".join(_keepers(family, skill))
-    priced = (f"It is at {cost}/75, which is real work and is going"
-              if cost > FLOOR else
-              f"It is at {cost}/75 - learned and never once used")
+    priced = (
+        f"It is at {cost}/75, which is real work and is going"
+        if cost > FLOOR
+        else f"It is at {cost}/75 - learned and never once used"
+    )
     return Assignment(
-        character=taker.name, verb="unlearn", skill=skill,
-        skill_id=skill_id(skill), cost=cost,
+        character=taker.name,
+        verb="unlearn",
+        skill=skill,
+        skill_id=skill_id(skill),
+        cost=cost,
         reason=(
             f"{taker.name} holds {MAX_PRIMARY} primary professions and is "
             f"assigned {' + '.join(assigned(taker.name))}, so {skill} has to "
             f"go to make room. {priced}. The family keeps {skill} because "
             f"{keeper} is assigned it."
         ),
-        said=(f"{taker.name} give up {skill}. {keeper} keep that for family "
-              f"now."),
+        said=(f"{taker.name} give up {skill}. {keeper} keep that for family now."),
     )
 
 
 def _take(taker: Member, skill: str) -> Assignment:
     trade = ROSTER[taker.name]
     return Assignment(
-        character=taker.name, verb="learn", skill=skill,
-        skill_id=skill_id(skill), cost=0,
+        character=taker.name,
+        verb="learn",
+        skill=skill,
+        skill_id=skill_id(skill),
+        cost=0,
         reason=(
             f"{taker.name} is assigned {' + '.join(trade.primaries)}, because "
             f"{trade.why}."
@@ -614,7 +642,8 @@ def _notes(family: Sequence) -> tuple:
         )
 
     settled_already = sorted(
-        m.name for m in family
+        m.name
+        for m in family
         if assigned(m.name) and not set(assigned(m.name)) - set(m.skills)
     )
     if settled_already:
@@ -637,8 +666,9 @@ def _notes(family: Sequence) -> tuple:
                 losses.append((value, member.name, skill))
     if losses:
         losses.sort(reverse=True)
-        worst = ", ".join(f"{name}'s {skill} at {value}/75"
-                          for value, name, skill in losses)
+        worst = ", ".join(
+            f"{name}'s {skill} at {value}/75" for value, name, skill in losses
+        )
         notes.append(
             "THIS PLAN DESTROYS WORKED SKILL, and here is all of it before any "
             f"of it happens: {worst}. Every point of it is deliberate - each "
@@ -647,10 +677,7 @@ def _notes(family: Sequence) -> tuple:
             "else is assigned it."
         )
 
-    unheld = sorted(
-        s for s in SECONDARY
-        if any(s not in m.skills for m in family)
-    )
+    unheld = sorted(s for s in SECONDARY if any(s not in m.skills for m in family))
     if not unheld:
         notes.append(
             "All five already hold cooking, fishing and first aid, and none of "
@@ -676,8 +703,10 @@ def errand(assignment: Assignment) -> str:
     the profession being dropped, which is a second trip and not a free action.
     """
     article = "an" if assignment.skill[0] in "aeiou" else "a"
-    return (f"{assignment.character} must find {article} {assignment.skill} "
-            f"trainer and {assignment.verb} {assignment.skill}.")
+    return (
+        f"{assignment.character} must find {article} {assignment.skill} "
+        f"trainer and {assignment.verb} {assignment.skill}."
+    )
 
 
 def lines(trade_plan: TradePlan) -> list:
@@ -1126,7 +1155,9 @@ def secondary_rank_refusal(skills: Mapping[str, int]) -> str:
     if not stuck:
         return SECONDARY_RANK_REFUSAL
     return "%s And the ceiling is not what is stopping them: %s." % (
-        SECONDARY_RANK_REFUSAL, "; ".join(stuck))
+        SECONDARY_RANK_REFUSAL,
+        "; ".join(stuck),
+    )
 
 
 def traveller(errand) -> str:

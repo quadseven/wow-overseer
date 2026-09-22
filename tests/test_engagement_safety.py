@@ -13,6 +13,7 @@ The C++ here is compiled only on a push to `main`, never on a PR, so these are
 contract tests over the source text, in the pattern test_schema_degrade.py
 established.
 """
+
 import pathlib
 import unittest
 
@@ -35,7 +36,7 @@ def _function(signature: str) -> str:
         elif src[i] == "}":
             depth -= 1
             if depth == 0:
-                return src[start:i + 1]
+                return src[start : i + 1]
     raise AssertionError("%s has no closing brace" % signature)
 
 
@@ -191,8 +192,9 @@ class ThePollIsRegisteredAndSeparateFromTheTravellerArchitecture(unittest.TestCa
         """This is a text-shape check, not a full regression suite: the two
         functions this PR must not touch still open with the same guarded
         roster/aim reads test_schema_degrade.py already pins down."""
-        quests = _code(_function("void DriveQuests()")
-                       + _function("void DriveFamilyQuests("))
+        quests = _code(
+            _function("void DriveQuests()") + _function("void DriveFamilyQuests(")
+        )
         self.assertIn("TravelHoldsTheWheel(", quests)
         self.assertNotIn("DriveEngagementSafety", quests)
         travel = _code(_function("void DriveTravel()"))

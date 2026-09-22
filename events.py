@@ -14,6 +14,7 @@ testable with canned data. Two invariants the bridge relies on:
   can emit events, which also makes the first poll (empty prev) silent -
   a bridge restart must not narrate 500 "arrivals".
 """
+
 from __future__ import annotations
 
 import json
@@ -62,14 +63,20 @@ def detect_events(prev: dict[str, dict], curr: dict[str, dict], geo) -> list[Eve
         if row["level"] > before["level"]:
             events.append(Event("level_up", name, {"level": row["level"]}))
         if row["zone_id"] != before["zone_id"]:
-            from_zone = geo.zone_name(before["map_id"], before["pos_x"], before["pos_y"])
+            from_zone = geo.zone_name(
+                before["map_id"], before["pos_x"], before["pos_y"]
+            )
             to_zone = geo.zone_name(row["map_id"], row["pos_x"], row["pos_y"])
             # zones.json rectangles are coarser than zone_id; a transition
             # that resolves to the same name would narrate "left X for X",
             # which reads as a glitch rather than a journey. Skip those.
             if from_zone != to_zone:
                 events.append(
-                    Event("zone_change", name, {"from_zone": from_zone, "to_zone": to_zone})
+                    Event(
+                        "zone_change",
+                        name,
+                        {"from_zone": from_zone, "to_zone": to_zone},
+                    )
                 )
         died = before["health"] > 0 and row["health"] <= 0
         if died:
@@ -98,10 +105,7 @@ def filter_for_story(events: list, notable: frozenset) -> list:
     preserved so downstream priority sorting is unaffected.
     """
     lowered = {n.lower() for n in notable}
-    return [
-        e for e in events
-        if e.kind in STORY_ALWAYS or e.name.lower() in lowered
-    ]
+    return [e for e in events if e.kind in STORY_ALWAYS or e.name.lower() in lowered]
 
 
 def split_for_voicing(events: list[Event], cap: int) -> tuple[list[Event], list[Event]]:
@@ -142,9 +146,7 @@ def template_line(event: Event) -> str:
 
 def build_batch_prompt(events: list[Event]) -> str:
     """One prompt for the whole batch - one LLM call per cycle, not per event."""
-    payload = json.dumps(
-        [{"name": e.name, "event": describe(e)} for e in events]
-    )
+    payload = json.dumps([{"name": e.name, "event": describe(e)} for e in events])
     return (
         "You narrate the inner lives of World of Warcraft characters. "
         "These things just happened, one entry per event:\n"

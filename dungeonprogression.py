@@ -23,6 +23,7 @@ which is the division of labour each half was already built for.
 No database, HTTP, or world access belongs here.  The adapter is responsible
 for reading the run ledger and handing rows to these functions.
 """
+
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping, Sequence
@@ -75,9 +76,7 @@ SCARLET_WINGS = (
 # the whole reason council.PLACES carries a judgement rather than the access
 # table's minimum.
 BLACKROCK_DEPTHS_MAP_ID = 230
-BLACKROCK_DEPTHS = (
-    ("blackrock-depths", 52),
-)
+BLACKROCK_DEPTHS = (("blackrock-depths", 52),)
 
 # Map id -> the ordered stages of that map's campaign.  A map that is NOT in
 # here has no named campaign, which is an ordinary answer and not a gap: it
@@ -117,9 +116,7 @@ def successful_runs(rows: Iterable[Mapping]) -> dict[str, int]:
     a caller can tell "nobody has cleared Blackrock Depths" from "this module
     has never heard of Blackrock Depths".
     """
-    counts = {keyword: 0
-              for stages in CAMPAIGNS.values()
-              for keyword, _ in stages}
+    counts = {keyword: 0 for stages in CAMPAIGNS.values() for keyword, _ in stages}
     for row in rows:
         keyword = str(row.get("portal_keyword") or "")
         outcome = str(row.get("outcome") or "")
@@ -156,8 +153,7 @@ def next_stage(
     return None
 
 
-def frontier_stage(stages: Sequence[tuple[str, int]], level: int,
-                   *, slack: int) -> str:
+def frontier_stage(stages: Sequence[tuple[str, int]], level: int, *, slack: int) -> str:
     """The HIGHEST stage this family is ready (or ``slack`` short of) for.
 
     The answer when no ordered campaign can be had: either the ledger is

@@ -17,6 +17,7 @@ gets wrong are not cosmetic. Both have a history in this repo:
 Every test here is a dict literal against a pure module: no database, no
 browser. The page contract is tests/test_decree_tab.py.
 """
+
 import pathlib
 import unittest
 from datetime import datetime
@@ -204,7 +205,6 @@ class TheCanonicalUnchangedRow(unittest.TestCase):
 
 
 class EveryStatusTheQueueCanHold(unittest.TestCase):
-
     def test_every_terminal_status_the_bridge_knows_can_be_drawn(self):
         for status in core.COMMAND_TERMINAL_STATUSES:
             self.assertIn(status, decree.OUTCOMES, status)
@@ -242,8 +242,9 @@ class TheCampaignCounter(unittest.TestCase):
     opinion."""
 
     def test_the_leaders_row_is_the_one_reported(self):
-        rows = roster({"Og": {"dungeon_runs_done": 1},
-                       "Grug": {"dungeon_runs_done": 7}})
+        rows = roster(
+            {"Og": {"dungeon_runs_done": 1}, "Grug": {"dungeon_runs_done": 7}}
+        )
         view = decree.campaign_view(agenda.standing_orders(rows)["campaign"])
         self.assertEqual(view["done"], 1)
         self.assertEqual(view["recorded_by"], "Og")
@@ -253,8 +254,9 @@ class TheCampaignCounter(unittest.TestCase):
         """The crown moves and the counter does not travel with it. Silently
         taking the maximum would hide a campaign that restarts every time
         leadership changes, behind a number that merely looks right."""
-        rows = roster({"Og": {"dungeon_runs_done": 0},
-                       "Grug": {"dungeon_runs_done": 2}})
+        rows = roster(
+            {"Og": {"dungeon_runs_done": 0}, "Grug": {"dungeon_runs_done": 2}}
+        )
         view = decree.campaign_view(agenda.standing_orders(rows)["campaign"])
         self.assertEqual(view["disagrees"], ["Grug"])
         self.assertIn("Grug", view["warning"])
@@ -295,13 +297,11 @@ class TheCampaignCounter(unittest.TestCase):
 
 
 class TravelIsNotTransaction(unittest.TestCase):
-
     def test_every_role_the_module_knows_is_offered_and_no_others(self):
         """The keywords are already duplicated in C++ and checked line for
         line by test_travel_npc. A third copy in a web page is the one nobody
         would think to check."""
-        self.assertEqual([c["role"] for c in decree.travel_chips()],
-                         list(travel.ROLES))
+        self.assertEqual([c["role"] for c in decree.travel_chips()], list(travel.ROLES))
 
     def test_the_caveat_is_the_one_the_module_states(self):
         self.assertIn("Travel, not transaction", decree.TRAVEL_CAVEAT)
@@ -325,8 +325,10 @@ class TravelIsNotTransaction(unittest.TestCase):
         self.assertTrue(decree.TRAVEL_UNBUILT)
 
     def test_only_characters_actually_aimed_somewhere_are_listed(self):
-        rows = [{"name": "Og", "target": "profession trainer"},
-                {"name": "Grug", "target": ""}]
+        rows = [
+            {"name": "Og", "target": "profession trainer"},
+            {"name": "Grug", "target": ""},
+        ]
         aimed = decree.travel_now(rows)
         self.assertEqual([a["name"] for a in aimed], ["Og"])
         self.assertIn("profession trainer", aimed[0]["says"])
@@ -349,12 +351,15 @@ class WhatThisConsoleMayWrite(unittest.TestCase):
         """`writes` is the road, and can_send is derived from it - so a card
         cannot become sendable on screen without naming what it writes."""
         roads = {s.key: s.writes for s in decree.SECTIONS}
-        self.assertEqual(roads, {
-            decree.JOB: decree.COMMAND,
-            decree.CAMPAIGN: decree.ROSTER,
-            decree.TRAVEL: decree.ROSTER,
-            decree.WILL: decree.CHAT,
-        })
+        self.assertEqual(
+            roads,
+            {
+                decree.JOB: decree.COMMAND,
+                decree.CAMPAIGN: decree.ROSTER,
+                decree.TRAVEL: decree.ROSTER,
+                decree.WILL: decree.CHAT,
+            },
+        )
         for section in decree.SECTIONS:
             self.assertTrue(decree.can_send(section.key), section.key)
 
@@ -371,9 +376,11 @@ class WhatThisConsoleMayWrite(unittest.TestCase):
         """The candour the refusals used to carry, now that the buttons work.
         An operator who has to press one to find out what it writes is being
         asked to experiment on a live realm."""
-        named = {decree.JOB: "overseer_command",
-                 decree.CAMPAIGN: "overseer_roster.dungeon_runs_wanted",
-                 decree.TRAVEL: "overseer_roster.travel_npc"}
+        named = {
+            decree.JOB: "overseer_command",
+            decree.CAMPAIGN: "overseer_roster.dungeon_runs_wanted",
+            decree.TRAVEL: "overseer_roster.travel_npc",
+        }
         for section in decree.SECTIONS:
             self.assertTrue(section.does, section.key)
             if section.key in named:
@@ -417,14 +424,15 @@ class WhatThisConsoleMayWrite(unittest.TestCase):
 
 
 class TheWill(unittest.TestCase):
-
     def test_the_family_answers_oldest_first(self):
         """bonds.speaking_order is the family table's own answer to who comes
         first. mod-overseer delivers in row order, so the order these are
         written in is the order they are read in."""
         rows = ["Bork", "Grug", "Ugga", "Og", "Grog"]
-        self.assertEqual(list(decree.will_audience(decree.WILL_FAMILY, rows)),
-                         bonds.speaking_order(rows))
+        self.assertEqual(
+            list(decree.will_audience(decree.WILL_FAMILY, rows)),
+            bonds.speaking_order(rows),
+        )
 
     def test_one_of_them_is_exactly_one_and_only_from_the_roster(self):
         rows = ["Grug", "Ugga"]
@@ -464,16 +472,17 @@ class TheWill(unittest.TestCase):
         """What the words become is the inner voice's decision. A preset
         shaped like a command line would be pretending otherwise."""
         from voice import is_raw_command
+
         for preset in decree.PRESETS:
             self.assertFalse(is_raw_command(preset), preset)
 
 
 class WhatIsStoppingThem(unittest.TestCase):
-
     def test_the_job_count_is_counted_and_not_typed(self):
         entry = decree.backlog()[-1]
-        self.assertIn("%d of %d" % (len(decree.unwired_modes()), len(jobs.MODES)),
-                      entry["what"])
+        self.assertIn(
+            "%d of %d" % (len(decree.unwired_modes()), len(jobs.MODES)), entry["what"]
+        )
 
     def test_wiring_a_mode_moves_the_count(self):
         """The guard for the line above: the sentence must be derived, so a
@@ -487,8 +496,9 @@ class WhatIsStoppingThem(unittest.TestCase):
         # Derived, not typed: wiring a real mode changes how many are left,
         # and this test must not need an edit each time one is (it did, once,
         # when `train` was wired).
-        self.assertIn("%d of %d" % (len(jobs.MODES) - len(widened), len(jobs.MODES)),
-                      after)
+        self.assertIn(
+            "%d of %d" % (len(jobs.MODES) - len(widened), len(jobs.MODES)), after
+        )
 
     def test_the_crafter_is_read_off_the_family_plan(self):
         """Who is owed the family's first trade is a fact professions.py
@@ -508,7 +518,6 @@ class WhatIsStoppingThem(unittest.TestCase):
 
 
 class TheWholePayload(unittest.TestCase):
-
     def test_an_empty_world_builds_a_thinner_console_and_never_raises(self):
         """A realm whose worldserver predates a table hands in [] for it. The
         same contract every other endpoint on this page keeps."""
@@ -537,8 +546,9 @@ class TheWholePayload(unittest.TestCase):
     def test_the_verdict_travels_on_the_row_and_not_as_a_word_to_match(self):
         """The page never compares a status string. Whether a row may be
         drawn as a success arrives already decided, on the row."""
-        payload = decree.build_console([], [command(status="applied"),
-                                            command(id=2, status="delivered")])
+        payload = decree.build_console(
+            [], [command(status="applied"), command(id=2, status="delivered")]
+        )
         verdicts = {o["status"]: o["success"] for o in payload["outcomes"]}
         self.assertEqual(verdicts, {"applied": True, "delivered": False})
 
@@ -550,6 +560,7 @@ class TheWholePayload(unittest.TestCase):
 
     def test_the_payload_is_json(self):
         import json
+
         json.dumps(decree.build_console(roster(), [command()]))
 
 
@@ -559,8 +570,9 @@ def two_families() -> list:
     for row in rows:
         row["family"] = "Grug"
     for name, lead in (("Zug", 1), ("Oz", 0)):
-        rows.append(dict(rows[0], name=name, lead=lead, family="Zug",
-                         dungeon_runs_wanted=5))
+        rows.append(
+            dict(rows[0], name=name, lead=lead, family="Zug", dungeon_runs_wanted=5)
+        )
     return rows
 
 
@@ -569,9 +581,16 @@ NOW = datetime(2026, 9, 22, 17, 0, 0)
 
 
 def job_row(row_id, name, status="delivered", detail="", command_="quest"):
-    return command(id=row_id, target_name=name, command=command_, kind="job",
-                   status=status, detail=detail, created_at=SENT,
-                   source="web:overseer")
+    return command(
+        id=row_id,
+        target_name=name,
+        command=command_,
+        kind="job",
+        status=status,
+        detail=detail,
+        created_at=SENT,
+        source="web:overseer",
+    )
 
 
 class AJobOrderIsReadBack(unittest.TestCase):
@@ -587,15 +606,13 @@ class AJobOrderIsReadBack(unittest.TestCase):
         self.assertIn("Ugga's job reads quest now", line["verdict"])
 
     def test_a_later_order_is_named_as_the_reason(self):
-        line = decree.outcome(job_row(5, "Ugga"), {"Ugga": "farm"},
-                              {"Ugga": 9}, NOW)
+        line = decree.outcome(job_row(5, "Ugga"), {"Ugga": "farm"}, {"Ugga": 9}, NOW)
         self.assertEqual(line["word"], "replaced")
         self.assertFalse(line["success"])
         self.assertIn("row 9", line["means"])
 
     def test_the_newest_order_that_the_column_disagrees_with_did_not_take(self):
-        line = decree.outcome(job_row(5, "Ugga"), {"Ugga": "farm"},
-                              {"Ugga": 5}, NOW)
+        line = decree.outcome(job_row(5, "Ugga"), {"Ugga": "farm"}, {"Ugga": 5}, NOW)
         self.assertEqual(line["word"], "did not take")
         self.assertEqual(line["tone"], decree.FAILED)
 
@@ -616,8 +633,9 @@ class AJobOrderIsReadBack(unittest.TestCase):
         self.assertEqual(line["word"], "handed over")
 
     def test_not_online_is_said_in_plain_words(self):
-        line = decree.outcome(job_row(4, "Grug", "error", "target not online"),
-                              {"Grug": "quest"}, {}, NOW)
+        line = decree.outcome(
+            job_row(4, "Grug", "error", "target not online"), {"Grug": "quest"}, {}, NOW
+        )
         self.assertIn("was not logged in", line["verdict"])
 
     def test_every_line_says_when_it_was_sent(self):
@@ -627,12 +645,15 @@ class AJobOrderIsReadBack(unittest.TestCase):
 
 
 class OneOrderIsOneLine(unittest.TestCase):
-
     def test_a_family_order_is_one_batch_with_the_exception_named(self):
-        rows = [job_row(3, "Grug", "error", "target not online"),
-                job_row(4, "Ugga"), job_row(5, "Og")]
-        payload = decree.build_console(two_families(), rows, NOW,
-                                       [{"target_name": "Ugga", "id": 4}])
+        rows = [
+            job_row(3, "Grug", "error", "target not online"),
+            job_row(4, "Ugga"),
+            job_row(5, "Og"),
+        ]
+        payload = decree.build_console(
+            two_families(), rows, NOW, [{"target_name": "Ugga", "id": 4}]
+        )
         self.assertEqual(len(payload["orders"]), 1)
         batch = payload["orders"][0]
         self.assertEqual(batch["who"], "Grug's family")
@@ -642,8 +663,10 @@ class OneOrderIsOneLine(unittest.TestCase):
         self.assertEqual(batch["ago"], "10 days ago")
 
     def test_orders_sent_at_different_times_are_different_lines(self):
-        rows = [job_row(4, "Ugga"),
-                dict(job_row(5, "Og"), created_at=datetime(2026, 9, 12))]
+        rows = [
+            job_row(4, "Ugga"),
+            dict(job_row(5, "Og"), created_at=datetime(2026, 9, 12)),
+        ]
         payload = decree.build_console(two_families(), rows, NOW)
         self.assertEqual(len(payload["orders"]), 2)
 
@@ -663,46 +686,46 @@ class BothFamilies(unittest.TestCase):
         self.assertEqual(fams["Grug"]["campaign"]["wanted"], 30)
 
     def test_a_job_order_without_a_family_is_refused_when_there_are_two(self):
-        order = decree.plan_order({"section": decree.JOB, "mode": "quest"},
-                                  two_families())
+        order = decree.plan_order(
+            {"section": decree.JOB, "mode": "quest"}, two_families()
+        )
         self.assertEqual(order.refusal, decree.ORDER_REFUSALS["family"])
 
     def test_a_job_order_reaches_only_the_named_family(self):
         order = decree.plan_order(
-            {"section": decree.JOB, "mode": "quest", "family": "Zug"},
-            two_families())
+            {"section": decree.JOB, "mode": "quest", "family": "Zug"}, two_families()
+        )
         self.assertEqual({r.target_name for r in order.rows}, {"Zug", "Oz"})
 
     def test_a_campaign_order_reaches_only_the_named_family(self):
         order = decree.plan_order(
-            {"section": decree.CAMPAIGN, "wanted": 3, "family": "Grug"},
-            two_families())
+            {"section": decree.CAMPAIGN, "wanted": 3, "family": "Grug"}, two_families()
+        )
         self.assertEqual({u.name for u in order.updates}, set(FAMILY))
 
     def test_an_unknown_family_is_refused(self):
         order = decree.plan_order(
-            {"section": decree.JOB, "mode": "quest", "family": "Nope"},
-            two_families())
+            {"section": decree.JOB, "mode": "quest", "family": "Nope"}, two_families()
+        )
         self.assertTrue(order.refusal)
 
     def test_one_family_needs_no_name(self):
-        order = decree.plan_order({"section": decree.JOB, "mode": "quest"},
-                                  roster())
+        order = decree.plan_order({"section": decree.JOB, "mode": "quest"}, roster())
         self.assertEqual(order.refusal, "")
 
     def test_travel_is_by_name_and_needs_no_family(self):
         order = decree.plan_order(
-            {"section": decree.TRAVEL, "name": "Oz", "role": "vendor"},
-            two_families())
+            {"section": decree.TRAVEL, "name": "Oz", "role": "vendor"}, two_families()
+        )
         self.assertEqual(order.refusal, "")
 
 
 class TheHouseRules(unittest.TestCase):
-
     def test_no_em_dashes(self):
         for name in ("decree.py", "tests/test_decree.py"):
-            self.assertNotIn(chr(0x2014),
-                             (HERE / name).read_text(encoding="utf-8"), name)
+            self.assertNotIn(
+                chr(0x2014), (HERE / name).read_text(encoding="utf-8"), name
+            )
 
     def test_the_module_is_ascii(self):
         (HERE / "decree.py").read_text(encoding="utf-8").encode("ascii")
@@ -711,8 +734,7 @@ class TheHouseRules(unittest.TestCase):
         """A new top-level module the map server imports is one forgotten
         COPY line away from a pod that crashes at start."""
         dockerfile = (HERE / "Dockerfile").resolve()
-        self.assertIn("decree.py",
-                      dockerfile.read_text(encoding="utf-8"))
+        self.assertIn("decree.py", dockerfile.read_text(encoding="utf-8"))
 
 
 if __name__ == "__main__":

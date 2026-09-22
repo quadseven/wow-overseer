@@ -1,13 +1,22 @@
 """Payload-builder tests: snapshot rows in, map JSON out."""
+
 import unittest
 
 from map_core import build_payload
 from transform import Geometry
 
 GEO = Geometry.load(".")
-ORGRIMMAR = {"name": "Grug", "level": 1, "race": 2, "map_id": 1,
-             "pos_x": 1573.0, "pos_y": -4399.0, "in_combat": 0, "is_bot": 0,
-             "age_seconds": 4}
+ORGRIMMAR = {
+    "name": "Grug",
+    "level": 1,
+    "race": 2,
+    "map_id": 1,
+    "pos_x": 1573.0,
+    "pos_y": -4399.0,
+    "in_combat": 0,
+    "is_bot": 0,
+    "age_seconds": 4,
+}
 
 
 def row(**kw):

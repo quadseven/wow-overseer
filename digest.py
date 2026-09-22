@@ -97,9 +97,9 @@ SOURCE_THOUGHT = "overseer_thought"
 
 # How a Change was arrived at. Three values, because there are three genuinely
 # different situations and collapsing any two of them tells a lie.
-BASIS_SAMPLED = "sampled"            # two real samples, the delta is measured
-BASIS_NO_BASELINE = "no-baseline"    # sampling started after the window did
-BASIS_NO_SAMPLES = "no-samples"      # nothing sampled for this character at all
+BASIS_SAMPLED = "sampled"  # two real samples, the delta is measured
+BASIS_NO_BASELINE = "no-baseline"  # sampling started after the window did
+BASIS_NO_SAMPLES = "no-samples"  # nothing sampled for this character at all
 
 COPPER_PER_GOLD = 10000
 
@@ -244,8 +244,14 @@ class Change:
     def moved(self) -> bool:
         """Did anything at all change? Only meaningful when measured."""
         return self.measured and any(
-            (self.levels, self.copper, self.quests, self.spells,
-             self.talents, self.equipped)
+            (
+                self.levels,
+                self.copper,
+                self.quests,
+                self.spells,
+                self.talents,
+                self.equipped,
+            )
         )
 
 
@@ -326,8 +332,7 @@ def changes(window: Window, samples) -> dict:
         after = _latest_at_or_before(rows, window.end) or _latest(rows)
         if before is None or after is None or after.at <= before.at:
             earliest = min(rows, key=lambda s: s.at).at if rows else None
-            out[name] = Change(
-                name=name, basis=BASIS_NO_BASELINE, since=earliest)
+            out[name] = Change(name=name, basis=BASIS_NO_BASELINE, since=earliest)
             continue
         out[name] = Change(
             name=name,
@@ -363,38 +368,51 @@ def gaps(standings) -> tuple:
     quests = {s.name: s.quests_done for s in live}
     hi, lo = max(quests.values()), min(quests.values())
     if hi - lo >= QUEST_SPREAD:
-        found.append(Gap(
-            metric="quest turn-ins", unit="",
-            leader=max(sorted(quests), key=lambda n: quests[n]),
-            leader_value=hi,
-            laggards=tuple(sorted(n for n, v in quests.items() if v == lo)),
-            laggard_value=lo,
-            note=("turn-ins are where the experience is, so this is what the "
-                  "level difference is made of"),
-        ))
+        found.append(
+            Gap(
+                metric="quest turn-ins",
+                unit="",
+                leader=max(sorted(quests), key=lambda n: quests[n]),
+                leader_value=hi,
+                laggards=tuple(sorted(n for n, v in quests.items() if v == lo)),
+                laggard_value=lo,
+                note=(
+                    "turn-ins are where the experience is, so this is what the "
+                    "level difference is made of"
+                ),
+            )
+        )
 
     broke = sorted(s.name for s in live if s.copper < BROKE_COPPER)
     if broke:
         richest = max(sorted(live, key=lambda s: s.name), key=lambda s: s.copper)
         poorest = min(sorted(live, key=lambda s: s.name), key=lambda s: s.copper)
-        found.append(Gap(
-            metric="gold", unit="g",
-            leader=richest.name, leader_value=richest.gold,
-            laggards=tuple(broke), laggard_value=poorest.gold,
-            note="under a gold buys no training and no repairs",
-        ))
+        found.append(
+            Gap(
+                metric="gold",
+                unit="g",
+                leader=richest.name,
+                leader_value=richest.gold,
+                laggards=tuple(broke),
+                laggard_value=poorest.gold,
+                note="under a gold buys no training and no repairs",
+            )
+        )
 
     levels = {s.name: s.level for s in live}
     hi, lo = max(levels.values()), min(levels.values())
     if hi - lo >= LEVEL_SPREAD:
-        found.append(Gap(
-            metric="level", unit="",
-            leader=max(sorted(levels), key=lambda n: levels[n]),
-            leader_value=hi,
-            laggards=tuple(sorted(n for n, v in levels.items() if v == lo)),
-            laggard_value=lo,
-            note="different mobs, and a quest hub they cannot share",
-        ))
+        found.append(
+            Gap(
+                metric="level",
+                unit="",
+                leader=max(sorted(levels), key=lambda n: levels[n]),
+                leader_value=hi,
+                laggards=tuple(sorted(n for n, v in levels.items() if v == lo)),
+                laggard_value=lo,
+                note="different mobs, and a quest hub they cannot share",
+            )
+        )
 
     return tuple(found)
 
@@ -429,8 +447,15 @@ class Digest:
         return any(c.measured for c in self.changes.values())
 
 
-def build(window: Window, standings, samples, moments, *, ledger=None,
-          has_event_log: bool = False) -> Digest:
+def build(
+    window: Window,
+    standings,
+    samples,
+    moments,
+    *,
+    ledger=None,
+    has_event_log: bool = False,
+) -> Digest:
     """The whole account, in one pass.
 
     Standings come out in the family's speaking order - oldest first - which
@@ -438,16 +463,20 @@ def build(window: Window, standings, samples, moments, *, ledger=None,
     once. Alphabetical would put the seven-year-old first and the mother last
     in a report about how the family is.
     """
-    order = {n: i for i, n in enumerate(
-        bonds.speaking_order([s.name for s in standings]))}
+    order = {
+        n: i for i, n in enumerate(bonds.speaking_order([s.name for s in standings]))
+    }
     ordered = tuple(sorted(standings, key=lambda s: order.get(s.name, 999)))
     return Digest(
         window=window,
         standings=ordered,
         changes=changes(window, samples),
-        moments=tuple(sorted(
-            (m for m in moments if window.contains(m.at)),
-            key=lambda m: (m.at, m.name))),
+        moments=tuple(
+            sorted(
+                (m for m in moments if window.contains(m.at)),
+                key=lambda m: (m.at, m.name),
+            )
+        ),
         gaps=gaps(ordered),
         ledger=ledger,
         has_event_log=has_event_log,
@@ -485,7 +514,9 @@ _ASK_RE = re.compile(
 )
 _NIGHT_RE = re.compile(
     r"\b(all night|overnight|last night|while i (was )?(slept|was asleep|slept)"
-    r"|since i went to bed)\b", re.IGNORECASE)
+    r"|since i went to bed)\b",
+    re.IGNORECASE,
+)
 _HOURS_RE = re.compile(
     r"\b(?:last|past|previous)\s+(\d+(?:\.\d+)?)\s*(h|hr|hrs|hour|hours|d|day|days)\b",
     re.IGNORECASE,
@@ -564,9 +595,10 @@ def _change_clause(change: Change) -> str:
     if change.equipped:
         bits.append("changed %s" % _plural(abs(change.equipped), "piece of gear"))
     if change.copper:
-        bits.append("%s %s" % (
-            "made" if change.copper > 0 else "spent",
-            _gold(abs(change.copper))))
+        bits.append(
+            "%s %s"
+            % ("made" if change.copper > 0 else "spent", _gold(abs(change.copper)))
+        )
     return _and_list(bits)
 
 
@@ -600,26 +632,42 @@ def _standing_line(digest: Digest, standing: Standing) -> str:
     they = _pronoun(standing.name)
     verb = "have" if they == "they" else "has"
     head = "%s, %s, is level %d%s with %s." % (
-        standing.name, who, standing.level, where, _gold(standing.copper))
+        standing.name,
+        who,
+        standing.level,
+        where,
+        _gold(standing.copper),
+    )
 
     change = digest.changes.get(standing.name)
     if change is not None and change.measured:
         moved = _change_clause(change)
-        head += (" Since then %s %s." % (they, moved) if moved
-                 else " Nothing moved for %s." % ("them" if they == "they"
-                                                  else "him" if they == "he"
-                                                  else "her"))
+        head += (
+            " Since then %s %s." % (they, moved)
+            if moved
+            else " Nothing moved for %s."
+            % ("them" if they == "they" else "him" if they == "he" else "her")
+        )
     elif dinged_recently(standing, digest.window):
-        head += " %s %s been level %d for %s of played time, so that ding is inside the window." % (
-            they.capitalize(), verb, standing.level,
-            _duration(standing.level_time_seconds))
+        head += (
+            " %s %s been level %d for %s of played time, so that ding is inside the window."
+            % (
+                they.capitalize(),
+                verb,
+                standing.level,
+                _duration(standing.level_time_seconds),
+            )
+        )
     return head
 
 
 def _no_baseline_line(digest: Digest) -> str:
     """The honest sentence for a window that starts before the counting did."""
-    starts = [c.since for c in digest.changes.values()
-              if c.basis == BASIS_NO_BASELINE and c.since]
+    starts = [
+        c.since
+        for c in digest.changes.values()
+        if c.basis == BASIS_NO_BASELINE and c.since
+    ]
     if starts:
         return (
             "I cannot tell you what changed across %s: I have only been "
@@ -640,21 +688,38 @@ def _gap_lines(digest: Digest) -> list:
         if gap.metric == "quest turn-ins":
             out.append(
                 "%s has %d quest turn-ins. %s %s on %d - %s."
-                % (gap.leader, int(gap.leader_value), _and_list(gap.laggards),
-                   "is" if len(gap.laggards) == 1 else "are",
-                   int(gap.laggard_value), gap.note))
+                % (
+                    gap.leader,
+                    int(gap.leader_value),
+                    _and_list(gap.laggards),
+                    "is" if len(gap.laggards) == 1 else "are",
+                    int(gap.laggard_value),
+                    gap.note,
+                )
+            )
         elif gap.metric == "gold":
             out.append(
                 "%s %s under a gold (%s, against %s's %.1fg) - %s."
-                % (_and_list(gap.laggards),
-                   "is" if len(gap.laggards) == 1 else "are",
-                   "%.1fg" % gap.laggard_value, gap.leader, gap.leader_value,
-                   gap.note))
+                % (
+                    _and_list(gap.laggards),
+                    "is" if len(gap.laggards) == 1 else "are",
+                    "%.1fg" % gap.laggard_value,
+                    gap.leader,
+                    gap.leader_value,
+                    gap.note,
+                )
+            )
         else:
             out.append(
                 "%s is %d, %s %d. %s."
-                % (gap.leader, int(gap.leader_value), _and_list(gap.laggards),
-                   int(gap.laggard_value), gap.note[0].upper() + gap.note[1:]))
+                % (
+                    gap.leader,
+                    int(gap.leader_value),
+                    _and_list(gap.laggards),
+                    int(gap.laggard_value),
+                    gap.note[0].upper() + gap.note[1:],
+                )
+            )
     return out
 
 
@@ -693,9 +758,13 @@ def _moment_lines(digest: Digest) -> list:
             continue
         named = [m for m in rows if m.text][:MAX_NAMED]
         if named:
-            out.append("%s: %s." % (
-                kind.replace("_", " ").capitalize(),
-                "; ".join("%s %s" % (m.name, m.text) for m in named)))
+            out.append(
+                "%s: %s."
+                % (
+                    kind.replace("_", " ").capitalize(),
+                    "; ".join("%s %s" % (m.name, m.text) for m in named),
+                )
+            )
         else:
             out.append("%s: %d." % (kind.replace("_", " ").capitalize(), len(rows)))
     return out
@@ -721,8 +790,10 @@ def render(digest: Digest) -> str:
     and none of it is computed twice.
     """
     if not digest.standings:
-        return ("Nobody is in the world and nothing was sampled, so there is "
-                "nothing to tell you about %s." % digest.window.describe())
+        return (
+            "Nobody is in the world and nothing was sampled, so there is "
+            "nothing to tell you about %s." % digest.window.describe()
+        )
 
     lines = ["The family, over %s." % digest.window.describe(), ""]
     lines.extend(_standing_line(digest, s) for s in digest.standings)
@@ -790,6 +861,9 @@ def opening_line(digest: Digest, content: str = "", *, speaker: str = "") -> str
     worst = digest.gaps[0] if digest.gaps else None
     if worst is not None:
         return "%s: the family stands, but %s %s behind on %s." % (
-            speaker, _and_list(worst.laggards),
-            "is" if len(worst.laggards) == 1 else "are", worst.metric)
+            speaker,
+            _and_list(worst.laggards),
+            "is" if len(worst.laggards) == 1 else "are",
+            worst.metric,
+        )
     return "%s: the family stands." % speaker

@@ -20,6 +20,7 @@ conversion therefore flips both axes:
 
 Usage: python3 gen_geometry.py <dbc_dir> <teleport_tsv> <out_dir>
 """
+
 from __future__ import annotations
 
 import json
@@ -34,10 +35,14 @@ CONTINENTS = {0: "Eastern Kingdoms", 1: "Kalimdor", 530: "Outland", 571: "Northr
 # (or squash Outland to nothing). They become their own regions, matched by
 # the dbc's internal zone names (frozen data, explicit is honest).
 EXILE_REGIONS = {
-    "quelthalas": {"name": "Quel'Thalas",
-                   "zones": {"EversongWoods", "Ghostlands", "SilvermoonCity", "Sunwell"}},
-    "azuremyst": {"name": "Azuremyst Isles",
-                  "zones": {"AzuremystIsle", "TheExodar", "BloodmystIsle"}},
+    "quelthalas": {
+        "name": "Quel'Thalas",
+        "zones": {"EversongWoods", "Ghostlands", "SilvermoonCity", "Sunwell"},
+    },
+    "azuremyst": {
+        "name": "Azuremyst Isles",
+        "zones": {"AzuremystIsle", "TheExodar", "BloodmystIsle"},
+    },
 }
 
 
@@ -76,17 +81,27 @@ def main(dbc_dir: str, teleport_tsv: str, out_dir: str) -> None:
             # by side), which would squash each continent into a strip.
             continue
         name = cstr(strings, name_ofs)
-        zone = {"area_id": area_id, "name": name,
-                "left": left, "right": right, "top": top, "bottom": bottom}
+        zone = {
+            "area_id": area_id,
+            "name": name,
+            "left": left,
+            "right": right,
+            "top": top,
+            "bottom": bottom,
+        }
         region_key = str(map_id)
         for key, spec in EXILE_REGIONS.items():
             if map_id == 530 and name in spec["zones"]:
                 region_key = key
-        c = continents.setdefault(region_key, {
-            "name": EXILE_REGIONS[region_key]["name"] if region_key in EXILE_REGIONS
-                    else CONTINENTS[map_id],
-            "zones": [],
-        })
+        c = continents.setdefault(
+            region_key,
+            {
+                "name": EXILE_REGIONS[region_key]["name"]
+                if region_key in EXILE_REGIONS
+                else CONTINENTS[map_id],
+                "zones": [],
+            },
+        )
         if region_key in EXILE_REGIONS:
             c["parent_map"] = 530
         c["zones"].append(zone)
@@ -115,7 +130,9 @@ def main(dbc_dir: str, teleport_tsv: str, out_dir: str) -> None:
         trig = triggers.get(tid)
         if not trig or tmap in CONTINENTS or trig["map"] not in CONTINENTS:
             continue
-        entrances.setdefault(str(tmap), {"map": trig["map"], "x": trig["x"], "y": trig["y"]})
+        entrances.setdefault(
+            str(tmap), {"map": trig["map"], "x": trig["x"], "y": trig["y"]}
+        )
     # Pass 2 (transitive): an instance entered from inside another instance
     # inherits the outer instance's entrance (e.g. raid wings).
     for tid, tmap in targets.items():
@@ -130,7 +147,9 @@ def main(dbc_dir: str, teleport_tsv: str, out_dir: str) -> None:
         json.dump({"continents": continents}, f, indent=1, sort_keys=True)
     with open(f"{out_dir}/entrances.json", "w") as f:
         json.dump(entrances, f, indent=1, sort_keys=True)
-    print(f"continents: {len(continents)}  zones: {sum(len(c['zones']) for c in continents.values())}  entrances: {len(entrances)}")
+    print(
+        f"continents: {len(continents)}  zones: {sum(len(c['zones']) for c in continents.values())}  entrances: {len(entrances)}"
+    )
 
 
 if __name__ == "__main__":

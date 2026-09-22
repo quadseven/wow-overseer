@@ -14,6 +14,7 @@ another continent. Every number in `_measured_*` came off the live database,
 so a rule that passes here has been checked against a real shape rather than a
 convenient one.
 """
+
 import pathlib
 import unittest
 
@@ -23,24 +24,45 @@ import bag_pressure
 import guildshare
 
 BRIDGE = pathlib.Path(__file__).resolve().parents[1] / "bridge.py"
-DOCKERFILE = (pathlib.Path(__file__).resolve().parents[1] / "Dockerfile")
+DOCKERFILE = pathlib.Path(__file__).resolve().parents[1] / "Dockerfile"
 
 
-def _stack(holder, item, entry, count, guid, item_class=guildshare.TRADE_GOODS,
-           subclass=5, bonding=0, required_skill=0, required_rank=0,
-           required_level=0):
+def _stack(
+    holder,
+    item,
+    entry,
+    count,
+    guid,
+    item_class=guildshare.TRADE_GOODS,
+    subclass=5,
+    bonding=0,
+    required_skill=0,
+    required_rank=0,
+    required_level=0,
+):
     return guildshare.Holding(
-        holder=holder, item=item, entry=entry, count=count, guid=guid,
-        item_class=item_class, subclass=subclass, bonding=bonding,
-        required_skill=required_skill, required_rank=required_rank,
+        holder=holder,
+        item=item,
+        entry=entry,
+        count=count,
+        guid=guid,
+        item_class=item_class,
+        subclass=subclass,
+        bonding=bonding,
+        required_skill=required_skill,
+        required_rank=required_rank,
         required_level=required_level,
     )
 
 
 def _member(name, level=40, skills=None, online=True, family=False, class_id=8):
     return guildshare.Member(
-        name=name, class_id=class_id, level=level, skills=skills or {},
-        online=online, family=family,
+        name=name,
+        class_id=class_id,
+        level=level,
+        skills=skills or {},
+        online=online,
+        family=family,
     )
 
 
@@ -69,8 +91,12 @@ def _measured_guild():
         _member("Grug", level=51, family=True, skills={164: 100}),
         _member("Grog", level=49, family=True, skills={202: 80}),
         # The one recruit who was actually in the world, on another continent.
-        _member("Tinceenk", level=40, online=True,
-                skills={129: 200, 171: 200, 182: 200, 197: 145, 333: 145}),
+        _member(
+            "Tinceenk",
+            level=40,
+            online=True,
+            skills={129: 200, 171: 200, 182: 200, 197: 145, 333: 145},
+        ),
         # Offline recruits: a tailor, an alchemist and a leatherworker, all of
         # whom could use what is spare and none of whom can receive it.
         _member("Navnah", level=51, online=False, skills={197: 230, 333: 230}),
@@ -104,23 +130,34 @@ class ReserveIsCraftRhythmsNumberTest(unittest.TestCase):
 class GearRecipientPriorityTest(unittest.TestCase):
     def _gear(self, holder="Grug", guid=1, level=40):
         return gear.Holding(
-            holder=holder, guid=guid, entry=1000 + guid,
-            name="Useful BoE", quality=2, item_level=level,
-            required_level=1, allowable_class=-1, inventory_type=13,
+            holder=holder,
+            guid=guid,
+            entry=1000 + guid,
+            name="Useful BoE",
+            quality=2,
+            item_level=level,
+            required_level=1,
+            allowable_class=-1,
+            inventory_type=13,
             item_class=gear.ITEM_CLASS_WEAPON,
         )
 
     def _character(self, name, level=40):
-        return gear.CharacterState(name=name, class_id=1, level=level,
-                                   equipped={"main_hand": 1})
+        return gear.CharacterState(
+            name=name, class_id=1, level=level, equipped={"main_hand": 1}
+        )
 
     def test_family_upgrade_is_reserved_before_guildmate_fallback(self):
         members = [_member("Guildie", online=True, family=False)]
         grants = bag_pressure.guild_gear_gifts(
             [self._gear(holder="Ugga")],
-            [self._character("Ugga", level=40), self._character("Grug"),
-             self._character("Guildie")],
-            ["Grug"], members,
+            [
+                self._character("Ugga", level=40),
+                self._character("Grug"),
+                self._character("Guildie"),
+            ],
+            ["Grug"],
+            members,
         )
         self.assertEqual(grants.grants, ())
 
@@ -129,7 +166,10 @@ class GearRecipientPriorityTest(unittest.TestCase):
         # Grug is not represented as a character, so the family has no
         # eligible recipient; the observed guild member gets the item.
         grants = bag_pressure.guild_gear_gifts(
-            [self._gear()], [self._character("Guildie")], ["Grug"], members,
+            [self._gear()],
+            [self._character("Guildie")],
+            ["Grug"],
+            members,
         )
         self.assertEqual(len(grants.grants), 1)
         self.assertEqual(grants.grants[0].taker, "Guildie")
@@ -137,7 +177,10 @@ class GearRecipientPriorityTest(unittest.TestCase):
     def test_offline_guildmate_is_never_a_recipient(self):
         members = [_member("Guildie", online=False, family=False)]
         grants = bag_pressure.guild_gear_gifts(
-            [self._gear()], [self._character("Guildie")], ["Grug"], members,
+            [self._gear()],
+            [self._character("Guildie")],
+            ["Grug"],
+            members,
         )
         self.assertEqual(grants.grants, ())
 
@@ -205,35 +248,60 @@ class SurplusNeverBreaksTheReserveTest(unittest.TestCase):
 
 class OnlyTheRightKindOfItemMovesTest(unittest.TestCase):
     def test_a_bind_on_pickup_item_is_never_shareable(self):
-        self.assertFalse(guildshare.shareable(
-            _stack("Og", "Soulbound Thing", 9001, 1, 1, bonding=1)))
+        self.assertFalse(
+            guildshare.shareable(_stack("Og", "Soulbound Thing", 9001, 1, 1, bonding=1))
+        )
 
     def test_a_bind_on_equip_item_is_never_shareable_either(self):
         # gear.py owns the question of whether a wearable should leave the
         # family. This pass must never be the reason one did.
-        self.assertFalse(guildshare.shareable(
-            _stack("Og", "Green Robe", 9002, 1, 1, bonding=2)))
+        self.assertFalse(
+            guildshare.shareable(_stack("Og", "Green Robe", 9002, 1, 1, bonding=2))
+        )
 
     def test_conjured_food_is_not_shareable(self):
         # class 0 subclass 5 - it vanishes in the receiver's bags.
-        self.assertFalse(guildshare.shareable(
-            _stack("Bork", "Conjured Cinnamon Roll", 22895, 20, 1,
-                   item_class=guildshare.CONSUMABLE, subclass=5)))
+        self.assertFalse(
+            guildshare.shareable(
+                _stack(
+                    "Bork",
+                    "Conjured Cinnamon Roll",
+                    22895,
+                    20,
+                    1,
+                    item_class=guildshare.CONSUMABLE,
+                    subclass=5,
+                )
+            )
+        )
 
     def test_potions_elixirs_and_bandages_are_shareable(self):
-        for name, entry, sub in (("Healing Potion", 929, 1),
-                                 ("Elixir of Lion's Strength", 2454, 2),
-                                 ("Linen Bandage", 1251, 7)):
-            self.assertTrue(guildshare.shareable(
-                _stack("Ugga", name, entry, 5, 1,
-                       item_class=guildshare.CONSUMABLE, subclass=sub)),
-                "%s should be shareable" % name)
+        for name, entry, sub in (
+            ("Healing Potion", 929, 1),
+            ("Elixir of Lion's Strength", 2454, 2),
+            ("Linen Bandage", 1251, 7),
+        ):
+            self.assertTrue(
+                guildshare.shareable(
+                    _stack(
+                        "Ugga",
+                        name,
+                        entry,
+                        5,
+                        1,
+                        item_class=guildshare.CONSUMABLE,
+                        subclass=sub,
+                    )
+                ),
+                "%s should be shareable" % name,
+            )
 
     def test_an_unknown_trade_good_subclass_is_refused_rather_than_guessed(self):
         # class 7 subclass 11 is "Other" - Empty Vial, Large Fang. No
         # profession in FEEDS claims it, so it is left alone.
-        self.assertFalse(guildshare.shareable(
-            _stack("Ugga", "Large Fang", 5637, 1, 1, subclass=11)))
+        self.assertFalse(
+            guildshare.shareable(_stack("Ugga", "Large Fang", 5637, 1, 1, subclass=11))
+        )
 
 
 class WhoCanUseItTest(unittest.TestCase):
@@ -247,39 +315,63 @@ class WhoCanUseItTest(unittest.TestCase):
     def test_a_leatherworker_does_get_the_leather(self):
         leather = _stack("Bork", "Raptor Hide", 4461, 5, 1, subclass=6)
         worker = _member("Vanuli", level=42, skills={165: 170})
-        self.assertEqual(guildshare.can_use(leather, worker),
-                         "Vanuli has leatherworking")
+        self.assertEqual(
+            guildshare.can_use(leather, worker), "Vanuli has leatherworking"
+        )
 
     def test_cloth_suits_a_tailor_and_equally_suits_a_first_aider(self):
         cloth = _stack("Og", "Linen Cloth", 2589, 20, 1, subclass=5)
-        self.assertEqual(guildshare.can_use(cloth, _member("A", skills={197: 145})),
-                         "A has tailoring")
-        self.assertEqual(guildshare.can_use(cloth, _member("B", skills={129: 200})),
-                         "B has first aid")
+        self.assertEqual(
+            guildshare.can_use(cloth, _member("A", skills={197: 145})),
+            "A has tailoring",
+        )
+        self.assertEqual(
+            guildshare.can_use(cloth, _member("B", skills={129: 200})),
+            "B has first aid",
+        )
         self.assertEqual(guildshare.can_use(cloth, _member("C", skills={164: 200})), "")
 
     def test_a_bandage_needs_first_aid_at_rank_not_a_level(self):
         # Measured live: bandages carry RequiredSkill 129 and RequiredLevel 0.
-        bandage = _stack("Ugga", "Silk Bandage", 6450, 10, 1,
-                         item_class=guildshare.CONSUMABLE, subclass=7,
-                         required_skill=129, required_rank=180)
+        bandage = _stack(
+            "Ugga",
+            "Silk Bandage",
+            6450,
+            10,
+            1,
+            item_class=guildshare.CONSUMABLE,
+            subclass=7,
+            required_skill=129,
+            required_rank=180,
+        )
         self.assertEqual(
             guildshare.can_use(bandage, _member("Ready", level=1, skills={129: 200})),
-            "Ready has first aid")
+            "Ready has first aid",
+        )
         self.assertEqual(
             guildshare.can_use(bandage, _member("Short", level=60, skills={129: 80})),
-            "")
+            "",
+        )
 
     def test_a_potion_needs_a_level_and_no_profession_at_all(self):
         # Measured live: potions carry RequiredSkill 0 and a real RequiredLevel.
-        potion = _stack("Ugga", "Greater Healing Potion", 1710, 5, 1,
-                        item_class=guildshare.CONSUMABLE, subclass=1,
-                        required_level=21)
+        potion = _stack(
+            "Ugga",
+            "Greater Healing Potion",
+            1710,
+            5,
+            1,
+            item_class=guildshare.CONSUMABLE,
+            subclass=1,
+            required_level=21,
+        )
         self.assertEqual(
             guildshare.can_use(potion, _member("Grown", level=29, skills={})),
-            "Grown is level 29")
+            "Grown is level 29",
+        )
         self.assertEqual(
-            guildshare.can_use(potion, _member("Young", level=18, skills={})), "")
+            guildshare.can_use(potion, _member("Young", level=18, skills={})), ""
+        )
 
     def test_an_herbs_milling_skill_does_not_lock_out_the_alchemist(self):
         # THE BUG THIS TEST EXISTS FOR, found by running the real query
@@ -289,24 +381,50 @@ class WhoCanUseItTest(unittest.TestCase):
         # them. Read as a usage gate it refuses every herb to every alchemist
         # in the guild and offers them to scribes instead, which inverts the
         # answer completely.
-        silverleaf = _stack("Ugga", "Silverleaf", 765, 7, 1300933, subclass=9,
-                            required_skill=773, required_rank=1)
+        silverleaf = _stack(
+            "Ugga",
+            "Silverleaf",
+            765,
+            7,
+            1300933,
+            subclass=9,
+            required_skill=773,
+            required_rank=1,
+        )
         alchemist = _member("Michane", level=36, skills={171: 85, 182: 85})
-        self.assertEqual(guildshare.can_use(silverleaf, alchemist),
-                         "Michane has alchemy")
+        self.assertEqual(
+            guildshare.can_use(silverleaf, alchemist), "Michane has alchemy"
+        )
 
     def test_a_scribe_can_still_have_the_herb_to_mill(self):
         # The declared skill is not meaningless, it is just not exclusive: a
         # scribe really can use Silverleaf, by milling it.
-        silverleaf = _stack("Ugga", "Silverleaf", 765, 7, 1300933, subclass=9,
-                            required_skill=773, required_rank=1)
+        silverleaf = _stack(
+            "Ugga",
+            "Silverleaf",
+            765,
+            7,
+            1300933,
+            subclass=9,
+            required_skill=773,
+            required_rank=1,
+        )
         scribe = _member("Alemid", level=29, skills={773: 145})
-        self.assertEqual(guildshare.can_use(silverleaf, scribe),
-                         "Alemid has inscription")
+        self.assertEqual(
+            guildshare.can_use(silverleaf, scribe), "Alemid has inscription"
+        )
 
     def test_a_purple_lotus_still_refuses_somebody_with_neither(self):
-        lotus = _stack("Ugga", "Purple Lotus", 8831, 1, 1878727, subclass=9,
-                       required_skill=773, required_rank=175)
+        lotus = _stack(
+            "Ugga",
+            "Purple Lotus",
+            8831,
+            1,
+            1878727,
+            subclass=9,
+            required_skill=773,
+            required_rank=175,
+        )
         smith = _member("Nangri", level=41, skills={164: 205, 186: 205})
         self.assertEqual(guildshare.can_use(lotus, smith), "")
 
@@ -320,8 +438,9 @@ class WhoCanUseItTest(unittest.TestCase):
 
 class PlanTest(unittest.TestCase):
     def test_the_measured_guild_sends_og_bolts_to_the_one_online_recruit(self):
-        share = guildshare.plan(_measured_bolts(), _measured_guild(),
-                                craft_spells=(2963, 3275))
+        share = guildshare.plan(
+            _measured_bolts(), _measured_guild(), craft_spells=(2963, 3275)
+        )
         self.assertEqual(share.present, 1)
         self.assertEqual(len(share.gifts), 1)
         gift = share.gifts[0]
@@ -334,8 +453,9 @@ class PlanTest(unittest.TestCase):
         # materials.py owns hand-offs inside the family. Two modules writing
         # gives for one pair is the second-writer bug this project keeps
         # finding, so the family must never appear on the receiving end.
-        share = guildshare.plan(_measured_bolts(), _measured_guild(),
-                                craft_spells=(2963,))
+        share = guildshare.plan(
+            _measured_bolts(), _measured_guild(), craft_spells=(2963,)
+        )
         family = {"Og", "Ugga", "Bork", "Grug", "Grog"}
         for gift in share.gifts:
             self.assertNotIn(gift.taker, family)
@@ -354,8 +474,9 @@ class PlanTest(unittest.TestCase):
         self.assertIn("a give needs both characters online", share.notes[0])
         for note in share.notes:
             self.assertNotIn("nobody online can use it", note)
-        self.assertEqual(guildshare.headline(share),
-                         "no guildmate is in the world right now")
+        self.assertEqual(
+            guildshare.headline(share), "no guildmate is in the world right now"
+        )
 
     def test_an_offline_member_who_could_use_it_is_still_not_sent_it(self):
         # Navnah has Tailoring 230 and is the best possible receiver for
@@ -368,8 +489,9 @@ class PlanTest(unittest.TestCase):
     def test_one_gift_per_member_per_pass(self):
         # Eight spare stacks and one online receiver is one gift, not eight
         # rows into bags nobody manages.
-        share = guildshare.plan(_measured_bolts(), _measured_guild(),
-                                craft_spells=(2963,))
+        share = guildshare.plan(
+            _measured_bolts(), _measured_guild(), craft_spells=(2963,)
+        )
         takers = [g.taker for g in share.gifts]
         self.assertEqual(len(takers), len(set(takers)))
 
@@ -385,8 +507,12 @@ class PlanTest(unittest.TestCase):
 
     def test_a_refused_pair_is_blocked_rather_than_asked_again(self):
         refused = {("Og", "Tinceenk"): "receiver bags are full"}
-        share = guildshare.plan(_measured_bolts(), _measured_guild(),
-                                craft_spells=(2963,), stuck_pairs=refused)
+        share = guildshare.plan(
+            _measured_bolts(),
+            _measured_guild(),
+            craft_spells=(2963,),
+            stuck_pairs=refused,
+        )
         self.assertEqual(share.gifts, ())
         self.assertEqual(len(share.blocked), 1)
         self.assertEqual(share.blocked[0][2], "receiver bags are full")
@@ -402,19 +528,25 @@ class PlanTest(unittest.TestCase):
         self.assertEqual([g.taker for g in share.gifts], ["Young"])
 
     def test_the_plan_is_deterministic(self):
-        first = guildshare.plan(_measured_bolts(), _measured_guild(),
-                                craft_spells=(2963,))
-        second = guildshare.plan(list(reversed(_measured_bolts())),
-                                 list(reversed(_measured_guild())),
-                                 craft_spells=(2963,))
-        self.assertEqual([(g.taker, g.guid) for g in first.gifts],
-                         [(g.taker, g.guid) for g in second.gifts])
+        first = guildshare.plan(
+            _measured_bolts(), _measured_guild(), craft_spells=(2963,)
+        )
+        second = guildshare.plan(
+            list(reversed(_measured_bolts())),
+            list(reversed(_measured_guild())),
+            craft_spells=(2963,),
+        )
+        self.assertEqual(
+            [(g.taker, g.guid) for g in first.gifts],
+            [(g.taker, g.guid) for g in second.gifts],
+        )
 
 
 class WhatGetsSaidTest(unittest.TestCase):
     def test_the_spoken_line_names_the_receivers_own_reason(self):
-        share = guildshare.plan(_measured_bolts(), _measured_guild(),
-                                craft_spells=(2963,))
+        share = guildshare.plan(
+            _measured_bolts(), _measured_guild(), craft_spells=(2963,)
+        )
         said = guildshare.lines(share)
         self.assertEqual(len(said), 1)
         self.assertTrue(said[0].startswith("Og: Og give Tinceenk "))
@@ -423,10 +555,14 @@ class WhatGetsSaidTest(unittest.TestCase):
     def test_the_reason_names_the_reserve_it_cleared(self):
         # 46 held against a 24 reserve. The stack of 16 clears it and leaves
         # the family 30, comfortably above what it told itself it needed.
-        cloth = [_stack("Og", "Linen Cloth", 2589, 30, 1, subclass=5),
-                 _stack("Og", "Linen Cloth", 2589, 16, 2, subclass=5)]
-        roster = [_member("Og", level=52, family=True),
-                  _member("Tinceenk", level=40, skills={197: 145})]
+        cloth = [
+            _stack("Og", "Linen Cloth", 2589, 30, 1, subclass=5),
+            _stack("Og", "Linen Cloth", 2589, 16, 2, subclass=5),
+        ]
+        roster = [
+            _member("Og", level=52, family=True),
+            _member("Tinceenk", level=40, skills={197: 145}),
+        ]
         share = guildshare.plan(cloth, roster, craft_spells=(2963,))
         self.assertEqual(share.gifts[0].count, 16)
         self.assertIn("reserve of 24 Linen Cloth", share.gifts[0].reason)
@@ -435,10 +571,14 @@ class WhatGetsSaidTest(unittest.TestCase):
     def test_the_three_empty_states_read_differently(self):
         nobody = guildshare.plan([], [_member("A", family=True)], craft_spells=())
         nothing = guildshare.plan([], _measured_guild(), craft_spells=())
-        something = guildshare.plan(_measured_bolts(), _measured_guild(),
-                                    craft_spells=(2963,))
-        heads = {guildshare.headline(nobody), guildshare.headline(nothing),
-                 guildshare.headline(something)}
+        something = guildshare.plan(
+            _measured_bolts(), _measured_guild(), craft_spells=(2963,)
+        )
+        heads = {
+            guildshare.headline(nobody),
+            guildshare.headline(nothing),
+            guildshare.headline(something),
+        }
         self.assertEqual(len(heads), 3)
 
 
@@ -479,7 +619,7 @@ class TheBridgeActuallyCallsThisTest(unittest.TestCase):
 
     def test_the_write_is_kind_give_with_its_own_source(self):
         start = self.source.index("def _insert_guild_gift(")
-        body = self.source[start:self.source.index("\ndef ", start + 1)]
+        body = self.source[start : self.source.index("\ndef ", start + 1)]
         self.assertIn("'give'", body)
         self.assertIn('"guildshare"', body)
 
@@ -487,7 +627,7 @@ class TheBridgeActuallyCallsThisTest(unittest.TestCase):
         # kind='give' is written by three passes now. A window keyed on kind
         # would let any one of them silence another's retry.
         start = self.source.index("def _recent_guild_gift_keys(")
-        body = self.source[start:self.source.index("\ndef ", start + 1)]
+        body = self.source[start : self.source.index("\ndef ", start + 1)]
         self.assertIn("source = 'guildshare'", body)
         self.assertNotIn("kind = 'give'", body)
 
@@ -495,12 +635,11 @@ class TheBridgeActuallyCallsThisTest(unittest.TestCase):
         # `characters` has no guildid column on this world - the mistake
         # _fetch_guild_money made and test_guildbank.py pins.
         self.assertIn("gm.guid = c.guid", self.source)
-        self.assertIn("SELECT gm2.guildid FROM guild_member gm2",
-                      self.source)
+        self.assertIn("SELECT gm2.guildid FROM guild_member gm2", self.source)
 
     def test_presence_comes_from_the_snapshot_freshness_rule(self):
         start = self.source.index("_GUILD_ROSTER_SQL = (")
-        body = self.source[start:self.source.index("\n_GUILD_SKILLS_SQL", start)]
+        body = self.source[start : self.source.index("\n_GUILD_SKILLS_SQL", start)]
         self.assertIn("overseer_snapshot", body)
         self.assertIn("INTERVAL 60 SECOND", body)
         # characters.online is minutes stale and is not this service's rule.
@@ -508,7 +647,7 @@ class TheBridgeActuallyCallsThisTest(unittest.TestCase):
 
     def test_the_surplus_read_refuses_bound_items_in_sql_too(self):
         start = self.source.index("_GUILD_SURPLUS_SQL = (")
-        body = self.source[start:self.source.index("\ndef ", start)]
+        body = self.source[start : self.source.index("\ndef ", start)]
         self.assertIn("it.bonding = 0", body)
         self.assertIn("it.class = 7", body)
 
@@ -516,7 +655,7 @@ class TheBridgeActuallyCallsThisTest(unittest.TestCase):
         # character_spell is NOT authoritative: recipes granted at runtime
         # never persist to it, so it is permanently wrong rather than stale.
         start = self.source.index("_GUILD_SKILLS_SQL = (")
-        body = self.source[start:self.source.index("\ndef ", start)]
+        body = self.source[start : self.source.index("\ndef ", start)]
         self.assertIn("character_skills", body)
         self.assertNotIn("character_spell", body)
 

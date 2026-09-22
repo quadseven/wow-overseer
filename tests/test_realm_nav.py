@@ -18,6 +18,7 @@ The other half is the switcher: three realms have been served from one hostname
 for weeks and nothing on the page said so, so moving between them meant editing
 the URL by hand.
 """
+
 import json
 import os
 import re
@@ -30,7 +31,7 @@ LF = chr(10)
 HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 with open(os.path.join(HERE, "index.html"), encoding="utf-8") as _fh:
     PAGE = _fh.read()
-STYLE = PAGE[PAGE.index("<style>"):PAGE.index("</style>")]
+STYLE = PAGE[PAGE.index("<style>") : PAGE.index("</style>")]
 
 
 def strip_comments(text, style):
@@ -45,8 +46,9 @@ def strip_comments(text, style):
     """
     if style == "css":
         return re.sub(r"/\*.*?\*/", "", text, flags=re.S)
-    return LF.join(l for l in text.splitlines()
-                   if not l.strip().startswith("//"))
+    return LF.join(
+        line for line in text.splitlines() if not line.strip().startswith("//")
+    )
 
 
 CODE = strip_comments(STYLE, "css")
@@ -67,7 +69,7 @@ def _theme_block(selector):
         if i < 0:
             break
         start = i + len(selector)
-        out.append(CODE[start:CODE.index("}", start)])
+        out.append(CODE[start : CODE.index("}", start)])
         at = start
     # EVERY block with that selector, joined. A theme state is the UNION of
     # its rules, and this page splits the light one across two `:root` blocks:
@@ -83,8 +85,7 @@ def rules_using(token):
     The distinction is the whole point: `--body:...` inside :root is a
     definition and proves nothing, `font-family:var(--body)` is a use.
     """
-    return re.findall(r"[a-z-]+\s*:[^;{}]*var\(" + re.escape(token) + r"\)",
-                      CODE)
+    return re.findall(r"[a-z-]+\s*:[^;{}]*var\(" + re.escape(token) + r"\)", CODE)
 
 
 class TheTypefacesAreActuallyApplied(unittest.TestCase):
@@ -93,21 +94,23 @@ class TheTypefacesAreActuallyApplied(unittest.TestCase):
 
     def test_each_face_is_referenced_by_at_least_one_rule(self):
         for token in ("--display", "--body", "--mono"):
-            self.assertTrue(rules_using(token),
-                            token + " is defined but no rule uses it, so the "
-                            "face downloads and renders nowhere")
+            self.assertTrue(
+                rules_using(token),
+                token + " is defined but no rule uses it, so the "
+                "face downloads and renders nowhere",
+            )
 
     def test_the_body_text_is_the_body_face_and_not_the_old_monospace(self):
         """The page was set in ui-monospace top to bottom. Body copy in a
         monospace face is the single loudest signal that no design happened."""
-        body = CODE[CODE.index("body {"):]
-        body = body[:body.index("}")]
+        body = CODE[CODE.index("body {") :]
+        body = body[: body.index("}")]
         self.assertIn("var(--body)", body)
         self.assertNotIn("ui-monospace", body)
 
     def test_the_mark_is_set_in_the_display_face(self):
-        h1 = STYLE[STYLE.index("h1 {"):]
-        h1 = h1[:h1.index("}")]
+        h1 = STYLE[STYLE.index("h1 {") :]
+        h1 = h1[: h1.index("}")]
         self.assertIn("var(--display)", h1)
 
     def test_mono_is_kept_for_data(self):
@@ -125,10 +128,14 @@ class DarkIsTheSameDesignAndNotTheOldSite(unittest.TestCase):
     sign the redesign had happened. That is exactly what was reported."""
 
     def test_the_dark_ground_is_not_the_old_grey(self):
-        for block in re.findall(r"(?:prefers-color-scheme: dark|data-theme=\"dark\")"
-                                r"[^{]*\{(?:[^{}]|\{[^{}]*\})*\}", CODE):
-            self.assertNotIn("#0d1117", block,
-                             "the dark theme is still the pre-redesign grey")
+        for block in re.findall(
+            r"(?:prefers-color-scheme: dark|data-theme=\"dark\")"
+            r"[^{]*\{(?:[^{}]|\{[^{}]*\})*\}",
+            CODE,
+        ):
+            self.assertNotIn(
+                "#0d1117", block, "the dark theme is still the pre-redesign grey"
+            )
             self.assertNotIn("#161b22", block)
 
     def test_every_surface_token_is_defined_in_each_theme_block(self):
@@ -146,25 +153,44 @@ class DarkIsTheSameDesignAndNotTheOldSite(unittest.TestCase):
         blocks = {
             "bare :root": _theme_block(":root {"),
             "prefers-color-scheme: dark": _theme_block(
-                ':root:not([data-theme="light"]) {'),
+                ':root:not([data-theme="light"]) {'
+            ),
             'data-theme="dark"': _theme_block(':root[data-theme="dark"] {'),
         }
-        for token in ("--card", "--card-line", "--on-card", "--on-card-dim",
-                      "--bg", "--panel", "--line", "--text", "--dim",
-                      "--shell-bg", "--shell-text", "--shell-dim",
-                      "--shell-line"):
+        for token in (
+            "--card",
+            "--card-line",
+            "--on-card",
+            "--on-card-dim",
+            "--bg",
+            "--panel",
+            "--line",
+            "--text",
+            "--dim",
+            "--shell-bg",
+            "--shell-text",
+            "--shell-dim",
+            "--shell-line",
+        ):
             for where, block in blocks.items():
-                self.assertIn(token + ":", block,
-                              "%s is not defined in %s" % (token, where))
+                self.assertIn(
+                    token + ":", block, "%s is not defined in %s" % (token, where)
+                )
 
     def test_no_component_is_styled_inside_a_theme_block(self):
         """Only tokens move between themes. A component rule inside a media
         query is one that silently does not apply in the un-stamped state."""
-        for block in re.findall(r"@media \(prefers-color-scheme: dark\)"
-                                r"[^{]*\{((?:[^{}]|\{[^{}]*\})*)\}", CODE):
+        for block in re.findall(
+            r"@media \(prefers-color-scheme: dark\)"
+            r"[^{]*\{((?:[^{}]|\{[^{}]*\})*)\}",
+            CODE,
+        ):
             for selector in re.findall(r"([^{};]+)\{", block):
-                self.assertIn(":root", selector,
-                              "component styled inside a theme block: " + selector)
+                self.assertIn(
+                    ":root",
+                    selector,
+                    "component styled inside a theme block: " + selector,
+                )
 
 
 class EveryCustomPropertyUsedIsAlsoDefined(unittest.TestCase):
@@ -193,25 +219,25 @@ class EveryCustomPropertyUsedIsAlsoDefined(unittest.TestCase):
         used = set(re.findall(r"var\(\s*(--[a-z0-9-]+)\s*\)", CODE))
         defined = set(re.findall(r"(--[a-z0-9-]+)\s*:", CODE))
         missing = sorted(used - defined)
-        self.assertEqual(missing, [],
-                         "used but never defined, so they silently inherit: %s"
-                         % missing)
+        self.assertEqual(
+            missing,
+            [],
+            "used but never defined, so they silently inherit: %s" % missing,
+        )
 
     def test_the_two_that_shipped_undefined_are_defined_everywhere(self):
         """Named explicitly as well as covered by the sweep above, because
         these two are the ones that actually reached a browser."""
         for token in ("--accent-text", "--caution-text"):
-            for where, block in (("bare :root", _theme_block(":root {")),
-                                 ("dark media", _theme_block(
-                                     ':root:not([data-theme="light"]) {')),
-                                 ("dark stamp", _theme_block(
-                                     ':root[data-theme="dark"] {'))):
-                self.assertIn(token + ":", block,
-                              "%s missing from %s" % (token, where))
+            for where, block in (
+                ("bare :root", _theme_block(":root {")),
+                ("dark media", _theme_block(':root:not([data-theme="light"]) {')),
+                ("dark stamp", _theme_block(':root[data-theme="dark"] {')),
+            ):
+                self.assertIn(token + ":", block, "%s missing from %s" % (token, where))
 
 
 class TheSwitcherKnowsWhichWorldsExist(unittest.TestCase):
-
     def test_all_three_realms_are_offered(self):
         nav = realmnav.build_nav("")
         self.assertEqual([r["label"] for r in nav], ["PROD", "DEV", "HC"])
@@ -260,8 +286,7 @@ class TheSwitcherReachesThePageWithTheMountPoint(unittest.TestCase):
         self.assertIn(basepath.NAV_PLACEHOLDER, PAGE)
 
     def test_apply_substitutes_real_json(self):
-        out = basepath.apply(
-            b"<x>__OVERSEER_BASE__</x><y>__OVERSEER_NAV__</y>", "/dev")
+        out = basepath.apply(b"<x>__OVERSEER_BASE__</x><y>__OVERSEER_NAV__</y>", "/dev")
         blob = out.decode().split("<y>")[1].split("</y>")[0]
         nav = json.loads(blob)
         self.assertTrue(next(r for r in nav if r["mount"] == "/dev")["current"])
@@ -276,25 +301,27 @@ class TheSwitcherReachesThePageWithTheMountPoint(unittest.TestCase):
         """Bare in the script, the UNSUBSTITUTED file is invalid JavaScript,
         which breaks every parser pointed at the source, including the
         node --check gate that has caught two real bugs in this work."""
-        self.assertIn('<script id="realmnav-data" type="application/json">',
-                      PAGE)
+        self.assertIn('<script id="realmnav-data" type="application/json">', PAGE)
         self.assertIn("JSON.parse(data.textContent)", PAGE)
 
     def test_the_page_draws_pills_and_makes_no_judgement(self):
-        block = PAGE[PAGE.index('var nav = [];'):]
-        block = strip_comments(block[:block.index("})();")], "js")
+        block = PAGE[PAGE.index("var nav = [];") :]
+        block = strip_comments(block[: block.index("})();")], "js")
         for judged in ("hardcore", "PROD", "no page"):
-            self.assertNotIn(judged, block,
-                             judged + " is decided in realmnav.py, not here")
+            self.assertNotIn(
+                judged, block, judged + " is decided in realmnav.py, not here"
+            )
 
     def test_it_is_drawn_after_the_markup_it_draws_into(self):
         """SHIPPED BROKEN ONCE, LOCALLY. The first version ran beside u(), in a
         script block ABOVE the header: getElementById returned null, the guard
         returned early exactly as written, and the switcher silently never
         appeared. No error, no failing test, just a missing control."""
-        self.assertLess(PAGE.index('<nav id="realmnav"'),
-                        PAGE.index("var nav = [];"),
-                        "the switcher is drawn before its markup exists")
+        self.assertLess(
+            PAGE.index('<nav id="realmnav"'),
+            PAGE.index("var nav = [];"),
+            "the switcher is drawn before its markup exists",
+        )
 
     def test_the_current_realm_is_marked_for_a_screen_reader(self):
         self.assertIn('setAttribute("aria-current", "page")', PAGE)
@@ -302,10 +329,13 @@ class TheSwitcherReachesThePageWithTheMountPoint(unittest.TestCase):
 
 
 class TheHouseRules(unittest.TestCase):
-
     def test_no_em_dashes(self):
-        for name in ("index.html", "realmnav.py", "basepath.py",
-                     "tests/test_realm_nav.py"):
+        for name in (
+            "index.html",
+            "realmnav.py",
+            "basepath.py",
+            "tests/test_realm_nav.py",
+        ):
             with open(os.path.join(HERE, name), encoding="utf-8") as fh:
                 self.assertNotIn(chr(0x2014), fh.read(), name)
 

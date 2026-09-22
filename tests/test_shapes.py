@@ -5,13 +5,16 @@ shapes.json is a committed artifact built from another committed artifact
 that the committed file is re-derivable and that the derivation holds its
 invariants - a checked-in blob nobody can reproduce is a fact with no source.
 """
+
 import importlib.util
 import json
 import pathlib
 import unittest
 
 HERE = pathlib.Path(__file__).resolve().parent.parent
-_spec = importlib.util.spec_from_file_location("gen_shapes", HERE / "tools" / "gen_shapes.py")
+_spec = importlib.util.spec_from_file_location(
+    "gen_shapes", HERE / "tools" / "gen_shapes.py"
+)
 gen = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(gen)
 
@@ -49,9 +52,11 @@ class EveryZoneSurvives(unittest.TestCase):
 
     def test_no_zone_is_silently_lost(self):
         for cid, cont in self.zones.items():
-            got = ({z["name"] for z in self.shapes[cid]["zones"]}
-                   | {m["name"] for m in self.shapes[cid]["marks"]}
-                   | set(self.shapes[cid]["dropped"]))
+            got = (
+                {z["name"] for z in self.shapes[cid]["zones"]}
+                | {m["name"] for m in self.shapes[cid]["marks"]}
+                | set(self.shapes[cid]["dropped"])
+            )
             self.assertEqual({z["name"] for z in cont["zones"]}, got, cid)
 
     def test_anything_dropped_is_named_not_merely_absent(self):
@@ -73,8 +78,11 @@ class EveryZoneSurvives(unittest.TestCase):
         means the table missed it when the client data grew."""
         for cid, c in self.shapes.items():
             for z in c["zones"]:
-                self.assertNotEqual(gen.DEFAULT_TERRAIN, z["fill"],
-                                    f"{cid}/{z['name']} has no terrain colour")
+                self.assertNotEqual(
+                    gen.DEFAULT_TERRAIN,
+                    z["fill"],
+                    f"{cid}/{z['name']} has no terrain colour",
+                )
 
 
 class RegionsAreDisjoint(unittest.TestCase):
@@ -107,9 +115,15 @@ class RegionsAreDisjoint(unittest.TestCase):
         aspect = abs((cont["top"] - cont["bottom"]) / (cont["left"] - cont["right"]))
         gw = gen.GRID_W
         gh = int(round(gw * aspect))
-        land = sum(1 for j in range(gh) for i in range(gw)
-                   if any(gen.inside(ring, (i + 0.5) / gw, (j + 0.5) / gh)
-                          for ring in gen.COASTS[cid]))
+        land = sum(
+            1
+            for j in range(gh)
+            for i in range(gw)
+            if any(
+                gen.inside(ring, (i + 0.5) / gw, (j + 0.5) / gh)
+                for ring in gen.COASTS[cid]
+            )
+        )
         self.assertEqual(land, sum(z["cells"] for z in r["zones"]))
         self.assertGreater(land, 0)
 
@@ -121,8 +135,11 @@ class LabelAnchors(unittest.TestCase):
     def test_the_deepest_point_beats_the_centroid_on_a_horseshoe(self):
         """A C-shape's centroid falls in the gap - outside the region. The
         pole of inaccessibility cannot, by construction."""
-        cells = {(i, 0) for i in range(9)} | {(i, 4) for i in range(9)} \
+        cells = (
+            {(i, 0) for i in range(9)}
+            | {(i, 4) for i in range(9)}
             | {(0, j) for j in range(5)}
+        )
         cx = sum(c[0] for c in cells) / len(cells)
         cy = sum(c[1] for c in cells) / len(cells)
         self.assertNotIn((round(cx), round(cy)), cells, "centroid escapes the shape")
@@ -150,9 +167,12 @@ class LabelAnchors(unittest.TestCase):
                 i = int(z["cx"] / 1000.0 * gw)
                 j = int(z["cy"] / (1000.0 * aspect) * gh)
                 self.assertTrue(
-                    any(gen.inside(ring, (i + 0.5) / gw, (j + 0.5) / gh)
-                        for ring in gen.COASTS[cid]),
-                    f"{cid}/{z['name']} anchors in the sea")
+                    any(
+                        gen.inside(ring, (i + 0.5) / gw, (j + 0.5) / gh)
+                        for ring in gen.COASTS[cid]
+                    ),
+                    f"{cid}/{z['name']} anchors in the sea",
+                )
 
 
 class Geometry(unittest.TestCase):
@@ -226,8 +246,8 @@ class TheMapIsWiredToTheGeometry(unittest.TestCase):
         cls.page = (HERE / "index.html").read_text()
 
     def test_the_server_serves_the_geometry(self):
-        table = self.server[self.server.index("GET_ROUTES = {"):]
-        table = table[:table.index("}")]
+        table = self.server[self.server.index("GET_ROUTES = {") :]
+        table = table[: table.index("}")]
         self.assertIn('"/shapes.json": _shapes_file', table)
 
     def test_the_page_asks_for_it(self):
@@ -244,8 +264,8 @@ class TheMapIsWiredToTheGeometry(unittest.TestCase):
         """isPointInPath takes the point UNAFFECTED by the current transform
         while transforming the path by it, so passing CSS pixels never hits on
         a retina screen - and never throws, either."""
-        fn = self.page[self.page.index("function zoneAt"):]
-        fn = fn[:fn.index("\n}")]
+        fn = self.page[self.page.index("function zoneAt") :]
+        fn = fn[: fn.index("\n}")]
         self.assertIn("devicePixelRatio", fn)
 
 

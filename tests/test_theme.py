@@ -8,25 +8,28 @@ symptom is one theme's text on the other theme's ground, which no unit test that
 imports Python would ever see. So these assert the SHAPE of the cascade, which
 is the part that breaks silently.
 """
+
 import re
 import unittest
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent.parent
 PAGE = (HERE / "index.html").read_text(encoding="utf-8")
-STYLE = PAGE[PAGE.index("<style>"):PAGE.index("</style>")]
-HEAD = PAGE[:PAGE.index("</head>")]
+STYLE = PAGE[PAGE.index("<style>") : PAGE.index("</style>")]
+HEAD = PAGE[: PAGE.index("</head>")]
 
 
 def _theme_blocks():
     """The three places a reader can be: nothing chosen and a light system, a
     dark system, and an explicit choice. A token has to be in all three."""
     blocks = []
-    for marker in (":root {\n    --ink:",
-                   ':root:not([data-theme="light"]) {',
-                   ':root[data-theme="dark"] {'):
+    for marker in (
+        ":root {\n    --ink:",
+        ':root:not([data-theme="light"]) {',
+        ':root[data-theme="dark"] {',
+    ):
         start = STYLE.index(marker)
-        blocks.append(STYLE[start:STYLE.index("}", start)])
+        blocks.append(STYLE[start : STYLE.index("}", start)])
     return blocks
 
 
@@ -47,8 +50,8 @@ class TheThemeResolvesInAllThreeStates(unittest.TestCase):
     def test_the_dark_media_query_yields_to_an_explicit_light_choice(self):
         """Guarded, or a reader who picked light on a dark machine gets dark
         anyway and the button appears broken."""
-        self.assertIn('prefers-color-scheme: dark', STYLE)
-        block = STYLE[STYLE.index('@media (prefers-color-scheme: dark)'):]
+        self.assertIn("prefers-color-scheme: dark", STYLE)
+        block = STYLE[STYLE.index("@media (prefers-color-scheme: dark)") :]
         self.assertIn(':root:not([data-theme="light"])', block[:200])
 
     def test_an_explicit_dark_choice_beats_a_light_system(self):
@@ -61,8 +64,10 @@ class TheThemeResolvesInAllThreeStates(unittest.TestCase):
         them. Counting is enough to catch it."""
         for token in ("--shell-bg", "--shell-text", "--shell-dim", "--shell-line"):
             self.assertGreaterEqual(
-                STYLE.count(token + ":"), 3,
-                token + " is not defined in all three theme states")
+                STYLE.count(token + ":"),
+                3,
+                token + " is not defined in all three theme states",
+            )
 
 
 class TheShellTakesTheThemeAndSoDoesTheContent(unittest.TestCase):
@@ -88,7 +93,7 @@ class TheShellTakesTheThemeAndSoDoesTheContent(unittest.TestCase):
         """The old dark values are the thing being asserted GONE. A page whose
         shell is the design and whose cards are the previous site is what got
         reported as "this looks nothing like the handoff"."""
-        root = STYLE[STYLE.index(":root {"):STYLE.index(":root {") + 400]
+        root = STYLE[STYLE.index(":root {") : STYLE.index(":root {") + 400]
         self.assertIn("--panel:#FFFFFF", root)
         self.assertIn("--text:#0B1A10", root)
         self.assertNotIn("--panel:#161b22", root)
@@ -109,11 +114,10 @@ class TheShellTakesTheThemeAndSoDoesTheContent(unittest.TestCase):
         1.3:1 on a white card. That is the same bug the Family tab shipped
         with priests, which is what the class below is about."""
         for section in ("#armory {", "#bags {"):
-            scope = STYLE[STYLE.index(section):]
-            scope = scope[:scope.index("}")]
+            scope = STYLE[STYLE.index(section) :]
+            scope = scope[: scope.index("}")]
             for token in ("--bg:", "--panel:", "--line:", "--text:", "--dim:"):
-                self.assertIn(token, scope,
-                              token + " is not overridden for " + section)
+                self.assertIn(token, scope, token + " is not overridden for " + section)
 
     def test_the_bags_scope_also_overrides_the_text_roles(self):
         """The five legacy tokens are not enough on their own any more. The
@@ -122,10 +126,15 @@ class TheShellTakesTheThemeAndSoDoesTheContent(unittest.TestCase):
         a WHITE card. Inside a section that is dark in both themes they have
         to be overridden too, or the finding at the top of the tab is ink on
         near-black."""
-        scope = STYLE[STYLE.index("#bags {"):]
-        scope = scope[:scope.index("}")]
-        for token in ("--on-card:", "--on-card-dim:", "--warn-text:",
-                      "--caution-text:", "--accent-text:"):
+        scope = STYLE[STYLE.index("#bags {") :]
+        scope = scope[: scope.index("}")]
+        for token in (
+            "--on-card:",
+            "--on-card-dim:",
+            "--warn-text:",
+            "--caution-text:",
+            "--accent-text:",
+        ):
             self.assertIn(token, scope, token + " is not overridden for #bags")
 
     def test_the_new_text_roles_exist_in_every_theme_state(self):
@@ -168,8 +177,8 @@ class ClassColourDoesNotSurviveAWhiteCard(unittest.TestCase):
     The Family card was the one light surface drawing names in class colour."""
 
     def test_the_family_name_is_ink_and_not_the_class_colour(self):
-        rule = STYLE[STYLE.index(".fname {"):]
-        rule = rule[:rule.index("}")]
+        rule = STYLE[STYLE.index(".fname {") :]
+        rule = rule[: rule.index("}")]
         self.assertIn("color:var(--text)", rule)
 
     def test_the_family_card_no_longer_paints_the_name_from_the_class(self):
@@ -185,8 +194,8 @@ class ClassColourDoesNotSurviveAWhiteCard(unittest.TestCase):
     def test_the_swatch_has_a_border_or_a_priest_is_an_invisible_hole(self):
         """A priest's colour IS #ffffff. Without a hairline the swatch is a
         white square on a white card, which is the same bug in a new shape."""
-        rule = STYLE[STYLE.index(".fclass {"):]
-        rule = rule[:rule.index("}")]
+        rule = STYLE[STYLE.index(".fclass {") :]
+        rule = rule[: rule.index("}")]
         self.assertIn("border:", rule)
 
     def test_the_dark_surfaces_keep_their_class_colours(self):
@@ -196,7 +205,6 @@ class ClassColourDoesNotSurviveAWhiteCard(unittest.TestCase):
 
 
 class TheStoredChoiceSurvivesAReload(unittest.TestCase):
-
     def test_it_is_applied_before_the_first_paint(self):
         """In the body it would run after the browser has drawn one theme and
         the reader would watch the page change colour on every load."""
@@ -210,11 +218,15 @@ class TheStoredChoiceSurvivesAReload(unittest.TestCase):
         preference."""
         for call in ("localStorage.getItem", "localStorage.setItem"):
             self.assertIn(call, PAGE, call)
-        head_script = HEAD[HEAD.index("<script>"):]
+        head_script = HEAD[HEAD.index("<script>") :]
         self.assertIn("try {", head_script)
         self.assertIn("catch", head_script)
-        setter = PAGE[PAGE.index("localStorage.setItem") - 200:
-                      PAGE.index("localStorage.setItem") + 200]
+        setter = PAGE[
+            PAGE.index("localStorage.setItem") - 200 : PAGE.index(
+                "localStorage.setItem"
+            )
+            + 200
+        ]
         self.assertIn("try {", setter)
 
     def test_the_button_names_where_it_goes_not_where_it_is(self):
@@ -232,39 +244,42 @@ class TheRealmBandsUseTheDesignTokens(unittest.TestCase):
     quietly returning production to a colour nobody chose."""
 
     def test_production_is_ink_with_the_alarm_rule_beneath(self):
-        band = STYLE[STYLE.index("#realm.rk-production"):]
+        band = STYLE[STYLE.index("#realm.rk-production") :]
         self.assertIn("background:var(--ink)", band[:200])
         self.assertIn("border-bottom-color:var(--vermilion)", band[:300])
 
     def test_unverified_is_vermilion_and_not_a_quiet_amber(self):
-        band = STYLE[STYLE.index("#realm.rk-unknown"):]
+        band = STYLE[STYLE.index("#realm.rk-unknown") :]
         self.assertIn("background:var(--vermilion)", band[:200])
 
     def test_the_quiet_state_keeps_a_fallback_before_color_mix(self):
         """color-mix is declared second so a browser without it still gets a
         green band rather than no background at all."""
-        band = STYLE[STYLE.index("#realm.rk-non-production"):]
+        band = STYLE[STYLE.index("#realm.rk-non-production") :]
         head = band[:400]
-        self.assertLess(head.index("background:var(--deep-green)"),
-                        head.index("background:color-mix"))
+        self.assertLess(
+            head.index("background:var(--deep-green)"),
+            head.index("background:color-mix"),
+        )
 
 
 class TheHouseRules(unittest.TestCase):
-
     def test_no_em_dashes(self):
         for name in ("index.html", "tests/test_theme.py"):
-            self.assertNotIn(chr(0x2014), (HERE / name).read_text(encoding="utf-8"),
-                             name)
+            self.assertNotIn(
+                chr(0x2014), (HERE / name).read_text(encoding="utf-8"), name
+            )
 
     def test_the_typefaces_have_real_fallbacks(self):
         """A blocked font host must cost the page its typography and nothing
         else."""
         for stack in ("--display:", "--body:", "--mono:"):
-            line = STYLE[STYLE.index(stack):STYLE.index(stack) + 160]
+            line = STYLE[STYLE.index(stack) : STYLE.index(stack) + 160]
             self.assertIn(",", line, stack + " has no fallback")
             self.assertTrue(
                 any(g in line for g in ("sans-serif", "monospace", "system-ui")),
-                stack + " ends without a generic family")
+                stack + " ends without a generic family",
+            )
 
 
 if __name__ == "__main__":

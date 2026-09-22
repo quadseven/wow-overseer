@@ -106,8 +106,12 @@ class Bond:
 # live world that is the identity, and this IS the table.
 _LIVE_FAMILY: dict[str, Bond] = {
     "Grug": Bond(
-        role="father", blood=True, seniority=100,
-        race="human", char_class="warrior", gender="male",
+        role="father",
+        blood=True,
+        seniority=100,
+        race="human",
+        char_class="warrior",
+        gender="male",
         # Protection. He is the one who goes first, so he is the one who
         # gets hit; this is the tank the family has never had.
         spec_tab=2,
@@ -120,8 +124,12 @@ _LIVE_FAMILY: dict[str, Bond] = {
         ),
     ),
     "Ugga": Bond(
-        role="mother", blood=True, seniority=99,
-        race="human", char_class="priest", gender="female",
+        role="mother",
+        blood=True,
+        seniority=99,
+        race="human",
+        char_class="priest",
+        gender="female",
         # Holy. She is already described as the priest keeping every one of
         # them alive - this is that sentence made true in the talent tree.
         spec_tab=1,
@@ -133,8 +141,12 @@ _LIVE_FAMILY: dict[str, Bond] = {
         ),
     ),
     "Grog": Bond(
-        role="elder son", blood=True, seniority=50,
-        race="dwarf", char_class="paladin", gender="male",
+        role="elder son",
+        blood=True,
+        seniority=50,
+        race="dwarf",
+        char_class="paladin",
+        gender="male",
         # Retribution. Copying his father into melee, one step behind him.
         spec_tab=2,
         persona=(
@@ -149,8 +161,12 @@ _LIVE_FAMILY: dict[str, Bond] = {
         ),
     ),
     "Bork": Bond(
-        role="younger son", blood=True, seniority=10,
-        race="gnome", char_class="rogue", gender="male",
+        role="younger son",
+        blood=True,
+        seniority=10,
+        race="gnome",
+        char_class="rogue",
+        gender="male",
         # Combat. The straightforward one, which suits a boy who has never
         # had a subtle thought.
         spec_tab=1,
@@ -166,8 +182,12 @@ _LIVE_FAMILY: dict[str, Bond] = {
         ),
     ),
     "Og": Bond(
-        role="neighbour", blood=False, seniority=60,
-        race="human", char_class="mage", gender="male",
+        role="neighbour",
+        blood=False,
+        seniority=60,
+        race="human",
+        char_class="mage",
+        gender="male",
         # Frost. The careful spec, for the one who is careful about
         # everything including what he says.
         spec_tab=2,
@@ -198,6 +218,7 @@ _LIVE_SUSPICION = {
         "him. He never accuses anyone."
     ),
 }
+
 
 def family_for(which: str | None = None) -> dict[str, Bond]:
     """The family table as `which` world spells it. Live is the identity.
@@ -314,9 +335,7 @@ def _count(history: list[tuple[str, str]], helper: str, called: str) -> int:
     zero a count, which reads as a rule that simply never fires.
     """
     h_want, c_want = canon(helper), canon(called)
-    return sum(
-        1 for h, c in history if canon(h) == h_want and canon(c) == c_want
-    )
+    return sum(1 for h, c in history if canon(h) == h_want and canon(c) == c_want)
 
 
 def decide(
@@ -590,14 +609,21 @@ def _counter(me: str, them: str) -> tuple[str, str, int | None]:
 
 
 def _times(count: int) -> str:
-    """"1 time", "2 times". A count printed into a sentence has to agree with
+    """ "1 time", "2 times". A count printed into a sentence has to agree with
     it: "answered Bork 1 times" is the sort of line that makes a reader
     distrust the number as well as the grammar."""
     return "1 time" if count == 1 else "%d times" % count
 
 
-def _note(rule: str, me: str, them: str, counted: str, count: int,
-          threshold: int | None, verdict: Verdict) -> str:
+def _note(
+    rule: str,
+    me: str,
+    them: str,
+    counted: str,
+    count: int,
+    threshold: int | None,
+    verdict: Verdict,
+) -> str:
     """One sentence about this pair, for a card or a row to print whole.
 
     NO PRONOUNS. This family has a mother, a father and three boys, so a
@@ -607,9 +633,13 @@ def _note(rule: str, me: str, them: str, counted: str, count: int,
     if rule == JEALOUSY:
         if not verdict.will_answer:
             return "%s stays away from %s. %s" % (me, them, verdict.reason)
-        return (
-            "%s has answered %s %s of the %d that make %s stop going to %s."
-            % (counted, them, _times(count), threshold, me, them)
+        return "%s has answered %s %s of the %d that make %s stop going to %s." % (
+            counted,
+            them,
+            _times(count),
+            threshold,
+            me,
+            them,
         )
     if rule == LITTLE_BROTHER:
         return (
@@ -620,9 +650,11 @@ def _note(rule: str, me: str, them: str, counted: str, count: int,
         return "%s answers %s every time - %s." % (me, them, verdict.reason)
     if not verdict.will_answer:
         return "%s has stopped answering %s. %s" % (me, them, verdict.reason)
-    return (
-        "%s has answered %s %s of the %d that make the family tire of it."
-        % (me, them, _times(count), threshold)
+    return "%s has answered %s %s of the %d that make the family tire of it." % (
+        me,
+        them,
+        _times(count),
+        threshold,
     )
 
 
@@ -657,17 +689,28 @@ def answers(history: list[tuple[str, str]]) -> tuple:
                 word = COUNTING
             else:
                 word = STOPPED
-            rows.append(Answering(
-                responder=me, caller=them, will_answer=verdict.will_answer,
-                reason=verdict.reason, word=word, rule=rule, counted=counted,
-                count=count, threshold=threshold,
-                note=_note(rule, me, them, counted, count, threshold, verdict),
-            ))
-    rows.sort(key=lambda r: (
-        _WORD_ORDER[r.word],
-        (r.threshold - r.count) if r.threshold else _NO_COUNTER,
-        r.responder, r.caller,
-    ))
+            rows.append(
+                Answering(
+                    responder=me,
+                    caller=them,
+                    will_answer=verdict.will_answer,
+                    reason=verdict.reason,
+                    word=word,
+                    rule=rule,
+                    counted=counted,
+                    count=count,
+                    threshold=threshold,
+                    note=_note(rule, me, them, counted, count, threshold, verdict),
+                )
+            )
+    rows.sort(
+        key=lambda r: (
+            _WORD_ORDER[r.word],
+            (r.threshold - r.count) if r.threshold else _NO_COUNTER,
+            r.responder,
+            r.caller,
+        )
+    )
     return tuple(rows)
 
 

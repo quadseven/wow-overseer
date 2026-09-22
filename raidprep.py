@@ -34,13 +34,13 @@ PURE MODULE, same seam as travel.py, jobs.py, trainjob.py and professions.py:
 rows in, a decision and some statements out. No MySQL, no Discord, no LLM.
 `bridge.py` reads the rows, runs the statements and speaks the sentences.
 """
+
 from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass
 
 import goals
-import professions
 
 
 # The mode this module is the drive for. Spelled once, and jobs.MODES is what
@@ -162,7 +162,9 @@ def profession_gaps(members: Sequence) -> tuple:
             current = 0
             for held_id in m.holds:
                 if held_id == prof_id:
-                    current = 1  # We only know they have it, not the exact value from roster
+                    current = (
+                        1  # We only know they have it, not the exact value from roster
+                    )
                     break
             # In the real _train_members, holds contains skill IDs not levels.
             # For raid prep we care about whether the profession is declared and
@@ -272,7 +274,9 @@ def report(raid_plan) -> str:
     if raid_plan.mail_items:
         parts.append("collecting %d mail item(s)" % raid_plan.mail_items)
     if raid_plan.profession_gaps:
-        profs = ", ".join("%s (%d->%d)" % (p, c, t) for _, p, c, t in raid_plan.profession_gaps)
+        profs = ", ".join(
+            "%s (%d->%d)" % (p, c, t) for _, p, c, t in raid_plan.profession_gaps
+        )
         parts.append("raising %s" % profs)
     if raid_plan.profession_gaps == () and raid_plan.mail_items == 0:
         parts.append("guild-bank deposit pass will run")

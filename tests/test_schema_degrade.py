@@ -25,6 +25,7 @@ test_travel_npc.py established - plus two that read the k8s manifests, so the
 citations in the corrected comment cannot rot into the same kind of confident
 falsehood they replace.
 """
+
 import pathlib
 import re
 import unittest
@@ -48,7 +49,7 @@ def _function(signature: str) -> str:
         elif src[i] == "}":
             depth -= 1
             if depth == 0:
-                return src[start:i + 1]
+                return src[start : i + 1]
     raise AssertionError("%s has no closing brace" % signature)
 
 
@@ -65,8 +66,7 @@ def _code(text: str) -> str:
 def _quests() -> str:
     # mod-overseer#552 split DriveQuests into a census and dispatch plus the
     # per-family body it always had. The drive these tests describe is both.
-    return (_function("void DriveQuests()")
-            + _function("void DriveFamilyQuests("))
+    return _function("void DriveQuests()") + _function("void DriveFamilyQuests(")
 
 
 def _travel() -> str:
@@ -78,7 +78,7 @@ def _end_travel_poll() -> str:
 
 
 def _load_quest_aims() -> str:
-    return _function('std::map<std::string, uint32> LoadQuestAims(')
+    return _function("std::map<std::string, uint32> LoadQuestAims(")
 
 
 def _load_travel_aims() -> str:
@@ -101,11 +101,13 @@ def _selects(column: str) -> int:
     Counted over the SELECT text rather than over the column name, because
     `travel_npc` legitimately appears in an UPDATE (the release) and in prose.
     """
-    return len([
-        stmt for stmt in re.findall(r'"SELECT[^;]*?"\s*\)', _code(_source()),
-                                    re.S)
-        if column in stmt
-    ])
+    return len(
+        [
+            stmt
+            for stmt in re.findall(r'"SELECT[^;]*?"\s*\)', _code(_source()), re.S)
+            if column in stmt
+        ]
+    )
 
 
 class TheQuestDriveCannotBeKilledByATravelColumn(unittest.TestCase):
@@ -115,9 +117,12 @@ class TheQuestDriveCannotBeKilledByATravelColumn(unittest.TestCase):
     worse than no decision at all."""
 
     def test_the_quest_drives_own_query_does_not_name_the_travel_column(self):
-        self.assertNotIn("travel_npc", _code(_quests()),
-                         "a missing travel_npc nulls this query and the family "
-                         "stops questing (infra#2846)")
+        self.assertNotIn(
+            "travel_npc",
+            _code(_quests()),
+            "a missing travel_npc nulls this query and the family "
+            "stops questing (infra#2846)",
+        )
 
     def test_the_quest_drive_still_gets_the_travel_aims(self):
         """Not fixed by deleting the arbitration's input. It has to still know."""
@@ -175,13 +180,18 @@ class EachLateColumnIsReadOnceAndGuardedOnItsOwn(unittest.TestCase):
         self.assertEqual(1, _selects("drive_quest"))
 
     def test_both_loaders_return_the_empty_map_rather_than_propagating(self):
-        for name, body in (("LoadQuestAims", _code(_load_quest_aims())),
-                           ("TravelAimBook::Load", _code(_load_travel_aims()))):
+        for name, body in (
+            ("LoadQuestAims", _code(_load_quest_aims())),
+            ("TravelAimBook::Load", _code(_load_travel_aims())),
+        ):
             self.assertIn("if (!result)", body, name)
             guard = body.index("if (!result)")
-            tail = body[guard:guard + 120]
-            self.assertIn("return aims;", tail,
-                          "%s propagates the failure instead of degrading" % name)
+            tail = body[guard : guard + 120]
+            self.assertIn(
+                "return aims;",
+                tail,
+                "%s propagates the failure instead of degrading" % name,
+            )
 
     def test_neither_loader_filters_on_anything_but_the_column_and_enabled(self):
         for body in (_code(_load_quest_aims()), _code(_load_travel_aims())):
@@ -198,8 +208,7 @@ class EachLateColumnIsReadOnceAndGuardedOnItsOwn(unittest.TestCase):
         2026_08_23_01 and is read unguarded by KeepRosterGrouped too. If those
         are missing the roster feature is not installed at all, and there is
         nothing for this drive to degrade to."""
-        self.assertRegex(_code(_quests()),
-                         r"SELECT name, `lead` FROM overseer_roster")
+        self.assertRegex(_code(_quests()), r"SELECT name, `lead` FROM overseer_roster")
 
 
 class TheTravelDriveReadsThroughTheSameLoader(unittest.TestCase):
@@ -219,14 +228,16 @@ class TheTravelDriveReadsThroughTheSameLoader(unittest.TestCase):
         code = _code(_travel())
         self.assertIn("aims.empty()", code)
         prune = code.index("aims.empty()")
-        self.assertIn("EndTravelPoll(std::set<std::string>())",
-                      code[prune:prune + 300])
+        self.assertIn(
+            "EndTravelPoll(std::set<std::string>())", code[prune : prune + 300]
+        )
         # The prune moved behind a named verb in #166, which ends the errand
         # memory and the stood-down strategies together. Assert that verb still
         # prunes, or this test would pass on a rename that quietly dropped the
         # prune, which is the one failure it exists to catch.
-        self.assertIn("_travelAims.PruneVanished(stillAimed)",
-                      _code(_end_travel_poll()))
+        self.assertIn(
+            "_travelAims.PruneVanished(stillAimed)", _code(_end_travel_poll())
+        )
 
     def test_the_filter_the_errand_loop_relied_on_moved_with_it(self):
         """DriveTravel never had to skip an empty target because the WHERE
@@ -276,7 +287,9 @@ class TheArbitrationIsNotRegressed(unittest.TestCase):
         # escort it is TRAVEL_POLL_MS exactly as before. Still its own timer,
         # still its own cadence.
         self.assertIn("_travelTimer >= travelPoll", code)
-        self.assertRegex(code, r"travelPoll =\s*_dungeonEscorts\.empty\(\) \? TRAVEL_POLL_MS")
+        self.assertRegex(
+            code, r"travelPoll =\s*_dungeonEscorts\.empty\(\) \? TRAVEL_POLL_MS"
+        )
         self.assertEqual(1, _code(_quests()).count("_travelAims.Load()"))
         self.assertEqual(1, _code(_travel()).count("_travelAims.Load()"))
 

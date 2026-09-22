@@ -1,5 +1,6 @@
 """The two-way chat bridge: what Discord says becomes speech, and what the
 world says becomes Discord lines (infra#2597)."""
+
 import os
 import sys
 import unittest
@@ -13,13 +14,22 @@ import relay
 class ParseSpeak(unittest.TestCase):
     def test_every_slash_form_maps_to_its_channel(self):
         cases = {
-            "/say hi": "say", "/s hi": "say",
-            "/yell hi": "yell", "/y hi": "yell", "/shout hi": "yell",
-            "/emote hi": "emote", "/e hi": "emote", "/me hi": "emote",
-            "/party hi": "party", "/p hi": "party",
-            "/raid hi": "raid", "/ra hi": "raid",
-            "/guild hi": "guild", "/g hi": "guild",
-            "/officer hi": "officer", "/o hi": "officer",
+            "/say hi": "say",
+            "/s hi": "say",
+            "/yell hi": "yell",
+            "/y hi": "yell",
+            "/shout hi": "yell",
+            "/emote hi": "emote",
+            "/e hi": "emote",
+            "/me hi": "emote",
+            "/party hi": "party",
+            "/p hi": "party",
+            "/raid hi": "raid",
+            "/ra hi": "raid",
+            "/guild hi": "guild",
+            "/g hi": "guild",
+            "/officer hi": "officer",
+            "/o hi": "officer",
         }
         for text, channel in cases.items():
             got = relay.parse_speak("Grug", text, "src")
@@ -77,7 +87,9 @@ class GmAllowlist(unittest.TestCase):
             ".modify speed 2",
             ".pinfo Grug",
         ):
-            self.assertIsInstance(relay.parse_speak("Grug", cmd, "s"), relay.GmCommand, cmd)
+            self.assertIsInstance(
+                relay.parse_speak("Grug", cmd, "s"), relay.GmCommand, cmd
+            )
 
     def test_the_irreversible_surface_is_refused(self):
         for cmd in (
@@ -89,7 +101,9 @@ class GmAllowlist(unittest.TestCase):
             ".reload config",
             ".unban account Thrall",
         ):
-            self.assertIsInstance(relay.parse_speak("Grug", cmd, "s"), relay.GmRefused, cmd)
+            self.assertIsInstance(
+                relay.parse_speak("Grug", cmd, "s"), relay.GmRefused, cmd
+            )
 
     def test_an_allowed_two_word_prefix_does_not_admit_its_siblings(self):
         # "server info" is allowed; "server shutdown" must not ride in on it.
@@ -111,8 +125,18 @@ class GmAllowlist(unittest.TestCase):
     # admits the leaf - which is exactly how ".npc delete" got in behind "npc"
     # the first time round. Their safe leaves may be listed individually.
     DESTRUCTIVE_TREES = (
-        "npc", "gobject", "character", "account", "guild", "server",
-        "reload", "ban", "unban", "titles", "arena", "instance",
+        "npc",
+        "gobject",
+        "character",
+        "account",
+        "guild",
+        "server",
+        "reload",
+        "ban",
+        "unban",
+        "titles",
+        "arena",
+        "instance",
     )
 
     def test_no_destructive_command_tree_is_admitted_whole(self):
@@ -191,7 +215,9 @@ class GmAllowlist(unittest.TestCase):
             ".guild delete Argentum",
             ".titles reset",
         ):
-            self.assertIsInstance(relay.parse_speak("Grug", cmd, "s"), relay.GmRefused, cmd)
+            self.assertIsInstance(
+                relay.parse_speak("Grug", cmd, "s"), relay.GmRefused, cmd
+            )
 
     def test_the_read_only_leaves_of_those_trees_are_still_allowed(self):
         self.assertTrue(relay.gm_is_allowed(".npc info"))
@@ -244,7 +270,10 @@ class Sanitize(unittest.TestCase):
         # An invisible character living literally in source is unreadable in
         # a diff and unsearchable; the module must stay pure ASCII.
         import os
-        path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "relay.py")
+
+        path = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "relay.py"
+        )
         with open(path, "rb") as fh:
             raw = fh.read()
         self.assertEqual([b for b in raw if b > 127], [])
@@ -405,8 +434,12 @@ class CoreIntegration(unittest.TestCase):
 class OutcomeReporting(unittest.TestCase):
     def report(self, **kw):
         row = {
-            "id": 7, "target_name": "Grug", "command": "hi",
-            "kind": "bot", "status": "delivered", "detail": "",
+            "id": 7,
+            "target_name": "Grug",
+            "command": "hi",
+            "kind": "bot",
+            "status": "delivered",
+            "detail": "",
         }
         row.update(kw)
         replies, _ = core.report_outcomes([row], set())
@@ -453,7 +486,12 @@ class OutcomeReporting(unittest.TestCase):
         self.assertEqual(replies[0][1].text, "Grug heard the order: follow")
 
     def test_a_row_written_before_this_feature_has_no_kind(self):
-        row = {"id": 7, "target_name": "Grug", "command": "follow", "status": "delivered"}
+        row = {
+            "id": 7,
+            "target_name": "Grug",
+            "command": "follow",
+            "status": "delivered",
+        }
         replies, _ = core.report_outcomes([row], set())
         self.assertEqual(replies[0][1].text, "Grug heard the order: follow")
 
@@ -485,7 +523,7 @@ class AddonTrafficTest(unittest.TestCase):
             "I need help with my warrior quest",
             "Wanna do Tranquillien rep grind?",
             "another Defias Bandit bites the dust",
-            "MBOT is a great addon",          # the prefix alone is not the tell
+            "MBOT is a great addon",  # the prefix alone is not the tell
             "tab tab tab",
             "",
         ):
@@ -499,9 +537,19 @@ class AddonTrafficTest(unittest.TestCase):
         speech out of the window permanently - the relay would look dead while
         working perfectly."""
         rows = [
-            {"id": 1, "sender_name": "Grug", "channel": "whisper", "text": "MBOT\tHELLO~1"},
+            {
+                "id": 1,
+                "sender_name": "Grug",
+                "channel": "whisper",
+                "text": "MBOT\tHELLO~1",
+            },
             {"id": 2, "sender_name": "Bork", "channel": "say", "text": "help me"},
-            {"id": 3, "sender_name": "Grug", "channel": "whisper", "text": "MBOT\tPING~9"},
+            {
+                "id": 3,
+                "sender_name": "Grug",
+                "channel": "whisper",
+                "text": "MBOT\tPING~9",
+            },
         ]
         keep, drop = relay.partition_addon(rows)
         self.assertEqual([r["id"] for r in keep], [2])
@@ -524,8 +572,13 @@ class HearerCollapseTest(unittest.TestCase):
     """
 
     def _row(self, i, sender="Grug", text="Aye.", at="2026-08-23 12:00:00", ch="party"):
-        return {"id": i, "sender_name": sender, "channel": ch, "text": text,
-                "created_at": at}
+        return {
+            "id": i,
+            "sender_name": sender,
+            "channel": ch,
+            "text": text,
+            "created_at": at,
+        }
 
     def test_one_line_heard_by_five_is_relayed_once(self):
         keep, drop = relay.collapse_hearers([self._row(i) for i in range(1, 6)])
@@ -539,8 +592,10 @@ class HearerCollapseTest(unittest.TestCase):
 
     def test_the_same_words_at_a_different_moment_are_not_collapsed(self):
         """Two councils an hour apart both ending 'Aye.' are two events."""
-        rows = [self._row(1, at="2026-08-23 12:00:00"),
-                self._row(2, at="2026-08-23 13:00:00")]
+        rows = [
+            self._row(1, at="2026-08-23 12:00:00"),
+            self._row(2, at="2026-08-23 13:00:00"),
+        ]
         keep, _ = relay.collapse_hearers(rows)
         self.assertEqual(len(keep), 2)
 
@@ -563,10 +618,15 @@ class HearerCollapseTest(unittest.TestCase):
         import pathlib
 
         src = (pathlib.Path(__file__).resolve().parent.parent / "bridge.py").read_text()
-        fn = next(n for n in ast.walk(ast.parse(src))
-                  if isinstance(n, ast.AsyncFunctionDef)
-                  and n.name == "_retire_addon_traffic")
+        fn = next(
+            n
+            for n in ast.walk(ast.parse(src))
+            if isinstance(n, ast.AsyncFunctionDef) and n.name == "_retire_addon_traffic"
+        )
         names = {n.attr for n in ast.walk(fn) if isinstance(n, ast.Attribute)}
-        self.assertIn("collapse_hearers", names,
-                      "per-listener copies are never collapsed; every party "
-                      "line reaches Discord once per character in the party")
+        self.assertIn(
+            "collapse_hearers",
+            names,
+            "per-listener copies are never collapsed; every party "
+            "line reaches Discord once per character in the party",
+        )

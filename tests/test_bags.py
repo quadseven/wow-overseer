@@ -37,6 +37,7 @@ them. So the tests below assert the ABSENCE of any disposal path, which is a
 far stronger guarantee than an exclusion list: there is nothing to exclude
 from, because nothing here can remove an item from a bag.
 """
+
 import pathlib
 import re
 import unittest
@@ -102,7 +103,8 @@ class TheModuleDoesNotHandOutBags(unittest.TestCase):
         src = _strip_comments(MODULE.read_text(encoding="utf-8"))
         for call in BAG_HANDOUT:
             self.assertNotIn(
-                call, src,
+                call,
+                src,
                 f"mod_overseer.cpp contains {call}: the module must not create "
                 "bags out of nothing. Bags are looted, bought, or crafted by a "
                 "teammate with tailoring (#2757) and traded or mailed over.",
@@ -115,7 +117,8 @@ class TheModuleDoesNotHandOutBags(unittest.TestCase):
         src = _strip_comments(MODULE.read_text(encoding="utf-8"))
         for call in DISPOSAL:
             self.assertNotIn(
-                call, src,
+                call,
+                src,
                 f"mod_overseer.cpp contains {call}: nothing in this module may "
                 "remove an item from a bag",
             )
@@ -173,8 +176,7 @@ class LootStopsWhenThereIsNoRoom(unittest.TestCase):
         carry" and started being a policy about bags."""
         added, _ = _patch_lines(LOOT_PATCH)
         self.assertTrue(
-            any("GetFreeInventorySpace" in line and "== 0" in line
-                for line in added),
+            any("GetFreeInventorySpace" in line and "== 0" in line for line in added),
             "the guard does not test for exactly zero free slots",
         )
         self.assertTrue(
@@ -199,12 +201,16 @@ class LootStopsWhenThereIsNoRoom(unittest.TestCase):
         chest path out of the function.
         """
         text = LOOT_PATCH.read_text(encoding="utf-8")
-        diff = text[text.index("diff --git"):]
-        self.assertIn("skillId == SKILL_NONE", diff,
-                      "the hunk does not show the SKILL_NONE early return, so "
-                      "nothing proves the guard is below it")
+        diff = text[text.index("diff --git") :]
+        self.assertIn(
+            "skillId == SKILL_NONE",
+            diff,
+            "the hunk does not show the SKILL_NONE early return, so "
+            "nothing proves the guard is below it",
+        )
         self.assertLess(
-            diff.index("skillId == SKILL_NONE"), diff.index("GetFreeInventorySpace"),
+            diff.index("skillId == SKILL_NONE"),
+            diff.index("GetFreeInventorySpace"),
             "the free-slot guard is placed ABOVE the SKILL_NONE return, which "
             "would stop a full-bagged bot looting money off a corpse",
         )
@@ -232,8 +238,11 @@ class ThePatchHeaderSaysHowToRetireIt(unittest.TestCase):
     """patches/README.md: these files are meant to be DELETED, and one nobody
     knows how to retire outlives its reason."""
 
-    REQUIRED = ["WHY THIS PATCH EXISTS", "WHAT WOULD LET THIS PATCH BE DELETED",
-                "APPLIES TO"]
+    REQUIRED = [
+        "WHY THIS PATCH EXISTS",
+        "WHAT WOULD LET THIS PATCH BE DELETED",
+        "APPLIES TO",
+    ]
 
     def test_it_carries_the_three_headings(self):
         text = LOOT_PATCH.read_text(encoding="utf-8")
@@ -243,11 +252,17 @@ class ThePatchHeaderSaysHowToRetireIt(unittest.TestCase):
     def test_it_names_the_sha_it_was_cut_against(self):
         """A patch header quoting a SHA that is no longer pinned is a patch
         nobody re-verified after a bump."""
-        pinned = set(re.findall(r"^AC_\w+_SHA=([0-9a-f]{40})$",
-                                PINS.read_text(encoding="utf-8"), re.MULTILINE))
+        pinned = set(
+            re.findall(
+                r"^AC_\w+_SHA=([0-9a-f]{40})$",
+                PINS.read_text(encoding="utf-8"),
+                re.MULTILINE,
+            )
+        )
         self.assertTrue(pinned, "no SHAs parsed out of UPSTREAM-PINS.env")
-        quoted = set(re.findall(r"[0-9a-f]{40}",
-                                LOOT_PATCH.read_text(encoding="utf-8")))
+        quoted = set(
+            re.findall(r"[0-9a-f]{40}", LOOT_PATCH.read_text(encoding="utf-8"))
+        )
         self.assertTrue(quoted, "the patch header quotes no upstream SHA")
         self.assertTrue(
             quoted <= pinned,

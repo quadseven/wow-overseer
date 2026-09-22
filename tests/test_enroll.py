@@ -42,6 +42,7 @@ infra#4221 left open and infra#4241 asked to answer. Making a second cohort
 travel needs a leader model `bonds.py` does not have, and that is its own
 issue, not this one.
 """
+
 import importlib.util
 import pathlib
 import re
@@ -53,10 +54,8 @@ HERE = pathlib.Path(__file__).resolve().parent
 # HERE is already the tests directory, so this is one hop to the repo root,
 # where the mod-overseer submodule is checked out.
 ROOT = HERE.parents[0]
-SQL_DIR = (ROOT / "mod-overseer"
-           / "data" / "sql" / "characters" / "base")
-MODULE = (ROOT / "mod-overseer"
-          / "src" / "mod_overseer.cpp")
+SQL_DIR = ROOT / "mod-overseer" / "data" / "sql" / "characters" / "base"
+MODULE = ROOT / "mod-overseer" / "src" / "mod_overseer.cpp"
 
 sys.path.insert(0, str(HERE.parents[0]))
 import enroll  # noqa: E402
@@ -69,7 +68,9 @@ import townslot  # noqa: E402
 # emits while both stayed green. Reverting a scope clause in `bridge.py` must
 # break this file for the same reason it breaks that one.
 from test_cohort_scope import (  # noqa: E402
-    _assigned, _sqlite, _statement,
+    _assigned,
+    _sqlite,
+    _statement,
 )
 
 # The adapter, loaded by path the way `test_verify_named_cohort` loads its own:
@@ -77,7 +78,8 @@ from test_cohort_scope import (  # noqa: E402
 # the pure read helpers are exercised, with a fake cursor - nothing here opens
 # a connection, and `_connect` is never called.
 _SPEC = importlib.util.spec_from_file_location(
-    "enroll_cohort", HERE.parents[0] / "tools" / "enroll_cohort.py")
+    "enroll_cohort", HERE.parents[0] / "tools" / "enroll_cohort.py"
+)
 TOOL = importlib.util.module_from_spec(_SPEC)
 _SPEC.loader.exec_module(TOOL)
 
@@ -119,8 +121,7 @@ _ALTER_RE = re.compile(r"ALTER TABLE\s+`?(\w+)`?")
 # as its ADD COLUMN, so the line is the honest bound.
 _ADD_RE = re.compile(r"ADD COLUMN\s+`(\w+)`([^\n,\"]*)")
 _DEFAULT_RE = re.compile(r"\bDEFAULT\s+('(?:[^']|'')*'|[^\s,]+)", re.I)
-_CREATE_RE = re.compile(
-    r"CREATE TABLE\s+`overseer_roster`\s*\((.*?)\n\)", re.S)
+_CREATE_RE = re.compile(r"CREATE TABLE\s+`overseer_roster`\s*\((.*?)\n\)", re.S)
 _CREATE_COL_RE = re.compile(r"^\s*`(\w+)`\s", re.M)
 
 
@@ -153,8 +154,9 @@ def declared_columns() -> dict[str, str | None]:
     columns: dict[str, str | None] = {}
     body = create.group(1)
     for name in _CREATE_COL_RE.findall(body):
-        line = next(ln for ln in body.splitlines()
-                    if ln.strip().startswith("`%s`" % name))
+        line = next(
+            ln for ln in body.splitlines() if ln.strip().startswith("`%s`" % name)
+        )
         found = _DEFAULT_RE.search(line)
         columns[name] = found.group(1) if found else None
     altered = [(m.start(), m.group(1)) for m in _ALTER_RE.finditer(text)]
@@ -184,26 +186,30 @@ class TheRowIsComplete(unittest.TestCase):
         """
         declared = set(declared_columns())
         self.assertEqual(
-            sorted(declared), sorted(enroll.ROSTER_COLUMNS),
+            sorted(declared),
+            sorted(enroll.ROSTER_COLUMNS),
             "enroll.ROSTER_COLUMNS disagrees with mod-overseer's migrations; "
             "a new roster column needs a deliberate value in "
-            "enroll.ROSTER_DEFAULTS before anything may be enrolled")
+            "enroll.ROSTER_DEFAULTS before anything may be enrolled",
+        )
 
     def test_every_column_is_accounted_for_exactly_once(self):
-        groups = (set(enroll.ROSTER_DEFAULTS), set(enroll.PER_CANDIDATE),
-                  set(enroll.DB_ASSIGNED))
+        groups = (
+            set(enroll.ROSTER_DEFAULTS),
+            set(enroll.PER_CANDIDATE),
+            set(enroll.DB_ASSIGNED),
+        )
         union: set = set()
         for group in groups:
-            self.assertEqual(union & group, set(),
-                             "a column is in two groups at once")
+            self.assertEqual(union & group, set(), "a column is in two groups at once")
             union |= group
         self.assertEqual(sorted(union), sorted(enroll.ROSTER_COLUMNS))
 
     def test_the_insert_names_every_column_it_writes(self):
         named = set(re.findall(r"`(\w+)`", enroll.INSERT_SQL))
         self.assertEqual(
-            named,
-            set(enroll.ROSTER_COLUMNS) - set(enroll.DB_ASSIGNED) | {"family"})
+            named, set(enroll.ROSTER_COLUMNS) - set(enroll.DB_ASSIGNED) | {"family"}
+        )
         # One placeholder per named column, so a column added to the list
         # without a value cannot produce a statement MySQL accepts.
         self.assertEqual(enroll.INSERT_SQL.count("%s"), len(named))
@@ -216,7 +222,7 @@ class TheRowIsComplete(unittest.TestCase):
         worth pinning rather than assuming.
         """
         plan = _plan(["Mozkisdo"])
-        (sql, params), = enroll.statements(plan)
+        ((sql, params),) = enroll.statements(plan)
         self.assertEqual(sql, enroll.INSERT_SQL)
         self.assertNotIn("Mozkisdo", sql)
         self.assertNotIn("Bonkers", sql)
@@ -232,9 +238,12 @@ class TheRowIsComplete(unittest.TestCase):
         starts asking for a campaign nobody will run.
         """
         declared = declared_columns()
-        self.assertEqual(declared["dungeon_runs_wanted"], "30",
-                         "the migration's default changed; re-read the "
-                         "argument in enroll.ROSTER_DEFAULTS before adjusting")
+        self.assertEqual(
+            declared["dungeon_runs_wanted"],
+            "30",
+            "the migration's default changed; re-read the "
+            "argument in enroll.ROSTER_DEFAULTS before adjusting",
+        )
         self.assertEqual(enroll.ROSTER_DEFAULTS["dungeon_runs_wanted"], 0)
 
     def test_the_job_default_is_overridden_away_from_the_driving_value(self):
@@ -257,19 +266,21 @@ class TheRowIsComplete(unittest.TestCase):
 
 
 def _candidate(name: str, **kw) -> enroll.Candidate:
-    facts = {"exists": True, "race": 2, "level": 60, "guild_id": 0,
-             "cohort": None}
+    facts = {"exists": True, "race": 2, "level": 60, "guild_id": 0, "cohort": None}
     facts.update(kw)
     return enroll.Candidate(name=name, **facts)
 
 
 def _plan(names, **kw) -> enroll.Plan:
     """A plan with both gates open, so a test can vary one thing at a time."""
-    facts = {"cohort": "Bonkers", "home_cohort": "Grug",
-             "has_family_column": True, "module_reads_family": True}
+    facts = {
+        "cohort": "Bonkers",
+        "home_cohort": "Grug",
+        "has_family_column": True,
+        "module_reads_family": True,
+    }
     facts.update(kw)
-    people = [n if isinstance(n, enroll.Candidate) else _candidate(n)
-              for n in names]
+    people = [n if isinstance(n, enroll.Candidate) else _candidate(n) for n in names]
     return enroll.plan(people, **facts)
 
 
@@ -304,10 +315,12 @@ class TheGatesRefuseTheWholeBatch(unittest.TestCase):
         returned still writes nothing. That is what makes the gate a gate
         rather than a suggestion the adapter is trusted to read.
         """
-        for gate in ({"has_family_column": False},
-                     {"module_reads_family": False},
-                     {"cohort": "Grug"},
-                     {"cohort": "x" * (enroll.MAX_COHORT + 1)}):
+        for gate in (
+            {"has_family_column": False},
+            {"module_reads_family": False},
+            {"cohort": "Grug"},
+            {"cohort": "x" * (enroll.MAX_COHORT + 1)},
+        ):
             with self.subTest(**gate):
                 plan = _plan(["Mozkisdo", "Biannise"], **gate)
                 self.assertTrue(plan.blocked)
@@ -342,8 +355,7 @@ class TheGatesRefuseTheWholeBatch(unittest.TestCase):
         # Letters only: `enroll._NAME_RE` is WoW's own 2-12 letter rule, so a
         # fixture with a digit in it would be refused for the wrong reason and
         # this test would pass without exercising the cap at all.
-        names = ["Name" + chr(ord("a") + i)
-                 for i in range(enroll.DEFAULT_LIMIT + 1)]
+        names = ["Name" + chr(ord("a") + i) for i in range(enroll.DEFAULT_LIMIT + 1)]
         plan = _plan(names)
         self.assertEqual(plan.blocked, enroll.GATE_OVER_LIMIT)
         self.assertEqual(plan.rows, ())
@@ -399,8 +411,9 @@ class TheModuleReadsTheRosterPerFamily(unittest.TestCase):
 
     def setUp(self):
         self.code = _code(MODULE.read_text(encoding="utf-8"))
-        self.queries = [q for q in _LITERAL_RE.findall(self.code)
-                        if "overseer_roster" in q]
+        self.queries = [
+            q for q in _LITERAL_RE.findall(self.code) if "overseer_roster" in q
+        ]
 
     def test_the_family_column_is_read_by_a_query_of_its_own(self):
         """`family` is a LATE column, so it is read alone and never inside a
@@ -409,13 +422,14 @@ class TheModuleReadsTheRosterPerFamily(unittest.TestCase):
         naming = [q for q in self.queries if "family" in q]
         self.assertTrue(naming, "no roster query names `family` any more")
         for query in naming:
-            self.assertNotIn("`lead`", query,
-                             "the family read has crept into a main roster query")
+            self.assertNotIn(
+                "`lead`", query, "the family read has crept into a main roster query"
+            )
 
     def test_keep_roster_grouped_partitions_by_family(self):
         """The read that used to conscript a second cohort into the first's party."""
         start = self.code.index("void KeepRosterGrouped()")
-        body = self.code[start:start + 3500]
+        body = self.code[start : start + 3500]
         self.assertIn("PartitionRosterByFamily", body)
         self.assertIn("KeepFamilyGrouped", body)
 
@@ -424,39 +438,44 @@ class TheModuleReadsTheRosterPerFamily(unittest.TestCase):
         one census that returns a single family's roster."""
         uses = self.code.count("LoadCampaignRoster(")
         self.assertGreaterEqual(
-            uses, 5,
+            uses,
+            5,
             "expected the census plus its four callers (home bind, town trip, "
             "dungeon run, guild founding); a caller has gone back to reading "
-            "the whole table")
+            "the whole table",
+        )
 
     def test_the_quest_drive_runs_once_per_family(self):
         self.assertIn("DriveFamilyQuests(", self.code)
         start = self.code.index("void DriveQuests()")
-        self.assertIn("PartitionRosterByFamily", self.code[start:start + 6000])
+        self.assertIn("PartitionRosterByFamily", self.code[start : start + 6000])
 
     def test_many_roster_reads_still_select_on_enabled_alone(self):
         """Not one read, a class of them, and most are correct as they are:
         event hooks that want every name. Scoping the rest is mod-overseer's own
         slice; this only notices if the class vanishes without anyone deciding."""
-        unscoped = [q for q in self.queries
-                    if "FROM overseer_roster WHERE enabled = 1" in q]
+        unscoped = [
+            q for q in self.queries if "FROM overseer_roster WHERE enabled = 1" in q
+        ]
         self.assertGreater(
-            len(unscoped), 3,
+            len(unscoped),
+            3,
             "the module's whole-table roster reads have largely gone; re-read "
-            "enroll.plan's second gate")
+            "enroll.plan's second gate",
+        )
 
 
 # --- the per-candidate refusals ---------------------------------------------
 
 
 class TheCandidatesAreChecked(unittest.TestCase):
-
     def test_an_unknown_name_is_refused_rather_than_dropped(self):
         """A typo must not become a smaller batch that looks successful."""
         plan = _plan([_candidate("Nobody", exists=False)])
         self.assertEqual(plan.rows, ())
-        self.assertEqual([(r.name, r.reason) for r in plan.refused],
-                         [("Nobody", enroll.UNKNOWN)])
+        self.assertEqual(
+            [(r.name, r.reason) for r in plan.refused], [("Nobody", enroll.UNKNOWN)]
+        )
 
     def test_an_alliance_character_is_refused(self):
         # race 1 is Human. A cross-faction cohort cannot found one guild.
@@ -493,8 +512,14 @@ class TheCandidatesAreChecked(unittest.TestCase):
         self.assertEqual(len(plan.skipped), 1)
 
     def test_something_that_is_not_a_character_name_is_refused(self):
-        for bad in ("", "x", "Mozkisdo'; DROP TABLE overseer_roster; --",
-                    "Averyverylongname", "Moz kisdo", "Mozkisd0"):
+        for bad in (
+            "",
+            "x",
+            "Mozkisdo'; DROP TABLE overseer_roster; --",
+            "Averyverylongname",
+            "Moz kisdo",
+            "Mozkisd0",
+        ):
             with self.subTest(bad=bad):
                 plan = _plan([_candidate(bad)])
                 self.assertEqual(plan.rows, ())
@@ -503,11 +528,8 @@ class TheCandidatesAreChecked(unittest.TestCase):
     def test_a_good_batch_survives_a_bad_neighbour(self):
         """One refusal does not cost the rest their turn, and the report says
         exactly which is which."""
-        plan = _plan(["Mozkisdo",
-                      _candidate("Alfred", race=1),
-                      "Biannise"])
-        self.assertEqual([r["name"] for r in plan.rows],
-                         ["Mozkisdo", "Biannise"])
+        plan = _plan(["Mozkisdo", _candidate("Alfred", race=1), "Biannise"])
+        self.assertEqual([r["name"] for r in plan.rows], ["Mozkisdo", "Biannise"])
         self.assertEqual([r.name for r in plan.refused], ["Alfred"])
         self.assertIn("2 to enrol", enroll.report(plan))
         self.assertIn("Alfred", enroll.report(plan))
@@ -592,18 +614,21 @@ def _table(extra_rows=()) -> sqlite3.Connection:
 
 
 def _cave(db: sqlite3.Connection) -> list:
-    return list(db.execute(
-        # noqa anchored on the first line of the expression: ruff reports S608
-        # at the START of a multi-line one. The only thing interpolated is
-        # `_COMPARED`, a literal column list forty lines above; the cohort key
-        # is bound.
-        "SELECT %s FROM overseer_roster WHERE family = ? ORDER BY name"  # noqa: S608
-        % _COMPARED, (CAVE,)))
+    return list(
+        db.execute(
+            # noqa anchored on the first line of the expression: ruff reports S608
+            # at the START of a multi-line one. The only thing interpolated is
+            # `_COMPARED`, a literal column list forty lines above; the cohort key
+            # is bound.
+            "SELECT %s FROM overseer_roster WHERE family = ? ORDER BY name"  # noqa: S608
+            % _COMPARED,
+            (CAVE,),
+        )
+    )
 
 
 def _all(db: sqlite3.Connection) -> list:
-    return list(db.execute(
-        "SELECT %s FROM overseer_roster ORDER BY name" % _COMPARED))  # noqa: S608 - `_COMPARED` is a literal column list in this file
+    return list(db.execute("SELECT %s FROM overseer_roster ORDER BY name" % _COMPARED))  # noqa: S608 - `_COMPARED` is a literal column list in this file
 
 
 # The three characters enrolled below are real, and were confirmed on wow-dev
@@ -624,9 +649,12 @@ class TheEnrollmentWritesWhatItSaysItWrites(unittest.TestCase):
 
     def test_the_rows_land_with_every_column_set(self):
         db = _table(_enrollment())
-        rows = list(db.execute(
-            "SELECT %s FROM overseer_roster WHERE family = 'Bonkers' "  # noqa: S608 - `_COMPARED` is a literal column list in this file; 'Bonkers' is this test's own constant
-            "ORDER BY name" % _COMPARED))
+        rows = list(
+            db.execute(
+                "SELECT %s FROM overseer_roster WHERE family = 'Bonkers' "  # noqa: S608 - `_COMPARED` is a literal column list in this file; 'Bonkers' is this test's own constant
+                "ORDER BY name" % _COMPARED
+            )
+        )
         self.assertEqual([r[0] for r in rows], sorted(BONKERS_NAMES))
         columns = [c.strip().strip("`") for c in _COMPARED.split(",")]
         for row in rows:
@@ -650,15 +678,22 @@ class TheEnrollmentWritesWhatItSaysItWrites(unittest.TestCase):
         an enrollment path would most plausibly have copied.
         """
         db = _table(_enrollment())
-        wanted = list(db.execute(
-            "SELECT DISTINCT dungeon_runs_wanted FROM overseer_roster "
-            "WHERE family = 'Bonkers'"))
+        wanted = list(
+            db.execute(
+                "SELECT DISTINCT dungeon_runs_wanted FROM overseer_roster "
+                "WHERE family = 'Bonkers'"
+            )
+        )
         self.assertEqual(wanted, [(0,)])
         # And Cave's own 25 is untouched, so this is an override and not a
         # table-wide clear wearing one as a disguise.
-        cave = list(db.execute(
-            "SELECT DISTINCT dungeon_runs_wanted FROM overseer_roster "
-            "WHERE family = ?", (CAVE,)))
+        cave = list(
+            db.execute(
+                "SELECT DISTINCT dungeon_runs_wanted FROM overseer_roster "
+                "WHERE family = ?",
+                (CAVE,),
+            )
+        )
         self.assertEqual(cave, [(25,)])
         db.close()
 
@@ -711,9 +746,11 @@ def _chain(func: str) -> tuple:
     statement is built from both. Severing any link in that chain in
     `bridge.py` now changes what these tests run.
     """
-    cohort = _assigned(func, "cohort",
-                       {"_cohort_of": lambda _name: CAVE,
-                        "bonds": _Bonds(), "head": "Grug"})
+    cohort = _assigned(
+        func,
+        "cohort",
+        {"_cohort_of": lambda _name: CAVE, "bonds": _Bonds(), "head": "Grug"},
+    )
     scope = _assigned(func, "scope", {"cohort": cohort})
     return cohort, scope
 
@@ -749,10 +786,8 @@ class CaveIsUnaffected(unittest.TestCase):
                 self.assertIn("family = %s", scope)
         # And the degradation is still the documented one: no column, no scope,
         # and today's exact statement.
-        self.assertEqual(
-            _assigned("_mark_party_leader", "scope", {"cohort": None}), "")
-        self.assertEqual(
-            _assigned("_aim_traveller", "scope", {"cohort": None}), "")
+        self.assertEqual(_assigned("_mark_party_leader", "scope", {"cohort": None}), "")
+        self.assertEqual(_assigned("_aim_traveller", "scope", {"cohort": None}), "")
 
     def test_cave_keeps_its_leader_when_the_other_cohort_has_one(self):
         """`_mark_party_leader` had no WHERE clause at all before infra#4232.
@@ -767,20 +802,24 @@ class CaveIsUnaffected(unittest.TestCase):
         this is what its absence looks like.
         """
         cohort, scope = _chain("_mark_party_leader")
-        sql, params = _statement("_mark_party_leader", 0,
-                                 head="Grug", scope=scope, cohort=cohort)
+        sql, params = _statement(
+            "_mark_party_leader", 0, head="Grug", scope=scope, cohort=cohort
+        )
         plain = _table()
         plain.execute(_sqlite(sql), params)
         mixed = _table(_enrollment())
         mixed.execute(
-            "UPDATE overseer_roster SET `lead` = 1 WHERE name = ?",
-            ("Mozkisdo",))
+            "UPDATE overseer_roster SET `lead` = 1 WHERE name = ?", ("Mozkisdo",)
+        )
         mixed.execute(_sqlite(sql), params)
         # Cave is unchanged by the presence of the other cohort...
         self.assertEqual(_cave(plain), _cave(mixed))
         # ...and Cave's write did not take the other cohort's leader away.
-        leads = dict(mixed.execute(
-            "SELECT name, `lead` FROM overseer_roster WHERE family = 'Bonkers'"))
+        leads = dict(
+            mixed.execute(
+                "SELECT name, `lead` FROM overseer_roster WHERE family = 'Bonkers'"
+            )
+        )
         self.assertEqual(leads, {"Mozkisdo": 1, "Biannise": 0, "Knongul": 0})
         plain.close()
         mixed.close()
@@ -799,21 +838,26 @@ class CaveIsUnaffected(unittest.TestCase):
         # Give one enrolled row an aim, so "left alone" is a value that could
         # visibly change rather than a zero that cannot.
         mixed.execute(
-            "UPDATE overseer_roster SET drive_quest = 554 WHERE name = ?",
-            ("Knongul",))
+            "UPDATE overseer_roster SET drive_quest = 554 WHERE name = ?", ("Knongul",)
+        )
         before = _cave(mixed)
         mixed.execute(
             # noqa on the first line of the expression, where ruff anchors a
             # multi-line S608. `scope` is not a value: it is the clause
             # `bridge._aim_traveller` itself chose, read out of its source by
             # `_chain`, and the cohort key it names is bound below.
-            _sqlite("UPDATE overseer_roster SET drive_quest = 0 "  # noqa: S608
-                    "WHERE drive_quest <> 0 AND name NOT IN (%s, %s)" + scope),
-            ("Grug", "Ugga", cohort))
+            _sqlite(
+                "UPDATE overseer_roster SET drive_quest = 0 "  # noqa: S608
+                "WHERE drive_quest <> 0 AND name NOT IN (%s, %s)" + scope
+            ),
+            ("Grug", "Ugga", cohort),
+        )
         self.assertEqual(_cave(mixed), before)
-        kept = list(mixed.execute(
-            "SELECT drive_quest FROM overseer_roster WHERE name = ?",
-            ("Knongul",)))
+        kept = list(
+            mixed.execute(
+                "SELECT drive_quest FROM overseer_roster WHERE name = ?", ("Knongul",)
+            )
+        )
         self.assertEqual(kept, [(554,)])
         mixed.close()
 
@@ -826,14 +870,20 @@ class CaveIsUnaffected(unittest.TestCase):
         cohort, scope = _chain("_aim_traveller")
         mixed = _table(_enrollment())
         mixed.execute(
-            "UPDATE overseer_roster SET drive_quest = 554 WHERE name = ?",
-            ("Knongul",))
+            "UPDATE overseer_roster SET drive_quest = 554 WHERE name = ?", ("Knongul",)
+        )
         mixed.execute(
-            _sqlite("UPDATE overseer_roster SET drive_quest = 0 "  # noqa: S608 - `scope` is the clause bridge._aim_traveller chose, read out of its source by `_chain`; the cohort key is bound
-                    "WHERE drive_quest <> 0" + scope), (cohort,))
-        kept = list(mixed.execute(
-            "SELECT drive_quest FROM overseer_roster WHERE name = ?",
-            ("Knongul",)))
+            _sqlite(
+                "UPDATE overseer_roster SET drive_quest = 0 "  # noqa: S608 - `scope` is the clause bridge._aim_traveller chose, read out of its source by `_chain`; the cohort key is bound
+                "WHERE drive_quest <> 0" + scope
+            ),
+            (cohort,),
+        )
+        kept = list(
+            mixed.execute(
+                "SELECT drive_quest FROM overseer_roster WHERE name = ?", ("Knongul",)
+            )
+        )
         self.assertEqual(kept, [(554,)])
         mixed.close()
 
@@ -846,14 +896,23 @@ class CaveIsUnaffected(unittest.TestCase):
         disagree, standing Cave's own drives down silently.
         """
         mixed = _table(_enrollment())
-        names = [r[0] for r in mixed.execute(
-            "SELECT name FROM overseer_roster WHERE enabled = 1 "
-            "AND family = ? ORDER BY name", (CAVE,))]
+        names = [
+            r[0]
+            for r in mixed.execute(
+                "SELECT name FROM overseer_roster WHERE enabled = 1 "
+                "AND family = ? ORDER BY name",
+                (CAVE,),
+            )
+        ]
         self.assertEqual(names, sorted(r[0] for r in LIVE_CAVE_ROWS))
         # The unscoped read is what the module still does, and it is why the
         # second gate exists. Stated here as a measured fact, not a warning.
-        everyone = [r[0] for r in mixed.execute(
-            "SELECT name FROM overseer_roster WHERE enabled = 1 ORDER BY name")]
+        everyone = [
+            r[0]
+            for r in mixed.execute(
+                "SELECT name FROM overseer_roster WHERE enabled = 1 ORDER BY name"
+            )
+        ]
         self.assertEqual(len(everyone), len(LIVE_CAVE_ROWS) + 3)
         mixed.close()
 
@@ -886,8 +945,8 @@ class TheAdapterNeverAsksForAColumnThatIsNotThere(unittest.TestCase):
             self.asked.append(sql)
             if "family" in sql:
                 raise AssertionError(
-                    "the adapter asked for `family` on a world without it: %s"
-                    % sql)
+                    "the adapter asked for `family` on a world without it: %s" % sql
+                )
 
         def fetchall(self):
             return list(self.rows)
@@ -901,8 +960,9 @@ class TheAdapterNeverAsksForAColumnThatIsNotThere(unittest.TestCase):
         self.assertEqual(cur.asked, [])
 
     def test_the_roster_read_drops_the_column_it_cannot_select(self):
-        cur = self._Cursor([{"name": "Mozkisdo", "race": 2, "level": 60,
-                             "guild_id": 0}])
+        cur = self._Cursor(
+            [{"name": "Mozkisdo", "race": 2, "level": 60, "guild_id": 0}]
+        )
         found = TOOL.candidates(cur, ["Mozkisdo"], present=False)
         self.assertEqual(len(found), 1)
         self.assertTrue(found[0].exists)
@@ -946,9 +1006,17 @@ class TheEnrolledCohortCannotTakeTheTravelColumn(unittest.TestCase):
 
     def test_an_enrolled_character_is_refused_the_traveller(self):
         decision = townslot.decide(
-            claimant="guild bank", character="Mozkisdo", aim="banker",
-            leader="Grug", column="", retaskable=(), holder=None, wants=[],
-            last_served={}, now=0.0)
+            claimant="guild bank",
+            character="Mozkisdo",
+            aim="banker",
+            leader="Grug",
+            column="",
+            retaskable=(),
+            holder=None,
+            wants=[],
+            last_served={},
+            now=0.0,
+        )
         self.assertEqual(decision.verdict, townslot.SLOT_NOT_THE_LEADER)
         self.assertFalse(decision.granted)
         self.assertFalse(decision.writes)
@@ -963,9 +1031,15 @@ class TheEnrolledCohortCannotTakeTheTravelColumn(unittest.TestCase):
         starvation worse. The fix is cohort-agnostic already.
         """
         slot = townslot.Slot(releasable=lambda _aim: True)
-        decision = slot.want(claimant="guild bank", character="Mozkisdo",
-                             aim="banker", leader="Grug", column="",
-                             retaskable=(), now=0.0)
+        decision = slot.want(
+            claimant="guild bank",
+            character="Mozkisdo",
+            aim="banker",
+            leader="Grug",
+            column="",
+            retaskable=(),
+            now=0.0,
+        )
         self.assertEqual(decision.verdict, townslot.SLOT_NOT_THE_LEADER)
         self.assertEqual(slot.wants, [])
 
@@ -977,9 +1051,15 @@ class TheEnrolledCohortCannotTakeTheTravelColumn(unittest.TestCase):
         evidence that enrollment is inert here rather than merely harmless.
         """
         slot = townslot.Slot(releasable=lambda _aim: True)
-        decision = slot.want(claimant="guild bank", character="Grug",
-                             aim="banker", leader="Grug", column="",
-                             retaskable=(), now=0.0)
+        decision = slot.want(
+            claimant="guild bank",
+            character="Grug",
+            aim="banker",
+            leader="Grug",
+            column="",
+            retaskable=(),
+            now=0.0,
+        )
         self.assertEqual(decision.verdict, townslot.SLOT_TAKE)
         self.assertEqual(decision.character, "Grug")
 
@@ -989,8 +1069,7 @@ class TheEnrolledCohortCannotTakeTheTravelColumn(unittest.TestCase):
         nobody can out-wait. The row arrives empty, and `_reconcile` turns an
         empty column into None."""
         self.assertEqual(enroll.ROSTER_DEFAULTS["travel_npc"], "")
-        self.assertIsNone(
-            townslot._reconcile(None, leader="Grug", column="", now=0.0))
+        self.assertIsNone(townslot._reconcile(None, leader="Grug", column="", now=0.0))
 
 
 if __name__ == "__main__":

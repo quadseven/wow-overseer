@@ -83,7 +83,7 @@ MODES = ("pov", "cam", "shot", "record")
 # A shot needs no heartbeat: nobody is watching it, so there is no viewer to
 # fall silent. The staleness sweep is its TIMEOUT instead - a shot the agent
 # never serves ends by itself with a reason, exactly like an unanswered watch.
-NEEDS_A_VIEWER = ("pov", "cam")   # literal, same reason as MODES
+NEEDS_A_VIEWER = ("pov", "cam")  # literal, same reason as MODES
 
 # requested -> the map asked
 # starting  -> the agent has taken it and is launching
@@ -161,7 +161,6 @@ STARTUP_SECONDS = 60
 UNCLAIMED_AFTER_SECONDS = 30
 
 
-
 # HOW A VIEWER ACTUALLY SEES IT, and the two are not interchangeable.
 #
 # SUNSHINE HAS NO BROWSER PLAYER. Measured on the box: 47984/47989 are its
@@ -181,8 +180,8 @@ UNCLAIMED_AFTER_SECONDS = 30
 # instructions for a Moonlight viewer, an embeddable player only when a URL
 # genuinely exists. Rendering a player for a Moonlight stream would be a
 # black rectangle and a bug report.
-DELIVERY_MOONLIGHT = "moonlight"   # detail = app name + instructions, TEXT
-DELIVERY_EMBED = "embed"           # detail = a URL a browser can actually play
+DELIVERY_MOONLIGHT = "moonlight"  # detail = app name + instructions, TEXT
+DELIVERY_EMBED = "embed"  # detail = a URL a browser can actually play
 
 
 def delivery_of(row: Mapping) -> str:
@@ -334,13 +333,22 @@ def stream_migrations(existing_columns) -> list:
     """
     have = {c.lower() for c in existing_columns}
     wanted = [
-        ("mode", "ALTER TABLE overseer_stream ADD COLUMN mode "
-                 "VARCHAR(16) NOT NULL DEFAULT 'cam'"),
-        ("state", "ALTER TABLE overseer_stream ADD COLUMN state "
-                  "VARCHAR(16) NOT NULL DEFAULT 'requested'"),
+        (
+            "mode",
+            "ALTER TABLE overseer_stream ADD COLUMN mode "
+            "VARCHAR(16) NOT NULL DEFAULT 'cam'",
+        ),
+        (
+            "state",
+            "ALTER TABLE overseer_stream ADD COLUMN state "
+            "VARCHAR(16) NOT NULL DEFAULT 'requested'",
+        ),
         ("detail", "ALTER TABLE overseer_stream ADD COLUMN detail TEXT NULL"),
-        ("last_seen", "ALTER TABLE overseer_stream ADD COLUMN last_seen "
-                      "TIMESTAMP NULL DEFAULT NULL"),
+        (
+            "last_seen",
+            "ALTER TABLE overseer_stream ADD COLUMN last_seen "
+            "TIMESTAMP NULL DEFAULT NULL",
+        ),
     ]
     # VARCHAR, not ENUM, deliberately: overseer_goal's kind-ENUM is exactly
     # the trap above, and a new state word should never need a migration to

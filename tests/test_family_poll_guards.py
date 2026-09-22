@@ -8,6 +8,7 @@ family switch mid-request could draw the family just left as the banner.
 
 Tickets: #161, #143, #156.
 """
+
 import pathlib
 import unittest
 
@@ -16,12 +17,11 @@ PAGE = (HERE / "index.html").read_text(encoding="utf-8")
 
 
 def _fn(name):
-    body = PAGE[PAGE.index("async function " + name + "()"):]
-    return body[:body.index("\n}\n")]
+    body = PAGE[PAGE.index("async function " + name + "()") :]
+    return body[: body.index("\n}\n")]
 
 
 class TheRepliesAreJudgedByTheFamilyDrawn(unittest.TestCase):
-
     def test_needs_compares_the_family_the_server_drew(self):
         self.assertIn("if ((p.family || asked) !== familyKey", _fn("pollNeeds"))
 
@@ -35,8 +35,8 @@ class TheRepliesAreJudgedByTheFamilyDrawn(unittest.TestCase):
         self.assertLess(body.index(guard), body.index("renderAgenda(p);"))
 
     def test_a_pasted_family_link_moves_the_banner_at_once(self):
-        body = PAGE[PAGE.index("function applyHash()"):]
-        body = body[:body.index("\n}\n")]
+        body = PAGE[PAGE.index("function applyHash()") :]
+        body = body[: body.index("\n}\n")]
         self.assertIn("if (familyKey !== before) pollAgenda();", body)
 
 

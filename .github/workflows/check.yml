@@ -30,6 +30,7 @@ on:
       - '.dockerignore'
       - '.github/workflows/check.yml'
       - '.github/scripts/compile_check.py'
+      - 'ruff.toml'
   pull_request:
     paths:
       - '**.py'
@@ -41,6 +42,7 @@ on:
       - '.dockerignore'
       - '.github/workflows/check.yml'
       - '.github/scripts/compile_check.py'
+      - 'ruff.toml'
   workflow_dispatch:
 
 permissions:
@@ -65,3 +67,17 @@ jobs:
       # broken test" rather than on an old interpreter.
       test-cmd: "python3 .github/scripts/compile_check.py --min-python 3.12 && python3 -m unittest discover -s tests -p 'test_*.py' -v"
       timeout-minutes: 10
+
+  lint:
+    # ruff check + format --check on the standard build the provisioned
+    # pre-commit hook pins (infra#995). No submodules: mod-overseer lints in
+    # its own repo. ruff.toml keeps the formatter off the two files the
+    # source-shape tests read as text.
+    uses: quadseven/infra-public/.github/workflows/check.python.yml@3d7eb0b00e8bfe949783d772ab777100182ab05d
+    with:
+      runner: ubuntu-latest
+      install-cmd: "true"
+      ruff: true
+      ruff-version: "0.15.10"
+      test-cmd: ""
+      timeout-minutes: 5

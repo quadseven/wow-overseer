@@ -64,9 +64,7 @@ class CeilingsTest(unittest.TestCase):
         # ding, and it also means the house only ever sells gear that is about
         # to be replaced.
         limits = _limits()
-        self.assertGreater(
-            limits.max_required_level, ahbot_ceiling.top_level([23, 29])
-        )
+        self.assertGreater(limits.max_required_level, ahbot_ceiling.top_level([23, 29]))
 
     def test_the_ceiling_rises_with_the_roster(self):
         self.assertLess(
@@ -198,12 +196,8 @@ class WouldListTest(unittest.TestCase):
 class DriftTest(unittest.TestCase):
     def test_a_missing_key_is_reported_as_the_dist_default_standing(self):
         reasons = ahbot_ceiling.drift("", ahbot_ceiling.ROSTER_LEVELS_MEASURED)
-        self.assertTrue(
-            all("is not set at all" in r for r in reasons), reasons
-        )
-        self.assertEqual(
-            len(reasons), len(ahbot_ceiling.overrides(_limits()))
-        )
+        self.assertTrue(all("is not set at all" in r for r in reasons), reasons)
+        self.assertEqual(len(reasons), len(ahbot_ceiling.overrides(_limits())))
 
 
 if __name__ == "__main__":
