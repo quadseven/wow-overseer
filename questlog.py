@@ -295,16 +295,23 @@ def _sort_key(quest: dict) -> tuple:
 
 def _member(name: str, char_row: dict | None, rows: list[dict], names: dict,
             holders: dict, turned_in: int) -> dict:
-    bond = bonds.FAMILY[name]
+    # bonds.member, not bonds.FAMILY[name]: the persona table holds ONE
+    # family, and indexing it was a KeyError for every member of the other,
+    # which is why the second family's tab could only ever be handed the
+    # first family's board. A member bonds does not know has no role, and
+    # "" is the honest answer; the class comes from their saved row.
+    bond = bonds.member(name)
+    role = bond.role if bond else ""
     if char_row is None:
         # No `characters` row at all. Like the Armory and unlike the Family
         # tab there is no freshness window here: a quest log is SAVED state,
         # so a logged-out character still has one and still gets a column.
+        klass = bond.char_class if bond else ""
         return {
             "name": name,
-            "role": bond.role,
-            "class": bond.char_class.title(),
-            "class_colour": family.class_colour_by_name(bond.char_class),
+            "role": role,
+            "class": klass.title(),
+            "class_colour": family.class_colour_by_name(klass),
             "present": False,
             "quests": [],
         }
@@ -314,7 +321,7 @@ def _member(name: str, char_row: dict | None, rows: list[dict], names: dict,
     free = max(0, LOG_SLOTS - used)
     return {
         "name": char_row["name"],
-        "role": bond.role,
+        "role": role,
         "present": True,
         "level": level,
         "class": _CLASS_NAMES.get(int(char_row["class"]),
@@ -338,7 +345,7 @@ def _member(name: str, char_row: dict | None, rows: list[dict], names: dict,
     }
 
 
-def _holders(rows: list[dict]) -> dict:
+def _holders(rows: list[dict], roster: list[str] | None = None) -> dict:
     """quest id -> which family members hold it, in roster order.
 
     Roster order rather than alphabetical, because the family is already
@@ -346,7 +353,7 @@ def _holders(rows: list[dict]) -> dict:
     this page, and a second ordering would be a second opinion about the same
     five people.
     """
-    order = {name: i for i, name in enumerate(family.roster())}
+    order = {name: i for i, name in enumerate(roster or family.roster())}
     found: dict[int, set] = {}
     for row in rows:
         found.setdefault(int(row["quest"]), set()).add(row["name"])
@@ -381,7 +388,8 @@ def _class_colour(class_id) -> str:
     return CLASS_COLOURS.get(int(class_id or 0), "#ffffff")
 
 
-def party(party_rows: list[dict] | None) -> dict:
+def party(party_rows: list[dict] | None,
+          roster: list[str] | None = None) -> dict:
     """Who is grouped with whom, and who leads, from the fresh snapshot rows.
 
     `party_rows` are {guid, name, group_leader} for whoever the snapshot
@@ -408,7 +416,13 @@ def party(party_rows: list[dict] | None) -> dict:
             leader = by_guid[key]
             break
     if leader is None:
-        leader = bonds.head_of_family()
+        # The persona table's head only when this IS that family. Another
+        # family's roster arrives lead first (the roster table orders it so),
+        # and crowning Grug on the Horde board is the bug this avoids.
+        head = bonds.head_of_family()
+        if roster and head not in roster:
+            head = roster[0]
+        leader = head
     return {"groups": groups, "leader": leader}
 
 
@@ -518,7 +532,8 @@ def _board_row(qid: int, row: dict, people: list[dict], statuses: dict,
 
 
 def build_board(members: list[dict], quest_rows: list[dict], names: dict,
-                done_rows: list[dict] | None, party_rows: list[dict] | None) -> dict:
+                done_rows: list[dict] | None, party_rows: list[dict] | None,
+                roster: list[str] | None = None) -> dict:
     """ONE quest board for the family, deduped by quest id (infra#88).
 
     The per-member logs answer "what is in Ugga's log"; this answers "what is
@@ -532,10 +547,11 @@ def build_board(members: list[dict], quest_rows: list[dict], names: dict,
     rows. Both may be None - an older adapter, or a test - and the board then
     simply knows nothing about turn-ins or helpers rather than failing.
     """
-    grouping = party(party_rows)
+    roster = roster or [m["name"] for m in members]
+    grouping = party(party_rows, roster)
     leader = grouping["leader"]
     by_name = {m["name"]: m for m in members}
-    order = {name: i for i, name in enumerate(family.roster())}
+    order = {name: i for i, name in enumerate(roster)}
     holders, per_holder, template = _index_rows(quest_rows)
     done = _done_by_quest(done_rows, holders)
     rows = []
@@ -561,7 +577,8 @@ def build_board(members: list[dict], quest_rows: list[dict], names: dict,
 def build_questlog(char_rows: list[dict], quest_rows: list[dict],
                    rewarded_rows: list[dict], names: dict,
                    done_rows: list[dict] | None = None,
-                   party_rows: list[dict] | None = None) -> dict:
+                   party_rows: list[dict] | None = None,
+                   roster: list[str] | None = None) -> dict:
     """Five quest logs, side by side and in roster order.
 
     All four inputs arrive keyed by character name or entry id and unfiltered;
@@ -579,23 +596,29 @@ def build_questlog(char_rows: list[dict], quest_rows: list[dict],
     `party_rows` ({guid, name, group_leader} from the snapshot) feed the
     shared board only, and default to nothing so an adapter that does not
     have them still gets five logs and a board that simply knows less.
+
+    `roster` is WHICH family, and the caller owns it: the adapter resolves a
+    family key against the roster table and hands the names in. None keeps
+    the family bonds holds, which is every caller that predates two.
     """
+    roster = list(roster) if roster else family.roster()
     chars = {r["name"]: r for r in char_rows}
     turned_in = {r["name"]: int(r["turned_in"]) for r in rewarded_rows}
     by_member: dict[str, list] = {}
     for row in quest_rows:
         by_member.setdefault(row["name"], []).append(row)
-    holders = _holders(quest_rows)
+    holders = _holders(quest_rows, roster)
     members = [
         _member(name, chars.get(name), by_member.get(name, []), names, holders,
                 turned_in.get(name, 0))
-        for name in family.roster()
+        for name in roster
     ]
     alone = sum(1 for who in holders.values() if len(who) <= 1)
     everyone = sum(1 for who in holders.values() if len(who) >= len(members))
     return {
         "members": members,
-        "board": build_board(members, quest_rows, names, done_rows, party_rows),
+        "board": build_board(members, quest_rows, names, done_rows, party_rows,
+                             roster),
         "slots": LOG_SLOTS,
         "expected": len(members),
         # Distinct quests, not rows: five characters holding the same quest is

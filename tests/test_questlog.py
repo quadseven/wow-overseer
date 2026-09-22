@@ -575,3 +575,39 @@ class WhoIsGroupedWithWhom(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TheBoardIsTheFamilyAsked(unittest.TestCase):
+    """The Horde family's tab showed the Alliance board: the builder only
+    knew bonds' family and indexed it by name, so any other roster was a
+    KeyError, and the adapter never asked for one."""
+
+    HORDE = ["Zug", "Oz", "Uzza"]
+
+    def build(self, party_rows=None):
+        return questlog.build_questlog(
+            chars(("Zug", 15), ("Oz", 11), ("Uzza", 11)),
+            [row("Zug", 100, QuestLevel=12), row("Oz", 100, QuestLevel=12)],
+            [{"name": "Zug", "turned_in": 4}],
+            {"creatures": {}, "gameobjects": {}, "items": {}},
+            party_rows=party_rows, roster=self.HORDE)
+
+    def test_the_members_are_the_roster_given(self):
+        p = self.build()
+        self.assertEqual([m["name"] for m in p["members"]], self.HORDE)
+        self.assertEqual(p["expected"], 3)
+
+    def test_a_member_bonds_does_not_know_has_no_role_rather_than_a_crash(self):
+        self.assertEqual(member(self.build(), "Zug")["role"], "")
+
+    def test_the_board_is_their_quests(self):
+        rows = self.build()["board"]["rows"]
+        self.assertEqual([r["id"] for r in rows], [100])
+        self.assertEqual({p["name"] for p in rows[0]["people"]}, {"Zug", "Oz"})
+
+    def test_with_no_live_group_the_crown_is_their_lead_not_the_other_head(self):
+        self.assertEqual(self.build()["board"]["leader"], "Zug")
+
+    def test_the_turn_in_spread_is_theirs(self):
+        spread = self.build()["turn_in_spread"]
+        self.assertEqual(spread["most"], "Zug")

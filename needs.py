@@ -468,12 +468,16 @@ def _member(name: str, char_row: dict | None, inventory_rows: list[dict],
     card that vanishes is how somebody stops being noticed, which is the whole
     complaint the Family view answers.
     """
-    bond = bonds.FAMILY[name]
+    # bonds.member rather than bonds.FAMILY[name]: the persona table holds one
+    # family, and a member of any other has no persona, no role and no bond
+    # note. note_for already answers "" for them.
+    bond = bonds.member(name)
+    role = bond.role if bond else ""
     note = bonds.note_for(name, history=history)
     if char_row is None:
         return {
             "name": name,
-            "role": bond.role,
+            "role": role,
             "present": False,
             "needs": [],
             "worst": {
@@ -497,7 +501,7 @@ def _member(name: str, char_row: dict | None, inventory_rows: list[dict],
             _positions_bar(capacity)]
     return {
         "name": name,
-        "role": bond.role,
+        "role": role,
         "present": True,
         "needs": bars,
         "worst": _worst_line(name, bars, capacity, purse, repair),
@@ -508,7 +512,8 @@ def _member(name: str, char_row: dict | None, inventory_rows: list[dict],
 
 def build_needs(char_rows: list[dict], inventory_rows: list[dict],
                 equipment_rows: list[dict], skill_rows: list[dict],
-                give_rows: list[dict], thought_rows: list[dict]) -> dict:
+                give_rows: list[dict], thought_rows: list[dict],
+                roster: list[str] | None = None) -> dict:
     """Everything under the five cards, in one payload.
 
     Three sections that are one story: what each of them needs, what the
@@ -520,7 +525,17 @@ def build_needs(char_rows: list[dict], inventory_rows: list[dict],
     Every row list arrives keyed by character name and unfiltered; splitting
     them per member is this module's job, so the adapter stays a handful of
     SELECTs and no logic.
+
+    `roster` is which family, resolved by the adapter from the roster table;
+    None keeps the family bonds holds. The give rows are not read per family
+    in SQL, so they are narrowed here to attempts this family's members made:
+    otherwise one family's refused handovers would be listed on the other's
+    tab. The pair rules are bonds', and bonds knows one family, so a family
+    it does not know gets no pair rows rather than the other family's.
     """
+    roster = list(roster) if roster else family.roster()
+    ours = set(roster)
+    give_rows = [r for r in give_rows if (r.get("target_name") or "") in ours]
     chars = {r["name"]: r for r in char_rows}
     inventory: dict[str, list[dict]] = {}
     for row in inventory_rows:
@@ -538,9 +553,10 @@ def build_needs(char_rows: list[dict], inventory_rows: list[dict],
     members = [
         _member(name, chars.get(name), inventory.get(name, []),
                 equipment.get(name, []), thought_rows, history)
-        for name in family.roster()
+        for name in roster
     ]
-    answering = bonds.answers(history)
+    bonded = all(bonds.member(n) is not None for n in roster)
+    answering = bonds.answers(history) if bonded else ()
     board = materials.board(
         holdings(inventory_rows),
         attempts=attempts(give_rows),
@@ -552,7 +568,9 @@ def build_needs(char_rows: list[dict], inventory_rows: list[dict],
         "moving": _moving(board),
         "answering": {
             "rows": [_answer_row(r) for r in answering],
-            "rule": bonds.answering_rule(),
-            "headline": _answering_headline(answering),
+            "rule": bonds.answering_rule() if bonded else "",
+            "headline": _answering_headline(answering) if bonded else
+            "no family rules are written for this family yet, so nobody "
+            "is counting who answers whom",
         },
     }

@@ -367,3 +367,43 @@ class TheStatesAreNamedRatherThanSpelled(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TheNeedsAreTheFamilyAsked(unittest.TestCase):
+    """The same bug the quest board had: the Horde tab drew the Alliance's
+    bags, handovers and bonds."""
+
+    HORDE = ["Zug", "Oz"]
+
+    def build(self, gives=()):
+        return needs.build_needs(
+            [{"name": n, "money": 100} for n in self.HORDE], [], [], [],
+            list(gives), [], roster=self.HORDE)
+
+    def test_the_members_are_the_roster_given(self):
+        p = self.build()
+        self.assertEqual([m["name"] for m in p["members"]], self.HORDE)
+        self.assertEqual(p["members"][0]["role"], "")
+
+    def test_another_familys_bonds_are_not_drawn_on_this_one(self):
+        p = self.build()
+        self.assertEqual(p["answering"]["rows"], [])
+        self.assertIn("no family rules", p["answering"]["headline"])
+        for name in family.roster():
+            self.assertNotIn(name, json.dumps(p["answering"]))
+
+    def test_only_this_familys_give_attempts_are_counted(self):
+        from unittest import mock
+        other = {"target_name": family.roster()[0], "target_arg": "Ugga",
+                 "status": "failed", "detail": "bags full"}
+        ours = {"target_name": "Oz", "target_arg": "Zug",
+                "status": "failed", "detail": "bags full"}
+        real = needs.materials.board
+        seen = {}
+
+        def spy(*args, **kw):
+            seen["attempts"] = kw.get("attempts")
+            return real(*args, **kw)
+        with mock.patch.object(needs.materials, "board", spy):
+            self.build(gives=[other, ours])
+        self.assertEqual([a.holder for a in seen["attempts"]], ["Oz"])

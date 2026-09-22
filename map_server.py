@@ -43,6 +43,7 @@ import standing
 import stream
 import tradespec
 import voice
+import watchwall
 import wealth
 from map_core import build_payload
 from panel import build_character_panel
@@ -357,20 +358,11 @@ def _fetch_character(name: str) -> dict:
         conn.close()
 
 
-def _fetch_family_names(which=None):
-    """Who is in `which` family, which one that resolved to, and all of them.
+def _fetch_rosters() -> dict:
+    """{family: [names, lead first]} for every family the roster table names.
 
-    WHY THIS READS overseer_roster AND NOT bonds. bonds knows ONE family: it
-    is a table of personas, renamed per world, and it is the right answer to
-    "how does Ugga speak". It is the wrong answer to "who is in the world"
-    now that there are two - an Alliance five and a Horde five - and the
-    roster has carried a `family` column all along for exactly this.
-
-    THE CALLER STILL CANNOT PASS A ROSTER, which is the rule /api/family was
-    written with and which this keeps. `which` selects among families the
-    SERVER knows; anything else falls back to the default. No name from a
-    request reaches the SQL below - only a key matched against a list the
-    database produced.
+    One read, shared by the per-family lookup below and by /api/heads, which
+    needs every family at once. Empty when no roster row carries a family.
     """
     conn = _connect()
     try:
@@ -387,6 +379,25 @@ def _fetch_family_names(which=None):
     by_family = {}
     for row in rows:
         by_family.setdefault(row["family"], []).append(row["name"])
+    return by_family
+
+
+def _fetch_family_names(which=None):
+    """Who is in `which` family, which one that resolved to, and all of them.
+
+    WHY THIS READS overseer_roster AND NOT bonds. bonds knows ONE family: it
+    is a table of personas, renamed per world, and it is the right answer to
+    "how does Ugga speak". It is the wrong answer to "who is in the world"
+    now that there are two - an Alliance five and a Horde five - and the
+    roster has carried a `family` column all along for exactly this.
+
+    THE CALLER STILL CANNOT PASS A ROSTER, which is the rule /api/family was
+    written with and which this keeps. `which` selects among families the
+    SERVER knows; anything else falls back to the default. No name from a
+    request reaches the SQL below - only a key matched against a list the
+    database produced.
+    """
+    by_family = _fetch_rosters()
     if not by_family:
         # No roster rows at all: degrade to exactly the old behaviour rather
         # than serving a blank tab.
@@ -471,7 +482,7 @@ def _fetch_family(names=None) -> list[dict]:
             # characters the day the family gains or loses somebody.
             cur.execute(
                 "SELECT guid, name, level, race, class, health, max_health, "  # noqa: S608
-                "in_combat, is_bot, group_leader, map_id, pos_x, pos_y, "
+                "in_combat, is_bot, group_leader, map_id, zone_id, pos_x, pos_y, "
                 "TIMESTAMPDIFF(SECOND, updated_at, NOW()) AS age_seconds "
                 "FROM overseer_snapshot "
                 f"WHERE name IN ({holes}) AND updated_at > NOW() - INTERVAL 60 SECOND",
@@ -913,7 +924,7 @@ def _fetch_names(cur, table: str, entries: list) -> dict:
     return {int(row["entry"]): row["name"] for row in cur.fetchall()}
 
 
-def _fetch_questlog() -> dict:
+def _fetch_questlog(names=None) -> dict:
     """The family's quest logs, and enough of acore_world to read them.
 
     NOT from overseer_snapshot and, like /api/armory, deliberately not subject
@@ -921,10 +932,11 @@ def _fetch_questlog() -> dict:
     "what was he working on" for somebody who logged out an hour ago - which
     is a good part of the reason to look.
 
-    Names come from bonds via family.roster(), never from the request, so the
-    roster clause is a fixed IN list of five with no user input in it.
+    Names come from the roster table (or bonds via family.roster()), never
+    from the request, so the roster clause is a fixed IN list of five with no
+    user input in it.
     """
-    names = family.roster()
+    names = family.roster() if names is None else names
     holes = ", ".join(["%s"] * len(names))
     statuses = ", ".join(["%s"] * len(questlog.IN_LOG))
     conn = _connect()
@@ -1141,15 +1153,17 @@ def _fetch_achievements() -> dict:
 #
 # Names come from bonds via family.roster(), never from the request, so every
 # IN list here is a fixed five with no user input in it.
-def _fetch_needs() -> dict:
+def _fetch_needs(names=None) -> dict:
     """The bags, gear, purse, trades, give attempts and thoughts of the five.
 
     Fetches rows and does nothing else (infra#2597). Which slot is a bag,
     which skill is a profession, which thought was said out loud, what counts
     as "no room" and when the family has given up are all decisions, and every
     one of them lives in needs.py where the stdlib suite can reach it.
+
+    `names` is the family the roster table resolved; never from the request.
     """
-    names = family.roster()
+    names = family.roster() if names is None else names
     holes = ", ".join(["%s"] * len(names))
     conn = _connect()
     try:
@@ -3034,6 +3048,37 @@ class Handler(BaseHTTPRequestHandler):
             log.exception("family query failed")
             self._send(503, "application/json", b'{"error": "world unreachable"}')
 
+    def _wall(self, query: dict) -> None:
+        """GET /api/wall - the Watch wall: every family's streamed characters.
+
+        TAKES NO PARAMETERS. The families come from the roster table and the
+        streamed characters from family.broadcast_url, so there is nothing a
+        caller could steer. One snapshot read and one profile read cover
+        every family; each family is still built on its own rows, because
+        build_family finds a family's leader by guid among the rows it is
+        handed and a merged set would hand one family the other's leader.
+        """
+        try:
+            rosters = _fetch_rosters()
+            if not rosters:
+                rosters = {"": family.roster()}
+            everyone = [n for names in rosters.values() for n in names]
+            rows = _fetch_family(everyone)
+            profiles = _fetch_profiles(everyone)
+            built = []
+            for key in sorted(rosters):
+                names = rosters[key]
+                mine = [r for r in rows if r["name"] in names]
+                built.append((key, family.build_family(
+                    mine, GEO, names, {n: profiles[n] for n in names if n in profiles})))
+            payload = watchwall.build_heads(built)
+            self._send(200, "application/json", json.dumps(payload).encode())
+        except Exception:
+            # The same contract as /api/family: the wall keeps the tiles it
+            # already has and says it may be stale.
+            log.exception("wall query failed")
+            self._send(503, "application/json", b'{"error": "world unreachable"}')
+
     def _armory(self, query: dict) -> None:
         """GET /api/armory - what the five are wearing, and how they are specced.
 
@@ -3077,25 +3122,6 @@ class Handler(BaseHTTPRequestHandler):
             # reads as "they have learned nothing", which is a worse lie
             # than an old answer honestly labelled.
             log.exception("standing query failed")
-            self._send(503, "application/json", b'{"error": "world unreachable"}')
-
-    def _questlog(self, query: dict) -> None:
-        """GET /api/questlog - what each of the five is actually working on.
-
-        No name parameter, for the same reason /api/family and /api/armory
-        take none: WHO the family is belongs to bonds, and accepting a roster
-        here would turn this into a general character query wearing a
-        friendly name.
-        """
-        try:
-            payload = questlog.build_questlog(**_fetch_questlog())
-            self._send(200, "application/json", json.dumps(payload).encode())
-        except Exception:
-            # Same contract as every other poll: the tab keeps the logs it has
-            # already drawn and says they may be stale. A blank quest log
-            # reads as "they have nothing to do", which is the opposite of
-            # what this view exists to report.
-            log.exception("questlog query failed")
             self._send(503, "application/json", b'{"error": "world unreachable"}')
 
     def _lineup(self, _query: dict) -> None:
@@ -3413,13 +3439,15 @@ class Handler(BaseHTTPRequestHandler):
         it finds as the Armory's own contract, so a handler dropped into that
         window is read as part of a feature it has nothing to do with.
 
-        No name parameter, for the same reason /api/family and /api/armory
-        take none: WHO the family is belongs to bonds, and accepting a roster
-        here would turn this into a general character query wearing a
-        friendly name.
+        Takes the same family key as /api/family and /api/questlog, resolved
+        by _family_scope; never a name. Without it the second family's tab
+        showed the first family's bags and bonds.
         """
         try:
-            payload = needs.build_needs(**_fetch_needs())
+            names, chosen, known = self._family_scope(query)
+            payload = needs.build_needs(**_fetch_needs(names), roster=names)
+            payload["family"] = chosen
+            payload["families"] = known
             self._send(200, "application/json", json.dumps(payload).encode())
         except Exception:
             # Same contract as every other poll: the view keeps the bars it
@@ -3461,6 +3489,43 @@ class Handler(BaseHTTPRequestHandler):
             self._send(404, "text/plain", b"not found")
             return
         handler(self)
+
+    def _questlog(self, query: dict) -> None:
+        """GET /api/questlog[?family=X] - what each of a family is working on.
+
+        BELOW do_POST, with _family_scope, because it now takes the family
+        key: the suites for the Armory, the standing panel and the Wealth view
+        each read a run of handlers above this as endpoints that take no
+        query at all.
+
+        The family key is the same one /api/family takes, matched against
+        the families the roster table reports, and an unknown key falls back
+        to the default. No name reaches the SQL from the request. Before this
+        read the key, every family's tab was handed the first family's board.
+        """
+        try:
+            names, chosen, known = self._family_scope(query)
+            payload = questlog.build_questlog(**_fetch_questlog(names), roster=names)
+            payload["family"] = chosen
+            payload["families"] = known
+            self._send(200, "application/json", json.dumps(payload).encode())
+        except Exception:
+            # Same contract as every other poll: the tab keeps the logs it has
+            # already drawn and says they may be stale. A blank quest log
+            # reads as "they have nothing to do", which is the opposite of
+            # what this view exists to report.
+            log.exception("questlog query failed")
+            self._send(503, "application/json", b'{"error": "world unreachable"}')
+
+    def _family_scope(self, query: dict):
+        """(names, family key, every family) for a request's `family` key.
+
+        The one place the per-family panels read the request, so the rule
+        /api/family was written with holds for all of them: the key selects
+        among families the DATABASE reports and nothing else from the request
+        reaches a reader.
+        """
+        return _fetch_family_names(query.get("family", [""])[0])
 
     def _chat_post(self) -> None:
         """POST /api/chat - the Overseer speaks, and one character answers.
@@ -3895,6 +3960,7 @@ class Handler(BaseHTTPRequestHandler):
         "/api/map": _map,
         "/api/character": _character,
         "/api/family": _family,
+        "/api/wall": _wall,
         "/api/armory": _armory,
         "/api/standing": _standing,
         "/api/wealth": _wealth,

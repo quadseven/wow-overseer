@@ -745,14 +745,30 @@ class TheQuestBoard(unittest.TestCase):
         show = show[:show.index("setInterval(pollFamily")]
         self.assertIn("pollQuests();", show[show.index("if (isFam)"):])
 
-    def test_the_endpoint_takes_no_roster_from_the_caller(self):
-        """Same rule /api/family and /api/armory follow: WHO the family is
-        belongs to bonds, and a roster parameter would make this a general
-        character query wearing a friendly name."""
+    def test_the_endpoint_takes_a_family_and_never_a_roster(self):
+        """The rule /api/family follows: a caller may choose a FAMILY and may
+        never supply a NAME. The board used to take no key at all, so the
+        Horde tab was handed the Alliance board. The names reaching the reader
+        are the ones _family_scope looked up, and the key is its only input."""
         handler = self.server[self.server.index("def _questlog"):]
-        handler = handler[:handler.index("def _thoughts")]
-        self.assertIn("questlog.build_questlog(**_fetch_questlog())", handler)
+        handler = handler[:handler.index("def _family_scope")]
+        self.assertIn("self._family_scope(query)", handler)
+        self.assertIn("questlog.build_questlog(**_fetch_questlog(names), roster=names)",
+                      handler)
         self.assertNotIn("query.get", handler)
+        scope = self.server[self.server.index("def _family_scope"):]
+        scope = scope[:scope.index("def _chat_post")]
+        self.assertIn('_fetch_family_names(query.get("family", [""])[0])', scope)
+        self.assertNotIn('query.get("name', scope)
+
+    def test_the_board_is_asked_for_the_family_on_screen(self):
+        """And the page asks for it. A reply for a family the viewer has
+        already left is dropped, or a tab switch mid-request paints the old
+        family's board under the new family's name."""
+        poll = self.block[self.block.index("async function pollQuests"):]
+        poll = poll[:poll.index("unreachable")]
+        self.assertIn('u("/api/questlog" + familyQuery(asked))', poll)
+        self.assertIn("if (asked !== familyKey || view !== FAMILY_VIEW) return;", poll)
 
     def test_the_endpoint_is_wired_into_the_route_table(self):
         """do_GET is a lookup and nothing else, so a handler that is never
@@ -1091,12 +1107,15 @@ class TheNeedsTheHandoversAndTheBonds(unittest.TestCase):
         """do_GET is a lookup and nothing else, so a handler that is never
         named in the table is a 404 with a docstring."""
         self.assertIn('"/api/needs": _needs,', self.server)
-        self.assertIn('fetch(u("/api/needs"))', self.tab)
+        self.assertIn('fetch(u("/api/needs" + familyQuery(asked)))', self.tab)
 
-    def test_the_endpoint_takes_no_roster_from_the_caller(self):
+    def test_the_endpoint_takes_a_family_and_never_a_roster(self):
+        """Same rule as the quest board: the family key through _family_scope
+        and nothing else. Without it the Horde tab drew the Alliance's bags."""
         handler = self.server[self.server.index("def _needs"):]
         handler = handler[:handler.index("def _agenda")]
-        self.assertIn("needs.build_needs(**_fetch_needs())", handler)
+        self.assertIn("self._family_scope(query)", handler)
+        self.assertIn("needs.build_needs(**_fetch_needs(names), roster=names)", handler)
         self.assertNotIn("query.get", handler)
         self.assertIn("self._send(503", handler)
 

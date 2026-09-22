@@ -356,3 +356,48 @@ class TheHouseRules(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TheWallIsEveryFamilysHeads(unittest.TestCase):
+    """The Watch tab showed one family's head, whichever family the Family tab
+    had last looked at. It is every family's streamed characters now: on a
+    realm with two game clients, the two heads, side by side."""
+
+    def families(self):
+        alliance = {"members": [
+            member("Grug", broadcast_url="https://streams.example/grug",
+                   leader=True, pov_changes_the_family=True),
+            member("Ugga", broadcast_url=None),
+            member("Og", broadcast_url=None)]}
+        horde = {"members": [
+            member("Zug", broadcast_url="https://streams.example/zug",
+                   leader=True, pov_changes_the_family=True),
+            member("Oz", broadcast_url=None)]}
+        return [("Grug", alliance), ("Zug", horde)]
+
+    def test_both_heads_and_only_the_heads(self):
+        heads = watchwall.build_heads(self.families())
+        self.assertEqual([m["name"] for m in heads["members"]], ["Grug", "Zug"])
+        self.assertEqual([t["name"] for t in heads["wall"]["tiles"]], ["Grug", "Zug"])
+
+    def test_each_head_says_which_family_it_leads(self):
+        heads = watchwall.build_heads(self.families())
+        self.assertEqual({m["name"]: m["family"] for m in heads["members"]},
+                         {"Grug": "Grug", "Zug": "Zug"})
+        self.assertEqual(heads["families"], ["Grug", "Zug"])
+
+    def test_the_headline_counts_the_heads_not_the_families(self):
+        heads = watchwall.build_heads(self.families())
+        self.assertEqual(heads["wall"]["headline"], "2 of 2 in the world")
+
+    def test_the_warning_names_both_selfbots(self):
+        warning = watchwall.build_heads(self.families())["wall"]["warning"]
+        self.assertIn("Grug", warning["body"])
+        self.assertIn("Zug", warning["body"])
+        self.assertIn("never log", warning["body"])
+        self.assertIn("whether or not you are looking", warning["body"])
+
+    def test_nobody_streamed_is_an_empty_wall_not_an_error(self):
+        heads = watchwall.build_heads([("Grug", {"members": [member("Ugga")]})])
+        self.assertEqual(heads["members"], [])
+        self.assertEqual(heads["wall"]["headline"], "no family")

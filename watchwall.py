@@ -191,6 +191,25 @@ def leader_warning(members) -> dict | None:
     named = [n for n in named if n]
     if not named:
         return None
+    if len(named) > 1:
+        # THE WALL OF HEADS carries one leader per family, and each of them
+        # is a selfbot for the same reason. Naming only the first would tell
+        # a viewer the second family was acting on its own when it is not.
+        who = " and ".join(named)
+        return {
+            "title": "THE LEADERS ARE SELFBOTS",
+            "body": (
+                who + " each have a client logged in as them, which makes "
+                "each a selfbot, and FindNewMaster hands the rest of each "
+                "family a master, so they follow and obey their head. That "
+                "is true right now whether or not you are looking at these "
+                "tiles, and it does not stop, because the clients never log "
+                "out. Any cohesion you see is the streamed configuration, "
+                "not the families on their own. Only a POV login does this; "
+                "a follow-cam is a GM watching from outside and changes "
+                "nothing."
+            ),
+        }
     who = named[0]
     return {
         "title": "THE LEADER IS A SELFBOT",
@@ -252,6 +271,34 @@ def headline(members) -> str:
         # a statistic and nobody being there is the thing worth reading.
         return "nobody is in the world"
     return "%d of %d in the world" % (here, len(members))
+
+
+def build_heads(families) -> dict:
+    """The Watch wall across every family: only the characters with a picture.
+
+    `families` is [(family key, family.build_family payload)], in the order
+    the families should appear. Only members with a broadcast are kept,
+    because the wall is a place to watch and a headless bot has nothing to
+    show; their status is on their own family's tab. On a realm with two
+    game clients that is the two heads, side by side.
+
+    Each kept member carries the key of the family it came from, so a tile
+    can say whose head it is without the page knowing any roster.
+    """
+    members = []
+    keys = []
+    for key, payload in families:
+        keys.append(key)
+        for m in payload.get("members", []):
+            if playable(m):
+                members.append(dict(m, family=key))
+    return {
+        "members": members,
+        "families": keys,
+        "wall": build_wall(members),
+        "here": sum(1 for m in members if m.get("present")),
+        "expected": len(members),
+    }
 
 
 def build_wall(members, chosen=None) -> dict:

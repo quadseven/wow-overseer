@@ -2116,6 +2116,15 @@
      loop looked like nothing at all. */
   .fcard.c-dead { border-color:var(--horde); background:var(--warn-bg); }
   .fcard.c-gone { opacity:.6; }
+  /* HEADLESS: no game client, so no picture and no POV to ask for. The
+     empty 16:9 box and the watch button go; the status strip stays. The
+     head, who has the picture, takes two columns wherever there are two,
+     so the family reads as one picture and a column of compact cards. */
+  .fcard.headless .fstream, .fcard.headless .fwatch,
+  .fcard.headless .fplayer { display:none; }
+  @media (min-width:820px) {
+    #ffeeds:has(.headless) .fcard:not(.headless) { grid-column:span 2; }
+  }
   .fstrip { padding:.6rem .8rem .8rem; }
   /* THE HEAD IS NOW A GLYPH AND A COLUMN. The 64px tile is flex:none and
      everything else shares what is left, so a long zone name wraps inside the
@@ -2594,6 +2603,31 @@
   #tabs button.on { color:var(--on-card); border-bottom-color:var(--accent); }
   #tabs button:focus-visible { outline:2px solid var(--accent);
                                outline-offset:-2px; }
+  /* THE GROUP ROW (Maps, More). The same scrolling strip as the tab row and
+     the same buttons, one step quieter, directly under the row so the toggle
+     that opened it is right above it. A chevron on the toggle says it opens
+     something rather than going somewhere. */
+  .tabpanel { display:flex; flex-wrap:nowrap; gap:.2rem;
+              padding:0 calc(var(--gutter) - .8rem);
+              background:var(--panel); border-bottom:1px solid var(--card-line);
+              overflow-x:auto; overscroll-behavior-x:contain;
+              scrollbar-width:none; -webkit-overflow-scrolling:touch; }
+  .tabpanel[hidden] { display:none; }
+  .tabpanel::-webkit-scrollbar { display:none; }
+  .tabpanel button { flex:none; min-height:44px; padding:0 .8rem; border:0;
+                     background:transparent; color:var(--dim);
+                     font:inherit; cursor:pointer; white-space:nowrap;
+                     border-bottom:3px solid transparent; }
+  .tabpanel button:hover { color:var(--text); }
+  .tabpanel button.on { color:var(--text); border-bottom-color:var(--accent); }
+  .tabpanel button:focus-visible { outline:2px solid var(--accent);
+                                   outline-offset:-2px; }
+  #tabs button.tabgroup::after { content:""; display:inline-block;
+    width:.4em; height:.4em; margin-left:.45em; vertical-align:.2em;
+    border-right:2px solid currentColor; border-bottom:2px solid currentColor;
+    transform:rotate(45deg); transition:transform .15s ease; }
+  #tabs button.tabgroup[aria-expanded="true"]::after {
+    transform:rotate(-135deg); vertical-align:-.05em; }
 
   /* THE WALL. Three modes, one breakpoint at 640px, and the numbers are the
      handoff's rather than mine: what shipped first was auto-fit minmax(320px)
@@ -2928,6 +2962,7 @@
   <div id="agwhen"></div>
 </div>
 <nav id="tabs"></nav>
+<div id="tabsub"></div>
 <section id="family">
   <!-- FOUR BLOCKS, ONE SEPARATOR. The mono index, the ink rule and the
        right-aligned label are the same three parts every time, so the tab
@@ -3336,18 +3371,120 @@ let hoverZone = null;
 const canvas = document.getElementById("map"), ctx = canvas.getContext("2d");
 const tip = document.getElementById("tip");
 
-async function loadZones() {
-  const [z, sh] = await Promise.all([
-    (await fetch(u("/zones.json"))).json(),
-    (await fetch(u("/shapes.json"))).json(),
-  ]);
-  zones = z.continents;
-  shapes = sh;
-  // A #map/<id> deep link arrives before this fetch finishes, so the id it
-  // named is checked and adopted here, the moment there is something to check
-  // it against.
-  adoptContinent();
+// --- the tab groups (Maps, More) ------------------------------------------
+//
+// TWENTY TABS IN ONE ROW WAS THE COMPLAINT. On a phone the row was four
+// screens wide and the Horde's family tab was somewhere past Kalimdor. So the
+// row holds the views asked for most, and two groups hold the rest: More for
+// the named views that are read now and then, Maps for the six continents.
+//
+// A GROUP IS A DISCLOSURE, NOT A MENU. Its toggle is an ordinary button with
+// aria-expanded, and its buttons are ordinary buttons in a second row placed
+// straight after this one, so Tab walks into them and Escape walks back out.
+// A floating dropdown would have to escape the row's own horizontal scroll,
+// and a clipped menu is a menu that does not work.
+//
+// ROUTING IS UNTOUCHED. HASH_VIEWS at the foot of the file is still the one
+// list of what an address can name; this only decides where a button sits.
+// A view with no place in tabLayout lands in More rather than nowhere.
+const MAPS_GROUP = "maps";
+const MORE_GROUP = "more";
+
+// A function rather than a constant because WATCH_VIEW and FAMILY_VIEW are
+// declared further down the file, and a top-level constant read here would be
+// a temporal-dead-zone error before any of this ran.
+function tabLayout() {
+  return {
+    primary: [WATCH_VIEW, FAMILY_VIEW, LINEUP_VIEW, ARMORY_VIEW, BAGS_VIEW,
+              DUNGEONS_VIEW, DECREE_VIEW],
+    groups: [[MORE_GROUP, "More"], [MAPS_GROUP, "Maps"]],
+  };
+}
+
+const tabGroups = new Map();
+// Which group a person opened by hand: "" means none was, so the group
+// holding the current view is the one shown; "none" means they closed it.
+let tabGroupOpen = "";
+
+function tabGroupPanel(key) {
+  const have = tabGroups.get(key);
+  if (have) return have.panel;
+  const label = new Map(tabLayout().groups).get(key) || key;
+  const toggle = document.createElement("button");
+  toggle.type = "button";
+  toggle.className = "tabgroup";
+  toggle.dataset.label = label;
+  toggle.textContent = label;
+  toggle.setAttribute("aria-expanded", "false");
+  toggle.setAttribute("aria-controls", "tabs-" + key);
+  const panel = document.createElement("div");
+  panel.id = "tabs-" + key;
+  panel.className = "tabpanel";
+  panel.setAttribute("role", "group");
+  panel.setAttribute("aria-label", label);
+  panel.hidden = true;
+  toggle.onclick = () => {
+    tabGroupOpen = panel.hidden ? key : "none";
+    syncTabGroups();
+  };
+  panel.addEventListener("keydown", (e) => {
+    if (e.key !== "Escape") return;
+    tabGroupOpen = "none";
+    syncTabGroups();
+    toggle.focus();
+  });
+  document.getElementById("tabs").appendChild(toggle);
+  document.getElementById("tabsub").appendChild(panel);
+  tabGroups.set(key, { toggle, panel });
+  return panel;
+}
+
+// Primary views to the front in tabLayout's order, everything else with a
+// view into More, and the group toggles last so that Tab from a toggle lands
+// in the panel it opened.
+function arrangeTabs() {
+  const row = document.getElementById("tabs");
+  const layout = tabLayout();
+  for (const [key] of layout.groups) tabGroupPanel(key);
+  const buttons = [...row.querySelectorAll("button[data-view]")];
+  for (const b of buttons) {
+    if (layout.primary.indexOf(b.dataset.view) < 0) tabGroupPanel(MORE_GROUP).appendChild(b);
+  }
+  for (const v of layout.primary) {
+    for (const b of buttons) if (b.dataset.view === v) row.appendChild(b);
+  }
+  for (const [key] of layout.groups) row.appendChild(tabGroups.get(key).toggle);
+}
+
+// The toggle is lit when the view on screen is inside its group, and names
+// that view, so a person on Kalimdor can see where they are without opening
+// anything. Open is whatever was chosen by hand, else the lit group.
+function syncTabGroups() {
+  for (const [key, g] of tabGroups) {
+    const lit = g.panel.querySelector("button.on");
+    g.toggle.classList.toggle("on", !!lit);
+    const text = lit ? g.toggle.dataset.label + ": " + lit.textContent : g.toggle.dataset.label;
+    if (g.toggle.textContent !== text) g.toggle.textContent = text;
+    if (lit) revealTab(g.toggle);
+    const open = tabGroupOpen ? tabGroupOpen === key : !!lit;
+    if (g.panel.hidden === open) g.panel.hidden = !open;
+    g.toggle.setAttribute("aria-expanded", String(open));
+  }
+}
+
+// --- the tab row (built at once, then grouped) ---------------------------
+//
+// BUILT THE MOMENT THE SCRIPT RUNS, not after zones.json. The named views need
+// no map data, and building them inside loadZones meant the first screen had
+// no way to go anywhere until two JSON files had arrived. Only the continent
+// buttons wait, because only they are named by that file.
+//
+// Every button is still appended to the row in the order it always was, and
+// arrangeTabs() then moves the ones that belong in a group into it. The order
+// below is the order within a group; tabLayout decides which group.
+function buildViewTabs() {
   const tabs = document.getElementById("tabs");
+  tabs.setAttribute("aria-label", "views");
   // FAMILY FIRST. The map answers "who is in the world"; the Family tab
   // answers "are my five all right", which is the question that actually gets
   // asked from a phone - so it is the first thing under the thumb, not the
@@ -3458,6 +3595,23 @@ async function loadZones() {
   db.dataset.view = DECREE_VIEW;
   db.onclick = () => showView(DECREE_VIEW);
   tabs.appendChild(db);
+  arrangeTabs();
+}
+
+async function loadZones() {
+  const [z, sh] = await Promise.all([
+    (await fetch(u("/zones.json"))).json(),
+    (await fetch(u("/shapes.json"))).json(),
+  ]);
+  zones = z.continents;
+  shapes = sh;
+  // A #map/<id> deep link arrives before this fetch finishes, so the id it
+  // named is checked and adopted here, the moment there is something to check
+  // it against.
+  adoptContinent();
+  // THE CONTINENTS LIVE IN THE MAPS GROUP. Six of them made the row twice as
+  // long as a phone, and they are one kind of thing: where on the map to look.
+  const tabs = tabGroupPanel(MAPS_GROUP);
   for (const id of CONTINENT_ORDER) {
     const b = document.createElement("button");
     b.textContent = zones[id].name;
@@ -5149,6 +5303,29 @@ function retainOnlyThese(names) {
   }
 }
 
+// The ?family= suffix every per-family read carries. Empty until the first
+// family poll has said which family is the default, which is also what the
+// server falls back to, so the first reads agree with the first cards.
+function familyQuery(key) {
+  return key ? "?family=" + encodeURIComponent(key) : "";
+}
+
+// Which family a #family address names; every other view has no key.
+function hashKeyFor(v) {
+  return v === FAMILY_VIEW ? familyKey : "";
+}
+
+// THE WATCH VIEW'S RENDER, and deliberately not renderFamily: the family
+// headline and cards belong to one family, and the wall is every family's
+// heads. Only the tiles and the wall are drawn; anyone not on the wall is
+// released, exactly as a family switch releases the family just left.
+function renderHeads(p) {
+  fam.byName = new Map(p.members.map((m) => [m.name, m]));
+  retainOnlyThese(p.members.map((m) => m.name));
+  renderBroadcasts(p);
+  renderWall(p);
+}
+
 function renderFamily(p) {
   fam.byName = new Map(p.members.map((m) => [m.name, m]));
   retainOnlyThese(p.members.map((m) => m.name));
@@ -5165,7 +5342,12 @@ function renderFamily(p) {
   fheadline.className = p.dead ? "alarm" : "";
   for (const m of p.members) {
     const c = familyCard(m.name);
-    c.card.className = "fcard c-" + m.condition;
+    // HEADLESS is a character with no broadcast: a bot with no game client,
+    // so no picture and nothing to watch. The card keeps its status (level,
+    // class, health, zone and the rest of the strip) and loses the empty
+    // video box and the "watch" button, which could only ever fail for them.
+    // The server decides who is streamed; the page reads broadcast_url.
+    c.card.className = "fcard c-" + m.condition + (m.broadcast_url ? "" : " headless");
     c.nm.textContent = m.name;
     // The name in its class colour, the same colour the Armory and the
     // board's portraits use for the same person - one face, everywhere.
@@ -5192,7 +5374,7 @@ function renderFamily(p) {
       // Still says WHO is missing. A card stripped down to a name is how a
       // logged-out character stops being noticed, which is the whole
       // complaint this tab answers.
-      c.meta.textContent = m["class"] + " - " + m.role;
+      c.meta.textContent = [m["class"], m.role].filter(Boolean).join(" - ");
       c.bar.style.display = "none";
       c.hp.textContent = "";
       c.where.textContent = "not in the world - logged out, or the "
@@ -5200,7 +5382,7 @@ function renderFamily(p) {
       c.warn.style.display = "none";
       continue;
     }
-    c.meta.textContent = "L" + m.level + " " + m["class"] + " - " + m.role;
+    c.meta.textContent = ["L" + m.level + " " + m["class"], m.role].filter(Boolean).join(" - ");
     c.bar.style.display = "";
     c.fill.style.width = m.health_pct + "%";
     c.hp.textContent = m.condition === "dead"
@@ -5416,10 +5598,18 @@ function renderAnswering(a) {
 // reads immediately, or these panels are blank for half a minute on arrival.
 async function pollNeeds() {
   if (view !== FAMILY_VIEW) return;
+  // FOR THE FAMILY ON SCREEN. This read no key at all, so the second
+  // family's tab drew the first family's bags and bonds under its own name.
+  const asked = familyKey;
   try {
-    const r = await fetch(u("/api/needs"));
+    const r = await fetch(u("/api/needs" + familyQuery(asked)));
     if (!r.ok) throw new Error(r.status);
-    renderNeeds(await r.json());
+    const p = await r.json();
+    // A reply for a family nobody is looking at any more is dropped rather
+    // than drawn: a tab switch mid-request would otherwise paint the family
+    // just left over the one just opened.
+    if (asked !== familyKey || view !== FAMILY_VIEW) return;
+    renderNeeds(p);
   } catch (e) {
     // Keep the bars that are drawn, for the same reason the cards are kept: a
     // needs panel that blanks reads as "there is nothing wrong with any of
@@ -5649,10 +5839,15 @@ function renderQuests(p) {
 // Entering the tab polls immediately, so it is never blank while waiting.
 async function pollQuests() {
   if (view !== FAMILY_VIEW) return;
+  // THE BOARD IS THE VIEWED FAMILY'S. It used to ask for no family, so the
+  // Horde tab showed the Alliance board: their quests, their turn-in spread.
+  const asked = familyKey;
   try {
-    const r = await fetch(u("/api/questlog"));
+    const r = await fetch(u("/api/questlog" + familyQuery(asked)));
     if (!r.ok) throw new Error(r.status);
-    renderQuests(await r.json());
+    const p = await r.json();
+    if (asked !== familyKey || view !== FAMILY_VIEW) return;
+    renderQuests(p);
   } catch (e) {
     // Keep the board that is drawn, for the same reason the cards are kept:
     // an empty board means "they have nothing to do", which is the opposite
@@ -5733,15 +5928,28 @@ async function refreshFamilyWatch() {
 // and giving the wall an endpoint of its own would let the two disagree about
 // who is dead - which is the kind of disagreement nobody catches, because
 // only one of them is ever on screen to be checked.
+//
+// THE WATCH VIEW ASKS FOR THE WALL, NOT FOR A FAMILY. /api/wall is every
+// family's streamed characters - on a realm with two game clients, the two
+// heads - so the wall shows both families side by side instead of whichever
+// one the Family tab last looked at. The eight headless members have no
+// picture and so no tile; their status is on their family's tab.
 async function pollFamily() {
   if (view !== FAMILY_VIEW && view !== WATCH_VIEW) return;
+  const onWatch = view === WATCH_VIEW;
+  const asked = familyKey;
   try {
-    const q = familyKey ? ("?family=" + encodeURIComponent(familyKey)) : "";
-    const r = await fetch(u("/api/family" + q));
+    const r = await fetch(onWatch ? u("/api/wall") : u("/api/family" + familyQuery(asked)));
     if (!r.ok) throw new Error(r.status);
     const payload = await r.json();
+    // Dropped if the view or the family changed while this was in flight:
+    // drawing it would put one view's tiles, or one family's cards, into
+    // the other.
+    if (view !== (onWatch ? WATCH_VIEW : FAMILY_VIEW)) return;
+    if (!onWatch && asked !== familyKey) return;
     syncFamilyTabs(payload);
-    renderFamily(payload);
+    if (onWatch) renderHeads(payload);
+    else renderFamily(payload);
   } catch (e) {
     // Keep the cards that are drawn. A Family tab that blanks on a failed
     // poll is indistinguishable from a family who all logged out at once.
@@ -5756,7 +5964,14 @@ async function pollFamily() {
 // usually does nothing.
 function syncFamilyTabs(payload) {
   const known = Array.isArray(payload.families) ? payload.families : [];
-  if (payload.family && !familyKey) familyKey = payload.family;
+  // The server's resolution wins: a key it did not recognise (a stale
+  // #family/<name> link) came back as the default family, and the tab that
+  // lights up has to be the family actually drawn.
+  if (payload.family && payload.family !== familyKey) {
+    familyKey = payload.family;
+    if (view === FAMILY_VIEW) history.replaceState(null, "", hashFor(FAMILY_VIEW));
+    markTabs();
+  }
   if (known.join("|") === familiesKnown.join("|")) return;
   familiesKnown = known;
   const existing = [...document.querySelectorAll('#tabs button[data-view="' + FAMILY_VIEW + '"]')];
@@ -5784,7 +5999,7 @@ function syncFamilyTabs(payload) {
 }
 
 function markTabs() {
-  for (const b of document.querySelectorAll("#tabs button")) {
+  for (const b of document.querySelectorAll("#tabs button:not(.tabgroup), #tabsub button")) {
     // This was a two-view ternary hard-coded to the Family tab, which meant a
     // third button fell into the map branch, compared an undefined dataset.id
     // against `current`, and could never light up at all. Now a button either
@@ -5800,6 +6015,7 @@ function markTabs() {
     b.classList.toggle("on", on);
     if (on) revealTab(b);
   }
+  syncTabGroups();
 }
 
 // THE SELECTED TAB IS BROUGHT BACK INTO ITS OWN ROW (infra#3482). Fourteen
@@ -5837,6 +6053,10 @@ function hashFor(v) {
   // The map carries its continent, or a link to it would forget which one
   // was being looked at - the one piece of state that view actually has.
   if (v === MAP_VIEW) return "#" + MAP_VIEW + "/" + current;
+  // A view that is one of several (a family tab) carries which one, so a
+  // link to the second family's tab opens that tab and not the default.
+  const key = hashKeyFor(v);
+  if (key) return "#" + v + "/" + encodeURIComponent(key);
   return "#" + v;
 }
 
@@ -5848,6 +6068,9 @@ function hashFor(v) {
 // the case that actually matters.
 function showView(v) {
   view = v;
+  // Choosing a view closes a group opened by hand; the group holding the new
+  // view, if any, is the one left showing.
+  tabGroupOpen = "";
   const want = hashFor(v);
   if (location.hash !== want) history.replaceState(null, "", want);
   const isFam = v === FAMILY_VIEW;
@@ -6038,7 +6261,13 @@ setInterval(refreshFamilyWatch, 5000); // and so does the watch it owns
 setInterval(pollQuests, 30000);        // quest rows are a save, not a stream
 setInterval(pollNeeds, 30000);         // and so are bags, gear and coin
 
-loadZones().then(() => { poll(); setInterval(poll, 5000); });
+// THE CENSUS DOES NOT WAIT FOR THE MAP FILES. It used to start only after
+// zones.json and shapes.json had both arrived, so the header said "reaching
+// the world..." for as long as those took; /api/map needs neither, and the
+// map draws the moment its files land.
+poll();
+setInterval(poll, 5000);
+loadZones().then(() => { render(); });
 setInterval(fetchPanel, 5000);  // panel rides the same 5s snapshot cadence
 setInterval(refreshMind, 5000);  // and so does the thought stream
 setInterval(refreshFrame, 5000);  // and so does their own screen
@@ -9889,6 +10118,11 @@ function applyHash() {
     render();
     return;
   }
+  // #family/<key> names which family. The key is only a request: the server
+  // matches it against the families it knows and falls back otherwise.
+  if (name === FAMILY_VIEW && cut >= 0) {
+    try { familyKey = decodeURIComponent(raw.slice(cut + 1)); } catch (e) { familyKey = ""; }
+  }
   // FAMILY for anything unrecognised, deliberately: an empty hash, a typo and
   // a stale bookmark all land on the page that answers "are my five all
   // right", which is the right place to be dropped when the request made no
@@ -9945,6 +10179,8 @@ function applyHash() {
   })();
 
 window.addEventListener("hashchange", applyHash);
+// The row first, so the view applyHash opens has a tab to light.
+buildViewTabs();
 // Synchronously, at the foot of the script rather than inside loadZones's
 // promise, for two reasons. The family view needs no map data, so waiting on
 // two JSON fetches to draw it would put a blank page in front of the one

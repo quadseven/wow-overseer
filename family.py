@@ -394,8 +394,7 @@ def _member(name: str, row: dict | None, geo, leader_name: str | None,
         # a character on 1hp of 583 reads as 1% rather than 0% - "0%" next to
         # a living character is a card arguing with itself.
         "health_pct": _health_pct(health, max_health),
-        "zone": "inside an instance" if in_instance
-                else geo.zone_name(row["map_id"], row["pos_x"], row["pos_y"]),
+        "zone": "inside an instance" if in_instance else _zone_of(row, geo),
         "broadcast_url": broadcast_url(row["name"]),
         "broadcast_renditions": broadcast_renditions(row["name"]),
         "instance": in_instance,
@@ -409,6 +408,21 @@ def _member(name: str, row: dict | None, geo, leader_name: str | None,
             row["name"], leader_name or ""),
         "age_seconds": int(row["age_seconds"]),
     }
+
+
+def _zone_of(row: dict, geo) -> str:
+    """Where a character is, preferring the world's own answer.
+
+    The snapshot row carries `zone_id`, which the core writes from the
+    player's live zone on every tick. The rectangle lookup is only a guess
+    from position, and it guessed wrong where zone boxes overlap: a head
+    standing in Winterspring was captioned "in Felwood" on the Watch tile
+    while the client on the same screen said Winterspring. The guess stays
+    as the fallback for a row with no id, or an id this realm's zone table
+    does not draw.
+    """
+    return (geo.zone_by_id(row.get("zone_id"))
+            or geo.zone_name(row["map_id"], row["pos_x"], row["pos_y"]))
 
 
 def class_colour_by_name(class_name: str) -> str:
