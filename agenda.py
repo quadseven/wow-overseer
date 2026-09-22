@@ -654,6 +654,29 @@ def stalled(moved_at: datetime | None, now: datetime) -> bool:
 
 # --- the whole banner --------------------------------------------------------
 
+def _span(seconds: int) -> str:
+    """A duration in the largest whole unit: "25 minutes", "13 hours"."""
+    for size, unit in ((86400, "day"), (3600, "hour"), (60, "minute")):
+        if seconds >= size:
+            count = seconds // size
+            return "%d %s%s" % (count, unit, "" if count == 1 else "s")
+    return "%d seconds" % seconds
+
+
+def stall_line(moved_at: datetime | None, now: datetime) -> str:
+    """What STALLED means here, with the real gap in it.
+
+    The banner printed "nothing has happened in over 20 minutes" for a family
+    that had been still for thirteen hours, under a headline about somebody
+    walking. What is measured is narrower, and is said as such: no quest,
+    level or gear change (MOVEMENT_KINDS).
+    """
+    if moved_at is None:
+        return ""
+    return ("STALLED: no quest, level or gear change for %s."
+            % _span(max(0, int((now - moved_at).total_seconds()))))
+
+
 def build_agenda(roster_rows: list[dict], run_rows: list[dict],
                  instance_rows: list[dict], goal_rows: list[dict],
                  trade_rows: list[dict], event_rows: list[dict],
@@ -725,6 +748,7 @@ def build_agenda(roster_rows: list[dict], run_rows: list[dict],
         "moved_seconds": _seconds(moved_at, now),
         "stalled": is_stalled,
         "stall_after_seconds": int(STALL_AFTER.total_seconds()),
+        "stall_line": stall_line(moved_at, now) if is_stalled else "",
         "orders": _public(order),
         "job_split": jsplit,
         "quest_split": qsplit,

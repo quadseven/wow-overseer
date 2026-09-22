@@ -130,8 +130,18 @@ class TheBannerDrawsWhatItIsGiven(unittest.TestCase):
         self.assertIn("moved_seconds", self.tab)
 
     def test_a_stall_is_said_in_words_and_not_only_in_colour(self):
+        """The sentence arrives written (agenda.stall_line), with the real
+        gap in it rather than the threshold."""
         self.assertIn("STALLED", self.tab)
-        self.assertIn("stall_after_seconds", self.tab)
+        self.assertIn("s.textContent = p.stall_line;", self.tab)
+        self.assertNotIn("stall_after_seconds / 60", self.tab)
+
+    def test_a_clock_nobody_can_read_is_left_off_not_printed_unknown(self):
+        """"goal set: unknown" was drawn on every questing family and read
+        as a fault."""
+        render = self.tab[self.tab.index("function renderAgenda"):]
+        self.assertIn("if (p.changed_seconds !== null", render)
+        self.assertIn("if (p.moved_seconds !== null", render)
 
     def test_a_failed_poll_keeps_the_sentence_it_has(self):
         """A blanked banner reads as 'the family has no goal', which is worse

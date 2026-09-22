@@ -7883,16 +7883,22 @@ function renderAgenda(p) {
     agDetail.appendChild(d);
   }
   agWhen.replaceChildren();
-  // BOTH CLOCKS, ALWAYS. "Set 40 minutes ago" is fine for a goal still being
-  // worked; "last moved 40 minutes ago" is the stall. Showing only one lets
-  // either be mistaken for the other, which is the whole point of the pair.
-  agWhen.appendChild(agStamp("goal set", p.changed_seconds, false));
-  agWhen.appendChild(agStamp("last moved", p.moved_seconds, p.stalled));
-  if (p.stalled) {
+  // BOTH CLOCKS WHEN BOTH ARE KNOWN. "Set 40 minutes ago" is fine for a goal
+  // still being worked; "last moved 40 minutes ago" is the stall. Showing
+  // only one lets either be mistaken for the other, which is the whole point
+  // of the pair. A clock this realm cannot read (no order behind the goal,
+  // no movement row yet) is left off: "goal set: unknown" read as a fault.
+  if (p.changed_seconds !== null && p.changed_seconds !== undefined) {
+    agWhen.appendChild(agStamp("goal set", p.changed_seconds, false));
+  }
+  if (p.moved_seconds !== null && p.moved_seconds !== undefined) {
+    agWhen.appendChild(agStamp("last moved", p.moved_seconds, p.stalled));
+  }
+  // The stall sentence arrives written, with the real gap in it.
+  if (p.stalled && p.stall_line) {
     const s = document.createElement("span");
     s.className = "agstale";
-    s.textContent = "STALLED - nothing has happened in over "
-      + Math.round(p.stall_after_seconds / 60) + " minutes.";
+    s.textContent = p.stall_line;
     agWhen.appendChild(s);
   }
   if (p.orders && p.orders.channel_id) {
