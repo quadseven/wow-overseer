@@ -17,6 +17,7 @@ fail: the roster would simply go quiet.
 Nothing here has been run against a live worldserver, and nothing in this file
 claims it has.
 """
+
 import pathlib
 import sys
 import unittest
@@ -53,8 +54,9 @@ class TheVocabularyAgrees(unittest.TestCase):
         self.assertEqual(trainjob.TRAINER_ROLE, learnaim.TRAINER_ROLE)
 
     def test_the_secondary_ids_are_read_from_trainjob_not_restated(self):
-        self.assertEqual(tuple(sorted(trainjob.SECONDARY.values())),
-                         learnaim.SECONDARY_IDS)
+        self.assertEqual(
+            tuple(sorted(trainjob.SECONDARY.values())), learnaim.SECONDARY_IDS
+        )
 
     def test_the_two_clear_reasons_are_distinct_sentences(self):
         self.assertNotEqual(learnaim.SETTLED, learnaim.UNASSIGNED)
@@ -83,19 +85,30 @@ class ThereIsNoHoldsRule(unittest.TestCase):
     def test_this_module_never_reads_a_held_skill_set(self):
         for banned in ("holds", "HasSkill", "character_skills"):
             self.assertNotIn(
-                "row.%s" % banned, self.source,
+                "row.%s" % banned,
+                self.source,
                 "learnaim must not decide from what a character holds (#74)",
             )
-        self.assertNotIn("holds", [f.name for f in learnaim.Row.__dataclass_fields__.values()])
+        self.assertNotIn(
+            "holds", [f.name for f in learnaim.Row.__dataclass_fields__.values()]
+        )
 
     def test_a_character_at_its_ceiling_keeps_its_errand(self):
         """The live shape: herbalism held at 132 against a max of 225, with the
         errand standing to buy the next tier. A holds-based rule would delete
         it; this one leaves it alone and lets the trainer answer."""
-        r = row("Ugga", learn_skill=HERBALISM, wanted=(ALCHEMY, HERBALISM),
-                traded=(HERBALISM,), settled=(), travel_npc="", leads=True)
+        r = row(
+            "Ugga",
+            learn_skill=HERBALISM,
+            wanted=(ALCHEMY, HERBALISM),
+            traded=(HERBALISM,),
+            settled=(),
+            travel_npc="",
+            leads=True,
+        )
         self.assertEqual("", learnaim.finished(r))
         self.assertEqual(HERBALISM, learnaim.outstanding(r))
+
 
 class FinishedAnswersFromWhatWasDecided(unittest.TestCase):
     def test_the_live_case_that_froze_the_family(self):
@@ -103,20 +116,33 @@ class FinishedAnswersFromWhatWasDecided(unittest.TestCase):
         roster still named skill 393 on 2026-09-13. The settled row is what
         says the errand was carried out - not the skill map, which describes
         the world's shape rather than this errand's outcome."""
-        bork = row("Bork", learn_skill=SKINNING,
-                   wanted=(LEATHERWORKING, SKINNING),
-                   traded=(LEATHERWORKING, SKINNING),
-                   settled=(LEATHERWORKING, SKINNING))
+        bork = row(
+            "Bork",
+            learn_skill=SKINNING,
+            wanted=(LEATHERWORKING, SKINNING),
+            traded=(LEATHERWORKING, SKINNING),
+            settled=(LEATHERWORKING, SKINNING),
+        )
         self.assertEqual(learnaim.SETTLED, learnaim.finished(bork))
 
     def test_a_settled_row_for_a_different_skill_says_nothing(self):
-        r = row("Bork", learn_skill=SKINNING, wanted=(LEATHERWORKING, SKINNING),
-                traded=(LEATHERWORKING, SKINNING), settled=(LEATHERWORKING,))
+        r = row(
+            "Bork",
+            learn_skill=SKINNING,
+            wanted=(LEATHERWORKING, SKINNING),
+            traded=(LEATHERWORKING, SKINNING),
+            settled=(LEATHERWORKING,),
+        )
         self.assertEqual("", learnaim.finished(r))
 
     def test_a_planned_row_is_an_errand_not_a_record_of_one(self):
-        r = row("Og", learn_skill=TAILORING, wanted=(TAILORING,),
-                traded=(TAILORING,), settled=())
+        r = row(
+            "Og",
+            learn_skill=TAILORING,
+            wanted=(TAILORING,),
+            traded=(TAILORING,),
+            settled=(),
+        )
         self.assertEqual("", learnaim.finished(r))
 
     def test_a_skill_the_roster_never_asked_for_is_TrainOnArrivals_refusal(self):
@@ -200,9 +226,15 @@ class ASecondaryErrandIsLiftedNotPreserved(unittest.TestCase):
         self.assertNotIn(str(FIRST_AID), ids.split(","))
 
     def test_a_settled_secondary_trade_still_ends_it(self):
-        r = row("Ugga", learn_skill=FIRST_AID, wanted=(ALCHEMY,),
-                traded=(FIRST_AID,), settled=(FIRST_AID,))
+        r = row(
+            "Ugga",
+            learn_skill=FIRST_AID,
+            wanted=(ALCHEMY,),
+            traded=(FIRST_AID,),
+            settled=(FIRST_AID,),
+        )
         self.assertIn(learnaim.finished(r), (learnaim.SECONDARY, learnaim.SETTLED))
+
 
 class TheBornFrozenErrandIsCarriedOutNotDiscarded(unittest.TestCase):
     """mod-overseer's AimLearnAt writes learn_skill with no trade row behind it
@@ -217,15 +249,16 @@ class TheBornFrozenErrandIsCarriedOutNotDiscarded(unittest.TestCase):
         self.assertTrue(learnaim.derived(r))
 
     def test_an_errand_a_trade_plan_wrote_is_not(self):
-        r = row("Grug", learn_skill=TAILORING, wanted=(TAILORING,),
-                traded=(TAILORING,))
+        r = row("Grug", learn_skill=TAILORING, wanted=(TAILORING,), traded=(TAILORING,))
         self.assertFalse(learnaim.derived(r))
 
     def test_the_leader_with_an_unwalked_errand_is_aimed(self):
-        p = learnaim.plan([
-            row("Grug", learn_skill=TAILORING, wanted=(TAILORING,), leads=True),
-            row("Grog", leads=False),
-        ])
+        p = learnaim.plan(
+            [
+                row("Grug", learn_skill=TAILORING, wanted=(TAILORING,), leads=True),
+                row("Grog", leads=False),
+            ]
+        )
         self.assertEqual("Grug", p.aim)
         self.assertEqual(TAILORING, p.skill)
         self.assertEqual((), p.clear)
@@ -234,18 +267,22 @@ class TheBornFrozenErrandIsCarriedOutNotDiscarded(unittest.TestCase):
         """AimedMover answers RefuseInFormation for a follower and says the
         remedy itself: aim the leader. Writing the column anyway would be the
         written-and-unread failure this whole issue is about, self-inflicted."""
-        p = learnaim.plan([
-            row("Grug", learn_skill=TAILORING, wanted=(TAILORING,), leads=False),
-            row("Grog", leads=True),
-        ])
+        p = learnaim.plan(
+            [
+                row("Grug", learn_skill=TAILORING, wanted=(TAILORING,), leads=False),
+                row("Grog", leads=True),
+            ]
+        )
         self.assertEqual("", p.aim)
         self.assertEqual(("Grug",), p.waiting)
 
     def test_only_one_character_is_aimed_and_the_rest_wait(self):
-        p = learnaim.plan([
-            row("Bork", learn_skill=SKINNING, wanted=(SKINNING,), leads=True),
-            row("Grug", learn_skill=TAILORING, wanted=(TAILORING,), leads=True),
-        ])
+        p = learnaim.plan(
+            [
+                row("Bork", learn_skill=SKINNING, wanted=(SKINNING,), leads=True),
+                row("Grug", learn_skill=TAILORING, wanted=(TAILORING,), leads=True),
+            ]
+        )
         self.assertEqual("Bork", p.aim)
         self.assertEqual(("Grug",), p.waiting)
 
@@ -255,18 +292,33 @@ class TheBornFrozenErrandIsCarriedOutNotDiscarded(unittest.TestCase):
         writing over one is the second-writer collision this codebase has
         already paid for on exactly this column."""
         for aim in ("vendor", "at:1:-7219,-2948,6", learnaim.TRAINER_ROLE):
-            p = learnaim.plan([
-                row("Grug", learn_skill=TAILORING, wanted=(TAILORING,),
-                    leads=True, travel_npc=aim),
-            ])
+            p = learnaim.plan(
+                [
+                    row(
+                        "Grug",
+                        learn_skill=TAILORING,
+                        wanted=(TAILORING,),
+                        leads=True,
+                        travel_npc=aim,
+                    ),
+                ]
+            )
             self.assertEqual("", p.aim, aim)
             self.assertEqual((), p.waiting, aim)
 
     def test_an_errand_that_is_over_is_cleared_and_never_also_aimed(self):
-        p = learnaim.plan([
-            row("Bork", learn_skill=SKINNING, wanted=(SKINNING,), leads=True,
-                traded=(SKINNING,), settled=(SKINNING,)),
-        ])
+        p = learnaim.plan(
+            [
+                row(
+                    "Bork",
+                    learn_skill=SKINNING,
+                    wanted=(SKINNING,),
+                    leads=True,
+                    traded=(SKINNING,),
+                    settled=(SKINNING,),
+                ),
+            ]
+        )
         self.assertEqual(("Bork",), tuple(s.character for s in p.clear))
         self.assertEqual("", p.aim)
         self.assertEqual((), p.waiting)
@@ -274,43 +326,58 @@ class TheBornFrozenErrandIsCarriedOutNotDiscarded(unittest.TestCase):
 
 class TheLeadIsBorrowedOnlyForAnErrandNothingElseCanSee(unittest.TestCase):
     def test_a_derived_errand_makes_its_character_the_traveller(self):
-        rows = [row("Grug", learn_skill=TAILORING, wanted=(TAILORING,)),
-                row("Grog")]
+        rows = [row("Grug", learn_skill=TAILORING, wanted=(TAILORING,)), row("Grog")]
         self.assertEqual("Grug", learnaim.traveller(rows))
 
     def test_the_borrow_survives_the_aim_it_asked_for(self):
         """The aim fills travel_npc, and if that ended the borrow the lead
         would snap back the same cycle and the character would never walk."""
-        rows = [row("Grug", learn_skill=TAILORING, wanted=(TAILORING,),
-                    travel_npc=learnaim.TRAINER_ROLE)]
+        rows = [
+            row(
+                "Grug",
+                learn_skill=TAILORING,
+                wanted=(TAILORING,),
+                travel_npc=learnaim.TRAINER_ROLE,
+            )
+        ]
         self.assertEqual("Grug", learnaim.traveller(rows))
 
     def test_a_trade_backed_errand_borrows_nothing_here(self):
         """_errand_traveller already borrows for those and bounds it with
         ERRAND_LEAD_HOURS. Taking the lead for one here would route around a
         bound somebody wrote for a reason."""
-        rows = [row("Og", learn_skill=TAILORING, wanted=(TAILORING,),
-                    traded=(TAILORING,))]
+        rows = [
+            row("Og", learn_skill=TAILORING, wanted=(TAILORING,), traded=(TAILORING,))
+        ]
         self.assertEqual("", learnaim.traveller(rows))
 
     def test_a_finished_errand_borrows_nothing(self):
-        rows = [row("Bork", learn_skill=SKINNING, wanted=(SKINNING,),
-                    settled=(SKINNING,))]
+        rows = [
+            row("Bork", learn_skill=SKINNING, wanted=(SKINNING,), settled=(SKINNING,))
+        ]
         self.assertEqual("", learnaim.traveller(rows))
 
     def test_nobody_is_the_resting_answer(self):
         self.assertEqual("", learnaim.traveller([row("Grog"), row("Og")]))
         self.assertEqual("", learnaim.traveller([]))
 
+
 class TheStatementsAreBoundAndAreCompareAndSwaps(unittest.TestCase):
     def test_the_clear_only_lands_on_the_value_it_read(self):
         """Without `AND learn_skill = %s` this would blank whatever AimLearnAt
         wrote between the read and the write - a clear that erases a brand new
         errand it never looked at."""
-        p = learnaim.plan([
-            row("Bork", learn_skill=SKINNING, wanted=(SKINNING,),
-                traded=(SKINNING,), settled=(SKINNING,)),
-        ])
+        p = learnaim.plan(
+            [
+                row(
+                    "Bork",
+                    learn_skill=SKINNING,
+                    wanted=(SKINNING,),
+                    traded=(SKINNING,),
+                    settled=(SKINNING,),
+                ),
+            ]
+        )
         sql, params = learnaim.statements(p)[0]
         self.assertIn("SET learn_skill = 0", sql)
         self.assertIn("WHERE name = %s AND learn_skill = %s", sql)
@@ -320,9 +387,11 @@ class TheStatementsAreBoundAndAreCompareAndSwaps(unittest.TestCase):
         """The same guard _write_trade_errand's ECONOMY_ERRANDS branch applies,
         written the same way: an economy pass or a dungeon Claim that took the
         column between the read and this write keeps it."""
-        p = learnaim.plan([
-            row("Grug", learn_skill=TAILORING, wanted=(TAILORING,), leads=True),
-        ])
+        p = learnaim.plan(
+            [
+                row("Grug", learn_skill=TAILORING, wanted=(TAILORING,), leads=True),
+            ]
+        )
         sql, params = learnaim.statements(p)[0]
         self.assertIn("SET travel_npc = %s", sql)
         self.assertIn("AND travel_npc = ''", sql)
@@ -330,22 +399,41 @@ class TheStatementsAreBoundAndAreCompareAndSwaps(unittest.TestCase):
         self.assertEqual((learnaim.TRAINER_ROLE, "Grug", TAILORING), params)
 
     def test_no_name_no_skill_and_no_keyword_is_interpolated(self):
-        p = learnaim.plan([
-            row("Bork", learn_skill=SKINNING, wanted=(SKINNING,),
-                traded=(SKINNING,), settled=(SKINNING,)),
-            row("Grug", learn_skill=TAILORING, wanted=(TAILORING,), leads=True),
-        ])
+        p = learnaim.plan(
+            [
+                row(
+                    "Bork",
+                    learn_skill=SKINNING,
+                    wanted=(SKINNING,),
+                    traded=(SKINNING,),
+                    settled=(SKINNING,),
+                ),
+                row("Grug", learn_skill=TAILORING, wanted=(TAILORING,), leads=True),
+            ]
+        )
         for sql, _ in learnaim.statements(p):
-            for value in ("Bork", "Grug", str(SKINNING), str(TAILORING),
-                          learnaim.TRAINER_ROLE):
+            for value in (
+                "Bork",
+                "Grug",
+                str(SKINNING),
+                str(TAILORING),
+                learnaim.TRAINER_ROLE,
+            ):
                 self.assertNotIn(value, sql)
 
     def test_the_clears_run_before_the_aim(self):
-        p = learnaim.plan([
-            row("Bork", learn_skill=SKINNING, wanted=(SKINNING,),
-                traded=(SKINNING,), settled=(SKINNING,)),
-            row("Grug", learn_skill=TAILORING, wanted=(TAILORING,), leads=True),
-        ])
+        p = learnaim.plan(
+            [
+                row(
+                    "Bork",
+                    learn_skill=SKINNING,
+                    wanted=(SKINNING,),
+                    traded=(SKINNING,),
+                    settled=(SKINNING,),
+                ),
+                row("Grug", learn_skill=TAILORING, wanted=(TAILORING,), leads=True),
+            ]
+        )
         written = learnaim.statements(p)
         self.assertEqual(2, len(written))
         self.assertIn("learn_skill = 0", written[0][0])
@@ -357,19 +445,28 @@ class TheStatementsAreBoundAndAreCompareAndSwaps(unittest.TestCase):
 
 class TheReportSaysWhatHappenedAndWhy(unittest.TestCase):
     def test_a_clear_carries_its_consequence(self):
-        p = learnaim.plan([
-            row("Bork", learn_skill=SKINNING, wanted=(SKINNING,),
-                traded=(SKINNING,), settled=(SKINNING,)),
-        ])
+        p = learnaim.plan(
+            [
+                row(
+                    "Bork",
+                    learn_skill=SKINNING,
+                    wanted=(SKINNING,),
+                    traded=(SKINNING,),
+                    settled=(SKINNING,),
+                ),
+            ]
+        )
         line = learnaim.report(p)
         self.assertIn("Bork", line)
         self.assertIn(str(SKINNING), line)
         self.assertIn("travel aim", line)
 
     def test_an_aim_never_claims_anybody_learned_anything(self):
-        p = learnaim.plan([
-            row("Grug", learn_skill=TAILORING, wanted=(TAILORING,), leads=True),
-        ])
+        p = learnaim.plan(
+            [
+                row("Grug", learn_skill=TAILORING, wanted=(TAILORING,), leads=True),
+            ]
+        )
         line = learnaim.report(p)
         self.assertIn("Grug", line)
         self.assertIn("Arriving is not learning", line)
@@ -377,15 +474,18 @@ class TheReportSaysWhatHappenedAndWhy(unittest.TestCase):
             self.assertNotIn(lie, line)
 
     def test_a_stranded_follower_is_named_even_though_nothing_was_written(self):
-        p = learnaim.plan([
-            row("Grug", learn_skill=TAILORING, wanted=(TAILORING,), leads=False),
-            row("Grog", leads=True),
-        ])
+        p = learnaim.plan(
+            [
+                row("Grug", learn_skill=TAILORING, wanted=(TAILORING,), leads=False),
+                row("Grog", leads=True),
+            ]
+        )
         self.assertEqual([], learnaim.statements(p))
         self.assertIn("Grug", learnaim.report(p))
 
     def test_silence_is_the_empty_answer(self):
         self.assertEqual("", learnaim.report(learnaim.Plan()))
+
 
 class TheBridgeReallyRunsIt(unittest.TestCase):
     """A pure module with no caller is the failure this one exists to fix,
@@ -400,8 +500,8 @@ class TheBridgeReallyRunsIt(unittest.TestCase):
         cls.source = BRIDGE.read_text(encoding="utf-8", errors="replace")
 
     def _protect_cycle(self):
-        cycle = self.source[self.source.index("async def _protect_characters(self)"):]
-        return cycle[:cycle.index("async def _share_quests_loop")]
+        cycle = self.source[self.source.index("async def _protect_characters(self)") :]
+        return cycle[: cycle.index("async def _share_quests_loop")]
 
     def test_the_bridge_imports_the_module(self):
         self.assertIn("import learnaim", self.source)
@@ -446,26 +546,28 @@ class TheBridgeReallyRunsIt(unittest.TestCase):
     def test_the_borrow_is_the_weakest_claim_on_the_lead(self):
         """An order a person just gave and a trade the family decided both
         outrank an errand mod-overseer wrote for itself."""
-        head = self.source[self.source.index("def _head_now()"):]
-        head = head[:head.index("def _protected_guids")]
-        self.assertLess(head.index("_train_traveller()"),
-                        head.index("_derived_errand_traveller()"))
-        self.assertLess(head.index("_errand_traveller()"),
-                        head.index("_derived_errand_traveller()"))
+        head = self.source[self.source.index("def _head_now()") :]
+        head = head[: head.index("def _protected_guids")]
+        self.assertLess(
+            head.index("_train_traveller()"), head.index("_derived_errand_traveller()")
+        )
+        self.assertLess(
+            head.index("_errand_traveller()"), head.index("_derived_errand_traveller()")
+        )
 
     def test_the_reads_do_not_join_across_the_collation_split(self):
         """overseer_roster is utf8mb4_unicode_ci and overseer_trade is
         utf8mb4_0900_ai_ci. Two reads and a match in Python removes the
         question; a join here would need an explicit COLLATE or raise 1267
         every cycle."""
-        reader = self.source[self.source.index("def _learn_aim_rows()"):]
-        reader = reader[:reader.index("def _derived_errand_traveller()")]
+        reader = self.source[self.source.index("def _learn_aim_rows()") :]
+        reader = reader[: reader.index("def _derived_errand_traveller()")]
         self.assertIn("FROM overseer_trade", reader)
         self.assertIn("FROM overseer_roster", reader)
         # The docstring and the comments say the word "join" while explaining
         # why there is not one, so the assertion is made against the CODE: the
         # body past the docstring, minus every comment line.
-        body = reader[reader.index('"""', reader.index('"""') + 3) + 3:]
+        body = reader[reader.index('"""', reader.index('"""') + 3) + 3 :]
         code = "\n".join(
             line for line in body.split("\n") if not line.strip().startswith("#")
         )
@@ -475,8 +577,10 @@ class TheBridgeReallyRunsIt(unittest.TestCase):
     def test_a_failed_reconcile_does_not_cost_the_rest_of_the_protect_cycle(self):
         """infra#3173's lesson again: this sits in the middle of a cycle that
         still has the spec tabs and the randomize guards to do."""
-        block = self.source[self.source.index("async def _reconcile_learn_aims(self)"):]
-        block = block[:block.index("async def _conjure")]
+        block = self.source[
+            self.source.index("async def _reconcile_learn_aims(self)") :
+        ]
+        block = block[: block.index("async def _conjure")]
         self.assertIn("except Exception:", block)
         self.assertIn("log.exception", block)
 
@@ -490,8 +594,8 @@ class TheBridgeReallyRunsIt(unittest.TestCase):
             ("def _learn_aim_rows()", "def _derived_errand_traveller()"),
             ("def _run_learn_aim_plan(statements)", "def _head_now()"),
         ):
-            block = self.source[self.source.index(signature):]
-            block = block[:block.index(end)]
+            block = self.source[self.source.index(signature) :]
+            block = block[: block.index(end)]
             self.assertIn("(1054, 1146)", block, signature)
 
 

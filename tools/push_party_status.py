@@ -36,6 +36,7 @@ USAGE
 Connection comes from the same environment the bridge uses, so this runs inside
 the cluster or through a port-forward with no second set of settings.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -61,7 +62,8 @@ def compose(url: str, timeout: float = 10.0) -> dict:
     from a request, and there is no scheme but http on this path.
     """
     with urllib.request.urlopen(  # noqa: S310
-            url.rstrip("/") + "/api/party-status", timeout=timeout) as answer:
+        url.rstrip("/") + "/api/party-status", timeout=timeout
+    ) as answer:
         return json.loads(answer.read().decode())
 
 
@@ -100,8 +102,13 @@ def enqueue(rows: list[dict], source: str) -> int:
                     "INSERT INTO overseer_command "
                     "(target_name, command, kind, channel, source) "
                     "VALUES (%s, %s, %s, %s, %s)",
-                    (row["target_name"], row["command"], row["kind"],
-                     row["channel"], source),
+                    (
+                        row["target_name"],
+                        row["command"],
+                        row["kind"],
+                        row["channel"],
+                        source,
+                    ),
                 )
     finally:
         conn.close()
@@ -111,12 +118,20 @@ def enqueue(rows: list[dict], source: str) -> int:
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--url", default=URL, help="map server base URL")
-    ap.add_argument("--every", type=float, default=0,
-                    help="seconds between pushes; 0 means once and stop")
-    ap.add_argument("--dry-run", action="store_true",
-                    help="print the line and write nothing")
-    ap.add_argument("--source", default="party-status",
-                    help="the source column stamped on every row")
+    ap.add_argument(
+        "--every",
+        type=float,
+        default=0,
+        help="seconds between pushes; 0 means once and stop",
+    )
+    ap.add_argument(
+        "--dry-run", action="store_true", help="print the line and write nothing"
+    )
+    ap.add_argument(
+        "--source",
+        default="party-status",
+        help="the source column stamped on every row",
+    )
     args = ap.parse_args()
 
     while True:
@@ -139,8 +154,9 @@ def main() -> int:
         if not args.dry_run:
             wrote = enqueue(payload.get("commands", []), args.source)
             if not wrote:
-                print("nobody to speak: no enabled roster, or no leader",
-                      file=sys.stderr)
+                print(
+                    "nobody to speak: no enabled roster, or no leader", file=sys.stderr
+                )
 
         if not args.every:
             return 0

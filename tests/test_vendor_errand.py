@@ -29,6 +29,7 @@ described today would pass while proving nothing. Every branch below is
 exercised deliberately, including the two the realm has never been in: a drained
 queue at the counter, and a queue that cannot be read at all.
 """
+
 import pathlib
 import re
 import unittest
@@ -74,8 +75,11 @@ def _statements(signature: str) -> str:
     explaining. This codebase argues at length in comments on purpose, so any
     test that COUNTS a call has to read the statements and not the prose.
     """
-    return "\n".join(line for line in _code(signature).splitlines()
-                     if not line.lstrip().startswith("#"))
+    return "\n".join(
+        line
+        for line in _code(signature).splitlines()
+        if not line.lstrip().startswith("#")
+    )
 
 
 class TheStepEndsAnErrandOnlyWhenItsQueueIsQuiet(unittest.TestCase):
@@ -84,8 +88,7 @@ class TheStepEndsAnErrandOnlyWhenItsQueueIsQuiet(unittest.TestCase):
     def test_a_leader_away_from_a_counter_is_aimed(self):
         """The ordinary case, and the only one that existed before."""
         self.assertEqual(
-            bag_pressure.vendor_errand_step(at_counter=False,
-                                            sales_outstanding=4),
+            bag_pressure.vendor_errand_step(at_counter=False, sales_outstanding=4),
             bag_pressure.VENDOR_ERRAND_AIM,
         )
 
@@ -94,8 +97,7 @@ class TheStepEndsAnErrandOnlyWhenItsQueueIsQuiet(unittest.TestCase):
         reach, so an empty queue on the road is what a trip looks like before
         it has started, not after it has finished."""
         self.assertEqual(
-            bag_pressure.vendor_errand_step(at_counter=False,
-                                            sales_outstanding=0),
+            bag_pressure.vendor_errand_step(at_counter=False, sales_outstanding=0),
             bag_pressure.VENDOR_ERRAND_AIM,
         )
 
@@ -103,8 +105,7 @@ class TheStepEndsAnErrandOnlyWhenItsQueueIsQuiet(unittest.TestCase):
         """The live realm's own state on 2026-09-13. The errand is working;
         the answer is to leave it alone, NOT to re-assert it."""
         self.assertEqual(
-            bag_pressure.vendor_errand_step(at_counter=True,
-                                            sales_outstanding=4),
+            bag_pressure.vendor_errand_step(at_counter=True, sales_outstanding=4),
             bag_pressure.VENDOR_ERRAND_HOLD,
         )
 
@@ -112,8 +113,7 @@ class TheStepEndsAnErrandOnlyWhenItsQueueIsQuiet(unittest.TestCase):
         """The state the realm has never reached, and the whole point of the
         change: an errand that has done its work gives the column back."""
         self.assertEqual(
-            bag_pressure.vendor_errand_step(at_counter=True,
-                                            sales_outstanding=0),
+            bag_pressure.vendor_errand_step(at_counter=True, sales_outstanding=0),
             bag_pressure.VENDOR_ERRAND_RELEASE,
         )
 
@@ -121,17 +121,17 @@ class TheStepEndsAnErrandOnlyWhenItsQueueIsQuiet(unittest.TestCase):
         """The leader can arrive before follower sellers; pressure means the
         town trip is not complete until those sellers have had a chance."""
         self.assertEqual(
-            bag_pressure.vendor_errand_step(at_counter=True,
-                                            sales_outstanding=0,
-                                            pressure=True),
+            bag_pressure.vendor_errand_step(
+                at_counter=True, sales_outstanding=0, pressure=True
+            ),
             bag_pressure.VENDOR_ERRAND_HOLD,
         )
 
     def test_pressure_does_not_change_an_errand_still_on_the_road(self):
         self.assertEqual(
-            bag_pressure.vendor_errand_step(at_counter=False,
-                                            sales_outstanding=0,
-                                            pressure=True),
+            bag_pressure.vendor_errand_step(
+                at_counter=False, sales_outstanding=0, pressure=True
+            ),
             bag_pressure.VENDOR_ERRAND_AIM,
         )
 
@@ -141,8 +141,7 @@ class TheStepEndsAnErrandOnlyWhenItsQueueIsQuiet(unittest.TestCase):
         the fail-open direction, and it walks the leader away from rows already
         queued against the counter."""
         self.assertEqual(
-            bag_pressure.vendor_errand_step(at_counter=True,
-                                            sales_outstanding=-1),
+            bag_pressure.vendor_errand_step(at_counter=True, sales_outstanding=-1),
             bag_pressure.VENDOR_ERRAND_HOLD,
         )
 
@@ -159,9 +158,15 @@ class TheStepEndsAnErrandOnlyWhenItsQueueIsQuiet(unittest.TestCase):
     def test_the_three_answers_are_distinct_words(self):
         """They are compared by value at the call site."""
         self.assertEqual(
-            len({bag_pressure.VENDOR_ERRAND_AIM,
-                 bag_pressure.VENDOR_ERRAND_HOLD,
-                 bag_pressure.VENDOR_ERRAND_RELEASE}), 3)
+            len(
+                {
+                    bag_pressure.VENDOR_ERRAND_AIM,
+                    bag_pressure.VENDOR_ERRAND_HOLD,
+                    bag_pressure.VENDOR_ERRAND_RELEASE,
+                }
+            ),
+            3,
+        )
 
 
 class TheBridgeCanActuallyHandTheColumnBack(unittest.TestCase):
@@ -199,7 +204,7 @@ class TheBridgeCanActuallyHandTheColumnBack(unittest.TestCase):
     def test_the_guard_covers_every_economy_errand_and_nothing_else(self):
         """The release is allowed exactly where the write is allowed."""
         src = _source()
-        line = src[src.index("ECONOMY_ERRANDS = ("):]
+        line = src[src.index("ECONOMY_ERRANDS = (") :]
         line = line[: line.index("\n")]
         self.assertIn('"vendor"', line)
         self.assertIn('"banker"', line)
@@ -207,7 +212,6 @@ class TheBridgeCanActuallyHandTheColumnBack(unittest.TestCase):
 
 
 class TheQueueReadIsTheOnlyCompletionSignal(unittest.TestCase):
-
     def _sql(self) -> str:
         """The hoisted query text.
 
@@ -222,7 +226,7 @@ class TheQueueReadIsTheOnlyCompletionSignal(unittest.TestCase):
         start = src.index("_OUTSTANDING_SALES_SQL = (")
         # To the closing paren at column 0, not the first `)` in the text -
         # `COUNT(*)` carries one three words in.
-        return src[start:src.index("\n)", start)]
+        return src[start : src.index("\n)", start)]
 
     def test_only_unanswered_rows_count_as_outstanding(self):
         """`delivered`, `error`, `applied`, `unchanged` and `verifying` are all
@@ -253,7 +257,9 @@ class TheQueueReadIsTheOnlyCompletionSignal(unittest.TestCase):
         OVERSEER_NOTABLE_NAMES. No request, message or item name reaches it."""
         body = _code("    async def _vendor_once(")
         self.assertIn("_protected_guids", body)
-        self.assertIn("_outstanding_sales", _code("    async def _settle_vendor_errand("))
+        self.assertIn(
+            "_outstanding_sales", _code("    async def _settle_vendor_errand(")
+        )
 
     def test_an_unreadable_queue_reports_minus_one_and_not_zero(self):
         """Returning 0 would make a missing table look exactly like a finished
@@ -269,7 +275,6 @@ class TheQueueReadIsTheOnlyCompletionSignal(unittest.TestCase):
 
 
 class ThePassAimsOnceAndReleasesLast(unittest.TestCase):
-
     def _pass(self) -> str:
         """Statements only. This pass argues its reasoning at length in
         comments that name the very functions these tests order, so reading the
@@ -304,8 +309,7 @@ class ThePassAimsOnceAndReleasesLast(unittest.TestCase):
         control-flow bug in a function that had grown past holding in a head.
         `_vendor_once` asks the question once and reads one answer."""
         body = self._pass()
-        self.assertIn("step = await self._settle_vendor_errand(names, leader)",
-                      body)
+        self.assertIn("step = await self._settle_vendor_errand(names, leader)", body)
         self.assertEqual(body.count("_settle_vendor_errand"), 1)
 
     def test_the_settling_releases_nothing_but_this_pass_s_own_errand(self):
@@ -324,8 +328,7 @@ class ThePassAimsOnceAndReleasesLast(unittest.TestCase):
         """Unchanged from before, and for the same reason the bank pass gives:
         a queue written before the walk is a queue of refusals."""
         body = self._pass()
-        self.assertLess(body.index("_claim_town_slot"),
-                        body.index("_insert_sell"))
+        self.assertLess(body.index("_claim_town_slot"), body.index("_insert_sell"))
 
     def test_the_errand_is_settled_above_every_early_return(self):
         """THE ORDERING BUG THIS FILE'S OWN SEQUENCE MODEL CAUGHT. The release
@@ -335,18 +338,22 @@ class ThePassAimsOnceAndReleasesLast(unittest.TestCase):
         is the same cycle `family_town_run_needed` returns False. A family that
         sold everything would have been parked for having succeeded."""
         body = self._pass()
-        self.assertLess(body.index("_settle_vendor_errand"),
-                        body.index("family_town_run_needed"))
-        self.assertLess(body.index("_settle_vendor_errand"),
-                        body.index("self._mid_run("))
-        self.assertLess(body.index("_settle_vendor_errand"),
-                        body.index("if not candidates:"))
+        self.assertLess(
+            body.index("_settle_vendor_errand"), body.index("family_town_run_needed")
+        )
+        self.assertLess(
+            body.index("_settle_vendor_errand"), body.index("self._mid_run(")
+        )
+        self.assertLess(
+            body.index("_settle_vendor_errand"), body.index("if not candidates:")
+        )
 
     def test_ending_an_old_errand_does_not_depend_on_starting_a_new_one(self):
         """Nothing about a quiet bag makes a standing errand less finished."""
         body = self._pass()
-        self.assertLess(body.index("_settle_vendor_errand"),
-                        body.index("family_town_run_needed"))
+        self.assertLess(
+            body.index("_settle_vendor_errand"), body.index("family_town_run_needed")
+        )
 
     def test_the_errand_goes_to_the_family_leader_and_still_only_one(self):
         """infra#3553. Aiming a follower is an update that moves nobody and
@@ -381,10 +388,12 @@ class ThePassAimsOnceAndReleasesLast(unittest.TestCase):
         not. `family_town_run_needed` must still stand between the gates and
         any aim, or the family is walked to town on no pressure at all."""
         body = self._pass()
-        self.assertLess(body.index("family_town_run_needed"),
-                        body.index("_claim_town_slot"))
-        self.assertLess(body.index("family_town_run_needed"),
-                        body.index("_insert_sell"))
+        self.assertLess(
+            body.index("family_town_run_needed"), body.index("_claim_town_slot")
+        )
+        self.assertLess(
+            body.index("family_town_run_needed"), body.index("_insert_sell")
+        )
 
 
 class TheLatchIsActuallyBroken(unittest.TestCase):
@@ -430,8 +439,11 @@ class TheLatchIsActuallyBroken(unittest.TestCase):
                 queue = 0
 
             # THE PASS. Settling the old errand first, above every gate.
-            step = (bag_pressure.vendor_errand_step(at_counter, queue)
-                    if settle else bag_pressure.VENDOR_ERRAND_AIM)
+            step = (
+                bag_pressure.vendor_errand_step(at_counter, queue)
+                if settle
+                else bag_pressure.VENDOR_ERRAND_AIM
+            )
             if settle and step == bag_pressure.VENDOR_ERRAND_RELEASE:
                 column = ""
             # ...then the gates, and only a family with something to sell

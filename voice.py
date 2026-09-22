@@ -7,6 +7,7 @@ gate) - it can never invent a string that reaches the game unchecked. The
 LLM supplies voice and intent; the data it speaks about is handed to it,
 never asked of it.
 """
+
 from __future__ import annotations
 
 import json
@@ -97,10 +98,40 @@ RAW_STARTERS = {v for v in VOCABULARY if " " not in v} | {
     # through the inner voice to be re-guessed by a model. The charset gate
     # below is unchanged and still applies to both.
     "nc",
-    "co", "cast", "castnc", "e", "ue", "equip", "unequip", "talk", "accept",
-    "reward", "release", "revive", "emote", "q", "ll", "c", "s", "b", "bank",
-    "gb", "rtsc", "rti", "focus", "playerbot", "tank", "heal", "dps", "say",
-    "unmount", "formation", "stance", "give", "trainer", "maintenance",
+    "co",
+    "cast",
+    "castnc",
+    "e",
+    "ue",
+    "equip",
+    "unequip",
+    "talk",
+    "accept",
+    "reward",
+    "release",
+    "revive",
+    "emote",
+    "q",
+    "ll",
+    "c",
+    "s",
+    "b",
+    "bank",
+    "gb",
+    "rtsc",
+    "rti",
+    "focus",
+    "playerbot",
+    "tank",
+    "heal",
+    "dps",
+    "say",
+    "unmount",
+    "formation",
+    "stance",
+    "give",
+    "trainer",
+    "maintenance",
 }
 
 
@@ -128,8 +159,16 @@ def is_raw_command(text: str) -> bool:
     return normalised.split()[0] in RAW_STARTERS
 
 
-def build_prompt(*, name: str, level: int, race_name: str, class_name: str,
-                 zone: str, personality: str | None, text: str) -> str:
+def build_prompt(
+    *,
+    name: str,
+    level: int,
+    race_name: str,
+    class_name: str,
+    zone: str,
+    personality: str | None,
+    text: str,
+) -> str:
     """The prompt that asks ONE character what it will do about an order.
 
     `personality` is a block, not a clause, since persona.characterisation
@@ -143,13 +182,13 @@ def build_prompt(*, name: str, level: int, race_name: str, class_name: str,
     return (
         f"You are {name}, a level {level} {race_name} {class_name} standing in "
         f"{zone}, a character in World of Warcraft.\n{persona}"
-        f"The Overseer commands you: \"{text}\"\n\n"
+        f'The Overseer commands you: "{text}"\n\n'
         "Pick the ONE command from this list that best fulfils the order:\n"
         f"{vocab}\n\n"
         "Answer with ONLY a JSON object, no other text:\n"
         '{"command": "<exactly one command from the list, or none>", '
         '"say": "<your reply, in character, one or two short sentences>"}\n'
-        "If no command fits, use \"none\" and refuse in character."
+        'If no command fits, use "none" and refuse in character.'
     )
 
 
@@ -183,6 +222,7 @@ def parse_decision(content: str) -> Decision:
         return Decision(command, say)
     # Parameterized form: a known raw token, then charset-clean arguments.
     if _COMMAND_RE.fullmatch(command) and (
-            command.split()[0] in RAW_STARTERS or _starts_with_multiword(command)):
+        command.split()[0] in RAW_STARTERS or _starts_with_multiword(command)
+    ):
         return Decision(command, say)
     return Decision(None, say)

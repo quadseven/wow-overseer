@@ -162,10 +162,7 @@ def candidates(member: questbook.Member, members) -> tuple:
     """
     mine = set(member.held) | set(member.rewarded)
     others = {
-        qid
-        for other in members
-        if other.name != member.name
-        for qid in other.held
+        qid for other in members if other.name != member.name for qid in other.held
     }
     return tuple(sorted(others - mine))
 
@@ -179,8 +176,9 @@ def _order(member: questbook.Member, ids, catalog) -> tuple:
     kept is questbook's ORDERING, which is the part worth reusing.
     """
     wanted = set(int(i) for i in ids)
-    ordered = [q.id for q in questbook.order_for(member, wanted, catalog)
-               if q.id in wanted]
+    ordered = [
+        q.id for q in questbook.order_for(member, wanted, catalog) if q.id in wanted
+    ]
     # Anything the walk could not place - it should not happen once blockers
     # have already been checked, but a plan that silently loses a grant is
     # worse than one that appends it in id order.
@@ -210,8 +208,9 @@ def plan(members, catalog) -> Plan:
         for quest_id in candidates(taker, members):
             quest = (catalog or {}).get(quest_id)
             if quest is None:
-                refusals.append(Refusal(taker=taker.name, quest_id=quest_id,
-                                        reasons=(UNKNOWN,)))
+                refusals.append(
+                    Refusal(taker=taker.name, quest_id=quest_id, reasons=(UNKNOWN,))
+                )
                 continue
             reasons = []
             if not is_sharable(quest):
@@ -221,9 +220,14 @@ def plan(members, catalog) -> Plan:
             # of it here.
             reasons.extend(questbook.blockers(taker, quest, catalog=catalog))
             if reasons:
-                refusals.append(Refusal(taker=taker.name, quest_id=quest_id,
-                                        title=quest.title,
-                                        reasons=tuple(reasons)))
+                refusals.append(
+                    Refusal(
+                        taker=taker.name,
+                        quest_id=quest_id,
+                        title=quest.title,
+                        reasons=tuple(reasons),
+                    )
+                )
                 continue
             grantable.append(quest_id)
 
@@ -232,13 +236,23 @@ def plan(members, catalog) -> Plan:
         for position, quest_id in enumerate(ordered):
             quest = catalog[quest_id]
             if position >= max(room, 0):
-                refusals.append(Refusal(taker=taker.name, quest_id=quest_id,
-                                        title=quest.title,
-                                        reasons=(LOG_FULL,)))
+                refusals.append(
+                    Refusal(
+                        taker=taker.name,
+                        quest_id=quest_id,
+                        title=quest.title,
+                        reasons=(LOG_FULL,),
+                    )
+                )
                 continue
-            grants.append(Grant(holder=donor(quest_id, members),
-                                taker=taker.name, quest_id=quest_id,
-                                title=quest.title))
+            grants.append(
+                Grant(
+                    holder=donor(quest_id, members),
+                    taker=taker.name,
+                    quest_id=quest_id,
+                    title=quest.title,
+                )
+            )
 
     return Plan(grants=tuple(grants), refusals=tuple(refusals))
 
@@ -256,7 +270,8 @@ def say(result: Plan) -> str:
             tally[reason] = tally.get(reason, 0) + 1
     detail = ", ".join("%s %d" % (r, n) for r, n in sorted(tally.items()))
     return "quest sharing: %d grant(s), %d refused%s" % (
-        len(result.grants), len(result.refusals),
+        len(result.grants),
+        len(result.refusals),
         (" (%s)" % detail) if detail else "",
     )
 
@@ -297,13 +312,15 @@ _GATE_RANK = {reason: rank for rank, reason in enumerate(SHARE_GATES)}
 # log, a prerequisite not yet turned in, "taker already holds it" - the next
 # pass recomputes from live rows and simply stops proposing that one). A
 # reason not in SHARE_GATES at all proves nothing and counts for nothing.
-PERMANENT_REFUSALS = frozenset({
-    "holder cannot share it (not held, or not flagged sharable)",
-    "no such quest",
-    "malformed request",
-    "same character",
-    "taker already turned it in",
-})
+PERMANENT_REFUSALS = frozenset(
+    {
+        "holder cannot share it (not held, or not flagged sharable)",
+        "no such quest",
+        "malformed request",
+        "same character",
+        "taker already turned it in",
+    }
+)
 
 
 def history_depth(base_minutes: int, cap_hours: int) -> int:

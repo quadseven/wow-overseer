@@ -13,6 +13,7 @@ for the reason test_armory.py gives: the files are the feature.
 
 Ticket: infra#3139.
 """
+
 import importlib.util
 import pathlib
 import unittest
@@ -30,42 +31,125 @@ WARRIOR, PRIEST = 1, 5
 # Real rows out of the live world database, verbatim, so the numbers below
 # are the numbers a person would check against the game.
 SCOUTING_BELT = dict(
-    entry=6581, item_name="Scouting Belt", quality=2, item_level=21, required_level=16,
-    max_durability=35, displayid=17127, **{"class": 4}, subclass=2, inventory_type=6,
-    armor=45, block=0, bonding=2, itemset=0, sell_price=422, allowable_class=-1,
-    description="", dmg_min1=0, dmg_max1=0, delay=0,
-    holy_res=0, fire_res=0, nature_res=0, frost_res=0, shadow_res=0, arcane_res=0,
+    entry=6581,
+    item_name="Scouting Belt",
+    quality=2,
+    item_level=21,
+    required_level=16,
+    max_durability=35,
+    displayid=17127,
+    **{"class": 4},
+    subclass=2,
+    inventory_type=6,
+    armor=45,
+    block=0,
+    bonding=2,
+    itemset=0,
+    sell_price=422,
+    allowable_class=-1,
+    description="",
+    dmg_min1=0,
+    dmg_max1=0,
+    delay=0,
+    holy_res=0,
+    fire_res=0,
+    nature_res=0,
+    frost_res=0,
+    shadow_res=0,
+    arcane_res=0,
 )
 DEFIAS_GLOVES = dict(
-    entry=10401, item_name="Blackened Defias Gloves", quality=2, item_level=18,
-    required_level=13, max_durability=30, displayid=27946, **{"class": 4}, subclass=2,
-    inventory_type=10, armor=46, block=0, bonding=2, itemset=161, sell_price=255,
-    allowable_class=-1, description="", dmg_min1=0, dmg_max1=0, delay=0,
-    holy_res=0, fire_res=0, nature_res=0, frost_res=0, shadow_res=0, arcane_res=0,
-    stat_type1=4, stat_value1=3, stat_type2=7, stat_value2=1,
+    entry=10401,
+    item_name="Blackened Defias Gloves",
+    quality=2,
+    item_level=18,
+    required_level=13,
+    max_durability=30,
+    displayid=27946,
+    **{"class": 4},
+    subclass=2,
+    inventory_type=10,
+    armor=46,
+    block=0,
+    bonding=2,
+    itemset=161,
+    sell_price=255,
+    allowable_class=-1,
+    description="",
+    dmg_min1=0,
+    dmg_max1=0,
+    delay=0,
+    holy_res=0,
+    fire_res=0,
+    nature_res=0,
+    frost_res=0,
+    shadow_res=0,
+    arcane_res=0,
+    stat_type1=4,
+    stat_value1=3,
+    stat_type2=7,
+    stat_value2=1,
 )
 IRONPATCH = dict(
-    entry=12976, item_name="Ironpatch Blade", quality=3, item_level=20, required_level=15,
-    max_durability=65, displayid=8272, **{"class": 2}, subclass=7, inventory_type=13,
-    armor=0, block=0, bonding=1, itemset=0, sell_price=1770, allowable_class=-1,
-    description="", dmg_min1=24, dmg_max1=46, delay=2600,
-    holy_res=0, fire_res=0, nature_res=0, frost_res=0, shadow_res=0, arcane_res=0,
-    stat_type1=4, stat_value1=4, stat_type2=7, stat_value2=2,
+    entry=12976,
+    item_name="Ironpatch Blade",
+    quality=3,
+    item_level=20,
+    required_level=15,
+    max_durability=65,
+    displayid=8272,
+    **{"class": 2},
+    subclass=7,
+    inventory_type=13,
+    armor=0,
+    block=0,
+    bonding=1,
+    itemset=0,
+    sell_price=1770,
+    allowable_class=-1,
+    description="",
+    dmg_min1=24,
+    dmg_max1=46,
+    delay=2600,
+    holy_res=0,
+    fire_res=0,
+    nature_res=0,
+    frost_res=0,
+    shadow_res=0,
+    arcane_res=0,
+    stat_type1=4,
+    stat_value1=4,
+    stat_type2=7,
+    stat_value2=2,
     # Sharpened: the permanent enchant in slot 0.
     enchantments="14 0 0 " + "0 0 0 " * 11,
 )
 
 
 def char(**kw):
-    row = {"name": FIRST, "level": 26, "race": 1, "class": WARRIOR, "gender": 0,
-           "online": 1, "activeTalentGroup": 0, "totalKills": 0, "guild": None}
+    row = {
+        "name": FIRST,
+        "level": 26,
+        "race": 1,
+        "class": WARRIOR,
+        "gender": 0,
+        "online": 1,
+        "activeTalentGroup": 0,
+        "totalKills": 0,
+        "guild": None,
+    }
     row.update(kw)
     return row
 
 
 def worn(slot, template, **kw):
-    row = {"name": FIRST, "slot": slot, "durability": 20, "enchantments": None,
-           "random_property_id": 0}
+    row = {
+        "name": FIRST,
+        "slot": slot,
+        "durability": 20,
+        "enchantments": None,
+        "random_property_id": 0,
+    }
     row.update(template)
     row.update(kw)
     return row
@@ -73,8 +157,14 @@ def worn(slot, template, **kw):
 
 def build(equipment=(), **rest):
     rest.setdefault("char_rows", [char()])
-    return armory.build_armory(rest.pop("char_rows"), list(equipment), rest.pop("talent_rows", []),
-                               BOOK, ITEMS, **rest)
+    return armory.build_armory(
+        rest.pop("char_rows"),
+        list(equipment),
+        rest.pop("talent_rows", []),
+        BOOK,
+        ITEMS,
+        **rest,
+    )
 
 
 def member(payload, name=FIRST):
@@ -102,8 +192,12 @@ class TheTooltipTest(unittest.TestCase):
         the family wears is 'of the X', and the X is the whole point."""
         # of the Tiger: enchants 76 (+3 Agility) and 70 (+3 Strength) in the
         # property slots, exactly as item_instance stores them.
-        row = worn(5, SCOUTING_BELT, random_property_id=643,
-                   enchantments="0 0 0 " * 7 + "76 0 0 70 0 0 " + "0 0 0 " * 3)
+        row = worn(
+            5,
+            SCOUTING_BELT,
+            random_property_id=643,
+            enchantments="0 0 0 " * 7 + "76 0 0 70 0 0 " + "0 0 0 " * 3,
+        )
         s = slot_of(member(build([row])), "waist")
         self.assertTrue(s["name"].startswith("Scouting Belt of "), s["name"])
         self.assertEqual(s["tooltip"]["stats"], ["+3 Agility", "+3 Strength"])
@@ -114,8 +208,12 @@ class TheTooltipTest(unittest.TestCase):
         group - the same arithmetic the core does when the item is put on."""
         # Suffix 5 (of the Monkey): enchants 2802 at 6666/10000 and 2803 at
         # 10000/10000, both agility/stamina stats with amount 0.
-        row = worn(5, SCOUTING_BELT, random_property_id=-5,
-                   enchantments="0 0 0 " * 7 + "2802 0 0 2803 0 0 " + "0 0 0 " * 3)
+        row = worn(
+            5,
+            SCOUTING_BELT,
+            random_property_id=-5,
+            enchantments="0 0 0 " * 7 + "2802 0 0 2803 0 0 " + "0 0 0 " * 3,
+        )
         s = slot_of(member(build([row])), "waist")
         self.assertEqual(s["name"], "Scouting Belt of the Monkey")
         # Level 21 uncommon, waist -> group 1 -> 5 points; 6666 * 5 // 10000 = 3,
@@ -125,24 +223,41 @@ class TheTooltipTest(unittest.TestCase):
         self.assertEqual(sorted(s["tooltip"]["stats"]), ["+3 Agility", "+5 Stamina"])
 
     def test_a_set_piece_lists_the_set_and_which_pieces_are_worn(self):
-        set_rows = [{"entry": e, "item_name": n} for e, n in [
-            (10399, "Blackened Defias Armor"), (10400, "Blackened Defias Leggings"),
-            (10401, "Blackened Defias Gloves"), (10402, "Blackened Defias Boots"),
-            (10403, "Blackened Defias Belt")]]
-        t = slot_of(member(build([worn(9, DEFIAS_GLOVES)], set_rows=set_rows)),
-                    "hands")["tooltip"]
+        set_rows = [
+            {"entry": e, "item_name": n}
+            for e, n in [
+                (10399, "Blackened Defias Armor"),
+                (10400, "Blackened Defias Leggings"),
+                (10401, "Blackened Defias Gloves"),
+                (10402, "Blackened Defias Boots"),
+                (10403, "Blackened Defias Belt"),
+            ]
+        ]
+        t = slot_of(
+            member(build([worn(9, DEFIAS_GLOVES)], set_rows=set_rows)), "hands"
+        )["tooltip"]
         self.assertEqual(t["set"]["name"], "Defias Leather")
         self.assertEqual((t["set"]["worn"], t["set"]["total"]), (1, 5))
         self.assertEqual([p["worn"] for p in t["set"]["pieces"]].count(True), 1)
-        self.assertIn("Blackened Defias Leggings", [p["name"] for p in t["set"]["pieces"]])
+        self.assertIn(
+            "Blackened Defias Leggings", [p["name"] for p in t["set"]["pieces"]]
+        )
         first = t["set"]["bonuses"][0]
-        self.assertEqual((first["threshold"], first["active"], first["text"]),
-                         (2, False, "+10 Armor."))
+        self.assertEqual(
+            (first["threshold"], first["active"], first["text"]),
+            (2, False, "+10 Armor."),
+        )
 
     def test_a_set_bonus_lights_up_when_enough_pieces_are_worn(self):
-        belt = dict(DEFIAS_GLOVES, entry=10403, item_name="Blackened Defias Belt",
-                    inventory_type=6)
-        t = slot_of(member(build([worn(9, DEFIAS_GLOVES), worn(5, belt)])), "hands")["tooltip"]
+        belt = dict(
+            DEFIAS_GLOVES,
+            entry=10403,
+            item_name="Blackened Defias Belt",
+            inventory_type=6,
+        )
+        t = slot_of(member(build([worn(9, DEFIAS_GLOVES), worn(5, belt)])), "hands")[
+            "tooltip"
+        ]
         self.assertEqual(t["set"]["worn"], 2)
         self.assertTrue(t["set"]["bonuses"][0]["active"])
         self.assertFalse(t["set"]["bonuses"][1]["active"])
@@ -150,8 +265,10 @@ class TheTooltipTest(unittest.TestCase):
     def test_a_weapon_shows_its_damage_and_speed_and_its_enchant_by_name(self):
         t = slot_of(member(build([worn(15, IRONPATCH)])), "main hand")["tooltip"]
         self.assertEqual((t["slot"], t["kind"]), ("One-Hand", "Sword"))
-        self.assertEqual(t["damage"], {"min": 24, "max": 46, "speed": 2.6,
-                                       "dps": 13.5, "elemental": None})
+        self.assertEqual(
+            t["damage"],
+            {"min": 24, "max": 46, "speed": 2.6, "dps": 13.5, "elemental": None},
+        )
         self.assertEqual(t["stats"], ["+4 Strength", "+2 Stamina"])
         self.assertEqual(t["enchant"], ["Sharpened (+4 Damage)"])
         self.assertEqual(t["binding"], "Binds when picked up")
@@ -171,7 +288,9 @@ class TheTooltipTest(unittest.TestCase):
         row = worn(5, dict(SCOUTING_BELT, stat_type1=32, stat_value1=10))
         t = slot_of(member(build([row])), "waist")["tooltip"]
         self.assertEqual(t["stats"], [])
-        self.assertEqual(t["effects"], ["Equip: Improves critical strike rating by 10."])
+        self.assertEqual(
+            t["effects"], ["Equip: Improves critical strike rating by 10."]
+        )
 
     def test_a_class_restricted_item_names_the_classes(self):
         row = worn(5, dict(SCOUTING_BELT, allowable_class=1 << 4))
@@ -192,13 +311,41 @@ class TheTooltipTest(unittest.TestCase):
         self.assertNotIn("_armor", s)
 
 
-SAVED = {"name": FIRST, "maxhealth": 1200, "maxpower1": 0, "maxpower2": 1000,
-         "maxpower4": 0, "maxpower7": 0, "strength": 90, "agility": 50, "stamina": 100,
-         "intellect": 25, "spirit": 35, "armor": 1500, "blockPct": 5.0, "dodgePct": 6.25,
-         "parryPct": 5.0, "critPct": 7.123456, "rangedCritPct": 4.0, "spellCritPct": 1.0,
-         "attackPower": 250, "rangedAttackPower": 70, "spellPower": 0}
-BASE = {"race": 1, "class": WARRIOR, "level": 26, "health": 296, "mana": 0,
-        "strength": 55, "agility": 40, "stamina": 51, "intellect": 23, "spirit": 28}
+SAVED = {
+    "name": FIRST,
+    "maxhealth": 1200,
+    "maxpower1": 0,
+    "maxpower2": 1000,
+    "maxpower4": 0,
+    "maxpower7": 0,
+    "strength": 90,
+    "agility": 50,
+    "stamina": 100,
+    "intellect": 25,
+    "spirit": 35,
+    "armor": 1500,
+    "blockPct": 5.0,
+    "dodgePct": 6.25,
+    "parryPct": 5.0,
+    "critPct": 7.123456,
+    "rangedCritPct": 4.0,
+    "spellCritPct": 1.0,
+    "attackPower": 250,
+    "rangedAttackPower": 70,
+    "spellPower": 0,
+}
+BASE = {
+    "race": 1,
+    "class": WARRIOR,
+    "level": 26,
+    "health": 296,
+    "mana": 0,
+    "strength": 55,
+    "agility": 40,
+    "stamina": 51,
+    "intellect": 23,
+    "spirit": 28,
+}
 
 
 class TheStatBlockTest(unittest.TestCase):
@@ -211,13 +358,20 @@ class TheStatBlockTest(unittest.TestCase):
         rows = self.rows(stats)
         self.assertEqual(rows["health"]["value"], 1200)
         # Rage is stored x10.
-        self.assertEqual((rows["power"]["label"], rows["power"]["value"]), ("Rage", 100))
+        self.assertEqual(
+            (rows["power"]["label"], rows["power"]["value"]), ("Rage", 100)
+        )
         self.assertEqual(rows["dodge"]["value"], 6.25)
         self.assertEqual(rows["melee_crit"]["value"], 7.12)
         self.assertEqual(rows["attack_power"]["value"], 250)
 
     def test_without_a_save_the_base_stats_are_base_plus_gear(self):
-        belt = worn(5, dict(SCOUTING_BELT, stat_type1=7, stat_value1=6, stat_type2=4, stat_value2=3))
+        belt = worn(
+            5,
+            dict(
+                SCOUTING_BELT, stat_type1=7, stat_value1=6, stat_type2=4, stat_value2=3
+            ),
+        )
         stats = member(build([belt], base_rows=[BASE]))["stats"]
         self.assertEqual(stats["source"], "derived")
         rows = self.rows(stats)
@@ -233,21 +387,34 @@ class TheStatBlockTest(unittest.TestCase):
     def test_a_suffix_counts_toward_the_derived_stats(self):
         """The Tiger's +3 Strength is on the item instance, not the template,
         and a stat block that ignored it would be quietly short."""
-        row = worn(5, SCOUTING_BELT, random_property_id=643,
-                   enchantments="0 0 0 " * 7 + "76 0 0 70 0 0 " + "0 0 0 " * 3)
+        row = worn(
+            5,
+            SCOUTING_BELT,
+            random_property_id=643,
+            enchantments="0 0 0 " * 7 + "76 0 0 70 0 0 " + "0 0 0 " * 3,
+        )
         rows = self.rows(member(build([row], base_rows=[BASE]))["stats"])
         self.assertEqual(rows["strength"]["value"], 58)
         self.assertEqual(rows["agility"]["value"], 43)
 
     def test_what_cannot_be_derived_is_unavailable_not_zero(self):
         rows = self.rows(member(build(base_rows=[BASE]))["stats"])
-        for key in ("block", "dodge", "parry", "melee_crit", "ranged_crit", "spell_crit"):
+        for key in (
+            "block",
+            "dodge",
+            "parry",
+            "melee_crit",
+            "ranged_crit",
+            "spell_crit",
+        ):
             self.assertIsNone(rows[key]["value"], key)
             self.assertEqual(rows[key]["note"], "not saved by the world yet")
 
     def test_a_mana_class_gets_mana_from_intellect(self):
         priest = char(**{"class": PRIEST, "level": 20})
-        base = dict(BASE, **{"class": PRIEST, "level": 20, "mana": 300, "intellect": 40})
+        base = dict(
+            BASE, **{"class": PRIEST, "level": 20, "mana": 300, "intellect": 40}
+        )
         rows = self.rows(member(build(char_rows=[priest], base_rows=[base]))["stats"])
         self.assertEqual(rows["power"]["label"], "Mana")
         self.assertEqual(rows["power"]["value"], 300 + 20 + 20 * 15)
@@ -277,8 +444,7 @@ class TheStatSourceTest(unittest.TestCase):
 
     def test_a_saved_block_labels_every_row_saved(self):
         stats = member(build(stats_rows=[SAVED], base_rows=[BASE]))["stats"]
-        self.assertTrue(all(r["source"] == armory.STAT_SAVED
-                            for r in stats["rows"]))
+        self.assertTrue(all(r["source"] == armory.STAT_SAVED for r in stats["rows"]))
 
     def test_a_derived_block_still_has_rows_that_are_not_derived(self):
         """THE ROW IS NOT THE BLOCK. Dodge and parry cannot be derived at all
@@ -293,13 +459,14 @@ class TheStatSourceTest(unittest.TestCase):
 
     def test_every_row_carries_a_gloss_that_says_what_its_word_means(self):
         """The colour is not a code the reader is asked to crack."""
-        for stats in (member(build(stats_rows=[SAVED], base_rows=[BASE]))["stats"],
-                      member(build([worn(5, SCOUTING_BELT)], base_rows=[BASE]))["stats"],
-                      member(build([worn(5, SCOUTING_BELT)]))["stats"]):
+        for stats in (
+            member(build(stats_rows=[SAVED], base_rows=[BASE]))["stats"],
+            member(build([worn(5, SCOUTING_BELT)], base_rows=[BASE]))["stats"],
+            member(build([worn(5, SCOUTING_BELT)]))["stats"],
+        ):
             self.assertTrue(stats["gloss"])
             for row in stats["rows"]:
-                self.assertEqual(row["gloss"],
-                                 armory.STAT_SOURCE_GLOSS[row["source"]])
+                self.assertEqual(row["gloss"], armory.STAT_SOURCE_GLOSS[row["source"]])
 
     def test_a_missing_stat_prints_the_word_and_can_never_print_zero(self):
         """The page is handed a string precisely so there is no branch left in
@@ -319,7 +486,7 @@ class TheStatSourceTest(unittest.TestCase):
         self.assertEqual(rows["dodge"]["source"], armory.STAT_SAVED)
 
     def test_a_whole_percentage_is_not_printed_with_a_trailing_zero(self):
-        """"4.0% dodge" is a percentage nobody writes that way, and the page
+        """ "4.0% dodge" is a percentage nobody writes that way, and the page
         no longer formats numbers so this is the only place it can be got
         right."""
         saved = dict(SAVED, dodgePct=4.0, critPct=7.5)
@@ -341,12 +508,19 @@ class TheHeaderTest(unittest.TestCase):
 
     def test_the_portrait_is_the_race_gender_and_class_icons(self):
         m = member(build(char_rows=[char(race=7, gender=1, **{"class": PRIEST})]))
-        self.assertEqual(m["portrait"], {"race_icon": "achievement_character_gnome_female",
-                                         "class_icon": "classicon_priest"})
+        self.assertEqual(
+            m["portrait"],
+            {
+                "race_icon": "achievement_character_gnome_female",
+                "class_icon": "classicon_priest",
+            },
+        )
         self.assertEqual(m["gender"], "female")
         self.assertEqual(m["class_colour"], "#ffffff")
 
-    def test_a_race_the_table_does_not_know_has_no_portrait_rather_than_a_wrong_one(self):
+    def test_a_race_the_table_does_not_know_has_no_portrait_rather_than_a_wrong_one(
+        self,
+    ):
         m = member(build(char_rows=[char(race=99)]))
         self.assertIsNone(m["portrait"]["race_icon"])
 
@@ -361,19 +535,25 @@ class TheDollTest(unittest.TestCase):
 
     def test_the_layout_is_sent_with_the_payload(self):
         p = build()
-        self.assertEqual(p["doll"], {"left": armory.DOLL_LEFT, "right": armory.DOLL_RIGHT})
+        self.assertEqual(
+            p["doll"], {"left": armory.DOLL_LEFT, "right": armory.DOLL_RIGHT}
+        )
 
 
 class TheGridTest(unittest.TestCase):
     def test_every_talent_of_the_tree_is_on_the_grid_learned_or_not(self):
-        spec = member(build(talent_rows=[{"name": FIRST, "spell": 12308, "specMask": 1}]))["spec"]
+        spec = member(
+            build(talent_rows=[{"name": FIRST, "spell": 12308, "specMask": 1}])
+        )["spec"]
         protection = spec["trees"][2]
         self.assertEqual(protection["name"], "Protection")
         self.assertEqual(len(protection["talents"]), 1)
         self.assertGreater(len(protection["grid"]), 20)
         puncture = next(t for t in protection["grid"] if t["name"] == "Puncture")
         self.assertEqual((puncture["rank"], puncture["max_rank"]), (1, 3))
-        self.assertTrue(all(t["rank"] == 0 for t in protection["grid"] if t["name"] != "Puncture"))
+        self.assertTrue(
+            all(t["rank"] == 0 for t in protection["grid"] if t["name"] != "Puncture")
+        )
         self.assertEqual((protection["rows"], protection["cols"]), (11, 4))
 
     def test_a_grid_talent_has_a_place_an_icon_and_its_prerequisite(self):
@@ -388,7 +568,9 @@ class TheGridTest(unittest.TestCase):
         ids = {t["id"] for t in arms["grid"]}
         for t in with_req:
             for req_id, req_rank in t["requires"]:
-                self.assertIn(req_id, ids, "an arrow must point at a talent of the same tree")
+                self.assertIn(
+                    req_id, ids, "an arrow must point at a talent of the same tree"
+                )
                 self.assertGreaterEqual(req_rank, 1)
 
     def test_every_tree_has_an_icon(self):
@@ -439,8 +621,14 @@ class TheDescriptionExpanderTest(unittest.TestCase):
     def setUpClass(cls):
         cls.gen = load_generator()
 
-    def row(self, base=(0, 0, 0), sides=(1, 1, 1), amplitude=(0, 0, 0),
-            duration_index=0, proc_chance=0):
+    def row(
+        self,
+        base=(0, 0, 0),
+        sides=(1, 1, 1),
+        amplitude=(0, 0, 0),
+        duration_index=0,
+        proc_chance=0,
+    ):
         r = [0] * 234
         for i, v in enumerate(base):
             r[80 + i] = v & 0xFFFFFFFF
@@ -457,12 +645,16 @@ class TheDescriptionExpanderTest(unittest.TestCase):
 
     def test_a_base_point_is_shown_one_higher_as_the_client_does(self):
         ex = self.expander(**{"1": self.row(base=(19, 0, 0))})
-        self.assertEqual(ex.expand(1, "Increases attack power by $s1."),
-                         "Increases attack power by 20.")
+        self.assertEqual(
+            ex.expand(1, "Increases attack power by $s1."),
+            "Increases attack power by 20.",
+        )
 
     def test_a_negative_effect_is_shown_as_its_size(self):
         ex = self.expander(**{"1": self.row(base=(-11, 0, 0))})
-        self.assertEqual(ex.expand(1, "Reduces threat by $s1%."), "Reduces threat by 10%.")
+        self.assertEqual(
+            ex.expand(1, "Reduces threat by $s1%."), "Reduces threat by 10%."
+        )
 
     def test_die_sides_make_a_range(self):
         ex = self.expander(**{"1": self.row(base=(9, 0, 0), sides=(5, 1, 1))})
@@ -475,7 +667,9 @@ class TheDescriptionExpanderTest(unittest.TestCase):
         self.assertEqual(self.gen.duration_text(3600000), "1 hour")
 
     def test_a_periodic_total_is_ticks_times_tick(self):
-        ex = self.expander(**{"1": self.row(base=(4, 0, 0), amplitude=(3000, 0, 0), duration_index=21)})
+        ex = self.expander(
+            **{"1": self.row(base=(4, 0, 0), amplitude=(3000, 0, 0), duration_index=21)}
+        )
         self.assertEqual(ex.expand(1, "$o1 damage over $d."), "50 damage over 30 sec.")
 
     def test_another_spells_value_can_be_reached(self):
@@ -537,11 +731,24 @@ class TheModelTest(unittest.TestCase):
             self.assertIsNone(armory.viewer_slot(slot, 11))
 
     def test_the_model_carries_the_face_the_character_was_made_with(self):
-        row = char(race=1, gender=1, skin=4, face=2, hairStyle=7, hairColor=3, facialStyle=0)
+        row = char(
+            race=1, gender=1, skin=4, face=2, hairStyle=7, hairColor=3, facialStyle=0
+        )
         model = armory.viewer_model(row, [])
-        self.assertEqual(model, {"race": 1, "gender": 1, "skin": 4, "face": 2,
-                                 "hairStyle": 7, "hairColor": 3, "facialStyle": 0,
-                                 "items": [], "assets": []})
+        self.assertEqual(
+            model,
+            {
+                "race": 1,
+                "gender": 1,
+                "skin": 4,
+                "face": 2,
+                "hairStyle": 7,
+                "hairColor": 3,
+                "facialStyle": 0,
+                "items": [],
+                "assets": [],
+            },
+        )
 
     def test_gender_passes_through_as_the_database_stores_it(self):
         """Viewer model id = race * 2 - 1 + gender, and model 1 is the human
@@ -556,16 +763,20 @@ class TheModelTest(unittest.TestCase):
             self.assertNotIn(key, model)
 
     def test_items_are_the_display_id_at_the_viewers_slot(self):
-        rows = [worn(0, SCOUTING_BELT, displayid=1170, inventory_type=1),
-                worn(4, SCOUTING_BELT, displayid=9575, inventory_type=20),
-                worn(15, IRONPATCH, displayid=20379, inventory_type=17),
-                worn(1, SCOUTING_BELT, displayid=999, inventory_type=2)]
+        rows = [
+            worn(0, SCOUTING_BELT, displayid=1170, inventory_type=1),
+            worn(4, SCOUTING_BELT, displayid=9575, inventory_type=20),
+            worn(15, IRONPATCH, displayid=20379, inventory_type=17),
+            worn(1, SCOUTING_BELT, displayid=999, inventory_type=2),
+        ]
         model = armory.viewer_model(char(), rows)
         self.assertEqual(model["items"], [[1, 1170], [20, 9575], [21, 20379]])
 
     def test_an_item_with_no_display_is_skipped_not_sent_as_zero(self):
-        rows = [worn(0, SCOUTING_BELT, displayid=None, inventory_type=1),
-                worn(2, SCOUTING_BELT, displayid=0)]
+        rows = [
+            worn(0, SCOUTING_BELT, displayid=None, inventory_type=1),
+            worn(2, SCOUTING_BELT, displayid=0),
+        ]
         self.assertEqual(armory.viewer_model(char(), rows)["items"], [])
 
     def test_a_race_the_viewer_has_no_model_for_gets_no_model(self):
@@ -593,15 +804,45 @@ class TheModelTest(unittest.TestCase):
         One worn piece in every drawn doll slot at once, and the whole list
         read back, so a slot that stops being sent fails HERE rather than on
         a screenshot."""
-        kinds = [(0, 1), (2, 3), (3, 4), (4, 5), (5, 6), (6, 7), (7, 8),
-                 (8, 9), (9, 10), (14, 16), (15, 13), (16, 14), (17, 15), (18, 19)]
-        rows = [worn(doll, SCOUTING_BELT, displayid=900 + doll, inventory_type=kind)
-                for doll, kind in kinds]
+        kinds = [
+            (0, 1),
+            (2, 3),
+            (3, 4),
+            (4, 5),
+            (5, 6),
+            (6, 7),
+            (7, 8),
+            (8, 9),
+            (9, 10),
+            (14, 16),
+            (15, 13),
+            (16, 14),
+            (17, 15),
+            (18, 19),
+        ]
+        rows = [
+            worn(doll, SCOUTING_BELT, displayid=900 + doll, inventory_type=kind)
+            for doll, kind in kinds
+        ]
         self.assertEqual(
             armory.viewer_model(char(), rows)["items"],
-            [[1, 900], [3, 902], [4, 903], [5, 904], [6, 905], [7, 906],
-             [8, 907], [9, 908], [10, 909], [16, 914], [21, 915], [22, 916],
-             [15, 917], [19, 918]])
+            [
+                [1, 900],
+                [3, 902],
+                [4, 903],
+                [5, 904],
+                [6, 905],
+                [7, 906],
+                [8, 907],
+                [9, 908],
+                [10, 909],
+                [16, 914],
+                [21, 915],
+                [22, 916],
+                [15, 917],
+                [19, 918],
+            ],
+        )
 
     def test_the_asset_path_is_the_viewers_own_rule_and_not_one_slot_shape(self):
         """Anything worn on the body is filed under its viewer slot; anything
@@ -610,8 +851,9 @@ class TheModelTest(unittest.TestCase):
         the page report a piece as undrawable that the viewer drew perfectly
         well - a false alarm on every weapon in the family."""
         for slot in sorted(armory.VIEWER_BODY_SLOTS):
-            self.assertEqual(armory.viewer_asset(slot, 25796),
-                             f"meta/armor/{slot}/25796.json")
+            self.assertEqual(
+                armory.viewer_asset(slot, 25796), f"meta/armor/{slot}/25796.json"
+            )
         for held in (armory.VIEWER_MAIN_HAND, armory.VIEWER_OFF_HAND, 15, 25, 26):
             self.assertEqual(armory.viewer_asset(held, 8272), "meta/item/8272.json")
 
@@ -619,8 +861,10 @@ class TheModelTest(unittest.TestCase):
         """The two tables are halves of one fact and can drift apart in
         silence: a slot in VIEWER_SLOTS but not here would be asked for at
         the wrong address, and every piece in it reported as missing art."""
-        drawn = set(armory.VIEWER_SLOTS.values()) - {armory.VIEWER_MAIN_HAND,
-                                                     armory.VIEWER_OFF_HAND}
+        drawn = set(armory.VIEWER_SLOTS.values()) - {
+            armory.VIEWER_MAIN_HAND,
+            armory.VIEWER_OFF_HAND,
+        }
         self.assertTrue(drawn <= armory.VIEWER_BODY_SLOTS, drawn)
         self.assertIn(armory.INVENTORY_TYPE_ROBE, armory.VIEWER_BODY_SLOTS)
 
@@ -629,23 +873,32 @@ class TheModelTest(unittest.TestCase):
         says nothing at all, so the page has to ask for the same file itself.
         Both the address and the sentence are written here, because the page
         may not invent either."""
-        rows = [worn(6, SCOUTING_BELT, displayid=25796, inventory_type=7,
-                     item_name="Battleforge Legguards"),
-                worn(15, IRONPATCH, displayid=8272, inventory_type=13)]
+        rows = [
+            worn(
+                6,
+                SCOUTING_BELT,
+                displayid=25796,
+                inventory_type=7,
+                item_name="Battleforge Legguards",
+            ),
+            worn(15, IRONPATCH, displayid=8272, inventory_type=13),
+        ]
         assets = armory.viewer_model(char(), rows)["assets"]
-        self.assertEqual(assets[0], {
-            "slot": "legs",
-            "path": "meta/armor/7/25796.json",
-            "note": "legs - Battleforge Legguards (display 25796)",
-        })
+        self.assertEqual(
+            assets[0],
+            {
+                "slot": "legs",
+                "path": "meta/armor/7/25796.json",
+                "note": "legs - Battleforge Legguards (display 25796)",
+            },
+        )
         self.assertEqual(assets[1]["slot"], "main hand")
         self.assertEqual(assets[1]["path"], "meta/item/8272.json")
 
     def test_a_piece_the_world_cannot_name_still_gets_a_sentence(self):
         """A custom or removed item joins as a NULL name. "undefined (display
         25760)" is the note that teaches a reader to distrust the rest."""
-        row = worn(7, SCOUTING_BELT, displayid=25760, inventory_type=8,
-                   item_name=None)
+        row = worn(7, SCOUTING_BELT, displayid=25760, inventory_type=8, item_name=None)
         note = armory.viewer_model(char(), [row])["assets"][0]["note"]
         self.assertNotIn("None", note)
         self.assertIn("25760", note)
@@ -654,8 +907,10 @@ class TheModelTest(unittest.TestCase):
     def test_a_slot_the_viewer_never_draws_is_never_looked_up(self):
         """A ring has no art to be missing, so it must not appear as a piece
         that failed to draw."""
-        rows = [worn(1, SCOUTING_BELT, displayid=555, inventory_type=2),
-                worn(10, SCOUTING_BELT, displayid=556, inventory_type=11)]
+        rows = [
+            worn(1, SCOUTING_BELT, displayid=555, inventory_type=2),
+            worn(10, SCOUTING_BELT, displayid=556, inventory_type=11),
+        ]
         self.assertEqual(armory.viewer_model(char(), rows)["assets"], [])
 
     def test_the_heading_over_the_undrawn_pieces_is_the_modules(self):
@@ -672,12 +927,18 @@ class TheModelHostNumberingTest(unittest.TestCase):
     is there; these pin the translation that closes it.
     """
 
-    SHIRT = dict(SCOUTING_BELT, entry=53, item_name="Neophyte's Shirt",
-                 displayid=9944, inventory_type=4)
+    SHIRT = dict(
+        SCOUTING_BELT,
+        entry=53,
+        item_name="Neophyte's Shirt",
+        displayid=9944,
+        inventory_type=4,
+    )
 
     def test_a_renumbered_item_is_sent_under_the_model_hosts_number(self):
-        model = armory.viewer_model(char(), [worn(3, self.SHIRT)],
-                                    ITEMS.viewer_displays)
+        model = armory.viewer_model(
+            char(), [worn(3, self.SHIRT)], ITEMS.viewer_displays
+        )
         self.assertEqual(model["items"], [[4, 8370]])
         self.assertEqual(model["assets"][0]["path"], "meta/armor/4/8370.json")
         self.assertIn("(display 8370)", model["assets"][0]["note"])
@@ -694,15 +955,22 @@ class TheModelHostNumberingTest(unittest.TestCase):
 
     def test_the_committed_table_covers_the_pieces_the_operator_saw_missing(self):
         # entry -> the model host's display, each checked against the host.
-        for entry, display in ((53, 8370), (8157, 13028), (9838, 26018),
-                               (11919, 16408), (20640, 15304)):
+        for entry, display in (
+            (53, 8370),
+            (8157, 13028),
+            (9838, 26018),
+            (11919, 16408),
+            (20640, 15304),
+        ):
             self.assertEqual(ITEMS.viewer_displays.get(entry), display, entry)
 
     def test_a_book_built_by_hand_still_constructs_with_no_table(self):
-        self.assertEqual(armory.viewer_display({"entry": 53, "displayid": 9944},
-                                               None), 9944)
-        self.assertIsNone(armory.viewer_display({"entry": 53, "displayid": 0},
-                                                ITEMS.viewer_displays))
+        self.assertEqual(
+            armory.viewer_display({"entry": 53, "displayid": 9944}, None), 9944
+        )
+        self.assertIsNone(
+            armory.viewer_display({"entry": 53, "displayid": 0}, ITEMS.viewer_displays)
+        )
 
 
 class TheDisplayGeneratorTest(unittest.TestCase):
@@ -711,7 +979,8 @@ class TheDisplayGeneratorTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         spec = importlib.util.spec_from_file_location(
-            "gen_viewer_displays", HERE / "tools" / "gen_viewer_displays.py")
+            "gen_viewer_displays", HERE / "tools" / "gen_viewer_displays.py"
+        )
         cls.gen = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(cls.gen)
 
@@ -720,8 +989,10 @@ class TheDisplayGeneratorTest(unittest.TestCase):
             {"ItemID": "53", "ItemAppearanceModifierID": "1", "ItemAppearanceID": "9"},
             {"ItemID": "53", "ItemAppearanceModifierID": "0", "ItemAppearanceID": "7"},
         ]
-        appearances = [{"ID": "7", "ItemDisplayInfoID": "8370"},
-                       {"ID": "9", "ItemDisplayInfoID": "1"}]
+        appearances = [
+            {"ID": "7", "ItemDisplayInfoID": "8370"},
+            {"ID": "9", "ItemDisplayInfoID": "1"},
+        ]
         self.assertEqual(self.gen.base_displays(modified, appearances), {53: 8370})
 
     def test_only_the_items_whose_number_changed_are_kept(self):
@@ -732,19 +1003,37 @@ class TheDisplayGeneratorTest(unittest.TestCase):
 
 def _both_families():
     def ch(name, cls, race, level=60, guild="Cave"):
-        return char(name=name, level=level, race=race, gender=0, guild=guild,
-                    **{"class": cls})
-    rows = [ch("Grug", 1, 1), ch("Ugga", 5, 1), ch("Grog", 2, 3), ch("Bork", 4, 7),
-            ch("Og", 8, 1),
-            ch("Zug", 1, 2, 15, "Bonkers"), ch("Oz", 8, 8, 11, "Bonkers"),
-            ch("Uzza", 5, 8, 11, "Bonkers"), ch("Zork", 11, 6, 11, "Bonkers"),
-            ch("Zrog", 7, 2, 11, "Bonkers")]
+        return char(
+            name=name, level=level, race=race, gender=0, guild=guild, **{"class": cls}
+        )
+
+    rows = [
+        ch("Grug", 1, 1),
+        ch("Ugga", 5, 1),
+        ch("Grog", 2, 3),
+        ch("Bork", 4, 7),
+        ch("Og", 8, 1),
+        ch("Zug", 1, 2, 15, "Bonkers"),
+        ch("Oz", 8, 8, 11, "Bonkers"),
+        ch("Uzza", 5, 8, 11, "Bonkers"),
+        ch("Zork", 11, 6, 11, "Bonkers"),
+        ch("Zrog", 7, 2, 11, "Bonkers"),
+    ]
     # Horde listed FIRST on purpose: the side order is the faction's, not
     # the roster's.
-    families = [("Zug", ["Zug", "Oz", "Uzza", "Zork", "Zrog"]),
-                ("Grug", ["Grug", "Bork", "Grog", "Og", "Ugga"])]
-    return armory.build_armory(rows, [], [], BOOK, ITEMS, families=families,
-                               guild_sizes={"Cave": 71, "Bonkers": 5})
+    families = [
+        ("Zug", ["Zug", "Oz", "Uzza", "Zork", "Zrog"]),
+        ("Grug", ["Grug", "Bork", "Grog", "Og", "Ugga"]),
+    ]
+    return armory.build_armory(
+        rows,
+        [],
+        [],
+        BOOK,
+        ITEMS,
+        families=families,
+        guild_sizes={"Cave": 71, "Bonkers": 5},
+    )
 
 
 class TheTwoFamiliesTest(unittest.TestCase):
@@ -766,7 +1055,9 @@ class TheTwoFamiliesTest(unittest.TestCase):
         self.assertEqual(rows[1], ("healer", "Ugga", "Uzza"))
 
     def test_the_damage_row_matches_a_class_to_its_own_class_first(self):
-        damage = {r["left"]: r["right"] for r in self.p["pairs"] if r["role"] == "damage"}
+        damage = {
+            r["left"]: r["right"] for r in self.p["pairs"] if r["role"] == "damage"
+        }
         self.assertEqual(damage["Og"], "Oz")
         self.assertEqual(set(damage), {"Grog", "Bork", "Og"})
         self.assertEqual(set(damage.values()), {"Oz", "Zork", "Zrog"})
@@ -785,18 +1076,25 @@ class TheTwoFamiliesTest(unittest.TestCase):
     def test_the_role_is_the_class_not_the_tree_being_levelled(self):
         """A warrior levelling Fury still holds the tank seat in a five:
         raidlineup's packing spends the pure tanks first."""
-        members = [{"name": "A", "present": True, "class_id": 2},
-                   {"name": "B", "present": True, "class_id": 1},
-                   {"name": "C", "present": True, "class_id": 11}]
-        self.assertEqual(armory.party_roles(members),
-                         {"B": "tank", "A": "healer", "C": "damage"})
+        members = [
+            {"name": "A", "present": True, "class_id": 2},
+            {"name": "B", "present": True, "class_id": 1},
+            {"name": "C", "present": True, "class_id": 11},
+        ]
+        self.assertEqual(
+            armory.party_roles(members), {"B": "tank", "A": "healer", "C": "damage"}
+        )
 
     def test_a_side_with_nobody_for_a_role_leaves_that_half_empty(self):
         left = [{"name": "A", "party_role": "tank", "class_id": 1}]
         right = [{"name": "B", "party_role": "damage", "class_id": 8}]
-        self.assertEqual(armory.pair_by_role(left, right), [
-            {"role": "tank", "left": "A", "right": None},
-            {"role": "damage", "left": None, "right": "B"}])
+        self.assertEqual(
+            armory.pair_by_role(left, right),
+            [
+                {"role": "tank", "left": "A", "right": None},
+                {"role": "damage", "left": None, "right": "B"},
+            ],
+        )
         self.assertTrue(self.p["no_counterpart"])
 
     def test_one_family_alone_still_draws(self):
@@ -815,13 +1113,24 @@ class TheGuildSectionsTest(unittest.TestCase):
         self.assertIn("71 members", guilds[0]["summary"])
 
     def test_the_guild_list_leaves_out_the_family_and_sorts_by_level(self):
-        rows = [{"name": "Grug", "level": 60, "class": 1, "race": 1, "online": 1},
-                {"name": "Low", "level": 20, "class": 9, "race": 7, "online": 0},
-                {"name": "High", "level": 60, "class": 3, "race": 3, "online": 1,
-                 "worn": 18, "avg_item_level": 58.4}]
+        rows = [
+            {"name": "Grug", "level": 60, "class": 1, "race": 1, "online": 1},
+            {"name": "Low", "level": 20, "class": 9, "race": 7, "online": 0},
+            {
+                "name": "High",
+                "level": 60,
+                "class": 3,
+                "race": 3,
+                "online": 1,
+                "worn": 18,
+                "avg_item_level": 58.4,
+            },
+        ]
         out = armory.guild_roster(rows, exclude=["Grug"])
         self.assertEqual([m["name"] for m in out], ["High", "Low"])
-        self.assertEqual(out[0]["line"], "Level 60 Dwarf Hunter - 18 worn, item level 58")
+        self.assertEqual(
+            out[0]["line"], "Level 60 Dwarf Hunter - 18 worn, item level 58"
+        )
         self.assertEqual(out[1]["presence"], "offline")
 
 

@@ -11,6 +11,7 @@ into behaviour, so the goal supervisor's `grind` - "kill what is in front of
 you" - remained the last instruction anybody gave. They were never being
 stupid. They were obeying.
 """
+
 import pathlib
 import sys
 import re
@@ -32,7 +33,8 @@ class TheSellCommandIsOneThatExists(unittest.TestCase):
             if parts[0] != "sell" or len(parts) < 2:
                 continue
             self.assertIn(
-                parts[1], SELL_ARGS,
+                parts[1],
+                SELL_ARGS,
                 f"'{command}' is not a SellAction argument; it will sell nothing "
                 f"and report success. Valid: {sorted(SELL_ARGS)}",
             )
@@ -49,8 +51,7 @@ class TheSellCommandIsOneThatExists(unittest.TestCase):
 
 
 MODULE = (
-    pathlib.Path(__file__).resolve().parents[1]
-    / "mod-overseer/src/mod_overseer.cpp"
+    pathlib.Path(__file__).resolve().parents[1] / "mod-overseer/src/mod_overseer.cpp"
 )
 
 
@@ -78,7 +79,7 @@ def _function_from(src: str, name: str) -> str:
         elif src[i] == "}":
             depth -= 1
             if depth == 0:
-                return src[start:i + 1]
+                return src[start : i + 1]
     raise AssertionError("%s has no closing brace" % name)
 
 
@@ -86,8 +87,9 @@ def _drive_quests() -> str:
     # mod-overseer#552 split DriveQuests into a census and dispatch plus the
     # per-family body it always had. The drive this file describes is both.
     src = MODULE.read_text(encoding="utf-8")
-    return (_function_from(src, "void DriveQuests()")
-            + _function_from(src, "void DriveFamilyQuests("))
+    return _function_from(src, "void DriveQuests()") + _function_from(
+        src, "void DriveFamilyQuests("
+    )
 
 
 class TheQuestDriverPointsThemAtTheObjective(unittest.TestCase):
@@ -123,8 +125,11 @@ class TheQuestDriverPointsThemAtTheObjective(unittest.TestCase):
         # the gate must carry the leader condition itself.
         gate = body.index("if (!isLead)")
         for m in re.finditer("MAX_QUEST_LOG_SIZE", body[:gate]):
-            self.assertIn("isLead &&", body[max(0, m.start() - 600):m.start()],
-                          "a slot walk before the leader gate is not leader-gated")
+            self.assertIn(
+                "isLead &&",
+                body[max(0, m.start() - 600) : m.start()],
+                "a slot walk before the leader gate is not leader-gated",
+            )
         self.assertIn("MAX_QUEST_LOG_SIZE", body[gate:])
 
     def test_a_character_already_on_a_quest_is_left_alone(self):

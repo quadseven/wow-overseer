@@ -76,6 +76,7 @@ mounts - a neutral goblin town) and node 80 (Ratchet, The Barrens, both).
 Every one was read off the live realm on 2026-09-19 while investigating
 infra#4206.
 """
+
 from __future__ import annotations
 
 import json
@@ -118,16 +119,17 @@ ANCHORS = (
 
 def parse(raw: bytes) -> list:
     """Every TaxiNodes.dbc record, in id order."""
-    magic, records, fields, size, _strings = HEADER.unpack(raw[:HEADER.size])
+    magic, records, fields, size, _strings = HEADER.unpack(raw[: HEADER.size])
     if magic != MAGIC:
         raise SystemExit("not a DBC: magic is %r, not %r" % (magic, MAGIC))
     if fields != FIELDS or size != FIELDS * 4:
         raise SystemExit(
             "TaxiNodes.dbc should be %d fields of 4 bytes; this one is %d "
             "fields of %d bytes, so the layout above no longer describes it"
-            % (FIELDS, fields, size))
+            % (FIELDS, fields, size)
+        )
     body = HEADER.size
-    block = raw[body + records * size:]
+    block = raw[body + records * size :]
 
     def text(offset: int) -> str:
         end = block.index(b"\x00", offset)
@@ -135,19 +137,21 @@ def parse(raw: bytes) -> list:
 
     out = []
     for index in range(records):
-        record = raw[body + index * size:body + (index + 1) * size]
+        record = raw[body + index * size : body + (index + 1) * size]
         values = struct.unpack("<%dI" % fields, record)
-        x, y, z = POSITION.unpack(record[POSITION_AT:POSITION_AT + POSITION.size])
-        out.append({
-            "id": int(values[FIELD_ID]),
-            "map": int(values[FIELD_MAP]),
-            "x": float(x),
-            "y": float(y),
-            "z": float(z),
-            "name": text(values[FIELD_NAME]),
-            "horde": int(values[FIELD_MOUNT_HORDE]),
-            "alliance": int(values[FIELD_MOUNT_ALLIANCE]),
-        })
+        x, y, z = POSITION.unpack(record[POSITION_AT : POSITION_AT + POSITION.size])
+        out.append(
+            {
+                "id": int(values[FIELD_ID]),
+                "map": int(values[FIELD_MAP]),
+                "x": float(x),
+                "y": float(y),
+                "z": float(z),
+                "name": text(values[FIELD_NAME]),
+                "horde": int(values[FIELD_MOUNT_HORDE]),
+                "alliance": int(values[FIELD_MOUNT_ALLIANCE]),
+            }
+        )
     out.sort(key=lambda node: node["id"])
     return out
 
@@ -158,17 +162,17 @@ def check(nodes: list) -> None:
     for node_id, name, map_id, horde, alliance in ANCHORS:
         got = by_id.get(node_id)
         if got is None:
-            raise SystemExit("node %d is missing - this is not TaxiNodes.dbc"
-                             % node_id)
+            raise SystemExit("node %d is missing - this is not TaxiNodes.dbc" % node_id)
         actual = (got["name"], got["map"], got["horde"], got["alliance"])
         if actual != (name, map_id, horde, alliance):
             raise SystemExit(
                 "node %d reads %r and the live realm says %r - the field "
-                "layout has moved" % (node_id, actual,
-                                      (name, map_id, horde, alliance)))
+                "layout has moved" % (node_id, actual, (name, map_id, horde, alliance))
+            )
     if len(nodes) != len(by_id):
-        raise SystemExit("TaxiNodes.dbc has duplicate ids, which the reader "
-                         "below indexes by")
+        raise SystemExit(
+            "TaxiNodes.dbc has duplicate ids, which the reader below indexes by"
+        )
 
 
 def main(argv: list) -> int:

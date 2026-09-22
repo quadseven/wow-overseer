@@ -7,6 +7,7 @@ mod_overseer.cpp side (DriveCraft) is what actually casts the spell and reads
 the reagents back from the character's real bags; this module never touches
 either, which is what these tests hold it to.
 """
+
 import pathlib
 import unittest
 
@@ -53,13 +54,33 @@ import travel
 # The tell is the total: the real field is non-zero for 647 Anvil spells alone.
 MEASURED_FOCUS = {
     # TAILORING
-    2963: 0, 8776: 0, 2964: 0, 3839: 0, 3865: 0, 18401: 0,
+    2963: 0,
+    8776: 0,
+    2964: 0,
+    3839: 0,
+    3865: 0,
+    18401: 0,
     # FIRST AID
     3275: 0,
     # ENGINEERING - eleven Anvils, and infra#3760 is the issue for them
-    3918: 0, 3922: 1, 7430: 1, 3923: 1, 3929: 0, 3931: 0, 3973: 0,
-    3938: 1, 3945: 0, 12585: 0, 12590: 1, 12589: 1, 12591: 1, 12599: 1,
-    12619: 1, 19788: 0, 19791: 1, 19795: 1,
+    3918: 0,
+    3922: 1,
+    7430: 1,
+    3923: 1,
+    3929: 0,
+    3931: 0,
+    3973: 0,
+    3938: 1,
+    3945: 0,
+    12585: 0,
+    12590: 1,
+    12589: 1,
+    12591: 1,
+    12599: 1,
+    12619: 1,
+    19788: 0,
+    19791: 1,
+    19795: 1,
     # MINING - the one focus-gated entry that has a walk (infra#3748)
     2657: 3,
     # ALCHEMY - 3450 and 11467 are the raid-consumable brackets, and their
@@ -68,16 +89,47 @@ MEASURED_FOCUS = {
     # "Alchemy Lab" focus, and on this realm that is FALSE for every flask,
     # elixir and potion. Alchemy Lab is focus 663 and exactly six spells in
     # the whole file want it, all of them Alchemist's Stones.
-    2330: 0, 2337: 0, 3447: 0, 3450: 0, 3173: 0, 7181: 0, 11449: 0, 11450: 0,
-    11457: 0, 11460: 0, 11467: 0, 17553: 0, 17556: 0,
+    2330: 0,
+    2337: 0,
+    3447: 0,
+    3450: 0,
+    3173: 0,
+    7181: 0,
+    11449: 0,
+    11450: 0,
+    11457: 0,
+    11460: 0,
+    11467: 0,
+    17553: 0,
+    17556: 0,
     # BLACKSMITHING - 2665 is gone, see craft.py's COLOUR BANDS block, and
     # 9920 Solid Grinding Stone is gone too, replaced at the same bracket by
     # 9918 Solid Sharpening Stone - see craft.py's RAID CONSUMABLES block
-    2660: 0, 3320: 0, 3326: 0, 3337: 0, 9918: 0, 16641: 0,
+    2660: 0,
+    3320: 0,
+    3326: 0,
+    3337: 0,
+    9918: 0,
+    16641: 0,
     # LEATHERWORKING
-    2881: 0, 2152: 0, 9058: 0, 3756: 0, 3763: 0, 2167: 0, 7135: 0, 20649: 0,
-    3818: 0, 3780: 0, 7151: 0, 7156: 0, 10487: 0, 10507: 0, 10548: 0,
-    10558: 0, 19049: 0, 19082: 0,
+    2881: 0,
+    2152: 0,
+    9058: 0,
+    3756: 0,
+    3763: 0,
+    2167: 0,
+    7135: 0,
+    20649: 0,
+    3818: 0,
+    3780: 0,
+    7151: 0,
+    7156: 0,
+    10487: 0,
+    10507: 0,
+    10548: 0,
+    10558: 0,
+    19049: 0,
+    19082: 0,
 }
 
 # THE SIBLING PROJECTION, FOR THE TWO FIELDS NOTHING CHECKED AT ALL.
@@ -95,35 +147,75 @@ MEASURED_FOCUS = {
 # BANDS block for the list and for why a wrong edge is invisible from outside.
 MEASURED_BANDS = {
     # TAILORING
-    2963: (1, 25, 50), 8776: (1, 50, 85), 2964: (1, 90, 105),
-    3839: (1, 135, 145), 3865: (1, 180, 185), 18401: (1, 255, 260),
+    2963: (1, 25, 50),
+    8776: (1, 50, 85),
+    2964: (1, 90, 105),
+    3839: (1, 135, 145),
+    3865: (1, 180, 185),
+    18401: (1, 255, 260),
     # FIRST AID
     3275: (1, 30, 60),
     # ENGINEERING
-    3918: (1, 20, 40), 3922: (1, 45, 60), 7430: (1, 70, 90),
-    3923: (1, 60, 90), 3929: (1, 85, 95), 3931: (1, 90, 105),
-    3973: (1, 110, 140), 3938: (1, 105, 155), 3945: (1, 125, 145),
-    12585: (1, 175, 195), 12590: (1, 175, 215), 12589: (1, 195, 235),
-    12591: (1, 200, 240), 12599: (1, 215, 255), 12619: (1, 235, 275),
-    19788: (1, 250, 260), 19791: (1, 280, 300), 19795: (1, 295, 315),
+    3918: (1, 20, 40),
+    3922: (1, 45, 60),
+    7430: (1, 70, 90),
+    3923: (1, 60, 90),
+    3929: (1, 85, 95),
+    3931: (1, 90, 105),
+    3973: (1, 110, 140),
+    3938: (1, 105, 155),
+    3945: (1, 125, 145),
+    12585: (1, 175, 195),
+    12590: (1, 175, 215),
+    12589: (1, 195, 235),
+    12591: (1, 200, 240),
+    12599: (1, 215, 255),
+    12619: (1, 235, 275),
+    19788: (1, 250, 260),
+    19791: (1, 280, 300),
+    19795: (1, 295, 315),
     # MINING
     2657: (1, 25, 70),
     # ALCHEMY - 2337's floor of 80 is the twenty-point wall Ugga walked into
-    2330: (1, 55, 95), 2337: (80, 85, 125), 3447: (1, 135, 175),
-    3450: (1, 195, 235), 3173: (1, 145, 185), 7181: (1, 175, 215),
-    11449: (1, 205, 245), 11450: (1, 215, 255), 11457: (1, 230, 270),
-    11460: (1, 245, 285), 11467: (1, 255, 295), 17553: (1, 275, 315),
+    2330: (1, 55, 95),
+    2337: (80, 85, 125),
+    3447: (1, 135, 175),
+    3450: (1, 195, 235),
+    3173: (1, 145, 185),
+    7181: (1, 175, 215),
+    11449: (1, 205, 245),
+    11450: (1, 215, 255),
+    11457: (1, 230, 270),
+    11460: (1, 245, 285),
+    11467: (1, 255, 295),
+    17553: (1, 275, 315),
     17556: (1, 290, 330),
     # BLACKSMITHING
-    2660: (1, 15, 55), 3320: (1, 45, 85), 3326: (1, 75, 100),
-    3337: (1, 125, 150), 9918: (1, 200, 210), 16641: (1, 255, 260),
+    2660: (1, 15, 55),
+    3320: (1, 45, 85),
+    3326: (1, 75, 100),
+    3337: (1, 125, 150),
+    9918: (1, 200, 210),
+    16641: (1, 255, 260),
     # LEATHERWORKING
-    2881: (1, 20, 40), 2152: (1, 30, 60), 9058: (1, 40, 70),
-    3756: (1, 85, 115), 3763: (1, 110, 140), 2167: (100, 125, 150),
-    7135: (1, 140, 165), 20649: (1, 150, 160), 3818: (1, 160, 170),
-    3780: (1, 170, 190), 7151: (1, 195, 215), 7156: (1, 210, 230),
-    10487: (1, 220, 240), 10507: (1, 225, 245), 10548: (1, 250, 270),
-    10558: (1, 255, 275), 19049: (1, 280, 300), 19082: (1, 310, 330),
+    2881: (1, 20, 40),
+    2152: (1, 30, 60),
+    9058: (1, 40, 70),
+    3756: (1, 85, 115),
+    3763: (1, 110, 140),
+    2167: (100, 125, 150),
+    7135: (1, 140, 165),
+    20649: (1, 150, 160),
+    3818: (1, 160, 170),
+    3780: (1, 170, 190),
+    7151: (1, 195, 215),
+    7156: (1, 210, 230),
+    10487: (1, 220, 240),
+    10507: (1, 225, 245),
+    10548: (1, 250, 270),
+    10558: (1, 255, 275),
+    19049: (1, 280, 300),
+    19082: (1, 310, 330),
 }
 
 # The eleven entries that declare a focus nothing in this repo walks to yet.
@@ -132,7 +224,17 @@ MEASURED_BANDS = {
 # the table, infra#3617 for the anvil walk). They are Engineering's whole
 # ladder above Rough Blasting Powder.
 FOCUS_WITHOUT_A_WALK = {
-    3922, 7430, 3923, 3938, 12590, 12589, 12591, 12599, 12619, 19791, 19795,
+    3922,
+    7430,
+    3923,
+    3938,
+    12590,
+    12589,
+    12591,
+    12599,
+    12619,
+    19791,
+    19795,
 }
 
 
@@ -152,7 +254,9 @@ class RecipeForTests(unittest.TestCase):
         recipe = craft.recipe_for(goals.SKILL_IDS["tailoring"], 61)
         self.assertIsNotNone(recipe)
         self.assertEqual(recipe.spell_id, 8776)
-        self.assertEqual(craft.recipe_for(goals.SKILL_IDS["tailoring"], 67).spell_id, 8776)
+        self.assertEqual(
+            craft.recipe_for(goals.SKILL_IDS["tailoring"], 67).spell_id, 8776
+        )
 
     def test_woolen_cloth_bracket_starts_after_linen_belt(self):
         # Woolen Cloth's own min_skill shifted from the guide's 61 to 68 to
@@ -308,8 +412,7 @@ class RecipeForTests(unittest.TestCase):
         leatherworking = goals.SKILL_IDS["leatherworking"]
         for value in range(46, 56):
             with self.subTest(skill_value=value):
-                self.assertEqual(craft.recipe_for(leatherworking, value).spell_id,
-                                 9058)
+                self.assertEqual(craft.recipe_for(leatherworking, value).spell_id, 9058)
         # and it hands off to Embossed Leather Gloves, which is ORANGE from 56
         self.assertEqual(craft.recipe_for(leatherworking, 56).spell_id, 3756)
 
@@ -444,10 +547,11 @@ class ToolRecipeTests(unittest.TestCase):
             for recipe in recipes:
                 if not recipe.repeatable:
                     self.assertEqual(
-                        recipe.min_skill, recipe.max_skill,
+                        recipe.min_skill,
+                        recipe.max_skill,
                         f"{recipe.name} is marked repeatable=False but spans "
                         f"more than one skill point - it would be recast "
-                        f"like a consumable"
+                        f"like a consumable",
                     )
 
     def test_arclight_spanner_is_marked_not_repeatable(self):
@@ -600,7 +704,8 @@ class CraftErrandTests(unittest.TestCase):
         # and at 60 - where this test used to sit - she stays on the recipe
         # she can actually hold, because 2337's learn floor is 80.
         self.assertEqual(
-            craft.craft_errand("Ugga", {"herbalism": 132, "alchemy": 60}), 2330)
+            craft.craft_errand("Ugga", {"herbalism": 132, "alchemy": 60}), 2330
+        )
 
     def test_finds_the_leatherworking_recipe_for_bork(self):
         # Bork: skinning + leatherworking (professions.ROSTER). Skinning is a
@@ -704,7 +809,9 @@ class FirstAidAndCookingTests(unittest.TestCase):
             with self.subTest(value=value):
                 self.assertIsNone(craft.recipe_for(goals.SKILL_IDS["cooking"], value))
 
-    def test_craft_errand_finds_first_aid_for_a_character_assigned_no_primary_with_recipe(self):
+    def test_craft_errand_finds_first_aid_for_a_character_assigned_no_primary_with_recipe(
+        self,
+    ):
         # Grug: assigned mining + blacksmithing (professions.ROSTER), neither
         # of which has a craft.RECIPES entry, so the primary loop finds
         # nothing - but every character, Grug included, already holds First
@@ -784,8 +891,9 @@ class RecipeTableDisciplineTests(unittest.TestCase):
         # typo, not a new profession.
         real_ids = {
             goals.SKILL_IDS[name]
-            for name in (professions.CRAFTING | professions.SECONDARY
-                         | professions.GATHERING)
+            for name in (
+                professions.CRAFTING | professions.SECONDARY | professions.GATHERING
+            )
             if name in goals.SKILL_IDS
         }
         for skill_id in craft.RECIPES:
@@ -799,9 +907,14 @@ class RecipeTableDisciplineTests(unittest.TestCase):
         would be the key rule being read as "any profession may have recipes"
         rather than as the one deliberate addition it is."""
         gathering_keys = {
-            skill_id for skill_id in craft.RECIPES
-            if skill_id in {goals.SKILL_IDS[n] for n in professions.GATHERING
-                            if n in goals.SKILL_IDS}
+            skill_id
+            for skill_id in craft.RECIPES
+            if skill_id
+            in {
+                goals.SKILL_IDS[n]
+                for n in professions.GATHERING
+                if n in goals.SKILL_IDS
+            }
         }
         self.assertEqual(gathering_keys, {goals.SKILL_IDS["mining"]})
 
@@ -815,6 +928,7 @@ class RecipeTableDisciplineTests(unittest.TestCase):
 class TheModeConstant(unittest.TestCase):
     def test_it_matches_the_vocabulary(self):
         import jobs
+
         self.assertEqual(craft.MODE, "craft")
         self.assertIn(craft.MODE, jobs.MODES)
         self.assertIn(craft.MODE, jobs.IMPLEMENTED)
@@ -847,6 +961,7 @@ class NoForecastOfTheWorldserversAnswer(unittest.TestCase):
 
     def test_the_module_records_why(self):
         import inspect
+
         source = inspect.getsource(craft)
         self.assertIn("3695", source)
         self.assertIn("_SaveSpells", source)
@@ -892,28 +1007,33 @@ class SpellFocusTests(unittest.TestCase):
             for recipe in recipes:
                 with self.subTest(skill=skill_id, recipe=recipe.name):
                     self.assertIn(
-                        recipe.spell_id, MEASURED_FOCUS,
+                        recipe.spell_id,
+                        MEASURED_FOCUS,
                         f"{recipe.name} (spell {recipe.spell_id}) is in "
                         "RECIPES with no measured RequiresSpellFocus. Pull "
                         "Spell.dbc from the worldserver pod and run "
                         "tools/spell_focus_from_dbc.py - a recipe whose focus "
                         "nobody looked up is how eleven Engineering brackets "
-                        "sat refused for their whole life (infra#3760).")
+                        "sat refused for their whole life (infra#3760).",
+                    )
                     self.assertEqual(
-                        recipe.focus, MEASURED_FOCUS[recipe.spell_id],
+                        recipe.focus,
+                        MEASURED_FOCUS[recipe.spell_id],
                         f"{recipe.name} (spell {recipe.spell_id}) declares "
                         f"focus={recipe.focus} and the worldserver's own "
                         f"Spell.dbc says {MEASURED_FOCUS[recipe.spell_id]}. "
                         "The declaration is what `craft.focus_for` hands the "
                         "forge pass, so a wrong one either sends nobody to a "
-                        "focus they need or sends them to the wrong object.")
+                        "focus they need or sends them to the wrong object.",
+                    )
 
     def test_the_measured_table_has_no_entries_for_recipes_that_are_gone(self):
         """A projection that outlives its subject is a projection nobody is
         reading. Kept exactly in step so the assertion above cannot be
         satisfied by a stale row."""
-        named = {recipe.spell_id
-                 for recipes in craft.RECIPES.values() for recipe in recipes}
+        named = {
+            recipe.spell_id for recipes in craft.RECIPES.values() for recipe in recipes
+        }
         self.assertEqual(set(MEASURED_FOCUS), named)
 
     def test_a_focus_gated_recipe_without_a_walk_is_a_named_counted_debt(self):
@@ -924,35 +1044,40 @@ class SpellFocusTests(unittest.TestCase):
         those eleven, so a twelfth cannot be added without a walk."""
         stranded = {
             recipe.spell_id
-            for recipes in craft.RECIPES.values() for recipe in recipes
+            for recipes in craft.RECIPES.values()
+            for recipe in recipes
             if recipe.focus and recipe.focus not in craft.FOCUS_AIMS
         }
         self.assertEqual(
-            stranded, FOCUS_WITHOUT_A_WALK,
+            stranded,
+            FOCUS_WITHOUT_A_WALK,
             "a recipe declaring a focus nothing walks to sits refused on every "
             "poll for ever, logged by DriveCraft as a bare SpellCastResult "
             "that reads like a cooldown. Land the aim and add the focus id to "
-            "craft.FOCUS_AIMS in the same change.")
+            "craft.FOCUS_AIMS in the same change.",
+        )
 
     def test_the_stranded_ones_are_all_the_anvil_and_all_engineering(self):
         """Says what the debt IS, so the number above is not just a number:
         one focus object, one profession, one issue."""
         stranded = {
             recipe.spell_id: recipe.focus
-            for recipes in craft.RECIPES.values() for recipe in recipes
+            for recipes in craft.RECIPES.values()
+            for recipe in recipes
             if recipe.focus and recipe.focus not in craft.FOCUS_AIMS
         }
-        self.assertEqual(set(stranded.values()), {1})   # Anvil, and only Anvil
-        engineering = {r.spell_id
-                       for r in craft.RECIPES[goals.SKILL_IDS["engineering"]]}
+        self.assertEqual(set(stranded.values()), {1})  # Anvil, and only Anvil
+        engineering = {
+            r.spell_id for r in craft.RECIPES[goals.SKILL_IDS["engineering"]]
+        }
         self.assertLessEqual(set(stranded), engineering)
 
     def test_an_anvil_gated_recipe_is_still_refused(self):
         """infra#3617's half stays fenced. Anvil is focus 1 and there is no
         anvil walk, so widening the rule above for the forge must not have
         quietly admitted every other focus object too."""
-        self.assertNotIn(1, craft.FOCUS_AIMS)   # Anvil
-        self.assertNotIn(2, craft.FOCUS_AIMS)   # Loom
+        self.assertNotIn(1, craft.FOCUS_AIMS)  # Anvil
+        self.assertNotIn(2, craft.FOCUS_AIMS)  # Loom
 
     def test_the_forge_aim_is_not_merely_claimed(self):
         # FOCUS_AIMS says something walks to focus 3. These are the two halves
@@ -976,10 +1101,16 @@ class SpellFocusTests(unittest.TestCase):
         is where that is caught. 2659 is Smelt Bronze, NOT Smelt Copper as
         infra#3738 states; Smelt Copper is 2657."""
         smelt_spells = {
-            2657: "Smelt Copper", 2658: "Smelt Silver", 2659: "Smelt Bronze",
-            3304: "Smelt Tin", 3307: "Smelt Iron", 3308: "Smelt Gold",
-            3569: "Smelt Steel", 10097: "Smelt Mithril",
-            10098: "Smelt Truesilver", 16153: "Smelt Thorium",
+            2657: "Smelt Copper",
+            2658: "Smelt Silver",
+            2659: "Smelt Bronze",
+            3304: "Smelt Tin",
+            3307: "Smelt Iron",
+            3308: "Smelt Gold",
+            3569: "Smelt Steel",
+            10097: "Smelt Mithril",
+            10098: "Smelt Truesilver",
+            16153: "Smelt Thorium",
         }
         for skill_id, recipes in craft.RECIPES.items():
             for recipe in recipes:
@@ -987,15 +1118,19 @@ class SpellFocusTests(unittest.TestCase):
                     continue
                 with self.subTest(recipe=recipe.name):
                     self.assertEqual(
-                        skill_id, goals.SKILL_IDS["mining"],
+                        skill_id,
+                        goals.SKILL_IDS["mining"],
                         "%s is a Mining ability (SkillLineAbility.dbc skill "
                         "line 186) and cannot be cast off any other skill"
-                        % recipe.name)
+                        % recipe.name,
+                    )
                     self.assertEqual(
-                        recipe.focus, 3,
+                        recipe.focus,
+                        3,
                         "%s carries RequiresSpellFocus = 3 (Forge) in "
                         "Spell.dbc; declaring anything else here would skip "
-                        "the walk" % recipe.name)
+                        "the walk" % recipe.name,
+                    )
 
     def test_the_trainer_taught_smelts_are_deliberately_absent(self):
         """Only Smelt Copper is `AcquireMethod = 1` - granted with Apprentice
@@ -1005,8 +1140,9 @@ class SpellFocusTests(unittest.TestCase):
         recipe ... a planner bug" WARN. Bronze and Steel are absent for a
         different reason again: both consume two smelted bars and a character
         holds one craft_spell, so neither can ever be stocked."""
-        named = {recipe.spell_id
-                 for recipes in craft.RECIPES.values() for recipe in recipes}
+        named = {
+            recipe.spell_id for recipes in craft.RECIPES.values() for recipe in recipes
+        }
         for spell in (2658, 2659, 3304, 3307, 3308, 3569, 10097, 10098, 16153):
             with self.subTest(spell=spell):
                 self.assertNotIn(spell, named)
@@ -1038,7 +1174,7 @@ class SpellFocusTests(unittest.TestCase):
 
     def test_focus_for_reads_the_table_so_callers_do_not(self):
         self.assertEqual(craft.focus_for(2657), 3)
-        self.assertEqual(craft.focus_for(2660), 0)   # Rough Sharpening Stone
+        self.assertEqual(craft.focus_for(2660), 0)  # Rough Sharpening Stone
         self.assertEqual(craft.focus_for(0), 0)
         self.assertEqual(craft.focus_for(999999), 0)  # a spell this table lost
 
@@ -1069,21 +1205,28 @@ class SpellFocusTests(unittest.TestCase):
         this test is what says no to it.
         """
         fire_spells = {
-            2538: "Charred Wolf Meat", 2540: "Roasted Boar Meat",
-            3370: "Crocolisk Steak", 3371: "Blood Sausage",
-            3372: "Murloc Fin Soup", 3373: "Crocolisk Gumbo",
-            3376: "Curiously Tasty Omelet", 3377: "Gooey Spider Cake",
-            3397: "Big Bear Steak", 3398: "Hot Lion Chops",
-            6412: "Kaldorei Spider Kabob", 6413: "Scorpid Surprise",
-            6414: "Roasted Kodo Meat", 6415: "Fillet of Frenzy",
-            6416: "Strider Stew", 6417: "Dig Rat Stew",
-            7751: "Brilliant Smallfish", 7752: "Slitherskin Mackerel",
+            2538: "Charred Wolf Meat",
+            2540: "Roasted Boar Meat",
+            3370: "Crocolisk Steak",
+            3371: "Blood Sausage",
+            3372: "Murloc Fin Soup",
+            3373: "Crocolisk Gumbo",
+            3376: "Curiously Tasty Omelet",
+            3377: "Gooey Spider Cake",
+            3397: "Big Bear Steak",
+            3398: "Hot Lion Chops",
+            6412: "Kaldorei Spider Kabob",
+            6413: "Scorpid Surprise",
+            6414: "Roasted Kodo Meat",
+            6415: "Fillet of Frenzy",
+            6416: "Strider Stew",
+            6417: "Dig Rat Stew",
+            7751: "Brilliant Smallfish",
+            7752: "Slitherskin Mackerel",
             37836: "Spice Bread",
         }
         named = {
-            recipe.spell_id
-            for recipes in craft.RECIPES.values()
-            for recipe in recipes
+            recipe.spell_id for recipes in craft.RECIPES.values() for recipe in recipes
         }
         clash = named & set(fire_spells)
         self.assertFalse(
@@ -1092,8 +1235,8 @@ class SpellFocusTests(unittest.TestCase):
             "(RequiresSpellFocus = 4, SpellFocusObject.dbc id 4). Nothing in "
             "this system lights one. See craft.py's COOKING comment for the "
             "single cast (spell 818, gameobject 29784, ten-yard radius) that "
-            "would." % sorted(
-                "%d (%s)" % (spell, fire_spells[spell]) for spell in clash),
+            "would."
+            % sorted("%d (%s)" % (spell, fire_spells[spell]) for spell in clash),
         )
 
     def test_the_module_records_the_forge_finding(self):
@@ -1101,6 +1244,7 @@ class SpellFocusTests(unittest.TestCase):
         # infra#3747 and infra#3748, and the reason none of it will be
         # re-litigated from a wiki.
         import inspect
+
         source = inspect.getsource(craft)
         self.assertIn("3738", source)
         self.assertIn("3748", source)
@@ -1117,6 +1261,7 @@ class SpellFocusTests(unittest.TestCase):
         # expensive part of infra#3614, and it is what stops the next reader
         # concluding that Cooking is merely missing a bracket.
         import inspect
+
         source = inspect.getsource(craft)
         self.assertIn("818", source)
         self.assertIn("29784", source)
@@ -1146,11 +1291,18 @@ class ColourBandTests(unittest.TestCase):
                 _req, _yellow, grey = MEASURED_BANDS[recipe.spell_id]
                 with self.subTest(skill=skill_id, recipe=recipe.name):
                     self.assertLess(
-                        recipe.max_skill, grey,
+                        recipe.max_skill,
+                        grey,
                         "%s (spell %d) runs to %d against a grey value of %d - "
                         "the last %d point(s) of that bracket cast for nothing"
-                        % (recipe.name, recipe.spell_id, recipe.max_skill, grey,
-                           recipe.max_skill - grey + 1))
+                        % (
+                            recipe.name,
+                            recipe.spell_id,
+                            recipe.max_skill,
+                            grey,
+                            recipe.max_skill - grey + 1,
+                        ),
+                    )
 
     def test_no_bracket_starts_below_its_own_learn_floor(self):
         """THE LOUD HALF, which was still missed for a year. Below
@@ -1163,17 +1315,20 @@ class ColourBandTests(unittest.TestCase):
                 req, _yellow, _grey = MEASURED_BANDS[recipe.spell_id]
                 with self.subTest(skill=skill_id, recipe=recipe.name):
                     self.assertGreaterEqual(
-                        recipe.min_skill, req,
+                        recipe.min_skill,
+                        req,
                         "%s (spell %d) starts at %d but cannot be learned "
-                        "until %d" % (recipe.name, recipe.spell_id,
-                                      recipe.min_skill, req))
+                        "until %d"
+                        % (recipe.name, recipe.spell_id, recipe.min_skill, req),
+                    )
 
     def test_the_projection_is_kept_exactly_in_step_with_the_table(self):
         """Same rule as MEASURED_FOCUS: a projection that outlives its subject
         is one nobody is reading, and a missing row would make both assertions
         above raise KeyError rather than fail with a sentence."""
-        named = {recipe.spell_id
-                 for recipes in craft.RECIPES.values() for recipe in recipes}
+        named = {
+            recipe.spell_id for recipes in craft.RECIPES.values() for recipe in recipes
+        }
         self.assertEqual(set(MEASURED_BANDS), named)
 
     def test_the_generator_exists_and_asserts_its_anchors(self):
@@ -1181,8 +1336,11 @@ class ColourBandTests(unittest.TestCase):
         file cannot re-derive it (CI has no cluster and Spell.dbc is 48MB).
         So pin that the tool is present and still anchored - a generator that
         stopped checking 2963/2657/3275 could emit plausible nonsense."""
-        tool = (pathlib.Path(__file__).resolve().parents[1]
-                / "tools" / "spell_bands_from_dbc.py")
+        tool = (
+            pathlib.Path(__file__).resolve().parents[1]
+            / "tools"
+            / "spell_bands_from_dbc.py"
+        )
         self.assertTrue(tool.exists(), "tools/spell_bands_from_dbc.py is gone")
         source = tool.read_text(encoding="utf-8", errors="replace")
         for anchor in ("2963", "2657", "3275", "3276"):
@@ -1195,6 +1353,7 @@ class ColourBandTests(unittest.TestCase):
         """The expensive part of this pass is the measurement, not the ten
         edits, and craft.py is where the next reader will look."""
         import inspect
+
         source = inspect.getsource(craft)
         self.assertIn("TrivialSkillLineRankHigh", source)
         self.assertIn("MinSkillLineRank", source)

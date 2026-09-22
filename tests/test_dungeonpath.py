@@ -6,6 +6,7 @@ level order for each family, Alliance and Horde both, with upgrades riding
 along and never deciding the order, and an honest mark on every step the
 overseer cannot run yet.
 """
+
 import pathlib
 import unittest
 
@@ -20,11 +21,19 @@ HERE = pathlib.Path(__file__).resolve().parent.parent
 def card(map_id, gainers=(), total=0, name=None, members=None):
     """A dungeonplan card with only the keys the path reads."""
     gainers = list(gainers)
-    return {"map_id": map_id, "name": name or "map %d" % map_id,
-            "gainers": gainers, "total": total,
-            "line": ("all %d would gain something" % len(gainers)
-                     if gainers else "nothing in here beats what is already worn"),
-            "members": members or [], "chips": []}
+    return {
+        "map_id": map_id,
+        "name": name or "map %d" % map_id,
+        "gainers": gainers,
+        "total": total,
+        "line": (
+            "all %d would gain something" % len(gainers)
+            if gainers
+            else "nothing in here beats what is already worn"
+        ),
+        "members": members or [],
+        "chips": [],
+    }
 
 
 def plan(*cards):
@@ -33,15 +42,29 @@ def plan(*cards):
 
 FIVE_AT_60 = [{"name": n, "level": 60} for n in ("A", "B", "C", "D", "E")]
 HORDE_LOW = [{"name": "Z", "level": 15}] + [
-    {"name": n, "level": 11} for n in ("O", "U", "K", "R")]
+    {"name": n, "level": 11} for n in ("O", "U", "K", "R")
+]
 PORTALS = dungeonpath.portals_by_map()
 
 
-def build(members=FIVE_AT_60, faction=dungeonpath.ALLIANCE, the_plan=None,
-          guild="", guild_counts=None, runs=()):
+def build(
+    members=FIVE_AT_60,
+    faction=dungeonpath.ALLIANCE,
+    the_plan=None,
+    guild="",
+    guild_counts=None,
+    runs=(),
+):
     return dungeonpath.build_family_path(
-        "A", faction, members, the_plan or plan(), guild, guild_counts or {},
-        list(runs), PORTALS)
+        "A",
+        faction,
+        members,
+        the_plan or plan(),
+        guild,
+        guild_counts or {},
+        list(runs),
+        PORTALS,
+    )
 
 
 def step(path, map_id):
@@ -80,8 +103,12 @@ class ThePathIsInLevelOrder(unittest.TestCase):
 
     def test_upgrades_do_not_change_the_order(self):
         quiet = [s["map_id"] for s in whole(build())]
-        loud = [s["map_id"] for s in whole(build(
-            the_plan=plan(card(329, "ABCDE", 500), card(531, "ABCDE", 900))))]
+        loud = [
+            s["map_id"]
+            for s in whole(
+                build(the_plan=plan(card(329, "ABCDE", 500), card(531, "ABCDE", 900)))
+            )
+        ]
         self.assertEqual(quiet, loud)
 
 
@@ -100,8 +127,11 @@ class WhereTheFamilyStands(unittest.TestCase):
 
     def test_with_nothing_to_gain_next_is_the_first_step_in_range(self):
         path = build()
-        first_live = next(s for s in path["steps"]
-                          if s["state"] in (dungeonpath.NOW, dungeonpath.NEXT))
+        first_live = next(
+            s
+            for s in path["steps"]
+            if s["state"] in (dungeonpath.NOW, dungeonpath.NEXT)
+        )
         self.assertEqual(first_live["state"], dungeonpath.NEXT)
 
     def test_a_low_family_is_told_the_level_it_needs(self):
@@ -122,12 +152,16 @@ class WhereTheFamilyStands(unittest.TestCase):
 class TheOutgrownStepsFoldAway(unittest.TestCase):
     def test_a_level_60_family_opens_on_the_first_step_in_range(self):
         path = build()
-        self.assertTrue(all(s["state"] in (dungeonpath.BEHIND, dungeonpath.OFF)
-                            for s in path["behind"]))
-        self.assertNotIn(path["steps"][0]["state"],
-                         (dungeonpath.BEHIND, dungeonpath.OFF))
-        self.assertIn("%d steps behind them" % len(path["behind"]),
-                      path["behind_line"])
+        self.assertTrue(
+            all(
+                s["state"] in (dungeonpath.BEHIND, dungeonpath.OFF)
+                for s in path["behind"]
+            )
+        )
+        self.assertNotIn(
+            path["steps"][0]["state"], (dungeonpath.BEHIND, dungeonpath.OFF)
+        )
+        self.assertIn("%d steps behind them" % len(path["behind"]), path["behind_line"])
 
     def test_a_low_family_has_nothing_folded(self):
         path = build(members=HORDE_LOW, faction=dungeonpath.HORDE)
@@ -152,10 +186,12 @@ class BothFactions(unittest.TestCase):
         self.assertIn("Orgrimmar", step(path, 389)["state_line"])
 
     def test_the_faction_comes_from_the_races(self):
-        self.assertEqual(dungeonpath.faction_of([1, 3, 4], {1, 3, 4}, {2, 5}),
-                         dungeonpath.ALLIANCE)
-        self.assertEqual(dungeonpath.faction_of([2, 5, 1], {1}, {2, 5}),
-                         dungeonpath.HORDE)
+        self.assertEqual(
+            dungeonpath.faction_of([1, 3, 4], {1, 3, 4}, {2, 5}), dungeonpath.ALLIANCE
+        )
+        self.assertEqual(
+            dungeonpath.faction_of([2, 5, 1], {1}, {2, 5}), dungeonpath.HORDE
+        )
         self.assertEqual(dungeonpath.faction_of([], {1}, {2}), "")
 
     def test_the_headline_names_every_family(self):
@@ -182,13 +218,18 @@ class WhatTheOverseerCanRun(unittest.TestCase):
         brd = step(build(), 230)
         self.assertFalse(brd["overseer"]["can"])
         self.assertIn("cannot run this one yet", brd["overseer"]["line"])
-        self.assertIn({"text": "overseer cannot run it yet", "tone": "no"},
-                      brd["chips"])
+        self.assertIn(
+            {"text": "overseer cannot run it yet", "tone": "no"}, brd["chips"]
+        )
 
     def test_scarlet_names_all_four_wings(self):
         line = step(build(), 189)["overseer"]["line"]
-        for wing in ("scarlet", "scarlet-library", "scarlet-armory",
-                     "scarlet-cathedral"):
+        for wing in (
+            "scarlet",
+            "scarlet-library",
+            "scarlet-armory",
+            "scarlet-cathedral",
+        ):
             self.assertIn(wing, line)
 
     def test_the_page_line_counts_dungeons_not_portals(self):
@@ -199,21 +240,29 @@ class WhatTheOverseerCanRun(unittest.TestCase):
 
 class RunsAndUpgrades(unittest.TestCase):
     def test_runs_are_counted_and_only_complete_is_a_clear(self):
-        runs = [{"map_id": 43, "outcome": "complete"},
-                {"map_id": 43, "outcome": "emptied"},
-                {"map_id": 43, "outcome": ""}]
-        self.assertEqual(step(build(runs=runs), 43)["runs_line"],
-                         "This family has started 3 runs here and cleared it once.")
-        self.assertEqual(step(build(), 43)["runs_line"],
-                         "This family has never started a run here.")
+        runs = [
+            {"map_id": 43, "outcome": "complete"},
+            {"map_id": 43, "outcome": "emptied"},
+            {"map_id": 43, "outcome": ""},
+        ]
+        self.assertEqual(
+            step(build(runs=runs), 43)["runs_line"],
+            "This family has started 3 runs here and cleared it once.",
+        )
+        self.assertEqual(
+            step(build(), 43)["runs_line"], "This family has never started a run here."
+        )
 
     def test_the_guild_count_is_on_the_step_and_in_the_summary(self):
         counts = {230: {"gainers": ["A", "X", "Y"], "of": 71, "pieces": 90}}
         path = build(guild="Cave", guild_counts=counts)
-        self.assertEqual(step(path, 230)["guild_line"],
-                         "The guild Cave: 3 of 71 members would gain something here.")
-        self.assertIn({"text": "Cave: 3 of 71 gain", "tone": "up"},
-                      step(path, 230)["chips"])
+        self.assertEqual(
+            step(path, 230)["guild_line"],
+            "The guild Cave: 3 of 71 members would gain something here.",
+        )
+        self.assertIn(
+            {"text": "Cave: 3 of 71 gain", "tone": "up"}, step(path, 230)["chips"]
+        )
         self.assertIn("map 230 (3)", path["guild_upgrades"])
 
     def test_no_guild_says_nothing_about_a_guild(self):
@@ -222,13 +271,21 @@ class RunsAndUpgrades(unittest.TestCase):
         self.assertIn("in no guild", path["who_line"])
 
     def test_each_member_keeps_the_best_piece_per_slot(self):
-        found = {"who": "A", "gains": [
-            {"slot": "chest", "name": "x"}, {"slot": "chest", "name": "y"},
-            {"slot": "head", "name": "z"}], "line": "", "delta_note": ""}
+        found = {
+            "who": "A",
+            "gains": [
+                {"slot": "chest", "name": "x"},
+                {"slot": "chest", "name": "y"},
+                {"slot": "head", "name": "z"},
+            ],
+            "line": "",
+            "delta_note": "",
+        }
         trimmed = dungeonpath._trim(found)
         self.assertEqual([g["name"] for g in trimmed["gains"]], ["x", "z"])
-        self.assertEqual(trimmed["more_line"],
-                         "and 1 lesser piece for the same slots, not shown")
+        self.assertEqual(
+            trimmed["more_line"], "and 1 lesser piece for the same slots, not shown"
+        )
 
     def test_a_raid_says_it_is_the_guilds_job(self):
         mc = step(build(), 409)
@@ -239,20 +296,55 @@ class RunsAndUpgrades(unittest.TestCase):
 class TheGuildCount(unittest.TestCase):
     def test_a_guild_member_who_would_gain_is_counted(self):
         encounters = [{"map_id": 36, "creature": 1, "name": "Boss"}]
-        loot = [{"Entry": 1, "Item": 10, "creature": 1, "item_name": "Chest",
-                 "quality": 3, "item_level": 20, "required_level": 1,
-                 "class": 4, "subclass": 2, "displayid": None,
-                 "inventory_type": 5, "allowable_class": -1}]
-        chars = [{"name": "A", "level": 20, "class": 1},
-                 {"name": "B", "level": 20, "class": 1}]
-        worn = [{"name": "A", "slot": 4, "entry": 1, "item_name": "Old",
-                 "quality": 1, "item_level": 5, "class": 4, "subclass": 2,
-                 "inventory_type": 5, "displayid": None},
-                {"name": "B", "slot": 4, "entry": 2, "item_name": "Good",
-                 "quality": 3, "item_level": 40, "class": 4, "subclass": 2,
-                 "inventory_type": 5, "displayid": None}]
-        counts = dungeonplan.gainer_counts(encounters, loot, chars, worn,
-                                           ["A", "B"], [36, 43])
+        loot = [
+            {
+                "Entry": 1,
+                "Item": 10,
+                "creature": 1,
+                "item_name": "Chest",
+                "quality": 3,
+                "item_level": 20,
+                "required_level": 1,
+                "class": 4,
+                "subclass": 2,
+                "displayid": None,
+                "inventory_type": 5,
+                "allowable_class": -1,
+            }
+        ]
+        chars = [
+            {"name": "A", "level": 20, "class": 1},
+            {"name": "B", "level": 20, "class": 1},
+        ]
+        worn = [
+            {
+                "name": "A",
+                "slot": 4,
+                "entry": 1,
+                "item_name": "Old",
+                "quality": 1,
+                "item_level": 5,
+                "class": 4,
+                "subclass": 2,
+                "inventory_type": 5,
+                "displayid": None,
+            },
+            {
+                "name": "B",
+                "slot": 4,
+                "entry": 2,
+                "item_name": "Good",
+                "quality": 3,
+                "item_level": 40,
+                "class": 4,
+                "subclass": 2,
+                "inventory_type": 5,
+                "displayid": None,
+            },
+        ]
+        counts = dungeonplan.gainer_counts(
+            encounters, loot, chars, worn, ["A", "B"], [36, 43]
+        )
         self.assertEqual(counts[36], {"gainers": ["A"], "of": 2, "pieces": 1})
         self.assertEqual(counts[43], {"gainers": [], "of": 2, "pieces": 0})
 

@@ -37,6 +37,7 @@ A recipe rule written below that gate could never once have fired, and a live
 dry run producing nothing would have looked exactly like a quiet realm. See
 `RecipeBranchIsReachable`.
 """
+
 import unittest
 
 import bag_pressure
@@ -67,21 +68,46 @@ HOLDERS = {
 }
 
 
-def _row(holder, guid, name, skill, *, item_class=9, quality=2, bonding=0,
-         instance_flags=0, sell_price=100, entry=1234):
+def _row(
+    holder,
+    guid,
+    name,
+    skill,
+    *,
+    item_class=9,
+    quality=2,
+    bonding=0,
+    instance_flags=0,
+    sell_price=100,
+    entry=1234,
+):
     """One carried-recipe row in exactly the shape _SURPLUS_RECIPES_SQL gives."""
     return {
-        "holder": holder, "item_guid": guid, "entry": entry, "count": 1,
-        "instance_flags": instance_flags, "name": name, "quality": quality,
-        "sell_price": sell_price, "bonding": bonding, "item_class": item_class,
-        "bag_family": 0, "required_skill": skill, "required_skill_rank": 100,
+        "holder": holder,
+        "item_guid": guid,
+        "entry": entry,
+        "count": 1,
+        "instance_flags": instance_flags,
+        "name": name,
+        "quality": quality,
+        "sell_price": sell_price,
+        "bonding": bonding,
+        "item_class": item_class,
+        "bag_family": 0,
+        "required_skill": skill,
+        "required_skill_rank": 100,
     }
 
 
 def _recipe_item(skill, *, name="Plans: Green Iron Boots", item_class=9):
     return disposition.Item(
-        name=name, quality=2, known=True, binding=disposition.BIND_NONE,
-        quest_item=False, item_class=item_class, required_skill=skill,
+        name=name,
+        quality=2,
+        known=True,
+        binding=disposition.BIND_NONE,
+        quest_item=False,
+        item_class=item_class,
+        required_skill=skill,
         sell_price=500,
     )
 
@@ -96,9 +122,7 @@ class RecipePredicate(unittest.TestCase):
         self.assertFalse(disposition.recipe(_recipe_item(0)))
 
     def test_a_green_is_not_a_recipe_however_it_is_labelled(self):
-        self.assertFalse(
-            disposition.recipe(_recipe_item(BLACKSMITHING, item_class=4))
-        )
+        self.assertFalse(disposition.recipe(_recipe_item(BLACKSMITHING, item_class=4)))
 
 
 class Learners(unittest.TestCase):
@@ -112,9 +136,7 @@ class Learners(unittest.TestCase):
 
     def test_string_holder_mapping_remains_compatible(self):
         rows = [_row("Og", 100, "Plans: Green Iron Boots", BLACKSMITHING)]
-        self.assertEqual(
-            disposition.learner_options(rows, HOLDERS), {100: ("Grug",)}
-        )
+        self.assertEqual(disposition.learner_options(rows, HOLDERS), {100: ("Grug",)})
 
     def test_unassigned_trade_is_not_given_to_an_arbitrary_backup(self):
         rows = [_row("Grug", 101, "Manual: Strong Anti-Venom", FIRST_AID)]
@@ -156,16 +178,26 @@ class Learners(unittest.TestCase):
             _row("Ugga", 9, "Pattern: Gray Woolen Robe", TAILORING),
             _row("Grug", 10, "Manual: Strong Anti-Venom", FIRST_AID),
         ]
-        self.assertEqual(disposition.learners(rows, HOLDERS), {
-            1: "Og", 2: "Grug", 3: "Ugga", 4: disposition.LEARNER_HOLDER,
-            5: "Bork", 6: "Ugga", 7: "Bork", 8: "Grug", 9: "Og",
-            10: disposition.LEARNER_NOBODY,
-        })
+        self.assertEqual(
+            disposition.learners(rows, HOLDERS),
+            {
+                1: "Og",
+                2: "Grug",
+                3: "Ugga",
+                4: disposition.LEARNER_HOLDER,
+                5: "Bork",
+                6: "Ugga",
+                7: "Bork",
+                8: "Grug",
+                9: "Og",
+                10: disposition.LEARNER_NOBODY,
+            },
+        )
 
     def test_an_unreadable_row_is_absent_rather_than_guessed(self):
         # Absent means LEARNER_UNASKED at the point of use, which keeps it.
         rows = [
-            {"holder": "Og"},                                  # no guid
+            {"holder": "Og"},  # no guid
             _row("", 11, "Plans: Copper Chain Vest", BLACKSMITHING),
             _row("Og", 0, "Plans: Copper Chain Vest", BLACKSMITHING),
             _row("Og", 12, "Shadowgem", BLACKSMITHING, item_class=3),
@@ -194,9 +226,11 @@ class RecipeBranchIsReachable(unittest.TestCase):
         # whose branch returns KEEP. If the recipe rule were written below it
         # this assertion would read KEEP and the feature would be inert.
         verdict = disposition.decide(
-            _recipe_item(BLACKSMITHING), disposition.Family(),
+            _recipe_item(BLACKSMITHING),
+            disposition.Family(),
             available=disposition.EXECUTABLE_TODAY,
-            family_fit=disposition.FIT_UNJUDGEABLE, learner="Grug",
+            family_fit=disposition.FIT_UNJUDGEABLE,
+            learner="Grug",
         )
         self.assertEqual(verdict.route, disposition.GIVE)
 
@@ -204,12 +238,20 @@ class RecipeBranchIsReachable(unittest.TestCase):
         # The premise of the test above, asserted rather than assumed, so that
         # a future change to gear.py cannot quietly invalidate it.
         holding = gear.Holding(
-            holder="Og", guid=7, entry=3611, name="Plans: Green Iron Boots",
-            quality=2, item_level=1, required_level=0, allowable_class=-1,
-            inventory_type=0, item_class=9,
+            holder="Og",
+            guid=7,
+            entry=3611,
+            name="Plans: Green Iron Boots",
+            quality=2,
+            item_level=1,
+            required_level=0,
+            allowable_class=-1,
+            inventory_type=0,
+            item_class=9,
         )
         self.assertEqual(
-            gear.claimant(holding, []), gear.UNJUDGEABLE,
+            gear.claimant(holding, []),
+            gear.UNJUDGEABLE,
         )
 
     def test_it_beats_the_vendor_route(self):
@@ -217,9 +259,11 @@ class RecipeBranchIsReachable(unittest.TestCase):
         # A reachable vendor and a real sell price must not win over a
         # sibling who can learn the thing.
         verdict = disposition.decide(
-            _recipe_item(TAILORING), disposition.Family(vendor_reachable=True),
+            _recipe_item(TAILORING),
+            disposition.Family(vendor_reachable=True),
             available=disposition.EXECUTABLE_TODAY,
-            family_fit=disposition.FIT_NOBODY, learner="Og",
+            family_fit=disposition.FIT_NOBODY,
+            learner="Og",
         )
         self.assertEqual(verdict.route, disposition.GIVE)
 
@@ -227,7 +271,8 @@ class RecipeBranchIsReachable(unittest.TestCase):
 class RecipeVerdicts(unittest.TestCase):
     def test_the_holders_own_trade_keeps(self):
         verdict = disposition.decide(
-            _recipe_item(ENGINEERING), disposition.Family(vendor_reachable=True),
+            _recipe_item(ENGINEERING),
+            disposition.Family(vendor_reachable=True),
             available=disposition.EXECUTABLE_TODAY,
             learner=disposition.LEARNER_HOLDER,
         )
@@ -235,7 +280,8 @@ class RecipeVerdicts(unittest.TestCase):
 
     def test_a_trade_nobody_is_assigned_keeps_rather_than_sells(self):
         verdict = disposition.decide(
-            _recipe_item(FIRST_AID), disposition.Family(vendor_reachable=True),
+            _recipe_item(FIRST_AID),
+            disposition.Family(vendor_reachable=True),
             available=disposition.EXECUTABLE_TODAY,
             learner=disposition.LEARNER_NOBODY,
         )
@@ -265,21 +311,33 @@ class RecipeVerdicts(unittest.TestCase):
         # The default must change nothing for every existing call site.
         item = _recipe_item(BLACKSMITHING)
         self.assertEqual(
-            disposition.decide(item, disposition.Family(vendor_reachable=True),
-                               available=disposition.EXECUTABLE_TODAY).route,
-            disposition.decide(item, disposition.Family(vendor_reachable=True),
-                               available=disposition.EXECUTABLE_TODAY,
-                               learner=disposition.LEARNER_UNASKED).route,
+            disposition.decide(
+                item,
+                disposition.Family(vendor_reachable=True),
+                available=disposition.EXECUTABLE_TODAY,
+            ).route,
+            disposition.decide(
+                item,
+                disposition.Family(vendor_reachable=True),
+                available=disposition.EXECUTABLE_TODAY,
+                learner=disposition.LEARNER_UNASKED,
+            ).route,
         )
 
     def test_a_quest_item_is_still_refused_first(self):
         item = disposition.Item(
-            name="Plans: Something Questy", quality=2, known=True,
-            binding=disposition.BIND_NONE, quest_item=True, item_class=9,
+            name="Plans: Something Questy",
+            quality=2,
+            known=True,
+            binding=disposition.BIND_NONE,
+            quest_item=True,
+            item_class=9,
             required_skill=BLACKSMITHING,
         )
         verdict = disposition.decide(
-            item, disposition.Family(), available=disposition.EXECUTABLE_TODAY,
+            item,
+            disposition.Family(),
+            available=disposition.EXECUTABLE_TODAY,
             learner="Grug",
         )
         self.assertEqual(verdict.route, disposition.KEEP)
@@ -288,13 +346,20 @@ class RecipeVerdicts(unittest.TestCase):
         # A Mining Pick is class 2 with a profession bag. The recipe branch
         # must not have been slipped above the gate that infra#3709 exists for.
         item = disposition.Item(
-            name="Mining Pick", quality=1, known=True,
-            binding=disposition.BIND_NONE, quest_item=False,
-            item_class=2, bag_family=1024, required_skill=186,
+            name="Mining Pick",
+            quality=1,
+            known=True,
+            binding=disposition.BIND_NONE,
+            quest_item=False,
+            item_class=2,
+            bag_family=1024,
+            required_skill=186,
         )
         verdict = disposition.decide(
-            item, disposition.Family(vendor_reachable=True),
-            available=disposition.EXECUTABLE_TODAY, learner="Grug",
+            item,
+            disposition.Family(vendor_reachable=True),
+            available=disposition.EXECUTABLE_TODAY,
+            learner="Grug",
         )
         self.assertEqual(verdict.route, disposition.KEEP)
         self.assertIn("trade tool", verdict.why)
@@ -304,13 +369,16 @@ class RecipeGifts(unittest.TestCase):
     """The adapter, end to end, over rows shaped like the live query's."""
 
     def _plan(self, rows, **kw):
-        kw.setdefault("position_rows", {
-            name: {"map_id": 1, "pos_x": 0.0, "pos_y": 0.0}
-            for name in ("Grug", "Ugga", "Og", "Grog", "Bork")
-        })
-        kw.setdefault("free_slots", {
-            name: 10 for name in ("Grug", "Ugga", "Og", "Grog", "Bork")
-        })
+        kw.setdefault(
+            "position_rows",
+            {
+                name: {"map_id": 1, "pos_x": 0.0, "pos_y": 0.0}
+                for name in ("Grug", "Ugga", "Og", "Grog", "Bork")
+            },
+        )
+        kw.setdefault(
+            "free_slots", {name: 10 for name in ("Grug", "Ugga", "Og", "Grog", "Bork")}
+        )
         return bag_pressure.recipe_gifts(rows, HOLDERS, **kw)
 
     def test_the_misfiled_recipe_becomes_a_grant_to_its_trades_owner(self):
@@ -326,10 +394,13 @@ class RecipeGifts(unittest.TestCase):
         rows = [_row("Og", 1507032, "Plans: Green Iron Boots", BLACKSMITHING)]
         near = self._plan(rows)
         self.assertEqual(near.grants[0].verb, gear.TRADE)
-        far = self._plan(rows, position_rows={
-            "Og": {"map_id": 1, "pos_x": 0.0, "pos_y": 0.0},
-            "Grug": {"map_id": 1, "pos_x": 800.0, "pos_y": 0.0},
-        })
+        far = self._plan(
+            rows,
+            position_rows={
+                "Og": {"map_id": 1, "pos_x": 0.0, "pos_y": 0.0},
+                "Grug": {"map_id": 1, "pos_x": 800.0, "pos_y": 0.0},
+            },
+        )
         self.assertEqual(far.grants[0].verb, gear.GIVE)
 
     def test_a_taker_on_another_map_is_still_a_give_not_a_bad_distance(self):
@@ -337,10 +408,13 @@ class RecipeGifts(unittest.TestCase):
         # Kalimdor; subtracting coordinates across maps yields a number and
         # that number would put an ocean inside eleven yards.
         rows = [_row("Og", 1507032, "Plans: Green Iron Boots", BLACKSMITHING)]
-        plan = self._plan(rows, position_rows={
-            "Og": {"map_id": 0, "pos_x": 0.0, "pos_y": 0.0},
-            "Grug": {"map_id": 1, "pos_x": 0.0, "pos_y": 0.0},
-        })
+        plan = self._plan(
+            rows,
+            position_rows={
+                "Og": {"map_id": 0, "pos_x": 0.0, "pos_y": 0.0},
+                "Grug": {"map_id": 1, "pos_x": 0.0, "pos_y": 0.0},
+            },
+        )
         self.assertEqual(plan.grants[0].verb, gear.GIVE)
 
     def test_a_recipe_in_the_right_bag_moves_nothing(self):
@@ -354,8 +428,15 @@ class RecipeGifts(unittest.TestCase):
     def test_a_soulbound_recipe_is_never_offered(self):
         # A recipe that has been used binds on the INSTANCE while its template
         # still reads bonding 0. DoTrade would refuse it, so no row is written.
-        rows = [_row("Og", 1507032, "Plans: Green Iron Boots", BLACKSMITHING,
-                     instance_flags=1)]
+        rows = [
+            _row(
+                "Og",
+                1507032,
+                "Plans: Green Iron Boots",
+                BLACKSMITHING,
+                instance_flags=1,
+            )
+        ]
         self.assertEqual(self._plan(rows).grants, ())
 
     def test_an_owner_marked_name_is_left_alone(self):
@@ -373,9 +454,12 @@ class RecipeGifts(unittest.TestCase):
 
     def test_a_taker_who_is_not_in_the_world_is_withheld_with_a_note(self):
         rows = [_row("Og", 1507032, "Plans: Green Iron Boots", BLACKSMITHING)]
-        plan = self._plan(rows, position_rows={
-            "Og": {"map_id": 1, "pos_x": 0.0, "pos_y": 0.0},
-        })
+        plan = self._plan(
+            rows,
+            position_rows={
+                "Og": {"map_id": 1, "pos_x": 0.0, "pos_y": 0.0},
+            },
+        )
         self.assertEqual(plan.grants, ())
         self.assertEqual(len(plan.notes), 1)
         self.assertIn("not in the world", plan.notes[0])
@@ -412,12 +496,22 @@ class RecipeGifts(unittest.TestCase):
         ]
         plan = self._plan(rows)
         moved = {g.guid: (g.holder, g.taker) for g in plan.grants}
-        self.assertEqual(moved, {
-            1: ("Grog", "Og"), 2: ("Grog", "Grug"), 3: ("Grog", "Ugga"),
-            5: ("Grug", "Bork"), 6: ("Grug", "Ugga"), 7: ("Og", "Bork"),
-            8: ("Og", "Grug"), 9: ("Og", "Grug"), 10: ("Og", "Grug"),
-            11: ("Ugga", "Og"), 12: ("Ugga", "Og"),
-        })
+        self.assertEqual(
+            moved,
+            {
+                1: ("Grog", "Og"),
+                2: ("Grog", "Grug"),
+                3: ("Grog", "Ugga"),
+                5: ("Grug", "Bork"),
+                6: ("Grug", "Ugga"),
+                7: ("Og", "Bork"),
+                8: ("Og", "Grug"),
+                9: ("Og", "Grug"),
+                10: ("Og", "Grug"),
+                11: ("Ugga", "Og"),
+                12: ("Ugga", "Og"),
+            },
+        )
         # Twelve of fifteen stay: the Schematic is already Grog's, and the
         # three Manuals name no claimant. 11 move, which is the banner's 13
         # less the two that were never movable.
@@ -427,9 +521,7 @@ class RecipeGifts(unittest.TestCase):
         # Fail closed: an empty mapping is "nobody could be named", not
         # "nobody wants any of it".
         rows = [_row("Og", 1507032, "Plans: Green Iron Boots", BLACKSMITHING)]
-        self.assertEqual(
-            bag_pressure.recipe_gifts(rows, {}).grants, ()
-        )
+        self.assertEqual(bag_pressure.recipe_gifts(rows, {}).grants, ())
 
 
 if __name__ == "__main__":

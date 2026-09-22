@@ -7,6 +7,7 @@ the shield. Everything here proves plan() gets the DECISION right for
 synthetic inputs - it does not and cannot prove the SQL that will produce
 those inputs against a live server (see gear.py's own module docstring).
 """
+
 import unittest
 
 import gear
@@ -23,22 +24,43 @@ WARRIOR_ONLY = 1 << (WARRIOR - 1)
 PLATE_MELEE = (1 << (WARRIOR - 1)) | (1 << (PALADIN - 1))
 
 
-def sword(holder, guid, item_level, allowable_class=WARRIOR_ONLY, quality=3,
-          required_level=1, inventory_type=21, soulbound=False):
+def sword(
+    holder,
+    guid,
+    item_level,
+    allowable_class=WARRIOR_ONLY,
+    quality=3,
+    required_level=1,
+    inventory_type=21,
+    soulbound=False,
+):
     """A one-handed weapon (InventoryType 21 = one-hand)."""
     return gear.Holding(
-        holder=holder, guid=guid, entry=guid, name="Twisted Sabre",
-        quality=quality, item_level=item_level, required_level=required_level,
-        allowable_class=allowable_class, inventory_type=inventory_type,
-        item_class=gear.ITEM_CLASS_WEAPON, soulbound=soulbound,
+        holder=holder,
+        guid=guid,
+        entry=guid,
+        name="Twisted Sabre",
+        quality=quality,
+        item_level=item_level,
+        required_level=required_level,
+        allowable_class=allowable_class,
+        inventory_type=inventory_type,
+        item_class=gear.ITEM_CLASS_WEAPON,
+        soulbound=soulbound,
     )
 
 
 def two_hander(holder, guid, item_level, allowable_class=PLATE_MELEE):
     return gear.Holding(
-        holder=holder, guid=guid, entry=guid, name="Severing Axe",
-        quality=3, item_level=item_level, required_level=1,
-        allowable_class=allowable_class, inventory_type=17,  # two-hand
+        holder=holder,
+        guid=guid,
+        entry=guid,
+        name="Severing Axe",
+        quality=3,
+        item_level=item_level,
+        required_level=1,
+        allowable_class=allowable_class,
+        inventory_type=17,  # two-hand
         item_class=gear.ITEM_CLASS_WEAPON,
     )
 
@@ -82,9 +104,14 @@ class TheSeveringAxeTest(unittest.TestCase):
 
     def test_two_hander_refused_for_a_character_with_a_shield_equipped(self):
         axe = two_hander("Ugga", 2, item_level=40)
-        grug = character("Grug", WARRIOR, equipped={
-            gear._MAIN_HAND: 30, gear._OFF_HAND: 20,
-        })
+        grug = character(
+            "Grug",
+            WARRIOR,
+            equipped={
+                gear._MAIN_HAND: 30,
+                gear._OFF_HAND: 20,
+            },
+        )
         upgrade, reason = gear.is_upgrade_for(axe, grug)
         self.assertFalse(upgrade)
         self.assertIn("off-hand", reason)
@@ -97,17 +124,27 @@ class TheSeveringAxeTest(unittest.TestCase):
 
     def test_one_hander_is_never_blocked_by_the_off_hand_guard(self):
         blade = sword("Ugga", 3, item_level=35, allowable_class=PLATE_MELEE)
-        grug = character("Grug", WARRIOR, equipped={
-            gear._MAIN_HAND: 20, gear._OFF_HAND: 20,
-        })
+        grug = character(
+            "Grug",
+            WARRIOR,
+            equipped={
+                gear._MAIN_HAND: 20,
+                gear._OFF_HAND: 20,
+            },
+        )
         upgrade, _ = gear.is_upgrade_for(blade, grug)
         self.assertTrue(upgrade)
 
     def test_plan_never_hands_the_axe_to_a_shield_tank(self):
         axe = two_hander("Ugga", 2, item_level=40)
-        grug = character("Grug", WARRIOR, equipped={
-            gear._MAIN_HAND: 30, gear._OFF_HAND: 20,
-        })
+        grug = character(
+            "Grug",
+            WARRIOR,
+            equipped={
+                gear._MAIN_HAND: 30,
+                gear._OFF_HAND: 20,
+            },
+        )
         grog = character("Grog", PALADIN, equipped={gear._MAIN_HAND: 25})
         result = gear.plan([axe], [grug, grog, character("Ugga", PRIEST)])
         self.assertEqual(len(result.grants), 1)
@@ -136,8 +173,9 @@ class UpgradeVsItemLevel(unittest.TestCase):
         self.assertIn("empty", reason)
 
     def test_required_level_refuses_an_underlevelled_character(self):
-        holding = sword("Ugga", 4, item_level=15, allowable_class=WARRIOR_ONLY,
-                        required_level=30)
+        holding = sword(
+            "Ugga", 4, item_level=15, allowable_class=WARRIOR_ONLY, required_level=30
+        )
         grug = character("Grug", WARRIOR, level=21, equipped={})
         upgrade, reason = gear.is_upgrade_for(holding, grug)
         self.assertFalse(upgrade)
@@ -152,9 +190,15 @@ class QuestItemsAndEquippedItemsAreNeverConsidered(unittest.TestCase):
 
     def test_a_non_weapon_non_armor_item_class_is_never_a_candidate(self):
         quest_item = gear.Holding(
-            holder="Ugga", guid=5, entry=5, name="Ancient Petrified Leaf",
-            quality=1, item_level=1, required_level=1,
-            allowable_class=ALL_CLASSES, inventory_type=0,
+            holder="Ugga",
+            guid=5,
+            entry=5,
+            name="Ancient Petrified Leaf",
+            quality=1,
+            item_level=1,
+            required_level=1,
+            allowable_class=ALL_CLASSES,
+            inventory_type=0,
             item_class=12,  # ITEM_CLASS_QUEST
         )
         og = character("Og", MAGE)
@@ -163,8 +207,9 @@ class QuestItemsAndEquippedItemsAreNeverConsidered(unittest.TestCase):
         self.assertIn("not gear", reason)
 
     def test_soulbound_items_are_never_a_candidate(self):
-        holding = sword("Ugga", 6, item_level=26, allowable_class=WARRIOR_ONLY,
-                        soulbound=True)
+        holding = sword(
+            "Ugga", 6, item_level=26, allowable_class=WARRIOR_ONLY, soulbound=True
+        )
         grug = character("Grug", WARRIOR)
         upgrade, reason = gear.is_upgrade_for(holding, grug)
         self.assertFalse(upgrade)

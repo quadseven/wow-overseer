@@ -320,13 +320,11 @@ def buy_command(auction_id: int) -> str:
 
 def list_command(item_guid: int, bid: int, buyout: int, hours: int = 12) -> str:
     """Render the pinned mod's safe auction-list request."""
-    if not all(isinstance(value, int) for value in
-               (item_guid, bid, buyout, hours)):
+    if not all(isinstance(value, int) for value in (item_guid, bid, buyout, hours)):
         raise ValueError("auction values must be integers")
     if item_guid <= 0 or bid <= 0 or buyout < bid or hours not in (12, 24, 48):
         raise ValueError("invalid auction listing")
-    return (f"list guid:{item_guid} bid:{bid} buyout:{buyout} "
-            f"hours:{hours}")
+    return f"list guid:{item_guid} bid:{bid} buyout:{buyout} hours:{hours}"
 
 
 # ---------------------------------------------------------------------------
@@ -361,7 +359,7 @@ NEUTRAL_AUCTIONEER_FACTIONS = frozenset({120, 474, 534, 714, 855})
 
 
 def team_of(race: int) -> str:
-    """"alliance", "horde", or "" for a race this module does not know."""
+    """ "alliance", "horde", or "" for a race this module does not know."""
     if int(race) in ALLIANCE_RACES:
         return "alliance"
     if int(race) in HORDE_RACES:
@@ -392,8 +390,9 @@ def reachable_house(team: str, auctioneer_faction: int) -> int:
     return TEAM_HOUSE.get(str(team or "").lower(), 0)
 
 
-def auctioneer_map_available(map_id: int | None,
-                             available_maps: set[int] | frozenset[int]) -> bool:
+def auctioneer_map_available(
+    map_id: int | None, available_maps: set[int] | frozenset[int]
+) -> bool:
     """Whether an auctioneer trip can resolve on the leader's current map."""
     if map_id is None:
         return False
@@ -562,8 +561,7 @@ class Sale:
 
     @property
     def command(self) -> str:
-        return list_command(self.candidate.item_guid, self.bid,
-                            self.buyout, self.hours)
+        return list_command(self.candidate.item_guid, self.bid, self.buyout, self.hours)
 
 
 def plan_sales(rows, *, max_items: int = 10, hours: int = 12) -> tuple:
@@ -580,8 +578,10 @@ def plan_sales(rows, *, max_items: int = 10, hours: int = 12) -> tuple:
         try:
             item = SaleCandidate(
                 holder=str(row["holder"]).strip(),
-                item_guid=int(row["item_guid"]), entry=int(row["entry"]),
-                label=str(row.get("label", "")), quality=int(row["quality"]),
+                item_guid=int(row["item_guid"]),
+                entry=int(row["entry"]),
+                label=str(row.get("label", "")),
+                quality=int(row["quality"]),
                 binding=str(row.get("binding", "boe")).lower(),
                 quest_item=bool(row.get("quest_item", False)),
                 recipient=str(row.get("recipient", "")).strip(),
@@ -590,20 +590,30 @@ def plan_sales(rows, *, max_items: int = 10, hours: int = 12) -> tuple:
             )
         except (KeyError, TypeError, ValueError):
             continue
-        if (item.item_guid <= 0 or not item.holder or item.entry <= 0
-                or item.quality >= 3 or item.binding == "soulbound"
-                or item.quest_item or item.recipient
-                or item.market_price <= 0):
+        if (
+            item.item_guid <= 0
+            or not item.holder
+            or item.entry <= 0
+            or item.quality >= 3
+            or item.binding == "soulbound"
+            or item.quest_item
+            or item.recipient
+            or item.market_price <= 0
+        ):
             continue
         buyout = max(item.market_price, item.sell_price * 4, 1)
         bid = max(1, buyout * 80 // 100)
         out.append(Sale(item, bid, buyout, hours))
-    return tuple(sorted(out, key=lambda sale: (sale.buyout,
-                                                sale.candidate.item_guid))[:max_items])
+    return tuple(
+        sorted(out, key=lambda sale: (sale.buyout, sale.candidate.item_guid))[
+            :max_items
+        ]
+    )
 
 
-def wanted(craft_spell: int, carried: dict, in_mail: dict,
-           casts: int = CASTS_PER_TRIP) -> list:
+def wanted(
+    craft_spell: int, carried: dict, in_mail: dict, casts: int = CASTS_PER_TRIP
+) -> list:
     """Every gathered reagent this character's craft errand is short of.
 
     `carried` and `in_mail` are `{item entry: count}`, read by two separate
@@ -617,17 +627,22 @@ def wanted(craft_spell: int, carried: dict, in_mail: dict,
     """
     needs = []
     for reagent in GATHERED.get(int(craft_spell or 0), ()):
-        short = short_of(reagent.per_cast,
-                         (carried or {}).get(reagent.entry, 0),
-                         (in_mail or {}).get(reagent.entry, 0), casts)
+        short = short_of(
+            reagent.per_cast,
+            (carried or {}).get(reagent.entry, 0),
+            (in_mail or {}).get(reagent.entry, 0),
+            casts,
+        )
         if short > 0:
-            needs.append(Need(shopper="", entry=reagent.entry,
-                              label=reagent.label, short=short))
+            needs.append(
+                Need(shopper="", entry=reagent.entry, label=reagent.label, short=short)
+            )
     return needs
 
 
-def short_of(need_per_cast: int, carried: int, in_mail: int,
-             casts: int = CASTS_PER_TRIP) -> int:
+def short_of(
+    need_per_cast: int, carried: int, in_mail: int, casts: int = CASTS_PER_TRIP
+) -> int:
     """How many more of a reagent to buy, counting the mail as already bought.
 
     Returns 0 rather than a negative number when the character is stocked, so a
@@ -667,7 +682,8 @@ def usable(listings, entry: int, house: int) -> list:
     wanted_entry = int(entry)
     pool = int(house)
     keep = [
-        listing for listing in (listings or ())
+        listing
+        for listing in (listings or ())
         if int(listing.entry) == wanted_entry
         and int(listing.buyout) > 0
         and int(listing.count) > 0
@@ -720,8 +736,9 @@ class _Attempt:
     out_of_slots: bool = False
 
 
-def _take_cheapest(need: "Need", market, bar: int, budget: int, slots,
-                   taken: set) -> "_Attempt":
+def _take_cheapest(
+    need: "Need", market, bar: int, budget: int, slots, taken: set
+) -> "_Attempt":
     """Take listings for one need, cheapest first, until it is met or refused.
 
     LIFTED OUT OF `plan_buys` rather than left inline, and the reason is the
@@ -790,21 +807,34 @@ def _take_cheapest(need: "Need", market, bar: int, budget: int, slots,
                 why=(
                     "%s is short %d %s; this stack of %d costs %d copper (%d "
                     "each, against a ceiling of %d and %d left to spend)"
-                    % (need.shopper, int(need.short), label, int(listing.count),
-                       price, listing.per_unit, bar, budget - spend)
+                    % (
+                        need.shopper,
+                        int(need.short),
+                        label,
+                        int(listing.count),
+                        price,
+                        listing.per_unit,
+                        bar,
+                        budget - spend,
+                    )
                 ),
             )
         )
 
     return _Attempt(
-        buys=tuple(buys), bought=bought, spend=spend,
-        refused_price=refused_price, refused_budget=refused_budget,
-        slots_left=left, out_of_slots=out_of_slots,
+        buys=tuple(buys),
+        bought=bought,
+        spend=spend,
+        refused_price=refused_price,
+        refused_budget=refused_budget,
+        slots_left=left,
+        out_of_slots=out_of_slots,
     )
 
 
-def plan_buys(needs, listings, house: int, purses, free_slots=None,
-              cap: int = SPEND_CAP_COPPER) -> tuple:
+def plan_buys(
+    needs, listings, house: int, purses, free_slots=None, cap: int = SPEND_CAP_COPPER
+) -> tuple:
     """Every auction worth buying this pass, and a sentence for each refusal.
 
     `needs` is one `Need` per (character, reagent) shortfall, `listings` is
@@ -851,7 +881,9 @@ def plan_buys(needs, listings, house: int, purses, free_slots=None,
         purse = int((purses or {}).get(shopper, 0) or 0)
         allowance = min(int(cap), purse)
         took = _take_cheapest(
-            need, market, bar,
+            need,
+            market,
+            bar,
             budget=allowance - spent.get(shopper, 0),
             slots=None if free_slots is None else int(slots_left.get(shopper, 0)),
             taken=taken,
@@ -873,8 +905,16 @@ def plan_buys(needs, listings, house: int, purses, free_slots=None,
                 "%s needs %d %s and none of the %d reachable listing(s) could "
                 "be taken (%d priced above the %d copper per-unit ceiling, %d "
                 "beyond the %d copper this pass may spend)"
-                % (shopper, int(need.short), label, len(market),
-                   took.refused_price, bar, took.refused_budget, allowance)
+                % (
+                    shopper,
+                    int(need.short),
+                    label,
+                    len(market),
+                    took.refused_price,
+                    bar,
+                    took.refused_budget,
+                    allowance,
+                )
             )
         elif took.bought < int(need.short):
             notes.append(

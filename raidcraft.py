@@ -114,7 +114,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-import craft
 import goals
 import raidgoals
 
@@ -275,81 +274,169 @@ CONSUMABLES: tuple[Consumable, ...] = (
     # beside `spellid_2 = 6624`. Worth naming first because "the cheapest one"
     # and "the first one reachable" are different questions and the answer to
     # the second is Elixir of Fortitude, twenty-five points higher.
-    Consumable(6624, 5634, "Free Action Potion", "alchemy", 150, RECIPE_ITEM,
-               175, 215, per_raider=ELIXIRS_PER_RAIDER,
-               note="breaks and prevents stun/immobilise for 30s - the "
-                    "Baron Geddon / Shazzrah staple. Taught by Recipe: Free "
-                    "Action Potion (item 5642, rank 150); NO trainer_spell row "
-                    "exists, so this needs the pattern-item mechanism"),
+    Consumable(
+        6624,
+        5634,
+        "Free Action Potion",
+        "alchemy",
+        150,
+        RECIPE_ITEM,
+        175,
+        215,
+        per_raider=ELIXIRS_PER_RAIDER,
+        note="breaks and prevents stun/immobilise for 30s - the "
+        "Baron Geddon / Shazzrah staple. Taught by Recipe: Free "
+        "Action Potion (item 5642, rank 150); NO trainer_spell row "
+        "exists, so this needs the pattern-item mechanism",
+    ),
     # ELIXIR OF FORTITUDE IS THE ONE THIS FAMILY REACHES FIRST, and the only
     # raid consumable on the whole list that a trainer teaches below 200. It is
     # also the only one that `craft.RECIPES` can name today without displacing a
     # better leveling pick - see the RAID CONSUMABLES block in craft.py for the
     # bracket it now owns and the argument for taking 175-184 off Greater
     # Healing Potion.
-    Consumable(3450, 3825, "Elixir of Fortitude", "alchemy", 175, TRAINER,
-               195, 235, per_raider=ELIXIRS_PER_RAIDER,
-               note="+120 health for an hour; cheap, and used by all forty "
-                    "because it stacks with everything. trainer_spell rank "
-                    "175 across 3 trainers for 6000 copper, and also Recipe: "
-                    "Elixir of Fortitude (item 3830) at the same rank. Its "
-                    "reagents are IDENTICAL to Elixir of Greater Defense "
-                    "(11450), which craft.RECIPES already carries - so the "
-                    "gathered half is already in craft_rhythm.GATHERED and the "
-                    "Leaded Vial already in craft_supply.REAGENT"),
-    Consumable(11467, 9187, "Elixir of Greater Agility", "alchemy", 240, TRAINER,
-               255, 295, per_raider=ELIXIRS_PER_RAIDER,
-               note="+25 agility - the melee/hunter elixir until Elixir of the "
-                    "Mongoose replaces it at 280. trainer_spell rank 240"),
+    Consumable(
+        3450,
+        3825,
+        "Elixir of Fortitude",
+        "alchemy",
+        175,
+        TRAINER,
+        195,
+        235,
+        per_raider=ELIXIRS_PER_RAIDER,
+        note="+120 health for an hour; cheap, and used by all forty "
+        "because it stacks with everything. trainer_spell rank "
+        "175 across 3 trainers for 6000 copper, and also Recipe: "
+        "Elixir of Fortitude (item 3830) at the same rank. Its "
+        "reagents are IDENTICAL to Elixir of Greater Defense "
+        "(11450), which craft.RECIPES already carries - so the "
+        "gathered half is already in craft_rhythm.GATHERED and the "
+        "Leaded Vial already in craft_supply.REAGENT",
+    ),
+    Consumable(
+        11467,
+        9187,
+        "Elixir of Greater Agility",
+        "alchemy",
+        240,
+        TRAINER,
+        255,
+        295,
+        per_raider=ELIXIRS_PER_RAIDER,
+        note="+25 agility - the melee/hunter elixir until Elixir of the "
+        "Mongoose replaces it at 280. trainer_spell rank 240",
+    ),
     # STONESCALE OIL IS NOT A CONSUMABLE AND IT IS HERE ANYWAY, which is the
     # same judgement `raidgoals.RECIPES` already made about it: it is three of
     # the reagents of Flask of the Titans and it is itself an Alchemy cast, so
     # a plan that stopped at "you need three Stonescale Oil" would send somebody
     # hunting an item nothing on this realm drops. `per_raider` is 0 because
     # nobody drinks it; the flask's own target is what pulls it.
-    Consumable(17551, 13423, "Stonescale Oil", "alchemy", 250, TRAINER,
-               250, 260, per_raider=0,
-               note="1x Stonescale Eel (13422) -> 1x Stonescale Oil. NOT a "
-                    "consumable: it is 3 of the 12 reagents of Flask of the "
-                    "Titans and is made rather than found, which is why "
-                    "raidgoals models it too. trainer_spell rank 250"),
-    Consumable(26277, 21546, "Elixir of Greater Firepower", "alchemy", 250,
-               RECIPE_ITEM, 265, 305, per_raider=ELIXIRS_PER_RAIDER,
-               note="+40 fire spell damage, for the fire casters. Taught by "
-                    "Recipe: Elixir of Greater Firepower (item 21547, rank "
-                    "250); no trainer_spell row"),
-    Consumable(17571, 13452, "Elixir of the Mongoose", "alchemy", 280,
-               RECIPE_ITEM, 295, 335, per_raider=ELIXIRS_PER_RAIDER,
-               note="+25 agility and +2% crit - the melee battle elixir for "
-                    "the whole tier. Taught by Recipe: Elixir of the Mongoose "
-                    "(item 13491, rank 280); no trainer_spell row"),
-    Consumable(17556, 13446, "Major Healing Potion", "alchemy", 275, TRAINER,
-               290, 330, per_raider=HEALING_POTIONS_PER_RAIDER,
-               note="the tier's healing potion, carried by all forty. "
-                    "trainer_spell rank 275, and Recipe: Major Healing Potion "
-                    "(item 13480) at the same rank. ALREADY the top bracket of "
-                    "craft.RECIPES' Alchemy ladder (285-300), which is the one "
-                    "place the leveling route and the raid list already agreed "
-                    "before anything here was written"),
-    Consumable(17580, 13444, "Major Mana Potion", "alchemy", 295, RECIPE_ITEM,
-               310, 350, per_raider=MANA_POTIONS_PER_RAIDER,
-               note="the tier's mana potion, for every healer and caster. "
-                    "Taught by Recipe: Major Mana Potion (item 13501, rank "
-                    "295); no trainer_spell row"),
-    Consumable(17574, 13457, "Greater Fire Protection Potion", "alchemy", 290,
-               RECIPE_ITEM, 305, 345,
-               per_raider=PROTECTION_POTIONS_PER_RAIDER,
-               note="absorbs 1950 fire damage - the Molten Core potion, and "
-                    "the one raidgoals already counts five of per member. "
-                    "Taught by Recipe: Greater Fire Protection Potion (item "
-                    "13494, rank 290); no trainer_spell row"),
-    Consumable(17576, 13458, "Greater Nature Protection Potion", "alchemy", 290,
-               RECIPE_ITEM, 305, 345,
-               per_raider=PROTECTION_POTIONS_PER_RAIDER,
-               note="absorbs 1950 nature damage - the AQ/Princess Huhuran "
-                    "potion rather than a Molten Core one. Taught by Recipe: "
-                    "Greater Nature Protection Potion (item 13496, rank 290); "
-                    "no trainer_spell row"),
+    Consumable(
+        17551,
+        13423,
+        "Stonescale Oil",
+        "alchemy",
+        250,
+        TRAINER,
+        250,
+        260,
+        per_raider=0,
+        note="1x Stonescale Eel (13422) -> 1x Stonescale Oil. NOT a "
+        "consumable: it is 3 of the 12 reagents of Flask of the "
+        "Titans and is made rather than found, which is why "
+        "raidgoals models it too. trainer_spell rank 250",
+    ),
+    Consumable(
+        26277,
+        21546,
+        "Elixir of Greater Firepower",
+        "alchemy",
+        250,
+        RECIPE_ITEM,
+        265,
+        305,
+        per_raider=ELIXIRS_PER_RAIDER,
+        note="+40 fire spell damage, for the fire casters. Taught by "
+        "Recipe: Elixir of Greater Firepower (item 21547, rank "
+        "250); no trainer_spell row",
+    ),
+    Consumable(
+        17571,
+        13452,
+        "Elixir of the Mongoose",
+        "alchemy",
+        280,
+        RECIPE_ITEM,
+        295,
+        335,
+        per_raider=ELIXIRS_PER_RAIDER,
+        note="+25 agility and +2% crit - the melee battle elixir for "
+        "the whole tier. Taught by Recipe: Elixir of the Mongoose "
+        "(item 13491, rank 280); no trainer_spell row",
+    ),
+    Consumable(
+        17556,
+        13446,
+        "Major Healing Potion",
+        "alchemy",
+        275,
+        TRAINER,
+        290,
+        330,
+        per_raider=HEALING_POTIONS_PER_RAIDER,
+        note="the tier's healing potion, carried by all forty. "
+        "trainer_spell rank 275, and Recipe: Major Healing Potion "
+        "(item 13480) at the same rank. ALREADY the top bracket of "
+        "craft.RECIPES' Alchemy ladder (285-300), which is the one "
+        "place the leveling route and the raid list already agreed "
+        "before anything here was written",
+    ),
+    Consumable(
+        17580,
+        13444,
+        "Major Mana Potion",
+        "alchemy",
+        295,
+        RECIPE_ITEM,
+        310,
+        350,
+        per_raider=MANA_POTIONS_PER_RAIDER,
+        note="the tier's mana potion, for every healer and caster. "
+        "Taught by Recipe: Major Mana Potion (item 13501, rank "
+        "295); no trainer_spell row",
+    ),
+    Consumable(
+        17574,
+        13457,
+        "Greater Fire Protection Potion",
+        "alchemy",
+        290,
+        RECIPE_ITEM,
+        305,
+        345,
+        per_raider=PROTECTION_POTIONS_PER_RAIDER,
+        note="absorbs 1950 fire damage - the Molten Core potion, and "
+        "the one raidgoals already counts five of per member. "
+        "Taught by Recipe: Greater Fire Protection Potion (item "
+        "13494, rank 290); no trainer_spell row",
+    ),
+    Consumable(
+        17576,
+        13458,
+        "Greater Nature Protection Potion",
+        "alchemy",
+        290,
+        RECIPE_ITEM,
+        305,
+        345,
+        per_raider=PROTECTION_POTIONS_PER_RAIDER,
+        note="absorbs 1950 nature damage - the AQ/Princess Huhuran "
+        "potion rather than a Molten Core one. Taught by Recipe: "
+        "Greater Nature Protection Potion (item 13496, rank 290); "
+        "no trainer_spell row",
+    ),
     # THE FOUR FLASKS. Identical in every measured field except their reagents:
     # rank 300, pattern-taught, yellow 315, grey 330, no focus. They are the
     # furthest thing on this list from actionable and they are recorded in full
@@ -357,29 +444,65 @@ CONSUMABLES: tuple[Consumable, ...] = (
     # "286 more skill points and a mechanism nothing has built" - the same
     # argument raidgoals makes for keeping the Field Repair Bot on its page
     # with nobody holding Engineering.
-    Consumable(17635, 13510, "Flask of the Titans", "alchemy", 300, RECIPE_ITEM,
-               315, 330, per_raider=FLASKS_PER_RAIDER,
-               note="+1200 health for two hours, survives death - the tank "
-                    "flask. Taught by Recipe: Flask of the Titans (item 13519, "
-                    "and a duplicate row at 31354), rank 300; no trainer_spell "
-                    "row. Its Stonescale Oil reagent is itself the 17551 craft "
-                    "above"),
-    Consumable(17636, 13511, "Flask of Distilled Wisdom", "alchemy", 300,
-               RECIPE_ITEM, 315, 330, per_raider=FLASKS_PER_RAIDER,
-               note="+2000 mana for two hours - the healer flask. Taught by "
-                    "Recipe: Flask of Distilled Wisdom (item 13520, duplicate "
-                    "at 31356), rank 300; no trainer_spell row"),
-    Consumable(17637, 13512, "Flask of Supreme Power", "alchemy", 300,
-               RECIPE_ITEM, 315, 330, per_raider=FLASKS_PER_RAIDER,
-               note="+150 spell damage for two hours - the caster flask. "
-                    "Taught by Recipe: Flask of Supreme Power (item 13521, "
-                    "duplicate at 31355), rank 300; no trainer_spell row"),
-    Consumable(17638, 13513, "Flask of Chromatic Resistance", "alchemy", 300,
-               RECIPE_ITEM, 315, 330, per_raider=FLASKS_PER_RAIDER,
-               note="+25 to every resistance for two hours - the Blackwing "
-                    "Lair flask rather than a Molten Core one. Taught by "
-                    "Recipe: Flask of Chromatic Resistance (item 13522, "
-                    "duplicate at 31357), rank 300; no trainer_spell row"),
+    Consumable(
+        17635,
+        13510,
+        "Flask of the Titans",
+        "alchemy",
+        300,
+        RECIPE_ITEM,
+        315,
+        330,
+        per_raider=FLASKS_PER_RAIDER,
+        note="+1200 health for two hours, survives death - the tank "
+        "flask. Taught by Recipe: Flask of the Titans (item 13519, "
+        "and a duplicate row at 31354), rank 300; no trainer_spell "
+        "row. Its Stonescale Oil reagent is itself the 17551 craft "
+        "above",
+    ),
+    Consumable(
+        17636,
+        13511,
+        "Flask of Distilled Wisdom",
+        "alchemy",
+        300,
+        RECIPE_ITEM,
+        315,
+        330,
+        per_raider=FLASKS_PER_RAIDER,
+        note="+2000 mana for two hours - the healer flask. Taught by "
+        "Recipe: Flask of Distilled Wisdom (item 13520, duplicate "
+        "at 31356), rank 300; no trainer_spell row",
+    ),
+    Consumable(
+        17637,
+        13512,
+        "Flask of Supreme Power",
+        "alchemy",
+        300,
+        RECIPE_ITEM,
+        315,
+        330,
+        per_raider=FLASKS_PER_RAIDER,
+        note="+150 spell damage for two hours - the caster flask. "
+        "Taught by Recipe: Flask of Supreme Power (item 13521, "
+        "duplicate at 31355), rank 300; no trainer_spell row",
+    ),
+    Consumable(
+        17638,
+        13513,
+        "Flask of Chromatic Resistance",
+        "alchemy",
+        300,
+        RECIPE_ITEM,
+        315,
+        330,
+        per_raider=FLASKS_PER_RAIDER,
+        note="+25 to every resistance for two hours - the Blackwing "
+        "Lair flask rather than a Molten Core one. Taught by "
+        "Recipe: Flask of Chromatic Resistance (item 13522, "
+        "duplicate at 31357), rank 300; no trainer_spell row",
+    ),
     # --- BLACKSMITHING (Grug, skill 164) -----------------------------------
     #
     # A SHARPENING STONE IS THE RAID CONSUMABLE AND A GRINDING STONE IS NOT,
@@ -390,27 +513,54 @@ CONSUMABLES: tuple[Consumable, ...] = (
     # with identical colour bands as their grinding-stone twin - so the choice
     # between them is free, and `craft.RECIPES` now takes it. See the RAID
     # CONSUMABLES block in craft.py.
-    Consumable(9918, 7964, "Solid Sharpening Stone", "blacksmithing", 200,
-               TRAINER, 200, 210, per_raider=WEAPON_BUFFS_PER_RAIDER,
-               note="+6 weapon damage for 30 min, from 1x Solid Stone (7912). "
-                    "trainer_spell rank 200. Its twin Solid Grinding Stone "
-                    "(9920) has the same rank and the same band and eats FOUR "
-                    "Solid Stone per cast for an item nothing here uses"),
-    Consumable(16641, 12404, "Dense Sharpening Stone", "blacksmithing", 250,
-               TRAINER, 255, 260, per_raider=WEAPON_BUFFS_PER_RAIDER,
-               note="+8 weapon damage for 30 min, from 1x Dense Stone (12365) "
-                    "- the level 60 melee weapon buff. trainer_spell rank 250. "
-                    "ALREADY craft.RECIPES' 250-259 Blacksmithing bracket, "
-                    "picked over its identical-band twin Dense Weightstone "
-                    "(16640) before this module existed - undocumented and "
-                    "unchecked until now"),
-    Consumable(22757, 18262, "Elemental Sharpening Stone", "blacksmithing", 300,
-               RECIPE_ITEM, 300, 320, per_raider=WEAPON_BUFFS_PER_RAIDER,
-               note="+2% crit for 30 min - strictly better than Dense for a "
-                    "raid, and the reason Dense is not the end of this line. "
-                    "2x Elemental Earth (7067) + 3x Dense Stone. Taught by "
-                    "Plans: Elemental Sharpening Stone (item 18264, rank 300); "
-                    "no trainer_spell row"),
+    Consumable(
+        9918,
+        7964,
+        "Solid Sharpening Stone",
+        "blacksmithing",
+        200,
+        TRAINER,
+        200,
+        210,
+        per_raider=WEAPON_BUFFS_PER_RAIDER,
+        note="+6 weapon damage for 30 min, from 1x Solid Stone (7912). "
+        "trainer_spell rank 200. Its twin Solid Grinding Stone "
+        "(9920) has the same rank and the same band and eats FOUR "
+        "Solid Stone per cast for an item nothing here uses",
+    ),
+    Consumable(
+        16641,
+        12404,
+        "Dense Sharpening Stone",
+        "blacksmithing",
+        250,
+        TRAINER,
+        255,
+        260,
+        per_raider=WEAPON_BUFFS_PER_RAIDER,
+        note="+8 weapon damage for 30 min, from 1x Dense Stone (12365) "
+        "- the level 60 melee weapon buff. trainer_spell rank 250. "
+        "ALREADY craft.RECIPES' 250-259 Blacksmithing bracket, "
+        "picked over its identical-band twin Dense Weightstone "
+        "(16640) before this module existed - undocumented and "
+        "unchecked until now",
+    ),
+    Consumable(
+        22757,
+        18262,
+        "Elemental Sharpening Stone",
+        "blacksmithing",
+        300,
+        RECIPE_ITEM,
+        300,
+        320,
+        per_raider=WEAPON_BUFFS_PER_RAIDER,
+        note="+2% crit for 30 min - strictly better than Dense for a "
+        "raid, and the reason Dense is not the end of this line. "
+        "2x Elemental Earth (7067) + 3x Dense Stone. Taught by "
+        "Plans: Elemental Sharpening Stone (item 18264, rank 300); "
+        "no trainer_spell row",
+    ),
     # --- ENCHANTING (Og, skill 333) ----------------------------------------
     #
     # THE TWO WEAPON OILS, AND ENCHANTING IS THE TRADE THAT MAKES THEM - which
@@ -426,18 +576,36 @@ CONSUMABLES: tuple[Consumable, ...] = (
     # a shard - which nothing in this repo produces, because nothing
     # disenchants. That is its own gap and its own issue, not a bracket this
     # pass could have filled.
-    Consumable(25129, 20749, "Brilliant Wizard Oil", "enchanting", 300,
-               RECIPE_ITEM, 310, 330, per_raider=WEAPON_BUFFS_PER_RAIDER,
-               note="+36 spell damage for an hour, for casters. 2x Large "
-                    "Brilliant Shard (14344) + 3x Firebloom (4625) + 1x Imbued "
-                    "Vial (18256). Taught by Formula: Brilliant Wizard Oil "
-                    "(item 20756, rank 300); no trainer_spell row"),
-    Consumable(25130, 20748, "Brilliant Mana Oil", "enchanting", 300,
-               RECIPE_ITEM, 310, 330, per_raider=WEAPON_BUFFS_PER_RAIDER,
-               note="+12 mana every 5s and +25 healing, for healers. 2x Large "
-                    "Brilliant Shard (14344) + 3x Purple Lotus (8831) + 1x "
-                    "Imbued Vial (18256). Taught by Formula: Brilliant Mana "
-                    "Oil (item 20757, rank 300); no trainer_spell row"),
+    Consumable(
+        25129,
+        20749,
+        "Brilliant Wizard Oil",
+        "enchanting",
+        300,
+        RECIPE_ITEM,
+        310,
+        330,
+        per_raider=WEAPON_BUFFS_PER_RAIDER,
+        note="+36 spell damage for an hour, for casters. 2x Large "
+        "Brilliant Shard (14344) + 3x Firebloom (4625) + 1x Imbued "
+        "Vial (18256). Taught by Formula: Brilliant Wizard Oil "
+        "(item 20756, rank 300); no trainer_spell row",
+    ),
+    Consumable(
+        25130,
+        20748,
+        "Brilliant Mana Oil",
+        "enchanting",
+        300,
+        RECIPE_ITEM,
+        310,
+        330,
+        per_raider=WEAPON_BUFFS_PER_RAIDER,
+        note="+12 mana every 5s and +25 healing, for healers. 2x Large "
+        "Brilliant Shard (14344) + 3x Purple Lotus (8831) + 1x "
+        "Imbued Vial (18256). Taught by Formula: Brilliant Mana "
+        "Oil (item 20757, rank 300); no trainer_spell row",
+    ),
     # --- FIRST AID (all five, skill 129) -----------------------------------
     #
     # THE BANDAGE LADDER IS REAL, IT IS RAID-RELEVANT, AND IT IS BLOCKED BY THE
@@ -455,27 +623,54 @@ CONSUMABLES: tuple[Consumable, ...] = (
     # all five every rung of this ladder is a trainer purchase. Linen Bandage
     # (3275) is the sole exception - ClassMask 0, AcquireMethod 1 - and it is
     # the one rung craft.RECIPES already carries.
-    Consumable(7929, 6451, "Heavy Silk Bandage", "first aid", 180, TRAINER,
-               180, 240, per_raider=BANDAGES_PER_RAIDER,
-               note="heals 800 over 8s from 2x Silk Cloth (4306) - the "
-                    "cheapest raid consumable in the game, and the only one "
-                    "whose reagent the family already gathers by accident. "
-                    "trainer_spell rank 180, and Manual: Heavy Silk Bandage "
-                    "(item 16112) at the same rank. BLOCKED: no First Aid "
-                    "trainer is reachable (infra#3614, mod-overseer#454)"),
-    Consumable(10840, 8544, "Mageweave Bandage", "first aid", 210, TRAINER,
-               210, 270, per_raider=BANDAGES_PER_RAIDER,
-               note="heals 1104 over 8s from 1x Mageweave Cloth (4338). "
-                    "trainer_spell rank 210, and Manual: Mageweave Bandage "
-                    "(item 16113). Same trainer blocker as above"),
-    Consumable(18630, 14530, "Heavy Runecloth Bandage", "first aid", 290,
-               TRAINER, 290, 350, per_raider=BANDAGES_PER_RAIDER,
-               note="heals 2000 over 8s from 2x Runecloth (14047) - the level "
-                    "60 bandage, and what a raid night actually carries. "
-                    "trainer_spell rank 290. Same trainer blocker as above; "
-                    "Og's own Bolt of Runecloth bracket already consumes the "
-                    "same cloth, which is the competition craft.RECIPES' First "
-                    "Aid comment names between Tailoring and First Aid"),
+    Consumable(
+        7929,
+        6451,
+        "Heavy Silk Bandage",
+        "first aid",
+        180,
+        TRAINER,
+        180,
+        240,
+        per_raider=BANDAGES_PER_RAIDER,
+        note="heals 800 over 8s from 2x Silk Cloth (4306) - the "
+        "cheapest raid consumable in the game, and the only one "
+        "whose reagent the family already gathers by accident. "
+        "trainer_spell rank 180, and Manual: Heavy Silk Bandage "
+        "(item 16112) at the same rank. BLOCKED: no First Aid "
+        "trainer is reachable (infra#3614, mod-overseer#454)",
+    ),
+    Consumable(
+        10840,
+        8544,
+        "Mageweave Bandage",
+        "first aid",
+        210,
+        TRAINER,
+        210,
+        270,
+        per_raider=BANDAGES_PER_RAIDER,
+        note="heals 1104 over 8s from 1x Mageweave Cloth (4338). "
+        "trainer_spell rank 210, and Manual: Mageweave Bandage "
+        "(item 16113). Same trainer blocker as above",
+    ),
+    Consumable(
+        18630,
+        14530,
+        "Heavy Runecloth Bandage",
+        "first aid",
+        290,
+        TRAINER,
+        290,
+        350,
+        per_raider=BANDAGES_PER_RAIDER,
+        note="heals 2000 over 8s from 2x Runecloth (14047) - the level "
+        "60 bandage, and what a raid night actually carries. "
+        "trainer_spell rank 290. Same trainer blocker as above; "
+        "Og's own Bolt of Runecloth bracket already consumes the "
+        "same cloth, which is the competition craft.RECIPES' First "
+        "Aid comment names between Tailoring and First Aid",
+    ),
 )
 
 CONSUMABLE_BY_SPELL = {c.spell_id: c for c in CONSUMABLES}
@@ -499,19 +694,19 @@ NOT_CRAFTED: dict[int, str] = {
     # creates one. On this realm they also have zero `npc_vendor` rows and zero
     # `creature_loot_template` rows, so nothing here even sells or drops them.
     12451: "Juju Power: item class 12 (Quest), no create spell, 0 vendor and "
-           "0 creature-loot rows on this realm. AllowableRace -1, so NOT "
-           "Horde-only - the brief's doubt was right, its reason was not",
+    "0 creature-loot rows on this realm. AllowableRace -1, so NOT "
+    "Horde-only - the brief's doubt was right, its reason was not",
     12460: "Juju Might: same - quest item, uncraftable, unsold, undropped here",
     12457: "Juju Chill: same",
     12455: "Juju Ember: same",
     12450: "Juju Flurry: same",
     12459: "Juju Escape: same",
     21151: "Rumsey Rum Black Label: a vendor drink (item class 0 subclass 5, "
-           "1 npc_vendor row). No create spell - nothing crafts it, so it is a "
-           "purchase and belongs to towntrip, not to any crafter",
+    "1 npc_vendor row). No create spell - nothing crafts it, so it is a "
+    "purchase and belongs to towntrip, not to any crafter",
     23123: "Blessed Wizard Oil: NOT Enchanting and not crafted at all. No "
-           "create spell; 2 npc_vendor rows. In 3.3.5a it is an Argent Dawn "
-           "purchase, which is a reputation errand rather than a trade",
+    "create spell; 2 npc_vendor rows. In 3.3.5a it is an Argent Dawn "
+    "purchase, which is a reputation errand rather than a trade",
 }
 
 # ---------------------------------------------------------------------------
@@ -522,20 +717,17 @@ NOT_CRAFTED: dict[int, str] = {
 # `raidgoals`' name-resolution design exists to surface, arriving here from the
 # other direction.
 MISNAMED: dict[str, str] = {
-    "Flask of Petrification":
-        "this realm carries Potion of Petrification (item 13506), an Alchemy "
-        "craft taught by Recipe: Potion of Petrification (item 13518). It is "
-        "a self-stun rather than a buff, so it is recorded here and "
-        "deliberately not in CONSUMABLES",
-    "Shadowoil":
-        "this realm carries Shadow Oil (item 3824, two words), Alchemy spell "
-        "3448, trainer_spell rank 165 and also Recipe: Shadow Oil (item 6068). "
-        "It is a weapon buff with a proc rather than a flat buff, and it is "
-        "the reagent of Greater Shadow Protection Potion. Not in CONSUMABLES "
-        "because the brief's list of it was a guess at a name, not a goal",
-    "Dreamshard Elixir":
-        "genuinely absent - no item_template row matches it or anything like "
-        "it. Nothing was built toward it",
+    "Flask of Petrification": "this realm carries Potion of Petrification (item 13506), an Alchemy "
+    "craft taught by Recipe: Potion of Petrification (item 13518). It is "
+    "a self-stun rather than a buff, so it is recorded here and "
+    "deliberately not in CONSUMABLES",
+    "Shadowoil": "this realm carries Shadow Oil (item 3824, two words), Alchemy spell "
+    "3448, trainer_spell rank 165 and also Recipe: Shadow Oil (item 6068). "
+    "It is a weapon buff with a proc rather than a flat buff, and it is "
+    "the reagent of Greater Shadow Protection Potion. Not in CONSUMABLES "
+    "because the brief's list of it was a guess at a name, not a goal",
+    "Dreamshard Elixir": "genuinely absent - no item_template row matches it or anything like "
+    "it. Nothing was built toward it",
 }
 
 
@@ -553,10 +745,12 @@ def by_spell(spell_id: int):
 
 def for_skill(skill: str) -> tuple:
     """Every raid consumable on one trade, cheapest realm rank first."""
-    return tuple(sorted(
-        (c for c in CONSUMABLES if c.skill == skill),
-        key=lambda c: (c.floor, c.spell_id),
-    ))
+    return tuple(
+        sorted(
+            (c for c in CONSUMABLES if c.skill == skill),
+            key=lambda c: (c.floor, c.spell_id),
+        )
+    )
 
 
 def castable(skill: str, value: int) -> tuple:
@@ -613,8 +807,7 @@ def nearest_teachable(skill: str, value: int):
     actually reach.
     """
     at = int(value or 0)
-    ahead = [c for c in for_skill(skill)
-             if c.taught in _TEACHABLE and c.floor > at]
+    ahead = [c for c in for_skill(skill) if c.taught in _TEACHABLE and c.floor > at]
     if not ahead:
         return None, 0
     return ahead[0], ahead[0].floor - at
@@ -648,29 +841,42 @@ def gap(name: str, skills: dict) -> str:
         if here:
             said.append(
                 "%s's %s %d is at or past the realm's rank for %s"
-                % (name, skill, value, ", ".join(c.name for c in here)))
+                % (name, skill, value, ", ".join(c.name for c in here))
+            )
             continue
         want, short = nearest(skill, value)
         if want is None:
             continue
-        line = ("%s's %s is %d/%d and the nearest raid consumable is %s at "
-                "rank %d, %d points up (%s)"
-                % (name, skill, value, _ceiling(skills, skill), want.name,
-                   want.floor, short, _taught_as(want)))
+        line = (
+            "%s's %s is %d/%d and the nearest raid consumable is %s at "
+            "rank %d, %d points up (%s)"
+            % (
+                name,
+                skill,
+                value,
+                _ceiling(skills, skill),
+                want.name,
+                want.floor,
+                short,
+                _taught_as(want),
+            )
+        )
         # BOTH ANSWERS WHEN THEY DIFFER, because the nearest rung and the
         # nearest rung this family can step on are different facts and naming
         # only the first would point at a pattern item nothing here buys.
         reach, further = nearest_teachable(skill, value)
         if reach is not None and reach.spell_id != want.spell_id:
-            line += ("; the nearest one anything here could learn is %s at "
-                     "rank %d, %d points up" % (reach.name, reach.floor,
-                                                further))
+            line += (
+                "; the nearest one anything here could learn is %s at "
+                "rank %d, %d points up" % (reach.name, reach.floor, further)
+            )
         said.append(line)
     if not said:
-        return ("%s holds no trade that makes anything a raid night carries - "
-                "no raid consumable exists at any skill value for tailoring, "
-                "leatherworking, engineering, mining or cooking on this realm"
-                % name)
+        return (
+            "%s holds no trade that makes anything a raid night carries - "
+            "no raid consumable exists at any skill value for tailoring, "
+            "leatherworking, engineering, mining or cooking on this realm" % name
+        )
     return "; ".join(said)
 
 
@@ -692,8 +898,10 @@ def _taught_as(want: Consumable) -> str:
     if want.taught == TRAINER:
         return "a trainer teaches it, which professions.py's errand owns"
     if want.taught == RECIPE_ITEM:
-        return ("no trainer teaches it - it is a pattern item, which is the "
-                "learn-from-an-item mechanism being built separately")
+        return (
+            "no trainer teaches it - it is a pattern item, which is the "
+            "learn-from-an-item mechanism being built separately"
+        )
     return "granted with the skill line, so nobody has to be taught it"
 
 
@@ -738,8 +946,9 @@ def preferred(skill: str, value: int):
     every skill point below 175 on every trade the family holds.
     """
     at = int(value or 0)
-    legal = [c for c in for_skill(skill)
-             if c.taught in _TEACHABLE and c.floor <= at < c.grey]
+    legal = [
+        c for c in for_skill(skill) if c.taught in _TEACHABLE and c.floor <= at < c.grey
+    ]
     if not legal:
         return None
     return max(legal, key=lambda c: (c.yellow, c.floor, -c.spell_id))
@@ -773,9 +982,7 @@ def stockpile(raiders: int, nights: int = NIGHTS_STOCKED) -> tuple:
     heads = max(int(raiders or 0), 0)
     span = max(int(nights or 0), 0)
     return tuple(
-        (c, c.per_raider * heads * span)
-        for c in CONSUMABLES
-        if c.per_raider > 0
+        (c, c.per_raider * heads * span) for c in CONSUMABLES if c.per_raider > 0
     )
 
 
@@ -803,13 +1010,20 @@ def report(names, skills_by_name: dict) -> str:
     """
     who = sorted(names or ())
     if not who:
-        return ("nobody is protected, so there is no crafter to measure "
-                "against the raid's list")
+        return (
+            "nobody is protected, so there is no crafter to measure "
+            "against the raid's list"
+        )
     said = "; ".join(gap(name, skills_by_name.get(name, {})) for name in who)
-    return ("%s. The list itself is %d craftable consumables, %d of which need "
-            "a pattern item nothing here buys yet." % (
-                said, len(CONSUMABLES),
-                sum(1 for c in CONSUMABLES if c.taught == RECIPE_ITEM)))
+    return (
+        "%s. The list itself is %d craftable consumables, %d of which need "
+        "a pattern item nothing here buys yet."
+        % (
+            said,
+            len(CONSUMABLES),
+            sum(1 for c in CONSUMABLES if c.taught == RECIPE_ITEM),
+        )
+    )
 
 
 # ---------------------------------------------------------------------------

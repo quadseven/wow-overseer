@@ -51,12 +51,12 @@ reader from going to look.
 
 Tickets: mod-overseer#88 (the epic), mod-overseer#152, mod-overseer#159.
 """
+
 from __future__ import annotations
 
 from datetime import datetime, timedelta
 
-from armory import (QUALITY_NAMES, UNKNOWN_QUALITY, ItemBook,
-                    template_tooltip)
+from armory import QUALITY_NAMES, UNKNOWN_QUALITY, ItemBook, template_tooltip
 from core import _ALLIANCE_RACES, _HORDE_RACES
 from recap import LOOT_CAVEAT, first_equips, run_state
 
@@ -66,11 +66,11 @@ from recap import LOOT_CAVEAT, first_equips, run_state
 # mod_overseer.cpp actually writes today, plus the two this page is designed
 # to grow into the moment the module records them.
 ITEM_EQUIP = "item_equip"
-QUEST_COMPLETE = "quest_complete"   # objectives done; the log says "complete"
-QUEST_REWARD = "quest_reward"       # turned in; the reward was taken
+QUEST_COMPLETE = "quest_complete"  # objectives done; the log says "complete"
+QUEST_REWARD = "quest_reward"  # turned in; the reward was taken
 LEVEL_UP = "level_up"
-BOSS_KILL = "boss_kill"             # not emitted yet - see infer_bosses
-FLIGHT = "flight"                   # not emitted yet - see first_flight
+BOSS_KILL = "boss_kill"  # not emitted yet - see infer_bosses
+FLIGHT = "flight"  # not emitted yet - see first_flight
 
 # Card kinds, in the order they win a tie on the same second. A run ends
 # with a turn-in and a level-up in the same instant more often than seems
@@ -176,6 +176,7 @@ def boss_creatures(map_id: int) -> list[int]:
 
 # --- time --------------------------------------------------------------------
 
+
 def _iso(t: datetime | None) -> str | None:
     return None if t is None else t.strftime("%Y-%m-%dT%H:%M:%S")
 
@@ -223,6 +224,7 @@ def _duration(start: datetime, end: datetime) -> str:
 # each guessing, so a fixture written against either spelling stays a true row
 # and a widened query cannot quietly blank a name somewhere nobody looked.
 
+
 def _item_quality(row: dict):
     return row.get("quality", row.get("Quality"))
 
@@ -231,8 +233,9 @@ def _item_name(row: dict) -> str | None:
     return row.get("item_name") or row.get("name")
 
 
-def item_payload(entry: int, items: dict, icons: dict,
-                 book: ItemBook | None = None) -> dict:
+def item_payload(
+    entry: int, items: dict, icons: dict, book: ItemBook | None = None
+) -> dict:
     """One item, as the page draws it: name in its quality colour, an icon
     when the frozen book knows one, and the lines its tooltip draws.
 
@@ -259,7 +262,8 @@ def item_payload(entry: int, items: dict, icons: dict,
         "name": _item_name(row) or ("item %d" % entry),
         "quality": quality,
         "quality_name": QUALITY_NAMES.get(quality, UNKNOWN_QUALITY)
-        if quality is not None else UNKNOWN_QUALITY,
+        if quality is not None
+        else UNKNOWN_QUALITY,
         "ilvl": row.get("item_level", row.get("ItemLevel")),
         "icon": icons.get(displayid) if displayid is not None else None,
         "wowhead": "https://www.wowhead.com/wotlk/item=%d" % entry,
@@ -269,13 +273,17 @@ def item_payload(entry: int, items: dict, icons: dict,
         # `entry` is handed over rather than read off the row, for the
         # reason recap.item_payload gives at length: the entry the caller
         # resolved is the one this page is drawing.
-        "tooltip": (template_tooltip(dict(row, entry=entry), book)
-                    if book is not None and row else None),
+        "tooltip": (
+            template_tooltip(dict(row, entry=entry), book)
+            if book is not None and row
+            else None
+        ),
     }
 
 
-def _loot_line(event: dict, items: dict, icons: dict,
-               book: ItemBook | None = None) -> dict:
+def _loot_line(
+    event: dict, items: dict, icons: dict, book: ItemBook | None = None
+) -> dict:
     line = item_payload(int(event["subject_id"]), items, icons, book)
     line["who"] = event["character_name"]
     line["at"] = _iso(event["first_seen"])
@@ -285,8 +293,10 @@ def _loot_line(event: dict, items: dict, icons: dict,
 
 # --- bosses -------------------------------------------------------------------
 
-def infer_bosses(map_id: int, loot_entries: set[int], boss_drops: dict,
-                 kill_events: list[dict]) -> dict:
+
+def infer_bosses(
+    map_id: int, loot_entries: set[int], boss_drops: dict, kill_events: list[dict]
+) -> dict:
     """Which of a dungeon's bosses fell, and how anyone knows.
 
     `boss_drops` is creature entry -> set of item entries that creature drops
@@ -321,9 +331,14 @@ def infer_bosses(map_id: int, loot_entries: set[int], boss_drops: dict,
 
 # --- runs -------------------------------------------------------------------------
 
-def _run_loot(inside: list[dict], items: dict, icons: dict,
-              first_worn: dict,
-              book: ItemBook | None = None) -> list[dict]:
+
+def _run_loot(
+    inside: list[dict],
+    items: dict,
+    icons: dict,
+    first_worn: dict,
+    book: ItemBook | None = None,
+) -> list[dict]:
     """The run's loot: gear FIRST worn inside it, not gear worn during it.
 
     THIS FILTER IS THE FIX FOR A CARD THAT SHIPPED WRONG. `inside` is already
@@ -343,8 +358,7 @@ def _run_loot(inside: list[dict], items: dict, icons: dict,
     for event in inside:
         if event["kind"] != ITEM_EQUIP:
             continue
-        first = first_worn.get((event["character_name"],
-                                int(event["subject_id"])))
+        first = first_worn.get((event["character_name"], int(event["subject_id"])))
         # Compared by time rather than by identity: the caller is free to hand
         # in a filtered copy of the rows, and a rule that quietly depended on
         # getting the same dict objects back would fail silently if it did.
@@ -356,21 +370,40 @@ def _run_loot(inside: list[dict], items: dict, icons: dict,
 
 
 def _run_levels(inside: list[dict]) -> list[dict]:
-    return [{"who": e["character_name"], "level": int(e["level"]),
-             "at": _iso(e["first_seen"])}
-            for e in inside if e["kind"] == LEVEL_UP]
+    return [
+        {
+            "who": e["character_name"],
+            "level": int(e["level"]),
+            "at": _iso(e["first_seen"]),
+        }
+        for e in inside
+        if e["kind"] == LEVEL_UP
+    ]
 
 
 def _run_quests(inside: list[dict]) -> list[dict]:
-    return [{"who": e["character_name"], "quest": int(e["subject_id"]),
-             "title": e["subject_name"], "turned_in": e["kind"] == QUEST_REWARD,
-             "at": _iso(e["first_seen"])}
-            for e in inside if e["kind"] in (QUEST_COMPLETE, QUEST_REWARD)]
+    return [
+        {
+            "who": e["character_name"],
+            "quest": int(e["subject_id"]),
+            "title": e["subject_name"],
+            "turned_in": e["kind"] == QUEST_REWARD,
+            "at": _iso(e["first_seen"]),
+        }
+        for e in inside
+        if e["kind"] in (QUEST_COMPLETE, QUEST_REWARD)
+    ]
 
 
 def _run_deaths(died: list[dict]) -> list[dict]:
-    return [{"who": d["character_name"], "killer": d.get("killer_name") or "",
-             "at": _iso(d["created_at"])} for d in died]
+    return [
+        {
+            "who": d["character_name"],
+            "killer": d.get("killer_name") or "",
+            "at": _iso(d["created_at"]),
+        }
+        for d in died
+    ]
 
 
 def _who_was_there(run: dict, inside: list[dict], died: list[dict]) -> set:
@@ -457,10 +490,18 @@ def _card_moment(run: dict, active_to: datetime | None, start: datetime) -> date
     return run.get("ended_at") or active_to or start
 
 
-def assemble_run(run: dict, events: list[dict], deaths: list[dict], items: dict,
-                 icons: dict, boss_drops: dict, roster: list[str],
-                 now: datetime, first_worn: dict | None = None,
-                 book: ItemBook | None = None) -> dict:
+def assemble_run(
+    run: dict,
+    events: list[dict],
+    deaths: list[dict],
+    items: dict,
+    icons: dict,
+    boss_drops: dict,
+    roster: list[str],
+    now: datetime,
+    first_worn: dict | None = None,
+    book: ItemBook | None = None,
+) -> dict:
     """One dungeon run, with everything that happened inside it.
 
     `events` and `deaths` are the WHOLE tables (or the fetched horizon); the
@@ -470,18 +511,24 @@ def assemble_run(run: dict, events: list[dict], deaths: list[dict], items: dict,
     reads as the shape of a card rather than as five list comprehensions.
     """
     start, end = run_window(run, now)
-    inside = [e for e in events
-              if in_run(run, e["first_seen"], int(e["map"]), now)]
-    died = [d for d in deaths
-            if in_run(run, d["created_at"], int(d["map"]), now)]
+    inside = [e for e in events if in_run(run, e["first_seen"], int(e["map"]), now)]
+    died = [d for d in deaths if in_run(run, d["created_at"], int(d["map"]), now)]
     map_id = int(run["map_id"])
-    loot = _run_loot(inside, items, icons,
-                     first_worn if first_worn is not None
-                     else first_equips(events), book)
+    loot = _run_loot(
+        inside,
+        items,
+        icons,
+        first_worn if first_worn is not None else first_equips(events),
+        book,
+    )
     levels = _run_levels(inside)
     quests = _run_quests(inside)
-    bosses = infer_bosses(map_id, {line["entry"] for line in loot}, boss_drops,
-                          [e for e in inside if e["kind"] == BOSS_KILL])
+    bosses = infer_bosses(
+        map_id,
+        {line["entry"] for line in loot},
+        boss_drops,
+        [e for e in inside if e["kind"] == BOSS_KILL],
+    )
     present = _who_was_there(run, inside, died)
     active_from, active_to = _activity_span(inside, died)
     gained = _gained(loot, bosses, levels, quests)
@@ -520,16 +567,27 @@ def assemble_run(run: dict, events: list[dict], deaths: list[dict], items: dict,
 
 # --- quests --------------------------------------------------------------------------
 
-def _after(events: list[dict], who: str, kind: str, since: datetime,
-           window: timedelta) -> list[dict]:
-    return [e for e in events
-            if e["character_name"] == who and e["kind"] == kind
-            and since <= e["first_seen"] <= since + window]
+
+def _after(
+    events: list[dict], who: str, kind: str, since: datetime, window: timedelta
+) -> list[dict]:
+    return [
+        e
+        for e in events
+        if e["character_name"] == who
+        and e["kind"] == kind
+        and since <= e["first_seen"] <= since + window
+    ]
 
 
-def assemble_quest(event: dict, events: list[dict], quest_rewards: dict,
-                   items: dict, icons: dict,
-                   book: ItemBook | None = None) -> dict:
+def assemble_quest(
+    event: dict,
+    events: list[dict],
+    quest_rewards: dict,
+    items: dict,
+    icons: dict,
+    book: ItemBook | None = None,
+) -> dict:
     """One turn-in: who, what it paid, and whether it was the level.
 
     `quest_rewards` is quest id -> {"items": [(entry, count)], "choices":
@@ -552,11 +610,12 @@ def assemble_quest(event: dict, events: list[dict], quest_rewards: dict,
     chosen = None
     if template["choices"]:
         choices = {int(c) for c in template["choices"]}
-        for equip in sorted(_after(events, who, ITEM_EQUIP, at, CHOICE_WINDOW),
-                            key=lambda e: e["first_seen"]):
+        for equip in sorted(
+            _after(events, who, ITEM_EQUIP, at, CHOICE_WINDOW),
+            key=lambda e: e["first_seen"],
+        ):
             if int(equip["subject_id"]) in choices:
-                chosen = item_payload(int(equip["subject_id"]), items, icons,
-                                      book)
+                chosen = item_payload(int(equip["subject_id"]), items, icons, book)
                 chosen["count"] = 1
                 chosen["chosen"] = True
                 rewards.append(chosen)
@@ -580,9 +639,13 @@ def assemble_quest(event: dict, events: list[dict], quest_rewards: dict,
     }
 
 
-def quest_cards(events: list[dict], quest_rewards: dict, items: dict,
-                icons: dict,
-                book: ItemBook | None = None) -> list[dict]:
+def quest_cards(
+    events: list[dict],
+    quest_rewards: dict,
+    items: dict,
+    icons: dict,
+    book: ItemBook | None = None,
+) -> list[dict]:
     """A card per turn-in, and one per completion that was never turned in.
 
     quest_complete fires when the objectives are done and quest_reward when
@@ -591,21 +654,25 @@ def quest_cards(events: list[dict], quest_rewards: dict, items: dict,
     same character and quest is still a thing that happened - the card just
     says "objectives done" instead of "turned in".
     """
-    rewarded = {(e["character_name"], int(e["subject_id"]))
-                for e in events if e["kind"] == QUEST_REWARD}
+    rewarded = {
+        (e["character_name"], int(e["subject_id"]))
+        for e in events
+        if e["kind"] == QUEST_REWARD
+    }
     cards = []
     for e in events:
         if e["kind"] == QUEST_REWARD:
-            cards.append(assemble_quest(e, events, quest_rewards, items,
-                                        icons, book))
+            cards.append(assemble_quest(e, events, quest_rewards, items, icons, book))
         elif e["kind"] == QUEST_COMPLETE:
             if (e["character_name"], int(e["subject_id"])) not in rewarded:
-                cards.append(assemble_quest(e, events, quest_rewards, items,
-                                            icons, book))
+                cards.append(
+                    assemble_quest(e, events, quest_rewards, items, icons, book)
+                )
     return cards
 
 
 # --- levels ---------------------------------------------------------------------------
+
 
 def level_cards(events: list[dict]) -> list[dict]:
     cards = []
@@ -613,24 +680,34 @@ def level_cards(events: list[dict]) -> list[dict]:
         if e["kind"] != LEVEL_UP:
             continue
         level = int(e["level"])
-        cards.append({
-            "kind": LEVEL,
-            "id": "%s:%d" % (e["character_name"], level),
-            "at": _iso(e["first_seen"]),
-            "title": "Level %d!" % level,
-            "who": e["character_name"],
-            "level": level,
-            "milestone": level in MILESTONE_LEVELS,
-            "map_id": int(e.get("map") or 0),
-        })
+        cards.append(
+            {
+                "kind": LEVEL,
+                "id": "%s:%d" % (e["character_name"], level),
+                "at": _iso(e["first_seen"]),
+                "title": "Level %d!" % level,
+                "who": e["character_name"],
+                "level": level,
+                "milestone": level in MILESTONE_LEVELS,
+                "map_id": int(e.get("map") or 0),
+            }
+        )
     return cards
 
 
 # --- firsts ---------------------------------------------------------------------------
 
+
 def _first_card(key: str, title: str, at: str | None, who, detail: str) -> dict:
-    return {"kind": FIRST, "id": "first:" + key, "key": key, "at": at,
-            "title": title, "who": who, "detail": detail}
+    return {
+        "kind": FIRST,
+        "id": "first:" + key,
+        "key": key,
+        "at": at,
+        "title": title,
+        "who": who,
+        "detail": detail,
+    }
 
 
 def _earliest(rows, key):
@@ -649,21 +726,37 @@ def _run_firsts(runs: list[dict], roster: list[str]) -> list[dict]:
     firsts = []
     first_run = _earliest([r for r in runs if r["gained"]], "active_from")
     if first_run:
-        firsts.append(_first_card(
-            "dungeon_run", "First dungeon run", first_run["active_from"],
-            first_run["members"],
-            "%s, led by %s" % (first_run["dungeon"], first_run["leader"])))
+        firsts.append(
+            _first_card(
+                "dungeon_run",
+                "First dungeon run",
+                first_run["active_from"],
+                first_run["members"],
+                "%s, led by %s" % (first_run["dungeon"], first_run["leader"]),
+            )
+        )
     cleared = _earliest([r for r in runs if r["cleared"]], "at")
     if cleared:
-        firsts.append(_first_card(
-            "dungeon_clear", "First dungeon clear", cleared["at"],
-            cleared["members"], "%s: the final boss fell" % cleared["dungeon"]))
+        firsts.append(
+            _first_card(
+                "dungeon_clear",
+                "First dungeon clear",
+                cleared["at"],
+                cleared["members"],
+                "%s: the final boss fell" % cleared["dungeon"],
+            )
+        )
     together = _earliest([r for r in runs if r["all_together"]], "at")
     if together:
-        firsts.append(_first_card(
-            "all_together", "All %d in one instance" % len(roster),
-            together["at"], together["members"],
-            "%s, the whole family inside at once" % together["dungeon"]))
+        firsts.append(
+            _first_card(
+                "all_together",
+                "All %d in one instance" % len(roster),
+                together["at"],
+                together["members"],
+                "%s, the whole family inside at once" % together["dungeon"],
+            )
+        )
     return firsts
 
 
@@ -676,31 +769,47 @@ def _quality_firsts(events: list[dict], items: dict) -> list[dict]:
     """
     firsts = []
     equips = [e for e in events if e["kind"] == ITEM_EQUIP]
-    for quality, key, title in ((3, "rare_item", "First rare item"),
-                                (4, "epic_item", "First epic item")):
-        good = [e for e in equips
-                if (_item_quality(items.get(int(e["subject_id"])) or {})
-                    or -1) >= quality]
+    for quality, key, title in (
+        (3, "rare_item", "First rare item"),
+        (4, "epic_item", "First epic item"),
+    ):
+        good = [
+            e
+            for e in equips
+            if (_item_quality(items.get(int(e["subject_id"])) or {}) or -1) >= quality
+        ]
         hit = _earliest(good, "first_seen")
         if hit:
-            firsts.append(_first_card(
-                key, title, _iso(hit["first_seen"]), hit["character_name"],
-                _item_name(items[int(hit["subject_id"])])))
+            firsts.append(
+                _first_card(
+                    key,
+                    title,
+                    _iso(hit["first_seen"]),
+                    hit["character_name"],
+                    _item_name(items[int(hit["subject_id"])]),
+                )
+            )
     return firsts
 
 
 def _level_firsts(events: list[dict]) -> list[dict]:
     """First of the family to reach each round level."""
-    ups = sorted((e for e in events if e["kind"] == LEVEL_UP),
-                 key=lambda e: e["first_seen"])
+    ups = sorted(
+        (e for e in events if e["kind"] == LEVEL_UP), key=lambda e: e["first_seen"]
+    )
     firsts = []
     for level in FIRST_LEVELS:
         hit = next((e for e in ups if int(e["level"]) >= level), None)
         if hit:
-            firsts.append(_first_card(
-                "level_%d" % level, "First to level %d" % level,
-                _iso(hit["first_seen"]), hit["character_name"],
-                "%s reached %d" % (hit["character_name"], int(hit["level"]))))
+            firsts.append(
+                _first_card(
+                    "level_%d" % level,
+                    "First to level %d" % level,
+                    _iso(hit["first_seen"]),
+                    hit["character_name"],
+                    "%s reached %d" % (hit["character_name"], int(hit["level"])),
+                )
+            )
     return firsts
 
 
@@ -710,13 +819,20 @@ def _flight_first(events: list[dict]) -> list[dict]:
     hit = _earliest([e for e in events if e["kind"] == FLIGHT], "first_seen")
     if not hit:
         return []
-    return [_first_card("flight", "First flight", _iso(hit["first_seen"]),
-                        hit["character_name"],
-                        hit.get("subject_name") or hit.get("detail") or "")]
+    return [
+        _first_card(
+            "flight",
+            "First flight",
+            _iso(hit["first_seen"]),
+            hit["character_name"],
+            hit.get("subject_name") or hit.get("detail") or "",
+        )
+    ]
 
 
-def first_cards(runs: list[dict], events: list[dict], items: dict,
-                roster: list[str]) -> list[dict]:
+def first_cards(
+    runs: list[dict], events: list[dict], items: dict, roster: list[str]
+) -> list[dict]:
     """The things that only happen once, each found from the whole history.
 
     `runs` are assembled run cards (assemble_run output), oldest or newest,
@@ -725,10 +841,12 @@ def first_cards(runs: list[dict], events: list[dict], items: dict,
     why each group above goes through _earliest rather than through its own
     sort.
     """
-    return (_run_firsts(runs, roster)
-            + _quality_firsts(events, items)
-            + _level_firsts(events)
-            + _flight_first(events))
+    return (
+        _run_firsts(runs, roster)
+        + _quality_firsts(events, items)
+        + _level_firsts(events)
+        + _flight_first(events)
+    )
 
 
 # --- reading the world tables --------------------------------------------------
@@ -750,8 +868,10 @@ def quest_rewards_from_rows(rows: list[dict]) -> dict:
             entry = int(row.get("RewardItem%d" % i) or 0)
             if entry:
                 fixed.append((entry, int(row.get("RewardAmount%d" % i) or 1)))
-        choices = [int(row.get("RewardChoiceItemID%d" % i) or 0)
-                   for i in range(1, CHOICE_SLOTS + 1)]
+        choices = [
+            int(row.get("RewardChoiceItemID%d" % i) or 0)
+            for i in range(1, CHOICE_SLOTS + 1)
+        ]
         out[int(row["ID"])] = {"items": fixed, "choices": [c for c in choices if c]}
     return out
 
@@ -764,7 +884,9 @@ def boss_drops_from_rows(rows: list[dict]) -> dict:
     return out
 
 
-def wanted_entries(event_rows: list[dict], quest_rewards: dict, boss_drops: dict) -> list[int]:
+def wanted_entries(
+    event_rows: list[dict], quest_rewards: dict, boss_drops: dict
+) -> list[int]:
     """Every item entry the cards may name, so the adapter fetches them in one query."""
     entries = {int(e["subject_id"]) for e in event_rows if e["kind"] == ITEM_EQUIP}
     for reward in quest_rewards.values():
@@ -776,8 +898,13 @@ def wanted_entries(event_rows: list[dict], quest_rewards: dict, boss_drops: dict
 
 
 def wanted_quests(event_rows: list[dict]) -> list[int]:
-    return sorted({int(e["subject_id"]) for e in event_rows
-                   if e["kind"] in (QUEST_COMPLETE, QUEST_REWARD)})
+    return sorted(
+        {
+            int(e["subject_id"])
+            for e in event_rows
+            if e["kind"] in (QUEST_COMPLETE, QUEST_REWARD)
+        }
+    )
 
 
 def wanted_bosses(run_rows: list[dict]) -> list[int]:
@@ -800,8 +927,7 @@ def wanted_bosses(run_rows: list[dict]) -> list[int]:
 # for one ground and wrong on the other.
 
 # The word each kind is announced by. Status words, in the mono face.
-KIND_WORDS = {RUN: "DUNGEON RUN", QUEST: "QUEST", LEVEL: "LEVEL",
-              FIRST: "FIRST"}
+KIND_WORDS = {RUN: "DUNGEON RUN", QUEST: "QUEST", LEVEL: "LEVEL", FIRST: "FIRST"}
 # A run nobody got anything out of is not a run, and calling it one flatters
 # the family. It gets its own word and its own quiet hue.
 ATTEMPT_WORD = "ATTEMPT"
@@ -834,7 +960,9 @@ def _run_body(card: dict) -> str:
     fight = card.get("active_duration") or card["duration"]
     if card.get("active_duration") and card["duration"] != card["active_duration"]:
         fight = "%s in the instance (the run row stayed open %s)" % (
-            card["active_duration"], card["duration"])
+            card["active_duration"],
+            card["duration"],
+        )
     elif card.get("active_duration"):
         fight = "%s in the instance" % card["active_duration"]
     body = "led by %s, %s" % (card["leader"], fight)
@@ -852,7 +980,8 @@ def card_body(card: dict) -> str:
         return "%s %s at level %d" % (
             card["who"],
             "turned it in" if card["turned_in"] else "finished the objectives",
-            card["level"])
+            card["level"],
+        )
     if kind == LEVEL:
         return str(card["who"])
     if kind == FIRST:
@@ -886,21 +1015,27 @@ def card_line(card: dict) -> dict | None:
         where = card["dungeon"]
         if card.get("gained"):
             if card.get("cleared"):
-                return {"who": card["leader"],
-                        "text": "We finished %s." % where}
-            return {"who": card["leader"],
-                    "text": "We got into %s, and we got out again." % where}
+                return {"who": card["leader"], "text": "We finished %s." % where}
+            return {
+                "who": card["leader"],
+                "text": "We got into %s, and we got out again." % where,
+            }
         if card.get("deaths"):
-            return {"who": card["deaths"][0]["who"],
-                    "text": "%s put me down." % where}
-        return {"who": card["leader"],
-                "text": "We walked into %s and nothing came of it." % where}
+            return {"who": card["deaths"][0]["who"], "text": "%s put me down." % where}
+        return {
+            "who": card["leader"],
+            "text": "We walked into %s and nothing came of it." % where,
+        }
     if kind == QUEST:
         if card["turned_in"]:
-            return {"who": card["who"],
-                    "text": "I gave it back. That is one less thing."}
-        return {"who": card["who"],
-                "text": "The work is done. The walking back is not."}
+            return {
+                "who": card["who"],
+                "text": "I gave it back. That is one less thing.",
+            }
+        return {
+            "who": card["who"],
+            "text": "The work is done. The walking back is not.",
+        }
     if kind == LEVEL:
         return {"who": card["who"], "text": "%d now." % card["level"]}
     if kind == FIRST:
@@ -920,8 +1055,9 @@ def dress(card: dict) -> dict:
     return card
 
 
-def strip(visits: int, runs: int, attempts: int, firsts: int,
-          boss_kills_recorded: bool) -> list[dict]:
+def strip(
+    visits: int, runs: int, attempts: int, firsts: int, boss_kills_recorded: bool
+) -> list[dict]:
     """The stat strip over the timeline: five counted things, in mono.
 
     The last tile is not a count and is the most useful one on the strip. Boss
@@ -935,8 +1071,10 @@ def strip(visits: int, runs: int, attempts: int, firsts: int,
         {"label": "ATTEMPTS", "value": str(attempts)},
         {"label": "VISITS", "value": str(visits)},
         {"label": "FIRSTS", "value": str(firsts)},
-        {"label": "BOSS KILLS",
-         "value": "RECORDED" if boss_kills_recorded else "INFERRED"},
+        {
+            "label": "BOSS KILLS",
+            "value": "RECORDED" if boss_kills_recorded else "INFERRED",
+        },
     ]
 
 
@@ -944,12 +1082,15 @@ def provenance(boss_kills_recorded: bool) -> str:
     """What the reader has to know to read the strip honestly. Empty when nothing does."""
     if boss_kills_recorded:
         return ""
-    return ("Boss kills are not recorded yet. Where this page names a boss it "
-            "inferred one from a drop somebody equipped, so a boss it does not "
-            "name may well have fallen.")
+    return (
+        "Boss kills are not recorded yet. Where this page names a boss it "
+        "inferred one from a drop somebody equipped, so a boss it does not "
+        "name may well have fallen."
+    )
 
 
 # --- the timeline -----------------------------------------------------------------------
+
 
 def sort_key(card: dict) -> tuple:
     """Newest first; on the same second, the bigger kind of fact first."""
@@ -993,7 +1134,7 @@ _QUEST_DONE = "quest_done"
 
 
 def names_phrase(names: list[str]) -> str:
-    """"Og", "Og and Bork", "Grog, Og and Bork"."""
+    """ "Og", "Og and Bork", "Grog, Og and Bork"."""
     names = [str(n) for n in names]
     if len(names) <= 1:
         return names[0] if names else ""
@@ -1004,7 +1145,7 @@ def _quests_phrase(titles: list[str]) -> str:
     if len(titles) <= STORY_QUESTS:
         return names_phrase(titles)
     rest = len(titles) - (STORY_QUESTS - 1)
-    return ", ".join(titles[:STORY_QUESTS - 1]) + " and %d more" % rest
+    return ", ".join(titles[: STORY_QUESTS - 1]) + " and %d more" % rest
 
 
 def faction_of(race_ids) -> str:
@@ -1021,7 +1162,7 @@ def faction_of(race_ids) -> str:
 
 
 def chapter_heading(family_name: str, faction: str) -> str:
-    """"Grug's family, Alliance". The family key is its head's name."""
+    """ "Grug's family, Alliance". The family key is its head's name."""
     who = "%s's family" % family_name if family_name else "The family"
     return who + (", " + faction if faction else "")
 
@@ -1042,8 +1183,9 @@ def _order_by_roster(names, roster: list[str]) -> list[str]:
     return sorted(set(names), key=lambda n: (place.get(n, len(place)), n))
 
 
-def _quest_entries(cluster: list[dict], turned_in: bool,
-                   roster: list[str]) -> list[dict]:
+def _quest_entries(
+    cluster: list[dict], turned_in: bool, roster: list[str]
+) -> list[dict]:
     """One sentence per group of characters who did the same quests."""
     done: dict[str, list[str]] = {}
     for item in cluster:
@@ -1056,18 +1198,26 @@ def _quest_entries(cluster: list[dict], turned_in: bool,
     at = max(i["at"] for i in cluster)
     entries = []
     for titles, who in by_titles.items():
-        verb = ("turned in" if turned_in
-                else "finished the objectives of")
-        tail = "" if turned_in else ", and still has to hand %s in" % (
-            "it" if len(titles) == 1 else "them")
+        verb = "turned in" if turned_in else "finished the objectives of"
+        tail = (
+            ""
+            if turned_in
+            else ", and still has to hand %s in"
+            % ("it" if len(titles) == 1 else "them")
+        )
         if not turned_in and len(who) > 1:
             tail = tail.replace("has", "have")
-        entries.append({
-            "kind": QUEST, "at": _iso(at), "who": who,
-            "word": KIND_WORDS[QUEST], "hue": KIND_HUES[QUEST],
-            "text": "%s %s %s%s." % (names_phrase(who), verb,
-                                     _quests_phrase(list(titles)), tail),
-        })
+        entries.append(
+            {
+                "kind": QUEST,
+                "at": _iso(at),
+                "who": who,
+                "word": KIND_WORDS[QUEST],
+                "hue": KIND_HUES[QUEST],
+                "text": "%s %s %s%s."
+                % (names_phrase(who), verb, _quests_phrase(list(titles)), tail),
+            }
+        )
     return entries
 
 
@@ -1080,45 +1230,78 @@ def _level_entries(cluster: list[dict], roster: list[str]) -> list[dict]:
     for who in _order_by_roster(top, roster):
         by_level.setdefault(top[who], []).append(who)
     at = max(i["at"] for i in cluster)
-    return [{
-        "kind": LEVEL, "at": _iso(at), "who": who,
-        "word": KIND_WORDS[LEVEL], "hue": KIND_HUES[LEVEL],
-        "text": "%s reached level %d." % (names_phrase(who), level),
-    } for level, who in sorted(by_level.items(), reverse=True)]
+    return [
+        {
+            "kind": LEVEL,
+            "at": _iso(at),
+            "who": who,
+            "word": KIND_WORDS[LEVEL],
+            "hue": KIND_HUES[LEVEL],
+            "text": "%s reached level %d." % (names_phrase(who), level),
+        }
+        for level, who in sorted(by_level.items(), reverse=True)
+    ]
 
 
 def _run_entries(runs: list[dict]) -> list[dict]:
     """A run keeps its whole card: it is the richest thing on the page."""
-    return [{"kind": RUN, "at": run["at"], "card": run,
-             "who": list(run.get("members") or [])}
-            for run in runs if run.get("at")]
+    return [
+        {
+            "kind": RUN,
+            "at": run["at"],
+            "card": run,
+            "who": list(run.get("members") or []),
+        }
+        for run in runs
+        if run.get("at")
+    ]
 
 
 def _first_entries(firsts: list[dict]) -> list[dict]:
     """A first is one sentence: its title, then who and what."""
-    return [{"kind": FIRST, "at": first["at"],
-             "who": first["who"] if isinstance(first["who"], list)
-             else [first["who"]],
-             "word": first["word"], "hue": first["hue"],
-             "text": "%s. %s." % (first["title"], first["body"])}
-            for first in firsts if first.get("at")]
+    return [
+        {
+            "kind": FIRST,
+            "at": first["at"],
+            "who": first["who"] if isinstance(first["who"], list) else [first["who"]],
+            "word": first["word"],
+            "hue": first["hue"],
+            "text": "%s. %s." % (first["title"], first["body"]),
+        }
+        for first in firsts
+        if first.get("at")
+    ]
 
 
 def _moments(quests: list[dict], levels: list[dict]) -> dict[str, list[dict]]:
     """Dated quest and level cards, split by what kind of sentence they make."""
     by_kind: dict[str, list[dict]] = {QUEST: [], _QUEST_DONE: [], LEVEL: []}
     for q in (q for q in quests if q.get("at")):
-        by_kind[QUEST if q["turned_in"] else _QUEST_DONE].append({
-            "at": datetime.fromisoformat(q["at"]), "who": q["who"],
-            "name": q.get("quest_name") or q["title"]})
+        by_kind[QUEST if q["turned_in"] else _QUEST_DONE].append(
+            {
+                "at": datetime.fromisoformat(q["at"]),
+                "who": q["who"],
+                "name": q.get("quest_name") or q["title"],
+            }
+        )
     for lv in (lv for lv in levels if lv.get("at")):
-        by_kind[LEVEL].append({"at": datetime.fromisoformat(lv["at"]),
-                               "who": lv["who"], "level": lv["level"]})
+        by_kind[LEVEL].append(
+            {
+                "at": datetime.fromisoformat(lv["at"]),
+                "who": lv["who"],
+                "level": lv["level"],
+            }
+        )
     return by_kind
 
 
-def story(runs: list[dict], quests: list[dict], levels: list[dict],
-          firsts: list[dict], roster: list[str]) -> list[dict]:
+def story(
+    runs: list[dict],
+    quests: list[dict],
+    levels: list[dict],
+    firsts: list[dict],
+    roster: list[str],
+) -> list[dict]:
     """The family's story, newest first, as the page draws it.
 
     `runs` and `firsts` are DRESSED cards; `quests` and `levels` are the raw
@@ -1134,21 +1317,27 @@ def story(runs: list[dict], quests: list[dict], levels: list[dict],
         entries += _quest_entries(cluster, False, roster)
     for cluster in _clusters(by_kind[LEVEL]):
         entries += _level_entries(cluster, roster)
-    entries.sort(key=lambda e: (e["at"], -_KIND_ORDER.get(e["kind"], 9)),
-                 reverse=True)
+    entries.sort(key=lambda e: (e["at"], -_KIND_ORDER.get(e["kind"], 9)), reverse=True)
     return entries[:STORY_LIMIT]
 
 
-UNREAD_CHAPTER = ("this family's record could not be read this time; the "
-                  "other chapters are current")
+UNREAD_CHAPTER = (
+    "this family's record could not be read this time; the other chapters are current"
+)
 
 
 def unread_chapter(family_name: str) -> dict:
     """The chapter for a family whose own read failed, said out loud rather
     than dropped, so one bad read does not blank the other family too."""
-    return {"family": family_name, "faction": "",
-            "heading": chapter_heading(family_name, ""), "roster": [],
-            "strip": [], "story": [], "empty": UNREAD_CHAPTER}
+    return {
+        "family": family_name,
+        "faction": "",
+        "heading": chapter_heading(family_name, ""),
+        "roster": [],
+        "strip": [],
+        "story": [],
+        "empty": UNREAD_CHAPTER,
+    }
 
 
 def chapter(payload: dict, family_name: str, faction: str) -> dict:
@@ -1160,16 +1349,26 @@ def chapter(payload: dict, family_name: str, faction: str) -> dict:
         "roster": payload["roster"],
         "strip": payload["strip"],
         "story": payload["story"],
-        "empty": ("nothing this family did is on the record yet"
-                  if not payload["story"] else ""),
+        "empty": (
+            "nothing this family did is on the record yet"
+            if not payload["story"]
+            else ""
+        ),
     }
 
 
-def build_achievements(run_rows: list[dict], event_rows: list[dict],
-                       death_rows: list[dict], items: dict, icons: dict,
-                       boss_drops: dict, quest_rewards: dict,
-                       roster: list[str], now: datetime | None = None,
-                       book: ItemBook | None = None) -> dict:
+def build_achievements(
+    run_rows: list[dict],
+    event_rows: list[dict],
+    death_rows: list[dict],
+    items: dict,
+    icons: dict,
+    boss_drops: dict,
+    quest_rewards: dict,
+    roster: list[str],
+    now: datetime | None = None,
+    book: ItemBook | None = None,
+) -> dict:
     """Rows in, the Chronicle's JSON out.
 
     run_rows      overseer_dungeon_run rows
@@ -1189,9 +1388,21 @@ def build_achievements(run_rows: list[dict], event_rows: list[dict],
     # equip of a pair is a fact about the record, not about any one visit, and
     # recomputing it inside assemble_run would be the same answer 200 times.
     first_worn = first_equips(event_rows)
-    runs = [assemble_run(r, events, death_rows, items, icons, boss_drops, roster,
-                         now, first_worn, book)
-            for r in run_rows]
+    runs = [
+        assemble_run(
+            r,
+            events,
+            death_rows,
+            items,
+            icons,
+            boss_drops,
+            roster,
+            now,
+            first_worn,
+            book,
+        )
+        for r in run_rows
+    ]
     # A visit in which nothing happened at all - opened by a heartbeat at the
     # door and closed by the next cold one - is not even an attempt. It is
     # still in the payload's count so the page can say how many there were.
@@ -1202,8 +1413,13 @@ def build_achievements(run_rows: list[dict], event_rows: list[dict],
     levels = [c for c in every_level if c["milestone"]]
     firsts = first_cards(runs, events, items, roster)
     cards = [dress(c) for c in timeline(runs + quests + levels + firsts)]
-    told = story([dress(r) for r in runs], quests, every_level,
-                 [dress(f) for f in firsts], list(roster))
+    told = story(
+        [dress(r) for r in runs],
+        quests,
+        every_level,
+        [dress(f) for f in firsts],
+        list(roster),
+    )
     recorded = any(e["kind"] == BOSS_KILL for e in events)
     done = sum(1 for r in runs if r["gained"])
     tried = sum(1 for r in runs if not r["gained"])

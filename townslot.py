@@ -92,6 +92,7 @@ keeps it. That case is `Holder.claimant == ""`, an ORPHAN, and it is given
 process cannot name is never preempted before the world's own backstop would
 have given up on it anyway.
 """
+
 from __future__ import annotations
 
 import dataclasses
@@ -277,6 +278,7 @@ class Holder:
     a monotonic reading supplied by the caller, never a wall clock: this is a
     duration question and the wall clock moves.
     """
+
     claimant: str
     character: str
     aim: str
@@ -292,6 +294,7 @@ class Want:
     survives every re-ask. `last_asked` is whether the pass is still asking at
     all, which is what decides whether anybody should still be yielding to it.
     """
+
     claimant: str
     waiting_since: float
     last_asked: float
@@ -307,6 +310,7 @@ class Decision:
     between the read that produced this decision and the write that acts on it
     matches nothing and is left alone.
     """
+
     verdict: str
     reason: str
     claimant: str = ""
@@ -325,9 +329,12 @@ class Decision:
         return self.verdict in (SLOT_TAKE, SLOT_PREEMPT)
 
 
-def lease_for(holder: Holder | None, lease: float = LEASE_SECONDS,
-              orphan_lease: float = ORPHAN_LEASE_SECONDS,
-              long_leases=None) -> float:
+def lease_for(
+    holder: Holder | None,
+    lease: float = LEASE_SECONDS,
+    orphan_lease: float = ORPHAN_LEASE_SECONDS,
+    long_leases=None,
+) -> float:
     """How long this holder may keep the traveller while somebody waits.
 
     An orphan gets the longer one. See ORPHAN_LEASE_SECONDS: the shorter lease
@@ -385,14 +392,16 @@ def stranded_nonleader_aims(aims, leader: str, *, ground, releasable) -> tuple:
     """
     if not leader:
         return ()
-    return tuple(sorted(
-        name for name, aim in (aims or {}).items()
-        if name != leader and str(aim or "") and ground(aim) and releasable(aim)
-    ))
+    return tuple(
+        sorted(
+            name
+            for name, aim in (aims or {}).items()
+            if name != leader and str(aim or "") and ground(aim) and releasable(aim)
+        )
+    )
 
 
-def urgent_ground_release(*, aim: str, pressure: bool, in_run: bool,
-                          ground) -> bool:
+def urgent_ground_release(*, aim: str, pressure: bool, in_run: bool, ground) -> bool:
     """Whether bag pressure may interrupt a stale positional town aim."""
     return bool(pressure and not in_run and str(aim or "") and ground(aim))
 
@@ -436,19 +445,32 @@ def _ahead_of(claimant: str, wants, now: float, want_fresh: float) -> list:
     everybody exactly as it did before.
     """
     mine = (_own_wait(claimant, wants, now), claimant)
-    return [want for want in fresh_wants(wants, now, want_fresh)
-            if (want.waiting_since, want.claimant) < mine]
+    return [
+        want
+        for want in fresh_wants(wants, now, want_fresh)
+        if (want.waiting_since, want.claimant) < mine
+    ]
 
 
-def decide(*, claimant: str, character: str, aim: str, leader: str,
-           column: str, retaskable, holder: Holder | None, wants,
-           last_served, now: float,
-           urgent: bool = False,
-           lease: float = LEASE_SECONDS,
-           orphan_lease: float = ORPHAN_LEASE_SECONDS,
-           long_leases=None,
-           want_fresh: float = WANT_FRESH_SECONDS,
-           releasable=None) -> Decision:
+def decide(
+    *,
+    claimant: str,
+    character: str,
+    aim: str,
+    leader: str,
+    column: str,
+    retaskable,
+    holder: Holder | None,
+    wants,
+    last_served,
+    now: float,
+    urgent: bool = False,
+    lease: float = LEASE_SECONDS,
+    orphan_lease: float = ORPHAN_LEASE_SECONDS,
+    long_leases=None,
+    want_fresh: float = WANT_FRESH_SECONDS,
+    releasable=None,
+) -> Decision:
     """May this pass have the traveller, and what has to happen first.
 
     Every fact comes in as an argument, including the two the caller has to
@@ -473,6 +495,7 @@ def decide(*, claimant: str, character: str, aim: str, leader: str,
     worst a stale read costs is one wasted cycle.
     """
     if releasable is None:
+
         def releasable(_aim):
             return False
 
@@ -484,7 +507,7 @@ def decide(*, claimant: str, character: str, aim: str, leader: str,
         return Decision(
             verdict=SLOT_WAIT,
             reason="%s asked for the traveller without naming an aim, so "
-                   "nothing was decided" % claimant,
+            "nothing was decided" % claimant,
             claimant=claimant,
             character=character,
         )
@@ -500,8 +523,8 @@ def decide(*, claimant: str, character: str, aim: str, leader: str,
         return Decision(
             verdict=SLOT_NOT_THE_LEADER,
             reason="%s asked to aim %s, who is not the leader (%s carries "
-                   "`new rpg`), so nothing was written - aiming a follower is "
-                   "an UPDATE that moves nobody" % (claimant, character, leader or "nobody"),
+            "`new rpg`), so nothing was written - aiming a follower is "
+            "an UPDATE that moves nobody" % (claimant, character, leader or "nobody"),
             claimant=claimant,
             aim=aim,
             character=character,
@@ -519,7 +542,7 @@ def decide(*, claimant: str, character: str, aim: str, leader: str,
         return Decision(
             verdict=SLOT_HOLD,
             reason="%s already holds the traveller %s with %r, taken %ds ago"
-                   % (claimant, character, aim, int(now - holder.since)),
+            % (claimant, character, aim, int(now - holder.since)),
             claimant=claimant,
             aim=aim,
             character=character,
@@ -537,9 +560,14 @@ def decide(*, claimant: str, character: str, aim: str, leader: str,
         return Decision(
             verdict=SLOT_TAKE,
             reason="%s refines %s's %r on %s into %r, which is the same errand "
-                   "at a sharper resolution" % (
-                       claimant, holder.claimant or "an unknown pass",
-                       holder.aim, character, aim),
+            "at a sharper resolution"
+            % (
+                claimant,
+                holder.claimant or "an unknown pass",
+                holder.aim,
+                character,
+                aim,
+            ),
             claimant=claimant,
             aim=aim,
             character=character,
@@ -548,34 +576,56 @@ def decide(*, claimant: str, character: str, aim: str, leader: str,
 
     if holder is None:
         return _free_column(
-            claimant=claimant, character=character, aim=aim, wants=wants,
-            last_served=last_served, now=now, want_fresh=want_fresh,
+            claimant=claimant,
+            character=character,
+            aim=aim,
+            wants=wants,
+            last_served=last_served,
+            now=now,
+            want_fresh=want_fresh,
             urgent=urgent,
         )
     return _held_column(
-        claimant=claimant, character=character, aim=aim, holder=holder,
-        wants=wants, now=now, lease=lease, orphan_lease=orphan_lease,
+        claimant=claimant,
+        character=character,
+        aim=aim,
+        holder=holder,
+        wants=wants,
+        now=now,
+        lease=lease,
+        orphan_lease=orphan_lease,
         long_leases=long_leases,
-        want_fresh=want_fresh, releasable=releasable, urgent=urgent,
+        want_fresh=want_fresh,
+        releasable=releasable,
+        urgent=urgent,
     )
 
 
-def decide_idle(*, claimant: str, character: str, leader: str, column: str,
-                holder: Holder | None, wants, now: float,
-                lease: float = LEASE_SECONDS,
-                orphan_lease: float = ORPHAN_LEASE_SECONDS,
-                long_leases=None,
-                want_fresh: float = WANT_FRESH_SECONDS,
-                releasable=None) -> Decision:
+def decide_idle(
+    *,
+    claimant: str,
+    character: str,
+    leader: str,
+    column: str,
+    holder: Holder | None,
+    wants,
+    now: float,
+    lease: float = LEASE_SECONDS,
+    orphan_lease: float = ORPHAN_LEASE_SECONDS,
+    long_leases=None,
+    want_fresh: float = WANT_FRESH_SECONDS,
+    releasable=None,
+) -> Decision:
     """May this drive have an empty travel column?"""
     if releasable is None:
+
         def releasable(_aim):
             return False
+
     if character != leader:
         return Decision(
             verdict=SLOT_NOT_THE_LEADER,
-            reason="%s asked to idle %s, who is not the leader" %
-                   (claimant, character),
+            reason="%s asked to idle %s, who is not the leader" % (claimant, character),
             claimant=claimant,
             character=character,
         )
@@ -583,22 +633,37 @@ def decide_idle(*, claimant: str, character: str, leader: str, column: str,
     if holder is None:
         return Decision(
             verdict=SLOT_CLEAR,
-            reason="%s has the idle traveller; the column was already free" %
-                   claimant,
+            reason="%s has the idle traveller; the column was already free" % claimant,
             claimant=claimant,
             character=character,
         )
     return _held_column(
-        claimant=claimant, character=character, aim="", holder=holder,
-        wants=wants, now=now, lease=lease, orphan_lease=orphan_lease,
+        claimant=claimant,
+        character=character,
+        aim="",
+        holder=holder,
+        wants=wants,
+        now=now,
+        lease=lease,
+        orphan_lease=orphan_lease,
         long_leases=long_leases,
-        want_fresh=want_fresh, releasable=releasable, clearing=True,
+        want_fresh=want_fresh,
+        releasable=releasable,
+        clearing=True,
     )
 
 
-def _free_column(*, claimant: str, character: str, aim: str, wants,
-                 last_served, now: float, want_fresh: float,
-                 urgent: bool = False) -> Decision:
+def _free_column(
+    *,
+    claimant: str,
+    character: str,
+    aim: str,
+    wants,
+    last_served,
+    now: float,
+    want_fresh: float,
+    urgent: bool = False,
+) -> Decision:
     """Nobody is holding the traveller. Is it this pass's turn to take it?
 
     SPLIT OUT OF `decide` RATHER THAN INLINE, so that the three questions -
@@ -616,11 +681,16 @@ def _free_column(*, claimant: str, character: str, aim: str, wants,
     # this one did. A pass that has never been served at all is owed it
     # outright; a pass that has never been served ITSELF owes nobody, because
     # it cannot have taken a turn from anybody.
-    yielded = [] if mine_served is None else [
-        want for want in ahead
-        if last_served.get(want.claimant) is None
-        or mine_served > last_served[want.claimant]
-    ]
+    yielded = (
+        []
+        if mine_served is None
+        else [
+            want
+            for want in ahead
+            if last_served.get(want.claimant) is None
+            or mine_served > last_served[want.claimant]
+        ]
+    )
     if yielded:
         # YIELDING A FREE COLUMN, WHICH IS THE HALF THAT MAKES THIS FAIR. This
         # pass could take it - nobody is holding it - but a pass that has been
@@ -632,9 +702,9 @@ def _free_column(*, claimant: str, character: str, aim: str, wants,
         return Decision(
             verdict=SLOT_WAIT,
             reason="%s stands aside: the column is free but %s has been "
-                   "waiting %ds for it and %s had the traveller more "
-                   "recently" % (claimant, first.claimant,
-                                 int(now - first.waiting_since), claimant),
+            "waiting %ds for it and %s had the traveller more "
+            "recently"
+            % (claimant, first.claimant, int(now - first.waiting_since), claimant),
             claimant=claimant,
             aim=aim,
             character=character,
@@ -642,17 +712,29 @@ def _free_column(*, claimant: str, character: str, aim: str, wants,
     return Decision(
         verdict=SLOT_TAKE,
         reason="%s takes the traveller %s for %r; the column was free"
-               % (claimant, character, aim),
+        % (claimant, character, aim),
         claimant=claimant,
         aim=aim,
         character=character,
     )
 
 
-def _held_column(*, claimant: str, character: str, aim: str, holder: Holder,
-                 wants, now: float, lease: float, orphan_lease: float,
-                 want_fresh: float, releasable, clearing: bool = False,
-                 urgent: bool = False, long_leases=None) -> Decision:
+def _held_column(
+    *,
+    claimant: str,
+    character: str,
+    aim: str,
+    holder: Holder,
+    wants,
+    now: float,
+    lease: float,
+    orphan_lease: float,
+    want_fresh: float,
+    releasable,
+    clearing: bool = False,
+    urgent: bool = False,
+    long_leases=None,
+) -> Decision:
     """Somebody else has the traveller. Wait, or take it off them?
 
     THE ONLY PLACE A PREEMPTION IS DECIDED, and it takes three things to agree:
@@ -680,8 +762,8 @@ def _held_column(*, claimant: str, character: str, aim: str, holder: Holder,
         return Decision(
             verdict=SLOT_WAIT,
             reason="%s waits: %s carries %r, which is not an errand the "
-                   "economy may hand back, so no lease applies to it"
-                   % (claimant, character, holder.aim),
+            "economy may hand back, so no lease applies to it"
+            % (claimant, character, holder.aim),
             claimant=claimant,
             aim=aim,
             character=character,
@@ -691,9 +773,16 @@ def _held_column(*, claimant: str, character: str, aim: str, holder: Holder,
         return Decision(
             verdict=SLOT_WAIT,
             reason="%s waits for %s's %r on %s, held %ds of a %ds lease "
-                   "(%ds left)" % (claimant, owner, holder.aim, character,
-                                   int(held_for), int(allowed),
-                                   int(allowed - held_for)),
+            "(%ds left)"
+            % (
+                claimant,
+                owner,
+                holder.aim,
+                character,
+                int(held_for),
+                int(allowed),
+                int(allowed - held_for),
+            ),
             claimant=claimant,
             aim=aim,
             character=character,
@@ -710,10 +799,16 @@ def _held_column(*, claimant: str, character: str, aim: str, holder: Holder,
         return Decision(
             verdict=SLOT_WAIT,
             reason="%s waits: %s's %r on %s is past its %ds lease, but %s has "
-                   "been waiting %ds longer and takes the slot first"
-                   % (claimant, owner, holder.aim, character, int(allowed),
-                      ahead[0].claimant,
-                      int(_own_wait(claimant, wants, now) - ahead[0].waiting_since)),
+            "been waiting %ds longer and takes the slot first"
+            % (
+                claimant,
+                owner,
+                holder.aim,
+                character,
+                int(allowed),
+                ahead[0].claimant,
+                int(_own_wait(claimant, wants, now) - ahead[0].waiting_since),
+            ),
             claimant=claimant,
             aim=aim,
             character=character,
@@ -723,10 +818,9 @@ def _held_column(*, claimant: str, character: str, aim: str, holder: Holder,
     return Decision(
         verdict=SLOT_CLEAR if clearing else SLOT_PREEMPT,
         reason="%s takes the traveller %s from %s: %r has held the family's "
-               "one travel column for %ds, past its %ds lease, and an errand "
-               "that cannot finish must not hold it for ever (%s)"
-               % (claimant, character, owner, holder.aim, int(held_for),
-                  int(allowed), issue),
+        "one travel column for %ds, past its %ds lease, and an errand "
+        "that cannot finish must not hold it for ever (%s)"
+        % (claimant, character, owner, holder.aim, int(held_for), int(allowed), issue),
         claimant=claimant,
         aim=aim,
         character=character,
@@ -742,8 +836,9 @@ def _own_wait(claimant: str, wants, now: float) -> float:
     return now
 
 
-def _reconcile(holder: Holder | None, *, leader: str, column: str,
-               now: float) -> Holder | None:
+def _reconcile(
+    holder: Holder | None, *, leader: str, column: str, now: float
+) -> Holder | None:
     """What the ledger's holder becomes once the column has been read.
 
     THE WORLD IS THE AUTHORITY AND THIS MEMORY IS NOT. mod-overseer clears
@@ -785,10 +880,14 @@ class Slot:
     that quietly disagrees with the column.
     """
 
-    def __init__(self, lease: float = LEASE_SECONDS,
-                 orphan_lease: float = ORPHAN_LEASE_SECONDS,
-                 want_fresh: float = WANT_FRESH_SECONDS,
-                 releasable=None, long_leases=None) -> None:
+    def __init__(
+        self,
+        lease: float = LEASE_SECONDS,
+        orphan_lease: float = ORPHAN_LEASE_SECONDS,
+        want_fresh: float = WANT_FRESH_SECONDS,
+        releasable=None,
+        long_leases=None,
+    ) -> None:
         self.lease = float(lease)
         self.orphan_lease = float(orphan_lease)
         self.want_fresh = float(want_fresh)
@@ -823,8 +922,9 @@ class Slot:
         if not claimant:
             return 0.0
         streak = self._fruitless.get(claimant, (0, 0.0))[0] + 1
-        wait = min(URGENT_BACKOFF_SECONDS * (2 ** (streak - 1)),
-                   URGENT_BACKOFF_CAP_SECONDS)
+        wait = min(
+            URGENT_BACKOFF_SECONDS * (2 ** (streak - 1)), URGENT_BACKOFF_CAP_SECONDS
+        )
         until = now + wait
         self._fruitless[claimant] = (streak, until)
         return until
@@ -844,12 +944,20 @@ class Slot:
         for the log line that says how many passes are queued."""
         return list(self._wants.values())
 
-    def want(self, *, claimant: str, character: str, aim: str, leader: str,
-             column: str, retaskable, now: float,
-             urgent: bool = False) -> Decision:
+    def want(
+        self,
+        *,
+        claimant: str,
+        character: str,
+        aim: str,
+        leader: str,
+        column: str,
+        retaskable,
+        now: float,
+        urgent: bool = False,
+    ) -> Decision:
         """Decide, and register the wait if the answer is no."""
-        self.holder = _reconcile(self.holder, leader=leader, column=column,
-                                 now=now)
+        self.holder = _reconcile(self.holder, leader=leader, column=column, now=now)
         # AN URGENT PASS THAT KEEPS ACHIEVING NOTHING STOPS BEING URGENT, for
         # as long as its backoff runs (infra#4191). This is deliberately the
         # first thing that happens to `urgent`, so everything below - the
@@ -872,28 +980,45 @@ class Slot:
         # lease an exemption rather than a lease.
         long_leases = {} if urgent else self.long_leases
         decision = decide(
-            claimant=claimant, character=character, aim=aim, leader=leader,
-            column=column, retaskable=retaskable, holder=self.holder,
-            wants=self.wants, last_served=self._served, now=now,
+            claimant=claimant,
+            character=character,
+            aim=aim,
+            leader=leader,
+            column=column,
+            retaskable=retaskable,
+            holder=self.holder,
+            wants=self.wants,
+            last_served=self._served,
+            now=now,
             urgent=urgent,
-            lease=lease, orphan_lease=orphan_lease, long_leases=long_leases,
-            want_fresh=self.want_fresh, releasable=self.releasable,
+            lease=lease,
+            orphan_lease=orphan_lease,
+            long_leases=long_leases,
+            want_fresh=self.want_fresh,
+            releasable=self.releasable,
         )
         if decision.verdict == SLOT_WAIT and decision.aim:
             self._note_wait(claimant, now)
         return decision
 
-    def want_idle(self, *, claimant: str, character: str, leader: str,
-                  column: str, now: float) -> Decision:
+    def want_idle(
+        self, *, claimant: str, character: str, leader: str, column: str, now: float
+    ) -> Decision:
         """Ask for the travel column to become empty, without a successor."""
-        self.holder = _reconcile(self.holder, leader=leader, column=column,
-                                 now=now)
+        self.holder = _reconcile(self.holder, leader=leader, column=column, now=now)
         decision = decide_idle(
-            claimant=claimant, character=character, leader=leader,
-            column=column, holder=self.holder, wants=self.wants, now=now,
-            lease=self.lease, orphan_lease=self.orphan_lease,
+            claimant=claimant,
+            character=character,
+            leader=leader,
+            column=column,
+            holder=self.holder,
+            wants=self.wants,
+            now=now,
+            lease=self.lease,
+            orphan_lease=self.orphan_lease,
             long_leases=self.long_leases,
-            want_fresh=self.want_fresh, releasable=self.releasable,
+            want_fresh=self.want_fresh,
+            releasable=self.releasable,
         )
         if decision.verdict == SLOT_WAIT:
             self._note_wait(claimant, now)
@@ -925,13 +1050,13 @@ class Slot:
             return
         name = decision.claimant
         since = decision.inherit_since if decision.inherit_since is not None else now
-        self.holder = Holder(claimant=name, character=decision.character,
-                             aim=decision.aim, since=since)
+        self.holder = Holder(
+            claimant=name, character=decision.character, aim=decision.aim, since=since
+        )
         self._wants.pop(name, None)
         self._served[name] = now
 
-    def adopt(self, *, claimant: str, character: str, aim: str,
-              now: float) -> None:
+    def adopt(self, *, claimant: str, character: str, aim: str, now: float) -> None:
         """Record a write this ledger did not arbitrate (infra#4194).
 
         NOT A CLAIM, AND DELIBERATELY NOT ONE. `want` decides whose turn it is;
@@ -965,8 +1090,7 @@ class Slot:
         """
         if not claimant or not character or not aim:
             return
-        self.holder = Holder(claimant=claimant, character=character,
-                             aim=aim, since=now)
+        self.holder = Holder(claimant=claimant, character=character, aim=aim, since=now)
 
     def forget(self, claimant: str) -> None:
         """Drop a pass's want without serving it.
@@ -983,9 +1107,9 @@ class Slot:
             return
         existing = self._wants.get(claimant)
         waiting_since = existing.waiting_since if existing else now
-        self._wants[claimant] = Want(claimant=claimant,
-                                      waiting_since=waiting_since,
-                                      last_asked=now)
+        self._wants[claimant] = Want(
+            claimant=claimant, waiting_since=waiting_since, last_asked=now
+        )
 
 
 def report(decision: Decision) -> str:

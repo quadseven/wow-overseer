@@ -14,6 +14,7 @@ order, and that a weapon nobody can hold is a gain.
 
 Tickets: infra#3500, mod-overseer#411.
 """
+
 import pathlib
 import unittest
 
@@ -24,14 +25,18 @@ import recap
 HERE = pathlib.Path(__file__).resolve().parent.parent
 MODULE = (HERE / "dungeonplan.py").read_text(encoding="utf-8")
 
-ENTRANCES = {"43": {"map": 1}, "36": {"map": 0}, "329": {"map": 0},
-             "209": {"map": 1}}
+ENTRANCES = {"43": {"map": 1}, "36": {"map": 0}, "329": {"map": 0}, "209": {"map": 1}}
 CONTINENTS = {"0": {"name": "Eastern Kingdoms"}, "1": {"name": "Kalimdor"}}
 
 
 def catalogue(map_id, low=15, high=25, comment="A Dungeon", difficulty=0):
-    return {"map_id": map_id, "difficulty": difficulty, "min_level": low,
-            "max_level": high, "comment": comment}
+    return {
+        "map_id": map_id,
+        "difficulty": difficulty,
+        "min_level": low,
+        "max_level": high,
+        "comment": comment,
+    }
 
 
 def encounter(map_id, creature, name="A Boss"):
@@ -44,18 +49,37 @@ def drop(creature, item, name, ilvl, inv=5, cls=4, sub=2, req=1, allow=-1):
     Defaults to a leather chest, which is the least interesting case and so
     the one every test that is about something else should not have to spell.
     """
-    return {"Entry": creature, "Item": item, "Chance": 20, "GroupId": 0,
-            "creature": creature, "item_name": name, "quality": 3,
-            "item_level": ilvl, "required_level": req, "class": cls,
-            "subclass": sub, "displayid": None, "inventory_type": inv,
-            "allowable_class": allow}
+    return {
+        "Entry": creature,
+        "Item": item,
+        "Chance": 20,
+        "GroupId": 0,
+        "creature": creature,
+        "item_name": name,
+        "quality": 3,
+        "item_level": ilvl,
+        "required_level": req,
+        "class": cls,
+        "subclass": sub,
+        "displayid": None,
+        "inventory_type": inv,
+        "allowable_class": allow,
+    }
 
 
 def worn(name, slot, item, ilvl, cls=4, sub=2, inv=5):
-    return {"name": name, "slot": slot, "entry": 900 + slot,
-            "item_name": item, "quality": 1, "item_level": ilvl,
-            "class": cls, "subclass": sub, "inventory_type": inv,
-            "displayid": None}
+    return {
+        "name": name,
+        "slot": slot,
+        "entry": 900 + slot,
+        "item_name": item,
+        "quality": 1,
+        "item_level": ilvl,
+        "class": cls,
+        "subclass": sub,
+        "inventory_type": inv,
+        "displayid": None,
+    }
 
 
 def skills(name, *ids):
@@ -68,23 +92,40 @@ ROGUE_SKILLS = skills("Ugga", 414, 173)
 WARRIOR_SKILLS = skills("Bork", 413, 43, 55)
 
 
-def build(catalogue_rows, encounter_rows, loot_rows, char_rows,
-          equipped_rows, skill_rows, roster=None, names=None, book=None):
+def build(
+    catalogue_rows,
+    encounter_rows,
+    loot_rows,
+    char_rows,
+    equipped_rows,
+    skill_rows,
+    roster=None,
+    names=None,
+    book=None,
+):
     return dungeonplan.build_dungeonplan(
-        catalogue_rows=catalogue_rows, encounter_rows=encounter_rows,
-        loot_rows=loot_rows, char_rows=char_rows,
-        equipped_rows=equipped_rows, skill_rows=skill_rows, icons={},
+        catalogue_rows=catalogue_rows,
+        encounter_rows=encounter_rows,
+        loot_rows=loot_rows,
+        char_rows=char_rows,
+        equipped_rows=equipped_rows,
+        skill_rows=skill_rows,
+        icons={},
         roster=roster if roster is not None else ["Ugga", "Bork"],
-        names=names or {}, entrances=ENTRANCES, continents=CONTINENTS,
-        book=book)
+        names=names or {},
+        entrances=ENTRANCES,
+        continents=CONTINENTS,
+        book=book,
+    )
 
 
 def one(payload, name):
     for dungeon in payload["dungeons"]:
         if dungeon["name"] == name:
             return dungeon
-    raise AssertionError("no dungeon called %r in %r"
-                         % (name, [d["name"] for d in payload["dungeons"]]))
+    raise AssertionError(
+        "no dungeon called %r in %r" % (name, [d["name"] for d in payload["dungeons"]])
+    )
 
 
 def gains_for(dungeon, who):
@@ -100,35 +141,63 @@ class TheDungeonListIsTheWorldsAndNotAHandWrittenOne(unittest.TestCase):
     remembered to add to it."""
 
     def base(self, rows):
-        return build(rows, [], [], [{"name": "Ugga", "level": 20, "class": 4,
-                                     "map": 1}],
-                     [], ROGUE_SKILLS, roster=["Ugga"])
+        return build(
+            rows,
+            [],
+            [],
+            [{"name": "Ugga", "level": 20, "class": 4, "map": 1}],
+            [],
+            ROGUE_SKILLS,
+            roster=["Ugga"],
+        )
 
     def test_every_catalogue_row_becomes_a_dungeon(self):
-        payload = self.base([catalogue(43, comment="Wailing Caverns"),
-                             catalogue(36, comment="The Deadmines")])
-        self.assertEqual({d["name"] for d in payload["dungeons"]},
-                         {"Wailing Caverns", "The Deadmines"})
+        payload = self.base(
+            [
+                catalogue(43, comment="Wailing Caverns"),
+                catalogue(36, comment="The Deadmines"),
+            ]
+        )
+        self.assertEqual(
+            {d["name"] for d in payload["dungeons"]},
+            {"Wailing Caverns", "The Deadmines"},
+        )
 
     def test_a_map_with_two_difficulty_rows_is_one_dungeon(self):
         """dungeon_access_template is keyed per difficulty, so a map arrives
         twice with two level ranges."""
-        payload = self.base([catalogue(43, 15, 25, "Wailing Caverns", 0),
-                             catalogue(43, 70, 80, "Wailing Caverns", 1)])
+        payload = self.base(
+            [
+                catalogue(43, 15, 25, "Wailing Caverns", 0),
+                catalogue(43, 70, 80, "Wailing Caverns", 1),
+            ]
+        )
         self.assertEqual(len(payload["dungeons"]), 1)
 
     def test_the_lowest_difficulty_row_wins_whole(self):
         """Not the lowest minimum with the highest maximum: that is a span
         neither row states, printed as though the table said it."""
-        payload = self.base([catalogue(43, 70, 80, "Wailing Caverns", 1),
-                             catalogue(43, 15, 25, "Wailing Caverns", 0)])
+        payload = self.base(
+            [
+                catalogue(43, 70, 80, "Wailing Caverns", 1),
+                catalogue(43, 15, 25, "Wailing Caverns", 0),
+            ]
+        )
         self.assertIn("level 15 to 25", one(payload, "Wailing Caverns")["level_line"])
 
     def test_the_sites_own_name_beats_the_tables_comment(self):
         """A second spelling of the same place on one site is a place a reader
         has to work out is the same place."""
-        payload = build([catalogue(36, comment="Deadmines (normal)")], [], [],
-                        [], [], [], roster=[], names={36: "The Deadmines"})
+        payload = build(
+            [catalogue(36, comment="Deadmines (normal)")],
+            [],
+            [],
+            [],
+            [],
+            [],
+            roster=[],
+            names={36: "The Deadmines"},
+        )
         self.assertEqual(payload["dungeons"][0]["name"], "The Deadmines")
 
     def test_the_tables_comment_is_the_fallback_and_not_a_map_number(self):
@@ -149,8 +218,15 @@ class TheDungeonListIsTheWorldsAndNotAHandWrittenOne(unittest.TestCase):
 class TheLevelRange(unittest.TestCase):
     def line(self, low, high, levels=(20,)):
         chars = [{"name": "Ugga", "level": levels[0], "class": 4, "map": 1}]
-        payload = build([catalogue(43, low, high, "Wailing Caverns")], [], [],
-                        chars, [], ROGUE_SKILLS, roster=["Ugga"])
+        payload = build(
+            [catalogue(43, low, high, "Wailing Caverns")],
+            [],
+            [],
+            chars,
+            [],
+            ROGUE_SKILLS,
+            roster=["Ugga"],
+        )
         return one(payload, "Wailing Caverns")["level_line"]
 
     def test_a_real_range_is_printed_with_both_numbers(self):
@@ -177,21 +253,27 @@ class TheLevelRange(unittest.TestCase):
 
 class WhoIsTooLowToZoneIn(unittest.TestCase):
     def payload(self, low, levels):
-        chars = [{"name": name, "level": level, "class": 4, "map": 1}
-                 for name, level in levels.items()]
-        return build([catalogue(43, low, 60, "Wailing Caverns")], [], [],
-                     chars, [], ROGUE_SKILLS + WARRIOR_SKILLS,
-                     roster=sorted(levels))
+        chars = [
+            {"name": name, "level": level, "class": 4, "map": 1}
+            for name, level in levels.items()
+        ]
+        return build(
+            [catalogue(43, low, 60, "Wailing Caverns")],
+            [],
+            [],
+            chars,
+            [],
+            ROGUE_SKILLS + WARRIOR_SKILLS,
+            roster=sorted(levels),
+        )
 
     def test_nobody_is_named_when_everybody_is_high_enough(self):
-        found = one(self.payload(15, {"Ugga": 20, "Bork": 21}),
-                    "Wailing Caverns")
+        found = one(self.payload(15, {"Ugga": 20, "Bork": 21}), "Wailing Caverns")
         self.assertEqual(found["entry_line"], "")
         self.assertFalse(found["shut"])
 
     def test_the_ones_who_are_too_low_are_named(self):
-        found = one(self.payload(21, {"Ugga": 20, "Bork": 21}),
-                    "Wailing Caverns")
+        found = one(self.payload(21, {"Ugga": 20, "Bork": 21}), "Wailing Caverns")
         self.assertIn("Ugga", found["entry_line"])
         self.assertNotIn("Bork", found["entry_line"])
         self.assertFalse(found["shut"], "one of them can still go")
@@ -202,8 +284,7 @@ class WhoIsTooLowToZoneIn(unittest.TestCase):
         Counting fixed that and broke a smaller thing: "not one of the 1 is
         high enough" on a roster of one. The count is already on the level
         line and in the chip, so the sentence carries none."""
-        found = one(self.payload(40, {"Ugga": 20, "Bork": 21}),
-                    "Wailing Caverns")
+        found = one(self.payload(40, {"Ugga": 20, "Bork": 21}), "Wailing Caverns")
         self.assertTrue(found["shut"])
         self.assertIn("nobody here is high enough", found["entry_line"])
         for hardcoded in ("five", "2", "1"):
@@ -212,8 +293,7 @@ class WhoIsTooLowToZoneIn(unittest.TestCase):
     def test_a_partly_blocked_dungeon_still_names_who_cannot_go(self):
         """Dropping the count must not cost the reader WHO, which is the half
         that decides whether the run can happen four-handed."""
-        found = one(self.payload(21, {"Ugga": 20, "Bork": 21}),
-                    "Wailing Caverns")
+        found = one(self.payload(21, {"Ugga": 20, "Bork": 21}), "Wailing Caverns")
         self.assertIn("Ugga", found["entry_line"])
         self.assertNotIn("Bork", found["entry_line"])
 
@@ -223,8 +303,15 @@ class WhoIsTooLowToZoneIn(unittest.TestCase):
         map. "1 dungeons read" appears on the day something is already wrong,
         which is the day the page is read closely."""
         chars = [{"name": "Ugga", "level": 20, "class": 4, "map": 1}]
-        payload = build([catalogue(43, comment="Only One")], [], [], chars,
-                        [], ROGUE_SKILLS, roster=["Ugga"])
+        payload = build(
+            [catalogue(43, comment="Only One")],
+            [],
+            [],
+            chars,
+            [],
+            ROGUE_SKILLS,
+            roster=["Ugga"],
+        )
         self.assertIn("1 dungeon read", payload["line"])
         self.assertNotIn("1 dungeons", payload["line"])
         self.assertIn("1 dungeon listed", payload["coverage"])
@@ -242,12 +329,22 @@ class WhereItsEntranceStands(unittest.TestCase):
     map."""
 
     def payload(self, maps):
-        chars = [{"name": name, "level": 20, "class": 4, "map": where}
-                 for name, where in maps.items()]
-        return build([catalogue(43, comment="Wailing Caverns"),
-                      catalogue(36, comment="The Deadmines")], [], [],
-                     chars, [], ROGUE_SKILLS + WARRIOR_SKILLS,
-                     roster=sorted(maps))
+        chars = [
+            {"name": name, "level": 20, "class": 4, "map": where}
+            for name, where in maps.items()
+        ]
+        return build(
+            [
+                catalogue(43, comment="Wailing Caverns"),
+                catalogue(36, comment="The Deadmines"),
+            ],
+            [],
+            [],
+            chars,
+            [],
+            ROGUE_SKILLS + WARRIOR_SKILLS,
+            roster=sorted(maps),
+        )
 
     def test_a_dungeon_on_their_continent_says_all_of_them_are_on_it(self):
         found = one(self.payload({"Ugga": 1, "Bork": 1}), "Wailing Caverns")
@@ -271,9 +368,15 @@ class WhereItsEntranceStands(unittest.TestCase):
         self.assertIn("all 2", found["where_line"])
 
     def test_an_entrance_nothing_can_place_is_admitted_and_not_guessed(self):
-        payload = build([catalogue(777, comment="Nowhere")], [], [],
-                        [{"name": "Ugga", "level": 20, "class": 4, "map": 1}],
-                        [], ROGUE_SKILLS, roster=["Ugga"])
+        payload = build(
+            [catalogue(777, comment="Nowhere")],
+            [],
+            [],
+            [{"name": "Ugga", "level": 20, "class": 4, "map": 1}],
+            [],
+            ROGUE_SKILLS,
+            roster=["Ugga"],
+        )
         self.assertIn("cannot place", one(payload, "Nowhere")["where_line"])
 
 
@@ -281,37 +384,54 @@ class WhatCountsAsAGain(unittest.TestCase):
     """One definition of "upgrade" on this site, and it is recap.verdict's."""
 
     def payload(self, loot, equipped, skill_rows=None):
-        chars = [{"name": "Ugga", "level": 30, "class": 4, "map": 1},
-                 {"name": "Bork", "level": 30, "class": 1, "map": 1}]
-        return build([catalogue(43, comment="Wailing Caverns")],
-                     [encounter(43, 3654, "Mutanus the Devourer")], loot,
-                     chars, equipped,
-                     ROGUE_SKILLS + WARRIOR_SKILLS if skill_rows is None
-                     else skill_rows)
+        chars = [
+            {"name": "Ugga", "level": 30, "class": 4, "map": 1},
+            {"name": "Bork", "level": 30, "class": 1, "map": 1},
+        ]
+        return build(
+            [catalogue(43, comment="Wailing Caverns")],
+            [encounter(43, 3654, "Mutanus the Devourer")],
+            loot,
+            chars,
+            equipped,
+            ROGUE_SKILLS + WARRIOR_SKILLS if skill_rows is None else skill_rows,
+        )
 
     def test_a_higher_item_level_in_a_worn_slot_is_a_gain(self):
-        found = one(self.payload([drop(3654, 10, "Better Vest", 44)],
-                                 [worn("Ugga", 4, "Old Vest", 30)]),
-                    "Wailing Caverns")
+        found = one(
+            self.payload(
+                [drop(3654, 10, "Better Vest", 44)], [worn("Ugga", 4, "Old Vest", 30)]
+            ),
+            "Wailing Caverns",
+        )
         self.assertIn("Ugga", found["gainers"])
         self.assertEqual(gains_for(found, "Ugga")["gains"][0]["delta"], 14)
 
     def test_a_lower_item_level_is_not_a_gain(self):
-        found = one(self.payload([drop(3654, 10, "Worse Vest", 20)],
-                                 [worn("Ugga", 4, "Old Vest", 30)]),
-                    "Wailing Caverns")
+        found = one(
+            self.payload(
+                [drop(3654, 10, "Worse Vest", 20)], [worn("Ugga", 4, "Old Vest", 30)]
+            ),
+            "Wailing Caverns",
+        )
         self.assertNotIn("Ugga", found["gainers"])
 
     def test_the_same_item_level_is_not_a_gain(self):
-        found = one(self.payload([drop(3654, 10, "Same Vest", 30)],
-                                 [worn("Ugga", 4, "Old Vest", 30)]),
-                    "Wailing Caverns")
+        found = one(
+            self.payload(
+                [drop(3654, 10, "Same Vest", 30)], [worn("Ugga", 4, "Old Vest", 30)]
+            ),
+            "Wailing Caverns",
+        )
         self.assertNotIn("Ugga", found["gainers"])
 
     def test_what_it_replaces_is_named_and_so_is_the_boss(self):
-        found = one(self.payload([drop(3654, 10, "Better Vest", 44)],
-                                 [worn("Ugga", 4, "Old Vest", 30)]),
-                    "Wailing Caverns")
+        found = one(
+            self.payload(
+                [drop(3654, 10, "Better Vest", 44)], [worn("Ugga", 4, "Old Vest", 30)]
+            ),
+            "Wailing Caverns",
+        )
         gain = gains_for(found, "Ugga")["gains"][0]
         self.assertEqual(gain["worn"], "Old Vest")
         self.assertEqual(gain["worn_ilvl"], 30)
@@ -324,26 +444,33 @@ class WhatCountsAsAGain(unittest.TestCase):
         """mod-overseer#411. allowable_class is -1 on a staff, so the ITEM
         restricts nobody; whether a character may hold it is a row in their
         own character_skills and is absent from item_template entirely."""
-        staff = drop(3654, 2280, "Kam's Walking Stick", 40, inv=17, cls=2,
-                     sub=10)
-        found = one(self.payload([staff],
-                                 [worn("Ugga", 15, "Dagger", 5, cls=2, sub=15,
-                                       inv=13)]),
-                    "Wailing Caverns")
+        staff = drop(3654, 2280, "Kam's Walking Stick", 40, inv=17, cls=2, sub=10)
+        found = one(
+            self.payload(
+                [staff], [worn("Ugga", 15, "Dagger", 5, cls=2, sub=15, inv=13)]
+            ),
+            "Wailing Caverns",
+        )
         self.assertNotIn("Ugga", found["gainers"])
 
     def test_a_weapon_the_character_does_hold_is_still_offered(self):
         sword = drop(3654, 5195, "Cruel Barb", 41, inv=21, cls=2, sub=7)
-        found = one(self.payload([sword],
-                                 [worn("Bork", 15, "Rusty Sword", 20, cls=2,
-                                       sub=7, inv=21)]),
-                    "Wailing Caverns")
+        found = one(
+            self.payload(
+                [sword], [worn("Bork", 15, "Rusty Sword", 20, cls=2, sub=7, inv=21)]
+            ),
+            "Wailing Caverns",
+        )
         self.assertIn("Bork", found["gainers"])
 
     def test_a_level_they_have_not_reached_is_not_a_gain(self):
-        found = one(self.payload([drop(3654, 10, "Late Vest", 90, req=60)],
-                                 [worn("Ugga", 4, "Old Vest", 30)]),
-                    "Wailing Caverns")
+        found = one(
+            self.payload(
+                [drop(3654, 10, "Late Vest", 90, req=60)],
+                [worn("Ugga", 4, "Old Vest", 30)],
+            ),
+            "Wailing Caverns",
+        )
         self.assertEqual(found["gainers"], [])
 
     def test_a_bag_is_not_a_gain_because_it_is_not_worn(self):
@@ -357,12 +484,14 @@ class WhatCountsAsAGain(unittest.TestCase):
         price that. Printed beside the piece rather than in a footer twenty
         rows down."""
         axe = drop(3654, 11, "Big Axe", 50, inv=17, cls=2, sub=1)
-        found = one(self.payload([axe],
-                                 [worn("Bork", 15, "Rusty Sword", 20, cls=2,
-                                       sub=7, inv=21)],
-                                 skill_rows=WARRIOR_SKILLS
-                                 + skills("Bork", 172)),
-                    "Wailing Caverns")
+        found = one(
+            self.payload(
+                [axe],
+                [worn("Bork", 15, "Rusty Sword", 20, cls=2, sub=7, inv=21)],
+                skill_rows=WARRIOR_SKILLS + skills("Bork", 172),
+            ),
+            "Wailing Caverns",
+        )
         gain = gains_for(found, "Bork")["gains"][0]
         self.assertTrue([c for c in gain["caveats"] if "off hand" in c])
 
@@ -377,11 +506,15 @@ class AnEmptySlotIsAllGainAndHasNoNumber(unittest.TestCase):
         # A worn chest so the armour ladder has an answer: a character in
         # nothing graded is UNRANKED rather than EMPTY, which is a different
         # case and test_recap.py's.
-        return build([catalogue(43, comment="Wailing Caverns")],
-                     [encounter(43, 3654)],
-                     [drop(3654, 12, "A Cloak", 39, inv=16, sub=1)],
-                     chars, [worn("Ugga", 4, "Old Vest", 30)], ROGUE_SKILLS,
-                     roster=["Ugga"])
+        return build(
+            [catalogue(43, comment="Wailing Caverns")],
+            [encounter(43, 3654)],
+            [drop(3654, 12, "A Cloak", 39, inv=16, sub=1)],
+            chars,
+            [worn("Ugga", 4, "Old Vest", 30)],
+            ROGUE_SKILLS,
+            roster=["Ugga"],
+        )
 
     def test_it_counts_toward_who_would_gain(self):
         self.assertIn("Ugga", one(self.payload(), "Wailing Caverns")["gainers"])
@@ -407,12 +540,20 @@ class OneSlotIsWornOnce(unittest.TestCase):
 
     def payload(self):
         chars = [{"name": "Ugga", "level": 30, "class": 4, "map": 1}]
-        loot = [drop(3654, 20, "Vest A", 40), drop(3654, 21, "Vest B", 44),
-                drop(3654, 22, "Vest C", 42)]
-        return build([catalogue(43, comment="Wailing Caverns")],
-                     [encounter(43, 3654)], loot, chars,
-                     [worn("Ugga", 4, "Old Vest", 30)], ROGUE_SKILLS,
-                     roster=["Ugga"])
+        loot = [
+            drop(3654, 20, "Vest A", 40),
+            drop(3654, 21, "Vest B", 44),
+            drop(3654, 22, "Vest C", 42),
+        ]
+        return build(
+            [catalogue(43, comment="Wailing Caverns")],
+            [encounter(43, 3654)],
+            loot,
+            chars,
+            [worn("Ugga", 4, "Old Vest", 30)],
+            ROGUE_SKILLS,
+            roster=["Ugga"],
+        )
 
     def test_every_piece_is_still_listed(self):
         found = gains_for(one(self.payload(), "Wailing Caverns"), "Ugga")
@@ -429,36 +570,59 @@ class OneSlotIsWornOnce(unittest.TestCase):
 
     def test_two_different_slots_do_both_count(self):
         chars = [{"name": "Ugga", "level": 30, "class": 4, "map": 1}]
-        loot = [drop(3654, 20, "Vest", 40), drop(3654, 21, "Gloves", 40,
-                                                 inv=10)]
-        payload = build([catalogue(43, comment="Wailing Caverns")],
-                        [encounter(43, 3654)], loot, chars,
-                        [worn("Ugga", 4, "Old Vest", 30),
-                         worn("Ugga", 9, "Old Gloves", 30, inv=10)],
-                        ROGUE_SKILLS, roster=["Ugga"])
+        loot = [drop(3654, 20, "Vest", 40), drop(3654, 21, "Gloves", 40, inv=10)]
+        payload = build(
+            [catalogue(43, comment="Wailing Caverns")],
+            [encounter(43, 3654)],
+            loot,
+            chars,
+            [
+                worn("Ugga", 4, "Old Vest", 30),
+                worn("Ugga", 9, "Old Gloves", 30, inv=10),
+            ],
+            ROGUE_SKILLS,
+            roster=["Ugga"],
+        )
         self.assertEqual(one(payload, "Wailing Caverns")["total"], 20)
 
 
 class TheOrderAndWhatItIsAllowedToClaim(unittest.TestCase):
     def payload(self):
-        chars = [{"name": "Ugga", "level": 30, "class": 4, "map": 1},
-                 {"name": "Bork", "level": 30, "class": 1, "map": 1}]
-        equipped = [worn("Ugga", 4, "Old Vest", 30),
-                    worn("Bork", 4, "Old Mail", 30, sub=3)]
-        catalogue_rows = [catalogue(43, comment="Two Gainers"),
-                          catalogue(36, comment="One Big Gainer"),
-                          catalogue(209, comment="One Small Gainer"),
-                          catalogue(329, 40, 60, comment="Shut To Them")]
-        encounters = [encounter(43, 1), encounter(36, 2), encounter(209, 3),
-                      encounter(329, 4)]
+        chars = [
+            {"name": "Ugga", "level": 30, "class": 4, "map": 1},
+            {"name": "Bork", "level": 30, "class": 1, "map": 1},
+        ]
+        equipped = [
+            worn("Ugga", 4, "Old Vest", 30),
+            worn("Bork", 4, "Old Mail", 30, sub=3),
+        ]
+        catalogue_rows = [
+            catalogue(43, comment="Two Gainers"),
+            catalogue(36, comment="One Big Gainer"),
+            catalogue(209, comment="One Small Gainer"),
+            catalogue(329, 40, 60, comment="Shut To Them"),
+        ]
+        encounters = [
+            encounter(43, 1),
+            encounter(36, 2),
+            encounter(209, 3),
+            encounter(329, 4),
+        ]
         loot = [
-            drop(1, 30, "Leather Vest", 34), drop(1, 31, "Mail Vest", 34, sub=3),
+            drop(1, 30, "Leather Vest", 34),
+            drop(1, 31, "Mail Vest", 34, sub=3),
             drop(2, 32, "Great Leather Vest", 60),
             drop(3, 33, "Slight Leather Vest", 31),
             drop(4, 34, "Shut Leather Vest", 99),
         ]
-        return build(catalogue_rows, encounters, loot, chars, equipped,
-                     ROGUE_SKILLS + WARRIOR_SKILLS)
+        return build(
+            catalogue_rows,
+            encounters,
+            loot,
+            chars,
+            equipped,
+            ROGUE_SKILLS + WARRIOR_SKILLS,
+        )
 
     def test_more_people_gaining_outranks_a_bigger_gain(self):
         """The headline question is where to take the FAMILY, so two people
@@ -468,8 +632,7 @@ class TheOrderAndWhatItIsAllowedToClaim(unittest.TestCase):
 
     def test_item_levels_break_a_tie_on_the_count(self):
         order = [d["name"] for d in self.payload()["dungeons"]]
-        self.assertLess(order.index("One Big Gainer"),
-                        order.index("One Small Gainer"))
+        self.assertLess(order.index("One Big Gainer"), order.index("One Small Gainer"))
 
     def test_a_dungeon_nobody_can_enter_is_last_whatever_it_holds(self):
         """It holds the best piece on the page and they cannot get in."""
@@ -483,13 +646,15 @@ class TheOrderAndWhatItIsAllowedToClaim(unittest.TestCase):
         """A ranked list invents an order where there is none, and the one
         printed on top reads as the better answer."""
         chars = [{"name": "Ugga", "level": 30, "class": 4, "map": 1}]
-        payload = build([catalogue(43, comment="Alpha"),
-                         catalogue(36, comment="Beta")],
-                        [encounter(43, 1), encounter(36, 2)],
-                        [drop(1, 40, "Vest One", 40),
-                         drop(2, 41, "Vest Two", 40)],
-                        chars, [worn("Ugga", 4, "Old Vest", 30)],
-                        ROGUE_SKILLS, roster=["Ugga"])
+        payload = build(
+            [catalogue(43, comment="Alpha"), catalogue(36, comment="Beta")],
+            [encounter(43, 1), encounter(36, 2)],
+            [drop(1, 40, "Vest One", 40), drop(2, 41, "Vest Two", 40)],
+            chars,
+            [worn("Ugga", 4, "Old Vest", 30)],
+            ROGUE_SKILLS,
+            roster=["Ugga"],
+        )
         self.assertIn("Beta", one(payload, "Alpha")["tie_line"])
         self.assertIn("Alpha", one(payload, "Beta")["tie_line"])
 
@@ -513,29 +678,45 @@ class WhatTheHeadlineMayNotSay(unittest.TestCase):
         back with no loot, and saying its drops lost a comparison that never
         ran is the page asserting something nothing here checked."""
         chars = [{"name": "Ugga", "level": 30, "class": 4, "map": 1}]
-        payload = build([catalogue(43, comment="Empty")], [], [], chars,
-                        [worn("Ugga", 4, "Old Vest", 30)], ROGUE_SKILLS,
-                        roster=["Ugga"])
+        payload = build(
+            [catalogue(43, comment="Empty")],
+            [],
+            [],
+            chars,
+            [worn("Ugga", 4, "Old Vest", 30)],
+            ROGUE_SKILLS,
+            roster=["Ugga"],
+        )
         line = one(payload, "Empty")["line"]
         self.assertIn("no boss loot", line)
         self.assertNotIn("beats what", line)
 
     def test_loot_that_beats_nothing_says_that_instead(self):
         chars = [{"name": "Ugga", "level": 30, "class": 4, "map": 1}]
-        payload = build([catalogue(43, comment="Poor")], [encounter(43, 1)],
-                        [drop(1, 50, "Rag", 5)], chars,
-                        [worn("Ugga", 4, "Old Vest", 30)], ROGUE_SKILLS,
-                        roster=["Ugga"])
+        payload = build(
+            [catalogue(43, comment="Poor")],
+            [encounter(43, 1)],
+            [drop(1, 50, "Rag", 5)],
+            chars,
+            [worn("Ugga", 4, "Old Vest", 30)],
+            ROGUE_SKILLS,
+            roster=["Ugga"],
+        )
         self.assertIn("beats what", one(payload, "Poor")["line"])
 
     def test_everybody_gaining_is_counted_and_named(self):
-        chars = [{"name": "Ugga", "level": 30, "class": 4, "map": 1},
-                 {"name": "Bork", "level": 30, "class": 1, "map": 1}]
-        payload = build([catalogue(43, comment="Good")], [encounter(43, 1)],
-                        [drop(1, 50, "Cloak", 39, inv=16, sub=1)], chars,
-                        [worn("Ugga", 4, "Old Vest", 30),
-                         worn("Bork", 4, "Old Mail", 30, sub=3)],
-                        ROGUE_SKILLS + WARRIOR_SKILLS)
+        chars = [
+            {"name": "Ugga", "level": 30, "class": 4, "map": 1},
+            {"name": "Bork", "level": 30, "class": 1, "map": 1},
+        ]
+        payload = build(
+            [catalogue(43, comment="Good")],
+            [encounter(43, 1)],
+            [drop(1, 50, "Cloak", 39, inv=16, sub=1)],
+            chars,
+            [worn("Ugga", 4, "Old Vest", 30), worn("Bork", 4, "Old Mail", 30, sub=3)],
+            ROGUE_SKILLS + WARRIOR_SKILLS,
+        )
         line = one(payload, "Good")["line"]
         self.assertIn("all 2", line)
         self.assertIn("Ugga", line)
@@ -543,12 +724,15 @@ class WhatTheHeadlineMayNotSay(unittest.TestCase):
 
     def test_the_top_line_counts_dungeons_and_recommends_nothing(self):
         chars = [{"name": "Ugga", "level": 30, "class": 4, "map": 1}]
-        payload = build([catalogue(43, comment="Good"),
-                         catalogue(36, comment="Empty")],
-                        [encounter(43, 1)],
-                        [drop(1, 50, "Cloak", 39, inv=16, sub=1)], chars,
-                        [worn("Ugga", 4, "Old Vest", 30)],
-                        ROGUE_SKILLS, roster=["Ugga"])
+        payload = build(
+            [catalogue(43, comment="Good"), catalogue(36, comment="Empty")],
+            [encounter(43, 1)],
+            [drop(1, 50, "Cloak", 39, inv=16, sub=1)],
+            chars,
+            [worn("Ugga", 4, "Old Vest", 30)],
+            ROGUE_SKILLS,
+            roster=["Ugga"],
+        )
         self.assertIn("2 dungeons read", payload["line"])
         self.assertIn("1 of them holds", payload["line"])
         for invented in ("should", "best", "go to", "recommend"):
@@ -557,8 +741,10 @@ class WhatTheHeadlineMayNotSay(unittest.TestCase):
     def test_the_family_line_says_who_was_compared_and_where_they_stand(self):
         """Every distance on every card is measured from this, so a reader who
         disagrees with one has to be able to see what it was measured from."""
-        chars = [{"name": "Ugga", "level": 30, "class": 4, "map": 1},
-                 {"name": "Bork", "level": 28, "class": 1, "map": 0}]
+        chars = [
+            {"name": "Ugga", "level": 30, "class": 4, "map": 1},
+            {"name": "Bork", "level": 28, "class": 1, "map": 0},
+        ]
         payload = build([], [], [], chars, [], ROGUE_SKILLS + WARRIOR_SKILLS)
         self.assertIn("Ugga 30", payload["family_line"])
         self.assertIn("Bork 28", payload["family_line"])
@@ -575,50 +761,90 @@ class TheChipsThatSurviveBeingCollapsed(unittest.TestCase):
         return {chip["text"]: chip["tone"] for chip in dungeon["chips"]}
 
     def test_the_level_range_and_the_continent_are_always_there(self):
-        payload = build([catalogue(43, 15, 25, "Wailing Caverns")], [], [],
-                        [{"name": "Ugga", "level": 20, "class": 4, "map": 1}],
-                        [], ROGUE_SKILLS, roster=["Ugga"])
+        payload = build(
+            [catalogue(43, 15, 25, "Wailing Caverns")],
+            [],
+            [],
+            [{"name": "Ugga", "level": 20, "class": 4, "map": 1}],
+            [],
+            ROGUE_SKILLS,
+            roster=["Ugga"],
+        )
         chips = self.chips(one(payload, "Wailing Caverns"))
         self.assertIn("levels 15 to 25", chips)
         self.assertEqual(chips["Kalimdor"], "up")
 
     def test_a_continent_none_of_them_are_on_is_toned_as_a_cost(self):
-        payload = build([catalogue(36, comment="The Deadmines")], [], [],
-                        [{"name": "Ugga", "level": 20, "class": 4, "map": 1}],
-                        [], ROGUE_SKILLS, roster=["Ugga"])
-        self.assertEqual(self.chips(one(payload, "The Deadmines"))
-                         ["Eastern Kingdoms"], "no")
+        payload = build(
+            [catalogue(36, comment="The Deadmines")],
+            [],
+            [],
+            [{"name": "Ugga", "level": 20, "class": 4, "map": 1}],
+            [],
+            ROGUE_SKILLS,
+            roster=["Ugga"],
+        )
+        self.assertEqual(
+            self.chips(one(payload, "The Deadmines"))["Eastern Kingdoms"], "no"
+        )
 
     def test_a_missing_level_range_is_dashed_rather_than_stated(self):
-        payload = build([catalogue(43, 0, 0, "Wailing Caverns")], [], [],
-                        [{"name": "Ugga", "level": 20, "class": 4, "map": 1}],
-                        [], ROGUE_SKILLS, roster=["Ugga"])
-        self.assertEqual(self.chips(one(payload, "Wailing Caverns"))
-                         ["no level range"], "unsure")
+        payload = build(
+            [catalogue(43, 0, 0, "Wailing Caverns")],
+            [],
+            [],
+            [{"name": "Ugga", "level": 20, "class": 4, "map": 1}],
+            [],
+            ROGUE_SKILLS,
+            roster=["Ugga"],
+        )
+        self.assertEqual(
+            self.chips(one(payload, "Wailing Caverns"))["no level range"], "unsure"
+        )
 
     def test_a_shut_dungeon_carries_the_chip_that_says_so(self):
-        payload = build([catalogue(329, 40, 60, "Stratholme")], [], [],
-                        [{"name": "Ugga", "level": 20, "class": 4, "map": 1}],
-                        [], ROGUE_SKILLS, roster=["Ugga"])
-        self.assertEqual(self.chips(one(payload, "Stratholme"))
-                         ["too low to enter"], "no")
+        payload = build(
+            [catalogue(329, 40, 60, "Stratholme")],
+            [],
+            [],
+            [{"name": "Ugga", "level": 20, "class": 4, "map": 1}],
+            [],
+            ROGUE_SKILLS,
+            roster=["Ugga"],
+        )
+        self.assertEqual(
+            self.chips(one(payload, "Stratholme"))["too low to enter"], "no"
+        )
 
     def test_the_item_level_chip_is_absent_when_there_is_nothing_to_show(self):
-        payload = build([catalogue(43, comment="Wailing Caverns")], [], [],
-                        [{"name": "Ugga", "level": 20, "class": 4, "map": 1}],
-                        [], ROGUE_SKILLS, roster=["Ugga"])
-        self.assertNotIn("0 item levels",
-                         self.chips(one(payload, "Wailing Caverns")))
+        payload = build(
+            [catalogue(43, comment="Wailing Caverns")],
+            [],
+            [],
+            [{"name": "Ugga", "level": 20, "class": 4, "map": 1}],
+            [],
+            ROGUE_SKILLS,
+            roster=["Ugga"],
+        )
+        self.assertNotIn("0 item levels", self.chips(one(payload, "Wailing Caverns")))
 
     def test_every_tone_is_one_the_stylesheet_knows(self):
-        payload = build([catalogue(43, 0, 0, "A"), catalogue(36, 40, 60, "B"),
-                         catalogue(777, 15, 25, "C")], [], [],
-                        [{"name": "Ugga", "level": 20, "class": 4, "map": 1}],
-                        [], ROGUE_SKILLS, roster=["Ugga"])
+        payload = build(
+            [
+                catalogue(43, 0, 0, "A"),
+                catalogue(36, 40, 60, "B"),
+                catalogue(777, 15, 25, "C"),
+            ],
+            [],
+            [],
+            [{"name": "Ugga", "level": 20, "class": 4, "map": 1}],
+            [],
+            ROGUE_SKILLS,
+            roster=["Ugga"],
+        )
         for dungeon in payload["dungeons"]:
             for chip in dungeon["chips"]:
-                self.assertIn(chip["tone"], ("", "up", "no", "unsure"),
-                              chip["text"])
+                self.assertIn(chip["tone"], ("", "up", "no", "unsure"), chip["text"])
 
 
 class TheBasisSaysWhatTheListDoesNotCover(unittest.TestCase):
@@ -626,14 +852,23 @@ class TheBasisSaysWhatTheListDoesNotCover(unittest.TestCase):
     list that quietly omits this is one a reader will over-trust."""
 
     def basis(self, skill_rows):
-        return build([catalogue(43, comment="Wailing Caverns")], [], [],
-                     [{"name": "Ugga", "level": 20, "class": 4, "map": 1}],
-                     [], skill_rows, roster=["Ugga"])["basis"]
+        return build(
+            [catalogue(43, comment="Wailing Caverns")],
+            [],
+            [],
+            [{"name": "Ugga", "level": 20, "class": 4, "map": 1}],
+            [],
+            skill_rows,
+            roster=["Ugga"],
+        )["basis"]
 
     def test_it_names_the_tables_it_read(self):
         basis = self.basis(ROGUE_SKILLS)
-        for table in ("dungeon_access_template", "instance_encounters",
-                      "creature_loot_template"):
+        for table in (
+            "dungeon_access_template",
+            "instance_encounters",
+            "creature_loot_template",
+        ):
             self.assertIn(table, basis, table)
 
     def test_it_admits_the_loot_it_does_not_follow(self):
@@ -666,10 +901,17 @@ class TheBasisSaysWhatTheListDoesNotCover(unittest.TestCase):
     def test_one_unknown_member_keeps_the_warning_for_everybody(self):
         """A board where one character's skills are missing is a board where
         that character's verdicts are the old item-level ones."""
-        basis = build([catalogue(43, comment="Wailing Caverns")], [], [],
-                      [{"name": "Ugga", "level": 20, "class": 4, "map": 1},
-                       {"name": "Bork", "level": 20, "class": 1, "map": 1}],
-                      [], ROGUE_SKILLS)["basis"]
+        basis = build(
+            [catalogue(43, comment="Wailing Caverns")],
+            [],
+            [],
+            [
+                {"name": "Ugga", "level": 20, "class": 4, "map": 1},
+                {"name": "Bork", "level": 20, "class": 1, "map": 1},
+            ],
+            [],
+            ROGUE_SKILLS,
+        )["basis"]
         self.assertIn("could not be read for every character", basis)
 
     def test_no_skill_rows_at_all_is_the_same_warning(self):
@@ -682,18 +924,23 @@ class ItBorrowsTheVerdictRatherThanKeepingASecondOne(unittest.TestCase):
     evening."""
 
     def test_the_gain_verdicts_are_the_loot_boards_own_constants(self):
-        self.assertEqual(set(dungeonplan.GAIN_VERDICTS),
-                         {recap.UPGRADE, recap.EMPTY})
+        self.assertEqual(set(dungeonplan.GAIN_VERDICTS), {recap.UPGRADE, recap.EMPTY})
 
     def test_the_sentence_on_a_gain_is_the_verdicts_own_why(self):
         chars = [{"name": "Ugga", "level": 30, "class": 4, "map": 1}]
-        member = recap.family_members(chars, [worn("Ugga", 4, "Old Vest", 30)],
-                                      ["Ugga"], ROGUE_SKILLS)[0]
+        member = recap.family_members(
+            chars, [worn("Ugga", 4, "Old Vest", 30)], ["Ugga"], ROGUE_SKILLS
+        )[0]
         row = drop(3654, 10, "Better Vest", 44)
-        payload = build([catalogue(43, comment="Wailing Caverns")],
-                        [encounter(43, 3654)], [row], chars,
-                        [worn("Ugga", 4, "Old Vest", 30)], ROGUE_SKILLS,
-                        roster=["Ugga"])
+        payload = build(
+            [catalogue(43, comment="Wailing Caverns")],
+            [encounter(43, 3654)],
+            [row],
+            chars,
+            [worn("Ugga", 4, "Old Vest", 30)],
+            ROGUE_SKILLS,
+            roster=["Ugga"],
+        )
         gain = gains_for(one(payload, "Wailing Caverns"), "Ugga")["gains"][0]
         self.assertIn(recap.verdict(row, member)["why"], gain["line"])
 
@@ -755,12 +1002,16 @@ STOCKADE_SKILLS = (
 
 
 def stockade(catalogue_rows, encounter_rows=None, loot_rows=None, names=None):
-    return build(catalogue_rows,
-                 STOCKADE_BOSSES if encounter_rows is None else encounter_rows,
-                 STOCKADE_LOOT if loot_rows is None else loot_rows,
-                 STOCKADE_FAMILY, STOCKADE_WORN, STOCKADE_SKILLS,
-                 roster=STOCKADE_ROSTER,
-                 names={STOCKADE: "The Stockade"} if names is None else names)
+    return build(
+        catalogue_rows,
+        STOCKADE_BOSSES if encounter_rows is None else encounter_rows,
+        STOCKADE_LOOT if loot_rows is None else loot_rows,
+        STOCKADE_FAMILY,
+        STOCKADE_WORN,
+        STOCKADE_SKILLS,
+        roster=STOCKADE_ROSTER,
+        names={STOCKADE: "The Stockade"} if names is None else names,
+    )
 
 
 class TheDungeonTheyAreActuallyRunning(unittest.TestCase):
@@ -781,8 +1032,16 @@ class TheDungeonTheyAreActuallyRunning(unittest.TestCase):
         found = one(self.listed(), "The Stockade")
         named = {gain["boss"] for m in found["members"] for gain in m["gains"]}
         self.assertTrue(named)
-        self.assertLessEqual(named, {"Bazil Thredd", "Hamhock", "Dextren Ward",
-                                     "Kam Deepfury", "Targorr the Dread"})
+        self.assertLessEqual(
+            named,
+            {
+                "Bazil Thredd",
+                "Hamhock",
+                "Dextren Ward",
+                "Kam Deepfury",
+                "Targorr the Dread",
+            },
+        )
 
     def test_the_shield_reaches_only_whoever_holds_shields(self):
         """mod-overseer#411 reaching this page. The shield is subclass 6 and
@@ -811,29 +1070,37 @@ class TheDungeonTheyAreActuallyRunning(unittest.TestCase):
     def test_the_access_tables_row_wins_over_the_site_placeholder(self):
         """The union is a floor and never a ceiling: a real row brings a real
         level range with it and must not be shadowed by the placeholder."""
-        self.assertIn("level 22 to 30",
-                      one(self.listed(), "The Stockade")["level_line"])
+        self.assertIn(
+            "level 22 to 30", one(self.listed(), "The Stockade")["level_line"]
+        )
 
     def test_the_reads_are_told_to_cover_every_map_that_gets_a_row(self):
         """A map added to the page but missing from the bound map list comes
         back with no bosses, and would render "no boss loot" over loot that
         was simply never asked for."""
-        self.assertIn(STOCKADE,
-                      dungeonplan.map_ids([], {STOCKADE: "The Stockade"}))
+        self.assertIn(STOCKADE, dungeonplan.map_ids([], {STOCKADE: "The Stockade"}))
         self.assertIn(STOCKADE, dungeonplan.map_ids([catalogue(STOCKADE)], {}))
-        self.assertEqual(dungeonplan.map_ids([catalogue(STOCKADE)],
-                                             {STOCKADE: "The Stockade"}),
-                         [STOCKADE])
+        self.assertEqual(
+            dungeonplan.map_ids([catalogue(STOCKADE)], {STOCKADE: "The Stockade"}),
+            [STOCKADE],
+        )
 
     def test_nothing_narrows_the_catalogue_beyond_the_two_lists(self):
         """No level filter, no party-size filter, no continent filter. Every
         map either list names gets a row, and the count is the whole answer to
         "is this list short because the pipeline narrowed it"."""
         rows = [catalogue(m, comment="map %d" % m) for m in (34, 43, 36, 209)]
-        payload = build(rows, [], [], STOCKADE_FAMILY, STOCKADE_WORN,
-                        STOCKADE_SKILLS, roster=STOCKADE_ROSTER, names={})
-        self.assertEqual({d["map_id"] for d in payload["dungeons"]},
-                         {34, 43, 36, 209})
+        payload = build(
+            rows,
+            [],
+            [],
+            STOCKADE_FAMILY,
+            STOCKADE_WORN,
+            STOCKADE_SKILLS,
+            roster=STOCKADE_ROSTER,
+            names={},
+        )
+        self.assertEqual({d["map_id"] for d in payload["dungeons"]}, {34, 43, 36, 209})
 
 
 class AnAbsentDungeonCannotPassForAnEmptyOne(unittest.TestCase):
@@ -846,12 +1113,17 @@ class AnAbsentDungeonCannotPassForAnEmptyOne(unittest.TestCase):
     def listed_but_unreadable(self):
         """In the catalogue, but the encounter table has nothing for it. A
         boss that is summoned rather than spawned is the real case."""
-        return stockade([catalogue(STOCKADE, 22, 30, "The Stockade")],
-                        encounter_rows=[], loot_rows=[])
+        return stockade(
+            [catalogue(STOCKADE, 22, 30, "The Stockade")],
+            encounter_rows=[],
+            loot_rows=[],
+        )
 
     def nothing_better(self):
-        return stockade([catalogue(STOCKADE, 22, 30, "The Stockade")],
-                        loot_rows=[drop(1716, 2043, "Rag", 3, inv=5)])
+        return stockade(
+            [catalogue(STOCKADE, 22, 30, "The Stockade")],
+            loot_rows=[drop(1716, 2043, "Rag", 3, inv=5)],
+        )
 
     def test_a_dungeon_with_nothing_readable_still_gets_a_row(self):
         found = one(self.listed_but_unreadable(), "The Stockade")
@@ -859,8 +1131,9 @@ class AnAbsentDungeonCannotPassForAnEmptyOne(unittest.TestCase):
         self.assertIn("no boss loot", found["line"])
 
     def test_that_row_is_not_worded_as_a_comparison_that_ran(self):
-        self.assertNotIn("beats what",
-                         one(self.listed_but_unreadable(), "The Stockade")["line"])
+        self.assertNotIn(
+            "beats what", one(self.listed_but_unreadable(), "The Stockade")["line"]
+        )
 
     def test_the_three_states_do_not_share_a_sentence(self):
         gains = one(self.listed_with_gains(), "The Stockade")["line"]
@@ -878,19 +1151,20 @@ class AnAbsentDungeonCannotPassForAnEmptyOne(unittest.TestCase):
     def test_the_coverage_line_says_a_map_on_neither_list_cannot_appear(self):
         """The ONLY place a reader can learn that their dungeon was never
         offered, because an absent dungeon has no row to say it from."""
-        self.assertIn("does not appear here at all",
-                      self.listed_with_gains()["coverage"])
+        self.assertIn(
+            "does not appear here at all", self.listed_with_gains()["coverage"]
+        )
 
     def test_it_counts_what_the_site_added_separately_from_the_table(self):
         self.assertIn("1 more this site names", stockade([])["coverage"])
 
     def test_it_does_not_invent_an_addition_when_there_was_none(self):
-        self.assertNotIn("more this site names",
-                         self.listed_with_gains()["coverage"])
+        self.assertNotIn("more this site names", self.listed_with_gains()["coverage"])
 
     def test_the_unreadable_one_is_counted_out_of_the_readable_tally(self):
-        self.assertIn("0 of them had boss loot",
-                      self.listed_but_unreadable()["coverage"])
+        self.assertIn(
+            "0 of them had boss loot", self.listed_but_unreadable()["coverage"]
+        )
 
     def test_the_basis_repeats_the_distinction_under_the_list(self):
         basis = self.listed_with_gains()["basis"]
@@ -898,8 +1172,16 @@ class AnAbsentDungeonCannotPassForAnEmptyOne(unittest.TestCase):
         self.assertIn("not the same as", basis)
 
     def test_an_empty_world_says_so_rather_than_counting_to_zero(self):
-        payload = build([], [], [], STOCKADE_FAMILY, STOCKADE_WORN,
-                        STOCKADE_SKILLS, roster=STOCKADE_ROSTER, names={})
+        payload = build(
+            [],
+            [],
+            [],
+            STOCKADE_FAMILY,
+            STOCKADE_WORN,
+            STOCKADE_SKILLS,
+            roster=STOCKADE_ROSTER,
+            names={},
+        )
         self.assertEqual(payload["coverage"], "")
         self.assertTrue(payload["empty_note"])
 
@@ -932,11 +1214,12 @@ class ThePartySizeIsReadToShowAndNeverToFilter(unittest.TestCase):
 
     def test_it_finds_the_marker_in_every_real_row_that_has_one(self):
         for map_id, comment in REAL_COMMENTS.items():
-            self.assertTrue(dungeonplan.party_size(comment),
-                            "%d: %s" % (map_id, comment))
+            self.assertTrue(
+                dungeonplan.party_size(comment), "%d: %s" % (map_id, comment)
+            )
 
     def test_it_reports_the_tables_own_words_and_does_not_tidy_them(self):
-        """"5/10man" is both, and a module that turned it into a number would
+        """ "5/10man" is both, and a module that turned it into a number would
         be asserting which one."""
         self.assertEqual(dungeonplan.party_size(REAL_COMMENTS[229]), "5/10man")
         self.assertEqual(dungeonplan.party_size(REAL_COMMENTS[409]), "40man")
@@ -953,14 +1236,19 @@ class ThePartySizeIsReadToShowAndNeverToFilter(unittest.TestCase):
     def test_it_does_not_match_a_word_that_merely_ends_in_man(self):
         """The false positive that would put a chip on a dungeon nobody said
         anything about."""
-        for near in ("10mana potion", "Human Lair", "Mana Tombs",
-                     "Shadowfang Keep"):
+        for near in ("10mana potion", "Human Lair", "Mana Tombs", "Shadowfang Keep"):
             self.assertEqual(dungeonplan.party_size(near), "", near)
 
     def test_the_marker_reaches_the_chips_beside_the_level_range(self):
-        payload = build([catalogue(409, 55, 60, REAL_COMMENTS[409])], [], [],
-                        [{"name": "Ugga", "level": 20, "class": 4, "map": 1}],
-                        [], ROGUE_SKILLS, roster=["Ugga"])
+        payload = build(
+            [catalogue(409, 55, 60, REAL_COMMENTS[409])],
+            [],
+            [],
+            [{"name": "Ugga", "level": 20, "class": 4, "map": 1}],
+            [],
+            ROGUE_SKILLS,
+            roster=["Ugga"],
+        )
         chips = [c["text"] for c in payload["dungeons"][0]["chips"]]
         self.assertIn("40man", chips)
         self.assertLess(chips.index("levels 55 to 60"), chips.index("40man"))
@@ -969,9 +1257,15 @@ class ThePartySizeIsReadToShowAndNeverToFilter(unittest.TestCase):
         """A 40man marker beside a family of five speaks for itself. Painting
         it as a warning would be this module deciding the one thing it went
         out of its way not to decide."""
-        payload = build([catalogue(409, 55, 60, REAL_COMMENTS[409])], [], [],
-                        [{"name": "Ugga", "level": 20, "class": 4, "map": 1}],
-                        [], ROGUE_SKILLS, roster=["Ugga"])
+        payload = build(
+            [catalogue(409, 55, 60, REAL_COMMENTS[409])],
+            [],
+            [],
+            [{"name": "Ugga", "level": 20, "class": 4, "map": 1}],
+            [],
+            ROGUE_SKILLS,
+            roster=["Ugga"],
+        )
         for chip in payload["dungeons"][0]["chips"]:
             if chip["text"] == "40man":
                 self.assertEqual(chip["tone"], "")
@@ -979,9 +1273,15 @@ class ThePartySizeIsReadToShowAndNeverToFilter(unittest.TestCase):
     def test_an_unmarked_dungeon_carries_no_chip_at_all(self):
         """Not "unknown size" either: an extra chip on most rows is noise, and
         the footer is where the gap is explained."""
-        payload = build([catalogue(34, 22, 30, "The Stockade")], [], [],
-                        [{"name": "Ugga", "level": 20, "class": 4, "map": 1}],
-                        [], ROGUE_SKILLS, roster=["Ugga"])
+        payload = build(
+            [catalogue(34, 22, 30, "The Stockade")],
+            [],
+            [],
+            [{"name": "Ugga", "level": 20, "class": 4, "map": 1}],
+            [],
+            ROGUE_SKILLS,
+            roster=["Ugga"],
+        )
         chips = [c["text"] for c in payload["dungeons"][0]["chips"]]
         self.assertFalse([c for c in chips if "man" in c], chips)
 
@@ -991,26 +1291,45 @@ class ThePartySizeIsReadToShowAndNeverToFilter(unittest.TestCase):
         text that several dungeons do not carry."""
         rows = [catalogue(m, 55, 60, c) for m, c in REAL_COMMENTS.items()]
         rows += [catalogue(34, 22, 30, "The Stockade")]
-        payload = build(rows, [], [],
-                        [{"name": "Ugga", "level": 20, "class": 4, "map": 1}],
-                        [], ROGUE_SKILLS, roster=["Ugga"])
-        self.assertEqual({d["map_id"] for d in payload["dungeons"]},
-                         set(REAL_COMMENTS) | {34})
+        payload = build(
+            rows,
+            [],
+            [],
+            [{"name": "Ugga", "level": 20, "class": 4, "map": 1}],
+            [],
+            ROGUE_SKILLS,
+            roster=["Ugga"],
+        )
+        self.assertEqual(
+            {d["map_id"] for d in payload["dungeons"]}, set(REAL_COMMENTS) | {34}
+        )
 
     def test_the_footer_says_a_row_without_the_chip_is_not_a_claim(self):
-        payload = build([catalogue(34, 22, 30, "The Stockade")], [], [],
-                        [{"name": "Ugga", "level": 20, "class": 4, "map": 1}],
-                        [], ROGUE_SKILLS, roster=["Ugga"])
+        payload = build(
+            [catalogue(34, 22, 30, "The Stockade")],
+            [],
+            [],
+            [{"name": "Ugga", "level": 20, "class": 4, "map": 1}],
+            [],
+            ROGUE_SKILLS,
+            roster=["Ugga"],
+        )
         basis = payload["basis"]
         self.assertIn("free text", basis)
         self.assertIn("never to narrow", basis)
         self.assertIn("not a claim", basis)
 
     def test_a_site_listed_row_has_no_comment_to_read_and_says_nothing(self):
-        payload = build([], [], [],
-                        [{"name": "Ugga", "level": 20, "class": 4, "map": 1}],
-                        [], ROGUE_SKILLS, roster=["Ugga"],
-                        names={34: "The Stockade"})
+        payload = build(
+            [],
+            [],
+            [],
+            [{"name": "Ugga", "level": 20, "class": 4, "map": 1}],
+            [],
+            ROGUE_SKILLS,
+            roster=["Ugga"],
+            names={34: "The Stockade"},
+        )
         chips = [c["text"] for c in payload["dungeons"][0]["chips"]]
         self.assertFalse([c for c in chips if "man" in c], chips)
 
@@ -1031,20 +1350,38 @@ def tooltip_loot():
     value and the stat pair are what a tooltip has to have something to say
     about; without them template_tooltip has nothing to draw."""
     row = drop(1716, 2044, "Warden Belt", 34, inv=6, sub=2)
-    row.update(armor=56, max_durability=45, bonding=1, sell_price=900,
-               stat_type1=4, stat_value1=7, stat_type2=7, stat_value2=5,
-               description="", itemset=0, block=0, delay=0, dmg_min1=0,
-               dmg_max1=0)
+    row.update(
+        armor=56,
+        max_durability=45,
+        bonding=1,
+        sell_price=900,
+        stat_type1=4,
+        stat_value1=7,
+        stat_type2=7,
+        stat_value2=5,
+        description="",
+        itemset=0,
+        block=0,
+        delay=0,
+        dmg_min1=0,
+        dmg_max1=0,
+    )
     return [row]
 
 
 class ADropNobodyHoldsStillShowsItsLines(unittest.TestCase):
     def payload(self, book):
-        return build([catalogue(34, 22, 30, "The Stockade")],
-                     [encounter(34, 1716, "Bazil Thredd")], tooltip_loot(),
-                     STOCKADE_FAMILY, STOCKADE_WORN, STOCKADE_SKILLS,
-                     roster=STOCKADE_ROSTER, names={34: "The Stockade"},
-                     book=book)
+        return build(
+            [catalogue(34, 22, 30, "The Stockade")],
+            [encounter(34, 1716, "Bazil Thredd")],
+            tooltip_loot(),
+            STOCKADE_FAMILY,
+            STOCKADE_WORN,
+            STOCKADE_SKILLS,
+            roster=STOCKADE_ROSTER,
+            names={34: "The Stockade"},
+            book=book,
+        )
 
     def gain(self, book):
         found = one(self.payload(book), "The Stockade")
@@ -1066,8 +1403,7 @@ class ADropNobodyHoldsStillShowsItsLines(unittest.TestCase):
         """A second tooltip builder is a second opinion about what an item
         says, and the two would disagree the first time either was touched."""
         row = dict(tooltip_loot()[0], entry=2044)
-        self.assertEqual(self.gain(BOOK)["tooltip"],
-                         armory.template_tooltip(row, BOOK))
+        self.assertEqual(self.gain(BOOK)["tooltip"], armory.template_tooltip(row, BOOK))
 
     def test_it_is_built_from_our_own_tables_and_not_fetched(self):
         """The page already refuses to let a browser reach an outside CDN for

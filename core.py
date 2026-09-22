@@ -9,6 +9,7 @@ too thin to hide logic in.
 
 Epic: infra#2597, ticket infra#2598.
 """
+
 from __future__ import annotations
 
 import re
@@ -187,7 +188,9 @@ def _spoken_directive(target: str, command: str, source: str):
     return spoken
 
 
-_ROSTER_RE = re.compile(r"\b(list|who|online|souls|playing|roster|players)\b", re.IGNORECASE)
+_ROSTER_RE = re.compile(
+    r"\b(list|who|online|souls|playing|roster|players)\b", re.IGNORECASE
+)
 
 
 def _digest_ask(text: str):
@@ -233,7 +236,9 @@ def parse_directive(
             continue
         if len(command) > MAX_COMMAND_LEN:
             directives.append(
-                Reply(f"That order for {target} is too long ({len(command)} chars, max {MAX_COMMAND_LEN}).")
+                Reply(
+                    f"That order for {target} is too long ({len(command)} chars, max {MAX_COMMAND_LEN})."
+                )
             )
             continue
         # WoW's own chat syntax ("/say hi", "/w Thrall hi") and dot-commands
@@ -257,11 +262,23 @@ def parse_directive(
         d
         for d in directives
         if isinstance(
-            d, (InsertCommand, NLDirective, FanoutCommand, FanoutDirective, SpeakCommand, GmCommand)
+            d,
+            (
+                InsertCommand,
+                NLDirective,
+                FanoutCommand,
+                FanoutDirective,
+                SpeakCommand,
+                GmCommand,
+            ),
         )
     ]
     if len(orders) > MAX_COMMANDS_PER_MESSAGE:
-        return [Reply(f"That is {len(orders)} orders in one breath; the cap is {MAX_COMMANDS_PER_MESSAGE}.")]
+        return [
+            Reply(
+                f"That is {len(orders)} orders in one breath; the cap is {MAX_COMMANDS_PER_MESSAGE}."
+            )
+        ]
     return directives
 
 
@@ -328,7 +345,9 @@ def _group_directive(
     if expression == "guild":
         return Reply(f"Name the guild. {GROUP_USAGE}")
     if not command:
-        return Reply(f"Tell {describe_expression(expression)} what to do. {GROUP_USAGE}")
+        return Reply(
+            f"Tell {describe_expression(expression)} what to do. {GROUP_USAGE}"
+        )
     if len(command) > MAX_COMMAND_LEN:
         return Reply(
             f"That order for {describe_expression(expression)} is too long "
@@ -408,7 +427,9 @@ def report_outcomes(
             if kind == "chat":
                 reply = Reply(f"{row['target_name']} could not say that ({detail}).")
             elif kind == "gm":
-                reply = Reply(f"{row['target_name']}: {row['command']} - refused ({detail}).")
+                reply = Reply(
+                    f"{row['target_name']}: {row['command']} - refused ({detail})."
+                )
             else:
                 reply = Reply(f"{row['target_name']} did not get the order ({detail}).")
         replies.append((row_id, reply))
@@ -430,7 +451,9 @@ def format_roster(rows: list[dict]) -> Reply:
     census plus a sample; the full living map is the #2599 ticket's job.
     """
     if not rows:
-        return Reply("The world is empty. Either the realm is down or nobody is logged in.")
+        return Reply(
+            "The world is empty. Either the realm is down or nobody is logged in."
+        )
 
     total = len(rows)
     alliance = sum(1 for r in rows if r["race"] in _ALLIANCE_RACES)
@@ -448,7 +471,12 @@ def format_roster(rows: list[dict]) -> Reply:
 
     lines = [
         f"{total} souls in the world - {alliance} Alliance, {horde} Horde, {fighting} in combat right now.",
-        "By continent: " + ", ".join(f"{name} {n}" for name, n in sorted(by_continent.items(), key=lambda kv: -kv[1])) + ".",
+        "By continent: "
+        + ", ".join(
+            f"{name} {n}"
+            for name, n in sorted(by_continent.items(), key=lambda kv: -kv[1])
+        )
+        + ".",
         f"Levels {levels[0]} to {levels[-1]}, median {levels[len(levels) // 2]}.",
         "Highest: " + ", ".join(f"{r['name']} ({r['level']})" for r in highest) + ".",
     ]

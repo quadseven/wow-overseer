@@ -31,7 +31,6 @@ import re
 from collections.abc import Collection
 from dataclasses import dataclass, field
 
-import voice
 
 # Long enough that a bot repeating itself, or two members calling at once,
 # cannot turn one situation into a stream of orders. Short enough that a real

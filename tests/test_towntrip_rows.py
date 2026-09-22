@@ -8,17 +8,32 @@ reason, which is that every mistake it can make is silent. A member dropped
 because a row was missing plans nothing and looks exactly like a member who
 needs nothing.
 """
+
 import unittest
 
 import towntrip
 from towntrip import Town
 
 
-def stack_row(holder, guid=1, entry=787, name="Slitherskin Mackerel",
-              carried=1, category=towntrip.CONSUMABLE_CATEGORY_FOOD, flags=0):
+def stack_row(
+    holder,
+    guid=1,
+    entry=787,
+    name="Slitherskin Mackerel",
+    carried=1,
+    category=towntrip.CONSUMABLE_CATEGORY_FOOD,
+    flags=0,
+):
     """One carried consumable stack, as _TOWN_CARRIED_SQL returns it."""
-    return {"holder": holder, "guid": guid, "entry": entry, "name": name,
-            "carried": carried, "spell_category": category, "item_flags": flags}
+    return {
+        "holder": holder,
+        "guid": guid,
+        "entry": entry,
+        "name": name,
+        "carried": carried,
+        "spell_category": category,
+        "item_flags": flags,
+    }
 
 
 def worn_row(holder, entry=1, durability=90, maximum=100, **kw):
@@ -47,7 +62,9 @@ class TheTownIsReadFromWhereTheyStand(unittest.TestCase):
         self.assertEqual(got, Town(repairs=False, stocks=frozenset()))
 
     def test_a_repairer_in_reach_is_the_only_thing_repairs_needs(self):
-        got = towntrip.town_from_rows([{"npcflag": towntrip.NPC_FLAG_REPAIR, "item": None}])
+        got = towntrip.town_from_rows(
+            [{"npcflag": towntrip.NPC_FLAG_REPAIR, "item": None}]
+        )
         self.assertTrue(got.repairs)
         self.assertEqual(got.stocks, frozenset())
 
@@ -61,13 +78,15 @@ class TheTownIsReadFromWhereTheyStand(unittest.TestCase):
         other would refuse exactly the vendors that would have bought.
         """
         got = towntrip.town_from_rows(
-            [{"npcflag": towntrip.NPC_FLAG_VENDOR, "item": None}])
+            [{"npcflag": towntrip.NPC_FLAG_VENDOR, "item": None}]
+        )
         self.assertTrue(got.vendor)
         self.assertEqual(got.stocks, frozenset())
 
     def test_a_repairer_alone_is_not_a_vendor(self):
         got = towntrip.town_from_rows(
-            [{"npcflag": towntrip.NPC_FLAG_REPAIR, "item": None}])
+            [{"npcflag": towntrip.NPC_FLAG_REPAIR, "item": None}]
+        )
         self.assertTrue(got.repairs)
         self.assertFalse(got.vendor)
 
@@ -97,7 +116,9 @@ class TheTownIsReadFromWhereTheyStand(unittest.TestCase):
         this module exists to avoid, and the refusal would read like a broken
         vendor rather than like a bad plan.
         """
-        got = towntrip.town_from_rows([{"npcflag": towntrip.NPC_FLAG_REPAIR, "item": 787}])
+        got = towntrip.town_from_rows(
+            [{"npcflag": towntrip.NPC_FLAG_REPAIR, "item": 787}]
+        )
         self.assertEqual(got.stocks, frozenset())
 
     def test_a_spawn_with_no_flags_contributes_nothing(self):
@@ -124,8 +145,7 @@ class EveryNameComesBackAsAMember(unittest.TestCase):
         self.assertEqual(len(got), 1)
 
     def test_rows_for_somebody_not_asked_about_are_ignored(self):
-        got = towntrip.members_from_rows(
-            [worn_row("Stranger")], [], [], {}, ["Grug"])
+        got = towntrip.members_from_rows([worn_row("Stranger")], [], [], {}, ["Grug"])
         self.assertEqual([m.name for m in got], ["Grug"])
         self.assertEqual(got[0].equipped, ())
 
@@ -139,13 +159,15 @@ class TheFactsSurviveTheCrossing(unittest.TestCase):
         be sent home with nothing to drink.
         """
         got = towntrip.members_from_rows(
-            [worn_row("Ugga", klass="Priest")], [], [], {}, ["Ugga"])
+            [worn_row("Ugga", klass="Priest")], [], [], {}, ["Ugga"]
+        )
         self.assertEqual(got[0].klass, "priest")
         self.assertIn(got[0].klass, towntrip.MANA_CLASSES)
 
     def test_durability_becomes_an_equipped_item(self):
         got = towntrip.members_from_rows(
-            [worn_row("Grug", durability=94, maximum=100)], [], [], {}, ["Grug"])
+            [worn_row("Grug", durability=94, maximum=100)], [], [], {}, ["Grug"]
+        )
         self.assertEqual(got[0].equipped[0].durability, 94)
         self.assertAlmostEqual(got[0].worst, 0.94)
 
@@ -156,7 +178,8 @@ class TheFactsSurviveTheCrossing(unittest.TestCase):
         repair on a family that has nothing to repair.
         """
         got = towntrip.members_from_rows(
-            [worn_row("Og", durability=0, maximum=0)], [], [], {}, ["Og"])
+            [worn_row("Og", durability=0, maximum=0)], [], [], {}, ["Og"]
+        )
         self.assertEqual(got[0].equipped, ())
         self.assertEqual(got[0].worst, 1.0)
 
@@ -166,10 +189,15 @@ class TheFactsSurviveTheCrossing(unittest.TestCase):
         neither is not a consumable and is dropped rather than guessed at."""
         got = towntrip.members_from_rows(
             [worn_row("Bork")],
-            [stack_row("Bork", guid=1, category=11, carried=3),
-             stack_row("Bork", guid=2, category=59, carried=5),
-             stack_row("Bork", guid=3, category=0, carried=40)],
-            [], {}, ["Bork"])
+            [
+                stack_row("Bork", guid=1, category=11, carried=3),
+                stack_row("Bork", guid=2, category=59, carried=5),
+                stack_row("Bork", guid=3, category=0, carried=40),
+            ],
+            [],
+            {},
+            ["Bork"],
+        )
         self.assertEqual(got[0].food_carried, 3)
         self.assertEqual(got[0].drink_carried, 5)
         self.assertEqual([s.guid for s in got[0].stacks], [1, 2])
@@ -180,9 +208,21 @@ class TheFactsSurviveTheCrossing(unittest.TestCase):
         as zero and a stack would have been bought over them (infra#3464)."""
         got = towntrip.members_from_rows(
             [worn_row("Og")],
-            [stack_row("Og", guid=9, entry=5350, name="Conjured Water",
-                       category=59, carried=15, flags=towntrip.ITEM_FLAG_CONJURED)],
-            [], {}, ["Og"])
+            [
+                stack_row(
+                    "Og",
+                    guid=9,
+                    entry=5350,
+                    name="Conjured Water",
+                    category=59,
+                    carried=15,
+                    flags=towntrip.ITEM_FLAG_CONJURED,
+                )
+            ],
+            [],
+            {},
+            ["Og"],
+        )
         self.assertEqual(got[0].drink_carried, 15)
         self.assertTrue(got[0].stacks[0].conjured)
 
@@ -192,16 +232,22 @@ class TheFactsSurviveTheCrossing(unittest.TestCase):
         got = towntrip.members_from_rows(
             [worn_row("Bork")],
             [stack_row("Bork", guid=4, category=11, carried=7, flags=0)],
-            [], {}, ["Bork"])
+            [],
+            {},
+            ["Bork"],
+        )
         self.assertFalse(got[0].stacks[0].conjured)
 
     def test_a_stack_with_no_guid_still_counts_and_cannot_be_handed_on(self):
-        """"We can see they have it but not which stack" keeps a purchase from
+        """ "We can see they have it but not which stack" keeps a purchase from
         being planned over it, and offers nothing it cannot name."""
         got = towntrip.members_from_rows(
             [worn_row("Bork")],
             [stack_row("Bork", guid=0, category=11, carried=6)],
-            [], {}, ["Bork"])
+            [],
+            {},
+            ["Bork"],
+        )
         self.assertEqual(got[0].food_carried, 6)
         self.assertEqual(got[0].stacks, ())
 
@@ -209,9 +255,14 @@ class TheFactsSurviveTheCrossing(unittest.TestCase):
         """Twenty of something is two stacks of ten as often as one of twenty."""
         got = towntrip.members_from_rows(
             [worn_row("Bork")],
-            [stack_row("Bork", guid=1, category=11, carried=12),
-             stack_row("Bork", guid=2, category=11, carried=8)],
-            [], {}, ["Bork"])
+            [
+                stack_row("Bork", guid=1, category=11, carried=12),
+                stack_row("Bork", guid=2, category=11, carried=8),
+            ],
+            [],
+            {},
+            ["Bork"],
+        )
         self.assertEqual(got[0].food_carried, 20)
         self.assertEqual(len(got[0].stacks), 2)
 
@@ -223,7 +274,8 @@ class TheFactsSurviveTheCrossing(unittest.TestCase):
 
     def test_free_slots_arrive_and_default_to_none(self):
         got = towntrip.members_from_rows(
-            [worn_row("Grug")], [], [], {"Grug": 14}, ["Grug", "Bork"])
+            [worn_row("Grug")], [], [], {"Grug": 14}, ["Grug", "Bork"]
+        )
         by_name = {m.name: m for m in got}
         self.assertEqual(by_name["Grug"].free_slots, 14)
         # Unmeasured room is zero room, which stops a purchase rather than
@@ -253,7 +305,8 @@ class ThePlannerAcceptsWhatThisProduces(unittest.TestCase):
             ]
         )
         members = towntrip.members_from_rows(
-            rows, carried, spells, {"Grug": 14, "Ugga": 4}, ["Grug", "Ugga"])
+            rows, carried, spells, {"Grug": 14, "Ugga": 4}, ["Grug", "Ugga"]
+        )
         got = towntrip.plan(members, town)
 
         kinds = {(e.member, e.kind) for e in got.errands}
@@ -274,18 +327,26 @@ class ThePlannerAcceptsWhatThisProduces(unittest.TestCase):
         """
         members = towntrip.members_from_rows(
             [worn_row("Grug", durability=50, maximum=100)],
-            [], [], {"Grug": 10}, ["Grug"])
+            [],
+            [],
+            {"Grug": 10},
+            ["Grug"],
+        )
         town = towntrip.town_from_rows(
-            [{"npcflag": towntrip.NPC_FLAG_REPAIR | towntrip.NPC_FLAG_VENDOR,
-              "item": 4594}])
+            [
+                {
+                    "npcflag": towntrip.NPC_FLAG_REPAIR | towntrip.NPC_FLAG_VENDOR,
+                    "item": 4594,
+                }
+            ]
+        )
         got = towntrip.plan(members, town)
         for errand in got.errands:
             with self.subTest(errand=errand):
                 if errand.kind == "repair":
                     self.assertEqual(errand.command, "all")
                 else:
-                    self.assertRegex(errand.command,
-                                     r"^entry:\d+ count:\d+ max:\d+$")
+                    self.assertRegex(errand.command, r"^entry:\d+ count:\d+ max:\d+$")
 
 
 if __name__ == "__main__":

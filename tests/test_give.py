@@ -20,6 +20,7 @@ like it worked:
   * an ENUM value added by editing CREATE TABLE IF NOT EXISTS, which does
     nothing at all to a table that already exists.
 """
+
 import pathlib
 import re
 import unittest
@@ -27,9 +28,7 @@ import unittest
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 MODULE = ROOT / "mod-overseer/src/mod_overseer.cpp"
 MIGRATION = (
-    ROOT
-    / "mod-overseer/data/sql/characters/base"
-    / "2026_08_24_00_overseer_give.sql"
+    ROOT / "mod-overseer/data/sql/characters/base" / "2026_08_24_00_overseer_give.sql"
 )
 
 
@@ -40,7 +39,9 @@ def _source() -> str:
 def _give_source() -> str:
     """Everything from the give banner to the end of DoGive."""
     src = _source()
-    start = src.index("// ---------------------------------------------------------------- give --")
+    start = src.index(
+        "// ---------------------------------------------------------------- give --"
+    )
     end = src.index("    void WriteSnapshot()")
     assert end > start
     return src[start:end]
@@ -79,7 +80,7 @@ class EveryRefusalIsReported(unittest.TestCase):
         diagnose from outside the worldserver."""
         body = _give_source()
         # DoGive lost its `static` in #170; match on the part that is stable.
-        body = body[body.index("char const* DoGive("):]
+        body = body[body.index("char const* DoGive(") :]
         # AND IT STOPS AT DoGive'S OWN END, which it did not used to. The window
         # _give_source returns runs to WriteSnapshot, so slicing only at the
         # front left this scanning every function that happens to sit between
@@ -91,7 +92,9 @@ class EveryRefusalIsReported(unittest.TestCase):
         # refuse(), and the home errand logs it and holds the member. So the
         # invariant this test protects was never broken; the test was reading a
         # function it was never about.
-        end = body.find("--------------------------------------------------------------- trade --")
+        end = body.find(
+            "--------------------------------------------------------------- trade --"
+        )
         if end != -1:
             body = body[:end]
         lines = body.splitlines()
@@ -101,7 +104,7 @@ class EveryRefusalIsReported(unittest.TestCase):
                 continue
             # The refusal itself, or the describe() that recorded it, has to be
             # within the same short block. Six lines covers a wrapped call.
-            window = "\n".join(lines[max(0, line_no - 6):line_no + 1])
+            window = "\n".join(lines[max(0, line_no - 6) : line_no + 1])
             # `out = ` counts because it IS the result column being written.
             # The test names the mechanism in its title but the invariant it
             # protects is the column, so recognising only the two helpers would
@@ -115,10 +118,10 @@ class EveryRefusalIsReported(unittest.TestCase):
         body = _give_source()
         for reason in (
             "no carried item with that guid on the giver",  # item not found
-            "receiver bags are full",                       # no room
-            "item is soulbound",                            # never movable
-            "receiver not online",                          # offline
-            "giver and receiver are the same character",    # same character
+            "receiver bags are full",  # no room
+            "item is soulbound",  # never movable
+            "receiver not online",  # offline
+            "giver and receiver are the same character",  # same character
         ):
             self.assertIn(reason, body, f"give cannot report: {reason}")
 
@@ -128,7 +131,7 @@ class EveryRefusalIsReported(unittest.TestCase):
         report, or worse."""
         body = _give_source()
         # DoGive lost its `static` in #170; match on the part that is stable.
-        body = body[body.index("char const* DoGive("):]
+        body = body[body.index("char const* DoGive(") :]
         statements = re.findall(r"\breturn\b[^;]*;", body, re.S)
         self.assertGreater(len(statements), 5, "the refusal paths went missing")
         checked = 0
@@ -136,7 +139,9 @@ class EveryRefusalIsReported(unittest.TestCase):
             for literal in re.findall(r'"((?:[^"\\]|\\.)*)"', statement):
                 checked += 1
                 self.assertNotIn(
-                    "'", literal, f"a detail literal carries a quote: {statement.strip()}"
+                    "'",
+                    literal,
+                    f"a detail literal carries a quote: {statement.strip()}",
                 )
         self.assertGreater(checked, 5, "no literals were actually inspected")
 
@@ -189,17 +194,22 @@ class TheMoveIsAtomic(unittest.TestCase):
         # and would pass or fail on layout rather than on order of execution.
         # The invariant has not changed, so assert it where it actually lives:
         # inside DoGive, room is established before the item is placed.
-        give = body[body.index("char const* DoGive("):]
-        room = min(i for i in (give.find("receiver->CanStoreItem("),
-                               give.find("CanWearContainer(receiver"))
-                   if i >= 0)
+        give = body[body.index("char const* DoGive(") :]
+        room = min(
+            i
+            for i in (
+                give.find("receiver->CanStoreItem("),
+                give.find("CanWearContainer(receiver"),
+            )
+            if i >= 0
+        )
         self.assertLess(room, give.index("PlaceItemOn(giver, receiver"))
         # And there is exactly ONE place the item can leave the giver, inside
         # that helper, so no other path can take it out of his bags first.
         # This is stronger than the original ordering check, which only
         # constrained the first of several possible move sites.
         self.assertEqual(1, body.count("giver->MoveItemFromInventory("))
-        helper = body[body.index("PlaceItemOn(Player* giver"):]
+        helper = body[body.index("PlaceItemOn(Player* giver") :]
         self.assertIn("giver->MoveItemFromInventory(", helper)
 
 

@@ -39,6 +39,7 @@ change what the family does by being looked at is a view nobody can trust.
 
 Ticket: infra#2597.
 """
+
 from __future__ import annotations
 
 import bonds
@@ -172,8 +173,13 @@ def _bags_bar(capacity: dict) -> dict:
         state = CAUTION
     else:
         state = FINE
-    return _bar(BAGS, "bag space", round(100 * free / slots),
-                "%d free of %d" % (free, slots), state)
+    return _bar(
+        BAGS,
+        "bag space",
+        round(100 * free / slots),
+        "%d free of %d" % (free, slots),
+        state,
+    )
 
 
 def _repair_bar(pct: int | None) -> dict:
@@ -200,8 +206,13 @@ def _coin_bar(purse: dict) -> dict:
         state = CAUTION
     else:
         state = FINE
-    return _bar(COIN, "coin", min(100, round(100 * total / THIN_COPPER)),
-                coin_words(purse), state)
+    return _bar(
+        COIN,
+        "coin",
+        min(100, round(100 * total / THIN_COPPER)),
+        coin_words(purse),
+        state,
+    )
 
 
 def _positions_bar(capacity: dict) -> dict:
@@ -221,52 +232,76 @@ def _positions_bar(capacity: dict) -> dict:
         state = CAUTION
     else:
         state = FINE
-    return _bar(BAG_POSITIONS, "bag slots",
-                round(100 * held / capacity["bag_slots"]),
-                "%d of %d bags carried" % (held, capacity["bag_slots"]), state)
+    return _bar(
+        BAG_POSITIONS,
+        "bag slots",
+        round(100 * held / capacity["bag_slots"]),
+        "%d of %d bags carried" % (held, capacity["bag_slots"]),
+        state,
+    )
 
 
-def _worst_line(name: str, bars: list[dict], capacity: dict, purse: dict,
-                repair_pct: int | None) -> dict:
+def _worst_line(
+    name: str, bars: list[dict], capacity: dict, purse: dict, repair_pct: int | None
+) -> dict:
     """The one rust-coloured line under the bars, naming the worst thing.
 
     ONE line, and it names ONE thing. Four bars already say what is true; what
     a person cannot do at a glance is rank them, and a card that listed all
     four problems would be back to making them do it.
     """
-    worst = min(bars, key=lambda b: (_STATE_ORDER[b["state"]],
-                                     999 if b["pct"] is None else b["pct"]))
+    worst = min(
+        bars,
+        key=lambda b: (_STATE_ORDER[b["state"]], 999 if b["pct"] is None else b["pct"]),
+    )
     if worst["state"] == FINE:
         return {"text": "nothing %s needs right now" % name, "state": FINE}
     if worst["key"] == BAGS:
         if worst["state"] == WARN:
-            text = ("%s has no room left - %d of %d slots used. A character "
-                    "with no room cannot finish a loot, and stops."
-                    % (name, capacity["used"], capacity["slots"]))
+            text = (
+                "%s has no room left - %d of %d slots used. A character "
+                "with no room cannot finish a loot, and stops."
+                % (name, capacity["used"], capacity["slots"])
+            )
         else:
-            text = ("%s has %d slots free of %d, which is a loot or two from "
-                    "none." % (name, capacity["free"], capacity["slots"]))
+            text = "%s has %d slots free of %d, which is a loot or two from none." % (
+                name,
+                capacity["free"],
+                capacity["slots"],
+            )
     elif worst["key"] == REPAIR:
         if worst["state"] == WARN:
-            text = ("%s's gear is at %d%% durability. Things are about to "
-                    "start falling off." % (name, repair_pct))
+            text = (
+                "%s's gear is at %d%% durability. Things are about to "
+                "start falling off." % (name, repair_pct)
+            )
         else:
-            text = ("%s's gear is at %d%% durability and worth repairing next "
-                    "time %s is in a town." % (name, repair_pct, name))
+            text = (
+                "%s's gear is at %d%% durability and worth repairing next "
+                "time %s is in a town." % (name, repair_pct, name)
+            )
     elif worst["key"] == COIN:
         if worst["state"] == WARN:
-            text = ("%s is carrying %s, which does not cover a repair bill."
-                    % (name, coin_words(purse)))
+            text = "%s is carrying %s, which does not cover a repair bill." % (
+                name,
+                coin_words(purse),
+            )
         else:
-            text = ("%s is carrying %s - thin for a repair and a bag both."
-                    % (name, coin_words(purse)))
+            text = "%s is carrying %s - thin for a repair and a bag both." % (
+                name,
+                coin_words(purse),
+            )
     elif worst["state"] == WARN:
-        text = ("%s has %d empty bag position(s) and no room in the bags "
-                "%s is carrying. %s needs a bag, not a vendor."
-                % (name, capacity["empty_bag_slots"], name, name))
+        text = (
+            "%s has %d empty bag position(s) and no room in the bags "
+            "%s is carrying. %s needs a bag, not a vendor."
+            % (name, capacity["empty_bag_slots"], name, name)
+        )
     else:
-        text = ("%s has %d empty bag position(s) - there is room for more bag."
-                % (name, capacity["empty_bag_slots"]))
+        text = "%s has %d empty bag position(s) - there is room for more bag." % (
+            name,
+            capacity["empty_bag_slots"],
+        )
     return {"text": text, "state": worst["state"]}
 
 
@@ -348,10 +383,14 @@ def holdings(inventory_rows: list[dict]) -> list:
             continue
         if row["bag"] == 0 and row["slot"] < len(EQUIPPED_SLOTS):
             continue
-        out.append(materials.Holding(
-            holder=row["name"], material=material,
-            count=int(row.get("count") or 1), guid=int(row["item_guid"]),
-        ))
+        out.append(
+            materials.Holding(
+                holder=row["name"],
+                material=material,
+                count=int(row.get("count") or 1),
+                guid=int(row["item_guid"]),
+            )
+        )
     return out
 
 
@@ -383,16 +422,19 @@ def _answering_headline(rows: tuple) -> str:
     """
     stopped = [r for r in rows if r.word == bonds.STOPPED]
     if stopped:
-        return ("%d of these pairs %s stopped answering"
-                % (len(stopped), "has" if len(stopped) == 1 else "have"))
+        return "%d of these pairs %s stopped answering" % (
+            len(stopped),
+            "has" if len(stopped) == 1 else "have",
+        )
     counting = [r for r in rows if r.word == bonds.COUNTING]
     if counting:
         nearest = min(counting, key=lambda r: r.threshold - r.count)
         left = nearest.threshold - nearest.count
-        return ("nobody has stopped answering anybody - %s to %s is the "
-                "nearest, %d answer%s away"
-                % (nearest.responder, nearest.caller, left,
-                   "" if left == 1 else "s"))
+        return (
+            "nobody has stopped answering anybody - %s to %s is the "
+            "nearest, %d answer%s away"
+            % (nearest.responder, nearest.caller, left, "" if left == 1 else "s")
+        )
     return "nobody has answered anybody yet, so no counter has started"
 
 
@@ -458,9 +500,14 @@ def _moving(board: dict) -> dict:
     }
 
 
-def _member(name: str, char_row: dict | None, inventory_rows: list[dict],
-            equipment_rows: list[dict], thought_rows: list[dict],
-            history: list) -> dict:
+def _member(
+    name: str,
+    char_row: dict | None,
+    inventory_rows: list[dict],
+    equipment_rows: list[dict],
+    thought_rows: list[dict],
+    history: list,
+) -> dict:
     """One card's worth of need.
 
     A member with no `characters` row still gets an entry, for the same reason
@@ -482,7 +529,7 @@ def _member(name: str, char_row: dict | None, inventory_rows: list[dict],
             "needs": [],
             "worst": {
                 "text": "%s has no saved character row, so there is nothing "
-                        "to read off %s's bags." % (name, name),
+                "to read off %s's bags." % (name, name),
                 "state": FINE,
             },
             "said": _said(name, thought_rows),
@@ -497,8 +544,12 @@ def _member(name: str, char_row: dict | None, inventory_rows: list[dict],
     capacity = wealth.build_capacity(split["containers"])
     purse = wealth.coins(char_row.get("money"))
     repair = _repair_pct(equipment_rows)
-    bars = [_bags_bar(capacity), _repair_bar(repair), _coin_bar(purse),
-            _positions_bar(capacity)]
+    bars = [
+        _bags_bar(capacity),
+        _repair_bar(repair),
+        _coin_bar(purse),
+        _positions_bar(capacity),
+    ]
     return {
         "name": name,
         "role": role,
@@ -510,10 +561,15 @@ def _member(name: str, char_row: dict | None, inventory_rows: list[dict],
     }
 
 
-def build_needs(char_rows: list[dict], inventory_rows: list[dict],
-                equipment_rows: list[dict], skill_rows: list[dict],
-                give_rows: list[dict], thought_rows: list[dict],
-                roster: list[str] | None = None) -> dict:
+def build_needs(
+    char_rows: list[dict],
+    inventory_rows: list[dict],
+    equipment_rows: list[dict],
+    skill_rows: list[dict],
+    give_rows: list[dict],
+    thought_rows: list[dict],
+    roster: list[str] | None = None,
+) -> dict:
     """Everything under the five cards, in one payload.
 
     Three sections that are one story: what each of them needs, what the
@@ -551,8 +607,14 @@ def build_needs(char_rows: list[dict], inventory_rows: list[dict],
         [r for r in reversed(thought_rows) if (r.get("source") or "") == "reflection"]
     )
     members = [
-        _member(name, chars.get(name), inventory.get(name, []),
-                equipment.get(name, []), thought_rows, history)
+        _member(
+            name,
+            chars.get(name),
+            inventory.get(name, []),
+            equipment.get(name, []),
+            thought_rows,
+            history,
+        )
         for name in roster
     ]
     bonded = all(bonds.member(n) is not None for n in roster)
@@ -569,8 +631,9 @@ def build_needs(char_rows: list[dict], inventory_rows: list[dict],
         "answering": {
             "rows": [_answer_row(r) for r in answering],
             "rule": bonds.answering_rule() if bonded else "",
-            "headline": _answering_headline(answering) if bonded else
-            "no family rules are written for this family yet, so nobody "
+            "headline": _answering_headline(answering)
+            if bonded
+            else "no family rules are written for this family yet, so nobody "
             "is counting who answers whom",
         },
     }

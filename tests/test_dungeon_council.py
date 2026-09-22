@@ -9,16 +9,20 @@ tests pin the wiring that closes that gap: PLACES now reaches the family's
 actual level range, `hold()` can fold prospects() into a family-wide
 proposal, and that proposal only ever fires for a REAL, ready-or-near target.
 """
+
 import unittest
 
 import council
 
 
 def _m(name, level, **over):
-    return council.Member(name=name, level=level,
-                          class_name=over.pop("class_name", "Warrior"),
-                          gold=over.pop("gold", 999999),
-                          trades=over.pop("trades", 5))
+    return council.Member(
+        name=name,
+        level=level,
+        class_name=over.pop("class_name", "Warrior"),
+        gold=over.pop("gold", 999999),
+        trades=over.pop("trades", 5),
+    )
 
 
 FAMILY_NAMES = ("Grug", "Ugga", "Grog", "Bork", "Og")
@@ -42,7 +46,14 @@ class PlacesReachTheFamilysRange(unittest.TestCase):
 
     def test_the_new_entries_do_not_disturb_the_existing_ones(self):
         for map_id, want in {
-            389: 15, 43: 17, 36: 17, 33: 22, 48: 24, 34: 24, 90: 29, 47: 30,
+            389: 15,
+            43: 17,
+            36: 17,
+            33: 22,
+            48: 24,
+            34: 24,
+            90: 29,
+            47: 30,
         }.items():
             self.assertEqual(want, council.PLACES[map_id])
 
@@ -120,15 +131,18 @@ class TheDungeonProposalFiresWhenReady(unittest.TestCase):
 
     def test_durable_scarlet_counts_advance_one_wing_at_a_time(self):
         proposal = council._dungeon_proposal(
-            self.members, self.rows, [],
+            self.members,
+            self.rows,
+            [],
             {"scarlet": 25, "scarlet-library": 25},
         )
         self.assertIsNotNone(proposal)
         self.assertEqual("scarlet-armory", proposal.keyword)
 
     def test_it_is_raised_by_and_for_the_weakest_member(self):
-        rows = _levels([("Grug", 45), ("Ugga", 45), ("Grog", 45), ("Bork", 41),
-                        ("Og", 45)])
+        rows = _levels(
+            [("Grug", 45), ("Ugga", 45), ("Grog", 45), ("Bork", 41), ("Og", 45)]
+        )
         proposal = council._dungeon_proposal(self.members, rows, [])
         self.assertEqual("Bork", proposal.proposer)
         self.assertEqual("Bork", proposal.beneficiary)
@@ -188,8 +202,9 @@ class ALevelSixtyFamilyIsNotSentBackToScarletMonastery(unittest.TestCase):
     def test_the_frontier_now_reaches_past_scarlet_monastery(self):
         self.assertIn(230, council.PLACES)
         self.assertGreater(council.PLACES[230], council.PLACES[189])
-        self.assertGreater(council.PLACES[230], max(
-            wants for _, wants in council.SCARLET_WINGS))
+        self.assertGreater(
+            council.PLACES[230], max(wants for _, wants in council.SCARLET_WINGS)
+        )
 
     def test_a_missing_ledger_no_longer_means_the_cathedral_for_ever(self):
         proposal = council._dungeon_proposal(self.members, self.rows, [], None)
@@ -198,8 +213,9 @@ class ALevelSixtyFamilyIsNotSentBackToScarletMonastery(unittest.TestCase):
         self.assertIn("Blackrock Depths", proposal.said)
 
     def test_a_finished_scarlet_campaign_no_longer_means_the_cathedral_either(self):
-        done = {keyword: council.DUNGEON_RUNS_WANTED
-                for keyword, _ in council.SCARLET_WINGS}
+        done = {
+            keyword: council.DUNGEON_RUNS_WANTED for keyword, _ in council.SCARLET_WINGS
+        }
         proposal = council._dungeon_proposal(self.members, self.rows, [], done)
         self.assertIsNotNone(proposal)
         self.assertEqual("blackrock-depths", proposal.keyword)
@@ -209,7 +225,8 @@ class ALevelSixtyFamilyIsNotSentBackToScarletMonastery(unittest.TestCase):
         uncleared graveyard run pinned the whole family to map 189 whatever
         they had outgrown. The frontier picks the place now."""
         proposal = council._dungeon_proposal(
-            self.members, self.rows, [], {"scarlet": 0})
+            self.members, self.rows, [], {"scarlet": 0}
+        )
         self.assertIsNotNone(proposal)
         self.assertEqual("blackrock-depths", proposal.keyword)
 
@@ -272,24 +289,40 @@ class TheProposalReachesHold(unittest.TestCase):
 
     def test_a_laggard_still_outranks_the_dungeon(self):
         """Nobody left behind outranks anywhere the family could go next."""
-        members = [_m("Grug", 41), _m("Ugga", 41), _m("Grog", 41),
-                  _m("Bork", 41), _m("Og", 30)]
-        rows = _levels([(n, 41) for n in ("Grug", "Ugga", "Grog", "Bork")]
-                       + [("Og", 30)])
+        members = [
+            _m("Grug", 41),
+            _m("Ugga", 41),
+            _m("Grog", 41),
+            _m("Bork", 41),
+            _m("Og", 30),
+        ]
+        rows = _levels(
+            [(n, 41) for n in ("Grug", "Ugga", "Grog", "Bork")] + [("Og", 30)]
+        )
         held = council.hold(members, history=[], level_rows=rows, cards=[])
         self.assertIsNotNone(held.plan)
         self.assertEqual("level", held.plan.kind)
         self.assertEqual("Og", held.plan.beneficiary)
 
     def test_the_dungeon_proposal_is_spoken_even_when_it_loses(self):
-        members = [_m("Grug", 41), _m("Ugga", 41), _m("Grog", 41),
-                  _m("Bork", 41), _m("Og", 30)]
-        rows = _levels([(n, 41) for n in ("Grug", "Ugga", "Grog", "Bork")]
-                       + [("Og", 30)])
+        members = [
+            _m("Grug", 41),
+            _m("Ugga", 41),
+            _m("Grog", 41),
+            _m("Bork", 41),
+            _m("Og", 30),
+        ]
+        rows = _levels(
+            [(n, 41) for n in ("Grug", "Ugga", "Grog", "Bork")] + [("Og", 30)]
+        )
         held = council.hold(members, history=[], level_rows=rows, cards=[])
-        self.assertTrue(any("we went than waited" in line
-                           or "will not trouble us now" in line
-                           for line in held.lines), held.lines)
+        self.assertTrue(
+            any(
+                "we went than waited" in line or "will not trouble us now" in line
+                for line in held.lines
+            ),
+            held.lines,
+        )
 
 
 if __name__ == "__main__":

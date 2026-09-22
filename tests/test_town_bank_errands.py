@@ -36,6 +36,7 @@ including the ones the realm has never reached - a trip that has asked for
 everything it can ask for, a queue that cannot be read at all, and the arrival
 cycle where the rows are about to be written.
 """
+
 import pathlib
 import re
 import unittest
@@ -82,20 +83,28 @@ def _statements(signature: str) -> str:
     statements and not the prose. test_vendor_errand.py was caught by this
     twice while it was being written.
     """
-    return "\n".join(line for line in _code(signature).splitlines()
-                     if not line.lstrip().startswith("#"))
+    return "\n".join(
+        line
+        for line in _code(signature).splitlines()
+        if not line.lstrip().startswith("#")
+    )
 
 
 def _worn(fraction: float) -> towntrip.Equipped:
-    return towntrip.Equipped(entry=1, name="Axe",
-                             durability=int(100 * fraction), max_durability=100)
+    return towntrip.Equipped(
+        entry=1, name="Axe", durability=int(100 * fraction), max_durability=100
+    )
 
 
 def _member(name: str, fraction: float = 1.0, **kw) -> towntrip.Member:
     return towntrip.Member(
-        name=name, klass=kw.pop("klass", "warrior"), level=kw.pop("level", 30),
-        money=kw.pop("money", 10_000), free_slots=kw.pop("free_slots", 10),
-        equipped=(_worn(fraction),), **kw,
+        name=name,
+        klass=kw.pop("klass", "warrior"),
+        level=kw.pop("level", 30),
+        money=kw.pop("money", 10_000),
+        free_slots=kw.pop("free_slots", 10),
+        equipped=(_worn(fraction),),
+        **kw,
     )
 
 
@@ -105,8 +114,9 @@ class TheTownStepEndsAnErrandOnlyOnItsOwnEvidence(unittest.TestCase):
     def test_a_leader_away_from_a_counter_with_work_to_do_is_aimed(self):
         """The ordinary case, and the only one that existed before."""
         self.assertEqual(
-            towntrip.errand_step(at_counter=False, rows_outstanding=0,
-                                 work_unasked=True),
+            towntrip.errand_step(
+                at_counter=False, rows_outstanding=0, work_unasked=True
+            ),
             towntrip.TOWN_ERRAND_AIM,
         )
 
@@ -117,8 +127,9 @@ class TheTownStepEndsAnErrandOnlyOnItsOwnEvidence(unittest.TestCase):
         the column back first lets the quest drive pick them up and walk them
         off their own rows before the world executes them."""
         self.assertEqual(
-            towntrip.errand_step(at_counter=True, rows_outstanding=0,
-                                 work_unasked=True),
+            towntrip.errand_step(
+                at_counter=True, rows_outstanding=0, work_unasked=True
+            ),
             towntrip.TOWN_ERRAND_HOLD,
         )
 
@@ -128,16 +139,18 @@ class TheTownStepEndsAnErrandOnlyOnItsOwnEvidence(unittest.TestCase):
         read a standing errand as a new one, which releases and re-takes the
         300 second counter hold."""
         self.assertEqual(
-            towntrip.errand_step(at_counter=True, rows_outstanding=3,
-                                 work_unasked=False),
+            towntrip.errand_step(
+                at_counter=True, rows_outstanding=3, work_unasked=False
+            ),
             towntrip.TOWN_ERRAND_HOLD,
         )
 
     def test_nothing_left_to_ask_for_releases(self):
         """The terminal path, and the whole point of the change."""
         self.assertEqual(
-            towntrip.errand_step(at_counter=True, rows_outstanding=0,
-                                 work_unasked=False),
+            towntrip.errand_step(
+                at_counter=True, rows_outstanding=0, work_unasked=False
+            ),
             towntrip.TOWN_ERRAND_RELEASE,
         )
 
@@ -152,8 +165,9 @@ class TheTownStepEndsAnErrandOnlyOnItsOwnEvidence(unittest.TestCase):
         nothing left to do - with the column still set and nobody left to clear
         it."""
         self.assertEqual(
-            towntrip.errand_step(at_counter=False, rows_outstanding=0,
-                                 work_unasked=False),
+            towntrip.errand_step(
+                at_counter=False, rows_outstanding=0, work_unasked=False
+            ),
             towntrip.TOWN_ERRAND_RELEASE,
         )
 
@@ -165,8 +179,9 @@ class TheTownStepEndsAnErrandOnlyOnItsOwnEvidence(unittest.TestCase):
         for unasked in (True, False):
             with self.subTest(work_unasked=unasked):
                 self.assertEqual(
-                    towntrip.errand_step(at_counter=True, rows_outstanding=-1,
-                                         work_unasked=unasked),
+                    towntrip.errand_step(
+                        at_counter=True, rows_outstanding=-1, work_unasked=unasked
+                    ),
                     towntrip.TOWN_ERRAND_HOLD,
                 )
 
@@ -176,11 +191,11 @@ class TheTownStepEndsAnErrandOnlyOnItsOwnEvidence(unittest.TestCase):
         for outstanding in (-99, -1, 1, 2, 17, 1000):
             for at_counter in (True, False):
                 for unasked in (True, False):
-                    with self.subTest(outstanding=outstanding,
-                                      at_counter=at_counter, unasked=unasked):
+                    with self.subTest(
+                        outstanding=outstanding, at_counter=at_counter, unasked=unasked
+                    ):
                         self.assertNotEqual(
-                            towntrip.errand_step(at_counter, outstanding,
-                                                 unasked),
+                            towntrip.errand_step(at_counter, outstanding, unasked),
                             towntrip.TOWN_ERRAND_RELEASE,
                         )
 
@@ -199,8 +214,15 @@ class TheTownStepEndsAnErrandOnlyOnItsOwnEvidence(unittest.TestCase):
     def test_the_three_answers_are_distinct_words(self):
         """They are compared by value at the call site."""
         self.assertEqual(
-            len({towntrip.TOWN_ERRAND_AIM, towntrip.TOWN_ERRAND_HOLD,
-                 towntrip.TOWN_ERRAND_RELEASE}), 3)
+            len(
+                {
+                    towntrip.TOWN_ERRAND_AIM,
+                    towntrip.TOWN_ERRAND_HOLD,
+                    towntrip.TOWN_ERRAND_RELEASE,
+                }
+            ),
+            3,
+        )
 
 
 class TheCounterWorkIsWhatACounterHasToServe(unittest.TestCase):
@@ -216,8 +238,9 @@ class TheCounterWorkIsWhatACounterHasToServe(unittest.TestCase):
         members = (_member("Grug", 0.94),)
         trip = towntrip.plan(members, towntrip.Town())
         self.assertEqual(trip.errands, ())
-        self.assertEqual(towntrip.counter_keys(members, trip),
-                         (("Grug", towntrip.REPAIR_COMMAND),))
+        self.assertEqual(
+            towntrip.counter_keys(members, trip), (("Grug", towntrip.REPAIR_COMMAND),)
+        )
 
     def test_undamaged_gear_is_not_counter_work(self):
         """The family that needs nothing is not walked to a repairer, which is
@@ -232,8 +255,11 @@ class TheCounterWorkIsWhatACounterHasToServe(unittest.TestCase):
         this pass queued. A second shape here would be a join nobody tests."""
         members = (_member("Grug", 0.5),)
         trip = towntrip.plan(members, towntrip.Town(repairs=True))
-        queued = {(e.member, e.command) for e in trip.errands
-                  if e.kind == towntrip.REPAIR_KIND}
+        queued = {
+            (e.member, e.command)
+            for e in trip.errands
+            if e.kind == towntrip.REPAIR_KIND
+        }
         self.assertEqual(set(towntrip.counter_keys(members, trip)), queued)
 
     def test_a_purchase_only_counts_once_a_vendor_can_actually_serve_it(self):
@@ -243,8 +269,10 @@ class TheCounterWorkIsWhatACounterHasToServe(unittest.TestCase):
         itself by returning a note rather than an errand."""
         hungry = _member("Og", 1.0, klass="mage", level=30, money=10_000_000)
         entry = towntrip._tier(towntrip.FOOD, hungry.level)[1]
-        self.assertEqual(towntrip.counter_keys(
-            (hungry,), towntrip.plan((hungry,), towntrip.Town())), ())
+        self.assertEqual(
+            towntrip.counter_keys((hungry,), towntrip.plan((hungry,), towntrip.Town())),
+            (),
+        )
         stocked = towntrip.Town(vendor=True, stocks=frozenset({entry}))
         keys = towntrip.counter_keys((hungry,), towntrip.plan((hungry,), stocked))
         self.assertEqual([name for name, _ in keys], ["Og"])
@@ -256,11 +284,11 @@ class TheCounterWorkIsWhatACounterHasToServe(unittest.TestCase):
         TravelHoldsTheWheel stands the quest drive down for exactly as long."""
         self.assertNotIn(towntrip.CONJURE_KIND, towntrip.COUNTER_KINDS)
         self.assertNotIn(towntrip.GIVE_KIND, towntrip.COUNTER_KINDS)
-        mage = _member("Og", 1.0, klass="mage", level=30,
-                       spells=frozenset(towntrip.CONJURE_FOOD))
+        mage = _member(
+            "Og", 1.0, klass="mage", level=30, spells=frozenset(towntrip.CONJURE_FOOD)
+        )
         trip = towntrip.plan((mage,), towntrip.Town())
-        self.assertTrue([e for e in trip.errands
-                         if e.kind == towntrip.CONJURE_KIND])
+        self.assertTrue([e for e in trip.errands if e.kind == towntrip.CONJURE_KIND])
         self.assertEqual(towntrip.counter_keys((mage,), trip), ())
 
     def test_the_damage_rule_is_written_once(self):
@@ -270,8 +298,7 @@ class TheCounterWorkIsWhatACounterHasToServe(unittest.TestCase):
         self.assertEqual(source.count("e.fraction < ANY_DAMAGE"), 1)
         self.assertIn("damaged = _damaged(member)", source)
         self.assertNotIn("ANY_DAMAGE", _code("    async def _towntrip_once(self)"))
-        self.assertNotIn("ANY_DAMAGE",
-                         _code("    async def _settle_town_errand("))
+        self.assertNotIn("ANY_DAMAGE", _code("    async def _settle_town_errand("))
 
 
 class TheBankStepAsksWhetherTheFamilyArrived(unittest.TestCase):
@@ -286,19 +313,22 @@ class TheBankStepAsksWhetherTheFamilyArrived(unittest.TestCase):
     """
 
     def test_moves_this_pass_has_not_asked_for_are_aimed(self):
-        self.assertEqual(bank.errand_step(at_counter=False, rows_outstanding=0,
-                                          moves_unasked=True),
-                         bank.BANK_ERRAND_AIM)
+        self.assertEqual(
+            bank.errand_step(at_counter=False, rows_outstanding=0, moves_unasked=True),
+            bank.BANK_ERRAND_AIM,
+        )
 
     def test_rows_still_unanswered_hold(self):
-        self.assertEqual(bank.errand_step(at_counter=False, rows_outstanding=2,
-                                          moves_unasked=True),
-                         bank.BANK_ERRAND_HOLD)
+        self.assertEqual(
+            bank.errand_step(at_counter=False, rows_outstanding=2, moves_unasked=True),
+            bank.BANK_ERRAND_HOLD,
+        )
 
     def test_a_fully_answered_queue_with_nothing_left_to_ask_releases(self):
-        self.assertEqual(bank.errand_step(at_counter=False, rows_outstanding=0,
-                                          moves_unasked=False),
-                         bank.BANK_ERRAND_RELEASE)
+        self.assertEqual(
+            bank.errand_step(at_counter=False, rows_outstanding=0, moves_unasked=False),
+            bank.BANK_ERRAND_RELEASE,
+        )
 
     def test_the_arrival_cycle_holds_rather_than_releasing(self):
         """THE BUG, AS ONE ASSERTION. The leader has arrived and the rows are
@@ -307,9 +337,10 @@ class TheBankStepAsksWhetherTheFamilyArrived(unittest.TestCase):
         a quiet queue plus nothing unasked as a finished trip and handed the
         column back. Holding is what keeps the family at the counter while
         the moves are queued against it."""
-        self.assertEqual(bank.errand_step(at_counter=True, rows_outstanding=0,
-                                          moves_unasked=True),
-                         bank.BANK_ERRAND_HOLD)
+        self.assertEqual(
+            bank.errand_step(at_counter=True, rows_outstanding=0, moves_unasked=True),
+            bank.BANK_ERRAND_HOLD,
+        )
 
     def test_an_aim_is_never_written_at_the_counter(self):
         """Re-asserting a keyword on a leader already standing there makes the
@@ -320,25 +351,29 @@ class TheBankStepAsksWhetherTheFamilyArrived(unittest.TestCase):
                 with self.subTest(outstanding=outstanding, unasked=unasked):
                     self.assertNotEqual(
                         bank.errand_step(True, outstanding, unasked),
-                        bank.BANK_ERRAND_AIM)
+                        bank.BANK_ERRAND_AIM,
+                    )
 
     def test_an_unreadable_queue_holds(self):
         """Same fail-closed direction as every other reader of this queue."""
         for at_counter in (True, False):
             for unasked in (True, False):
                 with self.subTest(at_counter=at_counter, moves_unasked=unasked):
-                    self.assertEqual(bank.errand_step(at_counter, -1, unasked),
-                                     bank.BANK_ERRAND_HOLD)
+                    self.assertEqual(
+                        bank.errand_step(at_counter, -1, unasked), bank.BANK_ERRAND_HOLD
+                    )
 
     def test_only_a_quiet_queue_ever_releases(self):
         for outstanding in (-7, -1, 1, 9, 400):
             for unasked in (True, False):
                 for at_counter in (True, False):
-                    with self.subTest(outstanding=outstanding, unasked=unasked,
-                                      at_counter=at_counter):
+                    with self.subTest(
+                        outstanding=outstanding, unasked=unasked, at_counter=at_counter
+                    ):
                         self.assertNotEqual(
                             bank.errand_step(at_counter, outstanding, unasked),
-                            bank.BANK_ERRAND_RELEASE)
+                            bank.BANK_ERRAND_RELEASE,
+                        )
 
     def test_nothing_left_to_ask_for_releases_wherever_the_leader_is(self):
         """The terminal path does not also test arrival, and the reason is the
@@ -348,13 +383,17 @@ class TheBankStepAsksWhetherTheFamilyArrived(unittest.TestCase):
         finished, and so is one that walked off after finishing."""
         for at_counter in (True, False):
             with self.subTest(at_counter=at_counter):
-                self.assertEqual(bank.errand_step(at_counter, 0, False),
-                                 bank.BANK_ERRAND_RELEASE)
+                self.assertEqual(
+                    bank.errand_step(at_counter, 0, False), bank.BANK_ERRAND_RELEASE
+                )
 
     def test_the_three_answers_are_distinct_words(self):
         self.assertEqual(
-            len({bank.BANK_ERRAND_AIM, bank.BANK_ERRAND_HOLD,
-                 bank.BANK_ERRAND_RELEASE}), 3)
+            len(
+                {bank.BANK_ERRAND_AIM, bank.BANK_ERRAND_HOLD, bank.BANK_ERRAND_RELEASE}
+            ),
+            3,
+        )
 
     def test_the_wrong_sentence_is_quoted_and_answered_rather_than_deleted(self):
         """infra#3815, the same way infra#3804 handled the same sentence one
@@ -363,12 +402,14 @@ class TheBankStepAsksWhetherTheFamilyArrived(unittest.TestCase):
         paragraph priced this exactly right on the options it had."""
         doc = " ".join(bank.errand_step.__doc__.split())
         self.assertIn("TWO INPUTS RATHER THAN THE TOWN TRIP'S THREE", doc)
-        self.assertIn("waits `pending` until its holder reaches the counter",
-                      doc)
+        self.assertIn("waits `pending` until its holder reaches the counter", doc)
         self.assertIn("A bank row does not wait.", doc)
         self.assertIn("AND AN ANSWER IS AN ANSWER, INCLUDING A REFUSAL", doc)
-        self.assertIn("Every sentence of that stands, and the bounded retry "
-                      "was the better of the two options ON OFFER", doc)
+        self.assertIn(
+            "Every sentence of that stands, and the bounded retry "
+            "was the better of the two options ON OFFER",
+            doc,
+        )
 
 
 class TheBridgeCanActuallyHandBothColumnsBack(unittest.TestCase):
@@ -408,8 +449,7 @@ class TheBridgeCanActuallyHandBothColumnsBack(unittest.TestCase):
         self.assertIn('_release_trade_errand, leader, "repair"', town)
         self.assertEqual(town.count("_claim_town_slot"), 1)
         bank_settle = _statements("    async def _settle_bank_errand(")
-        self.assertIn('self._claim_town_slot("bank", leader, "banker")',
-                      bank_settle)
+        self.assertIn('self._claim_town_slot("bank", leader, "banker")', bank_settle)
         self.assertIn('_release_trade_errand, leader, "banker"', bank_settle)
         self.assertEqual(bank_settle.count("_claim_town_slot"), 1)
 
@@ -418,7 +458,7 @@ class TheBridgeCanActuallyHandBothColumnsBack(unittest.TestCase):
         outright, so a keyword missing from that tuple would make the release a
         warning and nothing else."""
         src = _source()
-        line = src[src.index("ECONOMY_ERRANDS = ("):]
+        line = src[src.index("ECONOMY_ERRANDS = (") :]
         line = line[: line.index("\n")]
         self.assertIn('"repair"', line)
         self.assertIn('"banker"', line)
@@ -428,8 +468,10 @@ class TheBridgeCanActuallyHandBothColumnsBack(unittest.TestCase):
         refused because another town pass owns the column is a real, expected
         outcome (infra#3703) - and it was invisible until somebody logged it
         (infra#3464, infra#3660)."""
-        for settle in ("    async def _settle_town_errand(",
-                       "    async def _settle_bank_errand("):
+        for settle in (
+            "    async def _settle_town_errand(",
+            "    async def _settle_bank_errand(",
+        ):
             with self.subTest(settle=settle):
                 code = _statements(settle)
                 self.assertIn("aimed = await self._claim_town_slot(", code)
@@ -437,13 +479,12 @@ class TheBridgeCanActuallyHandBothColumnsBack(unittest.TestCase):
 
 
 class TheQueueReadIsTheOnlyCompletionSignal(unittest.TestCase):
-
     def _sql(self, name: str) -> str:
         src = _source()
         start = src.index("%s = (" % name)
         # To the closing paren at column 0, not the first `)` in the text -
         # `COUNT(*)` carries one three words in.
-        return src[start:src.index("\n)", start)]
+        return src[start : src.index("\n)", start)]
 
     def test_only_unanswered_rows_count_as_outstanding(self):
         """`delivered`, `error`, `applied`, `unchanged` and `verifying` are all
@@ -453,8 +494,7 @@ class TheQueueReadIsTheOnlyCompletionSignal(unittest.TestCase):
         is already 141 error against 1 delivered all time."""
         for name in ("_OUTSTANDING_TOWN_SQL", "_OUTSTANDING_BANK_SQL"):
             with self.subTest(sql=name):
-                self.assertIn("status IN ('pending', 'claimed')",
-                              self._sql(name))
+                self.assertIn("status IN ('pending', 'claimed')", self._sql(name))
 
     def test_the_town_count_is_scoped_to_this_passs_own_rows(self):
         """The materials and bag passes write kind='give' rows of their own.
@@ -472,8 +512,7 @@ class TheQueueReadIsTheOnlyCompletionSignal(unittest.TestCase):
         self.assertIn("kind IN (%s)", sql)
         self.assertNotIn("'repair'", sql)
         self.assertNotIn("'buy'", sql)
-        self.assertIn("towntrip.COUNTER_KINDS",
-                      _code("def _outstanding_town_work("))
+        self.assertIn("towntrip.COUNTER_KINDS", _code("def _outstanding_town_work("))
 
     def test_both_counts_are_scoped_to_the_family_they_were_asked_about(self):
         for name in ("_OUTSTANDING_TOWN_SQL", "_OUTSTANDING_BANK_SQL"):
@@ -508,8 +547,7 @@ class TheQueueReadIsTheOnlyCompletionSignal(unittest.TestCase):
         """`names` in both passes is the `characters.name` column read back by
         `_protected_guids`, filtered by OVERSEER_NOTABLE_NAMES. No request,
         message or item name reaches it."""
-        for body in ("    async def _towntrip_once(self)",
-                     "    async def _bank_once("):
+        for body in ("    async def _towntrip_once(self)", "    async def _bank_once("):
             with self.subTest(body=body):
                 self.assertIn("_protected_guids", _code(body))
 
@@ -533,15 +571,17 @@ class TheSettlingIsReachedOnTheCyclesThatMatter(unittest.TestCase):
         and nothing left to buy is precisely what done looks like - so a release
         below it could never fire on the cycles that matter."""
         body = self._town()
-        self.assertLess(body.index("_settle_town_errand"),
-                        body.index("if not trip.errands:"))
+        self.assertLess(
+            body.index("_settle_town_errand"), body.index("if not trip.errands:")
+        )
 
     def test_the_bank_errand_is_settled_above_the_no_moves_return(self):
         """Same argument one pass over: an errand is finished BECAUSE the moves
         landed, and moves that landed are moves bank.plan no longer proposes."""
         body = self._bank()
-        self.assertLess(body.index("_settle_bank_errand"),
-                        body.index("if not bank_plan.moves:"))
+        self.assertLess(
+            body.index("_settle_bank_errand"), body.index("if not bank_plan.moves:")
+        )
 
     def test_exactly_one_gate_stands_above_each_settling(self):
         """COUNTED, NOT EYEBALLED. The failure mode this exists for is a
@@ -552,13 +592,14 @@ class TheSettlingIsReachedOnTheCyclesThatMatter(unittest.TestCase):
         for `not names` and above for `_mid_run`: a town errand issued while
         the family is inside an instance pulls the leader out and the party
         spreads, so the pass genuinely must not run at all there."""
-        for body, settle in ((self._town(), "_settle_town_errand"),
-                             (self._bank(), "_settle_bank_errand")):
+        for body, settle in (
+            (self._town(), "_settle_town_errand"),
+            (self._bank(), "_settle_bank_errand"),
+        ):
             with self.subTest(settle=settle):
                 above = body[: body.index(settle)]
                 self.assertEqual(above.count("return"), 1)
-                self.assertIn("if not names or await self._mid_run(names):",
-                              above)
+                self.assertIn("if not names or await self._mid_run(names):", above)
 
     def test_each_pass_asks_the_question_once_and_reads_one_answer(self):
         """LIFTED OUT WHOLE. One question with one answer belongs in one
@@ -576,32 +617,37 @@ class TheSettlingIsReachedOnTheCyclesThatMatter(unittest.TestCase):
         """Unchanged, and still true: a row queued for a counter nobody is
         walking to is a refusal waiting to be logged."""
         town = self._town()
-        self.assertLess(town.index("_settle_town_errand"),
-                        town.index("_insert_town_errand"))
+        self.assertLess(
+            town.index("_settle_town_errand"), town.index("_insert_town_errand")
+        )
         bank_body = self._bank()
-        self.assertLess(bank_body.index("_settle_bank_errand"),
-                        bank_body.index("_insert_bank"))
+        self.assertLess(
+            bank_body.index("_settle_bank_errand"), bank_body.index("_insert_bank")
+        )
 
     def test_the_leader_is_read_once_and_used_for_both_halves(self):
         """Releasing an errand from one leader and aiming another would be two
         leaders, which is infra#3553 restated."""
-        for body, settle in ((self._town(), "_settle_town_errand"),
-                             (self._bank(), "_settle_bank_errand")):
+        for body, settle in (
+            (self._town(), "_settle_town_errand"),
+            (self._bank(), "_settle_bank_errand"),
+        ):
             with self.subTest(settle=settle):
-                self.assertIn("leader = await asyncio.to_thread(_head_now)",
-                              body)
+                self.assertIn("leader = await asyncio.to_thread(_head_now)", body)
                 self.assertIn("self.%s(names, leader" % settle, body)
 
     def test_the_retry_window_is_read_before_the_errand_is_settled(self):
         """It is half of "has this trip anything left to ask for". Reading it
         twice would be two answers to one question."""
         town = self._town()
-        self.assertLess(town.index("_recent_town_keys"),
-                        town.index("_settle_town_errand"))
+        self.assertLess(
+            town.index("_recent_town_keys"), town.index("_settle_town_errand")
+        )
         self.assertIn("towntrip.counter_keys(members, trip)", town)
         bank_body = self._bank()
-        self.assertLess(bank_body.index("_recent_bank_keys"),
-                        bank_body.index("_settle_bank_errand"))
+        self.assertLess(
+            bank_body.index("_recent_bank_keys"), bank_body.index("_settle_bank_errand")
+        )
 
 
 class TheGuildBankErrandIsNotOneOfThese(unittest.TestCase):
@@ -660,8 +706,7 @@ class TheGuildBankErrandIsNotOneOfThese(unittest.TestCase):
 
     def test_the_pass_writes_a_ground_aim_and_not_the_keyword(self):
         code = _statements("    async def _guild_bank_once(")
-        self.assertIn('self._claim_town_slot("guild bank", leader, vault.aim)',
-                      code)
+        self.assertIn('self._claim_town_slot("guild bank", leader, vault.aim)', code)
         self.assertNotIn('"guild banker"', code)
 
     def test_no_settling_was_added_for_it(self):
@@ -679,6 +724,7 @@ class TheGuildBankErrandIsNotOneOfThese(unittest.TestCase):
         since infra#3702. Before this the two disagreed and the vault aim could
         be written by the economy branch and handed back by nobody."""
         import travel
+
         self.assertTrue(travel.is_ground_aim("at:1:-705.0,-2045.0,66.0"))
         release = _statements("def _release_trade_errand(")
         self.assertIn("if not _is_economy_aim(travel_npc):", release)
@@ -690,7 +736,7 @@ class TheGuildBankErrandIsNotOneOfThese(unittest.TestCase):
         other half of (`CounterRoleForAim`), so putting an `at:` prefix in it
         would have been a change to a mirror rather than to a guard. The
         widening went into the predicate, not into the tuple."""
-        line = _source()[_source().index("ECONOMY_ERRANDS = ("):]
+        line = _source()[_source().index("ECONOMY_ERRANDS = (") :]
         self.assertNotIn("at:", line[: line.index("\n")])
 
 
@@ -716,8 +762,15 @@ class TheLatchIsActuallyBroken(unittest.TestCase):
     WINDOW = 12  # GIVE_RETRY_MINUTES=60 against a 300 second cycle.
 
     @classmethod
-    def _town_cycles(cls, count, settle=True, gate=True, queue_drains=True,
-                     damage_returns=True, readable=True):
+    def _town_cycles(
+        cls,
+        count,
+        settle=True,
+        gate=True,
+        queue_drains=True,
+        damage_returns=True,
+        readable=True,
+    ):
         """Run the town pass `count` times and report `travel_npc` after each.
 
         The world starts where the realm was found at 20:20: the leader carries
@@ -746,8 +799,9 @@ class TheLatchIsActuallyBroken(unittest.TestCase):
             # THE PASS. Settling first, above every gate below it.
             unasked = damaged and not window
             if settle:
-                step = towntrip.errand_step(at_counter, queue if readable
-                                            else -1, unasked or not gate)
+                step = towntrip.errand_step(
+                    at_counter, queue if readable else -1, unasked or not gate
+                )
             else:
                 step = towntrip.TOWN_ERRAND_AIM
             if step == towntrip.TOWN_ERRAND_AIM:
@@ -795,8 +849,7 @@ class TheLatchIsActuallyBroken(unittest.TestCase):
         """THE HALF A CARELESS FIX BREAKS. A leader whose rows are still
         unanswered keeps the column however many cycles pass, because it has to
         be standing at the counter when its own rows execute."""
-        self.assertEqual(set(self._town_cycles(24, queue_drains=False)),
-                         {"repair"})
+        self.assertEqual(set(self._town_cycles(24, queue_drains=False)), {"repair"})
 
     def test_an_unreadable_queue_never_decays_into_a_release(self):
         """A database that cannot be read must not look like a finished
@@ -840,8 +893,9 @@ class TheLatchIsActuallyBroken(unittest.TestCase):
         """
         if not settle:
             return bank.BANK_ERRAND_AIM
-        return bank.errand_step(at_counter and arrival_test,
-                                queue if readable else -1, unasked)
+        return bank.errand_step(
+            at_counter and arrival_test, queue if readable else -1, unasked
+        )
 
     @staticmethod
     def _column_after(step, column):
@@ -855,9 +909,17 @@ class TheLatchIsActuallyBroken(unittest.TestCase):
         return column
 
     @classmethod
-    def _bank_run(cls, count, settle=True, queue_answers=True,
-                  moves_return=True, readable=True, gate=True, watched=True,
-                  arrival_test=True):
+    def _bank_run(
+        cls,
+        count,
+        settle=True,
+        queue_answers=True,
+        moves_return=True,
+        readable=True,
+        gate=True,
+        watched=True,
+        arrival_test=True,
+    ):
         """The bank pass over `count` cycles.
 
         Returns (the column after each cycle, rows landed at a counter, times
@@ -912,8 +974,9 @@ class TheLatchIsActuallyBroken(unittest.TestCase):
 
             # THE PASS. `unasked` counts only movers the world can see.
             unasked = moves and watched and not window
-            step = cls._bank_step(settle, arrival_test, readable,
-                                  at_counter, queue, unasked)
+            step = cls._bank_step(
+                settle, arrival_test, readable, at_counter, queue, unasked
+            )
             rearmed += at_counter and step == bank.BANK_ERRAND_AIM
             column = cls._column_after(step, column)
             # ...and then the rows. With the gate they are written only from
@@ -993,8 +1056,7 @@ class TheLatchIsActuallyBroken(unittest.TestCase):
         self.assertEqual(self._bank_cycles(24, watched=False)[-1], "")
 
     def test_a_bank_queue_that_is_never_answered_keeps_its_errand(self):
-        self.assertEqual(set(self._bank_cycles(24, queue_answers=False)),
-                         {"banker"})
+        self.assertEqual(set(self._bank_cycles(24, queue_answers=False)), {"banker"})
 
     def test_an_unreadable_bank_queue_never_decays_into_a_release(self):
         self.assertNotIn("", self._bank_cycles(24, readable=False))
@@ -1019,14 +1081,19 @@ LIVE_RANK_IDS = (0, 1, 2, 3, 4)
 LIVE_DEPOSIT_RANK_IDS = (0, 1)
 LIVE_PURCHASED_TABS = 1
 LIVE_PURSES = {
-    "Grug": 984_896, "Ugga": 1_806_583, "Grog": 1_936_955,
-    "Bork": 1_788_091, "Og": 1_964_293,
+    "Grug": 984_896,
+    "Ugga": 1_806_583,
+    "Grog": 1_936_955,
+    "Bork": 1_788_091,
+    "Og": 1_964_293,
 }
 
 
 def _live_members() -> list:
-    return [{"name": name, "money": money, "in_guild": True}
-            for name, money in sorted(LIVE_PURSES.items())]
+    return [
+        {"name": name, "money": money, "in_guild": True}
+        for name, money in sorted(LIVE_PURSES.items())
+    ]
 
 
 class TheSetupBranchClosedTheDepositBranch(unittest.TestCase):
@@ -1061,13 +1128,21 @@ class TheSetupBranchClosedTheDepositBranch(unittest.TestCase):
     def test_the_live_rights_leave_plan_setup_permanently_unsatisfied(self):
         """The fact that makes the old gate permanent rather than slow."""
         import guildbank
+
         actions = guildbank.plan_setup(
-            leader="Grug", purchased_tabs=LIVE_PURCHASED_TABS,
-            rank_ids=LIVE_RANK_IDS, deposit_rank_ids=LIVE_DEPOSIT_RANK_IDS)
+            leader="Grug",
+            purchased_tabs=LIVE_PURCHASED_TABS,
+            rank_ids=LIVE_RANK_IDS,
+            deposit_rank_ids=LIVE_DEPOSIT_RANK_IDS,
+        )
         self.assertEqual(
-            ["bank grant-deposit rank:2", "bank grant-deposit rank:3",
-             "bank grant-deposit rank:4"],
-            [a.command for a in actions])
+            [
+                "bank grant-deposit rank:2",
+                "bank grant-deposit rank:3",
+                "bank grant-deposit rank:4",
+            ],
+            [a.command for a in actions],
+        )
 
     def test_the_old_rule_plans_no_deposit_for_as_long_as_setup_has_work(self):
         """The defect itself, run as a sequence over the live world.
@@ -1080,27 +1155,33 @@ class TheSetupBranchClosedTheDepositBranch(unittest.TestCase):
         hours after `grant-deposit rank:1` applied, it is unbounded.
         """
         import guildbank
+
         granted = set(LIVE_DEPOSIT_RANK_IDS)
         deposits_per_cycle = []
         for _ in range(3):
             actions = guildbank.plan_setup(
-                leader="Grug", purchased_tabs=LIVE_PURCHASED_TABS,
+                leader="Grug",
+                purchased_tabs=LIVE_PURCHASED_TABS,
                 rank_ids=LIVE_RANK_IDS,
-                deposit_rank_ids=tuple(sorted(granted)))
+                deposit_rank_ids=tuple(sorted(granted)),
+            )
             if actions:
                 # The old branch: queue one setup row and RETURN.
                 deposits_per_cycle.append(0)
                 granted.add(int(actions[0].command.rsplit(":", 1)[1]))
                 continue
-            deposits_per_cycle.append(len(guildbank.plan_deposits(
-                _live_members(), guild_has_tab=True)))
+            deposits_per_cycle.append(
+                len(guildbank.plan_deposits(_live_members(), guild_has_tab=True))
+            )
         self.assertEqual([0, 0, 0], deposits_per_cycle)
 
     def test_the_new_rule_plans_every_deposit_on_the_first_arrival(self):
         """The same world, with setup no longer standing in front."""
         import guildbank
+
         self.assertEqual(
-            5, len(guildbank.plan_deposits(_live_members(), guild_has_tab=True)))
+            5, len(guildbank.plan_deposits(_live_members(), guild_has_tab=True))
+        )
 
     def test_setup_and_deposit_share_one_arbitration(self):
         """TWO CLAIMS MEANT TWO MUTUALLY EXCLUSIVE BRANCHES.
@@ -1110,8 +1191,7 @@ class TheSetupBranchClosedTheDepositBranch(unittest.TestCase):
         own walk and only one of them could run. One claim means one walk that
         does both errands on arrival.
         """
-        self.assertEqual(1, self._pass().count(
-            '_claim_town_slot("guild bank"'))
+        self.assertEqual(1, self._pass().count('_claim_town_slot("guild bank"'))
 
     def test_the_deposit_is_planned_before_setup_is_queued(self):
         """`plan_deposits` must be reached on a cycle that also has setup work.
@@ -1122,8 +1202,9 @@ class TheSetupBranchClosedTheDepositBranch(unittest.TestCase):
         setup queue rather than below it.
         """
         body = self._pass()
-        self.assertLess(body.index("plan_deposits"),
-                        body.index("_recent_guild_setup_keys"))
+        self.assertLess(
+            body.index("plan_deposits"), body.index("_recent_guild_setup_keys")
+        )
 
     def test_the_setup_queue_does_not_return(self):
         """The queued setup row must fall through to the deposit rows.
@@ -1135,12 +1216,13 @@ class TheSetupBranchClosedTheDepositBranch(unittest.TestCase):
         "setup was the whole reason we walked" case.
         """
         body = self._pass()
-        after = body[body.index("_recent_guild_setup_keys"):]
+        after = body[body.index("_recent_guild_setup_keys") :]
         self.assertIn("_recent_guild_bank_keys", after)
         queue_block = after[: after.index("if not deposits:")]
         self.assertNotIn("return", queue_block)
-        self.assertLess(after.index("if not deposits:"),
-                        after.index("_recent_guild_bank_keys"))
+        self.assertLess(
+            after.index("if not deposits:"), after.index("_recent_guild_bank_keys")
+        )
 
 
 class ThePurchasedTabCountReachesTheReserve(unittest.TestCase):
@@ -1161,22 +1243,26 @@ class ThePurchasedTabCountReachesTheReserve(unittest.TestCase):
 
     def test_the_stale_default_excludes_the_leader_outright(self):
         import guildbank
+
         stale = {d.name for d in guildbank.plan_deposits(_live_members())}
         self.assertNotIn("Grug", stale)
 
     def test_the_tab_the_guild_owns_lets_the_leader_deposit(self):
         import guildbank
-        fresh = {d.name: d.copper for d in guildbank.plan_deposits(
-            _live_members(), guild_has_tab=True)}
+
+        fresh = {
+            d.name: d.copper
+            for d in guildbank.plan_deposits(_live_members(), guild_has_tab=True)
+        }
         self.assertIn("Grug", fresh)
-        self.assertEqual(LIVE_PURSES["Grug"] - guildbank.FLOAT_COPPER,
-                         fresh["Grug"])
+        self.assertEqual(LIVE_PURSES["Grug"] - guildbank.FLOAT_COPPER, fresh["Grug"])
 
     def test_the_pass_passes_the_count_it_already_read(self):
         body = _statements("    async def _guild_bank_once(")
         self.assertIn("guild_has_tab=purchased_tabs > 0", body)
-        self.assertIn('purchased_tabs = int(setup["purchased_tabs"]) '
-                      "if setup else 0", body)
+        self.assertIn(
+            'purchased_tabs = int(setup["purchased_tabs"]) if setup else 0', body
+        )
 
 
 class TheItemDepositStillHasNoCaller(unittest.TestCase):
@@ -1196,15 +1282,19 @@ class TheItemDepositStillHasNoCaller(unittest.TestCase):
     """
 
     def test_nothing_outside_tests_enqueues_an_item_deposit(self):
-        callers = [path.name for path in PACKAGE.glob("*.py")
-                   if "format_item_deposit(" in path.read_text(encoding="utf-8")]
+        callers = [
+            path.name
+            for path in PACKAGE.glob("*.py")
+            if "format_item_deposit(" in path.read_text(encoding="utf-8")
+        ]
         self.assertEqual(["guildbank.py"], callers)
 
     def test_the_pass_only_ever_writes_a_money_deposit(self):
-        self.assertIn('f"bank deposit {deposit.copper}"',
-                      _statements("    async def _guild_bank_once("))
-        self.assertNotIn("deposit-item",
-                         _statements("    async def _guild_bank_once("))
+        self.assertIn(
+            'f"bank deposit {deposit.copper}"',
+            _statements("    async def _guild_bank_once("),
+        )
+        self.assertNotIn("deposit-item", _statements("    async def _guild_bank_once("))
 
 
 if __name__ == "__main__":

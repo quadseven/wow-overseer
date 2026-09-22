@@ -19,6 +19,7 @@ Two rules shape everything below:
 
 Epic infra#2597, ticket infra#2605.
 """
+
 from __future__ import annotations
 
 # Faction membership already lives in core (and map_core/panel already
@@ -82,9 +83,7 @@ RECRUITS = "recruits"
 # The words that stop being character names. WoW would happily allow a
 # character called "Horde", so this is a deliberate trade: five reserved
 # words buy an unambiguous group grammar.
-GROUP_HEADS = (
-    frozenset({"guild", RECRUITS}) | _WHOLE_WORLD | frozenset(_FACTIONS)
-)
+GROUP_HEADS = frozenset({"guild", RECRUITS}) | _WHOLE_WORLD | frozenset(_FACTIONS)
 
 
 def split_group_order(head: str, rest: str) -> tuple[str, str] | None:
@@ -123,7 +122,7 @@ def _split_guild_name(rest: str) -> tuple[str, str]:
             # An unterminated quote means the name has no end; refusing to
             # guess where it stops is cheaper than mustering the wrong guild.
             return "", ""
-        return rest[1:closing].strip(), rest[closing + 1:].strip()
+        return rest[1:closing].strip(), rest[closing + 1 :].strip()
     name, _, command = rest.partition(" ")
     return name.strip(), command.strip()
 
@@ -235,7 +234,9 @@ def _resolve_guild(
     # Matching is a lookup in a map the realm handed us, so a typed name can
     # only ever select an existing guild - it can never widen the match.
     # Sorted so a duplicated guild name resolves the same way every time.
-    found = sorted(gid for gid, name in guild_names.items() if name.lower() == wanted.lower())
+    found = sorted(
+        gid for gid, name in guild_names.items() if name.lower() == wanted.lower()
+    )
     if not found:
         return [], (
             f"I know no guild called '{wanted}'. Multi-word names need quotes, "
@@ -307,7 +308,8 @@ def _resolve_recruits(
     guild_id = home.pop()
     canonical = guild_names.get(guild_id, "")
     members = [
-        r for r in commandable
+        r
+        for r in commandable
         if r.get("guild_id") == guild_id and r["name"].lower() not in kin
     ]
     if not members:

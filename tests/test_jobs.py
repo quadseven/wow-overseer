@@ -8,6 +8,7 @@ alone for a week after `dungeon` was fully wired. So it is asserted against
 mod_overseer.cpp as source text, the way test_bags.py and test_quest_aim.py
 already do (infra#3205).
 """
+
 import pathlib
 import unittest
 from unittest import mock
@@ -54,8 +55,9 @@ class ParseOrderTest(unittest.TestCase):
         self.assertEqual(jobs.parse_order("JOB grind"), "grind")
 
     def test_explicit_dungeon_name_is_preserved(self):
-        self.assertEqual(jobs.parse_order("job dungeon shadowfang"),
-                         "dungeon:shadowfang")
+        self.assertEqual(
+            jobs.parse_order("job dungeon shadowfang"), "dungeon:shadowfang"
+        )
 
     def test_unknown_dungeon_name_is_rejected(self):
         self.assertIsNone(jobs.parse_order("job dungeon zulfarak"))
@@ -262,7 +264,8 @@ class ImplementedMatchesTheModule(unittest.TestCase):
         if not MODULE.exists():
             raise unittest.SkipTest(
                 "mod-overseer submodule not checked out; "
-                "check.python-units.yml passes submodules: true for this dir")
+                "check.python-units.yml passes submodules: true for this dir"
+            )
         cls.source = MODULE.read_text(encoding="utf-8", errors="replace")
 
     def test_the_dungeon_job_really_does_drive_the_run_coordinator(self):

@@ -168,5 +168,8 @@ def reachable_locks(skill_name, value):
         have = int(value)
     except (TypeError, ValueError):
         return []
-    return [lock for lock, band in sorted(table.items(), key=lambda kv: (kv[1], kv[0]))
-            if have >= band]
+    return [
+        lock
+        for lock, band in sorted(table.items(), key=lambda kv: (kv[1], kv[0]))
+        if have >= band
+    ]

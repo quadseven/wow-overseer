@@ -27,6 +27,7 @@ and never to be per goal or per reagent.
 
 Tickets: infra#3508, infra#3500, infra#2597.
 """
+
 import pathlib
 import re
 import unittest
@@ -44,10 +45,10 @@ CSS_BANNER = "/* --- what the guild still needs before it can raid (infra#3508)"
 NEXT = "// --- the item tooltip, on every gear name (infra#3501)"
 NEXT_CSS = "/* --- the item tooltip, on every gear name (infra#3501)"
 
-BLOCK = PAGE[PAGE.index(BANNER):PAGE.index(NEXT, PAGE.index(BANNER))]
-CSS = PAGE[PAGE.index(CSS_BANNER):PAGE.index(NEXT_CSS, PAGE.index(CSS_BANNER))]
-SECTION = PAGE[PAGE.index('<section id="raid">'):]
-SECTION = SECTION[:SECTION.index("</section>")]
+BLOCK = PAGE[PAGE.index(BANNER) : PAGE.index(NEXT, PAGE.index(BANNER))]
+CSS = PAGE[PAGE.index(CSS_BANNER) : PAGE.index(NEXT_CSS, PAGE.index(CSS_BANNER))]
+SECTION = PAGE[PAGE.index('<section id="raid">') :]
+SECTION = SECTION[: SECTION.index("</section>")]
 
 
 def code(block: str) -> str:
@@ -58,8 +59,9 @@ def code(block: str) -> str:
     gets weakened until it passes. Several assertions below name the sentence
     they forbid.
     """
-    return "\n".join(line for line in block.splitlines()
-                     if not line.lstrip().startswith("//"))
+    return "\n".join(
+        line for line in block.splitlines() if not line.lstrip().startswith("//")
+    )
 
 
 CODE = code(BLOCK)
@@ -82,31 +84,38 @@ class WhereTheCodeIsAllowedToSit(unittest.TestCase):
     def test_the_script_sits_above_the_armorys_window(self):
         """test_armory_tab slices from its banner to `</script>`, which is the
         end of the file, so anything below it is read as Armory code."""
-        self.assertLess(PAGE.index(BANNER),
-                        PAGE.index("// --- the Armory tab (infra#3096, infra#3139)"))
+        self.assertLess(
+            PAGE.index(BANNER),
+            PAGE.index("// --- the Armory tab (infra#3096, infra#3139)"),
+        )
 
     def test_the_styles_sit_between_the_furniture_and_the_first_view(self):
         """The shared furniture has to stay above every view window or the
         first view to claim it takes the others hostage; the item tooltip's is
         the first window that starts at a banner."""
-        self.assertLess(PAGE.index("/* --- the redesign furniture (infra#2597)"),
-                        PAGE.index(CSS_BANNER))
+        self.assertLess(
+            PAGE.index("/* --- the redesign furniture (infra#2597)"),
+            PAGE.index(CSS_BANNER),
+        )
         self.assertLess(PAGE.index(CSS_BANNER), PAGE.index(NEXT_CSS))
 
     def test_the_fetch_sits_above_the_dungeon_plans_fetch_window(self):
         """test_dungeon_tab slices its fetch from its own function to the
         recap's banner and forbids an unguarded read inside it."""
-        self.assertLess(SERVER.index("def _fetch_raidgoals"),
-                        SERVER.index("def _fetch_dungeonplan"))
+        self.assertLess(
+            SERVER.index("def _fetch_raidgoals"), SERVER.index("def _fetch_dungeonplan")
+        )
 
     def test_the_handler_sits_outside_the_dungeon_plans_handler_window(self):
         """That window runs from `def _dungeons` to the recap's handler."""
-        self.assertLess(SERVER.index("    def _raidgoals"),
-                        SERVER.index("    def _dungeons"))
+        self.assertLess(
+            SERVER.index("    def _raidgoals"), SERVER.index("    def _dungeons")
+        )
 
     def test_the_section_sits_before_the_council(self):
-        self.assertLess(PAGE.index('<section id="raid">'),
-                        PAGE.index('<section id="council">'))
+        self.assertLess(
+            PAGE.index('<section id="raid">'), PAGE.index('<section id="council">')
+        )
 
 
 class TheTabIsReachable(unittest.TestCase):
@@ -115,58 +124,85 @@ class TheTabIsReachable(unittest.TestCase):
         what is still missing before the raid above them. Same subject, one
         rung up."""
         self.assertIn("rb.dataset.view = RAID_VIEW;", PAGE)
-        self.assertLess(PAGE.index("tabs.appendChild(gb);"),
-                        PAGE.index("tabs.appendChild(rb);"))
-        self.assertLess(PAGE.index("tabs.appendChild(rb);"),
-                        PAGE.index("tabs.appendChild(db);"))
+        self.assertLess(
+            PAGE.index("tabs.appendChild(gb);"), PAGE.index("tabs.appendChild(rb);")
+        )
+        self.assertLess(
+            PAGE.index("tabs.appendChild(rb);"), PAGE.index("tabs.appendChild(db);")
+        )
 
     def test_the_view_is_in_the_routing_table(self):
         """A view missing from HASH_VIEWS falls through to the unrecognised
         branch and silently opens the Family tab, which is exactly the failure
         the routing TABLE replaced a ladder of ifs to prevent."""
-        listed = PAGE[PAGE.index("const HASH_VIEWS = ["):]
-        self.assertIn("RAID_VIEW", listed[:listed.index("]")])
+        listed = PAGE[PAGE.index("const HASH_VIEWS = [") :]
+        self.assertIn("RAID_VIEW", listed[: listed.index("]")])
 
     def test_show_view_shows_and_hides_the_section(self):
-        show = PAGE[PAGE.index("function showView"):]
-        show = show[:show.index("// Read once, at startup")]
+        show = PAGE[PAGE.index("function showView") :]
+        show = show[: show.index("// Read once, at startup")]
         self.assertIn("const isRaid = v === RAID_VIEW;", show)
-        self.assertIn('rgsection.style.display = isRaid ? "block" : "none";',
-                      show)
+        self.assertIn('rgsection.style.display = isRaid ? "block" : "none";', show)
 
     def test_it_fetches_on_the_way_in_rather_than_waiting_for_the_timer(self):
         """A minute of empty goal list under a heading is indistinguishable
         from a broken one."""
-        show = PAGE[PAGE.index("function showView"):]
-        show = show[:show.index("// Read once, at startup")]
-        branch = show[show.index("  if (isRaid) {"):]
-        self.assertIn("pollRaid();", branch[:branch.index("  }")])
+        show = PAGE[PAGE.index("function showView") :]
+        show = show[: show.index("// Read once, at startup")]
+        branch = show[show.index("  if (isRaid) {") :]
+        self.assertIn("pollRaid();", branch[: branch.index("  }")])
 
     def test_it_stops_the_grid_and_closes_the_panel_like_every_read_view(self):
         """Both are map and Family things that would go on running behind a
         view that does not show them, keeping a second player alive off
         screen."""
-        show = PAGE[PAGE.index("function showView"):]
-        branch = show[show.index("  if (isRaid) {"):]
-        branch = branch[:branch.index("  }")]
+        show = PAGE[PAGE.index("function showView") :]
+        branch = show[show.index("  if (isRaid) {") :]
+        branch = branch[: branch.index("  }")]
         self.assertIn("closePanel();", branch)
         self.assertIn("stopBroadcasts();", branch)
 
     def test_the_markup_exists_and_every_box_the_script_fills_is_in_it(self):
-        for element in ('id="rghead"', 'id="rgroster"', 'id="rgraid"',
-                        'id="rgstrip"', 'id="rgorder"', 'id="rglist"',
-                        'id="rgothers"', 'id="rgotherlist"', 'id="rgbasis"',
-                        'id="rrgoal"', 'id="rrlist"', 'id="rrbasis"',
-                        'id="rgpick"', 'id="rgline"'):
+        for element in (
+            'id="rghead"',
+            'id="rgroster"',
+            'id="rgraid"',
+            'id="rgstrip"',
+            'id="rgorder"',
+            'id="rglist"',
+            'id="rgothers"',
+            'id="rgotherlist"',
+            'id="rgbasis"',
+            'id="rrgoal"',
+            'id="rrlist"',
+            'id="rrbasis"',
+            'id="rgpick"',
+            'id="rgline"',
+        ):
             self.assertIn(element, SECTION, element)
 
     def test_the_markup_holds_no_sentence_of_its_own(self):
         """Two section labels and the loading word, and nothing else: every
         other word on this tab arrives from the module."""
         text = re.sub(r"<[^>]+>", " ", SECTION)
-        words = [w for w in text.split() if w not in
-                 ("reaching", "the", "world...", "01", "02", "consumables,",
-                  "per", "guild", "rest", "of", "tier")]
+        words = [
+            w
+            for w in text.split()
+            if w
+            not in (
+                "reaching",
+                "the",
+                "world...",
+                "01",
+                "02",
+                "consumables,",
+                "per",
+                "guild",
+                "rest",
+                "of",
+                "tier",
+            )
+        ]
         self.assertEqual(words, [], words)
 
 
@@ -204,8 +240,14 @@ class ThePageDecidesNothing(unittest.TestCase):
         self.assertIn("goal.line", CODE)
         self.assertIn("goal.need_line", CODE)
         self.assertIn("goal.recipes_line", CODE)
-        for invented in ('" short"', '" needed"', '" held"', '"blocked"',
-                         '"unreachable"', '" enough"'):
+        for invented in (
+            '" short"',
+            '" needed"',
+            '" held"',
+            '"blocked"',
+            '"unreachable"',
+            '" enough"',
+        ):
             self.assertNotIn(invented, CODE, invented)
 
     def test_the_status_is_never_worked_out_on_the_page(self):
@@ -274,14 +316,16 @@ class TheEndpoint(unittest.TestCase):
         tables, exactly as /api/armory and /api/family refuse a name. This one
         asks a single question about a single raid, so there is nothing to
         steer either."""
-        handler = SERVER[SERVER.index("def _raidgoals"):
-                         SERVER.index("def _achievements")]
+        handler = SERVER[
+            SERVER.index("def _raidgoals") : SERVER.index("def _achievements")
+        ]
         self.assertIn("_fetch_raidgoals()", handler)
         self.assertNotIn("query.get", handler)
 
     def test_a_dead_database_is_a_503_that_keeps_what_is_drawn(self):
-        handler = SERVER[SERVER.index("def _raidgoals"):
-                         SERVER.index("def _achievements")]
+        handler = SERVER[
+            SERVER.index("def _raidgoals") : SERVER.index("def _achievements")
+        ]
         self.assertIn("self._send(503", handler)
         self.assertIn("may be stale", BLOCK)
 
@@ -297,18 +341,29 @@ class TheReads(unittest.TestCase):
         # To the dungeon plan's own banner and not to its function: that
         # section's SQL constants sit between the two, and a window that swept
         # them in would be asserting about somebody else's code.
-        cls.fetch = SERVER[SERVER.index("def _fetch_raidgoals"):
-                           SERVER.index("# --- which dungeon is worth running")]
+        cls.fetch = SERVER[
+            SERVER.index("def _fetch_raidgoals") : SERVER.index(
+                "# --- which dungeon is worth running"
+            )
+        ]
 
     def test_every_read_goes_through_the_guard_that_catches_both_errors(self):
         """1146 is a missing TABLE and 1054 a missing COLUMN. Production lacks
         tables dev has, and two of these tables are read by nothing else in
         this service, so an unguarded read here is a 503 on the live realm."""
         self.assertNotIn("cur.execute", self.fetch)
-        for table in ("guild_member", "item_template", "trainer_spell",
-                      "characters", "character_skills", "character_spell",
-                      "character_inventory", "npc_vendor",
-                      "creature_loot_template", "gameobject_loot_template"):
+        for table in (
+            "guild_member",
+            "item_template",
+            "trainer_spell",
+            "characters",
+            "character_skills",
+            "character_spell",
+            "character_inventory",
+            "npc_vendor",
+            "creature_loot_template",
+            "gameobject_loot_template",
+        ):
             self.assertIn('"%s' % table, self.fetch, table)
 
     def test_the_bound_item_list_is_the_modules_own(self):
@@ -321,8 +376,13 @@ class TheReads(unittest.TestCase):
     def test_the_reads_are_bound_to_the_roster_and_never_per_goal(self):
         """A query per reagent is twenty-seven times three round trips on an
         endpoint with no auth in front of it."""
-        for sql in ("_RAID_ITEMS", "_RAID_VENDOR", "_RAID_CREATURE",
-                    "_RAID_OBJECT", "_RAID_HOLDINGS"):
+        for sql in (
+            "_RAID_ITEMS",
+            "_RAID_VENDOR",
+            "_RAID_CREATURE",
+            "_RAID_OBJECT",
+            "_RAID_HOLDINGS",
+        ):
             self.assertEqual(self.fetch.count(sql + ".format"), 1, sql)
         self.assertNotIn("for recipe in", self.fetch)
         self.assertNotIn("for reagent in", self.fetch)
@@ -341,8 +401,8 @@ class TheReads(unittest.TestCase):
     def test_the_guild_read_is_narrowed_to_the_familys_own_guild(self):
         """The random population has guilds of its own, and counting those
         would be a raid group nobody is in."""
-        sql = SERVER[SERVER.index("_RAID_GUILD = ("):]
-        sql = sql[:sql.index(")\n")]
+        sql = SERVER[SERVER.index("_RAID_GUILD = (") :]
+        sql = sql[: sql.index(")\n")]
         self.assertIn("SELECT gm2.guildid FROM guild_member gm2", sql)
 
     def test_the_reserved_word_is_aliased_rather_than_selected_bare(self):
@@ -350,8 +410,8 @@ class TheReads(unittest.TestCase):
         would have taken this tab down on a realm running a newer server than
         the one it was written on."""
         for name in ("_RAID_RECIPES = (", "_RAID_TRAINER = ("):
-            sql = SERVER[SERVER.index(name):]
-            sql = sql[:sql.index(")\n")]
+            sql = SERVER[SERVER.index(name) :]
+            sql = sql[: sql.index(")\n")]
             self.assertIn("AS skill_rank", sql)
             self.assertNotIn("AS rank", sql)
 
@@ -359,17 +419,24 @@ class TheReads(unittest.TestCase):
         """bank.members_from_rows reads exactly these keys, and a thinner read
         would be a second answer to "where is that stack", free to disagree
         with the Bags tab about the same stack on the same evening."""
-        sql = SERVER[SERVER.index("_RAID_HOLDINGS = ("):]
-        sql = sql[:sql.index(")\n")]
-        for column in ("holder", "item_guid", "container_slots", "bonding",
-                       "item_class", "ci.bag", "ci.slot"):
+        sql = SERVER[SERVER.index("_RAID_HOLDINGS = (") :]
+        sql = sql[: sql.index(")\n")]
+        for column in (
+            "holder",
+            "item_guid",
+            "container_slots",
+            "bonding",
+            "item_class",
+            "ci.bag",
+            "ci.slot",
+        ):
             self.assertIn(column, sql, column)
 
     def test_the_worn_read_selects_the_resistance_and_nothing_else(self):
         """Five more resistance columns would invite the five sentences this
         view has not earned: it asks about Molten Core, which is fire."""
-        sql = SERVER[SERVER.index("_RAID_WORN = ("):]
-        sql = sql[:sql.index(")\n")]
+        sql = SERVER[SERVER.index("_RAID_WORN = (") :]
+        sql = sql[: sql.index(")\n")]
         self.assertIn("it.fire_res", sql)
         for other in ("frost_res", "nature_res", "shadow_res", "arcane_res"):
             self.assertNotIn(other, sql, other)
@@ -380,15 +447,14 @@ class TheReads(unittest.TestCase):
         creature because an unrelated reference shares its number. The loot
         board and the dungeon plan both carry this filter."""
         for name in ("_RAID_CREATURE = (", "_RAID_OBJECT = ("):
-            sql = SERVER[SERVER.index(name):]
-            self.assertIn("Reference = 0",
-                          sql[:sql.index(")\n")], name)
+            sql = SERVER[SERVER.index(name) :]
+            self.assertIn("Reference = 0", sql[: sql.index(")\n")], name)
 
     def test_the_three_source_reads_are_distinct(self):
         """A vial sold by ninety vendors is ninety rows and one answer."""
         for name in ("_RAID_VENDOR = (", "_RAID_CREATURE = (", "_RAID_OBJECT = ("):
-            sql = SERVER[SERVER.index(name):]
-            self.assertIn("SELECT DISTINCT", sql[:sql.index(")\n")])
+            sql = SERVER[SERVER.index(name) :]
+            self.assertIn("SELECT DISTINCT", sql[: sql.index(")\n")])
 
     def test_the_module_never_goes_back_to_the_database(self):
         """The whole view is eleven reads on one connection, and a module that
@@ -463,8 +529,8 @@ class ThePollIsGuarded(unittest.TestCase):
     def test_the_flag_is_released_in_a_finally(self):
         """Cleared at the end of the try it would be skipped by the very
         failure that most needs the next poll to be allowed to run."""
-        block = CODE[CODE.index("async function pollRaid"):]
-        self.assertIn("finally", block[:block.index("\n}")])
+        block = CODE[CODE.index("async function pollRaid") :]
+        self.assertIn("finally", block[: block.index("\n}")])
 
     def test_it_polls_only_while_the_tab_is_open(self):
         """It is a wide read: every roster member's whole inventory plus three
@@ -475,8 +541,8 @@ class ThePollIsGuarded(unittest.TestCase):
     def test_a_failed_poll_keeps_what_is_drawn(self):
         """A blanked list here reads as "there is nothing left to farm", which
         is the one claim this view must never make by accident."""
-        block = CODE[CODE.index("async function pollRaid"):]
-        self.assertNotIn("replaceChildren()", block[:block.index("\n}")])
+        block = CODE[CODE.index("async function pollRaid") :]
+        self.assertNotIn("replaceChildren()", block[: block.index("\n}")])
 
 
 class BothGuildsGetAReadinessCard(unittest.TestCase):
@@ -488,13 +554,20 @@ class BothGuildsGetAReadinessCard(unittest.TestCase):
         self.assertIn("raidready.group_guilds(", SERVER)
         self.assertIn("raidready.build_guild(", SERVER)
         self.assertIn("raidready.build_readiness(", SERVER)
-        self.assertIn("for (const g of p.guilds) rrlist.appendChild(rrCard(g));",
-                      CODE)
+        self.assertIn("for (const g of p.guilds) rrlist.appendChild(rrCard(g));", CODE)
 
     def test_every_readiness_sentence_is_the_modules(self):
-        for key in ("g.title", "g.headline", "g.roster_line", "g.gear_line",
-                    "g.blockers_line", "b.text", "tile.value", "tile.label",
-                    "p.goal_line"):
+        for key in (
+            "g.title",
+            "g.headline",
+            "g.roster_line",
+            "g.gear_line",
+            "g.blockers_line",
+            "b.text",
+            "tile.value",
+            "tile.label",
+            "p.goal_line",
+        ):
             self.assertIn(key, CODE, key)
 
     def test_a_hard_blocker_and_a_soft_one_are_drawn_apart(self):
@@ -510,16 +583,18 @@ class BothGuildsGetAReadinessCard(unittest.TestCase):
         can only ever find the Alliance guild. That is why the Horde guild
         was missing from both the Lineup and the Raid tab."""
         for fetch in ("def _fetch_raidgoals", "def _fetch_lineup"):
-            body = SERVER[SERVER.index(fetch):]
-            body = body[:body.index("\ndef ")]
+            body = SERVER[SERVER.index(fetch) :]
+            body = body[: body.index("\ndef ")]
             self.assertNotIn("names = family.roster()", body, fetch)
-        lineup = SERVER[SERVER.index("def _fetch_lineup"):]
-        self.assertIn("names = _all_roster_names()",
-                      lineup[:lineup.index("\ndef ")])
+        lineup = SERVER[SERVER.index("def _fetch_lineup") :]
+        self.assertIn("names = _all_roster_names()", lineup[: lineup.index("\ndef ")])
 
     def test_the_new_reads_are_guarded(self):
-        fetch = SERVER[SERVER.index("def _fetch_raidgoals"):
-                       SERVER.index("# --- which dungeon is worth running")]
+        fetch = SERVER[
+            SERVER.index("def _fetch_raidgoals") : SERVER.index(
+                "# --- which dungeon is worth running"
+            )
+        ]
         self.assertIn('"character_queststatus_rewarded")', fetch)
         self.assertIn('"dungeon_access_template")', fetch)
         self.assertIn("raidready.ATTUNEMENT_QUESTS", fetch)
@@ -535,43 +610,104 @@ class TheModuleAndThePageAgree(unittest.TestCase):
 
     def test_every_payload_key_the_script_reads_is_one_the_module_writes(self):
         payload = raidgoals.build_raidgoals(
-            item_rows=[], recipe_rows=[], trainer_rows=[], char_rows=[],
-            skill_rows=[], spell_rows=[], holding_rows=[], worn_rows=[],
-            vendor_rows=[], creature_rows=[], object_rows=[], guild_rows=[],
-            roster=["Ugga"])
-        for key in ("line", "roster_line", "raid_line", "strip", "order",
-                    "goals", "others", "others_line", "basis", "empty_note"):
+            item_rows=[],
+            recipe_rows=[],
+            trainer_rows=[],
+            char_rows=[],
+            skill_rows=[],
+            spell_rows=[],
+            holding_rows=[],
+            worn_rows=[],
+            vendor_rows=[],
+            creature_rows=[],
+            object_rows=[],
+            guild_rows=[],
+            roster=["Ugga"],
+        )
+        for key in (
+            "line",
+            "roster_line",
+            "raid_line",
+            "strip",
+            "order",
+            "goals",
+            "others",
+            "others_line",
+            "basis",
+            "empty_note",
+        ):
             self.assertIn("p." + key, CODE, key)
             self.assertIn(key, payload, key)
 
     def test_every_goal_key_the_script_reads_is_one_the_module_writes(self):
         payload = raidgoals.build_raidgoals(
-            item_rows=[], recipe_rows=[], trainer_rows=[], char_rows=[],
-            skill_rows=[], spell_rows=[], holding_rows=[], worn_rows=[],
-            vendor_rows=[], creature_rows=[], object_rows=[], guild_rows=[],
-            roster=["Ugga"])
+            item_rows=[],
+            recipe_rows=[],
+            trainer_rows=[],
+            char_rows=[],
+            skill_rows=[],
+            spell_rows=[],
+            holding_rows=[],
+            worn_rows=[],
+            vendor_rows=[],
+            creature_rows=[],
+            object_rows=[],
+            guild_rows=[],
+            roster=["Ugga"],
+        )
         goal = payload["goals"][0]
-        for key in ("name", "line", "chips", "need_line", "recipes_line",
-                    "members", "products", "recipes"):
+        for key in (
+            "name",
+            "line",
+            "chips",
+            "need_line",
+            "recipes_line",
+            "members",
+            "products",
+            "recipes",
+        ):
             self.assertIn("goal." + key, CODE, key)
             self.assertIn(key, goal, key)
 
     def test_every_readiness_key_the_script_reads_is_one_the_module_writes(self):
         import raidready
-        group = {"guildid": None, "guild": "", "family": "Ugga",
-                 "family_names": ["Ugga"], "rows": []}
+
+        group = {
+            "guildid": None,
+            "guild": "",
+            "family": "Ugga",
+            "family_names": ["Ugga"],
+            "rows": [],
+        }
         goals = raidgoals.build_raidgoals(
-            item_rows=[], recipe_rows=[], trainer_rows=[], char_rows=[],
-            skill_rows=[], spell_rows=[], holding_rows=[], worn_rows=[],
-            vendor_rows=[], creature_rows=[], object_rows=[], guild_rows=[],
-            roster=["Ugga"])
+            item_rows=[],
+            recipe_rows=[],
+            trainer_rows=[],
+            char_rows=[],
+            skill_rows=[],
+            spell_rows=[],
+            holding_rows=[],
+            worn_rows=[],
+            vendor_rows=[],
+            creature_rows=[],
+            object_rows=[],
+            guild_rows=[],
+            roster=["Ugga"],
+        )
         card = raidready.build_guild(group, [], [], [], None, goals)
         payload = raidready.build_readiness([card])
         for key in ("line", "goal_line", "guilds", "basis"):
             self.assertIn("p." + key, CODE, key)
             self.assertIn(key, payload, key)
-        for key in ("title", "headline", "tiles", "roster_line", "gear_line",
-                    "blockers_line", "blockers"):
+        for key in (
+            "title",
+            "headline",
+            "tiles",
+            "roster_line",
+            "gear_line",
+            "blockers_line",
+            "blockers",
+        ):
             self.assertIn("g." + key, CODE, key)
             self.assertIn(key, card, key)
 

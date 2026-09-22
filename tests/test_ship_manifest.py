@@ -9,6 +9,7 @@ This is not hypothetical: merging three concurrent feature branches on
 two of the three new modules and silently dropping panel.py, which
 map_server.py imports. Caught by hand; this test is so the next one is not.
 """
+
 import os
 import re
 import unittest

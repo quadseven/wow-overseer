@@ -53,6 +53,7 @@ tests/test_ship_manifest.py requires every top-level module to be named in
 the Dockerfile, after a rerere replay once dropped panel.py from it and gave
 the map server an import crash at pod start, long after CI was green.
 """
+
 from __future__ import annotations
 
 # The bar. UNCOMMON, which is 2, and the number is the operator's complaint
@@ -153,7 +154,7 @@ def worth_showing(quality) -> bool:
 
 
 def headline(winner: str, verb: str, viewer: str) -> str:
-    """"Og won" - the words above the tooltip, without the item.
+    """ "Og won" - the words above the tooltip, without the item.
 
     The item is not in here because only the client can render it. The addon
     appends the link itself, which draws as a coloured `[Robe of the Moccasin]`

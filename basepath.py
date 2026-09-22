@@ -47,6 +47,7 @@ hand a prefixed realm the root's URLs, which is precisely the cross-realm read
 above. A pod that refuses to start says so in one line of log; a pod that
 quietly addresses the wrong world says nothing at all.
 """
+
 from __future__ import annotations
 
 import json
@@ -147,6 +148,5 @@ def apply(html: bytes, prefix: str) -> bytes:
     # carries the token, so the loud failure happens in the suite instead.
     nav = NAV_PLACEHOLDER.encode()
     if nav in html:
-        html = html.replace(
-            nav, json.dumps(realmnav.build_nav(prefix)).encode())
+        html = html.replace(nav, json.dumps(realmnav.build_nav(prefix)).encode())
     return html

@@ -34,12 +34,12 @@ here, and what is worth pinning there is the seam anyway - that the decision
 is the pure module's, the aim goes onto the leader, and it names a creature
 entry rather than a role keyword or a coordinate.
 """
+
 import pathlib
 import re
 import unittest
 
 import craft_supply
-import towntrip
 import travel
 from towntrip import Town
 
@@ -63,6 +63,7 @@ def _bridge_block(signature: str) -> str:
     rest = src[start:]
     match = re.search(r"\n {0,%d}(async def |def |class )" % indent, rest[1:])
     return rest[: match.start() + 1] if match else rest
+
 
 EMPTY_VIAL = 3371
 LEADED_VIAL = 3372
@@ -105,7 +106,11 @@ class ReagentErrandTests(unittest.TestCase):
         # Lesser Healing Potion whose second reagent is the previous
         # recipe's own output) must answer (None, None), never a guess.
         errand, note = craft_supply.reagent_errand(
-            "Ugga", LESSER_HEALING_POTION, held=0, money=UGGA_MONEY, free_slots=5,
+            "Ugga",
+            LESSER_HEALING_POTION,
+            held=0,
+            money=UGGA_MONEY,
+            free_slots=5,
             town=town({EMPTY_VIAL}),
         )
         self.assertIsNone(errand)
@@ -113,8 +118,12 @@ class ReagentErrandTests(unittest.TestCase):
 
     def test_none_when_already_stocked_to_target(self):
         errand, note = craft_supply.reagent_errand(
-            "Ugga", MINOR_HEALING_POTION, held=craft_supply.TARGET, money=UGGA_MONEY,
-            free_slots=5, town=town({EMPTY_VIAL}),
+            "Ugga",
+            MINOR_HEALING_POTION,
+            held=craft_supply.TARGET,
+            money=UGGA_MONEY,
+            free_slots=5,
+            town=town({EMPTY_VIAL}),
         )
         self.assertIsNone(errand)
         self.assertIsNone(note)
@@ -123,7 +132,11 @@ class ReagentErrandTests(unittest.TestCase):
         # Ugga's own measured holding is 0x Empty Vial - the exact live
         # condition that stalled her Minor Healing Potion errand tonight.
         errand, note = craft_supply.reagent_errand(
-            "Ugga", MINOR_HEALING_POTION, held=0, money=UGGA_MONEY, free_slots=5,
+            "Ugga",
+            MINOR_HEALING_POTION,
+            held=0,
+            money=UGGA_MONEY,
+            free_slots=5,
             town=town({EMPTY_VIAL}),
         )
         self.assertIsNone(note)
@@ -136,7 +149,11 @@ class ReagentErrandTests(unittest.TestCase):
 
     def test_refuses_when_no_reachable_vendor_stocks_it(self):
         errand, note = craft_supply.reagent_errand(
-            "Ugga", MINOR_HEALING_POTION, held=0, money=UGGA_MONEY, free_slots=5,
+            "Ugga",
+            MINOR_HEALING_POTION,
+            held=0,
+            money=UGGA_MONEY,
+            free_slots=5,
             town=town(frozenset()),
         )
         self.assertIsNone(errand)
@@ -145,7 +162,11 @@ class ReagentErrandTests(unittest.TestCase):
 
     def test_refuses_with_no_free_bag_slot(self):
         errand, note = craft_supply.reagent_errand(
-            "Ugga", MINOR_HEALING_POTION, held=0, money=UGGA_MONEY, free_slots=0,
+            "Ugga",
+            MINOR_HEALING_POTION,
+            held=0,
+            money=UGGA_MONEY,
+            free_slots=0,
             town=town({EMPTY_VIAL}),
         )
         self.assertIsNone(errand)
@@ -157,7 +178,11 @@ class ReagentErrandTests(unittest.TestCase):
         # purse, so this exercises the refusal with an invented shortfall
         # rather than a real one (Grug has never actually been this poor).
         errand, note = craft_supply.reagent_errand(
-            "Grug", HEALING_POTION, held=0, money=50, free_slots=5,
+            "Grug",
+            HEALING_POTION,
+            held=0,
+            money=50,
+            free_slots=5,
             town=town({LEADED_VIAL}),
         )
         self.assertIsNone(errand)
@@ -165,7 +190,11 @@ class ReagentErrandTests(unittest.TestCase):
 
     def test_picks_the_right_vial_per_recipe(self):
         errand, _ = craft_supply.reagent_errand(
-            "Grug", HEALING_POTION, held=0, money=GRUG_MONEY, free_slots=5,
+            "Grug",
+            HEALING_POTION,
+            held=0,
+            money=GRUG_MONEY,
+            free_slots=5,
             town=town({LEADED_VIAL}),
         )
         self.assertIn("entry:3372", errand.command)
@@ -175,8 +204,12 @@ class ReagentErrandTests(unittest.TestCase):
         # other tests reach it, and it is the one most likely to trip a
         # copy-paste mistake in VIAL's third column.
         errand, note = craft_supply.reagent_errand(
-            "Ugga", SUPERIOR_HEALING_POTION, held=1, money=UGGA_MONEY,
-            free_slots=5, town=town({CRYSTAL_VIAL}),
+            "Ugga",
+            SUPERIOR_HEALING_POTION,
+            held=1,
+            money=UGGA_MONEY,
+            free_slots=5,
+            town=town({CRYSTAL_VIAL}),
         )
         self.assertIsNone(note)
         # short = TARGET(5) - held(1) = 4, price 2500/ea -> ceiling 10000
@@ -202,7 +235,11 @@ class ReagentErrandTests(unittest.TestCase):
         # real condition that would otherwise stall Bronze Tube the same
         # way Ugga's Minor Healing Potion stalled on 0x Empty Vial.
         errand, note = craft_supply.reagent_errand(
-            "Grog", BRONZE_TUBE, held=0, money=GROG_MONEY, free_slots=5,
+            "Grog",
+            BRONZE_TUBE,
+            held=0,
+            money=GROG_MONEY,
+            free_slots=5,
             town=town({WEAK_FLUX}),
         )
         self.assertIsNone(note)
@@ -215,7 +252,11 @@ class ReagentErrandTests(unittest.TestCase):
 
     def test_refuses_weak_flux_when_no_reachable_vendor_stocks_it(self):
         errand, note = craft_supply.reagent_errand(
-            "Grog", BRONZE_TUBE, held=0, money=GROG_MONEY, free_slots=5,
+            "Grog",
+            BRONZE_TUBE,
+            held=0,
+            money=GROG_MONEY,
+            free_slots=5,
             town=town(frozenset()),
         )
         self.assertIsNone(errand)
@@ -230,7 +271,11 @@ class ReagentErrandTests(unittest.TestCase):
         # shape Lesser Healing Potion already exercises above, never a
         # refusal note that implies a vendor trip would ever help.
         errand, note = craft_supply.reagent_errand(
-            "Grog", STANDARD_SCOPE, held=0, money=GROG_MONEY, free_slots=5,
+            "Grog",
+            STANDARD_SCOPE,
+            held=0,
+            money=GROG_MONEY,
+            free_slots=5,
             town=town(frozenset()),
         )
         self.assertIsNone(errand)
@@ -246,7 +291,11 @@ class CraftReagentErrandsTests(unittest.TestCase):
         # all, the same "not this module's problem" shape LESSER_HEALING_
         # POTION already exercises for REAGENT/reagent_errand.
         errands, notes = craft_supply.craft_reagent_errands(
-            "Bork", LIGHT_LEATHER, held={}, money=BORK_MONEY, free_slots=5,
+            "Bork",
+            LIGHT_LEATHER,
+            held={},
+            money=BORK_MONEY,
+            free_slots=5,
             town=town({COARSE_THREAD}),
         )
         self.assertEqual(errands, [])
@@ -257,8 +306,12 @@ class CraftReagentErrandsTests(unittest.TestCase):
         # condition that stalls Linen Belt the same way
         # Ugga's 0x Empty Vial stalled Minor Healing Potion.
         errands, notes = craft_supply.craft_reagent_errands(
-            "Bork", LINEN_BELT, held={COARSE_THREAD: 0},
-            money=BORK_MONEY, free_slots=5, town=town({COARSE_THREAD}),
+            "Bork",
+            LINEN_BELT,
+            held={COARSE_THREAD: 0},
+            money=BORK_MONEY,
+            free_slots=5,
+            town=town({COARSE_THREAD}),
         )
         self.assertEqual(notes, [])
         self.assertEqual(len(errands), 1)
@@ -269,8 +322,12 @@ class CraftReagentErrandsTests(unittest.TestCase):
     def test_none_when_already_stocked_to_target(self):
         target = craft_supply.CASTS_PER_TRIP * 1  # Coarse Thread, 1/cast
         errands, notes = craft_supply.craft_reagent_errands(
-            "Bork", LINEN_BELT, held={COARSE_THREAD: target},
-            money=BORK_MONEY, free_slots=5, town=town({COARSE_THREAD}),
+            "Bork",
+            LINEN_BELT,
+            held={COARSE_THREAD: target},
+            money=BORK_MONEY,
+            free_slots=5,
+            town=town({COARSE_THREAD}),
         )
         self.assertEqual(errands, [])
         self.assertEqual(notes, [])
@@ -280,8 +337,12 @@ class CraftReagentErrandsTests(unittest.TestCase):
         # the exact shape REAGENT's single-tuple values cannot hold, which
         # is why REAGENTS/craft_reagent_errands exist as a plural sibling.
         errands, notes = craft_supply.craft_reagent_errands(
-            "Og", DARK_LEATHER_BOOTS, held={FINE_THREAD: 0, GRAY_DYE: 0},
-            money=OG_MONEY, free_slots=5, town=town({FINE_THREAD, GRAY_DYE}),
+            "Og",
+            DARK_LEATHER_BOOTS,
+            held={FINE_THREAD: 0, GRAY_DYE: 0},
+            money=OG_MONEY,
+            free_slots=5,
+            town=town({FINE_THREAD, GRAY_DYE}),
         )
         self.assertEqual(notes, [])
         self.assertEqual(len(errands), 2)
@@ -293,9 +354,12 @@ class CraftReagentErrandsTests(unittest.TestCase):
 
     def test_buys_only_the_reagent_still_short_when_one_is_already_stocked(self):
         errands, notes = craft_supply.craft_reagent_errands(
-            "Og", DARK_LEATHER_BOOTS,
+            "Og",
+            DARK_LEATHER_BOOTS,
             held={FINE_THREAD: 10, GRAY_DYE: 0},
-            money=OG_MONEY, free_slots=5, town=town({FINE_THREAD, GRAY_DYE}),
+            money=OG_MONEY,
+            free_slots=5,
+            town=town({FINE_THREAD, GRAY_DYE}),
         )
         self.assertEqual(notes, [])
         self.assertEqual(len(errands), 1)
@@ -307,8 +371,12 @@ class CraftReagentErrandsTests(unittest.TestCase):
         # little more than one cast, which is exactly why REAGENTS carries
         # its own per-recipe quantity instead.
         errands, notes = craft_supply.craft_reagent_errands(
-            "Og", NIGHTSCAPE_PANTS, held={SILKEN_THREAD: 0}, money=OG_MONEY,
-            free_slots=5, town=town({SILKEN_THREAD}),
+            "Og",
+            NIGHTSCAPE_PANTS,
+            held={SILKEN_THREAD: 0},
+            money=OG_MONEY,
+            free_slots=5,
+            town=town({SILKEN_THREAD}),
         )
         self.assertEqual(notes, [])
         self.assertEqual(len(errands), 1)
@@ -321,8 +389,12 @@ class CraftReagentErrandsTests(unittest.TestCase):
         # Dye still queues, since a recipe with two reagents should not let
         # one missing vendor block the one that IS reachable.
         errands, notes = craft_supply.craft_reagent_errands(
-            "Og", DARK_LEATHER_BOOTS, held={FINE_THREAD: 0, GRAY_DYE: 0},
-            money=OG_MONEY, free_slots=5, town=town({GRAY_DYE}),
+            "Og",
+            DARK_LEATHER_BOOTS,
+            held={FINE_THREAD: 0, GRAY_DYE: 0},
+            money=OG_MONEY,
+            free_slots=5,
+            town=town({GRAY_DYE}),
         )
         self.assertEqual(len(errands), 1)
         self.assertEqual(errands[0].command, "entry:4340 count:5 max:1750")
@@ -332,8 +404,12 @@ class CraftReagentErrandsTests(unittest.TestCase):
 
     def test_refuses_with_no_free_bag_slot(self):
         errands, notes = craft_supply.craft_reagent_errands(
-            "Bork", LINEN_BELT, held={COARSE_THREAD: 0},
-            money=BORK_MONEY, free_slots=0, town=town({COARSE_THREAD}),
+            "Bork",
+            LINEN_BELT,
+            held={COARSE_THREAD: 0},
+            money=BORK_MONEY,
+            free_slots=0,
+            town=town({COARSE_THREAD}),
         )
         self.assertEqual(errands, [])
         self.assertEqual(len(notes), 1)
@@ -345,8 +421,12 @@ class CraftReagentErrandsTests(unittest.TestCase):
         # exercises the refusal with an invented shortfall rather than a
         # real one (Og has never actually been this poor).
         errands, notes = craft_supply.craft_reagent_errands(
-            "Og", RUNIC_LEATHER_HEADBAND, held={RUNE_THREAD: 0}, money=100,
-            free_slots=5, town=town({RUNE_THREAD}),
+            "Og",
+            RUNIC_LEATHER_HEADBAND,
+            held={RUNE_THREAD: 0},
+            money=100,
+            free_slots=5,
+            town=town({RUNE_THREAD}),
         )
         self.assertEqual(errands, [])
         self.assertEqual(len(notes), 1)
@@ -357,8 +437,12 @@ class CraftReagentErrandsTests(unittest.TestCase):
         # that has ZERO npc_vendor rows on this world - REAGENTS must only
         # ever name 14341, the one confirmed sold, never the look-alike.
         errands, _ = craft_supply.craft_reagent_errands(
-            "Og", RUNIC_LEATHER_HEADBAND, held={RUNE_THREAD: 0}, money=OG_MONEY,
-            free_slots=5, town=town({RUNE_THREAD}),
+            "Og",
+            RUNIC_LEATHER_HEADBAND,
+            held={RUNE_THREAD: 0},
+            money=OG_MONEY,
+            free_slots=5,
+            town=town({RUNE_THREAD}),
         )
         self.assertEqual(len(errands), 1)
         self.assertTrue(errands[0].command.startswith("entry:14341 "))
@@ -411,31 +495,33 @@ class CraftReagentErrandsTests(unittest.TestCase):
 
         for recipes in craft.RECIPES.values():
             for recipe in recipes:
-                wanted = {entry for entry in bought_entries
-                          if "(%d" % entry in recipe.note}
+                wanted = {
+                    entry for entry in bought_entries if "(%d" % entry in recipe.note
+                }
                 if not wanted:
                     continue
                 covered = set()
                 single = craft_supply.REAGENT.get(recipe.spell_id)
                 if single:
                     covered.add(single[0])
-                for entry, _l, _p, _q in craft_supply.REAGENTS.get(
-                        recipe.spell_id, ()):
+                for entry, _l, _p, _q in craft_supply.REAGENTS.get(recipe.spell_id, ()):
                     covered.add(entry)
                 with self.subTest(spell=recipe.spell_id, name=recipe.name):
                     self.assertEqual(
-                        sorted(wanted - covered), [],
+                        sorted(wanted - covered),
+                        [],
                         "%s (%d) names vendor-bought reagent(s) %s in its note "
                         "and craft_supply buys none of them, so every cast "
                         "will be refused for reagents with nothing logging why"
-                        % (recipe.name, recipe.spell_id,
-                           sorted(wanted - covered)))
+                        % (recipe.name, recipe.spell_id, sorted(wanted - covered)),
+                    )
 
     def test_every_reagents_entry_names_a_positive_quantity_per_cast(self):
         for spell_id, needs in craft_supply.REAGENTS.items():
             for entry, label, price, qty_per_cast in needs:
                 self.assertGreater(
-                    qty_per_cast, 0,
+                    qty_per_cast,
+                    0,
                     f"spell {spell_id}'s {label} ({entry}) has a non-positive "
                     f"per-cast quantity",
                 )
@@ -461,16 +547,25 @@ class CraftReagentErrandsTests(unittest.TestCase):
 GADGETZAN_MAP = 1
 EASTERN_KINGDOMS_MAP = 0
 PESTLEZUGG = craft_supply.VendorSpawn(
-    entry=5594, name="Alchemist Pestlezugg", faction=474,
-    map_id=GADGETZAN_MAP, yards=83.0,
+    entry=5594,
+    name="Alchemist Pestlezugg",
+    faction=474,
+    map_id=GADGETZAN_MAP,
+    yards=83.0,
 )
 JANDIA = craft_supply.VendorSpawn(
-    entry=4877, name="Jandia", faction=104,
-    map_id=GADGETZAN_MAP, yards=2071.0,
+    entry=4877,
+    name="Jandia",
+    faction=104,
+    map_id=GADGETZAN_MAP,
+    yards=2071.0,
 )
 HELENIA = craft_supply.VendorSpawn(
-    entry=4897, name="Helenia Olden", faction=894,
-    map_id=GADGETZAN_MAP, yards=3361.0,
+    entry=4897,
+    name="Helenia Olden",
+    faction=894,
+    map_id=GADGETZAN_MAP,
+    yards=3361.0,
 )
 
 
@@ -484,7 +579,8 @@ class SupplyTripTests(unittest.TestCase):
         trip = craft_supply.supply_trip(
             [craft_supply.Need("Ugga", EMPTY_VIAL, "Empty Vial")],
             {EMPTY_VIAL: [PESTLEZUGG, JANDIA]},
-            leader="Grog", map_id=GADGETZAN_MAP,
+            leader="Grog",
+            map_id=GADGETZAN_MAP,
         )
         self.assertEqual(trip.target, "5594")
         self.assertEqual(trip.vendor.entry, 5594)
@@ -497,7 +593,9 @@ class SupplyTripTests(unittest.TestCase):
         # nobody. The shopper is still named, because the BUY is hers.
         trip = craft_supply.supply_trip(
             [craft_supply.Need("Ugga", EMPTY_VIAL, "Empty Vial")],
-            {EMPTY_VIAL: [PESTLEZUGG]}, leader="Grog", map_id=GADGETZAN_MAP,
+            {EMPTY_VIAL: [PESTLEZUGG]},
+            leader="Grog",
+            map_id=GADGETZAN_MAP,
         )
         self.assertEqual(trip.traveller, "Grog")
         self.assertEqual(trip.shopper, "Ugga")
@@ -509,13 +607,17 @@ class SupplyTripTests(unittest.TestCase):
         # paths through PathGenerator and there is no navmesh across an
         # ocean. A cross-map aim would resolve to nothing, silently.
         across = craft_supply.VendorSpawn(
-            entry=1234, name="Somebody in Stormwind", faction=12,
-            map_id=EASTERN_KINGDOMS_MAP, yards=1.0,
+            entry=1234,
+            name="Somebody in Stormwind",
+            faction=12,
+            map_id=EASTERN_KINGDOMS_MAP,
+            yards=1.0,
         )
         trip = craft_supply.supply_trip(
             [craft_supply.Need("Ugga", EMPTY_VIAL, "Empty Vial")],
             {EMPTY_VIAL: [across, PESTLEZUGG]},
-            leader="Grog", map_id=GADGETZAN_MAP,
+            leader="Grog",
+            map_id=GADGETZAN_MAP,
         )
         self.assertEqual(trip.target, "5594")
         self.assertNotIn(across, trip.passed_over)
@@ -527,7 +629,9 @@ class SupplyTripTests(unittest.TestCase):
         # are the four things somebody would otherwise have to go and look up.
         trip = craft_supply.supply_trip(
             [craft_supply.Need("Ugga", EMPTY_VIAL, "Empty Vial")],
-            {EMPTY_VIAL: []}, leader="Grog", map_id=GADGETZAN_MAP,
+            {EMPTY_VIAL: []},
+            leader="Grog",
+            map_id=GADGETZAN_MAP,
         )
         self.assertEqual(trip.target, "")
         self.assertEqual(len(trip.unreachable), 1)
@@ -543,10 +647,13 @@ class SupplyTripTests(unittest.TestCase):
         # the same reasoning craft_reagent_errands already applies within one
         # recipe's two reagents.
         trip = craft_supply.supply_trip(
-            [craft_supply.Need("Bork", CRYSTAL_VIAL, "Crystal Vial"),
-             craft_supply.Need("Ugga", EMPTY_VIAL, "Empty Vial")],
+            [
+                craft_supply.Need("Bork", CRYSTAL_VIAL, "Crystal Vial"),
+                craft_supply.Need("Ugga", EMPTY_VIAL, "Empty Vial"),
+            ],
             {CRYSTAL_VIAL: [], EMPTY_VIAL: [PESTLEZUGG]},
-            leader="Grog", map_id=GADGETZAN_MAP,
+            leader="Grog",
+            map_id=GADGETZAN_MAP,
         )
         self.assertEqual(trip.target, "5594")
         self.assertEqual(trip.shopper, "Ugga")
@@ -560,10 +667,13 @@ class SupplyTripTests(unittest.TestCase):
         # the shopper who can be served in 83 yards goes before the one who
         # would need 3,361.
         trip = craft_supply.supply_trip(
-            [craft_supply.Need("Bork", LEADED_VIAL, "Leaded Vial"),
-             craft_supply.Need("Ugga", EMPTY_VIAL, "Empty Vial")],
+            [
+                craft_supply.Need("Bork", LEADED_VIAL, "Leaded Vial"),
+                craft_supply.Need("Ugga", EMPTY_VIAL, "Empty Vial"),
+            ],
             {LEADED_VIAL: [HELENIA], EMPTY_VIAL: [PESTLEZUGG]},
-            leader="Grog", map_id=GADGETZAN_MAP,
+            leader="Grog",
+            map_id=GADGETZAN_MAP,
         )
         self.assertEqual(trip.shopper, "Ugga")
         self.assertEqual(trip.waiting, ("Bork's Leaded Vial",))
@@ -574,9 +684,13 @@ class SupplyTripTests(unittest.TestCase):
         # Calling the second one "waiting its turn" would send a reader
         # looking for a second trip that is never needed.
         trip = craft_supply.supply_trip(
-            [craft_supply.Need("Bork", EMPTY_VIAL, "Empty Vial"),
-             craft_supply.Need("Ugga", EMPTY_VIAL, "Empty Vial")],
-            {EMPTY_VIAL: [PESTLEZUGG]}, leader="Grog", map_id=GADGETZAN_MAP,
+            [
+                craft_supply.Need("Bork", EMPTY_VIAL, "Empty Vial"),
+                craft_supply.Need("Ugga", EMPTY_VIAL, "Empty Vial"),
+            ],
+            {EMPTY_VIAL: [PESTLEZUGG]},
+            leader="Grog",
+            map_id=GADGETZAN_MAP,
         )
         self.assertEqual(trip.target, "5594")
         self.assertEqual(trip.waiting, ())
@@ -590,17 +704,21 @@ class SupplyTripTests(unittest.TestCase):
         # and arrives nowhere. Same tie-break ResolveTravelTarget applies to
         # its own shortlist.
         near = craft_supply.VendorSpawn(
-            entry=9001, name="A", faction=35, map_id=GADGETZAN_MAP, yards=40.0)
+            entry=9001, name="A", faction=35, map_id=GADGETZAN_MAP, yards=40.0
+        )
         also_near = craft_supply.VendorSpawn(
-            entry=8001, name="B", faction=35, map_id=GADGETZAN_MAP, yards=40.0)
+            entry=8001, name="B", faction=35, map_id=GADGETZAN_MAP, yards=40.0
+        )
         first = craft_supply.supply_trip(
             [craft_supply.Need("Ugga", EMPTY_VIAL, "Empty Vial")],
-            {EMPTY_VIAL: [near, also_near]}, leader="Grog",
+            {EMPTY_VIAL: [near, also_near]},
+            leader="Grog",
             map_id=GADGETZAN_MAP,
         )
         second = craft_supply.supply_trip(
             [craft_supply.Need("Ugga", EMPTY_VIAL, "Empty Vial")],
-            {EMPTY_VIAL: [also_near, near]}, leader="Grog",
+            {EMPTY_VIAL: [also_near, near]},
+            leader="Grog",
             map_id=GADGETZAN_MAP,
         )
         self.assertEqual(first.target, second.target)
@@ -613,13 +731,15 @@ class SupplyTripTests(unittest.TestCase):
         # pass after it - by which time that one is carried and no longer a
         # need - takes the other.
         thread_shop = craft_supply.VendorSpawn(
-            entry=7001, name="Thread", faction=474, map_id=GADGETZAN_MAP,
-            yards=60.0)
+            entry=7001, name="Thread", faction=474, map_id=GADGETZAN_MAP, yards=60.0
+        )
         dye_shop = craft_supply.VendorSpawn(
-            entry=7002, name="Dye", faction=474, map_id=GADGETZAN_MAP,
-            yards=900.0)
-        both = [craft_supply.Need("Og", FINE_THREAD, "Fine Thread"),
-                craft_supply.Need("Og", GRAY_DYE, "Gray Dye")]
+            entry=7002, name="Dye", faction=474, map_id=GADGETZAN_MAP, yards=900.0
+        )
+        both = [
+            craft_supply.Need("Og", FINE_THREAD, "Fine Thread"),
+            craft_supply.Need("Og", GRAY_DYE, "Gray Dye"),
+        ]
         spawns = {FINE_THREAD: [thread_shop], GRAY_DYE: [dye_shop]}
 
         first = craft_supply.supply_trip(both, spawns, "Grog", GADGETZAN_MAP)
@@ -627,8 +747,7 @@ class SupplyTripTests(unittest.TestCase):
         self.assertEqual(first.waiting, ("Og's Gray Dye",))
 
         # Next pass: the thread is carried, so only the dye is still a need.
-        second = craft_supply.supply_trip(
-            [both[1]], spawns, "Grog", GADGETZAN_MAP)
+        second = craft_supply.supply_trip([both[1]], spawns, "Grog", GADGETZAN_MAP)
         self.assertEqual(second.target, "7002")
         self.assertEqual(second.waiting, ())
 
@@ -638,7 +757,9 @@ class SupplyTripTests(unittest.TestCase):
         # silent shape this issue is about.
         trip = craft_supply.supply_trip(
             [craft_supply.Need("Ugga", EMPTY_VIAL, "Empty Vial")],
-            {EMPTY_VIAL: [PESTLEZUGG]}, leader="", map_id=GADGETZAN_MAP,
+            {EMPTY_VIAL: [PESTLEZUGG]},
+            leader="",
+            map_id=GADGETZAN_MAP,
         )
         self.assertEqual(trip.target, "")
         self.assertIn("follower", trip.why_not)
@@ -656,10 +777,13 @@ class SupplyTripTests(unittest.TestCase):
         # that craft_supply actually asks travel.resolve rather than
         # formatting the id itself.
         nowhere = craft_supply.VendorSpawn(
-            entry=0, name="", faction=0, map_id=GADGETZAN_MAP, yards=1.0)
+            entry=0, name="", faction=0, map_id=GADGETZAN_MAP, yards=1.0
+        )
         trip = craft_supply.supply_trip(
             [craft_supply.Need("Ugga", EMPTY_VIAL, "Empty Vial")],
-            {EMPTY_VIAL: [nowhere]}, leader="Grog", map_id=GADGETZAN_MAP,
+            {EMPTY_VIAL: [nowhere]},
+            leader="Grog",
+            map_id=GADGETZAN_MAP,
         )
         self.assertEqual(trip.target, "")
         self.assertIn("travel_npc", trip.why_not)
@@ -670,7 +794,9 @@ class SupplyTripTests(unittest.TestCase):
         # six digits, so this has room to spare - it is asserted anyway.
         trip = craft_supply.supply_trip(
             [craft_supply.Need("Ugga", EMPTY_VIAL, "Empty Vial")],
-            {EMPTY_VIAL: [PESTLEZUGG]}, leader="Grog", map_id=GADGETZAN_MAP,
+            {EMPTY_VIAL: [PESTLEZUGG]},
+            leader="Grog",
+            map_id=GADGETZAN_MAP,
         )
         self.assertLessEqual(len(trip.target), travel.COLUMN_WIDTH)
         self.assertTrue(travel.is_target(trip.target))
@@ -678,9 +804,13 @@ class SupplyTripTests(unittest.TestCase):
 
     def test_a_need_with_no_shopper_or_no_entry_is_dropped(self):
         trip = craft_supply.supply_trip(
-            [craft_supply.Need("", EMPTY_VIAL, "Empty Vial"),
-             craft_supply.Need("Ugga", 0, "nothing")],
-            {EMPTY_VIAL: [PESTLEZUGG]}, leader="Grog", map_id=GADGETZAN_MAP,
+            [
+                craft_supply.Need("", EMPTY_VIAL, "Empty Vial"),
+                craft_supply.Need("Ugga", 0, "nothing"),
+            ],
+            {EMPTY_VIAL: [PESTLEZUGG]},
+            leader="Grog",
+            map_id=GADGETZAN_MAP,
         )
         self.assertEqual(trip.target, "")
         self.assertEqual(trip.unreachable, ())
@@ -692,23 +822,30 @@ class SupplyTripTests(unittest.TestCase):
         with none). Checked across every REAGENT recipe, both stocked and
         not, at the boundary and either side of it."""
         for spell_id, (entry, label, _price) in craft_supply.REAGENT.items():
-            for held in (0, craft_supply.TARGET - 1, craft_supply.TARGET,
-                         craft_supply.TARGET + 1):
+            for held in (
+                0,
+                craft_supply.TARGET - 1,
+                craft_supply.TARGET,
+                craft_supply.TARGET + 1,
+            ):
                 empty = town(frozenset())
                 need = craft_supply.reagent_need("Ugga", spell_id, held, empty)
                 _errand, note = craft_supply.reagent_errand(
-                    "Ugga", spell_id, held, 10_000_000, 5, empty)
+                    "Ugga", spell_id, held, 10_000_000, 5, empty
+                )
                 self.assertEqual(
-                    bool(need), bool(note),
-                    "spell %s held %d: need=%r note=%r"
-                    % (spell_id, held, need, note))
+                    bool(need),
+                    bool(note),
+                    "spell %s held %d: need=%r note=%r" % (spell_id, held, need, note),
+                )
                 # And a reagent that IS in reach is never a trip, whatever
                 # the shortfall - the buy happens where they stand.
                 stocked = town({entry})
                 self.assertIsNone(
                     craft_supply.reagent_need("Ugga", spell_id, held, stocked),
                     "spell %s held %d was sent travelling to a vendor it is "
-                    "already standing at" % (spell_id, held))
+                    "already standing at" % (spell_id, held),
+                )
                 self.assertTrue(label)
 
     def test_plural_needs_and_plural_errands_never_disagree(self):
@@ -717,15 +854,20 @@ class SupplyTripTests(unittest.TestCase):
             held = {entry: 0 for entry, _l, _p, _q in reagents}
             needs = craft_supply.craft_reagent_needs("Og", spell_id, held, empty)
             _errands, notes = craft_supply.craft_reagent_errands(
-                "Og", spell_id, held, 10_000_000, 5, empty)
+                "Og", spell_id, held, 10_000_000, 5, empty
+            )
             self.assertEqual(len(needs), len(reagents), spell_id)
             self.assertEqual(len(needs), len(notes), spell_id)
             # Fully stocked to target: nowhere to go.
-            full = {entry: craft_supply.CASTS_PER_TRIP * qty
-                    for entry, _l, _p, qty in reagents}
+            full = {
+                entry: craft_supply.CASTS_PER_TRIP * qty
+                for entry, _l, _p, qty in reagents
+            }
             self.assertEqual(
                 craft_supply.craft_reagent_needs("Og", spell_id, full, empty),
-                [], spell_id)
+                [],
+                spell_id,
+            )
 
     def test_a_reagent_in_reach_is_bought_while_the_other_is_walked_to(self):
         """Dark Leather Boots needs Fine Thread AND Gray Dye. Standing at a
@@ -733,11 +875,11 @@ class SupplyTripTests(unittest.TestCase):
         only the thread becomes a trip."""
         here = town({GRAY_DYE})
         held = {FINE_THREAD: 0, GRAY_DYE: 0}
-        needs = craft_supply.craft_reagent_needs(
-            "Og", DARK_LEATHER_BOOTS, held, here)
+        needs = craft_supply.craft_reagent_needs("Og", DARK_LEATHER_BOOTS, held, here)
         self.assertEqual([n.entry for n in needs], [FINE_THREAD])
         errands, _notes = craft_supply.craft_reagent_errands(
-            "Og", DARK_LEATHER_BOOTS, held, OG_MONEY, 5, here)
+            "Og", DARK_LEATHER_BOOTS, held, OG_MONEY, 5, here
+        )
         self.assertEqual(len(errands), 1)
         self.assertTrue(errands[0].command.startswith("entry:4340 "))
 
@@ -750,7 +892,8 @@ class SupplyTripTests(unittest.TestCase):
         # happen" is the question it exists to answer.
         trip = craft_supply.supply_trip(
             [craft_supply.Need("Ugga", EMPTY_VIAL, "Empty Vial")],
-            {EMPTY_VIAL: [PESTLEZUGG]}, leader="Grog",
+            {EMPTY_VIAL: [PESTLEZUGG]},
+            leader="Grog",
             map_id=GADGETZAN_MAP,
             shopper_maps={"Ugga": EASTERN_KINGDOMS_MAP},
         )
@@ -766,8 +909,10 @@ class SupplyTripTests(unittest.TestCase):
         # leader is how a trip gets taken for somebody who is not there.
         trip = craft_supply.supply_trip(
             [craft_supply.Need("Ugga", EMPTY_VIAL, "Empty Vial")],
-            {EMPTY_VIAL: [PESTLEZUGG]}, leader="Grog",
-            map_id=GADGETZAN_MAP, shopper_maps={},
+            {EMPTY_VIAL: [PESTLEZUGG]},
+            leader="Grog",
+            map_id=GADGETZAN_MAP,
+            shopper_maps={},
         )
         self.assertEqual(trip.target, "")
         self.assertIn("nowhere visible", trip.unreachable[0])
@@ -775,7 +920,8 @@ class SupplyTripTests(unittest.TestCase):
     def test_a_shopper_standing_with_the_leader_is_served(self):
         trip = craft_supply.supply_trip(
             [craft_supply.Need("Ugga", EMPTY_VIAL, "Empty Vial")],
-            {EMPTY_VIAL: [PESTLEZUGG]}, leader="Grog",
+            {EMPTY_VIAL: [PESTLEZUGG]},
+            leader="Grog",
             map_id=GADGETZAN_MAP,
             shopper_maps={"Ugga": GADGETZAN_MAP},
         )
@@ -800,7 +946,8 @@ class SupplyReportTests(unittest.TestCase):
         trip = craft_supply.supply_trip(
             [craft_supply.Need("Ugga", EMPTY_VIAL, "Empty Vial")],
             {EMPTY_VIAL: [PESTLEZUGG, JANDIA, HELENIA]},
-            leader="Grog", map_id=GADGETZAN_MAP,
+            leader="Grog",
+            map_id=GADGETZAN_MAP,
         )
         said = craft_supply.report(trip)
         self.assertIn("5594", said)
@@ -816,20 +963,28 @@ class SupplyReportTests(unittest.TestCase):
     def test_only_shortlist_runners_up_are_named(self):
         many = [PESTLEZUGG] + [
             craft_supply.VendorSpawn(
-                entry=9000 + n, name="Shop %d" % n, faction=35,
-                map_id=GADGETZAN_MAP, yards=100.0 + n)
+                entry=9000 + n,
+                name="Shop %d" % n,
+                faction=35,
+                map_id=GADGETZAN_MAP,
+                yards=100.0 + n,
+            )
             for n in range(10)
         ]
         trip = craft_supply.supply_trip(
             [craft_supply.Need("Ugga", EMPTY_VIAL, "Empty Vial")],
-            {EMPTY_VIAL: many}, leader="Grog", map_id=GADGETZAN_MAP,
+            {EMPTY_VIAL: many},
+            leader="Grog",
+            map_id=GADGETZAN_MAP,
         )
         self.assertEqual(len(trip.passed_over), craft_supply.SHORTLIST)
 
     def test_a_trip_that_was_not_taken_reports_why(self):
         trip = craft_supply.supply_trip(
             [craft_supply.Need("Ugga", EMPTY_VIAL, "Empty Vial")],
-            {EMPTY_VIAL: []}, leader="Grog", map_id=GADGETZAN_MAP,
+            {EMPTY_VIAL: []},
+            leader="Grog",
+            map_id=GADGETZAN_MAP,
         )
         self.assertEqual(craft_supply.report(trip), trip.why_not)
 
@@ -867,7 +1022,10 @@ class TheBridgeWalksTheLeaderToTheRightShop(unittest.TestCase):
         # town errand asks at - and which writes through the same guarded
         # writer this used to name. Still the traveller the pure module chose,
         # still the target it chose, still never a second UPDATE.
-        self.assertIn('self._claim_town_slot(\n            "craft_supply", trip.traveller, trip.target)', body)
+        self.assertIn(
+            'self._claim_town_slot(\n            "craft_supply", trip.traveller, trip.target)',
+            body,
+        )
         self.assertNotIn("UPDATE overseer_roster", body)
 
     def test_the_bridge_reads_where_the_shoppers_are_standing(self):
@@ -892,7 +1050,9 @@ class TheBridgeWalksTheLeaderToTheRightShop(unittest.TestCase):
 
     def test_the_vendor_query_is_bounded_to_one_map_and_one_item(self):
         src = _bridge_source()
-        sql = src[src.index("_REAGENT_VENDOR_SQL = ("):src.index("REAGENT_VENDOR_ROWS =")]
+        sql = src[
+            src.index("_REAGENT_VENDOR_SQL = (") : src.index("REAGENT_VENDOR_ROWS =")
+        ]
         self.assertIn("acore_world.npc_vendor", sql)
         self.assertIn("nv.item = %s", sql)
         self.assertIn("cr.map = %s", sql)
@@ -952,10 +1112,11 @@ def _unexplained_returns(body: str) -> list:
     """
     lines = _code_only(body).splitlines()
     return [
-        i + 1 for i, line in enumerate(lines)
+        i + 1
+        for i, line in enumerate(lines)
         if line.strip() == "return"
-        and "log.info(" not in "\n".join(lines[max(0, i - 8):i])
-        and "log.warning(" not in "\n".join(lines[max(0, i - 8):i])
+        and "log.info(" not in "\n".join(lines[max(0, i - 8) : i])
+        and "log.warning(" not in "\n".join(lines[max(0, i - 8) : i])
     ]
 
 
@@ -979,7 +1140,8 @@ class ThePassIsNotDarkWhileTheFamilyGathers(unittest.TestCase):
         in which buying the rest is the useful thing to do."""
         self.assertIn("to_thread(_fetch_standing_crafts, names)", self.code)
         self.assertNotIn(
-            "to_thread(_fetch_craft_spells", self.code,
+            "to_thread(_fetch_craft_spells",
+            self.code,
             "craft_supply reads the job='craft'-filtered candidate list, so "
             "it is dark on every cycle craft_rhythm sends the family "
             "gathering - which is every cycle that matters",
@@ -1021,7 +1183,7 @@ class ThePassIsNotDarkWhileTheFamilyGathers(unittest.TestCase):
     def test_the_gate_spells_no_job_of_its_own(self):
         """A literal 'quest' here would be craft_rhythm's decision copied,
         and the copy is the one nobody would think to change."""
-        gate = self.code[self.code.index("if mode not in ("):]
+        gate = self.code[self.code.index("if mode not in (") :]
         gate = gate[: gate.index("return") + len("return")]
         self.assertNotIn("'quest'", gate)
         self.assertNotIn('"quest"', gate)
@@ -1034,7 +1196,8 @@ class ThePassIsNotDarkWhileTheFamilyGathers(unittest.TestCase):
         whose broken loop look identical is the failure this repo keeps
         meeting, and it is what hid this bug for ninety minutes."""
         self.assertEqual(
-            _unexplained_returns(self.body), [],
+            _unexplained_returns(self.body),
+            [],
             "a `return` in _craft_supply_once with no log line above it - "
             "that cycle leaves nothing behind to tell a quiet pass from a "
             "pass that never ran",
@@ -1053,7 +1216,7 @@ class ThePassIsNotDarkWhileTheFamilyGathers(unittest.TestCase):
         """One greppable line proves the fix. `queued ... on job=quest` is
         this pass working while the family gathers, which is the cycle
         infra#3805 says it kept missing."""
-        summary = self.code[self.code.index("craft_supply: queued"):]
+        summary = self.code[self.code.index("craft_supply: queued") :]
         self.assertIn("job=%s", summary)
         self.assertRegex(summary, r"len\(multi_candidates\), mode,")
 

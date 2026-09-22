@@ -127,9 +127,13 @@ class SetupAction:
     command: str
 
 
-def plan_setup(*, leader: str, purchased_tabs: int,
-               rank_ids: tuple[int, ...] = (),
-               deposit_rank_ids: tuple[int, ...] = ()) -> tuple[SetupAction, ...]:
+def plan_setup(
+    *,
+    leader: str,
+    purchased_tabs: int,
+    rank_ids: tuple[int, ...] = (),
+    deposit_rank_ids: tuple[int, ...] = (),
+) -> tuple[SetupAction, ...]:
     """Plan the one-time tab and deposit-rights setup, without doing I/O.
 
     Tab 0 is bought by the guild master from that character's purse. Once it
@@ -148,8 +152,11 @@ def plan_setup(*, leader: str, purchased_tabs: int,
         granted = {int(r) for r in deposit_rank_ids if int(r) > 0}
     except (TypeError, ValueError):
         return ()
-    return tuple(SetupAction(leader, f"bank grant-deposit rank:{rid}")
-                 for rid in ranks if rid not in granted)
+    return tuple(
+        SetupAction(leader, f"bank grant-deposit rank:{rid}")
+        for rid in ranks
+        if rid not in granted
+    )
 
 
 def plan_deposits(members: list[dict], *, guild_has_tab: bool = False) -> list[Deposit]:
@@ -206,7 +213,9 @@ def plan_deposits(members: list[dict], *, guild_has_tab: bool = False) -> list[D
     return deposits
 
 
-def format_item_deposit(*, item_guid: int | None = None, entry: int | None = None) -> str:
+def format_item_deposit(
+    *, item_guid: int | None = None, entry: int | None = None
+) -> str:
     """The `bank deposit-item guid:<n>` / `entry:<n>` command text
     `GuildVerb::BankDepositItem` parses (overseer_decisions.cpp) and `DoGuild`
     executes against `Guild::SwapItemsWithInventory` (mod_overseer.cpp).

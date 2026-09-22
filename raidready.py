@@ -24,6 +24,7 @@ PURE MODULE, same seam as raidgoals.py and dungeonplan.py: rows in, sentences
 out, nothing that talks to MySQL. Every sentence a reader sees is written here
 so a Python test can read it.
 """
+
 from __future__ import annotations
 
 import jobs
@@ -65,7 +66,7 @@ SOFT = "soft"
 
 
 def faction_of(races) -> str:
-    """"Alliance", "Horde", or "" when the races say neither or both."""
+    """ "Alliance", "Horde", or "" when the races say neither or both."""
     races = {int(r) for r in races if r is not None}
     alliance = bool(races & ALLIANCE_RACES)
     horde = bool(races & HORDE_RACES)
@@ -89,29 +90,46 @@ def group_guilds(guild_rows: list, families: dict) -> list:
         if row.get("name") is None:
             continue
         key = row.get("guildid")
-        entry = by_guild.setdefault(key, {"guildid": key,
-                                          "guild": row.get("guild_name") or "",
-                                          "rows": []})
+        entry = by_guild.setdefault(
+            key, {"guildid": key, "guild": row.get("guild_name") or "", "rows": []}
+        )
         entry["rows"].append(row)
     out = []
     seen = set()
     for family, names in families.items():
-        homes = [g for g in by_guild.values()
-                 if any(r.get("name") in names for r in g["rows"])]
+        homes = [
+            g
+            for g in by_guild.values()
+            if any(r.get("name") in names for r in g["rows"])
+        ]
         if not homes:
-            out.append({"guildid": None, "guild": "", "family": family,
-                        "family_names": list(names), "rows": []})
+            out.append(
+                {
+                    "guildid": None,
+                    "guild": "",
+                    "family": family,
+                    "family_names": list(names),
+                    "rows": [],
+                }
+            )
             continue
         for home in homes:
             if home["guildid"] in seen:
                 continue
             seen.add(home["guildid"])
-            out.append({"guildid": home["guildid"], "guild": home["guild"],
-                        "family": family,
-                        "family_names": [n for n in names
-                                         if any(r.get("name") == n
-                                                for r in home["rows"])],
-                        "rows": home["rows"]})
+            out.append(
+                {
+                    "guildid": home["guildid"],
+                    "guild": home["guild"],
+                    "family": family,
+                    "family_names": [
+                        n
+                        for n in names
+                        if any(r.get("name") == n for r in home["rows"])
+                    ],
+                    "rows": home["rows"],
+                }
+            )
     return out
 
 
@@ -120,9 +138,15 @@ def _count(count: int, one: str, many: str) -> str:
 
 
 def _names(members: list, limit: int = 3) -> str:
-    """"Oz 10, Uzza 10 and 3 more" - the lowest few, by level then name."""
-    shown = ["%s %s" % (m["name"], m.get("level") if m.get("level") is not None
-                        else "(level unknown)") for m in members[:limit]]
+    """ "Oz 10, Uzza 10 and 3 more" - the lowest few, by level then name."""
+    shown = [
+        "%s %s"
+        % (
+            m["name"],
+            m.get("level") if m.get("level") is not None else "(level unknown)",
+        )
+        for m in members[:limit]
+    ]
     rest = len(members) - len(shown)
     if rest > 0:
         return "%s and %d more" % (", ".join(shown), rest)
@@ -148,8 +172,9 @@ def worn_item_levels(worn_rows: list) -> dict:
         slot = totals.setdefault(row.get("name"), [0, 0])
         slot[0] += int(level)
         slot[1] += 1
-    return {name: round(total / count) for name, (total, count)
-            in totals.items() if count}
+    return {
+        name: round(total / count) for name, (total, count) in totals.items() if count
+    }
 
 
 def _placed_raiders(lineup: dict) -> list:
@@ -164,8 +189,11 @@ def _roles(lineup: dict) -> dict:
 
 
 def _tile(label: str, have: int, want: int) -> dict:
-    return {"label": label, "value": "%d / %d" % (have, want),
-            "tone": "up" if have >= want else "no"}
+    return {
+        "label": label,
+        "value": "%d / %d" % (have, want),
+        "tone": "up" if have >= want else "no",
+    }
 
 
 def _by_level(members: list) -> list:
@@ -182,23 +210,30 @@ def _staffing_blockers(lineup: dict, raiders: list, runnable: bool) -> list:
             "The overseer cannot take a raid in yet: its run coordinator only "
             "runs the portals mod-overseer has rows for (%s), and Molten Core "
             "is not one of them. Until it is, a raid night is somebody's "
-            "manual work." % ", ".join(sorted(jobs.PORTAL_KEYWORDS)))
+            "manual work." % ", ".join(sorted(jobs.PORTAL_KEYWORDS))
+        )
     if short["raiders"]:
         out.append(
             "%s short of the %d a raid is planned for: the guild has %s to "
-            "place." % (_count(short["raiders"], "raider", "raiders"),
-                        lineup["wanted"]["raiders"],
-                        _count(len(raiders), "raider", "raiders")))
+            "place."
+            % (
+                _count(short["raiders"], "raider", "raiders"),
+                lineup["wanted"]["raiders"],
+                _count(len(raiders), "raider", "raiders"),
+            )
+        )
     if short["tanks"]:
         out.append(
             "%s short: every one of the %d groups wants one, and only "
             "warriors, death knights, paladins and druids can hold the role."
-            % (_count(short["tanks"], "tank", "tanks"), groups))
+            % (_count(short["tanks"], "tank", "tanks"), groups)
+        )
     if short["healers"]:
         out.append(
             "%s short: every one of the %d groups wants one, and only "
             "priests, paladins, druids and shamans can heal."
-            % (_count(short["healers"], "healer", "healers"), groups))
+            % (_count(short["healers"], "healer", "healers"), groups)
+        )
     return out
 
 
@@ -206,42 +241,65 @@ def _level_blockers(raiders: list, min_level) -> tuple:
     """(hard, soft): below the instance's own gate, and merely below the cap."""
     gate = int(min_level) if min_level else 0
     under = _by_level([m for m in raiders if int(m.get("level") or 0) < gate])
-    below = _by_level([m for m in raiders
-                       if gate <= int(m.get("level") or 0) < LEVEL_CAP])
-    hard = ["%s below level %d, the lowest the instance's own access row lets "
-            "in: %s." % (_count(len(under), "raider is", "raiders are"), gate,
-                         _names(under))] if under else []
-    soft = ["%s allowed in but below level %d: %s." % (
-        _count(len(below), "raider is", "raiders are"), LEVEL_CAP,
-        _names(below))] if below else []
+    below = _by_level(
+        [m for m in raiders if gate <= int(m.get("level") or 0) < LEVEL_CAP]
+    )
+    hard = (
+        [
+            "%s below level %d, the lowest the instance's own access row lets "
+            "in: %s."
+            % (_count(len(under), "raider is", "raiders are"), gate, _names(under))
+        ]
+        if under
+        else []
+    )
+    soft = (
+        [
+            "%s allowed in but below level %d: %s."
+            % (_count(len(below), "raider is", "raiders are"), LEVEL_CAP, _names(below))
+        ]
+        if below
+        else []
+    )
     return hard, soft
 
 
 def _gear_blockers(raiders: list, gear: dict, attuned: set) -> list:
     """SOFT: thin gear against the convention, and the attunement shortcut."""
     out = []
-    thin = sorted((m for m in raiders
-                   if gear.get(m["name"]) is not None
-                   and gear[m["name"]] < GEAR_CONVENTION),
-                  key=lambda m: (gear[m["name"]], m["name"]))
+    thin = sorted(
+        (
+            m
+            for m in raiders
+            if gear.get(m["name"]) is not None and gear[m["name"]] < GEAR_CONVENTION
+        ),
+        key=lambda m: (gear[m["name"]], m["name"]),
+    )
     if thin:
-        named = ", ".join("%s %d" % (m["name"], gear[m["name"]])
-                          for m in thin[:3])
+        named = ", ".join("%s %d" % (m["name"], gear[m["name"]]) for m in thin[:3])
         if len(thin) > 3:
             named += " and %d more" % (len(thin) - 3)
         out.append(
             "%s gear averaging below item level %d, the dungeon blues players "
-            "usually bring: %s." % (
+            "usually bring: %s."
+            % (
                 _count(len(thin), "raider wears", "raiders wear"),
-                GEAR_CONVENTION, named))
+                GEAR_CONVENTION,
+                named,
+            )
+        )
     unattuned = [m for m in raiders if m["name"] not in attuned]
     if unattuned:
         out.append(
             "%d of %s %s Attunement to the Core. It is not needed to walk in "
             "through Blackrock Depths; it only opens the shortcut from Lothos "
-            "Riftwaker." % (len(unattuned),
-                            _count(len(raiders), "raider", "raiders"),
-                            "lacks" if len(unattuned) == 1 else "lack"))
+            "Riftwaker."
+            % (
+                len(unattuned),
+                _count(len(raiders), "raider", "raiders"),
+                "lacks" if len(unattuned) == 1 else "lack",
+            )
+        )
     return out
 
 
@@ -253,48 +311,73 @@ def _support_blockers(lineup: dict, goals: dict) -> list:
         out.append(
             "%s short: summoning is a warlock spell and the guild has %s "
             "outside the raid. Summoning saves the walk; it does not stop the "
-            "raid." % (_count(short["summoners"], "summoner", "summoners"),
-                       _count(len(lineup["summoners"]), "warlock", "warlocks")))
+            "raid."
+            % (
+                _count(short["summoners"], "summoner", "summoners"),
+                _count(len(lineup["summoners"]), "warlock", "warlocks"),
+            )
+        )
     if short["maintenance"]:
         out.append(
             "%s short of the %d who keep the bank, the crafting and the "
             "auction house going. They never raid, so this stops nothing."
-            % (_count(short["maintenance"], "maintenance place",
-                      "maintenance places"), lineup["wanted"]["maintenance"]))
+            % (
+                _count(short["maintenance"], "maintenance place", "maintenance places"),
+                lineup["wanted"]["maintenance"],
+            )
+        )
     goal_list = goals.get("goals") or []
     unmet = [g for g in goal_list if g.get("status") != raidgoals.MET]
     if unmet:
         out.append(
             "%d of %s still to gather (%s). Molten Core admits a raid "
-            "carrying none; the list is further down this page." % (
-                len(unmet), _count(len(goal_list), "consumable goal",
-                                   "consumable goals"),
-                ", ".join(g["name"].lower() for g in unmet)))
+            "carrying none; the list is further down this page."
+            % (
+                len(unmet),
+                _count(len(goal_list), "consumable goal", "consumable goals"),
+                ", ".join(g["name"].lower() for g in unmet),
+            )
+        )
     return out
 
 
-def _blockers(lineup: dict, raiders: list, min_level, gear: dict,
-              attuned: set, goals: dict, runnable: bool) -> list:
+def _blockers(
+    lineup: dict,
+    raiders: list,
+    min_level,
+    gear: dict,
+    attuned: set,
+    goals: dict,
+    runnable: bool,
+) -> list:
     """Everything between this guild and its first raid, hard ones first."""
     level_hard, level_soft = _level_blockers(raiders, min_level)
     hard = _staffing_blockers(lineup, raiders, runnable) + level_hard
-    soft = (level_soft + _gear_blockers(raiders, gear, attuned)
-            + _support_blockers(lineup, goals))
-    return ([{"tone": HARD, "text": t} for t in hard]
-            + [{"tone": SOFT, "text": t} for t in soft])
+    soft = (
+        level_soft
+        + _gear_blockers(raiders, gear, attuned)
+        + _support_blockers(lineup, goals)
+    )
+    return [{"tone": HARD, "text": t} for t in hard] + [
+        {"tone": SOFT, "text": t} for t in soft
+    ]
 
 
 def _headline(guild: str, family: str, hard: int, soft: int) -> str:
     who = guild or ("%s's family, in no guild" % family)
     if hard:
         line = "%s cannot raid Molten Core yet: %s the first raid" % (
-            who, _count(hard, "thing stops", "things stop"))
+            who,
+            _count(hard, "thing stops", "things stop"),
+        )
         if soft:
             line += ", and %d more would make it harder" % soft
         return line + "."
     if soft:
-        return ("%s could form its first Molten Core raid today; %s would "
-                "make the night easier." % (who, _count(soft, "thing", "things")))
+        return (
+            "%s could form its first Molten Core raid today; %s would "
+            "make the night easier." % (who, _count(soft, "thing", "things"))
+        )
     return "%s is ready for its first Molten Core raid." % who
 
 
@@ -307,12 +390,14 @@ def _guild_members(group: dict, char_rows: list) -> list:
     for name in dict.fromkeys(names):
         row = by_name.get(name) or {}
         guild_row = in_guild.get(name) or {}
-        members.append({
-            "name": name,
-            "level": row.get("level", guild_row.get("level")),
-            "class_id": row.get("class", guild_row.get("class_id")),
-            "race": guild_row.get("race", row.get("race")),
-        })
+        members.append(
+            {
+                "name": name,
+                "level": row.get("level", guild_row.get("level")),
+                "class_id": row.get("class", guild_row.get("class_id")),
+                "race": guild_row.get("race", row.get("race")),
+            }
+        )
     return members
 
 
@@ -332,26 +417,38 @@ def _tiles(lineup: dict, raiders: list) -> list:
 
 def _roster_line(members: list, lineup: dict, raiders: list) -> str:
     roles = _roles(lineup)
-    return ("%s in the guild; %s placed as %s, %s and %s, one tank and one "
-            "healer per group of five." % (
-                _count(len(members), "character", "characters"),
-                _count(len(raiders), "raider", "raiders"),
-                _count(roles["tank"], "tank", "tanks"),
-                _count(roles["healer"], "healer", "healers"),
-                _count(roles["dps"], "damage dealer", "damage dealers")))
+    return (
+        "%s in the guild; %s placed as %s, %s and %s, one tank and one "
+        "healer per group of five."
+        % (
+            _count(len(members), "character", "characters"),
+            _count(len(raiders), "raider", "raiders"),
+            _count(roles["tank"], "tank", "tanks"),
+            _count(roles["healer"], "healer", "healers"),
+            _count(roles["dps"], "damage dealer", "damage dealers"),
+        )
+    )
 
 
 def _gear_line(raiders: list, gear: dict) -> str:
     worn = [gear[m["name"]] for m in raiders if m["name"] in gear]
     if not worn:
         return "Nothing the placed raiders wear could be read."
-    return ("Placed raiders wear item level %d on average; %d or more is the "
-            "usual convention for a first raid, not a rule the instance keeps."
-            % (round(sum(worn) / len(worn)), GEAR_CONVENTION))
+    return (
+        "Placed raiders wear item level %d on average; %d or more is the "
+        "usual convention for a first raid, not a rule the instance keeps."
+        % (round(sum(worn) / len(worn)), GEAR_CONVENTION)
+    )
 
 
-def build_guild(group: dict, char_rows: list, worn_rows: list,
-                attuned_rows: list, min_level, goals: dict) -> dict:
+def build_guild(
+    group: dict,
+    char_rows: list,
+    worn_rows: list,
+    attuned_rows: list,
+    min_level,
+    goals: dict,
+) -> dict:
     """One guild's readiness card.
 
     `group` is one entry of group_guilds. `char_rows` carry name, level and
@@ -366,8 +463,15 @@ def build_guild(group: dict, char_rows: list, worn_rows: list,
     raiders = _placed_raiders(lineup)
     gear = worn_item_levels(worn_rows)
     attuned = {r["name"] for r in attuned_rows if r.get("name")}
-    blockers = _blockers(lineup, raiders, min_level, gear, attuned, goals,
-                         RAID_PORTAL in jobs.PORTAL_KEYWORDS)
+    blockers = _blockers(
+        lineup,
+        raiders,
+        min_level,
+        gear,
+        attuned,
+        goals,
+        RAID_PORTAL in jobs.PORTAL_KEYWORDS,
+    )
     hard = len([b for b in blockers if b["tone"] == HARD])
     faction = faction_of(m["race"] for m in members)
     name = group["guild"] or "%s's family" % group["family"]
@@ -377,17 +481,19 @@ def build_guild(group: dict, char_rows: list, worn_rows: list,
         "faction": faction,
         "title": name + (" (%s)" % faction if faction else ""),
         "ready": hard == 0,
-        "headline": _headline(group["guild"], group["family"], hard,
-                              len(blockers) - hard),
+        "headline": _headline(
+            group["guild"], group["family"], hard, len(blockers) - hard
+        ),
         "tiles": _tiles(lineup, raiders),
         "roster_line": _roster_line(members, lineup, raiders),
         "gear_line": _gear_line(raiders, gear),
         "blockers": blockers,
         "blockers_line": (
             "Nothing stands between this guild and its first raid."
-            if not blockers else
-            "What stops the first raid is listed first; the rest would only "
-            "make it harder."),
+            if not blockers
+            else "What stops the first raid is listed first; the rest would only "
+            "make it harder."
+        ),
         "goals": goals,
     }
 
@@ -401,16 +507,23 @@ def build_readiness(groups: list) -> dict:
         line = "every guild could form its first raid today"
     else:
         line = "%d of %s could form its first raid today" % (
-            len(ready), _count(len(groups), "guild", "guilds"))
+            len(ready),
+            _count(len(groups), "guild", "guilds"),
+        )
     return {
         "line": line,
         "goal_line": (
             "The goal for each guild: %d raiders in %d groups of %d, %d on "
             "maintenance and %d warlocks for summoning. Molten Core is the "
-            "first raid at this level cap." % (
-                raidlineup.RAIDERS, raidlineup.RAIDERS // raidlineup.GROUP_SIZE,
-                raidlineup.GROUP_SIZE, raidlineup.MAINTENANCE,
-                raidlineup.SUMMONERS)),
+            "first raid at this level cap."
+            % (
+                raidlineup.RAIDERS,
+                raidlineup.RAIDERS // raidlineup.GROUP_SIZE,
+                raidlineup.GROUP_SIZE,
+                raidlineup.MAINTENANCE,
+                raidlineup.SUMMONERS,
+            )
+        ),
         "guilds": groups,
         "basis": (
             "Who fills which place is the Lineup tab's own selection "
@@ -422,5 +535,6 @@ def build_readiness(groups: list) -> dict:
             "Whether the overseer can run the raid at all is read from the "
             "portal keywords the site knows mod-overseer carries. The item "
             "level of %d is a convention and is labelled as one wherever it "
-            "appears." % GEAR_CONVENTION),
+            "appears." % GEAR_CONVENTION
+        ),
     }

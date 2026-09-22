@@ -33,6 +33,7 @@ in `character_talent`. Including them would add a branch nothing can reach.
 
 Usage: python3 gen_talents.py <dbc_dir> <out_dir>
 """
+
 from __future__ import annotations
 
 import json
@@ -112,8 +113,9 @@ def load_trees(dbc_dir: str, icons: dict[int, str]) -> dict[str, dict]:
     return trees
 
 
-def load_spells(dbc_dir: str, wanted: set[int], icons: dict[int, str]
-                ) -> tuple[dict[int, str], dict[int, str]]:
+def load_spells(
+    dbc_dir: str, wanted: set[int], icons: dict[int, str]
+) -> tuple[dict[int, str], dict[int, str]]:
     """Spell.dbc -> (name, icon) per wanted spell.
 
     Only for the rank spells a talent actually names. The full table is 49k
@@ -127,15 +129,14 @@ def load_spells(dbc_dir: str, wanted: set[int], icons: dict[int, str]
         if r[0] in wanted and r[SPELL_NAME_FIELD]
     }
     spell_icons = {
-        r[0]: icons.get(r[SPELL_ICON_FIELD], "")
-        for r in spell_rows
-        if r[0] in wanted
+        r[0]: icons.get(r[SPELL_ICON_FIELD], "") for r in spell_rows if r[0] in wanted
     }
     return names, spell_icons
 
 
-def talent_entry(r: tuple, ranks: list[int], names: dict[int, str],
-                 spell_icons: dict[int, str]) -> dict:
+def talent_entry(
+    r: tuple, ranks: list[int], names: dict[int, str], spell_icons: dict[int, str]
+) -> dict:
     """One Talent.dbc row -> the talent as the page reads it."""
     # A talent is named after its first rank; every later rank is the same
     # name with a different "Rank N" subtext, so rank 1 is the only one
@@ -147,8 +148,9 @@ def talent_entry(r: tuple, ranks: list[int], names: dict[int, str],
     # page never has to know the file's counting.
     requires = [
         [talent, rank + 1]
-        for talent, rank in zip(r[TALENT_PREREQ_FIELDS], r[TALENT_PREREQ_RANK_FIELDS],
-                                strict=True)
+        for talent, rank in zip(
+            r[TALENT_PREREQ_FIELDS], r[TALENT_PREREQ_RANK_FIELDS], strict=True
+        )
         if talent
     ]
     return {
@@ -198,8 +200,12 @@ def main(dbc_dir: str, out_dir: str) -> None:
         # first cut shipped at 108KB and the PR review bot could not hold it
         # in one pass, which made the one file nobody can eyeball also the
         # one file nothing had checked.
-        json.dump({"trees": trees, "talents": talents}, f,
-                  separators=(",", ":"), sort_keys=True)
+        json.dump(
+            {"trees": trees, "talents": talents},
+            f,
+            separators=(",", ":"),
+            sort_keys=True,
+        )
         f.write("\n")
     print(f"trees: {len(trees)}  talents: {len(talents)}  rank spells: {len(wanted)}")
 

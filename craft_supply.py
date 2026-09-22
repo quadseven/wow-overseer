@@ -239,19 +239,19 @@ import travel
 # the reagent read straight out of the running worldserver's own Spell.dbc
 # (543b9fe61355b6a77a01714d52fea2e5), the price out of item_template.
 REAGENT: dict[int, tuple[int, str, int]] = {
-    2330: (3371, "Empty Vial", 20),      # Minor Healing Potion
-    3173: (3371, "Empty Vial", 20),      # Lesser Mana Potion
-    3447: (3372, "Leaded Vial", 200),    # Healing Potion
-    3450: (3372, "Leaded Vial", 200),    # Elixir of Fortitude (raid consumable)
-    7181: (3372, "Leaded Vial", 200),    # Greater Healing Potion
-    11449: (3372, "Leaded Vial", 200),   # Elixir of Agility
-    11450: (3372, "Leaded Vial", 200),   # Elixir of Greater Defense
-    11457: (8925, "Crystal Vial", 2500), # Superior Healing Potion
-    11460: (8925, "Crystal Vial", 2500), # Elixir of Detect Undead
-    11467: (8925, "Crystal Vial", 2500), # Elixir of Greater Agility (raid)
-    17553: (8925, "Crystal Vial", 2500), # Superior Mana Potion
-    17556: (8925, "Crystal Vial", 2500), # Major Healing Potion
-    3938: (2880, "Weak Flux", 100),      # Bronze Tube (Engineering)
+    2330: (3371, "Empty Vial", 20),  # Minor Healing Potion
+    3173: (3371, "Empty Vial", 20),  # Lesser Mana Potion
+    3447: (3372, "Leaded Vial", 200),  # Healing Potion
+    3450: (3372, "Leaded Vial", 200),  # Elixir of Fortitude (raid consumable)
+    7181: (3372, "Leaded Vial", 200),  # Greater Healing Potion
+    11449: (3372, "Leaded Vial", 200),  # Elixir of Agility
+    11450: (3372, "Leaded Vial", 200),  # Elixir of Greater Defense
+    11457: (8925, "Crystal Vial", 2500),  # Superior Healing Potion
+    11460: (8925, "Crystal Vial", 2500),  # Elixir of Detect Undead
+    11467: (8925, "Crystal Vial", 2500),  # Elixir of Greater Agility (raid)
+    17553: (8925, "Crystal Vial", 2500),  # Superior Mana Potion
+    17556: (8925, "Crystal Vial", 2500),  # Major Healing Potion
+    3938: (2880, "Weak Flux", 100),  # Bronze Tube (Engineering)
 }
 
 # Vials are cheap and cast-consumed one at a time, so a small standing stock
@@ -295,8 +295,7 @@ def reagent_errand(
     ceiling = price * short
     if money < ceiling:
         return None, (
-            f"{name} cannot afford {short} x {label} "
-            f"({ceiling} copper against {money})"
+            f"{name} cannot afford {short} x {label} ({ceiling} copper against {money})"
         )
 
     return (
@@ -319,36 +318,36 @@ def reagent_errand(
 # TARGET. Every id/price verified live against acore_world.item_template
 # and npc_vendor; see the module docstring for the full table.
 REAGENTS: dict[int, tuple[tuple[int, str, int, int], ...]] = {
-    8776: ((2320, "Coarse Thread", 10, 1),),                # Linen Belt (Tailoring)
+    8776: ((2320, "Coarse Thread", 10, 1),),  # Linen Belt (Tailoring)
     # 9058 IS BACK, because the reason it was absent was a misread rather than
     # a missing fact: an AcquireMethod 1 ability has no trainer_spell row by
     # definition, which is what "could not be verified" was actually seeing.
     # Verified against the worldserver's own SkillLineAbility.dbc/Spell.dbc -
     # see craft.RECIPES' comment beside the 46-55 Leatherworking bracket.
-    9058: ((2320, "Coarse Thread", 10, 1),),                # Handstitched Leather Cloak
-    3756: ((2320, "Coarse Thread", 10, 2),),                # Embossed Leather Gloves
-    3763: ((2320, "Coarse Thread", 10, 2),),                # Fine Leather Belt
+    9058: ((2320, "Coarse Thread", 10, 1),),  # Handstitched Leather Cloak
+    3756: ((2320, "Coarse Thread", 10, 2),),  # Embossed Leather Gloves
+    3763: ((2320, "Coarse Thread", 10, 2),),  # Fine Leather Belt
     2167: (
-        (2321, "Fine Thread", 100, 2),                      # Dark Leather Boots
+        (2321, "Fine Thread", 100, 2),  # Dark Leather Boots
         (4340, "Gray Dye", 350, 1),
     ),
     7135: (
-        (2321, "Fine Thread", 100, 1),                      # Dark Leather Pants
+        (2321, "Fine Thread", 100, 1),  # Dark Leather Pants
         (4340, "Gray Dye", 350, 1),
     ),
-    3818: ((4289, "Salt", 50, 3),),                          # Cured Heavy Hide
-    3780: ((2321, "Fine Thread", 100, 1),),                 # Heavy Armor Kit
-    7151: ((2321, "Fine Thread", 100, 2),),                 # Barbaric Shoulders
-    7156: ((4291, "Silken Thread", 500, 1),),               # Guardian Gloves
-    10487: ((4291, "Silken Thread", 500, 1),),              # Thick Armor Kit
-    10507: ((4291, "Silken Thread", 500, 2),),              # Nightscape Headband
-    10548: ((4291, "Silken Thread", 500, 4),),              # Nightscape Pants
-    10558: ((8343, "Heavy Silken Thread", 2000, 2),),       # Nightscape Boots
+    3818: ((4289, "Salt", 50, 3),),  # Cured Heavy Hide
+    3780: ((2321, "Fine Thread", 100, 1),),  # Heavy Armor Kit
+    7151: ((2321, "Fine Thread", 100, 2),),  # Barbaric Shoulders
+    7156: ((4291, "Silken Thread", 500, 1),),  # Guardian Gloves
+    10487: ((4291, "Silken Thread", 500, 1),),  # Thick Armor Kit
+    10507: ((4291, "Silken Thread", 500, 2),),  # Nightscape Headband
+    10548: ((4291, "Silken Thread", 500, 4),),  # Nightscape Pants
+    10558: ((8343, "Heavy Silken Thread", 2000, 2),),  # Nightscape Boots
     19049: (
-        (2325, "Black Dye", 1000, 1),                       # Wicked Leather Gauntlets
+        (2325, "Black Dye", 1000, 1),  # Wicked Leather Gauntlets
         (14341, "Rune Thread", 5000, 1),
     ),
-    19082: ((14341, "Rune Thread", 5000, 1),),              # Runic Leather Headband
+    19082: ((14341, "Rune Thread", 5000, 1),),  # Runic Leather Headband
 }
 
 # How many casts' worth of a REAGENTS reagent to keep in stock - see the
@@ -548,8 +547,9 @@ def reagent_need(name: str, craft_spell: int, held: int, town: "towntrip.Town"):
     return Need(name, entry, label)
 
 
-def craft_reagent_needs(name: str, craft_spell: int, held: dict,
-                        town: "towntrip.Town") -> list:
+def craft_reagent_needs(
+    name: str, craft_spell: int, held: dict, town: "towntrip.Town"
+) -> list:
     """Every trip this character's REAGENTS recipe needs, one per reagent.
 
     The plural sibling of `reagent_need`, the same way
@@ -592,8 +592,9 @@ def _usable(spawns, map_id: int) -> list:
     )
 
 
-def supply_trip(needs, spawns, leader: str, map_id: int,
-                shopper_maps=None) -> SupplyTrip:
+def supply_trip(
+    needs, spawns, leader: str, map_id: int, shopper_maps=None
+) -> SupplyTrip:
     """Where to send the family so one outstanding reagent can be bought.
 
     `needs` is every (shopper, reagent) pair that has nowhere in reach
@@ -641,7 +642,7 @@ def supply_trip(needs, spawns, leader: str, map_id: int,
         # whole issue is about, one layer up.
         return SupplyTrip(
             why_not="Nobody leads the family right now, and a follower aimed "
-                    "at a vendor does not walk - so this pass takes no trip.",
+            "at a vendor does not walk - so this pass takes no trip.",
         )
 
     unreachable = []
@@ -654,9 +655,13 @@ def supply_trip(needs, spawns, leader: str, map_id: int,
                     "%s is on map %s and %s leads on map %d, so no walk the "
                     "leader takes puts %s in front of a counter - following "
                     "does not cross a map"
-                    % (need.shopper,
-                       "nowhere visible" if standing is None else int(standing),
-                       leader, int(map_id), need.shopper)
+                    % (
+                        need.shopper,
+                        "nowhere visible" if standing is None else int(standing),
+                        leader,
+                        int(map_id),
+                        need.shopper,
+                    )
                 )
                 continue
         usable = _usable((spawns or {}).get(int(need.entry)), map_id)
@@ -665,12 +670,17 @@ def supply_trip(needs, spawns, leader: str, map_id: int,
                 "nothing on map %d sells %s (%d) at all, so %s's craft errand "
                 "cannot be supplied from this continent - no walk will change "
                 "that, and either the recipe or the map has to"
-                % (int(map_id), need.label or "that reagent", int(need.entry),
-                   need.shopper)
+                % (
+                    int(map_id),
+                    need.label or "that reagent",
+                    int(need.entry),
+                    need.shopper,
+                )
             )
             continue
-        reachable.append((float(usable[0].yards), str(need.shopper),
-                          int(need.entry), need, usable))
+        reachable.append(
+            (float(usable[0].yards), str(need.shopper), int(need.entry), need, usable)
+        )
 
     unreachable = tuple(unreachable)
     if not reachable:
@@ -701,7 +711,7 @@ def supply_trip(needs, spawns, leader: str, map_id: int,
             traveller=leader,
             unreachable=unreachable,
             why_not="creature %r is not something overseer_roster.travel_npc "
-                    "can hold, so no aim was written" % (chosen.entry,),
+            "can hold, so no aim was written" % (chosen.entry,),
         )
 
     # WHO ELSE THIS ONE WALK ALREADY ANSWERS FOR. A second need whose own
@@ -723,7 +733,7 @@ def supply_trip(needs, spawns, leader: str, map_id: int,
         entry=int(need.entry),
         label=need.label,
         vendor=chosen,
-        passed_over=tuple(usable[1:1 + SHORTLIST]),
+        passed_over=tuple(usable[1 : 1 + SHORTLIST]),
         also_served=tuple(also_served),
         waiting=tuple(waiting),
         unreachable=unreachable,
@@ -750,9 +760,16 @@ def report(trip) -> str:
         "%s is aimed at creature %s (%s, faction %s, %d yards) so %s can buy "
         "%s (%d) - the family follows the leader, and each shopper's own buy "
         "fires where they end up standing"
-        % (trip.traveller, trip.target, vendor.name or "unnamed",
-           vendor.faction, round(float(vendor.yards)), trip.shopper,
-           trip.label or "that reagent", trip.entry)
+        % (
+            trip.traveller,
+            trip.target,
+            vendor.name or "unnamed",
+            vendor.faction,
+            round(float(vendor.yards)),
+            trip.shopper,
+            trip.label or "that reagent",
+            trip.entry,
+        )
     )
     if trip.passed_over:
         said += ". Also stocking it, further off: " + ", ".join(

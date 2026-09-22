@@ -11,6 +11,7 @@ to disagree about which of "away" and "fighting" wins, so the Lua is asserted
 against as source text, the way test_jobs.py holds mod_overseer.cpp and
 test_frames.py holds map_server.py.
 """
+
 import datetime
 import pathlib
 import re
@@ -26,15 +27,26 @@ NOW = datetime.datetime(2026, 9, 5, 12, 0, 0)
 
 
 def _member(name, **kw):
-    row = {"name": name, "enabled": 1, "lead": 0, "job": "quest",
-           "travel_npc": "", "drive_quest": 0, "learn_skill": 0}
+    row = {
+        "name": name,
+        "enabled": 1,
+        "lead": 0,
+        "job": "quest",
+        "travel_npc": "",
+        "drive_quest": 0,
+        "learn_skill": 0,
+    }
     row.update(kw)
     return row
 
 
 def _moved(minutes):
-    return [{"kind": "quest_complete",
-             "last_seen": NOW - datetime.timedelta(minutes=minutes)}]
+    return [
+        {
+            "kind": "quest_complete",
+            "last_seen": NOW - datetime.timedelta(minutes=minutes),
+        }
+    ]
 
 
 class WhatTheClientDecidesForItself(unittest.TestCase):
@@ -42,14 +54,21 @@ class WhatTheClientDecidesForItself(unittest.TestCase):
     only case until something carries the line."""
 
     def test_a_disconnected_member_is_offline_whatever_else_is_true(self):
-        got = partystatus.decide({"connected": False, "dead": True,
-                                  "combat": True, "visible": False,
-                                  "in_range": False})
+        got = partystatus.decide(
+            {
+                "connected": False,
+                "dead": True,
+                "combat": True,
+                "visible": False,
+                "in_range": False,
+            }
+        )
         self.assertEqual(got["code"], partystatus.OFFLINE)
 
     def test_dead_outranks_every_distance_and_combat_fact(self):
-        got = partystatus.decide({"dead": True, "visible": False,
-                                  "combat": True, "in_range": False})
+        got = partystatus.decide(
+            {"dead": True, "visible": False, "combat": True, "in_range": False}
+        )
         self.assertEqual(got["code"], partystatus.DEAD)
 
     def test_out_of_sight_outranks_combat(self):
@@ -90,16 +109,15 @@ class WhatTheClientDecidesForItself(unittest.TestCase):
 
 
 class WhatThePushAddsAndWhatItCannotOverride(unittest.TestCase):
-
     def test_a_pushed_state_fills_the_silence(self):
-        got = partystatus.decide({}, {"code": partystatus.TASK,
-                                      "label": "quest"})
+        got = partystatus.decide({}, {"code": partystatus.TASK, "label": "quest"})
         self.assertEqual(got, {"code": partystatus.TASK, "label": "quest"})
 
     def test_an_observed_death_beats_a_recorded_job(self):
         """The push is a database snapshot seconds old; the corpse is now."""
-        got = partystatus.decide({"dead": True}, {"code": partystatus.TASK,
-                                                 "label": "quest"})
+        got = partystatus.decide(
+            {"dead": True}, {"code": partystatus.TASK, "label": "quest"}
+        )
         self.assertEqual(got["code"], partystatus.DEAD)
 
     def test_a_local_code_arriving_over_the_wire_is_not_honoured(self):
@@ -108,13 +126,11 @@ class WhatThePushAddsAndWhatItCannotOverride(unittest.TestCase):
         A sender that started claiming "dead" would be reporting a fact the
         client can see better, from a snapshot that is older.
         """
-        got = partystatus.decide({}, {"code": partystatus.DEAD,
-                                      "label": "dead"})
+        got = partystatus.decide({}, {"code": partystatus.DEAD, "label": "dead"})
         self.assertEqual(got["code"], "")
 
     def test_a_long_pushed_label_is_cut_to_what_fits(self):
-        got = partystatus.decide({}, {"code": partystatus.TASK,
-                                      "label": "x" * 40})
+        got = partystatus.decide({}, {"code": partystatus.TASK, "label": "x" * 40})
         self.assertEqual(len(got["label"]), partystatus.MAX_LABEL_CHARS)
 
 
@@ -122,36 +138,52 @@ class TheWireSurvivesTheColumn(unittest.TestCase):
     """overseer_command.command is VARCHAR(255) and MySQL truncates silently."""
 
     def test_a_line_round_trips(self):
-        members = [{"name": "Grug", "code": partystatus.TASK, "label": "quest"},
-                   {"name": "Ugga", "code": partystatus.TRAVEL,
-                    "label": "walking"}]
+        members = [
+            {"name": "Grug", "code": partystatus.TASK, "label": "quest"},
+            {"name": "Ugga", "code": partystatus.TRAVEL, "label": "walking"},
+        ]
         self.assertEqual(partystatus.parse(partystatus.line(members)), members)
 
     def test_a_whole_roster_of_five_fits_in_one_command(self):
-        members = [{"name": n, "code": partystatus.DUNGEON, "label": "dungeon"}
-                   for n in ("Grug", "Ugga", "Grog", "Bork", "Og")]
-        self.assertLessEqual(len(partystatus.line(members)),
-                             partystatus.MAX_LINE_CHARS)
+        members = [
+            {"name": n, "code": partystatus.DUNGEON, "label": "dungeon"}
+            for n in ("Grug", "Ugga", "Grog", "Bork", "Og")
+        ]
+        self.assertLessEqual(len(partystatus.line(members)), partystatus.MAX_LINE_CHARS)
 
     def test_a_separator_inside_a_label_cannot_shift_the_line(self):
         """A stray tab would silently move every later name onto the wrong
         state, which is worse than losing the label."""
-        line = partystatus.line([
-            {"name": "Grug", "code": partystatus.TASK, "label": "a\tb"},
-            {"name": "Ugga", "code": partystatus.IDLE, "label": "idle"}])
+        line = partystatus.line(
+            [
+                {"name": "Grug", "code": partystatus.TASK, "label": "a\tb"},
+                {"name": "Ugga", "code": partystatus.IDLE, "label": "idle"},
+            ]
+        )
         got = partystatus.parse(line)
         self.assertEqual([m["name"] for m in got], ["Grug", "Ugga"])
         self.assertEqual(got[0]["label"], "a b")
 
     def test_members_that_would_overflow_are_dropped_whole(self):
-        members = [{"name": "Name%02d" % i, "code": partystatus.TASK,
-                    "label": "guild business"} for i in range(40)]
+        members = [
+            {
+                "name": "Name%02d" % i,
+                "code": partystatus.TASK,
+                "label": "guild business",
+            }
+            for i in range(40)
+        ]
         line = partystatus.line(members)
         self.assertLessEqual(len(line), partystatus.MAX_LINE_CHARS)
         got = partystatus.parse(line)
         self.assertLess(len(got), len(members))
-        self.assertEqual(got, [{"name": m["name"], "code": m["code"],
-                                "label": m["label"]} for m in members[:len(got)]])
+        self.assertEqual(
+            got,
+            [
+                {"name": m["name"], "code": m["code"], "label": m["label"]}
+                for m in members[: len(got)]
+            ],
+        )
 
     def test_somebody_elses_addon_traffic_is_not_ours(self):
         self.assertIsNone(partystatus.parse("MBOT\tGET~ROSTER"))
@@ -167,8 +199,9 @@ class TheWireSurvivesTheColumn(unittest.TestCase):
         self.assertEqual(partystatus.parse(partystatus.line([])), [])
 
     def test_a_truncated_tail_drops_rather_than_guesses(self):
-        line = partystatus.line([
-            {"name": "Grug", "code": partystatus.TASK, "label": "quest"}])
+        line = partystatus.line(
+            [{"name": "Grug", "code": partystatus.TASK, "label": "quest"}]
+        )
         got = partystatus.parse(line + "\tUgga\ttravel")
         self.assertEqual([m["name"] for m in got], ["Grug"])
 
@@ -181,8 +214,7 @@ class WhatThePushSays(unittest.TestCase):
     """build_push, branch by branch, in the order it decides them."""
 
     def push(self, roster, runs=(), events=()):
-        return partystatus.build_push(list(roster), list(runs), list(events),
-                                      now=NOW)
+        return partystatus.build_push(list(roster), list(runs), list(events), now=NOW)
 
     def codes(self, payload):
         return {m["name"]: m["code"] for m in payload["members"]}
@@ -194,9 +226,10 @@ class WhatThePushSays(unittest.TestCase):
 
     def test_the_ordinary_case_is_on_task_named_by_the_job(self):
         got = self.push([_member("Grug", lead=1, job="farm")])
-        self.assertEqual(got["members"],
-                         [{"name": "Grug", "code": partystatus.TASK,
-                           "label": "farm"}])
+        self.assertEqual(
+            got["members"],
+            [{"name": "Grug", "code": partystatus.TASK, "label": "farm"}],
+        )
 
     def test_a_blank_job_column_means_the_default_the_module_means(self):
         got = self.push([_member("Grug", lead=1, job="")])
@@ -210,34 +243,44 @@ class WhatThePushSays(unittest.TestCase):
         self.assertEqual(got["members"][0]["label"], "dungeon")
 
     def test_a_travel_aim_is_said_as_walking(self):
-        got = self.push([_member("Grug", lead=1),
-                         _member("Ugga", travel_npc="innkeeper")])
-        self.assertEqual(self.codes(got),
-                         {"Grug": partystatus.TASK, "Ugga": partystatus.TRAVEL})
+        got = self.push(
+            [_member("Grug", lead=1), _member("Ugga", travel_npc="innkeeper")]
+        )
+        self.assertEqual(
+            self.codes(got), {"Grug": partystatus.TASK, "Ugga": partystatus.TRAVEL}
+        )
 
     def test_an_active_run_outranks_the_errands_it_holds(self):
         """The coordinator parks escorted members with travel aims that stay
         set while they stand still. Reading those as errands would report five
         people running errands in the middle of a clear."""
         got = self.push(
-            [_member("Grug", lead=1, travel_npc="trigger:1234"),
-             _member("Ugga", travel_npc="at:36:1,2,3")],
-            runs=[{"state": "active", "map_id": 36, "members": "",
-                   "started_at": NOW}])
+            [
+                _member("Grug", lead=1, travel_npc="trigger:1234"),
+                _member("Ugga", travel_npc="at:36:1,2,3"),
+            ],
+            runs=[{"state": "active", "map_id": 36, "members": "", "started_at": NOW}],
+        )
         self.assertEqual(set(self.codes(got).values()), {partystatus.DUNGEON})
 
     def test_a_run_names_only_its_stamped_members_once_it_has_any(self):
         got = self.push(
             [_member("Grug", lead=1), _member("Ugga")],
-            runs=[{"state": "active", "map_id": 36, "members": "Grug",
-                   "started_at": NOW}])
-        self.assertEqual(self.codes(got),
-                         {"Grug": partystatus.DUNGEON, "Ugga": partystatus.TASK})
+            runs=[
+                {"state": "active", "map_id": 36, "members": "Grug", "started_at": NOW}
+            ],
+        )
+        self.assertEqual(
+            self.codes(got), {"Grug": partystatus.DUNGEON, "Ugga": partystatus.TASK}
+        )
 
     def test_an_ended_run_is_not_a_run(self):
-        got = self.push([_member("Grug", lead=1)],
-                        runs=[{"state": "ended", "map_id": 36, "members": "Grug",
-                               "started_at": NOW}])
+        got = self.push(
+            [_member("Grug", lead=1)],
+            runs=[
+                {"state": "ended", "map_id": 36, "members": "Grug", "started_at": NOW}
+            ],
+        )
         self.assertEqual(self.codes(got), {"Grug": partystatus.TASK})
 
     def test_a_stalled_family_is_stalled_even_inside_a_live_run(self):
@@ -246,9 +289,11 @@ class WhatThePushSays(unittest.TestCase):
         looks like from the tables."""
         got = self.push(
             [_member("Grug", lead=1)],
-            runs=[{"state": "active", "map_id": 36, "members": "Grug",
-                   "started_at": NOW}],
-            events=_moved(90))
+            runs=[
+                {"state": "active", "map_id": 36, "members": "Grug", "started_at": NOW}
+            ],
+            events=_moved(90),
+        )
         self.assertEqual(self.codes(got), {"Grug": partystatus.STALLED})
 
     def test_a_family_that_moved_recently_is_not_stalled(self):
@@ -265,9 +310,11 @@ class WhatThePushSays(unittest.TestCase):
         """MOVEMENT_KINDS excludes death, so a wipe loop still reads stalled."""
         got = self.push(
             [_member("Grug", lead=1)],
-            events=[{"kind": "death", "last_seen": NOW},
-                    {"kind": "level_up",
-                     "last_seen": NOW - datetime.timedelta(minutes=90)}])
+            events=[
+                {"kind": "death", "last_seen": NOW},
+                {"kind": "level_up", "last_seen": NOW - datetime.timedelta(minutes=90)},
+            ],
+        )
         self.assertEqual(self.codes(got), {"Grug": partystatus.STALLED})
 
     def test_a_disabled_row_is_not_in_the_line_at_all(self):
@@ -275,8 +322,9 @@ class WhatThePushSays(unittest.TestCase):
         self.assertEqual([m["name"] for m in got["members"]], ["Grug"])
 
     def test_every_code_it_emits_is_one_the_addon_can_colour(self):
-        got = self.push([_member("Grug", lead=1, travel_npc="trainer"),
-                         _member("Ugga")])
+        got = self.push(
+            [_member("Grug", lead=1, travel_npc="trainer"), _member("Ugga")]
+        )
         for member in got["members"]:
             self.assertIn(member["code"], partystatus.PUSHED, member)
 
@@ -286,14 +334,21 @@ class WhatThePushSays(unittest.TestCase):
 
 
 class TheCommandRowsAreOnesDoChatAccepts(unittest.TestCase):
-
     def test_one_row_spoken_by_the_leader_reaches_all_five(self):
         """DoChat builds the party packet itself and broadcasts it to the
         group, so one row is one delivery to every session in it."""
         rows = partystatus.commands("OVSR\t1\tGrug\ttask\tquest", "Grug")
-        self.assertEqual(rows, [{"target_name": "Grug",
-                                 "command": "OVSR\t1\tGrug\ttask\tquest",
-                                 "kind": "chat", "channel": "party_addon"}])
+        self.assertEqual(
+            rows,
+            [
+                {
+                    "target_name": "Grug",
+                    "command": "OVSR\t1\tGrug\ttask\tquest",
+                    "kind": "chat",
+                    "channel": "party_addon",
+                }
+            ],
+        )
 
     def test_the_row_rides_the_addon_channel_so_no_chat_frame_draws_it(self):
         """`party` is what the family says out loud, and it stays visible on
@@ -308,8 +363,9 @@ class TheCommandRowsAreOnesDoChatAccepts(unittest.TestCase):
         field here whose regression every other assertion in this file would
         still pass through.
         """
-        line = partystatus.SEP.join([partystatus.PREFIX, partystatus.VERSION,
-                                     "Grug", partystatus.TASK, "quest"])
+        line = partystatus.SEP.join(
+            [partystatus.PREFIX, partystatus.VERSION, "Grug", partystatus.TASK, "quest"]
+        )
         rows = partystatus.commands(line, "Grug")
         self.assertEqual([row["channel"] for row in rows], ["party_addon"])
 
@@ -327,9 +383,13 @@ class TheCommandRowsAreOnesDoChatAccepts(unittest.TestCase):
         this needs no change there, and it stops being true the moment the
         separator becomes printable."""
         import relay
+
         rows = partystatus.commands(
-            partystatus.line([{"name": "Grug", "code": partystatus.TASK,
-                               "label": "quest"}]), "Grug")
+            partystatus.line(
+                [{"name": "Grug", "code": partystatus.TASK, "label": "quest"}]
+            ),
+            "Grug",
+        )
         self.assertTrue(relay.is_addon_traffic(rows[0]["command"]))
 
 
@@ -347,21 +407,23 @@ class TheAddonMirrorsTheModule(unittest.TestCase):
         cls.toc = (ADDON / "PartyStatus.toc").read_text()
 
     def rules(self):
-        block = self.lua[self.lua.index("local LOCAL_RULES = {"):]
-        block = block[:block.index("\n}")]
+        block = self.lua[self.lua.index("local LOCAL_RULES = {") :]
+        block = block[: block.index("\n}")]
         return re.findall(r'\{ code = "(\w+)",\s+label = "([^"]*)"', block)
 
     def test_the_addon_asks_the_local_facts_in_the_modules_order(self):
-        self.assertEqual([code for code, _ in self.rules()],
-                         list(partystatus.PRECEDENCE))
+        self.assertEqual(
+            [code for code, _ in self.rules()], list(partystatus.PRECEDENCE)
+        )
 
     def test_the_addon_says_the_words_the_module_chose(self):
-        self.assertEqual({code: label for code, label in self.rules()},
-                         partystatus.LOCAL_LABELS)
+        self.assertEqual(
+            {code: label for code, label in self.rules()}, partystatus.LOCAL_LABELS
+        )
 
     def test_every_state_has_a_colour_so_none_renders_black_on_black(self):
-        block = self.lua[self.lua.index("local COLOUR = {"):]
-        block = block[:block.index("\n}")]
+        block = self.lua[self.lua.index("local COLOUR = {") :]
+        block = block[: block.index("\n}")]
         coloured = set(re.findall(r"^\s+(\w+)\s+= \{", block, re.M))
         self.assertEqual(coloured, set(partystatus.CODES))
 
@@ -373,21 +435,21 @@ class TheAddonMirrorsTheModule(unittest.TestCase):
     def test_the_addon_expires_a_push_on_the_modules_clock(self):
         """A sender that dies must take the labels with it, not leave "on
         task" under a character who stopped an hour ago."""
-        self.assertIn("local PUSH_STALE_SECONDS = %d"
-                      % partystatus.PUSH_STALE_SECONDS, self.lua)
+        self.assertIn(
+            "local PUSH_STALE_SECONDS = %d" % partystatus.PUSH_STALE_SECONDS, self.lua
+        )
 
     def test_the_addon_reads_both_routes(self):
         """CHAT_MSG_ADDON is the route worth having; a party-chat line is the
         one that works with no change to the worldserver at all."""
         self.assertIn('driver:RegisterEvent("CHAT_MSG_ADDON")', self.lua)
-        self.assertIn('ChatFrame_AddMessageEventFilter("CHAT_MSG_PARTY"',
-                      self.lua)
+        self.assertIn('ChatFrame_AddMessageEventFilter("CHAT_MSG_PARTY"', self.lua)
 
     def test_the_party_chat_route_hides_its_own_traffic(self):
         """Returning true removes the line from every chat frame. Without it
         the stream shows machine text in party chat all day."""
-        block = self.lua[self.lua.index("local function chatFilter"):]
-        block = block[:block.index("\nend")]
+        block = self.lua[self.lua.index("local function chatFilter") :]
+        block = block[: block.index("\nend")]
         self.assertIn("return true", block)
 
     def test_nothing_is_drawn_inside_the_party_frame(self):
@@ -396,8 +458,8 @@ class TheAddonMirrorsTheModule(unittest.TestCase):
         the frame's TOPRIGHT and offset clear of it - see the file header for
         the measurements this protects."""
         self.assertIn(
-            'frame:SetPoint("LEFT", parent, "TOPRIGHT", CLEAR_X, NAME_Y)',
-            self.lua)
+            'frame:SetPoint("LEFT", parent, "TOPRIGHT", CLEAR_X, NAME_Y)', self.lua
+        )
 
     def test_the_clearance_puts_it_past_the_party_background_panel(self):
         """PartyMemberBackground is 134 wide from x=-5, so it ends at x=129
@@ -431,15 +493,15 @@ class TheEndpointIsWired(unittest.TestCase):
         cls.server = (HERE / "map_server.py").read_text()
 
     def test_the_route_reaches_the_handler(self):
-        get = self.server[self.server.index("GET_ROUTES = {"):]
-        get = get[:get.index("}")]
+        get = self.server[self.server.index("GET_ROUTES = {") :]
+        get = get[: get.index("}")]
         self.assertIn('"/api/party-status": _party_status', get)
 
     def test_it_reads_no_table_the_agenda_banner_does_not_already_read(self):
         """No new fetch and no new SQL: the party frames and the web page must
         not be able to reach different conclusions about the same family."""
-        block = self.server[self.server.index("def _party_status"):]
-        block = block[:block.index("\n    def ", 10)]
+        block = self.server[self.server.index("def _party_status") :]
+        block = block[: block.index("\n    def ", 10)]
         self.assertIn("_fetch_agenda()", block)
         self.assertNotIn("SELECT", block)
 
@@ -449,7 +511,6 @@ class TheEndpointIsWired(unittest.TestCase):
         map server on the next roll."""
         dockerfile = (HERE / "Dockerfile").read_text(encoding="utf-8")
         self.assertIn("partystatus.py", dockerfile)
-
 
 
 class TheSenderIsAPipeWithASchedule(unittest.TestCase):

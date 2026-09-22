@@ -44,6 +44,7 @@ THE RULE UNDER EVERY DECISION HERE: an answer this page is not sure of renders
 as an alarm, never as the reassuring one. There is no arrangement of missing
 rows that produces a quiet banner over an unidentified realm.
 """
+
 from __future__ import annotations
 
 from datetime import datetime
@@ -90,7 +91,8 @@ UPSTREAM_ORDER = (
 # component list below is "everything else" and a fact added by a future module
 # version shows up rather than being silently dropped.
 NON_COMPONENT_NAMES = frozenset(
-    {"module", "core", "core_pin", "realm", "realm_kind", "pins"})
+    {"module", "core", "core_pin", "realm", "realm_kind", "pins"}
+)
 
 # The verdict the module records on whether its declared pins describe the
 # binary that is actually running. See the module's PinsVerdict.
@@ -157,7 +159,7 @@ def _revision(core_version: str) -> str:
     at = core_version.find(marker)
     if at < 0:
         return ""
-    tail = core_version[at + len(marker):]
+    tail = core_version[at + len(marker) :]
     out = []
     for char in tail:
         if char in "0123456789abcdefABCDEF":
@@ -232,20 +234,28 @@ def _upstreams(facts: dict) -> list[dict]:
     after the known ones rather than skipped, so a newer worldserver can report
     a fifth component without this file changing first.
     """
+
     def entry(name: str) -> dict:
-        return {"name": name, "value": _value(facts, name),
-                "source": (facts[name].get("source") or "").strip()}
+        return {
+            "name": name,
+            "value": _value(facts, name),
+            "source": (facts[name].get("source") or "").strip(),
+        }
 
     known = [entry(name) for name in UPSTREAM_ORDER if _value(facts, name)]
-    extra = sorted(name for name in facts
-                   if name not in NON_COMPONENT_NAMES
-                   and name not in UPSTREAM_ORDER
-                   and _value(facts, name))
+    extra = sorted(
+        name
+        for name in facts
+        if name not in NON_COMPONENT_NAMES
+        and name not in UPSTREAM_ORDER
+        and _value(facts, name)
+    )
     return known + [entry(name) for name in extra]
 
 
-def _warnings(kind: str, reported: bool, pins: str, facts: dict, core: str,
-              core_source: str) -> list[str]:
+def _warnings(
+    kind: str, reported: bool, pins: str, facts: dict, core: str, core_source: str
+) -> list[str]:
     """Everything the reader has to be told, as full sentences.
 
     A list because more than one can be true at once, and full sentences rather
@@ -258,16 +268,19 @@ def _warnings(kind: str, reported: bool, pins: str, facts: dict, core: str,
         warnings.append(
             "This realm has not reported a build, so this page cannot say "
             "whether it is production. Treat what you are seeing as live until "
-            "it does.")
+            "it does."
+        )
     elif kind == UNKNOWN:
         warnings.append(
             "This realm reported a build but did not say whether it is "
-            "production. Treat what you are seeing as live until it does.")
+            "production. Treat what you are seeing as live until it does."
+        )
     if pins == PINS_STALE:
         warnings.append(
             "The upstream commits below were declared for a different build "
             "than the one this realm is running, so they describe another "
-            "image. Do not read them as fact.")
+            "image. Do not read them as fact."
+        )
     # The realm's report naming a core that is not the core the world says it is
     # running. Both are written at startup by the same process, so this should
     # be impossible; if it happens, one of the two is left over from a previous
@@ -277,7 +290,8 @@ def _warnings(kind: str, reported: bool, pins: str, facts: dict, core: str,
         warnings.append(
             "The build this realm reported names a different core than the one "
             "the world is running, so the report is left over from an earlier "
-            "worldserver.")
+            "worldserver."
+        )
     return warnings
 
 
@@ -285,16 +299,26 @@ def _realm_line(realm: str, realm_source: str) -> str:
     if realm and realm_source == "reported":
         return realm
     if realm:
-        return ("%s (name from the realm list; this realm has not reported its "
-                "own identity)" % realm)
+        return (
+            "%s (name from the realm list; this realm has not reported its "
+            "own identity)" % realm
+        )
     return "this realm has not named itself"
 
 
-def _build_line(reported: bool, module_version: str, core: str,
-                core_revision: str, upstreams: list[dict], pins: str) -> str:
+def _build_line(
+    reported: bool,
+    module_version: str,
+    core: str,
+    core_revision: str,
+    upstreams: list[dict],
+    pins: str,
+) -> str:
     if not reported:
-        line = ("This realm has not reported a build, so its module version "
-                "and upstreams are unknown.")
+        line = (
+            "This realm has not reported a build, so its module version "
+            "and upstreams are unknown."
+        )
         if core:
             # The core is still worth printing, and on the day this ships it is
             # the ONLY thing that can be printed, because AzerothCore records
@@ -303,8 +327,10 @@ def _build_line(reported: bool, module_version: str, core: str,
             line += " The world itself reports core %s." % (core_revision or core)
         return line
 
-    parts = ["module %s" % (module_version or "not reported"),
-             "core %s" % (core_revision or core or "not reported")]
+    parts = [
+        "module %s" % (module_version or "not reported"),
+        "core %s" % (core_revision or core or "not reported"),
+    ]
     # Twelve characters, the same abbreviation AzerothCore prints for itself, so
     # a reader can compare the two by eye without counting.
     parts += ["%s %s" % (item["name"], item["value"][:12]) for item in upstreams]
@@ -328,8 +354,12 @@ def _reported_at(facts: dict):
     return None
 
 
-def build_realm(build_rows: list[dict], version_rows: list[dict],
-                realmlist_rows: list[dict], now: datetime | None = None) -> dict:
+def build_realm(
+    build_rows: list[dict],
+    version_rows: list[dict],
+    realmlist_rows: list[dict],
+    now: datetime | None = None,
+) -> dict:
     """Rows in, the realm banner's JSON out.
 
     build_rows      overseer_build, any subset, in any order. EMPTY on a realm
@@ -386,6 +416,7 @@ def build_realm(build_rows: list[dict], version_rows: list[dict],
         # itself would be deciding something.
         "warning_text": " ".join(warnings),
         "realm_line": _realm_line(realm, realm_source),
-        "build_line": _build_line(reported, module_version, core, core_revision,
-                                  upstreams, pins),
+        "build_line": _build_line(
+            reported, module_version, core, core_revision, upstreams, pins
+        ),
     }

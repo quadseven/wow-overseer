@@ -21,6 +21,7 @@ WHAT THIS DOES NOT SUPPRESS. The `teleport` event is left alone on
 purpose: being moved to a level-appropriate grind spot IS the autonomous
 play we want, not damage.
 """
+
 from __future__ import annotations
 
 # Ten years. The manager's own slowest natural interval is 14 days, so the
@@ -65,5 +66,7 @@ def report(protected: dict, written: list, now: int) -> str:
     """
     names = ", ".join(sorted(protected.values())) or "nobody"
     return "protect: covering %d (%s), refreshed %d this cycle" % (
-        len(protected), names, len(written)
+        len(protected),
+        names,
+        len(written),
     )

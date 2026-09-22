@@ -75,6 +75,7 @@ of documentation, never an errand. A hierarchy that silently assumed otherwise
 would be the "reports success while doing nothing" failure professions.py's own
 BLOCKERS constant exists to prevent.
 """
+
 from __future__ import annotations
 
 import json
@@ -112,6 +113,7 @@ def load_craftbook(static_dir: str) -> dict:
             return json.load(handle)
     except (OSError, ValueError):
         return {}
+
 
 # Spell.dbc effect ids, named so the catalogue's provenance comments can be
 # read without a lookup. A SPECIALIZATION spell is effect 47 with nothing after
@@ -257,16 +259,36 @@ class Spec:
 # why the hierarchy gives him one specialization and not two.
 SPECS = (
     # ---- blacksmithing (164) ------------------------------------------------
-    Spec(key="armorsmith", label="Armorsmith", skill=164,
-         spell=9788, grant=9790, quest=5283,
-         quest_title="The Art of the Armorsmith",
-         npc=5164, npc_name="Grumnus Steelshaper", npc_map=0,
-         rival_group=5283, req_rank=200, req_level=40),
-    Spec(key="weaponsmith", label="Weaponsmith", skill=164,
-         spell=9787, grant=9789, quest=5284,
-         quest_title="The Way of the Weaponsmith",
-         npc=11146, npc_name="Ironus Coldsteel", npc_map=0,
-         rival_group=5283, req_rank=200, req_level=40),
+    Spec(
+        key="armorsmith",
+        label="Armorsmith",
+        skill=164,
+        spell=9788,
+        grant=9790,
+        quest=5283,
+        quest_title="The Art of the Armorsmith",
+        npc=5164,
+        npc_name="Grumnus Steelshaper",
+        npc_map=0,
+        rival_group=5283,
+        req_rank=200,
+        req_level=40,
+    ),
+    Spec(
+        key="weaponsmith",
+        label="Weaponsmith",
+        skill=164,
+        spell=9787,
+        grant=9789,
+        quest=5284,
+        quest_title="The Way of the Weaponsmith",
+        npc=11146,
+        npc_name="Ironus Coldsteel",
+        npc_map=0,
+        rival_group=5283,
+        req_rank=200,
+        req_level=40,
+    ),
     # THE THREE MASTER WEAPON SUB-SPECIALIZATIONS, AND WHY THEY ARE LISTED AT
     # ALL. They are listed because 24 blacksmithing crafts are gated on them
     # and a denominator that silently omitted those 24 would be reporting a
@@ -282,76 +304,193 @@ SPECS = (
     # grants nothing. Upstream teaches these at the same NPC after the quest;
     # this world database has no creature_default_trainer row for any of the
     # three. Filed as a finding, not routed around.
-    Spec(key="swordsmith", label="Master Swordsmith", skill=164,
-         spell=17039, grant=0, quest=5307, quest_title="Corruption",
-         npc=11193, npc_name="Seril Scourgebane", npc_map=1,
-         rival_group=0, req_rank=250, req_level=50,
-         unreachable=(
-             "quest 5307 Corruption exists at Seril Scourgebane and its "
-             "RewardSpell is 0, and no trainer_spell row, quest reward or item "
-             "in this world database teaches 17039 Master Swordsmith. The "
-             "eight crafts behind it cannot be reached by anybody on this "
-             "realm until a world-data fix lands")),
-    Spec(key="hammersmith", label="Master Hammersmith", skill=164,
-         spell=17040, grant=0, quest=5305, quest_title="Sweet Serenity",
-         npc=11191, npc_name="Lilith the Lithe", npc_map=1,
-         rival_group=0, req_rank=250, req_level=50,
-         unreachable=(
-             "quest 5305 Sweet Serenity exists at Lilith the Lithe and its "
-             "RewardSpell is 0, and nothing in this world database teaches "
-             "17040 Master Hammersmith. Its eight crafts are out of everyone's "
-             "reach")),
-    Spec(key="axesmith", label="Master Axesmith", skill=164,
-         spell=17041, grant=0, quest=5306,
-         quest_title="Snakestone of the Shadow Huntress",
-         npc=11192, npc_name="Kilram", npc_map=1,
-         rival_group=0, req_rank=250, req_level=50,
-         unreachable=(
-             "quest 5306 Snakestone of the Shadow Huntress exists at Kilram "
-             "and its RewardSpell is 0, and nothing in this world database "
-             "teaches 17041 Master Axesmith. Its eight crafts are out of "
-             "everyone's reach")),
+    Spec(
+        key="swordsmith",
+        label="Master Swordsmith",
+        skill=164,
+        spell=17039,
+        grant=0,
+        quest=5307,
+        quest_title="Corruption",
+        npc=11193,
+        npc_name="Seril Scourgebane",
+        npc_map=1,
+        rival_group=0,
+        req_rank=250,
+        req_level=50,
+        unreachable=(
+            "quest 5307 Corruption exists at Seril Scourgebane and its "
+            "RewardSpell is 0, and no trainer_spell row, quest reward or item "
+            "in this world database teaches 17039 Master Swordsmith. The "
+            "eight crafts behind it cannot be reached by anybody on this "
+            "realm until a world-data fix lands"
+        ),
+    ),
+    Spec(
+        key="hammersmith",
+        label="Master Hammersmith",
+        skill=164,
+        spell=17040,
+        grant=0,
+        quest=5305,
+        quest_title="Sweet Serenity",
+        npc=11191,
+        npc_name="Lilith the Lithe",
+        npc_map=1,
+        rival_group=0,
+        req_rank=250,
+        req_level=50,
+        unreachable=(
+            "quest 5305 Sweet Serenity exists at Lilith the Lithe and its "
+            "RewardSpell is 0, and nothing in this world database teaches "
+            "17040 Master Hammersmith. Its eight crafts are out of everyone's "
+            "reach"
+        ),
+    ),
+    Spec(
+        key="axesmith",
+        label="Master Axesmith",
+        skill=164,
+        spell=17041,
+        grant=0,
+        quest=5306,
+        quest_title="Snakestone of the Shadow Huntress",
+        npc=11192,
+        npc_name="Kilram",
+        npc_map=1,
+        rival_group=0,
+        req_rank=250,
+        req_level=50,
+        unreachable=(
+            "quest 5306 Snakestone of the Shadow Huntress exists at Kilram "
+            "and its RewardSpell is 0, and nothing in this world database "
+            "teaches 17041 Master Axesmith. Its eight crafts are out of "
+            "everyone's reach"
+        ),
+    ),
     # ---- leatherworking (165) -----------------------------------------------
-    Spec(key="dragonscale", label="Dragonscale Leatherworking", skill=165,
-         spell=10656, grant=10657, quest=5141,
-         quest_title="Dragonscale Leatherworking",
-         npc=7866, npc_name="Peter Galen", npc_map=1,
-         rival_group=5141, req_rank=225, req_level=40),
-    Spec(key="elemental", label="Elemental Leatherworking", skill=165,
-         spell=10658, grant=10659, quest=5144,
-         quest_title="Elemental Leatherworking",
-         npc=7868, npc_name="Sarah Tanner", npc_map=0,
-         rival_group=5141, req_rank=225, req_level=40),
-    Spec(key="tribal", label="Tribal Leatherworking", skill=165,
-         spell=10660, grant=10661, quest=5143,
-         quest_title="Tribal Leatherworking",
-         npc=7870, npc_name="Caryssia Moonhunter", npc_map=1,
-         rival_group=5141, req_rank=225, req_level=40),
+    Spec(
+        key="dragonscale",
+        label="Dragonscale Leatherworking",
+        skill=165,
+        spell=10656,
+        grant=10657,
+        quest=5141,
+        quest_title="Dragonscale Leatherworking",
+        npc=7866,
+        npc_name="Peter Galen",
+        npc_map=1,
+        rival_group=5141,
+        req_rank=225,
+        req_level=40,
+    ),
+    Spec(
+        key="elemental",
+        label="Elemental Leatherworking",
+        skill=165,
+        spell=10658,
+        grant=10659,
+        quest=5144,
+        quest_title="Elemental Leatherworking",
+        npc=7868,
+        npc_name="Sarah Tanner",
+        npc_map=0,
+        rival_group=5141,
+        req_rank=225,
+        req_level=40,
+    ),
+    Spec(
+        key="tribal",
+        label="Tribal Leatherworking",
+        skill=165,
+        spell=10660,
+        grant=10661,
+        quest=5143,
+        quest_title="Tribal Leatherworking",
+        npc=7870,
+        npc_name="Caryssia Moonhunter",
+        npc_map=1,
+        rival_group=5141,
+        req_rank=225,
+        req_level=40,
+    ),
     # ---- tailoring (197) ----------------------------------------------------
-    Spec(key="spellfire", label="Spellfire Tailoring", skill=197,
-         spell=26797, grant=26796, quest=10832,
-         quest_title="Becoming a Spellfire Tailor",
-         npc=22213, npc_name="Gidge Spellweaver", npc_map=530,
-         rival_group=10831, req_rank=325, req_level=60),
-    Spec(key="mooncloth", label="Mooncloth Tailoring", skill=197,
-         spell=26798, grant=26799, quest=10831,
-         quest_title="Becoming a Mooncloth Tailor",
-         npc=22208, npc_name="Nasmara Moonsong", npc_map=530,
-         rival_group=10831, req_rank=325, req_level=60),
-    Spec(key="shadoweave", label="Shadoweave Tailoring", skill=197,
-         spell=26801, grant=26800, quest=10833,
-         quest_title="Becoming a Shadoweave Tailor",
-         npc=22212, npc_name="Andrion Darkspinner", npc_map=530,
-         rival_group=10831, req_rank=325, req_level=60),
+    Spec(
+        key="spellfire",
+        label="Spellfire Tailoring",
+        skill=197,
+        spell=26797,
+        grant=26796,
+        quest=10832,
+        quest_title="Becoming a Spellfire Tailor",
+        npc=22213,
+        npc_name="Gidge Spellweaver",
+        npc_map=530,
+        rival_group=10831,
+        req_rank=325,
+        req_level=60,
+    ),
+    Spec(
+        key="mooncloth",
+        label="Mooncloth Tailoring",
+        skill=197,
+        spell=26798,
+        grant=26799,
+        quest=10831,
+        quest_title="Becoming a Mooncloth Tailor",
+        npc=22208,
+        npc_name="Nasmara Moonsong",
+        npc_map=530,
+        rival_group=10831,
+        req_rank=325,
+        req_level=60,
+    ),
+    Spec(
+        key="shadoweave",
+        label="Shadoweave Tailoring",
+        skill=197,
+        spell=26801,
+        grant=26800,
+        quest=10833,
+        quest_title="Becoming a Shadoweave Tailor",
+        npc=22212,
+        npc_name="Andrion Darkspinner",
+        npc_map=530,
+        rival_group=10831,
+        req_rank=325,
+        req_level=60,
+    ),
     # ---- engineering (202) --------------------------------------------------
-    Spec(key="goblin", label="Goblin Engineer", skill=202,
-         spell=20222, grant=20221, quest=3639, quest_title="Show Your Work",
-         npc=8126, npc_name="Nixx Sprocketspring", npc_map=1,
-         rival_group=3526, req_rank=200, req_level=10),
-    Spec(key="gnomish", label="Gnomish Engineer", skill=202,
-         spell=20219, grant=20220, quest=3641, quest_title="Show Your Work",
-         npc=7944, npc_name="Tinkmaster Overspark", npc_map=0,
-         rival_group=3526, req_rank=200, req_level=10),
+    Spec(
+        key="goblin",
+        label="Goblin Engineer",
+        skill=202,
+        spell=20222,
+        grant=20221,
+        quest=3639,
+        quest_title="Show Your Work",
+        npc=8126,
+        npc_name="Nixx Sprocketspring",
+        npc_map=1,
+        rival_group=3526,
+        req_rank=200,
+        req_level=10,
+    ),
+    Spec(
+        key="gnomish",
+        label="Gnomish Engineer",
+        skill=202,
+        spell=20219,
+        grant=20220,
+        quest=3641,
+        quest_title="Show Your Work",
+        npc=7944,
+        npc_name="Tinkmaster Overspark",
+        npc_map=0,
+        rival_group=3526,
+        req_rank=200,
+        req_level=10,
+    ),
     # ---- alchemy (171) ------------------------------------------------------
     # ALL THREE GATE ZERO CRAFTS, AND THAT IS A MEASUREMENT RATHER THAN AN
     # OMISSION. No trainer_spell row carries ReqAbility1 28672, 28675 or 28677,
@@ -361,19 +500,51 @@ SPECS = (
     # 100% recipe goal this page is about. Listed anyway, because "the alchemy
     # specialization is missing from the hierarchy" is a question somebody will
     # ask, and "it exists and grants no recipes" is the answer.
-    Spec(key="elixir", label="Elixir Master", skill=171,
-         spell=28677, grant=28678, quest=10902, quest_title="Master of Elixirs",
-         npc=19052, npc_name="Lorokeem", npc_map=530,
-         rival_group=10897, req_rank=325, req_level=68),
-    Spec(key="potion", label="Potion Master", skill=171,
-         spell=28675, grant=28676, quest=10897, quest_title="Master of Potions",
-         npc=17909, npc_name="Lauranna Thar'well", npc_map=530,
-         rival_group=10897, req_rank=325, req_level=68),
-    Spec(key="transmute", label="Transmutation Master", skill=171,
-         spell=28672, grant=28674, quest=10899,
-         quest_title="Master of Transmutation",
-         npc=22427, npc_name="Zarevhi", npc_map=530,
-         rival_group=10897, req_rank=325, req_level=68),
+    Spec(
+        key="elixir",
+        label="Elixir Master",
+        skill=171,
+        spell=28677,
+        grant=28678,
+        quest=10902,
+        quest_title="Master of Elixirs",
+        npc=19052,
+        npc_name="Lorokeem",
+        npc_map=530,
+        rival_group=10897,
+        req_rank=325,
+        req_level=68,
+    ),
+    Spec(
+        key="potion",
+        label="Potion Master",
+        skill=171,
+        spell=28675,
+        grant=28676,
+        quest=10897,
+        quest_title="Master of Potions",
+        npc=17909,
+        npc_name="Lauranna Thar'well",
+        npc_map=530,
+        rival_group=10897,
+        req_rank=325,
+        req_level=68,
+    ),
+    Spec(
+        key="transmute",
+        label="Transmutation Master",
+        skill=171,
+        spell=28672,
+        grant=28674,
+        quest=10899,
+        quest_title="Master of Transmutation",
+        npc=22427,
+        npc_name="Zarevhi",
+        npc_map=530,
+        rival_group=10897,
+        req_rank=325,
+        req_level=68,
+    ),
 )
 
 BY_KEY = {spec.key: spec for spec in SPECS}
@@ -415,57 +586,82 @@ class Slot:
 # The names are the LIVE five. `slots_for` puts this table through cast.rename
 # for whichever world a process serves, exactly as professions.roster_for does.
 _LIVE_FAMILY_SLOTS = (
-    Slot(spec_key="armorsmith", holder="Grug", why=(
-        "the operator's own instruction, and the character it already suited: "
-        "Grug is the plate-wearing warrior who tanks, and professions.ROSTER "
-        "pairs his blacksmithing with mining for exactly that reason. "
-        "Armorsmith's twelve crafts are plate and mail armour, including the "
-        "Breastplate of Kings and Bulwark of the Ancient Kings, which is the "
-        "gear he takes hits in. The rival branch, Weaponsmith, makes weapons "
-        "he would have to hand to somebody else")),
-    Slot(spec_key="elemental", holder="Bork", why=(
-        "the only one of the three leatherworking branches whose best work "
-        "Bork can both WEAR and WANT, which is what decided it against the "
-        "branch with more recipes. Bork is a rogue, so he wears LEATHER "
-        "(item_template subclass 2). Dragonscale's eight crafts are every one "
-        "of them MAIL (subclass 3) - the Netherstrike and Ebon Netherscale "
-        "sets - so he could never equip a single thing he made. Tribal's five "
-        "are leather but the Windhawk set is Intellect and Spirit (stat types "
-        "5 and 6), which is a caster druid's and worth nothing to a rogue. "
-        "Elemental's five are leather AND agility: the Primalstrike set is "
-        "epic, item level 115 to 120, and Primalstrike Vest carries Agility "
-        "38, Stamina 39 and hit rating 12, which is rogue itemization exactly. "
-        "Eight recipes he cannot use are worth less than five he can")),
-    Slot(spec_key="spellfire", holder="Og", why=(
-        "Og is the mage, and Spellfire is the only one of the three tailoring "
-        "branches itemized for one. All three make epic cloth robes at item "
-        "level 105 to 120: Spellfire Robe is crit rating 28 and Intellect 17, "
-        "Frozen Shadoweave Robe is Intellect 20 and Stamina 30, and Primal "
-        "Mooncloth Robe is Intellect 20 and Spirit 20. Crit and Intellect is a "
-        "damage caster's; Stamina is a warlock's survivability and Spirit is a "
-        "healer's regeneration, and Og is neither. All three unlock three "
-        "crafts, so nothing was given up on count")),
-    Slot(spec_key="goblin", holder="Grog", why=(
-        "a genuine tie on everything that usually decides, broken on the one "
-        "thing that is measurable today. Gnomish and Goblin unlock NINETEEN "
-        "crafts each, and Grog is a paladin, so neither makes armour he wears "
-        "- rules 1 and 2 above are silent and rule 3 is a draw. What is not a "
-        "draw is where the two trainers stand: Nixx Sprocketspring is on MAP 1 "
-        "in Gadgetzan, which is the continent all five of the family are "
-        "standing on, and Tinkmaster Overspark is on map 0 in Ironforge, which "
-        "ResolveTravelTarget refuses outright because there is no navmesh "
-        "across an ocean. One of the two is a walk and the other is not "
-        "reachable at all, and they unlock the same number of recipes")),
-    Slot(spec_key="elixir", holder="Ugga", why=(
-        "chosen last and worth the least, and that is stated rather than "
-        "dressed up: no alchemy specialization gates a single craft on this "
-        "realm, so this slot moves the 100% goal by exactly zero recipes. "
-        "Measured - nothing in trainer_spell carries ReqAbility1 28672, 28675 "
-        "or 28677 and no recipe item requires one. What the three do is add "
-        "output to a craft the alchemist could already make, so the choice is "
-        "about what the family DRINKS rather than what it can learn. Ugga is "
-        "the priest and the healer, and an elixir or a flask is the thing a "
-        "healer hands out before a fight rather than during one")),
+    Slot(
+        spec_key="armorsmith",
+        holder="Grug",
+        why=(
+            "the operator's own instruction, and the character it already suited: "
+            "Grug is the plate-wearing warrior who tanks, and professions.ROSTER "
+            "pairs his blacksmithing with mining for exactly that reason. "
+            "Armorsmith's twelve crafts are plate and mail armour, including the "
+            "Breastplate of Kings and Bulwark of the Ancient Kings, which is the "
+            "gear he takes hits in. The rival branch, Weaponsmith, makes weapons "
+            "he would have to hand to somebody else"
+        ),
+    ),
+    Slot(
+        spec_key="elemental",
+        holder="Bork",
+        why=(
+            "the only one of the three leatherworking branches whose best work "
+            "Bork can both WEAR and WANT, which is what decided it against the "
+            "branch with more recipes. Bork is a rogue, so he wears LEATHER "
+            "(item_template subclass 2). Dragonscale's eight crafts are every one "
+            "of them MAIL (subclass 3) - the Netherstrike and Ebon Netherscale "
+            "sets - so he could never equip a single thing he made. Tribal's five "
+            "are leather but the Windhawk set is Intellect and Spirit (stat types "
+            "5 and 6), which is a caster druid's and worth nothing to a rogue. "
+            "Elemental's five are leather AND agility: the Primalstrike set is "
+            "epic, item level 115 to 120, and Primalstrike Vest carries Agility "
+            "38, Stamina 39 and hit rating 12, which is rogue itemization exactly. "
+            "Eight recipes he cannot use are worth less than five he can"
+        ),
+    ),
+    Slot(
+        spec_key="spellfire",
+        holder="Og",
+        why=(
+            "Og is the mage, and Spellfire is the only one of the three tailoring "
+            "branches itemized for one. All three make epic cloth robes at item "
+            "level 105 to 120: Spellfire Robe is crit rating 28 and Intellect 17, "
+            "Frozen Shadoweave Robe is Intellect 20 and Stamina 30, and Primal "
+            "Mooncloth Robe is Intellect 20 and Spirit 20. Crit and Intellect is a "
+            "damage caster's; Stamina is a warlock's survivability and Spirit is a "
+            "healer's regeneration, and Og is neither. All three unlock three "
+            "crafts, so nothing was given up on count"
+        ),
+    ),
+    Slot(
+        spec_key="goblin",
+        holder="Grog",
+        why=(
+            "a genuine tie on everything that usually decides, broken on the one "
+            "thing that is measurable today. Gnomish and Goblin unlock NINETEEN "
+            "crafts each, and Grog is a paladin, so neither makes armour he wears "
+            "- rules 1 and 2 above are silent and rule 3 is a draw. What is not a "
+            "draw is where the two trainers stand: Nixx Sprocketspring is on MAP 1 "
+            "in Gadgetzan, which is the continent all five of the family are "
+            "standing on, and Tinkmaster Overspark is on map 0 in Ironforge, which "
+            "ResolveTravelTarget refuses outright because there is no navmesh "
+            "across an ocean. One of the two is a walk and the other is not "
+            "reachable at all, and they unlock the same number of recipes"
+        ),
+    ),
+    Slot(
+        spec_key="elixir",
+        holder="Ugga",
+        why=(
+            "chosen last and worth the least, and that is stated rather than "
+            "dressed up: no alchemy specialization gates a single craft on this "
+            "realm, so this slot moves the 100% goal by exactly zero recipes. "
+            "Measured - nothing in trainer_spell carries ReqAbility1 28672, 28675 "
+            "or 28677 and no recipe item requires one. What the three do is add "
+            "output to a craft the alchemist could already make, so the choice is "
+            "about what the family DRINKS rather than what it can learn. Ugga is "
+            "the priest and the healer, and an elixir or a flask is the thing a "
+            "healer hands out before a fight rather than during one"
+        ),
+    ),
 )
 
 
@@ -477,10 +673,13 @@ def slots_for(which: str | None = None) -> tuple:
     the names of characters in the other world is a plan nobody can check.
     """
     return tuple(
-        Slot(spec_key=slot.spec_key,
-             holder=cast.rename(slot.holder, which),
-             why=cast.retext(slot.why, which))
-        for slot in _LIVE_FAMILY_SLOTS)
+        Slot(
+            spec_key=slot.spec_key,
+            holder=cast.rename(slot.holder, which),
+            why=cast.retext(slot.why, which),
+        )
+        for slot in _LIVE_FAMILY_SLOTS
+    )
 
 
 FAMILY_SLOTS = slots_for()
@@ -499,9 +698,19 @@ FAMILY_SLOTS = slots_for()
 # ELSE in the hierarchy can reach", counted live against the world's own
 # trainer_spell gating, and a typed order would be that count written down
 # twice and allowed to drift. `_order_line` prints the rule above the list.
-_BACKUP_KEYS = ("weaponsmith", "gnomish", "dragonscale", "tribal",
-                "mooncloth", "shadoweave", "potion", "transmute",
-                "swordsmith", "hammersmith", "axesmith")
+_BACKUP_KEYS = (
+    "weaponsmith",
+    "gnomish",
+    "dragonscale",
+    "tribal",
+    "mooncloth",
+    "shadoweave",
+    "potion",
+    "transmute",
+    "swordsmith",
+    "hammersmith",
+    "axesmith",
+)
 
 # THE HARD LIMIT, AND IT IS STATED AT THE TOP OF EVERY VIEW THIS MODULE FEEDS.
 #
@@ -570,14 +779,16 @@ def rivals_of(spec: Spec) -> tuple:
     """
     if not spec.rival_group:
         return ()
-    return tuple(other for other in SPECS
-                 if other.rival_group == spec.rival_group
-                 and other.key != spec.key)
+    return tuple(
+        other
+        for other in SPECS
+        if other.rival_group == spec.rival_group and other.key != spec.key
+    )
 
 
 def chosen_spec(holder: str, slots: Sequence | None = None) -> Spec | None:
     """The specialization this character is meant to end up with, or None."""
-    for slot in (FAMILY_SLOTS if slots is None else slots):
+    for slot in FAMILY_SLOTS if slots is None else slots:
         if slot.holder == holder:
             return BY_KEY[slot.spec_key]
     return None
@@ -619,8 +830,9 @@ def spec_state(spec: Spec, value: int, level: int, held: Sequence) -> str:
     return LEARNABLE
 
 
-def spec_line(spec: Spec, value: int, level: int, held: Sequence,
-              holder: str, on_map: int) -> str:
+def spec_line(
+    spec: Spec, value: int, level: int, held: Sequence, holder: str, on_map: int
+) -> str:
     """What stands between this character and this specialization, in one line.
 
     EVERY GATE IS NAMED SEPARATELY BECAUSE THEY FAIL DIFFERENTLY. Skill is
@@ -636,27 +848,35 @@ def spec_line(spec: Spec, value: int, level: int, held: Sequence,
     if state == UNREACHABLE:
         return "%s: %s" % (spec.label, spec.unreachable)
     if state == BLOCKED_SPEC:
-        shut = ", ".join(rival.label for rival in rivals_of(spec)
-                         if rival in held)
-        return ("%s can never take %s now: %s is exclusive with it and is "
-                "already held" % (holder, spec.label, shut))
+        shut = ", ".join(rival.label for rival in rivals_of(spec) if rival in held)
+        return (
+            "%s can never take %s now: %s is exclusive with it and is "
+            "already held" % (holder, spec.label, shut)
+        )
     gates = []
     if int(value) < spec.req_rank:
-        gates.append("%s %d, and %s has %d, which is %d short"
-                     % (word, spec.req_rank, holder, int(value),
-                        spec.req_rank - int(value)))
+        gates.append(
+            "%s %d, and %s has %d, which is %d short"
+            % (word, spec.req_rank, holder, int(value), spec.req_rank - int(value))
+        )
     if int(level) < spec.req_level:
-        gates.append("character level %d, and %s is %d"
-                     % (spec.req_level, holder, int(level)))
+        gates.append(
+            "character level %d, and %s is %d" % (spec.req_level, holder, int(level))
+        )
     where = reach_line(spec, on_map, holder)
     if not gates:
-        opening = ("%s meets everything quest %d %s asks for, and %s is who "
-                   "hands it over" % (holder, spec.quest, spec.quest_title,
-                                      spec.npc_name))
+        opening = (
+            "%s meets everything quest %d %s asks for, and %s is who "
+            "hands it over" % (holder, spec.quest, spec.quest_title, spec.npc_name)
+        )
         return opening + (". " + where if where else "")
-    return ("quest %d %s asks for %s. %s is who hands it over%s"
-            % (spec.quest, spec.quest_title, ", and ".join(gates),
-               spec.npc_name, ". " + where if where else ""))
+    return "quest %d %s asks for %s. %s is who hands it over%s" % (
+        spec.quest,
+        spec.quest_title,
+        ", and ".join(gates),
+        spec.npc_name,
+        ". " + where if where else "",
+    )
 
 
 def reach_line(spec: Spec, on_map: int, holder: str) -> str:
@@ -670,10 +890,12 @@ def reach_line(spec: Spec, on_map: int, holder: str) -> str:
     """
     if not on_map or int(on_map) == int(spec.npc_map):
         return ""
-    return ("%s stands on map %d and %s is on map %d, which "
-            "ResolveTravelTarget refuses outright: there is no navmesh across "
-            "an ocean, so this is not a long walk, it is a refusal"
-            % (spec.npc_name, spec.npc_map, holder, int(on_map)))
+    return (
+        "%s stands on map %d and %s is on map %d, which "
+        "ResolveTravelTarget refuses outright: there is no navmesh across "
+        "an ocean, so this is not a long walk, it is a refusal"
+        % (spec.npc_name, spec.npc_map, holder, int(on_map))
+    )
 
 
 # ----------------------------------------------------------- the 100% figure --
@@ -719,8 +941,15 @@ def effective_rank(entry: Sequence, world_rank) -> int:
     return max(int(entry[1]), int(entry[2]))
 
 
-def _craft_state(rank: int, acquire: int, gate: int, value: int,
-                 known_spells: frozenset, spell: int, held: Sequence) -> str:
+def _craft_state(
+    rank: int,
+    acquire: int,
+    gate: int,
+    value: int,
+    known_spells: frozenset,
+    spell: int,
+    held: Sequence,
+) -> str:
     """Which of the five states one craft is in for one holder.
 
     THE ACQUIRE METHOD IS CHECKED BEFORE THE SPELLBOOK AND THE ORDER MATTERS.
@@ -764,9 +993,15 @@ def _percent(known: int, total: int) -> int:
     return min(100, (known * 100) // total)
 
 
-def profession_completion(skill: int, crafts: Mapping, holders: Sequence,
-                          gates: Mapping, ranks: Mapping, known_by: Mapping,
-                          slots: Sequence | None = None) -> dict:
+def profession_completion(
+    skill: int,
+    crafts: Mapping,
+    holders: Sequence,
+    gates: Mapping,
+    ranks: Mapping,
+    known_by: Mapping,
+    slots: Sequence | None = None,
+) -> dict:
     """How far one profession is along the road to every recipe in it.
 
     `crafts` is craftbook.json's entry for this skill line: spell id -> [name,
@@ -790,9 +1025,15 @@ def profession_completion(skill: int, crafts: Mapping, holders: Sequence,
     counts = {state: 0 for state in STATE_ORDER}
     for spell, entry in crafts.items():
         spell = int(spell)
-        state = _craft_state(effective_rank(entry, ranks.get(spell)),
-                             int(entry[3]), int(gates.get(spell, 0)), value,
-                             known_spells, spell, held)
+        state = _craft_state(
+            effective_rank(entry, ranks.get(spell)),
+            int(entry[3]),
+            int(gates.get(spell, 0)),
+            value,
+            known_spells,
+            spell,
+            held,
+        )
         counts[state] += 1
     total = sum(counts.values())
     return {
@@ -826,8 +1067,7 @@ def _count_chips(counts: Mapping) -> list:
     return out
 
 
-def _completion_line(word: str, holder: str, counts: Mapping,
-                     total: int) -> str:
+def _completion_line(word: str, holder: str, counts: Mapping, total: int) -> str:
     """One profession's standing, counted rather than judged.
 
     Every state that is non-zero is named. A sentence that reported only the
@@ -836,25 +1076,36 @@ def _completion_line(word: str, holder: str, counts: Mapping,
     crafter, and unreachable is a world-data fix nobody here can make.
     """
     if not holder:
-        return ("nobody holds %s, so all %d of its crafts are behind somebody "
-                "taking the trade" % (word, total))
-    said = ["%s knows %d of the %d crafts on the %s skill line, which is %d%%"
-            % (holder, counts[KNOWN], total, word,
-               _percent(counts[KNOWN], total))]
+        return (
+            "nobody holds %s, so all %d of its crafts are behind somebody "
+            "taking the trade" % (word, total)
+        )
+    said = [
+        "%s knows %d of the %d crafts on the %s skill line, which is %d%%"
+        % (holder, counts[KNOWN], total, word, _percent(counts[KNOWN], total))
+    ]
     if counts[LEARNABLE]:
-        said.append("%d more are under the skill already ground and are a "
-                    "trainer visit or a recipe away" % counts[LEARNABLE])
+        said.append(
+            "%d more are under the skill already ground and are a "
+            "trainer visit or a recipe away" % counts[LEARNABLE]
+        )
     if counts[BLOCKED_SKILL]:
         said.append("%d sit above that skill" % counts[BLOCKED_SKILL])
     if counts[BLOCKED_SPEC]:
-        said.append("%d are behind a specialization this character has not "
-                    "taken, which needs a second crafter rather than more "
-                    "grinding" % counts[BLOCKED_SPEC])
+        said.append(
+            "%d are behind a specialization this character has not "
+            "taken, which needs a second crafter rather than more "
+            "grinding" % counts[BLOCKED_SPEC]
+        )
     if counts[UNREACHABLE]:
-        said.append("%d cannot be reached by anybody on this realm"
-                    % counts[UNREACHABLE])
-    return ", and ".join(said) if len(said) == 1 else (
-        said[0] + ". " + "; ".join(said[1:]))
+        said.append(
+            "%d cannot be reached by anybody on this realm" % counts[UNREACHABLE]
+        )
+    return (
+        ", and ".join(said)
+        if len(said) == 1
+        else (said[0] + ". " + "; ".join(said[1:]))
+    )
 
 
 def overall_line(professions_done: Sequence) -> str:
@@ -862,18 +1113,21 @@ def overall_line(professions_done: Sequence) -> str:
     total = sum(row["total"] for row in professions_done)
     known = sum(row["known"] for row in professions_done)
     if not total:
-        return ("nothing here could read a craft list, so there is no "
-                "completion figure to give")
-    return ("%d of %d crafts known across %d professions, which is %d%% of "
-            "every recipe in the game for the trades this guild touches"
-            % (known, total, len(professions_done), _percent(known, total)))
+        return (
+            "nothing here could read a craft list, so there is no "
+            "completion figure to give"
+        )
+    return (
+        "%d of %d crafts known across %d professions, which is %d%% of "
+        "every recipe in the game for the trades this guild touches"
+        % (known, total, len(professions_done), _percent(known, total))
+    )
 
 
 # -------------------------------------------------------------- the ladder --
 
 
-def _slot_row(spec: Spec, holder: str, why: str, unlocks: int,
-              exclusive: int) -> dict:
+def _slot_row(spec: Spec, holder: str, why: str, unlocks: int, exclusive: int) -> dict:
     """One rung, with what it is worth and who is on it."""
     return {
         "spec": spec.key,
@@ -907,9 +1161,12 @@ def _rung_chips(spec: Spec, holder: str, unlocks: int) -> list:
     else:
         chips = [{"text": "nobody in this slot", "tone": "unsure"}]
     chips.append({"text": _skill_word(spec.skill), "tone": ""})
-    chips.append({"text": ("%d crafts" % unlocks) if unlocks != 1
-                          else "1 craft",
-                  "tone": "" if unlocks else "unsure"})
+    chips.append(
+        {
+            "text": ("%d crafts" % unlocks) if unlocks != 1 else "1 craft",
+            "tone": "" if unlocks else "unsure",
+        }
+    )
     return chips
 
 
@@ -931,27 +1188,38 @@ def _slot_line(spec: Spec, holder: str, unlocks: int, exclusive: int) -> str:
     """
     what = ("%d crafts" % unlocks) if unlocks != 1 else "1 craft"
     if spec.unreachable:
-        return ("%s: %s are gated on it and nobody on this realm can take it. "
-                "%s" % (spec.label, what, spec.unreachable))
+        return "%s: %s are gated on it and nobody on this realm can take it. %s" % (
+            spec.label,
+            what,
+            spec.unreachable,
+        )
     if holder and not unlocks:
-        return ("%s takes %s for the family, and it unlocks no recipe at all: "
-                "this branch adds output to crafts they could already make, so "
-                "it moves the completion figure by nothing and was chosen on "
-                "what the family drinks rather than on what it can learn"
-                % (holder, spec.label))
+        return (
+            "%s takes %s for the family, and it unlocks no recipe at all: "
+            "this branch adds output to crafts they could already make, so "
+            "it moves the completion figure by nothing and was chosen on "
+            "what the family drinks rather than on what it can learn"
+            % (holder, spec.label)
+        )
     if holder:
-        return ("%s takes %s for the family, first in line for the %s behind it"
-                % (holder, spec.label, what))
+        return "%s takes %s for the family, first in line for the %s behind it" % (
+            holder,
+            spec.label,
+            what,
+        )
     if not unlocks:
-        return ("%s is an empty BACKUP SLOT that is not worth filling: it "
-                "gates no craft on this realm, so recruiting for it would add "
-                "nothing to the %d%% figure above" % (spec.label, 0))
-    return ("%s is a BACKUP SLOT with nobody in it: %s are behind it, and no "
-            "member of the family can ever take it because the family's own %s "
-            "has taken an exclusive rival branch. Only a recruited %s who "
-            "chooses this branch can reach them"
-            % (spec.label, what, _skill_word(spec.skill),
-               _skill_word(spec.skill)))
+        return (
+            "%s is an empty BACKUP SLOT that is not worth filling: it "
+            "gates no craft on this realm, so recruiting for it would add "
+            "nothing to the %d%% figure above" % (spec.label, 0)
+        )
+    return (
+        "%s is a BACKUP SLOT with nobody in it: %s are behind it, and no "
+        "member of the family can ever take it because the family's own %s "
+        "has taken an exclusive rival branch. Only a recruited %s who "
+        "chooses this branch can reach them"
+        % (spec.label, what, _skill_word(spec.skill), _skill_word(spec.skill))
+    )
 
 
 def _order_line() -> str:
@@ -967,7 +1235,8 @@ def _order_line() -> str:
         "guild's recipe coverage is at the top. Then the specializations this "
         "realm has no route to at all, last, because no recruiting fills those. "
         "The count beside each rung is crafts gated on that specialization in "
-        "trainer_spell and in the recipe items, counted live and not typed in.")
+        "trainer_spell and in the recipe items, counted live and not typed in."
+    )
 
 
 def hierarchy(gates: Mapping, slots: Sequence | None = None) -> list:
@@ -984,10 +1253,15 @@ def hierarchy(gates: Mapping, slots: Sequence | None = None) -> list:
 
     by_holder = {slot.spec_key: slot for slot in slots}
     family = [
-        _slot_row(BY_KEY[slot.spec_key], slot.holder, slot.why,
-                  unlocks.get(BY_KEY[slot.spec_key].spell, 0),
-                  unlocks.get(BY_KEY[slot.spec_key].spell, 0))
-        for slot in slots]
+        _slot_row(
+            BY_KEY[slot.spec_key],
+            slot.holder,
+            slot.why,
+            unlocks.get(BY_KEY[slot.spec_key].spell, 0),
+            unlocks.get(BY_KEY[slot.spec_key].spell, 0),
+        )
+        for slot in slots
+    ]
     family.sort(key=lambda row: (-row["unlocks"], row["label"]))
 
     backups = []
@@ -996,8 +1270,9 @@ def hierarchy(gates: Mapping, slots: Sequence | None = None) -> list:
         spec = BY_KEY[key]
         if key in by_holder:
             continue
-        row = _slot_row(spec, "", "", unlocks.get(spec.spell, 0),
-                        unlocks.get(spec.spell, 0))
+        row = _slot_row(
+            spec, "", "", unlocks.get(spec.spell, 0), unlocks.get(spec.spell, 0)
+        )
         (unreachable if spec.unreachable else backups).append(row)
     backups.sort(key=lambda row: (-row["unlocks"], row["label"]))
     unreachable.sort(key=lambda row: (-row["unlocks"], row["label"]))
@@ -1025,18 +1300,21 @@ def coverage_gaps(holders_by_skill: Mapping) -> list:
         if skill is None or holders_by_skill.get(skill):
             continue
         deliberate = word in professions.UNASSIGNED
-        out.append({
-            "name": word,
-            "skill": skill,
-            "deliberate": deliberate,
-            "line": (
-                "%s: nobody holds it, and the family's own trade table leaves "
-                "it open on purpose for the guild to cover, so it is a "
-                "decision waiting on members rather than a mistake" % word
-                if deliberate else
-                "%s: nobody in the guild holds it, so every craft on its skill "
-                "line is behind somebody taking the trade" % word),
-        })
+        out.append(
+            {
+                "name": word,
+                "skill": skill,
+                "deliberate": deliberate,
+                "line": (
+                    "%s: nobody holds it, and the family's own trade table leaves "
+                    "it open on purpose for the guild to cover, so it is a "
+                    "decision waiting on members rather than a mistake" % word
+                    if deliberate
+                    else "%s: nobody in the guild holds it, so every craft on its skill "
+                    "line is behind somebody taking the trade" % word
+                ),
+            }
+        )
     return out
 
 
@@ -1081,10 +1359,15 @@ def craft_facts(craft_rows: Sequence) -> tuple:
     return ranks, gates
 
 
-def build_tradespec(craftbook: Mapping, craft_rows: Sequence,
-                    skill_rows: Sequence, spell_rows: Sequence,
-                    member_rows: Sequence, roster: Sequence,
-                    slots: Sequence | None = None) -> dict:
+def build_tradespec(
+    craftbook: Mapping,
+    craft_rows: Sequence,
+    skill_rows: Sequence,
+    spell_rows: Sequence,
+    member_rows: Sequence,
+    roster: Sequence,
+    slots: Sequence | None = None,
+) -> dict:
     """The whole view: the 100% figure, the ladder, and what stops both.
 
     `craftbook` is the committed projection of SkillLineAbility.dbc joined to
@@ -1109,12 +1392,14 @@ def build_tradespec(craftbook: Mapping, craft_rows: Sequence,
     for row in skill_rows:
         if row["name"] not in wanted:
             continue
-        holders_by_skill.setdefault(int(row["skill"]), []).append({
-            "who": row["name"],
-            "value": int(row.get("value") or 0),
-            "max": int(row.get("max") or 0),
-            "level": levels.get(row["name"], 0),
-        })
+        holders_by_skill.setdefault(int(row["skill"]), []).append(
+            {
+                "who": row["name"],
+                "value": int(row.get("value") or 0),
+                "max": int(row.get("max") or 0),
+                "level": levels.get(row["name"], 0),
+            }
+        )
     for found in holders_by_skill.values():
         found.sort(key=lambda h: (-h["value"], -h["max"], h["who"]))
 
@@ -1125,17 +1410,26 @@ def build_tradespec(craftbook: Mapping, craft_rows: Sequence,
         crafts = craftbook[str(skill)]
         if not crafts:
             continue
-        done.append(profession_completion(skill, crafts,
-                                          holders_by_skill.get(skill, []),
-                                          gates, ranks, known_by, slots))
+        done.append(
+            profession_completion(
+                skill,
+                crafts,
+                holders_by_skill.get(skill, []),
+                gates,
+                ranks,
+                known_by,
+                slots,
+            )
+        )
     done.sort(key=lambda row: (-row["percent"], row["name"]))
 
     ladder = hierarchy(gates, slots)
     specs = _spec_cards(holders_by_skill, known_by, maps, slots)
     return {
         "line": overall_line(done),
-        "percent": _percent(sum(row["known"] for row in done),
-                            sum(row["total"] for row in done)),
+        "percent": _percent(
+            sum(row["known"] for row in done), sum(row["total"] for row in done)
+        ),
         "professions": done,
         "specs": specs,
         "hierarchy": ladder,
@@ -1148,20 +1442,27 @@ def build_tradespec(craftbook: Mapping, craft_rows: Sequence,
         # committed file, so it is absent exactly when a container was built
         # without it - and a row of 0% across fourteen professions is a claim
         # somebody would act on.
-        "empty_note": ("craftbook.json could not be read, so there is no list "
-                       "of crafts to measure against and every figure here "
-                       "would be zero. That is a missing file in this "
-                       "container and not a guild that knows nothing."
-                       if not done else ""),
+        "empty_note": (
+            "craftbook.json could not be read, so there is no list "
+            "of crafts to measure against and every figure here "
+            "would be zero. That is a missing file in this "
+            "container and not a guild that knows nothing."
+            if not done
+            else ""
+        ),
         "basis": _basis(bool(gates)),
     }
 
 
-def _spec_cards(holders_by_skill: Mapping, known_by: Mapping, maps: Mapping,
-                slots: Sequence | None = None) -> list:
+def _spec_cards(
+    holders_by_skill: Mapping,
+    known_by: Mapping,
+    maps: Mapping,
+    slots: Sequence | None = None,
+) -> list:
     """Each family member's own specialization, and what stands in the way."""
     out = []
-    for slot in (FAMILY_SLOTS if slots is None else slots):
+    for slot in FAMILY_SLOTS if slots is None else slots:
         spec = BY_KEY[slot.spec_key]
         holders = holders_by_skill.get(spec.skill, [])
         mine = next((h for h in holders if h["who"] == slot.holder), None)
@@ -1170,22 +1471,27 @@ def _spec_cards(holders_by_skill: Mapping, known_by: Mapping, maps: Mapping,
         held = held_specs(known_by.get(slot.holder, ()))
         state = spec_state(spec, value, level, held)
         word, tone = SPEC_WORDS[state]
-        out.append({
-            "spec": spec.key,
-            "label": spec.label,
-            "holder": slot.holder,
-            "profession": _skill_word(spec.skill),
-            "skill": spec.skill,
-            "quest": spec.quest,
-            "quest_title": spec.quest_title,
-            "npc": spec.npc_name,
-            "state": state,
-            "why": slot.why,
-            "line": spec_line(spec, value, level, held, slot.holder,
-                              maps.get(slot.holder, 0)),
-            "chips": [{"text": word, "tone": tone},
-                      {"text": _skill_word(spec.skill), "tone": ""}],
-        })
+        out.append(
+            {
+                "spec": spec.key,
+                "label": spec.label,
+                "holder": slot.holder,
+                "profession": _skill_word(spec.skill),
+                "skill": spec.skill,
+                "quest": spec.quest,
+                "quest_title": spec.quest_title,
+                "npc": spec.npc_name,
+                "state": state,
+                "why": slot.why,
+                "line": spec_line(
+                    spec, value, level, held, slot.holder, maps.get(slot.holder, 0)
+                ),
+                "chips": [
+                    {"text": word, "tone": tone},
+                    {"text": _skill_word(spec.skill), "tone": ""},
+                ],
+            }
+        )
     return out
 
 
@@ -1199,11 +1505,12 @@ def _basis(gated: bool) -> str:
     gate_note = (
         "Which crafts sit behind a specialization is trainer_spell.ReqAbility1 "
         "in this realm's own world database, read live."
-        if gated else
-        "trainer_spell returned no ReqAbility1 rows this time, so NO craft is "
+        if gated
+        else "trainer_spell returned no ReqAbility1 rows this time, so NO craft is "
         "reported as specialization-gated. That is a missing read and not a "
         "profession without branches: the counts beside the hierarchy rungs "
-        "will all be zero and should not be believed.")
+        "will all be zero and should not be believed."
+    )
     return (
         "THE COUNT OF WHAT IS KNOWN IS PART OBSERVED AND PART COUNTED, and the "
         "difference is not decoration. A craft whose SkillLineAbility "
@@ -1215,8 +1522,9 @@ def _basis(gated: bool) -> str:
         "Bolt of Linen Cloth and one of the family was watched casting it. So "
         "an AcquireMethod 1 craft at or under the holder's skill is COUNTED as "
         "known here rather than observed, and the true figure could be lower "
-        "if the world refuses one for a reason this page cannot see. " +
-        gate_note + " The denominator is every ability on the profession's "
+        "if the world refuses one for a reason this page cannot see. "
+        + gate_note
+        + " The denominator is every ability on the profession's "
         "skill line out of SkillLineAbility.dbc, committed as craftbook.json "
         "by tools/craftbook_from_dbc.py and regenerated from the DBCs inside "
         "the running worldserver's own image. It is deliberately NOT "

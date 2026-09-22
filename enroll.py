@@ -26,6 +26,7 @@ fact comes in as an argument and a plan comes out; the adapter
 lets the stdlib suite run the real statements against a real two-cohort table
 instead of against a description of one.
 """
+
 from __future__ import annotations
 
 import dataclasses
@@ -233,6 +234,7 @@ class Candidate:
     that could not tell that apart from a level-1 guildless Horde character
     would enrol a typo.
     """
+
     name: str
     exists: bool = False
     race: int = 0
@@ -244,6 +246,7 @@ class Candidate:
 @dataclasses.dataclass(frozen=True)
 class Refusal:
     """One candidate that will not be enrolled, and the sentence saying why."""
+
     name: str
     reason: str
 
@@ -256,6 +259,7 @@ class Plan:
     `rows` is empty no matter how good the candidates were. That ordering is
     the fail-closed one, and `tests/test_enroll.py` pins it.
     """
+
     cohort: str
     rows: tuple[dict, ...] = ()
     skipped: tuple[Refusal, ...] = ()
@@ -285,9 +289,15 @@ def row_for(name: str, cohort: str) -> dict:
 _SKIPS = frozenset({ALREADY_HERE})
 
 
-def blocked_by(*, cohort: str, home_cohort: str | None,
-               has_family_column: bool, module_reads_family: bool,
-               count: int, limit: int) -> str:
+def blocked_by(
+    *,
+    cohort: str,
+    home_cohort: str | None,
+    has_family_column: bool,
+    module_reads_family: bool,
+    count: int,
+    limit: int,
+) -> str:
     """The whole-batch gates, in the order they are checked, or '' to proceed.
 
     SPLIT OUT OF `plan` RATHER THAN INLINE, so that "what stops the whole
@@ -351,9 +361,15 @@ def verdict(candidate: Candidate, cohort: str) -> str:
     return ""
 
 
-def plan(candidates, *, cohort: str, home_cohort: str | None,
-         has_family_column: bool, module_reads_family: bool,
-         limit: int = DEFAULT_LIMIT) -> Plan:
+def plan(
+    candidates,
+    *,
+    cohort: str,
+    home_cohort: str | None,
+    has_family_column: bool,
+    module_reads_family: bool,
+    limit: int = DEFAULT_LIMIT,
+) -> Plan:
     """Who may be enrolled into `cohort`, and what stops the whole batch.
 
     THE TWO GATES, AND WHY NEITHER IS OPTIONAL. Both are facts about the
@@ -400,10 +416,12 @@ def plan(candidates, *, cohort: str, home_cohort: str | None,
     cohort = (cohort or "").strip()
     wanted = list(candidates)
     blocked = blocked_by(
-        cohort=cohort, home_cohort=home_cohort,
+        cohort=cohort,
+        home_cohort=home_cohort,
         has_family_column=has_family_column,
         module_reads_family=module_reads_family,
-        count=len(wanted), limit=limit,
+        count=len(wanted),
+        limit=limit,
     )
     if blocked:
         return Plan(cohort=cohort, blocked=blocked)
@@ -432,8 +450,9 @@ def plan(candidates, *, cohort: str, home_cohort: str | None,
             # character name has to show the operator what they actually typed.
             refused.append(Refusal(name=candidate.name, reason=reason))
 
-    return Plan(cohort=cohort, rows=tuple(rows), skipped=tuple(skipped),
-                refused=tuple(refused))
+    return Plan(
+        cohort=cohort, rows=tuple(rows), skipped=tuple(skipped), refused=tuple(refused)
+    )
 
 
 # INSERT, NOT INSERT IGNORE, AND THAT IS THE OPPOSITE CHOICE TO
@@ -474,25 +493,25 @@ def statements(plan_: Plan) -> tuple[tuple[str, tuple], ...]:
     """
     if plan_.blocked:
         return ()
-    return tuple(
-        (INSERT_SQL, tuple(row[c] for c in _COLUMNS))
-        for row in plan_.rows
-    )
+    return tuple((INSERT_SQL, tuple(row[c] for c in _COLUMNS)) for row in plan_.rows)
 
 
 def report(plan_: Plan) -> str:
     """One sentence an operator reads before anything is written."""
     if plan_.blocked:
-        return ("enrollment into %r is refused: %s"
-                % (plan_.cohort, plan_.blocked))
+        return "enrollment into %r is refused: %s" % (plan_.cohort, plan_.blocked)
     parts = ["%d to enrol into %r" % (len(plan_.rows), plan_.cohort)]
     if plan_.skipped:
-        parts.append("%d already there (%s)"
-                     % (len(plan_.skipped),
-                        ", ".join(r.name for r in plan_.skipped)))
+        parts.append(
+            "%d already there (%s)"
+            % (len(plan_.skipped), ", ".join(r.name for r in plan_.skipped))
+        )
     if plan_.refused:
-        parts.append("%d refused (%s)"
-                     % (len(plan_.refused),
-                        ", ".join("%s: %s" % (r.name, r.reason)
-                                  for r in plan_.refused)))
+        parts.append(
+            "%d refused (%s)"
+            % (
+                len(plan_.refused),
+                ", ".join("%s: %s" % (r.name, r.reason) for r in plan_.refused),
+            )
+        )
     return "; ".join(parts)

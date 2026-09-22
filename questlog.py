@@ -37,6 +37,7 @@ right now and how far along is it", for a person looking at a phone. They read
 the same two tables and share nothing else; folding them together would give
 one module two audiences and two reasons to change.
 """
+
 from __future__ import annotations
 
 import bonds
@@ -94,9 +95,9 @@ OUTLEVEL_GAP = 8
 
 # The words a quest's status renders as. Named here so the page and the tests
 # agree on the vocabulary, the same way family.py owns DEAD/HURT/OK/GONE.
-READY = "ready"        # complete, and the walk to the questgiver is all that is left
-ACTIVE = "active"      # in progress
-STUCK = "failed"       # failed, still holding its slot
+READY = "ready"  # complete, and the walk to the questgiver is all that is left
+ACTIVE = "active"  # in progress
+STUCK = "failed"  # failed, still holding its slot
 
 _STATUS_WORDS = {COMPLETE: READY, INCOMPLETE: ACTIVE, FAILED: STUCK}
 
@@ -207,8 +208,12 @@ def _objectives(row: dict, names: dict) -> list[dict]:
         elif target is None:
             what = "them"
         else:
-            what = _named(names, target[0], target[1],
-                          "creature" if target[0] == "creatures" else "object")
+            what = _named(
+                names,
+                target[0],
+                target[1],
+                "creature" if target[0] == "creatures" else "object",
+            )
         out.append(_objective(what, row.get("mobcount%d" % i), need))
     for i in range(1, ITEM_SLOTS + 1):
         need = int(row.get("RequiredItemCount%d" % i) or 0)
@@ -293,8 +298,14 @@ def _sort_key(quest: dict) -> tuple:
     return (quest["bucket"], -quest["level"], quest["id"])
 
 
-def _member(name: str, char_row: dict | None, rows: list[dict], names: dict,
-            holders: dict, turned_in: int) -> dict:
+def _member(
+    name: str,
+    char_row: dict | None,
+    rows: list[dict],
+    names: dict,
+    holders: dict,
+    turned_in: int,
+) -> dict:
     # bonds.member, not bonds.FAMILY[name]: the persona table holds ONE
     # family, and indexing it was a KeyError for every member of the other,
     # which is why the second family's tab could only ever be handed the
@@ -324,8 +335,9 @@ def _member(name: str, char_row: dict | None, rows: list[dict], names: dict,
         "role": role,
         "present": True,
         "level": level,
-        "class": _CLASS_NAMES.get(int(char_row["class"]),
-                                 "class %s" % char_row["class"]),
+        "class": _CLASS_NAMES.get(
+            int(char_row["class"]), "class %s" % char_row["class"]
+        ),
         "class_colour": _class_colour(char_row["class"]),
         "online": bool(char_row.get("online")),
         # THE #73 NUMBERS. used/slots is the whole defect, and it is one
@@ -357,8 +369,10 @@ def _holders(rows: list[dict], roster: list[str] | None = None) -> dict:
     found: dict[int, set] = {}
     for row in rows:
         found.setdefault(int(row["quest"]), set()).add(row["name"])
-    return {quest: sorted(names, key=lambda n: order.get(n, len(order)))
-            for quest, names in found.items()}
+    return {
+        quest: sorted(names, key=lambda n: order.get(n, len(order)))
+        for quest, names in found.items()
+    }
 
 
 def _turn_in_spread(members: list[dict]) -> dict | None:
@@ -388,8 +402,7 @@ def _class_colour(class_id) -> str:
     return CLASS_COLOURS.get(int(class_id or 0), "#ffffff")
 
 
-def party(party_rows: list[dict] | None,
-          roster: list[str] | None = None) -> dict:
+def party(party_rows: list[dict] | None, roster: list[str] | None = None) -> dict:
     """Who is grouped with whom, and who leads, from the fresh snapshot rows.
 
     `party_rows` are {guid, name, group_leader} for whoever the snapshot
@@ -484,8 +497,15 @@ def _done_by_quest(done_rows: list[dict] | None, holders: dict) -> dict[int, set
     return done
 
 
-def _person(name: str, role: str, member: dict, own_row: dict | None,
-            names: dict, leader: str | None, turned_in: bool) -> dict:
+def _person(
+    name: str,
+    role: str,
+    member: dict,
+    own_row: dict | None,
+    names: dict,
+    leader: str | None,
+    turned_in: bool,
+) -> dict:
     objectives = _objectives(own_row, names) if own_row else []
     return {
         "name": name,
@@ -504,11 +524,19 @@ def _furthest(people: list[dict], order: dict) -> dict | None:
     return max(
         (p for p in people if p["role"] in (ON, HAND_IN)),
         key=lambda p: (p["progress_pct"] or 0, -order.get(p["name"], 0)),
-        default=None)
+        default=None,
+    )
 
 
-def _board_row(qid: int, row: dict, people: list[dict], statuses: dict,
-               per_holder: dict, names: dict, order: dict) -> dict:
+def _board_row(
+    qid: int,
+    row: dict,
+    people: list[dict],
+    statuses: dict,
+    per_holder: dict,
+    names: dict,
+    order: dict,
+) -> dict:
     # The row's own objectives are the FURTHEST holder's. Five holders are
     # five counters, and drawing all of them is the repetition the board
     # exists to remove; each portrait carries its own number.
@@ -531,9 +559,14 @@ def _board_row(qid: int, row: dict, people: list[dict], statuses: dict,
     }
 
 
-def build_board(members: list[dict], quest_rows: list[dict], names: dict,
-                done_rows: list[dict] | None, party_rows: list[dict] | None,
-                roster: list[str] | None = None) -> dict:
+def build_board(
+    members: list[dict],
+    quest_rows: list[dict],
+    names: dict,
+    done_rows: list[dict] | None,
+    party_rows: list[dict] | None,
+    roster: list[str] | None = None,
+) -> dict:
     """ONE quest board for the family, deduped by quest id (infra#88).
 
     The per-member logs answer "what is in Ugga's log"; this answers "what is
@@ -558,13 +591,20 @@ def build_board(members: list[dict], quest_rows: list[dict], names: dict,
     for qid, row in template.items():
         roles = _roles(qid, holders, grouping["groups"], done)
         people = [
-            _person(name, roles[name], by_name.get(name, {}),
-                    per_holder.get((qid, name)), names, leader,
-                    name in done.get(qid, ()))
+            _person(
+                name,
+                roles[name],
+                by_name.get(name, {}),
+                per_holder.get((qid, name)),
+                names,
+                leader,
+                name in done.get(qid, ()),
+            )
             for name in sorted(roles, key=lambda n: order.get(n, len(order)))
         ]
-        rows.append(_board_row(qid, row, people, holders[qid], per_holder,
-                               names, order))
+        rows.append(
+            _board_row(qid, row, people, holders[qid], per_holder, names, order)
+        )
     rows.sort(key=_board_sort_key)
     return {
         "rows": rows,
@@ -574,11 +614,15 @@ def build_board(members: list[dict], quest_rows: list[dict], names: dict,
     }
 
 
-def build_questlog(char_rows: list[dict], quest_rows: list[dict],
-                   rewarded_rows: list[dict], names: dict,
-                   done_rows: list[dict] | None = None,
-                   party_rows: list[dict] | None = None,
-                   roster: list[str] | None = None) -> dict:
+def build_questlog(
+    char_rows: list[dict],
+    quest_rows: list[dict],
+    rewarded_rows: list[dict],
+    names: dict,
+    done_rows: list[dict] | None = None,
+    party_rows: list[dict] | None = None,
+    roster: list[str] | None = None,
+) -> dict:
     """Five quest logs, side by side and in roster order.
 
     All four inputs arrive keyed by character name or entry id and unfiltered;
@@ -609,16 +653,21 @@ def build_questlog(char_rows: list[dict], quest_rows: list[dict],
         by_member.setdefault(row["name"], []).append(row)
     holders = _holders(quest_rows, roster)
     members = [
-        _member(name, chars.get(name), by_member.get(name, []), names, holders,
-                turned_in.get(name, 0))
+        _member(
+            name,
+            chars.get(name),
+            by_member.get(name, []),
+            names,
+            holders,
+            turned_in.get(name, 0),
+        )
         for name in roster
     ]
     alone = sum(1 for who in holders.values() if len(who) <= 1)
     everyone = sum(1 for who in holders.values() if len(who) >= len(members))
     return {
         "members": members,
-        "board": build_board(members, quest_rows, names, done_rows, party_rows,
-                             roster),
+        "board": build_board(members, quest_rows, names, done_rows, party_rows, roster),
         "slots": LOG_SLOTS,
         "expected": len(members),
         # Distinct quests, not rows: five characters holding the same quest is

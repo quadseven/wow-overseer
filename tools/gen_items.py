@@ -56,6 +56,7 @@ slot and would double the file for nothing.
 
 Usage: python3 gen_items.py <dbc_dir> <out_dir>
 """
+
 from __future__ import annotations
 
 import json
@@ -253,7 +254,7 @@ class Expander:
             # The client pluralises on the number just before the macro; a
             # description that puts it elsewhere gets the plural, which is
             # the reading that is wrong least often ("N charges").
-            before = text[:m.start()].rstrip()
+            before = text[: m.start()].rstrip()
             last = re.search(r"(\d+)\s*$", before)
             return m.group(1) if last and last.group(1) == "1" else m.group(2)
 
@@ -310,8 +311,9 @@ def freeze_enchants(dbc_dir: str) -> tuple[dict, set[int]]:
     wanted: set[int] = set()
     for r in enchant_rows:
         effects = []
-        effect_columns = zip(r[ENCHANT_EFFECTS], r[ENCHANT_MIN], r[ENCHANT_ARGS],
-                             strict=True)
+        effect_columns = zip(
+            r[ENCHANT_EFFECTS], r[ENCHANT_MIN], r[ENCHANT_ARGS], strict=True
+        )
         for kind, amount, arg in effect_columns:
             if kind:
                 effects.append([kind, amount, arg])
@@ -330,8 +332,11 @@ def freeze_random(dbc_dir: str) -> tuple[dict, dict, dict]:
     suffixes = {
         str(r[0]): [
             cstr(suffix_strings, r[SUFFIX_NAME]),
-            [[e, pct]
-             for e, pct in zip(r[SUFFIX_ENCHANTS], r[SUFFIX_PCT], strict=True) if e],
+            [
+                [e, pct]
+                for e, pct in zip(r[SUFFIX_ENCHANTS], r[SUFFIX_PCT], strict=True)
+                if e
+            ],
         ]
         for r in suffix_rows
     }
@@ -406,9 +411,11 @@ def main(dbc_dir: str, out_dir: str) -> None:
             # machine-read, and nobody hand-edits it.
             json.dump(book, f, separators=(",", ":"), sort_keys=True)
             f.write("\n")
-    print(f"icons: {len(icons['display'])}  spells: {len(spells)}  sets: {len(sets)}  "
-          f"enchants: {len(enchants)}  suffixes: {len(suffixes)}  "
-          f"properties: {len(properties)}")
+    print(
+        f"icons: {len(icons['display'])}  spells: {len(spells)}  sets: {len(sets)}  "
+        f"enchants: {len(enchants)}  suffixes: {len(suffixes)}  "
+        f"properties: {len(properties)}"
+    )
 
 
 if __name__ == "__main__":

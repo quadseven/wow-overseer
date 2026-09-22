@@ -1,0 +1,10 @@
+# ruff config for the standard lint (infra#995).
+
+[format]
+# bridge.py and map_server.py are read as TEXT by ~110 source-shape tests
+# (tests/ grep them for the order and wording of statements). Reformatting
+# them moves those statements across lines, and the tests fail with no
+# behavior change. The linter still covers both files; only the formatter
+# stays out. The pre-commit ruff-format hook runs with --force-exclude, so it
+# honors this too.
+exclude = ["bridge.py", "map_server.py"]

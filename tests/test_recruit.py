@@ -13,6 +13,7 @@ decides only whether it is this name's turn and whether it is too soon. If
 somebody later adds a sort by level, or by gear, or by class, the shape of
 these tests is what should make it look out of place.
 """
+
 import ast
 import pathlib
 import unittest
@@ -20,9 +21,7 @@ import unittest
 import recruit
 
 BRIDGE = pathlib.Path(__file__).resolve().parents[1] / "bridge.py"
-DOCKERFILE = (
-    pathlib.Path(__file__).resolve().parents[1] / "Dockerfile"
-)
+DOCKERFILE = pathlib.Path(__file__).resolve().parents[1] / "Dockerfile"
 
 # The family, as the planner sees them: names that are online and in the guild.
 ACTORS = ["Grug", "Ugga"]
@@ -45,7 +44,6 @@ def plan(**kw):
 
 
 class ASweepWithNothingInItsWayInvites(unittest.TestCase):
-
     def test_the_top_of_the_shortlist_is_asked(self):
         action = plan()
         self.assertEqual(action.verb, "invite")
@@ -82,7 +80,6 @@ class ASweepWithNothingInItsWayInvites(unittest.TestCase):
 
 
 class EveryRefusalSaysWhichOneItWas(unittest.TestCase):
-
     def test_nobody_online_is_not_the_same_as_nobody_to_recruit(self):
         action = plan(actors=[])
         self.assertEqual(action.verb, "wait")
@@ -124,7 +121,6 @@ class EveryRefusalSaysWhichOneItWas(unittest.TestCase):
 
 
 class WhenAFreshShortlistIsAskedFor(unittest.TestCase):
-
     def test_a_world_that_has_never_been_shortlisted_asks_for_one(self):
         action = plan(shortlist_age_minutes=None, shortlist_asked_minutes_ago=None)
         self.assertEqual(action.verb, "shortlist")
@@ -287,7 +283,9 @@ class AStaleRosterCountCannotSuppressTheRefreshThatWouldDisproveIt(unittest.Test
             "wait",
         )
         self.assertEqual(
-            plan(shortlist_age_minutes=recruit.SHORTLIST_FRESH_MINUTES + 0.1, **full).verb,
+            plan(
+                shortlist_age_minutes=recruit.SHORTLIST_FRESH_MINUTES + 0.1, **full
+            ).verb,
             "shortlist",
         )
 
@@ -337,7 +335,6 @@ class AStaleRosterCountCannotSuppressTheRefreshThatWouldDisproveIt(unittest.Test
 
 
 class AlreadyAskedIsSkippedAndNotBlocked(unittest.TestCase):
-
     def test_the_next_unasked_name_is_taken(self):
         self.assertEqual(plan(asked={"Cogwin"}).target_arg, "Sprout")
 
@@ -352,7 +349,6 @@ class AlreadyAskedIsSkippedAndNotBlocked(unittest.TestCase):
 
 
 class TheRateLimitIsAboutInvitesAndNotAboutPasses(unittest.TestCase):
-
     def test_a_first_ever_invite_is_not_held_back(self):
         self.assertEqual(plan(minutes_since_last_invite=None).verb, "invite")
 
@@ -362,7 +358,9 @@ class TheRateLimitIsAboutInvitesAndNotAboutPasses(unittest.TestCase):
             "invite",
         )
         self.assertEqual(
-            plan(minutes_since_last_invite=recruit.MIN_MINUTES_BETWEEN_INVITES - 0.1).verb,
+            plan(
+                minutes_since_last_invite=recruit.MIN_MINUTES_BETWEEN_INVITES - 0.1
+            ).verb,
             "wait",
         )
 
@@ -382,7 +380,6 @@ class TheRateLimitIsAboutInvitesAndNotAboutPasses(unittest.TestCase):
 
 
 class ANoSizeGateIsTrustedRatherThanSecondGuessed(unittest.TestCase):
-
     def test_a_target_size_of_zero_never_reads_as_full(self):
         """0 means the worldserver was configured with no size gate. Inventing
         a ceiling here would be a second place deciding when the roster is
@@ -433,8 +430,10 @@ class TheLoopIsActuallyWired(unittest.TestCase):
 
     def _names_in(self, fn_name):
         fn = next(
-            n for n in ast.walk(self.tree)
-            if isinstance(n, (ast.AsyncFunctionDef, ast.FunctionDef)) and n.name == fn_name
+            n
+            for n in ast.walk(self.tree)
+            if isinstance(n, (ast.AsyncFunctionDef, ast.FunctionDef))
+            and n.name == fn_name
         )
         return {n.id for n in ast.walk(fn) if isinstance(n, ast.Name)} | {
             n.attr for n in ast.walk(fn) if isinstance(n, ast.Attribute)
@@ -460,10 +459,14 @@ class TheLoopIsActuallyWired(unittest.TestCase):
         status filter here would make it a duplicate of the other read and
         restore the re-ask loop it exists to stop."""
         fn = next(
-            n for n in ast.walk(self.tree)
-            if isinstance(n, ast.FunctionDef) and n.name == "_minutes_since_shortlist_asked"
+            n
+            for n in ast.walk(self.tree)
+            if isinstance(n, ast.FunctionDef)
+            and n.name == "_minutes_since_shortlist_asked"
         )
-        self.assertNotIn("status", ast.get_source_segment(self.source, fn).split('"""')[-1])
+        self.assertNotIn(
+            "status", ast.get_source_segment(self.source, fn).split('"""')[-1]
+        )
 
     def test_the_pass_writes_through_insert_guild(self):
         self.assertIn("_insert_guild", self._names_in("_recruit_once"))
@@ -471,7 +474,8 @@ class TheLoopIsActuallyWired(unittest.TestCase):
     def test_insert_guild_can_write_target_arg(self):
         """Without this column no invite this bridge writes can ever run."""
         fn = next(
-            n for n in ast.walk(self.tree)
+            n
+            for n in ast.walk(self.tree)
             if isinstance(n, ast.FunctionDef) and n.name == "_insert_guild"
         )
         self.assertIn("target_arg", {a.arg for a in fn.args.args})
@@ -482,7 +486,8 @@ class TheLoopIsActuallyWired(unittest.TestCase):
         not a loop. 1265 truncated ENUM, 1146 missing table, 1054 missing
         column - the same three codes _insert_bank catches."""
         fn = next(
-            n for n in ast.walk(self.tree)
+            n
+            for n in ast.walk(self.tree)
             if isinstance(n, ast.FunctionDef) and n.name == "_insert_guild"
         )
         body = ast.get_source_segment(self.source, fn)
@@ -491,7 +496,6 @@ class TheLoopIsActuallyWired(unittest.TestCase):
 
 
 class TheModuleShipsInTheImage(unittest.TestCase):
-
     def test_recruit_is_copied_into_the_image(self):
         """test_ship_manifest checks this generically; named here too so a
         failure points at the module that moved rather than at a list."""

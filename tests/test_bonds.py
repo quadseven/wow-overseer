@@ -15,6 +15,7 @@ The history these decisions read is not new state - it is the `reflection`
 rows kin already writes ("Grog called for help. I regrouped."), counted back.
 Nothing here is a separate memory the store could disagree with.
 """
+
 import ast
 import pathlib
 import unittest
@@ -27,8 +28,13 @@ def _row(name, level=5, *, is_bot=True, guild_id=7):
     return {"name": name, "level": level, "is_bot": is_bot, "guild_id": guild_id}
 
 
-FAMILY_ROSTER = [_row("Grug", 8), _row("Ugga", 6), _row("Grog", 7),
-                 _row("Bork", 4), _row("Og", 6)]
+FAMILY_ROSTER = [
+    _row("Grug", 8),
+    _row("Ugga", 6),
+    _row("Grog", 7),
+    _row("Bork", 4),
+    _row("Og", 6),
+]
 
 # kin scopes by an explicit name set; bonds is where that set is defined.
 FAMILY = set(bonds.FAMILY)
@@ -76,15 +82,19 @@ class GrugIsMadTest(unittest.TestCase):
 
     def test_one_or_two_times_is_fine(self):
         for n in (1, 2):
-            d = bonds.decide("Grug", kin.Plea("Ugga", "a quest"),
-                             history=self._og_helped_ugga(n))
+            d = bonds.decide(
+                "Grug", kin.Plea("Ugga", "a quest"), history=self._og_helped_ugga(n)
+            )
             self.assertTrue(d.will_answer, n)
 
     def test_past_the_threshold_grug_sulks(self):
         # Same history as test_nobody_else_is_jealous. The pair is the point:
         # identical input, and only Grug refuses.
-        d = bonds.decide("Grug", kin.Plea("Ugga", "a quest"),
-                         history=self._og_helped_ugga(bonds.JEALOUSY_THRESHOLD))
+        d = bonds.decide(
+            "Grug",
+            kin.Plea("Ugga", "a quest"),
+            history=self._og_helped_ugga(bonds.JEALOUSY_THRESHOLD),
+        )
         self.assertFalse(d.will_answer)
         self.assertIn("Og", d.reason)
 
@@ -140,7 +150,9 @@ class BorkTest(unittest.TestCase):
         pleas with five online and five pleas with two - the same number
         meaning different things depending on who was logged in."""
         h = [("Og", "Bork")] * (bonds.FATIGUE_THRESHOLD * 3)
-        self.assertTrue(bonds.decide("Ugga", kin.Plea("Bork", "q"), history=h).will_answer)
+        self.assertTrue(
+            bonds.decide("Ugga", kin.Plea("Bork", "q"), history=h).will_answer
+        )
 
     def test_grug_himself_never_tires(self):
         h = [("Grug", "Grog")] * (bonds.FATIGUE_THRESHOLD * 4)
@@ -166,50 +178,83 @@ class BorkTest(unittest.TestCase):
 
     def test_bork_still_gets_help_from_the_two_who_owe_him_it(self):
         """The end state after the family has tired: dad and big brother."""
-        h = [(n, "Bork") for n in ("Grug", "Ugga", "Grog", "Og")
-             for _ in range(bonds.FATIGUE_THRESHOLD * 2)]
-        came = [n for n in ("Grug", "Ugga", "Grog", "Og")
-                if bonds.decide(n, kin.Plea("Bork", "q"), history=h).will_answer]
+        h = [
+            (n, "Bork")
+            for n in ("Grug", "Ugga", "Grog", "Og")
+            for _ in range(bonds.FATIGUE_THRESHOLD * 2)
+        ]
+        came = [
+            n
+            for n in ("Grug", "Ugga", "Grog", "Og")
+            if bonds.decide(n, kin.Plea("Bork", "q"), history=h).will_answer
+        ]
         self.assertEqual(came, ["Grug", "Grog"])
 
 
 class ApplyToMusterTest(unittest.TestCase):
     def test_bonds_filter_a_real_muster(self):
-        m = kin.plan_muster(kin.Plea("Ugga", "a quest"), FAMILY_ROSTER,
-                            family=FAMILY, last_muster_at=None, now=100.0)
+        m = kin.plan_muster(
+            kin.Plea("Ugga", "a quest"),
+            FAMILY_ROSTER,
+            family=FAMILY,
+            last_muster_at=None,
+            now=100.0,
+        )
         before = [a.character_name for a in m.actions]
         self.assertIn("Grug", before)
 
-        filtered = bonds.apply(m, kin.Plea("Ugga", "a quest"),
-                               history=[("Og", "Ugga")] * bonds.JEALOUSY_THRESHOLD)
+        filtered = bonds.apply(
+            m,
+            kin.Plea("Ugga", "a quest"),
+            history=[("Og", "Ugga")] * bonds.JEALOUSY_THRESHOLD,
+        )
         after = [a.character_name for a in filtered.actions]
         self.assertNotIn("Grug", after)
         self.assertIn("Og", after)
 
     def test_memories_follow_the_filter(self):
         """A responder who did not go must not remember going."""
-        m = kin.plan_muster(kin.Plea("Ugga", ""), FAMILY_ROSTER,
-                            family=FAMILY, last_muster_at=None, now=100.0)
-        filtered = bonds.apply(m, kin.Plea("Ugga", ""),
-                               history=[("Og", "Ugga")] * bonds.JEALOUSY_THRESHOLD)
+        m = kin.plan_muster(
+            kin.Plea("Ugga", ""),
+            FAMILY_ROSTER,
+            family=FAMILY,
+            last_muster_at=None,
+            now=100.0,
+        )
+        filtered = bonds.apply(
+            m, kin.Plea("Ugga", ""), history=[("Og", "Ugga")] * bonds.JEALOUSY_THRESHOLD
+        )
         self.assertNotIn("Grug", filtered.responder_memories)
         for name in filtered.responder_memories:
             self.assertIn(name, [a.character_name for a in filtered.actions])
 
     def test_the_caller_memory_names_only_who_actually_came(self):
-        m = kin.plan_muster(kin.Plea("Ugga", ""), FAMILY_ROSTER,
-                            family=FAMILY, last_muster_at=None, now=100.0)
-        filtered = bonds.apply(m, kin.Plea("Ugga", ""),
-                               history=[("Og", "Ugga")] * bonds.JEALOUSY_THRESHOLD)
+        m = kin.plan_muster(
+            kin.Plea("Ugga", ""),
+            FAMILY_ROSTER,
+            family=FAMILY,
+            last_muster_at=None,
+            now=100.0,
+        )
+        filtered = bonds.apply(
+            m, kin.Plea("Ugga", ""), history=[("Og", "Ugga")] * bonds.JEALOUSY_THRESHOLD
+        )
         self.assertNotIn("Grug", filtered.caller_memory)
 
     def test_everyone_refusing_leaves_no_actions_and_says_why(self):
-        m = kin.plan_muster(kin.Plea("Ugga", ""), FAMILY_ROSTER,
-                            family=FAMILY, last_muster_at=None, now=100.0)
-        heavy = ([("Og", "Ugga")] * bonds.JEALOUSY_THRESHOLD
-                 + [("Grog", "Ugga")] * bonds.FATIGUE_THRESHOLD
-                 + [("Bork", "Ugga")] * bonds.FATIGUE_THRESHOLD
-                 + [("Og", "Ugga")] * bonds.FATIGUE_THRESHOLD)
+        m = kin.plan_muster(
+            kin.Plea("Ugga", ""),
+            FAMILY_ROSTER,
+            family=FAMILY,
+            last_muster_at=None,
+            now=100.0,
+        )
+        heavy = (
+            [("Og", "Ugga")] * bonds.JEALOUSY_THRESHOLD
+            + [("Grog", "Ugga")] * bonds.FATIGUE_THRESHOLD
+            + [("Bork", "Ugga")] * bonds.FATIGUE_THRESHOLD
+            + [("Og", "Ugga")] * bonds.FATIGUE_THRESHOLD
+        )
         filtered = bonds.apply(m, kin.Plea("Ugga", ""), history=heavy)
         # Unconditional. Guarded by `if not filtered.actions` this passed the
         # moment anyone came - a green light that stays green precisely when
@@ -228,22 +273,28 @@ class ApplyToMusterTest(unittest.TestCase):
         """
         m = kin.Muster(
             actions=[kin.KinAction("Thrall", ["follow"])],
-            reason="", caller_memory="I called for help and Thrall regrouped.",
+            reason="",
+            caller_memory="I called for help and Thrall regrouped.",
             responder_memories={"Thrall": "Ugga called for help. I regrouped."},
         )
         heavy = [("Thrall", "Ugga")] * (bonds.FATIGUE_THRESHOLD * 4)
         filtered = bonds.apply(m, kin.Plea("Ugga", ""), history=heavy)
         self.assertEqual([a.character_name for a in filtered.actions], ["Thrall"])
-        self.assertTrue(bonds.decide("Thrall", kin.Plea("Ugga", ""),
-                                     history=heavy).will_answer)
-        self.assertTrue(bonds.decide("Grug", kin.Plea("Thrall", ""),
-                                     history=heavy).will_answer)
+        self.assertTrue(
+            bonds.decide("Thrall", kin.Plea("Ugga", ""), history=heavy).will_answer
+        )
+        self.assertTrue(
+            bonds.decide("Grug", kin.Plea("Thrall", ""), history=heavy).will_answer
+        )
 
 
 class HistoryTest(unittest.TestCase):
     def test_history_is_parsed_out_of_reflection_rows(self):
         rows = [
-            {"character_name": "Og", "text": "Ugga called for help with a quest. I regrouped."},
+            {
+                "character_name": "Og",
+                "text": "Ugga called for help with a quest. I regrouped.",
+            },
             {"character_name": "Grug", "text": "I called for help and Og regrouped."},
             {"character_name": "Bork", "text": "Grog called for help. I regrouped."},
         ]
@@ -256,7 +307,6 @@ class HistoryTest(unittest.TestCase):
     def test_unparseable_rows_are_skipped_not_guessed(self):
         rows = [{"character_name": "Og", "text": "the boars are angry today"}]
         self.assertEqual(bonds.history_from_thoughts(rows), [])
-
 
 
 class InertRuleTest(unittest.TestCase):
@@ -277,8 +327,9 @@ class InertRuleTest(unittest.TestCase):
         rows, jealous = [], False
         for _ in range(6):
             plea = kin.Plea("Ugga", "a quest")
-            m = kin.plan_muster(plea, roster, family=FAMILY,
-                                last_muster_at=None, now=0.0)
+            m = kin.plan_muster(
+                plea, roster, family=FAMILY, last_muster_at=None, now=0.0
+            )
             m = bonds.apply(m, plea, history=bonds.history_from_thoughts(rows))
             came = [a.character_name for a in m.actions]
             if "Og" in came and "Grug" not in came:
@@ -302,7 +353,9 @@ class CasingTest(unittest.TestCase):
 
     def test_a_lowercase_pair_still_tires_the_family(self):
         h = [("OG", "grog")] * bonds.FATIGUE_THRESHOLD
-        self.assertFalse(bonds.decide("og", kin.Plea("Grog", "q"), history=h).will_answer)
+        self.assertFalse(
+            bonds.decide("og", kin.Plea("Grog", "q"), history=h).will_answer
+        )
 
     def test_history_from_thoughts_keeps_whatever_casing_it_read(self):
         """Proves the counters cannot rely on the store being canonical."""
@@ -321,8 +374,13 @@ class MemoryTest(unittest.TestCase):
         one store these characters treat as true."""
         plea = kin.parse_plea("Grog", "I need help with my warrior quest and the boars")
         self.assertIsNotNone(plea)
-        m = kin.plan_muster(plea, [_row(n) for n in bonds.FAMILY], family=FAMILY,
-                            last_muster_at=None, now=0.0)
+        m = kin.plan_muster(
+            plea,
+            [_row(n) for n in bonds.FAMILY],
+            family=FAMILY,
+            last_muster_at=None,
+            now=0.0,
+        )
         heavy = [("Og", "Grog")] * (bonds.FATIGUE_THRESHOLD * 2)
         filtered = bonds.apply(m, plea, history=heavy)
         self.assertNotEqual(filtered.actions, m.actions)
@@ -344,7 +402,8 @@ class WiringTest(unittest.TestCase):
         src = (pathlib.Path(__file__).resolve().parent.parent / "bridge.py").read_text()
         tree = ast.parse(src)
         cls.fn = next(
-            n for n in ast.walk(tree)
+            n
+            for n in ast.walk(tree)
             if isinstance(n, ast.AsyncFunctionDef) and n.name == "_muster_for_pleas"
         )
         cls.calls = [n for n in ast.walk(cls.fn) if isinstance(n, ast.Call)]
@@ -353,8 +412,11 @@ class WiringTest(unittest.TestCase):
         want = dotted.split(".")
         for c in self.calls:
             f = c.func
-            if (isinstance(f, ast.Attribute) and isinstance(f.value, ast.Name)
-                    and [f.value.id, f.attr] == want):
+            if (
+                isinstance(f, ast.Attribute)
+                and isinstance(f.value, ast.Name)
+                and [f.value.id, f.attr] == want
+            ):
                 return c
         return None
 
@@ -369,7 +431,8 @@ class WiringTest(unittest.TestCase):
         call = self._call("kin.plan_muster")
         self.assertIsNotNone(call, "_muster_for_pleas no longer plans a muster")
         self.assertIn(
-            "family", [k.arg for k in call.keywords],
+            "family",
+            [k.arg for k in call.keywords],
             "plan_muster called without family= - kin would muster the realm",
         )
 
@@ -378,8 +441,8 @@ class WiringTest(unittest.TestCase):
         muster everyone refuses writes none - so a family that stopped helping
         each other could never start again, and said so only to the log."""
         src = (pathlib.Path(__file__).resolve().parent.parent / "bridge.py").read_text()
-        fetch = src[src.index("def _fetch_reflections"):]
-        fetch = fetch[:fetch.index("\ndef ")]
+        fetch = src[src.index("def _fetch_reflections") :]
+        fetch = fetch[: fetch.index("\ndef ")]
         self.assertIn("INTERVAL", fetch)
         self.assertIn("created_at", fetch)
 
@@ -391,9 +454,11 @@ class WiringTest(unittest.TestCase):
         hist = next((k.value for k in call.keywords if k.arg == "history"), None)
         self.assertIsNotNone(hist, "bonds.apply called without history=")
         self.assertNotIsInstance(
-            hist, ast.List,
+            hist,
+            ast.List,
             "history= is a literal list - the bonds rules can never fire",
         )
+
 
 class HeadOfFamilyTest(unittest.TestCase):
     """mod-overseer forms the party from whoever is online, in name order, so
@@ -414,6 +479,7 @@ class HeadOfFamilyTest(unittest.TestCase):
         """The exact bug being corrected."""
         self.assertNotEqual(bonds.head_of_family(), sorted(bonds.FAMILY)[0])
 
+
 class WindowContaminationTest(unittest.TestCase):
     """The bond rules count helping. Anything else in their window is noise
     that can evict the thing being counted.
@@ -428,7 +494,10 @@ class WindowContaminationTest(unittest.TestCase):
     def test_council_speech_contributes_no_pairs(self):
         """Which is exactly why it must not be stored where bonds looks."""
         council_rows = [
-            {"character_name": "Grug", "text": "Og is still 4. We should not leave them behind."},
+            {
+                "character_name": "Grug",
+                "text": "Og is still 4. We should not leave them behind.",
+            },
             {"character_name": "Ugga", "text": "Aye."},
             {"character_name": "Grug", "text": "Then it is settled."},
         ]
@@ -437,20 +506,24 @@ class WindowContaminationTest(unittest.TestCase):
     def test_a_window_of_council_speech_starves_the_rules(self):
         """The failure, reproduced: real memories crowded out by chatter that
         parses to nothing."""
-        real = [{"character_name": "Og", "text": "Ugga called for help. I regrouped."}] * 3
+        real = [
+            {"character_name": "Og", "text": "Ugga called for help. I regrouped."}
+        ] * 3
         chatter = [{"character_name": "Ugga", "text": "Aye."}] * 60
 
         healthy = bonds.history_from_thoughts(real)
         self.assertGreaterEqual(len(healthy), bonds.JEALOUSY_THRESHOLD)
         self.assertFalse(
-            bonds.decide("Grug", kin.Plea("Ugga", "q"), history=healthy).will_answer)
+            bonds.decide("Grug", kin.Plea("Ugga", "q"), history=healthy).will_answer
+        )
 
         # Same window size, but the memories have been pushed out of it.
         starved = bonds.history_from_thoughts(chatter[:60] + real[:0])
         self.assertEqual(starved, [])
         self.assertTrue(
             bonds.decide("Grug", kin.Plea("Ugga", "q"), history=starved).will_answer,
-            "with the memories evicted Grug can never get jealous, and nothing says so")
+            "with the memories evicted Grug can never get jealous, and nothing says so",
+        )
 
     def test_the_bridge_does_not_write_council_speech_where_bonds_reads(self):
         """bridge.py needs pymysql and discord, so this walks its AST."""
@@ -458,14 +531,23 @@ class WindowContaminationTest(unittest.TestCase):
         import pathlib
 
         src = (pathlib.Path(__file__).resolve().parent.parent / "bridge.py").read_text()
-        fn = next(n for n in ast.walk(ast.parse(src))
-                  if isinstance(n, ast.AsyncFunctionDef) and n.name == "_council_once")
-        tags = [n.value for n in ast.walk(fn)
-                if isinstance(n, ast.Constant) and n.value in ("reflection", "council")]
+        fn = next(
+            n
+            for n in ast.walk(ast.parse(src))
+            if isinstance(n, ast.AsyncFunctionDef) and n.name == "_council_once"
+        )
+        tags = [
+            n.value
+            for n in ast.walk(fn)
+            if isinstance(n, ast.Constant) and n.value in ("reflection", "council")
+        ]
         self.assertIn("council", tags)
-        self.assertNotIn("reflection", tags,
-                         "council speech tagged 'reflection' lands in the window "
-                         "the bond rules count, and crowds out the memories")
+        self.assertNotIn(
+            "reflection",
+            tags,
+            "council speech tagged 'reflection' lands in the window "
+            "the bond rules count, and crowds out the memories",
+        )
 
     def test_every_declaration_of_the_source_column_admits_the_new_tag(self):
         """A tag the ENUM rejects is an insert that fails, every council.
@@ -483,11 +565,13 @@ class WindowContaminationTest(unittest.TestCase):
         # for goal kind and status, and matching those made this fail for the
         # wrong reason.
         enums = [b for b in re.findall(r"ENUM\(([^)]*)\)", src) if "'reflection'" in b]
-        self.assertEqual(len(enums), 2,
-                         "expected the CREATE and the MODIFY, found %d" % len(enums))
+        self.assertEqual(
+            len(enums), 2, "expected the CREATE and the MODIFY, found %d" % len(enums)
+        )
         for body in enums:
-            self.assertIn("'council'", body,
-                          "this enum rejects the council tag: %s" % body)
+            self.assertIn(
+                "'council'", body, "this enum rejects the council tag: %s" % body
+            )
 
     def test_the_live_table_is_widened_not_just_the_create(self):
         """overseer_thought already exists, so CREATE TABLE IF NOT EXISTS is a
@@ -514,8 +598,9 @@ class SpeakingOrderTest(unittest.TestCase):
 
     def test_it_does_not_depend_on_what_order_it_was_handed(self):
         for given in (["Og", "Ugga", "Bork", "Grog"], ["Grog", "Bork", "Ugga", "Og"]):
-            self.assertEqual(bonds.speaking_order(given),
-                             ["Ugga", "Og", "Grog", "Bork"])
+            self.assertEqual(
+                bonds.speaking_order(given), ["Ugga", "Og", "Grog", "Bork"]
+            )
 
     def test_it_agrees_with_who_leads(self):
         """Seniority is the family table's one answer to who comes first. A
@@ -539,7 +624,6 @@ class SpeakingOrderTest(unittest.TestCase):
         given = ["Bork", "Grog", "Og", "Ugga"]
         self.assertCountEqual(bonds.speaking_order(given), given)
         self.assertEqual(bonds.speaking_order([]), [])
-
 
 
 class WhoAnswersWhoTest(unittest.TestCase):
@@ -604,8 +688,12 @@ class WhoAnswersWhoTest(unittest.TestCase):
     def test_a_refusal_sorts_above_a_counter_and_a_counter_above_an_exemption(self):
         """A refusal is the news. An exemption is the background it is read
         against, and putting the background first buries the finding."""
-        words = [r.word for r in bonds.answers(
-            [("Og", "Ugga")] * bonds.JEALOUSY_THRESHOLD + [("Bork", "Grog")])]
+        words = [
+            r.word
+            for r in bonds.answers(
+                [("Og", "Ugga")] * bonds.JEALOUSY_THRESHOLD + [("Bork", "Grog")]
+            )
+        ]
         self.assertEqual(words[0], bonds.STOPPED)
         self.assertLess(words.index(bonds.COUNTING), words.index(bonds.EXEMPT))
 
@@ -617,7 +705,7 @@ class WhoAnswersWhoTest(unittest.TestCase):
         self.assertEqual(row.pct, 100)
 
     def test_the_sentence_agrees_with_the_number_it_carries(self):
-        """"answered Bork 1 times" makes a reader distrust the count as well as
+        """ "answered Bork 1 times" makes a reader distrust the count as well as
         the grammar."""
         row = self.rows([("Bork", "Grog")])["Bork>Grog"]
         self.assertIn("1 time ", row.note + " ")
@@ -655,16 +743,19 @@ class TheViewAgreesWithTheWorld(unittest.TestCase):
         for history in self.histories():
             for row in bonds.answers(history):
                 verdict = bonds.decide(
-                    row.responder, bonds._Call(row.caller), history=history)
-                self.assertEqual(row.will_answer, verdict.will_answer,
-                                 (row.key, len(history)))
+                    row.responder, bonds._Call(row.caller), history=history
+                )
+                self.assertEqual(
+                    row.will_answer, verdict.will_answer, (row.key, len(history))
+                )
                 self.assertEqual(row.reason, verdict.reason, row.key)
 
     def test_stopped_and_will_answer_can_never_disagree(self):
         for history in self.histories():
             for row in bonds.answers(history):
-                self.assertEqual(row.word == bonds.STOPPED, not row.will_answer,
-                                 (row.key, row.word))
+                self.assertEqual(
+                    row.word == bonds.STOPPED, not row.will_answer, (row.key, row.word)
+                )
 
     def test_a_counter_that_has_reached_its_threshold_has_stopped(self):
         """The whole promise of the bar: when it fills, something changes."""
@@ -675,7 +766,6 @@ class TheViewAgreesWithTheWorld(unittest.TestCase):
 
 
 class TheCardNoteTest(unittest.TestCase):
-
     def test_it_prefers_what_this_character_does(self):
         """A card is about that character. Where they are the responder comes
         first; where they are the caller is still their business, because
@@ -699,7 +789,6 @@ class TheCardNoteTest(unittest.TestCase):
 
 
 class TheStandingRuleIsBuiltFromTheThresholds(unittest.TestCase):
-
     def test_it_quotes_the_numbers_rather_than_repeating_them(self):
         """A sentence with a 5 typed into it goes on claiming five the day
         somebody changes FATIGUE_THRESHOLD, and reads exactly as convincingly."""
@@ -707,6 +796,7 @@ class TheStandingRuleIsBuiltFromTheThresholds(unittest.TestCase):
         self.assertIn(str(bonds.FATIGUE_THRESHOLD), rule)
         self.assertIn(str(bonds.JEALOUSY_THRESHOLD), rule)
         self.assertIn(bonds.SUSPICION["with"], rule)
+
 
 if __name__ == "__main__":
     unittest.main()

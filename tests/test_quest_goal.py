@@ -9,6 +9,7 @@ said `council: plan 'quest' is not a goal the supervisor drives`.
 Every test below pins one of the links in the chain that was broken, and the
 ones that would fail SILENTLY on the live database are called out by name.
 """
+
 import ast
 import pathlib
 import unittest
@@ -115,8 +116,9 @@ class TheQuestIdSurvivesTheCouncil(unittest.TestCase):
     """
 
     def test_a_quest_proposal_carries_the_id(self):
-        me = _member("Ugga", 10, quest="I need 1 more Large Candle.",
-                     quest_left=1, quest_id=3861)
+        me = _member(
+            "Ugga", 10, quest="I need 1 more Large Candle.", quest_left=1, quest_id=3861
+        )
         proposal = council.assess(me, public_levels={"Ugga": 10, "Grug": 10})
         self.assertEqual("quest", proposal.kind)
         self.assertEqual(3861, proposal.quest_id)
@@ -128,8 +130,13 @@ class TheQuestIdSurvivesTheCouncil(unittest.TestCase):
 
     def test_the_id_reaches_the_agreed_plan(self):
         members = [
-            _member("Ugga", 10, quest="I need 1 more Large Candle.",
-                    quest_left=1, quest_id=3861),
+            _member(
+                "Ugga",
+                10,
+                quest="I need 1 more Large Candle.",
+                quest_left=1,
+                quest_id=3861,
+            ),
             _member("Grug", 10),
             _member("Bork", 10),
         ]
@@ -173,12 +180,23 @@ class ChoosingTheQuestToDrive(unittest.TestCase):
             3861: _quest(3861),
         }
         self.members = [
-            questbook.Member(name="Grug", class_id=1, race_id=1, level=12,
-                             rewarded=frozenset({35, 37, 176, 3861})),
-            questbook.Member(name="Bork", class_id=4, race_id=3, level=12,
-                             rewarded=frozenset({35, 37, 176, 3861})),
-            questbook.Member(name="Ugga", class_id=5, race_id=1, level=10,
-                             held=frozenset({35})),
+            questbook.Member(
+                name="Grug",
+                class_id=1,
+                race_id=1,
+                level=12,
+                rewarded=frozenset({35, 37, 176, 3861}),
+            ),
+            questbook.Member(
+                name="Bork",
+                class_id=4,
+                race_id=3,
+                level=12,
+                rewarded=frozenset({35, 37, 176, 3861}),
+            ),
+            questbook.Member(
+                name="Ugga", class_id=5, race_id=1, level=10, held=frozenset({35})
+            ),
         ]
         self.ledger = questbook.build(self.members, self.catalog)
 
@@ -187,8 +205,12 @@ class ChoosingTheQuestToDrive(unittest.TestCase):
         traveller can carry out would make the scene a decoration."""
         self.assertEqual(
             3861,
-            questbook.drive_target(self.ledger, held_by_traveller={3861, 176},
-                                   wanted=3861, beneficiary="Ugga"),
+            questbook.drive_target(
+                self.ledger,
+                held_by_traveller={3861, 176},
+                wanted=3861,
+                beneficiary="Ugga",
+            ),
         )
 
     def test_a_quest_the_traveller_does_not_hold_is_never_chosen(self):
@@ -196,8 +218,8 @@ class ChoosingTheQuestToDrive(unittest.TestCase):
         anything else falls through to ChangeToIdle() on the next tick. Aiming
         at an unheld quest is the "delivered, nothing happened" failure."""
         chosen = questbook.drive_target(
-            self.ledger, held_by_traveller=frozenset(), wanted=3861,
-            beneficiary="Ugga")
+            self.ledger, held_by_traveller=frozenset(), wanted=3861, beneficiary="Ugga"
+        )
         self.assertEqual(0, chosen)
 
     def test_it_falls_back_to_the_catch_up_plan_in_the_plan_s_own_order(self):
@@ -207,12 +229,14 @@ class ChoosingTheQuestToDrive(unittest.TestCase):
         order = [q.id for q in self.ledger.plans["Ugga"]]
         self.assertLess(order.index(35), order.index(37), order)
         chosen = questbook.drive_target(
-            self.ledger, held_by_traveller={35, 37}, wanted=0, beneficiary="Ugga")
+            self.ledger, held_by_traveller={35, 37}, wanted=0, beneficiary="Ugga"
+        )
         self.assertEqual(35, chosen)
 
     def test_it_skips_plan_entries_the_traveller_cannot_drive(self):
         chosen = questbook.drive_target(
-            self.ledger, held_by_traveller={37}, wanted=0, beneficiary="Ugga")
+            self.ledger, held_by_traveller={37}, wanted=0, beneficiary="Ugga"
+        )
         self.assertEqual(37, chosen)
 
     def test_with_no_beneficiary_it_helps_whoever_is_furthest_behind(self):
@@ -226,16 +250,26 @@ class ChoosingTheQuestToDrive(unittest.TestCase):
         """0 says "the traveller is not carrying the work the family should do",
         whose answer is quest sharing - not a different aim."""
         self.assertEqual(
-            0, questbook.drive_target(self.ledger, held_by_traveller={999},
-                                      wanted=3861, beneficiary="Ugga"))
+            0,
+            questbook.drive_target(
+                self.ledger, held_by_traveller={999}, wanted=3861, beneficiary="Ugga"
+            ),
+        )
 
 
 # --- supervising a quest goal ---------------------------------------------
 
 
 def _row(**kw):
-    row = dict(id=7, character_name="Ugga", kind="quest", target=goals.QUEST_TARGET,
-               quest_id=3861, status="active", last_report=None)
+    row = dict(
+        id=7,
+        character_name="Ugga",
+        kind="quest",
+        target=goals.QUEST_TARGET,
+        quest_id=3861,
+        status="active",
+        last_report=None,
+    )
     row.update(kw)
     return row
 
@@ -259,10 +293,12 @@ class SupervisingAQuestGoal(unittest.TestCase):
     def test_a_quest_goal_never_issues_a_strategy_command(self):
         for left, report in ((3, None), (3, "-3/0"), (3, "-3/4"), (2, "-3/0")):
             actions = goals.reconcile(
-                _row(last_report=report), goals.observed_from_left(left))
+                _row(last_report=report), goals.observed_from_left(left)
+            )
             self.assertFalse(
                 [a for a in actions if isinstance(a, goals.StrategyCommand)],
-                (left, report, actions))
+                (left, report, actions),
+            )
 
     def test_the_aim_is_renewed_on_a_clock_even_while_progress_is_good(self):
         """RPG_DO_QUEST self-expires after 30 minutes and the bot then re-rolls
@@ -276,27 +312,23 @@ class SupervisingAQuestGoal(unittest.TestCase):
         self.assertEqual(0, recorded.stalls, "the lease counter did not reset")
 
     def test_a_quiet_cycle_only_advances_the_lease_counter(self):
-        actions = goals.reconcile(_row(last_report="-3/0"),
-                                  goals.observed_from_left(3))
+        actions = goals.reconcile(_row(last_report="-3/0"), goals.observed_from_left(3))
         self.assertEqual(1, len(actions), actions)
         self.assertEqual(1, actions[0].stalls)
 
     def test_every_objective_closed_is_reported(self):
-        actions = goals.reconcile(_row(last_report="-3/0"),
-                                  goals.observed_from_left(2))
+        actions = goals.reconcile(_row(last_report="-3/0"), goals.observed_from_left(2))
         texts = [a.text for a in actions if isinstance(a, goals.Report)]
         self.assertEqual(1, len(texts))
         self.assertIn("2 objectives left", texts[0])
 
     def test_the_last_objective_reads_as_one_not_two(self):
-        actions = goals.reconcile(_row(last_report="-2/0"),
-                                  goals.observed_from_left(1))
+        actions = goals.reconcile(_row(last_report="-2/0"), goals.observed_from_left(1))
         text = [a.text for a in actions if isinstance(a, goals.Report)][0]
         self.assertIn("1 objective left", text)
 
     def test_zero_left_completes_the_goal(self):
-        actions = goals.reconcile(_row(last_report="-1/0"),
-                                  goals.observed_from_left(0))
+        actions = goals.reconcile(_row(last_report="-1/0"), goals.observed_from_left(0))
         self.assertTrue([a for a in actions if isinstance(a, goals.MarkComplete)])
 
     def test_completion_claims_objectives_done_and_not_the_quest_finished(self):
@@ -397,8 +429,9 @@ class PartyCohesionIsUntouched(unittest.TestCase):
     def test_an_aimed_follower_gets_the_strategy_that_reads_the_aim(self):
         commands = goals.life_strategies(leads=False, aimed=True)
         self.assertIn(goals.LIFE_STRATEGY, commands)
-        self.assertNotIn("nc -new rpg", commands,
-                         "stripping it is what made the aim unreadable")
+        self.assertNotIn(
+            "nc -new rpg", commands, "stripping it is what made the aim unreadable"
+        )
 
     def test_an_unaimed_follower_still_loses_it(self):
         """The 937-yard scatter is what happens to a follower carrying `new
@@ -419,14 +452,14 @@ class PartyCohesionIsUntouched(unittest.TestCase):
         hand out the wander strategy."""
         self.assertEqual(
             goals.life_strategies(leads=False),
-            goals.life_strategies(leads=False, aimed=False))
+            goals.life_strategies(leads=False, aimed=False),
+        )
 
     def test_the_supervisor_passes_the_aim_through(self):
         """The rule is worthless if bridge never tells it who is aimed - the
         far side of the boundary, which is where this epic keeps breaking."""
         code = _function_code("_give_them_a_life")
-        self.assertIn("aimed", code,
-                      "life_strategies has to be called with the aim")
+        self.assertIn("aimed", code, "life_strategies has to be called with the aim")
 
     def test_the_drive_quest_action_names_no_traveller(self):
         """It carries a beneficiary, who is who the work is FOR - not who gets
@@ -465,9 +498,12 @@ def _function_code(name: str) -> str:
     """
     node = _function(name)
     body = list(node.body)
-    if (body and isinstance(body[0], ast.Expr)
-            and isinstance(body[0].value, ast.Constant)
-            and isinstance(body[0].value.value, str)):
+    if (
+        body
+        and isinstance(body[0], ast.Expr)
+        and isinstance(body[0].value, ast.Constant)
+        and isinstance(body[0].value.value, str)
+    ):
         body = body[1:]
     return "\n".join(ast.dump(stmt) for stmt in body)
 
@@ -492,8 +528,9 @@ class TheBridgeStopsThrowingQuestPlansAway(unittest.TestCase):
         still one of them, not that it is the only one."""
         tree = ast.parse(_bridge_source())
         for node in ast.walk(tree):
-            if (isinstance(node, ast.Assign)
-                    and any(getattr(t, "id", "") == "DRIVEN_KINDS" for t in node.targets)):
+            if isinstance(node, ast.Assign) and any(
+                getattr(t, "id", "") == "DRIVEN_KINDS" for t in node.targets
+            ):
                 kinds = {e.value for e in node.value.elts}
                 self.assertIn("quest", kinds)
                 self.assertIn("level", kinds)
@@ -519,8 +556,9 @@ class TheBridgeStopsThrowingQuestPlansAway(unittest.TestCase):
         code = _function_code("_aim_traveller")
         self.assertIn("drive_quest", code)
         self.assertIn("name IN", code, "the aim must target holders by name")
-        self.assertNotIn("`lead` = 1", code,
-                         "a leader-only aim is unreadable for a follower")
+        self.assertNotIn(
+            "`lead` = 1", code, "a leader-only aim is unreadable for a follower"
+        )
 
     def test_a_non_holder_is_cleared_rather_than_left_aimed(self):
         """Aiming a character at a quest it does not hold idles it on the next
@@ -534,14 +572,19 @@ class TheBridgeStopsThrowingQuestPlansAway(unittest.TestCase):
         """overseer_roster's columns arrive with the worldserver image, and
         the bridge is a separate deployment with its own restarts. An
         unguarded write would take the whole supervision cycle with it."""
-        handler = [h for n in ast.walk(_function("_aim_traveller"))
-                   if isinstance(n, ast.Try) for h in n.handlers]
+        handler = [
+            h
+            for n in ast.walk(_function("_aim_traveller"))
+            if isinstance(n, ast.Try)
+            for h in n.handlers
+        ]
         self.assertEqual(1, len(handler))
         numbers = [n.value for n in ast.walk(handler[0]) if isinstance(n, ast.Constant)]
         self.assertIn(1054, numbers, "no ER_BAD_FIELD_ERROR guard")
         self.assertTrue(
             any(isinstance(n, ast.Raise) for n in ast.walk(handler[0])),
-            "any other OperationalError must still escape")
+            "any other OperationalError must still escape",
+        )
 
     def test_the_quest_choice_goes_through_questbook(self):
         """Rather than a second, quieter answer to a question questbook has
@@ -553,7 +596,6 @@ class TheBridgeStopsThrowingQuestPlansAway(unittest.TestCase):
         """A hand-copied second copy of that twenty-column join would drift,
         and it would drift silently."""
         self.assertIn("_QUEST_ONE_SQL = _QUEST_SQL.replace(", _bridge_source())
-
 
 
 class AnsweringAPleaActuallyAimsTheFamily(unittest.TestCase):
@@ -571,15 +613,16 @@ class AnsweringAPleaActuallyAimsTheFamily(unittest.TestCase):
 
     def test_the_muster_path_aims_the_family(self):
         code = _bridge_source()
-        self.assertIn("_aim_after_muster", code,
-                      "the muster path has to reach an aim")
-        self.assertIn("_aim_for_plea", code,
-                      "and that aim has to be the plea-derived one")
+        self.assertIn("_aim_after_muster", code, "the muster path has to reach an aim")
+        self.assertIn(
+            "_aim_for_plea", code, "and that aim has to be the plea-derived one"
+        )
 
     def test_the_aim_is_chosen_from_what_the_caller_actually_needs(self):
         code = _function_code("_aim_for_plea")
-        self.assertIn("caller", code,
-                      "the quest has to come from the character who asked")
+        self.assertIn(
+            "caller", code, "the quest has to come from the character who asked"
+        )
 
     def test_only_a_quest_the_helpers_also_hold_is_chosen(self):
         """Aiming a helper at a quest it does not hold idles it on the next
@@ -596,12 +639,17 @@ class AnsweringAPleaActuallyAimsTheFamily(unittest.TestCase):
         # _function_code returns an ast dump, so match the AST form rather
         # than the source text.
         code = _function_code("_aim_for_plea")
-        self.assertIn("Return(value=Constant(value=0))", code,
-                      "there has to be a path that aims nobody")
+        self.assertIn(
+            "Return(value=Constant(value=0))",
+            code,
+            "there has to be a path that aims nobody",
+        )
         self.assertGreaterEqual(
-            code.count("Return(value=Constant(value=0))"), 2,
+            code.count("Return(value=Constant(value=0))"),
+            2,
             "no caller, no incomplete quest, and no shared candidate are all "
-            "reasons to aim nobody rather than aim badly")
+            "reasons to aim nobody rather than aim badly",
+        )
 
     def test_the_quest_the_caller_named_beats_the_most_popular_one(self):
         """Ugga holds six incomplete quests. The most widely held is Bounty on
@@ -614,10 +662,16 @@ class AnsweringAPleaActuallyAimsTheFamily(unittest.TestCase):
         # A named match returns immediately; the popularity fallback can only
         # be reached by falling past it.
         self.assertIn("Return(value=Tuple", chooser)
-        self.assertIn("Constant(value=True)", chooser,
-                      "a named match must short-circuit the popularity path")
-        self.assertIn("about", _function_code("_aim_for_plea"),
-                      "the plea text has to be threaded through")
+        self.assertIn(
+            "Constant(value=True)",
+            chooser,
+            "a named match must short-circuit the popularity path",
+        )
+        self.assertIn(
+            "about",
+            _function_code("_aim_for_plea"),
+            "the plea text has to be threaded through",
+        )
 
 
 class AnyoneCanAskForHelp(unittest.TestCase):
@@ -637,18 +691,24 @@ class AnyoneCanAskForHelp(unittest.TestCase):
         return _function_code(fn)
 
     def test_no_character_name_appears_in_the_plea_aim_code(self):
-        for fn in ("_aim_for_plea", "_pick_plea_quest", "_holders_of",
-                   "_quest_titles", "_aim_traveller"):
+        for fn in (
+            "_aim_for_plea",
+            "_pick_plea_quest",
+            "_holders_of",
+            "_quest_titles",
+            "_aim_traveller",
+        ):
             code = self._code_of(fn)
             found = [n for n in self.FAMILY if n in code]
             self.assertEqual(
-                [], found,
-                "%s hard-codes %s; the caller must come from the plea" % (fn, found))
+                [],
+                found,
+                "%s hard-codes %s; the caller must come from the plea" % (fn, found),
+            )
 
     def test_the_caller_is_taken_from_the_plea_itself(self):
         code = _bridge_source()
-        self.assertIn("plea.caller", code,
-                      "whoever spoke is who gets helped")
+        self.assertIn("plea.caller", code, "whoever spoke is who gets helped")
 
     def test_the_family_roster_comes_from_configuration_not_source(self):
         """_protected_guids reads OVERSEER_NOTABLE_NAMES, so adding a sixth
@@ -674,7 +734,7 @@ class TheLeaderIsNotAGateOnHelpingSomebodyElse(unittest.TestCase):
     """
 
     HELD = {
-        "Grug": frozenset({26, 62, 176, 239, 5261}),   # the leader: NOT 60
+        "Grug": frozenset({26, 62, 176, 239, 5261}),  # the leader: NOT 60
         "Ugga": frozenset({60, 84, 176, 239}),
         "Og": frozenset({60, 176, 239}),
         "Grog": frozenset({60, 84}),
@@ -685,20 +745,23 @@ class TheLeaderIsNotAGateOnHelpingSomebodyElse(unittest.TestCase):
         """The exact live wedge: three of them are carrying quest 60 and the
         one who is not happens to be the leader."""
         self.assertIn(
-            60, questbook.aimable(self.HELD, "Ugga", "Grug"),
-            "quest 60 was held by Ugga, Og and Grog - it was always driveable")
+            60,
+            questbook.aimable(self.HELD, "Ugga", "Grug"),
+            "quest 60 was held by Ugga, Og and Grog - it was always driveable",
+        )
 
     def test_the_beneficiary_still_has_to_hold_it(self):
         """Not a relaxation of both halves. A quest Ugga does not hold cannot
         be observed for progress, so it must never be chosen for her."""
         self.assertNotIn(
-            5261, questbook.aimable(self.HELD, "Ugga", "Grug"),
-            "only Grug holds 5261; aiming it at Ugga could never be observed")
+            5261,
+            questbook.aimable(self.HELD, "Ugga", "Grug"),
+            "only Grug holds 5261; aiming it at Ugga could never be observed",
+        )
 
     def test_with_no_beneficiary_the_leader_is_the_fallback(self):
         """A council that named nobody still has to be able to travel."""
-        self.assertEqual(
-            self.HELD["Grug"], questbook.aimable(self.HELD, "", "Grug"))
+        self.assertEqual(self.HELD["Grug"], questbook.aimable(self.HELD, "", "Grug"))
 
     def test_the_old_intersection_would_have_chosen_nothing(self):
         """Pins the bug itself, so a future refactor that reinstates the
@@ -718,7 +781,8 @@ class TheLeaderIsNotAGateOnHelpingSomebodyElse(unittest.TestCase):
             ledger,
             held_by_traveller=questbook.aimable(self.HELD, "Ugga", "Grug"),
             wanted=60,
-            beneficiary="Ugga")
+            beneficiary="Ugga",
+        )
         self.assertEqual(60, chosen, "the council named 60 and Ugga holds it")
 
 
@@ -727,15 +791,19 @@ class TheChoiceFeedingTheAimDoesNotGateOnTheLeader(unittest.TestCase):
 
     def test_the_chooser_uses_the_shared_rule(self):
         code = _function_code("_choose_drive_quest")
-        self.assertIn("aimable", code,
-                      "the candidate set has to come from questbook.aimable")
+        self.assertIn(
+            "aimable", code, "the candidate set has to come from questbook.aimable"
+        )
 
     def test_the_chooser_no_longer_intersects_with_the_leader(self):
         """The literal `&` against the leader's holdings is the bug."""
         code = _function_code("_choose_drive_quest")
-        self.assertNotIn("BitAnd", code,
-                         "intersecting the candidates with anything is what "
-                         "emptied the set; aimable owns this rule now")
+        self.assertNotIn(
+            "BitAnd",
+            code,
+            "intersecting the candidates with anything is what "
+            "emptied the set; aimable owns this rule now",
+        )
 
 
 if __name__ == "__main__":

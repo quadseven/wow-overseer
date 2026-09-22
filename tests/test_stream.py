@@ -5,6 +5,7 @@ leaving a WoW client running idle when nobody is watching". A client held for
 nobody costs a GPU and 300MB and is INVISIBLE, which is this project's
 favourite kind of bug. Every test below is about that sentence.
 """
+
 import unittest
 
 import stream
@@ -13,8 +14,10 @@ import stream
 def _rows_to_the_cap():
     """Exactly MAX_CHANNELS live rows, every character distinct - a repeat
     would be refused as "already watching" and prove nothing about the cap."""
-    return [{"state": "live", "character": "Filler%d" % i, "mode": "pov"}
-            for i in range(stream.MAX_CHANNELS)]
+    return [
+        {"state": "live", "character": "Filler%d" % i, "mode": "pov"}
+        for i in range(stream.MAX_CHANNELS)
+    ]
 
 
 class Staleness(unittest.TestCase):
@@ -32,7 +35,8 @@ class Staleness(unittest.TestCase):
 
     def test_silence_past_the_timeout_ends_it(self):
         self.assertTrue(
-            stream.is_stale(self._row(), 1000.0 + stream.STALE_AFTER_SECONDS + 1))
+            stream.is_stale(self._row(), 1000.0 + stream.STALE_AFTER_SECONDS + 1)
+        )
 
     def test_the_timeout_is_bounded_in_absolute_seconds(self):
         """Pinned to REAL numbers, not to the constant itself. The first cut
@@ -40,12 +44,18 @@ class Staleness(unittest.TestCase):
         whole class moved with the constant - setting it to 999999 kept the
         suite green, which a mutation run caught. A test derived entirely from
         the value it is checking cannot check it."""
-        self.assertLessEqual(stream.STALE_AFTER_SECONDS, 120,
-                             "a client held this long for nobody is the bug "
-                             "infra#2663 exists to prevent")
-        self.assertGreaterEqual(stream.STALE_AFTER_SECONDS, 30,
-                                "too short and a throttled background tab "
-                                "kills a stream somebody is watching")
+        self.assertLessEqual(
+            stream.STALE_AFTER_SECONDS,
+            120,
+            "a client held this long for nobody is the bug "
+            "infra#2663 exists to prevent",
+        )
+        self.assertGreaterEqual(
+            stream.STALE_AFTER_SECONDS,
+            30,
+            "too short and a throttled background tab "
+            "kills a stream somebody is watching",
+        )
 
     def test_two_minutes_of_silence_is_stale_at_any_setting(self):
         """Absolute, not relative: whatever the constant says, two minutes of
@@ -59,21 +69,22 @@ class Staleness(unittest.TestCase):
         """One lost request must not kill a stream somebody is watching, so
         the timeout is a multiple of the send cadence."""
         self.assertGreaterEqual(
-            stream.STALE_AFTER_SECONDS, 3 * stream.HEARTBEAT_SECONDS)
+            stream.STALE_AFTER_SECONDS, 3 * stream.HEARTBEAT_SECONDS
+        )
 
     def test_an_ended_row_is_never_stale(self):
         """`ended` rows are history. History does not need tearing down, and
         a sweep that kept 'finding' them would act on the same row forever."""
         for state in ("ended", "stopping"):
             self.assertFalse(
-                stream.is_stale(self._row(state=state), 9_999_999.0), state)
+                stream.is_stale(self._row(state=state), 9_999_999.0), state
+            )
 
     def test_a_request_nobody_picked_up_goes_stale_on_its_own_clock(self):
         """No heartbeat yet, because no viewer has confirmed anything - so it
         is judged from when it was asked for. Otherwise a request the agent
         never takes sits in `requested` forever."""
-        row = {"state": "requested", "character": "Grug",
-               "requested_seconds": 500.0}
+        row = {"state": "requested", "character": "Grug", "requested_seconds": 500.0}
         self.assertFalse(stream.is_stale(row, 505.0))
         self.assertTrue(stream.is_stale(row, 500.0 + stream.STALE_AFTER_SECONDS + 1))
 
@@ -82,7 +93,8 @@ class Staleness(unittest.TestCase):
         five times in one day something reported nothing and it was read as a
         measurement. A row with no timestamps has not been measured."""
         self.assertFalse(
-            stream.is_stale({"state": "live", "character": "Grug"}, 9_999_999.0))
+            stream.is_stale({"state": "live", "character": "Grug"}, 9_999_999.0)
+        )
 
 
 class OutcomesReachTheScreen(unittest.TestCase):
@@ -91,9 +103,12 @@ class OutcomesReachTheScreen(unittest.TestCase):
     guessing, which is the bug Evan hit the first time he pressed one."""
 
     def _row(self, **kw):
-        base = {"state": "ended", "character": "Og",
-                "detail": "cam needs a GM account that is not family",
-                "last_seen_seconds": 1000.0}
+        base = {
+            "state": "ended",
+            "character": "Og",
+            "detail": "cam needs a GM account that is not family",
+            "last_seen_seconds": 1000.0,
+        }
         base.update(kw)
         return base
 
@@ -105,7 +120,8 @@ class OutcomesReachTheScreen(unittest.TestCase):
 
     def test_the_sweeps_own_teardown_is_reported_too(self):
         got = stream.outcome_of(
-            self._row(state="stopping", detail="nobody was watching"), 1005.0)
+            self._row(state="stopping", detail="nobody was watching"), 1005.0
+        )
         self.assertEqual("nobody was watching", got["detail"])
 
     def test_a_running_watch_has_no_outcome_yet(self):
@@ -121,8 +137,9 @@ class OutcomesReachTheScreen(unittest.TestCase):
         """Pinned to real numbers rather than to the constant, the same
         lesson the staleness class learned from a mutation run."""
         self.assertLessEqual(stream.OUTCOME_RECENT_SECONDS, 600)
-        self.assertGreaterEqual(stream.OUTCOME_RECENT_SECONDS,
-                                stream.STALE_AFTER_SECONDS)
+        self.assertGreaterEqual(
+            stream.OUTCOME_RECENT_SECONDS, stream.STALE_AFTER_SECONDS
+        )
 
     def test_a_bare_ended_row_says_nothing_because_it_has_nothing_to_say(self):
         self.assertIsNone(stream.outcome_of(self._row(detail=""), 1005.0))
@@ -130,8 +147,7 @@ class OutcomesReachTheScreen(unittest.TestCase):
 
     def test_a_reason_of_unknown_age_is_not_shown(self):
         """No clock is not a measurement - the same refusal is_stale makes."""
-        self.assertIsNone(
-            stream.outcome_of(self._row(last_seen_seconds=None), 1005.0))
+        self.assertIsNone(stream.outcome_of(self._row(last_seen_seconds=None), 1005.0))
 
 
 class AShotIsAWatchThatEnds(unittest.TestCase):
@@ -148,6 +164,7 @@ class AShotIsAWatchThatEnds(unittest.TestCase):
         agent sees KeyError rather than a mismatch. It caught `shot` that way."""
         import ast as _ast
         import pathlib as _pathlib
+
         src = (_pathlib.Path(stream.__file__)).read_text()
         found = {}
         for node in _ast.parse(src).body:
@@ -156,17 +173,24 @@ class AShotIsAWatchThatEnds(unittest.TestCase):
                     found[node.targets[0].id] = _ast.literal_eval(node.value)
                 except ValueError:
                     pass
-        for name in ("MODES", "STATES", "OCCUPIES_A_CLIENT", "STALE_AFTER_SECONDS",
-                     "SHOT_TIMEOUT_SECONDS", "RECORD_TIMEOUT_SECONDS",
-                     "NEEDS_A_VIEWER"):
+        for name in (
+            "MODES",
+            "STATES",
+            "OCCUPIES_A_CLIENT",
+            "STALE_AFTER_SECONDS",
+            "SHOT_TIMEOUT_SECONDS",
+            "RECORD_TIMEOUT_SECONDS",
+            "NEEDS_A_VIEWER",
+        ):
             self.assertIn(name, found, f"{name} is no longer literal-evaluable")
         self.assertEqual(tuple(stream.MODES), tuple(found["MODES"]))
 
     def test_the_named_constants_and_the_literal_tuple_agree(self):
         """MODES is spelled out literally so a parser can read it, which means
         the values exist twice. Gated here so they cannot drift apart."""
-        self.assertEqual((stream.POV, stream.CAM, stream.SHOT, stream.RECORD),
-                         tuple(stream.MODES))
+        self.assertEqual(
+            (stream.POV, stream.CAM, stream.SHOT, stream.RECORD), tuple(stream.MODES)
+        )
         self.assertEqual((stream.POV, stream.CAM), tuple(stream.NEEDS_A_VIEWER))
 
     def test_shot_is_a_real_mode(self):
@@ -176,8 +200,10 @@ class AShotIsAWatchThatEnds(unittest.TestCase):
     def test_a_shot_holds_a_channel_like_anything_else(self):
         """It is a logged-in client for a minute. Pretending otherwise is how
         the cap gets overrun by the one mode nobody is watching."""
-        rows = [{"state": "live", "character": "Grug", "mode": "pov"},
-                {"state": "starting", "character": "Og", "mode": "shot"}]
+        rows = [
+            {"state": "live", "character": "Grug", "mode": "pov"},
+            {"state": "starting", "character": "Og", "mode": "shot"},
+        ]
         self.assertEqual(2, stream.channels_in_use(rows))
 
         # Fill to the cap with the last one a shot, and the next is refused -
@@ -201,21 +227,33 @@ class AShotIsAWatchThatEnds(unittest.TestCase):
         """WoW measured 45-60s to a logged-in client on that hardware. On the
         watch clock the timeout would reliably beat the thing it is timing,
         tearing down the very client midway through starting for it."""
-        shot = {"state": "starting", "character": "Grug", "mode": stream.SHOT,
-                "requested_seconds": 1000.0}
+        shot = {
+            "state": "starting",
+            "character": "Grug",
+            "mode": stream.SHOT,
+            "requested_seconds": 1000.0,
+        }
         self.assertFalse(stream.is_stale(shot, 1000.0 + 90))
 
     def test_a_shot_nobody_serves_still_ends(self):
         """The sweep is its timeout. Without one it would hold a channel
         forever and no second shot could ever start."""
-        shot = {"state": "starting", "character": "Grug", "mode": stream.SHOT,
-                "requested_seconds": 1000.0}
+        shot = {
+            "state": "starting",
+            "character": "Grug",
+            "mode": stream.SHOT,
+            "requested_seconds": 1000.0,
+        }
         self.assertTrue(stream.is_stale(shot, 1000.0 + stream.SHOT_TIMEOUT_SECONDS + 1))
 
     def test_a_watch_keeps_the_short_leash(self):
         """The point of two clocks is that neither drifts onto the other."""
-        watch = {"state": "live", "character": "Grug", "mode": stream.POV,
-                 "last_seen_seconds": 1000.0}
+        watch = {
+            "state": "live",
+            "character": "Grug",
+            "mode": stream.POV,
+            "last_seen_seconds": 1000.0,
+        }
         self.assertTrue(stream.is_stale(watch, 1000.0 + 90))
 
     def test_the_two_timeouts_are_bounded_in_absolute_seconds(self):
@@ -233,8 +271,10 @@ class Channels(unittest.TestCase):
     clients are always up and each encoder costs 0.02 cores (infra#4266)."""
 
     def test_several_channels_can_be_in_use(self):
-        rows = [{"state": "live", "character": "Grug"},
-                {"state": "starting", "character": "Ugga"}]
+        rows = [
+            {"state": "live", "character": "Grug"},
+            {"state": "starting", "character": "Ugga"},
+        ]
         self.assertEqual(2, stream.channels_in_use(rows))
 
     def test_the_cap_can_actually_be_filled(self):
@@ -253,8 +293,10 @@ class Channels(unittest.TestCase):
     def test_ended_rows_do_not_hold_a_channel(self):
         """Otherwise the cap would fill with history and nobody could watch
         anything after two sessions."""
-        rows = [{"state": "ended", "character": "Grug"},
-                {"state": "ended", "character": "Ugga"}]
+        rows = [
+            {"state": "ended", "character": "Grug"},
+            {"state": "ended", "character": "Ugga"},
+        ]
         self.assertEqual(0, stream.channels_in_use(rows))
         self.assertTrue(stream.can_start(rows, "Bork", "cam")[0])
 
@@ -277,18 +319,21 @@ class DeliveryIsNotGuessed(unittest.TestCase):
 
     def test_the_default_is_instructions_not_a_player(self):
         self.assertEqual(stream.DELIVERY_MOONLIGHT, stream.delivery_of({}))
-        self.assertEqual(stream.DELIVERY_MOONLIGHT,
-                         stream.delivery_of({"delivery": ""}))
+        self.assertEqual(
+            stream.DELIVERY_MOONLIGHT, stream.delivery_of({"delivery": ""})
+        )
 
     def test_an_embed_is_only_used_when_explicitly_claimed(self):
-        self.assertEqual(stream.DELIVERY_EMBED,
-                         stream.delivery_of({"delivery": "embed"}))
+        self.assertEqual(
+            stream.DELIVERY_EMBED, stream.delivery_of({"delivery": "embed"})
+        )
 
     def test_an_unrecognised_kind_falls_back_to_instructions(self):
         """Guessing wrong toward Moonlight prints a sentence; guessing wrong
         toward embed shows a dead player."""
-        self.assertEqual(stream.DELIVERY_MOONLIGHT,
-                         stream.delivery_of({"delivery": "webrtc-maybe"}))
+        self.assertEqual(
+            stream.DELIVERY_MOONLIGHT, stream.delivery_of({"delivery": "webrtc-maybe"})
+        )
 
 
 class WatchingChangesTheWatched(unittest.TestCase):
@@ -318,7 +363,8 @@ class Migrations(unittest.TestCase):
 
     def test_a_correct_table_needs_nothing(self):
         sql = stream.stream_migrations(
-            ["character", "mode", "state", "detail", "last_seen"])
+            ["character", "mode", "state", "detail", "last_seen"]
+        )
         self.assertEqual([], sql)
 
     def test_it_is_idempotent_by_construction(self):
@@ -329,8 +375,12 @@ class Migrations(unittest.TestCase):
         self.assertEqual([], stream.stream_migrations(after))
 
     def test_case_does_not_defeat_it(self):
-        self.assertEqual([], stream.stream_migrations(
-            ["Character", "MODE", "State", "Detail", "LAST_SEEN"]))
+        self.assertEqual(
+            [],
+            stream.stream_migrations(
+                ["Character", "MODE", "State", "Detail", "LAST_SEEN"]
+            ),
+        )
 
     def test_state_is_not_an_enum(self):
         """VARCHAR on purpose: a new state word must never need a migration
@@ -351,6 +401,7 @@ class MapServerWiring(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         import pathlib
+
         here = pathlib.Path(__file__).resolve().parent.parent
         cls.server = (here / "map_server.py").read_text()
         cls.page = (here / "index.html").read_text()
@@ -360,10 +411,10 @@ class MapServerWiring(unittest.TestCase):
         contract is that each verb reaches the RIGHT half of the lifecycle.
         The form this replaced only proved the path string appeared somewhere,
         so a GET wired to _watch_post would have passed it."""
-        get_table = self.server[self.server.index("GET_ROUTES = {"):]
-        get_table = get_table[:get_table.index("}")]
-        post_table = self.server[self.server.index("POST_ROUTES = {"):]
-        post_table = post_table[:post_table.index("}")]
+        get_table = self.server[self.server.index("GET_ROUTES = {") :]
+        get_table = get_table[: get_table.index("}")]
+        post_table = self.server[self.server.index("POST_ROUTES = {") :]
+        post_table = post_table[: post_table.index("}")]
         self.assertIn('"/api/watch": _watch_state', get_table)
         self.assertIn('"/api/watch": _watch_post', post_table)
 
@@ -371,8 +422,8 @@ class MapServerWiring(unittest.TestCase):
         """The sweep is the whole lifecycle: a viewer who closed the tab sends
         nothing again, so their silence cannot end anything by itself."""
         self.assertIn("stream_expire", self.server)
-        state = self.server[self.server.index("def _watch_state"):]
-        state = state[:state.index("def _watch_post")]
+        state = self.server[self.server.index("def _watch_state") :]
+        state = state[: state.index("def _watch_post")]
         self.assertIn("stream_expire", state)
 
     def test_the_table_is_migrated_not_merely_created(self):
@@ -390,8 +441,8 @@ class MapServerWiring(unittest.TestCase):
         self.assertIn("_character_exists_by_name", self.server)
 
     def test_the_endpoint_hands_the_reason_to_the_page(self):
-        state = self.server[self.server.index("def _watch_state"):]
-        state = state[:state.index("def _watch_post")]
+        state = self.server[self.server.index("def _watch_state") :]
+        state = state[: state.index("def _watch_post")]
         self.assertIn("outcome_of", state)
         self.assertIn('"outcome"', state)
 
@@ -414,33 +465,35 @@ class MapServerWiring(unittest.TestCase):
         and two surfaces disagreeing about what a row MEANS is worse than
         either being wrong, because only one is on screen to be corrected.
         """
-        view = self.page[self.page.index("function watchView"):]
-        view = view[:view.index("async function refreshWatch")]
+        view = self.page[self.page.index("function watchView") :]
+        view = view[: view.index("async function refreshWatch")]
         self.assertNotIn('"live on Moonlight" + (w.detail', view)
         self.assertIn('w.detail || "live on Moonlight"', view)
 
     def test_the_note_keeps_the_line_breaks_it_was_given(self):
         """detail is several sentences now; textContent collapses newlines
         without pre-wrap, running the instruction into one wall."""
-        css = self.page[self.page.index("#pwnote {"):]
-        self.assertIn("pre-wrap", css[:css.index("}")])
+        css = self.page[self.page.index("#pwnote {") :]
+        self.assertIn("pre-wrap", css[: css.index("}")])
 
     def test_the_sweep_stamps_when_it_gave_up(self):
         """Without a clock on the teardown, outcome_of cannot tell a refusal
         that just happened from one that happened yesterday, and refuses to
         show either."""
-        sweep = self.server[self.server.index("def stream_expire"):]
-        sweep = sweep[:sweep.index("def _character_exists_by_name")]
+        sweep = self.server[self.server.index("def stream_expire") :]
+        sweep = sweep[: sweep.index("def _character_exists_by_name")]
         self.assertIn("last_seen = NOW()", sweep)
 
     def test_the_store_failing_does_not_take_the_map_down(self):
-        main = self.server[self.server.index("def main()"):]
+        main = self.server[self.server.index("def main()") :]
         self.assertIn("_ensure_stream_store", main)
         self.assertIn("except Exception", main)
-        self.assertLess(main.index("logging.basicConfig"),
-                        main.index("_ensure_stream_store"),
-                        "the ensure must run AFTER basicConfig or its failure "
-                        "is emitted through an unconfigured logger")
+        self.assertLess(
+            main.index("logging.basicConfig"),
+            main.index("_ensure_stream_store"),
+            "the ensure must run AFTER basicConfig or its failure "
+            "is emitted through an unconfigured logger",
+        )
 
     def test_the_page_heartbeats_and_does_not_rely_on_unload(self):
         """Silence is the signal. An unload handler misses a crashed tab, a
@@ -452,8 +505,8 @@ class MapServerWiring(unittest.TestCase):
     def test_the_page_never_embeds_a_moonlight_stream(self):
         """Sunshine has no browser player - 47990 is its config UI. An iframe
         at any Sunshine port shows settings or nothing."""
-        view = self.page[self.page.index("function watchView"):]
-        view = view[:view.index("async function refreshWatch")]
+        view = self.page[self.page.index("function watchView") :]
+        view = view[: view.index("async function refreshWatch")]
         self.assertIn('w.delivery === "embed"', view)
         self.assertIn("Moonlight", view)
         self.assertNotIn("<iframe", view)
@@ -462,8 +515,8 @@ class MapServerWiring(unittest.TestCase):
         """A viewer may close the map and keep watching on the Switch. Only
         the staleness sweep decides, because only it cannot be fooled by how
         the page was left."""
-        close = self.page[self.page.index("function closePanel"):]
-        close = close[:close.index("async function fetchPanel")]
+        close = self.page[self.page.index("function closePanel") :]
+        close = close[: close.index("async function fetchPanel")]
         self.assertIn("clearInterval", close)
         self.assertNotIn('"stop"', close)
 
@@ -490,8 +543,13 @@ class AShotIsNotAWatch(unittest.TestCase):
     """
 
     def shot(self, **over):
-        row = {"character": "Ugga", "mode": "shot", "state": "requested",
-               "requested_seconds": 1000.0, "last_seen_seconds": 1000.0}
+        row = {
+            "character": "Ugga",
+            "mode": "shot",
+            "state": "requested",
+            "requested_seconds": 1000.0,
+            "last_seen_seconds": 1000.0,
+        }
         row.update(over)
         return row
 
@@ -500,12 +558,13 @@ class AShotIsNotAWatch(unittest.TestCase):
 
     def test_a_shot_expires_on_its_own_leash(self):
         self.assertTrue(
-            stream.is_stale(self.shot(),
-                            1000.0 + stream.SHOT_TIMEOUT_SECONDS + 1))
+            stream.is_stale(self.shot(), 1000.0 + stream.SHOT_TIMEOUT_SECONDS + 1)
+        )
 
     def test_a_shot_with_no_heartbeat_is_not_stale_for_that_reason(self):
         self.assertFalse(
-            stream.is_stale(self.shot(last_seen_seconds=None), 1000.0 + 90))
+            stream.is_stale(self.shot(last_seen_seconds=None), 1000.0 + 90)
+        )
 
     def test_a_watch_is_unchanged(self):
         self.assertTrue(stream.is_stale(self.shot(mode="pov"), 1000.0 + 61))
@@ -521,8 +580,7 @@ class AShotIsNotAWatch(unittest.TestCase):
         "no viewer" for it and hands it three minutes - a client rendering for
         nobody for three minutes. Asking "is this a shot?" instead puts every
         unknown on the short clock, where being wrong costs a second click."""
-        self.assertTrue(stream.is_stale(self.shot(mode="hologram"),
-                                        1000.0 + 61))
+        self.assertTrue(stream.is_stale(self.shot(mode="hologram"), 1000.0 + 61))
         self.assertTrue(stream.needs_a_viewer({"mode": "hologram"}))
 
     def test_a_shot_may_be_asked_for(self):
@@ -530,8 +588,7 @@ class AShotIsNotAWatch(unittest.TestCase):
         self.assertTrue(allowed, why)
 
     def test_the_shot_leash_is_longer_than_the_watch_one(self):
-        self.assertGreater(stream.SHOT_TIMEOUT_SECONDS,
-                           stream.STALE_AFTER_SECONDS)
+        self.assertGreater(stream.SHOT_TIMEOUT_SECONDS, stream.STALE_AFTER_SECONDS)
 
 
 class TheWaitIsStatedOutLoud(unittest.TestCase):
@@ -544,8 +601,13 @@ class TheWaitIsStatedOutLoud(unittest.TestCase):
     """
 
     def row(self, **over):
-        r = {"character": "Ugga", "mode": "pov", "state": "requested",
-             "requested_seconds": 1000.0, "last_seen_seconds": 1000.0}
+        r = {
+            "character": "Ugga",
+            "mode": "pov",
+            "state": "requested",
+            "requested_seconds": 1000.0,
+            "last_seen_seconds": 1000.0,
+        }
         r.update(over)
         return r
 
@@ -556,13 +618,15 @@ class TheWaitIsStatedOutLoud(unittest.TestCase):
         """last_seen is rewritten every ten seconds. A clock taken from it
         would read "3 seconds" for the whole minute and say nothing at all."""
         self.assertEqual(
-            40, stream.waited_seconds(self.row(last_seen_seconds=1039.0), 1040.0))
+            40, stream.waited_seconds(self.row(last_seen_seconds=1039.0), 1040.0)
+        )
 
     def test_a_row_with_no_clock_admits_it(self):
         """None, not 0: an invented number beside a stated 45-60s budget is a
         lie a viewer would believe."""
         self.assertIsNone(
-            stream.waited_seconds(self.row(requested_seconds=None), 1040.0))
+            stream.waited_seconds(self.row(requested_seconds=None), 1040.0)
+        )
 
     def test_a_clock_never_runs_backwards(self):
         self.assertEqual(0, stream.waited_seconds(self.row(), 990.0))
@@ -583,8 +647,12 @@ class NobodyIsListeningIsItsOwnFailure(unittest.TestCase):
     """
 
     def row(self, **over):
-        r = {"character": "Ugga", "mode": "pov", "state": "requested",
-             "requested_seconds": 1000.0}
+        r = {
+            "character": "Ugga",
+            "mode": "pov",
+            "state": "requested",
+            "requested_seconds": 1000.0,
+        }
         r.update(over)
         return r
 
@@ -598,23 +666,24 @@ class NobodyIsListeningIsItsOwnFailure(unittest.TestCase):
         """The agent writes 'starting' the moment it takes a row, then spends
         its 45-60 seconds. Calling that unclaimed accuses a working machine of
         being switched off, mid-login."""
-        self.assertFalse(stream.looks_unclaimed(
-            self.row(state="starting"), 1100.0))
-        self.assertFalse(stream.looks_unclaimed(
-            self.row(state="live"), 1100.0))
+        self.assertFalse(stream.looks_unclaimed(self.row(state="starting"), 1100.0))
+        self.assertFalse(stream.looks_unclaimed(self.row(state="live"), 1100.0))
 
     def test_a_row_with_no_clock_is_not_accused(self):
-        self.assertFalse(stream.looks_unclaimed(
-            self.row(requested_seconds=None), 1100.0))
+        self.assertFalse(
+            stream.looks_unclaimed(self.row(requested_seconds=None), 1100.0)
+        )
 
     def test_the_agent_gets_more_than_a_couple_of_poll_ticks(self):
         """The agent polls every 5s. Anything under that is a race against a
         machine that is working."""
         self.assertGreaterEqual(stream.UNCLAIMED_AFTER_SECONDS, 15)
-        self.assertLess(stream.UNCLAIMED_AFTER_SECONDS,
-                        stream.STARTUP_SECONDS,
-                        "an unclaimed row must be named before the login "
-                        "budget runs out, or the two failures still blur")
+        self.assertLess(
+            stream.UNCLAIMED_AFTER_SECONDS,
+            stream.STARTUP_SECONDS,
+            "an unclaimed row must be named before the login "
+            "budget runs out, or the two failures still blur",
+        )
 
 
 class ThePlayer(unittest.TestCase):
@@ -628,6 +697,7 @@ class ThePlayer(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         import pathlib
+
         here = pathlib.Path(__file__).resolve().parent.parent
         cls.page = (here / "index.html").read_text()
         cls.server = (here / "map_server.py").read_text()
@@ -639,8 +709,8 @@ class ThePlayer(unittest.TestCase):
         """A browser refuses to autoplay audible video, and refuses to play
         inline on iOS without playsinline. Both failures look like a black
         box, which is the one outcome this feature cannot survive."""
-        tag = self.page[self.page.index('id="pwvid"'):]
-        tag = tag[:tag.index(">")]
+        tag = self.page[self.page.index('id="pwvid"') :]
+        tag = tag[: tag.index(">")]
         for attr in ("muted", "autoplay", "playsinline", "controls"):
             self.assertIn(attr, tag)
 
@@ -652,30 +722,41 @@ class ThePlayer(unittest.TestCase):
         commonly unfocused because the wait is a minute long. The symptom is
         the worst one available: a frozen frame that looks like a live game.
         """
-        player = self.page[self.page.index("function makePlayer"):]
-        player = player[:player.index("const panelPlayer")]
+        player = self.page[self.page.index("function makePlayer") :]
+        player = player[: player.index("const panelPlayer")]
         self.assertIn(".play()", player)
-        self.assertIn("if (!video.paused) return;", player,
-                      "a rejected play() is not always a refusal - an "
-                      "interrupted promise rejects while the video plays on, "
-                      "and the first live run printed 'would not start it' "
-                      "underneath Ugga running through a forest at 30fps")
-        self.assertIn("press play", player,
-                      "a refused play() must tell the person what to do, not "
-                      "leave them looking at a still picture")
-        self.assertEqual(self.page.count("new RTCPeerConnection"), 1,
-                         "ONE WHEP path for both surfaces (infra#2892): a "
-                         "second PeerConnection is a second set of autoplay "
-                         "lies to fall for, and a second chance to disagree "
-                         "about whether a stream is up")
+        self.assertIn(
+            "if (!video.paused) return;",
+            player,
+            "a rejected play() is not always a refusal - an "
+            "interrupted promise rejects while the video plays on, "
+            "and the first live run printed 'would not start it' "
+            "underneath Ugga running through a forest at 30fps",
+        )
+        self.assertIn(
+            "press play",
+            player,
+            "a refused play() must tell the person what to do, not "
+            "leave them looking at a still picture",
+        )
+        self.assertEqual(
+            self.page.count("new RTCPeerConnection"),
+            1,
+            "ONE WHEP path for both surfaces (infra#2892): a "
+            "second PeerConnection is a second set of autoplay "
+            "lies to fall for, and a second chance to disagree "
+            "about whether a stream is up",
+        )
 
     def test_a_live_embed_starts_the_player_rather_than_printing_a_url(self):
-        watch = self.page[self.page.index("async function refreshWatch"):]
-        watch = watch[:watch.index("// --- their own screen")]
+        watch = self.page[self.page.index("async function refreshWatch") :]
+        watch = watch[: watch.index("// --- their own screen")]
         self.assertIn("startPlayer(", watch)
-        self.assertNotIn('"live - open "', watch,
-                         "printing the URL for a person to copy is exactly "
-                         "what this piece replaces")
+        self.assertNotIn(
+            '"live - open "',
+            watch,
+            "printing the URL for a person to copy is exactly what this piece replaces",
+        )
 
     def test_the_whep_endpoint_is_derived_from_the_detail_url(self):
         """`detail` is the URL the agent wrote. WHEP hangs off it; inventing a
@@ -691,18 +772,21 @@ class ThePlayer(unittest.TestCase):
     def test_the_player_says_why_when_the_handshake_fails(self):
         """404 from WHEP means nothing is publishing on that path yet.
         Silence here is a black rectangle and a bug report."""
-        player = self.page[self.page.index("function whepFailure"):]
-        player = player[:player.index("function stopPlayer")]
+        player = self.page[self.page.index("function whepFailure") :]
+        player = player[: player.index("function stopPlayer")]
         self.assertIn("404", player)
-        self.assertNotIn("bad status code", player,
-                         "a status code on its own names nothing to go and "
-                         "look at, which is what an iframe would have given")
+        self.assertNotIn(
+            "bad status code",
+            player,
+            "a status code on its own names nothing to go and "
+            "look at, which is what an iframe would have given",
+        )
 
     def test_closing_the_panel_tears_the_player_down(self):
         """A PeerConnection left open holds a MediaMTX session and keeps
         pulling video across the tailnet for a panel nobody can see."""
-        close = self.page[self.page.index("function closePanel"):]
-        close = close[:close.index("async function fetchPanel")]
+        close = self.page[self.page.index("function closePanel") :]
+        close = close[: close.index("async function fetchPanel")]
         self.assertIn("stopPlayer(", close)
 
     def test_the_panel_polls_the_watch_state(self):
@@ -712,8 +796,8 @@ class ThePlayer(unittest.TestCase):
         self.assertIn("setInterval(refreshWatch", self.page)
 
     def test_the_wait_reaches_the_page_with_its_clock(self):
-        state = self.server[self.server.index("def _watch_state"):]
-        state = state[:state.index("def _watch_post")]
+        state = self.server[self.server.index("def _watch_state") :]
+        state = state[: state.index("def _watch_post")]
         self.assertIn("waited_seconds", state)
         self.assertIn("looks_unclaimed", state)
 
@@ -729,6 +813,6 @@ class ThePlayer(unittest.TestCase):
         watchView rather than refreshWatch since infra#2892 - see
         MapServerWiring.test_a_live_detail_is_printed_verbatim.
         """
-        view = self.page[self.page.index("function watchView"):]
-        view = view[:view.index("async function refreshWatch")]
+        view = self.page[self.page.index("function watchView") :]
+        view = view[: view.index("async function refreshWatch")]
         self.assertIn("w.unclaimed", view)

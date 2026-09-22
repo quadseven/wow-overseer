@@ -7,6 +7,7 @@ dict literal rather than a database, and the ones that matter most (a split
 party, a stall, a schema that predates half the columns) are the ones that are
 hardest to arrange in a live world on purpose.
 """
+
 import unittest
 from datetime import datetime, timedelta
 
@@ -42,30 +43,49 @@ def roster(overrides=None) -> list:
     return rows
 
 
-def build(roster_rows=None, run_rows=(), instance_rows=(), goal_rows=(),
-          trade_rows=(), event_rows=None, quest_titles=None, now=NOW):
+def build(
+    roster_rows=None,
+    run_rows=(),
+    instance_rows=(),
+    goal_rows=(),
+    trade_rows=(),
+    event_rows=None,
+    quest_titles=None,
+    now=NOW,
+):
     """build_agenda with the boring arguments already filled in."""
     if roster_rows is None:
         roster_rows = roster()
     if event_rows is None:
         # Something happened a minute ago, so nothing is stalled by default.
-        event_rows = [{"kind": "quest_accept",
-                       "last_seen": now - timedelta(minutes=1)}]
+        event_rows = [{"kind": "quest_accept", "last_seen": now - timedelta(minutes=1)}]
     if quest_titles is None:
         quest_titles = {101: "The Totem of Infliction", 246: "Assessing the Threat"}
     return agenda.build_agenda(
-        list(roster_rows), list(run_rows), list(instance_rows),
-        list(goal_rows), list(trade_rows), list(event_rows), quest_titles,
+        list(roster_rows),
+        list(run_rows),
+        list(instance_rows),
+        list(goal_rows),
+        list(trade_rows),
+        list(event_rows),
+        quest_titles,
         now=now,
     )
 
 
 def run_row(**overrides) -> dict:
     row = {
-        "id": 1, "leader_name": "Og", "map_id": 36, "state": "active",
-        "started_at": NOW - timedelta(minutes=20), "ended_at": None,
-        "ended_reason": "", "campaign_id": 1, "run_number": 2,
-        "outcome": "", "members": "Bork,Grog,Grug,Og,Ugga",
+        "id": 1,
+        "leader_name": "Og",
+        "map_id": 36,
+        "state": "active",
+        "started_at": NOW - timedelta(minutes=20),
+        "ended_at": None,
+        "ended_reason": "",
+        "campaign_id": 1,
+        "run_number": 2,
+        "outcome": "",
+        "members": "Bork,Grog,Grug,Og,Ugga",
     }
     row.update(overrides)
     return row
@@ -139,46 +159,57 @@ class ASplitPartyIsNeverAveraged(unittest.TestCase):
 
 class ARunInProgress(unittest.TestCase):
     def test_the_headline_carries_the_run_and_the_bosses(self):
-        out = build(run_rows=[run_row()],
-                    instance_rows=[{"id": 3, "map": 36,
-                                    "completedEncounters": 15,
-                                    "resettime": 1788654119}])
+        out = build(
+            run_rows=[run_row()],
+            instance_rows=[
+                {"id": 3, "map": 36, "completedEncounters": 15, "resettime": 1788654119}
+            ],
+        )
         self.assertEqual(out["activity"], agenda.DUNGEON)
         self.assertEqual(
-            out["headline"],
-            "Running The Deadmines, run 2 of 30, 4 of 7 bosses down")
+            out["headline"], "Running The Deadmines, run 2 of 30, 4 of 7 bosses down"
+        )
 
     def test_a_cleared_lockout_is_called_what_it_is(self):
         """127 is every Deadmines bit. A run into an instance that is already
         empty is `outcome = 'emptied'`, and dressing it up as a finished
         dungeon is the one thing this line must not do."""
-        out = build(run_rows=[run_row()],
-                    instance_rows=[{"id": 3, "map": 36,
-                                    "completedEncounters": 127,
-                                    "resettime": 1}])
+        out = build(
+            run_rows=[run_row()],
+            instance_rows=[
+                {"id": 3, "map": 36, "completedEncounters": 127, "resettime": 1}
+            ],
+        )
         self.assertIn("7 of 7 bosses down", out["headline"])
         self.assertIn("already cleared", " ".join(out["detail"]))
 
     def test_an_unknown_map_gets_no_denominator_rather_than_a_wrong_one(self):
-        out = build(run_rows=[run_row(map_id=43)],
-                    instance_rows=[{"id": 9, "map": 43,
-                                    "completedEncounters": 3, "resettime": 1}])
+        out = build(
+            run_rows=[run_row(map_id=43)],
+            instance_rows=[
+                {"id": 9, "map": 43, "completedEncounters": 3, "resettime": 1}
+            ],
+        )
         self.assertIn("2 bosses down", out["headline"])
-        self.assertNotIn(" of ", out["headline"].split("bosses")[0]
-                         .split("run 2 of 30")[-1])
+        self.assertNotIn(
+            " of ", out["headline"].split("bosses")[0].split("run 2 of 30")[-1]
+        )
 
     def test_an_unstamped_run_falls_back_to_the_campaign_counter(self):
         """run_number is stamped at the Clearing transition, so a run that has
         not got that far has 0 - and `done + 1` is what the module prints."""
-        out = build(roster({"Og": {"dungeon_runs_done": 4}}),
-                    run_rows=[run_row(run_number=0)])
+        out = build(
+            roster({"Og": {"dungeon_runs_done": 4}}), run_rows=[run_row(run_number=0)]
+        )
         self.assertIn("run 5 of 30", out["headline"])
 
     def test_a_run_outranks_a_job_split_but_still_reports_it(self):
         """A run actually under way is what is happening whatever the rows
         say - but the disagreement does not get to disappear."""
-        out = build(roster({"Ugga": {"job": "quest"}, "Og": {"job": "dungeon"}}),
-                    run_rows=[run_row()])
+        out = build(
+            roster({"Ugga": {"job": "quest"}, "Og": {"job": "dungeon"}}),
+            run_rows=[run_row()],
+        )
         self.assertEqual(out["activity"], agenda.DUNGEON)
         self.assertIn("does not agree on the job", " ".join(out["detail"]))
 
@@ -233,9 +264,14 @@ class TheCampaignCounter(unittest.TestCase):
 
     def test_between_runs_names_why_the_last_one_ended(self):
         rows = {n: {"job": "dungeon"} for n in FAMILY}
-        out = build(roster(rows),
-                    run_rows=[run_row(state="ended", outcome="wipe",
-                                      ended_at=NOW - timedelta(minutes=5))])
+        out = build(
+            roster(rows),
+            run_rows=[
+                run_row(
+                    state="ended", outcome="wipe", ended_at=NOW - timedelta(minutes=5)
+                )
+            ],
+        )
         self.assertEqual(out["activity"], agenda.DUNGEON)
         self.assertIn("Between dungeon runs", out["headline"])
         self.assertIn("the party wiped", " ".join(out["detail"]))
@@ -252,41 +288,52 @@ class TheCampaignCounter(unittest.TestCase):
 
 
 class Errands(unittest.TestCase):
-    TRADE = [{"character_name": "Og", "verb": "learn", "skill_name": "tailoring",
-              "reason": "Og is assigned tailoring because the mage wears cloth.",
-              "status": "planned",
-              "decided_at": datetime(2026, 9, 3, 1, 32, 55)}]
+    TRADE = [
+        {
+            "character_name": "Og",
+            "verb": "learn",
+            "skill_name": "tailoring",
+            "reason": "Og is assigned tailoring because the mage wears cloth.",
+            "status": "planned",
+            "decided_at": datetime(2026, 9, 3, 1, 32, 55),
+        }
+    ]
 
     def test_the_leader_walking_is_the_familys_goal(self):
-        out = build(roster({"Og": {"travel_npc": "profession trainer",
-                                   "learn_skill": 197}}),
-                    trade_rows=self.TRADE)
+        out = build(
+            roster({"Og": {"travel_npc": "profession trainer", "learn_skill": 197}}),
+            trade_rows=self.TRADE,
+        )
         self.assertEqual(out["activity"], agenda.TRAVEL)
         self.assertEqual(
             out["headline"],
-            "Walking Og to the nearest profession trainer to learn Tailoring")
+            "Walking Og to the nearest profession trainer to learn Tailoring",
+        )
 
     def test_a_non_leader_walking_is_a_side_trip_not_the_headline(self):
         """mod-overseer gates the RPG drive to the traveller, so the other
         four follow the LEADER. One of them wandering off does not change what
         the family is doing."""
-        out = build(roster({"Grug": {"travel_npc": "profession trainer",
-                                     "learn_skill": 164}}))
+        out = build(
+            roster({"Grug": {"travel_npc": "profession trainer", "learn_skill": 164}})
+        )
         self.assertEqual(out["activity"], agenda.QUEST)
         self.assertIn("Meanwhile Grug is walking", " ".join(out["detail"]))
 
     def test_the_councils_reason_is_quoted(self):
-        out = build(roster({"Og": {"travel_npc": "profession trainer",
-                                   "learn_skill": 197}}),
-                    trade_rows=self.TRADE)
+        out = build(
+            roster({"Og": {"travel_npc": "profession trainer", "learn_skill": 197}}),
+            trade_rows=self.TRADE,
+        )
         self.assertIn("the mage wears cloth", " ".join(out["detail"]))
         self.assertEqual(out["orders"]["kind"], "errand")
 
     def test_a_long_reason_is_cut_on_a_word(self):
         long = "word " * 200
-        out = build(roster({"Og": {"travel_npc": "profession trainer",
-                                   "learn_skill": 197}}),
-                    trade_rows=[dict(self.TRADE[0], reason=long)])
+        out = build(
+            roster({"Og": {"travel_npc": "profession trainer", "learn_skill": 197}}),
+            trade_rows=[dict(self.TRADE[0], reason=long)],
+        )
         quoted = out["detail"][0]
         self.assertLessEqual(len(quoted), agenda.REASON_CHARS + 3)
         self.assertTrue(quoted.endswith("..."))
@@ -295,9 +342,11 @@ class Errands(unittest.TestCase):
         """The live state on 2026-09-03: Grug under a Discord quest order
         while Og walks to a tailoring trainer. Crediting the trainer headline
         to the Discord order would put the badge on the wrong sentence."""
-        out = build(roster({"Og": {"travel_npc": "profession trainer",
-                                   "learn_skill": 197}}),
-                    goal_rows=DiscordOrders.GOAL, trade_rows=self.TRADE)
+        out = build(
+            roster({"Og": {"travel_npc": "profession trainer", "learn_skill": 197}}),
+            goal_rows=DiscordOrders.GOAL,
+            trade_rows=self.TRADE,
+        )
         self.assertEqual(out["activity"], agenda.TRAVEL)
         self.assertEqual(out["orders"]["kind"], "errand")
         self.assertIsNone(out["orders"]["channel_id"])
@@ -305,11 +354,13 @@ class Errands(unittest.TestCase):
     def test_a_side_errand_leaves_the_discord_order_credited(self):
         """The headline really is about the quest there, so the order that
         produced it is the one to name."""
-        out = build(roster({"Grug": {"travel_npc": "profession trainer",
-                                     "learn_skill": 164}}),
-                    goal_rows=DiscordOrders.GOAL,
-                    trade_rows=[dict(self.TRADE[0], character_name="Grug",
-                                     skill_name="blacksmithing")])
+        out = build(
+            roster({"Grug": {"travel_npc": "profession trainer", "learn_skill": 164}}),
+            goal_rows=DiscordOrders.GOAL,
+            trade_rows=[
+                dict(self.TRADE[0], character_name="Grug", skill_name="blacksmithing")
+            ],
+        )
         self.assertEqual(out["activity"], agenda.QUEST)
         self.assertEqual(out["orders"]["kind"], "discord")
 
@@ -317,8 +368,9 @@ class Errands(unittest.TestCase):
         """The coordinator parks escorted members with a travel aim and they
         deliberately keep it while standing still. Reading those as errands
         would report five people running errands mid-clear."""
-        out = build(roster({"Og": {"travel_npc": "trigger:4247"}}),
-                    run_rows=[run_row()])
+        out = build(
+            roster({"Og": {"travel_npc": "trigger:4247"}}), run_rows=[run_row()]
+        )
         self.assertEqual(out["activity"], agenda.DUNGEON)
 
 
@@ -337,8 +389,9 @@ class TravelTargetsTheModuleAccepts(unittest.TestCase):
         self.assertNotIn("nowhere", said)
 
     def test_a_role_keyword_still_goes_through_travel(self):
-        self.assertEqual(agenda.describe_aim("profession trainer"),
-                         "the nearest profession trainer")
+        self.assertEqual(
+            agenda.describe_aim("profession trainer"), "the nearest profession trainer"
+        )
 
     def test_a_bare_creature_entry_still_goes_through_travel(self):
         self.assertEqual(agenda.describe_aim("5511"), "creature 5511")
@@ -349,32 +402,39 @@ class TravelTargetsTheModuleAccepts(unittest.TestCase):
 
 class Staleness(unittest.TestCase):
     def test_a_quiet_family_is_called_stalled(self):
-        out = build(event_rows=[{"kind": "quest_accept",
-                                 "last_seen": NOW - timedelta(minutes=45)}])
+        out = build(
+            event_rows=[
+                {"kind": "quest_accept", "last_seen": NOW - timedelta(minutes=45)}
+            ]
+        )
         self.assertTrue(out["stalled"])
         self.assertEqual(out["moved_seconds"], 45 * 60)
 
     def test_a_busy_family_is_not(self):
-        out = build(event_rows=[{"kind": "level_up",
-                                 "last_seen": NOW - timedelta(minutes=3)}])
+        out = build(
+            event_rows=[{"kind": "level_up", "last_seen": NOW - timedelta(minutes=3)}]
+        )
         self.assertFalse(out["stalled"])
 
     def test_dying_on_a_loop_is_not_progress(self):
         """A party wiping every few minutes writes a death row every few
         minutes. Counting those would make this agree that a stuck family was
         busy, which is the whole failure it exists to catch."""
-        out = build(event_rows=[
-            {"kind": "quest_accept", "last_seen": NOW - timedelta(hours=2)},
-            {"kind": "death", "last_seen": NOW - timedelta(seconds=30)},
-        ])
+        out = build(
+            event_rows=[
+                {"kind": "quest_accept", "last_seen": NOW - timedelta(hours=2)},
+                {"kind": "death", "last_seen": NOW - timedelta(seconds=30)},
+            ]
+        )
         self.assertTrue(out["stalled"])
 
     def test_a_stalled_run_says_the_heartbeat_proves_nothing(self):
         """quadseven/mod-overseer#171 from outside: the run still reads active
         because last_progress_at is touched for everyone standing inside."""
-        out = build(run_rows=[run_row()],
-                    event_rows=[{"kind": "item_equip",
-                                 "last_seen": NOW - timedelta(hours=1)}])
+        out = build(
+            run_rows=[run_row()],
+            event_rows=[{"kind": "item_equip", "last_seen": NOW - timedelta(hours=1)}],
+        )
         self.assertTrue(out["stalled"])
         self.assertIn("mod-overseer#171", " ".join(out["detail"]))
 
@@ -386,18 +446,22 @@ class Staleness(unittest.TestCase):
         self.assertIsNone(out["moved_seconds"])
 
     def test_clock_skew_never_prints_a_negative_age(self):
-        out = build(event_rows=[{"kind": "level_up",
-                                 "last_seen": NOW + timedelta(seconds=3)}])
+        out = build(
+            event_rows=[{"kind": "level_up", "last_seen": NOW + timedelta(seconds=3)}]
+        )
         self.assertEqual(out["moved_seconds"], 0)
 
 
 class TheStallSentence(unittest.TestCase):
-
     def test_it_carries_the_real_gap_and_not_the_threshold(self):
-        out = build(event_rows=[{"kind": "quest_accept",
-                                 "last_seen": NOW - timedelta(hours=13)}])
-        self.assertEqual(out["stall_line"],
-                         "STALLED: no quest, level or gear change for 13 hours.")
+        out = build(
+            event_rows=[
+                {"kind": "quest_accept", "last_seen": NOW - timedelta(hours=13)}
+            ]
+        )
+        self.assertEqual(
+            out["stall_line"], "STALLED: no quest, level or gear change for 13 hours."
+        )
 
     def test_a_busy_family_has_none(self):
         self.assertEqual(build()["stall_line"], "")
@@ -416,14 +480,18 @@ class TheRunProgressColumnIsNotAProgressSignal(unittest.TestCase):
 
     def test_last_movement_ignores_the_run_table_entirely(self):
         import inspect
+
         source = inspect.getsource(agenda.last_movement)
         body = source.split('"""')[2]
         self.assertNotIn("last_progress_at", body)
 
     def test_a_warm_heartbeat_does_not_clear_a_stall(self):
-        out = build(run_rows=[run_row(last_progress_at=NOW)],
-                    event_rows=[{"kind": "quest_complete",
-                                 "last_seen": NOW - timedelta(hours=3)}])
+        out = build(
+            run_rows=[run_row(last_progress_at=NOW)],
+            event_rows=[
+                {"kind": "quest_complete", "last_seen": NOW - timedelta(hours=3)}
+            ],
+        )
         self.assertTrue(out["stalled"])
 
 
@@ -434,8 +502,9 @@ class ASchemaThatPredatesTheColumns(unittest.TestCase):
     raise."""
 
     def test_a_roster_with_only_its_oldest_columns_still_answers(self):
-        rows = [{"name": n, "enabled": 1, "lead": 1 if n == "Og" else 0}
-                for n in FAMILY]
+        rows = [
+            {"name": n, "enabled": 1, "lead": 1 if n == "Og" else 0} for n in FAMILY
+        ]
         out = build(rows)
         self.assertEqual(out["activity"], agenda.QUEST)
         self.assertEqual(out["campaign"]["done"], 0)
@@ -446,19 +515,34 @@ class ASchemaThatPredatesTheColumns(unittest.TestCase):
         self.assertTrue(out["headline"])
 
     def test_a_run_row_without_the_accounting_columns_still_reads(self):
-        thin = {"id": 1, "leader_name": "Og", "map_id": 36, "state": "active",
-                "started_at": NOW - timedelta(minutes=5), "ended_at": None,
-                "ended_reason": ""}
+        thin = {
+            "id": 1,
+            "leader_name": "Og",
+            "map_id": 36,
+            "state": "active",
+            "started_at": NOW - timedelta(minutes=5),
+            "ended_at": None,
+            "ended_reason": "",
+        }
         out = build(run_rows=[thin])
         self.assertEqual(out["activity"], agenda.DUNGEON)
         self.assertIn("The Deadmines", out["headline"])
 
 
 class DiscordOrders(unittest.TestCase):
-    GOAL = [{"character_name": "Grug", "kind": "quest", "skill_name": None,
-             "target": 0, "status": "active", "channel_id": "154305710",
-             "last_report": "-15/4", "quest_id": 101,
-             "created_at": datetime(2026, 9, 2, 22, 8, 44)}]
+    GOAL = [
+        {
+            "character_name": "Grug",
+            "kind": "quest",
+            "skill_name": None,
+            "target": 0,
+            "status": "active",
+            "channel_id": "154305710",
+            "last_report": "-15/4",
+            "quest_id": 101,
+            "created_at": datetime(2026, 9, 2, 22, 8, 44),
+        }
+    ]
 
     def test_an_active_order_is_credited_to_discord(self):
         out = build(goal_rows=self.GOAL)
@@ -488,8 +572,7 @@ class OtherJobs(unittest.TestCase):
         out = build(roster({n: {"job": "farm"} for n in FAMILY}))
         self.assertEqual(out["activity"], agenda.JOB)
         self.assertIn("farm", out["headline"])
-        self.assertIn("Nothing is wired behind that mode yet",
-                      " ".join(out["detail"]))
+        self.assertIn("Nothing is wired behind that mode yet", " ".join(out["detail"]))
 
     def test_dungeon_is_never_described_as_unbuilt(self):
         """It is the sole trigger for the whole run coordinator. Saying it is
@@ -513,6 +596,7 @@ class TheEncounterDenominator(unittest.TestCase):
         denominator from that list would print 'of 8' for a dungeon that can
         only reach 7."""
         import achievements
+
         self.assertEqual(agenda.ENCOUNTERS[36], 7)
         self.assertEqual(len(achievements.DUNGEONS[36]["bosses"]), 8)
 
@@ -565,10 +649,13 @@ class WhatTheColumnsSayIsSet(unittest.TestCase):
         self.assertIsNone(state["job_split"])
 
     def test_the_counter_is_the_one_campaign_already_decided(self):
-        rows = roster({"Og": {"dungeon_runs_done": 1},
-                       "Grug": {"dungeon_runs_done": 5}})
-        self.assertEqual(agenda.standing_orders(rows)["campaign"],
-                         agenda.campaign(agenda._enabled(rows)))
+        rows = roster(
+            {"Og": {"dungeon_runs_done": 1}, "Grug": {"dungeon_runs_done": 5}}
+        )
+        self.assertEqual(
+            agenda.standing_orders(rows)["campaign"],
+            agenda.campaign(agenda._enabled(rows)),
+        )
 
     def test_the_travel_column_comes_back_per_character(self):
         rows = roster({"Grug": {"travel_npc": "profession trainer"}})
@@ -586,8 +673,9 @@ class WhatTheColumnsSayIsSet(unittest.TestCase):
     def test_a_schema_without_the_job_column_still_answers(self):
         """The adapter drops to a narrower SELECT on a degraded schema, so
         these dicts genuinely arrive without the column."""
-        rows = [{"name": n, "enabled": 1, "lead": 1 if n == "Og" else 0}
-                for n in FAMILY]
+        rows = [
+            {"name": n, "enabled": 1, "lead": 1 if n == "Og" else 0} for n in FAMILY
+        ]
         state = agenda.standing_orders(rows)
         self.assertEqual(state["job"], jobs.DEFAULT)
         self.assertEqual(state["campaign"]["done"], 0)
@@ -604,25 +692,46 @@ class OneFamilyPerBanner(unittest.TestCase):
     HORDE = ("Zug", "Oz")
 
     def rows(self):
-        horde = [{"name": n, "enabled": 1, "lead": 1 if n == "Zug" else 0,
-                  "job": "quest", "drive_quest": 246, "travel_npc": "",
-                  "learn_skill": 0, "dungeon_runs_wanted": 0,
-                  "dungeon_runs_done": 0} for n in self.HORDE]
+        horde = [
+            {
+                "name": n,
+                "enabled": 1,
+                "lead": 1 if n == "Zug" else 0,
+                "job": "quest",
+                "drive_quest": 246,
+                "travel_npc": "",
+                "learn_skill": 0,
+                "dungeon_runs_wanted": 0,
+                "dungeon_runs_done": 0,
+            }
+            for n in self.HORDE
+        ]
         return roster() + horde
 
     def scoped(self, members, **kw):
         return agenda.build_agenda(
-            self.rows(), list(kw.get("run_rows", ())), [],
-            list(kw.get("goal_rows", ())), [],
+            self.rows(),
+            list(kw.get("run_rows", ())),
+            [],
+            list(kw.get("goal_rows", ())),
+            [],
             [{"kind": "quest_accept", "last_seen": NOW - timedelta(minutes=1)}],
             {101: "The Totem of Infliction", 246: "Assessing the Threat"},
-            now=NOW, members=list(members))
+            now=NOW,
+            members=list(members),
+        )
 
     def test_unscoped_the_two_families_are_one_roster_which_is_the_bug(self):
         out = agenda.build_agenda(
-            self.rows(), [], [], [], [],
+            self.rows(),
+            [],
+            [],
+            [],
+            [],
             [{"kind": "quest_accept", "last_seen": NOW - timedelta(minutes=1)}],
-            {101: "a", 246: "b"}, now=NOW)
+            {101: "a", 246: "b"},
+            now=NOW,
+        )
         self.assertEqual(len(out["roster"]), len(FAMILY) + len(self.HORDE))
 
     def test_each_family_reads_only_its_own_roster(self):

@@ -6,28 +6,56 @@ nothing ever listed on the auction house, and twenty-two uncommons on Grug
 alone. The refusals below are not hypothetical - most of them are the state
 that family is actually in.
 """
+
 import unittest
 
-from disposition import (AUCTION, BANK, BIND_NONE, BIND_ON_EQUIP, BIND_ON_PICKUP,
-                         EXECUTABLE_TODAY,
-                         DISENCHANT, GIVE, KEEP, VENDOR, Family, Item, decide,
-                         outgrown)
+from disposition import (
+    AUCTION,
+    BANK,
+    BIND_NONE,
+    BIND_ON_EQUIP,
+    BIND_ON_PICKUP,
+    EXECUTABLE_TODAY,
+    DISENCHANT,
+    GIVE,
+    KEEP,
+    VENDOR,
+    Family,
+    Item,
+    decide,
+    outgrown,
+)
 
 # A town with both services open, so a test about routing is not accidentally
 # a test about being out in the field.
-TOWN = Family(enchanting_skill=0, vendor_reachable=True, auction_reachable=True,
-              professions={"tailoring": 1})
+TOWN = Family(
+    enchanting_skill=0,
+    vendor_reachable=True,
+    auction_reachable=True,
+    professions={"tailoring": 1},
+)
 
 # The family as measured: Og can technically enchant, at skill one.
-REAL = Family(enchanting_skill=1, vendor_reachable=True, auction_reachable=False,
-              professions={"tailoring": 1, "alchemy": 1, "leatherworking": 1})
+REAL = Family(
+    enchanting_skill=1,
+    vendor_reachable=True,
+    auction_reachable=False,
+    professions={"tailoring": 1, "alchemy": 1, "leatherworking": 1},
+)
 
 
 def green(name="Ivycloth Cloak", **kw):
     """An ordinary outgrown green, overridable per test."""
-    base = dict(name=name, quality=2, known=True, binding=BIND_ON_EQUIP,
-                quest_item=False, equipment=True, required_level=15,
-                sell_price=100)
+    base = dict(
+        name=name,
+        quality=2,
+        known=True,
+        binding=BIND_ON_EQUIP,
+        quest_item=False,
+        equipment=True,
+        required_level=15,
+        sell_price=100,
+    )
     base.update(kw)
     return Item(**base)
 
@@ -71,7 +99,6 @@ class SoulboundCannotBeListed(unittest.TestCase):
 
 
 class TheAuctionHasToBeWorthTheWalk(unittest.TestCase):
-
     def test_a_green_worth_barely_more_than_vendor_is_not_listed(self):
         it = green(auction_value=110, sell_price=100)
         self.assertEqual(decide(it, TOWN, character_level=28).route, VENDOR)
@@ -110,38 +137,44 @@ class DisenchantingIsNotAvailableToThisFamily(unittest.TestCase):
         self.assertEqual(decide(it, able, character_level=28).route, VENDOR)
 
     def test_trade_goods_are_not_disenchantable_however_high_the_skill(self):
-        able = Family(enchanting_skill=450, vendor_reachable=True,
-                      professions={})
-        cloth = Item(name="Linen Cloth", quality=1, known=True,
-                     binding=BIND_NONE, quest_item=False, equipment=False,
-                     sell_price=10, disenchant_skill_required=1)
+        able = Family(enchanting_skill=450, vendor_reachable=True, professions={})
+        cloth = Item(
+            name="Linen Cloth",
+            quality=1,
+            known=True,
+            binding=BIND_NONE,
+            quest_item=False,
+            equipment=False,
+            sell_price=10,
+            disenchant_skill_required=1,
+        )
         self.assertNotEqual(decide(cloth, able).route, DISENCHANT)
 
     def test_a_common_item_is_not_disenchantable(self):
         able = Family(enchanting_skill=450, vendor_reachable=True)
-        it = green(quality=1, binding=BIND_ON_PICKUP,
-                   disenchant_skill_required=1)
-        self.assertNotEqual(decide(it, able, character_level=28).route,
-                            DISENCHANT)
+        it = green(quality=1, binding=BIND_ON_PICKUP, disenchant_skill_required=1)
+        self.assertNotEqual(decide(it, able, character_level=28).route, DISENCHANT)
 
 
 class OldMeansOutgrown(unittest.TestCase):
-
     def test_a_green_near_your_level_is_kept(self):
-        self.assertEqual(decide(green(required_level=25), TOWN,
-                                character_level=28).route, KEEP)
+        self.assertEqual(
+            decide(green(required_level=25), TOWN, character_level=28).route, KEEP
+        )
 
     def test_a_green_far_below_your_level_is_cleared_out(self):
-        self.assertNotEqual(decide(green(required_level=10), TOWN,
-                                   character_level=28).route, KEEP)
+        self.assertNotEqual(
+            decide(green(required_level=10), TOWN, character_level=28).route, KEEP
+        )
 
     def test_the_margin_protects_an_item_a_sibling_might_still_want(self):
         self.assertFalse(outgrown(green(required_level=20), 28))
         self.assertTrue(outgrown(green(required_level=18), 28))
 
     def test_something_with_no_level_is_not_equipment_to_outgrow(self):
-        cloth = Item(name="Linen Cloth", quality=1, known=True,
-                     quest_item=False, equipment=False)
+        cloth = Item(
+            name="Linen Cloth", quality=1, known=True, quest_item=False, equipment=False
+        )
         self.assertFalse(outgrown(cloth, 28))
 
 
@@ -151,9 +184,16 @@ class ProfessionMaterialsAreNotLoot(unittest.TestCase):
     was one unset flag away from."""
 
     def cloth(self, **kw):
-        base = dict(name="Linen Cloth", quality=1, known=True,
-                    binding=BIND_NONE, quest_item=False, equipment=False,
-                    sell_price=10, reagent_for="tailoring")
+        base = dict(
+            name="Linen Cloth",
+            quality=1,
+            known=True,
+            binding=BIND_NONE,
+            quest_item=False,
+            equipment=False,
+            sell_price=10,
+            reagent_for="tailoring",
+        )
         base.update(kw)
         return Item(**base)
 
@@ -162,26 +202,25 @@ class ProfessionMaterialsAreNotLoot(unittest.TestCase):
 
     def test_cloth_for_a_profession_nobody_has_is_still_kept(self):
         nobody = Family(vendor_reachable=True, professions={})
-        self.assertEqual(decide(self.cloth(), nobody, reagent_held=999).route,
-                         KEEP)
+        self.assertEqual(decide(self.cloth(), nobody, reagent_held=999).route, KEEP)
 
     def test_surplus_beyond_what_the_family_keeps_is_sold(self):
-        self.assertEqual(decide(self.cloth(), TOWN, reagent_held=500).route,
-                         VENDOR)
+        self.assertEqual(decide(self.cloth(), TOWN, reagent_held=500).route, VENDOR)
 
     def test_surplus_is_listed_when_it_is_worth_more_that_way(self):
         it = self.cloth(auction_value=1000)
         self.assertEqual(decide(it, TOWN, reagent_held=500).route, AUCTION)
 
     def test_surplus_with_nowhere_to_go_is_kept_not_dropped(self):
-        field = Family(vendor_reachable=False, auction_reachable=False,
-                       professions={"tailoring": 1})
-        self.assertEqual(decide(self.cloth(), field, reagent_held=500).route,
-                         KEEP)
+        field = Family(
+            vendor_reachable=False,
+            auction_reachable=False,
+            professions={"tailoring": 1},
+        )
+        self.assertEqual(decide(self.cloth(), field, reagent_held=500).route, KEEP)
 
 
 class TheFamilyComesBeforeTheVendor(unittest.TestCase):
-
     def test_an_upgrade_for_a_sibling_is_handed_over_not_sold(self):
         it = green(auction_value=100000)
         v = decide(it, TOWN, character_level=28, upgrade_for_sibling=True)
@@ -190,20 +229,27 @@ class TheFamilyComesBeforeTheVendor(unittest.TestCase):
     def test_that_beats_even_a_valuable_auction(self):
         """Ranking check: the family gate is above every disposal, so a
         mis-ranked disposal can waste value but never lose a sibling's upgrade."""
-        it = green(binding=BIND_ON_EQUIP, auction_value=10 ** 9)
-        self.assertEqual(decide(it, TOWN, character_level=28,
-                                upgrade_for_sibling=True).route, GIVE)
+        it = green(binding=BIND_ON_EQUIP, auction_value=10**9)
+        self.assertEqual(
+            decide(it, TOWN, character_level=28, upgrade_for_sibling=True).route, GIVE
+        )
 
 
 class EveryVerdictExplainsItself(unittest.TestCase):
     def test_no_verdict_is_silent(self):
-        cases = [Item(name="???"), green(), green(binding=BIND_ON_PICKUP),
-                 green(required_level=27)]
+        cases = [
+            Item(name="???"),
+            green(),
+            green(binding=BIND_ON_PICKUP),
+            green(required_level=27),
+        ]
         for it in cases:
             v = decide(it, TOWN, character_level=28)
-            self.assertTrue(v.why.strip(),
-                            "a route with no reason cannot be reviewed: %r" % it.name)
+            self.assertTrue(
+                v.why.strip(), "a route with no reason cannot be reviewed: %r" % it.name
+            )
             self.assertIn(it.name, v.why)
+
 
 class TheBankIsWhereThingsGoToWait(unittest.TestCase):
     """Measured 2026-09-04: every member had elsewhere=0, so the family has
@@ -217,51 +263,66 @@ class TheBankIsWhereThingsGoToWait(unittest.TestCase):
     """
 
     def cloth(self, **kw):
-        base = dict(name="Linen Cloth", quality=1, known=True,
-                    binding=BIND_NONE, quest_item=False, equipment=False,
-                    sell_price=10, reagent_for="tailoring")
+        base = dict(
+            name="Linen Cloth",
+            quality=1,
+            known=True,
+            binding=BIND_NONE,
+            quest_item=False,
+            equipment=False,
+            sell_price=10,
+            reagent_for="tailoring",
+        )
         base.update(kw)
         return Item(**base)
 
     def test_mats_for_a_profession_nobody_has_are_banked_not_carried(self):
-        nobody = Family(vendor_reachable=True, bank_reachable=True,
-                        professions={})
-        self.assertEqual(decide(self.cloth(), nobody, reagent_held=999).route,
-                         BANK)
+        nobody = Family(vendor_reachable=True, bank_reachable=True, professions={})
+        self.assertEqual(decide(self.cloth(), nobody, reagent_held=999).route, BANK)
 
     def test_without_a_bank_those_mats_are_still_never_sold(self):
         """The bank is a convenience. Its absence must not turn into a sale of
         something the family was keeping on purpose."""
-        nobody = Family(vendor_reachable=True, bank_reachable=False,
-                        professions={})
-        self.assertEqual(decide(self.cloth(), nobody, reagent_held=999).route,
-                         KEEP)
+        nobody = Family(vendor_reachable=True, bank_reachable=False, professions={})
+        self.assertEqual(decide(self.cloth(), nobody, reagent_held=999).route, KEEP)
 
     def test_surplus_with_no_buyer_in_reach_goes_to_the_bank(self):
-        field = Family(vendor_reachable=False, auction_reachable=False,
-                       bank_reachable=True, professions={"tailoring": 1})
-        self.assertEqual(decide(self.cloth(), field, reagent_held=500).route,
-                         BANK)
+        field = Family(
+            vendor_reachable=False,
+            auction_reachable=False,
+            bank_reachable=True,
+            professions={"tailoring": 1},
+        )
+        self.assertEqual(decide(self.cloth(), field, reagent_held=500).route, BANK)
 
     def test_a_buyer_in_reach_still_beats_the_bank_for_true_surplus(self):
         """Banking surplus is hoarding with extra steps. If somebody will pay
         for it and the family cannot use it, take the money."""
-        town = Family(vendor_reachable=True, auction_reachable=True,
-                      bank_reachable=True, professions={"tailoring": 1})
-        self.assertEqual(decide(self.cloth(), town, reagent_held=500).route,
-                         VENDOR)
+        town = Family(
+            vendor_reachable=True,
+            auction_reachable=True,
+            bank_reachable=True,
+            professions={"tailoring": 1},
+        )
+        self.assertEqual(decide(self.cloth(), town, reagent_held=500).route, VENDOR)
 
     def test_cloth_the_tailor_is_using_stays_in_the_bags(self):
         """Banking something needed today is worse than carrying it: it costs a
         walk to get back."""
-        town = Family(vendor_reachable=True, bank_reachable=True,
-                      professions={"tailoring": 1})
+        town = Family(
+            vendor_reachable=True, bank_reachable=True, professions={"tailoring": 1}
+        )
         self.assertEqual(decide(self.cloth(), town, reagent_held=39).route, KEEP)
 
     def test_the_bank_is_never_offered_for_a_quest_item(self):
         town = Family(vendor_reachable=True, bank_reachable=True)
-        it = Item(name="Gold Pickup Schedule", quality=1, known=True,
-                  quest_item=True, binding=BIND_ON_PICKUP)
+        it = Item(
+            name="Gold Pickup Schedule",
+            quality=1,
+            known=True,
+            quest_item=True,
+            binding=BIND_ON_PICKUP,
+        )
         self.assertEqual(decide(it, town).route, KEEP)
 
 
@@ -283,8 +344,7 @@ class OnlyRoutesSomethingCanActuallyCarryOut(unittest.TestCase):
 
     def test_a_listing_verdict_is_withheld_when_nothing_can_list(self):
         it = green(auction_value=100000)
-        verdict = decide(it, TOWN, character_level=28,
-                         available=EXECUTABLE_TODAY)
+        verdict = decide(it, TOWN, character_level=28, available=EXECUTABLE_TODAY)
         self.assertNotEqual(verdict.route, AUCTION)
 
     def test_a_tradable_green_is_kept_rather_than_dumped_at_a_vendor(self):
@@ -293,15 +353,18 @@ class OnlyRoutesSomethingCanActuallyCarryOut(unittest.TestCase):
         recovered, and several of them are the sibling-upgrade question
         (mod-overseer#189) rather than surplus at all."""
         it = green(binding=BIND_ON_EQUIP, auction_value=100000)
-        self.assertEqual(decide(it, TOWN, character_level=28,
-                                available=EXECUTABLE_TODAY).route, KEEP)
+        self.assertEqual(
+            decide(it, TOWN, character_level=28, available=EXECUTABLE_TODAY).route, KEEP
+        )
 
     def test_an_outgrown_soulbound_piece_is_sold(self):
         """Nobody can ever wear, trade or list it, and Og cannot dust it. The
         vendor is the only truthful answer, and it is a real one."""
         it = green(binding=BIND_ON_PICKUP, required_level=15)
-        self.assertEqual(decide(it, REAL, character_level=28,
-                                available=EXECUTABLE_TODAY).route, VENDOR)
+        self.assertEqual(
+            decide(it, REAL, character_level=28, available=EXECUTABLE_TODAY).route,
+            VENDOR,
+        )
 
     def test_reaching_a_route_and_owning_a_route_are_different_facts(self):
         """An auctioneer out of walking range is a transient fact about today.
@@ -310,52 +373,78 @@ class OnlyRoutesSomethingCanActuallyCarryOut(unittest.TestCase):
         away = Family(vendor_reachable=True, auction_reachable=False)
         it = green(binding=BIND_ON_EQUIP, auction_value=100000)
         self.assertEqual(decide(it, away, character_level=28).route, VENDOR)
-        self.assertEqual(decide(it, away, character_level=28,
-                                available=EXECUTABLE_TODAY).route, KEEP)
+        self.assertEqual(
+            decide(it, away, character_level=28, available=EXECUTABLE_TODAY).route, KEEP
+        )
 
     def test_junk_is_still_sold_because_vendor_is_available(self):
         it = green(quality=0, binding=BIND_ON_PICKUP, sell_price=12)
-        self.assertEqual(decide(it, REAL, character_level=28,
-                                available=EXECUTABLE_TODAY).route, VENDOR)
+        self.assertEqual(
+            decide(it, REAL, character_level=28, available=EXECUTABLE_TODAY).route,
+            VENDOR,
+        )
 
     def test_with_no_routes_at_all_everything_is_kept(self):
         """Fail closed: an availability set nobody filled in must not become a
         licence to sell, and must not throw either."""
-        for it in (green(quality=0, sell_price=12),
-                   green(binding=BIND_ON_PICKUP),
-                   green(auction_value=100000)):
-            self.assertEqual(decide(it, TOWN, character_level=28,
-                                    available=frozenset()).route, KEEP)
+        for it in (
+            green(quality=0, sell_price=12),
+            green(binding=BIND_ON_PICKUP),
+            green(auction_value=100000),
+        ):
+            self.assertEqual(
+                decide(it, TOWN, character_level=28, available=frozenset()).route, KEEP
+            )
 
     def test_the_bank_is_not_offered_until_something_writes_bank_rows(self):
-        nobody = Family(vendor_reachable=True, bank_reachable=True,
-                        professions={})
-        cloth = Item(name="Linen Cloth", quality=1, known=True,
-                     binding=BIND_NONE, quest_item=False, equipment=False,
-                     sell_price=10, reagent_for="tailoring")
+        nobody = Family(vendor_reachable=True, bank_reachable=True, professions={})
+        cloth = Item(
+            name="Linen Cloth",
+            quality=1,
+            known=True,
+            binding=BIND_NONE,
+            quest_item=False,
+            equipment=False,
+            sell_price=10,
+            reagent_for="tailoring",
+        )
         self.assertEqual(decide(cloth, nobody, reagent_held=999).route, BANK)
-        self.assertEqual(decide(cloth, nobody, reagent_held=999,
-                                available=EXECUTABLE_TODAY).route, KEEP)
+        self.assertEqual(
+            decide(cloth, nobody, reagent_held=999, available=EXECUTABLE_TODAY).route,
+            KEEP,
+        )
 
     def test_a_disenchant_verdict_is_withheld_while_no_executor_exists(self):
         able = Family(enchanting_skill=450, vendor_reachable=True)
         it = green(binding=BIND_ON_PICKUP, disenchant_skill_required=25)
         self.assertEqual(decide(it, able, character_level=28).route, DISENCHANT)
-        self.assertEqual(decide(it, able, character_level=28,
-                                available=EXECUTABLE_TODAY).route, VENDOR)
+        self.assertEqual(
+            decide(it, able, character_level=28, available=EXECUTABLE_TODAY).route,
+            VENDOR,
+        )
 
     def test_a_sibling_upgrade_is_kept_when_no_handover_route_is_open(self):
         it = green()
-        self.assertEqual(decide(it, TOWN, character_level=28,
-                                upgrade_for_sibling=True,
-                                available=frozenset({VENDOR})).route, KEEP)
+        self.assertEqual(
+            decide(
+                it,
+                TOWN,
+                character_level=28,
+                upgrade_for_sibling=True,
+                available=frozenset({VENDOR}),
+            ).route,
+            KEEP,
+        )
 
     def test_turning_the_auction_on_is_one_name(self):
         """The point of a set rather than five more booleans."""
         it = green(auction_value=100000)
-        self.assertEqual(decide(it, TOWN, character_level=28,
-                                available=EXECUTABLE_TODAY | {AUCTION}).route,
-                         AUCTION)
+        self.assertEqual(
+            decide(
+                it, TOWN, character_level=28, available=EXECUTABLE_TODAY | {AUCTION}
+            ).route,
+            AUCTION,
+        )
 
 
 if __name__ == "__main__":

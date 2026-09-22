@@ -6,6 +6,7 @@ dungeon goal is the same class of problem a quest goal was (infra#2597's
 migration to admit the kind, a lease-renewed drive action rather than a
 one-shot strategy, and a bridge that persists and executes it.
 """
+
 import ast
 import pathlib
 import unittest
@@ -17,10 +18,13 @@ BRIDGE = pathlib.Path(__file__).resolve().parents[1] / "bridge.py"
 
 
 def _m(name, level, **over):
-    return council.Member(name=name, level=level,
-                          class_name=over.pop("class_name", "Warrior"),
-                          gold=over.pop("gold", 999999),
-                          trades=over.pop("trades", 5))
+    return council.Member(
+        name=name,
+        level=level,
+        class_name=over.pop("class_name", "Warrior"),
+        gold=over.pop("gold", 999999),
+        trades=over.pop("trades", 5),
+    )
 
 
 def _bridge_source() -> str:
@@ -32,8 +36,10 @@ def _function(name: str):
     for node in ast.walk(tree):
         # AsyncFunctionDef too: _apply_goal_action and its siblings are
         # `async def` methods on the Discord client class.
-        if (isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
-                and node.name == name):
+        if (
+            isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+            and node.name == name
+        ):
             return node
     raise AssertionError("%s not found in bridge.py" % name)
 
@@ -41,9 +47,12 @@ def _function(name: str):
 def _function_code(name: str) -> str:
     node = _function(name)
     body = list(node.body)
-    if (body and isinstance(body[0], ast.Expr)
-            and isinstance(body[0].value, ast.Constant)
-            and isinstance(body[0].value.value, str)):
+    if (
+        body
+        and isinstance(body[0], ast.Expr)
+        and isinstance(body[0].value, ast.Constant)
+        and isinstance(body[0].value.value, str)
+    ):
         body = body[1:]
     return "\n".join(ast.dump(stmt) for stmt in body)
 
@@ -71,7 +80,8 @@ class TheEnumMigrationGeneralizedForDungeon(unittest.TestCase):
 
     def test_idempotent_against_a_table_that_already_has_it(self):
         self.assertEqual(
-            [], goals.goal_migrations(goals.KIND_COLUMN.lower(), has_quest_id=True))
+            [], goals.goal_migrations(goals.KIND_COLUMN.lower(), has_quest_id=True)
+        )
 
     def test_dungeon_is_in_the_one_list_of_kinds(self):
         self.assertIn("dungeon", goals.GOAL_KINDS)
@@ -88,15 +98,18 @@ class TellingTwoDungeonGoalsApart(unittest.TestCase):
     def test_the_keyword_is_the_identity_not_the_target(self):
         active = [{"kind": "dungeon", "target": 25, "skill_name": "scarlet-library"}]
         self.assertTrue(
-            goals.already_working("dungeon", 25, active, keyword="scarlet-library"))
+            goals.already_working("dungeon", 25, active, keyword="scarlet-library")
+        )
         self.assertFalse(
-            goals.already_working("dungeon", 25, active, keyword="scarlet-armory"))
+            goals.already_working("dungeon", 25, active, keyword="scarlet-armory")
+        )
 
     def test_the_bare_dungeon_job_is_its_own_identity(self):
         active = [{"kind": "dungeon", "target": 25, "skill_name": ""}]
         self.assertTrue(goals.already_working("dungeon", 25, active, keyword=""))
         self.assertFalse(
-            goals.already_working("dungeon", 25, active, keyword="scarlet"))
+            goals.already_working("dungeon", 25, active, keyword="scarlet")
+        )
 
     def test_other_kinds_are_unaffected(self):
         active = [{"kind": "level", "target": 20}]
@@ -107,9 +120,15 @@ class TellingTwoDungeonGoalsApart(unittest.TestCase):
 
 
 def _row(**kw):
-    row = dict(id=9, character_name="Bork", kind="dungeon",
-               target=council.DUNGEON_RUNS_WANTED, skill_name="scarlet-cathedral",
-               status="active", last_report=None)
+    row = dict(
+        id=9,
+        character_name="Bork",
+        kind="dungeon",
+        target=council.DUNGEON_RUNS_WANTED,
+        skill_name="scarlet-cathedral",
+        status="active",
+        last_report=None,
+    )
     row.update(kw)
     return row
 
@@ -129,7 +148,8 @@ class SupervisingADungeonGoal(unittest.TestCase):
             actions = goals.reconcile(_row(last_report=report), done)
             self.assertFalse(
                 [a for a in actions if isinstance(a, goals.StrategyCommand)],
-                (done, report, actions))
+                (done, report, actions),
+            )
 
     def test_the_job_is_renewed_on_a_clock_even_while_progress_is_good(self):
         """A relog or a bag-pressure evacuation can knock the job off the
@@ -179,16 +199,18 @@ class SupervisingADungeonGoal(unittest.TestCase):
 class TheKeywordSurvivesTheCouncil(unittest.TestCase):
     def test_a_dungeon_proposal_carries_the_keyword(self):
         members = [_m(n, 41) for n in ("Grug", "Ugga", "Grog", "Bork", "Og")]
-        rows = [{"name": n, "level": 41} for n in
-                ("Grug", "Ugga", "Grog", "Bork", "Og")]
+        rows = [
+            {"name": n, "level": 41} for n in ("Grug", "Ugga", "Grog", "Bork", "Og")
+        ]
         proposal = council._dungeon_proposal(members, rows, [])
         self.assertIsNotNone(proposal)
         self.assertEqual("scarlet-cathedral", proposal.keyword)
 
     def test_the_keyword_reaches_the_agreed_plan(self):
         members = [_m(n, 41) for n in ("Grug", "Ugga", "Grog", "Bork", "Og")]
-        rows = [{"name": n, "level": 41} for n in
-                ("Grug", "Ugga", "Grog", "Bork", "Og")]
+        rows = [
+            {"name": n, "level": 41} for n in ("Grug", "Ugga", "Grog", "Bork", "Og")
+        ]
         held = council.hold(members, history=[], level_rows=rows, cards=[])
         self.assertIsNotNone(held.plan)
         self.assertEqual("dungeon", held.plan.kind)
@@ -202,8 +224,9 @@ class TheBridgeCanActuallyDriveADungeonGoal(unittest.TestCase):
     def test_dungeon_is_a_driven_kind(self):
         tree = ast.parse(_bridge_source())
         for node in ast.walk(tree):
-            if (isinstance(node, ast.Assign)
-                    and any(getattr(t, "id", "") == "DRIVEN_KINDS" for t in node.targets)):
+            if isinstance(node, ast.Assign) and any(
+                getattr(t, "id", "") == "DRIVEN_KINDS" for t in node.targets
+            ):
                 kinds = {e.value for e in node.value.elts}
                 self.assertEqual({"level", "quest", "dungeon"}, kinds)
                 return
@@ -240,8 +263,9 @@ class TheBridgeCanActuallyDriveADungeonGoal(unittest.TestCase):
 # --- an unknown keyword never reaches the roster (#86) ----------------------
 
 
-MODULE = (pathlib.Path(__file__).resolve().parents[1]
-          / "mod-overseer/src/mod_overseer.cpp")
+MODULE = (
+    pathlib.Path(__file__).resolve().parents[1] / "mod-overseer/src/mod_overseer.cpp"
+)
 
 
 def _load_drive_dungeon(inserted: list, updated: list, warnings: list):
@@ -286,11 +310,13 @@ def _load_drive_dungeon(inserted: list, updated: list, warnings: list):
         "_fetch_enabled_names": lambda: ["Grug", "Ugga", "Og"],
         "_fetch_free_slots": lambda names: {n: 40 for n in names},
         "bag_pressure": types.SimpleNamespace(
-            family_town_run_needed=lambda slots: False),
+            family_town_run_needed=lambda slots: False
+        ),
         "_insert_job": lambda name, mode, by: inserted.append((name, mode)),
         "_connect": lambda: contextlib.nullcontext(Conn()),
         "pymysql": types.SimpleNamespace(
-            err=types.SimpleNamespace(MySQLError=Exception)),
+            err=types.SimpleNamespace(MySQLError=Exception)
+        ),
     }
     exec(compile(source, str(BRIDGE), "exec"), namespace)  # noqa: S102 - bridge.py's own source
     return namespace["_drive_dungeon"]
@@ -306,7 +332,9 @@ class AnUnknownKeywordNeverReachesTheRoster(unittest.TestCase):
         result, inserted, updated, _ = self._drive("blackrock-depths")
         self.assertEqual((0, 0), result)
         self.assertEqual([], inserted, "a job was written for an unknown keyword")
-        self.assertEqual([], updated, "a campaign row was written for an unknown keyword")
+        self.assertEqual(
+            [], updated, "a campaign row was written for an unknown keyword"
+        )
 
     def test_the_refusal_names_the_keyword_and_the_valid_ones(self):
         _, _, _, warnings = self._drive("blackrock-depths")
@@ -319,9 +347,13 @@ class AnUnknownKeywordNeverReachesTheRoster(unittest.TestCase):
         result, inserted, updated, warnings = self._drive("scarlet-cathedral")
         self.assertEqual((3, 3), result)
         self.assertEqual(
-            [("Grug", "dungeon:scarlet-cathedral"),
-             ("Ugga", "dungeon:scarlet-cathedral"),
-             ("Og", "dungeon:scarlet-cathedral")], inserted)
+            [
+                ("Grug", "dungeon:scarlet-cathedral"),
+                ("Ugga", "dungeon:scarlet-cathedral"),
+                ("Og", "dungeon:scarlet-cathedral"),
+            ],
+            inserted,
+        )
         self.assertEqual(3, len(updated))
         self.assertEqual([], warnings)
 
@@ -339,7 +371,7 @@ class TheKeywordVocabularyIsTheCoordinators(unittest.TestCase):
 
         text = MODULE.read_text(encoding="utf-8")
         start = text.index("DungeonPortals()\n")
-        body = text[start:text.index("};", start)]
+        body = text[start : text.index("};", start)]
         in_cpp = set(re.findall(r'^\s*\{"([a-z-]+)",', body, re.M))
         self.assertTrue(in_cpp, "no portal rows parsed from mod_overseer.cpp")
         self.assertEqual(in_cpp, set(jobs.PORTAL_KEYWORDS))

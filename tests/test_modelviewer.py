@@ -9,6 +9,7 @@ it needs a network.
 
 Ticket: infra#88.
 """
+
 import os
 import tempfile
 import time
@@ -20,10 +21,17 @@ from modelviewer import DiskCache, Store, classify
 
 class WhatIsAllowed(unittest.TestCase):
     def test_every_prefix_the_viewer_uses_is_admitted(self):
-        for path in ("meta/character/1.json", "meta/charactercustomization/1.json",
-                     "meta/armor/1/1170.json", "meta/item/20379.json",
-                     "m2/121087.m2", "skin/471401.skin", "anim/1.anim",
-                     "bone/12.bone", "textures/1234.webp"):
+        for path in (
+            "meta/character/1.json",
+            "meta/charactercustomization/1.json",
+            "meta/armor/1/1170.json",
+            "meta/item/20379.json",
+            "m2/121087.m2",
+            "skin/471401.skin",
+            "anim/1.anim",
+            "bone/12.bone",
+            "textures/1234.webp",
+        ):
             self.assertIsNotNone(classify(path), path)
 
     def test_the_content_type_is_the_files_own(self):
@@ -34,15 +42,29 @@ class WhatIsAllowed(unittest.TestCase):
 
     def test_anything_off_the_allowlist_is_refused(self):
         """A cache for one page's known requests, not a proxy."""
-        for path in ("", "meta/npc/1.json", "meta/object/1.json", "etc/passwd",
-                     "modelviewer/m2/1.m2", "viewer/viewer.min.js", "mo3/1.mo3",
-                     "deployment/viewer/c3f890f/viewer.min.js", "../meta/item/1.json"):
+        for path in (
+            "",
+            "meta/npc/1.json",
+            "meta/object/1.json",
+            "etc/passwd",
+            "modelviewer/m2/1.m2",
+            "viewer/viewer.min.js",
+            "mo3/1.mo3",
+            "deployment/viewer/c3f890f/viewer.min.js",
+            "../meta/item/1.json",
+        ):
             self.assertIsNone(classify(path), path)
 
     def test_a_path_that_climbs_or_hides_is_refused(self):
-        for path in ("meta/item/../../x.json", "meta/item//1.json",
-                     "meta/item/1.json?x=1", "meta/item/%2e%2e/1.json",
-                     "meta/item/1.json/", "m2/a b.m2", "textures/1.php"):
+        for path in (
+            "meta/item/../../x.json",
+            "meta/item//1.json",
+            "meta/item/1.json?x=1",
+            "meta/item/%2e%2e/1.json",
+            "meta/item/1.json/",
+            "m2/a b.m2",
+            "textures/1.php",
+        ):
             self.assertIsNone(classify(path), path)
 
     def test_an_extension_with_no_content_type_is_refused(self):
@@ -111,6 +133,7 @@ class TheReadThrough(unittest.TestCase):
             def __call__(self, url):
                 self.calls.append(url)
                 return 503, b"later"
+
         f = Angry()
         s = store(f)
         self.assertEqual(s.serve("meta/item/1.json").status, 502)
@@ -190,8 +213,8 @@ class TheEndpoint(unittest.TestCase):
         """zamimg answers 403 to anything that does not look like a browser,
         and an upstream that hangs must become a 502 rather than a stuck
         thread per request."""
-        fetch = self.server[self.server.index("def _fetch_upstream"):]
-        fetch = fetch[:fetch.index("MODELS = ")]
+        fetch = self.server[self.server.index("def _fetch_upstream") :]
+        fetch = fetch[: fetch.index("MODELS = ")]
         self.assertIn('"User-Agent": modelviewer.USER_AGENT', fetch)
         self.assertIn("timeout=modelviewer.UPSTREAM_TIMEOUT_SECONDS", fetch)
         self.assertIn("except urllib.error.HTTPError", fetch)

@@ -65,6 +65,7 @@ trip is what this module plans, so it is named for the trip.
 PURE MODULE: no MySQL, no core, no auction house, no browser. Every number here
 is arithmetic over rows somebody else fetched.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -123,6 +124,7 @@ class Letter:
     the day it was written is exactly the field that is not zero on the day it
     matters.
     """
+
     holder: str
     mail_id: int
     money: int
@@ -135,10 +137,11 @@ class Letter:
 @dataclass(frozen=True)
 class Take:
     """One mail command, with the reason it is worth sending written into it."""
+
     character: str
-    verb: str        # TAKE_ITEM or TAKE_MONEY
+    verb: str  # TAKE_ITEM or TAKE_MONEY
     mail_id: int
-    item_guid: int   # 0 for TAKE_MONEY
+    item_guid: int  # 0 for TAKE_MONEY
     why: str
 
 
@@ -152,6 +155,7 @@ class Plan:
     the bags are full - and those four want four different responses from a
     person reading the log.
     """
+
     takes: tuple = ()
     notes: tuple = ()
 
@@ -219,15 +223,19 @@ def letters_from_rows(rows, names):
 
     built = [
         Letter(
-            holder=letter.holder, mail_id=letter.mail_id, money=letter.money,
-            cod=letter.cod, delivered=letter.delivered,
+            holder=letter.holder,
+            mail_id=letter.mail_id,
+            money=letter.money,
+            cod=letter.cod,
+            delivered=letter.delivered,
             expire_time=letter.expire_time,
             attachments=tuple(sorted(attachments[key])),
         )
         for key, letter in letters.items()
     ]
-    return tuple(sorted(
-        built, key=lambda one: (one.holder, one.expire_time, one.mail_id)))
+    return tuple(
+        sorted(built, key=lambda one: (one.holder, one.expire_time, one.mail_id))
+    )
 
 
 def room_for(name: str, free_slots: dict, already_asked: dict) -> int:
@@ -275,8 +283,10 @@ def room_for(name: str, free_slots: dict, already_asked: dict) -> int:
 # one fact: this arrival has been asked to do as much as one arrival is allowed
 # to. Written once rather than twice so the two places that can reach it cannot
 # drift into two slightly different sentences describing the same stop.
-_VISIT_NOTE = ("%s has more in the mailbox than one visit carries; the rest "
-               "waits for the next trip")
+_VISIT_NOTE = (
+    "%s has more in the mailbox than one visit carries; the rest "
+    "waits for the next trip"
+)
 
 
 def _attachment_takes(holder, letter, room, budget):
@@ -300,17 +310,23 @@ def _attachment_takes(holder, letter, room, budget):
             note = _VISIT_NOTE % holder
             break
         if room <= 0:
-            note = ("%s has no room in the bags for what letter %d is "
-                    "carrying, so it stays in the mailbox" % (
-                        holder, letter.mail_id))
+            note = (
+                "%s has no room in the bags for what letter %d is "
+                "carrying, so it stays in the mailbox" % (holder, letter.mail_id)
+            )
             break
         room -= 1
         budget -= 1
-        takes.append(Take(
-            character=holder, verb=TAKE_ITEM, mail_id=letter.mail_id,
-            item_guid=guid,
-            why="letter %d is holding an attachment the bags have room for"
-                % letter.mail_id))
+        takes.append(
+            Take(
+                character=holder,
+                verb=TAKE_ITEM,
+                mail_id=letter.mail_id,
+                item_guid=guid,
+                why="letter %d is holding an attachment the bags have room for"
+                % letter.mail_id,
+            )
+        )
     return takes, room, budget, note
 
 
@@ -341,14 +357,20 @@ def _one_mailbox(holder, mine, room, visit_limit):
             # rather than a fault.
             notes.append(
                 "%s's letter %d has not been delivered yet, so it is left "
-                "where it is" % (holder, letter.mail_id))
+                "where it is" % (holder, letter.mail_id)
+            )
             continue
         if letter.money > 0:
-            money_takes.append(Take(
-                character=holder, verb=TAKE_MONEY, mail_id=letter.mail_id,
-                item_guid=0,
-                why="letter %d is carrying %d copper" % (
-                    letter.mail_id, letter.money)))
+            money_takes.append(
+                Take(
+                    character=holder,
+                    verb=TAKE_MONEY,
+                    mail_id=letter.mail_id,
+                    item_guid=0,
+                    why="letter %d is carrying %d copper"
+                    % (letter.mail_id, letter.money),
+                )
+            )
             budget -= 1
         if not letter.attachments:
             continue
@@ -361,11 +383,11 @@ def _one_mailbox(holder, mine, room, visit_limit):
             # a rule the world does not have.
             notes.append(
                 "%s's letter %d is cash on delivery, so its %d "
-                "attachment(s) are not this pass's to take" % (
-                    holder, letter.mail_id, len(letter.attachments)))
+                "attachment(s) are not this pass's to take"
+                % (holder, letter.mail_id, len(letter.attachments))
+            )
             continue
-        taken, room, budget, note = _attachment_takes(
-            holder, letter, room, budget)
+        taken, room, budget, note = _attachment_takes(holder, letter, room, budget)
         item_takes.extend(taken)
         if note:
             notes.append(note)
@@ -457,6 +479,7 @@ def lines(takes):
     half of it, because the other half was already queued inside the retry
     window, is a log that lies about what the family did.
     """
-    return ["%s: %s (%s) - %s"
-            % (take.character, take.verb, command(take), take.why)
-            for take in takes]
+    return [
+        "%s: %s (%s) - %s" % (take.character, take.verb, command(take), take.why)
+        for take in takes
+    ]

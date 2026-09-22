@@ -14,6 +14,7 @@ Examples (run with the wow-dev MySQL secret in the environment)::
 
 The account password is never read, printed, or accepted as an argument.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -42,7 +43,9 @@ def placeholders(count: int) -> str:
     return ",".join(["%s"] * count)
 
 
-def verify_realm(rows: list[dict], expected_id: int, expected_name: str | None) -> list[str]:
+def verify_realm(
+    rows: list[dict], expected_id: int, expected_name: str | None
+) -> list[str]:
     """Return realm errors without touching a database."""
     if len(rows) != 1:
         return [f"expected one realmlist row, got {len(rows)}"]
@@ -75,14 +78,22 @@ def verify_characters(
         account = str(row.get("username", "")).upper()
         accounts.append(account)
         if account != wanted["account"]:
-            errors.append(f"{name} belongs to {account!r}, expected {wanted['account']!r}")
+            errors.append(
+                f"{name} belongs to {account!r}, expected {wanted['account']!r}"
+            )
         if int(row.get("race", -1)) != wanted["race"]:
-            errors.append(f"{name} race is {row.get('race')}, expected {wanted['race']}")
+            errors.append(
+                f"{name} race is {row.get('race')}, expected {wanted['race']}"
+            )
         if int(row.get("class", -1)) != wanted["class"]:
-            errors.append(f"{name} class is {row.get('class')}, expected {wanted['class']}")
+            errors.append(
+                f"{name} class is {row.get('class')}, expected {wanted['class']}"
+            )
         actual_faction = "horde" if int(row.get("race", -1)) in HORDE_RACES else "other"
         if actual_faction != wanted["faction"]:
-            errors.append(f"{name} faction is {actual_faction}, expected {wanted['faction']}")
+            errors.append(
+                f"{name} faction is {actual_faction}, expected {wanted['faction']}"
+            )
     if len(set(accounts)) != len(accounts):
         errors.append("named characters do not have separate accounts")
     return errors
@@ -128,7 +139,9 @@ def _connect():
 
 def _read(cur, args) -> tuple[list[dict], list[dict], list[str]]:
     names = list(BONKERS)
-    cur.execute("SELECT id, name FROM acore_auth.realmlist WHERE id = %s", (args.realm_id,))
+    cur.execute(
+        "SELECT id, name FROM acore_auth.realmlist WHERE id = %s", (args.realm_id,)
+    )
     realm_rows = list(cur.fetchall())
     cur.execute(
         "SELECT c.name, c.account, c.race, c.class, a.username "
@@ -169,7 +182,9 @@ def main(argv: list[str] | None = None) -> int:
         realm_rows, character_rows, guild_rows = _read(cur, args)
     errors = verify_realm(realm_rows, args.realm_id, args.realm_name)
     errors.extend(verify_characters(character_rows, BONKERS))
-    errors.extend(verify_guilds(guild_rows, args.guild, args.minimum_random_bot_members))
+    errors.extend(
+        verify_guilds(guild_rows, args.guild, args.minimum_random_bot_members)
+    )
     report = {
         "realm": realm_rows,
         "characters": character_rows,

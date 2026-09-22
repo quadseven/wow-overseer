@@ -7,18 +7,35 @@ counter really is - lives here where the stdlib suite can reach it.
 
 Ticket: infra#2603.
 """
+
 from __future__ import annotations
 
 from core import _ALLIANCE_RACES, _HORDE_RACES
 
 _RACE_NAMES = {
-    1: "Human", 2: "Orc", 3: "Dwarf", 4: "Night Elf", 5: "Undead",
-    6: "Tauren", 7: "Gnome", 8: "Troll", 10: "Blood Elf", 11: "Draenei",
+    1: "Human",
+    2: "Orc",
+    3: "Dwarf",
+    4: "Night Elf",
+    5: "Undead",
+    6: "Tauren",
+    7: "Gnome",
+    8: "Troll",
+    10: "Blood Elf",
+    11: "Draenei",
 }
 
 _CLASS_NAMES = {
-    1: "Warrior", 2: "Paladin", 3: "Hunter", 4: "Rogue", 5: "Priest",
-    6: "Death Knight", 7: "Shaman", 8: "Mage", 9: "Warlock", 11: "Druid",
+    1: "Warrior",
+    2: "Paladin",
+    3: "Hunter",
+    4: "Rogue",
+    5: "Priest",
+    6: "Death Knight",
+    7: "Shaman",
+    8: "Mage",
+    9: "Warlock",
+    11: "Druid",
 }
 
 # The class's own colour, from the client's RAID_CLASS_COLORS table. Every
@@ -26,8 +43,16 @@ _CLASS_NAMES = {
 # lives beside the names, and armory, family and the quest board all read
 # this one table rather than each keeping a copy that could drift.
 CLASS_COLOURS = {
-    1: "#c79c6e", 2: "#f58cba", 3: "#abd473", 4: "#fff569", 5: "#ffffff",
-    6: "#c41f3b", 7: "#0070de", 8: "#69ccf0", 9: "#9482c9", 11: "#ff7d0a",
+    1: "#c79c6e",
+    2: "#f58cba",
+    3: "#abd473",
+    4: "#fff569",
+    5: "#ffffff",
+    6: "#c41f3b",
+    7: "#0070de",
+    8: "#69ccf0",
+    9: "#9482c9",
+    11: "#ff7d0a",
 }
 
 # class id -> (power name, characters.power* column, stored x10). Rage and
@@ -48,13 +73,29 @@ _BUTTONS_PER_BAR = 12
 
 # Player inventory geography, 3.3.5 slot constants (bag = 0 rows).
 _EQUIPMENT_SLOT_NAMES = [
-    "head", "neck", "shoulders", "shirt", "chest", "waist", "legs", "feet",
-    "wrists", "hands", "finger 1", "finger 2", "trinket 1", "trinket 2",
-    "back", "main hand", "off hand", "ranged", "tabard",
+    "head",
+    "neck",
+    "shoulders",
+    "shirt",
+    "chest",
+    "waist",
+    "legs",
+    "feet",
+    "wrists",
+    "hands",
+    "finger 1",
+    "finger 2",
+    "trinket 1",
+    "trinket 2",
+    "back",
+    "main hand",
+    "off hand",
+    "ranged",
+    "tabard",
 ]
-_BAG_SLOTS = range(19, 23)        # the four carried bag slots
-_BACKPACK_SLOTS = range(23, 39)   # the built-in 16-slot backpack
-_BANK_BAG_SLOTS = range(67, 74)   # bank bag containers (not carried)
+_BAG_SLOTS = range(19, 23)  # the four carried bag slots
+_BACKPACK_SLOTS = range(23, 39)  # the built-in 16-slot backpack
+_BANK_BAG_SLOTS = range(67, 74)  # bank bag containers (not carried)
 
 
 def _item_name(row: dict) -> str:
@@ -68,19 +109,21 @@ def _build_hotbar(action_rows: list[dict], active_spec: int) -> list[dict]:
         if row["spec"] != active_spec:
             continue
         kind, word = _ACTION_KINDS.get(row["type"], ("other", "Action"))
-        bars.setdefault(row["button"] // _BUTTONS_PER_BAR, []).append({
-            "slot": row["button"] % _BUTTONS_PER_BAR,
-            "label": f"{word} #{row['action']}",
-            "kind": kind,
-            "id": row["action"],
-        })
+        bars.setdefault(row["button"] // _BUTTONS_PER_BAR, []).append(
+            {
+                "slot": row["button"] % _BUTTONS_PER_BAR,
+                "label": f"{word} #{row['action']}",
+                "kind": kind,
+                "id": row["action"],
+            }
+        )
     # Bars are 1-based for humans, matching the in-game action bar numbers.
     return [{"bar": n + 1, "buttons": buttons} for n, buttons in sorted(bars.items())]
 
 
 def _build_inventory(inventory_rows: list[dict]) -> dict:
     equipment, backpack, bag_rows = [], [], []
-    carried: dict[int, dict] = {}   # container item guid -> bag payload
+    carried: dict[int, dict] = {}  # container item guid -> bag payload
     bank_bag_guids: set[int] = set()
     elsewhere = 0
     for row in sorted(inventory_rows, key=lambda r: (r["bag"], r["slot"])):
@@ -89,7 +132,9 @@ def _build_inventory(inventory_rows: list[dict]) -> dict:
             continue
         slot = row["slot"]
         if slot < len(_EQUIPMENT_SLOT_NAMES):
-            equipment.append({"slot": _EQUIPMENT_SLOT_NAMES[slot], "name": _item_name(row)})
+            equipment.append(
+                {"slot": _EQUIPMENT_SLOT_NAMES[slot], "name": _item_name(row)}
+            )
         elif slot in _BAG_SLOTS:
             carried[row["item_guid"]] = {"name": _item_name(row), "items": []}
         elif slot in _BACKPACK_SLOTS:
@@ -105,7 +150,9 @@ def _build_inventory(inventory_rows: list[dict]) -> dict:
             elsewhere += 1
     for row in bag_rows:
         if row["bag"] in carried:
-            carried[row["bag"]]["items"].append({"name": _item_name(row), "count": row["count"]})
+            carried[row["bag"]]["items"].append(
+                {"name": _item_name(row), "count": row["count"]}
+            )
         else:
             elsewhere += 1  # inside a bank bag
     return {
@@ -116,14 +163,19 @@ def _build_inventory(inventory_rows: list[dict]) -> dict:
     }
 
 
-def _build_target(target_guid: int, target_player: dict | None,
-                  target_creature_name: str | None) -> dict | None:
+def _build_target(
+    target_guid: int, target_player: dict | None, target_creature_name: str | None
+) -> dict | None:
     if not target_guid:
         return None
     # target_guid is a bare counter: player guids and creature spawn guids
     # overlap in the low range, so a live player match outranks a spawn row.
     if target_player is not None:
-        return {"kind": "player", "name": target_player["name"], "level": target_player["level"]}
+        return {
+            "kind": "player",
+            "name": target_player["name"],
+            "level": target_player["level"],
+        }
     if target_creature_name is not None:
         return {"kind": "creature", "name": target_creature_name}
     # Summoned/temporary units have no spawn row; admit it rather than
@@ -168,12 +220,15 @@ def build_character_panel(
     group = None
     if snapshot_row["group_leader"]:
         leader = snapshot_row["group_leader"]
-        members = [{
-            "name": r["name"],
-            "level": r["level"],
-            "class": _CLASS_NAMES.get(r["class"], f"class {r['class']}"),
-            "leader": r["guid"] == leader,
-        } for r in group_rows]
+        members = [
+            {
+                "name": r["name"],
+                "level": r["level"],
+                "class": _CLASS_NAMES.get(r["class"], f"class {r['class']}"),
+                "leader": r["guid"] == leader,
+            }
+            for r in group_rows
+        ]
         members.sort(key=lambda m: (not m["leader"], m["name"]))
         group = {"members": members}
 
@@ -183,8 +238,11 @@ def build_character_panel(
         "level": snapshot_row["level"],
         "race": _RACE_NAMES.get(race, f"race {race}"),
         "class": _CLASS_NAMES.get(class_id, f"class {class_id}"),
-        "faction": "alliance" if race in _ALLIANCE_RACES
-                   else "horde" if race in _HORDE_RACES else "neutral",
+        "faction": "alliance"
+        if race in _ALLIANCE_RACES
+        else "horde"
+        if race in _HORDE_RACES
+        else "neutral",
         "bot": bool(snapshot_row["is_bot"]),
         "combat": bool(snapshot_row["in_combat"]),
         "vitals": {
@@ -192,7 +250,9 @@ def build_character_panel(
             "max_health": snapshot_row["max_health"],
             "power": _build_power(class_id, char_row),
         },
-        "target": _build_target(snapshot_row["target_guid"], target_player, target_creature_name),
+        "target": _build_target(
+            snapshot_row["target_guid"], target_player, target_creature_name
+        ),
         "guild": guild_name,
         "group": group,
         "hotbar": _build_hotbar(action_rows, active_spec),

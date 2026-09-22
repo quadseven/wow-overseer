@@ -45,6 +45,7 @@ Inputs:
 
 Usage: python3 gen_viewer_displays.py <csv_dir> <items.tsv> <out_dir> <build>
 """
+
 from __future__ import annotations
 
 import csv
@@ -91,8 +92,7 @@ def main(argv: list[str]) -> int:
     with open(tsv) as f:
         world = [tuple(int(v) for v in line.split()) for line in f if line.strip()]
     table = differing(world, base_displays(modified, appearances))
-    payload = {"build": build,
-               "display": {str(k): table[k] for k in sorted(table)}}
+    payload = {"build": build, "display": {str(k): table[k] for k in sorted(table)}}
     path = os.path.join(out_dir, "viewerdisplays.json")
     with open(path, "w") as f:
         json.dump(payload, f, separators=(",", ":"))

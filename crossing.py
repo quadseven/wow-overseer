@@ -79,6 +79,7 @@ goes out. `travel.py` is imported for one number - the width of the column an
 aim has to fit in - because two copies of that number is how an aim gets
 silently truncated by MySQL into something the world can never parse back.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -118,11 +119,11 @@ ELSEWHERE = "elsewhere"
 UNREADABLE = "unreadable"
 
 # --- where the party is --------------------------------------------------
-BLIND = "blind"            # anybody unreadable: the world is not answering
-SCATTERED = "scattered"    # somebody readable on a map that is neither end
-SPLIT = "split"            # readable members on both ends at once
-ASSEMBLED = "assembled"    # every member readable, all on the origin map
-ARRIVED = "arrived"        # every member readable, all on the destination map
+BLIND = "blind"  # anybody unreadable: the world is not answering
+SCATTERED = "scattered"  # somebody readable on a map that is neither end
+SPLIT = "split"  # readable members on both ends at once
+ASSEMBLED = "assembled"  # every member readable, all on the origin map
+ARRIVED = "arrived"  # every member readable, all on the destination map
 
 # --- what to do about it -------------------------------------------------
 #
@@ -130,10 +131,10 @@ ARRIVED = "arrived"        # every member readable, all on the destination map
 # not a gap in it: of the six legs below, five are blocked on a fact this
 # deployment cannot supply, and a decision layer that emitted actions for them
 # would be emitting orders nothing can carry out.
-WAIT = "wait"      # unreadable world. Act on nothing.
-ALARM = "alarm"    # the party is across two maps, or off both. Say so.
-HOLD = "hold"      # assembled, and the next leg needs a fact nobody has.
-CROSS = "cross"    # assembled, and every leg's facts are in hand.
+WAIT = "wait"  # unreadable world. Act on nothing.
+ALARM = "alarm"  # the party is across two maps, or off both. Say so.
+HOLD = "hold"  # assembled, and the next leg needs a fact nobody has.
+CROSS = "cross"  # assembled, and every leg's facts are in hand.
 ARRIVE = "arrive"  # every member observed on the far map. Hand the party on.
 
 # --- the facts a crossing needs, one name each ----------------------------
@@ -155,30 +156,21 @@ FACT_TARGET_FOOTING = "target footing"
 # Where each fact would have to come from, quoted so a reader can check whether
 # it has appeared since without running anything.
 FACT_SOURCES = {
-    FACT_MEMBER_MAP:
-        "overseer_snapshot.map_id",
-    FACT_MEMBER_POSITION:
-        "overseer_snapshot.pos_x, pos_y, pos_z",
-    FACT_DOCK_POSITION:
-        "nothing in this repository records a berth; zones.json holds zone "
-        "boxes and entrances.json holds instance doors, and neither is a pier",
-    FACT_TRANSPORT_PRESENT:
-        "no table records a transport's position or its schedule",
-    FACT_MEMBER_ON_TRANSPORT:
-        "the worldserver has it (bot->GetTransport(), already read by "
-        "TerrainRecoveryMayInspect) and writes it nowhere",
-    FACT_TRANSPORT_IDENTITY:
-        "no table records WHICH transport a character is on, so two members on "
-        "two different boats read exactly like two members on one",
-    FACT_BOARDING_ACTUATOR:
-        "no command puts a character on a transport; boarding is a claim the "
-        "game client makes in its movement packet, the same part of a player a "
-        "bot does not have that already stopped the party at the Deadmines door",
-    FACT_LANDING_POSITION:
-        "the far-side berth is not in this repository either",
-    FACT_TARGET_FOOTING:
-        "entrances.json carries map, x and y and no z, and the at: grammar "
-        "requires one",
+    FACT_MEMBER_MAP: "overseer_snapshot.map_id",
+    FACT_MEMBER_POSITION: "overseer_snapshot.pos_x, pos_y, pos_z",
+    FACT_DOCK_POSITION: "nothing in this repository records a berth; zones.json holds zone "
+    "boxes and entrances.json holds instance doors, and neither is a pier",
+    FACT_TRANSPORT_PRESENT: "no table records a transport's position or its schedule",
+    FACT_MEMBER_ON_TRANSPORT: "the worldserver has it (bot->GetTransport(), already read by "
+    "TerrainRecoveryMayInspect) and writes it nowhere",
+    FACT_TRANSPORT_IDENTITY: "no table records WHICH transport a character is on, so two members on "
+    "two different boats read exactly like two members on one",
+    FACT_BOARDING_ACTUATOR: "no command puts a character on a transport; boarding is a claim the "
+    "game client makes in its movement packet, the same part of a player a "
+    "bot does not have that already stopped the party at the Deadmines door",
+    FACT_LANDING_POSITION: "the far-side berth is not in this repository either",
+    FACT_TARGET_FOOTING: "entrances.json carries map, x and y and no z, and the at: grammar "
+    "requires one",
 }
 
 # WHAT THIS DEPLOYMENT CAN SEE, as of mod-overseer's schema at
@@ -301,13 +293,15 @@ def plan(members: Sequence[str], origin_map: int, destination_map: int) -> Cross
     if not names:
         raise ValueError("a crossing needs at least one family member")
     if int(origin_map) == int(destination_map):
-        raise ValueError("a crossing needs two different maps, not map %d twice"
-                         % int(origin_map))
+        raise ValueError(
+            "a crossing needs two different maps, not map %d twice" % int(origin_map)
+        )
     return Crossing(names, int(origin_map), int(destination_map))
 
 
-def _readable_map(row: Mapping[str, object] | None,
-                  max_age_seconds: int) -> tuple[int | None, str]:
+def _readable_map(
+    row: Mapping[str, object] | None, max_age_seconds: int
+) -> tuple[int | None, str]:
     """The map this row proves, or None and the reason it proves nothing.
 
     THE THREE WAYS A ROW SAYS NOTHING, each answered separately so the reason
@@ -349,9 +343,12 @@ def _readable_map(row: Mapping[str, object] | None,
         return None, "snapshot map is not a number: %r" % (raw,)
 
 
-def read_member(name: str, row: Mapping[str, object] | None,
-                crossing: Crossing,
-                max_age_seconds: int = SNAPSHOT_MAX_AGE_SECONDS) -> dict:
+def read_member(
+    name: str,
+    row: Mapping[str, object] | None,
+    crossing: Crossing,
+    max_age_seconds: int = SNAPSHOT_MAX_AGE_SECONDS,
+) -> dict:
     """Where one member is, or why that cannot be said.
 
     `row` is an overseer_snapshot row as map_server._fetch_family selects it:
@@ -362,8 +359,7 @@ def read_member(name: str, row: Mapping[str, object] | None,
     """
     map_id, refusal = _readable_map(row, max_age_seconds)
     if map_id is None:
-        return {"name": name, "where": UNREADABLE, "map_id": None,
-                "reason": refusal}
+        return {"name": name, "where": UNREADABLE, "map_id": None, "reason": refusal}
     if map_id == crossing.origin_map:
         where = ORIGIN
     elif map_id == crossing.destination_map:
@@ -373,8 +369,11 @@ def read_member(name: str, row: Mapping[str, object] | None,
     return {"name": name, "where": where, "map_id": map_id, "reason": ""}
 
 
-def read_party(crossing: Crossing, rows: Iterable[Mapping[str, object]] | None,
-               max_age_seconds: int = SNAPSHOT_MAX_AGE_SECONDS) -> list[dict]:
+def read_party(
+    crossing: Crossing,
+    rows: Iterable[Mapping[str, object]] | None,
+    max_age_seconds: int = SNAPSHOT_MAX_AGE_SECONDS,
+) -> list[dict]:
     """One reading per roster member, in name order, however many rows arrived.
 
     DRIVEN BY THE ROSTER AND NOT BY THE ROWS. A member with no row must produce
@@ -390,8 +389,10 @@ def read_party(crossing: Crossing, rows: Iterable[Mapping[str, object]] | None,
         # Last row wins, and the sort below makes that deterministic rather
         # than dependent on cursor order.
         by_name[str(name)] = row
-    return [read_member(name, by_name.get(name), crossing, max_age_seconds)
-            for name in sorted(crossing.members)]
+    return [
+        read_member(name, by_name.get(name), crossing, max_age_seconds)
+        for name in sorted(crossing.members)
+    ]
 
 
 def standing(readings: Sequence[Mapping[str, object]]) -> str:
@@ -444,9 +445,12 @@ def first_blocked_leg(available: Iterable[str] = OBSERVABLE) -> Leg | None:
     return None
 
 
-def decide(crossing: Crossing, rows: Iterable[Mapping[str, object]] | None,
-           available: Iterable[str] = OBSERVABLE,
-           max_age_seconds: int = SNAPSHOT_MAX_AGE_SECONDS) -> dict:
+def decide(
+    crossing: Crossing,
+    rows: Iterable[Mapping[str, object]] | None,
+    available: Iterable[str] = OBSERVABLE,
+    max_age_seconds: int = SNAPSHOT_MAX_AGE_SECONDS,
+) -> dict:
     """One safe next action, from rows the caller fetched and nothing else.
 
     Returns a verdict dict rather than a bare action so that every refusal
@@ -470,25 +474,31 @@ def decide(crossing: Crossing, rows: Iterable[Mapping[str, object]] | None,
     if state == BLIND:
         unread = tuple(r["name"] for r in readings if r["where"] == UNREADABLE)
         if unread:
-            why = ("; ".join("%s: %s" % (r["name"], r["reason"])
-                             for r in readings if r["where"] == UNREADABLE))
+            why = "; ".join(
+                "%s: %s" % (r["name"], r["reason"])
+                for r in readings
+                if r["where"] == UNREADABLE
+            )
             verdict["reason"] = (
                 "the world is not answering for %s (%s); nothing is decided "
-                "about a party that cannot be seen" % (_and_list(unread), why))
+                "about a party that cannot be seen" % (_and_list(unread), why)
+            )
         else:
             verdict["reason"] = "no roster to read"
         verdict["unreadable"] = unread
         return verdict
 
     if state == SCATTERED:
-        astray = [(r["name"], r["map_id"]) for r in readings
-                  if r["where"] == ELSEWHERE]
+        astray = [(r["name"], r["map_id"]) for r in readings if r["where"] == ELSEWHERE]
         verdict["action"] = ALARM
         verdict["reason"] = (
             "%s on neither end of this crossing (%s); no drive in this system "
             "aims across a map boundary, so this does not resolve itself"
-            % (_and_list([n for n, _ in astray]),
-               ", ".join("%s on map %d" % (n, m) for n, m in astray)))
+            % (
+                _and_list([n for n, _ in astray]),
+                ", ".join("%s on map %d" % (n, m) for n, m in astray),
+            )
+        )
         verdict["astray"] = tuple(astray)
         return verdict
 
@@ -501,16 +511,23 @@ def decide(crossing: Crossing, rows: Iterable[Mapping[str, object]] | None,
             "map %d. `follow` only acts while the master is on the same map, "
             "and both `at:` and `trigger:` aims refuse when the map differs, so "
             "nothing here can close this gap"
-            % (_and_list(behind), crossing.origin_map,
-               _and_list(ahead), crossing.destination_map))
+            % (
+                _and_list(behind),
+                crossing.origin_map,
+                _and_list(ahead),
+                crossing.destination_map,
+            )
+        )
         verdict["behind"] = behind
         verdict["ahead"] = ahead
         return verdict
 
     if state == ARRIVED:
         verdict["action"] = ARRIVE
-        verdict["reason"] = ("every member observed on map %d within %d seconds"
-                             % (crossing.destination_map, max_age_seconds))
+        verdict["reason"] = "every member observed on map %d within %d seconds" % (
+            crossing.destination_map,
+            max_age_seconds,
+        )
         return verdict
 
     # ASSEMBLED: everybody read, everybody on the origin map. The only state in
@@ -520,7 +537,8 @@ def decide(crossing: Crossing, rows: Iterable[Mapping[str, object]] | None,
         verdict["action"] = CROSS
         verdict["leg"] = LEGS[0].name
         verdict["reason"] = "every member on map %d and every leg's facts in hand" % (
-            crossing.origin_map,)
+            crossing.origin_map,
+        )
         return verdict
 
     missing = leg_blockers(blocked, available)
@@ -529,7 +547,8 @@ def decide(crossing: Crossing, rows: Iterable[Mapping[str, object]] | None,
     verdict["blocked_on"] = missing
     verdict["reason"] = "cannot %s: %s" % (
         blocked.name,
-        "; ".join("no %s (%s)" % (fact, FACT_SOURCES[fact]) for fact in missing))
+        "; ".join("no %s (%s)" % (fact, FACT_SOURCES[fact]) for fact in missing),
+    )
     return verdict
 
 
@@ -580,7 +599,8 @@ def aim_at_place(map_id: int, x: float, y: float, z: float) -> str:
     if len(aim) > travel.COLUMN_WIDTH:
         raise ValueError(
             "aim does not fit overseer_roster.travel_npc (%d chars, limit %d): %s"
-            % (len(aim), travel.COLUMN_WIDTH, aim))
+            % (len(aim), travel.COLUMN_WIDTH, aim)
+        )
     return aim
 
 
@@ -596,8 +616,9 @@ def _coord(value: float) -> str:
     return text if text not in ("", "-") else "0"
 
 
-def approach(entrance: Mapping[str, object] | None,
-             destination_map: int = KALIMDOR) -> dict:
+def approach(
+    entrance: Mapping[str, object] | None, destination_map: int = KALIMDOR
+) -> dict:
     """The walk-on aim for an entrances.json record, or the reason there is none.
 
     THIS REFUSES TODAY, AND THE REFUSAL IS THE DELIVERABLE. `entrances.json` is
@@ -618,28 +639,43 @@ def approach(entrance: Mapping[str, object] | None,
     this repository and is not invented here.
     """
     if not entrance:
-        return {"usable": False, "aim": "",
-                "refused": "no entrance record"}
+        return {"usable": False, "aim": "", "refused": "no entrance record"}
     for field in ("map", "x", "y"):
         if entrance.get(field) is None:
-            return {"usable": False, "aim": "",
-                    "refused": "entrance record has no %s" % field}
+            return {
+                "usable": False,
+                "aim": "",
+                "refused": "entrance record has no %s" % field,
+            }
     try:
         entrance_map = int(entrance["map"])
     except (TypeError, ValueError):
-        return {"usable": False, "aim": "",
-                "refused": "entrance map is not a number: %r" % (entrance["map"],)}
+        return {
+            "usable": False,
+            "aim": "",
+            "refused": "entrance map is not a number: %r" % (entrance["map"],),
+        }
     if entrance_map != int(destination_map):
-        return {"usable": False, "aim": "",
-                "refused": "entrance is on map %d, not the crossing's map %d"
-                           % (entrance_map, int(destination_map))}
+        return {
+            "usable": False,
+            "aim": "",
+            "refused": "entrance is on map %d, not the crossing's map %d"
+            % (entrance_map, int(destination_map)),
+        }
     if entrance.get("z") is None:
-        return {"usable": False, "aim": "",
-                "refused": "entrance record carries no z, and %s"
-                           % FACT_SOURCES[FACT_TARGET_FOOTING]}
+        return {
+            "usable": False,
+            "aim": "",
+            "refused": "entrance record carries no z, and %s"
+            % FACT_SOURCES[FACT_TARGET_FOOTING],
+        }
     try:
-        aim = aim_at_place(entrance_map, float(entrance["x"]),
-                           float(entrance["y"]), float(entrance["z"]))
+        aim = aim_at_place(
+            entrance_map,
+            float(entrance["x"]),
+            float(entrance["y"]),
+            float(entrance["z"]),
+        )
     except (TypeError, ValueError) as exc:
         return {"usable": False, "aim": "", "refused": str(exc)}
     return {"usable": True, "aim": aim, "refused": ""}

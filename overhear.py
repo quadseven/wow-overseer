@@ -85,8 +85,9 @@ def is_addressed(row: dict, *, family, authored) -> bool:
     return text not in authored
 
 
-def hear(rows: list, *, family, authored, last_at: float | None,
-         now: float) -> Directive | None:
+def hear(
+    rows: list, *, family, authored, last_at: float | None, now: float
+) -> Directive | None:
     """The one order to act on from this batch, or None.
 
     The LAST qualifying line, not the first: if Evan typed twice while the

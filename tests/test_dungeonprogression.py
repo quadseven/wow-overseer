@@ -5,6 +5,7 @@ ordered stages of whichever dungeon the level frontier picked". The tests that
 pinned the Scarlet behaviour are all still here and still pass unchanged: the
 generalization was meant to add a second campaign, not to loosen the first.
 """
+
 import pathlib
 import unittest
 
@@ -40,7 +41,8 @@ class SuccessfulRuns(unittest.TestCase):
             {"portal_keyword": "blackrock-depths", "outcome": "wipe"},
         ]
         self.assertEqual(
-            2, dungeonprogression.successful_runs(rows)["blackrock-depths"])
+            2, dungeonprogression.successful_runs(rows)["blackrock-depths"]
+        )
 
     def test_a_dungeon_with_no_clears_is_a_zero_and_not_an_absence(self):
         counts = dungeonprogression.successful_runs([])
@@ -75,8 +77,7 @@ class OrderedStage(unittest.TestCase):
     WINGS = dungeonprogression.SCARLET_WINGS
 
     def test_missing_ledger_does_not_guess_a_wing(self):
-        self.assertIsNone(
-            dungeonprogression.next_stage(None, 25, stages=self.WINGS))
+        self.assertIsNone(dungeonprogression.next_stage(None, 25, stages=self.WINGS))
 
     def test_starts_at_graveyard(self):
         self.assertEqual(
@@ -87,34 +88,41 @@ class OrderedStage(unittest.TestCase):
     def test_advances_only_after_the_previous_wing_is_complete(self):
         self.assertEqual(
             "scarlet-library",
-            dungeonprogression.next_stage(
-                {"scarlet": 25}, 25, stages=self.WINGS),
+            dungeonprogression.next_stage({"scarlet": 25}, 25, stages=self.WINGS),
         )
         self.assertEqual(
             "scarlet-armory",
             dungeonprogression.next_stage(
-                {"scarlet": 25, "scarlet-library": 25}, 25, stages=self.WINGS),
+                {"scarlet": 25, "scarlet-library": 25}, 25, stages=self.WINGS
+            ),
         )
         self.assertEqual(
             "scarlet-cathedral",
             dungeonprogression.next_stage(
                 {"scarlet": 25, "scarlet-library": 25, "scarlet-armory": 25},
-                25, stages=self.WINGS),
+                25,
+                stages=self.WINGS,
+            ),
         )
 
     def test_does_not_skip_an_incomplete_lower_wing(self):
         self.assertEqual(
             "scarlet",
             dungeonprogression.next_stage(
-                {"scarlet": 24, "scarlet-library": 25,
-                 "scarlet-armory": 25, "scarlet-cathedral": 25},
-                25, stages=self.WINGS),
+                {
+                    "scarlet": 24,
+                    "scarlet-library": 25,
+                    "scarlet-armory": 25,
+                    "scarlet-cathedral": 25,
+                },
+                25,
+                stages=self.WINGS,
+            ),
         )
 
     def test_completed_campaign_has_no_next_wing(self):
         counts = {keyword: 25 for keyword, _ in self.WINGS}
-        self.assertIsNone(
-            dungeonprogression.next_stage(counts, 25, stages=self.WINGS))
+        self.assertIsNone(dungeonprogression.next_stage(counts, 25, stages=self.WINGS))
 
     def test_blackrock_depths_is_ordered_until_the_campaign_size_is_met(self):
         stages = dungeonprogression.campaign_stages(230)
@@ -124,12 +132,10 @@ class OrderedStage(unittest.TestCase):
         )
         self.assertEqual(
             "blackrock-depths",
-            dungeonprogression.next_stage(
-                {"blackrock-depths": 24}, 25, stages=stages),
+            dungeonprogression.next_stage({"blackrock-depths": 24}, 25, stages=stages),
         )
         self.assertIsNone(
-            dungeonprogression.next_stage(
-                {"blackrock-depths": 25}, 25, stages=stages),
+            dungeonprogression.next_stage({"blackrock-depths": 25}, 25, stages=stages),
         )
 
 
@@ -138,26 +144,28 @@ class FrontierStage(unittest.TestCase):
 
     def test_the_highest_door_the_family_can_reach(self):
         self.assertEqual(
-            "scarlet",
-            dungeonprogression.frontier_stage(self.WINGS, 28, slack=2))
+            "scarlet", dungeonprogression.frontier_stage(self.WINGS, 28, slack=2)
+        )
         self.assertEqual(
             "scarlet-cathedral",
-            dungeonprogression.frontier_stage(self.WINGS, 41, slack=2))
+            dungeonprogression.frontier_stage(self.WINGS, 41, slack=2),
+        )
 
     def test_the_slack_is_the_callers_and_not_this_modules(self):
         self.assertEqual(
             "scarlet-library",
-            dungeonprogression.frontier_stage(self.WINGS, 31, slack=2))
+            dungeonprogression.frontier_stage(self.WINGS, 31, slack=2),
+        )
         self.assertEqual(
-            "scarlet",
-            dungeonprogression.frontier_stage(self.WINGS, 31, slack=0))
+            "scarlet", dungeonprogression.frontier_stage(self.WINGS, 31, slack=0)
+        )
 
     def test_a_family_below_every_door_still_gets_the_first_one(self):
         """Not None: the READINESS gate is prospects()' job, and answering it
         twice in two places is how the two come to disagree."""
         self.assertEqual(
-            "scarlet",
-            dungeonprogression.frontier_stage(self.WINGS, 10, slack=2))
+            "scarlet", dungeonprogression.frontier_stage(self.WINGS, 10, slack=2)
+        )
 
     def test_no_stages_is_no_keyword(self):
         self.assertEqual("", dungeonprogression.frontier_stage((), 60, slack=2))
@@ -180,7 +188,8 @@ class ThePortalKeywordsTheWorldserverActuallyKnows(unittest.TestCase):
             raise unittest.SkipTest(
                 "mod-overseer submodule is not checked out: "
                 "git submodule update --init "
-                "production/docker/azerothcore-playerbots/mod-overseer")
+                "production/docker/azerothcore-playerbots/mod-overseer"
+            )
         cls.source = MODULE.read_text(encoding="utf-8", errors="replace")
 
     def _has_portal_row(self, keyword: str) -> bool:

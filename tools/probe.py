@@ -25,6 +25,7 @@ Connection comes from the same environment the bridge uses, so this runs inside
 the cluster or through a port-forward without a second set of settings to keep
 in step.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -133,22 +134,31 @@ def collect(cur, ids: dict[int, tuple[str, str]], deadline: float) -> dict:
     # A probe that never came back is reported as such rather than omitted. An
     # absent key reads as "nothing to say"; this is "nobody answered".
     for name, what in pending.values():
-        out.setdefault(name, {})[what] = {"error": "timed out waiting for the worldserver"}
+        out.setdefault(name, {})[what] = {
+            "error": "timed out waiting for the worldserver"
+        }
     return out
 
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("name", nargs="?", help="character to ask; omit with --all")
-    ap.add_argument("probes", nargs="*", default=None, help=f"any of: {' '.join(PROBES)}")
-    ap.add_argument("--all", action="store_true", help="ask every enabled roster character")
+    ap.add_argument(
+        "probes", nargs="*", default=None, help=f"any of: {' '.join(PROBES)}"
+    )
+    ap.add_argument(
+        "--all", action="store_true", help="ask every enabled roster character"
+    )
     ap.add_argument("--timeout", type=float, default=TIMEOUT_SECONDS)
     args = ap.parse_args()
 
     wanted = [p for p in (args.probes or PROBES)]
     bad = [p for p in wanted if p not in PROBES]
     if bad:
-        print(f"unknown probe(s): {' '.join(bad)}; known: {' '.join(PROBES)}", file=sys.stderr)
+        print(
+            f"unknown probe(s): {' '.join(bad)}; known: {' '.join(PROBES)}",
+            file=sys.stderr,
+        )
         return 2
     if not args.name and not args.all:
         ap.error("give a character name, or --all")

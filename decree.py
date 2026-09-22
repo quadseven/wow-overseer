@@ -36,6 +36,7 @@ control either reaches the world or is drawn disabled with the reason printed
 beside it, because a button that silently does nothing is the exact failure
 this epic is named after.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -72,10 +73,10 @@ import travel
 # `writes` NAMES THE ROAD, NOT THE PERMISSION. can_send is derived from it, so
 # a card cannot become sendable on screen without naming what it writes.
 
-CHAT = "chat"        # POST /api/chat, one character at a time
+CHAT = "chat"  # POST /api/chat, one character at a time
 COMMAND = "command"  # POST /api/decree, one overseer_command row per character
-ROSTER = "roster"    # POST /api/decree, one overseer_roster column
-NOWHERE = ""         # no write path from this page
+ROSTER = "roster"  # POST /api/decree, one overseer_roster column
+NOWHERE = ""  # no write path from this page
 
 JOB = "job"
 CAMPAIGN = "campaign"
@@ -231,8 +232,10 @@ def job_line(mode: str, leader: str | None) -> str:
     """
     if leader is None:
         return "Nobody is on the roster, so no job is set."
-    return ("Set to %s, read off %s's row - which is the row the run "
-            "coordinator reads." % (mode, leader))
+    return (
+        "Set to %s, read off %s's row - which is the row the run "
+        "coordinator reads." % (mode, leader)
+    )
 
 
 def job_choice(mode: str) -> dict | None:
@@ -311,7 +314,9 @@ def campaign_view(counter: dict) -> dict:
     else:
         left = wanted - done
         means = "%d run%s left before the coordinator stops." % (
-            left, "" if left == 1 else "s")
+            left,
+            "" if left == 1 else "s",
+        )
     warning = ""
     if disagrees:
         warning = (
@@ -375,9 +380,10 @@ def travel_chips() -> tuple:
             # A whole sentence, and it says the caveat again in the one place
             # a person is looking when they pick a role. travel.describe
             # supplies the half that names the target.
-            "says": ("Aiming somebody here walks them to %s and stands them "
-                     "in front of it. It does not make them use it."
-                     % travel.describe(role)),
+            "says": (
+                "Aiming somebody here walks them to %s and stands them "
+                "in front of it. It does not make them use it." % travel.describe(role)
+            ),
         }
         for role, flag in travel.ROLES.items()
     )
@@ -392,9 +398,9 @@ def travel_line(aimed) -> str:
     aimed = list(aimed)
     if not aimed:
         return "Nobody is aimed anywhere right now."
-    return "; ".join(
-        "%s is walking to %s" % (a["name"], a["says"]) for a in aimed
-    ) + "."
+    return (
+        "; ".join("%s is walking to %s" % (a["name"], a["says"]) for a in aimed) + "."
+    )
 
 
 def travel_now(rows: list) -> tuple:
@@ -407,11 +413,13 @@ def travel_now(rows: list) -> tuple:
     for row in rows or []:
         target = str(row.get("target") or "")
         if travel.is_target(target):
-            aimed.append({
-                "name": str(row.get("name") or ""),
-                "target": target,
-                "says": travel.describe(target),
-            })
+            aimed.append(
+                {
+                    "name": str(row.get("name") or ""),
+                    "target": target,
+                    "says": travel.describe(target),
+                }
+            )
     return tuple(aimed)
 
 
@@ -436,8 +444,7 @@ WILL_TARGETS = (
         "needs_name": False,
         "why_not": "",
         "what": (
-            "Every one of them hears it and answers in their own words, "
-            "oldest first."
+            "Every one of them hears it and answers in their own words, oldest first."
         ),
     },
     {
@@ -558,12 +565,12 @@ OUTCOME_EMPTY = "Nothing has been sent from this console yet."
 # past that this is history and the thought timeline is the place for it.
 OUTCOME_ROWS = 40
 
-VERIFIED = "verified"       # read back, and it holds
-UNVERIFIED = "unverified"   # handed over, nothing checked
-INERT = "inert"             # accepted, changed nothing
-WAITING = "waiting"         # still in flight
-FAILED = "failed"           # refused or errored
-UNSEEN = "unseen"           # a status this image has never heard of
+VERIFIED = "verified"  # read back, and it holds
+UNVERIFIED = "unverified"  # handed over, nothing checked
+INERT = "inert"  # accepted, changed nothing
+WAITING = "waiting"  # still in flight
+FAILED = "failed"  # refused or errored
+UNSEEN = "unseen"  # a status this image has never heard of
 
 
 @dataclass(frozen=True)
@@ -805,8 +812,10 @@ def _verdict(row: dict, read: Outcome, check: str | None, facts: dict) -> str:
         return "Nothing changed: %s has no roster row." % name
     if status == "error":
         if detail == NOT_ONLINE:
-            return ("Did not happen: %s was not logged in when the worldserver "
-                    "read the order." % name)
+            return (
+                "Did not happen: %s was not logged in when the worldserver "
+                "read the order." % name
+            )
         return "Did not happen for %s: %s." % (name, detail or "no reason given")
     if status == "applied":
         return "Applied: %s changed, read back off the character." % name
@@ -817,9 +826,12 @@ def _verdict(row: dict, read: Outcome, check: str | None, facts: dict) -> str:
     return "Handed over to %s; nothing was checked." % name
 
 
-def outcome(row: dict, roster_jobs: dict | None = None,
-            newest_job: dict | None = None,
-            now: datetime | None = None) -> dict:
+def outcome(
+    row: dict,
+    roster_jobs: dict | None = None,
+    newest_job: dict | None = None,
+    now: datetime | None = None,
+) -> dict:
     """One overseer_command row as a console line.
 
     The ROW ID is carried on every one of them, never only on the interesting
@@ -844,9 +856,12 @@ def outcome(row: dict, roster_jobs: dict | None = None,
     }
     if check is not None:
         template = READBACK[check]
-        read = Outcome(word=template.word, tone=template.tone,
-                       means=template.means % facts,
-                       evidence=template.evidence % facts)
+        read = Outcome(
+            word=template.word,
+            tone=template.tone,
+            means=template.means % facts,
+            evidence=template.evidence % facts,
+        )
     detail = str(row.get("detail") or "")
     return {
         "id": int(row.get("id") or 0),
@@ -868,9 +883,12 @@ def outcome(row: dict, roster_jobs: dict | None = None,
     }
 
 
-def outcomes(rows: list, roster_jobs: dict | None = None,
-             newest_job: dict | None = None,
-             now: datetime | None = None) -> tuple:
+def outcomes(
+    rows: list,
+    roster_jobs: dict | None = None,
+    newest_job: dict | None = None,
+    now: datetime | None = None,
+) -> tuple:
     """The command rows as console lines, newest first."""
     lines = [outcome(row, roster_jobs, newest_job, now) for row in (rows or [])]
     lines.sort(key=lambda o: -o["id"])
@@ -886,8 +904,7 @@ _TONE_RANK = (FAILED, INERT, UNSEEN, UNVERIFIED, WAITING, VERIFIED)
 
 
 def _batch_key(line: dict, row: dict) -> tuple:
-    return (line["kind"], line["command"], line["when"],
-            str(row.get("source") or ""))
+    return (line["kind"], line["command"], line["when"], str(row.get("source") or ""))
 
 
 def _batch_verdict(lines: list, command: str, who: str) -> str:
@@ -911,16 +928,19 @@ def _batch_verdict(lines: list, command: str, who: str) -> str:
         for o in rest:
             label = o["word"] + (" (%s)" % o["detail"] if o["detail"] else "")
             groups.setdefault(label, []).append(o["name"])
-        said = "; ".join("%s: %s" % (label, ", ".join(names))
-                         for label, names in groups.items()) + "."
+        said = (
+            "; ".join(
+                "%s: %s" % (label, ", ".join(names)) for label, names in groups.items()
+            )
+            + "."
+        )
     if worked:
-        return "%s: in effect for %d of %d. %s" % (
-            head, len(worked), len(lines), said)
+        return "%s: in effect for %d of %d. %s" % (head, len(worked), len(lines), said)
     return "%s: %s" % (head, said)
 
 
 def _batch_who(names: list, family_of: dict) -> str:
-    """"Grug's family" when every name is in one family, else the names."""
+    """ "Grug's family" when every name is in one family, else the names."""
     fams = {family_of.get(n, "") for n in names}
     if len(names) > 1 and len(fams) == 1 and "" not in fams:
         return family_label(fams.pop())
@@ -929,8 +949,10 @@ def _batch_who(names: list, family_of: dict) -> str:
 
 def _batch_tone(members: list) -> str:
     """The worst tone in the order, so one refusal colours the whole line."""
-    return min((o["tone"] for o in members),
-               key=lambda t: _TONE_RANK.index(t) if t in _TONE_RANK else 0)
+    return min(
+        (o["tone"] for o in members),
+        key=lambda t: _TONE_RANK.index(t) if t in _TONE_RANK else 0,
+    )
 
 
 def batches(rows: list, lines: tuple, family_of: dict | None = None) -> tuple:
@@ -949,23 +971,26 @@ def batches(rows: list, lines: tuple, family_of: dict | None = None) -> tuple:
     out = []
     for members in groups.values():
         who = _batch_who([o["name"] for o in members], family_of)
-        out.append({
-            "id": max(o["id"] for o in members),
-            "command": members[0]["command"],
-            "kind": members[0]["kind"],
-            "who": who,
-            "tone": _batch_tone(members),
-            "success": all(o["success"] for o in members),
-            "ago": members[0]["ago"],
-            "when": members[0]["when"],
-            "verdict": _batch_verdict(members, members[0]["command"], who),
-            "lines": members,
-        })
+        out.append(
+            {
+                "id": max(o["id"] for o in members),
+                "command": members[0]["command"],
+                "kind": members[0]["kind"],
+                "who": who,
+                "tone": _batch_tone(members),
+                "success": all(o["success"] for o in members),
+                "ago": members[0]["ago"],
+                "when": members[0]["when"],
+                "verdict": _batch_verdict(members, members[0]["command"], who),
+                "lines": members,
+            }
+        )
     out.sort(key=lambda b: -b["id"])
     return tuple(out)
 
 
 # --- what is stopping them ---------------------------------------------------
+
 
 def backlog() -> tuple:
     """The honest list of what the family still cannot do.
@@ -994,14 +1019,13 @@ def backlog() -> tuple:
             ),
         },
         {
-            "what": "%s does not hold %s." % (owed_to or "The family's crafter",
-                                              first_trade),
+            "what": "%s does not hold %s."
+            % (owed_to or "The family's crafter", first_trade),
             "why": (
                 "The family assigned it: %s is the first trade in the open "
                 "order and it is the family's bag problem. The plan has been "
                 "written down since the professions module landed and the "
-                "family holds none of its assigned trades yet."
-                % first_trade
+                "family holds none of its assigned trades yet." % first_trade
             ),
         },
         {
@@ -1015,7 +1039,7 @@ def backlog() -> tuple:
         },
         {
             "what": "%d of %d jobs are a name and nothing else."
-                    % (len(unwired), len(jobs.MODES)),
+            % (len(unwired), len(jobs.MODES)),
             "why": (
                 "Setting one of them stands the quest drive down and puts "
                 "nothing in its place: %s." % ", ".join(unwired)
@@ -1088,7 +1112,7 @@ def unwired_refusal(mode: str) -> str:
     return (
         "%s That is a name and nothing else, so this console will not send "
         "it - one tap is too cheap for an order that stands the family down. "
-        "Say \"job %s\" in the overseer's own channel if you mean it anyway."
+        'Say "job %s" in the overseer\'s own channel if you mean it anyway.'
         % (jobs.describe(mode), mode)
     )
 
@@ -1109,9 +1133,7 @@ ORDER_REFUSALS = {
         "and run count, so one order cannot set both."
     ),
     "mode": "That is not a job mode. The modes are: %s." % ", ".join(jobs.MODES),
-    "campaign": (
-        "Say what the campaign should be: a new cap, a restart, or both."
-    ),
+    "campaign": ("Say what the campaign should be: a new cap, a restart, or both."),
     "wanted": "The run cap has to be a whole number of runs.",
     "ceiling": (
         "The run cap has to be between %d and %d. That ceiling is the "
@@ -1229,9 +1251,7 @@ def _plan_campaign(request: dict, standing: dict) -> Order:
             return _refuse(CAMPAIGN, ORDER_REFUSALS["wanted"])
         if not CAMPAIGN_STOP <= wanted <= CAMPAIGN_CEILING:
             return _refuse(CAMPAIGN, ORDER_REFUSALS["ceiling"])
-        updates.extend(
-            Update(name, CAMPAIGN_WANTED, wanted, False) for name in names
-        )
+        updates.extend(Update(name, CAMPAIGN_WANTED, wanted, False) for name in names)
         # A cap of 0 is legal and is not a small campaign. campaign_view
         # already owns that sentence; this is the same fact said forwards.
         said.append(
@@ -1418,6 +1438,7 @@ def order_result(order: Order, changed: int) -> dict:
 # whom that row does not govern. So the job and the campaign are read and
 # ordered per family, and an order that fans out names the family it is for.
 
+
 def family_label(key: str) -> str:
     """How a family is named on the page: after the head it is keyed by."""
     return "%s's family" % key if key else "the family"
@@ -1449,31 +1470,40 @@ def family_views(roster_rows: list) -> list:
     for key in family_keys(roster_rows):
         standing = agenda.standing_orders(_rows_of(roster_rows, key))
         split = standing["job_split"]
-        out.append({
-            "key": key,
-            "label": family_label(key),
-            "leader": standing["leader"],
-            "roster": list(standing["roster"]),
-            "job": {
-                "standing": standing["job"],
-                "line": "%s: %s" % (family_label(key),
-                                    job_line(standing["job"], standing["leader"])),
-                "split_line": agenda.split_sentence(split) if split else "",
-            },
-            "campaign": dict(
-                campaign_view(standing["campaign"]),
-                line="%s: %s" % (family_label(key),
-                                 campaign_view(standing["campaign"])["line"]),
-            ),
-        })
+        out.append(
+            {
+                "key": key,
+                "label": family_label(key),
+                "leader": standing["leader"],
+                "roster": list(standing["roster"]),
+                "job": {
+                    "standing": standing["job"],
+                    "line": "%s: %s"
+                    % (
+                        family_label(key),
+                        job_line(standing["job"], standing["leader"]),
+                    ),
+                    "split_line": agenda.split_sentence(split) if split else "",
+                },
+                "campaign": dict(
+                    campaign_view(standing["campaign"]),
+                    line="%s: %s"
+                    % (family_label(key), campaign_view(standing["campaign"])["line"]),
+                ),
+            }
+        )
     return out
 
 
 # --- the whole console -------------------------------------------------------
 
-def build_console(roster_rows: list, command_rows: list,
-                  now: datetime | None = None,
-                  newest_job_rows: list | None = None) -> dict:
+
+def build_console(
+    roster_rows: list,
+    command_rows: list,
+    now: datetime | None = None,
+    newest_job_rows: list | None = None,
+) -> dict:
     """Rows in, the console's JSON out.
 
     roster_rows    overseer_roster, every column agenda reads
@@ -1494,10 +1524,11 @@ def build_console(roster_rows: list, command_rows: list,
     aimed = travel_now(standing["travel"])
     # THE READ-BACK NEEDS THE JOB COLUMN. A thin roster read (no `job`) hands
     # in no jobs at all, and no jobs means "not read", never "blank".
-    roster_jobs = {str(r["name"]): agenda._mode(r) for r in roster_rows
-                   if "job" in r}
-    newest_job = {str(r.get("target_name")): int(r.get("id") or 0)
-                  for r in (newest_job_rows or [])}
+    roster_jobs = {str(r["name"]): agenda._mode(r) for r in roster_rows if "job" in r}
+    newest_job = {
+        str(r.get("target_name")): int(r.get("id") or 0)
+        for r in (newest_job_rows or [])
+    }
     lines = outcomes(command_rows, roster_jobs, newest_job, now)
     family_of = {str(r["name"]): _family_key(r) for r in roster_rows}
     return {

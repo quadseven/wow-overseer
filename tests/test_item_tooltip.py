@@ -27,6 +27,7 @@ is the failure this file is watching for.
 
 Tickets: infra#3501.
 """
+
 import pathlib
 import unittest
 from datetime import datetime, timedelta
@@ -43,10 +44,10 @@ BANNER = "// --- the item tooltip, on every gear name (infra#3501)"
 CSS_BANNER = "/* --- the item tooltip, on every gear name (infra#3501)"
 NEXT = "// --- the Decree console (infra#2597)"
 NEXT_CSS = "/* --- the Decree console (infra#2597)"
-BLOCK = PAGE[PAGE.index(BANNER):PAGE.index(NEXT, PAGE.index(BANNER))]
-CSS = PAGE[PAGE.index(CSS_BANNER):PAGE.index(NEXT_CSS, PAGE.index(CSS_BANNER))]
-LINES = PAGE[PAGE.index("function itemTipLines"):]
-LINES = LINES[:LINES.index("\n}\n")]
+BLOCK = PAGE[PAGE.index(BANNER) : PAGE.index(NEXT, PAGE.index(BANNER))]
+CSS = PAGE[PAGE.index(CSS_BANNER) : PAGE.index(NEXT_CSS, PAGE.index(CSS_BANNER))]
+LINES = PAGE[PAGE.index("function itemTipLines") :]
+LINES = LINES[: LINES.index("\n}\n")]
 
 BOOK = armory.ItemBook.load(str(HERE))
 
@@ -59,15 +60,35 @@ def template(**over) -> dict:
     carrying four of them would pass while the query selected four.
     """
     row = {
-        "entry": 10402, "item_name": "Serpent's Shoulders", "quality": 2,
-        "item_level": 24, "required_level": 19, "max_durability": 70,
-        "displayid": 5194, "class": 4, "subclass": 2, "inventory_type": 3,
-        "armor": 48, "block": 0, "bonding": 1, "itemset": 0,
-        "sell_price": 4521, "allowable_class": -1, "description": "",
-        "dmg_min1": 0, "dmg_max1": 0, "delay": 0,
-        "dmg_min2": 0, "dmg_max2": 0, "dmg_type2": 0,
-        "holy_res": 0, "fire_res": 0, "nature_res": 0, "frost_res": 0,
-        "shadow_res": 0, "arcane_res": 0,
+        "entry": 10402,
+        "item_name": "Serpent's Shoulders",
+        "quality": 2,
+        "item_level": 24,
+        "required_level": 19,
+        "max_durability": 70,
+        "displayid": 5194,
+        "class": 4,
+        "subclass": 2,
+        "inventory_type": 3,
+        "armor": 48,
+        "block": 0,
+        "bonding": 1,
+        "itemset": 0,
+        "sell_price": 4521,
+        "allowable_class": -1,
+        "description": "",
+        "dmg_min1": 0,
+        "dmg_max1": 0,
+        "delay": 0,
+        "dmg_min2": 0,
+        "dmg_max2": 0,
+        "dmg_type2": 0,
+        "holy_res": 0,
+        "fire_res": 0,
+        "nature_res": 0,
+        "frost_res": 0,
+        "shadow_res": 0,
+        "arcane_res": 0,
     }
     for n in range(1, 11):
         row["stat_type%d" % n] = 0
@@ -75,8 +96,8 @@ def template(**over) -> dict:
     for n in range(1, 6):
         row["spellid_%d" % n] = 0
         row["spelltrigger_%d" % n] = 0
-    row["stat_type1"], row["stat_value1"] = 3, 7     # ITEM_MOD_AGILITY
-    row["stat_type2"], row["stat_value2"] = 6, 5     # ITEM_MOD_SPIRIT
+    row["stat_type1"], row["stat_value1"] = 3, 7  # ITEM_MOD_AGILITY
+    row["stat_type2"], row["stat_value2"] = 6, 5  # ITEM_MOD_SPIRIT
     row.update(over)
     return row
 
@@ -107,14 +128,26 @@ class TheLinesComeFromTheWorldDatabase(unittest.TestCase):
         self.assertEqual(self.tip["requires_level"], 19)
 
     def test_the_sell_price_is_split_into_coins_by_the_module(self):
-        self.assertEqual(self.tip["sell_price"],
-                         {"gold": 0, "silver": 45, "copper": 21})
+        self.assertEqual(
+            self.tip["sell_price"], {"gold": 0, "silver": 45, "copper": 21}
+        )
 
     def test_a_weapon_reads_its_damage_its_speed_and_its_dps(self):
-        tip = armory.template_tooltip(template(
-            entry=6472, item_name="Fang of the Crystal Spider", quality=3,
-            inventory_type=13, armor=0, dmg_min1=18, dmg_max1=34, delay=1700,
-            subclass=15, **{"class": 2}), BOOK)
+        tip = armory.template_tooltip(
+            template(
+                entry=6472,
+                item_name="Fang of the Crystal Spider",
+                quality=3,
+                inventory_type=13,
+                armor=0,
+                dmg_min1=18,
+                dmg_max1=34,
+                delay=1700,
+                subclass=15,
+                **{"class": 2},
+            ),
+            BOOK,
+        )
         self.assertEqual(tip["damage"]["min"], 18)
         self.assertEqual(tip["damage"]["max"], 34)
         self.assertEqual(tip["damage"]["speed"], 1.7)
@@ -127,32 +160,71 @@ class TheLinesComeFromTheWorldDatabase(unittest.TestCase):
         acore_world: dmg_min1=26, dmg_max1=49 (base physical, dmg_type1=0),
         dmg_min2=5, dmg_max2=7, dmg_type2=2 (Fire) - the exact "+5 - 7 Fire
         Damage" line infra#3513 reported missing."""
-        tip = armory.template_tooltip(template(
-            entry=7682, item_name="Torturing Poker", quality=1,
-            inventory_type=13, armor=0, dmg_min1=26, dmg_max1=49, delay=1800,
-            dmg_min2=5, dmg_max2=7, dmg_type2=2,
-            subclass=0, **{"class": 2}), BOOK)
+        tip = armory.template_tooltip(
+            template(
+                entry=7682,
+                item_name="Torturing Poker",
+                quality=1,
+                inventory_type=13,
+                armor=0,
+                dmg_min1=26,
+                dmg_max1=49,
+                delay=1800,
+                dmg_min2=5,
+                dmg_max2=7,
+                dmg_type2=2,
+                subclass=0,
+                **{"class": 2},
+            ),
+            BOOK,
+        )
         self.assertEqual(tip["damage"]["min"], 26)
         self.assertEqual(tip["damage"]["max"], 49)
-        self.assertEqual(tip["damage"]["elemental"],
-                         [{"school": "Fire", "min": 5, "max": 7}])
+        self.assertEqual(
+            tip["damage"]["elemental"], [{"school": "Fire", "min": 5, "max": 7}]
+        )
 
     def test_a_non_fire_elemental_range_is_named_and_not_confused_with_base(self):
-        tip = armory.template_tooltip(template(
-            entry=6472, item_name="Fang of the Crystal Spider", quality=3,
-            inventory_type=13, armor=0, dmg_min1=18, dmg_max1=34, delay=1700,
-            dmg_min2=3, dmg_max2=6, dmg_type2=4,  # Frost
-            subclass=15, **{"class": 2}), BOOK)
+        tip = armory.template_tooltip(
+            template(
+                entry=6472,
+                item_name="Fang of the Crystal Spider",
+                quality=3,
+                inventory_type=13,
+                armor=0,
+                dmg_min1=18,
+                dmg_max1=34,
+                delay=1700,
+                dmg_min2=3,
+                dmg_max2=6,
+                dmg_type2=4,  # Frost
+                subclass=15,
+                **{"class": 2},
+            ),
+            BOOK,
+        )
         self.assertEqual(tip["damage"]["min"], 18)
         self.assertEqual(tip["damage"]["max"], 34)
-        self.assertEqual(tip["damage"]["elemental"],
-                         [{"school": "Frost", "min": 3, "max": 6}])
+        self.assertEqual(
+            tip["damage"]["elemental"], [{"school": "Frost", "min": 3, "max": 6}]
+        )
 
     def test_an_item_with_no_elemental_damage_reports_none_not_an_empty_line(self):
-        tip = armory.template_tooltip(template(
-            entry=6472, item_name="Fang of the Crystal Spider", quality=3,
-            inventory_type=13, armor=0, dmg_min1=18, dmg_max1=34, delay=1700,
-            subclass=15, **{"class": 2}), BOOK)
+        tip = armory.template_tooltip(
+            template(
+                entry=6472,
+                item_name="Fang of the Crystal Spider",
+                quality=3,
+                inventory_type=13,
+                armor=0,
+                dmg_min1=18,
+                dmg_max1=34,
+                delay=1700,
+                subclass=15,
+                **{"class": 2},
+            ),
+            BOOK,
+        )
         self.assertIsNone(tip["damage"]["elemental"])
 
     def test_a_resistance_is_named_rather_than_numbered(self):
@@ -169,8 +241,8 @@ class TheLinesComeFromTheWorldDatabase(unittest.TestCase):
     def test_a_piece_with_no_durability_at_all_says_nothing(self):
         """Rings, cloaks and trinkets have none, and "0 / 0" is not a fact."""
         self.assertIsNone(
-            armory.template_tooltip(template(max_durability=0), BOOK)
-            ["durability"])
+            armory.template_tooltip(template(max_durability=0), BOOK)["durability"]
+        )
 
     def test_no_enchant_and_no_suffix_reach_a_template(self):
         """What an item BECOMES when somebody puts it on is a fact about their
@@ -183,15 +255,15 @@ class TheLinesComeFromTheWorldDatabase(unittest.TestCase):
         """_item_set names the other pieces out of a lookup none of these
         callers has. A set header over five lines of "Item #40303" says less
         than no set header."""
-        self.assertIsNone(armory.template_tooltip(
-            template(itemset=181), BOOK)["set"])
+        self.assertIsNone(armory.template_tooltip(template(itemset=181), BOOK)["set"])
 
     def test_a_row_from_a_narrow_read_gets_no_tooltip_at_all(self):
         """Not a tooltip full of nulls. Four queries behind this page selected
         a name, a quality and a level and nothing else; a caller that has not
         been widened must render the name without an affordance."""
-        self.assertIsNone(armory.template_tooltip(
-            {"entry": 1, "name": "the old shape"}, BOOK))
+        self.assertIsNone(
+            armory.template_tooltip({"entry": 1, "name": "the old shape"}, BOOK)
+        )
         self.assertIsNone(armory.template_tooltip({}, BOOK))
 
 
@@ -209,12 +281,12 @@ class TheItemPayloadsCarryIt(unittest.TestCase):
         payload = recap.item_payload(10402, template(), BOOK.icons)
         self.assertIsNone(payload["tooltip"])
         self.assertEqual(payload["name"], "Serpent's Shoulders")
-        self.assertEqual(payload["wowhead"],
-                         "https://www.wowhead.com/wotlk/item=10402")
+        self.assertEqual(payload["wowhead"], "https://www.wowhead.com/wotlk/item=10402")
 
     def test_the_chronicle_payload_carries_it_too(self):
-        payload = achievements.item_payload(10402, {10402: template()},
-                                            BOOK.icons, BOOK)
+        payload = achievements.item_payload(
+            10402, {10402: template()}, BOOK.icons, BOOK
+        )
         self.assertEqual(payload["tooltip"]["slot"], "Shoulder")
         self.assertEqual(payload["quality"], 2)
         self.assertEqual(payload["ilvl"], 24)
@@ -224,8 +296,11 @@ class TheItemPayloadsCarryIt(unittest.TestCase):
         aliased. Both spellings are read in one place so a widened query
         cannot quietly blank a name somewhere nobody looked."""
         payload = achievements.item_payload(
-            7, {7: {"name": "Old Shape Blade", "Quality": 3, "ItemLevel": 40}},
-            BOOK.icons, BOOK)
+            7,
+            {7: {"name": "Old Shape Blade", "Quality": 3, "ItemLevel": 40}},
+            BOOK.icons,
+            BOOK,
+        )
         self.assertEqual(payload["name"], "Old Shape Blade")
         self.assertEqual(payload["quality"], 3)
         self.assertEqual(payload["ilvl"], 40)
@@ -237,41 +312,82 @@ class TheItemPayloadsCarryIt(unittest.TestCase):
         self.assertIsNone(payload["tooltip"])
 
     def test_every_drop_on_the_loot_board_carries_one(self):
-        rows = [dict(template(), Entry=700, Item=10402, Chance=18.0,
-                     GroupId=0, creature=3654)]
+        rows = [
+            dict(
+                template(), Entry=700, Item=10402, Chance=18.0, GroupId=0, creature=3654
+            )
+        ]
         board = recap.build_lootboard(
-            43, "Wailing Caverns",
+            43,
+            "Wailing Caverns",
             [{"entry": 1, "creditEntry": 3654, "name": "Lady Anacondra"}],
-            rows, [{"name": "Ugga", "level": 24, "class": 1}], [],
-            BOOK.icons, ["Ugga"], None, BOOK)
+            rows,
+            [{"name": "Ugga", "level": 24, "class": 1}],
+            [],
+            BOOK.icons,
+            ["Ugga"],
+            None,
+            BOOK,
+        )
         drop = board["bosses"][0]["drops"][0]
         self.assertEqual(drop["tooltip"]["slot"], "Shoulder")
         self.assertEqual(drop["entry"], 10402)
 
     def test_a_board_built_without_a_book_still_builds(self):
-        rows = [dict(template(), Entry=700, Item=10402, Chance=18.0,
-                     GroupId=0, creature=3654)]
+        rows = [
+            dict(
+                template(), Entry=700, Item=10402, Chance=18.0, GroupId=0, creature=3654
+            )
+        ]
         board = recap.build_lootboard(
-            43, "Wailing Caverns",
+            43,
+            "Wailing Caverns",
             [{"entry": 1, "creditEntry": 3654, "name": "Lady Anacondra"}],
-            rows, [{"name": "Ugga", "level": 24, "class": 1}], [],
-            BOOK.icons, ["Ugga"])
+            rows,
+            [{"name": "Ugga", "level": 24, "class": 1}],
+            [],
+            BOOK.icons,
+            ["Ugga"],
+        )
         self.assertIsNone(board["bosses"][0]["drops"][0]["tooltip"])
 
     def test_the_live_recaps_loot_carries_one(self):
         now = datetime(2026, 9, 10, 19, 30)
-        run = {"id": 1, "map_id": 43, "leader_name": "Grug",
-               "started_at": now - timedelta(minutes=40),
-               "last_progress_at": now - timedelta(minutes=1),
-               "ended_at": None, "members": "Ugga"}
-        events = [{"kind": "item_equip", "character_name": "Ugga",
-                   "subject_id": 10402, "first_seen": now - timedelta(minutes=5),
-                   "map": 43, "zone": 718, "detail": "shoulders"}]
+        run = {
+            "id": 1,
+            "map_id": 43,
+            "leader_name": "Grug",
+            "started_at": now - timedelta(minutes=40),
+            "last_progress_at": now - timedelta(minutes=1),
+            "ended_at": None,
+            "members": "Ugga",
+        }
+        events = [
+            {
+                "kind": "item_equip",
+                "character_name": "Ugga",
+                "subject_id": 10402,
+                "first_seen": now - timedelta(minutes=5),
+                "map": 43,
+                "zone": 718,
+                "detail": "shoulders",
+            }
+        ]
         payload = recap.build_recap(
-            run_rows=[run], event_rows=events, death_rows=[],
-            snapshot_rows=[], instance_rows=[], encounter_rows=[],
-            roster=["Ugga"], items={10402: template()}, icons=BOOK.icons,
-            book=BOOK, dungeons={43: "Wailing Caverns"}, zones={}, now=now)
+            run_rows=[run],
+            event_rows=events,
+            death_rows=[],
+            snapshot_rows=[],
+            instance_rows=[],
+            encounter_rows=[],
+            roster=["Ugga"],
+            items={10402: template()},
+            icons=BOOK.icons,
+            book=BOOK,
+            dungeons={43: "Wailing Caverns"},
+            zones={},
+            now=now,
+        )
         self.assertEqual(payload["loot"][0]["tooltip"]["slot"], "Shoulder")
 
 
@@ -285,19 +401,19 @@ class TheQueriesBehindItWereWidened(unittest.TestCase):
         self.assertEqual(SERVER.count("_ITEM_TEMPLATE_COLUMNS = ("), 1)
 
     def test_the_recap_item_read_uses_it(self):
-        sql = SERVER[SERVER.index("_RECAP_ITEMS = ("):]
-        sql = sql[:sql.index(")\n")]
+        sql = SERVER[SERVER.index("_RECAP_ITEMS = (") :]
+        sql = sql[: sql.index(")\n")]
         self.assertIn("_ITEM_TEMPLATE_COLUMNS", sql)
         self.assertIn("it.entry", sql)
 
     def test_the_loot_board_read_uses_it(self):
-        sql = SERVER[SERVER.index("_RECAP_LOOT = ("):]
-        sql = sql[:sql.index("\n)")]
+        sql = SERVER[SERVER.index("_RECAP_LOOT = (") :]
+        sql = sql[: sql.index("\n)")]
         self.assertIn("_ITEM_TEMPLATE_COLUMNS", sql)
 
     def test_the_chronicle_item_read_uses_it(self):
-        fetch = SERVER[SERVER.index("def _fetch_achievements"):]
-        fetch = fetch[:fetch.index("def _ensure_stream_store")]
+        fetch = SERVER[SERVER.index("def _fetch_achievements") :]
+        fetch = fetch[: fetch.index("def _ensure_stream_store")]
         self.assertIn("_ITEM_TEMPLATE_COLUMNS", fetch)
 
     def test_both_builders_are_handed_the_book(self):
@@ -328,18 +444,27 @@ class ThePanelIsPlacedByCssAndMeasuresNothing(unittest.TestCase):
     def test_the_panel_is_outside_every_view(self):
         """It is drawn over whichever tab is open, so it cannot be a child of
         one of them."""
-        body = PAGE[PAGE.index("<body>"):PAGE.index("</body>")]
+        body = PAGE[PAGE.index("<body>") : PAGE.index("</body>")]
         self.assertIn('<div id="itemtip" hidden>', body)
-        for section in ('<section id="chronicle">', '<section id="armory">',
-                        '<section id="bags">'):
-            block = body[body.index(section):]
-            block = block[:block.index("</section>")]
+        for section in (
+            '<section id="chronicle">',
+            '<section id="armory">',
+            '<section id="bags">',
+        ):
+            block = body[body.index(section) :]
+            block = block[: block.index("</section>")]
             self.assertNotIn('id="itemtip"', block, section)
 
     def test_nothing_in_the_block_measures_a_coordinate(self):
-        for measured in ("getBoundingClientRect", "window.innerWidth",
-                         "innerHeight", "style.left", "style.top",
-                         "style.bottom", "offsetWidth"):
+        for measured in (
+            "getBoundingClientRect",
+            "window.innerWidth",
+            "innerHeight",
+            "style.left",
+            "style.top",
+            "style.bottom",
+            "offsetWidth",
+        ):
             self.assertNotIn(measured, BLOCK, measured)
 
     def test_the_css_pins_it_to_the_viewport(self):
@@ -351,10 +476,10 @@ class ThePanelIsPlacedByCssAndMeasuresNothing(unittest.TestCase):
         """A long item must not push its own way out off the bottom. The
         reading scrolls and the two rows under it do not, which is the same
         arrangement .aclose already has."""
-        markup = PAGE[PAGE.index('id="itemtipbody"'):]
-        self.assertIn('class="adetail"', markup[:markup.index(">")])
-        rule = PAGE[PAGE.index("  .adetail {"):]
-        rule = rule[:rule.index("}")]
+        markup = PAGE[PAGE.index('id="itemtipbody"') :]
+        self.assertIn('class="adetail"', markup[: markup.index(">")])
+        rule = PAGE[PAGE.index("  .adetail {") :]
+        rule = rule[: rule.index("}")]
         self.assertIn("overflow-y:auto", rule)
 
     def test_it_carries_its_own_dark_ground(self):
@@ -362,15 +487,23 @@ class ThePanelIsPlacedByCssAndMeasuresNothing(unittest.TestCase):
         is close to invisible, which is why #armory and #bags each override
         the palette. This panel is a child of the body, so it is inside
         neither and has to say so itself."""
-        scope = CSS[CSS.index("#itemtip {"):]
-        scope = scope[:scope.index("}")]
-        for token in ("--bg:", "--panel:", "--line:", "--text:", "--dim:",
-                      "--on-dark:", "--on-dark-dim:", "--on-dark-faint:"):
+        scope = CSS[CSS.index("#itemtip {") :]
+        scope = scope[: scope.index("}")]
+        for token in (
+            "--bg:",
+            "--panel:",
+            "--line:",
+            "--text:",
+            "--dim:",
+            "--on-dark:",
+            "--on-dark-dim:",
+            "--on-dark-faint:",
+        ):
             self.assertIn(token, scope, token)
 
     def test_the_way_out_is_a_thumb_sized_row(self):
-        rule = CSS[CSS.index("#itemtipout, #itemtipclose {"):]
-        rule = rule[:rule.index("}")]
+        rule = CSS[CSS.index("#itemtipout, #itemtipclose {") :]
+        rule = rule[: rule.index("}")]
         self.assertIn("min-height:44px", rule)
 
 
@@ -380,27 +513,27 @@ class TheNameIsNoLongerALink(unittest.TestCase):
     def test_the_gear_name_is_a_button(self):
         """An anchor with an href is what raises the browser's own menu on a
         long press, and no amount of cancelling the click takes that away."""
-        fn = BLOCK[BLOCK.index("function itemTipName"):]
-        fn = fn[:fn.index("\n}\n")]
+        fn = BLOCK[BLOCK.index("function itemTipName") :]
+        fn = fn[: fn.index("\n}\n")]
         self.assertIn('el("button", "iname " + cls, label)', fn)
         self.assertNotIn('createElement("a")', fn)
         self.assertNotIn(".href", fn)
 
     def test_the_long_press_callout_is_refused_in_css(self):
-        rule = CSS[CSS.index("  .iname {"):]
-        rule = rule[:rule.index("}")]
+        rule = CSS[CSS.index("  .iname {") :]
+        rule = rule[: rule.index("}")]
         self.assertIn("-webkit-touch-callout:none", rule)
         self.assertIn("touch-action:manipulation", rule)
 
     def test_a_name_with_nothing_behind_it_is_not_a_control(self):
         """An affordance that opens an empty panel is worse than none."""
-        fn = BLOCK[BLOCK.index("function itemTipName"):]
-        fn = fn[:fn.index("\n}\n")]
-        self.assertIn("if (!item.tooltip) return el(\"span\", cls, label);", fn)
+        fn = BLOCK[BLOCK.index("function itemTipName") :]
+        fn = fn[: fn.index("\n}\n")]
+        self.assertIn('if (!item.tooltip) return el("span", cls, label);', fn)
 
     def test_the_chronicles_loot_line_goes_through_it(self):
-        fn = PAGE[PAGE.index("function chrItem"):]
-        fn = fn[:fn.index("\n}\n")]
+        fn = PAGE[PAGE.index("function chrItem") :]
+        fn = fn[: fn.index("\n}\n")]
         self.assertIn("itemTipName(", fn)
         self.assertNotIn("a.href", fn)
         self.assertNotIn('a.target = "_blank"', fn)
@@ -412,8 +545,9 @@ class TheInteractionIsPredictable(unittest.TestCase):
     is why it is copied rather than reinvented."""
 
     def test_the_same_name_again_closes_it(self):
-        self.assertIn("if (tipShown.at === b && tipShown.pinned) closeItemTip();",
-                      BLOCK)
+        self.assertIn(
+            "if (tipShown.at === b && tipShown.pinned) closeItemTip();", BLOCK
+        )
 
     def test_a_tap_outside_closes_it(self):
         self.assertIn('t.closest("#itemtip, .iname")', BLOCK)
@@ -455,10 +589,9 @@ class ThereIsOnlyOneRenderer(unittest.TestCase):
     asked for is that card on every gear name, not a second one beside it."""
 
     def test_the_armorys_card_draws_through_it(self):
-        fn = PAGE[PAGE.index("function renderDetail"):]
-        fn = fn[:fn.index("\n}\n")]
-        self.assertIn("itemTipLines(c.detail, s.tooltip, renderProvenance(c, s));",
-                      fn)
+        fn = PAGE[PAGE.index("function renderDetail") :]
+        fn = fn[: fn.index("\n}\n")]
+        self.assertIn("itemTipLines(c.detail, s.tooltip, renderProvenance(c, s));", fn)
 
     def test_the_panel_draws_through_the_same_one(self):
         self.assertIn("itemTipLines(tipBody, item.tooltip, null);", BLOCK)
@@ -467,12 +600,26 @@ class ThereIsOnlyOneRenderer(unittest.TestCase):
         self.assertEqual(PAGE.count("\nfunction itemTipLines("), 1)
 
     def test_it_draws_every_line_the_game_draws(self):
-        for field in ("t.item_level", "t.binding", "t.slot", "t.kind",
-                      "t.damage", "t.armor", "t.block", "t.stats",
-                      "t.resistances", "t.enchant", "t.durability",
-                      "t.classes", "t.requires_level", "t.effects",
-                      "t.set.pieces", "t.set.bonuses", "t.flavor",
-                      "t.sell_price"):
+        for field in (
+            "t.item_level",
+            "t.binding",
+            "t.slot",
+            "t.kind",
+            "t.damage",
+            "t.armor",
+            "t.block",
+            "t.stats",
+            "t.resistances",
+            "t.enchant",
+            "t.durability",
+            "t.classes",
+            "t.requires_level",
+            "t.effects",
+            "t.set.pieces",
+            "t.set.bonuses",
+            "t.flavor",
+            "t.sell_price",
+        ):
             self.assertIn(field, LINES, field)
 
     def test_elemental_damage_is_drawn_beside_base_damage_not_folded_into_it(self):
@@ -503,8 +650,8 @@ class TheWayOutIsStillThere(unittest.TestCase):
         self.assertNotIn("https://", BLOCK)
 
     def test_it_refuses_the_opener(self):
-        markup = PAGE[PAGE.index('id="itemtipout"'):]
-        markup = markup[:markup.index(">")]
+        markup = PAGE[PAGE.index('id="itemtipout"') :]
+        markup = markup[: markup.index(">")]
         self.assertIn('rel="noopener"', markup)
         self.assertIn('target="_blank"', markup)
 
@@ -521,10 +668,17 @@ class TheWayOutIsStillThere(unittest.TestCase):
 
 class TheHouseRules(unittest.TestCase):
     def test_no_em_dashes(self):
-        for name in ("index.html", "armory.py", "recap.py", "achievements.py",
-                     "map_server.py", "tests/test_item_tooltip.py"):
-            self.assertNotIn(chr(0x2014),
-                             (HERE / name).read_text(encoding="utf-8"), name)
+        for name in (
+            "index.html",
+            "armory.py",
+            "recap.py",
+            "achievements.py",
+            "map_server.py",
+            "tests/test_item_tooltip.py",
+        ):
+            self.assertNotIn(
+                chr(0x2014), (HERE / name).read_text(encoding="utf-8"), name
+            )
 
 
 if __name__ == "__main__":

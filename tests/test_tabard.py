@@ -10,6 +10,7 @@ field is won by somebody who wanted it, and the same family always arrives at
 the same tabard - because a debate that reaches a different answer each night
 is the #2807 restaging bug wearing a new hat.
 """
+
 import pathlib
 import re
 import unittest
@@ -42,8 +43,9 @@ class WhatEachMemberWants(unittest.TestCase):
             claim = tabard.claim(who)
             self.assertIsNotNone(claim, who.name)
             for field in tabard.FIELDS:
-                self.assertIn(field.name, claim.wants,
-                              f"{who.name} has no {field.name}")
+                self.assertIn(
+                    field.name, claim.wants, f"{who.name} has no {field.name}"
+                )
 
     def test_every_wanted_value_is_in_the_range_the_realm_has_evidence_for(self):
         """Out of range is not a rendering bug, it is an unreadable tabard the
@@ -53,10 +55,8 @@ class WhatEachMemberWants(unittest.TestCase):
             claim = tabard.claim(who)
             for field in tabard.FIELDS:
                 value = claim.wants[field.name]
-                self.assertGreaterEqual(value, field.low,
-                                        f"{who.name}.{field.name}")
-                self.assertLessEqual(value, field.high,
-                                     f"{who.name}.{field.name}")
+                self.assertGreaterEqual(value, field.low, f"{who.name}.{field.name}")
+                self.assertLessEqual(value, field.high, f"{who.name}.{field.name}")
 
     def test_an_outsider_wants_nothing(self):
         """Only the family designs the family's tabard."""
@@ -75,8 +75,9 @@ class TheDebateConcludes(unittest.TestCase):
     def test_the_same_family_always_arrives_at_the_same_tabard(self):
         first = tabard.debate(FAMILY)
         second = tabard.debate(list(reversed(FAMILY)))
-        self.assertEqual(first.design.fields, second.design.fields,
-                         "dict order changed the tabard")
+        self.assertEqual(
+            first.design.fields, second.design.fields, "dict order changed the tabard"
+        )
 
     def test_it_says_who_won_each_field(self):
         out = tabard.debate(FAMILY)
@@ -92,8 +93,11 @@ class TheDebateConcludes(unittest.TestCase):
     def test_the_transcript_is_an_argument_not_a_result(self):
         out = tabard.debate(FAMILY)
         speakers = {line.split(":", 1)[0] for line in out.lines}
-        self.assertEqual(speakers & set(NAMES), set(NAMES),
-                         "somebody sat through the whole thing in silence")
+        self.assertEqual(
+            speakers & set(NAMES),
+            set(NAMES),
+            "somebody sat through the whole thing in silence",
+        )
 
     def test_it_settles_out_loud(self):
         out = tabard.debate(FAMILY)
@@ -135,8 +139,11 @@ class TheSceneReadsLikeFiveCharacters(unittest.TestCase):
 
     def test_no_two_members_open_the_same_way(self):
         openings = [tabard.claim(k).said.split(":")[0] for k in FAMILY]
-        self.assertEqual(len(set(openings)), len(FAMILY),
-                         f"five characters, {len(set(openings))} voices: {openings}")
+        self.assertEqual(
+            len(set(openings)),
+            len(FAMILY),
+            f"five characters, {len(set(openings))} voices: {openings}",
+        )
 
     def test_nobody_says_a_database_column_out_loud(self):
         """The ticket has them arguing about "border style and colours". A
@@ -144,8 +151,9 @@ class TheSceneReadsLikeFiveCharacters(unittest.TestCase):
         his family."""
         said = "\n".join(tabard.debate(FAMILY).lines)
         for field in tabard.FIELDS:
-            self.assertNotIn(field.name, said,
-                             f"{field.name} is a column name, not a word")
+            self.assertNotIn(
+                field.name, said, f"{field.name} is a column name, not a word"
+            )
 
     def test_the_numbers_stay_out_of_the_transcript(self):
         """They are palette indices. Said aloud they mean nothing, and this
@@ -163,9 +171,11 @@ class TheLayersAgreeOnWhatNoTabardMeans(unittest.TestCase):
 
     def test_the_debate_can_never_produce_all_zeros(self):
         self.assertGreaterEqual(
-            min(f.low for f in tabard.FIELDS if f.name == "BackgroundColor"), 1,
+            min(f.low for f in tabard.FIELDS if f.name == "BackgroundColor"),
+            1,
             "a floor of 0 on every field would let the debate agree on a "
-            "tabard the bridge would read as absent, and restage it forever")
+            "tabard the bridge would read as absent, and restage it forever",
+        )
         out = tabard.debate(FAMILY)
         self.assertTrue(any(out.design.fields.values()))
 
@@ -226,9 +236,12 @@ class TheGuardAsksWhetherItHappenedNotWhetherWeTried(unittest.TestCase):
         actually said it; `error` is the one it reaches when nobody was there
         to hear. Counting both is what made a scene nobody heard look held."""
         guard = self._guard()
-        self.assertIn("'delivered'", guard,
-                      "the guard must require delivery, or an undelivered "
-                      "scene reads as an argument the family had")
+        self.assertIn(
+            "'delivered'",
+            guard,
+            "the guard must require delivery, or an undelivered "
+            "scene reads as an argument the family had",
+        )
         self.assertIn("kind = 'chat'", guard)
 
     def test_it_no_longer_keys_on_the_command_row(self):
@@ -236,18 +249,25 @@ class TheGuardAsksWhetherItHappenedNotWhetherWeTried(unittest.TestCase):
         family was heard, and it was the wrong question in both directions:
         it counted an unheard attempt, and it would also have counted a row
         issued by a person testing the verb by hand."""
-        self.assertNotIn("LIKE 'tabard %'", BRIDGE,
-                         "the guard is back on the command row")
+        self.assertNotIn(
+            "LIKE 'tabard %'", BRIDGE, "the guard is back on the command row"
+        )
 
     def test_the_writer_and_the_guard_name_the_same_source(self):
         """Two literals would be one rename away from a guard that never
         matches the rows it guards - which fails OPEN, restaging the scene
         forever, and is exactly the bug this area keeps growing."""
-        self.assertEqual(BRIDGE.count("TABARD_SOURCE"), 4,
-                         "expected the constant at its definition, the guard, "
-                         "the speak rows and the guild row")
-        self.assertEqual(BRIDGE.count('"overseer:tabard"'), 1,
-                         "the source string should be written once")
+        self.assertEqual(
+            BRIDGE.count("TABARD_SOURCE"),
+            4,
+            "expected the constant at its definition, the guard, "
+            "the speak rows and the guild row",
+        )
+        self.assertEqual(
+            BRIDGE.count('"overseer:tabard"'),
+            1,
+            "the source string should be written once",
+        )
 
     def test_the_loop_is_registered_in_both_lists(self):
         """setup_hook and the headless driver. A loop in only one runs only
@@ -289,19 +309,25 @@ class TheSceneIsNotStagedToAnEmptyRoom(unittest.TestCase):
         body = self._once()
         gate = body.index("_bot_held_names")
         voiced = body.index("_in_character")
-        self.assertLess(gate, voiced,
-                        "presence must be settled before the LLM is asked for "
-                        "a line, or an empty room costs eleven calls a cycle")
+        self.assertLess(
+            gate,
+            voiced,
+            "presence must be settled before the LLM is asked for "
+            "a line, or an empty room costs eleven calls a cycle",
+        )
 
     def test_it_waits_for_everyone_not_just_for_anyone(self):
         """Partial presence is the half-told-argument case, so the gate is
         'all of them' and not 'some of them'."""
         body = self._once()
         self.assertIn("absent", body)
-        self.assertIn("if absent:", body,
-                      "the gate must refuse on ANY absentee; a truthiness "
-                      "check on the present set would stage to a half-empty "
-                      "room")
+        self.assertIn(
+            "if absent:",
+            body,
+            "the gate must refuse on ANY absentee; a truthiness "
+            "check on the present set would stage to a half-empty "
+            "room",
+        )
 
     def test_it_reuses_the_existing_presence_rule(self):
         """_bot_held_names already carries the 60-second freshness window and

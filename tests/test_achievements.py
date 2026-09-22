@@ -11,6 +11,7 @@ of 2026-09-02 (overseer_dungeon_run id 18392), its loot, and its deaths.
 
 Tickets: mod-overseer#88, mod-overseer#152.
 """
+
 import unittest
 from datetime import datetime, timedelta
 
@@ -23,63 +24,166 @@ ROSTER = ["Grug", "Ugga", "Og", "Grog", "Bork"]
 # The live run row, verbatim in shape. Opened by the first heartbeat at the
 # door at 08:47, closed by the cold one at 16:08; the clear itself ran
 # 15:20 to 16:06.
-RUN = {"id": 18392, "leader_name": "Og", "map_id": 36, "state": "ended",
-       "started_at": datetime(2026, 9, 2, 8, 47, 57),
-       "last_progress_at": datetime(2026, 9, 2, 16, 6, 47),
-       "ended_at": datetime(2026, 9, 2, 16, 8, 55),
-       "ended_reason": "heartbeat cold - nobody from the roster seen on the map"}
+RUN = {
+    "id": 18392,
+    "leader_name": "Og",
+    "map_id": 36,
+    "state": "ended",
+    "started_at": datetime(2026, 9, 2, 8, 47, 57),
+    "last_progress_at": datetime(2026, 9, 2, 16, 6, 47),
+    "ended_at": datetime(2026, 9, 2, 16, 8, 55),
+    "ended_reason": "heartbeat cold - nobody from the roster seen on the map",
+}
 
 ITEMS = {
-    7230: {"entry": 7230, "name": "Smite's Mighty Hammer", "Quality": 3, "ItemLevel": 23,
-           "displayid": 19610},
-    2169: {"entry": 2169, "name": "Buzzer Blade", "Quality": 3, "ItemLevel": 21,
-           "displayid": 20347},
-    5199: {"entry": 5199, "name": "Smelting Pants", "Quality": 3, "ItemLevel": 21,
-           "displayid": 1},
-    12052: {"entry": 12052, "name": "Ring of the Moon", "Quality": 2, "ItemLevel": 21,
-            "displayid": 9837},
-    5191: {"entry": 5191, "name": "Cruel Barb", "Quality": 3, "ItemLevel": 22,
-           "displayid": 2},
-    3663: {"entry": 3663, "name": "Recipe: Fish Stew", "Quality": 1, "ItemLevel": 20,
-           "displayid": 3},
-    1200: {"entry": 1200, "name": "Choice A", "Quality": 2, "ItemLevel": 20, "displayid": 4},
-    1201: {"entry": 1201, "name": "Choice B", "Quality": 2, "ItemLevel": 20, "displayid": 5},
-    9000: {"entry": 9000, "name": "Purple Thing", "Quality": 4, "ItemLevel": 60, "displayid": 6},
+    7230: {
+        "entry": 7230,
+        "name": "Smite's Mighty Hammer",
+        "Quality": 3,
+        "ItemLevel": 23,
+        "displayid": 19610,
+    },
+    2169: {
+        "entry": 2169,
+        "name": "Buzzer Blade",
+        "Quality": 3,
+        "ItemLevel": 21,
+        "displayid": 20347,
+    },
+    5199: {
+        "entry": 5199,
+        "name": "Smelting Pants",
+        "Quality": 3,
+        "ItemLevel": 21,
+        "displayid": 1,
+    },
+    12052: {
+        "entry": 12052,
+        "name": "Ring of the Moon",
+        "Quality": 2,
+        "ItemLevel": 21,
+        "displayid": 9837,
+    },
+    5191: {
+        "entry": 5191,
+        "name": "Cruel Barb",
+        "Quality": 3,
+        "ItemLevel": 22,
+        "displayid": 2,
+    },
+    3663: {
+        "entry": 3663,
+        "name": "Recipe: Fish Stew",
+        "Quality": 1,
+        "ItemLevel": 20,
+        "displayid": 3,
+    },
+    1200: {
+        "entry": 1200,
+        "name": "Choice A",
+        "Quality": 2,
+        "ItemLevel": 20,
+        "displayid": 4,
+    },
+    1201: {
+        "entry": 1201,
+        "name": "Choice B",
+        "Quality": 2,
+        "ItemLevel": 20,
+        "displayid": 5,
+    },
+    9000: {
+        "entry": 9000,
+        "name": "Purple Thing",
+        "Quality": 4,
+        "ItemLevel": 60,
+        "displayid": 6,
+    },
 }
 ICONS = {19610: "inv_hammer_09", 20347: "inv_weapon_shortblade_05"}
 # creature_loot_template, rare and up, for the Deadmines bosses.
-DROPS = {644: {872, 5187}, 642: {1937, 2169}, 643: {5194, 5195}, 1763: {1156, 5199},
-         646: {5192, 5196, 7230}, 645: {5197, 5198}, 647: {5200, 5201, 10403},
-         639: {5193, 5202, 10399, 5191}}
+DROPS = {
+    644: {872, 5187},
+    642: {1937, 2169},
+    643: {5194, 5195},
+    1763: {1156, 5199},
+    646: {5192, 5196, 7230},
+    645: {5197, 5198},
+    647: {5200, 5201, 10403},
+    639: {5193, 5202, 10399, 5191},
+}
 
 
-def ev(kind, who="Ugga", subject_id=0, subject_name="", detail="", level=20,
-       map_id=36, at=T, **extra):
-    row = {"character_name": who, "kind": kind, "subject_id": subject_id,
-           "subject_name": subject_name, "detail": detail, "level": level,
-           "map": map_id, "zone": 1581, "first_seen": at, "last_seen": at,
-           "occurrences": 1}
+def ev(
+    kind,
+    who="Ugga",
+    subject_id=0,
+    subject_name="",
+    detail="",
+    level=20,
+    map_id=36,
+    at=T,
+    **extra,
+):
+    row = {
+        "character_name": who,
+        "kind": kind,
+        "subject_id": subject_id,
+        "subject_name": subject_name,
+        "detail": detail,
+        "level": level,
+        "map": map_id,
+        "zone": 1581,
+        "first_seen": at,
+        "last_seen": at,
+        "occurrences": 1,
+    }
     row.update(extra)
     return row
 
 
 def equip(entry, who="Ugga", at=T, map_id=36, level=20):
-    return ev(ach.ITEM_EQUIP, who, entry, ITEMS.get(entry, {}).get("name", ""),
-              "slot 15", level, map_id, at)
+    return ev(
+        ach.ITEM_EQUIP,
+        who,
+        entry,
+        ITEMS.get(entry, {}).get("name", ""),
+        "slot 15",
+        level,
+        map_id,
+        at,
+    )
 
 
 def death(who="Grug", at=T, map_id=36, killer=""):
-    return {"character_name": who, "map": map_id, "zone": 1581,
-            "killer_name": killer or who, "killer_type": "player", "created_at": at}
+    return {
+        "character_name": who,
+        "map": map_id,
+        "zone": 1581,
+        "killer_name": killer or who,
+        "killer_type": "player",
+        "created_at": at,
+    }
 
 
 def build(runs=(), events=(), deaths=(), quest_rewards=None, now=NOW, items=ITEMS):
-    return ach.build_achievements(list(runs), list(events), list(deaths), items, ICONS,
-                                  DROPS, quest_rewards or {}, ROSTER, now)
+    return ach.build_achievements(
+        list(runs),
+        list(events),
+        list(deaths),
+        items,
+        ICONS,
+        DROPS,
+        quest_rewards or {},
+        ROSTER,
+        now,
+    )
 
 
 def run_card(payload, run_id=18392):
-    return next(c for c in payload["cards"] if c["kind"] == ach.RUN and c["id"] == run_id)
+    return next(
+        c for c in payload["cards"] if c["kind"] == ach.RUN and c["id"] == run_id
+    )
 
 
 class BindingLootToARun(unittest.TestCase):
@@ -87,13 +191,17 @@ class BindingLootToARun(unittest.TestCase):
 
     def test_an_equip_on_the_map_inside_the_window_is_the_runs_loot(self):
         card = run_card(build([RUN], [equip(7230, "Grog", T)]))
-        self.assertEqual([(x["who"], x["name"]) for x in card["loot"]],
-                         [("Grog", "Smite's Mighty Hammer")])
+        self.assertEqual(
+            [(x["who"], x["name"]) for x in card["loot"]],
+            [("Grog", "Smite's Mighty Hammer")],
+        )
 
     def test_time_alone_is_not_enough(self):
         """The run row was open for seven hours; a green equipped in Redridge
         at noon is not Deadmines loot however long the row stayed open."""
-        card = run_card(build([RUN], [equip(12052, "Ugga", T, map_id=0)], [death("Grug")]))
+        card = run_card(
+            build([RUN], [equip(12052, "Ugga", T, map_id=0)], [death("Grug")])
+        )
         self.assertEqual(card["loot"], [])
 
     def test_map_alone_is_not_enough(self):
@@ -112,7 +220,9 @@ class BindingLootToARun(unittest.TestCase):
         """No ended_at yet: the loot is still landing, so the window runs to
         the moment of the read rather than collapsing to nothing."""
         live = dict(RUN, state="active", ended_at=None)
-        card = run_card(build([live], [equip(7230, "Grog", NOW - timedelta(minutes=1))]))
+        card = run_card(
+            build([live], [equip(7230, "Grog", NOW - timedelta(minutes=1))])
+        )
         self.assertEqual(len(card["loot"]), 1)
         self.assertEqual(card["state"], "active")
         self.assertIsNone(card["ended_at"])
@@ -128,8 +238,9 @@ class BindingLootToARun(unittest.TestCase):
         later = equip(7230, "Grog", T + timedelta(minutes=10))
         earlier = equip(2169, "Ugga", T)
         card = run_card(build([RUN], [later, earlier]))
-        self.assertEqual([x["name"] for x in card["loot"]],
-                         ["Buzzer Blade", "Smite's Mighty Hammer"])
+        self.assertEqual(
+            [x["name"] for x in card["loot"]], ["Buzzer Blade", "Smite's Mighty Hammer"]
+        )
 
 
 class WhatARunCardSays(unittest.TestCase):
@@ -137,8 +248,10 @@ class WhatARunCardSays(unittest.TestCase):
         """The row says 7h 20m; the fight was 46 minutes. Both are shown and
         neither pretends to be the other."""
         events = [equip(2169, "Ugga", datetime(2026, 9, 2, 15, 41, 34))]
-        deaths = [death("Grug", datetime(2026, 9, 2, 15, 20, 43)),
-                  death("Ugga", datetime(2026, 9, 2, 16, 6, 55))]
+        deaths = [
+            death("Grug", datetime(2026, 9, 2, 15, 20, 43)),
+            death("Ugga", datetime(2026, 9, 2, 16, 6, 55)),
+        ]
         card = run_card(build([RUN], events, deaths))
         self.assertEqual(card["duration"], "7h 20m")
         self.assertEqual(card["active_from"], "2026-09-02T15:20:43")
@@ -162,25 +275,36 @@ class WhatARunCardSays(unittest.TestCase):
     def test_a_visit_with_nothing_inside_is_counted_but_not_a_card(self):
         """Twenty-two rows for nine real runs: the door-heartbeat rows are
         visits, not achievements."""
-        empty = dict(RUN, id=1, started_at=T - timedelta(days=1),
-                     ended_at=T - timedelta(days=1, minutes=-3))
+        empty = dict(
+            RUN,
+            id=1,
+            started_at=T - timedelta(days=1),
+            ended_at=T - timedelta(days=1, minutes=-3),
+        )
         payload = build([RUN, empty], [equip(7230)])
         self.assertEqual(payload["visits"], 2)
         self.assertEqual(payload["runs"], 1)
         self.assertEqual(payload["attempts"], 0)
-        self.assertEqual([c["id"] for c in payload["cards"] if c["kind"] == ach.RUN],
-                         [18392])
+        self.assertEqual(
+            [c["id"] for c in payload["cards"] if c["kind"] == ach.RUN], [18392]
+        )
 
     def test_level_ups_and_quests_inside_are_listed(self):
-        events = [equip(7230, "Grog"),
-                  ev(ach.LEVEL_UP, "Ugga", 21, "", "from 20", 21, 36, T),
-                  ev(ach.QUEST_REWARD, "Bork", 166, "The Defias Brotherhood", "", 22, 36, T),
-                  ev(ach.QUEST_COMPLETE, "Og", 373, "Underground Assault", "", 22, 36, T)]
+        events = [
+            equip(7230, "Grog"),
+            ev(ach.LEVEL_UP, "Ugga", 21, "", "from 20", 21, 36, T),
+            ev(ach.QUEST_REWARD, "Bork", 166, "The Defias Brotherhood", "", 22, 36, T),
+            ev(ach.QUEST_COMPLETE, "Og", 373, "Underground Assault", "", 22, 36, T),
+        ]
         card = run_card(build([RUN], events))
-        self.assertEqual(card["level_ups"], [{"who": "Ugga", "level": 21,
-                                              "at": "2026-09-02T15:00:00"}])
-        self.assertEqual([(q["title"], q["turned_in"]) for q in card["quests"]],
-                         [("The Defias Brotherhood", True), ("Underground Assault", False)])
+        self.assertEqual(
+            card["level_ups"],
+            [{"who": "Ugga", "level": 21, "at": "2026-09-02T15:00:00"}],
+        )
+        self.assertEqual(
+            [(q["title"], q["turned_in"]) for q in card["quests"]],
+            [("The Defias Brotherhood", True), ("Underground Assault", False)],
+        )
 
     def test_a_visit_that_gained_nothing_is_an_attempt(self):
         """A death at the door and nothing else: honest, and on the timeline,
@@ -189,7 +313,9 @@ class WhatARunCardSays(unittest.TestCase):
         card = run_card(payload)
         self.assertEqual(card["title"], "Dungeon attempt: The Deadmines")
         self.assertFalse(card["gained"])
-        self.assertEqual((payload["runs"], payload["attempts"], payload["visits"]), (0, 1, 1))
+        self.assertEqual(
+            (payload["runs"], payload["attempts"], payload["visits"]), (0, 1, 1)
+        )
         run = run_card(build([RUN], [equip(12052, "Ugga")]))
         self.assertEqual(run["title"], "Dungeon run: The Deadmines")
         self.assertTrue(run["gained"])
@@ -221,9 +347,13 @@ class InferringBosses(unittest.TestCase):
     def test_a_signature_drop_confirms_its_boss(self):
         card = run_card(build([RUN], [equip(7230, "Grog")]))
         known = card["bosses"]["known"]
-        self.assertEqual([(b["name"], b["how"]) for b in known], [("Mr. Smite", ach.BY_LOOT)])
+        self.assertEqual(
+            [(b["name"], b["how"]) for b in known], [("Mr. Smite", ach.BY_LOOT)]
+        )
         self.assertEqual(card["bosses"]["how"], ach.BY_LOOT)
-        self.assertIn("Edwin VanCleef", [b["name"] for b in card["bosses"]["unconfirmed"]])
+        self.assertIn(
+            "Edwin VanCleef", [b["name"] for b in card["bosses"]["unconfirmed"]]
+        )
 
     def test_a_green_confirms_nothing(self):
         card = run_card(build([RUN], [equip(12052)]))
@@ -232,8 +362,10 @@ class InferringBosses(unittest.TestCase):
     def test_bosses_keep_the_dungeons_order_not_the_loot_order(self):
         events = [equip(7230, "Grog", T), equip(2169, "Ugga", T + timedelta(minutes=1))]
         card = run_card(build([RUN], events))
-        self.assertEqual([b["name"] for b in card["bosses"]["known"]],
-                         ["Sneed's Shredder", "Mr. Smite"])
+        self.assertEqual(
+            [b["name"] for b in card["bosses"]["known"]],
+            ["Sneed's Shredder", "Mr. Smite"],
+        )
 
     def test_the_final_boss_is_what_makes_a_clear(self):
         four = run_card(build([RUN], [equip(7230), equip(2169), equip(5199)]))
@@ -248,15 +380,19 @@ class InferringBosses(unittest.TestCase):
         events = [ev(ach.BOSS_KILL, "Og", 639, "Edwin VanCleef", "", 22, 36, T)]
         card = run_card(build([RUN], events))
         self.assertEqual(card["bosses"]["how"], ach.BY_EVENT)
-        self.assertEqual([(b["name"], b["how"]) for b in card["bosses"]["known"]],
-                         [("Edwin VanCleef", ach.BY_EVENT)])
+        self.assertEqual(
+            [(b["name"], b["how"]) for b in card["bosses"]["known"]],
+            [("Edwin VanCleef", ach.BY_EVENT)],
+        )
         self.assertTrue(card["cleared"])
 
     def test_events_and_loot_combine(self):
         events = [ev(ach.BOSS_KILL, "Og", 644, "Rhahk'Zor", "", 22, 36, T), equip(7230)]
         card = run_card(build([RUN], events))
-        self.assertEqual([(b["name"], b["how"]) for b in card["bosses"]["known"]],
-                         [("Rhahk'Zor", ach.BY_EVENT), ("Mr. Smite", ach.BY_LOOT)])
+        self.assertEqual(
+            [(b["name"], b["how"]) for b in card["bosses"]["known"]],
+            [("Rhahk'Zor", ach.BY_EVENT), ("Mr. Smite", ach.BY_LOOT)],
+        )
 
     def test_the_payload_says_whether_kills_are_recorded_at_all(self):
         self.assertFalse(build([RUN], [equip(7230)])["boss_kills_recorded"])
@@ -265,44 +401,62 @@ class InferringBosses(unittest.TestCase):
 
 
 class QuestCards(unittest.TestCase):
-    REWARDS = {127: {"items": [(3663, 1)], "choices": []},
-               500: {"items": [], "choices": [1200, 1201]}}
+    REWARDS = {
+        127: {"items": [(3663, 1)], "choices": []},
+        500: {"items": [], "choices": [1200, 1201]},
+    }
 
     def quest(self, payload, who, qid):
-        return next(c for c in payload["cards"]
-                    if c["kind"] == ach.QUEST and c["who"] == who and c["quest"] == qid)
+        return next(
+            c
+            for c in payload["cards"]
+            if c["kind"] == ach.QUEST and c["who"] == who and c["quest"] == qid
+        )
 
     def test_a_turn_in_is_a_card_with_its_fixed_rewards(self):
         events = [ev(ach.QUEST_REWARD, "Bork", 127, "Selling Fish", "", 23, 0, T)]
         card = self.quest(build([], events, quest_rewards=self.REWARDS), "Bork", 127)
         self.assertEqual(card["title"], "Quest: Selling Fish")
         self.assertTrue(card["turned_in"])
-        self.assertEqual([(r["name"], r["count"], r["chosen"]) for r in card["rewards"]],
-                         [("Recipe: Fish Stew", 1, False)])
+        self.assertEqual(
+            [(r["name"], r["count"], r["chosen"]) for r in card["rewards"]],
+            [("Recipe: Fish Stew", 1, False)],
+        )
         self.assertFalse(card["choice_unknown"])
         self.assertIsNone(card["level_gained"])
 
     def test_the_chosen_reward_is_the_equip_that_follows(self):
-        events = [ev(ach.QUEST_REWARD, "Og", 500, "Pick One", "", 22, 0, T),
-                  equip(1201, "Og", T + timedelta(seconds=20), map_id=0)]
+        events = [
+            ev(ach.QUEST_REWARD, "Og", 500, "Pick One", "", 22, 0, T),
+            equip(1201, "Og", T + timedelta(seconds=20), map_id=0),
+        ]
         card = self.quest(build([], events, quest_rewards=self.REWARDS), "Og", 500)
-        self.assertEqual([(r["name"], r["chosen"]) for r in card["rewards"]],
-                         [("Choice B", True)])
+        self.assertEqual(
+            [(r["name"], r["chosen"]) for r in card["rewards"]], [("Choice B", True)]
+        )
         self.assertFalse(card["choice_unknown"])
 
     def test_an_equip_outside_the_window_or_not_on_the_list_is_not_the_choice(self):
-        events = [ev(ach.QUEST_REWARD, "Og", 500, "Pick One", "", 22, 0, T),
-                  equip(7230, "Og", T + timedelta(seconds=20), map_id=0),
-                  equip(1200, "Og", T + ach.CHOICE_WINDOW + timedelta(seconds=1), map_id=0),
-                  equip(1201, "Ugga", T + timedelta(seconds=5), map_id=0)]
+        events = [
+            ev(ach.QUEST_REWARD, "Og", 500, "Pick One", "", 22, 0, T),
+            equip(7230, "Og", T + timedelta(seconds=20), map_id=0),
+            equip(1200, "Og", T + ach.CHOICE_WINDOW + timedelta(seconds=1), map_id=0),
+            equip(1201, "Ugga", T + timedelta(seconds=5), map_id=0),
+        ]
         card = self.quest(build([], events, quest_rewards=self.REWARDS), "Og", 500)
         self.assertEqual(card["rewards"], [])
         self.assertTrue(card["choice_unknown"])
 
     def test_a_level_in_the_next_two_minutes_is_credited_to_the_turn_in(self):
-        events = [ev(ach.QUEST_REWARD, "Grug", 128, "Blackrock Bounty", "", 25, 0, T),
-                  ev(ach.LEVEL_UP, "Grug", 26, "", "from 25", 26, 0, T + timedelta(seconds=1)),
-                  ev(ach.LEVEL_UP, "Bork", 23, "", "from 22", 23, 0, T + timedelta(seconds=1))]
+        events = [
+            ev(ach.QUEST_REWARD, "Grug", 128, "Blackrock Bounty", "", 25, 0, T),
+            ev(
+                ach.LEVEL_UP, "Grug", 26, "", "from 25", 26, 0, T + timedelta(seconds=1)
+            ),
+            ev(
+                ach.LEVEL_UP, "Bork", 23, "", "from 22", 23, 0, T + timedelta(seconds=1)
+            ),
+        ]
         card = self.quest(build([], events), "Grug", 128)
         self.assertEqual(card["level_gained"], 26)
 
@@ -312,30 +466,48 @@ class QuestCards(unittest.TestCase):
         self.assertFalse(card["turned_in"])
 
     def test_a_completion_followed_by_a_turn_in_is_one_card_not_two(self):
-        events = [ev(ach.QUEST_COMPLETE, "Bork", 127, "Selling Fish", "", 23, 0, T),
-                  ev(ach.QUEST_REWARD, "Bork", 127, "Selling Fish", "", 23, 0,
-                     T + timedelta(minutes=3))]
+        events = [
+            ev(ach.QUEST_COMPLETE, "Bork", 127, "Selling Fish", "", 23, 0, T),
+            ev(
+                ach.QUEST_REWARD,
+                "Bork",
+                127,
+                "Selling Fish",
+                "",
+                23,
+                0,
+                T + timedelta(minutes=3),
+            ),
+        ]
         payload = build([], events, quest_rewards=self.REWARDS)
         cards = [c for c in payload["cards"] if c["kind"] == ach.QUEST]
         self.assertEqual(len(cards), 1)
         self.assertTrue(cards[0]["turned_in"])
 
     def test_the_same_quest_by_two_characters_is_two_cards(self):
-        events = [ev(ach.QUEST_REWARD, "Bork", 127, "Selling Fish", "", 23, 0, T),
-                  ev(ach.QUEST_REWARD, "Ugga", 127, "Selling Fish", "", 21, 0, T)]
+        events = [
+            ev(ach.QUEST_REWARD, "Bork", 127, "Selling Fish", "", 23, 0, T),
+            ev(ach.QUEST_REWARD, "Ugga", 127, "Selling Fish", "", 21, 0, T),
+        ]
         payload = build([], events, quest_rewards=self.REWARDS)
-        self.assertEqual(sorted(c["who"] for c in payload["cards"] if c["kind"] == ach.QUEST),
-                         ["Bork", "Ugga"])
+        self.assertEqual(
+            sorted(c["who"] for c in payload["cards"] if c["kind"] == ach.QUEST),
+            ["Bork", "Ugga"],
+        )
 
 
 class LevelCards(unittest.TestCase):
     def test_only_milestone_levels_get_their_own_card(self):
-        events = [ev(ach.LEVEL_UP, "Grug", 24, "", "from 23", 24, 0, T),
-                  ev(ach.LEVEL_UP, "Grug", 25, "", "from 24", 25, 0, T + timedelta(hours=1))]
+        events = [
+            ev(ach.LEVEL_UP, "Grug", 24, "", "from 23", 24, 0, T),
+            ev(ach.LEVEL_UP, "Grug", 25, "", "from 24", 25, 0, T + timedelta(hours=1)),
+        ]
         payload = build([], events)
         levels = [c for c in payload["cards"] if c["kind"] == ach.LEVEL]
-        self.assertEqual([(c["title"], c["who"], c["milestone"]) for c in levels],
-                         [("Level 25!", "Grug", True)])
+        self.assertEqual(
+            [(c["title"], c["who"], c["milestone"]) for c in levels],
+            [("Level 25!", "Grug", True)],
+        )
 
     def test_every_level_up_is_still_in_level_cards(self):
         events = [ev(ach.LEVEL_UP, "Grug", 24, "", "from 23", 24, 0, T)]
@@ -347,16 +519,29 @@ class Firsts(unittest.TestCase):
         return {f["key"]: f for f in payload["firsts"]}
 
     def test_the_first_run_is_the_earliest_that_gained_anything(self):
-        older = dict(RUN, id=1, leader_name="Ugga", started_at=T - timedelta(days=2),
-                     ended_at=T - timedelta(days=2, hours=-1))
-        events = [equip(7230, "Grog", T), equip(12052, "Ugga", T - timedelta(days=2, minutes=-5))]
+        older = dict(
+            RUN,
+            id=1,
+            leader_name="Ugga",
+            started_at=T - timedelta(days=2),
+            ended_at=T - timedelta(days=2, hours=-1),
+        )
+        events = [
+            equip(7230, "Grog", T),
+            equip(12052, "Ugga", T - timedelta(days=2, minutes=-5)),
+        ]
         f = self.firsts(build([RUN, older], events))
         self.assertEqual(f["dungeon_run"]["at"], "2026-08-31T15:05:00")
         self.assertIn("led by Ugga", f["dungeon_run"]["detail"])
 
     def test_an_attempt_before_the_first_run_is_not_the_first_run(self):
-        wipe = dict(RUN, id=1, leader_name="Ugga", started_at=T - timedelta(days=2),
-                    ended_at=T - timedelta(days=2, hours=-1))
+        wipe = dict(
+            RUN,
+            id=1,
+            leader_name="Ugga",
+            started_at=T - timedelta(days=2),
+            ended_at=T - timedelta(days=2, hours=-1),
+        )
         deaths = [death("Ugga", T - timedelta(days=2, minutes=-5))]
         f = self.firsts(build([RUN, wipe], [equip(7230, "Grog", T)], deaths))
         self.assertEqual(f["dungeon_run"]["at"], "2026-09-02T15:00:00")
@@ -375,19 +560,24 @@ class Firsts(unittest.TestCase):
         self.assertEqual(f["all_together"]["who"], ROSTER)
 
     def test_first_rare_and_first_epic_are_by_quality_not_by_run(self):
-        events = [equip(12052, "Ugga", T - timedelta(days=5), map_id=0),
-                  equip(2169, "Ugga", T - timedelta(days=1), map_id=0),
-                  equip(7230, "Grog", T),
-                  equip(9000, "Og", T + timedelta(hours=1), map_id=0)]
+        events = [
+            equip(12052, "Ugga", T - timedelta(days=5), map_id=0),
+            equip(2169, "Ugga", T - timedelta(days=1), map_id=0),
+            equip(7230, "Grog", T),
+            equip(9000, "Og", T + timedelta(hours=1), map_id=0),
+        ]
         f = self.firsts(build([], events))
-        self.assertEqual((f["rare_item"]["who"], f["rare_item"]["detail"]),
-                         ("Ugga", "Buzzer Blade"))
+        self.assertEqual(
+            (f["rare_item"]["who"], f["rare_item"]["detail"]), ("Ugga", "Buzzer Blade")
+        )
         self.assertEqual(f["epic_item"]["detail"], "Purple Thing")
 
     def test_first_to_a_level_is_the_earliest_at_or_above_it(self):
-        events = [ev(ach.LEVEL_UP, "Grug", 25, "", "from 24", 25, 0, T),
-                  ev(ach.LEVEL_UP, "Ugga", 25, "", "from 24", 25, 0, T + timedelta(days=1)),
-                  ev(ach.LEVEL_UP, "Grug", 20, "", "from 19", 20, 0, T - timedelta(days=4))]
+        events = [
+            ev(ach.LEVEL_UP, "Grug", 25, "", "from 24", 25, 0, T),
+            ev(ach.LEVEL_UP, "Ugga", 25, "", "from 24", 25, 0, T + timedelta(days=1)),
+            ev(ach.LEVEL_UP, "Grug", 20, "", "from 19", 20, 0, T - timedelta(days=4)),
+        ]
         f = self.firsts(build([], events))
         self.assertEqual(f["level_25"]["who"], "Grug")
         self.assertEqual(f["level_20"]["who"], "Grug")
@@ -406,34 +596,64 @@ class Firsts(unittest.TestCase):
 
 class TheTimeline(unittest.TestCase):
     def test_newest_first(self):
-        events = [ev(ach.LEVEL_UP, "Grug", 25, "", "from 24", 25, 0, T - timedelta(days=1)),
-                  ev(ach.QUEST_REWARD, "Bork", 127, "Selling Fish", "", 23, 0, T + timedelta(days=1))]
+        events = [
+            ev(ach.LEVEL_UP, "Grug", 25, "", "from 24", 25, 0, T - timedelta(days=1)),
+            ev(
+                ach.QUEST_REWARD,
+                "Bork",
+                127,
+                "Selling Fish",
+                "",
+                23,
+                0,
+                T + timedelta(days=1),
+            ),
+        ]
         payload = build([RUN], events + [equip(7230, "Grog", T)])
         kinds = [(c["kind"], c["at"]) for c in payload["cards"]]
         self.assertEqual(kinds[0], (ach.QUEST, "2026-09-03T15:00:00"))
-        self.assertEqual([k for k, _ in kinds if k != ach.FIRST],
-                         [ach.QUEST, ach.RUN, ach.LEVEL])
+        self.assertEqual(
+            [k for k, _ in kinds if k != ach.FIRST], [ach.QUEST, ach.RUN, ach.LEVEL]
+        )
         ats = [c["at"] for c in payload["cards"]]
         self.assertEqual(ats, sorted(ats, reverse=True))
 
     def test_on_the_same_second_the_bigger_fact_leads(self):
-        cards = [{"kind": ach.LEVEL, "at": "2026-09-02T16:08:55"},
-                 {"kind": ach.QUEST, "at": "2026-09-02T16:08:55"},
-                 {"kind": ach.RUN, "at": "2026-09-02T16:08:55"},
-                 {"kind": ach.FIRST, "at": "2026-09-02T16:08:55"}]
-        self.assertEqual([c["kind"] for c in ach.timeline(cards)],
-                         [ach.RUN, ach.FIRST, ach.QUEST, ach.LEVEL])
+        cards = [
+            {"kind": ach.LEVEL, "at": "2026-09-02T16:08:55"},
+            {"kind": ach.QUEST, "at": "2026-09-02T16:08:55"},
+            {"kind": ach.RUN, "at": "2026-09-02T16:08:55"},
+            {"kind": ach.FIRST, "at": "2026-09-02T16:08:55"},
+        ]
+        self.assertEqual(
+            [c["kind"] for c in ach.timeline(cards)],
+            [ach.RUN, ach.FIRST, ach.QUEST, ach.LEVEL],
+        )
 
     def test_the_timeline_is_capped_but_the_firsts_are_not(self):
-        events = [ev(ach.QUEST_REWARD, "Bork", i, "Q%d" % i, "", 23, 0, T - timedelta(hours=i))
-                  for i in range(ach.MAX_CARDS + 50)]
+        events = [
+            ev(
+                ach.QUEST_REWARD,
+                "Bork",
+                i,
+                "Q%d" % i,
+                "",
+                23,
+                0,
+                T - timedelta(hours=i),
+            )
+            for i in range(ach.MAX_CARDS + 50)
+        ]
         events.append(equip(2169, "Ugga", T - timedelta(days=400), map_id=0))
         payload = build([], events)
         self.assertEqual(len(payload["cards"]), ach.MAX_CARDS)
         self.assertEqual(self_first(payload, "rare_item")["at"], "2025-07-29T15:00:00")
 
     def test_undated_cards_are_dropped_rather_than_sorted_first(self):
-        cards = [{"kind": ach.FIRST, "at": None}, {"kind": ach.RUN, "at": "2026-09-02T16:08:55"}]
+        cards = [
+            {"kind": ach.FIRST, "at": None},
+            {"kind": ach.RUN, "at": "2026-09-02T16:08:55"},
+        ]
         self.assertEqual(len(ach.timeline(cards)), 1)
 
 
@@ -443,25 +663,47 @@ def self_first(payload, key):
 
 class ReadingTheWorldTables(unittest.TestCase):
     def test_quest_rewards_from_template_rows(self):
-        rows = [{"ID": 127, "RewardItem1": 3663, "RewardAmount1": 1, "RewardItem2": 0,
-                 "RewardAmount2": 0, "RewardItem3": 0, "RewardAmount3": 0,
-                 "RewardItem4": 100, "RewardAmount4": 0,
-                 "RewardChoiceItemID1": 1200, "RewardChoiceItemID2": 0,
-                 "RewardChoiceItemID3": 1201, "RewardChoiceItemID4": 0,
-                 "RewardChoiceItemID5": 0, "RewardChoiceItemID6": 0}]
-        self.assertEqual(ach.quest_rewards_from_rows(rows),
-                         {127: {"items": [(3663, 1), (100, 1)], "choices": [1200, 1201]}})
+        rows = [
+            {
+                "ID": 127,
+                "RewardItem1": 3663,
+                "RewardAmount1": 1,
+                "RewardItem2": 0,
+                "RewardAmount2": 0,
+                "RewardItem3": 0,
+                "RewardAmount3": 0,
+                "RewardItem4": 100,
+                "RewardAmount4": 0,
+                "RewardChoiceItemID1": 1200,
+                "RewardChoiceItemID2": 0,
+                "RewardChoiceItemID3": 1201,
+                "RewardChoiceItemID4": 0,
+                "RewardChoiceItemID5": 0,
+                "RewardChoiceItemID6": 0,
+            }
+        ]
+        self.assertEqual(
+            ach.quest_rewards_from_rows(rows),
+            {127: {"items": [(3663, 1), (100, 1)], "choices": [1200, 1201]}},
+        )
 
     def test_boss_drops_from_loot_rows(self):
-        rows = [{"creature": 646, "item": 7230}, {"creature": 646, "item": 5192},
-                {"creature": 639, "item": 5191}]
-        self.assertEqual(ach.boss_drops_from_rows(rows), {646: {7230, 5192}, 639: {5191}})
+        rows = [
+            {"creature": 646, "item": 7230},
+            {"creature": 646, "item": 5192},
+            {"creature": 639, "item": 5191},
+        ]
+        self.assertEqual(
+            ach.boss_drops_from_rows(rows), {646: {7230, 5192}, 639: {5191}}
+        )
 
     def test_wanted_entries_cover_loot_rewards_and_drops(self):
         events = [equip(7230), ev(ach.QUEST_REWARD, "Bork", 127, "Selling Fish")]
         rewards = {127: {"items": [(3663, 1)], "choices": [1200]}}
         drops = {639: {5191}}
-        self.assertEqual(ach.wanted_entries(events, rewards, drops), [1200, 3663, 5191, 7230])
+        self.assertEqual(
+            ach.wanted_entries(events, rewards, drops), [1200, 3663, 5191, 7230]
+        )
         self.assertEqual(ach.wanted_quests(events), [127])
 
     def test_wanted_bosses_follow_the_runs_maps(self):
@@ -484,12 +726,27 @@ class TheCardBringsItsOwnWords(unittest.TestCase):
     """
 
     def payload(self):
-        return build([RUN], [equip(7230, "Og", T.replace(hour=15, minute=30)),
-                             ev(ach.LEVEL_UP, "Bork", 25, "", "", 25, 36,
-                                T.replace(hour=15, minute=40))],
-                     [death("Grug", T.replace(hour=15, minute=35))])
+        return build(
+            [RUN],
+            [
+                equip(7230, "Og", T.replace(hour=15, minute=30)),
+                ev(
+                    ach.LEVEL_UP,
+                    "Bork",
+                    25,
+                    "",
+                    "",
+                    25,
+                    36,
+                    T.replace(hour=15, minute=40),
+                ),
+            ],
+            [death("Grug", T.replace(hour=15, minute=35))],
+        )
 
-    def test_a_run_that_gained_something_is_a_run_and_one_that_did_not_is_an_attempt(self):
+    def test_a_run_that_gained_something_is_a_run_and_one_that_did_not_is_an_attempt(
+        self,
+    ):
         """Calling a wipe at the door a dungeon run flatters the family, and
         the word is the only thing on the card that says which it was."""
         card = run_card(self.payload())
@@ -553,8 +810,7 @@ class TheCardBringsItsOwnWords(unittest.TestCase):
     def test_a_first_with_nobody_to_attribute_it_to_gets_no_line(self):
         """None, and the page draws nothing. Better than a voice belonging to
         no one."""
-        self.assertIsNone(ach.card_line(
-            {"kind": ach.FIRST, "who": [], "detail": ""}))
+        self.assertIsNone(ach.card_line({"kind": ach.FIRST, "who": [], "detail": ""}))
 
     def test_the_strip_counts_what_the_payload_counted(self):
         payload = self.payload()
@@ -588,12 +844,16 @@ class WithoutTheRunTable(unittest.TestCase):
     levels must still make a timeline out of nothing but events."""
 
     def test_no_runs_no_problem(self):
-        events = [ev(ach.QUEST_REWARD, "Bork", 127, "Selling Fish", "", 23, 0, T),
-                  ev(ach.LEVEL_UP, "Grug", 25, "", "from 24", 25, 0, T)]
+        events = [
+            ev(ach.QUEST_REWARD, "Bork", 127, "Selling Fish", "", 23, 0, T),
+            ev(ach.LEVEL_UP, "Grug", 25, "", "from 24", 25, 0, T),
+        ]
         payload = build([], events)
         self.assertEqual(payload["visits"], 0)
-        self.assertEqual(sorted(set(c["kind"] for c in payload["cards"])),
-                         [ach.FIRST, ach.LEVEL, ach.QUEST])
+        self.assertEqual(
+            sorted(set(c["kind"] for c in payload["cards"])),
+            [ach.FIRST, ach.LEVEL, ach.QUEST],
+        )
 
 
 class TheStory(unittest.TestCase):
@@ -605,78 +865,107 @@ class TheStory(unittest.TestCase):
 
     def test_three_characters_turning_in_together_is_one_sentence(self):
         a = T
-        events = [self.quest(w, 1, "Enraged Wildkin", a + timedelta(seconds=i))
-                  for i, w in enumerate(["Bork", "Og", "Grog"])]
+        events = [
+            self.quest(w, 1, "Enraged Wildkin", a + timedelta(seconds=i))
+            for i, w in enumerate(["Bork", "Og", "Grog"])
+        ]
         told = build(events=events)["story"]
         self.assertEqual(len(told), 1)
-        self.assertEqual(told[0]["text"],
-                         "Og, Grog and Bork turned in Enraged Wildkin.")
+        self.assertEqual(
+            told[0]["text"], "Og, Grog and Bork turned in Enraged Wildkin."
+        )
         self.assertEqual(told[0]["who"], ["Og", "Grog", "Bork"])
         self.assertEqual(told[0]["word"], "QUEST")
 
     def test_two_quests_by_the_same_people_are_listed_in_one_sentence(self):
-        events = [self.quest("Grog", 1, "Enraged Wildkin", T),
-                  self.quest("Grog", 2, "The Ruins of Kel'Theril", T)]
+        events = [
+            self.quest("Grog", 1, "Enraged Wildkin", T),
+            self.quest("Grog", 2, "The Ruins of Kel'Theril", T),
+        ]
         told = build(events=events)["story"]
-        self.assertEqual([e["text"] for e in told],
-                         ["Grog turned in Enraged Wildkin and The Ruins of Kel'Theril."])
+        self.assertEqual(
+            [e["text"] for e in told],
+            ["Grog turned in Enraged Wildkin and The Ruins of Kel'Theril."],
+        )
 
     def test_moments_further_apart_than_the_window_stay_apart(self):
-        events = [self.quest("Og", 1, "A Little Luck", T),
-                  self.quest("Bork", 1, "A Little Luck",
-                             T + ach.STORY_WINDOW + timedelta(minutes=1))]
+        events = [
+            self.quest("Og", 1, "A Little Luck", T),
+            self.quest(
+                "Bork", 1, "A Little Luck", T + ach.STORY_WINDOW + timedelta(minutes=1)
+            ),
+        ]
         told = build(events=events)["story"]
-        self.assertEqual([e["text"] for e in told],
-                         ["Bork turned in A Little Luck.",
-                          "Og turned in A Little Luck."])
+        self.assertEqual(
+            [e["text"] for e in told],
+            ["Bork turned in A Little Luck.", "Og turned in A Little Luck."],
+        )
 
     def test_objectives_without_a_turn_in_say_it_is_still_owed(self):
-        events = [self.quest("Og", 3, "Samophlange", T, kind=ach.QUEST_COMPLETE),
-                  self.quest("Bork", 3, "Samophlange", T, kind=ach.QUEST_COMPLETE)]
+        events = [
+            self.quest("Og", 3, "Samophlange", T, kind=ach.QUEST_COMPLETE),
+            self.quest("Bork", 3, "Samophlange", T, kind=ach.QUEST_COMPLETE),
+        ]
         told = build(events=events)["story"]
-        self.assertEqual(told[0]["text"],
-                         "Og and Bork finished the objectives of Samophlange, "
-                         "and still have to hand it in.")
+        self.assertEqual(
+            told[0]["text"],
+            "Og and Bork finished the objectives of Samophlange, "
+            "and still have to hand it in.",
+        )
 
     def test_every_level_is_in_the_story_not_only_the_milestones(self):
         # 7: no milestone card and no "first to level 10" either.
         events = [ev(ach.LEVEL_UP, w, level=7, at=T) for w in ("Og", "Grug")]
         result = build(events=events)
         self.assertEqual(result["cards"], [])
-        self.assertEqual([e["text"] for e in result["story"]],
-                         ["Grug and Og reached level 7."])
+        self.assertEqual(
+            [e["text"] for e in result["story"]], ["Grug and Og reached level 7."]
+        )
 
     def test_several_levels_in_one_moment_report_the_highest(self):
-        events = [ev(ach.LEVEL_UP, "Og", level=lv, at=T + timedelta(seconds=lv))
-                  for lv in (2, 3, 4)]
+        events = [
+            ev(ach.LEVEL_UP, "Og", level=lv, at=T + timedelta(seconds=lv))
+            for lv in (2, 3, 4)
+        ]
         told = build(events=events)["story"]
         self.assertEqual([e["text"] for e in told], ["Og reached level 4."])
 
     def test_a_long_quest_list_is_counted_rather_than_printed(self):
         events = [self.quest("Og", i, "Quest %d" % i, T) for i in range(1, 7)]
         told = build(events=events)["story"]
-        self.assertEqual(told[0]["text"],
-                         "Og turned in Quest 1, Quest 2, Quest 3 and 3 more.")
+        self.assertEqual(
+            told[0]["text"], "Og turned in Quest 1, Quest 2, Quest 3 and 3 more."
+        )
 
     def test_a_run_keeps_its_whole_card(self):
-        told = build(runs=[RUN], events=[equip(7230, at=T + timedelta(minutes=30))])["story"]
+        told = build(runs=[RUN], events=[equip(7230, at=T + timedelta(minutes=30))])[
+            "story"
+        ]
         runs = [e for e in told if e["kind"] == ach.RUN]
         self.assertEqual(len(runs), 1)
         self.assertEqual(runs[0]["card"]["dungeon"], "The Deadmines")
         self.assertIn("word", runs[0]["card"])
 
     def test_newest_first(self):
-        events = [ev(ach.LEVEL_UP, "Og", level=7, at=T),
-                  self.quest("Og", 1, "Later", T + timedelta(hours=2))]
+        events = [
+            ev(ach.LEVEL_UP, "Og", level=7, at=T),
+            self.quest("Og", 1, "Later", T + timedelta(hours=2)),
+        ]
         told = build(events=events)["story"]
         self.assertEqual([e["kind"] for e in told], [ach.QUEST, ach.LEVEL])
 
     def test_a_card_with_no_date_is_left_out_rather_than_sorted(self):
-        dated = {"at": "2026-09-02T15:00:00", "who": "Og", "turned_in": True,
-                 "title": "Quest: A", "quest_name": "A"}
+        dated = {
+            "at": "2026-09-02T15:00:00",
+            "who": "Og",
+            "turned_in": True,
+            "title": "Quest: A",
+            "quest_name": "A",
+        }
         undated = dict(dated, at=None, who="Bork")
-        told = ach.story([], [dated, undated], [{"at": None, "who": "Og",
-                                                 "level": 7}], [], ROSTER)
+        told = ach.story(
+            [], [dated, undated], [{"at": None, "who": "Og", "level": 7}], [], ROSTER
+        )
         self.assertEqual([e["text"] for e in told], ["Og turned in A."])
 
 
@@ -694,8 +983,7 @@ class TheChapters(unittest.TestCase):
         self.assertEqual(ach.faction_of([]), "")
 
     def test_the_heading_names_the_family_and_its_side(self):
-        self.assertEqual(ach.chapter_heading("Zug", ach.HORDE),
-                         "Zug's family, Horde")
+        self.assertEqual(ach.chapter_heading("Zug", ach.HORDE), "Zug's family, Horde")
         self.assertEqual(ach.chapter_heading("", ""), "The family")
 
     def test_a_chapter_carries_its_story_and_strip(self):

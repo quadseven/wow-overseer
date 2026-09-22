@@ -39,6 +39,7 @@ utf8mb4_unicode_ci onto one would turn an exact-match join into a case- and
 accent-insensitive one, which is a behaviour change wearing a bug fix's
 clothes.
 """
+
 import ast
 import pathlib
 import re
@@ -96,40 +97,79 @@ BINARY = "utf8mb4_bin"
 # the column ever matters.
 STRING_COLUMNS = {
     "overseer_chat": frozenset(
-        {"channel", "channel_name", "heard_by", "sender_name", "text"}),
+        {"channel", "channel_name", "heard_by", "sender_name", "text"}
+    ),
     "overseer_chat_watch": frozenset({"channels", "name"}),
     "overseer_command": frozenset(
-        {"channel", "claimed_by", "command", "detail", "kind", "result",
-         "source", "status", "target_arg", "target_name"}),
+        {
+            "channel",
+            "claimed_by",
+            "command",
+            "detail",
+            "kind",
+            "result",
+            "source",
+            "status",
+            "target_arg",
+            "target_name",
+        }
+    ),
     "overseer_death": frozenset(
-        {"character_name", "group_leader", "job", "killer_name", "killer_type",
-         "travel_target"}),
+        {
+            "character_name",
+            "group_leader",
+            "job",
+            "killer_name",
+            "killer_type",
+            "travel_target",
+        }
+    ),
     "overseer_dungeon_run": frozenset({"ended_reason", "leader_name", "state"}),
-    "overseer_event": frozenset(
-        {"character_name", "detail", "kind", "subject_name"}),
+    "overseer_event": frozenset({"character_name", "detail", "kind", "subject_name"}),
     "overseer_goal": frozenset(
-        {"channel_id", "character_name", "kind", "last_report", "skill_name",
-         "status"}),
-    "overseer_roster": frozenset(
-        {"job", "name", "note", "professions", "travel_npc"}),
+        {"channel_id", "character_name", "kind", "last_report", "skill_name", "status"}
+    ),
+    "overseer_roster": frozenset({"job", "name", "note", "professions", "travel_npc"}),
     "overseer_sample": frozenset({"character_name"}),
     # name/value rows rather than a column per fact, so this list is the whole
     # table and cannot grow when the module reports something new.
     "overseer_build": frozenset({"name", "source", "value"}),
     "overseer_snapshot": frozenset({"name"}),
-    "overseer_stream": frozenset(
-        {"character", "delivery", "detail", "mode", "state"}),
+    "overseer_stream": frozenset({"character", "delivery", "detail", "mode", "state"}),
     "overseer_thought": frozenset({"character_name", "source", "text"}),
     "overseer_trade": frozenset(
-        {"character_name", "reason", "skill_name", "status", "verb"}),
+        {"character_name", "reason", "skill_name", "status", "verb"}
+    ),
 }
 
 # Words that can follow a table name and are not an alias.
-NOT_AN_ALIAS = frozenset({
-    "as", "on", "using", "where", "set", "group", "order", "having", "limit",
-    "join", "left", "right", "inner", "outer", "cross", "straight_join",
-    "union", "values", "select", "for", "into", "natural", "partition",
-})
+NOT_AN_ALIAS = frozenset(
+    {
+        "as",
+        "on",
+        "using",
+        "where",
+        "set",
+        "group",
+        "order",
+        "having",
+        "limit",
+        "join",
+        "left",
+        "right",
+        "inner",
+        "outer",
+        "cross",
+        "straight_join",
+        "union",
+        "values",
+        "select",
+        "for",
+        "into",
+        "natural",
+        "partition",
+    }
+)
 
 # `FROM overseer_trade t`, `JOIN overseer_roster AS r`, `FROM characters c`.
 _SOURCE_TABLE = re.compile(
@@ -163,13 +203,17 @@ def _docstring_ids(tree: ast.AST) -> set:
     """
     out = set()
     for node in ast.walk(tree):
-        if not isinstance(node, (ast.Module, ast.FunctionDef,
-                                 ast.AsyncFunctionDef, ast.ClassDef)):
+        if not isinstance(
+            node, (ast.Module, ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)
+        ):
             continue
         body = getattr(node, "body", None)
-        if (body and isinstance(body[0], ast.Expr)
-                and isinstance(body[0].value, ast.Constant)
-                and isinstance(body[0].value.value, str)):
+        if (
+            body
+            and isinstance(body[0], ast.Expr)
+            and isinstance(body[0].value, ast.Constant)
+            and isinstance(body[0].value.value, str)
+        ):
             out.add(id(body[0].value))
     return out
 
@@ -273,9 +317,7 @@ class TheErrandJoinNamesItsCollation(unittest.TestCase):
     def test_the_trade_side_carries_an_explicit_collate(self):
         sql = [s for _, _, s in _statements() if "overseer_trade t" in s]
         self.assertEqual(len(sql), 1, "expected exactly one errand join")
-        self.assertIn(
-            "t.character_name COLLATE utf8mb4_unicode_ci = r.name", sql[0]
-        )
+        self.assertIn("t.character_name COLLATE utf8mb4_unicode_ci = r.name", sql[0])
 
     def test_the_collate_is_written_on_the_0900_side(self):
         """overseer_roster.name is already utf8mb4_unicode_ci, so collating the
@@ -299,7 +341,8 @@ class NoJoinCrossesTheSplitUncollated(unittest.TestCase):
             for predicate in _clashing_predicates(sql):
                 offenders.append("%s:%d  %s" % (path.name, lineno, predicate))
         self.assertEqual(
-            [], offenders,
+            [],
+            offenders,
             "These compare a utf8mb4_unicode_ci column against a "
             "utf8mb4_0900_ai_ci one, which MySQL refuses with error 1267 and "
             "which fails the WHOLE statement, not one row. Write "
@@ -317,7 +360,8 @@ class NoJoinCrossesTheSplitUncollated(unittest.TestCase):
             if len(_tables_spanned(sql)) > 1 and "COLLATE" not in sql.upper():
                 offenders.append("%s:%d  %s" % (path.name, lineno, sql[:120]))
         self.assertEqual(
-            [], offenders,
+            [],
+            offenders,
             "A statement naming tables from both collation groups and never "
             "saying COLLATE: " + "; ".join(offenders),
         )
@@ -333,25 +377,32 @@ class NoJoinCrossesTheSplitUncollated(unittest.TestCase):
             "WHERE r.enabled = 1 ORDER BY t.id LIMIT 1"
         )
         self.assertEqual(["t.character_name = r.name"], _clashing_predicates(old))
-        self.assertEqual({"utf8mb4_unicode_ci", "utf8mb4_0900_ai_ci"},
-                         _tables_spanned(old))
+        self.assertEqual(
+            {"utf8mb4_unicode_ci", "utf8mb4_0900_ai_ci"}, _tables_spanned(old)
+        )
 
     def test_the_sweep_ignores_a_pair_of_numbers(self):
         """`t.skill_id = r.learn_skill` crosses the same two tables and is
         perfectly legal: neither column carries a collation. Flagging it would
         teach the next reader to sprinkle COLLATE where it does nothing, and
         then to ignore the sweep when it is right."""
-        numeric = ("SELECT 1 FROM overseer_roster r JOIN overseer_trade t "
-                   "ON t.skill_id = r.learn_skill")
+        numeric = (
+            "SELECT 1 FROM overseer_roster r JOIN overseer_trade t "
+            "ON t.skill_id = r.learn_skill"
+        )
         self.assertEqual([], _clashing_predicates(numeric))
 
     def test_the_sweep_accepts_the_collation_on_either_operand(self):
         """Both spellings are correct SQL and both settle the predicate. The
         sweep must not push anybody towards one by rejecting the other."""
-        left = ("SELECT 1 FROM overseer_roster r JOIN overseer_trade t "
-                "ON t.character_name COLLATE utf8mb4_unicode_ci = r.name")
-        right = ("SELECT 1 FROM overseer_roster r JOIN overseer_trade t "
-                 "ON t.character_name = r.name COLLATE utf8mb4_0900_ai_ci")
+        left = (
+            "SELECT 1 FROM overseer_roster r JOIN overseer_trade t "
+            "ON t.character_name COLLATE utf8mb4_unicode_ci = r.name"
+        )
+        right = (
+            "SELECT 1 FROM overseer_roster r JOIN overseer_trade t "
+            "ON t.character_name = r.name COLLATE utf8mb4_0900_ai_ci"
+        )
         self.assertEqual([], _clashing_predicates(left))
         self.assertEqual([], _clashing_predicates(right))
 
@@ -374,7 +425,8 @@ class EveryTableQueriedHasARecordedCollation(unittest.TestCase):
                 if table.startswith("overseer_") and table not in COLLATIONS:
                     unknown.add(table)
         self.assertEqual(
-            set(), unknown,
+            set(),
+            unknown,
             "These overseer tables are queried but their collation is not "
             "recorded in COLLATIONS, so no join to them can be checked. Read "
             "it from information_schema.TABLES on both realms and add it: "
@@ -420,8 +472,10 @@ class TheCharactersJoinsAreLeftAlone(unittest.TestCase):
     def test_the_snapshot_join_still_needs_no_collate(self):
         """The join the sweep must NOT flag, named explicitly so a future
         tightening of the rule cannot start demanding COLLATE everywhere."""
-        sql = ("SELECT c.name FROM characters c "
-               "LEFT JOIN overseer_snapshot s ON s.name = c.name")
+        sql = (
+            "SELECT c.name FROM characters c "
+            "LEFT JOIN overseer_snapshot s ON s.name = c.name"
+        )
         self.assertEqual([], _clashing_predicates(sql))
 
 
@@ -472,23 +526,28 @@ class TheReasonIsWrittenWhereAJoinAuthorWillReadIt(unittest.TestCase):
 
     def test_the_block_above_the_join_names_the_error_and_both_collations(self):
         src = BRIDGE.read_text(encoding="utf-8")
-        head = src[:src.index("def _errand_traveller() -> str:")]
-        block = head[head.rindex("# THE overseer_"):]
-        for needed in ("1267", "utf8mb4_unicode_ci", "utf8mb4_0900_ai_ci",
-                       "utf8mb4_bin", "infra#3173"):
+        head = src[: src.index("def _errand_traveller() -> str:")]
+        block = head[head.rindex("# THE overseer_") :]
+        for needed in (
+            "1267",
+            "utf8mb4_unicode_ci",
+            "utf8mb4_0900_ai_ci",
+            "utf8mb4_bin",
+            "infra#3173",
+        ):
             self.assertIn(needed, block)
 
     def test_it_says_which_side_to_collate(self):
         src = BRIDGE.read_text(encoding="utf-8")
-        head = src[:src.index("def _errand_traveller() -> str:")]
-        block = head[head.rindex("# THE overseer_"):]
+        head = src[: src.index("def _errand_traveller() -> str:")]
+        block = head[head.rindex("# THE overseer_") :]
         self.assertIn("COLLATE utf8mb4_unicode_ci", block)
         self.assertIn("test_collation_split.py", block)
 
     def test_it_warns_off_the_characters_join(self):
         src = BRIDGE.read_text(encoding="utf-8")
-        head = src[:src.index("def _errand_traveller() -> str:")]
-        block = head[head.rindex("# THE overseer_"):]
+        head = src[: src.index("def _errand_traveller() -> str:")]
+        block = head[head.rindex("# THE overseer_") :]
         self.assertIn("characters.name is utf8mb4_bin", block)
 
 

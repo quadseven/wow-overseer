@@ -5,6 +5,7 @@ rows (real Geometry for zone names, since the names ARE the feature), and
 voicing is pinned on canned model output. That is the seam infra#2602
 demands: the world's deltas decide WHAT happened, the model only voices it.
 """
+
 import unittest
 
 import events
@@ -22,11 +23,18 @@ DUROTAR_POS = (0.0, -4700.0)
 OGRIMMAR_POS = (1800.0, -4380.0)
 
 
-def row(name, *, level=5, map_id=1, zone_id=14, pos=DUROTAR_POS,
-        health=100, in_combat=0):
+def row(
+    name, *, level=5, map_id=1, zone_id=14, pos=DUROTAR_POS, health=100, in_combat=0
+):
     return {
-        "name": name, "level": level, "map_id": map_id, "zone_id": zone_id,
-        "pos_x": pos[0], "pos_y": pos[1], "health": health, "in_combat": in_combat,
+        "name": name,
+        "level": level,
+        "map_id": map_id,
+        "zone_id": zone_id,
+        "pos_x": pos[0],
+        "pos_y": pos[1],
+        "health": health,
+        "in_combat": in_combat,
     }
 
 
@@ -61,8 +69,13 @@ class DetectZoneChangeTest(unittest.TestCase):
         curr = {"Grug": row("Grug", zone_id=1637, pos=OGRIMMAR_POS)}
         self.assertEqual(
             events.detect_events(prev, curr, GEO),
-            [Event("zone_change", "Grug",
-                   {"from_zone": "Durotar", "to_zone": "Ogrimmar"})],
+            [
+                Event(
+                    "zone_change",
+                    "Grug",
+                    {"from_zone": "Durotar", "to_zone": "Ogrimmar"},
+                )
+            ],
         )
 
     def test_same_zone_id_is_not_a_zone_change(self):
@@ -152,8 +165,9 @@ class PriorityAndCapTest(unittest.TestCase):
     def test_cap_voices_the_top_priority_events_and_keeps_the_rest(self):
         all_events = self._mixed_events()
         voiced, overflow = events.split_for_voicing(all_events, 3)
-        self.assertEqual([e.kind for e in voiced],
-                         ["level_up", "level_up", "zone_change"])
+        self.assertEqual(
+            [e.kind for e in voiced], ["level_up", "level_up", "zone_change"]
+        )
         self.assertEqual([e.name for e in overflow], ["Bine", "Mok"])
         # Nothing is dropped: voiced + overflow is the whole event list.
         self.assertEqual(voiced + overflow, all_events)
@@ -173,26 +187,39 @@ class TemplateLineTest(unittest.TestCase):
         )
         self.assertEqual(
             events.template_line(
-                Event("zone_change", "Grug",
-                      {"from_zone": "Durotar", "to_zone": "The Barrens"})
+                Event(
+                    "zone_change",
+                    "Grug",
+                    {"from_zone": "Durotar", "to_zone": "The Barrens"},
+                )
             ),
             "Grug crossed into The Barrens.",
         )
-        self.assertEqual(events.template_line(Event("death", "Grug")),
-                         "Grug fell in battle.")
-        self.assertEqual(events.template_line(Event("combat_entered", "Grug")),
-                         "Grug entered combat.")
-        self.assertEqual(events.template_line(Event("combat_survived", "Grug")),
-                         "Grug survived the fight.")
+        self.assertEqual(
+            events.template_line(Event("death", "Grug")), "Grug fell in battle."
+        )
+        self.assertEqual(
+            events.template_line(Event("combat_entered", "Grug")),
+            "Grug entered combat.",
+        )
+        self.assertEqual(
+            events.template_line(Event("combat_survived", "Grug")),
+            "Grug survived the fight.",
+        )
 
 
 class BatchPromptTest(unittest.TestCase):
     def test_prompt_carries_every_event_and_demands_a_json_array(self):
-        prompt = events.build_batch_prompt([
-            Event("level_up", "Grug", {"level": 5}),
-            Event("zone_change", "Aggra",
-                  {"from_zone": "Durotar", "to_zone": "Ogrimmar"}),
-        ])
+        prompt = events.build_batch_prompt(
+            [
+                Event("level_up", "Grug", {"level": 5}),
+                Event(
+                    "zone_change",
+                    "Aggra",
+                    {"from_zone": "Durotar", "to_zone": "Ogrimmar"},
+                ),
+            ]
+        )
         self.assertIn('"name": "Grug"', prompt)
         self.assertIn('"event": "reached level 5"', prompt)
         self.assertIn('"event": "crossed from Durotar into Ogrimmar"', prompt)
@@ -201,8 +228,7 @@ class BatchPromptTest(unittest.TestCase):
 
 VOICE_BATCH = [
     Event("level_up", "Grug", {"level": 5}),
-    Event("zone_change", "Aggra",
-          {"from_zone": "Durotar", "to_zone": "Ogrimmar"}),
+    Event("zone_change", "Aggra", {"from_zone": "Durotar", "to_zone": "Ogrimmar"}),
 ]
 
 
@@ -210,17 +236,21 @@ class VoiceEventsTest(unittest.TestCase):
     BATCH = VOICE_BATCH
 
     def test_clean_model_output_voices_every_event(self):
-        content = ('[{"name": "Grug", "say": "Level five. I feel it."},'
-                   ' {"name": "Aggra", "say": "Ogrimmar at last."}]')
+        content = (
+            '[{"name": "Grug", "say": "Level five. I feel it."},'
+            ' {"name": "Aggra", "say": "Ogrimmar at last."}]'
+        )
         self.assertEqual(
             events.voice_events(self.BATCH, content),
             ["Level five. I feel it.", "Ogrimmar at last."],
         )
 
     def test_reasoning_preamble_before_the_array_is_ignored(self):
-        content = ('Let me think {not: "json"} about it... {"draft": 1}\n'
-                   '[{"name": "Grug", "say": "Stronger now."},'
-                   ' {"name": "Aggra", "say": "The city."}]')
+        content = (
+            'Let me think {not: "json"} about it... {"draft": 1}\n'
+            '[{"name": "Grug", "say": "Stronger now."},'
+            ' {"name": "Aggra", "say": "The city."}]'
+        )
         self.assertEqual(
             events.voice_events(self.BATCH, content),
             ["Stronger now.", "The city."],
@@ -249,10 +279,13 @@ class VoiceEventsTest(unittest.TestCase):
             Event("level_up", "Grug", {"level": 5}),
             Event("combat_survived", "Grug"),
         ]
-        content = ('[{"name": "Grug", "say": "Level five."},'
-                   ' {"name": "Grug", "say": "Still breathing."}]')
-        self.assertEqual(events.voice_events(batch, content),
-                         ["Level five.", "Still breathing."])
+        content = (
+            '[{"name": "Grug", "say": "Level five."},'
+            ' {"name": "Grug", "say": "Still breathing."}]'
+        )
+        self.assertEqual(
+            events.voice_events(batch, content), ["Level five.", "Still breathing."]
+        )
 
     def test_overlong_say_is_truncated_not_dropped(self):
         batch = [Event("level_up", "Grug", {"level": 5})]
@@ -322,10 +355,15 @@ class StoryFilterTest(unittest.TestCase):
 
     def test_notable_matching_ignores_case(self):
         evs = [self._ev("combat_entered", "Grug")]
-        self.assertEqual(len(events.filter_for_story(evs, notable=frozenset({"grug"}))), 1)
+        self.assertEqual(
+            len(events.filter_for_story(evs, notable=frozenset({"grug"}))), 1
+        )
 
     def test_order_is_preserved(self):
-        evs = [self._ev("level_up", "A"), self._ev("combat_entered", "Grug"),
-               self._ev("zone_change", "B")]
+        evs = [
+            self._ev("level_up", "A"),
+            self._ev("combat_entered", "Grug"),
+            self._ev("zone_change", "B"),
+        ]
         out = events.filter_for_story(evs, notable=frozenset({"Grug"}))
         self.assertEqual([e.name for e in out], ["A", "Grug", "B"])

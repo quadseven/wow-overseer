@@ -300,8 +300,9 @@ def retryable_stuck(stuck_pairs: Mapping, free_slots: Mapping) -> dict:
     }
 
 
-def _said_for(holder: str, taker: str, material: str, count: int, skill: str,
-              held: Mapping) -> str:
+def _said_for(
+    holder: str, taker: str, material: str, count: int, skill: str, held: Mapping
+) -> str:
     """The handover, said in a way that is true whoever is carrying it.
 
     THE SKILL IS ONLY NAMED WHEN THE SKILL EXISTS. "Og need it for tailoring"
@@ -313,8 +314,9 @@ def _said_for(holder: str, taker: str, material: str, count: int, skill: str,
     claim it cannot support.
     """
     head = f"{holder} give {taker} {count} {material}."
-    how = chat.skill_state(taker, skill, held=held,
-                           planned={taker: professions.assigned(taker)})
+    how = chat.skill_state(
+        taker, skill, held=held, planned={taker: professions.assigned(taker)}
+    )
     if how == chat.HELD:
         return f"{head} {taker} need it for {skill}."
     if how == chat.LEARNING:
@@ -368,27 +370,40 @@ def plan(holdings, *, stuck_pairs: Mapping | None = None) -> Plan:
             mark = (holding.holder, taker, holding.material)
             if mark not in seen_blocks:
                 seen_blocks.add(mark)
-                blocked.append(Blocked(
-                    holder=holding.holder, taker=taker,
-                    material=holding.material, skill=skill, refusal=refusal,
-                    said=(
-                        f"{holding.holder} no give {taker} {holding.material} - "
-                        f"{refusal}. {holding.holder} wait."
-                    ),
-                ))
+                blocked.append(
+                    Blocked(
+                        holder=holding.holder,
+                        taker=taker,
+                        material=holding.material,
+                        skill=skill,
+                        refusal=refusal,
+                        said=(
+                            f"{holding.holder} no give {taker} {holding.material} - "
+                            f"{refusal}. {holding.holder} wait."
+                        ),
+                    )
+                )
             continue
-        grants.append(Grant(
-            holder=holding.holder, taker=taker, material=holding.material,
-            count=holding.count, guid=holding.guid, skill=skill,
-            reason=(
-                f"{holding.holder} holds {holding.count} {holding.material}, "
-                f"which feeds {skill}, and {taker} is the family's assigned "
-                f"{skill}. {holding.holder} is not assigned {skill}, so the "
-                f"stack does {holding.holder} no good where it sits."
-            ),
-        ))
+        grants.append(
+            Grant(
+                holder=holding.holder,
+                taker=taker,
+                material=holding.material,
+                count=holding.count,
+                guid=holding.guid,
+                skill=skill,
+                reason=(
+                    f"{holding.holder} holds {holding.count} {holding.material}, "
+                    f"which feeds {skill}, and {taker} is the family's assigned "
+                    f"{skill}. {holding.holder} is not assigned {skill}, so the "
+                    f"stack does {holding.holder} no good where it sits."
+                ),
+            )
+        )
     return Plan(
-        grants=tuple(grants), notes=tuple(notes), blocked=tuple(blocked),
+        grants=tuple(grants),
+        notes=tuple(notes),
+        blocked=tuple(blocked),
     )
 
 
@@ -419,11 +434,17 @@ def handovers(grants, *, held: Mapping | None = None) -> tuple:
     spoken = []
     for holder, taker, material in order:
         skill, count, guids = merged[(holder, taker, material)]
-        spoken.append(Handover(
-            holder=holder, taker=taker, material=material, skill=skill,
-            count=count, guids=tuple(guids),
-            said=_said_for(holder, taker, material, count, skill, live),
-        ))
+        spoken.append(
+            Handover(
+                holder=holder,
+                taker=taker,
+                material=material,
+                skill=skill,
+                count=count,
+                guids=tuple(guids),
+                said=_said_for(holder, taker, material, count, skill, live),
+            )
+        )
     return tuple(spoken)
 
 
@@ -437,7 +458,9 @@ def lines(material_plan: Plan, *, held: Mapping | None = None) -> list:
     family that has given up on a transfer says so rather than going quiet,
     which is the difference between reading the room and hiding a failure.
     """
-    spoken = [f"{h.holder}: {h.said}" for h in handovers(material_plan.grants, held=held)]
+    spoken = [
+        f"{h.holder}: {h.said}" for h in handovers(material_plan.grants, held=held)
+    ]
     spoken += [f"{b.holder}: {b.said}" for b in material_plan.blocked]
     return spoken
 
@@ -506,8 +529,7 @@ class Move:
         """
         if not self.count:
             return "%s to %s: %s" % (self.holder, self.taker, self.material)
-        return "%s to %s: %d %s" % (self.holder, self.taker, self.count,
-                                    self.material)
+        return "%s to %s: %d %s" % (self.holder, self.taker, self.count, self.material)
 
     @property
     def refusal_line(self) -> str:
@@ -520,7 +542,8 @@ class Move:
         if not self.blocked and not self.refusals:
             return ""
         return "refused %d time%s: %s" % (
-            self.refusals, "" if self.refusals == 1 else "s",
+            self.refusals,
+            "" if self.refusals == 1 else "s",
             self.refusal or NO_REASON_GIVEN,
         )
 
@@ -547,21 +570,27 @@ def _headline(rows: tuple, threshold: int) -> str:
     """The one line over the rows. Says nothing rather than inventing a
     finding when there is nothing to move."""
     if not rows:
-        return ("nothing wants to move - every reagent this family carries is "
-                "already in the bags of whoever is assigned it")
+        return (
+            "nothing wants to move - every reagent this family carries is "
+            "already in the bags of whoever is assigned it"
+        )
     waiting = sum(1 for r in rows if not r.blocked)
     stopped = sum(1 for r in rows if r.blocked)
     bits = []
     if waiting:
         bits.append("%d handover%s waiting" % (waiting, "" if waiting == 1 else "s"))
     if stopped:
-        bits.append("%d given up on after %d refusals each"
-                    % (stopped, threshold))
+        bits.append("%d given up on after %d refusals each" % (stopped, threshold))
     return "  -  ".join(bits)
 
 
-def board(holdings, *, attempts=(), held: Mapping | None = None,
-          threshold: int = GIVE_UP_AFTER) -> dict:
+def board(
+    holdings,
+    *,
+    attempts=(),
+    held: Mapping | None = None,
+    threshold: int = GIVE_UP_AFTER,
+) -> dict:
     """Everything the "what wants to move" section draws, in one call.
 
     `holdings` are the same Holdings the bridge plans on and `attempts` the
@@ -575,30 +604,45 @@ def board(holdings, *, attempts=(), held: Mapping | None = None,
     because Og bags full" is worth acting on.
     """
     counts = refusal_counts(attempts)
-    refused = {pair: reason for pair, (seen, reason) in counts.items()
-               if seen >= threshold}
+    refused = {
+        pair: reason for pair, (seen, reason) in counts.items() if seen >= threshold
+    }
     material_plan = plan(holdings, stuck_pairs=refused)
 
     carried: dict = {}
     for holding in holdings:
-        carried[(holding.holder, holding.material)] = (
-            carried.get((holding.holder, holding.material), 0) + int(holding.count)
-        )
+        carried[(holding.holder, holding.material)] = carried.get(
+            (holding.holder, holding.material), 0
+        ) + int(holding.count)
 
     rows = [
-        Move(holder=hand.holder, taker=hand.taker, material=hand.material,
-             skill=hand.skill, count=hand.count, said=hand.said, word=MOVING,
-             blocked=False, refusals=counts.get((hand.holder, hand.taker), (0, ""))[0],
-             refusal="")
+        Move(
+            holder=hand.holder,
+            taker=hand.taker,
+            material=hand.material,
+            skill=hand.skill,
+            count=hand.count,
+            said=hand.said,
+            word=MOVING,
+            blocked=False,
+            refusals=counts.get((hand.holder, hand.taker), (0, ""))[0],
+            refusal="",
+        )
         for hand in handovers(material_plan.grants, held=held)
     ]
     rows += [
-        Move(holder=stop.holder, taker=stop.taker, material=stop.material,
-             skill=stop.skill,
-             count=carried.get((stop.holder, stop.material), 0),
-             said=stop.said, word=gave_up_word(threshold), blocked=True,
-             refusals=counts.get((stop.holder, stop.taker), (threshold, ""))[0],
-             refusal=stop.refusal)
+        Move(
+            holder=stop.holder,
+            taker=stop.taker,
+            material=stop.material,
+            skill=stop.skill,
+            count=carried.get((stop.holder, stop.material), 0),
+            said=stop.said,
+            word=gave_up_word(threshold),
+            blocked=True,
+            refusals=counts.get((stop.holder, stop.taker), (threshold, ""))[0],
+            refusal=stop.refusal,
+        )
         for stop in material_plan.blocked
     ]
     rows = tuple(rows)

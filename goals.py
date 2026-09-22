@@ -12,6 +12,7 @@ the character), never every cycle. Steady state is read-only. Progress is
 recorded in the goal row itself, so a bridge restart resumes supervision
 from the store with no in-memory carryover.
 """
+
 from __future__ import annotations
 
 import re
@@ -566,8 +567,13 @@ def returned_to_ai(previous, current) -> frozenset:
 GATHER_STRATEGIES = ("nc +gather", "nc +loot")
 
 
-def life_strategies(*, leads: bool, aimed: bool = False, travelling: bool = False,
-                    gathering: bool = False) -> list:
+def life_strategies(
+    *,
+    leads: bool,
+    aimed: bool = False,
+    travelling: bool = False,
+    gathering: bool = False,
+) -> list:
     """What keeps this character playing, given whether it leads the party.
 
     ONE character travels and the rest follow. That asymmetry is the whole
@@ -714,8 +720,9 @@ def _life_strategies(*, leads: bool, aimed: bool, travelling: bool) -> list:
     return ["nc -new rpg", "nc +follow", FLEE_STRATEGY]
 
 
-def already_working(kind: str, target: int, active: list, *, quest_id: int = 0,
-                    keyword: str = "") -> bool:
+def already_working(
+    kind: str, target: int, active: list, *, quest_id: int = 0, keyword: str = ""
+) -> bool:
     """Is this character already pursuing exactly this goal?
 
     A function rather than a check at the call site so the rule can be tested
@@ -802,13 +809,19 @@ def cancel_text(name: str, cancelled: int) -> str:
 
 
 def milestone_text(row: Mapping, observed: int) -> str:
-    what = _describe(row["kind"], row.get("skill_name"), int(row["target"]),
-                     int(row.get("quest_id") or 0))
+    what = _describe(
+        row["kind"],
+        row.get("skill_name"),
+        int(row["target"]),
+        int(row.get("quest_id") or 0),
+    )
     if row["kind"] == "quest":
         left = -int(observed)
         plural = "" if left == 1 else "s"
-        return (f"{row['character_name']} advances: {left} objective{plural} "
-                f"left on {what}.")
+        return (
+            f"{row['character_name']} advances: {left} objective{plural} "
+            f"left on {what}."
+        )
     if row["kind"] == "dungeon":
         # The FAMILY advances, not the beneficiary alone - a dungeon run needs
         # everybody, and the character_name on the row is who the council
@@ -821,15 +834,21 @@ def milestone_text(row: Mapping, observed: int) -> str:
 
 
 def completion_text(row: Mapping, observed: int) -> str:
-    what = _describe(row["kind"], row.get("skill_name"), int(row["target"]),
-                     int(row.get("quest_id") or 0))
+    what = _describe(
+        row["kind"],
+        row.get("skill_name"),
+        int(row["target"]),
+        int(row.get("quest_id") or 0),
+    )
     if row["kind"] == "quest":
         # "Objectives done", NOT "quest finished". The turn-in is a separate
         # act the bot does for itself, and claiming the quest is complete here
         # would be the overseer over-reporting - the one thing this service
         # must never do.
-        return (f"Goal complete: {row['character_name']} has no objectives "
-                f"left on {what} and can hand it in.")
+        return (
+            f"Goal complete: {row['character_name']} has no objectives "
+            f"left on {what} and can hand it in."
+        )
     if row["kind"] == "dungeon":
         return f"Goal complete: the family finished its campaign on {what}."
     return f"Goal complete: {row['character_name']} reached {what} (now at {observed})."
@@ -1055,15 +1074,17 @@ def _reconcile_skill(row: Mapping, observed: int) -> list:
 
     actions: list = []
     if drive:
-        actions.append(DriveSkill(
-            skill_name=skill_name,
-            skill_id=skill_id,
-            target=target,
-            observed=observed,
-            beneficiary=name,
-            stalls=stalls,
-            speak=speak,
-        ))
+        actions.append(
+            DriveSkill(
+                skill_name=skill_name,
+                skill_id=skill_id,
+                target=target,
+                observed=observed,
+                beneficiary=name,
+                stalls=stalls,
+                speak=speak,
+            )
+        )
     if last is not None and _milestone_crossed("skill", last, observed):
         text = milestone_text(row, observed)
         actions.append(MilestoneThought(name, text))

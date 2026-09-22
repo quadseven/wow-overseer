@@ -28,6 +28,7 @@ takes a roster in and hands a lineup back, so the decision can be read on a
 page before anything irreversible happens to a guild. The caller owns the
 world.
 """
+
 from __future__ import annotations
 
 # WotLK class ids, as the realm's own `characters.class` column stores them.
@@ -35,9 +36,16 @@ WARRIOR, PALADIN, HUNTER, ROGUE, PRIEST = 1, 2, 3, 4, 5
 DEATH_KNIGHT, SHAMAN, MAGE, WARLOCK, DRUID = 6, 7, 8, 9, 11
 
 CLASS_NAMES = {
-    WARRIOR: "Warrior", PALADIN: "Paladin", HUNTER: "Hunter", ROGUE: "Rogue",
-    PRIEST: "Priest", DEATH_KNIGHT: "Death Knight", SHAMAN: "Shaman",
-    MAGE: "Mage", WARLOCK: "Warlock", DRUID: "Druid",
+    WARRIOR: "Warrior",
+    PALADIN: "Paladin",
+    HUNTER: "Hunter",
+    ROGUE: "Rogue",
+    PRIEST: "Priest",
+    DEATH_KNIGHT: "Death Knight",
+    SHAMAN: "Shaman",
+    MAGE: "Mage",
+    WARLOCK: "Warlock",
+    DRUID: "Druid",
 }
 
 # Who can hold a slot. A hybrid appears in both lists on purpose - the
@@ -82,9 +90,15 @@ def _take(pool: list, want: int, allowed: frozenset | None = None) -> list:
     return taken
 
 
-def build_lineup(members: list, guaranteed=(), *, raiders: int = RAIDERS,
-                 maintenance: int = MAINTENANCE, summoners: int = SUMMONERS,
-                 group_size: int = GROUP_SIZE) -> dict:
+def build_lineup(
+    members: list,
+    guaranteed=(),
+    *,
+    raiders: int = RAIDERS,
+    maintenance: int = MAINTENANCE,
+    summoners: int = SUMMONERS,
+    group_size: int = GROUP_SIZE,
+) -> dict:
     """Fill the lineup from `members`, and say what could not be filled.
 
     `members` is a list of dicts with `name`, `level` and `class_id`. Anyone
@@ -93,8 +107,10 @@ def build_lineup(members: list, guaranteed=(), *, raiders: int = RAIDERS,
     character before a person acts on it.
     """
     guaranteed = frozenset(guaranteed)
-    pool = sorted((dict(m) for m in members if m.get("name")),
-                  key=lambda m: _sort_key(m, guaranteed))
+    pool = sorted(
+        (dict(m) for m in members if m.get("name")),
+        key=lambda m: _sort_key(m, guaranteed),
+    )
 
     groups_wanted = raiders // group_size if group_size else 0
 
@@ -134,8 +150,7 @@ def build_lineup(members: list, guaranteed=(), *, raiders: int = RAIDERS,
     # a bug.
     for position, member in enumerate(dps):
         if groups:
-            groups[position % len(groups)]["members"].append(
-                dict(member, role="dps"))
+            groups[position % len(groups)]["members"].append(dict(member, role="dps"))
 
     placed = sum(len(group["members"]) for group in groups)
     return {
@@ -143,8 +158,12 @@ def build_lineup(members: list, guaranteed=(), *, raiders: int = RAIDERS,
         "maintenance": [dict(m, role="maintenance") for m in upkeep],
         "summoners": [dict(m, role="summoner") for m in summoner_corps],
         "surplus": list(pool),
-        "wanted": {"raiders": raiders, "maintenance": maintenance,
-                   "summoners": summoners, "total": raiders + maintenance + summoners},
+        "wanted": {
+            "raiders": raiders,
+            "maintenance": maintenance,
+            "summoners": summoners,
+            "total": raiders + maintenance + summoners,
+        },
         "shortfall": {
             "raiders": max(0, raiders - placed),
             "maintenance": max(0, maintenance - len(upkeep)),
@@ -152,7 +171,11 @@ def build_lineup(members: list, guaranteed=(), *, raiders: int = RAIDERS,
             "tanks": max(0, groups_wanted - len(tanks)),
             "healers": max(0, groups_wanted - len(healers)),
         },
-        "counts": {"raiders": placed, "maintenance": len(upkeep),
-                   "summoners": len(summoner_corps), "surplus": len(pool),
-                   "considered": len(members)},
+        "counts": {
+            "raiders": placed,
+            "maintenance": len(upkeep),
+            "summoners": len(summoner_corps),
+            "surplus": len(pool),
+            "considered": len(members),
+        },
     }

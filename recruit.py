@@ -119,7 +119,9 @@ class RecruitAction:
 
 
 def _wait(reason: str) -> RecruitAction:
-    return RecruitAction(verb="wait", actor="", command="", target_arg="", reason=reason)
+    return RecruitAction(
+        verb="wait", actor="", command="", target_arg="", reason=reason
+    )
 
 
 def plan_recruit(

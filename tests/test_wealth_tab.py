@@ -24,6 +24,7 @@ has been its own tab since the redesign.
 
 Tickets: quadseven/mod-overseer#88, quadseven/mod-overseer#147, infra#2831.
 """
+
 import pathlib
 import unittest
 
@@ -62,21 +63,25 @@ class WhereTheCodeIsAllowedToSit(unittest.TestCase):
         self.assertLess(css, self.page.index("--- the Family tab (infra#2892)"))
 
     def test_the_script_sits_below_the_armorys_own_poll(self):
-        self.assertGreater(self.page.index(BANNER),
-                           self.page.index("setInterval(pollArmory, 30000);"))
+        self.assertGreater(
+            self.page.index(BANNER), self.page.index("setInterval(pollArmory, 30000);")
+        )
 
     def test_the_handler_sits_below_the_armorys_slice(self):
         """The Armory endpoint suite reads everything between `def _armory`
         and `def _thoughts` as the Armory's own contract, including its
         assertion that no handler in that window reads a query parameter."""
-        self.assertGreater(self.server.index("def _wealth"),
-                           self.server.index("def _thoughts"))
+        self.assertGreater(
+            self.server.index("def _wealth"), self.server.index("def _thoughts")
+        )
 
     def test_the_fetch_sits_above_the_armorys_slice(self):
         """Same reasoning at the other end: `def _fetch_armory` to
         `def _ensure_stream_store` is the Armory's fetch window."""
-        self.assertLess(self.server.index("def _fetch_wealth"),
-                        self.server.index("def _fetch_armory"))
+        self.assertLess(
+            self.server.index("def _fetch_wealth"),
+            self.server.index("def _fetch_armory"),
+        )
 
 
 class ItIsATabOfItsOwn(unittest.TestCase):
@@ -92,8 +97,8 @@ class ItIsATabOfItsOwn(unittest.TestCase):
 
     def test_the_section_exists_and_the_armory_no_longer_contains_it(self):
         self.assertIn('<section id="bags">', self.page)
-        section = self.page[self.page.index('<section id="armory">'):]
-        section = section[:section.index("</section>")]
+        section = self.page[self.page.index('<section id="armory">') :]
+        section = section[: section.index("</section>")]
         self.assertNotIn('id="wcards"', section)
         self.assertNotIn('id="wauction"', section)
 
@@ -108,25 +113,29 @@ class ItIsATabOfItsOwn(unittest.TestCase):
         evening after rather than while something is wrong."""
         self.assertIn('bb.textContent = "Bags";', self.page)
         self.assertIn("bb.dataset.view = BAGS_VIEW;", self.page)
-        self.assertLess(self.page.index("tabs.appendChild(ab);"),
-                        self.page.index("tabs.appendChild(bb);"))
-        self.assertLess(self.page.index("tabs.appendChild(bb);"),
-                        self.page.index("tabs.appendChild(hb);"))
+        self.assertLess(
+            self.page.index("tabs.appendChild(ab);"),
+            self.page.index("tabs.appendChild(bb);"),
+        )
+        self.assertLess(
+            self.page.index("tabs.appendChild(bb);"),
+            self.page.index("tabs.appendChild(hb);"),
+        )
 
     def test_the_view_is_an_address(self):
         """#bags opens straight onto the tab. Asked of the routing TABLE
         rather than of a branch: the chain of ifs this replaced silently
         swallowed #watch when the Watch wall was added."""
-        listed = self.page[self.page.index("const HASH_VIEWS = ["):]
-        listed = listed[:listed.index("]")]
+        listed = self.page[self.page.index("const HASH_VIEWS = [") :]
+        listed = listed[: listed.index("]")]
         self.assertIn("BAGS_VIEW", listed)
 
     def test_show_view_hides_it_with_the_others(self):
-        show = self.page[self.page.index("function showView"):]
-        show = show[:show.index("setInterval(pollFamily")]
+        show = self.page[self.page.index("function showView") :]
+        show = show[: show.index("setInterval(pollFamily")]
         self.assertIn('bagsection.style.display = isBags ? "block" : "none";', show)
-        branch = show[show.index("if (isBags) {"):]
-        branch = branch[:branch.index("return;")]
+        branch = show[show.index("if (isBags) {") :]
+        branch = branch[: branch.index("return;")]
         for line in ("closePanel();", "stopBroadcasts();", "pollWealth();"):
             self.assertIn(line, branch)
 
@@ -134,15 +143,15 @@ class ItIsATabOfItsOwn(unittest.TestCase):
         """Two tabs, two polls. Leaving the fetch on the Armory branch would
         pull every inventory row the family owns every thirty seconds behind a
         view that does not draw one of them."""
-        show = self.page[self.page.index("function showView"):]
-        show = show[:show.index("setInterval(pollFamily")]
-        arm = show[show.index("if (isArm) {"):]
-        self.assertNotIn("pollWealth();", arm[:arm.index("return;")])
+        show = self.page[self.page.index("function showView") :]
+        show = show[: show.index("setInterval(pollFamily")]
+        arm = show[show.index("if (isArm) {") :]
+        self.assertNotIn("pollWealth();", arm[: arm.index("return;")])
 
     def test_the_poll_stops_when_the_tab_is_not_open(self):
         """A thirty-second fetch of every inventory row the family owns, run
         forever behind the map, is a query nobody is reading."""
-        poll = self.page[self.page.index("async function pollWealth"):]
+        poll = self.page[self.page.index("async function pollWealth") :]
         self.assertIn("if (view !== BAGS_VIEW) return;", poll)
 
     def test_the_poll_matches_the_armorys_cadence_and_not_the_maps(self):
@@ -166,7 +175,7 @@ class NothingOnThisTabDecidesAnything(unittest.TestCase):
     def setUpClass(cls):
         page = (HERE / "index.html").read_text(encoding="utf-8")
         start = page.index(BANNER)
-        cls.tab = page[start:page.index(FRONT_DOOR, start)]
+        cls.tab = page[start : page.index(FRONT_DOOR, start)]
         cls.built = payload()
 
     def test_the_thresholds_left_the_page(self):
@@ -179,8 +188,15 @@ class NothingOnThisTabDecidesAnything(unittest.TestCase):
         self.assertEqual(wealth.TIGHT_PERCENT, 90)
 
     def test_the_status_words_left_the_page(self):
-        for word in ('"nothing"', '"none"', '"no room left"', '"worn"',
-                     '"full"', '"out of room"', '"free"'):
+        for word in (
+            '"nothing"',
+            '"none"',
+            '"no room left"',
+            '"worn"',
+            '"full"',
+            '"out of room"',
+            '"free"',
+        ):
             self.assertNotIn(word, self.tab, word + " is composed in the page")
 
     def test_the_composed_sentences_left_the_page(self):
@@ -188,12 +204,18 @@ class NothingOnThisTabDecidesAnything(unittest.TestCase):
         a sentence added to wealth.py and then also pasted into the page is
         caught without anybody remembering to extend this test."""
         f = self.built["family"]["finding"]
-        for text in (f["lead"], f["detail"], f["because"],
-                     self.built["saved_note"],
-                     self.built["auctions"]["caveat"],
-                     self.built["auctions"]["empty"]["lead"],
-                     self.built["guild_bank"]["lead"],
-                     wealth.SPARE_NOTE, wealth.NOTABLE_NOTE, wealth.ABSENT_NOTE):
+        for text in (
+            f["lead"],
+            f["detail"],
+            f["because"],
+            self.built["saved_note"],
+            self.built["auctions"]["caveat"],
+            self.built["auctions"]["empty"]["lead"],
+            self.built["guild_bank"]["lead"],
+            wealth.SPARE_NOTE,
+            wealth.NOTABLE_NOTE,
+            wealth.ABSENT_NOTE,
+        ):
             self.assertNotIn(text, self.tab, "duplicated in the page: " + text)
 
     def test_the_section_labels_come_from_the_payload_too(self):
@@ -212,8 +234,7 @@ class NothingOnThisTabDecidesAnything(unittest.TestCase):
         so."""
         self.assertIn("const WSTALE =", self.tab)
         self.assertEqual(self.tab.count("const WSTALE"), 1)
-        self.assertIn("there is no payload during the failure it exists for",
-                      self.tab)
+        self.assertIn("there is no payload during the failure it exists for", self.tab)
 
     def test_a_tone_becomes_a_class_and_nothing_else(self):
         """wealth.py decides what counts as an alarm; the page decides what an
@@ -249,22 +270,27 @@ class TheFindingOpensTheTab(unittest.TestCase):
     def setUpClass(cls):
         page = (HERE / "index.html").read_text(encoding="utf-8")
         start = page.index(BANNER)
-        cls.tab = page[start:page.index(FRONT_DOOR, start)]
+        cls.tab = page[start : page.index(FRONT_DOOR, start)]
         css = page.index(CSS_BANNER)
-        cls.css = page[css:page.index("/* --- the Family tab (infra#2892)")]
+        cls.css = page[css : page.index("/* --- the Family tab (infra#2892)")]
 
     def test_it_is_the_first_thing_rendered(self):
         """A chart of 189 out of 190 is a full bar, and a full bar is what a
         healthy inventory looks like too until somebody reads the axis."""
-        render = self.tab[self.tab.index("function renderWealth(p)"):]
-        self.assertLess(render.index("renderFinding(p.family.finding);"),
-                        render.index("renderStats(p.family.stats);"))
+        render = self.tab[self.tab.index("function renderWealth(p)") :]
+        self.assertLess(
+            render.index("renderFinding(p.family.finding);"),
+            render.index("renderStats(p.family.stats);"),
+        )
 
     def test_it_carries_the_lead_the_detail_and_the_reason(self):
-        fn = self.tab[self.tab.index("function renderFinding"):]
-        fn = fn[:fn.index("\n}")]
-        for line in ('el("p", "wlead", f.lead)', 'el("p", "wdetail", f.detail)',
-                     'el("p", "wbecause", f.because)'):
+        fn = self.tab[self.tab.index("function renderFinding") :]
+        fn = fn[: fn.index("\n}")]
+        for line in (
+            'el("p", "wlead", f.lead)',
+            'el("p", "wdetail", f.detail)',
+            'el("p", "wbecause", f.because)',
+        ):
             self.assertIn(line, fn)
         self.assertIn("if (f.who_label)", fn)
 
@@ -277,8 +303,9 @@ class TheFindingOpensTheTab(unittest.TestCase):
         darker than the swatches they are named after because a pigment picked
         for a bar fails as words."""
         self.assertIn("#wfinding.t-alarm .wlead { color:var(--warn-text); }", self.css)
-        self.assertIn("#wfinding.t-caution .wlead { color:var(--caution-text); }",
-                      self.css)
+        self.assertIn(
+            "#wfinding.t-caution .wlead { color:var(--caution-text); }", self.css
+        )
 
 
 class TheBagGrid(unittest.TestCase):
@@ -286,9 +313,9 @@ class TheBagGrid(unittest.TestCase):
     def setUpClass(cls):
         page = (HERE / "index.html").read_text(encoding="utf-8")
         start = page.index(BANNER)
-        cls.tab = page[start:page.index(FRONT_DOOR, start)]
+        cls.tab = page[start : page.index(FRONT_DOOR, start)]
         css = page.index(CSS_BANNER)
-        cls.css = page[css:page.index("/* --- the Family tab (infra#2892)")]
+        cls.css = page[css : page.index("/* --- the Family tab (infra#2892)")]
 
     def test_an_empty_square_is_drawn_rather_than_left_out(self):
         """A bag rendered as only the things in it makes a full bag and a
@@ -316,15 +343,15 @@ class TheBagGrid(unittest.TestCase):
         """Eleven pixels is a third of the 44px this page allows anywhere
         else, so a square is a span with a title and never a link. The item
         behind it is named properly in the list below, on a 44px row."""
-        cell = self.tab[self.tab.index("function wslotCell"):]
-        cell = cell[:cell.index("\n}")]
+        cell = self.tab[self.tab.index("function wslotCell") :]
+        cell = cell[: cell.index("\n}")]
         self.assertNotIn('createElement("a")', cell)
         self.assertIn("cell.title = it.tip;", cell)
-        row = self.css[self.css.index(".witem {"):]
-        self.assertIn("min-height:44px", row[:row.index("}")])
+        row = self.css[self.css.index(".witem {") :]
+        self.assertIn("min-height:44px", row[: row.index("}")])
 
     def test_the_tooltip_line_is_composed_in_the_module(self):
-        """"no vendor value" is a sentence about what a SellPrice of 0 means,
+        """ "no vendor value" is a sentence about what a SellPrice of 0 means,
         which is the same judgement stack_value() already makes."""
         self.assertIn("a.title = it.tip;", self.tab)
         self.assertNotIn("no vendor value", self.tab)
@@ -334,8 +361,10 @@ class TheBagGrid(unittest.TestCase):
         for a picture of a bag nobody identifies by its art - so the name in
         the quality colour is what makes the row identifiable. The colours are
         the Armory's .q0-.q7 and not a second set."""
-        self.assertIn('head.appendChild(el("span", "n " + wquality(bag.quality),'
-                      " bag.name));", self.tab)
+        self.assertIn(
+            'head.appendChild(el("span", "n " + wquality(bag.quality), bag.name));',
+            self.tab,
+        )
         self.assertNotIn(".q3 {", self.css)
 
     def test_the_container_says_how_full_it_is_in_the_modules_words(self):
@@ -350,9 +379,9 @@ class ThePurseCard(unittest.TestCase):
     def setUpClass(cls):
         page = (HERE / "index.html").read_text(encoding="utf-8")
         start = page.index(BANNER)
-        cls.tab = page[start:page.index(FRONT_DOOR, start)]
+        cls.tab = page[start : page.index(FRONT_DOOR, start)]
         css = page.index(CSS_BANNER)
-        cls.css = page[css:page.index("/* --- the Family tab (infra#2892)")]
+        cls.css = page[css : page.index("/* --- the Family tab (infra#2892)")]
 
     def test_money_is_drawn_in_the_games_own_three_coins(self):
         self.assertIn('n.append(el("span", "g", m.gold + "g "));', self.tab)
@@ -387,16 +416,17 @@ class ThePurseCard(unittest.TestCase):
     def test_the_cards_are_built_once_and_updated_in_place(self):
         """Five cards rebuilt every poll would throw away the scroll position
         mid-read on a phone, which is the one device this is checked from."""
-        self.assertIn("const wlth = { cards: new Map(), note: \"\", sides: new Map() };",
-                      self.tab)
+        self.assertIn(
+            'const wlth = { cards: new Map(), note: "", sides: new Map() };', self.tab
+        )
         self.assertIn("let c = wlth.cards.get(name);", self.tab)
 
     def test_a_failed_poll_keeps_the_bags_it_has_and_says_they_are_old(self):
         """An empty bag grid reads as "he has plenty of room", which is the
         precise opposite of what this view exists to report."""
-        poll = self.tab[self.tab.index("async function pollWealth"):]
-        poll = poll[:poll.index("setInterval(pollWealth")]
-        self.assertIn("wsaved.append(el(\"span\", \"\", WSTALE));", poll)
+        poll = self.tab[self.tab.index("async function pollWealth") :]
+        poll = poll[: poll.index("setInterval(pollWealth")]
+        self.assertIn('wsaved.append(el("span", "", WSTALE));', poll)
         self.assertIn("if (wlth.note)", poll)
         self.assertNotIn("wcards.replaceChildren()", poll)
         self.assertNotIn("wfinding.replaceChildren()", poll)
@@ -406,8 +436,7 @@ class ThePurseCard(unittest.TestCase):
         concludes the view is broken. It is the payload's, because it is a
         fact about the data."""
         self.assertIn("as the world last saved them", wealth.SAVED_NOTE)
-        self.assertIn("wsaved.replaceChildren(el(\"span\", \"\", p.saved_note));",
-                      self.tab)
+        self.assertIn('wsaved.replaceChildren(el("span", "", p.saved_note));', self.tab)
 
 
 class TheEmptyPanelsSayWhyTheyAreEmpty(unittest.TestCase):
@@ -415,15 +444,15 @@ class TheEmptyPanelsSayWhyTheyAreEmpty(unittest.TestCase):
     def setUpClass(cls):
         page = (HERE / "index.html").read_text(encoding="utf-8")
         start = page.index(BANNER)
-        cls.tab = page[start:page.index(FRONT_DOOR, start)]
+        cls.tab = page[start : page.index(FRONT_DOOR, start)]
         cls.built = payload()
 
     def test_the_auction_panel_draws_the_reason_rather_than_a_blank(self):
         """A blank panel and a broken query look identical. Nobody has wired
         auction behaviour yet, so an empty auction house is the CORRECT
         reading and the panel has to say which of the two it is."""
-        render = self.tab[self.tab.index("function renderAuctions"):]
-        render = render[:render.index("\n}")]
+        render = self.tab[self.tab.index("function renderAuctions") :]
+        render = render[: render.index("\n}")]
         self.assertIn('el("p", "wplead", a.empty.lead)', render)
         self.assertIn('el("p", "wbody", a.empty.body)', render)
         self.assertIn("wlinked(a.empty.why)", render)
@@ -432,8 +461,8 @@ class TheEmptyPanelsSayWhyTheyAreEmpty(unittest.TestCase):
         """The core deletes an auction the moment it finishes and mails the
         gold, so an empty `sold` can never honestly read as "nothing has ever
         sold"."""
-        render = self.tab[self.tab.index("function renderAuctions"):]
-        render = render[:render.index("\n}")]
+        render = self.tab[self.tab.index("function renderAuctions") :]
+        render = render[: render.index("\n}")]
         self.assertIn("if (!a.tracked)", render)
         self.assertIn('el("p", "wbody", a.caveat)', render)
 
@@ -441,8 +470,8 @@ class TheEmptyPanelsSayWhyTheyAreEmpty(unittest.TestCase):
         """Same reasoning one panel down. There is no guild, so there is no
         guild bank - and what is useful is not the empty vault, it is which
         parts of the road to one the module can already drive."""
-        render = self.tab[self.tab.index("function renderGuild"):]
-        render = render[:render.index("\n}")]
+        render = self.tab[self.tab.index("function renderGuild") :]
+        render = render[: render.index("\n}")]
         self.assertIn('el("p", "wplead", g.lead)', render)
         self.assertIn("for (const s of g.steps)", render)
         self.assertIn('el("span", wtone("v", s.tone), s.state_label)', render)
@@ -467,12 +496,18 @@ class TheContractWithTheBuilder(unittest.TestCase):
     def setUpClass(cls):
         page = (HERE / "index.html").read_text(encoding="utf-8")
         start = page.index(BANNER)
-        cls.tab = page[start:page.index(FRONT_DOOR, start)]
+        cls.tab = page[start : page.index(FRONT_DOOR, start)]
         cls.built = payload()
 
     def test_the_top_level_keys_the_page_reads_all_exist(self):
-        for key in ("members", "family", "auctions", "guild_bank", "sections",
-                    "saved_note"):
+        for key in (
+            "members",
+            "family",
+            "auctions",
+            "guild_bank",
+            "sections",
+            "saved_note",
+        ):
             self.assertIn(key, self.built, key)
             self.assertIn("p." + key, self.tab, key)
 
@@ -491,12 +526,31 @@ class TheContractWithTheBuilder(unittest.TestCase):
         present = wealth.build_member(
             family.roster()[0],
             {"name": family.roster()[0], "level": 25, "class": 1, "money": 0},
-            [], {})
-        for key in ("who", "room", "holding", "elsewhere_note", "notable_note",
-                    "containers", "class_colour", "money", "held"):
+            [],
+            {},
+        )
+        for key in (
+            "who",
+            "room",
+            "holding",
+            "elsewhere_note",
+            "notable_note",
+            "containers",
+            "class_colour",
+            "money",
+            "held",
+        ):
             self.assertIn(key, present, key)
-        for key in ("percent", "tone", "used_label", "free_label", "free_tone",
-                    "bags_label", "spare_label", "spare_tone"):
+        for key in (
+            "percent",
+            "tone",
+            "used_label",
+            "free_label",
+            "free_tone",
+            "bags_label",
+            "spare_label",
+            "spare_tone",
+        ):
             self.assertIn(key, present["room"], key)
 
     def test_the_guild_bank_keys_the_page_reads_all_exist(self):
@@ -507,8 +561,10 @@ class TheContractWithTheBuilder(unittest.TestCase):
             self.assertIn(key, bank["steps"][0], key)
 
     def test_the_linked_sentence_has_both_halves_and_a_ticket(self):
-        for sentence in (self.built["guild_bank"]["blocked"],
-                         self.built["auctions"]["empty"]["why"]):
+        for sentence in (
+            self.built["guild_bank"]["blocked"],
+            self.built["auctions"]["empty"]["why"],
+        ):
             for key in ("before", "ticket", "after"):
                 self.assertIn(key, sentence, key)
 
@@ -518,23 +574,30 @@ class ItReadsOnAPhone(unittest.TestCase):
     def setUpClass(cls):
         cls.page = (HERE / "index.html").read_text(encoding="utf-8")
         css = cls.page.index(CSS_BANNER)
-        cls.css = cls.page[css:cls.page.index("/* --- the Family tab (infra#2892)")]
+        cls.css = cls.page[css : cls.page.index("/* --- the Family tab (infra#2892)")]
 
     def test_one_card_on_a_phone_and_more_only_when_there_is_room(self):
         """One breakpoint, at 640, so the tab does not change shape twice on
         the way to a desktop and the page never scrolls sideways."""
-        self.assertIn("#wcards { display:grid; gap:1rem; "
-                      "grid-template-columns:minmax(0,1fr); }", self.css)
-        self.assertIn("@media (min-width:640px) {\n"
-                      "    #wcards { grid-template-columns:"
-                      "repeat(auto-fit,minmax(330px,1fr)); }\n  }", self.css)
+        self.assertIn(
+            "#wcards { display:grid; gap:1rem; grid-template-columns:minmax(0,1fr); }",
+            self.css,
+        )
+        self.assertIn(
+            "@media (min-width:640px) {\n"
+            "    #wcards { grid-template-columns:"
+            "repeat(auto-fit,minmax(330px,1fr)); }\n  }",
+            self.css,
+        )
 
     def test_the_strip_is_two_columns_on_a_phone_rather_than_seven_rows(self):
         """Seven readings stacked is a screen and a half of scrolling before
         the first card, and these are glanced at rather than read."""
-        self.assertIn("#wstats { display:grid; gap:.55rem; margin-top:1rem;\n"
-                      "            grid-template-columns:repeat(2,minmax(0,1fr)); }",
-                      self.css)
+        self.assertIn(
+            "#wstats { display:grid; gap:.55rem; margin-top:1rem;\n"
+            "            grid-template-columns:repeat(2,minmax(0,1fr)); }",
+            self.css,
+        )
 
     def test_the_only_breakpoint_is_the_one_the_handoff_names(self):
         self.assertNotIn("min-width:1400px", self.css)
@@ -542,15 +605,16 @@ class ItReadsOnAPhone(unittest.TestCase):
         self.assertEqual(self.css.count("@media"), self.css.count("min-width:640px"))
 
     def test_the_section_rule_is_the_index_the_line_and_the_label(self):
-        self.assertIn(".bline { flex:1 1 auto; height:2px; "
-                      "background:var(--on-card); }", self.css)
+        self.assertIn(
+            ".bline { flex:1 1 auto; height:2px; background:var(--on-card); }", self.css
+        )
         self.assertIn(".bidx { font-family:var(--mono);", self.css)
         self.assertIn(".blab { font-family:var(--mono);", self.css)
 
     def test_every_row_that_can_be_tapped_is_a_finger_tall(self):
         for rule in (".witem {", ".wauc {", ".wstep {"):
-            block = self.css[self.css.index(rule):]
-            block = block[:block.index("}")]
+            block = self.css[self.css.index(rule) :]
+            block = block[: block.index("}")]
             self.assertIn("min-height:44px", block, rule)
 
     def test_the_page_carries_no_framework(self):
@@ -559,19 +623,27 @@ class ItReadsOnAPhone(unittest.TestCase):
         framework arriving by the back door: a CSS kit, a component library, a
         bundle. A font is none of those, and the check still fails if one shows
         up, because it counts the links rather than deleting the rule."""
-        links = [ln for ln in self.page.splitlines()
-                 if '<link rel="stylesheet"' in ln]
+        links = [ln for ln in self.page.splitlines() if '<link rel="stylesheet"' in ln]
         for ln in links:
-            self.assertIn("fonts.googleapis.com", ln,
-                          "only the font host may be linked: " + ln.strip())
+            self.assertIn(
+                "fonts.googleapis.com",
+                ln,
+                "only the font host may be linked: " + ln.strip(),
+            )
         self.assertLessEqual(len(links), 1, "one font stylesheet, no more")
         self.assertNotIn("<script src=", self.page)
 
     def test_no_em_dashes(self):
-        for name in ("index.html", "wealth.py", "map_server.py",
-                     "tests/test_wealth.py", "tests/test_wealth_tab.py"):
-            self.assertNotIn(chr(0x2014), (HERE / name).read_text(encoding="utf-8"),
-                             name)
+        for name in (
+            "index.html",
+            "wealth.py",
+            "map_server.py",
+            "tests/test_wealth.py",
+            "tests/test_wealth_tab.py",
+        ):
+            self.assertNotIn(
+                chr(0x2014), (HERE / name).read_text(encoding="utf-8"), name
+            )
 
 
 class TheEndpoint(unittest.TestCase):
@@ -585,11 +657,14 @@ class TheEndpoint(unittest.TestCase):
         # not bounded, so an assertion about what the SQL does must not be
         # able to read the prose about what it deliberately does not do.
         cls.fetch = cls.server[
-            cls.server.index("# --- the Wealth and Bags view"):
-            cls.server.index("# Everything a tooltip draws")]
-        cls.sql = cls.fetch[cls.fetch.index("names = family.roster()"):]
-        cls.handler = cls.server[cls.server.index("def _wealth"):
-                                 cls.server.index("def do_POST")]
+            cls.server.index("# --- the Wealth and Bags view") : cls.server.index(
+                "# Everything a tooltip draws"
+            )
+        ]
+        cls.sql = cls.fetch[cls.fetch.index("names = family.roster()") :]
+        cls.handler = cls.server[
+            cls.server.index("def _wealth") : cls.server.index("def do_POST")
+        ]
 
     def test_the_endpoint_is_reachable(self):
         self.assertIn('"/api/wealth": _wealth,', self.server)
@@ -599,8 +674,10 @@ class TheEndpoint(unittest.TestCase):
         this a general character query wearing a friendly name."""
         # Both families now (#88), and still from the roster alone.
         self.assertIn("groups = _fetch_family_groups()", self.handler)
-        self.assertIn("wealth.build_wealth(**_fetch_wealth(names), icons=ITEMS.icons,",
-                      self.handler)
+        self.assertIn(
+            "wealth.build_wealth(**_fetch_wealth(names), icons=ITEMS.icons,",
+            self.handler,
+        )
         self.assertIn("families=groups)", self.handler)
         self.assertNotIn("query.get", self.handler)
         self.assertIn("names = family.roster()", self.fetch)
@@ -684,32 +761,41 @@ class BothFamiliesAndWhereItIsGoing(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         page = (HERE / "index.html").read_text(encoding="utf-8")
-        start = page.index("// --- the Bags tab (quadseven/mod-overseer#88, infra#2597)")
-        cls.tab = page[start:page.index("// --- the front door (infra#3110)")]
+        start = page.index(
+            "// --- the Bags tab (quadseven/mod-overseer#88, infra#2597)"
+        )
+        cls.tab = page[start : page.index("// --- the front door (infra#3110)")]
 
     def test_the_columns_come_from_the_payloads_sides(self):
         """Which family is on which side is armory.family_sides', not the page's."""
-        sides = self.tab[self.tab.index("function wealthSides"):]
-        sides = sides[:sides.index("function wealthCard")]
+        sides = self.tab[self.tab.index("function wealthSides") :]
+        sides = sides[: sides.index("function wealthCard")]
         self.assertIn("p.sides.forEach((side, i) =>", sides)
         self.assertIn("col.head.textContent = side.heading;", sides)
         self.assertIn("for (const name of side.names)", sides)
         self.assertIn("wealthSides(p);", self.tab)
 
     def test_every_word_of_a_pile_is_the_modules(self):
-        fates = self.tab[self.tab.index("function renderFates"):]
-        fates = fates[:fates.index("function waucRow")]
-        for field in ("f.heading", "f.unmanaged.text", "pile.label", "pile.count",
-                      "pile.route", "pile.blocker", "pile.examples"):
+        fates = self.tab[self.tab.index("function renderFates") :]
+        fates = fates[: fates.index("function waucRow")]
+        for field in (
+            "f.heading",
+            "f.unmanaged.text",
+            "pile.label",
+            "pile.count",
+            "pile.route",
+            "pile.blocker",
+            "pile.examples",
+        ):
             self.assertIn(field, fates)
         self.assertIn("wticket(pile.ticket)", fates)
         self.assertNotIn("innerHTML", fates)
 
     def test_the_piles_are_drawn_on_every_present_card_and_cleared_on_a_gone_one(self):
-        member = self.tab[self.tab.index("function renderWealthMember"):]
-        member = member[:member.index("function wticket")]
+        member = self.tab[self.tab.index("function renderWealthMember") :]
+        member = member[: member.index("function wticket")]
         self.assertIn("renderFates(c, m.fates);", member)
-        self.assertIn("c.fates.replaceChildren();", member[:member.index("return;")])
+        self.assertIn("c.fates.replaceChildren();", member[: member.index("return;")])
 
 
 if __name__ == "__main__":

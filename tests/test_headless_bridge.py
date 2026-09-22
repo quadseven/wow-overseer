@@ -22,6 +22,7 @@ and returns None for every id, and every send site in bridge.py is already
 guarded on exactly that. A headless process cannot post to Discord because
 there is nothing to post through - not because it promises not to.
 """
+
 import pathlib
 import re
 import unittest
@@ -48,7 +49,6 @@ def _block(signature: str) -> str:
 
 
 class TheHeadlessRuntimeExists(unittest.TestCase):
-
     def test_it_subclasses_the_bridge_rather_than_reimplementing_it(self):
         """A parallel implementation would drift: the drives would be fixed in
         one and not the other, silently, for exactly as long as nobody ran the
@@ -61,7 +61,9 @@ class TheHeadlessRuntimeExists(unittest.TestCase):
         sets. Without overriding them the loops would not misbehave - they
         would never start, and nothing would say so."""
         src = _source()
-        self.assertRegex(src, r"async def wait_until_ready\(self\)\s*->\s*None:\s*\n\s*return")
+        self.assertRegex(
+            src, r"async def wait_until_ready\(self\)\s*->\s*None:\s*\n\s*return"
+        )
         self.assertRegex(src, r"def is_closed\(self\)\s*->\s*bool:\s*\n\s*return False")
 
 
@@ -75,8 +77,13 @@ class TheChatRelayIsTheOnlyThingLeftOut(unittest.TestCase):
 
     def test_nothing_else_is_skipped(self):
         skip = _block("HEADLESS_SKIP = ")
-        for drive in ("_supervise_goals", "_hold_council", "_share_quests_loop",
-                      "_restore_lost_lives", "_protect_characters"):
+        for drive in (
+            "_supervise_goals",
+            "_hold_council",
+            "_share_quests_loop",
+            "_restore_lost_lives",
+            "_protect_characters",
+        ):
             with self.subTest(drive=drive):
                 self.assertNotIn(drive, skip)
 
@@ -98,14 +105,15 @@ class TheSetupOnReadyDoesIsNotSkipped(unittest.TestCase):
         on_ready = _block("async def on_ready(self)")
         headless = _block("async def run_headless(self)")
         stores = set(re.findall(r"_ensure_\w+_store", on_ready))
-        self.assertTrue(stores, "on_ready no longer ensures any store - update this test")
+        self.assertTrue(
+            stores, "on_ready no longer ensures any store - update this test"
+        )
         for store in sorted(stores):
             with self.subTest(store=store):
                 self.assertIn(store, headless)
 
 
 class HeadlessIsChosenNeverFallenInto(unittest.TestCase):
-
     def test_it_requires_an_explicit_opt_in(self):
         """An absent token could mean 'this is dev' or 'the secret failed to
         mount in production'. Guessing the first would turn a broken live
@@ -114,8 +122,11 @@ class HeadlessIsChosenNeverFallenInto(unittest.TestCase):
         self.assertIn("OVERSEER_HEADLESS", body)
         opt_in = body.index("OVERSEER_HEADLESS")
         token = body.index('os.environ["DISCORD_BOT_TOKEN"]')
-        self.assertLess(opt_in, token,
-                        "the headless branch must be taken before the token is required")
+        self.assertLess(
+            opt_in,
+            token,
+            "the headless branch must be taken before the token is required",
+        )
 
     def test_the_gateway_path_still_requires_its_token(self):
         """The live path must keep failing loudly on a missing secret."""
@@ -125,7 +136,9 @@ class HeadlessIsChosenNeverFallenInto(unittest.TestCase):
         """The headless branch returns before the token is ever read, so a dev
         world cannot authenticate as the live bot even by accident."""
         body = _block("def main() -> None:")
-        headless = body[body.index("OVERSEER_HEADLESS"):body.index("    token = os.environ")]
+        headless = body[
+            body.index("OVERSEER_HEADLESS") : body.index("    token = os.environ")
+        ]
         self.assertNotIn("token", headless.lower())
         self.assertIn("return", headless)
 

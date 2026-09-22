@@ -39,6 +39,7 @@ in which a release below `family_town_run_needed` would never have run. The
 sequence model at the bottom of this file runs the sweep in both positions and
 shows the low one is worth precisely as much as no sweep at all.
 """
+
 import pathlib
 import re
 import unittest
@@ -85,8 +86,11 @@ def _statements(signature: str) -> str:
     which puts that string hundreds of characters BEFORE the call it describes.
     Any test that orders or counts a call has to read the statements.
     """
-    return "\n".join(line for line in _code(signature).splitlines()
-                     if not line.lstrip().startswith("#"))
+    return "\n".join(
+        line
+        for line in _code(signature).splitlines()
+        if not line.lstrip().startswith("#")
+    )
 
 
 class AStrandedErrandEndsOnlyWhenItsOwnQueueIsQuiet(unittest.TestCase):
@@ -176,7 +180,7 @@ class TheBridgeCanFindAnErrandItIsNotCarryingItself(unittest.TestCase):
     def test_it_asks_the_roster_which_rows_carry_the_keyword(self):
         src = _source()
         start = src.index("_ERRAND_HOLDERS_SQL = (")
-        sql = src[start:src.index("\n)", start)]
+        sql = src[start : src.index("\n)", start)]
         self.assertIn("SELECT name FROM overseer_roster", sql)
         self.assertIn("enabled = 1", sql)
         self.assertIn("travel_npc = %%s", sql)
@@ -214,7 +218,7 @@ class TheBridgeCanFindAnErrandItIsNotCarryingItself(unittest.TestCase):
         self.assertLess(code.index("_is_economy_aim"), code.index("_connect()"))
 
     def test_a_world_without_the_column_yields_nobody(self):
-        """"Nobody is carrying this" is the direction that releases nothing,
+        """ "Nobody is carrying this" is the direction that releases nothing,
         which is the safe way to not know."""
         code = _code("def _errand_holders(")
         self.assertIn("in (1054, 1146)", code)
@@ -249,10 +253,8 @@ class TheKeywordGuardOnTheReleaseIsUntouched(unittest.TestCase):
 
 
 class TheSweepReleasesOnlyWhatItMayRelease(unittest.TestCase):
-
     def _sweep(self) -> str:
-        return _statements(
-            "    async def _release_stranded_vendor_errands(")
+        return _statements("    async def _release_stranded_vendor_errands(")
 
     def test_the_sweep_exists_at_all(self):
         self.assertIn("async def _release_stranded_vendor_errands(", _source())
@@ -294,8 +296,9 @@ class TheSweepReleasesOnlyWhatItMayRelease(unittest.TestCase):
         whole area keeps producing is the one where both read as "no write"."""
         sweep = self._sweep()
         self.assertIn("if step != bag_pressure.VENDOR_ERRAND_RELEASE:", sweep)
-        self.assertLess(sweep.index("VENDOR_ERRAND_RELEASE"),
-                        sweep.index("_release_trade_errand"))
+        self.assertLess(
+            sweep.index("VENDOR_ERRAND_RELEASE"), sweep.index("_release_trade_errand")
+        )
 
     def test_the_leader_is_excluded_by_name(self):
         """LOAD-BEARING, NOT TIDY. A leader that has just been aimed is still
@@ -307,13 +310,12 @@ class TheSweepReleasesOnlyWhatItMayRelease(unittest.TestCase):
         self.assertIn("if name != leader", self._sweep())
 
     def test_without_a_leader_it_sweeps_nobody(self):
-        """"Stranded" is defined against `_head_now()`. With no answer there is
+        """ "Stranded" is defined against `_head_now()`. With no answer there is
         no way to tell the one character that can walk from the four that
         cannot, and every standing aim would be swept including the live one."""
         sweep = self._sweep()
         self.assertIn("if not leader:", sweep)
-        self.assertLess(sweep.index("if not leader:"),
-                        sweep.index("_errand_holders"))
+        self.assertLess(sweep.index("if not leader:"), sweep.index("_errand_holders"))
 
     def test_the_leader_half_still_settles_exactly_one_errand(self):
         """The sweep is a separate method rather than more lines inside
@@ -336,7 +338,8 @@ class TheSweepIsActuallyReached(unittest.TestCase):
     def test_the_pass_calls_it(self):
         body = self._pass()
         self.assertIn(
-            "await self._release_stranded_vendor_errands(names, leader)", body)
+            "await self._release_stranded_vendor_errands(names, leader)", body
+        )
         self.assertEqual(body.count("_release_stranded_vendor_errands"), 1)
 
     def test_it_runs_above_every_early_return_in_the_pass(self):
@@ -348,8 +351,12 @@ class TheSweepIsActuallyReached(unittest.TestCase):
         which a sweep below these gates would never have run once."""
         body = self._pass()
         swept = body.index("_release_stranded_vendor_errands")
-        for gate in ("family_town_run_needed", "self._mid_run(",
-                     "if not candidates:", "_fetch_free_slots"):
+        for gate in (
+            "family_town_run_needed",
+            "self._mid_run(",
+            "if not candidates:",
+            "_fetch_free_slots",
+        ):
             with self.subTest(gate=gate):
                 self.assertLess(swept, body.index(gate))
 
@@ -359,8 +366,10 @@ class TheSweepIsActuallyReached(unittest.TestCase):
         be two leaders, and the second one could sweep the first one's live
         aim."""
         body = self._pass()
-        self.assertLess(body.index("leader = await asyncio.to_thread(_head_now)"),
-                        body.index("_release_stranded_vendor_errands"))
+        self.assertLess(
+            body.index("leader = await asyncio.to_thread(_head_now)"),
+            body.index("_release_stranded_vendor_errands"),
+        )
         self.assertEqual(body.count("_head_now"), 1)
 
     def test_the_leader_is_settled_before_anybody_is_called_stranded(self):
@@ -368,18 +377,22 @@ class TheSweepIsActuallyReached(unittest.TestCase):
         completion test first, so a leader that has finished is released as a
         leader rather than left to be looked at twice."""
         body = self._pass()
-        self.assertLess(body.index("_settle_vendor_errand"),
-                        body.index("_release_stranded_vendor_errands"))
+        self.assertLess(
+            body.index("_settle_vendor_errand"),
+            body.index("_release_stranded_vendor_errands"),
+        )
 
     def test_the_sweep_cannot_fight_the_aim_the_same_pass_writes(self):
         """The aim is written below the gates and only ever on the leader
         (infra#3553); the sweep runs above them and never on the leader. They
         cannot touch the same row in the same cycle."""
         body = self._pass()
-        self.assertLess(body.index("_release_stranded_vendor_errands"),
-                        body.index("_claim_town_slot"))
+        self.assertLess(
+            body.index("_release_stranded_vendor_errands"),
+            body.index("_claim_town_slot"),
+        )
         self.assertEqual(body.count("_claim_town_slot"), 1)
-        self.assertIn('self._claim_town_slot(', body)
+        self.assertIn("self._claim_town_slot(", body)
         self.assertIn('"economy", leader, "vendor", urgent=True', body)
 
 
@@ -410,9 +423,17 @@ class TheStrandingIsActuallyBroken(unittest.TestCase):
     FOLLOWER = "Bork"
 
     @classmethod
-    def _cycles(cls, count, sweep=True, sweep_below_the_gate=False,
-                sweep_includes_the_leader=False, follower_queue_drains=True,
-                sell_on=(), rows_each_trip=3, walk_cycles=2):
+    def _cycles(
+        cls,
+        count,
+        sweep=True,
+        sweep_below_the_gate=False,
+        sweep_includes_the_leader=False,
+        follower_queue_drains=True,
+        sell_on=(),
+        rows_each_trip=3,
+        walk_cycles=2,
+    ):
         """Run the pass `count` times and report both columns after each one.
 
         `sweep=False` is the pass as infra#3717 left it: the leader's errand
@@ -432,8 +453,10 @@ class TheStrandingIsActuallyBroken(unittest.TestCase):
             for name in who:
                 if column[name] != "vendor":
                     continue
-                if (bag_pressure.stranded_errand_step(queue[name])
-                        == bag_pressure.VENDOR_ERRAND_RELEASE):
+                if (
+                    bag_pressure.stranded_errand_step(queue[name])
+                    == bag_pressure.VENDOR_ERRAND_RELEASE
+                ):
                     column[name] = ""
 
         for cycle in range(count):
@@ -452,7 +475,8 @@ class TheStrandingIsActuallyBroken(unittest.TestCase):
             # THE PASS. The leader's own errand is settled first, above every
             # gate, exactly as infra#3708 left it.
             step = bag_pressure.vendor_errand_step(
-                at_counter, queue[leader] + queue[follower])
+                at_counter, queue[leader] + queue[follower]
+            )
             if step == bag_pressure.VENDOR_ERRAND_RELEASE:
                 column[leader] = ""
             if sweep and not sweep_below_the_gate:
@@ -469,8 +493,13 @@ class TheStrandingIsActuallyBroken(unittest.TestCase):
                 # counter, which is why a walking leader's own queue reads 0.
                 if at_counter:
                     queue[leader] += rows_each_trip
-            seen.append({leader: column[leader], follower: column[follower],
-                         "arrived": at_counter})
+            seen.append(
+                {
+                    leader: column[leader],
+                    follower: column[follower],
+                    "arrived": at_counter,
+                }
+            )
         return seen
 
     def _follower(self, seen) -> list:

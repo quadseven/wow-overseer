@@ -391,8 +391,9 @@ def _damaged(member: Member) -> list[Equipped]:
     are still standing somewhere else. Two copies of the rule would be two
     answers, and the one in the bridge would be the untested one.
     """
-    return [e for e in member.equipped
-            if 0 < e.max_durability and e.fraction < ANY_DAMAGE]
+    return [
+        e for e in member.equipped if 0 < e.max_durability and e.fraction < ANY_DAMAGE
+    ]
 
 
 def _repair(member: Member, town: Town) -> tuple[list[Errand], list[str], list[str]]:
@@ -503,12 +504,16 @@ def _hand_on(wanted, conjurers, what: str) -> tuple[list[Errand], set]:
             # THE GIVER IS THE ROW'S CHARACTER AND THE TAKER IS ITS ARGUMENT,
             # the same two roles kind='give' already carries everywhere else:
             # DoGive moves an item OUT of target_name's bags INTO target_arg's.
-            errands.append(Errand(
-                giver.name, GIVE_KIND, f"guid:{stack.guid}",
-                f"{giver.name} conjured {stack.name} and {member.name} carries "
-                f"{member.carries(what)} {what}",
-                taker=member.name,
-            ))
+            errands.append(
+                Errand(
+                    giver.name,
+                    GIVE_KIND,
+                    f"guid:{stack.guid}",
+                    f"{giver.name} conjured {stack.name} and {member.name} carries "
+                    f"{member.carries(what)} {what}",
+                    taker=member.name,
+                )
+            )
             supplied.add(member.name)
             break
     return errands, supplied
@@ -548,13 +553,15 @@ def _conjure(conjurers, dependents, what: str) -> tuple[list[Errand], list[str],
                 "a sell pass has to run first"
             )
             continue
-        mouths = (f" and {len(dependents)} other(s) with none"
-                  if dependents else "")
-        errands.append(Errand(
-            giver.name, CONJURE_KIND,
-            f"{CONJURE_WORD[what]} up_to:{target}",
-            f"carries {carried} {what}, wants {target} for itself{mouths}",
-        ))
+        mouths = f" and {len(dependents)} other(s) with none" if dependents else ""
+        errands.append(
+            Errand(
+                giver.name,
+                CONJURE_KIND,
+                f"{CONJURE_WORD[what]} up_to:{target}",
+                f"carries {carried} {what}, wants {target} for itself{mouths}",
+            )
+        )
         supplied.add(giver.name)
         dependents = []
     return errands, notes, supplied
@@ -595,8 +602,7 @@ def _supply(members, town: Town, what: str) -> tuple[list[Errand], list[str]]:
 
     conjurers = [m for m in ordered if m.conjures(what)]
     errands, supplied = _hand_on(wanted, conjurers, what)
-    dependents = [m for m in wanted
-                  if not m.conjures(what) and m.name not in supplied]
+    dependents = [m for m in wanted if not m.conjures(what) and m.name not in supplied]
     made, notes, cast_for = _conjure(conjurers, dependents, what)
     errands.extend(made)
     supplied |= cast_for
@@ -686,13 +692,11 @@ def counter_keys(members, trip: Plan) -> tuple[tuple[str, str], ...]:
     town at all, so neither is work the travel column serves.
     """
     keys = {(m.name, REPAIR_COMMAND) for m in members if _damaged(m)}
-    keys.update((e.member, e.command) for e in trip.errands
-                if e.kind in COUNTER_KINDS)
+    keys.update((e.member, e.command) for e in trip.errands if e.kind in COUNTER_KINDS)
     return tuple(sorted(keys))
 
 
-def errand_step(at_counter: bool, rows_outstanding: int,
-                work_unasked: bool) -> str:
+def errand_step(at_counter: bool, rows_outstanding: int, work_unasked: bool) -> str:
     """What to do with the leader's `repair` aim this pass (infra#3728).
 
     THE ERRAND HAD NO TERMINAL PATH, WHICH IS THE WHOLE BUG AND IT IS THE SAME
@@ -837,8 +841,7 @@ def town_from_rows(rows) -> Town:
         # would otherwise make `plan` promise a purchase nobody can make.
         if entry and flags & NPC_FLAG_VENDOR:
             stocks.add(entry)
-    return Town(repairs=repairs, stocks=frozenset(stocks), vendor=vendor,
-                banker=banker)
+    return Town(repairs=repairs, stocks=frozenset(stocks), vendor=vendor, banker=banker)
 
 
 def members_from_rows(rows, carried, spells, free_slots, names) -> tuple:
@@ -913,11 +916,16 @@ def members_from_rows(rows, carried, spells, free_slots, names) -> tuple:
             drink[holder] += count
         guid = _int(row.get("guid"))
         if guid > 0:
-            stacks[holder].append(Stack(
-                guid=guid, entry=_int(row.get("entry")),
-                name=str(row.get("name") or "a bite"), count=count, what=what,
-                conjured=bool(_int(row.get("item_flags")) & ITEM_FLAG_CONJURED),
-            ))
+            stacks[holder].append(
+                Stack(
+                    guid=guid,
+                    entry=_int(row.get("entry")),
+                    name=str(row.get("name") or "a bite"),
+                    count=count,
+                    what=what,
+                    conjured=bool(_int(row.get("item_flags")) & ITEM_FLAG_CONJURED),
+                )
+            )
 
     known = {name: set() for name in wanted}
     for row in spells:

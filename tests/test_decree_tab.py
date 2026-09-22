@@ -28,6 +28,7 @@ disabled with the reason beside it.
 
 Ticket: infra#2597.
 """
+
 import pathlib
 import re
 import unittest
@@ -46,8 +47,8 @@ CHRONICLE_CSS = "/* --- the Chronicle (infra#2597, mod-overseer#88, mod-overseer
 FURNITURE_CSS = "/* --- the redesign furniture (infra#2597)"
 REALM_JS = "// --- which world this is (quadseven/mod-overseer#184)"
 
-VIEW = PAGE[PAGE.index(JS_BANNER):PAGE.index(REALM_JS)]
-CSS = PAGE[PAGE.index(CSS_BANNER):PAGE.index(CHRONICLE_CSS)]
+VIEW = PAGE[PAGE.index(JS_BANNER) : PAGE.index(REALM_JS)]
+CSS = PAGE[PAGE.index(CSS_BANNER) : PAGE.index(CHRONICLE_CSS)]
 
 
 def rule(selector: str) -> str:
@@ -66,22 +67,25 @@ def rule(selector: str) -> str:
         if selector in heads:
             return block.group(2)
     raise AssertionError("no rule selects %r" % selector)
-SECTION = PAGE[PAGE.index('<section id="decree">'):]
-SECTION = SECTION[:SECTION.index("</section>")]
+
+
+SECTION = PAGE[PAGE.index('<section id="decree">') :]
+SECTION = SECTION[: SECTION.index("</section>")]
 
 
 class WhereTheCodeIsAllowedToSit(unittest.TestCase):
-
     def test_the_styles_sit_above_every_view_window(self):
         """Every other view's CSS window starts at its own banner, and all of
         them are below this one."""
         css = PAGE.index(CSS_BANNER)
-        for banner in (CHRONICLE_CSS,
-                       "/* --- the Council (infra#2597)",
-                       "/* --- the Eye (infra#2597)",
-                       "--- the Armory tab (infra#3096",
-                       "--- the Bags tab (quadseven/mod-overseer#88",
-                       "--- the Family tab (infra#2892)"):
+        for banner in (
+            CHRONICLE_CSS,
+            "/* --- the Council (infra#2597)",
+            "/* --- the Eye (infra#2597)",
+            "--- the Armory tab (infra#3096",
+            "--- the Bags tab (quadseven/mod-overseer#88",
+            "--- the Family tab (infra#2892)",
+        ):
             self.assertLess(css, PAGE.index(banner), banner)
 
     def test_the_shared_furniture_is_above_this_view_and_not_inside_it(self):
@@ -124,7 +128,6 @@ class WhereTheCodeIsAllowedToSit(unittest.TestCase):
 
 
 class TheTabIsReachable(unittest.TestCase):
-
     def test_the_tab_exists_beside_the_others(self):
         self.assertIn('<section id="decree">', PAGE)
         self.assertIn('db.textContent = "Decree";', PAGE)
@@ -134,43 +137,46 @@ class TheTabIsReachable(unittest.TestCase):
         """Every tab before it answers a question about the family. This one
         changes what they are doing, and it must not be the thing under the
         thumb of somebody who opened the site to check whether anybody died."""
-        self.assertLess(PAGE.index("tabs.appendChild(hb);"),
-                        PAGE.index("tabs.appendChild(db);"))
-        self.assertLess(PAGE.index("tabs.appendChild(db);"),
-                        PAGE.index("for (const id of CONTINENT_ORDER)"))
+        self.assertLess(
+            PAGE.index("tabs.appendChild(hb);"), PAGE.index("tabs.appendChild(db);")
+        )
+        self.assertLess(
+            PAGE.index("tabs.appendChild(db);"),
+            PAGE.index("for (const id of CONTINENT_ORDER)"),
+        )
 
     def test_the_view_is_an_address(self):
         """A *_VIEW constant missing from HASH_VIEWS gets no error and no
         warning: its deep link quietly opens the Family tab."""
-        listed = PAGE[PAGE.index("const HASH_VIEWS = ["):]
-        listed = listed[:listed.index("]")]
+        listed = PAGE[PAGE.index("const HASH_VIEWS = [") :]
+        listed = listed[: listed.index("]")]
         self.assertIn("DECREE_VIEW", listed)
 
     def test_showview_toggles_the_section(self):
-        show = PAGE[PAGE.index("function showView"):]
-        show = show[:show.index("setInterval(pollFamily")]
+        show = PAGE[PAGE.index("function showView") :]
+        show = show[: show.index("setInterval(pollFamily")]
         self.assertIn('dcrSection.style.display = isDec ? "block" : "none";', show)
 
     def test_opening_the_tab_does_not_wait_for_the_timer(self):
         """Ten seconds of a blank console under a heading is
         indistinguishable from a broken one."""
-        show = PAGE[PAGE.index("function showView"):]
-        show = show[:show.index("setInterval(pollFamily")]
-        dec = show[show.index("if (isDec) {"):]
-        self.assertIn("pollDecree();", dec[:dec.index("return;")])
+        show = PAGE[PAGE.index("function showView") :]
+        show = show[: show.index("setInterval(pollFamily")]
+        dec = show[show.index("if (isDec) {") :]
+        self.assertIn("pollDecree();", dec[: dec.index("return;")])
 
     def test_opening_it_stops_the_things_that_belong_to_other_views(self):
         """The panel keeps a second player alive off screen and the broadcast
         grid keeps pulling video nobody can see."""
-        show = PAGE[PAGE.index("function showView"):]
-        show = show[:show.index("setInterval(pollFamily")]
-        dec = show[show.index("if (isDec) {"):]
-        head = dec[:dec.index("return;")]
+        show = PAGE[PAGE.index("function showView") :]
+        show = show[: show.index("setInterval(pollFamily")]
+        dec = show[show.index("if (isDec) {") :]
+        head = dec[: dec.index("return;")]
         self.assertIn("closePanel();", head)
         self.assertIn("stopBroadcasts();", head)
 
     def test_the_poll_stops_when_the_tab_is_not_open(self):
-        poll = VIEW[VIEW.index("async function pollDecree"):]
+        poll = VIEW[VIEW.index("async function pollDecree") :]
         self.assertIn("if (view !== DECREE_VIEW) return;", poll)
 
     def test_the_poll_matches_the_cadence_of_a_saved_column(self):
@@ -216,17 +222,17 @@ class NothingIsDecidedInJavaScript(unittest.TestCase):
     def test_the_page_never_composes_a_refusal(self):
         """A refusal is a claim about this system. The page chooses between
         sentences the module wrote; it never writes one."""
-        ladder = VIEW[VIEW.index("function dcrShowWill"):]
-        ladder = ladder[:ladder.index("async function dcrSpeak")]
+        ladder = VIEW[VIEW.index("function dcrShowWill") :]
+        ladder = ladder[: ladder.index("async function dcrSpeak")]
         for line in ladder.splitlines():
             if "refusal =" in line and "let refusal" not in line:
-                self.assertTrue(
-                    "p.will.refusals." in line or "t.why_not" in line, line)
+                self.assertTrue("p.will.refusals." in line or "t.why_not" in line, line)
 
     def test_the_page_never_names_the_family(self):
         """WHO the family is belongs to bonds, and in what order they answer
         belongs to bonds too. The audience arrives sorted."""
         import family
+
         for name in family.roster():
             self.assertNotIn('"' + name + '"', VIEW, name)
 
@@ -242,21 +248,21 @@ class NothingIsDecidedInJavaScript(unittest.TestCase):
         vocabulary that is free to change under it."""
         for word in list(jobs.MODES) + list(travel.ROLES) + list(decree.OUTCOMES):
             self.assertIsNone(
-                re.search(r"\b%s\b" % re.escape(word), SECTION.lower()), word)
+                re.search(r"\b%s\b" % re.escape(word), SECTION.lower()), word
+            )
 
 
 class TheHonestyMechanisms(unittest.TestCase):
-
     def test_picking_a_mode_prints_the_modules_own_sentence(self):
         """Selecting an unwired mode must SAY that it stands the quest drive
         down. The sentence is jobs.describe, riding on the chip."""
-        show = VIEW[VIEW.index("function dcrShowJob"):]
-        show = show[:show.index("function dcrShowRole")]
+        show = VIEW[VIEW.index("function dcrShowJob") :]
+        show = show[: show.index("function dcrShowRole")]
         self.assertIn("dcrJobSays.textContent = c ? c.says", show)
 
     def test_an_unwired_mode_is_drawn_as_a_warning_and_not_a_caption(self):
-        show = VIEW[VIEW.index("function dcrShowJob"):]
-        show = show[:show.index("function dcrShowRole")]
+        show = VIEW[VIEW.index("function dcrShowJob") :]
+        show = show[: show.index("function dcrShowRole")]
         self.assertIn('dcrJobSays.classList.toggle("warn", !!c && !c.wired);', show)
         self.assertIn("var(--warn-bg)", rule(".dcrsays.warn"))
         self.assertIn("color:var(--warn-text)", rule(".dcrsays.warn"))
@@ -264,7 +270,7 @@ class TheHonestyMechanisms(unittest.TestCase):
     def test_the_dot_never_carries_the_state_alone(self):
         """A dot is not readable. The chip's title says the same thing in the
         module's words, for anybody who cannot use the colour."""
-        build = VIEW[VIEW.index("function dcrBuildChips"):]
+        build = VIEW[VIEW.index("function dcrBuildChips") :]
         self.assertIn("b.title = c.says;", build)
 
     def test_delivered_is_not_drawn_in_the_success_colour(self):
@@ -285,8 +291,8 @@ class TheHonestyMechanisms(unittest.TestCase):
             self.assertIn("color:var(--", rule(".dcrword." + tone), tone)
 
     def test_the_row_id_and_the_evidence_are_both_drawn(self):
-        draw = VIEW[VIEW.index("function dcrOutcome"):]
-        draw = draw[:draw.index("function renderDecree")]
+        draw = VIEW[VIEW.index("function dcrOutcome") :]
+        draw = draw[: draw.index("function renderDecree")]
         self.assertIn('"row " + o.id', draw)
         self.assertIn("o.evidence", draw)
         self.assertIn("o.means", draw)
@@ -300,16 +306,19 @@ class BothFamiliesAndPlainOutcomes(unittest.TestCase):
     with its verdict and says when it was sent."""
 
     def test_each_familys_job_and_campaign_is_drawn(self):
-        render = VIEW[VIEW.index("function renderDecree"):]
+        render = VIEW[VIEW.index("function renderDecree") :]
         self.assertIn("for (const f of fams) {", render)
         self.assertIn("f.job.line", render)
         self.assertIn("f.campaign.line", render)
 
     def test_family_wide_orders_name_the_family(self):
-        for anchor in ("dcrJobSend.onclick", "dcrCampSend.onclick",
-                       "dcrCampReset.onclick"):
-            body = VIEW[VIEW.index(anchor):]
-            body = body[:body.index("};")]
+        for anchor in (
+            "dcrJobSend.onclick",
+            "dcrCampSend.onclick",
+            "dcrCampReset.onclick",
+        ):
+            body = VIEW[VIEW.index(anchor) :]
+            body = body[: body.index("};")]
             self.assertIn("family: dcr.fam", body, anchor)
 
     def test_the_family_picker_is_in_the_markup_for_both_cards(self):
@@ -317,21 +326,21 @@ class BothFamiliesAndPlainOutcomes(unittest.TestCase):
         self.assertIn('id="dcrcampfam"', SECTION)
 
     def test_the_picker_hides_when_there_is_no_choice(self):
-        build = VIEW[VIEW.index("function dcrBuildFamilies"):]
+        build = VIEW[VIEW.index("function dcrBuildFamilies") :]
         self.assertIn("row.hidden = fams.length < 2;", build)
 
     def test_one_card_per_order_with_its_verdict_and_age(self):
-        card = VIEW[VIEW.index("function dcrOrderCard"):]
-        card = card[:card.index("function renderDecree")]
+        card = VIEW[VIEW.index("function dcrOrderCard") :]
+        card = card[: card.index("function renderDecree")]
         self.assertIn("b.verdict", card)
         self.assertIn("b.ago", card)
         self.assertIn("b.who", card)
-        render = VIEW[VIEW.index("function renderDecree"):]
+        render = VIEW[VIEW.index("function renderDecree") :]
         self.assertIn("for (const b of p.orders)", render)
 
     def test_each_character_leads_with_a_plain_verdict(self):
-        draw = VIEW[VIEW.index("function dcrOutcome"):]
-        draw = draw[:draw.index("function dcrOrderCard")]
+        draw = VIEW[VIEW.index("function dcrOutcome") :]
+        draw = draw[: draw.index("function dcrOrderCard")]
         self.assertIn('el("div", "dcrmeans", o.verdict)', draw)
 
 
@@ -345,11 +354,18 @@ class ControlsThatCannotReachTheWorld(unittest.TestCase):
         """Disabled until a payload says otherwise: a button that is live
         before the first poll is a button pressed against a console that has
         not read the world yet."""
-        for control in ("dcrcampup", "dcrcampdown", "dcrjobsend",
-                        "dcrcampsend", "dcrcampreset", "dcrtravelsend",
-                        "dcrtravelstop", "dcrsend"):
-            button = SECTION[SECTION.index('id="' + control + '"'):]
-            self.assertIn("disabled", button[:button.index(">")], control)
+        for control in (
+            "dcrcampup",
+            "dcrcampdown",
+            "dcrjobsend",
+            "dcrcampsend",
+            "dcrcampreset",
+            "dcrtravelsend",
+            "dcrtravelstop",
+            "dcrsend",
+        ):
+            button = SECTION[SECTION.index('id="' + control + '"') :]
+            self.assertIn("disabled", button[: button.index(">")], control)
 
     def test_the_campaign_steppers_only_draft_and_never_write(self):
         """A thumb resting on `+` must not walk the live campaign upwards one
@@ -358,17 +374,19 @@ class ControlsThatCannotReachTheWorld(unittest.TestCase):
         # The whole handler, pinned as a literal rather than searched for an
         # absent word: "no dcrOrder in the next N characters" passes for a
         # window that stopped one character early.
-        self.assertIn("dcrCampUp.onclick = () => { dcr.wanted += 1; dcrShowCamp(); };",
-                      VIEW)
-        self.assertIn("dcrCampDown.onclick = () => { dcr.wanted -= 1; dcrShowCamp(); };",
-                      VIEW)
+        self.assertIn(
+            "dcrCampUp.onclick = () => { dcr.wanted += 1; dcrShowCamp(); };", VIEW
+        )
+        self.assertIn(
+            "dcrCampDown.onclick = () => { dcr.wanted -= 1; dcrShowCamp(); };", VIEW
+        )
 
     def test_the_campaign_bounds_are_the_payloads_and_not_this_files(self):
         """`floor` is the value that stops a campaign outright and `ceiling`
         is the column's own. A page holding either would be a second copy of a
         fact the database decides."""
-        show = VIEW[VIEW.index("function dcrShowCamp"):]
-        show = show[:show.index("dcrCampUp.onclick")]
+        show = VIEW[VIEW.index("function dcrShowCamp") :]
+        show = show[: show.index("dcrCampUp.onclick")]
         self.assertIn("dcr.wanted >= p.campaign.ceiling", show)
         self.assertIn("dcr.wanted <= p.campaign.floor", show)
         self.assertNotIn(str(decree.CAMPAIGN_CEILING), PAGE)
@@ -377,13 +395,11 @@ class ControlsThatCannotReachTheWorld(unittest.TestCase):
         """Seeded once from the world, then owned by the page. A poll that
         reset the counter every ten seconds would change the subject under a
         reader about to press send."""
-        render = VIEW[VIEW.index("function renderDecree"):]
+        render = VIEW[VIEW.index("function renderDecree") :]
         # Seeded from the chosen family's own row, and only while unset.
         self.assertIn("if (dcr.wanted === null) {", render)
-        self.assertIn("dcr.wanted = f ? f.campaign.wanted : p.campaign.wanted;",
-                      render)
-        self.assertNotIn("dcrCampNum.textContent = String(p.campaign.wanted);",
-                         render)
+        self.assertIn("dcr.wanted = f ? f.campaign.wanted : p.campaign.wanted;", render)
+        self.assertNotIn("dcrCampNum.textContent = String(p.campaign.wanted);", render)
 
     def test_they_are_exactly_44px(self):
         self.assertIn("width:44px", rule(".dcrstepbtn"))
@@ -393,13 +409,12 @@ class ControlsThatCannotReachTheWorld(unittest.TestCase):
         """The chip stays pressable so the stand-down warning can be read; it
         is the SEND that is refused. `sendable` is the payload's word - this
         file never compares a mode against a list of the wired ones."""
-        show = VIEW[VIEW.index("function dcrShowJob"):]
-        show = show[:show.index("dcrJobSend.onclick")]
+        show = VIEW[VIEW.index("function dcrShowJob") :]
+        show = show[: show.index("dcrJobSend.onclick")]
         self.assertIn("dcrJobSend.disabled = dcr.busy || !(c && c.sendable);", show)
-        build = VIEW[VIEW.index("function dcrBuildChips"):]
-        build = build[:build.index("async function dcrOrder")]
-        self.assertIn(
-            "dcrJobNote.textContent = c.sendable ? \"\" : c.why_not;", build)
+        build = VIEW[VIEW.index("function dcrBuildChips") :]
+        build = build[: build.index("async function dcrOrder")]
+        self.assertIn('dcrJobNote.textContent = c.sendable ? "" : c.why_not;', build)
         for mode in decree.unwired_modes():
             self.assertNotIn('"%s"' % mode, VIEW, mode)
 
@@ -409,29 +424,32 @@ class ControlsThatCannotReachTheWorld(unittest.TestCase):
         and by the send. A render that wrote either would blank the result the
         moment the poll that follows a send came back, which is a console
         reporting nothing about a write that happened."""
-        render = VIEW[VIEW.index("function renderDecree"):]
-        show = VIEW[VIEW.index("function dcrShowJob"):VIEW.index("dcrJobSend.onclick")]
+        render = VIEW[VIEW.index("function renderDecree") :]
+        show = VIEW[
+            VIEW.index("function dcrShowJob") : VIEW.index("dcrJobSend.onclick")
+        ]
         for note in ("dcrJobNote", "dcrCampNote", "dcrTravelNote"):
             self.assertNotIn(note + ".textContent", render, note)
             self.assertNotIn(note + ".textContent", show, note)
 
     def test_a_card_says_what_it_does_to_the_world_either_way(self):
-        refusal = VIEW[VIEW.index("function dcrRefusal"):]
-        refusal = refusal[:refusal.index("function dcrBuildChips")]
-        self.assertIn('if (sec.can_send) { node.appendChild(el("div", "dcrev", sec.does)); return; }',
-                      refusal)
+        refusal = VIEW[VIEW.index("function dcrRefusal") :]
+        refusal = refusal[: refusal.index("function dcrBuildChips")]
+        self.assertIn(
+            'if (sec.can_send) { node.appendChild(el("div", "dcrev", sec.does)); return; }',
+            refusal,
+        )
         self.assertIn("sec.why_not", refusal)
         self.assertIn("sec.instead", refusal)
 
     def test_an_unreachable_target_is_disabled_and_carries_its_reason(self):
-        chip = VIEW[VIEW.index("function dcrChip"):]
-        chip = chip[:chip.index("function dcrPress")]
+        chip = VIEW[VIEW.index("function dcrChip") :]
+        chip = chip[: chip.index("function dcrPress")]
         self.assertIn("if (why) { b.disabled = true; b.title = why; }", chip)
         self.assertIn("else b.onclick = onPick;", chip)
 
 
 class TheOnlyThingItSends(unittest.TestCase):
-
     def test_the_decree_goes_down_the_chat_path_that_already_existed(self):
         """Not a second endpoint and not a second grammar. The character
         panel's chat box has posted here since infra#2604."""
@@ -444,24 +462,24 @@ class TheOnlyThingItSends(unittest.TestCase):
         self.assertEqual(VIEW.count('fetch(u("/api/decree"), {'), 1)
 
     def test_one_post_per_character_and_never_a_fan_out_endpoint(self):
-        speak = VIEW[VIEW.index("async function dcrSpeak"):]
-        speak = speak[:speak.index("dcrSend.onclick")]
+        speak = VIEW[VIEW.index("async function dcrSpeak") :]
+        speak = speak[: speak.index("dcrSend.onclick")]
         self.assertIn("for (const name of names)", speak)
         self.assertIn("JSON.stringify({ name: name, text: text })", speak)
 
     def test_a_logged_out_member_is_reported_and_not_dropped(self):
         """/api/chat composes `say` for both cases, so a member who is not in
         the world is reported in the server's own words."""
-        speak = VIEW[VIEW.index("async function dcrSpeak"):]
-        speak = speak[:speak.index("dcrSend.onclick")]
+        speak = VIEW[VIEW.index("async function dcrSpeak") :]
+        speak = speak[: speak.index("dcrSend.onclick")]
         self.assertIn("said.textContent = a.say;", speak)
 
     def test_a_queued_row_is_called_queued(self):
         """A row on the queue has not been handed over, and a handed-over row
         has not been applied. The word on the line is the weakest of the
         three on purpose."""
-        speak = VIEW[VIEW.index("async function dcrSpeak"):]
-        speak = speak[:speak.index("dcrSend.onclick")]
+        speak = VIEW[VIEW.index("async function dcrSpeak") :]
+        speak = speak[: speak.index("dcrSend.onclick")]
         self.assertIn('"queued command row " + a.command_id', speak)
 
     def test_the_row_id_comes_back_from_the_endpoint(self):
@@ -471,16 +489,16 @@ class TheOnlyThingItSends(unittest.TestCase):
         self.assertIn("row_id = None", SERVER)
 
     def test_the_send_is_disabled_while_it_is_speaking(self):
-        speak = VIEW[VIEW.index("async function dcrSpeak"):]
-        speak = speak[:speak.index("dcrSend.onclick")]
+        speak = VIEW[VIEW.index("async function dcrSpeak") :]
+        speak = speak[: speak.index("dcrSend.onclick")]
         self.assertIn("dcr.busy = true;", speak)
         self.assertIn("dcrSend.disabled = true;", speak)
 
     def test_what_became_of_it_is_read_off_the_queue(self):
         """Not taken from the send's own reply. The queue is the only thing
         that knows, and it knows later."""
-        speak = VIEW[VIEW.index("async function dcrSpeak"):]
-        speak = speak[:speak.index("dcrSend.onclick")]
+        speak = VIEW[VIEW.index("async function dcrSpeak") :]
+        speak = speak[: speak.index("dcrSend.onclick")]
         self.assertIn("pollDecree();", speak)
 
 
@@ -491,50 +509,50 @@ class TheEndpointIsAnAdapter(unittest.TestCase):
     def test_it_reads_what_the_read_back_needs(self):
         """The newest job row per character from any source, and the family
         each roster row belongs to, both read in the console's own fetch."""
-        fetch = SERVER[SERVER.index("def _fetch_decree"):]
-        fetch = fetch[:fetch.index("def _fetch_roster_rows")]
+        fetch = SERVER[SERVER.index("def _fetch_decree") :]
+        fetch = fetch[: fetch.index("def _fetch_roster_rows")]
         self.assertIn("WHERE kind = 'job' GROUP BY target_name", fetch)
         self.assertIn('"newest_job_rows": newest_job_rows', fetch)
         self.assertIn("_with_family(cur, roster_rows)", fetch)
         self.assertIn("SELECT name, family FROM overseer_roster", fetch)
 
     def test_an_order_is_planned_against_the_same_families(self):
-        plan = SERVER[SERVER.index("def _fetch_roster_rows"):]
-        plan = plan[:plan.index("def _apply_order")]
+        plan = SERVER[SERVER.index("def _fetch_roster_rows") :]
+        plan = plan[: plan.index("def _apply_order")]
         self.assertIn("return _with_family(cur, rows)", plan)
 
     def test_it_is_in_the_route_table(self):
-        table = SERVER[SERVER.index("GET_ROUTES = {"):]
-        self.assertIn('"/api/decree": _decree,', table[:table.index("}")])
+        table = SERVER[SERVER.index("GET_ROUTES = {") :]
+        self.assertIn('"/api/decree": _decree,', table[: table.index("}")])
 
     def test_the_write_endpoint_is_in_the_post_table(self):
-        post = SERVER[SERVER.index("POST_ROUTES = {"):]
-        self.assertIn('"/api/decree": _decree_post,', post[:post.index("}")])
+        post = SERVER[SERVER.index("POST_ROUTES = {") :]
+        self.assertIn('"/api/decree": _decree_post,', post[: post.index("}")])
 
     def test_the_handler_only_fetches_and_serves(self):
-        handler = SERVER[SERVER.index("    def _decree(self"):]
-        handler = handler[:handler.index("    def _watch_state(self")]
+        handler = SERVER[SERVER.index("    def _decree(self") :]
+        handler = handler[: handler.index("    def _watch_state(self")]
         self.assertIn("decree.build_console(**_fetch_decree())", handler)
         self.assertNotIn("query.get", handler)
 
     def test_a_failed_query_is_a_503_and_never_a_blank_console(self):
-        handler = SERVER[SERVER.index("    def _decree(self"):]
-        handler = handler[:handler.index("    def _watch_state(self")]
+        handler = SERVER[SERVER.index("    def _decree(self") :]
+        handler = handler[: handler.index("    def _watch_state(self")]
         self.assertIn("self._send(503", handler)
         self.assertIn("log.exception", handler)
 
     def test_a_degraded_schema_thins_the_console_rather_than_breaking_it(self):
         """A realm whose worldserver predates a table must get an empty list,
         not a 503 on every poll."""
-        fetch = SERVER[SERVER.index("def _fetch_decree"):]
-        fetch = fetch[:fetch.index("class Handler")]
+        fetch = SERVER[SERVER.index("def _fetch_decree") :]
+        fetch = fetch[: fetch.index("class Handler")]
         self.assertIn("_guarded(", fetch)
 
     def test_the_orders_it_reads_back_are_its_own(self):
         """Scoped by `source`. A console showing the bridge's traffic would
         report somebody else's orders as if the operator had given them."""
-        fetch = SERVER[SERVER.index("def _fetch_decree"):]
-        fetch = fetch[:fetch.index("class Handler")]
+        fetch = SERVER[SERVER.index("def _fetch_decree") :]
+        fetch = fetch[: fetch.index("class Handler")]
         self.assertIn("WHERE source = %s", fetch)
         self.assertIn("WEB_SOURCE", fetch)
         self.assertIn("decree.OUTCOME_ROWS", fetch)
@@ -549,14 +567,13 @@ class TheEndpointIsAnAdapter(unittest.TestCase):
         """A blanked console reads as "no job is set, nobody is aimed
         anywhere, nothing is stopping them", which is the opposite of every
         fact on it."""
-        poll = VIEW[VIEW.index("async function pollDecree"):]
-        catch = poll[poll.index("} catch"):]
+        poll = VIEW[VIEW.index("async function pollDecree") :]
+        catch = poll[poll.index("} catch") :]
         self.assertIn('dcrHead.classList.add("stale");', catch)
         self.assertNotIn("replaceChildren", catch)
 
 
 class TheDesignTokens(unittest.TestCase):
-
     def test_no_pigment_is_ever_set_as_text(self):
         """--amber as text on paper is 2.5:1 and --green is 3.0:1. Both are
         fine as a 10px dot and neither is legible as a sentence, which is what
@@ -569,34 +586,46 @@ class TheDesignTokens(unittest.TestCase):
 
         The `color` property only, too: border-color and background still take
         a pigment, because a 4px rule and a 10px dot are shapes."""
-        for pigment in ("--rust", "--amber", "--green", "--vermilion",
-                        "--deep-green", "--cyan"):
+        for pigment in (
+            "--rust",
+            "--amber",
+            "--green",
+            "--vermilion",
+            "--deep-green",
+            "--cyan",
+        ):
             hit = re.search(r"(?<![-\w])color:var\(%s\)" % pigment, CSS)
             self.assertIsNone(hit, pigment)
 
     def test_the_text_roles_it_uses_are_defined_in_all_three_theme_states(self):
         """A token defined only inside the dark media query is invisible to a
         reader whose system preference does not match."""
-        style = PAGE[PAGE.index("<style>"):PAGE.index("</style>")]
+        style = PAGE[PAGE.index("<style>") : PAGE.index("</style>")]
         for token in ("--caution-text", "--accent-text", "--warn-text"):
             self.assertGreaterEqual(style.count(token + ":"), 3, token)
 
     def test_the_chips_are_pills_and_ink_when_active(self):
         self.assertIn("border-radius:999px", rule(".dcrchip"))
-        self.assertIn("background:var(--ink)",
-                      rule('.dcrchip[aria-pressed="true"]'))
+        self.assertIn("background:var(--ink)", rule('.dcrchip[aria-pressed="true"]'))
 
     def test_every_hit_target_is_at_least_44px(self):
         for selector in (".dcrchip", ".dcrstepbtn", "#dcrsend"):
-            self.assertTrue(
-                re.search(r"(min-)?height:44px", rule(selector)), selector)
+            self.assertTrue(re.search(r"(min-)?height:44px", rule(selector)), selector)
 
     def test_numbers_labels_and_status_words_are_set_in_the_mono(self):
         """Every number, label and machine word. Mono is what this whole page
         sets DATA in, and a status word is data."""
-        for selector in (".dcrnum", ".dcrword", ".dcrid", ".dcrlabel",
-                         ".dcrchip", ".dcrnow", ".dcrtag", ".dcrnumlabel",
-                         "#dcrhead"):
+        for selector in (
+            ".dcrnum",
+            ".dcrword",
+            ".dcrid",
+            ".dcrlabel",
+            ".dcrchip",
+            ".dcrnow",
+            ".dcrtag",
+            ".dcrnumlabel",
+            "#dcrhead",
+        ):
             self.assertIn("font-family:var(--mono)", rule(selector), selector)
 
     def test_there_is_one_breakpoint_and_it_is_640px(self):
@@ -607,7 +636,7 @@ class TheDesignTokens(unittest.TestCase):
         """showView sets display inline on the section, and an inline style
         beats a media query - so a grid declared on #decree would silently
         never apply."""
-        block = CSS[CSS.index("@media (min-width:640px)"):]
+        block = CSS[CSS.index("@media (min-width:640px)") :]
         self.assertIn("#dcrgrid { display:grid", block)
         self.assertNotIn("#decree {", block)
 
@@ -616,11 +645,11 @@ class TheDesignTokens(unittest.TestCase):
 
 
 class TheHouseRules(unittest.TestCase):
-
     def test_no_em_dashes(self):
         for name in ("index.html", "tests/test_decree_tab.py"):
-            self.assertNotIn(chr(0x2014),
-                             (HERE / name).read_text(encoding="utf-8"), name)
+            self.assertNotIn(
+                chr(0x2014), (HERE / name).read_text(encoding="utf-8"), name
+            )
 
     def test_no_framework_arrived_with_the_view(self):
         """No bundler, no component library, no CSS kit. The whole frontend is

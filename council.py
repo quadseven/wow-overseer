@@ -151,7 +151,7 @@ class Council:
 
 
 def _more_levels(n: int) -> str:
-    """"I want 1 more levels" is the sort of thing that breaks the spell."""
+    """ "I want 1 more levels" is the sort of thing that breaks the spell."""
     return "I want one more level." if n == 1 else f"I want {n} more levels."
 
 
@@ -188,7 +188,9 @@ def assess(me: Member, *, public_levels: dict) -> Proposal | None:
         if laggards:
             level, who = laggards[0]
             return Proposal(
-                proposer=me.name, kind="level", beneficiary=who,
+                proposer=me.name,
+                kind="level",
+                beneficiary=who,
                 target=min(median, level + BEHIND_BY),
                 weight=100 - level,
                 said=f"{who} is still {level}. We should not leave them behind.",
@@ -199,8 +201,11 @@ def assess(me: Member, *, public_levels: dict) -> Proposal | None:
     # murlocs, because levels were the only thing the council could see.
     if me.quest:
         return Proposal(
-            proposer=me.name, kind="quest", beneficiary=me.name,
-            target=me.quest_left, quest_id=me.quest_id,
+            proposer=me.name,
+            kind="quest",
+            beneficiary=me.name,
+            target=me.quest_left,
+            quest_id=me.quest_id,
             # Above trades and coin, below rescuing someone left behind. A
             # half-finished quest is the most concrete thing anyone at the
             # table has, and finishing it is cheap.
@@ -213,23 +218,34 @@ def assess(me: Member, *, public_levels: dict) -> Proposal | None:
     # name on it, and going to get it is cheap next to a mount.
     if me.trade_wanted:
         return Proposal(
-            proposer=me.name, kind="trades", beneficiary=me.name,
-            target=TRADES_EXPECTED, weight=40,
-            said=(f"Family need {me.trade_wanted}. {me.name} go find "
-                  f"{me.trade_wanted} teacher."),
+            proposer=me.name,
+            kind="trades",
+            beneficiary=me.name,
+            target=TRADES_EXPECTED,
+            weight=40,
+            said=(
+                f"Family need {me.trade_wanted}. {me.name} go find "
+                f"{me.trade_wanted} teacher."
+            ),
         )
 
     if me.trades < TRADES_EXPECTED:
         return Proposal(
-            proposer=me.name, kind="trades", beneficiary=me.name,
-            target=TRADES_EXPECTED, weight=40,
+            proposer=me.name,
+            kind="trades",
+            beneficiary=me.name,
+            target=TRADES_EXPECTED,
+            weight=40,
             said="I have no trade to speak of. I should learn one.",
         )
 
     if me.level >= SAVING_FROM_LEVEL and me.gold < POOR_BELOW:
         return Proposal(
-            proposer=me.name, kind="coin", beneficiary=me.name,
-            target=POOR_BELOW, weight=50,
+            proposer=me.name,
+            kind="coin",
+            beneficiary=me.name,
+            target=POOR_BELOW,
+            weight=50,
             said="I cannot afford a mount. I need coin more than levels.",
         )
 
@@ -242,12 +258,17 @@ def assess(me: Member, *, public_levels: dict) -> Proposal | None:
         # itself five times and had everyone volunteering to assist a man with
         # a fishing rod.
         return Proposal(
-            proposer=me.name, kind="idle", beneficiary=FAMILY_AT_LARGE,
-            target=me.level, weight=5,
+            proposer=me.name,
+            kind="idle",
+            beneficiary=FAMILY_AT_LARGE,
+            target=me.level,
+            weight=5,
             said="Nothing needs doing. I am going fishing.",
         )
     return Proposal(
-        proposer=me.name, kind="level", beneficiary=me.name,
+        proposer=me.name,
+        kind="level",
+        beneficiary=me.name,
         target=me.level - (me.level % IDLE_LEVEL_STEP) + IDLE_LEVEL_STEP,
         weight=20,
         said=_more_levels(IDLE_LEVEL_STEP - (me.level % IDLE_LEVEL_STEP)),
@@ -324,8 +345,11 @@ def _merge(proposals: list) -> list:
         # exactly, and merging them would have the family agree to help with a
         # quest nobody at the table named. It is 0 for every other kind, so
         # nothing else groups differently than it did.
-        key = ((p.kind, "self", p.target, p.quest_id) if p.beneficiary == p.proposer
-               else (p.kind, p.beneficiary, p.target, p.quest_id))
+        key = (
+            (p.kind, "self", p.target, p.quest_id)
+            if p.beneficiary == p.proposer
+            else (p.kind, p.beneficiary, p.target, p.quest_id)
+        )
         grouped.setdefault(key, []).append(p)
 
     merged = []
@@ -351,8 +375,9 @@ def _withhold(proposals: list, *, history: list) -> tuple:
     speaking, withheld = [], []
     for p in proposals:
         if p.beneficiary != p.proposer and bonds.member(p.beneficiary):
-            verdict = bonds.decide(p.proposer, _Plea(p.beneficiary, p.kind),
-                                   history=history)
+            verdict = bonds.decide(
+                p.proposer, _Plea(p.beneficiary, p.kind), history=history
+            )
             if not verdict.will_answer:
                 withheld.append((p.proposer, verdict.reason))
                 continue
@@ -404,15 +429,19 @@ def _script(tally: list, withheld: list) -> list:
     # folded into one proposal so the scene would not repeat itself, but
     # silence from four characters who all agree reads as absence.
     lines.extend(f"{who}: Aye." for who in agreed)
-    lines.extend(f"{who}: {line}" for who, line in backing
-                 if who not in said_already)
+    lines.extend(f"{who}: {line}" for who, line in backing if who not in said_already)
     lines.append(f"{won.proposer}: Then it is settled. {won.said}")
     return lines
 
 
-def hold(members: list, *, history: list, level_rows: list[dict] | None = None,
-         cards: list[dict] | None = None,
-         completed_runs: dict[str, int] | None = None) -> Council:
+def hold(
+    members: list,
+    *,
+    history: list,
+    level_rows: list[dict] | None = None,
+    cards: list[dict] | None = None,
+    completed_runs: dict[str, int] | None = None,
+) -> Council:
     """Run one council. Members in, a conversation and one plan out.
 
     Deterministic: the same state produces the same plan every time, so the
@@ -439,13 +468,14 @@ def hold(members: list, *, history: list, level_rows: list[dict] | None = None,
     # One member at a time, and only public levels alongside. Passing the whole
     # list here is what would quietly let a member reason about everyone
     # else's gold.
-    raw = [p for p in (assess(m, public_levels=public_levels) for m in speakers)
-           if p is not None]
+    raw = [
+        p
+        for p in (assess(m, public_levels=public_levels) for m in speakers)
+        if p is not None
+    ]
     # The one proposal not spoken for by assess(). See the docstring above
     # for why it lives here instead.
-    dungeon = _dungeon_proposal(
-        speakers, level_rows or [], cards or [], completed_runs
-    )
+    dungeon = _dungeon_proposal(speakers, level_rows or [], cards or [], completed_runs)
     if dungeon is not None:
         raw.append(dungeon)
     if not raw:
@@ -462,9 +492,14 @@ def hold(members: list, *, history: list, level_rows: list[dict] | None = None,
     score, _, won, _, _ = tally[0]
     return Council(
         lines=_script(tally, withheld),
-        plan=Plan(kind=won.kind, beneficiary=won.beneficiary,
-                  target=won.target, reason=won.said, quest_id=won.quest_id,
-                  keyword=won.keyword),
+        plan=Plan(
+            kind=won.kind,
+            beneficiary=won.beneficiary,
+            target=won.target,
+            reason=won.said,
+            quest_id=won.quest_id,
+            keyword=won.keyword,
+        ),
         reason=f"{won.proposer}'s plan carried at {score}",
     )
 
@@ -522,14 +557,14 @@ OUTSIDER_HUE = "muted"
 # them), and they fill the run of levels between Razorfen Kraul and Scarlet
 # Monastery's cathedral rather than leaving a gap prospects() cannot speak to.
 PLACES = {
-    389: 15,   # Ragefire Chasm
-    43: 17,    # Wailing Caverns
-    36: 17,    # The Deadmines
-    33: 22,    # Shadowfang Keep
-    48: 24,    # Blackfathom Deeps
-    34: 24,    # The Stockade
-    90: 29,    # Gnomeregan
-    47: 30,    # Razorfen Kraul
+    389: 15,  # Ragefire Chasm
+    43: 17,  # Wailing Caverns
+    36: 17,  # The Deadmines
+    33: 22,  # Shadowfang Keep
+    48: 24,  # Blackfathom Deeps
+    34: 24,  # The Stockade
+    90: 29,  # Gnomeregan
+    47: 30,  # Razorfen Kraul
     # ONE NUMBER PER MAP ID, and Scarlet Monastery is four wings on one map
     # (189). This entry is the GRAVEYARD's level - the wing met first, at the
     # door - because that is what "wants" means for every other entry here:
@@ -538,10 +573,10 @@ PLACES = {
     # once it settles on Scarlet Monastery is a narrower question, answered by
     # SCARLET_WINGS below rather than by trying to force four rows onto one
     # map id.
-    189: 28,   # Scarlet Monastery (Graveyard: Interrogator Vishas, Bloodmage Thalnos)
-    129: 33,   # Razorfen Downs
-    70: 34,    # Uldaman
-    209: 36,   # Zul'Farrak
+    189: 28,  # Scarlet Monastery (Graveyard: Interrogator Vishas, Bloodmage Thalnos)
+    129: 33,  # Razorfen Downs
+    70: 34,  # Uldaman
+    209: 36,  # Zul'Farrak
     # EXTENDED AGAIN 2026-09-19 (infra#4247), for the same reason and one level
     # range further on: the table topped out at Zul'Farrak (36) while all five
     # of the family sat at 60, so the hardest place `prospects()` could name
@@ -552,7 +587,7 @@ PLACES = {
     # 40 walk in, and what is spawned on map 230 on this pinned core is trash
     # at 48 to 60 and rare elites at 52 to 56. See dungeonprogression.py, where
     # the same number is quoted beside the world rows it was read from.
-    230: 52,   # Blackrock Depths
+    230: 52,  # Blackrock Depths
 }
 
 # The four wings of Scarlet Monastery (map 189, PLACES above), by the level
@@ -562,10 +597,10 @@ PLACES = {
 # itself: it is one number per map id, and all four wings share map 189.
 SCARLET_MAP_ID = 189
 SCARLET_WINGS = (
-    ("scarlet", 28),               # graveyard: Interrogator Vishas, Bloodmage Thalnos
-    ("scarlet-library", 33),       # Houndmaster Loksey, Arcanist Doan
-    ("scarlet-armory", 36),        # Herod
-    ("scarlet-cathedral", 39),     # Whitemane, Mograine
+    ("scarlet", 28),  # graveyard: Interrogator Vishas, Bloodmage Thalnos
+    ("scarlet-library", 33),  # Houndmaster Loksey, Arcanist Doan
+    ("scarlet-armory", 36),  # Herod
+    ("scarlet-cathedral", 39),  # Whitemane, Mograine
 )
 
 # What the operator set by hand the night these wings went live. Not derived
@@ -652,20 +687,21 @@ def transcript(rows: list[dict]) -> list[dict]:
     """
     sitting = sittings(rows)[-1:] or [[]]
     lines = sitting[0]
-    order = bonds.speaking_order({bonds.canon(row["character_name"])
-                                  for row in lines})
+    order = bonds.speaking_order({bonds.canon(row["character_name"]) for row in lines})
     rank = {name: index for index, name in enumerate(order)}
     ordered = sorted(
         lines,
-        key=lambda row: (rank[bonds.canon(row["character_name"])],
-                         row["created_at"]),
+        key=lambda row: (rank[bonds.canon(row["character_name"])], row["created_at"]),
     )
-    return [{
-        "who": bonds.canon(row["character_name"]),
-        "hue": speaker_hue(row["character_name"]),
-        "text": str(row.get("text") or ""),
-        "at": _iso(row["created_at"]),
-    } for row in ordered]
+    return [
+        {
+            "who": bonds.canon(row["character_name"]),
+            "hue": speaker_hue(row["character_name"]),
+            "text": str(row.get("text") or ""),
+            "at": _iso(row["created_at"]),
+        }
+        for row in ordered
+    ]
 
 
 # WHICH PLACE A DUNGEON GOAL NAMES. The goal row carries the job keyword in
@@ -712,7 +748,9 @@ def _runs(target: int) -> str:
 
 def _level_sentence(who: str, row: dict, _titles: dict) -> str:
     return "The family will help %s reach level %d." % (
-        who, int(row.get("target") or 0))
+        who,
+        int(row.get("target") or 0),
+    )
 
 
 def _quest_sentence(who: str, row: dict, titles: dict) -> str:
@@ -767,7 +805,7 @@ def decision_line(row: dict, quest_titles: dict | None = None) -> str:
 
 
 def _names(names: list) -> str:
-    """"Ugga", "Ugga and Og", "Ugga, Og and Bork"."""
+    """ "Ugga", "Ugga and Og", "Ugga, Og and Bork"."""
     names = list(names)
     if not names:
         return ""
@@ -813,8 +851,10 @@ def deciding_sitting(rows: list[dict], decided_at) -> list[dict]:
     found: list[dict] = []
     for sitting in sittings(rows):
         last = sitting[-1]["created_at"]
-        if last <= decided_at + timedelta(minutes=1) \
-                and decided_at - last <= SITTING_GAP:
+        if (
+            last <= decided_at + timedelta(minutes=1)
+            and decided_at - last <= SITTING_GAP
+        ):
             found = sitting
     return found
 
@@ -835,12 +875,16 @@ def _in_effect(row: dict, standing: dict | None) -> tuple[bool | None, str]:
     kind = str(row.get("kind") or "")
     who = str(row.get("character_name") or "") or "the family"
     if kind != "dungeon":
-        return None, ("Next: the goal loop steers %s toward it until it is done "
-                      "or cancelled." % who)
+        return None, (
+            "Next: the goal loop steers %s toward it until it is done "
+            "or cancelled." % who
+        )
     place = keyword_place(str(row.get("skill_name") or ""))
     if not standing or not standing.get("job"):
-        return None, ("Whether the family is on its way to %s could not be "
-                      "read this time." % place)
+        return None, (
+            "Whether the family is on its way to %s could not be "
+            "read this time." % place
+        )
     keyword = str(row.get("skill_name") or "").strip().lower()
     job = str(standing["job"]).strip().lower()
     leader = str(standing.get("leader") or "") or who
@@ -848,22 +892,24 @@ def _in_effect(row: dict, standing: dict | None) -> tuple[bool | None, str]:
     if job in wanted:
         done = standing.get("done")
         of = standing.get("wanted")
-        tally = (" %d of %d runs done." % (done, of)
-                 if done is not None and of else "")
-        return True, ("In effect: %s's job reads %s, so the run coordinator is "
-                      "working on it.%s" % (leader, job, tally))
-    return False, ("Not in effect yet: %s's job still reads %s, and the run "
-                   "coordinator starts %s only when it reads %s. Nobody is "
-                   "heading there." % (leader, job, place,
-                                       sorted(wanted)[0]))
+        tally = " %d of %d runs done." % (done, of) if done is not None and of else ""
+        return True, (
+            "In effect: %s's job reads %s, so the run coordinator is "
+            "working on it.%s" % (leader, job, tally)
+        )
+    return False, (
+        "Not in effect yet: %s's job still reads %s, and the run "
+        "coordinator starts %s only when it reads %s. Nobody is "
+        "heading there." % (leader, job, place, sorted(wanted)[0])
+    )
 
 
-def _older(active: list[dict], won: dict,
-           quest_titles: dict | None, now: datetime | None) -> list[str]:
+def _older(
+    active: list[dict], won: dict, quest_titles: dict | None, now: datetime | None
+) -> list[str]:
     """Every other goal still marked active, newest first, one line each."""
     out = []
-    for row in sorted(active, key=lambda r: r.get("created_at") or "",
-                      reverse=True):
+    for row in sorted(active, key=lambda r: r.get("created_at") or "", reverse=True):
         if row is won:
             continue
         since = _since(now, row.get("created_at"))
@@ -872,7 +918,7 @@ def _older(active: list[dict], won: dict,
 
 
 def _since(now: datetime | None, when) -> str:
-    """"Set 3 hours ago." off two datetimes, or "" when either is missing."""
+    """ "Set 3 hours ago." off two datetimes, or "" when either is missing."""
     if now is None or not hasattr(when, "year"):
         return ""
     return "Set %s." % ago((now - when).total_seconds())
@@ -890,8 +936,9 @@ def _rows_of(lines: list[dict]) -> list[dict]:
             at = datetime.fromisoformat(str(line.get("at") or ""))
         except ValueError:
             continue
-        rows.append({"character_name": line["who"], "text": line["text"],
-                     "created_at": at})
+        rows.append(
+            {"character_name": line["who"], "text": line["text"], "created_at": at}
+        )
     return rows
 
 
@@ -903,34 +950,39 @@ def _who_line(proposer: str, spoke: list[str], silent: list[str]) -> str:
         line += " %s also spoke." % _names(others)
     if silent:
         line += " %s did not speak at that sitting." % _names(silent)
-    return line + (" The council does not record a vote; the proposal with "
-                   "the most backing carries.")
+    return line + (
+        " The council does not record a vote; the proposal with "
+        "the most backing carries."
+    )
 
 
 OUTSIDE_LABEL = "SET OUTSIDE THE COUNCIL"
 OUTSIDE_LINE = (
     "No council sitting ended just before this goal was set, so it came from "
     "somewhere else: an order in Discord or from the operator. Nobody voted "
-    "on it.")
+    "on it."
+)
 
 
 def _active(goal_rows: list[dict], members: list[str] | None) -> list[dict]:
     """The goals still marked active, narrowed to one family when named."""
-    active = [row for row in goal_rows
-              if str(row.get("status") or "") == "active"]
+    active = [row for row in goal_rows if str(row.get("status") or "") == "active"]
     if members is None:
         return active
     allowed = set(members)
-    return [row for row in active
-            if str(row.get("character_name") or "") in allowed]
+    return [row for row in active if str(row.get("character_name") or "") in allowed]
 
 
-def consensus(goal_rows: list[dict], lines: list[dict],
-              quest_titles: dict | None = None, *,
-              thought_rows: list[dict] | None = None,
-              members: list[str] | None = None,
-              standing: dict | None = None,
-              now: datetime | None = None) -> dict | None:
+def consensus(
+    goal_rows: list[dict],
+    lines: list[dict],
+    quest_titles: dict | None = None,
+    *,
+    thought_rows: list[dict] | None = None,
+    members: list[str] | None = None,
+    standing: dict | None = None,
+    now: datetime | None = None,
+) -> dict | None:
     """The newest decision, in plain words, or None when nothing is on record.
 
     WHAT A READER NEEDS FROM THE CARD, in the order they need it: what was
@@ -992,8 +1044,11 @@ def _weakest(level_rows: list[dict]) -> tuple[str, int] | None:
     gated by the member who dies at the door, and a median would report a
     family ready while one of them was four levels off it.
     """
-    known = [(str(row["name"]), int(row.get("level") or 0))
-             for row in level_rows if str(row.get("name") or "")]
+    known = [
+        (str(row["name"]), int(row.get("level") or 0))
+        for row in level_rows
+        if str(row.get("name") or "")
+    ]
     known = [row for row in known if row[1] > 0]
     if not known:
         return None
@@ -1021,10 +1076,14 @@ def verdict(short: int, been: bool, drops: list[str], who: str) -> str:
             return "They have been in. Nothing came out of it, and nothing is stopping them trying again."
         return "Nothing is stopping them. Nobody has walked in yet."
     if short <= NEAR_ENOUGH:
-        return ("Short, and near enough to try anyway: %s is the one who would "
-                "be carried." % who)
-    return ("Not yet. %s is %d levels short, and the family goes in together "
-            "or not at all." % (who, short))
+        return (
+            "Short, and near enough to try anyway: %s is the one who would "
+            "be carried." % who
+        )
+    return (
+        "Not yet. %s is %d levels short, and the family goes in together "
+        "or not at all." % (who, short)
+    )
 
 
 def _drops_seen(cards: list[dict]) -> dict:
@@ -1044,11 +1103,12 @@ def _drops_seen(cards: list[dict]) -> dict:
         for item in card.get("loot") or []:
             name = str(item.get("name") or "")
             if name:
-                bucket[name] = max(bucket.get(name, -1),
-                                   int(item.get("quality") or 0))
+                bucket[name] = max(bucket.get(name, -1), int(item.get("quality") or 0))
     return {
-        map_id: [name for name, _ in sorted(bucket.items(),
-                                            key=lambda pair: (-pair[1], pair[0]))]
+        map_id: [
+            name
+            for name, _ in sorted(bucket.items(), key=lambda pair: (-pair[1], pair[0]))
+        ]
         for map_id, bucket in found.items()
     }
 
@@ -1072,19 +1132,21 @@ def prospects(level_rows: list[dict], cards: list[dict]) -> list[dict]:
             continue
         short = wants - level
         seen = drops.get(map_id, [])
-        out.append({
-            "map_id": map_id,
-            "place": achievements.dungeon_name(map_id),
-            "wants": wants,
-            "short": max(short, 0),
-            "gate": gate_word(short),
-            "hue": READY_HUE if short <= 0 else SHORT_HUE,
-            "ready": short <= 0,
-            "been": map_id in been,
-            "drops": seen[:DROPS_SHOWN],
-            "more_drops": max(len(seen) - DROPS_SHOWN, 0),
-            "verdict": verdict(short, map_id in been, seen, who),
-        })
+        out.append(
+            {
+                "map_id": map_id,
+                "place": achievements.dungeon_name(map_id),
+                "wants": wants,
+                "short": max(short, 0),
+                "gate": gate_word(short),
+                "hue": READY_HUE if short <= 0 else SHORT_HUE,
+                "ready": short <= 0,
+                "been": map_id in been,
+                "drops": seen[:DROPS_SHOWN],
+                "more_drops": max(len(seen) - DROPS_SHOWN, 0),
+                "verdict": verdict(short, map_id in been, seen, who),
+            }
+        )
     return out
 
 
@@ -1110,12 +1172,12 @@ def _scarlet_keyword(level: int) -> str:
     Monastery and nowhere else: PLACES carries one number per map id and map
     189 has four doors behind it.
     """
-    return dungeonprogression.frontier_stage(SCARLET_WINGS, level,
-                                             slack=NEAR_ENOUGH)
+    return dungeonprogression.frontier_stage(SCARLET_WINGS, level, slack=NEAR_ENOUGH)
 
 
-def _wing_rated_prospects(level_rows: list[dict], cards: list[dict],
-                          level: int) -> list[dict]:
+def _wing_rated_prospects(
+    level_rows: list[dict], cards: list[dict], level: int
+) -> list[dict]:
     """prospects(), with Scarlet Monastery re-rated to the wing this family
     can actually reach.
 
@@ -1139,8 +1201,9 @@ def _wing_rated_prospects(level_rows: list[dict], cards: list[dict],
     return rated
 
 
-def _campaign_keyword(map_id: int, level: int,
-                      completed_runs: dict[str, int] | None) -> str:
+def _campaign_keyword(
+    map_id: int, level: int, completed_runs: dict[str, int] | None
+) -> str:
     """The job keyword for the dungeon the frontier picked, or "" for none.
 
     THE FRONTIER PICKS THE DUNGEON AND THIS PICKS THE DOOR, and getting those
@@ -1164,16 +1227,21 @@ def _campaign_keyword(map_id: int, level: int,
         return ""
     if completed_runs is not None:
         ordered = dungeonprogression.next_stage(
-            completed_runs, DUNGEON_RUNS_WANTED, stages=stages,
+            completed_runs,
+            DUNGEON_RUNS_WANTED,
+            stages=stages,
         )
         if ordered:
             return ordered
     return dungeonprogression.frontier_stage(stages, level, slack=NEAR_ENOUGH)
 
 
-def _dungeon_proposal(speakers: list, level_rows: list[dict],
-                      cards: list[dict],
-                      completed_runs: dict[str, int] | None = None) -> Proposal | None:
+def _dungeon_proposal(
+    speakers: list,
+    level_rows: list[dict],
+    cards: list[dict],
+    completed_runs: dict[str, int] | None = None,
+) -> Proposal | None:
     """A family-wide proposal to run a dungeon, when one is actually ready.
 
     Built from prospects() - the exact readiness gate the Council tab already
@@ -1221,10 +1289,14 @@ def _dungeon_proposal(speakers: list, level_rows: list[dict],
     if best["ready"]:
         said = f"{place} will not trouble us now. We should go in."
     else:
-        said = (f"{place} is close enough to try. {who} would be carried, "
-                f"and I would rather we went than waited.")
+        said = (
+            f"{place} is close enough to try. {who} would be carried, "
+            f"and I would rather we went than waited."
+        )
     return Proposal(
-        proposer=voice.name, kind="dungeon", beneficiary=voice.name,
+        proposer=voice.name,
+        kind="dungeon",
+        beneficiary=voice.name,
         # target is DUNGEON_RUNS_WANTED, not a level or a map id: it is the
         # one number the persisted goal actually needs to drive a campaign,
         # the same way a quest proposal's target is objectives remaining
@@ -1237,7 +1309,8 @@ def _dungeon_proposal(speakers: list, level_rows: list[dict],
         # nobody left behind outranks anywhere the family could go next. See
         # the PR for the full argument.
         weight=70,
-        said=said, keyword=keyword,
+        said=said,
+        keyword=keyword,
     )
 
 
@@ -1245,18 +1318,22 @@ def quiet_line(lines: list[dict]) -> str:
     """What to say when no council is on record. Empty when there is one."""
     if lines:
         return ""
-    return ("No council is on record. They meet on their own cadence and only "
-            "when somebody has something to raise; an empty transcript is a "
-            "quiet week, not a broken page.")
+    return (
+        "No council is on record. They meet on their own cadence and only "
+        "when somebody has something to raise; an empty transcript is a "
+        "quiet week, not a broken page."
+    )
 
 
 def undecided_line(agreed: dict | None) -> str:
     """Why the consensus block is empty. Empty when it is not."""
     if agreed is not None:
         return ""
-    return ("Nothing the supervisor can drive is on the table. A council that "
-            "agrees on a quiet day has still decided something real - it is "
-            "simply not written as a goal, so this block has nothing to show.")
+    return (
+        "Nothing the supervisor can drive is on the table. A council that "
+        "agrees on a quiet day has still decided something real - it is "
+        "simply not written as a goal, so this block has nothing to show."
+    )
 
 
 # Race -> faction, 3.3.5a, the same two sets core.py counts a census by.
@@ -1265,9 +1342,12 @@ _HORDE_RACES = frozenset({2, 5, 6, 8, 10})
 
 
 def _faction(level_rows: list[dict], names: list[str]) -> str:
-    """"Alliance", "Horde" or "" off the family's own races."""
-    races = {int(row.get("race") or 0) for row in level_rows
-             if str(row.get("name") or "") in set(names)}
+    """ "Alliance", "Horde" or "" off the family's own races."""
+    races = {
+        int(row.get("race") or 0)
+        for row in level_rows
+        if str(row.get("name") or "") in set(names)
+    }
     if races and races <= _ALLIANCE_RACES:
         return "Alliance"
     if races and races <= _HORDE_RACES:
@@ -1290,24 +1370,27 @@ def families_of(roster_rows: list[dict] | None) -> list[tuple[str, list[str]]]:
         if not fam or not name:
             continue
         grouped.setdefault(fam, []).append(
-            (0 if int(row.get("lead") or 0) else 1, name))
+            (0 if int(row.get("lead") or 0) else 1, name)
+        )
     if not grouped:
         roster = bonds.speaking_order(list(bonds.FAMILY))
         return [(roster[0] if roster else "", roster)]
-    out = [(fam, [name for _, name in sorted(members)])
-           for fam, members in grouped.items()]
+    out = [
+        (fam, [name for _, name in sorted(members)]) for fam, members in grouped.items()
+    ]
     # The family bonds knows first, so the tab opens on the one that holds
     # councils; then by name, so the order does not move between polls.
-    out.sort(key=lambda pair: (not any(bonds.canon(n) for n in pair[1]),
-                               pair[0]))
+    out.sort(key=lambda pair: (not any(bonds.canon(n) for n in pair[1]), pair[0]))
     return out
 
 
 def _standing(roster_rows: list[dict] | None, names: list[str]) -> dict | None:
     """The family leader's job and campaign counter, or None if unread."""
-    rows = [row for row in roster_rows or []
-            if str(row.get("name") or "") in set(names)
-            and int(row.get("enabled", 1) or 0)]
+    rows = [
+        row
+        for row in roster_rows or []
+        if str(row.get("name") or "") in set(names) and int(row.get("enabled", 1) or 0)
+    ]
     if not rows or "job" not in rows[0]:
         return None
     lead = next((row for row in rows if int(row.get("lead") or 0)), rows[0])
@@ -1316,32 +1399,47 @@ def _standing(roster_rows: list[dict] | None, names: list[str]) -> dict | None:
         value = lead.get(key)
         return None if value is None else int(value)
 
-    return {"leader": str(lead["name"]),
-            "job": str(lead.get("job") or "quest"),
-            "done": number("dungeon_runs_done"),
-            "wanted": number("dungeon_runs_wanted")}
+    return {
+        "leader": str(lead["name"]),
+        "job": str(lead.get("job") or "quest"),
+        "done": number("dungeon_runs_done"),
+        "wanted": number("dungeon_runs_wanted"),
+    }
 
 
 NO_COUNCIL = (
     "%s's family does not hold councils. A council needs every speaker to "
     "have a written persona, and only one family has them, so nothing on "
     "this tab was decided for %s's family. Where they could go next is still "
-    "worked out from their levels below.")
+    "worked out from their levels below."
+)
 
 
-def _family_view(fam: str, names: list[str], thought_rows: list[dict],
-                 goal_rows: list[dict], level_rows: list[dict],
-                 cards: list[dict], quest_titles: dict | None,
-                 roster_rows: list[dict] | None, now: datetime) -> dict:
+def _family_view(
+    fam: str,
+    names: list[str],
+    thought_rows: list[dict],
+    goal_rows: list[dict],
+    level_rows: list[dict],
+    cards: list[dict],
+    quest_titles: dict | None,
+    roster_rows: list[dict] | None,
+    now: datetime,
+) -> dict:
     """One family's half of the tab."""
     holds = any(bonds.canon(name) for name in names)
-    mine = [row for row in level_rows
-            if str(row.get("name") or "") in set(names)]
+    mine = [row for row in level_rows if str(row.get("name") or "") in set(names)]
     if holds:
         lines = transcript(thought_rows)
-        agreed = consensus(goal_rows, lines, quest_titles,
-                           thought_rows=thought_rows, members=names,
-                           standing=_standing(roster_rows, names), now=now)
+        agreed = consensus(
+            goal_rows,
+            lines,
+            quest_titles,
+            thought_rows=thought_rows,
+            members=names,
+            standing=_standing(roster_rows, names),
+            now=now,
+        )
         quiet = quiet_line(lines)
         undecided = undecided_line(agreed)
         note = ""
@@ -1354,8 +1452,9 @@ def _family_view(fam: str, names: list[str], thought_rows: list[dict],
     faction = _faction(level_rows, names)
     return {
         "family": fam,
-        "title": ("%s's family, %s" % (fam, faction)) if faction
-                 else "%s's family" % fam,
+        "title": ("%s's family, %s" % (fam, faction))
+        if faction
+        else "%s's family" % fam,
         "faction": faction,
         "members": names,
         "holds_council": holds,
@@ -1369,11 +1468,15 @@ def _family_view(fam: str, names: list[str], thought_rows: list[dict],
     }
 
 
-def build_council(thought_rows: list[dict], goal_rows: list[dict],
-                  level_rows: list[dict], cards: list[dict],
-                  quest_titles: dict | None = None,
-                  now: datetime | None = None,
-                  roster_rows: list[dict] | None = None) -> dict:
+def build_council(
+    thought_rows: list[dict],
+    goal_rows: list[dict],
+    level_rows: list[dict],
+    cards: list[dict],
+    quest_titles: dict | None = None,
+    now: datetime | None = None,
+    roster_rows: list[dict] | None = None,
+) -> dict:
     """Rows in, the Council tab's JSON out.
 
     thought_rows  overseer_thought rows with source 'council', any order
@@ -1393,9 +1496,20 @@ def build_council(thought_rows: list[dict], goal_rows: list[dict],
     keys repeat the first family's for any older reader of this payload.
     """
     now = now or datetime.now()
-    families = [_family_view(fam, names, thought_rows, goal_rows, level_rows,
-                             cards, quest_titles, roster_rows, now)
-                for fam, names in families_of(roster_rows)]
+    families = [
+        _family_view(
+            fam,
+            names,
+            thought_rows,
+            goal_rows,
+            level_rows,
+            cards,
+            quest_titles,
+            roster_rows,
+            now,
+        )
+        for fam, names in families_of(roster_rows)
+    ]
     first = families[0]
     return {
         "generated_at": _iso(now),

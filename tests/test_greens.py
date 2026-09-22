@@ -24,6 +24,7 @@ soulbound - correct for a hand-off, wrong for the holder's own bags - so the
 holder is asked with `gear.would_wear` instead. That is the single most
 important line in this change and the first test below is it.
 """
+
 import pathlib
 import unittest
 
@@ -32,7 +33,7 @@ import disposition
 import gear
 
 WARRIOR, PALADIN, ROGUE, PRIEST, MAGE = 1, 2, 4, 5, 8
-ANY_CLASS = -1                      # item_template.AllowableClass for "all"
+ANY_CLASS = -1  # item_template.AllowableClass for "all"
 MAGE_ONLY = 1 << (MAGE - 1)
 WARRIOR_ONLY = 1 << (WARRIOR - 1)
 
@@ -50,11 +51,25 @@ def worn(name, class_id, level, **slots):
     the SQL hands over, because that is the shape the seam actually carries.
     """
     if not slots:
-        return [dict(name=name, class_id=class_id, level=level,
-                     inventory_type=None, item_level=None)]
-    return [dict(name=name, class_id=class_id, level=level,
-                 inventory_type=int(inv.lstrip("i")), item_level=int(ilvl))
-            for inv, ilvl in slots.items()]
+        return [
+            dict(
+                name=name,
+                class_id=class_id,
+                level=level,
+                inventory_type=None,
+                item_level=None,
+            )
+        ]
+    return [
+        dict(
+            name=name,
+            class_id=class_id,
+            level=level,
+            inventory_type=int(inv.lstrip("i")),
+            item_level=int(ilvl),
+        )
+        for inv, ilvl in slots.items()
+    ]
 
 
 def carried(**kw):
@@ -63,10 +78,23 @@ def carried(**kw):
     Defaults describe Og's Rigid Cape: a tradable green cloak, item level 19,
     required level 14, on a level-28 mage who has long outgrown it.
     """
-    base = dict(holder="Og", level=28, item_guid=5001, entry=9001, count=1,
-                instance_flags=0, name="Rigid Cape", quality=2, sell_price=402,
-                required_level=14, bonding=2, item_class=4, item_level=19,
-                allowable_class=ANY_CLASS, inventory_type=16)
+    base = dict(
+        holder="Og",
+        level=28,
+        item_guid=5001,
+        entry=9001,
+        count=1,
+        instance_flags=0,
+        name="Rigid Cape",
+        quality=2,
+        sell_price=402,
+        required_level=14,
+        bonding=2,
+        item_class=4,
+        item_level=19,
+        allowable_class=ANY_CLASS,
+        inventory_type=16,
+    )
     base.update(kw)
     return base
 
@@ -74,9 +102,16 @@ def carried(**kw):
 def sold(gear_rows, equipped_rows, keep_names=()):
     """Every guid the wired vendor pass would offer to a merchant."""
     fits = bag_pressure.family_fits(gear_rows, equipped_rows, THE_FIVE)
-    return {c.item_guid for c in bag_pressure.gear_candidates(
-        gear_rows, IN_TOWN, available=disposition.EXECUTABLE_TODAY,
-        fits=fits, keep_names=keep_names)}
+    return {
+        c.item_guid
+        for c in bag_pressure.gear_candidates(
+            gear_rows,
+            IN_TOWN,
+            available=disposition.EXECUTABLE_TODAY,
+            fits=fits,
+            keep_names=keep_names,
+        )
+    }
 
 
 # Three characters wearing something better in EVERY slot these tests touch:
@@ -85,9 +120,11 @@ def sold(gear_rows, equipped_rows, keep_names=()):
 # real upgrade for whoever has it, so a half-dressed fixture would prove that
 # gear is kept for the wrong reason and hide a rule that never ran.
 FULLY_DRESSED = dict(i16=30, i5=30, i7=30, i8=30, i23=30)
-OG_IS_DRESSED = (worn("Og", MAGE, 28, **FULLY_DRESSED)
-                 + worn("Grug", WARRIOR, 32, **FULLY_DRESSED)
-                 + worn("Ugga", PRIEST, 27, **FULLY_DRESSED))
+OG_IS_DRESSED = (
+    worn("Og", MAGE, 28, **FULLY_DRESSED)
+    + worn("Grug", WARRIOR, 32, **FULLY_DRESSED)
+    + worn("Ugga", PRIEST, 27, **FULLY_DRESSED)
+)
 
 
 class NothingTheFamilyWouldWearIsEverSold(unittest.TestCase):
@@ -99,8 +136,14 @@ class NothingTheFamilyWouldWearIsEverSold(unittest.TestCase):
         Soulbound and outgrown by the level margin, so every level-based test
         agrees it is disposable, and it is the best off-hand Og owns.
         """
-        orb = carried(name="Buccaneer's Orb", item_guid=7001, instance_flags=1,
-                      required_level=18, item_level=23, inventory_type=23)
+        orb = carried(
+            name="Buccaneer's Orb",
+            item_guid=7001,
+            instance_flags=1,
+            required_level=18,
+            item_level=23,
+            inventory_type=23,
+        )
         dressed = worn("Og", MAGE, 28, i23=22)
         self.assertEqual(sold([orb], dressed), set())
         # And prove the reason, not just the outcome: the holder wants it.
@@ -109,10 +152,16 @@ class NothingTheFamilyWouldWearIsEverSold(unittest.TestCase):
 
     def test_a_piece_a_sibling_would_wear_is_never_sold(self):
         """Ugga carries it, Ugga cannot use it, Og can. That is a hand-off."""
-        robe = carried(holder="Ugga", level=27, item_guid=7002,
-                       name="Mystic's Woolies", required_level=14,
-                       item_level=19, inventory_type=7,
-                       allowable_class=MAGE_ONLY)
+        robe = carried(
+            holder="Ugga",
+            level=27,
+            item_guid=7002,
+            name="Mystic's Woolies",
+            required_level=14,
+            item_level=19,
+            inventory_type=7,
+            allowable_class=MAGE_ONLY,
+        )
         family = worn("Ugga", PRIEST, 27, i7=20) + worn("Og", MAGE, 28, i7=12)
         self.assertEqual(sold([robe], family), set())
         fits = bag_pressure.family_fits([robe], family, THE_FIVE)
@@ -124,8 +173,9 @@ class NothingTheFamilyWouldWearIsEverSold(unittest.TestCase):
         "No slot for it" must never read as "nobody wants it". The slot map is
         deliberately small; this keeps it a refusal rather than a licence.
         """
-        ring = carried(name="Clay Ring", item_guid=7003, inventory_type=11,
-                       required_level=5)
+        ring = carried(
+            name="Clay Ring", item_guid=7003, inventory_type=11, required_level=5
+        )
         self.assertEqual(sold([ring], OG_IS_DRESSED), set())
         fits = bag_pressure.family_fits([ring], OG_IS_DRESSED, THE_FIVE)
         self.assertEqual(fits[7003], disposition.FIT_UNJUDGEABLE)
@@ -140,8 +190,7 @@ class NothingTheFamilyWouldWearIsEverSold(unittest.TestCase):
         Refused twice over: _SURPLUS_GEAR_SQL selects only classes 2 and 4,
         and EQUIPMENT_CLASSES excludes class 1 if one ever arrived anyway.
         """
-        bag = carried(name="Small Black Pouch", item_class=1, item_guid=7005,
-                      quality=1)
+        bag = carried(name="Small Black Pouch", item_class=1, item_guid=7005, quality=1)
         self.assertNotIn(1, bag_pressure.EQUIPMENT_CLASSES)
         self.assertEqual(sold([bag], OG_IS_DRESSED), set())
 
@@ -151,8 +200,14 @@ class NothingTheFamilyWouldWearIsEverSold(unittest.TestCase):
         The family deliberately feeds one character's crafting from the
         others' gathering, so these are not junk however green they look.
         """
-        ore = carried(name="Gold Ore", item_class=7, item_guid=7006,
-                      sell_price=500, required_level=0, inventory_type=0)
+        ore = carried(
+            name="Gold Ore",
+            item_class=7,
+            item_guid=7006,
+            sell_price=500,
+            required_level=0,
+            inventory_type=0,
+        )
         self.assertEqual(sold([ore], OG_IS_DRESSED), set())
 
     def test_the_junk_rule_still_refuses_every_uncommon(self):
@@ -163,27 +218,58 @@ class NothingTheFamilyWouldWearIsEverSold(unittest.TestCase):
         up the lot, so the greens that ARE disposable are routed through the
         gear half instead, which is restricted to weapons and armour.
         """
-        for name in ("Jade", "Gold Bar", "Ornate Bronze Lockbox",
-                     "Formula: Enchant Chest - Minor Mana"):
-            self.assertFalse(bag_pressure.sellable(bag_pressure.ItemForSale(
-                quality=2, quest_item=False, reagent=False,
-                profession_needed=False, sell_price=700)), name)
+        for name in (
+            "Jade",
+            "Gold Bar",
+            "Ornate Bronze Lockbox",
+            "Formula: Enchant Chest - Minor Mana",
+        ):
+            self.assertFalse(
+                bag_pressure.sellable(
+                    bag_pressure.ItemForSale(
+                        quality=2,
+                        quest_item=False,
+                        reagent=False,
+                        profession_needed=False,
+                        sell_price=700,
+                    )
+                ),
+                name,
+            )
 
     def test_an_item_the_owner_marked_is_never_sold(self):
         """The owner's hand brake, by name, matched case and space blind."""
-        keeper = carried(name="Journeyman's Pants", item_guid=7007,
-                         required_level=5, item_level=10, inventory_type=7)
+        keeper = carried(
+            name="Journeyman's Pants",
+            item_guid=7007,
+            required_level=5,
+            item_level=10,
+            inventory_type=7,
+        )
         self.assertEqual(sold([keeper], OG_IS_DRESSED), {7007})
-        self.assertEqual(sold([keeper], OG_IS_DRESSED,
-                              keep_names=("  journeyman's PANTS ",)), set())
+        self.assertEqual(
+            sold([keeper], OG_IS_DRESSED, keep_names=("  journeyman's PANTS ",)), set()
+        )
 
     def test_the_owners_mark_also_covers_the_junk_half_of_the_pass(self):
-        row = {"holder": "Og", "item_guid": 8001, "count": 1,
-               "name": "Ornate Bronze Lockbox", "quality": 0, "sell_price": 50,
-               "quest_item": False, "reagent": False, "profession_needed": False}
+        row = {
+            "holder": "Og",
+            "item_guid": 8001,
+            "count": 1,
+            "name": "Ornate Bronze Lockbox",
+            "quality": 0,
+            "sell_price": 50,
+            "quest_item": False,
+            "reagent": False,
+            "profession_needed": False,
+        }
         self.assertEqual(len(bag_pressure.vendor_candidates([row])), 1)
-        self.assertEqual(bag_pressure.vendor_candidates(
-            [row], keep_names=("Ornate Bronze Lockbox",)), ())
+        self.assertEqual(
+            bag_pressure.vendor_candidates(
+                [row], keep_names=("Ornate Bronze Lockbox",)
+            ),
+            (),
+        )
 
     def test_gear_still_close_to_level_is_kept_when_nobody_was_asked(self):
         """The `outgrown` margin, still doing its job wherever the gate has
@@ -191,9 +277,11 @@ class NothingTheFamilyWouldWearIsEverSold(unittest.TestCase):
         that has not been taught about `fits` gets."""
         recent = carried(item_guid=7008, required_level=25, item_level=30)
         self.assertEqual(
-            bag_pressure.gear_candidates([recent], IN_TOWN,
-                                         available=disposition.EXECUTABLE_TODAY),
-            ())
+            bag_pressure.gear_candidates(
+                [recent], IN_TOWN, available=disposition.EXECUTABLE_TODAY
+            ),
+            (),
+        )
 
     def test_a_piece_nobody_has_grown_into_yet_is_kept(self):
         """`gear.is_upgrade_for` refuses a character below the required level
@@ -202,15 +290,21 @@ class NothingTheFamilyWouldWearIsEverSold(unittest.TestCase):
         it is a future one, and selling it is the irreversible half of a
         temporary fact (infra#3464).
         """
-        early = carried(item_guid=7013, name="Feet of the Lynx",
-                        required_level=40, item_level=45, inventory_type=8)
+        early = carried(
+            item_guid=7013,
+            name="Feet of the Lynx",
+            required_level=40,
+            item_level=45,
+            inventory_type=8,
+        )
         self.assertEqual(sold([early], OG_IS_DRESSED), set())
         fits = bag_pressure.family_fits([early], OG_IS_DRESSED, THE_FIVE)
         self.assertEqual(fits[7013], disposition.FIT_NOBODY)
 
     def test_a_worthless_piece_is_not_walked_to_a_vendor(self):
-        self.assertEqual(sold([carried(item_guid=7009, sell_price=0)],
-                              OG_IS_DRESSED), set())
+        self.assertEqual(
+            sold([carried(item_guid=7009, sell_price=0)], OG_IS_DRESSED), set()
+        )
 
 
 class NotKnowingIsAlwaysAReasonToKeep(unittest.TestCase):
@@ -232,15 +326,18 @@ class NotKnowingIsAlwaysAReasonToKeep(unittest.TestCase):
         """
         rows = [carried()]
         self.assertEqual(
-            bag_pressure.gear_candidates(rows, IN_TOWN,
-                                         available=disposition.EXECUTABLE_TODAY),
-            ())
+            bag_pressure.gear_candidates(
+                rows, IN_TOWN, available=disposition.EXECUTABLE_TODAY
+            ),
+            (),
+        )
 
     def test_a_row_missing_a_gear_fact_is_dropped_not_guessed_at(self):
         broken = carried(item_guid=7011)
         del broken["item_level"]
-        self.assertEqual(bag_pressure.family_fits([broken], OG_IS_DRESSED,
-                                                  THE_FIVE), {})
+        self.assertEqual(
+            bag_pressure.family_fits([broken], OG_IS_DRESSED, THE_FIVE), {}
+        )
         self.assertEqual(sold([broken], OG_IS_DRESSED), set())
 
     def test_a_character_wearing_nothing_is_still_described(self):
@@ -289,18 +386,28 @@ class OnlyNobodyWantsItOpensTheVendor(unittest.TestCase):
     def test_turning_the_auction_on_later_takes_the_worthwhile_ones_back(self):
         """The premium is per item, so the rule survives an auctioneer leg."""
         rich = disposition.Item(
-            name="Rigid Cape", quality=2, known=True,
-            binding=disposition.BIND_ON_EQUIP, quest_item=False,
-            equipment=True, required_level=14, sell_price=402,
-            auction_value=402 * disposition.AUCTION_BEATS_VENDOR_BY)
-        at_the_house = disposition.Family(vendor_reachable=True,
-                                          auction_reachable=True)
+            name="Rigid Cape",
+            quality=2,
+            known=True,
+            binding=disposition.BIND_ON_EQUIP,
+            quest_item=False,
+            equipment=True,
+            required_level=14,
+            sell_price=402,
+            auction_value=402 * disposition.AUCTION_BEATS_VENDOR_BY,
+        )
+        at_the_house = disposition.Family(vendor_reachable=True, auction_reachable=True)
         both = disposition.EXECUTABLE_TODAY | {disposition.AUCTION}
         self.assertEqual(
-            disposition.decide(rich, at_the_house, character_level=28,
-                               available=both,
-                               family_fit=disposition.FIT_NOBODY).route,
-            disposition.AUCTION)
+            disposition.decide(
+                rich,
+                at_the_house,
+                character_level=28,
+                available=both,
+                family_fit=disposition.FIT_NOBODY,
+            ).route,
+            disposition.AUCTION,
+        )
 
     def test_a_green_nobody_wants_no_longer_waits_for_the_level_margin(self):
         """THE DEFECT THIS PR IS AGAINST, in one row (infra#3464).
@@ -317,8 +424,9 @@ class OnlyNobodyWantsItOpensTheVendor(unittest.TestCase):
         and nothing here takes gear off anybody, so a piece that beats
         nobody's slot today beats nobody's slot at any later level.
         """
-        stuck = carried(item_guid=7014, name="Ridge Cloak",
-                        required_level=25, item_level=30)
+        stuck = carried(
+            item_guid=7014, name="Ridge Cloak", required_level=25, item_level=30
+        )
         self.assertEqual(sold([stuck], OG_IS_DRESSED), {7014})
         fits = bag_pressure.family_fits([stuck], OG_IS_DRESSED, THE_FIVE)
         self.assertEqual(fits[7014], disposition.FIT_NOBODY)
@@ -329,23 +437,43 @@ class OnlyNobodyWantsItOpensTheVendor(unittest.TestCase):
         checks above this branch, and a piece nobody was asked about is kept
         by the margin itself."""
         item = disposition.Item(
-            name="Ridge Cloak", quality=2, known=True,
-            binding=disposition.BIND_ON_EQUIP, quest_item=False,
-            equipment=True, required_level=25, sell_price=402)
-        for answer in (disposition.FIT_UNASKED, disposition.FIT_HOLDER,
-                       disposition.FIT_UNJUDGEABLE):
+            name="Ridge Cloak",
+            quality=2,
+            known=True,
+            binding=disposition.BIND_ON_EQUIP,
+            quest_item=False,
+            equipment=True,
+            required_level=25,
+            sell_price=402,
+        )
+        for answer in (
+            disposition.FIT_UNASKED,
+            disposition.FIT_HOLDER,
+            disposition.FIT_UNJUDGEABLE,
+        ):
             with self.subTest(answer=answer):
                 self.assertEqual(
-                    disposition.decide(item, IN_TOWN, character_level=28,
-                                       available=disposition.EXECUTABLE_TODAY,
-                                       family_fit=answer).route,
-                    disposition.KEEP)
+                    disposition.decide(
+                        item,
+                        IN_TOWN,
+                        character_level=28,
+                        available=disposition.EXECUTABLE_TODAY,
+                        family_fit=answer,
+                    ).route,
+                    disposition.KEEP,
+                )
 
     def test_a_soulbound_green_nobody_wants_is_still_a_vendor_sale(self):
         """Unchanged behaviour, and the reason is unchanged: nobody can list
         or receive it, so no route loses out by taking the copper."""
-        orb = carried(name="Bright Boots", item_guid=7012, instance_flags=1,
-                      required_level=18, item_level=23, inventory_type=8)
+        orb = carried(
+            name="Bright Boots",
+            item_guid=7012,
+            instance_flags=1,
+            required_level=18,
+            item_level=23,
+            inventory_type=8,
+        )
         self.assertEqual(sold([orb], OG_IS_DRESSED), {7012})
 
 
@@ -354,14 +482,23 @@ class TheHolderIsAskedSoulboundBlind(unittest.TestCase):
 
     def _orb(self, soulbound):
         return gear.Holding(
-            holder="Og", guid=1, entry=1, name="Buccaneer's Orb", quality=2,
-            item_level=23, required_level=18, allowable_class=ANY_CLASS,
-            inventory_type=23, item_class=gear.ITEM_CLASS_ARMOR,
-            soulbound=soulbound)
+            holder="Og",
+            guid=1,
+            entry=1,
+            name="Buccaneer's Orb",
+            quality=2,
+            item_level=23,
+            required_level=18,
+            allowable_class=ANY_CLASS,
+            inventory_type=23,
+            item_class=gear.ITEM_CLASS_ARMOR,
+            soulbound=soulbound,
+        )
 
     def _og(self):
-        return gear.CharacterState(name="Og", class_id=MAGE, level=28,
-                                   equipped={"off_hand": 22})
+        return gear.CharacterState(
+            name="Og", class_id=MAGE, level=28, equipped={"off_hand": 22}
+        )
 
     def test_would_wear_ignores_binding_and_is_upgrade_for_does_not(self):
         self.assertTrue(gear.would_wear(self._orb(True), self._og())[0])
@@ -371,10 +508,18 @@ class TheHolderIsAskedSoulboundBlind(unittest.TestCase):
     def test_they_agree_on_everything_else(self):
         for soulbound in (True, False):
             unusable = gear.Holding(
-                holder="Og", guid=2, entry=2, name="Plate Helm", quality=2,
-                item_level=40, required_level=1, allowable_class=WARRIOR_ONLY,
-                inventory_type=1, item_class=gear.ITEM_CLASS_ARMOR,
-                soulbound=soulbound)
+                holder="Og",
+                guid=2,
+                entry=2,
+                name="Plate Helm",
+                quality=2,
+                item_level=40,
+                required_level=1,
+                allowable_class=WARRIOR_ONLY,
+                inventory_type=1,
+                item_class=gear.ITEM_CLASS_ARMOR,
+                soulbound=soulbound,
+            )
             self.assertFalse(gear.would_wear(unusable, self._og())[0])
             self.assertFalse(gear.is_upgrade_for(unusable, self._og())[0])
 
@@ -385,39 +530,58 @@ class TheHolderIsAskedSoulboundBlind(unittest.TestCase):
         first; a sibling's wish must not keep an item nobody can hand over.
         """
         self.assertEqual(
-            gear.claimant(self._orb(True), [
-                gear.CharacterState(name="Og", class_id=MAGE, level=28,
-                                    equipped={"off_hand": 30}),
-                gear.CharacterState(name="Ugga", class_id=PRIEST, level=27,
-                                    equipped={}),
-            ]), gear.NOBODY)
+            gear.claimant(
+                self._orb(True),
+                [
+                    gear.CharacterState(
+                        name="Og", class_id=MAGE, level=28, equipped={"off_hand": 30}
+                    ),
+                    gear.CharacterState(
+                        name="Ugga", class_id=PRIEST, level=27, equipped={}
+                    ),
+                ],
+            ),
+            gear.NOBODY,
+        )
 
     def test_the_holder_is_asked_before_any_sibling(self):
         """Both would wear it; the one already carrying it keeps it."""
         self.assertEqual(
-            gear.claimant(self._orb(False), [
-                self._og(),
-                gear.CharacterState(name="Ugga", class_id=PRIEST, level=27,
-                                    equipped={}),
-            ]), "Og")
+            gear.claimant(
+                self._orb(False),
+                [
+                    self._og(),
+                    gear.CharacterState(
+                        name="Ugga", class_id=PRIEST, level=27, equipped={}
+                    ),
+                ],
+            ),
+            "Og",
+        )
 
 
 class TheBridgeAsksBeforeItSells(unittest.TestCase):
     """The seam, read as text: bridge.py imports discord and cannot import."""
 
     def setUp(self):
-        self.src = (pathlib.Path(__file__).resolve().parents[1]
-                    / "bridge.py").read_text(encoding="utf-8")
+        self.src = (
+            pathlib.Path(__file__).resolve().parents[1] / "bridge.py"
+        ).read_text(encoding="utf-8")
 
     def _gear_sql(self):
-        return self.src[self.src.index("_SURPLUS_GEAR_SQL = ("):
-                        self.src.index("def _fetch_surplus_gear(")]
+        return self.src[
+            self.src.index("_SURPLUS_GEAR_SQL = (") : self.src.index(
+                "def _fetch_surplus_gear("
+            )
+        ]
 
     def test_the_gear_query_carries_what_the_gate_needs(self):
         block = self._gear_sql()
-        for column in ("it.ItemLevel AS item_level",
-                       "it.AllowableClass AS allowable_class",
-                       "it.InventoryType AS inventory_type"):
+        for column in (
+            "it.ItemLevel AS item_level",
+            "it.AllowableClass AS allowable_class",
+            "it.InventoryType AS inventory_type",
+        ):
             self.assertIn(column, block)
 
     def test_the_two_queries_cover_disjoint_halves_of_the_character(self):
@@ -427,25 +591,27 @@ class TheBridgeAsksBeforeItSells(unittest.TestCase):
         protection on the owner's list and the one enforced by geometry
         rather than by a rule anybody has to remember.
         """
-        worn_sql = self.src[self.src.index("_FAMILY_EQUIPPED_SQL = ("):
-                            self.src.index("def _fetch_family_equipped(")]
+        worn_sql = self.src[
+            self.src.index("_FAMILY_EQUIPPED_SQL = (") : self.src.index(
+                "def _fetch_family_equipped("
+            )
+        ]
         self.assertIn("ci.bag = 0 AND ci.slot < 19", worn_sql)
-        self.assertIn("ci.bag = 0 AND ci.slot BETWEEN 19 AND 38",
-                      self._gear_sql())
+        self.assertIn("ci.bag = 0 AND ci.slot BETWEEN 19 AND 38", self._gear_sql())
 
     def test_the_gear_query_still_refuses_everything_but_weapons_and_armour(self):
         self.assertIn("it.class IN (2, 4)", self._gear_sql())
 
     def test_the_pass_asks_the_gate_and_passes_the_owners_mark(self):
         start = self.src.index("    async def _vendor_once(self)")
-        block = self.src[start:self.src.index("    async def _vendor_loop(")]
+        block = self.src[start : self.src.index("    async def _vendor_loop(")]
         self.assertIn("bag_pressure.family_fits(gear_rows, worn, names)", block)
         self.assertIn("fits=fits", block)
         self.assertIn("keep_names=OWNER_KEEPS", block)
 
     def _vendor_pass(self):
         start = self.src.index("    async def _vendor_once(self)")
-        return self.src[start:self.src.index("    async def _vendor_loop(")]
+        return self.src[start : self.src.index("    async def _vendor_loop(")]
 
     def test_the_vendor_errand_is_written_once_and_to_the_leader(self):
         """infra#3553. One aim, on the character that carries `new rpg`.
@@ -457,7 +623,7 @@ class TheBridgeAsksBeforeItSells(unittest.TestCase):
         whole family's vendor errand for fifteen minutes at a time.
         """
         block = self._vendor_pass()
-        self.assertIn('self._claim_town_slot(', block)
+        self.assertIn("self._claim_town_slot(", block)
         self.assertIn('"economy", leader, "vendor", urgent=True', block)
         self.assertNotIn('self._claim_town_slot("economy", holder', block)
         self.assertEqual(1, block.count("_claim_town_slot"))
@@ -470,8 +636,10 @@ class TheBridgeAsksBeforeItSells(unittest.TestCase):
         again with one line of source.
         """
         block = self._vendor_pass()
-        self.assertLess(block.index("_write_trade_errand"),
-                        block.index("for holder in sorted(by_holder):"))
+        self.assertLess(
+            block.index("_write_trade_errand"),
+            block.index("for holder in sorted(by_holder):"),
+        )
 
     def test_the_leader_is_the_one_that_carries_the_strategy(self):
         """`_head_now`, not bonds.head_of_family().
@@ -480,8 +648,9 @@ class TheBridgeAsksBeforeItSells(unittest.TestCase):
         `_give_them_a_life` reads it to decide who gets `nc +new rpg`, so it
         is the only answer that names a character able to walk.
         """
-        self.assertIn("leader = await asyncio.to_thread(_head_now)",
-                      self._vendor_pass())
+        self.assertIn(
+            "leader = await asyncio.to_thread(_head_now)", self._vendor_pass()
+        )
 
     def test_whether_the_aim_was_taken_is_read_and_not_assumed(self):
         """The economy guard only retasks an idle traveller, so this write
@@ -500,14 +669,13 @@ class TheBridgeAsksBeforeItSells(unittest.TestCase):
         DoSell answers on the range of whoever is selling (infra#3464)."""
         block = self._vendor_pass()
         self.assertIn("by_holder.setdefault(candidate.holder, [])", block)
-        self.assertIn("town = await asyncio.to_thread(_fetch_town, holder)",
-                      block)
+        self.assertIn("town = await asyncio.to_thread(_fetch_town, holder)", block)
 
     def test_the_pass_writes_a_sale_and_never_a_destruction(self):
         """Deleting is the last resort and it is not reached: nothing in the
         disposable pile is worth zero, and mod-overseer has no destroy kind."""
         start = self.src.index("def _insert_sell(")
-        block = self.src[start:start + 1200]
+        block = self.src[start : start + 1200]
         self.assertIn("'sell'", block)
         for never in ("destroy", "DestroyItem"):
             self.assertNotIn(never, block)

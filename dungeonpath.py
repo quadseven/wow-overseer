@@ -25,6 +25,7 @@ all.
 Every sentence the page prints is written here, so a Python test can read it.
 The page renders and decides nothing (test_dungeon_tab.ThePageDecidesNothing).
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -67,25 +68,25 @@ class Step:
 # path and are left to the off-path list with the rest of Outland and
 # Northrend.
 PATH: tuple[Step, ...] = (
-    Step(389, 13, 21, inside=HORDE, city="Orgrimmar"),      # Ragefire Chasm
-    Step(43, 17, 24),                                       # Wailing Caverns
-    Step(36, 17, 26),                                       # The Deadmines
-    Step(33, 22, 30),                                       # Shadowfang Keep
-    Step(48, 24, 32),                                       # Blackfathom Deeps
-    Step(34, 24, 32, inside=ALLIANCE, city="Stormwind"),    # The Stockade
-    Step(189, 28, 45),                                      # Scarlet Monastery
-    Step(90, 29, 38),                                       # Gnomeregan
-    Step(47, 30, 40),                                       # Razorfen Kraul
-    Step(129, 33, 47),                                      # Razorfen Downs
-    Step(70, 34, 51),                                       # Uldaman
-    Step(209, 36, 54),                                      # Zul'Farrak
-    Step(349, 45, 55),                                      # Maraudon
-    Step(109, 50, 60),                                      # Sunken Temple
-    Step(230, 52, 60),                                      # Blackrock Depths
-    Step(229, 55, 60),                                      # Blackrock Spire
-    Step(429, 56, 60),                                      # Dire Maul
-    Step(289, 58, 60),                                      # Scholomance
-    Step(329, 58, 60),                                      # Stratholme
+    Step(389, 13, 21, inside=HORDE, city="Orgrimmar"),  # Ragefire Chasm
+    Step(43, 17, 24),  # Wailing Caverns
+    Step(36, 17, 26),  # The Deadmines
+    Step(33, 22, 30),  # Shadowfang Keep
+    Step(48, 24, 32),  # Blackfathom Deeps
+    Step(34, 24, 32, inside=ALLIANCE, city="Stormwind"),  # The Stockade
+    Step(189, 28, 45),  # Scarlet Monastery
+    Step(90, 29, 38),  # Gnomeregan
+    Step(47, 30, 40),  # Razorfen Kraul
+    Step(129, 33, 47),  # Razorfen Downs
+    Step(70, 34, 51),  # Uldaman
+    Step(209, 36, 54),  # Zul'Farrak
+    Step(349, 45, 55),  # Maraudon
+    Step(109, 50, 60),  # Sunken Temple
+    Step(230, 52, 60),  # Blackrock Depths
+    Step(229, 55, 60),  # Blackrock Spire
+    Step(429, 56, 60),  # Dire Maul
+    Step(289, 58, 60),  # Scholomance
+    Step(329, 58, 60),  # Stratholme
     Step(409, 60, 60, RAID, 40, name="Molten Core"),
     Step(469, 60, 60, RAID, 40, name="Blackwing Lair"),
     Step(309, 60, 60, RAID, 20, name="Zul'Gurub"),
@@ -114,19 +115,23 @@ PORTAL_MAPS = {
 # cannot be run end to end, in its words cut short. Said beside the "can run it"
 # line, because a portal row is not the same claim as a run that works.
 PORTAL_CAVEATS = {
-    43: ("mod-overseer's portal table notes the entrance is on Kalimdor and a "
-         "family living on the Eastern Kingdoms has no crossing yet, so a run "
-         "is refused until one exists"),
-    189: ("the Armory and Cathedral doors need the Scarlet Key, which drops in "
-          "the Library, so the Library wing comes first"),
+    43: (
+        "mod-overseer's portal table notes the entrance is on Kalimdor and a "
+        "family living on the Eastern Kingdoms has no crossing yet, so a run "
+        "is refused until one exists"
+    ),
+    189: (
+        "the Armory and Cathedral doors need the Scarlet Key, which drops in "
+        "the Library, so the Library wing comes first"
+    ),
 }
 
 # Where a family stands on a step.
-BEHIND = "behind"   # the band tops out below the weakest member
-NOW = "now"         # the weakest member is in the band, or near enough
-NEXT = "next"       # the one "now" step the page points at
-AHEAD = "ahead"     # the band starts too far above the weakest member
-OFF = "off"         # the entrance is inside the other faction's capital
+BEHIND = "behind"  # the band tops out below the weakest member
+NOW = "now"  # the weakest member is in the band, or near enough
+NEXT = "next"  # the one "now" step the page points at
+AHEAD = "ahead"  # the band starts too far above the weakest member
+OFF = "off"  # the entrance is inside the other faction's capital
 
 STATE_WORDS = {
     BEHIND: "outgrown",
@@ -200,23 +205,37 @@ def _state(step: Step, weakest: int | None, faction: str) -> str:
     return NOW
 
 
-def _state_line(step: Step, state: str, weakest_name: str,
-                weakest: int | None, faction: str) -> str:
+def _state_line(
+    step: Step, state: str, weakest_name: str, weakest: int | None, faction: str
+) -> str:
     if state == OFF:
-        return ("Its entrance is inside %s, which the %s cannot walk into, so "
-                "it is not on this family's path." % (step.city, faction))
+        return (
+            "Its entrance is inside %s, which the %s cannot walk into, so "
+            "it is not on this family's path." % (step.city, faction)
+        )
     if weakest is None:
         return "Nothing here knows the family's levels, so it cannot place them."
     if state == BEHIND:
-        return ("Outgrown: the band tops out at %d and even %s, the lowest of "
-                "them, is %d." % (step.high, weakest_name, weakest))
+        return (
+            "Outgrown: the band tops out at %d and even %s, the lowest of "
+            "them, is %d." % (step.high, weakest_name, weakest)
+        )
     if state == AHEAD:
-        return ("Later: the band starts at %d and %s, the lowest of them, is "
-                "%d, so %s to go." % (step.floor, weakest_name, weakest,
-                                       _plural(step.floor - weakest, "level")))
+        return (
+            "Later: the band starts at %d and %s, the lowest of them, is "
+            "%d, so %s to go."
+            % (
+                step.floor,
+                weakest_name,
+                weakest,
+                _plural(step.floor - weakest, "level"),
+            )
+        )
     if weakest < step.floor:
-        return ("In range, just: the band starts at %d and %s is %d, which is "
-                "near enough to try." % (step.floor, weakest_name, weakest))
+        return (
+            "In range, just: the band starts at %d and %s is %d, which is "
+            "near enough to try." % (step.floor, weakest_name, weakest)
+        )
     return "In range: every one of them is at least %d." % step.floor
 
 
@@ -224,15 +243,22 @@ def _overseer(step: Step, portals: dict) -> dict:
     keywords = portals.get(step.map_id, [])
     if keywords:
         caveat = PORTAL_CAVEATS.get(step.map_id)
-        return {"can": True,
-                "line": ("The overseer can run this one: mod-overseer has a "
-                         "portal for it (%s)%s." % (
-                             ", ".join(keywords),
-                             "; " + caveat if caveat else ""))}
-    return {"can": False,
-            "line": ("The overseer cannot run this one yet: mod-overseer has no "
-                     "portal for it, so a dungeon goal naming it is refused "
-                     "and it has to be run by hand.")}
+        return {
+            "can": True,
+            "line": (
+                "The overseer can run this one: mod-overseer has a "
+                "portal for it (%s)%s."
+                % (", ".join(keywords), "; " + caveat if caveat else "")
+            ),
+        }
+    return {
+        "can": False,
+        "line": (
+            "The overseer cannot run this one yet: mod-overseer has no "
+            "portal for it, so a dungeon goal naming it is refused "
+            "and it has to be run by hand."
+        ),
+    }
 
 
 def _runs(map_id: int, rows: list[dict]) -> str:
@@ -240,10 +266,14 @@ def _runs(map_id: int, rows: list[dict]) -> str:
     if not mine:
         return "This family has never started a run here."
     cleared = len([r for r in mine if str(r.get("outcome") or "") == "complete"])
-    done = ("never cleared it" if not cleared else "cleared it once"
-            if cleared == 1 else "cleared it %d times" % cleared)
-    return "This family has started %s here and %s." % (
-        _plural(len(mine), "run"), done)
+    done = (
+        "never cleared it"
+        if not cleared
+        else "cleared it once"
+        if cleared == 1
+        else "cleared it %d times" % cleared
+    )
+    return "This family has started %s here and %s." % (_plural(len(mine), "run"), done)
 
 
 def _trim(found: dict) -> dict:
@@ -259,9 +289,11 @@ def _trim(found: dict) -> dict:
     cut = len(found["gains"]) - len(kept)
     trimmed = dict(found)
     trimmed["gains"] = kept
-    trimmed["more_line"] = ("" if not cut else
-                            "and %s for the same slots, not shown"
-                            % _plural(cut, "lesser piece"))
+    trimmed["more_line"] = (
+        ""
+        if not cut
+        else "and %s for the same slots, not shown" % _plural(cut, "lesser piece")
+    )
     return trimmed
 
 
@@ -276,28 +308,55 @@ def _guild_line(guild: str, counts: dict | None) -> str:
         return ""
     if not counts.get("pieces"):
         return "The guild %s: no boss loot is listed here to compare." % guild
-    return ("The guild %s: %d of %d members would gain something here."
-            % (guild, len(counts["gainers"]), counts["of"]))
+    return "The guild %s: %d of %d members would gain something here." % (
+        guild,
+        len(counts["gainers"]),
+        counts["of"],
+    )
 
 
-def _chips(step: Step, state: str, overseer: dict, card: dict | None,
-           size: int, counts: dict | None, guild: str) -> list[dict]:
-    out = [{"text": STATE_WORDS[state], "tone": STATE_TONES[state]},
-           {"text": _band(step), "tone": ""}]
+def _chips(
+    step: Step,
+    state: str,
+    overseer: dict,
+    card: dict | None,
+    size: int,
+    counts: dict | None,
+    guild: str,
+) -> list[dict]:
+    out = [
+        {"text": STATE_WORDS[state], "tone": STATE_TONES[state]},
+        {"text": _band(step), "tone": ""},
+    ]
     if step.kind == RAID:
         out.append({"text": "raid, %d players" % step.players, "tone": ""})
     if state != OFF:
-        out.append({"text": ("overseer can run it" if overseer["can"]
-                             else "overseer cannot run it yet"),
-                    "tone": "up" if overseer["can"] else "no"})
+        out.append(
+            {
+                "text": (
+                    "overseer can run it"
+                    if overseer["can"]
+                    else "overseer cannot run it yet"
+                ),
+                "tone": "up" if overseer["can"] else "no",
+            }
+        )
     gainers = len(card["gainers"]) if card else 0
     if size:
-        out.append({"text": "family: %d of %d gain" % (gainers, size),
-                    "tone": "up" if gainers else ""})
+        out.append(
+            {
+                "text": "family: %d of %d gain" % (gainers, size),
+                "tone": "up" if gainers else "",
+            }
+        )
     if guild and counts and counts.get("of"):
         n = len(counts["gainers"])
-        out.append({"text": "%s: %d of %d gain" % (guild, n, counts["of"]),
-                    "tone": "up" if n else ""})
+        out.append(
+            {
+                "text": "%s: %d of %d gain" % (guild, n, counts["of"]),
+                "tone": "up" if n else "",
+            }
+        )
     return out
 
 
@@ -326,31 +385,42 @@ def _next_short(steps: list[dict]) -> str:
 def _next_line(steps: list[dict], weakest_name: str, weakest: int | None) -> str:
     chosen = next((s for s in steps if s["state"] == NEXT), None)
     if chosen is not None:
-        how = ("and the overseer can run it" if chosen["overseer"]["can"]
-               else "but the overseer cannot run it yet, so it is a run by hand")
+        how = (
+            "and the overseer can run it"
+            if chosen["overseer"]["can"]
+            else "but the overseer cannot run it yet, so it is a run by hand"
+        )
         if chosen["family_gainers"]:
             why = "%d of them would gain something there" % chosen["family_gainers"]
         else:
             why = "nothing in range holds an upgrade, so this is simply the first in range"
-        return "Next: %s (%s). %s, %s." % (chosen["name"], chosen["band"],
-                                           why[:1].upper() + why[1:], how)
+        return "Next: %s (%s). %s, %s." % (
+            chosen["name"],
+            chosen["band"],
+            why[:1].upper() + why[1:],
+            how,
+        )
     ahead = next((s for s in steps if s["state"] == AHEAD), None)
     if ahead is not None and weakest is not None:
-        return ("Next: %s, once %s reaches %d (%s is %d now)."
-                % (ahead["name"], weakest_name, ahead["floor"], weakest_name,
-                   weakest))
+        return "Next: %s, once %s reaches %d (%s is %d now)." % (
+            ahead["name"],
+            weakest_name,
+            ahead["floor"],
+            weakest_name,
+            weakest,
+        )
     return "Every step on the path is behind this family."
 
 
-def _upgrades_line(steps: list[dict], key: str, who: str,
-                   raids: bool = True) -> str:
+def _upgrades_line(steps: list[dict], key: str, who: str, raids: bool = True) -> str:
     """The steps in range that hold the most for `who`, best first.
 
     A raid is left out of the FAMILY's summary: five people do not clear a
     forty player raid, so its loot is not an upgrade a family can go and get.
     """
-    live = [s for s in steps if s["state"] in (NOW, NEXT)
-            and (raids or s["kind"] != RAID)]
+    live = [
+        s for s in steps if s["state"] in (NOW, NEXT) and (raids or s["kind"] != RAID)
+    ]
     if not live:
         return "No step is in range for %s yet." % who
     pool = [s for s in live if s[key]]
@@ -358,13 +428,16 @@ def _upgrades_line(steps: list[dict], key: str, who: str,
         return "Nothing on the steps in range is an upgrade for %s." % who
     pool.sort(key=lambda s: (-s[key], -s.get("family_total", 0), s["rank"]))
     named = ["%s (%d)" % (s["name"], s[key]) for s in pool[:_SUMMARY_STEPS]]
-    return ("Most upgrades for %s in range, by how many would gain: %s."
-            % (who, _names(named)))
+    return "Most upgrades for %s in range, by how many would gain: %s." % (
+        who,
+        _names(named),
+    )
 
 
 @dataclass(frozen=True)
 class _Family:
     """What every step of one family's path is judged against."""
+
     faction: str
     size: int
     weakest: int | None
@@ -385,8 +458,12 @@ def _weakest(members: list[dict]) -> tuple[int | None, str]:
 
 
 def _step_name(step: Step, card: dict | None, names: dict) -> str:
-    return (step.name or names.get(step.map_id)
-            or (card.get("name") if card else None) or "map %d" % step.map_id)
+    return (
+        step.name
+        or names.get(step.map_id)
+        or (card.get("name") if card else None)
+        or "map %d" % step.map_id
+    )
 
 
 def _step(rank: int, step: Step, card: dict | None, fam: _Family) -> dict:
@@ -403,13 +480,17 @@ def _step(rank: int, step: Step, card: dict | None, fam: _Family) -> dict:
         "band": _band(step),
         "floor": step.floor,
         "state": state,
-        "state_line": _state_line(step, state, fam.weakest_name, fam.weakest,
-                                  fam.faction),
+        "state_line": _state_line(
+            step, state, fam.weakest_name, fam.weakest, fam.faction
+        ),
         "overseer": overseer,
         "runs_line": _runs(step.map_id, fam.run_rows),
-        "raid_line": ("A raid for %d players: that is the guild's job, not "
-                      "a family's, and the Raid tab tracks it." % step.players
-                      if step.kind == RAID else ""),
+        "raid_line": (
+            "A raid for %d players: that is the guild's job, not "
+            "a family's, and the Raid tab tracks it." % step.players
+            if step.kind == RAID
+            else ""
+        ),
         "family_line": _family_gain_line(card),
         "family_gainers": len(gained),
         "family_total": card["total"] if card else 0,
@@ -425,30 +506,43 @@ def _fold(steps: list[dict]) -> tuple[list[dict], list[dict]]:
     outgrown dungeons before the first one that matters, and scrolling past
     them to reach "next" is the old page's problem in a new order. They stay
     on the payload, in order, so the path is still whole when opened."""
-    first_live = next((i for i, s in enumerate(steps)
-                       if s["state"] not in (BEHIND, OFF)), len(steps))
+    first_live = next(
+        (i for i, s in enumerate(steps) if s["state"] not in (BEHIND, OFF)), len(steps)
+    )
     return steps[:first_live], steps[first_live:]
 
 
 def _off_path(cards: dict) -> list[dict]:
     """Maps outside the classic path that still hold something, most first."""
-    found = [card for map_id, card in cards.items()
-             if map_id not in PATH_MAPS and card["gainers"]]
+    found = [
+        card
+        for map_id, card in cards.items()
+        if map_id not in PATH_MAPS and card["gainers"]
+    ]
     found.sort(key=lambda c: (-len(c["gainers"]), -c["total"], c["name"]))
     return found
 
 
 def _who_line(members: list[dict], faction: str, guild: str) -> str:
     who = ", ".join("%s %s" % (m["name"], m.get("level") or "?") for m in members)
-    return "%s%s%s." % (faction + ": " if faction else "",
-                        who or "nobody on the roster",
-                        (", in the guild %s" % guild) if guild else ", in no guild")
+    return "%s%s%s." % (
+        faction + ": " if faction else "",
+        who or "nobody on the roster",
+        (", in the guild %s" % guild) if guild else ", in no guild",
+    )
 
 
-def build_family_path(head: str, faction: str, members: list[dict],
-                      plan: dict, guild: str, guild_counts: dict,
-                      run_rows: list[dict], portals: dict,
-                      names: dict | None = None) -> dict:
+def build_family_path(
+    head: str,
+    faction: str,
+    members: list[dict],
+    plan: dict,
+    guild: str,
+    guild_counts: dict,
+    run_rows: list[dict],
+    portals: dict,
+    names: dict | None = None,
+) -> dict:
     """One family's path.
 
     head          the family's name, which is its head's name
@@ -462,10 +556,21 @@ def build_family_path(head: str, faction: str, members: list[dict],
     """
     cards = {int(card["map_id"]): card for card in plan.get("dungeons", [])}
     weakest, weakest_name = _weakest(members)
-    fam = _Family(faction, len(members), weakest, weakest_name, guild,
-                  guild_counts, run_rows, portals, names or {})
-    steps = [_step(rank, step, cards.get(step.map_id), fam)
-             for rank, step in enumerate(PATH, start=1)]
+    fam = _Family(
+        faction,
+        len(members),
+        weakest,
+        weakest_name,
+        guild,
+        guild_counts,
+        run_rows,
+        portals,
+        names or {},
+    )
+    steps = [
+        _step(rank, step, cards.get(step.map_id), fam)
+        for rank, step in enumerate(PATH, start=1)
+    ]
     _pick_next(steps)
     behind, steps = _fold(steps)
     off_path = _off_path(cards)
@@ -476,24 +581,34 @@ def build_family_path(head: str, faction: str, members: list[dict],
         "who_line": _who_line(members, faction, guild),
         "next_line": _next_line(steps, weakest_name, weakest),
         "next_short": _next_short(steps),
-        "family_upgrades": _upgrades_line(steps, "family_gainers", "the family",
-                                          raids=False),
-        "guild_upgrades": (_upgrades_line(steps, "guild_gainers",
-                                          "the guild " + guild)
-                           if guild and guild_counts else ""),
+        "family_upgrades": _upgrades_line(
+            steps, "family_gainers", "the family", raids=False
+        ),
+        "guild_upgrades": (
+            _upgrades_line(steps, "guild_gainers", "the guild " + guild)
+            if guild and guild_counts
+            else ""
+        ),
         "steps": steps,
         "behind": behind,
-        "behind_line": ("%s behind them, outgrown or out of reach: open to see "
-                        "the start of the path." % _plural(len(behind), "step")
-                        if behind else ""),
+        "behind_line": (
+            "%s behind them, outgrown or out of reach: open to see "
+            "the start of the path." % _plural(len(behind), "step")
+            if behind
+            else ""
+        ),
         "off_path_line": (
             "Off the path: %s outside the classic path (Outland, Northrend, "
             "heroics) hold something for this family. They are listed for "
             "completeness, not as a next step."
             % _plural(len(off_path), "dungeon or raid", "dungeons and raids")
-            if off_path else ""),
-        "off_path": [{"name": c["name"], "line": c["line"],
-                      "chips": c["chips"]} for c in off_path],
+            if off_path
+            else ""
+        ),
+        "off_path": [
+            {"name": c["name"], "line": c["line"], "chips": c["chips"]}
+            for c in off_path
+        ],
     }
 
 
@@ -505,8 +620,7 @@ ORDER = (
     "its weakest member: a band that tops out below that level is outgrown, "
     "and one that starts more than %d levels above it is later. Upgrades ride "
     "along on each step and never change the order; the next step is the "
-    "first one in range that holds something for somebody."
-    % council.NEAR_ENOUGH
+    "first one in range that holds something for somebody." % council.NEAR_ENOUGH
 )
 
 
@@ -515,14 +629,17 @@ def runnable_line(portals: dict, names: dict) -> str:
     if not portals:
         return "The overseer cannot run any dungeon on its own yet."
     listed = []
-    for map_id in sorted(portals, key=lambda m: PATH_MAPS.index(m)
-                         if m in PATH_MAPS else 999):
+    for map_id in sorted(
+        portals, key=lambda m: PATH_MAPS.index(m) if m in PATH_MAPS else 999
+    ):
         name = names.get(map_id) or "map %d" % map_id
         wings = len(portals[map_id])
         listed.append(name if wings == 1 else "%s (%d wings)" % (name, wings))
-    return ("The overseer can run %s on its own today, through the portals "
-            "mod-overseer carries: %s. Every other step is marked as one it "
-            "cannot run yet." % (_plural(len(listed), "dungeon"), _names(listed)))
+    return (
+        "The overseer can run %s on its own today, through the portals "
+        "mod-overseer carries: %s. Every other step is marked as one it "
+        "cannot run yet." % (_plural(len(listed), "dungeon"), _names(listed))
+    )
 
 
 BASIS = (
@@ -542,5 +659,6 @@ def headline(families: list[dict]) -> str:
     """The one line at the top: what each family should run next."""
     if not families:
         return "the roster names no family, so there is no path to draw"
-    return " ".join("Next for %s: %s." % (f["title"], f["next_short"])
-                    for f in families)
+    return " ".join(
+        "Next for %s: %s." % (f["title"], f["next_short"]) for f in families
+    )

@@ -137,13 +137,13 @@ SHAREABLE_CONSUMABLES = (POTION, ELIXIR, BANDAGE)
 # Blacksmithing and Engineering the same way. A member holding EITHER skill can
 # use the material, which is what the tuple means.
 FEEDS: dict[int, tuple[str, ...]] = {
-    4: ("jewelcrafting",),                     # Jewelcrafting stones
-    5: ("tailoring", "first aid"),             # Linen Cloth, Bolt of Linen, Silk
-    6: ("leatherworking",),                    # Light Leather, Raptor Hide
-    7: ("blacksmithing", "engineering"),       # Copper Ore, Silver Bar, Solid Stone
-    8: ("cooking",),                           # Red Wolf Meat, Giant Egg
-    9: ("alchemy",),                           # Silverleaf, Briarthorn, Purple Lotus
-    12: ("enchanting",),                       # Strange Dust, Illusion Dust
+    4: ("jewelcrafting",),  # Jewelcrafting stones
+    5: ("tailoring", "first aid"),  # Linen Cloth, Bolt of Linen, Silk
+    6: ("leatherworking",),  # Light Leather, Raptor Hide
+    7: ("blacksmithing", "engineering"),  # Copper Ore, Silver Bar, Solid Stone
+    8: ("cooking",),  # Red Wolf Meat, Giant Egg
+    9: ("alchemy",),  # Silverleaf, Briarthorn, Purple Lotus
+    12: ("enchanting",),  # Strange Dust, Illusion Dust
 }
 
 # Skill line ids, as `character_skills.skill` spells them. Read off the live
@@ -306,7 +306,11 @@ class Gift:
         for tailoring" was a fact about a roster table and not about Og.
         """
         return "%s give %s %d %s. %s" % (
-            self.holder, self.taker, self.count, self.item, self.need,
+            self.holder,
+            self.taker,
+            self.count,
+            self.item,
+            self.need,
         )
 
 
@@ -481,7 +485,9 @@ def can_use(holding: Holding, member: Member) -> str:
             if member.rank_in(required) < int(holding.required_rank):
                 return ""
             return "%s has %s" % (
-                member.name, _trade_named(required) or "the skill it needs")
+                member.name,
+                _trade_named(required) or "the skill it needs",
+            )
         return "%s is level %d" % (member.name, int(member.level))
 
     for trade in FEEDS.get(int(holding.subclass), ()):
@@ -489,7 +495,9 @@ def can_use(holding: Holding, member: Member) -> str:
             return "%s has %s" % (member.name, trade)
     if required and member.rank_in(required) >= int(holding.required_rank):
         return "%s has %s" % (
-            member.name, _trade_named(required) or "the skill it needs")
+            member.name,
+            _trade_named(required) or "the skill it needs",
+        )
     return ""
 
 
@@ -524,7 +532,9 @@ def _best_taker(holding: Holding, members, given: Mapping) -> tuple:
     return best or (None, "")
 
 
-def plan(holdings, members, craft_spells=(), stuck_pairs: Mapping | None = None) -> Plan:
+def plan(
+    holdings, members, craft_spells=(), stuck_pairs: Mapping | None = None
+) -> Plan:
     """Every family stack that should leave the family, in one pass.
 
     THE ORDER OF THE THREE GATES IS THE DESIGN. What kind of item is this
@@ -560,9 +570,9 @@ def plan(holdings, members, craft_spells=(), stuck_pairs: Mapping | None = None)
     for holding in surplus(movable, craft_spells):
         member, need = _best_taker(holding, roster, given)
         if member is None:
-            note = (
-                "%s has spare %s and nobody online can use it"
-                % (holding.holder, holding.item)
+            note = "%s has spare %s and nobody online can use it" % (
+                holding.holder,
+                holding.item,
             )
             if note not in notes:
                 notes.append(note)
@@ -576,20 +586,33 @@ def plan(holdings, members, craft_spells=(), stuck_pairs: Mapping | None = None)
             continue
         given[member.name] = True
         keep = reserve_for(int(holding.entry), craft_spells)
-        gifts.append(Gift(
-            holder=holding.holder, taker=member.name, item=holding.item,
-            entry=int(holding.entry), count=int(holding.count),
-            guid=int(holding.guid), need=need,
-            reason=(
-                "%s is above the family's own reserve of %d %s (%d casts' "
-                "worth), and %s - so the stack does more good in their bags "
-                "than in %s's."
-                % (holding.holder, keep, holding.item, RESERVE_CASTS,
-                   need.lower(), holding.holder)
-            ),
-        ))
-    return Plan(gifts=tuple(gifts), notes=tuple(notes),
-                blocked=tuple(blocked), present=present)
+        gifts.append(
+            Gift(
+                holder=holding.holder,
+                taker=member.name,
+                item=holding.item,
+                entry=int(holding.entry),
+                count=int(holding.count),
+                guid=int(holding.guid),
+                need=need,
+                reason=(
+                    "%s is above the family's own reserve of %d %s (%d casts' "
+                    "worth), and %s - so the stack does more good in their bags "
+                    "than in %s's."
+                    % (
+                        holding.holder,
+                        keep,
+                        holding.item,
+                        RESERVE_CASTS,
+                        need.lower(),
+                        holding.holder,
+                    )
+                ),
+            )
+        )
+    return Plan(
+        gifts=tuple(gifts), notes=tuple(notes), blocked=tuple(blocked), present=present
+    )
 
 
 def lines(share_plan: Plan) -> list:
@@ -616,12 +639,12 @@ def headline(share_plan: Plan) -> str:
     if not share_plan.gifts:
         return (
             "%d guildmate%s online, and nothing the family can spare suits "
-            "any of them"
-            % (share_plan.present, "" if share_plan.present == 1 else "s")
+            "any of them" % (share_plan.present, "" if share_plan.present == 1 else "s")
         )
-    return (
-        "%d stack%s going out to %d of the %d guildmate%s online"
-        % (len(share_plan.gifts), "" if len(share_plan.gifts) == 1 else "s",
-           len({g.taker for g in share_plan.gifts}), share_plan.present,
-           "" if share_plan.present == 1 else "s")
+    return "%d stack%s going out to %d of the %d guildmate%s online" % (
+        len(share_plan.gifts),
+        "" if len(share_plan.gifts) == 1 else "s",
+        len({g.taker for g in share_plan.gifts}),
+        share_plan.present,
+        "" if share_plan.present == 1 else "s",
     )

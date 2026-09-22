@@ -168,10 +168,24 @@ class SameShapeTest(unittest.TestCase):
         for live_name, dev_name in cast.DEV_NAMES.items():
             live, dev = self.live[live_name], self.dev[dev_name]
             self.assertEqual(
-                (live.role, live.blood, live.seniority, live.race,
-                 live.char_class, live.gender, live.spec_tab),
-                (dev.role, dev.blood, dev.seniority, dev.race,
-                 dev.char_class, dev.gender, dev.spec_tab),
+                (
+                    live.role,
+                    live.blood,
+                    live.seniority,
+                    live.race,
+                    live.char_class,
+                    live.gender,
+                    live.spec_tab,
+                ),
+                (
+                    dev.role,
+                    dev.blood,
+                    dev.seniority,
+                    dev.race,
+                    dev.char_class,
+                    dev.gender,
+                    dev.spec_tab,
+                ),
                 f"{dev_name} is not {live_name} under another name",
             )
 
@@ -299,9 +313,12 @@ class SeedRosterTest(unittest.TestCase):
     @classmethod
     def _run(cls, which):
         proc = subprocess.run(  # noqa: S603 - fixed argv, no shell; `which`
-                                # is one of two literals argparse allows
+            # is one of two literals argparse allows
             [sys.executable, cls.TOOL, "--family", which],
-            capture_output=True, text=True, check=True, cwd=ROOT,
+            capture_output=True,
+            text=True,
+            check=True,
+            cwd=ROOT,
         )
         return proc.stdout
 
@@ -340,9 +357,7 @@ class SeedRosterTest(unittest.TestCase):
         # column at all; leaving it at its 0 default is "no aim", which the
         # module degrades to leader-only travel.
         for column in ("drive_quest", "travel_npc"):
-            self.assertNotIn(
-                f"SET {column}", self.dev_sql, f"the seed writes {column}"
-            )
+            self.assertNotIn(f"SET {column}", self.dev_sql, f"the seed writes {column}")
 
     def test_the_seed_never_issues_a_profession_errand(self):
         # `professions` is a PERMISSION and is written. learn/unlearn are
@@ -366,9 +381,11 @@ class SeedRosterTest(unittest.TestCase):
         # worlds is being seeded differently from the other.
         # The set's own name appears in the header and in each row's `note`,
         # and is legitimately different. Everything else must be identical.
-        translated = cast.retext(self.live_sql, cast.DEV).replace(
-            f"'{cast.LIVE}'", f"'{cast.DEV}'"
-        ).replace(f"{cast.LIVE} family - ", f"{cast.DEV} family - ")
+        translated = (
+            cast.retext(self.live_sql, cast.DEV)
+            .replace(f"'{cast.LIVE}'", f"'{cast.DEV}'")
+            .replace(f"{cast.LIVE} family - ", f"{cast.DEV} family - ")
+        )
         self.assertEqual(translated, self.dev_sql)
 
 

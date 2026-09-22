@@ -81,12 +81,18 @@ Tickets: infra#2597 (the seam), infra#3309 (the delivery budget this is
 measured against), mod-overseer#88 (the run coordinator), mod-overseer#159
 (the events that would make the loot rule unnecessary).
 """
+
 from __future__ import annotations
 
 from datetime import datetime, timedelta
 
-from armory import (EQUIPPED_SLOTS, QUALITY_NAMES, UNKNOWN_QUALITY,
-                    ItemBook, template_tooltip)
+from armory import (
+    EQUIPPED_SLOTS,
+    QUALITY_NAMES,
+    UNKNOWN_QUALITY,
+    ItemBook,
+    template_tooltip,
+)
 
 ITEM_EQUIP = "item_equip"
 
@@ -110,6 +116,7 @@ SNAPSHOT_FRESH = timedelta(seconds=60)
 
 
 # --- the equip record ------------------------------------------------------
+
 
 def first_equips(event_rows: list[dict]) -> dict[tuple[str, int], dict]:
     """(character, item entry) -> the EARLIEST item_equip row for that pair.
@@ -136,6 +143,7 @@ def first_equips(event_rows: list[dict]) -> dict[tuple[str, int], dict]:
 
 # --- which run is open -----------------------------------------------------
 
+
 def run_state(run: dict) -> str:
     """What the row says it is, and what it must be when the row says nothing.
 
@@ -158,6 +166,7 @@ def is_active(run: dict) -> bool:
 
 
 # --- time and place --------------------------------------------------------
+
 
 def _iso(when: datetime | None) -> str | None:
     return None if when is None else when.strftime("%Y-%m-%dT%H:%M:%S")
@@ -201,8 +210,10 @@ def place_name(map_id: int, zone_id: int, dungeons: dict, zones: dict) -> str:
 
 # --- items -----------------------------------------------------------------
 
-def item_payload(entry: int, row: dict, icons: dict,
-                 book: ItemBook | None = None) -> dict:
+
+def item_payload(
+    entry: int, row: dict, icons: dict, book: ItemBook | None = None
+) -> dict:
     """One item as the page draws it.
 
     The same shape achievements.item_payload emits, so the Chronicle's two
@@ -225,8 +236,11 @@ def item_payload(entry: int, row: dict, icons: dict,
         "entry": entry,
         "name": name or ("item %d" % entry),
         "quality": quality,
-        "quality_name": (QUALITY_NAMES.get(quality, UNKNOWN_QUALITY)
-                         if quality is not None else UNKNOWN_QUALITY),
+        "quality_name": (
+            QUALITY_NAMES.get(quality, UNKNOWN_QUALITY)
+            if quality is not None
+            else UNKNOWN_QUALITY
+        ),
         "ilvl": ilvl,
         "icon": icons.get(displayid) if displayid is not None else None,
         "wowhead": "https://www.wowhead.com/wotlk/item=%d" % entry,
@@ -242,12 +256,16 @@ def item_payload(entry: int, row: dict, icons: dict,
         # loot board's rows come from creature_loot_template, where the item
         # id is a column of its own. The entry the caller resolved is the one
         # this page is drawing.
-        "tooltip": (template_tooltip(dict(row, entry=entry), book)
-                    if book is not None and row else None),
+        "tooltip": (
+            template_tooltip(dict(row, entry=entry), book)
+            if book is not None and row
+            else None
+        ),
     }
 
 
 # --- a run's loot ----------------------------------------------------------
+
 
 def run_ended(run: dict, now: datetime) -> datetime:
     """When a run stopped, for a row that is over but has no `ended_at`.
@@ -259,8 +277,7 @@ def run_ended(run: dict, now: datetime) -> datetime:
     """
     if is_active(run):
         return now
-    return (run.get("ended_at") or run.get("last_progress_at")
-            or run["started_at"])
+    return run.get("ended_at") or run.get("last_progress_at") or run["started_at"]
 
 
 def run_window(run: dict, now: datetime) -> tuple[datetime, datetime]:
@@ -275,9 +292,16 @@ def run_window(run: dict, now: datetime) -> tuple[datetime, datetime]:
     return run["started_at"], run_ended(run, now)
 
 
-def run_loot(run: dict, firsts: dict, items: dict, icons: dict,
-             now: datetime, dungeons: dict, zones: dict,
-             book: ItemBook | None = None) -> list[dict]:
+def run_loot(
+    run: dict,
+    firsts: dict,
+    items: dict,
+    icons: dict,
+    now: datetime,
+    dungeons: dict,
+    zones: dict,
+    book: ItemBook | None = None,
+) -> list[dict]:
     """The gear whose FIRST EVER equip falls inside this run, on its map.
 
     Both facts, for the reason achievements.in_run gives about time and map,
@@ -294,14 +318,16 @@ def run_loot(run: dict, firsts: dict, items: dict, icons: dict,
         line["who"] = who
         line["at"] = _iso(row["first_seen"])
         line["slot"] = row.get("detail") or ""
-        line["place"] = place_name(int(row.get("map") or 0),
-                                   int(row.get("zone") or 0), dungeons, zones)
+        line["place"] = place_name(
+            int(row.get("map") or 0), int(row.get("zone") or 0), dungeons, zones
+        )
         out.append(line)
     out.sort(key=lambda line: (line["at"] or "", line["who"]))
     return out
 
 
 # --- how far through they are ----------------------------------------------
+
 
 def encounter_order(encounter_rows: list[dict]) -> list[dict]:
     """A dungeon's encounters in the order the world database lists them.
@@ -313,11 +339,14 @@ def encounter_order(encounter_rows: list[dict]) -> list[dict]:
     what produces exactly seven rows for Wailing Caverns, which is exactly how
     many bosses Wailing Caverns has.
     """
-    return [{"entry": int(row["entry"]),
-             "creature": int(row["creditEntry"]),
-             "name": (row.get("name")
-                      or ("creature %d" % int(row["creditEntry"])))}
-            for row in sorted(encounter_rows, key=lambda r: int(r["entry"]))]
+    return [
+        {
+            "entry": int(row["entry"]),
+            "creature": int(row["creditEntry"]),
+            "name": (row.get("name") or ("creature %d" % int(row["creditEntry"]))),
+        }
+        for row in sorted(encounter_rows, key=lambda r: int(r["entry"]))
+    ]
 
 
 def encounters_down(mask: int | None, encounters: list[dict]) -> dict:
@@ -342,31 +371,45 @@ def encounters_down(mask: int | None, encounters: list[dict]) -> dict:
     nothing has fallen are different things, and they read differently.
     """
     if not encounters:
-        return {"known": False, "down": [], "left": [], "count": 0,
-                "total": 0, "line": "no boss list for this dungeon",
-                "basis": "the world database lists no encounters for this map, "
-                         "so there is nothing to count progress against"}
+        return {
+            "known": False,
+            "down": [],
+            "left": [],
+            "count": 0,
+            "total": 0,
+            "line": "no boss list for this dungeon",
+            "basis": "the world database lists no encounters for this map, "
+            "so there is nothing to count progress against",
+        }
     if mask is None:
-        return {"known": False, "down": [], "count": 0,
-                "left": [e["name"] for e in encounters],
-                "total": len(encounters),
-                "line": "%d bosses, and no record of which have fallen"
-                        % len(encounters),
-                "basis": "the core keeps no instance record for this run, so "
-                         "nothing here can say which bosses have fallen"}
+        return {
+            "known": False,
+            "down": [],
+            "count": 0,
+            "left": [e["name"] for e in encounters],
+            "total": len(encounters),
+            "line": "%d bosses, and no record of which have fallen" % len(encounters),
+            "basis": "the core keeps no instance record for this run, so "
+            "nothing here can say which bosses have fallen",
+        }
     down, left = [], []
     for index, encounter in enumerate(encounters):
         (down if mask & (1 << index) else left).append(encounter["name"])
-    return {"known": True, "down": down, "left": left, "count": len(down),
-            "total": len(encounters),
-            "line": "%d of %d bosses down" % (len(down), len(encounters)),
-            "basis": "read from the worldserver's own completedEncounters "
-                     "bitmask for the instance the family is bound to. That "
-                     "lockout outlives a single run row, so a boss beaten on "
-                     "an earlier visit to the same instance still counts here. "
-                     "Which bit is which boss is inferred from the order of "
-                     "the dungeon's rows in instance_encounters, because "
-                     "DungeonEncounter.dbc is not loaded on this realm"}
+    return {
+        "known": True,
+        "down": down,
+        "left": left,
+        "count": len(down),
+        "total": len(encounters),
+        "line": "%d of %d bosses down" % (len(down), len(encounters)),
+        "basis": "read from the worldserver's own completedEncounters "
+        "bitmask for the instance the family is bound to. That "
+        "lockout outlives a single run row, so a boss beaten on "
+        "an earlier visit to the same instance still counts here. "
+        "Which bit is which boss is inferred from the order of "
+        "the dungeon's rows in instance_encounters, because "
+        "DungeonEncounter.dbc is not loaded on this realm",
+    }
 
 
 def bind_instance(run: dict, instance_rows: list[dict]) -> int | None:
@@ -377,9 +420,12 @@ def bind_instance(run: dict, instance_rows: list[dict]) -> int | None:
     different visit. None when there is no row, which the caller must not
     confuse with a mask of zero.
     """
-    mine = [row for row in instance_rows
-            if int(row.get("map") if row.get("map") is not None else -1)
-            == int(run["map_id"])]
+    mine = [
+        row
+        for row in instance_rows
+        if int(row.get("map") if row.get("map") is not None else -1)
+        == int(run["map_id"])
+    ]
     if not mine:
         return None
     newest = max(mine, key=lambda row: int(row.get("id") or 0))
@@ -389,8 +435,10 @@ def bind_instance(run: dict, instance_rows: list[dict]) -> int | None:
 
 # --- who is in there -------------------------------------------------------
 
-def party_state(roster: list[str], snapshot_rows: list[dict], run: dict,
-                now: datetime) -> list[dict]:
+
+def party_state(
+    roster: list[str], snapshot_rows: list[dict], run: dict, now: datetime
+) -> list[dict]:
     """Each family member, and whether they are in the dungeon and standing.
 
     ALIVE IS `health > 0` AND NOTHING CLEVERER. overseer_snapshot has no dead
@@ -407,11 +455,17 @@ def party_state(roster: list[str], snapshot_rows: list[dict], run: dict,
     for name in roster:
         row = by_name.get(name)
         if row is None:
-            note = ("no snapshot row, so nothing here knows where %s is"
-                    % name)
-            out.append({"name": name, "known": False, "inside": False,
-                        "tone": "away", "note": note,
-                        "label": "%s: %s" % (name, note)})
+            note = "no snapshot row, so nothing here knows where %s is" % name
+            out.append(
+                {
+                    "name": name,
+                    "known": False,
+                    "inside": False,
+                    "tone": "away",
+                    "note": note,
+                    "label": "%s: %s" % (name, note),
+                }
+            )
             continue
         seen = row.get("updated_at")
         stale = bool(seen is not None and (now - seen) > SNAPSHOT_FRESH)
@@ -457,8 +511,10 @@ def party_state(roster: list[str], snapshot_rows: list[dict], run: dict,
 
 # --- the recap -------------------------------------------------------------
 
-def _run_deaths(run: dict, death_rows: list[dict], now: datetime,
-                dungeons: dict, zones: dict) -> list[dict]:
+
+def _run_deaths(
+    run: dict, death_rows: list[dict], now: datetime, dungeons: dict, zones: dict
+) -> list[dict]:
     start, end = run_window(run, now)
     out = []
     for row in death_rows:
@@ -467,14 +523,17 @@ def _run_deaths(run: dict, death_rows: list[dict], now: datetime,
             continue
         if int(row.get("map") or -1) != int(run["map_id"]):
             continue
-        out.append({
-            "who": row["character_name"],
-            "at": _iso(when),
-            "killer": row.get("killer_name") or "something unnamed",
-            "killer_type": row.get("killer_type") or "",
-            "place": place_name(int(row.get("map") or 0),
-                                int(row.get("zone") or 0), dungeons, zones),
-        })
+        out.append(
+            {
+                "who": row["character_name"],
+                "at": _iso(when),
+                "killer": row.get("killer_name") or "something unnamed",
+                "killer_type": row.get("killer_type") or "",
+                "place": place_name(
+                    int(row.get("map") or 0), int(row.get("zone") or 0), dungeons, zones
+                ),
+            }
+        )
     out.sort(key=lambda death: death["at"] or "")
     return out
 
@@ -489,8 +548,11 @@ def _party_line(inside: int, standing: int, roster: int) -> str:
     """
     if not inside:
         return "nobody from the family is on the dungeon map"
-    where = ("all %d inside" % roster if inside == roster
-             else "%d of %d inside" % (inside, roster))
+    where = (
+        "all %d inside" % roster
+        if inside == roster
+        else "%d of %d inside" % (inside, roster)
+    )
     if standing == inside:
         return where + ", all standing"
     return "%s, %d standing and %d down" % (where, standing, inside - standing)
@@ -528,14 +590,20 @@ def _ending(run: dict) -> str:
             return _ENDINGS[token]
     unknown = reason or outcome
     if unknown:
-        return ('the row says "%s", which is not a word this page knows'
-                % unknown)
+        return 'the row says "%s", which is not a word this page knows' % unknown
     return "nothing on the row says how it ended"
 
 
-def _ended_summary(run: dict, firsts: dict, items: dict, icons: dict,
-                   now: datetime, dungeons: dict, zones: dict,
-                   book: ItemBook | None = None) -> dict:
+def _ended_summary(
+    run: dict,
+    firsts: dict,
+    items: dict,
+    icons: dict,
+    now: datetime,
+    dungeons: dict,
+    zones: dict,
+    book: ItemBook | None = None,
+) -> dict:
     map_id = int(run["map_id"])
     end = run.get("ended_at") or run.get("last_progress_at") or run["started_at"]
     loot = run_loot(run, firsts, items, icons, now, dungeons, zones, book)
@@ -546,21 +614,35 @@ def _ended_summary(run: dict, firsts: dict, items: dict, icons: dict,
         "ended_reason": _ending(run),
         "lasted": elapsed(run["started_at"], end),
         "loot": loot,
-        "loot_line": ("nothing new was worn in there" if not loot else
-                      "%d first worn in there" % len(loot)),
+        "loot_line": (
+            "nothing new was worn in there"
+            if not loot
+            else "%d first worn in there" % len(loot)
+        ),
         "line": "the last run was %s, led by %s, and it lasted %s"
-                % (dungeons.get(map_id, "map %d" % map_id),
-                   run.get("leader_name") or "nobody named",
-                   elapsed(run["started_at"], end)),
+        % (
+            dungeons.get(map_id, "map %d" % map_id),
+            run.get("leader_name") or "nobody named",
+            elapsed(run["started_at"], end),
+        ),
     }
 
 
-def build_recap(run_rows: list[dict], event_rows: list[dict],
-                death_rows: list[dict], snapshot_rows: list[dict],
-                instance_rows: list[dict], encounter_rows: list[dict],
-                roster: list[str], items: dict, icons: dict,
-                dungeons: dict, zones: dict, now: datetime,
-                book: ItemBook | None = None) -> dict:
+def build_recap(
+    run_rows: list[dict],
+    event_rows: list[dict],
+    death_rows: list[dict],
+    snapshot_rows: list[dict],
+    instance_rows: list[dict],
+    encounter_rows: list[dict],
+    roster: list[str],
+    items: dict,
+    icons: dict,
+    dungeons: dict,
+    zones: dict,
+    now: datetime,
+    book: ItemBook | None = None,
+) -> dict:
     """The live recap, or an honest account of why there is not one.
 
     DEGRADING IS HALF THE JOB. Nothing is running most of the time, and a
@@ -577,8 +659,11 @@ def build_recap(run_rows: list[dict], event_rows: list[dict],
         last = max(ended, key=lambda r: r["started_at"]) if ended else None
         return {
             "live": False,
-            "headline": ("no dungeon run is open right now" if run_rows else
-                         "no dungeon run has ever been recorded on this realm"),
+            "headline": (
+                "no dungeon run is open right now"
+                if run_rows
+                else "no dungeon run has ever been recorded on this realm"
+            ),
             "run": None,
             "party": [],
             "inside_count": 0,
@@ -590,9 +675,11 @@ def build_recap(run_rows: list[dict], event_rows: list[dict],
             "deaths_line": "",
             "party_line": "",
             "progress": None,
-            "last": (_ended_summary(last, firsts, items, icons, now, dungeons,
-                                    zones, book)
-                     if last is not None else None),
+            "last": (
+                _ended_summary(last, firsts, items, icons, now, dungeons, zones, book)
+                if last is not None
+                else None
+            ),
         }
 
     run = max(active, key=lambda r: r["started_at"])
@@ -617,9 +704,12 @@ def build_recap(run_rows: list[dict], event_rows: list[dict],
             "elapsed": elapsed(run["started_at"], now),
             "last_progress_at": _iso(run.get("last_progress_at")),
             "stalled": stalled,
-            "stall_note": ("nothing has moved for %s, so this may have ended "
-                           "without the coordinator noticing"
-                           % elapsed(progressed, now)) if stalled else "",
+            "stall_note": (
+                "nothing has moved for %s, so this may have ended "
+                "without the coordinator noticing" % elapsed(progressed, now)
+            )
+            if stalled
+            else "",
         },
         "party": party,
         "inside_count": len(inside),
@@ -630,16 +720,21 @@ def build_recap(run_rows: list[dict], event_rows: list[dict],
         # The header used to say nine over a list of nine that had two real
         # ones in it, and a header that overstates a list is worse than no
         # header: it is what the operator read and believed.
-        "loot_line": ("nothing new worn in here yet" if not loot else
-                      "%d first worn in here" % len(loot)),
+        "loot_line": (
+            "nothing new worn in here yet"
+            if not loot
+            else "%d first worn in here" % len(loot)
+        ),
         "loot_caveat": LOOT_CAVEAT,
         "deaths": deaths,
-        "deaths_line": ("nobody has gone down" if not deaths else
-                        "%d down so far" % len(deaths)),
+        "deaths_line": (
+            "nobody has gone down" if not deaths else "%d down so far" % len(deaths)
+        ),
         # `encounter_rows` are THIS RUN'S MAP'S, which the adapter fetches
         # separately from the board's for the reason run_map explains.
-        "progress": encounters_down(bind_instance(run, instance_rows),
-                                    encounter_order(encounter_rows)),
+        "progress": encounters_down(
+            bind_instance(run, instance_rows), encounter_order(encounter_rows)
+        ),
         "last": None,
     }
 
@@ -666,10 +761,31 @@ def build_recap(run_rows: list[dict], event_rows: list[dict],
 # not check, so the honest move is to compare the slot it certainly fits and
 # say what was not considered.
 WEARABLE_SLOTS = {
-    1: (0,), 2: (1,), 3: (2,), 4: (3,), 5: (4,), 20: (4,), 6: (5,), 7: (6,),
-    8: (7,), 9: (8,), 10: (9,), 11: (10, 11), 12: (12, 13), 16: (14,),
-    13: (15,), 17: (15,), 21: (15,), 14: (16,), 22: (16,), 23: (16,),
-    15: (17,), 25: (17,), 26: (17,), 28: (17,), 19: (18,),
+    1: (0,),
+    2: (1,),
+    3: (2,),
+    4: (3,),
+    5: (4,),
+    20: (4,),
+    6: (5,),
+    7: (6,),
+    8: (7,),
+    9: (8,),
+    10: (9,),
+    11: (10, 11),
+    12: (12, 13),
+    16: (14,),
+    13: (15,),
+    17: (15,),
+    21: (15,),
+    14: (16,),
+    22: (16,),
+    23: (16,),
+    15: (17,),
+    25: (17,),
+    26: (17,),
+    28: (17,),
+    19: (18,),
 }
 
 ONE_HANDED = 13
@@ -692,9 +808,17 @@ NO_PROFICIENCY = "no proficiency"
 UNRANKED = "unranked"
 
 # The order the board sorts a drop's readers in, best first.
-_VERDICT_RANK = {EMPTY: 0, UPGRADE: 1, SIDEGRADE: 2, LOCKED: 3,
-                 TOO_HEAVY: 4, WRONG_CLASS: 5, NO_PROFICIENCY: 6, WORSE: 7,
-                 UNRANKED: 8}
+_VERDICT_RANK = {
+    EMPTY: 0,
+    UPGRADE: 1,
+    SIDEGRADE: 2,
+    LOCKED: 3,
+    TOO_HEAVY: 4,
+    WRONG_CLASS: 5,
+    NO_PROFICIENCY: 6,
+    WORSE: 7,
+    UNRANKED: 8,
+}
 
 # --- can this character hold it at all (mod-overseer#411) -------------------
 #
@@ -732,24 +856,67 @@ _VERDICT_RANK = {EMPTY: 0, UPGRADE: 1, SIDEGRADE: 2, LOCKED: 3,
 # item's own RequiredSkill and RequiredSpell columns, both 0 on an ordinary
 # weapon. It is the obvious call and it would not have caught entry 2280.)
 WEAPON_SKILLS = {
-    0: 44, 1: 172, 2: 45, 3: 46, 4: 54,
-    5: 160, 6: 229, 7: 43, 8: 55, 9: 0,
-    10: 136, 11: 0, 12: 0, 13: 473, 14: 0,
-    15: 173, 16: 176, 17: 253, 18: 226, 19: 228,
+    0: 44,
+    1: 172,
+    2: 45,
+    3: 46,
+    4: 54,
+    5: 160,
+    6: 229,
+    7: 43,
+    8: 55,
+    9: 0,
+    10: 136,
+    11: 0,
+    12: 0,
+    13: 473,
+    14: 0,
+    15: 173,
+    16: 176,
+    17: 253,
+    18: 226,
+    19: 228,
     20: 356,
 }
-ARMOUR_SKILLS = {0: 0, 1: 415, 2: 414, 3: 413, 4: 293, 5: 0, 6: 433,
-                 7: 0, 8: 0, 9: 0, 10: 0}
+ARMOUR_SKILLS = {
+    0: 0,
+    1: 415,
+    2: 414,
+    3: 413,
+    4: 293,
+    5: 0,
+    6: 433,
+    7: 0,
+    8: 0,
+    9: 0,
+    10: 0,
+}
 
 # For the SENTENCE only. It decides nothing, which is why it is allowed to be
 # a table: a refusal a reader cannot check is a refusal they will distrust.
 SKILL_NAMES = {
-    43: "one-hand sword", 44: "one-hand axe", 45: "bow", 46: "gun",
-    54: "one-hand mace", 55: "two-hand sword", 136: "staff",
-    160: "two-hand mace", 172: "two-hand axe", 173: "dagger", 176: "thrown",
-    226: "crossbow", 228: "wand", 229: "polearm", 253: "spear",
-    293: "plate", 356: "fishing pole", 413: "mail", 414: "leather",
-    415: "cloth", 433: "shield", 473: "fist weapon",
+    43: "one-hand sword",
+    44: "one-hand axe",
+    45: "bow",
+    46: "gun",
+    54: "one-hand mace",
+    55: "two-hand sword",
+    136: "staff",
+    160: "two-hand mace",
+    172: "two-hand axe",
+    173: "dagger",
+    176: "thrown",
+    226: "crossbow",
+    228: "wand",
+    229: "polearm",
+    253: "spear",
+    293: "plate",
+    356: "fishing pole",
+    413: "mail",
+    414: "leather",
+    415: "cloth",
+    433: "shield",
+    473: "fist weapon",
 }
 
 # WORN REGARDLESS, so no proficiency is asked for. A cloak's subclass is cloth
@@ -800,9 +967,12 @@ def armour_grade(equipped: list[dict]) -> int | None:
     stays because that fallback is real - it is what the board ranked on for
     its whole life - and because it needs no query of its own.
     """
-    grades = [int(row["subclass"]) for row in equipped
-              if row.get("class") == ARMOUR_CLASS
-              and int(row.get("subclass") or 0) in ARMOUR_GRADES]
+    grades = [
+        int(row["subclass"])
+        for row in equipped
+        if row.get("class") == ARMOUR_CLASS
+        and int(row.get("subclass") or 0) in ARMOUR_GRADES
+    ]
     return max(grades) if grades else None
 
 
@@ -848,9 +1018,13 @@ def verdict(drop: dict, member: dict) -> dict:
     name = member["name"]
     ilvl = int(drop.get("item_level") or 0)
     if not slots:
-        return {"who": name, "verdict": UNRANKED, "slot": "no slot",
-                "why": "not something that goes on the paper doll, so there is "
-                       "nothing to compare it against"}
+        return {
+            "who": name,
+            "verdict": UNRANKED,
+            "slot": "no slot",
+            "why": "not something that goes on the paper doll, so there is "
+            "nothing to compare it against",
+        }
 
     required = int(drop.get("required_level") or 0)
     level = int(member.get("level") or 0)
@@ -858,15 +1032,22 @@ def verdict(drop: dict, member: dict) -> dict:
     class_id = int(member.get("class") or 0)
     worn, slot_index = _worn_in(member["by_slot"], slots)
     slot = _slot_name(slot_index)
-    base = {"who": name, "slot": slot,
-            "worn": (worn.get("item_name") if worn else None),
-            "worn_ilvl": (int(worn.get("item_level") or 0) if worn else None)}
+    base = {
+        "who": name,
+        "slot": slot,
+        "worn": (worn.get("item_name") if worn else None),
+        "worn_ilvl": (int(worn.get("item_level") or 0) if worn else None),
+    }
 
-    if (allowable not in (None, -1, 0) and class_id
-            and not (int(allowable) & (1 << (class_id - 1)))):
-        base.update(verdict=WRONG_CLASS,
-                    why="restricted to other classes, so %s cannot use it at "
-                        "all" % name)
+    if (
+        allowable not in (None, -1, 0)
+        and class_id
+        and not (int(allowable) & (1 << (class_id - 1)))
+    ):
+        base.update(
+            verdict=WRONG_CLASS,
+            why="restricted to other classes, so %s cannot use it at all" % name,
+        )
         return base
     # PROFICIENCY, WHICH `allowable_class` ABOVE IS NOT (mod-overseer#411).
     # Placed here because it is the same KIND of gate as the one above it and
@@ -884,59 +1065,72 @@ def verdict(drop: dict, member: dict) -> dict:
     skills = member.get("skills")
     if needed and skills is not None:
         if needed not in skills:
-            base.update(verdict=NO_PROFICIENCY,
-                        why="%s has no %s skill, so %s can never hold this "
-                            "whatever its item level"
-                            % (name, SKILL_NAMES.get(needed, "required"),
-                               name))
+            base.update(
+                verdict=NO_PROFICIENCY,
+                why="%s has no %s skill, so %s can never hold this "
+                "whatever its item level"
+                % (name, SKILL_NAMES.get(needed, "required"), name),
+            )
             return base
         grade = None
     else:
-        grade = (drop.get("subclass")
-                 if drop.get("class") == ARMOUR_CLASS else None)
+        grade = drop.get("subclass") if drop.get("class") == ARMOUR_CLASS else None
     if grade in ARMOUR_GRADES:
         worn_grade = member.get("armour_grade")
         if worn_grade is None:
-            base.update(verdict=UNRANKED,
-                        why="%s is wearing no graded armour, so nothing here "
-                            "knows whether %s can wear %s"
-                            % (name, name, ARMOUR_GRADES[grade]))
+            base.update(
+                verdict=UNRANKED,
+                why="%s is wearing no graded armour, so nothing here "
+                "knows whether %s can wear %s" % (name, name, ARMOUR_GRADES[grade]),
+            )
             return base
         if int(grade) > worn_grade:
-            base.update(verdict=TOO_HEAVY,
-                        why="this is %s and the heaviest %s wears is %s"
-                            % (ARMOUR_GRADES[grade], name,
-                               ARMOUR_GRADES[worn_grade]))
+            base.update(
+                verdict=TOO_HEAVY,
+                why="this is %s and the heaviest %s wears is %s"
+                % (ARMOUR_GRADES[grade], name, ARMOUR_GRADES[worn_grade]),
+            )
             return base
     if required > level:
-        base.update(verdict=LOCKED,
-                    why="needs level %d and %s is %d" % (required, name, level))
+        base.update(
+            verdict=LOCKED, why="needs level %d and %s is %d" % (required, name, level)
+        )
         return base
 
     if worn is None:
-        base.update(verdict=EMPTY,
-                    why="nothing is worn in %s's %s slot, so item level %d is "
-                        "all gain" % (name, slot, ilvl))
+        base.update(
+            verdict=EMPTY,
+            why="nothing is worn in %s's %s slot, so item level %d is "
+            "all gain" % (name, slot, ilvl),
+        )
         return base
     if worn.get("item_level") is None:
-        base.update(verdict=UNRANKED,
-                    why="the world database does not know the item worn in "
-                        "%s's %s slot, so there is nothing to compare against"
-                        % (name, slot))
+        base.update(
+            verdict=UNRANKED,
+            why="the world database does not know the item worn in "
+            "%s's %s slot, so there is nothing to compare against" % (name, slot),
+        )
         return base
     worn_ilvl = int(worn["item_level"])
     if ilvl > worn_ilvl:
-        base.update(verdict=UPGRADE, gain=ilvl - worn_ilvl,
-                    why="item level %d against the %d of the %s worn there"
-                        % (ilvl, worn_ilvl, worn.get("item_name") or "item"))
+        base.update(
+            verdict=UPGRADE,
+            gain=ilvl - worn_ilvl,
+            why="item level %d against the %d of the %s worn there"
+            % (ilvl, worn_ilvl, worn.get("item_name") or "item"),
+        )
     elif ilvl == worn_ilvl:
-        base.update(verdict=SIDEGRADE,
-                    why="item level %d, the same as the %s worn there"
-                        % (ilvl, worn.get("item_name") or "item"))
+        base.update(
+            verdict=SIDEGRADE,
+            why="item level %d, the same as the %s worn there"
+            % (ilvl, worn.get("item_name") or "item"),
+        )
     else:
-        base.update(verdict=WORSE,
-                    why="item level %d against the %d of the %s worn there"
-                        % (ilvl, worn_ilvl, worn.get("item_name") or "item"))
+        base.update(
+            verdict=WORSE,
+            why="item level %d against the %d of the %s worn there"
+            % (ilvl, worn_ilvl, worn.get("item_name") or "item"),
+        )
     return base
 
 
@@ -970,17 +1164,25 @@ def caveats_for(drop: dict, proficiency_checked: bool = False) -> list[str]:
     """
     notes = []
     if not proficiency_checked and drop.get("class") == WEAPON_CLASS:
-        notes.append("weapon proficiency is not checked, so nothing here says "
-                     "who can actually hold it")
-    if (not proficiency_checked and drop.get("class") == ARMOUR_CLASS
-            and int(drop.get("subclass") or 0) == 6):
+        notes.append(
+            "weapon proficiency is not checked, so nothing here says "
+            "who can actually hold it"
+        )
+    if (
+        not proficiency_checked
+        and drop.get("class") == ARMOUR_CLASS
+        and int(drop.get("subclass") or 0) == 6
+    ):
         notes.append("shield proficiency is not checked")
     if int(drop.get("inventory_type") or 0) == ONE_HANDED:
-        notes.append("compared against the main hand only: putting it in the "
-                     "off hand needs dual wield, which is not checked")
+        notes.append(
+            "compared against the main hand only: putting it in the "
+            "off hand needs dual wield, which is not checked"
+        )
     if int(drop.get("inventory_type") or 0) == TWO_HANDED:
-        notes.append("a two-hander also costs the off hand, which this "
-                     "comparison does not price")
+        notes.append(
+            "a two-hander also costs the off hand, which this comparison does not price"
+        )
     return notes
 
 
@@ -1024,12 +1226,18 @@ def _chance(row: dict, group_sizes: dict) -> str:
     return "one roll shared between the %d rows in its group" % size
 
 
-def build_lootboard(map_id: int, dungeon: str, encounter_rows: list[dict],
-                    loot_rows: list[dict], char_rows: list[dict],
-                    equipped_rows: list[dict], icons: dict,
-                    roster: list[str],
-                    skill_rows: list[dict] | None = None,
-                    book: ItemBook | None = None) -> dict:
+def build_lootboard(
+    map_id: int,
+    dungeon: str,
+    encounter_rows: list[dict],
+    loot_rows: list[dict],
+    char_rows: list[dict],
+    equipped_rows: list[dict],
+    icons: dict,
+    roster: list[str],
+    skill_rows: list[dict] | None = None,
+    book: ItemBook | None = None,
+) -> dict:
     """What each boss on this map can drop, and who it would be for.
 
     The bosses come from `instance_encounters` narrowed to creatures spawned
@@ -1049,7 +1257,8 @@ def build_lootboard(map_id: int, dungeon: str, encounter_rows: list[dict],
     # old item-level ones, and the caveat is about the board rather than about
     # a member - so one unknown is enough to keep it printed for everybody.
     proficiency_checked = bool(members) and all(
-        member["skills"] is not None for member in members)
+        member["skills"] is not None for member in members
+    )
     group_sizes: dict = {}
     for row in loot_rows:
         key = (int(row["Entry"]), int(row.get("GroupId") or 0))
@@ -1067,9 +1276,14 @@ def build_lootboard(map_id: int, dungeon: str, encounter_rows: list[dict],
                 continue
             entry = int(row["Item"])
             drop = item_payload(entry, row, icons, book)
-            readers = sorted((verdict(row, member) for member in members),
-                             key=lambda v: (_VERDICT_RANK.get(v["verdict"], 9),
-                                            -int(v.get("gain") or 0), v["who"]))
+            readers = sorted(
+                (verdict(row, member) for member in members),
+                key=lambda v: (
+                    _VERDICT_RANK.get(v["verdict"], 9),
+                    -int(v.get("gain") or 0),
+                    v["who"],
+                ),
+            )
             wanted = [r for r in readers if r["verdict"] in (UPGRADE, EMPTY)]
             slot = _slot_name(slots_for(row.get("inventory_type"))[0])
             chance = _chance(row, group_sizes)
@@ -1089,34 +1303,41 @@ def build_lootboard(map_id: int, dungeon: str, encounter_rows: list[dict],
                 # sort EMPTY and UPGRADE above everything else. Re-rank the
                 # verdicts here and the page would start hiding a name or
                 # repeating one, with nothing failing.
-                verdict_line=("%s: %s" % (best["who"], best["why"])
-                              if best else ""),
+                verdict_line=("%s: %s" % (best["who"], best["why"]) if best else ""),
                 also_line=_also_line(wanted, best),
                 caveats=caveats_for(row, proficiency_checked),
             )
             drops.append(drop)
-        drops.sort(key=lambda d: (0 if d["wanted_by"] else 1,
-                                  -(d["ilvl"] or 0), d["name"]))
+        drops.sort(
+            key=lambda d: (0 if d["wanted_by"] else 1, -(d["ilvl"] or 0), d["name"])
+        )
         wanted = len([drop for drop in drops if drop["wanted_by"]])
-        bosses.append({
-            "name": encounter["name"],
-            "creature": encounter["creature"],
-            "drops": drops,
-            "wanted": wanted,
-            "line": _boss_line(len(drops), wanted),
-        })
+        bosses.append(
+            {
+                "name": encounter["name"],
+                "creature": encounter["creature"],
+                "drops": drops,
+                "wanted": wanted,
+                "line": _boss_line(len(drops), wanted),
+            }
+        )
 
     return {
         "map_id": map_id,
         "dungeon": dungeon,
         "bosses": bosses,
-        "line": ("%s: %d bosses, %d pieces of gear between them"
-                 % (dungeon, len(bosses),
-                    sum(len(boss["drops"]) for boss in bosses))),
-        "members": [{"name": m["name"], "level": m.get("level"),
-                     "armour": ARMOUR_GRADES.get(m.get("armour_grade"),
-                                                 "nothing graded")}
-                    for m in members],
+        "line": (
+            "%s: %d bosses, %d pieces of gear between them"
+            % (dungeon, len(bosses), sum(len(boss["drops"]) for boss in bosses))
+        ),
+        "members": [
+            {
+                "name": m["name"],
+                "level": m.get("level"),
+                "armour": ARMOUR_GRADES.get(m.get("armour_grade"), "nothing graded"),
+            }
+            for m in members
+        ],
         "basis": (
             "Bosses from the core's own instance_encounters table, narrowed "
             "to the credit creatures spawned on this map. An encounter whose "
@@ -1125,18 +1346,24 @@ def build_lootboard(map_id: int, dungeon: str, encounter_rows: list[dict],
             "loot that lives behind reference_loot_template is not followed, "
             "so this is not a complete drop list. Ranked by item level only: "
             "no stat weighting is applied anywhere, and a tie is reported as "
-            "a tie. " + (
+            "a tie. "
+            + (
                 "Whether a character can hold a thing is read from their own "
                 "character_skills rows, using the core's own "
                 "subclass-to-skill map, so a weapon or a shield nobody can "
                 "use is refused by name rather than ranked."
-                if proficiency_checked else
-                "Proficiency could not be read for every character this time, "
+                if proficiency_checked
+                else "Proficiency could not be read for every character this time, "
                 "so a weapon is ranked on item level alone and the drop says "
-                "so.")),
-        "empty_note": ("the world database lists no encounters for this map, "
-                       "so there is no boss loot to show"
-                       if not encounters else ""),
+                "so."
+            )
+        ),
+        "empty_note": (
+            "the world database lists no encounters for this map, "
+            "so there is no boss loot to show"
+            if not encounters
+            else ""
+        ),
     }
 
 
@@ -1148,9 +1375,12 @@ def _boss_line(drops: int, wanted: int) -> str:
     return "%d pieces, %d of them worth taking" % (drops, wanted)
 
 
-def family_members(char_rows: list[dict], equipped_rows: list[dict],
-             roster: list[str],
-             skill_rows: list[dict] | None = None) -> list[dict]:
+def family_members(
+    char_rows: list[dict],
+    equipped_rows: list[dict],
+    roster: list[str],
+    skill_rows: list[dict] | None = None,
+) -> list[dict]:
     """The family as the board compares against them.
 
     Built from whatever rows arrive, in roster order, so a sixth character or
@@ -1181,30 +1411,35 @@ def family_members(char_rows: list[dict], equipped_rows: list[dict],
         if char is None:
             continue
         mine = worn.get(name, [])
-        members.append({
-            "name": name,
-            "level": char.get("level"),
-            "class": char.get("class"),
-            "by_slot": {int(row["slot"]): row for row in mine},
-            "armour_grade": armour_grade(mine),
-            "skills": held.get(name),
-        })
+        members.append(
+            {
+                "name": name,
+                "level": char.get("level"),
+                "class": char.get("class"),
+                "by_slot": {int(row["slot"]): row for row in mine},
+                "armour_grade": armour_grade(mine),
+                "skills": held.get(name),
+            }
+        )
     return members
 
 
 # --- where a worn item came from -------------------------------------------
 
+
 def record_starts(event_rows: list[dict]) -> datetime | None:
     """The oldest equip the record holds. Anything worn before this is
     unknowable here, and the provenance line says so with the date rather
     than shrugging."""
-    seen = [row["first_seen"] for row in event_rows
-            if row.get("kind") in (None, ITEM_EQUIP)]
+    seen = [
+        row["first_seen"] for row in event_rows if row.get("kind") in (None, ITEM_EQUIP)
+    ]
     return min(seen) if seen else None
 
 
-def provenance_index(event_rows: list[dict], equipped_rows: list[dict],
-                     dungeons: dict, zones: dict) -> dict:
+def provenance_index(
+    event_rows: list[dict], equipped_rows: list[dict], dungeons: dict, zones: dict
+) -> dict:
     """character -> item entry -> where and when it was FIRST WORN.
 
     THE EARLIEST ROW, NOT THE LATEST. The latest row for a worn item is only
@@ -1223,8 +1458,11 @@ def provenance_index(event_rows: list[dict], equipped_rows: list[dict],
     """
     firsts = first_equips(event_rows)
     starts = record_starts(event_rows)
-    since = ("the equip record starts %s" % starts.strftime("%d %B %Y")
-             if starts is not None else "the equip record is empty")
+    since = (
+        "the equip record starts %s" % starts.strftime("%d %B %Y")
+        if starts is not None
+        else "the equip record is empty"
+    )
     out: dict = {}
     for row in equipped_rows:
         who = row["name"]
@@ -1236,8 +1474,9 @@ def provenance_index(event_rows: list[dict], equipped_rows: list[dict],
                 "line": "no record of where this came from: %s" % since,
             }
             continue
-        place = place_name(int(first.get("map") or 0),
-                           int(first.get("zone") or 0), dungeons, zones)
+        place = place_name(
+            int(first.get("map") or 0), int(first.get("zone") or 0), dungeons, zones
+        )
         out.setdefault(who, {})[entry] = {
             "known": True,
             "at": _iso(first["first_seen"]),
@@ -1256,6 +1495,7 @@ def provenance_index(event_rows: list[dict], equipped_rows: list[dict],
 # what a zone id is called. Each is a judgement, each is reachable from the
 # suite here, and none of them is reachable inside an f-string in map_server.
 
+
 def run_map(run_rows: list[dict]) -> int | None:
     """The map the live run is on, or None when nothing is open.
 
@@ -1273,8 +1513,7 @@ def run_map(run_rows: list[dict]) -> int | None:
     return int(max(live, key=lambda r: r["started_at"])["map_id"])
 
 
-def board_map(run_rows: list[dict], asked: int | None,
-              default: int = 43) -> int:
+def board_map(run_rows: list[dict], asked: int | None, default: int = 43) -> int:
     """Which dungeon the loot board should be built for.
 
     An explicit `?map=` wins, because a reader browsing ahead has said what
@@ -1299,8 +1538,13 @@ def wanted_items(event_rows: list[dict]) -> list[int]:
     Sorted so the query is stable between calls, which makes a slow-query log
     readable and a cached plan reusable.
     """
-    return sorted({int(row["subject_id"]) for row in event_rows
-                   if row.get("kind") in (None, ITEM_EQUIP)})
+    return sorted(
+        {
+            int(row["subject_id"])
+            for row in event_rows
+            if row.get("kind") in (None, ITEM_EQUIP)
+        }
+    )
 
 
 def zone_names(continents: dict) -> dict[int, str]:

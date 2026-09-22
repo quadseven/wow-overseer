@@ -7,6 +7,7 @@ writes `travel_npc`, but the caller in bridge.py routes the resulting errand
 through `ECONOMY_ERRANDS`, deliberately, so it inherits the exact same
 idle-traveller guard rather than repeating that mistake one file over.
 """
+
 import ast
 import pathlib
 import re
@@ -18,8 +19,7 @@ import travel
 BRIDGE = pathlib.Path(__file__).resolve().parents[1] / "bridge.py"
 TRAVEL = pathlib.Path(__file__).resolve().parents[1] / "travel.py"
 MOD_OVERSEER = (
-    pathlib.Path(__file__).resolve().parents[1]
-    / "mod-overseer/src/mod_overseer.cpp"
+    pathlib.Path(__file__).resolve().parents[1] / "mod-overseer/src/mod_overseer.cpp"
 )
 
 
@@ -27,8 +27,9 @@ class ReserveDocumentationMatchesPinnedCore(unittest.TestCase):
     """Keep the reserve explanation aligned with the pinned core behavior."""
 
     def test_distinguishes_immediate_handlers_from_periodic_saves(self):
-        source = (pathlib.Path(__file__).resolve().parents[1]
-                  / "guildbank.py").read_text(encoding="utf-8")
+        source = (
+            pathlib.Path(__file__).resolve().parents[1] / "guildbank.py"
+        ).read_text(encoding="utf-8")
         self.assertIn("only the guild-bank withdraw and mail-money handlers", source)
         self.assertIn("SaveGoldToDB", source)
         self.assertIn("Player::SaveToDB", source)
@@ -50,10 +51,8 @@ RESERVE_NO_TAB = guildbank.FLOAT_COPPER + guildbank.TAB0_COST_COPPER
 
 
 class WhoIsCarryingMoreThanTheFloat(unittest.TestCase):
-
     def test_nothing_below_the_reserve_is_planned(self):
-        self.assertEqual(
-            guildbank.plan_deposits([member(money=RESERVE_NO_TAB)]), [])
+        self.assertEqual(guildbank.plan_deposits([member(money=RESERVE_NO_TAB)]), [])
 
     def test_exactly_the_reserve_is_not_a_surplus(self):
         deposits = guildbank.plan_deposits([member(money=RESERVE_NO_TAB)])
@@ -66,37 +65,36 @@ class WhoIsCarryingMoreThanTheFloat(unittest.TestCase):
     def test_a_large_purse_deposits_everything_above_the_reserve(self):
         purse = RESERVE_NO_TAB + 50_000
         deposits = guildbank.plan_deposits([member(money=purse)])
-        self.assertEqual(deposits,
-                         [guildbank.Deposit(name="Grug", copper=50_000)])
+        self.assertEqual(deposits, [guildbank.Deposit(name="Grug", copper=50_000)])
 
 
 class OnlyAGuildMemberIsPlanned(unittest.TestCase):
-
     def test_a_character_with_no_guild_is_skipped_outright(self):
         """Not an error - the errand is meaningless for them, so the caller
         should never have to filter first."""
-        deposits = guildbank.plan_deposits(
-            [member(money=1_000_000, in_guild=False)])
+        deposits = guildbank.plan_deposits([member(money=1_000_000, in_guild=False)])
         self.assertEqual(deposits, [])
 
     def test_a_missing_in_guild_key_reads_as_not_in_a_guild(self):
         self.assertEqual(
-            guildbank.plan_deposits([{"name": "Grug", "money": 1_000_000}]), [])
+            guildbank.plan_deposits([{"name": "Grug", "money": 1_000_000}]), []
+        )
 
     def test_a_guild_member_alongside_a_non_member_only_plans_the_member(self):
-        deposits = guildbank.plan_deposits([
-            member(name="Grug", money=RESERVE_NO_TAB + 50_000, in_guild=True),
-            member(name="Stranger", money=RESERVE_NO_TAB + 50_000,
-                   in_guild=False),
-        ])
+        deposits = guildbank.plan_deposits(
+            [
+                member(name="Grug", money=RESERVE_NO_TAB + 50_000, in_guild=True),
+                member(name="Stranger", money=RESERVE_NO_TAB + 50_000, in_guild=False),
+            ]
+        )
         self.assertEqual([d.name for d in deposits], ["Grug"])
 
 
 class AStaleOrAbsentReadNeverManufacturesADeposit(unittest.TestCase):
-
     def test_a_missing_money_key_is_nothing_to_deposit_not_an_error(self):
-        self.assertEqual(guildbank.plan_deposits([{"name": "Grug",
-                                                    "in_guild": True}]), [])
+        self.assertEqual(
+            guildbank.plan_deposits([{"name": "Grug", "in_guild": True}]), []
+        )
 
     def test_a_zero_purse_deposits_nothing(self):
         self.assertEqual(guildbank.plan_deposits([member(money=0)]), [])
@@ -108,32 +106,35 @@ class AStaleOrAbsentReadNeverManufacturesADeposit(unittest.TestCase):
         self.assertEqual(guildbank.plan_deposits([member(money=-500)]), [])
 
     def test_a_non_int_money_value_is_treated_as_nothing_to_deposit(self):
-        self.assertEqual(
-            guildbank.plan_deposits([member(money="lots")]), [])
+        self.assertEqual(guildbank.plan_deposits([member(money="lots")]), [])
 
     def test_a_member_with_no_name_is_skipped(self):
         self.assertEqual(
-            guildbank.plan_deposits([{"money": 1_000_000, "in_guild": True}]),
-            [])
+            guildbank.plan_deposits([{"money": 1_000_000, "in_guild": True}]), []
+        )
 
 
 class MultipleMembersEachGetTheirOwnDeposit(unittest.TestCase):
-
     def test_every_member_over_the_reserve_gets_a_deposit(self):
-        deposits = guildbank.plan_deposits([
-            member(name="Grug", money=RESERVE_NO_TAB + 100),
-            member(name="Grog", money=RESERVE_NO_TAB + 200),
-        ])
-        self.assertEqual({d.name: d.copper for d in deposits},
-                         {"Grug": 100, "Grog": 200})
+        deposits = guildbank.plan_deposits(
+            [
+                member(name="Grug", money=RESERVE_NO_TAB + 100),
+                member(name="Grog", money=RESERVE_NO_TAB + 200),
+            ]
+        )
+        self.assertEqual(
+            {d.name: d.copper for d in deposits}, {"Grug": 100, "Grog": 200}
+        )
 
     def test_members_come_back_in_the_order_they_were_given(self):
         """Ordering, like _fetch_guild_money's own read, is the caller's
         concern - this module does not re-sort."""
-        deposits = guildbank.plan_deposits([
-            member(name="Ugga", money=RESERVE_NO_TAB + 1),
-            member(name="Bork", money=RESERVE_NO_TAB + 1),
-        ])
+        deposits = guildbank.plan_deposits(
+            [
+                member(name="Ugga", money=RESERVE_NO_TAB + 1),
+                member(name="Bork", money=RESERVE_NO_TAB + 1),
+            ]
+        )
         self.assertEqual([d.name for d in deposits], ["Ugga", "Bork"])
 
     def test_an_empty_roster_plans_nothing(self):
@@ -147,12 +148,13 @@ class FormatItemDepositIsAPureFormatterTests(unittest.TestCase):
     def test_guid_form(self):
         self.assertEqual(
             guildbank.format_item_deposit(item_guid=494263),
-            "bank deposit-item guid:494263")
+            "bank deposit-item guid:494263",
+        )
 
     def test_entry_form(self):
         self.assertEqual(
-            guildbank.format_item_deposit(entry=4562),
-            "bank deposit-item entry:4562")
+            guildbank.format_item_deposit(entry=4562), "bank deposit-item entry:4562"
+        )
 
     def test_neither_is_rejected(self):
         with self.assertRaises(ValueError):
@@ -234,8 +236,8 @@ class RecentGuildBankKeysEscapesItsLikePatternTests(unittest.TestCase):
     def test_the_query_string_itself_has_no_bare_percent(self):
         # Every '%' the query STRING contains must be one of pymysql's own
         # placeholders (%s) - a bare one is exactly what crashed live.
-        start = self.body.index('cur.execute(')
-        end = self.body.index(')', self.body.index("MINUTE\""))
+        start = self.body.index("cur.execute(")
+        end = self.body.index(")", self.body.index('MINUTE"'))
         query_call = self.body[start:end]
         query_literal = "".join(
             line.strip().strip('"')
@@ -308,12 +310,16 @@ class GuildBankTravelAimUsesTheRealKeywordTests(unittest.TestCase):
         aim has to be answered THERE - an empty tuple means "not an economy
         errand" and sends it down the unconditional branch."""
         source = BRIDGE.read_text(encoding="utf-8")
-        self.assertIn('"guild banker"', source[
-            source.index("ECONOMY_ERRANDS = ("):
-            source.index("\n", source.index("ECONOMY_ERRANDS = ("))
-        ])
-        guard = source[source.index("def _retaskable_from("):]
-        guard = guard[:guard.index("\ndef ")]
+        self.assertIn(
+            '"guild banker"',
+            source[
+                source.index("ECONOMY_ERRANDS = (") : source.index(
+                    "\n", source.index("ECONOMY_ERRANDS = (")
+                )
+            ],
+        )
+        guard = source[source.index("def _retaskable_from(") :]
+        guard = guard[: guard.index("\ndef ")]
         self.assertIn("travel.is_ground_aim(aim)", guard)
 
     def test_a_ground_aim_may_retask_only_an_idle_traveller(self):
@@ -330,10 +336,10 @@ class GuildBankTravelAimUsesTheRealKeywordTests(unittest.TestCase):
         (found exactly that way - green locally, `ModuleNotFoundError: No
         module named 'discord'` on the runner)."""
         source = BRIDGE.read_text(encoding="utf-8")
-        guard = source[source.index("def _retaskable_from("):]
-        guard = guard[:guard.index("\ndef ")]
-        branch = guard[guard.index("if travel.is_ground_aim(aim):"):]
-        branch = branch[:branch.index("if aim.isdigit():")]
+        guard = source[source.index("def _retaskable_from(") :]
+        guard = guard[: guard.index("\ndef ")]
+        branch = guard[guard.index("if travel.is_ground_aim(aim):") :]
+        branch = branch[: branch.index("if aim.isdigit():")]
         self.assertIn('return ("", aim)', branch)
         # Not a refinement of `vendor`, unlike the numeric aim below it.
         self.assertNotIn("VENDOR_ROLE", branch)
@@ -357,8 +363,9 @@ class GuildBankOnceLogsWhetherTheLeaderWasActuallyAimedTests(unittest.TestCase):
 
     def test_the_aim_result_is_captured_not_discarded(self):
         self.assertIn("aimed = await self._claim_town_slot(", self.body)
-        self.assertIn('self._claim_town_slot("guild bank", leader, vault.aim)',
-                      self.body)
+        self.assertIn(
+            'self._claim_town_slot("guild bank", leader, vault.aim)', self.body
+        )
 
     def test_a_refused_aim_is_logged(self):
         """Still logged, but the condition gained a second arm (infra#3702):
@@ -370,7 +377,7 @@ class GuildBankOnceLogsWhetherTheLeaderWasActuallyAimedTests(unittest.TestCase):
         self.assertIn("log.info(", self.body)
 
     def test_the_refusal_says_what_holds_the_column(self):
-        """"already on another errand" cannot tell a pass starved by a LIVE
+        """ "already on another errand" cannot tell a pass starved by a LIVE
         errand from one starved by an errand left behind, and that difference
         is the whole diagnosis. The holder is read and logged.
 
@@ -381,11 +388,11 @@ class GuildBankOnceLogsWhetherTheLeaderWasActuallyAimedTests(unittest.TestCase):
         this pins is that the sentence did not go away with the local read: the
         pass still reports its own cost, and `_claim_town_slot` still reports
         the holder."""
-        self.assertIn("guild bank: leader=%s could not be aimed at the vault",
-                      self.body)
-        door = self.source[self.source.index(
-            "    async def _claim_town_slot("):]
-        door = door[:door.index("    async def _aim_at_reagent_vendor(")]
+        self.assertIn(
+            "guild bank: leader=%s could not be aimed at the vault", self.body
+        )
+        door = self.source[self.source.index("    async def _claim_town_slot(") :]
+        door = door[: door.index("    async def _aim_at_reagent_vendor(")]
         self.assertIn("_current_travel_npc", door)
         self.assertIn("townslot.report(decision)", door)
 
@@ -393,7 +400,7 @@ class GuildBankOnceLogsWhetherTheLeaderWasActuallyAimedTests(unittest.TestCase):
         """A deposit queued when nobody can stand at a vault has exactly one
         possible answer - `no guild bank in reach` - which is the error this
         pass manufactured every ten minutes for its whole life."""
-        head = self.body[:self.body.index("_recent_guild_bank_keys")]
+        head = self.body[: self.body.index("_recent_guild_bank_keys")]
         self.assertIn("if not vault.aim:", head)
         self.assertIn("return", head)
 
@@ -406,7 +413,9 @@ class TheVaultAimComesFromTheSpawnTableTests(unittest.TestCase):
 
     def test_the_reader_joins_gameobject_on_the_characters_own_map(self):
         source = BRIDGE.read_text(encoding="utf-8")
-        sql = source[source.index("_VAULT_SQL = ("):source.index("def _nearest_vault")]
+        sql = source[
+            source.index("_VAULT_SQL = (") : source.index("def _nearest_vault")
+        ]
         self.assertIn("acore_world.gameobject", sql)
         self.assertIn("overseer_snapshot", sql)
         # The same-map rule, enforced in the join rather than hoped for.
@@ -417,8 +426,8 @@ class TheVaultAimComesFromTheSpawnTableTests(unittest.TestCase):
 
     def test_the_gameobject_type_is_the_named_constant_not_a_bare_34(self):
         source = BRIDGE.read_text(encoding="utf-8")
-        reader = source[source.index("def _nearest_vault"):]
-        reader = reader[:reader.index("\ndef ")]
+        reader = source[source.index("def _nearest_vault") :]
+        reader = reader[: reader.index("\ndef ")]
         self.assertIn("travel.GUILD_VAULT_GO_TYPE", reader)
         self.assertEqual(34, travel.GUILD_VAULT_GO_TYPE)
 
@@ -432,8 +441,10 @@ class GroundAimFitsTheColumnOrIsRefusedTests(unittest.TestCase):
 
     def test_a_real_vault_spawn_fits(self):
         # The Gadgetzan vault, read out of the live spawn table.
-        self.assertEqual("at:1:-7203.1,-3821.1,8.6",
-                         travel.ground_aim(1, -7203.14, -3821.13, 8.56098))
+        self.assertEqual(
+            "at:1:-7203.1,-3821.1,8.6",
+            travel.ground_aim(1, -7203.14, -3821.13, 8.56098),
+        )
 
     def test_the_longest_live_vault_spawn_still_fits_at_this_precision(self):
         # At full float precision this one renders as 33 characters, one past
@@ -489,9 +500,11 @@ class AVaultOnAnotherMapIsRefusedWithASentenceTests(unittest.TestCase):
         self.assertIn("overseer_snapshot", got.refused)
 
     def test_every_refusal_is_a_whole_sentence_and_not_a_code(self):
-        for got in (travel.vault_aim(None, 1),
-                    travel.vault_aim(self.spawn(map_id=530), 1),
-                    travel.vault_aim(self.spawn(), None)):
+        for got in (
+            travel.vault_aim(None, 1),
+            travel.vault_aim(self.spawn(map_id=530), 1),
+            travel.vault_aim(self.spawn(), None),
+        ):
             self.assertGreater(len(got.refused.split()), 8, got.refused)
 
 
@@ -525,6 +538,7 @@ class TheFloatDoesNotDriftFromTheRestOfThePackageTests(unittest.TestCase):
 
     def test_the_float_is_the_same_floor_needs_py_already_measured(self):
         import needs
+
         self.assertEqual(guildbank.FLOAT_COPPER, needs.THIN_COPPER)
 
     def test_the_float_is_above_the_broke_line_digest_py_reports(self):
@@ -533,6 +547,7 @@ class TheFloatDoesNotDriftFromTheRestOfThePackageTests(unittest.TestCase):
         one gold, so the pass deposited every character onto exactly the
         threshold another module exists to report as a problem (infra#3713)."""
         import digest
+
         self.assertGreater(guildbank.FLOAT_COPPER, digest.BROKE_COPPER)
 
 
@@ -549,7 +564,7 @@ class TheReserveKeepsTheFirstTabAffordableTests(unittest.TestCase):
     on 2026-09-13 for the family's guild."""
 
     LIVE_PURSES = {
-        "Grug": 1_663_413,   # Guild Master
+        "Grug": 1_663_413,  # Guild Master
         "Ugga": 1_718_394,
         "Grog": 1_782_663,
         "Bork": 1_557_501,
@@ -557,18 +572,23 @@ class TheReserveKeepsTheFirstTabAffordableTests(unittest.TestCase):
     }
 
     def _live_members(self):
-        return [member(name=name, money=money, in_guild=True)
-                for name, money in self.LIVE_PURSES.items()]
+        return [
+            member(name=name, money=money, in_guild=True)
+            for name, money in self.LIVE_PURSES.items()
+        ]
 
     def test_every_member_still_clears_the_tab_price_afterwards(self):
-        deposits = {d.name: d.copper
-                    for d in guildbank.plan_deposits(self._live_members())}
+        deposits = {
+            d.name: d.copper for d in guildbank.plan_deposits(self._live_members())
+        }
         for name, purse in self.LIVE_PURSES.items():
             left = purse - deposits.get(name, 0)
             self.assertGreaterEqual(
-                left, guildbank.TAB0_COST_COPPER,
+                left,
+                guildbank.TAB0_COST_COPPER,
                 f"{name} is left with {left} copper, under the "
-                f"{guildbank.TAB0_COST_COPPER} the first tab costs")
+                f"{guildbank.TAB0_COST_COPPER} the first tab costs",
+            )
 
     def test_the_old_float_only_rule_would_have_stranded_every_purse(self):
         """Not a hypothetical: this is what the rule did before #3713, and it
@@ -577,14 +597,16 @@ class TheReserveKeepsTheFirstTabAffordableTests(unittest.TestCase):
         on the float alone and the tab can never be bought by anyone."""
         self.assertLess(guildbank.FLOAT_COPPER, guildbank.TAB0_COST_COPPER)
         for name, purse in self.LIVE_PURSES.items():
-            self.assertGreater(purse, guildbank.TAB0_COST_COPPER,
-                               f"{name} could not have bought a tab anyway")
+            self.assertGreater(
+                purse,
+                guildbank.TAB0_COST_COPPER,
+                f"{name} could not have bought a tab anyway",
+            )
 
     def test_a_purse_that_cannot_clear_the_reserve_deposits_nothing(self):
         """A character poorer than the reserve keeps all of it rather than
         being taken down to the float - suppression, not a partial raid."""
-        deposits = guildbank.plan_deposits(
-            [member(money=guildbank.TAB0_COST_COPPER)])
+        deposits = guildbank.plan_deposits([member(money=guildbank.TAB0_COST_COPPER)])
         self.assertEqual(deposits, [])
 
 
@@ -594,12 +616,11 @@ class AGuildThatAlreadyOwnsATabStopsReservingThePriceTests(unittest.TestCase):
 
     def test_guild_has_tab_releases_the_tab_price(self):
         purse = guildbank.FLOAT_COPPER + guildbank.TAB0_COST_COPPER + 7
-        deposits = guildbank.plan_deposits(
-            [member(money=purse)], guild_has_tab=True)
+        deposits = guildbank.plan_deposits([member(money=purse)], guild_has_tab=True)
         self.assertEqual(
             deposits,
-            [guildbank.Deposit(name="Grug",
-                               copper=guildbank.TAB0_COST_COPPER + 7)])
+            [guildbank.Deposit(name="Grug", copper=guildbank.TAB0_COST_COPPER + 7)],
+        )
 
     def test_the_default_is_the_cautious_answer(self):
         """Defaulting to False matters because the caller has not been taught
@@ -607,12 +628,14 @@ class AGuildThatAlreadyOwnsATabStopsReservingThePriceTests(unittest.TestCase):
         that keeps the tab affordable, so wiring it later can only release
         gold, never strand it."""
         purse = guildbank.FLOAT_COPPER + guildbank.TAB0_COST_COPPER + 7
-        self.assertEqual(guildbank.plan_deposits([member(money=purse)]),
-                         guildbank.plan_deposits([member(money=purse)],
-                                                 guild_has_tab=False))
-        self.assertNotEqual(guildbank.plan_deposits([member(money=purse)]),
-                            guildbank.plan_deposits([member(money=purse)],
-                                                    guild_has_tab=True))
+        self.assertEqual(
+            guildbank.plan_deposits([member(money=purse)]),
+            guildbank.plan_deposits([member(money=purse)], guild_has_tab=False),
+        )
+        self.assertNotEqual(
+            guildbank.plan_deposits([member(money=purse)]),
+            guildbank.plan_deposits([member(money=purse)], guild_has_tab=True),
+        )
 
 
 class TabDepositBlockersNamesBothSilentRefusalsTests(unittest.TestCase):
@@ -621,8 +644,9 @@ class TabDepositBlockersNamesBothSilentRefusalsTests(unittest.TestCase):
     (infra#3713)."""
 
     def test_the_realm_as_it_stands_reports_the_missing_tab(self):
-        blockers = guildbank.tab_deposit_blockers(purchased_tabs=0,
-                                                  ranks_with_deposit=0)
+        blockers = guildbank.tab_deposit_blockers(
+            purchased_tabs=0, ranks_with_deposit=0
+        )
         self.assertEqual(len(blockers), 2)
         self.assertIn("no purchased bank tab", blockers[0])
         self.assertIn("100 gold", blockers[0])
@@ -634,19 +658,21 @@ class TabDepositBlockersNamesBothSilentRefusalsTests(unittest.TestCase):
         other rank defaults to `rights(0), slots(0)` (Guild.h:267). The
         family's guild is one Guild Master and four Officers, so buying the
         tab alone leaves exactly one character able to deposit."""
-        blockers = guildbank.tab_deposit_blockers(purchased_tabs=1,
-                                                  ranks_with_deposit=1)
+        blockers = guildbank.tab_deposit_blockers(
+            purchased_tabs=1, ranks_with_deposit=1
+        )
         self.assertEqual(len(blockers), 1)
         self.assertIn("Guild Master", blockers[0])
 
     def test_a_tab_open_to_more_than_one_rank_reports_nothing(self):
         self.assertEqual(
-            guildbank.tab_deposit_blockers(purchased_tabs=1,
-                                           ranks_with_deposit=2), [])
+            guildbank.tab_deposit_blockers(purchased_tabs=1, ranks_with_deposit=2), []
+        )
 
     def test_a_tab_with_no_rank_rights_at_all_is_reported(self):
-        blockers = guildbank.tab_deposit_blockers(purchased_tabs=1,
-                                                  ranks_with_deposit=0)
+        blockers = guildbank.tab_deposit_blockers(
+            purchased_tabs=1, ranks_with_deposit=0
+        )
         self.assertEqual(len(blockers), 1)
         self.assertIn("GUILD_BANK_RIGHT_DEPOSIT_ITEM", blockers[0])
 
@@ -709,9 +735,9 @@ class ADepositIsAnsweredWhereTheCharacterStandsTests(unittest.TestCase):
         start = cpp.index(
             "if (request.verb == GuildVerb::Bank || request.verb == GuildVerb::BankWithdraw)"
         )
-        self.money = cpp[start:cpp.index("GuildVerb::BankDepositItem", start)]
-        guild = cpp[cpp.index("static char const* DoGuild("):]
-        self.refuse = guild[guild.index("auto refuse = [&]"):][:400]
+        self.money = cpp[start : cpp.index("GuildVerb::BankDepositItem", start)]
+        guild = cpp[cpp.index("static char const* DoGuild(") :]
+        self.refuse = guild[guild.index("auto refuse = [&]") :][:400]
 
     def test_the_money_deposit_measures_range_at_the_moment_it_is_answered(self):
         self.assertIn("GuildBankInReach(who, anyVaultInRange)", self.money)
@@ -751,20 +777,19 @@ class TheVaultReachGateAnswersForTheRealFamilyTests(unittest.TestCase):
         """About 36 yards out. This is the exact state that produced five
         `no guild bank in reach` rows one second after the aim was taken, so
         a gate that passes here is a gate that would have written them."""
-        self.assertFalse(
-            travel.spawn_in_reach(GADGETZAN_VAULT, standing(), 8))
+        self.assertFalse(travel.spawn_in_reach(GADGETZAN_VAULT, standing(), 8))
 
     def test_a_depositor_at_the_vault_is_in_reach(self):
-        at_it = standing(pos_x=GADGETZAN_VAULT["x"] + 3.0,
-                         pos_y=GADGETZAN_VAULT["y"])
+        at_it = standing(pos_x=GADGETZAN_VAULT["x"] + 3.0, pos_y=GADGETZAN_VAULT["y"])
         self.assertTrue(travel.spawn_in_reach(GADGETZAN_VAULT, at_it, 8))
 
     def test_every_one_of_the_five_is_judged_on_its_own_standing(self):
         """The whole of infra#3804 in one assertion: an arrived leader and a
         follower still walking get different answers from the same spawn row,
         which is why the pass asks per depositor rather than once."""
-        arrived = standing(name="Grug", pos_x=GADGETZAN_VAULT["x"] + 2.0,
-                           pos_y=GADGETZAN_VAULT["y"])
+        arrived = standing(
+            name="Grug", pos_x=GADGETZAN_VAULT["x"] + 2.0, pos_y=GADGETZAN_VAULT["y"]
+        )
         behind = standing(name="Ugga")
         self.assertTrue(travel.spawn_in_reach(GADGETZAN_VAULT, arrived, 8))
         self.assertFalse(travel.spawn_in_reach(GADGETZAN_VAULT, behind, 8))
@@ -777,13 +802,13 @@ class TheVaultReachGateAnswersForTheRealFamilyTests(unittest.TestCase):
         against the constant the pass actually passes in."""
         source = BRIDGE.read_text(encoding="utf-8")
         start = source.index("async def _guild_bank_once(")
-        body = source[start:source.index("\n    async def ", start + 1)]
+        body = source[start : source.index("\n    async def ", start + 1)]
         self.assertIn("TOWN_COUNTER_YARDS", body)
-        self.assertEqual(8, int(
-            re.search(r"^TOWN_COUNTER_YARDS = (\d+)", source, re.M).group(1)))
+        self.assertEqual(
+            8, int(re.search(r"^TOWN_COUNTER_YARDS = (\d+)", source, re.M).group(1))
+        )
         self.assertGreater(8, travel.ARRIVED_POSITION_YARDS)
-        landed = standing(pos_x=GADGETZAN_VAULT["x"] + 7.0,
-                          pos_y=GADGETZAN_VAULT["y"])
+        landed = standing(pos_x=GADGETZAN_VAULT["x"] + 7.0, pos_y=GADGETZAN_VAULT["y"])
         self.assertTrue(travel.spawn_in_reach(GADGETZAN_VAULT, landed, 8))
         self.assertFalse(travel.spawn_in_reach(GADGETZAN_VAULT, landed, 5))
 
@@ -804,8 +829,8 @@ class TheDepositQueueWaitsForTheWalkTests(unittest.TestCase):
         start = source.index("async def _guild_bank_once(")
         end = source.index("\n    async def ", start + 1)
         self.body = source[start:end]
-        self.doc = self.body[:self.body.index('"""', self.body.index('"""') + 3)]
-        self.loop = self.body[self.body.index("for deposit in deposits:"):]
+        self.doc = self.body[: self.body.index('"""', self.body.index('"""') + 3)]
+        self.loop = self.body[self.body.index("for deposit in deposits:") :]
 
     def test_every_depositor_is_asked_for_not_just_the_leader(self):
         """The pass only ever read the leader's position, to name the map. A
@@ -820,15 +845,16 @@ class TheDepositQueueWaitsForTheWalkTests(unittest.TestCase):
         arrived is skipped rather than queued. Above `_insert_guild` is the
         whole assertion: below it, the row is already in the table."""
         self.assertIn("travel.spawn_in_reach(", self.loop)
-        self.assertLess(self.loop.index("travel.spawn_in_reach("),
-                        self.loop.index("_insert_guild"))
+        self.assertLess(
+            self.loop.index("travel.spawn_in_reach("), self.loop.index("_insert_guild")
+        )
 
     def test_the_gate_reads_the_depositors_own_position(self):
         """`positions.get(deposit.name)`, never the leader's row and never the
         spawn's `d2` - `d2` is measured from the leader, and a leader who has
         arrived says nothing about a follower who has not."""
-        gate = self.loop[self.loop.index("travel.spawn_in_reach("):]
-        gate = gate[:gate.index("_insert_guild")]
+        gate = self.loop[self.loop.index("travel.spawn_in_reach(") :]
+        gate = gate[: gate.index("_insert_guild")]
         self.assertIn("positions.get(deposit.name)", gate)
         self.assertIn("TOWN_COUNTER_YARDS", gate)
         self.assertNotIn("at_the_vault", gate)
@@ -854,8 +880,9 @@ class TheDepositQueueWaitsForTheWalkTests(unittest.TestCase):
         # without it. Anywhere it is still ASSERTED, it is still wrong, so
         # there is exactly one of it and it sits under the correction.
         self.assertEqual(self.doc.count("staying pending"), 1)
-        self.assertGreater(self.doc.index("staying pending"),
-                           self.doc.index("WAS FACTUALLY WRONG"))
+        self.assertGreater(
+            self.doc.index("staying pending"), self.doc.index("WAS FACTUALLY WRONG")
+        )
         self.assertNotIn("deposit row is queued", self.doc)
 
     def test_the_leader_distance_is_only_a_short_circuit_now(self):
@@ -863,7 +890,7 @@ class TheDepositQueueWaitsForTheWalkTests(unittest.TestCase):
         already standing at the vault must not be skipped just because another
         economy pass took the released column - but it no longer decides which
         rows are written."""
-        head = self.body[:self.body.index("for deposit in deposits:")]
+        head = self.body[: self.body.index("for deposit in deposits:")]
         self.assertIn("if not aimed and not at_the_vault:", head)
         self.assertIn("IT IS THE LEADER'S DISTANCE", head)
 
@@ -872,8 +899,9 @@ class BankSetupPlannerTests(unittest.TestCase):
     def test_missing_tab_is_bought_by_the_leader(self):
         self.assertEqual(
             (guildbank.SetupAction("Grug", "bank buy-tab"),),
-            guildbank.plan_setup(leader="Grug", purchased_tabs=0,
-                                 rank_ids=(0, 1, 2), deposit_rank_ids=()),
+            guildbank.plan_setup(
+                leader="Grug", purchased_tabs=0, rank_ids=(0, 1, 2), deposit_rank_ids=()
+            ),
         )
 
     def test_existing_tab_opens_only_missing_non_master_ranks(self):
@@ -882,8 +910,12 @@ class BankSetupPlannerTests(unittest.TestCase):
                 guildbank.SetupAction("Grug", "bank grant-deposit rank:2"),
                 guildbank.SetupAction("Grug", "bank grant-deposit rank:4"),
             ),
-            guildbank.plan_setup(leader="Grug", purchased_tabs=1,
-                                 rank_ids=(0, 1, 2, 4), deposit_rank_ids=(1,)),
+            guildbank.plan_setup(
+                leader="Grug",
+                purchased_tabs=1,
+                rank_ids=(0, 1, 2, 4),
+                deposit_rank_ids=(1,),
+            ),
         )
 
     def test_invalid_leader_fails_closed(self):
@@ -895,8 +927,8 @@ class BankSetupBridgeTests(unittest.TestCase):
         self.source = BRIDGE.read_text(encoding="utf-8")
 
     def test_setup_reads_all_tables_and_handles_old_realms(self):
-        body = self.source[self.source.index("def _fetch_guild_bank_setup("):]
-        body = body[:body.index("\ndef _recent_guild_setup_keys")]
+        body = self.source[self.source.index("def _fetch_guild_bank_setup(") :]
+        body = body[: body.index("\ndef _recent_guild_setup_keys")]
         self.assertIn("information_schema.tables", body)
         self.assertIn("guild_bank_tab", body)
         self.assertIn("guild_bank_right", body)
@@ -904,7 +936,7 @@ class BankSetupBridgeTests(unittest.TestCase):
         self.assertIn("1146", body)
 
     def test_setup_pass_uses_new_module_verbs(self):
-        body = self.source[self.source.index("async def _guild_bank_once("):]
+        body = self.source[self.source.index("async def _guild_bank_once(") :]
         self.assertIn("plan_setup", body)
         self.assertIn("_recent_guild_setup_keys", body)
         self.assertIn("guildbank-setup", body)
@@ -1006,8 +1038,9 @@ def _gb_statements() -> str:
     marker = '"""'
     if body.count(marker) >= 2:
         body = body.split(marker, 2)[2]
-    return "\n".join(line for line in body.splitlines()
-                     if not line.lstrip().startswith("#"))
+    return "\n".join(
+        line for line in body.splitlines() if not line.lstrip().startswith("#")
+    )
 
 
 class TheGuildBankPassActsOnlyWhereItIsStanding(unittest.TestCase):
@@ -1061,11 +1094,10 @@ class TheGuildBankPassActsOnlyWhereItIsStanding(unittest.TestCase):
         queued for a leader still on the road.
         """
         code = _gb_statements()
-        arrived = code[code.index("if not at_the_vault:"):]
-        arrived = arrived[arrived.index("return") + len("return"):]
+        arrived = code[code.index("if not at_the_vault:") :]
+        arrived = arrived[arrived.index("return") + len("return") :]
         self.assertIn('"guildbank-setup")', arrived)
-        self.assertIn('_insert_guild, deposit.name, command, "guildbank"',
-                      arrived)
+        self.assertIn('_insert_guild, deposit.name, command, "guildbank"', arrived)
 
     def test_the_column_is_still_claimed_so_the_walk_still_starts(self):
         """Dropping the RETURN VALUE must not drop the CALL.
@@ -1074,7 +1106,9 @@ class TheGuildBankPassActsOnlyWhereItIsStanding(unittest.TestCase):
         and an arrival-only gate would wait for ever. ONE claim now, not two:
         see the sibling test above and infra#4198.
         """
-        self.assertEqual(_gb_statements().count("aimed = await self._claim_town_slot("), 1)
+        self.assertEqual(
+            _gb_statements().count("aimed = await self._claim_town_slot("), 1
+        )
 
 
 if __name__ == "__main__":

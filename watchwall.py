@@ -312,18 +312,20 @@ def build_wall(members, chosen=None) -> dict:
     """
     tiles = []
     for m in members:
-        tiles.append({
-            "name": m.get("name"),
-            "role": m.get("role"),
-            "class": m.get("class"),
-            "class_colour": m.get("class_colour"),
-            "leader": bool(m.get("leader")),
-            "playable": playable(m),
-            "url": (m.get("broadcast_url") or "") or None,
-            "standing": standing(m),
-            "line": status_line(m),
-            "tone": tone_of(m),
-        })
+        tiles.append(
+            {
+                "name": m.get("name"),
+                "role": m.get("role"),
+                "class": m.get("class"),
+                "class_colour": m.get("class_colour"),
+                "leader": bool(m.get("leader")),
+                "playable": playable(m),
+                "url": (m.get("broadcast_url") or "") or None,
+                "standing": standing(m),
+                "line": status_line(m),
+                "tone": tone_of(m),
+            }
+        )
     return {
         "modes": list(MODES),
         "mode_labels": dict(MODE_LABELS),

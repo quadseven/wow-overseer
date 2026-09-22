@@ -101,6 +101,7 @@ read. Treating that as "knows nothing" would make every node in the world look
 undiscovered and send the family after whichever happened to be nearest, for
 ever. `known_nodes` answers None for it, and `choose` refuses on None.
 """
+
 from __future__ import annotations
 
 import json
@@ -120,15 +121,15 @@ TEAM_HORDE = "horde"
 # reading - but it is written out in full because a race missing from it must
 # answer "no side I can name" rather than default to one.
 TEAMS = {
-    1: TEAM_ALLIANCE,   # Human
-    2: TEAM_HORDE,      # Orc
-    3: TEAM_ALLIANCE,   # Dwarf
-    4: TEAM_ALLIANCE,   # Night Elf
-    5: TEAM_HORDE,      # Undead
-    6: TEAM_HORDE,      # Tauren
-    7: TEAM_ALLIANCE,   # Gnome
-    8: TEAM_HORDE,      # Troll
-    10: TEAM_HORDE,     # Blood Elf
+    1: TEAM_ALLIANCE,  # Human
+    2: TEAM_HORDE,  # Orc
+    3: TEAM_ALLIANCE,  # Dwarf
+    4: TEAM_ALLIANCE,  # Night Elf
+    5: TEAM_HORDE,  # Undead
+    6: TEAM_HORDE,  # Tauren
+    7: TEAM_ALLIANCE,  # Gnome
+    8: TEAM_HORDE,  # Troll
+    10: TEAM_HORDE,  # Blood Elf
     11: TEAM_ALLIANCE,  # Draenei
 }
 
@@ -277,11 +278,16 @@ def load_nodes(static_dir: str) -> tuple:
     with open(os.path.join(static_dir, "taxinodes.json"), encoding="utf-8") as f:
         book = json.load(f)
     return tuple(
-        Node(id=int(row["id"]), map_id=int(row["map"]),
-             x=float(row["x"]), y=float(row["y"]), z=float(row["z"]),
-             name=str(row.get("name") or ""),
-             horde=int(row.get("horde") or 0),
-             alliance=int(row.get("alliance") or 0))
+        Node(
+            id=int(row["id"]),
+            map_id=int(row["map"]),
+            x=float(row["x"]),
+            y=float(row["y"]),
+            z=float(row["z"]),
+            name=str(row.get("name") or ""),
+            horde=int(row.get("horde") or 0),
+            alliance=int(row.get("alliance") or 0),
+        )
         for row in book["nodes"]
     )
 
@@ -422,7 +428,7 @@ def node_of(master: Master, nodes=None) -> int:
     it is not this master's node either.
     """
     best = None
-    for node in (NODES if nodes is None else nodes):
+    for node in NODES if nodes is None else nodes:
         if int(node.map_id) != int(master.map_id):
             continue
         dx = float(node.x) - float(master.x)
@@ -447,8 +453,9 @@ def _given_up_on(skip) -> set:
     return {int(node) for node in (skip or ())}
 
 
-def _through_the_gates(node: Node, *, here, team, known, passed_over, masters,
-                       table, stands_at: dict):
+def _through_the_gates(
+    node: Node, *, here, team, known, passed_over, masters, table, stands_at: dict
+):
     """The flight master answering for `node`, or None if a gate refuses it.
 
     The module note's three gates, asked in the order that costs least: the
@@ -481,8 +488,9 @@ def _through_the_gates(node: Node, *, here, team, known, passed_over, masters,
     return master
 
 
-def candidates(*, standing, known, team, nodes=None, masters=(),
-               reach_yards=REACH_YARDS, skip=()):
+def candidates(
+    *, standing, known, team, nodes=None, masters=(), reach_yards=REACH_YARDS, skip=()
+):
     """Every node this character could go and learn, nearest first.
 
     `standing` is the character's own snapshot row - {"map_id", "pos_x",
@@ -519,9 +527,16 @@ def candidates(*, standing, known, team, nodes=None, masters=(),
     stands_at: dict = {}
     out = []
     for node in table:
-        master = _through_the_gates(node, here=here, team=team, known=known,
-                                    passed_over=passed_over, masters=masters,
-                                    table=table, stands_at=stands_at)
+        master = _through_the_gates(
+            node,
+            here=here,
+            team=team,
+            known=known,
+            passed_over=passed_over,
+            masters=masters,
+            table=table,
+            stands_at=stands_at,
+        )
         if master is None:
             continue
         dx = float(node.x) - px
@@ -537,8 +552,17 @@ def candidates(*, standing, known, team, nodes=None, masters=(),
     return [(row[0] ** 0.5, row[2], row[3]) for row in out]
 
 
-def choose(*, character, standing, taximask, race, nodes=None, masters=(),
-           reach_yards=REACH_YARDS, skip=()):
+def choose(
+    *,
+    character,
+    standing,
+    taximask,
+    race,
+    nodes=None,
+    masters=(),
+    reach_yards=REACH_YARDS,
+    skip=(),
+):
     """The node `character` should be sent to learn, or why there is not one.
 
     Every fact comes in as an argument. `taximask` is the raw column value so
@@ -550,13 +574,20 @@ def choose(*, character, standing, taximask, race, nodes=None, masters=(),
     # that into "already holds every flight point within reach" - a sentence
     # that is not merely unhelpful but FALSE, and false in the direction that
     # reads as success. Where a reading is missing, this has to say so.
-    if (not standing or standing.get("map_id") is None
-            or standing.get("pos_x") is None or standing.get("pos_y") is None):
-        return Errand(refused=(
-            "nobody can say where %s is standing - overseer_snapshot has no "
-            "fresh row for it, so the family is either offline or the module "
-            "has stopped writing the snapshot" % (character or "it",)),
-            why="no standing row.")
+    if (
+        not standing
+        or standing.get("map_id") is None
+        or standing.get("pos_x") is None
+        or standing.get("pos_y") is None
+    ):
+        return Errand(
+            refused=(
+                "nobody can say where %s is standing - overseer_snapshot has no "
+                "fresh row for it, so the family is either offline or the module "
+                "has stopped writing the snapshot" % (character or "it",)
+            ),
+            why="no standing row.",
+        )
 
     # The name every refusal below spells, read once. Four copies of the same
     # fallback is four places for it to drift apart; the sentence above keeps
@@ -565,33 +596,55 @@ def choose(*, character, standing, taximask, race, nodes=None, masters=(),
 
     known = known_nodes(taximask)
     if known is None:
-        return Errand(refused=(
-            "%s's taximask cannot be read, and a mask nobody can read is not "
-            "an empty one - treating it as empty would make every flight point "
-            "in the world look undiscovered and send the family after whichever "
-            "is nearest, for ever" % (who,)),
-            why="unreadable taximask.")
+        return Errand(
+            refused=(
+                "%s's taximask cannot be read, and a mask nobody can read is not "
+                "an empty one - treating it as empty would make every flight point "
+                "in the world look undiscovered and send the family after whichever "
+                "is nearest, for ever" % (who,)
+            ),
+            why="unreadable taximask.",
+        )
 
     team = team_of(race)
     if not team:
-        return Errand(refused=(
-            "%s's race (%r) is not one this process can put on a side, and a "
-            "guess would aim it at a flight master that will never speak to it"
-            % (who, race)),
-            why="no team for this race.")
+        return Errand(
+            refused=(
+                "%s's race (%r) is not one this process can put on a side, and a "
+                "guess would aim it at a flight master that will never speak to it"
+                % (who, race)
+            ),
+            why="no team for this race.",
+        )
 
-    found = candidates(standing=standing, known=known, team=team, nodes=nodes,
-                       masters=masters, reach_yards=reach_yards, skip=skip)
+    found = candidates(
+        standing=standing,
+        known=known,
+        team=team,
+        nodes=nodes,
+        masters=masters,
+        reach_yards=reach_yards,
+        skip=skip,
+    )
     if not found:
         given_up = len(_given_up_on(skip))
-        return Errand(refused=(
-            "%s already holds every %s flight point within %d yards of it on "
-            "map %s that a flight master actually stands at - %d node(s) known "
-            "in all%s - so there is nothing on this map left for it to walk to "
-            "and learn" % (who, team, int(reach_yards),
-                           standing.get("map_id"), len(known),
-                           ", and %d given up on" % given_up if given_up else "")),
-            why="no reachable undiscovered node on this map.")
+        return Errand(
+            refused=(
+                "%s already holds every %s flight point within %d yards of it on "
+                "map %s that a flight master actually stands at - %d node(s) known "
+                "in all%s - so there is nothing on this map left for it to walk to "
+                "and learn"
+                % (
+                    who,
+                    team,
+                    int(reach_yards),
+                    standing.get("map_id"),
+                    len(known),
+                    ", and %d given up on" % given_up if given_up else "",
+                )
+            ),
+            why="no reachable undiscovered node on this map.",
+        )
 
     yards, node, master = found[0]
     aim = travel.flight_master_aim(node.id)
@@ -601,25 +654,34 @@ def choose(*, character, standing, taximask, race, nodes=None, masters=(),
         # reach that, so this branch is a guard rather than a live case - but a
         # truncated aim is a DIFFERENT node that nobody chose, and this project
         # has already paid for that shape in dead characters.
-        return Errand(refused=(
-            "node %d cannot be named in the %d characters "
-            "overseer_roster.travel_npc holds, so aiming at it would truncate "
-            "into a node nobody chose" % (node.id, travel.COLUMN_WIDTH)),
-            why="the aim does not fit the column.")
+        return Errand(
+            refused=(
+                "node %d cannot be named in the %d characters "
+                "overseer_roster.travel_npc holds, so aiming at it would truncate "
+                "into a node nobody chose" % (node.id, travel.COLUMN_WIDTH)
+            ),
+            why="the aim does not fit the column.",
+        )
 
-    return Errand(aim=aim, node=node.id, node_name=node.name, yards=yards,
-                  master=master.entry,
-                  why="nearest %s flight point %s has not discovered, %d "
-                      "yards off, with creature %d standing at it."
-                      % (team, who, int(yards), master.entry))
+    return Errand(
+        aim=aim,
+        node=node.id,
+        node_name=node.name,
+        yards=yards,
+        master=master.entry,
+        why="nearest %s flight point %s has not discovered, %d "
+        "yards off, with creature %d standing at it."
+        % (team, who, int(yards), master.entry),
+    )
 
 
 def report(errand: Errand) -> str:
     """One sentence for the log and the thought stream."""
     if errand.refused:
         return errand.refused
-    return ("sending them to learn taxi node %d (%s), %d yards off, by aiming "
-            "%r - the flight master's own spawn is resolved by the module, so "
-            "no coordinate is written" % (
-                errand.node, errand.node_name or "unnamed", int(errand.yards),
-                errand.aim))
+    return (
+        "sending them to learn taxi node %d (%s), %d yards off, by aiming "
+        "%r - the flight master's own spawn is resolved by the module, so "
+        "no coordinate is written"
+        % (errand.node, errand.node_name or "unnamed", int(errand.yards), errand.aim)
+    )

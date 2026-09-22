@@ -15,6 +15,7 @@ suite can reach them.
 
 Ticket: infra#2892.
 """
+
 from __future__ import annotations
 
 import os
@@ -68,7 +69,8 @@ GONE = "gone"
 # rather than silently disagreeing with a file three directories away.
 _STREAM_PREFIX = os.environ.get("WOW_STREAM_PREFIX", "dev").strip().lower()
 _STREAM_BASE = os.environ.get(
-    "WOW_STREAM_BASE", "https://wow.stream.ts.ehumps.me").rstrip("/")
+    "WOW_STREAM_BASE", "https://wow.stream.ts.ehumps.me"
+).rstrip("/")
 # Same shape restriction as the stream agent's own _NAME_RE (video.py): a
 # name that lands in a URL gets the same treatment frames._NAME_RE gives it.
 _BROADCAST_NAME_RE = re.compile(r"^[A-Za-z]{2,12}$")
@@ -88,7 +90,8 @@ _BROADCAST_NAME_RE = re.compile(r"^[A-Za-z]{2,12}$")
 _STREAMED = frozenset(
     name.strip()
     for name in os.environ.get("WOW_STREAMED_CHARACTERS", "").split(",")
-    if name.strip())
+    if name.strip()
+)
 
 
 def is_streamed(character: str, streamed=None) -> bool:
@@ -99,6 +102,8 @@ def is_streamed(character: str, streamed=None) -> bool:
     """
     listed = _STREAMED if streamed is None else frozenset(streamed)
     return not listed or (character or "").strip() in listed
+
+
 _BROADCAST_PREFIX_RE = re.compile(r"^[a-z]{0,8}$")
 
 
@@ -120,8 +125,9 @@ def broadcast_path(character: str, prefix: str | None = None) -> str:
     return f"{label}{name.lower()}"
 
 
-def broadcast_url(character: str, base: str | None = None,
-                   prefix: str | None = None) -> str | None:
+def broadcast_url(
+    character: str, base: str | None = None, prefix: str | None = None
+) -> str | None:
     """Where a browser opens a WHEP connection for this member's broadcast.
 
     None when the path cannot be built, so the page can tell "nobody to
@@ -178,11 +184,19 @@ RENDITIONS = (
 # It is not a feature flag for the ladder itself - the WHEP fallback already
 # makes a mismatch harmless - it is a way to make the UI quieter during one.
 _LADDER = os.environ.get("WOW_STREAM_LADDER", "1").strip().lower() not in (
-    "0", "false", "no", "off")
+    "0",
+    "false",
+    "no",
+    "off",
+)
 
 
-def _rendition_url(character: str, rendition_id: str, base: str | None = None,
-                   prefix: str | None = None) -> str | None:
+def _rendition_url(
+    character: str,
+    rendition_id: str,
+    base: str | None = None,
+    prefix: str | None = None,
+) -> str | None:
     """One rendition's WHEP base URL, or None if the path cannot be built OR the
     character is not streamed."""
     if not is_streamed(character):
@@ -200,8 +214,9 @@ def _rendition_url(character: str, rendition_id: str, base: str | None = None,
     return f"{root}/{path}{suffix}"
 
 
-def broadcast_renditions(character: str, base: str | None = None,
-                         prefix: str | None = None) -> list[dict]:
+def broadcast_renditions(
+    character: str, base: str | None = None, prefix: str | None = None
+) -> list[dict]:
     """Every quality this member can be watched at, best first.
 
     A LIST, ALWAYS, and never a bare URL: one entry is the honest answer when
@@ -220,14 +235,16 @@ def broadcast_renditions(character: str, base: str | None = None,
         url = _rendition_url(character, spec["id"], base, prefix)
         if not url:
             return []
-        out.append({
-            "id": spec["id"],
-            "label": spec["label"],
-            "url": url,
-            "width": spec["width"],
-            "height": spec["height"],
-            "default": spec["id"] == RENDITION_DEFAULT,
-        })
+        out.append(
+            {
+                "id": spec["id"],
+                "label": spec["label"],
+                "url": url,
+                "width": spec["width"],
+                "height": spec["height"],
+                "default": spec["id"] == RENDITION_DEFAULT,
+            }
+        )
     return out
 
 
@@ -301,6 +318,7 @@ def _condition(health: int, max_health: int) -> str:
 # the persona when there is one and the database when there is not, and a
 # character neither knows renders blank rather than wrong.
 
+
 def _class_name_of(bond, profile: dict) -> str:
     if bond:
         return bond.char_class.title()
@@ -322,8 +340,13 @@ def _race_name_of(bond, profile: dict) -> str:
     return _RACE_NAMES.get(race_id, "") if race_id is not None else ""
 
 
-def _member(name: str, row: dict | None, geo, leader_name: str | None,
-            profile: dict | None = None) -> dict:
+def _member(
+    name: str,
+    row: dict | None,
+    geo,
+    leader_name: str | None,
+    profile: dict | None = None,
+) -> dict:
     """One card. `profile` is what the DATABASE knows about this character's
     class and race, and it is what makes this work for a second family.
 
@@ -385,8 +408,11 @@ def _member(name: str, row: dict | None, geo, leader_name: str | None,
         "race": _RACE_NAMES.get(race, f"race {race}"),
         "initials": initials(row["name"]),
         "mark": race_mark(_RACE_NAMES.get(race, "")),
-        "faction": "alliance" if race in _ALLIANCE_RACES
-                   else "horde" if race in _HORDE_RACES else "neutral",
+        "faction": "alliance"
+        if race in _ALLIANCE_RACES
+        else "horde"
+        if race in _HORDE_RACES
+        else "neutral",
         "condition": _condition(health, max_health),
         "health": health,
         "max_health": max_health,
@@ -405,7 +431,8 @@ def _member(name: str, row: dict | None, geo, leader_name: str | None,
         # other four a master and they start following. Best thing about
         # watching Grug, and a surprise if nobody says it.
         "pov_changes_the_family": stream.pov_changes_the_family(
-            row["name"], leader_name or ""),
+            row["name"], leader_name or ""
+        ),
         "age_seconds": int(row["age_seconds"]),
     }
 
@@ -421,8 +448,9 @@ def _zone_of(row: dict, geo) -> str:
     as the fallback for a row with no id, or an id this realm's zone table
     does not draw.
     """
-    return (geo.zone_by_id(row.get("zone_id"))
-            or geo.zone_name(row["map_id"], row["pos_x"], row["pos_y"]))
+    return geo.zone_by_id(row.get("zone_id")) or geo.zone_name(
+        row["map_id"], row["pos_x"], row["pos_y"]
+    )
 
 
 def class_colour_by_name(class_name: str) -> str:
@@ -483,8 +511,9 @@ def build_family(rows: list[dict], geo, names=None, profiles=None) -> dict:
         if holder is not None:
             leader_name = holder["name"]
             break
-    members = [_member(n, by_name.get(n), geo, leader_name, profiles.get(n))
-               for n in names]
+    members = [
+        _member(n, by_name.get(n), geo, leader_name, profiles.get(n)) for n in names
+    ]
     present = [m for m in members if m["present"]]
     return {
         "members": members,

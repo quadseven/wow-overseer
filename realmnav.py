@@ -45,8 +45,10 @@ REALMS = (
 
 # Said in full wherever the disabled control is explained, so nobody has to go
 # and find out whether it is broken.
-NO_PAGE = ("This world runs, but it has no page: its map deployment and "
-           "service are deliberately excluded, and nothing routes to it.")
+NO_PAGE = (
+    "This world runs, but it has no page: its map deployment and "
+    "service are deliberately excluded, and nothing routes to it."
+)
 
 
 def has_page(mount: str) -> bool:
@@ -82,15 +84,17 @@ def build_nav(current: str) -> list:
     nav = []
     for mount, label, description in REALMS:
         live = has_page(mount)
-        nav.append({
-            "mount": mount,
-            "label": label,
-            "description": description,
-            "href": href_for(mount) if live else "",
-            "current": mount == current,
-            "reachable": live,
-            # A disabled control that does not say why is indistinguishable
-            # from a broken one.
-            "note": "" if live else NO_PAGE,
-        })
+        nav.append(
+            {
+                "mount": mount,
+                "label": label,
+                "description": description,
+                "href": href_for(mount) if live else "",
+                "current": mount == current,
+                "reachable": live,
+                # A disabled control that does not say why is indistinguishable
+                # from a broken one.
+                "note": "" if live else NO_PAGE,
+            }
+        )
     return nav

@@ -6,6 +6,7 @@ text the way test_bag_handover does. What is pinned is the seam
 every decision about what crosses the counter is bank.py's, and the errand
 that puts a banker within reach is written BEFORE any row that needs one.
 """
+
 import pathlib
 import re
 import unittest
@@ -16,8 +17,7 @@ PACKAGE = pathlib.Path(__file__).resolve().parents[1]
 BRIDGE = PACKAGE / "bridge.py"
 DOCKERFILE = pathlib.Path(__file__).resolve().parents[1] / "Dockerfile"
 MOD_OVERSEER = (
-    pathlib.Path(__file__).resolve().parents[1]
-    / "mod-overseer/src/mod_overseer.cpp"
+    pathlib.Path(__file__).resolve().parents[1] / "mod-overseer/src/mod_overseer.cpp"
 )
 
 
@@ -50,15 +50,14 @@ def _code(signature: str) -> str:
 
 def _sql() -> str:
     src = _source()
-    return src[src.index("_BANK_ITEMS_SQL = ("):src.index("def _fetch_bank_items(")]
+    return src[src.index("_BANK_ITEMS_SQL = (") : src.index("def _fetch_bank_items(")]
 
 
 class ThePassRunsAndInTheRightOrder(unittest.TestCase):
-
     def test_the_loop_is_started_with_the_others(self):
         """A loop nobody creates is a feature that ships and never runs."""
         src = _source()
-        block = src[src.index("self._loops = {"):src.index("async def on_ready(")]
+        block = src[src.index("self._loops = {") : src.index("async def on_ready(")]
         self.assertIn("self._bank_loop,", block)
 
     def test_the_loop_calls_the_pass_and_survives_a_failed_one(self):
@@ -154,8 +153,12 @@ class ThePassRunsAndInTheRightOrder(unittest.TestCase):
         # Neither a keyword nor an entry retasks anybody: that is a standing
         # profession errand and belongs on the other branch.
         self.assertIn("return ()", guard)
-        self.assertIn("\"banker\"", _source()[:_source().index("def _write_trade_errand(")]
-                      .rsplit("ECONOMY_ERRANDS = ", 1)[1])
+        self.assertIn(
+            '"banker"',
+            _source()[: _source().index("def _write_trade_errand(")].rsplit(
+                "ECONOMY_ERRANDS = ", 1
+            )[1],
+        )
 
     def test_a_zero_rowcount_is_not_automatically_a_refusal(self):
         """This connection carries no `CLIENT_FOUND_ROWS`, so MySQL's default
@@ -178,7 +181,6 @@ class ThePassRunsAndInTheRightOrder(unittest.TestCase):
 
 
 class TheBridgeDecidesNothingAboutTheBank(unittest.TestCase):
-
     def test_the_plan_comes_from_the_pure_module(self):
         body = _block("    async def _bank_once(")
         self.assertIn("bank.members_from_rows(rows, names)", body)
@@ -198,8 +200,15 @@ class TheBridgeDecidesNothingAboutTheBank(unittest.TestCase):
         """Which item, which verb and which reason are all decided in the pure
         module. The bridge must not name a route, a verb or an item class."""
         body = _code("    async def _bank_once(")
-        for word in ("deposit", "withdraw", "buy slot", "reagent", "quest",
-                     "soulbound", "disposition."):
+        for word in (
+            "deposit",
+            "withdraw",
+            "buy slot",
+            "reagent",
+            "quest",
+            "soulbound",
+            "disposition.",
+        ):
             self.assertNotIn(word, body)
 
     def test_the_fetch_is_only_a_fetch(self):
@@ -215,13 +224,23 @@ class TheBridgeDecidesNothingAboutTheBank(unittest.TestCase):
 
 
 class TheRowsCarryWhatThePlannerReads(unittest.TestCase):
-
     def test_the_sql_names_every_column_members_from_rows_uses(self):
         sql = _sql()
-        for column in ("AS holder", "AS level", "AS item_guid", "AS count",
-                       "AS name", "AS quality", "AS sell_price",
-                       "AS required_level", "AS bonding", "AS item_class",
-                       "AS container_slots", "AS bag", "AS slot"):
+        for column in (
+            "AS holder",
+            "AS level",
+            "AS item_guid",
+            "AS count",
+            "AS name",
+            "AS quality",
+            "AS sell_price",
+            "AS required_level",
+            "AS bonding",
+            "AS item_class",
+            "AS container_slots",
+            "AS bag",
+            "AS slot",
+        ):
             self.assertIn(column, sql)
 
     def test_both_sides_of_the_counter_come_back(self):
@@ -247,7 +266,7 @@ class TheBankRowIsTheRowDoBankReads(unittest.TestCase):
         body = _block("def _insert_bank(")
         self.assertIn("(target_name, command, kind, target_arg, source)", body)
         self.assertIn("'bank'", body)
-        self.assertIn("(move.character, command, \"economy\")", body)
+        self.assertIn('(move.character, command, "economy")', body)
 
     def test_target_arg_is_written_empty_rather_than_defaulted(self):
         body = _block("def _insert_bank(")
@@ -290,22 +309,24 @@ class ABankRowIsAnsweredWhereTheCharacterStandsTests(unittest.TestCase):
         cpp = MOD_OVERSEER.read_text(encoding="utf-8")
         self.cpp = cpp
         start = cpp.index("static char const* DoBank(")
-        self.bank = cpp[start:cpp.index("static char const*", start + 10)]
+        self.bank = cpp[start : cpp.index("static char const*", start + 10)]
 
     def test_the_range_is_measured_at_the_moment_the_row_is_answered(self):
         self.assertIn("BankerInReach(who, anyBankerInRange)", self.bank)
         self.assertIn('"banker not in range"', self.bank)
-        self.assertIn("INTERACTION_DISTANCE",
-                      self.cpp[self.cpp.index("static Creature* BankerInReach("):]
-                      [:1200])
+        self.assertIn(
+            "INTERACTION_DISTANCE",
+            self.cpp[self.cpp.index("static Creature* BankerInReach(") :][:1200],
+        )
 
     def test_the_second_argument_is_the_detail_column_and_not_a_retry_class(self):
         """`describe("refused", reason); return detail;`. The detail is the
         text that lands in `overseer_command.detail`, which is why the column
         reads `banker not in range` - it is not a word anything classifies."""
-        refuse = self.bank[self.bank.index("auto refuse = [&]"):][:300]
-        self.assertIn("auto refuse = [&](char const* reason, char const* detail)",
-                      refuse)
+        refuse = self.bank[self.bank.index("auto refuse = [&]") :][:300]
+        self.assertIn(
+            "auto refuse = [&](char const* reason, char const* detail)", refuse
+        )
         self.assertIn('describe("refused", reason)', refuse)
         self.assertIn("return detail;", refuse)
         self.assertNotIn("pending", refuse)
@@ -337,7 +358,8 @@ class TheBankerBitIsTheWorldsOwnFlag(unittest.TestCase):
 
     def test_a_banker_in_reach_is_read_from_its_own_npcflag(self):
         town = towntrip.town_from_rows(
-            [{"npcflag": towntrip.NPC_FLAG_BANKER, "item": None}])
+            [{"npcflag": towntrip.NPC_FLAG_BANKER, "item": None}]
+        )
         self.assertTrue(town.banker)
 
     def test_a_vendor_or_a_repairer_alone_is_not_a_banker(self):
@@ -346,13 +368,18 @@ class TheBankerBitIsTheWorldsOwnFlag(unittest.TestCase):
         for flag in (towntrip.NPC_FLAG_VENDOR, towntrip.NPC_FLAG_REPAIR):
             with self.subTest(flag=flag):
                 self.assertFalse(
-                    towntrip.town_from_rows([{"npcflag": flag, "item": 787}]).banker)
+                    towntrip.town_from_rows([{"npcflag": flag, "item": 787}]).banker
+                )
 
     def test_one_spawn_can_carry_several_of_the_bits(self):
-        town = towntrip.town_from_rows([{
-            "npcflag": towntrip.NPC_FLAG_BANKER | towntrip.NPC_FLAG_VENDOR,
-            "item": 787,
-        }])
+        town = towntrip.town_from_rows(
+            [
+                {
+                    "npcflag": towntrip.NPC_FLAG_BANKER | towntrip.NPC_FLAG_VENDOR,
+                    "item": 787,
+                }
+            ]
+        )
         self.assertTrue(town.banker)
         self.assertTrue(town.vendor)
 
@@ -360,7 +387,8 @@ class TheBankerBitIsTheWorldsOwnFlag(unittest.TestCase):
         """`stocks` is still gated on the VENDOR bit. A banker with npc_vendor
         rows it cannot sell from would otherwise promise a purchase."""
         town = towntrip.town_from_rows(
-            [{"npcflag": towntrip.NPC_FLAG_BANKER, "item": 787}])
+            [{"npcflag": towntrip.NPC_FLAG_BANKER, "item": 787}]
+        )
         self.assertEqual(town.stocks, frozenset())
         self.assertFalse(town.vendor)
 
@@ -390,8 +418,10 @@ class TheBankQueueWaitsForTheWalkTests(unittest.TestCase):
         later, 141 error against 1 delivered all time."""
         body = _block("    async def _bank_once(")
         self.assertIn("at_the_counter[move.character]", body)
-        self.assertLess(body.index("if not at_the_counter[move.character]:"),
-                        body.index("_insert_bank, move, command"))
+        self.assertLess(
+            body.index("if not at_the_counter[move.character]:"),
+            body.index("_insert_bank, move, command"),
+        )
 
     def test_the_gate_reads_the_movers_own_position_and_not_the_leaders(self):
         """`BankerInReach(who, ...)` measures the character whose row it is.
@@ -405,8 +435,10 @@ class TheBankQueueWaitsForTheWalkTests(unittest.TestCase):
         """Several moves share a holder and the counter does not move between
         them."""
         code = _code("    async def _bank_once(")
-        self.assertLess(code.index("if move.character not in at_the_counter:"),
-                        code.index("_fetch_town, move.character"))
+        self.assertLess(
+            code.index("if move.character not in at_the_counter:"),
+            code.index("_fetch_town, move.character"),
+        )
 
     def test_a_mover_held_back_is_logged_rather_than_silently_dropped(self):
         """A pass that writes nothing and a broken one look identical
@@ -425,8 +457,10 @@ class TheBankQueueWaitsForTheWalkTests(unittest.TestCase):
         code = _code("    async def _bank_once(")
         self.assertIn("_fetch_positions, names", code)
         self.assertIn("and move.character in watched", code)
-        self.assertLess(code.index("_fetch_positions, names"),
-                        code.index("self._settle_bank_errand("))
+        self.assertLess(
+            code.index("_fetch_positions, names"),
+            code.index("self._settle_bank_errand("),
+        )
 
     def test_the_settling_asks_whether_the_leader_arrived(self):
         """The third input, and the town trip's own. Without it a queue that
@@ -434,8 +468,7 @@ class TheBankQueueWaitsForTheWalkTests(unittest.TestCase):
         and the aim is handed back before the family gets there."""
         settle = _code("    async def _settle_bank_errand(")
         self.assertIn("_fetch_town, leader", settle)
-        self.assertIn("bool(leader_town.banker), outstanding, moves_unasked",
-                      settle)
+        self.assertIn("bool(leader_town.banker), outstanding, moves_unasked", settle)
 
     def test_the_arrival_is_read_through_the_reader_the_sell_pass_uses(self):
         """`_settle_vendor_errand` asks the same reader the same question one
@@ -459,7 +492,6 @@ class TheBankQueueWaitsForTheWalkTests(unittest.TestCase):
 
 
 class TheModuleShips(unittest.TestCase):
-
     def test_bank_is_in_the_image(self):
         self.assertIn("bank.py", DOCKERFILE.read_text(encoding="utf-8"))
 

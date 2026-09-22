@@ -6,6 +6,7 @@ party chat: "i just asked for the sword that dropped with +4 stamina and they
 arent listening". Nothing was listening. The only ear the overseer had was a
 Discord channel.
 """
+
 import unittest
 
 import bonds
@@ -15,12 +16,20 @@ FAMILY = bonds.FAMILY
 
 # What the bridge itself caused them to say. Anything else from the family in a
 # shared channel is somebody at a keyboard.
-AUTHORED = {"Aye.", "Then it is settled.", "Og is still 4. We should not leave them behind."}
+AUTHORED = {
+    "Aye.",
+    "Then it is settled.",
+    "Og is still 4. We should not leave them behind.",
+}
 
 
 def _row(**over):
-    row = {"sender_name": "Grug", "sender_is_bot": 0, "channel": "party",
-           "text": "go to town and sell your junk"}
+    row = {
+        "sender_name": "Grug",
+        "sender_is_bot": 0,
+        "channel": "party",
+        "text": "go to town and sell your junk",
+    }
     row.update(over)
     return row
 
@@ -31,8 +40,11 @@ class AddressedTest(unittest.TestCase):
 
     def test_the_family_talking_among_itself_is_not(self):
         """The bridge authored those lines, so they are its own echo."""
-        self.assertFalse(overhear.is_addressed(
-            _row(text="Then it is settled."), family=FAMILY, authored=AUTHORED))
+        self.assertFalse(
+            overhear.is_addressed(
+                _row(text="Then it is settled."), family=FAMILY, authored=AUTHORED
+            )
+        )
 
     def test_selfbot_does_not_silence_evan(self):
         """The bug this replaced. With SelfBotLevel 3 the AI attaches to his
@@ -43,49 +55,80 @@ class AddressedTest(unittest.TestCase):
         self.assertTrue(overhear.is_addressed(row, family=FAMILY, authored=AUTHORED))
 
     def test_a_stranger_is_not_giving_evans_orders(self):
-        self.assertFalse(overhear.is_addressed(_row(sender_name="Thrall"), family=FAMILY, authored=AUTHORED))
+        self.assertFalse(
+            overhear.is_addressed(
+                _row(sender_name="Thrall"), family=FAMILY, authored=AUTHORED
+            )
+        )
 
     def test_a_whisper_is_between_two_people(self):
         """Fanning a private word out to five characters is not obedience, it
         is eavesdropping."""
-        self.assertFalse(overhear.is_addressed(_row(channel="whisper"), family=FAMILY, authored=AUTHORED))
+        self.assertFalse(
+            overhear.is_addressed(
+                _row(channel="whisper"), family=FAMILY, authored=AUTHORED
+            )
+        )
 
     def test_a_single_word_is_an_exclamation_not_an_instruction(self):
-        self.assertFalse(overhear.is_addressed(_row(text="ouch"), family=FAMILY, authored=AUTHORED))
+        self.assertFalse(
+            overhear.is_addressed(_row(text="ouch"), family=FAMILY, authored=AUTHORED)
+        )
 
     def test_an_empty_line_is_not_an_order(self):
         for text in ("", "   "):
-            self.assertFalse(overhear.is_addressed(_row(text=text), family=FAMILY, authored=AUTHORED))
+            self.assertFalse(
+                overhear.is_addressed(_row(text=text), family=FAMILY, authored=AUTHORED)
+            )
 
 
 class HearTest(unittest.TestCase):
     def test_the_last_line_wins(self):
         """If he typed twice between ticks, the later line is the one he meant.
         Acting on the first obeys a sentence he had already replaced."""
-        rows = [_row(text="everyone follow me"), _row(text="actually go sell your junk")]
-        d = overhear.hear(rows, family=FAMILY, authored=AUTHORED, last_at=None, now=100.0)
+        rows = [
+            _row(text="everyone follow me"),
+            _row(text="actually go sell your junk"),
+        ]
+        d = overhear.hear(
+            rows, family=FAMILY, authored=AUTHORED, last_at=None, now=100.0
+        )
         self.assertEqual(d.text, "actually go sell your junk")
 
     def test_bot_chatter_is_stepped_over_to_find_it(self):
         rows = [_row(text="go to town and sell"), _row(sender_is_bot=1, text="Aye.")]
-        d = overhear.hear(rows, family=FAMILY, authored=AUTHORED, last_at=None, now=100.0)
+        d = overhear.hear(
+            rows, family=FAMILY, authored=AUTHORED, last_at=None, now=100.0
+        )
         self.assertEqual(d.speaker, "Grug")
 
     def test_nothing_to_act_on_is_not_an_error(self):
         rows = [_row(sender_is_bot=1, text="Aye.")]
-        self.assertIsNone(overhear.hear(rows, family=FAMILY, authored=AUTHORED, last_at=None, now=100.0))
+        self.assertIsNone(
+            overhear.hear(
+                rows, family=FAMILY, authored=AUTHORED, last_at=None, now=100.0
+            )
+        )
 
     def test_a_burst_of_typing_is_one_order_not_three(self):
         """Somebody typing three sentences of thought is having a conversation.
         Turning each line into a command would have the family thrash."""
         rows = [_row(text="everyone come here please")]
         self.assertIsNone(
-            overhear.hear(rows, family=FAMILY, authored=AUTHORED, last_at=100.0, now=100.0 + 1))
+            overhear.hear(
+                rows, family=FAMILY, authored=AUTHORED, last_at=100.0, now=100.0 + 1
+            )
+        )
 
     def test_the_cooldown_does_expire(self):
         rows = [_row(text="everyone come here please")]
-        d = overhear.hear(rows, family=FAMILY, authored=AUTHORED, last_at=100.0,
-                          now=100.0 + overhear.COOLDOWN_SECONDS + 1)
+        d = overhear.hear(
+            rows,
+            family=FAMILY,
+            authored=AUTHORED,
+            last_at=100.0,
+            now=100.0 + overhear.COOLDOWN_SECONDS + 1,
+        )
         self.assertIsNotNone(d)
 
 
@@ -94,8 +137,9 @@ class AudienceTest(unittest.TestCase):
         """Evan is playing one of them. Telling his own character to follow
         itself looks fine in a test and reads as a bug in game."""
         d = overhear.Directive(speaker="Grug", text="follow me")
-        self.assertEqual(overhear.audience(d, family=FAMILY),
-                         ["Bork", "Grog", "Og", "Ugga"])
+        self.assertEqual(
+            overhear.audience(d, family=FAMILY), ["Bork", "Grog", "Og", "Ugga"]
+        )
 
     def test_casing_does_not_smuggle_the_speaker_back_in(self):
         d = overhear.Directive(speaker="grug", text="follow me")
@@ -111,16 +155,22 @@ class WiringTest(unittest.TestCase):
         import pathlib
 
         cls.ast = ast
-        cls.src = (pathlib.Path(__file__).resolve().parent.parent / "bridge.py").read_text()
+        cls.src = (
+            pathlib.Path(__file__).resolve().parent.parent / "bridge.py"
+        ).read_text()
         cls.tree = ast.parse(cls.src)
 
     def _names(self, fn_name):
         ast = self.ast
-        fn = next(n for n in ast.walk(self.tree)
-                  if isinstance(n, (ast.AsyncFunctionDef, ast.FunctionDef))
-                  and n.name == fn_name)
+        fn = next(
+            n
+            for n in ast.walk(self.tree)
+            if isinstance(n, (ast.AsyncFunctionDef, ast.FunctionDef))
+            and n.name == fn_name
+        )
         return {n.id for n in ast.walk(fn) if isinstance(n, ast.Name)} | {
-            n.attr for n in ast.walk(fn) if isinstance(n, ast.Attribute)}
+            n.attr for n in ast.walk(fn) if isinstance(n, ast.Attribute)
+        }
 
     def test_the_relay_listens(self):
         self.assertIn("_obey_evan_in_game", self._names("_relay_chat"))
@@ -132,18 +182,26 @@ class WiringTest(unittest.TestCase):
         the argument is a CALL."""
         import ast
 
-        fn = next(n for n in self.ast.walk(self.tree)
-                  if isinstance(n, self.ast.AsyncFunctionDef) and n.name == "_obey_once")
-        call = next(n for n in self.ast.walk(fn)
-                    if isinstance(n, ast.Call)
-                    and getattr(n.func, "attr", None) == "hear")
+        fn = next(
+            n
+            for n in self.ast.walk(self.tree)
+            if isinstance(n, self.ast.AsyncFunctionDef) and n.name == "_obey_once"
+        )
+        call = next(
+            n
+            for n in self.ast.walk(fn)
+            if isinstance(n, ast.Call) and getattr(n.func, "attr", None) == "hear"
+        )
         authored = next(k.value for k in call.keywords if k.arg == "authored")
         # Not a type check: `set()` parses as a Call and sailed through one.
         # The argument has to actually reach for the reader.
         inner = {n.id for n in ast.walk(authored) if isinstance(n, ast.Name)}
-        self.assertIn("_authored_lines", inner,
-                      "authored= does not read what the bridge said, so the "
-                      "family's own speech will be obeyed as orders")
+        self.assertIn(
+            "_authored_lines",
+            inner,
+            "authored= does not read what the bridge said, so the "
+            "family's own speech will be obeyed as orders",
+        )
 
     def test_it_hears_and_it_acts(self):
         names = self._names("_obey_once")
@@ -155,15 +213,20 @@ class WiringTest(unittest.TestCase):
         """Inventing an approximation of an order nobody gave is worse than
         admitting it was not understood, when the order moves five characters
         around a world."""
-        fn = next(n for n in self.ast.walk(self.tree)
-                  if isinstance(n, self.ast.AsyncFunctionDef)
-                  and n.name == "_obey_once")
+        fn = next(
+            n
+            for n in self.ast.walk(self.tree)
+            if isinstance(n, self.ast.AsyncFunctionDef) and n.name == "_obey_once"
+        )
         src = self.ast.unparse(fn)
         self.assertIn("decision.command is None", src)
 
     def _fn(self, name):
-        return next(n for n in self.ast.walk(self.tree)
-                    if isinstance(n, self.ast.AsyncFunctionDef) and n.name == name)
+        return next(
+            n
+            for n in self.ast.walk(self.tree)
+            if isinstance(n, self.ast.AsyncFunctionDef) and n.name == name
+        )
 
     def test_every_member_is_asked_not_only_the_first(self):
         """The defect. `audience` returns a SORTED list, so with Evan speaking
@@ -176,8 +239,11 @@ class WiringTest(unittest.TestCase):
         So the grounding fetch must not live in _obey_once at all: it belongs
         to the per-character function that _obey_once asks for everyone.
         """
-        self.assertNotIn("_fetch_grounding", self._names("_obey_once"),
-                         "_obey_once grounds on one character again")
+        self.assertNotIn(
+            "_fetch_grounding",
+            self._names("_obey_once"),
+            "_obey_once grounds on one character again",
+        )
         self.assertIn("_fetch_grounding", self._names("_answer_as"))
         self.assertIn("build_prompt", self._names("_answer_as"))
 
@@ -190,8 +256,11 @@ class WiringTest(unittest.TestCase):
         """They share a gather. An exception escaping one character's call
         would take the other three's answers with it, which is the old
         all-or-nothing failure wearing a new shape."""
-        handlers = [n for n in self.ast.walk(self._fn("_answer_as"))
-                    if isinstance(n, self.ast.ExceptHandler)]
+        handlers = [
+            n
+            for n in self.ast.walk(self._fn("_answer_as"))
+            if isinstance(n, self.ast.ExceptHandler)
+        ]
         self.assertTrue(handlers, "a failed inference kills the whole family's answer")
 
     def test_a_failure_is_admitted_rather_than_returned_from_silently(self):
@@ -206,12 +275,17 @@ class WiringTest(unittest.TestCase):
     def test_each_member_gets_their_own_command_and_their_own_words(self):
         """Everything written must be written inside the loop over `who`. One
         speak row outside it is one character answering for the family again."""
-        loops = [n for n in self.ast.walk(self._fn("_obey_once"))
-                 if isinstance(n, self.ast.For)]
+        loops = [
+            n
+            for n in self.ast.walk(self._fn("_obey_once"))
+            if isinstance(n, self.ast.For)
+        ]
         self.assertTrue(loops, "_obey_once no longer loops over the audience")
         inside = set()
         for loop in loops:
-            inside |= {n.id for n in self.ast.walk(loop) if isinstance(n, self.ast.Name)}
+            inside |= {
+                n.id for n in self.ast.walk(loop) if isinstance(n, self.ast.Name)
+            }
         self.assertIn("_insert_command", inside)
         self.assertIn("_insert_speak", inside)
 
@@ -221,16 +295,25 @@ class WiringTest(unittest.TestCase):
         concurrent inferences take longer than one, so the window this closes
         got wider, not narrower."""
         fn = self._fn("_obey_once")
-        stamped = [n.lineno for n in self.ast.walk(fn)
-                   if isinstance(n, self.ast.Attribute)
-                   and n.attr == "_last_overheard_at"
-                   and isinstance(n.ctx, self.ast.Store)]
-        asked = [n.lineno for n in self.ast.walk(fn)
-                 if isinstance(n, self.ast.Attribute) and n.attr == "gather"]
+        stamped = [
+            n.lineno
+            for n in self.ast.walk(fn)
+            if isinstance(n, self.ast.Attribute)
+            and n.attr == "_last_overheard_at"
+            and isinstance(n.ctx, self.ast.Store)
+        ]
+        asked = [
+            n.lineno
+            for n in self.ast.walk(fn)
+            if isinstance(n, self.ast.Attribute) and n.attr == "gather"
+        ]
         self.assertTrue(stamped and asked)
-        self.assertLess(max(stamped), min(asked),
-                        "the voice is asked before the order is stamped, so a "
-                        "slow inference lets the next tick act on it again")
+        self.assertLess(
+            max(stamped),
+            min(asked),
+            "the voice is asked before the order is stamped, so a "
+            "slow inference lets the next tick act on it again",
+        )
 
     def test_the_family_answers_oldest_first(self):
         """Written order is read order: mod-overseer delivers pending commands
@@ -242,11 +325,15 @@ class WiringTest(unittest.TestCase):
         """The relay is the product; obeying is a bonus on top of it. The
         guard lives in the listener rather than the relay because _relay_chat
         is at Elder's complexity cap."""
-        fn = next(n for n in self.ast.walk(self.tree)
-                  if isinstance(n, self.ast.AsyncFunctionDef)
-                  and n.name == "_obey_evan_in_game")
-        handlers = [n for n in self.ast.walk(fn)
-                    if isinstance(n, self.ast.ExceptHandler)]
+        fn = next(
+            n
+            for n in self.ast.walk(self.tree)
+            if isinstance(n, self.ast.AsyncFunctionDef)
+            and n.name == "_obey_evan_in_game"
+        )
+        handlers = [
+            n for n in self.ast.walk(fn) if isinstance(n, self.ast.ExceptHandler)
+        ]
         self.assertTrue(handlers)
 
 

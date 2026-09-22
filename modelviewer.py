@@ -41,6 +41,7 @@ of it without a network.
 
 Ticket: infra#88 (the epic).
 """
+
 from __future__ import annotations
 
 import hashlib
@@ -106,8 +107,10 @@ MISS_LIMIT = 4096
 
 # Upstream refuses requests that do not look like a browser's. This is the
 # one thing the viewer's browser would have sent anyway.
-USER_AGENT = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-              "(KHTML, like Gecko) Chrome/128.0 Safari/537.36")
+USER_AGENT = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/128.0 Safari/537.36"
+)
 UPSTREAM_TIMEOUT_SECONDS = 20
 
 DEFAULT_CAP_BYTES = 512 * 1024 * 1024
@@ -115,7 +118,8 @@ DEFAULT_CAP_BYTES = 512 * 1024 * 1024
 
 def default_cache_dir() -> str:
     return os.environ.get("MODEL_CACHE_DIR") or os.path.join(
-        tempfile.gettempdir(), "wow-modelviewer")
+        tempfile.gettempdir(), "wow-modelviewer"
+    )
 
 
 def classify(path: str) -> tuple[str, str] | None:
@@ -148,8 +152,9 @@ class DiskCache:
 
     def _name(self, path: str) -> str:
         ext = os.path.splitext(path)[1].lower()
-        return os.path.join(self.directory,
-                            hashlib.sha256(path.encode()).hexdigest() + ext)
+        return os.path.join(
+            self.directory, hashlib.sha256(path.encode()).hexdigest() + ext
+        )
 
     def get(self, path: str) -> bytes | None:
         name = self._name(path)
@@ -284,4 +289,6 @@ class Store:
         if status == 404:
             self._remember_miss(upstream_path)
             return Response(404, "text/plain", b"upstream has no such file", "no-store")
-        return Response(502, "text/plain", b"model host answered %d" % status, "no-store")
+        return Response(
+            502, "text/plain", b"model host answered %d" % status, "no-store"
+        )

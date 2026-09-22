@@ -4,6 +4,7 @@ The bridge supplies observations from the live snapshot and executes the
 returned action. This module deliberately does not know how positions are
 read or how a travel aim is released.
 """
+
 from __future__ import annotations
 
 import dataclasses
@@ -69,8 +70,12 @@ class FamilyProgress:
 FAMILY_COHESION_YARDS = 100.0
 
 
-def progress(previous: Movement | None, current: tuple | None,
-             now: float, movement_epsilon: float = 1.0) -> Progress:
+def progress(
+    previous: Movement | None,
+    current: tuple | None,
+    now: float,
+    movement_epsilon: float = 1.0,
+) -> Progress:
     """Track movement without making the database adapter a policy layer."""
     if current is None or len(current) < 4:
         return Progress(False, False, 0.0, previous)
@@ -114,11 +119,14 @@ def _family_position_rows(positions: Mapping[str, Mapping], names: tuple[str, ..
     return tuple(normalized)
 
 
-def family_progress(previous: FamilyMovement | None,
-                    positions: Mapping[str, Mapping],
-                    names: tuple[str, ...], now: float,
-                    cohesion_yards: float = FAMILY_COHESION_YARDS,
-                    movement_epsilon: float = 1.0) -> FamilyProgress:
+def family_progress(
+    previous: FamilyMovement | None,
+    positions: Mapping[str, Mapping],
+    names: tuple[str, ...],
+    now: float,
+    cohesion_yards: float = FAMILY_COHESION_YARDS,
+    movement_epsilon: float = 1.0,
+) -> FamilyProgress:
     """Track persistent party separation from fresh snapshot rows.
 
     A family is split when a member is on another map or farther than the
@@ -134,8 +142,7 @@ def family_progress(previous: FamilyMovement | None,
         return FamilyProgress(False, False, False, 0.0, previous)
     anchor = current_rows[0]
     split = any(
-        map_id != anchor[1]
-        or math.hypot(x - anchor[2], y - anchor[3]) > cohesion_yards
+        map_id != anchor[1] or math.hypot(x - anchor[2], y - anchor[3]) > cohesion_yards
         for _name, map_id, x, y in current_rows[1:]
     )
     if previous is None:
@@ -147,7 +154,10 @@ def family_progress(previous: FamilyMovement | None,
             if before[0] != after[0] or before[1] != after[1]:
                 moved = True
                 break
-            if math.hypot(before[2] - after[2], before[3] - after[3]) >= movement_epsilon:
+            if (
+                math.hypot(before[2] - after[2], before[3] - after[3])
+                >= movement_epsilon
+            ):
                 moved = True
                 break
     steady_since = now if moved else previous.steady_since
@@ -157,18 +167,28 @@ def family_progress(previous: FamilyMovement | None,
         split_since = None
     current = FamilyMovement(current_rows, steady_since, split_since)
     return FamilyProgress(
-        True, split, moved,
+        True,
+        split,
+        moved,
         max(0.0, now - split_since) if split_since is not None else 0.0,
         current,
     )
 
 
-def decide(*, pressure: bool, at_counter: bool, sales_outstanding: int,
-           movement_readable: bool, movement_progressed: bool,
-           stalled_seconds: float,
-           family_readable: bool = True, family_split: bool = False,
-           family_progressed: bool = True, family_split_seconds: float = 0.0,
-           stall_after_seconds: float = STALL_AFTER_SECONDS) -> Decision:
+def decide(
+    *,
+    pressure: bool,
+    at_counter: bool,
+    sales_outstanding: int,
+    movement_readable: bool,
+    movement_progressed: bool,
+    stalled_seconds: float,
+    family_readable: bool = True,
+    family_split: bool = False,
+    family_progressed: bool = True,
+    family_split_seconds: float = 0.0,
+    stall_after_seconds: float = STALL_AFTER_SECONDS,
+) -> Decision:
     """Decide whether a stalled vendor aim may be handed back.
 
     A release requires every positive fact: pressure still exists, the leader
@@ -190,7 +210,8 @@ def decide(*, pressure: bool, at_counter: bool, sales_outstanding: int,
     else:
         leader_stalled = stalled_seconds >= max(0.0, float(stall_after_seconds))
     family_stalled = (
-        family_readable and family_split
+        family_readable
+        and family_split
         and family_split_seconds >= max(0.0, float(stall_after_seconds))
     )
     if not leader_stalled and not family_stalled:
@@ -202,4 +223,3 @@ def decide(*, pressure: bool, at_counter: bool, sales_outstanding: int,
     if family_stalled and not leader_stalled:
         return Decision(RELEASE, "family split beyond the bounded stall window")
     return Decision(RELEASE, "vendor travel stalled beyond the bounded window")
-

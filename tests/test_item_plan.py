@@ -4,6 +4,7 @@ Every fixture here is a real shape taken from `overseer_command` on the dev
 realm on 2026-09-05, including the result payloads, so a change that stops
 honouring the world's own `retry` word fails here rather than in production.
 """
+
 import unittest
 
 import item_plan
@@ -16,10 +17,20 @@ def candidate(holder="Ugga", guid=1304881, count=4):
     return SellCandidate(holder=holder, item_guid=guid, count=count, item=JUNK)
 
 
-def row(command="guid:1304881 count:4", status="error",
-        detail="item not carried", result="", holder="Ugga"):
-    return {"target_name": holder, "command": command, "status": status,
-            "detail": detail, "result": result}
+def row(
+    command="guid:1304881 count:4",
+    status="error",
+    detail="item not carried",
+    result="",
+    holder="Ugga",
+):
+    return {
+        "target_name": holder,
+        "command": command,
+        "status": status,
+        "detail": detail,
+        "result": result,
+    }
 
 
 class TheWorldSaysWhereAndNotOnlyWhether(unittest.TestCase):
@@ -43,11 +54,18 @@ class TheWorldSaysWhereAndNotOnlyWhether(unittest.TestCase):
     """
 
     def _refusals(self, guid, holder="Grug", n=1):
-        return [item_plan.attempt_from_row(row(
-            command="guid:%d count:4" % guid, holder=holder, status="error",
-            detail="vendor not in range",
-            result='{"reason":"vendor not in range","retry":"elsewhere"}',
-        )) for _ in range(n)]
+        return [
+            item_plan.attempt_from_row(
+                row(
+                    command="guid:%d count:4" % guid,
+                    holder=holder,
+                    status="error",
+                    detail="vendor not in range",
+                    result='{"reason":"vendor not in range","retry":"elsewhere"}',
+                )
+            )
+            for _ in range(n)
+        ]
 
     def test_the_word_is_the_worlds_own_spelling(self):
         self.assertEqual(item_plan.RETRY_ELSEWHERE, "elsewhere")
@@ -55,8 +73,9 @@ class TheWorldSaysWhereAndNotOnlyWhether(unittest.TestCase):
     def test_one_refusal_is_a_near_miss_and_is_asked_again(self):
         """A bot drifts in and out of five yards. One refusal is not a wall,
         and treating it as one would strand an item about to sell."""
-        got = item_plan.plan([candidate(holder="Grug", guid=5001)],
-                             self._refusals(5001))
+        got = item_plan.plan(
+            [candidate(holder="Grug", guid=5001)], self._refusals(5001)
+        )
         self.assertEqual([c.item_guid for c in got.write], [5001])
 
     def test_the_same_refusal_over_and_over_is_a_wall(self):
@@ -66,10 +85,10 @@ class TheWorldSaysWhereAndNotOnlyWhether(unittest.TestCase):
         and the counters nearest this family are the other faction's."""
         got = item_plan.plan(
             [candidate(holder="Grug", guid=5001)],
-            self._refusals(5001, n=item_plan.ELSEWHERE_GIVE_UP))
+            self._refusals(5001, n=item_plan.ELSEWHERE_GIVE_UP),
+        )
         self.assertEqual(got.write, ())
-        self.assertIn("for want of a reachable vendor",
-                      item_plan.reasons(got.skipped))
+        self.assertIn("for want of a reachable vendor", item_plan.reasons(got.skipped))
 
     def test_the_hold_is_never_permanent(self):
         """ELSEWHERE means the row would work somewhere else, so the hold has
@@ -90,18 +109,24 @@ class TheWorldSaysWhereAndNotOnlyWhether(unittest.TestCase):
     def test_one_characters_wall_is_not_another_characters(self):
         """The place is a fact about the character. Two of the five can be
         standing in different rooms."""
-        attempts = self._refusals(5001, holder="Grug",
-                                  n=item_plan.ELSEWHERE_GIVE_UP)
+        attempts = self._refusals(5001, holder="Grug", n=item_plan.ELSEWHERE_GIVE_UP)
         got = item_plan.plan([candidate(holder="Ugga", guid=5002)], attempts)
         self.assertEqual([c.item_guid for c in got.write], [5002])
 
     def test_a_row_with_no_retry_word_is_unaffected(self):
         """An older world image writes no `result`. The literals still
         classify it and nothing here may start holding items on a guess."""
-        older = [item_plan.attempt_from_row(row(
-            command="guid:5001 count:4", holder="Grug", status="error",
-            detail="vendor not in range", result="",
-        ))] * 9
+        older = [
+            item_plan.attempt_from_row(
+                row(
+                    command="guid:5001 count:4",
+                    holder="Grug",
+                    status="error",
+                    detail="vendor not in range",
+                    result="",
+                )
+            )
+        ] * 9
         got = item_plan.plan([candidate(holder="Grug", guid=5001)], older)
         self.assertEqual([c.item_guid for c in got.write], [5001])
 
@@ -117,25 +142,40 @@ class ARangeHoldEndsWhenThePlaceChanges(unittest.TestCase):
     """
 
     def _range(self, guid, holder="Grug", n=item_plan.ELSEWHERE_GIVE_UP):
-        return [item_plan.attempt_from_row(row(
-            command="guid:%d count:4" % guid, holder=holder, status="error",
-            detail="vendor not in range",
-            result='{"reason":"vendor not in range","retry":"elsewhere"}',
-        )) for _ in range(n)]
+        return [
+            item_plan.attempt_from_row(
+                row(
+                    command="guid:%d count:4" % guid,
+                    holder=holder,
+                    status="error",
+                    detail="vendor not in range",
+                    result='{"reason":"vendor not in range","retry":"elsewhere"}',
+                )
+            )
+            for _ in range(n)
+        ]
 
     def _sold(self, guid, holder="Grug"):
-        return item_plan.attempt_from_row(row(
-            command="guid:%d count:1" % guid, holder=holder,
-            status="delivered", detail="", result=""))
+        return item_plan.attempt_from_row(
+            row(
+                command="guid:%d count:1" % guid,
+                holder=holder,
+                status="delivered",
+                detail="",
+                result="",
+            )
+        )
 
     def test_a_holder_at_a_vendor_is_offered_its_held_sales(self):
-        got = item_plan.plan([candidate(holder="Grug", guid=5001)],
-                             self._range(5001), at_vendor=True)
+        got = item_plan.plan(
+            [candidate(holder="Grug", guid=5001)], self._range(5001), at_vendor=True
+        )
         self.assertEqual([c.item_guid for c in got.write], [5001])
 
     def test_away_from_a_vendor_the_hold_still_stands(self):
-        got = item_plan.plan([candidate(holder="Grug", guid=5001)],
-                             self._range(5001), at_vendor=False)
+        got = item_plan.plan(
+            [candidate(holder="Grug", guid=5001)], self._range(5001), at_vendor=False
+        )
         self.assertEqual(got.write, ())
 
     def test_a_delivered_sale_after_the_refusals_ends_the_hold(self):
@@ -158,24 +198,30 @@ class ARangeHoldEndsWhenThePlaceChanges(unittest.TestCase):
     def test_an_item_that_cannot_be_sold_is_held_even_at_a_vendor(self):
         """Only the range hold is about place. A refusal the world calls
         `never` still holds for the full window, counter or no counter."""
-        refused = item_plan.attempt_from_row(row(
-            command="guid:5001 count:4", holder="Grug", status="error",
-            detail="item cannot be sold",
-            result='{"reason":"item cannot be sold","retry":"never"}'))
-        got = item_plan.plan([candidate(holder="Grug", guid=5001)],
-                             [refused], at_vendor=True)
+        refused = item_plan.attempt_from_row(
+            row(
+                command="guid:5001 count:4",
+                holder="Grug",
+                status="error",
+                detail="item cannot be sold",
+                result='{"reason":"item cannot be sold","retry":"never"}',
+            )
+        )
+        got = item_plan.plan(
+            [candidate(holder="Grug", guid=5001)], [refused], at_vendor=True
+        )
         self.assertEqual(got.write, ())
         self.assertIn("item cannot be sold", item_plan.reasons(got.skipped))
 
     def test_refused_here_is_empty_at_a_vendor(self):
         self.assertEqual(
-            item_plan.refused_here(self._range(5001, n=9), at_vendor=True), {})
+            item_plan.refused_here(self._range(5001, n=9), at_vendor=True), {}
+        )
 
 
 class ParsingTests(unittest.TestCase):
     def test_reads_the_command_shape_the_bridge_writes(self):
-        self.assertEqual(item_plan.parse_request("guid:1304881 count:4"),
-                         (1304881, 4))
+        self.assertEqual(item_plan.parse_request("guid:1304881 count:4"), (1304881, 4))
 
     def test_a_countless_command_parses_with_zero(self):
         self.assertEqual(item_plan.parse_request("guid:77"), (77, 0))
@@ -186,14 +232,21 @@ class ParsingTests(unittest.TestCase):
         self.assertIsNone(item_plan.attempt_from_row(row(command="junk")))
 
     def test_reads_the_worlds_retry_word_and_true_stack(self):
-        payload = ('{"outcome":"refused","reason":"count exceeds stack",'
-                   '"retry":"never","seller":"Bork",'
-                   '"request":"guid:1501282 count:6",'
-                   '"item":{"guid":1501282,"entry":2592,"name":"Wool Cloth",'
-                   '"count":6,"stack":3}}')
+        payload = (
+            '{"outcome":"refused","reason":"count exceeds stack",'
+            '"retry":"never","seller":"Bork",'
+            '"request":"guid:1501282 count:6",'
+            '"item":{"guid":1501282,"entry":2592,"name":"Wool Cloth",'
+            '"count":6,"stack":3}}'
+        )
         attempt = item_plan.attempt_from_row(
-            row(command="guid:1501282 count:6", holder="Bork",
-                detail="count exceeds stack", result=payload))
+            row(
+                command="guid:1501282 count:6",
+                holder="Bork",
+                detail="count exceeds stack",
+                result=payload,
+            )
+        )
         self.assertEqual(attempt.retry, "never")
         self.assertEqual(attempt.stack, 3)
         self.assertEqual(attempt.count, 6)
@@ -207,22 +260,25 @@ class ParsingTests(unittest.TestCase):
 
 class ScopeTests(unittest.TestCase):
     def test_a_delivered_sale_ends_the_item(self):
-        attempt = item_plan.attempt_from_row(
-            row(status="delivered", detail=""))
+        attempt = item_plan.attempt_from_row(row(status="delivered", detail=""))
         self.assertEqual(item_plan.terminal_scope(attempt), item_plan.ITEM)
 
     def test_item_not_carried_ends_the_item(self):
         self.assertEqual(
-            item_plan.terminal_scope(item_plan.attempt_from_row(row())),
-            item_plan.ITEM)
+            item_plan.terminal_scope(item_plan.attempt_from_row(row())), item_plan.ITEM
+        )
 
     def test_count_exceeds_stack_ends_only_that_request(self):
         attempt = item_plan.attempt_from_row(row(detail="count exceeds stack"))
         self.assertEqual(item_plan.terminal_scope(attempt), item_plan.REQUEST)
 
     def test_travelling_refusals_stay_retryable(self):
-        for detail in ("vendor not in range", "seller is in flight",
-                       "seller is dead", "target not online"):
+        for detail in (
+            "vendor not in range",
+            "seller is in flight",
+            "seller is dead",
+            "target not online",
+        ):
             attempt = item_plan.attempt_from_row(row(detail=detail))
             self.assertEqual(item_plan.terminal_scope(attempt), "", detail)
 
@@ -230,8 +286,8 @@ class ScopeTests(unittest.TestCase):
         # A world image newer than this file refuses with a literal we do not
         # carry. Its `retry` word still stops the retry storm.
         attempt = item_plan.attempt_from_row(
-            row(detail="item is enchanted",
-                result='{"retry":"never"}'))
+            row(detail="item is enchanted", result='{"retry":"never"}')
+        )
         self.assertEqual(item_plan.terminal_scope(attempt), item_plan.REQUEST)
 
     def test_the_bank_refusal_is_terminal_too(self):
@@ -249,8 +305,7 @@ class PlanTests(unittest.TestCase):
         self.assertEqual(sum(plan.skipped.values()), 1)
 
     def test_a_refused_item_is_never_re_queued(self):
-        plan = item_plan.plan(
-            [candidate()], [item_plan.attempt_from_row(row())])
+        plan = item_plan.plan([candidate()], [item_plan.attempt_from_row(row())])
         self.assertEqual(plan.write, ())
         self.assertEqual(plan.skipped, {"item not carried": 1})
 
@@ -280,12 +335,18 @@ class PlanTests(unittest.TestCase):
     def test_the_count_is_corrected_from_the_worlds_own_measurement(self):
         # Bork asked for 6 Wool Cloth, the world answered "stack":3. The next
         # pass must ask for 3, not 6 again and not nothing.
-        payload = ('{"retry":"never","item":{"count":6,"stack":3}}')
+        payload = '{"retry":"never","item":{"count":6,"stack":3}}'
         attempt = item_plan.attempt_from_row(
-            row(command="guid:1501282 count:6", holder="Bork",
-                detail="count exceeds stack", result=payload))
+            row(
+                command="guid:1501282 count:6",
+                holder="Bork",
+                detail="count exceeds stack",
+                result=payload,
+            )
+        )
         plan = item_plan.plan(
-            [candidate(holder="Bork", guid=1501282, count=6)], [attempt])
+            [candidate(holder="Bork", guid=1501282, count=6)], [attempt]
+        )
         self.assertEqual(len(plan.write), 1)
         self.assertEqual(plan.write[0].count, 3)
         self.assertEqual(plan.write[0].holder, "Bork")
@@ -293,24 +354,31 @@ class PlanTests(unittest.TestCase):
     def test_the_corrected_count_is_not_asked_for_twice(self):
         payload = '{"retry":"never","item":{"count":3,"stack":3}}'
         refused = item_plan.attempt_from_row(
-            row(command="guid:1501282 count:3", holder="Bork",
-                detail="count exceeds stack", result=payload))
+            row(
+                command="guid:1501282 count:3",
+                holder="Bork",
+                detail="count exceeds stack",
+                result=payload,
+            )
+        )
         plan = item_plan.plan(
-            [candidate(holder="Bork", guid=1501282, count=3)], [refused])
+            [candidate(holder="Bork", guid=1501282, count=3)], [refused]
+        )
         self.assertEqual(plan.write, ())
 
     def test_an_emptied_stack_is_dropped_rather_than_asked_for(self):
         payload = '{"retry":"never","item":{"count":2,"stack":0}}'
         attempt = item_plan.attempt_from_row(
-            row(command="guid:9 count:2", detail="count exceeds stack",
-                result=payload))
+            row(command="guid:9 count:2", detail="count exceeds stack", result=payload)
+        )
         plan = item_plan.plan([candidate(guid=9, count=2)], [attempt])
         self.assertEqual(plan.write, ())
         self.assertEqual(plan.skipped, {"nothing left in the stack": 1})
 
     def test_a_verdict_about_one_character_never_binds_another(self):
         sold = item_plan.attempt_from_row(
-            row(status="delivered", detail="", holder="Ugga"))
+            row(status="delivered", detail="", holder="Ugga")
+        )
         plan = item_plan.plan([candidate(holder="Grug")], [sold])
         self.assertEqual(len(plan.write), 1)
 
@@ -318,7 +386,8 @@ class PlanTests(unittest.TestCase):
         self.assertEqual(item_plan.reasons({}), "nothing")
         self.assertEqual(
             item_plan.reasons({"item not carried": 12, "already queued": 3}),
-            "12 item not carried, 3 already queued")
+            "12 item not carried, 3 already queued",
+        )
 
     def test_an_unreadable_history_does_not_stop_the_pass(self):
         # Fail open: the gate that cannot read its evidence must not become a

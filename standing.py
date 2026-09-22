@@ -53,6 +53,7 @@ Tickets: infra#3096 and infra#3139 (the tab this extends),
 quadseven/mod-overseer#160 (the missing enchanter),
 quadseven/mod-overseer#88 (the Armory area).
 """
+
 from __future__ import annotations
 
 import json
@@ -101,8 +102,16 @@ GROUP_LANGUAGE = "language"
 GROUP_OTHER = "other"
 
 # The order the page draws the groups in: what a person can act on first.
-GROUP_ORDER = (GROUP_PROFESSION, GROUP_SECONDARY, GROUP_WEAPON, GROUP_DEFENCE,
-               GROUP_ARMOUR, GROUP_CLASS, GROUP_LANGUAGE, GROUP_OTHER)
+GROUP_ORDER = (
+    GROUP_PROFESSION,
+    GROUP_SECONDARY,
+    GROUP_WEAPON,
+    GROUP_DEFENCE,
+    GROUP_ARMOUR,
+    GROUP_CLASS,
+    GROUP_LANGUAGE,
+    GROUP_OTHER,
+)
 
 DEFENCE_SKILL = 95
 
@@ -155,8 +164,16 @@ UNGRADED = frozenset({183, 777, 778})
 # the WIDTH of each rank and the ranks are cumulative from the bottom, which
 # is what `reputation_rank` walks. Reputation_Cap + 1 is where the walk
 # starts because exalted is the only rank that is not open-ended upward.
-RANK_NAMES = ("Hated", "Hostile", "Unfriendly", "Neutral",
-              "Friendly", "Honored", "Revered", "Exalted")
+RANK_NAMES = (
+    "Hated",
+    "Hostile",
+    "Unfriendly",
+    "Neutral",
+    "Friendly",
+    "Honored",
+    "Revered",
+    "Exalted",
+)
 POINTS_IN_RANK = (36000, 3000, 3000, 3000, 6000, 12000, 21000, 1000)
 REPUTATION_CAP = 42999
 REPUTATION_BOTTOM = -42000
@@ -251,8 +268,9 @@ def wowhead(kind: str, entry: int) -> str:
 # wrong, and the two drift the first time either one is edited. Built once
 # at import because `skill_group` is called for every skill row of every
 # member and none of its three inputs can change while the process lives.
-_TRADE_NAMES = {goals.SKILL_IDS[name]: name
-                for name in professions.PRIMARY | professions.SECONDARY}
+_TRADE_NAMES = {
+    goals.SKILL_IDS[name]: name for name in professions.PRIMARY | professions.SECONDARY
+}
 
 
 def profession_ids() -> dict[int, str]:
@@ -347,8 +365,9 @@ def skill_entry(row: dict, level: int, book: StandingBook) -> dict:
     return out
 
 
-def trade_entry(entry: dict, name: str, book: StandingBook,
-                known_spells: frozenset[int]) -> dict:
+def trade_entry(
+    entry: dict, name: str, book: StandingBook, known_spells: frozenset[int]
+) -> dict:
     """A profession's skill line plus what its owner can actually make.
 
     `known` is the recipes this character holds; `total` is every recipe the
@@ -372,16 +391,22 @@ def trade_entry(entry: dict, name: str, book: StandingBook,
             "known": len(known),
             "total": len(spells),
             "gathers": not spells,
-            "makes": [{
-                "spell": s,
-                "name": book.recipes[s]["name"],
-                "rank": book.recipes[s]["rank"],
-                # The recipe links to the ITEM it makes when it makes one,
-                # because that is the thing a person wants the tooltip for.
-                # An enchant makes no item and links to the spell instead.
-                "wowhead": (wowhead("item", book.recipes[s]["creates"])
-                            if book.recipes[s]["creates"] else wowhead("spell", s)),
-            } for s in known],
+            "makes": [
+                {
+                    "spell": s,
+                    "name": book.recipes[s]["name"],
+                    "rank": book.recipes[s]["rank"],
+                    # The recipe links to the ITEM it makes when it makes one,
+                    # because that is the thing a person wants the tooltip for.
+                    # An enchant makes no item and links to the spell instead.
+                    "wowhead": (
+                        wowhead("item", book.recipes[s]["creates"])
+                        if book.recipes[s]["creates"]
+                        else wowhead("spell", s)
+                    ),
+                }
+                for s in known
+            ],
         },
     }
 
@@ -439,7 +464,9 @@ def met(flags: int) -> bool:
     row for every faction in the game; this is what tells the five that
     matter from the hundred that do not.
     """
-    return bool(flags & FLAG_VISIBLE) and not (flags & (FLAG_HIDDEN | FLAG_INVISIBLE_FORCED))
+    return bool(flags & FLAG_VISIBLE) and not (
+        flags & (FLAG_HIDDEN | FLAG_INVISIBLE_FORCED)
+    )
 
 
 def reputation_entry(row: dict, book: StandingBook, race: int, class_id: int) -> dict:
@@ -468,8 +495,9 @@ def reputation_entry(row: dict, book: StandingBook, race: int, class_id: int) ->
     }
 
 
-def spec_summary(class_id: int, level: int, talent_rows: list[dict],
-                 book: armory.TalentBook) -> dict:
+def spec_summary(
+    class_id: int, level: int, talent_rows: list[dict], book: armory.TalentBook
+) -> dict:
     """A pile of learned spell ids -> the build, named, without the grid.
 
     Reads armory's OWN TalentBook and its budget rule rather than repeating
@@ -478,9 +506,16 @@ def spec_summary(class_id: int, level: int, talent_rows: list[dict],
     deep, and what is actually in it - so the two are different shapes of
     one fact, not two implementations of it.
     """
-    trees = {tid: {"id": tid, "name": t["name"], "icon": t["icon"],
-                   "points": 0, "talents": []}
-             for tid, t in book.trees_for(class_id)}
+    trees = {
+        tid: {
+            "id": tid,
+            "name": t["name"],
+            "icon": t["icon"],
+            "points": 0,
+            "talents": [],
+        }
+        for tid, t in book.trees_for(class_id)
+    }
     order = [tid for tid, _ in book.trees_for(class_id)]
     unknown, spent = [], 0
     for row in sorted(talent_rows, key=lambda r: int(r["spell"])):
@@ -501,15 +536,17 @@ def spec_summary(class_id: int, level: int, talent_rows: list[dict],
             unknown.append(talent["name"])
             continue
         trees[tid]["points"] += rank
-        trees[tid]["talents"].append({
-            "name": talent["name"],
-            "icon": talent["icon"],
-            "rank": rank,
-            "max_rank": len(talent["ranks"]),
-            "row": talent["row"],
-            "col": talent["col"],
-            "wowhead": wowhead("spell", talent["ranks"][rank - 1]),
-        })
+        trees[tid]["talents"].append(
+            {
+                "name": talent["name"],
+                "icon": talent["icon"],
+                "rank": rank,
+                "max_rank": len(talent["ranks"]),
+                "row": talent["row"],
+                "col": talent["col"],
+                "wowhead": wowhead("spell", talent["ranks"][rank - 1]),
+            }
+        )
     for tree in trees.values():
         tree["talents"].sort(key=lambda t: (t["row"], t["col"]))
     ordered = [trees[tid] for tid in order]
@@ -538,21 +575,25 @@ def trade_gap(held: set[str], book: StandingBook) -> dict:
     missing = sorted(professions.PRIMARY - held)
     return {
         "held": sorted(held & professions.PRIMARY),
-        "missing": [{
-            "trade": name,
-            "name": book.skill_name(ids[name]),
-            "icon": book.skills.get(ids[name], {}).get("icon", ""),
-            "recipes": len(book.by_skill.get(ids[name], [])),
-            "wowhead": wowhead("skill", ids[name]),
-            "why": ENCHANTING_WHY if name == ENCHANTING else "",
-        } for name in missing],
+        "missing": [
+            {
+                "trade": name,
+                "name": book.skill_name(ids[name]),
+                "icon": book.skills.get(ids[name], {}).get("icon", ""),
+                "recipes": len(book.by_skill.get(ids[name], [])),
+                "wowhead": wowhead("skill", ids[name]),
+                "why": ENCHANTING_WHY if name == ENCHANTING else "",
+            }
+            for name in missing
+        ],
         "enchanting": ENCHANTING in missing,
         "enchanting_why": ENCHANTING_WHY,
     }
 
 
-def trade_panel(entries: list[dict], book: StandingBook,
-                known_spells: frozenset[int]) -> dict:
+def trade_panel(
+    entries: list[dict], book: StandingBook, known_spells: frozenset[int]
+) -> dict:
     """The trades a character holds, and what standing in the way of more.
 
     `slots_free` is zero for all five today, and that is the point: the
@@ -584,16 +625,25 @@ def skill_panel(entries: list[dict], level: int) -> dict:
     keep in step - the page would have to name a group to know which copy
     to skip, which is the one thing sending the group list exists to stop.
     """
-    groups: dict[str, list] = {group: [] for group in GROUP_ORDER
-                               if group not in (GROUP_PROFESSION, GROUP_SECONDARY)}
+    groups: dict[str, list] = {
+        group: []
+        for group in GROUP_ORDER
+        if group not in (GROUP_PROFESSION, GROUP_SECONDARY)
+    }
     for entry in entries:
         if entry["group"] in groups:
             groups[entry["group"]].append(entry)
-    graded = [e for e in entries
-              if e["group"] in (GROUP_WEAPON, GROUP_DEFENCE) and not e["proficiency"]]
+    graded = [
+        e
+        for e in entries
+        if e["group"] in (GROUP_WEAPON, GROUP_DEFENCE) and not e["proficiency"]
+    ]
     return {
-        "groups": [{"group": group, "skills": groups[group]}
-                   for group in GROUP_ORDER if groups.get(group)],
+        "groups": [
+            {"group": group, "skills": groups[group]}
+            for group in GROUP_ORDER
+            if groups.get(group)
+        ],
         "cap": level_cap(level),
         # One number for the whole card: how far the graded combat skills
         # are, in total, from what this level allows. Proficiencies cannot
@@ -603,15 +653,19 @@ def skill_panel(entries: list[dict], level: int) -> dict:
     }
 
 
-def reputation_panel(reputation_rows: list[dict], book: StandingBook,
-                     race: int, class_id: int) -> list[dict]:
+def reputation_panel(
+    reputation_rows: list[dict], book: StandingBook, race: int, class_id: int
+) -> list[dict]:
     """Only the factions actually met, deepest standing first.
 
     Name breaks the tie so the order is stable between polls rather than
     reshuffling under a reader's thumb.
     """
-    met_rows = [reputation_entry(row, book, race, class_id)
-                for row in reputation_rows if met(int(row["flags"]))]
+    met_rows = [
+        reputation_entry(row, book, race, class_id)
+        for row in reputation_rows
+        if met(int(row["flags"]))
+    ]
     met_rows.sort(key=lambda r: (-r["total"], r["name"]))
     return met_rows
 
@@ -627,10 +681,16 @@ def active_talents(char_row: dict, talent_rows: list[dict]) -> list[dict]:
     return [r for r in talent_rows if int(r["specMask"]) & active]
 
 
-def _member(name: str, char_row: dict | None, skill_rows: list[dict],
-            reputation_rows: list[dict], talent_rows: list[dict],
-            known_spells: frozenset[int], book: StandingBook,
-            talents: armory.TalentBook) -> dict:
+def _member(
+    name: str,
+    char_row: dict | None,
+    skill_rows: list[dict],
+    reputation_rows: list[dict],
+    talent_rows: list[dict],
+    known_spells: frozenset[int],
+    book: StandingBook,
+    talents: armory.TalentBook,
+) -> dict:
     bond = bonds.FAMILY[name]
     if char_row is None:
         return {
@@ -643,8 +703,10 @@ def _member(name: str, char_row: dict | None, skill_rows: list[dict],
     race, class_id = int(char_row["race"]), int(char_row["class"])
     # Highest first, name breaking the tie: what has been worked at leads,
     # and the order does not move between polls.
-    entries = sorted((skill_entry(row, level, book) for row in skill_rows),
-                     key=lambda e: (-e["value"], e["name"]))
+    entries = sorted(
+        (skill_entry(row, level, book) for row in skill_rows),
+        key=lambda e: (-e["value"], e["name"]),
+    )
     return {
         "name": char_row["name"],
         "role": bond.role,
@@ -656,15 +718,21 @@ def _member(name: str, char_row: dict | None, skill_rows: list[dict],
         "professions": trade_panel(entries, book, known_spells),
         "skills": skill_panel(entries, level),
         "reputations": reputation_panel(reputation_rows, book, race, class_id),
-        "spec": spec_summary(class_id, level,
-                             active_talents(char_row, talent_rows), talents),
+        "spec": spec_summary(
+            class_id, level, active_talents(char_row, talent_rows), talents
+        ),
     }
 
 
-def build_standing(char_rows: list[dict], skill_rows: list[dict],
-                   reputation_rows: list[dict], talent_rows: list[dict],
-                   spell_rows: list[dict], book: StandingBook,
-                   talents: armory.TalentBook) -> dict:
+def build_standing(
+    char_rows: list[dict],
+    skill_rows: list[dict],
+    reputation_rows: list[dict],
+    talent_rows: list[dict],
+    spell_rows: list[dict],
+    book: StandingBook,
+    talents: armory.TalentBook,
+) -> dict:
     """Every member's standing, in roster order.
 
     Rows arrive keyed by character name and unfiltered, exactly as
@@ -689,12 +757,21 @@ def build_standing(char_rows: list[dict], skill_rows: list[dict],
 
     members = []
     for name in family.roster():
-        members.append(_member(
-            name, chars.get(name), skills.get(name, []), reputations.get(name, []),
-            talent_by_name.get(name, []), frozenset(spells.get(name, set())),
-            book, talents))
-    held = {p["trade"] for m in members if m["present"]
-            for p in m["professions"]["primary"]}
+        members.append(
+            _member(
+                name,
+                chars.get(name),
+                skills.get(name, []),
+                reputations.get(name, []),
+                talent_by_name.get(name, []),
+                frozenset(spells.get(name, set())),
+                book,
+                talents,
+            )
+        )
+    held = {
+        p["trade"] for m in members if m["present"] for p in m["professions"]["primary"]
+    }
     return {
         "members": members,
         "expected": len(members),

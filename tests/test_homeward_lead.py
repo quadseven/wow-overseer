@@ -30,6 +30,7 @@ vendor errand and proves nothing about the resting path underneath it.
 
 Ticket: infra#3420 (added), infra#3715 (retired).
 """
+
 import pathlib
 import re
 import unittest
@@ -57,13 +58,16 @@ def _resolve(train="", errand="", derived=""):
     these tests move with it, which is the failure mode a text assertion has.
     """
     body = _head_now_source()
-    expr = body[body.index("return ") + len("return "):].strip()
-    return eval(expr, {  # noqa: S307 - the source under test, not input
-        "_train_traveller": lambda: train,
-        "_errand_traveller": lambda: errand,
-        "_derived_errand_traveller": lambda: derived,
-        "bonds": bonds,
-    })
+    expr = body[body.index("return ") + len("return ") :].strip()
+    return eval(
+        expr,
+        {  # noqa: S307 - the source under test, not input
+            "_train_traveller": lambda: train,
+            "_errand_traveller": lambda: errand,
+            "_derived_errand_traveller": lambda: derived,
+            "bonds": bonds,
+        },
+    )
 
 
 class TheOverrideIsGone(unittest.TestCase):
@@ -84,14 +88,14 @@ class TheOverrideIsGone(unittest.TestCase):
         and asserting on the prose would force that history to be deleted to
         keep the test green."""
         body = _head_now_source()
-        self.assertNotIn("HOMEWARD_LEAD", body[body.index("return "):])
+        self.assertNotIn("HOMEWARD_LEAD", body[body.index("return ") :])
 
     def test_no_character_name_is_hardcoded_into_the_decision(self):
         """The next bind emergency must not be solved by pinning a name here
         again. The seam for it is the `or` chain, where a borrower leads for
         as long as it has somewhere to be and hands the lead back after."""
         expr = _head_now_source()
-        expr = expr[expr.index("return "):]
+        expr = expr[expr.index("return ") :]
         for name in bonds.FAMILY:
             self.assertNotIn(
                 '"%s"' % name, expr, "%s is hardcoded into _head_now" % name
@@ -144,9 +148,7 @@ class ABorrowerStillOutranksSeniority(unittest.TestCase):
 
     def test_the_derived_errand_is_the_weakest_of_the_three(self):
         self.assertEqual(_resolve(train="Ugga", derived="Og"), "Ugga")
-        self.assertEqual(
-            _resolve(train="Ugga", errand="Grog", derived="Og"), "Ugga"
-        )
+        self.assertEqual(_resolve(train="Ugga", errand="Grog", derived="Og"), "Ugga")
 
     def test_a_borrower_that_answers_nobody_is_skipped(self):
         """Each borrower answers '' rather than raising when its lookup fails,

@@ -5,7 +5,7 @@ levels above them and the map - 500 dots on a phone - surfaced none of it. So
 the cases that matter here are the ones that were invisible: dead, hurt, and
 missing, each of which must read as itself and not as the other two.
 """
-import ast
+
 import re
 import unittest
 from pathlib import Path
@@ -16,10 +16,22 @@ from transform import Geometry
 GEO = Geometry.load(".")
 
 # Grug in Elwynn, where the live family actually stands.
-ELWYNN = {"guid": 1, "name": "Grug", "level": 19, "race": 1, "class": 1,
-          "health": 583, "max_health": 583, "in_combat": 0, "is_bot": 1,
-          "group_leader": 1, "map_id": 0, "pos_x": -9000.0, "pos_y": 400.0,
-          "age_seconds": 4}
+ELWYNN = {
+    "guid": 1,
+    "name": "Grug",
+    "level": 19,
+    "race": 1,
+    "class": 1,
+    "health": 583,
+    "max_health": 583,
+    "in_combat": 0,
+    "is_bot": 1,
+    "group_leader": 1,
+    "map_id": 0,
+    "pos_x": -9000.0,
+    "pos_y": 400.0,
+    "age_seconds": 4,
+}
 
 
 def row(**kw):
@@ -116,8 +128,9 @@ class WhereAndWhatTest(unittest.TestCase):
         self.assertFalse(c["instance"])
 
     def test_instance_dweller_says_instance_not_a_guessed_zone(self):
-        c = card(family.build_family(
-            [row(map_id=34, pos_x=0.0, pos_y=0.0)], GEO), "Grug")
+        c = card(
+            family.build_family([row(map_id=34, pos_x=0.0, pos_y=0.0)], GEO), "Grug"
+        )
         self.assertTrue(c["instance"])
         self.assertEqual(c["zone"], "inside an instance")
 
@@ -151,8 +164,7 @@ class BroadcastPathTest(unittest.TestCase):
         # http://127.0.0.1:9997/v3/paths/list on the gaming box, verified
         # while this feature was built, answered with exactly these five.
         live = {"devbork", "devgrog", "devgrug", "devog", "devugga"}
-        self.assertEqual(
-            {family.broadcast_path(n) for n in family.roster()}, live)
+        self.assertEqual({family.broadcast_path(n) for n in family.roster()}, live)
 
     def test_prefix_and_name_are_concatenated_not_hyphenated(self):
         self.assertEqual(family.broadcast_path("Grug", prefix="dev"), "devgrug")
@@ -176,12 +188,14 @@ class BroadcastPathTest(unittest.TestCase):
     def test_broadcast_url_is_the_path_under_the_stream_host(self):
         self.assertEqual(
             family.broadcast_url("Grug", base="https://example.test", prefix="dev"),
-            "https://example.test/devgrug")
+            "https://example.test/devgrug",
+        )
 
     def test_broadcast_url_strips_a_trailing_slash_on_the_base(self):
         self.assertEqual(
             family.broadcast_url("Grug", base="https://example.test/", prefix="dev"),
-            "https://example.test/devgrug")
+            "https://example.test/devgrug",
+        )
 
     def test_broadcast_url_is_none_when_the_path_cannot_be_built(self):
         self.assertIsNone(family.broadcast_url("", base="https://example.test"))
@@ -232,10 +246,14 @@ class TheQualityLadder(unittest.TestCase):
         renditions must keep working, byte for byte, off the old field."""
         self.assertEqual(
             family.broadcast_url("Grug", base="https://x", prefix="dev"),
-            next(r["url"] for r
-                 in family.broadcast_renditions("Grug", base="https://x",
-                                                prefix="dev")
-                 if r["default"]))
+            next(
+                r["url"]
+                for r in family.broadcast_renditions(
+                    "Grug", base="https://x", prefix="dev"
+                )
+                if r["default"]
+            ),
+        )
 
     def test_exactly_one_rendition_is_the_default(self):
         """The page starts on it and falls back TO it when another 404s. Two
@@ -244,8 +262,10 @@ class TheQualityLadder(unittest.TestCase):
         self.assertEqual(sum(1 for r in got if r["default"]), 1)
 
     def test_the_renditions_carry_their_size_so_the_page_need_not_guess(self):
-        got = {r["id"]: (r["width"], r["height"]) for r
-               in family.broadcast_renditions("Grug", base="https://x")}
+        got = {
+            r["id"]: (r["width"], r["height"])
+            for r in family.broadcast_renditions("Grug", base="https://x")
+        }
         self.assertEqual(got["high"], (1280, 720))
         self.assertEqual(got["low"], (640, 360))
 
@@ -277,8 +297,7 @@ class TheQualityLadder(unittest.TestCase):
             with self.subTest(name=name):
                 c = card(p, name)
                 default = [r for r in c["broadcast_renditions"] if r["default"]]
-                self.assertEqual([c["broadcast_url"]],
-                                 [r["url"] for r in default])
+                self.assertEqual([c["broadcast_url"]], [r["url"] for r in default])
 
 
 class TheLadderMatchesWhatIsPublished(unittest.TestCase):
@@ -307,10 +326,10 @@ class TheLadderMatchesWhatIsPublished(unittest.TestCase):
         what a usable path looks like has to happen here."""
         pattern = re.compile(r"^https://[^/]+/[a-z]{2,16}$")
         for name in family.roster():
-            for r in family.broadcast_renditions(name, base="https://x",
-                                                 prefix="dev"):
+            for r in family.broadcast_renditions(name, base="https://x", prefix="dev"):
                 with self.subTest(name=name, rendition=r["id"]):
                     self.assertRegex(r["url"], pattern)
+
 
 class TheRollbackLever(unittest.TestCase):
     """WOW_STREAM_LADDER=0 stops the page offering a quality nobody publishes.
@@ -335,11 +354,13 @@ class TheRollbackLever(unittest.TestCase):
     # default state and the test passes for a reason that is not true.
     def setUp(self):
         import os
+
         self._before = os.environ.get("WOW_STREAM_LADDER")
 
     def tearDown(self):
         import importlib
         import os
+
         if self._before is None:
             os.environ.pop("WOW_STREAM_LADDER", None)
         else:
@@ -349,6 +370,7 @@ class TheRollbackLever(unittest.TestCase):
     def _reloaded(self, value):
         import importlib
         import os
+
         if value is None:
             os.environ.pop("WOW_STREAM_LADDER", None)
         else:
@@ -360,8 +382,7 @@ class TheRollbackLever(unittest.TestCase):
             with self.subTest(value=off):
                 mod = self._reloaded(off)
                 got = mod.broadcast_renditions("Grug", base="https://x")
-                self.assertEqual([r["id"] for r in got],
-                                 [mod.RENDITION_DEFAULT])
+                self.assertEqual([r["id"] for r in got], [mod.RENDITION_DEFAULT])
                 self.assertTrue(got[0]["default"])
 
     def test_off_still_leaves_a_watchable_stream(self):
@@ -370,14 +391,16 @@ class TheRollbackLever(unittest.TestCase):
         mod = self._reloaded("0")
         got = mod.broadcast_renditions("Grug", base="https://x", prefix="dev")
         self.assertEqual(got[0]["url"], "https://x/devgrug")
-        self.assertEqual(mod.broadcast_url("Grug", base="https://x",
-                                           prefix="dev"), got[0]["url"])
+        self.assertEqual(
+            mod.broadcast_url("Grug", base="https://x", prefix="dev"), got[0]["url"]
+        )
 
     def test_the_ladder_is_on_by_default(self):
         """An operator should not have to switch on the thing this change is
         for. Default-off is how a feature ships inert."""
         mod = self._reloaded(None)
         self.assertEqual(len(mod.broadcast_renditions("Grug")), 2)
+
 
 class OnlyStreamedCharactersHaveAVideo(unittest.TestCase):
     """Two game clients are streamed and the other eight characters are headless
@@ -406,6 +429,7 @@ class OnlyStreamedCharactersHaveAVideo(unittest.TestCase):
         """The floor. A deployment that never set this must not lose a picture."""
         self.assertTrue(family.is_streamed("Bork", ()))
         from unittest import mock
+
         with mock.patch.object(family, "_STREAMED", frozenset()):
             self.assertTrue(family.is_streamed("Bork"))
             self.assertTrue(family.broadcast_url("Bork"))
@@ -420,6 +444,7 @@ class OnlyStreamedCharactersHaveAVideo(unittest.TestCase):
         """Through the real public functions, with the list patched in: a tile
         with no URL is what the page keys off, so this is the seam that matters."""
         from unittest import mock
+
         with mock.patch.object(family, "_STREAMED", frozenset(self.STREAMED)):
             self.assertIsNone(family.broadcast_url("Bork"))
             self.assertEqual(family.broadcast_renditions("Bork"), [])
@@ -429,9 +454,14 @@ class OnlyStreamedCharactersHaveAVideo(unittest.TestCase):
     def test_the_wall_calls_an_unstreamed_tile_unplayable(self):
         from unittest import mock
         import watchwall
+
         with mock.patch.object(family, "_STREAMED", frozenset(self.STREAMED)):
-            self.assertFalse(watchwall.playable({"broadcast_url": family.broadcast_url("Bork")}))
-            self.assertTrue(watchwall.playable({"broadcast_url": family.broadcast_url("Grug")}))
+            self.assertFalse(
+                watchwall.playable({"broadcast_url": family.broadcast_url("Bork")})
+            )
+            self.assertTrue(
+                watchwall.playable({"broadcast_url": family.broadcast_url("Grug")})
+            )
 
 
 if __name__ == "__main__":
@@ -458,8 +488,10 @@ class ASecondFamilyIsNotTheFirstOneRenamed(unittest.TestCase):
     # class/race ids as the characters table spells them: orc warrior,
     # troll priest, orc shaman, tauren druid, troll mage.
     PROFILES = {
-        "Zug": {"class": 1, "race": 2}, "Uzza": {"class": 5, "race": 8},
-        "Zrog": {"class": 7, "race": 2}, "Zork": {"class": 11, "race": 6},
+        "Zug": {"class": 1, "race": 2},
+        "Uzza": {"class": 5, "race": 8},
+        "Zrog": {"class": 7, "race": 2},
+        "Zork": {"class": 11, "race": 6},
         "Oz": {"class": 8, "race": 8},
     }
 
@@ -467,15 +499,20 @@ class ASecondFamilyIsNotTheFirstOneRenamed(unittest.TestCase):
         payload = family.build_family([], GEO, self.HORDE, self.PROFILES)
         self.assertEqual([m["name"] for m in payload["members"]], self.HORDE)
         for name in family.roster():
-            self.assertNotIn(name, [m["name"] for m in payload["members"]],
-                             f"{name} belongs to the other family")
+            self.assertNotIn(
+                name,
+                [m["name"] for m in payload["members"]],
+                f"{name} belongs to the other family",
+            )
 
     def test_the_wall_follows_the_cards(self):
         """The wall is composed from the same members list, so a wall that
         disagreed with the cards would mean two rosters in one payload."""
         payload = family.build_family([], GEO, self.HORDE, self.PROFILES)
-        self.assertEqual([t["name"] for t in payload["wall"]["tiles"]],
-                         [m["name"] for m in payload["members"]])
+        self.assertEqual(
+            [t["name"] for t in payload["wall"]["tiles"]],
+            [m["name"] for m in payload["members"]],
+        )
 
     def test_a_logged_out_member_still_has_a_class_and_a_race(self):
         """This is what `profiles` is for. These five have no persona, and
@@ -492,8 +529,8 @@ class ASecondFamilyIsNotTheFirstOneRenamed(unittest.TestCase):
         """Everything but `role` comes off the snapshot row, so a character
         bonds has never heard of renders completely when it is online."""
         payload = family.build_family(
-            [row(name="Zug", race=2, **{"class": 1})], GEO,
-            self.HORDE, self.PROFILES)
+            [row(name="Zug", race=2, **{"class": 1})], GEO, self.HORDE, self.PROFILES
+        )
         zug = card(payload, "Zug")
         self.assertTrue(zug["present"])
         self.assertEqual(zug["class"], "Warrior")
@@ -503,8 +540,7 @@ class ASecondFamilyIsNotTheFirstOneRenamed(unittest.TestCase):
     def test_the_default_is_still_the_family_bonds_holds(self):
         """Every existing caller passes no names and must be unaffected."""
         payload = family.build_family([], GEO)
-        self.assertEqual([m["name"] for m in payload["members"]],
-                         family.roster())
+        self.assertEqual([m["name"] for m in payload["members"]], family.roster())
 
 
 class TheZoneIsTheWorldsAnswerFirst(unittest.TestCase):
@@ -529,7 +565,9 @@ class TheZoneIsTheWorldsAnswerFirst(unittest.TestCase):
         self.assertEqual(c["zone"], "Felwood")
 
     def test_an_unknown_zone_id_falls_back_rather_than_printing_nothing(self):
-        c = card(family.build_family([row(zone_id=999999, **self.OVERLAP)], GEO), "Grug")
+        c = card(
+            family.build_family([row(zone_id=999999, **self.OVERLAP)], GEO), "Grug"
+        )
         self.assertEqual(c["zone"], "Felwood")
 
     def test_the_wall_caption_says_the_same_zone(self):
@@ -538,7 +576,9 @@ class TheZoneIsTheWorldsAnswerFirst(unittest.TestCase):
         self.assertEqual(tile["line"], "in Winterspring")
 
     def test_the_adapter_selects_the_zone_id(self):
-        server = Path(__file__).resolve().parent.parent.joinpath("map_server.py").read_text()
-        fetch = server[server.index("def _fetch_family(names=None)"):]
-        fetch = fetch[:fetch.index("# --- the Wealth and Bags view")]
+        server = (
+            Path(__file__).resolve().parent.parent.joinpath("map_server.py").read_text()
+        )
+        fetch = server[server.index("def _fetch_family(names=None)") :]
+        fetch = fetch[: fetch.index("# --- the Wealth and Bags view")]
         self.assertIn("zone_id", fetch)

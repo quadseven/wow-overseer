@@ -19,6 +19,7 @@ pip install (check.python-units.yml's scope note), and bridge.py imports
 half of this suite that can execute does, and the wiring half is pinned as
 text - the same split tests/test_headless_bridge.py uses.
 """
+
 import pathlib
 import unittest
 
@@ -26,9 +27,9 @@ import core
 
 BRIDGE = pathlib.Path(__file__).resolve().parents[1] / "bridge.py"
 
-PROD_OVERSEER = "1540419847765237913"   # #overseer-prod
-PROD_CHAT = "1540695363093139537"       # #overseer-prod-grug
-DEV = "1543057103898279966"             # #overseer-dev
+PROD_OVERSEER = "1540419847765237913"  # #overseer-prod
+PROD_CHAT = "1540695363093139537"  # #overseer-prod-grug
+DEV = "1543057103898279966"  # #overseer-dev
 
 ALLOWED = frozenset({"9001"})
 
@@ -56,7 +57,6 @@ class WhatMakesTheLeakPossible(unittest.TestCase):
 
 
 class TheBridgeOnlyActsInChannelsItOwns(unittest.TestCase):
-
     @staticmethod
     def _source() -> str:
         return BRIDGE.read_text(encoding="utf-8")
@@ -65,14 +65,14 @@ class TheBridgeOnlyActsInChannelsItOwns(unittest.TestCase):
         src = self._source()
         self.assertIn("OWNED_CHANNEL_IDS", src)
         start = src.index("OWNED_CHANNEL_IDS = frozenset(")
-        block = src[start:src.index(")", start) + 1]
+        block = src[start : src.index(")", start) + 1]
         self.assertIn("OVERSEER_CHANNEL_ID", block)
         self.assertIn("CHAT_CHANNEL_ID", block)
 
     def test_on_message_returns_early_for_a_channel_it_does_not_own(self):
         src = self._source()
         start = src.index("async def on_message(")
-        body = src[start:src.index("\n    async def", start + 10)]
+        body = src[start : src.index("\n    async def", start + 10)]
         self.assertIn("OWNED_CHANNEL_IDS", body)
         # The guard has to run BEFORE anything is parsed, or the leak is only
         # narrowed rather than closed.
@@ -89,7 +89,7 @@ class TheBridgeOnlyActsInChannelsItOwns(unittest.TestCase):
         look healthy and answer nobody."""
         src = self._source()
         start = src.index("async def on_message(")
-        body = src[start:src.index("\n    async def", start + 10)]
+        body = src[start : src.index("\n    async def", start + 10)]
         self.assertIn("if OWNED_CHANNEL_IDS and", body)
 
 

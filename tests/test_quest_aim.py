@@ -19,13 +19,13 @@ Pins (production/UPSTREAM-PINS.env):
     module 8d9f6aa6bc6d45f9ae0ee0675b9b1f8aa6937312
 Neither is vendored here. Every line number below was read from those two.
 """
+
 import pathlib
 import re
 import unittest
 
 MODULE = (
-    pathlib.Path(__file__).resolve().parents[1]
-    / "mod-overseer/src/mod_overseer.cpp"
+    pathlib.Path(__file__).resolve().parents[1] / "mod-overseer/src/mod_overseer.cpp"
 )
 MIGRATION = (
     pathlib.Path(__file__).resolve().parents[1]
@@ -45,7 +45,7 @@ def _function(name: str) -> str:
         elif src[i] == "}":
             depth -= 1
             if depth == 0:
-                return src[start:i + 1]
+                return src[start : i + 1]
     raise AssertionError("%s has no closing brace" % name)
 
 
@@ -69,19 +69,20 @@ def _walks_before_the_leader_gate_are_leader_only(body: str) -> None:
     gate = body.index("if (!isLead)")
     before = body[:gate]
     for m in re.finditer(r"MAX_QUEST_LOG_SIZE", before):
-        head = before[max(0, m.start() - 600):m.start()]
+        head = before[max(0, m.start() - 600) : m.start()]
         assert "isLead &&" in head, (
             "a slot walk before the leader gate is not itself leader-gated; "
-            "every follower would free-roam its own log")
+            "every follower would free-roam its own log"
+        )
     assert "MAX_QUEST_LOG_SIZE" in body[gate:], (
-        "the fallback slot walk must still sit behind the leader gate")
+        "the fallback slot walk must still sit behind the leader gate"
+    )
 
 
 def _drive() -> str:
     # mod-overseer#552 split DriveQuests into a census and dispatch plus the
     # per-family body it always had. The drive these tests describe is both.
-    return (_function("void DriveQuests()")
-            + _function("void DriveFamilyQuests("))
+    return _function("void DriveQuests()") + _function("void DriveFamilyQuests(")
 
 
 def _chosen() -> str:
@@ -102,8 +103,10 @@ class TheColumnIsActuallyRead(unittest.TestCase):
         property that matters here is unchanged: the aim is READ."""
         # `LoadQuestAims(` rather than `LoadQuestAims()`: the loader takes an out-parameter since mod-overseer#192, which keeps the last good aim across a transient read failure.
         self.assertIn("LoadQuestAims(", _code(_drive()))
-        self.assertIn("drive_quest",
-                      _code(_function('std::map<std::string, uint32> LoadQuestAims(')))
+        self.assertIn(
+            "drive_quest",
+            _code(_function("std::map<std::string, uint32> LoadQuestAims(")),
+        )
 
     def test_only_the_leader_free_roams_its_own_quest_log(self):
         """The lesson this guard encodes has NOT changed; where it is enforced
@@ -124,8 +127,9 @@ class TheColumnIsActuallyRead(unittest.TestCase):
         """
         body = _code(_drive())
         self.assertIn("enabled = 1", body)
-        self.assertNotIn("`lead` = 1", body,
-                         "a leader-only query makes a follower's aim unreadable")
+        self.assertNotIn(
+            "`lead` = 1", body, "a leader-only query makes a follower's aim unreadable"
+        )
         _walks_before_the_leader_gate_are_leader_only(body)
 
     def test_the_column_the_module_reads_is_the_one_the_migration_adds(self):
@@ -134,7 +138,7 @@ class TheColumnIsActuallyRead(unittest.TestCase):
         self.assertIn("overseer_roster", _code(_drive()))
 
     def test_the_two_columns_are_fetched_by_index_not_by_one_getter(self):
-        body = _code(_function('std::map<std::string, uint32> LoadQuestAims('))
+        body = _code(_function("std::map<std::string, uint32> LoadQuestAims("))
         self.assertIn("fields[0]", body)
         self.assertIn("fields[1]", body)
 
@@ -143,7 +147,8 @@ class TheAimIsPreferredAndTheFallbackSurvives(unittest.TestCase):
     def test_the_aim_is_consulted_before_the_leaders_own_log(self):
         body = _code(_drive())
         self.assertLess(
-            body.index("DriveChosenQuest("), body.index("GetQuestSlotQuestId"),
+            body.index("DriveChosenQuest("),
+            body.index("GetQuestSlotQuestId"),
             "the log walk runs before the aim is considered, so the aim is decoration",
         )
 
@@ -235,16 +240,18 @@ class NoPathIsSilent(unittest.TestCase):
     def test_every_refusal_logs_before_it_returns(self):
         body = _chosen()
         for match in re.finditer(r"return false;", body):
-            before = body[max(0, match.start() - 900):match.start()]
-            self.assertIn(self.LOG, before,
-                          "a refusal at offset %d says nothing" % match.start())
+            before = body[max(0, match.start() - 900) : match.start()]
+            self.assertIn(
+                self.LOG, before, "a refusal at offset %d says nothing" % match.start()
+            )
 
     def test_every_aim_that_is_applied_logs_first(self):
         for body in (_drive(), _chosen()):
             for match in re.finditer(r"ChangeToDoQuest\(", body):
-                before = body[max(0, match.start() - 700):match.start()]
-                self.assertIn(self.LOG, before,
-                              "a quest is aimed with nothing written down")
+                before = body[max(0, match.start() - 700) : match.start()]
+                self.assertIn(
+                    self.LOG, before, "a quest is aimed with nothing written down"
+                )
 
     def test_the_paths_a_reader_has_to_tell_apart_are_all_distinct(self):
         """No aim (picked), aim applied, aim refused because the quest is not
@@ -279,7 +286,7 @@ class NoPathIsSilent(unittest.TestCase):
 def _backstop_comment() -> str:
     src = MODULE.read_text(encoding="utf-8")
     start = src.index("constexpr uint32 QUEST_POLL_MS")
-    return src[start:src.index("DRIVE_AIM_BACKSTOP_SECONDS = ") + 80]
+    return src[start : src.index("DRIVE_AIM_BACKSTOP_SECONDS = ") + 80]
 
 
 class TheAimIsReleasedOnItsOwnQuestsReward(unittest.TestCase):
@@ -309,9 +316,12 @@ class TheAimIsReleasedOnItsOwnQuestsReward(unittest.TestCase):
         has to name the aim."""
         body = _code(_drive())
         for match in re.finditer(r"GetQuestRewardStatus\(([^)]*)\)", body):
-            self.assertIn(match.group(1), ("aim", "state.lastWorking"),
-                          "a reward check that names neither the aim nor the "
-                          "quest being worked: %r" % match.group(1))
+            self.assertIn(
+                match.group(1),
+                ("aim", "state.lastWorking"),
+                "a reward check that names neither the aim nor the "
+                "quest being worked: %r" % match.group(1),
+            )
 
     def test_a_turn_in_of_a_different_quest_says_so(self):
         body = _drive()
@@ -323,7 +333,8 @@ class TheAimIsReleasedOnItsOwnQuestsReward(unittest.TestCase):
         self.assertIn("DRIVE_AIM_BACKSTOP_SECONDS", _code(src))
         body = _code(_drive())
         self.assertLess(
-            body.index("GetQuestRewardStatus(aim)"), body.index("DRIVE_AIM_BACKSTOP_SECONDS"),
+            body.index("GetQuestRewardStatus(aim)"),
+            body.index("DRIVE_AIM_BACKSTOP_SECONDS"),
             "the timer is consulted before the reward, which makes it the release",
         )
 
@@ -375,19 +386,27 @@ class EveryMemberUsedWasVerifiedAgainstThePinnedSources(unittest.TestCase):
 
     # Members already used elsewhere in this file, which the build has
     # therefore already proven for us.
-    ALREADY_PROVEN = {"Fetch", "NextRow", "Get", "GetTitle", "GetQuestTemplate",
-                      "FindPlayerByName",
-                      # infra#2801 reads the traveller's position in DriveQuests
-                      # to tell "abandoned without moving" from "travelling".
-                      # The snapshot writer in this same file has called these
-                      # since long before, so the build has proven them. Z is
-                      # deliberately absent: the diff does not use it.
-                      "GetPositionX", "GetPositionY",
-                      # module 89878284: the leader-serves-the-youngest log
-                      # line names the youngest and its level. Both are used
-                      # dozens of times elsewhere in this file (58 and 14
-                      # call sites), so the build has long since proven them.
-                      "GetName", "GetLevel"}
+    ALREADY_PROVEN = {
+        "Fetch",
+        "NextRow",
+        "Get",
+        "GetTitle",
+        "GetQuestTemplate",
+        "FindPlayerByName",
+        # infra#2801 reads the traveller's position in DriveQuests
+        # to tell "abandoned without moving" from "travelling".
+        # The snapshot writer in this same file has called these
+        # since long before, so the build has proven them. Z is
+        # deliberately absent: the diff does not use it.
+        "GetPositionX",
+        "GetPositionY",
+        # module 89878284: the leader-serves-the-youngest log
+        # line names the youngest and its level. Both are used
+        # dozens of times elsewhere in this file (58 and 14
+        # call sites), so the build has long since proven them.
+        "GetName",
+        "GetLevel",
+    }
 
     def test_every_arrow_member_used_is_on_the_verified_list(self):
         body = _code(_drive() + _chosen())
@@ -399,7 +418,9 @@ class EveryMemberUsedWasVerifiedAgainstThePinnedSources(unittest.TestCase):
         body = _code(_drive() + _chosen())
         used = set(re.findall(r"rpgInfo\.([A-Za-z_][A-Za-z0-9_]*)", body))
         unknown = used - set(self.VERIFIED)
-        self.assertEqual(unknown, set(), "unverified rpgInfo members: %s" % sorted(unknown))
+        self.assertEqual(
+            unknown, set(), "unverified rpgInfo members: %s" % sorted(unknown)
+        )
 
     def test_each_one_is_cited_with_a_header_and_a_line(self):
         both = _drive() + _chosen()
@@ -470,8 +491,11 @@ class TheSecondErrandOnTheSameBot(unittest.TestCase):
     def test_a_new_errand_reissues_even_when_the_id_already_matches(self):
         code = _code(_function("bool DriveChosenQuest"))
         tail = code.split("working == questId && !aimChanged", 1)[1]
-        self.assertIn("ChangeToDoQuest", tail,
-                      "the aim-changed path must reset the objective pointer")
+        self.assertIn(
+            "ChangeToDoQuest",
+            tail,
+            "the aim-changed path must reset the objective pointer",
+        )
 
     def test_that_reissue_is_announced_rather_than_being_a_third_silent_branch(self):
         body = _function("bool DriveChosenQuest")

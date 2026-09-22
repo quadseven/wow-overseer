@@ -18,6 +18,7 @@ Two failure modes are worth a suite of their own, and both are silent:
 The numbers in the fixtures below are the ones measured live on 2026-08-23,
 so a test that passes here is a test about the family that actually exists.
 """
+
 import datetime
 import unittest
 
@@ -32,8 +33,13 @@ NOW = datetime.datetime(2026, 8, 24, 7, 40)
 
 def standing(name, level, gold, quests, spells=17, talents=1, **kw):
     return digest.Standing(
-        name=name, level=level, copper=int(gold * digest.COPPER_PER_GOLD),
-        quests_done=quests, spells=spells, talents=talents, **kw,
+        name=name,
+        level=level,
+        copper=int(gold * digest.COPPER_PER_GOLD),
+        quests_done=quests,
+        spells=spells,
+        talents=talents,
+        **kw,
     )
 
 
@@ -54,7 +60,9 @@ def window(hours=6.0, now=NOW):
 
 
 def sample(name, minutes_ago, **kw):
-    return digest.Sample(name=name, at=NOW - datetime.timedelta(minutes=minutes_ago), **kw)
+    return digest.Sample(
+        name=name, at=NOW - datetime.timedelta(minutes=minutes_ago), **kw
+    )
 
 
 class Asking(unittest.TestCase):
@@ -64,31 +72,43 @@ class Asking(unittest.TestCase):
         self.assertEqual(digest.DEFAULT_HOURS, digest.parse_ask("how are they?").hours)
 
     def test_all_night_is_a_night(self):
-        """"What did they do all night" is Evan's own sentence."""
-        self.assertEqual(digest.NIGHT_HOURS,
-                         digest.parse_ask("what did they do all night?").hours)
-        self.assertEqual(digest.NIGHT_HOURS,
-                         digest.parse_ask("how are they? anything overnight").hours)
+        """ "What did they do all night" is Evan's own sentence."""
+        self.assertEqual(
+            digest.NIGHT_HOURS, digest.parse_ask("what did they do all night?").hours
+        )
+        self.assertEqual(
+            digest.NIGHT_HOURS,
+            digest.parse_ask("how are they? anything overnight").hours,
+        )
 
     def test_an_explicit_number_of_hours_wins(self):
         self.assertEqual(3.0, digest.parse_ask("catch me up on the last 3 hours").hours)
-        self.assertEqual(6.0, digest.parse_ask("what did they do in the past 6 hrs").hours)
+        self.assertEqual(
+            6.0, digest.parse_ask("what did they do in the past 6 hrs").hours
+        )
 
     def test_days_become_hours(self):
-        self.assertEqual(48.0, digest.parse_ask("how are they over the last 2 days").hours)
+        self.assertEqual(
+            48.0, digest.parse_ask("how are they over the last 2 days").hours
+        )
 
     def test_a_number_beats_the_night_phrase(self):
-        """"all night, say the last 2 hours" means two hours."""
+        """ "all night, say the last 2 hours" means two hours."""
         self.assertEqual(
-            2.0, digest.parse_ask("what did they do all night - last 2 hours").hours)
+            2.0, digest.parse_ask("what did they do all night - last 2 hours").hours
+        )
 
     def test_an_absurd_window_is_clamped_not_refused(self):
-        self.assertEqual(digest.MAX_HOURS,
-                         digest.parse_ask("how are they over the last 9999 days").hours)
+        self.assertEqual(
+            digest.MAX_HOURS,
+            digest.parse_ask("how are they over the last 9999 days").hours,
+        )
 
     def test_zero_hours_falls_back_rather_than_reporting_an_empty_stretch(self):
-        self.assertEqual(digest.DEFAULT_HOURS,
-                         digest.parse_ask("how are they in the last 0 hours").hours)
+        self.assertEqual(
+            digest.DEFAULT_HOURS,
+            digest.parse_ask("how are they in the last 0 hours").hours,
+        )
 
     def test_it_does_not_swallow_the_roster_question(self):
         for text in ("who is online", "list the players", "roster"):
@@ -159,7 +179,7 @@ class Changes(unittest.TestCase):
         is wrong.
         """
         rows = [
-            sample("Grug", 400, level=12, quests_done=9),   # before the window
+            sample("Grug", 400, level=12, quests_done=9),  # before the window
             sample("Grug", 300, level=13, quests_done=11),  # inside it
             sample("Grug", 5, level=14, quests_done=13),
         ]
@@ -189,8 +209,10 @@ class Changes(unittest.TestCase):
         self.assertTrue(change.moved)
 
     def test_a_flat_window_is_measured_and_empty(self):
-        rows = [sample("Grog", 400, level=10, copper=3000),
-                sample("Grog", 5, level=10, copper=3000)]
+        rows = [
+            sample("Grog", 400, level=10, copper=3000),
+            sample("Grog", 5, level=10, copper=3000),
+        ]
         change = digest.changes(window(6.0), rows)["Grog"]
         self.assertTrue(change.measured)
         self.assertFalse(change.moved)
@@ -241,7 +263,9 @@ class Gaps(unittest.TestCase):
         self.assertEqual("Grug", found["level"].leader)
 
     def test_an_even_family_has_nothing_to_report(self):
-        even = [standing(n, 12, 5.0, 12) for n in ("Grug", "Ugga", "Grog", "Bork", "Og")]
+        even = [
+            standing(n, 12, 5.0, 12) for n in ("Grug", "Ugga", "Grog", "Bork", "Og")
+        ]
         self.assertEqual((), digest.gaps(even))
 
     def test_one_character_alone_is_not_an_inequality(self):
@@ -255,8 +279,9 @@ def small_ledger():
     against the object the council actually acts on rather than a stand-in.
     """
     members = [
-        questbook.Member(name="Grug", class_id=1, race_id=1, level=14,
-                         rewarded=frozenset({100})),
+        questbook.Member(
+            name="Grug", class_id=1, race_id=1, level=14, rewarded=frozenset({100})
+        ),
         questbook.Member(name="Grog", class_id=2, race_id=1, level=10),
     ]
     catalog = {100: questbook.Quest(id=100, title="Kobold Candles", min_level=1)}
@@ -275,7 +300,9 @@ class Building(unittest.TestCase):
 
     def test_moments_outside_the_window_are_dropped(self):
         inside = digest.Moment(NOW - datetime.timedelta(hours=1), "Bork", "said", "hi")
-        outside = digest.Moment(NOW - datetime.timedelta(hours=30), "Bork", "said", "old")
+        outside = digest.Moment(
+            NOW - datetime.timedelta(hours=30), "Bork", "said", "old"
+        )
         built = digest.build(window(6.0), live_family(), [], [inside, outside])
         self.assertEqual((inside,), built.moments)
 
@@ -285,8 +312,15 @@ class Building(unittest.TestCase):
 
 class Rendering(unittest.TestCase):
     def account(self, samples=(), moments=(), ledger=None, hours=8.0):
-        return digest.render(digest.build(
-            window(hours), live_family(), list(samples), list(moments), ledger=ledger))
+        return digest.render(
+            digest.build(
+                window(hours),
+                live_family(),
+                list(samples),
+                list(moments),
+                ledger=ledger,
+            )
+        )
 
     def test_an_unsampled_window_never_claims_a_delta(self):
         """The central honesty test.
@@ -351,17 +385,31 @@ class Rendering(unittest.TestCase):
     def test_the_event_log_is_an_enrichment_and_never_a_requirement(self):
         """Same family, same window, with and without the sibling table."""
         plain = self.account()
-        enriched = self.account(moments=[digest.Moment(
-            NOW - datetime.timedelta(hours=2), "Og", "quest_complete",
-            'finished "Kobold Candles"', digest.SOURCE_EVENT)])
+        enriched = self.account(
+            moments=[
+                digest.Moment(
+                    NOW - datetime.timedelta(hours=2),
+                    "Og",
+                    "quest_complete",
+                    'finished "Kobold Candles"',
+                    digest.SOURCE_EVENT,
+                )
+            ]
+        )
         self.assertIn("Og has 17 quest turn-ins", plain)
         self.assertIn("Og has 17 quest turn-ins", enriched)
         self.assertIn("Kobold Candles", enriched)
 
     def test_chat_is_quoted_from_the_window(self):
-        moments = [digest.Moment(NOW - datetime.timedelta(hours=1), "Bork", "said",
-                                 "grog i am stuck in the well again",
-                                 digest.SOURCE_CHAT)]
+        moments = [
+            digest.Moment(
+                NOW - datetime.timedelta(hours=1),
+                "Bork",
+                "said",
+                "grog i am stuck in the well again",
+                digest.SOURCE_CHAT,
+            )
+        ]
         text = self.account(moments=moments)
         self.assertIn("stuck in the well", text)
         self.assertIn(digest.SOURCE_CHAT, text)
@@ -416,6 +464,7 @@ class Purity(unittest.TestCase):
     def _imports(self):
         import ast
         import pathlib
+
         tree = ast.parse(pathlib.Path(digest.__file__).read_text(encoding="utf-8"))
         names = set()
         for node in ast.walk(tree):
@@ -445,13 +494,18 @@ class BridgeWiring(unittest.TestCase):
     def _tree():
         import ast
         import pathlib
+
         bridge = pathlib.Path(__file__).resolve().parents[1] / "bridge.py"
         return ast.parse(bridge.read_text(encoding="utf-8"))
 
     def _function(self, name):
         import ast
+
         for node in ast.walk(self._tree()):
-            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == name:
+            if (
+                isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+                and node.name == name
+            ):
                 return node
         raise AssertionError("%s not found in bridge.py" % name)
 
@@ -466,8 +520,10 @@ class BridgeWiring(unittest.TestCase):
         broken.
         """
         import ast
+
         names = {
-            n.attr for n in ast.walk(self._function("setup_hook"))
+            n.attr
+            for n in ast.walk(self._function("setup_hook"))
             if isinstance(n, ast.Attribute)
         }
         self.assertIn("_sample_family", names)
@@ -481,10 +537,12 @@ class BridgeWiring(unittest.TestCase):
         be its own.
         """
         import ast
+
         fetch = self._function("_fetch_moments")
         guarded = {
             node.func.id
-            for try_ in ast.walk(fetch) if isinstance(try_, ast.Try)
+            for try_ in ast.walk(fetch)
+            if isinstance(try_, ast.Try)
             for node in ast.walk(try_)
             if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
         }
@@ -501,14 +559,18 @@ class BridgeWiring(unittest.TestCase):
         a quiet night.
         """
         import ast
+
         build = self._function("_build_digest")
         called = {
-            n.func.id for n in ast.walk(build)
+            n.func.id
+            for n in ast.walk(build)
             if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
         }
         self.assertIn("_db_now", called)
         attrs = {n.attr for n in ast.walk(build) if isinstance(n, ast.Attribute)}
-        self.assertNotIn("now", attrs, "_build_digest reads a clock that is not the database's")
+        self.assertNotIn(
+            "now", attrs, "_build_digest reads a clock that is not the database's"
+        )
 
 
 if __name__ == "__main__":

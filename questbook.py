@@ -61,29 +61,29 @@ from dataclasses import dataclass, field
 # 1 << (id - 1) throughout, but it is written out because the two numbers are
 # confusable and a table can be read against the wiki; see module docstring.
 CLASS_BIT = {
-    1: 1,      # warrior   - Grug
-    2: 2,      # paladin   - Grog
-    3: 4,      # hunter
-    4: 8,      # rogue     - Bork
-    5: 16,     # priest    - Ugga
-    6: 32,     # death knight
-    7: 64,     # shaman
-    8: 128,    # mage      - Og
-    9: 256,    # warlock
+    1: 1,  # warrior   - Grug
+    2: 2,  # paladin   - Grog
+    3: 4,  # hunter
+    4: 8,  # rogue     - Bork
+    5: 16,  # priest    - Ugga
+    6: 32,  # death knight
+    7: 64,  # shaman
+    8: 128,  # mage      - Og
+    9: 256,  # warlock
     11: 1024,  # druid     (there is no class id 10)
 }
 
 # Race ID (characters.race) -> AllowableRaces bit, same relationship.
 RACE_BIT = {
-    1: 1,      # human
-    2: 2,      # orc
-    3: 4,      # dwarf
-    4: 8,      # night elf
-    5: 16,     # undead
-    6: 32,     # tauren
-    7: 64,     # gnome
-    8: 128,    # troll
-    10: 512,   # blood elf
+    1: 1,  # human
+    2: 2,  # orc
+    3: 4,  # dwarf
+    4: 8,  # night elf
+    5: 16,  # undead
+    6: 32,  # tauren
+    7: 64,  # gnome
+    8: 128,  # troll
+    10: 512,  # blood elf
     11: 1024,  # draenei
 }
 
@@ -337,10 +337,13 @@ def participants(quest: Quest, members, *, catalog=None) -> tuple:
     the family's quest, not one member's, and excluding the finishers would
     make every completed quest look personal.
     """
-    return tuple(sorted(
-        m.name for m in members
-        if quest.id in m.rewarded or reachable(m, quest, catalog=catalog)
-    ))
+    return tuple(
+        sorted(
+            m.name
+            for m in members
+            if quest.id in m.rewarded or reachable(m, quest, catalog=catalog)
+        )
+    )
 
 
 def shared_quests(members, catalog) -> tuple:
@@ -351,7 +354,8 @@ def shared_quests(members, catalog) -> tuple:
     """
     names = {m.name for m in members}
     return tuple(
-        q for q in sorted(catalog.values(), key=lambda q: q.id)
+        q
+        for q in sorted(catalog.values(), key=lambda q: q.id)
         if set(participants(q, members, catalog=catalog)) == names
     )
 
@@ -436,8 +440,9 @@ def unreachable(member: Member, catalog) -> tuple:
             continue
         if _chain_reachable(member, q, catalog):
             continue
-        reasons = [r for r in blockers(member, q, catalog=catalog)
-                   if r != DONE] or [PREREQUISITE]
+        reasons = [r for r in blockers(member, q, catalog=catalog) if r != DONE] or [
+            PREREQUISITE
+        ]
         out.append(Stall(quest_id=q.id, title=q.title, reason=reasons[0]))
     return tuple(out)
 
@@ -449,8 +454,12 @@ def _replaying(member: Member, done) -> Member:
     character; every other fact about them is carried through untouched.
     """
     return Member(
-        name=member.name, class_id=member.class_id, race_id=member.race_id,
-        level=member.level, rewarded=frozenset(done), held=member.held,
+        name=member.name,
+        class_id=member.class_id,
+        race_id=member.race_id,
+        level=member.level,
+        rewarded=frozenset(done),
+        held=member.held,
         zones=member.zones,
     )
 
@@ -464,7 +473,8 @@ def _missed_shared_ids(member: Member, members, catalog) -> set:
     """
     others = [m for m in members if m.name != member.name]
     return {
-        q.id for q in shared_quests(members, catalog)
+        q.id
+        for q in shared_quests(members, catalog)
         if q.id not in member.rewarded and any(q.id in o.rewarded for o in others)
     }
 
@@ -501,9 +511,9 @@ def _next_ready(member: Member, done, remaining, catalog):
     """
     replayed = _replaying(member, done)
     ready = [
-        qid for qid in remaining
-        if qid in catalog
-        and not blockers(replayed, catalog[qid], catalog=catalog)
+        qid
+        for qid in remaining
+        if qid in catalog and not blockers(replayed, catalog[qid], catalog=catalog)
     ]
     return min(ready) if ready else None
 
@@ -542,8 +552,7 @@ def catch_up_plan(member: Member, members, catalog) -> tuple:
     done, so 37 is not "behind" - it is behind a door. order_for() walks the
     chain, replaying rewards as they would land, so 35 comes out before 37.
     """
-    return order_for(
-        member, _missed_shared_ids(member, members, catalog), catalog)
+    return order_for(member, _missed_shared_ids(member, members, catalog), catalog)
 
 
 @dataclass(frozen=True)
@@ -595,16 +604,24 @@ def say(ledger: Ledger, name: str) -> str:
         first = ledger.plans.get(name) or missed
         parts.append(
             "%s is behind on %d quest%s the rest of us have done; next is %s."
-            % (name, len(missed), "" if len(missed) == 1 else "s",
-               first[0].title or "quest %d" % first[0].id)
+            % (
+                name,
+                len(missed),
+                "" if len(missed) == 1 else "s",
+                first[0].title or "quest %d" % first[0].id,
+            )
         )
     else:
         parts.append("%s is not behind on anything we can help with." % name)
     if stalls:
         parts.append(
             "%s should drop %d quest%s that cannot be finished from here: %s."
-            % (name, len(stalls), "" if len(stalls) == 1 else "s",
-               ", ".join(s.title or "quest %d" % s.quest_id for s in stalls))
+            % (
+                name,
+                len(stalls),
+                "" if len(stalls) == 1 else "s",
+                ", ".join(s.title or "quest %d" % s.quest_id for s in stalls),
+            )
         )
     return " ".join(parts)
 
@@ -640,8 +657,9 @@ def aimable(held, beneficiary: str, leader: str) -> frozenset:
     return frozenset(holdings.get(who, frozenset()))
 
 
-def drive_target(ledger: Ledger, *, held_by_traveller, wanted: int = 0,
-                 beneficiary: str = "") -> int:
+def drive_target(
+    ledger: Ledger, *, held_by_traveller, wanted: int = 0, beneficiary: str = ""
+) -> int:
     """The ONE quest id the family should be aimed at, or 0.
 
     `held_by_traveller` MEANS "held by whoever will actually be aimed", which

@@ -15,6 +15,7 @@ tab down in production (infra#3172, infra#2846).
 
 Tickets: infra#2597, infra#3172, mod-overseer#88.
 """
+
 import pathlib
 import re
 import unittest
@@ -30,8 +31,8 @@ BANNER = "// --- the live recap and the loot board (infra#2597, mod-overseer#88)
 CSS_BANNER = "/* --- the recap and the loot board, inside the Chronicle (infra#2597)"
 NEXT = "// --- the Council (infra#2597)"
 NEXT_CSS = "/* --- the Council (infra#2597)"
-BLOCK = PAGE[PAGE.index(BANNER):PAGE.index(NEXT, PAGE.index(BANNER))]
-CSS = PAGE[PAGE.index(CSS_BANNER):PAGE.index(NEXT_CSS, PAGE.index(CSS_BANNER))]
+BLOCK = PAGE[PAGE.index(BANNER) : PAGE.index(NEXT, PAGE.index(BANNER))]
+CSS = PAGE[PAGE.index(CSS_BANNER) : PAGE.index(NEXT_CSS, PAGE.index(CSS_BANNER))]
 
 
 def code(block: str) -> str:
@@ -41,8 +42,9 @@ def code(block: str) -> str:
     guard that its own explanation can trip is a guard that gets weakened
     until it passes. Several assertions below name the sentence they forbid.
     """
-    return "\n".join(line for line in block.splitlines()
-                     if not line.lstrip().startswith("//"))
+    return "\n".join(
+        line for line in block.splitlines() if not line.lstrip().startswith("//")
+    )
 
 
 CODE = code(BLOCK)
@@ -53,29 +55,32 @@ class WhereTheCodeIsAllowedToSit(unittest.TestCase):
         """It renders into that tab and shares chrItem, chrSect, chrChips and
         chrWhen with it. Outside that window it would be either sweeping into
         the Armory's assertions or keeping a second copy of four helpers."""
-        chron = PAGE.index("// --- the Chronicle (infra#2597, mod-overseer#88,"
-                           " mod-overseer#152)")
+        chron = PAGE.index(
+            "// --- the Chronicle (infra#2597, mod-overseer#88, mod-overseer#152)"
+        )
         self.assertGreater(PAGE.index(BANNER), chron)
         self.assertLess(PAGE.index(BANNER), PAGE.index(NEXT))
 
     def test_the_css_is_above_the_family_banner(self):
         """The Family CSS tests slice from their banner to the end of the
         stylesheet, so rules below it are read as Family rules."""
-        self.assertLess(PAGE.index(CSS_BANNER),
-                        PAGE.index("--- the Family tab (infra#2892)"))
+        self.assertLess(
+            PAGE.index(CSS_BANNER), PAGE.index("--- the Family tab (infra#2892)")
+        )
 
     def test_the_markup_exists_and_is_in_the_chronicle_section(self):
-        section = PAGE[PAGE.index('<section id="chronicle">'):]
-        section = section[:section.index("</section>")]
+        section = PAGE[PAGE.index('<section id="chronicle">') :]
+        section = section[: section.index("</section>")]
         for element in ('id="rcbox"', 'id="rcboard"', 'id="rcbasis"'):
             self.assertIn(element, section, element)
 
     def test_the_timeline_is_still_on_the_page_below_it(self):
         """The recap was added ABOVE what they have done, not instead of it."""
-        section = PAGE[PAGE.index('<section id="chronicle">'):]
-        section = section[:section.index("</section>")]
-        self.assertLess(section.index('id="rcbox"'),
-                        section.index("what they have done"))
+        section = PAGE[PAGE.index('<section id="chronicle">') :]
+        section = section[: section.index("</section>")]
+        self.assertLess(
+            section.index('id="rcbox"'), section.index("what they have done")
+        )
 
 
 class TheEndpoint(unittest.TestCase):
@@ -87,20 +92,20 @@ class TheEndpoint(unittest.TestCase):
     def test_the_handler_takes_a_map_and_never_a_roster(self):
         """WHO the family is belongs to bonds, exactly as /api/armory and
         /api/family refuse a name. A map id is a fact about the world."""
-        handler = SERVER[SERVER.index("def _recap"):]
-        handler = handler[:handler.index("def _council")]
+        handler = SERVER[SERVER.index("def _recap") :]
+        handler = handler[: handler.index("def _council")]
         self.assertIn("family.roster()", handler)
         self.assertNotIn('query.get("name"', handler)
         self.assertIn('query.get("map"', handler)
 
     def test_the_map_parameter_is_an_integer_or_it_is_dropped(self):
-        handler = SERVER[SERVER.index("def _recap"):]
-        handler = handler[:handler.index("def _council")]
+        handler = SERVER[SERVER.index("def _recap") :]
+        handler = handler[: handler.index("def _council")]
         self.assertIn("isdigit()", handler)
 
     def test_a_dead_database_is_a_503_that_keeps_what_is_drawn(self):
-        handler = SERVER[SERVER.index("def _recap"):]
-        handler = handler[:handler.index("def _council")]
+        handler = SERVER[SERVER.index("def _recap") :]
+        handler = handler[: handler.index("def _council")]
         self.assertIn("self._send(503", handler)
         self.assertIn("may be stale", BLOCK)
 
@@ -109,10 +114,14 @@ class TheEndpoint(unittest.TestCase):
         the two guards already in this file catches both. Production lacks
         tables dev has, so an unguarded read here is a 503 on the live realm
         for a feature it has nothing to do with."""
-        fetch = SERVER[SERVER.index("def _fetch_recap"):]
-        fetch = fetch[:fetch.index("# --- the current-goal banner")]
-        for table in ("overseer_dungeon_run", "overseer_event", "overseer_death",
-                      "overseer_snapshot"):
+        fetch = SERVER[SERVER.index("def _fetch_recap") :]
+        fetch = fetch[: fetch.index("# --- the current-goal banner")]
+        for table in (
+            "overseer_dungeon_run",
+            "overseer_event",
+            "overseer_death",
+            "overseer_snapshot",
+        ):
             self.assertIn('"%s"' % table, fetch, table)
         # Nothing in the fetch may call execute directly: the guard is the
         # only way rows come back, so a read added later cannot skip it.
@@ -122,31 +131,33 @@ class TheEndpoint(unittest.TestCase):
         """1054 is not a ProgrammingError. pymysql has no entry for it in
         error_map, so it falls back to OperationalError, and a guard that
         catches only ProgrammingError is half a guard."""
-        guard = SERVER[SERVER.index("def _wide_guarded"):]
-        guard = guard[:guard.index("def _fetch_recap")]
+        guard = SERVER[SERVER.index("def _wide_guarded") :]
+        guard = guard[: guard.index("def _fetch_recap")]
         self.assertIn("pymysql.err.MySQLError", guard)
         self.assertIn("(1054, 1146)", guard)
 
     def test_anything_that_is_not_those_two_still_raises(self):
         """A guard that swallowed a network blip would render an empty recap
         and train the alarm away."""
-        guard = SERVER[SERVER.index("def _wide_guarded"):]
-        guard = guard[:guard.index("def _fetch_recap")]
+        guard = SERVER[SERVER.index("def _wide_guarded") :]
+        guard = guard[: guard.index("def _fetch_recap")]
         self.assertIn("raise", guard)
 
     def test_the_run_read_falls_back_to_columns_that_always_existed(self):
         """outcome and members arrived on 2026-09-02. A world that predates
         them must still get its runs."""
         self.assertIn("_RECAP_RUNS_OLD", SERVER)
-        self.assertNotIn("outcome", SERVER[SERVER.index("_RECAP_RUNS_OLD"):
-                                           SERVER.index("_RECAP_EQUIPS")])
+        self.assertNotIn(
+            "outcome",
+            SERVER[SERVER.index("_RECAP_RUNS_OLD") : SERVER.index("_RECAP_EQUIPS")],
+        )
 
     def test_the_equip_read_is_not_narrowed_to_the_run(self):
         """The earliest equip of a pair is a fortnight old for gear worn for a
         fortnight. Narrowing this to the run window would reproduce exactly
         the bug the module exists to fix."""
-        sql = SERVER[SERVER.index("_RECAP_EQUIPS = ("):]
-        sql = sql[:sql.index(")\n")]
+        sql = SERVER[SERVER.index("_RECAP_EQUIPS = (") :]
+        sql = sql[: sql.index(")\n")]
         self.assertNotIn("first_seen >=", sql)
         self.assertNotIn("started_at", sql)
 
@@ -201,8 +212,7 @@ class ThePageDecidesNothing(unittest.TestCase):
     def test_every_verdict_sentence_is_the_modules(self):
         self.assertIn("drop.verdict_line", CODE)
         self.assertNotIn("best.who +", CODE)
-        for invented in ('"upgrade for"', '"item level"', '"better than"',
-                         '"beats"'):
+        for invented in ('"upgrade for"', '"item level"', '"better than"', '"beats"'):
             self.assertNotIn(invented, CODE, invented)
 
     def test_the_also_wanted_list_is_trimmed_by_the_module(self):
@@ -242,8 +252,8 @@ class ThePageDecidesNothing(unittest.TestCase):
         """A hue is a fact about the stylesheet, which is the one thing that
         knows this page is drawn on two grounds."""
         self.assertIn("RC_TONES", CODE)
-        tones = CODE[CODE.index("const RC_TONES"):]
-        tones = tones[:tones.index("]);")]
+        tones = CODE[CODE.index("const RC_TONES") :]
+        tones = tones[: tones.index("]);")]
         for word in (recap.UPGRADE, recap.EMPTY, recap.LOCKED):
             self.assertIn('"%s"' % word, tones, word)
 
@@ -268,13 +278,13 @@ class WhatThePageMustNotDo(unittest.TestCase):
         self.assertNotIn("insertAdjacentHTML", BLOCK)
 
     def test_a_failed_poll_does_not_blank_the_view(self):
-        poll = BLOCK[BLOCK.index("async function pollRecap"):]
+        poll = BLOCK[BLOCK.index("async function pollRecap") :]
         self.assertNotIn("rcbox.replaceChildren()", poll)
         self.assertNotIn("rcboard.replaceChildren()", poll)
 
     def test_the_failure_says_so_through_the_banner_the_tab_already_has(self):
         """Two banners on one tab can disagree about whether the world is up."""
-        poll = BLOCK[BLOCK.index("async function pollRecap"):]
+        poll = BLOCK[BLOCK.index("async function pollRecap") :]
         self.assertIn("chrhead.textContent", poll)
 
     def test_the_page_never_reorders_the_roster_or_the_bosses(self):
@@ -284,9 +294,9 @@ class WhatThePageMustNotDo(unittest.TestCase):
         self.assertNotIn(".sort(", CODE)
 
     def test_entering_the_view_polls_both_halves(self):
-        show = PAGE[PAGE.index("function showView"):]
-        branch = show[show.index("if (isChr) {"):]
-        branch = branch[:branch.index("return;")]
+        show = PAGE[PAGE.index("function showView") :]
+        branch = show[show.index("if (isChr) {") :]
+        branch = branch[: branch.index("return;")]
         self.assertIn("pollChronicle();", branch)
         self.assertIn("pollRecap();", branch)
 
@@ -299,15 +309,21 @@ class TheStylesheetKeepsTheHouseRules(unittest.TestCase):
         """An undefined custom property is invalid at computed-value time, so
         the declaration falls back to inherit with no console error and no
         failing test. That shipped once already (infra#3255)."""
-        style = PAGE[PAGE.index("<style>"):PAGE.index("</style>")]
+        style = PAGE[PAGE.index("<style>") : PAGE.index("</style>")]
         defined = set(re.findall(r"(--[a-z0-9-]+)\s*:", style))
         used = set(re.findall(r"var\(\s*(--[a-z0-9-]+)\s*\)", CSS))
         self.assertEqual(sorted(used - defined), [])
 
     def test_it_paints_from_on_card_roles_and_never_from_a_pigment(self):
         """A pigment is mixed for one ground and this page has two."""
-        for pigment in ("--cyan", "--green", "--vermilion", "--amber",
-                        "--rust", "--deep-green"):
+        for pigment in (
+            "--cyan",
+            "--green",
+            "--vermilion",
+            "--amber",
+            "--rust",
+            "--deep-green",
+        ):
             self.assertNotIn("var(%s)" % pigment, CSS, pigment)
 
     def test_it_defines_no_quality_colours_of_its_own(self):
@@ -320,7 +336,7 @@ class TheStylesheetKeepsTheHouseRules(unittest.TestCase):
 
 
 class TheArmoryLinksBackToTheChronicle(unittest.TestCase):
-    """"Can you link on their armory where they got what gear?" What the
+    """ "Can you link on their armory where they got what gear?" What the
     record supports is where it was first seen WORN, and the line says that."""
 
     def test_the_provenance_index_rides_on_the_armory_payload(self):
@@ -331,28 +347,33 @@ class TheArmoryLinksBackToTheChronicle(unittest.TestCase):
         """Gear and talents are core tables that are always there;
         overseer_event is not. A realm without it must still get a paper
         doll."""
-        fetch = SERVER[SERVER.index("def _fetch_armory"):]
-        fetch = fetch[:fetch.index("def _fetch_standing")]
+        fetch = SERVER[SERVER.index("def _fetch_armory") :]
+        fetch = fetch[: fetch.index("def _fetch_standing")]
         self.assertIn("_wide_guarded(", fetch)
         self.assertIn("equip_event_rows", fetch)
 
     def test_the_line_is_a_link_to_the_chronicle(self):
-        block = PAGE[PAGE.index("function renderProvenance"):]
-        block = block[:block.index("function renderDetail")]
+        block = PAGE[PAGE.index("function renderProvenance") :]
+        block = block[: block.index("function renderDetail")]
         self.assertIn('a.href = "#chronicle";', block)
         self.assertIn("a.textContent = p.line;", block)
 
     def test_an_item_with_no_record_is_shown_and_not_hidden(self):
         """Hiding it would make "no idea where this came from" look identical
         to "came from nowhere interesting"."""
-        block = PAGE[PAGE.index("function renderProvenance"):]
-        block = block[:block.index("function renderDetail")]
+        block = PAGE[PAGE.index("function renderProvenance") :]
+        block = block[: block.index("function renderDetail")]
         self.assertIn("if (!p.known)", block)
         self.assertIn("row.textContent = p.line;", block)
 
     def test_the_sentence_is_the_modules_and_not_the_pages(self):
-        block = code(PAGE[PAGE.index("function renderProvenance"):
-                          PAGE.index("function renderDetail")])
+        block = code(
+            PAGE[
+                PAGE.index("function renderProvenance") : PAGE.index(
+                    "function renderDetail"
+                )
+            ]
+        )
         self.assertIn("p.line", block)
         for invented in ('"first worn in "', '"looted in "', '"got in "'):
             self.assertNotIn(invented, block, invented)

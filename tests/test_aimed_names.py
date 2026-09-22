@@ -23,6 +23,7 @@ no other seam.
 
 Ticket: infra#3409.
 """
+
 import pathlib
 import re
 import unittest
@@ -43,10 +44,13 @@ class AnErrandCountsAsSomewhereToBe(unittest.TestCase):
     def test_the_query_asks_for_a_travel_errand_too(self):
         """A character with an errand and no quest must count as aimed."""
         body = _aimed_names_source()
-        self.assertIn("travel_npc", body,
-                      "a character carrying a travel errand and no quest "
-                      "would not count as aimed, so the strategy pass takes "
-                      "`new rpg` back off it and nothing walks it anywhere")
+        self.assertIn(
+            "travel_npc",
+            body,
+            "a character carrying a travel errand and no quest "
+            "would not count as aimed, so the strategy pass takes "
+            "`new rpg` back off it and nothing walks it anywhere",
+        )
 
     def test_an_empty_errand_does_not_count(self):
         """The column is empty far more often than it is set.

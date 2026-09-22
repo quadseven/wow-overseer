@@ -8,6 +8,7 @@ chat.py where this stdlib suite can reach it without MySQL or an LLM.
 
 Ticket: infra#2604.
 """
+
 import unittest
 from datetime import datetime, timedelta
 
@@ -23,33 +24,46 @@ def rows(*specs) -> list[dict]:
     """Newest-first rows shaped like the SELECT the adapter runs."""
     out = []
     for row_id, source, text, ago_seconds in specs:
-        out.append({
-            "id": row_id,
-            "source": source,
-            "text": text,
-            "created_at": NOW - timedelta(seconds=ago_seconds),
-        })
+        out.append(
+            {
+                "id": row_id,
+                "source": source,
+                "text": text,
+                "created_at": NOW - timedelta(seconds=ago_seconds),
+            }
+        )
     return out
 
 
 class RelativeWhenTest(unittest.TestCase):
     def test_seconds_minutes_hours_days(self):
-        cases = [(3, "just now"), (42, "42s ago"), (90, "1m ago"),
-                 (60 * 75, "1h ago"), (86400 * 3 + 5, "3d ago")]
+        cases = [
+            (3, "just now"),
+            (42, "42s ago"),
+            (90, "1m ago"),
+            (60 * 75, "1h ago"),
+            (86400 * 3 + 5, "3d ago"),
+        ]
         for ago, expected in cases:
             with self.subTest(ago=ago):
-                self.assertEqual(chat.relative_when(NOW - timedelta(seconds=ago), NOW), expected)
+                self.assertEqual(
+                    chat.relative_when(NOW - timedelta(seconds=ago), NOW), expected
+                )
 
     def test_a_row_stamped_in_the_future_reads_as_just_now(self):
         # The label is computed on the database clock, but a row written
         # between the SELECT and the NOW() read is legitimately "ahead".
         # "in -2s" would read as breakage; "just now" is the truth.
-        self.assertEqual(chat.relative_when(NOW + timedelta(seconds=2), NOW), "just now")
+        self.assertEqual(
+            chat.relative_when(NOW + timedelta(seconds=2), NOW), "just now"
+        )
 
 
 class TimelineTest(unittest.TestCase):
     def test_each_thought_carries_id_source_text_iso_and_label(self):
-        page = chat.build_timeline("Odo", rows((9, "event", "Odo entered combat.", 120)), NOW, 50)
+        page = chat.build_timeline(
+            "Odo", rows((9, "event", "Odo entered combat.", 120)), NOW, 50
+        )
         self.assertEqual(page["name"], "Odo")
         thought = page["thoughts"][0]
         self.assertEqual(thought["id"], 9)
@@ -69,9 +83,12 @@ class TimelineTest(unittest.TestCase):
         # two speakers), so the marker is what tells the page who spoke.
         page = chat.build_timeline(
             "Odo",
-            rows((9, "chat", "I go, Overseer.", 5),
-                 (8, "chat", chat.overseer_line("go mine"), 6)),
-            NOW, 50,
+            rows(
+                (9, "chat", "I go, Overseer.", 5),
+                (8, "chat", chat.overseer_line("go mine"), 6),
+            ),
+            NOW,
+            50,
         )
         said, asked = page["thoughts"]
         self.assertEqual(said["speaker"], "character")
@@ -131,11 +148,19 @@ class MessageTest(unittest.TestCase):
 class PromptTest(unittest.TestCase):
     def build(self, **kw):
         args = {
-            "name": "Odo", "level": 5, "race_name": "Orc", "class_name": "Warrior",
-            "zone": "Durotar", "personality": "gruff and loyal",
-            "health": 100, "max_health": 146, "in_combat": False,
-            "recent": rows((9, "event", "Odo entered combat.", 60),
-                           (8, "chat", "I am hungry.", 120)),
+            "name": "Odo",
+            "level": 5,
+            "race_name": "Orc",
+            "class_name": "Warrior",
+            "zone": "Durotar",
+            "personality": "gruff and loyal",
+            "health": 100,
+            "max_health": 146,
+            "in_combat": False,
+            "recent": rows(
+                (9, "event", "Odo entered combat.", 60),
+                (8, "chat", "I am hungry.", 120),
+            ),
             "text": "go train your mining",
         }
         args.update(kw)
@@ -156,7 +181,9 @@ class PromptTest(unittest.TestCase):
         prompt = self.build()
         self.assertIn("Odo entered combat.", prompt)
         self.assertIn("I am hungry.", prompt)
-        self.assertLess(prompt.index("I am hungry."), prompt.index("Odo entered combat."))
+        self.assertLess(
+            prompt.index("I am hungry."), prompt.index("Odo entered combat.")
+        )
 
     def test_history_is_capped_so_one_chat_cannot_grow_unbounded(self):
         # Newest first in, newest kept: a character with months of event
@@ -196,14 +223,18 @@ class ParseReplyTest(unittest.TestCase):
     def test_the_last_json_object_wins_over_the_narration(self):
         # Live-learned on 2026-08-21: reasoning models narrate first, and
         # the narration contains braces. The answer is the LAST object.
-        content = ('First I consider {"command": "flee"} but no.\n'
-                   '{"command": "grind", "say": "I will hunt, Overseer."}')
+        content = (
+            'First I consider {"command": "flee"} but no.\n'
+            '{"command": "grind", "say": "I will hunt, Overseer."}'
+        )
         decision = chat.parse_reply(content)
         self.assertEqual(decision.command, "grind")
         self.assertEqual(decision.say, "I will hunt, Overseer.")
 
     def test_an_invented_command_is_dropped_but_the_words_survive(self):
-        decision = chat.parse_reply('{"command": "rm -rf azeroth", "say": "As you wish."}')
+        decision = chat.parse_reply(
+            '{"command": "rm -rf azeroth", "say": "As you wish."}'
+        )
         self.assertIsNone(decision.command)
         self.assertEqual(decision.say, "As you wish.")
 
@@ -324,9 +355,9 @@ class SayOnceTest(unittest.TestCase):
 
     def test_it_may_be_said_again_once_the_cooldown_has_passed(self):
         chat.remember_said(self.said, self.key, now=100.0)
-        self.assertTrue(chat.should_say(
-            self.said, self.key, now=100.0 + chat.SAY_ONCE_SECONDS
-        ))
+        self.assertTrue(
+            chat.should_say(self.said, self.key, now=100.0 + chat.SAY_ONCE_SECONDS)
+        )
 
     def test_a_different_intent_is_not_silenced_by_this_one(self):
         chat.remember_said(self.said, self.key, now=100.0)
@@ -336,7 +367,8 @@ class SayOnceTest(unittest.TestCase):
     def test_expired_entries_are_forgotten_rather_than_accumulating(self):
         for tick in range(5):
             chat.remember_said(
-                self.said, chat.say_key(speaker="Og", subject=str(tick)),
+                self.said,
+                chat.say_key(speaker="Og", subject=str(tick)),
                 now=100.0 + tick,
             )
         chat.remember_said(self.said, self.key, now=100.0 + chat.SAY_ONCE_SECONDS * 2)
@@ -372,8 +404,9 @@ class AddressedToSelfTest(unittest.TestCase):
 class SkillStateTest(unittest.TestCase):
     def test_a_trade_in_character_skills_is_held(self):
         self.assertEqual(
-            chat.skill_state("Og", "tailoring",
-                             held={"Og": {"tailoring": 1}}, planned=OG_PLANNED),
+            chat.skill_state(
+                "Og", "tailoring", held={"Og": {"tailoring": 1}}, planned=OG_PLANNED
+            ),
             chat.HELD,
         )
 
@@ -393,8 +426,9 @@ class SkillStateTest(unittest.TestCase):
     def test_the_world_outranks_the_queue(self):
         """A trade that is both held and still queued reads as held."""
         self.assertEqual(
-            chat.skill_state("Og", "tailoring",
-                             held={"Og": {"tailoring": 1}}, planned=OG_PLANNED),
+            chat.skill_state(
+                "Og", "tailoring", held={"Og": {"tailoring": 1}}, planned=OG_PLANNED
+            ),
             chat.HELD,
         )
 
@@ -406,8 +440,9 @@ class SkillStateTest(unittest.TestCase):
 
     def test_names_and_skills_are_matched_however_they_are_spelled(self):
         self.assertEqual(
-            chat.skill_state(" og ", "Tailoring",
-                             held={"OG": {"TAILORING": 1}}, planned={}),
+            chat.skill_state(
+                " og ", "Tailoring", held={"OG": {"TAILORING": 1}}, planned={}
+            ),
             chat.HELD,
         )
 
@@ -425,8 +460,7 @@ class SkillStateTest(unittest.TestCase):
         """`held` is a mapping of name to skills; whether the skills arrive
         as a dict of values or a plain list is the caller's business."""
         self.assertEqual(
-            chat.skill_state("Og", "tailoring",
-                             held={"Og": ["tailoring"]}, planned={}),
+            chat.skill_state("Og", "tailoring", held={"Og": ["tailoring"]}, planned={}),
             chat.HELD,
         )
 
@@ -435,39 +469,54 @@ class HonestClaimTest(unittest.TestCase):
     """The last gate, after the voice layer has reworded the line."""
 
     def test_a_held_trade_may_be_claimed_in_any_words(self):
-        self.assertTrue(chat.honest_claim(
-            "Og know tailoring. Og make it.", skill="tailoring", state=chat.HELD
-        ))
+        self.assertTrue(
+            chat.honest_claim(
+                "Og know tailoring. Og make it.", skill="tailoring", state=chat.HELD
+            )
+        )
 
     def test_the_captured_lie_is_refused(self):
-        self.assertFalse(chat.honest_claim(
-            "Og need cloth? Og know tailoring. Og make it, family just bring "
-            "the stuff.",
-            skill="tailoring", state=chat.LEARNING,
-        ))
+        self.assertFalse(
+            chat.honest_claim(
+                "Og need cloth? Og know tailoring. Og make it, family just bring "
+                "the stuff.",
+                skill="tailoring",
+                state=chat.LEARNING,
+            )
+        )
 
     def test_a_hedged_line_about_a_planned_trade_is_honest(self):
-        self.assertTrue(chat.honest_claim(
-            "Og no know tailoring yet. Og learning it.",
-            skill="tailoring", state=chat.LEARNING,
-        ))
+        self.assertTrue(
+            chat.honest_claim(
+                "Og no know tailoring yet. Og learning it.",
+                skill="tailoring",
+                state=chat.LEARNING,
+            )
+        )
 
     def test_a_line_that_never_names_the_trade_claims_nothing(self):
-        self.assertTrue(chat.honest_claim(
-            "Grug give Og 39 Linen Cloth.", skill="tailoring", state=chat.LEARNING
-        ))
+        self.assertTrue(
+            chat.honest_claim(
+                "Grug give Og 39 Linen Cloth.", skill="tailoring", state=chat.LEARNING
+            )
+        )
 
     def test_an_unlearned_trade_may_not_be_named_even_with_a_hedge(self):
         """There is nothing true to say about a trade nobody is getting."""
-        self.assertFalse(chat.honest_claim(
-            "Og learning blacksmithing.", skill="blacksmithing",
-            state=chat.UNSKILLED,
-        ))
+        self.assertFalse(
+            chat.honest_claim(
+                "Og learning blacksmithing.",
+                skill="blacksmithing",
+                state=chat.UNSKILLED,
+            )
+        )
 
     def test_the_trade_is_matched_as_a_whole_word(self):
-        self.assertTrue(chat.honest_claim(
-            "Og know tailoringcraft.", skill="tailoring", state=chat.LEARNING
-        ))
+        self.assertTrue(
+            chat.honest_claim(
+                "Og know tailoringcraft.", skill="tailoring", state=chat.LEARNING
+            )
+        )
 
     def test_no_trade_named_is_nothing_to_check(self):
         self.assertTrue(chat.honest_claim("Og hungry.", skill="", state=chat.UNSKILLED))
@@ -484,11 +533,18 @@ class MidRunTest(unittest.TestCase):
     """
 
     RUN = {
-        "leader_name": "Bork", "map_id": 36, "state": "active",
+        "leader_name": "Bork",
+        "map_id": 36,
+        "state": "active",
         "members": "Bork,Grog,Grug,Og,Ugga",
     }
-    JOBS = {"Bork": "dungeon", "Grog": "dungeon", "Grug": "dungeon",
-            "Og": "dungeon", "Ugga": "dungeon"}
+    JOBS = {
+        "Bork": "dungeon",
+        "Grog": "dungeon",
+        "Grug": "dungeon",
+        "Og": "dungeon",
+        "Ugga": "dungeon",
+    }
 
     def test_a_member_of_an_active_run_is_mid_run(self):
         self.assertTrue(chat.mid_run("Og", run=self.RUN, jobs=self.JOBS))
@@ -526,29 +582,23 @@ class MidRunTest(unittest.TestCase):
         self.assertFalse(chat.mid_run("", run=self.RUN, jobs=self.JOBS))
 
     def test_present_member_on_run_map_keeps_row_busy(self):
-        self.assertTrue(chat.run_has_present_member(
-            self.RUN, {"Og": 36, "Evan": 0}
-        ))
+        self.assertTrue(chat.run_has_present_member(self.RUN, {"Og": 36, "Evan": 0}))
 
     def test_members_elsewhere_release_stale_row(self):
-        self.assertFalse(chat.run_has_present_member(
-            self.RUN, {"Og": 0, "Bork": 0}
-        ))
+        self.assertFalse(chat.run_has_present_member(self.RUN, {"Og": 0, "Bork": 0}))
 
     def test_leader_outside_releases_split_run(self):
         run = dict(self.RUN, leader_name="Og")
-        self.assertFalse(chat.run_has_present_member(
-            run, {"Og": 0, "Bork": 36}
-        ))
+        self.assertFalse(chat.run_has_present_member(run, {"Og": 0, "Bork": 36}))
 
     def test_snapshot_read_failure_fails_closed(self):
         self.assertTrue(chat.run_has_present_member(self.RUN, None))
 
     def test_ended_or_missing_run_is_not_present(self):
         self.assertFalse(chat.run_has_present_member(None, {"Og": 36}))
-        self.assertFalse(chat.run_has_present_member(
-            dict(self.RUN, state="ended"), {"Og": 36}
-        ))
+        self.assertFalse(
+            chat.run_has_present_member(dict(self.RUN, state="ended"), {"Og": 36})
+        )
 
     def test_legacy_run_without_members_uses_any_live_snapshot(self):
         bare = dict(self.RUN, members="")
@@ -577,8 +627,9 @@ class StandDownTest(unittest.TestCase):
         self.assertIn("deep place", said)
 
     def test_it_is_short_enough_to_survive_the_voice_layer(self):
-        said = chat.stand_down("Og", subject="Bolt of Linen Cloth",
-                               place="The Deadmines")
+        said = chat.stand_down(
+            "Og", subject="Bolt of Linen Cloth", place="The Deadmines"
+        )
         self.assertLessEqual(len(said), persona.MAX_SPOKEN)
 
     def test_it_claims_no_trade(self):

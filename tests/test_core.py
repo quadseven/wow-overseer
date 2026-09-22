@@ -2,6 +2,7 @@
 
 No Discord, no MySQL, no LLM - the core is pure, which is the point.
 """
+
 import unittest
 
 from core import (
@@ -57,7 +58,9 @@ class ParseDirectiveTest(unittest.TestCase):
         )
 
     def test_flood_of_commands_is_capped(self):
-        lines = "\n".join(f"@Grug order{i}" for i in range(MAX_COMMANDS_PER_MESSAGE + 1))
+        lines = "\n".join(
+            f"@Grug order{i}" for i in range(MAX_COMMANDS_PER_MESSAGE + 1)
+        )
         out = parse_directive(lines, ME, ALLOWED)
         self.assertEqual(len(out), 1)
         self.assertIsInstance(out[0], Reply)
@@ -87,7 +90,9 @@ class ReportOutcomesTest(unittest.TestCase):
         self.assertEqual(replies2, [])
 
     def test_error_row_reports_its_detail(self):
-        replies, _ = report_outcomes([self._row(2, "error", "target not online")], set())
+        replies, _ = report_outcomes(
+            [self._row(2, "error", "target not online")], set()
+        )
         self.assertEqual(len(replies), 1)
         self.assertIn("target not online", replies[0][1].text)
 
@@ -115,7 +120,10 @@ if __name__ == "__main__":
 class DedicatedChannelTest(unittest.TestCase):
     def test_roster_question_yields_a_roster_query(self):
         from core import RosterQuery
-        out = parse_directive("List the souls that are playing", ME, ALLOWED, dedicated=True)
+
+        out = parse_directive(
+            "List the souls that are playing", ME, ALLOWED, dedicated=True
+        )
         self.assertEqual(len(out), 1)
         self.assertIsInstance(out[0], RosterQuery)
 
@@ -125,10 +133,14 @@ class DedicatedChannelTest(unittest.TestCase):
         self.assertIsInstance(out[0], Reply)
 
     def test_shared_channel_stays_silent(self):
-        self.assertEqual(parse_directive("who is online?", ME, ALLOWED, dedicated=False), [])
+        self.assertEqual(
+            parse_directive("who is online?", ME, ALLOWED, dedicated=False), []
+        )
 
     def test_unknown_author_silent_even_in_dedicated(self):
-        self.assertEqual(parse_directive("who is online?", "9999", ALLOWED, dedicated=True), [])
+        self.assertEqual(
+            parse_directive("who is online?", "9999", ALLOWED, dedicated=True), []
+        )
 
     def test_character_directives_still_work_in_dedicated(self):
         out = parse_directive("@Grug follow", ME, ALLOWED, dedicated=True)
@@ -136,11 +148,13 @@ class DedicatedChannelTest(unittest.TestCase):
 
     def test_job_order_yields_a_job_directive(self):
         from core import JobDirective
+
         out = parse_directive("job farm", ME, ALLOWED, dedicated=True)
         self.assertEqual(out, [JobDirective(mode="farm", source="discord:1000")])
 
     def test_evans_own_sentence_is_recognised(self):
         from core import JobDirective
+
         out = parse_directive("its farming time", ME, ALLOWED, dedicated=True)
         self.assertEqual(out, [JobDirective(mode="farm", source="discord:1000")])
 
@@ -157,13 +171,23 @@ class DedicatedChannelTest(unittest.TestCase):
 
 class FormatRosterTest(unittest.TestCase):
     def _row(self, name, level=5, race=2, map_id=1, combat=0, bot=1):
-        return {"name": name, "level": level, "race": race, "map_id": map_id,
-                "in_combat": combat, "is_bot": bot}
+        return {
+            "name": name,
+            "level": level,
+            "race": race,
+            "map_id": map_id,
+            "in_combat": combat,
+            "is_bot": bot,
+        }
 
     def test_census_counts_factions_and_continents(self):
         from core import format_roster
-        rows = [self._row("Grug", race=2, map_id=1), self._row("Aldo", race=1, map_id=0),
-                self._row("Vely", race=8, map_id=571, combat=1)]
+
+        rows = [
+            self._row("Grug", race=2, map_id=1),
+            self._row("Aldo", race=1, map_id=0),
+            self._row("Vely", race=8, map_id=571, combat=1),
+        ]
         text = format_roster(rows).text
         self.assertIn("3 souls", text)
         self.assertIn("1 Alliance", text)
@@ -173,15 +197,22 @@ class FormatRosterTest(unittest.TestCase):
 
     def test_mortals_are_named(self):
         from core import format_roster
+
         rows = [self._row("Grug", bot=0), self._row("Vely")]
         self.assertIn("Mortals present: Grug", format_roster(rows).text)
 
     def test_empty_world_reads_honestly(self):
         from core import format_roster
+
         self.assertIn("empty", format_roster([]).text)
 
     def test_sample_is_capped(self):
         from core import ROSTER_SAMPLE, format_roster
+
         rows = [self._row(f"Bot{i:03d}", level=i % 60 + 1) for i in range(200)]
-        highest_line = [l for l in format_roster(rows).text.splitlines() if l.startswith("Highest")][0]
+        highest_line = [
+            line
+            for line in format_roster(rows).text.splitlines()
+            if line.startswith("Highest")
+        ][0]
         self.assertLessEqual(highest_line.count(","), ROSTER_SAMPLE)

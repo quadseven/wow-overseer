@@ -14,6 +14,7 @@ What the operator asked for, and what each class pins:
     "watch" button;
   - the quest board and the needs panels read the family on screen.
 """
+
 import pathlib
 import re
 import unittest
@@ -25,13 +26,13 @@ SERVER = (HERE / "map_server.py").read_text(encoding="utf-8")
 
 def between(text, start, end):
     at = text.index(start)
-    return text[at:text.index(end, at)]
+    return text[at : text.index(end, at)]
 
 
 def routed_views():
     """The views HASH_VIEWS lists, by constant name."""
     listed = between(PAGE, "const HASH_VIEWS = [", "];")
-    return set(re.findall(r"\b[A-Z]+_VIEW\b", listed[listed.index("["):]))
+    return set(re.findall(r"\b[A-Z]+_VIEW\b", listed[listed.index("[") :]))
 
 
 def view_constants():
@@ -46,11 +47,24 @@ class TheTabsAreGrouped(unittest.TestCase):
 
     def test_the_primary_row_is_the_views_asked_for(self):
         primary = between(self.LAYOUT, "primary:", "],")
-        for view in ("WATCH_VIEW", "FAMILY_VIEW", "LINEUP_VIEW", "ARMORY_VIEW",
-                     "BAGS_VIEW", "DUNGEONS_VIEW", "DECREE_VIEW"):
+        for view in (
+            "WATCH_VIEW",
+            "FAMILY_VIEW",
+            "LINEUP_VIEW",
+            "ARMORY_VIEW",
+            "BAGS_VIEW",
+            "DUNGEONS_VIEW",
+            "DECREE_VIEW",
+        ):
             self.assertIn(view, primary, view)
-        for view in ("CHRONICLE_VIEW", "RAID_VIEW", "TRADES_VIEW",
-                     "COUNCIL_VIEW", "EYE_VIEW", "MAP_VIEW"):
+        for view in (
+            "CHRONICLE_VIEW",
+            "RAID_VIEW",
+            "TRADES_VIEW",
+            "COUNCIL_VIEW",
+            "EYE_VIEW",
+            "MAP_VIEW",
+        ):
             self.assertNotIn(view, primary, view)
 
     def test_there_are_two_groups_maps_and_more(self):
@@ -60,8 +74,10 @@ class TheTabsAreGrouped(unittest.TestCase):
     def test_the_continents_go_into_the_maps_group(self):
         load = between(PAGE, "async function loadZones()", "\n}\n")
         self.assertIn("const tabs = tabGroupPanel(MAPS_GROUP);", load)
-        self.assertLess(load.index("tabGroupPanel(MAPS_GROUP)"),
-                        load.index("for (const id of CONTINENT_ORDER)"))
+        self.assertLess(
+            load.index("tabGroupPanel(MAPS_GROUP)"),
+            load.index("for (const id of CONTINENT_ORDER)"),
+        )
 
     def test_a_view_nobody_placed_lands_in_more_not_nowhere(self):
         arrange = between(PAGE, "function arrangeTabs()", "\n}\n")
@@ -77,8 +93,11 @@ class TheTabsAreGrouped(unittest.TestCase):
 
     def test_routing_is_still_the_table(self):
         """Grouping moves buttons; it must not become a second router."""
-        for fn in ("function arrangeTabs()", "function syncTabGroups()",
-                   "function tabGroupPanel("):
+        for fn in (
+            "function arrangeTabs()",
+            "function syncTabGroups()",
+            "function tabGroupPanel(",
+        ):
             body = between(PAGE, fn, "\n}\n")
             self.assertNotIn("location.hash", body, fn)
             self.assertNotIn("HASH_VIEWS", body, fn)
@@ -96,7 +115,9 @@ class TheGroupsWorkFromAKeyboard(unittest.TestCase):
     def test_the_toggle_is_a_disclosure_button(self):
         self.assertIn('toggle.type = "button";', self.PANEL)
         self.assertIn('toggle.setAttribute("aria-expanded", "false");', self.PANEL)
-        self.assertIn('toggle.setAttribute("aria-controls", "tabs-" + key);', self.PANEL)
+        self.assertIn(
+            'toggle.setAttribute("aria-controls", "tabs-" + key);', self.PANEL
+        )
 
     def test_escape_closes_the_group_and_returns_focus(self):
         self.assertIn('e.key !== "Escape"', self.PANEL)
@@ -126,7 +147,7 @@ class TheShellDrawsAtOnce(unittest.TestCase):
         load = between(PAGE, "async function loadZones()", "\n}\n")
         self.assertNotIn("WATCH_VIEW", load)
         self.assertNotIn("buildViewTabs", load)
-        foot = PAGE[PAGE.index('window.addEventListener("hashchange", applyHash);'):]
+        foot = PAGE[PAGE.index('window.addEventListener("hashchange", applyHash);') :]
         self.assertLess(foot.index("buildViewTabs();"), foot.index("\napplyHash();"))
 
     def test_the_census_does_not_wait_for_the_map_files(self):
@@ -144,7 +165,9 @@ class TheWatchWallIsBothHeads(unittest.TestCase):
         self.assertIn("if (onWatch) renderHeads(payload);", self.POLL)
 
     def test_a_reply_for_a_view_no_longer_open_is_dropped(self):
-        self.assertIn("if (view !== (onWatch ? WATCH_VIEW : FAMILY_VIEW)) return;", self.POLL)
+        self.assertIn(
+            "if (view !== (onWatch ? WATCH_VIEW : FAMILY_VIEW)) return;", self.POLL
+        )
         self.assertIn("if (!onWatch && asked !== familyKey) return;", self.POLL)
 
     def test_the_heads_render_touches_no_family_card(self):
@@ -187,15 +210,17 @@ class HeadlessCardsHaveNoVideoChrome(unittest.TestCase):
         """The other family has no personas, so no role: "L11 Warrior - "."""
         render = between(PAGE, "function renderFamily(p)", "\n}\n")
         self.assertNotIn('m["class"] + " - " + m.role', render)
-        self.assertIn(".filter(Boolean).join(\" - \")", render)
+        self.assertIn('.filter(Boolean).join(" - ")', render)
 
 
 class ThePanelsReadTheFamilyOnScreen(unittest.TestCase):
     def test_the_needs_poll_names_the_family_and_drops_stale_replies(self):
         poll = between(PAGE, "async function pollNeeds()", "\n}\n")
         self.assertIn('u("/api/needs" + familyQuery(asked))', poll)
-        self.assertIn("if ((p.family || asked) !== familyKey || view !== FAMILY_VIEW) return;",
-                      poll)
+        self.assertIn(
+            "if ((p.family || asked) !== familyKey || view !== FAMILY_VIEW) return;",
+            poll,
+        )
 
     def test_a_family_tab_is_an_address(self):
         self.assertIn('return v === FAMILY_VIEW ? familyKey : "";', PAGE)

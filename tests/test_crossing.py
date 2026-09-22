@@ -7,6 +7,7 @@ The single most important one is
 whole difference between this module and a decision layer that reads an absent
 snapshot row as a negative observation.
 """
+
 import json
 import os
 import unittest
@@ -63,19 +64,22 @@ class ReadOneMemberTests(unittest.TestCase):
 
     def test_a_fresh_row_on_the_origin_map_reads_origin(self):
         reading = crossing.read_member(
-            "Grug", {"map_id": 0, "age_seconds": 3}, self.plan)
+            "Grug", {"map_id": 0, "age_seconds": 3}, self.plan
+        )
         self.assertEqual(reading["where"], crossing.ORIGIN)
         self.assertEqual(reading["map_id"], 0)
         self.assertEqual(reading["reason"], "")
 
     def test_a_fresh_row_on_the_destination_map_reads_destination(self):
         reading = crossing.read_member(
-            "Grug", {"map_id": 1, "age_seconds": 3}, self.plan)
+            "Grug", {"map_id": 1, "age_seconds": 3}, self.plan
+        )
         self.assertEqual(reading["where"], crossing.DESTINATION)
 
     def test_a_third_map_is_elsewhere_and_not_quietly_one_of_the_two(self):
         reading = crossing.read_member(
-            "Grug", {"map_id": 43, "age_seconds": 3}, self.plan)
+            "Grug", {"map_id": 43, "age_seconds": 3}, self.plan
+        )
         self.assertEqual(reading["where"], crossing.ELSEWHERE)
         self.assertEqual(reading["map_id"], 43)
 
@@ -94,7 +98,8 @@ class ReadOneMemberTests(unittest.TestCase):
 
     def test_a_stale_row_is_unreadable_however_confidently_it_names_a_map(self):
         reading = crossing.read_member(
-            "Grug", {"map_id": 1, "age_seconds": 600}, self.plan)
+            "Grug", {"map_id": 1, "age_seconds": 600}, self.plan
+        )
         self.assertEqual(reading["where"], crossing.UNREADABLE)
         self.assertIn("600 seconds old", reading["reason"])
 
@@ -109,10 +114,13 @@ class ReadOneMemberTests(unittest.TestCase):
         inside = crossing.read_member(
             "Grug",
             {"map_id": 1, "age_seconds": crossing.SNAPSHOT_MAX_AGE_SECONDS - 1},
-            self.plan)
+            self.plan,
+        )
         at_limit = crossing.read_member(
-            "Grug", {"map_id": 1, "age_seconds": crossing.SNAPSHOT_MAX_AGE_SECONDS},
-            self.plan)
+            "Grug",
+            {"map_id": 1, "age_seconds": crossing.SNAPSHOT_MAX_AGE_SECONDS},
+            self.plan,
+        )
         self.assertEqual(inside["where"], crossing.DESTINATION)
         self.assertEqual(at_limit["where"], crossing.UNREADABLE)
 
@@ -123,14 +131,16 @@ class ReadOneMemberTests(unittest.TestCase):
 
     def test_a_negative_age_is_broken_rather_than_very_fresh(self):
         reading = crossing.read_member(
-            "Grug", {"map_id": 1, "age_seconds": -5}, self.plan)
+            "Grug", {"map_id": 1, "age_seconds": -5}, self.plan
+        )
         self.assertEqual(reading["where"], crossing.UNREADABLE)
         self.assertIn("clocks disagree", reading["reason"])
 
     def test_a_row_with_no_map_or_a_junk_map_is_unreadable(self):
         no_map = crossing.read_member("Grug", {"age_seconds": 1}, self.plan)
         junk = crossing.read_member(
-            "Grug", {"map_id": "Kalimdor", "age_seconds": 1}, self.plan)
+            "Grug", {"map_id": "Kalimdor", "age_seconds": 1}, self.plan
+        )
         self.assertEqual(no_map["where"], crossing.UNREADABLE)
         self.assertEqual(junk["where"], crossing.UNREADABLE)
         self.assertIn("not a number", junk["reason"])
@@ -142,8 +152,7 @@ class ReadPartyTests(unittest.TestCase):
         readings = crossing.read_party(plan, rows(Grug=0, Ugga=0))
         self.assertEqual(len(readings), len(FAMILY))
         self.assertEqual([r["name"] for r in readings], sorted(FAMILY))
-        missing = {r["name"] for r in readings
-                   if r["where"] == crossing.UNREADABLE}
+        missing = {r["name"] for r in readings if r["where"] == crossing.UNREADABLE}
         self.assertEqual(missing, {"Og", "Grog", "Bork"})
 
     def test_rows_for_names_off_the_roster_are_ignored(self):
@@ -163,13 +172,13 @@ class StandingTests(unittest.TestCase):
 
     def test_everybody_on_the_origin_map_is_assembled(self):
         self.assertEqual(
-            self.standing_for(Grug=0, Ugga=0, Og=0, Grog=0, Bork=0),
-            crossing.ASSEMBLED)
+            self.standing_for(Grug=0, Ugga=0, Og=0, Grog=0, Bork=0), crossing.ASSEMBLED
+        )
 
     def test_everybody_on_the_destination_map_has_arrived(self):
         self.assertEqual(
-            self.standing_for(Grug=1, Ugga=1, Og=1, Grog=1, Bork=1),
-            crossing.ARRIVED)
+            self.standing_for(Grug=1, Ugga=1, Og=1, Grog=1, Bork=1), crossing.ARRIVED
+        )
 
     def test_four_on_the_far_map_and_one_unreadable_is_not_an_arrival(self):
         """The headline rule: BLIND outranks a majority reading.
@@ -181,18 +190,20 @@ class StandingTests(unittest.TestCase):
         the same map, and both `at:` and `trigger:` aims refuse when the map
         differs.
         """
-        self.assertEqual(self.standing_for(Grug=1, Ugga=1, Og=1, Grog=1),
-                         crossing.BLIND)
+        self.assertEqual(
+            self.standing_for(Grug=1, Ugga=1, Og=1, Grog=1), crossing.BLIND
+        )
 
     def test_a_stale_reading_cannot_complete_an_arrival_either(self):
         self.assertEqual(
             self.standing_for(Grug=1, Ugga=1, Og=1, Grog=1, Bork=(1, 900)),
-            crossing.BLIND)
+            crossing.BLIND,
+        )
 
     def test_a_party_across_both_maps_is_split(self):
         self.assertEqual(
-            self.standing_for(Grug=1, Ugga=1, Og=1, Grog=0, Bork=0),
-            crossing.SPLIT)
+            self.standing_for(Grug=1, Ugga=1, Og=1, Grog=0, Bork=0), crossing.SPLIT
+        )
 
     def test_a_member_on_a_third_map_outranks_a_split(self):
         """SCATTERED, not SPLIT, and the order is deliberate.
@@ -202,8 +213,8 @@ class StandingTests(unittest.TestCase):
         not fit, and the recovery for the two is not the same.
         """
         self.assertEqual(
-            self.standing_for(Grug=1, Ugga=1, Og=0, Grog=0, Bork=43),
-            crossing.SCATTERED)
+            self.standing_for(Grug=1, Ugga=1, Og=0, Grog=0, Bork=43), crossing.SCATTERED
+        )
 
     def test_an_empty_reading_list_is_blind_and_not_arrived(self):
         self.assertEqual(crossing.standing([]), crossing.BLIND)
@@ -217,34 +228,40 @@ class LegTests(unittest.TestCase):
         """A blocker with no source is a refusal nobody can act on."""
         for leg in crossing.LEGS:
             for fact in leg.needs:
-                self.assertIn(fact, crossing.FACT_SOURCES,
-                              "%s needs %r, which has no source" % (leg.name, fact))
+                self.assertIn(
+                    fact,
+                    crossing.FACT_SOURCES,
+                    "%s needs %r, which has no source" % (leg.name, fact),
+                )
 
     def test_every_leg_fails_closed_to_an_action_that_does_nothing(self):
         """No leg may fail closed by crossing or by declaring an arrival."""
         for leg in crossing.LEGS:
-            self.assertIn(leg.fails_closed_to,
-                          (crossing.HOLD, crossing.WAIT, crossing.ALARM),
-                          "%s fails closed to %r" % (leg.name, leg.fails_closed_to))
+            self.assertIn(
+                leg.fails_closed_to,
+                (crossing.HOLD, crossing.WAIT, crossing.ALARM),
+                "%s fails closed to %r" % (leg.name, leg.fails_closed_to),
+            )
 
     def test_this_world_can_see_two_of_the_nine_facts(self):
         """Pinned so that adding a fact source without wiring it is visible."""
-        self.assertEqual(crossing.OBSERVABLE,
-                         frozenset({crossing.FACT_MEMBER_MAP,
-                                    crossing.FACT_MEMBER_POSITION}))
+        self.assertEqual(
+            crossing.OBSERVABLE,
+            frozenset({crossing.FACT_MEMBER_MAP, crossing.FACT_MEMBER_POSITION}),
+        )
         self.assertTrue(crossing.OBSERVABLE < crossing.ALL_FACTS)
 
     def test_the_first_blocked_leg_is_the_earliest_and_not_the_worst(self):
         blocked = crossing.first_blocked_leg()
         self.assertEqual(blocked.name, "walk to the dock")
-        self.assertEqual(crossing.leg_blockers(blocked),
-                         (crossing.FACT_DOCK_POSITION,))
+        self.assertEqual(crossing.leg_blockers(blocked), (crossing.FACT_DOCK_POSITION,))
 
     def test_the_walk_on_leg_is_blocked_only_on_the_targets_footing(self):
         """Its member facts exist; the target's z does not."""
         walk_on = LEGS_BY_NAME["walk on"]
-        self.assertEqual(crossing.leg_blockers(walk_on),
-                         (crossing.FACT_TARGET_FOOTING,))
+        self.assertEqual(
+            crossing.leg_blockers(walk_on), (crossing.FACT_TARGET_FOOTING,)
+        )
 
     def test_nothing_is_blocked_when_every_fact_is_available(self):
         self.assertIsNone(crossing.first_blocked_leg(crossing.ALL_FACTS))
@@ -301,8 +318,9 @@ class DecideTests(unittest.TestCase):
         than about this module's opinion, and it is what will fail loudly if
         somebody later short-circuits the fact check.
         """
-        verdict = self.decide_for(available=crossing.ALL_FACTS,
-                                  Grug=0, Ugga=0, Og=0, Grog=0, Bork=0)
+        verdict = self.decide_for(
+            available=crossing.ALL_FACTS, Grug=0, Ugga=0, Og=0, Grog=0, Bork=0
+        )
         self.assertEqual(verdict["action"], crossing.CROSS)
         self.assertEqual(verdict["blocked_on"], ())
 
@@ -313,8 +331,9 @@ class DecideTests(unittest.TestCase):
         readable. This is the guard against a future caller passing ALL_FACTS
         as a convenience and silently disabling the freshness rule with it.
         """
-        verdict = self.decide_for(available=crossing.ALL_FACTS,
-                                  Grug=1, Ugga=1, Og=1, Grog=1)
+        verdict = self.decide_for(
+            available=crossing.ALL_FACTS, Grug=1, Ugga=1, Og=1, Grog=1
+        )
         self.assertEqual(verdict["action"], crossing.WAIT)
         self.assertEqual(verdict["standing"], crossing.BLIND)
 
@@ -332,12 +351,13 @@ class DecideTests(unittest.TestCase):
 class AimTests(unittest.TestCase):
     def test_the_aim_is_the_grammar_the_worldserver_parses(self):
         """`m ':' x ',' y ',' z`, with every separator checked on that side."""
-        self.assertEqual(crossing.aim_at_place(1, -753.596, -2212.78, 17.5),
-                         "at:1:-753.6,-2212.78,17.5")
+        self.assertEqual(
+            crossing.aim_at_place(1, -753.596, -2212.78, 17.5),
+            "at:1:-753.6,-2212.78,17.5",
+        )
 
     def test_a_whole_number_coordinate_keeps_no_trailing_decimals(self):
-        self.assertEqual(crossing.aim_at_place(0, -100.0, 25.0, 0.0),
-                         "at:0:-100,25,0")
+        self.assertEqual(crossing.aim_at_place(0, -100.0, 25.0, 0.0), "at:0:-100,25,0")
 
     def test_an_aim_too_long_for_the_column_is_refused_rather_than_truncated(self):
         """VARCHAR(32), and MySQL truncates rather than refusing.
@@ -375,8 +395,9 @@ class ApproachTests(unittest.TestCase):
         self.assertIn("no z", verdict["refused"])
 
     def test_an_entrance_on_the_wrong_map_is_refused(self):
-        verdict = crossing.approach({"map": 0, "x": 1.0, "y": 2.0, "z": 3.0},
-                                    crossing.KALIMDOR)
+        verdict = crossing.approach(
+            {"map": 0, "x": 1.0, "y": 2.0, "z": 3.0}, crossing.KALIMDOR
+        )
         self.assertFalse(verdict["usable"])
         self.assertIn("not the crossing's map", verdict["refused"])
 
@@ -386,8 +407,7 @@ class ApproachTests(unittest.TestCase):
 
     def test_an_entrance_with_a_measured_z_produces_a_usable_aim(self):
         """The seam works the day the footing is measured, and not before."""
-        verdict = crossing.approach(
-            {"map": 1, "x": -753.596, "y": -2212.78, "z": 17.5})
+        verdict = crossing.approach({"map": 1, "x": -753.596, "y": -2212.78, "z": 17.5})
         self.assertTrue(verdict["usable"])
         self.assertEqual(verdict["aim"], "at:1:-753.6,-2212.78,17.5")
         self.assertLessEqual(len(verdict["aim"]), travel.COLUMN_WIDTH)

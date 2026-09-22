@@ -55,6 +55,7 @@ already shipped once in another shape:
    of the lockout the family is SAVED TO - not as "bosses killed this run",
    which no table on this realm records.
 """
+
 from __future__ import annotations
 
 from datetime import datetime, timedelta
@@ -83,10 +84,16 @@ STALL_AFTER = timedelta(minutes=20)
 # precise state this must still call stalled. `death` is therefore excluded on
 # purpose - a stall detector that reset on a corpse run would have said the
 # family was fine all the way through #171.
-MOVEMENT_KINDS = frozenset({
-    "quest_accept", "quest_complete", "quest_reward", "level_up",
-    "item_equip", "unlearn",
-})
+MOVEMENT_KINDS = frozenset(
+    {
+        "quest_accept",
+        "quest_complete",
+        "quest_reward",
+        "level_up",
+        "item_equip",
+        "unlearn",
+    }
+)
 
 # How many encounter BITS `instance.completedEncounters` has for a map, so
 # "4 of 7" has a denominator that is true rather than remembered.
@@ -170,6 +177,7 @@ def _mode(row: dict) -> str:
 
 # --- disagreement ------------------------------------------------------------
 
+
 def split_on(rows: list[dict], field: str, blank=None) -> dict | None:
     """How the family disagrees about one column, or None if they do not.
 
@@ -192,8 +200,9 @@ def split_on(rows: list[dict], field: str, blank=None) -> dict | None:
     ordered = sorted(groups.items(), key=lambda kv: (-len(kv[1]), str(kv[0])))
     return {
         "field": field,
-        "groups": [{"value": value, "names": sorted(names)}
-                   for value, names in ordered],
+        "groups": [
+            {"value": value, "names": sorted(names)} for value, names in ordered
+        ],
     }
 
 
@@ -203,7 +212,7 @@ def job_split(rows: list[dict]) -> dict | None:
 
 
 def split_sentence(split: dict) -> str:
-    """"3 on quest, 2 on dungeon" - a split rendered for a person.
+    """ "3 on quest, 2 on dungeon" - a split rendered for a person.
 
     The values are printed as they are stored. Every key in jobs.MODES is
     already an English phrase a person says out loud ("gear hunt", "town
@@ -216,6 +225,7 @@ def split_sentence(split: dict) -> str:
 
 
 # --- the dungeon campaign ----------------------------------------------------
+
 
 def bosses_down(mask: int | None) -> int:
     """How many encounter bits are set in `instance.completedEncounters`."""
@@ -252,8 +262,7 @@ def campaign(rows: list[dict]) -> dict:
     done = int(leader.get("dungeon_runs_done") or 0)
     wanted = int(leader.get("dungeon_runs_wanted") or 0)
     higher = sorted(
-        str(r["name"]) for r in rows
-        if int(r.get("dungeon_runs_done") or 0) > done
+        str(r["name"]) for r in rows if int(r.get("dungeon_runs_done") or 0) > done
     )
     return {
         "done": done,
@@ -323,8 +332,9 @@ def last_ended_run(run_rows: list[dict]) -> dict | None:
     ended = [r for r in run_rows if str(r.get("state") or "") == "ended"]
     if not ended:
         return None
-    return max(ended, key=lambda r: r.get("ended_at") or r.get("started_at")
-               or datetime.min)
+    return max(
+        ended, key=lambda r: r.get("ended_at") or r.get("started_at") or datetime.min
+    )
 
 
 def instance_for(instance_rows: list[dict], map_id: int) -> dict | None:
@@ -373,7 +383,7 @@ def dungeon_progress(run: dict, instance: dict | None, counter: dict) -> dict:
 
 
 def dungeon_headline(progress: dict) -> str:
-    """"Running The Deadmines, run 2 of 30, 4 of 7 bosses down"."""
+    """ "Running The Deadmines, run 2 of 30, 4 of 7 bosses down"."""
     parts = [progress["dungeon"]]
     # The number the RUN ROW carries is the one to print when it has one: that
     # is what the row IS, where the roster counter is what has CLOSED. An
@@ -386,14 +396,16 @@ def dungeon_headline(progress: dict) -> str:
     else:
         parts.append("run %d" % number)
     if progress["bosses_total"]:
-        parts.append("%d of %d bosses down"
-                     % (progress["bosses_down"], progress["bosses_total"]))
+        parts.append(
+            "%d of %d bosses down" % (progress["bosses_down"], progress["bosses_total"])
+        )
     elif progress["bosses_down"]:
         parts.append("%d bosses down" % progress["bosses_down"])
     return "Running " + ", ".join(parts)
 
 
 # --- errands -----------------------------------------------------------------
+
 
 def describe_aim(value: str) -> str:
     """How to say an overseer_roster.travel_npc value out loud.
@@ -486,7 +498,7 @@ def shorten(text: str | None, limit: int = REASON_CHARS) -> str | None:
     if len(text) <= limit:
         return text
     cut = text.rfind(" ", 0, limit)
-    return text[:cut if cut > 0 else limit].rstrip(",;:.") + "..."
+    return text[: cut if cut > 0 else limit].rstrip(",;:.") + "..."
 
 
 def _why(name: str, skill: str | None, trade_rows: list[dict]) -> tuple:
@@ -525,14 +537,17 @@ def _skill_name(skill_id: int) -> str | None:
 def errand_headline(err: dict) -> str:
     if err["skill"]:
         return "Walking %s to %s to learn %s" % (
-            err["name"], err["target_text"], err["skill"].title())
+            err["name"],
+            err["target_text"],
+            err["skill"].title(),
+        )
     return "Walking %s to %s" % (err["name"], err["target_text"])
 
 
 # --- where the order came from -----------------------------------------------
 
-def orders(goal_rows: list[dict], quest_titles: dict,
-           err: dict | None) -> dict | None:
+
+def orders(goal_rows: list[dict], quest_titles: dict, err: dict | None) -> dict | None:
     """Where the current aim CAME FROM, when it came from an instruction.
 
     Two things can put an order into this world, and both record who asked: a
@@ -568,8 +583,9 @@ def _discord_order(row: dict, quest_titles: dict) -> dict:
     title = quest_titles.get(quest_id)
     # goals.py owns how a goal is said out loud, kind by kind; borrowing it
     # keeps the banner and the Discord acknowledgement using one wording.
-    what = title or goals._describe(str(row["kind"]), row.get("skill_name"),
-                                    int(row.get("target") or 0), quest_id)
+    what = title or goals._describe(
+        str(row["kind"]), row.get("skill_name"), int(row.get("target") or 0), quest_id
+    )
     return {
         "kind": "discord",
         "who": str(row["character_name"]),
@@ -614,6 +630,7 @@ def _errand_order(err: dict) -> dict:
 
 # --- staleness ---------------------------------------------------------------
 
+
 def last_movement(event_rows: list[dict]) -> datetime | None:
     """The most recent moment the family demonstrably GOT SOMEWHERE.
 
@@ -634,9 +651,12 @@ def last_movement(event_rows: list[dict]) -> datetime | None:
     a row every few minutes forever, and counting those would make this agree
     that a stuck family was busy.
     """
-    stamps = [row["last_seen"] for row in event_rows
-              if str(row.get("kind") or "") in MOVEMENT_KINDS
-              and row.get("last_seen") is not None]
+    stamps = [
+        row["last_seen"]
+        for row in event_rows
+        if str(row.get("kind") or "") in MOVEMENT_KINDS
+        and row.get("last_seen") is not None
+    ]
     return max(stamps) if stamps else None
 
 
@@ -653,6 +673,7 @@ def stalled(moved_at: datetime | None, now: datetime) -> bool:
 
 
 # --- the whole banner --------------------------------------------------------
+
 
 def _span(seconds: int) -> str:
     """A duration in the largest whole unit: "25 minutes", "13 hours"."""
@@ -673,15 +694,22 @@ def stall_line(moved_at: datetime | None, now: datetime) -> str:
     """
     if moved_at is None:
         return ""
-    return ("STALLED: no quest, level or gear change for %s."
-            % _span(max(0, int((now - moved_at).total_seconds()))))
+    return "STALLED: no quest, level or gear change for %s." % _span(
+        max(0, int((now - moved_at).total_seconds()))
+    )
 
 
-def build_agenda(roster_rows: list[dict], run_rows: list[dict],
-                 instance_rows: list[dict], goal_rows: list[dict],
-                 trade_rows: list[dict], event_rows: list[dict],
-                 quest_titles: dict, now: datetime | None = None,
-                 members: list[str] | None = None) -> dict:
+def build_agenda(
+    roster_rows: list[dict],
+    run_rows: list[dict],
+    instance_rows: list[dict],
+    goal_rows: list[dict],
+    trade_rows: list[dict],
+    event_rows: list[dict],
+    quest_titles: dict,
+    now: datetime | None = None,
+    members: list[str] | None = None,
+) -> dict:
     """Rows in, the current-goal banner's JSON out.
 
     roster_rows   overseer_roster, every column this reads
@@ -727,8 +755,18 @@ def build_agenda(roster_rows: list[dict], run_rows: list[dict],
     is_stalled = stalled(moved_at, now)
 
     activity, headline, detail, changed_at = _decide(
-        rows, names, run, run_rows, instance_rows, counter, err, jsplit,
-        qsplit, quest_titles, order, is_stalled,
+        rows,
+        names,
+        run,
+        run_rows,
+        instance_rows,
+        counter,
+        err,
+        jsplit,
+        qsplit,
+        quest_titles,
+        order,
+        is_stalled,
     )
 
     return {
@@ -776,8 +814,20 @@ def _order_at(order: dict | None):
     return order["_at"] if order else None
 
 
-def _decide(rows, names, run, run_rows, instance_rows, counter, err, jsplit,
-            qsplit, quest_titles, order, is_stalled):
+def _decide(
+    rows,
+    names,
+    run,
+    run_rows,
+    instance_rows,
+    counter,
+    err,
+    jsplit,
+    qsplit,
+    quest_titles,
+    order,
+    is_stalled,
+):
     """(activity, headline, detail lines, when the goal last changed).
 
     THE ORDER OF THESE BRANCHES IS THE WHOLE DESIGN, so it is written out here
@@ -833,17 +883,20 @@ def _in_a_run(run, instance_rows, counter, names, jsplit, is_stalled):
         detail.append(
             "The instance they are saved to is already cleared (%d of %d), so "
             "there is nothing left in it until it resets."
-            % (progress["bosses_down"], progress["bosses_total"]))
+            % (progress["bosses_down"], progress["bosses_total"])
+        )
     if is_stalled:
         detail.append(
             "Nothing has happened for a while. The run still reads active, but "
             "its heartbeat only proves somebody is standing inside - not that "
-            "anything is being killed (quadseven/mod-overseer#171).")
+            "anything is being killed (quadseven/mod-overseer#171)."
+        )
     if counter["disagrees"]:
         detail.append(_counter_disagreement(counter))
     if jsplit:
-        detail.append("The roster does not agree on the job: %s."
-                      % split_sentence(jsplit))
+        detail.append(
+            "The roster does not agree on the job: %s." % split_sentence(jsplit)
+        )
     return DUNGEON, dungeon_headline(progress), detail, run.get("started_at")
 
 
@@ -851,10 +904,10 @@ def _split(jsplit, qsplit, quest_titles):
     """Branch 3. Said before any single activity is claimed."""
     detail = [_who_line(jsplit)]
     if qsplit:
-        detail.append("Their quest aims differ too: %s."
-                      % _quest_split_line(qsplit, quest_titles))
-    return (SPLIT, "The family is split: %s." % split_sentence(jsplit),
-            detail, None)
+        detail.append(
+            "Their quest aims differ too: %s." % _quest_split_line(qsplit, quest_titles)
+        )
+    return (SPLIT, "The family is split: %s." % split_sentence(jsplit), detail, None)
 
 
 def _on_an_errand(err, names):
@@ -873,7 +926,8 @@ def _another_job(mode):
     if mode not in jobs.IMPLEMENTED:
         detail.append(
             "Nothing is wired behind that mode yet, so the quest drive is "
-            "stood down and nothing has replaced it.")
+            "stood down and nothing has replaced it."
+        )
     return JOB, "The family is set to %s." % mode, detail, None
 
 
@@ -882,23 +936,30 @@ def _questing(rows, err, qsplit, quest_titles, order):
     # A side errand: somebody who is not the leader is walking somewhere while
     # the rest quest on. It is real and worth saying, but it is not what the
     # family is doing, so it goes under the headline rather than in it.
-    side = ([_side_errand_line(err)]
-            if err is not None and not err["leads"] else [])
+    side = [_side_errand_line(err)] if err is not None and not err["leads"] else []
     aims = {int(r.get("drive_quest") or 0) for r in rows}
     aim = aims.pop() if len(aims) == 1 else 0
     when = _order_at(order)
     if not aim and qsplit:
-        return (QUEST, "Questing, but not on the same quest.",
-                [_quest_split_line(qsplit, quest_titles)] + side, when)
+        return (
+            QUEST,
+            "Questing, but not on the same quest.",
+            [_quest_split_line(qsplit, quest_titles)] + side,
+            when,
+        )
     if not aim:
-        return (QUEST, "Questing - picking their own quests.",
-                ["Nothing is aiming them at a particular quest right now."]
-                + side, when)
+        return (
+            QUEST,
+            "Questing - picking their own quests.",
+            ["Nothing is aiming them at a particular quest right now."] + side,
+            when,
+        )
     title = quest_titles.get(aim) or "quest %d" % aim
     detail = _order_lines(order)
     if qsplit:
-        detail.append("Not everyone is on it: %s."
-                      % _quest_split_line(qsplit, quest_titles))
+        detail.append(
+            "Not everyone is on it: %s." % _quest_split_line(qsplit, quest_titles)
+        )
     return QUEST, "Questing: " + title, detail + side, when
 
 
@@ -909,15 +970,13 @@ def _order_lines(order) -> list:
     lines = [order["text"]]
     left = order["objectives_left"]
     if left is not None:
-        lines.append("%d objective%s left on it."
-                     % (left, "" if left == 1 else "s"))
+        lines.append("%d objective%s left on it." % (left, "" if left == 1 else "s"))
     return lines
 
 
 def _side_errand_line(err: dict) -> str:
     what = (" to learn " + err["skill"].title()) if err["skill"] else ""
-    return "Meanwhile %s is walking to %s%s." % (
-        err["name"], err["target_text"], what)
+    return "Meanwhile %s is walking to %s%s." % (err["name"], err["target_text"], what)
 
 
 def _between_runs(run_rows: list, counter: dict):
@@ -934,16 +993,24 @@ def _between_runs(run_rows: list, counter: dict):
         instance reset was refused three times running.
     """
     last = last_ended_run(run_rows)
-    where = (achievements.dungeon_name(int(last["map_id"]))
-             if last and last.get("map_id") is not None else None)
+    where = (
+        achievements.dungeon_name(int(last["map_id"]))
+        if last and last.get("map_id") is not None
+        else None
+    )
     if counter["over"]:
-        headline = ("The dungeon campaign is finished: %d of %d runs done."
-                    % (counter["done"], counter["wanted"]))
-        detail = ["Set the leader's dungeon_runs_done back to 0 to start "
-                  "another campaign."]
+        headline = "The dungeon campaign is finished: %d of %d runs done." % (
+            counter["done"],
+            counter["wanted"],
+        )
+        detail = [
+            "Set the leader's dungeon_runs_done back to 0 to start another campaign."
+        ]
     else:
-        headline = ("Between dungeon runs: %d of %d done."
-                    % (counter["done"], counter["wanted"]))
+        headline = "Between dungeon runs: %d of %d done." % (
+            counter["done"],
+            counter["wanted"],
+        )
         detail = ["The next run starts with an instance reset."]
     if last is not None:
         detail.append(_last_run_line(last, where))
@@ -974,8 +1041,7 @@ def _last_run_line(run: dict, where: str | None) -> str:
     said = OUTCOMES.get(outcome, outcome)
     number = int(run.get("run_number") or 0)
     which = "Run %d" % number if number else "The last run"
-    return "%s%s ended because %s." % (
-        which, " of " + where if where else "", said)
+    return "%s%s ended because %s." % (which, " of " + where if where else "", said)
 
 
 def _members_line(run: dict, names: list) -> str:
@@ -986,8 +1052,7 @@ def _members_line(run: dict, names: list) -> str:
     less, rather than by claiming the party is empty.
     """
     leader = str(run.get("leader_name") or "") or "nobody"
-    members = [m.strip() for m in str(run.get("members") or "").split(",")
-               if m.strip()]
+    members = [m.strip() for m in str(run.get("members") or "").split(",") if m.strip()]
     if not members:
         return "Led by %s; the party is not stamped into the run yet." % leader
     line = "Led by %s, with %s." % (leader, ", ".join(sorted(members)))
@@ -1001,8 +1066,7 @@ def _counter_disagreement(counter: dict) -> str:
     return (
         "The campaign counter disagrees: %s leads with %d done, but %s carries "
         "a higher count. The crown moved and the counter did not."
-        % (counter["recorded_by"], counter["done"],
-           ", ".join(counter["disagrees"]))
+        % (counter["recorded_by"], counter["done"], ", ".join(counter["disagrees"]))
     )
 
 
@@ -1016,8 +1080,11 @@ def _quest_split_line(split: dict, quest_titles: dict) -> str:
     parts = []
     for group in split["groups"]:
         quest_id = int(group["value"] or 0)
-        what = (quest_titles.get(quest_id) or "quest %d" % quest_id
-                if quest_id else "no aim")
+        what = (
+            quest_titles.get(quest_id) or "quest %d" % quest_id
+            if quest_id
+            else "no aim"
+        )
         parts.append("%s on %s" % (", ".join(group["names"]), what))
     return "; ".join(parts)
 

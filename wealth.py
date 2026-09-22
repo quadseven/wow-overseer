@@ -68,6 +68,7 @@ built in this module; if it is a class name or a pixel, it is the page's.
 Tickets: quadseven/mod-overseer#88, quadseven/mod-overseer#147, infra#2597,
 infra#2831.
 """
+
 from __future__ import annotations
 
 import armory
@@ -75,8 +76,14 @@ import bagfate
 import bonds
 import family
 from armory import (
-    ARMOR_SUBCLASSES, CLASS_COLOURS, EQUIPPED_SLOTS, ITEM_CLASS_ARMOR,
-    ITEM_CLASS_WEAPON, QUALITY_NAMES, UNKNOWN_QUALITY, WEAPON_SUBCLASSES,
+    ARMOR_SUBCLASSES,
+    CLASS_COLOURS,
+    EQUIPPED_SLOTS,
+    ITEM_CLASS_ARMOR,
+    ITEM_CLASS_WEAPON,
+    QUALITY_NAMES,
+    UNKNOWN_QUALITY,
+    WEAPON_SUBCLASSES,
 )
 from core import _ALLIANCE_RACES, _HORDE_RACES
 from panel import _BACKPACK_SLOTS, _BAG_SLOTS, _BANK_BAG_SLOTS, _CLASS_NAMES
@@ -106,10 +113,23 @@ RARE_QUALITY = 3
 # armour (those two get their subclass word, which is the more useful one:
 # "Sword" beats "Weapon"). 3.3.5a ItemClass, from the core's ItemPrototype.h.
 ITEM_CLASSES = {
-    0: "Consumable", 1: "Container", 2: "Weapon", 3: "Gem", 4: "Armor",
-    5: "Reagent", 6: "Projectile", 7: "Trade Goods", 8: "Generic",
-    9: "Recipe", 10: "Money", 11: "Quiver", 12: "Quest", 13: "Key",
-    14: "Permanent", 15: "Miscellaneous", 16: "Glyph",
+    0: "Consumable",
+    1: "Container",
+    2: "Weapon",
+    3: "Gem",
+    4: "Armor",
+    5: "Reagent",
+    6: "Projectile",
+    7: "Trade Goods",
+    8: "Generic",
+    9: "Recipe",
+    10: "Money",
+    11: "Quiver",
+    12: "Quest",
+    13: "Key",
+    14: "Permanent",
+    15: "Miscellaneous",
+    16: "Glyph",
 }
 
 # The tooltip host. achievements.py builds the same URL for the same reason;
@@ -149,10 +169,10 @@ PLACE_WORN = "worn"
 # is is a judgement about the data, not about the stylesheet. So everything
 # this module composes carries the tone it should be drawn in, and index.html
 # turns a tone into a class name and does nothing else with it (infra#2597).
-ALARM = "alarm"       # vermilion: this is stopping a character from playing
-CAUTION = "caution"   # amber: worth acting on, and nobody is stuck yet
-GOOD = "good"         # green: worth noticing, nothing to do
-PLAIN = ""            # a fact with no verdict attached
+ALARM = "alarm"  # vermilion: this is stopping a character from playing
+CAUTION = "caution"  # amber: worth acting on, and nobody is stuck yet
+GOOD = "good"  # green: worth noticing, nothing to do
+PLAIN = ""  # a fact with no verdict attached
 
 # The word for an empty purse, an unsellable stack and a section with no rows
 # in it. One word, in one place, because "nothing" and "none" and "0c" drawn
@@ -166,8 +186,19 @@ NONE = "none"
 # and the number is set in the mono face precisely so it can be scanned rather
 # than read. Anything past ten is a digit in both, because nobody reads "one
 # hundred and eighty-nine" faster than they read 189.
-NUMBER_WORDS = ("no", "one", "two", "three", "four", "five", "six", "seven",
-                "eight", "nine", "ten")
+NUMBER_WORDS = (
+    "no",
+    "one",
+    "two",
+    "three",
+    "four",
+    "five",
+    "six",
+    "seven",
+    "eight",
+    "nine",
+    "ten",
+)
 
 
 def spell(count: int) -> str:
@@ -370,13 +401,21 @@ def item_tip(payload: dict) -> str:
         facts.append(payload["kind"])
     if payload["item_level"]:
         facts.append("item level %d" % payload["item_level"])
-    worth = ("vendor " + payload["value"]["text"] if payload["sell_price"]
-             else "no vendor value")
+    worth = (
+        "vendor " + payload["value"]["text"]
+        if payload["sell_price"]
+        else "no vendor value"
+    )
     return "%s (%s) %s" % (payload["stack"], ", ".join(facts), worth)
 
 
-def item_payload(row: dict, icons: dict[int, str], where: str,
-                 container: str | None = None, position: int | None = None) -> dict:
+def item_payload(
+    row: dict,
+    icons: dict[int, str],
+    where: str,
+    container: str | None = None,
+    position: int | None = None,
+) -> dict:
     """One inventory row, as the page draws it.
 
     `where` is EQUIPPED, CARRIED or ELSEWHERE and `container` is the name of
@@ -421,8 +460,14 @@ def item_payload(row: dict, icons: dict[int, str], where: str,
     return payload
 
 
-def _container(key: str, position: int, slots: int, name: str,
-               row: dict | None, icons: dict[int, str]) -> dict:
+def _container(
+    key: str,
+    position: int,
+    slots: int,
+    name: str,
+    row: dict | None,
+    icons: dict[int, str],
+) -> dict:
     """One place items can be: the backpack, or a bag in one of the four slots."""
     return {
         "key": key,
@@ -472,20 +517,28 @@ def split_inventory(rows: list[dict], icons: dict[int, str]) -> dict:
         slot = row["slot"]
         if slot < len(EQUIPPED_SLOTS):
             worn_rows.append(row)
-            equipped.append(item_payload(row, icons, EQUIPPED, EQUIPPED_SLOTS[slot],
-                                         slot))
+            equipped.append(
+                item_payload(row, icons, EQUIPPED, EQUIPPED_SLOTS[slot], slot)
+            )
         elif slot in _BAG_SLOTS:
             position = slot - _BAG_SLOTS.start + 1
-            bag = _container("bag%d" % position, position,
-                             int(row.get("container_slots") or 0),
-                             item_name(row), row, icons)
+            bag = _container(
+                "bag%d" % position,
+                position,
+                int(row.get("container_slots") or 0),
+                item_name(row),
+                row,
+                icons,
+            )
             containers.append(bag)
             by_guid[row["item_guid"]] = bag
         elif slot in _BACKPACK_SLOTS:
             carried_rows.append(row)
             backpack["items"].append(
-                item_payload(row, icons, CARRIED, BACKPACK_NAME,
-                             slot - _BACKPACK_SLOTS.start))
+                item_payload(
+                    row, icons, CARRIED, BACKPACK_NAME, slot - _BACKPACK_SLOTS.start
+                )
+            )
         elif slot in _BANK_BAG_SLOTS:
             # The bank bag itself is furniture, not cargo. Its guid is kept
             # so its CONTENTS land in the elsewhere count rather than being
@@ -501,7 +554,7 @@ def split_inventory(rows: list[dict], icons: dict[int, str]) -> dict:
     for row in inside:
         bag = by_guid.get(row["bag"])
         if bag is None:
-            elsewhere += 1   # inside a bank bag, or a container not carried
+            elsewhere += 1  # inside a bank bag, or a container not carried
             continue
         carried_rows.append(row)
         bag["items"].append(item_payload(row, icons, CARRIED, bag["name"], row["slot"]))
@@ -522,12 +575,19 @@ def split_inventory(rows: list[dict], icons: dict[int, str]) -> dict:
         # rather than as the missing template it is. The grid has nothing to
         # draw in that case either; the items still land in the spill row the
         # page keeps for exactly this.
-        bag["room_label"] = ("%d of %d" % (bag["used"], bag["slots"])
-                             if bag["slots"]
-                             else "%d carried, size unknown" % bag["used"])
-    return {"equipped": equipped, "containers": containers, "elsewhere": elsewhere,
-            "bank_bags": len(bank_bags),
-            "worn_rows": worn_rows, "carried_rows": carried_rows}
+        bag["room_label"] = (
+            "%d of %d" % (bag["used"], bag["slots"])
+            if bag["slots"]
+            else "%d carried, size unknown" % bag["used"]
+        )
+    return {
+        "equipped": equipped,
+        "containers": containers,
+        "elsewhere": elsewhere,
+        "bank_bags": len(bank_bags),
+        "worn_rows": worn_rows,
+        "carried_rows": carried_rows,
+    }
 
 
 def build_capacity(containers: list[dict]) -> dict:
@@ -562,8 +622,10 @@ def build_capacity(containers: list[dict]) -> dict:
 TIGHT_PERCENT = 90
 
 # The sentence that turns an empty bag position from a number into a job.
-SPARE_NOTE = ("An empty bag position is a bag somebody could hand him, which "
-              "is a different fix from selling something.")
+SPARE_NOTE = (
+    "An empty bag position is a bag somebody could hand him, which "
+    "is a different fix from selling something."
+)
 
 # What the notable list is, said once above it rather than guessed at.
 NOTABLE_NOTE = "green or better in a bag, rares anywhere"
@@ -612,11 +674,14 @@ def build_room(capacity: dict) -> dict:
         # to interpret, and this is the state the whole view exists to report.
         "free_label": "%d free" % free if free else "no room left",
         "free_tone": PLAIN if free else ALARM,
-        "bags_label": ("across %d %s and the backpack"
-                       % (bags, plural(bags, "bag")) if bags
-                       else "the backpack alone, no bags carried"),
-        "spare_label": ("%d empty bag %s" % (spare, plural(spare, "position"))
-                        if spare else None),
+        "bags_label": (
+            "across %d %s and the backpack" % (bags, plural(bags, "bag"))
+            if bags
+            else "the backpack alone, no bags carried"
+        ),
+        "spare_label": (
+            "%d empty bag %s" % (spare, plural(spare, "position")) if spare else None
+        ),
         "spare_tone": CAUTION if spare else PLAIN,
     }
 
@@ -640,13 +705,24 @@ def tally(items: list[dict]) -> dict:
             counts[quality] = counts.get(quality, 0) + 1
         value += item["value_copper"]
         stacked += item["count"]
-    by_quality = [{"quality": q, "name": quality_name(q), "count": n,
-                   "label": "%d %s" % (n, quality_name(q))}
-                  for q, n in sorted(counts.items(), reverse=True)]
+    by_quality = [
+        {
+            "quality": q,
+            "name": quality_name(q),
+            "count": n,
+            "label": "%d %s" % (n, quality_name(q)),
+        }
+        for q, n in sorted(counts.items(), reverse=True)
+    ]
     if unknown:
-        by_quality.append({"quality": None, "name": UNKNOWN_QUALITY,
-                           "count": unknown,
-                           "label": "%d %s" % (unknown, UNKNOWN_QUALITY)})
+        by_quality.append(
+            {
+                "quality": None,
+                "name": UNKNOWN_QUALITY,
+                "count": unknown,
+                "label": "%d %s" % (unknown, UNKNOWN_QUALITY),
+            }
+        )
     return {
         "items": len(items),
         # Stacks are the slot count; `units` is what is actually in them. A
@@ -693,9 +769,15 @@ def worth_naming(equipped: list[dict], carried: list[dict]) -> list[dict]:
     return notable_items(carried + notable_worn)
 
 
-def build_member(name: str, char_row: dict | None, inventory_rows: list[dict],
-                 icons: dict[int, str], claims: dict[int, str] | None = None,
-                 managed: bool = True, split: dict | None = None) -> dict:
+def build_member(
+    name: str,
+    char_row: dict | None,
+    inventory_rows: list[dict],
+    icons: dict[int, str],
+    claims: dict[int, str] | None = None,
+    managed: bool = True,
+    split: dict | None = None,
+) -> dict:
     """One member's purse, containers and holdings.
 
     A member with no `characters` row still gets an entry. A family view that
@@ -727,8 +809,13 @@ def build_member(name: str, char_row: dict | None, inventory_rows: list[dict],
         "name": char_row["name"],
         "role": bond.role if bond else None,
         "present": True,
-        "faction": ("alliance" if race in _ALLIANCE_RACES
-                    else "horde" if race in _HORDE_RACES else "neutral"),
+        "faction": (
+            "alliance"
+            if race in _ALLIANCE_RACES
+            else "horde"
+            if race in _HORDE_RACES
+            else "neutral"
+        ),
         "guild": char_row.get("guild"),
         "level": char_row.get("level"),
         "class": _CLASS_NAMES.get(class_id, "class %s" % class_id),
@@ -746,28 +833,37 @@ def build_member(name: str, char_row: dict | None, inventory_rows: list[dict],
         "notable": worth_naming(split["equipped"], carried),
         "elsewhere": split["elsewhere"],
     }
-    member["who"] = ("%s %s - %s" % (char_row.get("level"), member["class"],
-                                     member["role"]) if member["role"]
-                     else "%s %s" % (char_row.get("level"), member["class"]))
+    member["who"] = (
+        "%s %s - %s" % (char_row.get("level"), member["class"], member["role"])
+        if member["role"]
+        else "%s %s" % (char_row.get("level"), member["class"])
+    )
     member["room"] = build_room(member["capacity"])
     stacks, units = member["carried"]["items"], member["carried"]["units"]
     # STACKS AND ITEMS ARE DIFFERENT NUMBERS AND BOTH ARE SAID. A bag holding
     # one stack of twenty linen is one slot and twenty things, and a line
     # that reports either number alone is wrong about the other one.
     member["holding"] = money_sentence(
-        "carrying %d %s (%d items), worth "
-        % (stacks, plural(stacks, "stack"), units),
-        member["carried"]["vendor"], " at a vendor")
+        "carrying %d %s (%d items), worth " % (stacks, plural(stacks, "stack"), units),
+        member["carried"]["vendor"],
+        " at a vendor",
+    )
     member["elsewhere_note"] = (
-        "%d more stored elsewhere (bank, keyring), not drawn here"
-        % member["elsewhere"] if member["elsewhere"] else None)
+        "%d more stored elsewhere (bank, keyring), not drawn here" % member["elsewhere"]
+        if member["elsewhere"]
+        else None
+    )
     member["notable_note"] = NOTABLE_NOTE if member["notable"] else None
     # WHERE IT IS ALL GOING (#88): each carried stack in one pile, and what
     # stops the piles that go nowhere. bagfate says why these are the
     # pipeline's own rules rather than a second opinion.
     member["fates"] = bagfate.build_fates(
-        member["name"], split["carried_rows"], claims or {},
-        member["capacity"]["free"], managed)
+        member["name"],
+        split["carried_rows"],
+        claims or {},
+        member["capacity"]["free"],
+        managed,
+    )
     return member
 
 
@@ -794,19 +890,24 @@ def build_member(name: str, char_row: dict | None, inventory_rows: list[dict],
 FULL_CONSEQUENCE = (
     "A bot with no room can never finish a loot, so the loot goal preempts "
     "questing forever: that is how one of them held a single position to "
-    "within 0.1 yard for eight and a half hours.")
+    "within 0.1 yard for eight and a half hours."
+)
 TIGHT_CONSEQUENCE = (
     "One good drop takes the last of it, and a character with no room stops "
-    "questing rather than skipping the loot it cannot carry.")
+    "questing rather than skipping the loot it cannot carry."
+)
 ROOMY_CONSEQUENCE = (
     "Nobody is about to stall on a loot they have no room for, which is the "
-    "one thing a full bag does to a character on this realm.")
+    "one thing a full bag does to a character on this realm."
+)
 NO_CHARACTERS = (
     "Purses and bags are read off saved characters, so there is nothing here "
-    "to be full or empty.")
+    "to be full or empty."
+)
 NO_BAGS = (
     "Every character is born with a backpack, so a family with no slots at "
-    "all is a query that answered, not a family that owns nothing.")
+    "all is a query that answered, not a family that owns nothing."
+)
 
 # UNDER ONE BACKPACK OF ROOM LEFT, ACROSS ALL FIVE, is where this stops being
 # comfortable. A PERCENTAGE was the obvious rule and it is the wrong one: five
@@ -834,35 +935,46 @@ def build_finding(totals: dict) -> dict:
     present = totals["present"]
     who = ("out of room: " + ", ".join(full)) if full else None
     if not present:
-        return {"lead": "Nobody has a saved character",
-                "detail": "Not one of the roster has a row in the world's "
-                          "character table.",
-                "because": NO_CHARACTERS, "tone": ALARM, "who": [],
-                "who_label": None}
+        return {
+            "lead": "Nobody has a saved character",
+            "detail": "Not one of the roster has a row in the world's character table.",
+            "because": NO_CHARACTERS,
+            "tone": ALARM,
+            "who": [],
+            "who_label": None,
+        }
     if not slots:
-        return {"lead": "No bags and no backpack",
-                "detail": "%s saved %s, and not one carried slot between them."
-                          % (sentence(spell(present)),
-                             plural(present, "character")),
-                "because": NO_BAGS, "tone": ALARM, "who": [], "who_label": None}
+        return {
+            "lead": "No bags and no backpack",
+            "detail": "%s saved %s, and not one carried slot between them."
+            % (sentence(spell(present)), plural(present, "character")),
+            "because": NO_BAGS,
+            "tone": ALARM,
+            "who": [],
+            "who_label": None,
+        }
     if free == 0:
-        lead, tone, because = ("No free slot anywhere in the family", ALARM,
-                               FULL_CONSEQUENCE)
+        lead, tone, because = (
+            "No free slot anywhere in the family",
+            ALARM,
+            FULL_CONSEQUENCE,
+        )
     elif free <= FAMILY_TIGHT_SLOTS:
         # Alarm rather than caution when somebody is ALREADY stuck: a family
         # with ten slots left and nobody full is tight, and a family with one
         # slot left and four characters full is a fault being reported.
-        lead = "%s free %s in the whole family" % (spell(free),
-                                                   plural(free, "slot"))
+        lead = "%s free %s in the whole family" % (spell(free), plural(free, "slot"))
         tone = ALARM if full else CAUTION
         because = FULL_CONSEQUENCE if full else TIGHT_CONSEQUENCE
     elif full:
         lead = "%s of the %s %s out of room" % (
-            spell(len(full)), spell(present), "is" if len(full) == 1 else "are")
+            spell(len(full)),
+            spell(present),
+            "is" if len(full) == 1 else "are",
+        )
         tone, because = ALARM, FULL_CONSEQUENCE
     else:
-        lead = "%s free %s across the family" % (spell(free),
-                                                 plural(free, "slot"))
+        lead = "%s free %s across the family" % (spell(free), plural(free, "slot"))
         tone, because = PLAIN, ROOMY_CONSEQUENCE
     return {
         "lead": sentence(lead),
@@ -874,15 +986,19 @@ def build_finding(totals: dict) -> dict:
     }
 
 
-def stat(label: str, value: str | None = None, money: dict | None = None,
-         note: str | None = None, tone: str = PLAIN) -> dict:
+def stat(
+    label: str,
+    value: str | None = None,
+    money: dict | None = None,
+    note: str | None = None,
+    tone: str = PLAIN,
+) -> dict:
     """One reading in the strip under the finding.
 
     Either a `value` (a string, already counted and pluralised here) or an
     amount of `money` the page draws in the three coins, never both.
     """
-    return {"label": label, "value": value, "money": money, "note": note,
-            "tone": tone}
+    return {"label": label, "value": value, "money": money, "note": note, "tone": tone}
 
 
 def build_stats(totals: dict) -> list[dict]:
@@ -899,25 +1015,44 @@ def build_stats(totals: dict) -> list[dict]:
     spare, rares = cap["empty_bag_slots"], totals["rare_or_better"]
     positions = present * BAG_POSITIONS
     stats = [
-        stat("purse", money=totals["money"],
-             note="across %d %s" % (present, plural(present, "purse"))),
-        stat("carried goods", money=totals["vendor"],
-             note="what a vendor would pay"),
-        stat("slots", value="%d of %d" % (cap["used"], used), note="taken",
-             tone=ALARM if not free else
-             (CAUTION if free <= FAMILY_TIGHT_SLOTS else PLAIN)),
-        stat("bags", value="%d of %d" % (cap["bags"], positions),
-             note="bag positions filled",
-             tone=CAUTION if spare else PLAIN),
-        stat("empty bag positions", value=str(spare),
-             note="waiting for a bag", tone=CAUTION if spare else PLAIN),
-        stat("rare or better", value=str(rares), note="worn or carried",
-             tone=GOOD if rares else PLAIN),
+        stat(
+            "purse",
+            money=totals["money"],
+            note="across %d %s" % (present, plural(present, "purse")),
+        ),
+        stat("carried goods", money=totals["vendor"], note="what a vendor would pay"),
+        stat(
+            "slots",
+            value="%d of %d" % (cap["used"], used),
+            note="taken",
+            tone=ALARM
+            if not free
+            else (CAUTION if free <= FAMILY_TIGHT_SLOTS else PLAIN),
+        ),
+        stat(
+            "bags",
+            value="%d of %d" % (cap["bags"], positions),
+            note="bag positions filled",
+            tone=CAUTION if spare else PLAIN,
+        ),
+        stat(
+            "empty bag positions",
+            value=str(spare),
+            note="waiting for a bag",
+            tone=CAUTION if spare else PLAIN,
+        ),
+        stat(
+            "rare or better",
+            value=str(rares),
+            note="worn or carried",
+            tone=GOOD if rares else PLAIN,
+        ),
     ]
     # Named rather than merely counted, and last because it is the one reading
     # here that nobody has to act on.
-    stats.append(stat("richest", value=totals["richest"] or NOTHING,
-                      note="the biggest purse"))
+    stats.append(
+        stat("richest", value=totals["richest"] or NOTHING, note="the biggest purse")
+    )
     return stats
 
 
@@ -940,12 +1075,16 @@ def build_family(members: list[dict]) -> dict:
         "money": coins(money),
         "vendor": coins(vendor),
         "capacity": {
-            "slots": slots, "used": used, "free": max(0, slots - used),
+            "slots": slots,
+            "used": used,
+            "free": max(0, slots - used),
             "bags": sum(m["capacity"]["bags"] for m in present),
             "empty_bag_slots": sum(m["capacity"]["empty_bag_slots"] for m in present),
         },
-        "by_quality": [{"quality": q, "name": quality_name(q), "count": n}
-                       for q, n in sorted(counts.items(), reverse=True)],
+        "by_quality": [
+            {"quality": q, "name": quality_name(q), "count": n}
+            for q, n in sorted(counts.items(), reverse=True)
+        ],
         "rare_or_better": sum(n for q, n in counts.items() if q >= RARE_QUALITY),
         # Named rather than merely counted: "who has money" is a question
         # with an answer, and the answer is a person.
@@ -957,8 +1096,7 @@ def build_family(members: list[dict]) -> dict:
     }
     totals["finding"] = build_finding(totals)
     totals["stats"] = build_stats(totals)
-    totals["spare_note"] = (SPARE_NOTE if totals["capacity"]["empty_bag_slots"]
-                            else None)
+    totals["spare_note"] = SPARE_NOTE if totals["capacity"]["empty_bag_slots"] else None
     return totals
 
 
@@ -985,8 +1123,9 @@ def auction_payload(row: dict, roster: set[str], icons: dict[int, str]) -> dict:
         # otherwise have to turn into a sentence, and "seller unknown" is a
         # real state: `itemowner` is a guid and the character behind it can
         # have been deleted since the auction was posted.
-        "who_label": ("listed by %s" % owner if ours
-                      else "seller %s" % (owner or "unknown")),
+        "who_label": (
+            "listed by %s" % owner if ours else "seller %s" % (owner or "unknown")
+        ),
         # A listing with no bid on it has a STARTING price, not a highest
         # one, and drawing the start under the word "highest bid" would be
         # this panel inventing a bidder.
@@ -1028,7 +1167,8 @@ def linked_sentence(before: str, ticket: dict, after: str = ".") -> dict:
 AUCTION_EMPTY_LEAD = "Nothing listed, nothing sold, nothing bid on."
 AUCTION_EMPTY_BODY = (
     "The auction house table holds no row belonging to any of them, and that "
-    "is an empty auction house rather than an empty panel.")
+    "is an empty auction house rather than an empty panel."
+)
 # The second thing the table structurally cannot say, and it does not go away
 # the day the family starts trading: the core DELETES an auction the moment it
 # completes and mails the gold to the seller, so `sold` can only ever mean
@@ -1037,7 +1177,8 @@ AUCTION_EMPTY_BODY = (
 AUCTION_CAVEAT = (
     "Completed sales leave no trace to read: the core deletes an auction the "
     "moment it finishes and mails the gold, so this table can only ever show "
-    "live auctions.")
+    "live auctions."
+)
 
 
 def build_auctions(auction_rows: list[dict], icons: dict[int, str]) -> dict:
@@ -1070,19 +1211,33 @@ def build_auctions(auction_rows: list[dict], icons: dict[int, str]) -> dict:
         # The three lists as the page draws them, labels included, so adding a
         # fourth is a change here rather than a change in two places.
         "sections": [
-            {"label": "listed by the family", "rows": listings,
-             "count": len(listings), "empty": NONE},
-            {"label": "sold, gold in the post", "rows": sold,
-             "count": len(sold), "empty": NONE},
-            {"label": "bid on by the family", "rows": bids,
-             "count": len(bids), "empty": NONE},
+            {
+                "label": "listed by the family",
+                "rows": listings,
+                "count": len(listings),
+                "empty": NONE,
+            },
+            {
+                "label": "sold, gold in the post",
+                "rows": sold,
+                "count": len(sold),
+                "empty": NONE,
+            },
+            {
+                "label": "bid on by the family",
+                "rows": bids,
+                "count": len(bids),
+                "empty": NONE,
+            },
         ],
         "empty": {
             "lead": AUCTION_EMPTY_LEAD,
             "body": AUCTION_EMPTY_BODY,
             "why": linked_sentence(
-                "No part of the module lists, buys, bids or sells anything "
-                "yet: ", AUCTION_TICKET, " is still open."),
+                "No part of the module lists, buys, bids or sells anything yet: ",
+                AUCTION_TICKET,
+                " is still open.",
+            ),
         },
         "caveat": AUCTION_CAVEAT,
         # The page's empty state hangs off this: completed sales are not
@@ -1126,17 +1281,22 @@ GUILD_STEPS = (
     ("withdraw from the guild bank", MISSING),
 )
 NO_GUILD_LEAD = "There is no guild, so there is no guild bank."
-NO_GUILD_BODY = ("Rather than draw an empty vault, here is what stands "
-                 "between the family and one.")
+NO_GUILD_BODY = (
+    "Rather than draw an empty vault, here is what stands between the family and one."
+)
 # A guild appearing is not a thing this panel can be trusted to have kept up
 # with, so it says so rather than guessing at what is in the bank.
-GUILD_BODY = ("The bank's own tabs are not read here yet, so this is still "
-              "the road rather than the contents.")
+GUILD_BODY = (
+    "The bank's own tabs are not read here yet, so this is still "
+    "the road rather than the contents."
+)
 
 
-def build_guild_bank(guild_rows: list[dict],
-                     guild_bank_rows: list[dict] | None = None,
-                     guild_bank_right_rows: list[dict] | None = None) -> dict:
+def build_guild_bank(
+    guild_rows: list[dict],
+    guild_bank_rows: list[dict] | None = None,
+    guild_bank_right_rows: list[dict] | None = None,
+) -> dict:
     """Which guild the family is in, if any, and what stands in front of one.
 
     `guild_rows` is whatever `guild_member` joined to `guild` returns for the
@@ -1144,8 +1304,7 @@ def build_guild_bank(guild_rows: list[dict],
     and is checked rather than assumed. A hardcoded "there is no guild" would
     go on being drawn on the day somebody makes one.
     """
-    guilds = sorted({row["guild_name"] for row in guild_rows
-                     if row.get("guild_name")})
+    guilds = sorted({row["guild_name"] for row in guild_rows if row.get("guild_name")})
     observed = guild_bank_rows is not None
     rights_observed = guild_bank_right_rows is not None
     tabs = list(guild_bank_rows or [])
@@ -1162,27 +1321,35 @@ def build_guild_bank(guild_rows: list[dict],
     deposit_rank_ids = set()
     for row in rights:
         try:
-            if (int(row.get("tab_id")) == 0
-                    and int(row.get("rights", 0)) & 3 == 3):
+            if int(row.get("tab_id")) == 0 and int(row.get("rights", 0)) & 3 == 3:
                 deposit_rank_ids.add(int(row["rank_id"]))
         except (KeyError, TypeError, ValueError):
             continue
-    steps = [{"step": step, "state": state,
-              "state_label": GUILD_STEP_WORDS[state],
-              "tone": GUILD_STEP_TONES[state]} for step, state in GUILD_STEPS]
+    steps = [
+        {
+            "step": step,
+            "state": state,
+            "state_label": GUILD_STEP_WORDS[state],
+            "tone": GUILD_STEP_TONES[state],
+        }
+        for step, state in GUILD_STEPS
+    ]
     missing = [s for s in steps if s["state"] == MISSING]
     if guilds:
         lead = "The family is in %s." % ", ".join(guilds)
         body = GUILD_BODY
         if observed:
-            body = ("The guild has %d purchased bank tab%s holding %d stored "
-                    "item%s."
-                    % (tab_count, "" if tab_count == 1 else "s", item_count,
-                       "" if item_count == 1 else "s"))
+            body = "The guild has %d purchased bank tab%s holding %d stored item%s." % (
+                tab_count,
+                "" if tab_count == 1 else "s",
+                item_count,
+                "" if item_count == 1 else "s",
+            )
             if rights_observed:
                 body += " Deposit rights are recorded for %d rank%s." % (
                     len(deposit_rank_ids),
-                    "" if len(deposit_rank_ids) == 1 else "s")
+                    "" if len(deposit_rank_ids) == 1 else "s",
+                )
     else:
         lead, body = NO_GUILD_LEAD, NO_GUILD_BODY
     return {
@@ -1201,7 +1368,9 @@ def build_guild_bank(guild_rows: list[dict],
         "blocked": linked_sentence(
             "%s of the %s steps are not written, and all of them are "
             "blocked on " % (sentence(spell(len(missing))), spell(len(steps))),
-            GUILD_TICKET, "."),
+            GUILD_TICKET,
+            ".",
+        ),
     }
 
 
@@ -1219,8 +1388,10 @@ SECTION_HEADERS = {
 # money and bags on its own timer, so gold spent five minutes ago is still
 # here - and a reader who sells a sword, sees no change and concludes the page
 # is broken is a reader the page lied to.
-SAVED_NOTE = ("Purses, bags and auctions as the world last saved them, on the "
-              "same timer as the gear in the Armory.")
+SAVED_NOTE = (
+    "Purses, bags and auctions as the world last saved them, on the "
+    "same timer as the gear in the Armory."
+)
 
 
 def _claims_by_family(chars: dict, splits: dict, families) -> dict[int, str]:
@@ -1228,23 +1399,31 @@ def _claims_by_family(chars: dict, splits: dict, families) -> dict[int, str]:
     run: a Horde relative is not an Alliance one."""
     claims: dict[int, str] = {}
     for _key, names in families:
-        present = [n for n in names
-                   if n in splits and chars[n].get("class") is not None]
+        present = [
+            n for n in names if n in splits and chars[n].get("class") is not None
+        ]
         if not present:
             continue
-        claims.update(bagfate.family_claims(
-            {n: splits[n]["carried_rows"] for n in present},
-            {n: splits[n]["worn_rows"] for n in present},
-            {n: (chars[n]["class"], chars[n].get("level") or 1) for n in present}))
+        claims.update(
+            bagfate.family_claims(
+                {n: splits[n]["carried_rows"] for n in present},
+                {n: splits[n]["worn_rows"] for n in present},
+                {n: (chars[n]["class"], chars[n].get("level") or 1) for n in present},
+            )
+        )
     return claims
 
 
-def build_wealth(char_rows: list[dict], inventory_rows: list[dict],
-                 auction_rows: list[dict], guild_rows: list[dict],
-                 icons: dict[int, str],
-                 guild_bank_rows: list[dict] | None = None,
-                 guild_bank_right_rows: list[dict] | None = None,
-                 families: list[tuple[str, list[str]]] | None = None) -> dict:
+def build_wealth(
+    char_rows: list[dict],
+    inventory_rows: list[dict],
+    auction_rows: list[dict],
+    guild_rows: list[dict],
+    icons: dict[int, str],
+    guild_bank_rows: list[dict] | None = None,
+    guild_bank_right_rows: list[dict] | None = None,
+    families: list[tuple[str, list[str]]] | None = None,
+) -> dict:
     """Every member's purse and bags, the family total, the auction house,
     and the guild bank there is not.
 
@@ -1261,22 +1440,36 @@ def build_wealth(char_rows: list[dict], inventory_rows: list[dict],
     guild_of = {r["name"]: r.get("guild_name") for r in guild_rows}
     for name, row in chars.items():
         row.setdefault("guild", guild_of.get(name))
-    splits = {name: split_inventory(inventory.get(name, []), icons)
-              for _key, names in families for name in names if name in chars}
+    splits = {
+        name: split_inventory(inventory.get(name, []), icons)
+        for _key, names in families
+        for name in names
+        if name in chars
+    }
     claims = _claims_by_family(chars, splits, families)
     # A character the economy passes do not cover gets one sentence instead
     # of piles. The passes cover the persona family (bonds), which is the
     # roster they are configured with; #150 is widening that.
-    members = [build_member(name, chars.get(name), inventory.get(name, []), icons,
-                            claims=claims, managed=name in bonds.FAMILY,
-                            split=splits.get(name))
-               for _key, names in families for name in names]
+    members = [
+        build_member(
+            name,
+            chars.get(name),
+            inventory.get(name, []),
+            icons,
+            claims=claims,
+            managed=name in bonds.FAMILY,
+            split=splits.get(name),
+        )
+        for _key, names in families
+        for name in names
+    ]
     # BOTH FAMILIES, Alliance on the left and Horde on the right, by the
     # Armory's own rule for which side a family is on (armory.family_sides),
     # so the two tabs cannot put a family on different sides.
     by_name = {m["name"]: m for m in members}
     sides = armory.family_sides(
-        [(key, [by_name[n] for n in names]) for key, names in families])
+        [(key, [by_name[n] for n in names]) for key, names in families]
+    )
     for side in sides:
         side.pop("members")
     return {
@@ -1285,7 +1478,8 @@ def build_wealth(char_rows: list[dict], inventory_rows: list[dict],
         "family": build_family(members),
         "auctions": build_auctions(auction_rows, icons),
         "guild_bank": build_guild_bank(
-            guild_rows, guild_bank_rows, guild_bank_right_rows),
+            guild_rows, guild_bank_rows, guild_bank_right_rows
+        ),
         "sections": SECTION_HEADERS,
         "saved_note": SAVED_NOTE,
         "expected": len(members),

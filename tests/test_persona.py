@@ -12,6 +12,7 @@ The last clause is not decoration. bonds.py already made Grug refuse to answer
 Ugga once Og had answered her too often - the sulk was in the rules before it
 had a reason, and this gives it one.
 """
+
 import unittest
 
 import bonds
@@ -22,9 +23,11 @@ class PersonaTest(unittest.TestCase):
     def test_every_family_member_has_a_voice(self):
         for name in bonds.FAMILY:
             with self.subTest(name=name):
-                self.assertTrue(bonds.FAMILY[name].persona.strip(),
-                                "%s has no persona, so the model gets nothing "
-                                "to distinguish them from anyone else" % name)
+                self.assertTrue(
+                    bonds.FAMILY[name].persona.strip(),
+                    "%s has no persona, so the model gets nothing "
+                    "to distinguish them from anyone else" % name,
+                )
 
     def test_the_personas_are_actually_different(self):
         """Five identical descriptions would voice five identical characters,
@@ -78,8 +81,9 @@ class PersonaTest(unittest.TestCase):
         for name in bonds.FAMILY:
             p = persona.build_prompt(name, "x")
             for word in ("dwarf", "gnome", "human"):
-                self.assertNotIn(word, p.lower(),
-                                 "%s's prompt mentions %s" % (name, word))
+                self.assertNotIn(
+                    word, p.lower(), "%s's prompt mentions %s" % (name, word)
+                )
 
     def test_the_house_voice_is_in_every_prompt(self):
         """They are cavemen - that is why the parents are human. The register
@@ -92,7 +96,7 @@ class PersonaTest(unittest.TestCase):
             self.assertIn("Grug know fire good.", p, name)
 
     def test_the_voice_rules_are_spelled_out_not_implied(self):
-        """"Talk like a caveman" alone gets a model reaching for "ugg" and
+        """ "Talk like a caveman" alone gets a model reaching for "ugg" and
         chest-beating. The rules are what produce the actual register."""
         p = persona.build_prompt("Bork", "x")
         for rule in ("instead of", "Short words"):
@@ -111,8 +115,11 @@ class SuspicionTest(unittest.TestCase):
     """The engine behind the jealousy rule, finally written down."""
 
     def test_only_grug_carries_the_suspicion(self):
-        carried = [n for n in bonds.FAMILY
-                   if "suspects" in (persona.build_prompt(n, "x") or "")]
+        carried = [
+            n
+            for n in bonds.FAMILY
+            if "suspects" in (persona.build_prompt(n, "x") or "")
+        ]
         self.assertEqual(carried, ["Grug"])
 
     def test_it_names_the_two_people_it_is_about(self):
@@ -153,8 +160,10 @@ class CleanTest(unittest.TestCase):
     PLAIN = "Og is still 4. We should not leave them behind."
 
     def test_a_good_line_is_kept(self):
-        self.assertEqual(persona.clean("Og lags. We do not leave him.", self.PLAIN),
-                         "Og lags. We do not leave him.")
+        self.assertEqual(
+            persona.clean("Og lags. We do not leave him.", self.PLAIN),
+            "Og lags. We do not leave him.",
+        )
 
     def test_quotes_are_stripped(self):
         self.assertEqual(persona.clean('"Og lags."', self.PLAIN), "Og lags.")
@@ -201,8 +210,10 @@ class JsonInTheMouthTest(unittest.TestCase):
 
     def test_the_exact_lines_that_reached_the_channel(self):
         for said, want in (
-            ('{"response": "Bork no need do thing. Bork go fish!"}',
-             "Bork no need do thing. Bork go fish!"),
+            (
+                '{"response": "Bork no need do thing. Bork go fish!"}',
+                "Bork no need do thing. Bork go fish!",
+            ),
             ('{"sentence": "Og help Grug."}', "Og help Grug."),
         ):
             with self.subTest(said=said):
@@ -220,15 +231,18 @@ class JsonInTheMouthTest(unittest.TestCase):
     def test_an_object_with_no_sentence_in_it_falls_back(self):
         """`{"grug_plan_carried_at":210}` was said out loud. Whatever that is,
         it is not speech."""
-        self.assertEqual(persona.clean('{"grug_plan_carried_at":210}', self.PLAIN),
-                         self.PLAIN)
+        self.assertEqual(
+            persona.clean('{"grug_plan_carried_at":210}', self.PLAIN), self.PLAIN
+        )
 
     def test_json_wrapped_in_narration_is_still_found(self):
         said = 'Let me think.\nHere is the line:\n{"response": "Grug go now."}'
         self.assertEqual(persona.clean(said, self.PLAIN), "Grug go now.")
 
     def test_a_plain_sentence_is_untouched_by_any_of_this(self):
-        self.assertEqual(persona.clean("Og lags. We go.", self.PLAIN), "Og lags. We go.")
+        self.assertEqual(
+            persona.clean("Og lags. We go.", self.PLAIN), "Og lags. We go."
+        )
 
     def test_a_sentence_that_merely_mentions_a_brace_survives(self):
         """Only text that actually PARSES as an object is treated as one."""
@@ -245,16 +259,22 @@ class WiringTest(unittest.TestCase):
         import pathlib
 
         cls.ast = ast
-        cls.src = (pathlib.Path(__file__).resolve().parent.parent / "bridge.py").read_text()
+        cls.src = (
+            pathlib.Path(__file__).resolve().parent.parent / "bridge.py"
+        ).read_text()
         cls.tree = ast.parse(cls.src)
 
     def _names_in(self, fn_name):
         ast = self.ast
-        fn = next(n for n in ast.walk(self.tree)
-                  if isinstance(n, (ast.AsyncFunctionDef, ast.FunctionDef))
-                  and n.name == fn_name)
+        fn = next(
+            n
+            for n in ast.walk(self.tree)
+            if isinstance(n, (ast.AsyncFunctionDef, ast.FunctionDef))
+            and n.name == fn_name
+        )
         return {n.id for n in ast.walk(fn) if isinstance(n, ast.Name)} | {
-            n.attr for n in ast.walk(fn) if isinstance(n, ast.Attribute)}
+            n.attr for n in ast.walk(fn) if isinstance(n, ast.Attribute)
+        }
 
     def test_the_council_speaks_in_character(self):
         self.assertIn("_in_character", self._names_in("_council_once"))
@@ -262,11 +282,14 @@ class WiringTest(unittest.TestCase):
     def test_the_voice_falls_back_rather_than_raising(self):
         """A council must not be lost because a model was slow. The fallback
         is the line that was going to be said anyway."""
-        fn = next(n for n in self.ast.walk(self.tree)
-                  if isinstance(n, self.ast.AsyncFunctionDef)
-                  and n.name == "_in_character")
-        handlers = [n for n in self.ast.walk(fn)
-                    if isinstance(n, self.ast.ExceptHandler)]
+        fn = next(
+            n
+            for n in self.ast.walk(self.tree)
+            if isinstance(n, self.ast.AsyncFunctionDef) and n.name == "_in_character"
+        )
+        handlers = [
+            n for n in self.ast.walk(fn) if isinstance(n, self.ast.ExceptHandler)
+        ]
         self.assertTrue(handlers, "no except: an LLM outage would drop the council")
 
     def test_the_voice_runs_after_the_decision_not_before(self):
@@ -279,9 +302,11 @@ class WiringTest(unittest.TestCase):
         bridge.py than `_council_once` says nothing about the order INSIDE
         the council function itself.
         """
-        fn = next(n for n in self.ast.walk(self.tree)
-                  if isinstance(n, self.ast.AsyncFunctionDef)
-                  and n.name == "_council_once")
+        fn = next(
+            n
+            for n in self.ast.walk(self.tree)
+            if isinstance(n, self.ast.AsyncFunctionDef) and n.name == "_council_once"
+        )
         body = self.ast.get_source_segment(self.src, fn)
         council_at = body.index("held = council.hold(")
         voice_at = body.index("self._in_character(")
@@ -304,17 +329,21 @@ class WiringTest(unittest.TestCase):
         fourth call site cannot quietly reintroduce it.
         """
         ast = self.ast
-        calls = [n for n in ast.walk(self.tree)
-                 if isinstance(n, ast.Call)
-                 and getattr(n.func, "attr", None) == "build_prompt"
-                 and getattr(getattr(n.func, "value", None), "id", None) == "voice"]
+        calls = [
+            n
+            for n in ast.walk(self.tree)
+            if isinstance(n, ast.Call)
+            and getattr(n.func, "attr", None) == "build_prompt"
+            and getattr(getattr(n.func, "value", None), "id", None) == "voice"
+        ]
         self.assertTrue(calls, "nothing asks the inner voice at all any more")
         for call in calls:
             arg = next((k.value for k in call.keywords if k.arg == "personality"), None)
             self.assertIsNotNone(arg, "a build_prompt call names no personality")
             reached = {n.id for n in ast.walk(arg) if isinstance(n, ast.Name)}
             self.assertIn(
-                "_persona_for", reached,
+                "_persona_for",
+                reached,
                 "line %d prompts on mod_ollama_chat_personality instead of the "
                 "family Evan wrote" % call.lineno,
             )
@@ -347,7 +376,9 @@ class CharacterisationTest(unittest.TestCase):
             self.assertTrue(persona.characterisation(name), name)
 
     def test_chat_casing_still_finds_them(self):
-        self.assertEqual(persona.characterisation("bORK"), persona.characterisation("Bork"))
+        self.assertEqual(
+            persona.characterisation("bORK"), persona.characterisation("Bork")
+        )
 
     def test_a_stranger_gets_nothing_rather_than_a_borrowed_family(self):
         """Five hundred random bots share this realm. This module has personas

@@ -39,6 +39,7 @@ separate defect. It is NOT the cause of the Ugga case - a race does not fail
 twice consecutively on one bot while three others succeed twice - and this
 change does not touch it.
 """
+
 import pathlib
 import re
 import unittest
@@ -104,7 +105,11 @@ class SuccessIsReadBackNotAssumed(unittest.TestCase):
         # Between the hand-off and the end of the bot branch there must be no
         # unconditional success. The only status a checkable command may take
         # there is the in-flight one.
-        tail = code[handoff : code.index("else\n                detail = \"target has no bot AI", handoff)]
+        tail = code[
+            handoff : code.index(
+                'else\n                detail = "target has no bot AI', handoff
+            )
+        ]
         self.assertIn('status = "verifying"', tail)
 
     def test_a_strategy_command_is_parked_in_verifying_not_ended(self):
@@ -155,8 +160,16 @@ class SuccessIsReadBackNotAssumed(unittest.TestCase):
         actually had - that is the round trip this issue exists to remove."""
         outcome = _outcome_source()
         self.assertIn("ProbeStrategies(bot)", _code(outcome))
-        for field in ("outcome", "strategy", "sign", "before", "after", "waited_ms", "live"):
-            self.assertIn(r'\"%s\":' % field, outcome, field)
+        for field in (
+            "outcome",
+            "strategy",
+            "sign",
+            "before",
+            "after",
+            "waited_ms",
+            "live",
+        ):
+            self.assertIn(r"\"%s\":" % field, outcome, field)
 
     def test_the_verdict_update_is_conditional_on_still_owning_the_row(self):
         """Same rule the hand-off UPDATE already follows: if the bridge gave up

@@ -256,8 +256,9 @@ def _unassigned_refusal(beneficiary: str, skill_name: str) -> str:
     )
 
 
-def _stalled_sentence(skill_name: str, beneficiary: str, shape: str,
-                      observed: int, stalls: int) -> str:
+def _stalled_sentence(
+    skill_name: str, beneficiary: str, shape: str, observed: int, stalls: int
+) -> str:
     """What a goal says when the drive is right and the number is not moving.
 
     NOT a refusal. The mechanism named in `why` is the correct one and it is
@@ -284,7 +285,7 @@ def _stalled_sentence(skill_name: str, beneficiary: str, shape: str,
             "character short of mats with a bare `continue` and no log line at "
             "all, so 'employed and producing nothing' looks exactly like "
             "'busy' (infra#3696); craft_rhythm's own report names every starved "
-            "character by reagent. Grep the worldserver for \"does not know the "
+            'character by reagent. Grep the worldserver for "does not know the '
             "recipe\" against this character's name: a hit is (a) and silence "
             "is (b). This module deliberately does not decide between them - "
             "only the worldserver's own recorded answer can, which is craft.py's "
@@ -293,9 +294,18 @@ def _stalled_sentence(skill_name: str, beneficiary: str, shape: str,
     return said
 
 
-def plan(*, skill_name: str, skill_id: int, target: int, observed: int,
-         cap: int, beneficiary: str, standing: str, stalls: int = 0,
-         destination=None) -> Plan:
+def plan(
+    *,
+    skill_name: str,
+    skill_id: int,
+    target: int,
+    observed: int,
+    cap: int,
+    beneficiary: str,
+    standing: str,
+    stalls: int = 0,
+    destination=None,
+) -> Plan:
     """The one decision: what should the family do about this skill goal.
 
     Every argument is a fact somebody else read, and that is the seam. `cap` is
@@ -331,15 +341,19 @@ def plan(*, skill_name: str, skill_id: int, target: int, observed: int,
 
     if cap > 0 and observed >= cap and target > cap:
         return Plan(
-            skill_name=skill_name, beneficiary=beneficiary, shape=shape,
+            skill_name=skill_name,
+            beneficiary=beneficiary,
+            shape=shape,
             blocked=_rank_cap_refusal(skill_name, observed, cap, target),
             why="%s is capped at %d and the goal wants %d; no order helps."
-                % (skill_name, cap, target),
+            % (skill_name, cap, target),
         )
 
     if shape == FISHING:
         return Plan(
-            skill_name=skill_name, beneficiary=beneficiary, shape=shape,
+            skill_name=skill_name,
+            beneficiary=beneficiary,
+            shape=shape,
             blocked=FISHING_REFUSAL,
             why="fishing has no drive in this system at all.",
         )
@@ -362,17 +376,21 @@ def plan(*, skill_name: str, skill_id: int, target: int, observed: int,
                 # time.
                 refusal += SMELT_CAVEAT
             return Plan(
-                skill_name=skill_name, beneficiary=beneficiary, shape=shape,
+                skill_name=skill_name,
+                beneficiary=beneficiary,
+                shape=shape,
                 blocked=refusal,
                 why="no destination was surveyed for %s this pass." % skill_name,
             )
 
         if getattr(destination, "refused", ""):
             return Plan(
-                skill_name=skill_name, beneficiary=beneficiary, shape=shape,
+                skill_name=skill_name,
+                beneficiary=beneficiary,
+                shape=shape,
                 blocked=destination.refused,
-                why=getattr(destination, "why", "") or
-                    "the world offers nowhere to raise %s." % skill_name,
+                why=getattr(destination, "why", "")
+                or "the world offers nowhere to raise %s." % skill_name,
             )
 
         # A real field, on this map, inside the band, past the level guard.
@@ -381,18 +399,22 @@ def plan(*, skill_name: str, skill_id: int, target: int, observed: int,
         # "the quest drive stands down, full stop".
         got = destination.chosen
         return Plan(
-            skill_name=skill_name, beneficiary=beneficiary, shape=shape,
+            skill_name=skill_name,
+            beneficiary=beneficiary,
+            shape=shape,
             mode=MODE_GATHER,
             why="zone %d on map %d holds %d %s node(s) the weakest gatherer "
-                "can open; aiming the family at a surveyed spawn there."
-                % (got.zone_id, got.map_id, got.nodes, got.skill_name),
+            "can open; aiming the family at a surveyed spawn there."
+            % (got.zone_id, got.map_id, got.nodes, got.skill_name),
         )
 
     # --- CRAFTED from here down ------------------------------------------
     if skill_name not in professions.SECONDARY:
         if skill_name not in professions.assigned(beneficiary):
             return Plan(
-                skill_name=skill_name, beneficiary=beneficiary, shape=shape,
+                skill_name=skill_name,
+                beneficiary=beneficiary,
+                shape=shape,
                 blocked=_unassigned_refusal(beneficiary, skill_name),
                 why="%s holds no assignment for %s." % (beneficiary, skill_name),
             )
@@ -400,7 +422,9 @@ def plan(*, skill_name: str, skill_id: int, target: int, observed: int,
     recipe = craft.recipe_for(skill_id, observed)
     if recipe is None:
         return Plan(
-            skill_name=skill_name, beneficiary=beneficiary, shape=shape,
+            skill_name=skill_name,
+            beneficiary=beneficiary,
+            shape=shape,
             blocked=_no_bracket_refusal(skill_name, skill_id, observed),
             why="no craft.RECIPES bracket covers %s at %d." % (skill_name, observed),
         )
@@ -431,32 +455,52 @@ def plan(*, skill_name: str, skill_id: int, target: int, observed: int,
         # still settling. Writing into a half-landed order is how a family ends
         # up split across two modes; asking again next cycle costs one minute.
         return Plan(
-            skill_name=skill_name, beneficiary=beneficiary, shape=shape,
+            skill_name=skill_name,
+            beneficiary=beneficiary,
+            shape=shape,
             stalled=stalled,
             why="the family's job column does not agree yet, so nothing is "
-                "written this cycle - %s would cast spell %d (%s) once they do."
-                % (beneficiary, recipe.spell_id, recipe.name),
+            "written this cycle - %s would cast spell %d (%s) once they do."
+            % (beneficiary, recipe.spell_id, recipe.name),
         )
 
     if standing in RHYTHM_MODES:
         return Plan(
-            skill_name=skill_name, beneficiary=beneficiary, shape=shape,
+            skill_name=skill_name,
+            beneficiary=beneficiary,
+            shape=shape,
             stalled=stalled,
             why="the family is already inside the profession rhythm (job=%s), "
-                "so craft_rhythm owns the alternation from here - %s's bracket "
-                "for %s %d is spell %d (%s)."
-                % (standing, beneficiary, skill_name, observed,
-                   recipe.spell_id, recipe.name),
+            "so craft_rhythm owns the alternation from here - %s's bracket "
+            "for %s %d is spell %d (%s)."
+            % (
+                standing,
+                beneficiary,
+                skill_name,
+                observed,
+                recipe.spell_id,
+                recipe.name,
+            ),
         )
 
     return Plan(
-        skill_name=skill_name, beneficiary=beneficiary, shape=shape,
-        mode=MODE_CRAFT, stalled=stalled,
+        skill_name=skill_name,
+        beneficiary=beneficiary,
+        shape=shape,
+        mode=MODE_CRAFT,
+        stalled=stalled,
         why="the family is on job=%s, which is outside the profession rhythm, "
-            "so nothing would ever cast %s's bracket for %s %d (spell %d, %s) "
-            "- asking for job=%s is what lets craft_rhythm take over next pass."
-            % (standing, beneficiary, skill_name, observed, recipe.spell_id,
-               recipe.name, MODE_CRAFT),
+        "so nothing would ever cast %s's bracket for %s %d (spell %d, %s) "
+        "- asking for job=%s is what lets craft_rhythm take over next pass."
+        % (
+            standing,
+            beneficiary,
+            skill_name,
+            observed,
+            recipe.spell_id,
+            recipe.name,
+            MODE_CRAFT,
+        ),
     )
 
 
@@ -469,10 +513,15 @@ def report(skill_plan: Plan) -> str:
     from a pass that has died.
     """
     head = "skill goal %s for %s (%s)" % (
-        skill_plan.skill_name, skill_plan.beneficiary, skill_plan.shape)
+        skill_plan.skill_name,
+        skill_plan.beneficiary,
+        skill_plan.shape,
+    )
     if skill_plan.blocked:
         return "%s: BLOCKED - %s" % (head, skill_plan.blocked)
-    wrote = ("asked for job=%s" % skill_plan.mode) if skill_plan.mode else "wrote nothing"
+    wrote = (
+        ("asked for job=%s" % skill_plan.mode) if skill_plan.mode else "wrote nothing"
+    )
     said = "%s: %s - %s" % (head, wrote, skill_plan.why)
     if skill_plan.stalled:
         said += " STALLED: %s" % skill_plan.stalled

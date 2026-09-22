@@ -69,18 +69,22 @@ def read(row: dict, meta: dict) -> Progress | None:
     for i in range(1, SLOTS + 1):
         need = int(meta.get("RequiredNpcOrGoCount%d" % i) or 0)
         if need:
-            objectives.append(Objective(
-                what=meta.get("npc_name%d" % i) or "them",
-                have=int(row.get("mobcount%d" % i) or 0),
-                need=need,
-            ))
+            objectives.append(
+                Objective(
+                    what=meta.get("npc_name%d" % i) or "them",
+                    have=int(row.get("mobcount%d" % i) or 0),
+                    need=need,
+                )
+            )
         need = int(meta.get("RequiredItemCount%d" % i) or 0)
         if need:
-            objectives.append(Objective(
-                what=meta.get("item_name%d" % i) or "it",
-                have=int(row.get("itemcount%d" % i) or 0),
-                need=need,
-            ))
+            objectives.append(
+                Objective(
+                    what=meta.get("item_name%d" % i) or "it",
+                    have=int(row.get("itemcount%d" % i) or 0),
+                    need=need,
+                )
+            )
     if not objectives:
         return None
     return Progress(

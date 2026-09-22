@@ -299,7 +299,7 @@ def flight_master_node(value):
     text = str(value)
     if not text.startswith(FLIGHT_MASTER_NODE_AIM_PREFIX):
         return None
-    digits = text[len(FLIGHT_MASTER_NODE_AIM_PREFIX):]
+    digits = text[len(FLIGHT_MASTER_NODE_AIM_PREFIX) :]
     if not digits or len(digits) > FLIGHT_MASTER_NODE_DIGITS:
         return None
     # `str.isdigit` is True for superscripts and other unicode digit forms that
@@ -436,9 +436,13 @@ def aim_statements(names, target):
         # belongs to whoever else is travelling, and this function has no
         # opinion about them.
         marks = ", ".join(["%s"] * len(chosen))
-        return [("UPDATE overseer_roster SET travel_npc = %%s "  # noqa: S608 - placeholders from a COUNT, values still bound
-                 "WHERE travel_npc <> %%s AND name IN (%s)" % marks,
-                 (NONE, NONE, *chosen))]
+        return [
+            (
+                "UPDATE overseer_roster SET travel_npc = %%s "  # noqa: S608 - placeholders from a COUNT, values still bound
+                "WHERE travel_npc <> %%s AND name IN (%s)" % marks,
+                (NONE, NONE, *chosen),
+            )
+        ]
 
     # `marks` is a run of "%s" placeholders whose LENGTH comes from a count of
     # names - no name and no target reaches the SQL text. Every value is bound,
@@ -446,12 +450,16 @@ def aim_statements(names, target):
     # construction, and same suppression, as bridge._aim_traveller.
     marks = ", ".join(["%s"] * len(chosen))
     return [
-        ("UPDATE overseer_roster SET travel_npc = %%s "  # noqa: S608 - placeholders from a COUNT, values still bound
-         "WHERE name IN (%s)" % marks,
-         (resolved, *chosen)),
-        ("UPDATE overseer_roster SET travel_npc = %%s "  # noqa: S608 - placeholders from a COUNT, values still bound
-         "WHERE travel_npc <> %%s AND name NOT IN (%s)" % marks,
-         (NONE, NONE, *chosen)),
+        (
+            "UPDATE overseer_roster SET travel_npc = %%s "  # noqa: S608 - placeholders from a COUNT, values still bound
+            "WHERE name IN (%s)" % marks,
+            (resolved, *chosen),
+        ),
+        (
+            "UPDATE overseer_roster SET travel_npc = %%s "  # noqa: S608 - placeholders from a COUNT, values still bound
+            "WHERE travel_npc <> %%s AND name NOT IN (%s)" % marks,
+            (NONE, NONE, *chosen),
+        ),
     ]
 
 
@@ -489,7 +497,8 @@ def ground_aim(map_id, x, y, z):
     if where < 0:
         return None
     aim = "%s%d:%s" % (
-        GROUND_AIM_PREFIX, where,
+        GROUND_AIM_PREFIX,
+        where,
         ",".join("%.*f" % (GROUND_AIM_DECIMALS, axis) for axis in point),
     )
     return aim if len(aim) <= COLUMN_WIDTH else None
@@ -527,28 +536,40 @@ def vault_aim(spawn, standing_on):
     resolves to nothing.
     """
     if standing_on is None:
-        return VaultAim(refused=(
-            "nobody can say which map the leader is standing on - "
-            "overseer_snapshot has no fresh row for it, so the family is "
-            "either offline or the module has stopped writing the snapshot"))
+        return VaultAim(
+            refused=(
+                "nobody can say which map the leader is standing on - "
+                "overseer_snapshot has no fresh row for it, so the family is "
+                "either offline or the module has stopped writing the snapshot"
+            )
+        )
     if not spawn:
-        return VaultAim(refused=(
-            "no Guild Vault is spawned on map %s, so the family has to travel "
-            "to a map that has one before any deposit can land" % standing_on))
+        return VaultAim(
+            refused=(
+                "no Guild Vault is spawned on map %s, so the family has to travel "
+                "to a map that has one before any deposit can land" % standing_on
+            )
+        )
     where = spawn.get("map_id")
     if where is None or int(where) != int(standing_on):
-        return VaultAim(refused=(
-            "the nearest Guild Vault is on map %s and the leader is on map %s "
-            "- there is no navmesh between them, so this needs a boat, a "
-            "portal or a flight before an aim can do anything" % (
-                where, standing_on)))
+        return VaultAim(
+            refused=(
+                "the nearest Guild Vault is on map %s and the leader is on map %s "
+                "- there is no navmesh between them, so this needs a boat, a "
+                "portal or a flight before an aim can do anything"
+                % (where, standing_on)
+            )
+        )
     aim = ground_aim(where, spawn.get("x"), spawn.get("y"), spawn.get("z"))
     if not aim:
-        return VaultAim(refused=(
-            "the nearest Guild Vault on map %s cannot be named in the %d "
-            "characters overseer_roster.travel_npc holds, so aiming at it "
-            "would truncate into a coordinate nobody surveyed" % (
-                where, COLUMN_WIDTH)))
+        return VaultAim(
+            refused=(
+                "the nearest Guild Vault on map %s cannot be named in the %d "
+                "characters overseer_roster.travel_npc holds, so aiming at it "
+                "would truncate into a coordinate nobody surveyed"
+                % (where, COLUMN_WIDTH)
+            )
+        )
     return VaultAim(aim=aim)
 
 
@@ -596,27 +617,39 @@ def mailbox_aim(spawn, standing_on):
     part of it that does anything.
     """
     if standing_on is None:
-        return MailboxAim(refused=(
-            "nobody can say which map the leader is standing on - "
-            "overseer_snapshot has no fresh row for it, so the family is "
-            "either offline or the module has stopped writing the snapshot"))
+        return MailboxAim(
+            refused=(
+                "nobody can say which map the leader is standing on - "
+                "overseer_snapshot has no fresh row for it, so the family is "
+                "either offline or the module has stopped writing the snapshot"
+            )
+        )
     if not spawn:
-        return MailboxAim(refused=(
-            "no mailbox is spawned on map %s, so the family has to travel to a "
-            "map that has one before any letter can be collected" % standing_on))
+        return MailboxAim(
+            refused=(
+                "no mailbox is spawned on map %s, so the family has to travel to a "
+                "map that has one before any letter can be collected" % standing_on
+            )
+        )
     where = spawn.get("map_id")
     if where is None or int(where) != int(standing_on):
-        return MailboxAim(refused=(
-            "the nearest mailbox is on map %s and the leader is on map %s - "
-            "there is no navmesh between them, so this needs a boat, a portal "
-            "or a flight before an aim can do anything" % (where, standing_on)))
+        return MailboxAim(
+            refused=(
+                "the nearest mailbox is on map %s and the leader is on map %s - "
+                "there is no navmesh between them, so this needs a boat, a portal "
+                "or a flight before an aim can do anything" % (where, standing_on)
+            )
+        )
     aim = ground_aim(where, spawn.get("x"), spawn.get("y"), spawn.get("z"))
     if not aim:
-        return MailboxAim(refused=(
-            "the nearest mailbox on map %s cannot be named in the %d "
-            "characters overseer_roster.travel_npc holds, so aiming at it "
-            "would truncate into a coordinate nobody surveyed" % (
-                where, COLUMN_WIDTH)))
+        return MailboxAim(
+            refused=(
+                "the nearest mailbox on map %s cannot be named in the %d "
+                "characters overseer_roster.travel_npc holds, so aiming at it "
+                "would truncate into a coordinate nobody surveyed"
+                % (where, COLUMN_WIDTH)
+            )
+        )
     return MailboxAim(aim=aim)
 
 
@@ -663,22 +696,31 @@ def forge_aim(spawn, standing_on):
     follows is one DriveCraft cannot tell from a cooldown. Better to say so.
     """
     if standing_on is None:
-        return ForgeAim(refused=(
-            "nobody can say which map the smelter is standing on - "
-            "overseer_snapshot has no fresh row for it, so the family is "
-            "either offline or the module has stopped writing the snapshot"))
+        return ForgeAim(
+            refused=(
+                "nobody can say which map the smelter is standing on - "
+                "overseer_snapshot has no fresh row for it, so the family is "
+                "either offline or the module has stopped writing the snapshot"
+            )
+        )
     if not spawn:
-        return ForgeAim(refused=(
-            "no Forge whose focus is wider than the %d-yard arrival tolerance "
-            "is spawned on map %s, so nothing can be smelted there until the "
-            "family travels to a map that has one" % (
-                ARRIVED_POSITION_YARDS, standing_on)))
+        return ForgeAim(
+            refused=(
+                "no Forge whose focus is wider than the %d-yard arrival tolerance "
+                "is spawned on map %s, so nothing can be smelted there until the "
+                "family travels to a map that has one"
+                % (ARRIVED_POSITION_YARDS, standing_on)
+            )
+        )
     where = spawn.get("map_id")
     if where is None or int(where) != int(standing_on):
-        return ForgeAim(refused=(
-            "the nearest Forge is on map %s and the smelter is on map %s - "
-            "there is no navmesh between them, so this needs a boat, a portal "
-            "or a flight before an aim can do anything" % (where, standing_on)))
+        return ForgeAim(
+            refused=(
+                "the nearest Forge is on map %s and the smelter is on map %s - "
+                "there is no navmesh between them, so this needs a boat, a portal "
+                "or a flight before an aim can do anything" % (where, standing_on)
+            )
+        )
     radius = int(spawn.get("radius") or 0)
     if radius <= ARRIVED_POSITION_YARDS:
         # RE-CHECKED HERE THOUGH THE QUERY ALREADY FILTERS ON IT, exactly as
@@ -686,19 +728,25 @@ def forge_aim(spawn, standing_on):
         # enforces. The query decides which spawn is a candidate; this decides
         # what to SAY when there is none, and a sentence a person can act on is
         # worth more than a row that silently did not match.
-        return ForgeAim(refused=(
-            "the nearest Forge on map %s has a %d-yard focus and the travel "
-            "drive only promises to land a character within %d yards of an "
-            "`at:` aim, so walking there would not reliably put the smelter "
-            "inside the focus - and CheckCast's refusal for that is one "
-            "DriveCraft logs as a bare SpellCastResult, not as a distance" % (
-                where, radius, ARRIVED_POSITION_YARDS)))
+        return ForgeAim(
+            refused=(
+                "the nearest Forge on map %s has a %d-yard focus and the travel "
+                "drive only promises to land a character within %d yards of an "
+                "`at:` aim, so walking there would not reliably put the smelter "
+                "inside the focus - and CheckCast's refusal for that is one "
+                "DriveCraft logs as a bare SpellCastResult, not as a distance"
+                % (where, radius, ARRIVED_POSITION_YARDS)
+            )
+        )
     aim = ground_aim(where, spawn.get("x"), spawn.get("y"), spawn.get("z"))
     if not aim:
-        return ForgeAim(refused=(
-            "the nearest Forge on map %s cannot be named in the %d characters "
-            "overseer_roster.travel_npc holds, so aiming at it would truncate "
-            "into a coordinate nobody surveyed" % (where, COLUMN_WIDTH)))
+        return ForgeAim(
+            refused=(
+                "the nearest Forge on map %s cannot be named in the %d characters "
+                "overseer_roster.travel_npc holds, so aiming at it would truncate "
+                "into a coordinate nobody surveyed" % (where, COLUMN_WIDTH)
+            )
+        )
     return ForgeAim(aim=aim, radius=radius)
 
 

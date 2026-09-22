@@ -13,6 +13,7 @@ names, and a test that mocked it would pass just as happily with an empty one.
 
 Ticket: infra#3096.
 """
+
 import unittest
 
 import armory
@@ -39,16 +40,30 @@ HEROIC_STRIKE_R1 = 12282
 
 
 def char(**kw):
-    row = {"name": FIRST, "level": 25, "race": 1, "class": WARRIOR,
-           "online": 1, "activeTalentGroup": 0}
+    row = {
+        "name": FIRST,
+        "level": 25,
+        "race": 1,
+        "class": WARRIOR,
+        "online": 1,
+        "activeTalentGroup": 0,
+    }
     row.update(kw)
     return row
 
 
 def item(slot, **kw):
-    row = {"name": FIRST, "slot": slot, "entry": 6552, "durability": 70,
-           "item_name": "Bard's Tunic", "quality": 2, "item_level": 19,
-           "required_level": 14, "max_durability": 70}
+    row = {
+        "name": FIRST,
+        "slot": slot,
+        "entry": 6552,
+        "durability": 70,
+        "item_name": "Bard's Tunic",
+        "quality": 2,
+        "item_level": 19,
+        "required_level": 14,
+        "max_durability": 70,
+    }
     row.update(kw)
     return row
 
@@ -62,7 +77,12 @@ def talent(spell, **kw):
 def build(char_rows=None, equipment_rows=None, talent_rows=None, **rest):
     return armory.build_armory(
         [char()] if char_rows is None else char_rows,
-        equipment_rows or [], talent_rows or [], BOOK, ITEMS, **rest)
+        equipment_rows or [],
+        talent_rows or [],
+        BOOK,
+        ITEMS,
+        **rest,
+    )
 
 
 def col(payload, name):
@@ -92,8 +112,9 @@ class TheColumnsTest(unittest.TestCase):
         """The grid reads ACROSS - row three is the same slot in all five
         columns - which only holds if one list decides the order. A second
         list in the page could disagree and misalign the whole thing."""
-        self.assertEqual([s["slot"] for s in build()["slots"]],
-                         list(armory.EQUIPPED_SLOTS))
+        self.assertEqual(
+            [s["slot"] for s in build()["slots"]], list(armory.EQUIPPED_SLOTS)
+        )
 
 
 class TheGearTest(unittest.TestCase):
@@ -120,8 +141,10 @@ class TheGearTest(unittest.TestCase):
         """Counting an empty slot as item level 0 folds two different
         complaints - his gear is old, and he has no helmet - into one number
         that answers neither. The empty slots are listed separately instead."""
-        member = col(build(equipment_rows=[
-            item(4, item_level=20), item(5, item_level=30)]), FIRST)
+        member = col(
+            build(equipment_rows=[item(4, item_level=20), item(5, item_level=30)]),
+            FIRST,
+        )
         self.assertEqual(member["gear"]["average_item_level"], 25)
         self.assertEqual(member["gear"]["worn"], 2)
 
@@ -134,9 +157,21 @@ class TheGearTest(unittest.TestCase):
         """A LEFT JOIN miss is a custom or removed item, and it is genuinely
         equipped. Rendering it as an empty slot would invent a gap that is not
         there and send somebody looking for a helmet he already has."""
-        member = col(build(equipment_rows=[
-            item(0, entry=99999, item_name=None, quality=None,
-                 item_level=None, max_durability=None)]), FIRST)
+        member = col(
+            build(
+                equipment_rows=[
+                    item(
+                        0,
+                        entry=99999,
+                        item_name=None,
+                        quality=None,
+                        item_level=None,
+                        max_durability=None,
+                    )
+                ]
+            ),
+            FIRST,
+        )
         head = slot_of(member, "head")
         self.assertFalse(head["empty"])
         self.assertEqual(head["name"], "Item #99999")
@@ -146,14 +181,16 @@ class TheGearTest(unittest.TestCase):
         """Rings, cloaks, necks and trinkets store durability 0 because they
         HAVE no durability. Reading that as broken would paint half the
         paper doll red permanently."""
-        member = col(build(equipment_rows=[
-            item(10, durability=0, max_durability=0)]), FIRST)
+        member = col(
+            build(equipment_rows=[item(10, durability=0, max_durability=0)]), FIRST
+        )
         self.assertFalse(slot_of(member, "finger 1")["broken"])
         self.assertEqual(member["gear"]["broken"], [])
 
     def test_an_item_that_can_break_and_has_is_called_out(self):
-        member = col(build(equipment_rows=[
-            item(4, durability=0, max_durability=70)]), FIRST)
+        member = col(
+            build(equipment_rows=[item(4, durability=0, max_durability=70)]), FIRST
+        )
         self.assertTrue(slot_of(member, "chest")["broken"])
         self.assertEqual(member["gear"]["broken"], ["chest"])
 
@@ -184,8 +221,9 @@ class TheBuildTest(unittest.TestCase):
     def test_the_distribution_reads_in_the_order_the_game_draws_the_trees(self):
         """0/0/16 is a sentence every WoW player already knows how to read,
         but only if the three numbers are in the client's own tab order."""
-        spec = col(build(talent_rows=[
-            talent(PUNCTURE_R2), talent(HEROIC_STRIKE_R1)]), FIRST)["spec"]
+        spec = col(
+            build(talent_rows=[talent(PUNCTURE_R2), talent(HEROIC_STRIKE_R1)]), FIRST
+        )["spec"]
         self.assertEqual(spec["distribution"], "1/0/2")
         self.assertEqual(spec["trees"][ARMS]["name"], "Arms")
         self.assertEqual(spec["trees"][FURY]["name"], "Fury")
@@ -196,15 +234,13 @@ class TheBuildTest(unittest.TestCase):
         """character_talent holds BOTH dual-spec builds, told apart by
         specMask. Summing them reports a level 25 warrior with 32 points and
         a build he is not playing."""
-        rows = [talent(PUNCTURE_R2, specMask=1),
-                talent(HEROIC_STRIKE_R1, specMask=2)]
+        rows = [talent(PUNCTURE_R2, specMask=1), talent(HEROIC_STRIKE_R1, specMask=2)]
         spec = col(build(talent_rows=rows), FIRST)["spec"]
         self.assertEqual(spec["spent"], 2)
         self.assertEqual(spec["distribution"], "0/0/2")
 
     def test_the_other_spec_is_what_shows_when_it_is_the_active_one(self):
-        rows = [talent(PUNCTURE_R2, specMask=1),
-                talent(HEROIC_STRIKE_R1, specMask=2)]
+        rows = [talent(PUNCTURE_R2, specMask=1), talent(HEROIC_STRIKE_R1, specMask=2)]
         spec = col(build([char(activeTalentGroup=1)], None, rows), FIRST)["spec"]
         self.assertEqual(spec["distribution"], "1/0/0")
 
@@ -212,8 +248,7 @@ class TheBuildTest(unittest.TestCase):
         """The signal that a character has been levelling and nobody has been
         specc'ing him. It is invisible in the game unless you open his talent
         pane, and invisible here unless the budget is worked out."""
-        spec = col(build([char(level=25)], None,
-                         [talent(PUNCTURE_R1)]), FIRST)["spec"]
+        spec = col(build([char(level=25)], None, [talent(PUNCTURE_R1)]), FIRST)["spec"]
         self.assertEqual(spec["available"], 16)
         self.assertEqual(spec["spent"], 1)
         self.assertEqual(spec["unspent"], 15)
@@ -227,8 +262,7 @@ class TheBuildTest(unittest.TestCase):
         """A DK's points count quest rewards the core tracks in memory and
         does not expose here. An 'unspent points' figure that is quietly wrong
         is worse than one that admits it does not know."""
-        spec = col(build([char(**{"class": DEATH_KNIGHT})], None, []),
-                   FIRST)["spec"]
+        spec = col(build([char(**{"class": DEATH_KNIGHT})], None, []), FIRST)["spec"]
         self.assertIsNone(spec["available"])
         self.assertIsNone(spec["unspent"])
 
@@ -238,8 +272,7 @@ class TheBuildTest(unittest.TestCase):
         understate the build without anything on screen saying so."""
         spec = col(build(talent_rows=[talent(4242424)]), FIRST)["spec"]
         self.assertEqual(spec["spent"], 1)
-        self.assertEqual([t["name"] for t in spec["unplaced"]],
-                         ["Spell #4242424"])
+        self.assertEqual([t["name"] for t in spec["unplaced"]], ["Spell #4242424"])
 
     def test_a_character_with_no_talents_says_so_without_a_primary_tree(self):
         spec = col(build(), FIRST)["spec"]
@@ -249,8 +282,9 @@ class TheBuildTest(unittest.TestCase):
     def test_talents_are_listed_down_the_tree_the_way_the_trainer_draws_it(self):
         """Tier then column. Sorted by spell id - the order the rows arrive
         in - the list reads as a shuffle of a build rather than as a build."""
-        spec = col(build(talent_rows=[
-            talent(PUNCTURE_R1), talent(HEROIC_STRIKE_R1)]), FIRST)["spec"]
+        spec = col(
+            build(talent_rows=[talent(PUNCTURE_R1), talent(HEROIC_STRIKE_R1)]), FIRST
+        )["spec"]
         for tree in spec["trees"]:
             rows = [(t["row"], t["col"]) for t in tree["talents"]]
             self.assertEqual(rows, sorted(rows))
@@ -278,6 +312,7 @@ class TheTalentBookTest(unittest.TestCase):
         overwrite the first, and those points would be attributed to the wrong
         tree for as long as anybody looked at it."""
         import json
+
         with open("talents.json") as f:
             ranks = [s for t in json.load(f)["talents"] for s in t["ranks"]]
         self.assertEqual(len(ranks), len(set(ranks)))
@@ -289,7 +324,9 @@ class TheTalentBookTest(unittest.TestCase):
         This is the coverage check: a real class's real tree, fully named."""
         arms = BOOK.trees_for(WARRIOR)[ARMS][1]
         self.assertEqual(arms["name"], "Arms")
-        named = [t for t in BOOK.by_spell.values() if t[0]["name"].startswith("Spell #")]
+        named = [
+            t for t in BOOK.by_spell.values() if t[0]["name"].startswith("Spell #")
+        ]
         self.assertEqual(named, [], "talents with no name in the book")
 
 
@@ -309,7 +346,7 @@ class TheWordAnEmptySlotSaysTest(unittest.TestCase):
         self.assertEqual(s["empty_kind"], armory.EMPTY_MISSING)
 
     def test_a_cosmetic_slot_says_its_own_name_instead(self):
-        """"empty" on a tabard is a true sentence that means nothing. Its own
+        """ "empty" on a tabard is a true sentence that means nothing. Its own
         name is the complete answer to what is in it."""
         s = slot_of(col(build(), FIRST), "tabard")
         self.assertEqual(s["empty_label"], "tabard")
@@ -341,8 +378,9 @@ class TheWordAnEmptySlotSaysTest(unittest.TestCase):
             reading = armory.empty_reading(name)
             self.assertTrue(reading["label"], name)
             self.assertTrue(reading["note"], name)
-            self.assertIn(reading["kind"],
-                          (armory.EMPTY_MISSING, armory.EMPTY_COSMETIC), name)
+            self.assertIn(
+                reading["kind"], (armory.EMPTY_MISSING, armory.EMPTY_COSMETIC), name
+            )
 
 
 class TheSlotMarkTest(unittest.TestCase):
@@ -366,7 +404,7 @@ class TheSlotMarkTest(unittest.TestCase):
             self.assertEqual(mark, mark.upper(), name)
 
     def test_the_marks_are_the_players_names_not_the_databases(self):
-        """"finger 1" is R1 because a player calls it a ring. No rule over the
+        """ "finger 1" is R1 because a player calls it a ring. No rule over the
         stored name produces that, which is why there is a table."""
         self.assertEqual(armory.slot_mark("finger 1"), "R1")
         self.assertEqual(armory.slot_mark("trinket 2"), "T2")
@@ -378,8 +416,10 @@ class TheSlotMarkTest(unittest.TestCase):
 
     def test_the_mark_reaches_both_the_slot_list_and_every_cell(self):
         payload = build(equipment_rows=[item(0)])
-        self.assertEqual([s["mark"] for s in payload["slots"]],
-                         [armory.slot_mark(n) for n in armory.EQUIPPED_SLOTS])
+        self.assertEqual(
+            [s["mark"] for s in payload["slots"]],
+            [armory.slot_mark(n) for n in armory.EQUIPPED_SLOTS],
+        )
         self.assertEqual(slot_of(col(payload, FIRST), "head")["mark"], "HD")
 
     def test_an_item_with_no_level_has_an_empty_corner_not_a_zero(self):
@@ -401,8 +441,9 @@ class TheGearChipsTest(unittest.TestCase):
 
     def test_the_first_two_chips_are_always_there(self):
         chips = col(build(), FIRST)["gear"]["chips"]
-        self.assertEqual([c["key"] for c in chips[:2]],
-                         ["average item level", "slots worn"])
+        self.assertEqual(
+            [c["key"] for c in chips[:2]], ["average item level", "slots worn"]
+        )
         self.assertTrue(all(c["tone"] == armory.TONE_PLAIN for c in chips[:2]))
 
     def test_no_average_says_the_word_rather_than_zero(self):
@@ -430,11 +471,11 @@ class TheGearChipsTest(unittest.TestCase):
     def test_a_character_with_nothing_wrong_carries_no_loud_chips(self):
         """Every slot filled and nothing broken: the header is two facts and
         no colour."""
-        rows = [item(n, durability=70)
-                for n in range(len(armory.EQUIPPED_SLOTS))]
+        rows = [item(n, durability=70) for n in range(len(armory.EQUIPPED_SLOTS))]
         chips = col(build(equipment_rows=rows), FIRST)["gear"]["chips"]
-        self.assertEqual([c["tone"] for c in chips],
-                         [armory.TONE_PLAIN, armory.TONE_PLAIN])
+        self.assertEqual(
+            [c["tone"] for c in chips], [armory.TONE_PLAIN, armory.TONE_PLAIN]
+        )
 
 
 class TheTabHeadlineTest(unittest.TestCase):
@@ -485,38 +526,39 @@ class TheCollapsedBuildTest(unittest.TestCase):
         self.assertNotEqual(trees["show"], trees["hide"])
 
     def test_the_headline_is_the_distribution_and_the_deepest_tree(self):
-        spec = col(build([char(level=25)], None, [talent(PUNCTURE_R2)]),
-                   FIRST)["spec"]
+        spec = col(build([char(level=25)], None, [talent(PUNCTURE_R2)]), FIRST)["spec"]
         self.assertEqual(spec["headline"], "0/0/2 Protection")
 
     def test_a_character_who_has_spent_nothing_still_gets_a_line(self):
-        """"0/0/0" alone reads as a rendering failure."""
-        self.assertEqual(col(build(), FIRST)["spec"]["headline"],
-                         "0/0/0 nothing spent")
+        """ "0/0/0" alone reads as a rendering failure."""
+        self.assertEqual(col(build(), FIRST)["spec"]["headline"], "0/0/0 nothing spent")
 
     def test_the_budget_names_both_numbers_when_both_are_known(self):
-        spec = col(build([char(level=25)], None, [talent(PUNCTURE_R2)]),
-                   FIRST)["spec"]
+        spec = col(build([char(level=25)], None, [talent(PUNCTURE_R2)]), FIRST)["spec"]
         self.assertEqual(spec["budget"], "2 of 16 points spent")
         self.assertEqual(spec["unspent_note"], "14 unspent")
 
     def test_an_unknown_budget_says_only_what_it_knows(self):
         """A death knight's points count quest rewards this server does not
         expose. "0 of None points" would be worse than saying less."""
-        spec = col(build([char(level=25, **{"class": DEATH_KNIGHT})]),
-                   FIRST)["spec"]
+        spec = col(build([char(level=25, **{"class": DEATH_KNIGHT})]), FIRST)["spec"]
         self.assertEqual(spec["budget"], "0 points spent")
         self.assertIsNone(spec["unspent_note"])
 
     def test_the_bar_is_segments_so_the_page_never_decides_it_has_two(self):
-        spec = col(build([char(level=25)], None, [talent(PUNCTURE_R2)]),
-                   FIRST)["spec"]
-        self.assertEqual(spec["bar"], [{"kind": "spent", "points": 2},
-                                       {"kind": "unspent", "points": 14}])
+        spec = col(build([char(level=25)], None, [talent(PUNCTURE_R2)]), FIRST)["spec"]
+        self.assertEqual(
+            spec["bar"],
+            [{"kind": "spent", "points": 2}, {"kind": "unspent", "points": 14}],
+        )
 
     def test_an_unknown_budget_has_no_unspent_segment_to_draw(self):
-        spec = col(build([char(level=25, **{"class": DEATH_KNIGHT})], None,
-                         [talent(PUNCTURE_R2)]), FIRST)["spec"]
+        spec = col(
+            build(
+                [char(level=25, **{"class": DEATH_KNIGHT})], None, [talent(PUNCTURE_R2)]
+            ),
+            FIRST,
+        )["spec"]
         self.assertEqual([seg["kind"] for seg in spec["bar"]], ["spent"])
 
     def test_a_character_owed_nothing_and_holding_nothing_has_no_bar(self):
@@ -531,20 +573,24 @@ class TheMemberLineTest(unittest.TestCase):
     it used to be four appends and two truthiness checks in the page."""
 
     def test_it_reads_the_way_an_armory_writes_it(self):
-        member = col(build([char(level=26, guild="Ironforge Irregulars",
-                                 totalKills=412)]), FIRST)
-        self.assertEqual(member["identity"],
-                         "Level 26 Human Warrior - Ironforge Irregulars"
-                         " - 412 honourable kills")
+        member = col(
+            build([char(level=26, guild="Ironforge Irregulars", totalKills=412)]), FIRST
+        )
+        self.assertEqual(
+            member["identity"],
+            "Level 26 Human Warrior - Ironforge Irregulars - 412 honourable kills",
+        )
 
     def test_no_guild_leaves_no_gap_where_a_guild_would_be(self):
-        self.assertEqual(col(build([char(level=26)]), FIRST)["identity"],
-                         "Level 26 Human Warrior")
+        self.assertEqual(
+            col(build([char(level=26)]), FIRST)["identity"], "Level 26 Human Warrior"
+        )
 
     def test_a_single_kill_is_singular(self):
         member = col(build([char(level=26, totalKills=1)]), FIRST)
-        self.assertTrue(member["identity"].endswith("1 honourable kill"),
-                        member["identity"])
+        self.assertTrue(
+            member["identity"].endswith("1 honourable kill"), member["identity"]
+        )
 
     def test_five_pve_characters_do_not_each_carry_a_zero(self):
         """A line of zeros on every card is furniture."""
@@ -558,10 +604,8 @@ class TheMemberLineTest(unittest.TestCase):
         self.assertEqual(member["identity"], armory.ABSENT_NOTE)
 
     def test_presence_is_a_word_rather_than_a_boolean_for_the_page_to_name(self):
-        self.assertEqual(col(build([char(online=1)]), FIRST)["presence"],
-                         "online")
-        self.assertEqual(col(build([char(online=0)]), FIRST)["presence"],
-                         "offline")
+        self.assertEqual(col(build([char(online=1)]), FIRST)["presence"], "online")
+        self.assertEqual(col(build([char(online=0)]), FIRST)["presence"], "offline")
 
 
 if __name__ == "__main__":
