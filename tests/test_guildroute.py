@@ -671,7 +671,13 @@ class TheBridgeWalksAndNeverGives(unittest.TestCase):
     def test_the_route_pass_hands_its_waiting_routes_to_the_walk(self):
         body = self.body("async def _guild_route_once(")
         self.assertIn("await self._walk_route_holders(waiting, family_names)", body)
-        self.assertIn("self._guild_mail_runs.pop(route.holder, None)", body)
+        writer = self.body("async def _write_routes(")
+        self.assertIn("self._guild_mail_runs.pop(route.holder, None)", writer)
+
+    def test_a_run_is_reserved_before_its_claim_is_awaited(self):
+        body = self.body("async def _walk_route_holders(")
+        reserve = body.index("self._guild_mail_runs[run.holder] = now")
+        self.assertLess(reserve, body.index("await self._claim_town_slot("))
 
     def test_the_walker_read_carries_combat(self):
         bridge = (HERE / "bridge.py").read_text(encoding="utf-8")

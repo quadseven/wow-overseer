@@ -6483,16 +6483,7 @@ class Bridge(discord.Client):
             decided.grants, positions, at_mailbox, free_slots
         )
         _log_capped("guild route", ready.notes)
-        seen = await asyncio.to_thread(_recent_route_keys, GIVE_RETRY_MINUTES)
-        written = 0
-        for route in ready.grants:
-            if (route.holder, route.command) in seen:
-                continue
-            if await asyncio.to_thread(_insert_route, route):
-                written += 1
-                log.info("guild route: %s", route.said)
-                if route.verb == guildroute.MAIL:
-                    self._guild_mail_runs.pop(route.holder, None)
+        written = await self._write_routes(ready.grants)
         log.info("guild route: queued %d/%d hand-over(s) from %d carried guildmate "
                  "item(s)", written, len(ready.grants), len(gear_rows))
         moving = {(r.holder, r.guid) for r in ready.grants}
@@ -6501,6 +6492,23 @@ class Bridge(discord.Client):
             if (r.holder, r.guid) not in moving and r.holder not in at_mailbox
         ]
         await self._walk_route_holders(waiting, family_names)
+
+    async def _write_routes(self, grants) -> int:
+        """Write each hand-over not already in the retry window; how many were.
+
+        A letter written ends its holder's mail run (#185).
+        """
+        seen = await asyncio.to_thread(_recent_route_keys, GIVE_RETRY_MINUTES)
+        written = 0
+        for route in grants:
+            if (route.holder, route.command) in seen:
+                continue
+            if await asyncio.to_thread(_insert_route, route):
+                written += 1
+                log.info("guild route: %s", route.said)
+                if route.verb == guildroute.MAIL:
+                    self._guild_mail_runs.pop(route.holder, None)
+        return written
 
     async def _walk_route_holders(self, waiting: list, family_names: list) -> None:
         """Walk a waiting route's holder to the nearest mailbox (#185).
@@ -6533,12 +6541,15 @@ class Bridge(discord.Client):
         )
         _log_capped("guild route", plan.notes)
         for run in plan.runs:
+            # Reserved before the await and handed back on a refusal, so the
+            # holder is never read as free while its claim is in flight.
+            self._guild_mail_runs[run.holder] = now
             taken = await self._claim_town_slot(
                 guildroute.MAIL_RUN_CLAIMANT, run.holder, run.aim, cohort=run.cohort,
             )
             if not taken:
+                self._guild_mail_runs.pop(run.holder, None)
                 continue
-            self._guild_mail_runs[run.holder] = now
             self._guild_mail_run_starts.append(now)
             log.info("guild route: %s", run.said)
 
