@@ -530,6 +530,13 @@ class NotableLootIsTheModulesSentence(unittest.TestCase):
         self.assertIn('"q" + item.quality', line)
         self.assertIn("itemTipName(item, item.name, quality)", line)
 
+    def test_a_failed_loot_read_says_so(self):
+        poll = self.code[self.code.index("async function pollChrLoot") :]
+        poll = poll[: poll.index("\n}")]
+        catch = poll[poll.index("} catch (e) {") :]
+        self.assertIn("may be stale", catch)
+        self.assertNotIn("replaceChildren", catch)
+
     def test_entering_the_view_reads_the_loot_too(self):
         poll = self.code[self.code.index("async function pollChronicle") :]
         poll = poll[: poll.index("try {")]

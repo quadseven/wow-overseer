@@ -166,6 +166,43 @@ def _same_step(a: dict, b: dict) -> bool:
     )
 
 
+def _find_story(row: dict, by_guid: dict, everything: list[dict]) -> dict | None:
+    """The story this row belongs to, or None when it starts a new one.
+
+    By guid when the row carries one. Without one, the newest story for the
+    same entry whose current holder is this row's character.
+    """
+    guid = _int(row.get("item_guid"))
+    if guid:
+        return by_guid.get(guid)
+    entry = _int(row.get("subject_id"))
+    who = row.get("character_name")
+    for candidate in reversed(everything):
+        if candidate["entry"] == entry and _holder(candidate["steps"]) == who:
+            return candidate
+    return None
+
+
+def _new_story(row: dict) -> dict:
+    return {
+        "entry": _int(row.get("subject_id")),
+        "name": row.get("subject_name") or "",
+        "quality": _int(row.get("subject_quality")),
+        "guild": row.get("guild") or "",
+        "steps": [],
+    }
+
+
+def _add_step(story: dict, row: dict) -> None:
+    steps = story["steps"]
+    if steps and _same_step(steps[-1], row):
+        steps[-1] = dict(steps[-1], last_seen=row.get("last_seen"))
+        return
+    steps.append(row)
+    if not story["guild"] and row.get("guild"):
+        story["guild"] = row["guild"]
+
+
 def stories(rows: list[dict]) -> list[dict]:
     """Group event rows into item stories, each a list of rows oldest first.
 
@@ -178,33 +215,14 @@ def stories(rows: list[dict]) -> list[dict]:
     by_guid: dict[int, dict] = {}
     everything: list[dict] = []
     for row in ordered:
-        entry = _int(row.get("subject_id"))
-        guid = _int(row.get("item_guid"))
-        story = by_guid.get(guid) if guid else None
-        if story is None and not guid:
-            who = row.get("character_name")
-            for candidate in reversed(everything):
-                if candidate["entry"] == entry and _holder(candidate["steps"]) == who:
-                    story = candidate
-                    break
+        story = _find_story(row, by_guid, everything)
         if story is None:
-            story = {
-                "entry": entry,
-                "name": row.get("subject_name") or "",
-                "quality": _int(row.get("subject_quality")),
-                "guild": row.get("guild") or "",
-                "steps": [],
-            }
+            story = _new_story(row)
             everything.append(story)
+            guid = _int(row.get("item_guid"))
             if guid:
                 by_guid[guid] = story
-        steps = story["steps"]
-        if steps and _same_step(steps[-1], row):
-            steps[-1] = dict(steps[-1], last_seen=row.get("last_seen"))
-            continue
-        steps.append(row)
-        if not story["guild"] and row.get("guild"):
-            story["guild"] = row["guild"]
+        _add_step(story, row)
     return everything
 
 

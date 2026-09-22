@@ -8615,8 +8615,10 @@ async function pollChrLoot() {
       chrloot.appendChild(el("div", "chr-body", p.empty || ""));
     }
   } catch (e) {
-    // Keep the lines already drawn; the head above already says when the
-    // world stops answering.
+    // Keep the lines already drawn and say they may be old, as the head
+    // above does for the story. A quiet fortnight and a failed read must
+    // not look the same.
+    chrlootbasis.textContent = "the loot record could not be read - this may be stale";
   }
 }
 
