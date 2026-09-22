@@ -57,6 +57,7 @@ from datetime import datetime, timedelta
 
 from armory import (QUALITY_NAMES, UNKNOWN_QUALITY, ItemBook,
                     template_tooltip)
+from core import _ALLIANCE_RACES, _HORDE_RACES
 from recap import LOOT_CAVEAT, first_equips, run_state
 
 # --- the vocabulary the module writes, and this reads --------------------
@@ -567,6 +568,7 @@ def assemble_quest(event: dict, events: list[dict], quest_rewards: dict,
         "id": "%s:%d:%s" % (who, qid, _iso(at)),
         "at": _iso(at),
         "title": "Quest: %s" % (event.get("subject_name") or ("quest %d" % qid)),
+        "quest_name": event.get("subject_name") or ("quest %d" % qid),
         "quest": qid,
         "who": who,
         "level": int(event.get("level") or 0),
@@ -961,6 +963,186 @@ def timeline(cards: list[dict]) -> list[dict]:
     return dated[:MAX_CARDS]
 
 
+# --- the story (both families) ------------------------------------------------
+#
+# THE CARDS ABOVE ARE ONE PER CHARACTER PER EVENT, and that is the right shape
+# for evidence and the wrong one for reading. Three of them turning in the same
+# two quests in the same minute was six near-identical cards, and the operator
+# asked what the page was for. The story tells the same rows as sentences: a
+# run keeps its whole card, because a run is the richest thing on the page, and
+# everything else that happened TOGETHER is said once, naming everyone in it.
+#
+# "TOGETHER" IS A WINDOW, NOT A GUESS. Events of one kind whose stamps sit
+# within STORY_WINDOW of the one before are one moment; a gap longer than that
+# starts a new sentence. Ten minutes is a turn-in walk for a party that shares
+# its quests, and short enough that two separate trips are never merged.
+
+STORY_WINDOW = timedelta(minutes=10)
+# The most entries a chapter carries. The page shows them a day at a time.
+STORY_LIMIT = 150
+# How many quest names one sentence lists before it counts the rest.
+STORY_QUESTS = 4
+
+ALLIANCE = "Alliance"
+HORDE = "Horde"
+
+_QUEST_DONE = "quest_done"
+
+
+def names_phrase(names: list[str]) -> str:
+    """"Og", "Og and Bork", "Grog, Og and Bork"."""
+    names = [str(n) for n in names]
+    if len(names) <= 1:
+        return names[0] if names else ""
+    return ", ".join(names[:-1]) + " and " + names[-1]
+
+
+def _quests_phrase(titles: list[str]) -> str:
+    if len(titles) <= STORY_QUESTS:
+        return names_phrase(titles)
+    rest = len(titles) - (STORY_QUESTS - 1)
+    return ", ".join(titles[:STORY_QUESTS - 1]) + " and %d more" % rest
+
+
+def faction_of(race_ids) -> str:
+    """ALLIANCE or HORDE when every race agrees, "" when they do not or none
+    are known. A family is one faction by construction (the game will not
+    group across it), so a mixed answer is a data problem and is left blank
+    rather than guessed."""
+    races = {int(r) for r in race_ids if r is not None}
+    if races and races <= _ALLIANCE_RACES:
+        return ALLIANCE
+    if races and races <= _HORDE_RACES:
+        return HORDE
+    return ""
+
+
+def chapter_heading(family_name: str, faction: str) -> str:
+    """"Grug's family, Alliance". The family key is its head's name."""
+    who = "%s's family" % family_name if family_name else "The family"
+    return who + (", " + faction if faction else "")
+
+
+def _clusters(items: list[dict]) -> list[list[dict]]:
+    """Items of ONE kind, oldest first, chained into moments by STORY_WINDOW."""
+    out: list[list[dict]] = []
+    for item in sorted(items, key=lambda i: i["at"]):
+        if out and item["at"] - out[-1][-1]["at"] <= STORY_WINDOW:
+            out[-1].append(item)
+        else:
+            out.append([item])
+    return out
+
+
+def _order_by_roster(names, roster: list[str]) -> list[str]:
+    place = {name: i for i, name in enumerate(roster)}
+    return sorted(set(names), key=lambda n: (place.get(n, len(place)), n))
+
+
+def _quest_entries(cluster: list[dict], turned_in: bool,
+                   roster: list[str]) -> list[dict]:
+    """One sentence per group of characters who did the same quests."""
+    done: dict[str, list[str]] = {}
+    for item in cluster:
+        titles = done.setdefault(item["who"], [])
+        if item["name"] not in titles:
+            titles.append(item["name"])
+    by_titles: dict[tuple, list[str]] = {}
+    for who in _order_by_roster(done, roster):
+        by_titles.setdefault(tuple(done[who]), []).append(who)
+    at = max(i["at"] for i in cluster)
+    entries = []
+    for titles, who in by_titles.items():
+        verb = ("turned in" if turned_in
+                else "finished the objectives of")
+        tail = "" if turned_in else ", and still has to hand %s in" % (
+            "it" if len(titles) == 1 else "them")
+        if not turned_in and len(who) > 1:
+            tail = tail.replace("has", "have")
+        entries.append({
+            "kind": QUEST, "at": _iso(at), "who": who,
+            "word": KIND_WORDS[QUEST], "hue": KIND_HUES[QUEST],
+            "text": "%s %s %s%s." % (names_phrase(who), verb,
+                                     _quests_phrase(list(titles)), tail),
+        })
+    return entries
+
+
+def _level_entries(cluster: list[dict], roster: list[str]) -> list[dict]:
+    """One sentence per level reached: "Oz, Uzza and Zrog reached level 11"."""
+    top: dict[str, int] = {}
+    for item in cluster:
+        top[item["who"]] = max(top.get(item["who"], 0), item["level"])
+    by_level: dict[int, list[str]] = {}
+    for who in _order_by_roster(top, roster):
+        by_level.setdefault(top[who], []).append(who)
+    at = max(i["at"] for i in cluster)
+    return [{
+        "kind": LEVEL, "at": _iso(at), "who": who,
+        "word": KIND_WORDS[LEVEL], "hue": KIND_HUES[LEVEL],
+        "text": "%s reached level %d." % (names_phrase(who), level),
+    } for level, who in sorted(by_level.items(), reverse=True)]
+
+
+def story(runs: list[dict], quests: list[dict], levels: list[dict],
+          firsts: list[dict], roster: list[str]) -> list[dict]:
+    """The family's story, newest first, as the page draws it.
+
+    `runs` and `firsts` are DRESSED cards; `quests` and `levels` are the raw
+    quest and level cards, every level and not only the milestones, because a
+    story at level 11 is mostly levels. A run entry carries its whole card
+    under `card`; every other entry is one sentence under `text`.
+    """
+    entries: list[dict] = []
+    for run in runs:
+        if run.get("at"):
+            entries.append({"kind": RUN, "at": run["at"], "card": run,
+                            "who": list(run.get("members") or [])})
+    for first in firsts:
+        if first.get("at"):
+            entries.append({
+                "kind": FIRST, "at": first["at"],
+                "who": first["who"] if isinstance(first["who"], list)
+                else [first["who"]],
+                "word": first["word"], "hue": first["hue"],
+                "text": "%s. %s." % (first["title"], first["body"]),
+            })
+    by_kind: dict[str, list[dict]] = {QUEST: [], _QUEST_DONE: [], LEVEL: []}
+    for q in quests:
+        if not q.get("at"):
+            continue
+        by_kind[QUEST if q["turned_in"] else _QUEST_DONE].append({
+            "at": datetime.fromisoformat(q["at"]), "who": q["who"],
+            "name": q.get("quest_name") or q["title"]})
+    for lv in levels:
+        if lv.get("at"):
+            by_kind[LEVEL].append({"at": datetime.fromisoformat(lv["at"]),
+                                   "who": lv["who"], "level": lv["level"]})
+    for cluster in _clusters(by_kind[QUEST]):
+        entries += _quest_entries(cluster, True, roster)
+    for cluster in _clusters(by_kind[_QUEST_DONE]):
+        entries += _quest_entries(cluster, False, roster)
+    for cluster in _clusters(by_kind[LEVEL]):
+        entries += _level_entries(cluster, roster)
+    entries.sort(key=lambda e: (e["at"], -_KIND_ORDER.get(e["kind"], 9)),
+                 reverse=True)
+    return entries[:STORY_LIMIT]
+
+
+def chapter(payload: dict, family_name: str, faction: str) -> dict:
+    """One family's part of the Chronicle, cut from its build_achievements."""
+    return {
+        "family": family_name,
+        "faction": faction,
+        "heading": chapter_heading(family_name, faction),
+        "roster": payload["roster"],
+        "strip": payload["strip"],
+        "story": payload["story"],
+        "empty": ("nothing this family did is on the record yet"
+                  if not payload["story"] else ""),
+    }
+
+
 def build_achievements(run_rows: list[dict], event_rows: list[dict],
                        death_rows: list[dict], items: dict, icons: dict,
                        boss_drops: dict, quest_rewards: dict,
@@ -994,9 +1176,12 @@ def build_achievements(run_rows: list[dict], event_rows: list[dict],
     visits = len(runs)
     runs = [r for r in runs if r["active_from"]]
     quests = quest_cards(events, quest_rewards, items, icons, book)
-    levels = [c for c in level_cards(events) if c["milestone"]]
+    every_level = level_cards(events)
+    levels = [c for c in every_level if c["milestone"]]
     firsts = first_cards(runs, events, items, roster)
     cards = [dress(c) for c in timeline(runs + quests + levels + firsts)]
+    told = story([dress(r) for r in runs], quests, every_level,
+                 [dress(f) for f in firsts], list(roster))
     recorded = any(e["kind"] == BOSS_KILL for e in events)
     done = sum(1 for r in runs if r["gained"])
     tried = sum(1 for r in runs if not r["gained"])
@@ -1014,4 +1199,6 @@ def build_achievements(run_rows: list[dict], event_rows: list[dict],
         # number with a word beside it is a claim, and a claim is judgement.
         "strip": strip(visits, done, tried, len(firsts), recorded),
         "provenance": provenance(recorded),
+        # The same rows told as sentences, newest first (see story()).
+        "story": told,
     }

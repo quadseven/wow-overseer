@@ -1008,7 +1008,7 @@ def _fetch_questlog(names=None) -> dict:
             "done_rows": done_rows, "party_rows": party_rows}
 
 
-def _fetch_achievements() -> dict:
+def _fetch_achievements(names=None) -> dict:
     """What the family has done: runs, events, deaths, and the world rows
     that name what they gained.
 
@@ -1018,9 +1018,14 @@ def _fetch_achievements() -> dict:
     (error 1146) still gets its quests and levels - the runs are the bonus,
     not the condition, in the pattern bridge.py established for the digest.
 
-    Names come from bonds via family.roster(), never from the request.
+    Names come from the roster table (one family at a time, see
+    _achievements) or from bonds via family.roster(), never from the request.
+
+    RUNS ARE THE FAMILY'S OWN, by leader. overseer_dungeon_run has no family
+    column, and with two families in one world an unfiltered read would put
+    the Alliance's runs in the Horde's chapter.
     """
-    names = family.roster()
+    names = family.roster() if names is None else list(names)
     holes = ", ".join(["%s"] * len(names))
     conn = _connect()
     try:
@@ -1031,7 +1036,8 @@ def _fetch_achievements() -> dict:
                     "last_progress_at, ended_at, ended_reason "
                     "FROM overseer_dungeon_run ORDER BY started_at DESC LIMIT 500"
                 )
-                run_rows = list(cur.fetchall())
+                run_rows = [r for r in cur.fetchall()
+                            if r.get("leader_name") in names]
             except pymysql.err.ProgrammingError as exc:
                 if not (exc.args and exc.args[0] == 1146):
                     raise
@@ -3363,13 +3369,29 @@ class Handler(BaseHTTPRequestHandler):
             self._send(503, "application/json", b'{"error": "world unreachable"}')
 
     def _achievements(self, query: dict) -> None:
-        """GET /api/achievements - what the family has done, newest first.
+        """GET /api/achievements - what the families have done, newest first.
 
         No name parameter, for the same reason the other family endpoints
-        take none: WHO the family is belongs to bonds.
+        take none: WHO the families are belongs to the roster table.
+
+        ONE CHAPTER PER FAMILY, Alliance and Horde both. The top level is
+        still the default family's whole payload, so nothing that read it
+        before changes; `chapters` is what the Chronicle draws.
         """
         try:
-            payload = achievements.build_achievements(**_fetch_achievements())
+            _names, default, known = _fetch_family_names()
+            order = [default] + [f for f in known if f != default] if known else [""]
+            payload = None
+            chapters = []
+            for which in order:
+                names = _fetch_family_names(which)[0] if which else family.roster()
+                built = achievements.build_achievements(**_fetch_achievements(names))
+                faction = achievements.faction_of(
+                    p.get("race") for p in _fetch_profiles(names).values())
+                chapters.append(achievements.chapter(built, which, faction))
+                if payload is None:
+                    payload = built
+            payload["chapters"] = chapters
             self._send(200, "application/json", json.dumps(payload).encode())
         except Exception:
             # Same contract as every other poll: the tab keeps the timeline it

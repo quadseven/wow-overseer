@@ -1236,7 +1236,29 @@
                           border-color:var(--ink); }
   #chrfilters button:focus-visible { outline:2px solid var(--accent);
                                      outline-offset:2px; }
-  #chrline { display:grid; gap:10px; }
+  /* ONE CHAPTER PER FAMILY (#135), side by side where there is room for
+     two and stacked on a phone. */
+  #chrline { display:grid; gap:14px; align-items:start;
+             grid-template-columns:repeat(auto-fit, minmax(340px, 1fr)); }
+  .chr-chapter { display:grid; gap:8px; min-width:0; }
+  .chr-chapter-head { font-family:var(--display); font-weight:800;
+                      font-stretch:125%; font-size:1.2rem; line-height:1.2;
+                      color:var(--on-card); }
+  .chr-day { margin:.6rem 0 0; font-family:var(--mono); font-size:11px;
+             font-weight:700; letter-spacing:.14em; text-transform:uppercase;
+             color:var(--on-card-dim); }
+  .chr-line { display:grid; grid-template-columns:auto auto 1fr; gap:.3rem .7rem;
+              align-items:baseline; padding:9px 12px; border-radius:10px;
+              background:var(--card); border:1px solid var(--card-line);
+              font-size:14px; line-height:1.45; color:var(--on-card); }
+  .chr-line .chr-when, .chr-line .chr-kind { font-family:var(--mono);
+              font-size:10px; font-weight:700; letter-spacing:.14em; }
+  #rcfold { margin:1.4rem 0 0; }
+  #rcfold > summary { min-height:44px; display:flex; align-items:center;
+                      cursor:pointer; font-family:var(--mono); font-size:11px;
+                      font-weight:700; letter-spacing:.12em;
+                      text-transform:uppercase; }
+  #rcfold a { color:inherit; }
   /* .chr-card takes the shared card recipe from the furniture above. */
   .chr-top { display:flex; align-items:center; gap:.85rem; flex-wrap:wrap;
              font-family:var(--mono); font-size:11px; font-weight:700;
@@ -3147,17 +3169,23 @@
      device this is read on. -->
 <section id="chronicle">
   <div id="chrhead" class="ds-head">reaching the world...</div>
-  <div id="chrstrip" class="ds-strip"></div>
   <p id="chrnote" hidden></p>
   <div class="ds-rule"><span class="ix">01</span><span class="ln"></span><span class="lb">what is happening right now</span></div>
   <div id="rcbox"></div>
-  <div class="ds-rule"><span class="ix">02</span><span class="ln"></span><span class="lb">what can drop in there</span></div>
-  <p id="rcbasis" class="chr-body"></p>
-  <div id="rcboard"></div>
-  <div class="ds-rule"><span class="ix">03</span><span class="ln"></span><span class="lb">what they have done</span></div>
+  <div class="ds-rule"><span class="ix">02</span><span class="ln"></span><span class="lb">what they have done</span></div>
   <div id="chrfilters"></div>
   <div id="chrline"></div>
   <button id="chrmore">show older</button>
+  <!-- THE LOOT BOARD, FOLDED AWAY (#135). It is gear comparison for the last
+       dungeon run, and it used to sit between "what is happening" and the
+       story, where it filled most of the screen. Upgrades by dungeon are the
+       Dungeons tab's question; this stays for the one-dungeon detail. -->
+  <details id="rcfold">
+    <summary>what could drop in the last dungeon, and who it would suit</summary>
+    <p class="chr-body">Which dungeons hold upgrades for each family is on the <a href="#dungeons">Dungeons tab</a>.</p>
+    <p id="rcbasis" class="chr-body"></p>
+    <div id="rcboard"></div>
+  </details>
 </section>
 <!-- WHERE TO GO NEXT. The order to run dungeons in, one path per
      family, Alliance and Horde both, with the upgrades each step holds for the
@@ -8083,7 +8111,6 @@ setInterval(pollAgenda, 10000);
 const chrsection = document.getElementById("chronicle");
 const chrline = document.getElementById("chrline");
 const chrhead = document.getElementById("chrhead");
-const chrstrip = document.getElementById("chrstrip");
 const chrnote = document.getElementById("chrnote");
 const chrfilters = document.getElementById("chrfilters");
 const chrmore = document.getElementById("chrmore");
@@ -8091,7 +8118,7 @@ const chrmore = document.getElementById("chrmore");
 // than shared so that neither view's block depends on the other existing.
 const CHR_ICON_HOST = "https://wow.zamimg.com/images/wow/icons/large/";
 const CHR_PAGE = 40;
-const chr = { cards: [], filter: "all", shown: CHR_PAGE };
+const chr = { chapters: [], filter: "all", shown: CHR_PAGE };
 
 const CHR_FILTERS = [["all", "everything"], ["run", "dungeon runs"],
                      ["quest", "quests"], ["level", "levels"], ["first", "firsts"]];
@@ -8116,6 +8143,25 @@ function chrWhen(iso) {
   const time = d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
   if (sameDay) return "today " + time;
   return d.toLocaleDateString([], { month: "short", day: "numeric" }) + " " + time;
+}
+
+// The story is grouped under the reader's own days, which is the same clock
+// exception chrWhen is: the server cannot know where midnight falls here.
+function chrDay(iso) {
+  const d = new Date(iso);
+  if (isNaN(d)) return "";
+  const today = new Date();
+  const yesterday = new Date(today);
+  yesterday.setDate(today.getDate() - 1);
+  if (d.toDateString() === today.toDateString()) return "today";
+  if (d.toDateString() === yesterday.toDateString()) return "yesterday";
+  return d.toLocaleDateString([], { weekday: "long", month: "short", day: "numeric" });
+}
+
+function chrTime(iso) {
+  const d = new Date(iso);
+  if (isNaN(d)) return "";
+  return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 }
 
 function chrSect(card, label) {
@@ -8237,62 +8283,71 @@ function chrRunCard(c) {
   return card;
 }
 
-function chrQuestCard(c) {
-  const card = chrCard(c);
-  if (c.rewards.length) {
-    chrSect(card, c.turned_in ? "rewards" : "on offer");
-    const grid = el("div", "loot");
-    for (const item of c.rewards) grid.appendChild(chrItem(item));
-    card.appendChild(grid);
-  }
-  if (c.choice_unknown) {
-    card.appendChild(el("div", "note",
-      "this quest offered a choice of reward, and nothing equipped afterwards says which was taken"));
-  }
-  if (c.level_gained) {
-    card.appendChild(el("div", "note", "and reached level " + c.level_gained));
-  }
-  return card;
+// ONE SENTENCE OF THE STORY (#135). The time is the reader's; the kind word,
+// its hue and the sentence itself are achievements.story's.
+function chrLine(e) {
+  const row = el("div", "chr-line");
+  row.appendChild(el("span", "chr-when", chrTime(e.at)));
+  row.appendChild(el("span", "chr-kind h-" + e.hue, e.word));
+  row.appendChild(el("span", "chr-text", e.text));
+  return row;
 }
-
-// A level and a first carry nothing under the head. They are one fact each,
-// and the head is where a fact goes.
-function chrPlainCard(c) {
-  return chrCard(c);
-}
-
-const CHR_DRAW = { run: chrRunCard, quest: chrQuestCard, level: chrPlainCard,
-                   first: chrPlainCard };
 
 // THE STAT STRIP. Five tiles, and not one of them is counted here: the
 // payload's `strip` arrives as label/value pairs, including the last one,
 // which is a WORD rather than a number because boss kills are inferred from
 // loot and a count there would present a guess as a measurement.
-function renderChrStrip(tiles) {
-  chrstrip.replaceChildren();
+function renderChrStrip(strip, tiles) {
+  strip.replaceChildren();
   for (const tile of tiles || []) {
     const box = el("div", "ds-tile");
     box.appendChild(el("span", "v", tile.value));
     box.appendChild(el("span", "k", tile.label));
-    chrstrip.appendChild(box);
+    strip.appendChild(box);
   }
+}
+
+// ONE CHAPTER PER FAMILY, in the order the server sent them (#135). A run
+// keeps its whole card; everything else is one sentence under the reader's
+// day. The filter and the page length apply to each chapter alike.
+function chrChapter(ch) {
+  const box = el("div", "chr-chapter");
+  box.appendChild(el("h3", "chr-chapter-head", ch.heading));
+  const strip = el("div", "ds-strip");
+  renderChrStrip(strip, ch.strip);
+  box.appendChild(strip);
+  const wanted = chr.filter === "all"
+    ? ch.story : ch.story.filter(e => e.kind === chr.filter);
+  if (!wanted.length) {
+    box.appendChild(el("div", "chr-body", ch.empty || "nothing of this kind yet"));
+  }
+  let day = null;
+  for (const e of wanted.slice(0, chr.shown)) {
+    const d = chrDay(e.at);
+    if (d !== day) {
+      box.appendChild(el("div", "chr-day", d));
+      day = d;
+    }
+    box.appendChild(e.kind === "run" ? chrRunCard(e.card) : chrLine(e));
+  }
+  return { box, more: wanted.length > chr.shown };
 }
 
 function renderChronicle() {
   for (const b of chrfilters.querySelectorAll("button")) {
     b.classList.toggle("on", b.dataset.filter === chr.filter);
   }
-  const wanted = chr.filter === "all"
-    ? chr.cards : chr.cards.filter(c => c.kind === chr.filter);
   chrline.replaceChildren();
-  if (!wanted.length) {
+  let more = false;
+  for (const ch of chr.chapters) {
+    const drawn = chrChapter(ch);
+    chrline.appendChild(drawn.box);
+    more = more || drawn.more;
+  }
+  if (!chr.chapters.length) {
     chrline.appendChild(el("div", "chr-body", "nothing here yet"));
   }
-  for (const c of wanted.slice(0, chr.shown)) {
-    const draw = CHR_DRAW[c.kind];
-    if (draw) chrline.appendChild(draw(c));
-  }
-  chrmore.style.display = wanted.length > chr.shown ? "block" : "none";
+  chrmore.style.display = more ? "block" : "none";
 }
 
 async function pollChronicle() {
@@ -8300,8 +8355,7 @@ async function pollChronicle() {
     const r = await fetch(u("/api/achievements"));
     if (!r.ok) throw new Error(r.status);
     const p = await r.json();
-    chr.cards = p.cards;
-    renderChrStrip(p.strip);
+    chr.chapters = p.chapters || [];
     chrnote.textContent = p.provenance || "";
     chrnote.hidden = !p.provenance;
     chrhead.textContent = "read " + new Date().toLocaleTimeString();
