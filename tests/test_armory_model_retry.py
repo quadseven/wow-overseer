@@ -7,6 +7,7 @@ portraits for good while every card below them drew.
 
 Tickets: #168.
 """
+
 import pathlib
 import unittest
 
@@ -15,11 +16,10 @@ PAGE = (HERE / "index.html").read_text(encoding="utf-8")
 
 
 class AFailedModelIsTriedAgain(unittest.TestCase):
-
     def setUp(self):
-        body = PAGE[PAGE.index("async function renderModel(c, m)"):]
-        self.body = body[:body.index("\n}\n")]
-        self.catch = self.body[self.body.rindex("} catch (e) {"):]
+        body = PAGE[PAGE.index("async function renderModel(c, m)") :]
+        self.body = body[: body.index("\n}\n")]
+        self.catch = self.body[self.body.rindex("} catch (e) {") :]
 
     def test_the_catch_forgets_the_key(self):
         self.assertIn("c.modelKey = null;", self.catch)
