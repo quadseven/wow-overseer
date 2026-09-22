@@ -115,6 +115,16 @@ def dungeon_job(keyword: str) -> str | None:
     return None
 
 
+def is_dungeon_job(job) -> bool:
+    """Whether `job` is a dungeon job, bare or naming its portal (#206).
+
+    The same test mod-overseer's IsDungeonJob makes: `dungeon` or
+    `dungeon:<keyword>`, matched whole, so `quest` or an empty job is not one.
+    """
+    text = str(job or "").strip().lower()
+    return text == "dungeon" or text.startswith("dungeon:")
+
+
 # The modes that change behaviour. Every other key in MODES is accepted,
 # stored, and said back honestly as "not built yet" - see `describe`. Kept as
 # its own constant, not inferred from a "the code exists" check, so extending

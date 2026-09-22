@@ -7,7 +7,9 @@ from typing import Iterable
 
 import disposition
 import gear
+import jobs
 import raidlineup
+import travel
 
 # The trade-range judgement, re-exported for `handover` (#189) so there is one
 # opinion about "standing together" and gear keeps its single importer.
@@ -590,6 +592,309 @@ def bag_purchases(buyers, offers) -> tuple:
             )
         )
     return tuple(purchases), tuple(notes)
+
+
+# ---------------------------------------------------------------------------
+# WALKING TO A VENDOR THAT STOCKS A BAG (#206)
+#
+# `bag_purchases` buys only where the family already stands. Measured on the
+# dev realm 2026-09-22: the second family stood in Ratchet at vendor 8307,
+# which sells no bags, and logged "no vendor in reach stocks a bag" every
+# cycle while Jazzik (creature 3498), forty yards away, sold the Small Brown
+# Pouch and the Brown Leather Satchel. Nothing sent them there, and the
+# dungeon coordinator will not open a run while a member has three or fewer
+# free slots, so the family's first dungeon waited on a pouch.
+#
+# The trip is one aim on the leader, written as the vendor's bare creature
+# entry through the town slot. mod-overseer resolves that to the nearest
+# spawn this character may deal with, holds the leader at the counter on
+# arrival (CounterRoleForNpcFlags), and the purchase pass buys there on its
+# next cycle, exactly as it would at any other counter.
+
+# How far the family may be walked for a bag: a walk across a town or to the
+# next settlement over, never a cross-zone trip. Measured on map 1: Jazzik is
+# 48 yards from the Ratchet counter the family stood at, and the Crossroads
+# bag vendors (3487, 3481) are 309 and 389 yards from where the second family
+# stood an hour later. The next ones out (K'waii, Jark) are over 1,200 yards
+# from either spot, which is a journey, not an errand.
+BAG_VENDOR_MAX_YARDS = 500.0
+
+# Within this many yards of the chosen vendor's spawn the leader is already
+# there, and re-aiming would only make mod-overseer arrive, release and be
+# asked again. A follower still outside the counter's reach closes the gap by
+# following. Wider than the 8-yard counter box because a spawn row is where a
+# vendor was placed, not where it stands after wandering.
+BAG_VENDOR_HERE_YARDS = 10.0
+
+# How far a home may be from where the leader stands and still be "this
+# town". Mirrors mod-overseer's CAMPAIGN_HOME_TOWN_YARDS (#348): comfortably
+# wider than a town and far narrower than the gap to the next one.
+CAMPAIGN_HOME_TOWN_YARDS = 250.0
+
+
+@dataclass(frozen=True)
+class BagVendor:
+    """One creature entry that stocks a general bag, and its nearest spawn.
+
+    Read from acore_world.npc_vendor joined to the creature spawns and
+    item_template (class 1, subclass 0), never hand-authored. `yards` is the
+    2D distance from the leader, the measure ResolveTravelTarget ranks by.
+    """
+
+    entry: int
+    name: str
+    map_id: int
+    yards: float
+    faction: int = 0
+    offers: tuple = ()
+
+
+def bag_vendors_from_rows(rows) -> tuple:
+    """BagVendor per creature entry, from one row per (vendor, bag)."""
+    grouped: dict = {}
+    for row in rows or ():
+        try:
+            entry = int(row["entry"])
+            offer = BagOffer(
+                entry=int(row["item"]),
+                name=str(row.get("item_name") or ""),
+                slots=int(row["slots"]),
+                price=int(row["price"]),
+            )
+            spot = (
+                str(row.get("name") or ""),
+                int(row["map_id"]),
+                float(row["yards"]),
+                int(row.get("faction") or 0),
+            )
+        except (KeyError, TypeError, ValueError):
+            continue
+        if entry <= 0 or offer.price <= 0 or offer.slots <= 0:
+            continue
+        seen = grouped.setdefault(entry, [spot, []])
+        seen[1].append(offer)
+    return tuple(
+        BagVendor(
+            entry=entry,
+            name=spot[0],
+            map_id=spot[1],
+            yards=spot[2],
+            faction=spot[3],
+            offers=tuple(sorted(offers, key=lambda o: (o.price, -o.slots, o.entry))),
+        )
+        for entry, (spot, offers) in grouped.items()
+    )
+
+
+@dataclass(frozen=True)
+class Standing:
+    """Where one family member is, whether it is fighting, and its home.
+
+    `map_id` is None when the snapshot has no fresh row. `home_map` is None
+    when character_homebind has no row, which reads as "not bound here".
+    """
+
+    name: str
+    map_id: int | None = None
+    x: float = 0.0
+    y: float = 0.0
+    in_combat: bool = False
+    job: str = ""
+    home_map: int | None = None
+    home_x: float = 0.0
+    home_y: float = 0.0
+
+
+def _number(value, cast, default=None):
+    try:
+        return default if value is None else cast(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def standing_from_rows(rows) -> dict:
+    """name -> Standing, from bridge._fetch_bag_trip_facts rows."""
+    out = {}
+    for row in rows or ():
+        name = str(row.get("name") or "")
+        if not name:
+            continue
+        out[name] = Standing(
+            name=name,
+            map_id=_number(row.get("map_id"), int),
+            x=_number(row.get("pos_x"), float, 0.0),
+            y=_number(row.get("pos_y"), float, 0.0),
+            in_combat=bool(_number(row.get("in_combat"), int, 0)),
+            job=str(row.get("job") or ""),
+            home_map=_number(row.get("home_map"), int),
+            home_x=_number(row.get("home_x"), float, 0.0),
+            home_y=_number(row.get("home_y"), float, 0.0),
+        )
+    return out
+
+
+def _yards(ax, ay, bx, by) -> float:
+    return ((float(ax) - float(bx)) ** 2 + (float(ay) - float(by)) ** 2) ** 0.5
+
+
+def bind_pending(standing: dict, leader: str) -> tuple:
+    """Names whose campaign bind may not have landed yet (#206, mod-overseer#583).
+
+    A dungeon campaign walks each member to the campaign's inn and holds it
+    there to bind, and a vendor aim taken meanwhile cancels that hold
+    (mod-overseer#583). The bridge cannot read the campaign's inn, so it asks
+    the question it can answer: a member on a dungeon job whose home is not in
+    the town the leader stands in may still be waiting for that bind. Once
+    character_homebind shows this town, the bind has landed and a town errand
+    no longer competes with it. Unknown reads count as pending.
+    """
+    here = standing.get(leader)
+    out = []
+    for name in sorted(standing):
+        member = standing[name]
+        if not jobs.is_dungeon_job(member.job):
+            continue
+        if (
+            here is None
+            or here.map_id is None
+            or member.home_map is None
+            or int(member.home_map) != int(here.map_id)
+            or _yards(member.home_x, member.home_y, here.x, here.y)
+            > CAMPAIGN_HOME_TOWN_YARDS
+        ):
+            out.append(name)
+    return tuple(out)
+
+
+@dataclass(frozen=True)
+class BagTrip:
+    """The one walk to a bag vendor, or why none is taken.
+
+    `target` is the `travel_npc` value (a bare creature entry) and is '' when
+    no aim should be written; `why_not` is never empty then.
+    """
+
+    target: str = ""
+    vendor: BagVendor | None = None
+    buyers: tuple = ()
+    why_not: str = ""
+
+
+def bag_vendor_trip(
+    buyers,
+    vendors,
+    *,
+    leader: str,
+    standing: dict,
+    in_run: bool = False,
+    max_yards: float = BAG_VENDOR_MAX_YARDS,
+) -> BagTrip:
+    """Where to walk the family so a member who wants a bag can buy one.
+
+    `buyers` are the BagBuyers whose own reach stocks no bag. `vendors` are
+    BagVendors measured from the leader. The nearest vendor within
+    `max_yards` on the leader's map at which at least one buyer can afford
+    that vendor's cheapest bag (with the level reserve kept back and a free
+    slot for it to land in) is chosen; ties go to the lower entry.
+
+    NEVER OVER SOMETHING MORE IMPORTANT. No trip while a dungeon run is in
+    progress, while anybody in the family is fighting, or while a campaign
+    bind may still be pending (`bind_pending`). No trip either once nobody
+    who can afford a bag lacks one, which is what stops it repeating.
+    """
+    if not leader:
+        return BagTrip(
+            why_not="nobody leads the family, and a follower aimed "
+            "at a vendor does not walk"
+        )
+    if in_run:
+        return BagTrip(
+            why_not="a dungeon run is in progress; the bag trip waits until it ends"
+        )
+    fighting = sorted(name for name, s in standing.items() if s.in_combat)
+    if fighting:
+        return BagTrip(why_not="%s in combat; the bag trip waits" % ", ".join(fighting))
+    pending = bind_pending(standing, leader)
+    if pending:
+        return BagTrip(
+            why_not="%s on a dungeon job and not yet bound in this town; the "
+            "bag trip waits for the campaign bind to land (mod-overseer#583)"
+            % ", ".join(pending)
+        )
+    here = standing.get(leader)
+    if here is None or here.map_id is None:
+        return BagTrip(why_not="nothing can say where %s is standing" % leader)
+    map_id = int(here.map_id)
+    walkers = []
+    for buyer in sorted(buyers or (), key=lambda b: b.name):
+        if buyer.open_positions <= 0 or buyer.free_slots < 1:
+            continue
+        spot = standing.get(buyer.name)
+        if spot is None or spot.map_id is None or int(spot.map_id) != map_id:
+            continue
+        walkers.append(buyer)
+    if not walkers:
+        return BagTrip(
+            why_not="nobody on %s's map wants a bag and has a free "
+            "slot for one" % leader
+        )
+    usable = sorted(
+        (
+            v
+            for v in (vendors or ())
+            if int(v.map_id) == map_id and float(v.yards) <= max_yards and v.offers
+        ),
+        key=lambda v: (float(v.yards), int(v.entry)),
+    )
+    if not usable:
+        return BagTrip(
+            why_not="no vendor within %d yards of %s on map %d "
+            "stocks a bag" % (int(max_yards), leader, map_id)
+        )
+    for vendor in usable:
+        served = tuple(
+            b.name
+            for b in walkers
+            if bag_purchase_allowed(
+                b.money, vendor.offers[0].price, True, reserve=bag_reserve(b.level)
+            )
+        )
+        if not served:
+            continue
+        if float(vendor.yards) <= BAG_VENDOR_HERE_YARDS:
+            return BagTrip(
+                vendor=vendor,
+                buyers=served,
+                why_not="%s already stands at %s (creature %d); the purchase "
+                "waits for the buyers to reach the counter"
+                % (leader, vendor.name, vendor.entry),
+            )
+        target = travel.resolve(str(int(vendor.entry)))
+        if not target or len(target) > travel.COLUMN_WIDTH:
+            return BagTrip(
+                why_not="creature %r cannot be named in travel_npc" % (vendor.entry,)
+            )
+        return BagTrip(target=target, vendor=vendor, buyers=served)
+    return BagTrip(
+        why_not="nobody who wants a bag can spare the price of the cheapest "
+        "one within %d yards and keep the level reserve" % int(max_yards)
+    )
+
+
+def bag_trip_report(trip: BagTrip, leader: str) -> str:
+    """One log sentence naming the vendor, its faction and who it serves."""
+    if not trip.target:
+        return trip.why_not
+    vendor = trip.vendor
+    return "%s is aimed at creature %s (%s, faction %d, %d yards) so %s can buy %s" % (
+        leader,
+        trip.target,
+        vendor.name,
+        vendor.faction,
+        int(vendor.yards),
+        ", ".join(trip.buyers),
+        vendor.offers[0].name,
+    )
 
 
 def item_binding(row) -> str:

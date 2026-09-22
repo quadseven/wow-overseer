@@ -220,12 +220,12 @@ class TheBridgeRunsEveryFamily(unittest.TestCase):
         )
         self.assertLess(
             body.index("self._hand_bags_once("),
-            body.index("self._buy_bags_once(list(c.names))"),
+            body.index("self._bag_purchase_and_trip(list(c.names), c)"),
         )
 
     def test_this_family_buys_bags_too(self):
         body = _statements("    async def _economy_for_every_family(")
-        self.assertIn("await self._buy_bags_once(own)", body)
+        self.assertIn("await self._bag_purchase_and_trip(own)", body)
 
     def test_another_family_walks_its_own_leader_on_its_own_slot(self):
         body = _statements("    async def _vendor_once(")
