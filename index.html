@@ -5984,6 +5984,14 @@ function showView(v) {
     pollRaid();
     return;
   }
+  if (isLineup) {
+    // The Raid view's treatment and reasons. #87 left this branch out, so
+    // the tab never fetched and sat on its placeholder for ever.
+    closePanel();
+    stopBroadcasts();
+    pollLineup();
+    return;
+  }
   if (isDec) {
     // The same treatment, for the same two reasons: the panel is a map thing
     // that would keep a second player alive off screen, and thirty seconds
@@ -6361,6 +6369,7 @@ async function pollRaid() {
 // only while the tab is open, and the guard at the top of pollRaid is what
 // makes that true even for the call showView makes on the way in.
 setInterval(() => { if (view === RAID_VIEW) pollRaid(); }, 60000);
+setInterval(() => { if (view === LINEUP_VIEW) pollLineup(); }, 60000);
 
 
 // --- the item tooltip, on every gear name (infra#3501) -------------------
