@@ -38,6 +38,7 @@ COPY core.py bridge.py voice.py transform.py \
      guildcraft.py tradespec.py guildbank.py guildshare.py recruit.py \
      bag_pressure.py bag_upgrade.py bag_economy.py disposition.py bagfate.py \
      item_plan.py \
+     jev.py jev_items.py \
      bank.py \
      mailrun.py \
      realm.py basepath.py watchwall.py realmnav.py \
