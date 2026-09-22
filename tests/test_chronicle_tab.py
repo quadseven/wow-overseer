@@ -254,6 +254,8 @@ class TheChronicle(unittest.TestCase):
             "map_server.py",
             "tests/test_achievements.py",
             "tests/test_chronicle_tab.py",
+            "lootstory.py",
+            "tests/test_lootstory.py",
         ):
             self.assertNotIn(
                 chr(0x2014), (HERE / name).read_text(encoding="utf-8"), name
@@ -465,6 +467,73 @@ class BothFamiliesAndNoGearInTheWay(unittest.TestCase):
 
     def test_there_is_no_single_family_strip_above_the_chapters(self):
         self.assertNotIn('id="chrstrip"', self.section)
+
+
+class NotableLootIsTheModulesSentence(unittest.TestCase):
+    """mod-overseer#567: every rare, epic and legendary item the families'
+    guilds looted, who it went to and when it went on. The sentence is
+    lootstory.py's; this block draws it."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.page = (HERE / "index.html").read_text(encoding="utf-8")
+        cls.server = (HERE / "map_server.py").read_text(encoding="utf-8")
+        start = cls.page.index(BANNER)
+        cls.code = code(cls.page[start : cls.page.index(NEXT, start)])
+        section = cls.page[cls.page.index('<section id="chronicle">') :]
+        cls.section = section[: section.index("</section>")]
+
+    def test_the_endpoint_is_routed_and_built_by_lootstory(self):
+        self.assertIn('"/api/loot": _loot,', self.server)
+        self.assertIn("lootstory.build_loot(", self.server)
+        self.assertIn('fetch(u("/api/loot"))', self.code)
+
+    def test_a_missing_story_column_degrades_rather_than_failing(self):
+        fetch = self.server[self.server.index("def _fetch_loot") :]
+        fetch = fetch[: fetch.index("\ndef ")]
+        self.assertIn("_guarded(", fetch)
+        self.assertIn('fallback=base.format(story="")', fetch)
+
+    def test_the_section_sits_below_the_story_and_above_the_fold(self):
+        self.assertLess(
+            self.section.index('id="chrline"'), self.section.index('id="chrloot"')
+        )
+        self.assertLess(
+            self.section.index('id="chrloot"'),
+            self.section.index('<details id="rcfold">'),
+        )
+
+    def test_the_line_and_the_basis_are_not_composed_here(self):
+        line = self.code[self.code.index("function chrLootLine") :]
+        line = line[: line.index("\n}")]
+        self.assertIn("s.line", line)
+        self.assertIn("p.basis", self.code)
+        self.assertIn("p.empty", self.code)
+        loot = self.code[
+            self.code.index("function chrLootLine") : self.code.index(
+                "async function pollChronicle"
+            )
+        ]
+        for invented in (
+            "looted",
+            "traded",
+            "mailed",
+            "equipped",
+            "overseer command",
+            " roll",
+        ):
+            self.assertNotIn(invented, loot, invented)
+
+    def test_the_item_is_drawn_in_the_armorys_quality_colour(self):
+        line = self.code[self.code.index("function chrLootLine") :]
+        line = line[: line.index("\n}")]
+        self.assertIn('"q" + item.quality', line)
+        self.assertIn("itemTipName(item, item.name, quality)", line)
+
+    def test_entering_the_view_reads_the_loot_too(self):
+        poll = self.code[self.code.index("async function pollChronicle") :]
+        poll = poll[: poll.index("try {")]
+        self.assertIn("pollChrLoot();", poll)
 
 
 if __name__ == "__main__":

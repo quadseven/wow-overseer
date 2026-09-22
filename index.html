@@ -1277,6 +1277,15 @@
               font-size:14px; line-height:1.45; color:var(--on-card); }
   .chr-line .chr-when, .chr-line .chr-kind { font-family:var(--mono);
               font-size:10px; font-weight:700; letter-spacing:.14em; }
+  /* ONE NOTABLE ITEM'S STORY (mod-overseer#567). The item name in its
+     quality colour beside the reader's clock, and the sentence under both,
+     so a long story wraps as prose instead of squeezing a column. */
+  .chr-loot { grid-template-columns:auto 1fr; margin-top:6px; }
+  .chr-loot .chr-loot-item { display:flex; flex-wrap:wrap; align-items:baseline;
+                             gap:.3rem .6rem; min-width:0; }
+  .chr-loot .who { font-family:var(--mono); font-size:10px; font-weight:700;
+                   letter-spacing:.14em; color:var(--on-card-dim); }
+  .chr-loot .chr-text { grid-column:1 / -1; }
   #rcfold { margin:1.4rem 0 0; }
   #rcfold > summary { min-height:44px; display:flex; align-items:center;
                       cursor:pointer; font-family:var(--mono); font-size:11px;
@@ -3274,6 +3283,12 @@
   <div id="chrfilters"></div>
   <div id="chrline"></div>
   <button id="chrmore">show older</button>
+  <!-- NOTABLE LOOT (mod-overseer#567). Every rare, epic and legendary item
+       the families' guilds looted, who it went to and when it went on, one
+       sentence per item. The sentences come from lootstory.py. -->
+  <div class="ds-rule"><span class="ix">03</span><span class="ln"></span><span class="lb">notable loot, and where it went</span></div>
+  <p id="chrlootbasis" class="chr-body"></p>
+  <div id="chrloot"></div>
   <!-- THE LOOT BOARD, FOLDED AWAY (#135). It is gear comparison for the last
        dungeon run, and it used to sit between "what is happening" and the
        story, where it filled most of the screen. Upgrades by dungeon are the
@@ -8568,7 +8583,45 @@ function renderChronicle() {
   chrmore.style.display = more ? "block" : "none";
 }
 
+// NOTABLE LOOT (mod-overseer#567). One line per item: the reader's clock,
+// the item in its quality colour, the guild, and lootstory.py's sentence.
+// Nothing here says what happened to the item; the payload does.
+const chrloot = document.getElementById("chrloot");
+const chrlootbasis = document.getElementById("chrlootbasis");
+
+function chrLootLine(s) {
+  const row = el("div", "chr-line chr-loot");
+  row.appendChild(el("span", "chr-when", chrWhen(s.at)));
+  const head = el("div", "chr-loot-item");
+  const item = s.item;
+  const quality = item.quality === null || item.quality === undefined
+    ? "qunknown" : "q" + item.quality;
+  head.appendChild(itemTipName(item, item.name, quality));
+  if (s.guild) head.appendChild(el("span", "who", s.guild));
+  row.appendChild(head);
+  row.appendChild(el("span", "chr-text", s.line));
+  return row;
+}
+
+async function pollChrLoot() {
+  try {
+    const r = await fetch(u("/api/loot"));
+    if (!r.ok) throw new Error(r.status);
+    const p = await r.json();
+    chrlootbasis.textContent = p.basis || "";
+    chrloot.replaceChildren();
+    for (const s of p.stories || []) chrloot.appendChild(chrLootLine(s));
+    if (!(p.stories || []).length) {
+      chrloot.appendChild(el("div", "chr-body", p.empty || ""));
+    }
+  } catch (e) {
+    // Keep the lines already drawn; the head above already says when the
+    // world stops answering.
+  }
+}
+
 async function pollChronicle() {
+  pollChrLoot();
   try {
     const r = await fetch(u("/api/achievements"));
     if (!r.ok) throw new Error(r.status);
