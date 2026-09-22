@@ -51,6 +51,7 @@ import os
 from dataclasses import dataclass, field
 
 import bonds
+import bag_pressure
 import family
 import raidlineup
 from core import _ALLIANCE_RACES, _HORDE_RACES
@@ -1273,6 +1274,78 @@ def _build_gear(slots: list[dict]) -> dict:
     }
 
 
+# --- the weakest slot (#174) ----------------------------------------------
+# Which worn slot is furthest below the character's level, by gear.py's own
+# rule (gear.weakest_slot, through bag_pressure), so the Armory and the guild hand-over pass that
+# prefers filling it cannot disagree. The paper doll's slot names map onto
+# gear's buckets here; rings, necks and trinkets have no bucket and are not
+# judged, the same refusal gear.py makes.
+_GEAR_BUCKET_BY_SLOT = {
+    "head": "head",
+    "shoulders": "shoulder",
+    "chest": "chest",
+    "waist": "waist",
+    "legs": "legs",
+    "feet": "feet",
+    "wrists": "wrist",
+    "hands": "hands",
+    "back": "back",
+    "main hand": "main_hand",
+    "off hand": "off_hand",
+    "ranged": "ranged",
+}
+
+# How far behind, in gear.weakest_slot's weighted item levels, a slot has to
+# be before the family's worst one earns a chip. A level 60 in item level 50
+# boots is not news; an item level 30 weapon at 60 (a shortfall of 60) is.
+WEAKEST_FLAG = 20
+WEAKEST_KEY = "weakest slot"
+
+
+def weakest_payload(name: str, class_id, level, slots: list[dict]):
+    """gear.weakest_slot over one member's paper doll, or None."""
+    equipped = {}
+    for s in slots:
+        bucket = _GEAR_BUCKET_BY_SLOT.get(s["slot"])
+        if bucket and not s["empty"] and s.get("item_level") is not None:
+            equipped[bucket] = int(s["item_level"])
+    try:
+        weakest = bag_pressure.weakest_slot_of(name, class_id, level, equipped)
+    except (TypeError, ValueError):
+        return None
+    if weakest is None:
+        return None
+    return {
+        "slot": weakest.label,
+        "item_level": weakest.item_level,
+        "level": weakest.level,
+        "shortfall": weakest.shortfall,
+        "said": weakest.said,
+    }
+
+
+def flag_weakest(members: list[dict]) -> list[str]:
+    """Put a chip on every member whose weakest slot is badly behind.
+
+    Only past WEAKEST_FLAG, so the header stays quiet on a character with
+    nothing far behind. Every member and not only the worst one: measured on
+    the dev family 2026-09-22, four of the five carried a weapon between item
+    level 24 and 30 at level 60, and naming one of them would hide the other
+    three. Returns the names it flagged, worst first.
+    """
+    behind = [
+        m
+        for m in members
+        if m.get("weakest") and m["weakest"]["shortfall"] >= WEAKEST_FLAG
+    ]
+    behind.sort(key=lambda m: (-m["weakest"]["shortfall"], m["name"]))
+    for m in behind:
+        m["gear"]["chips"].append(
+            {"key": WEAKEST_KEY, "value": m["weakest"]["said"], "tone": TONE_CAUTION}
+        )
+    return [m["name"] for m in behind]
+
+
 def _stat(key: str, label: str, value, note: str | None = None) -> dict:
     return {
         "key": key,
@@ -1671,6 +1744,9 @@ def _member(
         "gear": _build_gear(slots),
         "stats": stats,
         "spec": _build_spec(class_id, char_row["level"], in_play, book),
+        "weakest": weakest_payload(
+            char_row["name"], class_id, char_row["level"], slots
+        ),
     }
 
 
@@ -1708,27 +1784,11 @@ def party_roles(members: list[dict]) -> dict[str, str]:
 
     Present members only; in roster order within a class band, so the lead
     is chosen first when two could do it. A member with no saved character
-    has no class to read and gets no role.
+    has no class to read and gets no role. The packing itself is
+    raidlineup.party_roles, which gear.py's role guard reads as well (#174),
+    so the Armory and the hand-off passes cannot disagree about who tanks.
     """
-    pool = [m for m in members if m.get("present")]
-
-    def take(allowed) -> dict | None:
-        for m in pool:
-            if m.get("class_id") in allowed:
-                pool.remove(m)
-                return m
-        return None
-
-    roles = {}
-    tank = take(raidlineup.PURE_TANKS) or take(raidlineup.TANKS)
-    if tank:
-        roles[tank["name"]] = TANK
-    healer = take(raidlineup.PURE_HEALERS) or take(raidlineup.HEALERS)
-    if healer:
-        roles[healer["name"]] = HEALER
-    for m in pool:
-        roles[m["name"]] = DAMAGE
-    return roles
+    return raidlineup.party_roles([m for m in members if m.get("present")])
 
 
 def _style(m: dict) -> str:
@@ -2047,6 +2107,7 @@ def build_armory(
                 items,
             )
         )
+    flag_weakest(members)
     sides = family_sides(_assign_roles(members, families))
     pairs = pair_by_role(
         sides[0]["members"] if sides else [],

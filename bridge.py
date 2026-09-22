@@ -43,6 +43,7 @@ import goals
 import bonds
 import guildbank
 import guildshare
+import guildroute
 import craft
 import craft_rhythm
 import gatheraim
@@ -6363,6 +6364,12 @@ class Bridge(discord.Client):
             log.info("guildshare: %s stopped asking %s - %s",
                      holder, taker, refusal)
         await self._guild_gear_share_once(names, roster)
+        try:
+            await self._guild_route_once(names, roster)
+        except Exception:
+            # Its own writer and its own failure: a broken route read must not
+            # stop the surplus below from going out.
+            log.exception("guild route pass failed; retrying next cycle")
         if not share.gifts:
             return
 
@@ -6426,6 +6433,55 @@ class Bridge(discord.Client):
                      grant.reason)
         log.info("guild gear: queued %d/%d hand-off(s), %d already queued",
                  len(fresh), len(plan.grants), len(plan.grants) - len(fresh))
+
+    async def _guild_route_once(self, family_names: list, roster: list) -> None:
+        """Hand a guildmate's loot to the guild member who gains most (#174).
+
+        SQL remains a fact fetch; gear.py decides who, and whether it can
+        happen in the world now, through bag_pressure's adapters. Only a trade between two characters already
+        standing together, or a letter posted by a holder already at a
+        mailbox, is ever written - never kind='give', which would move the
+        item across a continent in one database write. See gear.py's banner
+        over `route_plan`.
+        """
+        family = set(family_names)
+        online = [m for m in roster if m.online]
+        holders = [str(m.name) for m in online if str(m.name) not in family]
+        if not holders:
+            return
+        gear_rows = await asyncio.to_thread(_fetch_guild_held_gear, holders)
+        if not gear_rows:
+            return
+        names = [str(m.name) for m in online]
+        equipped = await asyncio.to_thread(_fetch_family_equipped, names)
+        decided = bag_pressure.guild_routes_from_rows(
+            gear_rows, equipped, family_names, roster,
+        )
+        _log_capped("guild route", decided.notes)
+        if not decided.grants:
+            return
+        positions = await asyncio.to_thread(_fetch_positions, names)
+        # Best routes' holders first, and a bounded number of them: one
+        # mailbox read per holder, every cycle, across a whole guild.
+        route_holders = list(dict.fromkeys(r.holder for r in decided.grants))
+        at_mailbox = await asyncio.to_thread(
+            _holders_at_mailbox, route_holders[:GUILD_ROUTE_MAILBOX_CHECKS], positions
+        )
+        free_slots = await asyncio.to_thread(_fetch_free_slots, names)
+        ready = bag_pressure.guild_route_deliverable(
+            decided.grants, positions, at_mailbox, free_slots
+        )
+        _log_capped("guild route", ready.notes)
+        seen = await asyncio.to_thread(_recent_route_keys, GIVE_RETRY_MINUTES)
+        written = 0
+        for route in ready.grants:
+            if (route.holder, route.command) in seen:
+                continue
+            if await asyncio.to_thread(_insert_route, route):
+                written += 1
+                log.info("guild route: %s", route.said)
+        log.info("guild route: queued %d/%d hand-over(s) from %d carried guildmate "
+                 "item(s)", written, len(ready.grants), len(gear_rows))
 
     async def _say_guild_gift(self, gift) -> None:
         """Say it in guild chat, because the guild is who it is addressed to.
@@ -11852,6 +11908,138 @@ def _insert_guild_gift(gift) -> int:
                     "%s from %s to %s needs the worldserver image carrying "
                     "mod-overseer's give SQL (infra#2597)",
                     gift.count, gift.item, gift.holder, gift.taker,
+                )
+                return 0
+            raise
+        return cur.lastrowid or 0
+
+
+# Carried weapons and armour of the guild's OTHER members (#174): the same
+# columns and scope as _SURPLUS_GEAR_SQL, plus whether the item carries a
+# spell. `has_effect` is what guildroute reads to call a ranking unsure: item
+# level cannot price a chance-on-hit or an on-use effect. Soulbound instances
+# and bound templates are filtered here and again in guildroute, the same
+# stated-twice rule _GUILD_SURPLUS_SQL gives for `it.bonding = 0`.
+_GUILD_HELD_GEAR_SQL = (
+    "SELECT c.name AS holder, c.level AS level, ii.guid AS item_guid, "
+    "ii.itemEntry AS entry, ii.count AS count, ii.flags AS instance_flags, "
+    "it.name AS name, it.Quality AS quality, "
+    "it.RequiredLevel AS required_level, it.bonding AS bonding, "
+    "it.class AS item_class, it.subclass AS item_subclass, "
+    "it.ItemLevel AS item_level, it.AllowableClass AS allowable_class, "
+    "it.InventoryType AS inventory_type, "
+    "(it.spellid_1 > 0 OR it.spellid_2 > 0 OR it.spellid_3 > 0 "
+    " OR it.spellid_4 > 0 OR it.spellid_5 > 0) AS has_effect "
+    "FROM character_inventory ci "
+    "JOIN characters c ON c.guid = ci.guid "
+    "JOIN item_instance ii ON ii.guid = ci.item "
+    "JOIN acore_world.item_template it ON it.entry = ii.itemEntry "
+    "WHERE c.name IN (%s) AND ((ci.bag = 0 AND ci.slot BETWEEN 23 AND 38) "
+    "OR ci.bag IN (SELECT bag.item FROM character_inventory bag "
+    "WHERE bag.guid = ci.guid AND bag.bag = 0 AND bag.slot BETWEEN 19 AND 22)) "
+    "AND it.class IN (2, 4) AND it.Quality >= 2 "
+    "AND (ii.flags & 1) = 0 AND it.bonding IN (0, 2, 3)"
+)
+
+
+# How many route holders one pass asks "are you at a mailbox" about.
+GUILD_ROUTE_MAILBOX_CHECKS = int(os.environ.get("GUILD_ROUTE_MAILBOX_CHECKS", "20"))
+# How many notes one pass logs line by line before it summarises the rest.
+GUILD_ROUTE_NOTE_LINES = 5
+
+
+def _log_capped(prefix: str, notes) -> None:
+    """Log the first few notes and a count of the rest, never a wall of them.
+
+    Measured on the dev realm 2026-09-22, one pass held 59 routes nobody could
+    carry out yet; a line each, every ten minutes, buries the log.
+    """
+    notes = list(notes or ())
+    for note in notes[:GUILD_ROUTE_NOTE_LINES]:
+        log.info("%s: %s", prefix, note)
+    if len(notes) > GUILD_ROUTE_NOTE_LINES:
+        log.info("%s: and %d more like it", prefix, len(notes) - GUILD_ROUTE_NOTE_LINES)
+
+
+def _fetch_guild_held_gear(names: list) -> list:
+    """Read guildmates' carried gear facts; guildroute decides everything."""
+    if not names:
+        return []
+    sql = _GUILD_HELD_GEAR_SQL % ",".join(["%s"] * len(names))
+    with _connect() as conn, conn.cursor() as cur:
+        try:
+            cur.execute(sql, names)
+        except pymysql.err.MySQLError as exc:
+            if exc.args and exc.args[0] in (1054, 1146):
+                log.warning("guild route: carried gear facts unavailable")
+                return []
+            raise
+        return [dict(row) for row in cur.fetchall()]
+
+
+def _holders_at_mailbox(holders: list, positions: dict) -> set:
+    """The holders standing at a mailbox now, by the mail pass's own gate.
+
+    `_nearest_mailbox` and `travel.spawn_in_reach` at TOWN_COUNTER_YARDS are
+    the reach test the family's mail pass uses before it writes a take, for
+    the same reason: a letter asked of somebody not at a mailbox comes back
+    `mailbox not in range` a second later.
+    """
+    out = set()
+    for holder in holders:
+        spawn = _nearest_mailbox(holder)
+        if travel.spawn_in_reach(spawn, positions.get(holder), TOWN_COUNTER_YARDS):
+            out.add(holder)
+    return out
+
+
+def _recent_route_keys(minutes: int) -> set:
+    """(holder, command) pairs this pass already wrote inside the window.
+
+    Keyed on `source` like every other pass's window; the gain rides after
+    the colon, so the match is on the prefix.
+    """
+    with _connect() as conn, conn.cursor() as cur:
+        try:
+            cur.execute(
+                "SELECT target_name, command FROM overseer_command "
+                "WHERE source LIKE %s AND created_at > NOW() - INTERVAL %s MINUTE",
+                (guildroute.SOURCE + ":%", int(minutes)),
+            )
+        except pymysql.err.MySQLError as exc:
+            if exc.args and exc.args[0] in (1054, 1146):
+                return set()
+            raise
+        return {(row["target_name"], row["command"]) for row in cur.fetchall()}
+
+
+def _insert_route(route) -> int:
+    """One overseer_command row for one guild hand-over (#174).
+
+    The kind is `route.verb`, a trade or a letter, because gear.route_deliverable
+    only returns a hand-over the world can carry out in person. Anything else
+    is refused here as well, so a future verb cannot slip a database move
+    through this writer. Guarded on 1265 like every other kind written here.
+    """
+    if route.verb not in guildroute.VERBS:
+        log.warning("guild route: refusing to write kind=%r for %s", route.verb,
+                    route.name)
+        return 0
+    with _connect() as conn, conn.cursor() as cur:
+        try:
+            cur.execute(
+                "INSERT INTO overseer_command "
+                "(target_name, command, kind, target_arg, source) "
+                "VALUES (%s, %s, %s, %s, %s)",
+                (route.holder, route.command, route.verb, route.taker,
+                 guildroute.source_for(route.gain)),
+            )
+        except pymysql.err.MySQLError as exc:
+            if exc.args and exc.args[0] in (1146, 1265):
+                log.warning(
+                    "overseer_command.kind has no '%s' value - handing %s from "
+                    "%s to %s needs a newer worldserver image",
+                    route.verb, route.name, route.holder, route.taker,
                 )
                 return 0
             raise

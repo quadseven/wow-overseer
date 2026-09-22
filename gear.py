@@ -180,6 +180,162 @@ _SHIELD_CLASSES = frozenset({1, 2, 7})
 SUBCLASS_UNSTATED = -1
 
 
+# ---------------------------------------------------------------------------
+# WHICH WEAPONS A CLASS CAN SWING, WHICH AllowableClass DOES NOT SAY EITHER
+#
+# The armour table above exists because AllowableClass is -1 on almost every
+# piece. Weapons are the same: Destiny, a two-hand sword, carries -1, so
+# `usable_by_class` says a warlock can wield it. Measured on the dev realm
+# 2026-09-22, a level 60 warlock guildmate carried Destiny and two other
+# two-handers she can never swing, and the question "who in the guild gains
+# most from this" (#174) cannot be asked honestly while the answer includes
+# every caster in the guild.
+#
+# item_template.subclass for class 2 (WEAPON). The fishing pole (20) and the
+# miscellaneous weapon (14) are not decided here; `wieldable_weapon` abstains
+# on them the way `wearable_armor` abstains on a libram.
+WEAPON_AXE, WEAPON_AXE2, WEAPON_BOW, WEAPON_GUN = 0, 1, 2, 3
+WEAPON_MACE, WEAPON_MACE2, WEAPON_POLEARM = 4, 5, 6
+WEAPON_SWORD, WEAPON_SWORD2, WEAPON_STAFF = 7, 8, 10
+WEAPON_FIST, WEAPON_DAGGER, WEAPON_THROWN = 13, 15, 16
+WEAPON_CROSSBOW, WEAPON_WAND = 18, 19
+
+_ALL_MELEE_AND_RANGED = frozenset(
+    {
+        WEAPON_AXE,
+        WEAPON_AXE2,
+        WEAPON_BOW,
+        WEAPON_GUN,
+        WEAPON_MACE,
+        WEAPON_MACE2,
+        WEAPON_POLEARM,
+        WEAPON_SWORD,
+        WEAPON_SWORD2,
+        WEAPON_STAFF,
+        WEAPON_FIST,
+        WEAPON_DAGGER,
+        WEAPON_THROWN,
+        WEAPON_CROSSBOW,
+    }
+)
+
+# Class id -> the weapon subclasses its trainers teach by level 60 in 3.3.5.
+_WEAPON_SKILLS = {
+    1: _ALL_MELEE_AND_RANGED,  # Warrior: everything but a wand
+    2: frozenset(
+        {
+            WEAPON_AXE,
+            WEAPON_AXE2,
+            WEAPON_MACE,
+            WEAPON_MACE2,
+            WEAPON_POLEARM,
+            WEAPON_SWORD,
+            WEAPON_SWORD2,
+        }
+    ),  # Paladin
+    3: _ALL_MELEE_AND_RANGED - {WEAPON_MACE, WEAPON_MACE2},  # Hunter
+    4: frozenset(
+        {
+            WEAPON_AXE,
+            WEAPON_BOW,
+            WEAPON_GUN,
+            WEAPON_MACE,
+            WEAPON_SWORD,
+            WEAPON_FIST,
+            WEAPON_DAGGER,
+            WEAPON_THROWN,
+            WEAPON_CROSSBOW,
+        }
+    ),  # Rogue
+    5: frozenset({WEAPON_MACE, WEAPON_STAFF, WEAPON_DAGGER, WEAPON_WAND}),  # Priest
+    6: frozenset(
+        {
+            WEAPON_AXE,
+            WEAPON_AXE2,
+            WEAPON_MACE,
+            WEAPON_MACE2,
+            WEAPON_POLEARM,
+            WEAPON_SWORD,
+            WEAPON_SWORD2,
+        }
+    ),  # Death Knight
+    7: frozenset(
+        {
+            WEAPON_AXE,
+            WEAPON_AXE2,
+            WEAPON_MACE,
+            WEAPON_MACE2,
+            WEAPON_STAFF,
+            WEAPON_FIST,
+            WEAPON_DAGGER,
+        }
+    ),  # Shaman
+    8: frozenset({WEAPON_SWORD, WEAPON_STAFF, WEAPON_DAGGER, WEAPON_WAND}),  # Mage
+    9: frozenset({WEAPON_SWORD, WEAPON_STAFF, WEAPON_DAGGER, WEAPON_WAND}),  # Warlock
+    11: frozenset(
+        {
+            WEAPON_MACE,
+            WEAPON_MACE2,
+            WEAPON_POLEARM,
+            WEAPON_STAFF,
+            WEAPON_FIST,
+            WEAPON_DAGGER,
+        }
+    ),  # Druid
+}
+
+_KNOWN_WEAPON_SUBCLASSES = _ALL_MELEE_AND_RANGED | {WEAPON_WAND}
+
+
+def wieldable_weapon(holding: Holding, character: CharacterState) -> bool:
+    """Can this character's class wield this weapon at all.
+
+    Abstains - returns True - for anything that is not a weapon, for a
+    subclass this table does not decide, for a class it does not list, and
+    for a row that never stated its subclass, which is the same abstention
+    `wearable_armor` makes and for the same reason.
+    """
+    if int(holding.item_class) != ITEM_CLASS_WEAPON:
+        return True
+    subclass = int(holding.item_subclass)
+    if subclass not in _KNOWN_WEAPON_SUBCLASSES:
+        return True
+    skills = _WEAPON_SKILLS.get(int(character.class_id))
+    if skills is None:
+        return True
+    return subclass in skills
+
+
+# ---------------------------------------------------------------------------
+# THE ROLE, WHICH DECIDES WHETHER A SHIELD IS WORTH KEEPING
+#
+# The off-hand guard in `would_wear` refuses a two-hander to anybody wearing a
+# shield, because it cannot tell a tank from a damage dealer who happens to
+# carry one. Measured 2026-09-22: the family's Retribution paladin wore a one
+# hand axe and a shield, so every two-hander the guild found for him was
+# refused on his behalf. `role` is that missing fact, filled from the same
+# party packing the lineup uses (raidlineup.party_roles). ROLE_UNKNOWN keeps
+# the old guard exactly, so a character nobody assigned a role is judged as
+# before.
+ROLE_UNKNOWN = ""
+ROLE_TANK = "tank"
+ROLE_HEALER = "healer"
+ROLE_DAMAGE = "damage"
+
+# Warrior, paladin and death knight: the classes whose damage specs are built
+# around a two-hander, so a shield on one of them in a damage role is a spare
+# rather than a job.
+_TWO_HANDER_CLASSES = frozenset({1, 2, 6})
+
+
+def prefers_two_hander(character: CharacterState) -> bool:
+    """Would a two-hander replace this character's shield rather than cost it."""
+    return (
+        str(character.role) == ROLE_DAMAGE
+        and int(character.class_id) in _TWO_HANDER_CLASSES
+    )
+
+
 def heaviest_armor(class_id: int, level: int) -> int:
     """The heaviest armour subclass this character is trained in right now."""
     best = ARMOR_CLOTH
@@ -236,6 +392,10 @@ class Holding:
     # the fact AllowableClass does not carry. SUBCLASS_UNSTATED means the row
     # did not say and `wearable_armor` abstains.
     item_subclass: int = SUBCLASS_UNSTATED
+    # The item carries a spell (item_template.spellid_1..5): an on-use, an
+    # on-equip or a chance-on-hit effect. Item level cannot price one, so a
+    # ranking that compares item levels is only a floor for it (#174).
+    has_effect: bool = False
 
 
 @dataclass(frozen=True)
@@ -256,6 +416,10 @@ class CharacterState:
     class_id: int
     level: int
     equipped: dict = field(default_factory=dict)
+    # ROLE_TANK, ROLE_HEALER, ROLE_DAMAGE or ROLE_UNKNOWN. See
+    # `prefers_two_hander`: only a damage role on a two-hander class changes
+    # anything, and unknown keeps the off-hand guard.
+    role: str = ROLE_UNKNOWN
 
     def equipped_level(self, slot: str) -> int:
         return int(self.equipped.get(slot, 0))
@@ -369,6 +533,9 @@ def would_wear(holding: Holding, character: CharacterState) -> tuple:
     if not wearable_armor(holding, character):
         cls = _CLASS_NAMES.get(character.class_id, "class %d" % character.class_id)
         return False, f"{cls} is not trained in that armour type"
+    if not wieldable_weapon(holding, character):
+        cls = _CLASS_NAMES.get(character.class_id, "class %d" % character.class_id)
+        return False, f"{cls} cannot wield that weapon type"
     if character.level < holding.required_level:
         return False, f"requires level {holding.required_level}"
 
@@ -386,8 +553,26 @@ def would_wear(holding: Holding, character: CharacterState) -> tuple:
     # character IS a shield tank - only that they are, right now, in the
     # world, wearing something a two-hander would knock off, which is the one
     # fact this module can observe rather than guess at.
+    #
+    # A DAMAGE ROLE ON A TWO-HANDER CLASS LIFTS IT (#174), and then the
+    # two-hander has to beat the main hand it replaces, not the empty two-hand
+    # bucket: the Retribution paladin wearing a one-hander at 52 is not
+    # upgraded by a two-hander at 40.
     if slot == _TWO_HAND and character.has_off_hand():
-        return False, "would displace an equipped off-hand item"
+        if not prefers_two_hander(character):
+            return False, "would displace an equipped off-hand item"
+        current = max(
+            character.equipped_level(_TWO_HAND), character.equipped_level(_MAIN_HAND)
+        )
+        if current and holding.item_level <= current:
+            return (
+                False,
+                f"not an upgrade (the main hand worn now is item level {current})",
+            )
+        return True, (
+            f"item level {holding.item_level} two-hander beats the "
+            f"{current} main hand, and a damage role has no use for the shield"
+        )
 
     current = character.equipped_level(slot)
     if current and holding.item_level <= current:
@@ -421,6 +606,142 @@ def is_upgrade_for(holding: Holding, character: CharacterState) -> tuple:
     if holding.soulbound:
         return False, "soulbound to the current holder"
     return would_wear(holding, character)
+
+
+def worn_against(holding: Holding, character: CharacterState) -> int:
+    """The item level this piece would replace on this character.
+
+    A two-hander replaces whichever weapon is in the hands, so it is measured
+    against the better of the two-hand and main-hand buckets; everything else
+    against its own bucket.
+    """
+    slot = _slot_for(holding)
+    worn = character.equipped_level(slot)
+    if slot == _TWO_HAND:
+        worn = max(worn, character.equipped_level(_MAIN_HAND))
+    return int(worn)
+
+
+def upgrade_gain(holding: Holding, character: CharacterState) -> tuple:
+    """(gain, reason): how many item levels a hand-off would add, 0 for none.
+
+    THE SAME OPINION AS `is_upgrade_for`, WITH THE HANDS SETTLED (#174).
+    `is_upgrade_for` compares within one slot bucket, which reads the two-hand
+    bucket as empty for anybody holding a one-hander; `_hand_refusal` is the
+    rule `equips` already applies for exactly that, so a hand-off is refused
+    on the same grounds a holder's own equip would be. A piece this returns a
+    gain for is one its receiver's own equip pass would put on.
+    """
+    upgrade, reason = is_upgrade_for(holding, character)
+    if not upgrade:
+        return 0, reason
+    refusal = _hand_refusal(holding, character)
+    if refusal:
+        return 0, refusal
+    gain = int(holding.item_level) - worn_against(holding, character)
+    if gain <= 0:
+        return 0, "not an upgrade"
+    return gain, reason
+
+
+# ---------------------------------------------------------------------------
+# THE WEAKEST SLOT (#174)
+#
+# Measured on the dev family 2026-09-22: the level 60 Protection warrior wore
+# an item level 30 dagger in the main hand with a shield, while every other
+# worn piece he had was 42 to 56. Nothing asked which slot was furthest behind,
+# so nothing looked for a weapon. This is that question, over the same slot
+# buckets every other judgement here uses.
+#
+# THE WEAPON COUNTS DOUBLE. Every melee swing, a tank's threat and a caster's
+# spell power off a staff all start from the weapon, and the armour slots
+# share the rest of the character's stats roughly evenly. Without the weight a
+# level 29 cloak and a level 30 dagger read as the same problem, and they are
+# not. A hunter's weapon is the ranged one, so for a hunter the weights swap.
+#
+# Rings, necks and trinkets are not judged: `_SLOT_BY_INVTYPE` has no bucket
+# for them, and that refusal is kept here rather than guessed around.
+
+_ARMOUR_BUCKETS = (
+    _HEAD,
+    _SHOULDER,
+    _CHEST,
+    _WAIST,
+    _LEGS,
+    _FEET,
+    _WRIST,
+    _HANDS,
+    _BACK,
+)
+_HUNTER = 3
+WEAPON_WEIGHT = 2
+
+
+@dataclass(frozen=True)
+class Weakest:
+    """One character's weakest judged slot, and how far behind their level."""
+
+    name: str
+    slot: str  # a bucket; "weapon" for the main/two hand pair
+    item_level: int
+    level: int
+    shortfall: int  # weighted item levels below the character level
+
+    @property
+    def label(self) -> str:
+        return "main hand" if self.slot == "weapon" else self.slot.replace("_", " ")
+
+    @property
+    def said(self) -> str:
+        return "%s, item level %d at level %d" % (
+            self.label,
+            self.item_level,
+            self.level,
+        )
+
+
+def bucket_of(holding: Holding) -> str:
+    """The weakest-slot bucket a piece would fill: "weapon" for either hand."""
+    slot = _slot_for(holding)
+    return "weapon" if slot in (_MAIN_HAND, _TWO_HAND) else slot
+
+
+def weakest_slot(character: CharacterState):
+    """The judged slot furthest below this character's level, or None.
+
+    Armour buckets always count, and an empty one counts as item level 0 -
+    a missing helmet is a real gap. The off hand and the ranged slot count
+    only when something is worn there, because a two-hander leaves the off
+    hand empty on purpose and most classes carry a ranged piece as a stat
+    stick. None when every judged slot is at or above the character's level.
+    """
+    level = int(character.level)
+    hunter = int(character.class_id) == _HUNTER
+    weapon = max(
+        character.equipped_level(_MAIN_HAND), character.equipped_level(_TWO_HAND)
+    )
+    judged = [(b, character.equipped_level(b), 1) for b in _ARMOUR_BUCKETS]
+    judged.append(("weapon", weapon, 1 if hunter else WEAPON_WEIGHT))
+    if character.equipped_level(_OFF_HAND):
+        judged.append((_OFF_HAND, character.equipped_level(_OFF_HAND), 1))
+    if hunter or character.equipped_level(_RANGED):
+        judged.append(
+            (_RANGED, character.equipped_level(_RANGED), WEAPON_WEIGHT if hunter else 1)
+        )
+    best = None
+    for bucket, item_level, weight in judged:
+        shortfall = weight * max(0, level - int(item_level))
+        if shortfall <= 0:
+            continue
+        if best is None or shortfall > best.shortfall:
+            best = Weakest(
+                name=character.name,
+                slot=bucket,
+                item_level=int(item_level),
+                level=level,
+                shortfall=shortfall,
+            )
+    return best
 
 
 def plan(holdings, characters) -> Plan:
@@ -954,7 +1275,7 @@ def equips_to_queue(wanted, recent, tries, give_up=3) -> tuple:
 EQUIPPED_POSITIONS = range(0, 19)
 
 
-def characters_from_rows(rows, names) -> list:
+def characters_from_rows(rows, names, roles=None) -> list:
     """One CharacterState per name, from equipped rows joined to characters.
 
     A NAME WITH NO USABLE ROW IS LEFT OUT, not defaulted. `claimant` answers
@@ -967,7 +1288,11 @@ def characters_from_rows(rows, names) -> list:
     Rows carry name, class_id, level and, when something is worn in the slot,
     inventory_type and item_level. A LEFT JOIN row for a character wearing
     nothing at all still names them, and they get an empty equipped map.
+
+    `roles` maps a name to ROLE_TANK, ROLE_HEALER or ROLE_DAMAGE; a name it
+    does not mention, and every name when it is None, is ROLE_UNKNOWN.
     """
+    roles = dict(roles or {})
     seen = {}
     for row in rows:
         try:
@@ -995,6 +1320,7 @@ def characters_from_rows(rows, names) -> list:
             class_id=seen[name][0],
             level=seen[name][1],
             equipped=seen[name][2],
+            role=str(roles.get(name, ROLE_UNKNOWN) or ROLE_UNKNOWN),
         )
         for name in names
         if name in seen
@@ -1026,8 +1352,310 @@ def holdings_from_rows(rows) -> list:
                     item_class=int(row["item_class"]),
                     soulbound=bool(int(row.get("instance_flags", 0) or 0) & 0x1),
                     item_subclass=int(row.get("item_subclass", SUBCLASS_UNSTATED)),
+                    has_effect=bool(int(row.get("has_effect", 0) or 0)),
                 )
             )
         except (KeyError, TypeError, ValueError):
             continue
     return out
+
+
+# ---------------------------------------------------------------------------
+# THE GUILD'S LOOT, RANKED (#174)
+#
+# Everything above moves the family's own gear. Nothing moved a guildmate's
+# loot to whoever in the guild gains most from it. Measured on the dev realm
+# 2026-09-22: a level 60 warlock guildmate carried Destiny (a bind-on-equip
+# epic two-hand sword, item level 57) she can never swing, while the family's
+# Retribution paladin wore a one-hander at item level 52.
+#
+# THE SAME OPINION, RANKED. `upgrade_gain` decides whether a receiver gains
+# and by how much; `rank_receivers` only orders the answers. It is one pure
+# function, candidates and an item in and receivers out, so a second scorer
+# (the Jev Score proposed in #95) can sit beside it on the same inputs and be
+# compared row for row.
+#
+# "SURE" IS A CLAIM ABOUT THE NUMBERS. Item level prices stats. It cannot
+# price a chance-on-hit or an on-use spell, so for an item carrying one the
+# gain is only a floor - the module's own equip rule says the same, "cannot
+# be settled from the numbers". Such an item is ranked and reported and never
+# moved by this heuristic: it is the case a better scorer exists for.
+#
+# A HAND-OVER MUST HAPPEN IN THE WORLD. kind='give' moves an item between two
+# online characters at any distance, which is a database write wearing a
+# hand-over's name: a sword left Silithus and arrived in Winterspring in the
+# same second. `route_deliverable` never picks it. There are two honest ways:
+#
+#     trade   the two are within TRADE_YARDS already; the core runs a real
+#             trade between them.
+#     mail    the holder is at a mailbox and posts it; the core charges the
+#             postage and applies its delivery delay, and the family's own
+#             mail pass collects it later. Family receivers only, because
+#             nothing makes a guildmate's bot collect post.
+#
+# Neither is arranged. A holder is a guildmate's bot, not a roster character,
+# so nothing in this process can walk it anywhere; the pass waits for the
+# meeting or the mailbox and says which one it is waiting on.
+
+MAIL = "mail"
+
+# The smallest gain worth a hand-over across the guild. One or two item levels
+# is inside the noise of how stats are budgeted.
+CLEAR_GAIN = 3
+
+# Hand-overs one pass may write, across the whole guild.
+PER_PASS = 2
+
+
+@dataclass(frozen=True)
+class Candidate:
+    """One online guild member who could receive an item."""
+
+    character: CharacterState
+    family: bool = False
+
+    @property
+    def name(self) -> str:
+        return self.character.name
+
+
+@dataclass(frozen=True)
+class Ranked:
+    """One receiver for one item, as `rank_receivers` scored them."""
+
+    name: str
+    gain: int  # item levels over what the receiver wears there now
+    family: bool
+    fills_weakest: bool  # the item goes in the receiver's weakest slot
+    sure: bool  # False when item level cannot price the item (an effect)
+    reason: str
+
+
+def rank_receivers(holding: Holding, candidates) -> tuple:
+    """Every candidate this item is a real upgrade for, best first.
+
+    Ordered by gain, then family before guildmate, then the receiver whose
+    weakest slot it fills, then by name, so two passes over unchanged facts
+    rank identically. The holder is never a candidate and a soulbound item
+    ranks nobody. Pure, and the seam a second scorer sits beside.
+    """
+    if holding.soulbound:
+        return ()
+    sure = not holding.has_effect
+    bucket = bucket_of(holding)
+    out = []
+    for candidate in candidates:
+        character = candidate.character
+        if character.name == holding.holder:
+            continue
+        gain, reason = upgrade_gain(holding, character)
+        if gain <= 0:
+            continue
+        weakest = weakest_slot(character)
+        out.append(
+            Ranked(
+                name=character.name,
+                gain=int(gain),
+                family=bool(candidate.family),
+                fills_weakest=weakest is not None and weakest.slot == bucket,
+                sure=sure,
+                reason=reason,
+            )
+        )
+    out.sort(key=lambda r: (-r.gain, not r.family, not r.fills_weakest, r.name))
+    return tuple(out)
+
+
+@dataclass(frozen=True)
+class Route:
+    """One guildmate item, one receiver, and how it travels once `verb` is set."""
+
+    holder: str
+    taker: str
+    guid: int
+    entry: int
+    name: str
+    gain: int
+    family: bool
+    fills_weakest: bool
+    reason: str
+    verb: str = ""
+    alternates: tuple = ()
+
+    @property
+    def command(self) -> str:
+        """What the executor parses: DoTrade's guid spec, or a mail `send`."""
+        if self.verb == MAIL:
+            return "send item:%d subject:%s" % (int(self.guid), self.name)
+        return "guid:%d" % int(self.guid)
+
+    @property
+    def said(self) -> str:
+        """The log line: holder, receiver, item, gain and why."""
+        return "%s -> %s by %s, %s (item %d), +%d item levels - %s" % (
+            self.holder,
+            self.taker,
+            self.verb or "?",
+            self.name,
+            int(self.guid),
+            int(self.gain),
+            self.reason,
+        )
+
+
+def _route(holding: Holding, ranked: Ranked) -> Route:
+    return Route(
+        holder=holding.holder,
+        taker=ranked.name,
+        guid=int(holding.guid),
+        entry=int(holding.entry),
+        name=holding.name,
+        gain=ranked.gain,
+        family=ranked.family,
+        fills_weakest=ranked.fills_weakest,
+        reason=ranked.reason,
+    )
+
+
+def route_plan(holdings, candidates, clear_gain: int = CLEAR_GAIN) -> Plan:
+    """Every guildmate item that should go to somebody who gains more.
+
+    Plan.grants carries Routes here, best gain first, each with its
+    runners-up for `route_deliverable` to walk.
+
+    THE HOLDER IS ASKED FIRST, soulbound-blind, with `would_wear`, and an item
+    its holder would wear never moves. A holder with no Candidate (nothing
+    read about what they wear) is left alone rather than presumed to have no
+    use for their own gear. A family holder is not this pass's: the family's
+    own passes already decide those items, and two writers for one item is
+    the bug this project has fixed more than once.
+    """
+    by_name = {c.name: c for c in candidates}
+    routes, notes = [], []
+    for holding in sorted(holdings, key=lambda h: (h.holder, int(h.guid))):
+        holder = by_name.get(holding.holder)
+        if holder is None or holder.family or holding.soulbound:
+            continue
+        if would_wear(holding, holder.character)[0]:
+            continue
+        ranked = rank_receivers(holding, candidates)
+        if not ranked:
+            continue
+        if not ranked[0].sure:
+            notes.append(
+                "%s carries %s, best for %s by item level (+%d), but it has an "
+                "effect item level cannot price, so it is not moved"
+                % (holding.holder, holding.name, ranked[0].name, ranked[0].gain)
+            )
+            continue
+        clear = [r for r in ranked if r.gain >= int(clear_gain)]
+        if not clear:
+            notes.append(
+                "%s carries %s; the best gain is %s's +%d, under the %d a "
+                "hand-over needs"
+                % (
+                    holding.holder,
+                    holding.name,
+                    ranked[0].name,
+                    ranked[0].gain,
+                    int(clear_gain),
+                )
+            )
+            continue
+        first = _route(holding, clear[0])
+        routes.append(
+            replace(first, alternates=tuple(_route(holding, r) for r in clear[1:]))
+        )
+    routes.sort(key=lambda r: (-r.gain, r.holder, r.guid))
+    return Plan(grants=tuple(routes), notes=tuple(notes))
+
+
+def route_deliverable(
+    routes, position_rows, at_mailbox, free_slots, per_pass=PER_PASS
+) -> Plan:
+    """The routes that can happen in the world now, each with its verb.
+
+    TRADE when the holder and a ranked receiver are within trade range and
+    the receiver has a free slot. MAIL when the holder is at a mailbox and the
+    receiver is family. Never GIVE. Otherwise the item waits, with one note
+    naming what it waits on. A receiver takes at most one item per pass, and
+    at most `per_pass` routes come back.
+    """
+    spots = spots_from_rows(position_rows)
+    room = {str(k): int(v or 0) for k, v in dict(free_slots or {}).items()}
+    posting = {str(n) for n in (at_mailbox or ())}
+    out, notes, taken = [], [], set()
+    for route in routes:
+        if len(out) >= int(per_pass):
+            notes.append(
+                "%s stays with %s this pass: %d hand-overs is the limit per pass"
+                % (route.name, route.holder, int(per_pass))
+            )
+            continue
+        here = spots.get(route.holder)
+        if here is None:
+            notes.append(
+                "%s stays with %s: %s is not in the world"
+                % (route.name, route.holder, route.holder)
+            )
+            continue
+        chosen = None
+        taken_by, absent, full, apart = [], [], [], []
+        for option in (route,) + tuple(route.alternates):
+            if option.taker in taken:
+                taken_by.append(option.taker)
+                continue
+            there = spots.get(option.taker)
+            if there is None:
+                absent.append(option.taker)
+                continue
+            if _within_trade_range(here, there):
+                if room.get(option.taker, 0) <= 0:
+                    full.append(option.taker)
+                    continue
+                chosen = replace(option, verb=TRADE, alternates=())
+                room[option.taker] = room.get(option.taker, 0) - 1
+                break
+            if option.family and route.holder in posting:
+                chosen = replace(option, verb=MAIL, alternates=())
+                break
+            apart.append(option.taker)
+        if chosen is None:
+            notes.append(_route_withheld(route, posting, taken_by, absent, full, apart))
+            continue
+        taken.add(chosen.taker)
+        out.append(chosen)
+    return Plan(grants=tuple(out), notes=tuple(notes))
+
+
+def _few(names: list) -> str:
+    """Up to three names, then how many more: a note stays one line."""
+    if len(names) <= 3:
+        return _joined(names)
+    return "%s and %d more" % (", ".join(names[:3]), len(names) - 3)
+
+
+def _route_withheld(route, posting, taken_by, absent, full, apart) -> str:
+    """The one note for a route no ranked receiver could take this pass."""
+    walls = []
+    if apart:
+        walls.append(
+            "%s is beside none of %s%s"
+            % (
+                route.holder,
+                _few(apart),
+                "" if route.holder in posting else ", and at no mailbox",
+            )
+        )
+    if full:
+        walls.append(
+            "%s ha%s no free bag slot" % (_few(full), "ve" if len(full) > 1 else "s")
+        )
+    if absent:
+        walls.append("%s not in the world" % _few(absent))
+    if taken_by:
+        walls.append(
+            "%s already ha%s one coming"
+            % (_few(taken_by), "ve" if len(taken_by) > 1 else "s")
+        )
+    return "%s stays with %s: %s" % (route.name, route.holder, "; ".join(walls))

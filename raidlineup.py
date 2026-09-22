@@ -179,3 +179,37 @@ def build_lineup(
             "considered": len(members),
         },
     }
+
+
+# The party role words, as armory.py and gear.py spell them.
+TANK, HEALER, DAMAGE = "tank", "healer", "damage"
+
+
+def party_roles(members) -> dict:
+    """name -> tank, healer or damage, for one party of five.
+
+    The packing `build_lineup` uses, at the size of one group: the tank is the
+    first member whose class can ONLY tank, else the first who can; the healer
+    likewise; everybody else deals damage. `members` are dicts with `name` and
+    `class_id`, in the order ties should break (the roster's). The caller
+    decides who is present; a member left out gets no role.
+    """
+    pool = [m for m in members if m.get("name")]
+
+    def take(allowed):
+        for m in pool:
+            if m.get("class_id") in allowed:
+                pool.remove(m)
+                return m
+        return None
+
+    roles = {}
+    tank = take(PURE_TANKS) or take(TANKS)
+    if tank:
+        roles[tank["name"]] = TANK
+    healer = take(PURE_HEALERS) or take(HEALERS)
+    if healer:
+        roles[healer["name"]] = HEALER
+    for m in pool:
+        roles[m["name"]] = DAMAGE
+    return roles

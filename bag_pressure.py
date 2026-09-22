@@ -7,6 +7,7 @@ from typing import Iterable
 
 import disposition
 import gear
+import raidlineup
 
 # The two item classes that are worn: weapons and armour. A bag is class 1 and
 # is deliberately not here, because an empty bag is still slots.
@@ -757,6 +758,26 @@ def bag_candidates(
 # dependency-free and must not learn about disposition to do it.
 
 
+def family_characters(equipped_rows, names) -> list:
+    """The family's CharacterStates, each carrying its party role (#174).
+
+    The role is `raidlineup.party_roles` over the family itself, the packing
+    the Armory already shows: one tank, one healer, the rest damage. It is
+    what lets `gear.would_wear` hand a two-hander to a damage-role paladin
+    who happens to carry a shield, and still refuse one to the tank. Every
+    family judgement in this module builds its characters here, so the
+    hand-off, the claim that guards the sell path and the holder's own equip
+    all read the same role and cannot disagree about the same piece.
+
+    `names` is ONE family: the bridge passes its own roster, never two.
+    """
+    base = gear.characters_from_rows(equipped_rows, names)
+    roles = raidlineup.party_roles(
+        [{"name": c.name, "class_id": c.class_id} for c in base]
+    )
+    return gear.characters_from_rows(equipped_rows, names, roles=roles)
+
+
 def family_fits(gear_rows, equipped_rows, names) -> dict:
     """item guid -> disposition.FIT_*, from the one gear opinion.
 
@@ -766,7 +787,7 @@ def family_fits(gear_rows, equipped_rows, names) -> dict:
     describe, a holder nobody named - and it is why this returns only what it
     positively decided rather than a value for every row it was handed.
     """
-    characters = gear.characters_from_rows(equipped_rows, names)
+    characters = family_characters(equipped_rows, names)
     holdings = gear.holdings_from_rows(gear_rows)
     holder_of = {int(h.guid): h.holder for h in holdings}
     fits = {}
@@ -795,7 +816,7 @@ def family_claimants(gear_rows, equipped_rows, names) -> dict:
     where the sell path only needs "a sibling". Same rows, same opinion; the
     answer is a name, CLAIM_NOBODY or CLAIM_UNJUDGEABLE.
     """
-    characters = gear.characters_from_rows(equipped_rows, names)
+    characters = family_characters(equipped_rows, names)
     return gear.claims(gear.holdings_from_rows(gear_rows), characters)
 
 
@@ -847,7 +868,7 @@ def family_gifts(
     kept = [
         row for row in gear_rows if not owner_keeps(row.get("name", ""), keep_names)
     ]
-    characters = gear.characters_from_rows(equipped_rows, names)
+    characters = family_characters(equipped_rows, names)
     holdings = gear.holdings_from_rows(kept)
     return gear.deliverable(
         gear.plan(holdings, characters).grants,
@@ -867,7 +888,7 @@ def holder_equips(gear_rows, equipped_rows, names, keep_names=()) -> tuple:
     kept = [
         row for row in gear_rows if not owner_keeps(row.get("name", ""), keep_names)
     ]
-    characters = gear.characters_from_rows(equipped_rows, names)
+    characters = family_characters(equipped_rows, names)
     return gear.equips(gear.holdings_from_rows(kept), characters)
 
 
@@ -930,7 +951,13 @@ def guild_gear_gifts_from_rows(
     family-first reservation before a guild recipient is considered.
     """
     names = [str(member.name) for member in (members or ())]
-    characters = gear.characters_from_rows(equipped_rows, names)
+    # The family carries its party role, the same one every family pass in
+    # this module reads; a guildmate has none and keeps the off-hand guard.
+    roles = {
+        c.name: c.role
+        for c in family_characters(equipped_rows, [str(n) for n in family_names or ()])
+    }
+    characters = gear.characters_from_rows(equipped_rows, names, roles=roles)
     holdings = gear.holdings_from_rows(gear_rows)
     return guild_gear_gifts(
         holdings,
@@ -940,6 +967,71 @@ def guild_gear_gifts_from_rows(
         position_rows=position_rows,
         free_slots=free_slots,
     )
+
+
+# ---------------------------------------------------------------------------
+# THE GUILD'S LOOT, ROUTED (#174)
+#
+# The adapter half of gear.route_plan: guildmates' carried rows become
+# Holdings, online guild members become Candidates (the family carrying its
+# party role), and gear decides. Re-exported below so the bridge, and a second
+# scorer beside the ranking, never import gear themselves.
+
+# item_template.bonding values that are bound before anybody equips anything:
+# bind on pickup (1) and quest (4). Bind on equip (2) and bind on use (3)
+# still trade from a bag, unless the INSTANCE is soulbound, which
+# gear.holdings_from_rows reads.
+_BOUND_TEMPLATES = frozenset({1, 4})
+
+
+def guild_route_holdings(rows) -> list:
+    """Holdings for guildmates' carried gear; nothing bound gets through."""
+    kept = []
+    for row in rows or ():
+        try:
+            if int(row.get("bonding", 0) or 0) in _BOUND_TEMPLATES:
+                continue
+        except (TypeError, ValueError):
+            continue
+        kept.append(row)
+    return [h for h in gear.holdings_from_rows(kept) if not h.soulbound]
+
+
+def guild_route_candidates(equipped_rows, members, family_names) -> list:
+    """Candidates for every ONLINE guild member, the family carrying roles.
+
+    `members` are guildshare.Member rows. A member who is not online is not
+    a candidate: neither a trade nor a mailbox collection happens for
+    somebody who is not there.
+    """
+    family = [str(n) for n in family_names or ()]
+    online = [str(m.name) for m in members or () if m.online]
+    roles = {c.name: c.role for c in family_characters(equipped_rows, family)}
+    characters = gear.characters_from_rows(equipped_rows, online, roles=roles)
+    kin = set(family)
+    return [gear.Candidate(character=c, family=c.name in kin) for c in characters]
+
+
+def guild_routes_from_rows(gear_rows, equipped_rows, family_names, members):
+    """gear.route_plan over the rows: who in the guild gains most, per item."""
+    return gear.route_plan(
+        guild_route_holdings(gear_rows),
+        guild_route_candidates(equipped_rows, members, family_names),
+    )
+
+
+def weakest_slot_of(name, class_id, level, equipped: dict):
+    """gear.weakest_slot for a character described by bucket -> item level."""
+    return gear.weakest_slot(
+        gear.CharacterState(
+            name=str(name), class_id=int(class_id), level=int(level), equipped=equipped
+        )
+    )
+
+
+# Re-exported so no caller outside this adapter imports gear (see above).
+guild_route_deliverable = gear.route_deliverable
+rank_receivers = gear.rank_receivers
 
 
 def recipe_gifts(
