@@ -3437,6 +3437,12 @@ class Bridge(discord.Client):
         # streak and costs at most one repeated walk, which is cheaper than
         # the walk being repeated for ever.
         self._flight_attempts: dict = {}
+        # GUILD MAIL RUNS UNDER WAY (#185): holder -> monotonic start, and the
+        # start times of the last day's runs. In memory for the town slot's
+        # reason; the daily cap also reads the command log, which a restart
+        # does not forget (guildroute.runs_today).
+        self._guild_mail_runs: dict = {}
+        self._guild_mail_run_starts: list = []
         # Leader snapshot history used only to detect a vendor aim that has
         # stopped moving. The decision itself lives in vendor_stall.py.
         self._vendor_movement: dict[str, vendor_stall.Movement] = {}
@@ -6463,7 +6469,12 @@ class Bridge(discord.Client):
         positions = await asyncio.to_thread(_fetch_positions, names)
         # Best routes' holders first, and a bounded number of them: one
         # mailbox read per holder, every cycle, across a whole guild.
-        route_holders = list(dict.fromkeys(r.holder for r in decided.grants))
+        # A holder on a mail run is asked first, so the cycle it arrives is
+        # the cycle its letter is written (#185).
+        route_holders = list(dict.fromkeys(
+            [h for h in self._guild_mail_runs]
+            + [r.holder for r in decided.grants]
+        ))
         at_mailbox = await asyncio.to_thread(
             _holders_at_mailbox, route_holders[:GUILD_ROUTE_MAILBOX_CHECKS], positions
         )
@@ -6480,8 +6491,56 @@ class Bridge(discord.Client):
             if await asyncio.to_thread(_insert_route, route):
                 written += 1
                 log.info("guild route: %s", route.said)
+                if route.verb == guildroute.MAIL:
+                    self._guild_mail_runs.pop(route.holder, None)
         log.info("guild route: queued %d/%d hand-over(s) from %d carried guildmate "
                  "item(s)", written, len(ready.grants), len(gear_rows))
+        moving = {(r.holder, r.guid) for r in ready.grants}
+        waiting = [
+            r for r in decided.grants
+            if (r.holder, r.guid) not in moving and r.holder not in at_mailbox
+        ]
+        await self._walk_route_holders(waiting, family_names)
+
+    async def _walk_route_holders(self, waiting: list, family_names: list) -> None:
+        """Walk a waiting route's holder to the nearest mailbox (#185).
+
+        guildroute.plan_mail_runs decides who walks, within its bounds: one
+        run per holder, the nearest mailbox within a distance cap, a daily
+        cap, never in combat or inside an instance. The walk is the town
+        slot's ground aim, the one the family's own mail pass uses, so only a
+        roster family's leader can be walked; a guild bot off the roster
+        waits and the note says why (quadseven/mod-overseer#569). The letter
+        is written by `_guild_route_once` on the cycle the holder stands at
+        the box. Nothing here writes an overseer_command row, and never a
+        give.
+        """
+        now = time.monotonic()
+        self._guild_mail_runs = guildroute.live_runs(self._guild_mail_runs, now)
+        self._guild_mail_run_starts = [
+            t for t in self._guild_mail_run_starts
+            if now - t < guildroute.DAY_SECONDS
+        ]
+        if not waiting:
+            return
+        holders = list(dict.fromkeys(r.holder for r in waiting))
+        holders = holders[:GUILD_ROUTE_MAILBOX_CHECKS]
+        walkers = await asyncio.to_thread(_route_walkers, holders, family_names)
+        posted = await asyncio.to_thread(_route_letters_today)
+        plan = guildroute.plan_mail_runs(
+            waiting, walkers, self._guild_mail_runs,
+            guildroute.runs_today(self._guild_mail_run_starts, now, posted),
+        )
+        _log_capped("guild route", plan.notes)
+        for run in plan.runs:
+            taken = await self._claim_town_slot(
+                guildroute.MAIL_RUN_CLAIMANT, run.holder, run.aim, cohort=run.cohort,
+            )
+            if not taken:
+                continue
+            self._guild_mail_runs[run.holder] = now
+            self._guild_mail_run_starts.append(now)
+            log.info("guild route: %s", run.said)
 
     async def _say_guild_gift(self, gift) -> None:
         """Say it in guild chat, because the guild is who it is addressed to.
@@ -11991,6 +12050,65 @@ def _holders_at_mailbox(holders: list, positions: dict) -> set:
         if travel.spawn_in_reach(spawn, positions.get(holder), TOWN_COUNTER_YARDS):
             out.add(holder)
     return out
+
+
+# A holder's fresh snapshot row, with what a mail run is gated on (#185).
+_ROUTE_WALKER_SQL = (
+    "SELECT name, map_id, pos_x, pos_y, in_combat FROM overseer_snapshot "
+    "WHERE name IN (%s) AND updated_at > NOW() - INTERVAL 60 SECOND"
+)
+
+
+def _route_walkers(holders: list, family_names: list) -> dict:
+    """holder -> guildroute.Walker; guildroute decides everything.
+
+    Which roster family each holder leads comes from the same roster read the
+    town slot uses (`townslot.other_cohorts`). The nearest mailbox is only
+    looked up for a holder that can be walked at all, so a guild of bots off
+    the roster costs one snapshot read and no spawn reads.
+    """
+    if not holders:
+        return {}
+    rows = _roster_cohort_rows()
+    roster = {str(row.get("name") or "") for row in rows}
+    leader_of = {
+        cohort.leader: cohort.key
+        for cohort in townslot.other_cohorts(rows, family_names)
+    }
+    sql = _ROUTE_WALKER_SQL % ",".join(["%s"] * len(holders))
+    with _connect() as conn, conn.cursor() as cur:
+        try:
+            cur.execute(sql, holders)
+        except pymysql.err.MySQLError as exc:
+            if exc.args and exc.args[0] in (1054, 1146):
+                log.warning("guild route: holder positions unavailable")
+                return {}
+            raise
+        states = {row["name"]: dict(row) for row in cur.fetchall()}
+    out = {}
+    for holder in holders:
+        state = states.get(holder)
+        spawn = _nearest_mailbox(holder) if state and holder in leader_of else None
+        out[holder] = guildroute.walker_from(holder, state, leader_of, roster, spawn)
+    return out
+
+
+def _route_letters_today() -> int:
+    """Route letters the command log holds for the last 24 hours (#185)."""
+    with _connect() as conn, conn.cursor() as cur:
+        try:
+            cur.execute(
+                "SELECT COUNT(*) AS n FROM overseer_command "
+                "WHERE source LIKE %s AND kind = %s "
+                "AND created_at > NOW() - INTERVAL 1 DAY",
+                (guildroute.SOURCE + ":%", guildroute.MAIL),
+            )
+        except pymysql.err.MySQLError as exc:
+            if exc.args and exc.args[0] in (1054, 1146):
+                return 0
+            raise
+        row = cur.fetchone()
+        return int((row or {}).get("n") or 0)
 
 
 def _recent_route_keys(minutes: int) -> set:

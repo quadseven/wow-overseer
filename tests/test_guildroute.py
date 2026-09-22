@@ -19,6 +19,7 @@ import bag_pressure
 import gear
 import guildroute
 import raidlineup
+import travel
 
 HERE = pathlib.Path(__file__).resolve().parents[1]
 
@@ -522,6 +523,162 @@ class TheRowsAndThePage(unittest.TestCase):
         self.assertIn("renderRoutes(p.guild_routes);", page)
         server = (HERE / "map_server.py").read_text(encoding="utf-8")
         self.assertIn('payload["guild_routes"] = _fetch_guild_routes()', server)
+
+
+def _box(d2=100.0 * 100.0, map_id=1):
+    # A mailbox spawn row as _nearest_mailbox returns it, d2 from the holder.
+    return {"map_id": map_id, "x": -1500.0, "y": 2400.0, "z": 90.0, "d2": d2}
+
+
+def _walker(name="Avenah", **over):
+    base = dict(
+        state={"map_id": 1, "in_combat": 0},
+        leader_of={"Avenah": "Bonkers"},
+        roster={"Avenah"},
+        spawn=_box(),
+    )
+    base.update(over)
+    return guildroute.walker_from(
+        name, base["state"], base["leader_of"], base["roster"], base["spawn"]
+    )
+
+
+class HoldersWalkToAMailbox(unittest.TestCase):
+    """#185: a waiting route walks its holder to the nearest mailbox."""
+
+    def setUp(self):
+        self.route = gear.route_plan(
+            [destiny(has_effect=False)], cands(avenah(), grog())
+        ).grants[0]
+
+    def plan(self, walker=None, running=(), spent=0, routes=None, **kw):
+        walkers = {"Avenah": walker or _walker()}
+        return guildroute.plan_mail_runs(
+            routes or [self.route], walkers, set(running), spent, **kw
+        )
+
+    def test_a_roster_leader_holder_walks_to_the_nearest_mailbox(self):
+        plan = self.plan()
+        self.assertEqual(len(plan.runs), 1)
+        run = plan.runs[0]
+        self.assertEqual((run.holder, run.taker, run.guid), ("Avenah", "Grog", 4909901))
+        self.assertEqual(run.cohort, "Bonkers")
+        self.assertEqual(run.aim, travel.mailbox_aim(_box(), 1).aim)
+        self.assertEqual(
+            run.said,
+            "Avenah walks 100 yards to the mailbox at %s to post Destiny "
+            "(item 4909901) to Grog, +%d item levels" % (run.aim, self.route.gain),
+        )
+
+    def test_a_guild_bot_off_the_roster_waits_and_names_the_module_gap(self):
+        walker = _walker(leader_of={}, roster=set())
+        plan = self.plan(walker)
+        self.assertEqual(plan.runs, ())
+        self.assertEqual(
+            plan.notes,
+            (
+                "Destiny stays with Avenah: Avenah is a guild bot off the roster, "
+                "which nothing in mod-overseer can walk yet "
+                "(quadseven/mod-overseer#569)",
+            ),
+        )
+
+    def test_a_roster_follower_is_not_walked(self):
+        plan = self.plan(_walker(leader_of={}))
+        self.assertEqual(plan.runs, ())
+        self.assertIn(guildroute.NOT_LEADING, plan.notes[0])
+
+    def test_one_run_per_holder_at_a_time(self):
+        plan = self.plan(running={"Avenah"})
+        self.assertEqual(plan.runs, ())
+        self.assertIn("already walking to a mailbox", plan.notes[0])
+        second = replace(self.route, guid=77, name="Second")
+        plan = self.plan(routes=[self.route, second])
+        self.assertEqual([r.guid for r in plan.runs], [4909901])
+
+    def test_the_nearest_mailbox_must_be_within_the_cap(self):
+        far = _walker(spawn=_box(d2=700.0 * 700.0))
+        plan = self.plan(far)
+        self.assertEqual(plan.runs, ())
+        self.assertIn("700 yards away, past the 600", plan.notes[0])
+        self.assertEqual(len(self.plan(far, max_yards=800).runs), 1)
+
+    def test_no_mailbox_on_the_map_waits(self):
+        plan = self.plan(_walker(spawn=None))
+        self.assertEqual(plan.runs, ())
+        self.assertIn("no mailbox is spawned on map 1", plan.notes[0])
+
+    def test_the_daily_cap(self):
+        plan = self.plan(spent=guildroute.MAIL_RUNS_PER_DAY)
+        self.assertEqual(plan.runs, ())
+        self.assertIn("mail runs a day is the limit", plan.notes[0])
+        self.assertEqual(len(self.plan(spent=guildroute.MAIL_RUNS_PER_DAY - 1).runs), 1)
+
+    def test_never_in_combat(self):
+        plan = self.plan(_walker(state={"map_id": 1, "in_combat": 1}))
+        self.assertEqual(plan.runs, ())
+        self.assertIn("is in combat", plan.notes[0])
+
+    def test_never_inside_an_instance(self):
+        plan = self.plan(
+            _walker(state={"map_id": 36, "in_combat": 0}, spawn=_box(map_id=36))
+        )
+        self.assertEqual(plan.runs, ())
+        self.assertIn("inside an instance", plan.notes[0])
+
+    def test_not_in_the_world_waits(self):
+        plan = self.plan(_walker(state=None))
+        self.assertEqual(plan.runs, ())
+        self.assertIn("not in the world", plan.notes[0])
+
+    def test_only_a_family_receiver_is_walked_for(self):
+        plan = self.plan(routes=[replace(self.route, family=False)])
+        self.assertEqual(plan.runs, ())
+
+    def test_a_family_runner_up_is_walked_for(self):
+        guildmate = replace(self.route, family=False, taker="Someone")
+        route = replace(guildmate, alternates=(self.route,))
+        self.assertEqual([r.taker for r in self.plan(routes=[route]).runs], ["Grog"])
+
+    def test_a_run_ends_after_its_time(self):
+        running = {"Avenah": 0.0, "Other": 1000.0}
+        self.assertEqual(
+            guildroute.live_runs(running, guildroute.MAIL_RUN_SECONDS + 1.0),
+            {"Other": 1000.0},
+        )
+
+    def test_the_day_counts_memory_or_the_log_whichever_is_more(self):
+        now = guildroute.DAY_SECONDS + 10.0
+        self.assertEqual(guildroute.runs_today([0.0, 20.0, 30.0], now), 2)
+        self.assertEqual(guildroute.runs_today([20.0], now, posted=4), 4)
+
+
+class TheBridgeWalksAndNeverGives(unittest.TestCase):
+    def body(self, name):
+        bridge = (HERE / "bridge.py").read_text(encoding="utf-8")
+        body = bridge[bridge.index(name) :]
+        return body[: body.index("\n    async def ")]
+
+    def test_the_walk_goes_through_the_town_slot_and_writes_no_row(self):
+        body = self.body("async def _walk_route_holders(")
+        self.assertIn("guildroute.plan_mail_runs(", body)
+        self.assertIn("self._claim_town_slot(", body)
+        self.assertIn("cohort=run.cohort", body)
+        self.assertNotIn("INSERT", body)
+        self.assertNotIn("_insert_", body)
+        self.assertNotIn("'give'", body)
+
+    def test_the_route_pass_hands_its_waiting_routes_to_the_walk(self):
+        body = self.body("async def _guild_route_once(")
+        self.assertIn("await self._walk_route_holders(waiting, family_names)", body)
+        self.assertIn("self._guild_mail_runs.pop(route.holder, None)", body)
+
+    def test_the_walker_read_carries_combat(self):
+        bridge = (HERE / "bridge.py").read_text(encoding="utf-8")
+        sql = bridge[bridge.index("_ROUTE_WALKER_SQL = (") :]
+        sql = sql[: sql.index("\n)\n")]
+        self.assertIn("in_combat", sql)
+        self.assertIn("map_id", sql)
 
 
 if __name__ == "__main__":
