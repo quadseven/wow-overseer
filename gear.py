@@ -1600,29 +1600,18 @@ def route_deliverable(
             )
             continue
         chosen = None
-        taken_by, absent, full, apart = [], [], [], []
+        walls = {"taken": [], "absent": [], "full": [], "apart": []}
         for option in (route,) + tuple(route.alternates):
-            if option.taker in taken:
-                taken_by.append(option.taker)
-                continue
-            there = spots.get(option.taker)
-            if there is None:
-                absent.append(option.taker)
-                continue
-            if _within_trade_range(here, there):
-                if room.get(option.taker, 0) <= 0:
-                    full.append(option.taker)
-                    continue
-                chosen = replace(option, verb=TRADE, alternates=())
-                room[option.taker] = room.get(option.taker, 0) - 1
+            verb, wall = _verb_for(option, here, spots, room, posting, taken)
+            if verb:
+                chosen = replace(option, verb=verb, alternates=())
                 break
-            if option.family and route.holder in posting:
-                chosen = replace(option, verb=MAIL, alternates=())
-                break
-            apart.append(option.taker)
+            walls[wall].append(option.taker)
         if chosen is None:
-            notes.append(_route_withheld(route, posting, taken_by, absent, full, apart))
+            notes.append(_route_withheld(route, posting, walls))
             continue
+        if chosen.verb == TRADE:
+            room[chosen.taker] = room.get(chosen.taker, 0) - 1
         taken.add(chosen.taker)
         out.append(chosen)
     return Plan(grants=tuple(out), notes=tuple(notes))
@@ -1635,11 +1624,35 @@ def _few(names: list) -> str:
     return "%s and %d more" % (", ".join(names[:3]), len(names) - 3)
 
 
-def _route_withheld(route, posting, taken_by, absent, full, apart) -> str:
+def _verb_for(option, here, spots, room, posting, taken) -> tuple:
+    """(verb, "") when this receiver can take the item now, else ("", wall).
+
+    The wall is which of four things stopped it: "taken" (already has one
+    coming this pass), "absent" (not in the world), "full" (beside the holder
+    with no free slot) or "apart" (neither beside the holder nor reachable by
+    post).
+    """
+    if option.taker in taken:
+        return "", "taken"
+    there = spots.get(option.taker)
+    if there is None:
+        return "", "absent"
+    if _within_trade_range(here, there):
+        if room.get(option.taker, 0) <= 0:
+            return "", "full"
+        return TRADE, ""
+    if option.family and option.holder in posting:
+        return MAIL, ""
+    return "", "apart"
+
+
+def _route_withheld(route, posting, walls: dict) -> str:
     """The one note for a route no ranked receiver could take this pass."""
-    walls = []
+    taken_by, absent = walls["taken"], walls["absent"]
+    full, apart = walls["full"], walls["apart"]
+    said = []
     if apart:
-        walls.append(
+        said.append(
             "%s is beside none of %s%s"
             % (
                 route.holder,
@@ -1648,14 +1661,17 @@ def _route_withheld(route, posting, taken_by, absent, full, apart) -> str:
             )
         )
     if full:
-        walls.append(
+        said.append(
             "%s ha%s no free bag slot" % (_few(full), "ve" if len(full) > 1 else "s")
         )
     if absent:
-        walls.append("%s not in the world" % _few(absent))
+        said.append(
+            "%s %s not in the world"
+            % (_few(absent), "are" if len(absent) > 1 else "is")
+        )
     if taken_by:
-        walls.append(
+        said.append(
             "%s already ha%s one coming"
             % (_few(taken_by), "ve" if len(taken_by) > 1 else "s")
         )
-    return "%s stays with %s: %s" % (route.name, route.holder, "; ".join(walls))
+    return "%s stays with %s: %s" % (route.name, route.holder, "; ".join(said))
