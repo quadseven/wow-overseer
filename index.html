@@ -2309,8 +2309,20 @@
      so the family reads as one picture and a column of compact cards. */
   .fcard.headless .fstream, .fcard.headless .fwatch,
   .fcard.headless .fplayer { display:none; }
+  /* THE HEAD ON TOP, THE FAMILY UNDER IT (the operator's layout). With
+     headless members the streamed head takes a whole row, and the four
+     without a picture sit in one row beneath it: two across on a medium
+     screen, four across on a wide one. On a wide screen the head's card
+     puts the picture beside its facts rather than above them, so the row
+     is not one very tall card. */
   @media (min-width:820px) {
-    #ffeeds:has(.headless) .fcard:not(.headless) { grid-column:span 2; }
+    #ffeeds:has(.headless) .fcard:not(.headless) { grid-column:1 / -1; }
+  }
+  @media (min-width:1280px) {
+    #ffeeds:has(.headless) { grid-template-columns:repeat(4,minmax(0,1fr)); }
+    #ffeeds:has(.headless) .fcard:not(.headless) {
+      display:grid; grid-template-columns:minmax(0,1.7fr) minmax(0,1fr);
+      align-items:start; }
   }
   .fstrip { padding:.6rem .8rem .8rem; }
   /* THE HEAD IS NOW A GLYPH AND A COLUMN. The 64px tile is flex:none and
