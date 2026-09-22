@@ -556,6 +556,23 @@ def family_fits(gear_rows, equipped_rows, names) -> dict:
     return fits
 
 
+# gear.claims' two answers that are not a name, re-exported so a reader of
+# claimants never imports gear itself (this module is its one adapter).
+CLAIM_NOBODY = gear.NOBODY
+CLAIM_UNJUDGEABLE = gear.UNJUDGEABLE
+
+
+def family_claimants(gear_rows, equipped_rows, names) -> dict:
+    """item guid -> WHO gear.claims says should have it, for the Bags tab.
+
+    family_fits' question with the name kept: the page says "gear for Ugga"
+    where the sell path only needs "a sibling". Same rows, same opinion; the
+    answer is a name, CLAIM_NOBODY or CLAIM_UNJUDGEABLE.
+    """
+    characters = gear.characters_from_rows(equipped_rows, names)
+    return gear.claims(gear.holdings_from_rows(gear_rows), characters)
+
+
 def family_gifts(gear_rows, equipped_rows, names, keep_names=(),
                  position_rows=None, free_slots=None):
     """The carried pieces a sibling should be handed, and who should have them.

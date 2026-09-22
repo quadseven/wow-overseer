@@ -1506,9 +1506,44 @@
              border-radius:10px; padding:0 .8rem; font-family:var(--mono);
              font-size:.8rem; text-transform:uppercase; letter-spacing:.06em; }
   #ajump a:hover { border-color:var(--accent-text); color:var(--accent-text); }
+  /* TWO FAMILIES, ONE ROW PER PARTY ROLE (#88). Alliance on the left, Horde
+     on the right, so the tank is read beside the tank. A row is one column
+     on a phone (the role, then the Alliance card, then the Horde card) and
+     two from the width at which two profiles already fitted side by side;
+     a profile is never narrower than its doll, so nothing scrolls sideways. */
   #aprofiles { display:grid; gap:1rem; grid-template-columns:minmax(0,1fr); }
-  @media (min-width:1400px) { #aprofiles { grid-template-columns:repeat(2,minmax(0,1fr)); } }
-  @media (min-width:2100px) { #aprofiles { grid-template-columns:repeat(3,minmax(0,1fr)); } }
+  #asides, .apair { display:grid; gap:1rem; grid-template-columns:minmax(0,1fr); }
+  @media (min-width:1400px) {
+    #asides, .apair { grid-template-columns:repeat(2,minmax(0,1fr)); }
+    .apairrole { grid-column:1 / -1; }
+  }
+  #asides { margin-bottom:.4rem; }
+  .asidehead { font-family:var(--mono); font-size:.85rem; text-transform:uppercase;
+               letter-spacing:.06em; padding:.3rem .6rem; border-left:4px solid var(--neutral); }
+  .asidehead.alliance { border-left-color:var(--alliance); }
+  .asidehead.horde { border-left-color:var(--horde); }
+  .apairrole { font-family:var(--mono); font-size:.8rem; text-transform:uppercase;
+               letter-spacing:.08em; color:var(--dim); border-bottom:1px solid var(--line);
+               padding-bottom:.2rem; }
+  .aside { min-width:0; }
+  .anone { color:var(--dim); font-size:.9rem; padding:.6rem 0; }
+  /* THE GUILDS, COLLAPSED. Seventy profiles would be the page; a closed
+     section is one line, and its members are fetched only when it opens. */
+  #aguilds { margin-top:1.2rem; display:grid; gap:.6rem; }
+  .aguild { border:1px solid var(--line); border-radius:12px; padding:0 .8rem; }
+  .aguild.alliance { border-left:4px solid var(--alliance); }
+  .aguild.horde { border-left:4px solid var(--horde); }
+  .aguild > summary { min-height:44px; display:flex; align-items:center; cursor:pointer;
+                      font-family:var(--mono); font-size:.85rem; }
+  .aglist { display:grid; gap:.3rem; padding-bottom:.8rem; }
+  .agmember { display:flex; flex-wrap:wrap; gap:.5rem; align-items:center; width:100%;
+              min-height:44px; text-align:left; background:none; color:var(--text);
+              border:1px solid var(--line); border-radius:10px; padding:.2rem .7rem;
+              font:inherit; cursor:pointer; }
+  .agmember[aria-expanded="true"] { border-color:var(--accent-text); }
+  .agmember .n { font-weight:600; }
+  .agmember .l { color:var(--dim); overflow-wrap:anywhere; }
+  .agprofile { padding-top:.5rem; }
   /* THE DARK CARD ITSELF, painted from --ink rather than from this scope's
      --panel: the handoff names one dark surface and gives it one value, and
      --panel in here also dresses the standing and wealth cards below. */
@@ -2060,6 +2095,30 @@
   @media (min-width:640px) {
     #wcards { grid-template-columns:repeat(auto-fit,minmax(330px,1fr)); }
   }
+  /* TWO FAMILIES (#88): each side of #wcards is one family, Alliance first,
+     so on a desktop the two stand side by side and on a phone the Horde
+     follows the Alliance. The cards inside a side stack. */
+  .wside { display:grid; gap:1rem; align-content:start; min-width:0; }
+  .wsidehead { font-family:var(--mono); font-size:12px; letter-spacing:.12em;
+               text-transform:uppercase; color:var(--on-card-dim);
+               padding:.3rem .6rem; border-left:4px solid var(--neutral); }
+  .wsidehead.alliance { border-left-color:var(--alliance); }
+  .wsidehead.horde { border-left-color:var(--horde); }
+  /* Where it is going: one pile per line, the tone on the count. */
+  .wfates { margin-top:.8rem; border-top:1px solid var(--line); padding-top:.6rem; }
+  .wfates .wfh { font-family:var(--mono); font-size:11px; letter-spacing:.14em;
+                 text-transform:uppercase; color:var(--on-card-dim); }
+  .wpile { padding:.35rem 0; border-bottom:1px solid var(--line); font-size:.88rem; }
+  .wpile .pl { display:flex; gap:.5rem; align-items:baseline; }
+  .wpile .pl .k { overflow-wrap:anywhere; min-width:0; }
+  .wpile .pl .n { margin-left:auto; white-space:nowrap; font-family:var(--mono);
+                  font-size:11px; color:var(--on-card-dim); }
+  .wpile.t-alarm .pl .n, .wpile.t-alarm .r { color:var(--warn-text); }
+  .wpile.t-caution .pl .n, .wpile.t-caution .r { color:var(--caution-text); }
+  .wpile.t-good .pl .n { color:var(--accent-text); }
+  .wpile .r, .wpile .x { color:var(--on-card-dim); overflow-wrap:anywhere; }
+  .wpile .x { font-size:.8rem; }
+  .wpile a, .wfates a { color:inherit; }
   .wcard { background:var(--panel); border:1px solid var(--line);
            border-radius:14px; padding:16px 18px 18px; min-width:0; }
   .wcard.c-gone { opacity:.6; }
@@ -3124,7 +3183,9 @@
   <div id="aheadline">reaching the world...</div>
   <div id="asaved"></div>
   <nav id="ajump"></nav>
+  <div id="asides"></div>
   <div id="aprofiles"></div>
+  <div id="aguilds"></div>
   <!-- The standing panel (mod-overseer#88, mod-overseer#160): what the five
        have LEARNED, under what they are wearing. Inside #armory on purpose -
        it is the same question asked about the same five, and a sixth tab
@@ -8810,6 +8871,8 @@ setInterval(() => { if (view === EYE_VIEW) pollEye(); }, 30000);
 
 const asection = document.getElementById("armory");
 const aprofiles = document.getElementById("aprofiles");
+const asides = document.getElementById("asides");
+const aguilds = document.getElementById("aguilds");
 const ajump = document.getElementById("ajump");
 const aheadline = document.getElementById("aheadline");
 // Set here rather than in the markup so the sentence lives with the code that
@@ -8866,9 +8929,13 @@ function silhouette(colour) {
 // `trees` is the payload's own answer to whether the talent grids start
 // open. It is read here rather than decided here: "collapsed by default" is
 // a product decision and armory.py owns it.
-const arm = { profiles: new Map(), trees: null, provenance: {} };
+const arm = { profiles: new Map(), trees: null, provenance: {}, rows: [],
+              guilds: new Map(), doll: null };
 
-function armoryProfile(name) {
+// `host` is where a NEW profile is put: the pair rows place family profiles
+// themselves, and a guildmate's goes under its own line in a guild section,
+// which is also why a guildmate gets no jump link.
+function armoryProfile(name, host, jump = true) {
   let c = arm.profiles.get(name);
   if (c) return c;
   const prof = el("article", "aprof");
@@ -8923,10 +8990,12 @@ function armoryProfile(name) {
   const trees = el("div", "atrees");
   const unplaced = el("div", "aunplaced");
   prof.append(head, body, hint, spec, bar, trees, unplaced);
-  aprofiles.appendChild(prof);
-  const jump = el("a", "", name);
-  jump.href = "#" + prof.id;
-  ajump.appendChild(jump);
+  (host || aprofiles).appendChild(prof);
+  if (jump) {
+    const link = el("a", "", name);
+    link.href = "#" + prof.id;
+    ajump.appendChild(link);
+  }
   c = { name, prof, glyphs, faction, nm, role, line, nums, left, portrait, right, stats,
         card, detail, gaps, hint, spec, sum, budget, unspent, toggle, bar,
         trees, unplaced,
@@ -8941,6 +9010,8 @@ function armoryProfile(name) {
     showTrees(c);
   });
   arm.profiles.set(name, c);
+  portrait.armProfile = c;
+  modelSeen.observe(portrait);
   return c;
 }
 
@@ -9463,7 +9534,33 @@ function customisation(model, options) {
 // One viewer per profile, torn down and rebuilt only when the character's
 // model actually changes - a new helmet, a haircut - because building one
 // is a few MB of geometry and the poll runs every thirty seconds.
+// ONLY THE MODELS ON SCREEN ARE BUILT (#88). Each viewer is a WebGL context,
+// and a browser keeps only so many alive per page; ten family profiles plus
+// any guildmates opened below went past it, and the oldest contexts were
+// lost mid-draw ("Error in program linking"), leaving white panes. So a
+// profile's model is built when its stage comes near the screen and torn
+// down when it leaves; the portrait stands in for it while it is away.
+const modelSeen = new IntersectionObserver((entries) => {
+  for (const e of entries) {
+    const c = e.target.armProfile;
+    if (!c) continue;
+    c.visible = e.isIntersecting;
+    if (c.visible && c.pendingModel) renderModel(c, c.pendingModel);
+    else if (!c.visible && c.viewer) dropModel(c);
+  }
+}, { rootMargin: "400px 0px" });
+
+function dropModel(c) {
+  try { c.viewer.destroy(); } catch (e) { /* already gone */ }
+  c.viewer = null;
+  c.modelKey = null;
+  c.portrait.classList.remove("live");
+  c.gaps.textContent = "";
+}
+
 async function renderModel(c, m) {
+  c.pendingModel = m;
+  if (!c.visible) return;
   const key = m.model ? JSON.stringify(m.model) : "";
   if (c.modelKey === key) return;
   c.modelKey = key;
@@ -9687,8 +9784,53 @@ function renderArmory(p) {
   // verdict in a ternary here is a verdict no test can reach.
   aheadline.textContent = p.headline.text;
   aheadline.className = p.headline.alarm ? "alarm" : "";
-  for (const m of p.members) {
-    const c = armoryProfile(m.name);
+  arm.doll = p.doll;
+  renderSides(p);
+  for (const m of p.members) renderMember(armoryProfile(m.name), m, p.doll);
+  renderGuilds(p);
+}
+
+// The two side headings, Alliance then Horde, in the order the server sent.
+function renderSides(p) {
+  asides.textContent = "";
+  for (const side of p.sides) asides.appendChild(el("div", "asidehead " + side.faction, side.heading));
+  // One row per pair. Rows are kept and refilled, and a profile is MOVED
+  // into its cell rather than rebuilt, so its viewer and its open card
+  // survive a poll that reorders nothing.
+  p.pairs.forEach((pair, i) => {
+    let row = arm.rows[i];
+    if (!row) {
+      row = { box: el("div", "apair"), label: el("div", "apairrole"),
+              left: el("div", "aside"), right: el("div", "aside") };
+      row.box.append(row.label, row.left, row.right);
+      aprofiles.appendChild(row.box);
+      arm.rows[i] = row;
+    }
+    row.label.textContent = pair.role;
+    placeProfile(row.left, pair.left, p.no_counterpart);
+    placeProfile(row.right, pair.right, p.no_counterpart);
+  });
+  while (arm.rows.length > p.pairs.length) arm.rows.pop().box.remove();
+}
+
+function placeProfile(cell, name, none) {
+  if (!name) {
+    if (cell.dataset.who !== "") {
+      cell.textContent = "";
+      cell.appendChild(el("div", "anone", none));
+      cell.dataset.who = "";
+    }
+    return;
+  }
+  const c = armoryProfile(name, cell);
+  if (c.prof.parentNode !== cell) {
+    cell.textContent = "";
+    cell.appendChild(c.prof);
+  }
+  cell.dataset.who = name;
+}
+
+function renderMember(c, m, doll) {
     c.prof.className = "aprof" + (m.present ? "" : " c-gone");
     if (!m.present) {
       // Still says who, and still says what. A profile stripped to a name
@@ -9700,7 +9842,7 @@ function renderArmory(p) {
       // reached to take its note down. A caveat about a picture that is not
       // there any more would outlive the picture.
       c.gaps.textContent = "";
-      continue;
+      return;
     }
     c.nm.style.color = m.class_colour;
     c.faction.textContent = "";
@@ -9734,13 +9876,78 @@ function renderArmory(p) {
     // Driven by the SERVER's doll layout, not by this member's rows, so
     // every profile has the same cells in the same places, and the page
     // never names a slot itself.
-    for (const spec of p.doll.left) renderSlot(slotCell(c, c.left, spec), bySlot.get(spec));
-    for (const spec of p.doll.right) renderSlot(slotCell(c, c.right, spec), bySlot.get(spec));
+    for (const spec of doll.left) renderSlot(slotCell(c, c.left, spec), bySlot.get(spec));
+    for (const spec of doll.right) renderSlot(slotCell(c, c.right, spec), bySlot.get(spec));
     // The card under the doll is redrawn from the fresh row, so a poll that
     // arrives while a slot is open updates it instead of going stale.
     showSelection(c);
     renderArmoryStats(c, m.stats);
     renderSpec(c, m.spec, m.class_colour);
+}
+
+// --- the guilds under the families (#88) ---------------------------------
+// COLLAPSED BY DEFAULT, AND FETCHED ONLY WHEN OPENED. The default Armory is
+// the two families; a guild is one line until somebody opens it, then a list
+// of one line per member, and a member's full profile is fetched only when
+// that line is opened. The guild list is one read when a section opens, and
+// never on the thirty-second poll: guildmates are looked up, not watched.
+function renderGuilds(p) {
+  for (const g of p.guilds) {
+    let s = arm.guilds.get(g.name);
+    if (!s) {
+      const box = el("details", "aguild " + g.faction);
+      const sum = el("summary", "");
+      const list = el("div", "aglist");
+      box.append(sum, list);
+      aguilds.appendChild(box);
+      s = { name: g.name, box, sum, list, loaded: false };
+      box.addEventListener("toggle", () => { if (box.open && !s.loaded) loadGuild(s); });
+      arm.guilds.set(g.name, s);
+    }
+    s.sum.textContent = g.summary;
+  }
+}
+
+async function loadGuild(s) {
+  s.loaded = true;
+  s.list.textContent = "";
+  try {
+    const r = await fetch(u("/api/armory/guild?guild=" + encodeURIComponent(s.name)));
+    if (!r.ok) throw new Error(r.status);
+    const g = await r.json();
+    if (!g.members.length) s.list.appendChild(el("div", "anone", g.empty_note));
+    for (const m of g.members) {
+      const b = el("button", "agmember");
+      b.type = "button";
+      b.setAttribute("aria-expanded", "false");
+      const nm = el("span", "n", m.name);
+      nm.style.color = m.class_colour;
+      b.append(nm, el("span", "l", m.line), el("span", m.presence === "online" ? "on" : "off", m.presence));
+      const slot = el("div", "agprofile");
+      slot.hidden = true;
+      b.addEventListener("click", () => openGuildmate(b, slot, m.name));
+      s.list.append(b, slot);
+    }
+  } catch (e) {
+    // Closing and opening the section asks again.
+    s.loaded = false;
+    s.list.appendChild(el("div", "anone", "the world is unreachable - close and open to try again"));
+  }
+}
+
+async function openGuildmate(b, slot, name) {
+  const open = b.getAttribute("aria-expanded") !== "true";
+  b.setAttribute("aria-expanded", String(open));
+  slot.hidden = !open;
+  if (!open || arm.profiles.has(name)) return;
+  try {
+    const r = await fetch(u("/api/armory/member?name=" + encodeURIComponent(name)));
+    if (!r.ok) throw new Error(r.status);
+    const one = await r.json();
+    renderMember(armoryProfile(name, slot, false), one.member, one.doll);
+  } catch (e) {
+    b.setAttribute("aria-expanded", "false");
+    slot.hidden = true;
   }
 }
 
@@ -10079,7 +10286,27 @@ const WSTALE = "The world is unreachable right now, so this may be stale.";
 // throw away the scroll position mid-read on a phone, which is the one device
 // this is checked from. `note` is the last good saved-note, kept for the
 // failure path above.
-const wlth = { cards: new Map(), note: "" };
+const wlth = { cards: new Map(), note: "", sides: new Map() };
+
+// One column per family, keyed by the family, in the order the server sent
+// (Alliance first). A card is put in its family's column when it is built.
+function wealthSides(p) {
+  p.sides.forEach((side, i) => {
+    let col = wlth.sides.get(side.family);
+    if (!col) {
+      col = { box: el("div", "wside"), head: el("div", "wsidehead") };
+      col.box.appendChild(col.head);
+      wlth.sides.set(side.family, col);
+    }
+    col.head.className = "wsidehead " + side.faction;
+    col.head.textContent = side.heading;
+    if (wcards.children[i] !== col.box) wcards.insertBefore(col.box, wcards.children[i] || null);
+    for (const name of side.names) {
+      const c = wealthCard(name, col.box);
+      if (c.card.parentNode !== col.box) col.box.appendChild(c.card);
+    }
+  });
+}
 
 // A tone from the payload becomes a class and nothing else. wealth.py decides
 // what counts as an alarm; this decides what an alarm looks like.
@@ -10238,7 +10465,7 @@ function renderStats(list) {
   }
 }
 
-function wealthCard(name) {
+function wealthCard(name, host) {
   let c = wlth.cards.get(name);
   if (c) return c;
   const card = el("article", "wcard");
@@ -10253,9 +10480,10 @@ function wealthCard(name) {
   const tally = el("div", "wtally");
   const bags = el("div", "wbags");
   const notable = el("div", "wnotable");
-  card.append(head, who, purse, meter, room, spare, tally, bags, notable);
-  wcards.appendChild(card);
-  c = { card, head, who, purse, meter, bar, room, spare, tally, bags, notable };
+  const fates = el("div", "wfates");
+  card.append(head, who, purse, meter, room, spare, tally, fates, bags, notable);
+  (host || wcards).appendChild(card);
+  c = { card, head, who, purse, meter, bar, room, spare, tally, bags, notable, fates };
   wlth.cards.set(name, c);
   return c;
 }
@@ -10273,9 +10501,11 @@ function renderWealthMember(c, m) {
     c.tally.replaceChildren();
     c.bags.replaceChildren();
     c.notable.replaceChildren();
+    c.fates.replaceChildren();
     return;
   }
   c.head.style.color = m.class_colour;
+  renderFates(c, m.fates);
   c.purse.replaceChildren(wcoins(m.money));
   const r = m.room;
   c.meter.hidden = false;
@@ -10309,6 +10539,40 @@ function renderWealthMember(c, m) {
     const list = el("div", "wlist");
     for (const it of m.notable) list.appendChild(witem(it));
     c.notable.appendChild(list);
+  }
+}
+
+// WHERE IT IS ALL GOING (#88): every pile, its route, what blocks it and the
+// open ticket, all bagfate.py's words. The page only picks the classes.
+function wticket(t) {
+  const a = document.createElement("a");
+  a.href = t.url;
+  a.target = "_blank";
+  a.rel = "noopener";
+  a.textContent = t.label;
+  return a;
+}
+
+function renderFates(c, f) {
+  c.fates.replaceChildren();
+  if (!f) return;
+  c.fates.appendChild(el("div", "wfh", f.heading));
+  if (f.unmanaged) {
+    const p = el("p", wtone("wpile", f.unmanaged.tone));
+    p.append(el("span", "r", f.unmanaged.text + " "), wticket(f.unmanaged.ticket));
+    c.fates.appendChild(p);
+    return;
+  }
+  for (const pile of f.piles) {
+    const row = el("div", wtone("wpile", pile.tone));
+    const line = el("div", "pl");
+    line.append(el("span", "k", pile.label), el("span", "n", pile.count));
+    row.appendChild(line);
+    const route = el("div", "r", pile.route + (pile.blocker ? " - " + pile.blocker : "") + " ");
+    if (pile.ticket) route.appendChild(wticket(pile.ticket));
+    row.appendChild(route);
+    if (pile.examples) row.appendChild(el("div", "x", pile.examples));
+    c.fates.appendChild(row);
   }
 }
 
@@ -10397,6 +10661,7 @@ function renderWealth(p) {
   wrule(wcardshead, p.sections.cards);
   wrule(wauchead, p.sections.auction);
   wrule(wguildhead, p.sections.guild);
+  wealthSides(p);
   for (const m of p.members) renderWealthMember(wealthCard(m.name), m);
   renderAuctions(p.auctions);
   renderGuild(p.guild_bank);

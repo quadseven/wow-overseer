@@ -70,12 +70,15 @@ infra#2831.
 """
 from __future__ import annotations
 
+import armory
+import bagfate
 import bonds
 import family
 from armory import (
     ARMOR_SUBCLASSES, CLASS_COLOURS, EQUIPPED_SLOTS, ITEM_CLASS_ARMOR,
     ITEM_CLASS_WEAPON, QUALITY_NAMES, UNKNOWN_QUALITY, WEAPON_SUBCLASSES,
 )
+from core import _ALLIANCE_RACES, _HORDE_RACES
 from panel import _BACKPACK_SLOTS, _BAG_SLOTS, _BANK_BAG_SLOTS, _CLASS_NAMES
 
 # The coin. Named rather than spelled 10000 three times, because the one bug
@@ -450,6 +453,10 @@ def split_inventory(rows: list[dict], icons: dict[int, str]) -> dict:
     """
     equipped: list[dict] = []
     containers: list[dict] = []
+    # The RAW rows behind `equipped` and every container's items, for
+    # bagfate: the gear check wants template columns the page never draws.
+    worn_rows: list[dict] = []
+    carried_rows: list[dict] = []
     by_guid: dict[int, dict] = {}
     bank_bags: set[int] = set()
     inside: list[dict] = []
@@ -464,6 +471,7 @@ def split_inventory(rows: list[dict], icons: dict[int, str]) -> dict:
             continue
         slot = row["slot"]
         if slot < len(EQUIPPED_SLOTS):
+            worn_rows.append(row)
             equipped.append(item_payload(row, icons, EQUIPPED, EQUIPPED_SLOTS[slot],
                                          slot))
         elif slot in _BAG_SLOTS:
@@ -474,6 +482,7 @@ def split_inventory(rows: list[dict], icons: dict[int, str]) -> dict:
             containers.append(bag)
             by_guid[row["item_guid"]] = bag
         elif slot in _BACKPACK_SLOTS:
+            carried_rows.append(row)
             backpack["items"].append(
                 item_payload(row, icons, CARRIED, BACKPACK_NAME,
                              slot - _BACKPACK_SLOTS.start))
@@ -494,6 +503,7 @@ def split_inventory(rows: list[dict], icons: dict[int, str]) -> dict:
         if bag is None:
             elsewhere += 1   # inside a bank bag, or a container not carried
             continue
+        carried_rows.append(row)
         bag["items"].append(item_payload(row, icons, CARRIED, bag["name"], row["slot"]))
 
     for bag in containers:
@@ -516,7 +526,8 @@ def split_inventory(rows: list[dict], icons: dict[int, str]) -> dict:
                              if bag["slots"]
                              else "%d carried, size unknown" % bag["used"])
     return {"equipped": equipped, "containers": containers, "elsewhere": elsewhere,
-            "bank_bags": len(bank_bags)}
+            "bank_bags": len(bank_bags),
+            "worn_rows": worn_rows, "carried_rows": carried_rows}
 
 
 def build_capacity(containers: list[dict]) -> dict:
@@ -683,31 +694,39 @@ def worth_naming(equipped: list[dict], carried: list[dict]) -> list[dict]:
 
 
 def build_member(name: str, char_row: dict | None, inventory_rows: list[dict],
-                 icons: dict[int, str]) -> dict:
+                 icons: dict[int, str], claims: dict[int, str] | None = None,
+                 managed: bool = True) -> dict:
     """One member's purse, containers and holdings.
 
     A member with no `characters` row still gets an entry. A family view that
     quietly drops somebody is the exact failure the Armory tab was built to
     stop, and it is no less a failure here.
     """
-    bond = bonds.FAMILY[name]
+    # bonds knows one family. A Horde member has no bond and no family role,
+    # which is not an error: its line says level and class, and nothing more.
+    bond = bonds.FAMILY.get(name)
     if char_row is None:
+        klass = bond.char_class.title() if bond else "unknown class"
         return {
             "name": name,
-            "role": bond.role,
-            "class": bond.char_class.title(),
+            "role": bond.role if bond else None,
+            "class": klass,
             "present": False,
-            "who": "%s - %s" % (bond.char_class.title(), bond.role),
+            "who": "%s - %s" % (klass, bond.role) if bond else klass,
             "absent_note": ABSENT_NOTE,
         }
     split = split_inventory(inventory_rows, icons)
     carried = [i for bag in split["containers"] for i in bag["items"]]
     held = split["equipped"] + carried
     class_id = char_row.get("class")
+    race = char_row.get("race")
     member = {
         "name": char_row["name"],
-        "role": bond.role,
+        "role": bond.role if bond else None,
         "present": True,
+        "faction": ("alliance" if race in _ALLIANCE_RACES
+                    else "horde" if race in _HORDE_RACES else "neutral"),
+        "guild": char_row.get("guild"),
         "level": char_row.get("level"),
         "class": _CLASS_NAMES.get(class_id, "class %s" % class_id),
         "class_colour": CLASS_COLOURS.get(class_id, "#ffffff"),
@@ -724,8 +743,9 @@ def build_member(name: str, char_row: dict | None, inventory_rows: list[dict],
         "notable": worth_naming(split["equipped"], carried),
         "elsewhere": split["elsewhere"],
     }
-    member["who"] = "%s %s - %s" % (char_row.get("level"), member["class"],
-                                    member["role"])
+    member["who"] = ("%s %s - %s" % (char_row.get("level"), member["class"],
+                                     member["role"]) if member["role"]
+                     else "%s %s" % (char_row.get("level"), member["class"]))
     member["room"] = build_room(member["capacity"])
     stacks, units = member["carried"]["items"], member["carried"]["units"]
     # STACKS AND ITEMS ARE DIFFERENT NUMBERS AND BOTH ARE SAID. A bag holding
@@ -739,6 +759,12 @@ def build_member(name: str, char_row: dict | None, inventory_rows: list[dict],
         "%d more stored elsewhere (bank, keyring), not drawn here"
         % member["elsewhere"] if member["elsewhere"] else None)
     member["notable_note"] = NOTABLE_NOTE if member["notable"] else None
+    # WHERE IT IS ALL GOING (#88): each carried stack in one pile, and what
+    # stops the piles that go nowhere. bagfate says why these are the
+    # pipeline's own rules rather than a second opinion.
+    member["fates"] = bagfate.build_fates(
+        member["name"], split["carried_rows"], claims or {},
+        member["capacity"]["free"], managed)
     return member
 
 
@@ -1198,7 +1224,8 @@ def build_wealth(char_rows: list[dict], inventory_rows: list[dict],
                  auction_rows: list[dict], guild_rows: list[dict],
                  icons: dict[int, str],
                  guild_bank_rows: list[dict] | None = None,
-                 guild_bank_right_rows: list[dict] | None = None) -> dict:
+                 guild_bank_right_rows: list[dict] | None = None,
+                 families: list[tuple[str, list[str]]] | None = None) -> dict:
     """Every member's purse and bags, the family total, the auction house,
     and the guild bank there is not.
 
@@ -1210,10 +1237,43 @@ def build_wealth(char_rows: list[dict], inventory_rows: list[dict],
     inventory: dict[str, list[dict]] = {}
     for row in inventory_rows:
         inventory.setdefault(row["name"], []).append(row)
-    members = [build_member(name, chars.get(name), inventory.get(name, []), icons)
-               for name in family.roster()]
+    if families is None:
+        families = [("", family.roster())]
+    guild_of = {r["name"]: r.get("guild_name") for r in guild_rows}
+    for name, row in chars.items():
+        row.setdefault("guild", guild_of.get(name))
+    # The gear check runs over each family on its own, as the pipeline's
+    # hand-offs do: a Horde relative is not an Alliance one.
+    claims: dict[int, str] = {}
+    for _key, names in families:
+        carried, worn, levels = {}, {}, {}
+        for name in names:
+            row = chars.get(name)
+            if row is None or row.get("class") is None:
+                continue
+            split = split_inventory(inventory.get(name, []), {})
+            carried[name] = split["carried_rows"]
+            worn[name] = split["worn_rows"]
+            levels[name] = (row["class"], row.get("level") or 1)
+        if levels:
+            claims.update(bagfate.family_claims(carried, worn, levels))
+    # A character the economy passes do not cover gets one sentence instead
+    # of piles. The passes cover the persona family (bonds), which is the
+    # roster they are configured with; #150 is widening that.
+    members = [build_member(name, chars.get(name), inventory.get(name, []), icons,
+                            claims=claims, managed=name in bonds.FAMILY)
+               for _key, names in families for name in names]
+    # BOTH FAMILIES, Alliance on the left and Horde on the right, by the
+    # Armory's own rule for which side a family is on (armory.family_sides),
+    # so the two tabs cannot put a family on different sides.
+    by_name = {m["name"]: m for m in members}
+    sides = armory.family_sides(
+        [(key, [by_name[n] for n in names]) for key, names in families])
+    for side in sides:
+        side.pop("members")
     return {
         "members": members,
+        "sides": sides,
         "family": build_family(members),
         "auctions": build_auctions(auction_rows, icons),
         "guild_bank": build_guild_bank(

@@ -730,5 +730,100 @@ class TheDisplayGeneratorTest(unittest.TestCase):
         self.assertEqual(self.gen.differing(world, modern), {53: 8370})
 
 
+def _both_families():
+    def ch(name, cls, race, level=60, guild="Cave"):
+        return char(name=name, level=level, race=race, gender=0, guild=guild,
+                    **{"class": cls})
+    rows = [ch("Grug", 1, 1), ch("Ugga", 5, 1), ch("Grog", 2, 3), ch("Bork", 4, 7),
+            ch("Og", 8, 1),
+            ch("Zug", 1, 2, 15, "Bonkers"), ch("Oz", 8, 8, 11, "Bonkers"),
+            ch("Uzza", 5, 8, 11, "Bonkers"), ch("Zork", 11, 6, 11, "Bonkers"),
+            ch("Zrog", 7, 2, 11, "Bonkers")]
+    # Horde listed FIRST on purpose: the side order is the faction's, not
+    # the roster's.
+    families = [("Zug", ["Zug", "Oz", "Uzza", "Zork", "Zrog"]),
+                ("Grug", ["Grug", "Bork", "Grog", "Og", "Ugga"])]
+    return armory.build_armory(rows, [], [], BOOK, ITEMS, families=families,
+                               guild_sizes={"Cave": 71, "Bonkers": 5})
+
+
+class TheTwoFamiliesTest(unittest.TestCase):
+    """Alliance left, Horde right, one row per party role (#88)."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.p = _both_families()
+
+    def test_alliance_is_the_left_side_whatever_the_roster_order(self):
+        self.assertEqual([s["faction"] for s in self.p["sides"]], ["alliance", "horde"])
+        self.assertEqual(self.p["sides"][0]["names"][0], "Grug")
+        self.assertIn("Cave", self.p["sides"][0]["heading"])
+        self.assertIn("Bonkers", self.p["sides"][1]["heading"])
+
+    def test_the_tank_is_beside_the_tank_and_the_healer_beside_the_healer(self):
+        rows = [(r["role"], r["left"], r["right"]) for r in self.p["pairs"]]
+        self.assertEqual(rows[0], ("tank", "Grug", "Zug"))
+        self.assertEqual(rows[1], ("healer", "Ugga", "Uzza"))
+
+    def test_the_damage_row_matches_a_class_to_its_own_class_first(self):
+        damage = {r["left"]: r["right"] for r in self.p["pairs"] if r["role"] == "damage"}
+        self.assertEqual(damage["Og"], "Oz")
+        self.assertEqual(set(damage), {"Grog", "Bork", "Og"})
+        self.assertEqual(set(damage.values()), {"Oz", "Zork", "Zrog"})
+
+    def test_every_member_of_both_families_is_drawn_exactly_once(self):
+        drawn = [n for r in self.p["pairs"] for n in (r["left"], r["right"]) if n]
+        self.assertEqual(sorted(drawn), sorted(m["name"] for m in self.p["members"]))
+        self.assertEqual(len(self.p["members"]), 10)
+
+    def test_a_member_with_no_bond_still_gets_a_role(self):
+        zug = member(self.p, "Zug")
+        self.assertEqual(zug["party_role"], "tank")
+        self.assertEqual(zug["role"], "tank")
+        self.assertEqual(member(self.p, "Grug")["party_role"], "tank")
+
+    def test_the_role_is_the_class_not_the_tree_being_levelled(self):
+        """A warrior levelling Fury still holds the tank seat in a five:
+        raidlineup's packing spends the pure tanks first."""
+        members = [{"name": "A", "present": True, "class_id": 2},
+                   {"name": "B", "present": True, "class_id": 1},
+                   {"name": "C", "present": True, "class_id": 11}]
+        self.assertEqual(armory.party_roles(members),
+                         {"B": "tank", "A": "healer", "C": "damage"})
+
+    def test_a_side_with_nobody_for_a_role_leaves_that_half_empty(self):
+        left = [{"name": "A", "party_role": "tank", "class_id": 1}]
+        right = [{"name": "B", "party_role": "damage", "class_id": 8}]
+        self.assertEqual(armory.pair_by_role(left, right), [
+            {"role": "tank", "left": "A", "right": None},
+            {"role": "damage", "left": None, "right": "B"}])
+        self.assertTrue(self.p["no_counterpart"])
+
+    def test_one_family_alone_still_draws(self):
+        p = build()
+        self.assertEqual(len(p["sides"]), 1)
+        self.assertEqual(p["pairs"][0]["left"], FIRST)
+
+
+class TheGuildSectionsTest(unittest.TestCase):
+    def test_each_family_guild_is_one_collapsed_section_with_its_size(self):
+        guilds = _both_families()["guilds"]
+        self.assertEqual([g["name"] for g in guilds], ["Cave", "Bonkers"])
+        self.assertEqual(guilds[0]["size"], 71)
+        self.assertEqual(guilds[0]["others"], 66)
+        self.assertNotIn("members", guilds[0])
+        self.assertIn("71 members", guilds[0]["summary"])
+
+    def test_the_guild_list_leaves_out_the_family_and_sorts_by_level(self):
+        rows = [{"name": "Grug", "level": 60, "class": 1, "race": 1, "online": 1},
+                {"name": "Low", "level": 20, "class": 9, "race": 7, "online": 0},
+                {"name": "High", "level": 60, "class": 3, "race": 3, "online": 1,
+                 "worn": 18, "avg_item_level": 58.4}]
+        out = armory.guild_roster(rows, exclude=["Grug"])
+        self.assertEqual([m["name"] for m in out], ["High", "Low"])
+        self.assertEqual(out[0]["line"], "Level 60 Dwarf Hunter - 18 worn, item level 58")
+        self.assertEqual(out[1]["presence"], "offline")
+
+
 if __name__ == "__main__":
     unittest.main()

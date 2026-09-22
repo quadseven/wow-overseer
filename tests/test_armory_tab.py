@@ -213,8 +213,13 @@ class TheArmoryTab(unittest.TestCase):
         """Which slots go down which side of the character is a fact the
         payload carries (armory.DOLL_LEFT / DOLL_RIGHT); the page draws
         from it so it never names a slot itself."""
-        self.assertIn("for (const spec of p.doll.left)", self.tab)
-        self.assertIn("for (const spec of p.doll.right)", self.tab)
+        # `doll` is the payload's: renderMember is handed p.doll by the poll
+        # and one.doll by a guildmate's own read.
+        self.assertIn("for (const spec of doll.left)", self.tab)
+        self.assertIn("for (const spec of doll.right)", self.tab)
+        self.assertIn("renderMember(armoryProfile(m.name), m, p.doll)", self.tab)
+        self.assertIn("renderMember(armoryProfile(name, slot, false), one.member, one.doll)",
+                      self.tab)
 
     def test_the_page_leaves_the_tailnet_for_exactly_two_things(self):
         """The game's art is in the client's archives, not in any table this
@@ -464,7 +469,7 @@ class TheArmoryTab(unittest.TestCase):
         model = self.ajs[self.ajs.index("async function renderModel"):]
         self.assertIn('c.gaps.textContent = "";', model[:model.index("let pane")])
         gone = self.ajs[self.ajs.index("if (!m.present) {"):]
-        self.assertIn('c.gaps.textContent = "";', gone[:gone.index("continue;")])
+        self.assertIn('c.gaps.textContent = "";', gone[:gone.index("return;")])
 
     def test_the_undrawn_note_is_a_caution_and_takes_no_room_when_empty(self):
         """Caution ink, not alarm ink: the gear IS on the character and the
@@ -732,11 +737,16 @@ class TheArmoryTab(unittest.TestCase):
 
     def test_one_profile_on_a_phone_and_two_on_a_wide_desktop(self):
         """A profile is as wide as its paper doll needs, and the page must
-        never scroll sideways: one column until there is room for two."""
+        never scroll sideways: one column until there is room for two. The
+        two are now Alliance and Horde side by side in a role row, so there
+        is no third column: a third profile would break the comparison."""
         self.assertIn("#aprofiles { display:grid; gap:1rem; grid-template-columns:minmax(0,1fr); }",
                       self.css)
-        self.assertIn("grid-template-columns:repeat(2,minmax(0,1fr))", self.css)
-        self.assertIn("grid-template-columns:repeat(3,minmax(0,1fr))", self.css)
+        self.assertIn("#asides, .apair { display:grid; gap:1rem; grid-template-columns:minmax(0,1fr); }",
+                      self.acss)
+        self.assertIn("@media (min-width:1400px) {\n    #asides, .apair { grid-template-columns:repeat(2,minmax(0,1fr)); }",
+                      self.acss)
+        self.assertNotIn("grid-template-columns:repeat(3,minmax(0,1fr))", self.acss)
 
     def test_one_content_breakpoint_and_it_is_the_handoffs(self):
         """Mobile first, and the doll goes beside the stat block at 640. The
@@ -813,9 +823,13 @@ class TheEndpoint(unittest.TestCase):
         assertNotIn below is the load-bearing one and it is untouched."""
         handler = self.server[self.server.index("def _armory"):]
         handler = handler[:handler.index("def _thoughts")]
-        self.assertIn("fetched = _fetch_armory()", handler)
-        self.assertIn("armory.build_armory(**fetched, book=BOOK, items=ITEMS)",
+        # Both families now, and still from the roster: the names reach the
+        # fetch from _fetch_family_groups and nowhere else.
+        self.assertIn("groups = _fetch_family_groups()", handler)
+        self.assertIn("fetched = _fetch_armory(names)", handler)
+        self.assertIn("armory.build_armory(**fetched, book=BOOK, items=ITEMS,",
                       handler)
+        self.assertIn("families=groups,", handler)
         self.assertNotIn("query.get", handler)
 
     def test_a_file_the_model_host_has_not_got_is_logged_and_not_only_answered(self):
@@ -887,6 +901,94 @@ class TheEndpoint(unittest.TestCase):
     # worldserver.overrides.conf, which this repo does not carry. An
     # equivalent check should live in infra's own wow-dev render-test suite
     # instead - see the tracking issue for this split.
+
+
+class TheTwoFamiliesAndTheGuilds(unittest.TestCase):
+    """Both families side by side by party role, guilds collapsed and lazy (#88)."""
+
+    @classmethod
+    def setUpClass(cls):
+        page = (HERE / "index.html").read_text()
+        start = page.index("// --- the Armory tab (infra#3096, infra#3139)")
+        tab = page[start:page.index("</script>", start)]
+        cls.ajs = tab[:tab.index(
+            "// --- the standing panel (mod-overseer#88, mod-overseer#160)")]
+        cls.page = page
+        cls.server = (HERE / "map_server.py").read_text()
+
+    def test_the_section_has_a_place_for_the_sides_and_the_guilds(self):
+        armory_html = self.page[self.page.index('<section id="armory">'):]
+        armory_html = armory_html[:armory_html.index("</section>")]
+        for box in ('<div id="asides"></div>', '<div id="aprofiles"></div>',
+                    '<div id="aguilds"></div>'):
+            self.assertIn(box, armory_html)
+        self.assertLess(armory_html.index('id="aprofiles"'),
+                        armory_html.index('id="aguilds"'))
+
+    def test_the_rows_come_from_the_payloads_pairs(self):
+        """Who sits beside whom is armory.pair_by_role's, not the page's."""
+        self.assertIn("p.pairs.forEach((pair, i) =>", self.ajs)
+        self.assertIn("placeProfile(row.left, pair.left, p.no_counterpart);", self.ajs)
+        self.assertIn("placeProfile(row.right, pair.right, p.no_counterpart);", self.ajs)
+        self.assertIn("row.label.textContent = pair.role;", self.ajs)
+
+    def test_a_profile_is_moved_into_its_cell_not_rebuilt(self):
+        """A rebuilt profile would throw away its viewer every poll."""
+        place = self.ajs[self.ajs.index("function placeProfile"):]
+        place = place[:place.index("function renderMember")]
+        self.assertIn("if (c.prof.parentNode !== cell)", place)
+        self.assertIn("cell.appendChild(c.prof);", place)
+
+    def test_a_guild_is_closed_by_default_and_fetched_only_when_opened(self):
+        guilds = self.ajs[self.ajs.index("function renderGuilds"):]
+        guilds = guilds[:guilds.index("async function loadGuild")]
+        self.assertIn('el("details", "aguild " + g.faction)', guilds)
+        self.assertNotIn("box.open = true", guilds)
+        self.assertNotIn("fetch(", guilds)
+        self.assertIn("if (box.open && !s.loaded) loadGuild(s);", guilds)
+        self.assertIn('u("/api/armory/guild?guild=" + encodeURIComponent(s.name))',
+                      self.ajs)
+
+    def test_a_guildmates_profile_is_fetched_one_at_a_time(self):
+        mate = self.ajs[self.ajs.index("async function openGuildmate"):]
+        self.assertIn('u("/api/armory/member?name=" + encodeURIComponent(name))', mate)
+        self.assertIn("if (!open || arm.profiles.has(name)) return;", mate)
+
+    def test_the_poll_never_reads_a_guild(self):
+        poll = self.ajs[self.ajs.index("async function pollArmory"):]
+        poll = poll[:poll.index("setInterval(pollArmory")]
+        self.assertNotIn("/api/armory/guild", poll)
+        self.assertNotIn("/api/armory/member", poll)
+
+    def test_only_the_models_near_the_screen_hold_a_webgl_context(self):
+        """Ten profiles, plus guildmates, went past the browser's live WebGL
+        context budget and the oldest panes went white. A model is built
+        when its stage nears the screen and torn down when it leaves."""
+        self.assertIn("const modelSeen = new IntersectionObserver(", self.ajs)
+        self.assertIn("modelSeen.observe(portrait);", self.ajs)
+        model = self.ajs[self.ajs.index("async function renderModel"):]
+        self.assertIn("c.pendingModel = m;\n  if (!c.visible) return;", model)
+        drop = self.ajs[self.ajs.index("function dropModel"):]
+        drop = drop[:drop.index("async function renderModel")]
+        self.assertIn("c.modelKey = null;", drop)
+        self.assertIn('c.gaps.textContent = "";', drop)
+
+    def test_both_guild_routes_are_reachable(self):
+        self.assertIn('"/api/armory/guild": _armory_guild,', self.server)
+        self.assertIn('"/api/armory/member": _armory_member,', self.server)
+
+    def test_a_guild_or_a_name_is_only_ever_matched_against_the_families(self):
+        """The two routes take a parameter; what makes them safe is that the
+        parameter is compared against a set the database produced for the
+        families' own guilds, and refused otherwise."""
+        guild = self.server[self.server.index("def _armory_guild"):]
+        guild = guild[:guild.index("def _armory_member")]
+        self.assertIn("if wanted not in _fetch_guild_sizes(names):", guild)
+        member = self.server[self.server.index("def _armory_member"):]
+        member = member[:member.index("def _read_json_body")]
+        self.assertIn("if not _NAME_RE.fullmatch(wanted):", member)
+        self.assertIn("if wanted not in members:", member)
+        self.assertIn("self._send(404", member)
 
 
 if __name__ == "__main__":

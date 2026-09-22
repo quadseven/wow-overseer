@@ -51,6 +51,7 @@ from dataclasses import dataclass, field
 
 import bonds
 import family
+import raidlineup
 from core import _ALLIANCE_RACES, _HORDE_RACES
 from panel import (  # noqa: F401 - CLASS_COLOURS is re-exported for its old callers
     CLASS_COLOURS, _CLASS_NAMES, _EQUIPMENT_SLOT_NAMES, _RACE_NAMES,
@@ -1280,7 +1281,10 @@ ABSENT_NOTE = "no saved character - deleted, or never made."
 def _member(name: str, char_row: dict | None, equipment_rows: list[dict],
             talent_rows: list[dict], stats_row: dict | None, base_row: dict | None,
             set_names: dict[int, str], book: TalentBook, items: ItemBook) -> dict:
-    bond = bonds.FAMILY[name]
+    # The persona table knows ONE family. A Horde member, or a guildmate, has
+    # no bond, and that is not an error: it has no family role, only the
+    # party role party_roles gives it from its class.
+    bond = bonds.FAMILY.get(name)
     if char_row is None:
         # No `characters` row at all - the character was deleted or never
         # made. Unlike the Family tab there is no freshness window here:
@@ -1288,8 +1292,9 @@ def _member(name: str, char_row: dict | None, equipment_rows: list[dict],
         # has both and still gets a full column.
         return {
             "name": name,
-            "role": bond.role,
-            "class": bond.char_class.title(),
+            "role": bond.role if bond else UNKNOWN_ROLE,
+            "class": bond.char_class.title() if bond else UNKNOWN_ROLE,
+            "class_id": None,
             "present": False,
             "identity": ABSENT_NOTE,
         }
@@ -1326,8 +1331,11 @@ def _member(name: str, char_row: dict | None, equipment_rows: list[dict],
         identity.append(f"{kills} honourable kill" + ("" if kills == 1 else "s"))
     return {
         "name": char_row["name"],
-        "role": bond.role,
+        # The family role ("father") where there is one; party_roles
+        # overwrites this with the party role for anyone without a bond.
+        "role": bond.role if bond else UNKNOWN_ROLE,
         "present": True,
+        "class_id": class_id,
         "identity": " - ".join(identity),
         # The word, not the boolean, because the page must not be the place
         # that decides what the opposite of online is called.
@@ -1358,6 +1366,217 @@ def _member(name: str, char_row: dict | None, equipment_rows: list[dict],
         "stats": stats,
         "spec": _build_spec(class_id, char_row["level"], in_play, book),
     }
+
+
+# --- both families, side by side (#88) --------------------------------------
+# The Armory used to draw one family. There are two - an Alliance five and a
+# Horde five - and the operator asked to read them as a COMPARISON: Alliance
+# on the left, Horde on the right, one row per party role, so the tank is
+# beside the tank and the healer beside the healer.
+#
+# THE ROLE IS THE CLASS'S, BY THE SAME PACKING THE RAID LINEUP USES. A five
+# has one tank and one healer. raidlineup already decides who can fill each
+# (TANKS, HEALERS) and spends the classes that can ONLY do one thing first,
+# so a warrior tanks before a paladin is asked to and a priest heals before
+# a druid is. Reading it off the talent tree instead would put a level-11
+# character with two points in Fury into the damage row, and the spec a
+# character is levelling in is not the seat it holds in the party.
+TANK, HEALER, DAMAGE = "tank", "healer", "damage"
+UNKNOWN_ROLE = "unknown"
+ROLE_ORDER = (TANK, HEALER, DAMAGE)
+# How the damage row is matched when the classes differ: melee against
+# melee, casters against casters. Druids and shamans are either, and their
+# deepest tree says which.
+MELEE_CLASSES = frozenset({raidlineup.WARRIOR, raidlineup.PALADIN,
+                           raidlineup.ROGUE, raidlineup.DEATH_KNIGHT})
+MELEE_TREES = frozenset({"Feral Combat", "Enhancement"})
+# What an empty half of a row says. A blank cell reads as a card that
+# failed to load; this says the other family simply has nobody for it.
+NO_COUNTERPART = "no one in this role on this side"
+FACTION_HEADINGS = {"alliance": "Alliance", "horde": "Horde"}
+
+
+def party_roles(members: list[dict]) -> dict[str, str]:
+    """name -> tank, healer or damage, for one family of five.
+
+    Present members only; in roster order within a class band, so the lead
+    is chosen first when two could do it. A member with no saved character
+    has no class to read and gets no role.
+    """
+    pool = [m for m in members if m.get("present")]
+
+    def take(allowed) -> dict | None:
+        for m in pool:
+            if m.get("class_id") in allowed:
+                pool.remove(m)
+                return m
+        return None
+
+    roles = {}
+    tank = take(raidlineup.PURE_TANKS) or take(raidlineup.TANKS)
+    if tank:
+        roles[tank["name"]] = TANK
+    healer = take(raidlineup.PURE_HEALERS) or take(raidlineup.HEALERS)
+    if healer:
+        roles[healer["name"]] = HEALER
+    for m in pool:
+        roles[m["name"]] = DAMAGE
+    return roles
+
+
+def _style(m: dict) -> str:
+    if m.get("class_id") in MELEE_CLASSES:
+        return "melee"
+    primary = (m.get("spec") or {}).get("primary")
+    if m.get("class_id") in (raidlineup.DRUID, raidlineup.SHAMAN):
+        return "melee" if primary in MELEE_TREES else "ranged"
+    return "ranged"
+
+
+def pair_by_role(left: list[dict], right: list[dict]) -> list[dict]:
+    """Rows of {role, left, right}: tank, healer, then damage, then absent.
+
+    The damage row is matched as closely as the classes allow: the same class
+    first (a mage against a mage), then the same style (melee against melee),
+    then whoever is left, in roster order. Either side may be None.
+    """
+    def by_role(side, role):
+        return [m for m in side if m.get("party_role") == role]
+
+    rows = []
+    for role in (TANK, HEALER):
+        ls, rs = by_role(left, role), by_role(right, role)
+        for i in range(max(len(ls), len(rs))):
+            rows.append({"role": role,
+                         "left": ls[i]["name"] if i < len(ls) else None,
+                         "right": rs[i]["name"] if i < len(rs) else None})
+    ld, rd = by_role(left, DAMAGE), list(by_role(right, DAMAGE))
+    matched = []
+    for rule in (lambda a, b: a.get("class_id") == b.get("class_id"),
+                 lambda a, b: _style(a) == _style(b),
+                 lambda a, b: True):
+        for a in ld:
+            if any(a is x for x, _ in matched):
+                continue
+            for b in rd:
+                if rule(a, b):
+                    matched.append((a, b))
+                    rd.remove(b)
+                    break
+    order = {id(a): i for i, a in enumerate(ld)}
+    matched.sort(key=lambda pair: order[id(pair[0])])
+    for a, b in matched:
+        rows.append({"role": DAMAGE, "left": a["name"], "right": b["name"]})
+    unmatched = [a for a in ld if not any(a is x for x, _ in matched)]
+    for a in unmatched:
+        rows.append({"role": DAMAGE, "left": a["name"], "right": None})
+    for b in rd:
+        rows.append({"role": DAMAGE, "left": None, "right": b["name"]})
+    # A member with no role (no saved character) still gets a row: a
+    # comparison that quietly drops somebody is the failure this tab is for.
+    la = [m["name"] for m in left if not m.get("party_role")]
+    ra = [m["name"] for m in right if not m.get("party_role")]
+    for i in range(max(len(la), len(ra))):
+        rows.append({"role": UNKNOWN_ROLE,
+                     "left": la[i] if i < len(la) else None,
+                     "right": ra[i] if i < len(ra) else None})
+    return rows
+
+
+def _faction_of(members: list[dict]) -> str:
+    counts: dict[str, int] = {}
+    for m in members:
+        if m.get("faction") in FACTION_HEADINGS:
+            counts[m["faction"]] = counts.get(m["faction"], 0) + 1
+    return max(counts, key=counts.get) if counts else "neutral"
+
+
+def family_sides(groups: list[tuple[str, list[dict]]]) -> list[dict]:
+    """The families as page columns: Alliance first (left), then Horde.
+
+    A family is on the side its members' races put it on. Two families of
+    one faction, or a realm with only one, still draw: the order is then
+    the roster's.
+    """
+    sides = []
+    for key, members in groups:
+        faction = _faction_of(members)
+        lead = key or (members[0]["name"] if members else "")
+        guilds = [m.get("guild") for m in members if m.get("guild")]
+        guild = max(set(guilds), key=guilds.count) if guilds else None
+        heading = FACTION_HEADINGS.get(faction, "Family")
+        heading += f" - {lead}'s family" if lead else ""
+        if guild:
+            heading += f", guild {guild}"
+        sides.append({"family": key, "faction": faction, "heading": heading,
+                      "guild": guild, "members": members})
+        sides[-1]["names"] = [m["name"] for m in members]
+    rank = {"alliance": 0, "horde": 1}
+    sides.sort(key=lambda s: rank.get(s["faction"], 2))
+    return sides
+
+
+def guild_sections(members: list[dict], sizes: dict[str, int],
+                   sides: list[dict]) -> list[dict]:
+    """One collapsed section per guild a family member is in.
+
+    The count is the whole guild; `others` is how many are NOT already drawn
+    above as family, which is what opening the section will show. The
+    members themselves are not here: a guild of seventy is fetched only
+    when its section is opened (/api/armory/guild).
+    """
+    faction_of = {s["guild"]: s["faction"] for s in sides if s.get("guild")}
+    shown: dict[str, int] = {}
+    for m in members:
+        if m.get("guild"):
+            shown[m["guild"]] = shown.get(m["guild"], 0) + 1
+    out = []
+    for name in sorted(shown, key=lambda g: (
+            {"alliance": 0, "horde": 1}.get(faction_of.get(g), 2), g)):
+        size = sizes.get(name, shown[name])
+        others = max(0, size - shown[name])
+        out.append({
+            "name": name,
+            "faction": faction_of.get(name, "neutral"),
+            "size": size,
+            "others": others,
+            "summary": f"{name} - {size} member" + ("" if size == 1 else "s")
+                       + f", {others} not shown above",
+        })
+    return out
+
+
+# What an opened guild says when every member is already drawn above.
+GUILD_EMPTY_NOTE = "everyone in this guild is already drawn above."
+
+
+# The collapsed guild list: one line per member, the one sentence, and the
+# gear read that matters at a glance. Full profiles are fetched one at a
+# time (/api/armory/member) so the default page never carries seventy.
+def guild_roster(rows: list[dict], exclude=()) -> list[dict]:
+    """Guild member rows -> the compact list a guild section draws.
+
+    `rows` carry name, level, class, race, online, and the equipped count
+    and average item level of what is worn. Highest level first, then name,
+    so the list does not reshuffle between opens.
+    """
+    exclude = set(exclude)
+    out = []
+    for r in sorted(rows, key=lambda r: (-(r.get("level") or 0), r["name"])):
+        if r["name"] in exclude:
+            continue
+        class_id, race = r.get("class"), r.get("race")
+        line = (f"Level {r.get('level')} {_RACE_NAMES.get(race, f'race {race}')} "
+                f"{_CLASS_NAMES.get(class_id, f'class {class_id}')}")
+        if r.get("worn"):
+            line += f" - {r['worn']} worn, item level {int(r.get('avg_item_level') or 0)}"
+        out.append({
+            "name": r["name"],
+            "line": line,
+            "class_colour": CLASS_COLOURS.get(class_id, "#ffffff"),
+            "presence": "online" if r.get("online") else "offline",
+        })
+    return out
 
 
 # What the page says over the whole tab, and how loudly. LOUD ONLY FOR THE
@@ -1401,7 +1620,9 @@ def build_armory(char_rows: list[dict], equipment_rows: list[dict],
                  talent_rows: list[dict], book: TalentBook, items: ItemBook,
                  stats_rows: list[dict] | None = None,
                  base_rows: list[dict] | None = None,
-                 set_rows: list[dict] | None = None) -> dict:
+                 set_rows: list[dict] | None = None,
+                 families: list[tuple[str, list[str]]] | None = None,
+                 guild_sizes: dict[str, int] | None = None) -> dict:
     """Every member's profile, in roster order.
 
     The row lists arrive keyed by character name, unfiltered; splitting them
@@ -1409,6 +1630,11 @@ def build_armory(char_rows: list[dict], equipment_rows: list[dict],
     queries and no logic. A member with no rows still gets a profile - a
     family view that quietly drops somebody is the exact failure this tab
     exists to stop.
+
+    `families` is every family the roster knows, as (key, names) with the
+    lead first; None is the one family bonds holds, which is what a caller
+    with no roster table gets. `guild_sizes` counts every guild a family
+    member is in, for the collapsed guild sections under the pairs.
 
     `stats_rows` are character_stats (may be absent for any member),
     `base_rows` the class-and-race base stats keyed by (race, class, level),
@@ -1424,8 +1650,10 @@ def build_armory(char_rows: list[dict], equipment_rows: list[dict],
     stats = {r["name"]: r for r in (stats_rows or [])}
     base = {(r["race"], r["class"], r["level"]): r for r in (base_rows or [])}
     set_names = {r["entry"]: r["item_name"] for r in (set_rows or [])}
+    if families is None:
+        families = [("", family.roster())]
     members = []
-    for name in family.roster():
+    for name in [n for _key, names in families for n in names]:
         char_row = chars.get(name)
         base_row = None
         if char_row is not None:
@@ -1433,8 +1661,25 @@ def build_armory(char_rows: list[dict], equipment_rows: list[dict],
         members.append(_member(name, char_row, equipment.get(name, []),
                                talents.get(name, []), stats.get(name), base_row,
                                set_names, book, items))
+    by_name = {m["name"]: m for m in members}
+    groups = [(key, [by_name[n] for n in names]) for key, names in families]
+    for _key, group in groups:
+        for name, role in party_roles(group).items():
+            by_name[name]["party_role"] = role
+            if by_name[name]["role"] == UNKNOWN_ROLE:
+                by_name[name]["role"] = role
+    sides = family_sides(groups)
+    pairs = pair_by_role(sides[0]["members"] if sides else [],
+                         sides[1]["members"] if len(sides) > 1 else [])
+    # The profiles travel once, in `members`; a side names its own.
+    for side in sides:
+        side.pop("members")
     return {
         "members": members,
+        "sides": sides,
+        "pairs": pairs,
+        "no_counterpart": NO_COUNTERPART,
+        "guilds": guild_sections(members, guild_sizes or {}, sides),
         # The slot order, sent rather than retyped in the page: the paper
         # doll's left column, right column and weapon row are all drawn from
         # this one list, so both ends must agree on what the slots are.
