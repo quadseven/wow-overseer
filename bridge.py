@@ -1893,7 +1893,18 @@ def _drive_dungeon(keyword: str, wanted: int) -> tuple:
     Returns (jobs written, campaign rows written), both possibly 0 when bag
     pressure withholds the whole pass or the roster is empty - the same
     "count what actually landed" honesty _set_job's own fan-out keeps.
+    A keyword with no portal row is refused before any read or write
+    (jobs.dungeon_job), also returning (0, 0).
     """
+    mode = jobs.dungeon_job(keyword)
+    if mode is None:
+        log.warning(
+            "goal: refusing dungeon:%s - no dungeon portal answers to that "
+            "keyword, so no character's job was changed; known keywords: %s",
+            keyword, ", ".join(sorted(jobs.PORTAL_KEYWORDS)),
+        )
+        return 0, 0
+
     names = _fetch_enabled_names()
     if not names:
         return 0, 0
@@ -1908,7 +1919,6 @@ def _drive_dungeon(keyword: str, wanted: int) -> tuple:
         )
         return 0, 0
 
-    mode = "dungeon:%s" % keyword if keyword else "dungeon"
     jobs_written = 0
     for name in names:
         try:

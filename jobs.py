@@ -66,6 +66,38 @@ DUNGEONS = {
     "shadowfang keep": "shadowfang",
 }
 
+# Every keyword mod-overseer's coordinator has a portal row for
+# (DungeonPortals() in mod_overseer.cpp), which is the only set a
+# `dungeon:<keyword>` job can actually act on. Wider than DUNGEONS above on
+# purpose: DUNGEONS is what chat accepts, while the council's own goals already
+# send the Scarlet wings and the rest. tests/test_dungeon_goal.py pins this set
+# to the C++ table, so a portal added there fails here until it is listed.
+PORTAL_KEYWORDS = frozenset({
+    "deadmines",
+    "shadowfang",
+    "scarlet",
+    "scarlet-library",
+    "scarlet-armory",
+    "scarlet-cathedral",
+    "stockades",
+    "wailing",
+})
+
+
+def dungeon_job(keyword: str) -> str | None:
+    """The job a dungeon goal writes for `keyword`, or None to refuse it.
+
+    "" is the bare `dungeon` job, whose default portal belongs to
+    mod-overseer. A keyword with no portal row is refused: written anyway, it
+    parks every enabled character on a job the coordinator cannot run, and the
+    other drives stand down for it, so the whole roster stalls in silence.
+    """
+    if not keyword:
+        return "dungeon"
+    if keyword in PORTAL_KEYWORDS:
+        return "dungeon:%s" % keyword
+    return None
+
 # The modes that change behaviour. Every other key in MODES is accepted,
 # stored, and said back honestly as "not built yet" - see `describe`. Kept as
 # its own constant, not inferred from a "the code exists" check, so extending
