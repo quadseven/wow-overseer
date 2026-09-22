@@ -179,10 +179,15 @@ class TheEndpointIsWiredUp(unittest.TestCase):
     def test_the_route_exists(self):
         self.assertIn('"/api/agenda": _agenda,', self.server)
 
-    def test_the_endpoint_takes_no_roster_from_the_caller(self):
+    def test_the_endpoint_takes_a_family_and_never_a_roster(self):
+        """The family key, through the same _family_scope the quest board
+        uses, and nothing else from the request. Unscoped, the banner read
+        both families' rows as one family."""
         handler = self.server[self.server.index("def _agenda"):]
         handler = handler[:handler.index("def do_POST")]
-        self.assertIn("agenda.build_agenda(**_fetch_agenda())", handler)
+        self.assertIn("self._family_scope(query)", handler)
+        self.assertIn("agenda.build_agenda(**_fetch_agenda(names), members=names)",
+                      handler)
         self.assertNotIn("query.get", handler)
 
     def test_a_failed_query_is_a_503_and_not_an_empty_banner(self):
@@ -246,3 +251,37 @@ class EveryOverseerTableReadIsGuarded(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class EveryFamilyIsOnTheBanner(unittest.TestCase):
+    """Two families, one banner: the viewed family in full, each other
+    family as one line."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.page = (HERE / "index.html").read_text(encoding="utf-8")
+        start = cls.page.index(BANNER)
+        cls.tab = cls.page[start:cls.page.index(CHRONICLE, start)]
+
+    def test_the_banner_asks_for_the_family_on_screen(self):
+        poll = self.tab[self.tab.index("async function pollAgenda"):]
+        self.assertIn('u("/api/agenda" + familyQuery(asked))', poll)
+
+    def test_every_other_family_gets_a_line(self):
+        poll = self.tab[self.tab.index("async function pollAgenda"):]
+        self.assertIn("(p.families || []).filter((f) => f !== p.family)", poll)
+        self.assertIn('u("/api/agenda" + familyQuery(f))', poll)
+        self.assertIn('<div id="agother">', self.page)
+
+    def test_the_other_lines_are_built_once_and_say_a_stall_in_words(self):
+        row = self.tab[self.tab.index("function renderAgendaRow"):]
+        row = row[:row.index("\n}\n")]
+        self.assertIn("agRows.get(p.family)", row)
+        self.assertIn('"STALLED"', row)
+        self.assertNotIn("innerHTML", row)
+
+    def test_the_big_line_says_whose_goal_it_is(self):
+        self.assertIn('p.family + "\'s family"', self.tab)
+
+    def test_a_family_switch_moves_the_banner_at_once(self):
+        self.assertIn("pollFamily(); pollAgenda(); };", self.page)

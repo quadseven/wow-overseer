@@ -2404,7 +2404,7 @@ def _guarded(cur, sql: str, params: tuple = (), fallback: str = "",
     return []
 
 
-def _fetch_agenda() -> dict:
+def _fetch_agenda(names=None) -> dict:
     """Everything the current-goal banner reads, in one connection.
 
     Not subject to the 60s snapshot freshness rule, and deliberately so: an
@@ -2412,10 +2412,11 @@ def _fetch_agenda() -> dict:
     family who logged out an hour ago, which is a good part of the reason to
     look at all.
 
-    Names come from bonds via family.roster(), never from the request, so
-    every roster clause is a fixed IN list of five with no user input in it.
+    Names come from the roster table through _family_scope, or from bonds via
+    family.roster(), never from the request, so every roster clause is a
+    fixed IN list with no user input in it.
     """
-    names = family.roster()
+    names = family.roster() if names is None else names
     holes = ", ".join(["%s"] * len(names))
     conn = _connect()
     try:
@@ -3466,12 +3467,17 @@ class Handler(BaseHTTPRequestHandler):
         so a handler dropped into either window is read as part of a contract
         it has nothing to do with.
 
-        No name parameter, like every other family endpoint: WHO the family is
-        belongs to bonds, and this asks about the family as one thing anyway -
-        a per-character agenda is the split it exists to report.
+        Takes the family key, like /api/family, and never a name: the key is
+        matched against the roster table by _family_scope. Without it the
+        banner read every family's rows as one family. It still asks about a
+        family as one thing - a per-character agenda is the split it exists
+        to report.
         """
         try:
-            payload = agenda.build_agenda(**_fetch_agenda())
+            names, chosen, known = self._family_scope(query)
+            payload = agenda.build_agenda(**_fetch_agenda(names), members=names)
+            payload["family"] = chosen
+            payload["families"] = known
             self._send(200, "application/json", json.dumps(payload).encode())
         except Exception:
             # Same contract as every other poll, and it matters more here than
