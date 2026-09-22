@@ -55,6 +55,14 @@ class ThePilesTest(unittest.TestCase):
         self.assertEqual(bagfate.pile_of(white, gear.NOBODY, "A")[0], bagfate.VENDOR_GEAR)
 
 
+class TheTablesAgreeTest(unittest.TestCase):
+    def test_every_pile_has_words_and_a_place_in_the_order(self):
+        """build_fates sorts by ORDER.index; a pile in one table and not the
+        other would fail the whole card, so the two are pinned equal."""
+        self.assertEqual(set(bagfate.PILES), set(bagfate.ORDER))
+        self.assertEqual(len(bagfate.ORDER), len(set(bagfate.ORDER)))
+
+
 class TheCardTest(unittest.TestCase):
     def test_piles_are_counted_ordered_and_carry_their_ticket(self):
         rows = [row(1, bagfate.QUEST), row(2, bagfate.QUEST), row(3, 15, quality=0),
