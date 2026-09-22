@@ -237,5 +237,126 @@ class TheBridgeCanActuallyDriveADungeonGoal(unittest.TestCase):
         self.assertIn("dungeon_runs_wanted", code)
 
 
+# --- an unknown keyword never reaches the roster (#86) ----------------------
+
+
+MODULE = (pathlib.Path(__file__).resolve().parents[1]
+          / "mod-overseer/src/mod_overseer.cpp")
+
+
+def _load_drive_dungeon(inserted: list, updated: list, warnings: list):
+    """bridge._drive_dungeon, executed for real against fakes.
+
+    bridge.py itself cannot be imported here (discord/pymysql), so the one
+    function is compiled out of its source and run with every name it reaches
+    for supplied by the test. That makes this a behaviour test: it counts the
+    writes that would have landed, rather than reading the code as text.
+    """
+    import contextlib
+    import types
+
+    import jobs
+
+    node = _function("_drive_dungeon")
+    source = ast.get_source_segment(_bridge_source(), node)
+
+    class Cursor:
+        rowcount = 1
+
+        def execute(self, sql, args):
+            updated.append(args)
+
+    class Conn:
+        def cursor(self):
+            return contextlib.nullcontext(Cursor())
+
+    class Log:
+        def info(self, *a, **k):
+            pass
+
+        def warning(self, msg, *args):
+            warnings.append(msg % args)
+
+        def exception(self, *a, **k):
+            pass
+
+    namespace = {
+        "jobs": jobs,
+        "log": Log(),
+        "_fetch_enabled_names": lambda: ["Grug", "Ugga", "Og"],
+        "_fetch_free_slots": lambda names: {n: 40 for n in names},
+        "bag_pressure": types.SimpleNamespace(
+            family_town_run_needed=lambda slots: False),
+        "_insert_job": lambda name, mode, by: inserted.append((name, mode)),
+        "_connect": lambda: contextlib.nullcontext(Conn()),
+        "pymysql": types.SimpleNamespace(
+            err=types.SimpleNamespace(MySQLError=Exception)),
+    }
+    exec(compile(source, str(BRIDGE), "exec"), namespace)  # noqa: S102 - bridge.py's own source
+    return namespace["_drive_dungeon"]
+
+
+class AnUnknownKeywordNeverReachesTheRoster(unittest.TestCase):
+    def _drive(self, keyword):
+        inserted, updated, warnings = [], [], []
+        result = _load_drive_dungeon(inserted, updated, warnings)(keyword, 25)
+        return result, inserted, updated, warnings
+
+    def test_an_unknown_keyword_writes_nothing_at_all(self):
+        result, inserted, updated, _ = self._drive("blackrock-depths")
+        self.assertEqual((0, 0), result)
+        self.assertEqual([], inserted, "a job was written for an unknown keyword")
+        self.assertEqual([], updated, "a campaign row was written for an unknown keyword")
+
+    def test_the_refusal_names_the_keyword_and_the_valid_ones(self):
+        _, _, _, warnings = self._drive("blackrock-depths")
+        self.assertEqual(1, len(warnings), warnings)
+        self.assertIn("dungeon:blackrock-depths", warnings[0])
+        for keyword in ("deadmines", "scarlet-cathedral", "stockades"):
+            self.assertIn(keyword, warnings[0])
+
+    def test_a_known_keyword_still_sends_the_whole_family(self):
+        result, inserted, updated, warnings = self._drive("scarlet-cathedral")
+        self.assertEqual((3, 3), result)
+        self.assertEqual(
+            [("Grug", "dungeon:scarlet-cathedral"),
+             ("Ugga", "dungeon:scarlet-cathedral"),
+             ("Og", "dungeon:scarlet-cathedral")], inserted)
+        self.assertEqual(3, len(updated))
+        self.assertEqual([], warnings)
+
+    def test_the_bare_dungeon_job_is_still_accepted(self):
+        result, inserted, _, _ = self._drive("")
+        self.assertEqual((3, 3), result)
+        self.assertEqual({"dungeon"}, {mode for _, mode in inserted})
+
+
+class TheKeywordVocabularyIsTheCoordinators(unittest.TestCase):
+    def test_portal_keywords_match_mod_overseers_portal_table(self):
+        import re
+
+        import jobs
+
+        text = MODULE.read_text(encoding="utf-8")
+        start = text.index("DungeonPortals()\n")
+        body = text[start:text.index("};", start)]
+        in_cpp = set(re.findall(r'^\s*\{"([a-z-]+)",', body, re.M))
+        self.assertTrue(in_cpp, "no portal rows parsed from mod_overseer.cpp")
+        self.assertEqual(in_cpp, set(jobs.PORTAL_KEYWORDS))
+
+    def test_every_chat_dungeon_is_a_portal_keyword(self):
+        import jobs
+
+        self.assertLessEqual(set(jobs.DUNGEONS.values()), jobs.PORTAL_KEYWORDS)
+
+    def test_dungeon_job(self):
+        import jobs
+
+        self.assertEqual("dungeon", jobs.dungeon_job(""))
+        self.assertEqual("dungeon:scarlet", jobs.dungeon_job("scarlet"))
+        self.assertIsNone(jobs.dungeon_job("blackrock-depths"))
+        self.assertIsNone(jobs.dungeon_job("Deadmines"))
+
+
 if __name__ == "__main__":
     unittest.main()
