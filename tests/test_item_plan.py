@@ -106,6 +106,72 @@ class TheWorldSaysWhereAndNotOnlyWhether(unittest.TestCase):
         self.assertEqual([c.item_guid for c in got.write], [5001])
 
 
+class ARangeHoldEndsWhenThePlaceChanges(unittest.TestCase):
+    """#149: the range hold outlived the range.
+
+    Measured on the dev realm 2026-09-22: `holder=Grug queued 0/8 vendor
+    sale(s), held back 8 refused 3 times for want of a reachable vendor`,
+    while the worldserver logged Grug reaching a vendor 27 times in two
+    hours. The three refusals were from the evening before, and the hold ran
+    for the whole 24 hour memory window whatever he did.
+    """
+
+    def _range(self, guid, holder="Grug", n=item_plan.ELSEWHERE_GIVE_UP):
+        return [item_plan.attempt_from_row(row(
+            command="guid:%d count:4" % guid, holder=holder, status="error",
+            detail="vendor not in range",
+            result='{"reason":"vendor not in range","retry":"elsewhere"}',
+        )) for _ in range(n)]
+
+    def _sold(self, guid, holder="Grug"):
+        return item_plan.attempt_from_row(row(
+            command="guid:%d count:1" % guid, holder=holder,
+            status="delivered", detail="", result=""))
+
+    def test_a_holder_at_a_vendor_is_offered_its_held_sales(self):
+        got = item_plan.plan([candidate(holder="Grug", guid=5001)],
+                             self._range(5001), at_vendor=True)
+        self.assertEqual([c.item_guid for c in got.write], [5001])
+
+    def test_away_from_a_vendor_the_hold_still_stands(self):
+        got = item_plan.plan([candidate(holder="Grug", guid=5001)],
+                             self._range(5001), at_vendor=False)
+        self.assertEqual(got.write, ())
+
+    def test_a_delivered_sale_after_the_refusals_ends_the_hold(self):
+        """The world dealt with this holder since, so the refusals no longer
+        say where it stands, even before this pass sees the counter."""
+        attempts = self._range(5001) + [self._sold(7777)]
+        got = item_plan.plan([candidate(holder="Grug", guid=5001)], attempts)
+        self.assertEqual([c.item_guid for c in got.write], [5001])
+
+    def test_a_delivered_sale_before_the_refusals_does_not(self):
+        attempts = [self._sold(7777)] + self._range(5001)
+        got = item_plan.plan([candidate(holder="Grug", guid=5001)], attempts)
+        self.assertEqual(got.write, ())
+
+    def test_another_holders_sale_does_not_end_this_holders_hold(self):
+        attempts = self._range(5001) + [self._sold(7777, holder="Ugga")]
+        got = item_plan.plan([candidate(holder="Grug", guid=5001)], attempts)
+        self.assertEqual(got.write, ())
+
+    def test_an_item_that_cannot_be_sold_is_held_even_at_a_vendor(self):
+        """Only the range hold is about place. A refusal the world calls
+        `never` still holds for the full window, counter or no counter."""
+        refused = item_plan.attempt_from_row(row(
+            command="guid:5001 count:4", holder="Grug", status="error",
+            detail="item cannot be sold",
+            result='{"reason":"item cannot be sold","retry":"never"}'))
+        got = item_plan.plan([candidate(holder="Grug", guid=5001)],
+                             [refused], at_vendor=True)
+        self.assertEqual(got.write, ())
+        self.assertIn("item cannot be sold", item_plan.reasons(got.skipped))
+
+    def test_refused_here_is_empty_at_a_vendor(self):
+        self.assertEqual(
+            item_plan.refused_here(self._range(5001, n=9), at_vendor=True), {})
+
+
 class ParsingTests(unittest.TestCase):
     def test_reads_the_command_shape_the_bridge_writes(self):
         self.assertEqual(item_plan.parse_request("guid:1304881 count:4"),

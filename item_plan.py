@@ -212,7 +212,8 @@ def settled(attempts) -> tuple:
     return items, requests
 
 
-def refused_here(attempts, give_up=ELSEWHERE_GIVE_UP) -> dict:
+def refused_here(attempts, give_up=ELSEWHERE_GIVE_UP,
+                 at_vendor=False) -> dict:
     """(holder, item) -> reason, for items the world keeps refusing on PLACE.
 
     An ELSEWHERE refusal is not terminal, and must not be treated as one: the
@@ -225,12 +226,35 @@ def refused_here(attempts, give_up=ELSEWHERE_GIVE_UP) -> dict:
     Keyed on the ITEM and never on the request, because where a character is
     standing is a fact about the character and not about the count.
 
-    The hold expires with the caller's memory window rather than being
-    permanent, so a party that walks to a vendor which WILL deal with them
-    offers every one of these again.
+    THE HOLD ENDS WHEN THE PLACE CHANGES, NOT ONLY WHEN THE WINDOW DOES
+    (#149). It used to expire only with the caller's memory window, which is
+    24 hours, and the docstring promised that reaching a vendor would clear
+    it. It did not: measured on the dev realm 2026-09-22, the leader was
+    logged reaching a vendor 27 times in two hours while all eight of his
+    sales stayed held on three `vendor not in range` refusals from the
+    evening before. Two facts now end it:
+
+      * `at_vendor`, the caller's own reading that a vendor is within reach
+        of this holder right now. A range refusal is about where the holder
+        stood; standing somewhere else is exactly what makes it stale.
+      * a DELIVERED sale by the same holder after the refusals. The world
+        dealt with that holder since, so the refusals no longer describe
+        where it stands. `attempts` are read in the order the world wrote
+        them (the caller sorts by row id), which is what "after" means here.
+
+    A refusal for any other reason is not an ELSEWHERE refusal and never
+    reaches this function's tally, so it still holds for the full window.
     """
+    if at_vendor:
+        return {}
     tally: dict = {}
     for attempt in attempts:
+        if attempt.status in SUCCESS_STATUSES:
+            # The holder was served since; its older range refusals no
+            # longer say anything about where it stands.
+            for key in [k for k in tally if k[0] == attempt.holder]:
+                del tally[key]
+            continue
         if attempt.retry != RETRY_ELSEWHERE:
             continue
         key = (attempt.holder, attempt.item_guid)
@@ -268,8 +292,11 @@ def reasons(skipped) -> str:
                      in sorted(skipped.items(), key=lambda kv: (-kv[1], kv[0])))
 
 
-def plan(candidates, attempts) -> Plan:
+def plan(candidates, attempts, at_vendor=False) -> Plan:
     """Keep only the candidates the world has not already answered.
+
+    `at_vendor` is whether a vendor is within reach of these candidates'
+    holder right now; see `refused_here` for why it ends a range hold.
 
     Candidates keep their order and their type: a corrected count comes back
     as the same frozen dataclass with a new `count`, so the caller's insert
@@ -277,7 +304,7 @@ def plan(candidates, attempts) -> Plan:
     """
     attempts = tuple(attempts)
     done_items, done_requests = settled(attempts)
-    stuck_here = refused_here(attempts)
+    stuck_here = refused_here(attempts, at_vendor=at_vendor)
     already_open = open_requests(attempts)
     stacks = true_stacks(attempts)
     write, skipped, seen = [], {}, set()
