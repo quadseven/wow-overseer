@@ -292,6 +292,49 @@ class TheHonestyMechanisms(unittest.TestCase):
         self.assertIn("o.means", draw)
 
 
+class BothFamiliesAndPlainOutcomes(unittest.TestCase):
+    """The operator asked "decree doesnt work?" while the list read HANDED
+    OVER on every row and the job card described one family's leader over
+    both families. These pin the page half of the fix: one line per family,
+    a family on every family-wide order, and one card per order that leads
+    with its verdict and says when it was sent."""
+
+    def test_each_familys_job_and_campaign_is_drawn(self):
+        render = VIEW[VIEW.index("function renderDecree"):]
+        self.assertIn("for (const f of fams) {", render)
+        self.assertIn("f.job.line", render)
+        self.assertIn("f.campaign.line", render)
+
+    def test_family_wide_orders_name_the_family(self):
+        for anchor in ("dcrJobSend.onclick", "dcrCampSend.onclick",
+                       "dcrCampReset.onclick"):
+            body = VIEW[VIEW.index(anchor):]
+            body = body[:body.index("};")]
+            self.assertIn("family: dcr.fam", body, anchor)
+
+    def test_the_family_picker_is_in_the_markup_for_both_cards(self):
+        self.assertIn('id="dcrjobfam"', SECTION)
+        self.assertIn('id="dcrcampfam"', SECTION)
+
+    def test_the_picker_hides_when_there_is_no_choice(self):
+        build = VIEW[VIEW.index("function dcrBuildFamilies"):]
+        self.assertIn("row.hidden = fams.length < 2;", build)
+
+    def test_one_card_per_order_with_its_verdict_and_age(self):
+        card = VIEW[VIEW.index("function dcrOrderCard"):]
+        card = card[:card.index("function renderDecree")]
+        self.assertIn("b.verdict", card)
+        self.assertIn("b.ago", card)
+        self.assertIn("b.who", card)
+        render = VIEW[VIEW.index("function renderDecree"):]
+        self.assertIn("for (const b of p.orders)", render)
+
+    def test_each_character_leads_with_a_plain_verdict(self):
+        draw = VIEW[VIEW.index("function dcrOutcome"):]
+        draw = draw[:draw.index("function dcrOrderCard")]
+        self.assertIn('el("div", "dcrmeans", o.verdict)', draw)
+
+
 class ControlsThatCannotReachTheWorld(unittest.TestCase):
     """A button that silently does nothing is the failure this epic is named
     after. Every card writes now (infra#3345), so the rule turns into its
@@ -335,7 +378,9 @@ class ControlsThatCannotReachTheWorld(unittest.TestCase):
         reset the counter every ten seconds would change the subject under a
         reader about to press send."""
         render = VIEW[VIEW.index("function renderDecree"):]
-        self.assertIn("if (dcr.wanted === null) dcr.wanted = p.campaign.wanted;",
+        # Seeded from the chosen family's own row, and only while unset.
+        self.assertIn("if (dcr.wanted === null) {", render)
+        self.assertIn("dcr.wanted = f ? f.campaign.wanted : p.campaign.wanted;",
                       render)
         self.assertNotIn("dcrCampNum.textContent = String(p.campaign.wanted);",
                          render)
@@ -442,6 +487,21 @@ class TheOnlyThingItSends(unittest.TestCase):
 class TheEndpointIsAnAdapter(unittest.TestCase):
     """THE ONE RULE at the other end: the HTTP adapter fetches rows and does
     nothing else."""
+
+    def test_it_reads_what_the_read_back_needs(self):
+        """The newest job row per character from any source, and the family
+        each roster row belongs to, both read in the console's own fetch."""
+        fetch = SERVER[SERVER.index("def _fetch_decree"):]
+        fetch = fetch[:fetch.index("def _fetch_roster_rows")]
+        self.assertIn("WHERE kind = 'job' GROUP BY target_name", fetch)
+        self.assertIn('"newest_job_rows": newest_job_rows', fetch)
+        self.assertIn("_with_family(cur, roster_rows)", fetch)
+        self.assertIn("SELECT name, family FROM overseer_roster", fetch)
+
+    def test_an_order_is_planned_against_the_same_families(self):
+        plan = SERVER[SERVER.index("def _fetch_roster_rows"):]
+        plan = plan[:plan.index("def _apply_order")]
+        self.assertIn("return _with_family(cur, rows)", plan)
 
     def test_it_is_in_the_route_table(self):
         table = SERVER[SERVER.index("GET_ROUTES = {"):]

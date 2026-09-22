@@ -19,6 +19,7 @@ browser. The page contract is tests/test_decree_tab.py.
 """
 import pathlib
 import unittest
+from datetime import datetime
 from unittest import mock
 
 import agenda
@@ -550,6 +551,150 @@ class TheWholePayload(unittest.TestCase):
     def test_the_payload_is_json(self):
         import json
         json.dumps(decree.build_console(roster(), [command()]))
+
+
+def two_families() -> list:
+    """Grug's five and Zug's two, each with its own leader and counter."""
+    rows = roster({"Og": {"lead": 0}, "Grug": {"lead": 1}})
+    for row in rows:
+        row["family"] = "Grug"
+    for name, lead in (("Zug", 1), ("Oz", 0)):
+        rows.append(dict(rows[0], name=name, lead=lead, family="Zug",
+                         dungeon_runs_wanted=5))
+    return rows
+
+
+SENT = datetime(2026, 9, 11, 21, 29, 18)
+NOW = datetime(2026, 9, 22, 17, 0, 0)
+
+
+def job_row(row_id, name, status="delivered", detail="", command_="quest"):
+    return command(id=row_id, target_name=name, command=command_, kind="job",
+                   status=status, detail=detail, created_at=SENT,
+                   source="web:overseer")
+
+
+class AJobOrderIsReadBack(unittest.TestCase):
+    """DoJob only ever reports `delivered`, so every job order read "NOTHING
+    WAS READ BACK" forever. The column it writes is in the roster this
+    console already reads, so the console checks it."""
+
+    def test_a_job_the_column_now_carries_is_in_effect(self):
+        line = decree.outcome(job_row(5, "Ugga"), {"Ugga": "quest"}, {}, NOW)
+        self.assertEqual(line["word"], "in effect")
+        self.assertEqual(line["tone"], decree.VERIFIED)
+        self.assertTrue(line["success"])
+        self.assertIn("Ugga's job reads quest now", line["verdict"])
+
+    def test_a_later_order_is_named_as_the_reason(self):
+        line = decree.outcome(job_row(5, "Ugga"), {"Ugga": "farm"},
+                              {"Ugga": 9}, NOW)
+        self.assertEqual(line["word"], "replaced")
+        self.assertFalse(line["success"])
+        self.assertIn("row 9", line["means"])
+
+    def test_the_newest_order_that_the_column_disagrees_with_did_not_take(self):
+        line = decree.outcome(job_row(5, "Ugga"), {"Ugga": "farm"},
+                              {"Ugga": 5}, NOW)
+        self.assertEqual(line["word"], "did not take")
+        self.assertEqual(line["tone"], decree.FAILED)
+
+    def test_a_name_with_no_roster_row_changed_nothing(self):
+        line = decree.outcome(job_row(5, "Nobody"), {"Ugga": "quest"}, {}, NOW)
+        self.assertEqual(line["word"], "changed nothing")
+        self.assertFalse(line["success"])
+
+    def test_no_roster_read_is_not_evidence(self):
+        """A thin roster read hands in no jobs. That is "not read", so the
+        row says handed over exactly as before."""
+        line = decree.outcome(job_row(5, "Ugga"), {}, {}, NOW)
+        self.assertEqual(line["word"], "handed over")
+        self.assertFalse(line["success"])
+
+    def test_a_bot_row_is_never_judged_against_the_job_column(self):
+        line = decree.outcome(command(), {"Ugga": "nc -new rpg"}, {}, NOW)
+        self.assertEqual(line["word"], "handed over")
+
+    def test_not_online_is_said_in_plain_words(self):
+        line = decree.outcome(job_row(4, "Grug", "error", "target not online"),
+                              {"Grug": "quest"}, {}, NOW)
+        self.assertIn("was not logged in", line["verdict"])
+
+    def test_every_line_says_when_it_was_sent(self):
+        line = decree.outcome(job_row(5, "Ugga"), {}, {}, NOW)
+        self.assertEqual(line["ago"], "10 days ago")
+        self.assertEqual(decree.ago(None, NOW), "at an unknown time")
+
+
+class OneOrderIsOneLine(unittest.TestCase):
+
+    def test_a_family_order_is_one_batch_with_the_exception_named(self):
+        rows = [job_row(3, "Grug", "error", "target not online"),
+                job_row(4, "Ugga"), job_row(5, "Og")]
+        payload = decree.build_console(two_families(), rows, NOW,
+                                       [{"target_name": "Ugga", "id": 4}])
+        self.assertEqual(len(payload["orders"]), 1)
+        batch = payload["orders"][0]
+        self.assertEqual(batch["who"], "Grug's family")
+        self.assertIn("in effect for 2 of 3", batch["verdict"])
+        self.assertIn("Grug was not logged in", batch["verdict"])
+        self.assertEqual(batch["tone"], decree.FAILED)
+        self.assertEqual(batch["ago"], "10 days ago")
+
+    def test_orders_sent_at_different_times_are_different_lines(self):
+        rows = [job_row(4, "Ugga"),
+                dict(job_row(5, "Og"), created_at=datetime(2026, 9, 12))]
+        payload = decree.build_console(two_families(), rows, NOW)
+        self.assertEqual(len(payload["orders"]), 2)
+
+
+class BothFamilies(unittest.TestCase):
+    """Two families, two leaders, two counters. Reading them as one printed
+    "read off Grug's row" over ten characters and set the Horde's job from a
+    card that described the Alliance's."""
+
+    def test_each_family_gets_its_own_job_and_campaign(self):
+        payload = decree.build_console(two_families(), [], NOW)
+        fams = {f["key"]: f for f in payload["families"]}
+        self.assertEqual(set(fams), {"Grug", "Zug"})
+        self.assertEqual(fams["Zug"]["leader"], "Zug")
+        self.assertIn("Zug's row", fams["Zug"]["job"]["line"])
+        self.assertEqual(fams["Zug"]["campaign"]["wanted"], 5)
+        self.assertEqual(fams["Grug"]["campaign"]["wanted"], 30)
+
+    def test_a_job_order_without_a_family_is_refused_when_there_are_two(self):
+        order = decree.plan_order({"section": decree.JOB, "mode": "quest"},
+                                  two_families())
+        self.assertEqual(order.refusal, decree.ORDER_REFUSALS["family"])
+
+    def test_a_job_order_reaches_only_the_named_family(self):
+        order = decree.plan_order(
+            {"section": decree.JOB, "mode": "quest", "family": "Zug"},
+            two_families())
+        self.assertEqual({r.target_name for r in order.rows}, {"Zug", "Oz"})
+
+    def test_a_campaign_order_reaches_only_the_named_family(self):
+        order = decree.plan_order(
+            {"section": decree.CAMPAIGN, "wanted": 3, "family": "Grug"},
+            two_families())
+        self.assertEqual({u.name for u in order.updates}, set(FAMILY))
+
+    def test_an_unknown_family_is_refused(self):
+        order = decree.plan_order(
+            {"section": decree.JOB, "mode": "quest", "family": "Nope"},
+            two_families())
+        self.assertTrue(order.refusal)
+
+    def test_one_family_needs_no_name(self):
+        order = decree.plan_order({"section": decree.JOB, "mode": "quest"},
+                                  roster())
+        self.assertEqual(order.refusal, "")
+
+    def test_travel_is_by_name_and_needs_no_family(self):
+        order = decree.plan_order(
+            {"section": decree.TRAVEL, "name": "Oz", "role": "vendor"},
+            two_families())
+        self.assertEqual(order.refusal, "")
 
 
 class TheHouseRules(unittest.TestCase):

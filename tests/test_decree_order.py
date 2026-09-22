@@ -770,8 +770,11 @@ class TheWritesThatActuallyRun(unittest.TestCase):
         conn = FakeConn(cursor)
         with mock.patch.object(map_server, "_connect", return_value=conn):
             rows = map_server._fetch_roster_rows()
-        self.assertEqual(len(cursor.calls), 2)
+        # The full read, the thin read, then the family stamp (decree.py
+        # plans a job or a campaign per family).
+        self.assertEqual(len(cursor.calls), 3)
         self.assertIn("`lead` FROM overseer_roster", cursor.calls[1][0])
+        self.assertIn("SELECT name, family FROM overseer_roster", cursor.calls[2][0])
         self.assertEqual(rows, [])
         self.assertTrue(conn.closed)
 
