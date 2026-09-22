@@ -181,16 +181,232 @@ class TheConsensusIsReadOffWhatSurvivedTheCouncil(unittest.TestCase):
         self.assertIn("not written as a goal", council.undecided_line(None))
         self.assertEqual("", council.undecided_line({"decision": "x"}))
 
-    def test_the_vote_counts_who_spoke_and_says_that_is_what_it_is(self):
+    def test_the_card_counts_who_spoke_and_never_claims_a_vote(self):
         """THE TALLY IS NOT WRITTEN DOWN ANYWHERE. hold() scores the proposals
         and keeps only the winner, so a count of ayes here would be a number
         invented about a vote nothing recorded. Who turned up to argue is a
-        fact this module does have."""
-        lines = council.transcript([said("Grug", "g"), said("Ugga", "u")])
-        agreed = council.consensus([goal("Bork")], lines)
+        fact this module does have, and the card says which it is."""
+        rows = [said("Grug", "g"), said("Ugga", "u", minutes=1)]
+        agreed = council.consensus([goal("Bork", minutes=1)], [],
+                                   thought_rows=rows, now=T0)
         self.assertEqual(2, agreed["spoke"])
         self.assertEqual(len(bonds.FAMILY), agreed["family"])
-        self.assertIn("SPOKE", agreed["vote"])
+        self.assertIn("does not record a vote", agreed["who_line"])
+        self.assertNotIn("vote", agreed)
+
+
+def dgoal(who, keyword, target=25, minutes=0, status="active"):
+    row = goal(who, "dungeon", target, status=status, minutes=minutes)
+    row["skill_name"] = keyword
+    return row
+
+
+class TheDecisionIsAPlainSentence(unittest.TestCase):
+    """The operator could not read "Grug is to see to dungeon." Every kind
+    the goal table holds has its own sentence, with a subject and a verb."""
+
+    def test_a_dungeon_goal_names_the_place_and_the_campaign(self):
+        line = council.decision_line(dgoal("Grug", "blackrock-depths"))
+        self.assertEqual(
+            "Grug will lead the family into Blackrock Depths, 25 runs.", line)
+        self.assertNotIn("see to", line)
+
+    def test_a_scarlet_goal_names_its_wing(self):
+        line = council.decision_line(dgoal("Grog", "scarlet-cathedral"))
+        self.assertIn("Scarlet Monastery (the Cathedral)", line)
+
+    def test_every_portal_keyword_has_a_place(self):
+        """A keyword the portal table can run and this sentence cannot name
+        would print the raw keyword to the operator."""
+        import jobs
+        for keyword in jobs.PORTAL_KEYWORDS:
+            self.assertIn(keyword, council.DUNGEON_KEYWORDS, keyword)
+
+    def test_the_bare_dungeon_job_is_a_dungeon_and_not_a_blank(self):
+        self.assertIn("into a dungeon",
+                      council.decision_line(dgoal("Grug", "")))
+
+    def test_a_skill_goal_names_the_skill_and_the_rank(self):
+        row = goal("Grog", "skill", 50)
+        row["skill_name"] = "mining"
+        self.assertEqual("Grog will train mining to 50.",
+                         council.decision_line(row))
+
+    def test_a_level_goal_says_who_helps_whom(self):
+        self.assertEqual("The family will help Bork reach level 12.",
+                         council.decision_line(goal("Bork", "level", 12)))
+
+    def test_no_kind_falls_into_to_see_to(self):
+        for kind in ("level", "quest", "skill", "dungeon", "mystery"):
+            self.assertNotIn("is to see to",
+                             council.decision_line(goal("Grug", kind)), kind)
+
+
+OUTSIDE = council.OUTSIDE_LABEL
+
+
+class TheCardReadsTheSittingThatDecidedIt(unittest.TestCase):
+    """The card used to count the speakers of the LAST sitting, which on the
+    dev realm was a one-line sitting about a robe held a day after the dungeon
+    decision it was printed under."""
+
+    def setUp(self):
+        self.rows = [
+            said("Grug", "we go in", minutes=0),
+            said("Ugga", "Ugga help Grug.", minutes=0),
+            said("Grug", "Then it is settled.", minutes=1),
+            # A day later, and nothing to do with the decision.
+            said("Og", "Og make robe.", minutes=24 * 60),
+        ]
+        self.agreed = council.consensus(
+            [dgoal("Grug", "blackrock-depths", minutes=1)], [],
+            thought_rows=self.rows, now=T0 + timedelta(days=1, hours=2))
+
+    def test_the_count_is_of_the_deciding_sitting(self):
+        self.assertEqual(["Grug", "Ugga"], self.agreed["speakers"])
+        self.assertNotIn("Og", self.agreed["speakers"])
+
+    def test_the_proposer_is_whoever_settled_it(self):
+        self.assertEqual("Grug", self.agreed["proposer"])
+        self.assertTrue(self.agreed["who_line"].startswith("Grug proposed it."))
+        self.assertIn("Ugga also spoke.", self.agreed["who_line"])
+
+    def test_everyone_who_did_not_speak_is_named(self):
+        for name in ("Og", "Grog", "Bork"):
+            self.assertIn(name, self.agreed["silent"])
+        self.assertIn("did not speak at that sitting", self.agreed["who_line"])
+
+    def test_the_lines_shown_are_the_deciding_ones(self):
+        texts = [line["text"] for line in self.agreed["sitting"]]
+        self.assertIn("Ugga help Grug.", texts)
+        self.assertNotIn("Og make robe.", texts)
+
+    def test_it_says_how_long_ago(self):
+        self.assertEqual("Set 25 hours ago.", self.agreed["when_line"])
+
+    def test_a_goal_no_sitting_produced_says_so(self):
+        agreed = council.consensus(
+            [dgoal("Grug", "deadmines", minutes=600)], [],
+            thought_rows=self.rows[:3], now=T0)
+        self.assertEqual("SET OUTSIDE THE COUNCIL", agreed["label"])
+        self.assertIn("Nobody voted", agreed["who_line"])
+        self.assertEqual([], agreed["sitting"])
+
+    def test_a_goal_time_that_is_not_a_time_finds_no_sitting(self):
+        self.assertEqual([], council.deciding_sitting(self.rows, "2026-09-03"))
+
+    def test_an_unreadable_line_time_is_skipped_not_raised(self):
+        lines = [{"who": "Grug", "text": "g", "at": "not a time"},
+                 {"who": "Ugga", "text": "u", "at": None}]
+        agreed = council.consensus([goal("Bork")], lines, now=T0)
+        self.assertEqual(OUTSIDE, agreed["label"])
+
+    def test_other_open_goals_are_listed_not_hidden(self):
+        agreed = council.consensus(
+            [dgoal("Grug", "blackrock-depths", minutes=1),
+             dgoal("Bork", "stockades", minutes=-60)], [],
+            thought_rows=self.rows, now=T0)
+        self.assertEqual(1, len(agreed["older"]))
+        self.assertIn("The Stockade", agreed["older"][0])
+
+
+class TheCardSaysWhetherItIsInEffect(unittest.TestCase):
+    """A dungeon decision starts nothing until the family leader's job column
+    names it: the run coordinator reads that one column. The card said nothing
+    about it, so an active goal nobody was acting on read as done."""
+
+    def _agreed(self, job):
+        standing = {"leader": "Grug", "job": job, "done": 3, "wanted": 25}
+        return council.consensus([dgoal("Grug", "blackrock-depths")], [],
+                                 thought_rows=[], standing=standing, now=T0)
+
+    def test_a_matching_job_is_in_effect_and_counts_runs(self):
+        agreed = self._agreed("dungeon:blackrock-depths")
+        self.assertIs(True, agreed["in_effect"])
+        self.assertIn("3 of 25 runs done", agreed["next_line"])
+
+    def test_a_job_that_names_something_else_is_not_in_effect(self):
+        agreed = self._agreed("quest")
+        self.assertIs(False, agreed["in_effect"])
+        self.assertIn("still reads quest", agreed["next_line"])
+        self.assertIn("dungeon:blackrock-depths", agreed["next_line"])
+
+    def test_a_standing_with_no_leader_names_the_goal_holder(self):
+        agreed = council.consensus([dgoal("Grug", "blackrock-depths")], [],
+                                   thought_rows=[], standing={"job": "quest"},
+                                   now=T0)
+        self.assertIn("Grug's job still reads quest", agreed["next_line"])
+
+    def test_an_unread_roster_is_unknown_and_not_a_guess(self):
+        agreed = council.consensus([dgoal("Grug", "blackrock-depths")], [],
+                                   thought_rows=[], standing=None, now=T0)
+        self.assertIsNone(agreed["in_effect"])
+        self.assertIn("could not be read", agreed["next_line"])
+
+    def test_a_goal_with_no_column_says_what_happens_next(self):
+        agreed = council.consensus([goal("Bork", "level", 12)], [],
+                                   thought_rows=[], now=T0)
+        self.assertIsNone(agreed["in_effect"])
+        self.assertTrue(agreed["next_line"].startswith("Next:"))
+
+
+def roster_row(name, fam, lead=0, job="quest"):
+    return {"name": name, "family": fam, "enabled": 1, "lead": lead,
+            "job": job, "dungeon_runs_wanted": 25, "dungeon_runs_done": 0}
+
+
+class BothFamiliesAreOnTheTab(unittest.TestCase):
+    """The roster holds an Alliance five and a Horde five. bonds holds personas
+    for one of them, so the tab only ever showed that one."""
+
+    def setUp(self):
+        roster = [roster_row(n, "Grug", lead=int(n == "Grug"))
+                  for n in ("Grug", "Ugga", "Og", "Grog", "Bork")]
+        roster += [roster_row(n, "Zug", lead=int(n == "Zug"))
+                   for n in ("Zug", "Oz", "Uzza", "Zork", "Zrog")]
+        lv = [{"name": n, "level": 60, "race": 1}
+              for n in ("Grug", "Ugga", "Og", "Grog", "Bork")]
+        lv += [{"name": n, "level": 12, "race": 2}
+               for n in ("Zug", "Oz", "Uzza", "Zork", "Zrog")]
+        self.payload = council.build_council(
+            [said("Grug", "g"), said("Ugga", "u")],
+            [dgoal("Grug", "blackrock-depths")], lv,
+            [run_card(230, [("Ironfoe", 4)])], now=T0, roster_rows=roster)
+        self.by = {f["family"]: f for f in self.payload["families"]}
+
+    def test_there_is_one_block_per_family(self):
+        self.assertEqual(["Grug", "Zug"],
+                         [f["family"] for f in self.payload["families"]])
+
+    def test_each_family_is_titled_with_its_faction(self):
+        self.assertEqual("Grug's family, Alliance", self.by["Grug"]["title"])
+        self.assertEqual("Zug's family, Horde", self.by["Zug"]["title"])
+
+    def test_a_family_with_no_personas_says_it_holds_no_councils(self):
+        zug = self.by["Zug"]
+        self.assertFalse(zug["holds_council"])
+        self.assertIn("does not hold councils", zug["note"])
+        self.assertIsNone(zug["consensus"])
+
+    def test_the_other_familys_goal_is_not_theirs(self):
+        self.assertIsNotNone(self.by["Grug"]["consensus"])
+        self.assertIsNone(self.by["Zug"]["consensus"])
+
+    def test_each_family_is_gated_on_its_own_levels(self):
+        zug = self.by["Zug"]["prospects"]
+        self.assertTrue(zug)
+        self.assertNotIn("Blackrock Depths", [p["place"] for p in zug])
+        self.assertTrue(any(not p["ready"] for p in zug)
+                        or all(p["wants"] <= 12 for p in zug))
+
+    def test_drops_the_alliance_saw_are_not_credited_to_the_horde(self):
+        for place in self.by["Zug"]["prospects"]:
+            self.assertEqual([], place["drops"], place["place"])
+
+    def test_no_roster_falls_back_to_the_one_family_bonds_knows(self):
+        payload = council.build_council([], [], [], [], now=T0)
+        self.assertEqual(1, len(payload["families"]))
+        self.assertTrue(payload["families"][0]["holds_council"])
 
 
 class TheGateIsAWordAndTheVerdictAnswersIt(unittest.TestCase):
@@ -301,7 +517,9 @@ class TheWholePayloadSurvivesAnEmptyWorld(unittest.TestCase):
         self.assertEqual(["Grug", "Bork"],
                          [x["who"] for x in payload["transcript"]])
         self.assertEqual(["Bork", "Grug"], payload["spoke"])
-        self.assertIn("SPOKE", payload["consensus"]["vote"])
+        for key in ("label", "decision", "who_line", "next_line", "sitting"):
+            self.assertIn(key, payload["consensus"])
+        self.assertTrue(payload["families"])
         self.assertTrue(payload["prospects"])
         for line in payload["transcript"]:
             self.assertIn(line["hue"], council.SPEAKER_HUES)
@@ -361,10 +579,21 @@ class ThePageOnlyDraws(unittest.TestCase):
         self.assertIn('"cn-gate h-" + p.hue', self.code)
         self.assertNotIn("h-green", self.code)
 
-    def test_the_decision_and_the_vote_are_drawn_and_not_composed(self):
-        self.assertIn("agreed.decision", self.code)
-        self.assertIn("agreed.vote", self.code)
-        self.assertNotIn("agreed.spoke +", self.code)
+    def test_the_decision_is_drawn_as_sentences_and_not_composed(self):
+        """The card was a status word over "1 OF 5 SPOKE", and the operator
+        could not read it. Every line on it is now a sentence from council.py,
+        drawn as it arrives."""
+        for key in ("agreed.label", "agreed.decision", "agreed.who_line",
+                    "agreed.when_line", "agreed.next_line", "agreed.sitting"):
+            self.assertIn(key, self.code, key)
+        self.assertNotIn("agreed.vote", self.code)
+        self.assertNotIn("CARRIED", self.code)
+        self.assertNotIn("SPOKE", self.code)
+
+    def test_every_family_is_drawn(self):
+        self.assertIn("p.families", self.code)
+        self.assertIn("f.title", self.code)
+        self.assertIn("f.note", self.code)
 
     def test_the_gate_and_the_verdict_come_from_the_payload(self):
         self.assertIn("p.gate", self.code)
@@ -410,7 +639,8 @@ class ThePageOnlyDraws(unittest.TestCase):
         table the module creates was not guarded."""
         fetch = self.server[self.server.index("def _fetch_council"):]
         fetch = fetch[:fetch.index("def _fetch_eye")]
-        for table in ("overseer_thought", "overseer_goal", "characters"):
+        for table in ("overseer_thought", "overseer_goal", "characters",
+                      "overseer_roster"):
             self.assertIn('"%s")' % table, fetch, table)
 
     def test_the_view_polls_only_while_it_is_open(self):
