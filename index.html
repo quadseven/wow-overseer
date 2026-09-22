@@ -9698,8 +9698,15 @@ async function renderModel(c, m) {
     c.portrait.classList.remove("live");
     watchModel(c, key, m.model.assets);
   } catch (e) {
-    // The portrait is still there; nothing to draw over it.
+    // The portrait is still there; nothing to draw over it. The key is
+    // forgotten so the next poll tries again: keeping it made one failure
+    // permanent, because every later call saw the same key and returned
+    // early. The first two profiles hit exactly that at page load and stayed
+    // portraits for good while every card below them drew.
     c.portrait.classList.remove("live");
+    c.modelKey = null;
+    c.viewer = null;
+    console.warn("armory model build failed; retrying on the next poll", e);
   }
 }
 
