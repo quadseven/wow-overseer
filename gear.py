@@ -1393,9 +1393,11 @@ def holdings_from_rows(rows) -> list:
 #             mail pass collects it later. Family receivers only, because
 #             nothing makes a guildmate's bot collect post.
 #
-# Neither is arranged. A holder is a guildmate's bot, not a roster character,
-# so nothing in this process can walk it anywhere; the pass waits for the
-# meeting or the mailbox and says which one it is waiting on.
+# Neither is arranged here. `guildroute.plan_mail_runs` walks a waiting
+# holder to the nearest mailbox when the module can walk it (a roster
+# family's leader, #185). A guildmate's bot off the roster cannot be walked
+# yet (quadseven/mod-overseer#569), so for it the pass waits for the meeting
+# or the mailbox and says which one it is waiting on.
 
 MAIL = "mail"
 
