@@ -1139,6 +1139,14 @@
            margin-left:.5rem; }
   .dcrmeans { margin-top:.35rem; line-height:1.55; }
   .dcrev { margin-top:.25rem; color:var(--on-card-dim); line-height:1.55; }
+  /* ONE ORDER, ITS CHARACTERS INSIDE IT. The order card leads with its
+     verdict; each character is a quieter line under it, with how the word
+     was judged folded away rather than repeated five times. */
+  .dcrout .dcrout { background:transparent; padding:.35rem 0 .35rem .7rem; }
+  .dcrmore { margin-top:.2rem; }
+  .dcrmore summary { cursor:pointer; min-height:44px; display:flex;
+                     align-items:center; }
+  .dcrmore summary .dcrid, .dcrmore > summary { margin-left:0; }
   /* WHAT IS STOPPING THEM. */
   .dcrblock { padding:.65rem 0; border-top:1px solid var(--card-line); }
   .dcrblock:first-child { border-top:0; padding-top:.4rem; }
@@ -3172,6 +3180,7 @@
     <div class="dcrcard">
       <h2 id="dcrjobtitle"></h2>
       <div id="dcrjobnow" class="dcrnow"></div>
+      <div id="dcrjobfam" class="dcrchips" role="group" aria-label="which family" hidden></div>
       <div id="dcrjobsplit" class="dcrsplit"></div>
       <div id="dcrjobchips" class="dcrchips" role="group" aria-label="job modes"></div>
       <p id="dcrjobsays" class="dcrsays"></p>
@@ -3182,6 +3191,7 @@
     <div class="dcrcard">
       <h2 id="dcrcamptitle"></h2>
       <div id="dcrcampline" class="dcrnow"></div>
+      <div id="dcrcampfam" class="dcrchips" role="group" aria-label="which family" hidden></div>
       <div class="dcrstep">
         <button id="dcrcampdown" class="dcrstepbtn" type="button" disabled>-</button>
         <span id="dcrcampnum" class="dcrnum">0</span>
@@ -6945,6 +6955,8 @@ const dcrSection = document.getElementById("decree");
 const dcrHead = document.getElementById("dcrhead");
 const dcrJobTitle = document.getElementById("dcrjobtitle");
 const dcrJobNow = document.getElementById("dcrjobnow");
+const dcrJobFam = document.getElementById("dcrjobfam");
+const dcrCampFam = document.getElementById("dcrcampfam");
 const dcrJobSplit = document.getElementById("dcrjobsplit");
 const dcrJobChips = document.getElementById("dcrjobchips");
 const dcrJobSays = document.getElementById("dcrjobsays");
@@ -6997,12 +7009,61 @@ const dcrBlockList = document.getElementById("dcrblocklist");
 // under a hand that is about to press send.
 const dcr = {
   seen: null, built: false, job: null, role: null, target: null, one: "",
-  wanted: null, who: "",
+  wanted: null, who: "", fam: null, famKeys: "",
   busy: false,
   jobs: new Map(), jobBtns: new Map(),
   roles: new Map(), roleBtns: new Map(),
   targetBtns: new Map(), oneBtns: new Map(), whoBtns: new Map(),
+  famBtns: [],
 };
+
+// WHICH FAMILY AN ORDER IS FOR. Each family has its own leader, job and run
+// count, so the job and the campaign cards each carry the same picker and
+// share one choice. The families arrive from the payload in the order the
+// module put them; the picker only appears when there is a choice to make.
+function dcrFamily(p) {
+  return (p.families || []).find((f) => f.key === dcr.fam) || null;
+}
+
+function dcrBuildFamilies(p) {
+  const fams = p.families || [];
+  const keys = fams.map((f) => f.key).join("\n");
+  if (dcr.fam === null || !fams.some((f) => f.key === dcr.fam)) {
+    dcr.fam = fams.length ? fams[0].key : "";
+  }
+  if (keys === dcr.famKeys) return;
+  dcr.famKeys = keys;
+  dcr.famBtns = [];
+  for (const row of [dcrJobFam, dcrCampFam]) {
+    row.replaceChildren();
+    row.hidden = fams.length < 2;
+    const btns = new Map();
+    for (const f of fams) {
+      const b = dcrChip(f.label, "", () => {
+        dcr.fam = f.key;
+        // A different family is a different run count, so the draft is
+        // re-seeded from that family's own row.
+        const chosen = dcrFamily(dcr.seen);
+        if (chosen) dcr.wanted = chosen.campaign.wanted;
+        dcrShowFamilies();
+        dcrShowCamp();
+      }, "");
+      btns.set(f.key, b);
+      row.appendChild(b);
+    }
+    dcr.famBtns.push(btns);
+  }
+}
+
+function dcrShowFamilies() {
+  for (const btns of dcr.famBtns) dcrPress(btns, dcr.fam);
+  const p = dcr.seen;
+  const f = p ? dcrFamily(p) : null;
+  if (!f) return;
+  dcrCampMeans.textContent = f.campaign.means;
+  dcrCampWarn.textContent = f.campaign.warning;
+  dcrCampWarn.hidden = f.campaign.warning === "";
+}
 
 function dcrChip(label, dot, onPick, why) {
   const b = el("button", "dcrchip");
@@ -7163,7 +7224,8 @@ function dcrShowJob() {
 
 dcrJobSend.onclick = () => {
   const p = dcr.seen;
-  if (p) dcrOrder({ section: p.job.section, mode: dcr.job }, dcrJobNote);
+  if (p) dcrOrder({ section: p.job.section, mode: dcr.job, family: dcr.fam },
+                  dcrJobNote);
 };
 
 // THE COUNTER IS DRAFTED, THEN SENT. The two steppers move a number on this
@@ -7185,14 +7247,16 @@ dcrCampUp.onclick = () => { dcr.wanted += 1; dcrShowCamp(); };
 dcrCampDown.onclick = () => { dcr.wanted -= 1; dcrShowCamp(); };
 dcrCampSend.onclick = () => {
   const p = dcr.seen;
-  if (p) dcrOrder({ section: p.campaign.section, wanted: dcr.wanted }, dcrCampNote);
+  if (p) dcrOrder({ section: p.campaign.section, wanted: dcr.wanted,
+                    family: dcr.fam }, dcrCampNote);
 };
 // THE ONE THE OPERATOR ACTUALLY NEEDED. A family sitting at 30 of 30 has
 // silently stopped attempting dungeons, and until this landed the only way
 // back was a hand on the database.
 dcrCampReset.onclick = () => {
   const p = dcr.seen;
-  if (p) dcrOrder({ section: p.campaign.section, restart: true }, dcrCampNote);
+  if (p) dcrOrder({ section: p.campaign.section, restart: true,
+                    family: dcr.fam }, dcrCampNote);
 };
 
 function dcrShowRole() {
@@ -7309,16 +7373,42 @@ function dcrOutcome(o) {
   // `ok` comes from the row's own verdict, never from this file comparing a
   // status word. It is the only extra weight any row gets, and `delivered`
   // cannot reach it: decree.py decides, and it decides that handed over is
-  // not applied.
+  // not applied unless the column it wrote was read back.
   const n = el("div", "dcrout " + o.tone + (o.success ? " ok" : ""));
   const top = el("div", "");
   top.appendChild(el("span", "dcrword " + o.tone, o.word));
   top.appendChild(el("span", "dcrid", "row " + o.id + " - " + o.name));
   n.appendChild(top);
-  n.appendChild(el("div", "dcrcmd", o.command));
-  n.appendChild(el("div", "dcrmeans", o.means));
-  n.appendChild(el("div", "dcrev", o.evidence));
-  if (o.detail) n.appendChild(el("div", "dcrev", o.detail));
+  n.appendChild(el("div", "dcrmeans", o.verdict));
+  // What the word means and what it was judged on, one tap away rather than
+  // repeated under every character of every order.
+  const more = document.createElement("details");
+  more.className = "dcrmore";
+  more.appendChild(el("summary", "dcrid", "how this was judged"));
+  more.appendChild(el("div", "dcrev", o.means));
+  more.appendChild(el("div", "dcrev", o.evidence));
+  if (o.detail) more.appendChild(el("div", "dcrev", o.detail));
+  n.appendChild(more);
+  return n;
+}
+
+// ONE ORDER, ONE CARD. A job order is a row per character, so the card leads
+// with the order and its one-sentence verdict, then lists each character.
+function dcrOrderCard(b) {
+  const n = el("div", "dcrout " + b.tone + (b.success ? " ok" : ""));
+  const top = el("div", "");
+  top.appendChild(el("span", "dcrword " + b.tone, b.command));
+  top.appendChild(el("span", "dcrid", b.who + " - " + b.ago));
+  n.appendChild(top);
+  n.appendChild(el("div", "dcrcmd", b.verdict));
+  // Folded when every character's line agrees with the verdict above, open
+  // when one of them is the exception the verdict names.
+  const each = document.createElement("details");
+  each.className = "dcrmore";
+  each.open = !b.success;
+  each.appendChild(el("summary", "dcrid", "each character (" + b.lines.length + ")"));
+  for (const o of b.lines) each.appendChild(dcrOutcome(o));
+  n.appendChild(each);
   return n;
 }
 
@@ -7332,21 +7422,39 @@ function renderDecree(p) {
   if (dcr.job === null) dcr.job = p.job.standing;
   // Seeded once from the world, then owned by the page: the poll must not
   // rewrite a number somebody is part-way through setting.
-  if (dcr.wanted === null) dcr.wanted = p.campaign.wanted;
+  dcrBuildFamilies(p);
+  if (dcr.wanted === null) {
+    const f = dcrFamily(p);
+    dcr.wanted = f ? f.campaign.wanted : p.campaign.wanted;
+  }
 
   const jobSec = secs.get(p.job.section);
   if (jobSec) dcrJobTitle.textContent = jobSec.title;
-  dcrJobNow.textContent = p.job.line;
-  dcrJobSplit.textContent = p.job.split_line;
+  // ONE LINE PER FAMILY. Each family's job is read off its own leader's row;
+  // a roster with no families at all falls back to the merged line.
+  dcrJobNow.replaceChildren();
+  dcrCampLine.replaceChildren();
+  const fams = p.families || [];
+  if (!fams.length) {
+    dcrJobNow.appendChild(el("div", "", p.job.line));
+    dcrCampLine.appendChild(el("div", "", p.campaign.line));
+  }
+  const splits = [];
+  for (const f of fams) {
+    dcrJobNow.appendChild(el("div", "", f.job.line));
+    dcrCampLine.appendChild(el("div", "", f.campaign.line));
+    if (f.job.split_line) splits.push(f.label + ": " + f.job.split_line);
+  }
+  dcrJobSplit.textContent = fams.length ? splits.join(" ") : p.job.split_line;
   dcrShowJob();
   dcrRefusal(dcrJobWhy, jobSec, p.refusal_tag);
 
   const campSec = secs.get(p.campaign.section);
   if (campSec) dcrCampTitle.textContent = campSec.title;
-  dcrCampLine.textContent = p.campaign.line;
   dcrCampMeans.textContent = p.campaign.means;
   dcrCampWarn.textContent = p.campaign.warning;
   dcrCampWarn.hidden = p.campaign.warning === "";
+  dcrShowFamilies();
   dcrShowCamp();
   dcrRefusal(dcrCampWhy, campSec, p.refusal_tag);
 
@@ -7367,10 +7475,10 @@ function renderDecree(p) {
 
   dcrOutLede.textContent = p.outcome_lede;
   dcrOutList.replaceChildren();
-  if (!p.outcomes.length) {
+  if (!p.orders.length) {
     dcrOutList.appendChild(el("div", "dcrnone", p.outcome_empty));
   } else {
-    for (const o of p.outcomes) dcrOutList.appendChild(dcrOutcome(o));
+    for (const b of p.orders) dcrOutList.appendChild(dcrOrderCard(b));
   }
 
   dcrBlockList.replaceChildren();

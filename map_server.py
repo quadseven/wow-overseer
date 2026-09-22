@@ -2730,12 +2730,50 @@ def _fetch_decree() -> dict:
             command_rows = _guarded(
                 cur,
                 "SELECT id, target_name, command, kind, status, detail, "
-                "created_at FROM overseer_command WHERE source = %s "
+                "source, created_at FROM overseer_command WHERE source = %s "
                 "ORDER BY id DESC LIMIT %s",
                 (WEB_SOURCE, decree.OUTCOME_ROWS), "", "overseer_command")
+            # THE NEWEST JOB ROW PER CHARACTER, FROM ANY SOURCE. The goal loop
+            # and the Discord bridge write job rows too, and this is what lets
+            # decree.py tell "a later order replaced it" from "it never took".
+            newest_job_rows = _guarded(
+                cur,
+                "SELECT target_name, MAX(id) AS id FROM overseer_command "
+                "WHERE kind = 'job' GROUP BY target_name",
+                (), "", "overseer_command")
+            _with_family(cur, roster_rows)
     finally:
         conn.close()
-    return {"roster_rows": roster_rows, "command_rows": command_rows}
+    return {"roster_rows": roster_rows, "command_rows": command_rows,
+            "newest_job_rows": newest_job_rows}
+
+
+def _with_family(cur, roster_rows: list) -> list:
+    """Stamp each roster row with its overseer_roster.family, in place.
+
+    A SEPARATE READ, not a column added to _ROSTER_FULL: that statement is
+    shared with the current-goal banner, and a realm whose roster predates
+    the family column would drop the whole full read to _ROSTER_OLD and lose
+    the job and campaign columns with it. Here a missing column costs only
+    the family split, and every row reads as one family, which is what the
+    console did before there were two.
+    """
+    # NOT _guarded: a missing column arrives as an OperationalError, which
+    # that helper does not catch (see _fetch_roster_rows), so it would 503
+    # the very realm this fallback exists for.
+    try:
+        cur.execute("SELECT name, family FROM overseer_roster")
+        family_rows = list(cur.fetchall())
+    except pymysql.err.MySQLError as exc:
+        if not (exc.args and exc.args[0] in _DEGRADED):
+            raise
+        log.info("decree: overseer_roster has no family column (%s) - "
+                 "reading the roster as one family", exc.args[0])
+        family_rows = []
+    by_name = {r["name"]: r.get("family") or "" for r in family_rows}
+    for row in roster_rows:
+        row["family"] = by_name.get(row.get("name"), "")
+    return roster_rows
 
 
 # --- the console's write path (infra#3345) -----------------------------------
@@ -2802,13 +2840,17 @@ def _fetch_roster_rows() -> list:
             for attempt in (_ROSTER_FULL, _ROSTER_OLD):
                 try:
                     cur.execute(attempt)
-                    return list(cur.fetchall())
+                    rows = list(cur.fetchall())
                 except pymysql.err.MySQLError as exc:
                     if not (exc.args and exc.args[0] in _DEGRADED):
                         raise
                     log.info("decree: overseer_roster is thinner than this "
                              "image expects (%s) - trying a thinner read",
                              exc.args[0])
+                    continue
+                # The same family stamp the console's read gets, so an order
+                # is planned against the families the page drew.
+                return _with_family(cur, rows)
     finally:
         conn.close()
     return []

@@ -110,12 +110,14 @@ SECTIONS = (
         why_not="",
         instead="",
         does=(
-            "Writes one kind='job' overseer_command row per ENABLED roster "
-            "character - the same table, row shape and worldserver poller the "
+            "Writes one kind='job' overseer_command row per ENABLED "
+            "character of the family picked above - the same table, row shape and worldserver poller the "
             "bridge uses when it hears a job order in Discord "
             "(bridge._insert_job). No column is set from here: "
             "mod_overseer.cpp's DoJob is what moves overseer_roster.job, and "
-            "it needs the character in the world to act on the row."
+            "it needs the character in the world to act on the row. What "
+            "came back reads that column afterwards and says whether the "
+            "order is in effect."
         ),
     ),
     Section(
@@ -126,7 +128,8 @@ SECTIONS = (
         instead="",
         does=(
             "Writes overseer_roster.dungeon_runs_wanted and "
-            "dungeon_runs_done on EVERY enabled row, not only the leader's. "
+            "dungeon_runs_done on EVERY enabled row of the family picked "
+            "above, not only the leader's. "
             "The coordinator reads the leader's row and the count does not "
             "travel with the crown, so a cap set on one row is a campaign "
             "that appears to restart the moment somebody else takes the "
@@ -539,9 +542,11 @@ SUCCESS_STATUSES = ("applied",)
 # The heading sentence of the card, and the one an operator has to read
 # before the rows underneath mean anything.
 OUTCOME_LEDE = (
-    "Every order this console has sent, newest first, with its OUTCOME rather "
-    "than its reply. `delivered` means handed over and nothing verified; "
-    "`applied` is the only word here that means the character changed."
+    "Every order this console has sent, newest first, one line per order. "
+    "In effect and applied mean the change was read back afterwards: a job order is checked "
+    "against the job column it writes, and a bot order against the "
+    "character's live strategies. Handed over means the module took the row "
+    "and nothing was checked."
 )
 
 # Said out loud rather than left as an empty box: a blank list under a
@@ -675,38 +680,282 @@ def _when(value) -> str | None:
     return None if value is None else str(value)
 
 
-def outcome(row: dict) -> dict:
+def ago(then, now: datetime | None) -> str:
+    """How long ago, coarse, in words: "just now", "4 hours ago", "11 days ago".
+
+    Written here rather than in the page because a line that says WHEN an
+    order was sent is part of the verdict: "handed over" on an order from
+    eleven days ago and on one from a minute ago are different findings, and
+    the list used to print neither.
+    """
+    if not isinstance(then, datetime) or not isinstance(now, datetime):
+        return "at an unknown time"
+    seconds = int((now - then).total_seconds())
+    if seconds < 60:
+        return "just now"
+    for size, unit in ((86400, "day"), (3600, "hour"), (60, "minute")):
+        if seconds >= size:
+            count = seconds // size
+            return "%d %s%s ago" % (count, unit, "" if count == 1 else "s")
+    return "just now"
+
+
+# --- reading a job order back ------------------------------------------------
+#
+# A STOPGAP UNTIL quadseven/mod-overseer#564 lands the read-back in DoJob.
+#
+# WHY THE SITE READS IT BACK AND NOT THE MODULE. mod_overseer.cpp's DoJob is a
+# plain `UPDATE overseer_roster SET job` followed by status `delivered`, so a
+# job row is never `applied` and never `unchanged`, whatever it did. Every
+# job order this console had ever sent therefore read "NOTHING WAS READ BACK",
+# which is true of the row and useless to the operator: the column it writes
+# is sitting in overseer_roster, and this console already reads that table.
+#
+# So a delivered job row is judged against two things the adapter hands in:
+# what the target's roster row says NOW, and the newest job row for that
+# target from ANY source. The second is what separates "a later order
+# replaced it" from "it never took", because the goal loop and the Discord
+# bridge write job rows too and this console only lists its own.
+HOLDS = "holds"
+REPLACED = "replaced"
+DID_NOT_TAKE = "did not take"
+NO_ROW = "no roster row"
+
+READBACK = {
+    HOLDS: Outcome(
+        word="in effect",
+        tone=VERIFIED,
+        means="%(name)s's job column reads %(now)s now, which is what this order set.",
+        evidence=(
+            "Read off overseer_roster.job for %(name)s just now. The module "
+            "itself reports only that it accepted the row."
+        ),
+    ),
+    REPLACED: Outcome(
+        word="replaced",
+        tone=INERT,
+        means=(
+            "%(name)s's job reads %(now)s now: a later order (row %(newest)d) "
+            "set something else after this one."
+        ),
+        evidence="Read off overseer_roster.job and the newest job row for %(name)s.",
+    ),
+    DID_NOT_TAKE: Outcome(
+        word="did not take",
+        tone=FAILED,
+        means=(
+            "This is the newest job order for %(name)s, and their job reads "
+            "%(now)s rather than %(asked)s. The module accepted the row and the "
+            "column did not change."
+        ),
+        evidence="Read off overseer_roster.job for %(name)s just now.",
+    ),
+    NO_ROW: Outcome(
+        word="changed nothing",
+        tone=FAILED,
+        means=(
+            "%(name)s has no overseer_roster row, so the module's column write "
+            "matched nothing even though it reported the row delivered."
+        ),
+        evidence="No overseer_roster row carries that name.",
+    ),
+}
+
+# THE ONE REFUSAL EVERY OPERATOR SEES, said in plain words. It is written by
+# the worldserver when the target is not logged in at the moment the queue is
+# read, which on this realm means a restart or a relog was in progress.
+NOT_ONLINE = "target not online"
+
+
+def _readback(row: dict, roster_jobs: dict, newest_job: dict) -> str | None:
+    """Which READBACK verdict a delivered job row earns, or None to leave it.
+
+    None for everything that is not a delivered job row, and for a delivered
+    one when the adapter handed in no roster at all: an absent read is not
+    evidence, and a thinner console says "handed over" exactly as before.
+    """
+    if str(row.get("kind") or "") != JOB_KIND:
+        return None
+    if str(row.get("status") or "") != "delivered" or not roster_jobs:
+        return None
+    name = str(row.get("target_name") or "")
+    if name not in roster_jobs:
+        return NO_ROW
+    asked = jobs.resolve(str(row.get("command") or "")) or str(row.get("command") or "")
+    if roster_jobs[name] == asked:
+        return HOLDS
+    latest = int(newest_job.get(name) or 0)
+    if latest > int(row.get("id") or 0):
+        return REPLACED
+    return DID_NOT_TAKE
+
+
+def _verdict(row: dict, read: Outcome, check: str | None, facts: dict) -> str:
+    """One plain sentence: did this order work, for this character."""
+    name = facts["name"]
+    status = str(row.get("status") or "")
+    detail = str(row.get("detail") or "")
+    if check == HOLDS:
+        return "In effect: %s's job reads %s now." % (name, facts["now"])
+    if check == REPLACED:
+        return "Replaced: a later order set %s to %s." % (name, facts["now"])
+    if check == DID_NOT_TAKE:
+        return "Did not take: %s's job still reads %s." % (name, facts["now"])
+    if check == NO_ROW:
+        return "Nothing changed: %s has no roster row." % name
+    if status == "error":
+        if detail == NOT_ONLINE:
+            return ("Did not happen: %s was not logged in when the worldserver "
+                    "read the order." % name)
+        return "Did not happen for %s: %s." % (name, detail or "no reason given")
+    if status == "applied":
+        return "Applied: %s changed, read back off the character." % name
+    if status == "unchanged":
+        return "Nothing changed for %s." % name
+    if read.tone == WAITING:
+        return "Not picked up yet for %s." % name
+    return "Handed over to %s; nothing was checked." % name
+
+
+def outcome(row: dict, roster_jobs: dict | None = None,
+            newest_job: dict | None = None,
+            now: datetime | None = None) -> dict:
     """One overseer_command row as a console line.
 
     The ROW ID is carried on every one of them, never only on the interesting
     ones: it is the whole handle on the evidence, and an operator who has to
     go and find which row a line was about has already lost the round trip
     this view exists to remove.
+
+    `roster_jobs` is {name: job} off overseer_roster and `newest_job` is
+    {name: newest job row id, any source}. Both default to empty, and empty
+    means "not read", which leaves a delivered job row saying "handed over".
     """
+    roster_jobs = roster_jobs or {}
     status = str(row.get("status") or "")
     read = outcome_of(status)
+    check = _readback(row, roster_jobs, newest_job or {})
+    name = str(row.get("target_name") or "")
+    facts = {
+        "name": name,
+        "now": roster_jobs.get(name, ""),
+        "asked": str(row.get("command") or ""),
+        "newest": int((newest_job or {}).get(name) or 0),
+    }
+    if check is not None:
+        template = READBACK[check]
+        read = Outcome(word=template.word, tone=template.tone,
+                       means=template.means % facts,
+                       evidence=template.evidence % facts)
     detail = str(row.get("detail") or "")
     return {
         "id": int(row.get("id") or 0),
-        "name": str(row.get("target_name") or ""),
+        "name": name,
         "command": str(row.get("command") or ""),
         "kind": str(row.get("kind") or "bot"),
         "status": status,
         "word": read.word,
         "tone": read.tone,
-        "success": is_success(status),
+        # A read-back that holds is the one other thing allowed the success
+        # weight: it is the column this order wrote, read off the table after.
+        "success": is_success(status) or check == HOLDS,
         "means": read.means,
         "evidence": read.evidence,
         "detail": detail,
+        "verdict": _verdict(row, read, check, facts),
         "when": _when(row.get("created_at")),
+        "ago": ago(row.get("created_at"), now),
     }
 
 
-def outcomes(rows: list) -> tuple:
+def outcomes(rows: list, roster_jobs: dict | None = None,
+             newest_job: dict | None = None,
+             now: datetime | None = None) -> tuple:
     """The command rows as console lines, newest first."""
-    lines = [outcome(row) for row in (rows or [])]
+    lines = [outcome(row, roster_jobs, newest_job, now) for row in (rows or [])]
     lines.sort(key=lambda o: -o["id"])
     return tuple(lines)
+
+
+# --- one decree, one line ----------------------------------------------------
+#
+# A job order is one row PER CHARACTER, so a single press of the button used
+# to fill the list with five identical cards. The operator's question is
+# "did the order I gave work", and that is one line with the exceptions named.
+_TONE_RANK = (FAILED, INERT, UNSEEN, UNVERIFIED, WAITING, VERIFIED)
+
+
+def _batch_key(line: dict, row: dict) -> tuple:
+    return (line["kind"], line["command"], line["when"],
+            str(row.get("source") or ""))
+
+
+def _batch_verdict(lines: list, command: str, who: str) -> str:
+    """The whole order in one sentence, with the exceptions named.
+
+    One exception is said in its own full sentence. Several are grouped by
+    what happened to them, so five characters handed the same thing read as
+    one clause rather than five copies of it.
+    """
+    worked = [o for o in lines if o["success"]]
+    rest = [o for o in lines if not o["success"]]
+    head = "%s for %s" % (command, who)
+    if not rest:
+        if len(lines) == 1:
+            return "%s: %s" % (head, lines[0]["verdict"])
+        return "%s: in effect for all %d." % (head, len(lines))
+    if len(rest) == 1:
+        said = rest[0]["verdict"]
+    else:
+        groups: dict = {}
+        for o in rest:
+            label = o["word"] + (" (%s)" % o["detail"] if o["detail"] else "")
+            groups.setdefault(label, []).append(o["name"])
+        said = "; ".join("%s: %s" % (label, ", ".join(names))
+                         for label, names in groups.items()) + "."
+    if worked:
+        return "%s: in effect for %d of %d. %s" % (
+            head, len(worked), len(lines), said)
+    return "%s: %s" % (head, said)
+
+
+def batches(rows: list, lines: tuple, family_of: dict | None = None) -> tuple:
+    """The console lines grouped into the orders that were actually given.
+
+    One decree is one group: the same kind and command, written in the same
+    second. `family_of` names whose family each character is in, so a batch
+    says "for Grug's family" instead of listing five names.
+    """
+    family_of = family_of or {}
+    by_id = {int(r.get("id") or 0): r for r in (rows or [])}
+    groups: dict = {}
+    for line in lines:
+        key = _batch_key(line, by_id.get(line["id"], {}))
+        groups.setdefault(key, []).append(line)
+    out = []
+    for members in groups.values():
+        names = [o["name"] for o in members]
+        fams = {family_of.get(n, "") for n in names}
+        if len(names) > 1 and len(fams) == 1 and "" not in fams:
+            who = family_label(fams.pop())
+        else:
+            who = ", ".join(names)
+        tone = min((o["tone"] for o in members),
+                   key=lambda t: _TONE_RANK.index(t) if t in _TONE_RANK else 0)
+        out.append({
+            "id": max(o["id"] for o in members),
+            "command": members[0]["command"],
+            "kind": members[0]["kind"],
+            "who": who,
+            "tone": tone,
+            "success": all(o["success"] for o in members),
+            "ago": members[0]["ago"],
+            "when": members[0]["when"],
+            "verdict": _batch_verdict(members, members[0]["command"], who),
+            "lines": members,
+        })
+    out.sort(key=lambda b: -b["id"])
+    return tuple(out)
 
 
 # --- what is stopping them ---------------------------------------------------
@@ -848,6 +1097,10 @@ ORDER_REFUSALS = {
         "per character, so each of them answers in their own words."
     ),
     "roster": "Nobody is on the roster, so there is nobody to order.",
+    "family": (
+        "Pick which family this is for. Each family has its own leader, job "
+        "and run count, so one order cannot set both."
+    ),
     "mode": "That is not a job mode. The modes are: %s." % ", ".join(jobs.MODES),
     "campaign": (
         "Say what the campaign should be: a new cap, a restart, or both."
@@ -1059,6 +1312,10 @@ def _plan_travel(request: dict, standing: dict) -> Order:
 # another branch.
 PLANNERS = {JOB: _plan_job, CAMPAIGN: _plan_campaign, TRAVEL: _plan_travel}
 
+# The cards whose order fans out over a family and is read off its leader.
+# Travel is not one: it names one character, and the name picks the family.
+FAMILY_WIDE = (JOB, CAMPAIGN)
+
 
 def plan_order(request: dict, roster_rows: list) -> Order:
     """One order from the console: a refusal with a reason, or what to write.
@@ -1076,6 +1333,18 @@ def plan_order(request: dict, roster_rows: list) -> Order:
     planner = PLANNERS.get(section)
     if planner is None:
         return _refuse(section, ORDER_REFUSALS["section"])
+    if section in FAMILY_WIDE:
+        # WHICH FAMILY, and never both by default. A job or a campaign cap is
+        # read off one leader's row, so an order that fanned out over every
+        # enabled row set the Horde's job from a card that described the
+        # Alliance's. With more than one family the request has to name one,
+        # and the name is matched against the roster, never trusted.
+        keys = family_keys(roster_rows)
+        asked = request.get("family")
+        if isinstance(asked, str) and asked in keys:
+            roster_rows = _rows_of(roster_rows, asked)
+        elif len(keys) > 1:
+            return _refuse(section, ORDER_REFUSALS["family"])
     return planner(request, agenda.standing_orders(roster_rows))
 
 
@@ -1132,17 +1401,82 @@ def order_result(order: Order, changed: int) -> dict:
     }
 
 
+# --- two families --------------------------------------------------------------
+#
+# overseer_roster carries a `family` column, and the realm now drives two: an
+# Alliance five and a Horde five, each with its own leader, its own job and
+# its own campaign counter (mod_overseer.cpp reads the LEADER's row, and each
+# family has one). Reading the roster as one family picked one of the two
+# leaders and printed "read off Grug's row" over ten characters, half of
+# whom that row does not govern. So the job and the campaign are read and
+# ordered per family, and an order that fans out names the family it is for.
+
+def family_label(key: str) -> str:
+    """How a family is named on the page: after the head it is keyed by."""
+    return "%s's family" % key if key else "the family"
+
+
+def _family_key(row: dict) -> str:
+    return str(row.get("family") or "")
+
+
+def family_keys(roster_rows: list) -> list:
+    """Every family with at least one enabled row, bonds' own first.
+
+    The family this process was configured for opens first, which is the
+    rule /api/family keeps; the rest follow by name so the order is stable.
+    """
+    keys = {_family_key(r) for r in roster_rows if int(r.get("enabled") or 0)}
+    head = bonds.head_of_family()
+    own = {_family_key(r) for r in roster_rows if str(r.get("name")) == head}
+    return sorted(keys, key=lambda k: (k not in own, k))
+
+
+def _rows_of(roster_rows: list, key: str) -> list:
+    return [r for r in roster_rows if _family_key(r) == key]
+
+
+def family_views(roster_rows: list) -> list:
+    """One standing job and one campaign counter per family."""
+    out = []
+    for key in family_keys(roster_rows):
+        standing = agenda.standing_orders(_rows_of(roster_rows, key))
+        split = standing["job_split"]
+        out.append({
+            "key": key,
+            "label": family_label(key),
+            "leader": standing["leader"],
+            "roster": list(standing["roster"]),
+            "job": {
+                "standing": standing["job"],
+                "line": "%s: %s" % (family_label(key),
+                                    job_line(standing["job"], standing["leader"])),
+                "split_line": agenda.split_sentence(split) if split else "",
+            },
+            "campaign": dict(
+                campaign_view(standing["campaign"]),
+                line="%s: %s" % (family_label(key),
+                                 campaign_view(standing["campaign"])["line"]),
+            ),
+        })
+    return out
+
+
 # --- the whole console -------------------------------------------------------
 
 def build_console(roster_rows: list, command_rows: list,
-                  now: datetime | None = None) -> dict:
+                  now: datetime | None = None,
+                  newest_job_rows: list | None = None) -> dict:
     """Rows in, the console's JSON out.
 
     roster_rows    overseer_roster, every column agenda reads
     command_rows   recent overseer_command rows, any status
     now            the clock, injectable so the suite can stand still
+    newest_job_rows  {target_name, id} for the newest kind='job' row per
+                   character from any source, which is what tells "a later
+                   order replaced it" apart from "it never took"
 
-    BOTH MAY BE EMPTY. A realm whose worldserver predates a table hands in []
+    ALL MAY BE EMPTY. A realm whose worldserver predates a table hands in []
     and gets a thinner console, never an exception - the same contract every
     other endpoint on this page keeps.
     """
@@ -1151,6 +1485,14 @@ def build_console(roster_rows: list, command_rows: list,
     mode = standing["job"]
     split = standing["job_split"]
     aimed = travel_now(standing["travel"])
+    # THE READ-BACK NEEDS THE JOB COLUMN. A thin roster read (no `job`) hands
+    # in no jobs at all, and no jobs means "not read", never "blank".
+    roster_jobs = {str(r["name"]): agenda._mode(r) for r in roster_rows
+                   if "job" in r}
+    newest_job = {str(r.get("target_name")): int(r.get("id") or 0)
+                  for r in (newest_job_rows or [])}
+    lines = outcomes(command_rows, roster_jobs, newest_job, now)
+    family_of = {str(r["name"]): _family_key(r) for r in roster_rows}
     return {
         "generated_at": _when(now),
         "sections": [
@@ -1209,7 +1551,9 @@ def build_console(roster_rows: list, command_rows: list,
             "max_chars": WILL_MAX_CHARS,
             "submit": WILL_SUBMIT,
         },
-        "outcomes": list(outcomes(command_rows)),
+        "families": family_views(roster_rows),
+        "outcomes": list(lines),
+        "orders": list(batches(command_rows, lines, family_of)),
         "outcome_lede": OUTCOME_LEDE,
         "outcome_empty": OUTCOME_EMPTY,
         "backlog": list(backlog()),
