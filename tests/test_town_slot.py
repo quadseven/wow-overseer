@@ -303,15 +303,19 @@ class TheDoorDoesThreeThingsInOneOrder(unittest.TestCase):
         for it to be forgotten; one place that reads `_head_now` and refuses
         anybody else is the rule enforced."""
         self.assertIn("leader = await asyncio.to_thread(_head_now)", self.code)
+        self.assertLess(self.code.index("_head_now"), self.code.index("slot.want("))
+        # Another family's leader is read here too, from its own rows (#150).
+        self.assertIn(
+            "leader = await asyncio.to_thread(_cohort_leader, cohort)", self.code
+        )
         self.assertLess(
-            self.code.index("_head_now"), self.code.index("self._town_slot.want(")
+            self.code.index("_cohort_leader"), self.code.index("slot.want(")
         )
 
     def test_it_reads_the_column_before_it_decides(self):
         self.assertIn("_current_travel_npc, leader", self.code)
         self.assertLess(
-            self.code.index("_current_travel_npc"),
-            self.code.index("self._town_slot.want("),
+            self.code.index("_current_travel_npc"), self.code.index("slot.want(")
         )
 
     def test_it_hands_the_write_s_own_guard_to_the_decision(self):
@@ -364,7 +368,7 @@ class TheDoorDoesThreeThingsInOneOrder(unittest.TestCase):
         recorded the intention would hand this pass a lease it is not using."""
         self.assertLess(
             self.code.index("taken = await"),
-            self.code.index("self._town_slot.settle(decision, taken"),
+            self.code.index("slot.settle(decision, taken"),
         )
 
     def test_a_lost_race_returns_false_rather_than_claiming_the_aim(self):

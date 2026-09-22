@@ -3435,7 +3435,11 @@ class Bridge(discord.Client):
         # far enough apart that nobody reaches one usable vendor counter.
         # vendor_stall owns the pure cohesion clock; this bridge only retains
         # its last observation between polls.
-        self._vendor_family_movement: vendor_stall.FamilyMovement | None = None
+        # Keyed by leader since #150: each family walks to its own counter.
+        self._vendor_family_movement: dict[str, vendor_stall.FamilyMovement] = {}
+        # One town slot per OTHER family (#150), keyed by the roster's
+        # `family` value. This bridge's own family keeps `self._town_slot`.
+        self._cohort_town_slots: dict[str, townslot.Slot] = {}
         # Equip rows whose outcome has already been logged, by row id, so each
         # answer is said once (#146).
         self._equip_reported: set = set()
@@ -4913,7 +4917,8 @@ class Bridge(discord.Client):
         )
 
     async def _claim_town_slot(self, claimant: str, character: str,
-                               aim: str, urgent: bool = False) -> bool:
+                               aim: str, urgent: bool = False,
+                               cohort: str | None = None) -> bool:
         """Ask for the family's one traveller, and act on the answer (infra#3703).
 
         THE ONE DOOR EVERY TOWN ERRAND NOW GOES THROUGH. Seven passes write
@@ -4955,11 +4960,19 @@ class Bridge(discord.Client):
         returns True and writes nothing: the column already says what this pass
         wanted it to say, and re-asserting it makes mod-overseer's aim book
         erase its own state and read a standing errand as a new one (infra#3708).
+
+        `cohort` NAMES ANOTHER FAMILY (#150). Its leader is read from its own
+        roster rows, here, for the same reason `_head_now()` is read here for
+        this bridge's family, and its turn is kept in that family's own slot.
         """
-        leader = await asyncio.to_thread(_head_now)
+        if cohort is None:
+            leader = await asyncio.to_thread(_head_now)
+        else:
+            leader = await asyncio.to_thread(_cohort_leader, cohort)
+        slot = self._cohort_town_slot(cohort)
         column = await asyncio.to_thread(_current_travel_npc, leader)
         now = time.monotonic()
-        decision = self._town_slot.want(
+        decision = slot.want(
             claimant=claimant, character=character, aim=aim, leader=leader,
             column=column, retaskable=_retaskable_from(aim), now=now,
             urgent=urgent,
@@ -4988,14 +5001,14 @@ class Bridge(discord.Client):
                     decision.release.character, decision.release.aim, claimant,
                 )
         if decision.verdict == townslot.SLOT_HOLD:
-            self._town_slot.settle(decision, True, now)
+            slot.settle(decision, True, now)
             log.debug("%s", townslot.report(decision))
             return True
         taken = await asyncio.to_thread(
             _write_trade_errand,
             professions.Errand(character=character, travel_npc=aim),
         )
-        self._town_slot.settle(decision, taken, now)
+        slot.settle(decision, taken, now)
         if not taken:
             # THE SLOT SAID YES AND THE COLUMN SAID NO, which is a race rather
             # than a contradiction: something wrote the column between the read
@@ -5010,6 +5023,28 @@ class Bridge(discord.Client):
             return False
         log.info("%s", townslot.report(decision))
         return True
+
+    def _cohort_town_slot(self, cohort=None) -> "townslot.Slot":
+        """The town slot for a family: this bridge's own, or another's (#150).
+
+        `cohort` is None, a `townslot.Cohort`, or its key. Each other family
+        gets its own ledger with the same leases, created on first use.
+        """
+        key = getattr(cohort, "key", cohort)
+        if not key:
+            return self._town_slot
+        slot = self._cohort_town_slots.get(key)
+        if slot is None:
+            slot = townslot.Slot(
+                lease=TOWN_SLOT_LEASE_SECONDS,
+                releasable=_is_economy_aim,
+                long_leases={
+                    GATHER_CLAIMANT: TOWN_SLOT_GATHER_LEASE_SECONDS,
+                    FLIGHT_CLAIMANT: TOWN_SLOT_FLIGHT_LEASE_SECONDS,
+                },
+            )
+            self._cohort_town_slots[key] = slot
+        return slot
 
     async def _idle_town_slot(self, claimant: str) -> bool:
         """Ask for the family's traveller to be idle, with no successor aim."""
@@ -6449,13 +6484,13 @@ class Bridge(discord.Client):
             if stall.current is not None:
                 self._vendor_movement[leader] = stall.current
             family_stall = vendor_stall.family_progress(
-                self._vendor_family_movement,
+                self._vendor_family_movement.get(leader),
                 await asyncio.to_thread(_fetch_positions, names),
                 tuple(names),
                 time.monotonic(),
             )
             if family_stall.current is not None:
-                self._vendor_family_movement = family_stall.current
+                self._vendor_family_movement[leader] = family_stall.current
             decision = vendor_stall.decide(
                 pressure=pressure,
                 at_counter=bool(leader_town.vendor),
@@ -6482,7 +6517,7 @@ class Bridge(discord.Client):
                         decision.reason,
                     )
                     self._vendor_movement.pop(leader, None)
-                    self._vendor_family_movement = None
+                    self._vendor_family_movement.pop(leader, None)
                     return bag_pressure.VENDOR_ERRAND_RELEASE
         step = bag_pressure.vendor_errand_step(
             bool(leader_town.vendor), outstanding,
@@ -6661,7 +6696,12 @@ class Bridge(discord.Client):
         leaves their non-empty aim in place. This sweep is only used outside an
         active dungeon run, so it cannot erase a party staging escort.
         """
-        aims = await asyncio.to_thread(_standing_travel_aims)
+        # ONLY THIS FAMILY'S ROWS (#150). "Stranded" means "not the leader",
+        # and every row of another family is not this family's leader, so an
+        # unscoped read would blank the other family's live aims.
+        aims = {name: aim for name, aim
+                in (await asyncio.to_thread(_standing_travel_aims)).items()
+                if name in names}
         stranded = townslot.stranded_nonleader_aims(
             aims, leader, ground=travel.is_ground_aim, releasable=_is_economy_aim,
         )
@@ -6677,8 +6717,15 @@ class Bridge(discord.Client):
                 )
         return released
 
-    async def _vendor_once(self) -> None:
+    async def _vendor_once(self, cohort=None) -> None:
         """Queue carried junk and outgrown gear for the world sell executor.
+
+        FOR ONE FAMILY AT A TIME (#150). `cohort` is None for the family this
+        bridge has always driven, whose names come from OVERSEER_NOTABLE_NAMES
+        and whose traveller is `_head_now()`, exactly as before. Any other
+        family in `overseer_roster.family` arrives as a `townslot.Cohort`
+        carrying its own names and its own roster leader, and gets its own
+        town slot, so neither family's errands can arbitrate the other's.
 
         TWO SOURCES, ONE PASS, ONE ERRAND. Junk comes from bag_pressure and
         outgrown equipment from disposition, but both end as a kind='sell'
@@ -6690,9 +6737,13 @@ class Bridge(discord.Client):
         still true is item_plan's. This method fetches, calls them, and writes
         what comes back.
         """
-        names = sorted((await asyncio.to_thread(_protected_guids)).values())
+        if cohort is None:
+            names = sorted((await asyncio.to_thread(_protected_guids)).values())
+        else:
+            names = sorted(cohort.names)
         if not names:
             return
+        slot = self._cohort_town_slot(cohort)
 
         # SETTLING THE LAST ERRAND COMES BEFORE DECIDING ON A NEW ONE, AND
         # ABOVE EVERY GATE BELOW (infra#3708, infra#3703's option 2).
@@ -6716,7 +6767,10 @@ class Bridge(discord.Client):
         # `_drive_train` gives: it names the character that can actually walk.
         # Read once and used for both halves, because releasing an errand from
         # one leader and aiming another would be two leaders.
-        leader = await asyncio.to_thread(_head_now)
+        if cohort is None:
+            leader = await asyncio.to_thread(_head_now)
+        else:
+            leader = cohort.leader
         step = await self._settle_vendor_errand(names, leader)
         # AND THE SAME SETTLING FOR EVERY OTHER ROW CARRYING THIS PASS'S OWN
         # KEYWORD (infra#3746). The line above hands back the errand the LEADER
@@ -7047,6 +7101,7 @@ class Bridge(discord.Client):
             # the slot says whose, for how long, and what ends it.
             aimed = await self._claim_town_slot(
                 "economy", leader, "vendor", urgent=True,
+                cohort=None if cohort is None else cohort.key,
             )
             if not aimed:
                 log.info(
@@ -7124,9 +7179,9 @@ class Bridge(discord.Client):
         # somebody else's errand.
         if aimed:
             if inserted:
-                self._town_slot.productive("economy")
+                slot.productive("economy")
             else:
-                until = self._town_slot.fruitless("economy", time.monotonic())
+                until = slot.fruitless("economy", time.monotonic())
                 log.warning(
                     "economy: took the travel column on bag pressure and wrote "
                     "no sale; urgency suppressed for %.0fs so a pressure this "
@@ -7344,7 +7399,106 @@ class Bridge(discord.Client):
                 await self._vendor_once()
             except Exception:
                 log.exception("economy vendor pass failed; retrying next cycle")
+            await self._economy_for_every_family()
             await asyncio.sleep(cycle)
+
+    async def _economy_for_every_family(self) -> None:
+        """The bag and economy passes for every family, not only this one (#150).
+
+        Every pass used to take its names from OVERSEER_NOTABLE_NAMES through
+        `_protected_guids`, which is one family. Measured on wow-dev
+        2026-09-22 the second family in `overseer_roster.family` carried only
+        its 16-slot backpacks, Zug at 15 of 16, and no pass ever looked at it.
+
+        THIS BRIDGE'S OWN FAMILY keeps its vendor pass exactly where it was
+        (the line above this call) and gains only the purchase. EVERY OTHER
+        FAMILY runs, in order: the vendor pass (sell first, so the purse and
+        the bags are what a purchase then reads), the family bag hand-over,
+        then the purchase. Each step is guarded on its own, so one family's
+        failure costs that step and nothing else.
+        """
+        own = sorted((await asyncio.to_thread(_protected_guids)).values())
+        if own:
+            try:
+                await self._buy_bags_once(own)
+            except Exception:
+                log.exception("bags: purchase pass failed; retrying next cycle")
+        cohorts = await asyncio.to_thread(_other_cohorts, own)
+        for cohort in cohorts:
+            for what, step in (
+                    ("vendor", lambda c=cohort: self._vendor_once(c)),
+                    ("bag hand-over", lambda c=cohort: self._hand_bags_once(list(c.names))),
+                    ("bag purchase", lambda c=cohort: self._buy_bags_once(list(c.names))),
+            ):
+                try:
+                    await step()
+                except Exception:
+                    log.exception("economy: %s pass failed for family %s; "
+                                  "retrying next cycle", what, cohort.key)
+
+    async def _buy_bags_once(self, names: list) -> None:
+        """Buy the cheapest bag a vendor in reach stocks, for anyone short (#150).
+
+        `bag_pressure.bag_purchases` decides; this reads and writes. A
+        purchase is a kind='buy' town-trip row (DoBuy pays the vendor), and it
+        is written only for a character whose OWN vendors in reach stock the
+        bag, because DoBuy refuses on the buyer's range. Right behind it goes
+        one kind='bot' `e` row that puts the new bag into the empty position.
+        No travel aim is written: the family is at a counter because the
+        vendor pass walked it there.
+        """
+        members = bag_upgrade.members_from_rows(
+            await asyncio.to_thread(_fetch_bag_state, names), names)
+        open_positions = bag_pressure.open_bag_positions(members)
+        wanting = sorted(name for name, n in open_positions.items() if n > 0)
+        if not wanting:
+            log.info("bags: nobody in %s has an empty bag position the "
+                     "family's own spare bags will not fill", names)
+            return
+        towns = {}
+        for name in wanting:
+            towns[name] = await asyncio.to_thread(_fetch_town, name)
+        at_counter = [name for name in wanting if towns[name].vendor]
+        if not at_counter:
+            log.info("bags: %d want a bag (%s) and none is at a vendor",
+                     len(wanting), ", ".join(wanting))
+            return
+        stocked = sorted({entry for name in at_counter
+                          for entry in towns[name].stocks})
+        offers = await asyncio.to_thread(_fetch_bag_offers, stocked)
+        purses = await asyncio.to_thread(_fetch_purses, at_counter)
+        free = await asyncio.to_thread(_fetch_free_slots, at_counter)
+        buyers = [
+            bag_pressure.BagBuyer(
+                name=name, level=purses.get(name, (0, 0))[0],
+                money=purses.get(name, (0, 0))[1],
+                open_positions=open_positions[name],
+                free_slots=int(free.get(name, 0)),
+                stocks=frozenset(towns[name].stocks),
+            )
+            for name in at_counter if name in purses
+        ]
+        purchases, notes = bag_pressure.bag_purchases(buyers, offers)
+        for note in notes:
+            log.info("bags: %s", note)
+        seen = await asyncio.to_thread(_recent_town_keys, GIVE_RETRY_MINUTES)
+        bought = 0
+        for purchase in purchases:
+            if (purchase.buyer, purchase.command) in seen:
+                continue
+            errand = towntrip.Errand(
+                purchase.buyer, towntrip.BUY_KIND, purchase.command,
+                purchase.why, purchase.price,
+            )
+            if not await asyncio.to_thread(_insert_town_errand, errand):
+                continue
+            bought += 1
+            await asyncio.to_thread(_insert_bag_equip, purchase)
+            log.info("bags: %s buys %s (%d slots) for up to %d copper - %s",
+                     purchase.buyer, purchase.name, purchase.slots,
+                     purchase.price, purchase.why)
+        log.info("bags: %d at a vendor wanted a bag, %d purchase(s) queued, "
+                 "%d held back", len(buyers), bought, len(notes))
 
     async def _settle_bank_errand(self, names: list, leader: str,
                                   moves_unasked: bool) -> str:
@@ -11544,6 +11698,86 @@ def _fetch_bag_state(names: list) -> list:
     with _connect() as conn, conn.cursor() as cur:
         cur.execute(sql, names)
         return [dict(row) for row in cur.fetchall()]
+
+
+# Every enabled roster row with its family and lead flag (#150). The family
+# column arrives with mod-overseer's SQL; a world without it has one family.
+_ROSTER_COHORTS_SQL = (
+    "SELECT name, family, `lead` FROM overseer_roster "
+    "WHERE enabled = 1 AND family IS NOT NULL AND family <> ''"
+)
+
+
+def _roster_cohort_rows() -> list:
+    """Rows for townslot.other_cohorts; no judgement here."""
+    with _connect() as conn, conn.cursor() as cur:
+        try:
+            cur.execute(_ROSTER_COHORTS_SQL)
+        except pymysql.err.MySQLError as exc:
+            if exc.args and exc.args[0] in (1054, 1146):
+                return []
+            raise
+        return [dict(row) for row in cur.fetchall()]
+
+
+def _other_cohorts(own_names: list) -> tuple:
+    """Every roster family but this bridge's own, with its leader (#150)."""
+    return townslot.other_cohorts(_roster_cohort_rows(), own_names)
+
+
+def _cohort_leader(key: str) -> str:
+    """The leader of the family `key`, read now; "" when it has none."""
+    for cohort in townslot.other_cohorts(_roster_cohort_rows(), ()):
+        if cohort.key == key:
+            return cohort.leader
+    return ""
+
+
+def _fetch_purses(names: list) -> dict:
+    """name -> (level, money in copper), as the characters row saved them."""
+    if not names:
+        return {}
+    sql = ("SELECT name, level, money FROM characters "  # noqa: S608 - placeholders only
+           "WHERE name IN (%s)" % ",".join(["%s"] * len(names)))
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(sql, names)
+        return {row["name"]: (int(row["level"] or 0), int(row["money"] or 0))
+                for row in cur.fetchall()}
+
+
+# The general-purpose bags among the entries a vendor in reach stocks (#150).
+# subclass 0 is the plain container; herb, enchanting, soul and the other
+# special bags only hold one kind of thing and are never bought for room.
+_BAG_OFFERS_SQL = (
+    "SELECT entry, name, ContainerSlots AS slots, BuyPrice AS price "
+    "FROM acore_world.item_template "
+    "WHERE entry IN (%s) AND class = 1 AND subclass = 0 "
+    "AND ContainerSlots > 0 AND BuyPrice > 0"
+)
+
+
+def _fetch_bag_offers(entries: list) -> list:
+    """bag_pressure.BagOffer for every general bag among `entries`."""
+    if not entries:
+        return []
+    sql = _BAG_OFFERS_SQL % ",".join(["%s"] * len(entries))
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(sql, [int(entry) for entry in entries])
+        return [bag_pressure.BagOffer(
+                    entry=int(row["entry"]), name=str(row["name"]),
+                    slots=int(row["slots"]), price=int(row["price"]))
+                for row in cur.fetchall()]
+
+
+def _insert_bag_equip(purchase) -> int:
+    """One kind='bot' row putting a just-bought bag into its position."""
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(
+            "INSERT INTO overseer_command (target_name, command, kind, source) "
+            "VALUES (%s, %s, 'bot', %s)",
+            (purchase.buyer, purchase.equip_command, "bags"),
+        )
+        return cur.lastrowid or 0
 
 
 def _insert_bag_give(move, command: str) -> int:
