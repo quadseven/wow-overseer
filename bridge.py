@@ -10359,18 +10359,7 @@ class Bridge(discord.Client):
 
     async def _crafter_mail_for(self, names: list, now: float) -> None:
         """One family's part of `_crafter_mail_once`."""
-        crafting = await asyncio.to_thread(_crafter_plan, names)
-        people = {p.name: p for p in crafting.people}
-        designated = {
-            seat.name: people[seat.name]
-            for seats in crafting.register.values() for seat in seats
-            if seat.seat == crafters.DESIGNATED and seat.name in people
-        }
-        if not designated:
-            return
-        rows = await asyncio.to_thread(
-            _fetch_crafter_letters, sorted(designated), names)
-        letters = [x for x in map(crafters.letter_from_row, rows) if x]
+        designated, letters = await self._crafter_letters(names)
         if not letters:
             return
         known = crafters.known_from_rows(
@@ -10385,10 +10374,32 @@ class Bridge(discord.Client):
                 | set(self._dues_walks))
         plan, notes = crafters.visits(letters, designated, known,
                                       frozenset(busy), free_slots)
+        notes += await self._start_crafter_walks(plan, names, now)
+        _log_capped(crafters.LOG_PREFIX.rstrip(":"), notes)
+
+    async def _crafter_letters(self, names: list) -> tuple:
+        """(designated guild crafters by name, their recipe letters)."""
+        crafting = await asyncio.to_thread(_crafter_plan, names)
+        people = {p.name: p for p in crafting.people}
+        designated = {
+            seat.name: people[seat.name]
+            for seats in crafting.register.values() for seat in seats
+            if seat.seat == crafters.DESIGNATED and seat.name in people
+        }
+        if not designated:
+            return designated, []
+        rows = await asyncio.to_thread(
+            _fetch_crafter_letters, sorted(designated), names)
+        return designated, [x for x in map(crafters.letter_from_row, rows) if x]
+
+    async def _start_crafter_walks(self, plan, names: list, now: float) -> list:
+        """Write a walk row per visit a walker allows; the refusals as notes."""
+        if not plan:
+            return []
         row_walks = now >= self._mail_walk_unsupported_until
-        walkers = (await asyncio.to_thread(
+        walkers = await asyncio.to_thread(
             _route_walkers, [v.receiver for v in plan], names, row_walks)
-            if plan else {})
+        notes = []
         for visit in plan:
             refused = crafters.walk_refusal(visit.receiver,
                                             walkers.get(visit.receiver))
@@ -10406,7 +10417,7 @@ class Bridge(discord.Client):
             task = asyncio.create_task(self._follow_crafter_visit(visit, row_id))
             self._mail_walk_tasks.add(task)
             task.add_done_callback(self._mail_walk_task_done)
-        _log_capped(crafters.LOG_PREFIX.rstrip(":"), notes)
+        return notes
 
     async def _follow_crafter_visit(self, visit, row_id: int) -> None:
         """Take each recipe out once the walk arrives, then learn it."""

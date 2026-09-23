@@ -205,33 +205,14 @@ def route(
         return Route(stack, KEEP, why="another pass owns %s" % stack.name)
     if stack.recipe and holder is not None and can_learn_now(stack, holder):
         return Route(stack, KEEP, why="%s can learn %s now" % (holder.name, stack.name))
-    if not stack.bound and pick is None:
-        for family in (True, False):
-            person, need = _first(stack, people, family=family, online=True, skip=busy)
-            if person is not None:
-                return Route(stack, FAMILY if family else GUILD, person.name, need)
-        person, need = _first(stack, people)
-        if person is not None:
-            return Route(
-                stack,
-                WAIT,
-                person.name,
-                "%s; nobody free to take it is online this pass, and a letter "
-                "needs its receiver online" % need,
-            )
-        price = (market or {}).get(stack.entry)
-        if (
-            auction_open
-            and price
-            and price >= max(1, stack.sell_price) * disposition.AUCTION_BEATS_VENDOR_BY
-        ):
-            return Route(
-                stack,
-                AUCTION,
-                why="nobody in the family or guild can use %s, and it sells for "
-                "%d copper each listed against %d at a vendor"
-                % (stack.name, price, stack.sell_price),
-            )
+    if not stack.bound:
+        # A recipe the register placed with nobody is not searched again.
+        handed = _handed(stack, people, busy) if pick is None else None
+        if handed is not None:
+            return handed
+        listed = _listed(stack, market, auction_open)
+        if listed is not None:
+            return listed
     if stack.sell_price > 0:
         return Route(
             stack,
@@ -240,6 +221,42 @@ def route(
             "copper" % (stack.name, stack.sell_price),
         )
     return Route(stack, KEEP, why="%s has no route and no vendor price" % stack.name)
+
+
+def _handed(stack: Stack, people, busy) -> Route | None:
+    """FAMILY, GUILD or WAIT for the first person by name who can use it."""
+    for family in (True, False):
+        person, need = _first(stack, people, family=family, online=True, skip=busy)
+        if person is not None:
+            return Route(stack, FAMILY if family else GUILD, person.name, need)
+    person, need = _first(stack, people)
+    if person is not None:
+        return Route(
+            stack,
+            WAIT,
+            person.name,
+            "%s; nobody free to take it is online this pass, and a letter "
+            "needs its receiver online" % need,
+        )
+    return None
+
+
+def _listed(stack: Stack, market, auction_open: bool) -> Route | None:
+    """AUCTION when the house is open and pays enough more than a vendor."""
+    price = (market or {}).get(stack.entry)
+    if (
+        auction_open
+        and price
+        and price >= max(1, stack.sell_price) * disposition.AUCTION_BEATS_VENDOR_BY
+    ):
+        return Route(
+            stack,
+            AUCTION,
+            why="nobody in the family or guild can use %s, and it sells for "
+            "%d copper each listed against %d at a vendor"
+            % (stack.name, price, stack.sell_price),
+        )
+    return None
 
 
 def _picked(stack: Stack, pick, busy) -> Route:

@@ -268,6 +268,20 @@ class TheClearanceRouteTakesThePick(unittest.TestCase):
         new = self.plan(routes(), [purification])
         self.assertNotIn(new[25].route, clearance.GIVEN)
 
+    def test_a_recipe_placed_with_nobody_is_still_listed_or_sold(self):
+        purification = stack(25, "Recipe: Purification Potion", ALCHEMY, 285)
+        got = {
+            r.stack.guid: r
+            for r in clearance.plan(
+                [purification],
+                [cperson(p) for p in PEOPLE],
+                picks=routes(),
+                market={1: 50_000},
+                auction_open=True,
+            )
+        }
+        self.assertEqual(got[25].route, clearance.AUCTION)
+
     def test_a_routed_recipe_is_not_held_for_the_family_hand_off(self):
         got = self.plan(
             routes(),
@@ -488,7 +502,12 @@ class TheBridgeWiring(unittest.TestCase):
         )
 
     def test_never_a_give_or_a_gm_command(self):
-        for name in ("_crafter_mail_for", "_follow_crafter_visit", "_take_and_learn"):
+        for name in (
+            "_crafter_mail_for",
+            "_start_crafter_walks",
+            "_follow_crafter_visit",
+            "_take_and_learn",
+        ):
             body = self.body(name)
             self.assertNotIn("_insert_gm", body)
             self.assertNotIn("'give'", body)
