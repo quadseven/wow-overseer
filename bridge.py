@@ -78,6 +78,7 @@ import skillgoal
 import tabard
 import towntrip
 import townslot
+import tradechoice
 import vendor_stall
 import trainjob
 import travel
@@ -3635,6 +3636,10 @@ class Bridge(discord.Client):
         # One town slot per OTHER family (#150), keyed by the roster's
         # `family` value. This bridge's own family keeps `self._town_slot`.
         self._cohort_town_slots: dict[str, townslot.Slot] = {}
+        # When each other family's trainee first borrowed its lead for the
+        # learn errand it still has (#211), keyed by the roster's `family`.
+        # In memory like the town slots; a restart restarts the bound.
+        self._family_lead_since: dict[str, dict] = {}
         # Equip rows whose outcome has already been logged, by row id, so each
         # answer is said once (#146).
         self._equip_reported: set = set()
@@ -6261,6 +6266,8 @@ class Bridge(discord.Client):
                 # two steps above have just written (infra#3686).
                 await self._reconcile_learn_aims()
 
+                await self._trades_for_every_family()
+
                 # Which tree each of them puts talent points in. Without this
                 # the module leaves talents alone entirely, which is the safe
                 # default for a character nobody has decided a role for and the
@@ -7988,6 +7995,103 @@ class Bridge(discord.Client):
                 except Exception:
                     log.exception("economy: %s pass failed for family %s; "
                                   "retrying next cycle", what, cohort.key)
+
+    async def _trades_for_every_family(self) -> None:
+        """Choose, declare and walk to the professions of every other family (#211).
+
+        `professions.ROSTER`, `_write_declared_professions` and the learn-aim
+        reconcile all serve this bridge's own family. Measured on wow-dev
+        2026-09-23 the Horde family held no primary profession, and the
+        `learn_skill` mod-overseer had written for all five from a hand-seeded
+        permission had nothing walking it to a trainer. Each family is
+        guarded on its own, so one family's failure costs only its turn.
+        """
+        own = sorted((await asyncio.to_thread(_protected_guids)).values())
+        for cohort in await asyncio.to_thread(_other_cohorts, own):
+            try:
+                await self._family_trades_once(cohort)
+            except Exception:
+                log.exception("trades: pass failed for family %s; retrying "
+                              "next cycle", cohort.key)
+
+    async def _family_trades_once(self, cohort) -> None:
+        """One other family: settle, choose empty slots, declare, then walk.
+
+        `tradechoice` decides everything; this reads and writes. A choice is
+        written to `overseer_trade` before the roster permission, so the
+        record of a decision exists before anything acts on it, and both are
+        read back on the next cycle rather than decided again.
+        """
+        state = await asyncio.to_thread(_family_trade_state, cohort.key)
+        if state is None:
+            return
+        for done in await asyncio.to_thread(_settle_trades, state["skills"]):
+            log.info("trades: settled for family %s - %s %s %s", cohort.key,
+                     done.character, done.verb, done.skill)
+        members = tradechoice.members_from(
+            state["characters"], state["skills"], state["trades"])
+        decisions = await tradechoice.choose(
+            self._jev, members, mode_now=tradechoice.mode(),
+            floor=tradechoice.min_confidence())
+        for decision in decisions:
+            log.info("%s", decision.line())
+            if decision.judgment is not None:
+                try:
+                    await asyncio.to_thread(_insert_jev_judgment, decision.judgment)
+                except pymysql.err.MySQLError:
+                    log.exception("trades: the Jev comparison for %s was not "
+                                  "recorded; the choice stands", decision.character)
+            await asyncio.to_thread(_record_family_choice, decision)
+        members = tradechoice.with_decisions(members, decisions)
+        declared = {row["name"]: str(row.get("professions") or "")
+                    for row in state["roster"]}
+        changes = tradechoice.declarations(members, declared)
+        if changes:
+            await asyncio.to_thread(_declare_family_professions, changes)
+            for ids, name in changes:
+                log.info("trades: %s may now learn skills %s (family %s)",
+                         name, ids, cohort.key)
+                declared[name] = ids
+        await self._family_learn_aims(cohort, state, declared)
+
+    async def _family_learn_aims(self, cohort, state: dict, declared: dict) -> None:
+        """Hand the lead to a trainee, and aim it at a trainer (#211).
+
+        The same two steps this bridge's own family gets from `_head_now` and
+        `_reconcile_learn_aims`, for a family whose head is its roster key.
+        The lead is borrowed for at most ERRAND_LEAD_HOURS per errand.
+        """
+        rows = tradechoice.learn_rows(state["roster"], state["trades"], declared)
+        if not rows:
+            return
+        leader = next((r.character for r in rows if r.leads), cohort.leader)
+        now = time.monotonic()
+        since = self._family_lead_since.get(cohort.key, {})
+        lead = tradechoice.next_lead(
+            rows, leader=leader, head=cohort.key,
+            expired=tradechoice.expired(since, now, ERRAND_LEAD_HOURS * 3600))
+        self._family_lead_since[cohort.key] = tradechoice.borrow_clock(
+            since, rows, lead, cohort.key, now)
+        if lead != leader:
+            await asyncio.to_thread(_mark_party_leader, lead)
+            log.info("trades: %s now leads family %s (was %s) - %s",
+                     lead, cohort.key, leader,
+                     "a learn errand needs its own character to walk"
+                     if lead != cohort.key else "no learn errand is left")
+            rows = tradechoice.led_by(rows, lead)
+        learn_plan = learnaim.plan(rows)
+        if not (learn_plan.clear or learn_plan.aim or learn_plan.waiting):
+            return
+        landed = 0
+        if learn_plan.clear or learn_plan.aim:
+            landed = await asyncio.to_thread(
+                _run_learn_aim_plan, learnaim.statements(learn_plan))
+        if learn_plan.aim and landed:
+            self._cohort_town_slot(cohort.key).adopt(
+                claimant="trades", character=learn_plan.aim,
+                aim=learnaim.TRAINER_ROLE, now=now)
+        log.info("trades: family %s - %s (%d row(s) changed)", cohort.key,
+                 learnaim.report(learn_plan), landed)
 
     async def _bag_purchase_and_trip(self, names: list, cohort=None) -> None:
         """Buy where the family stands, then walk to a bag vendor if needed (#206).
@@ -12936,6 +13040,78 @@ def _cohort_leader(key: str) -> str:
         if cohort.key == key:
             return cohort.leader
     return ""
+
+
+# One other family's roster rows, for its professions and learn errands (#211).
+_FAMILY_TRADE_ROSTER_SQL = (
+    "SELECT name, `lead`, professions, travel_npc, learn_skill "
+    "FROM overseer_roster WHERE enabled = 1 AND family = %s"
+)
+_FAMILY_TRADE_CLASS_SQL = "SELECT name, class, level FROM characters WHERE name IN (%s)"
+_FAMILY_TRADE_ROWS_SQL = (
+    "SELECT character_name, verb, skill_name, skill_id, status "
+    "FROM overseer_trade WHERE verb = 'learn' AND character_name IN (%s)"
+)
+
+
+def _family_trade_state(family: str) -> dict | None:
+    """What `tradechoice` reads for one family, or None when it cannot be read.
+
+    Four plain reads matched by name in Python. FAILS CLOSED on 1054/1146,
+    like `_learn_aim_rows`: the caller writes `professions`, `learn_skill` and
+    `travel_npc`, and a half-read family would make a decided character look
+    undecided.
+    """
+    with _connect() as conn, conn.cursor() as cur:
+        try:
+            cur.execute(_FAMILY_TRADE_ROSTER_SQL, (family,))
+            roster = [dict(row) for row in cur.fetchall()]
+            if not roster:
+                return None
+            names = [row["name"] for row in roster]
+            marks = ",".join(["%s"] * len(names))
+            cur.execute(_FAMILY_TRADE_CLASS_SQL % marks, names)
+            characters = [
+                {"name": row["name"], "level": int(row["level"] or 0),
+                 "class_name": CLASS_NAMES.get(row["class"], "")}
+                for row in cur.fetchall()
+            ]
+            cur.execute(_FAMILY_TRADE_ROWS_SQL % marks, names)
+            trades = [dict(row) for row in cur.fetchall()]
+        except pymysql.err.MySQLError as exc:
+            if exc.args and exc.args[0] in (1054, 1146):
+                log.warning("trades: family %s cannot be read on this realm "
+                            "(%s); nothing is chosen for it", family, exc.args[0])
+                return None
+            raise
+    return {"roster": roster, "characters": characters, "trades": trades,
+            "skills": _fetch_trade_skills(names)}
+
+
+def _record_family_choice(decision) -> None:
+    """One `overseer_trade` learn row per trade the decision adds (#211).
+
+    INSERT IGNORE on the (character, verb, skill) key: a row already there is
+    an earlier decision, and it stands.
+    """
+    if not decision.learn:
+        return
+    with _connect() as conn, conn.cursor() as cur:
+        for skill in decision.learn:
+            cur.execute(
+                "INSERT IGNORE INTO overseer_trade "
+                "(character_name, verb, skill_name, skill_id, reason) "
+                "VALUES (%s, 'learn', %s, %s, %s)",
+                (decision.character, skill, professions.skill_id(skill),
+                 decision.reason()[:2000]),
+            )
+
+
+def _declare_family_professions(changes: list) -> None:
+    """Write [(professions, name)] onto the roster: the learn permission."""
+    with _connect() as conn, conn.cursor() as cur:
+        cur.executemany(
+            "UPDATE overseer_roster SET professions = %s WHERE name = %s", changes)
 
 
 def _fetch_purses(names: list) -> dict:
