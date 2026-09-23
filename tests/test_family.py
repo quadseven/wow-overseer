@@ -537,6 +537,23 @@ class ASecondFamilyIsNotTheFirstOneRenamed(unittest.TestCase):
         self.assertEqual(zug["race"], "Orc")
         self.assertEqual(zug["faction"], "horde")
 
+    def test_every_card_carries_its_family_role(self):
+        """The warband's cards showed a blank role: bonds had no persona for
+        them. Logged out and logged in, each now says who they are."""
+        payload = family.build_family(
+            [row(name="Zug", race=2, **{"class": 1})], GEO, self.HORDE, self.PROFILES
+        )
+        self.assertEqual(
+            {m["name"]: m["role"] for m in payload["members"]},
+            {
+                "Zug": "chief",
+                "Uzza": "elder blood brother",
+                "Zrog": "younger brother",
+                "Zork": "adopted brother",
+                "Oz": "younger blood brother",
+            },
+        )
+
     def test_the_default_is_still_the_family_bonds_holds(self):
         """Every existing caller passes no names and must be unaffected."""
         payload = family.build_family([], GEO)

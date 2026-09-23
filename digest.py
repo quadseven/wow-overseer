@@ -618,7 +618,7 @@ def _pronoun(name: str) -> str:
     """he/she, from bonds. Read rather than stored a second time here: the
     family table is where the five are described, and a duplicate could
     disagree with it. Anyone outside the family gets "they"."""
-    bond = bonds.member(name)
+    bond = bonds.bond_of(name)
     if bond is None or not bond.gender:
         return "they"
     return "she" if bond.gender == "female" else "he"
@@ -626,7 +626,7 @@ def _pronoun(name: str) -> str:
 
 def _standing_line(digest: Digest, standing: Standing) -> str:
     """One character, one sentence: where they are and what moved."""
-    bond = bonds.member(standing.name)
+    bond = bonds.bond_of(standing.name)
     who = ("the %s" % bond.role) if bond else "one of ours"
     where = " in %s" % standing.zone if standing.zone else ""
     they = _pronoun(standing.name)
@@ -833,7 +833,7 @@ def build_prompt(digest: Digest, *, speaker: str = "") -> str:
     whatever the model says, so an outage costs a greeting and nothing else.
     """
     speaker = speaker or bonds.head_of_family()
-    bond = bonds.member(speaker)
+    bond = bonds.bond_of(speaker)
     persona = ("\n%s\n" % bond.persona) if bond and bond.persona else ""
     return (
         "You are %s, a character in World of Warcraft.\n%s"

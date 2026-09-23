@@ -784,9 +784,10 @@ def build_member(
     quietly drops somebody is the exact failure the Armory tab was built to
     stop, and it is no less a failure here.
     """
-    # bonds knows one family. A Horde member has no bond and no family role,
-    # which is not an error: its line says level and class, and nothing more.
-    bond = bonds.FAMILY.get(name)
+    # bond_of reads every family bonds describes. A character none of them
+    # claims has no family role, which is not an error: its line says level
+    # and class, and nothing more.
+    bond = bonds.bond_of(name)
     if char_row is None:
         klass = bond.char_class.title() if bond else "unknown class"
         return {

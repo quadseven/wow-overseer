@@ -50,14 +50,51 @@ GRUG_VOICE = (
     'not". Short words only. Never sound clever or modern.'
 )
 
+# Zug's warband talks in the same register with its own flavour. Five grown men
+# of the Horde rather than a cave family, so the examples are a war camp's: the
+# orc battle cry, the troll "mon", the tauren's Earth Mother. The RULES are
+# Grug's, word for word, because the register is what makes the overseer's
+# characters sound like one world; the examples are what make this band
+# sound like itself.
+ZUG_VOICE = (
+    "HOW YOU TALK. You are of the Horde, and you talk like a war camp. Speak "
+    "like this:\n"
+    "  Zug go first. Band follow. Lok'tar!\n"
+    "  Easy, mon. Uzza fix.\n"
+    "  Oz make fire most magnificent, mon!\n"
+    "  Earth Mother watch. Zork carry.\n"
+    "  Zrog no like. Spirits say wait.\n"
+    'Rules: say your own name instead of "I". Drop the words "a", '
+    '"an" and "the". Use "no" instead of "do not" or "does '
+    'not". Short words only. Never sound clever or modern.'
+)
+
+# Per family, keyed as bonds.HOUSES is: by the head's name in the live world.
+# What each family IS in one phrase for the prompt's opening, the talk it is
+# asked to answer in, and the register it is held to.
+_GRUG = {"is": "a CAVEMAN", "talk": "caveman talk", "voice": GRUG_VOICE}
+_ZUG = {"is": "of the HORDE", "talk": "your band's blunt talk", "voice": ZUG_VOICE}
+
+
+# Grug's family is renamed per world and Zug's is not, so only Zug's head is a
+# stable key; everything else speaks as Grug's family always has.
+_VOICES = {"Zug": _ZUG}
+
+
+def _voice_of(name: str) -> dict:
+    """The register `name`'s family speaks in. Grug's for anyone not in Zug's
+    band, which keeps every existing prompt exactly as it was."""
+    house = bonds.house_of(name)
+    return _VOICES.get(house.head, _GRUG) if house is not None else _GRUG
+
 
 def _relationships(speaker: str) -> str:
     """How the speaker stands to everyone else, in their own terms."""
-    me = bonds.member(speaker)
-    if me is None:
+    kin = bonds.family_of(speaker)
+    if kin is None:
         return ""
     lines = []
-    for other, bond in bonds.FAMILY.items():
+    for other, bond in kin.items():
         if other == speaker:
             continue
         lines.append(f"  {other} - {bond.role}, a {bond.char_class}")
@@ -67,35 +104,39 @@ def _relationships(speaker: str) -> str:
 def build_prompt(speaker: str, plain: str, *, context: str = "") -> str | None:
     """The prompt that turns a decided line into that character saying it.
 
-    Returns None for anyone outside the family: this module has personas for
-    five characters and no business putting words in anyone else's mouth.
+    Returns None for anyone outside every family: this module has personas
+    for the families bonds.py describes and no business putting words in
+    anyone else's mouth. Each family is prompted in its own register, with
+    its own watched pair as the thing its head carries.
 
     The plain line is given as the MEANING, not as a draft to improve. The
     model's only job is to say that meaning as this character would - so a
     model that ignores the instruction and rewrites the sense is caught by
     the caller keeping the plan, not the words.
     """
-    bond = bonds.member(speaker)
+    bond = bonds.bond_of(speaker)
     if bond is None:
         return None
 
-    canonical = bonds.canon(speaker)
+    canonical = bonds.canon_of(speaker)
+    house = bonds.house_of(canonical)
+    voice = _voice_of(canonical)
     suspicion = ""
-    if canonical == bonds.SUSPICION["who"]:
-        suspicion = "\nSomething you carry: " + bonds.SUSPICION["note"] + "\n"
+    if canonical == house.watch["who"]:
+        suspicion = "\nSomething you carry: " + house.watch["note"] + "\n"
 
     return (
         f"You are {canonical}, a {bond.gender} {bond.char_class} in World of "
-        f"Warcraft. You are a CAVEMAN.\n"
-        f"You are the {bond.role} of a family of cavemen who travel together.\n"
+        f"Warcraft. You are {voice['is']}.\n"
+        f"You are the {bond.role} of {house.band}.\n"
         f"{bond.persona}\n"
         f"\nThe others:\n{_relationships(canonical)}\n"
         f"{suspicion}"
         f"{chr(10) + 'What is happening: ' + context + chr(10) if context else ''}"
-        f"\n{GRUG_VOICE}\n"
-        f"\nYou are about to say this to your family:\n"
+        f"\n{voice['voice']}\n"
+        f"\nYou are about to say this to your {house.noun}:\n"
         f'  "{plain}"\n\n'
-        "Say the SAME thing in caveman talk, in your own voice. Keep the meaning "
+        f"Say the SAME thing in {voice['talk']}, in your own voice. Keep the meaning "
         "exactly - if it names a person, a number or a place, keep them. One "
         "short sentence.\n"
         "Answer with the sentence and nothing else."
@@ -181,9 +222,9 @@ def clean(said: str, plain: str) -> str:
 def characterisation(name: str) -> str | None:
     """Who this character is, for a prompt this module does not build itself.
 
-    Returns None for anyone outside the family, so a caller can keep whatever
-    it had - this module has personas for five characters and no business
-    describing anyone else.
+    Returns None for anyone outside every family, so a caller can keep
+    whatever it had - this module has personas for the families bonds.py
+    describes and no business describing anyone else.
 
     WHY THIS EXISTS. voice.build_prompt was grounded on
     `mod_ollama_chat_personality` instead, which is the table mod-ollama-chat
@@ -211,10 +252,11 @@ def characterisation(name: str) -> str | None:
     five; the register is what makes them one family, and a persona without it
     is what produced five polite strangers the first time round.
     """
-    bond = bonds.member(name)
+    bond = bonds.bond_of(name)
     if bond is None:
         return None
+    house = bonds.house_of(name)
     return (
-        f"You are the {bond.role} of a family of cavemen who travel together.\n"
-        f"{bond.persona}\n\n{GRUG_VOICE}"
+        f"You are the {bond.role} of {house.band}.\n"
+        f"{bond.persona}\n\n{_voice_of(name)['voice']}"
     )

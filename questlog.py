@@ -306,12 +306,13 @@ def _member(
     holders: dict,
     turned_in: int,
 ) -> dict:
-    # bonds.member, not bonds.FAMILY[name]: the persona table holds ONE
-    # family, and indexing it was a KeyError for every member of the other,
-    # which is why the second family's tab could only ever be handed the
-    # first family's board. A member bonds does not know has no role, and
-    # "" is the honest answer; the class comes from their saved row.
-    bond = bonds.member(name)
+    # bonds.bond_of, not bonds.FAMILY[name]: indexing the driven family was a
+    # KeyError for every member of the other, which is why the second
+    # family's tab could only ever be handed the first family's board.
+    # bond_of knows every family bonds describes; a character none of them
+    # claims has no role, and "" is the honest answer; the class comes from
+    # their saved row.
+    bond = bonds.bond_of(name)
     role = bond.role if bond else ""
     if char_row is None:
         # No `characters` row at all. Like the Armory and unlike the Family

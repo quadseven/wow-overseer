@@ -798,5 +798,128 @@ class TheStandingRuleIsBuiltFromTheThresholds(unittest.TestCase):
         self.assertIn(bonds.SUSPICION["with"], rule)
 
 
+class TheWarbandHasItsOwnBonds(unittest.TestCase):
+    """Zug's family had no bonds at all: blank roles on its cards, no voice,
+    and no rules about who turns up for whom. It is a warband of brothers and
+    sworn friends, and these are its rules, read by the same `decide`."""
+
+    HORDE = ("Zug", "Zrog", "Uzza", "Oz", "Zork")
+
+    def ask(self, responder, caller, history=()):
+        return bonds.decide(responder, kin.Plea(caller, ""), history=list(history))
+
+    def test_every_member_has_a_role_a_persona_and_a_class(self):
+        for name in self.HORDE:
+            with self.subTest(name=name):
+                bond = bonds.bond_of(name)
+                self.assertIsNotNone(bond)
+                self.assertTrue(bond.role)
+                self.assertTrue(bond.persona.strip())
+                self.assertEqual(bond.gender, "male")
+        self.assertEqual(
+            {
+                n: (bonds.bond_of(n).race, bonds.bond_of(n).char_class)
+                for n in self.HORDE
+            },
+            {
+                "Zug": ("orc", "warrior"),
+                "Zrog": ("orc", "shaman"),
+                "Uzza": ("troll", "priest"),
+                "Oz": ("troll", "mage"),
+                "Zork": ("tauren", "druid"),
+            },
+        )
+
+    def test_the_roles_and_personas_are_all_different(self):
+        bonds_ = [bonds.bond_of(n) for n in self.HORDE]
+        self.assertEqual(len({b.role for b in bonds_}), 5)
+        self.assertEqual(len({b.persona for b in bonds_}), 5)
+
+    def test_it_is_keyed_by_its_head_as_the_roster_keys_it(self):
+        self.assertEqual(bonds.HOUSES["Zug"].head, "Zug")
+        self.assertEqual(set(bonds.family_of("oz")), set(self.HORDE))
+
+    def test_the_names_are_disjoint_across_families(self):
+        """One case-insensitive lookup answers for every family, which is only
+        sound while no name is in two of them."""
+        seen = [n.lower() for h in bonds.HOUSES.values() for n in h.members]
+        self.assertEqual(len(seen), len(set(seen)))
+
+    def test_the_driven_family_is_unchanged(self):
+        """member/canon/FAMILY mean the family this process drives. Widening
+        them would pull the warband into the bridge's musters and councils."""
+        self.assertIsNone(bonds.member("Zug"))
+        self.assertIsNone(bonds.canon("Zug"))
+        self.assertNotIn("Zug", bonds.FAMILY)
+        self.assertEqual(bonds.head_of_family(), "Grug")
+        self.assertEqual(bonds.answers([]), bonds.answers([], "Grug"))
+
+    def test_the_chief_answers_the_band(self):
+        heavy = [("Zug", "Zork")] * (bonds.FATIGUE_THRESHOLD * 3)
+        self.assertTrue(self.ask("Zug", "Zork", heavy).will_answer)
+
+    def test_the_chief_lets_oz_learn_once_uzza_has_saved_him_too_often(self):
+        below = [("Uzza", "Oz")] * (bonds.GRUDGE_THRESHOLD - 1)
+        self.assertTrue(self.ask("Zug", "Oz", below).will_answer)
+        at = [("Uzza", "Oz")] * bonds.GRUDGE_THRESHOLD
+        d = self.ask("Zug", "Oz", at)
+        self.assertFalse(d.will_answer)
+        self.assertIn("Uzza", d.reason)
+        self.assertIn("learn", d.reason)
+
+    def test_uzza_never_tires_of_his_brother(self):
+        heavy = [("Uzza", "Oz")] * (bonds.FATIGUE_THRESHOLD * 3)
+        d = self.ask("Uzza", "Oz", heavy)
+        self.assertTrue(d.will_answer)
+        self.assertIn("brother", d.reason)
+
+    def test_zrog_always_comes_when_zug_calls(self):
+        heavy = [("Zrog", "Zug")] * (bonds.FATIGUE_THRESHOLD * 3)
+        self.assertTrue(self.ask("Zrog", "Zug", heavy).will_answer)
+
+    def test_everyone_else_tires(self):
+        heavy = [("Zork", "Oz")] * bonds.FATIGUE_THRESHOLD
+        self.assertFalse(self.ask("Zork", "Oz", heavy).will_answer)
+        self.assertFalse(
+            self.ask(
+                "Oz", "Uzza", [("Oz", "Uzza")] * bonds.FATIGUE_THRESHOLD
+            ).will_answer
+        )
+
+    def test_the_families_owe_each_other_nothing_either_way(self):
+        heavy = [("Og", "Zug")] * (bonds.FATIGUE_THRESHOLD * 3)
+        self.assertEqual(self.ask("Og", "Zug", heavy).reason, "no bond either way")
+        self.assertEqual(self.ask("Zug", "Ugga").reason, "no bond either way")
+
+    def test_the_chief_answers_first(self):
+        self.assertEqual(
+            bonds.speaking_order(["Zork", "Oz", "Zug", "Uzza", "Zrog"]),
+            ["Zug", "Zrog", "Uzza", "Oz", "Zork"],
+        )
+
+    def test_the_view_matches_decide_for_the_warband(self):
+        h = [("Uzza", "Oz")] * bonds.GRUDGE_THRESHOLD + [("Zork", "Zrog")]
+        rows = {r.key: r for r in bonds.answers(h, "Zug")}
+        self.assertEqual(rows["Zug>Oz"].word, bonds.STOPPED)
+        self.assertEqual(rows["Zug>Oz"].counted, "Uzza")
+        self.assertEqual(rows["Uzza>Oz"].word, bonds.EXEMPT)
+        self.assertEqual(rows["Zrog>Zug"].word, bonds.EXEMPT)
+        self.assertEqual(rows["Zork>Zrog"].word, bonds.COUNTING)
+        for row in rows.values():
+            verdict = self.ask(row.responder, row.caller, h)
+            self.assertEqual(row.reason, verdict.reason, row.key)
+        for name in bonds.FAMILY:
+            self.assertNotIn(name, " ".join(r.key for r in rows.values()))
+
+    def test_the_card_note_and_rule_are_the_warbands(self):
+        note = bonds.note_for("Oz", history=[])
+        self.assertIn("Oz", note)
+        rule = bonds.answering_rule("Zug")
+        self.assertIn("chief", rule)
+        self.assertIn(str(bonds.GRUDGE_THRESHOLD), rule)
+        self.assertNotIn("father", rule)
+        self.assertEqual(bonds.answering_rule("Thrall"), "")
+
+
 if __name__ == "__main__":
     unittest.main()

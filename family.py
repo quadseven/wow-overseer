@@ -354,18 +354,20 @@ def _member(
     persona table - five keys, renamed per world - so `bonds.FAMILY[name]`
     was a KeyError for every member of any other family, which is to say the
     Family tab could only ever render the family bonds happened to hold.
-    `bonds.member` returns None for anyone outside it instead, and everything
-    that used to come from the bond has a database answer behind it:
+    `bonds.bond_of` reads every family bonds describes and returns None for
+    anyone outside them all, and everything that used to come from the bond
+    has a database answer behind it:
 
-      role   - bonds only. A family bonds does not know has no persona and
-               therefore no role, and "" is the honest answer rather than a
-               guess. The card shows the class, which is a fact.
+      role   - bonds only. Both families have one ("father", "chief"). A
+               character no family claims has no persona and therefore no
+               role, and "" is the honest answer rather than a guess. The
+               card shows the class, which is a fact.
       class  - the snapshot row when present, `profile` when logged out.
       race   - the same.
 
     So a persona enriches a card here; it no longer gates one existing.
     """
-    bond = bonds.member(name)
+    bond = bonds.bond_of(name)
     profile = profile or {}
     if row is None:
         # Logged out, or the worldserver dropped them. NOT an error and NOT a
