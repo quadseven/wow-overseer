@@ -76,7 +76,7 @@ class ThePassRunsAndInTheRightOrder(unittest.TestCase):
     def test_the_pass_stands_down_mid_run(self):
         """A town errand pulls the leader out of the instance and the party
         spreads. The vendor and bank passes gate on this and so does this one."""
-        code = _code("    async def _towntrip_once(self)")
+        code = _code("    async def _towntrip_once(self")
         self.assertIn("self._mid_run(names)", code)
 
     def test_the_travel_errand_is_written_before_any_row(self):
@@ -93,17 +93,17 @@ class ThePassRunsAndInTheRightOrder(unittest.TestCase):
         before the first insert, and that the aim is still what the settling
         writes.
         """
-        code = _code("    async def _towntrip_once(self)")
+        code = _code("    async def _towntrip_once(self")
         self.assertLess(
             code.index("_settle_town_errand"), code.index("_insert_town_errand")
         )
         settle = _code("    async def _settle_town_errand(")
-        self.assertIn('self._claim_town_slot("towntrip", leader, "repair")', settle)
+        self.assertIn('self._claim_town_slot("towntrip", leader, "repair",', settle)
 
     def test_the_leader_is_the_one_sent(self):
         """Only the leader carries `new rpg`; an aimed follower wanders."""
-        code = _code("    async def _towntrip_once(self)")
-        self.assertIn("leader = await asyncio.to_thread(_head_now)", code)
+        code = _code("    async def _towntrip_once(self")
+        self.assertIn("leader = await asyncio.to_thread(_family_of, cohort)", code)
 
     def test_the_leader_is_head_now_not_the_static_seniority_answer(self):
         """infra#3553/#3554, the same defect as the bank pass right beside it.
@@ -116,7 +116,7 @@ class ThePassRunsAndInTheRightOrder(unittest.TestCase):
         `travel_npc` nobody can walk. Checked with comments stripped, since
         the prose above is allowed to name the function it warns against.
         """
-        code = _code("    async def _towntrip_once(self)")
+        code = _code("    async def _towntrip_once(self")
         self.assertIn("_head_now", code)
         code_lines = [ln.split("#", 1)[0] for ln in code.splitlines()]
         self.assertNotIn("bonds.head_of_family()", "\n".join(code_lines))
@@ -143,7 +143,7 @@ class TheBridgeDecidesNothingAboutTheTrip(unittest.TestCase):
     """Every threshold belongs to towntrip.py, which is where it is tested."""
 
     def test_the_pass_names_no_threshold_of_its_own(self):
-        code = _code("    async def _towntrip_once(self)")
+        code = _code("    async def _towntrip_once(self")
         for number in ("0.35", "0.9", "20", "STACK", "FLOOR", "ANY_DAMAGE"):
             with self.subTest(number=number):
                 self.assertNotIn(number, code)
@@ -151,7 +151,7 @@ class TheBridgeDecidesNothingAboutTheTrip(unittest.TestCase):
     def test_the_pass_names_no_item_entry(self):
         """A food or drink entry in the bridge is the FOOD/DRINK table being
         written down a second time, in the one place nothing tests it."""
-        code = _code("    async def _towntrip_once(self)")
+        code = _code("    async def _towntrip_once(self")
         for entry in ("787", "4592", "4593", "4594", "159", "1179", "1205", "1708"):
             with self.subTest(entry=entry):
                 self.assertNotIn(entry, code)
@@ -285,7 +285,7 @@ class TheRowIsTheRowTheExecutorReads(unittest.TestCase):
     def test_a_repeat_inside_the_retry_window_is_not_queued_again(self):
         """A walk that has not finished would otherwise turn one slow journey
         into a hundred dead commands."""
-        code = _code("    async def _towntrip_once(self)")
+        code = _code("    async def _towntrip_once(self")
         self.assertIn("_recent_town_keys", code)
 
     def test_the_retry_window_reads_every_kind_the_trip_writes(self):

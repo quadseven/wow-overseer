@@ -85,7 +85,7 @@ class ThePassRunsAndInTheRightOrder(unittest.TestCase):
         first insert."""
         body = _block("    async def _bank_once(")
         settle = _block("    async def _settle_bank_errand(")
-        self.assertIn('self._claim_town_slot("bank", leader, "banker")', settle)
+        self.assertIn('self._claim_town_slot("bank", leader, "banker",', settle)
         self.assertLess(body.index("_settle_bank_errand"), body.index("_insert_bank"))
 
     def test_the_errand_goes_to_the_family_leader(self):
@@ -101,10 +101,10 @@ class ThePassRunsAndInTheRightOrder(unittest.TestCase):
         one place rather than restated in seven passes, and the release below
         still names the same leader this pass read."""
         body = _block("    async def _bank_once(")
-        self.assertIn("leader = await asyncio.to_thread(_head_now)", body)
+        self.assertIn("leader = await asyncio.to_thread(_family_of, cohort)", body)
         self.assertIn("self._settle_bank_errand(names, leader", body)
         settle = _block("    async def _settle_bank_errand(")
-        self.assertIn('self._claim_town_slot("bank", leader, "banker")', settle)
+        self.assertIn('self._claim_town_slot("bank", leader, "banker",', settle)
         self.assertIn('_release_trade_errand, leader, "banker"', settle)
 
     def test_the_leader_is_head_now_not_the_static_seniority_answer(self):

@@ -1476,6 +1476,30 @@ def _names_of(cohort=None) -> list:
     return sorted(cohort.names)
 
 
+def _family_of(cohort=None) -> tuple:
+    """(names, leader) for a family: this bridge's own for None (#246).
+
+    The town passes' form of `_names_of`. This bridge's own family walks
+    behind `_head_now()`, exactly as before; another roster family walks
+    behind its own roster leader, the one `townslot.other_cohorts` read.
+    """
+    if cohort is None:
+        names = sorted(_protected_guids().values())
+        return names, (_head_now() if names else "")
+    return sorted(cohort.names), cohort.leader
+
+
+def _cohort_key(cohort=None):
+    """The town-slot key for a family: None for this bridge's own (#246)."""
+    return getattr(cohort, "key", None)
+
+
+def _family_label(cohort=None) -> str:
+    """"" for this bridge's own family, " for family <key>" for another."""
+    key = _cohort_key(cohort)
+    return " for family %s" % key if key else ""
+
+
 def _primaries_for(cohort, names, skills: dict) -> dict:
     """name -> the trades that count for it, or {} for this bridge's family.
 
@@ -6101,7 +6125,7 @@ class Bridge(discord.Client):
                 )
         return step
 
-    async def _auction_once(self) -> None:
+    async def _auction_once(self, cohort=None) -> None:
         """Buy the gathered reagents a standing craft errand needs (infra#3731).
 
         THE GAP THIS CLOSES, AND THE ONE IT DOES NOT. All five of the family
@@ -6164,7 +6188,7 @@ class Bridge(discord.Client):
         before being blanked. The keyword survives the cycle AND takes the
         counter hold that keeps them there while the rows run.
         """
-        names = sorted((await asyncio.to_thread(_protected_guids)).values())
+        names, leader = await asyncio.to_thread(_family_of, cohort)
         if not names or await self._mid_run(names):
             return
 
@@ -6173,7 +6197,6 @@ class Bridge(discord.Client):
         # tidiness: an errand is only finished BECAUSE the buying worked, and a
         # release written below the gates would never fire on the cycles that
         # matter.
-        leader = await asyncio.to_thread(_head_now)
         if not leader:
             log.info(
                 "auction: nobody leads the family right now, and a follower "
@@ -6182,11 +6205,11 @@ class Bridge(discord.Client):
             )
             return
         step = await self._settle_auction_errand(names, leader)
-        await self._auction_sales_once(names, leader, step)
+        await self._auction_sales_once(names, leader, step, cohort)
         # BAGS BEFORE THE REAGENT GATE BELOW, which returns when nobody is on
         # a craft errand: a bigger bag is worth the walk on its own.
         try:
-            await self._auction_bag_upgrades(names, leader, step)
+            await self._auction_bag_upgrades(names, leader, step, cohort)
         except Exception:
             log.exception("bag upgrade: auction half failed; retrying next cycle")
 
@@ -6252,7 +6275,8 @@ class Bridge(discord.Client):
             # the same refusal with how long the holder has had the column, how
             # much of its lease is left, and who is ahead in the queue.
             aimed = await self._claim_town_slot(
-                "auction", leader, auction.AUCTIONEER_ROLE)
+                "auction", leader, auction.AUCTIONEER_ROLE,
+                cohort=_cohort_key(cohort))
             if not aimed:
                 log.info(
                     "auction: leader=%s could not be aimed at an auctioneer "
@@ -6286,13 +6310,13 @@ class Bridge(discord.Client):
 
         log.info(
             "auction: queued %d purchase(s) worth %d copper across %d "
-            "shopper(s), leader=%s aimed=%s. Bought reagents arrive by MAIL "
+            "shopper(s), leader=%s aimed=%s%s. Bought reagents arrive by MAIL "
             "and are not craftable until a mailbox pass collects them.",
-            queued, spent, len(shoppers), leader, aimed,
+            queued, spent, len(shoppers), leader, aimed, _family_label(cohort),
         )
 
     async def _auction_sales_once(self, names: list, leader: str,
-                                  step: str) -> None:
+                                  step: str, cohort=None) -> None:
         """List safe surplus BoE gear at the leader's reachable house.
 
         `auction.plan_sales` owns the sale judgement. This adapter only reads
@@ -6337,7 +6361,8 @@ class Bridge(discord.Client):
             pressure = bag_pressure.family_town_run_needed(
                 await asyncio.to_thread(_fetch_free_slots, names))
             if step == bag_pressure.VENDOR_ERRAND_AIM and await self._claim_town_slot(
-                    "auction", leader, auction.AUCTIONEER_ROLE, urgent=pressure):
+                    "auction", leader, auction.AUCTIONEER_ROLE, urgent=pressure,
+                    cohort=_cohort_key(cohort)):
                 log.info("auction: leader=%s aimed to list %d surplus BoE item(s)",
                          leader, len(candidates))
             return
@@ -6367,11 +6392,11 @@ class Bridge(discord.Client):
                 log.info("auction: %s %s - %s", sale.candidate.holder,
                          sale.command, sale.candidate.label or "surplus BoE")
         if queued:
-            await self._keep_at_auctioneer(leader)
-        log.info("auction: listed %d surplus BoE item(s) at house %s",
-                 queued, house)
+            await self._keep_at_auctioneer(leader, cohort)
+        log.info("auction: listed %d surplus BoE item(s) at house %s%s",
+                 queued, house, _family_label(cohort))
 
-    async def _keep_at_auctioneer(self, leader: str) -> None:
+    async def _keep_at_auctioneer(self, leader: str, cohort=None) -> None:
         """Hold the leader at the counter while queued auction rows run.
 
         A completed purchase can release the old aim before this pass
@@ -6391,13 +6416,13 @@ class Bridge(discord.Client):
         # owns the column and is only re-asserting its own keyword;
         # staying silent would evict itself and hand a twenty-minute lease
         # to nobody, which is the unbounded stall infra#4194 measured.
-        self._town_slot.adopt(
+        self._cohort_town_slot(cohort).adopt(
             claimant="auction", character=leader,
             aim=auction.AUCTIONEER_ROLE, now=time.monotonic(),
         )
 
     async def _auction_bag_upgrades(self, names: list, leader: str,
-                                    step: str) -> None:
+                                    step: str, cohort=None) -> None:
         """Buy a bigger bag at the auction house for a member with full positions.
 
         `bag_market.plan_upgrades` decides; this reads and writes. Before the
@@ -6436,7 +6461,7 @@ class Bridge(discord.Client):
         if not upgrades:
             return
         if await self._queue_auction_bags(upgrades, teams, house):
-            await self._keep_at_auctioneer(leader)
+            await self._keep_at_auctioneer(leader, cohort)
             return
         if at_counter or step != bag_pressure.VENDOR_ERRAND_AIM:
             return
@@ -6445,7 +6470,8 @@ class Bridge(discord.Client):
         pressure = bag_pressure.family_town_run_needed(
             await asyncio.to_thread(_fetch_free_slots, names))
         aimed = await self._claim_town_slot(
-            "auction", leader, auction.AUCTIONEER_ROLE, urgent=pressure)
+            "auction", leader, auction.AUCTIONEER_ROLE, urgent=pressure,
+            cohort=_cohort_key(cohort))
         log.info("bag upgrade: leader=%s walks to an auctioneer for %d bag(s) "
                  "(aim taken=%s)", leader, len(upgrades), aimed)
 
@@ -6600,9 +6626,10 @@ class Bridge(discord.Client):
                 await self._auction_once()
             except Exception:
                 log.exception("auction pass failed; retrying next cycle")
+            await self._for_other_families("auction", self._auction_once)
             await asyncio.sleep(cycle)
 
-    async def _recipebook_once(self) -> None:
+    async def _recipebook_once(self, cohort=None) -> None:
         """Learn the recipes already in the bags, and buy one that is in reach.
 
         TWO HALVES, AND THE FIRST ONE COSTS NOTHING. A class-9 item - a Pattern,
@@ -6624,7 +6651,7 @@ class Bridge(discord.Client):
         NOTHING HERE DECIDES ANYTHING. recipebook.py holds the reachability
         rule, the ordering and the caps; this reads rows and writes rows.
         """
-        names = sorted((await asyncio.to_thread(_protected_guids)).values())
+        names = await asyncio.to_thread(_names_of, cohort)
         if not names or await self._mid_run(names):
             return
 
@@ -6708,6 +6735,7 @@ class Bridge(discord.Client):
                 await self._recipebook_once()
             except Exception:
                 log.exception("recipebook pass failed; retrying next cycle")
+            await self._for_other_families("recipebook", self._recipebook_once)
             await asyncio.sleep(cycle)
 
     async def _protect_characters(self) -> None:
@@ -7974,16 +8002,14 @@ class Bridge(discord.Client):
         lock_sales = lockbox.sale_candidates(locks.sell)
         # GEMS AND SPARE RECIPES (#148, #145): a family member or guildmate who
         # can use one gets it, then the auction house, then the vendor. The
-        # auction pass lists only for this bridge's own family, so another
-        # family's stacks skip the house rather than wait on a pass it never
-        # gets.
-        clear = await self._clearance_plan(names, leader,
-                                           auction_open=cohort is None)
+        # auction pass lists for every family since #246, so every family's
+        # stacks may wait for the house.
+        clear = await self._clearance_plan(names, leader, auction_open=True)
         clear_sales = _clearance_sales(clear)
         # JEV IS SHOWN WHAT THE PROTECTION KEEPS (#232), in shadow: the same
         # rows and the two plans just made, and nothing waits on the answer.
         self._jev_keep_shadow(names, leader, rows, clear, locks, free_slots,
-                              auction_open=cohort is None)
+                              auction_open=True)
         for sale in lock_sales + clear_sales:
             sellable_counts[sale.holder] = sellable_counts.get(sale.holder, 0) + 1
 
@@ -8902,9 +8928,17 @@ class Bridge(discord.Client):
 
         The crafting passes' form of `_economy_for_every_family`: each family
         is guarded on its own, so one family's failure costs only its turn.
+        The roster read is guarded too (#246): the town loops call this
+        outside their own try, and a loop task that raises stops for good.
         """
-        own = sorted((await asyncio.to_thread(_protected_guids)).values())
-        for cohort in await asyncio.to_thread(_other_cohorts, own):
+        try:
+            own = sorted((await asyncio.to_thread(_protected_guids)).values())
+            cohorts = await asyncio.to_thread(_other_cohorts, own)
+        except Exception:
+            log.exception("%s: the roster's other families could not be read; "
+                          "retrying next cycle", what)
+            return
+        for cohort in cohorts:
             try:
                 await step(cohort)
             except Exception:
@@ -9420,7 +9454,8 @@ class Bridge(discord.Client):
                  bag_pressure.bag_trip_report(trip, leader), aimed)
 
     async def _settle_bank_errand(self, names: list, leader: str,
-                                  moves_unasked: bool) -> str:
+                                  moves_unasked: bool,
+                                  cohort: str | None = None) -> str:
         """Aim, hold or hand back the bank pass's `banker` errand (infra#3728).
 
         THE HALF THAT WAS NEVER BUILT, HERE TOO. `banker` is one of the four
@@ -9480,7 +9515,8 @@ class Bridge(discord.Client):
             # invisible for as long as nobody logged it.
             # THROUGH THE TOWN SLOT (infra#3703): the refusal is now a turn in
             # a queue with a lease on it rather than a race this pass lost.
-            aimed = await self._claim_town_slot("bank", leader, "banker")
+            aimed = await self._claim_town_slot("bank", leader, "banker",
+                                                 cohort=cohort)
             if not aimed:
                 log.info(
                     "bank: leader=%s is already on somebody else's errand, so "
@@ -9519,7 +9555,7 @@ class Bridge(discord.Client):
                 )
         return step
 
-    async def _bank_once(self) -> None:
+    async def _bank_once(self, cohort=None) -> None:
         """One pass of the bank: park what the family keeps but cannot use.
 
         Same shape as _hand_bags_once and _vendor_once, and deliberately no
@@ -9574,7 +9610,7 @@ class Bridge(discord.Client):
         A bank trip is a town errand, and pulling the leader out of a run to
         make one is how the party spreads.
         """
-        names = sorted((await asyncio.to_thread(_protected_guids)).values())
+        names, leader = await asyncio.to_thread(_family_of, cohort)
         if not names or await self._mid_run(names):
             return
         bank_plan = await asyncio.to_thread(_plan_bank, names)
@@ -9600,7 +9636,6 @@ class Bridge(discord.Client):
         # to bank - so every step of the settling has to sit ABOVE that return
         # or it could never fire. Same ordering bug, same reasoning, as
         # infra#3717's `_settle_vendor_errand`.
-        leader = await asyncio.to_thread(_head_now)
         # THE RETRY WINDOW IS READ BEFORE THE ERRAND IS SETTLED, because it is
         # half of "has this trip anything left to ask for": a move bank.plan
         # proposes again because `character_inventory` has not been flushed yet
@@ -9616,7 +9651,8 @@ class Bridge(discord.Client):
         unasked = [move for move, command in planned
                    if (move.character, command) not in seen
                    and move.character in watched]
-        await self._settle_bank_errand(names, leader, bool(unasked))
+        await self._settle_bank_errand(names, leader, bool(unasked),
+                                       cohort=_cohort_key(cohort))
 
         if not bank_plan.moves:
             log.info("bank: nothing to put down and nothing to fetch back")
@@ -9657,8 +9693,8 @@ class Bridge(discord.Client):
             )
         for line in bank.lines(fresh):
             log.info("bank: %s", line)
-        log.info("bank: queued %d/%d move(s), leader=%s",
-                 len(fresh), len(bank_plan.moves), leader)
+        log.info("bank: queued %d/%d move(s), leader=%s%s",
+                 len(fresh), len(bank_plan.moves), leader, _family_label(cohort))
 
     async def _bank_loop(self) -> None:
         """Keep the family's bank in use (mod-overseer#207).
@@ -9680,9 +9716,10 @@ class Bridge(discord.Client):
                 await self._bank_once()
             except Exception:
                 log.exception("economy bank pass failed; retrying next cycle")
+            await self._for_other_families("bank", self._bank_once)
             await asyncio.sleep(cycle)
 
-    async def _guild_bank_once(self) -> None:
+    async def _guild_bank_once(self, cohort=None) -> None:
         """One pass of the guild bank: park gold above each character's float.
 
         Deposit only (mod-overseer#437, infra#2831) - see guildbank.py for
@@ -9784,10 +9821,9 @@ class Bridge(discord.Client):
         gold rows, and they count as a reason to walk on their own, because a
         family under the gold float can still have full bags.
         """
-        names = sorted((await asyncio.to_thread(_protected_guids)).values())
+        names, leader = await asyncio.to_thread(_family_of, cohort)
         if not names or await self._mid_run(names):
             return
-        leader = await asyncio.to_thread(_head_now)
         setup = await asyncio.to_thread(_fetch_guild_bank_setup, names)
         purchased_tabs = int(setup["purchased_tabs"]) if setup else 0
         # SETUP IS AN ERRAND TO THE SAME PLACE, NOT A GATE IN FRONT OF THE
@@ -9826,13 +9862,12 @@ class Bridge(discord.Client):
         # `plan_deposits` holds `TAB0_COST_COPPER` back from every member while
         # `guild_has_tab` is False, so the price is still sitting in somebody's
         # purse after the deposits land. That reserve exists for exactly this.
-        actions = guildbank.plan_setup(
-            leader=leader,
-            purchased_tabs=purchased_tabs,
-            rank_ids=setup["rank_ids"],
-            deposit_rank_ids=setup["deposit_rank_ids"],
-        ) if setup else ()
+        #
+        # THE GUILD MASTER BUYS, FROM ITS OWN PURSE, AND ONLY WHEN IT CAN PAY
+        # (#246). `_plan_guild_setup` has the reasoning.
         members = await asyncio.to_thread(_fetch_guild_money, names)
+        actions = _plan_guild_setup(setup, purchased_tabs, names, leader,
+                                    members, cohort)
         # THE TAB COUNT WAS ALREADY IN HAND AND WAS NEVER PASSED (infra#4198).
         # `plan_deposits` defaults `guild_has_tab` to False - the cautious
         # answer, which reserves `FLOAT_COPPER + TAB0_COST_COPPER` - and this
@@ -9869,7 +9904,8 @@ class Bridge(discord.Client):
             # The sentence comes from travel.vault_aim already actionable.
             log.info("guild bank: nobody can be sent to a vault - %s", vault.refused)
             return
-        aimed = await self._claim_town_slot("guild bank", leader, vault.aim)
+        aimed = await self._claim_town_slot("guild bank", leader, vault.aim,
+                                             cohort=_cohort_key(cohort))
         # ALREADY STANDING THERE COUNTS AS AIMED, because it is the state the
         # aim exists to produce. mod-overseer RELEASES a travel aim the moment
         # the walk arrives (it clears `travel_npc`, which is the signal the
@@ -9943,12 +9979,12 @@ class Bridge(discord.Client):
             seen_setup = await asyncio.to_thread(
                 _recent_guild_setup_keys, GIVE_RETRY_MINUTES)
             action = next((a for a in actions
-                           if (leader, a.command) not in seen_setup), None)
+                           if (a.target, a.command) not in seen_setup), None)
             if action:
-                await asyncio.to_thread(_insert_guild, leader,
+                await asyncio.to_thread(_insert_guild, action.target,
                                         action.command, "guildbank-setup")
-                log.info("guild bank setup: queued %s for %s",
-                         action.command, leader)
+                log.info("guild bank setup: queued %s for %s%s",
+                         action.command, action.target, _family_label(cohort))
         if items:
             await self._queue_guild_items(items, spawn, positions)
         if not deposits:
@@ -9984,8 +10020,9 @@ class Bridge(discord.Client):
                 "now comes back 'no guild bank in reach' a second later",
                 ", ".join(sorted(walking)), TOWN_COUNTER_YARDS, vault.aim,
             )
-        log.info("guild bank: queued %d/%d deposit(s), leader=%s aimed at %s",
-                 len(fresh), len(deposits), leader, vault.aim)
+        log.info("guild bank: queued %d/%d deposit(s), leader=%s aimed at %s%s",
+                 len(fresh), len(deposits), leader, vault.aim,
+                 _family_label(cohort))
 
     async def _queue_guild_items(self, items, spawn, positions) -> None:
         """Write the keeper rule's guild deposits for holders at the vault.
@@ -10133,9 +10170,10 @@ class Bridge(discord.Client):
                 await self._guild_bank_once()
             except Exception:
                 log.exception("guild bank pass failed; retrying next cycle")
+            await self._for_other_families("guild bank", self._guild_bank_once)
             await asyncio.sleep(cycle)
 
-    async def _guild_dues_once(self) -> None:
+    async def _guild_dues_once(self, cohort=None) -> None:
         """One pass of the maintenance members' job: guild dues by post (#234).
 
         guildwork.py decides who posts, how much and why not; this reads the
@@ -10150,13 +10188,14 @@ class Bridge(discord.Client):
         the same `raidlineup.build_lineup` over the same members the Lineup
         page shows, so the page and this pass cannot name different people.
         """
-        names = sorted((await asyncio.to_thread(_protected_guids)).values())
+        names = await asyncio.to_thread(_names_of, cohort)
         if not names:
             return
         rows = await asyncio.to_thread(_fetch_dues_rows, names)
         members, masters = guildwork.maintenance_from_rows(rows, names)
         if not members:
-            log.info("guild dues: no family guild has a maintenance member yet")
+            log.info("guild dues: no family guild has a maintenance member yet%s",
+                     _family_label(cohort))
             return
         now = time.monotonic()
         self._dues_walks = guildroute.live_runs(self._dues_walks, now)
@@ -10193,9 +10232,9 @@ class Bridge(discord.Client):
             task.add_done_callback(self._mail_walk_task_done)
         log.info(
             "guild dues: started %d walk(s); %d of %d maintenance member(s) "
-            "already posted or were asked in the last %d hours",
+            "already posted or were asked in the last %d hours%s",
             started, len({m.name for m in members} & set(posted)), len(members),
-            guildwork.INTERVAL_HOURS,
+            guildwork.INTERVAL_HOURS, _family_label(cohort),
         )
 
     async def _follow_dues_walk(self, run, row_id: int) -> None:
@@ -10262,9 +10301,10 @@ class Bridge(discord.Client):
                 await self._guild_dues_once()
             except Exception:
                 log.exception("guild dues pass failed; retrying next cycle")
+            await self._for_other_families("guild dues", self._guild_dues_once)
             await asyncio.sleep(cycle)
 
-    async def _mail_once(self) -> None:
+    async def _mail_once(self, cohort=None) -> None:
         """One pass of the mail: collect what is already addressed to the family.
 
         infra#3741, and the third shipped-but-uncalled executor this package has
@@ -10366,13 +10406,14 @@ class Bridge(discord.Client):
         passes skip one: a mail run is a town errand, and pulling the leader out
         of a run to make one is how the party spreads.
         """
-        names = sorted((await asyncio.to_thread(_protected_guids)).values())
+        names, leader = await asyncio.to_thread(_family_of, cohort)
         if not names or await self._mid_run(names):
             return
         letters = mailrun.letters_from_rows(
             await asyncio.to_thread(_fetch_mail, names), names)
         if not letters:
-            log.info("mail: nothing is waiting in anybody's mailbox")
+            log.info("mail: nothing is waiting in anybody's mailbox%s",
+                     _family_label(cohort))
             return
         # THE WINDOW IS READ BEFORE THE PLAN, because it is an input to the
         # plan and not only a filter on it: `attachments_asked` turns the takes
@@ -10397,7 +10438,6 @@ class Bridge(discord.Client):
         # character that actually carries `new rpg` and can therefore walk, where
         # the seniority answer is a static table that named a follower for six
         # hours while the real leader was on a trade errand.
-        leader = await asyncio.to_thread(_head_now)
         # ONE POSITION READ, FOR TWO QUESTIONS (infra#3830): which map the
         # LEADER aims from, and whether each TAKER is at the mailbox now.
         # `_fetch_positions` batches, so this is the one query it always was.
@@ -10421,7 +10461,8 @@ class Bridge(discord.Client):
         # measured 21 letters waiting would have been the one pass nothing could
         # ever preempt, holding the column while the auction pass that BUYS what
         # arrives by mail starved behind it.
-        aimed = await self._claim_town_slot("mail", leader, post.aim)
+        aimed = await self._claim_town_slot("mail", leader, post.aim,
+                                             cohort=_cohort_key(cohort))
         # ALREADY STANDING THERE COUNTS AS AIMED, the reasoning `_guild_bank_once`
         # sets out: mod-overseer releases a travel aim the moment the walk
         # arrives, so the cycle AFTER the family reaches the mailbox finds the
@@ -10469,8 +10510,9 @@ class Bridge(discord.Client):
         for line in mailrun.lines(fresh):
             log.info("mail: %s", line)
         log.info("mail: queued %d/%d take(s) from %d letter(s), leader=%s "
-                 "aimed at %s",
-                 len(fresh), len(mail_plan.takes), len(letters), leader, post.aim)
+                 "aimed at %s%s",
+                 len(fresh), len(mail_plan.takes), len(letters), leader, post.aim,
+                 _family_label(cohort))
 
     async def _mail_loop(self) -> None:
         """Keep the family's mailboxes emptied (infra#3741).
@@ -10490,9 +10532,10 @@ class Bridge(discord.Client):
                 await self._mail_once()
             except Exception:
                 log.exception("mail pass failed; retrying next cycle")
+            await self._for_other_families("mail", self._mail_once)
             await asyncio.sleep(cycle)
 
-    async def _forge_once(self) -> None:
+    async def _forge_once(self, cohort=None) -> None:
         """Stand the family at a Forge when somebody is holding a smelt errand
         (infra#3748, part of infra#3731).
 
@@ -10559,13 +10602,12 @@ class Bridge(discord.Client):
         NOT IN THE MIDDLE OF A DUNGEON RUN, for the reason both bank passes skip
         one: pulling the leader out is how the party spreads.
         """
-        smelters = await asyncio.to_thread(_forge_errands)
+        smelters = await asyncio.to_thread(_forge_errands, _cohort_key(cohort))
         if not smelters:
             return
-        names = sorted((await asyncio.to_thread(_protected_guids)).values())
+        names, leader = await asyncio.to_thread(_family_of, cohort)
         if not names or await self._mid_run(names):
             return
-        leader = await asyncio.to_thread(_head_now)
         where = (await asyncio.to_thread(_fetch_positions, [leader])).get(leader)
         spawn = await asyncio.to_thread(_nearest_forge, leader)
         forge = travel.forge_aim(spawn, where.get("map_id") if where else None)
@@ -10602,7 +10644,8 @@ class Bridge(discord.Client):
                 ", ".join(sorted(smelters)),
             )
             return
-        aimed = await self._claim_town_slot("forge", leader, forge.aim)
+        aimed = await self._claim_town_slot("forge", leader, forge.aim,
+                                             cohort=_cohort_key(cohort))
         if not aimed:
             # WHAT IT IS COSTING, WHICH THE SLOT CANNOT SAY. `_claim_town_slot`
             # has already named the holder, its lease and the queue - that is
@@ -10648,6 +10691,7 @@ class Bridge(discord.Client):
                 await self._forge_once()
             except Exception:
                 log.exception("forge pass failed; retrying next cycle")
+            await self._for_other_families("forge", self._forge_once)
             await asyncio.sleep(cycle)
 
     def _settle_flight_attempts(self, name: str, taximask) -> None:
@@ -10838,7 +10882,8 @@ class Bridge(discord.Client):
             await asyncio.sleep(cycle)
 
     async def _settle_town_errand(self, names: list, leader: str, town,
-                                  work_unasked: bool) -> str:
+                                  work_unasked: bool,
+                                  cohort: str | None = None) -> str:
         """Aim, hold or hand back the town trip's `repair` errand (infra#3728).
 
         THE OTHER END OF AN ERRAND THAT ONLY EVER HAD ONE. `_towntrip_once`
@@ -10886,7 +10931,8 @@ class Bridge(discord.Client):
             # starvation worth seeing in the log (infra#3703), not a failure.
             # THROUGH THE TOWN SLOT (infra#3703), which is what turns "the sell
             # pass owns the column" from a permanent answer into a turn.
-            aimed = await self._claim_town_slot("towntrip", leader, "repair")
+            aimed = await self._claim_town_slot("towntrip", leader, "repair",
+                                                 cohort=cohort)
             if not aimed:
                 log.info(
                     "towntrip: leader=%s is already on somebody else's errand, "
@@ -10921,7 +10967,7 @@ class Bridge(discord.Client):
                 )
         return step
 
-    async def _towntrip_once(self) -> None:
+    async def _towntrip_once(self, cohort=None) -> None:
         """Repair and restock between two dungeon runs.
 
         THE EXECUTORS SHIPPED WITHOUT A WRITER. mod-overseer#227 landed
@@ -10961,7 +11007,7 @@ class Bridge(discord.Client):
         looks like - which is the ordering bug infra#3717 caught in the sell
         pass by running its own sequence model.
         """
-        names = sorted((await asyncio.to_thread(_protected_guids)).values())
+        names, leader = await asyncio.to_thread(_family_of, cohort)
         if not names or await self._mid_run(names):
             return
 
@@ -10970,7 +11016,6 @@ class Bridge(discord.Client):
         # actually be walked to the repair counter is whoever `_head_now`
         # names this cycle, not the family's resting seniority answer, which
         # can be sitting on somebody else's errand right now.
-        leader = await asyncio.to_thread(_head_now)
 
         town = await asyncio.to_thread(_fetch_town, leader)
         members = towntrip.members_from_rows(
@@ -10995,7 +11040,8 @@ class Bridge(discord.Client):
         seen = await asyncio.to_thread(_recent_town_keys, GIVE_RETRY_MINUTES)
         unasked = [key for key in towntrip.counter_keys(members, trip)
                    if key not in seen]
-        await self._settle_town_errand(names, leader, town, bool(unasked))
+        await self._settle_town_errand(names, leader, town, bool(unasked),
+                                       cohort=_cohort_key(cohort))
 
         if not trip.errands:
             log.info(
@@ -11029,8 +11075,8 @@ class Bridge(discord.Client):
                          " -> %s" % errand.taker if errand.taker else "",
                          errand.why)
         _log_capped("towntrip", waits)
-        log.info("towntrip: queued %d/%d errand(s), leader=%s",
-                 queued, len(trip.errands), leader)
+        log.info("towntrip: queued %d/%d errand(s), leader=%s%s",
+                 queued, len(trip.errands), leader, _family_label(cohort))
 
     async def _towntrip_loop(self) -> None:
         """Keep the family repaired and fed between runs (mod-overseer#226).
@@ -11053,6 +11099,7 @@ class Bridge(discord.Client):
                 await self._towntrip_once()
             except Exception:
                 log.exception("town trip pass failed; retrying next cycle")
+            await self._for_other_families("towntrip", self._towntrip_once)
             await asyncio.sleep(cycle)
 
     async def _narrate_events(self) -> None:
@@ -15788,14 +15835,59 @@ def _fetch_guild_bank_setup(names: list) -> dict | None:
                 (guild_id,),
             )
             tab0_items = int(cur.fetchone()["n"])
+            # WHO MAY BUY THE TAB (#246): the guild master, from its own purse.
+            cur.execute(
+                "SELECT c.name FROM guild g JOIN characters c "
+                "ON c.guid = g.leaderguid WHERE g.guildid = %s",
+                (guild_id,),
+            )
+            master = cur.fetchone()
             return {"purchased_tabs": purchased, "rank_ids": rank_ids,
                     "deposit_rank_ids": deposit_ranks,
-                    "member_ranks": member_ranks, "tab0_items": tab0_items}
+                    "member_ranks": member_ranks, "tab0_items": tab0_items,
+                    "master": str(master["name"]) if master else ""}
         except pymysql.err.MySQLError as exc:
             if exc.args and exc.args[0] in (1054, 1146):
                 log.warning("guild bank setup tables are unavailable")
                 return None
             raise
+
+
+def _setup_buyer(setup: dict | None, names: list, leader: str) -> str:
+    """Who is asked to buy the tab and open it to the ranks (#246).
+
+    The guild master when it is one of this family, because the core debits
+    the buyer's own purse and only the master may change rank rights; the
+    family's traveller otherwise, which is what this pass always asked.
+    """
+    master = str((setup or {}).get("master") or "")
+    return master if master and master in names else leader
+
+
+def _plan_guild_setup(setup: dict | None, purchased_tabs: int, names: list,
+                      leader: str, members: list, cohort=None) -> tuple:
+    """The tab and rank setup rows the guild-bank pass may ask for (#246).
+
+    `Guild::HandleBuyBankTab` debits the buyer, so a `buy-tab` row written for
+    a master short of the price comes back refused and costs a walk to the
+    vault. The buyer is `_setup_buyer`'s, and `guildbank.plan_setup` asks for
+    the tab only once that purse holds the price; until then this says so.
+    """
+    if not setup:
+        return ()
+    buyer = _setup_buyer(setup, names, leader)
+    purse = {str(m.get("name")): m.get("money") for m in members}.get(buyer)
+    actions = guildbank.plan_setup(
+        leader=buyer,
+        purchased_tabs=purchased_tabs,
+        rank_ids=setup["rank_ids"],
+        deposit_rank_ids=setup["deposit_rank_ids"],
+        purse=purse,
+    )
+    if purchased_tabs == 0 and not actions:
+        log.info("%s%s", guildbank.tab_waits_line(buyer, purse),
+                 _family_label(cohort))
+    return actions
 
 
 def _recent_guild_setup_keys(minutes: int) -> set[tuple[str, str]]:
@@ -16296,7 +16388,7 @@ def _nearest_forge(name: str):
         return dict(row) if row else None
 
 
-def _forge_errands() -> dict:
+def _forge_errands(family: str | None = None) -> dict:
     """name -> craft_spell, for every `job='craft'` row whose recipe needs a
     FORGE (infra#3748).
 
@@ -16339,7 +16431,8 @@ def _forge_errands() -> dict:
     failure this function was written to avoid, arriving through the door the
     design closed.
     """
-    cohort = _cohort_of(bonds.head_of_family())
+    # `family` names another roster family (#246); None is this bridge's own.
+    cohort = family or _cohort_of(bonds.head_of_family())
     scope = " AND family = %s" if cohort else ""
     scope_args = (cohort,) if cohort else ()
     with _connect() as conn, conn.cursor() as cur:

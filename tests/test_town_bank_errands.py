@@ -297,7 +297,7 @@ class TheCounterWorkIsWhatACounterHasToServe(unittest.TestCase):
         source = (PACKAGE / "towntrip.py").read_text(encoding="utf-8")
         self.assertEqual(source.count("e.fraction < ANY_DAMAGE"), 1)
         self.assertIn("damaged = _damaged(member)", source)
-        self.assertNotIn("ANY_DAMAGE", _code("    async def _towntrip_once(self)"))
+        self.assertNotIn("ANY_DAMAGE", _code("    async def _towntrip_once(self"))
         self.assertNotIn("ANY_DAMAGE", _code("    async def _settle_town_errand("))
 
 
@@ -445,11 +445,11 @@ class TheBridgeCanActuallyHandBothColumnsBack(unittest.TestCase):
         names, which is worse than the latch it replaces because it looks
         fixed."""
         town = _statements("    async def _settle_town_errand(")
-        self.assertIn('self._claim_town_slot("towntrip", leader, "repair")', town)
+        self.assertIn('self._claim_town_slot("towntrip", leader, "repair",', town)
         self.assertIn('_release_trade_errand, leader, "repair"', town)
         self.assertEqual(town.count("_claim_town_slot"), 1)
         bank_settle = _statements("    async def _settle_bank_errand(")
-        self.assertIn('self._claim_town_slot("bank", leader, "banker")', bank_settle)
+        self.assertIn('self._claim_town_slot("bank", leader, "banker",', bank_settle)
         self.assertIn('_release_trade_errand, leader, "banker"', bank_settle)
         self.assertEqual(bank_settle.count("_claim_town_slot"), 1)
 
@@ -545,11 +545,14 @@ class TheQueueReadIsTheOnlyCompletionSignal(unittest.TestCase):
 
     def test_the_names_come_from_the_roster_and_not_from_a_caller(self):
         """`names` in both passes is the `characters.name` column read back by
-        `_protected_guids`, filtered by OVERSEER_NOTABLE_NAMES. No request,
-        message or item name reaches it."""
-        for body in ("    async def _towntrip_once(self)", "    async def _bank_once("):
+        `_protected_guids`, filtered by OVERSEER_NOTABLE_NAMES, or another
+        family's `overseer_roster` names (#246), both through `_family_of`. No
+        request, message or item name reaches it."""
+        for body in ("    async def _towntrip_once(self", "    async def _bank_once("):
             with self.subTest(body=body):
-                self.assertIn("_protected_guids", _code(body))
+                self.assertIn(
+                    "await asyncio.to_thread(_family_of, cohort)", _code(body)
+                )
 
 
 class TheSettlingIsReachedOnTheCyclesThatMatter(unittest.TestCase):
@@ -560,7 +563,7 @@ class TheSettlingIsReachedOnTheCyclesThatMatter(unittest.TestCase):
     assertions for the two passes here."""
 
     def _town(self) -> str:
-        return _statements("    async def _towntrip_once(self)")
+        return _statements("    async def _towntrip_once(self")
 
     def _bank(self) -> str:
         return _statements("    async def _bank_once(")
@@ -633,7 +636,9 @@ class TheSettlingIsReachedOnTheCyclesThatMatter(unittest.TestCase):
             (self._bank(), "_settle_bank_errand"),
         ):
             with self.subTest(settle=settle):
-                self.assertIn("leader = await asyncio.to_thread(_head_now)", body)
+                self.assertIn(
+                    "leader = await asyncio.to_thread(_family_of, cohort)", body
+                )
                 self.assertIn("self.%s(names, leader" % settle, body)
 
     def test_the_retry_window_is_read_before_the_errand_is_settled(self):
@@ -706,7 +711,7 @@ class TheGuildBankErrandIsNotOneOfThese(unittest.TestCase):
 
     def test_the_pass_writes_a_ground_aim_and_not_the_keyword(self):
         code = _statements("    async def _guild_bank_once(")
-        self.assertIn('self._claim_town_slot("guild bank", leader, vault.aim)', code)
+        self.assertIn('self._claim_town_slot("guild bank", leader, vault.aim,', code)
         self.assertNotIn('"guild banker"', code)
 
     def test_no_settling_was_added_for_it(self):

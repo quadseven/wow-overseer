@@ -324,7 +324,7 @@ class TheBridgeWiring(unittest.TestCase):
     def test_the_auction_pass_buys_bags_before_its_reagent_gate(self):
         body = _body(
             self.source,
-            "    async def _auction_once(self)",
+            "    async def _auction_once(self",
             "    async def _auction_sales_once(",
         )
         self.assertLess(
