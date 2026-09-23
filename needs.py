@@ -587,8 +587,8 @@ def build_needs(
     None keeps the family bonds holds. The give rows are not read per family
     in SQL, so they are narrowed here to attempts this family's members made:
     otherwise one family's refused handovers would be listed on the other's
-    tab. The pair rules are bonds', and bonds knows one family, so a family
-    it does not know gets no pair rows rather than the other family's.
+    tab. The pair rules are bonds', read for the family on screen, so a family
+    bonds has no rules for gets no pair rows rather than the other family's.
     """
     roster = list(roster) if roster else family.roster()
     ours = set(roster)
@@ -618,11 +618,6 @@ def build_needs(
         )
         for name in roster
     ]
-    # One family's rules, the family on screen: a roster is one family, and
-    # its bonds are read off whichever family its members belong to.
-    bonded = bool(roster) and all(bonds.bond_of(n) is not None for n in roster)
-    kin = roster[0] if bonded else None
-    answering = bonds.answers(history, kin) if bonded else ()
     board = materials.board(
         holdings(inventory_rows),
         attempts=attempts(give_rows),
@@ -632,12 +627,27 @@ def build_needs(
         "members": members,
         "expected": len(members),
         "moving": _moving(board),
-        "answering": {
-            "rows": [_answer_row(r) for r in answering],
-            "rule": bonds.answering_rule(kin) if bonded else "",
-            "headline": _answering_headline(answering)
-            if bonded
-            else "no family rules are written for this family yet, so nobody "
-            "is counting who answers whom",
-        },
+        "answering": _answering(roster, history),
+    }
+
+
+def _answering(roster: list[str], history: list[tuple[str, str]]) -> dict:
+    """Who will still answer whom, by the rules of the family on screen.
+
+    A roster is one family, and its bonds are read off whichever family its
+    members belong to. A roster with anyone no family claims gets no pair
+    rows rather than another family's.
+    """
+    if not roster or any(bonds.bond_of(n) is None for n in roster):
+        return {
+            "rows": [],
+            "rule": "",
+            "headline": "no family rules are written for this family yet, so "
+            "nobody is counting who answers whom",
+        }
+    answering = bonds.answers(history, roster[0])
+    return {
+        "rows": [_answer_row(r) for r in answering],
+        "rule": bonds.answering_rule(roster[0]),
+        "headline": _answering_headline(answering),
     }
