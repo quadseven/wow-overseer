@@ -10525,7 +10525,11 @@ class Bridge(discord.Client):
             return
         now = time.monotonic()
         self._corps_steps = guildroute.live_runs(self._corps_steps, now)
-        busy = set(self._corps_steps) | set(self._dues_walks) | set(self._guild_mail_runs)
+        # Any bot another guild pass has on a walk is left alone: the module
+        # would refuse a second walk anyway, and the refusal would spend the
+        # step's cooldown.
+        busy = (set(self._corps_steps) | set(self._dues_walks)
+                | set(self._guild_mail_runs) | set(self._crafter_walks))
         plan = guildcorps.plan(
             members, facts["family"], facts["trainable"], facts["vendors"],
             facts["recent"], busy)
