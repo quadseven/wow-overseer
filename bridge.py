@@ -10744,20 +10744,8 @@ class Bridge(discord.Client):
         own = await asyncio.to_thread(_cohort_of, bonds.head_of_family())
         owning: set = set()
         for key, rows in pending.items():
-            fam = fams.get(key)
-            if fam is None or not rows:
-                continue
-            head = rows[0]
-            leader = fam["leader"]
-            name = str(leader.get("name") or "")
-            active = (jobs.dungeon_job(str(head["keyword"])) or ""
-                      if str(head["status"]) == campaignqueue.ACTIVE else "")
-            job = str(leader.get("job") or "")
-            if not name or not townslot.campaign_owns_traveller(active, job, False):
-                continue
-            free = await asyncio.to_thread(_fetch_free_slots, list(fam["names"]))
-            if not townslot.campaign_owns_traveller(
-                    active, job, jev_activity.withheld(True, free)):
+            name, active = await self._staging_campaign(rows, fams.get(key))
+            if not active:
                 continue
             slot = self._town_slot if key == own else self._cohort_town_slot(key)
             owning.add(id(slot))
@@ -10772,6 +10760,27 @@ class Bridge(discord.Client):
                 log.info("town slot: the campaign no longer owns %s - town "
                          "errands resume", slot.campaign)
                 slot.campaign_over()
+
+    async def _staging_campaign(self, rows: list, fam: dict | None) -> tuple:
+        """(leader, dungeon job) when this family's campaign owns its leader.
+
+        ("", "") otherwise: no active entry, the job is not on the leader, or
+        the campaign is withheld for bag space (#227).
+        """
+        if fam is None or not rows:
+            return "", ""
+        head, leader = rows[0], fam["leader"]
+        name = str(leader.get("name") or "")
+        active = (jobs.dungeon_job(str(head["keyword"])) or ""
+                  if str(head["status"]) == campaignqueue.ACTIVE else "")
+        job = str(leader.get("job") or "")
+        if not name or not townslot.campaign_owns_traveller(active, job, False):
+            return "", ""
+        free = await asyncio.to_thread(_fetch_free_slots, list(fam["names"]))
+        if not townslot.campaign_owns_traveller(
+                active, job, jev_activity.withheld(True, free)):
+            return "", ""
+        return name, active
 
     async def _hand_back_for_campaign(self, slot, leader: str) -> None:
         """Clear a bridge pass's aim off a staging leader (#227)."""

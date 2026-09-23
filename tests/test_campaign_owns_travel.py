@@ -343,6 +343,7 @@ def _bridge_self(world, clock, log):
     ns = _load(
         [
             "_campaign_owns_travel",
+            "_staging_campaign",
             "_hand_back_for_campaign",
             "_claim_town_slot",
             "_cohort_town_slot",
@@ -385,6 +386,7 @@ def _bridge_self(world, clock, log):
     )
     for name in (
         "_campaign_owns_travel",
+        "_staging_campaign",
         "_hand_back_for_campaign",
         "_claim_town_slot",
         "_cohort_town_slot",
