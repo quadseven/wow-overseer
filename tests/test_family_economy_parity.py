@@ -441,7 +441,9 @@ class TheMasterBuysTheTabWithTheGold(unittest.TestCase):
                 ),
             }
         )
-        ns = _load(["_guild_bank_once", "_setup_buyer", *HELPERS], ns)
+        ns = _load(
+            ["_guild_bank_once", "_plan_guild_setup", "_setup_buyer", *HELPERS], ns
+        )
         asyncio.run(ns["_guild_bank_once"](me, cohort))
         self.assertEqual([names], world.get("mid_run_names"))
         return world, me, log

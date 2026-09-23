@@ -9864,23 +9864,10 @@ class Bridge(discord.Client):
         # purse after the deposits land. That reserve exists for exactly this.
         #
         # THE GUILD MASTER BUYS, FROM ITS OWN PURSE, AND ONLY WHEN IT CAN PAY
-        # (#246). `Guild::HandleBuyBankTab` debits the buyer, so a `buy-tab`
-        # row written for a master short of the price comes back refused and
-        # costs a walk to the vault. The master is the setup target whenever
-        # it is one of this family; the traveller otherwise, as before.
+        # (#246). `_plan_guild_setup` has the reasoning.
         members = await asyncio.to_thread(_fetch_guild_money, names)
-        buyer = _setup_buyer(setup, names, leader)
-        purses = {str(m.get("name")): m.get("money") for m in members}
-        actions = guildbank.plan_setup(
-            leader=buyer,
-            purchased_tabs=purchased_tabs,
-            rank_ids=setup["rank_ids"],
-            deposit_rank_ids=setup["deposit_rank_ids"],
-            purse=purses.get(buyer),
-        ) if setup else ()
-        if setup and purchased_tabs == 0 and not actions:
-            log.info("%s", guildbank.tab_waits_line(buyer, purses.get(buyer))
-                     + _family_label(cohort))
+        actions = _plan_guild_setup(setup, purchased_tabs, names, leader,
+                                    members, cohort)
         # THE TAB COUNT WAS ALREADY IN HAND AND WAS NEVER PASSED (infra#4198).
         # `plan_deposits` defaults `guild_has_tab` to False - the cautious
         # answer, which reserves `FLOAT_COPPER + TAB0_COST_COPPER` - and this
@@ -15875,6 +15862,32 @@ def _setup_buyer(setup: dict | None, names: list, leader: str) -> str:
     """
     master = str((setup or {}).get("master") or "")
     return master if master and master in names else leader
+
+
+def _plan_guild_setup(setup: dict | None, purchased_tabs: int, names: list,
+                      leader: str, members: list, cohort=None) -> tuple:
+    """The tab and rank setup rows the guild-bank pass may ask for (#246).
+
+    `Guild::HandleBuyBankTab` debits the buyer, so a `buy-tab` row written for
+    a master short of the price comes back refused and costs a walk to the
+    vault. The buyer is `_setup_buyer`'s, and `guildbank.plan_setup` asks for
+    the tab only once that purse holds the price; until then this says so.
+    """
+    if not setup:
+        return ()
+    buyer = _setup_buyer(setup, names, leader)
+    purse = {str(m.get("name")): m.get("money") for m in members}.get(buyer)
+    actions = guildbank.plan_setup(
+        leader=buyer,
+        purchased_tabs=purchased_tabs,
+        rank_ids=setup["rank_ids"],
+        deposit_rank_ids=setup["deposit_rank_ids"],
+        purse=purse,
+    )
+    if purchased_tabs == 0 and not actions:
+        log.info("%s%s", guildbank.tab_waits_line(buyer, purse),
+                 _family_label(cohort))
+    return actions
 
 
 def _recent_guild_setup_keys(minutes: int) -> set[tuple[str, str]]:
