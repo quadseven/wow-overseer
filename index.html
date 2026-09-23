@@ -3517,6 +3517,8 @@
       <p id="dcrjevlede" class="dcrlede"></p>
       <div id="dcrjevkinds" class="dcrlist"></div>
       <div id="dcrjevlist" class="dcrlist"></div>
+      <h3 id="dcrjevkeeptitle"></h3>
+      <div id="dcrjevkeep" class="dcrlist"></div>
     </div>
   </div>
 </section>
@@ -7631,6 +7633,8 @@ const dcrJevTitle = document.getElementById("dcrjevtitle");
 const dcrJevLede = document.getElementById("dcrjevlede");
 const dcrJevKinds = document.getElementById("dcrjevkinds");
 const dcrJevList = document.getElementById("dcrjevlist");
+const dcrJevKeepTitle = document.getElementById("dcrjevkeeptitle");
+const dcrJevKeep = document.getElementById("dcrjevkeep");
 
 // WHAT IS BEING DRAFTED, which is deliberately not what the world is set to.
 // The poll rewrites the live lines every ten seconds; it must never rewrite
@@ -8169,6 +8173,12 @@ function dcrRenderJev(j) {
   dcrJevList.replaceChildren();
   if (!j.recent.length) dcrJevList.append(el("div", "", j.empty));
   for (const line of j.recent) dcrJevList.append(el("div", "", line));
+  // The protected non-gear items where Jev differs (#232).
+  dcrJevKeepTitle.textContent = j.keep_title || "";
+  dcrJevKeep.replaceChildren();
+  const keep = j.keep_differ || [];
+  if (!keep.length && j.keep_empty) dcrJevKeep.append(el("div", "", j.keep_empty));
+  for (const line of keep) dcrJevKeep.append(el("div", "", line));
 }
 
 async function pollDecree() {

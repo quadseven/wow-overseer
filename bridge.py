@@ -59,6 +59,7 @@ import jev
 import jev_items
 import jev_choices
 import jev_activity
+import jev_keep
 import jobs
 import kin
 import learnaim
@@ -3821,6 +3822,10 @@ class Bridge(discord.Client):
         # Record writers for passes that answered too late to act, held for
         # the same reason.
         self._jev_writes: set = set()
+        # THE PROTECTED NON-GEAR ITEMS (#232): (holder, item guid) -> when Jev
+        # was last asked about that stack, so each is asked at most once per
+        # JEV_ITEM_KEEP_INTERVAL_MINUTES. In memory: a restart asks again.
+        self._jev_keep_asked: dict = {}
         # THE ACTIVITY CHOICE (#216). Per family key: what the last cycle saw
         # (breakpoint marks, when Jev was last asked, since when the family has
         # been on its job) and the interlude Jev chose, if one is running. In
@@ -7794,6 +7799,10 @@ class Bridge(discord.Client):
         clear = await self._clearance_plan(names, leader,
                                            auction_open=cohort is None)
         clear_sales = _clearance_sales(clear)
+        # JEV IS SHOWN WHAT THE PROTECTION KEEPS (#232), in shadow: the same
+        # rows and the two plans just made, and nothing waits on the answer.
+        self._jev_keep_shadow(names, leader, rows, clear, locks, free_slots,
+                              auction_open=cohort is None)
         for sale in lock_sales + clear_sales:
             sellable_counts[sale.holder] = sellable_counts.get(sale.holder, 0) + 1
 
@@ -8465,6 +8474,74 @@ class Bridge(discord.Client):
         self._jev_hold(jev_choices.quest_shadow(
             self._jev, candidates, seen["chosen"], plan.beneficiary,
             seen["held"], levels, rule.mode), "the quest aim")
+
+    def _jev_keep_shadow(self, names: list, leader: str, rows: list, clear,
+                         locks, free_slots: dict, auction_open: bool) -> None:
+        """Ask Jev what to do with a few protected non-gear stacks (#232).
+
+        jev_keep decides which stacks are due (at most JEV_ITEM_KEEP_LIMIT a
+        pass, each at most once per JEV_ITEM_KEEP_INTERVAL_MINUTES), what the
+        heuristic does with them and what Jev is asked. Held like the other
+        shadow passes: one per family at a time, recorded when it ends, and
+        never waited on, so it changes nothing this cycle.
+        """
+        rule = jev_keep.policy()
+        if rule.mode == jev.OFF or not self._jev.ready(jev_keep.KIND):
+            return
+        key = (jev_keep.KIND,) + tuple(sorted(names))
+        running = self._jev_tasks.get(key)
+        if running is not None and not running.done():
+            return
+        limit, interval = jev_keep.knobs(os.environ)
+        kept = jev_keep.protected(rows)
+        now = time.monotonic()
+        pending = jev_keep.due(kept, self._jev_keep_asked, now, interval, limit)
+        if not pending:
+            return
+        for row in pending:
+            self._jev_keep_asked[(str(row["holder"]), int(row["item_guid"]))] = now
+        routes = jev_keep.routes_from_plans(clear, locks)
+
+        async def run() -> None:
+            judgments = await self._jev_keep_once(
+                names, leader, pending, routes, free_slots, auction_open, rule)
+            log.info("%s", jev_keep.summary(judgments, len(kept), limit, interval))
+            await self._jev_record(judgments, ",".join(names))
+
+        task = asyncio.create_task(run())
+        self._jev_tasks[key] = task
+        task.add_done_callback(_jev_task_done)
+
+    async def _jev_keep_once(self, names: list, leader: str, pending: list,
+                             routes: dict, free_slots: dict, auction_open: bool,
+                             rule) -> list:
+        """The reads jev_keep's facts need, then the questions."""
+        entries = sorted({int(r.get("entry") or 0) for r in pending} - {0})
+        templates = await asyncio.to_thread(_fetch_jev_keep_templates, entries)
+        skills = await asyncio.to_thread(_fetch_recipe_skills, names)
+        roster = await asyncio.to_thread(_fetch_guild_roster, names)
+        classes = await asyncio.to_thread(_fetch_jev_keep_classes, names)
+        holders = {
+            name: jev_keep.Holder(
+                name=name, class_id=int(classes.get(name, (0, 0))[0]),
+                level=int(classes.get(name, (0, 0))[1]),
+                free_slots=int(free_slots.get(name, -1)),
+                skills=dict(skills.get(name) or {}))
+            for name in names
+        }
+        market: dict = {}
+        if auction_open and leader:
+            teams = await asyncio.to_thread(_fetch_teams, [leader])
+            house = auction.TEAM_HOUSE.get(teams.get(leader, ""), 0)
+            for listing in await asyncio.to_thread(
+                    _fetch_auction_listings, entries, house):
+                market[listing.entry] = min(
+                    market.get(listing.entry, listing.per_unit), listing.per_unit)
+        asks = jev_keep.asks(
+            pending, templates=templates, holders=holders,
+            people=_clearance_people(names, skills, roster), routes=routes,
+            market=market, reagent_trades=REAGENT_TRADES, mode=rule.mode)
+        return await jev_keep.shadow_pass(self._jev, asks, rule)
 
     def _jev_hold(self, ask, who: str) -> None:
         """Run one shadow question as a held task and record its answer."""
@@ -12962,6 +13039,44 @@ _JEV_ITEM_FACTS_SQL = (
     + ", ".join(f"it.spellid_{n}, it.spelltrigger_{n}" for n in range(1, 6))
     + " FROM acore_world.item_template it WHERE it.entry IN (%s)"
 )
+
+
+# The template facts jev_keep shows Jev about a protected non-gear stack
+# (#232) that the vendor rows do not carry: how it binds, how high it stacks,
+# the trade and rank a recipe teaches, and a lockbox's lock.
+_JEV_KEEP_TEMPLATE_SQL = (
+    "SELECT it.entry, it.bonding, it.stackable, "
+    "it.RequiredSkill AS required_skill, it.RequiredSkillRank AS required_rank, "
+    "it.lockid AS lock_id FROM acore_world.item_template it "
+    "WHERE it.entry IN (%s)"
+)
+_JEV_KEEP_CLASSES_SQL = "SELECT name, class, level FROM characters WHERE name IN (%s)"
+
+
+def _fetch_jev_keep_templates(entries: list) -> dict:
+    """entry -> jev_keep's template facts; {} on a world without them."""
+    if not entries:
+        return {}
+    sql = _JEV_KEEP_TEMPLATE_SQL % ",".join(["%s"] * len(entries))  # noqa: S608 - placeholders from a COUNT, values still bound
+    with _connect() as conn, conn.cursor() as cur:
+        try:
+            cur.execute(sql, list(entries))
+        except pymysql.err.MySQLError as exc:
+            if exc.args and exc.args[0] in (1054, 1146):
+                return {}
+            raise
+        return {int(row["entry"]): dict(row) for row in cur.fetchall()}
+
+
+def _fetch_jev_keep_classes(names: list) -> dict:
+    """name -> (class id, level) for jev_keep's holder facts."""
+    if not names:
+        return {}
+    sql = _JEV_KEEP_CLASSES_SQL % ",".join(["%s"] * len(names))  # noqa: S608 - placeholders from a COUNT, values still bound
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(sql, list(names))
+        return {row["name"]: (int(row["class"] or 0), int(row["level"] or 0))
+                for row in cur.fetchall()}
 
 
 def _fetch_jev_worn(names: list) -> list:
