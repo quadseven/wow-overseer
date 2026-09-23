@@ -526,7 +526,7 @@ class TheCallerIsWiredAndWritesOnlyAJobMode(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.source = BRIDGE.read_text(encoding="utf-8", errors="replace")
-        start = cls.source.index("async def _craft_rhythm_once(self)")
+        start = cls.source.index("async def _craft_rhythm_once(self")
         cls.body = cls.source[
             start : cls.source.index("async def _craft_rhythm_loop(self)")
         ]

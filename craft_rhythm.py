@@ -51,6 +51,7 @@ from dataclasses import dataclass
 
 import craft
 import jobs
+import professions
 
 # ---------------------------------------------------------------------------
 # THE TWO MODES, AND WHY THE GATHERING ONE IS `quest` AND NOT `farm`.
@@ -556,7 +557,83 @@ class Errand:
     why: str = ""
 
 
-def reagents_to_count(name: str, skills: dict) -> set:
+# What a family's bags are made from (#215), counted so `bag_errand` can tell
+# a tailor holding bolts for a bag from one holding the linen to weave them.
+BOLT_OF_LINEN = 2996
+LINEN_CLOTH = 2589
+BOLTS_PER_BAG = 3
+LINEN_PER_BOLT = 2
+BOLT_OF_LINEN_SPELL = 2963
+
+
+def bag_errand(
+    name: str, skills: dict, held: dict, primaries=None, bags_wanted: int = 0
+):
+    """A tailor's bag errand, ahead of its ladder, or None (#215).
+
+    BAGS FOR THE FAMILY FIRST. The Horde family carries 16-slot backpacks and
+    little coin, and a tailor makes bags out of looted linen. So while
+    anybody in the family has an empty bag position no spare bag will fill
+    (`bag_pressure.open_bag_positions`, summed by the caller), a tailor past
+    the Linen Bag's minimum skill works toward a bag before it climbs:
+
+      * with the bolts for one bag, it sews the bag, and reads STOCKED
+        (`BAG_FEED`), so the rhythm sits the family down to craft;
+      * short of bolts, it weaves Bolt of Linen Cloth toward one, and that
+        errand reads short of linen when there is none, so the rhythm sends
+        the family out to kill humanoids, which is where linen comes from.
+
+    The finished bag is a spare in the tailor's bags, and the family bag
+    hand-over (`bag_upgrade.plan_family_bags`) gives it to whoever has the
+    empty position. None means no bag errand: nobody wants a bag, this
+    character is no tailor, or its skill has not reached the recipe.
+    """
+    if bags_wanted <= 0:
+        return None
+    trades = professions.assigned(name) if primaries is None else primaries
+    if "tailoring" not in trades:
+        return None
+    value = int(skills.get("tailoring", 0) or 0)
+    bag = craft.LINEN_BAG
+    if value < bag.min_skill:
+        return None
+    bolts = int(held.get(BOLT_OF_LINEN, 0) or 0)
+    if bolts >= BOLTS_PER_BAG:
+        return Errand(
+            name=name,
+            spell=bag.spell_id,
+            why="%s sews a %s: the family has %d empty bag position(s) and "
+            "%s holds %d Bolt of Linen Cloth"
+            % (name, bag.name, bags_wanted, name, bolts),
+        )
+    return Errand(
+        name=name,
+        spell=BOLT_OF_LINEN_SPELL,
+        why="%s weaves Bolt of Linen Cloth toward a %s: the family has %d "
+        "empty bag position(s), and %d bolt(s) of the %d a bag takes are in "
+        "hand" % (name, bag.name, bags_wanted, bolts, BOLTS_PER_BAG),
+    )
+
+
+# What a bag errand is judged on (#215). Not GATHERED: a bolt comes off a
+# cast, not a walk. `bag_errand` names the bag only with a bag's bolts in
+# hand, so the bag's stand reads STOCKED and the rhythm lets the tailor sew.
+BAG_FEED: dict[int, tuple[Reagent, ...]] = {
+    craft.LINEN_BAG.spell_id: (
+        Reagent(BOLT_OF_LINEN, "Bolt of Linen Cloth", BOLTS_PER_BAG),
+    ),
+}
+
+
+def feeds(craft_spell: int) -> tuple:
+    """The reagents a stand on this recipe counts: GATHERED, then BAG_FEED."""
+    spell = int(craft_spell or 0)
+    return GATHERED.get(spell) or BAG_FEED.get(spell, ())
+
+
+def reagents_to_count(
+    name: str, skills: dict, primaries=None, bags_wanted: int = 0
+) -> set:
     """Every item entry a decision about this character could need to count.
 
     THE UNION OF BOTH CANDIDATES, ASKED BEFORE EITHER IS CHOSEN, which is the
@@ -571,13 +648,21 @@ def reagents_to_count(name: str, skills: dict) -> set:
     entries costs nothing per character.
     """
     wanted = set()
-    for spell in (craft.craft_errand(name, skills), craft.smelt_errand(name, skills)):
+    for spell in (
+        craft.craft_errand(name, skills, primaries),
+        craft.smelt_errand(name, skills, primaries),
+    ):
         for reagent in GATHERED.get(int(spell or 0), ()):
             wanted.add(reagent.entry)
+    trades = professions.assigned(name) if primaries is None else primaries
+    if bags_wanted > 0 and "tailoring" in trades:
+        wanted.update((BOLT_OF_LINEN, LINEN_CLOTH))
     return wanted
 
 
-def errand(name: str, skills: dict, held: dict) -> Errand:
+def errand(
+    name: str, skills: dict, held: dict, primaries=None, bags_wanted: int = 0
+) -> Errand:
     """Spend, or smelt? The one `craft_spell` this character should carry.
 
     THE ALTERNATION infra#3748 ASKED FOR, AND IT LIVES HERE RATHER THAN IN
@@ -620,9 +705,15 @@ def errand(name: str, skills: dict, held: dict) -> Errand:
     never consume the same item. Copper Ore feeds only the smelt; Rough Stone
     feeds only the powders and the sharpening stones. They arrive on the same
     mining trip and are spent by different recipes.
+
+    `primaries` and `bags_wanted` serve another family (#215): its members'
+    trades are the ones they hold, and a tailor's `bag_errand` comes first.
     """
-    spend = craft.craft_errand(name, skills)
-    smelt = craft.smelt_errand(name, skills)
+    bag = bag_errand(name, skills, held, primaries, bags_wanted)
+    if bag is not None:
+        return bag
+    spend = craft.craft_errand(name, skills, primaries)
+    smelt = craft.smelt_errand(name, skills, primaries)
 
     if not smelt:
         return Errand(
@@ -682,6 +773,20 @@ def stand(name: str, craft_spell: int, held: dict) -> Stand:
             why="%s has no standing craft errand, so there is nothing to be "
             "short of - craft.craft_errand found no recipe in any bracket "
             "this character's skills reach" % name,
+        )
+
+    bag = BAG_FEED.get(spell)
+    if bag:
+        bolts = int(held.get(bag[0].entry, 0))
+        casts = bolts // bag[0].per_cast
+        return Stand(
+            name=name,
+            craft_spell=spell,
+            verdict=STOCKED if casts >= 1 else SHORT,
+            casts=casts,
+            thinnest=bag[0].label,
+            why="%s holds %d %s, enough for %d family bag(s) (spell %d)"
+            % (name, bolts, bag[0].label, casts, spell),
         )
 
     reagents = GATHERED.get(spell)
@@ -862,3 +967,22 @@ def report(plan: Rhythm) -> str:
     if plan.mode and not plan.changed:
         said += " Already on job=%s, so nothing is written." % plan.mode
     return said
+
+
+# The gathering trades a walk to a field serves (#215). Skinning is left out
+# for the reason `gatheraim.lowest_gatherer` gives: it comes off corpses, so
+# roaming is already the walk.
+NODE_TRADES = frozenset({"herbalism", "mining"})
+
+
+def short_of_nodes(stands, primaries: dict) -> bool:
+    """Whether a SHORT member of another family works a node trade (#215).
+
+    Such a member is short of herbs or ore, which come off nodes, so the
+    family is better walked to a field of them than left to roam. A family
+    short only of cloth or leather roams, since killing is how both come.
+    """
+    return any(
+        stand.verdict == SHORT and NODE_TRADES & set(primaries.get(stand.name, ()))
+        for stand in stands
+    )

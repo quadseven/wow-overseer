@@ -386,7 +386,10 @@ class TheIdleDoorClearsWithoutAReplacement(unittest.TestCase):
         self.code = _statements("    async def _idle_town_slot(")
 
     def test_it_asks_the_same_ledger_for_an_idle_verdict(self):
-        self.assertIn("self._town_slot.want_idle(", self.code)
+        # The family's own ledger (#215): this bridge's for None, another
+        # family's for its cohort, never a second copy.
+        self.assertIn("slot = self._cohort_town_slot(cohort)", self.code)
+        self.assertIn("slot.want_idle(", self.code)
 
     def test_it_compares_and_swaps_the_exact_stale_aim(self):
         self.assertIn(
