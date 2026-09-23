@@ -160,6 +160,32 @@ def _place(container: dict, position: int, cell: dict) -> None:
     cells[position] = cell
 
 
+def _hang_bags(
+    held: dict[int, dict], holders: range, key: str, icons: dict[int, str]
+) -> tuple[list[dict], list[dict]]:
+    """The bag slots -> (the bag bar, the containers hung off them).
+
+    The bar has every slot, filled or not; a container exists only for a
+    slot with a bag in it.
+    """
+    bar: list[dict] = []
+    bags: list[dict] = []
+    for number, slot in enumerate(holders, start=1):
+        row = held.get(slot)
+        bar.append({"position": number, "bag": item_cell(row, icons) if row else None})
+        if row is not None:
+            bags.append(
+                _container(
+                    "%s%d" % (key, number),
+                    row.get("item_name") or "Bag #%d" % number,
+                    int(row.get("container_slots") or 0),
+                    row,
+                    icons,
+                )
+            )
+    return bar, bags
+
+
 def build_inventory(
     rows: list[dict], icons: dict[int, str], where: str, money: int | None = None
 ) -> dict:
@@ -172,47 +198,31 @@ def build_inventory(
     """
     key, name, built_in = _BUILT_IN[where]
     holders = _BAG_HOLDERS[where]
-    containers = [_container(key, name, len(built_in), None, icons)]
-    by_guid: dict[int, dict] = {}
-    slots: list[dict] = []
-    inside: list[dict] = []
-    held = {}
-    for row in sorted(rows, key=lambda r: (r["bag"], r["slot"])):
-        if row["bag"] != 0:
-            inside.append(row)
-        elif row["slot"] in holders:
-            held[row["slot"]] = row
-        elif row["slot"] in built_in:
-            _place(containers[0], row["slot"] - built_in.start, item_cell(row, icons))
-    for number, slot in enumerate(holders, start=1):
-        row = held.get(slot)
-        slots.append(
-            {"position": number, "bag": item_cell(row, icons) if row else None}
-        )
-        if row is None:
-            continue
-        bag = _container(
-            "%s%d" % (key, number),
-            row.get("item_name") or "Bag #%d" % number,
-            int(row.get("container_slots") or 0),
-            row,
-            icons,
-        )
-        containers.append(bag)
-        by_guid[row["item_guid"]] = bag
-    for row in inside:
-        bag = by_guid.get(row["bag"])
-        # Inside a container this frame does not draw: a bank bag seen from
-        # the Bags frame, or the other way round.
+    base = _container(key, name, len(built_in), None, icons)
+    top = [r for r in rows if r["bag"] == 0]
+    held = {r["slot"]: r for r in top if r["slot"] in holders}
+    for row in top:
+        if row["slot"] in built_in:
+            _place(base, row["slot"] - built_in.start, item_cell(row, icons))
+    bar, bags = _hang_bags(held, holders, key, icons)
+    by_guid = {
+        held[slot]["item_guid"]: bag
+        for slot, bag in zip(sorted(held), bags, strict=True)
+    }
+    for row in rows:
+        bag = by_guid.get(row["bag"]) if row["bag"] != 0 else None
+        # Inside a container this frame does not draw (a bank bag seen from
+        # the Bags frame, or the other way round) is skipped.
         if bag is not None:
             _place(bag, row["slot"], item_cell(row, icons))
+    containers = [base, *bags]
     total = sum(len(c["cells"]) for c in containers)
     used = sum(1 for c in containers for cell in c["cells"] if cell is not None)
     return {
         "where": where,
         "title": FRAME_TITLES[where],
         "containers": containers,
-        "bag_slots": slots,
+        "bag_slots": bar,
         "total": total,
         "used": used,
         "free": total - used,

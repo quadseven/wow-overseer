@@ -368,11 +368,24 @@ class TheEndpoints(unittest.TestCase):
                 self.assertEqual(h.code, 404, bad)
             inv.assert_not_called()
 
-    def test_a_dead_database_is_a_503(self, _groups):
-        with mock.patch.object(
-            map_server, "_fetch_client_inventory", side_effect=RuntimeError("down")
-        ):
-            self.assertEqual(get("/api/client/bags?name=Zug").code, 503)
+    def test_a_dead_database_is_a_503_and_a_bug_is_a_500(self, _groups):
+        """Only a database or network fault reads as an unreachable world; a
+        builder's own bug is a 500, so it is not dressed as an outage."""
+
+        class Down(Exception):
+            pass
+
+        stub = types.SimpleNamespace(err=types.SimpleNamespace(MySQLError=Down))
+        with mock.patch.object(map_server, "pymysql", stub):
+            for fault, code in (
+                (Down("gone"), 503),
+                (OSError("reset"), 503),
+                (KeyError("slot"), 500),
+            ):
+                with mock.patch.object(
+                    map_server, "_fetch_client_inventory", side_effect=fault
+                ):
+                    self.assertEqual(get("/api/client/bags?name=Zug").code, code)
 
     def test_an_item_is_read_once_and_a_bad_entry_never_reaches_sql(self, _groups):
         tpl = {
@@ -445,7 +458,7 @@ class TheOverlayHandlesBothFamilies(unittest.TestCase):
 
     def test_no_family_or_character_is_named_in_the_overlay(self):
         code = overlay()
-        for key, names in FAMILIES:
+        for _key, names in FAMILIES:
             for name in names:
                 self.assertNotRegex(code, r'["\']%s["\']' % name, name)
         for guild in ("Cave", "Bonkers"):

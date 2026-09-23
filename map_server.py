@@ -5121,9 +5121,14 @@ class Handler(BaseHTTPRequestHandler):
             payload.setdefault("name", scope[0])
             payload["family_key"] = scope[1]
             self._send(200, "application/json", json.dumps(payload).encode())
-        except Exception:
+        except (pymysql.err.MySQLError, OSError):
+            # The world, or the way to it, is down: the frame says so.
             log.exception("client %s query failed", what)
             self._send(503, "application/json", b'{"error": "world unreachable"}')
+        except Exception:
+            # A bug in building the frame is not an outage and is not called one.
+            log.exception("client %s frame failed to build", what)
+            self._send(500, "application/json", b'{"error": "frame failed to build"}')
 
     def _client_bags(self, query: dict) -> None:
         """GET /api/client/bags?name=X - the backpack and the four bags."""
@@ -5167,9 +5172,13 @@ class Handler(BaseHTTPRequestHandler):
             return
         try:
             tip = CLIENT_TOOLTIPS.get(int(raw), _client_item)
-        except Exception:
+        except (pymysql.err.MySQLError, OSError):
             log.exception("client item query failed")
             self._send(503, "application/json", b'{"error": "world unreachable"}')
+            return
+        except Exception:
+            log.exception("client item tooltip failed to build")
+            self._send(500, "application/json", b'{"error": "tooltip failed to build"}')
             return
         if tip is None:
             self._send(404, "application/json", b'{"error": "no such item"}')
