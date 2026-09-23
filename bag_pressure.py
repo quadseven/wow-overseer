@@ -780,6 +780,67 @@ class BagTrip:
     why_not: str = ""
 
 
+def _trip_blocked(leader: str, standing: dict, in_run: bool) -> str:
+    """Why no trip may be taken at all right now, or '' when one may."""
+    if not leader:
+        return "nobody leads the family, and a follower aimed at a vendor does not walk"
+    if in_run:
+        return "a dungeon run is in progress; the bag trip waits until it ends"
+    fighting = sorted(name for name, s in standing.items() if s.in_combat)
+    if fighting:
+        return "%s in combat; the bag trip waits" % ", ".join(fighting)
+    pending = bind_pending(standing, leader)
+    if pending:
+        return (
+            "%s on a dungeon job and not yet bound in this town; the bag trip "
+            "waits for the campaign bind to land (mod-overseer#583)"
+            % ", ".join(pending)
+        )
+    here = standing.get(leader)
+    if here is None or here.map_id is None:
+        return "nothing can say where %s is standing" % leader
+    return ""
+
+
+def _trip_walkers(buyers, standing: dict, map_id: int) -> list:
+    """Buyers with a position to fill and a slot to land a bag in, who stand
+    on the leader's map and so can follow it to a counter."""
+    out = []
+    for buyer in sorted(buyers or (), key=lambda b: b.name):
+        spot = standing.get(buyer.name)
+        if (
+            buyer.open_positions > 0
+            and buyer.free_slots >= 1
+            and spot is not None
+            and spot.map_id is not None
+            and int(spot.map_id) == map_id
+        ):
+            out.append(buyer)
+    return out
+
+
+def _trip_vendors(vendors, map_id: int, max_yards: float) -> list:
+    """Stocking vendors on the leader's map within the cap, nearest first."""
+    return sorted(
+        (
+            v
+            for v in (vendors or ())
+            if int(v.map_id) == map_id and float(v.yards) <= max_yards and v.offers
+        ),
+        key=lambda v: (float(v.yards), int(v.entry)),
+    )
+
+
+def _served_at(vendor: BagVendor, walkers) -> tuple:
+    """Who can buy this vendor's cheapest bag and keep the level reserve."""
+    price = vendor.offers[0].price
+    return tuple(
+        b.name
+        for b in walkers
+        if bag_purchase_allowed(b.money, price, True, reserve=bag_reserve(b.level))
+    )
+
+
 def bag_vendor_trip(
     buyers,
     vendors,
@@ -802,63 +863,24 @@ def bag_vendor_trip(
     bind may still be pending (`bind_pending`). No trip either once nobody
     who can afford a bag lacks one, which is what stops it repeating.
     """
-    if not leader:
-        return BagTrip(
-            why_not="nobody leads the family, and a follower aimed "
-            "at a vendor does not walk"
-        )
-    if in_run:
-        return BagTrip(
-            why_not="a dungeon run is in progress; the bag trip waits until it ends"
-        )
-    fighting = sorted(name for name, s in standing.items() if s.in_combat)
-    if fighting:
-        return BagTrip(why_not="%s in combat; the bag trip waits" % ", ".join(fighting))
-    pending = bind_pending(standing, leader)
-    if pending:
-        return BagTrip(
-            why_not="%s on a dungeon job and not yet bound in this town; the "
-            "bag trip waits for the campaign bind to land (mod-overseer#583)"
-            % ", ".join(pending)
-        )
-    here = standing.get(leader)
-    if here is None or here.map_id is None:
-        return BagTrip(why_not="nothing can say where %s is standing" % leader)
-    map_id = int(here.map_id)
-    walkers = []
-    for buyer in sorted(buyers or (), key=lambda b: b.name):
-        if buyer.open_positions <= 0 or buyer.free_slots < 1:
-            continue
-        spot = standing.get(buyer.name)
-        if spot is None or spot.map_id is None or int(spot.map_id) != map_id:
-            continue
-        walkers.append(buyer)
+    blocked = _trip_blocked(leader, standing, in_run)
+    if blocked:
+        return BagTrip(why_not=blocked)
+    map_id = int(standing[leader].map_id)
+    walkers = _trip_walkers(buyers, standing, map_id)
     if not walkers:
         return BagTrip(
-            why_not="nobody on %s's map wants a bag and has a free "
-            "slot for one" % leader
+            why_not="nobody on %s's map wants a bag and has a free slot for one"
+            % leader
         )
-    usable = sorted(
-        (
-            v
-            for v in (vendors or ())
-            if int(v.map_id) == map_id and float(v.yards) <= max_yards and v.offers
-        ),
-        key=lambda v: (float(v.yards), int(v.entry)),
-    )
+    usable = _trip_vendors(vendors, map_id, max_yards)
     if not usable:
         return BagTrip(
-            why_not="no vendor within %d yards of %s on map %d "
-            "stocks a bag" % (int(max_yards), leader, map_id)
+            why_not="no vendor within %d yards of %s on map %d stocks a bag"
+            % (int(max_yards), leader, map_id)
         )
     for vendor in usable:
-        served = tuple(
-            b.name
-            for b in walkers
-            if bag_purchase_allowed(
-                b.money, vendor.offers[0].price, True, reserve=bag_reserve(b.level)
-            )
-        )
+        served = _served_at(vendor, walkers)
         if not served:
             continue
         if float(vendor.yards) <= BAG_VENDOR_HERE_YARDS:

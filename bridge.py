@@ -7836,22 +7836,9 @@ class Bridge(discord.Client):
             log.info("bags: nobody in %s has an empty bag position the "
                      "family's own spare bags will not fill", names)
             return ()
-        towns = {}
-        for name in wanting:
-            towns[name] = await asyncio.to_thread(_fetch_town, name)
-        purses = await asyncio.to_thread(_fetch_purses, wanting)
-        free = await asyncio.to_thread(_fetch_free_slots, wanting)
-        everyone = [
-            bag_pressure.BagBuyer(
-                name=name, level=purses.get(name, (0, 0))[0],
-                money=purses.get(name, (0, 0))[1],
-                open_positions=open_positions[name],
-                free_slots=int(free.get(name, 0)),
-                stocks=frozenset(towns[name].stocks),
-            )
-            for name in wanting if name in purses
-        ]
-        buyers = [b for b in everyone if towns[b.name].vendor]
+        everyone, at_vendor = await asyncio.to_thread(
+            _bag_buyers, wanting, open_positions)
+        buyers = [b for b in everyone if b.name in at_vendor]
         stocked = sorted({entry for b in buyers for entry in b.stocks})
         offers = (await asyncio.to_thread(_fetch_bag_offers, stocked)
                   if stocked else [])
@@ -12770,6 +12757,27 @@ def _fetch_bag_trip_facts(names: list) -> list:
     for row in rows:
         row["job"] = jobs_by_name.get(row["name"], "")
     return rows
+
+
+def _bag_buyers(wanting: list, open_positions: dict) -> tuple:
+    """(every wanting BagBuyer, the names standing at a vendor) (#150, #206).
+
+    `stocks` is what this buyer's own reach sells, because DoBuy answers on
+    the buyer's range. A buyer with no saved purse row is left out.
+    """
+    towns = {name: _fetch_town(name) for name in wanting}
+    purses = _fetch_purses(wanting)
+    free = _fetch_free_slots(wanting)
+    everyone = [
+        bag_pressure.BagBuyer(
+            name=name, level=purses[name][0], money=purses[name][1],
+            open_positions=open_positions[name],
+            free_slots=int(free.get(name, 0)),
+            stocks=frozenset(towns[name].stocks),
+        )
+        for name in wanting if name in purses
+    ]
+    return everyone, {name for name in wanting if towns[name].vendor}
 
 
 def _insert_bag_equip(purchase) -> int:
