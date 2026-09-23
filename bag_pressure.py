@@ -263,9 +263,9 @@ def family_town_run_needed(
 # because the middle one is new. "trip" takes the travel column and writes
 # sales; "counter" writes sales only for holders already at a vendor and takes
 # no aim; "none" writes nothing.
-VENDOR_PASS_TRIP = "trip"
-VENDOR_PASS_COUNTER = "counter"
-VENDOR_PASS_NONE = "none"
+VENDOR_MODE_TRIP = "trip"
+VENDOR_MODE_COUNTER = "counter"
+VENDOR_MODE_NONE = "none"
 
 
 def vendor_pass_mode(trip_worth: bool, withheld: bool, in_run: bool) -> str:
@@ -286,10 +286,33 @@ def vendor_pass_mode(trip_worth: bool, withheld: bool, in_run: bool) -> str:
     infra#4190's reason for the gate intact.
     """
     if trip_worth:
-        return VENDOR_PASS_TRIP
+        return VENDOR_MODE_TRIP
     if withheld and not in_run:
-        return VENDOR_PASS_COUNTER
-    return VENDOR_PASS_NONE
+        return VENDOR_MODE_COUNTER
+    return VENDOR_MODE_NONE
+
+
+def aim_step_in_mode(step: str, mode: str) -> str:
+    """The vendor errand step once the pass mode is known (#225).
+
+    In counter mode the bag trip owns the traveller, so an `aim` becomes a
+    `hold`: the column is left as it is. Every other step is unchanged.
+    """
+    if mode == VENDOR_MODE_COUNTER and step == VENDOR_ERRAND_AIM:
+        return VENDOR_ERRAND_HOLD
+    return step
+
+
+def counter_holders(holders, mode: str, leader_at_counter: bool, at_counter) -> set:
+    """Holders that may get sell rows in this pass mode (#225).
+
+    In counter mode this pass takes no trip, so a walking leader is not
+    heading to a counter for these rows. Only a holder at a vendor, or every
+    holder once the leader stands at one, sells. Other modes are unchanged.
+    """
+    if mode != VENDOR_MODE_COUNTER or leader_at_counter:
+        return set(holders)
+    return {h for h in holders if at_counter(h)}
 
 
 # WHAT A VENDOR ERRAND SHOULD DO NEXT. Three words rather than two booleans at

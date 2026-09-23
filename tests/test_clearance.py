@@ -191,7 +191,7 @@ class TheBridgeWiresIt(unittest.TestCase):
         self.assertIn(") + lock_sales + clear_sales", body)
         self.assertLess(
             body.index("await self._route_clearance("),
-            body.index("trip_worth = bag_pressure.family_town_run_needed("),
+            body.index("mode = await self._vendor_pass_mode("),
         )
 
     def test_the_sales_count_toward_the_trip(self):

@@ -116,28 +116,72 @@ class TheGateCountsAWithheldCampaign(unittest.TestCase):
 
     def test_a_withheld_campaign_sells_at_the_counter(self):
         self.assertEqual(
-            bag_pressure.VENDOR_PASS_COUNTER,
+            bag_pressure.VENDOR_MODE_COUNTER,
             bag_pressure.vendor_pass_mode(False, True, False),
         )
 
     def test_a_trip_worth_taking_is_still_a_trip(self):
         for withheld in (False, True):
             self.assertEqual(
-                bag_pressure.VENDOR_PASS_TRIP,
+                bag_pressure.VENDOR_MODE_TRIP,
                 bag_pressure.vendor_pass_mode(True, withheld, False),
             )
 
     def test_no_campaign_waiting_stays_home_as_before(self):
         self.assertEqual(
-            bag_pressure.VENDOR_PASS_NONE,
+            bag_pressure.VENDOR_MODE_NONE,
             bag_pressure.vendor_pass_mode(False, False, False),
         )
 
     def test_never_inside_a_run(self):
         self.assertEqual(
-            bag_pressure.VENDOR_PASS_NONE,
+            bag_pressure.VENDOR_MODE_NONE,
             bag_pressure.vendor_pass_mode(False, True, True),
         )
+
+
+class TheCounterModeTakesNoAim(unittest.TestCase):
+    def test_an_aim_becomes_a_hold(self):
+        self.assertEqual(
+            bag_pressure.VENDOR_ERRAND_HOLD,
+            bag_pressure.aim_step_in_mode(
+                bag_pressure.VENDOR_ERRAND_AIM, bag_pressure.VENDOR_MODE_COUNTER
+            ),
+        )
+
+    def test_a_trip_still_aims(self):
+        self.assertEqual(
+            bag_pressure.VENDOR_ERRAND_AIM,
+            bag_pressure.aim_step_in_mode(
+                bag_pressure.VENDOR_ERRAND_AIM, bag_pressure.VENDOR_MODE_TRIP
+            ),
+        )
+
+    def test_a_release_is_left_alone(self):
+        self.assertEqual(
+            bag_pressure.VENDOR_ERRAND_RELEASE,
+            bag_pressure.aim_step_in_mode(
+                bag_pressure.VENDOR_ERRAND_RELEASE, bag_pressure.VENDOR_MODE_COUNTER
+            ),
+        )
+
+    def test_only_holders_at_a_vendor_sell_while_the_leader_walks(self):
+        got = bag_pressure.counter_holders(
+            {"Zug", "Oz"}, bag_pressure.VENDOR_MODE_COUNTER, False, lambda h: h == "Oz"
+        )
+        self.assertEqual({"Oz"}, got)
+
+    def test_every_holder_sells_once_the_leader_is_at_the_counter(self):
+        got = bag_pressure.counter_holders(
+            {"Zug", "Oz"}, bag_pressure.VENDOR_MODE_COUNTER, True, lambda h: False
+        )
+        self.assertEqual({"Zug", "Oz"}, got)
+
+    def test_a_trip_keeps_its_holders(self):
+        got = bag_pressure.counter_holders(
+            {"Zug"}, bag_pressure.VENDOR_MODE_TRIP, False, lambda h: False
+        )
+        self.assertEqual({"Zug"}, got)
 
 
 class AnOrphansClockIsNotInherited(unittest.TestCase):
@@ -512,7 +556,7 @@ def _run_vendor_once(queued, at_vendor=True):
     world = types.SimpleNamespace(sells=[])
     free = {"Zug": 2}
     ns = _load(
-        ["_vendor_once", "_sellable_per_holder"],
+        ["_vendor_once", "_vendor_pass_mode", "_sellable_per_holder"],
         {
             "asyncio": types.SimpleNamespace(to_thread=_thread),
             "time": Clock(),
@@ -546,6 +590,7 @@ def _run_vendor_once(queued, at_vendor=True):
         },
     )
     me = _FakeEconomySelf(world)
+    me._vendor_pass_mode = lambda *a: ns["_vendor_pass_mode"](me, *a)
     cohort = townslot.Cohort(key="Zug", leader="Zug", names=("Zug",))
     asyncio.run(ns["_vendor_once"](me, cohort))
     return world.sells, me.claims, log.lines

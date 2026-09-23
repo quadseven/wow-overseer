@@ -7592,6 +7592,30 @@ class Bridge(discord.Client):
                 )
         return released
 
+    async def _vendor_pass_mode(self, names: list, free_slots: dict,
+                                sellable_counts: dict, in_run: bool) -> str:
+        """Whether `_vendor_once` travels, sells where it stands, or stops (#225).
+
+        Selling alone may not clear the withhold line when a bag would. The
+        gate then said "no trip" and the pass returned, and the Jev sell
+        interlude, which calls the same pass, wrote no sale for 45 minutes on
+        wow-dev. While the campaign is withheld, the bag trip owns the aim and
+        this pass sells for whoever stands at a vendor.
+        """
+        trip_worth = bag_pressure.family_town_run_needed(
+            free_slots, sellable=sellable_counts)
+        withheld = not trip_worth and jev_activity.withheld(
+            await asyncio.to_thread(_campaign_waiting, names), free_slots)
+        mode = bag_pressure.vendor_pass_mode(trip_worth, withheld, in_run)
+        if mode == bag_pressure.VENDOR_MODE_COUNTER:
+            log.info("economy: selling alone lifts nobody past the trigger of "
+                     "%d (free slots %s, sellable %s), but the family's campaign "
+                     "is withheld for bag space - the bag trip owns the travel "
+                     "aim and sales are written for whoever stands at a vendor",
+                     bag_pressure.TOWN_RUN_FREE_SLOTS, free_slots,
+                     sellable_counts)
+        return mode
+
     async def _vendor_once(self, cohort=None) -> None:
         """Queue carried junk and outgrown gear for the world sell executor.
 
@@ -7808,17 +7832,12 @@ class Bridge(discord.Client):
         # meets the ordinary disposition on a later cycle.
         await self._equip_upgrades(gear_rows, worn, names, jev_plan)
 
-        # A CAMPAIGN WITHHELD FOR BAG SPACE STILL SELLS (#225). Selling alone
-        # may not clear the withhold line when a bag would, so the gate below
-        # said "no trip" and returned, and the Jev sell interlude, which calls
-        # this same pass, wrote no sale for 45 minutes on wow-dev. The bag trip
-        # owns the aim then; this pass sells for whoever stands at a vendor.
-        trip_worth = bag_pressure.family_town_run_needed(
-            free_slots, sellable=sellable_counts)
-        withheld = not trip_worth and jev_activity.withheld(
-            await asyncio.to_thread(_campaign_waiting, names), free_slots)
-        mode = bag_pressure.vendor_pass_mode(trip_worth, withheld, in_run)
-        if mode == bag_pressure.VENDOR_PASS_NONE:
+        # A CAMPAIGN WITHHELD FOR BAG SPACE STILL SELLS (#225); see
+        # `_vendor_pass_mode`.
+        mode = await self._vendor_pass_mode(
+            names, free_slots, sellable_counts, in_run)
+        step = bag_pressure.aim_step_in_mode(step, mode)
+        if mode == bag_pressure.VENDOR_MODE_NONE:
             # Said with the counts, because "below the trigger" and "nobody a
             # vendor could lift past it" are different reasons to stay home and
             # the second one used to be invisible (infra#4190).
@@ -7827,13 +7846,6 @@ class Bridge(discord.Client):
                      free_slots, sellable_counts,
                      bag_pressure.TOWN_RUN_FREE_SLOTS)
             return
-        if mode == bag_pressure.VENDOR_PASS_COUNTER:
-            log.info("economy: selling alone lifts nobody past the trigger of "
-                     "%d (free slots %s, sellable %s), but the family's campaign "
-                     "is withheld for bag space - the bag trip owns the travel "
-                     "aim and sales are written for whoever stands at a vendor",
-                     bag_pressure.TOWN_RUN_FREE_SLOTS, free_slots,
-                     sellable_counts)
         if in_run:
             # Bag pressure outranks an unfinished dungeon. The world-side
             # coordinator already treats job=quest as the operator's request
@@ -8004,14 +8016,7 @@ class Bridge(discord.Client):
         # a new one, releasing and re-taking the counter hold. The argument and
         # the measurements are on `bag_pressure.vendor_errand_step`.
         aimed = False
-        if (step == bag_pressure.VENDOR_ERRAND_AIM
-                and mode == bag_pressure.VENDOR_PASS_COUNTER):
-            # NO AIM: THE BAG TRIP OWNS THE TRAVELLER (#225). Its vendor buys
-            # the junk as well, and a second claim here is the fight over one
-            # column that walked the family away from the bag vendor.
-            log.info("economy: leader=%s is left to the bag trip; no vendor "
-                     "aim is taken while the campaign is withheld", leader)
-        elif step == bag_pressure.VENDOR_ERRAND_AIM:
+        if step == bag_pressure.VENDOR_ERRAND_AIM:
             # THE RETURN VALUE IS READ. The economy guard in _write_trade_errand
             # only retasks an IDLE traveller, so this write is a no-op while the
             # town trip owns `travel_npc = 'repair'` - which is a legitimate
@@ -8047,10 +8052,10 @@ class Bridge(discord.Client):
             leader_at_counter=leader_at_counter,
             holder_at_counter=lambda holder: bool(holder_town[holder].vendor),
         ))
-        if mode == bag_pressure.VENDOR_PASS_COUNTER and not leader_at_counter:
-            # No trip of this pass's own, so a walking leader is not heading
-            # to a counter for these rows; only a holder at one sells (#225).
-            queue_holders = {h for h in queue_holders if holder_town[h].vendor}
+        queue_holders = bag_pressure.counter_holders(
+            queue_holders, mode, leader_at_counter,
+            lambda holder: bool(holder_town[holder].vendor),
+        )
         for holder in sorted(by_holder):
             holder_candidates = tuple(by_holder[holder])
             town = holder_town[holder]
