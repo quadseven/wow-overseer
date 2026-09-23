@@ -138,6 +138,10 @@ LLM_TIMEOUT = float(os.environ.get("LLM_TIMEOUT_SECONDS", "120"))
 # jev.mode, where they are documented.
 JEV_SHADOW_LIMIT = int(os.environ.get("JEV_SHADOW_LIMIT", "16"))
 JEV_RETENTION_DAYS = int(os.environ.get("JEV_RETENTION_DAYS", "30"))
+# How long a pass with a kind in act mode waits for Jev before the heuristic
+# acts without it: the client's own deadline, so a slow Jev costs a pass at
+# most that and never more. The answers still arrive and are recorded.
+JEV_ACT_WAIT_SECONDS = float(os.environ.get("JEV_TIMEOUT_SECONDS", "3"))
 # What gets said in game when NOBODY in the family could answer an order Evan
 # gave - the voice is down, or none of them are in the world. Said once, by the
 # most senior of them, and in the family's own register because it is one of
@@ -3647,9 +3651,14 @@ class Bridge(discord.Client):
         # The last comparison written per (kind, subject, item guid), so an
         # unchanged answer is recorded once rather than every economy cycle.
         self._jev_recorded: dict = {}
-        # One shadow pass per family at a time, held so it is never collected
-        # mid-flight (see setup_hook) and never waited on by the economy pass.
+        # One Jev pass per family (and one for the guild route) at a time,
+        # held so it is never collected mid-flight (see setup_hook). A pass
+        # with a kind in act mode is waited on for at most
+        # JEV_ACT_WAIT_SECONDS; past that it runs on and records late.
         self._jev_tasks: dict = {}
+        # Record writers for passes that answered too late to act, held for
+        # the same reason.
+        self._jev_writes: set = set()
 
     async def setup_hook(self) -> None:
         # Held, not fired and forgotten. asyncio keeps only a weak reference to
@@ -6706,6 +6715,10 @@ class Bridge(discord.Client):
         decided = bag_pressure.guild_routes_from_rows(
             gear_rows, equipped, family_names, roster,
         )
+        # WHO GAINS MOST, ASKED OF JEV TOO (#184): a Score per ranked
+        # candidate, and where it acts, its pick leads the route.
+        decided = await self._jev_guild(
+            decided, gear_rows, equipped, family_names, roster)
         _log_capped("guild route", decided.notes)
         if not decided.grants:
             return
@@ -7384,18 +7397,22 @@ class Bridge(discord.Client):
         # that sibling than in anybody's purse, and it needs no vendor, no
         # leader, no counter and no `travel_npc` - the same argument
         # `_hand_recipes` makes just above.
-        await self._hand_gear(gear_rows, worn, names)
+        #
+        # JEV IS ASKED FIRST, BECAUSE IT CAN NOW CHANGE THE NEXT TWO PASSES
+        # (#95). The same two reads. A kind in act mode is waited on for at
+        # most JEV_ACT_WAIT_SECONDS (the client's own deadline); an answer in
+        # time that clears the kind's threshold changes what the hand-off and
+        # the equip pass do (jev_items.act_plan), through their own rows and
+        # no other. A late, absent or unsure answer changes nothing. With
+        # every kind in shadow nothing waits at all.
+        jev_plan = await self._jev_items_plan(gear_rows, worn, names)
+        await self._hand_gear(gear_rows, worn, names, jev_plan)
         # AND WHAT THE HOLDER WOULD WEAR IS PUT ON (#146). The same two reads,
         # the same opinion (`gear.claimant` naming the holder), and like the
         # hand-off it needs no vendor, leader or counter, so it runs above the
         # town-run gate. The piece it takes off is carried from then on and
         # meets the ordinary disposition on a later cycle.
-        await self._equip_upgrades(gear_rows, worn, names)
-        # AND JEV IS ASKED THE SAME QUESTIONS, IN SHADOW (#95). The same two
-        # reads again; the pass runs beside this one rather than inside it, so
-        # a slow or absent Jev never delays a sale, a hand-off or an equip.
-        # Nothing it answers is written anywhere but the comparison record.
-        self._jev_shadow(gear_rows, worn, names)
+        await self._equip_upgrades(gear_rows, worn, names, jev_plan)
 
         if not bag_pressure.family_town_run_needed(
                 free_slots, sellable=sellable_counts):
@@ -7679,7 +7696,8 @@ class Bridge(discord.Client):
                     max(0.0, until - time.monotonic()),
                 )
 
-    async def _hand_gear(self, gear_rows: list, worn: list, names: list) -> None:
+    async def _hand_gear(self, gear_rows: list, worn: list, names: list,
+                         jev_plan=None) -> None:
         """Move every carried piece that suits a sibling better (infra#3464).
 
         THE VERB FOLLOWS WHERE THE TWO OF THEM ARE STANDING. It was always
@@ -7715,6 +7733,9 @@ class Bridge(discord.Client):
             gear_rows, worn, names, keep_names=OWNER_KEEPS,
             position_rows=positions, free_slots=free_slots,
         )
+        # A piece Jev acted on stays with its holder (#95): it is being put
+        # on, or Jev judged it one to keep. Each one becomes a note.
+        plan = jev_items.withhold_gifts(plan, jev_plan)
         for note in plan.notes:
             log.info("gear: %s", note)
         # ONE NOTE PER WITHHELD GRANT, so this is the number the family
@@ -7747,7 +7768,7 @@ class Bridge(discord.Client):
         )
 
     async def _equip_upgrades(self, gear_rows: list, worn: list,
-                              names: list) -> None:
+                              names: list, jev_plan=None) -> None:
         """Put on every carried piece its own holder would wear (#146).
 
         `bag_pressure.holder_equips` (gear.equips) decides which pieces;
@@ -7777,6 +7798,13 @@ class Bridge(discord.Client):
             )
         wanted = bag_pressure.holder_equips(
             gear_rows, worn, names, keep_names=OWNER_KEEPS)
+        if jev_plan is not None and (jev_plan.equip or jev_plan.no_equip):
+            # JEV'S ANSWER, THROUGH THE SAME ROW (#95): a piece it chose is
+            # put on with the same `e Hitem:` command, and one it judged
+            # worse than what is worn is left in the bags.
+            wanted = bag_pressure.jev_equips(
+                wanted, gear_rows, worn, names, withheld=jev_plan.no_equip,
+                chosen=jev_plan.equip, keep_names=OWNER_KEEPS)
         recent = {(row["target_name"], row["command"]) for row in history
                   if row["recent"]}
         tries: dict = {}
@@ -7802,42 +7830,76 @@ class Bridge(discord.Client):
             EQUIP_RETRY_MINUTES, len(notes),
         )
 
-    def _jev_shadow(self, gear_rows: list, worn: list, names: list) -> None:
-        """Start this family's Jev shadow pass unless one is still running (#95).
+    async def _jev_items_plan(self, gear_rows: list, worn: list, names: list):
+        """This family's Jev pass, and what it changes this cycle (#95).
 
-        Scheduled, not awaited: the economy pass goes on to its vendor half at
-        once. A family whose previous pass has not finished is skipped this
-        cycle rather than queued, so passes can never stack up behind a slow
-        API.
+        Returns a jev_items.ActPlan, or None when the heuristic acts alone:
+        every kind in shadow or off, this family's previous pass still
+        running, or no answer inside JEV_ACT_WAIT_SECONDS. The pass is
+        recorded either way, as acted on or, when late, as the heuristic's.
         """
-        modes = {
-            kind: jev.effective_mode(kind, act_supported=False)
-            for kind in (jev_items.KIND_DISPOSITION, jev_items.KIND_WEAPON)
-        }
+        rules = jev_items.policies()
+        task = self._jev_shadow(gear_rows, worn, names, rules)
+        if task is None:
+            return None
+        if any(rule.mode == jev.ACT for rule in rules.values()):
+            done, _ = await asyncio.wait({task}, timeout=JEV_ACT_WAIT_SECONDS)
+            if task in done and not task.cancelled() and task.exception() is None:
+                routes = {
+                    guid: route for guid, (route, _why) in jev_items.heuristic(
+                        gear_rows, worn, names, OWNER_KEEPS).items()
+                }
+                plan = jev_items.act_plan(task.result(), rules, routes)
+                await self._jev_record(plan.judgments, ",".join(names))
+                return plan
+        self._jev_record_late(task, ",".join(names))
+        return None
+
+    def _jev_shadow(self, gear_rows: list, worn: list, names: list,
+                    rules: dict):
+        """Start this family's Jev pass unless one is still running (#95).
+
+        Returns the held task, or None when nothing was started. A family
+        whose previous pass has not finished is skipped this cycle rather
+        than queued, so passes can never stack up behind a slow API.
+        """
+        modes = {kind: rule.mode for kind, rule in rules.items()}
         if all(m == jev.OFF for m in modes.values()):
-            return
+            return None
         key = tuple(sorted(names))
         running = self._jev_tasks.get(key)
         if running is not None and not running.done():
-            return
+            return None
         task = asyncio.create_task(
             self._jev_shadow_once(list(gear_rows), list(worn), list(names), modes))
         self._jev_tasks[key] = task
         task.add_done_callback(_jev_task_done)
+        return task
 
     async def _jev_shadow_once(self, gear_rows: list, worn: list,
-                               names: list, modes: dict) -> None:
-        """Ask, compare, record. `jev_items.shadow_pass` decides everything;
-        this reads the two extra facts it needs and writes what changed."""
+                               names: list, modes: dict) -> list:
+        """Ask and compare; the judgments, recorded by the caller.
+        `jev_items.shadow_pass` decides everything; this reads the two extra
+        facts it needs."""
         if not gear_rows or not self._jev.ready(jev_items.KIND_DISPOSITION):
             # No key: the client says so once, and no read is spent on it.
-            return
+            return []
         worn_items = await asyncio.to_thread(_fetch_jev_worn, names)
         entries = {int(r["entry"]) for r in gear_rows if r.get("entry")}
         entries |= {int(r["entry"]) for r in worn_items if r.get("entry")}
+        describe = await self._jev_describer(entries)
+        specs = jev_items.specs_for(names, bonds.FAMILY, _jev_trees_for)
+        return await jev_items.shadow_pass(
+            self._jev, gear_rows=gear_rows, worn_rows=worn,
+            worn_items=worn_items, names=names, describe=describe,
+            specs=specs, keep_names=OWNER_KEEPS, modes=modes,
+            limit=JEV_SHADOW_LIMIT,
+        )
+
+    async def _jev_describer(self, entries):
+        """entry -> the Armory's trimmed tooltip, over one read of the facts."""
         facts = await asyncio.to_thread(_fetch_jev_item_facts, sorted(entries))
         book = _jev_item_book()
-        specs = jev_items.specs_for(names, bonds.FAMILY, _jev_trees_for)
 
         def describe(entry: int):
             row = facts.get(int(entry))
@@ -7845,12 +7907,76 @@ class Bridge(discord.Client):
                 return None
             return jev_items.item_card(armory.template_tooltip(row, book))
 
-        judgments = await jev_items.shadow_pass(
-            self._jev, gear_rows=gear_rows, worn_rows=worn,
-            worn_items=worn_items, names=names, describe=describe,
-            specs=specs, keep_names=OWNER_KEEPS, modes=modes,
-            limit=JEV_SHADOW_LIMIT,
-        )
+        return describe
+
+    async def _jev_guild(self, decided, gear_rows: list, equipped: list,
+                         family_names: list, roster: list):
+        """Ask Jev who in the guild gains most from each item (#184).
+
+        The same bounded wait as the family's pass. Where Jev's pick clears
+        the guild_recipient threshold and is already one of the route's own
+        receivers, it becomes the route's taker (jev_items.reroute); the
+        route is delivered and written exactly as the ranking's would be.
+        Returns the route plan to deliver.
+        """
+        rule = jev_items.guild_policy()
+        if rule.mode == jev.OFF or not self._jev.ready(jev_items.KIND_GUILD):
+            return decided
+        running = self._jev_tasks.get(jev_items.KIND_GUILD)
+        if running is not None and not running.done():
+            return decided
+        candidates = bag_pressure.guild_route_candidates(
+            equipped, roster, family_names)
+        asks = jev_items.recipient_asks(
+            bag_pressure.guild_route_holdings(gear_rows), candidates,
+            decided.grants, bag_pressure.rank_receivers)
+        if not asks:
+            return decided
+        task = asyncio.create_task(
+            self._jev_guild_once(asks, candidates, family_names, rule.mode))
+        self._jev_tasks[jev_items.KIND_GUILD] = task
+        task.add_done_callback(_jev_task_done)
+        if rule.mode == jev.ACT:
+            done, _ = await asyncio.wait({task}, timeout=JEV_ACT_WAIT_SECONDS)
+            if task in done and not task.cancelled() and task.exception() is None:
+                decided, judgments = jev_items.reroute(decided, task.result(), rule)
+                await self._jev_record(judgments, "the guild")
+                return decided
+        self._jev_record_late(task, "the guild")
+        return decided
+
+    async def _jev_guild_once(self, asks: list, candidates: list,
+                              family_names: list, mode: str) -> list:
+        """The guild recipient questions; the judgments, recorded by the caller."""
+        people = [c.character for c in candidates]
+        worn_items = await asyncio.to_thread(
+            _fetch_jev_worn, [c.name for c in people])
+        entries = {int(a.holding.entry) for a in asks}
+        entries |= {int(r["entry"]) for r in worn_items if r.get("entry")}
+        describe = await self._jev_describer(entries)
+        specs = jev_items.specs_for(family_names, bonds.FAMILY, _jev_trees_for)
+        closet = jev_items.wardrobes(people, worn_items, describe, specs)
+        return await jev_items.recipient_pass(
+            self._jev, asks, describe, closet, mode, limit=JEV_SHADOW_LIMIT)
+
+    def _jev_record_late(self, task: asyncio.Task, who: str) -> None:
+        """Record a pass nobody waited on, as the heuristic's, when it ends."""
+
+        async def later() -> None:
+            await asyncio.wait({task})
+            if task.cancelled() or task.exception() is not None:
+                # _jev_task_done has already said why the pass failed, and a
+                # pass that failed has nothing to record.
+                return
+            await self._jev_record(jev_items.heuristic_acted(task.result()), who)
+
+        writer = asyncio.create_task(later())
+        self._jev_writes.add(writer)
+        writer.add_done_callback(self._jev_writes.discard)
+        writer.add_done_callback(_jev_task_done)
+
+    async def _jev_record(self, judgments, who: str) -> None:
+        """Write what changed to the comparison record, and say the totals."""
         fresh = [j for j in judgments
                  if self._jev_recorded.get(j.key) != j.signature]
         for judgment in fresh:
@@ -7860,9 +7986,10 @@ class Bridge(discord.Client):
         answered = [j for j in judgments if j.jev]
         log.info(
             "jev-shadow: %d question(s) for %s, %d answered, %d agree, "
-            "%d new record(s)",
-            len(judgments), ",".join(names), len(answered),
-            sum(1 for j in answered if j.agree), len(fresh),
+            "%d carried out as Jev's, %d new record(s)",
+            len(judgments), who, len(answered),
+            sum(1 for j in answered if j.agree),
+            sum(1 for j in judgments if j.acted == jev.JEV), len(fresh),
         )
 
     async def _hand_recipes(self, names: list, free_slots: dict) -> None:
@@ -11809,11 +11936,27 @@ def _create_jev_store() -> None:
             " latency_ms INT UNSIGNED NOT NULL DEFAULT 0,"
             " model VARCHAR(40) NOT NULL DEFAULT '',"
             " mode VARCHAR(8) NOT NULL,"
+            " acted VARCHAR(10) NOT NULL DEFAULT '',"
             " created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,"
             " PRIMARY KEY (id), KEY idx_kind_time (kind, created_at),"
             " KEY idx_item (item_guid, id)"
             ") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci"
         )
+        # `acted` arrived with act mode (#95). CREATE TABLE IF NOT EXISTS is
+        # a no-op on the table that already exists, so the column is added
+        # the way overseer_thought's index is: looked up, then altered once.
+        # A row written before it reads '' (nobody recorded who acted).
+        cur.execute(
+            "SELECT COUNT(*) AS n FROM information_schema.COLUMNS "
+            "WHERE TABLE_SCHEMA = DATABASE() "
+            "  AND TABLE_NAME = 'overseer_jev_judgment' AND COLUMN_NAME = 'acted'"
+        )
+        if not (cur.fetchone() or {}).get("n"):
+            cur.execute(
+                "ALTER TABLE overseer_jev_judgment "
+                "ADD COLUMN acted VARCHAR(10) NOT NULL DEFAULT '' AFTER mode"
+            )
+            log.info("overseer_jev_judgment: added acted")
         cur.execute(
             "DELETE FROM overseer_jev_judgment "
             "WHERE created_at < NOW() - INTERVAL %s DAY",
@@ -11828,8 +11971,9 @@ def _insert_jev_judgment(judgment) -> None:
         cur.execute(
             "INSERT INTO overseer_jev_judgment (kind, subject, holder, "
             "item_guid, item_entry, item_name, heuristic, heuristic_why, jev, "
-            "confidence, probabilities, agree, status, latency_ms, model, mode) "
-            "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+            "confidence, probabilities, agree, status, latency_ms, model, mode, "
+            "acted) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, "
+            "%s, %s, %s, %s)",
             (
                 judgment.kind, judgment.subject[:12], judgment.holder[:12],
                 judgment.item_guid, judgment.item_entry,
@@ -11838,7 +11982,7 @@ def _insert_jev_judgment(judgment) -> None:
                 judgment.confidence, judgment.probabilities_json() or None,
                 None if agree is None else int(agree), judgment.status[:16],
                 max(0, judgment.latency_ms), judgment.model[:40],
-                judgment.mode[:8],
+                judgment.mode[:8], judgment.acted[:10],
             ),
         )
 

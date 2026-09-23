@@ -1268,6 +1268,58 @@ def equips(holdings, characters) -> tuple:
     return tuple(sorted(out, key=lambda e: (e.holder, e.slot, e.guid)))
 
 
+def chosen_equip(holding: Holding, character: CharacterState, reason: str):
+    """An Equip for a piece a second judge chose for its own holder, or None.
+
+    The same row `equips` writes, for a piece `equips` would not pick: Jev in
+    act mode (#95), on the weapon swaps item level cannot settle. The caller
+    has already asked whether the holder can wear it at all; this only builds
+    the row, and refuses a piece that is not its holder's or has no slot.
+    """
+    slot = _slot_for(holding)
+    if not slot or character.name != holding.holder:
+        return None
+    worn = character.equipped_level(slot)
+    if slot == _TWO_HAND:
+        worn = max(worn, character.equipped_level(_MAIN_HAND))
+    return Equip(
+        holder=holding.holder,
+        guid=int(holding.guid),
+        entry=int(holding.entry),
+        name=holding.name,
+        slot=slot,
+        item_level=int(holding.item_level),
+        worn_level=int(worn),
+        reason=str(reason),
+    )
+
+
+def merge_equips(wanted, withheld, chosen) -> tuple:
+    """`wanted` without the `withheld` guids, with each `chosen` Equip in.
+
+    A chosen piece displaces whatever `wanted` held for the same holder and
+    slot group, and a chosen two-hander displaces an off-hand piece too, the
+    rule `equips` keeps for its own picks. One row per slot, as before.
+    """
+    held = {int(g) for g in withheld or ()}
+    out = [e for e in wanted if int(e.guid) not in held]
+    for pick in chosen or ():
+        group = _WEAPON_GROUP.get(pick.slot, pick.slot)
+        out = [
+            e
+            for e in out
+            if not (
+                e.holder == pick.holder
+                and (
+                    _WEAPON_GROUP.get(e.slot, e.slot) == group
+                    or (pick.slot == _TWO_HAND and e.slot == _OFF_HAND)
+                )
+            )
+        ]
+        out.append(pick)
+    return tuple(sorted(out, key=lambda e: (e.holder, e.slot, e.guid)))
+
+
 def equips_to_queue(wanted, recent, tries, give_up=3) -> tuple:
     """Which equips to write now, and a note for each one held back.
 

@@ -35,6 +35,7 @@ import family
 import frames
 import guildcraft
 import guildroute
+import jevview
 import lootstory
 import modelviewer
 import needs
@@ -1576,6 +1577,40 @@ def _fetch_guild_routes() -> dict:
         log.exception("guild route rows unreadable; the Bags tab shows none")
         return guildroute.view([])
     return guildroute.view(rows, names)
+
+
+# --- Jev's record on the Decree (#95) ---------------------------------------
+# The bridge's comparison rows, newest first, over a window long enough to
+# show an agree rate. What each row SAYS is jevview.view's.
+JEV_VIEW_DAYS = 7
+JEV_VIEW_ROWS = 2000
+
+
+def _fetch_jev_view() -> dict:
+    """jevview.view over the recent overseer_jev_judgment rows; never raises.
+
+    A read that fails (no table yet on a realm that never ran the bridge, a
+    world that is down) is an empty card, because this is one card on the
+    Decree and must not take the console down with it.
+    """
+    try:
+        conn = _connect()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT kind, subject, item_name, heuristic, jev, confidence, "
+                    "agree, status, mode, acted FROM overseer_jev_judgment "
+                    "WHERE created_at > NOW() - INTERVAL %s DAY "
+                    "ORDER BY id DESC LIMIT %s",
+                    (JEV_VIEW_DAYS, JEV_VIEW_ROWS),
+                )
+                rows = list(cur.fetchall())
+        finally:
+            conn.close()
+    except Exception:
+        log.exception("jev record unreadable; the Decree shows none")
+        return jevview.view([])
+    return jevview.view(rows)
 
 
 # --- the Council and the Eye (infra#2597) -----------------------------------
@@ -4307,6 +4342,7 @@ class Handler(BaseHTTPRequestHandler):
         """
         try:
             payload = decree.build_console(**_fetch_decree())
+            payload["jev"] = _fetch_jev_view()
             self._send(200, "application/json", json.dumps(payload).encode())
         except Exception:
             # Same contract as every other poll, and it matters here for a

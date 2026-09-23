@@ -374,19 +374,70 @@ class DescriptionTest(unittest.TestCase):
 class BridgeWiringTest(unittest.TestCase):
     """bridge.py is read as text: it imports discord and cannot be imported here."""
 
-    def test_the_shadow_pass_starts_after_the_equip_pass_and_is_not_awaited(self):
-        equip = BRIDGE.index("await self._equip_upgrades(gear_rows, worn, names)")
-        shadow = BRIDGE.index("self._jev_shadow(gear_rows, worn, names)", equip)
-        gate = BRIDGE.index("family_town_run_needed(", equip)
-        self.assertLess(shadow, gate)
-        self.assertNotIn("await self._jev_shadow(", BRIDGE)
+    def test_jev_is_asked_before_the_two_passes_it_can_change(self):
+        """Asked first, so an answer in time can change the hand-off and the
+        equip pass; both above the town-run gate, as before."""
+        body = BRIDGE[BRIDGE.index("    async def _vendor_once(") :]
+        plan = body.index(
+            "jev_plan = await self._jev_items_plan(gear_rows, worn, names)"
+        )
+        give = body.index("await self._hand_gear(gear_rows, worn, names, jev_plan)")
+        equip = body.index(
+            "await self._equip_upgrades(gear_rows, worn, names, jev_plan)"
+        )
+        gate = body.index("family_town_run_needed(", equip)
+        self.assertLess(plan, give)
+        self.assertLess(give, equip)
+        self.assertLess(equip, gate)
 
-    def test_the_shadow_pass_writes_only_its_own_record(self):
-        start = BRIDGE.index("    async def _jev_shadow_once(")
-        end = BRIDGE.index("\n    async def ", start + 10)
-        body = BRIDGE[start:end]
-        self.assertNotIn("_insert_", body.replace("_insert_jev_judgment", ""))
-        self.assertNotIn("overseer_command", body)
+    def test_the_wait_is_bounded_by_the_clients_own_deadline(self):
+        self.assertIn(
+            'JEV_ACT_WAIT_SECONDS = float(os.environ.get("JEV_TIMEOUT_SECONDS", "3"))',
+            BRIDGE,
+        )
+        for name in ("    async def _jev_items_plan(", "    async def _jev_guild("):
+            body = BRIDGE[BRIDGE.index(name) :]
+            body = body[: body.index("\n    async def ", 10)]
+            self.assertIn(
+                "await asyncio.wait({task}, timeout=JEV_ACT_WAIT_SECONDS)", body
+            )
+            self.assertIn("self._jev_record_late(task,", body)
+            self.assertNotIn("await task", body)
+
+    def test_a_late_pass_is_recorded_as_the_heuristics(self):
+        body = BRIDGE[BRIDGE.index("    def _jev_record_late(") :]
+        body = body[: body.index("\n    async def ")]
+        self.assertIn("jev_items.heuristic_acted(", body)
+        self.assertIn("self._jev_writes.add(writer)", body)
+
+    def test_the_act_plan_reaches_only_the_existing_passes(self):
+        give = BRIDGE[BRIDGE.index("    async def _hand_gear(") :]
+        self.assertIn("jev_items.withhold_gifts(plan, jev_plan)", give)
+        equip = BRIDGE[BRIDGE.index("    async def _equip_upgrades(") :]
+        equip = equip[: equip.index("\n    async def ")]
+        self.assertIn("bag_pressure.jev_equips(", equip)
+        self.assertLess(
+            equip.index("bag_pressure.jev_equips("), equip.index("_insert_equip")
+        )
+
+    def test_the_guild_route_asks_before_it_delivers(self):
+        body = BRIDGE[BRIDGE.index("    async def _guild_route_once(") :]
+        ask = body.index("decided = await self._jev_guild(")
+        self.assertLess(ask, body.index("bag_pressure.guild_route_deliverable("))
+
+    def test_the_jev_passes_write_only_their_own_record(self):
+        for name in (
+            "    async def _jev_shadow_once(",
+            "    async def _jev_guild_once(",
+            "    async def _jev_record(",
+            "    async def _jev_items_plan(",
+            "    async def _jev_guild(",
+        ):
+            start = BRIDGE.index(name)
+            end = BRIDGE.index("\n    async def ", start + 10)
+            body = BRIDGE[start:end]
+            self.assertNotIn("_insert_", body.replace("_insert_jev_judgment", ""), name)
+            self.assertNotIn("overseer_command", body, name)
         insert = BRIDGE[BRIDGE.index("def _insert_jev_judgment(") :]
         insert = insert[: insert.index("\n\n\n")]
         self.assertEqual(
@@ -396,8 +447,22 @@ class BridgeWiringTest(unittest.TestCase):
     def test_the_record_is_created_at_both_start_ups(self):
         self.assertEqual(BRIDGE.count("await asyncio.to_thread(_ensure_jev_store)"), 2)
 
-    def test_act_is_not_wired_yet(self):
-        self.assertIn("jev.effective_mode(kind, act_supported=False)", BRIDGE)
+    def test_act_is_wired_and_read_per_kind(self):
+        self.assertNotIn("act_supported=False", BRIDGE)
+        self.assertIn("rules = jev_items.policies()", BRIDGE)
+        self.assertIn("rule = jev_items.guild_policy()", BRIDGE)
+
+    def test_the_record_gains_acted_the_bridge_owned_way(self):
+        store = BRIDGE[BRIDGE.index("def _create_jev_store(") :]
+        store = store[: store.index("\n\n\n")]
+        self.assertIn(" acted VARCHAR(10) NOT NULL DEFAULT '',", store)
+        self.assertIn("information_schema.COLUMNS", store)
+        self.assertIn(
+            "ADD COLUMN acted VARCHAR(10) NOT NULL DEFAULT '' AFTER mode", store
+        )
+        insert = BRIDGE[BRIDGE.index("def _insert_jev_judgment(") :]
+        insert = insert[: insert.index("\n\n\n")]
+        self.assertIn("judgment.acted[:10]", insert)
 
 
 if __name__ == "__main__":

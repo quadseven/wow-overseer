@@ -149,6 +149,7 @@ STRING_COLUMNS = {
     # From its own DDL (bridge._ensure_jev_store): every VARCHAR column.
     "overseer_jev_judgment": frozenset(
         {
+            "acted",
             "heuristic",
             "heuristic_why",
             "holder",

@@ -1227,6 +1227,31 @@ def holder_equips(gear_rows, equipped_rows, names, keep_names=()) -> tuple:
     return gear.equips(gear.holdings_from_rows(kept), characters)
 
 
+def jev_equips(
+    wanted, gear_rows, equipped_rows, names, *, withheld, chosen, keep_names=()
+) -> tuple:
+    """`holder_equips` with Jev's act plan applied (#95).
+
+    `withheld` is item guids to leave in the bags; `chosen` maps an item guid
+    to why Jev puts it on its own holder. A chosen piece still has to pass
+    gear.py's own can-wear rules and the owner's never-dispose mark, and it
+    becomes the same `e Hitem:` row through `gear.chosen_equip`.
+    """
+    characters = {c.name: c for c in family_characters(equipped_rows, names)}
+    picks = []
+    for holding in gear.holdings_from_rows(gear_rows):
+        reason = (chosen or {}).get(int(holding.guid))
+        character = characters.get(holding.holder)
+        if reason is None or character is None:
+            continue
+        if owner_keeps(holding.name, keep_names) or not can_wear(holding, character):
+            continue
+        pick = gear.chosen_equip(holding, character, reason)
+        if pick is not None:
+            picks.append(pick)
+    return gear.merge_equips(wanted, withheld, picks)
+
+
 # Re-exported so the bridge never imports gear itself (this module is its one
 # adapter); see gear.equips_to_queue and gear.equip_entry.
 equips_to_queue = gear.equips_to_queue
