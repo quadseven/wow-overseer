@@ -7598,7 +7598,8 @@ class Bridge(discord.Client):
         return released
 
     async def _release_stranded_ground_errands(self, names: list,
-                                               leader: str) -> int:
+                                               leader: str,
+                                               run_doors: bool = False) -> int:
         """Release stale positional economy aims left on non-leaders.
 
         A positional town aim is valid for the leader, but a follower cannot
@@ -7612,9 +7613,23 @@ class Bridge(discord.Client):
         aims = {name: aim for name, aim
                 in (await asyncio.to_thread(_standing_travel_aims)).items()
                 if name in names}
-        stranded = townslot.stranded_nonleader_aims(
-            aims, leader, ground=travel.is_ground_aim, releasable=_is_economy_aim,
-        )
+        if run_doors:
+            run = await asyncio.to_thread(_active_dungeon_run)
+            doors = await asyncio.to_thread(
+                _dungeon_doors, (run or {}).get("map_id"))
+            if not doors:
+                # No door read means no way to tell a run's aim from a stale
+                # one, and the safe answer is the one that changes nothing.
+                return 0
+            stranded = townslot.stranded_aims_far_from_doors(
+                aims, leader, ground=travel.is_ground_aim,
+                releasable=_is_economy_aim, doors=doors,
+            )
+        else:
+            stranded = townslot.stranded_nonleader_aims(
+                aims, leader, ground=travel.is_ground_aim,
+                releasable=_is_economy_aim,
+            )
         released = 0
         for name in stranded:
             aim = aims.get(name, "")
@@ -7729,6 +7744,12 @@ class Bridge(discord.Client):
         in_run = await self._mid_run(names)
         if not in_run:
             await self._release_stranded_ground_errands(names, leader)
+        else:
+            # ...AND DURING ONE, EVERYTHING FAR FROM THE RUN'S DOOR (#230). A
+            # stale mailbox aim on a follower is inert while it follows and
+            # comes alive the moment ENTER lifts the stage holds.
+            await self._release_stranded_ground_errands(names, leader,
+                                                        run_doors=True)
 
         free_slots = await asyncio.to_thread(_fetch_free_slots, names)
 
@@ -13845,6 +13866,31 @@ def _outstanding_town_work(names: list) -> int:
 def _outstanding_bank_moves(names: list) -> int:
     """Bank rows still unanswered, or -1 if the queue cannot be read."""
     return _outstanding_counts(_OUTSTANDING_BANK_SQL, (), names, "bank")
+
+
+def _dungeon_doors(map_id) -> tuple:
+    """(map, x, y) of every outdoor trigger that teleports into `map_id` (#230).
+
+    Read from the world database's own areatrigger tables, so no door is
+    typed by hand. Empty for no map, an unknown one, or a failed read.
+    """
+    if not map_id:
+        return ()
+    with _connect() as conn, conn.cursor() as cur:
+        try:
+            cur.execute(
+                "SELECT a.map, a.x, a.y FROM acore_world.areatrigger_teleport t "
+                "JOIN acore_world.areatrigger a ON a.entry = t.ID "
+                "WHERE t.target_map = %s",
+                (int(map_id),),
+            )
+            rows = cur.fetchall() or ()
+        except pymysql.err.MySQLError as exc:
+            if exc.args and exc.args[0] in (1054, 1146):
+                return ()
+            raise
+    return tuple((int(row["map"]), float(row["x"]), float(row["y"]))
+                 for row in rows)
 
 
 def _active_dungeon_run() -> dict | None:

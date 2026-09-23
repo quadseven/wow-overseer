@@ -420,6 +420,69 @@ def stranded_nonleader_aims(aims, leader: str, *, ground, releasable) -> tuple:
     )
 
 
+# HOW FAR FROM A DUNGEON DOOR A FOLLOWER'S ECONOMY AIM MUST BE BEFORE IT IS
+# PLAINLY NOT THE RUN'S (wow-overseer#230). A run's staging point, corridor
+# waypoints and door aims all sit near its door; the longest measured approach
+# corridor, Wailing Caverns', descends about 465 yards. Eight hundred clears it.
+RUN_DOOR_KEEP_YARDS = 800.0
+
+
+def _ground_point(aim: str):
+    """(map, x, y) of an `at:<map>:<x>,<y>,<z>` aim, or None when unreadable.
+
+    Only for the distance test below. An aim this cannot read is answered
+    None, and the caller keeps it: an unreadable aim is never released.
+    """
+    text = str(aim or "")
+    if not text.startswith("at:"):
+        return None
+    try:
+        map_part, rest = text[3:].split(":", 1)
+        x, y = rest.split(",")[:2]
+        return int(map_part), float(x), float(y)
+    except (ValueError, IndexError):
+        return None
+
+
+def stranded_aims_far_from_doors(
+    aims,
+    leader: str,
+    *,
+    ground,
+    releasable,
+    doors,
+    keep_yards: float = RUN_DOOR_KEEP_YARDS,
+) -> tuple:
+    """`stranded_nonleader_aims`, narrowed for a family in a dungeon run.
+
+    wow-overseer#230: four Horde followers carried a Barrens mailbox aim into a
+    Ragefire run, and when ENTER lifted the stage holds one of them walked 1,863
+    yards to it from twelve yards short of the door. The plain sweep is skipped
+    during a run because a run's own escorts are ground aims too. This keeps
+    every aim within `keep_yards` of one of the run's doors, `doors` being
+    (map, x, y) triples, and every aim it cannot read, and releases the rest.
+    With no door known it releases nothing.
+    """
+    if not doors:
+        return ()
+    released = []
+    for name in stranded_nonleader_aims(
+        aims, leader, ground=ground, releasable=releasable
+    ):
+        point = _ground_point((aims or {}).get(name, ""))
+        if point is None:
+            continue
+        near = any(
+            door_map == point[0]
+            and ((door_x - point[1]) ** 2 + (door_y - point[2]) ** 2) ** 0.5
+            <= keep_yards
+            for door_map, door_x, door_y in (doors or ())
+        )
+        if not near:
+            released.append(name)
+    return tuple(released)
+
+
 @dataclasses.dataclass(frozen=True)
 class Cohort:
     """One family from `overseer_roster.family`, and who walks it (#150).
