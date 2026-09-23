@@ -468,6 +468,15 @@ def recipe(item) -> bool:
     return bool(int(item.item_class) == RECIPE_CLASS and int(item.required_skill) > 0)
 
 
+def learnable_now(skill: int, rank: int) -> bool:
+    """Can a character with `skill` in a recipe's trade learn it today (#145)?
+
+    The one rule the clearance pass keeps a recipe on: a holder who can learn
+    it now keeps it, and the recipe pass learns it. Anybody else routes it.
+    """
+    return int(skill) > 0 and int(skill) >= int(rank)
+
+
 def outgrown(item, character_level, margin=10):
     """Is this the "old green" a person would clear out?
 
