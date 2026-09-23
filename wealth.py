@@ -1341,17 +1341,8 @@ def build_guild_bank(
         lead = "The family is in %s." % ", ".join(guilds)
         body = GUILD_BODY
         if observed:
-            body = "The guild has %d purchased bank tab%s holding %d stored item%s." % (
-                tab_count,
-                "" if tab_count == 1 else "s",
-                item_count,
-                "" if item_count == 1 else "s",
-            )
-            if rights_observed:
-                body += " Deposit rights are recorded for %d rank%s." % (
-                    len(deposit_rank_ids),
-                    "" if len(deposit_rank_ids) == 1 else "s",
-                )
+            ranks = len(deposit_rank_ids) if rights_observed else None
+            body = _vault_sentence("The guild", tab_count, item_count, ranks)
     else:
         lead, body = NO_GUILD_LEAD, NO_GUILD_BODY
     by_guild = _bank_by_guild(
@@ -1361,13 +1352,7 @@ def build_guild_bank(
         # TWO FAMILIES, TWO GUILDS, TWO VAULTS. One sentence over both read
         # "The guild has 1 purchased bank tab" when that tab was Cave's and
         # Bonkers had none; each guild now says its own.
-        lead = "The families are in %s." % " and ".join(
-            "%s (%s)" % (g["guild"], g["faction_name"])
-            if g["faction_name"]
-            else g["guild"]
-            for g in by_guild
-        )
-        body = ""
+        lead, body = _families_lead(by_guild), ""
     return {
         "guilds": guilds,
         "by_guild": by_guild,
@@ -1401,9 +1386,10 @@ def _bank_by_guild(
 ) -> list[dict]:
     """One line per guild the families are in, Alliance's first.
 
-    The order and the faction come from the Bags tab's own sides (the
-    Armory's rule), so a guild is on the same side here as its family's
-    cards are above; a guild no side names follows, by name.
+    The faction comes from the Bags tab's own sides (the Armory's rule), so
+    a guild is on the same side here as its family's cards are above. The
+    order is sorted here rather than trusted from `sides`: Alliance, then
+    Horde, then any guild no side names, by name.
     """
     ids: dict[str, int] = {}
     for row in guild_rows:
@@ -1411,38 +1397,18 @@ def _bank_by_guild(
         if name and row.get("guild_id") is not None:
             ids.setdefault(name, int(row["guild_id"]))
     faction_of = {s["guild"]: s["faction"] for s in sides or [] if s.get("guild")}
-    order = [s["guild"] for s in sides or [] if s.get("guild") in ids]
-    order += sorted(g for g in ids if g not in order)
+    tabs_of, ranks_of = _bank_index(tabs, rights)
+    rank = {"alliance": 0, "horde": 1}
     out = []
-    for name in order:
-        gid = ids[name]
-        mine = [t for t in tabs if _int(t.get("guild_id")) == gid]
-        items = sum(max(0, _int(t.get("item_count"))) for t in mine)
-        ranks = {
-            _int(r.get("rank_id"))
-            for r in rights
-            if _int(r.get("guild_id")) == gid
-            and _int(r.get("tab_id")) == 0
-            and _int(r.get("rights")) & 3 == 3
-        }
-        if not observed:
-            line = "%s: %s" % (name, GUILD_BODY)
-        elif not mine:
-            line = "%s has no purchased bank tab." % name
-        else:
-            line = "%s has %d purchased bank tab%s holding %d stored item%s." % (
-                name,
-                len(mine),
-                "" if len(mine) == 1 else "s",
-                items,
-                "" if items == 1 else "s",
-            )
-            if rights_observed:
-                line += " Deposit rights are recorded for %d rank%s." % (
-                    len(ranks),
-                    "" if len(ranks) == 1 else "s",
-                )
+    for name in sorted(ids, key=lambda g: (rank.get(faction_of.get(g, ""), 2), g)):
         faction = faction_of.get(name, "")
+        line = _bank_line(
+            name,
+            tabs_of.get(ids[name], []),
+            ranks_of.get(ids[name], set()),
+            observed,
+            rights_observed,
+        )
         out.append(
             {
                 "guild": name,
@@ -1452,6 +1418,64 @@ def _bank_by_guild(
             }
         )
     return out
+
+
+def _bank_index(tabs: list[dict], rights: list[dict]) -> tuple[dict, dict]:
+    """Tabs and deposit ranks bucketed by guild id, one pass over each."""
+    tabs_of: dict[int, list[dict]] = {}
+    for t in tabs:
+        tabs_of.setdefault(_int(t.get("guild_id")), []).append(t)
+    ranks_of: dict[int, set] = {}
+    for r in rights:
+        if _int(r.get("tab_id")) == 0 and _int(r.get("rights")) & 3 == 3:
+            ranks_of.setdefault(_int(r.get("guild_id")), set()).add(
+                _int(r.get("rank_id"))
+            )
+    return tabs_of, ranks_of
+
+
+def _plural_s(n: int) -> str:
+    return "" if n == 1 else "s"
+
+
+def _vault_sentence(subject: str, tabs: int, items: int, ranks: int | None) -> str:
+    """ "<subject> has N purchased bank tabs holding M stored items." plus the
+    deposit ranks when those were read (None when they were not)."""
+    line = "%s has %d purchased bank tab%s holding %d stored item%s." % (
+        subject,
+        tabs,
+        _plural_s(tabs),
+        items,
+        _plural_s(items),
+    )
+    if ranks is not None:
+        line += " Deposit rights are recorded for %d rank%s." % (
+            ranks,
+            _plural_s(ranks),
+        )
+    return line
+
+
+def _bank_line(
+    name: str, mine: list[dict], ranks: set, observed: bool, rights_observed: bool
+) -> str:
+    """One guild's vault in one sentence."""
+    if not observed:
+        return "%s: %s" % (name, GUILD_BODY)
+    if not mine:
+        return "%s has no purchased bank tab." % name
+    items = sum(max(0, _int(t.get("item_count"))) for t in mine)
+    return _vault_sentence(
+        name, len(mine), items, len(ranks) if rights_observed else None
+    )
+
+
+def _families_lead(by_guild: list[dict]) -> str:
+    """ "The families are in Cave (Alliance) and Bonkers (Horde)." """
+    return "The families are in %s." % " and ".join(
+        "%s (%s)" % (g["guild"], g["faction_name"]) if g["faction_name"] else g["guild"]
+        for g in by_guild
+    )
 
 
 def _int(value) -> int:

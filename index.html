@@ -3369,7 +3369,6 @@
   <details id="rcfold">
     <summary>what could drop in the last dungeon, and who it would suit</summary>
     <p class="chr-body">Which dungeons hold upgrades for each family is on the <a href="#dungeons">Dungeons tab</a>.</p>
-    <p id="rcbasis" class="chr-body"></p>
     <div id="rcboard"></div>
   </details>
 </section>
@@ -8948,7 +8947,6 @@ setInterval(() => { if (view === CHRONICLE_VIEW) pollChronicle(); }, 60000);
 
 const rcbox = document.getElementById("rcbox");
 const rcboard = document.getElementById("rcboard");
-const rcbasis = document.getElementById("rcbasis");
 
 // A verdict word -> the tone it is painted in. The WORDS are the module's and
 // this map must never invent one: an unknown verdict draws in the body colour
@@ -9089,7 +9087,6 @@ function rcDrop(drop) {
 function rcBoards(p) {
   const fams = p.families || [p];
   rcboard.replaceChildren();
-  rcbasis.textContent = "";
   for (const f of fams) {
     const col = el("div", "rc-family");
     if (f.heading) col.appendChild(el("div", "asidehead " + f.faction, f.heading));
@@ -10678,7 +10675,10 @@ function renderStanding(p) {
     for (const name of side.names) sideOf.set(name, s);
   }
   for (const m of p.members) {
-    const c = standingCard(m.name, sideOf.get(m.name));
+    // Every member is in a side by construction (standing.build_standing);
+    // one that somehow is not goes in the first column rather than being
+    // dropped or taking the whole panel down.
+    const c = standingCard(m.name, sideOf.get(m.name) || standingSide(p.sides[0]));
     c.card.className = "stcard" + (m.present ? "" : " gone");
     c.body.textContent = "";
     if (!m.present) {

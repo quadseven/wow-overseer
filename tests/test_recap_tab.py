@@ -71,7 +71,8 @@ class WhereTheCodeIsAllowedToSit(unittest.TestCase):
     def test_the_markup_exists_and_is_in_the_chronicle_section(self):
         section = PAGE[PAGE.index('<section id="chronicle">') :]
         section = section[: section.index("</section>")]
-        for element in ('id="rcbox"', 'id="rcboard"', 'id="rcbasis"'):
+        # rcbasis is gone: each family's board carries its own basis (#198).
+        for element in ('id="rcbox"', 'id="rcboard"'):
             self.assertIn(element, section, element)
 
     def test_the_timeline_is_still_on_the_page_below_it(self):
