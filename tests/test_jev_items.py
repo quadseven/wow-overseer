@@ -15,6 +15,7 @@ Jev is the real client over a fake transport.
 """
 
 import asyncio
+from dataclasses import replace
 import json
 import pathlib
 import re
@@ -371,6 +372,22 @@ class DescriptionTest(unittest.TestCase):
         self.assertEqual(specs, {"Grog": "Retribution"})
 
 
+_JUDGED = jev_items.Judgment(
+    kind=jev_items.KIND_WEAPON,
+    subject="Grog",
+    holder="Grog",
+    item_guid=1,
+    item_entry=647,
+    item_name="Destiny",
+    heuristic="worn",
+    heuristic_why="",
+    mode=jev.ACT,
+    status=jev.ANSWERED,
+    jev="carried",
+    confidence=0.9,
+)
+
+
 class BridgeWiringTest(unittest.TestCase):
     """bridge.py is read as text: it imports discord and cannot be imported here."""
 
@@ -462,7 +479,51 @@ class BridgeWiringTest(unittest.TestCase):
         )
         insert = BRIDGE[BRIDGE.index("def _insert_jev_judgment(") :]
         insert = insert[: insert.index("\n\n\n")]
-        self.assertIn("judgment.acted[:10]", insert)
+        self.assertIn('acted = str(getattr(judgment, "acted", "") or "")', insert)
+        self.assertIn("acted[:10]", insert)
+
+    def test_a_judgment_that_does_not_say_who_acted_still_inserts(self):
+        """tradechoice.Judgment (profession_choice) has no `acted`; its row
+        must still be written, with acted '' (not recorded). The insert runs
+        here over a fake connection, since bridge.py cannot be imported."""
+        import tradechoice
+
+        insert = BRIDGE[BRIDGE.index("def _insert_jev_judgment(") :]
+        insert = insert[: insert.index("\n\n\n")]
+        executed = []
+
+        class Cursor:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+            def execute(self, sql, args):
+                executed.append(args)
+
+        class Conn(Cursor):
+            def cursor(self):
+                return Cursor()
+
+        scope = {"_connect": Conn}
+        exec(insert, scope)
+        judgment = tradechoice.Judgment(
+            subject="Grog",
+            heuristic="a",
+            heuristic_why="w",
+            mode="shadow",
+            status="answered",
+            jev="b",
+            confidence=0.5,
+        )
+        self.assertFalse(hasattr(judgment, "acted"))
+        scope["_insert_jev_judgment"](judgment)
+        self.assertEqual(executed[0][-1], "")
+        executed.clear()
+        marked = replace(jev_items.heuristic_acted([_JUDGED])[0])
+        scope["_insert_jev_judgment"](marked)
+        self.assertEqual(executed[0][-1], jev.HEURISTIC)
 
 
 if __name__ == "__main__":

@@ -701,13 +701,39 @@ def drive_target(
     different aim. It is a much rarer answer than it was - it used to fire
     whenever the leader alone happened not to hold the quest.
     """
+    candidates = drive_candidates(
+        ledger,
+        held_by_traveller=held_by_traveller,
+        wanted=wanted,
+        beneficiary=beneficiary,
+    )
+    return candidates[0].id if candidates else 0
+
+
+def drive_candidates(
+    ledger: Ledger, *, held_by_traveller, wanted: int = 0, beneficiary: str = ""
+) -> tuple:
+    """Every quest `drive_target` could aim at, in its order of preference.
+
+    `drive_target` is the first of these, always; the rest are the quests it
+    passed over, each once. A second judge (Jev, #95) is shown exactly this
+    list, so it can only ever be asked to choose among quests somebody who
+    can be aimed is holding. A `wanted` quest the ledger does not describe is
+    carried by id alone.
+    """
     held = frozenset(int(q) for q in (held_by_traveller or ()))
-    if wanted and int(wanted) in held:
-        return int(wanted)
     who = beneficiary or ledger.furthest_behind
-    if not who:
-        return 0
-    for quest in tuple(ledger.plans.get(who, ())) + tuple(ledger.behind.get(who, ())):
-        if quest.id in held:
-            return quest.id
-    return 0
+    known = {}
+    for quests in list(ledger.plans.values()) + list(ledger.behind.values()):
+        for quest in quests:
+            known.setdefault(quest.id, quest)
+    out: dict = {}
+    if wanted and int(wanted) in held:
+        out[int(wanted)] = known.get(int(wanted), Quest(id=int(wanted)))
+    if who:
+        for quest in tuple(ledger.plans.get(who, ())) + tuple(
+            ledger.behind.get(who, ())
+        ):
+            if quest.id in held:
+                out.setdefault(quest.id, quest)
+    return tuple(out.values())

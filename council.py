@@ -1552,6 +1552,78 @@ def _either(names: list) -> str:
     return names[0] if len(names) == 1 else ", ".join(names[:-1]) + " or " + names[-1]
 
 
+def _frontier(ready: list[dict]) -> dict:
+    """The hardest ready prospect; ties favour Scarlet Monastery, then a door
+    outside any capital. See _dungeon_proposal for why."""
+    inside = _inside_capital()
+    return max(
+        ready,
+        key=lambda p: (
+            p["wants"],
+            p["map_id"] == SCARLET_MAP_ID,
+            p["map_id"] not in inside,
+        ),
+    )
+
+
+@dataclass(frozen=True)
+class Door:
+    """One dungeon the council could send the family to now, by its door."""
+
+    place: str
+    map_id: int
+    keyword: str
+    wants: int
+    ready: bool
+
+
+def dungeon_doors(
+    level_rows: list[dict],
+    cards: list[dict],
+    completed_runs: dict[str, int] | None = None,
+) -> tuple:
+    """(doors, pick): every dungeon the council may send this family to now,
+    one door each, and the one its frontier rule picks (None when no door).
+
+    THE OPTIONS ARE THE PROPOSAL'S OWN. The same prospects, the same
+    `_sendable` filter, the same door per map (`_campaign_keyword`) and the
+    same `door_refusal` rules (#204, #207): a second judge (Jev, #95) may be
+    asked to choose among these, and never among a door the council itself
+    would refuse. `pick` is `_dungeon_proposal`'s choice of place, by door.
+    """
+    weakest = _weakest(level_rows) if level_rows else None
+    if weakest is None:
+        return (), None
+    _who, level = weakest
+    ready, _passed = _sendable(
+        _wing_rated_prospects(level_rows, cards, level), level_rows
+    )
+    if not ready:
+        return (), None
+    best = _frontier(ready)
+    doors, pick = [], None
+    for p in sorted(ready, key=lambda p: (p["wants"], p["place"])):
+        keyword = _campaign_keyword(int(p["map_id"]), level, completed_runs)
+        if (
+            not keyword
+            or jobs.dungeon_job(keyword) is None
+            or _withheld_door(keyword)
+            or door_refusal(keyword, level_rows)
+        ):
+            continue
+        door = Door(
+            place=str(p["place"]),
+            map_id=int(p["map_id"]),
+            keyword=keyword,
+            wants=int(p["wants"]),
+            ready=bool(p["ready"]),
+        )
+        doors.append(door)
+        if p is best:
+            pick = door
+    return tuple(doors), pick
+
+
 def _dungeon_proposal(
     speakers: list,
     level_rows: list[dict],
@@ -1607,15 +1679,7 @@ def _dungeon_proposal(
     # own stated priority, then a door outside any capital: Blackfathom
     # Deeps and the Stockade both want 24, and the city door is the one a
     # family of the other faction could never have taken.
-    inside = _inside_capital()
-    best = max(
-        ready,
-        key=lambda p: (
-            p["wants"],
-            p["map_id"] == SCARLET_MAP_ID,
-            p["map_id"] not in inside,
-        ),
-    )
+    best = _frontier(ready)
     # AND THE DOOR ONLY AFTER THE PLACE (infra#4247). The run ledger used to be
     # consulted first and allowed to narrow `ready` to Scarlet Monastery, which
     # is why a level 60 family could never be sent past a level 39 wing. It now
