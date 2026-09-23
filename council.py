@@ -1458,6 +1458,13 @@ def _door_floor(keyword: str, map_id: int) -> int:
     return step.low if step is not None else 0
 
 
+def door_floor(keyword: str) -> int:
+    """The level `door_refusal` holds a portal keyword's door to."""
+    import dungeonpath
+
+    return _door_floor(keyword, int(dungeonpath.PORTAL_MAPS[keyword]))
+
+
 def door_refusal(keyword: str, level_rows: list[dict]) -> str:
     """Why this family cannot be sent through `keyword`'s door, or "".
 

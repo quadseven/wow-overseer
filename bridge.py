@@ -43,6 +43,7 @@ import fanout
 import flightlearn
 import goals
 import bonds
+import campaignplan
 import campaignqueue
 import guildbank
 import guildshare
@@ -2201,6 +2202,79 @@ def _apply_queue_move(move, names: list) -> str:
     return move.why
 
 
+# --- the campaign planner ------------------------------------------------------
+#
+# campaignplan.py decides; these read what it decides from and append what it
+# chose. Every read that the realm cannot answer (1054 or 1146) reads as
+# unknown, so a missing column costs a fact and never the plan.
+
+_PLANNER_LOOT: dict | None = None
+
+
+def _planner_rows(cur, sql: str, args: tuple, what: str):
+    """Rows for one planner read, or None when this realm cannot answer it."""
+    try:
+        cur.execute(sql, args)
+    except pymysql.err.MySQLError as exc:
+        if exc.args and exc.args[0] in (1054, 1146):
+            log.info("planner: %s cannot be read on this realm", what)
+            return None
+        raise
+    return [dict(row) for row in cur.fetchall()]
+
+
+def _planner_facts(key: str, fam: dict, level_rows: list):
+    """campaignplan.Facts for one family. Reads only."""
+    global _PLANNER_LOOT
+    names = list(fam["names"])
+    marks = campaignplan.holes(len(names))
+    args = tuple(names)
+    with _connect() as conn, conn.cursor() as cur:
+        runs = _planner_rows(
+            cur, campaignplan.RUNS_SQL.format(holes=marks), args, "the run ledger")
+        if runs is None:
+            runs = _planner_rows(
+                cur, campaignplan.RUNS_SQL_OLD.format(holes=marks), args,
+                "the old run ledger") or []
+        quest_rows = _planner_rows(cur, campaignplan.QUESTS_SQL, (),
+                                   "the dungeon quests")
+        rewarded = _planner_rows(
+            cur, campaignplan.REWARDED_SQL.format(holes=marks), args,
+            "the rewarded quests")
+        worn = _planner_rows(cur, campaignplan.GEAR_SQL.format(holes=marks),
+                             args, "the worn gear")
+        if _PLANNER_LOOT is None:
+            rows = _planner_rows(cur, campaignplan.LOOT_SQL, (), "the boss loot")
+            if rows is not None:
+                _PLANNER_LOOT = campaignplan.loot(rows)
+    done, failed = campaignplan.ledger(runs, names)
+    quests = (None if quest_rows is None or rewarded is None
+              else campaignplan.open_quests(quest_rows, rewarded, level_rows))
+    return campaignplan.Facts(
+        family=key, level_rows=tuple(level_rows), done=done, failed=failed,
+        quests=quests, gear=None if worn is None else campaignplan.gear(worn),
+        loot=_PLANNER_LOOT)
+
+
+def _append_planned(family: str, rows: list, finish: int, option) -> int:
+    """Queue `option` after the family's pending rows. Rows changed.
+
+    `finish` is an outgrown planner entry to mark done first, which the queue
+    pass then moves past like any finished entry.
+    """
+    position = max([int(r.get("position") or 0) for r in rows] or [-1]) + 1
+    with _connect() as conn, conn.cursor() as cur:
+        changed = 0
+        if finish:
+            cur.execute(campaignqueue.FINISH_SQL, (int(finish),))
+            changed += cur.rowcount or 0
+        cur.execute(campaignqueue.INSERT_SQL,
+                    (family, position, option.keyword, int(option.runs),
+                     campaignplan.SOURCE))
+        changed += cur.rowcount or 0
+    return changed
+
+
 def _queue_owns_job(family: str | None = None) -> bool:
     """Whether a family's campaign queue owns its job now.
 
@@ -3828,6 +3902,9 @@ class Bridge(discord.Client):
         # rules simply resume.
         self._activity_seen: dict = {}
         self._activity_interludes: dict = {}
+        # family -> (the last "nothing to plan" line, when), so it is said
+        # once and the facts are not re-read every cycle.
+        self._planner_said: dict = {}
         self._activity_own_key = None
 
     async def setup_hook(self) -> None:
@@ -4645,10 +4722,8 @@ class Bridge(discord.Client):
                        "map_id": m.map_id, "lead": m.lead}
                       for m in members]
         completed_runs = await asyncio.to_thread(_fetch_dungeon_completion)
-        # WHICH DOOR, ASKED OF JEV TOO, IN SHADOW (#95): over exactly the
-        # doors council.dungeon_doors allows, recorded beside the frontier's
-        # pick. Held, never awaited, and it changes nothing the council does.
-        self._jev_council_shadow(level_rows, completed_runs)
+        # WHICH DUNGEON NEXT IS ASKED OF JEV BY THE CAMPAIGN PLANNER, not here
+        # (_plan_campaign): that is where its answer can act.
         held = council.hold(members, history=history,
                             level_rows=level_rows, cards=[],
                             completed_runs=completed_runs)
@@ -8439,18 +8514,6 @@ class Bridge(discord.Client):
         return await jev_items.recipient_pass(
             self._jev, asks, describe, closet, mode, limit=JEV_SHADOW_LIMIT)
 
-    def _jev_council_shadow(self, level_rows: list, completed_runs) -> None:
-        """Ask Jev which of the allowed doors the family should take (#95)."""
-        rule = jev_choices.policy(jev_choices.KIND_DUNGEON)
-        if rule.mode == jev.OFF or not self._jev.ready(jev_choices.KIND_DUNGEON):
-            return
-        doors, pick = council.dungeon_doors(level_rows, [], completed_runs)
-        if pick is None or len(doors) < 2:
-            return
-        self._jev_hold(jev_choices.dungeon_shadow(
-            self._jev, doors, pick, level_rows, completed_runs, rule.mode),
-            "the council's dungeon")
-
     def _jev_quest_shadow(self, plan, seen: dict, level_rows: list) -> None:
         """Ask Jev which quest the aim should drive, beside questbook (#95)."""
         if plan.kind != "quest" or not seen.get("chosen"):
@@ -10709,6 +10772,12 @@ class Bridge(discord.Client):
         pending = campaignqueue.pending_by_family(
             await asyncio.to_thread(_fetch_queue_rows))
         fams = campaignqueue.families(await asyncio.to_thread(_fetch_queue_roster))
+        # THE PLANNER BEFORE THE STEP: a family whose queue is empty or on its
+        # last finished entry gets its next dungeon appended here, so the step
+        # below moves on to it instead of sending the family back to quest.
+        if await self._plan_campaigns(pending, fams):
+            pending = campaignqueue.pending_by_family(
+                await asyncio.to_thread(_fetch_queue_rows))
         # THE TRAVEL COLUMN FIRST, AND FOR EVERY FAMILY (#227): a family whose
         # queue emptied must get its town errands back this pass too.
         await self._campaign_owns_travel(pending, fams)
@@ -10742,6 +10811,73 @@ class Bridge(discord.Client):
                 # One family's failure must not cost the other its advance.
                 log.exception("queue: the pass for %s failed; retrying next "
                               "cycle", campaignqueue._family(key))
+
+    async def _plan_campaigns(self, pending: dict, fams: dict) -> bool:
+        """Queue the next dungeon for every family that has run out.
+
+        True when any family's queue was written, so the pass re-reads it.
+        One family's failure never costs another its plan.
+        """
+        if not campaignplan.enabled():
+            return False
+        wrote = False
+        for key, fam in sorted(fams.items()):
+            try:
+                wrote = await self._plan_campaign(key, fam,
+                                                  pending.get(key, [])) or wrote
+            except Exception:
+                log.exception("planner: the plan for %s failed; its queue "
+                              "stands and it is tried again next cycle",
+                              campaignqueue._family(key))
+        return wrote
+
+    async def _plan_campaign(self, key: str, fam: dict, rows: list) -> bool:
+        """Choose, record and queue one family's next dungeon, when it is due.
+
+        campaignplan decides when and what; Jev is asked over the same runs
+        and acts past its floor (jev_choices.dungeon_ask). The judgment is
+        written to overseer_jev_judgment before the entry, so the record
+        says why the run was queued even if the write that follows fails.
+        """
+        who = campaignqueue._family(key)
+        level_rows = await asyncio.to_thread(_queue_level_rows, fam)
+        due = campaignplan.due(rows, fam["leader"], level_rows)
+        if not due.reason:
+            self._planner_said.pop(key, None)
+            return False
+        now = time.monotonic()
+        idle = self._planner_said.get(key)
+        if idle is not None and now - idle[1] < campaignplan.IDLE_SECONDS:
+            return False
+        facts = await asyncio.to_thread(_planner_facts, key, fam, level_rows)
+        opts = campaignplan.options(facts)
+        pick = campaignplan.heuristic(opts)
+        if pick is None:
+            line = campaignplan.nothing_line(facts)
+            if idle is None or idle[0] != line:
+                log.info("planner: %s: %s", who, line)
+            self._planner_said[key] = (line, now)
+            return False
+        judgment = None
+        rule = jev_choices.policy(jev_choices.KIND_DUNGEON)
+        if rule.mode != jev.OFF and self._jev.ready(jev_choices.KIND_DUNGEON):
+            judgment = await jev_choices.dungeon_ask(
+                self._jev, facts, opts, pick, rule, due.reason)
+        if judgment is not None:
+            log.info("%s", judgment.line())
+            try:
+                await asyncio.to_thread(_insert_jev_judgment, judgment)
+            except Exception:
+                log.exception("planner: the dungeon choice for %s was not "
+                              "recorded", who)
+        chosen = jev_choices.dungeon_carried(opts, pick, judgment)
+        written = await asyncio.to_thread(_append_planned, key, rows,
+                                          due.finish, chosen)
+        self._planner_said.pop(key, None)
+        log.info("planner: %s: %s", who, campaignplan.planned_line(
+            chosen, due.reason,
+            "Jev" if chosen is not pick else "the heuristic"))
+        return bool(written)
 
     async def _campaign_owns_travel(self, pending: dict, fams: dict) -> None:
         """Give a staging campaign its leader's travel column (#227).

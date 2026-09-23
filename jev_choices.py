@@ -1,20 +1,22 @@
-"""Two council decisions asked of Jev in shadow: the dungeon and the quest (#95).
+"""Two family decisions asked of Jev: the next dungeon and the quest aim (#95).
 
-SHADOW ONLY. Both choices are made elsewhere and stay made there: the dungeon
-by council._dungeon_proposal's frontier rule, the quest aim by
-questbook.drive_target. Jev is asked the same question over the same options
-and its answer is recorded beside the heuristic's in overseer_jev_judgment. No
-act path is built for either kind, so JEV_MODE_<KIND>=act says so and runs
-shadow (jev.effective_mode).
-
-  dungeon_choice  which of the doors council.dungeon_doors allows (#204, #207)
-                  the family should take next. Asked only with two or more.
+  dungeon_choice  which of the runs campaignplan.options offers a family whose
+                  campaign queue has run out. ACT by default, behind a
+                  confidence floor (DUNGEON_THRESHOLD; JEV_MODE_DUNGEON_CHOICE
+                  and JEV_THRESHOLD_DUNGEON_CHOICE override both): Jev's run
+                  is queued when it is sure enough, campaignplan.heuristic's
+                  otherwise, and on no answer at all. Asked only with two or
+                  more runs to choose from.
   quest_pick      which of the quests questbook.drive_candidates lists the
                   family's aim should drive. This is the bridge's `drive_quest`
                   aim, not the leader's own pick inside mod-overseer's
                   DriveFamilyQuests, which the bridge cannot see or change;
-                  the aim is the one seam the bridge owns. Asked only with two
-                  or more.
+                  the aim is the one seam the bridge owns. SHADOW only: no act
+                  path is built, so JEV_MODE_QUEST_PICK=act says so and runs
+                  shadow (jev.effective_mode). Asked only with two or more.
+
+Both are recorded in overseer_jev_judgment beside the heuristic's answer,
+with `acted` saying which one the world got.
 
 PURE: facts in, questions and Judgments out; the only I/O is the client the
 caller hands in.
@@ -22,8 +24,10 @@ caller hands in.
 
 from __future__ import annotations
 
-from dataclasses import replace
+import json
+from dataclasses import dataclass, replace
 
+import campaignplan
 import jev
 from jev_items import Judgment
 
@@ -31,9 +35,22 @@ KIND_DUNGEON = "dungeon_choice"
 KIND_QUEST = "quest_pick"
 KINDS = (KIND_DUNGEON, KIND_QUEST)
 
+# The dungeon's confidence floor. The shadow record's answers ran 0.76 to
+# 0.79 and agreed with the heuristic every time, so 0.7 lets a confident
+# answer act without letting a guess do so.
+DUNGEON_THRESHOLD = 0.7
+
 
 def policy(kind: str, environ=None) -> jev.Policy:
-    """Shadow by default, and never act: no act path is built for these."""
+    """The dungeon acts by default at DUNGEON_THRESHOLD; the quest aim is
+    shadow only, because no act path is built for it."""
+    if kind == KIND_DUNGEON:
+        return jev.policy(
+            kind,
+            environ=environ,
+            default_mode=jev.ACT,
+            default_threshold=DUNGEON_THRESHOLD,
+        )
     return jev.policy(kind, environ=environ, act_supported=False)
 
 
@@ -73,56 +90,200 @@ def _base(kind, subject, heuristic, why, mode) -> Judgment:
 # THE DUNGEON
 
 
-def dungeon_question(doors, level_rows, completed_runs=None):
-    """(state, questions) for "which dungeon next", over `doors` by keyword."""
-    runs = dict(completed_runs or {})
+# Read before the class: its `jev` field shadows the module in the class body.
+_HEURISTIC = jev.HEURISTIC
+
+
+@dataclass(frozen=True)
+class DungeonJudgment:
+    """One dungeon choice, shaped for overseer_jev_judgment.
+
+    The columns jev_items.Judgment fills, plus `facts`: what the question was
+    asked with, so the record shows why a run was queued. `item_name` carries
+    why the planner was asked now.
+    """
+
+    subject: str
+    heuristic: str
+    heuristic_why: str
+    mode: str
+    status: str
+    item_name: str = ""
+    facts: str = ""
+    jev: str = ""
+    confidence: float | None = None
+    probabilities: dict | None = None
+    latency_ms: int = 0
+    model: str = ""
+    acted: str = _HEURISTIC
+    kind: str = KIND_DUNGEON
+    item_guid: int = 0
+    item_entry: int = 0
+
+    @property
+    def holder(self) -> str:
+        return self.subject
+
+    @property
+    def agree(self) -> bool | None:
+        return None if not self.jev else self.jev == self.heuristic
+
+    @property
+    def chosen(self) -> str:
+        """The run the world gets: Jev's where it acted, the heuristic's else."""
+        return self.jev if self.acted == jev.JEV else self.heuristic
+
+    def probabilities_json(self, limit: int = 1000) -> str:
+        if not self.probabilities:
+            return ""
+        ranked = sorted(self.probabilities.items(), key=lambda kv: (-kv[1], kv[0]))
+        text = json.dumps({k: round(v, 4) for k, v in ranked}, separators=(",", ":"))
+        return text if len(text) <= limit else ""
+
+    def line(self) -> str:
+        """One structured log line: who chose which run, and from what."""
+        answer = (
+            "jev=%s conf=%.2f" % (self.jev, self.confidence or 0.0)
+            if self.jev
+            else "jev=-"
+        )
+        return (
+            "planner: family=%s chose %s; kind=%s heuristic=%s %s status=%s "
+            "latency_ms=%d mode=%s acted=%s why_now=%r facts=%r"
+            % (
+                self.subject,
+                self.chosen,
+                self.kind,
+                self.heuristic,
+                answer,
+                self.status,
+                self.latency_ms,
+                self.mode,
+                self.acted,
+                self.item_name,
+                self.facts,
+            )
+        )
+
+
+def _unknown(value):
+    return "unknown" if value is None else value
+
+
+def dungeon_question(facts, opts):
+    """(state, questions) for "which dungeon next", over campaignplan Options."""
+    gear = facts.gear or {}
     state = {
         "family": [
-            {"name": str(r.get("name") or ""), "level": int(r.get("level") or 0)}
-            for r in level_rows
+            {
+                "name": str(r.get("name") or ""),
+                "level": int(r.get("level") or 0),
+                "worn_item_level": _unknown(gear.get(str(r.get("name")), (None,))[0]),
+                "empty_gear_slots": _unknown(
+                    gear.get(str(r.get("name")), (None, None))[1]
+                ),
+            }
+            for r in facts.level_rows
         ],
         "dungeons": [
             {
-                "dungeon": d.place,
-                "door": d.keyword,
-                "level_it_wants": d.wants,
-                "ready_now": d.ready,
-                "runs_already_done": int(runs.get(d.keyword, 0)),
+                "door": o.keyword,
+                "dungeon": o.place,
+                "levels": "%d to %d" % (o.floor, o.ceiling),
+                "weakest_member_ready": o.ready,
+                "completed_runs": o.done,
+                "failed_attempts": o.failed,
+                "runs_it_would_be_queued_for": o.runs,
+                "open_quests": _unknown(o.quests),
+                "boss_gear_item_level": _unknown(o.loot_level),
+                "members_whose_gear_is_below_it": list(o.below),
             }
-            for d in doors
+            for o in opts
         ],
     }
     criteria = {
-        d.keyword: "The family runs %s next (it wants level %d, %s)."
-        % (d.place, d.wants, "they are ready" if d.ready else "close enough to try")
-        for d in doors
+        o.keyword: "The family runs %s next, %d times (levels %d to %d)."
+        % (o.place, o.runs, o.floor, o.ceiling)
+        for o in opts
     }
     instructions = (
-        "`family` is a party of World of Warcraft adventurers choosing their "
-        "next dungeon run from `dungeons`, every one of which they can walk to "
-        "and enter now. Choose the run that serves the whole party best: a "
-        "dungeon that challenges them without overwhelming the weakest, "
-        "rewards their levels with experience and gear, and is not one they "
-        "have already run too often."
+        "`family` is a party of World of Warcraft adventurers whose list of "
+        "dungeon runs is empty. `dungeons` is every dungeon they can walk to "
+        "and enter now: the levels it suits, how often they have completed it "
+        "and failed at it, how many runs it would be queued for, the quests it "
+        "still holds for them, and how its bosses' gear compares with what "
+        "they wear. Choose the dungeon a sensible group would run next: one "
+        "that suits the weakest member's level, levels and gears the party, "
+        "finishes open quests, and is not one they have run to exhaustion or "
+        "keep failing at."
     )
     return state, {"dungeon": jev.choice(instructions, criteria)}
 
 
-async def dungeon_shadow(client, doors, pick, level_rows, completed_runs, mode):
-    """The dungeon_choice Judgment, or None when there is nothing to choose."""
-    if mode == jev.OFF or pick is None or len(doors) < 2:
+def facts_line(facts, opts) -> str:
+    """The question's facts in one line for the record, at most 1000 chars."""
+    who, level = facts.weakest
+    parts = ["weakest %s %d" % (who, level)]
+    for o in opts:
+        parts.append(
+            "%s %d-%d done %d/%d failed %d quests %s loot %s below %d"
+            % (
+                o.keyword,
+                o.floor,
+                o.ceiling,
+                o.done,
+                o.target,
+                o.failed,
+                _unknown(o.quests),
+                _unknown(o.loot_level),
+                len(o.below),
+            )
+        )
+    return "; ".join(parts)[:1000]
+
+
+async def dungeon_ask(client, facts, opts, pick, rule, why_now: str = ""):
+    """The dungeon_choice judgment, acted on per `rule`, or None when there is
+    nothing to ask: the kind is off, or there is one run or none."""
+    if rule.mode == jev.OFF or pick is None or len(opts) < 2:
         return None
-    weakest = min(level_rows, key=lambda r: (int(r.get("level") or 0), r.get("name")))
-    base = _base(
-        KIND_DUNGEON,
-        str(weakest.get("name") or "?"),
-        pick.keyword,
-        "the hardest door the weakest member can walk into (%s)" % pick.place,
-        mode,
+    base = DungeonJudgment(
+        subject=str(facts.family or facts.weakest[0] or "?"),
+        heuristic=pick.keyword,
+        heuristic_why=campaignplan.heuristic_why(pick),
+        mode=rule.mode,
+        status="",
+        item_name=why_now,
+        facts=facts_line(facts, opts),
     )
-    state, questions = dungeon_question(doors, level_rows, completed_runs)
+    state, questions = dungeon_question(facts, opts)
     outcome = await client.ask(KIND_DUNGEON, state, questions)
-    return _judged(base, outcome, "dungeon")
+    if outcome.answers is None:
+        return replace(base, status=outcome.status, latency_ms=outcome.latency_ms)
+    answer = outcome.answers["dungeon"]
+    offered = {o.keyword for o in opts}
+    return replace(
+        base,
+        status=outcome.status,
+        latency_ms=outcome.latency_ms,
+        model=outcome.model,
+        jev=answer.choice,
+        confidence=answer.confidence,
+        probabilities=answer.probabilities,
+        acted=rule.acted(
+            pick.keyword,
+            answer.choice,
+            answer.confidence,
+            can_act=answer.choice in offered,
+        ),
+    )
+
+
+def dungeon_carried(opts, pick, judgment):
+    """The Option to queue: Jev's where its answer acted, `pick` otherwise."""
+    if judgment is None or judgment.acted != jev.JEV:
+        return pick
+    return next((o for o in opts if o.keyword == judgment.jev), pick)
 
 
 # ---------------------------------------------------------------------------

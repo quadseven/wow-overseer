@@ -7464,6 +7464,8 @@ function dgnFamily(f) {
   box.appendChild(el("p", "dgn-next", f.next_line));
   // The family's campaign queue (#209), when it has one.
   if (f.queue && f.queue.line) box.appendChild(el("p", "dgn-next", f.queue.line));
+  // Now and next (campaignplan.py): the queue's head and what follows it.
+  if (f.plan && f.plan.line) box.appendChild(el("p", "dgn-next", f.plan.line));
   dgnNote(box, f.family_upgrades);
   dgnNote(box, f.guild_upgrades);
   const list = el("div", "dgn-list");

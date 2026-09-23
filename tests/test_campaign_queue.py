@@ -353,9 +353,13 @@ def _queue_pass(world, holds=None):
     async def owns_travel(pending, fams):
         return None
 
+    async def no_plan(pending, fams):
+        return False
+
     me = types.SimpleNamespace(
         _activity_holds=lambda key=None: holds.get(key, ""),
         _campaign_owns_travel=owns_travel,
+        _plan_campaigns=no_plan,
     )
     asyncio.run(ns["_campaign_queue_once"](me))
     return log.lines
