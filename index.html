@@ -3149,6 +3149,148 @@
   function u(path) { return BASE + path; }
 
 </script>
+<!-- THE VIRTUAL GAME CLIENT (vclient.py). Its own block, so it can be read and
+     deleted with the overlay it dresses. The frames are dark in both themes
+     for the Armory's reason: item quality is a colour, and the canonical
+     colours were drawn for a dark ground. The gold trim is the game's own
+     frame colour, so the overlay reads as the client and not as the page. -->
+<style id="vclient-style">
+  .vclayer, .vcbar {
+    --vc-bg:#0c0d0a; --vc-panel:#15160f; --vc-slot:#1c1d16; --vc-slot-line:#34332a;
+    --vc-gold:#b8913b; --vc-gold-hi:#f0cf6a; --vc-text:#ece5cf; --vc-dim:#a39c86;
+    --vc-online:#2fd46f; --vc-offline:#6b6757;
+    /* The tooltip's reading is the Armory's .adetail, which reads these. */
+    --on-dark:#E8EFE6; --on-dark-dim:#B9C9BC; --on-dark-faint:#8FA396;
+    --caution-text:#E8B33D; --warn-text:#FF7A5E; --accent-text:#2FD46F;
+  }
+  /* THE ACTION BAR rides on the picture, bottom right, above the health band
+     and above .povhit, so a press opens a frame instead of promoting the tile. */
+  .vcbar { position:absolute; right:8px; bottom:10px; z-index:2; display:flex;
+           gap:3px; padding:3px; border-radius:6px;
+           background:linear-gradient(#1f1d14e6, #0c0d0ae6);
+           border:1px solid var(--vc-gold); box-shadow:0 2px 8px #000a; }
+  .vcbtn { width:30px; height:30px; padding:0; border-radius:4px; cursor:pointer;
+           border:1px solid #5a4a22; color:var(--vc-gold-hi);
+           background:radial-gradient(circle at 50% 35%, #3a3322, #15130c);
+           font-family:var(--mono); font-size:9px; font-weight:700;
+           letter-spacing:.02em; line-height:1; }
+  .vcbtn:hover, .vcbtn[aria-pressed="true"] { border-color:var(--vc-gold-hi);
+           box-shadow:inset 0 0 6px #f0cf6a88; }
+  .vcbtn:focus-visible { outline:2px solid var(--vc-gold-hi); outline-offset:1px; }
+  @media (max-width:640px) { .vcbtn { width:26px; height:26px; font-size:8px; } }
+
+  /* THE LAYER covers the viewport and takes no clicks itself; each frame does. */
+  .vclayer { position:fixed; inset:0; z-index:60; pointer-events:none; }
+  .vcframe { position:absolute; pointer-events:auto; display:flex;
+             flex-direction:column; min-width:220px;
+             max-width:calc(100vw - 16px); max-height:calc(100vh - 16px);
+             color:var(--vc-text); background:var(--vc-bg);
+             border:2px solid var(--vc-gold); border-radius:8px;
+             box-shadow:0 0 0 1px #000, inset 0 0 0 1px #3d3220,
+                        0 12px 30px #000c;
+             font-size:13px; }
+  .vcframe[hidden] { display:none; }
+  .vchead { display:flex; align-items:center; gap:.5rem; padding:5px 6px 5px 10px;
+            cursor:move; user-select:none; touch-action:none;
+            background:linear-gradient(#2a2415, #15130c);
+            border-bottom:1px solid var(--vc-gold); border-radius:6px 6px 0 0; }
+  .vctitle { font-family:var(--display); font-weight:700; font-size:13px;
+             color:var(--vc-gold-hi); letter-spacing:.03em; white-space:nowrap; }
+  .vcwho { min-width:0; max-width:9rem; background:#0c0d0a; color:var(--vc-text);
+           border:1px solid #5a4a22; border-radius:4px; font:inherit;
+           font-size:12px; padding:1px 2px; }
+  .vcgap { flex:1 1 auto; }
+  .vcx { width:22px; height:22px; padding:0; border-radius:50%; cursor:pointer;
+         border:1px solid #7a2a1a; background:radial-gradient(#8a2a18, #3a0e06);
+         color:#ffd9c9; font-weight:700; font-size:12px; line-height:1; }
+  .vcx:focus-visible { outline:2px solid var(--vc-gold-hi); outline-offset:1px; }
+  .vcbody { overflow:auto; padding:8px; }
+  .vcnote { color:var(--vc-dim); font-size:12px; padding:4px 2px; }
+  .vcnote.bad { color:var(--warn-text); }
+
+  /* BAGNON: every bag in one grid, the empty slots drawn, search on top. */
+  .vctools { display:flex; gap:6px; align-items:center; margin-bottom:6px; }
+  .vcsearch { flex:1 1 auto; min-width:0; background:#0c0d0a; color:var(--vc-text);
+              border:1px solid #5a4a22; border-radius:4px; padding:3px 6px;
+              font:inherit; font-size:12px; }
+  .vcbags { display:flex; gap:3px; }
+  .vcgrid { display:grid; grid-template-columns:repeat(var(--cols, 10), 36px);
+            gap:2px; }
+  .vcslot { position:relative; width:36px; height:36px; padding:0; cursor:default;
+            border:1px solid var(--vc-slot-line); border-radius:3px;
+            background:var(--vc-slot); overflow:hidden; color:var(--vc-text);
+            font:inherit; }
+  .vcslot.small { width:24px; height:24px; }
+  .vcslot.item { cursor:pointer; box-shadow:inset 0 0 0 1px #000; }
+  .vcslot.empty { background:linear-gradient(135deg, #17180f, #22231a); }
+  .vcslot img { display:block; width:100%; height:100%; object-fit:cover; }
+  .vcslot .vclet { display:flex; align-items:center; justify-content:center;
+                   width:100%; height:100%; font-family:var(--display);
+                   font-weight:700; font-size:13px; }
+  .vcslot .vcmark { display:flex; align-items:center; justify-content:center;
+                    width:100%; height:100%; font-family:var(--mono);
+                    font-size:9px; color:var(--vc-offline); }
+  .vcslot .vccount { position:absolute; right:2px; bottom:0; font-size:11px;
+                     font-weight:700; color:#fff; text-shadow:0 0 2px #000,
+                     1px 1px 1px #000; }
+  .vcslot.dim { opacity:.18; }
+  .vcslot.qb0 { border-color:#9d9d9d; } .vcslot.qb1 { border-color:#d8d8d8; }
+  .vcslot.qb2 { border-color:#1eff00; } .vcslot.qb3 { border-color:#3B9DFF; }
+  .vcslot.qb4 { border-color:#a335ee; } .vcslot.qb5 { border-color:#ff8000; }
+  .vcslot.qb6, .vcslot.qb7 { border-color:#e6cc80; }
+  .vcslot.item.qb1 { border-color:#6d6a5e; }
+  .vcfoot { display:flex; justify-content:space-between; gap:.6rem;
+            align-items:center; margin-top:6px; font-size:12px; color:var(--vc-dim); }
+  .vcmoney .g { color:#ffd100; } .vcmoney .s { color:#c7c7cf; }
+  .vcmoney .c { color:#d6874e; }
+  .vctabs { display:flex; flex-wrap:wrap; gap:3px; margin-bottom:6px; }
+  .vctab { padding:3px 8px; border-radius:4px 4px 0 0; cursor:pointer;
+           border:1px solid #5a4a22; border-bottom:0; background:#15130c;
+           color:var(--vc-dim); font:inherit; font-size:12px; }
+  .vctab[aria-pressed="true"] { color:var(--vc-gold-hi); background:#2a2415; }
+
+  /* THE CHARACTER SHEET: the paper doll, two columns of slots, the sheet
+     between them. */
+  .vcdoll { display:grid; grid-template-columns:40px minmax(150px, 1fr) 40px;
+            gap:6px; }
+  .vccol { display:flex; flex-direction:column; gap:3px; }
+  .vcsheet { display:flex; flex-direction:column; gap:3px; padding:6px;
+             border:1px solid #3d3220; border-radius:4px;
+             background:radial-gradient(circle at 50% 30%, #231f14, #0c0d0a); }
+  .vcsheet .who { font-family:var(--display); font-weight:700; font-size:14px; }
+  .vcsheet .what { color:var(--vc-dim); font-size:12px; }
+  .vcstat { display:flex; justify-content:space-between; gap:.5rem; font-size:12px; }
+  .vcstat .k { color:var(--vc-dim); }
+
+  /* SOCIAL and the QUEST LOG: lists, read top down. */
+  .vclist { display:flex; flex-direction:column; gap:2px; min-width:240px; }
+  .vcrow { display:grid; grid-template-columns:10px 1fr auto; gap:6px;
+           align-items:baseline; padding:2px 4px; border-radius:3px; }
+  .vcrow:nth-child(odd) { background:#15160f; }
+  .vcdot { width:8px; height:8px; border-radius:50%; background:var(--vc-offline);
+           align-self:center; }
+  .vcdot.on { background:var(--vc-online); }
+  .vcrow .nm { font-weight:700; }
+  .vcrow .ln { color:var(--vc-dim); font-size:11px; }
+  .vcrow .rk { color:var(--vc-dim); font-size:11px; white-space:nowrap; }
+  .vcq { padding:3px 4px; border-bottom:1px solid #22211a; }
+  .vcq .qt { font-weight:700; }
+  .vcq .qo { color:var(--vc-dim); font-size:11px; padding-left:10px; }
+  .vcq .qo.done { color:#8a8676; text-decoration:line-through; }
+  .vcq .qs { color:var(--vc-gold-hi); font-size:11px; }
+  .vcd-red { color:#ff2020; } .vcd-orange { color:#ff8040; }
+  .vcd-yellow { color:#ffff00; } .vcd-green { color:#40c040; }
+  .vcd-grey { color:#9d9d9d; }
+
+  /* THE TOOLTIP, the game's: near-black, a thin light border, the Armory's
+     own lines inside it. Fixed to the viewport and kept inside it. */
+  .vctip { position:fixed; z-index:70; pointer-events:none; width:max-content;
+           max-width:min(20rem, calc(100vw - 16px));
+           background:#080d1ef2; border:1px solid #b9b9c9; border-radius:5px;
+           box-shadow:0 4px 14px #000c; color:#fff; }
+  .vctip[hidden] { display:none; }
+  .vctip .vcsub { color:var(--vc-dim); font-size:11px; margin-top:.3rem; }
+</style>
 </head>
 <body>
 <!-- WHICH WORLD THIS IS (quadseven/mod-overseer#184). Above the header,
@@ -5399,6 +5541,9 @@ function wallSlot(name) {
     wallApplyAudio();
   };
   shot.append(hit, big, ear);
+  // The virtual client's action bar (vclient.py): bags, bank, guild bank,
+  // character, social and quest log for this tile's character.
+  shot.appendChild(vclientBar(name));
   slot.append(shot, strip);
   wall.slots.set(name, { slot: slot, shot: shot, standing: standing,
                          line: line, status: status, big: big, hit: hit,
@@ -11487,6 +11632,591 @@ if (window.matchMedia) {
   });
 }
 paintThemeButton();
+</script>
+<script>
+// --- the virtual game client (vclient.py) ----------------------------------
+//
+// THE GAME'S OWN FRAMES, OVER THE GAME'S OWN PICTURE. Every tile on the Watch
+// wall carries a small action bar; each button opens a frame the way the
+// client does (bags, bank, guild bank, character, social, quest log), and the
+// frames float over the stream: draggable by their title, closed by their
+// cross or by Escape, one of each kind at a time, and each with a picker for
+// which family member it shows.
+//
+// READ ONLY, AND LAZY. Nothing here posts or commands anything, and nothing is
+// fetched until a frame is opened: a frame asks for its character when it
+// opens or when the picker changes, and a tooltip asks for its item the first
+// time it is hovered and keeps the answer.
+//
+// WHICH FAMILY IS THE SERVER'S. No name is typed in here: the tile says who
+// it is, /api/client/social says which family that is and who else is in it,
+// and that key is what the quest log asks /api/questlog for. The same code
+// draws Grug's family and Zug's.
+//
+// NOTHING REACHES THE PAGE AS MARKUP. Every string goes through textContent
+// (el), the same rule as the rest of this page.
+const VC_FRAMES = [
+  { kind: "bags", label: "Bags", mark: "BAG", key: "b" },
+  { kind: "bank", label: "Bank", mark: "BNK" },
+  { kind: "guildbank", label: "Guild bank", mark: "GBK" },
+  { kind: "character", label: "Character", mark: "CHR", key: "c" },
+  { kind: "social", label: "Social", mark: "SOC", key: "o" },
+  { kind: "quests", label: "Quest log", mark: "QST", key: "l" },
+];
+const VC_COLUMNS = { bags: 10, bank: 14, guildbank: 14 };
+const vc = { layer: null, frames: new Map(), z: 1, social: new Map(),
+             items: new Map(), tip: null, tipAt: null, last: null };
+
+function vcLayer() {
+  if (!vc.layer) {
+    vc.layer = el("div", "vclayer");
+    vc.tip = el("div", "vctip adetail");
+    vc.tip.hidden = true;
+    vc.tip.setAttribute("role", "tooltip");
+    vc.layer.appendChild(vc.tip);
+    // INSIDE THE WATCH SECTION, so leaving the tab takes every frame with it
+    // and coming back finds them where they were left.
+    (document.getElementById("watch") || document.body).appendChild(vc.layer);
+  }
+  return vc.layer;
+}
+
+// The bar for one tile. Called by wallSlot for every character on the wall,
+// so every family member's tile has one and no family is special-cased.
+function vclientBar(name) {
+  const bar = el("div", "vcbar");
+  bar.setAttribute("role", "toolbar");
+  bar.setAttribute("aria-label", name + "'s game frames");
+  for (const f of VC_FRAMES) {
+    const b = el("button", "vcbtn", f.mark);
+    b.type = "button";
+    b.title = f.label + (f.key ? " (" + f.key.toUpperCase() + ")" : "");
+    b.setAttribute("aria-label", "Open " + name + "'s " + f.label.toLowerCase());
+    b.dataset.kind = f.kind;
+    // The tile's hit area is underneath and promotes the tile; a press here
+    // must open a frame and do nothing else.
+    b.addEventListener("click", (e) => {
+      e.stopPropagation();
+      vcToggle(f.kind, name, bar);
+    });
+    bar.appendChild(b);
+  }
+  return bar;
+}
+
+function vcToggle(kind, name, anchor) {
+  const f = vc.frames.get(kind);
+  if (f && !f.el.hidden && f.name === name) { vcClose(kind); return; }
+  vcOpen(kind, name, anchor);
+}
+
+function vcFrame(kind) {
+  let f = vc.frames.get(kind);
+  if (f) return f;
+  const spec = VC_FRAMES.find((x) => x.kind === kind);
+  const frame = el("div", "vcframe");
+  frame.setAttribute("role", "dialog");
+  frame.setAttribute("aria-label", spec.label);
+  frame.hidden = true;
+  const head = el("div", "vchead");
+  const title = el("span", "vctitle", spec.label);
+  const who = el("select", "vcwho");
+  who.setAttribute("aria-label", "Which family member");
+  const gap = el("span", "vcgap");
+  const x = el("button", "vcx", "x");
+  x.type = "button";
+  x.title = "Close (Esc)";
+  x.setAttribute("aria-label", "Close " + spec.label.toLowerCase());
+  x.addEventListener("click", () => vcClose(kind));
+  head.append(title, who, gap, x);
+  const body = el("div", "vcbody");
+  frame.append(head, body);
+  vcLayer().appendChild(frame);
+  f = { kind: kind, el: frame, body: body, who: who, name: null, placed: false,
+        ask: 0, state: {} };
+  who.addEventListener("change", () => { f.name = who.value; vcLoad(f); });
+  frame.addEventListener("pointerdown", () => vcFront(f));
+  vcDrag(f, head);
+  vc.frames.set(kind, f);
+  return f;
+}
+
+function vcFront(f) {
+  vc.z += 1;
+  f.el.style.zIndex = String(vc.z);
+}
+
+// Placed once, over the tile it was opened from and cascaded by kind so two
+// frames do not open on top of each other. After that it stays where it was
+// dragged.
+function vcPlace(f, anchor) {
+  const shot = anchor && anchor.closest(".povshot");
+  const r = (shot || anchor || document.body).getBoundingClientRect();
+  const i = VC_FRAMES.findIndex((x) => x.kind === f.kind);
+  vcMove(f, r.left + 12 + i * 22, r.top + 12 + i * 18);
+  f.placed = true;
+}
+
+function vcMove(f, left, top) {
+  const w = f.el.offsetWidth || 240, h = f.el.offsetHeight || 120;
+  const maxL = Math.max(8, window.innerWidth - w - 8);
+  const maxT = Math.max(8, window.innerHeight - Math.min(h, 60) - 8);
+  f.el.style.left = Math.round(Math.min(Math.max(8, left), maxL)) + "px";
+  f.el.style.top = Math.round(Math.min(Math.max(8, top), maxT)) + "px";
+}
+
+function vcDrag(f, head) {
+  let from = null;
+  head.addEventListener("pointerdown", (e) => {
+    if (e.button !== 0 || e.target.closest("button, select")) return;
+    from = { x: e.clientX, y: e.clientY,
+             left: f.el.offsetLeft, top: f.el.offsetTop };
+    head.setPointerCapture(e.pointerId);
+    e.preventDefault();
+  });
+  head.addEventListener("pointermove", (e) => {
+    if (!from) return;
+    vcMove(f, from.left + e.clientX - from.x, from.top + e.clientY - from.y);
+  });
+  const stop = (e) => {
+    if (!from) return;
+    from = null;
+    if (head.hasPointerCapture(e.pointerId)) head.releasePointerCapture(e.pointerId);
+  };
+  head.addEventListener("pointerup", stop);
+  head.addEventListener("pointercancel", stop);
+}
+
+function vcOpen(kind, name, anchor) {
+  const f = vcFrame(kind);
+  f.name = name;
+  vc.last = name;
+  f.el.hidden = false;
+  vcFront(f);
+  vcPicker(f);
+  if (!f.placed) vcPlace(f, anchor);
+  vcPressed();
+  vcLoad(f);
+}
+
+function vcClose(kind) {
+  const f = vc.frames.get(kind);
+  if (!f || f.el.hidden) return;
+  f.el.hidden = true;
+  f.ask += 1;
+  vcHideTip();
+  vcPressed();
+}
+
+// Which bar buttons have their frame open, for the character it shows.
+function vcPressed() {
+  for (const b of document.querySelectorAll(".vcbtn")) {
+    const f = vc.frames.get(b.dataset.kind);
+    const bar = b.closest(".povslot");
+    const who = bar ? bar.dataset.name : null;
+    b.setAttribute("aria-pressed", String(!!f && !f.el.hidden && f.name === who));
+  }
+}
+
+// ESCAPE CLOSES THE TOPMOST FRAME, as it does in the client. One per press, so
+// a reader with three open can back out of them in the order they came up.
+document.addEventListener("keydown", (e) => {
+  if (e.key !== "Escape") return;
+  let top = null;
+  for (const f of vc.frames.values()) {
+    if (f.el.hidden) continue;
+    if (!top || Number(f.el.style.zIndex) > Number(top.el.style.zIndex)) top = f;
+  }
+  if (top) vcClose(top.kind);
+});
+
+// --- reading ---------------------------------------------------------------
+
+async function vcGet(url) {
+  const r = await fetch(url, { cache: "no-store" });
+  let body = null;
+  try { body = await r.json(); } catch (e) { body = null; }
+  if (!r.ok) {
+    const why = body && body.error ? body.error : "status " + r.status;
+    throw new Error(why);
+  }
+  return body;
+}
+
+// The social payload doubles as "who is this, and who is their family": the
+// picker and the quest log both need it, so it is fetched once per character
+// and kept for a minute.
+async function vcSocial(name) {
+  const held = vc.social.get(name);
+  if (held && Date.now() - held.at < 60000) return held.body;
+  const body = await vcGet(u("/api/client/social?name=") + encodeURIComponent(name));
+  vc.social.set(name, { at: Date.now(), body: body });
+  return body;
+}
+
+async function vcPicker(f) {
+  const want = f.name;
+  if (!f.who.options.length || ![...f.who.options].some((o) => o.value === want)) {
+    f.who.replaceChildren(new Option(want, want));
+  }
+  f.who.value = want;
+  try {
+    const s = await vcSocial(want);
+    if (f.name !== want) return;
+    f.who.replaceChildren(...s.family.members.map((m) => new Option(m.name, m.name)));
+    f.who.value = want;
+  } catch (e) { /* the picker keeps the one name it has */ }
+}
+
+async function vcLoad(f) {
+  const ask = ++f.ask;
+  const name = f.name;
+  vcHideTip();
+  f.body.replaceChildren(el("div", "vcnote", "reading " + name + "..."));
+  try {
+    const draw = VC_DRAW[f.kind];
+    const node = await draw(name, f);
+    if (ask !== f.ask) return;
+    f.body.replaceChildren(node);
+  } catch (err) {
+    if (ask !== f.ask) return;
+    f.body.replaceChildren(el("div", "vcnote bad",
+      "the world did not answer for " + name + ": " + err.message));
+  }
+  // A frame that grew past the edge is brought back inside the window.
+  vcMove(f, f.el.offsetLeft, f.el.offsetTop);
+}
+
+// --- slots -----------------------------------------------------------------
+
+// One slot. An item draws its icon, or its initials in its quality colour when
+// there is no icon or the icon host does not answer, and never a broken image.
+// `tip` is either a tooltip already in hand (the character sheet's) or null,
+// in which case the item's entry is asked for on first hover.
+function vcSlot(item, tip, small) {
+  const s = el("button", "vcslot" + (small ? " small" : ""));
+  s.type = "button";
+  if (!item) {
+    s.classList.add("empty");
+    s.tabIndex = -1;
+    s.setAttribute("aria-label", "empty slot");
+    return s;
+  }
+  const q = item.quality === null || item.quality === undefined ? null : item.quality;
+  s.classList.add("item");
+  if (q !== null) s.classList.add("qb" + q);
+  const letters = () => {
+    s.prepend(el("span", "vclet" + (q === null ? " qunknown" : " q" + q),
+                 item.letters || "?"));
+  };
+  if (item.icon) s.prepend(iconImg(item.icon, "", letters));
+  else letters();
+  if (item.count > 1) s.appendChild(el("span", "vccount", String(item.count)));
+  s.setAttribute("aria-label", item.name + (item.count > 1 ? " x" + item.count : ""));
+  s.dataset.name = (item.name || "").toLowerCase();
+  vcTipOn(s, item, tip);
+  return s;
+}
+
+function vcTipOn(s, item, tip) {
+  const show = () => vcShowTip(s, item, tip);
+  s.addEventListener("pointerenter", (e) => { if (e.pointerType === "mouse") show(); });
+  s.addEventListener("pointerleave", (e) => { if (e.pointerType === "mouse") vcHideTip(); });
+  s.addEventListener("focus", show);
+  s.addEventListener("blur", vcHideTip);
+  // A tap has no hover: it shows the tooltip, and a second tap puts it away.
+  s.addEventListener("click", () => {
+    if (vc.tipAt === s && !vc.tip.hidden) vcHideTip();
+    else show();
+  });
+}
+
+function vcItem(entry) {
+  let p = vc.items.get(entry);
+  if (!p) {
+    p = vcGet(u("/api/client/item?entry=") + entry);
+    // A failure is not kept, so the next hover asks again.
+    p.catch(() => vc.items.delete(entry));
+    vc.items.set(entry, p);
+  }
+  return p;
+}
+
+async function vcShowTip(at, item, tip) {
+  vcLayer();
+  vc.tipAt = at;
+  const t = vc.tip;
+  t.replaceChildren(el("div", "nm" + (item.quality === null ? "" : " q" + item.quality),
+                       item.name));
+  t.hidden = false;
+  vcTipPlace(at);
+  let reading = tip;
+  if (!reading) {
+    try { reading = (await vcItem(item.entry)).tooltip; } catch (e) {
+      if (vc.tipAt === at) t.appendChild(el("div", "vcsub", "no tooltip: " + e.message));
+      return;
+    }
+  }
+  if (vc.tipAt !== at || t.hidden) return;
+  t.replaceChildren();
+  itemTipLines(t, reading, null);
+  if (item.count > 1) t.appendChild(el("div", "vcsub", "stack of " + item.count));
+  vcTipPlace(at);
+}
+
+// Beside the slot, to the right unless there is no room, and never off-screen.
+function vcTipPlace(at) {
+  const r = at.getBoundingClientRect(), t = vc.tip;
+  const w = t.offsetWidth, h = t.offsetHeight;
+  let left = r.right + 8;
+  if (left + w > window.innerWidth - 8) left = r.left - w - 8;
+  left = Math.max(8, Math.min(left, window.innerWidth - w - 8));
+  const top = Math.max(8, Math.min(r.top, window.innerHeight - h - 8));
+  t.style.left = Math.round(left) + "px";
+  t.style.top = Math.round(top) + "px";
+}
+
+function vcHideTip() {
+  if (vc.tip) vc.tip.hidden = true;
+  vc.tipAt = null;
+}
+
+function vcMoney(m) {
+  const n = el("span", "vcmoney");
+  if (!m) return n;
+  if (m.gold) n.append(el("span", "g", m.gold + "g "));
+  if (m.gold || m.silver) n.append(el("span", "s", m.silver + "s "));
+  n.append(el("span", "c", m.copper + "c"));
+  return n;
+}
+
+// The search box dims every slot whose item does not match, the empty ones
+// included, which is how Bagnon shows a search.
+function vcSearch(grid) {
+  const box = el("input", "vcsearch");
+  box.type = "search";
+  box.placeholder = "search";
+  box.setAttribute("aria-label", "Search these slots");
+  box.addEventListener("input", () => {
+    const q = box.value.trim().toLowerCase();
+    for (const s of grid.children) {
+      s.classList.toggle("dim", !!q && !(s.dataset.name || "").includes(q));
+    }
+  });
+  return box;
+}
+
+function vcGrid(cells, columns) {
+  const grid = el("div", "vcgrid");
+  grid.style.setProperty("--cols", String(columns));
+  for (const c of cells) grid.appendChild(vcSlot(c, null, false));
+  return grid;
+}
+
+// --- the frames ------------------------------------------------------------
+
+async function vcInventory(where, name) {
+  const url = where === "bank" ? u("/api/client/bank?name=") : u("/api/client/bags?name=");
+  const p = await vcGet(url + encodeURIComponent(name));
+  const out = el("div");
+  const cells = [];
+  for (const c of p.containers) cells.push(...c.cells);
+  const grid = vcGrid(cells, VC_COLUMNS[where]);
+  const tools = el("div", "vctools");
+  const bags = el("div", "vcbags");
+  for (const b of p.bag_slots) bags.appendChild(vcSlot(b.bag, null, true));
+  tools.append(bags, vcSearch(grid));
+  const foot = el("div", "vcfoot");
+  foot.append(el("span", "", p.free + " free of " + p.total), vcMoney(p.money));
+  out.append(tools, grid, foot);
+  if (p.note) out.appendChild(el("div", "vcnote", p.note));
+  return out;
+}
+
+async function vcGuildBank(name, f) {
+  const p = await vcGet(u("/api/client/guildbank?name=") + encodeURIComponent(name));
+  const out = el("div");
+  if (!p.tabs.length) {
+    if (p.guild) out.appendChild(el("div", "vcnote", p.guild));
+    out.appendChild(el("div", "vcnote", p.note));
+    return out;
+  }
+  const tabs = el("div", "vctabs");
+  const holder = el("div");
+  const foot = el("div", "vcfoot");
+  const show = (i) => {
+    f.state.tab = i;
+    for (const b of tabs.children) {
+      b.setAttribute("aria-pressed", String(Number(b.dataset.i) === i));
+    }
+    const tab = p.tabs[i];
+    const grid = vcGrid(tab.cells, p.columns);
+    const tools = el("div", "vctools");
+    tools.appendChild(vcSearch(grid));
+    holder.replaceChildren(tools, grid);
+    foot.replaceChildren(el("span", "", p.guild + " - " + tab.used + " of " + tab.total),
+                         vcMoney(p.money));
+  };
+  p.tabs.forEach((tab, i) => {
+    const b = el("button", "vctab", tab.name);
+    b.type = "button";
+    b.dataset.i = String(i);
+    b.addEventListener("click", () => show(i));
+    tabs.appendChild(b);
+  });
+  out.append(tabs, holder, foot);
+  const kept = f.state.tab;
+  show(kept !== undefined && kept < p.tabs.length ? kept : 0);
+  return out;
+}
+
+async function vcCharacter(name) {
+  const p = await vcGet(u("/api/armory/member?name=") + encodeURIComponent(name));
+  const m = p.member;
+  const bySlot = new Map(m.slots.map((s) => [s.slot, s]));
+  const column = (names) => {
+    const col = el("div", "vccol");
+    for (const n of names) {
+      const s = bySlot.get(n);
+      if (!s || s.empty) {
+        const cell = vcSlot(null, null, false);
+        cell.appendChild(el("span", "vcmark", s ? s.mark : n.slice(0, 2).toUpperCase()));
+        cell.title = s ? s.empty_label + ": " + n : n;
+        col.appendChild(cell);
+      } else {
+        col.appendChild(vcSlot({ entry: s.entry, name: s.name, quality: s.quality,
+                                 icon: s.icon, letters: s.mark, count: 1 },
+                               s.tooltip, false));
+      }
+    }
+    return col;
+  };
+  const sheet = el("div", "vcsheet");
+  const who = el("div", "who", m.name);
+  who.style.color = m.class_colour || "";
+  sheet.append(who, el("div", "what",
+    "Level " + m.level + " " + (m.race || "") + " " + (m["class"] || "")));
+  if (m.guild) sheet.appendChild(el("div", "what", "<" + m.guild + ">"));
+  for (const c of (m.gear && m.gear.chips) || []) {
+    const r = el("div", "vcstat");
+    r.append(el("span", "k", c.key), el("span", "v", c.value));
+    sheet.appendChild(r);
+  }
+  for (const s of ((m.stats && m.stats.rows) || []).slice(0, 12)) {
+    const r = el("div", "vcstat");
+    r.append(el("span", "k", s.label), el("span", "v", s.reading));
+    sheet.appendChild(r);
+  }
+  const doll = el("div", "vcdoll");
+  doll.append(column(p.doll.left), sheet, column(p.doll.right));
+  return doll;
+}
+
+function vcPerson(p) {
+  const r = el("div", "vcrow");
+  const dot = el("span", "vcdot" + (p.online ? " on" : ""));
+  dot.title = p.online ? "online" : "offline";
+  const mid = el("div");
+  const nm = el("div", "nm", p.name);
+  nm.style.color = p.class_colour || "";
+  mid.append(nm, el("div", "ln", p.line + (p.note ? " - " + p.note : "")));
+  r.append(dot, mid, el("span", "rk", p.rank || (p.online ? "online" : "")));
+  return r;
+}
+
+async function vcSocialFrame(name, f) {
+  vc.social.delete(name);
+  const p = await vcSocial(name);
+  const out = el("div");
+  const tabs = el("div", "vctabs");
+  const list = el("div", "vclist");
+  const pages = [
+    ["family", "Family", () => p.family.members, null],
+    ["guild", p.guild.name ? p.guild.name + " (" + p.guild.online + "/" + p.guild.total + ")"
+      : "Guild", () => p.guild.members, p.guild.note],
+    ["friends", "Friends (" + p.friends.length + ")", () => p.friends, p.friends_note],
+  ];
+  const show = (key) => {
+    f.state.page = key;
+    const page = pages.find((x) => x[0] === key);
+    for (const b of tabs.children) {
+      b.setAttribute("aria-pressed", String(b.dataset.key === key));
+    }
+    list.replaceChildren(...page[2]().map(vcPerson));
+    if (page[3]) list.appendChild(el("div", "vcnote", page[3]));
+    if (key === "friends" && p.ignored.length) {
+      list.appendChild(el("div", "vcnote", "ignoring: " + p.ignored.join(", ")));
+    }
+  };
+  for (const [key, label] of pages) {
+    const b = el("button", "vctab", label);
+    b.type = "button";
+    b.dataset.key = key;
+    b.addEventListener("click", () => show(key));
+    tabs.appendChild(b);
+  }
+  out.append(tabs, list);
+  show(f.state.page || "family");
+  return out;
+}
+
+// The client's difficulty colours: a quest's level against the character's.
+function vcDifficulty(quest, level) {
+  const d = quest - level;
+  if (d >= 5) return "vcd-red";
+  if (d >= 3) return "vcd-orange";
+  if (d >= -2) return "vcd-yellow";
+  if (level - quest <= Math.max(5, Math.floor(level / 10) + 5)) return "vcd-green";
+  return "vcd-grey";
+}
+
+async function vcQuests(name) {
+  const s = await vcSocial(name);
+  const p = await vcGet(u("/api/questlog?family=") + encodeURIComponent(s.family.key));
+  const m = (p.members || []).find((x) => x.name === name);
+  const out = el("div", "vclist");
+  if (!m) {
+    out.appendChild(el("div", "vcnote", name + " has no quest log on this realm."));
+    return out;
+  }
+  out.appendChild(el("div", "vcnote", m.used + " of " + m.slots + " quests"));
+  for (const q of m.quests) {
+    const box = el("div", "vcq");
+    const t = el("div", "qt " + vcDifficulty(q.level, m.level), "[" + q.level + "] " + q.title);
+    box.appendChild(t);
+    if (q.ready) box.appendChild(el("div", "qs", "Complete"));
+    else if (q.failed) box.appendChild(el("div", "qs", "Failed"));
+    for (const o of q.objectives || []) {
+      box.appendChild(el("div", "qo" + (o.done ? " done" : ""),
+                         o.what + ": " + o.have + "/" + o.need));
+    }
+    out.appendChild(box);
+  }
+  return out;
+}
+
+const VC_DRAW = {
+  bags: (name) => vcInventory("bags", name),
+  bank: (name) => vcInventory("bank", name),
+  guildbank: vcGuildBank,
+  character: vcCharacter,
+  social: vcSocialFrame,
+  quests: vcQuests,
+};
+
+// THE CLIENT'S KEYS, on the Watch tab only and never while typing: B bags,
+// C character, O social, L quest log, for the tile last opened from (or the
+// large tile when nothing has been opened yet).
+document.addEventListener("keydown", (e) => {
+  if (e.ctrlKey || e.metaKey || e.altKey || view !== WATCH_VIEW) return;
+  const t = e.target;
+  if (t instanceof Element && t.closest("input, textarea, select")) return;
+  const spec = VC_FRAMES.find((x) => x.key === e.key.toLowerCase());
+  const name = vc.last || wall.hero;
+  if (!spec || !name) return;
+  const slot = wall.slots.get(name);
+  vcToggle(spec.kind, name, slot ? slot.shot : null);
+});
 </script>
 </body>
 </html>
