@@ -1457,6 +1457,13 @@ def _crafting_roster(family: str | None = None) -> list:
         return [row["name"] for row in cur.fetchall()]
 
 
+def _names_of(cohort=None) -> list:
+    """A family's names, sorted: this bridge's own for None (#215)."""
+    if cohort is None:
+        return sorted(_protected_guids().values())
+    return sorted(cohort.names)
+
+
 def _primaries_for(cohort, names, skills: dict) -> dict:
     """name -> the trades that count for it, or {} for this bridge's family.
 
@@ -5085,10 +5092,7 @@ class Bridge(discord.Client):
         pulls the leader away between two runs; a buy at a counter the
         family already stands at still lands.
         """
-        if cohort is None:
-            names = sorted((await asyncio.to_thread(_protected_guids)).values())
-        else:
-            names = sorted(cohort.names)
+        names = await asyncio.to_thread(_names_of, cohort)
         if not names:
             log.info(
                 "craft_supply: no protected character to shop for, so nothing "
@@ -5229,12 +5233,8 @@ class Bridge(discord.Client):
                             name, errand.command, errand.why,
                         )
 
-        if needs and cohort is not None and await asyncio.to_thread(
-                _queue_owns_job, cohort.key):
-            log.info("craft_supply: family %s's campaign queue owns its job, "
-                     "so the walk to a reagent vendor waits", cohort.key)
-        elif needs:
-            await self._aim_at_reagent_vendor(needs, cohort)
+        if needs:
+            await self._walk_for_reagents(needs, cohort)
 
         # The mode is named here too, so ONE line proves the fix: `on
         # job=quest` is this pass shopping while the family gathers, which is
@@ -5412,6 +5412,20 @@ class Bridge(discord.Client):
             decision.release.character, decision.release.aim, claimant,
         )
         return False
+
+    async def _walk_for_reagents(self, needs: list, cohort=None) -> None:
+        """Walk to a reagent vendor, unless another family's queue owns its job.
+
+        A family whose campaign queue owns its job keeps its leader for the
+        runs (#215): the walk waits, and a buy at a counter it already
+        stands at still lands.
+        """
+        if cohort is not None and await asyncio.to_thread(
+                _queue_owns_job, cohort.key):
+            log.info("craft_supply: family %s's campaign queue owns its job, "
+                     "so the walk to a reagent vendor waits", cohort.key)
+            return
+        await self._aim_at_reagent_vendor(needs, cohort)
 
     async def _aim_at_reagent_vendor(self, needs: list, cohort=None) -> None:
         """Walk the family to a vendor that actually stocks one of the
@@ -5629,15 +5643,7 @@ class Bridge(discord.Client):
         never cancelled; and its job is written by `_set_family_job`, since
         `_set_job` answers only for this bridge's family.
         """
-        if cohort is None:
-            names = sorted((await asyncio.to_thread(_protected_guids)).values())
-        else:
-            names = sorted(cohort.names)
-            if await asyncio.to_thread(_queue_owns_job, cohort.key):
-                log.info("craft_rhythm: family %s's campaign queue owns its "
-                         "job, so the rhythm waits for the queue to empty",
-                         cohort.key)
-                return
+        names = await asyncio.to_thread(_names_of, cohort)
         if not names:
             return
         standing = craft_rhythm.standing_mode(
@@ -5696,7 +5702,10 @@ class Bridge(discord.Client):
             await self._family_rhythm_moves(cohort, plan, primaries)
             return
         log.info("craft_rhythm: %s", craft_rhythm.report(plan))
+        await self._own_rhythm_moves(plan, names, skills)
 
+    async def _own_rhythm_moves(self, plan, names: list, skills: dict) -> None:
+        """What this bridge's own family does with its rhythm's answer."""
         # HOW FAR THE FAMILY IS FROM THE RAID'S OWN SHOPPING LIST, every pass,
         # on the inputs this function already holds. `raidcraft` is the join
         # between the LEVELING table this pass drives (craft.RECIPES) and the
@@ -5786,7 +5795,14 @@ class Bridge(discord.Client):
         own town slot; a family short only of cloth or leather roams, which
         is how both come, so its traveller is asked to be idle. Neither
         happens mid-run. The job is then written only on a change.
+
+        NOTHING WHILE ITS CAMPAIGN QUEUE OWNS ITS JOB: the queue's runs come
+        first, and the rhythm waits for the queue to empty.
         """
+        if await asyncio.to_thread(_queue_owns_job, cohort.key):
+            log.info("craft_rhythm: family %s's campaign queue owns its job, "
+                     "so the rhythm waits for the queue to empty", cohort.key)
+            return
         if plan.mode == craft_rhythm.MODE_GATHER:
             if await self._mid_run(list(cohort.names)):
                 log.info("craft_rhythm: family %s is in a dungeon run, so no "

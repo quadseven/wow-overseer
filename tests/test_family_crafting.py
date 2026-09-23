@@ -222,6 +222,7 @@ def _rhythm_self(world, log):
             "_family_rhythm_moves",
             "_set_family_job",
             "_primaries_for",
+            "_names_of",
         ],
         {
             "asyncio": FAKE_ASYNCIO,
@@ -407,11 +408,20 @@ class AnotherFamilysMaterialsReachItsCrafter(unittest.TestCase):
 
 class TheWalksUseTheFamilysOwnLeaderAndSlot(unittest.TestCase):
     def test_the_supply_walk_asks_the_familys_slot_and_waits_for_its_queue(self):
-        supply = ast.get_source_segment(BRIDGE, _function("_craft_supply_once"))
+        supply = ast.get_source_segment(BRIDGE, _function("_walk_for_reagents"))
         self.assertIn("_queue_owns_job, cohort.key", supply)
         aim = ast.get_source_segment(BRIDGE, _function("_aim_at_reagent_vendor"))
         self.assertIn("_cohort_leader, cohort.key", aim)
         self.assertIn('cohort=getattr(cohort, "key", None)', aim)
+
+    def test_the_family_job_writer_asks_what_set_job_asks(self):
+        """`_set_job` asks `jobs.why_not` and stands down for a queue; the
+        other family's writer asks both, before any row is written."""
+        body = ast.get_source_segment(BRIDGE, _function("_set_family_job"))
+        self.assertLess(body.index("jobs.why_not(mode)"), body.index("_insert_job"))
+        self.assertLess(
+            body.index("_queue_owns_job, cohort.key"), body.index("_insert_job")
+        )
 
     def test_the_gather_walk_asks_the_familys_slot(self):
         walk = ast.get_source_segment(BRIDGE, _function("_walk_to_gather_field"))

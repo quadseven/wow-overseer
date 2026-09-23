@@ -995,7 +995,9 @@ class TheBridgeWalksTheLeaderToTheRightShop(unittest.TestCase):
         self.assertNotIn('travel_npc="vendor"', body)
         self.assertIn("craft_supply.reagent_need(", body)
         self.assertIn("craft_supply.craft_reagent_needs(", body)
-        self.assertIn("self._aim_at_reagent_vendor(needs, cohort)", body)
+        self.assertIn("self._walk_for_reagents(needs, cohort)", body)
+        walk = _bridge_block("    async def _walk_for_reagents(")
+        self.assertIn("self._aim_at_reagent_vendor(needs, cohort)", walk)
 
     def test_the_bridge_does_no_shortfall_arithmetic_of_its_own(self):
         """Whether a character is short of a reagent - and so whether a walk
