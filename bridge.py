@@ -50,6 +50,7 @@ import guildbank
 import guildshare
 import guildroute
 import guildwork
+import guildcorps
 import handover
 import craft
 import crafters
@@ -3891,6 +3892,10 @@ class Bridge(discord.Client):
         # start. In memory like the mail runs above; the daily limit is read
         # from the command log, which a restart does not forget.
         self._dues_walks: dict = {}
+        # GUILD CRAFTING CORPS STEPS UNDER WAY: holder -> monotonic start. In
+        # memory like the dues walks; every cooldown is read from the command
+        # log, which a restart does not forget.
+        self._corps_steps: dict = {}
         # Leader snapshot history used only to detect a vendor aim that has
         # stopped moving. The decision itself lives in vendor_stall.py.
         self._vendor_movement: dict[str, vendor_stall.Movement] = {}
@@ -3977,6 +3982,7 @@ class Bridge(discord.Client):
                 self._guild_bank_loop,
                 self._guild_dues_loop,
                 self._crafter_mail_loop,
+                self._guild_corps_loop,
                 self._mail_loop,
                 self._recruit_loop,
                 self._craft_supply_loop,
@@ -10498,6 +10504,129 @@ class Bridge(discord.Client):
             await self._for_other_families("guild dues", self._guild_dues_once)
             await asyncio.sleep(cycle)
 
+    async def _guild_corps_once(self) -> None:
+        """One pass of the guild crafting corps (#256): bags crafted, not only bought.
+
+        guildcorps.py decides who holds which post and what each tailor does
+        next; this reads the facts and writes the rows a step names. Every row
+        is a player's own verb: the module's walk to a mailbox, a trainer or a
+        vendor (quadseven/mod-overseer#570 and quadseven/mod-overseer#621), a
+        `send` or `take-item` letter, a `buy` at the counter, a `use` of a
+        carried pattern, or a cast of a recipe the character knows. Never a
+        give, never a GM command.
+        """
+        names = sorted((await asyncio.to_thread(_protected_guids)).values())
+        if not names:
+            return
+        facts = await asyncio.to_thread(_fetch_corps_facts, names)
+        members = facts.get("members") or []
+        if not any(m.maintenance for m in members):
+            log.info("guild corps: no family guild has a maintenance member yet")
+            return
+        now = time.monotonic()
+        self._corps_steps = guildroute.live_runs(self._corps_steps, now)
+        # Any bot another guild pass has on a walk is left alone: the module
+        # would refuse a second walk anyway, and the refusal would spend the
+        # step's cooldown.
+        busy = (set(self._corps_steps) | set(self._dues_walks)
+                | set(self._guild_mail_runs) | set(self._crafter_walks))
+        plan = guildcorps.plan(
+            members, facts["family"], facts["trainable"], facts["vendors"],
+            facts["recent"], busy)
+        for guild, posts in sorted(plan.corps.items()):
+            log.info("guild corps: %s: %s", guild,
+                     "; ".join("%s %s" % (p.name, p.said) for p in posts)
+                     or "nobody on maintenance holds a corps trade")
+        _log_capped("guild corps", plan.notes)
+        for step in plan.steps:
+            # Reserved before the task starts and released when it ends, so a
+            # holder is never read as free while one of its rows is in flight.
+            self._corps_steps[step.holder] = now
+            task = asyncio.create_task(self._run_corps_step(step))
+            self._mail_walk_tasks.add(task)
+            task.add_done_callback(self._mail_walk_task_done)
+        log.info("guild corps: started %d step(s)", len(plan.steps))
+
+    async def _run_corps_step(self, step) -> None:
+        """Write one step's rows in order, each after the last has answered."""
+        try:
+            if step.walk is not None:
+                walk_id = await asyncio.to_thread(_insert_corps_row, step.holder, step.walk)
+                if not walk_id:
+                    return
+                log.info("guild corps: %s (walk row %d)", step.said, walk_id)
+                answer = await self._await_mail_walk(step.holder, walk_id)
+                if answer.state != guildroute.ARRIVED:
+                    log.info("guild corps: walk row %d for %s ended without "
+                             "arriving: %s", walk_id, step.holder,
+                             answer.said or answer.state)
+                    return
+            else:
+                log.info("guild corps: %s", step.said)
+            for row in step.rows:
+                for _ in range(max(1, int(step.repeat))):
+                    if not await self._corps_row(step, row):
+                        return
+        except pymysql.err.MySQLError:
+            log.exception("guild corps: step for %s failed", step.holder)
+        finally:
+            self._corps_steps.pop(step.holder, None)
+
+    async def _corps_row(self, step, row) -> bool:
+        """Write one row and wait for its answer; True when it worked.
+
+        A cast refused because the character was moving is written again once:
+        the refusal itself places the hold, so the second ask finds it standing.
+        """
+        for attempt in (1, 2):
+            row_id = await asyncio.to_thread(_insert_corps_row, step.holder, row)
+            if not row_id:
+                return False
+            answer = await self._await_corps_answer(row_id, CORPS_ROW_FOLLOW_SECONDS)
+            status = str((answer or {}).get("status") or "")
+            detail = str((answer or {}).get("detail") or "")
+            if status in ("applied", "delivered"):
+                log.info("guild corps: %s row %d for %s (%s) came back %s",
+                         row.kind, row_id, step.holder, row.command, status)
+                return True
+            if attempt == 1 and detail == CORPS_MOVING:
+                await asyncio.sleep(MAIL_WALK_POLL_SECONDS)
+                continue
+            log.info("guild corps: %s row %d for %s (%s) came back %s: %s",
+                     row.kind, row_id, step.holder, row.command,
+                     status or "unanswered", detail)
+            return False
+        return False
+
+    async def _await_corps_answer(self, row_id: int, seconds: float):
+        """Read one row until it leaves pending/claimed/verifying, bounded."""
+        deadline = time.monotonic() + seconds
+        row = None
+        while time.monotonic() < deadline:
+            await asyncio.sleep(MAIL_WALK_POLL_SECONDS)
+            row = await asyncio.to_thread(_command_answer, row_id)
+            if row is None:
+                return None
+            if str(row.get("status") or "") not in ("", "pending", "claimed", "verifying"):
+                return row
+        return row
+
+    async def _guild_corps_loop(self) -> None:
+        """The guild crafting corps, on its own clock.
+
+        It never writes `travel_npc`, so it needs no stagger against the
+        vendor, bank or guild-bank passes.
+        """
+        await self.wait_until_ready()
+        cycle = float(os.environ.get("GUILD_CORPS_CYCLE_SECONDS", "600"))
+        await asyncio.sleep(min(cycle, 360.0))
+        while not self.is_closed():
+            try:
+                await self._guild_corps_once()
+            except Exception:
+                log.exception("guild corps pass failed; retrying next cycle")
+            await asyncio.sleep(cycle)
+
     async def _mail_once(self, cohort=None) -> None:
         """One pass of the mail: collect what is already addressed to the family.
 
@@ -15521,6 +15650,155 @@ def _insert_dues_row(holder: str, command: str, taker: str, source: str) -> int:
         return cur.lastrowid or 0
 
 
+# THE GUILD CRAFTING CORPS READS AND ROW. Every member of every family guild,
+# with its map; the corps' skills, recipes, mail and carried materials; the
+# family's worn bags; which tailoring spells a trainer teaches and which path
+# items a vendor sells on each map; and the corps' own recent rows.
+_CORPS_MEMBERS_SQL = (
+    "SELECT g.name AS guild_name, c.guid, c.name, c.class AS class_id, c.level, "
+    "c.money, c.online, c.map AS map_id, lc.name AS master "
+    "FROM characters c "
+    "JOIN guild_member gm ON gm.guid = c.guid "
+    "JOIN guild g ON g.guildid = gm.guildid "
+    "LEFT JOIN characters lc ON lc.guid = g.leaderguid "
+    "WHERE g.guildid IN (SELECT gm2.guildid FROM guild_member gm2 "
+    "JOIN characters c2 ON c2.guid = gm2.guid WHERE c2.name IN (%s))"
+)
+_CORPS_SKILLS_SQL = (
+    "SELECT guid, skill, value, max FROM character_skills "
+    "WHERE guid IN ({guids}) AND skill IN ({skills})"
+)
+_CORPS_SPELLS_SQL = (
+    "SELECT guid, spell FROM character_spell WHERE guid IN ({guids}) AND spell IN ({spells})"
+)
+# Carried: the backpack and the bags worn, never the bank; the same scope the
+# module's item verbs reach.
+_CORPS_ITEMS_SQL = (
+    "SELECT ci.guid AS owner, ii.guid AS item_guid, ii.itemEntry AS entry, ii.count "
+    "FROM character_inventory ci JOIN item_instance ii ON ii.guid = ci.item "
+    "WHERE ci.guid IN ({guids}) AND ii.itemEntry IN ({entries}) "
+    "AND ((ci.bag = 0 AND ci.slot BETWEEN 23 AND 38) "
+    "OR ci.bag IN (SELECT bag.item FROM character_inventory bag "
+    "WHERE bag.guid = ci.guid AND bag.bag = 0 AND bag.slot BETWEEN 19 AND 22))"
+)
+_CORPS_LETTERS_SQL = (
+    "SELECT m.receiver, m.id AS mail_id, mi.item_guid, ii.itemEntry AS entry, ii.count, "
+    "(m.deliver_time <= UNIX_TIMESTAMP()) AS ready "
+    "FROM mail m JOIN mail_items mi ON mi.mail_id = m.id "
+    "JOIN item_instance ii ON ii.guid = mi.item_guid "
+    "WHERE m.receiver IN ({guids}) AND ii.itemEntry IN ({entries})"
+)
+_CORPS_BAGS_SQL = (
+    "SELECT ci.guid AS owner, it.ContainerSlots AS slots "
+    "FROM character_inventory ci JOIN item_instance ii ON ii.guid = ci.item "
+    "JOIN acore_world.item_template it ON it.entry = ii.itemEntry "
+    "WHERE ci.guid IN ({guids}) AND ci.bag = 0 AND ci.slot BETWEEN 19 AND 22"
+)
+# `cr.id`, not `cr.id1`, for the reason _VENDOR_SPAWN_SQL gives.
+_CORPS_TRAINABLE_SQL = (
+    "SELECT DISTINCT cr.map AS map_id, ts.SpellId AS spell "
+    "FROM acore_world.creature cr "
+    "JOIN acore_world.creature_default_trainer t ON t.CreatureId = cr.id "
+    "JOIN acore_world.trainer_spell ts ON ts.TrainerId = t.TrainerId "
+    "WHERE ts.SpellId IN ({spells})"
+)
+_CORPS_VENDORS_SQL = (
+    "SELECT DISTINCT cr.map AS map_id, v.item "
+    "FROM acore_world.creature cr JOIN acore_world.npc_vendor v ON v.entry = cr.id "
+    "WHERE v.item IN ({entries})"
+)
+_CORPS_RECENT_SQL = (
+    "SELECT target_name, target_arg, source, "
+    "TIMESTAMPDIFF(MINUTE, created_at, NOW()) AS age FROM overseer_command "
+    "WHERE source LIKE %s AND created_at > NOW() - INTERVAL 1 DAY"
+)
+# How long one corps row is followed: a trainer walk's own ceiling and margin.
+CORPS_ROW_FOLLOW_SECONDS = 360.0
+# DoCast's refusal for a moving caster (CastRefusal::Moving), which places the
+# hold on its way out, so one more ask finds the character standing.
+CORPS_MOVING = "character is moving"
+
+
+def _corps_read(cur, what: str, sql: str, params=()) -> list:
+    """One corps read; a schema without the table or column reads as empty.
+
+    The warning names the read and the server's own error, so a missing
+    column is diagnosable from the log alone and an empty answer is never
+    mistaken for an empty world.
+    """
+    try:
+        cur.execute(sql, params)
+    except pymysql.err.MySQLError as exc:
+        if exc.args and exc.args[0] in (1054, 1146):
+            log.warning("guild corps: the %s read failed on this schema (%s): %s; "
+                        "the pass plans without it", what, exc.args[0], exc.args[-1])
+            return []
+        raise
+    return [dict(row) for row in cur.fetchall()]
+
+
+def _fetch_corps_facts(family_names: list) -> dict:
+    """Everything guildcorps.plan reads, on one connection; no judgement here."""
+    ids = lambda values: ",".join(str(int(v)) for v in values) or "0"  # noqa: E731
+    with _connect() as conn, conn.cursor() as cur:
+        rows = _corps_read(cur, "guild members", _CORPS_MEMBERS_SQL % ",".join(["%s"] * len(family_names)),
+                           list(family_names))
+        maint, _masters = guildwork.maintenance_from_rows(rows, family_names)
+        maintenance = {m.name for m in maint}
+        family = set(family_names)
+        guid_of = {str(r["name"]): int(r["guid"]) for r in rows}
+        crew = ids(guid_of[n] for n in maintenance if n in guid_of)
+        everyone = ids(guid_of.values())
+        kin = ids(guid_of[n] for n in family if n in guid_of)
+        entries = ids(sorted(guildcorps.PATH_ENTRIES | set(guildcorps.BAG_ITEMS)))
+        spells = ids(sorted(guildcorps.PATH_SPELLS))
+        skills = ids(sorted(guildcorps.SKILL_NAMES))
+        skill_rows = _corps_read(cur, "skills", _CORPS_SKILLS_SQL.format(guids=crew, skills=skills))
+        spell_rows = _corps_read(cur, "recipes", _CORPS_SPELLS_SQL.format(guids=crew, spells=spells))
+        item_rows = _corps_read(cur, "carried materials", _CORPS_ITEMS_SQL.format(guids=everyone, entries=entries))
+        mail_rows = _corps_read(cur, "letters", _CORPS_LETTERS_SQL.format(guids=crew, entries=entries))
+        bag_rows = _corps_read(cur, "worn bags", _CORPS_BAGS_SQL.format(guids=kin))
+        trainable = _corps_read(cur, "trainers", _CORPS_TRAINABLE_SQL.format(spells=spells))
+        vendors = _corps_read(cur, "vendors", _CORPS_VENDORS_SQL.format(entries=entries))
+        recent = _corps_read(cur, "recent rows", _CORPS_RECENT_SQL, (guildcorps.SOURCE + ":%",))
+    members = guildcorps.members_from_rows(
+        rows, skill_rows, spell_rows, item_rows, mail_rows, bag_rows, maintenance, family)
+    family_by_guild = {}
+    for m in members:
+        if m.family:
+            family_by_guild.setdefault(m.guild, []).append(m)
+    return {
+        "members": members,
+        "family": family_by_guild,
+        "trainable": guildcorps.places_from_rows(trainable, "spell"),
+        "vendors": guildcorps.places_from_rows(vendors, "item"),
+        "recent": guildcorps.recent_from_rows(recent),
+    }
+
+
+def _insert_corps_row(holder: str, row) -> int:
+    """One overseer_command row for the corps, as the step named it.
+
+    Guarded on 1146 and 1265 like `_insert_dues_row`: a world whose queue has
+    no such table, or no such `kind`, gets a warning and no row.
+    """
+    with _connect() as conn, conn.cursor() as cur:
+        try:
+            cur.execute(
+                "INSERT INTO overseer_command "
+                "(target_name, command, kind, target_arg, source) "
+                "VALUES (%s, %s, %s, %s, %s)",
+                (holder, row.command, row.kind, row.target_arg or "", row.source),
+            )
+        except pymysql.err.MySQLError as exc:
+            if exc.args and exc.args[0] in (1146, 1265):
+                log.warning("guild corps: cannot queue a %s row for %s on this "
+                            "worldserver image", row.kind, holder)
+                return 0
+            raise
+        return cur.lastrowid or 0
+
+
 def _recent_route_keys(minutes: int) -> set:
     """(holder, command) pairs this pass already wrote inside the window.
 
@@ -19181,6 +19459,7 @@ class HeadlessBridge(Bridge):
                 self._guild_bank_loop,
                 self._guild_dues_loop,
                 self._crafter_mail_loop,
+                self._guild_corps_loop,
                 self._mail_loop,
                 self._recruit_loop,
                 self._craft_supply_loop,
