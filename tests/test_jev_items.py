@@ -507,7 +507,7 @@ class BridgeWiringTest(unittest.TestCase):
                 return Cursor()
 
         scope = {"_connect": Conn}
-        exec(insert, scope)
+        exec(insert, scope)  # noqa: S102 - bridge.py's own source
         judgment = tradechoice.Judgment(
             subject="Grog",
             heuristic="a",
