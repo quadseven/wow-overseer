@@ -33,7 +33,7 @@ independent reasons, any one of them enough. Same wall as #2756 (talents),
 #2813 (bags) and #2782 (trainer spells) - this is the fourth thing it has
 silently withheld.
 
-THE RULE THAT SHAPES EVERYTHING BELOW. Evan rejected #2823 for conjuring bags
+THE RULE THAT SHAPES EVERYTHING BELOW. The operator rejected #2823 for conjuring bags
 out of nowhere, and #2782 is open against spells that appear without a trainer
 ever being visited. A profession that simply shows up in `character_skills` is
 the same violation wearing a different noun. So this module DECIDES and never
@@ -202,7 +202,7 @@ class _Trade:
     why: str
 
 
-# WHO TAKES WHAT. Evan's assignment, with the reasoning kept next to it.
+# WHO TAKES WHAT. The operator's assignment, with the reasoning kept next to it.
 #
 # WHY A TABLE IS THE RIGHT SHAPE HERE, having been the wrong one before. An
 # earlier draft of this module DERIVED a single tailor from armour and
@@ -264,7 +264,7 @@ _LIVE_ROSTER = {
     "Grog": _Trade(
         primaries=("mining", "engineering"),
         why=(
-            "the elder son. Evan asked for this directly: engineering over "
+            "the elder son. The operator asked for this directly: engineering over "
             "jewelcrafting (#2831 update), because it is the only 3.3.5a trade "
             "that makes a repair bot and a portable mailbox, and "
             "mod-overseer's own guild-migration notes cite 17,200+ logged "
@@ -308,7 +308,7 @@ ROSTER = roster_for()
 # Inscription and jewelcrafting are the two primaries nobody is assigned, ON
 # PURPOSE. They were Grog's until this change (#2831 update): he now takes
 # mining + engineering instead (see his `why`), which means the family loses
-# its glyph-maker and its gem-cutter. Evan wants the guild (#2831) to cover
+# its glyph-maker and its gem-cutter. The operator wants the guild (#2831) to cover
 # them - engineering used to be that placeholder, and these two take its
 # place - so leaving them open is a decision and not an oversight, and this
 # constant is here so that a future reader counting the crafts does not "fix"
@@ -714,7 +714,7 @@ def lines(trade_plan: TradePlan) -> list:
 
     Said in party chat by the character it is about (#2829: a need has to
     become a request to a person). A plan nobody hears is the overseer talking
-    to itself, which is the half of every one of these features that Evan
+    to itself, which is the half of every one of these features that the operator
     actually sees.
     """
     return [f"{a.character}: {a.said}" for a in trade_plan.assignments]
@@ -728,7 +728,7 @@ def settled(assignment: Assignment, skills: Mapping[str, int]) -> bool:
     deliberate and it is the whole no-magic guarantee in one signature: this
     module has no path to the observation, so it cannot fake one. The bridge
     reads `character_skills`, hands the answer here, and writes 'learned' only
-    when the answer is yes - by whatever route it happened, including Evan
+    when the answer is yes - by whatever route it happened, including the operator
     walking Ugga to a trainer himself.
     """
     if assignment.verb == "unlearn":

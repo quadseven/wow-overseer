@@ -6,7 +6,7 @@ pip install, so it cannot be imported here - the same wall tests/
 test_headless_bridge.py meets, and the same answer: pin the wiring by reading
 the source, because a pure rule nothing calls is decoration.
 
-WHAT WAS ON SCREEN, captured from Evan's stream and confirmed against the
+WHAT WAS ON SCREEN, captured from the operator's stream and confirmed against the
 live database on 2026-09-02:
 
     [Party] [Grog]: Grog give Og 20 Linen Cloth. Og need it for tailoring.
@@ -161,7 +161,7 @@ class NeverAddressYourselfTest(unittest.TestCase):
 class ReadTheRoomTest(unittest.TestCase):
     """Crafting chatter stands down mid-run.
 
-    Evan, watching a Deadmines pull stop so somebody could hand over cloth:
+    The operator, watching a Deadmines pull stop so somebody could hand over cloth:
     "They should say shut up we are in a dungeon just wait."
     """
 

@@ -119,7 +119,7 @@ class SelectionTest(unittest.TestCase):
 class RenameTest(unittest.TestCase):
     def test_unknown_names_pass_through(self):
         # The callers rewrite prose full of trainers, zones and strangers.
-        for name in ("Thrall", "", "Evan"):
+        for name in ("Thrall", "", "Ahuman"):
             self.assertEqual(cast.rename(name, cast.DEV), name)
 
     def test_retext_replaces_whole_words_only(self):

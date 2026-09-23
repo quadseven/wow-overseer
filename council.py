@@ -3,7 +3,7 @@
 Pure module, same seam as kin.py and bonds.py: state in, a conversation and a
 plan out. bridge.py reads the rows and writes the results.
 
-WHAT EVAN ASKED FOR. "I really want them to sort of be like a team that
+WHAT THE OPERATOR ASKED FOR. "I really want them to sort of be like a team that
 collectively talks together, talking about what they need to focus on today...
 sometimes they just log in and just fish." So the council must be able to
 decide on something unambitious, and it must be able to disagree - a council
@@ -197,7 +197,7 @@ def assess(me: Member, *, public_levels: dict) -> Proposal | None:
 
     # Somebody being left behind outranks anything I want for myself. This is
     # checked first on purpose: a family that grinds past its youngest is not
-    # the family Evan described.
+    # the family the operator described.
     if others:
         median = _median_level(list(public_levels.values()))
         laggards = sorted(

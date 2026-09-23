@@ -176,7 +176,7 @@ def plan_muster(
     structurally cannot express `is_bot`, so the filter was silently nobody's
     job: `_fetch_roster()` returns EVERY online character - seated humans, any
     guild, anywhere - and the six responders became the six alphabetically
-    first characters on the realm. A player named "Evan" sorts ahead of "Grug"
+    first characters on the realm. A player named "Ahuman" sorts ahead of "Grug"
     and was mustered every time. `fanout.py:141` already filters `is_bot` with
     a test behind it (`test_characters_without_bot_ai_are_never_mustered`),
     because mod_overseer.cpp writes `status='error'`, `detail="target has no

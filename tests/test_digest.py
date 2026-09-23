@@ -9,7 +9,7 @@ Two failure modes are worth a suite of their own, and both are silent:
      A zero where the answer is "I was not watching" reads as "nothing
      happened", which is a lie told confidently, every hour, forever.
 
-  2. NOT SAYING THE THING EVAN ASKED FOR. The standing requirement is that
+  2. NOT SAYING THE THING THE OPERATOR ASKED FOR. The standing requirement is that
      nobody falls behind. Live tonight: Og on 17 quest turn-ins against Grog
      and Ugga on 3, and Grog with 0.3 gold - under the price of training. A
      digest that reports those only when asked is a digest that never reports
@@ -72,7 +72,7 @@ class Asking(unittest.TestCase):
         self.assertEqual(digest.DEFAULT_HOURS, digest.parse_ask("how are they?").hours)
 
     def test_all_night_is_a_night(self):
-        """ "What did they do all night" is Evan's own sentence."""
+        """ "What did they do all night" is the operator's own sentence."""
         self.assertEqual(
             digest.NIGHT_HOURS, digest.parse_ask("what did they do all night?").hours
         )
@@ -361,7 +361,7 @@ class Rendering(unittest.TestCase):
         """Verbatim from questbook.say.
 
         Restating it here would be a second answer to "who is behind", given
-        to Evan, that could disagree with the one the council acts on.
+        to the operator, that could disagree with the one the council acts on.
         """
         ledger = small_ledger()
         text = self.account(ledger=ledger)
@@ -444,8 +444,8 @@ class Voicing(unittest.TestCase):
         self.assertIn("Grug", line)
 
     def test_a_model_line_is_used_and_bounded(self):
-        line = digest.opening_line(self.built(), "  Evan.  You are back.  ")
-        self.assertEqual("Evan. You are back.", line)
+        line = digest.opening_line(self.built(), "  the operator.  You are back.  ")
+        self.assertEqual("the operator. You are back.", line)
         self.assertLessEqual(len(digest.opening_line(self.built(), "x" * 900)), 200)
 
 

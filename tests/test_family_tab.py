@@ -584,7 +584,7 @@ if __name__ == "__main__":
 
 
 class TheBrokenButtonMustNotBeSpendable(unittest.TestCase):
-    """infra#2887, found the way it should never be found - by Evan.
+    """infra#2887, found the way it should never be found - by the operator.
 
     `watch them` (follow-cam) sat FIRST in the character panel, read as the
     primary action, and is not implemented: it spends ~40 seconds bringing a

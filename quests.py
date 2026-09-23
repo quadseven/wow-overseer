@@ -4,7 +4,7 @@ Pure module. Quest rows and quest metadata in, a readable statement of who
 needs what out. bridge.py does the reading.
 
 WHY THIS EXISTS. The council could talk about levels and nothing else, so five
-characters grinding murlocs held a conversation about levels. Evan asked for
+characters grinding murlocs held a conversation about levels. The operator asked for
 the obvious thing: "they are killing murlocs right now they should talk about
 that and how many more they need to do and whats next".
 

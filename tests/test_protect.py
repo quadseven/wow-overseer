@@ -5,7 +5,7 @@ row has expired: FindEvent drops the row once
 `NowSeconds() - time >= validIn`, GetEventValue then returns 0, and the
 update loop calls Randomize(). Below level 3 that routes to
 RandomizeFirst(), which assigns a level and re-gears - which would erase
-the character Evan is actually growing (infra#2656).
+the character the operator is actually growing (infra#2656).
 
 Suppression is therefore just: keep a row whose validIn has not elapsed.
 This module decides WHICH rows need writing; bridge.py does the writing.
@@ -117,7 +117,7 @@ class RosterWiringTest(unittest.TestCase):
         self.assertIn("_give_them_a_life", self.called)
 
     def test_a_character_at_the_keyboard_is_not_sent_bot_commands(self):
-        """A character Evan is holding has no PlayerbotAI, so every bot command
+        """A character the operator is holding has no PlayerbotAI, so every bot command
         aimed at it is refused. Without this the roster loop aimed one every
         cycle at whichever character he happened to be playing, filling the
         command table with errors."""

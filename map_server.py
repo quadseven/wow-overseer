@@ -5342,7 +5342,7 @@ def main() -> None:
     # migration must run against the LIVE shape rather than be assumed by
     # a CREATE that is a no-op on an existing table. Degrades loudly and
     # keeps serving: a broken stream store must not take the map down,
-    # because the map is what Evan actually uses.
+    # because the map is what the operator actually uses.
     try:
         _ensure_stream_store()
     except Exception:

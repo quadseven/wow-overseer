@@ -1,6 +1,6 @@
 """Family bonds: who answers a plea depends on who they are to the caller.
 
-Evan's brief, verbatim, because every rule below traces to a clause of it:
+The operator's brief, verbatim, because every rule below traces to a clause of it:
 
   "grug is the dad and should always help his family unless he is mad at ugga
    getting helped by og too much, and bork is gonna constantly need help he is

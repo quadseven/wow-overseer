@@ -187,7 +187,7 @@ class ReasoningPreambleTest(unittest.TestCase):
 class SellJunkTest(unittest.TestCase):
     """Live-found 2026-08-24 (infra#2597).
 
-    Evan typed "lets go sell junk in town" in party chat. The model answered
+    The operator typed "lets go sell junk in town" in party chat. The model answered
     with the command `sell junk`, which is NOT a command: mod-playerbots'
     SellAction accepts gray/*/vendor/[item link], anything else falls through
     to an item-name lookup, matches nothing, sells nothing and RETURNS TRUE.

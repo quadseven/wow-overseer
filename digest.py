@@ -4,7 +4,7 @@ Pure module, the same seam as questbook.py and bonds.py - facts in,
 judgements and prose out. No pymysql, no network. bridge.py runs the queries
 and hands the rows in.
 
-WHY THIS EXISTS, in Evan's words:
+WHY THIS EXISTS, in the operator's words:
 
   "What is the family doing now? What did they do all night? I want to be able
    to ask these questions when I come back later to catch up on what they've
@@ -38,7 +38,7 @@ it renders carries the grade it came from:
   STANDING ONLY, true right now and carrying no history:
     - level, gold, quest turn-ins, spells, talents, equipped gear.
       These are what "how are they?" is really asking, and they are the
-      inequality Evan cares about, so they are reported plainly as standings
+      inequality the operator cares about, so they are reported plainly as standings
       and never dressed up as deltas.
 
   ONLY FROM THE MOMENT SAMPLING SHIPS:
@@ -104,7 +104,7 @@ BASIS_NO_SAMPLES = "no-samples"  # nothing sampled for this character at all
 COPPER_PER_GOLD = 10000
 
 # --- thresholds, named so a reader can argue with them ---------------------
-# Evan's standing requirement is that nobody falls behind, so the digest
+# The operator's standing requirement is that nobody falls behind, so the digest
 # volunteers these without being asked. Each number is a judgement, written
 # down where it can be changed rather than buried in an if.
 

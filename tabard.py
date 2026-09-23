@@ -4,7 +4,7 @@ Pure module, same seam as council.py, kin.py and bonds.py: names in, a
 conversation and a design out. bridge.py sends the command and writes the
 result; nothing here touches a database or a socket.
 
-WHAT EVAN ASKED FOR (infra#2831): "when they have enough money they will make
+WHAT THE OPERATOR ASKED FOR (infra#2831): "when they have enough money they will make
 one called Cave and they will design their tabard after discussing what it
 should look like". The guild exists - `Cave`, guildid 23, formed 2026-09-12
 via mod-overseer's `guild form` verb, with Grug as its master and the other
@@ -61,7 +61,7 @@ is not the artefact - the tabard is. What it does instead:
     human mage, and that is visible to anyone standing next to them.
 
   * leaves the aesthetic judgement to the one party who can actually see it.
-    Evan watches this realm live and says plainly when something looks stupid;
+    The operator watches this realm live and says plainly when something looks stupid;
     that has been a real mechanism every single time. A module that guessed at
     colour names would be asking him to argue with a lookup table instead of
     with the tabard.

@@ -565,7 +565,7 @@ class StrategiesReturnWithTheCharacter(unittest.TestCase):
 
     def test_nobody_new_means_nobody_is_re_issued(self):
         """These commands reach the game as whispers. Re-issuing to characters
-        that never lost anything is visible noise in Evan's chat."""
+        that never lost anything is visible noise in the operator's chat."""
         both = frozenset({"Bork", "Grug"})
         self.assertEqual(frozenset(), goals.returned_to_ai(both, both))
 
@@ -652,7 +652,7 @@ class TheReturnLoopIsActuallyWired(unittest.TestCase):
 
     def test_it_asks_who_came_back_rather_than_re_issuing_to_everyone(self):
         """These commands reach the game as whispers; blanket re-issues are
-        visible noise in Evan's chat."""
+        visible noise in the operator's chat."""
         self.assertIn("returned_to_ai", self._calls())
 
     def test_it_actually_hands_the_life_back(self):

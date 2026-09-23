@@ -154,7 +154,7 @@ JEV_RETENTION_DAYS = int(os.environ.get("JEV_RETENTION_DAYS", "30"))
 # acts without it: the client's own deadline, so a slow Jev costs a pass at
 # most that and never more. The answers still arrive and are recorded.
 JEV_ACT_WAIT_SECONDS = float(os.environ.get("JEV_TIMEOUT_SECONDS", "3"))
-# What gets said in game when NOBODY in the family could answer an order Evan
+# What gets said in game when NOBODY in the family could answer an order the operator
 # gave - the voice is down, or none of them are in the world. Said once, by the
 # most senior of them, and in the family's own register because it is one of
 # them saying it. The alternative is what this replaced: returning silently,
@@ -707,7 +707,7 @@ def _fetch_reflections() -> list[dict]:
 def _persona_for(grounding: dict) -> str | None:
     """The character to prompt this one as: the family's own, or the bots'.
 
-    The family is described in bonds.py, in text Evan wrote, and that beats
+    The family is described in bonds.py, in text the operator wrote, and that beats
     `mod_ollama_chat_personality` outright - it is not a fallback for them.
     See persona.characterisation: that table holds ANCIENT_WISE_ONE for Bork
     and Og and nothing for the other three, which is why the youngest son
@@ -842,7 +842,7 @@ _BOT_HELD_SQL = (
 def _bot_held_names(names: list) -> list:
     """Of `names`, the ones currently driven by the AI rather than by a person.
 
-    A character Evan is holding at the keyboard has no PlayerbotAI, so every
+    A character the operator is holding at the keyboard has no PlayerbotAI, so every
     bot command aimed at it is refused - and the roster loop would aim one
     every cycle, forever, filling the command table with errors against the
     one character he happens to be playing.
@@ -1113,11 +1113,11 @@ def _authored_lines(minutes: int = 30) -> set:
     """Every line the bridge recently put in a character's mouth.
 
     This is how an order is told apart from the family's own speech. The bot
-    flag cannot do it: with selfbot on, the AI attaches to Evan's character and
+    flag cannot do it: with selfbot on, the AI attaches to the operator's character and
     everything he types is flagged as bot speech. Authorship holds either way.
 
     Bounded by time so the set stays small and so a sentence the family said an
-    hour ago cannot mute Evan saying the same words now.
+    hour ago cannot mute the operator saying the same words now.
     """
     with _connect() as conn, conn.cursor() as cur:
         cur.execute(
@@ -1738,7 +1738,7 @@ def _settle_trades(skills: dict) -> list:
     answers a question; it cannot go and get them, and this function cannot
     make one up - the only input is a live read of character_skills. So a row
     can only reach 'learned' by somebody actually having been to a trainer, by
-    whatever route that happened, INCLUDING Evan walking Og there himself.
+    whatever route that happened, INCLUDING the operator walking Og there himself.
     """
     with _connect() as conn, conn.cursor() as cur:
         cur.execute(
@@ -2417,7 +2417,7 @@ def _holders_of(quest_id: int) -> set:
 def _aim_for_plea(caller: str, helpers: list, about: str = "") -> int:
     """Point the family at what the caller actually asked for.
 
-    THE FAILURE THIS EXISTS TO FIX. In Evan's Discord on 2026-08-24, at 14:35,
+    THE FAILURE THIS EXISTS TO FIX. In the operator's Discord on 2026-08-24, at 14:35,
     15:06 and 16:05, Ugga says she needs one more Large Candle and all four
     agree to help her. Nothing happens, three times, hours apart. She sat at 7
     of 8 for quest 60 throughout. The muster wrote a regroup command and a
@@ -4197,7 +4197,7 @@ class Bridge(discord.Client):
     async def _stood_down_for_craft(self, ask, now: float) -> bool:
         """Mid-run, the answer is "not now" - said once, and only once.
 
-        Evan, watching a Deadmines pull stop so somebody could talk about
+        The operator, watching a Deadmines pull stop so somebody could talk about
         cloth: "They should say shut up we are in a dungeon just wait."
         Either end of the conversation being in the run is enough; the party
         chat window is the same window whoever is standing where.
@@ -4448,7 +4448,7 @@ class Bridge(discord.Client):
                     await channel.send(reply.text)
 
     async def _obey_evan_in_game(self, rows: list) -> None:
-        """Act on an order Evan typed in game rather than in Discord.
+        """Act on an order the operator typed in game rather than in Discord.
 
         He is sitting at the keyboard playing one of these characters, so that
         is the natural place to talk to them - and until now nothing was
@@ -4476,21 +4476,21 @@ class Bridge(discord.Client):
 
         # Oldest first. audience() sorts alphabetically, which is fine for
         # deciding WHO acts and wrong for deciding who speaks first: it put
-        # Bork at the head of the queue every time Evan spoke as Grug.
+        # Bork at the head of the queue every time the operator spoke as Grug.
         who = bonds.speaking_order(overhear.audience(directive, family=bonds.FAMILY))
         if not who:
             return
 
         # Stamp BEFORE issuing. At-most-once matters more than at-least-once
         # when the cost of a double is the whole family acting on one sentence
-        # twice, and a missed order is one Evan can simply repeat.
+        # twice, and a missed order is one the operator can simply repeat.
         self._last_overheard_at = time.monotonic()
 
         # EVERY member answers, each from their own situation. This used to ask
         # the voice once, about who[0], and then apply that one answer to all
-        # four - so Bork answered every order Evan ever gave (he is first
+        # four - so Bork answered every order the operator ever gave (he is first
         # alphabetically), and the other three carried out a decision taken
-        # from Bork's level, Bork's zone and Bork's bags. Evan: "i want them
+        # from Bork's level, Bork's zone and Bork's bags. The operator: "i want them
         # all to answer to be honest, and it should all synthesize based on
         # their own brain and needs based on what they are doing."
         #
@@ -4531,7 +4531,7 @@ class Bridge(discord.Client):
             await asyncio.to_thread(_insert_thought, name, "chat", decision.say)
             # Written one at a time, in speaking order, and not staggered in
             # time. mod-overseer takes pending commands ORDER BY id ASC, twenty
-            # per two-second poll, so insertion order IS the order Evan reads -
+            # per two-second poll, so insertion order IS the order the operator reads -
             # and overhear.COOLDOWN_SECONDS already caps the whole family at
             # one exchange per twenty seconds, which is four lines, not a
             # flood. Sleeping between them would only park the relay tick.
@@ -4727,7 +4727,7 @@ class Bridge(discord.Client):
 
         The plan is persisted as an ordinary goal, so the supervisor drives it
         with the machinery that already exists and a council that decides
-        something is indistinguishable, downstream, from Evan asking for it.
+        something is indistinguishable, downstream, from the operator asking for it.
         """
         await self.wait_until_ready()
         cycle = float(os.environ.get("COUNCIL_CYCLE_SECONDS", "3600"))
@@ -4896,7 +4896,7 @@ class Bridge(discord.Client):
         #
         # _bot_held_names is reused rather than reimplemented: same table,
         # same 60-second freshness window, and it already carries the
-        # is_bot rule - a character Evan is holding at the keyboard has no
+        # is_bot rule - a character the operator is holding at the keyboard has no
         # PlayerbotAI and could not say its line anyway.
         present = set(await asyncio.to_thread(
             _bot_held_names, [k.name for k in kin]))
@@ -4959,7 +4959,7 @@ class Bridge(discord.Client):
         Watching for the transition rather than shortening the sweep is
         deliberate: these commands reach the game as whispers, and re-issuing
         fifteen of them a minute to characters that never lost anything is
-        visible noise in Evan's chat. A character that did not relog needs
+        visible noise in the operator's chat. A character that did not relog needs
         nothing, and gets nothing.
         """
         await self.wait_until_ready()
@@ -5017,7 +5017,7 @@ class Bridge(discord.Client):
         THE SETTLE PATH IS UNCHANGED AND IS STILL THE ONLY PROOF. A written
         column says the module was asked, never that anything happened; the row
         moves to 'learned' only when `character_skills` is OBSERVED to agree -
-        by whatever honest route, including Evan walking Ugga to a trainer
+        by whatever honest route, including the operator walking Ugga to a trainer
         himself.
         """
         await self.wait_until_ready()
@@ -6882,7 +6882,7 @@ class Bridge(discord.Client):
             # NOT A FAILURE AND NOT A SKIP TO BE FIXED. Reagents are still in
             # the wrong bags and will still be in the wrong bags when the run
             # ends; what changes is that the family is not made to stop a
-            # boss pull to discuss cloth. Evan, watching one: they should say
+            # boss pull to discuss cloth. The operator, watching one: they should say
             # they are in a dungeon and wait. See chat.mid_run.
             log.info("materials: the family is in a dungeon run - reagents wait")
             return
@@ -18810,7 +18810,7 @@ def _already_agreed(plan) -> bool:
 
     Asked BEFORE the council speaks, not after. Persisting already refused a
     duplicate goal, but the scene was played out in full first, which is the
-    half Evan actually sees.
+    half the operator actually sees.
     """
     if plan.kind not in DRIVEN_KINDS:
         return False
@@ -19329,7 +19329,7 @@ def _build_digest(ask) -> digest.Digest:
     order they can catch up, and what they should abandon are questions
     questbook.py already answers against the class masks and chain rules that
     make them hard, and the council acts on that answer. A second opinion here
-    would be a second answer, given to Evan, that could disagree with what the
+    would be a second answer, given to the operator, that could disagree with what the
     family then does.
     """
     now = _db_now()

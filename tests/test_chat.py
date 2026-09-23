@@ -286,7 +286,7 @@ class OutageTest(unittest.TestCase):
 # --- the rules for saying a thing out loud (infra#3197) --------------------
 #
 # Every case below is constructed. The three faults they pin were captured
-# from Evan's own stream and confirmed against the live database on
+# from the operator's own stream and confirmed against the live database on
 # 2026-09-02: one sentence said 58 times in three minutes, a crafter
 # answering itself, and a claim ("Og know tailoring") that `character_skills`
 # has never supported.
@@ -526,7 +526,7 @@ class HonestClaimTest(unittest.TestCase):
 
 
 class MidRunTest(unittest.TestCase):
-    """Reading the room (mod-overseer#169, and Evan watching a pull stop).
+    """Reading the room (mod-overseer#169, and the operator watching a pull stop).
 
     The live row, 2026-09-03: run 35864, map 36 (The Deadmines), state
     'active', members "Bork,Grog,Grug,Og,Ugga".
@@ -557,7 +557,7 @@ class MidRunTest(unittest.TestCase):
         self.assertFalse(chat.mid_run("Og", run=ended, jobs=self.JOBS))
 
     def test_somebody_outside_the_run_is_not_mid_run(self):
-        self.assertFalse(chat.mid_run("Evan", run=self.RUN, jobs=self.JOBS))
+        self.assertFalse(chat.mid_run("Ahuman", run=self.RUN, jobs=self.JOBS))
 
     def test_the_member_list_is_read_however_it_is_spelled(self):
         spaced = dict(self.RUN, members=" bork , og ")
@@ -582,7 +582,7 @@ class MidRunTest(unittest.TestCase):
         self.assertFalse(chat.mid_run("", run=self.RUN, jobs=self.JOBS))
 
     def test_present_member_on_run_map_keeps_row_busy(self):
-        self.assertTrue(chat.run_has_present_member(self.RUN, {"Og": 36, "Evan": 0}))
+        self.assertTrue(chat.run_has_present_member(self.RUN, {"Og": 36, "Ahuman": 0}))
 
     def test_members_elsewhere_release_stale_row(self):
         self.assertFalse(chat.run_has_present_member(self.RUN, {"Og": 0, "Bork": 0}))

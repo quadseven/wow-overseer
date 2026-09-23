@@ -1,6 +1,6 @@
 """What the family is actually working on.
 
-Evan: "they are killing murlocs right now they should talk about that and how
+The operator: "they are killing murlocs right now they should talk about that and how
 many more they need to do and whats next and talk about the gear drops and who
 needs what".
 

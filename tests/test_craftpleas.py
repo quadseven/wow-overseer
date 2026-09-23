@@ -21,7 +21,7 @@ class ParseAskTest(unittest.TestCase):
         self.assertEqual(ask.crafter, "Og")
 
     def test_the_caveman_form_is_understood(self):
-        """Evan's own example, and professions.py's own `said` text, are both
+        """The operator's own example, and professions.py's own `said` text, are both
         this grammar - no "need", just "make"."""
         ask = craftpleas.parse_ask("Grug", "Ugga make bag?")
         self.assertIsNotNone(ask)
@@ -29,7 +29,7 @@ class ParseAskTest(unittest.TestCase):
         self.assertEqual(ask.crafter, "Og")
 
     def test_who_can_make_is_a_query_too(self):
-        ask = craftpleas.parse_ask("Evan", "who can make potions around here")
+        ask = craftpleas.parse_ask("Ahuman", "who can make potions around here")
         self.assertIsNotNone(ask)
         self.assertEqual(ask.skill, "alchemy")
         self.assertEqual(ask.crafter, "Ugga")
@@ -245,7 +245,7 @@ class AnswerTest(unittest.TestCase):
         self.assertIn("bag", said)
 
     def test_a_trade_that_is_only_planned_is_never_claimed(self):
-        """The line Evan watched, and the one that replaces it. Og does not
+        """The line the operator watched, and the one that replaces it. Og does not
         know tailoring; the learn has been 'planned' since 2026-08-26."""
         ask = craftpleas.parse_ask("Grug", "I need a bag")
         said = craftpleas.answer(ask, held={"Og": {"herbalism": 30}})

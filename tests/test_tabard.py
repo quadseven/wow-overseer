@@ -1,6 +1,6 @@
 """The family argues about the tabard and arrives at one.
 
-Evan, on infra#2831: "when they have enough money they will make one called
+The operator, on infra#2831: "when they have enough money they will make one called
 Cave and they will design their tabard after discussing what it should look
 like".
 

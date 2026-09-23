@@ -601,7 +601,7 @@ class TheBridgeStopsThrowingQuestPlansAway(unittest.TestCase):
 class AnsweringAPleaActuallyAimsTheFamily(unittest.TestCase):
     """infra#2801: "Bork help Ugga" was a sentence with no mechanism.
 
-    Observed in Evan's Discord at 14:35, 15:06 and 16:05 on 2026-08-24: Ugga
+    Observed in the operator's Discord at 14:35, 15:06 and 16:05 on 2026-08-24: Ugga
     says she needs one more Large Candle, all four agree to help her, and
     nothing happens. Hours apart, three times, verbatim. Meanwhile she sat at
     7 of 8 candles for quest 60 the whole time.

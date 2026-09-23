@@ -591,7 +591,7 @@ def life_strategies(
     happen at all - measured live, the family went from a 937-yard spread to
     four of them standing within three yards of each other.
 
-    The cost of getting this wrong the other way is the thing Evan actually
+    The cost of getting this wrong the other way is the thing the operator actually
     complained about: the healer 600 yards away in her own fight, three fights
     in three sub-zones, and Grug charging three mobs with nobody to heal him.
 

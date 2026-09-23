@@ -1,6 +1,6 @@
 """Saying the line in character, without ever changing what was decided.
 
-Evan's brief for the family:
+The operator's brief for the family:
 
     bork should be an annoying young son, grog a more mature son still young
     but older than bork, ugga the ... mother of the sons, grug the dad, loves
@@ -195,7 +195,7 @@ class CleanTest(unittest.TestCase):
 
 class JsonInTheMouthTest(unittest.TestCase):
     """A model asked for a sentence sometimes answers with an object anyway,
-    and these were SPOKEN OUT LOUD in Evan's party chat before it was caught:
+    and these were SPOKEN OUT LOUD in the operator's party chat before it was caught:
 
         [Party] Bork: {"response": "Bork no need do thing. Bork go fish!"}
         [Party] Og:   {"sentence": "Og help Grug."}
@@ -345,12 +345,12 @@ class WiringTest(unittest.TestCase):
                 "_persona_for",
                 reached,
                 "line %d prompts on mod_ollama_chat_personality instead of the "
-                "family Evan wrote" % call.lineno,
+                "family the operator wrote" % call.lineno,
             )
 
 
 class CharacterisationTest(unittest.TestCase):
-    """The persona Evan wrote, for prompts persona.py does not build itself.
+    """The persona the operator wrote, for prompts persona.py does not build itself.
 
     Bork replied to "lets go sell junk in town" with "The cycle of commerce
     must flow. Let us trade these dull relics for coin, as the ancients did."

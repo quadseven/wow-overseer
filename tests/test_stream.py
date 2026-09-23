@@ -100,7 +100,7 @@ class Staleness(unittest.TestCase):
 class OutcomesReachTheScreen(unittest.TestCase):
     """Every way a watch ends carries a reason. A reason nobody renders is
     the same as no reason - the buttons just come back and the viewer is left
-    guessing, which is the bug Evan hit the first time he pressed one."""
+    guessing, which is the bug the operator hit the first time he pressed one."""
 
     def _row(self, **kw):
         base = {

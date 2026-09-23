@@ -1,6 +1,6 @@
 """Who is behind on quests, and whether they can still do anything about it.
 
-Evan: all five should quest equally and nobody should fall behind. Live the
+The operator: all five should quest equally and nobody should fall behind. Live the
 turn-ins were Og 17, Bork 13, Grug 13, Grog 3, Ugga 3, because the five hold
 different quest logs.
 

@@ -4,7 +4,7 @@ Pure module, same seam as kin.py - a plea, a roster-derived muster and a
 history of who has helped whom go in, a narrowed muster comes out. bridge.py
 reads the history and writes the rows.
 
-WHERE THESE RULES COME FROM. Evan described the family, and every rule below
+WHERE THESE RULES COME FROM. The operator described the family, and every rule below
 traces to a clause of it rather than to a general idea of what families do:
 
   "grug is the dad and should always help his family unless he is mad at ugga
@@ -25,7 +25,7 @@ Counting every answer to a caller instead looks equivalent and is not: one plea
 writes one memory row per responder, so the same number meant two pleas with
 the family online and five with one member online. Worse, it starved the
 jealousy rule, which needs Og to keep answering Ugga: Og tired out at two, one
-short of the three that makes Grug sulk, so the rule Evan actually asked for
+short of the three that makes Grug sulk, so the rule the operator actually asked for
 could never fire.
 
 WHY THE HISTORY IS NOT NEW STATE. `kin` already writes a `reflection` row for

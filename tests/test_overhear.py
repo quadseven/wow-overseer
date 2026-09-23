@@ -1,4 +1,4 @@
-"""Evan talking to the family in game rather than through Discord.
+"""The operator talking to the family in game rather than through Discord.
 
 He asked the same thing several ways - "how do i talk as grug suggesting to go
 to a town and sell and upgrade gear", and then, having typed exactly that into
@@ -134,7 +134,7 @@ class HearTest(unittest.TestCase):
 
 class AudienceTest(unittest.TestCase):
     def test_the_speaker_is_not_ordered_to_obey_himself(self):
-        """Evan is playing one of them. Telling his own character to follow
+        """The operator is playing one of them. Telling his own character to follow
         itself looks fine in a test and reads as a bug in game."""
         d = overhear.Directive(speaker="Grug", text="follow me")
         self.assertEqual(
@@ -229,7 +229,7 @@ class WiringTest(unittest.TestCase):
         )
 
     def test_every_member_is_asked_not_only_the_first(self):
-        """The defect. `audience` returns a SORTED list, so with Evan speaking
+        """The defect. `audience` returns a SORTED list, so with the operator speaking
         as Grug who[0] was Bork every single time - and _obey_once fetched
         grounding for who[0] alone, built one prompt from it, and applied the
         answer to all four. Bork answered every order the family ever got, and
@@ -291,7 +291,7 @@ class WiringTest(unittest.TestCase):
 
     def test_the_order_is_stamped_before_anybody_is_asked(self):
         """At-most-once. The cost of a double is the whole family acting on one
-        sentence twice; the cost of a miss is Evan typing it again. Four
+        sentence twice; the cost of a miss is the operator typing it again. Four
         concurrent inferences take longer than one, so the window this closes
         got wider, not narrower."""
         fn = self._fn("_obey_once")

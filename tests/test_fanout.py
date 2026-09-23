@@ -133,12 +133,12 @@ class CommandableTest(unittest.TestCase):
         # mod-overseer can only whisper to a character that has a
         # PlayerbotAI; a row for a mortal is a guaranteed error row, and it
         # would make the muster count lie.
-        roster = [_row("Grug"), _row("Evan", bot=0)]
+        roster = [_row("Grug"), _row("Ahuman", bot=0)]
         names, _ = resolve_targets("everyone", roster, GUILDS)
         self.assertEqual(names, ["Grug"])
 
     def test_a_world_of_only_mortals_refuses(self):
-        names, reason = resolve_targets("everyone", [_row("Evan", bot=0)], GUILDS)
+        names, reason = resolve_targets("everyone", [_row("Ahuman", bot=0)], GUILDS)
         self.assertEqual(names, [])
         self.assertTrue(reason)
 

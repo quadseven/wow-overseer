@@ -1,6 +1,6 @@
 """The family works out what today is for.
 
-Evan's brief: "I really want them to sort of be like a team that collectively
+The operator's brief: "I really want them to sort of be like a team that collectively
 talks together, talking about what they need to focus on today... sometimes
 they just log in and just fish."
 

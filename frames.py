@@ -1,7 +1,7 @@
 """The last frame of a character's own screen, and why there isn't one.
 
 WHY THIS EXISTS. The overseer can read a character's position, bags, spells and
-strategies and still have no idea what is happening to it. #2663 gives Evan
+strategies and still have no idea what is happening to it. #2663 gives the operator
 video; this gives everyone - including whatever is reading these tables - a
 still. A frame is the one instrument here that SHOWS the game rather than
 describing it.

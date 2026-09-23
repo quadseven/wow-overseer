@@ -5,7 +5,7 @@ out. No pymysql, no network, nothing fetched in here. bridge.py runs the
 queries against acore_world.quest_template / quest_template_addon and the two
 per-character tables, builds Member and Quest records, and hands them in.
 
-WHY THIS EXISTS. Evan's requirement is that all five quest equally and nobody
+WHY THIS EXISTS. The operator's requirement is that all five quest equally and nobody
 falls behind. They do not. Turn-ins, read live:
 
     Og 17    Bork 13    Grug 13    Grog 3    Ugga 3

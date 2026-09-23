@@ -182,14 +182,17 @@ class PlanMusterTest(unittest.TestCase):
     def test_a_human_player_is_never_mustered(self):
         """_fetch_roster returns EVERY online character. Before the fix the
         responders were the six alphabetically first names on the realm, so a
-        player called Evan was ordered every time - and mod_overseer writes
+        player called Ahuman was ordered every time - and mod_overseer writes
         status='error', detail='target has no bot AI' for them."""
-        roster = ROSTER + [_row("Aaanon", is_bot=False), _row("Evan", 60, is_bot=False)]
+        roster = ROSTER + [
+            _row("Aaanon", is_bot=False),
+            _row("Ahuman", 60, is_bot=False),
+        ]
         m = kin.plan_muster(
             self._plea(), roster, family=FAMILY, last_muster_at=None, now=100.0
         )
         names = [a.character_name for a in m.actions]
-        self.assertNotIn("Evan", names)
+        self.assertNotIn("Ahuman", names)
         self.assertNotIn("Aaanon", names)
         self.assertEqual(sorted(names), ["Bork", "Grug", "Og", "Ugga"])
 

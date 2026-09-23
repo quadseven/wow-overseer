@@ -4,7 +4,7 @@ infra#3205. Every view this page already has answers a different question.
 The map says WHERE the five are. The Family tab says whether they are alive.
 The Armory says what they are wearing, the Quest board what is in their logs,
 the Chronicle what they have already done. None of them says what the
-family is CURRENTLY TRYING TO ACHIEVE, which is the question Evan asks out
+family is CURRENTLY TRYING TO ACHIEVE, which is the question the operator asks out
 loud every time he opens the page, and the only one he still has to ask a
 person to answer.
 
@@ -32,7 +32,7 @@ and nobody has ever put the pieces beside each other:
 So this module READS. It writes nothing, invents nothing, and adds no column.
 Where two of those sources disagree it says they disagree rather than picking
 one, because the whole reason this page is being asked for is that a split
-party is the failure Evan keeps catching by eye.
+party is the failure the operator keeps catching by eye.
 
 PURE MODULE, the same seam as family.py, questlog.py and achievements.py: rows
 in, the banner's JSON out. No MySQL, no Discord, no LLM, and no clock of its
@@ -74,7 +74,7 @@ import travel
 # hour and puts a quest, a level or an equip on the event feed every few
 # minutes, so twenty minutes of total silence is well outside normal play and
 # well inside a person's patience. Below ten this would cry stall over a long
-# corridor; above thirty it is slower than Evan noticing by eye, which would
+# corridor; above thirty it is slower than the operator noticing by eye, which would
 # make the whole feature pointless. It is deliberately the same twenty minutes
 # mod_overseer.cpp's TRAVEL_BACKSTOP_SECONDS gives a walk before giving up.
 STALL_AFTER = timedelta(minutes=20)
@@ -845,7 +845,7 @@ def _decide(
     3. The family is split  - said BEFORE any single activity is claimed.
                               "Four are questing" is not the same answer as
                               "the family is questing", and the difference is
-                              what Evan has been catching by eye.
+                              what the operator has been catching by eye.
     4. The LEADER on an errand- he is walking somewhere on purpose and the
                               other four follow him, so his errand is the
                               family's. A non-leader's errand is a side trip
