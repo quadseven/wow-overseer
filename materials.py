@@ -38,7 +38,7 @@ this stack end up in", never "should this stack exist" - the item is already
 real and already sitting in somebody's inventory. REAGENTS below is read-only
 domain knowledge (which profession consumes which material), the same shape
 as professions.ARMOUR and professions.CRAFT_ARMOUR: a short, named table
-rather than a derivation, because the correctness here is Evan's own
+rather than a derivation, because the correctness here is the operator's own
 observation of what is actually in these bags, not a rule that could
 reverse-engineer it. Deliberately small: a material not listed is left alone
 rather than guessed at, exactly as craftpleas.PRODUCTS (#2829) leaves an
@@ -53,7 +53,7 @@ those inputs is. Say so plainly rather than implying otherwise, per this
 service's own hard-won rule about `delivered` meaning nothing was verified.
 
 WHAT INFRA#3197 CHANGED, AND WHY THE WORDS MOVED OUT OF THE DECISION. What
-Evan watched on stream was this, twice per character, minutes apart:
+The operator watched on stream was this, twice per character, minutes apart:
 
     [Party] [Grog]: Grog give Og 20 Linen Cloth. Og need it for tailoring.
     [Party] [Grog]: Grog give Og 19 Linen Cloth. Og need it for tailoring.

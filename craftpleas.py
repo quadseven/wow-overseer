@@ -6,7 +6,7 @@ Discord, no LLM below this line - `_in_character` is what puts a voice on the
 answer, exactly as it puts one on every other line this project speaks in
 party chat.
 
-WHY THIS EXISTS. Evan rejected #2823 for materialising a bag out of nowhere -
+WHY THIS EXISTS. The operator rejected #2823 for materialising a bag out of nowhere -
 "they should know each others skills and professions and be able to ask Ugga
 or Og whoever gets tailoring to make a bag." The knowledge already existed:
 professions.ROSTER assigns Og tailoring for exactly this reason (its own
@@ -98,7 +98,7 @@ PRODUCTS = {
     "ring": "jewelcrafting",
 }
 
-# A request, however the family phrases it: Evan's own example is caveman
+# A request, however the family phrases it: The operator's own example is caveman
 # grammar ("Ugga make bag?"), and so is professions.py's own `said` text
 # ("Family need tailoring"). "make" alone is included, not only "need" and
 # "want", because that caveman form has no "need" in it at all.

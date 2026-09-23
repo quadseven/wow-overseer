@@ -173,7 +173,7 @@ class HandoverTest(unittest.TestCase):
     """One thing said per intent, however many stacks it takes (infra#3197)."""
 
     def test_two_stacks_of_one_material_are_one_sentence(self):
-        """What Evan watched: 20 and then 19, a minute apart, which reads as
+        """What the operator watched: 20 and then 19, a minute apart, which reads as
         a loop re-evaluating rather than as a bundle changing hands."""
         grants = materials.plan(
             [

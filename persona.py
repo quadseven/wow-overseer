@@ -30,7 +30,7 @@ import bonds
 # line anyway.
 MAX_SPOKEN = 180
 
-# The house voice, taken from Evan's grug project rather than invented. All
+# The house voice, taken from the operator's grug project rather than invented. All
 # five talk this way - that is WHY they are human cavemen, and the two boys are
 # a dwarf and a gnome only because those models are short enough to read as
 # children.
@@ -151,7 +151,7 @@ _SPOKEN_KEYS = ("response", "sentence", "say", "text", "line", "answer")
 def _from_json(text: str) -> str | None:
     """The sentence inside an object, if that is what arrived.
 
-    Live, in Evan's Discord, spoken aloud in game:
+    Live, in the operator's Discord, spoken aloud in game:
 
         [Party] Bork: {"response": "Bork no need do thing. Bork go fish!"}
         [Party] Og:   {"sentence": "Og help Grug."}
@@ -237,14 +237,14 @@ def characterisation(name: str) -> str | None:
         Og   | ANCIENT_WISE_ONE
 
     and NO row at all for Grug, Ugga or Grog, who were therefore prompted with
-    no character whatsoever. So when Evan said "lets go sell junk in town", the
+    no character whatsoever. So when the operator said "lets go sell junk in town", the
     little brother who is in trouble constantly answered
 
         "The cycle of commerce must flow. Let us trade these dull relics for
          coin, as the ancients did."
 
     Bork was not out of character. He was flagged ANCIENT_WISE_ONE and played
-    it perfectly. The family's real characterisation is the `persona` Evan
+    it perfectly. The family's real characterisation is the `persona` the operator
     wrote on each Bond, which build_prompt above has grounded the council on
     since it was written, and which reached the inner voice through nothing.
 

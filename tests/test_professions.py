@@ -19,7 +19,7 @@ and its FIRST TWO LINES are
 returning at its first line every time it has ever run for these five. Same
 wall as #2756 (talents), #2813 (bags) and #2782 (trainer spells).
 
-THE ASSIGNMENT, which is Evan's and not this module's invention:
+THE ASSIGNMENT, which is the operator's and not this module's invention:
 
     Grug   warrior  tank     mining      + blacksmithing
     Bork   rogue             skinning    + leatherworking
@@ -28,10 +28,10 @@ THE ASSIGNMENT, which is Evan's and not this module's invention:
     Grog   paladin           mining      + engineering
 
 Inscription and jewelcrafting are deliberately left to nobody (#2831, the
-guild) - Grog's old pair, before Evan asked for engineering over
+guild) - Grog's old pair, before the operator asked for engineering over
 jewelcrafting.
 
-THE RULE THIS SUITE IS REALLY ABOUT. Evan rejected #2823 for conjuring bags out
+THE RULE THIS SUITE IS REALLY ABOUT. The operator rejected #2823 for conjuring bags out
 of nowhere, and #2782 is open against spells that appear without a trainer
 being visited. A profession that simply appears in `character_skills` is the
 same violation wearing a different noun. So the tests below assert, as hard as
@@ -92,7 +92,7 @@ def _walk(family, limit=40):
 
     The single most valuable thing this suite does. `plan` only ever emits one
     trade, so no single call can show that the SEQUENCE terminates, that it
-    reaches the assignment Evan actually wrote, or that no guard deadlocks it
+    reaches the assignment the operator actually wrote, or that no guard deadlocks it
     three trades in. Walking it does all three at once.
 
     Returns (steps, final skills) where steps is the flat list of assignments
@@ -220,7 +220,7 @@ class RosterTest(unittest.TestCase):
         self.assertEqual(professions.GATHERING - taken, set())
 
     def test_inscription_and_jewelcrafting_are_left_unassigned_on_purpose(self):
-        """#2831: Evan wants the guild to cover these two professions - Grog's
+        """#2831: The operator wants the guild to cover these two professions - Grog's
         old pair, before he asked for engineering over jewelcrafting. A future
         reader counting the crafts must not 'fix' this."""
         taken = {s for name in professions.ROSTER for s in professions.assigned(name)}
@@ -245,7 +245,7 @@ class RosterTest(unittest.TestCase):
     def test_grog_is_now_self_sufficient_instead_of_dependent(self):
         """The old pair (inscription + jewelcrafting) was deliberately
         gathering-free, structurally dependent on Ugga's herbs and Grug's ore
-        (#2830). Evan asked for engineering over jewelcrafting instead, and
+        (#2830). The operator asked for engineering over jewelcrafting instead, and
         Grog's own mining now feeds it - this test pins the reversal, not the
         old shape."""
         self.assertIn("mining", professions.assigned("Grog"))
@@ -386,7 +386,7 @@ class PlanTest(unittest.TestCase):
 
     def test_the_sequence_terminates_at_exactly_the_assignment(self):
         """The whole economy, walked end to end. No guard deadlocks it, it
-        does not loop, and where it stops is where Evan said it should."""
+        does not loop, and where it stops is where the operator said it should."""
         _, final = _walk(_family())
         for name, wanted in (
             ("Grug", {"mining", "blacksmithing"}),

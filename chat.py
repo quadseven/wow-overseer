@@ -20,7 +20,7 @@ is the same subject seen from the other end: everything below decides what
 reaches a chat window, and the four rules are shared by every module that
 puts words in a character's mouth. They are pure predicates over facts the
 caller supplies - no roster, no SQL, no clock of their own - so each one is
-a function a test can hold, which is the point. What Evan watched on stream
+a function a test can hold, which is the point. What the operator watched on stream
 is what named them:
 
     [Party] [Grog]: Grog give Og 20 Linen Cloth. Og need it for tailoring.
@@ -43,7 +43,7 @@ is what named them:
                        else. A viewer cannot tell that line is wrong, which
                        is what makes it the worst of the three.
   READ THE ROOM        crafting chatter stands down while a dungeon run is
-                       active. Evan, watching a Deadmines pull stop for a
+                       active. The operator, watching a Deadmines pull stop for a
                        cloth handover: "Why the fuck is the whole game
                        pausing to give Og cloth? They should say shut up we
                        are in a dungeon just wait."
@@ -315,7 +315,7 @@ def parse_reply(content: str) -> voice.Decision:
 # How long one INTENT stays said before it may be said again.
 #
 # Thirty minutes, and the number is a viewing decision rather than an
-# engineering one: the bar Evan set is that he never sees the same sentence
+# engineering one: the bar the operator set is that he never sees the same sentence
 # twice in a screenful of party chat, and a screenful is a couple of minutes
 # of a busy fight. kin.COOLDOWN_SECONDS is 90s for the opposite reason - a
 # second real emergency in the same fight still deserves an answer, while a
@@ -561,7 +561,7 @@ def run_has_present_member(
 def stand_down(speaker: str, *, subject: str = "", place: str = "") -> str:
     """What a character says instead, when it is asked mid-run.
 
-    Evan's own words for the line he wanted: "They should say shut up we are
+    The operator's own words for the line he wanted: "They should say shut up we are
     in a dungeon just wait." Said ONCE, keyed like every other intent - the
     fault being fixed is a loop that cannot read the room, and a stand-down
     repeated every tick would be the same loop wearing better manners.

@@ -8,7 +8,7 @@ five, because until infra#2791 there was only one world.
 There are two worlds now, and the dev one had no family. Which meant every
 experiment - a new quest aim, a strategy change, a profession errand, a party
 re-leadership - was still run on Grug, Ugga, Grog, Bork and Og, in the world
-Evan actually plays in. That is how five characters spent a day dead on a loop
+The operator actually plays in. That is how five characters spent a day dead on a loop
 in a level-45 zone, and how one of them was aimed into Redridge and killed.
 
 WHAT THIS MODULE IS, AND WHAT IT DELIBERATELY IS NOT. It is a RENAMING, not a

@@ -119,7 +119,7 @@ class TheOrdinaryCase(unittest.TestCase):
 
 
 class ASplitPartyIsNeverAveraged(unittest.TestCase):
-    """The failure Evan keeps catching by eye, and the one rule this page must
+    """The failure the operator keeps catching by eye, and the one rule this page must
     not break: four against one is reported as four against one."""
 
     def test_a_job_split_takes_the_headline(self):

@@ -11,7 +11,7 @@ logs, so the same fight pays two of them nothing:
     Og 17    Grug 13    Bork 13    Ugga 3    Grog 3
 
 Grog and Ugga stand within three yards of the others and kill the same mobs.
-They simply do not hold the quests those kills count towards. Evan's
+They simply do not hold the quests those kills count towards. The operator's
 requirement is that nobody in the family falls behind, and the only way five
 people get paid for one kill is for all five to be carrying the quest.
 
@@ -189,7 +189,7 @@ def _order(member: questbook.Member, ids, catalog) -> tuple:
 def _takers(members) -> list:
     """The family, the ones furthest behind first.
 
-    Rewarded count is the same number Evan reads off the server (Og 17, Grog
+    Rewarded count is the same number the operator reads off the server (Og 17, Grog
     3), so the pass serves the characters he can see are behind before it
     serves the ones he can see are ahead. Ties break on name, so the order is
     stable on identical facts.

@@ -1,13 +1,13 @@
 """What the family is trying to do RIGHT NOW - the RimWorld-style schedule.
 
-infra#2834. Evan's own words: "i should be able to be like, its farming time,
+infra#2834. The operator's own words: "i should be able to be like, its farming time,
 sort of like rim world job schedule times, they should quest, farm, dungeon,
 level, grind, try to get specific gear from something, etc". Everything the
 epic had built before this (quest aims, turn-ins, cohesion, travel, trades) is
 about whether a single behaviour works. None of it says WHAT the family should
 currently be doing, which is the layer this module names.
 
-WHAT SHIPS AND WHAT DOES NOT. `MODES` names the whole vocabulary Evan asked
+WHAT SHIPS AND WHAT DOES NOT. `MODES` names the whole vocabulary the operator asked
 for, because a schedule with one slot is not a schedule and a person reading
 this file should see the shape of the thing being built. The modes wired to an
 actual behaviour change are named in IMPLEMENTED, one at a time, each with the
@@ -38,7 +38,7 @@ from __future__ import annotations
 
 import re
 
-# Canonical mode -> what it means, in the vocabulary Evan named plus what he
+# Canonical mode -> what it means, in the vocabulary the operator named plus what he
 # said he was probably missing. Order is the order he named them in, which is
 # also a reasonable build order.
 MODES = {
@@ -47,7 +47,7 @@ MODES = {
     "farm": "gather deliberately for a named material, not opportunistically",
     "dungeon": "run an instance, tank bot leading (mod-dungeon-clear)",
     "fish": "toggle the bots' own fishing AI - accumulate food and reagents from water",
-    "grind": "kill things for experience, no objective (Evan's 'level / grind' / 'xp')",
+    "grind": "kill things for experience, no objective (The operator's 'level / grind' / 'xp')",
     "gear hunt": "target a specific item from a specific source (infra#2797)",
     "craft": "level a profession, work a queue of things the family needs",
     "town run": "vendor, repair, restock, mail (needs infra#2783)",
@@ -315,7 +315,7 @@ DEFAULT = "quest"
 COLUMN_WIDTH = 20
 
 # How people actually say it, folded onto the canonical key. Deliberately
-# includes Evan's own phrase from the issue ("its farming time") verbatim,
+# includes the operator's own phrase from the issue ("its farming time") verbatim,
 # because a recognizer that requires the formal noun and misses the sentence
 # that prompted the whole epic would be a design that forgot its own ticket.
 ALIASES = {
@@ -409,7 +409,7 @@ def _explicit(text: str) -> str | None:
 def parse_order(text: str) -> str | None:
     """A mode order somewhere in free text, or None.
 
-    Two shapes: the explicit "job <mode>" form, and Evan's natural register -
+    Two shapes: the explicit "job <mode>" form, and the operator's natural register -
     "it's farming time", "time to grind" - matched as a whole known phrase
     inside the sentence. Deliberately NOT "any word in MODES appears
     anywhere": that would fire on "quest" inside an ordinary sentence about

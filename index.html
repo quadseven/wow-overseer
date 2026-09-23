@@ -3725,7 +3725,7 @@
            first, read as the primary action, and is NOT IMPLEMENTED: it spends
            forty seconds bringing a client up and then answers with a refusal
            about needing a GM account that is not one of the family (infra#2887).
-           Evan tapped it on his phone, waited, got nothing, and reasonably
+           The operator tapped it on his phone, waited, got nothing, and reasonably
            concluded streaming was broken - on the day it was proven working.
            `be them` is the one that works, so it leads, and follow-cam is
            disabled rather than merely demoted: a control that cannot succeed
@@ -4781,7 +4781,7 @@ async function refreshWatch() {
 
 // --- their own screen (infra#2663) ---------------------------------------
 //
-// The stream is for Evan; this still is for everyone else, including whatever
+// The stream is for the operator; this still is for everyone else, including whatever
 // is reading the overseer's tables. It is the only instrument here that shows
 // the game instead of describing it.
 //
@@ -5082,7 +5082,7 @@ function refreshMind() { if (mind.name && !mind.busy) fetchThoughts(null); }
 
 // --- the Family tab (infra#2892), reshaped by infra#88 -------------------
 //
-// THE COMPLAINT THIS ANSWERS, in Evan's own words: on a phone the map is five
+// THE COMPLAINT THIS ANSWERS, in the operator's own words: on a phone the map is five
 // hundred dots and the five that matter are indistinguishable. The map is the
 // right instrument for "who is in the world" and the wrong one for "is my
 // family alive" - that second question is about five named characters and its
@@ -5132,7 +5132,7 @@ const wrapEl = document.getElementById("wrap");
 let view = MAP_VIEW;
 // `open` is who this tab is watching. ONE AT A TIME on purpose: the GPU has
 // two channels, and the second is worth leaving free for the panel, another
-// phone, or Evan on the Switch - two videos on one phone screen is not a
+// phone, or the operator on the Switch - two videos on one phone screen is not a
 // feature anybody asked for.
 const fam = { cards: new Map(), byName: new Map(), open: null, channels: null };
 

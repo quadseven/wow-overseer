@@ -4,7 +4,7 @@ SELLING. `sell junk` was in the vocabulary and is not a command.
 mod-playerbots' SellAction accepts gray, *, vendor or an item link; anything
 else falls through to an item-name lookup, matches nothing, sells nothing, and
 returns TRUE. So the row said delivered, the character announced it was heading
-to a vendor, and no grey item ever left a bag. Evan watched that happen twice.
+to a vendor, and no grey item ever left a bag. The operator watched that happen twice.
 
 QUESTING. The council settles on an objective and nothing turns that decision
 into behaviour, so the goal supervisor's `grind` - "kill what is in front of

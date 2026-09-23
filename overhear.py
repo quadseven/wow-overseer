@@ -1,9 +1,9 @@
-"""Evan talking to the family in game, rather than through Discord.
+"""The operator talking to the family in game, rather than through Discord.
 
 Pure module. Chat rows in, a decision about whether the overseer was being
 addressed out. bridge.py does the reading and the acting.
 
-WHY. Evan kept asking the same question in different words - "how do i talk as
+WHY. The operator kept asking the same question in different words - "how do i talk as
 grug suggesting to go to a town and sell and upgrade gear", "i just asked for
 the sword that dropped with +4 stamina and they arent listening". He was
 typing into party chat and nothing was listening, because the only ear the
@@ -11,7 +11,7 @@ overseer had was a Discord channel. He is sitting at the keyboard playing one
 of these characters; that is the natural place to talk to them.
 
 WHAT COUNTS AS BEING ADDRESSED. A line typed by a HUMAN, in a channel the
-family shares. `sender_is_bot` is the whole test: when Evan holds Grug the
+family shares. `sender_is_bot` is the whole test: when the operator holds Grug the
 character has no PlayerbotAI and the row says 0; when the AI holds him it says
 1. So the family's own council speech can never be mistaken for an order, and
 neither can the five hundred random bots.
@@ -27,7 +27,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-# Channels the family shares. `say` is in for the case where Evan is stood
+# Channels the family shares. `say` is in for the case where the operator is stood
 # among them; `whisper` is not, because a whisper to one character is between
 # those two and the overseer has no business fanning it out to everyone.
 HEARD_ON = ("party", "say", "raid")
@@ -43,7 +43,7 @@ MIN_WORDS = 2
 
 @dataclass(frozen=True)
 class Directive:
-    """Something Evan said in game that the family should act on."""
+    """Something the operator said in game that the family should act on."""
 
     speaker: str
     text: str
@@ -53,7 +53,7 @@ def is_addressed(row: dict, *, family, authored) -> bool:
     """Was the overseer being spoken to?
 
     NOT `sender_is_bot`. That was the first design and it is wrong the moment
-    selfbot is on: with SelfBotLevel 3 the AI attaches to Evan's character the
+    selfbot is on: with SelfBotLevel 3 the AI attaches to the operator's character the
     instant he logs in, so everything HE types comes back flagged as bot
     speech. The listener was built on a flag an earlier change had already
     broken - the live row read
@@ -90,7 +90,7 @@ def hear(
 ) -> Directive | None:
     """The one order to act on from this batch, or None.
 
-    The LAST qualifying line, not the first: if Evan typed twice while the
+    The LAST qualifying line, not the first: if the operator typed twice while the
     relay was between ticks, the later line is the one he meant. Taking the
     first would act on a sentence he had already replaced.
     """
@@ -106,7 +106,7 @@ def hear(
 def audience(directive: Directive, *, family) -> list:
     """Who carries out the order: the family, minus whoever gave it.
 
-    Evan is playing one of them. Ordering his own character to follow itself is
+    The operator is playing one of them. Ordering his own character to follow itself is
     the sort of thing that looks fine in a test and reads as a bug in game.
     """
     return sorted(n for n in family if n.casefold() != directive.speaker.casefold())
