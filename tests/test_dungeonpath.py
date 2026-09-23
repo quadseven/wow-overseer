@@ -247,18 +247,18 @@ class WhatTheOverseerCanRun(unittest.TestCase):
     def test_a_new_portal_says_what_still_stands_in_the_way(self):
         """A portal row is not the same claim as a run that works, so each
         new one carries mod-overseer's own caveat beside "can run it"."""
-        for map_id in (48, 47, 129, 90, 70, 209, 109, 230, 229, 329):
+        for map_id in (48, 47, 129, 90, 70, 209, 109, 230, 229, 329, 349, 289, 429):
             self.assertIn(map_id, dungeonpath.PORTAL_CAVEATS, map_id)
         line = step(build(), 90)["overseer"]["line"]
         self.assertIn("gnomeregan, gnomeregan-depot", line)
         self.assertIn("Workshop Key", line)
 
     def test_a_dungeon_without_a_portal_says_so(self):
-        dire_maul = step(build(), 429)
-        self.assertFalse(dire_maul["overseer"]["can"])
-        self.assertIn("cannot run this one yet", dire_maul["overseer"]["line"])
+        molten_core = step(build(), 409)
+        self.assertFalse(molten_core["overseer"]["can"])
+        self.assertIn("cannot run this one yet", molten_core["overseer"]["line"])
         self.assertIn(
-            {"text": "overseer cannot run it yet", "tone": "no"}, dire_maul["chips"]
+            {"text": "overseer cannot run it yet", "tone": "no"}, molten_core["chips"]
         )
 
     def test_scarlet_names_all_four_wings(self):
@@ -273,8 +273,8 @@ class WhatTheOverseerCanRun(unittest.TestCase):
 
     def test_the_page_line_counts_dungeons_not_portals(self):
         line = dungeonpath.runnable_line(PORTALS, {36: "The Deadmines"})
-        # Stratholme is withheld (#205), so 14 of the 15 portal maps.
-        self.assertIn("can run 14 dungeons", line)
+        # Stratholme is withheld (#205), so 18 of the 19 portal maps.
+        self.assertIn("can run 18 dungeons", line)
         self.assertIn("The Deadmines", line)
 
 

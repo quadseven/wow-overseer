@@ -131,6 +131,19 @@ class JobDirective:
 
 
 @dataclass(frozen=True)
+class QueueDirective:
+    """A family's dungeon campaign queue order (#209): "queue Zug: ragefire
+    50, then wailing 50". `family` is the name before the colon, "" when none
+    was given; `text` is the entries, "clear", or "" to be told the queue.
+    campaignqueue.py reads both, and the bridge validates before it writes.
+    """
+
+    family: str
+    text: str
+    source: str
+
+
+@dataclass(frozen=True)
 class FanoutCommand:
     """A group order that is already a playerbot command.
 
@@ -291,6 +304,15 @@ def _job_mode(text: str):
     return parse_order(text)
 
 
+def _queue_order(text: str):
+    """campaignqueue.parse_order, late-imported like _job_mode. A message
+    that starts with "queue" is a queue order and nothing else, so it is
+    asked before the job phrases."""
+    from campaignqueue import parse_order
+
+    return parse_order(text)
+
+
 def _unaddressed(text: str, dedicated: bool, author_id: str = "") -> list:
     """What a message that names no character means.
 
@@ -319,6 +341,13 @@ def _unaddressed(text: str, dedicated: bool, author_id: str = "") -> list:
     """
     if not dedicated:
         return []
+    queue = _queue_order(text)
+    if queue is not None:
+        return [
+            QueueDirective(
+                family=queue.family, text=queue.text, source=f"discord:{author_id}"
+            )
+        ]
     mode = _job_mode(text)
     if mode is not None:
         return [JobDirective(mode=mode, source=f"discord:{author_id}")]

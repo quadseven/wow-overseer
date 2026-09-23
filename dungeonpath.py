@@ -122,6 +122,16 @@ PORTAL_MAPS = {
     "lower-blackrock-spire": 229,
     "stratholme-live": 329,
     "stratholme-undead": 329,
+    "ragefire": 389,
+    "maraudon-orange": 349,
+    "maraudon-purple": 349,
+    "scholomance": 289,
+    "dire-maul-east-east": 429,
+    "dire-maul-east-west": 429,
+    "dire-maul-east-south": 429,
+    "dire-maul-west-north": 429,
+    "dire-maul-west-south": 429,
+    "dire-maul-north": 429,
 }
 
 # What mod-overseer's own portal table says about a row that exists and still
@@ -170,6 +180,19 @@ PORTAL_CAVEATS = {
     329: (
         "the service entrance needs the Key to the City from the main gate "
         "side, and the main gate has no way out of its own"
+    ),
+    349: (
+        "the orange and purple doors both lead into the inner dungeon, and "
+        "which way a run walks out follows the job, not the map"
+    ),
+    289: (
+        "the Skeleton Key opens the door past the entrance, and whether that "
+        "door also stands between the staging point and the entrance has not "
+        "been measured"
+    ),
+    429: (
+        "the West and North wing doors need the Crescent Key, which drops in "
+        "the East wing, so an East wing run comes first"
     ),
 }
 

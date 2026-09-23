@@ -41,6 +41,7 @@ import fanout
 import flightlearn
 import goals
 import bonds
+import campaignqueue
 import guildbank
 import guildshare
 import guildroute
@@ -1889,7 +1890,8 @@ def _aim_traveller(quest_id: int) -> int:
         return aimed
 
 
-def _drive_dungeon(keyword: str, wanted: int) -> tuple:
+def _drive_dungeon(keyword: str, wanted: int, names=None,
+                   source: str = "overseer:goal") -> tuple:
     """Turn a decided dungeon goal into the roster writes that actually send
     the family in: job='dungeon:<keyword>' (or the bare 'dungeon') on every
     ENABLED character, plus the campaign cap the coordinator counts against.
@@ -1917,6 +1919,11 @@ def _drive_dungeon(keyword: str, wanted: int) -> tuple:
     "count what actually landed" honesty _set_job's own fan-out keeps.
     A keyword with no portal row is refused before any read or write
     (jobs.dungeon_job), also returning (0, 0).
+
+    `names` is the family to send, for the campaign queue (#209), which
+    drives every family off its own roster rows; None is this bridge's own
+    family, as the council's goal has always meant. `source` is what the job
+    rows carry, so a queue advance reads as one on the Decree.
     """
     mode = jobs.dungeon_job(keyword)
     if mode is None:
@@ -1927,7 +1934,7 @@ def _drive_dungeon(keyword: str, wanted: int) -> tuple:
         )
         return 0, 0
 
-    names = _fetch_enabled_names()
+    names = _fetch_enabled_names() if names is None else list(names)
     if not names:
         return 0, 0
 
@@ -1944,7 +1951,7 @@ def _drive_dungeon(keyword: str, wanted: int) -> tuple:
     jobs_written = 0
     for name in names:
         try:
-            _insert_job(name, mode, "overseer:goal")
+            _insert_job(name, mode, source)
             jobs_written += 1
         except Exception:
             # One failed insert must not cost the rest of the family; see
@@ -1973,6 +1980,161 @@ def _drive_dungeon(keyword: str, wanted: int) -> tuple:
     log.info("goal: dungeon:%s -> %d job(s), %d campaign row(s) of %d enabled",
              keyword or "(default)", jobs_written, campaign_written, len(names))
     return jobs_written, campaign_written
+
+
+# --- the campaign queue (#209) ------------------------------------------------
+#
+# campaignqueue.py decides; these read the rows it decides on and run the
+# statements it names. The queue is bridge-owned state, created at start-up
+# the way the Jev store is (#179), because the worldserver never reads it.
+
+
+def _ensure_queue_store() -> None:
+    """The campaign queue table, created the way the Jev store is (#179).
+
+    A FAILURE IS LOGGED AND SWALLOWED, as the Jev store's is: a start-up that
+    raised over this table would stop every loop the bridge runs, and the
+    queue pass then says, every cycle, that it has nothing to read.
+    """
+    try:
+        with _connect() as conn, conn.cursor() as cur:
+            cur.execute(campaignqueue.CREATE_SQL)
+    except pymysql.err.MySQLError:
+        log.exception("queue: the campaign queue store is unavailable, so no "
+                      "family's queue can be set or advanced")
+
+
+def _fetch_queue_rows() -> list:
+    """Every queued and active entry, every family. [] with no table yet."""
+    try:
+        with _connect() as conn, conn.cursor() as cur:
+            cur.execute(campaignqueue.SELECT_PENDING_SQL)
+            return [dict(row) for row in cur.fetchall()]
+    except pymysql.err.MySQLError as exc:
+        if exc.args and exc.args[0] in (1054, 1146):
+            return []
+        raise
+
+
+# The family column arrives with mod-overseer#506's SQL; a roster without it
+# is one family, keyed ''. A roster without the campaign columns cannot run a
+# queue at all, and reads as nobody.
+_QUEUE_ROSTER_SQL = (
+    "SELECT name, enabled, `lead`, family, job, dungeon_runs_done "
+    "FROM overseer_roster WHERE enabled = 1"
+)
+_QUEUE_ROSTER_OLD = (
+    "SELECT name, enabled, `lead`, job, dungeon_runs_done "
+    "FROM overseer_roster WHERE enabled = 1"
+)
+
+
+def _fetch_queue_roster() -> list:
+    """The enabled roster, with each row's family, job and run count."""
+    with _connect() as conn, conn.cursor() as cur:
+        for sql in (_QUEUE_ROSTER_SQL, _QUEUE_ROSTER_OLD):
+            try:
+                cur.execute(sql)
+            except pymysql.err.MySQLError as exc:
+                if exc.args and exc.args[0] == 1054:
+                    continue
+                raise
+            return [dict(row) for row in cur.fetchall()]
+    log.warning("queue: overseer_roster has no campaign columns on this realm, "
+                "so no queue can advance (mod-overseer#302)")
+    return []
+
+
+def _queue_level_rows(family: dict) -> list:
+    """Each member's saved level, race and map, with the leader marked."""
+    names = list(family["names"])
+    if not names:
+        return []
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(campaignqueue.level_rows_sql(len(names)), tuple(names))
+        rows = [dict(row) for row in cur.fetchall()]
+    lead = str(family["leader"].get("name") or "")
+    for row in rows:
+        row["lead"] = 1 if row.get("name") == lead else 0
+    return rows
+
+
+def _write_queue(plan, source: str) -> int:
+    """Replace a family's pending queue with `plan`'s entries. Rows changed."""
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(campaignqueue.CANCEL_SQL, (plan.family,))
+        changed = cur.rowcount or 0
+        for position, entry in enumerate(plan.entries):
+            cur.execute(campaignqueue.INSERT_SQL,
+                        (plan.family, position, entry.keyword, entry.runs,
+                         source[:64]))
+            changed += 1
+    return changed
+
+
+def _mark_queue(sql: str, entry_id: int) -> int:
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(sql, (int(entry_id),))
+        return cur.rowcount or 0
+
+
+def _reset_campaign_done(names: list) -> int:
+    """dungeon_runs_done back to 0 on every member: a new entry counts from
+    nothing, and the count lives on whichever row leads (decree.py)."""
+    reset = 0
+    with _connect() as conn, conn.cursor() as cur:
+        for name in names:
+            cur.execute(
+                "UPDATE overseer_roster SET dungeon_runs_done = 0 WHERE name = %s",
+                (name,),
+            )
+            reset += cur.rowcount or 0
+    return reset
+
+
+def _apply_queue_move(move, names: list) -> None:
+    """Run one campaignqueue.Move for one family. Decides nothing.
+
+    The dungeon job goes through `_drive_dungeon`, the council goal's own
+    writer, so a queue entry is refused on an unknown keyword and withheld on
+    full bags exactly as a council decision is. An entry is marked started
+    only once its job landed; a withheld start is retried next pass.
+    """
+    if move.finish:
+        _mark_queue(campaignqueue.FINISH_SQL, move.finish)
+    if move.quest:
+        for name in names:
+            try:
+                _insert_job(name, jobs.DEFAULT, campaignqueue.SOURCE)
+            except Exception:
+                log.exception("queue: quest job insert failed for %s", name)
+        return
+    if not move.keyword:
+        return
+    written, _ = _drive_dungeon(move.keyword, move.wanted, names,
+                                campaignqueue.SOURCE)
+    if not written:
+        return
+    if move.reset:
+        _reset_campaign_done(names)
+    if move.start:
+        _mark_queue(campaignqueue.START_SQL, move.start)
+
+
+def _queue_owns_job() -> bool:
+    """Whether this bridge's own family has a queue that owns its job now.
+
+    The passes that write this family's job on their own clock (the council
+    goal's dungeon lease, the skill goal, the craft rhythm) ask this first
+    and stand down, so a queue is not stomped every few minutes by a pass
+    that knows nothing about it. An unreadable queue owns nothing.
+    """
+    try:
+        family = _cohort_of(bonds.head_of_family()) or ""
+        return bool(campaignqueue.pending_by_family(_fetch_queue_rows()).get(family))
+    except Exception:
+        log.exception("queue: could not read whether a queue owns the job")
+        return False
 
 
 def _holders_of(quest_id: int) -> set:
@@ -3525,6 +3687,7 @@ class Bridge(discord.Client):
                 self._towntrip_loop,
                 self._flight_learn_loop,
                 self._restore_lost_lives,
+                self._campaign_queue_loop,
             )
         }
 
@@ -3540,6 +3703,7 @@ class Bridge(discord.Client):
         await asyncio.to_thread(_ensure_sample_store)
         await asyncio.to_thread(_ensure_trade_store)
         await asyncio.to_thread(_ensure_jev_store)
+        await asyncio.to_thread(_ensure_queue_store)
 
     async def on_message(self, message: discord.Message) -> None:
         if message.author.bot:
@@ -3565,6 +3729,15 @@ class Bridge(discord.Client):
         (relay.GmCommand, _insert_gm, "gm command"),
     )
 
+    # Decision type -> the method that carries it out with (decision, channel).
+    _DIRECTED = (
+        (core.NLDirective, "_interpret"),
+        (core.FanoutDirective, "_conjure"),
+        (core.JobDirective, "_set_job"),
+        (core.QueueDirective, "_set_queue"),
+        (core.DigestQuery, "_report_digest"),
+    )
+
     async def _act_on(self, decision, channel) -> None:
         """Carry out one parsed decision."""
         for kind, insert, label in self._QUEUED:
@@ -3576,19 +3749,17 @@ class Bridge(discord.Client):
                 log.info("queued %s %s for %s", label, row_id, decision.target_name)
                 return
 
-        if isinstance(decision, core.NLDirective):
-            await self._interpret(decision, channel)
-        elif isinstance(decision, core.FanoutCommand):
+        # A decision that is a (decision, channel) call is a table row, not
+        # another branch: the chain had grown one limb per directive kind.
+        for kind, method in self._DIRECTED:
+            if isinstance(decision, kind):
+                await getattr(self, method)(decision, channel)
+                return
+        if isinstance(decision, core.FanoutCommand):
             await self._muster(decision, decision.command, channel)
-        elif isinstance(decision, core.FanoutDirective):
-            await self._conjure(decision, channel)
-        elif isinstance(decision, core.JobDirective):
-            await self._set_job(decision, channel)
         elif isinstance(decision, core.RosterQuery):
             rows = await asyncio.to_thread(_fetch_roster)
             await channel.send(core.format_roster(rows).text[:1990])
-        elif isinstance(decision, core.DigestQuery):
-            await self._report_digest(decision, channel)
         else:
             await channel.send(decision.text)
 
@@ -9555,10 +9726,106 @@ class Bridge(discord.Client):
                  action.quest_id, action.beneficiary, aimed)
 
     async def _goal_drive_dungeon(self, row: dict, action) -> None:
+        # A CAMPAIGN QUEUE OWNS THE JOB WHILE IT HAS ENTRIES (#209). This
+        # lease re-asserts the council's keyword every few cycles, which would
+        # pull a family off the queue's dungeon and restart nothing.
+        if await asyncio.to_thread(_queue_owns_job):
+            log.info("goal: dungeon:%s stands down - the family's campaign "
+                     "queue owns its job", action.keyword or "(default)")
+            return
         # _drive_dungeon is what decides whether bag pressure withholds
         # this cycle; 0 written either means that, or an empty roster, and
         # both are already logged there with the reason.
         await asyncio.to_thread(_drive_dungeon, action.keyword, action.wanted)
+
+    # --- the campaign queue (#209) --------------------------------------------
+
+    async def _campaign_queue_loop(self) -> None:
+        """Advance every family's queue on its own clock.
+
+        A minute by default: a dungeon run takes longer than that, so a
+        queue is advanced within a minute of its cap being reached, and a job
+        knocked off the leader's row is back inside the same minute.
+        """
+        await self.wait_until_ready()
+        cycle = float(os.environ.get("QUEUE_CYCLE_SECONDS", "60"))
+        await asyncio.sleep(min(cycle, 45.0))
+        while not self.is_closed():
+            try:
+                await self._campaign_queue_once()
+            except Exception:
+                log.exception("queue: pass failed; retrying next cycle")
+            await asyncio.sleep(cycle)
+
+    async def _campaign_queue_once(self) -> None:
+        """One pass: every family with a pending entry, off its own leader."""
+        pending = campaignqueue.pending_by_family(
+            await asyncio.to_thread(_fetch_queue_rows))
+        if not pending:
+            return
+        fams = campaignqueue.families(await asyncio.to_thread(_fetch_queue_roster))
+        for key, rows in pending.items():
+            fam = fams.get(key)
+            if fam is None:
+                log.warning("queue: %s has queued dungeons and no enabled "
+                            "roster row, so nothing is written",
+                            campaignqueue._family(key))
+                continue
+            move = campaignqueue.step(rows, fam["leader"])
+            log.info("queue: %s: %s", campaignqueue._family(key), move.why)
+            if not move.writes:
+                continue
+            try:
+                await asyncio.to_thread(_apply_queue_move, move, fam["names"])
+            except Exception:
+                # One family's failure must not cost the other its advance.
+                log.exception("queue: the pass for %s failed; retrying next "
+                              "cycle", campaignqueue._family(key))
+
+    async def _set_queue(self, d: core.QueueDirective, channel) -> None:
+        """Set, clear or read a family's queue from the overseer's channel.
+
+        Every entry is validated before anything is written, and one refused
+        entry refuses the whole order: a queue with a hole in it is a
+        different plan from the one that was given.
+        """
+        order = campaignqueue.Order(family=d.family, text=d.text)
+        fams = campaignqueue.families(await asyncio.to_thread(_fetch_queue_roster))
+        key, refusal = campaignqueue.pick_family(order.family, sorted(fams))
+        if refusal:
+            await channel.send(refusal[:1990])
+            return
+        if not order.text.strip():
+            mine = campaignqueue.pending_by_family(
+                await asyncio.to_thread(_fetch_queue_rows)).get(key, [])
+            line = campaignqueue.progress_line(
+                mine, fams[key]["leader"].get("dungeon_runs_done"))
+            await channel.send(
+                ("Queue for %s: %s." % (campaignqueue._family(key), line)
+                 if line else "Nothing is queued for %s." % campaignqueue._family(key))[:1990])
+            return
+        if order.clear:
+            plan = campaignqueue.clear(key)
+        else:
+            entries, refusal = campaignqueue.parse_entries(order.text)
+            if refusal:
+                await channel.send(refusal[:1990])
+                return
+            level_rows = await asyncio.to_thread(_queue_level_rows, fams[key])
+            plan = campaignqueue.plan(key, entries, level_rows)
+            if plan.refusal:
+                log.info("queue: refused for %s: %s", campaignqueue._family(key),
+                         plan.refusal)
+                await channel.send(plan.refusal[:1990])
+                return
+        written = await asyncio.to_thread(_write_queue, plan, d.source)
+        log.info("queue: %s set by %s, %d row(s) written: %s",
+                 campaignqueue._family(key), d.source, written, plan.says)
+        await channel.send(plan.says[:1990])
+        if plan.entries:
+            # Started now, not a minute from now, for the reason _set_job
+            # drives train at once: somebody has just given an order.
+            await self._campaign_queue_once()
 
     async def _goal_thought(self, row: dict, action) -> None:
         await asyncio.to_thread(
@@ -9979,24 +10246,17 @@ class Bridge(discord.Client):
             await channel.send(refusal[:1990])
             return
 
+        if await self._queue_holds_job(d):
+            return
+
         # THE SECOND HALF OF THE SAME GUARD. A mode can be wired and still have
         # nothing to do, and setting it then is the same idle by a longer road.
-        # Only `train` can answer this today because only `train` has a drive
-        # in this process to ask; quest and dungeon are driven inside the
-        # worldserver and have no equivalent question to put.
-        if d.mode == trainjob.MODE:
-            blocked = trainjob.readiness(await asyncio.to_thread(_train_members))
-            if blocked:
-                log.info("job: refused mode=%r - nothing to train", d.mode)
-                await channel.send(("Refusing to set job=train. " + blocked)[:1990])
-                return
-
-        if d.mode == raidprep.MODE:
-            blocked = raidprep.readiness(await asyncio.to_thread(_raidprep_members))
-            if blocked:
-                log.info("job: refused mode=%r - nothing to prepare", d.mode)
-                await channel.send(("Refusing to set job=raid prep. " + blocked)[:1990])
-                return
+        # See _job_not_ready.
+        blocked = await self._job_not_ready(d.mode)
+        if blocked:
+            log.info("job: refused mode=%r - nothing to do", d.mode)
+            await channel.send(blocked[:1990])
+            return
 
         names = await asyncio.to_thread(_fetch_enabled_names)
         if not names:
@@ -10045,6 +10305,37 @@ class Bridge(discord.Client):
         await channel.send(
             f"{jobs.describe(d.mode)} ({written}/{len(names)} of the family told)"
         )
+
+    async def _queue_holds_job(self, d: core.JobDirective) -> bool:
+        """AN AUTOMATIC PASS DOES NOT OUTRANK A CAMPAIGN QUEUE (#209).
+
+        The craft rhythm and the skill goal write this family's job on their
+        own clocks; while a queue has entries it owns the job, and a pass that
+        switched the family off its dungeon would end the run. A person's own
+        order still goes through: "queue clear" is how they stop one.
+        """
+        if not d.source.startswith("overseer:"):
+            return False
+        if not await asyncio.to_thread(_queue_owns_job):
+            return False
+        log.info("job: mode=%r from %s stands down - the family's campaign "
+                 "queue owns its job", d.mode, d.source)
+        return True
+
+    async def _job_not_ready(self, mode: str) -> str:
+        """The refusal for a wired mode with nothing to do, or "".
+
+        Only `train` and `raid prep` can answer this today because only they
+        have a drive in this process to ask; quest and dungeon are driven
+        inside the worldserver and have no equivalent question to put.
+        """
+        if mode == trainjob.MODE:
+            blocked = trainjob.readiness(await asyncio.to_thread(_train_members))
+            return ("Refusing to set job=train. " + blocked) if blocked else ""
+        if mode == raidprep.MODE:
+            blocked = raidprep.readiness(await asyncio.to_thread(_raidprep_members))
+            return ("Refusing to set job=raid prep. " + blocked) if blocked else ""
+        return ""
 
     async def _drive_train(self) -> None:
         """Make `job = train` mean something: aim the traveller at a trainer.
@@ -15697,6 +15988,7 @@ class HeadlessBridge(Bridge):
         await asyncio.to_thread(_ensure_sample_store)
         await asyncio.to_thread(_ensure_trade_store)
         await asyncio.to_thread(_ensure_jev_store)
+        await asyncio.to_thread(_ensure_queue_store)
 
         loops = [
             coro for coro in (
@@ -15726,6 +16018,7 @@ class HeadlessBridge(Bridge):
                 self._towntrip_loop,
                 self._flight_learn_loop,
                 self._restore_lost_lives,
+                self._campaign_queue_loop,
             ) if coro.__name__ not in self.HEADLESS_SKIP
         ]
         log.info("headless: no Discord gateway; driving %d loop(s): %s",

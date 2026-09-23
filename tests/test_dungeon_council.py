@@ -395,7 +395,7 @@ class EveryPortalMapGetsItsOwnDoor(unittest.TestCase):
             self.assertEqual(keyword, council._campaign_keyword(map_id, 60, None))
 
     def test_a_map_without_a_portal_has_no_door(self):
-        self.assertEqual("", council.front_door(389))  # Ragefire Chasm
+        self.assertEqual("", council.front_door(409))  # Molten Core
 
     def test_the_new_classic_doors_are_in_places_at_the_pages_floors(self):
         lows = {step.map_id: step.low for step in dungeonpath.PATH}
@@ -467,8 +467,10 @@ class AnUnknownFactionIsNotSentIntoACapital(unittest.TestCase):
 
 class ADungeonWithoutAPortalIsNeverProposed(unittest.TestCase):
     def test_ragefire_chasm_alone_in_range_proposes_nothing(self):
-        """Ragefire Chasm has no portal row. Written anyway, it used to become
-        the bare `dungeon` job, which is the Deadmines."""
+        """Ragefire Chasm is on Kalimdor and this family stands on the
+        Eastern Kingdoms with no crossing, so nothing is proposed. Before its
+        portal row it used to become the bare `dungeon` job, which is the
+        Deadmines."""
         members, rows = _family(13, HORDE_RACE)
         self.assertIsNone(council._dungeon_proposal(members, rows, []))
 

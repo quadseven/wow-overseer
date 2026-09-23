@@ -331,7 +331,7 @@ class AnUnknownKeywordNeverReachesTheRoster(unittest.TestCase):
         return result, inserted, updated, warnings
 
     def test_an_unknown_keyword_writes_nothing_at_all(self):
-        result, inserted, updated, _ = self._drive("ragefire")
+        result, inserted, updated, _ = self._drive("maraudon")
         self.assertEqual((0, 0), result)
         self.assertEqual([], inserted, "a job was written for an unknown keyword")
         self.assertEqual(
@@ -339,9 +339,9 @@ class AnUnknownKeywordNeverReachesTheRoster(unittest.TestCase):
         )
 
     def test_the_refusal_names_the_keyword_and_the_valid_ones(self):
-        _, _, _, warnings = self._drive("ragefire")
+        _, _, _, warnings = self._drive("maraudon")
         self.assertEqual(1, len(warnings), warnings)
-        self.assertIn("dungeon:ragefire", warnings[0])
+        self.assertIn("dungeon:maraudon", warnings[0])
         for keyword in ("deadmines", "scarlet-cathedral", "stockades"):
             self.assertIn(keyword, warnings[0])
 
@@ -388,7 +388,7 @@ class TheKeywordVocabularyIsTheCoordinators(unittest.TestCase):
 
         self.assertEqual("dungeon", jobs.dungeon_job(""))
         self.assertEqual("dungeon:scarlet", jobs.dungeon_job("scarlet"))
-        self.assertIsNone(jobs.dungeon_job("ragefire"))
+        self.assertIsNone(jobs.dungeon_job("maraudon"))
         self.assertIsNone(jobs.dungeon_job("Deadmines"))
 
 

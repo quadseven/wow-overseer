@@ -220,9 +220,20 @@ class TheArrivalToleranceIsMirroredFromTheModule(unittest.TestCase):
     def test_a_ground_aim_is_the_tolerance_this_constant_names(self):
         """The module picks between two tolerances on whether the aim resolved
         a creature. An `at:` aim resolves `outEntry = 0`, so it takes the
-        position one - which is the one mirrored above."""
+        position one - which is the one mirrored above. Since #577 the
+        position tolerance is PositionArrivalYards, which answers the same
+        constant for every aim that is neither a `trigger:` door nor a rejoin
+        escort's walk back in, and a forge aim is neither."""
         self.assertIn(
-            "entry ? TRAVEL_ARRIVED_YARDS : TRAVEL_ARRIVED_POSITION_YARDS", self.module
+            "entry ? TRAVEL_ARRIVED_YARDS : PositionArrivalYards(name, target)",
+            self.module,
+        )
+        body = self.module.split("float PositionArrivalYards(", 1)[1].split(
+            "\n    }\n", 1
+        )[0]
+        self.assertIn('target.rfind("trigger:", 0) == 0', body)
+        self.assertTrue(
+            body.rstrip().endswith("return TRAVEL_ARRIVED_POSITION_YARDS;"), body[-200:]
         )
         self.assertIn(
             "outEntry = 0;  // deliberately: the walk is the whole errand", self.module
