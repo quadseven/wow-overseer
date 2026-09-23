@@ -402,7 +402,7 @@ class BridgeWiringTest(unittest.TestCase):
         equip = body.index(
             "await self._equip_upgrades(gear_rows, worn, names, jev_plan)"
         )
-        gate = body.index("family_town_run_needed(", equip)
+        gate = body.index("self._vendor_pass_mode(", equip)
         self.assertLess(plan, give)
         self.assertLess(give, equip)
         self.assertLess(equip, gate)

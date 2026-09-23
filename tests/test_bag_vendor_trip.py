@@ -302,7 +302,7 @@ class TheBridgeWiring(unittest.TestCase):
     def test_the_trip_goes_through_the_town_slot_on_the_leader(self):
         body = _statements("    async def _aim_at_bag_vendor(")
         self.assertIn("bag_pressure.bag_vendor_trip(", body)
-        self.assertIn('"bags", leader, trip.target', body)
+        self.assertIn("BAGS_CLAIMANT, leader, trip.target", body)
         self.assertIn("self._claim_town_slot(", body)
         self.assertIn("in_run = await self._mid_run(names)", body)
         self.assertNotIn("_write_trade_errand", body)

@@ -246,7 +246,7 @@ class TheBridgeWritesIt(unittest.TestCase):
         equip = body.index(
             "await self._equip_upgrades(gear_rows, worn, names, jev_plan)"
         )
-        gate = body.index("if not bag_pressure.family_town_run_needed(")
+        gate = body.index("mode = await self._vendor_pass_mode(")
         self.assertLess(body.index("await self._hand_gear("), equip)
         self.assertLess(equip, gate)
 

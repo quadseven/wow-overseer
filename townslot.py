@@ -610,6 +610,14 @@ def decide(
         # would have. The lease is INHERITED rather than restarted: two passes
         # refining each other's aims must not be able to launder a lease
         # between them and keep the column for ever.
+        #
+        # AN ORPHAN'S CLOCK IS NOT INHERITED (#225). Laundering takes two
+        # owners, and an orphan has none. It also runs on the 1200s orphan
+        # lease, so the old clock carried over to the ordinary 300s lease is
+        # already spent. Measured on wow-dev: the bag trip refined an orphan
+        # '3487' 730s after it was first seen, held a lease that was 430s
+        # expired on arrival, and lost the leader to clearance 17 yards from
+        # the bag vendor.
         return Decision(
             verdict=SLOT_TAKE,
             reason="%s refines %s's %r on %s into %r, which is the same errand "
@@ -624,7 +632,7 @@ def decide(
             claimant=claimant,
             aim=aim,
             character=character,
-            inherit_since=holder.since,
+            inherit_since=holder.since if holder.claimant else None,
         )
 
     if holder is None:
@@ -881,6 +889,56 @@ def _held_column(
     )
 
 
+# How long one pass may keep the traveller reserved (#225). The orphan lease,
+# the ceiling this file already puts on an errand nobody can hand back.
+RESERVE_SECONDS = ORPHAN_LEASE_SECONDS
+
+
+@dataclasses.dataclass(frozen=True)
+class Reservation:
+    """One pass owns the traveller for a stated reason, from `since`."""
+
+    claimant: str
+    since: float
+    why: str
+
+    def live(self, now: float, limit: float = RESERVE_SECONDS) -> bool:
+        return now - self.since < limit
+
+
+def reserved_wait(
+    claimant: str, character: str, aim: str, reservation, now: float
+) -> Decision | None:
+    """A wait for any other pass while a live reservation stands, else None.
+
+    THE ONE OWNER OF THE AIM (#225). A campaign withheld for bag space is
+    cured only by a vendor stop. Fairness handed the traveller to clearance
+    17 yards short of the bag vendor, so the campaign stayed withheld and
+    the family walked off to post letters. While the reservation is live,
+    every other pass waits. The reserving pass gets no new rights: it still
+    asks the slot like any other pass.
+    """
+    if reservation is None or not reservation.live(now):
+        return None
+    if claimant == reservation.claimant:
+        return None
+    return Decision(
+        verdict=SLOT_WAIT,
+        reason="%s waits: %s owns the traveller %s while %s (%ds of %ds)"
+        % (
+            claimant,
+            reservation.claimant,
+            character,
+            reservation.why,
+            int(now - reservation.since),
+            int(RESERVE_SECONDS),
+        ),
+        claimant=claimant,
+        aim=aim,
+        character=character,
+    )
+
+
 def _own_wait(claimant: str, wants, now: float) -> float:
     """When this pass started waiting, or now if it has not been waiting."""
     for want in wants:
@@ -956,6 +1014,30 @@ class Slot:
         # for infra#4191. Empty for every pass that never claims urgency, and
         # cleared the moment one of them achieves something.
         self._fruitless: dict = {}
+        # The pass that owns the traveller for a stated reason (#225), or None.
+        self.reservation: Reservation | None = None
+
+    def reserve(self, claimant: str, now: float, why: str) -> None:
+        """Give `claimant` the traveller until it unreserves or the hold ends.
+
+        NOT RENEWED BY ASKING AGAIN, for rule 2's reason: a hold renewed on
+        every cycle never ends. A new claimant replaces the old one.
+        """
+        if not claimant:
+            return
+        if self.reservation is not None and self.reservation.claimant == claimant:
+            return
+        self.reservation = Reservation(claimant=claimant, since=now, why=why)
+
+    def reserved_by(self, claimant: str, now: float) -> bool:
+        """Whether `claimant` holds a live reservation right now."""
+        r = self.reservation
+        return r is not None and r.claimant == claimant and r.live(now)
+
+    def unreserve(self, claimant: str) -> None:
+        """End `claimant`'s reservation; another pass's is left alone."""
+        if self.reservation is not None and self.reservation.claimant == claimant:
+            self.reservation = None
 
     def urgency_suppressed_until(self, claimant: str) -> float:
         """When this claimant may preempt on urgency again (0.0 = now).
@@ -1011,6 +1093,10 @@ class Slot:
     ) -> Decision:
         """Decide, and register the wait if the answer is no."""
         self.holder = _reconcile(self.holder, leader=leader, column=column, now=now)
+        held = reserved_wait(claimant, character, aim, self.reservation, now)
+        if held is not None:
+            self._note_wait(claimant, now)
+            return held
         # AN URGENT PASS THAT KEEPS ACHIEVING NOTHING STOPS BEING URGENT, for
         # as long as its backoff runs (infra#4191). This is deliberately the
         # first thing that happens to `urgent`, so everything below - the
@@ -1059,6 +1145,10 @@ class Slot:
     ) -> Decision:
         """Ask for the travel column to become empty, without a successor."""
         self.holder = _reconcile(self.holder, leader=leader, column=column, now=now)
+        held = reserved_wait(claimant, character, "", self.reservation, now)
+        if held is not None:
+            self._note_wait(claimant, now)
+            return held
         decision = decide_idle(
             claimant=claimant,
             character=character,
