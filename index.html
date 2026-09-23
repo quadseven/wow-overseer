@@ -6705,6 +6705,14 @@ function lnList(title, members, classes, note) {
       w.textContent = m.work;
       box.appendChild(w);
     }
+    // The member's crafting corps post, its skill and the bags it has made,
+    // written by guildcorps.py.
+    if (m.corps) {
+      const c = document.createElement("div");
+      c.className = "ln-work";
+      c.textContent = m.corps;
+      box.appendChild(c);
+    }
   }
   return box;
 }
@@ -6782,7 +6790,8 @@ function lnRender(payload) {
     const extras = document.createElement("div");
     extras.className = "ln-grid";
     extras.appendChild(lnList("Maintenance", g.maintenance || [], classes,
-                              g.dues ? g.dues.said : "never raids"));
+                              [g.dues ? g.dues.said : "", g.corps ? g.corps.said : ""]
+                                .filter(Boolean).join("; ") || "never raids"));
     extras.appendChild(lnList("Summoners", g.summoners || [], classes,
                               "warlocks, summoning only"));
     if ((g.surplus || []).length) {

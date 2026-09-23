@@ -45,6 +45,7 @@ import questlog
 import raidgoals
 import guildwork
 import crafters
+import guildcorps
 import raidlineup
 import raidready
 import recap
@@ -2006,6 +2007,21 @@ _LINEUP_DUES = (
     "FROM overseer_command WHERE kind = 'mail' AND source LIKE %s "
     "AND command LIKE 'send %%' ORDER BY id"
 )
+# THE GUILD CRAFTING CORPS: each guild member's trades, so the page names the
+# same posts the bridge's corps pass fills, and every craft the corps wrote.
+# `kind = 'cast'` first, for the (kind, status, updated_at) index.
+_LINEUP_CORPS_SKILLS = (
+    "SELECT c.name, cs.skill, cs.value, cs.max FROM character_skills cs "
+    "JOIN characters c ON c.guid = cs.guid "
+    "JOIN guild_member gm ON gm.guid = c.guid "
+    "WHERE cs.skill IN ({skills}) AND gm.guildid IN (SELECT gm2.guildid "
+    "FROM guild_member gm2 JOIN characters c2 ON c2.guid = gm2.guid "
+    "WHERE c2.name IN ({holes}))"
+)
+_LINEUP_CORPS_CRAFTS = (
+    "SELECT target_name, source, status, result FROM overseer_command "
+    "WHERE kind = 'cast' AND source LIKE %s ORDER BY id"
+)
 
 # EVERY MEMBER'S RECIPE TRADES (#248), for the designated-crafters register
 # the Lineup page shows. The skill ids are crafters.TRADES, bound as values.
@@ -2044,6 +2060,13 @@ def _fetch_lineup() -> dict:
                 cur, _LINEUP_SKILLS.format(  # noqa: S608
                     holes=holes, skills=", ".join(["%s"] * len(trades))),
                 tuple(names) + tuple(trades), "", "character_skills")
+            corps_ids = ", ".join(str(int(k)) for k in sorted(guildcorps.SKILL_NAMES))
+            corps_skills = _wide_guarded(
+                cur, _LINEUP_CORPS_SKILLS.format(skills=corps_ids, holes=holes),  # noqa: S608
+                tuple(names), "", "character_skills")
+            corps_crafts = _wide_guarded(
+                cur, _LINEUP_CORPS_CRAFTS, (guildcorps.SOURCE + ":craft:%",),
+                "", "overseer_command")
     finally:
         conn.close()
     return {
@@ -2052,6 +2075,8 @@ def _fetch_lineup() -> dict:
         "masters": {m.get("guildid"): m.get("master") for m in masters},
         "dues": dues,
         "skills": skills,
+        "corps_skills": corps_skills,
+        "corps_crafts": corps_crafts,
     }
 
 
@@ -4005,6 +4030,7 @@ class Handler(BaseHTTPRequestHandler):
                 })
             payload = []
             contributed = guildwork.contributions(fetched.get("dues"))
+            made = guildcorps.bags_made(fetched.get("corps_crafts"))
             masters = fetched.get("masters") or {}
             for guild in guilds.values():
                 lineup = raidlineup.build_lineup(
@@ -4022,6 +4048,13 @@ class Handler(BaseHTTPRequestHandler):
                 # Who receives which trade's recipes (#248).
                 lineup["crafters"] = _crafter_register(
                     guild["members"], roster, fetched.get("skills"))
+                # Each maintenance member's corps post, its skill, and the
+                # bags the corps has crafted.
+                guildcorps.attach_corps(
+                    lineup,
+                    guildcorps.posts_for_lineup(
+                        lineup, guild["name"], fetched.get("corps_skills")),
+                    made)
                 payload.append(lineup)
             # ALLIANCE FIRST, then Horde, the order every other two-family
             # view on the page uses; within a side, the bigger guild first.
