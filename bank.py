@@ -554,7 +554,10 @@ class Storage:
     left to a sale that will never happen. `skills` is holder ->
     {skill_id: value}, for the recipe test. `named` is entry -> the trades
     whose recipes buy it (bridge.REAGENT_TRADES). `guild_depositors` and
-    `guild_free` describe the guild bank's tab 0.
+    `guild_free` describe the guild bank's tab 0. `routed` maps a recipe's
+    guid to the crafter the designated-crafters register sends it to (#248):
+    such a recipe stays in the bags for the hand-off, and comes out of the
+    bank for it.
     """
 
     trades: dict = field(default_factory=dict)
@@ -564,6 +567,7 @@ class Storage:
     guild_depositors: frozenset = frozenset()
     guild_free: int = 0
     stock_cap: int = disposition.REAGENT_KEEP
+    routed: dict = field(default_factory=dict)
 
 
 def _trades_and_skills(held, worked_by):
@@ -601,7 +605,7 @@ def _guild_room(guild):
     return depositors, free
 
 
-def storage_from(held, worked_by=None, named=None, guild=None):
+def storage_from(held, worked_by=None, named=None, guild=None, routed=None):
     """The Storage this family is today, from what the bridge already reads.
 
     `held` is name -> {profession: value} (`_fetch_trade_skills`), `worked_by`
@@ -624,6 +628,7 @@ def storage_from(held, worked_by=None, named=None, guild=None):
         named=dict(named or {}),
         guild_depositors=depositors,
         guild_free=free,
+        routed=dict(routed or {}),
     )
 
 
@@ -709,7 +714,7 @@ def storage_reason(holding, storage, surplus=frozenset()):
         return ""
     trades = storage.trades.get(holding.holder, frozenset())
     if disposition.recipe(item):
-        if _learnable(holding, storage):
+        if _learnable(holding, storage) or holding.guid in storage.routed:
             return ""
         return (
             "%s teaches a trade or a rank %s does not have yet, so it waits "
@@ -853,6 +858,11 @@ def _wanted_back(holding, member, family, totals, storage):
         return ""
     if disposition.recipe(holding.item) and _learnable(holding, storage):
         return "%s can learn it now" % member.name
+    if disposition.recipe(holding.item) and holding.guid in storage.routed:
+        return "%s is to go to %s, a designated crafter" % (
+            holding.item.name,
+            storage.routed[holding.guid],
+        )
     return verdict.why if verdict.route in WITHDRAW_ROUTES else ""
 
 

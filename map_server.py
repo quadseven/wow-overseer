@@ -44,6 +44,7 @@ import partystatus
 import questlog
 import raidgoals
 import guildwork
+import crafters
 import raidlineup
 import raidready
 import recap
@@ -2006,6 +2007,17 @@ _LINEUP_DUES = (
     "AND command LIKE 'send %%' ORDER BY id"
 )
 
+# EVERY MEMBER'S RECIPE TRADES (#248), for the designated-crafters register
+# the Lineup page shows. The skill ids are crafters.TRADES, bound as values.
+_LINEUP_SKILLS = (
+    "SELECT c.name, cs.skill, cs.value FROM characters c "
+    "JOIN guild_member gm ON gm.guid = c.guid "
+    "JOIN character_skills cs ON cs.guid = c.guid "
+    "WHERE gm.guildid IN (SELECT gm2.guildid FROM guild_member gm2 "
+    "JOIN characters c2 ON c2.guid = gm2.guid WHERE c2.name IN ({holes})) "
+    "AND cs.skill IN ({skills}) AND cs.value > 0"
+)
+
 
 def _fetch_lineup() -> dict:
     """Every guild the roster is in, with the class of every member.
@@ -2027,6 +2039,11 @@ def _fetch_lineup() -> dict:
                                     tuple(names), "", "guild")
             dues = _wide_guarded(cur, _LINEUP_DUES, (guildwork.SOURCE + ":%",),
                                  "", "overseer_command")
+            trades = sorted(crafters.TRADES)
+            skills = _wide_guarded(
+                cur, _LINEUP_SKILLS.format(  # noqa: S608
+                    holes=holes, skills=", ".join(["%s"] * len(trades))),
+                tuple(names) + tuple(trades), "", "character_skills")
     finally:
         conn.close()
     return {
@@ -2034,7 +2051,24 @@ def _fetch_lineup() -> dict:
         "roster": names,
         "masters": {m.get("guildid"): m.get("master") for m in masters},
         "dues": dues,
+        "skills": skills,
     }
+
+
+def _crafter_register(members: list, roster: set, skill_rows: list) -> list:
+    """One guild's designated-crafters register, as the page draws it (#248)."""
+    skills: dict = {}
+    for row in skill_rows or ():
+        skills.setdefault(row.get("name"), {})[int(row.get("skill") or 0)] = int(
+            row.get("value") or 0)
+    people = [
+        crafters.Person(name=m["name"], skills=skills.get(m["name"], {}),
+                        level=int(m.get("level") or 0),
+                        family=m["name"] in roster)
+        for m in members
+    ]
+    return crafters.register_payload(
+        crafters.register(people, crafters.per_trade(os.environ)))
 
 
 def _fetch_raidgoals() -> dict:
@@ -3985,6 +4019,9 @@ class Handler(BaseHTTPRequestHandler):
                 # The side the guild fights for, off its family's own races.
                 lineup["faction"] = achievements.faction_of(
                     m["race"] for m in guild["members"] if m["name"] in roster)
+                # Who receives which trade's recipes (#248).
+                lineup["crafters"] = _crafter_register(
+                    guild["members"], roster, fetched.get("skills"))
                 payload.append(lineup)
             # ALLIANCE FIRST, then Horde, the order every other two-family
             # view on the page uses; within a side, the bigger guild first.

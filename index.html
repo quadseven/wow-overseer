@@ -6709,6 +6709,31 @@ function lnList(title, members, classes, note) {
   return box;
 }
 
+// The designated-crafters register (#248): per trade, the family members who
+// hold it and the guild members designated for it. crafters.py picks them;
+// a recipe goes to the first of them who can learn it and has not.
+function lnCrafters(trades) {
+  const box = document.createElement("div");
+  box.className = "ln-box";
+  const h = document.createElement("div");
+  h.className = "ln-boxhead";
+  h.textContent = "Designated crafters";
+  box.appendChild(h);
+  const n = document.createElement("div");
+  n.className = "ln-note";
+  n.textContent = "recipes go to these first, family before guild";
+  box.appendChild(n);
+  for (const t of trades) {
+    const row = document.createElement("div");
+    row.className = "ln-row";
+    const who = (t.seats || []).map(s =>
+      s.name + " " + s.rank + (s.seat === "family" ? " (family)" : ""));
+    row.textContent = t.trade + ": " + who.join(", ");
+    box.appendChild(row);
+  }
+  return box;
+}
+
 function lnRender(payload) {
   const classes = payload.classes || {};
   lnbody.textContent = "";
@@ -6764,6 +6789,7 @@ function lnRender(payload) {
       extras.appendChild(lnList("Surplus - not in the lineup", g.surplus,
                                 classes, "chosen for no place"));
     }
+    if ((g.crafters || []).length) extras.appendChild(lnCrafters(g.crafters));
     sec.appendChild(extras);
     lnbody.appendChild(sec);
   }
