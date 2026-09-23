@@ -339,6 +339,7 @@ class FakeFamily:
         self.jobs = []
         self.records = []
         self.calls = []
+        self.runs = []  # what successive _mid_run calls answer; empty is False
 
     def reads(self, names, leader):
         return {
@@ -375,12 +376,19 @@ def _bridge(world, fake_jev, holds=None):
         "_insert_job": world.insert_job,
         "_insert_jev_judgment": world.records.append,
     }
-    names = ["_activity_holds", "_activity_for", "_carry_out_activity"]
+    names = [
+        "_activity_holds",
+        "_activity_for",
+        "_activity_can",
+        "_activity_due",
+        "_carry_out_activity",
+        "_drive_activity",
+    ]
     module = ast.Module(body=[_function(n) for n in names], type_ignores=[])
     exec(compile(module, "bridge.py", "exec"), ns)  # noqa: S102 - bridge.py's own source
 
     async def mid_run(_names):
-        return False
+        return bool(world.runs and world.runs.pop(0))
 
     def recorder(name):
         async def call(*args):
@@ -454,6 +462,47 @@ class TheBridgeCarriesItOut(unittest.TestCase):
         self.assertEqual((record.status, record.acted), (jev.ERROR, jev.HEURISTIC))
         self.assertEqual(([], []), (world.jobs, world.calls))
         self.assertEqual("", me._activity_holds("Zug"))
+
+    def test_a_run_that_started_while_jev_was_asked_is_not_interrupted(self):
+        world = FakeFamily({"Zug": 0, "Oz": 9, "Uzza": 9, "Zork": 9, "Zrog": 9})
+        world.runs = [False, True]
+        me, _log = self.run_pass(
+            world, FakeJev(picks={"activity": ja.SELL}, confidence=0.8)
+        )
+        self.assertEqual(1, len(world.records))
+        self.assertEqual(([], []), (world.jobs, world.calls))
+        self.assertEqual("", me._activity_holds("Zug"))
+
+    def test_the_own_family_is_read_once_per_pass(self):
+        seen = []
+        ns = {
+            "asyncio": asyncio,
+            "jev": jev,
+            "jev_activity": ja,
+            "campaignqueue": campaignqueue,
+            "log": _Log(),
+            "bonds": types.SimpleNamespace(head_of_family=lambda: "Grug"),
+            "_cohort_of": lambda name: "Grug",
+            "_fetch_queue_roster": lambda: [
+                {"name": n, "enabled": 1, "lead": 1, "family": n, "job": "quest"}
+                for n in ("Grug", "Zug")
+            ],
+            "_fetch_queue_rows": lambda: [],
+        }
+        module = ast.Module(body=[_function("_activity_once")], type_ignores=[])
+        exec(compile(module, "bridge.py", "exec"), ns)  # noqa: S102 - bridge.py's own source
+
+        async def activity_for(key, fam, rows, own, rule):
+            seen.append((key, own))
+
+        me = types.SimpleNamespace(
+            _jev=jev.Client("k", transport=FakeJev()),
+            _activity_own_key=None,
+            _activity_for=activity_for,
+        )
+        asyncio.run(ns["_activity_once"](me))
+        self.assertEqual([("Grug", True), ("Zug", False)], seen)
+        self.assertEqual("Grug", me._activity_own_key)
 
     def test_choosing_the_campaign_ends_the_interlude_and_asks_the_queue(self):
         world = FakeFamily({n: 20 for n, _, _ in HORDE})

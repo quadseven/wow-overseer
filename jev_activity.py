@@ -180,31 +180,39 @@ def members_from_rows(names, level_rows, free_slots, worn_rows, goods_rows, reci
 
     A member with no level row is still shown, at level 0, rather than
     dropped: the question is about the whole family. A member whose worn
-    items could not be read has `empty_gear_slots` None, not 0.
+    items could not be read (`worn_rows` None) has `empty_gear_slots` None,
+    not 0.
     """
     levels = {str(r.get("name")): r for r in level_rows or ()}
-    worn = {str(r.get("name")): int(r.get("worn") or 0) for r in worn_rows or ()}
-    goods = {str(r.get("name")): int(r.get("stacks") or 0) for r in goods_rows or ()}
-    seen_worn = worn_rows is not None
-    out = []
-    for name in names:
-        row = levels.get(name, {})
-        out.append(
-            Member(
-                name=name,
-                level=int(row.get("level") or 0),
-                class_name=str(row.get("class_name") or ""),
-                free_slots=(
-                    int(free_slots[name]) if name in (free_slots or {}) else None
-                ),
-                empty_gear_slots=(
-                    max(0, len(GEAR_SLOTS) - worn.get(name, 0)) if seen_worn else None
-                ),
-                trade_goods=goods.get(name, 0),
-                recipe=name in set(recipes or ()),
-            )
+    worn = _counts(worn_rows, "worn")
+    goods = _counts(goods_rows, "stacks")
+    free = dict(free_slots or {})
+    holders = set(recipes or ())
+    return tuple(
+        Member(
+            name=name,
+            level=int(levels.get(name, {}).get("level") or 0),
+            class_name=str(levels.get(name, {}).get("class_name") or ""),
+            free_slots=int(free[name]) if name in free else None,
+            empty_gear_slots=_empty(worn, name),
+            trade_goods=goods.get(name, 0) if goods else 0,
+            recipe=name in holders,
         )
-    return tuple(out)
+        for name in names
+    )
+
+
+def _counts(rows, column: str) -> dict | None:
+    """name -> int(column), or None when the rows could not be read."""
+    if rows is None:
+        return None
+    return {str(r.get("name")): int(r.get(column) or 0) for r in rows}
+
+
+def _empty(worn: dict | None, name: str) -> int | None:
+    if worn is None:
+        return None
+    return max(0, len(GEAR_SLOTS) - worn.get(name, 0))
 
 
 def withheld(queued: bool, free_slots: dict) -> bool:

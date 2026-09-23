@@ -2176,7 +2176,7 @@ _ACTIVITY_READS = (
     ("deaths",
      "SELECT COUNT(*) AS n FROM overseer_death WHERE character_name IN (%s)"),
     ("worn",
-     "SELECT c.name, COUNT(*) AS worn FROM character_inventory ci "
+     "SELECT c.name, COUNT(*) AS worn FROM character_inventory ci "  # noqa: S608 - the slot list is jev_activity.GEAR_SLOTS, integer constants; names are bound
      "JOIN characters c ON c.guid = ci.guid WHERE ci.bag = 0 AND ci.slot IN ("
      + ", ".join(str(slot) for slot in jev_activity.GEAR_SLOTS)
      + ") AND c.name IN (%s) GROUP BY c.name"),
@@ -2188,6 +2188,18 @@ _ACTIVITY_READS = (
      "WHERE it.class = 7 AND (ci.bag <> 0 OR ci.slot BETWEEN 23 AND 38) "
      "AND c.name IN (%s) GROUP BY c.name"),
 )
+
+
+def _activity_shape(key: str, rows: list):
+    """One read's rows in the shape jev_activity.members_from_rows takes."""
+    if key == "members":
+        return [{"name": r["name"], "level": int(r["level"] or 0),
+                 "class_name": CLASS_NAMES.get(r["class"], "")} for r in rows]
+    if key == "recipes":
+        return [r["name"] for r in rows]
+    if key == "deaths":
+        return int((rows[0] if rows else {}).get("n") or 0)
+    return rows
 
 
 def _activity_reads(names: list, leader: str) -> dict:
@@ -2210,17 +2222,7 @@ def _activity_reads(names: list, leader: str) -> dict:
                     log.info("activity: %s cannot be read on this realm", key)
                     continue
                 raise
-            rows = [dict(row) for row in cur.fetchall()]
-            if key == "members":
-                out[key] = [{"name": r["name"], "level": int(r["level"] or 0),
-                             "class_name": CLASS_NAMES.get(r["class"], "")}
-                            for r in rows]
-            elif key == "recipes":
-                out[key] = [r["name"] for r in rows]
-            elif key == "deaths":
-                out[key] = int((rows[0] if rows else {}).get("n") or 0)
-            else:
-                out[key] = rows
+            out[key] = _activity_shape(key, [dict(row) for row in cur.fetchall()])
     if leader:
         town = _fetch_town(leader)
         out["at_town"] = bool(town.vendor or town.repairs)
@@ -10216,6 +10218,22 @@ class Bridge(discord.Client):
 
     # --- the activity choice (#216) -------------------------------------------
 
+    async def _drive_activity(self, key: str, fam: dict, activity: str,
+                              own: bool) -> None:
+        """Run the pass that already drives `activity`, now, for this family."""
+        names = list(fam["names"])
+        if activity == jev_activity.SELL:
+            cohort = None if own else townslot.Cohort(
+                key, str(fam["leader"].get("name") or ""), tuple(names))
+            await self._vendor_once(cohort)
+            await self._bag_purchase_and_trip(names, cohort)
+        elif activity == jev_activity.CRAFT and own:
+            await self._craft_once()
+        elif activity == jev_activity.TRAIN and own:
+            await self._drive_train()
+        elif activity == jev_activity.GATHER and own:
+            await self._walk_to_gather_field(await self._gather_destination())
+
     def _activity_holds(self, key=None) -> str:
         """The activity whose interlude holds family `key`'s job, or "".
 
@@ -10256,14 +10274,15 @@ class Bridge(discord.Client):
         rule = jev_activity.policy()
         if rule.mode == jev.OFF or not self._jev.ready(jev_activity.KIND):
             return
-        own_names = set((await asyncio.to_thread(_protected_guids)).values())
+        # THIS BRIDGE'S FAMILY, read once per pass the way _queue_owns_job
+        # reads it, so the holds with no key name one family for the pass.
+        own_key = await asyncio.to_thread(_cohort_of, bonds.head_of_family())
+        self._activity_own_key = own_key or ""
         fams = campaignqueue.families(await asyncio.to_thread(_fetch_queue_roster))
         pending = campaignqueue.pending_by_family(
             await asyncio.to_thread(_fetch_queue_rows))
         for key, fam in sorted(fams.items()):
-            own = bool(own_names & set(fam["names"]))
-            if own:
-                self._activity_own_key = key
+            own = key == self._activity_own_key
             try:
                 await self._activity_for(key, fam, pending.get(key, []), own, rule)
             except Exception:
@@ -10284,27 +10303,14 @@ class Bridge(discord.Client):
         members = jev_activity.members_from_rows(
             names, reads["members"], reads["free"], reads["worn"],
             reads["goods"], reads["recipes"])
-        can_gather = can_train = False
-        if own:
-            # Only this family's walk and trainer aim have writers today.
-            skills = await asyncio.to_thread(_fetch_trade_skills, names)
-            can_gather = (gatheraim.lowest_gatherer(skills)[0] is not None
-                          and not gatheraim.bags_block_gathering(reads["free"]))
-            can_train = not trainjob.readiness(
-                await asyncio.to_thread(_train_members))
+        can_gather, can_train = await self._activity_can(names, reads["free"], own)
         job = str(leader.get("job") or "").strip().lower()
         now = time.monotonic()
         marks = jev_activity.Marks(
             runs_done=None if done is None else int(done),
             levels=tuple((m.name, m.level) for m in members),
             deaths=reads["deaths"], withheld=held, at_town=reads["at_town"])
-        seen = self._activity_seen.get(key) or {}
-        since = seen["since"] if seen.get("job") == job else now
-        reason = jev_activity.due(
-            jev_activity.stopped_at(seen.get("marks"), marks), seen.get("asked"),
-            now, 60.0 * jev_activity.CADENCE_MINUTES)
-        self._activity_seen[key] = {"marks": marks, "asked": seen.get("asked"),
-                                    "since": since, "job": job}
+        reason, since = self._activity_due(key, marks, job, now)
         if not reason:
             return
         interlude = self._activity_holds(key)
@@ -10332,6 +10338,31 @@ class Bridge(discord.Client):
         if judgment.carried_out:
             await self._carry_out_activity(key, fam, judgment.carried_out, own, job)
 
+    async def _activity_can(self, names: list, free: dict, own: bool) -> tuple:
+        """(can gather, can train). Only this family's walk and trainer aim
+        have writers today, so every other family is offered neither."""
+        if not own:
+            return False, False
+        skills = await asyncio.to_thread(_fetch_trade_skills, names)
+        can_gather = (gatheraim.lowest_gatherer(skills)[0] is not None
+                      and not gatheraim.bags_block_gathering(free))
+        can_train = not trainjob.readiness(await asyncio.to_thread(_train_members))
+        return can_gather, can_train
+
+    def _activity_due(self, key: str, marks, job: str, now: float) -> tuple:
+        """(why ask now or "", since when the family has been on `job`).
+
+        Remembers this cycle's marks, so a breakpoint is seen once.
+        """
+        seen = self._activity_seen.get(key) or {}
+        since = seen["since"] if seen.get("job") == job else now
+        reason = jev_activity.due(
+            jev_activity.stopped_at(seen.get("marks"), marks), seen.get("asked"),
+            now, 60.0 * jev_activity.CADENCE_MINUTES)
+        self._activity_seen[key] = {"marks": marks, "asked": seen.get("asked"),
+                                    "since": since, "job": job}
+        return reason, since
+
     async def _carry_out_activity(self, key: str, fam: dict, activity: str,
                                   own: bool, job: str) -> None:
         """Carry out Jev's activity through the paths today's rules use.
@@ -10349,6 +10380,11 @@ class Bridge(discord.Client):
                      who)
             await self._campaign_queue_once()
             return
+        # The ask took time: a run that started meanwhile is not interrupted.
+        if await self._mid_run(names):
+            log.info("activity: %s went into a run while Jev was asked; %s "
+                     "stands down", who, activity)
+            return
         self._activity_interludes[key] = lease
         want = jev_activity.JOB[activity]
         if want and want != job:
@@ -10359,21 +10395,7 @@ class Bridge(discord.Client):
                 except Exception:
                     log.exception("activity: job insert failed for %s (mode=%s)",
                                   name, want)
-        if activity == jev_activity.SELL:
-            if own:
-                await self._vendor_once()
-                await self._bag_purchase_and_trip(names)
-            else:
-                cohort = townslot.Cohort(
-                    key, str(fam["leader"].get("name") or ""), tuple(names))
-                await self._vendor_once(cohort)
-                await self._bag_purchase_and_trip(names, cohort)
-        elif activity == jev_activity.CRAFT and own:
-            await self._craft_once()
-        elif activity == jev_activity.TRAIN and own:
-            await self._drive_train()
-        elif activity == jev_activity.GATHER and own:
-            await self._walk_to_gather_field(await self._gather_destination())
+        await self._drive_activity(key, fam, activity, own)
         log.info("activity: %s: Jev chose %s; job=%s for %d minutes, then "
                  "today's rules resume", who, activity, want or job,
                  jev_activity.LEASE_MINUTES[activity])
