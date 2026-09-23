@@ -48,6 +48,7 @@ import raidlineup
 import raidready
 import recap
 import realm
+import runtimeline
 import standing
 import stream
 import tradespec
@@ -2678,6 +2679,51 @@ def _fetch_queue_views() -> dict:
         conn.close()
 
 
+# --- the run timeline (mod-overseer#616) -----------------------------------
+#
+# The worldserver writes each dungeon run's phase changes and decisions to
+# overseer_dungeon_run_event, because its container log rotates within
+# minutes. The age is computed by the database so its clock and this
+# process's cannot disagree about when a row was written.
+_RUN_TIMELINE_TABLE = (
+    "SELECT COUNT(*) AS n FROM information_schema.TABLES "
+    "WHERE table_schema = DATABASE() AND table_name = 'overseer_dungeon_run_event'"
+)
+_RUN_TIMELINE = (
+    "SELECT id, family, leader_name, character_name, run_id, campaign_id, "
+    "run_number, portal, phase, kind, detail, "
+    "TIMESTAMPDIFF(SECOND, created_at, NOW()) AS age_seconds "
+    "FROM overseer_dungeon_run_event "
+    "WHERE created_at > NOW() - INTERVAL %s HOUR ORDER BY id DESC LIMIT %s"
+)
+
+
+def _fetch_run_timeline() -> dict:
+    """The timeline rows and the families they belong to, in one connection.
+
+    Takes nothing from the request. A realm whose worldserver predates the
+    table reads as `present = False` and the page says so, rather than a 503.
+    """
+    conn = _connect()
+    try:
+        with conn.cursor() as cur:
+            families: dict = {}
+            for row in _wide_guarded(cur, _PLAN_FAMILIES, (), "",
+                                     "overseer_roster"):
+                if row.get("family") and row.get("name"):
+                    families.setdefault(row["family"], []).append(row["name"])
+            table = _wide_guarded(cur, _RUN_TIMELINE_TABLE, (), "",
+                                  "overseer_dungeon_run_event")
+            present = bool(table and table[0].get("n"))
+            rows = (_wide_guarded(cur, _RUN_TIMELINE,
+                                  (runtimeline.WINDOW_HOURS, runtimeline.ROW_LIMIT),
+                                  "", "overseer_dungeon_run_event")
+                    if present else [])
+    finally:
+        conn.close()
+    return {"rows": rows, "families": families, "present": present}
+
+
 # --- the live dungeon recap and the loot board (infra#2597) ------------------
 #
 # EVERY READ BELOW IS GUARDED FOR BOTH 1146 AND 1054, and this endpoint is the
@@ -4073,6 +4119,22 @@ class Handler(BaseHTTPRequestHandler):
             log.exception("dungeon plan query failed")
             self._send(503, "application/json", b'{"error": "world unreachable"}')
 
+    def _run_timeline(self, _query: dict) -> None:
+        """GET /api/runtimeline - each family's recent dungeon runs, step by step.
+
+        No parameters: the families come from the roster, exactly as
+        /api/dungeons takes none.
+        """
+        try:
+            fetched = _fetch_run_timeline()
+            payload = runtimeline.build_run_timeline(
+                fetched["rows"], fetched["families"], present=fetched["present"])
+            self._send(200, "application/json", json.dumps(payload).encode())
+        except Exception:
+            # The tab keeps what it has drawn and says it may be stale.
+            log.exception("run timeline query failed")
+            self._send(503, "application/json", b'{"error": "world unreachable"}')
+
     def _recap(self, query: dict) -> None:
         """GET /api/recap[?map=N] - what is happening in there right now, and
         what can drop where.
@@ -4818,6 +4880,7 @@ class Handler(BaseHTTPRequestHandler):
         "/api/achievements": _achievements,
         "/api/loot": _loot,
         "/api/dungeons": _dungeons,
+        "/api/runtimeline": _run_timeline,
         "/api/raidgoals": _raidgoals,
         "/api/lineup": _lineup,
         "/api/trades": _trades,

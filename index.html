@@ -1073,6 +1073,29 @@
   .dgn-why { margin-top:3px; font-size:12px; line-height:1.5;
              color:var(--on-card-dim); }
 
+  /* THE RUN TIMELINE (mod-overseer#616). One card per run, newest first, and
+     one row per phase change or decision, with the time in a column the width
+     of a clock. The tones are role names runtimeline.py chose; an unknown one
+     draws in the body colour. Same card recipe as the path above, no width in
+     pixels and no breakpoint of its own. */
+  #rtlfamilies { display:grid; gap:1.4rem; margin-top:.6rem;
+                 grid-template-columns:repeat(auto-fit, minmax(min(100%, 30rem), 1fr)); }
+  #rtlline { max-width:72ch; }
+  #rtlline.alarm { color:var(--warn-text); }
+  .rtl-run { margin-top:10px; }
+  .rtl-run > summary { grid-template-columns:minmax(0, 1fr); }
+  .rtl-run > summary .dgn-sum { grid-column:1; }
+  .rtl-run.rtl-bad > summary .dgn-sum { color:var(--warn-text); }
+  .rtl-run.rtl-good > summary .dgn-sum { color:var(--accent-text); }
+  .rtl-event { display:grid; grid-template-columns:auto minmax(0, 1fr);
+               gap:.7rem; margin-top:6px; font-size:13px; line-height:1.45;
+               color:var(--on-card); overflow-wrap:anywhere; }
+  .rtl-event:first-of-type { margin-top:10px; }
+  .rtl-at { font-family:var(--mono); color:var(--on-card-dim); }
+  .rtl-event.rtl-phase .rtl-line { font-weight:700; }
+  .rtl-event.rtl-bad .rtl-line { color:var(--warn-text); }
+  .rtl-event.rtl-warn .rtl-line { color:var(--caution-text); }
+  .rtl-event.rtl-good .rtl-line { color:var(--accent-text); }
   /* --- the Decree console (infra#2597) --------------------------------------
      THE ONLY WRITE SURFACE IN THE REDESIGN, and most of its controls are
      drawn disabled on purpose. What this page may and may not reach is
@@ -3342,6 +3365,9 @@
   <p id="dgnorder" class="chr-body"></p>
   <div id="dgnfamilies"></div>
   <p id="dgnbasis" class="chr-body"></p>
+  <div class="ds-rule"><span class="ix">02</span><span class="ln"></span><span class="lb">run timeline</span></div>
+  <p id="rtlline" class="chr-body"></p>
+  <div id="rtlfamilies"></div>
 </section>
 <!-- WHAT THE GUILD STILL NEEDS BEFORE IT CAN RAID (infra#3508). The operator
      asked for "resource goal tracking for like molten core mats like fire res
@@ -6491,6 +6517,7 @@ function showView(v) {
     closePanel();
     stopBroadcasts();
     pollDungeons();
+    pollRunTimeline();
     return;
   }
   if (isRaid) {
@@ -7558,6 +7585,74 @@ async function pollDungeons() {
 // open, and the guard at the top of pollDungeons is what makes that true even
 // for the call showView makes on the way in.
 setInterval(() => { if (view === DUNGEONS_VIEW) pollDungeons(); }, 60000);
+
+// THE RUN TIMELINE (mod-overseer#616). How each family's recent runs went,
+// phase by phase, from the rows the worldserver writes to
+// overseer_dungeon_run_event - the record that is still there after the
+// container log has rotated. Every string arrives written by runtimeline.py;
+// this prints them and turns a tone name into a class.
+const rtlline = document.getElementById("rtlline");
+const rtlfamilies = document.getElementById("rtlfamilies");
+let rtlPulling = false;
+let rtlDrawn = false;
+
+function rtlRender(p) {
+  rtlline.textContent = p.line;
+  rtlline.className = "chr-body";
+  // A card somebody opened stays open across a poll, and one they closed
+  // stays closed; only the first draw takes the module's choice.
+  const opened = new Set();
+  for (const d of rtlfamilies.querySelectorAll("details[open]")) opened.add(d.dataset.key);
+  const out = [];
+  for (const f of p.families) {
+    const box = el("div", "dgn-family");
+    box.appendChild(el("h3", "dgn-title", f.title));
+    box.appendChild(el("p", "chr-body", f.line));
+    for (const run of f.runs) {
+      const card = el("details", "chr-card dgn-card rtl-run rtl-" + run.tone);
+      card.dataset.key = f.title + "|" + run.title;
+      card.open = rtlDrawn ? opened.has(card.dataset.key) : run.open;
+      const summary = document.createElement("summary");
+      summary.appendChild(el("span", "dgn-name", run.title));
+      summary.appendChild(el("span", "dgn-sum", run.line));
+      card.appendChild(summary);
+      for (const ev of run.events) {
+        const line = el("div", "rtl-event rtl-" + ev.tone);
+        line.appendChild(el("span", "rtl-at", ev.at));
+        line.appendChild(el("span", "rtl-line", ev.line));
+        card.appendChild(line);
+      }
+      box.appendChild(card);
+    }
+    out.push(box);
+  }
+  // Cleared only here, after a read that succeeded: a failed poll leaves
+  // what is drawn in place.
+  rtlfamilies.textContent = "";
+  for (const box of out) rtlfamilies.appendChild(box);
+  rtlDrawn = true;
+}
+
+async function pollRunTimeline() {
+  if (view !== DUNGEONS_VIEW || rtlPulling) return;
+  rtlPulling = true;
+  try {
+    const r = await fetch(u("/api/runtimeline"),
+                          {signal: AbortSignal.timeout(20000)});
+    if (!r.ok) throw new Error(r.status);
+    rtlRender(await r.json());
+  } catch (e) {
+    // Whatever is drawn stays drawn, like the path's poll above.
+    rtlline.textContent = "the world is unreachable - this may be stale";
+    rtlline.className = "chr-body alarm";
+  } finally {
+    rtlPulling = false;
+  }
+}
+
+// Every thirty seconds while the tab is open: a run changes phase in minutes,
+// and this read is one indexed table.
+setInterval(() => { if (view === DUNGEONS_VIEW) pollRunTimeline(); }, 30000);
 
 // --- the Decree console (infra#2597) ---------------------------------------
 //

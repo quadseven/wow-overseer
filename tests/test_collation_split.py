@@ -82,6 +82,9 @@ COLLATIONS = {
     "overseer_jev_judgment": "utf8mb4_0900_ai_ci",
     # Bridge-owned (#209), named in campaignqueue.CREATE_SQL the same way.
     "overseer_dungeon_queue": "utf8mb4_0900_ai_ci",
+    # Module-owned (mod-overseer#616), named in its own CREATE TABLE
+    # (COLLATE=utf8mb4_unicode_ci) exactly as overseer_build is above.
+    "overseer_dungeon_run_event": "utf8mb4_unicode_ci",
     # Not an overseer table, and the reason every join to it is safe. A binary
     # collation wins against any non-binary one of the same charset without
     # anybody writing COLLATE.
@@ -131,6 +134,18 @@ STRING_COLUMNS = {
         }
     ),
     "overseer_dungeon_run": frozenset({"ended_reason", "leader_name", "state"}),
+    # From its own DDL (mod-overseer#616): every VARCHAR column.
+    "overseer_dungeon_run_event": frozenset(
+        {
+            "character_name",
+            "detail",
+            "family",
+            "kind",
+            "leader_name",
+            "phase",
+            "portal",
+        }
+    ),
     "overseer_event": frozenset({"character_name", "detail", "kind", "subject_name"}),
     "overseer_goal": frozenset(
         {"channel_id", "character_name", "kind", "last_report", "skill_name", "status"}
