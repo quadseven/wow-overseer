@@ -235,9 +235,16 @@ _LIVE_SUSPICION = {
 # orcs shout Lok'tar, the tauren speaks of the Earth Mother. The register is
 # still the short, blunt one the whole overseer speaks in.
 #
-# spec_tab stays -1 on purpose. Choosing talents writes to the world (see
-# spec_tabs), and giving this family a voice is not the change that should
-# also respec five characters.
+# THE CHIEF IS THE BAND'S TANK, AND THAT IS THE OPERATOR'S DECISION: the head
+# of each family is a protection warrior and holds the aggro. Zug is spec_tab 2
+# for the same reason Grug is. A character whose points already sit in another
+# tree is not respecced by this number alone: mod-overseer sends him to a
+# warrior trainer to buy a talent reset out of his own purse, then spends the
+# points in protection (quadseven/mod-overseer#626).
+#
+# The other four stay -1 on purpose. Choosing talents writes to the world (see
+# spec_tabs), and naming the band's tank is not the change that should also
+# respec the rest of it.
 _HORDE_FAMILY: dict[str, Bond] = {
     "Zug": Bond(
         role="chief",
@@ -246,6 +253,9 @@ _HORDE_FAMILY: dict[str, Bond] = {
         race="orc",
         char_class="warrior",
         gender="male",
+        # Protection. He goes first into every fight, so he is the one who gets
+        # hit, and the band's dungeon runs need a tank to lead them.
+        spec_tab=2,
         persona=(
             "The chief of the band, Zrog's elder brother, and an orc warrior. "
             "Fewest words of anyone. Gives orders, not reasons. Goes first "
@@ -567,17 +577,29 @@ def head_of_family() -> str:
 
 
 def spec_tabs() -> dict[str, int]:
-    """Name -> talent tree, for every member who has one chosen.
+    """Name -> talent tree, for every member of every family who has one chosen.
 
-    Derived from FAMILY rather than repeated, for the same reason
+    Derived from the family tables rather than repeated, for the same reason
     head_of_family is: the family table is where these decisions are written
     down, and a second copy here is a second answer that can disagree.
+
+    EVERY FAMILY, NOT ONLY THE ONE THIS PROCESS DRIVES. The roster rows of the
+    second family live on the same realm and are read by the same module, and
+    the only choice written for it is its head's: Zug tanks, as Grug does. The
+    names are disjoint across families (tests/test_bonds.py holds that), so one
+    UPDATE by name cannot reach the wrong character. FAMILY is read first and
+    wins for its own names.
 
     Members left at -1 are omitted entirely. The column already defaults to -1,
     so writing them would be writing the default back over itself, and leaving
     them out keeps "no role chosen" distinguishable from "chose nothing".
     """
-    return {name: bond.spec_tab for name, bond in FAMILY.items() if bond.spec_tab >= 0}
+    tabs = {name: bond.spec_tab for name, bond in FAMILY.items() if bond.spec_tab >= 0}
+    for house in HOUSES.values():
+        for name, bond in house.members.items():
+            if bond.spec_tab >= 0:
+                tabs.setdefault(name, bond.spec_tab)
+    return tabs
 
 
 def canon(name: str) -> str | None:

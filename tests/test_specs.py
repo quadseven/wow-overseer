@@ -81,6 +81,38 @@ class FamilyRoles(unittest.TestCase):
         }
         self.assertEqual({}, bad, f"talent tab out of range 0-2: {bad}")
 
+    def test_every_family_head_is_a_protection_tank(self):
+        """The operator's decision: each family's head is its main tank.
+
+        Asserted per House, so the Horde head is held to it as well as Grug.
+        The dungeon module leads a run only with a bot that answers IsTank, and
+        a head left at -1 or in fury is a party nobody leads.
+        """
+        for head, house in bonds.HOUSES.items():
+            bond = house.members[head]
+            self.assertIn(
+                (bond.char_class, bond.spec_tab),
+                TANK_SPECS,
+                f"{head} heads a family and is not a tank: "
+                f"{(bond.char_class, bond.spec_tab)}",
+            )
+
+    def test_spec_tabs_reaches_the_second_familys_head(self):
+        """The bridge writes what spec_tabs returns, and only that.
+
+        Deriving it from FAMILY alone left the Horde head's row at whatever it
+        was enrolled with, and it was enrolled in fury.
+        """
+        tabs = bonds.spec_tabs()
+        self.assertEqual(2, tabs.get("Zug"))
+        self.assertEqual(2, tabs.get("Grug"))
+
+    def test_the_rest_of_the_second_family_is_left_alone(self):
+        """Naming the band's tank is not a respec of the whole band."""
+        tabs = bonds.spec_tabs()
+        for name in ("Zrog", "Uzza", "Oz", "Zork"):
+            self.assertNotIn(name, tabs)
+
     def test_spec_tabs_omits_anyone_undecided(self):
         """-1 is not written back over the column's own default."""
         undecided = bonds.Bond(role="x", blood=False, seniority=1, char_class="rogue")
