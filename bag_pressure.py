@@ -259,6 +259,39 @@ def family_town_run_needed(
     return False
 
 
+# WHAT THE ECONOMY PASS DOES THIS CYCLE (#225). Three answers, not a bool,
+# because the middle one is new. "trip" takes the travel column and writes
+# sales; "counter" writes sales only for holders already at a vendor and takes
+# no aim; "none" writes nothing.
+VENDOR_PASS_TRIP = "trip"
+VENDOR_PASS_COUNTER = "counter"
+VENDOR_PASS_NONE = "none"
+
+
+def vendor_pass_mode(trip_worth: bool, withheld: bool, in_run: bool) -> str:
+    """Whether the economy pass travels, sells where it stands, or stops.
+
+    `trip_worth` is `family_town_run_needed` with the sellable half. It asks
+    whether SELLING alone can lift somebody past the trigger. For a campaign
+    withheld for bag space the answer can be no when a bag would still clear
+    it. Measured on wow-dev 2026-09-23: the leader at 2 free slots with 1
+    sellable item, a trip worth 3 against a trigger of 3, so the pass returned
+    here every cycle. The Jev sell interlude called this same pass and wrote
+    no sale in 45 minutes.
+
+    SO A WITHHELD CAMPAIGN SELLS AT THE COUNTER, WITHOUT TRAVELLING. The bag
+    trip owns the aim (`townslot.Slot.reserve`) and walks the family to a
+    vendor that stocks a bag. Every vendor buys, so the sales are written
+    there. A trip this pass cannot justify is still not taken, which keeps
+    infra#4190's reason for the gate intact.
+    """
+    if trip_worth:
+        return VENDOR_PASS_TRIP
+    if withheld and not in_run:
+        return VENDOR_PASS_COUNTER
+    return VENDOR_PASS_NONE
+
+
 # WHAT A VENDOR ERRAND SHOULD DO NEXT. Three words rather than two booleans at
 # the call site, because the interesting answer is the middle one and a pair of
 # flags is exactly how it stayed invisible: "not aiming" and "giving the column

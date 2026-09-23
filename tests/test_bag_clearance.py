@@ -319,7 +319,7 @@ class LockboxesReachTheRogue(unittest.TestCase):
         self.assertIn(") + lock_sales", body)
         self.assertLess(
             body.index("_route_lockboxes"),
-            body.index("if not bag_pressure.family_town_run_needed("),
+            body.index("trip_worth = bag_pressure.family_town_run_needed("),
         )
 
     def test_a_box_moves_only_by_a_near_give_or_a_letter(self):

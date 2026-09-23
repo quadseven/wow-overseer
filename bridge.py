@@ -514,6 +514,10 @@ GATHER_CLAIMANT = "gather"
 # and a discovery walk is exactly the kind that can fail to finish.
 FLIGHT_CLAIMANT = "flight"
 
+# The bag pass's name in the town slot (#206), and the pass that owns the
+# traveller while a campaign is withheld for bag space (#225).
+BAGS_CLAIMANT = "bags"
+
 # How far the flight-network pass will send somebody, and how long it may keep
 # the column while it does.
 #
@@ -7804,8 +7808,17 @@ class Bridge(discord.Client):
         # meets the ordinary disposition on a later cycle.
         await self._equip_upgrades(gear_rows, worn, names, jev_plan)
 
-        if not bag_pressure.family_town_run_needed(
-                free_slots, sellable=sellable_counts):
+        # A CAMPAIGN WITHHELD FOR BAG SPACE STILL SELLS (#225). Selling alone
+        # may not clear the withhold line when a bag would, so the gate below
+        # said "no trip" and returned, and the Jev sell interlude, which calls
+        # this same pass, wrote no sale for 45 minutes on wow-dev. The bag trip
+        # owns the aim then; this pass sells for whoever stands at a vendor.
+        trip_worth = bag_pressure.family_town_run_needed(
+            free_slots, sellable=sellable_counts)
+        withheld = not trip_worth and jev_activity.withheld(
+            await asyncio.to_thread(_campaign_waiting, names), free_slots)
+        mode = bag_pressure.vendor_pass_mode(trip_worth, withheld, in_run)
+        if mode == bag_pressure.VENDOR_PASS_NONE:
             # Said with the counts, because "below the trigger" and "nobody a
             # vendor could lift past it" are different reasons to stay home and
             # the second one used to be invisible (infra#4190).
@@ -7814,6 +7827,13 @@ class Bridge(discord.Client):
                      free_slots, sellable_counts,
                      bag_pressure.TOWN_RUN_FREE_SLOTS)
             return
+        if mode == bag_pressure.VENDOR_PASS_COUNTER:
+            log.info("economy: selling alone lifts nobody past the trigger of "
+                     "%d (free slots %s, sellable %s), but the family's campaign "
+                     "is withheld for bag space - the bag trip owns the travel "
+                     "aim and sales are written for whoever stands at a vendor",
+                     bag_pressure.TOWN_RUN_FREE_SLOTS, free_slots,
+                     sellable_counts)
         if in_run:
             # Bag pressure outranks an unfinished dungeon. The world-side
             # coordinator already treats job=quest as the operator's request
@@ -7984,7 +8004,14 @@ class Bridge(discord.Client):
         # a new one, releasing and re-taking the counter hold. The argument and
         # the measurements are on `bag_pressure.vendor_errand_step`.
         aimed = False
-        if step == bag_pressure.VENDOR_ERRAND_AIM:
+        if (step == bag_pressure.VENDOR_ERRAND_AIM
+                and mode == bag_pressure.VENDOR_PASS_COUNTER):
+            # NO AIM: THE BAG TRIP OWNS THE TRAVELLER (#225). Its vendor buys
+            # the junk as well, and a second claim here is the fight over one
+            # column that walked the family away from the bag vendor.
+            log.info("economy: leader=%s is left to the bag trip; no vendor "
+                     "aim is taken while the campaign is withheld", leader)
+        elif step == bag_pressure.VENDOR_ERRAND_AIM:
             # THE RETURN VALUE IS READ. The economy guard in _write_trade_errand
             # only retasks an IDLE traveller, so this write is a no-op while the
             # town trip owns `travel_npc = 'repair'` - which is a legitimate
@@ -8020,6 +8047,10 @@ class Bridge(discord.Client):
             leader_at_counter=leader_at_counter,
             holder_at_counter=lambda holder: bool(holder_town[holder].vendor),
         ))
+        if mode == bag_pressure.VENDOR_PASS_COUNTER and not leader_at_counter:
+            # No trip of this pass's own, so a walking leader is not heading
+            # to a counter for these rows; only a holder at one sells (#225).
+            queue_holders = {h for h in queue_holders if holder_town[h].vendor}
         for holder in sorted(by_holder):
             holder_candidates = tuple(by_holder[holder])
             town = holder_town[holder]
@@ -8877,7 +8908,9 @@ class Bridge(discord.Client):
         counter, and releases the column; `_buy_bags_once` buys on the next
         cycle because the buyers now stand at a counter that stocks a bag.
         """
+        slot = self._cohort_town_slot(cohort)
         if not needy:
+            slot.unreserve(BAGS_CLAIMANT)
             return
         if cohort is None:
             leader = await asyncio.to_thread(_head_now)
@@ -8893,11 +8926,28 @@ class Bridge(discord.Client):
                 await asyncio.to_thread(_fetch_bag_vendors, here))
         trip = bag_pressure.bag_vendor_trip(
             needy, vendors, leader=leader, standing=standing, in_run=in_run)
+        # ONE OWNER OF THE AIM WHILE THE CAMPAIGN IS WITHHELD (#225). Measured
+        # on wow-dev 2026-09-23: clearance took the leader 17 yards short of
+        # the bag vendor to post guild letters, and the campaign stayed
+        # withheld. The hold lasts while there is a bag vendor to reach or to
+        # stand at, and `townslot.RESERVE_SECONDS` bounds it.
+        withheld = jev_activity.withheld(
+            await asyncio.to_thread(_campaign_waiting, names),
+            await asyncio.to_thread(_fetch_free_slots, names),
+        )
+        if withheld and trip.vendor is not None:
+            slot.reserve(BAGS_CLAIMANT, time.monotonic(),
+                         "the family's campaign is withheld for bag space")
+        else:
+            slot.unreserve(BAGS_CLAIMANT)
         if not trip.target:
             log.info("bags: no bag vendor trip - %s", trip.why_not)
             return
+        # URGENT ONLY WHILE THE RESERVATION IS LIVE, so a trip that cannot
+        # land falls back to its ordinary turn once the hold runs out.
         aimed = await self._claim_town_slot(
-            "bags", leader, trip.target,
+            BAGS_CLAIMANT, leader, trip.target,
+            urgent=slot.reserved_by(BAGS_CLAIMANT, time.monotonic()),
             cohort=getattr(cohort, "key", None),
         )
         log.info("bags: %s (aim taken=%s)",
