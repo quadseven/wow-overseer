@@ -115,8 +115,8 @@ class ThePassRunsAndInTheRightOrder(unittest.TestCase):
         Sending a follower straight at a coordinate leaves that character
         behind."""
         body = _block("    async def _mail_once(")
-        self.assertIn("leader = await asyncio.to_thread(_head_now)", body)
-        self.assertIn('self._claim_town_slot("mail", leader, post.aim)', body)
+        self.assertIn("leader = await asyncio.to_thread(_family_of, cohort)", body)
+        self.assertIn('self._claim_town_slot("mail", leader, post.aim,', body)
 
     def test_the_leader_is_head_now_not_the_static_seniority_answer(self):
         """infra#3553/#3554. `_head_now()`, NOT bonds.head_of_family(): the

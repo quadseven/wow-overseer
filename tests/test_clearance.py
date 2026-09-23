@@ -186,7 +186,7 @@ class TheBridgeWiresIt(unittest.TestCase):
     def test_the_vendor_pass_plans_sells_and_hands_over(self):
         body = _block("    async def _vendor_once(")
         self.assertIn("await self._clearance_plan(names, leader,", body)
-        self.assertIn("auction_open=cohort is None", body)
+        self.assertIn("auction_open=True", body)
         self.assertIn("clear_sales = _clearance_sales(clear)", body)
         self.assertIn(") + lock_sales + clear_sales", body)
         self.assertLess(

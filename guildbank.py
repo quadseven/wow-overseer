@@ -141,6 +141,7 @@ def plan_setup(
     purchased_tabs: int,
     rank_ids: tuple[int, ...] = (),
     deposit_rank_ids: tuple[int, ...] = (),
+    purse: int | None = None,
 ) -> tuple[SetupAction, ...]:
     """Plan the one-time tab and deposit-rights setup, without doing I/O.
 
@@ -148,12 +149,20 @@ def plan_setup(
     exists, the same master opens tab 0 to every non-master rank that lacks the
     deposit right. The returned commands are idempotent when the caller reads
     the persisted state before planning, and malformed state fails closed.
+
+    `purse` is the buyer's `characters.money` when the caller read it. A buyer
+    holding less than `TAB0_COST_COPPER` is not asked (#246): the core
+    refuses the purchase, and the row would cost a walk to the vault for
+    nothing. None keeps the old answer, so a caller that has not read the
+    purse still asks.
     """
     if not isinstance(leader, str) or not leader.strip():
         return ()
     if not isinstance(purchased_tabs, int) or purchased_tabs < 0:
         return ()
     if purchased_tabs == 0:
+        if purse is not None and not can_buy_tab(purse):
+            return ()
         return (SetupAction(leader, "bank buy-tab"),)
     try:
         ranks = sorted({int(r) for r in rank_ids if int(r) > 0})
@@ -164,6 +173,27 @@ def plan_setup(
         SetupAction(leader, f"bank grant-deposit rank:{rid}")
         for rid in ranks
         if rid not in granted
+    )
+
+
+def can_buy_tab(purse) -> bool:
+    """Whether a purse, in copper, pays for tab 0; unreadable reads as no."""
+    try:
+        return int(purse) >= TAB0_COST_COPPER
+    except (TypeError, ValueError):
+        return False
+
+
+def tab_waits_line(buyer: str, purse) -> str:
+    """The pass's sentence for a tab its buyer cannot pay for yet (#246)."""
+    try:
+        held = max(0, int(purse or 0))
+    except (TypeError, ValueError):
+        held = 0
+    return (
+        "guild bank setup: tab 0 waits - %s holds %dg of the %dg it costs, "
+        "and the guild's dues are what fill that purse"
+        % (buyer or "nobody", held // 10_000, TAB0_COST_COPPER // 10_000)
     )
 
 

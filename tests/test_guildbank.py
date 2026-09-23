@@ -364,7 +364,7 @@ class GuildBankOnceLogsWhetherTheLeaderWasActuallyAimedTests(unittest.TestCase):
     def test_the_aim_result_is_captured_not_discarded(self):
         self.assertIn("aimed = await self._claim_town_slot(", self.body)
         self.assertIn(
-            'self._claim_town_slot("guild bank", leader, vault.aim)', self.body
+            'self._claim_town_slot("guild bank", leader, vault.aim,', self.body
         )
 
     def test_a_refused_aim_is_logged(self):
@@ -1018,7 +1018,7 @@ class ParameterisedQueriesSurviveMogrify(unittest.TestCase):
 def _gb_block() -> str:
     """`_guild_bank_once`'s body, to the next def at the same indent."""
     src = BRIDGE.read_text(encoding="utf-8")
-    signature = "    async def _guild_bank_once(self) -> None:"
+    signature = "    async def _guild_bank_once(self, cohort=None) -> None:"
     start = src.index(signature)
     rest = src[start:]
     match = re.search(r"\n {0,4}(async def |def |class )", rest[1:])

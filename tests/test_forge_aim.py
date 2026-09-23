@@ -296,7 +296,7 @@ class TheCallerIsWiredAndCannotLatchTheColumn(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.source = BRIDGE.read_text(encoding="utf-8", errors="replace")
-        start = cls.source.index("async def _forge_once(self)")
+        start = cls.source.index("async def _forge_once(self")
         cls.body = cls.source[start : cls.source.index("async def _forge_loop(self)")]
         # THE CODE, WITHOUT THE DOCSTRING. The ordering assertions below are
         # about which statement runs first, and that docstring names several of
@@ -317,14 +317,14 @@ class TheCallerIsWiredAndCannotLatchTheColumn(unittest.TestCase):
         competes for `travel_npc` not at all."""
         first = self.code.index("_forge_errands")
         self.assertLess(first, self.code.index("_claim_town_slot"))
-        self.assertLess(first, self.code.index("_head_now"))
+        self.assertLess(first, self.code.index("_family_of"))
         self.assertIn("if not smelters:\n            return", self.code)
 
     def test_the_demand_read_is_gated_on_the_craft_permission(self):
         """`job='craft'` is DriveCraft's own permission. Walking somebody to a
         forge while the family is out gathering stands the quest drive down
         (`TravelHoldsTheWheel`) for a cast that cannot happen anyway."""
-        reader = self.source[self.source.index("def _forge_errands()") :]
+        reader = self.source[self.source.index("def _forge_errands(") :]
         reader = reader[: reader.index("def _current_travel_npc")]
         self.assertIn("job = %s", reader)
         self.assertIn("craft.MODE", reader)
@@ -341,7 +341,7 @@ class TheCallerIsWiredAndCannotLatchTheColumn(unittest.TestCase):
         supposed to cure. A truthiness test on `focus_for` is that bug, and it
         is a one-character edit away, so it is pinned rather than reasoned
         about."""
-        reader = self.source[self.source.index("def _forge_errands()") :]
+        reader = self.source[self.source.index("def _forge_errands(") :]
         reader = reader[: reader.index("def _current_travel_npc")]
         self.assertIn("== travel.FORGE_FOCUS_ID", reader)
         # And the mapping the comparison relies on really does name the forge.
@@ -440,7 +440,7 @@ class TheFocusVocabularyCannotDriftFromTheWalk(unittest.TestCase):
 
     def test_the_named_pass_exists_and_uses_the_named_aim(self):
         source = BRIDGE.read_text(encoding="utf-8", errors="replace")
-        self.assertIn("async def _forge_once(self)", source)
+        self.assertIn("async def _forge_once(self", source)
         self.assertIn("travel.forge_aim(", source)
         self.assertIn("travel.SPELL_FOCUS_GO_TYPE", source)
         self.assertIn("travel.FORGE_FOCUS_ID", source)
