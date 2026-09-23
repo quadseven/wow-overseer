@@ -1265,36 +1265,41 @@ class ThePurchasedTabCountReachesTheReserve(unittest.TestCase):
         )
 
 
-class TheItemDepositStillHasNoCaller(unittest.TestCase):
-    """infra#4230's `guild_bank_item` criterion cannot be met by this pass.
+class TheItemDepositHasOneCaller(unittest.TestCase):
+    """#233: the item verb finally has a policy, and it lives in bank.py.
 
-    NOT A REGRESSION AND NOT FIXED HERE - pinned so the next reader does not
-    spend the day this one nearly spent. `bank deposit <copper>` lands in
-    `guild.BankMoney`; `guild_bank_item` only ever moves for
-    `bank deposit-item`, whose command text `guildbank.format_item_deposit`
-    renders correctly and which NOTHING in this package ever enqueues.
-
-    So `guild_bank_item = 0` is not evidence about the travel column, the
-    arbitration or this fix. It is the absence of a policy that decides WHICH
-    items to hand over, which guildbank.py's own docstring says was left
-    unwritten on purpose. That is the work infra#4198's item-relief path
-    actually needs.
+    infra#4230 pinned that nothing enqueued `bank deposit-item`, because no
+    module decided WHICH items a member should hand over. bank.py's keeper
+    rule is that decision, and `bank.command` renders its guild moves through
+    `guildbank.format_item_deposit`, so the formatter still has exactly one
+    spelling and one caller outside its own module.
     """
 
-    def test_nothing_outside_tests_enqueues_an_item_deposit(self):
-        callers = [
+    def test_bank_is_the_only_caller_of_the_formatter(self):
+        callers = sorted(
             path.name
             for path in PACKAGE.glob("*.py")
             if "format_item_deposit(" in path.read_text(encoding="utf-8")
-        ]
-        self.assertEqual(["guildbank.py"], callers)
+        )
+        self.assertEqual(["bank.py", "guildbank.py"], callers)
 
-    def test_the_pass_only_ever_writes_a_money_deposit(self):
+    def test_the_pass_still_writes_its_money_deposit(self):
         self.assertIn(
             'f"bank deposit {deposit.copper}"',
             _statements("    async def _guild_bank_once("),
         )
-        self.assertNotIn("deposit-item", _statements("    async def _guild_bank_once("))
+
+    def test_the_item_rows_come_from_the_shared_plan(self):
+        body = _statements("    async def _guild_bank_once(")
+        self.assertIn("_plan_bank, names)).guild", body)
+        self.assertIn("self._queue_guild_items(items, spawn, positions)", body)
+        self.assertIn("if not actions and not deposits and not items:", body)
+        queue = _statements("    async def _queue_guild_items(")
+        self.assertIn("bank.command(move)", queue)
+        self.assertIn("_recent_guild_bank_keys", queue)
+        self.assertLess(
+            queue.index("travel.spawn_in_reach("), queue.index("_insert_guild")
+        )
 
 
 if __name__ == "__main__":

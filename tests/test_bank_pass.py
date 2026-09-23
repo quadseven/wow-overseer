@@ -71,7 +71,7 @@ class ThePassRunsAndInTheRightOrder(unittest.TestCase):
         make one is how the party spreads."""
         body = _block("    async def _bank_once(")
         self.assertIn("await self._mid_run(names)", body)
-        self.assertLess(body.index("self._mid_run("), body.index("_fetch_bank_items"))
+        self.assertLess(body.index("self._mid_run("), body.index("_plan_bank"))
 
     def test_the_travel_errand_is_written_before_any_row_that_needs_it(self):
         """DoBank refuses with `banker not in range`. A queue written before
@@ -182,11 +182,17 @@ class ThePassRunsAndInTheRightOrder(unittest.TestCase):
 
 class TheBridgeDecidesNothingAboutTheBank(unittest.TestCase):
     def test_the_plan_comes_from_the_pure_module(self):
+        """#233 moved the fetch-and-plan into `_plan_bank`, which the guild
+        bank pass shares, so the one split between the two banks is decided
+        once. The pass still writes only what that plan says."""
         body = _block("    async def _bank_once(")
-        self.assertIn("bank.members_from_rows(rows, names)", body)
-        self.assertIn("bank.family_from_skills(held)", body)
-        self.assertIn("bank.plan(", body)
+        self.assertIn("asyncio.to_thread(_plan_bank, names)", body)
         self.assertIn("bank.command(move)", body)
+        helper = _block("def _plan_bank(")
+        self.assertIn("bank.members_from_rows(rows, names)", helper)
+        self.assertIn("bank.family_from_skills(held)", helper)
+        self.assertIn("bank.plan(", helper)
+        self.assertIn("storage=storage", helper)
 
     def test_no_slot_arithmetic_in_the_bridge(self):
         """Slot ranges, free-room counting and the bank's own size live in

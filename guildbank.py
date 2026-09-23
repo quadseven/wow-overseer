@@ -15,7 +15,15 @@ upcoming trainer costs, repair bills or auction listings - those are exactly
 the kind of "surplus" question `disposition.py` answers for items, and a gold
 version of that same judgement is future work, not this slice.
 
-ITEM DEPOSIT (mod-overseer, infra#3647): MECHANISM ONLY, no auto-policy.
+ITEM DEPOSIT (mod-overseer, infra#3647): MECHANISM HERE, POLICY IN bank.py.
+
+UPDATE (#233): the policy the next paragraphs say was left for a follow-up
+now exists. bank.py's keeper rule decides which carried stacks are stored,
+sends the tradable ones here through `format_item_deposit`, and
+`_guild_bank_once` queues them from the vault. The guild on the dev realm
+has since bought tab 0 and its family ranks carry the deposit-item right,
+so the blockers below are the ones `bank.storage_from` checks before it
+offers the guild anything.
 
 `format_item_deposit` below produces the exact `bank deposit-item
 guid:<n>`/`entry:<n>` command text `GuildVerb::BankDepositItem` parses
