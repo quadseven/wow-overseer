@@ -53,6 +53,17 @@ class Bag:
     # item, not its kind: the family carries several identical pouches
     # and an entry id would name any of them.
     guid: int = 0
+    # The item_template entry, which is what the playerbot equip verb names
+    # (`self_equips`). 0 when the caller did not read it, and a bag with no
+    # entry is never put on by its own holder.
+    entry: int = 0
+    # A general bag (item_template.subclass 0) holds anything. A herb bag or
+    # a soul bag does not, so the core refuses to empty a worn bag into one;
+    # only general bags are put on by their own holder.
+    general: bool = True
+    # The guid of the worn bag a carried bag sits in, 0 in the backpack. A
+    # swap may not empty a worn bag into a spare that is inside it.
+    inside: int = 0
 
 
 @dataclass(frozen=True)
@@ -219,9 +230,13 @@ def slots_gained(moves):
 # transfer and never will be. The family-wide match is the missing half, and it
 # can only be made somewhere that can see all five at once.
 #
-# SAME-CHARACTER EQUIPS ARE DELIBERATELY NOT HERE. Putting on a bag you already
-# carry is not a give, and `give` is the only mechanism that exists. Nothing on
-# the measured family needs it, so nothing here pretends to.
+# SAME-CHARACTER EQUIPS ARE `self_equips` BELOW, and they are a different verb.
+# Putting on a bag you already carry is not a give. When this was first
+# written `give` was the only mechanism, and nothing on the measured family
+# needed more. The bag purchase (#150) has since used the playerbot equip verb
+# (`e`) for a bag its own buyer carries, and measured on wow-dev 2026-09-22
+# Grog carried a spare Red Leather Bag (8 slots) at 0 free slots while wearing
+# a Small Green Pouch (6). That swap is the same verb.
 
 
 @dataclass(frozen=True)
@@ -309,6 +324,124 @@ def plan_family_bags(members):
     return moves
 
 
+@dataclass(frozen=True)
+class SelfEquip:
+    """One carried bag its own holder puts on (#88).
+
+    `replaces` names the worn bag it displaces on a swap, None when it goes
+    into an empty position. `command` is the playerbot equip verb.
+    """
+
+    holder: str
+    bag: str
+    entry: int
+    guid: int
+    replaces: str | None
+    slots_gained: int
+    why: str
+
+    @property
+    def command(self) -> str:
+        """`e` with an item link. mod-playerbots' EquipAction puts a container
+        into the first empty bag position, else in place of the smallest worn
+        bag (EquipAction::GetSmallestBagSlot, the last of equal sizes)."""
+        return "e Hitem:%d:0" % int(self.entry)
+
+
+def _smallest_worn(worn):
+    """The worn bags the equip verb may pick, and their size.
+
+    GetSmallestBagSlot takes the last of several equal smallest bags, and
+    which one that is depends on bag positions this planner does not read.
+    So every worn bag of the smallest size is a candidate, and a swap must be
+    safe against each of them.
+    """
+    size = min(bag.slots for bag in worn)
+    return size, [bag for bag in worn if bag.slots == size]
+
+
+def self_equips(members):
+    """The carried bags their own holders should put on, one per holder.
+
+    AN EMPTY POSITION FIRST. The equip verb fills one before it swaps
+    anything, and a bag there gains its own slots plus the slot it stops
+    occupying.
+
+    OTHERWISE A SWAP, ONLY WHEN THE CORE CAN DO IT. With every position full
+    the verb swaps the spare for the smallest worn bag. The core then moves
+    that bag's items into the spare (Player::SwapItem's bag exchange), so the
+    swap needs a general spare that is strictly larger, empty, holds every
+    item of each smallest worn bag, and is not inside one of them. The free
+    slots elsewhere do not matter, which is why `_swap_is_safe` above is not
+    the test here. The displaced bag is carried afterwards, where
+    `plan_family_bags` hands it on or `bag_pressure.bag_candidates` sells it.
+    """
+    moves = []
+    for member in sorted(members, key=lambda m: m.name):
+        spares = [
+            bag
+            for bag in member.carried
+            if bag.used == 0 and bag.general and bag.entry > 0 and bag.guid > 0
+        ]
+        if not spares:
+            continue
+        best = _biggest_first(spares)[0]
+        if member.positions - len(member.worn) > 0:
+            moves.append(
+                SelfEquip(
+                    holder=member.name,
+                    bag=best.name,
+                    entry=best.entry,
+                    guid=best.guid,
+                    replaces=None,
+                    slots_gained=best.slots + 1,
+                    why="%s has an empty bag position and carries %s as cargo"
+                    % (member.name, best.name),
+                )
+            )
+            continue
+        if not member.worn:
+            continue
+        size, smallest = _smallest_worn(member.worn)
+        if best.slots <= size:
+            continue
+        if any(bag.used > best.slots for bag in smallest):
+            continue
+        if best.inside and best.inside in {bag.guid for bag in smallest}:
+            continue
+        moves.append(
+            SelfEquip(
+                holder=member.name,
+                bag=best.name,
+                entry=best.entry,
+                guid=best.guid,
+                replaces=smallest[-1].name,
+                slots_gained=best.slots - size,
+                why="%s holds %d slots where the smallest worn bag holds %d"
+                % (best.name, best.slots, size),
+            )
+        )
+    return moves
+
+
+def without_bags(members, guids):
+    """The members with the given carried bags removed from their cargo.
+
+    Used so a bag its holder is putting on is not also handed to a sibling
+    by `plan_family_bags` in the same pass.
+    """
+    gone = set(guids)
+    return [
+        Member(
+            m.name,
+            m.positions,
+            worn=m.worn,
+            carried=tuple(b for b in m.carried if b.guid not in gone),
+        )
+        for m in members
+    ]
+
+
 def give_command(move):
     """The command text mod-overseer's DoGive takes for one handover.
 
@@ -347,6 +480,30 @@ BAG_POSITIONS = range(19, 23)
 BACKPACK_POSITIONS = range(23, 39)
 
 
+def _worn_guids(rows, by_name) -> dict:
+    """holder -> the guids of the bags that holder wears."""
+    worn = {}
+    for row in rows:
+        if row["holder"] not in by_name:
+            continue
+        if int(row["bag"]) == 0 and int(row["slot"]) in BAG_POSITIONS:
+            worn.setdefault(row["holder"], set()).add(int(row["guid"]))
+    return worn
+
+
+def _bag_from_row(row) -> Bag:
+    """One Bag from one container row."""
+    return Bag(
+        row["name"],
+        int(row["slots"]),
+        used=int(row.get("used", 0)),
+        guid=int(row["guid"]),
+        entry=int(row.get("entry", 0) or 0),
+        general=int(row.get("subclass", 0) or 0) == 0,
+        inside=int(row["bag"]),
+    )
+
+
 def members_from_rows(rows, names, positions=len(BAG_POSITIONS)):
     """One Member per name, whether or not any row mentions them.
 
@@ -356,23 +513,13 @@ def members_from_rows(rows, names, positions=len(BAG_POSITIONS)):
     name, slots, bag, slot and used, as the bridge's SQL names them.
     """
     by_name = {name: {"worn": [], "carried": []} for name in names}
-    worn_guids = {}
-    for row in rows:
-        if row["holder"] not in by_name:
-            continue
-        if int(row["bag"]) == 0 and int(row["slot"]) in BAG_POSITIONS:
-            worn_guids.setdefault(row["holder"], set()).add(int(row["guid"]))
+    worn_guids = _worn_guids(rows, by_name)
     for row in rows:
         holder = row["holder"]
         if holder not in by_name:
             continue
-        bag = Bag(
-            row["name"],
-            int(row["slots"]),
-            used=int(row.get("used", 0)),
-            guid=int(row["guid"]),
-        )
         container, slot = int(row["bag"]), int(row["slot"])
+        bag = _bag_from_row(row)
         if container == 0 and slot in BAG_POSITIONS:
             by_name[holder]["worn"].append(bag)
         elif (

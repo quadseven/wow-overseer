@@ -37,6 +37,7 @@ COPY core.py bridge.py voice.py transform.py \
      dungeonprogression.py \
      guildcraft.py tradespec.py guildbank.py guildshare.py guildroute.py recruit.py \
      bag_pressure.py bag_upgrade.py bag_economy.py disposition.py bagfate.py \
+     lockbox.py \
      item_plan.py \
      jev.py jev_items.py jev_choices.py jev_activity.py jevview.py \
      bank.py \

@@ -531,7 +531,30 @@ def open_bag_positions(members) -> dict:
     return out
 
 
-def bag_purchases(buyers, offers) -> tuple:
+def reserve_yields(buyer: BagBuyer, campaign_waiting: bool) -> bool:
+    """Does this buyer's reserve give way to the bag (#88)?
+
+    Yes only when both hold: an operator-ordered dungeon campaign is waiting
+    for this family, and this buyer is one of the members whose free slots
+    hold it back (`TOWN_RUN_FREE_SLOTS`, the line `bridge._drive_dungeon`
+    withholds on). The bag is then the one purchase standing between the
+    family and the run the operator asked for.
+
+    WHY THE RESERVE YIELDS RATHER THAN A SIBLING BUYING THE BAG. Measured on
+    wow-dev 2026-09-22: Zug held 2149 copper against a 2000 copper reserve at
+    level 20, and the pouch in reach cost 500, so the purchase was held back
+    every cycle while his three free slots withheld Ragefire Chasm from the
+    whole family. A sibling purchase would need a buy that skips the equip,
+    a hand-over the next cycle within trade range, and a way to stop the
+    family's other empty positions taking the pouch first. The yield is one
+    condition on facts this module already has, it spends the buyer's own
+    coin, and it cannot fire outside the case that blocks a campaign. The
+    first dungeon run refills a purse of 16 silver many times over.
+    """
+    return bool(campaign_waiting) and 0 <= buyer.free_slots <= TOWN_RUN_FREE_SLOTS
+
+
+def bag_purchases(buyers, offers, campaign_waiting: bool = False) -> tuple:
     """The cheapest bag each buyer can afford, and a note for each who cannot.
 
     One bag per buyer per pass: the next pass sees the bag it bought. The
@@ -539,6 +562,10 @@ def bag_purchases(buyers, offers) -> tuple:
     (ties go to the bigger bag, then the lower entry), and it is bought only
     when `bag_purchase_allowed` says the reserve survives it and there is a
     free slot for it to land in. Returns (purchases, notes).
+
+    `campaign_waiting` says an operator-ordered dungeon campaign is queued
+    for this family; `reserve_yields` decides which buyers it frees from the
+    reserve.
     """
     by_entry = {}
     for offer in offers:
@@ -560,6 +587,9 @@ def bag_purchases(buyers, offers) -> tuple:
             continue
         offer = stocked[0]
         reserve = bag_reserve(buyer.level)
+        yielded = reserve_yields(buyer, campaign_waiting)
+        if yielded:
+            reserve = 0
         if not bag_purchase_allowed(buyer.money, offer.price, True, reserve=reserve):
             notes.append(
                 "%s cannot spare %d copper for %s (%d in the purse, "
@@ -587,8 +617,16 @@ def bag_purchases(buyers, offers) -> tuple:
                 name=offer.name,
                 slots=offer.slots,
                 price=offer.price,
-                why="%d empty bag position(s), %d copper in the purse, %d kept "
-                "back" % (buyer.open_positions, buyer.money, reserve),
+                why=(
+                    "%d empty bag position(s), %d copper in the purse, %d kept "
+                    "back" % (buyer.open_positions, buyer.money, reserve)
+                )
+                + (
+                    "; the reserve yields because %d free slot(s) hold back "
+                    "the family's dungeon campaign" % buyer.free_slots
+                    if yielded
+                    else ""
+                ),
             )
         )
     return tuple(purchases), tuple(notes)

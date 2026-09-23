@@ -345,6 +345,36 @@ del _bit
 # professions.
 TOOL_CLASS = 2
 
+# WHICH TRADES A TOOL SERVES, for the per-holder keep in `profession_keeps`
+# (#88). The bag bits above are a sorting hint and say too little about a
+# tool: a Blacksmith Hammer is bagged as mining and engineering supplies
+# (BagFamily 1152) and is also what blacksmithing works with. So the tools the
+# families carry are named here by entry, and a tool not named falls back to
+# its bag bits. Entries read off acore_world.item_template on wow-dev
+# 2026-09-22 from what the two families carry.
+TOOL_TRADES = {
+    2901: ("mining",),  # Mining Pick
+    5956: ("blacksmithing", "engineering"),  # Blacksmith Hammer
+    6219: ("engineering",),  # Arclight Spanner
+    7005: ("skinning",),  # Skinning Knife
+    6218: ("enchanting",),  # Runed Copper Rod
+    6339: ("enchanting",),  # Runed Silver Rod
+    11130: ("enchanting",),  # Runed Golden Rod
+    11145: ("enchanting",),  # Runed Truesilver Rod
+    16207: ("enchanting",),  # Runed Arcanite Rod
+    20815: ("jewelcrafting",),  # Jeweler's Kit
+}
+
+
+def tool_trades(entry: int, bag_family: int) -> tuple:
+    """The trades a tool serves: its named entry, else its bag bits."""
+    named = TOOL_TRADES.get(int(entry))
+    if named:
+        return named
+    return tuple(
+        trade for trade, bit in sorted(PROFESSION_BAGS.items()) if int(bag_family) & bit
+    )
+
 
 @dataclass(frozen=True)
 class Item:
@@ -910,7 +940,9 @@ def _trade_of(entry: int, bag_family: int, worked, named) -> str:
     return ""
 
 
-def profession_keeps(rows, worked=(), named=None, reagent_keep=REAGENT_KEEP):
+def profession_keeps(
+    rows, worked=(), named=None, reagent_keep=REAGENT_KEEP, worked_by=None
+):
     """The carried stacks no vendor pass may offer, keyed by item guid.
 
     Returns `item_guid -> why`, and a guid that is absent is simply not
@@ -947,9 +979,42 @@ def profession_keeps(rows, worked=(), named=None, reagent_keep=REAGENT_KEEP):
     it instead, which is a fixed point: 3x20 vials with a keep of 40 offers
     one stack and then offers nothing more. A single stack of 60 is kept
     entire, because selling it would empty the shelf.
+
+    `worked_by` MAKES THE TOOL KEEP PER HOLDER (#88). It maps a holder to the
+    trades that holder is declared to work. When it is given, a tool is kept
+    only for a holder whose own trades include one the tool serves
+    (`tool_trades`); a tool its holder has no use for is left to the vendor
+    pass. A holder missing from `worked_by`, or a tool whose trades cannot be
+    named, is kept, the fail-closed direction. `None` keeps every tool, the
+    behaviour this function had before.
     """
+    holders_trades = _holders_trades(worked_by)
     worked = {str(trade).strip().lower() for trade in worked if str(trade).strip()}
     named = named or {}
+    keeps: dict = {}
+    for entry, held in _stacks_by_entry(rows).items():
+        item_class, bag_family = held[0][3]
+        if _is_tool(item_class, bag_family):
+            keeps.update(_tool_keeps(entry, bag_family, held, holders_trades))
+            continue
+        trade = _trade_of(entry, bag_family, worked, named)
+        if trade:
+            keeps.update(_stock_keeps(held, trade, reagent_keep))
+    return keeps
+
+
+def _holders_trades(worked_by):
+    """holder -> lower-cased trade names, or None when no plan was given."""
+    if worked_by is None:
+        return None
+    return {
+        str(holder): {str(t).strip().lower() for t in trades if str(t).strip()}
+        for holder, trades in dict(worked_by).items()
+    }
+
+
+def _stacks_by_entry(rows) -> dict:
+    """entry -> [(count, guid, name, (class, bag_family), holder)]; bad rows dropped."""
     stacks: dict = {}
     for row in rows:
         try:
@@ -962,31 +1027,36 @@ def profession_keeps(rows, worked=(), named=None, reagent_keep=REAGENT_KEEP):
         if guid <= 0 or count <= 0:
             continue
         stacks.setdefault(entry, []).append(
-            (count, guid, str(row.get("name", "")), fact)
+            (count, guid, str(row.get("name", "")), fact, str(row.get("holder", "")))
         )
+    return stacks
 
-    keeps: dict = {}
-    for entry, held in stacks.items():
-        item_class, bag_family = held[0][3]
-        if _is_tool(item_class, bag_family):
-            for _, guid, name, _fact in held:
-                keeps[guid] = (
-                    "%s is a trade tool, and a tool has no level to outgrow" % name
-                )
+
+def _tool_keeps(entry, bag_family, held, holders_trades) -> dict:
+    """The copies of one tool that are kept: all, or only for holders who use it."""
+    serves = set(tool_trades(entry, bag_family))
+    keeps = {}
+    for _, guid, name, _fact, holder in held:
+        own = (holders_trades or {}).get(holder)
+        if serves and own is not None and not (own & serves):
             continue
-        trade = _trade_of(entry, bag_family, worked, named)
-        if not trade:
+        keeps[guid] = "%s is a trade tool, and a tool has no level to outgrow" % name
+    return keeps
+
+
+def _stock_keeps(held, trade, reagent_keep) -> dict:
+    """Whole stacks of one trade's stock, largest first, up to `reagent_keep`."""
+    keeps = {}
+    kept = 0
+    # Largest stack first, so the surplus that stays sellable is the
+    # leftovers rather than the shelf.
+    for count, guid, name, _fact, _holder in sorted(held, reverse=True):
+        if kept and kept + count > reagent_keep:
             continue
-        kept = 0
-        # Largest stack first, so the surplus that stays sellable is the
-        # leftovers rather than the shelf.
-        for count, guid, name, _fact in sorted(held, reverse=True):
-            if kept and kept + count > reagent_keep:
-                continue
-            kept += count
-            keeps[guid] = "%s feeds %s, and the family keeps up to %d of it" % (
-                name,
-                trade,
-                reagent_keep,
-            )
+        kept += count
+        keeps[guid] = "%s feeds %s, and the family keeps up to %d of it" % (
+            name,
+            trade,
+            reagent_keep,
+        )
     return keeps
