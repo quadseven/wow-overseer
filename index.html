@@ -7786,9 +7786,12 @@ function dcrBuildChips(p) {
   dcrCampReset.textContent = p.campaign.restart_label;
   dcrTravelSend.textContent = p.travel.submit;
   dcrTravelStop.textContent = p.travel.stand_down;
-  dcrQueueSend.textContent = p.queue.submit;
-  dcrQueueClear.textContent = p.queue.clear_label;
-  dcrQueueText.placeholder = p.queue.example;
+  // A payload from before #209 carries no queue card; the rest still draws.
+  if (p.queue) {
+    dcrQueueSend.textContent = p.queue.submit;
+    dcrQueueClear.textContent = p.queue.clear_label;
+    dcrQueueText.placeholder = p.queue.example;
+  }
 }
 
 // ONE POST, ONE SHAPE, AND NO JUDGEMENT IN IT. The body names a card and
@@ -7889,19 +7892,20 @@ dcrCampReset.onclick = () => {
 // how many runs, whether this family may use them - is decree.py's and
 // campaignqueue.py's to decide; a refusal comes back as their sentence.
 function dcrShowQueue() {
-  dcrQueueSend.disabled = dcr.busy || !dcrQueueText.value.trim();
-  dcrQueueClear.disabled = dcr.busy;
+  const ready = !!(dcr.seen && dcr.seen.queue);
+  dcrQueueSend.disabled = dcr.busy || !ready || !dcrQueueText.value.trim();
+  dcrQueueClear.disabled = dcr.busy || !ready;
 }
 
 dcrQueueText.oninput = dcrShowQueue;
 dcrQueueSend.onclick = () => {
   const p = dcr.seen;
-  if (p) dcrOrder({ section: p.queue.section, entries: dcrQueueText.value,
+  if (p && p.queue) dcrOrder({ section: p.queue.section, entries: dcrQueueText.value,
                     family: dcr.fam }, dcrQueueNote);
 };
 dcrQueueClear.onclick = () => {
   const p = dcr.seen;
-  if (p) dcrOrder({ section: p.queue.section, clear: true, family: dcr.fam },
+  if (p && p.queue) dcrOrder({ section: p.queue.section, clear: true, family: dcr.fam },
                   dcrQueueNote);
 };
 
@@ -8104,10 +8108,12 @@ function renderDecree(p) {
   dcrShowCamp();
   dcrRefusal(dcrCampWhy, campSec, p.refusal_tag);
 
-  const queueSec = secs.get(p.queue.section);
+  const queueSec = p.queue ? secs.get(p.queue.section) : null;
   if (queueSec) dcrQueueTitle.textContent = queueSec.title;
   dcrQueueLine.replaceChildren();
-  for (const f of fams) dcrQueueLine.appendChild(el("div", "", f.queue.line));
+  for (const f of fams) {
+    if (f.queue) dcrQueueLine.appendChild(el("div", "", f.queue.line));
+  }
   dcrShowQueue();
   dcrRefusal(dcrQueueWhy, queueSec, p.refusal_tag);
 

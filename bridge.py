@@ -3729,6 +3729,15 @@ class Bridge(discord.Client):
         (relay.GmCommand, _insert_gm, "gm command"),
     )
 
+    # Decision type -> the method that carries it out with (decision, channel).
+    _DIRECTED = (
+        (core.NLDirective, "_interpret"),
+        (core.FanoutDirective, "_conjure"),
+        (core.JobDirective, "_set_job"),
+        (core.QueueDirective, "_set_queue"),
+        (core.DigestQuery, "_report_digest"),
+    )
+
     async def _act_on(self, decision, channel) -> None:
         """Carry out one parsed decision."""
         for kind, insert, label in self._QUEUED:
@@ -3740,21 +3749,17 @@ class Bridge(discord.Client):
                 log.info("queued %s %s for %s", label, row_id, decision.target_name)
                 return
 
-        if isinstance(decision, core.NLDirective):
-            await self._interpret(decision, channel)
-        elif isinstance(decision, core.FanoutCommand):
+        # A decision that is a (decision, channel) call is a table row, not
+        # another branch: the chain had grown one limb per directive kind.
+        for kind, method in self._DIRECTED:
+            if isinstance(decision, kind):
+                await getattr(self, method)(decision, channel)
+                return
+        if isinstance(decision, core.FanoutCommand):
             await self._muster(decision, decision.command, channel)
-        elif isinstance(decision, core.FanoutDirective):
-            await self._conjure(decision, channel)
-        elif isinstance(decision, core.JobDirective):
-            await self._set_job(decision, channel)
-        elif isinstance(decision, core.QueueDirective):
-            await self._set_queue(decision, channel)
         elif isinstance(decision, core.RosterQuery):
             rows = await asyncio.to_thread(_fetch_roster)
             await channel.send(core.format_roster(rows).text[:1990])
-        elif isinstance(decision, core.DigestQuery):
-            await self._report_digest(decision, channel)
         else:
             await channel.send(decision.text)
 
@@ -10241,34 +10246,17 @@ class Bridge(discord.Client):
             await channel.send(refusal[:1990])
             return
 
-        # AN AUTOMATIC PASS DOES NOT OUTRANK A CAMPAIGN QUEUE (#209). The
-        # craft rhythm and the skill goal write this family's job on their own
-        # clocks; while a queue has entries it owns the job, and a pass that
-        # switched the family off its dungeon would end the run. A person's
-        # own order still goes through: "queue clear" is how they stop one.
-        if d.source.startswith("overseer:") and await asyncio.to_thread(_queue_owns_job):
-            log.info("job: mode=%r from %s stands down - the family's "
-                     "campaign queue owns its job", d.mode, d.source)
+        if await self._queue_holds_job(d):
             return
 
         # THE SECOND HALF OF THE SAME GUARD. A mode can be wired and still have
         # nothing to do, and setting it then is the same idle by a longer road.
-        # Only `train` can answer this today because only `train` has a drive
-        # in this process to ask; quest and dungeon are driven inside the
-        # worldserver and have no equivalent question to put.
-        if d.mode == trainjob.MODE:
-            blocked = trainjob.readiness(await asyncio.to_thread(_train_members))
-            if blocked:
-                log.info("job: refused mode=%r - nothing to train", d.mode)
-                await channel.send(("Refusing to set job=train. " + blocked)[:1990])
-                return
-
-        if d.mode == raidprep.MODE:
-            blocked = raidprep.readiness(await asyncio.to_thread(_raidprep_members))
-            if blocked:
-                log.info("job: refused mode=%r - nothing to prepare", d.mode)
-                await channel.send(("Refusing to set job=raid prep. " + blocked)[:1990])
-                return
+        # See _job_not_ready.
+        blocked = await self._job_not_ready(d.mode)
+        if blocked:
+            log.info("job: refused mode=%r - nothing to do", d.mode)
+            await channel.send(blocked[:1990])
+            return
 
         names = await asyncio.to_thread(_fetch_enabled_names)
         if not names:
@@ -10317,6 +10305,37 @@ class Bridge(discord.Client):
         await channel.send(
             f"{jobs.describe(d.mode)} ({written}/{len(names)} of the family told)"
         )
+
+    async def _queue_holds_job(self, d: core.JobDirective) -> bool:
+        """AN AUTOMATIC PASS DOES NOT OUTRANK A CAMPAIGN QUEUE (#209).
+
+        The craft rhythm and the skill goal write this family's job on their
+        own clocks; while a queue has entries it owns the job, and a pass that
+        switched the family off its dungeon would end the run. A person's own
+        order still goes through: "queue clear" is how they stop one.
+        """
+        if not d.source.startswith("overseer:"):
+            return False
+        if not await asyncio.to_thread(_queue_owns_job):
+            return False
+        log.info("job: mode=%r from %s stands down - the family's campaign "
+                 "queue owns its job", d.mode, d.source)
+        return True
+
+    async def _job_not_ready(self, mode: str) -> str:
+        """The refusal for a wired mode with nothing to do, or "".
+
+        Only `train` and `raid prep` can answer this today because only they
+        have a drive in this process to ask; quest and dungeon are driven
+        inside the worldserver and have no equivalent question to put.
+        """
+        if mode == trainjob.MODE:
+            blocked = trainjob.readiness(await asyncio.to_thread(_train_members))
+            return ("Refusing to set job=train. " + blocked) if blocked else ""
+        if mode == raidprep.MODE:
+            blocked = raidprep.readiness(await asyncio.to_thread(_raidprep_members))
+            return ("Refusing to set job=raid prep. " + blocked) if blocked else ""
+        return ""
 
     async def _drive_train(self) -> None:
         """Make `job = train` mean something: aim the traveller at a trainer.

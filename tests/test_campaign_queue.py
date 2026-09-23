@@ -107,6 +107,13 @@ class TheOperatorsOrderIsRead(unittest.TestCase):
         self.assertIn("not a dungeon the overseer has a door for", refusal)
         self.assertIn("ragefire", refusal)
 
+    def test_a_long_run_of_digits_is_read_in_linear_time(self):
+        """CodeQL flagged the first reader as polynomial on repeated digits."""
+        _, refusal = campaignqueue.parse_entries("ragefire " + "9" * 390)
+        self.assertIn("exactly one number", refusal)
+        _, refusal = campaignqueue.parse_entries("9" * 5000)
+        self.assertIn("at most 400", refusal)
+
     def test_a_count_past_the_column_is_refused(self):
         _, refusal = campaignqueue.parse_entries("ragefire 70000")
         self.assertIn("65535", refusal)
@@ -417,11 +424,29 @@ class NothingElseStompsTheQueue(unittest.TestCase):
 
     def test_an_automatic_job_order_asks_first(self):
         body = ast.get_source_segment(BRIDGE, _function("_set_job"))
-        self.assertIn('d.source.startswith("overseer:")', body)
         self.assertLess(
-            body.index("_queue_owns_job"),
+            body.index("await self._queue_holds_job(d)"),
             body.index("names = await asyncio.to_thread(_fetch_enabled_names)"),
         )
+
+    def test_only_an_automatic_source_stands_down(self):
+        owns = []
+        ns = _load(
+            ["_queue_holds_job"],
+            {
+                "asyncio": asyncio,
+                "log": _Log(),
+                "_queue_owns_job": lambda: owns.append(1) or True,
+            },
+        )
+
+        def ask(source):
+            d = core.JobDirective(mode="quest", source=source)
+            return asyncio.run(ns["_queue_holds_job"](types.SimpleNamespace(), d))
+
+        self.assertTrue(ask("overseer:craft_rhythm"))
+        self.assertFalse(ask("discord:7"))
+        self.assertEqual(1, len(owns), "a person's order asked the queue at all")
 
     def test_the_queue_owns_the_job_only_for_its_own_family(self):
         rows = [_q(1, "ragefire", 50, "active", 0)]

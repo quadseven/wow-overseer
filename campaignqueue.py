@@ -206,8 +206,13 @@ def keyword_for(text: str) -> str | None:
 # --- reading an order ----------------------------------------------------------
 
 _SPLIT = re.compile(r",|;|\bthen\b|\band\b|\bafter that\b", re.IGNORECASE)
-_COUNT = re.compile(r"(?<![\w-])x?(\d+)\s*(?:x|times?|runs?)?(?![\w-])", re.IGNORECASE)
-_FILLER = re.compile(r"\b(?:run|runs|times|time|clear|of)\b", re.IGNORECASE)
+# A count is one whole word, "50", "x50" or "50x", matched against that word
+# alone: no pattern here ever scans a whole sentence for digits.
+_COUNT = re.compile(r"x?(\d{1,6})x?")
+_FILLER = frozenset({"run", "runs", "times", "time", "clear", "of"})
+
+# Longer than any real order; a pasted paragraph is refused before it is read.
+MAX_ORDER_CHARS = 400
 
 
 def parse_entries(text: str) -> tuple:
@@ -217,7 +222,13 @@ def parse_entries(text: str) -> tuple:
     is refused on the first part that does not, because a queue with a hole
     in it is a different plan from the one that was asked for.
     """
-    parts = [p.strip() for p in _SPLIT.split(str(text or "")) if p and p.strip()]
+    text = str(text or "")
+    if len(text) > MAX_ORDER_CHARS:
+        return (), "That order is %d characters; a queue order is at most %d." % (
+            len(text),
+            MAX_ORDER_CHARS,
+        )
+    parts = [p.strip() for p in _SPLIT.split(text) if p and p.strip()]
     if not parts:
         return (), (
             "Say which dungeons, and how many runs of each: "
@@ -230,7 +241,8 @@ def parse_entries(text: str) -> tuple:
         )
     entries = []
     for part in parts:
-        counts = _COUNT.findall(part)
+        words = _fold(part).split()
+        counts = [m.group(1) for m in map(_COUNT.fullmatch, words) if m]
         if len(counts) != 1:
             return (), ('"%s" needs exactly one number: how many runs of it.' % part)
         runs = int(counts[0])
@@ -239,7 +251,9 @@ def parse_entries(text: str) -> tuple:
                 '"%s" asks for %d runs; a queue entry is 1 to %d runs, the '
                 "campaign column's own range." % (part, runs, RUNS_CEILING)
             )
-        name = _FILLER.sub(" ", _COUNT.sub(" ", part))
+        name = " ".join(
+            w for w in words if w not in _FILLER and not _COUNT.fullmatch(w)
+        )
         keyword = keyword_for(name)
         if keyword is None:
             return (), (
@@ -307,7 +321,7 @@ def _plain(entries) -> str:
 
 _ORDER = re.compile(
     r"^\s*queue\b\s*(?:for\s+)?"
-    r"(?:(?P<family>[a-z]+)(?:'s)?(?:\s+family)?\s*:)?\s*(?P<rest>.*?)\s*$",
+    r"(?:(?P<family>[a-z]+)(?:'s)?(?:\s+family)?\s*:)?(?P<rest>.*)$",
     re.IGNORECASE | re.DOTALL,
 )
 
@@ -337,7 +351,9 @@ def parse_order(text: str) -> Order | None:
     found = _ORDER.match(str(text or ""))
     if found is None:
         return None
-    return Order(family=(found.group("family") or ""), text=found.group("rest") or "")
+    return Order(
+        family=(found.group("family") or ""), text=(found.group("rest") or "").strip()
+    )
 
 
 def pick_family(asked: str, keys: list) -> tuple:
@@ -383,32 +399,31 @@ def families(roster_rows: list) -> dict:
     """
     grouped: dict = {}
     for row in roster_rows or []:
-        try:
-            if not int(row.get("enabled", 1) or 0):
-                continue
-        except (TypeError, ValueError):
-            continue
-        name = str(row.get("name") or "").strip()
-        if not name:
-            continue
-        grouped.setdefault(str(row.get("family") or "").strip(), []).append(row)
+        if _flag(row, "enabled", 1) and str(row.get("name") or "").strip():
+            grouped.setdefault(str(row.get("family") or "").strip(), []).append(row)
     out = {}
     for key, rows in grouped.items():
         rows = sorted(rows, key=lambda r: str(r.get("name")))
-
-        def _lead(r):
-            try:
-                return int(r.get("lead") or 0) == 1
-            except (TypeError, ValueError):
-                return False
-
-        leader = (
-            next((r for r in rows if _lead(r)), None)
-            or next((r for r in rows if str(r.get("name")) == key), None)
-            or rows[0]
-        )
-        out[key] = {"leader": leader, "names": [str(r["name"]) for r in rows]}
+        out[key] = {
+            "leader": _leader_of(key, rows),
+            "names": [str(r["name"]) for r in rows],
+        }
     return out
+
+
+def _flag(row: dict, column: str, default: int = 0) -> bool:
+    try:
+        return int(row.get(column, default) or 0) == 1
+    except (TypeError, ValueError):
+        return False
+
+
+def _leader_of(key: str, rows: list) -> dict:
+    return (
+        next((r for r in rows if _flag(r, "lead")), None)
+        or next((r for r in rows if str(r.get("name")) == key), None)
+        or rows[0]
+    )
 
 
 def step(rows: list, leader: dict | None) -> Move:
