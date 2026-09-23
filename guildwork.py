@@ -170,6 +170,40 @@ class DuesPlan:
     notes: tuple = ()
 
 
+def _not_due(member, taker, posted) -> str | None:
+    """Why this member posts nothing this pass; "" to say nothing; None if due.
+
+    The empty string is a quiet skip: a member who already posted inside
+    INTERVAL_HOURS is the normal case and is not worth a log line.
+    """
+    name = str(member.name)
+    if not taker:
+        return "%s: %s has no guild master to post to" % (name, member.guild)
+    if taker == name:
+        return "%s is the guild master and posts no dues" % name
+    if name in posted:
+        return ""
+    if not member.online:
+        return "%s is offline" % name
+    if not dues_for(member.money):
+        return "%s carries %s, not enough above the %s float to post" % (
+            name,
+            gold(member.money),
+            gold(FLOAT_COPPER),
+        )
+    return None
+
+
+def _cannot_walk(name, walker, busy, max_yards) -> str:
+    """Why this due member is not walked to a mailbox now, "" when it can be."""
+    if name in busy:
+        return "%s is already walking to a mailbox" % name
+    why = guildroute.cannot_walk(walker, name, max_yards)
+    if not why and not walker.by_row:
+        why = "%s cannot be walked by the mailbox walk row" % name
+    return "%s waits: %s" % (name, why) if why else ""
+
+
 def plan_dues(
     members,
     masters,
@@ -194,38 +228,16 @@ def plan_dues(
     for member in members or ():
         name = str(member.name)
         taker = str((masters or {}).get(member.guild) or "")
-        if not taker:
-            notes.append("%s: %s has no guild master to post to" % (name, member.guild))
-            continue
-        if taker == name:
-            notes.append("%s is the guild master and posts no dues" % name)
-            continue
-        if name in posted:
-            continue
-        if not member.online:
-            notes.append("%s is offline" % name)
-            continue
-        copper = dues_for(member.money)
-        if not copper:
-            notes.append(
-                "%s carries %s, not enough above the %s float to post"
-                % (name, gold(member.money), gold(FLOAT_COPPER))
-            )
-            continue
-        if name in busy:
-            notes.append("%s is already walking to a mailbox" % name)
-            continue
         walker = (walkers or {}).get(name)
-        why = guildroute.cannot_walk(walker, name, max_yards)
-        if not why and walker is not None and not walker.by_row:
-            why = "%s cannot be walked by the mailbox walk row" % name
+        why = _not_due(member, taker, posted)
+        due = why is None
+        if due:
+            why = _cannot_walk(name, walker, busy, max_yards)
+        if due and not why and started.get(member.guild, 0) >= int(per_guild):
+            why = "%s waits: %d dues walks per guild per pass" % (name, int(per_guild))
         if why:
-            notes.append("%s waits: %s" % (name, why))
-            continue
-        if started.get(member.guild, 0) >= int(per_guild):
-            notes.append(
-                "%s waits: %d dues walks per guild per pass" % (name, int(per_guild))
-            )
+            notes.append(why)
+        if not due or why:
             continue
         started[member.guild] = started.get(member.guild, 0) + 1
         runs.append(
@@ -233,7 +245,7 @@ def plan_dues(
                 holder=name,
                 taker=taker,
                 guild=str(member.guild),
-                copper=copper,
+                copper=dues_for(member.money),
                 aim=walker.aim,
                 yards=float(walker.yards),
             )
@@ -347,6 +359,32 @@ def attach_work(lineup, taker, contributed) -> dict:
     return lineup
 
 
+def _by_guild(rows) -> tuple:
+    """({guild: [rows]}, {guild: master}) out of the bridge's guild rows."""
+    guilds, masters = {}, {}
+    for row in rows or ():
+        guild = str(row.get("guild_name") or "")
+        if not guild or not row.get("name"):
+            continue
+        guilds.setdefault(guild, []).append(row)
+        if row.get("master"):
+            masters[guild] = str(row["master"])
+    return guilds, masters
+
+
+def _member_from(guild, row) -> Member:
+    """One Member from one guild row; an unreadable purse reads as empty."""
+    try:
+        money = int(row.get("money") or 0)
+    except (TypeError, ValueError):
+        money = 0
+    try:
+        online = bool(int(row.get("online") or 0))
+    except (TypeError, ValueError):
+        online = False
+    return Member(name=str(row.get("name")), guild=guild, money=money, online=online)
+
+
 def maintenance_from_rows(rows, family_names):
     """(members, masters) out of the guild rows the bridge read.
 
@@ -358,44 +396,19 @@ def maintenance_from_rows(rows, family_names):
     its guild master.
     """
     family = frozenset(str(n) for n in family_names or ())
-    guilds, masters = {}, {}
-    for row in rows or ():
-        guild = str(row.get("guild_name") or "")
-        name = str(row.get("name") or "")
-        if not guild or not name:
-            continue
-        guilds.setdefault(guild, []).append(row)
-        if row.get("master"):
-            masters[guild] = str(row["master"])
+    guilds, masters = _by_guild(rows)
     members = []
     for guild in sorted(guilds):
-        in_guild = guilds[guild]
+        by_name = {str(r.get("name")): r for r in guilds[guild]}
         lineup = raidlineup.build_lineup(
             [
-                {
-                    "name": str(r.get("name")),
-                    "class_id": r.get("class_id"),
-                    "level": r.get("level"),
-                }
-                for r in in_guild
+                {"name": name, "class_id": r.get("class_id"), "level": r.get("level")}
+                for name, r in by_name.items()
             ],
-            guaranteed=[
-                str(r.get("name")) for r in in_guild if str(r.get("name")) in family
-            ],
+            guaranteed=[name for name in by_name if name in family],
         )
-        by_name = {str(r.get("name")): r for r in in_guild}
-        for placed in lineup["maintenance"]:
-            row = by_name[placed["name"]]
-            try:
-                money = int(row.get("money") or 0)
-            except (TypeError, ValueError):
-                money = 0
-            members.append(
-                Member(
-                    name=placed["name"],
-                    guild=guild,
-                    money=money,
-                    online=bool(int(row.get("online") or 0)),
-                )
-            )
+        members.extend(
+            _member_from(guild, by_name[placed["name"]])
+            for placed in lineup["maintenance"]
+        )
     return members, masters
