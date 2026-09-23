@@ -1164,12 +1164,17 @@ _COUNCIL_MEMBER_SQL = (
     "       (SELECT COUNT(*) FROM character_skills k "
     "         WHERE k.guid = c.guid AND k.skill IN (" + _TRADE_SKILL_IDS + ")"
     "       ) AS trades, "
-    "       s.level AS live_level "
+    "       s.level AS live_level, s.map_id AS live_map "
     "FROM characters c "
     "LEFT JOIN overseer_snapshot s "
     "       ON s.name = c.name AND s.updated_at > NOW() - INTERVAL 60 SECOND "
     "WHERE c.name IN (%s)"
 )
+# Who leads, read on its own: overseer_roster and overseer_snapshot sit in
+# different collation groups (test_collation_split), so this is a second
+# statement rather than a subquery beside the snapshot join. The leader's map
+# is the family's continent to the council (#205).
+_COUNCIL_LEAD_SQL = "SELECT name FROM overseer_roster WHERE `lead` = 1"
 
 
 # The maps whose ended runs the council counts, as a literal for the SQL
@@ -1238,6 +1243,8 @@ def _fetch_council_members(names: list) -> list:
             names,
         )
         rows = cur.fetchall()
+        cur.execute(_COUNCIL_LEAD_SQL)
+        leads = {str(r["name"]) for r in cur.fetchall()}
 
     progress = _fetch_quest_progress(names)
     # What the family has already agreed this character will go and learn, and
@@ -1265,6 +1272,10 @@ def _fetch_council_members(names: list) -> list:
                 quest_left=left,
                 quest_id=quest_id,
                 race=int(row.get("race") or 0),
+                # Same snapshot row as the level, so as fresh (#205).
+                map_id=(None if row.get("live_map") is None
+                        else int(row["live_map"])),
+                lead=row["name"] in leads,
             )
         )
     return members
@@ -4277,8 +4288,10 @@ class Bridge(discord.Client):
         # is the whole of what the proposal acts on. Tracked as a follow-up
         # rather than silently declared complete.
         # race rides along so the council can tell which capital's doors
-        # this family can walk to (#202).
-        level_rows = [{"name": m.name, "level": m.level, "race": m.race}
+        # this family can walk to (#202); map_id and lead so it can tell
+        # which continent the family's leader is on (#205).
+        level_rows = [{"name": m.name, "level": m.level, "race": m.race,
+                       "map_id": m.map_id, "lead": m.lead}
                       for m in members]
         completed_runs = await asyncio.to_thread(_fetch_dungeon_completion)
         held = council.hold(members, history=history,

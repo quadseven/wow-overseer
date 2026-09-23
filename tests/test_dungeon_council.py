@@ -14,6 +14,7 @@ import unittest
 from pathlib import Path
 
 import council
+import crossing
 import dungeonpath
 import jobs
 
@@ -31,8 +32,14 @@ def _m(name, level, **over):
 FAMILY_NAMES = ("Grug", "Ugga", "Grog", "Bork", "Og")
 
 
-def _levels(rows):
-    return [{"name": n, "level": lv} for n, lv in rows]
+EASTERN_KINGDOMS = 0
+KALIMDOR = 1
+
+
+def _levels(rows, map_id=EASTERN_KINGDOMS):
+    """Level rows for a family standing on `map_id`. Since #205 a family
+    whose continent is unread is sent nowhere, so every row carries one."""
+    return [{"name": n, "level": lv, "map_id": map_id} for n, lv in rows]
 
 
 class PlacesReachTheFamilysRange(unittest.TestCase):
@@ -168,8 +175,9 @@ class TheDungeonProposalFiresWhenReady(unittest.TestCase):
 
     def test_a_non_scarlet_target_carries_its_own_door(self):
         """#202: this used to be "", the bare `dungeon` job, which runs the
-        Deadmines whatever the council had chosen."""
-        rows = _levels([(n, 30) for n in FAMILY_NAMES])
+        Deadmines whatever the council had chosen. On Kalimdor, since #205
+        keeps a family to its own continent."""
+        rows = _levels([(n, 30) for n in FAMILY_NAMES], KALIMDOR)
         members = _members_at(30)
         proposal = council._dungeon_proposal(members, rows, [])
         self.assertIsNotNone(proposal)
@@ -212,12 +220,12 @@ class ALevelSixtyFamilyIsNotSentBackToScarletMonastery(unittest.TestCase):
         )
 
     def test_a_missing_ledger_no_longer_means_the_cathedral_for_ever(self):
-        """Stratholme since #202 put it in PLACES: the hardest door a level 60
-        family can walk into is now its main gate, not Blackrock Depths."""
+        """On the Eastern Kingdoms, and with Stratholme withheld (#205), the
+        hardest door a level 60 family can use is Blackrock Spire's."""
         proposal = council._dungeon_proposal(self.members, self.rows, [], None)
         self.assertIsNotNone(proposal)
-        self.assertEqual("stratholme-live", proposal.keyword)
-        self.assertIn("Stratholme", proposal.said)
+        self.assertEqual("lower-blackrock-spire", proposal.keyword)
+        self.assertIn("Blackrock Spire", proposal.said)
 
     def test_a_finished_scarlet_campaign_no_longer_means_the_cathedral_either(self):
         done = {
@@ -225,7 +233,7 @@ class ALevelSixtyFamilyIsNotSentBackToScarletMonastery(unittest.TestCase):
         }
         proposal = council._dungeon_proposal(self.members, self.rows, [], done)
         self.assertIsNotNone(proposal)
-        self.assertEqual("stratholme-live", proposal.keyword)
+        self.assertEqual("lower-blackrock-spire", proposal.keyword)
 
     def test_an_unfinished_scarlet_campaign_does_not_drag_a_sixty_back(self):
         """The ledger used to OUTRANK the level frontier outright, so a single
@@ -235,7 +243,7 @@ class ALevelSixtyFamilyIsNotSentBackToScarletMonastery(unittest.TestCase):
             self.members, self.rows, [], {"scarlet": 0}
         )
         self.assertIsNotNone(proposal)
-        self.assertEqual("stratholme-live", proposal.keyword)
+        self.assertEqual("lower-blackrock-spire", proposal.keyword)
 
     def test_it_repeats_rather_than_standing_down_once_the_count_is_met(self):
         """The operator asked for Blackrock Depths "over and over ...
@@ -243,7 +251,7 @@ class ALevelSixtyFamilyIsNotSentBackToScarletMonastery(unittest.TestCase):
         again, not stop - the repeat was never the defect.
 
         At 52, where Blackrock Depths is the frontier: since #202 a level 60
-        family's frontier is Stratholme."""
+        family's frontier is higher."""
         done = {"blackrock-depths": council.DUNGEON_RUNS_WANTED}
         members = _members_at(52)
         rows = _levels([(n, 52) for n in FAMILY_NAMES])
@@ -343,7 +351,7 @@ ALLIANCE_RACE = 1  # Human
 HORDE_RACE = 2  # Orc
 
 
-def _family(level, race):
+def _family(level, race, map_id=EASTERN_KINGDOMS):
     members = [
         council.Member(
             name=n,
@@ -355,7 +363,10 @@ def _family(level, race):
         )
         for n in FAMILY_NAMES
     ]
-    rows = [{"name": n, "level": level, "race": race} for n in FAMILY_NAMES]
+    rows = [
+        {"name": n, "level": level, "race": race, "map_id": map_id}
+        for n in FAMILY_NAMES
+    ]
     return members, rows
 
 
@@ -369,7 +380,8 @@ class EveryPortalMapGetsItsOwnDoor(unittest.TestCase):
             self.assertEqual(map_id, council.DUNGEON_KEYWORDS[keyword][0], keyword)
 
     def test_every_portal_map_is_sent_by_a_keyword_that_opens_it(self):
-        for map_id in sorted(set(dungeonpath.PORTAL_MAPS.values())):
+        withheld = {dungeonpath.PORTAL_MAPS[k] for k in dungeonpath.WITHHELD_DOORS}
+        for map_id in sorted(set(dungeonpath.PORTAL_MAPS.values()) - withheld):
             with self.subTest(map_id=map_id):
                 keyword = council._campaign_keyword(map_id, 60, None)
                 self.assertIn(keyword, jobs.PORTAL_KEYWORDS)
@@ -379,7 +391,6 @@ class EveryPortalMapGetsItsOwnDoor(unittest.TestCase):
         for map_id, keyword in (
             (90, "gnomeregan"),
             (70, "uldaman"),
-            (329, "stratholme-live"),
         ):
             self.assertEqual(keyword, council._campaign_keyword(map_id, 60, None))
 
@@ -394,7 +405,7 @@ class EveryPortalMapGetsItsOwnDoor(unittest.TestCase):
 
 class ALevelTwentyFourAllianceFamily(unittest.TestCase):
     def setUp(self):
-        self.members, self.rows = _family(24, ALLIANCE_RACE)
+        self.members, self.rows = _family(24, ALLIANCE_RACE, KALIMDOR)
 
     def test_it_is_sent_to_blackfathom_deeps_not_the_deadmines(self):
         proposal = council._dungeon_proposal(self.members, self.rows, [])
@@ -448,7 +459,7 @@ class AHordeFamilyIsNeverSentIntoStormwind(unittest.TestCase):
 class AnUnknownFactionIsNotSentIntoACapital(unittest.TestCase):
     def test_a_roster_without_races_gets_the_door_outside_the_city(self):
         members = _members_at(24)
-        rows = _levels([(n, 24) for n in FAMILY_NAMES])
+        rows = _levels([(n, 24) for n in FAMILY_NAMES], KALIMDOR)
         proposal = council._dungeon_proposal(members, rows, [])
         self.assertIsNotNone(proposal)
         self.assertEqual("blackfathom", proposal.keyword)
@@ -496,7 +507,142 @@ class TheBridgeHandsTheCouncilTheFamilysRaces(unittest.TestCase):
         )
         self.assertIn('"SELECT c.name, c.class, c.race, c.money, "', source)
         self.assertIn('race=int(row.get("race") or 0),', source)
-        self.assertIn('"race": m.race}', source)
+        self.assertIn('"race": m.race,', source)
+
+
+# --- #205: only doors the family can reach, and none that are withheld -----
+
+
+def _door_map(keyword):
+    return dungeonpath.PORTAL_MAPS[keyword]
+
+
+class ALevelSixtyAllianceFamilyOnKalimdor(unittest.TestCase):
+    """The family the issue is about: level 60, Alliance, living on Kalimdor,
+    with no crossing to the Eastern Kingdoms and Stratholme withheld."""
+
+    def setUp(self):
+        self.members, self.rows = _family(60, ALLIANCE_RACE, KALIMDOR)
+
+    def test_it_is_sent_to_zulfarrak(self):
+        proposal = council._dungeon_proposal(self.members, self.rows, [])
+        self.assertIsNotNone(proposal)
+        self.assertEqual("zulfarrak", proposal.keyword)
+        self.assertIn("Zul'Farrak", proposal.said)
+
+    def test_the_plan_that_carries_names_the_same_door(self):
+        held = council.hold(self.members, history=[], level_rows=self.rows, cards=[])
+        self.assertIsNotNone(held.plan)
+        self.assertEqual("dungeon:zulfarrak", jobs.dungeon_job(held.plan.keyword))
+
+    def test_the_reasoning_says_why_the_harder_doors_were_passed_over(self):
+        said = council._dungeon_proposal(self.members, self.rows, []).said
+        self.assertIn("Not Stratholme: withheld, since", said)
+        self.assertIn("portcullis", said)
+        self.assertIn("Blackrock Depths", said)
+        self.assertIn(
+            "on the Eastern Kingdoms while we are on Kalimdor, with no way across yet",
+            said,
+        )
+
+    def test_nothing_easier_than_the_door_chosen_is_named_as_passed_over(self):
+        """Uldaman (34) and Gnomeregan (29) are on the Eastern Kingdoms too,
+        but below Zul'Farrak (36), so they were never the better choice."""
+        said = council._dungeon_proposal(self.members, self.rows, []).said
+        self.assertIn("Scarlet Monastery", said)  # the Cathedral wants 39
+        self.assertNotIn("Uldaman", said)
+        self.assertNotIn("Gnomeregan", said)
+
+    def test_a_family_inside_zulfarrak_is_still_on_kalimdor(self):
+        _, rows = _family(60, ALLIANCE_RACE, _door_map("zulfarrak"))
+        proposal = council._dungeon_proposal(self.members, rows, [])
+        self.assertEqual("zulfarrak", proposal.keyword)
+
+
+class TheLeadersMapDecidesTheContinent(unittest.TestCase):
+    def test_the_leader_on_kalimdor_takes_the_family_to_kalimdor_doors(self):
+        members, rows = _family(60, ALLIANCE_RACE, EASTERN_KINGDOMS)
+        rows[0] = dict(rows[0], map_id=KALIMDOR, lead=1)
+        proposal = council._dungeon_proposal(members, rows, [])
+        self.assertEqual("zulfarrak", proposal.keyword)
+
+    def test_the_leader_on_the_eastern_kingdoms_keeps_them_there(self):
+        members, rows = _family(60, ALLIANCE_RACE, KALIMDOR)
+        rows[0] = dict(rows[0], map_id=EASTERN_KINGDOMS, lead=1)
+        proposal = council._dungeon_proposal(members, rows, [])
+        self.assertEqual("lower-blackrock-spire", proposal.keyword)
+
+    def test_an_unread_continent_proposes_nothing(self):
+        members, rows = _family(60, ALLIANCE_RACE)
+        rows = [{k: v for k, v in row.items() if k != "map_id"} for row in rows]
+        self.assertIsNone(council._dungeon_proposal(members, rows, []))
+
+    def test_a_split_family_without_a_readable_leader_proposes_nothing(self):
+        members, rows = _family(60, ALLIANCE_RACE, KALIMDOR)
+        rows[0] = dict(rows[0], map_id=EASTERN_KINGDOMS)
+        self.assertIsNone(council._dungeon_proposal(members, rows, []))
+
+    def test_map_zero_is_a_continent_not_an_unread_map(self):
+        self.assertEqual(EASTERN_KINGDOMS, council.continent_of(0))
+        self.assertIsNone(council.continent_of(None))
+
+
+class NoProposalCrossesAContinentOrUsesAWithheldDoor(unittest.TestCase):
+    def test_every_proposal_stays_on_the_familys_continent(self):
+        self.assertIsNotNone(crossing.first_blocked_leg())
+        for race in (ALLIANCE_RACE, HORDE_RACE, 0):
+            for home in (EASTERN_KINGDOMS, KALIMDOR):
+                for level in range(10, 61):
+                    members, rows = _family(level, race, home)
+                    proposal = council._dungeon_proposal(members, rows, [])
+                    if proposal is None:
+                        continue
+                    with self.subTest(race=race, home=home, level=level):
+                        door = council.continent_of(_door_map(proposal.keyword))
+                        self.assertEqual(home, door)
+
+    def test_nothing_proposes_stratholme_while_it_is_withheld(self):
+        self.assertIn("stratholme-live", dungeonpath.WITHHELD_DOORS)
+        self.assertIn("stratholme-undead", dungeonpath.WITHHELD_DOORS)
+        for race in (ALLIANCE_RACE, HORDE_RACE, 0):
+            for home in (EASTERN_KINGDOMS, KALIMDOR):
+                for level in range(10, 61):
+                    members, rows = _family(level, race, home)
+                    for runs in (None, {}, {"blackrock-depths": 25}):
+                        proposal = council._dungeon_proposal(members, rows, [], runs)
+                        if proposal is None:
+                            continue
+                        with self.subTest(race=race, home=home, level=level):
+                            self.assertNotIn(
+                                proposal.keyword, dungeonpath.WITHHELD_DOORS
+                            )
+
+    def test_a_horde_family_never_gets_a_door_inside_stormwind(self):
+        for home in (EASTERN_KINGDOMS, KALIMDOR):
+            for level in range(10, 61):
+                members, rows = _family(level, HORDE_RACE, home)
+                proposal = council._dungeon_proposal(members, rows, [])
+                if proposal is None:
+                    continue
+                with self.subTest(home=home, level=level):
+                    self.assertNotEqual("stockades", proposal.keyword)
+
+    def test_the_front_door_skips_a_withheld_door(self):
+        self.assertEqual("", council.front_door(_door_map("stratholme-live")))
+
+
+class TheBridgeHandsTheCouncilTheLeadersMap(unittest.TestCase):
+    def test_the_member_read_selects_map_and_lead_and_passes_them_on(self):
+        source = (Path(__file__).resolve().parent.parent / "bridge.py").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("s.map_id AS live_map", source)
+        self.assertIn(
+            '_COUNCIL_LEAD_SQL = "SELECT name FROM overseer_roster WHERE `lead` = 1"',
+            source,
+        )
+        self.assertIn('lead=row["name"] in leads,', source)
+        self.assertIn('"map_id": m.map_id, "lead": m.lead}', source)
 
 
 if __name__ == "__main__":
