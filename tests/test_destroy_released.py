@@ -129,10 +129,10 @@ class _Log:
     def info(self, msg, *a, **k):
         self.lines.append(msg % a if a else msg)
 
-    warning = info
+    warning = exception = info
 
 
-def _run(rows, attempts=()):
+def _run(rows, attempts=(), insert=None):
     written = []
     log = _Log()
     namespace = {
@@ -143,9 +143,8 @@ def _run(rows, attempts=()):
         "OWNER_KEEPS": (),
         "SELL_MEMORY_HOURS": 24,
         "_sell_attempts": lambda hours: list(attempts),
-        "_insert_destroy": lambda c: (
-            written.append(bag_pressure.destroy_command(c)) or 1
-        ),
+        "_insert_destroy": insert
+        or (lambda c: written.append(bag_pressure.destroy_command(c)) or 1),
     }
     module = ast.Module(body=[_function("_destroy_released")], type_ignores=[])
     exec(compile(module, "bridge.py", "exec"), namespace)  # noqa: S102
@@ -167,6 +166,16 @@ class ThePassWritesOneDestroyPerStack(unittest.TestCase):
         )
         written, _ = _run([leftover()], attempts=[done])
         self.assertEqual([], written)
+
+    def test_a_failed_insert_is_logged_and_never_raised(self):
+        def broken(candidate):
+            raise RuntimeError("lost connection")
+
+        written, lines = _run([leftover()], insert=broken)
+        self.assertEqual([], written)
+        self.assertTrue(
+            any("the sales behind it carry on" in ln for ln in lines), lines
+        )
 
     def test_nothing_to_destroy_writes_and_logs_nothing(self):
         written, lines = _run([leftover(quest_item=1)])

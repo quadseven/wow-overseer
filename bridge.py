@@ -8377,16 +8377,27 @@ class Bridge(discord.Client):
         stacks, `item_plan` drops any the world already answered, and the
         world re-checks the holder's quest log before it destroys anything.
         No vendor is needed, so this runs before every vendor gate.
+
+        A FAULT HERE NEVER STOPS THE SALES BEHIND IT. The vendor pass calls
+        this first, so a failed history read or insert is logged and the
+        destroys are skipped for this pass rather than raised into it.
         """
         candidates = bag_pressure.destroy_candidates(rows, keep_names=OWNER_KEEPS)
         if not candidates:
             return
-        attempts = await asyncio.to_thread(_sell_attempts, SELL_MEMORY_HOURS)
-        plan = item_plan.plan(candidates, attempts, at_vendor=True)
         inserted = 0
-        for candidate in plan.write:
-            if await asyncio.to_thread(_insert_destroy, candidate):
-                inserted += 1
+        try:
+            attempts = await asyncio.to_thread(_sell_attempts, SELL_MEMORY_HOURS)
+            plan = item_plan.plan(candidates, attempts, at_vendor=True)
+            for candidate in plan.write:
+                if await asyncio.to_thread(_insert_destroy, candidate):
+                    inserted += 1
+        except Exception:
+            log.exception(
+                "economy: the destroy pass failed after %d row(s); the sales "
+                "behind it carry on", inserted,
+            )
+            return
         log.info(
             "economy: queued %d/%d destroy(s) of released unpriced quest "
             "items, held back %s",
