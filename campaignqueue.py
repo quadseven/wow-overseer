@@ -73,8 +73,10 @@ CREATE_SQL = (
     ") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci"
 )
 
+# `source` rides along so the planner (campaignplan.py) can tell its own
+# entries from an operator's order.
 SELECT_PENDING_SQL = (
-    "SELECT id, family, position, keyword, runs_wanted, status "
+    "SELECT id, family, position, keyword, runs_wanted, status, source "
     "FROM overseer_dungeon_queue WHERE status IN ('queued', 'active') "
     "ORDER BY family, position, id"
 )
@@ -522,6 +524,7 @@ def view(rows: list, done: int | None, family: str = "") -> dict:
     line = progress_line(rows, done)
     return {
         "line": ("Queue: %s." % line) if line else "",
+        "done": done,
         "entries": [
             {
                 "keyword": str(r["keyword"]),

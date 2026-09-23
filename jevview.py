@@ -28,7 +28,7 @@ KINDS = {
     "weapon_choice": "Weapon choice",
     "item_disposition": "What to do with a carried item",
     "guild_recipient": "Who in the guild gains most from an item",
-    "dungeon_choice": "The council's dungeon",
+    "dungeon_choice": "The next dungeon a family runs",
     "quest_pick": "The family's quest",
     "profession_choice": "A family member's professions",
     "activity_choice": "A family's next activity",

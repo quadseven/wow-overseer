@@ -49,6 +49,7 @@ COPY core.py bridge.py voice.py transform.py \
      tabard.py crossing.py \
      vendor_stall.py \
      campaignqueue.py \
+     campaignplan.py \
      zones.json entrances.json shapes.json \
      talents.json items.json icons.json spells.json viewerdisplays.json \
      standing.json craftbook.json taxinodes.json \

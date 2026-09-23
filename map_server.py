@@ -24,6 +24,7 @@ import agenda
 import armory
 import bag_pressure
 import basepath
+import campaignplan
 import campaignqueue
 import chat
 import council
@@ -2484,6 +2485,8 @@ def _fetch_dungeonplan() -> dict:
             worn: list = []
             skills: list = []
             runs: list = []
+            quest_rows: list = []
+            rewarded: list = []
             if names:
                 holes = ", ".join(["%s"] * len(names))
                 # S608 on the roster reads: `holes` is a run of placeholders
@@ -2515,13 +2518,21 @@ def _fetch_dungeonplan() -> dict:
                     cur, _PLAN_RUNS.format(holes=holes),  # noqa: S608
                     tuple(names), _PLAN_RUNS_OLD.format(holes=holes),  # noqa: S608
                     "overseer_dungeon_run")
+                # WHAT THE PLANNER READS (campaignplan.py), so the page's "next
+                # planned" is the bridge's own heuristic over the same facts.
+                quest_rows = _wide_guarded(cur, campaignplan.QUESTS_SQL, (),
+                                           "", "quest_template")
+                rewarded = _wide_guarded(
+                    cur, campaignplan.REWARDED_SQL.format(holes=holes),
+                    tuple(names), "", "character_queststatus_rewarded")
     finally:
         conn.close()
     return {"catalogue_rows": catalogue, "encounter_rows": encounters,
             "loot_rows": loot, "char_rows": chars, "equipped_rows": worn,
             "skill_rows": skills, "families": families,
             "guild_rows": guild_rows, "run_rows": runs,
-            "queue_views": queue_views}
+            "queue_views": queue_views, "quest_rows": quest_rows,
+            "rewarded_rows": rewarded}
 
 
 def _dungeon_paths(fetched: dict) -> dict:
@@ -2570,6 +2581,11 @@ def _dungeon_paths(fetched: dict) -> dict:
         # Wailing Caverns 50", read off the family's own leader.
         path["queue"] = fetched.get("queue_views", {}).get(
             head, campaignqueue.view([], None, head))
+        # NOW AND NEXT: the queue's head, and what follows it, as queued or as
+        # the campaign planner would choose once the queue runs out.
+        path["plan"] = campaignplan.page_view(
+            path["queue"], _planner_facts(head, roster, chars, fetched),
+            path["queue"].get("done"))
         families.append(path)
         basis = plan["basis"]
     return {
@@ -2581,6 +2597,27 @@ def _dungeon_paths(fetched: dict) -> dict:
         "empty_note": ("the roster names no family, so there is no path to draw"
                        if not families else ""),
     }
+
+
+def _planner_facts(head: str, roster: list, chars: dict, fetched: dict):
+    """campaignplan.Facts for one family off the Dungeons page's own reads.
+
+    The roster is ordered leader first (_PLAN_FAMILIES), which is the member
+    whose map says which continent the family is on. Gear and loot are left
+    unread: the heuristic does not weigh them, only Jev does.
+    """
+    level_rows = tuple(
+        {"name": n, "level": chars[n].get("level"), "race": chars[n].get("race"),
+         "map_id": chars[n].get("map"), "lead": 1 if i == 0 else 0}
+        for i, n in enumerate(roster) if chars.get(n) is not None)
+    done, failed = campaignplan.ledger(fetched.get("run_rows") or [], roster)
+    quest_rows = fetched.get("quest_rows")
+    quests = (campaignplan.open_quests(
+        quest_rows, [r for r in fetched.get("rewarded_rows") or []
+                     if r.get("name") in roster], list(level_rows))
+        if quest_rows else None)
+    return campaignplan.Facts(family=head, level_rows=level_rows, done=done,
+                              failed=failed, quests=quests)
 
 
 # --- the campaign queue (#209) ------------------------------------------------
