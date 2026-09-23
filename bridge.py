@@ -15715,13 +15715,19 @@ CORPS_ROW_FOLLOW_SECONDS = 360.0
 CORPS_MOVING = "character is moving"
 
 
-def _corps_read(cur, sql: str, params=()) -> list:
-    """One corps read; a schema without the table or column reads as empty."""
+def _corps_read(cur, what: str, sql: str, params=()) -> list:
+    """One corps read; a schema without the table or column reads as empty.
+
+    The warning names the read and the server's own error, so a missing
+    column is diagnosable from the log alone and an empty answer is never
+    mistaken for an empty world.
+    """
     try:
         cur.execute(sql, params)
     except pymysql.err.MySQLError as exc:
         if exc.args and exc.args[0] in (1054, 1146):
-            log.warning("guild corps: a read failed on this schema: %s", exc.args[-1])
+            log.warning("guild corps: the %s read failed on this schema (%s): %s; "
+                        "the pass plans without it", what, exc.args[0], exc.args[-1])
             return []
         raise
     return [dict(row) for row in cur.fetchall()]
@@ -15731,7 +15737,7 @@ def _fetch_corps_facts(family_names: list) -> dict:
     """Everything guildcorps.plan reads, on one connection; no judgement here."""
     ids = lambda values: ",".join(str(int(v)) for v in values) or "0"  # noqa: E731
     with _connect() as conn, conn.cursor() as cur:
-        rows = _corps_read(cur, _CORPS_MEMBERS_SQL % ",".join(["%s"] * len(family_names)),
+        rows = _corps_read(cur, "guild members", _CORPS_MEMBERS_SQL % ",".join(["%s"] * len(family_names)),
                            list(family_names))
         maint, _masters = guildwork.maintenance_from_rows(rows, family_names)
         maintenance = {m.name for m in maint}
@@ -15743,14 +15749,14 @@ def _fetch_corps_facts(family_names: list) -> dict:
         entries = ids(sorted(guildcorps.PATH_ENTRIES | set(guildcorps.BAG_ITEMS)))
         spells = ids(sorted(guildcorps.PATH_SPELLS))
         skills = ids(sorted(guildcorps.SKILL_NAMES))
-        skill_rows = _corps_read(cur, _CORPS_SKILLS_SQL.format(guids=crew, skills=skills))
-        spell_rows = _corps_read(cur, _CORPS_SPELLS_SQL.format(guids=crew, spells=spells))
-        item_rows = _corps_read(cur, _CORPS_ITEMS_SQL.format(guids=everyone, entries=entries))
-        mail_rows = _corps_read(cur, _CORPS_LETTERS_SQL.format(guids=crew, entries=entries))
-        bag_rows = _corps_read(cur, _CORPS_BAGS_SQL.format(guids=kin))
-        trainable = _corps_read(cur, _CORPS_TRAINABLE_SQL.format(spells=spells))
-        vendors = _corps_read(cur, _CORPS_VENDORS_SQL.format(entries=entries))
-        recent = _corps_read(cur, _CORPS_RECENT_SQL, (guildcorps.SOURCE + ":%",))
+        skill_rows = _corps_read(cur, "skills", _CORPS_SKILLS_SQL.format(guids=crew, skills=skills))
+        spell_rows = _corps_read(cur, "recipes", _CORPS_SPELLS_SQL.format(guids=crew, spells=spells))
+        item_rows = _corps_read(cur, "carried materials", _CORPS_ITEMS_SQL.format(guids=everyone, entries=entries))
+        mail_rows = _corps_read(cur, "letters", _CORPS_LETTERS_SQL.format(guids=crew, entries=entries))
+        bag_rows = _corps_read(cur, "worn bags", _CORPS_BAGS_SQL.format(guids=kin))
+        trainable = _corps_read(cur, "trainers", _CORPS_TRAINABLE_SQL.format(spells=spells))
+        vendors = _corps_read(cur, "vendors", _CORPS_VENDORS_SQL.format(entries=entries))
+        recent = _corps_read(cur, "recent rows", _CORPS_RECENT_SQL, (guildcorps.SOURCE + ":%",))
     members = guildcorps.members_from_rows(
         rows, skill_rows, spell_rows, item_rows, mail_rows, bag_rows, maintenance, family)
     family_by_guild = {}

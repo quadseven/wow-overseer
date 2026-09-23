@@ -539,20 +539,32 @@ def _can_make(tailor, recipe) -> int:
     return min(tailor.count(e) // int(n) for e, n in recipe.reagents)
 
 
-def _train_step(tailor, bag, bolt, trainable):
+def _learnable(recipe, tailor, trainable) -> bool:
+    """A trainer on the tailor's map teaches this recipe, and its skill allows it."""
     value, _ = tailor.skill(TAILORING)
+    return (
+        recipe.source == "trainer"
+        and recipe.spell in trainable
+        and recipe.spell not in tailor.known
+        and value >= recipe.learn_rank
+    )
+
+
+def _recipes_to_train(tailor, bag, bolt, trainable) -> list:
+    """The path recipes this tailor should buy at a trainer now, in order."""
+    path = [bag, bolt]
+    if bag is not None:
+        path.extend(BOLT_OF.get(int(e)) for e, _ in bag.reagents)
     wanted = []
-    for recipe in (bag, bolt) + tuple(
-        BOLT_OF.get(int(e)) for e, _ in (bag.reagents if bag else ())
-    ):
-        if recipe is None or recipe.spell in tailor.known or recipe.spell in wanted:
-            continue
-        if (
-            recipe.source == "trainer"
-            and recipe.spell in trainable
-            and value >= recipe.learn_rank
-        ):
-            wanted.append(recipe.spell)
+    for recipe in path:
+        if recipe is not None and recipe.spell not in wanted:
+            if _learnable(recipe, tailor, trainable):
+                wanted.append(recipe.spell)
+    return wanted
+
+
+def _train_step(tailor, bag, bolt, trainable):
+    wanted = _recipes_to_train(tailor, bag, bolt, trainable)
     rank = _due_rank(tailor, trainable)
     if not wanted and not rank:
         return None
@@ -572,8 +584,10 @@ def _train_step(tailor, bag, bolt, trainable):
 
 def _bag_steps(tailor, bag, reach, trainable, vendors):
     """The steps toward crafting `bag`, in order; the first that applies wins."""
+    held = next((h for h in tailor.carried if int(h.entry) == bag.pattern), None)
+    if reach == "pattern" and held is None:
+        reach = "vendor" if bag.pattern in vendors else ""
     if reach == "pattern":
-        held = next(h for h in tailor.carried if int(h.entry) == bag.pattern)
         return Step(
             tailor.name,
             "learn",
@@ -744,6 +758,48 @@ class CorpsPlan:
     notes: tuple = ()
 
 
+def _supply_for(tailor, crew, trainable, vendors, busy, room, recent) -> list:
+    """Letters the guild posts to a tailor that has no step of its own."""
+    bag, _ = target_bag(tailor, crew, trainable, vendors)
+    bolt = skillup_bolt(tailor, crew, trainable)
+    letters = supply_steps(tailor, bag, bolt, crew, busy, room, recent)
+    return [s for s in letters if not _cooling(s, recent)]
+
+
+def _guild_steps(guild_facts, posts, recent, busy, steps, notes) -> None:
+    """One guild's tailors: a step each, or letters from their guildmates."""
+    crew, family, trainable_by_map, vendors_by_map = guild_facts
+    named = {m.name: m for m in crew}
+    letters = 0
+    for post in posts:
+        if post.role != "tailor":
+            continue
+        tailor = named.get(post.name)
+        if tailor is None:
+            notes.append("%s holds a post and is missing from the crew" % post.name)
+            continue
+        if tailor.name in busy:
+            notes.append("%s is already on a corps errand" % tailor.name)
+            continue
+        trainable = frozenset((trainable_by_map or {}).get(tailor.map_id, ()))
+        vendors = frozenset((vendors_by_map or {}).get(tailor.map_id, ()))
+        step, why = tailor_step(tailor, crew, family, trainable, vendors)
+        if step is not None and not _cooling(step, recent):
+            steps.append(step)
+            busy.add(tailor.name)
+            continue
+        notes.append(
+            "%s: %s waits out its cooldown" % (tailor.name, step.action)
+            if step
+            else why
+        )
+        if tailor.online and letters < SUPPLY_LETTERS_PER_GUILD:
+            room = SUPPLY_LETTERS_PER_GUILD - letters
+            sent = _supply_for(tailor, crew, trainable, vendors, busy, room, recent)
+            steps.extend(sent)
+            letters += len(sent)
+
+
 def plan(
     members, family_by_guild, trainable_by_map, vendors_by_map, recent, busy
 ) -> CorpsPlan:
@@ -762,47 +818,16 @@ def plan(
     busy = set(busy or ())
     steps, notes = [], []
     for guild, posts in sorted(corps.items()):
-        crew = by_guild.get(guild, [])
-        named = {m.name: m for m in crew}
-        family = (family_by_guild or {}).get(guild, ())
-        letters = 0
-        for post in posts:
-            if post.role != "tailor":
-                continue
-            tailor = named[post.name]
-            if tailor.name in busy:
-                notes.append("%s is already on a corps errand" % tailor.name)
-                continue
-            trainable = frozenset((trainable_by_map or {}).get(tailor.map_id, ()))
-            vendors = frozenset((vendors_by_map or {}).get(tailor.map_id, ()))
-            step, why = tailor_step(tailor, crew, family, trainable, vendors)
-            if step is not None and not _cooling(step, recent):
-                steps.append(step)
-                busy.add(tailor.name)
-                continue
-            if step is not None:
-                notes.append(
-                    "%s: %s waits out its cooldown" % (tailor.name, step.action)
-                )
-            elif why:
-                notes.append(why)
-            if tailor.online and letters < SUPPLY_LETTERS_PER_GUILD:
-                bag, _ = target_bag(tailor, crew, trainable, vendors)
-                bolt = skillup_bolt(tailor, crew, trainable)
-                for s in supply_steps(
-                    tailor,
-                    bag,
-                    bolt,
-                    crew,
-                    busy,
-                    SUPPLY_LETTERS_PER_GUILD - letters,
-                    recent,
-                ):
-                    if _cooling(s, recent):
-                        continue
-                    steps.append(s)
-                    letters += 1
-    return CorpsPlan(corps=corps, steps=tuple(steps), notes=tuple(notes))
+        facts = (
+            by_guild.get(guild, []),
+            (family_by_guild or {}).get(guild, ()),
+            trainable_by_map,
+            vendors_by_map,
+        )
+        _guild_steps(facts, posts, recent, busy, steps, notes)
+    return CorpsPlan(
+        corps=corps, steps=tuple(steps), notes=tuple(n for n in notes if n)
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -891,6 +916,34 @@ def _int(value, default=0) -> int:
         return default
 
 
+def _grouped(rows, key, make) -> dict:
+    """`make(row)` for each row, grouped by the int in `key`."""
+    out = {}
+    for row in rows or ():
+        out.setdefault(_int(row.get(key)), []).append(make(row))
+    return out
+
+
+def _held_from(row) -> Held:
+    return Held(
+        _int(row.get("item_guid")), _int(row.get("entry")), _int(row.get("count"), 1)
+    )
+
+
+def _letter_from(row) -> Letter:
+    return Letter(
+        _int(row.get("mail_id")),
+        _int(row.get("item_guid")),
+        _int(row.get("entry")),
+        _int(row.get("count"), 1),
+        bool(_int(row.get("ready"))),
+    )
+
+
+def _skill_pair(row) -> tuple:
+    return _int(row.get("skill")), (_int(row.get("value")), _int(row.get("max")))
+
+
 def members_from_rows(
     member_rows,
     skill_rows,
@@ -910,38 +963,14 @@ def members_from_rows(
     """
     maintenance = {str(n) for n in maintenance or ()}
     family = {str(n) for n in family or ()}
-    skills, known, carried, mail, bags = {}, {}, {}, {}, {}
-    for row in skill_rows or ():
-        skills.setdefault(_int(row.get("guid")), {})[_int(row.get("skill"))] = (
-            _int(row.get("value")),
-            _int(row.get("max")),
-        )
-    for row in spell_rows or ():
-        known.setdefault(_int(row.get("guid")), set()).add(_int(row.get("spell")))
-    for row in item_rows or ():
-        carried.setdefault(_int(row.get("owner")), []).append(
-            Held(
-                _int(row.get("item_guid")),
-                _int(row.get("entry")),
-                _int(row.get("count"), 1),
-            )
-        )
-    for row in mail_rows or ():
-        mail.setdefault(_int(row.get("receiver")), []).append(
-            Letter(
-                _int(row.get("mail_id")),
-                _int(row.get("item_guid")),
-                _int(row.get("entry")),
-                _int(row.get("count"), 1),
-                bool(_int(row.get("ready"))),
-            )
-        )
-    for row in bag_rows or ():
-        bags.setdefault(_int(row.get("owner")), []).append(_int(row.get("slots")))
+    skills = _grouped(skill_rows, "guid", _skill_pair)
+    known = _grouped(spell_rows, "guid", lambda r: _int(r.get("spell")))
+    carried = _grouped(item_rows, "owner", _held_from)
+    mail = _grouped(mail_rows, "receiver", _letter_from)
+    bags = _grouped(bag_rows, "owner", lambda r: _int(r.get("slots")))
     out = []
     for row in member_rows or ():
-        name = str(row.get("name") or "")
-        guid = _int(row.get("guid"))
+        name, guid = str(row.get("name") or ""), _int(row.get("guid"))
         if not name or not guid:
             continue
         map_id = row.get("map_id")
@@ -955,7 +984,7 @@ def members_from_rows(
                 map_id=None if map_id is None else _int(map_id),
                 maintenance=name in maintenance,
                 family=name in family,
-                skills=skills.get(guid, {}),
+                skills=dict(skills.get(guid, ())),
                 known=frozenset(known.get(guid, ())),
                 carried=tuple(carried.get(guid, ())),
                 mail=tuple(mail.get(guid, ())),

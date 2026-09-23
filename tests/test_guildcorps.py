@@ -289,6 +289,22 @@ class ThePass(unittest.TestCase):
         self.assertNotIn("Derred", [s.holder for s in plan.steps])
 
 
+class TheGuards(unittest.TestCase):
+    def test_a_post_whose_member_is_missing_is_noted_not_raised(self):
+        posts = (gc.Post("Ghost", "tailor", gc.TAILORING, 300, 300),)
+        steps, notes = [], []
+        gc._guild_steps(([], (), TRAINABLE, VENDORS), posts, {}, set(), steps, notes)
+        self.assertEqual(steps, [])
+        self.assertIn("Ghost holds a post and is missing from the crew", notes)
+
+    def test_a_pattern_that_is_gone_is_bought_again(self):
+        bag = next(r for r in gc.BAGS if r.spell == 18405)
+        step = gc._bag_steps(
+            tailor(), bag, "pattern", TRAINABLE[EVERLOOK], VENDORS[EVERLOOK]
+        )
+        self.assertEqual((step.action, step.key), ("buy", 14468))
+
+
 class FromRows(unittest.TestCase):
     def test_members_from_rows(self):
         members = gc.members_from_rows(
