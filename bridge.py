@@ -14,6 +14,7 @@ nothing in this file may call the database directly from an async handler.
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import json
 import logging
 import os
@@ -2825,6 +2826,22 @@ def _write_trade_errand(errand) -> bool:
     return True
 
 
+def _release_learn_aim(character: str) -> bool:
+    """Blank a trainer walk and leave `learn_skill` pending (#227).
+
+    A compare-and-swap on the one keyword `learnaim.statements` writes, for
+    the campaign's hand-back only. `learnaim.plan` aims the trip again once
+    the column is empty and the campaign has let go.
+    """
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(
+            "UPDATE overseer_roster SET travel_npc = '' "
+            "WHERE name = %s AND travel_npc = %s",
+            (character, learnaim.TRAINER_ROLE),
+        )
+        return bool(cur.rowcount)
+
+
 def _release_trade_errand(character: str, travel_npc: str) -> bool:
     """Give an economy errand back, and only one this process could have written.
 
@@ -4916,6 +4933,13 @@ class Bridge(discord.Client):
         errand = professions.to_errand(plan, skills)
         if not errand:
             return
+        if errand.travel_npc and self._town_slot.campaign:
+            # A staging campaign keeps its leader (#227). The plan stands and
+            # is written again on the first cycle after the campaign lets go.
+            log.info("trades: %s's trainer errand waits - the campaign owns "
+                     "the traveller (%s)", errand.character,
+                     self._town_slot.campaign)
+            return
         await asyncio.to_thread(_write_trade_errand, errand)
         # AND TELL THE LEDGER WHEN THIS ONE MOVES SOMEBODY (infra#4194). A
         # trade errand is written every cycle and usually names no traveller at
@@ -5327,7 +5351,8 @@ class Bridge(discord.Client):
 
     async def _claim_town_slot(self, claimant: str, character: str,
                                aim: str, urgent: bool = False,
-                               cohort: str | None = None) -> bool:
+                               cohort: str | None = None,
+                               distance: float | None = None) -> bool:
         """Ask for the family's one traveller, and act on the answer (infra#3703).
 
         THE ONE DOOR EVERY TOWN ERRAND NOW GOES THROUGH. Seven passes write
@@ -5373,6 +5398,10 @@ class Bridge(discord.Client):
         `cohort` NAMES ANOTHER FAMILY (#150). Its leader is read from its own
         roster rows, here, for the same reason `_head_now()` is read here for
         this bridge's family, and its turn is kept in that family's own slot.
+
+        `distance` is how far the leader stands from a ground aim (#227). A
+        held walk that stops closing is handed back here, by its owner, and
+        this returns False so the pass can choose another target.
         """
         if cohort is None:
             leader = await asyncio.to_thread(_head_now)
@@ -5384,8 +5413,14 @@ class Bridge(discord.Client):
         decision = slot.want(
             claimant=claimant, character=character, aim=aim, leader=leader,
             column=column, retaskable=_retaskable_from(aim), now=now,
-            urgent=urgent,
+            urgent=urgent, distance=distance,
         )
+        if decision.verdict == townslot.SLOT_GIVE_UP:
+            released = await asyncio.to_thread(
+                _release_trade_errand, decision.character, decision.aim)
+            slot.gave_up(decision, released, now)
+            log.warning("%s (released=%s)", townslot.report(decision), released)
+            return False
         if not decision.granted:
             log.info("%s", townslot.report(decision))
             return False
@@ -8631,13 +8666,22 @@ class Bridge(discord.Client):
                 _holders_at_mailbox, sorted(pressed), positions):
             return
         where = positions.get(leader)
-        spawn = await asyncio.to_thread(_nearest_mailbox, leader)
+        # A MAILBOX THIS PASS GAVE UP ON IS SKIPPED FOR THE NEXT ONE (#227).
+        # The Crossroads mailbox was a walk the world could not finish for the
+        # Horde leader; asking for it again only held the traveller.
+        slot = self._cohort_town_slot(cohort)
+        now = time.monotonic()
+        spawn = await asyncio.to_thread(
+            _nearest_mailbox, leader,
+            lambda row: slot.spent("clearance", travel.mailbox_aim(
+                row, row.get("map_id")).aim, now))
         post = travel.mailbox_aim(spawn, where.get("map_id") if where else None)
         if not post.aim:
             log.info("clearance: nobody can be sent to a mailbox - %s", post.refused)
             return
-        aimed = await self._claim_town_slot("clearance", leader, post.aim,
-                                            cohort=cohort)
+        aimed = await self._claim_town_slot(
+            "clearance", leader, post.aim, cohort=cohort,
+            distance=_spawn_yards(spawn))
         log.info("clearance: %s hold letters for the guild; leader=%s aimed at a "
                  "mailbox (taken=%s)", ", ".join(sorted(pressed)), leader, aimed)
 
@@ -8802,6 +8846,17 @@ class Bridge(discord.Client):
         """
         rows = tradechoice.learn_rows(state["roster"], state["trades"], declared)
         if not rows:
+            return
+        campaign = self._cohort_town_slot(cohort.key).campaign
+        if campaign:
+            # A STAGING CAMPAIGN KEEPS ITS LEADER (#227): no lead is borrowed
+            # and no trainer walk is aimed. Finished learns are still cleared.
+            learn_plan = learnaim.plan(rows)
+            if learn_plan.clear:
+                await asyncio.to_thread(_run_learn_aim_plan, learnaim.statements(
+                    dataclasses.replace(learn_plan, aim="", skill=0)))
+            log.info("trades: family %s's learn trips wait - the campaign owns "
+                     "the traveller (%s)", cohort.key, campaign)
             return
         leader = next((r.character for r in rows if r.leads), cohort.leader)
         now = time.monotonic()
@@ -10632,9 +10687,12 @@ class Bridge(discord.Client):
         """One pass: every family with a pending entry, off its own leader."""
         pending = campaignqueue.pending_by_family(
             await asyncio.to_thread(_fetch_queue_rows))
+        fams = campaignqueue.families(await asyncio.to_thread(_fetch_queue_roster))
+        # THE TRAVEL COLUMN FIRST, AND FOR EVERY FAMILY (#227): a family whose
+        # queue emptied must get its town errands back this pass too.
+        await self._campaign_owns_travel(pending, fams)
         if not pending:
             return
-        fams = campaignqueue.families(await asyncio.to_thread(_fetch_queue_roster))
         for key, rows in pending.items():
             fam = fams.get(key)
             if fam is None:
@@ -10663,6 +10721,94 @@ class Bridge(discord.Client):
                 # One family's failure must not cost the other its advance.
                 log.exception("queue: the pass for %s failed; retrying next "
                               "cycle", campaignqueue._family(key))
+
+    async def _campaign_owns_travel(self, pending: dict, fams: dict) -> None:
+        """Give a staging campaign its leader's travel column (#227).
+
+        ONE RULE FOR EVERY TOWN PASS. Clearance's mailbox walk, the bag trip,
+        the vendor trip, craft supply, gathering, flights and the learn trips
+        all share the leader's one `travel_npc`, and mod-overseer's coordinator
+        will not stage a run while anything stands in it ("defers staging
+        because leader 'Zug' has outstanding travel errand"). Measured on
+        wow-dev 2026-09-23: clearance's walk to a mailbox the leader could not
+        reach held Ragefire Chasm run 1 for over fifteen minutes, and the
+        module will not blank an aim it did not claim.
+
+        So while a family's active queue entry is on its leader and the
+        campaign is not withheld, its town slot answers every pass with a
+        wait, the learn trips stand down, and whatever a bridge pass left on
+        the leader is handed back here by the bridge, its owner. A family
+        whose campaign is withheld, interrupted by a Jev interlude, or done
+        gets its town errands back on this same pass.
+        """
+        own = await asyncio.to_thread(_cohort_of, bonds.head_of_family())
+        owning: set = set()
+        for key, rows in pending.items():
+            name, active = await self._staging_campaign(rows, fams.get(key))
+            if not active:
+                continue
+            slot = self._town_slot if key == own else self._cohort_town_slot(key)
+            owning.add(id(slot))
+            if not slot.campaign:
+                log.info("town slot: %s's campaign owns the traveller %s (%s) - "
+                         "town errands wait until it is withheld or done",
+                         campaignqueue._family(key), name, active)
+            slot.yield_to_campaign("%s on %s" % (active, name))
+            await self._hand_back_for_campaign(slot, name)
+        for slot in (self._town_slot, *self._cohort_town_slots.values()):
+            if id(slot) not in owning and slot.campaign:
+                log.info("town slot: the campaign no longer owns %s - town "
+                         "errands resume", slot.campaign)
+                slot.campaign_over()
+
+    async def _staging_campaign(self, rows: list, fam: dict | None) -> tuple:
+        """(leader, dungeon job) when this family's campaign owns its leader.
+
+        ("", "") otherwise: no active entry, the job is not on the leader, or
+        the campaign is withheld for bag space (#227).
+        """
+        if fam is None or not rows:
+            return "", ""
+        head, leader = rows[0], fam["leader"]
+        name = str(leader.get("name") or "")
+        active = (jobs.dungeon_job(str(head["keyword"])) or ""
+                  if str(head["status"]) == campaignqueue.ACTIVE else "")
+        job = str(leader.get("job") or "")
+        if not name or not townslot.campaign_owns_traveller(active, job, False):
+            return "", ""
+        free = await asyncio.to_thread(_fetch_free_slots, list(fam["names"]))
+        if not townslot.campaign_owns_traveller(
+                active, job, jev_activity.withheld(True, free)):
+            return "", ""
+        return name, active
+
+    async def _hand_back_for_campaign(self, slot, leader: str) -> None:
+        """Clear a bridge pass's aim off a staging leader (#227)."""
+        column = await asyncio.to_thread(_current_travel_npc, leader)
+        if not column:
+            return
+        if column == learnaim.TRAINER_ROLE:
+            # THE LEARN TRIP IS A BRIDGE AIM TOO, and with `learn_skill`
+            # pending the module will not blank it. `learn_skill` is left as
+            # it is, so the trip is walked again once the campaign lets go.
+            if await asyncio.to_thread(_release_learn_aim, leader):
+                log.warning("town slot: handed %s's trainer walk back so the "
+                            "campaign can stage; the learn waits for it",
+                            leader)
+            return
+        holder = slot.campaign_release(leader=leader, column=column,
+                                       now=time.monotonic(),
+                                       ground=travel.is_ground_aim)
+        if holder is None:
+            log.info("town slot: %s carries %r, which is not a bridge errand "
+                     "this pass may hand back yet", leader, column)
+            return
+        released = await asyncio.to_thread(_release_trade_errand, leader,
+                                           holder.aim)
+        slot.released_for_campaign(holder, released)
+        log.warning("town slot: handed %s's %r (%s) back so the campaign can "
+                    "stage (released=%s)", leader, holder.aim,
+                    holder.claimant or "an unknown writer", released)
 
     async def _set_queue(self, d: core.QueueDirective, channel) -> None:
         """Set, clear or read a family's queue from the overseer's channel.
@@ -11549,6 +11695,12 @@ class Bridge(discord.Client):
             learn_plan = learnaim.plan(rows)
             if not (learn_plan.clear or learn_plan.aim or learn_plan.waiting):
                 return
+            if learn_plan.aim and self._town_slot.campaign:
+                # A staging campaign keeps its leader (#227).
+                log.info("learn-aim: %s's trainer walk waits - the campaign "
+                         "owns the traveller (%s)", learn_plan.aim,
+                         self._town_slot.campaign)
+                learn_plan = dataclasses.replace(learn_plan, aim="", skill=0)
             landed = await asyncio.to_thread(
                 _run_learn_aim_plan, learnaim.statements(learn_plan)
             )
@@ -14893,8 +15045,23 @@ _MAILBOX_SQL = (
 )
 
 
-def _nearest_mailbox(name: str):
+def _spawn_yards(spawn) -> float | None:
+    """Yards from the snapshot a spawn row was measured from, or None."""
+    try:
+        return float(spawn["d2"]) ** 0.5
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
+# The same read, for a caller that skips the mailboxes it has given up on.
+_MAILBOXES_SQL = _MAILBOX_SQL.replace("LIMIT 1", "LIMIT 8")
+
+
+def _nearest_mailbox(name: str, skip=None):
     """The nearest mailbox spawn row on `name`'s own map, or None.
+
+    `skip` is a predicate over a row; a row it answers True for is passed over
+    for the next nearest (#227). None reads exactly as before.
 
     A ROW OUT OF THE SPAWN TABLE, NOT A COORDINATE THIS PROCESS INVENTED - the
     identical guarantee `_nearest_vault` gives, against the identical tables.
@@ -14908,7 +15075,8 @@ def _nearest_mailbox(name: str):
     """
     with _connect() as conn, conn.cursor() as cur:
         try:
-            cur.execute(_MAILBOX_SQL, (name, travel.MAILBOX_GO_TYPE))
+            cur.execute(_MAILBOX_SQL if skip is None else _MAILBOXES_SQL,
+                        (name, travel.MAILBOX_GO_TYPE))
         except pymysql.err.MySQLError as exc:
             # 1054 missing column, 1146 missing table. A world image with no
             # overseer_snapshot cannot say where anybody is standing, and one
@@ -14918,8 +15086,11 @@ def _nearest_mailbox(name: str):
                 log.warning("mail: cannot see where the family is standing")
                 return None
             raise
-        row = cur.fetchone()
-        return dict(row) if row else None
+        if skip is None:
+            row = cur.fetchone()
+            return dict(row) if row else None
+        rows = [dict(r) for r in cur.fetchall()]
+    return next((r for r in rows if not skip(r)), None)
 
 
 # EVERY LETTER IN THE FAMILY'S MAILBOXES, ONE ROW PER ATTACHMENT.
