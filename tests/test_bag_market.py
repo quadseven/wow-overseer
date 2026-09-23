@@ -2,11 +2,13 @@
 
 The fixture is the dev realm as read on 2026-09-23: every bag each member
 wears, what each carries in the purse, and every general bag on sale in the
-Alliance auction house, with the item guids and auction ids renumbered. The
+Alliance auction house. Item entries, sizes and prices are the realm's; item
+guids and auction ids are renumbered, and a worn bag's entry is invented. The
 replay runs the planner pass after pass, putting each bought bag on and
 taking its listing off the house, until nothing more is worth buying.
 """
 
+import itertools
 import pathlib
 import unittest
 
@@ -17,7 +19,7 @@ from bag_upgrade import Bag, Member
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 BRIDGE = ROOT / "bridge.py"
 
-_guid = iter(range(1000, 9999))
+_guid = itertools.count(1000)
 
 
 def worn(*sizes):
@@ -87,7 +89,8 @@ ALLIANCE_HOUSE = _house(
     ]
 )
 
-# The general bags a town vendor stocks, at item_template.BuyPrice.
+# The general bags a town vendor stocks, at acore_world.item_template.BuyPrice
+# as read on 2026-09-23 (entries 4496, 4498, 4497 and 4499).
 VENDOR_STOCK = tuple(
     Listing(VENDOR, entry, entry, name, slots, price)
     for entry, name, slots, price in [
@@ -241,6 +244,7 @@ class WhoIsOffered(unittest.TestCase):
 
     def test_a_unique_bag_is_not_sold_to_its_owner(self):
         murloc = [x for x in ALLIANCE_HOUSE if x.unique]
+        # 1470 is the realm's Murloc Skin Bag entry, the unique bag above.
         owner = Member("Ugga", 4, worn=worn(6, 8, 8) + (Bag("Murloc", 10, entry=1470),))
         upgrades, _ = bag_market.plan_upgrades([owner], ALLIANCE_PURSES, murloc)
         self.assertEqual(upgrades, ())
