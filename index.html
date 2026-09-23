@@ -318,6 +318,13 @@
   #theme:hover { color:var(--shell-text); }
   #theme:focus-visible { outline:2px solid var(--green); outline-offset:2px; }
   #stale { display:none; background:#6e2c00; color:var(--amber-text); padding:.3rem 1rem; }
+  /* An open tab running an older copy of this page than the server now
+     serves. Same colours as #stale: it is the same kind of warning. */
+  #pagestale { background:#6e2c00; color:var(--amber-text); padding:.3rem 1rem; }
+  #pagestale[hidden] { display:none; }
+  #pagestale button { font:inherit; margin-left:.6rem; cursor:pointer;
+                      background:none; color:inherit; border:1px solid currentColor;
+                      border-radius:6px; padding:0 .5rem; min-height:32px; }
   /* --- which world this is (quadseven/mod-overseer#184) ---------------------
      THE FIRST THING IN THE STYLESHEET AND THE FIRST THING IN THE BODY, above
      the header and above #stale, because it is the only thing on this page
@@ -778,14 +785,15 @@
              overflow-wrap:anywhere; }
   .rr-card .ds-tile.up .v { color:var(--accent-text); }
   .rr-card .ds-tile.no .v { color:var(--caution-text); }
-  #rgpick { margin:.6rem 0 .4rem; }
-  #rgpick button { font:inherit; font-size:12px; cursor:pointer;
+  /* The guild switches: the Raid tab's consumables and the Trades tab. */
+  :is(#rgpick, #gcrpick) { margin:.6rem 0 .4rem; }
+  :is(#rgpick, #gcrpick) button { font:inherit; font-size:12px; cursor:pointer;
                    background:none; border:1px solid var(--card-line);
                    border-radius:999px; padding:2px .7rem;
                    color:var(--on-card-dim); }
-  #rgpick button.on { border-color:var(--accent-text);
+  :is(#rgpick, #gcrpick) button.on { border-color:var(--accent-text);
                       color:var(--accent-text); }
-  #rgpick button:focus-visible { outline:2px solid var(--accent);
+  :is(#rgpick, #gcrpick) button:focus-visible { outline:2px solid var(--accent);
                                  outline-offset:3px; }
 
   /* --- the item tooltip, on every gear name (infra#3501) -----------------
@@ -1400,7 +1408,11 @@
      Only the four things the cards above have no word for are new. Every one
      of them paints from an on-card ROLE and never from a pigment, because
      this view is drawn on two grounds and a pigment is mixed for one. */
-  #rcbox, #rcboard { display:grid; gap:10px; margin:0 0 1.1rem; }
+  /* One column per family where there is room, the Dungeons tab's rule:
+     Alliance left, Horde right, and one above the other on a phone. */
+  #rcbox, #rcboard { display:grid; gap:10px 1.4rem; margin:0 0 1.1rem;
+                     grid-template-columns:repeat(auto-fit, minmax(min(100%, 30rem), 1fr)); }
+  .rc-family { display:grid; gap:10px; align-content:start; min-width:0; }
   .rc-bar { height:6px; border-radius:999px; background:var(--card-line);
             overflow:hidden; margin:.7rem 0 .1rem; }
   .rc-bar i { display:block; height:100%; background:var(--accent-text); }
@@ -2014,12 +2026,12 @@
      shows that nobody can disenchant, which is what turns every unusable
      green into vendor trash (mod-overseer#160). An absence has to be given
      a shape or it is not read at all. */
-  #stgap { background:var(--panel); border:1px solid var(--line);
+  #stgap, .stgap { background:var(--panel); border:1px solid var(--line);
            border-left:3px solid var(--horde); border-radius:8px;
            padding:.7rem .9rem; margin-bottom:1rem; }
-  #stgap.ok { border-left-color:var(--mortal); }
+  #stgap.ok, .stgap.ok { border-left-color:var(--mortal); }
   .stgap-head { color:var(--rust); }
-  #stgap.ok .stgap-head { color:var(--mortal); }
+  #stgap.ok .stgap-head, .stgap.ok .stgap-head { color:var(--mortal); }
   .stgap-why { color:var(--dim); margin-top:.25rem; overflow-wrap:anywhere; }
   .stgap-list { display:flex; flex-wrap:wrap; gap:.35rem; margin-top:.5rem; }
   .stgap-list a { display:flex; align-items:center; gap:.35rem; text-decoration:none;
@@ -2039,8 +2051,14 @@
   #stjump a { color:var(--text); text-decoration:none; border:1px solid var(--line);
               border-radius:6px; padding:.2rem .6rem; font-size:.9rem; }
   #stjump a:hover { border-color:var(--alliance); }
+  /* ONE COLUMN PER FAMILY, Alliance left and Horde right, by the same rule
+     and at the same width as the Armory's pairs above: each family has its
+     own gap, because what nobody in one family holds is not closed by the
+     other family holding it. On a phone the Horde column follows. */
   #stcards { display:grid; gap:1rem; grid-template-columns:minmax(0,1fr); }
   @media (min-width:1400px) { #stcards { grid-template-columns:repeat(2,minmax(0,1fr)); } }
+  .stside { display:grid; gap:1rem; align-content:start; min-width:0; }
+  .stside .stgap { margin-bottom:0; }
   .stcard { background:var(--panel); border:1px solid var(--line); border-radius:10px;
             padding:.8rem 1rem 1rem; min-width:0; scroll-margin-top:3rem; }
   .stcard.gone { opacity:.6; }
@@ -3151,6 +3169,9 @@
     whether it is production. Treat what you are seeing as live.</div>
   <div id="rkbuild"></div>
 </div>
+<div id="pagestale" role="status" hidden>This page is an older copy than the
+  server now serves, so a view may be missing what it has since gained.<button
+  type="button" id="pagereload">reload</button></div>
 <header>
   <span class="mark"><span class="dot" aria-hidden="true"></span><h1>THE OVERSEER</h1></span>
   <span id="census">reaching the world...</span>
@@ -3409,6 +3430,9 @@
 
 <section id="trades">
   <div id="gcrhead" class="ds-head">reaching the world...</div>
+  <!-- One guild per family: Alliance first, then Horde. The switch picks
+       which one the sections below are drawn for. -->
+  <div id="gcrpick" class="rg-chips"></div>
   <p id="gcrguild" class="chr-body"></p>
   <p id="gcrcoverage" class="chr-body"></p>
   <div class="ds-rule"><span class="ix">01</span><span class="ln"></span><span class="lb">the hundred per cent</span></div>
@@ -7151,6 +7175,7 @@ const gcrgaps = document.getElementById("gcrgaps");
 const gcrorder = document.getElementById("gcrorder");
 const gcrbasis = document.getElementById("gcrbasis");
 const gcrlist = document.getElementById("gcrlist");
+const gcrpick = document.getElementById("gcrpick");
 
 // An empty string is a real answer from the module and means "there is nothing
 // to say here", so it draws nothing rather than an empty line.
@@ -7222,6 +7247,27 @@ function gcrTrade(t) {
   for (const recipe of t.known) body.appendChild(gcrKnown(recipe));
   card.appendChild(body);
   return card;
+}
+
+// WHICH FAMILY'S GUILD IS DRAWN, remembered by key across polls so the
+// two-minute refresh does not snap back to the first one. The first is the
+// Alliance's, because the server sends them Alliance first.
+let gcrChosen = null;
+
+function gcrPick(p) {
+  const fams = p.families || [p];
+  const chosen = fams.find((f) => f.family === gcrChosen) || fams[0];
+  gcrChosen = chosen.family;
+  gcrpick.replaceChildren();
+  if (fams.length > 1) {
+    for (const f of fams) {
+      const b = el("button", f === chosen ? "on" : "", f.heading);
+      b.type = "button";
+      b.onclick = () => { gcrChosen = f.family; gcrPick(p); };
+      gcrpick.appendChild(b);
+    }
+  }
+  gcrRender(chosen);
 }
 
 function gcrRender(p) {
@@ -7357,7 +7403,7 @@ async function pollTrades() {
     const r = await fetch(u("/api/trades"),
                           {signal: AbortSignal.timeout(20000)});
     if (!r.ok) throw new Error(r.status);
-    gcrRender(await r.json());
+    gcrPick(await r.json());
   } catch (e) {
     // Whatever is drawn stays drawn, like every other poll on this page. A
     // blanked list reads as "the guild can make nothing and needs nothing",
@@ -8347,11 +8393,26 @@ function renderRealm(d) {
   rkWarn.style.display = d.warning_text ? "block" : "none";
 }
 
+// WHICH COPY OF THE PAGE THIS IS, stamped by the server when it served it
+// (basepath.py). The page is served no-store, so a reload always gets the
+// current one; a tab that is never reloaded keeps this script for days, and
+// this is how it finds out. Unstamped (opened as a file) it never warns.
+const PAGE_BUILT = "__OVERSEER_PAGE__";
+document.getElementById("pagereload").onclick = () => location.reload();
+
+function checkPage(served) {
+  const stamped = /^[0-9a-f]+$/.test(PAGE_BUILT);
+  document.getElementById("pagestale").hidden =
+    !(stamped && served && served !== PAGE_BUILT);
+}
+
 async function pollRealm() {
   try {
     const r = await fetch(u("/api/realm"));
     if (!r.ok) throw new Error(r.status);
-    renderRealm(await r.json());
+    const d = await r.json();
+    renderRealm(d);
+    checkPage(d.page);
   } catch (e) {
     // LEAVE THE BANNER EXACTLY AS IT IS, and this is the one poll on the page
     // where that is not just the polite thing to do. The realm has not changed
@@ -8954,8 +9015,21 @@ function rcLoot(card, p) {
   rcNote(card, p.loot_caveat);
 }
 
-function rcRecap(p) {
+// ONE CARD PER FAMILY, Alliance left and Horde right, in the order the
+// server sends them. Each card is that family's own run and party: a Horde
+// run drawn with the Alliance five as its party was the bug this fixed.
+function rcRecaps(p) {
+  const fams = p.families || [p];
   rcbox.replaceChildren();
+  for (const f of fams) {
+    const col = el("div", "rc-family");
+    if (f.heading) col.appendChild(el("div", "asidehead " + f.faction, f.heading));
+    col.appendChild(rcRecap(f));
+    rcbox.appendChild(col);
+  }
+}
+
+function rcRecap(p) {
   const card = el("article", "chr-card");
   const top = el("div", "chr-top");
   top.appendChild(el("span", "chr-when", chrWhen(p.run ? p.run.started_at : null)));
@@ -8976,8 +9050,7 @@ function rcRecap(p) {
         rcNote(card, p.loot_caveat);
       }
     }
-    rcbox.appendChild(card);
-    return;
+    return card;
   }
   if (p.run.stall_note) rcNote(card, p.run.stall_note);
   rcProgress(card, p.progress);
@@ -8987,7 +9060,7 @@ function rcRecap(p) {
   if (p.deaths.length) {
     card.appendChild(chrChips(p.deaths.map(d => d.who + " (" + d.killer + ")"), "dead"));
   }
-  rcbox.appendChild(card);
+  return card;
 }
 
 // ONE DROP. The verdict, the reason for it and the list of who wants it are
@@ -9009,21 +9082,36 @@ function rcDrop(drop) {
   return row;
 }
 
-function rcBoard(board) {
+// ONE BOARD PER FAMILY, beside each other like the recap cards: a drop is
+// weighed against the family that would wear it, so each family's board
+// names its own members. The basis goes under each family's heading because
+// the two boards can be for two different dungeons.
+function rcBoards(p) {
+  const fams = p.families || [p];
   rcboard.replaceChildren();
+  rcbasis.textContent = "";
+  for (const f of fams) {
+    const col = el("div", "rc-family");
+    if (f.heading) col.appendChild(el("div", "asidehead " + f.faction, f.heading));
+    rcBoard(col, f.board);
+    rcboard.appendChild(col);
+  }
+}
+
+function rcBoard(col, board) {
   if (board.empty_note) {
     // The basis describes how a board was built, so it must not stand over
     // one that was not built at all.
-    rcbasis.textContent = board.empty_note;
+    col.appendChild(el("p", "chr-body", board.empty_note));
     return;
   }
-  rcbasis.textContent = board.basis;
+  col.appendChild(el("p", "chr-body", board.basis));
   for (const boss of board.bosses) {
     const card = el("article", "chr-card");
     card.appendChild(el("h3", "chr-title", boss.name));
     card.appendChild(el("p", "chr-body", boss.line));
     for (const drop of boss.drops) card.appendChild(rcDrop(drop));
-    rcboard.appendChild(card);
+    col.appendChild(card);
   }
 }
 
@@ -9032,8 +9120,8 @@ async function pollRecap() {
     const r = await fetch(u("/api/recap"));
     if (!r.ok) throw new Error(r.status);
     const p = await r.json();
-    rcRecap(p);
-    rcBoard(p.board);
+    rcRecaps(p);
+    rcBoards(p);
   } catch (e) {
     // Whatever is drawn stays drawn, like every other poll on this page. A
     // blanked recap reads as "nothing is happening in there", which is the
@@ -10439,7 +10527,7 @@ document.getElementById("stnote").textContent =
   + "Names for them come from the client's own frozen tables, because this "
   + "server's copies of those tables are empty.";
 
-const stand = { cards: new Map() };
+const stand = { cards: new Map(), sides: new Map() };
 
 // A bar, or nothing when there is no scale to draw one against. A
 // proficiency has no ceiling and a bar that is always full says less than
@@ -10508,37 +10596,60 @@ function stSection(card, label) {
 // Cards are built once and refilled, the same rule the Armory profiles and
 // the Family cards follow: five cards rebuilt every poll would throw away
 // the scroll position mid-read on the one device this is checked from.
-function standingCard(name) {
+function standingCard(name, side) {
   let c = stand.cards.get(name);
-  if (c) return c;
-  const card = el("article", "stcard");
-  card.id = "stcard-" + name;
-  const nm = el("div", "stname", name);
-  const who = el("div", "stwho");
-  const body = el("div");
-  card.append(nm, who, body);
-  stcards.appendChild(card);
-  const jump = el("a", "", name);
-  jump.href = "#" + card.id;
-  stjump.appendChild(jump);
-  c = { card, nm, who, body };
-  stand.cards.set(name, c);
+  if (!c) {
+    const card = el("article", "stcard");
+    card.id = "stcard-" + name;
+    const nm = el("div", "stname", name);
+    const who = el("div", "stwho");
+    const body = el("div");
+    card.append(nm, who, body);
+    const jump = el("a", "", name);
+    jump.href = "#" + card.id;
+    stjump.appendChild(jump);
+    c = { card, nm, who, body };
+    stand.cards.set(name, c);
+  }
+  // Into its family's column, which is where it already is on every poll
+  // after the first; appendChild of a node already in place keeps the order.
+  if (c.card.parentNode !== side.list) side.list.appendChild(c.card);
   return c;
+}
+
+// ONE COLUMN PER FAMILY: its heading, its own gap, then its cards. Built
+// once per family and re-appended in the payload's order (Alliance first),
+// so a poll never rebuilds a column under a reader's thumb.
+function standingSide(side) {
+  let s = stand.sides.get(side.family);
+  if (!s) {
+    const col = el("div", "stside");
+    const head = el("div", "asidehead");
+    const gap = el("div", "stgap");
+    const list = el("div", "stside");
+    col.append(head, gap, list);
+    s = { col, head, gap, list };
+    stand.sides.set(side.family, s);
+  }
+  s.head.className = "asidehead " + side.faction;
+  s.head.textContent = side.heading;
+  stcards.appendChild(s.col);
+  return s;
 }
 
 // The family-wide gap. Enchanting is called out by name and given its
 // reason; the rest are listed because "eight of the ten primaries have
 // nobody" is the shape of the problem, not a detail of it.
-function renderGap(gap) {
-  stgap.textContent = "";
-  stgap.className = gap.missing.length ? "" : "ok";
+function renderGap(box, gap) {
+  box.textContent = "";
+  box.classList.toggle("ok", !gap.missing.length);
   if (!gap.missing.length) {
-    stgap.appendChild(el("div", "stgap-head", "every primary trade has an owner"));
+    box.appendChild(el("div", "stgap-head", "every primary trade has an owner"));
     return;
   }
-  stgap.appendChild(el("div", "stgap-head",
+  box.appendChild(el("div", "stgap-head",
     "NOBODY IN THE FAMILY HAS: " + gap.missing.length + " of the primary trades"));
-  if (gap.enchanting) stgap.appendChild(el("div", "stgap-why", gap.enchanting_why));
+  if (gap.enchanting) box.appendChild(el("div", "stgap-why", gap.enchanting_why));
   const list = el("div", "stgap-list");
   for (const m of gap.missing) {
     const a = document.createElement("a");
@@ -10552,13 +10663,22 @@ function renderGap(gap) {
     if (m.recipes) a.appendChild(el("span", "n", m.recipes + " recipes"));
     list.appendChild(a);
   }
-  stgap.appendChild(list);
+  box.appendChild(list);
 }
 
 function renderStanding(p) {
-  renderGap(p.gap);
+  // The stale warning lives in #stgap; a good poll clears it away.
+  stgap.textContent = "";
+  stgap.hidden = true;
+  const sideOf = new Map();
+  for (const side of p.sides) {
+    const s = standingSide(side);
+    // Each family's gap is drawn before any of its cards.
+    renderGap(s.gap, side.gap);
+    for (const name of side.names) sideOf.set(name, s);
+  }
   for (const m of p.members) {
-    const c = standingCard(m.name);
+    const c = standingCard(m.name, sideOf.get(m.name));
     c.card.className = "stcard" + (m.present ? "" : " gone");
     c.body.textContent = "";
     if (!m.present) {
@@ -10669,6 +10789,7 @@ async function pollStanding() {
     // nothing", which is a worse lie than an old answer labelled as old.
     stgap.textContent = "";
     stgap.className = "";
+    stgap.hidden = false;
     stgap.appendChild(el("div", "stgap-head",
       "the world is unreachable - this may be stale"));
   }
@@ -11084,7 +11205,14 @@ function renderAuctions(a) {
 function renderGuild(g) {
   wguild.replaceChildren();
   wguild.appendChild(el("p", "wplead", g.lead));
-  wguild.appendChild(el("p", "wbody", g.body));
+  if (g.body) wguild.appendChild(el("p", "wbody", g.body));
+  // One line per guild when the families are in two, Alliance's first, each
+  // marked with its side the way the columns above are.
+  if ((g.by_guild || []).length > 1) {
+    for (const b of g.by_guild) {
+      wguild.appendChild(el("p", "wbody asidehead " + b.faction, b.line));
+    }
+  }
   const list = el("ol", "wsteps");
   for (const s of g.steps) {
     const li = el("li", "wstep");

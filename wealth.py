@@ -1297,6 +1297,7 @@ def build_guild_bank(
     guild_rows: list[dict],
     guild_bank_rows: list[dict] | None = None,
     guild_bank_right_rows: list[dict] | None = None,
+    sides: list[dict] | None = None,
 ) -> dict:
     """Which guild the family is in, if any, and what stands in front of one.
 
@@ -1353,8 +1354,23 @@ def build_guild_bank(
                 )
     else:
         lead, body = NO_GUILD_LEAD, NO_GUILD_BODY
+    by_guild = _bank_by_guild(
+        guild_rows, tabs, rights, observed, rights_observed, sides
+    )
+    if len(by_guild) > 1:
+        # TWO FAMILIES, TWO GUILDS, TWO VAULTS. One sentence over both read
+        # "The guild has 1 purchased bank tab" when that tab was Cave's and
+        # Bonkers had none; each guild now says its own.
+        lead = "The families are in %s." % " and ".join(
+            "%s (%s)" % (g["guild"], g["faction_name"])
+            if g["faction_name"]
+            else g["guild"]
+            for g in by_guild
+        )
+        body = ""
     return {
         "guilds": guilds,
+        "by_guild": by_guild,
         "bank_observed": observed,
         "purchased_tabs": tab_count if observed else None,
         "stored_items": item_count if observed else None,
@@ -1373,6 +1389,77 @@ def build_guild_bank(
             ".",
         ),
     }
+
+
+def _bank_by_guild(
+    guild_rows: list[dict],
+    tabs: list[dict],
+    rights: list[dict],
+    observed: bool,
+    rights_observed: bool,
+    sides: list[dict] | None,
+) -> list[dict]:
+    """One line per guild the families are in, Alliance's first.
+
+    The order and the faction come from the Bags tab's own sides (the
+    Armory's rule), so a guild is on the same side here as its family's
+    cards are above; a guild no side names follows, by name.
+    """
+    ids: dict[str, int] = {}
+    for row in guild_rows:
+        name = row.get("guild_name")
+        if name and row.get("guild_id") is not None:
+            ids.setdefault(name, int(row["guild_id"]))
+    faction_of = {s["guild"]: s["faction"] for s in sides or [] if s.get("guild")}
+    order = [s["guild"] for s in sides or [] if s.get("guild") in ids]
+    order += sorted(g for g in ids if g not in order)
+    out = []
+    for name in order:
+        gid = ids[name]
+        mine = [t for t in tabs if _int(t.get("guild_id")) == gid]
+        items = sum(max(0, _int(t.get("item_count"))) for t in mine)
+        ranks = {
+            _int(r.get("rank_id"))
+            for r in rights
+            if _int(r.get("guild_id")) == gid
+            and _int(r.get("tab_id")) == 0
+            and _int(r.get("rights")) & 3 == 3
+        }
+        if not observed:
+            line = "%s: %s" % (name, GUILD_BODY)
+        elif not mine:
+            line = "%s has no purchased bank tab." % name
+        else:
+            line = "%s has %d purchased bank tab%s holding %d stored item%s." % (
+                name,
+                len(mine),
+                "" if len(mine) == 1 else "s",
+                items,
+                "" if items == 1 else "s",
+            )
+            if rights_observed:
+                line += " Deposit rights are recorded for %d rank%s." % (
+                    len(ranks),
+                    "" if len(ranks) == 1 else "s",
+                )
+        faction = faction_of.get(name, "")
+        out.append(
+            {
+                "guild": name,
+                "faction": faction,
+                "faction_name": armory.FACTION_HEADINGS.get(faction, ""),
+                "line": line,
+            }
+        )
+    return out
+
+
+def _int(value) -> int:
+    """An adapter value as an int, 0 when it is missing or malformed."""
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return 0
 
 
 # --- what the page calls each block ----------------------------------------
@@ -1479,7 +1566,7 @@ def build_wealth(
         "family": build_family(members),
         "auctions": build_auctions(auction_rows, icons),
         "guild_bank": build_guild_bank(
-            guild_rows, guild_bank_rows, guild_bank_right_rows
+            guild_rows, guild_bank_rows, guild_bank_right_rows, sides
         ),
         "sections": SECTION_HEADERS,
         "saved_note": SAVED_NOTE,

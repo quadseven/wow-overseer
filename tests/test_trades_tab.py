@@ -356,9 +356,10 @@ class TheEndpoint(unittest.TestCase):
         self.assertIn('fetch(u("/api/trades"),', BLOCK)
 
     def test_the_handler_takes_nothing_from_the_caller(self):
-        """WHO the guild is belongs to bonds and to the world's own guild
-        table, exactly as /api/armory and /api/family refuse a name."""
-        self.assertIn("family.roster()", HANDLER)
+        """WHO the guild is belongs to the roster and to the world's own
+        guild table, exactly as /api/armory and /api/family refuse a name.
+        One guild per family, every family from the roster (#198)."""
+        self.assertIn("sides = _faction_sides()", HANDLER)
         self.assertNotIn("query.get", HANDLER)
 
     def test_a_dead_database_is_a_503_that_keeps_what_is_drawn(self):

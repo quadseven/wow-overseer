@@ -50,6 +50,7 @@ quietly addresses the wrong world says nothing at all.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 
@@ -87,6 +88,20 @@ PLACEHOLDER = "__OVERSEER_BASE__"
 # is missing for the first second on every load, which is exactly when someone
 # who opened the wrong realm is looking for it.
 NAV_PLACEHOLDER = "__OVERSEER_NAV__"
+# WHICH COPY OF THE PAGE THIS IS. The page is served no-store and nothing in
+# front of it caches, so a reload always fetches the current one; but a tab
+# left open keeps running the script it loaded, for days, and nothing on it
+# says so. The page carries the version it was served as, /api/realm reports
+# the version the server would serve now, and the page says "reload" when
+# the two differ. Substituted in the same pass as the mount point.
+PAGE_PLACEHOLDER = "__OVERSEER_PAGE__"
+
+
+def page_version(html: bytes) -> str:
+    """A short fingerprint of the page as it sits on disk, before any
+    substitution, so every realm serving one image reports the same one."""
+    return hashlib.sha256(html).hexdigest()[:12]
+
 
 # What a mount point may be made of. Deliberately narrow: this value is
 # substituted into a JavaScript string literal in the page, so a quote or a
@@ -133,6 +148,7 @@ def apply(html: bytes, prefix: str) -> bytes:
     lost the token has to stop the response rather than serve a page that looks
     entirely normal and is asking the wrong world.
     """
+    original = html
     marker = PLACEHOLDER.encode()
     if marker not in html:
         raise ValueError(
@@ -149,4 +165,7 @@ def apply(html: bytes, prefix: str) -> bytes:
     nav = NAV_PLACEHOLDER.encode()
     if nav in html:
         html = html.replace(nav, json.dumps(realmnav.build_nav(prefix)).encode())
+    page = PAGE_PLACEHOLDER.encode()
+    if page in html:
+        html = html.replace(page, page_version(original).encode())
     return html

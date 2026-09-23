@@ -691,12 +691,14 @@ def _member(
     book: StandingBook,
     talents: armory.TalentBook,
 ) -> dict:
-    bond = bonds.FAMILY[name]
+    # bond_of, not FAMILY: the Horde five have bonds of their own, and
+    # FAMILY is only the family this process drives (bonds.member says why).
+    bond = bonds.bond_of(name)
     if char_row is None:
         return {
             "name": name,
-            "role": bond.role,
-            "class": bond.char_class.title(),
+            "role": bond.role if bond else "",
+            "class": bond.char_class.title() if bond else "",
             "present": False,
         }
     level = int(char_row["level"])
@@ -709,8 +711,9 @@ def _member(
     )
     return {
         "name": char_row["name"],
-        "role": bond.role,
+        "role": bond.role if bond else "",
         "present": True,
+        "faction": _faction(race),
         "level": level,
         "class": _CLASS_NAMES.get(class_id, f"class {class_id}"),
         "class_colour": CLASS_COLOURS.get(class_id, "#ffffff"),
@@ -732,15 +735,23 @@ def build_standing(
     spell_rows: list[dict],
     book: StandingBook,
     talents: armory.TalentBook,
+    families: list[tuple[str, list[str]]] | None = None,
 ) -> dict:
-    """Every member's standing, in roster order.
+    """Every member's standing, in roster order, one side per family.
 
     Rows arrive keyed by character name and unfiltered, exactly as
     build_armory takes them: splitting them per member is this module's job
     so the adapter stays queries and nothing else. A member with no rows
     still gets a card, for the reason the Armory tab gives - a family view
     that quietly drops somebody is the failure it exists to prevent.
+
+    `families` is every family the roster knows, as (key, names); None is
+    bonds' one family. Each family gets its own trade gap, because "nobody
+    in the family has enchanting" is a claim about one family: the Horde
+    five holding a trade does not close the Alliance five's gap.
     """
+    if families is None:
+        families = [("", family.roster())]
     chars = {r["name"]: r for r in char_rows}
     skills: dict[str, list[dict]] = {}
     for row in skill_rows:
@@ -755,9 +766,9 @@ def build_standing(
     for row in spell_rows:
         spells.setdefault(row["name"], set()).add(int(row["spell"]))
 
-    members = []
-    for name in family.roster():
-        members.append(
+    groups = []
+    for key, names in families:
+        mine = [
             _member(
                 name,
                 chars.get(name),
@@ -768,13 +779,44 @@ def build_standing(
                 book,
                 talents,
             )
-        )
-    held = {
-        p["trade"] for m in members if m["present"] for p in m["professions"]["primary"]
-    }
+            for name in names
+        ]
+        groups.append((key, mine))
+    # Alliance left, Horde right, by the Armory's own rule, so the two panels
+    # of one tab cannot put a family on different sides.
+    sides = armory.family_sides(groups)
+    for side in sides:
+        mine = side.pop("members")
+        held = {
+            p["trade"]
+            for m in mine
+            if m["present"]
+            for p in m["professions"]["primary"]
+        }
+        side["gap"] = trade_gap(held, book)
+    members = [m for side in sides for m in _members_of(side, groups)]
     return {
         "members": members,
+        "sides": sides,
         "expected": len(members),
-        "gap": trade_gap(held, book),
+        # The first side's gap, for a page that predates the sides.
+        "gap": sides[0]["gap"] if sides else trade_gap(set(), book),
         "groups": list(GROUP_ORDER),
     }
+
+
+def _members_of(side: dict, groups: list[tuple[str, list[dict]]]) -> list[dict]:
+    """The members of one side, in their roster order."""
+    for key, members in groups:
+        if key == side["family"]:
+            return members
+    return []
+
+
+def _faction(race: int) -> str:
+    """The side a race fights for, in the Armory's words for it."""
+    if race in armory._ALLIANCE_RACES:
+        return "alliance"
+    if race in armory._HORDE_RACES:
+        return "horde"
+    return "neutral"

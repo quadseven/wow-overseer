@@ -90,11 +90,12 @@ class TheEndpoint(unittest.TestCase):
         self.assertIn('fetch(u("/api/recap"))', BLOCK)
 
     def test_the_handler_takes_a_map_and_never_a_roster(self):
-        """WHO the family is belongs to bonds, exactly as /api/armory and
-        /api/family refuse a name. A map id is a fact about the world."""
+        """WHO the family is belongs to the roster, exactly as /api/armory
+        and /api/family refuse a name. A map id is a fact about the world.
+        One recap per family, every family from the roster (#198)."""
         handler = SERVER[SERVER.index("def _recap") :]
         handler = handler[: handler.index("def _council")]
-        self.assertIn("family.roster()", handler)
+        self.assertIn("for side in _faction_sides():", handler)
         self.assertNotIn('query.get("name"', handler)
         self.assertIn('query.get("map"', handler)
 

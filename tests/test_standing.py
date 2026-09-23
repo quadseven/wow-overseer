@@ -873,8 +873,10 @@ class ThePagePanel(unittest.TestCase):
         shows that nobody can disenchant."""
         render = self.js[self.js.index("function renderStanding") :]
         render = render[: render.index("async function pollStanding")]
+        # One gap per family now (#198), each drawn before any card.
         self.assertLess(
-            render.index("renderGap(p.gap)"), render.index("for (const m of p.members)")
+            render.index("renderGap(s.gap, side.gap)"),
+            render.index("for (const m of p.members)"),
         )
 
     def test_the_endpoint_is_routed(self):
