@@ -8512,9 +8512,15 @@ class Bridge(discord.Client):
                 await self._jev_record(judgments, ",".join(names))
             except Exception:
                 # Named here, not only by _jev_task_done's generic line, so a
-                # failed item_keep pass says which pass and which family.
-                log.exception("jev-keep: pass for %s failed; the heuristic is "
-                              "unaffected", ",".join(names))
+                # failed item_keep pass says which pass and which family. Its
+                # stacks are un-marked so the next pass asks them again rather
+                # than waiting out the interval with nothing recorded.
+                for row in pending:
+                    self._jev_keep_asked.pop(
+                        (str(row["holder"]), int(row["item_guid"])), None)
+                log.exception("jev-keep: pass for %s failed; its %d stack(s) "
+                              "are asked again next pass, and the heuristic is "
+                              "unaffected", ",".join(names), len(pending))
 
         task = asyncio.create_task(run())
         self._jev_tasks[key] = task
