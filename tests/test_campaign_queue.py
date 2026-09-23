@@ -329,8 +329,10 @@ class _Log:
     warning = exception = info
 
 
-def _queue_pass(world):
-    """One queue pass against `world`; the lines it logged."""
+def _queue_pass(world, holds=None):
+    """One queue pass against `world`; the lines it logged. `holds` maps a
+    family key to the Jev interlude holding its job (#216)."""
+    holds = holds or {}
     log = _Log()
     ns = _load(
         ["_campaign_queue_once", "_apply_queue_move"],
@@ -347,7 +349,8 @@ def _queue_pass(world):
             "_reset_campaign_done": world.reset,
         },
     )
-    asyncio.run(ns["_campaign_queue_once"](types.SimpleNamespace()))
+    me = types.SimpleNamespace(_activity_holds=lambda key=None: holds.get(key, ""))
+    asyncio.run(ns["_campaign_queue_once"](me))
     return log.lines
 
 
@@ -502,7 +505,8 @@ class NothingElseStompsTheQueue(unittest.TestCase):
 
         def ask(source):
             d = core.JobDirective(mode="quest", source=source)
-            return asyncio.run(ns["_queue_holds_job"](types.SimpleNamespace(), d))
+            me = types.SimpleNamespace(_activity_holds=lambda key=None: "")
+            return asyncio.run(ns["_queue_holds_job"](me, d))
 
         self.assertTrue(ask("overseer:craft_rhythm"))
         self.assertFalse(ask("discord:7"))
