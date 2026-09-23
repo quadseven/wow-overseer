@@ -7960,6 +7960,7 @@ class Bridge(discord.Client):
         # refused a piece; counting it here would let an upgrade that is about
         # to be handed to somebody justify a town trip on its holder's behalf.
         rows = await asyncio.to_thread(_fetch_vendor_items, names)
+        await self._destroy_released(rows)
         bag_rows = await asyncio.to_thread(_fetch_surplus_bags, names)
         equipped_bag_slots = await asyncio.to_thread(
             _fetch_equipped_bag_slots, names
@@ -8366,6 +8367,31 @@ class Bridge(discord.Client):
                     "(infra#4191)",
                     max(0.0, until - time.monotonic()),
                 )
+
+    async def _destroy_released(self, rows: list) -> None:
+        """Queue a destroy for each released quest item no vendor will buy.
+
+        wow-overseer#241 releases a quest item once no open quest wants it,
+        and a priced one then sells. An UNPRICED one never could, so it sat
+        in the bags for ever (mod-overseer#614). `bag_pressure` picks those
+        stacks, `item_plan` drops any the world already answered, and the
+        world re-checks the holder's quest log before it destroys anything.
+        No vendor is needed, so this runs before every vendor gate.
+        """
+        candidates = bag_pressure.destroy_candidates(rows, keep_names=OWNER_KEEPS)
+        if not candidates:
+            return
+        attempts = await asyncio.to_thread(_sell_attempts, SELL_MEMORY_HOURS)
+        plan = item_plan.plan(candidates, attempts, at_vendor=True)
+        inserted = 0
+        for candidate in plan.write:
+            if await asyncio.to_thread(_insert_destroy, candidate):
+                inserted += 1
+        log.info(
+            "economy: queued %d/%d destroy(s) of released unpriced quest "
+            "items, held back %s",
+            inserted, len(candidates), item_plan.reasons(plan.skipped),
+        )
 
     async def _hand_gear(self, gear_rows: list, worn: list, names: list,
                          jev_plan=None) -> None:
@@ -14313,6 +14339,30 @@ def _worked_by(names: list) -> dict:
         if trades:
             out[name] = tuple(sorted(trades))
     return out
+
+
+def _insert_destroy(candidate: bag_pressure.SellCandidate) -> int:
+    """Queue one released, unpriced quest stack for the world's destroy verb.
+
+    kind='sell' with a `destroy` command (mod-overseer#614): the world routes
+    it on the first word, so no new ENUM value is needed. An older world image
+    reads it as a malformed sale and refuses it, which costs one row.
+    """
+    command = bag_pressure.destroy_command(candidate)
+    with _connect() as conn, conn.cursor() as cur:
+        try:
+            cur.execute(
+                "INSERT INTO overseer_command "
+                "(target_name, command, kind, target_arg, source) "
+                "VALUES (%s, %s, 'sell', '', %s)",
+                (candidate.holder, command, "economy"),
+            )
+        except pymysql.err.MySQLError as exc:
+            if exc.args and exc.args[0] in (1146, 1265):
+                log.warning("destroy command unavailable on this world image")
+                return 0
+            raise
+        return cur.lastrowid or 0
 
 
 def _sell_attempts(hours: int) -> list:
