@@ -199,8 +199,11 @@ RUNS_SQL_OLD = (
     "FROM overseer_dungeon_run WHERE state = 'ended' AND leader_name IN ({holes})"
 )
 
+# S608 on the three statements below: the only interpolated parts are this
+# module's own integer constants (ZONES, GEAR_SLOTS, MAPS), passed through
+# int() or range(); no value from outside reaches them.
 QUESTS_SQL = (
-    "SELECT ID AS quest, QuestSortID AS zone, MinLevel AS min_level, "
+    "SELECT ID AS quest, QuestSortID AS zone, MinLevel AS min_level, "  # noqa: S608
     "AllowableRaces AS races FROM acore_world.quest_template "
     "WHERE QuestSortID IN (" + ", ".join(str(int(z)) for z in ZONES) + ") "
     "AND LogTitle NOT LIKE '<%%'"
@@ -215,7 +218,7 @@ REWARDED_SQL = (
 GEAR_SLOTS = tuple(s for s in range(18) if s != 3)
 
 GEAR_SQL = (
-    "SELECT c.name, AVG(it.ItemLevel) AS item_level, COUNT(*) AS worn "
+    "SELECT c.name, AVG(it.ItemLevel) AS item_level, COUNT(*) AS worn "  # noqa: S608
     "FROM character_inventory ci JOIN characters c ON c.guid = ci.guid "
     "JOIN item_instance ii ON ii.guid = ci.item "
     "JOIN acore_world.item_template it ON it.entry = ii.itemEntry "
@@ -227,7 +230,7 @@ GEAR_SQL = (
 # What a dungeon's bosses drop, as one number: the mean item level of their
 # uncommon-or-better weapons and armour. Static per world, read once.
 LOOT_SQL = (
-    "SELECT cr.map AS map_id, AVG(it.ItemLevel) AS item_level "
+    "SELECT cr.map AS map_id, AVG(it.ItemLevel) AS item_level "  # noqa: S608
     "FROM acore_world.creature_loot_template clt "
     "JOIN acore_world.creature_template ct ON ct.lootid = clt.Entry "
     "JOIN acore_world.item_template it ON it.entry = clt.Item "
@@ -276,6 +279,17 @@ def _race_bit(race) -> int:
     return 1 << (race - 1) if race > 0 else 0
 
 
+def _can_do(row: dict, member: tuple, done_by: dict) -> bool:
+    """Whether one member (name, level, race bit) can still do one quest."""
+    name, level, bit = member
+    races = int(row.get("races") or 0)
+    return (
+        (not races or bool(races & bit))
+        and level >= int(row.get("min_level") or 0)
+        and int(row["quest"]) not in done_by.get(name, set())
+    )
+
+
 def open_quests(quest_rows: list, rewarded_rows: list, level_rows: list) -> dict:
     """zone -> how many of its quests somebody in the family can still do.
 
@@ -291,18 +305,9 @@ def open_quests(quest_rows: list, rewarded_rows: list, level_rows: list) -> dict
     ]
     out: dict = {}
     for row in quest_rows or []:
-        races = int(row.get("races") or 0)
-        quest = int(row["quest"])
-        for name, level, bit in members:
-            if races and not races & bit:
-                continue
-            if level < int(row.get("min_level") or 0):
-                continue
-            if quest in done_by.get(name, set()):
-                continue
+        if any(_can_do(row, member, done_by) for member in members):
             zone = int(row["zone"])
             out[zone] = out.get(zone, 0) + 1
-            break
     return out
 
 
@@ -532,6 +537,14 @@ def due(rows: list, leader: dict | None, level_rows: list) -> Due:
                 int(head["runs_wanted"]),
             )
         )
+    return _outgrown(head, level_rows)
+
+
+def _outgrown(head: dict, level_rows: list) -> Due:
+    """An active planner entry the weakest member has outgrown ends early.
+
+    Only the planner's own entries: an operator's order runs to its count.
+    """
     run = BY_KEYWORD.get(wing_of(str(head.get("keyword") or "")))
     if str(head.get("source") or "") != SOURCE or run is None:
         return Due()

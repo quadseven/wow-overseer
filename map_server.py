@@ -2609,8 +2609,8 @@ def _planner_facts(head: str, roster: list, chars: dict, fetched: dict):
     level_rows = tuple(
         {"name": n, "level": chars[n].get("level"), "race": chars[n].get("race"),
          "map_id": chars[n].get("map"), "lead": 1 if i == 0 else 0}
-        for i, n in enumerate(roster) if n in chars)
-    done, failed = campaignplan.ledger(fetched["run_rows"], roster)
+        for i, n in enumerate(roster) if chars.get(n) is not None)
+    done, failed = campaignplan.ledger(fetched.get("run_rows") or [], roster)
     quest_rows = fetched.get("quest_rows")
     quests = (campaignplan.open_quests(
         quest_rows, [r for r in fetched.get("rewarded_rows") or []
