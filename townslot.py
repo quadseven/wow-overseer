@@ -1479,9 +1479,9 @@ class Slot:
         """Drop a pass's want without serving it.
 
         For a pass that has decided it no longer needs the traveller at all.
-        Nothing calls this yet; it exists because `WANT_FRESH_SECONDS` is the
-        slow way to reach the same state and a pass that KNOWS is allowed to
-        say so.
+        `WANT_FRESH_SECONDS` is the slow way to reach the same state and a
+        pass that KNOWS is allowed to say so: the flight pass does, when bag
+        pressure makes its discovery walk wait (`bag_market.discovery_waits`).
         """
         self._wants.pop(claimant, None)
 
