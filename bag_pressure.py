@@ -149,6 +149,63 @@ def vendor_candidates(rows: Iterable[dict], keep_names=()) -> tuple[SellCandidat
     return tuple(out)
 
 
+# ITEM_CLASS_QUEST in item_template.class.
+QUEST_CLASS = 12
+
+# ITEM_QUALITY_UNCOMMON. The world's destroy verb refuses anything above it
+# unless the row says `allow:quality`, and this side never says it.
+DESTROY_MAX_QUALITY = 2
+
+
+def destroy_candidates(
+    rows: Iterable[dict], keep_names=()
+) -> tuple[SellCandidate, ...]:
+    """Released quest items no vendor will buy, for the world's destroy verb.
+
+    A class-12 stack that QUEST_NEEDED_SQL no longer protects and that has a
+    sell price goes down the ordinary sell path. One with NO price can never
+    leave the bags that way: the core's sale refuses SellPrice 0. The world
+    executor destroys such a stack on a `destroy guid:<n> count:<n>` row
+    (mod-overseer#614), re-checking the holder's quest log itself.
+
+    NARROW ON PURPOSE. Only class 12, only a row that explicitly says
+    `quest_item` is false (a missing flag keeps the stack), only a price of
+    exactly 0, only Uncommon or below, never a reagent, a profession's stock
+    or an owner-kept name. Everything else keeps its existing route.
+    """
+    out = []
+    for row in rows:
+        if owner_keeps(row.get("name", ""), keep_names):
+            continue
+        try:
+            if int(row["item_class"]) != QUEST_CLASS:
+                continue
+            if "quest_item" not in row or bool(row["quest_item"]):
+                continue
+            if int(row["sell_price"]) != 0 or int(row["quality"]) > DESTROY_MAX_QUALITY:
+                continue
+            if bool(row.get("reagent", True)) or bool(
+                row.get("profession_needed", True)
+            ):
+                continue
+            candidate = SellCandidate(
+                holder=str(row["holder"]),
+                item_guid=int(row["item_guid"]),
+                count=int(row["count"]),
+                item=ItemForSale(quality=int(row["quality"]), sell_price=0),
+            )
+        except (KeyError, TypeError, ValueError):
+            continue
+        if candidate.holder and candidate.item_guid > 0 and candidate.count > 0:
+            out.append(candidate)
+    return tuple(out)
+
+
+def destroy_command(candidate: SellCandidate) -> str:
+    """The world's destroy grammar: the whole stack, nothing allowed."""
+    return "destroy guid:%d count:%d" % (candidate.item_guid, candidate.count)
+
+
 def vendor_batch(
     candidates: Iterable[SellCandidate],
 ) -> tuple[str, tuple[SellCandidate, ...]]:

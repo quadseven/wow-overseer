@@ -536,6 +536,7 @@ class _FakeEconomySelf:
     _route_clearance = _noop
     _hand_gear = _noop
     _equip_upgrades = _noop
+    _destroy_released = _noop
 
 
 def _vendor_rows():

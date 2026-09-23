@@ -672,8 +672,9 @@ class TheBridgeAsksBeforeItSells(unittest.TestCase):
         self.assertIn("town = await asyncio.to_thread(_fetch_town, holder)", block)
 
     def test_the_pass_writes_a_sale_and_never_a_destruction(self):
-        """Deleting is the last resort and it is not reached: nothing in the
-        disposable pile is worth zero, and mod-overseer has no destroy kind."""
+        """The sale writer never destroys. Destroying an unpriced released
+        quest item has its own writer, `_insert_destroy`, and its own gate
+        (mod-overseer#614); nothing in the disposable pile reaches it."""
         start = self.src.index("def _insert_sell(")
         block = self.src[start : start + 1200]
         self.assertIn("'sell'", block)
