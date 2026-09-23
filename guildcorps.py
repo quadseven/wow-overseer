@@ -582,45 +582,57 @@ def _train_step(tailor, bag, bolt, trainable):
     )
 
 
-def _bag_steps(tailor, bag, reach, trainable, vendors):
-    """The steps toward crafting `bag`, in order; the first that applies wins."""
+def _pattern_step(tailor, bag, reach, vendors):
+    """Learn the carried pattern, or buy it; None when neither applies."""
     held = next((h for h in tailor.carried if int(h.entry) == bag.pattern), None)
     if reach == "pattern" and held is None:
         reach = "vendor" if bag.pattern in vendors else ""
     if reach == "pattern":
+        command = "use guid:%d" % int(held.guid)
         return Step(
             tailor.name,
             "learn",
             bag.pattern,
             "%s learns %s from the pattern it carries" % (tailor.name, bag.name),
-            rows=(
-                Row(
-                    "cast",
-                    "use guid:%d" % int(held.guid),
-                    "",
-                    source_for("learn", bag.pattern),
-                ),
-            ),
+            rows=(Row("cast", command, "", source_for("learn", bag.pattern)),),
         )
     if reach == "vendor":
-        return _buy(
-            tailor, bag.pattern, 1, PATTERN_PRICE.get(bag.pattern, 0), "pattern"
-        )
-    if _can_make(tailor, bag):
-        return _craft(tailor, bag, 1, "the bag")
+        price = PATTERN_PRICE.get(bag.pattern, 0)
+        return _buy(tailor, bag.pattern, 1, price, "pattern")
+    return None
+
+
+def _bolt_step(tailor, bag):
+    """Craft the bolts the bag still lacks from cloth in the bags."""
     for entry, need in bag.reagents:
         bolt = BOLT_OF.get(int(entry))
         short = int(need) - tailor.count(entry)
-        if bolt is not None and short > 0 and bolt.spell in tailor.known:
-            cloth, per = _cloth_for(bolt)
-            n = min(short, tailor.count(cloth) // per)
-            if n > 0:
-                return _craft(tailor, bolt, n, "for the %s" % bag.name)
+        if bolt is None or short <= 0 or bolt.spell not in tailor.known:
+            continue
+        cloth, per = _cloth_for(bolt)
+        n = min(short, tailor.count(cloth) // per)
+        if n > 0:
+            return _craft(tailor, bolt, n, "for the %s" % bag.name)
+    return None
+
+
+def _thread_step(tailor, bag, vendors):
+    """Buy the vendor's thread, once everything else for the bag is in hand."""
+    if not _only_thread_missing(tailor, bag):
+        return None
     for entry, need in bag.reagents:
         if _vendor_reagent(entry) and tailor.count(entry) < need and entry in vendors:
-            if _only_thread_missing(tailor, bag):
-                return _buy(tailor, entry, int(need), THREAD_PRICE[entry], "thread")
+            return _buy(tailor, entry, int(need), THREAD_PRICE[entry], "thread")
     return None
+
+
+def _bag_steps(tailor, bag, reach, trainable, vendors):
+    """The steps toward crafting `bag`, in order; the first that applies wins."""
+    if reach in ("pattern", "vendor"):
+        return _pattern_step(tailor, bag, reach, vendors)
+    if _can_make(tailor, bag):
+        return _craft(tailor, bag, 1, "the bag")
+    return _bolt_step(tailor, bag) or _thread_step(tailor, bag, vendors)
 
 
 def _only_thread_missing(tailor, bag) -> bool:
