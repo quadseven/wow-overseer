@@ -31,6 +31,7 @@ import bag_pressure
 import bag_upgrade
 import bank
 import chat
+import clearance
 import council
 import core
 import craftpleas
@@ -6166,12 +6167,14 @@ class Bridge(discord.Client):
         facts, supplies current market prices, and queues its returned rows.
         """
         gear_rows = await asyncio.to_thread(_fetch_surplus_gear, names)
-        if not gear_rows:
-            return
-        equipped = await asyncio.to_thread(_fetch_family_equipped, names)
+        equipped = (await asyncio.to_thread(_fetch_family_equipped, names)
+                    if gear_rows else [])
         fits = bag_pressure.family_fits(gear_rows, equipped, names)
-        candidates = []
-        entries = set()
+        # GEMS AND RECIPES NOBODY IN THE FAMILY OR GUILD CAN USE (#148), when
+        # the market beats the vendor; `clearance.plan` decides which.
+        candidates = _clearance_listings(
+            await self._clearance_plan(names, leader, auction_open=True))
+        entries = {c["entry"] for c in candidates}
         for row in gear_rows:
             try:
                 guid = int(row["item_guid"])
@@ -6195,8 +6198,14 @@ class Bridge(discord.Client):
             return
         counter = await asyncio.to_thread(_fetch_auctioneer, leader)
         if not counter:
+            # A LISTING THAT FREES A FULL BAG IS AS URGENT AS A SALE (#148).
+            # The vendor pass claims the traveller urgently on bag pressure;
+            # without the same standing a listing waited behind every other
+            # errand, measured as "could not be aimed at an auctioneer".
+            pressure = bag_pressure.family_town_run_needed(
+                await asyncio.to_thread(_fetch_free_slots, names))
             if step == bag_pressure.VENDOR_ERRAND_AIM and await self._claim_town_slot(
-                    "auction", leader, auction.AUCTIONEER_ROLE):
+                    "auction", leader, auction.AUCTIONEER_ROLE, urgent=pressure):
                 log.info("auction: leader=%s aimed to list %d surplus BoE item(s)",
                          leader, len(candidates))
             return
@@ -7693,7 +7702,15 @@ class Bridge(discord.Client):
         # counts toward what a trip could sell like any other.
         locks = await self._lockbox_plan(names, free_slots)
         lock_sales = lockbox.sale_candidates(locks.sell)
-        for sale in lock_sales:
+        # GEMS AND SPARE RECIPES (#148, #145): a family member or guildmate who
+        # can use one gets it, then the auction house, then the vendor. The
+        # auction pass lists only for this bridge's own family, so another
+        # family's stacks skip the house rather than wait on a pass it never
+        # gets.
+        clear = await self._clearance_plan(names, leader,
+                                           auction_open=cohort is None)
+        clear_sales = _clearance_sales(clear)
+        for sale in lock_sales + clear_sales:
             sellable_counts[sale.holder] = sellable_counts.get(sale.holder, 0) + 1
 
         # A stale positional aim on the leader can block the vendor pass just
@@ -7739,6 +7756,8 @@ class Bridge(discord.Client):
         # AND THE LOCKBOXES GO TO THE ROGUE, for the same reason (#88): a give
         # or a letter between two characters needs no vendor trip.
         await self._route_lockboxes(names, locks)
+        await self._route_clearance(names, leader, clear, free_slots,
+                                    cohort=getattr(cohort, "key", None))
 
         # AND SO DOES THE GEAR HAND-OFF, FOR THE SAME REASON AND ONE MORE
         # (infra#4198). It used to sit below the two returns beneath this
@@ -7843,7 +7862,7 @@ class Bridge(discord.Client):
             bag_pressure.bag_candidates(
                 bag_rows, equipped_bag_slots, keep_names=OWNER_KEEPS,
             )
-        ) + lock_sales
+        ) + lock_sales + clear_sales
         if not candidates:
             log.info("economy: no safe carried vendor goods")
             return
@@ -8066,65 +8085,6 @@ class Bridge(discord.Client):
                     "(infra#4191)",
                     max(0.0, until - time.monotonic()),
                 )
-
-    async def _lockbox_plan(self, names: list, free_slots: dict):
-        """Read the family's lockboxes and rogues; lockbox.plan routes them."""
-        boxes = lockbox.boxes_from_rows(
-            await asyncio.to_thread(_fetch_lockboxes, names))
-        if not boxes:
-            return lockbox.Plan()
-        pickers = await asyncio.to_thread(_fetch_lock_pickers, names, free_slots)
-        return lockbox.plan(boxes, pickers, bag_pressure.TOWN_RUN_FREE_SLOTS)
-
-    async def _route_lockboxes(self, names: list, locks) -> None:
-        """Write what `lockbox.plan` decided (#88).
-
-        The rogue picks and opens with mod-playerbots' own `unlock items`
-        and `open items`. A box on its way to the rogue moves the way every
-        hand-over does (#193): a give within trade range, a letter when its
-        holder stands at a mailbox, and otherwise it waits and says so.
-        """
-        _log_capped("lockbox", list(locks.notes))
-        if not (locks.unlock or locks.open or locks.hands):
-            return
-        seen = await asyncio.to_thread(_recent_lockbox_keys, LOCKBOX_RETRY_MINUTES)
-        await self._pick_lockboxes(locks, seen)
-        if locks.hands:
-            await self._hand_lockboxes(locks.hands, seen)
-
-    async def _pick_lockboxes(self, locks, seen: set) -> None:
-        """The rogue's `unlock items` and `open items` rows, once per window."""
-        for rogue, command in (
-                [(n, lockbox.UNLOCK_COMMAND) for n in locks.unlock]
-                + [(n, lockbox.OPEN_COMMAND) for n in locks.open]):
-            if (rogue, command) in seen:
-                continue
-            if await asyncio.to_thread(_insert_lockbox_row, rogue, command, "bot"):
-                log.info("lockbox: %s - %s", rogue, command)
-
-    async def _hand_lockboxes(self, hands, seen: set) -> None:
-        """Each box to its rogue by a near give or a letter, or it waits (#193)."""
-        people = sorted({h.holder for h in hands} | {h.taker for h in hands})
-        positions = await asyncio.to_thread(_fetch_positions, people)
-        where = handover.spots(positions)
-        posting = await asyncio.to_thread(
-            _holders_at_mailbox, sorted({h.holder for h in hands}), positions)
-        waits = []
-        for hand in hands:
-            how = handover.verdict(hand.holder, hand.taker, where,
-                                   posting=posting, mailable=True)
-            if not how.verb:
-                waits.append(handover.waiting(hand.box.name, hand.holder,
-                                              hand.taker, how.why))
-                continue
-            command = hand.post_command if how.verb == handover.MAIL else hand.command
-            if (hand.holder, command) in seen:
-                continue
-            if await asyncio.to_thread(_insert_lockbox_row, hand.holder, command,
-                                       how.verb, hand.taker):
-                log.info("lockbox: %s -> %s by %s, %s - %s", hand.holder,
-                         hand.taker, how.verb, hand.box.name, hand.why)
-        _log_capped("lockbox", waits)
 
     async def _hand_gear(self, gear_rows: list, worn: list, names: list,
                          jev_plan=None) -> None:
@@ -8562,6 +8522,147 @@ class Bridge(discord.Client):
             except Exception:
                 log.exception("%s: pass failed for family %s; retrying next "
                               "cycle", what, cohort.key)
+
+    async def _clearance_plan(self, names: list, leader: str,
+                              auction_open: bool = False) -> tuple:
+        """Read the family's gems and recipes and who could use them (#148).
+
+        `clearance.plan` decides. The market is read from the house the
+        leader's team trades at, only when the auction pass can list for this
+        family.
+        """
+        rows = await asyncio.to_thread(_fetch_clearance_items, names)
+        stacks = clearance.stacks_from_rows(rows)
+        if not stacks:
+            return ()
+        skills = await asyncio.to_thread(_fetch_recipe_skills, names)
+        roster = await asyncio.to_thread(_fetch_guild_roster, names)
+        people = _clearance_people(names, skills, roster)
+        kept = _clearance_kept(rows, names, skills)
+        market: dict = {}
+        if auction_open and leader:
+            teams = await asyncio.to_thread(_fetch_teams, [leader])
+            house = auction.TEAM_HOUSE.get(teams.get(leader, ""), 0)
+            listings = await asyncio.to_thread(
+                _fetch_auction_listings, sorted({s.entry for s in stacks}), house)
+            for listing in listings:
+                market[listing.entry] = min(
+                    market.get(listing.entry, listing.per_unit), listing.per_unit)
+        routes = clearance.plan(stacks, people, kept=kept, market=market,
+                                auction_open=auction_open)
+        log.info("clearance: %d gem and recipe stack(s) - %s", len(routes),
+                 ", ".join("%s %d" % pair
+                           for pair in sorted(clearance.counts(routes).items())))
+        return routes
+
+    async def _route_clearance(self, names: list, leader: str, routes,
+                               free_slots: dict, cohort: str | None = None) -> None:
+        """Hand the family and guild routes over, and walk to a mailbox if needed.
+
+        A hand-over moves the way every one does (#193): a give within trade
+        range, a letter from a mailbox, otherwise it waits. When a letter
+        waits on a holder at or below the town-run trigger, the leader is
+        aimed at the nearest mailbox through the town slot, so the stacks
+        that withhold a dungeon run are posted on the walk rather than never.
+        """
+        given = [r for r in routes if r.route in clearance.GIVEN]
+        _log_capped("clearance", [
+            "%s stays with %s: %s" % (r.stack.name, r.stack.holder, r.why)
+            for r in routes if r.route == clearance.WAIT])
+        if not given:
+            return
+        gifts = [
+            guildshare.Gift(
+                holder=r.stack.holder, taker=r.taker, item=r.stack.name,
+                entry=r.stack.entry, count=r.stack.count, guid=r.stack.guid,
+                need=r.why, reason=r.why,
+            )
+            for r in given
+        ]
+        await self._write_guild_gifts(gifts)
+        pressed = {r.stack.holder for r in given
+                   if 0 <= int(free_slots.get(r.stack.holder, -1))
+                   <= bag_pressure.TOWN_RUN_FREE_SLOTS}
+        if pressed and leader:
+            await self._walk_to_post(pressed, leader, cohort)
+
+    async def _walk_to_post(self, pressed: set, leader: str,
+                            cohort: str | None) -> None:
+        """Aim the leader at the nearest mailbox unless every holder is at one."""
+        positions = await asyncio.to_thread(
+            _fetch_positions, sorted(pressed | {leader}))
+        if pressed <= await asyncio.to_thread(
+                _holders_at_mailbox, sorted(pressed), positions):
+            return
+        where = positions.get(leader)
+        spawn = await asyncio.to_thread(_nearest_mailbox, leader)
+        post = travel.mailbox_aim(spawn, where.get("map_id") if where else None)
+        if not post.aim:
+            log.info("clearance: nobody can be sent to a mailbox - %s", post.refused)
+            return
+        aimed = await self._claim_town_slot("clearance", leader, post.aim,
+                                            cohort=cohort)
+        log.info("clearance: %s hold letters for the guild; leader=%s aimed at a "
+                 "mailbox (taken=%s)", ", ".join(sorted(pressed)), leader, aimed)
+
+    async def _lockbox_plan(self, names: list, free_slots: dict):
+        """Read the family's lockboxes and rogues; lockbox.plan routes them."""
+        boxes = lockbox.boxes_from_rows(
+            await asyncio.to_thread(_fetch_lockboxes, names))
+        if not boxes:
+            return lockbox.Plan()
+        pickers = await asyncio.to_thread(_fetch_lock_pickers, names, free_slots)
+        return lockbox.plan(boxes, pickers, bag_pressure.TOWN_RUN_FREE_SLOTS)
+
+    async def _route_lockboxes(self, names: list, locks) -> None:
+        """Write what `lockbox.plan` decided (#88).
+
+        The rogue picks and opens with mod-playerbots' own `unlock items`
+        and `open items`. A box on its way to the rogue moves the way every
+        hand-over does (#193): a give within trade range, a letter when its
+        holder stands at a mailbox, and otherwise it waits and says so.
+        """
+        _log_capped("lockbox", list(locks.notes))
+        if not (locks.unlock or locks.open or locks.hands):
+            return
+        seen = await asyncio.to_thread(_recent_lockbox_keys, LOCKBOX_RETRY_MINUTES)
+        await self._pick_lockboxes(locks, seen)
+        if locks.hands:
+            await self._hand_lockboxes(locks.hands, seen)
+
+    async def _pick_lockboxes(self, locks, seen: set) -> None:
+        """The rogue's `unlock items` and `open items` rows, once per window."""
+        for rogue, command in (
+                [(n, lockbox.UNLOCK_COMMAND) for n in locks.unlock]
+                + [(n, lockbox.OPEN_COMMAND) for n in locks.open]):
+            if (rogue, command) in seen:
+                continue
+            if await asyncio.to_thread(_insert_lockbox_row, rogue, command, "bot"):
+                log.info("lockbox: %s - %s", rogue, command)
+
+    async def _hand_lockboxes(self, hands, seen: set) -> None:
+        """Each box to its rogue by a near give or a letter, or it waits (#193)."""
+        people = sorted({h.holder for h in hands} | {h.taker for h in hands})
+        positions = await asyncio.to_thread(_fetch_positions, people)
+        where = handover.spots(positions)
+        posting = await asyncio.to_thread(
+            _holders_at_mailbox, sorted({h.holder for h in hands}), positions)
+        waits = []
+        for hand in hands:
+            how = handover.verdict(hand.holder, hand.taker, where,
+                                   posting=posting, mailable=True)
+            if not how.verb:
+                waits.append(handover.waiting(hand.box.name, hand.holder,
+                                              hand.taker, how.why))
+                continue
+            command = hand.post_command if how.verb == handover.MAIL else hand.command
+            if (hand.holder, command) in seen:
+                continue
+            if await asyncio.to_thread(_insert_lockbox_row, hand.holder, command,
+                                       how.verb, hand.taker):
+                log.info("lockbox: %s -> %s by %s, %s - %s", hand.holder,
+                         hand.taker, how.verb, hand.box.name, hand.why)
+        _log_capped("lockbox", waits)
 
     async def _economy_for_every_family(self) -> None:
         """The bag and economy passes for every family, not only this one (#150).
@@ -13102,6 +13203,106 @@ _LOCKBOX_SQL = (
     "WHERE bag.guid = ci.guid AND bag.bag = 0 AND bag.slot BETWEEN 19 AND 22)) "
     "AND it.class = 15 AND it.lockid > 0"
 )
+
+# Carried gems and skill-gated recipes (#148, #145): the vendor half's carried
+# scope. `ii.flags` comes raw for the soulbound bit, and `bag_family` rides
+# along for `disposition.profession_keeps`, which spares a gem the family's
+# own trade uses.
+_CLEARANCE_SQL = (
+    "SELECT c.name AS holder, ii.guid AS item_guid, ii.itemEntry AS entry, "
+    "ii.count AS count, ii.flags AS instance_flags, it.name AS name, "
+    "it.class AS item_class, it.Quality AS quality, it.SellPrice AS sell_price, "
+    "it.bonding AS bonding, it.BagFamily AS bag_family, "
+    "it.RequiredSkill AS required_skill, it.RequiredSkillRank AS required_rank "
+    "FROM character_inventory ci "
+    "JOIN characters c ON c.guid = ci.guid "
+    "JOIN item_instance ii ON ii.guid = ci.item "
+    "JOIN acore_world.item_template it ON it.entry = ii.itemEntry "
+    "WHERE c.name IN (%s) AND ((ci.bag = 0 AND ci.slot BETWEEN 23 AND 38) "
+    "OR ci.bag IN (SELECT bag.item FROM character_inventory bag "
+    "WHERE bag.guid = ci.guid AND bag.bag = 0 AND bag.slot BETWEEN 19 AND 22)) "
+    "AND (it.class = 3 OR (it.class = 9 AND it.RequiredSkill > 0))"
+)
+
+
+def _fetch_clearance_items(names: list) -> list:
+    """Rows for clearance.stacks_from_rows; no judgement here."""
+    if not names:
+        return []
+    sql = _CLEARANCE_SQL % ",".join(["%s"] * len(names))
+    with _connect() as conn, conn.cursor() as cur:
+        try:
+            cur.execute(sql, names)
+        except pymysql.err.MySQLError as exc:
+            if exc.args and exc.args[0] in (1054, 1146):
+                log.warning("gem and recipe facts unavailable on this world image")
+                return []
+            raise
+        return [dict(row) for row in cur.fetchall()]
+
+
+def _clearance_sales(routes) -> tuple:
+    """The vendor pass's SellCandidate for every stack `clearance` sends there."""
+    return tuple(
+        bag_pressure.SellCandidate(
+            holder=r.stack.holder, item_guid=r.stack.guid, count=r.stack.count,
+            item=bag_pressure.ItemForSale(quality=r.stack.quality,
+                                          sell_price=r.stack.sell_price))
+        for r in routes if r.route == clearance.VENDOR
+    )
+
+
+def _clearance_listings(routes) -> list:
+    """The auction sale candidates for every stack `clearance` lists (#148)."""
+    return [
+        {
+            "holder": r.stack.holder, "item_guid": r.stack.guid,
+            "entry": r.stack.entry, "label": r.stack.name,
+            "quality": r.stack.quality,
+            "binding": disposition.BIND_NONE, "quest_item": False,
+            "sell_price": r.stack.sell_price,
+        }
+        for r in routes if r.route == clearance.AUCTION
+    ]
+
+
+def _clearance_kept(rows: list, names: list, skills: dict) -> frozenset:
+    """Guids another pass owns: a family member's recipe, the family's own gems.
+
+    A recipe `disposition.learners` names another member of THIS family for
+    is the family recipe hand-off's. A gem `disposition.profession_keeps`
+    protects is stock one of the family's own trades uses.
+    """
+    family = set(names)
+    kept = {
+        guid for guid, who in disposition.learners(
+            rows, _recipe_holders_by_skill(skills)).items()
+        if who in family
+    }
+    worked_by = _worked_by(names)
+    worked = {trade for trades in worked_by.values() for trade in trades}
+    kept |= set(disposition.profession_keeps(
+        [row for row in rows if int(row.get("item_class", 0) or 0) == clearance.GEM_CLASS],
+        worked=worked, named=REAGENT_TRADES,
+    ))
+    return frozenset(kept)
+
+
+def _clearance_people(names: list, skills: dict, roster: list) -> list:
+    """clearance.Person for the family and every guildmate outside it."""
+    family = set(names)
+    people = [
+        clearance.Person(name=name, skills=dict(skills.get(name) or {}),
+                         family=True, online=True)
+        for name in sorted(family)
+    ]
+    people.extend(
+        clearance.Person(name=m.name, skills=dict(m.skills or {}),
+                         family=False, online=bool(m.online))
+        for m in roster if m.name not in family
+    )
+    return people
+
 
 # Class and Lockpicking skill for every family member, 0 without the skill.
 _LOCK_PICKERS_SQL = (
