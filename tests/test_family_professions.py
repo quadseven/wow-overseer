@@ -374,6 +374,8 @@ class TheModeSwitch(unittest.TestCase):
         self.assertEqual(0.7, tradechoice.min_confidence({env: "0.7"}))
         self.assertEqual(1.0, tradechoice.min_confidence({env: "3"}))
         self.assertEqual(0.5, tradechoice.min_confidence({env: "high"}))
+        self.assertEqual(0.5, tradechoice.min_confidence({env: "nan"}))
+        self.assertEqual(0.5, tradechoice.min_confidence({env: "inf"}))
 
 
 def _block(start: str, end: str) -> str:

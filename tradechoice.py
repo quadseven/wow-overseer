@@ -45,6 +45,7 @@ from __future__ import annotations
 
 import itertools
 import json
+import math
 import os
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, replace
@@ -391,6 +392,8 @@ def min_confidence(environ=None) -> float:
     try:
         value = float(env.get(MIN_CONFIDENCE_ENV, DEFAULT_MIN_CONFIDENCE))
     except (TypeError, ValueError):
+        return DEFAULT_MIN_CONFIDENCE
+    if not math.isfinite(value):
         return DEFAULT_MIN_CONFIDENCE
     return min(1.0, max(0.0, value))
 
