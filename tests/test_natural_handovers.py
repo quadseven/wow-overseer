@@ -288,11 +288,16 @@ class TheBridgeFollowsTheWalk(unittest.TestCase):
         self.assertIn("MAIL_WALK_SOURCE", body)
 
     def test_the_follow_is_bounded_and_reads_the_row(self):
+        """The read loop is shared with the guild dues walks (#234), so it
+        lives in `_await_mail_walk` and the follow calls it."""
+        loop = _block("    async def _await_mail_walk(")
+        self.assertIn("guildroute.WALK_FOLLOW_SECONDS", loop)
+        self.assertIn("await asyncio.sleep(MAIL_WALK_POLL_SECONDS)", loop)
+        self.assertIn("_command_answer, row_id", loop)
+        self.assertIn("guildroute.judge_walk(", loop)
+        self.assertNotIn("except Exception", loop)
         body = _block("    async def _follow_mail_walk(")
-        self.assertIn("guildroute.WALK_FOLLOW_SECONDS", body)
-        self.assertIn("await asyncio.sleep(MAIL_WALK_POLL_SECONDS)", body)
-        self.assertIn("_command_answer, row_id", body)
-        self.assertIn("guildroute.judge_walk(", body)
+        self.assertIn("await self._await_mail_walk(run.holder, row_id)", body)
         self.assertIn("except pymysql.err.MySQLError:", body)
         self.assertNotIn("except Exception", body)
 

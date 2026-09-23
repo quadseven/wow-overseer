@@ -43,6 +43,7 @@ import needs
 import partystatus
 import questlog
 import raidgoals
+import guildwork
 import raidlineup
 import raidready
 import recap
@@ -1945,6 +1946,23 @@ _RAID_OBJECT = ("SELECT DISTINCT Item AS item FROM "
                 "acore_world.gameobject_loot_template "
                 "WHERE Reference = 0 AND Item IN ({holes})")
 
+# WHO THE MAINTENANCE MEMBERS POST THEIR DUES TO, AND WHAT THEY HAVE POSTED
+# (#234). The guild master of each guild the roster is in, and every dues
+# letter in the command log. `kind = 'mail'` first so the read rides the
+# (kind, status, updated_at) index rather than scanning the whole queue; the
+# `source` prefix is guildwork's own, which no other pass writes.
+_LINEUP_MASTERS = (
+    "SELECT g.guildid, c.name AS master FROM guild g "
+    "JOIN characters c ON c.guid = g.leaderguid "
+    "WHERE g.guildid IN (SELECT gm2.guildid FROM guild_member gm2 "
+    "JOIN characters c2 ON c2.guid = gm2.guid WHERE c2.name IN ({holes}))"
+)
+_LINEUP_DUES = (
+    "SELECT target_name, command, status, detail, result "
+    "FROM overseer_command WHERE kind = 'mail' AND source LIKE %s "
+    "AND command LIKE 'send %%' ORDER BY id"
+)
+
 
 def _fetch_lineup() -> dict:
     """Every guild the roster is in, with the class of every member.
@@ -1962,9 +1980,18 @@ def _fetch_lineup() -> dict:
         with conn.cursor() as cur:
             rows = _wide_guarded(cur, _LINEUP_GUILD.format(holes=holes),  # noqa: S608
                                  tuple(names), "", "guild_member")
+            masters = _wide_guarded(cur, _LINEUP_MASTERS.format(holes=holes),  # noqa: S608
+                                    tuple(names), "", "guild")
+            dues = _wide_guarded(cur, _LINEUP_DUES, (guildwork.SOURCE + ":%",),
+                                 "", "overseer_command")
     finally:
         conn.close()
-    return {"rows": rows, "roster": names}
+    return {
+        "rows": rows,
+        "roster": names,
+        "masters": {m.get("guildid"): m.get("master") for m in masters},
+        "dues": dues,
+    }
 
 
 def _fetch_raidgoals() -> dict:
@@ -3831,6 +3858,8 @@ class Handler(BaseHTTPRequestHandler):
                     "class_colour": family.class_colour_by_name(class_name),
                 })
             payload = []
+            contributed = guildwork.contributions(fetched.get("dues"))
+            masters = fetched.get("masters") or {}
             for guild in guilds.values():
                 lineup = raidlineup.build_lineup(
                     guild["members"],
@@ -3838,6 +3867,9 @@ class Handler(BaseHTTPRequestHandler):
                                 if m["name"] in roster])
                 lineup["guild"] = guild["name"]
                 lineup["guildid"] = guild["guildid"]
+                # Each maintenance member's job and what it has posted (#234).
+                guildwork.attach_work(
+                    lineup, masters.get(guild["guildid"]) or "", contributed)
                 payload.append(lineup)
             payload.sort(key=lambda g: (-g["counts"]["considered"], g["guild"]))
             self._send(200, "application/json",

@@ -389,6 +389,15 @@ def plan_mail_runs(
     return MailRunPlan(runs=tuple(runs), notes=tuple(notes))
 
 
+def cannot_walk(walker, holder, max_yards=MAIL_RUN_YARDS) -> str:
+    """Why this holder is not walked to a mailbox now, "" when it can be.
+
+    Public for the guild dues pass (`guildwork.py`), which walks the same bots
+    by the same row and must refuse exactly what this refuses.
+    """
+    return _cannot_walk(walker, holder, max_yards)
+
+
 def _cannot_walk(walker, holder, max_yards) -> str:
     """Why this holder is not walked to a mailbox now, "" when it can be."""
     if walker is None or walker.map_id is None:

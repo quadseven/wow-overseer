@@ -2779,6 +2779,7 @@
   .ln-boxhead { font-size:.72rem; letter-spacing:.08em; text-transform:uppercase;
                 color:var(--muted); margin-bottom:.3rem; }
   .ln-note { font-size:.68rem; color:var(--muted); margin:-.15rem 0 .3rem; }
+  .ln-work { font-size:.66rem; color:var(--muted); margin:0 0 .25rem .6rem; }
   .ln-row { display:flex; align-items:baseline; gap:.4rem; padding:.1rem 0;
             font-size:.82rem; }
   .ln-name { flex:1 1 auto; min-width:0; overflow:hidden; text-overflow:ellipsis;
@@ -6644,7 +6645,17 @@ function lnList(title, members, classes, note) {
     n.textContent = note;
     box.appendChild(n);
   }
-  for (const m of members) box.appendChild(lnCard(m, classes));
+  for (const m of members) {
+    box.appendChild(lnCard(m, classes));
+    // A maintenance member's job and what it has posted (#234), written by
+    // guildwork.py. Only maintenance members carry it.
+    if (m.work) {
+      const w = document.createElement("div");
+      w.className = "ln-work";
+      w.textContent = m.work;
+      box.appendChild(w);
+    }
+  }
   return box;
 }
 
@@ -6696,7 +6707,7 @@ function lnRender(payload) {
     const extras = document.createElement("div");
     extras.className = "ln-grid";
     extras.appendChild(lnList("Maintenance", g.maintenance || [], classes,
-                              "bank, crafting, auction - never raids"));
+                              g.dues ? g.dues.said : "never raids"));
     extras.appendChild(lnList("Summoners", g.summoners || [], classes,
                               "warlocks, summoning only"));
     if ((g.surplus || []).length) {

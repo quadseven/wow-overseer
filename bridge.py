@@ -48,6 +48,7 @@ import campaignqueue
 import guildbank
 import guildshare
 import guildroute
+import guildwork
 import handover
 import craft
 import craft_rhythm
@@ -3860,6 +3861,10 @@ class Bridge(discord.Client):
         # and the follow tasks, held so none is collected mid-walk.
         self._mail_walk_unsupported_until: float = 0.0
         self._mail_walk_tasks: set = set()
+        # GUILD DUES WALKS UNDER WAY (#234): maintenance member -> monotonic
+        # start. In memory like the mail runs above; the daily limit is read
+        # from the command log, which a restart does not forget.
+        self._dues_walks: dict = {}
         # Leader snapshot history used only to detect a vendor aim that has
         # stopped moving. The decision itself lives in vendor_stall.py.
         self._vendor_movement: dict[str, vendor_stall.Movement] = {}
@@ -3938,6 +3943,7 @@ class Bridge(discord.Client):
                 self._vendor_loop,
                 self._bank_loop,
                 self._guild_bank_loop,
+                self._guild_dues_loop,
                 self._mail_loop,
                 self._recruit_loop,
                 self._craft_supply_loop,
@@ -7341,27 +7347,37 @@ class Bridge(discord.Client):
         WALK_UNSUPPORTED_SECONDS.
         """
         try:
-            answer = guildroute.WalkAnswer(guildroute.WALKING)
-            deadline = time.monotonic() + guildroute.WALK_FOLLOW_SECONDS
-            while time.monotonic() < deadline:
-                await asyncio.sleep(MAIL_WALK_POLL_SECONDS)
-                row = await asyncio.to_thread(_command_answer, row_id)
-                if row is None:
-                    answer = guildroute.WalkAnswer(
-                        guildroute.ENDED, "walk row %d cannot be read" % row_id
-                    )
-                    break
-                answer = guildroute.judge_walk(
-                    run.holder, row.get("status"), row.get("detail"), row.get("result")
-                )
-                if answer.state != guildroute.WALKING:
-                    break
+            answer = await self._await_mail_walk(run.holder, row_id)
             await self._end_mail_walk(run, row_id, answer)
         except pymysql.err.MySQLError:
             # A database fault ends this follow; the holder keeps its run
             # slot until the run's time is up, so nothing loops. Anything
             # else is a bug and reaches _mail_walk_task_done.
             log.exception("guild route: following walk row %d failed", row_id)
+
+    async def _await_mail_walk(self, holder: str, row_id: int):
+        """Read one walk row until it answers; the last answer read.
+
+        Shared by the gear route's walks and the guild dues walks (#234), so
+        both read a walk row the same way: WALK_FOLLOW_SECONDS at
+        MAIL_WALK_POLL_SECONDS, one read each, judged by guildroute.judge_walk.
+        A database fault is raised to the caller, which owns the log line.
+        """
+        answer = guildroute.WalkAnswer(guildroute.WALKING)
+        deadline = time.monotonic() + guildroute.WALK_FOLLOW_SECONDS
+        while time.monotonic() < deadline:
+            await asyncio.sleep(MAIL_WALK_POLL_SECONDS)
+            row = await asyncio.to_thread(_command_answer, row_id)
+            if row is None:
+                return guildroute.WalkAnswer(
+                    guildroute.ENDED, "walk row %d cannot be read" % row_id
+                )
+            answer = guildroute.judge_walk(
+                holder, row.get("status"), row.get("detail"), row.get("result")
+            )
+            if answer.state != guildroute.WALKING:
+                break
+        return answer
 
     async def _end_mail_walk(self, run, row_id: int, answer) -> None:
         """Post the letter on arrival; otherwise say why the route waits."""
@@ -9865,6 +9881,135 @@ class Bridge(discord.Client):
                 await self._guild_bank_once()
             except Exception:
                 log.exception("guild bank pass failed; retrying next cycle")
+            await asyncio.sleep(cycle)
+
+    async def _guild_dues_once(self) -> None:
+        """One pass of the maintenance members' job: guild dues by post (#234).
+
+        guildwork.py decides who posts, how much and why not; this reads the
+        facts and writes rows. The only rows written are the module's
+        `walk-to-mailbox` walk for a bot off the roster
+        (quadseven/mod-overseer#570) and, once the walk reads 'applied', one
+        `send money:` letter to the guild master. The family's own mail and
+        guild-bank passes take it from there. Never a give, never a GM
+        command.
+
+        THE LINEUP IS THE PAGE'S LINEUP. The maintenance members are picked by
+        the same `raidlineup.build_lineup` over the same members the Lineup
+        page shows, so the page and this pass cannot name different people.
+        """
+        names = sorted((await asyncio.to_thread(_protected_guids)).values())
+        if not names:
+            return
+        rows = await asyncio.to_thread(_fetch_dues_rows, names)
+        members, masters = guildwork.maintenance_from_rows(rows, names)
+        if not members:
+            log.info("guild dues: no family guild has a maintenance member yet")
+            return
+        now = time.monotonic()
+        self._dues_walks = guildroute.live_runs(self._dues_walks, now)
+        posted = await asyncio.to_thread(_dues_recent_holders)
+        busy = set(self._dues_walks) | set(self._guild_mail_runs)
+        # Positions and mailboxes are read only for a member the plan could
+        # start: one mailbox read each, every cycle, is what the gear route
+        # also bounds.
+        candidates = [
+            m.name for m in members
+            if m.online and m.name not in posted and m.name not in busy
+            and guildwork.dues_for(m.money)
+        ]
+        row_walks = now >= self._mail_walk_unsupported_until
+        walkers = (await asyncio.to_thread(_route_walkers, candidates, names, row_walks)
+                   if candidates else {})
+        plan = guildwork.plan_dues(members, masters, walkers, posted, busy)
+        _log_capped("guild dues", plan.notes)
+        started = 0
+        for run in plan.runs:
+            # Reserved before the await and handed back on a refusal, so the
+            # member is never read as free while its walk row is in flight.
+            self._dues_walks[run.holder] = now
+            row_id = await asyncio.to_thread(
+                _insert_dues_row, run.holder, run.walk_command, run.taker,
+                run.walk_source)
+            if not row_id:
+                self._dues_walks.pop(run.holder, None)
+                continue
+            started += 1
+            log.info("guild dues: %s (walk row %d)", run.said, row_id)
+            task = asyncio.create_task(self._follow_dues_walk(run, row_id))
+            self._mail_walk_tasks.add(task)
+            task.add_done_callback(self._mail_walk_task_done)
+        log.info(
+            "guild dues: started %d walk(s); %d of %d maintenance member(s) "
+            "already posted or were asked in the last %d hours",
+            started, len({m.name for m in members} & set(posted)), len(members),
+            guildwork.INTERVAL_HOURS,
+        )
+
+    async def _follow_dues_walk(self, run, row_id: int) -> None:
+        """Post the dues letter the moment the walk arrives, else say why not."""
+        try:
+            answer = await self._await_mail_walk(run.holder, row_id)
+            if answer.state == guildroute.ARRIVED:
+                letter = await asyncio.to_thread(
+                    _insert_dues_row, run.holder, run.command, run.taker, run.source)
+                if letter:
+                    log.info("guild dues: %s; posts %s to %s (letter row %d)",
+                             answer.said, guildwork.gold(run.copper), run.taker, letter)
+                    await self._report_dues_letter(run, letter)
+            elif answer.state == guildroute.UNSUPPORTED:
+                self._mail_walk_unsupported_until = (
+                    time.monotonic() + guildroute.WALK_UNSUPPORTED_SECONDS)
+                log.warning("guild dues: walk row %d: %s", row_id, answer.said)
+            elif answer.state == guildroute.WALKING:
+                log.info("guild dues: walk row %d for %s had no answer in %d "
+                         "seconds; no letter", row_id, run.holder,
+                         int(guildroute.WALK_FOLLOW_SECONDS))
+            else:
+                log.info("guild dues: walk row %d: %s; no letter this time",
+                         row_id, answer.said)
+        except pymysql.err.MySQLError:
+            log.exception("guild dues: following walk row %d failed", row_id)
+        finally:
+            self._dues_walks.pop(run.holder, None)
+
+    async def _report_dues_letter(self, run, row_id: int) -> None:
+        """Log what the world answered the letter with, once, bounded.
+
+        The page reads the same answer from the command log; this line is
+        what makes a dues letter findable in the bridge's own log.
+        """
+        deadline = time.monotonic() + DUES_LETTER_FOLLOW_SECONDS
+        while time.monotonic() < deadline:
+            await asyncio.sleep(MAIL_WALK_POLL_SECONDS)
+            row = await asyncio.to_thread(_command_answer, row_id)
+            status = str((row or {}).get("status") or "")
+            if status in ("", "pending", "claimed"):
+                continue
+            if status == "delivered":
+                log.info("guild dues: %s posted %s to %s (letter row %d)",
+                         run.holder, guildwork.gold(run.copper), run.taker, row_id)
+            else:
+                log.info("guild dues: %s's letter row %d came back %s: %s",
+                         run.holder, row_id, status, (row or {}).get("detail") or "")
+            return
+        log.info("guild dues: letter row %d for %s had no answer in %d seconds",
+                 row_id, run.holder, int(DUES_LETTER_FOLLOW_SECONDS))
+
+    async def _guild_dues_loop(self) -> None:
+        """Guild dues from the maintenance members (#234), on its own clock.
+
+        No `travel_npc` stagger is needed: this pass never writes that column,
+        so it does not compete with the vendor, bank or guild-bank passes.
+        """
+        await self.wait_until_ready()
+        cycle = float(os.environ.get("GUILD_DUES_CYCLE_SECONDS", "900"))
+        await asyncio.sleep(min(cycle, 300.0))
+        while not self.is_closed():
+            try:
+                await self._guild_dues_once()
+            except Exception:
+                log.exception("guild dues pass failed; retrying next cycle")
             await asyncio.sleep(cycle)
 
     async def _mail_once(self) -> None:
@@ -14563,6 +14708,92 @@ def _command_answer(row_id: int):
         return dict(row) if row else None
 
 
+# THE GUILD DUES READS AND ROW (#234). Every member of every guild the family
+# is in, with the guild master's name, because the pass picks the maintenance
+# members out of the same lineup the page draws and posts to the master.
+_DUES_MEMBERS_SQL = (
+    "SELECT g.name AS guild_name, c.name, c.class AS class_id, c.level, "
+    "c.money, c.online, lc.name AS master "
+    "FROM characters c "
+    "JOIN guild_member gm ON gm.guid = c.guid "
+    "JOIN guild g ON g.guildid = gm.guildid "
+    "LEFT JOIN characters lc ON lc.guid = g.leaderguid "
+    "WHERE g.guildid IN (SELECT gm2.guildid FROM guild_member gm2 "
+    "JOIN characters c2 ON c2.guid = gm2.guid WHERE c2.name IN (%s))"
+)
+# A walk that ended without a letter may be tried again after this long, so a
+# member who cannot reach a box is not walked every pass.
+DUES_WALK_RETRY_MINUTES = 60
+# How long the bridge waits to log what the world answered a dues letter with.
+DUES_LETTER_FOLLOW_SECONDS = 60.0
+
+
+def _fetch_dues_rows(family_names: list) -> list:
+    """Rows for guildwork.maintenance_from_rows; no judgement here."""
+    if not family_names:
+        return []
+    sql = _DUES_MEMBERS_SQL % ",".join(["%s"] * len(family_names))
+    with _connect() as conn, conn.cursor() as cur:
+        try:
+            cur.execute(sql, list(family_names))
+        except pymysql.err.MySQLError as exc:
+            if exc.args and exc.args[0] in (1054, 1146):
+                log.warning("guild dues: the guild tables cannot be read")
+                return []
+            raise
+        return [dict(row) for row in cur.fetchall()]
+
+
+def _dues_recent_holders() -> set:
+    """Members who posted, or were asked to, recently enough to wait.
+
+    A letter inside guildwork.INTERVAL_HOURS that the world did not refuse,
+    or a walk inside DUES_WALK_RETRY_MINUTES whatever it answered. A refused
+    letter does not count, so a member whose letter bounced walks again once
+    its walk window has passed.
+    """
+    with _connect() as conn, conn.cursor() as cur:
+        try:
+            cur.execute(
+                "SELECT DISTINCT target_name FROM overseer_command "
+                "WHERE kind = 'mail' AND ("
+                "(source LIKE %s AND status <> 'error' "
+                "AND created_at > NOW() - INTERVAL %s HOUR) OR "
+                "(source LIKE %s AND created_at > NOW() - INTERVAL %s MINUTE))",
+                (guildwork.SOURCE + ":%", int(guildwork.INTERVAL_HOURS),
+                 guildwork.WALK_SOURCE + ":%", int(DUES_WALK_RETRY_MINUTES)),
+            )
+        except pymysql.err.MySQLError as exc:
+            if exc.args and exc.args[0] in (1054, 1146):
+                return set()
+            raise
+        return {str(row["target_name"]) for row in cur.fetchall()}
+
+
+def _insert_dues_row(holder: str, command: str, taker: str, source: str) -> int:
+    """One `kind='mail'` row for the dues pass: a walk or a letter (#234).
+
+    The guild master in target_arg: a `send` needs it, and on a walk row it
+    tells an operator reading the queue who the walk is for (the module
+    ignores it there). Guarded on 1146 and 1265 like `_insert_mail_walk`.
+    """
+    with _connect() as conn, conn.cursor() as cur:
+        try:
+            cur.execute(
+                "INSERT INTO overseer_command "
+                "(target_name, command, kind, target_arg, source) "
+                "VALUES (%s, %s, 'mail', %s, %s)",
+                (holder, command, taker, source),
+            )
+        except pymysql.err.MySQLError as exc:
+            if exc.args and exc.args[0] in (1146, 1265):
+                log.warning("guild dues: cannot queue mail for %s on this "
+                            "worldserver image", holder)
+                return 0
+            raise
+        return cur.lastrowid or 0
+
+
 def _recent_route_keys(minutes: int) -> set:
     """(holder, command) pairs this pass already wrote inside the window.
 
@@ -18028,6 +18259,7 @@ class HeadlessBridge(Bridge):
                 self._vendor_loop,
                 self._bank_loop,
                 self._guild_bank_loop,
+                self._guild_dues_loop,
                 self._mail_loop,
                 self._recruit_loop,
                 self._craft_supply_loop,
