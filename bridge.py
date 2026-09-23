@@ -8503,10 +8503,18 @@ class Bridge(discord.Client):
         routes = jev_keep.routes_from_plans(clear, locks)
 
         async def run() -> None:
-            judgments = await self._jev_keep_once(
-                names, leader, pending, routes, free_slots, auction_open, rule)
-            log.info("%s", jev_keep.summary(judgments, len(kept), limit, interval))
-            await self._jev_record(judgments, ",".join(names))
+            try:
+                judgments = await self._jev_keep_once(
+                    names, leader, pending, routes, free_slots, auction_open,
+                    rule)
+                log.info("%s", jev_keep.summary(judgments, len(kept), limit,
+                                                interval))
+                await self._jev_record(judgments, ",".join(names))
+            except Exception:
+                # Named here, not only by _jev_task_done's generic line, so a
+                # failed item_keep pass says which pass and which family.
+                log.exception("jev-keep: pass for %s failed; the heuristic is "
+                              "unaffected", ",".join(names))
 
         task = asyncio.create_task(run())
         self._jev_tasks[key] = task
