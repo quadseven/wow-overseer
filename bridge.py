@@ -7801,7 +7801,7 @@ class Bridge(discord.Client):
         own = sorted((await asyncio.to_thread(_protected_guids)).values())
         if own:
             try:
-                await self._buy_bags_once(own)
+                await self._bag_purchase_and_trip(own)
             except Exception:
                 log.exception("bags: purchase pass failed; retrying next cycle")
         cohorts = await asyncio.to_thread(_other_cohorts, own)
@@ -7809,7 +7809,8 @@ class Bridge(discord.Client):
             for what, step in (
                     ("vendor", lambda c=cohort: self._vendor_once(c)),
                     ("bag hand-over", lambda c=cohort: self._hand_bags_once(list(c.names))),
-                    ("bag purchase", lambda c=cohort: self._buy_bags_once(list(c.names))),
+                    ("bag purchase",
+                     lambda c=cohort: self._bag_purchase_and_trip(list(c.names), c)),
             ):
                 try:
                     await step()
@@ -7817,7 +7818,17 @@ class Bridge(discord.Client):
                     log.exception("economy: %s pass failed for family %s; "
                                   "retrying next cycle", what, cohort.key)
 
-    async def _buy_bags_once(self, names: list) -> None:
+    async def _bag_purchase_and_trip(self, names: list, cohort=None) -> None:
+        """Buy where the family stands, then walk to a bag vendor if needed (#206).
+
+        The purchase runs first, so a member who can buy here buys here and is
+        not counted as a reason to walk. What is left over - members whose own
+        reach stocks no bag - is what `_aim_at_bag_vendor` may take a trip for.
+        """
+        needy = await self._buy_bags_once(names)
+        await self._aim_at_bag_vendor(needy, names, cohort)
+
+    async def _buy_bags_once(self, names: list) -> tuple:
         """Buy the cheapest bag a vendor in reach stocks, for anyone short (#150).
 
         `bag_pressure.bag_purchases` decides; this reads and writes. A
@@ -7825,8 +7836,10 @@ class Bridge(discord.Client):
         is written only for a character whose OWN vendors in reach stock the
         bag, because DoBuy refuses on the buyer's range. Right behind it goes
         one kind='bot' `e` row that puts the new bag into the empty position.
-        No travel aim is written: the family is at a counter because the
-        vendor pass walked it there.
+        No travel aim is written here; `_aim_at_bag_vendor` owns that (#206).
+
+        Returns the BagBuyers who want a bag and whose own reach stocks none,
+        which is the question a walk to another vendor answers.
         """
         members = bag_upgrade.members_from_rows(
             await asyncio.to_thread(_fetch_bag_state, names), names)
@@ -7835,30 +7848,19 @@ class Bridge(discord.Client):
         if not wanting:
             log.info("bags: nobody in %s has an empty bag position the "
                      "family's own spare bags will not fill", names)
-            return
-        towns = {}
-        for name in wanting:
-            towns[name] = await asyncio.to_thread(_fetch_town, name)
-        at_counter = [name for name in wanting if towns[name].vendor]
-        if not at_counter:
+            return ()
+        everyone, at_vendor = await asyncio.to_thread(
+            _bag_buyers, wanting, open_positions)
+        buyers = [b for b in everyone if b.name in at_vendor]
+        stocked = sorted({entry for b in buyers for entry in b.stocks})
+        offers = (await asyncio.to_thread(_fetch_bag_offers, stocked)
+                  if stocked else [])
+        bagged = {offer.entry for offer in offers}
+        needy = tuple(b for b in everyone if not (b.stocks & bagged))
+        if not buyers:
             log.info("bags: %d want a bag (%s) and none is at a vendor",
                      len(wanting), ", ".join(wanting))
-            return
-        stocked = sorted({entry for name in at_counter
-                          for entry in towns[name].stocks})
-        offers = await asyncio.to_thread(_fetch_bag_offers, stocked)
-        purses = await asyncio.to_thread(_fetch_purses, at_counter)
-        free = await asyncio.to_thread(_fetch_free_slots, at_counter)
-        buyers = [
-            bag_pressure.BagBuyer(
-                name=name, level=purses.get(name, (0, 0))[0],
-                money=purses.get(name, (0, 0))[1],
-                open_positions=open_positions[name],
-                free_slots=int(free.get(name, 0)),
-                stocks=frozenset(towns[name].stocks),
-            )
-            for name in at_counter if name in purses
-        ]
+            return needy
         purchases, notes = bag_pressure.bag_purchases(buyers, offers)
         for note in notes:
             log.info("bags: %s", note)
@@ -7880,6 +7882,44 @@ class Bridge(discord.Client):
                      purchase.price, purchase.why)
         log.info("bags: %d at a vendor wanted a bag, %d purchase(s) queued, "
                  "%d held back", len(buyers), bought, len(notes))
+        return needy
+
+    async def _aim_at_bag_vendor(self, needy, names: list, cohort=None) -> None:
+        """Walk the family to the nearest vendor that stocks a bag (#206).
+
+        `bag_pressure.bag_vendor_trip` decides; this reads and writes. The aim
+        is the vendor's bare creature entry on the leader, through the town
+        slot, so it refines a standing `vendor` errand rather than fighting it
+        (`_retaskable_from`) and never takes the column from a pass the slot
+        says is ahead. mod-overseer walks the leader there, holds it at the
+        counter, and releases the column; `_buy_bags_once` buys on the next
+        cycle because the buyers now stand at a counter that stocks a bag.
+        """
+        if not needy:
+            return
+        if cohort is None:
+            leader = await asyncio.to_thread(_head_now)
+        else:
+            leader = cohort.leader
+        standing = bag_pressure.standing_from_rows(
+            await asyncio.to_thread(_fetch_bag_trip_facts, names))
+        in_run = await self._mid_run(names)
+        here = standing.get(leader)
+        vendors = ()
+        if here is not None and here.map_id is not None:
+            vendors = bag_pressure.bag_vendors_from_rows(
+                await asyncio.to_thread(_fetch_bag_vendors, here))
+        trip = bag_pressure.bag_vendor_trip(
+            needy, vendors, leader=leader, standing=standing, in_run=in_run)
+        if not trip.target:
+            log.info("bags: no bag vendor trip - %s", trip.why_not)
+            return
+        aimed = await self._claim_town_slot(
+            "bags", leader, trip.target,
+            cohort=getattr(cohort, "key", None),
+        )
+        log.info("bags: %s (aim taken=%s)",
+                 bag_pressure.bag_trip_report(trip, leader), aimed)
 
     async def _settle_bank_errand(self, names: list, leader: str,
                                   moves_unasked: bool) -> str:
@@ -12641,6 +12681,116 @@ def _fetch_bag_offers(entries: list) -> list:
                     entry=int(row["entry"]), name=str(row["name"]),
                     slots=int(row["slots"]), price=int(row["price"]))
                 for row in cur.fetchall()]
+
+
+# The general bags every vendor near the leader stocks, one row per (vendor,
+# bag), nearest spawn per vendor (#206). Read from the world, never authored:
+# the same join `_REAGENT_VENDOR_SQL` makes, narrowed to the general bags
+# `_BAG_OFFERS_SQL` buys, and boxed to the trip cap so the whole map is not
+# scanned. `cr.id` is the spawn's template on this world, as there.
+_BAG_VENDOR_SQL = (
+    "SELECT cr.id AS entry, ct.name AS name, ct.faction AS faction, "
+    "cr.map AS map_id, "
+    "MIN(SQRT(POW(cr.position_x - %s, 2) + POW(cr.position_y - %s, 2))) AS yards, "
+    "it.entry AS item, it.name AS item_name, it.ContainerSlots AS slots, "
+    "it.BuyPrice AS price "
+    "FROM acore_world.npc_vendor nv "
+    "JOIN acore_world.creature cr ON cr.id = nv.entry "
+    "JOIN acore_world.creature_template ct ON ct.entry = cr.id "
+    "JOIN acore_world.item_template it ON it.entry = nv.item "
+    "WHERE cr.map = %s AND (ct.npcflag & %s) <> 0 "
+    "AND it.class = 1 AND it.subclass = 0 "
+    "AND it.ContainerSlots > 0 AND it.BuyPrice > 0 "
+    "AND ABS(cr.position_x - %s) <= %s AND ABS(cr.position_y - %s) <= %s "
+    "GROUP BY cr.id, ct.name, ct.faction, cr.map, it.entry, it.name, "
+    "it.ContainerSlots, it.BuyPrice "
+    "HAVING yards <= %s ORDER BY yards, entry, price"
+)
+
+
+def _fetch_bag_vendors(here) -> list:
+    """Rows for bag_pressure.bag_vendors_from_rows, measured from `here`.
+
+    `here` is the leader's bag_pressure.Standing. Degrades to no rows on
+    1054/1146, which walks nobody anywhere.
+    """
+    cap = float(bag_pressure.BAG_VENDOR_MAX_YARDS)
+    x, y = float(here.x), float(here.y)
+    with _connect() as conn, conn.cursor() as cur:
+        try:
+            cur.execute(
+                _BAG_VENDOR_SQL,
+                (x, y, int(here.map_id), towntrip.NPC_FLAG_VENDOR,
+                 x, cap, y, cap, cap),
+            )
+        except pymysql.err.MySQLError as exc:
+            if exc.args and exc.args[0] in (1054, 1146):
+                log.warning("bags: this world image cannot say which vendors "
+                            "stock a bag, so nobody is walked to one")
+                return []
+            raise
+        return [dict(row) for row in cur.fetchall()]
+
+
+# Where each member stands, whether it is fighting, and where it is bound
+# (#206). Two statements, because overseer_roster.name and characters.name
+# carry different collations on this realm and cannot be compared directly.
+_BAG_TRIP_JOBS_SQL = (
+    "SELECT name, job FROM overseer_roster WHERE name IN (%s)"
+)
+_BAG_TRIP_PLACES_SQL = (
+    "SELECT c.name AS name, h.mapId AS home_map, h.posX AS home_x, "
+    "h.posY AS home_y, s.map_id AS map_id, s.pos_x AS pos_x, "
+    "s.pos_y AS pos_y, s.in_combat AS in_combat "
+    "FROM characters c "
+    "LEFT JOIN character_homebind h ON h.guid = c.guid "
+    "LEFT JOIN overseer_snapshot s ON s.name = c.name "
+    "AND s.updated_at > NOW() - INTERVAL 60 SECOND "
+    "WHERE c.name IN (%s)"
+)
+
+
+def _fetch_bag_trip_facts(names: list) -> list:
+    """Rows for bag_pressure.standing_from_rows; no judgement here."""
+    if not names:
+        return []
+    marks = ",".join(["%s"] * len(names))
+    with _connect() as conn, conn.cursor() as cur:
+        try:
+            cur.execute(_BAG_TRIP_JOBS_SQL % marks, names)
+            jobs_by_name = {row["name"]: row["job"] for row in cur.fetchall()}
+            cur.execute(_BAG_TRIP_PLACES_SQL % marks, names)
+            rows = [dict(row) for row in cur.fetchall()]
+        except pymysql.err.MySQLError as exc:
+            if exc.args and exc.args[0] in (1054, 1146):
+                log.warning("bags: cannot read where the family stands or is "
+                            "bound, so nobody is walked to a bag vendor")
+                return []
+            raise
+    for row in rows:
+        row["job"] = jobs_by_name.get(row["name"], "")
+    return rows
+
+
+def _bag_buyers(wanting: list, open_positions: dict) -> tuple:
+    """(every wanting BagBuyer, the names standing at a vendor) (#150, #206).
+
+    `stocks` is what this buyer's own reach sells, because DoBuy answers on
+    the buyer's range. A buyer with no saved purse row is left out.
+    """
+    towns = {name: _fetch_town(name) for name in wanting}
+    purses = _fetch_purses(wanting)
+    free = _fetch_free_slots(wanting)
+    everyone = [
+        bag_pressure.BagBuyer(
+            name=name, level=purses[name][0], money=purses[name][1],
+            open_positions=open_positions[name],
+            free_slots=int(free.get(name, 0)),
+            stocks=frozenset(towns[name].stocks),
+        )
+        for name in wanting if name in purses
+    ]
+    return everyone, {name for name in wanting if towns[name].vendor}
 
 
 def _insert_bag_equip(purchase) -> int:
