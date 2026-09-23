@@ -52,6 +52,7 @@ import guildroute
 import guildwork
 import handover
 import craft
+import crafters
 import craft_rhythm
 import gatheraim
 import gatherband
@@ -3930,6 +3931,12 @@ class Bridge(discord.Client):
         # was last asked about that stack, so each is asked at most once per
         # JEV_ITEM_KEEP_INTERVAL_MINUTES. In memory: a restart asks again.
         self._jev_keep_asked: dict = {}
+        # THE DESIGNATED CRAFTERS (#248): per family, the recipe guids the
+        # register routes to somebody, what was last logged, and which guild
+        # crafters are on a mailbox walk right now.
+        self._crafter_routed: dict = {}
+        self._crafter_said: dict = {}
+        self._crafter_walks: dict = {}
         # THE ACTIVITY CHOICE (#216). Per family key: what the last cycle saw
         # (breakpoint marks, when Jev was last asked, since when the family has
         # been on its job) and the interlude Jev chose, if one is running. In
@@ -3969,6 +3976,7 @@ class Bridge(discord.Client):
                 self._bank_loop,
                 self._guild_bank_loop,
                 self._guild_dues_loop,
+                self._crafter_mail_loop,
                 self._mail_loop,
                 self._recruit_loop,
                 self._craft_supply_loop,
@@ -8782,10 +8790,14 @@ class Bridge(discord.Client):
                     _fetch_auction_listings, entries, house):
                 market[listing.entry] = min(
                     market.get(listing.entry, listing.per_unit), listing.per_unit)
+        # THE DESIGNATED CRAFTERS (#248): a recipe's `give:` options follow
+        # the register's ranking, and its facts name the trade's crafters.
+        crafting = await asyncio.to_thread(_crafter_plan, names)
         asks = jev_keep.asks(
             pending, templates=templates, holders=holders,
             people=_clearance_people(names, skills, roster), routes=routes,
-            market=market, reagent_trades=REAGENT_TRADES, mode=rule.mode)
+            market=market, reagent_trades=REAGENT_TRADES, mode=rule.mode,
+            takers=crafting.takers, register=crafting.register)
         return await jev_keep.shadow_pass(self._jev, asks, rule)
 
     def _jev_hold(self, ask, who: str) -> None:
@@ -8871,8 +8883,16 @@ class Bridge(discord.Client):
         POSITIONS ARE READ HERE rather than passed down, the same choice
         `_hand_gear` makes and for the same reason: this pass now runs on
         cycles that return before the vendor half ever reads them.
+
+        THE DESIGNATED CRAFTERS COME FIRST (#248). A guid the register sends
+        to a family member or guild crafter who learns it is delivered by the
+        clearance route, which ran just before this on the same cycle and
+        recorded those guids; this pass leaves them alone.
         """
+        routed = getattr(self, "_crafter_routed", {}).get(
+            tuple(sorted(names)), frozenset())
         rows = await asyncio.to_thread(_fetch_surplus_recipes, names)
+        rows = [r for r in rows if int(r.get("item_guid") or 0) not in routed]
         if not rows:
             log.info("recipes: nobody is carrying a recipe with a skill gate")
             return
@@ -8955,6 +8975,11 @@ class Bridge(discord.Client):
         """
         rows = await asyncio.to_thread(_fetch_clearance_items, names)
         stacks = clearance.stacks_from_rows(rows)
+        # THE DESIGNATED CRAFTERS PLACE EVERY RECIPE FIRST (#248), and the
+        # family recipe hand-off leaves what they route to `_route_clearance`.
+        crafting = await asyncio.to_thread(_crafter_plan, names)
+        self._crafter_routed[tuple(sorted(names))] = frozenset(crafting.routed)
+        self._say_crafter_plan(names, crafting)
         if not stacks:
             return ()
         skills = await asyncio.to_thread(_fetch_recipe_skills, names)
@@ -8971,11 +8996,30 @@ class Bridge(discord.Client):
                 market[listing.entry] = min(
                     market.get(listing.entry, listing.per_unit), listing.per_unit)
         routes = clearance.plan(stacks, people, kept=kept, market=market,
-                                auction_open=auction_open)
+                                auction_open=auction_open, picks=crafting.picks)
         log.info("clearance: %d gem and recipe stack(s) - %s", len(routes),
                  ", ".join("%s %d" % pair
                            for pair in sorted(clearance.counts(routes).items())))
         return routes
+
+    def _say_crafter_plan(self, names: list, crafting) -> None:
+        """Log the register and the recipe routes when they change (#248).
+
+        The clearance pass runs every few minutes; a line per recipe each time
+        would bury the log, so the lines are written only when what they say
+        differs from the last time this family's were written.
+        """
+        key = tuple(sorted(names))
+        lines = ["register %s" % line
+                 for line in crafters.register_lines(crafting.register)]
+        lines += [p.said for _, p in sorted(crafting.picks.items())]
+        signature = hash(tuple(lines))
+        if self._crafter_said.get(key) == signature:
+            return
+        self._crafter_said[key] = signature
+        log.info("%s", crafters.summary(crafting.picks))
+        for line in lines:
+            log.info("%s %s", crafters.LOG_PREFIX, line)
 
     async def _route_clearance(self, names: list, leader: str, routes,
                                free_slots: dict, cohort: str | None = None) -> None:
@@ -10286,6 +10330,145 @@ class Bridge(discord.Client):
             return
         log.info("guild dues: letter row %d for %s had no answer in %d seconds",
                  row_id, run.holder, int(DUES_LETTER_FOLLOW_SECONDS))
+
+    async def _crafter_mail_once(self) -> None:
+        """Take a designated crafter's recipe letters out, and learn them (#248).
+
+        A recipe the clearance route posts to a guild crafter lands in a
+        mailbox nothing read: measured on dev 2026-09-23, recipes mailed to
+        guild bots at 14:13 were still unopened hours later. For each family
+        this reads the letters family members sent to the guild's designated
+        crafters, and `crafters.visits` picks who walks. The rows are the
+        module's own, the ones a player's actions map to: a `walk-to-mailbox`
+        row (quadseven/mod-overseer#570), a `take-item` row per recipe, then
+        a `use guid:` row that learns it (kind='cast', mod-overseer#467).
+        Never a give, never a GM command.
+        """
+        own = sorted((await asyncio.to_thread(_protected_guids)).values())
+        families = [own] if own else []
+        families += [list(c.names)
+                     for c in await asyncio.to_thread(_other_cohorts, own)]
+        now = time.monotonic()
+        self._crafter_walks = guildroute.live_runs(self._crafter_walks, now)
+        for names in families:
+            try:
+                await self._crafter_mail_for(names, now)
+            except Exception:
+                log.exception("%s pickup pass failed for %s; retrying next "
+                              "cycle", crafters.LOG_PREFIX, ",".join(names))
+
+    async def _crafter_mail_for(self, names: list, now: float) -> None:
+        """One family's part of `_crafter_mail_once`."""
+        crafting = await asyncio.to_thread(_crafter_plan, names)
+        people = {p.name: p for p in crafting.people}
+        designated = {
+            seat.name: people[seat.name]
+            for seats in crafting.register.values() for seat in seats
+            if seat.seat == crafters.DESIGNATED and seat.name in people
+        }
+        if not designated:
+            return
+        rows = await asyncio.to_thread(
+            _fetch_crafter_letters, sorted(designated), names)
+        letters = [x for x in map(crafters.letter_from_row, rows) if x]
+        if not letters:
+            return
+        known = crafters.known_from_rows(
+            await asyncio.to_thread(
+                _fetch_crafter_known, sorted({x.receiver for x in letters}),
+                [x.recipe.spell for x in letters]),
+            await asyncio.to_thread(_fetch_recipe_verdicts),
+        )
+        receivers = sorted({x.receiver for x in letters})
+        free_slots = await asyncio.to_thread(_fetch_free_slots, receivers)
+        busy = (set(self._crafter_walks) | set(self._guild_mail_runs)
+                | set(self._dues_walks))
+        plan, notes = crafters.visits(letters, designated, known,
+                                      frozenset(busy), free_slots)
+        row_walks = now >= self._mail_walk_unsupported_until
+        walkers = (await asyncio.to_thread(
+            _route_walkers, [v.receiver for v in plan], names, row_walks)
+            if plan else {})
+        for visit in plan:
+            refused = crafters.walk_refusal(visit.receiver,
+                                            walkers.get(visit.receiver))
+            if refused:
+                notes.append(refused)
+                continue
+            self._crafter_walks[visit.receiver] = now
+            row_id = await asyncio.to_thread(
+                _insert_crafter_row, visit.receiver, visit.walk_command, "mail",
+                "%s:%s" % (crafters.WALK_SOURCE, visit.receiver))
+            if not row_id:
+                self._crafter_walks.pop(visit.receiver, None)
+                continue
+            log.info("%s (walk row %d)", visit.said, row_id)
+            task = asyncio.create_task(self._follow_crafter_visit(visit, row_id))
+            self._mail_walk_tasks.add(task)
+            task.add_done_callback(self._mail_walk_task_done)
+        _log_capped(crafters.LOG_PREFIX.rstrip(":"), notes)
+
+    async def _follow_crafter_visit(self, visit, row_id: int) -> None:
+        """Take each recipe out once the walk arrives, then learn it."""
+        try:
+            answer = await self._await_mail_walk(visit.receiver, row_id)
+            if answer.state == guildroute.UNSUPPORTED:
+                self._mail_walk_unsupported_until = (
+                    time.monotonic() + guildroute.WALK_UNSUPPORTED_SECONDS)
+            if answer.state != guildroute.ARRIVED:
+                log.info("%s walk row %d for %s: %s; the recipes stay in the "
+                         "mailbox", crafters.LOG_PREFIX, row_id, visit.receiver,
+                         answer.said or answer.state)
+                return
+            for take in visit.takes:
+                await self._take_and_learn(take)
+        except pymysql.err.MySQLError:
+            log.exception("%s following walk row %d failed",
+                          crafters.LOG_PREFIX, row_id)
+        finally:
+            self._crafter_walks.pop(visit.receiver, None)
+
+    async def _take_and_learn(self, take) -> None:
+        """One `take-item` row, and on delivery one `use guid:` row."""
+        row_id = await asyncio.to_thread(
+            _insert_crafter_row, take.receiver, take.take_command, "mail",
+            "%s:%s" % (crafters.TAKE_SOURCE, take.receiver))
+        if not row_id:
+            return
+        status, detail = await self._crafter_row_answer(row_id)
+        if status != "delivered":
+            log.info("%s %s could not take %s out (row %d, %s: %s)",
+                     crafters.LOG_PREFIX, take.receiver, take.name, row_id,
+                     status or "no answer", detail)
+            return
+        learn = await asyncio.to_thread(_insert_learn, take.receiver,
+                                        take.use_command)
+        log.info("%s %s took %s out of the mailbox and learns it (use row %d)",
+                 crafters.LOG_PREFIX, take.receiver, take.name, learn)
+
+    async def _crafter_row_answer(self, row_id: int) -> tuple:
+        """(status, detail) of one row once answered, bounded; ('', '') if not."""
+        deadline = time.monotonic() + DUES_LETTER_FOLLOW_SECONDS
+        while time.monotonic() < deadline:
+            await asyncio.sleep(MAIL_WALK_POLL_SECONDS)
+            row = await asyncio.to_thread(_command_answer, row_id)
+            status = str((row or {}).get("status") or "")
+            if status not in ("", "pending", "claimed", "verifying"):
+                return status, str((row or {}).get("detail") or "")
+        return "", ""
+
+    async def _crafter_mail_loop(self) -> None:
+        """The designated crafters' recipe pickup (#248), on its own clock."""
+        await self.wait_until_ready()
+        cycle = float(os.environ.get("CRAFTER_MAIL_CYCLE_SECONDS", "600"))
+        await asyncio.sleep(min(cycle, 360.0))
+        while not self.is_closed():
+            try:
+                await self._crafter_mail_once()
+            except Exception:
+                log.exception("%s pickup pass failed; retrying next cycle",
+                              crafters.LOG_PREFIX)
+            await asyncio.sleep(cycle)
 
     async def _guild_dues_loop(self) -> None:
         """Guild dues from the maintenance members (#234), on its own clock.
@@ -14251,6 +14434,206 @@ def _clearance_people(names: list, skills: dict, roster: list) -> list:
     return people
 
 
+
+# THE DESIGNATED CRAFTERS (#248). Every recipe the family holds, in the bags,
+# the personal bank or the guild bank, with the skill gate and the spell it
+# teaches. A bound copy is left out: only its holder can learn it.
+_CRAFTER_RECIPES_SQL = (
+    "SELECT c.name AS holder, ii.guid AS item_guid, ii.itemEntry AS entry, "
+    "it.name AS name, it.RequiredSkill AS required_skill, "
+    "it.RequiredSkillRank AS required_rank, it.spellid_2 AS recipe_spell, "
+    "CASE WHEN (ci.bag = 0 AND ci.slot BETWEEN 23 AND 38) "
+    "OR ci.bag IN (SELECT bag.item FROM character_inventory bag "
+    "WHERE bag.guid = ci.guid AND bag.bag = 0 AND bag.slot BETWEEN 19 AND 22) "
+    "THEN 'bags' "
+    "WHEN (ci.bag = 0 AND ci.slot BETWEEN 39 AND 66) "
+    "OR ci.bag IN (SELECT bag.item FROM character_inventory bag "
+    "WHERE bag.guid = ci.guid AND bag.bag = 0 AND bag.slot BETWEEN 67 AND 73) "
+    "THEN 'bank' ELSE '' END AS location "
+    "FROM character_inventory ci "
+    "JOIN characters c ON c.guid = ci.guid "
+    "JOIN item_instance ii ON ii.guid = ci.item "
+    "JOIN acore_world.item_template it ON it.entry = ii.itemEntry "
+    "WHERE c.name IN (%s) AND it.class = 9 AND it.RequiredSkill > 0 "
+    "AND it.bonding NOT IN (1, 4) AND (ii.flags & 1) = 0"
+)
+_CRAFTER_GUILD_BANK_SQL = (
+    "SELECT 'guild bank' AS holder, ii.guid AS item_guid, "
+    "ii.itemEntry AS entry, it.name AS name, "
+    "it.RequiredSkill AS required_skill, it.RequiredSkillRank AS required_rank, "
+    "it.spellid_2 AS recipe_spell, 'guild bank' AS location "
+    "FROM guild_bank_item gbi "
+    "JOIN item_instance ii ON ii.guid = gbi.item_guid "
+    "JOIN acore_world.item_template it ON it.entry = ii.itemEntry "
+    "WHERE gbi.guildid IN (SELECT gm.guildid FROM guild_member gm "
+    "JOIN characters c ON c.guid = gm.guid WHERE c.name IN (%s)) "
+    "AND it.class = 9 AND it.RequiredSkill > 0"
+)
+# Which of those recipes' spells each guild member already knows. A row
+# proves the spell is known; a missing row proves nothing (crafters.py).
+_CRAFTER_KNOWN_SQL = (
+    "SELECT c.name AS name, cs.spell AS spell FROM character_spell cs "
+    "JOIN characters c ON c.guid = cs.guid "
+    "WHERE c.name IN (%s) AND cs.spell IN (%s)"
+)
+
+
+def _fetch_crafter_recipes(names: list) -> list:
+    """crafters.Recipe for every unbound recipe the family holds (#248)."""
+    if not names:
+        return []
+    marks = ",".join(["%s"] * len(names))
+    rows = []
+    with _connect() as conn, conn.cursor() as cur:
+        for sql in (_CRAFTER_RECIPES_SQL, _CRAFTER_GUILD_BANK_SQL):
+            try:
+                cur.execute(sql % marks, list(names))  # noqa: S608 - placeholders from a COUNT
+            except pymysql.err.MySQLError as exc:
+                if exc.args and exc.args[0] in (1054, 1146):
+                    log.warning("crafter-route: a recipe read is unavailable here")
+                    continue
+                raise
+            rows.extend(dict(row) for row in cur.fetchall())
+    out = []
+    for row in rows:
+        recipe = crafters.recipe_from_row(row)
+        if recipe is not None and recipe.where:
+            out.append(recipe)
+    return out
+
+
+def _fetch_crafter_known(names: list, spells: list) -> list:
+    """(name, spell) rows from character_spell for these names and spells."""
+    spells = sorted({int(s) for s in spells if int(s) > 0})
+    if not names or not spells:
+        return []
+    sql = _CRAFTER_KNOWN_SQL % (
+        ",".join(["%s"] * len(names)), ",".join(["%s"] * len(spells)))
+    with _connect() as conn, conn.cursor() as cur:
+        try:
+            cur.execute(sql, list(names) + spells)  # noqa: S608 - placeholders from a COUNT
+        except pymysql.err.MySQLError as exc:
+            if exc.args and exc.args[0] in (1054, 1146):
+                return []
+            raise
+        return [dict(row) for row in cur.fetchall()]
+
+
+def _crafter_people(names: list, skills: dict, roster: list) -> list:
+    """crafters.Person for the family and every guildmate outside it."""
+    family = set(names)
+    levels = {m.name: int(m.level or 0) for m in roster}
+    people = [
+        crafters.Person(name=name, skills=dict(skills.get(name) or {}),
+                        level=levels.get(name, 0), family=True, online=True)
+        for name in sorted(family)
+    ]
+    people.extend(
+        crafters.Person(name=m.name, skills=dict(m.skills or {}),
+                        level=int(m.level or 0), family=False,
+                        online=bool(m.online))
+        for m in roster if m.name not in family
+    )
+    return people
+
+
+@dataclasses.dataclass(frozen=True)
+class CrafterPlan:
+    """The register, the people it was built from, and every recipe's route."""
+
+    register: dict
+    people: tuple
+    known: object
+    picks: dict
+    takers: dict
+
+    @property
+    def routed(self) -> dict:
+        """guid -> taker for every recipe going to somebody but its holder."""
+        return {g: p.taker for g, p in self.picks.items() if p.routed}
+
+
+def _crafter_plan(names: list) -> CrafterPlan:
+    """Read the family's recipes and guild, then route every recipe (#248).
+
+    Blocking: callers run it through `asyncio.to_thread`. crafters.py decides
+    everything; this only reads.
+    """
+    skills = _fetch_recipe_skills(names)
+    roster = _fetch_guild_roster(names)
+    people = _crafter_people(names, skills, roster)
+    reg = crafters.register(people, crafters.per_trade(os.environ))
+    recipes = _fetch_crafter_recipes(names)
+    known = crafters.known_from_rows(
+        _fetch_crafter_known([p.name for p in people],
+                             [r.spell for r in recipes]),
+        _fetch_recipe_verdicts(),
+    )
+    gap = crafters.soon_gap(os.environ)
+    picks = crafters.route(recipes, reg, people, known, gap)
+    takers = {
+        int(r.guid): crafters.candidates(r, reg, people, known, gap)
+        for r in recipes
+    }
+    return CrafterPlan(reg, tuple(people), known, picks, takers)
+
+
+# Recipe letters family members posted to the designated crafters (#248).
+# `delivered` is whether the letter's delivery delay has passed; a letter with
+# cash on delivery is never taken from.
+_CRAFTER_LETTERS_SQL = (
+    "SELECT r.name AS receiver, m.id AS mail_id, mi.item_guid AS item_guid, "
+    "ii.itemEntry AS entry, it.name AS name, "
+    "it.RequiredSkill AS required_skill, it.RequiredSkillRank AS required_rank, "
+    "it.spellid_2 AS recipe_spell, "
+    "(m.deliver_time <= UNIX_TIMESTAMP()) AS delivered, m.cod AS cod "
+    "FROM mail m "
+    "JOIN mail_items mi ON mi.mail_id = m.id "
+    "JOIN characters r ON r.guid = m.receiver "
+    "JOIN characters s ON s.guid = m.sender "
+    "JOIN item_instance ii ON ii.guid = mi.item_guid "
+    "JOIN acore_world.item_template it ON it.entry = ii.itemEntry "
+    "WHERE r.name IN (%s) AND s.name IN (%s) "
+    "AND it.class = 9 AND it.RequiredSkill > 0"
+)
+
+
+def _fetch_crafter_letters(receivers: list, senders: list) -> list:
+    """Rows for crafters.letter_from_row; no judgement here."""
+    if not receivers or not senders:
+        return []
+    sql = _CRAFTER_LETTERS_SQL % (
+        ",".join(["%s"] * len(receivers)), ",".join(["%s"] * len(senders)))
+    with _connect() as conn, conn.cursor() as cur:
+        try:
+            cur.execute(sql, list(receivers) + list(senders))  # noqa: S608 - placeholders from a COUNT
+        except pymysql.err.MySQLError as exc:
+            if exc.args and exc.args[0] in (1054, 1146):
+                log.warning("crafter-route: the mail tables cannot be read")
+                return []
+            raise
+        return [dict(row) for row in cur.fetchall()]
+
+
+def _insert_crafter_row(holder: str, command: str, kind: str, source: str) -> int:
+    """One pickup row for a designated crafter (#248): a walk or a take."""
+    with _connect() as conn, conn.cursor() as cur:
+        try:
+            cur.execute(
+                "INSERT INTO overseer_command "
+                "(target_name, command, kind, target_arg, source) "
+                "VALUES (%s, %s, %s, '', %s)",
+                (holder, command, kind, source),
+            )
+        except pymysql.err.MySQLError as exc:
+            if exc.args and exc.args[0] in (1146, 1265):
+                log.warning("crafter-route: cannot queue %s for %s on this "
+                            "worldserver image", command.split(" ")[0], holder)
+                return 0
+            raise
+        return cur.lastrowid or 0
+
+
 # Class and Lockpicking skill for every family member, 0 without the skill.
 _LOCK_PICKERS_SQL = (
     "SELECT c.name AS name, c.class AS class_id, "
@@ -15732,8 +16115,11 @@ def _plan_bank(names: list) -> "bank.Plan":
     """
     rows = _fetch_bank_items(names)
     held = _fetch_trade_skills(names)
+    # A recipe the designated crafters route to somebody stays in the bags
+    # for the hand-off, and comes back out of the bank for it (#248).
     storage = bank.storage_from(
         held, _worked_by(names), REAGENT_TRADES, _fetch_guild_bank_setup(names),
+        routed=_crafter_plan(names).routed,
     )
     return bank.plan(
         bank.members_from_rows(rows, names), bank.family_from_skills(held),
@@ -18783,6 +19169,7 @@ class HeadlessBridge(Bridge):
                 self._bank_loop,
                 self._guild_bank_loop,
                 self._guild_dues_loop,
+                self._crafter_mail_loop,
                 self._mail_loop,
                 self._recruit_loop,
                 self._craft_supply_loop,

@@ -478,18 +478,72 @@ class KeepJudgment(Judgment):
     facts: str = ""
 
 
-def asks(rows, *, templates, holders, people, routes, market, reagent_trades, mode):
-    """(KeepJudgment, state, questions) per row, in the order given."""
+def crafter_users(row: dict, takers: dict) -> list | None:
+    """(person, why) for a recipe the designated-crafters register ranked (#248).
+
+    `takers` maps an item guid to `crafters.candidates` for it, best first.
+    None when the register did not rank this stack, so `users` answers. The
+    holder is left out: keeping is already an option of its own.
+    """
+    ranked = (takers or {}).get(_int(row.get("item_guid")))
+    if ranked is None:
+        return None
+    holder = str(row.get("holder") or "")
+    return [
+        (
+            clearance.Person(
+                name=p.taker,
+                skills={},
+                family=p.seat in ("family", "holder"),
+                online=bool(p.online),
+            ),
+            p.why,
+        )
+        for p in ranked
+        if p.taker and p.taker != holder
+    ]
+
+
+def designated_for(template: dict, register: dict) -> list:
+    """The register's seats for a recipe's trade, as Jev is shown them."""
+    seats = (register or {}).get(_int(template.get("required_skill")), ())
+    return [{"name": s.name, "skill": s.rank, "seat": s.seat} for s in seats]
+
+
+def asks(
+    rows,
+    *,
+    templates,
+    holders,
+    people,
+    routes,
+    market,
+    reagent_trades,
+    mode,
+    takers=None,
+    register=None,
+):
+    """(KeepJudgment, state, questions) per row, in the order given.
+
+    `takers` and `register` come from the designated-crafters register
+    (#248): a recipe's `give:` options follow its ranking, and the state
+    names the trade's designated crafters.
+    """
     out = []
     for row in rows:
         entry = _int(row.get("entry"))
         template = templates.get(entry) or {}
         holder = holders.get(str(row["holder"])) or Holder(str(row["holder"]))
         trades = trades_using(row, reagent_trades)
-        who = users(row, template, people, trades)
+        who = crafter_users(row, takers)
+        if who is None:
+            who = users(row, template, people, trades)
         answer, why = heuristic(row, routes)
         offered = options(row, template, who, answer)
         state = state_for(row, template, holder, who, trades, market or {})
+        seats = designated_for(template, register)
+        if seats and "teaches" in state["item"]:
+            state["item"]["teaches"]["designated_crafters"] = seats
         out.append(
             (
                 KeepJudgment(

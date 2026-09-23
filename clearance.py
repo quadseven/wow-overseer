@@ -27,6 +27,11 @@ THE ROUTE, IN ORDER, AND THE FIRST ONE THAT APPLIES WINS.
               `disposition.AUCTION_BEATS_VENDOR_BY`.
     VENDOR    the rest, when the vendor pays for it.
 
+A RECIPE THE DESIGNATED-CRAFTERS REGISTER PLACES (#248) skips the by-name
+search: `crafters.choose` has already picked the family member or designated
+guild crafter who learns it, skipping anyone who already knows it. A recipe
+it places with nobody goes on to KEEP, AUCTION or VENDOR as before.
+
 "CAN LEARN NOW", NOT "COULD REACH AT THIS LEVEL". #145 asked for the second.
 The operator's direction was the first: a recipe whose holder's skill is below
 its rank is routed, not kept for the day the holder catches up. A level-60
@@ -178,6 +183,7 @@ def route(
     market=None,
     auction_open: bool = False,
     busy=frozenset(),
+    picks=None,
 ) -> Route:
     """One stack's route. See the module docstring for the order.
 
@@ -187,12 +193,19 @@ def route(
     known price and is not listed. `busy` are people already handed a stack
     this pass: they take nothing more now, but they still count as somebody
     who can use it, so the stack waits rather than being sold.
+
+    `picks` maps a recipe's guid to `crafters.Pick` (#248). When a recipe has
+    one, the designated-crafters register decides who takes it, and the
+    by-name search below is not asked.
     """
+    pick = (picks or {}).get(stack.guid) if stack.recipe else None
+    if pick is not None and pick.taker:
+        return _picked(stack, pick, busy)
     if stack.guid in kept:
         return Route(stack, KEEP, why="another pass owns %s" % stack.name)
     if stack.recipe and holder is not None and can_learn_now(stack, holder):
         return Route(stack, KEEP, why="%s can learn %s now" % (holder.name, stack.name))
-    if not stack.bound:
+    if not stack.bound and pick is None:
         for family in (True, False):
             person, need = _first(stack, people, family=family, online=True, skip=busy)
             if person is not None:
@@ -229,7 +242,40 @@ def route(
     return Route(stack, KEEP, why="%s has no route and no vendor price" % stack.name)
 
 
-def plan(stacks, people, *, kept=frozenset(), market=None, auction_open=False) -> tuple:
+def _picked(stack: Stack, pick, busy) -> Route:
+    """The route for a recipe the designated-crafters register placed (#248).
+
+    The holder keeps what the holder learns. A family taker is handed it; a
+    guild taker is handed it when online, and otherwise it waits, because a
+    letter needs its receiver online. A taker already handed a stack this
+    pass waits for the next one.
+    """
+    if pick.kept:
+        return Route(stack, KEEP, why=pick.why)
+    if stack.bound:
+        return Route(stack, KEEP, why="%s is bound to %s" % (stack.name, stack.holder))
+    if pick.taker in busy:
+        return Route(
+            stack,
+            WAIT,
+            pick.taker,
+            "%s; %s is already handed a stack this pass" % (pick.why, pick.taker),
+        )
+    if pick.seat == "family":
+        return Route(stack, FAMILY, pick.taker, pick.why)
+    if pick.online:
+        return Route(stack, GUILD, pick.taker, pick.why)
+    return Route(
+        stack,
+        WAIT,
+        pick.taker,
+        "%s; offline this pass, and a letter needs its receiver online" % pick.why,
+    )
+
+
+def plan(
+    stacks, people, *, kept=frozenset(), market=None, auction_open=False, picks=None
+) -> tuple:
     """Every stack's Route, holders in name order.
 
     A guildmate or family member is handed at most one stack per pass, the
@@ -249,6 +295,7 @@ def plan(stacks, people, *, kept=frozenset(), market=None, auction_open=False) -
             market=market,
             auction_open=auction_open,
             busy=frozenset(taken),
+            picks=picks,
         )
         if got.route in GIVEN:
             taken.add(got.taker)
