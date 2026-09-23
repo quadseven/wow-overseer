@@ -566,20 +566,8 @@ class Storage:
     stock_cap: int = disposition.REAGENT_KEEP
 
 
-def storage_from(held, worked_by=None, named=None, guild=None):
-    """The Storage this family is today, from what the bridge already reads.
-
-    `held` is name -> {profession: value} (`_fetch_trade_skills`), `worked_by`
-    is name -> declared trades (`_worked_by`), and `guild` is
-    `_fetch_guild_bank_setup`'s answer or None. A trade counts as worked when
-    the holder holds any skill in it or is declared to work it, the same
-    union the vendor pass protects stock for.
-
-    THE GUILD IS OPEN ONLY ON FACTS. No purchased tab, no member rank, or a
-    rank without the right on tab 0, and the guild takes nothing: the core
-    no-ops every one of those deposits without an error, so a guess here is a
-    queue of refusals.
-    """
+def _trades_and_skills(held, worked_by):
+    """holder -> worked trades, and holder -> {skill_id: value}."""
     trades: dict = {}
     skills: dict = {}
     for name, profs in (held or {}).items():
@@ -596,16 +584,39 @@ def storage_from(held, worked_by=None, named=None, guild=None):
         trades.setdefault(str(name), set()).update(
             str(t).strip().lower() for t in declared if str(t).strip()
         )
-    depositors: frozenset = frozenset()
-    free = 0
-    if guild and _int(guild.get("purchased_tabs")) > 0:
-        rights = {_int(r) for r in guild.get("deposit_rank_ids", ())}
-        depositors = frozenset(
-            name
-            for name, rank in dict(guild.get("member_ranks") or {}).items()
-            if _int(rank, -1) in rights
-        )
-        free = max(0, GUILD_TAB_SLOTS - _int(guild.get("tab0_items"), GUILD_TAB_SLOTS))
+    return trades, skills
+
+
+def _guild_room(guild):
+    """(members whose rank may deposit on tab 0, tab 0's free slots)."""
+    if not guild or _int(guild.get("purchased_tabs")) <= 0:
+        return frozenset(), 0
+    rights = {_int(r) for r in guild.get("deposit_rank_ids", ())}
+    depositors = frozenset(
+        name
+        for name, rank in dict(guild.get("member_ranks") or {}).items()
+        if _int(rank, -1) in rights
+    )
+    free = max(0, GUILD_TAB_SLOTS - _int(guild.get("tab0_items"), GUILD_TAB_SLOTS))
+    return depositors, free
+
+
+def storage_from(held, worked_by=None, named=None, guild=None):
+    """The Storage this family is today, from what the bridge already reads.
+
+    `held` is name -> {profession: value} (`_fetch_trade_skills`), `worked_by`
+    is name -> declared trades (`_worked_by`), and `guild` is
+    `_fetch_guild_bank_setup`'s answer or None. A trade counts as worked when
+    the holder holds any skill in it or is declared to work it, the same
+    union the vendor pass protects stock for.
+
+    THE GUILD IS OPEN ONLY ON FACTS. No purchased tab, no member rank, or a
+    rank without the right on tab 0, and the guild takes nothing: the core
+    no-ops every one of those deposits without an error, so a guess here is a
+    queue of refusals.
+    """
+    trades, skills = _trades_and_skills(held, worked_by)
+    depositors, free = _guild_room(guild)
     return Storage(
         trades={name: frozenset(t) for name, t in trades.items()},
         family_trades=frozenset(t for own in trades.values() for t in own),
@@ -758,6 +769,123 @@ def _verdict(holding, family, level, totals):
     )
 
 
+def _deposit_candidates(member, family, totals, storage):
+    """(holding, why, keeper) in deposit order: the keeper rule first."""
+    candidates = [
+        (holding, why, True)
+        for holding, why in (_stored(member, storage) if storage else [])
+    ]
+    chosen = {holding.guid for holding, _why, _keeper in candidates}
+    for holding in member.carried:
+        if holding.guid in chosen or holding.container_slots > 0:
+            # An empty spare bag belongs in somebody's empty bag position
+            # and a full one cannot be moved at all. Either way the bank
+            # is the wrong place for it.
+            continue
+        verdict = _verdict(holding, family, member.level, totals)
+        if verdict.route == disposition.BANK:
+            candidates.append((holding, verdict.why, False))
+    return candidates
+
+
+def _deposit(member, holding, why, to=PERSONAL):
+    return Move(
+        character=member.name,
+        verb=DEPOSIT,
+        guid=holding.guid,
+        item=holding.item.name,
+        count=holding.count,
+        why=why,
+        to=to,
+    )
+
+
+def _plan_deposits(member, candidates, storage, guild_room, visit_limit, notes):
+    """(personal deposits, guild deposits, guild room left) for one member.
+
+    A keeper that may go to the guild goes there while the tab has room and
+    this member's vault visit has room; past either, it is offered to the
+    banker, because the two trips are separate and a stack that leaves the
+    bags by either one has done what it was planned for.
+    """
+    deposits, sent = [], []
+    room = member.bank_free
+    for holding, why, keeper in candidates:
+        to_guild = (
+            keeper and not holding.bound and member.name in storage.guild_depositors
+        )
+        if to_guild and guild_room <= 0:
+            notes.append(
+                "the guild bank's tab is full, so %s goes to %s's own bank"
+                % (holding.item.name, member.name)
+            )
+        if to_guild and guild_room > 0 and len(sent) < visit_limit:
+            guild_room -= 1
+            sent.append(_deposit(member, holding, why, GUILD))
+            continue
+        if len(deposits) >= visit_limit:
+            notes.append(
+                "%s has more to bank than one visit carries; the "
+                "rest waits for the next trip" % member.name
+            )
+            continue
+        if room <= 0:
+            notes.append(
+                "%s's bank is full, so %s stays in the bags"
+                % (member.name, holding.item.name)
+            )
+            continue
+        room -= 1
+        deposits.append(_deposit(member, holding, why))
+    return deposits, sent, guild_room
+
+
+def _wanted_back(holding, member, family, totals, storage):
+    """Why a banked stack belongs in the bags again, or ''.
+
+    A stack the keeper rule stores is never wanted back, so the two halves
+    cannot undo each other. A recipe its holder can now learn is.
+    """
+    verdict = _verdict(holding, family, member.level, totals)
+    if storage is None:
+        return verdict.why if verdict.route in WITHDRAW_ROUTES else ""
+    if storage_reason(holding, storage):
+        return ""
+    if disposition.recipe(holding.item) and _learnable(holding, storage):
+        return "%s can learn it now" % member.name
+    return verdict.why if verdict.route in WITHDRAW_ROUTES else ""
+
+
+def _plan_withdrawals(member, family, totals, storage, space, budget, notes):
+    """The withdrawals for one member, within `space` slots and `budget` moves."""
+    withdrawals = []
+    for holding in member.banked:
+        if len(withdrawals) >= budget:
+            break
+        if holding.container_slots > 0:
+            continue
+        why = _wanted_back(holding, member, family, totals, storage)
+        if not why:
+            continue
+        if space <= 0:
+            notes.append(
+                "%s has no room to take %s back out" % (member.name, holding.item.name)
+            )
+            continue
+        space -= 1
+        withdrawals.append(
+            Move(
+                character=member.name,
+                verb=WITHDRAW,
+                guid=holding.guid,
+                item=holding.item.name,
+                count=holding.count,
+                why="%s is wanted in the bags again - %s" % (holding.item.name, why),
+            )
+        )
+    return withdrawals
+
+
 def plan(members, family, *, visit_limit=VISIT_LIMIT, storage=None):
     """Every bank move worth making, in the order it should be sent.
 
@@ -783,115 +911,22 @@ def plan(members, family, *, visit_limit=VISIT_LIMIT, storage=None):
     moves, notes, guild = [], [], []
     guild_room = storage.guild_free if storage else 0
     for member in sorted(members, key=lambda m: m.name):
-        deposits = []
-        sent = []
-        room = member.bank_free
-        candidates = list(_stored(member, storage)) if storage else []
-        chosen = {holding.guid for holding, _why in candidates}
-        for holding in member.carried:
-            if holding.guid in chosen or holding.container_slots > 0:
-                # An empty spare bag belongs in somebody's empty bag position
-                # and a full one cannot be moved at all. Either way the bank
-                # is the wrong place for it.
-                continue
-            verdict = _verdict(holding, family, member.level, totals)
-            if verdict.route == disposition.BANK:
-                candidates.append((holding, verdict.why))
-        for holding, why in candidates:
-            to_guild = (
-                storage is not None
-                and holding.guid in chosen
-                and not holding.bound
-                and member.name in storage.guild_depositors
-            )
-            if to_guild and guild_room <= 0:
-                notes.append(
-                    "the guild bank's tab is full, so %s goes to %s's own bank"
-                    % (holding.item.name, member.name)
-                )
-                to_guild = False
-            if to_guild and len(sent) >= visit_limit:
-                # Past one vault visit, the rest is offered to the banker: the
-                # two trips are separate, and a stack that leaves the bags by
-                # either one has done what it was planned for.
-                to_guild = False
-            if to_guild:
-                guild_room -= 1
-                sent.append(
-                    Move(
-                        character=member.name,
-                        verb=DEPOSIT,
-                        guid=holding.guid,
-                        item=holding.item.name,
-                        count=holding.count,
-                        why=why,
-                        to=GUILD,
-                    )
-                )
-                continue
-            if len(deposits) >= visit_limit:
-                notes.append(
-                    "%s has more to bank than one visit carries; the "
-                    "rest waits for the next trip" % member.name
-                )
-                continue
-            if room <= 0:
-                notes.append(
-                    "%s's bank is full, so %s stays in the bags"
-                    % (member.name, holding.item.name)
-                )
-                continue
-            room -= 1
-            deposits.append(
-                Move(
-                    character=member.name,
-                    verb=DEPOSIT,
-                    guid=holding.guid,
-                    item=holding.item.name,
-                    count=holding.count,
-                    why=why,
-                )
-            )
-
-        withdrawals = []
+        candidates = _deposit_candidates(member, family, totals, storage)
+        deposits, sent, guild_room = _plan_deposits(
+            member, candidates, storage, guild_room, visit_limit, notes
+        )
         # Every deposit hands a bag slot back, so the room to receive a
         # withdrawal is larger than it was measured. A guild deposit does not
         # count: it is written on a different trip, to a different place.
-        space = member.bag_free + len(deposits)
-        for holding in member.banked:
-            if len(deposits) + len(withdrawals) >= visit_limit:
-                break
-            if holding.container_slots > 0:
-                continue
-            verdict = _verdict(holding, family, member.level, totals)
-            wanted = verdict.route in WITHDRAW_ROUTES
-            why = verdict.why
-            if storage is not None:
-                if storage_reason(holding, storage):
-                    continue
-                if disposition.recipe(holding.item) and _learnable(holding, storage):
-                    wanted = True
-                    why = "%s can learn it now" % member.name
-            if not wanted:
-                continue
-            if space <= 0:
-                notes.append(
-                    "%s has no room to take %s back out"
-                    % (member.name, holding.item.name)
-                )
-                continue
-            space -= 1
-            withdrawals.append(
-                Move(
-                    character=member.name,
-                    verb=WITHDRAW,
-                    guid=holding.guid,
-                    item=holding.item.name,
-                    count=holding.count,
-                    why="%s is wanted in the bags again - %s"
-                    % (holding.item.name, why),
-                )
-            )
+        withdrawals = _plan_withdrawals(
+            member,
+            family,
+            totals,
+            storage,
+            member.bag_free + len(deposits),
+            visit_limit - len(deposits),
+            notes,
+        )
         moves.extend(deposits)
         moves.extend(withdrawals)
         guild.extend(sent)
