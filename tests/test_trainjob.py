@@ -305,9 +305,10 @@ class TheBridgeReallyDrivesIt(unittest.TestCase):
         self.assertIn("await self._drive_train()", self.source)
 
     def test_the_drive_is_re_asserted_on_the_protect_cycle(self):
-        """Called twice: once when the order lands, once every protect cycle.
-        A drive that ran only on the order would be lost to a restart."""
-        self.assertEqual(2, self.source.count("await self._drive_train()"))
+        """Called on the order, every protect cycle, and when Jev's activity
+        choice picks train (#216). A drive that ran only on the order would be
+        lost to a restart."""
+        self.assertEqual(3, self.source.count("await self._drive_train()"))
 
     def test_the_drive_writes_the_column_that_makes_a_character_walk(self):
         self.assertIn("_aim_train_traveller", self.source)

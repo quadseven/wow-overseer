@@ -150,6 +150,7 @@ STRING_COLUMNS = {
     "overseer_jev_judgment": frozenset(
         {
             "acted",
+            "facts",
             "heuristic",
             "heuristic_why",
             "holder",

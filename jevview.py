@@ -31,6 +31,7 @@ KINDS = {
     "dungeon_choice": "The council's dungeon",
     "quest_pick": "The family's quest",
     "profession_choice": "A family member's professions",
+    "activity_choice": "A family's next activity",
 }
 
 _ACTED = {
@@ -92,7 +93,9 @@ def recent_line(row: dict) -> str:
             str(row.get("status") or "unknown"),
         )
     acted = _ACTED.get(str(row.get("acted") or ""), "who acted was not recorded")
-    return "%s: %s. %s; %s." % (_label(row.get("kind")), about, said, acted)
+    line = "%s: %s. %s; %s." % (_label(row.get("kind")), about, said, acted)
+    facts = str(row.get("facts") or "").strip()
+    return "%s Given: %s." % (line, facts) if facts else line
 
 
 def view(rows, recent: int = 12) -> dict:

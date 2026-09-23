@@ -56,6 +56,7 @@ import item_plan
 import jev
 import jev_items
 import jev_choices
+import jev_activity
 import jobs
 import kin
 import learnaim
@@ -2164,6 +2165,68 @@ def _queue_owns_job() -> bool:
         return False
 
 
+# --- the activity choice's reads (#216) --------------------------------------
+#
+# jev_activity decides; these read what the question carries. Every statement
+# names one collation group, and each is bound by the family's own names.
+_ACTIVITY_READS = (
+    ("members", "SELECT name, level, class FROM characters WHERE name IN (%s)"),
+    ("recipes",
+     "SELECT name FROM overseer_roster WHERE craft_spell <> 0 AND name IN (%s)"),
+    ("deaths",
+     "SELECT COUNT(*) AS n FROM overseer_death WHERE character_name IN (%s)"),
+    ("worn",
+     "SELECT c.name, COUNT(*) AS worn FROM character_inventory ci "
+     "JOIN characters c ON c.guid = ci.guid WHERE ci.bag = 0 AND ci.slot IN ("
+     + ", ".join(str(slot) for slot in jev_activity.GEAR_SLOTS)
+     + ") AND c.name IN (%s) GROUP BY c.name"),
+    ("goods",
+     "SELECT c.name, COUNT(*) AS stacks FROM character_inventory ci "
+     "JOIN characters c ON c.guid = ci.guid "
+     "JOIN item_instance ii ON ii.guid = ci.item "
+     "JOIN acore_world.item_template it ON it.entry = ii.itemEntry "
+     "WHERE it.class = 7 AND (ci.bag <> 0 OR ci.slot BETWEEN 23 AND 38) "
+     "AND c.name IN (%s) GROUP BY c.name"),
+)
+
+
+def _activity_reads(names: list, leader: str) -> dict:
+    """What the activity question carries about one family. Reads only.
+
+    A read the realm cannot answer (1054 or 1146: a column or table this
+    world image predates) is empty rather than fatal, and the fact reads as
+    unknown in the question; `worn` stays None so a gear gap is never
+    invented from a failed read.
+    """
+    out = {"free": _fetch_free_slots(names), "members": [], "recipes": [],
+           "deaths": 0, "worn": None, "goods": [], "at_town": False}
+    marks = ", ".join(["%s"] * len(names))
+    with _connect() as conn, conn.cursor() as cur:
+        for key, sql in _ACTIVITY_READS:
+            try:
+                cur.execute(sql % marks, tuple(names))
+            except pymysql.err.MySQLError as exc:
+                if exc.args and exc.args[0] in (1054, 1146):
+                    log.info("activity: %s cannot be read on this realm", key)
+                    continue
+                raise
+            rows = [dict(row) for row in cur.fetchall()]
+            if key == "members":
+                out[key] = [{"name": r["name"], "level": int(r["level"] or 0),
+                             "class_name": CLASS_NAMES.get(r["class"], "")}
+                            for r in rows]
+            elif key == "recipes":
+                out[key] = [r["name"] for r in rows]
+            elif key == "deaths":
+                out[key] = int((rows[0] if rows else {}).get("n") or 0)
+            else:
+                out[key] = rows
+    if leader:
+        town = _fetch_town(leader)
+        out["at_town"] = bool(town.vendor or town.repairs)
+    return out
+
+
 def _holders_of(quest_id: int) -> set:
     """Which protected characters actually hold this quest in an actionable
     state.
@@ -3686,6 +3749,14 @@ class Bridge(discord.Client):
         # Record writers for passes that answered too late to act, held for
         # the same reason.
         self._jev_writes: set = set()
+        # THE ACTIVITY CHOICE (#216). Per family key: what the last cycle saw
+        # (breakpoint marks, when Jev was last asked, since when the family has
+        # been on its job) and the interlude Jev chose, if one is running. In
+        # memory: a restart ends every interlude, and the queue and today's
+        # rules simply resume.
+        self._activity_seen: dict = {}
+        self._activity_interludes: dict = {}
+        self._activity_own_key = None
 
     async def setup_hook(self) -> None:
         # Held, not fired and forgotten. asyncio keeps only a weak reference to
@@ -3724,6 +3795,7 @@ class Bridge(discord.Client):
                 self._flight_learn_loop,
                 self._restore_lost_lives,
                 self._campaign_queue_loop,
+                self._activity_loop,
             )
         }
 
@@ -10032,6 +10104,11 @@ class Bridge(discord.Client):
             log.info("goal: dungeon:%s stands down - the family's campaign "
                      "queue owns its job", action.keyword or "(default)")
             return
+        held = self._activity_holds()
+        if held:
+            log.info("goal: dungeon:%s stands down - the family's %s interlude "
+                     "(#216) holds its job", action.keyword or "(default)", held)
+            return
         # _drive_dungeon is what decides whether bag pressure withholds
         # this cycle; 0 written either means that, or an empty roster, and
         # both are already logged there with the reason.
@@ -10073,6 +10150,15 @@ class Bridge(discord.Client):
             move = campaignqueue.step(rows, fam["leader"])
             if not move.writes:
                 log.info("queue: %s: %s", campaignqueue._family(key), move.why)
+                continue
+            # A JEV INTERLUDE DELAYS THE NEXT RUN, NEVER THE ORDER (#216). The
+            # entries are untouched: the start or re-assert is only held until
+            # the family's chosen activity ends, and then made as it would be.
+            held = self._activity_holds(key)
+            if held and move.keyword:
+                log.info("queue: %s holds %s while the family's %s interlude "
+                         "runs; the order stands", campaignqueue._family(key),
+                         move.keyword, held)
                 continue
             try:
                 said = await asyncio.to_thread(_apply_queue_move, move,
@@ -10127,6 +10213,170 @@ class Bridge(discord.Client):
             # Started now, not a minute from now, for the reason _set_job
             # drives train at once: somebody has just given an order.
             await self._campaign_queue_once()
+
+    # --- the activity choice (#216) -------------------------------------------
+
+    def _activity_holds(self, key=None) -> str:
+        """The activity whose interlude holds family `key`'s job, or "".
+
+        None is this bridge's own family, as the activity pass last saw it.
+        An expired interlude is dropped here, so the queue and the automatic
+        passes resume on the first cycle after it ends.
+        """
+        key = self._activity_own_key if key is None else key
+        lease = self._activity_interludes.get(key)
+        if lease is None:
+            return ""
+        if not lease.live(time.monotonic()):
+            self._activity_interludes.pop(key, None)
+            log.info("activity: %s's %s interlude is over; today's rules "
+                     "resume", campaignqueue._family(key), lease.activity)
+            return ""
+        return lease.activity
+
+    async def _activity_loop(self) -> None:
+        """Ask each family what it does next, on its own clock (#216).
+
+        A minute by default: breakpoints (a run finished, a level, a death,
+        full bags, a town) are caught within that, and the cadence itself is
+        jev_activity.CADENCE_MINUTES.
+        """
+        await self.wait_until_ready()
+        cycle = float(os.environ.get("ACTIVITY_CYCLE_SECONDS", "60"))
+        await asyncio.sleep(min(cycle, 75.0))
+        while not self.is_closed():
+            try:
+                await self._activity_once()
+            except Exception:
+                log.exception("activity: pass failed; today's rules stand")
+            await asyncio.sleep(cycle)
+
+    async def _activity_once(self) -> None:
+        """One pass: every family on the roster, each guarded on its own."""
+        rule = jev_activity.policy()
+        if rule.mode == jev.OFF or not self._jev.ready(jev_activity.KIND):
+            return
+        own_names = set((await asyncio.to_thread(_protected_guids)).values())
+        fams = campaignqueue.families(await asyncio.to_thread(_fetch_queue_roster))
+        pending = campaignqueue.pending_by_family(
+            await asyncio.to_thread(_fetch_queue_rows))
+        for key, fam in sorted(fams.items()):
+            own = bool(own_names & set(fam["names"]))
+            if own:
+                self._activity_own_key = key
+            try:
+                await self._activity_for(key, fam, pending.get(key, []), own, rule)
+            except Exception:
+                log.exception("activity: the choice for %s failed; today's "
+                              "rules stand", campaignqueue._family(key))
+
+    async def _activity_for(self, key: str, fam: dict, rows: list, own: bool,
+                            rule) -> None:
+        """Read one family, decide whether to ask, ask, record, carry out."""
+        names = list(fam["names"])
+        leader = fam["leader"]
+        if not names or await self._mid_run(names):
+            return
+        reads = await asyncio.to_thread(
+            _activity_reads, names, str(leader.get("name") or ""))
+        done = leader.get("dungeon_runs_done")
+        held = jev_activity.withheld(bool(rows), reads["free"])
+        members = jev_activity.members_from_rows(
+            names, reads["members"], reads["free"], reads["worn"],
+            reads["goods"], reads["recipes"])
+        can_gather = can_train = False
+        if own:
+            # Only this family's walk and trainer aim have writers today.
+            skills = await asyncio.to_thread(_fetch_trade_skills, names)
+            can_gather = (gatheraim.lowest_gatherer(skills)[0] is not None
+                          and not gatheraim.bags_block_gathering(reads["free"]))
+            can_train = not trainjob.readiness(
+                await asyncio.to_thread(_train_members))
+        job = str(leader.get("job") or "").strip().lower()
+        now = time.monotonic()
+        marks = jev_activity.Marks(
+            runs_done=None if done is None else int(done),
+            levels=tuple((m.name, m.level) for m in members),
+            deaths=reads["deaths"], withheld=held, at_town=reads["at_town"])
+        seen = self._activity_seen.get(key) or {}
+        since = seen["since"] if seen.get("job") == job else now
+        reason = jev_activity.due(
+            jev_activity.stopped_at(seen.get("marks"), marks), seen.get("asked"),
+            now, 60.0 * jev_activity.CADENCE_MINUTES)
+        self._activity_seen[key] = {"marks": marks, "asked": seen.get("asked"),
+                                    "since": since, "job": job}
+        if not reason:
+            return
+        interlude = self._activity_holds(key)
+        if interlude:
+            log.info("activity: %s is on its %s interlude; %s is not asked "
+                     "again until it ends", campaignqueue._family(key),
+                     interlude, reason)
+            return
+        facts = jev_activity.Facts(
+            family=key or str(leader.get("name") or ""), members=members,
+            job=job, queue=campaignqueue.progress_line(
+                rows, None if done is None else int(done)),
+            withheld=held, can_gather=can_gather, can_train=can_train,
+            minutes_on_activity=int((now - since) // 60), reason=reason)
+        judgment = await jev_activity.ask(self._jev, facts, rule)
+        self._activity_seen[key]["asked"] = now
+        if judgment is None:
+            return
+        log.info("%s", judgment.line())
+        try:
+            await asyncio.to_thread(_insert_jev_judgment, judgment)
+        except Exception:
+            log.exception("activity: the choice for %s was not recorded",
+                          campaignqueue._family(key))
+        if judgment.carried_out:
+            await self._carry_out_activity(key, fam, judgment.carried_out, own, job)
+
+    async def _carry_out_activity(self, key: str, fam: dict, activity: str,
+                                  own: bool, job: str) -> None:
+        """Carry out Jev's activity through the paths today's rules use.
+
+        NEVER A QUEUE WRITE. The campaign is resumed by ending the interlude
+        and letting the queue pass re-assert its own entry; every other
+        activity is a job row and the pass that already drives it.
+        """
+        names = list(fam["names"])
+        who = campaignqueue._family(key)
+        lease = jev_activity.interlude(activity, time.monotonic())
+        if lease is None:
+            self._activity_interludes.pop(key, None)
+            log.info("activity: %s: Jev chose the campaign; the queue drives it",
+                     who)
+            await self._campaign_queue_once()
+            return
+        self._activity_interludes[key] = lease
+        want = jev_activity.JOB[activity]
+        if want and want != job:
+            for name in names:
+                try:
+                    await asyncio.to_thread(_insert_job, name, want,
+                                            jev_activity.SOURCE)
+                except Exception:
+                    log.exception("activity: job insert failed for %s (mode=%s)",
+                                  name, want)
+        if activity == jev_activity.SELL:
+            if own:
+                await self._vendor_once()
+                await self._bag_purchase_and_trip(names)
+            else:
+                cohort = townslot.Cohort(
+                    key, str(fam["leader"].get("name") or ""), tuple(names))
+                await self._vendor_once(cohort)
+                await self._bag_purchase_and_trip(names, cohort)
+        elif activity == jev_activity.CRAFT and own:
+            await self._craft_once()
+        elif activity == jev_activity.TRAIN and own:
+            await self._drive_train()
+        elif activity == jev_activity.GATHER and own:
+            await self._walk_to_gather_field(await self._gather_destination())
+        log.info("activity: %s: Jev chose %s; job=%s for %d minutes, then "
+                 "today's rules resume", who, activity, want or job,
+                 jev_activity.LEASE_MINUTES[activity])
 
     async def _goal_thought(self, row: dict, action) -> None:
         await asyncio.to_thread(
@@ -10617,6 +10867,12 @@ class Bridge(discord.Client):
         """
         if not d.source.startswith("overseer:"):
             return False
+        # A Jev interlude holds the job the same way, for its lease (#216).
+        held = self._activity_holds()
+        if held:
+            log.info("job: mode=%r from %s stands down - the family's %s "
+                     "interlude holds its job", d.mode, d.source, held)
+            return True
         if not await asyncio.to_thread(_queue_owns_job):
             return False
         log.info("job: mode=%r from %s stands down - the family's campaign "
@@ -12110,6 +12366,7 @@ def _create_jev_store() -> None:
             " latency_ms INT UNSIGNED NOT NULL DEFAULT 0,"
             " model VARCHAR(40) NOT NULL DEFAULT '',"
             " mode VARCHAR(8) NOT NULL,"
+            " facts VARCHAR(1000) NOT NULL DEFAULT '',"
             " acted VARCHAR(10) NOT NULL DEFAULT '',"
             " created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,"
             " PRIMARY KEY (id), KEY idx_kind_time (kind, created_at),"
@@ -12131,6 +12388,20 @@ def _create_jev_store() -> None:
                 "ADD COLUMN acted VARCHAR(10) NOT NULL DEFAULT '' AFTER mode"
             )
             log.info("overseer_jev_judgment: added acted")
+        # `facts` arrived with the activity choice (#216): what the question
+        # was asked with, so the record shows why a choice was made. Added
+        # the same way; a row written before it reads ''.
+        cur.execute(
+            "SELECT COUNT(*) AS n FROM information_schema.COLUMNS "
+            "WHERE TABLE_SCHEMA = DATABASE() "
+            "  AND TABLE_NAME = 'overseer_jev_judgment' AND COLUMN_NAME = 'facts'"
+        )
+        if not (cur.fetchone() or {}).get("n"):
+            cur.execute(
+                "ALTER TABLE overseer_jev_judgment "
+                "ADD COLUMN facts VARCHAR(1000) NOT NULL DEFAULT '' AFTER mode"
+            )
+            log.info("overseer_jev_judgment: added facts")
         cur.execute(
             "DELETE FROM overseer_jev_judgment "
             "WHERE created_at < NOW() - INTERVAL %s DAY",
@@ -12147,13 +12418,15 @@ def _insert_jev_judgment(judgment) -> None:
     """
     agree = judgment.agree
     acted = str(getattr(judgment, "acted", "") or "")
+    # Only the activity choice carries its facts (#216); every other kind ''.
+    facts = str(getattr(judgment, "facts", "") or "")
     with _connect() as conn, conn.cursor() as cur:
         cur.execute(
             "INSERT INTO overseer_jev_judgment (kind, subject, holder, "
             "item_guid, item_entry, item_name, heuristic, heuristic_why, jev, "
             "confidence, probabilities, agree, status, latency_ms, model, mode, "
-            "acted) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, "
-            "%s, %s, %s, %s)",
+            "facts, acted) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, "
+            "%s, %s, %s, %s, %s, %s, %s)",
             (
                 judgment.kind, judgment.subject[:12], judgment.holder[:12],
                 judgment.item_guid, judgment.item_entry,
@@ -12162,7 +12435,7 @@ def _insert_jev_judgment(judgment) -> None:
                 judgment.confidence, judgment.probabilities_json() or None,
                 None if agree is None else int(agree), judgment.status[:16],
                 max(0, judgment.latency_ms), judgment.model[:40],
-                judgment.mode[:8], acted[:10],
+                judgment.mode[:8], facts[:1000], acted[:10],
             ),
         )
 
@@ -16419,6 +16692,7 @@ class HeadlessBridge(Bridge):
                 self._flight_learn_loop,
                 self._restore_lost_lives,
                 self._campaign_queue_loop,
+                self._activity_loop,
             ) if coro.__name__ not in self.HEADLESS_SKIP
         ]
         log.info("headless: no Discord gateway; driving %d loop(s): %s",

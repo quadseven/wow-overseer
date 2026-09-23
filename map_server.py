@@ -1597,13 +1597,23 @@ def _fetch_jev_view() -> dict:
         conn = _connect()
         try:
             with conn.cursor() as cur:
-                cur.execute(
-                    "SELECT kind, subject, item_name, heuristic, jev, confidence, "
-                    "agree, status, mode, acted FROM overseer_jev_judgment "
-                    "WHERE created_at > NOW() - INTERVAL %s DAY "
-                    "ORDER BY id DESC LIMIT %s",
-                    (JEV_VIEW_DAYS, JEV_VIEW_ROWS),
-                )
+                # `facts` arrives with the bridge's start-up (#216); a record
+                # read before that has none, and the card simply omits it.
+                for columns in ("acted, facts", "acted"):
+                    try:
+                        cur.execute(
+                            "SELECT kind, subject, item_name, heuristic, jev, "  # noqa: S608 - the column list is one of two fixed strings; every value is bound
+                            "confidence, agree, status, mode, " + columns + " "
+                            "FROM overseer_jev_judgment "
+                            "WHERE created_at > NOW() - INTERVAL %s DAY "
+                            "ORDER BY id DESC LIMIT %s",
+                            (JEV_VIEW_DAYS, JEV_VIEW_ROWS),
+                        )
+                    except pymysql.err.OperationalError as exc:
+                        if exc.args and exc.args[0] == 1054:
+                            continue
+                        raise
+                    break
                 rows = list(cur.fetchall())
         finally:
             conn.close()
