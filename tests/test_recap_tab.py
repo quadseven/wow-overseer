@@ -71,7 +71,8 @@ class WhereTheCodeIsAllowedToSit(unittest.TestCase):
     def test_the_markup_exists_and_is_in_the_chronicle_section(self):
         section = PAGE[PAGE.index('<section id="chronicle">') :]
         section = section[: section.index("</section>")]
-        for element in ('id="rcbox"', 'id="rcboard"', 'id="rcbasis"'):
+        # rcbasis is gone: each family's board carries its own basis (#198).
+        for element in ('id="rcbox"', 'id="rcboard"'):
             self.assertIn(element, section, element)
 
     def test_the_timeline_is_still_on_the_page_below_it(self):
@@ -90,11 +91,12 @@ class TheEndpoint(unittest.TestCase):
         self.assertIn('fetch(u("/api/recap"))', BLOCK)
 
     def test_the_handler_takes_a_map_and_never_a_roster(self):
-        """WHO the family is belongs to bonds, exactly as /api/armory and
-        /api/family refuse a name. A map id is a fact about the world."""
+        """WHO the family is belongs to the roster, exactly as /api/armory
+        and /api/family refuse a name. A map id is a fact about the world.
+        One recap per family, every family from the roster (#198)."""
         handler = SERVER[SERVER.index("def _recap") :]
         handler = handler[: handler.index("def _council")]
-        self.assertIn("family.roster()", handler)
+        self.assertIn("for side in _faction_sides():", handler)
         self.assertNotIn('query.get("name"', handler)
         self.assertIn('query.get("map"', handler)
 

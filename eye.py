@@ -120,10 +120,27 @@ def character_tier(family_rows: list[dict], realm_characters: int) -> dict:
     return tier(CHARACTER, ON, str(held), headline + ".")
 
 
+def _by_family(family_rows: list[dict]) -> dict[str, list[str]]:
+    """{family key: sorted names} from the saved rows, key "" when unlabelled.
+
+    The adapter labels each row with the family the roster puts it in. A row
+    with no label is the one family bonds holds, which is what an older
+    caller (and a realm with no roster families) hands in.
+    """
+    groups: dict[str, list[str]] = {}
+    for row in family_rows:
+        groups.setdefault(str(row.get("family") or ""), []).append(str(row["name"]))
+    return {key: sorted(names) for key, names in sorted(groups.items())}
+
+
 def family_tier(family_rows: list[dict]) -> dict:
-    """One family. Not a count of families - there is one, and it is named."""
-    names = sorted(str(row["name"]) for row in family_rows)
-    if not names:
+    """Every family, named. Two families are counted as two and both named.
+
+    The Horde family used to be absent here: the rows came from bonds' one
+    family, so a realm with two read "One family" over five names.
+    """
+    groups = _by_family(family_rows)
+    if not groups:
         return tier(
             FAMILY,
             OFF,
@@ -131,11 +148,25 @@ def family_tier(family_rows: list[dict]) -> dict:
             "No family is in the world.",
             "The five characters logged in and saved by the module.",
         )
-    return tier(FAMILY, ON, "1", "One family: %s." % ", ".join(names))
+    if len(groups) == 1:
+        names = next(iter(groups.values()))
+        return tier(FAMILY, ON, "1", "One family: %s." % ", ".join(names))
+    parts = [
+        "%s's (%s)" % (key, ", ".join(names)) if key else ", ".join(names)
+        for key, names in groups.items()
+    ]
+    return tier(
+        FAMILY,
+        ON,
+        str(len(groups)),
+        "%d families: %s." % (len(groups), "; ".join(parts)),
+    )
 
 
-def party_tier(snapshot_rows: list[dict], family: set) -> dict:
-    """Whether the family is actually together, from the leader they follow.
+def party_tier(
+    snapshot_rows: list[dict], family: set, family_of: dict | None = None
+) -> dict:
+    """Whether each family is actually together, from the leader they follow.
 
     A party is the one social tier above a character that this realm really
     has, so it is reported as a real thing and not as an absence - but it is
@@ -143,16 +174,21 @@ def party_tier(snapshot_rows: list[dict], family: set) -> dict:
     one party, and calling that a party would be the invention this view
     exists to refuse.
 
+    `family_of` maps a name to its family key. With two families, two leaders
+    are two parties, one per family, and not a split: the split is judged
+    inside each family. Without it every name is one family, as before.
+
     Read off the LIVE snapshot and not off the saved rows, because a party is
     the one thing on this ladder that stops existing when everybody logs out.
     """
-    leaders = {
-        str(row.get("group_leader") or "")
-        for row in snapshot_rows
-        if str(row.get("name") or "") in family
-    }
-    leaders.discard("")
-    if not leaders:
+    family_of = family_of or {}
+    leaders_of: dict[str, set] = {}
+    for row in snapshot_rows:
+        name = str(row.get("name") or "")
+        leader = str(row.get("group_leader") or "")
+        if name in family and leader:
+            leaders_of.setdefault(family_of.get(name, ""), set()).add(leader)
+    if not leaders_of:
         return tier(
             PARTY,
             OFF,
@@ -161,15 +197,32 @@ def party_tier(snapshot_rows: list[dict], family: set) -> dict:
             "A party leader in the snapshot. The module writes one the moment "
             "the family groups up, and writes none while they are logged out.",
         )
-    if len(leaders) > 1:
+    split = {key: leaders for key, leaders in leaders_of.items() if len(leaders) > 1}
+    if split:
+        key, leaders = sorted(split.items())[0]
+        who = "%s's family" % key if key else "the family"
         return tier(
             PARTY,
             PARTIAL,
-            str(len(leaders)),
-            "%d groups, not one: the family is split." % len(leaders),
-            "The family behind one leader again.",
+            str(sum(len(v) for v in leaders_of.values())),
+            "%d groups, not one: %s is split." % (len(leaders), who),
+            "Each family behind one leader again.",
         )
-    return tier(PARTY, ON, "1", "One party, behind %s." % sorted(leaders)[0])
+    if len(leaders_of) == 1:
+        leaders = next(iter(leaders_of.values()))
+        return tier(PARTY, ON, "1", "One party, behind %s." % sorted(leaders)[0])
+    behind = ", ".join(
+        "%s's family behind %s" % (key, sorted(leaders)[0])
+        if key
+        else "one behind %s" % sorted(leaders)[0]
+        for key, leaders in sorted(leaders_of.items())
+    )
+    return tier(
+        PARTY,
+        ON,
+        str(len(leaders_of)),
+        "%d parties, one per family: %s." % (len(leaders_of), behind),
+    )
 
 
 def guild_tier(guilds: int, realm_characters: int) -> dict:
@@ -277,8 +330,9 @@ def build_eye(
     """Rows in, the Eye's JSON out.
 
     snapshot_rows overseer_snapshot, the live world (name, is_bot, group_leader)
-    family_rows   the family's SAVED character rows (name), so the ladder does
-                  not report a family that stopped existing at bedtime
+    family_rows   every family's SAVED character rows (name, and the family
+                  key the roster puts it in), so the ladder does not report a
+                  family that stopped existing at bedtime
     realm_rows    a single COUNT(*) row over `characters`, or []
     guild_rows    a single COUNT(*) row over `guild`, or []
     now           the clock, injectable so the suite can stand still
@@ -293,10 +347,11 @@ def build_eye(
     souls = len(snapshot_rows)
     mortals = sum(1 for row in snapshot_rows if not row.get("is_bot"))
     family = {str(row["name"]) for row in family_rows}
+    family_of = {str(row["name"]): str(row.get("family") or "") for row in family_rows}
     tiers = [
         character_tier(family_rows, realm_characters),
         family_tier(family_rows),
-        party_tier(snapshot_rows, family),
+        party_tier(snapshot_rows, family, family_of),
         guild_tier(guilds, realm_characters),
         realm_tier(souls, mortals),
     ]
@@ -309,7 +364,7 @@ def build_eye(
         "strip": [
             {"label": "CHARACTERS", "value": str(realm_characters)},
             {"label": "IN WORLD", "value": str(souls)},
-            {"label": "FAMILIES", "value": "1" if family_rows else "0"},
+            {"label": "FAMILIES", "value": str(len(_by_family(family_rows)))},
             {"label": "GUILDS", "value": str(guilds)},
             {"label": "TIERS ON", "value": "%d/%d" % (on, len(tiers))},
         ],

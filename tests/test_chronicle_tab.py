@@ -454,7 +454,6 @@ class BothFamiliesAndNoGearInTheWay(unittest.TestCase):
     def test_the_loot_board_is_folded_below_the_story(self):
         fold = self.section[self.section.index('<details id="rcfold">') :]
         self.assertIn('id="rcboard"', fold)
-        self.assertIn('id="rcbasis"', fold)
         self.assertNotIn('<details id="rcfold" open', self.section)
         self.assertLess(
             self.section.index('id="chrline"'),

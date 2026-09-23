@@ -495,6 +495,41 @@ def _fetch_profiles(names) -> dict:
         conn.close()
 
 
+def _page_version() -> str:
+    """basepath.page_version of index.html as it is on disk now.
+
+    Read per call rather than once at import: it is one small file, /api/realm
+    is polled once a minute, and a value frozen at import would go on
+    reporting the old page if the file were ever replaced under a running
+    process.
+    """
+    with open(os.path.join(HERE, "index.html"), "rb") as f:
+        return basepath.page_version(f.read())
+
+
+def _faction_sides() -> list[dict]:
+    """Every family as a page side: key, names, faction and heading.
+
+    Alliance first (the left column), then Horde, the order the Armory and
+    the Bags tab draw them in; a family whose faction cannot be read keeps
+    the roster's order after both. The faction and the heading are
+    achievements' words, so a side here and a Chronicle chapter name a family
+    the same way. No roster families at all is bonds' one family, keyed "".
+    """
+    groups = _fetch_family_groups()
+    profiles = _fetch_profiles([n for _key, names in groups for n in names])
+    sides = []
+    for key, names in groups:
+        faction = achievements.faction_of(
+            profiles[n].get("race") for n in names if n in profiles)
+        sides.append({"family": key, "names": list(names),
+                      "faction": faction.lower(),
+                      "heading": achievements.chapter_heading(key, faction)})
+    rank = {"alliance": 0, "horde": 1}
+    sides.sort(key=lambda side: rank.get(side["faction"], 2))
+    return sides
+
+
 def _fetch_family(names=None) -> list[dict]:
     """The family's fresh snapshot rows, in one query.
 
@@ -947,7 +982,7 @@ def _fetch_armory(names: list[str] | None = None) -> dict:
             "base_rows": base_rows, "set_rows": set_rows}
 
 
-def _fetch_standing() -> dict:
+def _fetch_standing(names: list[str] | None = None) -> dict:
     """What the family has LEARNED: trades, skills, reputations, talents.
 
     Five queries, all against acore_characters and all of them plain reads.
@@ -960,10 +995,11 @@ def _fetch_standing() -> dict:
     omission - every one of them is empty on this realm (see standing.py).
     The names come from the frozen book instead.
 
-    Names come from bonds via family.roster(), never from the request, so
-    every IN list is a fixed five with no user input in it.
+    Names come from the roster table (every family) or from bonds via
+    family.roster(), never from the request, so every IN list is a fixed
+    roster with no user input in it.
     """
-    names = family.roster()
+    names = family.roster() if names is None else names
     holes = ", ".join(["%s"] * len(names))
     conn = _connect()
     try:
@@ -1738,7 +1774,11 @@ def _fetch_eye() -> dict:
     that no guild had been made - and the day one exists that tier turns on
     with no change to this file or to eye.py.
     """
-    names = family.roster()
+    # EVERY FAMILY, not bonds' one: the FAMILY tier read "One family" over
+    # Grug's five while the Horde five were saved beside them.
+    groups = _fetch_family_groups()
+    family_of = {n: key for key, group in groups for n in group}
+    names = list(family_of)
     holes = ", ".join(["%s"] * len(names))
     conn = _connect()
     try:
@@ -1762,6 +1802,8 @@ def _fetch_eye() -> dict:
                 (), "", "guild")
     finally:
         conn.close()
+    for row in family_rows:
+        row["family"] = family_of.get(row["name"], "")
     return {"snapshot_rows": snapshot_rows, "family_rows": family_rows,
             "realm_rows": realm_rows, "guild_rows": guild_rows}
 
@@ -2291,38 +2333,48 @@ _TRADE_QUESTS = " UNION ".join(
 )
 
 
-def _fetch_guildcraft() -> dict:
+def _fetch_guildcraft(groups: list[tuple[str, list[str]]] | None = None) -> dict:
     """Every trade, every recipe in it, and where each one can be got.
 
-    One connection, ten reads, none of them per trade, per character or per
-    recipe. Names come from bonds via family.roster() and never from the
-    request, exactly as /api/armory and /api/family refuse a name parameter.
+    One connection. The world reads (recipes, trainers, vendors, drops,
+    quests) happen ONCE whatever the number of families; the four reads that
+    bind a roster happen once per family, because each family's guild is its
+    own answer. Names come from the roster table (every family) or from
+    bonds via family.roster(), never from the request, exactly as
+    /api/armory and /api/family refuse a name parameter.
 
     THE SECOND PHASE IS THE POINT. `covered` is the family plus their guild,
     and it is `guildcraft.covered_names` that decides it, so the two reads that
     bind a roster cannot fall behind the list the page draws rows for. A name
     with a row and no spells read would render as "knows nothing", which is a
     claim rather than a gap.
+
+    Returns the world rows at the top level and one dict of roster rows per
+    family under "families", keyed as `groups` is.
     """
-    names = family.roster()
-    holes = ", ".join(["%s"] * len(names))
+    groups = groups if groups is not None else [("", family.roster())]
     conn = _connect()
     try:
         with conn.cursor() as cur:
-            # S608 on every roster read below: `holes` is a run of "%s"
-            # placeholders sized by len(family.roster()), and every VALUE is
-            # still bound by the driver. The skill-id lists are ints from
-            # goals.SKILL_IDS and no request can reach them.
-            guild = _wide_guarded(cur, _TRADE_GUILD.format(holes=holes),  # noqa: S608
-                                  tuple(names), "", "guild_member")
-            covered = guildcraft.covered_names(names, guild)
-            choles = ", ".join(["%s"] * len(covered))
-            members = _wide_guarded(cur, _TRADE_MEMBERS.format(holes=choles),  # noqa: S608
-                                    tuple(covered), "", "characters")
-            skills = _wide_guarded(cur, _TRADE_SKILLS.format(holes=choles),  # noqa: S608
-                                   tuple(covered), "", "character_skills")
-            spells = _wide_guarded(cur, _TRADE_SPELLS.format(holes=choles),  # noqa: S608
-                                   tuple(covered), "", "character_spell")
+            per_family = {}
+            for key, names in groups:
+                holes = ", ".join(["%s"] * len(names))
+                # S608 on every roster read below: `holes` is a run of "%s"
+                # placeholders sized by the roster's length, and every VALUE
+                # is still bound by the driver. The skill-id lists are ints
+                # from goals.SKILL_IDS and no request can reach them.
+                guild = _wide_guarded(cur, _TRADE_GUILD.format(holes=holes),  # noqa: S608
+                                      tuple(names), "", "guild_member")
+                covered = guildcraft.covered_names(names, guild)
+                choles = ", ".join(["%s"] * len(covered))
+                members = _wide_guarded(cur, _TRADE_MEMBERS.format(holes=choles),  # noqa: S608
+                                        tuple(covered), "", "characters")
+                skills = _wide_guarded(cur, _TRADE_SKILLS.format(holes=choles),  # noqa: S608
+                                       tuple(covered), "", "character_skills")
+                spells = _wide_guarded(cur, _TRADE_SPELLS.format(holes=choles),  # noqa: S608
+                                       tuple(covered), "", "character_spell")
+                per_family[key] = {"guild_rows": guild, "member_rows": members,
+                                   "skill_rows": skills, "spell_rows": spells}
             # THE ONE READ WHOSE ABSENCE CHANGES A SENTENCE. An empty list here
             # is either "nobody is assigned anything" or "the column is not in
             # this world yet", and those are different admissions, so the page
@@ -2343,8 +2395,7 @@ def _fetch_guildcraft() -> dict:
                                    "quest_template")
     finally:
         conn.close()
-    return {"guild_rows": guild, "member_rows": members, "skill_rows": skills,
-            "spell_rows": spells, "roster_rows": roster_rows,
+    return {"families": per_family, "roster_rows": roster_rows,
             "recipe_rows": recipes, "trainer_rows": trainer,
             "vendor_rows": vendors, "drop_rows": drops, "quest_rows": quests,
             # NOT A build_guildcraft ARGUMENT. It feeds tradespec, which is the
@@ -2881,7 +2932,7 @@ def _wide_guarded(cur, sql: str, params: tuple = (), fallback: str = "",
     return []
 
 
-def _fetch_recap(map_id: int | None) -> dict:
+def _fetch_recap(map_id: int | None, names: list[str] | None = None) -> dict:
     """Everything the recap and the loot board read, in one connection.
 
     `map_id` is the ONLY thing a caller may steer, it is an int the handler
@@ -2889,14 +2940,22 @@ def _fetch_recap(map_id: int | None) -> dict:
     via family.roster() and never from the request, exactly as /api/armory and
     /api/family refuse a name parameter, so every roster clause is a fixed IN
     list with no user input in it.
+
+    ONE FAMILY'S RUNS. `names` is one family from the roster; the runs are
+    the ones a member of it led. Unfiltered, a Horde run in Ragefire Chasm
+    was drawn with the Alliance five as its party, all "not on the dungeon
+    map". The filter is in Python because the runs read is already the
+    newest 200 and the leader is a column on it.
     """
-    names = family.roster()
+    names = family.roster() if names is None else names
     holes = ", ".join(["%s"] * len(names))
     conn = _connect()
     try:
         with conn.cursor() as cur:
             runs = _wide_guarded(cur, _RECAP_RUNS, (), _RECAP_RUNS_OLD,
                                  "overseer_dungeon_run")
+            led = set(names)
+            runs = [r for r in runs if r.get("leader_name") in led]
             # S608 on the roster reads below: `holes` is a run of placeholders
             # sized by len(family.roster()), and every VALUE is still bound by
             # the driver.
@@ -3728,6 +3787,9 @@ class Handler(BaseHTTPRequestHandler):
         """
         try:
             payload = realm.build_realm(**_fetch_realm())
+            # The page this server would serve now; an open tab compares it
+            # with the one it was served as (basepath.PAGE_PLACEHOLDER).
+            payload["page"] = _page_version()
             self._send(200, "application/json", json.dumps(payload).encode())
         except Exception:
             log.exception("realm query failed")
@@ -3859,8 +3921,12 @@ class Handler(BaseHTTPRequestHandler):
         turn this into a general character query wearing a friendly name.
         """
         try:
-            payload = standing.build_standing(**_fetch_standing(), book=STANDING,
-                                              talents=BOOK)
+            # BOTH FAMILIES, from the roster, never from the request, exactly
+            # as the Armory above this panel reads them.
+            groups = _fetch_family_groups()
+            names = [n for _key, group in groups for n in group]
+            payload = standing.build_standing(**_fetch_standing(names), book=STANDING,
+                                              talents=BOOK, families=groups)
             self._send(200, "application/json", json.dumps(payload).encode())
         except Exception:
             # Same contract as every other poll: the panel keeps what it has
@@ -3916,8 +3982,18 @@ class Handler(BaseHTTPRequestHandler):
                 # Each maintenance member's job and what it has posted (#234).
                 guildwork.attach_work(
                     lineup, masters.get(guild["guildid"]) or "", contributed)
+                # The side the guild fights for, off its family's own races.
+                lineup["faction"] = achievements.faction_of(
+                    m["race"] for m in guild["members"] if m["name"] in roster)
                 payload.append(lineup)
-            payload.sort(key=lambda g: (-g["counts"]["considered"], g["guild"]))
+            # ALLIANCE FIRST, then Horde, the order every other two-family
+            # view on the page uses; within a side, the bigger guild first.
+            # Sorted by size alone, the Horde guild came first whenever the
+            # two tied, which put the Lineup in the opposite order to the
+            # Armory and the Raid tab beside it.
+            rank = {achievements.ALLIANCE: 0, achievements.HORDE: 1}
+            payload.sort(key=lambda g: (rank.get(g["faction"], 2),
+                                        -g["counts"]["considered"], g["guild"]))
             self._send(200, "application/json",
                        json.dumps({"guilds": payload,
                                    "classes": raidlineup.CLASS_NAMES}).encode())
@@ -4070,25 +4146,48 @@ class Handler(BaseHTTPRequestHandler):
         exactly as /api/armory and /api/family refuse a name.
         """
         try:
-            fetched = _fetch_guildcraft()
+            # ONE GUILD PER FAMILY, Alliance first: Cave's trades on the left
+            # and Bonkers' on the right. Before this the tab was bonds' one
+            # family and its guild, and the Horde guild had no trades page.
+            sides = _faction_sides()
+            fetched = _fetch_guildcraft(
+                [(side["family"], side["names"]) for side in sides])
             # LIFTED OUT BEFORE THE SPLAT. These rows answer tradespec's two
             # questions (what rank does a craft ask for, which specialization
             # gates it) and are not a build_guildcraft argument; leaving them in
             # would be a TypeError on every poll.
             crafts = fetched.pop("craft_rows")
-            roster = family.roster()
-            payload = guildcraft.build_guildcraft(
-                **fetched, icons=ITEMS.icons, book=ITEMS,
-                roster=roster, names=achievements.MAP_NAMES, geo=GEO)
-            # THE SECOND HALF OF THE VIEW, and it is built from the SAME rows
-            # rather than from a second read. guildcraft answers "what can the
-            # guild make and where does a missing recipe come from"; this
-            # answers "how far along the whole road are we, and who is first in
-            # line". They are separate modules because they are separate
-            # questions, and one payload because they are one tab.
-            payload["goal"] = tradespec.build_tradespec(
-                CRAFTBOOK, crafts, fetched["skill_rows"],
-                fetched["spell_rows"], fetched["member_rows"], roster)
+            per_family = fetched.pop("families")
+            roster_rows = fetched.pop("roster_rows")
+            built = []
+            for side in sides:
+                roster = side["names"]
+                mine = per_family[side["family"]]
+                # Only this family's assignments: the roster column names
+                # characters, and the other family's are not this guild's.
+                ours = set(roster)
+                assigned = [r for r in roster_rows if r.get("name") in ours]
+                payload = guildcraft.build_guildcraft(
+                    **mine, **fetched, roster_rows=assigned, icons=ITEMS.icons,
+                    book=ITEMS, roster=roster, names=achievements.MAP_NAMES,
+                    geo=GEO)
+                # THE SECOND HALF OF THE VIEW, and it is built from the SAME
+                # rows rather than from a second read. guildcraft answers "what
+                # can the guild make and where does a missing recipe come
+                # from"; this answers "how far along the whole road are we, and
+                # who is first in line". They are separate modules because they
+                # are separate questions, and one payload because they are one
+                # tab.
+                payload["goal"] = tradespec.build_tradespec(
+                    CRAFTBOOK, crafts, mine["skill_rows"],
+                    mine["spell_rows"], mine["member_rows"], roster)
+                payload.update(family=side["family"], faction=side["faction"],
+                               heading=side["heading"])
+                built.append(payload)
+            # The top level is the first family's (Alliance), for a page that
+            # predates the list; the page draws `families`.
+            payload = dict(built[0])
+            payload["families"] = built
             self._send(200, "application/json", json.dumps(payload).encode())
         except Exception:
             # Same contract as every other poll: the tab keeps what it has
@@ -4158,26 +4257,22 @@ class Handler(BaseHTTPRequestHandler):
         if map_id not in achievements.MAP_NAMES:
             map_id = None
         try:
-            fetched = _fetch_recap(map_id)
-            board_map = fetched.pop("board_map")
-            board_encounters = fetched.pop("board_encounter_rows")
-            item_rows = fetched.pop("item_rows")
-            loot_rows = fetched.pop("loot_rows")
-            char_rows = fetched.pop("char_rows")
-            equipped_rows = fetched.pop("equipped_rows")
-            skill_rows = fetched.pop("skill_rows")
-            payload = recap.build_recap(
-                roster=family.roster(),
-                items={int(row["entry"]): row for row in item_rows},
-                icons=ITEMS.icons, book=ITEMS,
-                dungeons=achievements.MAP_NAMES,
-                zones=recap.zone_names(GEO.continents),
-                now=datetime.now(), **fetched)
-            payload["board"] = recap.build_lootboard(
-                board_map, achievements.MAP_NAMES.get(board_map,
-                                                      "map %d" % board_map),
-                board_encounters, loot_rows, char_rows, equipped_rows,
-                ITEMS.icons, family.roster(), skill_rows, ITEMS)
+            # ONE RECAP PER FAMILY, Alliance first. Each is built from that
+            # family's own runs and its own five, so a Horde run is drawn
+            # with the Horde party and the loot board weighs drops against
+            # the family that would wear them.
+            recaps = []
+            for side in _faction_sides():
+                built = self._recap_for(map_id, side["names"])
+                built.update(family=side["family"], faction=side["faction"],
+                             heading=side["heading"])
+                recaps.append(built)
+            # The top level is the family with a live run (the first, when
+            # both are in), else the first: what a page that predates the
+            # families list draws, and never the wrong party for the run.
+            live = [r for r in recaps if r.get("live")]
+            payload = dict((live or recaps)[0])
+            payload["families"] = recaps
             self._send(200, "application/json", json.dumps(payload).encode())
         except Exception:
             # Same contract as every other poll: the tab keeps what it has
@@ -4185,6 +4280,31 @@ class Handler(BaseHTTPRequestHandler):
             # is happening", which is the one thing this view exists to answer.
             log.exception("recap query failed")
             self._send(503, "application/json", b'{"error": "world unreachable"}')
+
+    @staticmethod
+    def _recap_for(map_id: int | None, names: list[str]) -> dict:
+        """One family's recap and loot board, from that family's rows."""
+        fetched = _fetch_recap(map_id, names)
+        board_map = fetched.pop("board_map")
+        board_encounters = fetched.pop("board_encounter_rows")
+        item_rows = fetched.pop("item_rows")
+        loot_rows = fetched.pop("loot_rows")
+        char_rows = fetched.pop("char_rows")
+        equipped_rows = fetched.pop("equipped_rows")
+        skill_rows = fetched.pop("skill_rows")
+        payload = recap.build_recap(
+            roster=names,
+            items={int(row["entry"]): row for row in item_rows},
+            icons=ITEMS.icons, book=ITEMS,
+            dungeons=achievements.MAP_NAMES,
+            zones=recap.zone_names(GEO.continents),
+            now=datetime.now(), **fetched)
+        payload["board"] = recap.build_lootboard(
+            board_map, achievements.MAP_NAMES.get(board_map,
+                                                  "map %d" % board_map),
+            board_encounters, loot_rows, char_rows, equipped_rows,
+            ITEMS.icons, names, skill_rows, ITEMS)
+        return payload
 
     def _council(self, query: dict) -> None:
         """GET /api/council - the last sitting, what it carried, where next.
