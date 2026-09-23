@@ -177,6 +177,39 @@ def _summary(run: dict, latest: bool) -> tuple[str, str]:
     ), "plain"
 
 
+def _event(row: dict, now: datetime) -> dict:
+    who = ("%s: " % row["character_name"]) if row.get("character_name") else ""
+    return {
+        "at": _clock(row.get("age_seconds"), now),
+        "line": who + (row.get("detail") or row.get("kind") or ""),
+        "tone": _tone(row),
+    }
+
+
+def _run_card(run: dict, latest: bool, now: datetime) -> dict:
+    line, tone = _summary(run, latest=latest)
+    return {
+        "title": _title(run),
+        "line": line,
+        "tone": tone,
+        "open": latest,
+        "events": [_event(r, now) for r in run["rows"]],
+    }
+
+
+def _family_block(family: str, rows: list[dict], now: datetime, limit: int) -> dict:
+    shown = split_runs(rows)[-limit:][::-1]
+    drawn = [_run_card(run, index == 0, now) for index, run in enumerate(shown)]
+    if drawn:
+        head = "The last %d run%s, newest first." % (
+            len(drawn),
+            "" if len(drawn) == 1 else "s",
+        )
+    else:
+        head = "No run in the last %d hours." % WINDOW_HOURS
+    return {"title": family, "line": head, "runs": drawn}
+
+
 def build_run_timeline(
     rows: list[dict],
     families: dict[str, list[str]],
@@ -207,46 +240,10 @@ def build_run_timeline(
         by_family.setdefault(row.get("family") or "", []).append(row)
 
     names = list(families) + sorted(f for f in by_family if f and f not in families)
-    out = []
-    for family in names:
-        family_rows = by_family.get(family, [])
-        runs = split_runs(family_rows)
-        shown = runs[-runs_per_family:][::-1]
-        drawn = []
-        for index, run in enumerate(shown):
-            line, tone = _summary(run, latest=index == 0)
-            drawn.append(
-                {
-                    "title": _title(run),
-                    "line": line,
-                    "tone": tone,
-                    "open": index == 0,
-                    "events": [
-                        {
-                            "at": _clock(r.get("age_seconds"), now),
-                            "line": (
-                                ("%s: " % r["character_name"])
-                                if r.get("character_name")
-                                else ""
-                            )
-                            + (r.get("detail") or r.get("kind") or ""),
-                            "tone": _tone(r),
-                        }
-                        for r in run["rows"]
-                    ],
-                }
-            )
-        if drawn:
-            head = "The last %d run%s, newest first." % (
-                len(drawn),
-                "" if len(drawn) == 1 else "s",
-            )
-        else:
-            head = "No run in the last %d hours." % WINDOW_HOURS
-        out.append({"title": family, "line": head, "runs": drawn})
-
     return {
         "line": "Each run's phase changes and decisions as the worldserver wrote "
         "them, times in %s. Rows are kept 14 days." % _ZONE_LABEL,
-        "families": out,
+        "families": [
+            _family_block(f, by_family.get(f, []), now, runs_per_family) for f in names
+        ],
     }
