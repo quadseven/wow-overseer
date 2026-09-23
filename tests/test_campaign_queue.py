@@ -297,8 +297,10 @@ class FakeWorld:
                     r["status"] = "done"
         return 1
 
-    def drive(self, keyword, wanted, names=None, source=""):
+    def drive(self, keyword, wanted, names=None, source="", withheld=None):
         if self.withhold:
+            if withheld is not None:
+                withheld.append("bags are near full")
             return 0, 0
         for name in names:
             self.row(name).update(
@@ -318,20 +320,25 @@ class FakeWorld:
 
 
 class _Log:
-    def info(self, *a, **k):
-        pass
+    def __init__(self):
+        self.lines = []
+
+    def info(self, msg, *a, **k):
+        self.lines.append(msg % a if a else msg)
 
     warning = exception = info
 
 
 def _queue_pass(world):
+    """One queue pass against `world`; the lines it logged."""
+    log = _Log()
     ns = _load(
         ["_campaign_queue_once", "_apply_queue_move"],
         {
             "asyncio": asyncio,
             "campaignqueue": campaignqueue,
             "jobs": jobs,
-            "log": _Log(),
+            "log": log,
             "_fetch_queue_rows": world.fetch_queue,
             "_fetch_queue_roster": world.fetch_roster,
             "_mark_queue": world.mark,
@@ -341,6 +348,7 @@ def _queue_pass(world):
         },
     )
     asyncio.run(ns["_campaign_queue_once"](types.SimpleNamespace()))
+    return log.lines
 
 
 class TheQueueAdvancesByItself(unittest.TestCase):
@@ -412,6 +420,56 @@ class TheQueueAdvancesByItself(unittest.TestCase):
         _queue_pass(self.world)
         self.assertEqual("queued", self.world.queue[0]["status"])
         self.assertEqual(9, self.zug()["dungeon_runs_done"], "the count was reset")
+
+    def test_a_withheld_start_logs_the_withhold_and_its_reason(self):
+        """#217: the pass said "starting Ragefire Chasm, 50 runs" every
+        minute while the bag check held the start back."""
+        self.world.withhold = True
+        lines = _queue_pass(self.world)
+        self.assertIn("queue: Zug's family: withheld: bags are near full", lines)
+        self.assertFalse([ln for ln in lines if "starting" in ln], lines)
+
+    def test_a_start_that_landed_still_says_starting(self):
+        lines = _queue_pass(self.world)
+        self.assertEqual(
+            ["queue: Zug's family: starting Ragefire Chasm, 50 runs"],
+            [ln for ln in lines if ln.startswith("queue: Zug")],
+        )
+
+
+def _drive_with_full_bags(withheld):
+    """bridge._drive_dungeon, run for real with every bag near full."""
+    ns = _load(
+        ["_withheld", "_drive_dungeon"],
+        {
+            "jobs": jobs,
+            "log": _Log(),
+            "_fetch_free_slots": lambda names: {n: 0 for n in names},
+            "bag_pressure": types.SimpleNamespace(
+                family_town_run_needed=lambda slots: True
+            ),
+            "_insert_job": lambda *a: (_ for _ in ()).throw(
+                AssertionError("a job was written past full bags")
+            ),
+        },
+    )
+    return ns["_drive_dungeon"]("ragefire", 50, ["Zug"], "s", withheld=withheld)
+
+
+class TheDriveSaysWhyItWithheld(unittest.TestCase):
+    def test_full_bags_are_the_reason_given(self):
+        withheld = []
+        self.assertEqual((0, 0), _drive_with_full_bags(withheld))
+        self.assertEqual(1, len(withheld), withheld)
+        self.assertIn("bags are near full", withheld[0])
+
+    def test_an_unknown_keyword_is_the_reason_given(self):
+        withheld = []
+        ns = _load(["_withheld", "_drive_dungeon"], {"jobs": jobs, "log": _Log()})
+        self.assertEqual(
+            (0, 0), ns["_drive_dungeon"]("maraudon", 5, ["Zug"], withheld=withheld)
+        )
+        self.assertEqual(["no dungeon portal answers to maraudon"], withheld)
 
 
 class NothingElseStompsTheQueue(unittest.TestCase):
