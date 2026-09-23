@@ -3512,6 +3512,12 @@
       <h2>What is stopping them</h2>
       <div id="dcrblocklist"></div>
     </div>
+    <div class="dcrcard">
+      <h2 id="dcrjevtitle"></h2>
+      <p id="dcrjevlede" class="dcrlede"></p>
+      <div id="dcrjevkinds" class="dcrlist"></div>
+      <div id="dcrjevlist" class="dcrlist"></div>
+    </div>
   </div>
 </section>
 <div id="wrap"><canvas id="map"></canvas><div id="tip"></div></div>
@@ -7621,6 +7627,10 @@ const dcrHeard = document.getElementById("dcrheard");
 const dcrOutLede = document.getElementById("dcroutlede");
 const dcrOutList = document.getElementById("dcroutlist");
 const dcrBlockList = document.getElementById("dcrblocklist");
+const dcrJevTitle = document.getElementById("dcrjevtitle");
+const dcrJevLede = document.getElementById("dcrjevlede");
+const dcrJevKinds = document.getElementById("dcrjevkinds");
+const dcrJevList = document.getElementById("dcrjevlist");
 
 // WHAT IS BEING DRAFTED, which is deliberately not what the world is set to.
 // The poll rewrites the live lines every ten seconds; it must never rewrite
@@ -8149,12 +8159,26 @@ function renderDecree(p) {
   }
 }
 
+// Jev's record (#95): every sentence is jevview.view's.
+function dcrRenderJev(j) {
+  if (!j) return;
+  dcrJevTitle.textContent = j.title;
+  dcrJevLede.textContent = j.lede;
+  dcrJevKinds.replaceChildren();
+  for (const line of j.kinds) dcrJevKinds.append(el("div", "", line));
+  dcrJevList.replaceChildren();
+  if (!j.recent.length) dcrJevList.append(el("div", "", j.empty));
+  for (const line of j.recent) dcrJevList.append(el("div", "", line));
+}
+
 async function pollDecree() {
   if (view !== DECREE_VIEW) return;
   try {
     const r = await fetch(u("/api/decree"));
     if (!r.ok) throw new Error(r.status);
-    renderDecree(await r.json());
+    const p = await r.json();
+    renderDecree(p);
+    dcrRenderJev(p.jev);
   } catch (e) {
     // KEEP WHAT IS DRAWN. A console that blanked on a failed poll would read
     // as "no job is set, nobody is aimed anywhere, nothing is stopping them",

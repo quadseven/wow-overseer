@@ -243,7 +243,9 @@ def _block(signature: str) -> str:
 class TheBridgeWritesIt(unittest.TestCase):
     def test_the_vendor_pass_equips_above_the_town_run_gate(self):
         body = _block("    async def _vendor_once(self")
-        equip = body.index("await self._equip_upgrades(gear_rows, worn, names)")
+        equip = body.index(
+            "await self._equip_upgrades(gear_rows, worn, names, jev_plan)"
+        )
         gate = body.index("if not bag_pressure.family_town_run_needed(")
         self.assertLess(body.index("await self._hand_gear("), equip)
         self.assertLess(equip, gate)

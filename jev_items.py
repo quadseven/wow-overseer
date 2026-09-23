@@ -6,10 +6,15 @@ complaint (bags full of things nobody routes), and it is a closed choice over
 routes the bag pipeline can already carry out, which is exactly Jev's shape.
 
 SHADOW MEANS THE HEURISTIC STILL ACTS. For every carried piece of gear this
-asks Jev the same question the pipeline answers, records both answers side by
-side, and changes nothing in the world. `act` is a later operator decision,
-per kind, once the record shows Jev agreeing where the heuristic is right and
-differing where it is wrong.
+asks Jev the same question the pipeline answers and records both answers side
+by side.
+
+ACT MEANS JEV'S ANSWER IS CARRIED OUT, through the heuristic's own command
+paths and never a new one (see `act_plan`). What each kind may do, and at what
+confidence, is `POLICY_DEFAULTS`; the operator overrides either per kind with
+JEV_MODE_<KIND> and JEV_THRESHOLD_<KIND>. Live comparisons on the dev realm
+(2026-09-22): weapon_choice agreed with the heuristic 4 of 5 at a mean
+confidence of 0.95; item_disposition agreed 42 of 92 at 0.35 to 0.46.
 
 TWO QUESTIONS, BOTH CHOICES:
 
@@ -46,6 +51,31 @@ import raidlineup
 
 KIND_DISPOSITION = "item_disposition"
 KIND_WEAPON = "weapon_choice"
+
+# Each kind's default switch, threshold and agreement rule (jev.policy).
+#
+#   weapon_choice     act at 0.85. The record shows it right where it is sure.
+#   item_disposition  act at 0.80, and an answer that agrees with the
+#                     heuristic counts as Jev's at any confidence. Its record
+#                     runs at 0.35 to 0.46, so in practice this acts only where
+#                     the two agree, which changes nothing in the world: it is
+#                     shadow in effect until Jev is sure of a different route.
+#                     Only `keep` and `equip` have an act path (see act_plan).
+POLICY_DEFAULTS = {
+    KIND_WEAPON: dict(default_mode=jev.ACT, default_threshold=0.85),
+    KIND_DISPOSITION: dict(
+        default_mode=jev.ACT, default_threshold=0.80, on_agreement=True
+    ),
+}
+
+
+def policies(environ=None) -> dict:
+    """kind -> jev.Policy for the two item kinds."""
+    return {
+        kind: jev.policy(kind, environ=environ, **defaults)
+        for kind, defaults in POLICY_DEFAULTS.items()
+    }
+
 
 KEEP = "keep"
 EQUIP = "equip"
@@ -484,6 +514,9 @@ class Judgment:
     probabilities: dict | None = None
     latency_ms: int = 0
     model: str = ""
+    # jev.JEV, jev.BOTH or jev.HEURISTIC once the act plan has run; "" until
+    # then. Recorded, so the record says which answer the world got.
+    acted: str = ""
 
     @property
     def agree(self) -> bool | None:
@@ -492,7 +525,12 @@ class Judgment:
     @property
     def signature(self) -> tuple:
         """What has to change for a new record to be worth writing."""
-        return (self.heuristic, self.jev, self.jev and round(self.confidence or 0, 2))
+        return (
+            self.heuristic,
+            self.jev,
+            self.jev and round(self.confidence or 0, 2),
+            self.acted,
+        )
 
     @property
     def key(self) -> tuple:
@@ -516,7 +554,7 @@ class Judgment:
             answer = "jev=-"
         return (
             "jev-shadow: kind=%s subject=%s holder=%s item=%d:%s heuristic=%s %s "
-            "verdict=%s status=%s latency_ms=%d mode=%s why=%r"
+            "verdict=%s status=%s latency_ms=%d mode=%s acted=%s why=%r"
             % (
                 self.kind,
                 self.subject,
@@ -529,6 +567,7 @@ class Judgment:
                 self.status,
                 self.latency_ms,
                 self.mode,
+                self.acted or "-",
                 self.heuristic_why,
             )
         )
@@ -681,6 +720,334 @@ async def shadow_pass(
         return _judged(base, outcome, qid)
 
     return list(await asyncio.gather(*(one(a) for a in asks)))
+
+
+# ---------------------------------------------------------------------------
+# ACTING ON THE ANSWERS (#95)
+#
+# NEVER A NEW ACTION. Jev's answer reaches the world only through the two
+# passes that already run: the family hand-off (`_hand_gear`) and the holder's
+# own equip (`_equip_upgrades`, the `e Hitem:` row). Acting can therefore do
+# exactly three things: put a piece on its own holder, leave a piece the equip
+# pass would put on in the bags, and leave a piece the hand-off would move with
+# its holder. A route Jev prefers that has no such path (a sale, a listing, a
+# hand-off to somebody the heuristic did not name) is recorded as the
+# heuristic's, because the heuristic's is the one that happened.
+#
+# ONLY A FRESH ANSWER ACTS. Answered or cached for this cycle's own question
+# (the cache is keyed on the exact state, so a changed wardrobe is a changed
+# question). The caller waits at most the client's own deadline; past it the
+# heuristic acts and the late answers are recorded as the heuristic's.
+
+_FRESH = (jev.ANSWERED, jev.CACHED)
+# Routes an equip may stand in for without racing another pass over the same
+# piece in the same cycle. A sale or a listing reads the same stale rows.
+_EQUIP_OVER = (KEEP, EQUIP)
+
+
+@dataclass(frozen=True)
+class ActPlan:
+    """What this cycle's passes do differently because Jev answered."""
+
+    equip: dict  # item guid -> why: put on its own holder
+    no_equip: frozenset  # item guids the equip pass leaves in the bags
+    no_give: frozenset  # item guids the family hand-off leaves with the holder
+    judgments: tuple  # every judgment, `acted` set
+
+    @property
+    def changes(self) -> bool:
+        return bool(self.equip or self.no_equip or self.no_give)
+
+
+def _equip_why(j: Judgment) -> str:
+    return "Jev judged it the better choice for %s (%s, confidence %.2f)" % (
+        j.subject,
+        j.kind,
+        j.confidence or 0.0,
+    )
+
+
+def _gives(route: str) -> bool:
+    return route.startswith(GIVE_PREFIX)
+
+
+def _weapon_can(j: Judgment, route: str) -> bool:
+    """A weapon answer acts only on the holder's own weapon, and `carried`
+    only where no sale or listing will race the equip for the same piece."""
+    if j.subject != j.holder:
+        return False
+    return j.jev == WORN or route in _EQUIP_OVER or _gives(route)
+
+
+def _disposition_can(j: Judgment) -> bool:
+    """`keep` can withhold an equip or a hand-off; `equip` can stand in for
+    keeping it or handing it off. Nothing else has an act path."""
+    if j.jev == KEEP:
+        return j.heuristic == EQUIP or _gives(j.heuristic)
+    if j.jev == EQUIP:
+        return j.heuristic == KEEP or _gives(j.heuristic)
+    return False
+
+
+def _who_acts(policies: dict, j: Judgment, can: bool) -> str:
+    rule = policies.get(j.kind)
+    if rule is None or j.status not in _FRESH or not j.jev:
+        return jev.HEURISTIC
+    return rule.acted(j.heuristic, j.jev, j.confidence, can_act=can)
+
+
+def _change(j: Judgment, equip: dict, no_equip: set, no_give: set) -> None:
+    """What Jev's answer on one piece does to the two passes."""
+    if j.jev in (CARRIED, EQUIP):
+        equip[j.item_guid] = _equip_why(j)
+        no_give.add(j.item_guid)
+    elif j.jev == WORN or j.heuristic == EQUIP:
+        no_equip.add(j.item_guid)
+    else:
+        no_give.add(j.item_guid)
+
+
+def act_plan(judgments, policies: dict, routes: dict) -> ActPlan:
+    """Who acts on each judgment, and the three changes that follow.
+
+    `policies` is kind -> jev.Policy; `routes` is item guid -> the pipeline's
+    route (`heuristic()`'s first element), which says what else will happen to
+    a piece this cycle. weapon_choice is settled first and wins a piece it
+    acts on; item_disposition then acts only on pieces left.
+    """
+    equip, no_equip, no_give, taken = {}, set(), set(), set()
+    marked = {}
+    ordered = [j for j in judgments if j.kind == KIND_WEAPON] + [
+        j for j in judgments if j.kind == KIND_DISPOSITION
+    ]
+    for j in ordered:
+        if j.kind == KIND_WEAPON:
+            can = _weapon_can(j, routes.get(j.item_guid, ""))
+        else:
+            can = j.item_guid not in taken and _disposition_can(j)
+        acted = _who_acts(policies, j, can)
+        if acted == jev.JEV:
+            taken.add(j.item_guid)
+            _change(j, equip, no_equip, no_give)
+        marked[id(j)] = replace(j, acted=acted)
+    return ActPlan(
+        equip=equip,
+        no_equip=frozenset(no_equip),
+        no_give=frozenset(no_give),
+        judgments=tuple(
+            marked.get(id(j), replace(j, acted=jev.HEURISTIC)) for j in judgments
+        ),
+    )
+
+
+def heuristic_acted(judgments) -> list:
+    """Every judgment marked as the heuristic's: the answer came too late, or
+    nothing waited for it, so the heuristic is what the world got."""
+    return [replace(j, acted=jev.HEURISTIC) for j in judgments]
+
+
+# ---------------------------------------------------------------------------
+# WHICH GUILD MEMBER GAINS MOST (#184)
+#
+# gear.rank_receivers orders the guild members an item is a real upgrade for,
+# by item level. It cannot price an effect or say what a role needs from a
+# slot. Jev is asked ONE Score per ranked candidate, in one request per item:
+# how much would this item improve this member in their role. The member Jev
+# scores highest is compared with the ranking's pick.
+#
+# ACTING NEVER WIDENS THE SET. Jev's pick replaces the route's receiver only
+# when that member is already one of the route's own receivers (its taker or
+# an alternate, every one of them clear of gear.CLEAR_GAIN), the Score's
+# confidence reaches the threshold, and no other candidate scores as high.
+# The reordered route is delivered by the same `route_deliverable` and written
+# by the same insert as the heuristic's. An item the ranking refuses to move
+# (an effect item level cannot price, or no clear gain) is asked and recorded
+# and never moved.
+
+KIND_GUILD = "guild_recipient"
+NOBODY = "nobody"
+POLICY_DEFAULTS[KIND_GUILD] = dict(default_mode=jev.ACT, default_threshold=0.80)
+
+GAIN_LEVELS = [
+    "None: it is no better for them than what they wear there now, or their "
+    "role has no use for it.",
+    "Slight: a small improvement they would barely notice.",
+    "Moderate: a real improvement in a slot that already serves them well.",
+    "Clear: a clear upgrade for one of their weakest slots, and exactly what "
+    "their role needs.",
+]
+
+
+def guild_policy(environ=None) -> jev.Policy:
+    return jev.policy(KIND_GUILD, environ=environ, **POLICY_DEFAULTS[KIND_GUILD])
+
+
+@dataclass(frozen=True)
+class RecipientAsk:
+    """One guild item, its ranked candidates and the heuristic's pick."""
+
+    holding: object
+    ranked: tuple  # gear.Ranked, best first
+    heuristic: str  # the route's taker, or NOBODY when it is not moved
+    why: str
+
+
+def recipient_asks(holdings, candidates, routes, rank) -> list:
+    """RecipientAsk per holding the ranking scores anybody for.
+
+    `rank(holding, candidates)` is bag_pressure.rank_receivers; `routes` are
+    the route plan's grants, whose taker is the heuristic's pick.
+    """
+    routed = {(r.holder, int(r.guid)): r for r in routes}
+    out = []
+    for holding in sorted(holdings, key=lambda h: (h.holder, int(h.guid))):
+        ranked = tuple(rank(holding, candidates))
+        if not ranked:
+            continue
+        route = routed.get((holding.holder, int(holding.guid)))
+        if route is not None:
+            pick, why = route.taker, "+%d item levels, %s" % (route.gain, route.reason)
+        elif not ranked[0].sure:
+            pick, why = NOBODY, "an effect item level cannot price; not moved"
+        else:
+            pick, why = NOBODY, "no gain clear enough to move it"
+        out.append(RecipientAsk(holding, ranked, pick, why))
+    return out
+
+
+def recipient_question(ask: RecipientAsk, item: dict, closet: dict):
+    """(state, questions): one Score per ranked candidate, one request."""
+    slots = _WORN_SLOTS.get(int(ask.holding.inventory_type), ())
+    members = []
+    for r in ask.ranked:
+        w = closet.get(r.name)
+        who = _who(w, slots) if w is not None else {"name": r.name}
+        who["in_the_holders_family"] = bool(r.family)
+        members.append(who)
+    state = {"item": item, "candidates": members}
+    questions = {}
+    for n, r in enumerate(ask.ranked):
+        questions["c%d" % n] = jev.score(
+            "`item` is being handed to one member of a World of Warcraft guild. "
+            "`candidates[%d]` is %s, described with what they wear in the slots "
+            "`item` would go in. How much would `item` improve %s in the role "
+            "their class and specialization play, compared with what they wear "
+            "there now?" % (n, r.name, r.name),
+            GAIN_LEVELS,
+        )
+    return state, questions
+
+
+def recipient_judgment(ask: RecipientAsk, outcome: jev.Outcome, mode: str) -> Judgment:
+    """The comparison for one item: the ranking's pick beside Jev's top score.
+
+    Jev's pick is the single highest score; a tie at the top is no pick,
+    recorded as NOBODY. `confidence` is that Score's own; `probabilities`
+    carries every candidate's score on a 0 to 1 scale.
+    """
+    h = ask.holding
+    base = Judgment(
+        kind=KIND_GUILD,
+        subject=h.holder,
+        holder=h.holder,
+        item_guid=int(h.guid),
+        item_entry=int(h.entry),
+        item_name=h.name,
+        heuristic=ask.heuristic,
+        heuristic_why=ask.why,
+        mode=mode,
+        status=outcome.status,
+        latency_ms=outcome.latency_ms,
+    )
+    if outcome.answers is None:
+        return base
+    top = len(GAIN_LEVELS) - 1
+    scores = {r.name: outcome.answers["c%d" % n] for n, r in enumerate(ask.ranked)}
+    best = max(s.score for s in scores.values())
+    leaders = [name for name, s in scores.items() if s.score == best]
+    if len(leaders) == 1:
+        pick, confidence = leaders[0], scores[leaders[0]].confidence
+    else:
+        pick, confidence = NOBODY, min(scores[n].confidence for n in leaders)
+    return replace(
+        base,
+        model=outcome.model,
+        jev=pick,
+        confidence=confidence,
+        probabilities={name: s.score / top for name, s in scores.items()},
+    )
+
+
+async def recipient_pass(client, asks, describe, closet, mode, limit=16) -> list:
+    """Ask Jev about each guild item; the judgments, `acted` unset."""
+    if mode == jev.OFF:
+        return []
+    gate = asyncio.Semaphore(max(1, int(getattr(client, "concurrency", 1))))
+
+    async def one(ask):
+        h = ask.holding
+        item = describe(int(h.entry)) or {"name": h.name, "item_level": h.item_level}
+        state, questions = recipient_question(ask, item, closet)
+        async with gate:
+            outcome = await client.ask(KIND_GUILD, state, questions)
+        return recipient_judgment(ask, outcome, mode)
+
+    return list(await asyncio.gather(*(one(a) for a in asks[: max(0, int(limit))])))
+
+
+def reroute(plan, judgments, policy: jev.Policy) -> tuple:
+    """(plan, judgments): the route plan with Jev's pick first where it acts,
+    and every judgment with `acted` set.
+
+    A route Jev acts on keeps every receiver it had, reordered so Jev's pick
+    is the taker and the rest follow as alternates in the ranking's order, so
+    `route_deliverable` still falls back through them when Jev's pick cannot
+    take it now.
+    """
+    by_item = {(j.holder, j.item_guid): j for j in judgments}
+    out_routes, acted = [], {}
+    for route in plan.grants:
+        j = by_item.get((route.holder, int(route.guid)))
+        if j is None:
+            out_routes.append(route)
+            continue
+        options = (replace(route, alternates=()),) + tuple(route.alternates)
+        names = [o.taker for o in options]
+        fresh = j.status in _FRESH and bool(j.jev)
+        who = (
+            policy.acted(j.heuristic, j.jev, j.confidence, can_act=j.jev in names)
+            if fresh
+            else jev.HEURISTIC
+        )
+        acted[(j.holder, j.item_guid)] = who
+        if who != jev.JEV:
+            out_routes.append(route)
+            continue
+        first = options[names.index(j.jev)]
+        rest = tuple(o for o in options if o.taker != j.jev)
+        out_routes.append(replace(first, alternates=rest))
+    marked = tuple(
+        replace(j, acted=acted.get((j.holder, j.item_guid), jev.HEURISTIC))
+        for j in judgments
+    )
+    return replace(plan, grants=tuple(out_routes)), marked
+
+
+def withhold_gifts(plan, act: ActPlan | None):
+    """The family hand-off plan without the pieces Jev keeps with their
+    holder, one note per piece withheld, the way the plan's own notes read."""
+    if act is None or not act.no_give:
+        return plan
+    kept, notes = [], list(plan.notes)
+    for grant in plan.grants:
+        if int(grant.guid) in act.no_give:
+            notes.append(
+                "%s keeps %s rather than handing it to %s: Jev acted on it"
+                % (grant.holder, grant.name, grant.taker)
+            )
+        else:
+            kept.append(grant)
+    return replace(plan, grants=tuple(kept), notes=tuple(notes))
 
 
 def specs_for(names, family_bonds, trees_for) -> dict:

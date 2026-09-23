@@ -35,9 +35,11 @@ BOUNDED IN THREE WAYS:
 
 MODES, PER DECISION KIND. `mode(kind)` reads `JEV_MODE_<KIND>`: `off` asks
 nothing, `shadow` (the default) asks and records the answer beside the
-heuristic's while the heuristic acts, and `act` is reserved for the operator
-to turn on per kind once the recorded comparison shows agreement. A kind whose
-act path is not built yet says so and runs as shadow (see `effective_mode`).
+heuristic's while the heuristic acts, and `act` carries Jev's answer out when
+its confidence reaches that kind's threshold (`JEV_THRESHOLD_<KIND>`, see
+`policy`). Below the threshold, or with no answer at all, the heuristic acts.
+A kind whose act path is not built yet says so and runs as shadow (see
+`effective_mode`).
 """
 
 from __future__ import annotations
@@ -76,17 +78,18 @@ ERROR = "error"
 INVALID = "invalid"
 
 
-def mode(kind: str, environ=None) -> str:
+def mode(kind: str, environ=None, default: str = DEFAULT_MODE) -> str:
     """off / shadow / act for one decision kind, from JEV_MODE_<KIND>.
 
-    An unset or unreadable value is SHADOW. Shadow never changes what the
-    world does, so a typo in the switch can cost a log line and never an
-    action.
+    An unset value is `default` (SHADOW unless the caller names the kind's
+    own default). An unreadable one is SHADOW, whatever the default: shadow
+    never changes what the world does, so a typo in the switch can cost a log
+    line and never an action.
     """
     env = os.environ if environ is None else environ
     raw = str(env.get("JEV_MODE_" + kind.upper(), "") or "").strip().lower()
     if not raw:
-        return DEFAULT_MODE
+        return default if default in MODES else DEFAULT_MODE
     if raw not in MODES:
         log.warning(
             "jev: JEV_MODE_%s=%r is not one of %s; using %s",
@@ -114,6 +117,91 @@ def effective_mode(kind: str, act_supported: bool, environ=None) -> str:
         )
         return SHADOW
     return chosen
+
+
+# ---------------------------------------------------------------------------
+# WHO ACTS: THE THRESHOLD, PER KIND
+
+# The record's `acted` column. JEV: Jev's answer was carried out where the
+# heuristic's differed. BOTH: the two agreed and that answer was carried out.
+# HEURISTIC: the heuristic's answer was carried out (shadow, below threshold,
+# no answer, or no act path for what Jev chose).
+JEV = "jev"
+BOTH = "both"
+HEURISTIC = "heuristic"
+ACTED = (JEV, BOTH, HEURISTIC)
+
+
+@dataclass(frozen=True)
+class Policy:
+    """One kind's switch and threshold, read once per pass.
+
+    `on_agreement` is the narrow rule for a kind whose confidence runs low
+    even where it is right: an answer that AGREES with the heuristic counts
+    as Jev's at any confidence. It changes no action (the two answers are the
+    same one); it changes only what the record says acted.
+    """
+
+    kind: str
+    mode: str
+    threshold: float
+    on_agreement: bool = False
+
+    def acted(self, heuristic: str, answer: str, confidence, can_act=True) -> str:
+        """JEV, BOTH or HEURISTIC for one comparison. `can_act` is False when
+        no act path exists for Jev's answer, so the heuristic stands."""
+        if self.mode != ACT or not answer or confidence is None:
+            return HEURISTIC
+        confident = float(confidence) >= self.threshold
+        if answer == heuristic:
+            return BOTH if (confident or self.on_agreement) else HEURISTIC
+        return JEV if (confident and can_act) else HEURISTIC
+
+
+def threshold(kind: str, environ=None, default: float = 1.0) -> float:
+    """JEV_THRESHOLD_<KIND> as a probability, or `default`.
+
+    Unreadable or out of [0, 1] is `default`, said once per call. A default of
+    1.0 means Jev is never confident enough, which is the safe reading.
+    """
+    env = os.environ if environ is None else environ
+    raw = str(env.get("JEV_THRESHOLD_" + kind.upper(), "") or "").strip()
+    if not raw:
+        return float(default)
+    try:
+        value = _unit(float(raw))
+    except ValueError:
+        value = None
+    if value is None:
+        log.warning(
+            "jev: JEV_THRESHOLD_%s=%r is not a probability; using %.2f",
+            kind.upper(),
+            raw,
+            float(default),
+        )
+        return float(default)
+    return value
+
+
+def policy(
+    kind: str,
+    *,
+    default_mode: str = DEFAULT_MODE,
+    default_threshold: float = 1.0,
+    on_agreement: bool = False,
+    act_supported: bool = True,
+    environ=None,
+) -> Policy:
+    """The Policy for one kind, from its two environment switches."""
+    chosen = mode(kind, environ, default=default_mode)
+    if chosen == ACT and not act_supported:
+        chosen = effective_mode(kind, False, {"JEV_MODE_" + kind.upper(): ACT})
+    return Policy(
+        kind=kind,
+        mode=chosen,
+        threshold=threshold(kind, environ, default_threshold),
+        on_agreement=on_agreement,
+    )
 
 
 # ---------------------------------------------------------------------------
