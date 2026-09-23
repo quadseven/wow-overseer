@@ -96,6 +96,16 @@ PORTAL_KEYWORDS = frozenset(
         "lower-blackrock-spire",
         "stratholme-live",
         "stratholme-undead",
+        "ragefire",
+        "maraudon-orange",
+        "maraudon-purple",
+        "scholomance",
+        "dire-maul-east-east",
+        "dire-maul-east-west",
+        "dire-maul-east-south",
+        "dire-maul-west-north",
+        "dire-maul-west-south",
+        "dire-maul-north",
     }
 )
 

@@ -44,6 +44,7 @@ from datetime import datetime
 
 import agenda
 import bonds
+import campaignqueue
 import chat
 import core  # noqa: F401 - named by SUCCESS_STATUSES' comment, and by the suite
 import jobs
@@ -76,10 +77,12 @@ import travel
 CHAT = "chat"  # POST /api/chat, one character at a time
 COMMAND = "command"  # POST /api/decree, one overseer_command row per character
 ROSTER = "roster"  # POST /api/decree, one overseer_roster column
+QUEUE_STORE = "queue"  # POST /api/decree, the bridge's campaign queue table
 NOWHERE = ""  # no write path from this page
 
 JOB = "job"
 CAMPAIGN = "campaign"
+QUEUE = "queue"
 TRAVEL = "travel"
 WILL = "will"
 
@@ -135,6 +138,25 @@ SECTIONS = (
             "travel with the crown, so a cap set on one row is a campaign "
             "that appears to restart the moment somebody else takes the "
             "lead - which is the disagreement this card already reports."
+        ),
+    ),
+    Section(
+        key=QUEUE,
+        title="Dungeon queue",
+        writes=QUEUE_STORE,
+        why_not="",
+        instead="",
+        does=(
+            "Replaces the picked family's pending rows in "
+            "overseer_dungeon_queue with the dungeons named, in order (#209). "
+            "No job or column is written from here: the bridge's queue pass "
+            "starts the first entry within a minute - job=dungeon:<keyword> "
+            "and the run cap on every enabled member, the count back to 0 - "
+            "moves on when the leader's dungeon_runs_done reaches the entry's "
+            "runs, and returns the family to quest when the list is empty. "
+            "Every entry is checked first: a door the overseer has, not "
+            "withheld, not in the other faction's capital, not above the "
+            "weakest member's level, and on their continent."
         ),
     ),
     Section(
@@ -1089,6 +1111,9 @@ CAMPAIGN_RESTART = 0
 # every other sentence on this view is: a label that drifted to "apply" in a
 # markup edit would be a claim nothing tests.
 JOB_SUBMIT = "Set the family's job"
+QUEUE_SUBMIT = "Set the queue"
+QUEUE_CLEAR_LABEL = "Clear the queue"
+QUEUE_EXAMPLE = "ragefire 50, then wailing 50"
 CAMPAIGN_SUBMIT = "Set the run cap"
 CAMPAIGN_RESTART_LABEL = "Start the count again"
 TRAVEL_SUBMIT = "Send them"
@@ -1149,6 +1174,7 @@ ORDER_REFUSALS = {
         "That is not somewhere the family can be sent. The roles are: %s - "
         "or a creature entry." % ", ".join(travel.ROLES)
     ),
+    "queue": ('Say the queue as dungeons and runs, in order: "%s".' % QUEUE_EXAMPLE),
 }
 
 
@@ -1190,11 +1216,17 @@ class Order:
     rows: tuple
     updates: tuple
     says: str
+    # A campaignqueue.Plan for the queue card, None for every other card. The
+    # adapter replaces the family's pending entries with its own.
+    queue: object = None
 
     @property
     def asked(self) -> int:
         """How many writes this is, which is what `changed` is read against."""
-        return len(self.rows) + len(self.updates)
+        queued = 0
+        if self.queue is not None:
+            queued = len(self.queue.entries) or 1
+        return len(self.rows) + len(self.updates) + queued
 
 
 def _refuse(section: str, why: str) -> Order:
@@ -1334,21 +1366,58 @@ def _plan_travel(request: dict, standing: dict) -> Order:
     )
 
 
+def _plan_queue(request: dict, standing: dict, family: str, roster_rows: list) -> Order:
+    """A family's dungeon queue, or why not (#209).
+
+    The entries arrive as the operator typed them and are read by
+    campaignqueue.parse_entries, the same reader the Discord order uses, then
+    checked against this family's own members by campaignqueue.plan. One
+    refused entry refuses the whole queue, and nothing is written.
+    """
+    names = list(standing["roster"])
+    if not names:
+        return _refuse(QUEUE, ORDER_REFUSALS["roster"])
+    if request.get("clear") is True:
+        plan = campaignqueue.clear(family)
+        return Order(QUEUE, "", (), (), plan.says, plan)
+    raw = request.get("entries")
+    if not isinstance(raw, str) or not raw.strip():
+        return _refuse(QUEUE, ORDER_REFUSALS["queue"])
+    entries, refusal = campaignqueue.parse_entries(raw)
+    if refusal:
+        return _refuse(QUEUE, refusal)
+    # The family's own rows, carrying the level, race and map_id the
+    # adapter stamped on them, with the leader standing_orders picked.
+    lead = standing["leader"]
+    mine = [
+        dict(row, lead=1 if row.get("name") == lead else 0)
+        for row in roster_rows
+        if row.get("name") in names
+    ]
+    plan = campaignqueue.plan(family, entries, mine)
+    if plan.refusal:
+        return _refuse(QUEUE, plan.refusal)
+    return Order(QUEUE, "", (), (), plan.says, plan)
+
+
 # Which card plans which order. A table rather than a chain for the same
 # reason map_server's routes are one: an unknown section is a miss, not
-# another branch.
+# another branch. The queue card is planned beside it, because it alone needs
+# the family's key and levels.
 PLANNERS = {JOB: _plan_job, CAMPAIGN: _plan_campaign, TRAVEL: _plan_travel}
 
 # The cards whose order fans out over a family and is read off its leader.
 # Travel is not one: it names one character, and the name picks the family.
-FAMILY_WIDE = (JOB, CAMPAIGN)
+FAMILY_WIDE = (JOB, CAMPAIGN, QUEUE)
 
 
 def plan_order(request: dict, roster_rows: list) -> Order:
     """One order from the console: a refusal with a reason, or what to write.
 
     request       the POST body, entirely untrusted
-    roster_rows   overseer_roster, the same rows build_console is handed
+    roster_rows   overseer_roster, the same rows build_console is handed;
+                  the queue card also reads each row's level, race and
+                  map_id (map_server._with_levels)
 
     THE ROSTER IS READ, NEVER TAKEN FROM THE REQUEST: a stale page carrying
     its own idea of the family would fan an order out over characters the
@@ -1358,8 +1427,9 @@ def plan_order(request: dict, roster_rows: list) -> Order:
     if section == WILL:
         return _refuse(WILL, ORDER_REFUSALS["will"])
     planner = PLANNERS.get(section)
-    if planner is None:
+    if planner is None and section != QUEUE:
         return _refuse(section, ORDER_REFUSALS["section"])
+    family = ""
     if section in FAMILY_WIDE:
         # WHICH FAMILY, and never both by default. A job or a campaign cap is
         # read off one leader's row, so an order that fanned out over every
@@ -1370,8 +1440,15 @@ def plan_order(request: dict, roster_rows: list) -> Order:
         asked = request.get("family")
         if isinstance(asked, str) and asked in keys:
             roster_rows = _rows_of(roster_rows, asked)
+            family = asked
         elif len(keys) > 1:
             return _refuse(section, ORDER_REFUSALS["family"])
+        elif keys:
+            family = keys[0]
+    if section == QUEUE:
+        return _plan_queue(
+            request, agenda.standing_orders(roster_rows), family, roster_rows
+        )
     return planner(request, agenda.standing_orders(roster_rows))
 
 
@@ -1399,6 +1476,11 @@ ORDER_NOTHING = {
         "Nothing changed. Either they are already walking there, or the "
         "column carries an errand and this console will not erase one. The "
         "live line above says which."
+    ),
+    QUEUE: (
+        "Nothing changed. Either there was no queue to clear, or this realm "
+        "has no overseer_dungeon_queue yet - the bridge creates it when it "
+        "starts."
     ),
 }
 
@@ -1464,12 +1546,16 @@ def _rows_of(roster_rows: list, key: str) -> list:
     return [r for r in roster_rows if _family_key(r) == key]
 
 
-def family_views(roster_rows: list) -> list:
-    """One standing job and one campaign counter per family."""
+def family_views(roster_rows: list, queue_rows: list | None = None) -> list:
+    """One standing job, one campaign counter and one queue per family."""
     out = []
+    queued = campaignqueue.pending_by_family(queue_rows or [])
     for key in family_keys(roster_rows):
         standing = agenda.standing_orders(_rows_of(roster_rows, key))
         split = standing["job_split"]
+        queue = campaignqueue.view(
+            queued.get(key, []), standing["campaign"].get("done"), key
+        )
         out.append(
             {
                 "key": key,
@@ -1490,6 +1576,11 @@ def family_views(roster_rows: list) -> list:
                     line="%s: %s"
                     % (family_label(key), campaign_view(standing["campaign"])["line"]),
                 ),
+                "queue": dict(
+                    queue,
+                    line="%s: %s"
+                    % (family_label(key), queue["line"] or "nothing is queued."),
+                ),
             }
         )
     return out
@@ -1503,6 +1594,7 @@ def build_console(
     command_rows: list,
     now: datetime | None = None,
     newest_job_rows: list | None = None,
+    queue_rows: list | None = None,
 ) -> dict:
     """Rows in, the console's JSON out.
 
@@ -1512,6 +1604,7 @@ def build_console(
     newest_job_rows  {target_name, id} for the newest kind='job' row per
                    character from any source, which is what tells "a later
                    order replaced it" apart from "it never took"
+    queue_rows     overseer_dungeon_queue's pending rows, every family (#209)
 
     ALL MAY BE EMPTY. A realm whose worldserver predates a table hands in []
     and gets a thinner console, never an exception - the same contract every
@@ -1589,7 +1682,13 @@ def build_console(
             "max_chars": WILL_MAX_CHARS,
             "submit": WILL_SUBMIT,
         },
-        "families": family_views(roster_rows),
+        "queue": {
+            "section": QUEUE,
+            "submit": QUEUE_SUBMIT,
+            "clear_label": QUEUE_CLEAR_LABEL,
+            "example": QUEUE_EXAMPLE,
+        },
+        "families": family_views(roster_rows, queue_rows),
         "outcomes": list(lines),
         "orders": list(batches(command_rows, lines, family_of)),
         "outcome_lede": OUTCOME_LEDE,

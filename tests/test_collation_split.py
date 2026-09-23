@@ -80,6 +80,8 @@ COLLATIONS = {
     # bridge._ensure_jev_store NAMES utf8mb4_0900_ai_ci, the collation every
     # other bridge-owned table carries, rather than inheriting a default.
     "overseer_jev_judgment": "utf8mb4_0900_ai_ci",
+    # Bridge-owned (#209), named in campaignqueue.CREATE_SQL the same way.
+    "overseer_dungeon_queue": "utf8mb4_0900_ai_ci",
     # Not an overseer table, and the reason every join to it is safe. A binary
     # collation wins against any non-binary one of the same charset without
     # anybody writing COLLATE.
@@ -160,6 +162,7 @@ STRING_COLUMNS = {
             "subject",
         }
     ),
+    "overseer_dungeon_queue": frozenset({"family", "keyword", "status", "source"}),
 }
 
 # Words that can follow a table name and are not an alias.

@@ -342,7 +342,7 @@ class TravelIsNotTransaction(unittest.TestCase):
 
 
 class WhatThisConsoleMayWrite(unittest.TestCase):
-    """All four cards reach the world now (infra#3345), and every one of them
+    """Every card reaches the world now, and every one of them
     says which road it takes and what it writes. A control that silently does
     nothing is the failure this epic is named after; so is one that writes
     without saying where."""
@@ -356,6 +356,7 @@ class WhatThisConsoleMayWrite(unittest.TestCase):
             {
                 decree.JOB: decree.COMMAND,
                 decree.CAMPAIGN: decree.ROSTER,
+                decree.QUEUE: decree.QUEUE_STORE,
                 decree.TRAVEL: decree.ROSTER,
                 decree.WILL: decree.CHAT,
             },

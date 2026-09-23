@@ -24,6 +24,7 @@ import agenda
 import armory
 import bag_pressure
 import basepath
+import campaignqueue
 import chat
 import council
 import decree
@@ -2417,6 +2418,7 @@ def _fetch_dungeonplan() -> dict:
                 loot = _wide_guarded(
                     cur, _PLAN_LOOT.format(holes=mholes),  # noqa: S608
                     tuple(maps), "", "creature_loot_template")
+            queue_views = _queue_views(cur)
             families: dict = {}
             for row in _wide_guarded(cur, _PLAN_FAMILIES, (), "",
                                      "overseer_roster"):
@@ -2473,7 +2475,8 @@ def _fetch_dungeonplan() -> dict:
     return {"catalogue_rows": catalogue, "encounter_rows": encounters,
             "loot_rows": loot, "char_rows": chars, "equipped_rows": worn,
             "skill_rows": skills, "families": families,
-            "guild_rows": guild_rows, "run_rows": runs}
+            "guild_rows": guild_rows, "run_rows": runs,
+            "queue_views": queue_views}
 
 
 def _dungeon_paths(fetched: dict) -> dict:
@@ -2514,10 +2517,15 @@ def _dungeon_paths(fetched: dict) -> dict:
             _ALLIANCE_RACES, _HORDE_RACES)
         members = [{"name": n, "level": chars[n].get("level")}
                    for n in roster if n in chars]
-        families.append(dungeonpath.build_family_path(
+        path = dungeonpath.build_family_path(
             head, faction, members, plan, guild_name, guild_counts,
             [r for r in fetched["run_rows"] if r.get("leader_name") in roster],
-            portals, achievements.MAP_NAMES))
+            portals, achievements.MAP_NAMES)
+        # THE QUEUE, per family (#209): "Ragefire Chasm 12 of 50, then
+        # Wailing Caverns 50", read off the family's own leader.
+        path["queue"] = fetched.get("queue_views", {}).get(
+            head, campaignqueue.view([], None, head))
+        families.append(path)
         basis = plan["basis"]
     return {
         "line": dungeonpath.headline(families),
@@ -2528,6 +2536,37 @@ def _dungeon_paths(fetched: dict) -> dict:
         "empty_note": ("the roster names no family, so there is no path to draw"
                        if not families else ""),
     }
+
+
+# --- the campaign queue (#209) ------------------------------------------------
+#
+# Read beside the Dungeons page, the family banner and the Decree, which all
+# draw it. The table is the bridge's; a realm whose bridge has not started
+# since #209 has none, and every family then reads "nothing is queued".
+_QUEUE_LEADERS = (
+    "SELECT name, enabled, `lead`, family, dungeon_runs_done FROM overseer_roster"
+)
+_QUEUE_LEADERS_OLD = (
+    "SELECT name, enabled, `lead`, dungeon_runs_done FROM overseer_roster"
+)
+
+
+def _queue_views(cur) -> dict:
+    """family -> campaignqueue.view, off one cursor. {} on a bare schema."""
+    queue_rows = _wide_guarded(cur, campaignqueue.SELECT_PENDING_SQL, (), "",
+                               campaignqueue.TABLE)
+    roster_rows = _wide_guarded(cur, _QUEUE_LEADERS, (), _QUEUE_LEADERS_OLD,
+                                "overseer_roster")
+    return campaignqueue.views(queue_rows, roster_rows)
+
+
+def _fetch_queue_views() -> dict:
+    conn = _connect()
+    try:
+        with conn.cursor() as cur:
+            return _queue_views(cur)
+    finally:
+        conn.close()
 
 
 # --- the live dungeon recap and the loot board (infra#2597) ------------------
@@ -3198,10 +3237,14 @@ def _fetch_decree() -> dict:
                 "WHERE kind = 'job' GROUP BY target_name",
                 (), "", "overseer_command")
             _with_family(cur, roster_rows)
+            # The campaign queue (#209). The bridge's table, so a realm whose
+            # bridge predates it reads as nothing queued.
+            queue_rows = _wide_guarded(cur, campaignqueue.SELECT_PENDING_SQL,
+                                       (), "", campaignqueue.TABLE)
     finally:
         conn.close()
     return {"roster_rows": roster_rows, "command_rows": command_rows,
-            "newest_job_rows": newest_job_rows}
+            "newest_job_rows": newest_job_rows, "queue_rows": queue_rows}
 
 
 def _with_family(cur, roster_rows: list) -> list:
@@ -3230,6 +3273,60 @@ def _with_family(cur, roster_rows: list) -> list:
     for row in roster_rows:
         row["family"] = by_name.get(row.get("name"), "")
     return roster_rows
+
+
+def _with_levels(cur, roster_rows: list) -> list:
+    """Stamp each roster row with its saved level, race and map_id, in place.
+
+    Read for the queue card (#209), whose every entry is checked against the
+    family's weakest level, its faction and its continent. A realm that
+    cannot answer leaves the rows unstamped, and the queue card then refuses
+    with "nobody's level can be read" rather than guessing.
+    """
+    names = sorted({str(r.get("name")) for r in roster_rows if r.get("name")})
+    if not names:
+        return roster_rows
+    try:
+        cur.execute(campaignqueue.level_rows_sql(len(names)), tuple(names))
+        found = {r["name"]: r for r in cur.fetchall()}
+    except pymysql.err.MySQLError as exc:
+        if not (exc.args and exc.args[0] in _DEGRADED):
+            raise
+        log.info("decree: characters could not be read for levels (%s)",
+                 exc.args[0])
+        return roster_rows
+    for row in roster_rows:
+        got = found.get(row.get("name"))
+        if got is not None:
+            row.update(level=got.get("level"), race=got.get("race"),
+                       map_id=got.get("map_id"))
+    return roster_rows
+
+
+def _apply_queue(cur, plan) -> int:
+    """Replace one family's pending queue with `plan`'s entries (#209).
+
+    The same two statements the bridge's Discord path runs, named once in
+    campaignqueue. A realm with no queue table yet changes nothing, and says
+    so, rather than 503ing the console.
+    """
+    try:
+        cur.execute(campaignqueue.CANCEL_SQL, (plan.family,))
+        changed = cur.rowcount or 0
+        for position, entry in enumerate(plan.entries):
+            cur.execute(campaignqueue.INSERT_SQL,
+                        (plan.family, position, entry.keyword, entry.runs,
+                         WEB_SOURCE))
+            changed += 1
+    except pymysql.err.MySQLError as exc:
+        if not (exc.args and exc.args[0] in _DEGRADED):
+            raise
+        log.warning("decree: %s is not writable on this realm (%s) - the "
+                    "bridge creates it when it starts", campaignqueue.TABLE,
+                    exc.args[0])
+        return 0
+    return changed
+
 
 
 # --- the console's write path (infra#3345) -----------------------------------
@@ -3304,8 +3401,11 @@ def _fetch_roster_rows() -> list:
                              "image expects (%s) - trying a thinner read",
                              exc.args[0])
                     continue
-                # The same family stamp the console's read gets, so an order
-                # is planned against the families the page drew.
+                # Each member's level, race and map, which the queue card
+                # checks (#209); then the same family stamp the console's read
+                # gets, so an order is planned against the families the page
+                # drew.
+                rows = _with_levels(cur, rows)
                 return _with_family(cur, rows)
     finally:
         conn.close()
@@ -3376,6 +3476,8 @@ def _apply_order(order) -> int:
                     )
                     continue
                 changed += cur.rowcount
+            if order.queue is not None:
+                changed += _apply_queue(cur, order.queue)
     finally:
         conn.close()
     return changed
@@ -4037,6 +4139,13 @@ class Handler(BaseHTTPRequestHandler):
             payload = agenda.build_agenda(**_fetch_agenda(names), members=names)
             payload["family"] = chosen
             payload["families"] = known
+            # THE FAMILY'S CAMPAIGN QUEUE (#209), first under the headline:
+            # "Queue: Ragefire Chasm 12 of 50, then Wailing Caverns 50."
+            queue = _fetch_queue_views().get(chosen or "")
+            payload["queue"] = queue or campaignqueue.view([], None, chosen or "")
+            if payload["queue"]["line"]:
+                payload["detail"] = [payload["queue"]["line"],
+                                     *(payload.get("detail") or [])]
             self._send(200, "application/json", json.dumps(payload).encode())
         except Exception:
             # Same contract as every other poll, and it matters more here than

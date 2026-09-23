@@ -760,6 +760,16 @@ DUNGEON_KEYWORDS = {
     "lower-blackrock-spire": (229, "the Lower Spire"),
     "stratholme-live": (329, "the main gate"),
     "stratholme-undead": (329, "the service entrance"),
+    "ragefire": (389, ""),
+    "maraudon-orange": (349, "the orange wing"),
+    "maraudon-purple": (349, "the purple wing"),
+    "scholomance": (289, ""),
+    "dire-maul-east-east": (429, "the East wing, east door"),
+    "dire-maul-east-west": (429, "the East wing, west door"),
+    "dire-maul-east-south": (429, "the East wing, south door"),
+    "dire-maul-west-north": (429, "the West wing, north door"),
+    "dire-maul-west-south": (429, "the West wing, south door"),
+    "dire-maul-north": (429, "the North wing"),
 }
 
 
@@ -1423,6 +1433,64 @@ def _refusal(p: dict, faction: str, home: int | None) -> str:
             map_id,
         )
         return "no door the overseer can use"
+    door = continent_of(map_id)
+    if home is None:
+        return "nothing says which continent we are on"
+    if door != home and _no_crossing():
+        return "on %s while we are on %s, with no way across yet" % (
+            CONTINENT_NAMES.get(door, "another continent"),
+            CONTINENT_NAMES.get(home, "another continent"),
+        )
+    return ""
+
+
+def _door_floor(keyword: str, map_id: int) -> int:
+    """The level a door wants: the Scarlet wing's own, PLACES' number for the
+    map, or the Dungeons page's floor for a map PLACES does not name."""
+    import dungeonpath
+
+    wing = dict(SCARLET_WINGS).get(keyword)
+    if wing is not None:
+        return wing
+    if map_id in PLACES:
+        return PLACES[map_id]
+    step = next((s for s in dungeonpath.PATH if s.map_id == map_id), None)
+    return step.low if step is not None else 0
+
+
+def door_refusal(keyword: str, level_rows: list[dict]) -> str:
+    """Why this family cannot be sent through `keyword`'s door, or "".
+
+    The same rules the council proposes by (#202, #204, #205, #207), asked of
+    one named door rather than of a map: a portal keyword mod-overseer runs,
+    not a withheld door, not inside the other faction's capital, not more
+    than NEAR_ENOUGH levels above the weakest member, and on the family's
+    continent or across a crossing that can be made. The campaign queue
+    (#209) asks this of every entry before a row is written.
+    """
+    import dungeonpath
+
+    if keyword not in jobs.PORTAL_KEYWORDS:
+        return "no dungeon portal answers to %r" % keyword
+    if keyword in dungeonpath.WITHHELD_DOORS:
+        return "withheld, since " + dungeonpath.WITHHELD_DOORS[keyword]
+    map_id = int(dungeonpath.PORTAL_MAPS[keyword])
+    names = [str(row.get("name") or "") for row in level_rows]
+    faction = _faction(level_rows, names)
+    if _other_capital(map_id, faction):
+        return (
+            "inside the other faction's capital"
+            if faction
+            else "inside a capital, and nothing says which faction this family is"
+        )
+    weakest = _weakest(level_rows)
+    if weakest is None:
+        return "nobody's level can be read"
+    who, level = weakest
+    floor = _door_floor(keyword, map_id)
+    if level + NEAR_ENOUGH < floor:
+        return "%s is level %d and it wants %d" % (who, level, floor)
+    home = _home_continent(level_rows)
     door = continent_of(map_id)
     if home is None:
         return "nothing says which continent we are on"
