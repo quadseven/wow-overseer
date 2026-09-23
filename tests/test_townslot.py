@@ -1391,6 +1391,56 @@ class ThePurityOfTheModule(unittest.TestCase):
             ),
         )
 
+    def test_in_a_run_a_stale_aim_far_from_the_door_is_released(self):
+        # wow-overseer#230: four Horde followers carried a Barrens mailbox aim
+        # into a Ragefire run; the door (trigger 2230) is at (1818, -4427).
+        door = ((1, 1818.0, -4427.0),)
+        aims = {
+            "Zug": "at:1:1807.39,-4407.8,-18.4334",
+            "Oz": "at:1:271.838,-3313.76,56.0253",
+            "Uzza": "at:1:1818.4,-4427.26,-20.3327",
+        }
+        self.assertEqual(
+            ("Oz",),
+            townslot.stranded_aims_far_from_doors(
+                aims,
+                "Zug",
+                ground=lambda value: value.startswith("at:"),
+                releasable=lambda value: value.startswith("at:"),
+                doors=door,
+            ),
+        )
+
+    def test_in_a_run_an_aim_near_the_door_or_unreadable_is_kept(self):
+        door = ((1, 1818.0, -4427.0),)
+        aims = {
+            "Oz": "at:1:1760.0,-4200.0,30.0",
+            "Zork": "at:garbled",
+            "Zrog": "at:0:271.838,-3313.76,56.0",
+        }
+        self.assertEqual(
+            ("Zrog",),
+            townslot.stranded_aims_far_from_doors(
+                aims,
+                "Zug",
+                ground=lambda value: value.startswith("at:"),
+                releasable=lambda value: value.startswith("at:"),
+                doors=door,
+            ),
+        )
+
+    def test_in_a_run_with_no_door_nothing_is_released(self):
+        self.assertEqual(
+            (),
+            townslot.stranded_aims_far_from_doors(
+                {"Oz": "at:1:271.838,-3313.76,56.0253"},
+                "Zug",
+                ground=lambda _: True,
+                releasable=lambda _: True,
+                doors=(),
+            ),
+        )
+
     def test_no_leader_does_not_release_any_aim(self):
         self.assertEqual(
             (),
