@@ -51,8 +51,9 @@ COPY core.py bridge.py voice.py transform.py \
      campaignqueue.py \
      campaignplan.py \
      runtimeline.py \
+     vclient.py \
      zones.json entrances.json shapes.json \
-     talents.json items.json icons.json spells.json viewerdisplays.json \
+     talents.json items.json icons.json bagicons.json spells.json bagspells.json viewerdisplays.json \
      standing.json craftbook.json taxinodes.json \
      index.html /app/
 

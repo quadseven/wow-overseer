@@ -55,6 +55,7 @@ import standing
 import stream
 import tradespec
 import voice
+import vclient
 import watchwall
 import wealth
 from core import _ALLIANCE_RACES, _HORDE_RACES
@@ -3756,6 +3757,143 @@ def _apply_order(order) -> int:
     return changed
 
 
+# --- the virtual game client over the Watch streams -----------------------
+# One character at a time, and only a character on a family roster: the name
+# from the request is compared against _fetch_family_groups() before any of
+# these run, so every query below is bound to a name the database already
+# listed as family. Read only, like every other GET here.
+_CLIENT_INVENTORY = (
+    "SELECT ci.bag, ci.slot, ci.item AS item_guid, ii.itemEntry AS entry, "
+    "ii.count, it.name AS item_name, it.Quality AS quality, it.displayid, "
+    "it.ContainerSlots AS container_slots "
+    "FROM characters c "
+    "JOIN character_inventory ci ON ci.guid = c.guid "
+    "JOIN item_instance ii ON ii.guid = ci.item "
+    "LEFT JOIN acore_world.item_template it ON it.entry = ii.itemEntry "
+    "WHERE c.name = %s"
+)
+_CLIENT_MONEY = "SELECT money FROM characters WHERE name = %s"
+_CLIENT_GUILD = (
+    "SELECT g.guildid AS guild_id, g.name AS guild_name, "
+    "g.BankMoney AS bank_money "
+    "FROM characters c JOIN guild_member gm ON gm.guid = c.guid "
+    "JOIN guild g ON g.guildid = gm.guildid WHERE c.name = %s"
+)
+_CLIENT_GUILD_TABS = (
+    "SELECT TabId AS tab_id, TabName AS tab_name, TabIcon AS tab_icon "
+    "FROM guild_bank_tab WHERE guildid = %s ORDER BY TabId"
+)
+_CLIENT_GUILD_ITEMS = (
+    "SELECT gbi.TabId AS tab_id, gbi.SlotId AS slot_id, "
+    "ii.itemEntry AS entry, ii.count, it.name AS item_name, "
+    "it.Quality AS quality, it.displayid "
+    "FROM guild_bank_item gbi "
+    "JOIN item_instance ii ON ii.guid = gbi.item_guid "
+    "LEFT JOIN acore_world.item_template it ON it.entry = ii.itemEntry "
+    "WHERE gbi.guildid = %s"
+)
+_CLIENT_GUILD_ROSTER = (
+    "SELECT c.name, c.level, c.class, c.race, c.online, gm.rank, "
+    "gr.rname AS rank_name "
+    "FROM guild_member gm JOIN characters c ON c.guid = gm.guid "
+    "LEFT JOIN guild_rank gr ON gr.guildid = gm.guildid AND gr.rid = gm.rank "
+    "WHERE gm.guildid = %s"
+)
+_CLIENT_SOCIAL = (
+    "SELECT f.name, f.level, f.class, f.race, f.online, s.flags, s.note "
+    "FROM characters c JOIN character_social s ON s.guid = c.guid "
+    "JOIN characters f ON f.guid = s.friend WHERE c.name = %s"
+)
+_CLIENT_FAMILY = (
+    "SELECT name, level, class, race, online FROM characters WHERE name IN "
+)
+_CLIENT_ITEM = (
+    "SELECT it.entry, " + _ITEM_TEMPLATE_COLUMNS + " "
+    "FROM acore_world.item_template it WHERE it.entry = %s"
+)
+# Tooltips by item entry. A template does not change while the world is up.
+CLIENT_TOOLTIPS = vclient.TooltipCache()
+# The item book widened to what a bag holds: the Armory's covers only what can
+# be equipped, and a bag is mostly cloth, food and quest items.
+CLIENT_BOOK = vclient.load_book(HERE, ITEMS)
+CLIENT_ICONS = CLIENT_BOOK.icons
+
+
+def _client_guild(cur, name: str) -> dict | None:
+    cur.execute(_CLIENT_GUILD, (name,))
+    return cur.fetchone()
+
+
+def _fetch_client_inventory(name: str) -> dict:
+    """Every inventory row one character has, and their purse."""
+    conn = _connect()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(_CLIENT_INVENTORY, (name,))
+            rows = list(cur.fetchall())
+            cur.execute(_CLIENT_MONEY, (name,))
+            money = cur.fetchone()
+    finally:
+        conn.close()
+    return {"rows": rows, "money": money["money"] if money else None}
+
+
+def _fetch_client_guild_bank(name: str) -> dict:
+    """The character's guild, its bought tabs and what is in them."""
+    conn = _connect()
+    try:
+        with conn.cursor() as cur:
+            guild = _client_guild(cur, name)
+            tabs: list = []
+            items: list = []
+            if guild is not None:
+                cur.execute(_CLIENT_GUILD_TABS, (guild["guild_id"],))
+                tabs = list(cur.fetchall())
+                cur.execute(_CLIENT_GUILD_ITEMS, (guild["guild_id"],))
+                items = list(cur.fetchall())
+    finally:
+        conn.close()
+    return {"guild": guild, "tab_rows": tabs, "item_rows": items}
+
+
+def _fetch_client_social(name: str, family_names: list[str]) -> dict:
+    """The family's rows, the character's guild roster and their social list."""
+    holes = ", ".join(["%s"] * len(family_names))
+    conn = _connect()
+    try:
+        with conn.cursor() as cur:
+            # S608: placeholders only, one per roster name from the database.
+            cur.execute(_CLIENT_FAMILY + "(" + holes + ")",  # noqa: S608
+                        tuple(family_names))
+            family_rows = list(cur.fetchall())
+            guild = _client_guild(cur, name)
+            guild_rows: list = []
+            if guild is not None:
+                cur.execute(_CLIENT_GUILD_ROSTER, (guild["guild_id"],))
+                guild_rows = list(cur.fetchall())
+            cur.execute(_CLIENT_SOCIAL, (name,))
+            social_rows = list(cur.fetchall())
+    finally:
+        conn.close()
+    return {"family_rows": family_rows, "guild": guild,
+            "guild_rows": guild_rows, "social_rows": social_rows}
+
+
+def _fetch_client_item(entry: int) -> dict | None:
+    """One item_template row, with every column a tooltip draws."""
+    conn = _connect()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(_CLIENT_ITEM, (entry,))
+            return cur.fetchone()
+    finally:
+        conn.close()
+
+
+def _client_item(entry: int) -> dict | None:
+    return vclient.item_tooltip(_fetch_client_item(entry), CLIENT_BOOK)
+
+
 class Handler(BaseHTTPRequestHandler):
     def do_GET(self):  # noqa: N802 (stdlib naming)
         # A lookup and nothing else. Every GET endpoint takes the parsed
@@ -4990,6 +5128,96 @@ class Handler(BaseHTTPRequestHandler):
             log.exception("armory member query failed")
             self._send(503, "application/json", b'{"error": "world unreachable"}')
 
+    # --- the virtual game client (vclient.py) ---------------------------
+    # Below _armory_member for the same reason it sits here: several suites
+    # slice this class between two handlers and assert that no request
+    # parameter is read inside the slice. Every one of these takes a name,
+    # and the name is only ever compared against the family rosters.
+    def _client_scope(self, query: dict):
+        """(name, family key, family names) for a roster name, else None."""
+        wanted = query.get("name", [""])[0]
+        if not _NAME_RE.fullmatch(wanted):
+            return None
+        for key, names in _fetch_family_groups():
+            if wanted in names:
+                return wanted, key, names
+        return None
+
+    def _client_frame(self, query: dict, build, what: str) -> None:
+        """Scope the name, build the frame, and send it; 404 off the roster."""
+        try:
+            scope = self._client_scope(query)
+            if scope is None:
+                self._send(404, "application/json", b'{"error": "not a family member"}')
+                return
+            payload = build(*scope)
+            payload.setdefault("name", scope[0])
+            payload["family_key"] = scope[1]
+            self._send(200, "application/json", json.dumps(payload).encode())
+        except (pymysql.err.MySQLError, OSError):
+            # The world, or the way to it, is down: the frame says so.
+            log.exception("client %s query failed", what)
+            self._send(503, "application/json", b'{"error": "world unreachable"}')
+        except Exception:
+            # A bug in building the frame is not an outage and is not called one.
+            log.exception("client %s frame failed to build", what)
+            self._send(500, "application/json", b'{"error": "frame failed to build"}')
+
+    def _client_bags(self, query: dict) -> None:
+        """GET /api/client/bags?name=X - the backpack and the four bags."""
+        def build(name, _key, _names):
+            f = _fetch_client_inventory(name)
+            return vclient.build_inventory(f["rows"], CLIENT_ICONS, vclient.BAGS,
+                                           money=f["money"])
+        self._client_frame(query, build, "bags")
+
+    def _client_bank(self, query: dict) -> None:
+        """GET /api/client/bank?name=X - the bank and its seven bag slots."""
+        def build(name, _key, _names):
+            f = _fetch_client_inventory(name)
+            return vclient.build_inventory(f["rows"], CLIENT_ICONS, vclient.BANK)
+        self._client_frame(query, build, "bank")
+
+    def _client_guild_bank(self, query: dict) -> None:
+        """GET /api/client/guildbank?name=X - the guild bank, tab by tab."""
+        def build(name, _key, _names):
+            return vclient.build_guild_bank(**_fetch_client_guild_bank(name),
+                                            icons=CLIENT_ICONS)
+        self._client_frame(query, build, "guild bank")
+
+    def _client_social(self, query: dict) -> None:
+        """GET /api/client/social?name=X - family, guild roster, friends."""
+        def build(name, key, names):
+            return vclient.build_social(name, key, names,
+                                        **_fetch_client_social(name, names))
+        self._client_frame(query, build, "social")
+
+    def _client_item_tip(self, query: dict) -> None:
+        """GET /api/client/item?entry=N - one item's tooltip, cached per entry.
+
+        An item template is game data rather than anything about a family,
+        so this takes any entry; it is bounded to a positive integer before
+        it reaches SQL, and the answer is kept for the life of the process.
+        """
+        raw = query.get("entry", [""])[0]
+        if not raw.isdigit() or not 0 < int(raw) < 10_000_000:
+            self._send(400, "application/json", b'{"error": "not an item entry"}')
+            return
+        try:
+            tip = CLIENT_TOOLTIPS.get(int(raw), _client_item)
+        except (pymysql.err.MySQLError, OSError):
+            log.exception("client item query failed")
+            self._send(503, "application/json", b'{"error": "world unreachable"}')
+            return
+        except Exception:
+            log.exception("client item tooltip failed to build")
+            self._send(500, "application/json", b'{"error": "tooltip failed to build"}')
+            return
+        if tip is None:
+            self._send(404, "application/json", b'{"error": "no such item"}')
+            return
+        self._send(200, "application/json", json.dumps(tip).encode())
+
     def _read_json_body(self) -> dict | None:
         """The POST body as a dict, or None after sending the error itself."""
         try:
@@ -5063,6 +5291,11 @@ class Handler(BaseHTTPRequestHandler):
         "/api/armory": _armory,
         "/api/armory/guild": _armory_guild,
         "/api/armory/member": _armory_member,
+        "/api/client/bags": _client_bags,
+        "/api/client/bank": _client_bank,
+        "/api/client/guildbank": _client_guild_bank,
+        "/api/client/social": _client_social,
+        "/api/client/item": _client_item_tip,
         "/api/standing": _standing,
         "/api/wealth": _wealth,
         "/api/questlog": _questlog,
