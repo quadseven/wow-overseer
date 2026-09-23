@@ -60,6 +60,7 @@ import jev_activity
 import jobs
 import kin
 import learnaim
+import lockbox
 # NOT `mailbox` - that is a Python standard library module, and this package is
 # imported with its own directory first on sys.path. See mailrun.py's docstring.
 import mailrun
@@ -6733,8 +6734,14 @@ class Bridge(discord.Client):
         here.
         """
         rows = await asyncio.to_thread(_fetch_bag_state, names)
+        members = bag_upgrade.members_from_rows(rows, names)
+        # A BAG ITS OWN HOLDER CAN PUT ON GOES ON FIRST (#88), and it is not
+        # also handed to a sibling in the same pass. The bag it displaces is
+        # carried from the next save on, where the hand-over below or the
+        # vendor pass's `bag_candidates` takes it.
+        own = await self._equip_own_bags(members)
         moves = bag_upgrade.plan_family_bags(
-            bag_upgrade.members_from_rows(rows, names)
+            bag_upgrade.without_bags(members, own)
         )
         if not moves:
             log.info("bags: nothing to hand over")
@@ -6760,6 +6767,27 @@ class Bridge(discord.Client):
                     move.slots_gained, move.why,
                 )
         _log_capped("bags", waits)
+
+    async def _equip_own_bags(self, members) -> set:
+        """Put on the carried bags their own holders should wear (#88).
+
+        `bag_upgrade.self_equips` decides; this writes one kind='bot' `e` row
+        per holder, the verb the bag purchase already uses, and returns the
+        guids so the family hand-over leaves them alone.
+        """
+        equips = bag_upgrade.self_equips(members)
+        if not equips:
+            return set()
+        seen = await asyncio.to_thread(_recent_bag_equip_keys, GIVE_RETRY_MINUTES)
+        for move in equips:
+            if (move.holder, move.command) in seen:
+                continue
+            if await asyncio.to_thread(_insert_bag_self_equip, move):
+                log.info("bags: %s puts on %s%s (%s, +%d slots) - %s",
+                         move.holder, move.bag,
+                         " in place of %s" % move.replaces if move.replaces else "",
+                         move.command, move.slots_gained, move.why)
+        return {move.guid for move in equips}
 
     async def _mid_run(self, names: list) -> bool:
         """Is any of these characters in the middle of a dungeon run?"""
@@ -7661,6 +7689,12 @@ class Bridge(discord.Client):
         sellable_counts = _sellable_per_holder(
             rows, bag_rows, equipped_bag_slots, names,
         )
+        # A LOCKBOX NO FAMILY ROGUE CAN PICK IS VENDOR GOODS (#88), so it
+        # counts toward what a trip could sell like any other.
+        locks = await self._lockbox_plan(names, free_slots)
+        lock_sales = lockbox.sale_candidates(locks.sell)
+        for sale in lock_sales:
+            sellable_counts[sale.holder] = sellable_counts.get(sale.holder, 0) + 1
 
         # A stale positional aim on the leader can block the vendor pass just
         # as surely as one on a follower. Full bags are the urgent case: when
@@ -7702,6 +7736,9 @@ class Bridge(discord.Client):
         # budget only in the sense every reader of `character_inventory` does,
         # which the `_hand_recipes` docstring prices out in full.
         await self._hand_recipes(names, free_slots)
+        # AND THE LOCKBOXES GO TO THE ROGUE, for the same reason (#88): a give
+        # or a letter between two characters needs no vendor trip.
+        await self._route_lockboxes(names, locks)
 
         # AND SO DOES THE GEAR HAND-OFF, FOR THE SAME REASON AND ONE MORE
         # (infra#4198). It used to sit below the two returns beneath this
@@ -7806,7 +7843,7 @@ class Bridge(discord.Client):
             bag_pressure.bag_candidates(
                 bag_rows, equipped_bag_slots, keep_names=OWNER_KEEPS,
             )
-        )
+        ) + lock_sales
         if not candidates:
             log.info("economy: no safe carried vendor goods")
             return
@@ -8029,6 +8066,58 @@ class Bridge(discord.Client):
                     "(infra#4191)",
                     max(0.0, until - time.monotonic()),
                 )
+
+    async def _lockbox_plan(self, names: list, free_slots: dict):
+        """Read the family's lockboxes and rogues; lockbox.plan routes them."""
+        boxes = lockbox.boxes_from_rows(
+            await asyncio.to_thread(_fetch_lockboxes, names))
+        if not boxes:
+            return lockbox.Plan()
+        pickers = await asyncio.to_thread(_fetch_lock_pickers, names, free_slots)
+        return lockbox.plan(boxes, pickers, bag_pressure.TOWN_RUN_FREE_SLOTS)
+
+    async def _route_lockboxes(self, names: list, locks) -> None:
+        """Write what `lockbox.plan` decided (#88).
+
+        The rogue picks and opens with mod-playerbots' own `unlock items`
+        and `open items`. A box on its way to the rogue moves the way every
+        hand-over does (#193): a give within trade range, a letter when its
+        holder stands at a mailbox, and otherwise it waits and says so.
+        """
+        _log_capped("lockbox", list(locks.notes))
+        if not (locks.unlock or locks.open or locks.hands):
+            return
+        seen = await asyncio.to_thread(_recent_lockbox_keys, LOCKBOX_RETRY_MINUTES)
+        for rogue, command in (
+                [(n, lockbox.UNLOCK_COMMAND) for n in locks.unlock]
+                + [(n, lockbox.OPEN_COMMAND) for n in locks.open]):
+            if (rogue, command) in seen:
+                continue
+            if await asyncio.to_thread(_insert_lockbox_row, rogue, command, "bot"):
+                log.info("lockbox: %s - %s", rogue, command)
+        if not locks.hands:
+            return
+        people = sorted({h.holder for h in locks.hands} | {h.taker for h in locks.hands})
+        positions = await asyncio.to_thread(_fetch_positions, people)
+        where = handover.spots(positions)
+        posting = await asyncio.to_thread(
+            _holders_at_mailbox, sorted({h.holder for h in locks.hands}), positions)
+        waits = []
+        for hand in locks.hands:
+            how = handover.verdict(hand.holder, hand.taker, where,
+                                   posting=posting, mailable=True)
+            if not how.verb:
+                waits.append(handover.waiting(hand.box.name, hand.holder,
+                                              hand.taker, how.why))
+                continue
+            command = hand.post_command if how.verb == handover.MAIL else hand.command
+            if (hand.holder, command) in seen:
+                continue
+            if await asyncio.to_thread(_insert_lockbox_row, hand.holder, command,
+                                       how.verb, hand.taker):
+                log.info("lockbox: %s -> %s by %s, %s - %s", hand.holder,
+                         hand.taker, how.verb, hand.box.name, hand.why)
+        _log_capped("lockbox", waits)
 
     async def _hand_gear(self, gear_rows: list, worn: list, names: list,
                          jev_plan=None) -> None:
@@ -8642,7 +8731,11 @@ class Bridge(discord.Client):
             log.info("bags: %d want a bag (%s) and none is at a vendor",
                      len(wanting), ", ".join(wanting))
             return needy
-        purchases, notes = bag_pressure.bag_purchases(buyers, offers)
+        # A QUEUED DUNGEON CAMPAIGN LETS THE RESERVE YIELD for a member whose
+        # free slots withhold it (#88); `bag_pressure.reserve_yields` says why.
+        campaign = await asyncio.to_thread(_campaign_waiting, names)
+        purchases, notes = bag_pressure.bag_purchases(
+            buyers, offers, campaign_waiting=campaign)
         for note in notes:
             log.info("bags: %s", note)
         seen = await asyncio.to_thread(_recent_town_keys, GIVE_RETRY_MINUTES)
@@ -12838,9 +12931,14 @@ def _fetch_vendor_items(names: list) -> list:
     # 2026-09-13: this is what sold Grug's Mining Pick and Blacksmith Hammer
     # eight times each, Bork's Skinning Knife four times, and Ugga's 25 Empty
     # Vials ten minutes after craft_supply bought them.
+    # A TOOL IS KEPT FOR THE HOLDER WHOSE OWN TRADES USE IT (#88). `worked_by`
+    # is each character's plan, and a Blacksmith Hammer in the bags of a
+    # character with no blacksmithing or engineering in it is vendor goods.
+    worked_by = _worked_by(names)
     worked = {trade for name in names for trade in professions.assigned(name)}
+    worked |= {trade for trades in worked_by.values() for trade in trades}
     keeps = disposition.profession_keeps(
-        rows, worked=worked, named=REAGENT_TRADES,
+        rows, worked=worked, named=REAGENT_TRADES, worked_by=worked_by,
     )
     for item in rows:
         # Trade goods such as Linen are class 7, not class 5. The
@@ -12978,6 +13076,172 @@ def _fetch_surplus_bags(names: list) -> list:
                 return []
             raise
         return [dict(row) for row in cur.fetchall()]
+
+
+# Carried lockboxes (#88): the vendor half's carried scope, item class 15
+# with a lock. `ii.flags` comes raw, and lockbox.boxes_from_rows reads the
+# unlocked bit out of it.
+_LOCKBOX_SQL = (
+    "SELECT c.name AS holder, ii.guid AS item_guid, ii.itemEntry AS entry, "
+    "it.name AS name, it.class AS item_class, it.lockid AS lock_id, "
+    "ii.flags AS instance_flags, it.Quality AS quality, "
+    "it.SellPrice AS sell_price "
+    "FROM character_inventory ci "
+    "JOIN characters c ON c.guid = ci.guid "
+    "JOIN item_instance ii ON ii.guid = ci.item "
+    "JOIN acore_world.item_template it ON it.entry = ii.itemEntry "
+    "WHERE c.name IN (%s) AND ((ci.bag = 0 AND ci.slot BETWEEN 23 AND 38) "
+    "OR ci.bag IN (SELECT bag.item FROM character_inventory bag "
+    "WHERE bag.guid = ci.guid AND bag.bag = 0 AND bag.slot BETWEEN 19 AND 22)) "
+    "AND it.class = 15 AND it.lockid > 0"
+)
+
+# Class and Lockpicking skill for every family member, 0 without the skill.
+_LOCK_PICKERS_SQL = (
+    "SELECT c.name AS name, c.class AS class_id, "
+    "COALESCE(cs.value, 0) AS lockpicking "
+    "FROM characters c "
+    "LEFT JOIN character_skills cs ON cs.guid = c.guid AND cs.skill = %s "
+    "WHERE c.name IN (%s)"
+)
+
+
+def _fetch_lockboxes(names: list) -> list:
+    """Rows for lockbox.boxes_from_rows; no judgement here."""
+    if not names:
+        return []
+    sql = _LOCKBOX_SQL % ",".join(["%s"] * len(names))
+    with _connect() as conn, conn.cursor() as cur:
+        try:
+            cur.execute(sql, names)
+        except pymysql.err.MySQLError as exc:
+            if exc.args and exc.args[0] in (1054, 1146):
+                log.warning("lockbox facts unavailable on this world image")
+                return []
+            raise
+        return [dict(row) for row in cur.fetchall()]
+
+
+def _fetch_lock_pickers(names: list, free_slots: dict) -> list:
+    """lockbox.Picker for every family member; lockbox decides who picks."""
+    if not names:
+        return []
+    sql = _LOCK_PICKERS_SQL % ("%s", ",".join(["%s"] * len(names)))
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(sql, [lockbox.LOCKPICKING] + list(names))
+        rows = cur.fetchall()
+    return [
+        lockbox.Picker(
+            name=row["name"], class_id=int(row["class_id"] or 0),
+            lockpicking=int(row["lockpicking"] or 0),
+            free_slots=int(free_slots.get(row["name"], 0)),
+        )
+        for row in rows
+    ]
+
+
+# How long a lockbox row is remembered before the same one may be written
+# again. Short, because `unlock items` and `open items` each act on one box
+# and a rogue holding three needs three turns of each.
+LOCKBOX_RETRY_MINUTES = int(os.environ.get("LOCKBOX_RETRY_MINUTES", "10"))
+
+
+def _recent_lockbox_keys(minutes: int) -> set:
+    """(character, command) pairs the lockbox pass wrote inside the window."""
+    with _connect() as conn, conn.cursor() as cur:
+        try:
+            cur.execute(
+                "SELECT target_name, command FROM overseer_command "
+                "WHERE source = 'lockbox' "
+                "AND created_at > NOW() - INTERVAL %s MINUTE",
+                (int(minutes),),
+            )
+        except pymysql.err.MySQLError as exc:
+            if exc.args and exc.args[0] in (1054, 1146):
+                return set()
+            raise
+        return {(row["target_name"], row["command"]) for row in cur.fetchall()}
+
+
+def _insert_lockbox_row(character: str, command: str, kind: str,
+                        taker: str = "") -> int:
+    """One overseer_command row for the lockbox pass, source='lockbox'.
+
+    kind='bot' for `unlock items` and `open items` on the rogue; kind='give'
+    or kind='mail' for a box moving to the rogue, with the rogue in
+    target_arg, the role that column holds for every other hand-over.
+    """
+    if kind not in ("bot", handover.GIVE, handover.MAIL):
+        log.warning("lockbox: refusing to write kind=%r for %s", kind, character)
+        return 0
+    with _connect() as conn, conn.cursor() as cur:
+        try:
+            cur.execute(
+                "INSERT INTO overseer_command "
+                "(target_name, command, kind, target_arg, source) "
+                "VALUES (%s, %s, %s, %s, %s)",
+                (character, command, kind, taker, "lockbox"),
+            )
+        except pymysql.err.MySQLError as exc:
+            if exc.args and exc.args[0] == 1265:
+                log.warning("overseer_command.kind has no %r value; the lockbox "
+                            "row for %s waits for a newer worldserver image",
+                            kind, character)
+                return 0
+            raise
+        return cur.lastrowid or 0
+
+
+# The trades each roster row is declared to work (#211, #213): the skill line
+# ids `tradechoice` writes to `overseer_roster.professions`.
+_DECLARED_TRADES_SQL = (
+    "SELECT name, professions FROM overseer_roster WHERE name IN (%s)"
+)
+
+
+def _fetch_declared_trades(names: list) -> dict:
+    """name -> the trade names its roster row declares; {} when unreadable."""
+    if not names:
+        return {}
+    sql = _DECLARED_TRADES_SQL % ",".join(["%s"] * len(names))
+    with _connect() as conn, conn.cursor() as cur:
+        try:
+            cur.execute(sql, names)
+        except pymysql.err.MySQLError as exc:
+            if exc.args and exc.args[0] in (1054, 1146):
+                return {}
+            raise
+        rows = cur.fetchall()
+    out = {}
+    for row in rows:
+        trades = []
+        for part in str(row.get("professions") or "").split(","):
+            try:
+                trade = _SKILL_NAMES.get(int(part.strip()), "")
+            except ValueError:
+                continue
+            if trade:
+                trades.append(trade)
+        out[row["name"]] = tuple(trades)
+    return out
+
+
+def _worked_by(names: list) -> dict:
+    """name -> every trade that character is meant to work (#88).
+
+    The union of the two places a plan lives: `professions.assigned` for the
+    family this bridge was written for, and the roster's declared skills,
+    which `tradechoice` writes for every family (#213). A character with
+    neither is left out, and `disposition.profession_keeps` keeps every tool
+    of a holder it cannot see a plan for.
+    """
+    declared = _fetch_declared_trades(names)
+    out = {}
+    for name in names:
+        trades = set(professions.assigned(name)) | set(declared.get(name, ()))
+        if trades:
+            out[name] = tuple(sorted(trades))
+    return out
 
 
 def _sell_attempts(hours: int) -> list:
@@ -13753,7 +14017,10 @@ def _insert_gear_handoff(grant) -> int:
 _BAG_STATE_SQL = (
     "SELECT c.name AS holder, ii.guid AS guid, it.name AS name, "
     "       it.ContainerSlots AS slots, ci.bag AS bag, ci.slot AS slot, "
-    "       COALESCE(fill.n, 0) AS used "
+    "       COALESCE(fill.n, 0) AS used, "
+    # The entry the equip verb names and the subclass that says whether the
+    # bag is a general one (bag_upgrade.self_equips, #88).
+    "       ii.itemEntry AS entry, it.subclass AS subclass "
     "FROM character_inventory ci "
     "JOIN characters c                  ON c.guid = ci.guid "
     "JOIN item_instance ii              ON ii.guid = ci.item "
@@ -14041,6 +14308,62 @@ def _insert_bag_equip(purchase) -> int:
             (purchase.buyer, purchase.equip_command, "bags"),
         )
         return cur.lastrowid or 0
+
+
+def _recent_bag_equip_keys(minutes: int) -> set:
+    """(character, command) pairs of kind='bot' bag rows inside the window."""
+    with _connect() as conn, conn.cursor() as cur:
+        try:
+            cur.execute(
+                "SELECT target_name, command FROM overseer_command "
+                "WHERE kind = 'bot' AND source = 'bags' "
+                "AND created_at > NOW() - INTERVAL %s MINUTE",
+                (int(minutes),),
+            )
+        except pymysql.err.MySQLError as exc:
+            if exc.args and exc.args[0] in (1054, 1146):
+                return set()
+            raise
+        return {(row["target_name"], row["command"]) for row in cur.fetchall()}
+
+
+def _insert_bag_self_equip(move) -> int:
+    """One kind='bot' row putting a carried bag on its own holder (#88)."""
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(
+            "INSERT INTO overseer_command (target_name, command, kind, source) "
+            "VALUES (%s, %s, 'bot', %s)",
+            (move.holder, move.command, "bags"),
+        )
+        return cur.lastrowid or 0
+
+
+# Is an operator-ordered dungeon campaign queued or running for the family
+# these characters belong to (#209)? The queue is keyed by roster family.
+# The two tables sit on opposite sides of the collation split, so the queue's
+# operand is collated to the roster's (infra#3173).
+_CAMPAIGN_WAITING_SQL = (
+    "SELECT COUNT(*) AS waiting FROM overseer_dungeon_queue q "
+    "JOIN overseer_roster r "
+    "ON q.family COLLATE utf8mb4_unicode_ci = r.family "
+    "WHERE r.name IN (%s) AND q.status IN ('queued', 'active')"
+)
+
+
+def _campaign_waiting(names: list) -> bool:
+    """True when a dungeon campaign waits on this family; False if unreadable."""
+    if not names:
+        return False
+    sql = _CAMPAIGN_WAITING_SQL % ",".join(["%s"] * len(names))
+    with _connect() as conn, conn.cursor() as cur:
+        try:
+            cur.execute(sql, names)
+        except pymysql.err.MySQLError as exc:
+            if exc.args and exc.args[0] in (1054, 1146):
+                return False
+            raise
+        row = cur.fetchone()
+    return bool(row and int(row["waiting"] or 0) > 0)
 
 
 def _insert_bag_give(move, command: str) -> int:

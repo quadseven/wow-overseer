@@ -248,7 +248,10 @@ class TheBridgeRunsEveryFamily(unittest.TestCase):
             body.index("_insert_town_errand, errand"),
             body.index("_insert_bag_equip, purchase"),
         )
-        self.assertIn("bag_pressure.bag_purchases(buyers, offers)", body)
+        self.assertIn(
+            "bag_pressure.bag_purchases(\n            buyers, offers, campaign_waiting=campaign)",
+            body,
+        )
 
     def test_no_gm_command_and_no_travel_write_in_the_purchase(self):
         body = _statements("    async def _buy_bags_once(")
