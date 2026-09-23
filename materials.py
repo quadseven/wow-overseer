@@ -330,7 +330,28 @@ def _said_for(
     return head
 
 
-def plan(holdings, *, stuck_pairs: Mapping | None = None) -> Plan:
+def family_crafters(skills_by_name: Mapping) -> dict:
+    """skill -> the member who holds it, highest value first, then by name.
+
+    For a family `professions.ROSTER` does not name (#215): the trade a
+    reagent feeds belongs to whoever has learned it, since that is the only
+    character who can cast with it.
+    """
+    out: dict = {}
+    best: dict = {}
+    for name in sorted(skills_by_name):
+        for skill, value in (skills_by_name.get(name) or {}).items():
+            if skill not in professions.CRAFTING or not value:
+                continue
+            if int(value) > best.get(skill, 0):
+                best[skill] = int(value)
+                out[skill] = name
+    return out
+
+
+def plan(
+    holdings, *, stuck_pairs: Mapping | None = None, crafters: Mapping | None = None
+) -> Plan:
     """Every stack that should move, in one pass.
 
     Deterministic: the same holdings in produce the same grants in the same
@@ -347,6 +368,10 @@ def plan(holdings, *, stuck_pairs: Mapping | None = None) -> Plan:
 
     `stuck_pairs` is `stuck()`'s answer: those pairs produce a Blocked instead
     of a Grant, so a doomed give is proposed no further.
+
+    `crafters` maps a skill to the member who works it, for a family ROSTER
+    does not name (#215); `family_crafters` builds it from what they hold.
+    None keeps ROSTER's answer for this bridge's own family.
     """
     refused = stuck_pairs or {}
     grants = []
@@ -357,7 +382,10 @@ def plan(holdings, *, stuck_pairs: Mapping | None = None) -> Plan:
         skill = REAGENTS.get(holding.material, "")
         if not skill:
             continue
-        taker = professions.crafter_for(skill)
+        if crafters is None:
+            taker = professions.crafter_for(skill)
+        else:
+            taker = str(crafters.get(skill) or "")
         if not taker:
             note = (
                 f"{holding.material} feeds {skill}, and nobody is assigned "

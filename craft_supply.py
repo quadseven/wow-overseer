@@ -319,6 +319,7 @@ def reagent_errand(
 # and npc_vendor; see the module docstring for the full table.
 REAGENTS: dict[int, tuple[tuple[int, str, int, int], ...]] = {
     8776: ((2320, "Coarse Thread", 10, 1),),  # Linen Belt (Tailoring)
+    3755: ((2320, "Coarse Thread", 10, 3),),  # Linen Bag (craft.BAG_RECIPES)
     # 9058 IS BACK, because the reason it was absent was a misread rather than
     # a missing fact: an AcquireMethod 1 ability has no trainer_spell row by
     # definition, which is what "could not be verified" was actually seeing.

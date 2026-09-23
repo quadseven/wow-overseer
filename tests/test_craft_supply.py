@@ -455,12 +455,8 @@ class CraftReagentErrandsTests(unittest.TestCase):
         import craft
 
         for spell_id in craft_supply.REAGENTS:
-            found = any(
-                r.spell_id == spell_id
-                for recipes in craft.RECIPES.values()
-                for r in recipes
-            )
-            self.assertTrue(found, f"spell {spell_id} is not in craft.RECIPES")
+            found = any(r.spell_id == spell_id for r in craft.known_recipes())
+            self.assertTrue(found, f"spell {spell_id} is not a craft.py recipe")
 
     def test_every_recipe_that_names_a_bought_reagent_is_bought_for(self):
         """THE DIRECTION THE TWO TESTS ABOVE DO NOT COVER, and it was found by
@@ -493,28 +489,25 @@ class CraftReagentErrandsTests(unittest.TestCase):
         for reagents in craft_supply.REAGENTS.values():
             bought_entries.update(entry for entry, _l, _p, _q in reagents)
 
-        for recipes in craft.RECIPES.values():
-            for recipe in recipes:
-                wanted = {
-                    entry for entry in bought_entries if "(%d" % entry in recipe.note
-                }
-                if not wanted:
-                    continue
-                covered = set()
-                single = craft_supply.REAGENT.get(recipe.spell_id)
-                if single:
-                    covered.add(single[0])
-                for entry, _l, _p, _q in craft_supply.REAGENTS.get(recipe.spell_id, ()):
-                    covered.add(entry)
-                with self.subTest(spell=recipe.spell_id, name=recipe.name):
-                    self.assertEqual(
-                        sorted(wanted - covered),
-                        [],
-                        "%s (%d) names vendor-bought reagent(s) %s in its note "
-                        "and craft_supply buys none of them, so every cast "
-                        "will be refused for reagents with nothing logging why"
-                        % (recipe.name, recipe.spell_id, sorted(wanted - covered)),
-                    )
+        for recipe in craft.known_recipes():
+            wanted = {entry for entry in bought_entries if "(%d" % entry in recipe.note}
+            if not wanted:
+                continue
+            covered = set()
+            single = craft_supply.REAGENT.get(recipe.spell_id)
+            if single:
+                covered.add(single[0])
+            for entry, _l, _p, _q in craft_supply.REAGENTS.get(recipe.spell_id, ()):
+                covered.add(entry)
+            with self.subTest(spell=recipe.spell_id, name=recipe.name):
+                self.assertEqual(
+                    sorted(wanted - covered),
+                    [],
+                    "%s (%d) names vendor-bought reagent(s) %s in its note "
+                    "and craft_supply buys none of them, so every cast "
+                    "will be refused for reagents with nothing logging why"
+                    % (recipe.name, recipe.spell_id, sorted(wanted - covered)),
+                )
 
     def test_every_reagents_entry_names_a_positive_quantity_per_cast(self):
         for spell_id, needs in craft_supply.REAGENTS.items():
@@ -1002,7 +995,7 @@ class TheBridgeWalksTheLeaderToTheRightShop(unittest.TestCase):
         self.assertNotIn('travel_npc="vendor"', body)
         self.assertIn("craft_supply.reagent_need(", body)
         self.assertIn("craft_supply.craft_reagent_needs(", body)
-        self.assertIn("self._aim_at_reagent_vendor(needs)", body)
+        self.assertIn("self._aim_at_reagent_vendor(needs, cohort)", body)
 
     def test_the_bridge_does_no_shortfall_arithmetic_of_its_own(self):
         """Whether a character is short of a reagent - and so whether a walk
@@ -1023,7 +1016,7 @@ class TheBridgeWalksTheLeaderToTheRightShop(unittest.TestCase):
         # writer this used to name. Still the traveller the pure module chose,
         # still the target it chose, still never a second UPDATE.
         self.assertIn(
-            'self._claim_town_slot(\n            "craft_supply", trip.traveller, trip.target)',
+            'self._claim_town_slot(\n            "craft_supply", trip.traveller, trip.target,',
             body,
         )
         self.assertNotIn("UPDATE overseer_roster", body)

@@ -1818,6 +1818,57 @@ RECIPES: dict = {
 }
 
 
+# THE FAMILY'S OWN BAGS (#215), kept apart from RECIPES because a bag is not a
+# rung of the leveling ladder: it is made because somebody in the family has an
+# empty bag position, at whatever skill the tailor has reached past its
+# minimum. RECIPES allows one recipe per skill point, and a bag overlapping
+# the bolt and belt brackets would break that rule for a reason that has
+# nothing to do with skill. craft_rhythm.bag_errand is the one reader.
+#
+# Linen Bag, spell 3755: 3x Bolt of Linen Cloth (2996) and 3x Coarse Thread
+# (2320, vendor-bought, see craft_supply.REAGENTS) make one Linen Bag (item
+# 4238, 6 slots), no focus needed, required skill 45. Taught by any tailoring
+# trainer; like every rung above the first in RECIPES it relies on the
+# playerbots recipe grant described in the auto-learn comment above, and
+# DriveCraft's `!HasSpell` branch says so if that grant does not reach it.
+LINEN_BAG = Recipe(
+    3755,
+    "Linen Bag",
+    min_skill=45,
+    max_skill=450,
+    note="3x Bolt of Linen Cloth (2996), 3x Coarse Thread (2320, "
+    "vendor-bought) -> 1x Linen Bag (item 4238, 6 slots), no focus needed",
+)
+BAG_RECIPES: dict = {SKILL_IDS["tailoring"]: (LINEN_BAG,)}
+
+
+def known_recipes():
+    """Every recipe this module can name: the ladder, then the family's bags."""
+    for recipes in RECIPES.values():
+        yield from recipes
+    for recipes in BAG_RECIPES.values():
+        yield from recipes
+
+
+def held_primaries(skills: dict) -> tuple:
+    """The primary trades a character actually holds, in a fixed order.
+
+    WHAT ANOTHER FAMILY'S `primaries` ARE (#215). `professions.assigned` is
+    this bridge's own family's hand-written table and names nobody else, so
+    for every other family the trades that count are the ones the character
+    has learned, which tradechoice chose and a trainer taught (#211). A
+    trade not learned yet has nothing to cast, the same reading
+    `craft_errand` already gives a value of 0.
+    """
+    return tuple(
+        sorted(
+            name
+            for name, value in skills.items()
+            if name in professions.PRIMARY and value
+        )
+    )
+
+
 def recipe_for(skill_id: int, skill_value: int):
     """The recipe worth casting for this skill at this value, or None.
 
@@ -1856,14 +1907,13 @@ def focus_for(spell_id: int) -> int:
     wanted = int(spell_id or 0)
     if not wanted:
         return 0
-    for recipes in RECIPES.values():
-        for recipe in recipes:
-            if recipe.spell_id == wanted:
-                return recipe.focus
+    for recipe in known_recipes():
+        if recipe.spell_id == wanted:
+            return recipe.focus
     return 0
 
 
-def smelt_errand(name: str, skills: dict) -> int:
+def smelt_errand(name: str, skills: dict, primaries=None) -> int:
     """The smelt `craft_spell` this character could carry, or 0.
 
     THE GATHERING-TRADE SIBLING OF `craft_errand`, AND DELIBERATELY A SECOND
@@ -1886,8 +1936,12 @@ def smelt_errand(name: str, skills: dict) -> int:
     or with mining above 69 where the next bracket is trainer-gated and
     deliberately absent. A caller must not invent a fallback, the same
     permission discipline `recipe_for` and `craft_errand` already hold.
+
+    `primaries` replaces `professions.assigned(name)` for a character of
+    another family (#215); see `held_primaries`.
     """
-    for skill_name in professions.assigned(name):
+    trades = professions.assigned(name) if primaries is None else primaries
+    for skill_name in trades:
         if skill_name not in professions.GATHERING:
             continue
         value = skills.get(skill_name, 0)
@@ -1899,7 +1953,7 @@ def smelt_errand(name: str, skills: dict) -> int:
     return 0
 
 
-def craft_errand(name: str, skills: dict) -> int:
+def craft_errand(name: str, skills: dict, primaries=None) -> int:
     """The `craft_spell` this character's roster row should carry, or 0.
 
     `skills` is one character's profession skills as `professions.plan`'s
@@ -1918,8 +1972,12 @@ def craft_errand(name: str, skills: dict) -> int:
     (no RECIPES entry yet, or between brackets) falls through to whatever
     secondary bracket its First Aid/Cooking value is in, rather than sitting
     on job='craft' doing nothing while a free skill-up sits unclaimed.
+
+    `primaries` replaces `professions.assigned(name)` for a character of
+    another family (#215); see `held_primaries`.
     """
-    for skill_name in professions.assigned(name):
+    trades = professions.assigned(name) if primaries is None else primaries
+    for skill_name in trades:
         if skill_name not in professions.CRAFTING:
             continue
         value = skills.get(skill_name, 0)

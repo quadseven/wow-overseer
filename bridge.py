@@ -1427,7 +1427,7 @@ def _pending_trades() -> dict:
         return {}
 
 
-def _crafting_roster() -> list:
+def _crafting_roster(family: str | None = None) -> list:
     """Every enabled character currently on `job='craft'` (infra#440).
 
     A PLAIN COLUMN READ, not a decision - _craft_once uses this to know WHO
@@ -1442,8 +1442,10 @@ def _crafting_roster() -> list:
     character's `craft_spell`, which sends it walking to a `travel_npc` this
     family's leader logic never accounted for - a second guild's smelter
     crossing a continent because THIS family wanted something made.
+
+    `family` names another roster family (#215); None is this bridge's own.
     """
-    cohort = _cohort_of(bonds.head_of_family())
+    cohort = family or _cohort_of(bonds.head_of_family())
     scope = " AND family = %s" if cohort else ""
     scope_args = (cohort,) if cohort else ()
     with _connect() as conn, conn.cursor() as cur:
@@ -1455,7 +1457,41 @@ def _crafting_roster() -> list:
         return [row["name"] for row in cur.fetchall()]
 
 
-def _standing_jobs() -> dict:
+def _primaries_for(cohort, names, skills: dict) -> dict:
+    """name -> the trades that count for it, or {} for this bridge's family.
+
+    This bridge's own family is `professions.assigned`'s, which the craft
+    choosers read when a name is missing here. Another family's members
+    count the trades they hold (#215, `craft.held_primaries`).
+    """
+    if cohort is None:
+        return {}
+    return {name: craft.held_primaries(skills.get(name, {})) for name in names}
+
+
+def _bags_wanted_for(cohort=None) -> int:
+    """Empty bag positions no spare bag will fill, across one family (#215).
+
+    `bag_pressure.open_bag_positions` answers per member; the tailor's bag
+    errand needs only whether the family still wants one. An unreadable
+    bag state wants nothing, and says so, so the tailor keeps its ladder.
+    """
+    if cohort is None:
+        names = sorted(_protected_guids().values())
+    else:
+        names = sorted(cohort.names)
+    if not names:
+        return 0
+    try:
+        members = bag_upgrade.members_from_rows(_fetch_bag_state(names), names)
+    except Exception:
+        log.exception("craft: the family's bag positions could not be read, "
+                      "so no bag is made this pass")
+        return 0
+    return sum(bag_pressure.open_bag_positions(members).values())
+
+
+def _standing_jobs(family: str | None = None) -> dict:
     """name -> `job` for every enabled roster row (infra#3696).
 
     THE SIBLING OF `_crafting_roster`, AND THE REASON IT IS NOT THAT FUNCTION.
@@ -1481,8 +1517,10 @@ def _standing_jobs() -> dict:
     for ever, and craft supply, the craft rhythm and the skill-goal pass all
     stand down. For THIS family, on account of a job somebody else's character
     is on, with nothing logged that names the cause.
+
+    `family` names another roster family (#215); None is this bridge's own.
     """
-    cohort = _cohort_of(bonds.head_of_family())
+    cohort = family or _cohort_of(bonds.head_of_family())
     scope = " AND family = %s" if cohort else ""
     scope_args = (cohort,) if cohort else ()
     with _connect() as conn, conn.cursor() as cur:
@@ -2148,16 +2186,18 @@ def _apply_queue_move(move, names: list) -> str:
     return move.why
 
 
-def _queue_owns_job() -> bool:
-    """Whether this bridge's own family has a queue that owns its job now.
+def _queue_owns_job(family: str | None = None) -> bool:
+    """Whether a family's campaign queue owns its job now.
 
     The passes that write this family's job on their own clock (the council
     goal's dungeon lease, the skill goal, the craft rhythm) ask this first
     and stand down, so a queue is not stomped every few minutes by a pass
     that knows nothing about it. An unreadable queue owns nothing.
+
+    `family` names another roster family (#215); None is this bridge's own.
     """
     try:
-        family = _cohort_of(bonds.head_of_family()) or ""
+        family = family or _cohort_of(bonds.head_of_family()) or ""
         return bool(campaignqueue.pending_by_family(_fetch_queue_rows()).get(family))
     except Exception:
         log.exception("queue: could not read whether a queue owns the job")
@@ -4874,7 +4914,7 @@ class Bridge(discord.Client):
 
         await self._speak_trade_plan(plan, fresh)
 
-    async def _craft_once(self) -> None:
+    async def _craft_once(self, cohort=None) -> None:
         """Aim every `job='craft'` character at the recipe craft.recipe_for
         picks for its current skill (infra#440).
 
@@ -4902,11 +4942,18 @@ class Bridge(discord.Client):
         extra query that costs is `_fetch_item_counts`, already batched one
         round trip per DISTINCT item entry across the whole family, and only
         the family's two miners contribute an entry to it at all.
+
+        `cohort` is another roster family (#215): its crafters are its own
+        rows on job='craft', their trades are the ones they hold, and a
+        tailor sews the family's bags first (`craft_rhythm.bag_errand`).
         """
-        names = await asyncio.to_thread(_crafting_roster)
+        names = await asyncio.to_thread(
+            _crafting_roster, getattr(cohort, "key", None))
         if not names:
             return
         skills = await asyncio.to_thread(_fetch_trade_skills, names)
+        primaries = _primaries_for(cohort, names, skills)
+        bags_wanted = await asyncio.to_thread(_bags_wanted_for, cohort)
         # BOTH CANDIDATES' REAGENTS, FETCHED BEFORE EITHER IS CHOSEN. The choice
         # compares what is held for the spend against what is held for the
         # smelt, so counting only the chosen recipe's reagents would need the
@@ -4914,13 +4961,15 @@ class Bridge(discord.Client):
         wanted = {
             (name, entry)
             for name in names
-            for entry in craft_rhythm.reagents_to_count(name, skills.get(name, {}))
+            for entry in craft_rhythm.reagents_to_count(
+                name, skills.get(name, {}), primaries.get(name), bags_wanted)
         }
         counts = await asyncio.to_thread(_fetch_item_counts, sorted(wanted))
         for name in names:
             held = {entry: count for (who, entry), count in counts.items()
                     if who == name}
-            chosen = craft_rhythm.errand(name, skills.get(name, {}), held)
+            chosen = craft_rhythm.errand(name, skills.get(name, {}), held,
+                                         primaries.get(name), bags_wanted)
             await asyncio.to_thread(_write_craft_errand, name, chosen.spell)
             if chosen.spell:
                 log.info("craft: %s aimed at %s spell %s - %s",
@@ -4942,9 +4991,10 @@ class Bridge(discord.Client):
                 await self._craft_once()
             except Exception:
                 log.exception("craft failed; retrying next cycle")
+            await self._for_other_families("craft", self._craft_once)
             await asyncio.sleep(cycle)
 
-    async def _craft_supply_once(self) -> None:
+    async def _craft_supply_once(self, cohort=None) -> None:
         """Buy the vendor reagent a standing craft errand needs (infra#3613).
 
         THE GAP THIS CLOSES. Every crafting recipe craft.py verified tonight
@@ -5028,8 +5078,17 @@ class Bridge(discord.Client):
         `_recruit_once`'s house rule, and this pass had two silent `return`s
         above its summary line, which is how a quiet cycle and a pass that
         never ran looked identical for ninety minutes.
+
+        `cohort` is another roster family (#215): its own names, its own
+        jobs, and its own leader and town slot for the walk. While its
+        campaign queue owns its job, the walk waits, so a reagent trip never
+        pulls the leader away between two runs; a buy at a counter the
+        family already stands at still lands.
         """
-        names = sorted((await asyncio.to_thread(_protected_guids)).values())
+        if cohort is None:
+            names = sorted((await asyncio.to_thread(_protected_guids)).values())
+        else:
+            names = sorted(cohort.names)
         if not names:
             log.info(
                 "craft_supply: no protected character to shop for, so nothing "
@@ -5038,7 +5097,7 @@ class Bridge(discord.Client):
             return
 
         mode = craft_rhythm.standing_mode(
-            await asyncio.to_thread(_standing_jobs)
+            await asyncio.to_thread(_standing_jobs, getattr(cohort, "key", None))
         )
         if mode not in (craft_rhythm.MODE_CRAFT, craft_rhythm.MODE_GATHER):
             log.info(
@@ -5170,8 +5229,12 @@ class Bridge(discord.Client):
                             name, errand.command, errand.why,
                         )
 
-        if needs:
-            await self._aim_at_reagent_vendor(needs)
+        if needs and cohort is not None and await asyncio.to_thread(
+                _queue_owns_job, cohort.key):
+            log.info("craft_supply: family %s's campaign queue owns its job, "
+                     "so the walk to a reagent vendor waits", cohort.key)
+        elif needs:
+            await self._aim_at_reagent_vendor(needs, cohort)
 
         # The mode is named here too, so ONE line proves the fix: `on
         # job=quest` is this pass shopping while the family gathers, which is
@@ -5312,12 +5375,19 @@ class Bridge(discord.Client):
             self._cohort_town_slots[key] = slot
         return slot
 
-    async def _idle_town_slot(self, claimant: str) -> bool:
-        """Ask for the family's traveller to be idle, with no successor aim."""
-        leader = await asyncio.to_thread(_head_now)
+    async def _idle_town_slot(self, claimant: str, cohort=None) -> bool:
+        """Ask for the family's traveller to be idle, with no successor aim.
+
+        `cohort` is another roster family (#215): its own leader, its own slot.
+        """
+        if cohort is None:
+            leader = await asyncio.to_thread(_head_now)
+        else:
+            leader = await asyncio.to_thread(_cohort_leader, cohort.key)
+        slot = self._cohort_town_slot(cohort)
         column = await asyncio.to_thread(_current_travel_npc, leader)
         now = time.monotonic()
-        decision = self._town_slot.want_idle(
+        decision = slot.want_idle(
             claimant=claimant, character=leader, leader=leader,
             column=column, now=now,
         )
@@ -5325,14 +5395,14 @@ class Bridge(discord.Client):
             log.info("%s", townslot.report(decision))
             return False
         if decision.release is None:
-            self._town_slot.settle(decision, True, now)
+            slot.settle(decision, True, now)
             log.debug("%s", townslot.report(decision))
             return True
         released = await asyncio.to_thread(
             _release_trade_errand, decision.release.character,
             decision.release.aim,
         )
-        self._town_slot.settle(decision, released, now)
+        slot.settle(decision, released, now)
         if released:
             log.info("%s", townslot.report(decision))
             return True
@@ -5343,7 +5413,7 @@ class Bridge(discord.Client):
         )
         return False
 
-    async def _aim_at_reagent_vendor(self, needs: list) -> None:
+    async def _aim_at_reagent_vendor(self, needs: list, cohort=None) -> None:
         """Walk the family to a vendor that actually stocks one of the
         outstanding reagents (infra#3692).
 
@@ -5396,8 +5466,14 @@ class Bridge(discord.Client):
         and is deliberately not made here; this pass needs no C++ change to
         work, and a ten-minute loop that re-asserts is a cheaper answer than a
         core rebuild.
+
+        `cohort` is another roster family (#215): its own leader walks, and
+        the trip is arbitrated in its own town slot.
         """
-        leader = await asyncio.to_thread(_head_now)
+        if cohort is None:
+            leader = await asyncio.to_thread(_head_now)
+        else:
+            leader = await asyncio.to_thread(_cohort_leader, cohort.key)
         positions = await asyncio.to_thread(
             _fetch_positions, [leader] if leader else []
         )
@@ -5452,7 +5528,8 @@ class Bridge(discord.Client):
         # grants it while the sell pass holds the column - it would be inert
         # otherwise - and only a genuinely different errand makes it wait.
         aimed = await self._claim_town_slot(
-            "craft_supply", trip.traveller, trip.target)
+            "craft_supply", trip.traveller, trip.target,
+            cohort=getattr(cohort, "key", None))
         log.info("craft_supply: %s (aim taken=%s)", craft_supply.report(trip), aimed)
         if not aimed:
             log.info(
@@ -5477,6 +5554,7 @@ class Bridge(discord.Client):
                 await self._craft_supply_once()
             except Exception:
                 log.exception("craft_supply failed; retrying next cycle")
+            await self._for_other_families("craft_supply", self._craft_supply_once)
             await asyncio.sleep(cycle)
 
     def _rhythm_channel(self):
@@ -5504,7 +5582,7 @@ class Bridge(discord.Client):
                 return channel
         return _LogChannel()
 
-    async def _craft_rhythm_once(self) -> None:
+    async def _craft_rhythm_once(self, cohort=None) -> None:
         """Alternate the family between gathering and crafting (infra#3696).
 
         THE KEYSTONE OF infra#3731, AND THE ONLY THING HERE THAT WAS MISSING.
@@ -5544,14 +5622,30 @@ class Bridge(discord.Client):
         decision. The report is still logged every pass, changed or not,
         because the starvation it names is the half of infra#3696 that has
         nothing to do with the mode.
+
+        `cohort` is another roster family (#215). Its own rows decide, with
+        the trades its members hold and its own bag wants; it gathers and
+        crafts only while no campaign queue owns its job, so a queued run is
+        never cancelled; and its job is written by `_set_family_job`, since
+        `_set_job` answers only for this bridge's family.
         """
-        names = sorted((await asyncio.to_thread(_protected_guids)).values())
+        if cohort is None:
+            names = sorted((await asyncio.to_thread(_protected_guids)).values())
+        else:
+            names = sorted(cohort.names)
+            if await asyncio.to_thread(_queue_owns_job, cohort.key):
+                log.info("craft_rhythm: family %s's campaign queue owns its "
+                         "job, so the rhythm waits for the queue to empty",
+                         cohort.key)
+                return
         if not names:
             return
         standing = craft_rhythm.standing_mode(
-            await asyncio.to_thread(_standing_jobs)
+            await asyncio.to_thread(_standing_jobs, getattr(cohort, "key", None))
         )
         skills = await asyncio.to_thread(_fetch_trade_skills, names)
+        primaries = _primaries_for(cohort, names, skills)
+        bags_wanted = await asyncio.to_thread(_bags_wanted_for, cohort)
 
         # ONE BATCH FOR THE WHOLE FAMILY, the same discipline
         # `_craft_supply_once` already holds `_fetch_item_counts` to: one round
@@ -5567,7 +5661,8 @@ class Bridge(discord.Client):
         wanted = {
             (name, entry)
             for name in names
-            for entry in craft_rhythm.reagents_to_count(name, skills.get(name, {}))
+            for entry in craft_rhythm.reagents_to_count(
+                name, skills.get(name, {}), primaries.get(name), bags_wanted)
         }
         counts = await asyncio.to_thread(_fetch_item_counts, sorted(wanted))
         # `carried` and not `held`: the gather branch at the foot of this
@@ -5581,7 +5676,8 @@ class Bridge(discord.Client):
         }
         spells = {
             name: craft_rhythm.errand(
-                name, skills.get(name, {}), carried[name]).spell
+                name, skills.get(name, {}), carried[name],
+                primaries.get(name), bags_wanted).spell
             for name in names
         }
 
@@ -5589,11 +5685,16 @@ class Bridge(discord.Client):
             craft_rhythm.stand(
                 name, spells[name],
                 {reagent.entry: carried[name].get(reagent.entry, 0)
-                 for reagent in craft_rhythm.GATHERED.get(spells[name], ())},
+                 for reagent in craft_rhythm.feeds(spells[name])},
             )
             for name in names
         ]
         plan = craft_rhythm.rhythm(stands, standing)
+        if cohort is not None:
+            log.info("craft_rhythm: family %s: %s", cohort.key,
+                     craft_rhythm.report(plan))
+            await self._family_rhythm_moves(cohort, plan, primaries)
+            return
         log.info("craft_rhythm: %s", craft_rhythm.report(plan))
 
         # HOW FAR THE FAMILY IS FROM THE RAID'S OWN SHOPPING LIST, every pass,
@@ -5674,7 +5775,62 @@ class Bridge(discord.Client):
                 await self._craft_rhythm_once()
             except Exception:
                 log.exception("craft_rhythm failed; retrying next cycle")
+            await self._for_other_families("craft_rhythm", self._craft_rhythm_once)
             await asyncio.sleep(cycle)
+
+    async def _family_rhythm_moves(self, cohort, plan, primaries: dict) -> None:
+        """What another family does with its rhythm's answer (#215).
+
+        GATHERING: a family whose short member works a node trade (herbs or
+        ore) walks its leader to a field near it, by `gatheraim`, through its
+        own town slot; a family short only of cloth or leather roams, which
+        is how both come, so its traveller is asked to be idle. Neither
+        happens mid-run. The job is then written only on a change.
+        """
+        if plan.mode == craft_rhythm.MODE_GATHER:
+            if await self._mid_run(list(cohort.names)):
+                log.info("craft_rhythm: family %s is in a dungeon run, so no "
+                         "gathering walk is taken", cohort.key)
+            elif craft_rhythm.short_of_nodes(plan.stands, primaries):
+                choice = await self._gather_destination(cohort)
+                log.info("gather: family %s - %s", cohort.key,
+                         getattr(choice, "why", "") or "no reason given")
+                await self._walk_to_gather_field(choice, cohort)
+            else:
+                await self._idle_town_slot("craft_rhythm", cohort)
+        if plan.changed:
+            await self._set_family_job(cohort, plan.mode, "overseer:craft_rhythm")
+
+    async def _set_family_job(self, cohort, mode: str, source: str) -> int:
+        """Write another family's job on every member, and say so (#215).
+
+        `_set_job` is this bridge's family's writer and speaks to a person;
+        an automatic pass for another family writes the same kind='job' rows
+        the campaign queue writes for it (`_apply_queue_move`), and stands
+        down exactly as `_set_job` does while that family's queue owns its
+        job. A family put on craft gets its craft errands at once.
+        """
+        refusal = jobs.why_not(mode)
+        if refusal:
+            log.warning("job: family %s not told %s - %s", cohort.key, mode,
+                        refusal)
+            return 0
+        if await asyncio.to_thread(_queue_owns_job, cohort.key):
+            log.info("job: mode=%r from %s stands down - family %s's campaign "
+                     "queue owns its job", mode, source, cohort.key)
+            return 0
+        written = 0
+        for name in sorted(cohort.names):
+            try:
+                await asyncio.to_thread(_insert_job, name, mode, source)
+                written += 1
+            except Exception:
+                log.exception("job: insert failed for %s (mode=%s)", name, mode)
+        log.info("job: family %s told %s by %s (%d/%d)", cohort.key, mode,
+                 source, written, len(cohort.names))
+        if mode == craft.MODE and written:
+            await self._craft_once(cohort)
+        return written
 
     async def _settle_auction_errand(self, names: list, leader: str) -> str:
         """Is the auctioneer errand the leader already carries finished?
@@ -6347,7 +6503,7 @@ class Bridge(discord.Client):
             except Exception:
                 log.exception("quest sharing pass failed; retrying next cycle")
 
-    async def _move_materials_once(self) -> None:
+    async def _move_materials_once(self, cohort=None) -> None:
         """One pass of infra#2830: reagents move to whoever is assigned the
         profession they feed.
 
@@ -6355,7 +6511,16 @@ class Bridge(discord.Client):
         the command, and only then speak - a give that could not be written
         (missing ENUM, or already queued inside GIVE_RETRY_MINUTES) has
         nothing to announce.
+
+        `cohort` is another roster family (#215). Its reagents go to whoever
+        in it holds the trade they feed (`materials.family_crafters`), so the
+        family's linen reaches its tailor. Its bags are handed over by the
+        economy pass, and its gives are logged rather than spoken, since the
+        party voices here are this bridge's family's.
         """
+        if cohort is not None:
+            await self._move_family_materials(cohort)
+            return
         names = sorted((await asyncio.to_thread(_protected_guids)).values())
         if await self._mid_run(names):
             # NOT A FAILURE AND NOT A SKIP TO BE FIXED. Reagents are still in
@@ -6419,6 +6584,47 @@ class Bridge(discord.Client):
                 grant.skill, grant.reason,
             )
         await self._speak_handovers(fresh)
+
+    async def _move_family_materials(self, cohort) -> None:
+        """Another family's reagents to its own crafters (#215)."""
+        names = sorted(cohort.names)
+        if await self._mid_run(names):
+            log.info("materials: family %s is in a dungeon run - reagents wait",
+                     cohort.key)
+            return
+        skills = await asyncio.to_thread(_fetch_trade_skills, names)
+        holdings = await asyncio.to_thread(_fetch_holdings, names)
+        refused = materials.retryable_stuck(
+            materials.stuck(
+                await asyncio.to_thread(_give_attempts, GIVE_GIVE_UP_HOURS)),
+            await asyncio.to_thread(_fetch_free_slots, names),
+        )
+        material_plan = materials.plan(
+            holdings, stuck_pairs=refused,
+            crafters=materials.family_crafters(skills))
+        for note in material_plan.notes:
+            log.info("materials: family %s: %s", cohort.key, note)
+        for block in material_plan.blocked:
+            log.info("materials: family %s: %s", cohort.key, block.said)
+        seen = await asyncio.to_thread(_recent_give_keys, GIVE_RETRY_MINUTES)
+        where = handover.spots(await asyncio.to_thread(_fetch_positions, names))
+        given, waits = 0, []
+        for grant in material_plan.grants:
+            if (grant.holder, grant.taker, grant.command) in seen:
+                continue
+            how = handover.verdict(grant.holder, grant.taker, where)
+            if how.verb != handover.GIVE:
+                waits.append(handover.waiting(
+                    grant.material, grant.holder, grant.taker, how.why))
+                continue
+            if await asyncio.to_thread(_insert_give, grant):
+                given += 1
+                log.info("materials: %s -> %s, %d %s (%s) - %s", grant.holder,
+                         grant.taker, grant.count, grant.material, grant.skill,
+                         grant.reason)
+        _log_capped("materials", waits)
+        log.info("materials: family %s - %d give(s) queued of %d planned",
+                 cohort.key, given, len(material_plan.grants))
 
     async def _hand_bags_once(self, names: list) -> None:
         """Give every idle bag to whoever has an empty bag position.
@@ -6572,6 +6778,7 @@ class Bridge(discord.Client):
                 await self._move_materials_once()
             except Exception:
                 log.exception("materials pass failed; retrying next cycle")
+            await self._for_other_families("materials", self._move_materials_once)
             await asyncio.sleep(cycle)
 
     async def _guild_share_once(self) -> None:
@@ -8155,6 +8362,20 @@ class Bridge(discord.Client):
                 log.exception("economy vendor pass failed; retrying next cycle")
             await self._economy_for_every_family()
             await asyncio.sleep(cycle)
+
+    async def _for_other_families(self, what: str, step) -> None:
+        """Run `step(cohort)` for every roster family but this one (#215).
+
+        The crafting passes' form of `_economy_for_every_family`: each family
+        is guarded on its own, so one family's failure costs only its turn.
+        """
+        own = sorted((await asyncio.to_thread(_protected_guids)).values())
+        for cohort in await asyncio.to_thread(_other_cohorts, own):
+            try:
+                await step(cohort)
+            except Exception:
+                log.exception("%s: pass failed for family %s; retrying next "
+                              "cycle", what, cohort.key)
 
     async def _economy_for_every_family(self) -> None:
         """The bag and economy passes for every family, not only this one (#150).
@@ -10145,7 +10366,7 @@ class Bridge(discord.Client):
     async def _goal_complete(self, row: dict, action) -> None:
         await asyncio.to_thread(_complete_goal, action.goal_id)
 
-    async def _gather_destination(self):
+    async def _gather_destination(self, cohort=None):
         """Where the family should go to gather, or a Choice saying why not.
 
         EVERY READ HERE ALREADY EXISTED. `_head_now` is the same leader every
@@ -10163,15 +10384,20 @@ class Bridge(discord.Client):
         set. Only the densest few are measured: the ranking is long and each
         reading is a creature scan, so measuring all of them every goal cycle
         would be work about zones the family will never be sent to.
+
+        `cohort` is another roster family (#215): its own leader and names.
         """
-        leader = await asyncio.to_thread(_head_now)
+        leader = await asyncio.to_thread(_family_leader, cohort)
         if not leader:
             return gatheraim.Choice(
                 refused="no leader is marked on overseer_roster, so there is "
                         "nobody to aim and no map to aim them on",
                 why="no roster lead.")
 
-        names = await asyncio.to_thread(_fetch_enabled_names)
+        if cohort is None:
+            names = await asyncio.to_thread(_fetch_enabled_names)
+        else:
+            names = sorted(cohort.names)
         skills = await asyncio.to_thread(_fetch_trade_skills, names)
         skill_name, value = gatheraim.lowest_gatherer(skills)
         if skill_name is None:
@@ -10218,15 +10444,15 @@ class Bridge(discord.Client):
                                 spawns=spawns, family_level=level,
                                 zone_levels=zone_levels, origin=origin)
 
-    async def _yield_gather_aim(self, why: str) -> bool:
+    async def _yield_gather_aim(self, why: str, cohort=None) -> bool:
         """Hand back a gathering walk this pass holds, and say why (#170).
 
         Only the pass's OWN aim: the slot's holder must be GATHER_CLAIMANT and
         the column must still read the aim it wrote. The release is the same
         compare-and-swap every errand uses, so a column that changed hands in
-        between matches nothing.
+        between matches nothing. `cohort` is another family's slot (#215).
         """
-        holder = self._town_slot.holder
+        holder = self._cohort_town_slot(cohort).holder
         if holder is None or holder.claimant != GATHER_CLAIMANT:
             log.info("gather: %s", why)
             return False
@@ -10241,7 +10467,7 @@ class Bridge(discord.Client):
                  else "the walk to %s had already ended" % holder.aim)
         return bool(released)
 
-    async def _walk_to_gather_field(self, choice) -> None:
+    async def _walk_to_gather_field(self, choice, cohort=None) -> None:
         """Send the family to the field `gatheraim` chose, or say why not.
 
         THE AIM IS BUILT BY `travel.ground_aim` AND NEVER BY THIS METHOD.
@@ -10273,6 +10499,9 @@ class Bridge(discord.Client):
         from a town errand. `Slot.long_leases` is keyed on that name: this is
         the pass whose trip is measured in minutes, and the only one given a
         lease dimensioned for it (`townslot.GATHER_LEASE_SECONDS`).
+
+        `cohort` is another roster family (#215): its names, its leader, and
+        its own town slot.
         """
         # FULL BAGS COME FIRST (#170). Measured on wow-dev 2026-09-22 the
         # gather walk held the column for Grug at 3 free slots of 64 while the
@@ -10280,7 +10509,10 @@ class Bridge(discord.Client):
         # cannot loot makes the walk worthless and the town trip urgent, so the
         # walk neither takes the column nor keeps one it already holds.
         try:
-            names = await asyncio.to_thread(_fetch_enabled_names)
+            if cohort is None:
+                names = await asyncio.to_thread(_fetch_enabled_names)
+            else:
+                names = sorted(cohort.names)
             free = await asyncio.to_thread(_fetch_free_slots, names)
         except Exception:
             # An unreadable bag is a reason not to walk, and it is said: an
@@ -10294,9 +10526,10 @@ class Bridge(discord.Client):
             # spoken it. Saying it twice in two voices is how a log stops
             # being read. But a walk this pass started earlier must not keep
             # the column once there is no field to walk to (#170).
-            await self._yield_gather_aim(full or "no gathering field is chosen")
+            await self._yield_gather_aim(full or "no gathering field is chosen",
+                                         cohort)
             return
-        leader = await asyncio.to_thread(_head_now)
+        leader = await asyncio.to_thread(_family_leader, cohort)
         if not leader:
             return
         where = (await asyncio.to_thread(_fetch_positions, [leader])).get(leader)
@@ -10326,7 +10559,8 @@ class Bridge(discord.Client):
                 got.zone_id, got.map_id, "overseer_roster.travel_npc",
             )
             return
-        aimed = await self._claim_town_slot(GATHER_CLAIMANT, leader, aim)
+        aimed = await self._claim_town_slot(
+            GATHER_CLAIMANT, leader, aim, cohort=getattr(cohort, "key", None))
         if not aimed:
             # `_claim_town_slot` has already named the holder, its lease and
             # the queue. What only this pass knows is what the wait costs: the
@@ -13252,6 +13486,13 @@ def _roster_cohort_rows() -> list:
 def _other_cohorts(own_names: list) -> tuple:
     """Every roster family but this bridge's own, with its leader (#150)."""
     return townslot.other_cohorts(_roster_cohort_rows(), own_names)
+
+
+def _family_leader(cohort=None) -> str:
+    """This bridge's leader for None, or another family's, read now."""
+    if cohort is None:
+        return _head_now()
+    return _cohort_leader(cohort.key)
 
 
 def _cohort_leader(key: str) -> str:
