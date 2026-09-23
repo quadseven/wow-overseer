@@ -32,7 +32,16 @@ KINDS = {
     "quest_pick": "The family's quest",
     "profession_choice": "A family member's professions",
     "activity_choice": "A family's next activity",
+    "item_keep": "What to do with a protected non-gear item",
 }
+
+# The protected non-gear items (#232) get their own short list: only where
+# Jev and the heuristic differ, which is the part worth reading. They are
+# asked often and would otherwise crowd every other kind out of `recent`.
+KEEP_KIND = "item_keep"
+KEEP_TITLE = "Protected items where Jev would differ"
+KEEP_EMPTY = "No protected item on record where Jev and the heuristic differ."
+KEEP_ROWS = 8
 
 _ACTED = {
     "jev": "Jev's answer was carried out",
@@ -98,6 +107,20 @@ def recent_line(row: dict) -> str:
     return "%s Given: %s." % (line, facts) if facts else line
 
 
+def keep_line(row: dict) -> str:
+    """One item_keep disagreement: holder, item, both answers and why."""
+    confidence = row.get("confidence")
+    sure = " at %.2f" % float(confidence) if confidence is not None else ""
+    return "%s, %s: heuristic %s, Jev %s%s (%s)." % (
+        str(row.get("subject") or "?"),
+        str(row.get("item_name") or "?"),
+        str(row.get("heuristic") or "?"),
+        str(row.get("jev") or "?"),
+        sure,
+        str(row.get("mode") or "?"),
+    )
+
+
 def view(rows, recent: int = 12) -> dict:
     """The Decree's Jev card from overseer_jev_judgment rows, newest first."""
     rows = list(rows or ())
@@ -111,6 +134,15 @@ def view(rows, recent: int = 12) -> dict:
         "title": TITLE,
         "lede": LEDE,
         "kinds": [kind_line(k, by_kind[k]) for k in order],
-        "recent": [recent_line(r) for r in rows[: max(0, int(recent))]],
+        "recent": [recent_line(r) for r in rows if str(r.get("kind")) != KEEP_KIND][
+            : max(0, int(recent))
+        ],
         "empty": EMPTY,
+        "keep_title": KEEP_TITLE,
+        "keep_differ": [
+            keep_line(r)
+            for r in rows
+            if str(r.get("kind")) == KEEP_KIND and r.get("jev") and not r.get("agree")
+        ][:KEEP_ROWS],
+        "keep_empty": KEEP_EMPTY,
     }

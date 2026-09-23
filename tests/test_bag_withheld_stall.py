@@ -525,6 +525,10 @@ class _FakeEconomySelf:
     async def _noop(self, *a, **k):
         return None
 
+    def _jev_keep_shadow(self, *a, **k):
+        """The item_keep shadow pass starts a task and returns (#232)."""
+        return None
+
     _release_stranded_vendor_errands = _noop
     _release_stranded_ground_errands = _noop
     _hand_recipes = _noop
