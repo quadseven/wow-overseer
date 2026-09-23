@@ -465,14 +465,30 @@ class TheNeedsAreTheFamilyAsked(unittest.TestCase):
     def test_the_members_are_the_roster_given(self):
         p = self.build()
         self.assertEqual([m["name"] for m in p["members"]], self.HORDE)
-        self.assertEqual(p["members"][0]["role"], "")
+        self.assertEqual(p["members"][0]["role"], "chief")
 
     def test_another_familys_bonds_are_not_drawn_on_this_one(self):
         p = self.build()
-        self.assertEqual(p["answering"]["rows"], [])
-        self.assertIn("no family rules", p["answering"]["headline"])
         for name in family.roster():
             self.assertNotIn(name, json.dumps(p["answering"]))
+
+    def test_this_familys_own_bonds_are_drawn(self):
+        """The warband has written rules now, so its Family view counts who
+        answers whom by ITS rules, not Grug's and not none."""
+        p = self.build()
+        keys = {r["key"] for r in p["answering"]["rows"]}
+        self.assertIn("Zug>Oz", keys)
+        self.assertIn("Uzza>Oz", keys)
+        self.assertEqual(p["answering"]["rule"], bonds.answering_rule("Zug"))
+        self.assertIn("chief", p["answering"]["rule"])
+        self.assertNotIn("no family rules", p["answering"]["headline"])
+
+    def test_a_roster_no_family_claims_still_has_no_rules(self):
+        p = needs.build_needs(
+            [{"name": "Thrall", "money": 1}], [], [], [], [], [], roster=["Thrall"]
+        )
+        self.assertEqual(p["answering"]["rows"], [])
+        self.assertIn("no family rules", p["answering"]["headline"])
 
     def test_only_this_familys_give_attempts_are_counted(self):
         from unittest import mock

@@ -1067,11 +1067,28 @@ class TheTwoFamiliesTest(unittest.TestCase):
         self.assertEqual(sorted(drawn), sorted(m["name"] for m in self.p["members"]))
         self.assertEqual(len(self.p["members"]), 10)
 
-    def test_a_member_with_no_bond_still_gets_a_role(self):
+    def test_the_second_family_has_its_own_family_role(self):
+        """Zug's warband has bonds now, so his card says "chief" the way
+        Grug's says "father". The party role is still the class's."""
         zug = member(self.p, "Zug")
         self.assertEqual(zug["party_role"], "tank")
-        self.assertEqual(zug["role"], "tank")
+        self.assertEqual(zug["role"], "chief")
         self.assertEqual(member(self.p, "Grug")["party_role"], "tank")
+
+    def test_a_member_with_no_bond_still_gets_a_role(self):
+        """A character no family claims takes its party role as its role."""
+        groups = armory._assign_roles(
+            [
+                {
+                    "name": "Thrall",
+                    "present": True,
+                    "class_id": 1,
+                    "role": armory.UNKNOWN_ROLE,
+                }
+            ],
+            [("Thrall", ["Thrall"])],
+        )
+        self.assertEqual(groups[0][1][0]["role"], "tank")
 
     def test_the_role_is_the_class_not_the_tree_being_levelled(self):
         """A warrior levelling Fury still holds the tank seat in a five:

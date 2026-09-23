@@ -388,5 +388,49 @@ class CharacterisationTest(unittest.TestCase):
         self.assertIsNone(persona.characterisation(""))
 
 
+class TheWarbandHasAVoice(unittest.TestCase):
+    """Zug's family had no persona, so build_prompt returned None and every
+    one of them spoke plainly, or as whatever mod-ollama-chat guessed."""
+
+    HORDE = ("Zug", "Zrog", "Uzza", "Oz", "Zork")
+
+    def test_every_member_gets_a_prompt_in_the_warband_voice(self):
+        for name in self.HORDE:
+            with self.subTest(name=name):
+                prompt = persona.build_prompt(name, "We go now.")
+                self.assertIsNotNone(prompt)
+                self.assertIn(bonds.bond_of(name).persona, prompt)
+                self.assertIn(persona.ZUG_VOICE, prompt)
+                self.assertNotIn(persona.GRUG_VOICE, prompt)
+                self.assertIn("warband", prompt)
+                self.assertNotIn("CAVEMAN", prompt)
+
+    def test_the_others_are_the_band_not_grugs_family(self):
+        prompt = persona.build_prompt("Oz", "We go now.")
+        for other in ("Zug", "Zrog", "Uzza", "Zork"):
+            self.assertIn(other, prompt)
+        for name in bonds.FAMILY:
+            self.assertNotIn("  %s - " % name, prompt)
+
+    def test_only_the_chief_carries_the_grudge(self):
+        note = bonds.HOUSES["Zug"].watch["note"]
+        self.assertIn(note, persona.build_prompt("Zug", "We go now."))
+        self.assertNotIn(note, persona.build_prompt("Oz", "We go now."))
+        self.assertNotIn(
+            bonds.SUSPICION["note"], persona.build_prompt("Zug", "We go now.")
+        )
+
+    def test_characterisation_is_the_warbands_too(self):
+        text = persona.characterisation("uzza")
+        self.assertIn(bonds.bond_of("Uzza").persona, text)
+        self.assertIn(persona.ZUG_VOICE, text)
+
+    def test_grugs_family_still_talks_like_cavemen(self):
+        prompt = persona.build_prompt("Grug", "We go now.")
+        self.assertIn(persona.GRUG_VOICE, prompt)
+        self.assertIn("CAVEMAN", prompt)
+        self.assertNotIn(persona.ZUG_VOICE, prompt)
+
+
 if __name__ == "__main__":
     unittest.main()

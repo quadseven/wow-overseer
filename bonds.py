@@ -220,6 +220,120 @@ _LIVE_SUSPICION = {
 }
 
 
+# THE SECOND FAMILY: A WARBAND, NOT A HOUSEHOLD. Five Horde characters led by
+# Zug, the guild master of Bonkers, verified against the live characters: all
+# male, an orc warrior, an orc shaman, two trolls (a priest and a mage) and a
+# tauren druid. A mother, a father and a neighbour would not fit five grown men
+# of three races, so this family is brothers and sworn friends instead:
+#
+#   Zug and Zrog are orc brothers. Zug is the elder and the chief.
+#   Uzza and Oz are troll brothers from the Echo Isles who swore blood
+#   brotherhood to Zug. Uzza is the elder, and the calm one.
+#   Zork is a tauren from Mulgore the band took in.
+#
+# Unlike Grug's family, race here IS culture, lightly: the trolls say "mon", the
+# orcs shout Lok'tar, the tauren speaks of the Earth Mother. The register is
+# still the short, blunt one the whole overseer speaks in.
+#
+# spec_tab stays -1 on purpose. Choosing talents writes to the world (see
+# spec_tabs), and giving this family a voice is not the change that should
+# also respec five characters.
+_HORDE_FAMILY: dict[str, Bond] = {
+    "Zug": Bond(
+        role="chief",
+        blood=True,
+        seniority=100,
+        race="orc",
+        char_class="warrior",
+        gender="male",
+        persona=(
+            "The chief of the band, Zrog's elder brother, and an orc warrior. "
+            "Fewest words of anyone. Gives orders, not reasons. Goes first "
+            "into every fight and shouts Lok'tar when he does. Counts every "
+            "time Oz pulls more than the band can fight and Uzza has to save "
+            "him, and says so, loudly. Would still bleed for Oz, and everyone "
+            "knows it."
+        ),
+    ),
+    "Zrog": Bond(
+        role="younger brother",
+        blood=True,
+        seniority=80,
+        race="orc",
+        char_class="shaman",
+        gender="male",
+        persona=(
+            "Zug's younger brother, and an orc shaman. Listens to the spirits "
+            "of earth, fire, water and wind and tells the band what they say, "
+            "which is usually what Zrog already thought. Quieter than his "
+            "brother and more patient. Follows Zug anywhere and always comes "
+            "when Zug calls. Friends with Zork, because both of them hear the "
+            "land."
+        ),
+    ),
+    "Uzza": Bond(
+        role="elder blood brother",
+        blood=False,
+        seniority=70,
+        race="troll",
+        char_class="priest",
+        gender="male",
+        persona=(
+            "A troll of the Echo Isles, Oz's older brother, sworn to Zug by "
+            "blood, and the priest who keeps the whole band alive. Calm. The "
+            "slowest to speak and never loud. Says 'easy, mon' when things go "
+            "wrong. Always goes when Oz calls, however many times, and sighs "
+            "about it after."
+        ),
+    ),
+    "Oz": Bond(
+        role="younger blood brother",
+        blood=False,
+        seniority=65,
+        race="troll",
+        char_class="mage",
+        gender="male",
+        persona=(
+            "Uzza's younger brother, a troll of the Echo Isles sworn to Zug by "
+            "blood, and a mage. Clever and knows it: reaches for one big word "
+            "a sentence and gets it slightly wrong. Reckless. Pulls too many, "
+            "sets too much on fire, and laughs about both. Calls everyone "
+            "'mon'. Argues with Zug about who is in charge of a fight, and "
+            "loses."
+        ),
+    ),
+    "Zork": Bond(
+        role="adopted brother",
+        blood=False,
+        seniority=50,
+        race="tauren",
+        char_class="druid",
+        gender="male",
+        persona=(
+            "A tauren from Mulgore the band took in, and a druid: a bear when "
+            "the band needs a wall, a cat when it needs to be quiet. The "
+            "biggest of them and the gentlest. Few words, slow and warm. "
+            "Speaks of the Earth Mother. Carries whoever is hurt and never "
+            "says it was heavy."
+        ),
+    ),
+}
+
+# The Horde family's watched pair, the same shape as _LIVE_SUSPICION and read
+# by the same rule. Not jealousy: a grudge between brothers. Zug keeps going to
+# Oz until Uzza has had to rescue Oz too often, and then lets Oz learn.
+_HORDE_GRUDGE = {
+    "who": "Zug",
+    "about": "Oz",
+    "with": "Uzza",
+    "note": (
+        "Zug thinks Oz runs in too fast and pulls more than the band can "
+        "fight, and that Uzza wears himself thin keeping Oz alive. Zug says "
+        "so, often. Zug has never once left Oz to die."
+    ),
+}
+
+
 def family_for(which: str | None = None) -> dict[str, Bond]:
     """The family table as `which` world spells it. Live is the identity.
 
@@ -259,15 +373,187 @@ _BY_LOWER = {name.lower(): name for name in FAMILY}
 
 
 @dataclass(frozen=True)
+class House:
+    """One family's written rules, in the names its world uses.
+
+    WHY THE RULES ARE DATA AND NOT ROLE NAMES. `decide` used to read
+    `role == "father"` and `role == "elder son"`, which is Grug's family and
+    nobody else's: a warband has a chief and brothers, not a father and sons,
+    and a second family keyed on the first family's role words would get no
+    rules at all. Every family has the same three kinds of rule, so a House
+    states WHO fills each one and `decide` reads that:
+
+      head   - answers anyone in the family, always.
+      watch  - the one exception to the head: he stops going to `about` once
+               `with` has answered `about` too often. Jealousy in Grug's
+               family, a grudge between brothers in Zug's.
+      always - pairs exempt from fatigue: somebody who turns up for somebody
+               however often it is asked.
+
+    Everyone else tires of the same caller at FATIGUE_THRESHOLD.
+    """
+
+    members: dict[str, Bond]
+    head: str
+    # What these characters are to each other, for a prompt: "a family of
+    # cavemen who travel together".
+    band: str
+    # What the group calls itself in a sentence: "family" or "band".
+    noun: str
+    # _LIVE_SUSPICION's shape: who counts, about whom, whose answers, and the
+    # sentence the voice grounds on.
+    watch: dict
+    watch_rule: str
+    watch_threshold: int
+    # The verdict reasons. %(about)s, %(with)s and %(count)d are filled in.
+    watch_kept: str
+    watch_refused: str
+    head_rule: str
+    head_kept: str
+    # (responder, caller, rule, reason). %(caller)s is filled in.
+    always: tuple[tuple[str, str, str, str], ...]
+    # The standing rules as one sentence, under the rows on the Family view.
+    rule_text: str
+
+
+# Which of the written rules is the one in play for a pair. Labels only: what
+# a rule DOES is decided by which slot of a House it fills, never by its name.
+FATHER = "father"
+JEALOUSY = "jealousy"
+LITTLE_BROTHER = "little brother"
+FATIGUE = "fatigue"
+CHIEF = "chief"
+GRUDGE = "grudge"
+BROTHER = "brother"
+
+# Uzza rescuing Oz this many times is where Zug stops running in after him.
+GRUDGE_THRESHOLD = 3
+
+
+def _house(members: dict[str, Bond], **rules) -> House:
+    head = max(members, key=lambda n: members[n].seniority)
+    return House(members=members, head=head, **rules)
+
+
+def houses_for(which: str | None = None) -> dict[str, House]:
+    """Every family this overseer has written bonds for, keyed by its head.
+
+    Keyed by the HEAD'S NAME because that is how `overseer_roster.family`
+    keys a family: a cohort is named after its most senior member. Grug's
+    family is renamed for `which` world exactly as FAMILY is; Zug's family
+    has one set of names in every world, so the rename leaves it alone.
+    """
+    grug = family_for(which)
+    suspicion = suspicion_for(which)
+    elder, younger = (cast.rename(n, which) for n in ("Grog", "Bork"))
+    zug = dict(_HORDE_FAMILY)
+    out = [
+        _house(
+            grug,
+            band="a family of cavemen who travel together",
+            noun="family",
+            watch=suspicion,
+            watch_rule=JEALOUSY,
+            watch_threshold=JEALOUSY_THRESHOLD,
+            watch_kept="she is his wife",
+            watch_refused="%(with)s has answered %(about)s %(count)d times. "
+            "Let %(with)s go.",
+            head_rule=FATHER,
+            head_kept="his family called",
+            always=(
+                (elder, younger, LITTLE_BROTHER, "%(caller)s is his little brother"),
+            ),
+            rule_text=(
+                "The father answers anyone in the family. The big brother turns "
+                "up for the little one however often it is asked. Everyone else "
+                "answers the same caller %(fatigue)d times and then stops - and "
+                "%(with)s answering the mother %(watch)d times is what makes the "
+                "father stop going to her."
+            ),
+        ),
+        _house(
+            zug,
+            band="a warband of brothers and sworn friends who travel together",
+            noun="band",
+            watch=dict(_HORDE_GRUDGE),
+            watch_rule=GRUDGE,
+            watch_threshold=GRUDGE_THRESHOLD,
+            watch_kept="%(about)s is his sworn brother",
+            watch_refused="%(with)s has saved %(about)s %(count)d times. "
+            "Let %(about)s learn.",
+            head_rule=CHIEF,
+            head_kept="his band called",
+            always=(
+                ("Uzza", "Oz", BROTHER, "%(caller)s is his little brother"),
+                ("Zrog", "Zug", BROTHER, "%(caller)s is his brother and his chief"),
+            ),
+            rule_text=(
+                "The chief answers anyone in the band. Uzza turns up for his "
+                "brother Oz, and Zrog for his brother Zug, however often they "
+                "ask. Everyone else answers the same caller %(fatigue)d times "
+                "and then stops - and %(with)s saving Oz %(watch)d times is "
+                "what makes the chief let Oz learn."
+            ),
+        ),
+    ]
+    return {h.head: h for h in out}
+
+
+HOUSES: dict[str, House] = houses_for()
+# Every family's members by lower-cased name, and which House each is in. The
+# names are disjoint across families (tests/test_bonds.py holds that), so one
+# lookup can answer for all of them.
+_HOUSE_OF: dict[str, House] = {
+    name.lower(): house for house in HOUSES.values() for name in house.members
+}
+_ANY_BY_LOWER = {
+    name.lower(): name for house in HOUSES.values() for name in house.members
+}
+
+
+@dataclass(frozen=True)
 class Verdict:
     will_answer: bool
     reason: str
 
 
 def member(name: str) -> Bond | None:
-    """Case-insensitive, because chat is. Returns None for anyone outside."""
+    """Case-insensitive, because chat is. Returns None for anyone outside.
+
+    THE FAMILY THIS PROCESS DRIVES, and only that one. The bridge's musters,
+    the council and the tabard debate read this to mean "one of ours", and
+    widening it would pull a second family into all three. A question about
+    who a character IS, for any family, is `bond_of`.
+    """
     canonical = _BY_LOWER.get((name or "").strip().lower())
     return FAMILY[canonical] if canonical else None
+
+
+def bond_of(name: str) -> Bond | None:
+    """The Bond for `name` in ANY family the bonds are written for, or None.
+
+    What a card, a voice line or a bond note wants: the Horde family's role
+    and persona are as real as Grug's, and `member` returning None for them is
+    what left their cards with a blank role and their mouths with no voice.
+    """
+    canonical = canon_of(name)
+    return _HOUSE_OF[canonical.lower()].members[canonical] if canonical else None
+
+
+def canon_of(name: str) -> str | None:
+    """`name` as its own family spells it, for any family, or None."""
+    return _ANY_BY_LOWER.get((name or "").strip().lower())
+
+
+def house_of(name: str) -> House | None:
+    """The House `name` belongs to, or None for anyone no family claims."""
+    return _HOUSE_OF.get((name or "").strip().lower())
+
+
+def family_of(name: str) -> dict[str, Bond] | None:
+    """Every member of `name`'s family, or None for anyone outside them all."""
+    house = house_of(name)
+    return house.members if house else None
 
 
 def head_of_family() -> str:
@@ -305,23 +591,24 @@ def speaking_order(names) -> list[str]:
     WHY ORDER MATTERS NOW. Every member of the audience answers an overheard
     order in their own words (infra#2597), so four chat lines are written in
     one go and mod-overseer delivers them in id order, twenty per two-second
-    poll - which means the order they are WRITTEN in is the order Evan reads
-    them in. Alphabetical, which is what overhear.audience returns, put the
-    seven-year-old first every single time and the mother last.
+    poll - which means the order they are WRITTEN in is the order the operator
+    reads them in. Alphabetical, which is what overhear.audience returns, put
+    the seven-year-old first every single time and the mother last.
 
     Seniority is already the family table's answer to who comes first - it is
     what head_of_family reads - so this is that same fact used twice rather
-    than a second opinion about the family that could disagree with it.
+    than a second opinion about the family that could disagree with it. It is
+    read from every family, so the warband answers chief first too.
 
-    Anyone outside the family sorts after, alphabetically: this module has no
-    opinion about their standing and guessing one would be an invention.
+    Anyone outside every family sorts after, alphabetically: this module has
+    no opinion about their standing and guessing one would be an invention.
     """
     names = list(names)
     return sorted(
         names,
         key=lambda n: (
-            0 if canon(n) else 1,
-            -FAMILY[canon(n)].seniority if canon(n) else 0,
+            0 if canon_of(n) else 1,
+            -bond_of(n).seniority if canon_of(n) else 0,
             n,
         ),
     )
@@ -334,8 +621,16 @@ def _count(history: list[tuple[str, str]], helper: str, called: str) -> int:
     "og" and "Og" both turn up; comparing them raw let any casing drift silently
     zero a count, which reads as a rule that simply never fires.
     """
-    h_want, c_want = canon(helper), canon(called)
-    return sum(1 for h, c in history if canon(h) == h_want and canon(c) == c_want)
+    h_want, c_want = canon_of(helper), canon_of(called)
+    return sum(1 for h, c in history if canon_of(h) == h_want and canon_of(c) == c_want)
+
+
+def _always(house: House, me: str, them: str) -> tuple[str, str] | None:
+    """(rule, reason) when `me` turns up for `them` whatever the count."""
+    for responder, caller, rule, reason in house.always:
+        if (me, them) == (responder, caller):
+            return rule, reason % {"caller": them}
+    return None
 
 
 def decide(
@@ -346,8 +641,10 @@ def decide(
 ) -> Verdict:
     """Will `responder` answer this plea?
 
-    Anyone outside the family answers - this module has opinions about five
-    characters and no business narrowing anyone else.
+    Anyone outside the family answers - this module has opinions about the
+    families it has written bonds for and no business narrowing anyone else.
+    Two characters from DIFFERENT families have no bond either way: a warband
+    owes Grug's family nothing, and the other way round.
 
     Every count here is PER PAIR: how often this responder answered this
     caller. Counting per caller instead looks equivalent and is not, because
@@ -357,33 +654,36 @@ def decide(
     on who happened to be logged in, and it starved the jealousy rule below of
     the very rows it counts.
     """
-    me, them = canon(responder), canon(plea.caller)
+    me, them = canon_of(responder), canon_of(plea.caller)
     if me is None or them is None:
         return Verdict(True, "no bond either way")
-    bond, caller = FAMILY[me], FAMILY[them]
+    house = house_of(me)
+    if house is not house_of(them):
+        return Verdict(True, "no bond either way")
 
-    # The father answers. Checked before every counter, because "should always
+    # The head answers. Checked before every counter, because "should always
     # help his family" outranks a tally.
-    if bond.role == "father":
-        if caller.role == "mother":
-            # SUSPICION, not a literal "Og". The rival is the person the
-            # father counts, which is a fact the family table already states
-            # once - and a second spelling of it here is a spelling that stops
-            # matching the moment the family is renamed for another world.
-            rival = _count(history, SUSPICION["with"], them)
-            if rival >= JEALOUSY_THRESHOLD:
-                return Verdict(
-                    False, f"Og has answered {them} {rival} times. Let Og go."
-                )
-            return Verdict(True, "she is his wife")
-        return Verdict(True, "his family called")
+    if me == house.head:
+        watch = house.watch
+        if them == watch["about"]:
+            # The watched pair, read off the House rather than spelled here:
+            # the rival is a fact the family table already states once, and a
+            # second spelling would stop matching the moment the family is
+            # renamed for another world.
+            rival = _count(history, watch["with"], them)
+            said = {"about": them, "with": watch["with"], "count": rival}
+            if rival >= house.watch_threshold:
+                return Verdict(False, house.watch_refused % said)
+            return Verdict(True, house.watch_kept % said)
+        return Verdict(True, house.head_kept)
 
-    # The big brother turns up for the little one, and keeps turning up after
-    # the rest of the family has started rolling its eyes. This is the only
-    # thing standing between Bork and nobody coming, so it is exempt from
-    # fatigue rather than merely ahead of it in the function.
-    if bond.role == "elder son" and caller.role == "younger son":
-        return Verdict(True, f"{them} is his little brother")
+    # The standing exemptions: the big brother for the little one, and in
+    # the warband each brother for his own. Exempt from fatigue rather than
+    # merely ahead of it in the function, because for Bork this is the only
+    # thing standing between him and nobody coming.
+    exempt = _always(house, me, them)
+    if exempt is not None:
+        return Verdict(True, exempt[1])
 
     tired = _count(history, me, them)
     if tired >= FATIGUE_THRESHOLD:
@@ -496,12 +796,6 @@ EXEMPT = "EXEMPT"
 COUNTING = "COUNTING"
 STOPPED = "STOPPED"
 
-# Which of the written rules is the one in play for a pair.
-FATHER = "father"
-JEALOUSY = "jealousy"
-LITTLE_BROTHER = "little brother"
-FATIGUE = "fatigue"
-
 # The order a reader wants them in: a refusal is the news, a counter running
 # towards one is the warning, and the two standing exemptions are the
 # background those are read against.
@@ -585,27 +879,30 @@ class Answering:
         return min(100, round(100 * self.count / self.threshold))
 
 
-def _counter(me: str, them: str) -> tuple[str, str, int | None]:
-    """Which rule counts this pair, WHOSE answers it counts, and the count that
-    changes the answer.
+def _counter(house: House, me: str, them: str) -> tuple[str, str, int | None, str]:
+    """Which rule counts this pair, WHOSE answers it counts, the count that
+    changes the answer, and which slot of the House the rule fills.
 
     Mirrors `decide` branch for branch, and the suite checks it against
     `decide` rather than against a second reading of the docstring: this
     decides what to SHOW and `decide` decides what HAPPENS, and the two quietly
     disagreeing is the one failure that would look perfectly fine on screen.
     """
-    bond, caller = FAMILY[me], FAMILY[them]
-    if bond.role == "father":
-        if caller.role == "mother":
-            # SUSPICION, not a literal name, for the same reason `decide` reads
-            # it from there: the rival is the person the father counts, and a
-            # second spelling here stops matching the moment the family is
-            # renamed for another world.
-            return JEALOUSY, SUSPICION["with"], JEALOUSY_THRESHOLD
-        return FATHER, me, None
-    if bond.role == "elder son" and caller.role == "younger son":
-        return LITTLE_BROTHER, me, None
-    return FATIGUE, me, FATIGUE_THRESHOLD
+    if me == house.head:
+        if them == house.watch["about"]:
+            # The rival is read off the House, for the same reason `decide`
+            # reads it from there.
+            return house.watch_rule, house.watch["with"], house.watch_threshold, _WATCH
+        return house.head_rule, me, None, _HEAD
+    exempt = _always(house, me, them)
+    if exempt is not None:
+        return exempt[0], me, None, _EXEMPT
+    return FATIGUE, me, FATIGUE_THRESHOLD, _FATIGUE
+
+
+# Which slot of a House a rule fills. What a row LOOKS like follows from this,
+# never from the rule's label.
+_HEAD, _WATCH, _EXEMPT, _FATIGUE = "head", "watch", "exempt", "fatigue"
 
 
 def _times(count: int) -> str:
@@ -616,6 +913,8 @@ def _times(count: int) -> str:
 
 
 def _note(
+    house: House,
+    kind: str,
     rule: str,
     me: str,
     them: str,
@@ -626,13 +925,22 @@ def _note(
 ) -> str:
     """One sentence about this pair, for a card or a row to print whole.
 
-    NO PRONOUNS. This family has a mother, a father and three boys, so a
+    NO PRONOUNS. Grug's family has a mother, a father and three boys, so a
     sentence saying "her" is a sentence that has to know which of them it is
     about; naming both sides costs a few characters and cannot be wrong.
     """
-    if rule == JEALOUSY:
+    if kind == _WATCH:
         if not verdict.will_answer:
             return "%s stays away from %s. %s" % (me, them, verdict.reason)
+        if rule == GRUDGE:
+            return "%s has saved %s %s of the %d that make %s let %s learn." % (
+                counted,
+                them,
+                _times(count),
+                threshold,
+                me,
+                them,
+            )
         return "%s has answered %s %s of the %d that make %s stop going to %s." % (
             counted,
             them,
@@ -641,47 +949,68 @@ def _note(
             me,
             them,
         )
-    if rule == LITTLE_BROTHER:
+    if kind == _EXEMPT:
+        if rule == LITTLE_BROTHER:
+            return (
+                "%s turns up for %s every time. The little brother is exempt from "
+                "fatigue, so this one never runs out." % (me, them)
+            )
         return (
-            "%s turns up for %s every time. The little brother is exempt from "
-            "fatigue, so this one never runs out." % (me, them)
+            "%s turns up for %s every time - %s. Exempt from fatigue, so this "
+            "one never runs out." % (me, them, verdict.reason)
         )
-    if rule == FATHER:
+    if kind == _HEAD:
         return "%s answers %s every time - %s." % (me, them, verdict.reason)
     if not verdict.will_answer:
         return "%s has stopped answering %s. %s" % (me, them, verdict.reason)
-    return "%s has answered %s %s of the %d that make the family tire of it." % (
+    return "%s has answered %s %s of the %d that make the %s tire of it." % (
         me,
         them,
         _times(count),
         threshold,
+        house.noun,
     )
 
 
-def answers(history: list[tuple[str, str]]) -> tuple:
+def _house_for(family: str | None) -> House | None:
+    """The House `family` names: a member's name or the roster's family key
+    (which is its head's name), or the family this process drives when None.
+    """
+    if family is None:
+        return house_of(head_of_family())
+    return house_of(family)
+
+
+def answers(history: list[tuple[str, str]], family: str | None = None) -> tuple:
     """Every pair the bonds have something to say about, most consequential first.
+
+    `family` is any member's name, or the roster's key for the family; None is
+    the family this process drives. A name no family claims gives nothing.
 
     NOT ALL TWENTY PAIRS. A pair nobody has ever answered, under the ordinary
     fatigue rule, is the common and boring and correct case, and twenty rows of
     it would drown the two or three actually asking for something - the same
     reason `materials.plan` does not note a stack that is already in the right
-    bags. The two WRITTEN exceptions are always shown, because they are the
-    rules a reader has come to check, and every other pair appears the moment
+    bags. The WRITTEN exceptions are always shown, because they are the rules
+    a reader has come to check, and every other pair appears the moment
     somebody has actually answered somebody.
 
     `history` is `history_from_thoughts`' output: (helper, called) pairs.
     """
+    house = _house_for(family)
+    if house is None:
+        return ()
     rows = []
-    for me in speaking_order(FAMILY):
-        for them in speaking_order(FAMILY):
+    for me in speaking_order(house.members):
+        for them in speaking_order(house.members):
             if me == them:
                 continue
-            rule, counted, threshold = _counter(me, them)
+            rule, counted, threshold, kind = _counter(house, me, them)
             count = _count(history, counted, them)
-            if rule not in (JEALOUSY, LITTLE_BROTHER) and not count:
+            if kind not in (_WATCH, _EXEMPT) and not count:
                 continue
             verdict = decide(me, _Call(them), history=history)
-            if rule == LITTLE_BROTHER:
+            if kind == _EXEMPT:
                 word = EXEMPT
             elif threshold is None:
                 word = ALWAYS
@@ -700,7 +1029,9 @@ def answers(history: list[tuple[str, str]]) -> tuple:
                     counted=counted,
                     count=count,
                     threshold=threshold,
-                    note=_note(rule, me, them, counted, count, threshold, verdict),
+                    note=_note(
+                        house, kind, rule, me, them, counted, count, threshold, verdict
+                    ),
                 )
             )
     rows.sort(
@@ -723,32 +1054,35 @@ def note_for(name: str, *, history: list[tuple[str, str]]) -> str:
     have nothing live to say about gets the standing rule rather than a blank:
     a card with no bond note reads as a family with no bonds.
     """
-    me = canon(name)
+    me = canon_of(name)
     if me is None:
         return ""
-    rows = answers(history)
+    house = house_of(me)
+    rows = answers(history, me)
     mine = [r for r in rows if r.responder == me]
     if not mine:
         mine = [r for r in rows if r.caller == me]
     if mine:
         return mine[0].note
     return (
-        "%s is the family's %s, and nobody has called on %s lately. Anyone "
+        "%s is the %s's %s, and nobody has called on %s lately. Anyone "
         "answers anyone until the same caller has been answered %d times."
-        % (me, FAMILY[me].role, me, FATIGUE_THRESHOLD)
+        % (me, house.noun, house.members[me].role, me, FATIGUE_THRESHOLD)
     )
 
 
-def answering_rule() -> str:
+def answering_rule(family: str | None = None) -> str:
     """The standing rules, said once under the rows rather than on every one.
 
     Built FROM the thresholds rather than typed beside them, so the sentence
     cannot go on claiming five after somebody has changed FATIGUE_THRESHOLD.
+    `family` is read as `answers` reads it; a name no family claims gets "".
     """
-    return (
-        "The father answers anyone in the family. The big brother turns up for "
-        "the little one however often it is asked. Everyone else answers the "
-        "same caller %d times and then stops - and %s answering the mother %d "
-        "times is what makes the father stop going to her."
-        % (FATIGUE_THRESHOLD, SUSPICION["with"], JEALOUSY_THRESHOLD)
-    )
+    house = _house_for(family)
+    if house is None:
+        return ""
+    return house.rule_text % {
+        "fatigue": FATIGUE_THRESHOLD,
+        "with": house.watch["with"],
+        "watch": house.watch_threshold,
+    }

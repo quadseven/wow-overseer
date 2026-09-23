@@ -689,8 +689,9 @@ class TheBoardIsTheFamilyAsked(unittest.TestCase):
         self.assertEqual([m["name"] for m in p["members"]], self.HORDE)
         self.assertEqual(p["expected"], 3)
 
-    def test_a_member_bonds_does_not_know_has_no_role_rather_than_a_crash(self):
-        self.assertEqual(member(self.build(), "Zug")["role"], "")
+    def test_the_second_family_has_its_own_roles(self):
+        self.assertEqual(member(self.build(), "Zug")["role"], "chief")
+        self.assertEqual(member(self.build(), "Oz")["role"], "younger blood brother")
 
     def test_the_board_is_their_quests(self):
         rows = self.build()["board"]["rows"]

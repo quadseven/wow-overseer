@@ -515,10 +515,11 @@ def _member(
     card that vanishes is how somebody stops being noticed, which is the whole
     complaint the Family view answers.
     """
-    # bonds.member rather than bonds.FAMILY[name]: the persona table holds one
-    # family, and a member of any other has no persona, no role and no bond
-    # note. note_for already answers "" for them.
-    bond = bonds.member(name)
+    # bonds.bond_of rather than bonds.FAMILY[name]: FAMILY is the driven family
+    # only, and bond_of knows every family bonds describes. A character none
+    # of them claims has no persona, no role and no bond note, and note_for
+    # already answers "" for them.
+    bond = bonds.bond_of(name)
     role = bond.role if bond else ""
     note = bonds.note_for(name, history=history)
     if char_row is None:
@@ -617,8 +618,11 @@ def build_needs(
         )
         for name in roster
     ]
-    bonded = all(bonds.member(n) is not None for n in roster)
-    answering = bonds.answers(history) if bonded else ()
+    # One family's rules, the family on screen: a roster is one family, and
+    # its bonds are read off whichever family its members belong to.
+    bonded = bool(roster) and all(bonds.bond_of(n) is not None for n in roster)
+    kin = roster[0] if bonded else None
+    answering = bonds.answers(history, kin) if bonded else ()
     board = materials.board(
         holdings(inventory_rows),
         attempts=attempts(give_rows),
@@ -630,7 +634,7 @@ def build_needs(
         "moving": _moving(board),
         "answering": {
             "rows": [_answer_row(r) for r in answering],
-            "rule": bonds.answering_rule() if bonded else "",
+            "rule": bonds.answering_rule(kin) if bonded else "",
             "headline": _answering_headline(answering)
             if bonded
             else "no family rules are written for this family yet, so nobody "

@@ -1659,10 +1659,11 @@ def _member(
     book: TalentBook,
     items: ItemBook,
 ) -> dict:
-    # The persona table knows ONE family. A Horde member, or a guildmate, has
-    # no bond, and that is not an error: it has no family role, only the
-    # party role party_roles gives it from its class.
-    bond = bonds.FAMILY.get(name)
+    # bond_of reads every family bonds describes, so a Horde member's card
+    # says "chief" where an Alliance one says "father". A guildmate has no
+    # bond, and that is not an error: it has no family role, only the party
+    # role party_roles gives it from its class.
+    bond = bonds.bond_of(name)
     if char_row is None:
         return _absent_member(name, bond)
     class_id, race = char_row["class"], char_row["race"]
