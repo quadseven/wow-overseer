@@ -283,8 +283,10 @@ def _load_drive_dungeon(inserted: list, updated: list, warnings: list):
 
     import jobs
 
-    node = _function("_drive_dungeon")
-    source = ast.get_source_segment(_bridge_source(), node)
+    source = "\n\n".join(
+        ast.get_source_segment(_bridge_source(), _function(name))
+        for name in ("_withheld", "_drive_dungeon")
+    )
 
     class Cursor:
         rowcount = 1

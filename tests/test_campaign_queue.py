@@ -440,7 +440,7 @@ class TheQueueAdvancesByItself(unittest.TestCase):
 def _drive_with_full_bags(withheld):
     """bridge._drive_dungeon, run for real with every bag near full."""
     ns = _load(
-        ["_drive_dungeon"],
+        ["_withheld", "_drive_dungeon"],
         {
             "jobs": jobs,
             "log": _Log(),
@@ -465,7 +465,7 @@ class TheDriveSaysWhyItWithheld(unittest.TestCase):
 
     def test_an_unknown_keyword_is_the_reason_given(self):
         withheld = []
-        ns = _load(["_drive_dungeon"], {"jobs": jobs, "log": _Log()})
+        ns = _load(["_withheld", "_drive_dungeon"], {"jobs": jobs, "log": _Log()})
         self.assertEqual(
             (0, 0), ns["_drive_dungeon"]("maraudon", 5, ["Zug"], withheld=withheld)
         )

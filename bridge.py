@@ -1899,6 +1899,13 @@ def _aim_traveller(quest_id: int) -> int:
         return aimed
 
 
+def _withheld(reasons, reason: str) -> tuple:
+    """(0, 0), with `reason` added to `reasons` when a caller asked for it."""
+    if reasons is not None:
+        reasons.append(reason)
+    return 0, 0
+
+
 def _drive_dungeon(keyword: str, wanted: int, names=None,
                    source: str = "overseer:goal", withheld=None) -> tuple:
     """Turn a decided dungeon goal into the roster writes that actually send
@@ -1936,11 +1943,6 @@ def _drive_dungeon(keyword: str, wanted: int, names=None,
     list when given, gains the reason a pass wrote no job, so the queue can
     log the withhold rather than a start that never happened (#217).
     """
-    def _withhold(reason: str) -> tuple:
-        if withheld is not None:
-            withheld.append(reason)
-        return 0, 0
-
     mode = jobs.dungeon_job(keyword)
     if mode is None:
         log.warning(
@@ -1948,11 +1950,11 @@ def _drive_dungeon(keyword: str, wanted: int, names=None,
             "keyword, so no character's job was changed; known keywords: %s",
             keyword, ", ".join(sorted(jobs.PORTAL_KEYWORDS)),
         )
-        return _withhold("no dungeon portal answers to %s" % keyword)
+        return _withheld(withheld, "no dungeon portal answers to %s" % keyword)
 
     names = _fetch_enabled_names() if names is None else list(names)
     if not names:
-        return _withhold("no enabled character to send")
+        return _withheld(withheld, "no enabled character to send")
 
     free_slots = _fetch_free_slots(names)
     if bag_pressure.family_town_run_needed(free_slots):
@@ -1962,8 +1964,8 @@ def _drive_dungeon(keyword: str, wanted: int, names=None,
             "before it could progress (mod-overseer#423/#424/#430)",
             keyword or "(default)", len(names),
         )
-        return _withhold("bags are near full, and a run started now would be "
-                         "evacuated before it could progress")
+        return _withheld(withheld, "bags are near full, and a run started now "
+                         "would be evacuated before it could progress")
 
     jobs_written = 0
     for name in names:
@@ -1974,8 +1976,6 @@ def _drive_dungeon(keyword: str, wanted: int, names=None,
             # One failed insert must not cost the rest of the family; see
             # _set_job's identical reasoning.
             log.exception("dungeon job insert failed for %s (mode=%s)", name, mode)
-    if not jobs_written:
-        _withhold("no dungeon job insert landed")
 
     campaign_written = 0
     with _connect() as conn, conn.cursor() as cur:
@@ -2139,7 +2139,7 @@ def _apply_queue_move(move, names: list) -> str:
     written, _ = _drive_dungeon(move.keyword, move.wanted, names,
                                 campaignqueue.SOURCE, withheld=withheld)
     if not written:
-        return "withheld: %s" % ("; ".join(withheld) or "no job was written")
+        return "withheld: %s" % ("; ".join(withheld) or "no dungeon job insert landed")
     if move.reset:
         _reset_campaign_done(names)
     if move.start:

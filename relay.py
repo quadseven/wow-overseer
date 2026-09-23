@@ -51,6 +51,8 @@ def fit_spoken(text: str, limit: int = MAX_SPEAK_LEN) -> str:
     text = " ".join(str(text).split())
     if len(text) <= limit:
         return text
+    if limit <= 3:
+        return text[: max(limit, 0)]
     head = text[: limit - 3]
     space = head.rfind(" ")
     if space > 0:

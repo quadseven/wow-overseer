@@ -108,6 +108,10 @@ class FitSpoken(unittest.TestCase):
             "The Deadmines, then.", relay.fit_spoken("The Deadmines, then.")
         )
 
+    def test_a_limit_too_small_for_the_mark_is_a_plain_cut(self):
+        self.assertEqual("ab", relay.fit_spoken("abc def", 2))
+        self.assertEqual("", relay.fit_spoken("abc def", 0))
+
     def test_one_word_longer_than_the_column_is_cut_at_the_column(self):
         got = relay.fit_spoken("a" * 400)
         self.assertEqual(255, len(got))
@@ -141,10 +145,8 @@ def _insert_speak(written: list):
             )()
         ),
     }
-    exec(
-        compile(ast.Module(body=[node], type_ignores=[]), "bridge.py", "exec"),
-        namespace,
-    )  # noqa: S102 - bridge.py's own source
+    code = compile(ast.Module(body=[node], type_ignores=[]), "bridge.py", "exec")
+    exec(code, namespace)  # noqa: S102 - bridge.py's own source
     return namespace["_insert_speak"]
 
 
