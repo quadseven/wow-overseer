@@ -767,6 +767,46 @@ def _equip_why(j: Judgment) -> str:
     )
 
 
+def _gives(route: str) -> bool:
+    return route.startswith(GIVE_PREFIX)
+
+
+def _weapon_can(j: Judgment, route: str) -> bool:
+    """A weapon answer acts only on the holder's own weapon, and `carried`
+    only where no sale or listing will race the equip for the same piece."""
+    if j.subject != j.holder:
+        return False
+    return j.jev == WORN or route in _EQUIP_OVER or _gives(route)
+
+
+def _disposition_can(j: Judgment) -> bool:
+    """`keep` can withhold an equip or a hand-off; `equip` can stand in for
+    keeping it or handing it off. Nothing else has an act path."""
+    if j.jev == KEEP:
+        return j.heuristic == EQUIP or _gives(j.heuristic)
+    if j.jev == EQUIP:
+        return j.heuristic == KEEP or _gives(j.heuristic)
+    return False
+
+
+def _who_acts(policies: dict, j: Judgment, can: bool) -> str:
+    rule = policies.get(j.kind)
+    if rule is None or j.status not in _FRESH or not j.jev:
+        return jev.HEURISTIC
+    return rule.acted(j.heuristic, j.jev, j.confidence, can_act=can)
+
+
+def _change(j: Judgment, equip: dict, no_equip: set, no_give: set) -> None:
+    """What Jev's answer on one piece does to the two passes."""
+    if j.jev in (CARRIED, EQUIP):
+        equip[j.item_guid] = _equip_why(j)
+        no_give.add(j.item_guid)
+    elif j.jev == WORN or j.heuristic == EQUIP:
+        no_equip.add(j.item_guid)
+    else:
+        no_give.add(j.item_guid)
+
+
 def act_plan(judgments, policies: dict, routes: dict) -> ActPlan:
     """Who acts on each judgment, and the three changes that follow.
 
@@ -775,65 +815,27 @@ def act_plan(judgments, policies: dict, routes: dict) -> ActPlan:
     a piece this cycle. weapon_choice is settled first and wins a piece it
     acts on; item_disposition then acts only on pieces left.
     """
-    equip, no_equip, no_give = {}, set(), set()
-    taken = set()
-    out = {}
-    weapon = [j for j in judgments if j.kind == KIND_WEAPON]
-    disposition = [j for j in judgments if j.kind == KIND_DISPOSITION]
-    for j in weapon:
-        rule = policies.get(j.kind)
-        fresh = j.status in _FRESH and bool(j.jev)
-        own = j.subject == j.holder
-        route = routes.get(j.item_guid, "")
-        can = own and (
-            j.jev == WORN or route in _EQUIP_OVER or route.startswith(GIVE_PREFIX)
-        )
-        acted = (
-            rule.acted(j.heuristic, j.jev, j.confidence, can_act=can)
-            if rule is not None and fresh
-            else jev.HEURISTIC
-        )
+    equip, no_equip, no_give, taken = {}, set(), set(), set()
+    marked = {}
+    ordered = [j for j in judgments if j.kind == KIND_WEAPON] + [
+        j for j in judgments if j.kind == KIND_DISPOSITION
+    ]
+    for j in ordered:
+        if j.kind == KIND_WEAPON:
+            can = _weapon_can(j, routes.get(j.item_guid, ""))
+        else:
+            can = j.item_guid not in taken and _disposition_can(j)
+        acted = _who_acts(policies, j, can)
         if acted == jev.JEV:
             taken.add(j.item_guid)
-            if j.jev == CARRIED:
-                equip[j.item_guid] = _equip_why(j)
-                no_give.add(j.item_guid)
-            else:
-                no_equip.add(j.item_guid)
-        out[id(j)] = replace(j, acted=acted)
-    for j in disposition:
-        rule = policies.get(j.kind)
-        fresh = j.status in _FRESH and bool(j.jev)
-        can = j.item_guid not in taken and (
-            (
-                j.jev == KEEP
-                and (j.heuristic == EQUIP or j.heuristic.startswith(GIVE_PREFIX))
-            )
-            or (
-                j.jev == EQUIP
-                and (j.heuristic == KEEP or j.heuristic.startswith(GIVE_PREFIX))
-            )
-        )
-        acted = (
-            rule.acted(j.heuristic, j.jev, j.confidence, can_act=can)
-            if rule is not None and fresh
-            else jev.HEURISTIC
-        )
-        if acted == jev.JEV:
-            if j.jev == EQUIP:
-                equip[j.item_guid] = _equip_why(j)
-                no_give.add(j.item_guid)
-            elif j.heuristic == EQUIP:
-                no_equip.add(j.item_guid)
-            else:
-                no_give.add(j.item_guid)
-        out[id(j)] = replace(j, acted=acted)
+            _change(j, equip, no_equip, no_give)
+        marked[id(j)] = replace(j, acted=acted)
     return ActPlan(
         equip=equip,
         no_equip=frozenset(no_equip),
         no_give=frozenset(no_give),
         judgments=tuple(
-            out.get(id(j), replace(j, acted=jev.HEURISTIC)) for j in judgments
+            marked.get(id(j), replace(j, acted=jev.HEURISTIC)) for j in judgments
         ),
     )
 

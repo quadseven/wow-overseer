@@ -7798,13 +7798,11 @@ class Bridge(discord.Client):
             )
         wanted = bag_pressure.holder_equips(
             gear_rows, worn, names, keep_names=OWNER_KEEPS)
-        if jev_plan is not None and (jev_plan.equip or jev_plan.no_equip):
-            # JEV'S ANSWER, THROUGH THE SAME ROW (#95): a piece it chose is
-            # put on with the same `e Hitem:` command, and one it judged
-            # worse than what is worn is left in the bags.
-            wanted = bag_pressure.jev_equips(
-                wanted, gear_rows, worn, names, withheld=jev_plan.no_equip,
-                chosen=jev_plan.equip, keep_names=OWNER_KEEPS)
+        # JEV'S ANSWER, THROUGH THE SAME ROW (#95): a piece it chose is put on
+        # with the same `e Hitem:` command, and one it judged worse than what
+        # is worn is left in the bags. No plan leaves `wanted` as it is.
+        wanted = bag_pressure.jev_equips(
+            wanted, gear_rows, worn, names, jev_plan, keep_names=OWNER_KEEPS)
         recent = {(row["target_name"], row["command"]) for row in history
                   if row["recent"]}
         tries: dict = {}

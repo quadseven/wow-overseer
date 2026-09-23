@@ -1227,16 +1227,18 @@ def holder_equips(gear_rows, equipped_rows, names, keep_names=()) -> tuple:
     return gear.equips(gear.holdings_from_rows(kept), characters)
 
 
-def jev_equips(
-    wanted, gear_rows, equipped_rows, names, *, withheld, chosen, keep_names=()
-) -> tuple:
-    """`holder_equips` with Jev's act plan applied (#95).
+def jev_equips(wanted, gear_rows, equipped_rows, names, plan, keep_names=()) -> tuple:
+    """`holder_equips` with Jev's act plan applied (#95); `wanted` itself when
+    there is no plan or it changes no equip.
 
-    `withheld` is item guids to leave in the bags; `chosen` maps an item guid
-    to why Jev puts it on its own holder. A chosen piece still has to pass
-    gear.py's own can-wear rules and the owner's never-dispose mark, and it
-    becomes the same `e Hitem:` row through `gear.chosen_equip`.
+    `plan.no_equip` is item guids to leave in the bags; `plan.equip` maps an
+    item guid to why Jev puts it on its own holder. A chosen piece still has
+    to pass gear.py's own can-wear rules and the owner's never-dispose mark,
+    and it becomes the same `e Hitem:` row through `gear.chosen_equip`.
     """
+    if plan is None or not (plan.equip or plan.no_equip):
+        return tuple(wanted)
+    withheld, chosen = plan.no_equip, plan.equip
     characters = {c.name: c for c in family_characters(equipped_rows, names)}
     picks = []
     for holding in gear.holdings_from_rows(gear_rows):

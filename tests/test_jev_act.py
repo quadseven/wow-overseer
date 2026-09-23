@@ -120,9 +120,7 @@ class WeaponActTest(unittest.TestCase):
         self.assertIn(777, plan.no_give)
         wanted = bag_pressure.holder_equips(rows, WORN, NAMES)
         self.assertEqual(wanted, ())
-        [equip] = bag_pressure.jev_equips(
-            wanted, rows, WORN, NAMES, withheld=plan.no_equip, chosen=plan.equip
-        )
+        [equip] = bag_pressure.jev_equips(wanted, rows, WORN, NAMES, plan)
         self.assertEqual(equip.command, "e Hitem:%d:0" % PROC_BLADE)
         self.assertEqual(equip.holder, "Grog")
         self.assertIn("Jev judged", equip.reason)
@@ -160,9 +158,7 @@ class WeaponActTest(unittest.TestCase):
         self.assertEqual(of(plan, jev_items.KIND_WEAPON, "Grug").acted, jev.JEV)
         self.assertEqual(plan.no_equip, frozenset({778}))
         self.assertEqual(
-            bag_pressure.jev_equips(
-                wanted, rows, WORN, NAMES, withheld=plan.no_equip, chosen=plan.equip
-            ),
+            bag_pressure.jev_equips(wanted, rows, WORN, NAMES, plan),
             (),
         )
 
@@ -196,16 +192,21 @@ class WeaponActTest(unittest.TestCase):
 
     def test_the_owners_mark_is_never_put_on(self):
         rows = [proc_blade("Grog", 777)]
+        plan = jev_items.ActPlan(
+            equip={777: "why"}, no_equip=frozenset(), no_give=frozenset(), judgments=()
+        )
         picks = bag_pressure.jev_equips(
-            (),
-            rows,
-            WORN,
-            NAMES,
-            withheld=(),
-            chosen={777: "why"},
-            keep_names=("Proc Blade",),
+            (), rows, WORN, NAMES, plan, keep_names=("Proc Blade",)
         )
         self.assertEqual(picks, ())
+        self.assertEqual(len(bag_pressure.jev_equips((), rows, WORN, NAMES, plan)), 1)
+
+    def test_no_plan_leaves_the_heuristics_equips(self):
+        rows = [proc_blade("Grug", 778)]
+        wanted = bag_pressure.holder_equips(rows, WORN, NAMES)
+        self.assertEqual(
+            bag_pressure.jev_equips(wanted, rows, WORN, NAMES, None), wanted
+        )
 
 
 class DispositionActTest(unittest.TestCase):
