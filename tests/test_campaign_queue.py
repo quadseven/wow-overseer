@@ -434,6 +434,8 @@ class NothingElseStompsTheQueue(unittest.TestCase):
         ns = _load(
             ["_queue_holds_job"],
             {
+                # The annotation on `d` is evaluated at def time before 3.14.
+                "core": core,
                 "asyncio": asyncio,
                 "log": _Log(),
                 "_queue_owns_job": lambda: owns.append(1) or True,
