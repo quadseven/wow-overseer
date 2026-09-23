@@ -28,6 +28,7 @@ import pymysql
 import achievements
 import armory
 import auction
+import bag_market
 import bag_pressure
 import bag_upgrade
 import bank
@@ -6182,6 +6183,12 @@ class Bridge(discord.Client):
             return
         step = await self._settle_auction_errand(names, leader)
         await self._auction_sales_once(names, leader, step)
+        # BAGS BEFORE THE REAGENT GATE BELOW, which returns when nobody is on
+        # a craft errand: a bigger bag is worth the walk on its own.
+        try:
+            await self._auction_bag_upgrades(names, leader, step)
+        except Exception:
+            log.exception("bag upgrade: auction half failed; retrying next cycle")
 
         # NOT `_fetch_craft_spells`, WHICH FILTERS job='craft' (infra#3734).
         # `craft_rhythm` moves the family to MODE_GATHER the moment any of
@@ -6360,29 +6367,103 @@ class Bridge(discord.Client):
                 log.info("auction: %s %s - %s", sale.candidate.holder,
                          sale.command, sale.candidate.label or "surplus BoE")
         if queued:
-            # Keep the leader at the counter while the world executor answers
-            # the listing rows. A completed purchase can release the old aim
-            # before this pass discovers a new sale, so reassert the same
-            # guarded keyword whenever work was actually queued.
-            await asyncio.to_thread(
-                _write_trade_errand,
-                professions.Errand(character=leader,
-                                   travel_npc=auction.AUCTIONEER_ROLE),
-            )
-            # AND TELL THE LEDGER, because this write did not go through
-            # `_claim_town_slot` (infra#4194). `_reconcile` rebuilds the holder
-            # from the column on every `want()`, and a value it does not
-            # recognise becomes `Holder(claimant="", since=now)` - an ORPHAN on
-            # the 1200s lease with the clock started again. This pass already
-            # owns the column and is only re-asserting its own keyword;
-            # staying silent would evict itself and hand a twenty-minute lease
-            # to nobody, which is the unbounded stall infra#4194 measured.
-            self._town_slot.adopt(
-                claimant="auction", character=leader,
-                aim=auction.AUCTIONEER_ROLE, now=time.monotonic(),
-            )
+            await self._keep_at_auctioneer(leader)
         log.info("auction: listed %d surplus BoE item(s) at house %s",
                  queued, house)
+
+    async def _keep_at_auctioneer(self, leader: str) -> None:
+        """Hold the leader at the counter while queued auction rows run.
+
+        A completed purchase can release the old aim before this pass
+        discovers new work, so the same guarded keyword is reasserted whenever
+        work was actually queued.
+        """
+        await asyncio.to_thread(
+            _write_trade_errand,
+            professions.Errand(character=leader,
+                               travel_npc=auction.AUCTIONEER_ROLE),
+        )
+        # AND TELL THE LEDGER, because this write did not go through
+        # `_claim_town_slot` (infra#4194). `_reconcile` rebuilds the holder
+        # from the column on every `want()`, and a value it does not
+        # recognise becomes `Holder(claimant="", since=now)` - an ORPHAN on
+        # the 1200s lease with the clock started again. This pass already
+        # owns the column and is only re-asserting its own keyword;
+        # staying silent would evict itself and hand a twenty-minute lease
+        # to nobody, which is the unbounded stall infra#4194 measured.
+        self._town_slot.adopt(
+            claimant="auction", character=leader,
+            aim=auction.AUCTIONEER_ROLE, now=time.monotonic(),
+        )
+
+    async def _auction_bag_upgrades(self, names: list, leader: str,
+                                    step: str) -> None:
+        """Buy a bigger bag at the auction house for a member with full positions.
+
+        `bag_market.plan_upgrades` decides; this reads and writes. Before the
+        leader arrives the plan is made against the house of its team, so the
+        pass knows whether a walk is worth taking; at a counter it is made
+        against that counter's house. A row is written only
+        for a buyer standing at an auctioneer of that house, the per-shopper
+        gate `_shop_for` keeps, because `DoAuction` refuses any other id as
+        `WrongHouse`. The bag arrives by mail: `_mail_once` collects it and
+        `_hand_bags_once` puts it on in place of the smallest worn bag.
+        """
+        members = bag_upgrade.members_from_rows(
+            await asyncio.to_thread(_fetch_bag_state, names), names)
+        pending = await asyncio.to_thread(_recent_bag_buys, GIVE_RETRY_MINUTES)
+        shoppers = [m for m in members if m.name not in pending]
+        if not any(bag_market.smallest_worn(m) is not None for m in shoppers):
+            return
+        purses = {
+            name: bag_market.Purse(level=level, money=money)
+            for name, (level, money) in
+            (await asyncio.to_thread(_fetch_purses, names)).items()
+        }
+        teams = await asyncio.to_thread(_fetch_teams, names)
+        # THE COUNTER'S HOUSE ONCE THE LEADER STANDS AT ONE. The nearest
+        # auctioneer can be a neutral one, whose house is not the team's.
+        at_counter = await asyncio.to_thread(_fetch_auctioneer, leader)
+        house = (auction.reachable_house(teams.get(leader, ""),
+                                         int(at_counter.get("faction") or 0))
+                 if at_counter
+                 else auction.TEAM_HOUSE.get(teams.get(leader, ""), 0))
+        upgrades, notes = bag_market.plan_upgrades(
+            shoppers, purses,
+            await asyncio.to_thread(_fetch_bag_listings, house),
+            mailed=await asyncio.to_thread(_fetch_mailed_bags, names),
+        )
+        for note in notes:
+            log.info("bags: %s", note)
+        log.info("%s at house %s", bag_market.report(
+            upgrades, bag_market.family_budget(purses)), house)
+        if not upgrades:
+            return
+        queued = 0
+        for upgrade in upgrades:
+            stand = await asyncio.to_thread(_fetch_auctioneer, upgrade.buyer)
+            if not stand or auction.reachable_house(
+                    teams.get(upgrade.buyer, ""),
+                    int(stand.get("faction") or 0)) != house:
+                continue
+            if await asyncio.to_thread(_insert_auction, upgrade.buyer,
+                                       upgrade.command, "bags"):
+                queued += 1
+                log.info("bag upgrade: %s %s - %s", upgrade.buyer,
+                         upgrade.command, upgrade.why)
+        if queued:
+            await self._keep_at_auctioneer(leader)
+            return
+        if at_counter or step != bag_pressure.VENDOR_ERRAND_AIM:
+            return
+        # THE WALK, through the one door, urgent on the same bag pressure the
+        # listing half above claims on.
+        pressure = bag_pressure.family_town_run_needed(
+            await asyncio.to_thread(_fetch_free_slots, names))
+        aimed = await self._claim_town_slot(
+            "auction", leader, auction.AUCTIONEER_ROLE, urgent=pressure)
+        log.info("bag upgrade: leader=%s walks to an auctioneer for %d bag(s) "
+                 "(aim taken=%s)", leader, len(upgrades), aimed)
 
     async def _auction_shortfall(self, shoppers: dict) -> tuple:
         """Who is short of what, counting the bags and the mail separately.
@@ -9085,10 +9166,10 @@ class Bridge(discord.Client):
         not counted as a reason to walk. What is left over - members whose own
         reach stocks no bag - is what `_aim_at_bag_vendor` may take a trip for.
         """
-        needy = await self._buy_bags_once(names)
+        needy = await self._buy_bags_once(names, auction_too=cohort is None)
         await self._aim_at_bag_vendor(needy, names, cohort)
 
-    async def _buy_bags_once(self, names: list) -> tuple:
+    async def _buy_bags_once(self, names: list, auction_too: bool = False) -> tuple:
         """Buy the cheapest bag a vendor in reach stocks, for anyone short (#150).
 
         `bag_pressure.bag_purchases` decides; this reads and writes. A
@@ -9103,6 +9184,10 @@ class Bridge(discord.Client):
         """
         members = bag_upgrade.members_from_rows(
             await asyncio.to_thread(_fetch_bag_state, names), names)
+        try:
+            await self._vendor_bag_upgrades(members, auction_too)
+        except Exception:
+            log.exception("bag upgrade: vendor half failed; retrying next cycle")
         open_positions = bag_pressure.open_bag_positions(members)
         wanting = sorted(name for name, n in open_positions.items() if n > 0)
         if not wanting:
@@ -9147,6 +9232,84 @@ class Bridge(discord.Client):
         log.info("bags: %d at a vendor wanted a bag, %d purchase(s) queued, "
                  "%d held back", len(buyers), bought, len(notes))
         return needy
+
+    async def _vendor_bag_upgrades(self, members, auction_too: bool = False) -> None:
+        """Buy a bigger bag at a vendor in reach, for a member with full positions.
+
+        The vendor half of `bag_market`, and the half every family gets: the
+        auction half needs the mail pass, which runs for this bridge's own
+        family only. A buyer must stand at a vendor that stocks the bag,
+        because DoBuy refuses on the buyer's range, and no walk is taken for
+        an upgrade (`_aim_at_bag_vendor` walks for an empty position only).
+        The bag lands in the buyer's bags, and the `e` row right behind it
+        puts it on in place of the smallest worn bag. A member with a bag
+        bought at the auction house in the window, or one in the mail, is
+        not sold a second one here.
+
+        `auction_too` is True for this bridge's own family, whose auction pass
+        buys bags as well. The house's bags then join the plan, and a member
+        whose best bag is on the house is left to that pass rather than sold
+        a smaller one here.
+        """
+        names = [m.name for m in members]
+        pending = await asyncio.to_thread(_recent_bag_buys, GIVE_RETRY_MINUTES)
+        full = [m for m in members
+                if bag_market.smallest_worn(m) is not None
+                and m.name not in pending]
+        if not full:
+            return
+        reach = {}
+        for member in full:
+            town = await asyncio.to_thread(_fetch_town, member.name)
+            if town.vendor and town.stocks:
+                reach[member.name] = frozenset(town.stocks)
+        if not reach:
+            return
+        offers = await asyncio.to_thread(
+            _fetch_bag_offers, sorted(set().union(*reach.values())))
+        listings = [
+            bag_market.Listing(source=bag_market.VENDOR, key=o.entry,
+                               entry=o.entry, name=o.name, slots=o.slots,
+                               price=o.price)
+            for o in offers
+        ]
+        if auction_too:
+            leader = await asyncio.to_thread(_head_now)
+            teams = await asyncio.to_thread(_fetch_teams, [leader] if leader else [])
+            listings += await asyncio.to_thread(
+                _fetch_bag_listings, auction.TEAM_HOUSE.get(teams.get(leader, ""), 0))
+        purses = {
+            name: bag_market.Purse(level=level, money=money)
+            for name, (level, money) in
+            (await asyncio.to_thread(_fetch_purses, names)).items()
+        }
+        upgrades, notes = bag_market.plan_upgrades(
+            [m for m in full if m.name in reach], purses, listings,
+            mailed=await asyncio.to_thread(_fetch_mailed_bags, list(reach)),
+            reach=reach,
+            free_slots=await asyncio.to_thread(_fetch_free_slots, list(reach)),
+        )
+        for note in notes:
+            log.info("bags: %s", note)
+        seen = await asyncio.to_thread(_recent_town_keys, GIVE_RETRY_MINUTES)
+        for upgrade in upgrades:
+            if upgrade.listing.source != bag_market.VENDOR:
+                log.info("bags: %s's best bag is %s on the auction house, so "
+                         "the auction pass buys it", upgrade.buyer,
+                         upgrade.listing.name)
+                continue
+            if (upgrade.buyer, upgrade.command) in seen:
+                continue
+            errand = towntrip.Errand(
+                upgrade.buyer, towntrip.BUY_KIND, upgrade.command,
+                upgrade.why, upgrade.price,
+            )
+            if not await asyncio.to_thread(_insert_town_errand, errand):
+                continue
+            await asyncio.to_thread(_insert_bag_equip, upgrade)
+            log.info("bag upgrade: %s buys %s at a vendor (+%d slots) - %s",
+                     upgrade.buyer, upgrade.listing.name, upgrade.gain,
+                     upgrade.why)
 
     async def _aim_at_bag_vendor(self, needy, names: list, cohort=None) -> None:
         """Walk the family to the nearest vendor that stocks a bag (#206).
@@ -10524,6 +10687,16 @@ class Bridge(discord.Client):
             # are different answers and a reader has a different thing to do
             # about each.
             log.info("flight: %s", flightlearn.report(errand))
+            return
+        # BAG PRESSURE OUTRANKS A DISCOVERY WALK. The want is dropped as well
+        # as the claim, so the town slot stops ranking this pass ahead of the
+        # sell and bag passes; `bag_market.discovery_waits` has the evidence.
+        waits = bag_market.discovery_waits(
+            await asyncio.to_thread(_fetch_free_slots, names))
+        if waits:
+            self._town_slot.forget(FLIGHT_CLAIMANT)
+            log.info("flight: taxi node %d waits for the family's bags - %s",
+                     errand.node, waits)
             return
         aimed = await self._claim_town_slot(FLIGHT_CLAIMANT, leader,
                                             errand.aim)
@@ -17016,12 +17189,15 @@ def _fetch_teams(names: list) -> dict:
         }
 
 
-def _insert_auction(member: str, command: str) -> int:
+def _insert_auction(member: str, command: str, source: str = "auction") -> int:
     """Queue one kind='auction' row for the world executor.
 
     `target_arg` is left empty: the auction executor does not read it (the
     column carries a receiving character for kind='give' and kind='trade', and
     an auction has no other side this process names).
+
+    `source` is 'bags' for a bag upgrade, so `_recent_bag_buys` can tell a
+    bag bought in the retry window from a reagent.
     """
     with _connect() as conn, conn.cursor() as cur:
         try:
@@ -17029,7 +17205,7 @@ def _insert_auction(member: str, command: str) -> int:
                 "INSERT INTO overseer_command "
                 "(target_name, command, kind, target_arg, source) "
                 "VALUES (%s, %s, %s, %s, %s)",
-                (member, command, auction.AUCTION_KIND, "", "auction"),
+                (member, command, auction.AUCTION_KIND, "", source),
             )
         except pymysql.err.MySQLError as exc:
             if exc.args and exc.args[0] in (1146, 1265):
@@ -17066,6 +17242,99 @@ def _recent_auction_keys(minutes: int) -> set:
                 return set()
             raise
         return {(row["target_name"], row["command"]) for row in cur.fetchall()}
+
+
+def _recent_bag_buys(minutes: int) -> set:
+    """Who has had a bag bought off the auction house inside the window.
+
+    A bought bag sits in the mail until the mail pass collects it, and
+    `bag_market.on_the_way` sees it there. This covers the minutes between
+    the row and the letter, so one member gets one bag a window.
+    """
+    with _connect() as conn, conn.cursor() as cur:
+        try:
+            cur.execute(
+                "SELECT DISTINCT target_name FROM overseer_command "
+                "WHERE kind = 'auction' AND source = 'bags' "
+                "AND created_at > NOW() - INTERVAL %s MINUTE",
+                (int(minutes),),
+            )
+        except pymysql.err.MySQLError as exc:
+            if exc.args and exc.args[0] in (1054, 1146, 1265):
+                return set()
+            raise
+        return {row["target_name"] for row in cur.fetchall()}
+
+
+# Every buyout listing of a general bag in one house (bag_market). subclass 0
+# is the plain container, the same rule `_BAG_OFFERS_SQL` holds a vendor to.
+_BAG_LISTINGS_SQL = (
+    "SELECT a.id AS auction_id, ii.itemEntry AS entry, it.name AS name, "
+    "it.ContainerSlots AS slots, a.buyoutprice AS price, "
+    "it.maxcount AS maxcount "
+    "FROM auctionhouse a "
+    "JOIN item_instance ii ON ii.guid = a.itemguid "
+    "JOIN acore_world.item_template it ON it.entry = ii.itemEntry "
+    "WHERE a.houseid = %s AND a.buyoutprice > 0 AND it.class = 1 "
+    "AND it.subclass = 0 AND it.ContainerSlots > 0"
+)
+
+
+def _fetch_bag_listings(house: int) -> list:
+    """bag_market.Listing for every general bag on sale in `house`."""
+    if int(house) <= 0:
+        return []
+    with _connect() as conn, conn.cursor() as cur:
+        try:
+            cur.execute(_BAG_LISTINGS_SQL, (int(house),))
+            rows = cur.fetchall()
+        except pymysql.err.MySQLError as exc:
+            if exc.args and exc.args[0] in (1054, 1146):
+                log.warning("bags: no readable auction house, so no bag is "
+                            "bought there this pass")
+                return []
+            raise
+    return [
+        bag_market.Listing(
+            source=bag_market.AUCTION, key=int(row["auction_id"]),
+            entry=int(row["entry"]), name=str(row["name"] or ""),
+            slots=int(row["slots"] or 0), price=int(row["price"] or 0),
+            unique=int(row["maxcount"] or 0) > 0,
+        )
+        for row in rows
+    ]
+
+
+# The general bags waiting in each member's mail, by size (bag_market).
+_MAILED_BAGS_SQL = (
+    "SELECT c.name AS name, it.ContainerSlots AS slots "
+    "FROM mail m "
+    "JOIN mail_items mi ON mi.mail_id = m.id "
+    "JOIN item_instance ii ON ii.guid = mi.item_guid "
+    "JOIN acore_world.item_template it ON it.entry = ii.itemEntry "
+    "JOIN characters c ON c.guid = m.receiver "
+    "WHERE c.name IN (%s) AND it.class = 1 AND it.subclass = 0 "
+    "AND it.ContainerSlots > 0"
+)
+
+
+def _fetch_mailed_bags(names: list) -> dict:
+    """name -> [ContainerSlots of each general bag in its mail]."""
+    if not names:
+        return {}
+    sql = _MAILED_BAGS_SQL % ",".join(["%s"] * len(names))  # noqa: S608 - placeholders from a COUNT, values still bound
+    with _connect() as conn, conn.cursor() as cur:
+        try:
+            cur.execute(sql, names)
+            rows = cur.fetchall()
+        except pymysql.err.MySQLError as exc:
+            if exc.args and exc.args[0] in (1054, 1146):
+                return {}
+            raise
+    out: dict = {}
+    for row in rows:
+        out.setdefault(row["name"], []).append(int(row["slots"] or 0))
+    return out
 
 
 # ---------------------------------------------------------------------------

@@ -288,7 +288,7 @@ class TheBridgeWiring(unittest.TestCase):
     def test_purchase_runs_before_the_trip(self):
         body = _statements("    async def _bag_purchase_and_trip(")
         self.assertLess(
-            body.index("await self._buy_bags_once(names)"),
+            body.index("await self._buy_bags_once(names, auction_too=cohort is None)"),
             body.index("await self._aim_at_bag_vendor(needy, names, cohort)"),
         )
 
