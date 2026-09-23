@@ -57,8 +57,15 @@ _INSTANCE_SOULBOUND = 0x1
 # for quality 1 or less and a vendor price, so a leftover with no price is
 # never offered. Expects the aliases `it` (item_template), `ii`
 # (item_instance) and `ci` (character_inventory).
+#
+# A QUEST STARTER IS A QUEST ITEM ONLY UNTIL ITS QUEST IS DONE (#233). It
+# used to be `it.startquest > 0` alone, so a starter stayed protected for
+# ever after its quest was turned in. It now asks the holder's own
+# character_queststatus_rewarded for the quest it starts.
 QUEST_NEEDED_SQL = (
-    "(it.class = 12 AND (it.startquest > 0 OR EXISTS ("
+    "(it.class = 12 AND ((it.startquest > 0 AND NOT EXISTS ("
+    "SELECT 1 FROM character_queststatus_rewarded qr "
+    "WHERE qr.guid = ci.guid AND qr.quest = it.startquest)) OR EXISTS ("
     "SELECT 1 FROM character_queststatus qs "
     "JOIN acore_world.quest_template qt ON qt.ID = qs.quest "
     "WHERE qs.guid = ci.guid AND qs.status <> 0 AND ii.itemEntry IN ("

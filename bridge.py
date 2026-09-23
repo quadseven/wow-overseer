@@ -9362,11 +9362,7 @@ class Bridge(discord.Client):
         names = sorted((await asyncio.to_thread(_protected_guids)).values())
         if not names or await self._mid_run(names):
             return
-        rows = await asyncio.to_thread(_fetch_bank_items, names)
-        held = await asyncio.to_thread(_fetch_trade_skills, names)
-        bank_plan = bank.plan(
-            bank.members_from_rows(rows, names), bank.family_from_skills(held)
-        )
+        bank_plan = await asyncio.to_thread(_plan_bank, names)
         for note in bank_plan.notes:
             log.info("bank: %s", note)
         # `_head_now()` RATHER THAN bonds.head_of_family() (infra#3553, same
@@ -9564,13 +9560,14 @@ class Bridge(discord.Client):
         arbitration, one claim and one arrival, and the in-line comments below
         carry the measurement.
 
-        IT STILL DEPOSITS GOLD AND ONLY GOLD. `guild_bank_item` cannot move
-        from anything in this pass: `bank deposit <copper>` lands in
-        `guild.BankMoney`, and the item verb `guildbank.format_item_deposit`
-        renders has no caller anywhere in this package. Relief for a member
-        full of PROTECTED ITEMS (infra#4198) is a policy that does not exist
-        yet, not a broken one - see guildbank.py's own docstring for why it
-        was deliberately left unwritten.
+        AND NOW ITEMS TOO (#233). This pass used to deposit gold and only
+        gold, because the item verb had a formatter and no policy deciding
+        WHICH items. `bank.plan`'s keeper rule is that policy: its `guild`
+        moves are the tradable stacks nobody uses from the bags, offered only
+        while the holder's rank can deposit into tab 0 and the tab has room.
+        They ride the same walk and the same per-depositor range gate as the
+        gold rows, and they count as a reason to walk on their own, because a
+        family under the gold float can still have full bags.
         """
         names = sorted((await asyncio.to_thread(_protected_guids)).values())
         if not names or await self._mid_run(names):
@@ -9635,14 +9632,16 @@ class Bridge(discord.Client):
         # can only ever release gold, never strand it".
         deposits = guildbank.plan_deposits(
             members, guild_has_tab=purchased_tabs > 0)
-        if not actions and not deposits:
+        items = (await asyncio.to_thread(_plan_bank, names)).guild
+        if not actions and not deposits and not items:
             log.info("guild bank: nobody is carrying more than the float")
             return
         # ONE POSITION READ, FOR TWO QUESTIONS (infra#3804): which map the
         # LEADER aims from, and whether each DEPOSITOR is at the vault now.
         # `_fetch_positions` batches, so this is the one query it always was.
         positions = await asyncio.to_thread(
-            _fetch_positions, sorted({leader} | {d.name for d in deposits}))
+            _fetch_positions, sorted({leader} | {d.name for d in deposits}
+                                     | {m.character for m in items}))
         where = positions.get(leader)
         spawn = await asyncio.to_thread(_nearest_vault, leader)
         vault = travel.vault_aim(spawn, where.get("map_id") if where else None)
@@ -9735,12 +9734,14 @@ class Bridge(discord.Client):
                                         action.command, "guildbank-setup")
                 log.info("guild bank setup: queued %s for %s",
                          action.command, leader)
+        if items:
+            await self._queue_guild_items(items, spawn, positions)
         if not deposits:
-            # REACHED ONLY WHEN SETUP IS THE WHOLE REASON THIS PASS WALKED.
-            # `not actions and not deposits` already returned far above, so
-            # this arm means the trip was bought by setup alone and nobody is
-            # over their float - which is a complete, uninteresting pass and
-            # not a failure.
+            # REACHED WHEN SETUP OR ITEMS ARE THE WHOLE REASON THIS PASS
+            # WALKED. `not actions and not deposits and not items` already
+            # returned far above, so this arm means nobody is over their
+            # float - which is a complete, uninteresting pass and not a
+            # failure.
             log.info("guild bank: nobody is carrying more than the float")
             return
         seen = await asyncio.to_thread(_recent_guild_bank_keys, GIVE_RETRY_MINUTES)
@@ -9770,6 +9771,42 @@ class Bridge(discord.Client):
             )
         log.info("guild bank: queued %d/%d deposit(s), leader=%s aimed at %s",
                  len(fresh), len(deposits), leader, vault.aim)
+
+    async def _queue_guild_items(self, items, spawn, positions) -> None:
+        """Write the keeper rule's guild deposits for holders at the vault.
+
+        The item half of `_guild_bank_once` (#233), and the same two gates as
+        its gold rows: a (character, command) already asked inside the retry
+        window is not asked again, and a row is only written for a holder
+        standing within TOWN_COUNTER_YARDS of the vault, because DoGuild
+        answers `no guild bank in reach` a second after a row written from
+        anywhere else. The command text is `bank.command(move)`, which renders
+        it through guildbank's own formatter.
+        """
+        seen = await asyncio.to_thread(_recent_guild_bank_keys, GIVE_RETRY_MINUTES)
+        fresh = []
+        walking = set()
+        for move in items:
+            command = bank.command(move)
+            if (move.character, command) in seen:
+                continue
+            if not travel.spawn_in_reach(
+                    spawn, positions.get(move.character), TOWN_COUNTER_YARDS):
+                walking.add(move.character)
+                continue
+            if await asyncio.to_thread(
+                    _insert_guild, move.character, command, "guildbank-item"):
+                fresh.append(move)
+        if walking:
+            log.info(
+                "guild bank: %s not within %d yards of the vault, so no kept "
+                "stack is queued for them until the walk lands",
+                ", ".join(sorted(walking)), TOWN_COUNTER_YARDS,
+            )
+        for line in bank.lines(fresh):
+            log.info("guild bank: %s", line)
+        log.info("guild bank: queued %d/%d kept stack(s) for the guild bank "
+                 "tab", len(fresh), len(items))
 
     async def _recruit_once(self) -> None:
         """One pass of the recruit sweep: shortlist, or invite, or say why not.
@@ -15372,13 +15409,40 @@ _BANK_ITEMS_SQL = (
     "       it.SellPrice AS sell_price, it.RequiredLevel AS required_level, "
     "       it.bonding AS bonding, it.class AS item_class, "
     "       it.ContainerSlots AS container_slots, "
-    "       ci.bag AS bag, ci.slot AS slot "
+    "       ci.bag AS bag, ci.slot AS slot, "
+    # What bank.storage_reason reads (#233): which trade claims the stack,
+    # the rank a recipe teaches at, a lockbox's lock, a quest starter, and
+    # whether THIS copy is already bound.
+    "       ii.itemEntry AS entry, it.BagFamily AS bag_family, "
+    "       it.RequiredSkill AS required_skill, "
+    "       it.RequiredSkillRank AS required_rank, it.lockid AS lock_id, "
+    "       it.startquest AS start_quest, ii.flags AS instance_flags "
     "FROM character_inventory ci "
     "JOIN characters c                  ON c.guid = ci.guid "
     "JOIN item_instance ii              ON ii.guid = ci.item "
     "JOIN acore_world.item_template it  ON it.entry = ii.itemEntry "
     "WHERE c.name IN (%s)"
 )
+
+
+def _plan_bank(names: list) -> "bank.Plan":
+    """bank.plan over the family's rows, with the keeper rule switched on.
+
+    ONE PLAN FOR TWO PASSES (#233). `_bank_once` writes its `moves` from a
+    banker and `_guild_bank_once` writes its `guild` moves from a vault, and
+    both read them from this one call over the same rows, so the split
+    between the two banks is decided once and cannot disagree between them.
+    Blocking: the passes call it through `asyncio.to_thread`.
+    """
+    rows = _fetch_bank_items(names)
+    held = _fetch_trade_skills(names)
+    storage = bank.storage_from(
+        held, _worked_by(names), REAGENT_TRADES, _fetch_guild_bank_setup(names),
+    )
+    return bank.plan(
+        bank.members_from_rows(rows, names), bank.family_from_skills(held),
+        storage=storage,
+    )
 
 
 def _fetch_bank_items(names: list) -> list:
@@ -15457,8 +15521,27 @@ def _fetch_guild_bank_setup(names: list) -> dict | None:
                 (guild_id,),
             )
             deposit_ranks = tuple(int(row["rid"]) for row in cur.fetchall())
+            # WHO MAY PUT AN ITEM IN, AND HOW MUCH ROOM TAB 0 HAS (#233).
+            # The core no-ops an item deposit for a rank without the right or
+            # into a full tab, so bank.storage_from offers the guild only to
+            # members of THIS guild whose rank carries it, and only as many
+            # stacks as the tab has free slots.
+            cur.execute(
+                "SELECT c.name, gm.rank FROM guild_member gm "
+                "JOIN characters c ON c.guid = gm.guid "
+                "WHERE gm.guildid = %%s AND c.name IN (%s)" % marks,
+                (guild_id, *names),
+            )
+            member_ranks = {row["name"]: int(row["rank"]) for row in cur.fetchall()}
+            cur.execute(
+                "SELECT COUNT(*) AS n FROM guild_bank_item "
+                "WHERE guildid = %s AND TabId = 0",
+                (guild_id,),
+            )
+            tab0_items = int(cur.fetchone()["n"])
             return {"purchased_tabs": purchased, "rank_ids": rank_ids,
-                    "deposit_rank_ids": deposit_ranks}
+                    "deposit_rank_ids": deposit_ranks,
+                    "member_ranks": member_ranks, "tab0_items": tab0_items}
         except pymysql.err.MySQLError as exc:
             if exc.args and exc.args[0] in (1054, 1146):
                 log.warning("guild bank setup tables are unavailable")
@@ -16078,15 +16161,17 @@ def _recent_guild_bank_keys(minutes: int) -> set:
     reason: `bank deposit <copper>` rows go through `_insert_guild`, which
     also carries tabard/invite/shortlist commands under the same kind - the
     `LIKE 'bank deposit %'` filter is what keeps this read to only the
-    deposit rows this pass itself is responsible for re-queuing.
+    deposit rows this pass itself is responsible for re-queuing. The item
+    rows (`bank deposit-item guid:<n>`, #233) are the same pass's too, and
+    need their own pattern because a hyphen, not a space, follows `deposit`.
     """
     with _connect() as conn, conn.cursor() as cur:
         try:
             cur.execute(
                 "SELECT target_name, command FROM overseer_command "
-                "WHERE kind = 'guild' AND command LIKE %s "
+                "WHERE kind = 'guild' AND (command LIKE %s OR command LIKE %s) "
                 "AND created_at > NOW() - INTERVAL %s MINUTE",
-                ("bank deposit %", int(minutes)),
+                ("bank deposit %", "bank deposit-item %", int(minutes)),
             )
         except pymysql.err.MySQLError as exc:
             # 1054 missing column, 1146 missing table, 1265 a `kind` ENUM with

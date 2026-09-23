@@ -26,6 +26,13 @@ go in.
     disposition    one item   -> one route, with a reason
     bank           one family -> an ordered list of bank moves that fit
 
+ONE QUESTION DISPOSITION DOES NOT ASK IS ANSWERED HERE (#233): is this stack
+used from the bags at all? Disposition's verdicts are about keeping and
+selling, and a gem, a recipe nobody can learn yet or a lockbox is worth
+keeping and never used from a bag. The keeper rule (the block above
+`Storage`) stores those, and it is the only judgement this module makes on
+its own. Disposition's BANK verdict is still read, after the keeper rule.
+
 THE MIRROR IS THE POINT. A deposit is only half of using a bank. An item goes
 down when the family cannot use it yet and comes back when it can - the cloth
 returns when somebody is actually a tailor. Both halves read the SAME verdict
@@ -62,10 +69,13 @@ here is arithmetic over rows somebody else fetched.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import disposition
+import goals
+import guildbank
 import materials
+import recipebook
 
 # The two verbs this module emits. `buy slot` is the third the executor takes
 # and is argued about in the docstring.
@@ -134,6 +144,31 @@ _BONDING = {
 BAGS = "bags"
 BANK = "bank"
 
+# Where a deposit lands. PERSONAL is the holder's own bank, the `kind='bank'`
+# row this module has always written. GUILD is tab 0 of the holder's guild
+# bank, the `bank deposit-item guid:<n>` row guildbank.format_item_deposit
+# renders and `_guild_bank_once` queues from the vault.
+PERSONAL = "personal"
+GUILD = "guild"
+
+# Tab 0 is the only tab the item verb deposits into (mod-overseer's
+# BankDepositItem, "TAB 0 ONLY, v1"), and a 3.3.5 guild bank tab has 98 slots
+# (GUILD_BANK_MAX_SLOTS in the core). A full tab makes the core no-op the
+# move, so the planner never offers more stacks than the tab has room for.
+GUILD_TAB_SLOTS = 98
+
+# item_template.class values the keeper rule reads beside the four above.
+ITEM_CLASS_CONSUMABLE = 0
+ITEM_CLASS_GEM = 3
+ITEM_CLASS_REAGENT = 5
+ITEM_CLASS_TRADE_GOODS = 7
+ITEM_CLASS_RECIPE = 9
+ITEM_CLASS_MISC = 15
+
+# item_instance.flags bit 1: ITEM_FIELD_FLAG_SOULBOUND. A bind-on-equip copy
+# somebody has worn is bound even though its template says bonding 2.
+_INSTANCE_SOULBOUND = 0x1
+
 # The verdicts that mean "this belongs in the bags", and so the only ones
 # that fetch something back out of the bank.
 #
@@ -167,6 +202,15 @@ class Holding:
     count: int
     container_slots: int  # >0 when the stack is itself a bag
     item: disposition.Item
+    # The facts the keeper rule reads (#233). Every default is the answer
+    # that stores nothing: entry 0 names no trade, rank 0 gates nothing, a
+    # lock id of 0 is not a lockbox, and `bound` True keeps a stack out of
+    # the guild bank.
+    template_id: int = 0
+    required_rank: int = 0
+    lock_id: int = 0
+    start_quest: int = 0
+    bound: bool = True
 
 
 @dataclass(frozen=True)
@@ -198,6 +242,9 @@ class Move:
     item: str
     count: int
     why: str
+    # PERSONAL for the holder's own bank, GUILD for the guild bank's tab 0.
+    # Only a DEPOSIT is ever GUILD: nothing here withdraws from a guild bank.
+    to: str = PERSONAL
 
 
 @dataclass(frozen=True)
@@ -212,6 +259,10 @@ class Plan:
 
     moves: tuple = ()
     notes: tuple = ()
+    # The GUILD deposits, kept apart from `moves` because a different pass
+    # walks to a different place to write them: `moves` are answered by a
+    # banker, these by a guild vault.
+    guild: tuple = ()
 
 
 def _int(value, default=0):
@@ -255,6 +306,9 @@ def item_from_row(row):
         auction_value=None,
         reagent_for=materials.REAGENTS.get(name),
         disenchant_skill_required=None,
+        item_class=item_class,
+        bag_family=_int(row.get("bag_family")),
+        required_skill=_int(row.get("required_skill")),
     )
 
 
@@ -364,6 +418,14 @@ def members_from_rows(rows, names):
             count=max(1, _int(row.get("count"), 1)),
             container_slots=slots,
             item=item,
+            template_id=_int(row.get("entry")),
+            required_rank=_int(row.get("required_rank")),
+            lock_id=_int(row.get("lock_id")),
+            start_quest=_int(row.get("start_quest")),
+            bound=(
+                item.binding == disposition.BIND_ON_PICKUP
+                or bool(_int(row.get("instance_flags")) & _INSTANCE_SOULBOUND)
+            ),
         )
         (carried if place == BAGS else banked)[holder].append(holding)
 
@@ -446,6 +508,256 @@ def reagent_totals(members):
     return totals
 
 
+# ---------------------------------------------------------------------------
+# WHAT STAYS IN THE BAGS (#233)
+#
+# MEASURED ON THE DEV REALM 2026-09-23. A level 60 priest with 30 bag slots
+# sat at 0 free, and this pass logged "nothing to put down" every cycle. It
+# only ever banked what `disposition.decide` routed to BANK, and that verdict
+# fires for one case: a material in `materials.REAGENTS` (six names) for a
+# trade nobody has. Everything else falls to the old-green branch, which
+# answers VENDOR for anything with a price - and the vendor pass then refuses
+# it, because it sells Quality 1 and below. So 48 uncut gems, 8 recipes, 3
+# lockboxes and a Libram were routed to a sale nobody would make, and the one
+# place that could take them never saw a BANK verdict.
+#
+# THE KEEPER RULE ANSWERS A DIFFERENT QUESTION FROM DISPOSITION'S. Disposition
+# asks "is this worth keeping". This asks "is it used FROM THE BAGS", which is
+# the question a person asks at the bank counter. A gem nobody carrying it
+# cuts, a recipe its holder cannot learn yet, a lockbox, another trade's stock
+# and an uncommon keepsake are all worth keeping and none of them is used from
+# a bag, so they go to storage. What the holder's own trades use stays, up to
+# `disposition.REAGENT_KEEP` of each item, and only the stacks past that are
+# stored - the same whole-stacks, largest-first rule `profession_keeps` uses,
+# so the vendor pass and this one agree about which stacks are the shelf.
+#
+# WHAT IT NEVER TOUCHES. Quest-class stacks and anything that starts a quest
+# (the quest rule's, bag_pressure.QUEST_NEEDED_SQL), consumables, weapons and
+# armour (the gear passes'), bags, and trade stock no trade in the family
+# claims at Quality 1 or below (the vendor's goods).
+#
+# TRADABLE KEEPERS GO TO THE GUILD BANK, the rest to the personal bank. The
+# guild bank is shared, so a gem stored there is reachable by whoever takes up
+# jewelcrafting; a bound stack can never enter it (mod-overseer's
+# BankDepositItem refuses a soulbound item) and goes to the holder's own bank.
+# The guild is only offered what its tab 0 has room for, and only from a
+# holder whose rank carries the deposit-item right there.
+
+
+@dataclass(frozen=True)
+class Storage:
+    """What the keeper rule needs to know beyond one stack.
+
+    `trades` maps a holder to the trades that holder works (lower-case).
+    `family_trades` is every trade the family works: stock one of those claims
+    is protected from the vendor for somebody, so it is stored rather than
+    left to a sale that will never happen. `skills` is holder ->
+    {skill_id: value}, for the recipe test. `named` is entry -> the trades
+    whose recipes buy it (bridge.REAGENT_TRADES). `guild_depositors` and
+    `guild_free` describe the guild bank's tab 0.
+    """
+
+    trades: dict = field(default_factory=dict)
+    family_trades: frozenset = frozenset()
+    skills: dict = field(default_factory=dict)
+    named: dict = field(default_factory=dict)
+    guild_depositors: frozenset = frozenset()
+    guild_free: int = 0
+    stock_cap: int = disposition.REAGENT_KEEP
+
+
+def _trades_and_skills(held, worked_by):
+    """holder -> worked trades, and holder -> {skill_id: value}."""
+    trades: dict = {}
+    skills: dict = {}
+    for name, profs in (held or {}).items():
+        own = trades.setdefault(str(name), set())
+        ids = skills.setdefault(str(name), {})
+        for profession, value in (profs or {}).items():
+            profession = str(profession).strip().lower()
+            if _int(value) > 0:
+                own.add(profession)
+            skill_id = goals.SKILL_IDS.get(profession)
+            if skill_id:
+                ids[skill_id] = _int(value)
+    for name, declared in (worked_by or {}).items():
+        trades.setdefault(str(name), set()).update(
+            str(t).strip().lower() for t in declared if str(t).strip()
+        )
+    return trades, skills
+
+
+def _guild_room(guild):
+    """(members whose rank may deposit on tab 0, tab 0's free slots)."""
+    if not guild or _int(guild.get("purchased_tabs")) <= 0:
+        return frozenset(), 0
+    rights = {_int(r) for r in guild.get("deposit_rank_ids", ())}
+    depositors = frozenset(
+        name
+        for name, rank in dict(guild.get("member_ranks") or {}).items()
+        if _int(rank, -1) in rights
+    )
+    free = max(0, GUILD_TAB_SLOTS - _int(guild.get("tab0_items"), GUILD_TAB_SLOTS))
+    return depositors, free
+
+
+def storage_from(held, worked_by=None, named=None, guild=None):
+    """The Storage this family is today, from what the bridge already reads.
+
+    `held` is name -> {profession: value} (`_fetch_trade_skills`), `worked_by`
+    is name -> declared trades (`_worked_by`), and `guild` is
+    `_fetch_guild_bank_setup`'s answer or None. A trade counts as worked when
+    the holder holds any skill in it or is declared to work it, the same
+    union the vendor pass protects stock for.
+
+    THE GUILD IS OPEN ONLY ON FACTS. No purchased tab, no member rank, or a
+    rank without the right on tab 0, and the guild takes nothing: the core
+    no-ops every one of those deposits without an error, so a guess here is a
+    queue of refusals.
+    """
+    trades, skills = _trades_and_skills(held, worked_by)
+    depositors, free = _guild_room(guild)
+    return Storage(
+        trades={name: frozenset(t) for name, t in trades.items()},
+        family_trades=frozenset(t for own in trades.values() for t in own),
+        skills=skills,
+        named=dict(named or {}),
+        guild_depositors=depositors,
+        guild_free=free,
+    )
+
+
+# The classes the keeper rule never stores: quest items (the quest rule's),
+# consumables (eaten from the bags), weapons and armour (the gear passes') and
+# bags (bag_upgrade's).
+_NEVER_STORED = frozenset(
+    {
+        ITEM_CLASS_QUEST,
+        ITEM_CLASS_CONSUMABLE,
+        ITEM_CLASS_WEAPON,
+        ITEM_CLASS_ARMOR,
+        ITEM_CLASS_CONTAINER,
+    }
+)
+
+
+def _claims(holding, trades, named):
+    """The first of `trades` that claims this stack as its stock, or ''.
+
+    The craft tables first, then the item's own material name, then its bag,
+    the order `disposition._trade_of` argues for.
+    """
+    trade = disposition._trade_of(
+        holding.template_id, holding.item.bag_family, trades, named
+    )
+    if trade:
+        return trade
+    material = materials.REAGENTS.get(holding.item.name)
+    if material and material in trades:
+        return material
+    return ""
+
+
+def _learnable(holding, storage):
+    """Could the holder learn this recipe today (recipebook.within_reach)?"""
+    return recipebook.within_reach(
+        holding.item.required_skill,
+        holding.required_rank,
+        storage.skills.get(holding.holder, {}),
+    )
+
+
+def stock_surplus(carried, storage):
+    """The guids of own-trade stock past the cap, per holder and item.
+
+    Whole stacks, largest first, at least one stack always kept: the rule
+    `disposition._stock_keeps` applies to the family's shelf, applied here to
+    one holder's bags. 25 Empty Vial against a cap of 40 is no surplus; three
+    stacks of 20 Silverleaf keep two and store one.
+    """
+    by_key: dict = {}
+    for holding in carried:
+        trades = storage.trades.get(holding.holder, frozenset())
+        if holding.item.item_class in _NEVER_STORED:
+            continue
+        if not _claims(holding, trades, storage.named):
+            continue
+        by_key.setdefault((holding.holder, holding.template_id), []).append(holding)
+    surplus = set()
+    for stacks in by_key.values():
+        kept = 0
+        for holding in sorted(stacks, key=_stack_order):
+            if kept and kept + holding.count > storage.stock_cap:
+                surplus.add(holding.guid)
+                continue
+            kept += holding.count
+    return frozenset(surplus)
+
+
+def storage_reason(holding, storage, surplus=frozenset()):
+    """Why this stack belongs in storage and not in the bags, or ''.
+
+    '' is the common answer and means "not this rule's business": the bags
+    keep it, or another pass (the vendor, the gear passes, the quest rule)
+    decides it. `surplus` is `stock_surplus` over the holder's carried stacks,
+    and only matters for the holder's own trade stock.
+    """
+    item = holding.item
+    if holding.container_slots > 0 or item.item_class in _NEVER_STORED:
+        return ""
+    if holding.start_quest > 0 or item.quest_item:
+        return ""
+    trades = storage.trades.get(holding.holder, frozenset())
+    if disposition.recipe(item):
+        if _learnable(holding, storage):
+            return ""
+        return (
+            "%s teaches a trade or a rank %s does not have yet, so it waits "
+            "in storage rather than in a bag slot" % (item.name, holding.holder)
+        )
+    if item.item_class == ITEM_CLASS_MISC and holding.lock_id > 0:
+        return "%s is a lockbox, and a closed box is not used from the bags" % item.name
+    own = _claims(holding, trades, storage.named)
+    if own:
+        if holding.guid in surplus:
+            return "%s is past the %d %s keeps for %s" % (
+                item.name,
+                storage.stock_cap,
+                holding.holder,
+                own,
+            )
+        return ""
+    if item.item_class == ITEM_CLASS_GEM:
+        return "%s is a gem and %s does not cut gems" % (item.name, holding.holder)
+    claimed = _claims(holding, storage.family_trades, storage.named)
+    if claimed:
+        return "%s feeds %s, which %s does not work" % (
+            item.name,
+            claimed,
+            holding.holder,
+        )
+    if item.quality >= 2:
+        return "%s is kept but never used from the bags" % item.name
+    return ""
+
+
+def _stored(member, storage):
+    """(holding, why) for every carried stack the keeper rule stores, in order.
+
+    SURPLUS FIRST: stacks nobody in the bags uses at all go before the surplus
+    of the holder's own stock, and inside each group the biggest pile goes
+    first, because every stack is worth one slot whatever its size.
+    """
+    surplus = stock_surplus(member.carried, storage)
+    found = []
+    for holding in member.carried:
+        why = storage_reason(holding, storage, surplus)
+        if why:
+            found.append((holding.guid in surplus, _stack_order(holding), holding, why))
+    found.sort(key=lambda found_row: (found_row[0], found_row[1]))
+    return [(holding, why) for _own, _order, holding, why in found]
+
+
 def _verdict(holding, family, level, totals):
     """What disposition says about this stack, in this family, right now."""
     return disposition.decide(
@@ -457,7 +769,124 @@ def _verdict(holding, family, level, totals):
     )
 
 
-def plan(members, family, *, visit_limit=VISIT_LIMIT):
+def _deposit_candidates(member, family, totals, storage):
+    """(holding, why, keeper) in deposit order: the keeper rule first."""
+    candidates = [
+        (holding, why, True)
+        for holding, why in (_stored(member, storage) if storage else [])
+    ]
+    chosen = {holding.guid for holding, _why, _keeper in candidates}
+    for holding in member.carried:
+        if holding.guid in chosen or holding.container_slots > 0:
+            # An empty spare bag belongs in somebody's empty bag position
+            # and a full one cannot be moved at all. Either way the bank
+            # is the wrong place for it.
+            continue
+        verdict = _verdict(holding, family, member.level, totals)
+        if verdict.route == disposition.BANK:
+            candidates.append((holding, verdict.why, False))
+    return candidates
+
+
+def _deposit(member, holding, why, to=PERSONAL):
+    return Move(
+        character=member.name,
+        verb=DEPOSIT,
+        guid=holding.guid,
+        item=holding.item.name,
+        count=holding.count,
+        why=why,
+        to=to,
+    )
+
+
+def _plan_deposits(member, candidates, storage, guild_room, visit_limit, notes):
+    """(personal deposits, guild deposits, guild room left) for one member.
+
+    A keeper that may go to the guild goes there while the tab has room and
+    this member's vault visit has room; past either, it is offered to the
+    banker, because the two trips are separate and a stack that leaves the
+    bags by either one has done what it was planned for.
+    """
+    deposits, sent = [], []
+    room = member.bank_free
+    for holding, why, keeper in candidates:
+        to_guild = (
+            keeper and not holding.bound and member.name in storage.guild_depositors
+        )
+        if to_guild and guild_room <= 0:
+            notes.append(
+                "the guild bank's tab is full, so %s goes to %s's own bank"
+                % (holding.item.name, member.name)
+            )
+        if to_guild and guild_room > 0 and len(sent) < visit_limit:
+            guild_room -= 1
+            sent.append(_deposit(member, holding, why, GUILD))
+            continue
+        if len(deposits) >= visit_limit:
+            notes.append(
+                "%s has more to bank than one visit carries; the "
+                "rest waits for the next trip" % member.name
+            )
+            continue
+        if room <= 0:
+            notes.append(
+                "%s's bank is full, so %s stays in the bags"
+                % (member.name, holding.item.name)
+            )
+            continue
+        room -= 1
+        deposits.append(_deposit(member, holding, why))
+    return deposits, sent, guild_room
+
+
+def _wanted_back(holding, member, family, totals, storage):
+    """Why a banked stack belongs in the bags again, or ''.
+
+    A stack the keeper rule stores is never wanted back, so the two halves
+    cannot undo each other. A recipe its holder can now learn is.
+    """
+    verdict = _verdict(holding, family, member.level, totals)
+    if storage is None:
+        return verdict.why if verdict.route in WITHDRAW_ROUTES else ""
+    if storage_reason(holding, storage):
+        return ""
+    if disposition.recipe(holding.item) and _learnable(holding, storage):
+        return "%s can learn it now" % member.name
+    return verdict.why if verdict.route in WITHDRAW_ROUTES else ""
+
+
+def _plan_withdrawals(member, family, totals, storage, space, budget, notes):
+    """The withdrawals for one member, within `space` slots and `budget` moves."""
+    withdrawals = []
+    for holding in member.banked:
+        if len(withdrawals) >= budget:
+            break
+        if holding.container_slots > 0:
+            continue
+        why = _wanted_back(holding, member, family, totals, storage)
+        if not why:
+            continue
+        if space <= 0:
+            notes.append(
+                "%s has no room to take %s back out" % (member.name, holding.item.name)
+            )
+            continue
+        space -= 1
+        withdrawals.append(
+            Move(
+                character=member.name,
+                verb=WITHDRAW,
+                guid=holding.guid,
+                item=holding.item.name,
+                count=holding.count,
+                why="%s is wanted in the bags again - %s" % (holding.item.name, why),
+            )
+        )
+    return withdrawals
+
+
+def plan(members, family, *, visit_limit=VISIT_LIMIT, storage=None):
     """Every bank move worth making, in the order it should be sent.
 
     DEPOSITS BEFORE WITHDRAWALS, per character, and the withdrawal budget is
@@ -470,78 +899,42 @@ def plan(members, family, *, visit_limit=VISIT_LIMIT):
     a green suits somebody else better is the give pass's question, it is
     answered against the whole family's worn kit, and answering it here with a
     shrug would be a second opinion nobody asked for.
+
+    `storage` turns on the keeper rule (#233; see the block above
+    `Storage`). Without it the plan is disposition's BANK verdict alone,
+    which is what this function did before. With it, the keeper rule's stacks
+    are deposited first - tradable ones into `Plan.guild` while the guild can
+    take them, the rest into `Plan.moves` - and a stack the rule stores is
+    never withdrawn, so the two halves cannot undo each other.
     """
     totals = reagent_totals(members)
-    moves, notes = [], []
+    moves, notes, guild = [], [], []
+    guild_room = storage.guild_free if storage else 0
     for member in sorted(members, key=lambda m: m.name):
-        deposits = []
-        room = member.bank_free
-        for holding in member.carried:
-            if len(deposits) >= visit_limit:
-                notes.append(
-                    "%s has more to bank than one visit carries; the "
-                    "rest waits for the next trip" % member.name
-                )
-                break
-            if holding.container_slots > 0:
-                # An empty spare bag belongs in somebody's empty bag position
-                # and a full one cannot be moved at all. Either way the bank
-                # is the wrong place for it.
-                continue
-            verdict = _verdict(holding, family, member.level, totals)
-            if verdict.route != disposition.BANK:
-                continue
-            if room <= 0:
-                notes.append(
-                    "%s's bank is full, so %s stays in the bags"
-                    % (member.name, holding.item.name)
-                )
-                continue
-            room -= 1
-            deposits.append(
-                Move(
-                    character=member.name,
-                    verb=DEPOSIT,
-                    guid=holding.guid,
-                    item=holding.item.name,
-                    count=holding.count,
-                    why=verdict.why,
-                )
-            )
-
-        withdrawals = []
+        candidates = _deposit_candidates(member, family, totals, storage)
+        deposits, sent, guild_room = _plan_deposits(
+            member, candidates, storage, guild_room, visit_limit, notes
+        )
         # Every deposit hands a bag slot back, so the room to receive a
-        # withdrawal is larger than it was measured.
-        space = member.bag_free + len(deposits)
-        for holding in member.banked:
-            if len(deposits) + len(withdrawals) >= visit_limit:
-                break
-            if holding.container_slots > 0:
-                continue
-            verdict = _verdict(holding, family, member.level, totals)
-            if verdict.route not in WITHDRAW_ROUTES:
-                continue
-            if space <= 0:
-                notes.append(
-                    "%s has no room to take %s back out"
-                    % (member.name, holding.item.name)
-                )
-                continue
-            space -= 1
-            withdrawals.append(
-                Move(
-                    character=member.name,
-                    verb=WITHDRAW,
-                    guid=holding.guid,
-                    item=holding.item.name,
-                    count=holding.count,
-                    why="%s is wanted in the bags again - %s"
-                    % (holding.item.name, verdict.why),
-                )
-            )
+        # withdrawal is larger than it was measured. A guild deposit does not
+        # count: it is written on a different trip, to a different place.
+        withdrawals = _plan_withdrawals(
+            member,
+            family,
+            totals,
+            storage,
+            member.bag_free + len(deposits),
+            visit_limit - len(deposits),
+            notes,
+        )
         moves.extend(deposits)
         moves.extend(withdrawals)
-    return Plan(moves=tuple(moves), notes=tuple(dict.fromkeys(notes)))
+        guild.extend(sent)
+    return Plan(
+        moves=tuple(moves),
+        notes=tuple(dict.fromkeys(notes)),
+        guild=tuple(guild),
+    )
 
 
 def command(move):
@@ -551,7 +944,13 @@ def command(move):
     and the guid must be non-zero: zero is what every "not found" path in the
     core returns, so a row asking for it would be answered by whichever item
     that path happened to find.
+
+    A GUILD move is the guild verb's text instead, rendered by the one
+    formatter that already knows it (`bank deposit-item guid:<n>`), because
+    it goes to DoGuild as a `kind='guild'` row and not to DoBank.
     """
+    if move.to == GUILD:
+        return guildbank.format_item_deposit(item_guid=move.guid)
     return "%s guid:%d" % (move.verb, move.guid)
 
 
