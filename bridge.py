@@ -1990,6 +1990,89 @@ def _withheld(reasons, reason: str) -> tuple:
     return 0, 0
 
 
+# The source a town-first job row carries (#265), so the Decree and
+# overseer_command say why the campaign's job left the family.
+TOWN_FIRST_SOURCE = "overseer:town-first"
+
+# When each family's campaign was last handed to town, keyed by its sorted
+# names, for bag_pressure.CAMPAIGN_RESUME_CEILING_SECONDS. In-process on
+# purpose: a restart starts the clock again, which costs a longer stay in town
+# and never a run into full bags.
+_TOWN_FIRST_SINCE: dict = {}
+
+
+def _jobs_of(names: list) -> dict:
+    """name -> overseer_roster.job for `names`; {} when it cannot be read."""
+    if not names:
+        return {}
+    sql = "SELECT name, job FROM overseer_roster WHERE name IN (%s)" % ",".join(
+        ["%s"] * len(names))
+    with _connect() as conn, conn.cursor() as cur:
+        try:
+            cur.execute(sql, list(names))
+        except pymysql.err.MySQLError as exc:
+            if exc.args and exc.args[0] in (1054, 1146):
+                return {}
+            raise
+        return {str(row["name"]): str(row["job"] or "") for row in cur.fetchall()}
+
+
+def _hand_to_town(keyword: str, mode: str, names: list) -> int:
+    """Take an armed campaign's job off a family with no bag room (#265).
+
+    TOWN FIRST, THEN THE DUNGEON, the way a group of players does it. The
+    withhold used to write nothing, so a campaign already on the family kept
+    its job: the town slot still gave it the head, and the module opened the
+    next run the moment one sale lifted a member past the floor. Taking the job
+    off is what hands the head to the town passes and the module's town trip,
+    and the queue's own re-assert then waits for the resume floor.
+
+    Returns the job rows written; 0 when the campaign was not armed.
+    """
+    armed = [n for n, job in _jobs_of(names).items() if job == mode]
+    if not armed:
+        return 0
+    _TOWN_FIRST_SINCE[tuple(sorted(names))] = time.monotonic()
+    handed = 0
+    for name in names:
+        try:
+            _insert_job(name, jobs.DEFAULT, TOWN_FIRST_SOURCE)
+            handed += 1
+        except Exception:
+            log.exception("town first: quest job insert failed for %s", name)
+    log.warning(
+        "town first: dungeon:%s hands the family to town - a member has %d or "
+        "fewer free slots, so its job is taken off %d character(s) and the town "
+        "passes have the head. The campaign goes back in when every member has "
+        "%d free slots (wow-overseer#265)",
+        keyword or "(default)", bag_pressure.TOWN_RUN_FREE_SLOTS, handed,
+        bag_pressure.CAMPAIGN_RESUME_FREE_SLOTS,
+    )
+    return handed
+
+
+def _town_first(mode: str, names: list, free_slots: dict) -> str:
+    """"" when the campaign may be sent in; otherwise why it waits in town (#265).
+
+    An armed campaign is never held here: it is withheld only at the floor,
+    above. One that is not armed (a fresh start, or one handed to town) goes in
+    only when every member has bag_pressure.CAMPAIGN_RESUME_FREE_SLOTS free, or
+    after CAMPAIGN_RESUME_CEILING_SECONDS in town.
+    """
+    key = tuple(sorted(names))
+    if any(job == mode for job in _jobs_of(names).values()):
+        _TOWN_FIRST_SINCE.pop(key, None)
+        return ""
+    now = time.monotonic()
+    since = _TOWN_FIRST_SINCE.setdefault(key, now)
+    short = bag_pressure.campaign_resume_short(free_slots, held_seconds=now - since)
+    if not short:
+        _TOWN_FIRST_SINCE.pop(key, None)
+        return ""
+    return "town first: %s below %d free slots, and the run waits for room" % (
+        ", ".join(short), bag_pressure.CAMPAIGN_RESUME_FREE_SLOTS)
+
+
 def _drive_dungeon(keyword: str, wanted: int, names=None,
                    source: str = "overseer:goal", withheld=None) -> tuple:
     """Turn a decided dungeon goal into the roster writes that actually send
@@ -2048,8 +2131,14 @@ def _drive_dungeon(keyword: str, wanted: int, names=None,
             "before it could progress (mod-overseer#423/#424/#430)",
             keyword or "(default)", len(names),
         )
+        _hand_to_town(keyword, mode, names)
         return _withheld(withheld, "bags are near full, and a run started now "
                          "would be evacuated before it could progress")
+    waits = _town_first(mode, names, free_slots)
+    if waits:
+        log.info("goal: withholding dungeon:%s for %d enabled character(s) - %s "
+                 "(wow-overseer#265)", keyword or "(default)", len(names), waits)
+        return _withheld(withheld, waits)
 
     jobs_written = 0
     for name in names:
