@@ -104,33 +104,36 @@ class Route:
     why: str = ""
 
 
+def _stack_from_row(row) -> Stack:
+    """One Stack from one world row; raises on a row that cannot be read."""
+    bonding = int(row.get("bonding", 0) or 0)
+    flags = int(row.get("instance_flags", 0) or 0)
+    return Stack(
+        holder=str(row["holder"]).strip(),
+        guid=int(row["item_guid"]),
+        entry=int(row["entry"]),
+        name=str(row.get("name", "")),
+        item_class=int(row["item_class"]),
+        count=int(row.get("count", 1) or 1),
+        quality=int(row.get("quality", 0) or 0),
+        sell_price=int(row.get("sell_price", 0) or 0),
+        required_skill=int(row.get("required_skill", 0) or 0),
+        required_rank=int(row.get("required_rank", 0) or 0),
+        bound=bonding in (1, 4) or bool(flags & SOULBOUND_FLAG),
+    )
+
+
 def stacks_from_rows(rows) -> list:
     """Stack values for gems and skill-gated recipes; unreadable rows dropped."""
     out = []
     for row in rows or ():
         try:
-            item_class = int(row["item_class"])
-            bonding = int(row.get("bonding", 0) or 0)
-            flags = int(row.get("instance_flags", 0) or 0)
-            stack = Stack(
-                holder=str(row["holder"]).strip(),
-                guid=int(row["item_guid"]),
-                entry=int(row["entry"]),
-                name=str(row.get("name", "")),
-                item_class=item_class,
-                count=int(row.get("count", 1) or 1),
-                quality=int(row.get("quality", 0) or 0),
-                sell_price=int(row.get("sell_price", 0) or 0),
-                required_skill=int(row.get("required_skill", 0) or 0),
-                required_rank=int(row.get("required_rank", 0) or 0),
-                bound=bonding in (1, 4) or bool(flags & SOULBOUND_FLAG),
-            )
+            stack = _stack_from_row(row)
         except (KeyError, TypeError, ValueError):
             continue
-        if not stack.holder or stack.guid <= 0 or stack.count <= 0:
-            continue
-        if stack.gem or stack.recipe:
-            out.append(stack)
+        if stack.holder and stack.guid > 0 and stack.count > 0:
+            if stack.gem or stack.recipe:
+                out.append(stack)
     return out
 
 
