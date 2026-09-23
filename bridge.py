@@ -184,12 +184,16 @@ def _insert_command(cmd: core.InsertCommand) -> int:
 
 
 def _insert_speak(cmd: relay.SpeakCommand) -> int:
+    # Fitted here, the one writer every spoken row passes through, so no
+    # caller can hand the column a line it refuses (#217). The council keeps
+    # the whole line in overseer_thought, whose text column holds it.
     with _connect() as conn, conn.cursor() as cur:
         cur.execute(
             "INSERT INTO overseer_command "
             "(target_name, command, kind, channel, target_arg, source) "
             "VALUES (%s, %s, 'chat', %s, %s, %s)",
-            (cmd.target_name, cmd.text, cmd.channel, cmd.whisper_to, cmd.source),
+            (cmd.target_name, relay.fit_spoken(cmd.text), cmd.channel,
+             cmd.whisper_to, cmd.source),
         )
         return cur.lastrowid
 
@@ -1896,7 +1900,7 @@ def _aim_traveller(quest_id: int) -> int:
 
 
 def _drive_dungeon(keyword: str, wanted: int, names=None,
-                   source: str = "overseer:goal") -> tuple:
+                   source: str = "overseer:goal", withheld=None) -> tuple:
     """Turn a decided dungeon goal into the roster writes that actually send
     the family in: job='dungeon:<keyword>' (or the bare 'dungeon') on every
     ENABLED character, plus the campaign cap the coordinator counts against.
@@ -1928,8 +1932,15 @@ def _drive_dungeon(keyword: str, wanted: int, names=None,
     `names` is the family to send, for the campaign queue (#209), which
     drives every family off its own roster rows; None is this bridge's own
     family, as the council's goal has always meant. `source` is what the job
-    rows carry, so a queue advance reads as one on the Decree.
+    rows carry, so a queue advance reads as one on the Decree. `withheld`, a
+    list when given, gains the reason a pass wrote no job, so the queue can
+    log the withhold rather than a start that never happened (#217).
     """
+    def _withhold(reason: str) -> tuple:
+        if withheld is not None:
+            withheld.append(reason)
+        return 0, 0
+
     mode = jobs.dungeon_job(keyword)
     if mode is None:
         log.warning(
@@ -1937,11 +1948,11 @@ def _drive_dungeon(keyword: str, wanted: int, names=None,
             "keyword, so no character's job was changed; known keywords: %s",
             keyword, ", ".join(sorted(jobs.PORTAL_KEYWORDS)),
         )
-        return 0, 0
+        return _withhold("no dungeon portal answers to %s" % keyword)
 
     names = _fetch_enabled_names() if names is None else list(names)
     if not names:
-        return 0, 0
+        return _withhold("no enabled character to send")
 
     free_slots = _fetch_free_slots(names)
     if bag_pressure.family_town_run_needed(free_slots):
@@ -1951,7 +1962,8 @@ def _drive_dungeon(keyword: str, wanted: int, names=None,
             "before it could progress (mod-overseer#423/#424/#430)",
             keyword or "(default)", len(names),
         )
-        return 0, 0
+        return _withhold("bags are near full, and a run started now would be "
+                         "evacuated before it could progress")
 
     jobs_written = 0
     for name in names:
@@ -1962,6 +1974,8 @@ def _drive_dungeon(keyword: str, wanted: int, names=None,
             # One failed insert must not cost the rest of the family; see
             # _set_job's identical reasoning.
             log.exception("dungeon job insert failed for %s (mode=%s)", name, mode)
+    if not jobs_written:
+        _withhold("no dungeon job insert landed")
 
     campaign_written = 0
     with _connect() as conn, conn.cursor() as cur:
@@ -2097,13 +2111,18 @@ def _reset_campaign_done(names: list) -> int:
     return reset
 
 
-def _apply_queue_move(move, names: list) -> None:
+def _apply_queue_move(move, names: list) -> str:
     """Run one campaignqueue.Move for one family. Decides nothing.
 
     The dungeon job goes through `_drive_dungeon`, the council goal's own
     writer, so a queue entry is refused on an unknown keyword and withheld on
     full bags exactly as a council decision is. An entry is marked started
     only once its job landed; a withheld start is retried next pass.
+
+    Returns the line the queue logs: the move's own sentence once it landed,
+    or "withheld: <reason>" when `_drive_dungeon` wrote no job. Logging the
+    move before it ran said "starting" every minute for a start that the bag
+    check was holding back (#217).
     """
     if move.finish:
         _mark_queue(campaignqueue.FINISH_SQL, move.finish)
@@ -2113,17 +2132,19 @@ def _apply_queue_move(move, names: list) -> None:
                 _insert_job(name, jobs.DEFAULT, campaignqueue.SOURCE)
             except Exception:
                 log.exception("queue: quest job insert failed for %s", name)
-        return
+        return move.why
     if not move.keyword:
-        return
+        return move.why
+    withheld: list = []
     written, _ = _drive_dungeon(move.keyword, move.wanted, names,
-                                campaignqueue.SOURCE)
+                                campaignqueue.SOURCE, withheld=withheld)
     if not written:
-        return
+        return "withheld: %s" % ("; ".join(withheld) or "no job was written")
     if move.reset:
         _reset_campaign_done(names)
     if move.start:
         _mark_queue(campaignqueue.START_SQL, move.start)
+    return move.why
 
 
 def _queue_owns_job() -> bool:
@@ -10001,11 +10022,13 @@ class Bridge(discord.Client):
                             campaignqueue._family(key))
                 continue
             move = campaignqueue.step(rows, fam["leader"])
-            log.info("queue: %s: %s", campaignqueue._family(key), move.why)
             if not move.writes:
+                log.info("queue: %s: %s", campaignqueue._family(key), move.why)
                 continue
             try:
-                await asyncio.to_thread(_apply_queue_move, move, fam["names"])
+                said = await asyncio.to_thread(_apply_queue_move, move,
+                                               fam["names"])
+                log.info("queue: %s: %s", campaignqueue._family(key), said)
             except Exception:
                 # One family's failure must not cost the other its advance.
                 log.exception("queue: the pass for %s failed; retrying next "

@@ -39,6 +39,25 @@ def discord_len(text: str) -> int:
     return len(text.encode("utf-16-le")) // 2
 
 
+def fit_spoken(text: str, limit: int = MAX_SPEAK_LEN) -> str:
+    """`text` cut to fit the command column, at a word boundary.
+
+    A spoken row carries its words in overseer_command.command, and MySQL
+    refuses a row longer than the column whole (1406). So an over-long line
+    was never said at all, and the council that produced it failed every
+    cycle (#217). The cut ends on a whole word and marks itself with "...";
+    a single word longer than the column is cut where the column ends.
+    """
+    text = " ".join(str(text).split())
+    if len(text) <= limit:
+        return text
+    head = text[: limit - 3]
+    space = head.rfind(" ")
+    if space > 0:
+        head = head[:space]
+    return head.rstrip(" ,;:.-") + "..."
+
+
 # One relay post must not become a wall. Older lines are still in the table.
 MAX_LINES_PER_POST = 20
 
