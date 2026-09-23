@@ -202,7 +202,7 @@ class TheBridgeWiresIt(unittest.TestCase):
         body = _block("    async def _route_clearance(")
         self.assertIn("await self._write_guild_gifts(gifts)", body)
         self.assertIn(
-            'self._claim_town_slot("clearance", leader, post.aim',
+            '"clearance", leader, post.aim, cohort=cohort,',
             _block("    async def _walk_to_post("),
         )
         self.assertIn("await self._walk_to_post(pressed, leader, cohort)", body)

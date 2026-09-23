@@ -249,6 +249,23 @@ WANT_FRESH_SECONDS = 900.0
 URGENT_BACKOFF_SECONDS = 300.0
 URGENT_BACKOFF_CAP_SECONDS = ORPHAN_LEASE_SECONDS
 
+# A WALK THE WORLD CANNOT FINISH IS GIVEN UP BY ITS OWNER (#227).
+#
+# Measured on wow-dev 2026-09-23: clearance aimed the Horde leader at the
+# Crossroads mailbox, and mod-overseer said of it "made no progress in 18
+# attempts - releasing the errand before upstream can teleport it". The world
+# lets go of a walk like that and leaves the column alone, because the aim is
+# not its to blank. Clearance asked again every cycle, got `hold`, and held the
+# traveller for as long as it kept asking. A pass that says how far its leader
+# is from its aim is measured against that here: no `PROGRESS_YARDS` of ground
+# gained in `STALL_SECONDS`, while still further out than `ARRIVED_YARDS`, is a
+# walk that cannot land. The owner hands it back and does not ask for that aim
+# again for `SPENT_SECONDS`, so it can pick another target or drop the trip.
+STALL_SECONDS = 240.0
+PROGRESS_YARDS = 5.0
+ARRIVED_YARDS = 15.0
+SPENT_SECONDS = 1800.0
+
 
 # The verdicts. Strings rather than an enum for the reason every other decision
 # vocabulary in this package uses strings (`bag_pressure.VENDOR_ERRAND_*`,
@@ -260,6 +277,8 @@ SLOT_WAIT = "wait"
 SLOT_PREEMPT = "preempt"
 SLOT_CLEAR = "clear"
 SLOT_NOT_THE_LEADER = "not the leader"
+# The owner hands back an aim it cannot reach (#227). Not granted.
+SLOT_GIVE_UP = "give up"
 
 # The verdicts under which the caller ends up with the traveller. `SLOT_HOLD`
 # is in here and writes nothing: the column already says what the caller wanted
@@ -980,6 +999,32 @@ def _reconcile(
     return Holder(claimant="", character=leader, aim=column, since=now)
 
 
+def campaign_owns_traveller(active_job: str, leader_job: str, withheld: bool) -> bool:
+    """Whether a family's campaign wants its leader for staging right now (#227).
+
+    `active_job` is the dungeon job of the family's active queue entry ("" when
+    none is active), `leader_job` is the job on the leader's roster row, and
+    `withheld` is `jev_activity.withheld` for the family. The queue writes the
+    job when it starts or re-asserts an entry and a withhold or a Jev
+    interlude takes it off again, so a leader carrying the head's job is a
+    leader the coordinator is about to stage. Town errands resume the moment
+    any of the three says otherwise.
+    """
+    job = str(active_job or "").strip().lower()
+    return bool(job) and str(leader_job or "").strip().lower() == job and not withheld
+
+
+def stalled(best: float, best_at: float, distance: float, now: float) -> bool:
+    """Whether a walk that is `distance` yards out has stopped closing (#227).
+
+    `best` is the nearest the leader has been to this aim and `best_at` when
+    that was. A leader inside `ARRIVED_YARDS` has arrived and is not stalled.
+    """
+    if distance <= ARRIVED_YARDS:
+        return False
+    return now - best_at >= STALL_SECONDS and distance > best - PROGRESS_YARDS
+
+
 class Slot:
     """The ledger: who holds the traveller, who is waiting, who was served.
 
@@ -1016,6 +1061,15 @@ class Slot:
         self._fruitless: dict = {}
         # The pass that owns the traveller for a stated reason (#225), or None.
         self.reservation: Reservation | None = None
+        # Why the family's campaign owns the traveller (#227), or "" when it
+        # does not. Set and cleared by the bridge's queue pass every cycle.
+        self.campaign = ""
+        # Orphan ground aims already handed back for the campaign (#227).
+        self._yielded: set = set()
+        # {(claimant, aim): (best distance, when)} for walks with a distance.
+        self._progress: dict = {}
+        # {(claimant, aim): when given up} for walks that could not land.
+        self._spent: dict = {}
 
     def reserve(self, claimant: str, now: float, why: str) -> None:
         """Give `claimant` the traveller until it unreserves or the hold ends.
@@ -1038,6 +1092,65 @@ class Slot:
         """End `claimant`'s reservation; another pass's is left alone."""
         if self.reservation is not None and self.reservation.claimant == claimant:
             self.reservation = None
+
+    def yield_to_campaign(self, why: str) -> None:
+        """The family's campaign owns the traveller until `campaign_over` (#227)."""
+        self.campaign = str(why or "")
+
+    def campaign_over(self) -> None:
+        """Town errands may ask for the traveller again (#227)."""
+        self.campaign = ""
+
+    def campaign_release(
+        self, *, leader: str, column: str, now: float, ground
+    ) -> Holder | None:
+        """The aim on the leader the bridge must hand back for the campaign.
+
+        ONLY WHAT A BRIDGE PASS WROTE (#227). The coordinator's own staging,
+        corridor and berth aims are `at:` aims too, so the column alone cannot
+        say whose an `at:` aim is. Three answers, in order:
+
+          * an aim this ledger records for a named pass is that pass's, and
+            the bridge is its owner;
+          * a keyword or creature-entry aim is written by the bridge and never
+            by the coordinator;
+          * an ORPHAN ground aim (one this process does not remember writing,
+            which is every aim after a restart) is handed back only after it
+            has stood unchanged for `LEASE_SECONDS`, and only once per aim.
+            If it was the coordinator's after all, the coordinator re-arms it
+            on its next poll and says so at WARN; once per aim string bounds
+            that to one re-arm per point per process.
+
+        A trainer aim is not `releasable` and is not answered here: the bridge
+        hands that one back through its own compare-and-swap.
+        """
+        self.holder = _reconcile(self.holder, leader=leader, column=column, now=now)
+        holder = self.holder
+        if holder is None or not self.releasable or not self.releasable(holder.aim):
+            return None
+        if holder.claimant or not ground(holder.aim):
+            return holder
+        if holder.aim in self._yielded or now - holder.since < self.lease:
+            return None
+        self._yielded.add(holder.aim)
+        return holder
+
+    def released_for_campaign(self, holder: Holder, released: bool) -> None:
+        """Record that `campaign_release`'s answer was acted on."""
+        if released and self.holder is not None and self.holder.aim == holder.aim:
+            self.holder = None
+
+    def spent(self, claimant: str, aim: str, now: float) -> bool:
+        """Whether `claimant` gave `aim` up as unreachable within SPENT_SECONDS."""
+        at = self._spent.get((claimant, aim))
+        return at is not None and now - at < SPENT_SECONDS
+
+    def gave_up(self, decision: Decision, released: bool, now: float) -> None:
+        """Record that a SLOT_GIVE_UP was acted on (#227)."""
+        self._progress.pop((decision.claimant, decision.aim), None)
+        if released and self.holder is not None and self.holder.aim == decision.aim:
+            self.holder = None
+            self._served[decision.claimant] = now
 
     def urgency_suppressed_until(self, claimant: str) -> float:
         """When this claimant may preempt on urgency again (0.0 = now).
@@ -1090,9 +1203,39 @@ class Slot:
         retaskable,
         now: float,
         urgent: bool = False,
+        distance: float | None = None,
     ) -> Decision:
-        """Decide, and register the wait if the answer is no."""
+        """Decide, and register the wait if the answer is no.
+
+        `distance` is how many yards the leader stands from a ground aim, for
+        a pass that can say. It is what lets an owner give up a walk the world
+        cannot finish (#227); a pass that passes None is never given up on.
+        """
         self.holder = _reconcile(self.holder, leader=leader, column=column, now=now)
+        if self.campaign:
+            # THE CAMPAIGN FIRST, AHEAD OF EVERY RESERVATION AND LEASE (#227).
+            # Not registered as a wait: the order is rebuilt when town errands
+            # resume, rather than handing the first free column to whichever
+            # pass happened to ask most often during a run.
+            return Decision(
+                verdict=SLOT_WAIT,
+                reason="%s waits: the family's campaign owns the traveller %s "
+                "(%s), and town errands resume when it is withheld or done"
+                % (claimant, character, self.campaign),
+                claimant=claimant,
+                aim=aim,
+                character=character,
+            )
+        if self.spent(claimant, aim, now):
+            return Decision(
+                verdict=SLOT_WAIT,
+                reason="%s gave up %r on %s as a walk that cannot land, and "
+                "does not ask for it again for %ds"
+                % (claimant, aim, character, int(SPENT_SECONDS)),
+                claimant=claimant,
+                aim=aim,
+                character=character,
+            )
         held = reserved_wait(claimant, character, aim, self.reservation, now)
         if held is not None:
             self._note_wait(claimant, now)
@@ -1138,6 +1281,37 @@ class Slot:
         )
         if decision.verdict == SLOT_WAIT and decision.aim:
             self._note_wait(claimant, now)
+        if decision.verdict == SLOT_HOLD and distance is not None:
+            return self._measure(decision, float(distance), now)
+        return decision
+
+    def _measure(self, decision: Decision, distance: float, now: float) -> Decision:
+        """A held walk that has stopped closing becomes a give-up (#227)."""
+        key = (decision.claimant, decision.aim)
+        best, best_at = self._progress.get(key, (distance, now))
+        if stalled(best, best_at, distance, now):
+            self._spent[key] = now
+            return Decision(
+                verdict=SLOT_GIVE_UP,
+                reason="%s gives up %r on %s: %d yards out and no %d yards "
+                "gained in %ds, so it is a walk the world cannot finish and "
+                "is not asked for again for %ds"
+                % (
+                    decision.claimant,
+                    decision.aim,
+                    decision.character,
+                    int(distance),
+                    int(PROGRESS_YARDS),
+                    int(now - best_at),
+                    int(SPENT_SECONDS),
+                ),
+                claimant=decision.claimant,
+                aim=decision.aim,
+                character=decision.character,
+                release=self.holder,
+            )
+        if key not in self._progress or distance <= best - PROGRESS_YARDS:
+            self._progress[key] = (distance, now)
         return decision
 
     def want_idle(
@@ -1192,6 +1366,9 @@ class Slot:
             self._served[decision.claimant] = now
             return
         name = decision.claimant
+        if decision.writes:
+            # A new walk is measured from where it starts (#227).
+            self._progress.pop((name, decision.aim), None)
         since = decision.inherit_since if decision.inherit_since is not None else now
         self.holder = Holder(
             claimant=name, character=decision.character, aim=decision.aim, since=since

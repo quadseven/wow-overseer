@@ -349,7 +349,14 @@ def _queue_pass(world, holds=None):
             "_reset_campaign_done": world.reset,
         },
     )
-    me = types.SimpleNamespace(_activity_holds=lambda key=None: holds.get(key, ""))
+
+    async def owns_travel(pending, fams):
+        return None
+
+    me = types.SimpleNamespace(
+        _activity_holds=lambda key=None: holds.get(key, ""),
+        _campaign_owns_travel=owns_travel,
+    )
     asyncio.run(ns["_campaign_queue_once"](me))
     return log.lines
 
