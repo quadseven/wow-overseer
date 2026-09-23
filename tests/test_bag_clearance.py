@@ -323,7 +323,7 @@ class LockboxesReachTheRogue(unittest.TestCase):
         )
 
     def test_a_box_moves_only_by_a_near_give_or_a_letter(self):
-        body = _block("    async def _route_lockboxes(")
+        body = _block("    async def _hand_lockboxes(")
         self.assertIn("handover.verdict(", body)
         self.assertIn("mailable=True", body)
         writer = _block("def _insert_lockbox_row(")

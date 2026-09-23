@@ -8088,6 +8088,12 @@ class Bridge(discord.Client):
         if not (locks.unlock or locks.open or locks.hands):
             return
         seen = await asyncio.to_thread(_recent_lockbox_keys, LOCKBOX_RETRY_MINUTES)
+        await self._pick_lockboxes(locks, seen)
+        if locks.hands:
+            await self._hand_lockboxes(locks.hands, seen)
+
+    async def _pick_lockboxes(self, locks, seen: set) -> None:
+        """The rogue's `unlock items` and `open items` rows, once per window."""
         for rogue, command in (
                 [(n, lockbox.UNLOCK_COMMAND) for n in locks.unlock]
                 + [(n, lockbox.OPEN_COMMAND) for n in locks.open]):
@@ -8095,15 +8101,16 @@ class Bridge(discord.Client):
                 continue
             if await asyncio.to_thread(_insert_lockbox_row, rogue, command, "bot"):
                 log.info("lockbox: %s - %s", rogue, command)
-        if not locks.hands:
-            return
-        people = sorted({h.holder for h in locks.hands} | {h.taker for h in locks.hands})
+
+    async def _hand_lockboxes(self, hands, seen: set) -> None:
+        """Each box to its rogue by a near give or a letter, or it waits (#193)."""
+        people = sorted({h.holder for h in hands} | {h.taker for h in hands})
         positions = await asyncio.to_thread(_fetch_positions, people)
         where = handover.spots(positions)
         posting = await asyncio.to_thread(
-            _holders_at_mailbox, sorted({h.holder for h in locks.hands}), positions)
+            _holders_at_mailbox, sorted({h.holder for h in hands}), positions)
         waits = []
-        for hand in locks.hands:
+        for hand in hands:
             how = handover.verdict(hand.holder, hand.taker, where,
                                    posting=posting, mailable=True)
             if not how.verb:

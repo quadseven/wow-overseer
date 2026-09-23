@@ -988,14 +988,33 @@ def profession_keeps(
     named, is kept, the fail-closed direction. `None` keeps every tool, the
     behaviour this function had before.
     """
-    holders_trades = None
-    if worked_by is not None:
-        holders_trades = {
-            str(holder): {str(t).strip().lower() for t in trades if str(t).strip()}
-            for holder, trades in dict(worked_by).items()
-        }
+    holders_trades = _holders_trades(worked_by)
     worked = {str(trade).strip().lower() for trade in worked if str(trade).strip()}
     named = named or {}
+    keeps: dict = {}
+    for entry, held in _stacks_by_entry(rows).items():
+        item_class, bag_family = held[0][3]
+        if _is_tool(item_class, bag_family):
+            keeps.update(_tool_keeps(entry, bag_family, held, holders_trades))
+            continue
+        trade = _trade_of(entry, bag_family, worked, named)
+        if trade:
+            keeps.update(_stock_keeps(held, trade, reagent_keep))
+    return keeps
+
+
+def _holders_trades(worked_by):
+    """holder -> lower-cased trade names, or None when no plan was given."""
+    if worked_by is None:
+        return None
+    return {
+        str(holder): {str(t).strip().lower() for t in trades if str(t).strip()}
+        for holder, trades in dict(worked_by).items()
+    }
+
+
+def _stacks_by_entry(rows) -> dict:
+    """entry -> [(count, guid, name, (class, bag_family), holder)]; bad rows dropped."""
     stacks: dict = {}
     for row in rows:
         try:
@@ -1010,34 +1029,34 @@ def profession_keeps(
         stacks.setdefault(entry, []).append(
             (count, guid, str(row.get("name", "")), fact, str(row.get("holder", "")))
         )
+    return stacks
 
-    keeps: dict = {}
-    for entry, held in stacks.items():
-        item_class, bag_family = held[0][3]
-        if _is_tool(item_class, bag_family):
-            serves = set(tool_trades(entry, bag_family))
-            for _, guid, name, _fact, holder in held:
-                if holders_trades is not None and serves:
-                    own = holders_trades.get(holder)
-                    if own is not None and not (own & serves):
-                        continue
-                keeps[guid] = (
-                    "%s is a trade tool, and a tool has no level to outgrow" % name
-                )
+
+def _tool_keeps(entry, bag_family, held, holders_trades) -> dict:
+    """The copies of one tool that are kept: all, or only for holders who use it."""
+    serves = set(tool_trades(entry, bag_family))
+    keeps = {}
+    for _, guid, name, _fact, holder in held:
+        own = (holders_trades or {}).get(holder)
+        if serves and own is not None and not (own & serves):
             continue
-        trade = _trade_of(entry, bag_family, worked, named)
-        if not trade:
+        keeps[guid] = "%s is a trade tool, and a tool has no level to outgrow" % name
+    return keeps
+
+
+def _stock_keeps(held, trade, reagent_keep) -> dict:
+    """Whole stacks of one trade's stock, largest first, up to `reagent_keep`."""
+    keeps = {}
+    kept = 0
+    # Largest stack first, so the surplus that stays sellable is the
+    # leftovers rather than the shelf.
+    for count, guid, name, _fact, _holder in sorted(held, reverse=True):
+        if kept and kept + count > reagent_keep:
             continue
-        kept = 0
-        # Largest stack first, so the surplus that stays sellable is the
-        # leftovers rather than the shelf.
-        for count, guid, name, _fact, _holder in sorted(held, reverse=True):
-            if kept and kept + count > reagent_keep:
-                continue
-            kept += count
-            keeps[guid] = "%s feeds %s, and the family keeps up to %d of it" % (
-                name,
-                trade,
-                reagent_keep,
-            )
+        kept += count
+        keeps[guid] = "%s feeds %s, and the family keeps up to %d of it" % (
+            name,
+            trade,
+            reagent_keep,
+        )
     return keeps

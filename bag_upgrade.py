@@ -480,6 +480,30 @@ BAG_POSITIONS = range(19, 23)
 BACKPACK_POSITIONS = range(23, 39)
 
 
+def _worn_guids(rows, by_name) -> dict:
+    """holder -> the guids of the bags that holder wears."""
+    worn = {}
+    for row in rows:
+        if row["holder"] not in by_name:
+            continue
+        if int(row["bag"]) == 0 and int(row["slot"]) in BAG_POSITIONS:
+            worn.setdefault(row["holder"], set()).add(int(row["guid"]))
+    return worn
+
+
+def _bag_from_row(row) -> Bag:
+    """One Bag from one container row."""
+    return Bag(
+        row["name"],
+        int(row["slots"]),
+        used=int(row.get("used", 0)),
+        guid=int(row["guid"]),
+        entry=int(row.get("entry", 0) or 0),
+        general=int(row.get("subclass", 0) or 0) == 0,
+        inside=int(row["bag"]),
+    )
+
+
 def members_from_rows(rows, names, positions=len(BAG_POSITIONS)):
     """One Member per name, whether or not any row mentions them.
 
@@ -489,26 +513,13 @@ def members_from_rows(rows, names, positions=len(BAG_POSITIONS)):
     name, slots, bag, slot and used, as the bridge's SQL names them.
     """
     by_name = {name: {"worn": [], "carried": []} for name in names}
-    worn_guids = {}
-    for row in rows:
-        if row["holder"] not in by_name:
-            continue
-        if int(row["bag"]) == 0 and int(row["slot"]) in BAG_POSITIONS:
-            worn_guids.setdefault(row["holder"], set()).add(int(row["guid"]))
+    worn_guids = _worn_guids(rows, by_name)
     for row in rows:
         holder = row["holder"]
         if holder not in by_name:
             continue
         container, slot = int(row["bag"]), int(row["slot"])
-        bag = Bag(
-            row["name"],
-            int(row["slots"]),
-            used=int(row.get("used", 0)),
-            guid=int(row["guid"]),
-            entry=int(row.get("entry", 0) or 0),
-            general=int(row.get("subclass", 0) or 0) == 0,
-            inside=container,
-        )
+        bag = _bag_from_row(row)
         if container == 0 and slot in BAG_POSITIONS:
             by_name[holder]["worn"].append(bag)
         elif (
