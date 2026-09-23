@@ -1434,6 +1434,39 @@ def _refusal(p: dict, faction: str, home: int | None) -> str:
     return ""
 
 
+def _sendable(rated: list[dict], level_rows: list[dict]) -> tuple[list, list]:
+    """(the ready prospects the family can be sent to, [(prospect, why not)]
+    for the ready ones it cannot). Unready prospects are in neither."""
+    faction = _faction(level_rows, [str(row.get("name") or "") for row in level_rows])
+    home = _home_continent(level_rows)
+    ready: list = []
+    passed: list = []
+    for p in rated:
+        if p["short"] > NEAR_ENOUGH:
+            continue
+        why = _refusal(p, faction, home)
+        if why:
+            passed.append((p, why))
+        else:
+            ready.append(p)
+    if not ready and home is None and passed:
+        log.info(
+            "council: not proposing a dungeon - the family's continent "
+            "is unread, so no door can be shown reachable"
+        )
+    return ready, passed
+
+
+def _dungeon_said(best: dict, who: str) -> str:
+    place = best["place"]
+    if best["ready"]:
+        return f"{place} will not trouble us now. We should go in."
+    return (
+        f"{place} is close enough to try. {who} would be carried, "
+        f"and I would rather we went than waited."
+    )
+
+
 def _passed_over(best: dict, passed: list) -> str:
     """The reasoning line's account of every harder place passed over for
     `best`, grouped by reason, hardest first. "" when none was."""
@@ -1496,24 +1529,8 @@ def _dungeon_proposal(
     # be made, and a door dungeonpath.WITHHELD_DOORS names is refused
     # outright. A family whose continent is unread is sent nowhere: a door
     # nobody can show is reachable is not one to send them to.
-    faction = _faction(level_rows, [str(row.get("name") or "") for row in level_rows])
-    home = _home_continent(level_rows)
-    ready = []
-    passed = []
-    for p in rated:
-        if p["short"] > NEAR_ENOUGH:
-            continue
-        why = _refusal(p, faction, home)
-        if why:
-            passed.append((p, why))
-            continue
-        ready.append(p)
+    ready, passed = _sendable(rated, level_rows)
     if not ready:
-        if home is None and passed:
-            log.info(
-                "council: not proposing a dungeon - the family's continent "
-                "is unread, so no door can be shown reachable"
-            )
         return None
     # The FRONTIER, not the first entry: prospects() lists everything the
     # family has already been to as well, however far past it they now are,
@@ -1548,15 +1565,7 @@ def _dungeon_proposal(
             keyword,
         )
         return None
-    place = best["place"]
-    if best["ready"]:
-        said = f"{place} will not trouble us now. We should go in."
-    else:
-        said = (
-            f"{place} is close enough to try. {who} would be carried, "
-            f"and I would rather we went than waited."
-        )
-    said += _passed_over(best, passed)
+    said = _dungeon_said(best, who) + _passed_over(best, passed)
     return Proposal(
         proposer=voice.name,
         kind="dungeon",
