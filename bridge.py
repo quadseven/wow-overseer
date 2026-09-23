@@ -55,6 +55,7 @@ import dungeonprogression
 import item_plan
 import jev
 import jev_items
+import jev_choices
 import jobs
 import kin
 import learnaim
@@ -4479,6 +4480,10 @@ class Bridge(discord.Client):
                        "map_id": m.map_id, "lead": m.lead}
                       for m in members]
         completed_runs = await asyncio.to_thread(_fetch_dungeon_completion)
+        # WHICH DOOR, ASKED OF JEV TOO, IN SHADOW (#95): over exactly the
+        # doors council.dungeon_doors allows, recorded beside the frontier's
+        # pick. Held, never awaited, and it changes nothing the council does.
+        self._jev_council_shadow(level_rows, completed_runs)
         held = council.hold(members, history=history,
                             level_rows=level_rows, cards=[],
                             completed_runs=completed_runs)
@@ -4520,7 +4525,11 @@ class Bridge(discord.Client):
             await asyncio.to_thread(_insert_thought, speaker, "council", text)
 
         if held.plan is not None:
-            await asyncio.to_thread(_persist_council_plan, held.plan)
+            seen: dict = {}
+            await asyncio.to_thread(_persist_council_plan, held.plan, seen)
+            # AND WHICH QUEST THE AIM DRIVES, IN SHADOW (#95), over the
+            # candidates the choice was just made from.
+            self._jev_quest_shadow(held.plan, seen, level_rows)
         log.info("council: %d line(s), %s", len(held.lines), held.reason)
 
     async def _design_tabard(self) -> None:
@@ -7963,6 +7972,46 @@ class Bridge(discord.Client):
         closet = jev_items.wardrobes(people, worn_items, describe, specs)
         return await jev_items.recipient_pass(
             self._jev, asks, describe, closet, mode, limit=JEV_SHADOW_LIMIT)
+
+    def _jev_council_shadow(self, level_rows: list, completed_runs) -> None:
+        """Ask Jev which of the allowed doors the family should take (#95)."""
+        rule = jev_choices.policy(jev_choices.KIND_DUNGEON)
+        if rule.mode == jev.OFF or not self._jev.ready(jev_choices.KIND_DUNGEON):
+            return
+        doors, pick = council.dungeon_doors(level_rows, [], completed_runs)
+        if pick is None or len(doors) < 2:
+            return
+        self._jev_hold(jev_choices.dungeon_shadow(
+            self._jev, doors, pick, level_rows, completed_runs, rule.mode),
+            "the council's dungeon")
+
+    def _jev_quest_shadow(self, plan, seen: dict, level_rows: list) -> None:
+        """Ask Jev which quest the aim should drive, beside questbook (#95)."""
+        if plan.kind != "quest" or not seen.get("chosen"):
+            return
+        rule = jev_choices.policy(jev_choices.KIND_QUEST)
+        if rule.mode == jev.OFF or not self._jev.ready(jev_choices.KIND_QUEST):
+            return
+        candidates = questbook.drive_candidates(
+            seen["ledger"], held_by_traveller=seen["driveable"],
+            wanted=int(plan.quest_id or 0), beneficiary=plan.beneficiary)
+        levels = {str(r["name"]): int(r["level"] or 0) for r in level_rows}
+        self._jev_hold(jev_choices.quest_shadow(
+            self._jev, candidates, seen["chosen"], plan.beneficiary,
+            seen["held"], levels, rule.mode), "the quest aim")
+
+    def _jev_hold(self, ask, who: str) -> None:
+        """Run one shadow question as a held task and record its answer."""
+
+        async def run() -> None:
+            judgment = await ask
+            if judgment is not None:
+                await self._jev_record([judgment], who)
+
+        task = asyncio.create_task(run())
+        self._jev_writes.add(task)
+        task.add_done_callback(self._jev_writes.discard)
+        task.add_done_callback(_jev_task_done)
 
     def _jev_record_late(self, task: asyncio.Task, who: str) -> None:
         """Record a pass nobody waited on, as the heuristic's, when it ends."""
@@ -12067,8 +12116,14 @@ def _create_jev_store() -> None:
 
 
 def _insert_jev_judgment(judgment) -> None:
-    """One jev_items.Judgment as one row. Writes nothing else, anywhere."""
+    """One judgment as one row. Writes nothing else, anywhere.
+
+    Any judgment shaped like jev_items.Judgment: tradechoice's profession
+    choice writes here too. `acted` is read with a default because a kind that
+    does not say who acted records '' (not recorded), never a failed insert.
+    """
     agree = judgment.agree
+    acted = str(getattr(judgment, "acted", "") or "")
     with _connect() as conn, conn.cursor() as cur:
         cur.execute(
             "INSERT INTO overseer_jev_judgment (kind, subject, holder, "
@@ -12084,7 +12139,7 @@ def _insert_jev_judgment(judgment) -> None:
                 judgment.confidence, judgment.probabilities_json() or None,
                 None if agree is None else int(agree), judgment.status[:16],
                 max(0, judgment.latency_ms), judgment.model[:40],
-                judgment.mode[:8], judgment.acted[:10],
+                judgment.mode[:8], acted[:10],
             ),
         )
 
@@ -15623,7 +15678,7 @@ def _insert_town_errand(errand) -> int:
         return cur.lastrowid or 0
 
 
-def _choose_drive_quest(plan) -> int:
+def _choose_drive_quest(plan, seen: dict | None = None) -> int:
     """Which quest the family's traveller should actually be aimed at, or 0.
 
     The council decides THAT the family will do a quest; questbook decides
@@ -15657,6 +15712,10 @@ def _choose_drive_quest(plan) -> int:
         leader, plan.beneficiary, plan.quest_id, chosen, len(driveable),
         ledger.furthest_behind,
     )
+    if seen is not None:
+        # What the choice was made from, for Jev's shadow of it (#95). Read
+        # off this build, never a second one.
+        seen.update(ledger=ledger, held=held, driveable=driveable, chosen=chosen)
     return chosen
 
 
@@ -15709,7 +15768,7 @@ def _already_agreed(plan) -> bool:
         )
 
 
-def _persist_council_plan(plan) -> int | None:
+def _persist_council_plan(plan, seen: dict | None = None) -> int | None:
     """Turn an agreed plan into a goal the supervisor already knows how to drive.
 
     Only kinds the supervisor can actually act on are persisted. A council that
@@ -15727,7 +15786,7 @@ def _persist_council_plan(plan) -> int | None:
 
     quest_id = 0
     if plan.kind == "quest":
-        quest_id = _choose_drive_quest(plan)
+        quest_id = _choose_drive_quest(plan, seen)
         if not quest_id:
             # Nothing the traveller holds AND the beneficiary can be measured
             # on. Said out loud rather than persisted: a goal nobody can drive

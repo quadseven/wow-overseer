@@ -30,6 +30,7 @@ KINDS = {
     "guild_recipient": "Who in the guild gains most from an item",
     "dungeon_choice": "The council's dungeon",
     "quest_pick": "The family's quest",
+    "profession_choice": "A family member's professions",
 }
 
 _ACTED = {
