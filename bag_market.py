@@ -177,22 +177,91 @@ def spendable(purse: Purse, reserve_per_level: int = UPGRADE_RESERVE_PER_LEVEL) 
     return max(0, int(purse.money) - reserve_per_level * max(1, int(purse.level)))
 
 
-def _owned_entries(member: Member) -> set:
-    return {bag.entry for bag in member.worn + member.carried if bag.entry}
-
-
-def _in_reach(listing: Listing, buyer: str, reach) -> bool:
-    """An auction listing is in every buyer's reach; a vendor's stock is not."""
-    if listing.source != VENDOR or reach is None:
-        return True
-    return listing.entry in reach.get(buyer, ())
-
-
 def _order(members):
     """Smallest worn bag first, then the least room in all, then the name."""
     return sorted(
         members,
         key=lambda m: (smallest_worn(m), sum(b.slots for b in m.worn), m.name),
+    )
+
+
+@dataclass(frozen=True)
+class Rule:
+    """The spending rule's numbers, so tests can bend one at a time."""
+
+    share: int = UPGRADE_SHARE_PERCENT
+    reserve_per_level: int = UPGRADE_RESERVE_PER_LEVEL
+    max_per_slot: int = MAX_COPPER_PER_SLOT
+    min_gain: int = MIN_UPGRADE_GAIN
+
+
+@dataclass(frozen=True)
+class _Shopper:
+    """One member's side of a pass: what it wears, owns, may spend and reach."""
+
+    name: str
+    size: int
+    owned: frozenset
+    allowance: int
+    room: int
+    reach: frozenset | None
+
+
+def _offered(listing: Listing, who: _Shopper, taken: set, rule: Rule) -> bool:
+    """Could this member buy this bag at all, price aside?"""
+    if listing.slots - who.size < rule.min_gain or listing.price <= 0:
+        return False
+    if listing.unique and listing.entry in who.owned:
+        return False
+    if listing.source == AUCTION:
+        # In every buyer's reach, sold once, and delivered by mail.
+        return listing.key not in taken
+    if who.reach is not None and listing.entry not in who.reach:
+        return False
+    return who.room >= 1
+
+
+def _affordable(listing: Listing, who: _Shopper, rule: Rule) -> bool:
+    gain = listing.slots - who.size
+    return listing.price <= min(who.allowance, gain * rule.max_per_slot)
+
+
+def _best(listings, who: _Shopper, taken: set, rule: Rule):
+    """(the bag to buy or None, whether any bigger bag was on offer)."""
+    offered = [x for x in listings if _offered(x, who, taken, rule)]
+    choices = [x for x in offered if _affordable(x, who, rule)]
+    if not choices:
+        return None, bool(offered)
+    return min(choices, key=lambda x: (-x.slots, x.price, x.source, x.key)), True
+
+
+def _refusal(who: _Shopper, purse: Purse, budget: int, rule: Rule) -> str:
+    return (
+        "%s cannot buy a bag bigger than its %d-slot one: %d copper may be "
+        "spent (%d in the purse, %d kept back at level %d, %d left of the "
+        "family's share), at most %d a slot"
+        % (
+            who.name,
+            who.size,
+            who.allowance,
+            purse.money,
+            rule.reserve_per_level * max(1, purse.level),
+            purse.level,
+            budget,
+            rule.max_per_slot,
+        )
+    )
+
+
+def _shopper(member: Member, purse: Purse, budget: int, reach, free_slots, rule):
+    owned = {bag.entry for bag in member.worn + member.carried if bag.entry}
+    return _Shopper(
+        name=member.name,
+        size=smallest_worn(member),
+        owned=frozenset(owned),
+        allowance=min(spendable(purse, rule.reserve_per_level), budget),
+        room=int((free_slots or {}).get(member.name, 0)),
+        reach=None if reach is None else frozenset(reach.get(member.name, ())),
     )
 
 
@@ -204,10 +273,7 @@ def plan_upgrades(
     mailed=None,
     reach=None,
     free_slots=None,
-    share: int = UPGRADE_SHARE_PERCENT,
-    reserve_per_level: int = UPGRADE_RESERVE_PER_LEVEL,
-    max_per_slot: int = MAX_COPPER_PER_SLOT,
-    min_gain: int = MIN_UPGRADE_GAIN,
+    rule: Rule = Rule(),
 ) -> tuple:
     """The best affordable upgrade per member, and a note for each refusal.
 
@@ -223,68 +289,26 @@ def plan_upgrades(
     auction purchase goes to the mail and does not.
     """
     mailed = mailed or {}
-    budget = family_budget(purses, share)
+    budget = family_budget(purses, rule.share)
     taken: set = set()
     upgrades: list = []
     notes: list = []
-    wearers = [m for m in members if smallest_worn(m) is not None]
-    for member in _order(wearers):
-        size = smallest_worn(member)
+    for member in _order(m for m in members if smallest_worn(m) is not None):
         coming = on_the_way(member, mailed.get(member.name, ()))
-        if coming:
+        purse = purses.get(member.name)
+        if coming or purse is None:
             notes.append(
-                "%s already has a %d-slot bag coming for its %d-slot one"
-                % (member.name, coming, size)
+                "%s already has a %d-slot bag coming" % (member.name, coming)
+                if coming
+                else "%s has no purse reading, so buys nothing" % member.name
             )
             continue
-        purse = purses.get(member.name)
-        if purse is None:
-            notes.append("%s has no purse reading, so buys nothing" % member.name)
-            continue
-        owned = _owned_entries(member)
-        allowance = min(spendable(purse, reserve_per_level), budget)
-        room = int((free_slots or {}).get(member.name, 0))
-        choices = []
-        bigger = False
-        for listing in listings:
-            gain = listing.slots - size
-            if gain < min_gain or listing.price <= 0:
-                continue
-            if listing.source == AUCTION and listing.key in taken:
-                continue
-            if not _in_reach(listing, member.name, reach):
-                continue
-            if listing.unique and listing.entry in owned:
-                continue
-            if listing.source == VENDOR and room < 1:
-                continue
-            bigger = True
-            if listing.price > gain * max_per_slot:
-                continue
-            if listing.price > allowance:
-                continue
-            choices.append((listing, gain))
-        if not choices:
+        who = _shopper(member, purse, budget, reach, free_slots, rule)
+        listing, bigger = _best(listings, who, taken, rule)
+        if listing is None:
             if bigger:
-                notes.append(
-                    "%s cannot buy a bag bigger than its %d-slot one: %d copper "
-                    "may be spent (%d in the purse, %d kept back at level %d, %d "
-                    "left of the family's share), at most %d a slot"
-                    % (
-                        member.name,
-                        size,
-                        allowance,
-                        purse.money,
-                        reserve_per_level * max(1, purse.level),
-                        purse.level,
-                        budget,
-                        max_per_slot,
-                    )
-                )
+                notes.append(_refusal(who, purse, budget, rule))
             continue
-        listing, gain = min(
-            choices, key=lambda c: (-c[0].slots, c[0].price, c[0].source, c[0].key)
-        )
         budget -= listing.price
         if listing.source == AUCTION:
             taken.add(listing.key)
@@ -292,11 +316,11 @@ def plan_upgrades(
             Upgrade(
                 buyer=member.name,
                 listing=listing,
-                replaces=size,
-                gain=gain,
+                replaces=who.size,
+                gain=listing.slots - who.size,
                 why="%s (%d slots) replaces a %d-slot bag for %d copper of %d "
                 "spendable"
-                % (listing.name, listing.slots, size, listing.price, allowance),
+                % (listing.name, listing.slots, who.size, listing.price, who.allowance),
             )
         )
     return tuple(upgrades), tuple(notes)

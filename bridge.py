@@ -6415,11 +6415,7 @@ class Bridge(discord.Client):
         shoppers = [m for m in members if m.name not in pending]
         if not any(bag_market.smallest_worn(m) is not None for m in shoppers):
             return
-        purses = {
-            name: bag_market.Purse(level=level, money=money)
-            for name, (level, money) in
-            (await asyncio.to_thread(_fetch_purses, names)).items()
-        }
+        purses = await self._bag_purses(names)
         teams = await asyncio.to_thread(_fetch_teams, names)
         # THE COUNTER'S HOUSE ONCE THE LEADER STANDS AT ONE. The nearest
         # auctioneer can be a neutral one, whose house is not the team's.
@@ -6439,19 +6435,7 @@ class Bridge(discord.Client):
             upgrades, bag_market.family_budget(purses)), house)
         if not upgrades:
             return
-        queued = 0
-        for upgrade in upgrades:
-            stand = await asyncio.to_thread(_fetch_auctioneer, upgrade.buyer)
-            if not stand or auction.reachable_house(
-                    teams.get(upgrade.buyer, ""),
-                    int(stand.get("faction") or 0)) != house:
-                continue
-            if await asyncio.to_thread(_insert_auction, upgrade.buyer,
-                                       upgrade.command, "bags"):
-                queued += 1
-                log.info("bag upgrade: %s %s - %s", upgrade.buyer,
-                         upgrade.command, upgrade.why)
-        if queued:
+        if await self._queue_auction_bags(upgrades, teams, house):
             await self._keep_at_auctioneer(leader)
             return
         if at_counter or step != bag_pressure.VENDOR_ERRAND_AIM:
@@ -6464,6 +6448,30 @@ class Bridge(discord.Client):
             "auction", leader, auction.AUCTIONEER_ROLE, urgent=pressure)
         log.info("bag upgrade: leader=%s walks to an auctioneer for %d bag(s) "
                  "(aim taken=%s)", leader, len(upgrades), aimed)
+
+    async def _bag_purses(self, names: list) -> dict:
+        """name -> bag_market.Purse, from the saved characters rows."""
+        return {
+            name: bag_market.Purse(level=level, money=money)
+            for name, (level, money) in
+            (await asyncio.to_thread(_fetch_purses, names)).items()
+        }
+
+    async def _queue_auction_bags(self, upgrades, teams: dict, house: int) -> int:
+        """Write a `buy auction:<id>` row for each buyer at a counter of `house`."""
+        queued = 0
+        for upgrade in upgrades:
+            stand = await asyncio.to_thread(_fetch_auctioneer, upgrade.buyer)
+            if not stand or auction.reachable_house(
+                    teams.get(upgrade.buyer, ""),
+                    int(stand.get("faction") or 0)) != house:
+                continue
+            if await asyncio.to_thread(_insert_auction, upgrade.buyer,
+                                       upgrade.command, "bags"):
+                queued += 1
+                log.info("bag upgrade: %s %s - %s", upgrade.buyer,
+                         upgrade.command, upgrade.why)
+        return queued
 
     async def _auction_shortfall(self, shoppers: dict) -> tuple:
         """Who is short of what, counting the bags and the mail separately.
@@ -9251,20 +9259,36 @@ class Bridge(discord.Client):
         whose best bag is on the house is left to that pass rather than sold
         a smaller one here.
         """
-        names = [m.name for m in members]
         pending = await asyncio.to_thread(_recent_bag_buys, GIVE_RETRY_MINUTES)
         full = [m for m in members
                 if bag_market.smallest_worn(m) is not None
                 and m.name not in pending]
-        if not full:
+        reach = await self._bag_vendor_reach(full)
+        if not reach:
             return
+        upgrades, notes = bag_market.plan_upgrades(
+            [m for m in full if m.name in reach],
+            await self._bag_purses([m.name for m in members]),
+            await self._bag_listings(reach, auction_too),
+            mailed=await asyncio.to_thread(_fetch_mailed_bags, list(reach)),
+            reach=reach,
+            free_slots=await asyncio.to_thread(_fetch_free_slots, list(reach)),
+        )
+        for note in notes:
+            log.info("bags: %s", note)
+        await self._queue_vendor_bags(upgrades)
+
+    async def _bag_vendor_reach(self, members) -> dict:
+        """name -> the entries the vendors in that member's reach stock."""
         reach = {}
-        for member in full:
+        for member in members:
             town = await asyncio.to_thread(_fetch_town, member.name)
             if town.vendor and town.stocks:
                 reach[member.name] = frozenset(town.stocks)
-        if not reach:
-            return
+        return reach
+
+    async def _bag_listings(self, reach: dict, auction_too: bool) -> list:
+        """The general bags in reach, and the house's when `auction_too`."""
         offers = await asyncio.to_thread(
             _fetch_bag_offers, sorted(set().union(*reach.values())))
         listings = [
@@ -9278,19 +9302,10 @@ class Bridge(discord.Client):
             teams = await asyncio.to_thread(_fetch_teams, [leader] if leader else [])
             listings += await asyncio.to_thread(
                 _fetch_bag_listings, auction.TEAM_HOUSE.get(teams.get(leader, ""), 0))
-        purses = {
-            name: bag_market.Purse(level=level, money=money)
-            for name, (level, money) in
-            (await asyncio.to_thread(_fetch_purses, names)).items()
-        }
-        upgrades, notes = bag_market.plan_upgrades(
-            [m for m in full if m.name in reach], purses, listings,
-            mailed=await asyncio.to_thread(_fetch_mailed_bags, list(reach)),
-            reach=reach,
-            free_slots=await asyncio.to_thread(_fetch_free_slots, list(reach)),
-        )
-        for note in notes:
-            log.info("bags: %s", note)
+        return listings
+
+    async def _queue_vendor_bags(self, upgrades) -> None:
+        """Write the kind='buy' row and the `e` row for each vendor upgrade."""
         seen = await asyncio.to_thread(_recent_town_keys, GIVE_RETRY_MINUTES)
         for upgrade in upgrades:
             if upgrade.listing.source != bag_market.VENDOR:
