@@ -36,6 +36,10 @@ classic level-60 feel, so the Netherweave Bag, its bolt and the Master rank
 stay in the tables as measured but are never a target, and a tailor or a
 guildmate standing in Outland or Northrend is left where it is with a note.
 
+WHAT THE CORPS WORKS TOWARD, THEN, is the Runecloth Bag, whose pattern Qia
+sells in Everlook: a far walk on Kalimdor since quadseven/mod-overseer#633,
+mounted, by a flight path the bot knows, and along the travel survey.
+
 PURE MODULE: rows in, a plan and sentences out. No MySQL, no clock; the bridge
 reads the facts, passes them in, and writes the rows a step names.
 """
@@ -154,6 +158,12 @@ RANKS = {
     26791: (375, 275),
     51308: (450, 350),
 }
+# The skill spell each rank teaches (Journeyman 3909, Expert 3910, Artisan
+# 12180). A tailor that already knows it holds the rank, whatever its ceiling
+# reads, and no trainer will sell it again: measured on dev (2026-09-23), a
+# random bot knew Master Tailoring's 26790 with a ceiling of 300, and its walk
+# ended "no trainer on this map will teach this character that skill".
+RANK_SKILL_SPELL = {3912: 3909, 3913: 3910, 12181: 12180, 26791: 26790, 51308: 51309}
 
 # Threads, bought at a vendor (item_template.BuyPrice, copper each).
 THREAD_PRICE = {2320: 10, 2321: 100, 4291: 500, 8343: 2000, 14341: 5000}
@@ -165,7 +175,11 @@ BUY_CEILING_NUM, BUY_CEILING_DEN = 5, 4
 
 BOLT_OF = {r.makes: r for r in BOLTS}
 BAG_ITEMS = {r.makes: r for r in BAGS}
-PATH_SPELLS = frozenset(r.spell for r in BOLTS + BAGS) | frozenset(RANKS)
+PATH_SPELLS = (
+    frozenset(r.spell for r in BOLTS + BAGS)
+    | frozenset(RANKS)
+    | frozenset(RANK_SKILL_SPELL.values())
+)
 
 
 def _classic(recipe: Recipe) -> bool:
@@ -337,10 +351,17 @@ def source_for(action, key) -> str:
     return "%s:%s:%d" % (SOURCE, action, int(key))
 
 
-def _walk_to_mailbox(action, key) -> Row:
+# THE CAP A WALK ROW ASKS FOR (quadseven/mod-overseer#633) is passed down as
+# `cap` to every builder that writes one: the far cap while the worldserver walks
+# that far (`guildroute.walk_cap`), and the near one otherwise, which is also the
+# default so a caller that says nothing writes the rows it always wrote.
+NEAR = guildroute.MAIL_RUN_YARDS
+
+
+def _walk_to_mailbox(action, key, cap=NEAR) -> Row:
     return Row(
         "mail",
-        "%s max:%d" % (guildroute.WALK_VERB, int(guildroute.MAIL_RUN_YARDS)),
+        guildroute.mailbox_walk_command(cap),
         "",
         source_for(action + "-walk", key),
     )
@@ -435,11 +456,17 @@ def skillup_bolt(tailor, members, trainable):
 
 
 def _due_rank(tailor, trainable) -> int:
-    """The rank spell a trainer on the map would sell now, 0 when none."""
+    """The rank spell a trainer on the map would sell now, 0 when none.
+
+    Never past the classic ruleset's skill, and never a rank whose skill
+    spell the tailor already knows: a trainer does not sell a rank twice.
+    """
     value, cap = tailor.skill(TAILORING)
     for spell, (gives, needs) in sorted(RANKS.items(), key=lambda kv: kv[1][0]):
         if not classic.skill_ok(gives):
             continue  # Master and Grand Master: outside the classic ruleset
+        if RANK_SKILL_SPELL.get(spell) in tailor.known:
+            continue  # it holds the rank already; a trainer will not sell it twice
         if gives > cap and value >= needs and spell in trainable:
             return spell
     return 0
@@ -459,7 +486,7 @@ def _recipient(bag, family):
     return best[1] if best else None
 
 
-def _post_step(tailor, family):
+def _post_step(tailor, family, cap=NEAR):
     for held in tailor.carried:
         bag = BAG_ITEMS.get(int(held.entry))
         if bag is None:
@@ -481,7 +508,7 @@ def _post_step(tailor, family):
                     source_for("post", bag.makes),
                 ),
             ),
-            walk=_walk_to_mailbox("post", bag.makes),
+            walk=_walk_to_mailbox("post", bag.makes, cap),
         )
     return None
 
@@ -497,7 +524,7 @@ def _path_entries() -> frozenset:
 PATH_ENTRIES = _path_entries()
 
 
-def _collect_step(tailor):
+def _collect_step(tailor, cap=NEAR):
     ready = [x for x in tailor.mail if x.ready and int(x.entry) in PATH_ENTRIES]
     if not ready:
         return None
@@ -517,7 +544,7 @@ def _collect_step(tailor):
         "%s walks to a mailbox to collect %d letter(s) of materials"
         % (tailor.name, len(rows)),
         rows=rows,
-        walk=_walk_to_mailbox("collect", ready[0].entry),
+        walk=_walk_to_mailbox("collect", ready[0].entry, cap),
     )
 
 
@@ -532,7 +559,7 @@ def _craft(tailor, recipe, count, why) -> Step:
     )
 
 
-def _buy(tailor, entry, count, price, name) -> Step:
+def _buy(tailor, entry, count, price, name, cap=NEAR) -> Step:
     return Step(
         tailor.name,
         "buy",
@@ -547,7 +574,10 @@ def _buy(tailor, entry, count, price, name) -> Step:
             ),
         ),
         walk=Row(
-            "buy", "walk-to-vendor item:%d" % entry, "", source_for("buy-walk", entry)
+            "buy",
+            "walk-to-vendor item:%d%s" % (entry, guildroute.errand_cap_word(cap)),
+            "",
+            source_for("buy-walk", entry),
         ),
     )
 
@@ -583,7 +613,7 @@ def _recipes_to_train(tailor, bag, bolt, trainable) -> list:
     return wanted
 
 
-def _train_step(tailor, bag, bolt, trainable):
+def _train_step(tailor, bag, bolt, trainable, cap=NEAR):
     wanted = _recipes_to_train(tailor, bag, bolt, trainable)
     rank = _due_rank(tailor, trainable)
     if not wanted and not rank:
@@ -591,6 +621,7 @@ def _train_step(tailor, bag, bolt, trainable):
     command = "walk-to-trainer skill:%d" % TAILORING
     if wanted:
         command += " learn:%s" % ",".join(str(s) for s in wanted)
+    command += guildroute.errand_cap_word(cap)
     key = wanted[0] if wanted else rank
     return Step(
         tailor.name,
@@ -602,7 +633,7 @@ def _train_step(tailor, bag, bolt, trainable):
     )
 
 
-def _pattern_step(tailor, bag, reach, vendors):
+def _pattern_step(tailor, bag, reach, vendors, cap=NEAR):
     """Learn the carried pattern, or buy it; None when neither applies."""
     held = next((h for h in tailor.carried if int(h.entry) == bag.pattern), None)
     if reach == "pattern" and held is None:
@@ -618,7 +649,7 @@ def _pattern_step(tailor, bag, reach, vendors):
         )
     if reach == "vendor":
         price = PATTERN_PRICE.get(bag.pattern, 0)
-        return _buy(tailor, bag.pattern, 1, price, "pattern")
+        return _buy(tailor, bag.pattern, 1, price, "pattern", cap)
     return None
 
 
@@ -636,23 +667,23 @@ def _bolt_step(tailor, bag):
     return None
 
 
-def _thread_step(tailor, bag, vendors):
+def _thread_step(tailor, bag, vendors, cap=NEAR):
     """Buy the vendor's thread, once everything else for the bag is in hand."""
     if not _only_thread_missing(tailor, bag):
         return None
     for entry, need in bag.reagents:
         if _vendor_reagent(entry) and tailor.count(entry) < need and entry in vendors:
-            return _buy(tailor, entry, int(need), THREAD_PRICE[entry], "thread")
+            return _buy(tailor, entry, int(need), THREAD_PRICE[entry], "thread", cap)
     return None
 
 
-def _bag_steps(tailor, bag, reach, trainable, vendors):
+def _bag_steps(tailor, bag, reach, trainable, vendors, cap=NEAR):
     """The steps toward crafting `bag`, in order; the first that applies wins."""
     if reach in ("pattern", "vendor"):
-        return _pattern_step(tailor, bag, reach, vendors)
+        return _pattern_step(tailor, bag, reach, vendors, cap)
     if _can_make(tailor, bag):
         return _craft(tailor, bag, 1, "the bag")
-    return _bolt_step(tailor, bag) or _thread_step(tailor, bag, vendors)
+    return _bolt_step(tailor, bag) or _thread_step(tailor, bag, vendors, cap)
 
 
 def _only_thread_missing(tailor, bag) -> bool:
@@ -693,14 +724,32 @@ def _shortfall(tailor, bag, bolt) -> list:
     return need
 
 
+def _near_key(member, entry, mailbox_yards):
+    """How a sender is preferred: nearest a mailbox first (#633), then the
+    bigger stack, then the name. A distance nobody read goes last."""
+    yards = (mailbox_yards or {}).get(member.name)
+    return (yards is None, float(yards or 0.0), -member.count(entry), member.name)
+
+
 def supply_steps(
-    tailor, bag, bolt, members, busy, per_guild=SUPPLY_LETTERS_PER_GUILD, recent=None
+    tailor,
+    bag,
+    bolt,
+    members,
+    busy,
+    per_guild=SUPPLY_LETTERS_PER_GUILD,
+    recent=None,
+    mailbox_yards=None,
+    cap=NEAR,
 ):
     """Letters from guild members who carry what the tailor lacks.
 
     Nothing is asked for twice inside the supply cooldown: `recent` holds
     ("to:<tailor>", "supply", entry) for every letter already written to this
     tailor, because a letter in flight is not in its mailbox yet.
+
+    `mailbox_yards` maps a member to how far its nearest mailbox is. The nearest
+    sender is asked first, so the guild's letters go to the shortest walks.
     """
     steps = []
     for entry, count in _shortfall(tailor, bag, bolt):
@@ -718,7 +767,7 @@ def supply_steps(
             and not classic.is_expansion_map(m.map_id)
             and m.count(entry) > 0
         ]
-        senders.sort(key=lambda m: (-m.count(entry), m.name))
+        senders.sort(key=lambda m: _near_key(m, entry, mailbox_yards))
         for sender in senders:
             if left <= 0 or len(steps) >= per_guild:
                 break
@@ -742,7 +791,7 @@ def supply_steps(
                             source_for("supply", entry),
                         ),
                     ),
-                    walk=_walk_to_mailbox("supply", entry),
+                    walk=_walk_to_mailbox("supply", entry, cap),
                 )
             )
             busy.add(sender.name)
@@ -750,23 +799,23 @@ def supply_steps(
     return steps
 
 
-def tailor_step(tailor, members, family, trainable, vendors):
+def tailor_step(tailor, members, family, trainable, vendors, cap=NEAR):
     """(Step or None, note): this tailor's one step this pass, and why."""
     if not tailor.online:
         return None, "%s is offline" % tailor.name
-    step = _post_step(tailor, family)
+    step = _post_step(tailor, family, cap)
     if step:
         return step, ""
-    step = _collect_step(tailor)
+    step = _collect_step(tailor, cap)
     if step:
         return step, ""
     bag, reach = target_bag(tailor, members, trainable, vendors)
     bolt = skillup_bolt(tailor, members, trainable)
-    step = _train_step(tailor, bag, bolt, trainable)
+    step = _train_step(tailor, bag, bolt, trainable, cap)
     if step:
         return step, ""
     if bag is not None:
-        step = _bag_steps(tailor, bag, reach, trainable, vendors)
+        step = _bag_steps(tailor, bag, reach, trainable, vendors, cap)
         if step:
             return step, ""
     if bolt is not None and bolt.spell in tailor.known:
@@ -791,15 +840,23 @@ class CorpsPlan:
     notes: tuple = ()
 
 
-def _supply_for(tailor, crew, trainable, vendors, busy, room, recent) -> list:
-    """Letters the guild posts to a tailor that has no step of its own."""
+def _supply_for(tailor, crew, facts, busy, room, recent, travel) -> list:
+    """Letters the guild posts to a tailor that has no step of its own.
+
+    `facts` is (trainable, vendors) on the tailor's map; `travel` is
+    (cap, mailbox_yards) for the walks the letters take.
+    """
+    trainable, vendors = facts
+    cap, near = travel
     bag, _ = target_bag(tailor, crew, trainable, vendors)
     bolt = skillup_bolt(tailor, crew, trainable)
-    letters = supply_steps(tailor, bag, bolt, crew, busy, room, recent)
+    letters = supply_steps(tailor, bag, bolt, crew, busy, room, recent, near, cap)
     return [s for s in letters if not _cooling(s, recent)]
 
 
-def _guild_steps(guild_facts, posts, recent, busy, steps, notes) -> None:
+def _guild_steps(
+    guild_facts, posts, recent, busy, steps, notes, travel=(NEAR, None)
+) -> None:
     """One guild's tailors: a step each, or letters from their guildmates."""
     crew, family, trainable_by_map, vendors_by_map = guild_facts
     named = {m.name: m for m in crew}
@@ -819,7 +876,7 @@ def _guild_steps(guild_facts, posts, recent, busy, steps, notes) -> None:
             continue
         trainable = frozenset((trainable_by_map or {}).get(tailor.map_id, ()))
         vendors = frozenset((vendors_by_map or {}).get(tailor.map_id, ()))
-        step, why = tailor_step(tailor, crew, family, trainable, vendors)
+        step, why = tailor_step(tailor, crew, family, trainable, vendors, travel[0])
         if step is not None and not _cooling(step, recent):
             steps.append(step)
             busy.add(tailor.name)
@@ -831,21 +888,33 @@ def _guild_steps(guild_facts, posts, recent, busy, steps, notes) -> None:
         )
         if tailor.online and letters < SUPPLY_LETTERS_PER_GUILD:
             room = SUPPLY_LETTERS_PER_GUILD - letters
-            sent = _supply_for(tailor, crew, trainable, vendors, busy, room, recent)
+            sent = _supply_for(
+                tailor, crew, (trainable, vendors), busy, room, recent, travel
+            )
             steps.extend(sent)
             letters += len(sent)
 
 
 def plan(
-    members, family_by_guild, trainable_by_map, vendors_by_map, recent, busy
+    members,
+    family_by_guild,
+    trainable_by_map,
+    vendors_by_map,
+    recent,
+    busy,
+    walk_yards=guildroute.MAIL_RUN_YARDS,
+    mailbox_yards=None,
 ) -> CorpsPlan:
     """Every guild's corps, and each tailor's step this pass.
 
     `members` are every member of every family guild (Member). `family_by_guild`
     maps a guild to its family Members. `trainable_by_map` and `vendors_by_map`
     map a map id to the tailoring spells a trainer there teaches and the items a
-    vendor there sells. `recent` maps (holder, action, key) to the minutes since
-    the last row of that step; `busy` holds names already on a walk.
+    vendor there sells. `recent` maps
+    (holder, action, key) to the minutes since the last row of that step; `busy`
+    holds names already on a walk. `walk_yards` is the cap the walk rows ask for
+    (`guildroute.walk_cap`), and `mailbox_yards` maps a member to its nearest
+    mailbox's distance, so the nearest sender is asked first.
     """
     corps = plan_corps(members)
     by_guild = {}
@@ -853,6 +922,7 @@ def plan(
         by_guild.setdefault(m.guild, []).append(m)
     busy = set(busy or ())
     steps, notes = [], []
+    travel = (float(walk_yards), mailbox_yards)
     for guild, posts in sorted(corps.items()):
         facts = (
             by_guild.get(guild, []),
@@ -860,7 +930,7 @@ def plan(
             trainable_by_map,
             vendors_by_map,
         )
-        _guild_steps(facts, posts, recent, busy, steps, notes)
+        _guild_steps(facts, posts, recent, busy, steps, notes, travel)
     return CorpsPlan(
         corps=corps, steps=tuple(steps), notes=tuple(n for n in notes if n)
     )

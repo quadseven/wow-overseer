@@ -107,7 +107,12 @@ class TheSelf:
         self._dues_walks = {}
         self._guild_mail_runs = {}
         self._mail_walk_unsupported_until = 0.0
+        self._far_walk_unsupported_until = 0.0
         self._mail_walk_tasks = set()
+
+    def _guild_walk_cap(self):
+        # The near cap, which is what these fixtures' mailboxes are inside.
+        return 600.0
 
     async def _mid_run(self, names):
         self.world.setdefault("mid_run_names", []).append(list(names))

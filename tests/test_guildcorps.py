@@ -11,6 +11,7 @@ import pathlib
 import unittest
 
 import guildcorps as gc
+import guildroute
 
 HERE = pathlib.Path(__file__).resolve().parents[1]
 BRIDGE = (HERE / "bridge.py").read_text(encoding="utf-8")
@@ -166,6 +167,14 @@ class ATailorsNextStep(unittest.TestCase):
         commands = [row.command for row in getattr(step, "rows", ())]
         self.assertFalse([c for c in commands if "26745" in c or "26746" in c])
 
+    def test_a_rank_whose_spell_it_knows_is_not_bought_again(self):
+        """Measured: a bot knew the rank's skill spell with the old ceiling, and
+        its trainer walk ended "no trainer on this map will teach this
+        character that skill"."""
+        t = tailor("Baldam", 225, 225, known=KNOWN_300 | {12180})
+        step, _ = step_of(t)
+        self.assertNotEqual(getattr(step, "action", None), "train")
+
     def test_no_trainer_on_the_map_means_no_walk(self):
         t = tailor("Derred", carried=(held(14047, 5),))
         step, _ = step_of(t, trainable=frozenset({3912}))
@@ -298,6 +307,47 @@ class ThePass(unittest.TestCase):
     def test_a_busy_tailor_is_left_alone(self):
         plan = gc.plan(self.crew(), {}, TRAINABLE, VENDORS, {}, {"Derred"})
         self.assertNotIn("Derred", [s.holder for s in plan.steps])
+
+
+class TheFarWalk(unittest.TestCase):
+    """quadseven/mod-overseer#633: the walks may go past the near cap now, and
+    the nearest member is asked first."""
+
+    def crew(self):
+        return [
+            tailor(known=KNOWN_300 | {18405}),
+            member("Alylienne", maintenance=False, carried=(held(14047, 20, 4001),)),
+            member("Fugotik", maintenance=False, carried=(held(14047, 12, 4002),)),
+            member("Beerix", maintenance=False, carried=(held(8170, 20, 4003),)),
+        ]
+
+    def test_the_far_cap_is_asked_for_on_every_walk(self):
+        far = guildroute.FAR_WALK_YARDS
+        plan = gc.plan(self.crew(), {}, TRAINABLE, VENDORS, {}, set(), walk_yards=far)
+        supply = [s for s in plan.steps if s.action == "supply"]
+        self.assertEqual(supply[0].walk.command, "walk-to-mailbox max:20000")
+        step, _ = gc.tailor_step(
+            tailor(), self.crew()[1:], (), TRAINABLE[EVERLOOK], VENDORS[EVERLOOK], far
+        )
+        self.assertEqual(step.walk.command, "walk-to-vendor item:14468 max:20000")
+        step, _ = gc.tailor_step(
+            tailor("Xohjaz", 225, 225), [], (), TRAINABLE[EVERLOOK], frozenset(), far
+        )
+        self.assertEqual(step.rows[0].command, "walk-to-trainer skill:197 max:20000")
+
+    def test_the_near_cap_writes_the_rows_it_always_wrote(self):
+        step, _ = gc.tailor_step(
+            tailor(), self.crew()[1:], (), TRAINABLE[EVERLOOK], VENDORS[EVERLOOK]
+        )
+        self.assertEqual(step.walk.command, "walk-to-vendor item:14468")
+
+    def test_the_nearest_sender_is_asked_first(self):
+        yards = {"Alylienne": 1953.0, "Fugotik": 120.0, "Beerix": 300.0}
+        plan = gc.plan(
+            self.crew(), {}, TRAINABLE, VENDORS, {}, set(), mailbox_yards=yards
+        )
+        supply = [s for s in plan.steps if s.action == "supply"]
+        self.assertEqual([s.holder for s in supply], ["Fugotik", "Alylienne"])
 
 
 class TheGuards(unittest.TestCase):
@@ -478,6 +528,30 @@ class TheBridgePass(unittest.TestCase):
         body = self.body("_run_corps_step")
         self.assertLess(
             body.index("guildroute.ARRIVED"), body.index("for row in step.rows")
+        )
+
+    def test_the_pass_asks_the_far_cap_and_the_nearest_sender(self):
+        """quadseven/mod-overseer#633."""
+        once = self.body("_guild_corps_once")
+        self.assertIn("walk_yards=cap, mailbox_yards=near", once)
+        self.assertIn("self._run_corps_step(step, cap)", once)
+        self.assertIn("guildroute.GUILD_STEP_SECONDS", once)
+        near = self.body("_corps_mailbox_yards")
+        self.assertIn("classic.is_expansion_map(m.map_id)", near)
+        self.assertIn("CORPS_NEAR_READS", near)
+
+    def test_a_walk_a_fight_ended_is_walked_again_once(self):
+        step = self.body("_run_corps_step")
+        self.assertIn("self._walk_again_after_a_fight(", step)
+        self.assertIn("self._await_mail_walk(step.holder, walk_id, cap)", step)
+        row = self.body("_corps_row")
+        self.assertIn("guildroute.COMBAT_ENDING", row)
+        self.assertIn("guildroute.follow_seconds(cap)", row)
+        self.assertIn(
+            '"guild corps: %s row %d for %s ended in a fight; walking it "', BRIDGE
+        )
+        self.assertIn(
+            '"%s: walk row %d for %s ended in a fight; walking it again in %d "', BRIDGE
         )
 
     def test_log_lines_are_unique_to_the_pass(self):
