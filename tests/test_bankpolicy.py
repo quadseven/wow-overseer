@@ -142,6 +142,133 @@ class AFamilyMemberKeepsItsSecondSet(unittest.TestCase):
         self.assertEqual(bankpolicy.PERSONAL, bankpolicy.place(facts)[11].to)
 
 
+class WhatTheHolderGrowsIntoWaitsInItsOwnBank(unittest.TestCase):
+    """The family is lowered to its natural levels: Grog, about 36, keeps his
+    epic Destiny (level 52) in his own bank until he can wear it again."""
+
+    def grog(self, level=36):
+        return bankpolicy.Keeper("Grog", PALADIN, level, "damage", frozenset())
+
+    def destiny(self, **kw):
+        base = dict(quality=4, required_level=52, item_class=bankpolicy.WEAPON)
+        base.update(kw)
+        return piece(647, "Destiny", **base)
+
+    def test_destiny_waits_in_groggs_bank_until_52(self):
+        facts = bankpolicy.Facts(
+            pieces=(self.destiny(),),
+            family=(self.grog(),),
+            reach={647: reach(bucket="weapon", guild=("Grug",))},
+        )
+        placed = bankpolicy.place(facts)[647]
+        self.assertEqual(
+            (bankpolicy.PERSONAL, bankpolicy.GROWS_INTO), (placed.to, placed.kind)
+        )
+        self.assertIn("Grog keeps Destiny until level 52", placed.why)
+
+    def test_even_tradable_it_never_goes_to_the_guild(self):
+        facts = bankpolicy.Facts(
+            pieces=(self.destiny(bound=False),),
+            family=(self.grog(),),
+            reach={647: reach(bucket="weapon", guild=("Grug",))},
+        )
+        self.assertEqual(bankpolicy.PERSONAL, bankpolicy.place(facts)[647].to)
+
+    def test_at_its_level_it_is_the_gear_passes_again(self):
+        facts = bankpolicy.Facts(
+            pieces=(self.destiny(),),
+            family=(self.grog(60),),
+            reach={647: reach(bucket="weapon")},
+        )
+        self.assertEqual({}, bankpolicy.place(facts))
+
+    def test_every_piece_it_grows_into_is_kept(self):
+        a = piece(
+            1, "Blade A", quality=3, required_level=40, item_class=bankpolicy.WEAPON
+        )
+        b = piece(
+            2, "Blade B", quality=3, required_level=50, item_class=bankpolicy.WEAPON
+        )
+        facts = bankpolicy.Facts(
+            pieces=(a, b),
+            family=(self.grog(),),
+            reach={1: reach(bucket="weapon"), 2: reach(bucket="weapon")},
+        )
+        self.assertEqual([1, 2], sorted(bankpolicy.place(facts)))
+
+
+class TheOperatorsReservationOutranksEveryRule(unittest.TestCase):
+    def rows(self):
+        return [
+            {
+                "character": "Grog",
+                "item": 647,
+                "reason": "his sword",
+                "until_level": 52,
+            },
+            {"character": "Somebody", "item": 1, "until_level": 10},
+            {"character": "Grog", "item": 0},
+        ]
+
+    def test_rows_are_read_by_name_for_the_family_only(self):
+        got = bankpolicy.reservations_from_rows(self.rows(), ["Grog", "Og"])
+        self.assertEqual((bankpolicy.Reservation("Grog", 647, 52, "his sword"),), got)
+        alias = bankpolicy.reservations_from_rows(
+            [{"name": "Og", "item_guid": 9, "level": 30}], ["Og"]
+        )
+        self.assertEqual((bankpolicy.Reservation("Og", 9, 30, ""),), alias)
+
+    def test_a_reserved_potion_is_kept_home_not_sent_to_the_raid(self):
+        potion = piece(
+            21,
+            "Greater Fire Protection Potion",
+            item_class=0,
+            bound=False,
+            entry=raidsupply.GREATER_FIRE_PROTECTION,
+            count=9,
+        )
+        facts = bankpolicy.Facts(
+            pieces=(potion,),
+            family=(keeper(),),
+            reserved=(
+                bankpolicy.Reservation(
+                    "Grog", raidsupply.GREATER_FIRE_PROTECTION, 0, "mine"
+                ),
+            ),
+        )
+        placed = bankpolicy.place(facts)[21]
+        self.assertEqual(
+            (bankpolicy.PERSONAL, bankpolicy.RESERVED), (placed.to, placed.kind)
+        )
+        self.assertEqual("Grog keeps Greater Fire Protection Potion: mine", placed.why)
+
+    def test_the_level_it_waits_for_is_on_the_page(self):
+        blade = piece(
+            30, "Destiny", quality=4, bound=False, item_class=bankpolicy.WEAPON
+        )
+        facts = bankpolicy.Facts(
+            pieces=(blade,),
+            family=(keeper(),),
+            reach={30: reach(bucket="weapon", wears=False, guild=("Aleth",))},
+            reserved=(bankpolicy.Reservation("Grog", 30, 70, ""),),
+        )
+        placed = bankpolicy.place(facts)[30]
+        self.assertEqual(bankpolicy.PERSONAL, placed.to)
+        self.assertEqual(
+            "Bank: Grog's bank - Grog keeps Destiny until level 70", placed.line
+        )
+
+    def test_a_reservation_whose_level_is_reached_places_nothing(self):
+        blade = piece(30, "Destiny", quality=4, item_class=bankpolicy.WEAPON)
+        facts = bankpolicy.Facts(
+            pieces=(blade,),
+            family=(keeper(),),
+            reach={30: reach(bucket="weapon")},
+            reserved=(bankpolicy.Reservation("Grog", 30, 52, ""),),
+        )
+        self.assertEqual({}, bankpolicy.place(facts))
+
+
 class TheRaidsSuppliesGoToTheirTab(unittest.TestCase):
     def test_potions_past_the_holders_own_night_are_banked(self):
         # A damage paladin drinks two Greater Fire Protection a night.
@@ -341,8 +468,10 @@ class TheFactsAreReadFromRows(unittest.TestCase):
             },
             {"name": "Zork", "class_id": 7, "level": 20},
             {"name": "Oz", "class_id": MAGE, "level": 20},
+            # Already past the level: never a LATER wearer.
+            {"name": "Zug", "class_id": 7, "level": 60},
         ]
-        fit = bag_pressure.gear_reach(gear_rows, worn, ["Grog", "Zork", "Oz"])[7]
+        fit = bag_pressure.gear_reach(gear_rows, worn, ["Grog", "Zork", "Oz", "Zug"])[7]
         self.assertTrue(fit.holder_wears)
         self.assertEqual("head", fit.bucket)
         # A shaman trains mail at 40 and will wear it at 50; a mage never will.
@@ -571,6 +700,37 @@ class TheSellPassesSkipWhatThePolicyKeeps(unittest.TestCase):
         }
         kept = ns["_without_bank_keeps"]([C(1), C(2)], placed, "economy")
         self.assertEqual([1], [c.item_guid for c in kept])
+
+    def test_the_sell_passes_read_a_fresh_policy(self):
+        self.assertEqual(
+            2, self.SOURCE.count("asyncio.to_thread(_bank_policy, names, True)")
+        )
+
+    def test_a_kept_at_home_move_never_reaches_the_guild(self):
+        ns = {
+            "log": types.SimpleNamespace(exception=lambda *a: None),
+            "bankpolicy": bankpolicy,
+        }
+        start = self.SOURCE.index("def _not_kept_at_home(")
+        end = self.SOURCE.index("\ndef ", start + 1)
+        exec(compile(self.SOURCE[start:end], "bridge.py", "exec"), ns)  # noqa: S102
+        home = bankpolicy.Placement(1, "Grog", "X", bankpolicy.PERSONAL, None, "k", "w")
+        ns["_bank_policy"] = lambda names: {1: home}
+        moves = [types.SimpleNamespace(guid=1), types.SimpleNamespace(guid=2)]
+        self.assertEqual(
+            [2], [m.guid for m in ns["_not_kept_at_home"](moves, ["Grog"])]
+        )
+
+        def broken(names):
+            raise RuntimeError("down")
+
+        ns["_bank_policy"] = broken
+        self.assertEqual((), ns["_not_kept_at_home"](moves, ["Grog"]))
+
+    def test_jevs_routes_survive_an_unreadable_policy(self):
+        body = self.SOURCE[self.SOURCE.index("    async def _jev_items_plan(") :]
+        body = body[: body.index("\n    def ")]
+        self.assertIn("asyncio.to_thread(_bank_policy_lines_or_none, names)", body)
 
     def test_the_module_is_in_the_image(self):
         self.assertIn(

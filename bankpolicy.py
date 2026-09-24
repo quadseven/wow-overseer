@@ -49,7 +49,7 @@ answer. Every judgement is `place`, over plain rows.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 import disposition
 import goals
@@ -68,6 +68,8 @@ WEAPON, ARMOR, CONSUMABLE = 2, 4, 0
 
 # What each set is called, which is also the word the page shows.
 FIRE_SET = "fire resistance set"
+RESERVED = "kept by the operator"
+GROWS_INTO = "kept until its level"
 PVP_SET = "PvP set"
 ROLE_SET = {
     statweights.TANK: "tank set",
@@ -230,6 +232,25 @@ class Facts:
     # item guid -> bag_pressure.GearReach, for every piece of gear.
     reach: dict = field(default_factory=dict)
     claimed: frozenset = field(default_factory=frozenset)
+    # The operator's keep reservations (`overseer_keep`): Reservation rows.
+    reserved: tuple = ()
+
+
+@dataclass(frozen=True)
+class Reservation:
+    """One item the operator told a character to keep until a level.
+
+    `item` is matched against the stack's guid and its entry, because the
+    reservation names "Grog's Destiny" and either is how a person says it.
+    """
+
+    character: str
+    item: int
+    until_level: int = 0
+    reason: str = ""
+
+    def covers(self, piece) -> bool:
+        return self.character == piece.holder and self.item in (piece.guid, piece.entry)
 
 
 def _int(value, default=0) -> int:
@@ -304,7 +325,18 @@ def claimed_from_rows(item_rows, worn_rows, names) -> frozenset:
 
 def _second_set(piece, keeper):
     """(set kind, score, why) when this piece is one of the holder's second
-    sets, else None. Fire resistance first, then PvP, then an off role."""
+    sets, else None. Gear it grows back into first, then fire resistance,
+    then PvP, then an off role."""
+    if piece.required_level > keeper.level and piece.quality >= RARE:
+        # NATURAL PROGRESSION: a rare or epic the holder cannot wear yet and
+        # will at its level (Grog's Destiny, level 52, while Grog is 36). It
+        # waits in the holder's own bank, never the guild's, never a vendor.
+        why = "%s keeps %s until level %d, when it can wear it" % (
+            piece.holder,
+            piece.name,
+            piece.required_level,
+        )
+        return GROWS_INTO, (piece.required_level, piece.item_level), why
     if piece.fire_res > 0:
         why = "+%d fire resistance for Molten Core; %s keeps a fire resistance set" % (
             piece.fire_res,
@@ -346,7 +378,8 @@ def _personal(pieces, family, reach, claimed) -> dict:
         if found is None:
             continue
         kind, score, why = found
-        key = (piece.holder, kind, fit.bucket)
+        # Every piece the holder grows into is kept; a set keeps its best.
+        key = (piece.holder, kind, fit.bucket, piece.guid if kind == GROWS_INTO else 0)
         held = best.get(key)
         if held is None or score > held[0]:
             best[key] = (score, piece, kind, why)
@@ -467,15 +500,48 @@ def _gear_for_later(pieces, reach, claimed, taken) -> dict:
     return out
 
 
+def _reserved(pieces, reservations, levels) -> dict:
+    """Rule 0: guid -> Placement in its owner's own bank, for every stack a
+    keep reservation covers while its owner is below the level it waits for.
+
+    The operator's word outranks every rule below: `place` gives a reserved
+    stack to no other rule, so it never goes to the guild bank and no sell
+    pass sees it. While it waits it belongs in its owner's bank and is never
+    withdrawn; once the owner reaches the level it is no longer placed, and
+    the gear passes put it on.
+    """
+    out = {}
+    for piece in pieces:
+        found = next((r for r in reservations if r.covers(piece)), None)
+        if found is None:
+            continue
+        if found.until_level and _int(levels.get(piece.holder)) >= found.until_level:
+            continue
+        why = "%s keeps %s" % (piece.holder, piece.name)
+        if found.until_level > 0:
+            why += " until level %d" % found.until_level
+        if found.reason:
+            why += ": %s" % found.reason
+        out[piece.guid] = Placement(
+            piece.guid, piece.holder, piece.name, PERSONAL, None, RESERVED, why
+        )
+    return out
+
+
 def place(facts: Facts) -> dict:
     """guid -> Placement for every stack this policy has an answer for.
 
     A guid missing from the answer is not this policy's: the gear passes,
     the keeper rule and the sell passes decide it as they did before.
     """
-    pieces = tuple(p for p in facts.pieces if not p.quest_needed)
+    levels = {k.name: k.level for k in facts.family}
+    held = frozenset(
+        p.guid for p in facts.pieces if any(r.covers(p) for r in facts.reserved)
+    )
+    pieces = tuple(p for p in facts.pieces if not p.quest_needed and p.guid not in held)
     claimed = frozenset(facts.claimed)
-    out = dict(_personal(pieces, facts.family, facts.reach, claimed))
+    out = dict(_reserved(facts.pieces, facts.reserved, levels))
+    out.update(_personal(pieces, facts.family, facts.reach, claimed))
     out.update(_raid_supplies(pieces, facts.family, claimed, frozenset(out)))
     out.update(_gear_for_later(pieces, facts.reach, claimed, frozenset(out)))
     return out
@@ -727,8 +793,12 @@ def _party_roles(names, classes) -> dict:
     )
 
 
-def read(cur, names) -> Facts:
-    """The three reads over `cur`, for one family."""
+def read(cur, names, reservations=()) -> Facts:
+    """The three reads over `cur`, for one family.
+
+    `reservations` are the operator's keep reservations (Reservation, see
+    `reservations_from_rows`), read by whoever owns that table.
+    """
     names = [str(n) for n in names or () if n]
     if not names:
         return Facts()
@@ -739,4 +809,41 @@ def read(cur, names) -> Facts:
     worn = [dict(r) for r in cur.fetchall()]
     cur.execute(SKILLS_SQL % marks, names)
     skills = [dict(r) for r in cur.fetchall()]
-    return facts_from_rows(names, items, worn, skills)
+    facts = facts_from_rows(names, items, worn, skills)
+    return replace(facts, reserved=tuple(reservations))
+
+
+# The keep reservations the operator writes. The table ships with the
+# natural-progression change and is read there; these are the column names a
+# row may carry, so its reader can hand the rows over as they come.
+_KEEP_CHARACTER = ("character", "character_name", "name", "holder")
+_KEEP_ITEM = ("item", "item_guid", "guid", "item_entry", "entry")
+_KEEP_UNTIL = ("until_level", "level")
+_KEEP_REASON = ("reason", "why", "note")
+
+
+def _first(row: dict, keys, default=None):
+    for key in keys:
+        if row.get(key) not in (None, ""):
+            return row[key]
+    return default
+
+
+def reservations_from_rows(rows, names) -> tuple:
+    """Reservation for each row naming one of `names`; unreadable rows drop."""
+    wanted = {str(n) for n in names}
+    out = []
+    for row in rows:
+        who = str(_first(row, _KEEP_CHARACTER, ""))
+        item = _int(_first(row, _KEEP_ITEM))
+        if who not in wanted or item <= 0:
+            continue
+        out.append(
+            Reservation(
+                who,
+                item,
+                _int(_first(row, _KEEP_UNTIL)),
+                str(_first(row, _KEEP_REASON, "")),
+            )
+        )
+    return tuple(out)

@@ -493,6 +493,7 @@ class TheMasterBuysTheTabWithTheGold(unittest.TestCase):
                     for x in n
                 ],
                 "_plan_bank": lambda n: types.SimpleNamespace(guild=[]),
+                "_not_kept_at_home": lambda moves, names: tuple(moves),
                 "_fetch_positions": lambda n: {x: {"map_id": 1} for x in n},
                 "_nearest_vault": lambda leader: world.setdefault("vault_for", leader),
                 "_spawn_yards": lambda spawn: None,

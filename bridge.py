@@ -7120,7 +7120,7 @@ class Bridge(discord.Client):
         candidates = _clearance_listings(
             await self._clearance_plan(names, leader, auction_open=True))
         # NOTHING THE BANK POLICY KEEPS IS LISTED (#320).
-        banked = await asyncio.to_thread(_bank_policy, names)
+        banked = await asyncio.to_thread(_bank_policy, names, True)
         candidates = [c for c in candidates if int(c["item_guid"]) not in banked]
         entries = {c["entry"] for c in candidates}
         for row in gear_rows:
@@ -9064,7 +9064,7 @@ class Bridge(discord.Client):
         # raid supply, gear kept for a guildmate. The bank passes carry it to
         # a bank; a sale here would race them to the counter.
         candidates = _without_bank_keeps(
-            candidates, await asyncio.to_thread(_bank_policy, names), "economy")
+            candidates, await asyncio.to_thread(_bank_policy, names, True), "economy")
         if not candidates:
             log.info("economy: no safe carried vendor goods")
             return
@@ -9479,10 +9479,10 @@ class Bridge(discord.Client):
         if any(rule.mode == jev.ACT for rule in rules.values()):
             done, _ = await asyncio.wait({task}, timeout=JEV_ACT_WAIT_SECONDS)
             if task in done and not task.cancelled() and task.exception() is None:
+                banked = await asyncio.to_thread(_bank_policy_lines_or_none, names)
                 routes = {
                     guid: route for guid, (route, _why) in jev_items.heuristic(
-                        gear_rows, worn, names, OWNER_KEEPS,
-                        _bank_policy_lines(names)).items()
+                        gear_rows, worn, names, OWNER_KEEPS, banked).items()
                 }
                 plan = jev_items.act_plan(task.result(), rules, routes)
                 await self._jev_record(plan.judgments, ",".join(names))
@@ -9529,7 +9529,7 @@ class Bridge(discord.Client):
             worn_items=worn_items, names=names, describe=describe,
             specs=specs, keep_names=OWNER_KEEPS, modes=modes,
             limit=JEV_SHADOW_LIMIT, heads=tuple(bonds.HOUSES),
-            banked=await asyncio.to_thread(_bank_policy_lines, names),
+            banked=await asyncio.to_thread(_bank_policy_lines_or_none, names),
         )
 
     async def _jev_describer(self, entries):
@@ -10994,6 +10994,9 @@ class Bridge(discord.Client):
         items = (await asyncio.to_thread(_plan_bank, names)).guild
         # AND WHAT JEV CHOSE TO BANK (#267), under the same gates.
         items = tuple(items) + tuple(self._jev_keep_deposits(names, setup, items))
+        # NOTHING THE POLICY KEEPS IN ITS OWNER'S BANK GOES TO THE GUILD
+        # (#320): a second set, or an item the operator reserved.
+        items = await asyncio.to_thread(_not_kept_at_home, items, names)
         if not actions and not deposits and not items:
             log.info("guild bank: nobody is carrying more than the float")
             return
@@ -18836,8 +18839,12 @@ BANK_POLICY_SECONDS = 120.0
 _BANK_POLICY_CACHE: dict = {}
 
 
-def _bank_policy(names: list) -> dict:
+def _bank_policy(names: list, fresh: bool = False) -> dict:
     """item guid -> bankpolicy.Placement for this family; blocking.
+
+    `fresh` skips the cache: a sell pass asks about what is in the bags now,
+    and a drop picked up since the last read must not be sold before the
+    policy has seen it.
 
     A world image without one of the columns or tables answers {} and says so;
     any other failure is raised, so a pass that would sell cannot go ahead on
@@ -18848,7 +18855,7 @@ def _bank_policy(names: list) -> dict:
         return {}
     now = time.monotonic()
     hit = _BANK_POLICY_CACHE.get(key)
-    if hit is not None and now - hit[0] < BANK_POLICY_SECONDS:
+    if not fresh and hit is not None and now - hit[0] < BANK_POLICY_SECONDS:
         return hit[1]
     with _connect() as conn, conn.cursor() as cur:
         try:
@@ -18869,6 +18876,33 @@ def _bank_policy(names: list) -> dict:
 def _bank_policy_lines(names: list) -> dict:
     """item guid -> the policy's line, for Jev's question (#320)."""
     return {guid: p.line for guid, p in _bank_policy(names).items()}
+
+
+def _bank_policy_lines_or_none(names: list) -> dict:
+    """`_bank_policy_lines`, or none when the read fails: Jev's route map is
+    advisory, and a failed read must not stop the pass that asked."""
+    try:
+        return _bank_policy_lines(names)
+    except Exception:
+        log.exception("bank policy: unreadable for Jev's routes; asking without it")
+        return {}
+
+
+def _not_kept_at_home(moves, names: list) -> tuple:
+    """The guild-bank moves whose stack the policy does not keep in its
+    owner's bank (#320). An unreadable policy moves nothing: a reserved item
+    that reached the guild bank could not be taken back by this process."""
+    if not moves:
+        return ()
+    try:
+        placed = _bank_policy(names)
+    except Exception:
+        log.exception("bank policy: unreadable, so no item goes to the guild bank")
+        return ()
+    return tuple(
+        m for m in moves
+        if getattr(placed.get(m.guid), "to", "") != bankpolicy.PERSONAL
+    )
 
 
 def _without_bank_keeps(candidates, placed: dict, what: str) -> list:

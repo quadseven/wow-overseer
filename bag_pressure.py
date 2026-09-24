@@ -1715,6 +1715,7 @@ def gear_reach(gear_rows, equipped_rows, family_names) -> dict:
                     c.name
                     for c in characters.values()
                     if c.name != holding.holder
+                    and int(c.level) < int(holding.required_level)
                     and _wears_at(
                         holding, c, max(int(c.level), int(holding.required_level))
                     )
