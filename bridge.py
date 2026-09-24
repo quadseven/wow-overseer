@@ -13546,46 +13546,47 @@ class Bridge(discord.Client):
                 log.info("attunement: %s: %s stands at Lothos Riftwaker, so the "
                          "walk is handed back", who, leader)
 
+    async def _dungeonquest_for_family(self, key, fam, rows, own) -> bool:
+        if not fam or not rows:
+            return False
+        head = rows[0]
+        if str(head.get("status")) not in (campaignqueue.QUEUED,
+                                            campaignqueue.ACTIVE):
+            return False
+        leader = str(fam["leader"].get("name") or "")
+        if not leader:
+            return False
+        mid = await self._mid_run(list(fam["names"]))
+        facts = await asyncio.to_thread(
+            _dungeonquest_facts, fam, str(head["keyword"]), leader, True, mid)
+        step = dungeonquests.step(facts)
+        for name, command in step.rows:
+            written = await asyncio.to_thread(
+                _insert_dungeonquest_row, name, command)
+            if written:
+                log.info("dungeon quests: %s wrote %s for %s (%d)",
+                         campaignqueue._family(key), command, name, written)
+        cohort = None if key == (own or "") else key
+        if step.aim:
+            await self._claim_town_slot(
+                DUNGEON_QUEST_CLAIMANT, leader, str(step.aim), cohort=cohort)
+        if step.release:
+            await asyncio.to_thread(_release_trade_errand, leader,
+                                    str(step.giver or ""))
+        if step.rows or step.aim:
+            log.info("dungeon quests: %s: %s",
+                     campaignqueue._family(key), step.line)
+        return step.hold_planner
+
     async def _dungeonquest_pass(self, pending: dict, fams: dict) -> set:
         """Take or hand in dungeon quests before advancing a campaign run."""
-        held = set()
         own = await asyncio.to_thread(_cohort_of, bonds.head_of_family())
+        held = set()
         for key, rows in sorted(pending.items()):
-            fam = fams.get(key)
-            if not fam or not rows:
-                continue
-            head = rows[0]
-            if str(head.get("status")) not in (campaignqueue.QUEUED,
-                                                campaignqueue.ACTIVE):
-                continue
-            leader = str(fam["leader"].get("name") or "")
-            if not leader:
-                continue
             try:
-                mid = await self._mid_run(list(fam["names"]))
-                facts = await asyncio.to_thread(
-                    _dungeonquest_facts, fam, str(head["keyword"]), leader,
-                    True, mid)
-                step = dungeonquests.step(facts)
-                if step.hold_planner:
+                if await self._dungeonquest_for_family(
+                        key, fams.get(key), rows, own):
                     held.add(key)
-                for name, command in step.rows:
-                    written = await asyncio.to_thread(
-                        _insert_dungeonquest_row, name, command)
-                    if written:
-                        log.info("dungeon quests: %s wrote %s for %s (%d)",
-                                 campaignqueue._family(key), command, name,
-                                 written)
-                if step.aim:
-                    await self._claim_town_slot(
-                        DUNGEON_QUEST_CLAIMANT, leader, str(step.aim),
-                        cohort=None if key == (own or "") else key)
-                if step.release:
-                    await asyncio.to_thread(_release_trade_errand, leader,
-                                            str(step.giver or ""))
-                if step.rows or step.aim:
-                    log.info("dungeon quests: %s: %s",
-                             campaignqueue._family(key), step.line)
             except Exception:
                 log.exception("dungeon quests: pass failed for %s",
                               campaignqueue._family(key))

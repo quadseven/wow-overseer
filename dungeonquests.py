@@ -186,6 +186,26 @@ def _actions(facts: Facts):
     return actions
 
 
+def _ready_actions(actions, giver, spawn):
+    return tuple(
+        (member.name, said)
+        for entry, member, said in actions
+        if int(entry) == int(giver)
+        and _distance(member, spawn) is not None
+        and _distance(member, spawn) <= REACH_YARDS
+    )
+
+
+def _leader_at_giver(facts: Facts, spawn) -> bool:
+    leader = next((m for m in facts.members if m.name == facts.leader), None)
+    leader = leader or (facts.members[0] if facts.members else None)
+    return (
+        leader is not None
+        and _distance(leader, spawn) is not None
+        and _distance(leader, spawn) <= REACH_YARDS
+    )
+
+
 def step(facts: Facts) -> Step:
     actions = _actions(facts)
     if not actions:
@@ -198,20 +218,8 @@ def step(facts: Facts) -> Step:
     if not giver:
         return Step(WAIT, "an eligible dungeon quest has no giver")
     spawn = _giver(facts, giver)
-    ready = [
-        (member.name, said)
-        for entry, member, said in actions
-        if int(entry) == int(giver)
-        and _distance(member, spawn) is not None
-        and _distance(member, spawn) <= REACH_YARDS
-    ]
-    leader = next((m for m in facts.members if m.name == facts.leader), None)
-    leader = leader or (facts.members[0] if facts.members else None)
-    at_giver = (
-        leader is not None
-        and _distance(leader, spawn) is not None
-        and _distance(leader, spawn) <= REACH_YARDS
-    )
+    ready = _ready_actions(actions, giver, spawn)
+    at_giver = _leader_at_giver(facts, spawn)
     verb = "take" if any("take " in command for _, command in ready) else "turn in"
     line = (
         "at giver %d: %s" % (giver, "; ".join("%s %s" % x for x in ready))
@@ -243,56 +251,15 @@ def facts_from_rows(
     due=False,
     mid_run=False,
 ):
+    names = tuple(str(row.get("name")) for row in members or ())
     chars = {str(row.get("name")): row for row in members or ()}
     seen = {str(row.get("name")): row for row in snapshot_rows or ()}
-    names = tuple(str(row.get("name")) for row in members or ())
-    rewarded = {name: set() for name in names}
-    for row in rewarded_rows or ():
-        rewarded.setdefault(str(row.get("name")), set()).add(int(row["quest"]))
-    statuses = {name: {} for name in names}
-    for row in log_rows or ():
-        statuses.setdefault(str(row.get("name")), {})[int(row["quest"])] = int(
-            row.get("status") or 0
-        )
-    quests = tuple(
-        Quest(
-            int(row["quest"]),
-            int(row["zone"]),
-            int(row.get("min_level") or 0),
-            int(row.get("races") or 0),
-            int(row.get("prev_quest") or 0),
-            int(row.get("starter") or 0),
-            int(row.get("ender") or 0),
-        )
-        for row in quest_rows or ()
-    )
-    parsed = []
-    for name in names:
-        c, s = chars.get(name, {}), seen.get(name, {})
-        parsed.append(
-            Member(
-                name,
-                int(c.get("level") or 0),
-                int(c.get("race") or 0),
-                None if not s else int(s.get("map_id")),
-                float(s.get("pos_x") or 0),
-                float(s.get("pos_y") or 0),
-                float(s.get("pos_z") or 0),
-            )
-        )
-    givers = {
-        int(row["id"]): (
-            int(row.get("map_id") or 0),
-            float(row.get("pos_x") or 0),
-            float(row.get("pos_y") or 0),
-            float(row.get("pos_z") or 0),
-        )
-        for row in giver_rows or ()
-    }
-    recent = {
-        (str(row.get("target_name")), str(row.get("command")))
-        for row in recent_rows or ()
-    }
+    rewarded = _rewarded(names, rewarded_rows)
+    statuses = _statuses(names, log_rows)
+    quests = _quest_rows(quest_rows)
+    parsed = _members(names, chars, seen)
+    givers = _givers(giver_rows)
+    recent = _recent(recent_rows)
     return Facts(
         dungeon=dungeon,
         leader=leader,
@@ -304,4 +271,68 @@ def facts_from_rows(
         recent=frozenset(recent),
         due=due,
         mid_run=mid_run,
+    )
+
+
+def _rewarded(names, rows):
+    out = {name: set() for name in names}
+    for row in rows or ():
+        out.setdefault(str(row.get("name")), set()).add(int(row["quest"]))
+    return out
+
+
+def _statuses(names, rows):
+    out = {name: {} for name in names}
+    for row in rows or ():
+        out.setdefault(str(row.get("name")), {})[int(row["quest"])] = int(
+            row.get("status") or 0
+        )
+    return out
+
+
+def _quest_rows(rows):
+    return tuple(
+        Quest(
+            int(row["quest"]),
+            int(row["zone"]),
+            int(row.get("min_level") or 0),
+            int(row.get("races") or 0),
+            int(row.get("prev_quest") or 0),
+            int(row.get("starter") or 0),
+            int(row.get("ender") or 0),
+        )
+        for row in rows or ()
+    )
+
+
+def _members(names, chars, seen):
+    return tuple(
+        Member(
+            name,
+            int(chars.get(name, {}).get("level") or 0),
+            int(chars.get(name, {}).get("race") or 0),
+            None if not seen.get(name) else int(seen[name].get("map_id")),
+            float(seen.get(name, {}).get("pos_x") or 0),
+            float(seen.get(name, {}).get("pos_y") or 0),
+            float(seen.get(name, {}).get("pos_z") or 0),
+        )
+        for name in names
+    )
+
+
+def _givers(rows):
+    return {
+        int(row["id"]): (
+            int(row.get("map_id") or 0),
+            float(row.get("pos_x") or 0),
+            float(row.get("pos_y") or 0),
+            float(row.get("pos_z") or 0),
+        )
+        for row in rows or ()
+    }
+
+
+def _recent(rows):
+    return frozenset(
+        (str(row.get("target_name")), str(row.get("command"))) for row in rows or ()
     )
