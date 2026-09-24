@@ -593,7 +593,7 @@ def _cells(row: dict) -> list:
     return [
         str(row["group"]),
         row["name"],
-        row["role"],
+        row.get("label") or row["role"],
         "?" if row["level"] is None else str(row["level"]),
         "not read" if row["gear"] is None else str(row["gear"]),
         (
@@ -667,6 +667,9 @@ def raider_rows(
                     "name": name,
                     "group": group.get("number"),
                     "role": member.get("role", "dps"),
+                    # The duty and the talent tree ("main tank, Protection"),
+                    # raidlineup's; the cell prints it over the bare role.
+                    "label": member.get("label", ""),
                     "level": member.get("level"),
                     "gear": gear.get(name),
                     "fire_res": fire.get(name, 0),

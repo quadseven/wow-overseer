@@ -399,7 +399,7 @@ class EachRaiderIsReported(unittest.TestCase):
             [
                 "1",
                 self.head,
-                "tank",
+                "main tank",
                 "60",
                 "45",
                 "17 of 200",
