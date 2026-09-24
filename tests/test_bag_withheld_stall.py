@@ -404,6 +404,7 @@ def _bridge_self(world, clock, log):
             "GATHER_CLAIMANT": "gather",
             "FLIGHT_CLAIMANT": "flight",
             "LEVEL_CLAIMANT": "level",
+            "ATTUNE_CLAIMANT": "attunement",
             "TOWN_SLOT_GATHER_LEASE_SECONDS": townslot.GATHER_LEASE_SECONDS,
             "TOWN_SLOT_FLIGHT_LEASE_SECONDS": townslot.GATHER_LEASE_SECONDS,
             "_is_economy_aim": economy,

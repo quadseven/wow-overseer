@@ -429,6 +429,12 @@ class TheBridgePass(unittest.TestCase):
         # The movement picture is read by the bridge (situation.py); these
         # passes run without one, which asks the question as it always was.
         me._situation_for = no_situation
+
+        async def no_attunement(*_args):
+            return set()
+
+        # The attunement step (attunestep.py) holds no family here.
+        me._attunement_pass = no_attunement
         fams = {
             "Zug": {"leader": {"name": "Zug", "dungeon_runs_done": 0}, "names": ["Zug"]}
         }
