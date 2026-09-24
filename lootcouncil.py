@@ -16,6 +16,17 @@ share of the piece's worth that is new to them and the item levels over what
 they wear. The instructions give the council's rule in words: family first,
 then the biggest real upgrade for the role, then the guild's raiders.
 
+FIRST CALL. A raiding guild gears its main tank first on a tank's piece, and
+its healers first on a healer's piece (mod-overseer's LootCouncilPriority).
+Measured on the dev realm on 2026-09-24: Big Bad Pauldrons from Zul'Farrak,
+90% survival to a tank, went to the Retribution paladin at 40% new over the
+main tank at 36%, and Jev agreed at 0.47. Each candidate now carries
+`main_tank`, `role_piece` and `priority` (0 the main tank on a tank's piece,
+1 another tank on one, 2 a healer on a healer's piece, 3 everybody else), the
+options say so, and the instructions give the rule in words. A row written by
+an older module carries none of them, and every candidate reads as priority 3,
+which is the ranking it was written with.
+
 WHO ACTS. `loot_council` acts at 0.75, and an answer that agrees with the
 heuristic counts as Jev's at any confidence. 0.75 is guild_recipient's
 threshold, set from the same Choice probe (its clear calls answered 0.84 to
@@ -61,12 +72,25 @@ INSTRUCTIONS = (
     "way a thoughtful loot council would. `candidates` are the members it "
     "would upgrade, each with their class, talent specialization, role and "
     "how much of the item's worth is new to them over what they wear now. "
-    "The family's own members come first, then the guild's raiders. Among "
-    "them, give it to the one it improves most in the role they play: stats "
-    "that suit the class and specialization (a protection warrior values "
-    "stamina, defense, armor and block), and the biggest real upgrade. "
-    "Choose nobody only if it is not a real upgrade for anyone."
+    "The family's own members come first, then the guild's raiders. Like a "
+    "raiding guild, the council gears its main tank first: a certain upgrade "
+    "that is a tank's piece (mostly armor, stamina, defense and block) goes "
+    "to the main tank before anyone, then to another tank, even when someone "
+    "else would gain a bigger share. A certain upgrade that is a healer's "
+    "piece (spirit or mana regeneration) goes to a healer first. Otherwise, "
+    "give it to the one it improves most in the role they play: stats that "
+    "suit the class and specialization (a protection warrior values stamina, "
+    "defense, armor and block), and the biggest real upgrade. Choose nobody "
+    "only if it is not a real upgrade for anyone."
 )
+
+# LootCouncilPriority's tiers, as the module writes them.
+MAIN_TANK_CALL, TANK_CALL, HEALER_CALL, NO_CALL = 0, 1, 2, 3
+_CALL_WORDS = {
+    MAIN_TANK_CALL: "first call as the main tank on a tank's piece",
+    TANK_CALL: "first call as a tank on a tank's piece",
+    HEALER_CALL: "first call as a healer on a healer's piece",
+}
 
 
 def policy(environ=None) -> jev.Policy:
@@ -92,6 +116,9 @@ class Candidate:
     spec: str
     tank: bool
     why: str
+    main_tank: bool = False
+    role_piece: bool = False
+    priority: int = NO_CALL
 
     @property
     def upgrades(self) -> bool:
@@ -126,6 +153,12 @@ def _float(value) -> float:
         return 0.0
 
 
+def _priority(value) -> int:
+    """A LootCouncilPriority tier; anything else, or nothing, is no call."""
+    tier = _int(value, NO_CALL)
+    return tier if tier in (MAIN_TANK_CALL, TANK_CALL, HEALER_CALL) else NO_CALL
+
+
 def candidates_from_json(text) -> tuple:
     """The module's LootCandidatesJson, parsed; () for anything unreadable."""
     try:
@@ -151,6 +184,9 @@ def candidates_from_json(text) -> tuple:
                 spec=str(c.get("spec") or ""),
                 tank=bool(c.get("tank")),
                 why=str(c.get("why") or ""),
+                main_tank=bool(c.get("main_tank")),
+                role_piece=bool(c.get("role_piece")),
+                priority=_priority(c.get("priority")),
             )
         )
     return tuple(out)
@@ -179,13 +215,15 @@ def council_from_row(row: dict) -> Council | None:
 
 def offered(council: Council) -> tuple:
     """The candidates the question offers: every one the module scored as an
-    upgrade, family first, the way the module ranks them."""
+    upgrade, family first, the way the module ranks them (first call before
+    the size of the upgrade)."""
     return tuple(
         sorted(
             (c for c in council.candidates if c.upgrades),
             key=lambda c: (
                 not c.family,
                 c.comparison != "better",
+                c.priority,
                 -c.upgrade_percent,
                 c.name,
             ),
@@ -198,9 +236,14 @@ def option(c: Candidate) -> str:
     who = " ".join(p for p in (c.spec, c.class_name) if p) or "member"
     if c.role and c.role != UNKNOWN:
         who += ", playing " + c.role
-    if c.tank:
+    if c.main_tank:
+        who += " (the main tank)"
+    elif c.tank:
         who += " (a tank)"
     side = "in the family" if c.family else "a guild raider"
+    call = _CALL_WORDS.get(c.priority)
+    if call:
+        side += ", " + call
     if c.comparison == "better":
         size = "%d%% of its worth is new to them" % c.upgrade_percent
     else:
@@ -237,6 +280,9 @@ def question(council: Council, item: dict | None):
                 "talent_specialization": c.spec,
                 "role": c.role,
                 "tank": c.tank,
+                "main_tank": c.main_tank,
+                "a_piece_for_their_role": c.role_piece,
+                "first_call": _CALL_WORDS.get(c.priority, "none"),
                 "upgrade_percent_of_its_worth": c.upgrade_percent,
                 "item_levels_over_what_they_wear": c.item_level_gain,
                 "certain_upgrade": c.comparison == "better",
