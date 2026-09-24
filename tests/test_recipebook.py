@@ -440,6 +440,13 @@ class LearningWhatIsAlreadyCarried(unittest.TestCase):
     def test_an_empty_pass_is_not_an_error(self):
         self.assertEqual(recipebook.plan_learns([], SKILLS), ([], []))
 
+    def test_a_recipe_past_300_is_not_learned_by_a_375_holder(self):
+        # The classic ruleset: an Outland trainer's 375 cap is no licence.
+        held = self._held("Adept", 1, 22900, 171, 305, "Recipe: Elixir of Camouflage")
+        learns, skipped = recipebook.plan_learns([held], {"Adept": {171: 340}})
+        self.assertEqual(learns, [])
+        self.assertIn("past the classic ruleset's 300", skipped[0].why)
+
 
 class BuyingOneThatIsActuallyUsable(unittest.TestCase):
     def _houses(self, **kw):
@@ -457,6 +464,18 @@ class BuyingOneThatIsActuallyUsable(unittest.TestCase):
             [x.entry for x in recipebook.usable([GINGERBREAD], 7, SKILLS["Og"])],
             [17200],
         )
+
+    def test_a_recipe_past_300_is_never_bought(self):
+        outland = recipebook.Listing(
+            auction_id=1,
+            entry=22900,
+            label="Recipe: Elixir of Camouflage",
+            buyout=100,
+            house=2,
+            required_skill=171,
+            required_rank=305,
+        )
+        self.assertEqual(recipebook.usable([outland], 2, {171: 340}), [])
 
     def test_a_bid_only_listing_is_never_bought(self):
         """A bid buys nothing and DoAuction refuses one by name."""

@@ -280,6 +280,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+import classic
 import craft_rhythm
 import travel
 
@@ -393,8 +394,12 @@ def reachable_house(team: str, auctioneer_faction: int) -> int:
 def auctioneer_map_available(
     map_id: int | None, available_maps: set[int] | frozenset[int]
 ) -> bool:
-    """Whether an auctioneer trip can resolve on the leader's current map."""
-    if map_id is None:
+    """Whether an auctioneer trip can resolve on the leader's current map.
+
+    Never on Outland or Northrend: the classic ruleset sends nobody to an
+    auctioneer there, whatever the caller read as available.
+    """
+    if map_id is None or classic.is_expansion_map(map_id):
         return False
     return int(map_id) in {int(value) for value in available_maps}
 
@@ -627,6 +632,8 @@ def wanted(
     """
     needs = []
     for reagent in GATHERED.get(int(craft_spell or 0), ()):
+        if not classic.item_ok(reagent.entry):
+            continue  # an Outland or Northrend reagent: never bought
         short = short_of(
             reagent.per_cast,
             (carried or {}).get(reagent.entry, 0),

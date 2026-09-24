@@ -304,6 +304,18 @@ class OptionsTest(unittest.TestCase):
         self.assertIn("give:Og", self.offered("Pattern: Red Woolen Bag"))
         self.assertNotIn("give:Og", self.offered("Pattern: Icy Cloak"))
 
+    def test_nobody_is_named_for_a_recipe_past_300_or_an_outland_item(self):
+        # The classic ruleset: a 375 tailor could learn a 325 pattern, but Jev
+        # is not told of a taker the world does not allow.
+        tailor = clearance.Person(
+            name="Adept", skills={197: 340}, family=True, online=True
+        )
+        pattern = row(209, 21892, "Pattern: Bolt of Imbued Netherweave", 9, 1, 2)
+        template = {"required_skill": 197, "required_rank": 325}
+        self.assertEqual(jev_keep.users(pattern, template, [tailor], ()), [])
+        cloth = row(210, 21877, "Netherweave Cloth", 7, 20, 1)
+        self.assertEqual(jev_keep.users(cloth, {}, [tailor], ("tailoring",)), [])
+
     def test_the_heuristics_answer_is_always_offered(self):
         for j, _s, questions in asks():
             self.assertIn(j.heuristic, questions["route"]["criteria"], j.item_name)

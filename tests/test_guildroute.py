@@ -587,6 +587,22 @@ class HoldersWalkToAMailbox(unittest.TestCase):
         self.assertEqual(run.verb, gear.MAIL)
         self.assertEqual(run.command, "send item:4909901 subject:Destiny")
 
+    def test_a_holder_in_outland_or_northrend_is_not_walked(self):
+        # The classic ruleset: a guild bot standing on 530 or 571 is not
+        # walked to that map's mailbox, however near it is.
+        for map_id, land in ((530, "Outland"), (571, "Northrend")):
+            walker = _walker(
+                leader_of={},
+                roster=set(),
+                state={"map_id": map_id, "in_combat": 0},
+                spawn=_box(map_id=map_id),
+            )
+            self.assertEqual(self.plan(walker).runs, (), map_id)
+            self.assertEqual(
+                guildroute.cannot_walk(walker, "Avenah"),
+                "Avenah stands in %s, outside the classic world" % land,
+            )
+
     def test_a_roster_leader_is_not_walked_by_row(self):
         self.assertFalse(self.plan().runs[0].by_row)
 

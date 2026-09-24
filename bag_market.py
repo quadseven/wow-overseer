@@ -52,6 +52,7 @@ from dataclasses import dataclass, replace
 
 import auction
 import bag_pressure
+import classic
 from bag_upgrade import Bag, Member
 
 AUCTION = "auction"
@@ -211,6 +212,8 @@ def _offered(listing: Listing, who: _Shopper, taken: set, rule: Rule) -> bool:
     """Could this member buy this bag at all, price aside?"""
     if listing.slots - who.size < rule.min_gain or listing.price <= 0:
         return False
+    if not classic.item_ok(listing.entry):
+        return False  # an Outland or Northrend bag: outside the classic ruleset
     if listing.unique and listing.entry in who.owned:
         return False
     if listing.source == AUCTION:

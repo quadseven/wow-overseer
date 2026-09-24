@@ -68,6 +68,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 import auction
+import classic
 
 # ---------------------------------------------------------------------------
 # THE COMMAND GRAMMAR. Rendered rather than spelled at the call site, the same
@@ -291,6 +292,21 @@ def plan_learns(held, skills: dict, settled=None, seen=None):
                 )
             )
             continue
+        if not classic.skill_ok(item.required_rank):
+            skipped.append(
+                Skipped(
+                    item.holder,
+                    int(item.entry),
+                    item.label,
+                    "needs skill %d at %d, past the classic ruleset's %d"
+                    % (
+                        int(item.required_skill),
+                        int(item.required_rank),
+                        classic.MAX_PROFESSION_SKILL,
+                    ),
+                )
+            )
+            continue
         if not within_reach(item.required_skill, item.required_rank, mine):
             have = int(mine.get(int(item.required_skill), 0) or 0)
             skipped.append(
@@ -360,6 +376,7 @@ def usable(
         and int(listing.buyout) > 0
         and int(listing.buyout) <= int(cap)
         and within_reach(listing.required_skill, listing.required_rank, skills)
+        and classic.skill_ok(listing.required_rank)
         and int(listing.entry) not in settled
     ]
     return sorted(

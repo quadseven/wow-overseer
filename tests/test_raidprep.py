@@ -106,6 +106,11 @@ class PlanAgreesWithReadiness(unittest.TestCase):
         names = [p for _, p, _, _ in plan.profession_gaps]
         self.assertIn("alchemy", names)
 
+    def test_the_profession_target_is_the_classic_300(self):
+        fam = [member("Grog", wanted=(ALCHEMY,), holds=(ALCHEMY,))]
+        targets = {t for _, _, _, t in raidprep.plan(fam).profession_gaps}
+        self.assertEqual(targets, {300})
+
 
 class ReportAgrees(unittest.TestCase):
     def test_why_not_is_reported(self):

@@ -42,7 +42,7 @@ COPY core.py bridge.py voice.py transform.py \
      jev.py jev_items.py jev_choices.py jev_activity.py jev_keep.py jevview.py \
      bank.py \
      mailrun.py \
-     realm.py basepath.py watchwall.py realmnav.py \
+     realm.py basepath.py watchwall.py realmnav.py classic.py \
      needs.py partystatus.py lootcard.py lootstory.py towntrip.py \
      townslot.py tradechoice.py \
      enroll.py \

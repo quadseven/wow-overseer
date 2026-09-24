@@ -68,6 +68,7 @@ import json
 from dataclasses import dataclass, replace
 
 import bank
+import classic
 import clearance
 import goals
 import guildshare
@@ -374,7 +375,15 @@ def use_for(person, row: dict, template: dict, trades: tuple) -> str:
 
 def users(row: dict, template: dict, people, trades: tuple) -> list:
     """(person, why) for everyone but the holder who could use the item:
-    family first, then online guildmates, then the rest, by name."""
+    family first, then online guildmates, then the rest, by name.
+
+    Nobody, under the classic ruleset, for an Outland or Northrend item or a
+    recipe past skill 300: Jev is not told of a taker the world does not allow.
+    """
+    if not classic.item_ok(row.get("entry")) or not classic.skill_ok(
+        template.get("required_rank")
+    ):
+        return []
     found = []
     for person in people or ():
         if person.name == row.get("holder"):

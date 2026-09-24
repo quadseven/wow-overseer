@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import re
 
+import classic
 import recap
 
 # The continents a character can stand on. Anything else is an instance, and
@@ -481,8 +482,10 @@ def map_ids(catalogue_rows: list[dict], names: dict) -> list[int]:
     a dungeon whose loot was simply never asked for.
     """
     return sorted(
-        {int(row["map_id"]) for row in catalogue_rows}
+        map_id
+        for map_id in {int(row["map_id"]) for row in catalogue_rows}
         | {int(map_id) for map_id in names}
+        if not classic.outside_classic(map_id)
     )
 
 
@@ -521,6 +524,8 @@ def _catalogue(catalogue_rows: list[dict], names: dict) -> dict:
     best: dict = {}
     for map_id in names:
         map_id = int(map_id)
+        if classic.outside_classic(map_id):
+            continue  # an Outland or Northrend door: outside the classic ruleset
         best[map_id] = {
             "map_id": map_id,
             "difficulty": 0,
@@ -532,6 +537,8 @@ def _catalogue(catalogue_rows: list[dict], names: dict) -> dict:
         }
     for row in catalogue_rows:
         map_id = int(row["map_id"])
+        if classic.outside_classic(map_id):
+            continue
         difficulty = int(row.get("difficulty") or 0)
         # A row already taken from the access table wins over a later one at a
         # higher difficulty; a placeholder seeded from the site's list above

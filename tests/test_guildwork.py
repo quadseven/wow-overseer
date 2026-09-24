@@ -27,12 +27,12 @@ GOLD = guildwork.COPPER_PER_GOLD
 def walker(name, **over):
     base = dict(
         name=name,
-        map_id=530,
+        map_id=0,
         in_combat=False,
         unwalkable="",
         cohort="",
         yards=328.0,
-        aim="at:530:-248.1,1017.4,54.3",
+        aim="at:0:-8826.4,630.1,94.1",
         by_row=True,
     )
     base.update(over)
@@ -69,7 +69,7 @@ class TheLetter(unittest.TestCase):
             taker="Grug",
             guild="Cave",
             copper=250 * GOLD,
-            aim="at:530:1,2,3",
+            aim="at:0:1,2,3",
             yards=328.4,
         )
 
@@ -92,7 +92,7 @@ class TheLetter(unittest.TestCase):
     def test_the_log_line_names_who_where_how_much_and_to_whom(self):
         self.assertEqual(
             self.run.said,
-            "Goraraa (Cave) walks 328 yards to the mailbox at at:530:1,2,3 "
+            "Goraraa (Cave) walks 328 yards to the mailbox at at:0:1,2,3 "
             "to post 250g of dues to Grug",
         )
 
@@ -161,6 +161,21 @@ class ThePlan(unittest.TestCase):
         )
         self.assertEqual(plan.runs, ())
         self.assertIn("cannot walk one to a mailbox yet", plan.notes[0])
+
+    def test_a_member_in_outland_or_northrend_is_never_walked(self):
+        # Measured on dev: a Bonkers member was walked 341 yards to a mailbox
+        # on map 530. The classic ruleset leaves such a member where it is.
+        plan = self.plan(
+            [member("Zora", guild="Bonkers"), member("Frost", guild="Bonkers")],
+            walkers={
+                "Zora": walker("Zora", map_id=530, aim="at:530:-248.1,1017.4,54.3"),
+                "Frost": walker("Frost", map_id=571, aim="at:571:5804.1,624.7,647.8"),
+            },
+        )
+        self.assertEqual(plan.runs, ())
+        said = " | ".join(plan.notes)
+        self.assertIn("Zora stands in Outland, outside the classic world", said)
+        self.assertIn("Frost stands in Northrend, outside the classic world", said)
 
     def test_a_roster_leader_is_never_walked_by_the_row(self):
         plan = self.plan(

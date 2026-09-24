@@ -19,6 +19,8 @@ import re
 from dataclasses import dataclass
 from typing import Mapping
 
+import classic
+
 # Profession -> SkillLine id (3.3.5a conventions). acore_world.skillline_dbc
 # is EMPTY on this deployment (DBC data ships inside the client files), so
 # these ids were verified live against acore_characters.character_skills
@@ -50,11 +52,12 @@ SKILL_IDS = {
     "inscription": 773,
 }
 
-# 3.3.5a caps. Targets outside these bounds are not goals: the parser stays
-# conservative and lets the voice treat the text as ordinary words instead
-# of persisting something unreachable.
-MAX_LEVEL = 80
-MAX_SKILL = 450
+# The classic ruleset's caps (classic.py): level 60 and skill 300, not the
+# 3.3.5a client's 80 and 450. Targets outside these bounds are not goals: the
+# parser stays conservative and lets the voice treat the text as ordinary words
+# instead of persisting something this world will not allow.
+MAX_LEVEL = classic.MAX_LEVEL
+MAX_SKILL = classic.MAX_PROFESSION_SKILL
 
 # Level goals report every level; skill points come one at a time, so skill
 # goals report on crossing each step boundary instead of every point.

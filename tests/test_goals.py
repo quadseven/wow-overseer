@@ -32,6 +32,15 @@ class ParseLevelTest(unittest.TestCase):
     def test_hit_level(self):
         self.assertEqual(parse_goal("hit level 10"), Goal("level", 10))
 
+    def test_the_classic_caps_bound_a_goal(self):
+        # Level 60 and skill 300: the classic ruleset, not the client's 80/450.
+        self.assertEqual(parse_goal("reach level 60"), Goal("level", 60))
+        self.assertIsNone(parse_goal("reach level 70"))
+        self.assertEqual(
+            parse_goal("push mining up to 300"), Goal("skill", 300, "mining")
+        )
+        self.assertIsNone(parse_goal("push mining up to 375"))
+
     def test_get_to_level(self):
         self.assertEqual(parse_goal("get to level 12"), Goal("level", 12))
 
