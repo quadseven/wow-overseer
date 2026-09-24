@@ -4030,6 +4030,11 @@ class Bridge(discord.Client):
         # was last asked about that stack, so each is asked at most once per
         # JEV_ITEM_KEEP_INTERVAL_MINUTES. In memory: a restart asks again.
         self._jev_keep_asked: dict = {}
+        # WHAT JEV CHOSE TO BANK OR GIVE (#267): (holder, item guid) ->
+        # jev_keep.Order, carried out by the guild gift writer and the guild
+        # bank pass while the stack is still carried. In memory: a restart
+        # forgets them and the next answer decides again.
+        self._jev_keep_orders: dict = {}
         # THE DESIGNATED CRAFTERS (#248): per family, the recipe guids the
         # register routes to somebody, what was last logged, and which guild
         # crafters are on a mailbox walk right now.
@@ -4043,6 +4048,12 @@ class Bridge(discord.Client):
         # rules simply resume.
         self._activity_seen: dict = {}
         self._activity_interludes: dict = {}
+        # A break only this choice ever starts (job=fish, #267): per family,
+        # (when it ends, the activity, the names).
+        # Kept apart from the interlude, which any job pass may drop first.
+        self._activity_restore: dict = {}
+        # Per family, when Jev last sent it fishing, so the question can say.
+        self._activity_fished: dict = {}
         # family -> (the last "nothing to plan" line, when), so it is said
         # once and the facts are not re-read every cycle.
         self._planner_said: dict = {}
@@ -8166,6 +8177,8 @@ class Bridge(discord.Client):
         await self._route_lockboxes(names, locks)
         await self._route_clearance(names, leader, clear, free_slots,
                                     cohort=getattr(cohort, "key", None))
+        # AND WHAT JEV CHOSE TO GIVE (#267), through the same gift writer.
+        await self._jev_keep_give(names, rows)
 
         # AND SO DOES THE GEAR HAND-OFF, FOR THE SAME REASON AND ONE MORE
         # (infra#4198). It used to sit below the two returns beneath this
@@ -8839,7 +8852,10 @@ class Bridge(discord.Client):
             return
         for row in pending:
             self._jev_keep_asked[(str(row["holder"]), int(row["item_guid"]))] = now
-        routes = jev_keep.routes_from_plans(clear, locks)
+        # The destroy pass's own candidates are its answer too (#267).
+        routes = jev_keep.routes_from_plans(
+            clear, locks,
+            destroys=bag_pressure.destroy_candidates(rows, keep_names=OWNER_KEEPS))
 
         async def run() -> None:
             try:
@@ -8849,6 +8865,9 @@ class Bridge(discord.Client):
                 log.info("%s", jev_keep.summary(judgments, len(kept), limit,
                                                 interval))
                 await self._jev_record(judgments, ",".join(names))
+                for order in jev_keep.orders_from(judgments, time.monotonic()):
+                    self._jev_keep_orders[order.key] = order
+                    log.info("%s", order.said())
             except Exception:
                 # Named here, not only by _jev_task_done's generic line, so a
                 # failed item_keep pass says which pass and which family. Its
@@ -8899,6 +8918,50 @@ class Bridge(discord.Client):
             market=market, reagent_trades=REAGENT_TRADES, mode=rule.mode,
             takers=crafting.takers, register=crafting.register)
         return await jev_keep.shadow_pass(self._jev, asks, rule)
+
+    def _jev_keep_live(self, names: list, rows=None) -> list:
+        """This family's item_keep orders still worth carrying out (#267).
+
+        With this pass's carried `rows`, an order whose stack moved, changed
+        size or aged out is dropped and said once; without them (the guild
+        bank pass reads no rows) only the age is checked, and the world's
+        deposit verb refuses a stack that has gone.
+        """
+        now = time.monotonic()
+        if rows is None:
+            rows = [dict(holder=o.holder, item_guid=o.guid, count=o.count)
+                    for o in self._jev_keep_orders.values()]
+        live, dropped = jev_keep.live_orders(
+            self._jev_keep_orders, rows, now, names=set(names))
+        for order, why in dropped:
+            self._jev_keep_orders.pop(order.key, None)
+            log.info("jev-keep: dropped the order for %s's %s (%s): %s",
+                     order.holder, order.name, order.route, why)
+        return live
+
+    async def _jev_keep_give(self, names: list, rows: list) -> None:
+        """Hand over the stacks Jev chose to give, as the clearance does."""
+        if not self._jev_keep_orders:
+            return
+        gifts = jev_keep.gifts(self._jev_keep_live(names, rows))
+        if gifts:
+            log.info("jev-keep: handing over %d stack(s) Jev chose to give",
+                     len(gifts))
+            await self._write_guild_gifts(gifts)
+
+    def _jev_keep_deposits(self, names: list, setup, planned) -> list:
+        """The guild deposits Jev chose, within the guild bank's own gates."""
+        if not self._jev_keep_orders:
+            return []
+        storage = bank.storage_from({}, guild=setup)
+        moves, notes = jev_keep.deposits(
+            self._jev_keep_live(names), storage.guild_depositors,
+            storage.guild_free - len(planned), planned)
+        _log_capped("jev-keep", notes)
+        if moves:
+            log.info("jev-keep: %d stack(s) Jev chose ride the guild bank "
+                     "deposits", len(moves))
+        return moves
 
     def _jev_hold(self, ask, who: str) -> None:
         """Run one shadow question as a held task and record its answer."""
@@ -10027,6 +10090,8 @@ class Bridge(discord.Client):
         deposits = guildbank.plan_deposits(
             members, guild_has_tab=purchased_tabs > 0)
         items = (await asyncio.to_thread(_plan_bank, names)).guild
+        # AND WHAT JEV CHOSE TO BANK (#267), under the same gates.
+        items = tuple(items) + tuple(self._jev_keep_deposits(names, setup, items))
         if not actions and not deposits and not items:
             log.info("guild bank: nobody is carrying more than the float")
             return
@@ -12057,6 +12122,7 @@ class Bridge(discord.Client):
         reads = await asyncio.to_thread(
             _activity_reads, names, str(leader.get("name") or ""))
         done = leader.get("dungeon_runs_done")
+        runs = None if done is None else int(done)
         held = jev_activity.withheld(bool(rows), reads["free"])
         members = jev_activity.members_from_rows(
             names, reads["members"], reads["free"], reads["worn"],
@@ -12064,8 +12130,10 @@ class Bridge(discord.Client):
         can_gather, can_train = await self._activity_can(names, reads["free"], own)
         job = str(leader.get("job") or "").strip().lower()
         now = time.monotonic()
+        if await self._activity_restore_job(key, job, now):
+            return
         marks = jev_activity.Marks(
-            runs_done=None if done is None else int(done),
+            runs_done=runs,
             levels=tuple((m.name, m.level) for m in members),
             deaths=reads["deaths"], withheld=held, at_town=reads["at_town"])
         reason, since = self._activity_due(key, marks, job, now)
@@ -12079,10 +12147,10 @@ class Bridge(discord.Client):
             return
         facts = jev_activity.Facts(
             family=key or str(leader.get("name") or ""), members=members,
-            job=job, queue=campaignqueue.progress_line(
-                rows, None if done is None else int(done)),
+            job=job, queue=campaignqueue.progress_line(rows, runs),
             withheld=held, can_gather=can_gather, can_train=can_train,
-            minutes_on_activity=int((now - since) // 60), reason=reason)
+            minutes_on_activity=int((now - since) // 60), reason=reason,
+            minutes_since_fishing=self._activity_minutes_since_fishing(key, now))
         judgment = await jev_activity.ask(self._jev, facts, rule)
         self._activity_seen[key]["asked"] = now
         if judgment is None:
@@ -12114,9 +12182,11 @@ class Bridge(discord.Client):
         """
         seen = self._activity_seen.get(key) or {}
         since = seen["since"] if seen.get("job") == job else now
+        # EACH FAMILY ON ITS OWN CLOCK (#267), so the realm's families do not
+        # all change what they are doing on the same minute.
         reason = jev_activity.due(
             jev_activity.stopped_at(seen.get("marks"), marks), seen.get("asked"),
-            now, 60.0 * jev_activity.CADENCE_MINUTES)
+            now, jev_activity.cadence_seconds(key))
         self._activity_seen[key] = {"marks": marks, "asked": seen.get("asked"),
                                     "since": since, "job": job}
         return reason, since
@@ -12131,7 +12201,7 @@ class Bridge(discord.Client):
         """
         names = list(fam["names"])
         who = campaignqueue._family(key)
-        lease = jev_activity.interlude(activity, time.monotonic())
+        lease = jev_activity.interlude(activity, time.monotonic(), key)
         if lease is None:
             self._activity_interludes.pop(key, None)
             log.info("activity: %s: Jev chose the campaign; the queue drives it",
@@ -12154,9 +12224,66 @@ class Bridge(discord.Client):
                     log.exception("activity: job insert failed for %s (mode=%s)",
                                   name, want)
         await self._drive_activity(key, fam, activity, own)
-        log.info("activity: %s: Jev chose %s; job=%s for %d minutes, then "
-                 "today's rules resume", who, activity, want or job,
-                 jev_activity.LEASE_MINUTES[activity])
+        minutes = (lease.until - time.monotonic()) / 60.0
+        if activity in jev_activity.RESTORE:
+            self._activity_restore[key] = (lease.until, activity, names)
+        if activity == jev_activity.FISH:
+            self._activity_fished[key] = time.monotonic()
+        log.info("activity: %s: Jev chose %s; job=%s for %.0f minutes, then "
+                 "today's rules resume", who, activity, want or job, minutes)
+        await self._activity_emote(key, fam, activity)
+
+    def _activity_minutes_since_fishing(self, key: str, now: float):
+        """Minutes since Jev last sent this family fishing, or None."""
+        fished = self._activity_fished.get(key)
+        return None if fished is None else int((now - fished) // 60)
+
+    async def _activity_emote(self, key: str, fam: dict, activity: str) -> None:
+        """The leader says what the family does next, as a player would (#267).
+
+        One text emote in the world's own emote channel, only when Jev has
+        changed the activity. Flavor: a failed write is logged and nothing
+        else changes.
+        """
+        leader = str(fam["leader"].get("name") or "")
+        text = jev_activity.emote(activity, key, time.monotonic())
+        if not leader or not text:
+            return
+        try:
+            await asyncio.to_thread(_insert_speak, relay.SpeakCommand(
+                leader, "emote", text, "", jev_activity.SOURCE))
+            log.info("activity: %s emotes: %s", leader, text)
+        except Exception:
+            log.exception("activity: the %s emote for %s was not written",
+                          activity, leader)
+
+    async def _activity_restore_job(self, key: str, job: str, now: float) -> bool:
+        """Put a family back on the default job when its fishing break ends.
+
+        Nothing else writes job=fish, so without this a family Jev sent
+        fishing would fish until somebody changed the job by hand. Only while
+        the leader is still on the job the break set: a queue or a person that
+        has moved the family on since wins. True when it wrote the jobs, so
+        the caller asks again next cycle rather than on a stale read.
+        """
+        held = self._activity_restore.get(key)
+        if held is None or now < held[0]:
+            return False
+        _until, activity, names = held
+        self._activity_restore.pop(key, None)
+        if job != jev_activity.JOB[activity]:
+            return False
+        back = jev_activity.RESTORE[activity]
+        for name in names:
+            try:
+                await asyncio.to_thread(_insert_job, name, back,
+                                        jev_activity.SOURCE)
+            except Exception:
+                log.exception("activity: job insert failed for %s (mode=%s)",
+                              name, back)
+        log.info("activity: %s's %s break is over; job=%s again",
+                 campaignqueue._family(key), activity, back)
+        return True
 
     async def _goal_thought(self, row: dict, action) -> None:
         await asyncio.to_thread(

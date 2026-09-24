@@ -71,7 +71,7 @@ class PolicyTest(unittest.TestCase):
         self.assertEqual(rules[jev_items.KIND_DISPOSITION].threshold, 0.80)
         self.assertTrue(rules[jev_items.KIND_DISPOSITION].on_agreement)
         guild = jev_items.guild_policy({})
-        self.assertEqual((guild.mode, guild.threshold), (jev.ACT, 0.80))
+        self.assertEqual((guild.mode, guild.threshold), (jev.ACT, 0.75))
 
     def test_the_environment_overrides_each_kind(self):
         env = {"JEV_MODE_WEAPON_CHOICE": "shadow", "JEV_THRESHOLD_WEAPON_CHOICE": "0.9"}
@@ -302,12 +302,12 @@ class DispositionActTest(unittest.TestCase):
 # WHO IN THE GUILD GAINS MOST (#184)
 
 
-class FakeScores:
-    """A transport answering each Score question from `scores[name]`, found
-    by the candidate's name in the question's instructions."""
+class FakePick:
+    """A transport answering the guild Choice with `pick` at `confidence`,
+    or its first option when `pick` is None."""
 
-    def __init__(self, scores, confidence=0.9):
-        self.scores = scores
+    def __init__(self, pick=None, confidence=0.9):
+        self.pick = pick
         self.confidence = confidence
         self.requests = []
 
@@ -316,23 +316,21 @@ class FakeScores:
         self.requests.append(request)
         answers = {}
         for qid, question in request["questions"].items():
-            name = next(
-                n for n in self.scores if "is %s," % n in question["instructions"]
-            )
-            value = self.scores[name]
-            levels = [str(n) for n in range(len(question["criteria"]))]
+            options = list(question["criteria"])
+            pick = self.pick if self.pick in options else options[0]
+            rest = 0.1 / max(1, len(options) - 1)
             answers[qid] = {
-                "type": "score",
-                "score": value,
-                "probabilities": {k: (1.0 if int(k) == value else 0.0) for k in levels},
+                "type": "choice",
+                "choice": pick,
+                "probabilities": {o: (0.9 if o == pick else rest) for o in options},
                 "confidence": self.confidence,
             }
         return 200, json.dumps({"model": "jev-1.13.0", "answers": answers}).encode()
 
 
-def ranked(name, gain, family=False):
+def ranked(name, gain, family=False, sure=True):
     return gear.Ranked(
-        name=name, gain=gain, family=family, fills_weakest=False, sure=True, reason="r"
+        name=name, gain=gain, family=family, fills_weakest=False, sure=sure, reason="r"
     )
 
 
@@ -365,34 +363,86 @@ def route(taker, gain, alternates=()):
     )
 
 
-def guild_pass(scores, confidence=0.9, routes=None, key="k"):
+def guild_pass(pick, confidence=0.9, routes=None, key="k", ranking=None, closet=None):
     grants = (
         routes
         if routes is not None
         else (route("Grug", 27, alternates=(route("Grog", 5),)),)
     )
-    ranking = (ranked("Grug", 27, True), ranked("Grog", 5, True))
+    ranking = ranking or (ranked("Grug", 27, True), ranked("Grog", 5, True))
     asks = jev_items.recipient_asks([DESTINY], [], grants, lambda h, c: ranking)
-    fake = FakeScores(scores, confidence)
+    fake = FakePick(pick, confidence)
     client = jev.Client(key, transport=fake)
     judgments = asyncio.run(
-        jev_items.recipient_pass(client, asks, lambda e: CARDS.get(e), {}, jev.ACT)
+        jev_items.recipient_pass(
+            client, asks, lambda e: CARDS.get(e), closet or {}, jev.ACT
+        )
     )
     return gear.Plan(grants=tuple(grants)), judgments, fake
 
 
 class GuildRecipientTest(unittest.TestCase):
-    def test_one_request_per_item_one_score_per_candidate(self):
-        _plan, [judgment], fake = guild_pass({"Grug": 1, "Grog": 3})
+    def test_one_request_per_item_one_choice_over_the_candidates(self):
+        """#267: a Score per candidate recorded a confidence about the score's
+        rounding, not the pick. One Choice's confidence is about the pick."""
+        _plan, [judgment], fake = guild_pass("Grog")
         [request] = fake.requests
-        self.assertEqual(sorted(request["questions"]), ["c0", "c1"])
-        self.assertEqual({q["type"] for q in request["questions"].values()}, {"score"})
+        [(qid, question)] = request["questions"].items()
+        self.assertEqual((qid, question["type"]), ("to", "choice"))
+        self.assertEqual(list(question["criteria"]), ["Grug", "Grog"])
         self.assertEqual(len(request["state"]["candidates"]), 2)
         self.assertEqual((judgment.heuristic, judgment.jev), ("Grug", "Grog"))
-        self.assertEqual(judgment.probabilities, {"Grug": 1 / 3, "Grog": 1.0})
+        self.assertEqual(judgment.confidence, 0.9)
+        self.assertAlmostEqual(judgment.probabilities["Grog"], 0.9)
+
+    def test_each_option_names_the_role_what_it_replaces_and_the_gain(self):
+        closet = {
+            "Grug": jev_items.Wardrobe(
+                "Grug",
+                1,
+                60,
+                "Protection",
+                {15: {"name": "Honed Stiletto", "item_level": 30}},
+            )
+        }
+        _plan, _j, fake = guild_pass("Grug", closet=closet)
+        criteria = fake.requests[0]["questions"]["to"]["criteria"]
+        self.assertIn("level 60 Protection Warrior", criteria["Grug"])
+        self.assertIn("Honed Stiletto (item level 30)", criteria["Grug"])
+        self.assertIn("+27 item levels", criteria["Grug"])
+        self.assertIn("+5 item levels", criteria["Grog"])
+
+    def test_a_long_ranking_is_cut_to_the_best_and_keeps_the_taker(self):
+        many = tuple(ranked("M%s" % chr(97 + n), 40 - n) for n in range(10))
+        grants = (route("Mj", 31),)
+        _plan, _j, fake = guild_pass("Ma", routes=grants, ranking=many)
+        offered = list(fake.requests[0]["questions"]["to"]["criteria"])
+        self.assertEqual(len(offered), jev_items.MAX_RECIPIENTS + 1)
+        self.assertEqual(offered[:3], ["Ma", "Mb", "Mc"])
+        self.assertEqual(offered[-1], "Mj")
+
+    def test_routed_items_are_asked_before_unmoved_ones(self):
+        other = gear.Holding(
+            holder="Aaron",
+            guid=1,
+            entry=647,
+            name="Destiny",
+            quality=4,
+            item_level=57,
+            required_level=52,
+            allowable_class=-1,
+            inventory_type=17,
+            item_class=2,
+        )
+        ranking = (ranked("Grug", 27, True),)
+        asks = jev_items.recipient_asks(
+            [other, DESTINY], [], (route("Grug", 27),), lambda h, c: ranking
+        )
+        self.assertEqual([a.holding.holder for a in asks], ["Avenah", "Aaron"])
+        self.assertEqual(asks[1].heuristic, jev_items.NOBODY)
 
     def test_a_sure_pick_among_the_routes_receivers_leads_the_route(self):
-        plan, judgments, _ = guild_pass({"Grug": 1, "Grog": 3}, confidence=0.9)
+        plan, judgments, _ = guild_pass("Grog", confidence=0.8)
         out, [marked] = jev_items.reroute(plan, judgments, jev_items.guild_policy({}))
         self.assertEqual(marked.acted, jev.JEV)
         [first] = out.grants
@@ -401,40 +451,34 @@ class GuildRecipientTest(unittest.TestCase):
         self.assertEqual(first.command, "guid:4909901")
 
     def test_an_unsure_pick_leaves_the_ranking(self):
-        plan, judgments, _ = guild_pass({"Grug": 1, "Grog": 3}, confidence=0.7)
+        plan, judgments, _ = guild_pass("Grog", confidence=0.7)
         out, [marked] = jev_items.reroute(plan, judgments, jev_items.guild_policy({}))
         self.assertEqual(marked.acted, jev.HEURISTIC)
         self.assertEqual(out.grants[0].taker, "Grug")
 
     def test_a_pick_outside_the_routes_receivers_never_moves_it(self):
         """Grog is ranked but under the clear gain, so not on the route."""
-        plan, judgments, _ = guild_pass(
-            {"Grug": 1, "Grog": 3}, routes=(route("Grug", 27),)
-        )
+        plan, judgments, _ = guild_pass("Grog", routes=(route("Grug", 27),))
         out, [marked] = jev_items.reroute(plan, judgments, jev_items.guild_policy({}))
         self.assertEqual(marked.acted, jev.HEURISTIC)
         self.assertEqual(out, plan)
 
-    def test_a_tie_at_the_top_is_no_pick(self):
-        _plan, [judgment], _ = guild_pass({"Grug": 2, "Grog": 2})
-        self.assertEqual(judgment.jev, jev_items.NOBODY)
-
     def test_an_item_the_ranking_does_not_move_is_asked_and_never_moved(self):
-        plan, [judgment], _ = guild_pass({"Grug": 1, "Grog": 3}, routes=())
+        plan, [judgment], _ = guild_pass("Grog", routes=())
         self.assertEqual(judgment.heuristic, jev_items.NOBODY)
         out, [marked] = jev_items.reroute(plan, [judgment], jev_items.guild_policy({}))
         self.assertEqual(out.grants, ())
         self.assertEqual(marked.acted, jev.HEURISTIC)
 
     def test_no_key_leaves_every_route(self):
-        plan, judgments, fake = guild_pass({"Grug": 1, "Grog": 3}, key="")
+        plan, judgments, fake = guild_pass("Grog", key="")
         self.assertEqual(fake.requests, [])
         out, [marked] = jev_items.reroute(plan, judgments, jev_items.guild_policy({}))
         self.assertEqual(out, plan)
         self.assertEqual((marked.status, marked.acted), (jev.NO_KEY, jev.HEURISTIC))
 
     def test_off_asks_nothing(self):
-        client = jev.Client("k", transport=FakeScores({}))
+        client = jev.Client("k", transport=FakePick())
         self.assertEqual(
             asyncio.run(
                 jev_items.recipient_pass(client, [object()], None, {}, jev.OFF)

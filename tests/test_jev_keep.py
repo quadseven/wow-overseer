@@ -1,4 +1,4 @@
-"""Jev asked about protected non-gear items, in shadow (#232).
+"""Jev asked about protected non-gear items (#232), acting on bank and give (#267).
 
 THE FIXTURE is the priest measured on 2026-09-23: level 60, 30 bag slots, 0
 free, carrying 48 uncut gems, 8 recipes for trades she does not have, 3
@@ -12,6 +12,8 @@ import asyncio
 import pathlib
 import unittest
 
+import bag_pressure
+import bank
 import clearance
 import jev
 import jev_keep
@@ -172,7 +174,11 @@ def routes():
         lockbox.Picker(n, CLASSES[n][0], SKILLS[n].get(LOCKPICKING, 0), FREE[n])
         for n in NAMES
     ]
-    return jev_keep.routes_from_plans(clear, lockbox.plan(boxes, pickers, 3))
+    return jev_keep.routes_from_plans(
+        clear,
+        lockbox.plan(boxes, pickers, 3),
+        destroys=bag_pressure.destroy_candidates(ROWS),
+    )
 
 
 def asks(rows=None, market=None, mode=jev.SHADOW):
@@ -188,6 +194,19 @@ def asks(rows=None, market=None, mode=jev.SHADOW):
     )
 
 
+# Two stacks the protection keeps that Jev may act on (#267). Linen Cloth is
+# tailoring stock Ugga does not work and Og does; Star Wood is jewelcrafting
+# stock nobody in the family works.
+STAR_WOOD = 9901
+LINEN = row(
+    801, 2589, "Linen Cloth", 7, 20, 1, 13, reagent=True, profession_needed=True
+)
+STAR = row(802, STAR_WOOD, "Star Wood", 7, 5, 1, 25, reagent=True)
+TEMPLATES[2589] = dict(bonding=0, stackable=20)
+TEMPLATES[STAR_WOOD] = dict(bonding=0, stackable=20)
+REAGENT_TRADES[STAR_WOOD] = ("jewelcrafting",)
+
+
 def by_name(pending):
     return {j.item_name: (j, state, q) for j, state, q in pending}
 
@@ -195,7 +214,9 @@ def by_name(pending):
 def run(fake, key="k", environ=None, rows=None):
     client = jev.Client(key, transport=fake)
     rule = jev_keep.policy(environ or {})
-    return asyncio.run(jev_keep.shadow_pass(client, asks(rows, mode=rule.mode), rule))
+    return asyncio.run(
+        jev_keep.shadow_pass(client, asks(rows, mode=rule.mode), rule, environ or {})
+    )
 
 
 class WhichStacksTest(unittest.TestCase):
@@ -236,13 +257,23 @@ class HeuristicTest(unittest.TestCase):
         # Bork picks every box at Lockpicking 250.
         for box in BOXES:
             self.assertEqual(answers[box["name"]], "give:Bork")
-        # Her own alchemy stock, and quest leftovers, stay.
+        # Her own alchemy stock, and the quest item an open quest needs, stay.
         self.assertEqual(answers["Empty Vial"], jev_keep.KEEP)
         self.assertEqual(answers["Silverleaf"], jev_keep.KEEP)
-        self.assertEqual(answers["Candle of Beckoning"], jev_keep.KEEP)
+        self.assertEqual(answers["Flayed Demon Skin"], jev_keep.KEEP)
         self.assertIn(
-            "no vendor pays for it", pending["Candle of Beckoning"][0].heuristic_why
+            "an open quest needs it", pending["Flayed Demon Skin"][0].heuristic_why
         )
+
+    def test_the_destroy_pass_takes_the_released_quest_leftovers(self):
+        """#267: the destroy pass (#243) queues these, so the heuristic's
+        answer is destroy, not keep. Recorded as keep, every confident destroy
+        Jev gave on the dev realm read as a disagreement."""
+        pending = by_name(asks())
+        for stale in STALE_QUEST:
+            j = pending[stale["name"]][0]
+            self.assertEqual(j.heuristic, jev_keep.DESTROY, stale["name"])
+            self.assertIn("destroy pass", j.heuristic_why)
 
     def test_a_stack_no_plan_routes_is_kept_with_its_protection(self):
         answer, why = jev_keep.heuristic(STOCK[1], {})
@@ -325,10 +356,13 @@ class FactsTest(unittest.TestCase):
             self.assertIn('"free_bag_slots":0', j.facts)
 
 
+SHADOW = {"JEV_MODE_ITEM_KEEP": "shadow"}
+
+
 class ShadowTest(unittest.TestCase):
-    def test_every_stack_gets_a_shadow_judgment_and_the_heuristic_acts(self):
+    def test_in_shadow_every_stack_is_judged_and_the_heuristic_acts(self):
         fake = FakeJev(picks={"route": jev_keep.DESTROY}, confidence=0.99)
-        judgments = run(fake)
+        judgments = run(fake, environ=SHADOW)
         self.assertEqual(len(judgments), len(UGGA))
         self.assertEqual(len(fake.requests), len(UGGA))
         for j in judgments:
@@ -336,22 +370,7 @@ class ShadowTest(unittest.TestCase):
             self.assertEqual(j.mode, jev.SHADOW)
             self.assertEqual(j.jev, jev_keep.DESTROY)
             self.assertEqual(j.acted, jev.HEURISTIC)
-            self.assertFalse(j.agree)
             self.assertIn("kind=item_keep", j.line())
-
-    def test_act_is_refused_until_a_route_can_act(self):
-        environ = {"JEV_MODE_ITEM_KEEP": "act", "JEV_THRESHOLD_ITEM_KEEP": "0.5"}
-        with self.assertLogs("wow-overseer.jev", "WARNING") as said:
-            rule = jev_keep.policy(environ)
-        self.assertEqual(rule.mode, jev.SHADOW)
-        self.assertEqual(rule.threshold, 0.5)
-        self.assertIn("no act path is built for item_keep", said.output[0])
-        judgments = run(FakeJev(confidence=0.99), environ=environ)
-        self.assertTrue(all(j.acted == jev.HEURISTIC for j in judgments))
-
-    def test_the_default_is_shadow_at_the_default_threshold(self):
-        rule = jev_keep.policy({})
-        self.assertEqual((rule.mode, rule.threshold), (jev.SHADOW, 0.85))
 
     def test_off_asks_nothing(self):
         fake = FakeJev()
@@ -370,7 +389,144 @@ class ShadowTest(unittest.TestCase):
         self.assertEqual(
             line,
             "jev-keep: asked 2 of 27 protected non-gear stack(s), 2 answered, "
-            "2 agree, 0 differ (limit 8, every 180 min)",
+            "2 agree, 0 differ, 0 carried out as Jev's (limit 8, every 180 min)",
+        )
+
+
+def judged(rows, pick, confidence, environ=None):
+    """Each stack in `rows` judged with Jev answering `pick`."""
+    return {
+        j.item_name: j
+        for j in run(
+            FakeJev(picks={"route": pick}, confidence=confidence),
+            environ=environ,
+            rows=rows,
+        )
+    }
+
+
+class ActTest(unittest.TestCase):
+    """#267: bank and give act; sell and destroy never do."""
+
+    def test_the_default_is_act_with_a_floor_per_route(self):
+        rule = jev_keep.policy({})
+        self.assertEqual(rule.mode, jev.ACT)
+        self.assertEqual(jev_keep.route_rule(rule, jev_keep.BANK).threshold, 0.6)
+        self.assertEqual(jev_keep.route_rule(rule, "give:Og").threshold, 0.6)
+        self.assertEqual(jev_keep.route_rule(rule, jev_keep.SELL).threshold, 0.85)
+
+    def test_each_route_floor_is_its_own_switch(self):
+        env = {"JEV_THRESHOLD_ITEM_KEEP_BANK": "0.9"}
+        rule = jev_keep.policy(env)
+        self.assertEqual(jev_keep.route_rule(rule, "bank", env).threshold, 0.9)
+        self.assertEqual(jev_keep.route_rule(rule, "give:Og", env).threshold, 0.6)
+        [j] = judged([STAR], jev_keep.BANK, 0.7, env).values()
+        self.assertEqual(j.acted, jev.HEURISTIC)
+
+    def test_stock_nobody_in_the_family_works_is_banked(self):
+        [j] = judged([STAR], jev_keep.BANK, 0.62).values()
+        self.assertEqual((j.heuristic, j.jev, j.acted), ("keep", "bank", jev.JEV))
+
+    def test_below_the_floor_the_protection_keeps_it(self):
+        [j] = judged([STAR], jev_keep.BANK, 0.59).values()
+        self.assertEqual(j.acted, jev.HEURISTIC)
+
+    def test_stock_a_family_member_works_is_never_banked_but_may_be_given(self):
+        [bank_j] = judged([LINEN], jev_keep.BANK, 0.95).values()
+        self.assertEqual(bank_j.acted, jev.HEURISTIC)
+        [give_j] = judged([LINEN], "give:Og", 0.7).values()
+        self.assertEqual((give_j.jev, give_j.acted), ("give:Og", jev.JEV))
+
+    def test_the_holders_own_trade_stock_is_never_banked(self):
+        """Ugga works alchemy, so her vials stay whatever Jev says."""
+        for j in judged(STOCK, jev_keep.BANK, 0.99).values():
+            self.assertEqual(j.acted, jev.HEURISTIC, j.item_name)
+
+    def test_ugga_loses_nothing_irreversible_and_no_plan_is_overridden(self):
+        """The fixture the issue named: at 0.99, Jev's destroy and sell never
+        act, an open quest's item stays, and the lockboxes' and recipes' own
+        plans are never replaced by a bank."""
+        for pick in (jev_keep.DESTROY, jev_keep.SELL, jev_keep.BANK):
+            for j in judged(None, pick, 0.99).values():
+                self.assertNotEqual(j.acted, jev.JEV, (pick, j.item_name))
+
+    def test_an_act_becomes_an_order_and_nothing_else_does(self):
+        judgments = list(judged([STAR, LINEN], jev_keep.BANK, 0.7).values())
+        [order] = jev_keep.orders_from(judgments, now=5.0)
+        self.assertEqual(
+            (order.holder, order.guid, order.route, order.count, order.at),
+            ("Ugga", 802, jev_keep.BANK, 5, 5.0),
+        )
+        self.assertEqual(
+            order.said(),
+            "jev-keep: acting on Ugga's 5 Star Wood: bank to the guild bank "
+            "(conf 0.70)",
+        )
+
+
+def order(guid=802, route=jev_keep.BANK, taker="", count=5, at=0.0, holder="Ugga"):
+    return jev_keep.Order(
+        holder=holder,
+        guid=guid,
+        entry=STAR_WOOD,
+        name="Star Wood",
+        count=count,
+        route=route,
+        taker=taker,
+        confidence=0.7,
+        at=at,
+    )
+
+
+class OrderTest(unittest.TestCase):
+    def test_an_order_lives_only_while_its_stack_is_carried_unchanged(self):
+        orders = {
+            ("Ugga", 802): order(),
+            ("Ugga", 803): order(guid=803),
+            ("Ugga", 804): order(guid=804),
+            ("Ugga", 805): order(guid=805, at=-4000.0),
+            ("Og", 806): order(guid=806, holder="Og"),
+        }
+        rows = [
+            dict(holder="Ugga", item_guid=802, count=5),
+            dict(holder="Ugga", item_guid=804, count=2),
+            dict(holder="Ugga", item_guid=805, count=5),
+            dict(holder="Og", item_guid=806, count=5),
+        ]
+        live, dropped = jev_keep.live_orders(orders, rows, 60.0, names={"Ugga"})
+        self.assertEqual([o.guid for o in live], [802])
+        self.assertEqual(
+            sorted((o.guid, why) for o, why in dropped),
+            [
+                (803, "no longer carried (done, or moved on)"),
+                (804, "the stack changed size"),
+                (805, "older than 60 minutes"),
+            ],
+        )
+
+    def test_a_give_order_is_a_guild_gift(self):
+        [gift] = jev_keep.gifts([order(route=jev_keep.GIVE, taker="Og"), order()])
+        self.assertEqual((gift.holder, gift.taker, gift.guid), ("Ugga", "Og", 802))
+        self.assertEqual(gift.count, 5)
+
+    def test_a_bank_order_is_a_guild_deposit_within_the_bank_passs_gates(self):
+        planned = (bank.Move("Ugga", bank.DEPOSIT, 803, "x", 1, "keeper", bank.GUILD),)
+        orders = [
+            order(),
+            order(guid=803),
+            order(guid=804),
+            order(guid=805, holder="Og"),
+        ]
+        moves, notes = jev_keep.deposits(orders, {"Ugga"}, 1, planned)
+        [move] = moves
+        self.assertEqual((move.character, move.guid, move.to), ("Ugga", 802, "guild"))
+        self.assertEqual(bank.command(move), "bank deposit-item guid:802")
+        self.assertEqual(
+            notes,
+            [
+                "the guild bank's tab is full; Star Wood stays",
+                "Og's rank cannot deposit Star Wood",
+            ],
         )
 
 
@@ -454,8 +610,12 @@ class ViewTest(unittest.TestCase):
 
 class BridgeTest(unittest.TestCase):
     def body(self, name):
-        fn = BRIDGE[BRIDGE.index("    def %s(" % name) :]
-        return fn[: fn.index("\n    def ", 10)]
+        at = BRIDGE.find("    def %s(" % name)
+        if at < 0:
+            at = BRIDGE.index("    async def %s(" % name)
+        fn = BRIDGE[at:]
+        ends = [fn.find(m, 10) for m in ("\n    def ", "\n    async def ")]
+        return fn[: min(e for e in ends if e > 0)]
 
     def test_the_protection_pass_asks_after_its_plans_and_before_the_hand_offs(self):
         at = BRIDGE.index("self._jev_keep_shadow(names, leader, rows, clear, locks")
@@ -469,6 +629,27 @@ class BridgeTest(unittest.TestCase):
         self.assertIn("jev_keep.knobs(os.environ)", body)
         self.assertIn("jev_keep.due(", body)
         self.assertIn("self._jev_record(judgments", body)
+
+    def test_the_destroy_pass_is_read_as_the_heuristics_answer(self):
+        body = self.body("_jev_keep_shadow")
+        self.assertIn("destroys=bag_pressure.destroy_candidates(rows", body)
+
+    def test_an_act_is_kept_as_an_order_and_said(self):
+        body = self.body("_jev_keep_shadow")
+        self.assertIn("jev_keep.orders_from(judgments", body)
+        self.assertIn("self._jev_keep_orders[order.key] = order", body)
+
+    def test_gives_ride_the_guild_gift_writer_after_the_clearance(self):
+        at = BRIDGE.index("await self._jev_keep_give(names, rows)")
+        self.assertLess(BRIDGE.index("await self._route_clearance(names, leader"), at)
+        self.assertIn("self._write_guild_gifts(gifts)", self.body("_jev_keep_give"))
+
+    def test_banks_ride_the_guild_bank_items_before_its_walk_is_decided(self):
+        body = self.body("_guild_bank_once")
+        at = body.index("self._jev_keep_deposits(names, setup, items)")
+        self.assertLess(body.index("_plan_bank, names)).guild"), at)
+        self.assertLess(at, body.index("if not actions and not deposits and not items"))
+        self.assertLess(at, body.index("_fetch_positions, sorted({leader}"))
 
     def test_the_judgments_carry_their_facts_to_the_record(self):
         insert = BRIDGE[BRIDGE.index("def _insert_jev_judgment(") :]

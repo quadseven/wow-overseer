@@ -122,6 +122,10 @@ class TheSelf:
     async def _follow_dues_walk(self, run, row_id):
         return None
 
+    def _jev_keep_deposits(self, names, setup, planned):
+        """What Jev chose to bank (#267): nothing, in this world."""
+        return []
+
     def _mail_walk_task_done(self, task):
         return None
 

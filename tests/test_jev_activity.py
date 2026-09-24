@@ -30,6 +30,8 @@ BRIDGE = (HERE / "bridge.py").read_text(encoding="utf-8")
 SERVER = (HERE / "map_server.py").read_text(encoding="utf-8")
 
 ROOMY = {"Zug": 20, "Oz": 20, "Uzza": 20, "Zork": 20, "Zrog": 20}
+# Room to loot, and too little to go fishing with (jev_activity.can_fish).
+SNUG = {"Zug": 7, "Oz": 8, "Uzza": 9, "Zork": 7, "Zrog": 8}
 HORDE = (
     ("Zug", 20, 0),
     ("Oz", 19, 5),
@@ -77,6 +79,87 @@ class Slow:
         return 200, b"{}"
 
 
+class HumanTouches(unittest.TestCase):
+    """#267: a player unwinds by fishing, the realm's families do not all
+    turn on the same minute, and a leader says what the family does next."""
+
+    def test_fishing_is_offered_with_room_in_every_bag(self):
+        roomy = ja.options(facts(queue="", job="quest", members=members(free=ROOMY)))
+        self.assertEqual([ja.QUEST, ja.FISH], list(roomy))
+        self.assertEqual("fish", ja.JOB[ja.FISH])
+        self.assertIn("fish", jobs.IMPLEMENTED)
+
+    def test_fishing_is_never_offered_to_a_full_bag_or_a_withheld_run(self):
+        snug = ja.options(facts(queue="", job="quest", members=members(free=SNUG)))
+        self.assertNotIn(ja.FISH, snug)
+        held = ja.options(facts(withheld=True, members=members(free=ROOMY)))
+        self.assertNotIn(ja.FISH, held)
+        unknown = members(free=ROOMY)[:4] + (
+            ja.Member(name="Zrog", level=17, free_slots=None),
+        )
+        self.assertNotIn(ja.FISH, ja.options(facts(members=unknown)))
+
+    def test_jev_can_choose_fishing_and_the_family_goes(self):
+        fake = FakeJev(picks={"activity": ja.FISH}, confidence=0.8)
+        j = ask(facts(queue="", job="quest", members=members(free=ROOMY)), fake)
+        self.assertEqual(ja.FISH, j.carried_out)
+        state = fake.requests[0]["state"]
+        self.assertEqual(
+            "not this session", state["minutes_since_the_family_last_fished"]
+        )
+
+    def test_only_fishing_is_put_back_on_the_default_job(self):
+        self.assertEqual({ja.FISH: jobs.DEFAULT}, ja.RESTORE)
+
+    def test_each_family_has_its_own_cadence_within_the_spread(self):
+        keys = ["alliance", "horde", "Zug", "Grug", "Og", "Ugga"]
+        cadences = {k: ja.cadence_seconds(k) for k in keys}
+        low = 60 * ja.CADENCE_MINUTES * (1 - ja.SPREAD)
+        high = 60 * ja.CADENCE_MINUTES * (1 + ja.SPREAD)
+        for k, c in cadences.items():
+            self.assertTrue(low <= c <= high, (k, c))
+            self.assertEqual(c, ja.cadence_seconds(k))
+        self.assertGreater(len({round(c) for c in cadences.values()}), 3)
+
+    def test_interludes_vary_in_length(self):
+        lengths = {
+            round(ja.lease_minutes(ja.QUEST, "Zug", 60.0 * n), 2) for n in range(12)
+        }
+        self.assertGreater(len(lengths), 3)
+
+    def test_every_activity_but_the_campaign_has_an_emote(self):
+        self.assertEqual("", ja.emote(ja.CAMPAIGN, "Zug", 0.0))
+        for activity in ja.ACTIVITIES:
+            if activity == ja.CAMPAIGN:
+                continue
+            said = {ja.emote(activity, "Zug", 60.0 * n) for n in range(20)}
+            self.assertEqual(set(ja.EMOTES[activity]), said, activity)
+            for line in said:
+                self.assertTrue(line.isascii() and line.endswith("."), line)
+                self.assertNotIn("\u2014", line)
+
+    def test_the_bridge_uses_the_family_cadence_and_speaks_the_emote(self):
+        due = BRIDGE[BRIDGE.index("    def _activity_due(") :]
+        due = due[: due.index("\n    async def ")]
+        self.assertIn("jev_activity.cadence_seconds(key)", due)
+        self.assertNotIn("jev_activity.CADENCE_MINUTES)", due)
+        carry = BRIDGE[BRIDGE.index("    async def _carry_out_activity(") :]
+        carry = carry[: carry.index("\n    async def ", 10)]
+        self.assertIn("jev_activity.interlude(activity, time.monotonic(), key)", carry)
+        self.assertIn("await self._activity_emote(key, fam, activity)", carry)
+        emote = BRIDGE[BRIDGE.index("    async def _activity_emote(") :]
+        emote = emote[: emote.index("\n    async def ", 10)]
+        self.assertIn("jev_activity.emote(", emote)
+        self.assertIn('"emote"', emote)
+
+    def test_the_bridge_ends_a_fishing_break(self):
+        body = BRIDGE[BRIDGE.index("    async def _activity_restore_job(") :]
+        body = body[: body.index("\n    async def ", 10)]
+        self.assertIn("jev_activity.RESTORE", body)
+        self.assertIn("_insert_job", body)
+        self.assertIn("activity: %s's %s break is over", body)
+
+
 class TheChoiceSet(unittest.TestCase):
     def test_a_withheld_run_offers_selling_and_never_the_campaign(self):
         offered = ja.options(facts(withheld=True))
@@ -89,7 +172,7 @@ class TheChoiceSet(unittest.TestCase):
         self.assertIn("Ragefire Chasm 12 of 50", offered[ja.CAMPAIGN])
 
     def test_each_option_needs_its_executor(self):
-        plain = ja.options(facts(queue="", job="quest", members=members(free=ROOMY)))
+        plain = ja.options(facts(queue="", job="quest", members=members(free=SNUG)))
         self.assertEqual([ja.QUEST], list(plain))
         rich = ja.options(
             facts(
@@ -106,7 +189,7 @@ class TheChoiceSet(unittest.TestCase):
         """Rest has no drive (jobs.IMPLEMENTED); a queue edit is not a choice."""
         self.assertNotIn("rest", jobs.IMPLEMENTED)
         self.assertEqual(
-            (ja.CAMPAIGN, ja.QUEST, ja.GATHER, ja.CRAFT, ja.SELL, ja.TRAIN),
+            (ja.CAMPAIGN, ja.QUEST, ja.GATHER, ja.CRAFT, ja.SELL, ja.TRAIN, ja.FISH),
             ja.ACTIVITIES,
         )
         for activity, job in ja.JOB.items():
@@ -239,7 +322,7 @@ class JevChooses(unittest.TestCase):
     def test_nothing_to_choose_asks_nothing(self):
         fake = FakeJev()
         self.assertIsNone(
-            ask(facts(queue="", job="quest", members=members(free=ROOMY)), fake)
+            ask(facts(queue="", job="quest", members=members(free=SNUG)), fake)
         )
         self.assertEqual([], fake.requests)
 
@@ -262,9 +345,16 @@ class JevChooses(unittest.TestCase):
 
     def test_the_lease_is_bounded_and_the_campaign_has_none(self):
         self.assertIsNone(ja.interlude(ja.CAMPAIGN, 0.0))
-        lease = ja.interlude(ja.SELL, 100.0)
-        self.assertTrue(lease.live(100.0 + 60 * ja.LEASE_MINUTES[ja.SELL] - 1))
-        self.assertFalse(lease.live(100.0 + 60 * ja.LEASE_MINUTES[ja.SELL]))
+        lease = ja.interlude(ja.SELL, 100.0, "Zug")
+        minutes = ja.lease_minutes(ja.SELL, "Zug", 100.0)
+        self.assertTrue(lease.live(100.0 + 60 * minutes - 1))
+        self.assertFalse(lease.live(100.0 + 60 * minutes))
+        low, high = 1 - ja.SPREAD, 1 + ja.SPREAD
+        self.assertTrue(
+            low * ja.LEASE_MINUTES[ja.SELL]
+            <= minutes
+            <= high * ja.LEASE_MINUTES[ja.SELL]
+        )
         for activity in ja.ACTIVITIES:
             if activity != ja.CAMPAIGN:
                 self.assertLessEqual(ja.LEASE_MINUTES[activity], 30, activity)
@@ -339,6 +429,7 @@ class FakeFamily:
         self.jobs = []
         self.records = []
         self.calls = []
+        self.speak = []
         self.runs = []  # what successive _mid_run calls answer; empty is False
 
     def reads(self, names, leader):
@@ -375,6 +466,8 @@ def _bridge(world, fake_jev, holds=None):
         "_activity_reads": world.reads,
         "_insert_job": world.insert_job,
         "_insert_jev_judgment": world.records.append,
+        "_insert_speak": world.speak.append,
+        "relay": __import__("relay"),
     }
     names = [
         "_activity_holds",
@@ -383,6 +476,9 @@ def _bridge(world, fake_jev, holds=None):
         "_activity_due",
         "_carry_out_activity",
         "_drive_activity",
+        "_activity_emote",
+        "_activity_restore_job",
+        "_activity_minutes_since_fishing",
     ]
     module = ast.Module(body=[_function(n) for n in names], type_ignores=[])
     exec(compile(module, "bridge.py", "exec"), ns)  # noqa: S102 - bridge.py's own source
@@ -400,6 +496,8 @@ def _bridge(world, fake_jev, holds=None):
     me._jev = jev.Client("k", transport=fake_jev)
     me._activity_seen = {}
     me._activity_interludes = {}
+    me._activity_restore = {}
+    me._activity_fished = {}
     me._activity_own_key = None
     me._mid_run = mid_run
     for name in (
@@ -454,6 +552,52 @@ class TheBridgeCarriesItOut(unittest.TestCase):
         )
         self.assertEqual(ja.SELL, me._activity_holds("Zug"))
         self.assertTrue(any("Jev chose sell" in line for line in log.lines), log.lines)
+
+    def test_a_carried_out_choice_is_announced_by_the_leader(self):
+        world = FakeFamily({"Zug": 0, "Oz": 9, "Uzza": 9, "Zork": 9, "Zrog": 9})
+        _me, log = self.run_pass(
+            world, FakeJev(picks={"activity": ja.SELL}, confidence=0.8)
+        )
+        [said] = world.speak
+        self.assertEqual((said.target_name, said.channel), ("Zug", "emote"))
+        self.assertIn(said.text, ja.EMOTES[ja.SELL])
+        self.assertEqual(ja.SOURCE, said.source)
+        self.assertTrue(
+            any(line.startswith("activity: Zug emotes: ") for line in log.lines),
+            log.lines,
+        )
+
+    def test_a_fishing_break_ends_on_the_default_job(self):
+        world = FakeFamily({n: 20 for n, _, _ in HORDE}, job="quest")
+        me, log = _bridge(world, FakeJev(picks={"activity": ja.FISH}, confidence=0.8))
+        fam = _family()
+        fam["leader"]["job"] = "quest"
+        asyncio.run(me._activity_for("Zug", fam, [], False, ja.policy({})))
+        self.assertEqual({(n, "fish", ja.SOURCE) for n, _, _ in HORDE}, set(world.jobs))
+        self.assertIn("Zug", me._activity_fished)
+        # The break runs out while the leader is still fishing.
+        held = me._activity_restore["Zug"]
+        self.assertEqual(ja.FISH, held[1])
+        me._activity_restore["Zug"] = (0.0,) + tuple(held[1:])
+        world.jobs.clear()
+        fam["leader"]["job"] = "fish"
+        asyncio.run(me._activity_for("Zug", fam, [], False, ja.policy({})))
+        self.assertEqual(
+            {(n, "quest", ja.SOURCE) for n, _, _ in HORDE}, set(world.jobs)
+        )
+        self.assertNotIn("Zug", me._activity_restore)
+        self.assertTrue(
+            any("fish break is over; job=quest again" in line for line in log.lines),
+            log.lines,
+        )
+
+    def test_a_family_moved_on_since_is_not_put_back(self):
+        world = FakeFamily({n: 20 for n, _, _ in HORDE})
+        me, _log = _bridge(world, FakeJev(picks={"activity": ja.CAMPAIGN}))
+        me._activity_restore["Zug"] = (0.0, ja.FISH, ["Zug"])
+        asyncio.run(me._activity_for("Zug", _family(), _rows(), False, ja.policy({})))
+        self.assertEqual([], world.jobs)
+        self.assertEqual({}, me._activity_restore)
 
     def test_no_answer_writes_nothing_and_still_records(self):
         world = FakeFamily({"Zug": 0, "Oz": 9, "Uzza": 9, "Zork": 9, "Zrog": 9})
