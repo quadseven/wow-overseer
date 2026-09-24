@@ -139,6 +139,7 @@ class TheFarWalksWaitInTown(unittest.TestCase):
                 _assign("GATHER_CLAIMANT"),
                 _assign("FLIGHT_CLAIMANT"),
                 _assign("LEVEL_CLAIMANT"),
+                _assign("ATTUNE_CLAIMANT"),
             },
             set(townslot.AWAY_CLAIMANTS),
         )

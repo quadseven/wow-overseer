@@ -311,11 +311,12 @@ CAMPAIGN_STOP_EVERY_SECONDS = 1800.0
 
 # THE WALKS THAT LEAVE TOWN, which wait while the family's campaign waits in
 # town for bag room (mod-overseer#659). The bridge's own claimant names:
-# bridge.GATHER_CLAIMANT, FLIGHT_CLAIMANT and LEVEL_CLAIMANT. A gathering
-# field, a flight master to learn and a leveling hub are each a walk out of
-# town, and a family waiting on a vendor meets there instead of scattering;
-# the vendor, bank, mail, auction and trainer passes keep their turns.
-AWAY_CLAIMANTS = frozenset({"gather", "flight", "level"})
+# bridge.GATHER_CLAIMANT, FLIGHT_CLAIMANT, LEVEL_CLAIMANT and ATTUNE_CLAIMANT.
+# A gathering field, a flight master to learn, a leveling hub and Lothos
+# Riftwaker (attunestep.py) are each a walk out of town, and a family waiting
+# on a vendor meets there instead of scattering; the vendor, bank, mail,
+# auction and trainer passes keep their turns.
+AWAY_CLAIMANTS = frozenset({"gather", "flight", "level", "attunement"})
 
 
 def is_town_stop(claimant: str, distance: float | None) -> bool:

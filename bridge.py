@@ -43,6 +43,7 @@ import events
 import fanout
 import flightlearn
 import goals
+import attunestep
 import bonds
 import campaignplan
 import campaignqueue
@@ -548,6 +549,11 @@ FLIGHT_CLAIMANT = "flight"
 # distance, so it is held to that pass's lease: a lease and not an exemption,
 # for infra#3703's reason.
 LEVEL_CLAIMANT = "level"
+
+# THE SAME, FOR THE ATTUNEMENT WALK: the leader walked to Lothos Riftwaker on
+# Blackrock Mountain (attunestep.py), across the Eastern Kingdoms, so it is
+# held to the flight pass's lease too. attunestep.CLAIMANT is the same word.
+ATTUNE_CLAIMANT = "attunement"
 
 # How often the leveling pass looks, and how long a leveling choice stands
 # before Jev is asked again on unchanged facts. A level, a new option or a
@@ -2439,6 +2445,63 @@ def _fetch_queue_roster() -> list:
     log.warning("queue: overseer_roster has no campaign columns on this realm, "
                 "so no queue can advance (mod-overseer#302)")
     return []
+
+
+def _attunement_facts(family: str, leader: str, names: list, job: str,
+                      mid_run: bool, due: bool) -> attunestep.Facts:
+    """Everything attunestep.step reads, on one connection; no judgement here."""
+    holes = ", ".join(["%s"] * len(names))
+    quests = attunestep.quest_list()
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(attunestep.MEMBERS_SQL.format(holes=holes), tuple(names))  # noqa: S608 - placeholders only
+        member_rows = [dict(r) for r in cur.fetchall()]
+        try:
+            cur.execute(attunestep.SNAPSHOT_SQL.format(holes=holes), tuple(names))  # noqa: S608 - placeholders only
+            snapshot_rows = [dict(r) for r in cur.fetchall()]
+        except pymysql.err.MySQLError as exc:
+            if not (exc.args and exc.args[0] in (1054, 1146)):
+                raise
+            snapshot_rows = []
+        cur.execute(attunestep.REWARDED_SQL.format(holes=holes, quests=quests),  # noqa: S608 - placeholders and ids only
+                    tuple(names))
+        rewarded_rows = [dict(r) for r in cur.fetchall()]
+        cur.execute(attunestep.LOG_SQL.format(holes=holes, quests=quests),  # noqa: S608 - placeholders and ids only
+                    tuple(names))
+        log_rows = [dict(r) for r in cur.fetchall()]
+        cur.execute(attunestep.QUEST_SQL.format(quests=quests))  # noqa: S608 - ids only
+        quest_rows = [dict(r) for r in cur.fetchall()]
+        cur.execute(attunestep.SPAWN_SQL, (attunestep.LOTHOS,))
+        spawn_rows = [dict(r) for r in cur.fetchall()]
+        try:
+            cur.execute(attunestep.RECENT_SQL,
+                        (attunestep.SOURCE, attunestep.ROW_RETRY_SECONDS))
+            recent_rows = [dict(r) for r in cur.fetchall()]
+        except pymysql.err.MySQLError as exc:
+            if not (exc.args and exc.args[0] in (1054, 1146)):
+                raise
+            recent_rows = []
+    return attunestep.facts_from_rows(
+        family, leader, names, member_rows, snapshot_rows, rewarded_rows,
+        log_rows, quest_rows, spawn_rows, recent_rows,
+        job=job, mid_run=mid_run, due=due)
+
+
+def _insert_attunement_row(name: str, command: str) -> int:
+    """One kind='quest' row (quadseven/mod-overseer#678). 0 when the realm's
+    overseer_command has no 'quest' kind yet: its 2026_09_24_04 migration is
+    not applied, and strict mode refuses the value with 1265."""
+    with _connect() as conn, conn.cursor() as cur:
+        try:
+            cur.execute(attunestep.INSERT_SQL, (name, command, attunestep.SOURCE))
+        except pymysql.err.MySQLError as exc:
+            if exc.args and exc.args[0] == 1265:
+                log.warning(
+                    "attunement: overseer_command.kind has no 'quest' value - "
+                    "%s for %s needs mod-overseer's "
+                    "2026_09_24_04_overseer_quest.sql applied", command, name)
+                return 0
+            raise
+        return cur.lastrowid or 0
 
 
 def _queue_level_rows(family: dict) -> list:
@@ -4482,6 +4545,7 @@ class Bridge(discord.Client):
                 GATHER_CLAIMANT: TOWN_SLOT_GATHER_LEASE_SECONDS,
                 FLIGHT_CLAIMANT: TOWN_SLOT_FLIGHT_LEASE_SECONDS,
                 LEVEL_CLAIMANT: TOWN_SLOT_FLIGHT_LEASE_SECONDS,
+                ATTUNE_CLAIMANT: TOWN_SLOT_FLIGHT_LEASE_SECONDS,
             },
         )
         # WHICH NODE HAS BEEN ASKED FOR, HOW OFTEN, AND WITH WHAT MASK BEHIND
@@ -4584,6 +4648,10 @@ class Bridge(discord.Client):
         # family -> (the last "nothing to plan" line, when), so it is said
         # once and the facts are not re-read every cycle.
         self._planner_said: dict = {}
+        # The attunement step (attunestep.py): the line last said per family,
+        # and when the current stretch of holding its planner began.
+        self._attune_said: dict = {}
+        self._attune_since: dict = {}
         self._activity_own_key = None
         # THE MOVEMENT PICTURE (situation.py): each roster member's recent
         # positions, sampled by _situation_loop on its own clock because no
@@ -6271,6 +6339,7 @@ class Bridge(discord.Client):
                     GATHER_CLAIMANT: TOWN_SLOT_GATHER_LEASE_SECONDS,
                     FLIGHT_CLAIMANT: TOWN_SLOT_FLIGHT_LEASE_SECONDS,
                     LEVEL_CLAIMANT: TOWN_SLOT_FLIGHT_LEASE_SECONDS,
+                    ATTUNE_CLAIMANT: TOWN_SLOT_FLIGHT_LEASE_SECONDS,
                 },
             )
             self._cohort_town_slots[key] = slot
@@ -13051,11 +13120,18 @@ class Bridge(discord.Client):
 
         True when any family's queue was written, so the pass re-reads it.
         One family's failure never costs another its plan.
+
+        THE ATTUNEMENT FIRST: a capped family on the Eastern Kingdoms whose
+        queue has run out walks to Lothos Riftwaker for Attunement to the Core
+        (attunestep.py), and a family on that walk is not planned for.
         """
+        held = await self._attunement_pass(pending, fams)
         if not campaignplan.enabled():
             return False
         wrote = False
         for key, fam in sorted(fams.items()):
+            if key in held:
+                continue
             try:
                 wrote = await self._plan_campaign(key, fam,
                                                   pending.get(key, [])) or wrote
@@ -13114,6 +13190,78 @@ class Bridge(discord.Client):
             chosen, due.reason,
             "Jev" if chosen is not pick else "the heuristic"))
         return bool(written)
+
+    # --- the Molten Core attunement (attunestep.py) ---------------------------
+
+    async def _attunement_pass(self, pending: dict, fams: dict) -> set:
+        """Walk each family that needs it to Lothos Riftwaker; the keys whose
+        planner waits for that walk. One family's failure costs no other."""
+        if not attunestep.enabled():
+            return set()
+        own = await asyncio.to_thread(_cohort_of, bonds.head_of_family())
+        held = set()
+        for key, fam in sorted(fams.items()):
+            try:
+                if await self._attunement_for(key, fam, pending.get(key, []),
+                                              key == (own or "")):
+                    held.add(key)
+            except Exception:
+                log.exception("attunement: the step for %s failed; its planner "
+                              "is not held and it is tried again next cycle",
+                              campaignqueue._family(key))
+        return held
+
+    async def _attunement_for(self, key: str, fam: dict, rows: list,
+                              own: bool) -> bool:
+        """One family's attunement step, carried out. True holds its planner.
+
+        attunestep decides; this reads the rows, writes kind='quest' rows for
+        members standing at Lothos, and asks the town slot for the leader's
+        walk, the way every other pass that moves the family does.
+        """
+        who = campaignqueue._family(key)
+        names = list(fam["names"])
+        leader = str(fam["leader"].get("name") or "")
+        if not names or not leader:
+            return False
+        level_rows = await asyncio.to_thread(_queue_level_rows, fam)
+        due = bool(campaignplan.due(rows, fam["leader"], level_rows).reason)
+        mid = await self._mid_run(names) if due else False
+        facts = await asyncio.to_thread(
+            _attunement_facts, key, leader, names,
+            str(fam["leader"].get("job") or ""), mid, due)
+        step = attunestep.step(facts)
+        now = time.monotonic()
+        if step.hold_planner:
+            since = self._attune_since.setdefault(key, now)
+            if now - since > attunestep.HOLD_LIMIT_SECONDS:
+                line = ("gave the planner back after %d minutes without "
+                        "finishing: %s" % (int((now - since) // 60), step.line))
+                if self._attune_said.get(key) != line:
+                    log.warning("attunement: %s: %s", who, line)
+                self._attune_said[key] = line
+                return False
+        else:
+            self._attune_since.pop(key, None)
+        if self._attune_said.get(key) != step.line:
+            log.info("attunement: %s: %s", who, step.line)
+        self._attune_said[key] = step.line
+        for name, command in step.rows:
+            written = await asyncio.to_thread(_insert_attunement_row, name, command)
+            if written:
+                log.info("attunement: %s: wrote %s for %s (command %d)", who,
+                         command, name, written)
+        if step.aim:
+            await self._claim_town_slot(ATTUNE_CLAIMANT, leader,
+                                        attunestep.AIM,
+                                        cohort=None if own else key)
+        if step.release:
+            released = await asyncio.to_thread(_release_trade_errand, leader,
+                                               attunestep.AIM)
+            if released:
+                log.info("attunement: %s: %s stands at Lothos Riftwaker, so the "
+                         "walk is handed back", who, leader)
+        return step.hold_planner
 
     async def _campaign_owns_travel(self, pending: dict, fams: dict) -> None:
         """Give a staging campaign its leader's travel column (#227).

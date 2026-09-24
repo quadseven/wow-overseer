@@ -194,24 +194,27 @@ NOT_TAKEN = "not taken"
 IN_LOG_STATUSES = frozenset({1, 3})
 
 STEPS = (
-    "Send the family to Lothos Riftwaker: a travel order for the head to "
-    "creature %d; the family follows. Each member takes Attunement to the Core "
-    "from him in person (the Alliance quest cannot be shared)." % LOTHOS,
+    "The attunement step (attunestep.py) walks the family to Lothos "
+    "Riftwaker, creature %d, once every member is at level 55 or more, all "
+    "are on the Eastern Kingdoms and the family's queued runs are done; the "
+    "planner waits for the walk. Each member standing at him takes Attunement "
+    "to the Core in person through a kind='quest' row (the Alliance quest "
+    "cannot be shared)." % LOTHOS,
     "Queue the family into Blackrock Depths: queue <family>: blackrock depths "
     "1. The Core Fragment chest stands beside the Molten Bridge in the back "
     "half of the dungeon, past the Lyceum; it opens only for a member holding "
     "the quest, one fragment each.",
-    "Walk back to Lothos and hand the fragment in. The Raid tab shows each "
+    "With a fragment carried, the attunement step walks the family back to "
+    "Lothos and each member hands it in the same way. The Raid tab shows each "
     "member move from not taken to in the quest log to fragment held to "
     "attuned, read from the realm.",
 )
 
 STEPS_UNPROVEN = (
-    "Not yet seen on this realm: whether every follower takes the quest at "
-    "Lothos when the head does, whether the dungeon brain's route passes close "
-    "enough to the chest for each member to loot it, and whether the hand-in "
-    "happens without a turn-in errand. Each is read back from the realm rather "
-    "than assumed."
+    "Not yet seen on this realm: whether every follower stands within twelve "
+    "yards of Lothos when the head arrives, and whether the dungeon brain's "
+    "route passes close enough to the chest for each member to loot it. Each "
+    "is read back from the realm rather than assumed."
 )
 
 
