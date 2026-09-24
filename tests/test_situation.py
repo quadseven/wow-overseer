@@ -627,6 +627,20 @@ class Vision(unittest.TestCase):
         self.assertEqual("", vision.vision_url({}))
         self.assertFalse(vision.Seer.from_env({}).on)
 
+    def test_only_http_urls_and_no_redirects(self):
+        self.assertFalse(
+            vision.Seer(
+                frame_url="file:///etc/passwd", vision_url="http://v/api/chat"
+            ).on
+        )
+        self.assertFalse(vision.Seer(vision_url="gopher://v/api/chat").on)
+        self.assertTrue(vision.Seer(vision_url="http://v/api/chat").on)
+        with self.assertRaises(ValueError):
+            vision._http("file:///etc/passwd", None, 1.0)
+        self.assertIsNone(
+            vision._NoRedirect().redirect_request(None, None, 302, "", {}, "http://x")
+        )
+
     def test_heads_are_the_streamed_characters_and_unset_is_nobody(self):
         self.assertEqual(frozenset(), vision.heads({}))
         self.assertEqual(

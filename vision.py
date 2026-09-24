@@ -38,6 +38,7 @@ import logging
 import os
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from dataclasses import dataclass
 
@@ -189,14 +190,36 @@ class Look:
         return dict(self.fields, seconds_old=max(0, age), source=SOURCE)
 
 
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """A redirect is answered as the 3xx it is, never followed: the two URLs
+    here are the operator's, and a hop to anywhere else is not one of them."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):  # noqa: PLR0913 - the stdlib's signature
+        return None
+
+
+_OPENER = urllib.request.build_opener(_NoRedirect)
+
+
+def plain_http(url: str) -> bool:
+    """Only http and https are ever opened (no file:, ftp: or custom scheme)."""
+    return urllib.parse.urlsplit(str(url or "")).scheme in ("http", "https")
+
+
 def _http(url: str, body: bytes | None, timeout: float) -> tuple:
-    """GET (body None) or POST JSON; (status, bytes). Runs in a thread."""
+    """GET (body None) or POST JSON; (status, bytes). Runs in a thread.
+
+    Only an http(s) URL reaches here (`Seer` turns itself off on any other
+    scheme), and a redirect is returned as its status rather than followed.
+    """
+    if not plain_http(url):
+        raise ValueError("refusing a non-http URL")
     headers = {"Content-Type": "application/json"} if body is not None else {}
-    request = urllib.request.Request(  # noqa: S310 - operator-configured in-cluster URLs
+    request = urllib.request.Request(  # noqa: S310 - scheme checked above
         url, data=body, headers=headers, method="POST" if body is not None else "GET"
     )
     try:
-        with urllib.request.urlopen(request, timeout=timeout) as response:  # noqa: S310 - operator-configured in-cluster URLs
+        with _OPENER.open(request, timeout=timeout) as response:
             return response.status, response.read()
     except urllib.error.HTTPError as exc:
         try:
@@ -243,6 +266,9 @@ class Seer:
         self.timeout = max(1.0, float(timeout))
         self.every = float(every)
         self.on = bool(on) and bool(vision_url)
+        if self.on and not (plain_http(vision_url) and plain_http(frame_url)):
+            log.warning("vision: VISION_URL and VISION_FRAME_URL must be http(s); off")
+            self.on = False
         self._transport = transport or _http
         self._clock = clock
         self._last: dict = {}
@@ -300,7 +326,9 @@ class Seer:
     def _look_now(self, name: str, now: float) -> Look:
         sep = "&" if "?" in self.frame_url else "?"
         status, raw = self._transport(
-            "%s%sname=%s&meta=1" % (self.frame_url, sep, name), None, self.timeout
+            "%s%sname=%s&meta=1" % (self.frame_url, sep, urllib.parse.quote(name)),
+            None,
+            self.timeout,
         )
         if status != 200:
             return Look(name, NO_FRAME, now)
@@ -314,7 +342,9 @@ class Seer:
         if int(age) > FRESH_SECONDS:
             return Look(name, STALE, now, frame_age=int(age))
         status, jpeg = self._transport(
-            "%s%sname=%s" % (self.frame_url, sep, name), None, self.timeout
+            "%s%sname=%s" % (self.frame_url, sep, urllib.parse.quote(name)),
+            None,
+            self.timeout,
         )
         if status != 200 or not jpeg:
             return Look(name, NO_FRAME, now)
