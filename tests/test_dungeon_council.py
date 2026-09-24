@@ -647,5 +647,62 @@ class TheBridgeHandsTheCouncilTheLeadersMap(unittest.TestCase):
         self.assertIn('"map_id": m.map_id, "lead": m.lead}', source)
 
 
+class AModuleThatBoardsOpensTheOtherContinentsDoors(unittest.TestCase):
+    """mod-overseer#671: once the running module reports `crossing = boards`,
+    a dungeon door on the other continent is one the family can be sent to.
+    With no such report every such door is refused exactly as before."""
+
+    def setUp(self):
+        crossing.note_module_crossing("")
+        self.members, self.rows = _family(60, ALLIANCE_RACE, KALIMDOR)
+
+    def tearDown(self):
+        crossing.note_module_crossing("")
+
+    def test_without_the_report_blackrock_depths_is_refused(self):
+        self.assertIn("with no way across yet",
+                      council.door_refusal("blackrock-depths", self.rows))
+
+    def test_with_the_report_blackrock_depths_is_allowed(self):
+        self.assertTrue(crossing.note_module_crossing("boards"))
+        self.assertEqual("", council.door_refusal("blackrock-depths", self.rows))
+        self.assertEqual("", council.door_refusal("lower-blackrock-spire", self.rows))
+
+    def test_the_report_opens_nothing_the_other_rules_close(self):
+        crossing.note_module_crossing("boards")
+        self.assertIn("withheld", council.door_refusal("stratholme-live", self.rows))
+        _, low = _family(20, ALLIANCE_RACE, KALIMDOR)
+        self.assertIn("wants", council.door_refusal("blackrock-depths", low))
+
+    def test_any_other_value_is_not_a_crossing(self):
+        for value in ("", None, "refuses", "board", "BOARDS "):
+            crossing.note_module_crossing(value)
+            with self.subTest(value=value):
+                self.assertEqual(value is not None and str(value).strip().lower() == "boards",
+                                 crossing.module_boards())
+
+    def test_only_a_dungeon_door_leans_on_it(self):
+        """The module crosses inside a dungeon run and nowhere else, so every
+        other caller (the leveling route) still reads the crossing as blocked."""
+        crossing.note_module_crossing("boards")
+        self.assertFalse(crossing.dungeon_door_blocked())
+        self.assertIsNotNone(crossing.first_blocked_leg())
+
+    def test_saying_the_same_thing_twice_is_not_a_change(self):
+        self.assertTrue(crossing.note_module_crossing("boards"))
+        self.assertFalse(crossing.note_module_crossing("boards"))
+        self.assertTrue(crossing.note_module_crossing(""))
+
+
+class TheBridgeReadsTheModulesReport(unittest.TestCase):
+    def test_the_queue_pass_reads_the_build_fact_before_judging_a_door(self):
+        source = (Path(__file__).resolve().parent.parent / "bridge.py").read_text()
+        self.assertIn("SELECT value FROM overseer_build WHERE name = 'crossing'", source)
+        once = source[source.index("async def _campaign_queue_once"):]
+        once = once[:once.index("async def ", 10)]
+        self.assertLess(once.index("_fetch_module_crossing"),
+                        once.index("_plan_campaigns"))
+
+
 if __name__ == "__main__":
     unittest.main()

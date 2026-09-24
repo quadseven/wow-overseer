@@ -876,8 +876,10 @@ def _home_continent(level_rows: list[dict]) -> int | None:
 
 
 def _no_crossing() -> bool:
-    """True while crossing.py says a continent crossing cannot be made."""
-    return crossing.first_blocked_leg() is not None
+    """True while no crossing to a dungeon door on the other continent can be
+    made: crossing.py cannot drive one and the module does not report that it
+    boards transports itself (mod-overseer#671)."""
+    return crossing.dungeon_door_blocked()
 
 
 def _inside_capital() -> dict:

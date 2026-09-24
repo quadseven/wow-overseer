@@ -445,6 +445,45 @@ def first_blocked_leg(available: Iterable[str] = OBSERVABLE) -> Leg | None:
     return None
 
 
+# WHAT THE MODULE SAYS IT CAN DO ACROSS AN OCEAN (mod-overseer#671).
+#
+# Everything above is about a crossing THIS process would drive, and it still
+# refuses: nothing it can read says who is aboard. Since mod-overseer#671 the
+# worldserver drives one itself, inside a dungeon run: its coordinator walks
+# the leader to a surveyed berth, steps the family onto the docked transport,
+# and walks them off at the far landing. It reports that in `overseer_build`
+# as `crossing = boards`. A realm with no such row runs a module that refuses
+# every crossing, and reads exactly as before.
+#
+# ONLY A DUNGEON DOOR MAY LEAN ON IT. The module crosses for a dungeon run and
+# nothing else: every other aim is an `at:` point the module refuses across a
+# map. So `dungeon_door_blocked` is what the council asks about a door, and
+# `first_blocked_leg` stays what every other caller asks.
+MODULE_BOARDS = "boards"
+
+_module_crossing = ""
+
+
+def note_module_crossing(value: str | None) -> bool:
+    """Record the module's `crossing` build fact. True when it changed."""
+    seen = str(value or "").strip().lower()
+    global _module_crossing
+    changed = seen != _module_crossing
+    _module_crossing = seen
+    return changed
+
+
+def module_boards() -> bool:
+    """True when the running module reports it boards transports itself."""
+    return _module_crossing == MODULE_BOARDS
+
+
+def dungeon_door_blocked() -> bool:
+    """True while no crossing to a dungeon door on the other continent can be
+    made: neither this process nor the module can make one."""
+    return not module_boards() and first_blocked_leg() is not None
+
+
 def decide(
     crossing: Crossing,
     rows: Iterable[Mapping[str, object]] | None,
