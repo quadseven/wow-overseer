@@ -54,6 +54,7 @@ import guildshare
 import guildroute
 import guildwork
 import guildcorps
+import healerspec
 import holdings
 import handover
 import craft
@@ -11652,13 +11653,46 @@ class Bridge(discord.Client):
             task.add_done_callback(self._mail_walk_task_done)
         log.info("guild corps: started %d step(s)%s", len(plan.steps),
                  _family_label(cohort))
+        busy |= {step.holder for step in plan.steps}
+        # THE HEALERS THE LINEUP IS SHORT OF (mod-overseer#692) are asked for
+        # every family's guild, from the members the corps and, for this
+        # bridge's own family, the raid supply left free.
         if cohort is not None:
+            await self._healer_respec_once(facts, names, busy | set(self._corps_steps), cap)
             return
         # THE RAID'S SUPPLY (#275) takes the members the corps left free. A
         # failure propagates to the corps loop, which logs it with its
         # traceback after the corps' own steps have already started.
-        busy |= {step.holder for step in plan.steps}
         await self._raid_supply_once(facts, plan.corps, busy, cap)
+        await self._healer_respec_once(facts, names, busy | set(self._corps_steps), cap)
+
+    async def _healer_respec_once(self, facts, family_names, busy, cap) -> None:
+        """Ask the guild raiders the healer shortfall needs to change trees.
+
+        healerspec.py decides who, in the order a raid leader asks; this writes
+        each pick's `walk-to-trainer talents:<tree>` row through the corps'
+        own runner, which follows the walk to its end. The module walks the
+        raider to a class trainer of its class, buys the reset with the
+        raider's own gold and spends the points in the healing tree
+        (quadseven/mod-overseer#692). Never a give, never a GM command.
+        """
+        now = time.monotonic()
+        started = 0
+        for guild, lineup in sorted((facts.get("lineups") or {}).items()):
+            picks, notes = healerspec.picks(
+                guild, lineup, family_names, facts.get("online") or frozenset(),
+                facts.get("healer_recent") or {}, busy)
+            _log_capped("healer respec", notes)
+            for pick in picks:
+                step = healerspec.step(pick, cap)
+                self._corps_steps[step.holder] = now
+                busy = busy | {step.holder}
+                task = asyncio.create_task(self._run_corps_step(step, cap))
+                self._mail_walk_tasks.add(task)
+                task.add_done_callback(self._mail_walk_task_done)
+                started += 1
+                log.info("healer respec: %s (%s)", pick.said(), step.rows[0].command)
+        log.info("healer respec: started %d walk(s)", started)
 
     async def _raid_supply_once(self, facts, corps, busy, cap) -> None:
         """One pass of the raid's supply (#275): Molten Core consumables and
@@ -18035,6 +18069,8 @@ def _fetch_corps_facts(family_names: list) -> dict:
         trainable = _corps_read(cur, "trainers", _CORPS_TRAINABLE_SQL.format(spells=spells))
         vendors = _corps_read(cur, "vendors", _CORPS_VENDORS_SQL.format(entries=entries))
         recent = _corps_read(cur, "recent rows", _CORPS_RECENT_SQL, (guildcorps.SOURCE + ":%",))
+        healer_recent = _corps_read(cur, "recent respec rows", _CORPS_RECENT_SQL,
+                                    (healerspec.SOURCE + ":%",))
     members = guildcorps.members_from_rows(
         rows, skill_rows, spell_rows, item_rows, mail_rows, bag_rows, maintenance, family)
     family_by_guild = {}
@@ -18047,6 +18083,11 @@ def _fetch_corps_facts(family_names: list) -> dict:
         "trainable": guildcorps.places_from_rows(trainable, "spell"),
         "vendors": guildcorps.places_from_rows(vendors, "item"),
         "recent": guildcorps.recent_from_rows(recent),
+        # THE HEALER RESPEC'S READS (mod-overseer#692): each guild's lineup over
+        # the same member rows, who is in the world, and the pass's own rows.
+        "lineups": healerspec.lineups_from_rows(rows, family_names),
+        "online": frozenset(str(r["name"]) for r in rows if r.get("online")),
+        "healer_recent": guildcorps.recent_from_rows(healer_recent, prefix=healerspec.SOURCE),
     }
 
 
