@@ -32,6 +32,7 @@ import jobs
 import raidgoals
 import raidlineup
 import raidrun
+import raidsupply
 
 # The race ids of each faction, as `characters.race` stores them (3.3.5a).
 ALLIANCE_RACES = frozenset({1, 3, 4, 7, 11})
@@ -592,6 +593,7 @@ def build_guild(
     *,
     quest_rows: list = (),
     holding_rows: list = (),
+    supply: dict | None = None,
 ) -> dict:
     """One guild's readiness card.
 
@@ -603,6 +605,8 @@ def build_guild(
     `goals` is raidgoals.build_raidgoals for this guild. `quest_rows` are
     {"name", "status"} rows for the attunement quest held in a log, and
     `holding_rows` the Raid tab's bag read, for fragments and potions.
+    `supply` is this guild's raid supply read (#275): `have` by item entry,
+    `knowers` by craft spell and the guild bank's gold as `bank`.
     """
     members = _guild_members(group, char_rows)
     lineup = raidlineup.build_lineup(members, guaranteed=group["family_names"])
@@ -667,7 +671,24 @@ def build_guild(
         "attunement": raidrun.attunement(
             list(group["family_names"]), attuned, in_log, fragments
         ),
+        "supply": _supply_card(lineup, members, worn_rows, group, supply),
     }
+
+
+def _supply_card(lineup, members, worn_rows, group, supply) -> dict:
+    """The Molten Core supply section (#275): raidsupply's card for this guild."""
+    classes = {m["name"]: m.get("class_id") for m in members}
+    raiders = raidsupply.raiders_from_lineup(
+        lineup, classes, worn_rows, group["family_names"]
+    )
+    read = supply or {}
+    return raidsupply.card(
+        raiders,
+        read.get("have") or {},
+        read.get("knowers") or {},
+        None,
+        read.get("bank"),
+    )
 
 
 def build_readiness(groups: list) -> dict:
