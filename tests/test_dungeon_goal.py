@@ -285,7 +285,7 @@ def _load_drive_dungeon(inserted: list, updated: list, warnings: list):
 
     source = "\n\n".join(
         ast.get_source_segment(_bridge_source(), _function(name))
-        for name in ("_withheld", "_drive_dungeon")
+        for name in ("_withheld", "_insert_family_jobs", "_drive_dungeon")
     )
 
     class Cursor:

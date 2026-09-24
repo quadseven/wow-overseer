@@ -104,7 +104,13 @@ def _drive(world, clock, log, since):
     module = ast.Module(
         body=[
             _function(n)
-            for n in ("_withheld", "_hand_to_town", "_town_first", "_drive_dungeon")
+            for n in (
+                "_withheld",
+                "_hand_to_town",
+                "_town_first",
+                "_insert_family_jobs",
+                "_drive_dungeon",
+            )
         ],
         type_ignores=[],
     )

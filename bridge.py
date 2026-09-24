@@ -2073,6 +2073,19 @@ def _town_first(mode: str, names: list, free_slots: dict) -> str:
         ", ".join(short), bag_pressure.CAMPAIGN_RESUME_FREE_SLOTS)
 
 
+def _insert_family_jobs(names: list, mode: str, source: str) -> int:
+    """One job row per name; how many landed. One failed insert must not cost
+    the rest of the family, for _set_job's identical reasoning."""
+    written = 0
+    for name in names:
+        try:
+            _insert_job(name, mode, source)
+            written += 1
+        except Exception:
+            log.exception("dungeon job insert failed for %s (mode=%s)", name, mode)
+    return written
+
+
 def _drive_dungeon(keyword: str, wanted: int, names=None,
                    source: str = "overseer:goal", withheld=None) -> tuple:
     """Turn a decided dungeon goal into the roster writes that actually send
@@ -2140,15 +2153,7 @@ def _drive_dungeon(keyword: str, wanted: int, names=None,
                  "(wow-overseer#265)", keyword or "(default)", len(names), waits)
         return _withheld(withheld, waits)
 
-    jobs_written = 0
-    for name in names:
-        try:
-            _insert_job(name, mode, source)
-            jobs_written += 1
-        except Exception:
-            # One failed insert must not cost the rest of the family; see
-            # _set_job's identical reasoning.
-            log.exception("dungeon job insert failed for %s (mode=%s)", name, mode)
+    jobs_written = _insert_family_jobs(names, mode, source)
 
     campaign_written = 0
     with _connect() as conn, conn.cursor() as cur:
