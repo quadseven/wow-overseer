@@ -98,7 +98,7 @@ def rungs(facts: campaignplan.Facts) -> list:
     known_bosses = facts.bosses or {}
     out = []
     for run in campaignplan.RUNS:
-        bosses = known_bosses.get(run.map_id)
+        bosses = None if campaignplan.shares_map(run) else known_bosses.get(run.map_id)
         if run.keyword in offered:
             state, line = OPEN, _open_line(offered[run.keyword])
         elif run.keyword in refused:

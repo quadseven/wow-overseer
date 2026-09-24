@@ -152,6 +152,23 @@ class ALevel60FamilyGearsInTheLowerDungeons(unittest.TestCase):
         self.assertTrue(pick.capped)
         self.assertEqual(pick.runs, campaignplan.AT_CAP_RUNS)
 
+    def test_the_runs_made_while_levelling_do_not_fill_its_first_round(self):
+        opts = campaignplan.options(
+            alliance(upgrades=worth(zulfarrak=18.0), done={"zulfarrak": 30})
+        )
+        zf = next(o for o in opts if o.keyword == "zulfarrak")
+        self.assertEqual((zf.done, zf.target), (30, 40))
+
+    def test_a_wing_is_not_blamed_for_its_neighbours_deaths(self):
+        with mock.patch.object(crossing, "first_blocked_leg", return_value=None):
+            opts = campaignplan.options(
+                horde(level=38, deaths={189: campaignplan.TROUBLE_DEATHS})
+            )
+        wings = [o for o in opts if o.keyword.startswith("scarlet")]
+        self.assertTrue(wings)
+        self.assertFalse(any(o.troubled for o in wings))
+        self.assertTrue(all(o.deaths is None and o.bosses is None for o in wings))
+
     def test_zulfarrak_is_outgrown_once_it_holds_nothing(self):
         refused = campaignplan.refusals(alliance(upgrades=worth()))
         self.assertIn("holds no upgrade for anyone", refused["zulfarrak"])
@@ -243,7 +260,7 @@ class DeathsAndWipesCount(unittest.TestCase):
     def test_jev_is_told_the_record(self):
         f = alliance(
             keys=CRESCENT,
-            deaths={429: 4},
+            deaths={209: 4, 429: 7},
             won={209: 9},
             upgrades=worth(zulfarrak=18.0, **{"dire-maul-east-east": 9.0}),
         )
@@ -269,9 +286,14 @@ class DeathsAndWipesCount(unittest.TestCase):
             for d in request["state"]["dungeons"]
             if d["door"] == "dire-maul-east-east"
         )
-        self.assertEqual(east["family_deaths_there_in_the_last_week"], 4)
+        # Dire Maul's wings share map 429, so its deaths are nobody's wing.
+        self.assertEqual(east["family_deaths_there_in_the_last_week"], "unknown")
+        self.assertEqual(east["boss_levels"], "unknown")
+        self.assertEqual(zf["family_deaths_there_in_the_last_week"], 4)
         self.assertIn("keep dying", request["questions"]["dungeon"]["instructions"])
-        self.assertIn("died 4", judgment.facts)
+        self.assertIn(
+            "zulfarrak 36-54 done 0/10 failed 0 wiped 0 died 4", judgment.facts
+        )
         self.assertTrue(jev_choices.dungeon_by_jev(judgment))
 
 
@@ -421,6 +443,14 @@ class TheLowerDungeonsLoot(unittest.TestCase):
             preraid.reachable_place(preraid.MARAUDON_INNER, {"maraudon-purple"})
         )
         self.assertEqual(preraid.place_name(preraid.MARAUDON_INNER), "inner Maraudon")
+
+    def test_the_raid_tab_opens_inner_maraudon_with_its_wings(self):
+        opened = preraid.open_places({"maraudon-orange", "zulfarrak"})
+        self.assertEqual(
+            opened, {"maraudon-orange", "zulfarrak", preraid.MARAUDON_INNER}
+        )
+        view = preraid.build_view([], opened, {}, {})
+        self.assertFalse(any("inner Maraudon" in line for line in view["closed"]))
 
     def test_the_lower_maps_are_read(self):
         for map_id in (209, 349, 70, 129, 189):

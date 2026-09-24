@@ -489,6 +489,12 @@ class TheRaidTab(unittest.TestCase):
         )
         self.assertIn("Blackrock Depths: on the Eastern Kingdoms", closed)
         self.assertTrue(view["runs"][0].startswith("Dire Maul"))
+        # Inner Maraudon is closed because both wings are, never "no door".
+        self.assertIn(
+            "inner Maraudon: reached only through Maraudon (the orange wing) or "
+            "Maraudon (the purple wing), and neither is open",
+            closed,
+        )
         self.assertEqual(len(view["progress"]), 2)
 
     def test_below_the_cap_there_is_no_plan(self):

@@ -1516,7 +1516,14 @@ def build_view(plans: list, reachable, refused: dict, progress_by_place: dict) -
         "%s: %s"
         % (
             place_name(p),
-            refused.get(p) or CLOSED.get(p, "no door the overseer can use"),
+            refused.get(p)
+            or CLOSED.get(p)
+            or (
+                "reached only through %s, and neither is open"
+                % " or ".join(place_name(r) for r in SHARED_PLACES[p])
+                if p in SHARED_PLACES
+                else "no door the overseer can use"
+            ),
         )
         for p in unreachable
     ]
@@ -1606,7 +1613,13 @@ def family_view(
         [r for r in log_rows or [] if r.get("name") in wanted],
         [r for r in held_rows or [] if r.get("name") in wanted],
     )
-    return build_view(plans, reachable & set(PLACES), refused, moved)
+    return build_view(plans, open_places(reachable), refused, moved)
+
+
+def open_places(reachable) -> set:
+    """The places the family can go to, given the runs in `reachable`: those
+    runs, and a place reached through one of them (inner Maraudon)."""
+    return {p for p in PLACES if reachable_place(p, reachable)}
 
 
 def said_gains(gains: tuple) -> str:

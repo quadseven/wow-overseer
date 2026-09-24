@@ -737,18 +737,36 @@ def _gear_facts(facts: Facts, run: Run) -> dict:
     return out
 
 
+def shares_map(run: Run) -> bool:
+    """Whether another Run's wing stands on the same map (Scarlet Monastery,
+    Maraudon, Dire Maul, Stratholme)."""
+    return sum(1 for r in RUNS if r.map_id == run.map_id) > 1
+
+
 def _history_facts(facts: Facts, run: Run) -> dict:
-    """The record fields of one run's Option, from the facts."""
+    """The record fields of one run's Option, from the facts.
+
+    Deaths, the loot council's awards and the bosses' levels are read per
+    map, so a wing that shares its map is told None for them: ten deaths in
+    the Graveyard are not the Cathedral's, nor are the Cathedral's bosses the
+    Graveyard's. The ledger's wipes are per door already.
+    """
     tally = (facts.outcomes or {}).get(run.keyword, {})
+
+    def own(found: dict | None):
+        if found is None or shares_map(run):
+            return None
+        return found.get(run.map_id)
+
+    deaths = own(facts.deaths)
+    won = own(facts.won)
     return {
         "level": facts.weakest[1],
-        "bosses": None if facts.bosses is None else facts.bosses.get(run.map_id),
-        "deaths": None
-        if facts.deaths is None
-        else int(facts.deaths.get(run.map_id, 0)),
+        "bosses": own(facts.bosses),
+        "deaths": None if facts.deaths is None or shares_map(run) else int(deaths or 0),
         "wipes": int(tally.get(WIPE, 0)),
         "staged": int(tally.get(STAGING_FAILED, 0)),
-        "won": None if facts.won is None else int(facts.won.get(run.map_id, 0)),
+        "won": None if facts.won is None or shares_map(run) else int(won or 0),
     }
 
 
@@ -763,7 +781,16 @@ def options(facts: Facts) -> list:
     out = []
     for run in open_runs:
         quests = None if facts.quests is None else int(facts.quests.get(run.zone, 0))
-        want = target(run, level, quests, rounds)
+        # A LOWER DUNGEON AT THE CAP COUNTS ITS OWN ROUNDS. The ledger has
+        # no window, so the runs a family made while levelling through it
+        # would otherwise fill the first at-cap round before it began. Its
+        # loot (`_outgrown_run`) is what retires it.
+        own = (
+            int(facts.done.get(run.keyword, 0)) // AT_CAP_RUNS
+            if level >= LEVEL_CAP and run.ceiling < LEVEL_CAP
+            else 0
+        )
+        want = target(run, level, quests, max(rounds, own))
         done = int(facts.done.get(run.keyword, 0))
         if done >= want:
             continue
