@@ -1465,51 +1465,17 @@ class Slot:
         """
         self.holder = _reconcile(self.holder, leader=leader, column=column, now=now)
         stop = is_town_stop(claimant, distance)
-        if self.campaign and stop:
-            # THE ONE ASK A CAMPAIGN LETS THROUGH (see STOP_CLAIMANTS).
-            decision = self._campaign_stop(
-                claimant=claimant,
-                character=character,
-                aim=aim,
-                leader=leader,
-                now=now,
-                distance=float(distance),
-            )
-            if decision.verdict == SLOT_HOLD:
-                return self._measure(decision, float(distance), now)
-            return decision
-        if self.campaign:
-            # THE CAMPAIGN FIRST, AHEAD OF EVERY RESERVATION AND LEASE (#227).
-            # Not registered as a wait: the order is rebuilt when town errands
-            # resume, rather than handing the first free column to whichever
-            # pass happened to ask most often during a run.
-            return Decision(
-                verdict=SLOT_WAIT,
-                reason="%s waits: the family's campaign owns the traveller %s "
-                "(%s), and town errands resume when it is withheld or done"
-                % (claimant, character, self.campaign),
-                claimant=claimant,
-                aim=aim,
-                character=character,
-            )
-        if self.spent(claimant, aim, now):
-            return Decision(
-                verdict=SLOT_WAIT,
-                reason="%s gave up %r on %s as a walk that cannot land, and "
-                "does not ask for it again for %ds"
-                % (claimant, aim, character, int(SPENT_SECONDS)),
-                claimant=claimant,
-                aim=aim,
-                character=character,
-            )
-        held = reserved_wait(claimant, character, aim, self.reservation, now)
-        if held is not None:
-            self._note_wait(claimant, now)
-            return held
-        held = self._stop_wait(claimant, character, aim, now)
-        if held is not None:
-            self._note_wait(claimant, now)
-            return held
+        gate = self._gate(
+            claimant=claimant,
+            character=character,
+            aim=aim,
+            leader=leader,
+            now=now,
+            distance=distance,
+            stop=stop,
+        )
+        if gate is not None:
+            return gate
         # AN URGENT PASS THAT KEEPS ACHIEVING NOTHING STOPS BEING URGENT, for
         # as long as its backoff runs (infra#4191). This is deliberately the
         # first thing that happens to `urgent`, so everything below - the
@@ -1555,6 +1521,70 @@ class Slot:
         if decision.verdict == SLOT_HOLD and distance is not None:
             return self._measure(decision, float(distance), now)
         return decision
+
+    def _gate(
+        self,
+        *,
+        claimant: str,
+        character: str,
+        aim: str,
+        leader: str,
+        now: float,
+        distance,
+        stop: bool,
+    ) -> Decision | None:
+        """What answers before the queue is asked, or None to ask it.
+
+        In order: the campaign (which lets only a short town stop through),
+        a walk this claimant gave up on, a reservation, and another
+        claimant's short town stop inside its window.
+        """
+        if self.campaign and stop:
+            # THE ONE ASK A CAMPAIGN LETS THROUGH (see STOP_CLAIMANTS).
+            decision = self._campaign_stop(
+                claimant=claimant,
+                character=character,
+                aim=aim,
+                leader=leader,
+                now=now,
+                distance=float(distance),
+            )
+            if decision.verdict == SLOT_HOLD:
+                return self._measure(decision, float(distance), now)
+            return decision
+        if self.campaign:
+            # THE CAMPAIGN FIRST, AHEAD OF EVERY RESERVATION AND LEASE (#227).
+            # Not registered as a wait: the order is rebuilt when town errands
+            # resume, rather than handing the first free column to whichever
+            # pass happened to ask most often during a run.
+            return Decision(
+                verdict=SLOT_WAIT,
+                reason="%s waits: the family's campaign owns the traveller %s "
+                "(%s), and town errands resume when it is withheld or done"
+                % (claimant, character, self.campaign),
+                claimant=claimant,
+                aim=aim,
+                character=character,
+            )
+        if self.spent(claimant, aim, now):
+            return Decision(
+                verdict=SLOT_WAIT,
+                reason="%s gave up %r on %s as a walk that cannot land, and "
+                "does not ask for it again for %ds"
+                % (claimant, aim, character, int(SPENT_SECONDS)),
+                claimant=claimant,
+                aim=aim,
+                character=character,
+            )
+        held = reserved_wait(claimant, character, aim, self.reservation, now)
+        if held is not None:
+            self._note_wait(claimant, now)
+            return held
+        held = self._stop_wait(claimant, character, aim, now)
+        if held is not None:
+            self._note_wait(claimant, now)
+            return held
+        return None
 
     def _measure(self, decision: Decision, distance: float, now: float) -> Decision:
         """A held walk that has stopped closing becomes a give-up (#227)."""

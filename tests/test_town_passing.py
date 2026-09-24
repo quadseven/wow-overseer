@@ -9,8 +9,8 @@ bag upgrade walks with no bound at all, taking every other pass's column.
 
 Pinned here on fakes, with the bridge's own functions loaded out of bridge.py:
 the quick look writes rows only for a holder standing at a counter, never
-claims the column, and runs for every family every minute; the mail pass
-looks before it walks and tells the slot how far the mailbox is; the campaign
+claims the column, and runs for every family every minute; every counter
+claim tells the slot how far the counter is; the campaign
 does not hand back a live stop; and a fruitless urgent auction grant backs
 the auction pass's urgency off.
 """
@@ -232,16 +232,10 @@ class TheLookRunsForEveryFamilyAndNeverWalks(unittest.TestCase):
             self.assertNotIn("_write_trade_errand", body, name)
 
 
-class TheMailPassLooksBeforeItWalksAndSaysHowFar(unittest.TestCase):
+class EveryCounterClaimSaysHowFar(unittest.TestCase):
     def body(self):
         start = BRIDGE.index("    async def _mail_once(")
         return BRIDGE[start : BRIDGE.index("\n    async def ", start + 1)]
-
-    def test_the_look_comes_before_the_claim(self):
-        body = self.body()
-        self.assertLess(
-            body.index("await self._mail_in_passing("), body.index("_claim_town_slot(")
-        )
 
     def test_every_counter_claim_carries_its_distance(self):
         self.assertIn("distance=_spawn_yards(spawn))", self.body())
@@ -330,7 +324,10 @@ class AFruitlessUrgentAuctionGrantBacksOff(unittest.TestCase):
                 world["slot_for"] = key
                 return slot
 
-        ns["_auction_urgency_spent"](Me(), HORDE, "list")
+        ns["_auction_urgency_spent"](Me(), HORDE, "list", False)
+        self.assertEqual(0.0, slot.urgency_suppressed_until("auction"))
+        self.assertEqual([], log.lines)
+        ns["_auction_urgency_spent"](Me(), HORDE, "list", True)
         self.assertEqual("Zug", world["slot_for"])
         self.assertGreater(slot.urgency_suppressed_until("auction"), 100.0)
         self.assertTrue(
@@ -348,12 +345,12 @@ class AFruitlessUrgentAuctionGrantBacksOff(unittest.TestCase):
         for name, spent, cleared in (
             (
                 "_auction_sales_once",
-                '_auction_urgency_spent(cohort, "list")',
+                '_auction_urgency_spent(cohort, "list", pressure)',
                 'productive("auction")',
             ),
             (
                 "_auction_bag_upgrades",
-                '_auction_urgency_spent(cohort, "bag upgrade")',
+                '_auction_urgency_spent(cohort, "bag upgrade", aimed and pressure)',
                 'productive("auction")',
             ),
         ):

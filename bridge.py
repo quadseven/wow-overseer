@@ -6556,8 +6556,7 @@ class Bridge(discord.Client):
                     cohort=_cohort_key(cohort)):
                 log.info("auction: leader=%s aimed to list %d surplus BoE item(s)",
                          leader, len(candidates))
-                if pressure:
-                    self._auction_urgency_spent(cohort, "list")
+                self._auction_urgency_spent(cohort, "list", pressure)
             return
         teams = await asyncio.to_thread(_fetch_teams, [leader])
         house = auction.reachable_house(
@@ -6669,10 +6668,9 @@ class Bridge(discord.Client):
             cohort=_cohort_key(cohort))
         log.info("bag upgrade: leader=%s walks to an auctioneer for %d bag(s) "
                  "(aim taken=%s)", leader, len(upgrades), aimed)
-        if aimed and pressure:
-            self._auction_urgency_spent(cohort, "bag upgrade")
+        self._auction_urgency_spent(cohort, "bag upgrade", aimed and pressure)
 
-    def _auction_urgency_spent(self, cohort, why: str) -> None:
+    def _auction_urgency_spent(self, cohort, why: str, urgent: bool) -> None:
         """Back the auction pass's urgency off after a grant that sold nothing.
 
         THE AUCTION PASS CLAIMED URGENCY WITH NO BOUND AT ALL. The vendor pass
@@ -6687,8 +6685,11 @@ class Bridge(discord.Client):
         A grant that has written nothing yet is fruitless in exactly the
         sense the vendor pass uses, and the listing or the bag bought at the
         counter is what calls `productive`. Suppressed urgency is not a
-        refusal: the pass keeps its ordinary lease and its turn.
+        refusal: the pass keeps its ordinary lease and its turn. A grant that
+        was not claimed urgently (`urgent` False) costs nothing here.
         """
+        if not urgent:
+            return
         slot = self._cohort_town_slot(_cohort_key(cohort))
         until = slot.fruitless("auction", time.monotonic())
         log.warning(
@@ -11226,12 +11227,6 @@ class Bridge(discord.Client):
         if not mail_plan.takes:
             log.info("mail: %d letter(s) are waiting and none of them can be "
                      "collected this pass", len(letters))
-            return
-        # ANYBODY ALREADY STANDING AT A MAILBOX CHECKS IT FIRST, whoever holds
-        # the column: a take at the box is an instant verb that moves nobody.
-        # Only what is left needs a trip.
-        seen = seen | await self._mail_in_passing(mail_plan.takes, seen, cohort)
-        if all((t.character, mailrun.command(t)) in seen for t in mail_plan.takes):
             return
 
         # `_head_now()` RATHER THAN bonds.head_of_family(), the defect infra#3553

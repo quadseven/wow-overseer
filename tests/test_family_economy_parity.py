@@ -134,10 +134,6 @@ class TheSelf:
     def _mail_walk_task_done(self, task):
         return None
 
-    async def _mail_in_passing(self, takes, seen, cohort=None):
-        """Nobody in these worlds is standing at a mailbox already (#276)."""
-        return set()
-
 
 # --- which family, which leader ---------------------------------------------
 
