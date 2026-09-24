@@ -49,6 +49,7 @@ import disposition
 import jev
 import raidlineup
 import statweights
+from gear import wieldable_weapon
 
 KIND_DISPOSITION = "item_disposition"
 KIND_WEAPON = "weapon_choice"
@@ -94,37 +95,6 @@ WORN = "worn"
 RARE = 3
 ITEM_CLASS_WEAPON = bag_pressure.WEAPON_CLASS
 
-# item_template.subclass for class 2 (WEAPON) that each class can be trained
-# to wield in 3.3.5a. Used for ONE thing: not offering Jev a route the world
-# would refuse. gear.py does not model weapon skills (AllowableClass is -1 on
-# ordinary weapons), so without this a priest would be offered a two-handed
-# sword. 14 (miscellaneous) and 20 (fishing pole) are open to everyone.
-_AXE, _AXE2, _BOW, _GUN, _MACE, _MACE2, _POLEARM, _SWORD, _SWORD2 = range(9)
-_STAFF, _FIST, _MISC, _DAGGER, _THROWN, _CROSSBOW, _WAND, _FISHING = (
-    10,
-    13,
-    14,
-    15,
-    16,
-    18,
-    19,
-    20,
-)
-_WEAPON_SKILLS = {
-    1: {_AXE, _AXE2, _BOW, _GUN, _MACE, _MACE2, _POLEARM, _SWORD, _SWORD2}
-    | {_STAFF, _FIST, _DAGGER, _THROWN, _CROSSBOW},  # Warrior
-    2: {_AXE, _AXE2, _MACE, _MACE2, _POLEARM, _SWORD, _SWORD2},  # Paladin
-    3: {_AXE, _AXE2, _BOW, _GUN, _POLEARM, _SWORD, _SWORD2}
-    | {_STAFF, _FIST, _DAGGER, _THROWN, _CROSSBOW},  # Hunter
-    4: {_AXE, _BOW, _GUN, _MACE, _SWORD, _FIST, _DAGGER, _THROWN, _CROSSBOW},  # Rogue
-    5: {_MACE, _STAFF, _DAGGER, _WAND},  # Priest
-    6: {_AXE, _AXE2, _MACE, _MACE2, _POLEARM, _SWORD, _SWORD2},  # Death Knight
-    7: {_AXE, _AXE2, _MACE, _MACE2, _STAFF, _FIST, _DAGGER},  # Shaman
-    8: {_SWORD, _STAFF, _DAGGER, _WAND},  # Mage
-    9: {_SWORD, _STAFF, _DAGGER, _WAND},  # Warlock
-    11: {_MACE, _MACE2, _POLEARM, _STAFF, _FIST, _DAGGER},  # Druid
-}
-
 # InventoryType -> the equipment slots (bag 0) a piece of that type goes in.
 # The slots are what the world stores; a question about a ring has to show
 # both rings worn, and a question about a weapon has to show both hands.
@@ -164,19 +134,13 @@ def class_name(class_id: int) -> str:
 def can_wield(holding, character) -> bool:
     """Could this character put the piece on at all, better or not.
 
-    Class mask, armour training and required level are gear.py's own rules;
-    the weapon skill is the one fact gear.py does not carry (see
-    `_WEAPON_SKILLS`). Whether it is an UPGRADE is the judgment, and is left
-    to the heuristic and to Jev.
+    Class mask, armour training, required level and weapon skill are gear.py's
+    shared eligibility rules. Whether it is an UPGRADE is the judgment, and
+    is left to the heuristic and to Jev.
     """
     if not bag_pressure.can_wear(holding, character):
         return False
-    if int(holding.item_class) == ITEM_CLASS_WEAPON:
-        subclass = int(holding.item_subclass)
-        if subclass in (_MISC, _FISHING):
-            return True
-        return subclass in _WEAPON_SKILLS.get(int(character.class_id), set())
-    return True
+    return wieldable_weapon(holding, character)
 
 
 def _money(copper: int) -> str:

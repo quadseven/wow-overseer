@@ -211,6 +211,18 @@ class DestinyTest(unittest.TestCase):
             {jev_items.KEEP, jev_items.EQUIP, "give:Grug", jev_items.VENDOR},
         )
 
+    def test_jev_uses_the_shared_gear_weapon_table(self):
+        priest = next(
+            character for character in characters() if character.class_id == PRIEST
+        )
+        row = carried(item_subclass=gear.WEAPON_MACE, inventory_type=13)
+        original = gear._WEAPON_SKILLS[PRIEST]
+        gear._WEAPON_SKILLS[PRIEST] = frozenset()
+        try:
+            self.assertFalse(jev_items.can_wield(holding(row), priest))
+        finally:
+            gear._WEAPON_SKILLS[PRIEST] = original
+
     def test_an_epic_is_not_offered_to_the_auction_house(self):
         offered = jev_items.options(carried(), holding(carried()), characters())
         self.assertNotIn(jev_items.AUCTION, offered)
