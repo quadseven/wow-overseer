@@ -1057,6 +1057,20 @@ class TheTwoDriversDoNotFightOverTheWheel(unittest.TestCase):
         self.assertIn("CanBeSentToNpc(botAI)", _code(_wheel()))
 
 
+# How many `_travelAims.Release(name)` calls DriveTravel holds. The census test
+# below asserts it against the source, and its docstring names each one.
+RELEASE_CENSUS = 12
+_NUMBER_WORDS = {
+    10: "Ten",
+    11: "Eleven",
+    12: "Twelve",
+    13: "Thirteen",
+    14: "Fourteen",
+    15: "Fifteen",
+    16: "Sixteen",
+}
+
+
 class TheErrandStateIsNotOutlivedByItsClock(unittest.TestCase):
     """PR #2840 review, P2. The errand's `progress.since` is the 20-minute
     backstop clock. Left behind on a release, a LATER errand at the same target
@@ -1067,19 +1081,35 @@ class TheErrandStateIsNotOutlivedByItsClock(unittest.TestCase):
         self.assertIn("_state.erase(name)", _code(_clear()))
 
     def test_every_release_path_goes_through_the_one_that_erases(self):
-        """Ten releases inside DriveTravel - arrival, no such spawn, the
-        backstop, stepping through a doorway, the death-rate breaker's two, and
-        mod-overseer#388's flight-discovery pair - and none of them may erase,
-        or forget to erase, on its own.
+        """Twelve releases inside DriveTravel, and none of them may erase, or
+        forget to erase, on its own. In source order:
 
-        The ninth and tenth are #388's deliberate flight-discovery errand
+          1-2. the death-rate breaker's two (mod-overseer#272);
+          3.   the same breaker ending a catch-up walk or a home errand
+               (mod-overseer#348);
+          4.   the water release (mod-overseer#504);
+          5.   the stuck-counter release before upstream can teleport
+               (mod-overseer#498);
+          6.   no such spawn, which also carries the route gate's refusal
+               (mod-overseer#300);
+          7.   stepping through a doorway;
+          8-9. mod-overseer#388's flight-discovery pair;
+          10.  arrival;
+          11.  the backstop;
+          12.  the footing refusal's own bound (mod-overseer#312).
+
+        `test_the_census_lead_names_the_asserted_count` holds the first word
+        of this docstring to the number asserted below, so the two cannot
+        drift apart again.
+
+        The eighth and ninth are #388's deliberate flight-discovery errand
         (`flight master:<nodeId>`), and they are two for the same reason the
-        breaker above is two rather than one: they answer different questions.
-        The ninth fires once the hold-and-learn transaction is resolved,
+        breaker below is two rather than one: they answer different questions.
+        The eighth fires once the hold-and-learn transaction is resolved,
         whether or not the node was actually learned - a deliberate errand
         that reached its flight master and tried is done either way, and
         `LearnFlightNodeDeliberately`'s own log line already said which. The
-        tenth is #402's rule applied here: the spawn this errand was sent to
+        ninth is #402's rule applied here: the spawn this errand was sent to
         is gone (despawned, dead, or phased) by the time the character
         arrives, so nothing is left to learn from and the aim is handed back
         to whatever wrote it rather than held open forever.
@@ -1091,7 +1121,7 @@ class TheErrandStateIsNotOutlivedByItsClock(unittest.TestCase):
         exists, and name it here - the assertion below is the one that actually
         protects the invariant, and it is why the count may move at all.
 
-        The two newest are mod-overseer#272's breaker, and they are two rather
+        The first two are mod-overseer#272's breaker, and they are two rather
         than one for a reason worth keeping: the first calls an errand off
         because it has killed its traveller, and the second clears the column
         AGAIN on a later poll because something outside this module writes it
@@ -1099,15 +1129,28 @@ class TheErrandStateIsNotOutlivedByItsClock(unittest.TestCase):
         release could not do both, because the second one has to keep happening
         while the first must not repeat its own log line.
 
-        The seventh is mod-overseer#300, the route gate. It is a release and
-        not a refusal-in-place because a walk this character cannot survive
-        has no shorter version: the destination gate can pick a farther safe
+        The third is mod-overseer#348's. It is the breaker again, for the two
+        walks that another drive re-aims every poll: a catch-up walk and a
+        home errand. Clearing the column alone would be undone by that drive's
+        next poll, so this one refuses the target, stands the walk down, and
+        releases the column only when the walk is not a dungeon escort (an
+        escort is ended through EndOneEscort instead).
+
+        The fifth is mod-overseer#498's stuck-counter release. It fires when
+        upstream's own `stuckAttempts` says the character is stuck and would
+        be teleported, and only for a character this drive actually steers
+        (`CanBeSentToNpc`), because a counter with no writer is not evidence.
+
+        The route gate, mod-overseer#300, is not a line of its own. It is a
+        release and not a refusal-in-place because a walk this character
+        cannot survive has no shorter version: the destination gate can pick a farther safe
         candidate, but once every candidate is behind lethal ground there is
         nothing left to aim at, so the errand ends rather than waits. It is
         also the one release that can fire before the character has taken a
-        single step.
+        single step. It lives in ResolveTravelTarget, which reports its
+        refusal through the sixth release's `said` text.
 
-        The eighth is mod-overseer#312, the footing refusal's own bound. It
+        The twelfth is mod-overseer#312, the footing refusal's own bound. It
         is a release rather than a wait because the thing it gives up on is
         not a moment of bad luck: the character has been refused every
         bearing toward its aim on eight consecutive polls without moving a
@@ -1120,8 +1163,8 @@ class TheErrandStateIsNotOutlivedByItsClock(unittest.TestCase):
         restarted before it could ever run out. This one is anchored to a
         PLACE, which is why it fires.
 
-        The newest is mod-overseer#504's water release, and it is the only one
-        that fires because of where the character is STANDING rather than
+        The fourth, and the newest, is mod-overseer#504's water release. It is
+        the only one that fires because of where the character is STANDING rather than
         because of anything the walk did or failed to do. The stuck-errand
         hold above asked CanBeSentToNpc and rpgInfo.stuckAttempts and nothing
         else, so a leader stuck on an errand was held in place whether or not
@@ -1133,14 +1176,9 @@ class TheErrandStateIsNotOutlivedByItsClock(unittest.TestCase):
         the traveller. It is a release rather than a refusal-in-place for the
         same reason #300's route gate is: standing still is the thing doing
         the killing here, so there is no shorter version of this walk to wait
-        for.
-
-        NOTE: the lead sentence above says "Ten" and this assertion has been
-        12 since #504. That drift predates #504 - the count was already 11
-        against a prose lead of ten - so one release in this census has never
-        been named in prose. The assertion, not the lead, is the authority."""
+        for."""
         code = _code(_drive())
-        self.assertEqual(12, code.count("_travelAims.Release(name)"))
+        self.assertEqual(RELEASE_CENSUS, code.count("_travelAims.Release(name)"))
         self.assertNotIn("_state.erase(", code)
         # Stronger than "the drive does not erase": it cannot. The memory is a
         # private member of the book, so the only way out is Release.
@@ -1148,6 +1186,16 @@ class TheErrandStateIsNotOutlivedByItsClock(unittest.TestCase):
         self.assertLess(
             book.index("private:"),
             book.index("std::map<std::string, TravelState> _state;"),
+        )
+
+    def test_the_census_lead_names_the_asserted_count(self):
+        """The census docstring once said "Ten" while the assertion said 11,
+        and nothing noticed. Its first word is held to RELEASE_CENSUS here, so
+        raising the count without renaming the lead fails."""
+        lead = self.test_every_release_path_goes_through_the_one_that_erases.__doc__
+        self.assertTrue(
+            lead.lstrip().startswith(_NUMBER_WORDS[RELEASE_CENSUS] + " releases"),
+            lead.lstrip()[:40],
         )
 
     def test_a_row_cleared_bridge_side_mid_walk_is_noticed(self):
