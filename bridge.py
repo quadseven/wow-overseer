@@ -64,6 +64,7 @@ import item_plan
 import jev
 import jev_items
 import jev_choices
+import jev_recovery
 import jev_activity
 import jev_keep
 import jobs
@@ -4168,6 +4169,7 @@ class Bridge(discord.Client):
                 self._restore_lost_lives,
                 self._campaign_queue_loop,
                 self._activity_loop,
+                self._run_recovery_loop,
             )
         }
 
@@ -11961,6 +11963,63 @@ class Bridge(discord.Client):
 
     # --- the campaign queue (#209) --------------------------------------------
 
+    async def _run_recovery_loop(self) -> None:
+        """Answer mod-overseer's run recovery and staging stall requests.
+
+        The module never stops a campaign on failures (the operator's order):
+        it writes a request row, waits a backoff, and applies the answer on
+        the row, or its own heuristic without one. This pass asks Jev
+        (jev_recovery) and writes the answer back, recording every judgment.
+        """
+        await self.wait_until_ready()
+        said_missing = False
+        while not self.is_closed():
+            try:
+                rows = await asyncio.to_thread(_fetch_recovery_requests)
+                if rows is None:
+                    if not said_missing:
+                        log.warning("run recovery: overseer_run_recovery is missing "
+                                    "on this world; the module decides every "
+                                    "recovery with its own heuristic")
+                        said_missing = True
+                    await asyncio.sleep(RECOVERY_CYCLE_SECONDS * 30)
+                    continue
+                said_missing = False
+                for row in rows:
+                    await self._answer_run_recovery(row)
+            except Exception:
+                log.exception("run recovery: pass failed; retrying next cycle")
+            await asyncio.sleep(RECOVERY_CYCLE_SECONDS)
+
+    async def _answer_run_recovery(self, row: dict) -> None:
+        """One request: ask, record, answer. A row this pass cannot ask about
+        is answered with the module's own heuristic so it is not asked
+        again."""
+        request = jev_recovery.request_from_row(row)
+        if request is None:
+            heuristic = str(row.get("heuristic") or "")
+            if heuristic:
+                await asyncio.to_thread(_answer_recovery_request, row["id"],
+                                        heuristic, "heuristic", None)
+            return
+        rule = jev_recovery.policy(request.kind)
+        judgment = jev_recovery.base_judgment(request, rule)
+        if rule.mode != jev.OFF and self._jev.ready(request.kind):
+            context = await asyncio.to_thread(_fetch_recovery_context, request)
+            judgment = await jev_recovery.judge(self._jev, request, context, rule)
+        log.info("%s", judgment.line())
+        try:
+            await asyncio.to_thread(_insert_jev_judgment, judgment)
+        except Exception:
+            log.exception("run recovery: the judgment for %s was not recorded",
+                          request.family)
+        changed = await asyncio.to_thread(
+            _answer_recovery_request, request.id, judgment.chosen,
+            judgment.chosen_by, judgment.confidence)
+        if not changed:
+            log.info("run recovery: request %d for %s was already applied by the "
+                     "module before this answer landed", request.id, request.family)
+
     async def _campaign_queue_loop(self) -> None:
         """Advance every family's queue on its own clock.
 
@@ -14585,6 +14644,97 @@ def _insert_jev_judgment(judgment) -> None:
                 max(0, judgment.latency_ms), judgment.model[:40],
                 judgment.mode[:8], facts[:1000], acted[:10],
             ),
+        )
+
+
+# RUN RECOVERY (jev_recovery). mod-overseer writes one overseer_run_recovery row
+# per failed dungeon attempt and per repeated staging take-back, and never stops
+# a campaign; this answers the row. The table is the module's (its own
+# migration creates it); a world without it answers nothing, said once.
+RECOVERY_CYCLE_SECONDS = 10.0
+# A request older than this is past any backoff the module waits, so answering
+# it would change nothing.
+RECOVERY_REQUEST_MAX_AGE_MINUTES = 30
+
+_RECOVERY_PENDING_SQL = (
+    "SELECT id, family, leader_name, campaign_id, run_number, kind, attempt, "
+    "failure, facts, options, heuristic, heuristic_why "
+    "FROM overseer_run_recovery WHERE status = 'pending' "
+    "AND created_at > NOW() - INTERVAL %s MINUTE ORDER BY id LIMIT 20"
+)
+_RECOVERY_EVENTS_SQL = (
+    "SELECT phase, kind, detail FROM overseer_dungeon_run_event "
+    "WHERE family = %s AND created_at > NOW() - INTERVAL 45 MINUTE "
+    "ORDER BY id DESC LIMIT 25"
+)
+_RECOVERY_MEMBERS_SQL = (
+    "SELECT name FROM overseer_roster WHERE family = %s AND enabled = 1"
+)
+_RECOVERY_POSITIONS_SQL = (
+    "SELECT name, map_id, zone_id, pos_x, pos_y, in_combat, group_leader "
+    "FROM overseer_snapshot WHERE name IN (%s) "
+    "AND updated_at > NOW() - INTERVAL 120 SECOND"
+)
+_RECOVERY_HISTORY_SQL = (
+    "SELECT id, family, campaign_id, attempt, failure, applied, applied_by, "
+    "applied_at FROM overseer_run_recovery WHERE kind = 'run_recovery' "
+    "AND status = 'applied' ORDER BY id DESC LIMIT 20"
+)
+_RECOVERY_RUNS_SQL = (
+    "SELECT campaign_id, started_at, outcome, ended_reason "
+    "FROM overseer_dungeon_run WHERE campaign_id IN (%s)"
+)
+
+
+def _fetch_recovery_requests():
+    """Pending requests, oldest first; None when this world has no table."""
+    with _connect() as conn, conn.cursor() as cur:
+        try:
+            cur.execute(_RECOVERY_PENDING_SQL, (RECOVERY_REQUEST_MAX_AGE_MINUTES,))
+        except pymysql.err.MySQLError as exc:
+            if exc.args and exc.args[0] in (1054, 1146):
+                return None
+            raise
+        return list(cur.fetchall())
+
+
+def _fetch_recovery_context(request) -> "jev_recovery.Context":
+    """What the bridge sees about one request's family, for Jev."""
+    context = jev_recovery.Context()
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(_RECOVERY_EVENTS_SQL, (request.family,))
+        context.events = list(cur.fetchall())
+        cur.execute(_RECOVERY_MEMBERS_SQL, (request.family,))
+        names = [row["name"] for row in cur.fetchall()]
+        if names:
+            cur.execute(
+                _RECOVERY_POSITIONS_SQL % ",".join(["%s"] * len(names)), names
+            )
+            context.positions = {row["name"]: dict(row) for row in cur.fetchall()}
+        cur.execute(_RECOVERY_HISTORY_SQL)
+        applied = list(cur.fetchall())
+        campaigns = sorted({int(r["campaign_id"]) for r in applied if r["campaign_id"]})
+        runs = []
+        if campaigns:
+            cur.execute(
+                _RECOVERY_RUNS_SQL % ",".join(["%s"] * len(campaigns)), campaigns
+            )
+            runs = list(cur.fetchall())
+        context.history = jev_recovery.recovery_history(applied, runs)
+    context.free_slots = _fetch_free_slots(names) if names else {}
+    return context
+
+
+def _answer_recovery_request(request_id: int, answer: str, by: str,
+                             confidence) -> int:
+    """Write the answer onto a still-pending row. Returns rows changed: 0
+    means the module applied its own choice first, which is fine."""
+    with _connect() as conn, conn.cursor() as cur:
+        return cur.execute(
+            "UPDATE overseer_run_recovery SET status = 'answered', answer = %s, "
+            "answered_by = %s, confidence = %s, answered_at = NOW() "
+            "WHERE id = %s AND status = 'pending'",
+            (answer[:24], by[:12], confidence, int(request_id)),
         )
 
 
@@ -19880,6 +20030,7 @@ class HeadlessBridge(Bridge):
                 self._restore_lost_lives,
                 self._campaign_queue_loop,
                 self._activity_loop,
+                self._run_recovery_loop,
             ) if coro.__name__ not in self.HEADLESS_SKIP
         ]
         log.info("headless: no Discord gateway; driving %d loop(s): %s",

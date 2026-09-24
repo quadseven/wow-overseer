@@ -56,6 +56,10 @@ _EVENT_TONES = {
     "busy_ceiling": "warn",
     "dc_skip": "warn",
     "staging_rearm": "warn",
+    # mod-overseer never stops a campaign on failures: it recovers, and says
+    # which recovery and which answer to a repeated staging take-back.
+    "recovery": "warn",
+    "staging_stall": "warn",
     "reset_retry": "warn",
     "evacuated": "warn",
 }
