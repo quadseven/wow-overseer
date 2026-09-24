@@ -40,7 +40,9 @@ WHEN IT IS ASKED. Only when something is wrong (`trouble`): a member far from
 the leader and not moving, a member far from a leader who stands at its
 hearthstone point, a leader stuck or circling with a goal it has not reached,
 or the family dying. Never during a dungeon run or a dungeon job:
-those belong to run recovery and the campaign's own staging.
+those belong to run recovery and the campaign's own staging. A dungeon
+family spread across zones hearths to its shared inn through run recovery's
+`hearth_regroup` (jev_recovery), not through this kind.
 
 ACT BY DEFAULT, behind DEFAULT_THRESHOLD (JEV_MODE_MOVEMENT and
 JEV_THRESHOLD_MOVEMENT override both). Below it, or with no answer, the
