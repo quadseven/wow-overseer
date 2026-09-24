@@ -68,14 +68,26 @@ def _card(
     attuned=(),
     goals=NO_GOALS,
     runnable=True,
+    clears=True,
+    chars=(),
+    quest_rows=(),
+    holding_rows=(),
 ):
     group = raidready.group_guilds(rows, {"Head": family_names})[0]
-    portals = (
-        frozenset({raidready.RAID_PORTAL}) if runnable else frozenset({"deadmines"})
-    )
-    with mock.patch.object(raidready.jobs, "PORTAL_KEYWORDS", portals):
+    raids = frozenset({raidready.RAID_PORTAL}) if runnable else frozenset()
+    with (
+        mock.patch.object(raidready.jobs, "RAID_KEYWORDS", raids),
+        mock.patch.object(raidready.raidrun, "CLEARS", clears),
+    ):
         return raidready.build_guild(
-            group, [], list(worn), [{"name": n} for n in attuned], min_level, goals
+            group,
+            list(chars),
+            list(worn),
+            [{"name": n} for n in attuned],
+            min_level,
+            goals,
+            quest_rows=list(quest_rows),
+            holding_rows=list(holding_rows),
         )
 
 
@@ -141,7 +153,32 @@ class HardBlockers(unittest.TestCase):
         first = card["blockers"][0]
         self.assertEqual(first["tone"], raidready.HARD)
         self.assertIn("cannot take a raid in", first["text"])
-        self.assertIn("deadmines", first["text"])
+        self.assertIn("Molten Core is not one of them", first["text"])
+
+    def test_a_run_that_cannot_clear_is_a_hard_blocker_said_plainly(self):
+        """The raid run forms, assembles and enters; nothing clears. The card
+        must not call the guild ready to raid on the strength of a runner that
+        stops at the entrance."""
+        rows = _guild("Cave", 23, FULL)
+        card = _card(
+            rows,
+            [rows[0]["name"]],
+            attuned=[r["name"] for r in rows],
+            worn=[{"name": r["name"], "slot": 0, "item_level": 60} for r in rows],
+            clears=False,
+        )
+        self.assertFalse(card["ready"])
+        hard = [b["text"] for b in card["blockers"] if b["tone"] == raidready.HARD]
+        self.assertEqual(1, len(hard), hard)
+        self.assertIn("Nothing clears Molten Core yet", hard[0])
+        self.assertIn("holds at the entrance", hard[0])
+
+    def test_the_shipped_answer_is_that_nothing_clears(self):
+        """Unpatched, the card states today's truth: the run exists and does
+        not clear. This fails the moment raidrun claims a clear it has not got,
+        or drops the run the module now has."""
+        self.assertIn(raidready.RAID_PORTAL, raidready.jobs.RAID_KEYWORDS)
+        self.assertFalse(raidready.raidrun.CLEARS)
 
     def test_a_small_guild_is_short_raiders_tanks_and_healers(self):
         rows = _guild(
@@ -212,6 +249,124 @@ class SoftBlockersStopNothing(unittest.TestCase):
             {"name": "A", "slot": 18, "item_level": 1},
         ]
         self.assertEqual(raidready.worn_item_levels(worn), {"A": 60})
+
+
+class EachRaiderIsReported(unittest.TestCase):
+    """The operator asked for a row per raider: level, gear, attunement, fire
+    resistance, role, and what stands in the way."""
+
+    def setUp(self):
+        self.rows = _guild("Cave", 23, FULL)
+        self.head = self.rows[0]["name"]
+        chars = []
+        for index, row in enumerate(self.rows):
+            chars.append(
+                {
+                    "name": row["name"],
+                    "level": row["level"],
+                    "class": row["class_id"],
+                    "race": row["race"],
+                    # Every fifth on Outland, one offline.
+                    "map": 530 if index % 5 == 1 else 0,
+                    "online": 0 if index == 2 else 1,
+                }
+            )
+        self.worn = [
+            {"name": self.head, "slot": 0, "item_level": 45, "fire_res": 0},
+            {"name": self.head, "slot": 1, "item_level": 45, "fire_res": 10},
+            {"name": self.head, "slot": 2, "item_level": 45, "fire_res": 7},
+        ]
+        self.card = _card(
+            self.rows,
+            [self.head],
+            chars=chars,
+            worn=self.worn,
+            attuned=[self.head],
+            clears=False,
+        )
+        self.by_name = {r["name"]: r for r in self.card["raiders"]}
+
+    def test_forty_rows_one_per_placed_raider(self):
+        self.assertEqual(40, len(self.card["raiders"]))
+        self.assertEqual(
+            len(raidready.RAIDER_COLUMNS), len(self.card["raiders"][0]["cells"])
+        )
+        self.assertEqual(list(raidready.RAIDER_COLUMNS), self.card["raider_columns"])
+
+    def test_the_heads_row_carries_every_measurement(self):
+        head = self.by_name[self.head]
+        self.assertEqual(1, head["group"])
+        self.assertEqual("tank", head["role"])
+        self.assertEqual(60, head["level"])
+        self.assertEqual(45, head["gear"])
+        self.assertEqual(17, head["fire_res"])
+        self.assertTrue(head["attuned"])
+        self.assertEqual("Eastern Kingdoms", head["where"])
+        self.assertEqual(
+            ["1", self.head, "tank", "60", "45", "17", "yes", "0", "Eastern Kingdoms"],
+            head["cells"],
+        )
+
+    def test_unread_gear_and_other_continents_are_said_not_guessed(self):
+        others = [r for r in self.card["raiders"] if r["name"] != self.head]
+        self.assertTrue(all(r["gear"] is None for r in others))
+        self.assertTrue(all(r["cells"][4] == "not read" for r in others))
+        self.assertIn("Outland", {r["where"] for r in others})
+        self.assertTrue(any(r["where"].endswith(", offline") for r in others))
+
+    def test_the_summary_line_counts_what_the_rows_say(self):
+        line = self.card["raiders_line"]
+        self.assertIn("40 raiders: 1 attuned", line)
+        self.assertIn("1 wearing any fire resistance (17 in all)", line)
+        self.assertIn("0 fire protection potions carried", line)
+
+    def test_the_card_says_what_the_run_does_and_that_clearing_is_off(self):
+        self.assertIn("moltencore 1", self.card["run_line"])
+        self.assertIn("does not clear", self.card["run_line"])
+        self.assertIn("none of it has been validated live", self.card["clearing_line"])
+
+    def test_the_attunement_path_is_on_the_card(self):
+        att = self.card["attunement"]
+        self.assertEqual(
+            [
+                {
+                    "name": self.head,
+                    "status": "attuned",
+                    "line": "%s: attuned" % self.head,
+                }
+            ],
+            att["members"],
+        )
+        self.assertIn("1 of 1 attuned", att["line"])
+        self.assertEqual(3, len(att["steps"]))
+        self.assertIn("Lothos Riftwaker", att["steps"][0])
+        self.assertIn("blackrock depths", att["steps"][1])
+
+
+class TheAttunementIsReadNotAssumed(unittest.TestCase):
+    def test_each_state_in_order(self):
+        status = raidready.raidrun.attunement_status
+        self.assertEqual("not taken", status(False, False, 0))
+        self.assertEqual("in the quest log", status(False, True, 0))
+        self.assertEqual("fragment held", status(False, True, 1))
+        self.assertEqual("attuned", status(True, False, 0))
+
+    def test_the_quest_log_rows_drive_the_family_statuses(self):
+        rows = _guild("Cave", 23, FULL)
+        family = [rows[0]["name"], rows[1]["name"], rows[2]["name"]]
+        card = _card(
+            rows,
+            family,
+            quest_rows=[
+                {"name": family[1], "status": 3},
+                {"name": family[2], "status": 0},
+            ],
+        )
+        statuses = {m["name"]: m["status"] for m in card["attunement"]["members"]}
+        self.assertEqual("not taken", statuses[family[0]])
+        self.assertEqual("in the quest log", statuses[family[1]])
+        # Status 0 is QUEST_STATUS_NONE: a row, but not a quest in the log.
+        self.assertEqual("not taken", statuses[family[2]])
 
 
 class TheTopLine(unittest.TestCase):

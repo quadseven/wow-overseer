@@ -31,6 +31,7 @@ from dataclasses import dataclass
 import achievements
 import council
 import jobs
+import raidrun
 
 TABLE = "overseer_dungeon_queue"
 
@@ -198,11 +199,22 @@ def _names() -> dict:
 
 
 def keyword_for(text: str) -> str | None:
-    """The portal keyword `text` names, or None."""
+    """The portal or raid keyword `text` names, or None.
+
+    A raid is named here and nowhere in the planner's vocabulary: an order is
+    the only road to one (raidrun.py).
+    """
     said = _fold(text)
     if said.startswith("the "):
         said = said[4:]
-    return _names().get(said)
+    return _names().get(said) or raidrun.keyword_for(said)
+
+
+def _place(keyword: str) -> str:
+    """How a queue entry's door is said: a raid by name, a dungeon as council says."""
+    if raidrun.is_raid(keyword):
+        return raidrun.place(keyword)
+    return council.keyword_place(keyword)
 
 
 # --- reading an order ----------------------------------------------------------
@@ -261,7 +273,10 @@ def parse_entries(text: str) -> tuple:
             return (), (
                 '"%s" is not a dungeon the overseer has a door for. The doors '
                 "are: %s."
-                % (" ".join(name.split()), ", ".join(sorted(jobs.PORTAL_KEYWORDS)))
+                % (
+                    " ".join(name.split()),
+                    ", ".join(sorted(jobs.PORTAL_KEYWORDS | jobs.RAID_KEYWORDS)),
+                )
             )
         entries.append(Entry(keyword, runs))
     return tuple(entries), ""
@@ -279,12 +294,16 @@ def plan(family: str, entries: tuple, level_rows: list) -> Plan:
     if not entries:
         return Plan(family, "The queue names no dungeon.", (), False, "")
     for entry in entries:
-        why = council.door_refusal(entry.keyword, level_rows)
+        why = (
+            raidrun.refusal(entry.keyword, entry.runs, level_rows)
+            if raidrun.is_raid(entry.keyword)
+            else council.door_refusal(entry.keyword, level_rows)
+        )
         if why:
             return Plan(
                 family,
                 "Not queued: %s for %s - %s. Nothing was written."
-                % (council.keyword_place(entry.keyword), _family(family), why),
+                % (_place(entry.keyword), _family(family), why),
                 (),
                 False,
                 "",
@@ -314,9 +333,7 @@ def _family(family: str) -> str:
 
 
 def _plain(entries) -> str:
-    return ", then ".join(
-        "%s %d" % (council.keyword_place(e.keyword), e.runs) for e in entries
-    )
+    return ", then ".join("%s %d" % (_place(e.keyword), e.runs) for e in entries)
 
 
 # --- the Discord order form ----------------------------------------------------
@@ -447,7 +464,7 @@ def step(rows: list, leader: dict | None) -> Move:
     head = rows[0]
     keyword = str(head["keyword"])
     runs = int(head["runs_wanted"])
-    place = council.keyword_place(keyword)
+    place = _place(keyword)
     if str(head["status"]) == QUEUED:
         return Move(
             start=int(head["id"]),
@@ -473,7 +490,7 @@ def step(rows: list, leader: dict | None) -> Move:
                     place,
                     done,
                     runs,
-                    council.keyword_place(str(nxt["keyword"])),
+                    _place(str(nxt["keyword"])),
                     int(nxt["runs_wanted"]),
                 ),
             )
@@ -483,7 +500,7 @@ def step(rows: list, leader: dict | None) -> Move:
             why="%s is done at %d of %d and the queue is empty; back to %s"
             % (place, done, runs, jobs.DEFAULT),
         )
-    want = jobs.dungeon_job(keyword)
+    want = jobs.job_for(keyword)
     if str(leader.get("job") or "").strip().lower() != want:
         return Move(
             keyword=keyword,
@@ -508,7 +525,7 @@ def progress_line(rows: list, done: int | None) -> str:
         return ""
     parts = []
     for i, row in enumerate(rows):
-        place = council.keyword_place(str(row["keyword"]))
+        place = _place(str(row["keyword"]))
         runs = int(row["runs_wanted"])
         if i == 0 and str(row["status"]) == ACTIVE and done is not None:
             parts.append("%s %d of %d" % (place, min(int(done), runs), runs))
@@ -528,7 +545,7 @@ def view(rows: list, done: int | None, family: str = "") -> dict:
         "entries": [
             {
                 "keyword": str(r["keyword"]),
-                "place": council.keyword_place(str(r["keyword"])),
+                "place": _place(str(r["keyword"])),
                 "runs": int(r["runs_wanted"]),
                 "status": str(r["status"]),
             }

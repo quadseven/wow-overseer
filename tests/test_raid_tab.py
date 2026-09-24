@@ -500,10 +500,11 @@ class TheMobileRules(unittest.TestCase):
         self.assertEqual(CSS.count("::-webkit-details-marker"), 2)
 
     def test_a_summary_keeps_a_visible_focus_ring(self):
-        """The two summaries and the guild picker are the controls on this
-        tab, and list-style:none on a summary is where a focus ring usually
-        goes missing."""
-        self.assertEqual(CSS.count(":focus-visible"), 3)
+        """The three summaries (a goal, a recipe, the per-raider table) and
+        the guild picker are the controls on this tab, and list-style:none on
+        a summary is where a focus ring usually goes missing."""
+        self.assertEqual(CSS.count(":focus-visible"), 4)
+        self.assertIn(".rr-raiders > summary:focus-visible", CSS)
 
     def test_it_draws_no_item_quality_colour(self):
         """A quality colour is designed for the dark ground the Armory and the
