@@ -90,6 +90,7 @@ import quests
 import raidcraft
 import raidlineup
 import raidprep
+import raidroles
 import raidrun
 import raidsupply
 import recipebook
@@ -2340,7 +2341,20 @@ def _drive_raid(keyword: str, family: str, names: list, source: str,
         # writes them again.
         try:
             cur.execute(raidrun.DELETE_SEATS_SQL, (family, keyword))
-            cur.executemany(raidrun.INSERT_SEAT_SQL, seats)
+            try:
+                cur.executemany(
+                    raidrun.INSERT_SEAT_DUTY_SQL,
+                    raidrun.seat_rows(family, keyword, lineup, duty=True))
+            except pymysql.err.MySQLError as exc:
+                if not (exc.args and exc.args[0] == 1054):
+                    raise
+                # The module's duty column is not applied yet: the seats
+                # without it still form the raid (raidrun.INSERT_SEAT_DUTY_SQL).
+                log.warning("raid: overseer_raid_seat has no duty column yet - "
+                            "mod-overseer's 2026_09_24_02_overseer_raid_seat_duty"
+                            ".sql is not applied, so %s's seats are written "
+                            "without their duties", campaignqueue._family(family))
+                cur.executemany(raidrun.INSERT_SEAT_SQL, seats)
         except pymysql.err.MySQLError as exc:
             if exc.args and exc.args[0] == 1146:
                 log.warning(
@@ -2358,8 +2372,9 @@ def _drive_raid(keyword: str, family: str, names: list, source: str,
         except Exception:
             log.exception("raid job insert failed for %s (mode=%s)", name, mode)
     log.info("raid: %s ordered into %s - %d seats written in %d groups, %d "
-             "job row(s) of %d", campaignqueue._family(family), keyword,
-             len(seats), len({s[3] for s in seats}), written, len(names))
+             "job row(s) of %d. %s", campaignqueue._family(family), keyword,
+             len(seats), len({s[3] for s in seats}), written, len(names),
+             lineup.get("roles_line", ""))
     return written
 
 
@@ -17592,7 +17607,7 @@ def _command_answer(row_id: int):
 # members out of the same lineup the page draws and posts to the master.
 _DUES_MEMBERS_SQL = (
     "SELECT g.name AS guild_name, c.name, c.class AS class_id, c.level, "
-    "c.money, c.online, lc.name AS master "
+    "c.money, c.online, lc.name AS master, " + raidroles.TALENTS_COLUMN + " "
     "FROM characters c "
     "JOIN guild_member gm ON gm.guid = c.guid "
     "JOIN guild g ON g.guildid = gm.guildid "
@@ -17679,7 +17694,8 @@ def _insert_dues_row(holder: str, command: str, taker: str, source: str) -> int:
 # items a vendor sells on each map; and the corps' own recent rows.
 _CORPS_MEMBERS_SQL = (
     "SELECT g.name AS guild_name, c.guid, c.name, c.class AS class_id, c.level, "
-    "c.money, c.online, c.map AS map_id, lc.name AS master "
+    "c.money, c.online, c.map AS map_id, lc.name AS master, "
+    + raidroles.TALENTS_COLUMN + " "
     "FROM characters c "
     "JOIN guild_member gm ON gm.guid = c.guid "
     "JOIN guild g ON g.guildid = gm.guildid "

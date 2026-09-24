@@ -89,10 +89,16 @@ MANA_PHYSICAL = frozenset({PALADIN, HUNTER})
 CLOTH_CLASSES = frozenset({PRIEST, MAGE, WARLOCK})
 
 
-def role_of(lineup_role: str, class_id) -> str:
-    """tank, healer, physical or caster, from raidlineup's role and the class."""
+def role_of(lineup_role: str, class_id, raid_role: str = "") -> str:
+    """tank, healer, physical or caster, from raidlineup's role, the talent
+    tree's role where the lineup read one (a Shadow priest casts, an
+    Enhancement shaman hits), and the class otherwise."""
     if lineup_role in (TANK, HEALER):
         return lineup_role
+    if raid_role in ("melee", "ranged"):
+        return PHYSICAL
+    if raid_role == "caster":
+        return CASTER
     return PHYSICAL if int(class_id or 0) in PHYSICAL_CLASSES else CASTER
 
 
@@ -116,9 +122,14 @@ def raiders_from_lineup(lineup, classes, fire_rows=(), family=()) -> list:
     """Raider rows from a raidlineup result.
 
     `classes` maps a name to its class id; `fire_rows` are worn items with
-    `name`, `slot` and `fire_res`. The main tank is the first tank the lineup
-    placed: group one's, which is the group the head of the raid leads.
+    `name`, `slot` and `fire_res`. The main tank is the one the lineup named
+    (raidlineup.MAIN_TANK), else the first tank it placed.
     """
+    named = any(
+        m.get("duty") == MAIN_TANK
+        for group in (lineup or {}).get("groups") or ()
+        for m in group.get("members") or ()
+    )
     worn = {}
     for row in fire_rows or ():
         name = str(row.get("name") or "")
@@ -130,8 +141,15 @@ def raiders_from_lineup(lineup, classes, fire_rows=(), family=()) -> list:
             name = str(member.get("name") or "")
             if not name:
                 continue
-            role = role_of(member.get("role", "dps"), classes.get(name))
-            main = role == TANK and not main_taken
+            role = role_of(
+                member.get("role", "dps"),
+                classes.get(name),
+                str(member.get("raid_role") or ""),
+            )
+            if named:
+                main = member.get("duty") == MAIN_TANK
+            else:
+                main = role == TANK and not main_taken
             main_taken = main_taken or main
             items = tuple(worn.get(name, ()))
             out.append(
@@ -986,7 +1004,15 @@ def guild_facts(guild, members, worn_rows, posts, vendors_by_map) -> GuildFacts:
     names = {m.name for m in crew}
     family = {m.name for m in crew if m.family}
     lineup = raidlineup.build_lineup(
-        [{"name": m.name, "level": m.level, "class_id": m.class_id} for m in crew],
+        [
+            {
+                "name": m.name,
+                "level": m.level,
+                "class_id": m.class_id,
+                "talent_spells": m.talent_spells,
+            }
+            for m in crew
+        ],
         guaranteed=family,
     )
     raiders = raiders_from_lineup(

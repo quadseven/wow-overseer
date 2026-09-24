@@ -35,6 +35,7 @@ from dataclasses import dataclass
 
 import guildroute
 import raidlineup
+import raidroles
 
 COPPER_PER_GOLD = 10_000
 
@@ -426,7 +427,12 @@ def maintenance_from_rows(rows, family_names):
         by_name = {str(r.get("name")): r for r in guilds[guild]}
         lineup = raidlineup.build_lineup(
             [
-                {"name": name, "class_id": r.get("class_id"), "level": r.get("level")}
+                {
+                    "name": name,
+                    "class_id": r.get("class_id"),
+                    "level": r.get("level"),
+                    raidroles.KEY: r.get(raidroles.KEY),
+                }
                 for name, r in by_name.items()
             ],
             guaranteed=[name for name in by_name if name in family],

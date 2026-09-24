@@ -50,6 +50,7 @@ import holdings
 import crafters
 import guildcorps
 import raidlineup
+import raidroles
 import preraid
 import raidready
 import raidsupply
@@ -1952,7 +1953,7 @@ def _fetch_eye() -> dict:
 # the same one the raid-goal read uses: whichever guilds the roster is in.
 _LINEUP_GUILD = (
     "SELECT g.guildid, g.name AS guild_name, c.name, c.class AS class_id, "
-    "       c.level, c.race "
+    "       c.level, c.race, " + raidroles.TALENTS_COLUMN + " "
     "FROM characters c "
     "JOIN guild_member gm ON gm.guid = c.guid "
     "JOIN guild g ON g.guildid = gm.guildid "
@@ -1962,7 +1963,7 @@ _LINEUP_GUILD = (
 
 _RAID_GUILD = (
     "SELECT c.name, c.level, c.class AS class_id, c.race, "
-    "       g.name AS guild_name, g.guildid "
+    "       g.name AS guild_name, g.guildid, " + raidroles.TALENTS_COLUMN + " "
     "FROM characters c "
     "JOIN guild_member gm ON gm.guid = c.guid "
     "JOIN guild g ON g.guildid = gm.guildid "
@@ -4475,6 +4476,7 @@ class Handler(BaseHTTPRequestHandler):
                     "class_id": row.get("class_id"),
                     "level": row.get("level"),
                     "race": row.get("race"),
+                    raidroles.KEY: row.get(raidroles.KEY),
                     # Resolved here rather than in the page, because every
                     # other view on this site takes its class colour from the
                     # server and a second palette could disagree with the
