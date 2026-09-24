@@ -68,6 +68,7 @@ import jev_choices
 import jev_recovery
 import jev_activity
 import jev_keep
+import jev_movement
 import jobs
 import kin
 import learnaim
@@ -2853,6 +2854,49 @@ def _situation_reads(names: list, leader: str) -> dict:
     return out
 
 
+# --- the movement choice's reads and writer (jev_movement.py) -----------------
+_MOVEMENT_BINDS = (
+    "SELECT c.name, h.mapId AS map_id, h.posX AS x, h.posY AS y, h.posZ AS z "
+    "FROM character_homebind h JOIN characters c ON c.guid = h.guid "
+    "WHERE c.name IN (%s)")
+# A hearth that did not happen (an error row) starts no cooldown.
+_MOVEMENT_HEARTHED = (
+    "SELECT DISTINCT target_name FROM overseer_command WHERE kind = 'hearth' "
+    "AND status <> 'error' AND created_at > NOW() - INTERVAL "
+    + str(jev_movement.HEARTH_COOLDOWN_SECONDS) + " SECOND "
+    "AND target_name IN (%s)")
+
+
+def _movement_reads(names: list) -> dict:
+    """Hearthstone points and who hearthed in the last hour. Reads only."""
+    out = {"binds": {}, "hearthed": frozenset()}
+    if not names:
+        return out
+    marks = ", ".join(["%s"] * len(names))
+    with _connect() as conn, conn.cursor() as cur:
+        rows = _situation_try(cur, "homebind", _MOVEMENT_BINDS % marks, tuple(names))
+        out["binds"] = {
+            str(r["name"]): situation.Point(int(r["map_id"]), float(r["x"]),
+                                            float(r["y"]), float(r["z"]))
+            for r in rows or ()
+        }
+        rows = _situation_try(cur, "hearths", _MOVEMENT_HEARTHED % marks,
+                              tuple(names))
+        out["hearthed"] = frozenset(str(r["target_name"]) for r in rows or ())
+    return out
+
+
+def _insert_hearth(name: str) -> int:
+    """One kind='hearth' row: the character uses its hearthstone."""
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(
+            "INSERT INTO overseer_command (target_name, command, kind, source) "
+            "VALUES (%s, 'use', 'hearth', %s)",
+            (name, jev_movement.SOURCE),
+        )
+        return cur.lastrowid
+
+
 def _holders_of(quest_id: int) -> set:
     """Which protected characters actually hold this quest in an actionable
     state.
@@ -4444,6 +4488,10 @@ class Bridge(discord.Client):
         # (vision.py). Both in memory; a restart reads progress as unknown
         # until the trail is a minute long again.
         self._situation_trail = situation.Tracker()
+        # family -> {"asked": when, "acted": when}, monotonic, for the
+        # movement choice's own clock (jev_movement.ASK_SECONDS and
+        # ACT_COOLDOWN_SECONDS). In memory; a restart may ask once early.
+        self._movement_seen: dict = {}
         self._seer = vision.Seer.from_env(dict(os.environ, LLM_URL=LLM_URL))
         # THE LEVELING ZONE (levelroute.py). Per family key: the facts the
         # last choice was made on, the hub chosen, who chose it and when; the
@@ -4501,6 +4549,7 @@ class Bridge(discord.Client):
                 self._loot_council_loop,
                 self._situation_loop,
                 self._level_route_loop,
+                self._movement_loop,
             )
         }
 
@@ -13101,6 +13150,100 @@ class Bridge(discord.Client):
             return ""
         return lease.activity
 
+    async def _movement_loop(self) -> None:
+        """Ask each family how it gets moving again, when something is wrong
+        with how it moves (jev_movement)."""
+        await self.wait_until_ready()
+        cycle = float(os.environ.get("MOVEMENT_CYCLE_SECONDS", "60"))
+        # After the sampler has a trail: progress needs a minute of it.
+        await asyncio.sleep(max(cycle, 90.0))
+        while not self.is_closed():
+            try:
+                await self._movement_once()
+            except Exception:
+                log.exception("movement: pass failed; today's rules stand")
+            await asyncio.sleep(cycle)
+
+    async def _movement_once(self) -> None:
+        rule = jev_movement.policy()
+        if rule.mode == jev.OFF or not self._jev.ready(jev_movement.KIND):
+            return
+        fams = campaignqueue.families(await asyncio.to_thread(_fetch_queue_roster))
+        for key, fam in sorted(fams.items()):
+            try:
+                await self._movement_for(key, fam, rule)
+            except Exception:
+                log.exception("movement: the choice for %s failed; today's "
+                              "rules stand", campaignqueue._family(key))
+
+    def _movement_due(self, key: str, job: str, now: float) -> bool:
+        """Not during a dungeon job (run recovery and the campaign's staging
+        own those), and not inside the family's own ask or act clock."""
+        if jobs.is_dungeon_job(job):
+            return False
+        seen = self._movement_seen.get(key) or {}
+        if now - seen.get("asked", -1e9) < jev_movement.ASK_SECONDS:
+            return False
+        return now - seen.get("acted", -1e9) >= jev_movement.ACT_COOLDOWN_SECONDS
+
+    async def _movement_for(self, key: str, fam: dict, rule) -> None:
+        names = list(fam["names"])
+        leader = str(fam["leader"].get("name") or "")
+        job = str(fam["leader"].get("job") or "").strip().lower()
+        now = time.monotonic()
+        if not names or not self._movement_due(key, job, now):
+            return
+        if await self._mid_run(names):
+            return
+        where = await self._situation_for(key, names, leader)
+        if where is None:
+            return
+        reads = await asyncio.to_thread(_movement_reads, names)
+        slot = self._travel_slot_of(key)
+        holder = slot.holder if slot is not None else None
+        mine = holder is not None and holder.claimant and holder.character == leader
+        facts = jev_movement.Facts(
+            family=key or leader, where=where, binds=reads["binds"],
+            hearthed=reads["hearthed"], errand=holder.aim if mine else "",
+            claimant=holder.claimant if mine else "")
+        judgment = await jev_movement.ask(self._jev, facts, rule)
+        if judgment is None:
+            return
+        self._movement_seen.setdefault(key, {})["asked"] = now
+        log.info("%s", judgment.line())
+        try:
+            await asyncio.to_thread(_insert_jev_judgment, judgment)
+        except Exception:
+            log.exception("movement: the choice for %s was not recorded",
+                          campaignqueue._family(key))
+        if judgment.carried_out:
+            await self._carry_out_movement(key, facts, judgment, slot)
+            self._movement_seen[key]["acted"] = now
+
+    async def _carry_out_movement(self, key: str, facts, judgment, slot) -> None:
+        """Write what Jev chose. Every road here already exists in the world:
+        kind='hearth' rows and the travel column's compare-and-swap release."""
+        who = campaignqueue._family(key)
+        chosen = judgment.carried_out
+        if chosen == jev_movement.HEARTH_STRAGGLER and judgment.straggler:
+            await asyncio.to_thread(_insert_hearth, judgment.straggler)
+            log.info("movement: %s hearths home - far from %s and not moving "
+                     "(Jev, conf %.2f)", judgment.straggler, who,
+                     judgment.confidence or 0.0)
+        elif chosen == jev_movement.HEARTH_FAMILY:
+            for body in facts.where.bodies:
+                await asyncio.to_thread(_insert_hearth, body.name)
+            log.info("movement: %s hearths home together and meets at the inn "
+                     "(Jev, conf %.2f)", who, judgment.confidence or 0.0)
+        elif chosen == jev_movement.DROP_ERRAND and facts.errand and slot is not None:
+            leader = facts.where.leader
+            released = await asyncio.to_thread(_release_trade_errand, leader,
+                                               facts.errand)
+            slot.abandon(facts.claimant, facts.errand, released, time.monotonic())
+            log.info("movement: %s gives up the walk to %r (%s's); released=%s "
+                     "(Jev, conf %.2f)", leader, facts.errand, facts.claimant,
+                     released, judgment.confidence or 0.0)
+
     async def _situation_loop(self) -> None:
         """Sample every roster member's position for situation.Tracker.
 
@@ -21381,6 +21524,7 @@ class HeadlessBridge(Bridge):
                 self._run_recovery_loop,
                 self._situation_loop,
                 self._level_route_loop,
+                self._movement_loop,
             ) if coro.__name__ not in self.HEADLESS_SKIP
         ]
         log.info("headless: no Discord gateway; driving %d loop(s): %s",

@@ -33,6 +33,7 @@ KINDS = {
     "quest_pick": "The family's quest",
     "profession_choice": "A family member's professions",
     "activity_choice": "A family's next activity",
+    "movement": "How a family gets moving again",
     "item_keep": "What to do with a protected non-gear item",
 }
 

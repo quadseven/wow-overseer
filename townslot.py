@@ -1404,6 +1404,20 @@ class Slot:
             self.holder = None
             self._served[decision.claimant] = now
 
+    def abandon(self, claimant: str, aim: str, released: bool, now: float) -> None:
+        """Record a walk given up by a choice rather than by a stall.
+
+        jev_movement's `drop_errand`: the same ledger a stall give-up writes,
+        so the gate refuses `claimant` that aim for SPENT_SECONDS exactly as
+        it does after `_measure`, and a pass re-asserting on its own cycle
+        cannot put the walk straight back.
+        """
+        self._spent[(claimant, aim)] = now
+        self._progress.pop((claimant, aim), None)
+        if released and self.holder is not None and self.holder.aim == aim:
+            self.holder = None
+            self._served[claimant] = now
+
     def urgency_suppressed_until(self, claimant: str) -> float:
         """When this claimant may preempt on urgency again (0.0 = now).
 
