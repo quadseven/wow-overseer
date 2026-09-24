@@ -13231,21 +13231,34 @@ class Bridge(discord.Client):
             _attunement_facts, key, leader, names,
             str(fam["leader"].get("job") or ""), mid, due)
         step = attunestep.step(facts)
-        now = time.monotonic()
-        if step.hold_planner:
-            since = self._attune_since.setdefault(key, now)
-            if now - since > attunestep.HOLD_LIMIT_SECONDS:
-                line = ("gave the planner back after %d minutes without "
-                        "finishing: %s" % (int((now - since) // 60), step.line))
-                if self._attune_said.get(key) != line:
-                    log.warning("attunement: %s: %s", who, line)
-                self._attune_said[key] = line
-                return False
-        else:
-            self._attune_since.pop(key, None)
+        if self._attune_hold_spent(key, who, step):
+            return False
         if self._attune_said.get(key) != step.line:
             log.info("attunement: %s: %s", who, step.line)
         self._attune_said[key] = step.line
+        await self._attune_carry_out(key, who, leader, own, step)
+        return step.hold_planner
+
+    def _attune_hold_spent(self, key: str, who: str, step) -> bool:
+        """Has this stretch of holding the planner run past its limit?
+        Said once when it has; the stretch ends when the step stops holding."""
+        if not step.hold_planner:
+            self._attune_since.pop(key, None)
+            return False
+        now = time.monotonic()
+        since = self._attune_since.setdefault(key, now)
+        if now - since <= attunestep.HOLD_LIMIT_SECONDS:
+            return False
+        line = ("gave the planner back after %d minutes without finishing: %s"
+                % (int((now - since) // 60), step.line))
+        if self._attune_said.get(key) != line:
+            log.warning("attunement: %s: %s", who, line)
+        self._attune_said[key] = line
+        return True
+
+    async def _attune_carry_out(self, key: str, who: str, leader: str,
+                                own: bool, step) -> None:
+        """Write the step's quest rows, and walk or release the leader."""
         for name, command in step.rows:
             written = await asyncio.to_thread(_insert_attunement_row, name, command)
             if written:
@@ -13261,7 +13274,6 @@ class Bridge(discord.Client):
             if released:
                 log.info("attunement: %s: %s stands at Lothos Riftwaker, so the "
                          "walk is handed back", who, leader)
-        return step.hold_planner
 
     async def _campaign_owns_travel(self, pending: dict, fams: dict) -> None:
         """Give a staging campaign its leader's travel column (#227).

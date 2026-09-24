@@ -91,10 +91,11 @@ QUEST_SQL = (
     "WHERE ID IN ({quests})"
 )
 MEMBERS_SQL = "SELECT name, level, race FROM characters WHERE name IN ({holes})"
+# SNAPSHOT_MAX_AGE_SECONDS, written out (tests/test_attunestep.py holds the
+# two equal), so the statement is one constant string.
 SNAPSHOT_SQL = (
     "SELECT name, map_id, pos_x, pos_y, pos_z FROM overseer_snapshot "
-    "WHERE updated_at > NOW() - INTERVAL %d SECOND AND name IN ({holes})"
-    % SNAPSHOT_MAX_AGE_SECONDS
+    "WHERE updated_at > NOW() - INTERVAL 60 SECOND AND name IN ({holes})"
 )
 REWARDED_SQL = (
     "SELECT c.name, q.quest FROM characters c "
@@ -219,36 +220,35 @@ def _names(members) -> str:
     return "%s and %d more" % (", ".join(names[:3]), len(names) - 3)
 
 
-def step(facts: Facts, idle_jobs=("", "quest")) -> Step:
-    members = tuple(facts.members)
-    if not members:
-        return Step(WAIT, "no member of the family could be read")
+def _s(items) -> str:
+    """The verb ending for a list of names: "s" for one, "" for more."""
+    return "s" if len(items) == 1 else ""
+
+
+def _unready(facts: Facts, members: tuple):
+    """(a waiting Step, None) when nobody can go yet, else (None, the row)."""
     if all(m.rewarded for m in members):
-        return Step(DONE, "every member is attuned to the Core")
+        return Step(DONE, "every member is attuned to the Core"), None
     quest = quest_for(members, facts.quests)
     if quest is None:
         return Step(
             WAIT,
             "no Attunement to the Core row in the world admits every member's race",
-        )
+        ), None
     if facts.spawn is None:
-        return Step(WAIT, "Lothos Riftwaker has no spawn in the world database")
+        return Step(WAIT, "Lothos Riftwaker has no spawn in the world database"), None
     low = [m for m in members if m.level < quest.min_level]
     if low:
         return Step(
             WAIT,
             "%s below level %d, the attunement's own minimum"
             % (_names(low), quest.min_level),
-        )
-    needing = [m for m in members if need(m)]
-    if not needing:
-        holding = [m for m in members if not m.rewarded]
-        return Step(
-            BLACKROCK,
-            "%s hold%s Attunement to the Core without a Core Fragment: "
-            "Blackrock Depths is next, and the planner ranks it first"
-            % (_names(holding), "s" if len(holding) == 1 else ""),
-        )
+        ), None
+    return None, quest
+
+
+def _not_now(facts: Facts, members: tuple, needing: list, idle_jobs) -> Step | None:
+    """Why the family cannot walk to Lothos this pass, or None."""
     away = [m for m in members if m.map_id is None or int(m.map_id) != EASTERN_KINGDOMS]
     if away:
         unread = [m for m in away if m.map_id is None]
@@ -258,7 +258,7 @@ def step(facts: Facts, idle_jobs=("", "quest")) -> Step:
             "there%s; getting across is the campaign's crossing"
             % (
                 _names(needing),
-                "s" if len(needing) == 1 else "",
+                _s(needing),
                 _names(away),
                 "is" if len(away) == 1 else "are",
                 " (%s unread)" % _names(unread) if unread else "",
@@ -268,37 +268,41 @@ def step(facts: Facts, idle_jobs=("", "quest")) -> Step:
         return Step(
             WAIT,
             "%s need%s Lothos Riftwaker, after the family's queued runs"
-            % (_names(needing), "s" if len(needing) == 1 else ""),
+            % (_names(needing), _s(needing)),
         )
-    if facts.mid_run or str(facts.job or "").strip().lower() not in idle_jobs:
+    job = str(facts.job or "").strip().lower()
+    if facts.mid_run or job not in idle_jobs:
         return Step(
             WAIT,
             "%s need%s Lothos Riftwaker, once the family is off job %s"
             % (
                 _names(needing),
-                "s" if len(needing) == 1 else "",
-                "mid-run" if facts.mid_run else (facts.job or "?"),
+                _s(needing),
+                "mid-run" if facts.mid_run else job or "?",
             ),
             hold_planner=True,
         )
+    return None
+
+
+def _go(facts: Facts, members: tuple, needing: list, quest: QuestRow) -> Step:
+    """The walk, and the rows for the members standing at Lothos."""
+    wanted = [(m, command(need(m), quest.quest_id)) for m in needing]
     rows = tuple(
-        (m.name, command(need(m), quest.quest_id))
-        for m in needing
-        if in_reach(m, facts.spawn)
-        and (m.name, command(need(m), quest.quest_id)) not in facts.recent
+        (m.name, said)
+        for m, said in wanted
+        if in_reach(m, facts.spawn) and (m.name, said) not in facts.recent
     )
     leader = next((m for m in members if m.name == facts.leader), None)
     at_lothos = leader is not None and in_reach(leader, facts.spawn)
+    far = yards(leader, facts.spawn) if leader else None
     if rows:
-        line = "at Lothos Riftwaker: %s" % "; ".join(
-            "%s %s" % (name, said) for name, said in rows
-        )
+        line = "at Lothos Riftwaker: %s" % "; ".join("%s %s" % r for r in rows)
     elif at_lothos:
         line = "the family stands at Lothos Riftwaker; %s's rows are written" % (
             _names(needing)
         )
     else:
-        far = yards(leader, facts.spawn) if leader else None
         line = "%s walks the family to Lothos Riftwaker%s for %s" % (
             facts.leader,
             " (%d yards)" % far if far is not None else "",
@@ -314,7 +318,67 @@ def step(facts: Facts, idle_jobs=("", "quest")) -> Step:
     )
 
 
+def step(facts: Facts, idle_jobs=("", "quest")) -> Step:
+    """What the family does about the attunement this pass (see the module
+    docstring for the order the checks are made in)."""
+    members = tuple(facts.members)
+    if not members:
+        return Step(WAIT, "no member of the family could be read")
+    waiting, quest = _unready(facts, members)
+    if waiting is not None:
+        return waiting
+    needing = [m for m in members if need(m)]
+    if not needing:
+        holding = [m for m in members if not m.rewarded]
+        return Step(
+            BLACKROCK,
+            "%s hold%s Attunement to the Core without a Core Fragment: "
+            "Blackrock Depths is next, and the planner ranks it first"
+            % (_names(holding), _s(holding)),
+        )
+    return _not_now(facts, members, needing, idle_jobs) or _go(
+        facts, members, needing, quest
+    )
+
+
 # --- reading the rows ---------------------------------------------------------
+
+
+def _statuses(log_rows) -> dict:
+    """name -> the furthest QuestStatus a log row carries for it."""
+    status: dict = {}
+    for row in log_rows or ():
+        name = str(row.get("name"))
+        status[name] = max(status.get(name, 0), int(row.get("status") or 0))
+    return status
+
+
+def _member(name, char_row, seen, rewarded, status) -> Member:
+    c = char_row or {}
+    s = seen or {}
+    return Member(
+        name=name,
+        level=int(c.get("level") or 0),
+        race=int(c.get("race") or 0),
+        map_id=None if s.get("map_id") is None else int(s["map_id"]),
+        x=float(s.get("pos_x") or 0.0),
+        y=float(s.get("pos_y") or 0.0),
+        z=float(s.get("pos_z") or 0.0),
+        rewarded=rewarded,
+        status=status,
+    )
+
+
+def _spawn(spawn_rows) -> tuple | None:
+    if not spawn_rows:
+        return None
+    r = spawn_rows[0]
+    return (
+        int(r.get("map") or 0),
+        float(r.get("position_x") or 0.0),
+        float(r.get("position_y") or 0.0),
+        float(r.get("position_z") or 0.0),
+    )
 
 
 def facts_from_rows(
@@ -337,29 +401,11 @@ def facts_from_rows(
     chars = {str(r.get("name")): r for r in member_rows or ()}
     seen = {str(r.get("name")): r for r in snapshot_rows or ()}
     rewarded = {str(r.get("name")) for r in rewarded_rows or ()}
-    status: dict = {}
-    for row in log_rows or ():
-        name = str(row.get("name"))
-        status[name] = max(status.get(name, 0), int(row.get("status") or 0))
-    members = []
-    for name in names:
-        c = chars.get(name) or {}
-        s = seen.get(name)
-        members.append(
-            Member(
-                name=name,
-                level=int(c.get("level") or 0),
-                race=int(c.get("race") or 0),
-                map_id=None
-                if s is None or s.get("map_id") is None
-                else int(s["map_id"]),
-                x=float((s or {}).get("pos_x") or 0.0),
-                y=float((s or {}).get("pos_y") or 0.0),
-                z=float((s or {}).get("pos_z") or 0.0),
-                rewarded=name in rewarded,
-                status=status.get(name, STATUS_NONE),
-            )
-        )
+    status = _statuses(log_rows)
+    members = tuple(
+        _member(n, chars.get(n), seen.get(n), n in rewarded, status.get(n, STATUS_NONE))
+        for n in names
+    )
     quests = tuple(
         QuestRow(
             int(r.get("ID") or 0),
@@ -368,24 +414,15 @@ def facts_from_rows(
         )
         for r in quest_rows or ()
     )
-    spawn = None
-    if spawn_rows:
-        r = spawn_rows[0]
-        spawn = (
-            int(r.get("map") or 0),
-            float(r.get("position_x") or 0.0),
-            float(r.get("position_y") or 0.0),
-            float(r.get("position_z") or 0.0),
-        )
     recent = frozenset(
         (str(r.get("target_name")), str(r.get("command"))) for r in recent_rows or ()
     )
     return Facts(
         family=family,
         leader=leader,
-        members=tuple(members),
+        members=members,
         quests=quests,
-        spawn=spawn,
+        spawn=_spawn(spawn_rows),
         job=job,
         mid_run=mid_run,
         due=due,

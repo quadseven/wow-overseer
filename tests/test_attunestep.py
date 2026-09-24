@@ -209,6 +209,12 @@ class TheRows(unittest.TestCase):
         self.assertEqual(f.quests[1], attunestep.QuestRow(7848, 55, 1101))
         self.assertIn(("Grug", "turnin quest:7848"), f.recent)
 
+    def test_the_snapshot_age_is_the_constant(self):
+        self.assertIn(
+            "INTERVAL %d SECOND" % attunestep.SNAPSHOT_MAX_AGE_SECONDS,
+            attunestep.SNAPSHOT_SQL,
+        )
+
     def test_the_switch(self):
         self.assertTrue(attunestep.enabled({}))
         self.assertFalse(attunestep.enabled({"ATTUNEMENT_STEP": "off"}))
@@ -238,7 +244,7 @@ class TheBridgeCarriesItOut(unittest.TestCase):
         self.assertIn("if exc.args and exc.args[0] == 1265:", BRIDGE)
 
     def test_the_hold_has_a_limit(self):
-        self.assertIn("now - since > attunestep.HOLD_LIMIT_SECONDS", BRIDGE)
+        self.assertIn("if now - since <= attunestep.HOLD_LIMIT_SECONDS:", BRIDGE)
 
 
 if __name__ == "__main__":
