@@ -12189,6 +12189,17 @@ class Bridge(discord.Client):
                 if m.holds(skill)
             }
             if not skills:
+                # A SKINNER WITH NO NODE TRADE hunts beasts it can skin: the
+                # world's creature spawns on its map, in its band.
+                skin = m.skill(guildjobs.SKINNING)[0]
+                low, high = guildjobs.skin_band(m.level, skin)
+                if m.holds(guildjobs.SKINNING) and high >= low:
+                    beasts = await asyncio.to_thread(
+                        _survey_job_beasts, int(m.map_id), float(m.x), float(m.y), low, high)
+                    spot = guildjobs.skinning_field(beasts, (float(m.x), float(m.y)),
+                                                    m.level, skin)
+                    if spot is not None:
+                        out[m.name] = spot
                 continue
             locks = tuple(sorted({lock for name, best in gatheraim.strongest_gatherers(skills)
                                   for lock in gatherband.reachable_locks(name, best)}))
@@ -18757,6 +18768,37 @@ _JOB_NODE_SQL = (
     "JOIN acore_world.gameobject_template gt ON gt.entry = g.id "
     "WHERE g.map = %s AND gt.type = %s AND gt.Data0 IN ({placeholders}) AND g.zoneId <> 0"
 )
+
+
+# Skinnable beasts near one point: a normal-rank creature with skinning loot
+# that is not skinned with herbalism or mining (CREATURE_TYPE_FLAG_SKIN_WITH_
+# HERBALISM 0x100, _MINING 0x200), in a level band, inside a square box the
+# pure selection then trims to a circle.
+_JOB_BEAST_SQL = (
+    "SELECT c.guid, c.map AS map_id, c.position_x AS x, c.position_y AS y, "
+    "ct.maxlevel AS level, ct.name FROM acore_world.creature c "
+    "JOIN acore_world.creature_template ct ON ct.entry = c.id "
+    "WHERE c.map = %s AND ct.skinloot > 0 AND ct.`rank` = 0 "
+    "AND (ct.type_flags & 768) = 0 AND ct.maxlevel BETWEEN %s AND %s "
+    "AND c.position_x BETWEEN %s AND %s AND c.position_y BETWEEN %s AND %s"
+)
+
+
+def _survey_job_beasts(map_id: int, x: float, y: float, low: int, high: int) -> list:
+    """[(Spot, level)] of skinnable beasts within guildjobs.SKIN_YARDS of a
+    point, from the world's own creature spawns, with their spawn ids."""
+    reach = guildjobs.SKIN_YARDS
+    with _connect() as conn, conn.cursor() as cur:
+        try:
+            cur.execute(_JOB_BEAST_SQL, (int(map_id), int(low), int(high), x - reach,
+                                         x + reach, y - reach, y + reach))
+        except pymysql.err.MySQLError as exc:
+            if exc.args and exc.args[0] in (1054, 1146):
+                return []
+            raise
+        return [(spot, int(row["level"] or 0))
+                for row in cur.fetchall()
+                for spot in guildjobs.spots_from_rows([row], kind="creature")]
 
 
 def _survey_job_nodes(map_id: int, lock_ids) -> list:

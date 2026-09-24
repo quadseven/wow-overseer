@@ -29,7 +29,10 @@ guild corps' own `Step` shape, run by the corps' own runner in the bridge.
                5. farm: walk to a field of nodes its skill can open at a level
                   it can survive (gatheraim.choose, over the world's own node
                   spawns), with `walk-to-spawn gameobject:`; there the module
-                  lets it go and its own gather and grind strategies work.
+                  lets it go and its own gather and grind strategies work. A
+                  skinner with no node trade is sent instead to the densest
+                  pack of beasts it can kill and skin (`skinning_field`, over
+                  the world's creature spawns), with `walk-to-spawn creature:`.
   summoner     post and sell like anybody. Below level 20 it levels, because
                Ritual of Summoning is learned at 20 and needs a Soul Shard.
                With the ritual it is given a door (see WHICH DOOR) and, while
@@ -409,6 +412,82 @@ def _cooling(member: Member, action: str, recent) -> bool:
     return any(
         r.name == member.name and r.action == action and int(r.age_minutes) < minutes
         for r in recent or ()
+    )
+
+
+# ---------------------------------------------------------------------------
+# A SKINNER'S FIELD.
+
+# The core's own rule (Spell::CheckCast, SPELL_EFFECT_SKINNING): a creature of
+# level L needs skinning (L - 10) * 10 below 100 skill and L * 5 from there.
+# A skinner hunts beasts from SKIN_BELOW levels under itself to one over, and
+# only as high as its skill can skin.
+SKIN_BELOW = 6
+SKIN_ABOVE = 1
+# Spawns are grouped in cells this wide; the densest cell nearest the skinner
+# wins, in thousand-yard steps, like gatheraim.near_fields.
+SKIN_CELL = 250.0
+# How far a skinner is sent for beasts, and how many make a field.
+SKIN_YARDS = 3000.0
+SKIN_MIN_SPAWNS = 4
+
+
+def skinnable_level(value) -> int:
+    """The highest creature level this skinning value can skin; 0 unlearned."""
+    value = _int(value)
+    if value <= 0:
+        return 0
+    return value // 10 + 10 if value < 100 else value // 5
+
+
+def skin_band(level, value) -> tuple:
+    """(lowest, highest) creature level a skinner of this level and skill
+    hunts; highest below lowest means nothing fits."""
+    level = _int(level)
+    return max(1, level - SKIN_BELOW), min(level + SKIN_ABOVE, skinnable_level(value))
+
+
+def skinning_field(beasts, origin, level, value) -> Spot | None:
+    """The beast spawn a skinner is sent to, or None.
+
+    `beasts` are (Spot, level) for skinnable creature spawns on its map;
+    `origin` its (x, y). The spawns in its band are grouped into SKIN_CELL
+    cells; of the cells with SKIN_MIN_SPAWNS or more within SKIN_YARDS, the
+    nearest (in thousand-yard steps) and then the densest wins, and the spawn
+    sent to is the real one nearest that cell's middle.
+    """
+    low, high = skin_band(level, value)
+    if high < low or origin is None:
+        return None
+    cells = {}
+    for spot, beast_level in beasts or ():
+        if not low <= _int(beast_level) <= high:
+            continue
+        if _yards(spot.x, spot.y, origin[0], origin[1]) > SKIN_YARDS:
+            continue
+        key = (int(spot.x // SKIN_CELL), int(spot.y // SKIN_CELL))
+        cells.setdefault(key, []).append(spot)
+    best = None
+    for key, spots in cells.items():
+        if len(spots) < SKIN_MIN_SPAWNS:
+            continue
+        cx = sum(s.x for s in spots) / len(spots)
+        cy = sum(s.y for s in spots) / len(spots)
+        central = min(spots, key=lambda s: ((s.x - cx) ** 2 + (s.y - cy) ** 2, s.spawn))
+        rank = (int(_yards(cx, cy, origin[0], origin[1]) // 1000), -len(spots), key)
+        if best is None or rank < best[0]:
+            best = (rank, central, len(spots))
+    if best is None:
+        return None
+    _rank, spot, count = best
+    return Spot(
+        kind="creature",
+        spawn=spot.spawn,
+        map_id=spot.map_id,
+        x=spot.x,
+        y=spot.y,
+        name=spot.name or "a pack of beasts",
+        why="%d skinnable beasts of levels %d to %d" % (count, low, high),
     )
 
 

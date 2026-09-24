@@ -197,6 +197,49 @@ class Maintenance(unittest.TestCase):
         )
 
 
+class ASkinnersField(unittest.TestCase):
+    def beast(self, spawn, x, y, level=10, name="Mottled Boar"):
+        return (guildjobs.Spot("creature", spawn, 1, x, y, name), level)
+
+    def test_the_cores_skinning_rule(self):
+        self.assertEqual(guildjobs.skinnable_level(0), 0)
+        self.assertEqual(guildjobs.skinnable_level(1), 10)
+        self.assertEqual(guildjobs.skinnable_level(50), 15)
+        self.assertEqual(guildjobs.skinnable_level(100), 20)
+        self.assertEqual(guildjobs.skinnable_level(300), 60)
+
+    def test_the_band_is_its_level_and_what_its_skill_can_skin(self):
+        self.assertEqual(guildjobs.skin_band(12, 30), (6, 13))
+        self.assertEqual(guildjobs.skin_band(20, 50), (14, 15))
+
+    def test_the_nearest_dense_pack_in_band_wins(self):
+        near = [self.beast(i, 100 + i, 100 + i) for i in range(4)]
+        dense_far = [self.beast(10 + i, 2100 + i, 100) for i in range(9)]
+        thin = [self.beast(30, 10, 10), self.beast(31, 20, 20)]
+        red = [self.beast(40 + i, 50 + i, 50, level=20) for i in range(8)]
+        spot = guildjobs.skinning_field(
+            near + dense_far + thin + red, (0.0, 0.0), 12, 30
+        )
+        self.assertEqual(spot.kind, "creature")
+        self.assertIn(spot.spawn, {0, 1, 2, 3})
+        self.assertIn("6 skinnable beasts of levels 6 to 13", spot.why)
+
+    def test_nothing_in_band_is_no_field(self):
+        red = [self.beast(i, 10 + i, 10, level=30) for i in range(8)]
+        self.assertIsNone(guildjobs.skinning_field(red, (0.0, 0.0), 12, 30))
+        self.assertIsNone(guildjobs.skinning_field([], (0.0, 0.0), 12, 0))
+
+    def test_a_skinner_is_walked_to_its_beasts(self):
+        field = guildjobs.Spot("creature", 77, 0, -8000.0, 900.0, "Mottled Boar")
+        m = member(
+            "Skinner",
+            skills={S: (30, 75), 197: (10, 75)},
+            carried=(stack(1, 7005, 1, item_class=2),),
+        )
+        step = only_step(plan([m], fields={"Skinner": field}), "Skinner")
+        self.assertEqual(step.rows[0].command, "walk-to-spawn creature:77")
+
+
 class WhereMaterialsGo(unittest.TestCase):
     def test_herbs_go_to_the_guilds_alchemist_and_ore_to_the_bank(self):
         m = member(
@@ -569,6 +612,12 @@ class TheBridgePass(unittest.TestCase):
         self.assertIn("_survey_job_nodes", body)
         self.assertIn("spawn=int(spawn.guid)", body)
         self.assertIn("g.guid", BRIDGE[BRIDGE.index("_JOB_NODE_SQL = (") :])
+
+    def test_a_skinner_with_no_node_trade_hunts_surveyed_beasts(self):
+        body = self.body("_job_fields")
+        self.assertIn("_survey_job_beasts", body)
+        self.assertIn("guildjobs.skinning_field(", body)
+        self.assertIn("c.guid", BRIDGE[BRIDGE.index("_JOB_BEAST_SQL = (") :])
 
     def test_an_older_worldserver_is_remembered_for_an_hour(self):
         self.assertIn(
