@@ -54,7 +54,7 @@ COPY core.py bridge.py voice.py transform.py \
      preraid.py \
      runtimeline.py \
      vclient.py \
-     situation.py vision.py \
+     situation.py vision.py jev_movement.py \
      zones.json entrances.json shapes.json \
      talents.json items.json icons.json bagicons.json spells.json bagspells.json viewerdisplays.json \
      standing.json craftbook.json taxinodes.json \
