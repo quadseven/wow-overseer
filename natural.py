@@ -53,23 +53,32 @@ def why_not(name, family_names, parts, dues_takers, ledger_readable=True) -> str
     held = (parts or {}).get(name, set())
     if name in {str(n) for n in family_names or ()}:
         if name in {str(n) for n in dues_takers or ()} and GOLD_PART not in held:
-            return ("%s holds guild dues the factory-made members posted and has "
-                    "not had them taken out (naturalize discard-unearned-gold), "
-                    "so it contributes nothing" % name)
+            return (
+                "%s holds guild dues the factory-made members posted and has "
+                "not had them taken out (naturalize discard-unearned-gold), "
+                "so it contributes nothing" % name
+            )
         return ""
     if not ledger_readable:
-        return ("%s contributes nothing: the naturalize ledger cannot be read, "
-                "so nobody has been reset to level 1" % name)
+        return (
+            "%s contributes nothing: the naturalize ledger cannot be read, "
+            "so nobody has been reset to level 1" % name
+        )
     if RESET_PART not in held:
-        return ("%s contributes nothing: it has not been reset to level 1, so "
-                "what it holds was handed to it" % name)
+        return (
+            "%s contributes nothing: it has not been reset to level 1, so "
+            "what it holds was handed to it" % name
+        )
     return ""
 
 
-def contributors(names, family_names, parts, dues_takers, ledger_readable=True) -> frozenset:
+def contributors(
+    names, family_names, parts, dues_takers, ledger_readable=True
+) -> frozenset:
     """The names among `names` whose gold and items were earned."""
     return frozenset(
-        str(n) for n in names or ()
+        str(n)
+        for n in names or ()
         if not why_not(n, family_names, parts, dues_takers, ledger_readable)
     )
 

@@ -137,7 +137,12 @@ class TheFarWalk(unittest.TestCase):
             "Unknown": walker("Unknown", yards=None),
         }
         plan = guildwork.plan_dues(
-            crew, self.masters, walkers, (), (), max_yards=guildroute.FAR_WALK_YARDS,
+            crew,
+            self.masters,
+            walkers,
+            (),
+            (),
+            max_yards=guildroute.FAR_WALK_YARDS,
             eligible={m.name for m in crew},
         )
         self.assertEqual([r.holder for r in plan.runs], ["Near", "Mid"])

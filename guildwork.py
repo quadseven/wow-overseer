@@ -181,8 +181,10 @@ def _not_due(member, taker, posted, eligible) -> str | None:
     """
     name = str(member.name)
     if name not in eligible:
-        return ("%s posts no dues: it has not been reset to level 1, so its "
-                "gold was handed to it, and only earned gold is contributed" % name)
+        return (
+            "%s posts no dues: it has not been reset to level 1, so its "
+            "gold was handed to it, and only earned gold is contributed" % name
+        )
     if not taker:
         return "%s: %s has no guild master to post to" % (name, member.guild)
     if taker == name:
