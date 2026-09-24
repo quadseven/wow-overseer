@@ -134,6 +134,10 @@ class TheSelf:
     def _mail_walk_task_done(self, task):
         return None
 
+    async def _mail_in_passing(self, takes, seen, cohort=None):
+        """Nobody in these worlds is standing at a mailbox already (#276)."""
+        return set()
+
 
 # --- which family, which leader ---------------------------------------------
 
@@ -268,6 +272,7 @@ def _mail_ns(world, log):
             "_fetch_free_slots": lambda names: {n: 10 for n in names},
             "_fetch_positions": lambda names: {n: {"map_id": 1} for n in names},
             "_nearest_mailbox": lambda leader: world.setdefault("mailbox_for", leader),
+            "_spawn_yards": lambda spawn: None,
             "_mail_takes_in_reach": lambda takes, spawn, positions, yards, aim: takes,
             "_insert_mail": lambda take, command: (
                 world.setdefault("taken", []).append(take.character) or 1
@@ -437,6 +442,7 @@ class TheMasterBuysTheTabWithTheGold(unittest.TestCase):
                 "_plan_bank": lambda n: types.SimpleNamespace(guild=[]),
                 "_fetch_positions": lambda n: {x: {"map_id": 1} for x in n},
                 "_nearest_vault": lambda leader: world.setdefault("vault_for", leader),
+                "_spawn_yards": lambda spawn: None,
                 "_recent_guild_setup_keys": lambda minutes: set(),
                 "_insert_guild": lambda who, command, source: world.setdefault(
                     "guild_rows", []

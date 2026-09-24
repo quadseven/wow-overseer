@@ -266,6 +266,59 @@ PROGRESS_YARDS = 5.0
 ARRIVED_YARDS = 15.0
 SPENT_SECONDS = 1800.0
 
+# THE TOWN STOP: A SHORT WALK TO A MAILBOX, A BANKER OR A VAULT.
+#
+# Measured on the dev realm on 2026-09-24. Grug held 22 letters with 2,609
+# gold in them and Zug 6 letters with 1,042, the ten members had one item in
+# their personal banks between them, and the Cave guild bank had not seen a
+# deposit in eleven days. The mail pass took the column 11 times in 24 hours
+# and the bank pass 11 times, and every grant was taken off them again within
+# about 210 seconds by an urgent listing walk that never arrived either, so
+# no walk to a mailbox or a banker ever landed. On the Horde side the
+# family's campaign owned the traveller, and every town pass waited for it.
+#
+# A player does not queue for the post. Passing a mailbox, or standing in a
+# town after the vendor, they walk the few yards and check it. These three
+# claimants are that errand, and they are ORDERED rather than competing:
+#
+#   * a stop is only a stop while its counter is within TOWN_STOP_YARDS of
+#     the leader. Further out it is an ordinary trip with an ordinary turn;
+#   * it never preempts anybody. It takes a FREE column ahead of the queue,
+#     because it is short, and nothing else;
+#   * once taken, nobody preempts it for TOWN_STOP_SECONDS, urgent or not,
+#     because an urgent listing walk taking it at 81 seconds is what was
+#     measured. After that the ordinary lease rules apply again;
+#   * while the family's campaign owns the traveller, one stop per claimant
+#     per CAMPAIGN_STOP_EVERY_SECONDS is allowed, again only into a free
+#     column. The campaign's own aims are never touched: mod-overseer's
+#     coordinator defers staging while an errand stands in the column
+#     (mod-overseer#632 orders a head's travel column, and the town stop sits
+#     under the campaign's approach there too).
+STOP_CLAIMANTS = frozenset({"mail", "bank", "guild bank"})
+# A counter in the same town. The vendor and the vault the first lease was
+# measured between are 121 yards apart; 150 covers that and a little more,
+# and it is the family's own town rather than the next zone.
+TOWN_STOP_YARDS = 150.0
+# 150 yards at 112 yards a minute (the walking rate mod-overseer's backstop
+# measures) is 80 seconds; the counter work after it is seconds. 240 is three
+# of those walks and still under the ordinary lease.
+TOWN_STOP_SECONDS = 240.0
+# How often a campaign lets the same claimant stop. Half an hour: a run of a
+# low dungeon is longer than that, so one stop per run between runs, and a
+# stop that could not land is not retried every cycle at the campaign's cost.
+CAMPAIGN_STOP_EVERY_SECONDS = 1800.0
+
+
+def is_town_stop(claimant: str, distance: float | None) -> bool:
+    """Whether this ask is a short town stop rather than an ordinary trip."""
+    if claimant not in STOP_CLAIMANTS or distance is None:
+        return False
+    try:
+        yards = float(distance)
+    except (TypeError, ValueError):
+        return False
+    return 0.0 <= yards <= TOWN_STOP_YARDS
+
 
 # The verdicts. Strings rather than an enum for the reason every other decision
 # vocabulary in this package uses strings (`bag_pressure.VENDOR_ERRAND_*`,
@@ -337,6 +390,9 @@ class Decision:
     character: str = ""
     release: Holder | None = None
     inherit_since: float | None = None
+    # Granted as a short town stop (see STOP_CLAIMANTS), which `settle`
+    # records so the stop is not preempted or handed back while it walks.
+    stop: bool = False
 
     @property
     def granted(self) -> bool:
@@ -605,6 +661,7 @@ def decide(
     long_leases=None,
     want_fresh: float = WANT_FRESH_SECONDS,
     releasable=None,
+    stop: bool = False,
 ) -> Decision:
     """May this pass have the traveller, and what has to happen first.
 
@@ -727,6 +784,7 @@ def decide(
             now=now,
             want_fresh=want_fresh,
             urgent=urgent,
+            stop=stop,
         )
     return _held_column(
         claimant=claimant,
@@ -806,6 +864,7 @@ def _free_column(
     now: float,
     want_fresh: float,
     urgent: bool = False,
+    stop: bool = False,
 ) -> Decision:
     """Nobody is holding the traveller. Is it this pass's turn to take it?
 
@@ -817,6 +876,22 @@ def _free_column(
     # A loot-blocking bag failure is not an ordinary fairness wait. If the
     # column is free, urgent maintenance takes it even when an older auction
     # or bank want is registered.
+    #
+    # A SHORT TOWN STOP DOES NOT QUEUE EITHER (see STOP_CLAIMANTS). It is a
+    # walk of a few dozen yards in the town the family is already standing
+    # in, and making it wait a whole round behind trips across the zone is
+    # how a mailbox 40 yards away went unvisited for a day.
+    if stop:
+        return Decision(
+            verdict=SLOT_TAKE,
+            reason="%s takes the traveller %s for a short town stop at %r; "
+            "the column was free and a stop in the same town goes ahead of "
+            "the queue" % (claimant, character, aim),
+            claimant=claimant,
+            aim=aim,
+            character=character,
+            stop=True,
+        )
     ahead = [] if urgent else _ahead_of(claimant, wants, now, want_fresh)
     mine_served = last_served.get(claimant)
     # WHO IS OWED THE NEXT TURN. Only a pass that has been waiting longer than
@@ -1133,6 +1208,12 @@ class Slot:
         self._progress: dict = {}
         # {(claimant, aim): when given up} for walks that could not land.
         self._spent: dict = {}
+        # {(character, aim): when taken} for short town stops, which nobody
+        # preempts or hands back for TOWN_STOP_SECONDS (see STOP_CLAIMANTS).
+        self._stops: dict = {}
+        # {claimant: when} for the last stop made while a campaign owned the
+        # traveller, so a campaign gives each claimant one stop per window.
+        self._campaign_stops: dict = {}
 
     def reserve(self, claimant: str, now: float, why: str) -> None:
         """Give `claimant` the traveller until it unreserves or the hold ends.
@@ -1197,6 +1278,10 @@ class Slot:
         holder = self.holder
         if holder is None or not self.releasable or not self.releasable(holder.aim):
             return None
+        if self.stop_live(now) is not None:
+            # A SHORT TOWN STOP THE CAMPAIGN ITSELF ALLOWED is not handed back
+            # while it walks; the coordinator defers staging for it.
+            return None
         if holder.claimant:
             return holder
         if not ground(holder.aim):
@@ -1210,6 +1295,102 @@ class Slot:
         """Record that `campaign_release`'s answer was acted on."""
         if released and self.holder is not None and self.holder.aim == holder.aim:
             self.holder = None
+
+    def stop_live(self, now: float) -> Holder | None:
+        """The holder when it is a short town stop still inside its window."""
+        holder = self.holder
+        if holder is None or holder.claimant not in STOP_CLAIMANTS:
+            return None
+        since = self._stops.get((holder.character, holder.aim))
+        if since is None or now - since >= TOWN_STOP_SECONDS:
+            return None
+        return holder
+
+    def _stop_wait(self, claimant: str, character: str, aim: str, now: float):
+        """A wait while another claimant's town stop walks, else None."""
+        live = self.stop_live(now)
+        if live is None or live.claimant == claimant:
+            return None
+        since = self._stops[(live.character, live.aim)]
+        return Decision(
+            verdict=SLOT_WAIT,
+            reason="%s waits: %s is making a short town stop at %r on %s, "
+            "%ds of %ds, and a town stop is not preempted"
+            % (
+                claimant,
+                live.claimant,
+                live.aim,
+                live.character,
+                int(now - since),
+                int(TOWN_STOP_SECONDS),
+            ),
+            claimant=claimant,
+            aim=aim,
+            character=character,
+        )
+
+    def _campaign_stop(
+        self,
+        *,
+        claimant: str,
+        character: str,
+        aim: str,
+        leader: str,
+        now: float,
+        distance: float,
+    ) -> Decision:
+        """A short town stop while the family's campaign owns the traveller.
+
+        Only into a FREE column, only for the leader, and only once per
+        claimant per CAMPAIGN_STOP_EVERY_SECONDS. Anything in the column is
+        the campaign's or somebody's errand, and it is never taken.
+        """
+        holder = self.holder
+        why = "the family's campaign owns the traveller %s (%s)" % (
+            character,
+            self.campaign,
+        )
+        if holder is not None and holder.claimant == claimant and holder.aim == aim:
+            return Decision(
+                verdict=SLOT_HOLD,
+                reason="%s keeps its short town stop at %r on %s while %s"
+                % (claimant, aim, character, why),
+                claimant=claimant,
+                aim=aim,
+                character=character,
+                inherit_since=holder.since,
+                stop=True,
+            )
+        refusal = ""
+        last = self._campaign_stops.get(claimant)
+        if character != leader:
+            refusal = "%s is not the leader" % character
+        elif holder is not None:
+            refusal = "the column holds %r" % holder.aim
+        elif last is not None and now - last < CAMPAIGN_STOP_EVERY_SECONDS:
+            refusal = "it stopped %ds ago and a campaign allows one stop per %ds" % (
+                int(now - last),
+                int(CAMPAIGN_STOP_EVERY_SECONDS),
+            )
+        if refusal:
+            return Decision(
+                verdict=SLOT_WAIT,
+                reason="%s waits: %s, and a short town stop %d yards off cannot "
+                "go because %s" % (claimant, why, int(distance), refusal),
+                claimant=claimant,
+                aim=aim,
+                character=character,
+            )
+        return Decision(
+            verdict=SLOT_TAKE,
+            reason="%s makes a short town stop %d yards off at %r while %s; the "
+            "column was free and the approach waits for the stop"
+            % (claimant, int(distance), aim, why),
+            claimant=claimant,
+            aim=aim,
+            character=character,
+            stop=True,
+        )
 
     def spent(self, claimant: str, aim: str, now: float) -> bool:
         """Whether `claimant` gave `aim` up as unreachable within SPENT_SECONDS."""
@@ -1283,6 +1464,20 @@ class Slot:
         cannot finish (#227); a pass that passes None is never given up on.
         """
         self.holder = _reconcile(self.holder, leader=leader, column=column, now=now)
+        stop = is_town_stop(claimant, distance)
+        if self.campaign and stop:
+            # THE ONE ASK A CAMPAIGN LETS THROUGH (see STOP_CLAIMANTS).
+            decision = self._campaign_stop(
+                claimant=claimant,
+                character=character,
+                aim=aim,
+                leader=leader,
+                now=now,
+                distance=float(distance),
+            )
+            if decision.verdict == SLOT_HOLD:
+                return self._measure(decision, float(distance), now)
+            return decision
         if self.campaign:
             # THE CAMPAIGN FIRST, AHEAD OF EVERY RESERVATION AND LEASE (#227).
             # Not registered as a wait: the order is rebuilt when town errands
@@ -1308,6 +1503,10 @@ class Slot:
                 character=character,
             )
         held = reserved_wait(claimant, character, aim, self.reservation, now)
+        if held is not None:
+            self._note_wait(claimant, now)
+            return held
+        held = self._stop_wait(claimant, character, aim, now)
         if held is not None:
             self._note_wait(claimant, now)
             return held
@@ -1349,6 +1548,7 @@ class Slot:
             long_leases=long_leases,
             want_fresh=self.want_fresh,
             releasable=self.releasable,
+            stop=stop,
         )
         if decision.verdict == SLOT_WAIT and decision.aim:
             self._note_wait(claimant, now)
@@ -1391,6 +1591,8 @@ class Slot:
         """Ask for the travel column to become empty, without a successor."""
         self.holder = _reconcile(self.holder, leader=leader, column=column, now=now)
         held = reserved_wait(claimant, character, "", self.reservation, now)
+        if held is None:
+            held = self._stop_wait(claimant, character, "", now)
         if held is not None:
             self._note_wait(claimant, now)
             return held
@@ -1440,6 +1642,15 @@ class Slot:
         if decision.writes:
             # A new walk is measured from where it starts (#227).
             self._progress.pop((name, decision.aim), None)
+        if decision.stop and decision.writes:
+            self._stops = {
+                key: since
+                for key, since in self._stops.items()
+                if now - since < TOWN_STOP_SECONDS
+            }
+            self._stops[(decision.character, decision.aim)] = now
+            if self.campaign:
+                self._campaign_stops[name] = now
         since = decision.inherit_since if decision.inherit_since is not None else now
         self.holder = Holder(
             claimant=name, character=decision.character, aim=decision.aim, since=since

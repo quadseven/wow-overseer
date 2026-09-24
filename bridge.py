@@ -4159,6 +4159,7 @@ class Bridge(discord.Client):
                 self._crafter_mail_loop,
                 self._guild_corps_loop,
                 self._mail_loop,
+                self._town_passing_loop,
                 self._recruit_loop,
                 self._craft_supply_loop,
                 self._craft_rhythm_loop,
@@ -6555,6 +6556,8 @@ class Bridge(discord.Client):
                     cohort=_cohort_key(cohort)):
                 log.info("auction: leader=%s aimed to list %d surplus BoE item(s)",
                          leader, len(candidates))
+                if pressure:
+                    self._auction_urgency_spent(cohort, "list")
             return
         teams = await asyncio.to_thread(_fetch_teams, [leader])
         house = auction.reachable_house(
@@ -6583,6 +6586,7 @@ class Bridge(discord.Client):
                          sale.command, sale.candidate.label or "surplus BoE")
         if queued:
             await self._keep_at_auctioneer(leader, cohort)
+            self._cohort_town_slot(_cohort_key(cohort)).productive("auction")
         log.info("auction: listed %d surplus BoE item(s) at house %s%s",
                  queued, house, _family_label(cohort))
 
@@ -6652,6 +6656,7 @@ class Bridge(discord.Client):
             return
         if await self._queue_auction_bags(upgrades, teams, house):
             await self._keep_at_auctioneer(leader, cohort)
+            self._cohort_town_slot(_cohort_key(cohort)).productive("auction")
             return
         if at_counter or step != bag_pressure.VENDOR_ERRAND_AIM:
             return
@@ -6664,6 +6669,34 @@ class Bridge(discord.Client):
             cohort=_cohort_key(cohort))
         log.info("bag upgrade: leader=%s walks to an auctioneer for %d bag(s) "
                  "(aim taken=%s)", leader, len(upgrades), aimed)
+        if aimed and pressure:
+            self._auction_urgency_spent(cohort, "bag upgrade")
+
+    def _auction_urgency_spent(self, cohort, why: str) -> None:
+        """Back the auction pass's urgency off after a grant that sold nothing.
+
+        THE AUCTION PASS CLAIMED URGENCY WITH NO BOUND AT ALL. The vendor pass
+        reports each urgent grant's outcome to the town slot, and the auction
+        pass's two urgent walks, the listing walk and the bag upgrade walk,
+        never did. Measured on the dev realm on 2026-09-24: "aimed to list 4
+        surplus BoE item(s)" every ten minutes for a day, never listing one,
+        and every grant zeroed the lease of whoever held the column. The
+        mail, bank and guild bank walks were taken off the leader after 81 to
+        219 seconds, and none of them ever reached its counter.
+
+        A grant that has written nothing yet is fruitless in exactly the
+        sense the vendor pass uses, and the listing or the bag bought at the
+        counter is what calls `productive`. Suppressed urgency is not a
+        refusal: the pass keeps its ordinary lease and its turn.
+        """
+        slot = self._cohort_town_slot(_cohort_key(cohort))
+        until = slot.fruitless("auction", time.monotonic())
+        log.warning(
+            "auction: took the travel column on bag pressure for a %s walk and "
+            "wrote nothing yet; urgency suppressed for %.0fs so a walk that "
+            "does not land stops taking every other errand's column%s",
+            why, max(0.0, until - time.monotonic()), _family_label(cohort),
+        )
 
     async def _bag_purses(self, names: list) -> dict:
         """name -> bag_market.Purse, from the saved characters rows."""
@@ -9832,8 +9865,12 @@ class Bridge(discord.Client):
             # invisible for as long as nobody logged it.
             # THROUGH THE TOWN SLOT (infra#3703): the refusal is now a turn in
             # a queue with a lease on it rather than a race this pass lost.
+            # AND THE DISTANCE MAKES A BANKER IN THE SAME TOWN A SHORT STOP
+            # (townslot.STOP_CLAIMANTS), the way the mail pass's does.
             aimed = await self._claim_town_slot("bank", leader, "banker",
-                                                 cohort=cohort)
+                                                 cohort=cohort,
+                                                 distance=await asyncio.to_thread(
+                                                     _nearest_banker_yards, leader))
             if not aimed:
                 log.info(
                     "bank: leader=%s is already on somebody else's errand, so "
@@ -10012,6 +10049,53 @@ class Bridge(discord.Client):
             log.info("bank: %s", line)
         log.info("bank: queued %d/%d move(s), leader=%s%s",
                  len(fresh), len(bank_plan.moves), leader, _family_label(cohort))
+
+    async def _bank_at_the_counter(self, planned, seen: set) -> tuple:
+        """Write the moves of every mover standing at a banker right now.
+
+        Returns `(fresh, walking)`: the moves written, and the movers with no
+        banker in reach. Asked per mover, because `BankerInReach(who, ...)`
+        measures the character whose row it is.
+        """
+        at_the_counter: dict = {}
+        walking = []
+        fresh = []
+        for move, command in planned:
+            if (move.character, command) in seen:
+                continue
+            if move.character not in at_the_counter:
+                mover_town = await asyncio.to_thread(_fetch_town, move.character)
+                at_the_counter[move.character] = bool(mover_town.banker)
+            if not at_the_counter[move.character]:
+                walking.append(move.character)
+                continue
+            if await asyncio.to_thread(_insert_bank, move, command):
+                fresh.append(move)
+        return fresh, walking
+
+    async def _bank_passing_once(self, cohort=None) -> None:
+        """The quick look: bank for whoever is at a banker, nothing else.
+
+        Never claims the travel column. A family that stopped at a banker for
+        any reason (a vendor beside it, the town trip) puts its surplus down
+        on the way past instead of waiting for the ten-minute bank pass.
+        """
+        names, _leader = await asyncio.to_thread(_family_of, cohort)
+        if not names:
+            return
+        bank_plan = await asyncio.to_thread(_plan_bank, names)
+        if not bank_plan.moves:
+            return
+        seen = await asyncio.to_thread(_recent_bank_keys, GIVE_RETRY_MINUTES)
+        planned = [(move, bank.command(move)) for move in bank_plan.moves]
+        fresh, _walking = await self._bank_at_the_counter(planned, seen)
+        if fresh:
+            for line in bank.lines(fresh):
+                log.info("bank: %s", line)
+            log.info("bank passing: %s at a banker - queued %d move(s) "
+                     "without a trip%s",
+                     ", ".join(sorted({m.character for m in fresh})),
+                     len(fresh), _family_label(cohort))
 
     async def _bank_loop(self) -> None:
         """Keep the family's bank in use (mod-overseer#207).
@@ -10223,8 +10307,11 @@ class Bridge(discord.Client):
             # The sentence comes from travel.vault_aim already actionable.
             log.info("guild bank: nobody can be sent to a vault - %s", vault.refused)
             return
+        # THE DISTANCE MAKES A VAULT IN THE SAME TOWN A SHORT STOP
+        # (townslot.STOP_CLAIMANTS), the way the mail pass's does.
         aimed = await self._claim_town_slot("guild bank", leader, vault.aim,
-                                             cohort=_cohort_key(cohort))
+                                             cohort=_cohort_key(cohort),
+                                             distance=_spawn_yards(spawn))
         # ALREADY STANDING THERE COUNTS AS AIMED, because it is the state the
         # aim exists to produce. mod-overseer RELEASES a travel aim the moment
         # the walk arrives (it clears `travel_npc`, which is the signal the
@@ -10342,6 +10429,45 @@ class Bridge(discord.Client):
         log.info("guild bank: queued %d/%d deposit(s), leader=%s aimed at %s%s",
                  len(fresh), len(deposits), leader, vault.aim,
                  _family_label(cohort))
+
+    async def _guild_bank_passing_once(self, cohort=None) -> None:
+        """The quick look: deposit for whoever stands at a vault, nothing else.
+
+        The gold `_guild_bank_once` would deposit, under the same float and the
+        same tab reserve (`guildbank.plan_deposits`), for each depositor
+        standing in reach of their own nearest vault. It never claims the
+        column, and it leaves the tab purchase and the kept stacks to the full
+        pass, which walks for them.
+        """
+        names, _leader = await asyncio.to_thread(_family_of, cohort)
+        if not names:
+            return
+        setup = await asyncio.to_thread(_fetch_guild_bank_setup, names)
+        purchased_tabs = int(setup["purchased_tabs"]) if setup else 0
+        deposits = guildbank.plan_deposits(
+            await asyncio.to_thread(_fetch_guild_money, names),
+            guild_has_tab=purchased_tabs > 0)
+        if not deposits:
+            return
+        positions = await asyncio.to_thread(
+            _fetch_positions, sorted({d.name for d in deposits}))
+        seen = await asyncio.to_thread(_recent_guild_bank_keys, GIVE_RETRY_MINUTES)
+        fresh = []
+        for deposit in deposits:
+            command = f"bank deposit {deposit.copper}"
+            if (deposit.name, command) in seen:
+                continue
+            spawn = await asyncio.to_thread(_nearest_vault, deposit.name)
+            if not travel.spawn_in_reach(
+                    spawn, positions.get(deposit.name), TOWN_COUNTER_YARDS):
+                continue
+            await asyncio.to_thread(_insert_guild, deposit.name, command, "guildbank")
+            fresh.append(deposit)
+        if fresh:
+            log.info("guild bank passing: %s at a vault - queued %d deposit(s) "
+                     "without a trip%s",
+                     ", ".join(sorted(d.name for d in fresh)), len(fresh),
+                     _family_label(cohort))
 
     async def _queue_guild_items(self, items, spawn, positions) -> None:
         """Write the keeper rule's guild deposits for holders at the vault.
@@ -11101,6 +11227,12 @@ class Bridge(discord.Client):
             log.info("mail: %d letter(s) are waiting and none of them can be "
                      "collected this pass", len(letters))
             return
+        # ANYBODY ALREADY STANDING AT A MAILBOX CHECKS IT FIRST, whoever holds
+        # the column: a take at the box is an instant verb that moves nobody.
+        # Only what is left needs a trip.
+        seen = seen | await self._mail_in_passing(mail_plan.takes, seen, cohort)
+        if all((t.character, mailrun.command(t)) in seen for t in mail_plan.takes):
+            return
 
         # `_head_now()` RATHER THAN bonds.head_of_family(), the defect infra#3553
         # found in the vendor pass and infra#3554 fixed: `_head_now` names the
@@ -11130,8 +11262,14 @@ class Bridge(discord.Client):
         # measured 21 letters waiting would have been the one pass nothing could
         # ever preempt, holding the column while the auction pass that BUYS what
         # arrives by mail starved behind it.
+        #
+        # THE DISTANCE MAKES A MAILBOX IN THE SAME TOWN A SHORT STOP
+        # (townslot.STOP_CLAIMANTS): ahead of the queue into a free column,
+        # not preempted while it walks, and let through once per window while
+        # the family's campaign owns the traveller.
         aimed = await self._claim_town_slot("mail", leader, post.aim,
-                                             cohort=_cohort_key(cohort))
+                                             cohort=_cohort_key(cohort),
+                                             distance=_spawn_yards(spawn))
         # ALREADY STANDING THERE COUNTS AS AIMED, the reasoning `_guild_bank_once`
         # sets out: mod-overseer releases a travel aim the moment the walk
         # arrives, so the cycle AFTER the family reaches the mailbox finds the
@@ -11182,6 +11320,103 @@ class Bridge(discord.Client):
                  "aimed at %s%s",
                  len(fresh), len(mail_plan.takes), len(letters), leader, post.aim,
                  _family_label(cohort))
+
+    async def _mail_in_passing(self, takes, seen: set, cohort=None) -> set:
+        """Queue the takes of every holder standing at a mailbox of their own.
+
+        CHECKING THE POST ON THE WAY PAST IT. The mail pass only ever asked
+        whether the LEADER stood at the ONE mailbox it aimed at, so a follower
+        at a box, or a leader at a different box in the same town, collected
+        nothing, and a family that passed a mailbox on its way somewhere else
+        never looked in it. Asked per holder of that holder's own nearest box,
+        at the core's own reach (`FindMailboxInReach` sweeps around the
+        character whose row it is), so a row is written only where it works.
+
+        Returns the `(character, command)` pairs it wrote, so the caller does
+        not ask for them again this cycle.
+        """
+        by_holder: dict = {}
+        for take in takes:
+            command = mailrun.command(take)
+            if (take.character, command) in seen:
+                continue
+            by_holder.setdefault(take.character, []).append((take, command))
+        if not by_holder:
+            return set()
+        positions = await asyncio.to_thread(_fetch_positions, sorted(by_holder))
+        wrote: set = set()
+        fresh = []
+        for holder in sorted(by_holder):
+            spawn = await asyncio.to_thread(_nearest_mailbox, holder)
+            if not travel.spawn_in_reach(spawn, positions.get(holder),
+                                         TOWN_COUNTER_YARDS):
+                continue
+            for take, command in by_holder[holder]:
+                if await asyncio.to_thread(_insert_mail, take, command):
+                    wrote.add((take.character, command))
+                    fresh.append(take)
+        if fresh:
+            for line in mailrun.lines(fresh):
+                log.info("mail: %s", line)
+            log.info("mail passing: %s at a mailbox - queued %d take(s) "
+                     "without a trip%s",
+                     ", ".join(sorted({t.character for t in fresh})),
+                     len(fresh), _family_label(cohort))
+        return wrote
+
+    async def _mail_passing_once(self, cohort=None) -> None:
+        """The quick look: collect for whoever is at a mailbox, nothing else.
+
+        The full mail pass runs every ten minutes and a family walks through
+        a town in less. This runs every PASSING_CYCLE_SECONDS, never claims
+        the travel column, and writes rows only for a holder already standing
+        at a box.
+        """
+        names, _leader = await asyncio.to_thread(_family_of, cohort)
+        if not names:
+            return
+        letters = mailrun.letters_from_rows(
+            await asyncio.to_thread(_fetch_mail, names), names)
+        if not letters:
+            return
+        seen = await asyncio.to_thread(_recent_mail_keys, GIVE_RETRY_MINUTES)
+        mail_plan = mailrun.plan(
+            letters,
+            await asyncio.to_thread(_fetch_free_slots, names),
+            mailrun.attachments_asked(seen),
+        )
+        if mail_plan.takes:
+            await self._mail_in_passing(mail_plan.takes, seen, cohort)
+
+    async def _town_passing_once(self, cohort=None) -> None:
+        """Look in the mailbox, the bank and the vault a member is standing at.
+
+        None of the three claims the travel column: each writes rows only for
+        a holder already in reach of the counter. So a family that stops at a
+        vendor beside the bank, or walks through a town on its way to a
+        dungeon, checks its post and puts its surplus down as it goes, the
+        way a player does. Each look is guarded on its own, so one failing
+        costs only itself.
+        """
+        for what, step in (
+                ("mail", self._mail_passing_once),
+                ("bank", self._bank_passing_once),
+                ("guild bank", self._guild_bank_passing_once)):
+            try:
+                await step(cohort)
+            except Exception:
+                log.exception("town passing: the %s look failed%s; retrying "
+                              "next cycle", what, _family_label(cohort))
+
+    async def _town_passing_loop(self) -> None:
+        """The quick look at the counters, every TOWN_PASSING_CYCLE_SECONDS."""
+        await self.wait_until_ready()
+        await asyncio.sleep(min(TOWN_PASSING_CYCLE_SECONDS, 45.0))
+        while not self.is_closed():
+            await self._town_passing_once()
+            await self._for_other_families("town passing",
+                                           self._town_passing_once)
+            await asyncio.sleep(TOWN_PASSING_CYCLE_SECONDS)
 
     async def _mail_loop(self) -> None:
         """Keep the family's mailboxes emptied (infra#3741).
@@ -12166,6 +12401,13 @@ class Bridge(discord.Client):
                 log.warning("town slot: handed %s's trainer walk back so the "
                             "campaign can stage; the learn waits for it",
                             leader)
+            return
+        stop = slot.stop_live(time.monotonic())
+        if stop is not None and stop.aim == column:
+            # A SHORT TOWN STOP THE CAMPAIGN LET THROUGH is not handed back
+            # while it walks; the coordinator defers staging for it.
+            log.info("town slot: %s keeps %s's short town stop at %r - the "
+                     "campaign stages after it", leader, stop.claimant, column)
             return
         holder = slot.campaign_release(leader=leader, column=column,
                                        now=time.monotonic(),
@@ -17119,6 +17361,36 @@ def _spawn_yards(spawn) -> float | None:
 # The same read, for a caller that skips the mailboxes it has given up on.
 _MAILBOXES_SQL = _MAILBOX_SQL.replace("LIMIT 1", "LIMIT 8")
 
+# THE NEAREST BANKER ON THE CHARACTER'S MAP, for the town stop's distance
+# only. The bank errand itself stays the `banker` keyword, which mod-overseer
+# resolves to a banker that will deal with the leader; this answers "is there
+# one in this town", so a banker of the other side a few yards off can make a
+# stop look short. The stop's own window bounds what that costs.
+_NEAREST_BANKER_SQL = (
+    "SELECT (POW(cr.position_x - s.pos_x, 2) + POW(cr.position_y - s.pos_y, 2)) "
+    "AS d2 "
+    "FROM overseer_snapshot s "
+    "JOIN acore_world.creature cr ON cr.map = s.map_id "
+    "JOIN acore_world.creature_template ct ON ct.entry = cr.id "
+    "WHERE s.name = %s AND s.updated_at > NOW() - INTERVAL 120 SECOND "
+    "AND (ct.npcflag & %s) <> 0 "
+    "ORDER BY d2 LIMIT 1"
+)
+
+
+def _nearest_banker_yards(name: str) -> float | None:
+    """Yards from `name` to the nearest banker on its map, or None."""
+    with _connect() as conn, conn.cursor() as cur:
+        try:
+            cur.execute(_NEAREST_BANKER_SQL, (name, towntrip.NPC_FLAG_BANKER))
+        except pymysql.err.MySQLError as exc:
+            if exc.args and exc.args[0] in (1054, 1146):
+                log.warning("bank: cannot see where %s is standing", name)
+                return None
+            raise
+        row = cur.fetchone()
+    return _spawn_yards(dict(row)) if row else None
+
 
 def _nearest_mailbox(name: str, skip=None):
     """The nearest mailbox spawn row on `name`'s own map, or None.
@@ -17976,6 +18248,12 @@ def _insert_mail(take, command: str) -> int:
 # vendor afterwards is the obvious next change rather than something to fake
 # here by widening the net.
 TOWN_COUNTER_YARDS = 8
+# How often the quick look at the counters runs (`_town_passing_loop`). A
+# family walks through a town in a minute or two, and the ten-minute mail and
+# bank passes miss that; the look reads a few rows per member and writes
+# nothing unless somebody is standing at a counter.
+TOWN_PASSING_CYCLE_SECONDS = float(
+    os.environ.get("TOWN_PASSING_CYCLE_SECONDS", "60"))
 
 # Every spawn near the leader that can repair or sell, and what it sells.
 #
@@ -20007,6 +20285,7 @@ class HeadlessBridge(Bridge):
                 self._crafter_mail_loop,
                 self._guild_corps_loop,
                 self._mail_loop,
+                self._town_passing_loop,
                 self._recruit_loop,
                 self._craft_supply_loop,
                 self._craft_rhythm_loop,
