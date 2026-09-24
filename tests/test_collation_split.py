@@ -82,6 +82,9 @@ COLLATIONS = {
     "overseer_jev_judgment": "utf8mb4_0900_ai_ci",
     # Bridge-owned (#209), named in campaignqueue.CREATE_SQL the same way.
     "overseer_dungeon_queue": "utf8mb4_0900_ai_ci",
+    # Bridge-owned (the Bags tab's week), named in
+    # bridge._ensure_economy_store the same way overseer_jev_judgment is.
+    "overseer_economy_sample": "utf8mb4_0900_ai_ci",
     # Module-owned (mod-overseer#616), named in its own CREATE TABLE
     # (COLLATE=utf8mb4_unicode_ci) exactly as overseer_build is above.
     "overseer_dungeon_run_event": "utf8mb4_unicode_ci",
@@ -183,6 +186,8 @@ STRING_COLUMNS = {
         }
     ),
     "overseer_dungeon_queue": frozenset({"family", "keyword", "status", "source"}),
+    # From its own DDL (bridge._ensure_economy_store): every VARCHAR column.
+    "overseer_economy_sample": frozenset({"kind", "subject"}),
     # From its own DDL (mod-overseer's 2026_09_23_01): every VARCHAR column.
     "overseer_raid_seat": frozenset({"family", "keyword", "name", "role"}),
 }

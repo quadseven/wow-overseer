@@ -44,6 +44,7 @@ import partystatus
 import questlog
 import raidgoals
 import guildwork
+import holdings
 import crafters
 import guildcorps
 import raidlineup
@@ -591,6 +592,31 @@ _WEALTH_ITEM_COLUMNS = (
 # column list above: the auction read uses that list and has no `ci`.
 _WEALTH_QUEST_NEEDED = ", " + bag_pressure.QUEST_NEEDED_SQL + " AS quest_needed "
 
+# THE MAILBOXES, one row per attachment, in the mail pass's own shape
+# (bridge._MAIL_SQL) plus `checked` for the unread count. A LEFT JOIN onto
+# mail_items, because a letter carrying only gold has no attachment row and an
+# inner join would drop exactly the letter worth collecting. Delivery is
+# answered here, where the clock is; the fold is holdings.mailboxes'.
+_WEALTH_MAIL = (
+    "SELECT c.name AS holder, m.id AS mail_id, m.money AS money, "
+    "m.cod AS cod, m.expire_time AS expire_time, m.checked AS checked, "
+    "(m.deliver_time <= UNIX_TIMESTAMP()) AS delivered, "
+    "mi.item_guid AS item_guid "
+    "FROM mail m "
+    "JOIN characters c ON c.guid = m.receiver "
+    "LEFT JOIN mail_items mi ON mi.mail_id = m.id "
+    "WHERE c.name IN ({holes})"
+)
+# The week behind the purses, mailboxes, banks and vaults: the bridge's own
+# ten-minute samples (bridge._ensure_economy_store). Bounded by subject and by
+# the window the page draws; the bucketing is holdings.series'.
+_WEALTH_ECONOMY = (
+    "SELECT subject, kind, money, mail_letters, mail_money, mail_items, "
+    "bank_items, bank_tabs, taken_at FROM overseer_economy_sample "
+    "WHERE subject IN ({holes}) AND taken_at > NOW() - INTERVAL %s DAY "
+    "ORDER BY taken_at"
+)
+
 
 def _fetch_wealth(names: list[str] | None = None) -> dict:
     """The family's purse, every inventory row they own, and the auction house.
@@ -671,7 +697,8 @@ def _fetch_wealth(names: list[str] | None = None) -> dict:
             # somebody makes one - which a constant in the builder could never
             # do. An INNER JOIN, so no rows means nobody is in a guild.
             cur.execute(
-                "SELECT c.name, g.guildid AS guild_id, g.name AS guild_name "  # noqa: S608
+                "SELECT c.name, g.guildid AS guild_id, g.name AS guild_name, "  # noqa: S608
+                "g.BankMoney AS bank_money "
                 "FROM characters c "
                 "JOIN guild_member gm ON gm.guid = c.guid "
                 "JOIN guild g ON g.guildid = gm.guildid "
@@ -722,12 +749,40 @@ def _fetch_wealth(names: list[str] | None = None) -> dict:
                         log.warning("guild bank rights are unavailable")
                     else:
                         raise
+            # The mailboxes and the sampled week. Both fail closed to None on
+            # a realm without the table (the bridge creates the sample table
+            # on its first start), and the builder says so in words rather
+            # than drawing an empty mailbox or a flat line.
+            mail_rows = None
+            try:
+                cur.execute(_WEALTH_MAIL.format(holes=holes), tuple(names))  # noqa: S608
+                mail_rows = list(cur.fetchall())
+            except pymysql.err.MySQLError as exc:
+                if exc.args and exc.args[0] in (1054, 1146):
+                    log.warning("wealth: the mail tables are unavailable")
+                else:
+                    raise
+            economy_rows = None
+            subjects = list(names) + sorted({row["guild_name"] for row in guild_rows
+                                             if row.get("guild_name")})
+            try:
+                cur.execute(
+                    _WEALTH_ECONOMY.format(holes=", ".join(["%s"] * len(subjects))),  # noqa: S608
+                    (*subjects, holdings.HISTORY_DAYS),
+                )
+                economy_rows = list(cur.fetchall())
+            except pymysql.err.MySQLError as exc:
+                if exc.args and exc.args[0] in (1054, 1146):
+                    log.warning("wealth: overseer_economy_sample is unavailable")
+                else:
+                    raise
     finally:
         conn.close()
     return {"char_rows": char_rows, "inventory_rows": inventory_rows,
             "auction_rows": auction_rows, "guild_rows": guild_rows,
             "guild_bank_rows": guild_bank_rows,
-            "guild_bank_right_rows": guild_bank_right_rows}
+            "guild_bank_right_rows": guild_bank_right_rows,
+            "mail_rows": mail_rows, "economy_rows": economy_rows}
 
 
 # Everything a tooltip draws, straight off item_template. Listed once, here,

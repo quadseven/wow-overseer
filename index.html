@@ -2326,6 +2326,21 @@
               color:var(--on-card-dim); }
   .wstep .v.t-good { color:var(--accent-text); }
   .wstep .v.t-caution { color:var(--caution-text); }
+  /* THE MAILBOX, THE BANK AND THE WEEK BEHIND THEM. A sparkline per line,
+     full card width and 22px tall, so it reads at phone width without an axis:
+     the caption beside it says what it reads now and how far it moved. */
+  .wecon { margin-top:.7rem; font-size:.88rem; color:var(--on-card-dim); }
+  .wecon .t-caution { color:var(--caution-text); }
+  .whist { margin-top:.5rem; }
+  .whist + .whist { margin-top:.35rem; }
+  .whead { display:flex; flex-wrap:wrap; align-items:baseline; gap:.1rem .6rem;
+           font-family:var(--mono); font-size:11px; letter-spacing:.05em; }
+  .whead .k { text-transform:uppercase; letter-spacing:.12em; }
+  .wspark { display:block; width:100%; height:22px; margin-top:.15rem;
+            color:var(--accent-text); overflow:visible; }
+  .wspark polyline { fill:none; stroke:currentColor; stroke-width:1.5; }
+  .wspark circle { fill:currentColor; }
+  .wvault + .wvault { margin-top:.8rem; }
   /* --- the Family tab (infra#2892), reshaped by infra#3110 and infra#88 ---
      Five feeds, then one board. Sized for a thumb on a 390px phone FIRST and
      widened on a desktop, rather than the other way round: the map is
@@ -11264,9 +11279,10 @@ function wealthCard(name, host) {
   const bags = el("div", "wbags");
   const notable = el("div", "wnotable");
   const fates = el("div", "wfates");
-  card.append(head, who, purse, meter, room, spare, tally, fates, bags, notable);
+  const econ = el("div", "wecon");
+  card.append(head, who, purse, meter, room, spare, tally, econ, fates, bags, notable);
   (host || wcards).appendChild(card);
-  c = { card, head, who, purse, meter, bar, room, spare, tally, bags, notable, fates };
+  c = { card, head, who, purse, meter, bar, room, spare, tally, econ, bags, notable, fates };
   wlth.cards.set(name, c);
   return c;
 }
@@ -11282,6 +11298,7 @@ function renderWealthMember(c, m) {
     c.room.textContent = m.absent_note;
     c.spare.replaceChildren();
     c.tally.replaceChildren();
+    c.econ.replaceChildren();
     c.bags.replaceChildren();
     c.notable.replaceChildren();
     c.fates.replaceChildren();
@@ -11315,6 +11332,7 @@ function renderWealthMember(c, m) {
   }
   c.tally.appendChild(qs);
   if (m.elsewhere_note) c.tally.appendChild(el("div", "welse", m.elsewhere_note));
+  renderEcon(c.econ, m);
   c.bags.replaceChildren(...m.containers.map(wbag));
   c.notable.replaceChildren();
   if (m.notable_note) {
@@ -11323,6 +11341,54 @@ function renderWealthMember(c, m) {
     for (const it of m.notable) list.appendChild(witem(it));
     c.notable.appendChild(list);
   }
+}
+
+// THE MAILBOX, THE BANK AND THE WEEK BEHIND THEM. Every word is wealth.py's
+// (mailbox_line, bank_line, build_history) and every point is holdings.py's,
+// already scaled to 0..1 on both axes; this turns them into pixels.
+function wspark(points) {
+  const svg = document.createElementNS(SVG_NS, "svg");
+  svg.setAttribute("class", "wspark");
+  svg.setAttribute("viewBox", "0 0 100 22");
+  // Stretched to the card, not letterboxed: x is time across the window.
+  svg.preserveAspectRatio.baseVal.align =
+    SVGPreserveAspectRatio.SVG_PRESERVEASPECTRATIO_NONE;
+  svg.setAttribute("aria-hidden", "true");
+  const at = (p) => [(p[0] * 100).toFixed(2), (20 - p[1] * 18).toFixed(2)];
+  const line = document.createElementNS(SVG_NS, "polyline");
+  line.setAttribute("points", points.map((p) => at(p).join(",")).join(" "));
+  line.setAttribute("vector-effect", "non-scaling-stroke");
+  svg.appendChild(line);
+  if (points.length) {
+    const last = at(points[points.length - 1]);
+    const dot = document.createElementNS(SVG_NS, "circle");
+    dot.setAttribute("cx", last[0]);
+    dot.setAttribute("cy", last[1]);
+    dot.setAttribute("r", "1.6");
+    svg.appendChild(dot);
+  }
+  return svg;
+}
+
+function whistory(h) {
+  const box = el("div", "");
+  if (!h) return box;
+  if (h.note) box.appendChild(el("div", "welse", h.note));
+  for (const line of h.lines) {
+    const row = el("div", "whist");
+    const head = el("div", "whead");
+    head.append(el("span", "k", line.label), el("span", "", line.caption));
+    row.append(head, wspark(line.points));
+    box.appendChild(row);
+  }
+  return box;
+}
+
+function renderEcon(node, m) {
+  node.replaceChildren();
+  const mail = wmoney(m.mail);
+  mail.className = wtone("wsay", m.mail.tone);
+  node.append(mail, el("div", "wsay", m.bank.label), whistory(m.history));
 }
 
 // WHERE IT IS ALL GOING (#88): every pile, its route, what blocks it and the
@@ -11443,6 +11509,13 @@ function renderGuild(g) {
   }
   wguild.appendChild(list);
   wguild.appendChild(wlinked(g.blocked));
+  // Each vault's gold and its week, under the road, one block per guild.
+  for (const b of g.by_guild || []) {
+    const v = el("div", "wvault wecon");
+    if (b.money_line) v.appendChild(wmoney(b.money_line));
+    v.appendChild(whistory(b.history));
+    wguild.appendChild(v);
+  }
 }
 
 function renderWealth(p) {
@@ -11476,6 +11549,7 @@ async function pollWealth() {
     renderWealth(p);
     wlth.note = p.saved_note;
     wsaved.replaceChildren(el("span", "", p.saved_note));
+    if (p.history_caption) wsaved.append(el("span", "", p.history_caption));
     wsaved.className = "";
   } catch (e) {
     // Keep every bag already drawn, exactly as the profiles in the Armory do.
