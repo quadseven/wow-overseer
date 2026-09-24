@@ -1467,6 +1467,62 @@ def door_floor(keyword: str) -> int:
     return _door_floor(keyword, int(dungeonpath.PORTAL_MAPS[keyword]))
 
 
+# WHY A DOOR IS REFUSED, AS A KIND AS WELL AS A SENTENCE. The dungeon ladder
+# (dungeonladder.py) draws every door a family could use as one rung and says
+# which of these stands in the way; the kind is the same check that wrote the
+# sentence, so the ladder cannot disagree with the refusal.
+REFUSED_NO_DOOR = "no door"
+REFUSED_WITHHELD = "withheld"
+REFUSED_FACTION = "other faction"
+REFUSED_UNREAD = "unread"
+REFUSED_LEVEL = "level"
+REFUSED_CROSSING = "crossing"
+
+
+def door_refusal_kind(keyword: str, level_rows: list[dict]) -> tuple[str, str]:
+    """(kind, why) this family cannot be sent through `keyword`'s door, or
+    ("", "") when it can. `door_refusal` is the sentence alone.
+
+    The continent check asks crossing.py whether a crossing can be made
+    (`_no_crossing`), so a door across the sea opens here the moment that
+    module says the boat or zeppelin can be taken, with nothing written twice.
+    """
+    import dungeonpath
+
+    if keyword not in jobs.PORTAL_KEYWORDS:
+        return REFUSED_NO_DOOR, "no dungeon portal answers to %r" % keyword
+    if keyword in dungeonpath.WITHHELD_DOORS:
+        return REFUSED_WITHHELD, "withheld, since " + dungeonpath.WITHHELD_DOORS[
+            keyword
+        ]
+    map_id = int(dungeonpath.PORTAL_MAPS[keyword])
+    names = [str(row.get("name") or "") for row in level_rows]
+    faction = _faction(level_rows, names)
+    if _other_capital(map_id, faction):
+        return REFUSED_FACTION, (
+            "inside the other faction's capital"
+            if faction
+            else "inside a capital, and nothing says which faction this family is"
+        )
+    weakest = _weakest(level_rows)
+    if weakest is None:
+        return REFUSED_UNREAD, "nobody's level can be read"
+    who, level = weakest
+    floor = _door_floor(keyword, map_id)
+    if level + NEAR_ENOUGH < floor:
+        return REFUSED_LEVEL, "%s is level %d and it wants %d" % (who, level, floor)
+    home = _home_continent(level_rows)
+    door = continent_of(map_id)
+    if home is None:
+        return REFUSED_UNREAD, "nothing says which continent we are on"
+    if door != home and _no_crossing():
+        return REFUSED_CROSSING, "on %s while we are on %s, with no way across yet" % (
+            CONTINENT_NAMES.get(door, "another continent"),
+            CONTINENT_NAMES.get(home, "another continent"),
+        )
+    return "", ""
+
+
 def door_refusal(keyword: str, level_rows: list[dict]) -> str:
     """Why this family cannot be sent through `keyword`'s door, or "".
 
@@ -1477,38 +1533,7 @@ def door_refusal(keyword: str, level_rows: list[dict]) -> str:
     continent or across a crossing that can be made. The campaign queue
     (#209) asks this of every entry before a row is written.
     """
-    import dungeonpath
-
-    if keyword not in jobs.PORTAL_KEYWORDS:
-        return "no dungeon portal answers to %r" % keyword
-    if keyword in dungeonpath.WITHHELD_DOORS:
-        return "withheld, since " + dungeonpath.WITHHELD_DOORS[keyword]
-    map_id = int(dungeonpath.PORTAL_MAPS[keyword])
-    names = [str(row.get("name") or "") for row in level_rows]
-    faction = _faction(level_rows, names)
-    if _other_capital(map_id, faction):
-        return (
-            "inside the other faction's capital"
-            if faction
-            else "inside a capital, and nothing says which faction this family is"
-        )
-    weakest = _weakest(level_rows)
-    if weakest is None:
-        return "nobody's level can be read"
-    who, level = weakest
-    floor = _door_floor(keyword, map_id)
-    if level + NEAR_ENOUGH < floor:
-        return "%s is level %d and it wants %d" % (who, level, floor)
-    home = _home_continent(level_rows)
-    door = continent_of(map_id)
-    if home is None:
-        return "nothing says which continent we are on"
-    if door != home and _no_crossing():
-        return "on %s while we are on %s, with no way across yet" % (
-            CONTINENT_NAMES.get(door, "another continent"),
-            CONTINENT_NAMES.get(home, "another continent"),
-        )
-    return ""
+    return door_refusal_kind(keyword, level_rows)[1]
 
 
 def _sendable(rated: list[dict], level_rows: list[dict]) -> tuple[list, list]:

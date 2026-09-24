@@ -1056,6 +1056,9 @@
   /* Where the family stands only changes how loud a step is. Outgrown and
      unreachable steps stay on the path, quieter, so the order stays honest. */
   .dgn-card.dgn-behind, .dgn-card.dgn-off { opacity:.62; }
+  .dgn-rung { margin-top:.7rem; }
+  .dgn-rung.dgn-rung-open .sect { color:var(--accent-text); }
+  .dgn-rung:not(.dgn-rung-open) { opacity:.72; }
   .dgn-card.dgn-next { border-color:var(--accent-text); }
   .dgn-fold > .dgn-list { margin-top:.8rem; }
   .dgn-card > summary { list-style:none; cursor:pointer; display:grid;
@@ -7946,6 +7949,28 @@ function dgnOffPath(f) {
   return box;
 }
 
+// THE LADDER (dungeonladder.py): every door before the raid as this family
+// stands to it, in one closed box under the plan. The module writes every
+// word; `r.state` only picks a class, so an open rung reads first.
+function dgnLadder(ladder) {
+  const box = el("details", "chr-card dgn-card dgn-fold");
+  const head = document.createElement("summary");
+  head.appendChild(el("span", "dgn-rank", ""));
+  head.appendChild(el("span", "dgn-name", ladder.title));
+  head.appendChild(el("span", "dgn-sum", ladder.line));
+  box.appendChild(head);
+  const body = el("div", "dgn-body");
+  for (const r of ladder.rungs) {
+    const rung = el("div", "dgn-rung dgn-rung-" + r.state);
+    rung.appendChild(el("div", "sect", r.head));
+    rung.appendChild(el("div", "dgn-why", r.detail));
+    rung.appendChild(el("div", "dgn-why", r.line));
+    body.appendChild(rung);
+  }
+  box.appendChild(body);
+  return box;
+}
+
 // ONE FAMILY: who they are, what is next, the upgrades for them and for their
 // guild, then the path in the module's order.
 function dgnFamily(f) {
@@ -7957,6 +7982,16 @@ function dgnFamily(f) {
   if (f.queue && f.queue.line) box.appendChild(el("p", "dgn-next", f.queue.line));
   // Now and next (campaignplan.py): the queue's head and what follows it.
   if (f.plan && f.plan.line) box.appendChild(el("p", "dgn-next", f.plan.line));
+  // Jev's last dungeon choice for the family and its reasons.
+  if (f.plan && f.plan.jev) box.appendChild(el("p", "chr-body", f.plan.jev));
+  // The ladder: every door before the raid, open and closed, and why.
+  if (f.ladder && f.ladder.rungs && f.ladder.rungs.length) {
+    const ladder = el("div", "dgn-list");
+    ladder.appendChild(dgnLadder(f.ladder));
+    box.appendChild(ladder);
+  } else if (f.ladder && f.ladder.line) {
+    dgnNote(box, f.ladder.line);
+  }
   dgnNote(box, f.family_upgrades);
   dgnNote(box, f.guild_upgrades);
   const list = el("div", "dgn-list");

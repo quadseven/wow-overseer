@@ -9,7 +9,8 @@ the pieces each member is missing, and runs the dungeon where the most of them
 drop, picking up the attunement and the key on the way. This module is that
 reading, from the world's own loot tables and each member's own gear.
 
-WHAT IT READS. Everything that drops on the level 60 dungeon maps
+WHAT IT READS. Everything that drops on the level 60 dungeon maps, and on
+the lower ones whose rares still upgrade a fresh level 60 (LOWER_MAPS)
 (creature_loot_template and gameobject_loot_template, one reference level
 deep through reference_loot_template), the rewards of the quests those
 dungeons hold (quest_template), each drop's stats (item_template, with equip
@@ -48,6 +49,7 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 import bag_pressure
+import campaignplan
 import council
 
 # --- the places ----------------------------------------------------------------
@@ -61,18 +63,36 @@ SUNKEN_TEMPLE, SPIRE, DEPTHS, SCHOLOMANCE, STRATHOLME, DIRE_MAUL = (
     329,
     429,
 )
-MAPS = (SUNKEN_TEMPLE, SPIRE, DEPTHS, SCHOLOMANCE, STRATHOLME, DIRE_MAUL)
+
+# THE LOWER DUNGEONS A LEVEL 60 FAMILY STILL GEARS IN. A family that reaches
+# 60 wears item level 39 to 45, and the rares of these five drop at 40 to 50.
+# Measured on the dev realm on 2026-09-24: one Zul'Farrak visit by the level
+# 60 Alliance family handed nine pieces to members they upgraded. Below
+# these, a rare is under what a fresh 60 wears and the read would only add
+# rows that never upgrade anyone.
+SCARLET, RAZORFEN_DOWNS, ULDAMAN, ZULFARRAK, MARAUDON = 189, 129, 70, 209, 349
+LOWER_MAPS = (SCARLET, RAZORFEN_DOWNS, ULDAMAN, ZULFARRAK, MARAUDON)
+
+MAPS = (SUNKEN_TEMPLE, SPIRE, DEPTHS, SCHOLOMANCE, STRATHOLME, DIRE_MAUL) + LOWER_MAPS
 
 # The Upper Spire shares map 229 with the Lower Spire and has no door of its
 # own in mod-overseer (the Dragonspine Door inside opens for the Seal of
 # Ascension), so it is a place the plan names and the planner cannot choose.
 UPPER_SPIRE = "upper-blackrock-spire"
 
+# Inner Maraudon, past Celebras, is reached through either the orange or the
+# purple wing, so what drops there is credited to both runs (SHARED_PLACES).
+MARAUDON_INNER = "maraudon-inner"
+SHARED_PLACES = {MARAUDON_INNER: ("maraudon-orange", "maraudon-purple")}
+
 # The place a single-wing map's drops belong to.
 MAP_PLACE = {
     SUNKEN_TEMPLE: "sunken-temple",
     DEPTHS: "blackrock-depths",
     SCHOLOMANCE: "scholomance",
+    RAZORFEN_DOWNS: "razorfen-downs",
+    ULDAMAN: "uldaman",
+    ZULFARRAK: "zulfarrak",
 }
 
 # THE WINGS, BY THEIR BOSSES (creature_template entries, read on the dev realm
@@ -91,6 +111,20 @@ WING_BOSSES = {
     STRATHOLME: {
         "stratholme-live": (10808, 10997, 10811, 11032, 10558, 10516, 10393, 11143),
         "stratholme-undead": (10435, 10437, 10436, 10438, 10440),
+    },
+    # Read on the dev realm 2026-09-24 off instance_encounters: each wing is
+    # its own instance on map 189, far apart, so the nearest boss places a
+    # drop in the wing it fell in.
+    SCARLET: {
+        "scarlet": (3983, 4543),
+        "scarlet-library": (3974, 6487),
+        "scarlet-armory": (3975,),
+        "scarlet-cathedral": (4542, 3977, 3976),
+    },
+    MARAUDON: {
+        "maraudon-orange": (13282, 12258),
+        "maraudon-purple": (12236,),
+        MARAUDON_INNER: (12225, 12203, 13601, 13596, 12201),
     },
 }
 
@@ -139,6 +173,8 @@ CLOSED = {
 def place_name(place: str) -> str:
     if place == UPPER_SPIRE:
         return "Upper Blackrock Spire"
+    if place == MARAUDON_INNER:
+        return "inner Maraudon"
     if place in QUEST_PLACES:
         return QUEST_PLACES[place][0]
     return council.keyword_place(place)
@@ -305,8 +341,16 @@ KEY_PIECES = {
 }
 
 _QUEST_IDS = ", ".join(str(int(q)) for q in ATTUNEMENT_QUESTS + KEY_QUESTS)
+# The door keys (campaignplan.DOOR_KEYS) ride on the same read, so the Raid
+# tab knows which Dire Maul and Scarlet doors the family can open.
 _ITEM_IDS = ", ".join(
-    str(int(i)) for i in (CORE_FRAGMENT, SEAL_OF_ASCENSION, *sorted(KEY_PIECES))
+    str(int(i))
+    for i in (
+        CORE_FRAGMENT,
+        SEAL_OF_ASCENSION,
+        *sorted(KEY_PIECES),
+        *campaignplan.KEY_ITEMS,
+    )
 )
 
 PROGRESS_REWARDED_SQL = (
@@ -1085,7 +1129,15 @@ def reachable_place(place: str, reachable) -> bool:
     """Whether `place` can be gone to, given the runs in `reachable`."""
     if place in QUEST_PLACES:
         return any(run in reachable for run in QUEST_PLACES[place][1])
+    if place in SHARED_PLACES:
+        return any(run in reachable for run in SHARED_PLACES[place])
     return place in reachable
+
+
+def drops_at(source_place: str, place: str) -> bool:
+    """Whether a drop placed at `source_place` falls on a run of `place`:
+    the same place, or a place reached through it (SHARED_PLACES)."""
+    return source_place == place or place in SHARED_PLACES.get(source_place, ())
 
 
 # The paper-doll slots as the plan groups them: a pair of rings and a pair of
@@ -1181,8 +1233,9 @@ def run_gains(plans: list) -> dict:
     """place -> (Gain per member), from each member's upgrades.
 
     A piece's chance at a place is the sum of its drop sources there, capped
-    at one per run. A quest reward is not counted: it is had once, not every
-    run. The item levels a run is worth are, per slot, the expected best
+    at one per run; a drop in inner Maraudon counts for both wings that lead
+    there (SHARED_PLACES). A quest reward is not counted: it is had once, not
+    every run. The item levels a run is worth are, per slot, the expected best
     upgrade that drops for it: two chests that each drop one run in five are
     not worth two chests, because only one is worn.
     """
@@ -1196,7 +1249,7 @@ def run_gains(plans: list) -> dict:
                     sum(
                         s.chance
                         for s in u.item.sources
-                        if s.place == place and s.kind != QUEST
+                        if drops_at(s.place, place) and s.kind != QUEST
                     )
                     / 100.0,
                     1.0,
@@ -1463,7 +1516,14 @@ def build_view(plans: list, reachable, refused: dict, progress_by_place: dict) -
         "%s: %s"
         % (
             place_name(p),
-            refused.get(p) or CLOSED.get(p, "no door the overseer can use"),
+            refused.get(p)
+            or CLOSED.get(p)
+            or (
+                "reached only through %s, and neither is open"
+                % " or ".join(place_name(r) for r in SHARED_PLACES[p])
+                if p in SHARED_PLACES
+                else "no door the overseer can use"
+            ),
         )
         for p in unreachable
     ]
@@ -1506,8 +1566,6 @@ def family_view(
     refusals its planner and an operator's queue order are held to, so the
     page and the planner cannot disagree about where the next upgrade is.
     """
-    import campaignplan
-
     wanted = set(names)
     rows = [r for r in member_rows or [] if r.get("name") in wanted]
     levels = [int(r.get("level") or 0) for r in rows]
@@ -1532,10 +1590,9 @@ def family_view(
             "basis": WEIGHTS_LINE,
         }
     family = members(rows, [r for r in worn_rows or [] if r.get("member") in wanted])
-    facts = campaignplan.Facts(
-        family=names[0] if names else "", level_rows=tuple(rows), done={}, failed={}
+    refused = campaignplan.refusals(
+        _planner_facts(names, rows, family, items, held_rows)
     )
-    refused = campaignplan.refusals(facts)
     reachable = {r.keyword for r in campaignplan.RUNS if r.keyword not in refused}
     plans = [plan(m, items, reachable) for m in family]
     moved = progress(
@@ -1544,7 +1601,35 @@ def family_view(
         [r for r in log_rows or [] if r.get("name") in wanted],
         [r for r in held_rows or [] if r.get("name") in wanted],
     )
-    return build_view(plans, reachable & set(PLACES), refused, moved)
+    return build_view(plans, open_places(reachable), refused, moved)
+
+
+def _planner_facts(names, rows, family, items, held_rows):
+    """campaignplan.Facts for the Raid tab's refusals. The upgrades first: a
+    lower dungeon is open to a level 60 family only while it still holds one
+    (campaignplan.refusals), the planner's rule; the door keys off the held
+    items read."""
+    wanted = set(names)
+    held = [
+        r
+        for r in held_rows or []
+        if r.get("name") in wanted
+        and int(r.get("entry") or 0) in campaignplan.KEY_ITEMS
+    ]
+    return campaignplan.Facts(
+        family=names[0] if names else "",
+        level_rows=tuple(rows),
+        done={},
+        failed={},
+        upgrades=run_gains([plan(m, items) for m in family]),
+        keys=campaignplan.keys_held(held),
+    )
+
+
+def open_places(reachable) -> set:
+    """The places the family can go to, given the runs in `reachable`: those
+    runs, and a place reached through one of them (inner Maraudon)."""
+    return {p for p in PLACES if reachable_place(p, reachable)}
 
 
 def said_gains(gains: tuple) -> str:

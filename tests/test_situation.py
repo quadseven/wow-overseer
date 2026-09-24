@@ -439,6 +439,8 @@ class JevReadsIt(unittest.TestCase):
             done={},
             failed={},
             quests=None,
+            # The Crescent Key, so Dire Maul West and North are open too.
+            keys=frozenset({18249}),
         )
         opts = campaignplan.options(f)
         return f, opts

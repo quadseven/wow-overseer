@@ -22,7 +22,13 @@ holds that to jobs.PORTAL_KEYWORDS. A run is offered when:
     council.NEAR_ENOUGH levels above the weakest member, and on the family's
     continent or across a crossing that can be made. The same rules an
     operator's queue order is held to (#204, #205, #207).
-  * the weakest member has not outgrown it (`Run.ceiling`).
+  * the weakest member has not outgrown it (`Run.ceiling`). At the level cap
+    a lower dungeon is outgrown only once its loot holds no upgrade for any
+    member (preraid.py reads Zul'Farrak, Maraudon, Uldaman, Razorfen Downs
+    and the Scarlet wings as well as the level 60 dungeons).
+  * its door does not need a key nobody in the family holds (DOOR_KEYS): the
+    Scarlet Armory and Cathedral wait for the Scarlet Key from the Library,
+    Dire Maul West and North for the Crescent Key from the East wing.
   * it has not been run to its target count (`target`).
 
 HOW MANY RUNS (`target`). Not a fixed fifty:
@@ -35,9 +41,12 @@ HOW MANY RUNS (`target`). Not a fixed fifty:
     of QUEST_PASS_RUNS more runs on top.
 
 WHICH ONE (`heuristic`). A ready run before one the family would be carried
-through. Then, for a levelling family, the run they will outgrow soonest,
-because a group levelling through a band uses a dungeon before it loses it;
-then the one with the least of its target done; then path order.
+through, and a run the family has not died its way out of (`Option.troubled`:
+never completed, with TROUBLE_WIPES wipes or TROUBLE_DEATHS deaths on its map
+in DEATH_HOURS) before one it has. Then, for a levelling family, the run they
+will outgrow soonest, because a group levelling through a band uses a dungeon
+before it loses it; then the one with the least of its target done; then path
+order.
 
 AT THE LEVEL CAP THE GEAR DECIDES, the way a raid guild gears for Molten
 Core (#280). preraid.py reads every level 60 dungeon's loot tables against
@@ -54,8 +63,16 @@ works through the dungeons as it outgrows their loot rather than living in
 one.
 
 Jev is asked the same question over the same options, told the same facts
-(jev_choices.dungeon_ask), and its answer is carried out when it is
-confident enough; otherwise this answer is.
+(jev_choices.dungeon_ask) and the history behind them: the bosses' levels,
+the family's deaths and wipes there, what the loot council has handed out
+from there. Its answer is carried out when it is confident enough, and the
+queue entry then carries SOURCE_JEV; otherwise the heuristic's is, with
+SOURCE.
+
+AT MOST ONE PLANNED ENTRY, AND NEVER BEFORE THE OPERATOR'S (`due`). The
+planner writes only when the family's queue is empty, or holds one entry
+that has reached its count; an operator entry still waiting to start, or a
+planned entry still running, stops it.
 
 PURE MODULE: no MySQL, no Discord, no clock. Rows in, choices and sentences
 out. The statements the bridge and the site read with are written here.
@@ -63,6 +80,7 @@ out. The statements the bridge and the site read with are written here.
 
 from __future__ import annotations
 
+import json
 import os
 from dataclasses import dataclass, replace
 
@@ -70,8 +88,49 @@ import council
 import dungeonpath
 
 # The source a planned queue entry carries, so the queue's own rows say which
-# entries the operator ordered and which this module chose.
+# entries the operator ordered and which this module chose: SOURCE_JEV when
+# Jev's answer was carried out (alone, or agreeing with the heuristic),
+# SOURCE when the heuristic's was because Jev was off, unsure or unanswered.
 SOURCE = "overseer:planner"
+SOURCE_JEV = "overseer:jev"
+PLANNED_SOURCES = (SOURCE, SOURCE_JEV)
+
+
+def source_for(by_jev: bool) -> str:
+    """The queue source for a planned entry, by who chose it."""
+    return SOURCE_JEV if by_jev else SOURCE
+
+
+# THE HISTORY THAT COUNTS AGAINST A DUNGEON. A run never completed, with this
+# many wipes on the ledger or this many of the family's deaths on its map in
+# the last DEATH_HOURS, goes behind every run that is not. Two wipes is not
+# bad luck; ten deaths is two whole parties.
+TROUBLE_WIPES = 2
+TROUBLE_DEATHS = 10
+DEATH_HOURS = 168
+
+# How far the bosses may stand from the weakest member's level before the fit
+# is said as above or below them. Words for Jev and the page; the gate is
+# council's floor and the Run's ceiling.
+FIT_ABOVE = 3
+FIT_BELOW = 6
+
+# DOORS THAT NEED A KEY, and where the key drops. mod-overseer stages a party
+# at each of these and does not check for the key (its portal table says so),
+# so a run aimed at one before anybody holds the key stands at a door that
+# will not move. Keyed by Run keyword: (item entry, the key, the run it drops
+# in).
+DOOR_KEYS = {
+    "scarlet-armory": (7146, "the Scarlet Key", "scarlet-library"),
+    "scarlet-cathedral": (7146, "the Scarlet Key", "scarlet-library"),
+    "dire-maul-west-north": (18249, "the Crescent Key", "dire-maul-east-east"),
+    "dire-maul-north": (18249, "the Crescent Key", "dire-maul-east-east"),
+}
+KEY_ITEMS = tuple(sorted({key for key, _name, _where in DOOR_KEYS.values()}))
+
+# Why a run is not offered, beyond council's door refusals.
+REFUSED_OUTGROWN = "outgrown"
+REFUSED_LOCKED = "locked"
 
 LEVEL_CAP = 60
 
@@ -259,8 +318,63 @@ LOOT_SQL = (
 )
 
 
+# The family's deaths per dungeon map in the last DEATH_HOURS (bound).
+DEATHS_SQL = (
+    "SELECT map AS map_id, COUNT(*) AS n FROM overseer_death "  # noqa: S608
+    "WHERE character_name IN ({holes}) AND map IN ("
+    + ", ".join(str(int(m)) for m in MAPS)
+    + ") AND created_at > NOW() - INTERVAL %s HOUR GROUP BY map"
+)
+
+# The pieces the loot council handed to a member, per map, for one family.
+WON_SQL = (
+    "SELECT map AS map_id, COUNT(*) AS n FROM overseer_loot_council "
+    "WHERE family = %s AND status = 'given' AND recipient <> '' GROUP BY map"
+)
+
+# The level range of each dungeon's bosses, off the world's own encounter
+# credits. Static per world, read once.
+BOSSES_SQL = (
+    "SELECT cr.map AS map_id, MIN(ct.minlevel) AS low, "  # noqa: S608
+    "MAX(ct.maxlevel) AS high FROM acore_world.instance_encounters ie "
+    "JOIN acore_world.creature_template ct ON ct.entry = ie.creditEntry "
+    "JOIN (SELECT DISTINCT id, map FROM acore_world.creature WHERE map IN ("
+    + ", ".join(str(int(m)) for m in MAPS)
+    + ")) cr ON cr.id = ct.entry WHERE ie.creditType = 0 GROUP BY cr.map"
+)
+
+# The door keys any member carries, anywhere in their bags or key ring.
+KEYS_SQL = (
+    "SELECT DISTINCT ii.itemEntry AS entry FROM character_inventory ci "  # noqa: S608
+    "JOIN characters c ON c.guid = ci.guid "
+    "JOIN item_instance ii ON ii.guid = ci.item "
+    "WHERE c.name IN ({holes}) AND ii.itemEntry IN ("
+    + ", ".join(str(int(k)) for k in KEY_ITEMS)
+    + ")"
+)
+
+
 def holes(count: int) -> str:
     return ", ".join(["%s"] * max(int(count), 1))
+
+
+def per_map(rows: list) -> dict:
+    """map id -> n, off DEATHS_SQL or WON_SQL rows."""
+    return {int(r["map_id"]): int(r.get("n") or 0) for r in rows or []}
+
+
+def bosses(rows: list) -> dict:
+    """map id -> (lowest, highest) boss level, off BOSSES_SQL rows."""
+    return {
+        int(r["map_id"]): (int(r["low"] or 0), int(r["high"] or 0))
+        for r in rows or []
+        if r.get("low") is not None and r.get("high") is not None
+    }
+
+
+def keys_held(rows: list) -> frozenset:
+    """The door key entries somebody in the family carries, off KEYS_SQL."""
+    return frozenset(int(r["entry"]) for r in rows or [])
 
 
 def ledger(rows: list, names: list) -> tuple:
@@ -285,6 +399,29 @@ def ledger(rows: list, names: list) -> tuple:
         bucket = done if str(row.get("outcome") or "") == SUCCESS else failed
         bucket[keyword] = bucket.get(keyword, 0) + 1
     return done, failed
+
+
+WIPE = "wipe"
+STAGING_FAILED = "staging_failed"
+
+
+def outcomes(rows: list, names: list) -> dict:
+    """Run keyword -> {outcome: ended runs}, off the same ledger rows and by
+    the same rules as `ledger`."""
+    members = set(names)
+    out: dict = {}
+    for row in rows or []:
+        if str(row.get("leader_name") or "") not in members:
+            continue
+        keyword = wing_of(str(row.get("portal_keyword") or "")) or _front_run(
+            int(row.get("map_id") or 0)
+        )
+        if not keyword:
+            continue
+        said = str(row.get("outcome") or "") or "unrecorded"
+        tally = out.setdefault(keyword, {})
+        tally[said] = tally.get(said, 0) + 1
+    return out
 
 
 def _race_bit(race) -> int:
@@ -359,6 +496,11 @@ class Facts:
     loot        map id -> boss gear item level, or None
     upgrades    preraid place -> (preraid.Gain per member), or None
     progress    preraid place -> preraid.Progress, or None
+    outcomes    Run keyword -> {outcome: ended runs}, or None when unread
+    deaths      map id -> the family's deaths there in DEATH_HOURS, or None
+    won         map id -> pieces the loot council gave a member, or None
+    bosses      map id -> (lowest, highest) boss level, or None
+    keys        door key entries somebody carries (DOOR_KEYS), or None
     """
 
     family: str
@@ -370,6 +512,11 @@ class Facts:
     loot: dict | None = None
     upgrades: dict | None = None
     progress: dict | None = None
+    outcomes: dict | None = None
+    deaths: dict | None = None
+    won: dict | None = None
+    bosses: dict | None = None
+    keys: frozenset | None = None
 
     @property
     def weakest(self) -> tuple:
@@ -408,6 +555,61 @@ class Option:
     progress_rank: int = 0  # 2 the attunement, 1 the key, 0 neither now
     continent: str = ""  # the continent the door stands on
     crossing: bool = False  # the door is across a continent crossing
+    level: int = 0  # the weakest member's level
+    bosses: tuple | None = None  # (lowest, highest) boss level, None unread
+    deaths: int | None = None  # the family's deaths on its map, DEATH_HOURS
+    wipes: int = 0  # ledger runs that ended in a wipe
+    staged: int = 0  # ledger runs that never got in (staging_failed)
+    won: int | None = None  # pieces the loot council gave a member there
+
+    @property
+    def troubled(self) -> bool:
+        """Never completed, and the family keeps dying there."""
+        return self.done == 0 and (
+            self.wipes >= TROUBLE_WIPES or (self.deaths or 0) >= TROUBLE_DEATHS
+        )
+
+    @property
+    def fit(self) -> str:
+        """The bosses' levels against the weakest member's, said; "" unread."""
+        if not self.bosses or not self.level:
+            return ""
+        low, high = self.bosses
+        span = "%d" % low if low == high else "%d to %d" % (low, high)
+        if high - self.level > FIT_ABOVE:
+            where = "above"
+        elif self.level - high > FIT_BELOW:
+            where = "below"
+        else:
+            where = "about right for"
+        return "its bosses are level %s, %s a weakest of %d" % (
+            span,
+            where,
+            self.level,
+        )
+
+    @property
+    def history(self) -> str:
+        """The family's record there, said."""
+        parts = ["%d completed" % self.done]
+        if self.wipes:
+            parts.append("%d wiped" % self.wipes)
+        other = self.failed - self.wipes - self.staged
+        if other > 0:
+            parts.append("%d ended early" % other)
+        if self.staged:
+            parts.append("%d never got in" % self.staged)
+        if self.deaths is not None:
+            parts.append(
+                "%d death%s there in the last %d days"
+                % (self.deaths, "" if self.deaths == 1 else "s", DEATH_HOURS // 24)
+            )
+        if self.won:
+            parts.append(
+                "%d piece%s the loot council gave a member"
+                % (self.won, "" if self.won == 1 else "s")
+            )
+        return ", ".join(parts)
 
     @property
     def value(self) -> float:
@@ -452,17 +654,69 @@ def target(run: Run, level: int, quests: int | None, rounds: int = 0) -> int:
     return base
 
 
-def refusals(facts: Facts) -> dict:
-    """Run keyword -> why it is not offered, for every run that is not."""
+def _expected(facts: Facts, keyword: str) -> float | None:
+    """The item levels one run of `keyword` is worth, None when unread or
+    when preraid does not read that dungeon's loot at all."""
+    if facts.upgrades is None or keyword not in facts.upgrades:
+        return None
+    return round(sum(float(g.levels) for g in facts.upgrades.get(keyword, ())), 2)
+
+
+def _outgrown_run(facts: Facts, run: Run, level: int) -> str:
+    """Why the family has outgrown `run`, or "" while it has not.
+
+    Levelling, a run is outgrown past its ceiling. At the level cap it is
+    outgrown only once its loot holds no upgrade for anybody, because a raid
+    guild gears in the lower dungeons too.
+    """
+    if level <= run.ceiling:
+        return ""
+    worth = _expected(facts, run.keyword) if level >= LEVEL_CAP else None
+    if worth:
+        return ""
+    if worth is None:
+        return "outgrown: it tops out at %d" % run.ceiling
+    return "outgrown: it tops out at %d and holds no upgrade for anyone" % (run.ceiling)
+
+
+def _locked(facts: Facts, run: Run) -> str:
+    """Why the family cannot get through `run`'s door without a key, or ""."""
+    need = DOOR_KEYS.get(run.keyword)
+    if need is None:
+        return ""
+    entry, name, where = need
+    if facts.keys is not None and entry in facts.keys:
+        return ""
+    return "locked: it needs %s, which drops in %s, and %s" % (
+        name,
+        council.keyword_place(where),
+        "nobody carries one"
+        if facts.keys is not None
+        else "nothing says anybody carries one",
+    )
+
+
+def refusal_kinds(facts: Facts) -> dict:
+    """Run keyword -> (kind, why) it is not offered, for every run that is
+    not. The kinds are council's REFUSED_* and this module's."""
     _who, level = facts.weakest
     out = {}
     for run in RUNS:
-        why = council.door_refusal(run.keyword, list(facts.level_rows))
-        if not why and level > run.ceiling:
-            why = "outgrown: it tops out at %d" % run.ceiling
+        kind, why = council.door_refusal_kind(run.keyword, list(facts.level_rows))
+        if not why:
+            why = _outgrown_run(facts, run, level)
+            kind = REFUSED_OUTGROWN if why else ""
+        if not why:
+            why = _locked(facts, run)
+            kind = REFUSED_LOCKED if why else ""
         if why:
-            out[run.keyword] = why
+            out[run.keyword] = (kind, why)
     return out
+
+
+def refusals(facts: Facts) -> dict:
+    """Run keyword -> why it is not offered, for every run that is not."""
+    return {keyword: why for keyword, (_k, why) in refusal_kinds(facts).items()}
 
 
 def _gear_facts(facts: Facts, run: Run) -> dict:
@@ -483,6 +737,39 @@ def _gear_facts(facts: Facts, run: Run) -> dict:
     return out
 
 
+def shares_map(run: Run) -> bool:
+    """Whether another Run's wing stands on the same map (Scarlet Monastery,
+    Maraudon, Dire Maul, Stratholme)."""
+    return sum(1 for r in RUNS if r.map_id == run.map_id) > 1
+
+
+def _history_facts(facts: Facts, run: Run) -> dict:
+    """The record fields of one run's Option, from the facts.
+
+    Deaths, the loot council's awards and the bosses' levels are read per
+    map, so a wing that shares its map is told None for them: ten deaths in
+    the Graveyard are not the Cathedral's, nor are the Cathedral's bosses the
+    Graveyard's. The ledger's wipes are per door already.
+    """
+    tally = (facts.outcomes or {}).get(run.keyword, {})
+
+    def own(found: dict | None):
+        if found is None or shares_map(run):
+            return None
+        return found.get(run.map_id)
+
+    deaths = own(facts.deaths)
+    won = own(facts.won)
+    return {
+        "level": facts.weakest[1],
+        "bosses": own(facts.bosses),
+        "deaths": None if facts.deaths is None or shares_map(run) else int(deaths or 0),
+        "wipes": int(tally.get(WIPE, 0)),
+        "staged": int(tally.get(STAGING_FAILED, 0)),
+        "won": None if facts.won is None or shares_map(run) else int(won or 0),
+    }
+
+
 def options(facts: Facts) -> list:
     """Every run the family could be queued for now, in path order."""
     _who, level = facts.weakest
@@ -494,7 +781,16 @@ def options(facts: Facts) -> list:
     out = []
     for run in open_runs:
         quests = None if facts.quests is None else int(facts.quests.get(run.zone, 0))
-        want = target(run, level, quests, rounds)
+        # A LOWER DUNGEON AT THE CAP COUNTS ITS OWN ROUNDS. The ledger has
+        # no window, so the runs a family made while levelling through it
+        # would otherwise fill the first at-cap round before it began. Its
+        # loot (`_outgrown_run`) is what retires it.
+        own = (
+            int(facts.done.get(run.keyword, 0)) // AT_CAP_RUNS
+            if level >= LEVEL_CAP and run.ceiling < LEVEL_CAP
+            else 0
+        )
+        want = target(run, level, quests, max(rounds, own))
         done = int(facts.done.get(run.keyword, 0))
         if done >= want:
             continue
@@ -520,6 +816,7 @@ def options(facts: Facts) -> list:
                 below=below,
                 capped=level >= LEVEL_CAP,
                 **_gear_facts(facts, run),
+                **_history_facts(facts, run),
             )
         )
     return out
@@ -534,6 +831,7 @@ def rank(option: Option) -> tuple:
     if option.capped:
         return (
             not option.ready,
+            option.troubled,
             -option.progress_rank,
             -option.value,
             option.done / max(option.target, 1),
@@ -541,6 +839,7 @@ def rank(option: Option) -> tuple:
         )
     return (
         not option.ready,
+        option.troubled,
         option.ceiling,
         option.done / max(option.target, 1),
         _order(option),
@@ -555,6 +854,13 @@ def heuristic(opts: list) -> Option | None:
 
 
 def heuristic_why(pick: Option) -> str:
+    said = _heuristic_why(pick)
+    if pick.troubled:
+        said += "; every run left has cost the family (%s)" % pick.history
+    return said
+
+
+def _heuristic_why(pick: Option) -> str:
     if pick.capped and pick.progress_rank:
         return "%s advances the raid's progression: %s (%s)" % (
             pick.place,
@@ -597,6 +903,11 @@ def due(rows: list, leader: dict | None, level_rows: list) -> Due:
     rows    the family's queued and active entries, in order, each with its
             `source` (campaignqueue.SELECT_PENDING_SQL)
     leader  the leader's roster row; its dungeon_runs_done counts the head
+
+    Conservative on purpose: nothing is planned while any entry waits behind
+    the head, or while the head (the operator's or a planned one) is short of
+    its count. So an operator's order always runs first and to its end, and
+    at most one planned entry is ever pending.
     """
     if not rows:
         return Due("the queue is empty")
@@ -622,12 +933,14 @@ def _outgrown(head: dict, level_rows: list) -> Due:
     """An active planner entry the weakest member has outgrown ends early.
 
     Only the planner's own entries: an operator's order runs to its count.
+    Only while the family levels: at the level cap a lower dungeon was chosen
+    for its loot, not its levels, and its round is short (AT_CAP_RUNS).
     """
     run = BY_KEYWORD.get(wing_of(str(head.get("keyword") or "")))
-    if str(head.get("source") or "") != SOURCE or run is None:
+    if str(head.get("source") or "") not in PLANNED_SOURCES or run is None:
         return Due()
     weakest = [int(r.get("level") or 0) for r in level_rows if r.get("level")]
-    if weakest and min(weakest) > run.ceiling:
+    if weakest and run.ceiling < min(weakest) < LEVEL_CAP:
         return Due(
             "the family has outgrown %s (the weakest is %d, it tops out at %d)"
             % (run.place, min(weakest), run.ceiling),
@@ -650,12 +963,15 @@ def planned_line(option: Option, reason: str, chooser: str) -> str:
         worth = "; %.1f expected item levels a run over every slot" % (option.expected)
     if option.progress:
         worth += "; %s" % option.progress
-    return "queued %s (%s; %s done of %d%s) because %s; chosen by %s" % (
+    if option.fit:
+        worth += "; %s" % option.fit
+    return "queued %s (%s; %s done of %d%s; record: %s) because %s; chosen by %s" % (
         entry_line(option),
         option.why,
         option.done,
         option.target,
         worth,
+        option.history,
         reason,
         chooser,
     )
@@ -719,10 +1035,92 @@ def sequence(facts: Facts, queued: list | None = None, count: int = LOOKAHEAD) -
     return out
 
 
-def page_view(queue_view: dict, facts: Facts | None, done: int | None) -> dict:
-    """The Dungeons tab's two lines for one family: now, and next planned.
+# The latest dungeon choice recorded for one family: what Jev said, what the
+# heuristic said and why, which was carried out, and how long ago.
+CHOICE_SQL = (
+    "SELECT heuristic, heuristic_why, jev, confidence, probabilities, acted, "
+    "status, item_name, TIMESTAMPDIFF(SECOND, created_at, NOW()) AS age_seconds "
+    "FROM overseer_jev_judgment WHERE kind = %s AND subject = %s "
+    "ORDER BY id DESC LIMIT 1"
+)
+CHOICE_KIND = "dungeon_choice"  # jev_choices.KIND_DUNGEON, which imports this
 
-    `queue_view` is campaignqueue.view's; `done` the leader's run count.
+
+def _runner_up(row: dict, chosen: str) -> str:
+    """ "; next Razorfen Kraul at 0.12" off the recorded probabilities."""
+    try:
+        probs = json.loads(str(row.get("probabilities") or "") or "{}")
+    except ValueError:
+        return ""
+    others = sorted(
+        ((float(p), k) for k, p in probs.items() if k != chosen), reverse=True
+    )
+    if not others:
+        return ""
+    p, keyword = others[0]
+    return "; next %s at %.2f" % (council.keyword_place(keyword), p)
+
+
+def choice_line(row: dict | None) -> str:
+    """Jev's last dungeon choice for a family and its reasons, said; "" for
+    none on record."""
+    if not row:
+        return ""
+    heuristic = str(row.get("heuristic") or "")
+    answer = str(row.get("jev") or "")
+    acted = str(row.get("acted") or "")
+    why = str(row.get("heuristic_why") or "")
+    when = council.ago(row.get("age_seconds"))
+    asked = str(row.get("item_name") or "")
+    head = "Jev's last dungeon choice%s%s: " % (
+        (", " + when) if when else "",
+        (", asked because " + asked) if asked else "",
+    )
+    if not answer:
+        return head + (
+            "Jev gave no answer (%s), so the heuristic's %s was queued, because %s."
+            % (row.get("status") or "no status", council.keyword_place(heuristic), why)
+        )
+    sure = "%.2f" % float(row.get("confidence") or 0.0)
+    runner = _runner_up(row, answer)
+    if acted == "both":
+        return head + (
+            "Jev chose %s (sure at %s%s), as the heuristic did, because %s. "
+            "That was queued." % (council.keyword_place(answer), sure, runner, why)
+        )
+    if acted == "jev":
+        return head + (
+            "Jev chose %s (sure at %s%s) over the heuristic's %s, which it "
+            "picked because %s. Jev's choice was queued."
+            % (
+                council.keyword_place(answer),
+                sure,
+                runner,
+                council.keyword_place(heuristic),
+                why,
+            )
+        )
+    return head + (
+        "Jev leaned to %s at %s%s, short of its floor, so the heuristic's %s was "
+        "queued, because %s."
+        % (
+            council.keyword_place(answer),
+            sure,
+            runner,
+            council.keyword_place(heuristic),
+            why,
+        )
+    )
+
+
+def page_view(
+    queue_view: dict, facts: Facts | None, done: int | None, choice: dict | None = None
+) -> dict:
+    """The Dungeons tab's lines for one family: now, next planned, and the
+    last dungeon choice Jev was asked for, with its reasons.
+
+    `queue_view` is campaignqueue.view's; `done` the leader's run count;
+    `choice` the CHOICE_SQL row, or None.
     """
     entries = list((queue_view or {}).get("entries") or [])
     if entries:
@@ -754,7 +1152,12 @@ def page_view(queue_view: dict, facts: Facts | None, done: int | None) -> dict:
             nxt = "Next planned: %s (%s)." % (entry_line(option), option.why)
         else:
             nxt = "Next planned: nothing in range on this continent, so the family quests."
-    return {"now": now, "next": nxt, "line": " ".join(p for p in (now, nxt) if p)}
+    return {
+        "now": now,
+        "next": nxt,
+        "line": " ".join(p for p in (now, nxt) if p),
+        "jev": choice_line(choice),
+    }
 
 
 def portal_coverage() -> set:

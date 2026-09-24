@@ -2618,6 +2618,9 @@ def _apply_queue_move(move, names: list, family: str = "") -> str:
 # unknown, so a missing column costs a fact and never the plan.
 
 _PLANNER_LOOT: dict | None = None
+# The level range of each dungeon's bosses (campaignplan.BOSSES_SQL). Static per
+# world, so read once, like the boss loot.
+_PLANNER_BOSSES: dict | None = None
 # preraid's catalog: every piece the level 60 dungeons drop or reward, with
 # where and how often. Static per world, so read once, like the boss loot.
 _PLANNER_CATALOG: dict | None = None
@@ -2637,7 +2640,7 @@ def _planner_rows(cur, sql: str, args: tuple, what: str):
 
 def _planner_facts(key: str, fam: dict, level_rows: list):
     """campaignplan.Facts for one family. Reads only."""
-    global _PLANNER_LOOT
+    global _PLANNER_LOOT, _PLANNER_BOSSES
     names = list(fam["names"])
     marks = campaignplan.holes(len(names))
     args = tuple(names)
@@ -2659,6 +2662,20 @@ def _planner_facts(key: str, fam: dict, level_rows: list):
             rows = _planner_rows(cur, campaignplan.LOOT_SQL, (), "the boss loot")
             if rows is not None:
                 _PLANNER_LOOT = campaignplan.loot(rows)
+        # THE FAMILY'S RECORD, so the choice weighs where they keep dying and
+        # what the loot council has already handed out from each dungeon.
+        died = _planner_rows(
+            cur, campaignplan.DEATHS_SQL.format(holes=marks),
+            args + (campaignplan.DEATH_HOURS,), "the family's deaths")
+        won = _planner_rows(cur, campaignplan.WON_SQL, (key,),
+                            "the loot council's awards")
+        keys = _planner_rows(cur, campaignplan.KEYS_SQL.format(holes=marks),
+                             args, "the door keys")
+        if _PLANNER_BOSSES is None:
+            rows = _planner_rows(cur, campaignplan.BOSSES_SQL, (),
+                                 "the bosses' levels")
+            if rows is not None:
+                _PLANNER_BOSSES = campaignplan.bosses(rows)
     done, failed = campaignplan.ledger(runs, names)
     quests = (None if quest_rows is None or rewarded is None
               else campaignplan.open_quests(quest_rows, rewarded, level_rows))
@@ -2666,7 +2683,12 @@ def _planner_facts(key: str, fam: dict, level_rows: list):
     return campaignplan.Facts(
         family=key, level_rows=tuple(level_rows), done=done, failed=failed,
         quests=quests, gear=None if worn is None else campaignplan.gear(worn),
-        loot=_PLANNER_LOOT, upgrades=upgrades, progress=progress)
+        loot=_PLANNER_LOOT, upgrades=upgrades, progress=progress,
+        outcomes=campaignplan.outcomes(runs, names),
+        deaths=_read_or_none(campaignplan.per_map, died),
+        won=_read_or_none(campaignplan.per_map, won),
+        bosses=_PLANNER_BOSSES,
+        keys=_read_or_none(campaignplan.keys_held, keys))
 
 
 def _planner_catalog(cur) -> dict | None:
@@ -2724,11 +2746,13 @@ def _planner_preraid(names: list, level_rows: list) -> tuple:
     return upgrades, progress
 
 
-def _append_planned(family: str, rows: list, finish: int, option) -> int:
+def _append_planned(family: str, rows: list, finish: int, option,
+                    source: str = campaignplan.SOURCE) -> int:
     """Queue `option` after the family's pending rows. Rows changed.
 
     `finish` is an outgrown planner entry to mark done first, which the queue
-    pass then moves past like any finished entry.
+    pass then moves past like any finished entry. `source` says who chose it:
+    campaignplan.SOURCE_JEV for Jev, campaignplan.SOURCE for the heuristic.
     """
     position = max([int(r.get("position") or 0) for r in rows] or [-1]) + 1
     with _connect() as conn, conn.cursor() as cur:
@@ -2738,7 +2762,7 @@ def _append_planned(family: str, rows: list, finish: int, option) -> int:
             changed += cur.rowcount or 0
         cur.execute(campaignqueue.INSERT_SQL,
                     (family, position, option.keyword, int(option.runs),
-                     campaignplan.SOURCE))
+                     source))
         changed += cur.rowcount or 0
     return changed
 
@@ -13212,12 +13236,14 @@ class Bridge(discord.Client):
                 log.exception("planner: the dungeon choice for %s was not "
                               "recorded", who)
         chosen = jev_choices.dungeon_carried(opts, pick, judgment)
+        by_jev = jev_choices.dungeon_by_jev(judgment)
+        source = campaignplan.source_for(by_jev)
         written = await asyncio.to_thread(_append_planned, key, rows,
-                                          due.finish, chosen)
+                                          due.finish, chosen, source)
         self._planner_said.pop(key, None)
-        log.info("planner: %s: %s", who, campaignplan.planned_line(
+        log.info("planner: %s: %s; source=%s", who, campaignplan.planned_line(
             chosen, due.reason,
-            "Jev" if chosen is not pick else "the heuristic"))
+            "Jev" if by_jev else "the heuristic"), source)
         return bool(written)
 
     # --- the Molten Core attunement (attunestep.py) ---------------------------
