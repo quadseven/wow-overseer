@@ -387,6 +387,7 @@ class Item:
     """
 
     name: str
+    holder: str = ""
     quality: int = 0
     known: bool = False
     binding: str = BIND_ON_PICKUP
@@ -415,6 +416,9 @@ class Family:
     """What the family can actually do today, not what it could in principle."""
 
     enchanting_skill: int = 0
+    # Naturally earned enchanting ranks observed for guild members. Runtime
+    # grants and planned skills are deliberately absent from this input.
+    guild_enchanters: dict = field(default_factory=dict)
     # profession -> the skill somebody in the family actually has
     professions: dict = field(default_factory=dict)
     # How much of a reagent the family keeps before the rest is surplus.
@@ -511,7 +515,24 @@ def _can_disenchant(item, family):
     needed = item.disenchant_skill_required
     if needed is None:
         return False
-    return family.enchanting_skill >= needed
+    if item.binding == BIND_ON_PICKUP:
+        skill = (
+            family.guild_enchanters.get(item.holder)
+            if item.holder
+            else family.enchanting_skill
+        )
+        return skill is not None and int(skill) >= needed
+    skills = [family.enchanting_skill]
+    skills.extend(family.guild_enchanters.values())
+    return any(int(skill) >= needed for skill in skills)
+
+
+def _disenchantable(item):
+    return (
+        item.equipment
+        and item.quality >= 2
+        and item.disenchant_skill_required is not None
+    )
 
 
 def _auction_is_worth_it(
@@ -785,12 +806,15 @@ def decide(
             AUCTION,
             "%s is bind-on-equip and worth more listed than vendored" % item.name,
         )
-    if DISENCHANT in available and _can_disenchant(item, family):
-        return Verdict(
-            DISENCHANT,
-            "%s cannot be listed or is not worth "
-            "listing, and the family can break it down" % item.name,
-        )
+    no_enchanter = False
+    if DISENCHANT in available and _disenchantable(item):
+        if _can_disenchant(item, family):
+            return Verdict(
+                DISENCHANT,
+                "%s cannot be listed or is not worth "
+                "listing, and a natural guild enchanter can break it down" % item.name,
+            )
+        no_enchanter = True
     if (
         item.binding != BIND_ON_PICKUP
         and AUCTION not in available
@@ -817,6 +841,12 @@ def decide(
             "throw away the difference" % item.name,
         )
     if VENDOR in available and family.vendor_reachable and item.sell_price > 0:
+        if no_enchanter:
+            return Verdict(
+                VENDOR,
+                "%s has no qualifying natural guild enchanter, so "
+                "disenchanting does nothing" % item.name,
+            )
         return Verdict(
             VENDOR,
             "%s is outgrown, and vendoring is the only route open to it" % item.name,

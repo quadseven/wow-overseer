@@ -155,6 +155,52 @@ class DisenchantingIsNotAvailableToThisFamily(unittest.TestCase):
         it = green(quality=1, binding=BIND_ON_PICKUP, disenchant_skill_required=1)
         self.assertNotEqual(decide(it, able, character_level=28).route, DISENCHANT)
 
+    def test_a_natural_guild_enchanter_can_break_down_bind_on_equip_green(self):
+        it = green(
+            binding=BIND_ON_EQUIP,
+            disenchant_skill_required=25,
+            holder="Og",
+        )
+        family = Family(
+            vendor_reachable=True,
+            guild_enchanters={"Guildmate": 50},
+        )
+        self.assertEqual(
+            decide(it, family, character_level=28, available={DISENCHANT}).route,
+            DISENCHANT,
+        )
+
+    def test_no_qualifying_guild_enchanter_does_not_disassemble(self):
+        it = green(
+            binding=BIND_ON_EQUIP,
+            disenchant_skill_required=25,
+            holder="Og",
+        )
+        family = Family(vendor_reachable=True, guild_enchanters={"Guildmate": 10})
+        verdict = decide(
+            it,
+            family,
+            character_level=28,
+            available={DISENCHANT, VENDOR, AUCTION},
+        )
+        self.assertEqual(verdict.route, VENDOR)
+        self.assertIn("no qualifying natural guild enchanter", verdict.why)
+
+    def test_soulbound_green_requires_the_holders_natural_skill(self):
+        it = green(
+            binding=BIND_ON_PICKUP,
+            disenchant_skill_required=25,
+            holder="Og",
+        )
+        family = Family(
+            enchanting_skill=450,
+            guild_enchanters={"Guildmate": 50},
+        )
+        self.assertNotEqual(
+            decide(it, family, character_level=28, available={DISENCHANT}).route,
+            DISENCHANT,
+        )
+
 
 class OldMeansOutgrown(unittest.TestCase):
     def test_a_green_near_your_level_is_kept(self):

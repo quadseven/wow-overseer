@@ -1212,6 +1212,7 @@ def gear_candidates(
             item_class = int(row["item_class"])
             item = disposition.Item(
                 name=str(row["name"]),
+                holder=str(row["holder"]),
                 quality=int(row["quality"]),
                 known=True,
                 binding=binding,
