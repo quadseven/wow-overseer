@@ -8,8 +8,10 @@ Potion anywhere, and a guild bank of about 804 gold that only the guild master
 may draw on.
 """
 
+import ast
 import asyncio
 import pathlib
+import types
 import unittest
 
 import auction
@@ -508,6 +510,35 @@ class JevPicksWhatComesNext(unittest.TestCase):
         self.assertEqual(rs.focus_of(judgment, self.opts), "make:%d" % rs.MAJOR_HEALING)
         self.assertIn("raid supply: guild=Cave", judgment.line())
 
+    def test_the_record_changes_only_when_the_answer_does(self):
+        first = self.run_ask(FakeClient("make:%d" % rs.MAJOR_HEALING, 0.8))
+        again = self.run_ask(FakeClient("make:%d" % rs.MAJOR_HEALING, 0.8))
+        other = self.run_ask(FakeClient("make:%d" % rs.MAJOR_MANA, 0.8))
+        self.assertEqual(first.signature, again.signature)
+        self.assertNotEqual(first.signature, other.signature)
+
+    def test_the_guilds_facts_are_the_raid_tabs_lineup(self):
+        crew = [
+            member("Grug", family=True, maintenance=False, class_id=rs.WARRIOR),
+            member("Aylysae", maintenance=False, class_id=rs.PRIEST),
+            member(
+                "Zug",
+                guild="Bonkers",
+                family=True,
+                maintenance=False,
+                class_id=rs.WARRIOR,
+            ),
+        ]
+        worn = [
+            {"name": "Grug", "slot": 6, "fire_res": 10},
+            {"name": "Zug", "slot": 6, "fire_res": 5},
+        ]
+        out = rs.guild_facts("Cave", crew, worn, (ALCHEMIST,), {})
+        self.assertEqual({m.name for m in out.members}, {"Grug", "Aylysae"})
+        by = {r.name: r for r in out.raiders}
+        self.assertTrue(by["Grug"].main_tank)
+        self.assertEqual(by["Grug"].fire, 10)
+
     def test_an_unsure_answer_or_none_keeps_the_heuristic(self):
         judgment = self.run_ask(FakeClient("make:%d" % rs.MAJOR_HEALING, 0.3))
         self.assertEqual(
@@ -636,15 +667,178 @@ class TheBridgePass(unittest.TestCase):
         self.assertIn("busy |= {step.holder for step in plan.steps}", corps)
         self.assertIn("self._raid_supply_once(facts, plan.corps, busy, cap)", corps)
         supply = self.body("_raid_supply_once")
-        self.assertIn("raidsupply.ask(", supply)
-        self.assertIn("self._run_corps_step(step, cap)", supply)
         self.assertIn('log.info("raid supply: started %d step(s)", started)', supply)
+        self.assertIn(
+            "self._run_corps_step(step, cap)", self.body("_raid_supply_guild")
+        )
+        focus = self.body("_raid_supply_focus")
+        self.assertIn("raidsupply.ask(", focus)
+        self.assertIn("judgment.signature", focus)
 
     def test_the_guild_bank_pass_holds_the_raid_gold_back(self):
         start = BRIDGE.index("def _fetch_guild_money(")
         self.assertIn(
             "raidsupply.hold_back(rows, ledger)", BRIDGE[start : start + 3000]
         )
+
+
+def _functions(names):
+    tree = ast.parse(BRIDGE)
+    found = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        and node.name in names
+    ]
+    return ast.Module(body=found, type_ignores=[])
+
+
+class _Log:
+    def __init__(self):
+        self.lines = []
+
+    def info(self, msg, *a, **k):
+        self.lines.append(msg % a if a else msg)
+
+    warning = exception = debug = info
+
+
+def _thread(fn, *a, **k):
+    async def run():
+        return fn(*a, **k)
+
+    return run()
+
+
+class _Task:
+    def add_done_callback(self, cb):
+        return None
+
+
+class TheBridgePassRuns(unittest.TestCase):
+    """The pass's own code, loaded out of bridge.py and run against fakes: a
+    Cave with an alchemist holding the herbs, a guild master standing at the
+    vault and at a counter, and Jev answering."""
+
+    PASS = (
+        "_raid_supply_once",
+        "_raid_supply_guild",
+        "_raid_supply_focus",
+        "_raid_supply_market",
+    )
+
+    def run_pass(self, at_vault=True, at_counter=True, listings=()):
+        world = {"rows": [], "auction": [], "judgments": [], "steps": []}
+        log = _Log()
+        oden = alchemist(
+            carried=(held(1, 13464, 6), held(2, 13465, 3), held(3, VIAL, 3))
+        )
+        members = [oden, *raider_members()]
+        extra = {
+            "worn": [],
+            "letters": [],
+            "bank": {"Cave": 8_046_728},
+            "masters": {"Cave": "Grug"},
+            "purses": {"Grug": 400_000},
+            "ledger": [],
+            "recent": [],
+        }
+
+        def create_task(coro):
+            coro.close()
+            return _Task()
+
+        ns = {
+            "asyncio": types.SimpleNamespace(
+                to_thread=_thread, create_task=create_task
+            ),
+            "log": log,
+            "time": types.SimpleNamespace(monotonic=lambda: 100.0),
+            "jev": jev,
+            "pymysql": types.SimpleNamespace(
+                err=types.SimpleNamespace(MySQLError=Exception)
+            ),
+            "raidsupply": rs,
+            "guildcorps": gc,
+            "auction": auction,
+            "travel": types.SimpleNamespace(
+                spawn_in_reach=lambda spawn, where, yards: at_vault
+            ),
+            "TOWN_COUNTER_YARDS": 8,
+            "_log_capped": lambda prefix, notes: [
+                log.info("%s: %s", prefix, n) for n in notes
+            ],
+            "_fetch_raid_supply_facts": lambda m: extra,
+            "_insert_jev_judgment": lambda j: world["judgments"].append(j),
+            "_fetch_teams": lambda names: {n: "alliance" for n in names},
+            "_fetch_auction_listings": lambda entries, house: list(listings),
+            "_nearest_vault": lambda name: {"x": 0},
+            "_fetch_positions": lambda names: {n: {"map_id": 0} for n in names},
+            "_insert_guild": lambda who, command, source: (
+                world["rows"].append((who, command, source)) or 7
+            ),
+            "_fetch_auctioneer": lambda name: {"faction": 12} if at_counter else None,
+            "_fetch_free_slots": lambda names: {n: 10 for n in names},
+            "_insert_auction": lambda who, command, source: (
+                world["auction"].append((who, command, source)) or 9
+            ),
+        }
+        exec(compile(_functions(self.PASS), "bridge.py", "exec"), ns)  # noqa: S102 - bridge.py's own source
+
+        class Self:
+            _corps_steps = {}
+            _raid_supply_said = {}
+            _mail_walk_tasks = set()
+            _jev = types.SimpleNamespace(
+                ready=lambda kind: True,
+                ask=FakeClient("make:%d" % rs.MAJOR_HEALING, 0.9).ask,
+            )
+
+            def _mail_walk_task_done(self, task):
+                return None
+
+            async def _run_corps_step(self, step, cap):
+                world["steps"].append(step)
+
+        me = Self()
+        for name in self.PASS:
+            setattr(me, name, types.MethodType(ns[name], me))
+        facts = {"members": members, "vendors": {}}
+        posts = {"Cave": (ALCHEMIST,)}
+        asyncio.run(me._raid_supply_once(facts, posts, set(), 600.0))
+        return world, log, me
+
+    def test_the_pass_starts_the_alchemists_craft_and_records_jevs_focus(self):
+        _, log, me = self.run_pass()
+        self.assertIn("Oden", me._corps_steps)
+        self.assertTrue(
+            any(
+                line.startswith("raid supply: guild=Cave focus=make:13446")
+                for line in log.lines
+            )
+        )
+        self.assertIn("raid supply: started 1 step(s)", log.lines)
+        self.assertIn("Cave", me._raid_supply_said)
+
+    def test_the_master_withdraws_at_the_vault_and_buys_at_the_counter(self):
+        listings = [
+            auction.Listing(11, rs.GREATER_FIRE_PROTECTION, "GFPP", 5, 20_000, 2)
+        ]
+        world, log, _ = self.run_pass(listings=listings)
+        self.assertEqual(
+            world["rows"], [("Grug", "bank withdraw 20000", rs.WITHDRAW_SOURCE)]
+        )
+        # Nothing withdrawn is on the ledger yet, so nothing is bought this pass.
+        self.assertFalse(world["auction"])
+        self.assertTrue(any("no unspent raid budget" in line for line in log.lines))
+
+    def test_away_from_the_vault_nothing_is_withdrawn(self):
+        listings = [
+            auction.Listing(11, rs.GREATER_FIRE_PROTECTION, "GFPP", 5, 20_000, 2)
+        ]
+        world, log, _ = self.run_pass(at_vault=False, listings=listings)
+        self.assertFalse(world["rows"])
+        self.assertTrue(any("is not at a vault" in line for line in log.lines))
 
 
 if __name__ == "__main__":

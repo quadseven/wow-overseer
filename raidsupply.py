@@ -57,6 +57,7 @@ import guildcorps
 import guildroute
 import jev
 import jev_choices
+import raidlineup
 
 SOURCE = "raidsupply"
 KIND = "raid_supply"
@@ -608,6 +609,16 @@ class SupplyJudgment(jev_choices.DungeonJudgment):
 
     kind: str = KIND
 
+    @property
+    def signature(self) -> tuple:
+        """What has to change for a new record to be worth writing."""
+        return (
+            self.heuristic,
+            self.jev,
+            self.jev and round(self.confidence or 0, 2),
+            self.acted,
+        )
+
     def line(self) -> str:
         answer = (
             "jev=%s conf=%.2f" % (self.jev, self.confidence or 0.0)
@@ -963,6 +974,30 @@ class GuildFacts:
     raiders: tuple  # Raider
     posts: tuple  # guildcorps.Post
     vendors_by_map: dict
+
+
+def guild_facts(guild, members, worn_rows, posts, vendors_by_map) -> GuildFacts:
+    """One guild's GuildFacts from every family guild's corps Members.
+
+    The raiders are the lineup the Raid tab shows, chosen by
+    raidlineup.build_lineup over the same members with the family guaranteed.
+    """
+    crew = [m for m in members or () if m.guild == guild]
+    names = {m.name for m in crew}
+    family = {m.name for m in crew if m.family}
+    lineup = raidlineup.build_lineup(
+        [{"name": m.name, "level": m.level, "class_id": m.class_id} for m in crew],
+        guaranteed=family,
+    )
+    raiders = raiders_from_lineup(
+        lineup,
+        {m.name: m.class_id for m in crew},
+        [r for r in worn_rows or () if r.get("name") in names],
+        family,
+    )
+    return GuildFacts(
+        guild, tuple(crew), tuple(raiders), tuple(posts), vendors_by_map or {}
+    )
 
 
 @dataclass(frozen=True)

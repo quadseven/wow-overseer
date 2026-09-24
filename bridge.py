@@ -10851,52 +10851,56 @@ class Bridge(discord.Client):
         extra = await asyncio.to_thread(_fetch_raid_supply_facts, members)
         members = raidsupply.with_letters(members, extra["letters"])
         recent = guildcorps.recent_from_rows(extra["recent"], prefix=raidsupply.SOURCE)
-        rule = raidsupply.policy()
         started = 0
         for guild, posts in sorted((corps or {}).items()):
-            crew = [m for m in members if m.guild == guild]
-            family = {m.name for m in crew if m.family}
-            lineup = raidlineup.build_lineup(
-                [{"name": m.name, "level": m.level, "class_id": m.class_id} for m in crew],
-                guaranteed=family)
-            raiders = raidsupply.raiders_from_lineup(
-                lineup, {m.name: m.class_id for m in crew},
-                [r for r in extra["worn"] if r.get("name") in {m.name for m in crew}], family)
-            guild_facts = raidsupply.GuildFacts(
-                guild, tuple(crew), tuple(raiders), tuple(posts), facts.get("vendors") or {})
-            master = extra["masters"].get(guild, "")
-            withdrawn, spent = raidsupply.ledger(extra["ledger"], master)
-            bank = extra["bank"].get(guild)
-            first = raidsupply.plan_guild(guild_facts, recent, set(busy), cap=cap)
-            opts = raidsupply.options(first.lines, first.fire, raidsupply.FIRE_GEAR)
-            judgment = None
-            if rule.mode != jev.OFF and self._jev.ready(raidsupply.KIND):
-                judgment = await raidsupply.ask(
-                    self._jev, guild, first.lines, first.fire, opts,
-                    raidsupply.reserve(withdrawn, spent), rule)
-            if judgment is not None:
-                log.info("%s", judgment.line())
-                if self._raid_supply_said.get(guild) != judgment.signature:
-                    self._raid_supply_said[guild] = judgment.signature
-                    try:
-                        await asyncio.to_thread(_insert_jev_judgment, judgment)
-                    except pymysql.err.MySQLError:
-                        log.exception("raid supply: the choice for %s was not recorded", guild)
-            focus = raidsupply.focus_of(judgment, opts)
-            plan = raidsupply.plan_guild(guild_facts, recent, busy, focus=focus, cap=cap)
-            log.info("%s; focus %s", raidsupply.summary(plan), focus or "none")
-            _log_capped("raid supply", plan.notes)
-            now = time.monotonic()
-            for step in plan.steps:
-                self._corps_steps[step.holder] = now
-                task = asyncio.create_task(self._run_corps_step(step, cap))
-                self._mail_walk_tasks.add(task)
-                task.add_done_callback(self._mail_walk_task_done)
-                started += 1
-            if master and bank is not None:
-                await self._raid_supply_market(
-                    guild, plan, master, focus, (bank, withdrawn, spent), extra)
+            guild_facts = raidsupply.guild_facts(
+                guild, members, extra["worn"], posts, facts.get("vendors") or {})
+            started += await self._raid_supply_guild(
+                guild_facts, extra, recent, busy, cap)
         log.info("raid supply: started %d step(s)", started)
+
+    async def _raid_supply_guild(self, guild_facts, extra, recent, busy, cap) -> int:
+        """One guild's supply steps, started; returns how many."""
+        guild = guild_facts.guild
+        master = extra["masters"].get(guild, "")
+        withdrawn, spent = raidsupply.ledger(extra["ledger"], master)
+        focus = await self._raid_supply_focus(
+            guild_facts, recent, busy, cap, raidsupply.reserve(withdrawn, spent))
+        plan = raidsupply.plan_guild(guild_facts, recent, busy, focus=focus, cap=cap)
+        log.info("%s; focus %s", raidsupply.summary(plan), focus or "none")
+        _log_capped("raid supply", plan.notes)
+        now = time.monotonic()
+        for step in plan.steps:
+            self._corps_steps[step.holder] = now
+            task = asyncio.create_task(self._run_corps_step(step, cap))
+            self._mail_walk_tasks.add(task)
+            task.add_done_callback(self._mail_walk_task_done)
+        bank = extra["bank"].get(guild)
+        if master and bank is not None:
+            await self._raid_supply_market(
+                guild, plan, master, focus, (bank, withdrawn, spent), extra)
+        return len(plan.steps)
+
+    async def _raid_supply_focus(self, guild_facts, recent, busy, cap, budget) -> str:
+        """What the guild works first: Jev's `raid_supply` choice where it acts,
+        the heuristic's otherwise. The judgment is recorded when it changes."""
+        guild = guild_facts.guild
+        first = raidsupply.plan_guild(guild_facts, recent, set(busy), cap=cap)
+        opts = raidsupply.options(first.lines, first.fire, raidsupply.FIRE_GEAR)
+        rule = raidsupply.policy()
+        if rule.mode == jev.OFF or not self._jev.ready(raidsupply.KIND):
+            return raidsupply.focus_of(None, opts)
+        judgment = await raidsupply.ask(
+            self._jev, guild, first.lines, first.fire, opts, budget, rule)
+        if judgment is not None:
+            log.info("%s", judgment.line())
+            if self._raid_supply_said.get(guild) != judgment.signature:
+                self._raid_supply_said[guild] = judgment.signature
+                try:
+                    await asyncio.to_thread(_insert_jev_judgment, judgment)
+                except pymysql.err.MySQLError:
+                    log.exception("raid supply: the choice for %s was not recorded", guild)
+        return raidsupply.focus_of(judgment, opts)
 
     async def _raid_supply_market(self, guild, plan, master, focus, money, extra) -> None:
         """The auction half: withdraw at a vault, buy at a counter; else say why.
@@ -16381,7 +16385,6 @@ def _fetch_raid_supply_facts(members) -> dict:
     """What raidsupply reads beyond the corps' facts; no judgement here."""
     ids = lambda values: ",".join(str(int(v)) for v in values) or "0"  # noqa: E731
     names = sorted({m.name for m in members})
-    guilds = sorted({m.guild for m in members if m.guild})
     out = {"worn": [], "letters": [], "bank": {}, "masters": {}, "purses": {},
            "ledger": [], "recent": []}
     if not names:
@@ -16396,14 +16399,7 @@ def _fetch_raid_supply_facts(members) -> dict:
                                   _RAID_SUPPLY_WORN_SQL.format(guids=everyone))
         out["letters"] = _corps_read(cur, "raid letters", _CORPS_LETTERS_SQL.format(
             guids=everyone, entries=entries))
-        if guilds:
-            rows = _corps_read(cur, "guild bank gold", _RAID_SUPPLY_BANK_SQL.format(
-                names=",".join(["%s"] * len(guilds))), guilds)
-            for row in rows:
-                guild = str(row["guild_name"])
-                out["bank"][guild] = int(row.get("bank") or 0)
-                out["masters"][guild] = str(row.get("master") or "")
-                out["purses"][str(row.get("master") or "")] = int(row.get("money") or 0)
+        _raid_supply_bank(cur, sorted({m.guild for m in members if m.guild}), out)
         rows = _corps_read(cur, "raid supply rows", _RAID_SUPPLY_ROWS_SQL,
                            (raidsupply.SOURCE + ":%",))
     name_of = {guid: name for name, guid in guid_of.items()}
@@ -16412,6 +16408,21 @@ def _fetch_raid_supply_facts(members) -> dict:
     out["ledger"] = rows
     out["recent"] = rows
     return out
+
+
+def _raid_supply_bank(cur, guilds: list, out: dict) -> None:
+    """Each guild's bank gold, its master (guild.leaderguid) and the master's
+    purse, into `out`."""
+    if not guilds:
+        return
+    rows = _corps_read(cur, "guild bank gold", _RAID_SUPPLY_BANK_SQL.format(
+        names=",".join(["%s"] * len(guilds))), guilds)
+    for row in rows:
+        guild, master = str(row["guild_name"]), str(row.get("master") or "")
+        out["bank"][guild] = int(row.get("bank") or 0)
+        out["masters"][guild] = master
+        out["purses"][master] = int(row.get("money") or 0)
+
 
 
 def _recent_route_keys(minutes: int) -> set:
