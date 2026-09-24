@@ -1202,6 +1202,11 @@ class Slot:
         # Why the family's campaign owns the traveller (#227), or "" when it
         # does not. Set and cleared by the bridge's queue pass every cycle.
         self.campaign = ""
+        # Why the family's campaign waits in town for bag room (#297), or "".
+        # Set and cleared by the bridge's queue pass every cycle, like
+        # `campaign`. The town passes keep the traveller; only the learn trips
+        # wait, so the vendor trip the hold asks for can take the column.
+        self.town_first = ""
         # Orphan ground aims already handed back for the campaign (#227).
         self._yielded: set = set()
         # {(claimant, aim): (best distance, when)} for walks with a distance.
@@ -1244,6 +1249,27 @@ class Slot:
     def campaign_over(self) -> None:
         """Town errands may ask for the traveller again (#227)."""
         self.campaign = ""
+
+    def hold_for_town(self, why: str) -> None:
+        """The campaign waits in town for bag room until `town_over` (#297)."""
+        self.town_first = str(why or "")
+
+    def town_over(self) -> None:
+        """The campaign no longer waits in town for bag room (#297)."""
+        self.town_first = ""
+
+    @property
+    def learn_waits(self) -> str:
+        """Why a trainer walk may not take the leader now, or "".
+
+        A STAGING CAMPAIGN (#227) AND A CAMPAIGN HELD IN TOWN FOR BAG ROOM
+        (#297). The first owns the leader outright. The second needs the town
+        trip that lets it back in, and a trainer walk is the one errand no
+        town pass may take back: on wow-dev 2026-09-24 the Horde leader
+        carried one through the whole hold, every town pass waited behind it,
+        and nothing sold. The learn waits for the campaign either way.
+        """
+        return self.campaign or self.town_first
 
     def campaign_release(
         self, *, leader: str, column: str, now: float, ground

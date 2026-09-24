@@ -233,6 +233,7 @@ def vendor_holders_to_queue(
     leader: str,
     leader_at_counter: bool,
     holder_at_counter,
+    leader_walking: bool,
 ) -> tuple:
     """Which candidate holders may receive sell rows this pass.
 
@@ -240,6 +241,14 @@ def vendor_holders_to_queue(
     the counter, queueing the already-judged rows for followers is safe: the
     world executor will retry a follower until that character catches up. If
     the leader is not there yet, retain the old per-holder range gate.
+
+    A LEADER NOT AT A COUNTER GETS ROWS ONLY WHILE IT WALKS TO ONE (#297).
+    `leader_walking` is whether the leader carries this pass's vendor aim. The
+    leader used to be queued on the premise that it was on its way, and when
+    another errand held its travel column it was on its way nowhere. Measured
+    on wow-dev 2026-09-24: the Horde leader held a trainer walk the economy may
+    not take, and 57 sell rows written from where it stood all answered
+    `vendor not in range`, until the item memory refused those items outright.
     """
     holders = sorted(
         {
@@ -250,7 +259,11 @@ def vendor_holders_to_queue(
     )
     if leader_at_counter:
         return tuple(holders)
-    return tuple(name for name in holders if name == leader or holder_at_counter(name))
+    return tuple(
+        name
+        for name in holders
+        if (name == leader and leader_walking) or holder_at_counter(name)
+    )
 
 
 def town_run_needed(
