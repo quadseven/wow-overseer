@@ -12628,6 +12628,12 @@ class Bridge(discord.Client):
         judgment = jev_recovery.base_judgment(request, rule)
         if rule.mode != jev.OFF and self._jev.ready(request.kind):
             context = await asyncio.to_thread(_fetch_recovery_context, request)
+            # The movement picture (situation.py), in the slot jev_recovery
+            # keeps for it. None leaves the question as it was.
+            where = await self._situation_for(
+                request.family, list(context.positions), request.leader)
+            if where is not None:
+                context.perception = where.state()
             judgment = await jev_recovery.judge(self._jev, request, context, rule)
         log.info("%s", judgment.line())
         try:

@@ -490,6 +490,9 @@ class TheBridgeWiring(unittest.TestCase):
         self.assertIn("situation=where)", BRIDGE)
         self.assertIn("due.reason, where=where)", BRIDGE)
 
+    def test_run_recovery_reads_it_as_perception(self):
+        self.assertIn("context.perception = where.state()", BRIDGE)
+
     def test_rank_is_quoted(self):
         self.assertIn("ct.`rank`", BRIDGE)
         self.assertNotIn("ct.rank,", BRIDGE)
