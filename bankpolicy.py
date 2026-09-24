@@ -302,6 +302,35 @@ def claimed_from_rows(item_rows, worn_rows, names) -> frozenset:
     return frozenset(out)
 
 
+def _second_set(piece, keeper):
+    """(set kind, score, why) when this piece is one of the holder's second
+    sets, else None. Fire resistance first, then PvP, then an off role."""
+    if piece.fire_res > 0:
+        why = "+%d fire resistance for Molten Core; %s keeps a fire resistance set" % (
+            piece.fire_res,
+            piece.holder,
+        )
+        return FIRE_SET, (piece.fire_res, piece.item_level), why
+    if piece.pvp:
+        why = "%s keeps it as a PvP set: it comes from an honor source" % piece.holder
+        return PVP_SET, (piece.item_level, 0), why
+    item = disposition.Item(
+        name=piece.name,
+        known=True,
+        equipment=True,
+        required_level=piece.required_level,
+        item_class=piece.item_class,
+        quest_item=False,
+    )
+    if disposition.outgrown(item, keeper.level):
+        return None
+    role = off_role(piece, keeper)
+    if not role:
+        return None
+    why = "%s keeps a %s for when it plays %s" % (piece.holder, ROLE_SET[role], role)
+    return ROLE_SET[role], (piece.item_level, 0), why
+
+
 def _personal(pieces, family, reach, claimed) -> dict:
     """Rule 2: guid -> Placement for each holder's best second-set pieces."""
     keepers = {k.name: k for k in family}
@@ -313,39 +342,10 @@ def _personal(pieces, family, reach, claimed) -> dict:
             continue
         if not fit.holder_wears or not fit.bucket:
             continue
-        if piece.fire_res > 0:
-            kind, score = FIRE_SET, (piece.fire_res, piece.item_level)
-            why = (
-                "+%d fire resistance for Molten Core; %s keeps a fire "
-                "resistance set" % (piece.fire_res, piece.holder)
-            )
-        elif piece.pvp:
-            kind, score = PVP_SET, (piece.item_level, 0)
-            why = (
-                "%s keeps it as a PvP set: it comes from an honor source" % piece.holder
-            )
-        else:
-            if disposition.outgrown(
-                disposition.Item(
-                    name=piece.name,
-                    known=True,
-                    equipment=True,
-                    required_level=piece.required_level,
-                    item_class=piece.item_class,
-                    quest_item=False,
-                ),
-                keeper.level,
-            ):
-                continue
-            role = off_role(piece, keeper)
-            if not role:
-                continue
-            kind, score = ROLE_SET[role], (piece.item_level, 0)
-            why = "%s keeps a %s for when it plays %s" % (
-                piece.holder,
-                ROLE_SET[role],
-                role,
-            )
+        found = _second_set(piece, keeper)
+        if found is None:
+            continue
+        kind, score, why = found
         key = (piece.holder, kind, fit.bucket)
         held = best.get(key)
         if held is None or score > held[0]:
@@ -539,8 +539,10 @@ _STAT_COLUMNS = ", ".join(
     for n in range(1, 11)
 )
 
+# S608: every piece of this string is a module constant; the names are bound
+# as parameters by the caller.
 ITEMS_SQL = (
-    "SELECT c.name AS holder, ii.guid AS item_guid, ii.itemEntry AS entry, "
+    "SELECT c.name AS holder, ii.guid AS item_guid, ii.itemEntry AS entry, "  # noqa: S608
     "ii.count AS count, ii.flags AS instance_flags, ci.bag AS bag, ci.slot AS slot, "
     "it.name AS name, it.Quality AS quality, it.class AS item_class, "
     "it.subclass AS item_subclass, it.InventoryType AS inventory_type, "

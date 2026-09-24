@@ -1683,6 +1683,12 @@ class GearReach:
     later_wearers: tuple = ()
 
 
+def _wears_at(holding, character, level) -> bool:
+    """Class, armour, weapon skill and level at `level`; never an upgrade test."""
+    bare = replace(character, equipped={}, level=level)
+    return bool(gear.would_wear(holding, bare)[0])
+
+
 def gear_reach(gear_rows, equipped_rows, family_names) -> dict:
     """item guid -> GearReach, for the family's gear rows (#320).
 
@@ -1698,23 +1704,20 @@ def gear_reach(gear_rows, equipped_rows, family_names) -> dict:
         if holder is None:
             continue
         level = max(int(holder.level), int(holding.required_level))
-
-        def wears(c, at):
-            bare = replace(c, equipped={}, level=at)
-            return bool(gear.would_wear(holding, bare)[0])
-
         out[int(holding.guid)] = GearReach(
             bucket=gear.bucket_of(holding),
             holder_role=holder.role,
             holder_class=int(holder.class_id),
             holder_level=int(holder.level),
-            holder_wears=wears(holder, level),
+            holder_wears=_wears_at(holding, holder, level),
             later_wearers=tuple(
                 sorted(
                     c.name
                     for c in characters.values()
                     if c.name != holding.holder
-                    and wears(c, max(int(c.level), int(holding.required_level)))
+                    and _wears_at(
+                        holding, c, max(int(c.level), int(holding.required_level))
+                    )
                 )
             ),
         )
