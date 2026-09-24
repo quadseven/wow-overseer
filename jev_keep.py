@@ -23,12 +23,33 @@ their own plans and never re-decided here: `clearance` hands a gem or recipe
 over, lists it or sells it; `lockbox` hands a box to the family rogue or sells
 it; everything else the protection keeps.
 
-SHADOW ONLY, FOR NOW. The answer is recorded beside the heuristic's in
-overseer_jev_judgment and nothing changes. `ACTABLE` names the routes with an
-act path, and it is empty: JEV_MODE_ITEM_KEEP=act says so in the log and runs
-shadow (jev.policy with act_supported=False). Flipping to act later is adding
-a route's executor and naming it in ACTABLE; JEV_THRESHOLD_ITEM_KEEP then
-decides how sure Jev must be.
+ACT ON TWO ROUTES, SHADOW ON THE REST (#267). A day of shadow answers on the
+dev realm showed where Jev's choice is well-founded and an executor exists:
+
+  bank     the most common disagreement, reversible, and it cleared 0.6
+           mostly on recipes for trades nobody in the family works and cloth
+           or herbs the holder does not work. Carried out by the guild bank
+           pass's item deposits (bank.Move to GUILD), with that pass's own
+           depositor and tab-room gates.
+  give     a stack handed to someone `who_else_can_use_it` names. Carried out
+           by the guild gift writer (a give in trade range, else a letter).
+
+Both act only where the protection would otherwise keep the stack
+(`actable_routes`): never over a live clearance, lockbox or destroy plan,
+never on a stack an open quest needs or a bound one, and a bank never takes
+what somebody in the holder's family, or the holder, works a trade with. Each
+route has its own threshold (`ROUTE_THRESHOLDS`, JEV_THRESHOLD_ITEM_KEEP_BANK
+and JEV_THRESHOLD_ITEM_KEEP_GIVE), which the kind's own
+JEV_THRESHOLD_ITEM_KEEP does not override.
+
+`sell` and `destroy` stay in shadow. Both are irreversible, and neither
+cleared a safe bar: sell peaked at 0.73 on a quest key, and every confident
+destroy was a released quest item the destroy pass (#243) takes anyway, which
+`routes_from_plans` now labels `destroy` so the two agree on the record.
+
+An answer arrives after the pass that asked it has moved on, so an act is an
+`Order` the bridge keeps and the next pass's executors carry out, for as long
+as the same stack is still carried (`live_orders`).
 
 ASKED SPARINGLY. The economy pass runs every 90 seconds and a full bag holds
 dozens of protected stacks. `due` picks at most `limit` stacks per pass, never
@@ -46,8 +67,10 @@ import asyncio
 import json
 from dataclasses import dataclass, replace
 
+import bank
 import clearance
 import goals
+import guildshare
 import jev
 import lockbox
 import materials
@@ -62,9 +85,16 @@ SELL = "sell"
 DESTROY = "destroy"
 GIVE_PREFIX = "give:"
 
-# Routes Jev's answer may be carried out through. None yet: see the module
-# docstring. A route named here must have an executor first.
-ACTABLE: frozenset = frozenset()
+# Routes Jev's answer may be carried out through, each with an executor (see
+# the module docstring). A `give:<name>` answer is the GIVE route.
+GIVE = "give"
+ACTABLE: frozenset = frozenset({BANK, GIVE})
+# Each actable route's own default confidence floor. 0.6 lets the answers the
+# shadow record showed were sound act (bank peaked at 0.68, all of it on
+# stacks the guards allow) and keeps a coin toss from doing so.
+ROUTE_THRESHOLDS = {BANK: 0.6, GIVE: 0.6}
+# How long an order waits for its executor before it is dropped unread.
+ORDER_MINUTES = 60
 
 DEFAULT_THRESHOLD = 0.85
 # Environment knobs the bridge reads for this kind, besides JEV_MODE_ITEM_KEEP
@@ -103,13 +133,37 @@ MAX_USERS = 4
 
 
 def policy(environ=None) -> jev.Policy:
-    """Shadow by default at DEFAULT_THRESHOLD; act only once ACTABLE is set."""
+    """Act by default; each ACTABLE route then has its own floor
+    (`route_rule`), and every other route is recorded and never carried out."""
     return jev.policy(
         KIND,
         environ=environ,
-        default_mode=jev.SHADOW,
+        default_mode=jev.ACT,
         default_threshold=DEFAULT_THRESHOLD,
         act_supported=bool(ACTABLE),
+    )
+
+
+def route_of(answer: str) -> str:
+    """The route an answer takes: `give:<name>` is GIVE, the rest themselves."""
+    return GIVE if str(answer).startswith(GIVE_PREFIX) else str(answer)
+
+
+def route_rule(rule: jev.Policy, answer: str, environ=None) -> jev.Policy:
+    """`rule` with the floor of the route `answer` takes.
+
+    JEV_THRESHOLD_ITEM_KEEP_<ROUTE> sets it; unset, the route's
+    ROUTE_THRESHOLDS default. A route with no act path keeps the kind's own,
+    which only ever decides whether an agreeing answer is recorded as BOTH.
+    """
+    route = route_of(answer)
+    if route not in ROUTE_THRESHOLDS:
+        return rule
+    return replace(
+        rule,
+        threshold=jev.threshold(
+            "%s_%s" % (KIND, route), environ, ROUTE_THRESHOLDS[route]
+        ),
     )
 
 
@@ -203,14 +257,21 @@ def due(rows, asked: dict, now: float, interval: float, limit: int) -> list:
 # WHAT THE SHIPPED PASSES DO
 
 
-def routes_from_plans(clear=(), locks=None) -> dict:
-    """item guid -> (answer, why) from the clearance and lockbox plans.
+def routes_from_plans(clear=(), locks=None, destroys=()) -> dict:
+    """item guid -> (answer, why) from the clearance, lockbox and destroy plans.
 
     A guid absent from the result is one no pass routes: the protection
     keeps it. clearance's WAIT is a keep (the stack stays until its taker is
-    online); a box its own holder can pick stays with the holder.
+    online); a box its own holder can pick stays with the holder. `destroys`
+    are bag_pressure.destroy_candidates: released quest items no vendor buys,
+    which the destroy pass (#243) queues for the world's destroy verb.
     """
     out = {}
+    for candidate in destroys or ():
+        out[int(candidate.item_guid)] = (
+            DESTROY,
+            "destroy pass: a released quest item no vendor will buy",
+        )
     for r in clear or ():
         if r.route in clearance.GIVEN:
             answer = GIVE_PREFIX + r.taker
@@ -473,9 +534,28 @@ def facts_line(state: dict) -> str:
 
 @dataclass(frozen=True)
 class KeepJudgment(Judgment):
-    """A jev_items.Judgment that also carries the facts it was asked with."""
+    """A jev_items.Judgment that also carries the facts it was asked with,
+    the routes Jev may carry out for this stack (`actable_routes`) and the
+    stack's size, which an order needs."""
 
     facts: str = ""
+    actable: tuple = ()
+    count: int = 1
+
+
+def actable_routes(row: dict, template: dict, who: list, holder, trades, answer):
+    """The answers Jev may carry out for this stack: (), or some of `bank`
+    and `give:<name>`. See the module docstring for why each guard exists.
+    """
+    if answer != KEEP or bool(row.get("quest_item", True)) or bound(template):
+        return ()
+    out = []
+    family_uses = any(p.family for p, _why in who)
+    holder_uses = any(holder.rank(_TRADE_IDS.get(t, 0)) > 0 for t in trades)
+    if not family_uses and not holder_uses:
+        out.append(BANK)
+    out.extend(GIVE_PREFIX + p.name for p, _why in who[:MAX_USERS])
+    return tuple(out)
 
 
 def crafter_users(row: dict, takers: dict) -> list | None:
@@ -540,6 +620,11 @@ def asks(
             who = users(row, template, people, trades)
         answer, why = heuristic(row, routes)
         offered = options(row, template, who, answer)
+        allowed = tuple(
+            a
+            for a in actable_routes(row, template, who, holder, trades, answer)
+            if a in offered
+        )
         state = state_for(row, template, holder, who, trades, market or {})
         seats = designated_for(template, register)
         if seats and "teaches" in state["item"]:
@@ -559,6 +644,8 @@ def asks(
                     status="",
                     acted=jev.HEURISTIC,
                     facts=facts_line(state),
+                    actable=allowed,
+                    count=_int(row.get("count"), 1) or 1,
                 ),
                 state,
                 question(state, offered),
@@ -567,9 +654,14 @@ def asks(
     return out
 
 
-def judged(base: KeepJudgment, outcome: jev.Outcome, rule: jev.Policy) -> KeepJudgment:
-    """The judgment with Jev's answer and who acted. Nothing acts while
-    ACTABLE is empty, so `acted` is the heuristic's."""
+def judged(
+    base: KeepJudgment, outcome: jev.Outcome, rule: jev.Policy, environ=None
+) -> KeepJudgment:
+    """The judgment with Jev's answer and who acted.
+
+    Jev acts only on an answer in the stack's own `actable`, at or above that
+    route's floor (`route_rule`); anything else is recorded as the heuristic's.
+    """
     if outcome.answers is None:
         return replace(base, status=outcome.status, latency_ms=outcome.latency_ms)
     answer = outcome.answers["route"]
@@ -581,28 +673,174 @@ def judged(base: KeepJudgment, outcome: jev.Outcome, rule: jev.Policy) -> KeepJu
         jev=answer.choice,
         confidence=answer.confidence,
         probabilities=answer.probabilities,
-        acted=rule.acted(
+        acted=route_rule(rule, answer.choice, environ).acted(
             base.heuristic,
             answer.choice,
             answer.confidence,
-            can_act=answer.choice in ACTABLE,
+            can_act=answer.choice in base.actable
+            and route_of(answer.choice) in ACTABLE,
         ),
     )
 
 
-async def shadow_pass(client, pending, rule: jev.Policy) -> list:
-    """Ask Jev about each (judgment, state, questions); the judgments."""
+async def shadow_pass(client, pending, rule: jev.Policy, environ=None) -> list:
+    """Ask Jev about each (judgment, state, questions); the judgments.
+
+    Each question queues for a free client slot for up to the client's own
+    deadline: nothing waits on this pass, and 162 of 950 questions in one day
+    met `busy` behind another kind's burst (#267).
+    """
     if rule.mode == jev.OFF:
         return []
     gate = asyncio.Semaphore(max(1, int(getattr(client, "concurrency", 1))))
+    wait = float(getattr(client, "timeout", 0.0))
 
     async def one(ask):
         base, state, questions = ask
         async with gate:
-            outcome = await client.ask(KIND, state, questions)
-        return judged(base, outcome, rule)
+            outcome = await client.ask(KIND, state, questions, wait=wait)
+        return judged(base, outcome, rule, environ)
 
     return list(await asyncio.gather(*(one(a) for a in pending)))
+
+
+# ---------------------------------------------------------------------------
+# CARRYING AN ACT OUT (#267)
+
+
+@dataclass(frozen=True)
+class Order:
+    """One stack Jev chose to bank or give, waiting for its executor."""
+
+    holder: str
+    guid: int
+    entry: int
+    name: str
+    count: int
+    route: str  # BANK or GIVE
+    taker: str  # the receiver of a GIVE; '' for a BANK
+    confidence: float
+    at: float  # when it was decided, on the caller's clock
+
+    @property
+    def key(self) -> tuple:
+        return (self.holder, self.guid)
+
+    def said(self) -> str:
+        """The one log line an order is announced with."""
+        where = "the guild bank" if self.route == BANK else self.taker
+        return "jev-keep: acting on %s's %d %s: %s to %s (conf %.2f)" % (
+            self.holder,
+            self.count,
+            self.name,
+            self.route,
+            where,
+            self.confidence,
+        )
+
+
+def orders_from(judgments, now: float) -> list:
+    """An Order for every judgment Jev acted on, in the order given."""
+    out = []
+    for j in judgments:
+        if j.acted != jev.JEV or route_of(j.jev) not in ACTABLE:
+            continue
+        taker = j.jev[len(GIVE_PREFIX) :] if route_of(j.jev) == GIVE else ""
+        out.append(
+            Order(
+                holder=j.holder,
+                guid=int(j.item_guid),
+                entry=int(j.item_entry),
+                name=j.item_name,
+                count=int(getattr(j, "count", 1) or 1),
+                route=route_of(j.jev),
+                taker=taker,
+                confidence=float(j.confidence or 0.0),
+                at=now,
+            )
+        )
+    return out
+
+
+def live_orders(orders: dict, rows, now: float, names=None) -> tuple:
+    """(orders still to carry out, what was dropped and why).
+
+    `orders` maps (holder, guid) to an Order; `rows` are this pass's carried
+    rows (bridge._fetch_vendor_items). An order whose stack is no longer
+    carried by its holder, whose count changed, or that is older than
+    ORDER_MINUTES is dropped: the world moved on, and a stale order must not
+    act on a stack Jev never judged. `names`, when given, keeps only this
+    family's orders and leaves the rest out of both results.
+    """
+    carried = {
+        (str(r.get("holder") or ""), _int(r.get("item_guid"))): _int(r.get("count"), 1)
+        for r in rows or ()
+    }
+    live, dropped = [], []
+    for key, order in sorted(orders.items()):
+        if names is not None and order.holder not in names:
+            continue
+        if now - order.at > ORDER_MINUTES * 60:
+            dropped.append((order, "older than %d minutes" % ORDER_MINUTES))
+        elif key not in carried:
+            dropped.append((order, "no longer carried (done, or moved on)"))
+        elif carried[key] != order.count:
+            dropped.append((order, "the stack changed size"))
+        else:
+            live.append(order)
+    return live, dropped
+
+
+def gifts(orders) -> list:
+    """The GIVE orders as guildshare.Gifts for the guild gift writer."""
+    return [
+        guildshare.Gift(
+            holder=o.holder,
+            taker=o.taker,
+            item=o.name,
+            entry=o.entry,
+            count=o.count,
+            guid=o.guid,
+            need="Jev chose %s for it (conf %.2f)" % (o.taker, o.confidence),
+            reason="Jev chose to give it (#267)",
+        )
+        for o in orders
+        if o.route == GIVE and o.taker
+    ]
+
+
+def deposits(orders, depositors, room: int, planned=()) -> tuple:
+    """(bank.Moves to the guild bank, notes) for the BANK orders.
+
+    The guild bank pass's own gates, applied the way bank.plan applies them:
+    only a holder whose rank may deposit on tab 0, only while the tab has
+    `room` left, and never a stack `planned` (the keeper rule's own guild
+    moves) already sends.
+    """
+    already = {int(m.guid) for m in planned}
+    moves, notes = [], []
+    for o in orders:
+        if o.route != BANK or o.guid in already:
+            continue
+        if o.holder not in depositors:
+            notes.append("%s's rank cannot deposit %s" % (o.holder, o.name))
+            continue
+        if room <= 0:
+            notes.append("the guild bank's tab is full; %s stays" % o.name)
+            continue
+        room -= 1
+        moves.append(
+            bank.Move(
+                character=o.holder,
+                verb=bank.DEPOSIT,
+                guid=o.guid,
+                item=o.name,
+                count=o.count,
+                why="Jev chose to bank %s (conf %.2f)" % (o.name, o.confidence),
+                to=bank.GUILD,
+            )
+        )
+    return moves, notes
 
 
 def summary(judgments, considered: int, limit: int, interval: float) -> str:
@@ -610,13 +848,14 @@ def summary(judgments, considered: int, limit: int, interval: float) -> str:
     answered = [j for j in judgments if j.jev]
     return (
         "jev-keep: asked %d of %d protected non-gear stack(s), %d answered, "
-        "%d agree, %d differ (limit %d, every %d min)"
+        "%d agree, %d differ, %d carried out as Jev's (limit %d, every %d min)"
         % (
             len(judgments),
             considered,
             len(answered),
             sum(1 for j in answered if j.agree),
             sum(1 for j in answered if not j.agree),
+            sum(1 for j in judgments if j.acted == jev.JEV),
             limit,
             int(interval // 60),
         )

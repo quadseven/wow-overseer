@@ -534,6 +534,7 @@ class _FakeEconomySelf:
     _hand_recipes = _noop
     _route_lockboxes = _noop
     _route_clearance = _noop
+    _jev_keep_give = _noop
     _hand_gear = _noop
     _equip_upgrades = _noop
     _destroy_released = _noop

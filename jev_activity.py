@@ -26,6 +26,11 @@ WHAT JEV IS OFFERED. Only what the family can carry out now (`options`):
             when the run is withheld for bag space or a member is nearly full.
   train     job=train, which aims the leader at a trainer. Offered only where
             trainjob.readiness has something to learn (this bridge's family).
+  fish      job=fish, mod-overseer's fishing drive (jobs.DRIVES): the bots'
+            own fishing AI, which a player reaches for between errands (#267).
+            Offered only with room in every member's bags and the run not
+            withheld. Nothing else ever writes job=fish, so when its lease
+            ends the bridge puts the family back on the default job.
 
 REST IS NOT OFFERED, and that is the honest choice set rather than an
 omission. `jobs.MODES` names `rest` but it is not in `jobs.IMPLEMENTED`, and
@@ -52,6 +57,17 @@ breakpoints a player stops at: a run finished, a level gained, a death, bags
 too full for the next run, arriving in town. Never mid-run, and never while an
 interlude it chose is still running.
 
+NOT IN LOCKSTEP (#267). Every family used to be asked on the same 20-minute
+clock and every interlude lasted exactly its LEASE_MINUTES, so the realm's
+families changed what they were doing on the same minute. Each family now has
+its own cadence within SPREAD of CADENCE_MINUTES (`cadence_seconds`, fixed per
+family) and each interlude its own length within SPREAD of its lease
+(`lease_minutes`). Deterministic, from the family key and the minute, so a
+test can pin it and a log can explain it.
+
+SAID OUT LOUD. When Jev changes what a family does, its leader says so with a
+text emote (`emote`), the way a player announces a break to the group.
+
 PURE: facts in, questions and judgments out. The only I/O is the client the
 caller hands in.
 """
@@ -59,6 +75,7 @@ caller hands in.
 from __future__ import annotations
 
 import json
+import zlib
 from dataclasses import dataclass, replace
 
 import bag_pressure
@@ -79,7 +96,8 @@ GATHER = "gather"
 CRAFT = "craft"
 SELL = "sell"
 TRAIN = "train"
-ACTIVITIES = (CAMPAIGN, QUEST, GATHER, CRAFT, SELL, TRAIN)
+FISH = "fish"
+ACTIVITIES = (CAMPAIGN, QUEST, GATHER, CRAFT, SELL, TRAIN, FISH)
 
 # The job each activity puts the family on. "" writes none: the campaign's
 # job belongs to the queue (or the council's lease), which re-asserts it.
@@ -91,19 +109,31 @@ JOB = {
     SELL: jobs.DEFAULT,
     CRAFT: "craft",
     TRAIN: "train",
+    FISH: "fish",
 }
+
+# The job to put the family back on when an interlude ends, for the jobs no
+# other pass re-asserts. Craft and train have their own passes; nothing but
+# this choice ever writes job=fish.
+RESTORE = {FISH: jobs.DEFAULT}
 
 # How long an interlude holds the queue and the automatic job passes. Long
 # enough for the errand to be walked and done, short enough that a commitment
 # of fifty runs loses minutes to it, never the order.
-LEASE_MINUTES = {QUEST: 30, GATHER: 20, CRAFT: 20, SELL: 10, TRAIN: 15}
+LEASE_MINUTES = {QUEST: 30, GATHER: 20, CRAFT: 20, SELL: 10, TRAIN: 15, FISH: 15}
 
 CADENCE_MINUTES = 20
+# How far a family's cadence and an interlude's length stray from the above:
+# 0.25 is 15 to 25 minutes on the 20-minute cadence.
+SPREAD = 0.25
 
 # A member at or below this many free slots makes a town trip worth offering
 # even while the run can still start. bag_pressure.TOWN_RUN_FREE_SLOTS is the
 # stricter floor at which the run is withheld outright.
 SELL_FREE_SLOTS = 6
+# Fishing fills bags with the catch, so it is offered only while every member
+# has more than this many free slots.
+FISH_FREE_SLOTS = 10
 
 # Why the question was asked now; recorded with it.
 CADENCE = "on the cadence"
@@ -155,6 +185,7 @@ class Facts:
     can_train: bool = False
     minutes_on_activity: int = 0
     reason: str = CADENCE
+    minutes_since_fishing: int | None = None
 
     @property
     def levels(self) -> list:
@@ -312,7 +343,19 @@ def options(f: Facts) -> dict:
         )
     if f.can_train:
         out[TRAIN] = "Visit a trainer to learn the ranks and trades waiting."
+    if can_fish(f):
+        out[FISH] = "Take a break by the water: fish together for food and reagents."
     return out
+
+
+def can_fish(f: Facts) -> bool:
+    """Fishing fills bags, so it is offered only with room in every member's
+    (and never while the run is withheld for bag space)."""
+    if f.withheld or not f.members:
+        return False
+    return all(
+        m.free_slots is not None and m.free_slots > FISH_FREE_SLOTS for m in f.members
+    )
 
 
 def heuristic(f: Facts) -> tuple:
@@ -412,6 +455,11 @@ def question(f: Facts, offered: dict):
         ),
         "current_job": f.job or jobs.DEFAULT,
         "minutes_on_current_activity": int(f.minutes_on_activity),
+        "minutes_since_the_family_last_fished": (
+            "not this session"
+            if f.minutes_since_fishing is None
+            else int(f.minutes_since_fishing)
+        ),
         "why_now": f.reason,
     }
     instructions = (
@@ -422,8 +470,9 @@ def question(f: Facts, offered: dict):
         "bags before anything else), keep the operator's `dungeon_queue` "
         "when the run can start, take a break from a long stretch of one "
         "activity, learn from a trainer when ranks are waiting, craft or "
-        "gather for their professions when it helps the group, and let each "
-        "member's role and persona colour the choice."
+        "gather for their professions when it helps the group, now and then "
+        "unwind by fishing when nothing presses, and let each member's role "
+        "and persona color the choice."
     )
     return state, {"activity": jev.choice(instructions, dict(offered))}
 
@@ -567,9 +616,75 @@ class Interlude:
         return now < self.until
 
 
-def interlude(activity: str, now: float) -> Interlude | None:
-    """The lease for a carried-out activity, or None for the campaign itself."""
+def _unit(*parts) -> float:
+    """A fixed number in [0, 1) from `parts`: the same parts, the same number."""
+    text = "|".join(str(p) for p in parts).encode("utf-8")
+    return (zlib.crc32(text) & 0xFFFFFFFF) / 2**32
+
+
+def _spread(value: float, *parts) -> float:
+    """`value` moved by up to SPREAD either way, fixed by `parts`."""
+    return value * (1.0 - SPREAD + 2.0 * SPREAD * _unit(*parts))
+
+
+def cadence_seconds(family: str) -> float:
+    """This family's own cadence: CADENCE_MINUTES within SPREAD, fixed per
+    family, so families asked on one pass drift apart rather than turning
+    together."""
+    return 60.0 * _spread(CADENCE_MINUTES, "cadence", family)
+
+
+def lease_minutes(activity: str, family: str = "", now: float = 0.0) -> float:
+    """How long this interlude holds: its LEASE_MINUTES within SPREAD, varied
+    by family and by the minute it began; 0 for the campaign."""
     minutes = LEASE_MINUTES.get(activity)
+    if not minutes:
+        return 0.0
+    return _spread(minutes, "lease", activity, family, int(now // 60))
+
+
+def interlude(activity: str, now: float, family: str = "") -> Interlude | None:
+    """The lease for a carried-out activity, or None for the campaign itself."""
+    minutes = lease_minutes(activity, family, now)
     if not minutes:
         return None
     return Interlude(activity, now + 60.0 * minutes)
+
+
+# What the leader does, in the emote channel, when Jev changes the family's
+# activity. Two per activity, picked by `emote`, so a long session does not
+# repeat one line. Third person, as a text emote reads in the chat frame.
+EMOTES = {
+    QUEST: (
+        "unrolls a worn quest map and taps the next mark.",
+        "rallies the others back onto the road.",
+    ),
+    GATHER: (
+        "sniffs the air for herbs and ore.",
+        "shoulders a pick and heads for the hills.",
+    ),
+    CRAFT: (
+        "rummages for reagents and settles in to craft.",
+        "clears a spot to work and lays out the tools.",
+    ),
+    SELL: (
+        "pats a bulging pack and points toward town.",
+        "grumbles about full bags and turns for the vendor.",
+    ),
+    TRAIN: (
+        "mutters about lessons waiting at the trainer.",
+        "heads off to learn something new.",
+    ),
+    FISH: (
+        "stretches and eyes the nearest water.",
+        "digs out a fishing pole and whistles.",
+    ),
+}
+
+
+def emote(activity: str, family: str = "", now: float = 0.0) -> str:
+    """The leader's emote for starting `activity`, or '' for none."""
+    lines = EMOTES.get(activity, ())
+    if not lines:
+        return ""
+    return lines[int(_unit("emote", activity, family, int(now // 60)) * len(lines))]

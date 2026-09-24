@@ -712,11 +712,15 @@ async def shadow_pass(
     )
     asks = _questions(family, gear_rows, describe)[: max(0, int(limit))]
     gate = asyncio.Semaphore(max(1, int(getattr(client, "concurrency", 1))))
+    # Queued for a free slot rather than `busy` behind another kind (#267):
+    # 97 of 480 answers in one day were `busy`. An act pass that waits on
+    # this still gives up at its own deadline, so this costs it nothing.
+    wait = float(getattr(client, "timeout", 0.0))
 
     async def one(ask):
         base, state, questions, qid = ask
         async with gate:
-            outcome = await client.ask(base.kind, state, questions)
+            outcome = await client.ask(base.kind, state, questions, wait=wait)
         return _judged(base, outcome, qid)
 
     return list(await asyncio.gather(*(one(a) for a in asks)))
@@ -847,35 +851,51 @@ def heuristic_acted(judgments) -> list:
 
 
 # ---------------------------------------------------------------------------
-# WHICH GUILD MEMBER GAINS MOST (#184)
+# WHICH GUILD MEMBER GAINS MOST (#184, #267)
 #
 # gear.rank_receivers orders the guild members an item is a real upgrade for,
 # by item level. It cannot price an effect or say what a role needs from a
-# slot. Jev is asked ONE Score per ranked candidate, in one request per item:
-# how much would this item improve this member in their role. The member Jev
-# scores highest is compared with the ranking's pick.
+# slot. Jev is asked ONE Choice per item: which of the ranked candidates it
+# improves most, each option naming the member's class, role, what they wear
+# there and the ranking's own item-level gain. Jev's pick is compared with the
+# ranking's.
+#
+# WHY A CHOICE AND NOT A SCORE PER CANDIDATE (#267). The first cut asked one
+# Score per candidate and recorded the winner's Score confidence. That number
+# measures how near the expected score sits to one of the rubric's levels, not
+# how sure Jev is that this member beats the others: a probe on the dev realm
+# answered 2.65 with 0.65, 2.12 with 0.12 and 0.25 with 0.75. Over one day
+# its confidence averaged 0.32 and cleared 0.80 on 6% of answers, while one
+# request carried up to 60 questions and 16 of 607 timed out. The Choice's
+# confidence is about the pick itself: the same probe gave 0.84 and 0.88 on a
+# clear plate helm, 0.62 on a robe two casters wanted and 0.29 on a crossbow a
+# rogue and a hunter both wanted.
 #
 # ACTING NEVER WIDENS THE SET. Jev's pick replaces the route's receiver only
 # when that member is already one of the route's own receivers (its taker or
-# an alternate, every one of them clear of gear.CLEAR_GAIN), the Score's
-# confidence reaches the threshold, and no other candidate scores as high.
-# The reordered route is delivered by the same `route_deliverable` and written
-# by the same insert as the heuristic's. An item the ranking refuses to move
-# (an effect item level cannot price, or no clear gain) is asked and recorded
-# and never moved.
+# an alternate, every one of them clear of gear.CLEAR_GAIN) and the Choice's
+# confidence reaches the threshold. The reordered route is delivered by the
+# same `route_deliverable` and written by the same insert as the heuristic's.
+# An item the ranking refuses to move (an effect item level cannot price, or
+# no clear gain) is asked and recorded and never moved.
 
 KIND_GUILD = "guild_recipient"
 NOBODY = "nobody"
-POLICY_DEFAULTS[KIND_GUILD] = dict(default_mode=jev.ACT, default_threshold=0.80)
+# 0.75: the probe's clear calls answered 0.84 to 0.88 and its genuine
+# toss-ups 0.26 to 0.65, so this acts on the first and never the second.
+POLICY_DEFAULTS[KIND_GUILD] = dict(default_mode=jev.ACT, default_threshold=0.75)
+# The candidates one question offers, best ranked first. The route's taker is
+# always among them.
+MAX_RECIPIENTS = 6
 
-GAIN_LEVELS = [
-    "None: it is no better for them than what they wear there now, or their "
-    "role has no use for it.",
-    "Slight: a small improvement they would barely notice.",
-    "Moderate: a real improvement in a slot that already serves them well.",
-    "Clear: a clear upgrade for one of their weakest slots, and exactly what "
-    "their role needs.",
-]
+RECIPIENT_INSTRUCTIONS = (
+    "`item` is being handed to one member of a World of Warcraft guild. Every "
+    "one of `candidates` could use it and is described with what they wear in "
+    "the slots `item` would go in. Choose the member `item` improves most in "
+    "the role their class and specialization play, the way a thoughtful guild "
+    "shares loot: armor and stats that suit the class, and the biggest real "
+    "upgrade over what they wear."
+)
 
 
 def guild_policy(environ=None) -> jev.Policy:
@@ -891,12 +911,23 @@ class RecipientAsk:
     heuristic: str  # the route's taker, or NOBODY when it is not moved
     why: str
 
+    @property
+    def offered(self) -> tuple:
+        """The candidates the question offers: the best MAX_RECIPIENTS, and
+        the route's taker even when it ranks below them."""
+        head = tuple(self.ranked[:MAX_RECIPIENTS])
+        if self.heuristic != NOBODY and all(r.name != self.heuristic for r in head):
+            head += tuple(r for r in self.ranked if r.name == self.heuristic)[:1]
+        return head
+
 
 def recipient_asks(holdings, candidates, routes, rank) -> list:
     """RecipientAsk per holding the ranking scores anybody for.
 
     `rank(holding, candidates)` is bag_pressure.rank_receivers; `routes` are
-    the route plan's grants, whose taker is the heuristic's pick.
+    the route plan's grants, whose taker is the heuristic's pick. Items with a
+    route come first, so a pass cut short by its limit spends its questions
+    where an answer can act.
     """
     routed = {(r.holder, int(r.guid)): r for r in routes}
     out = []
@@ -912,38 +943,58 @@ def recipient_asks(holdings, candidates, routes, rank) -> list:
         else:
             pick, why = NOBODY, "no gain clear enough to move it"
         out.append(RecipientAsk(holding, ranked, pick, why))
+    out.sort(key=lambda a: a.heuristic == NOBODY)
     return out
 
 
+def _worn_there(w: Wardrobe | None, slots) -> str:
+    """What `w` wears in the item's slots, in words, for an option."""
+    if w is None:
+        return "what they wear there is unknown"
+    worn = [w.worn[s] for s in slots if s in w.worn]
+    if not worn:
+        return "nothing worn there"
+    return "replacing " + " and ".join(
+        "%s (item level %s)" % (d.get("name", "an item"), d.get("item_level", "?"))
+        for d in worn
+    )
+
+
+def recipient_option(r, w: Wardrobe | None, slots) -> str:
+    """One candidate as a Choice option: who, their role, what it replaces,
+    and the ranking's own item-level gain."""
+    who = [r.name, "gets it:"]
+    if w is not None:
+        role = " ".join(p for p in (w.spec, class_name(w.class_id)) if p)
+        who.append("the level %d %s," % (w.level, role))
+    elif r.family:
+        who.append("a member of the holder's family,")
+    return "%s %s, +%d item levels%s." % (
+        " ".join(who),
+        _worn_there(w, slots),
+        int(r.gain),
+        "" if r.sure else " (it has an effect item level cannot price)",
+    )
+
+
 def recipient_question(ask: RecipientAsk, item: dict, closet: dict):
-    """(state, questions): one Score per ranked candidate, one request."""
+    """(state, questions): one Choice over the offered candidates."""
     slots = _WORN_SLOTS.get(int(ask.holding.inventory_type), ())
-    members = []
-    for r in ask.ranked:
+    members, criteria = [], {}
+    for r in ask.offered:
         w = closet.get(r.name)
         who = _who(w, slots) if w is not None else {"name": r.name}
         who["in_the_holders_family"] = bool(r.family)
         members.append(who)
+        criteria[r.name] = recipient_option(r, w, slots)
     state = {"item": item, "candidates": members}
-    questions = {}
-    for n, r in enumerate(ask.ranked):
-        questions["c%d" % n] = jev.score(
-            "`item` is being handed to one member of a World of Warcraft guild. "
-            "`candidates[%d]` is %s, described with what they wear in the slots "
-            "`item` would go in. How much would `item` improve %s in the role "
-            "their class and specialization play, compared with what they wear "
-            "there now?" % (n, r.name, r.name),
-            GAIN_LEVELS,
-        )
-    return state, questions
+    return state, {"to": jev.choice(RECIPIENT_INSTRUCTIONS, criteria)}
 
 
 def recipient_judgment(ask: RecipientAsk, outcome: jev.Outcome, mode: str) -> Judgment:
-    """The comparison for one item: the ranking's pick beside Jev's top score.
+    """The comparison for one item: the ranking's pick beside Jev's.
 
-    Jev's pick is the single highest score; a tie at the top is no pick,
-    recorded as NOBODY. `confidence` is that Score's own; `probabilities`
-    carries every candidate's score on a 0 to 1 scale.
+    `confidence` and `probabilities` are the Choice's own.
     """
     h = ask.holding
     base = Judgment(
@@ -961,35 +1012,33 @@ def recipient_judgment(ask: RecipientAsk, outcome: jev.Outcome, mode: str) -> Ju
     )
     if outcome.answers is None:
         return base
-    top = len(GAIN_LEVELS) - 1
-    scores = {r.name: outcome.answers["c%d" % n] for n, r in enumerate(ask.ranked)}
-    best = max(s.score for s in scores.values())
-    leaders = [name for name, s in scores.items() if s.score == best]
-    if len(leaders) == 1:
-        pick, confidence = leaders[0], scores[leaders[0]].confidence
-    else:
-        pick, confidence = NOBODY, min(scores[n].confidence for n in leaders)
+    answer = outcome.answers["to"]
     return replace(
         base,
         model=outcome.model,
-        jev=pick,
-        confidence=confidence,
-        probabilities={name: s.score / top for name, s in scores.items()},
+        jev=answer.choice,
+        confidence=answer.confidence,
+        probabilities=answer.probabilities,
     )
 
 
 async def recipient_pass(client, asks, describe, closet, mode, limit=16) -> list:
-    """Ask Jev about each guild item; the judgments, `acted` unset."""
+    """Ask Jev about each guild item; the judgments, `acted` unset.
+
+    A question queues for a free client slot for up to the client's own
+    deadline rather than meeting `busy` behind another kind's burst (#267).
+    """
     if mode == jev.OFF:
         return []
     gate = asyncio.Semaphore(max(1, int(getattr(client, "concurrency", 1))))
+    wait = float(getattr(client, "timeout", 0.0))
 
     async def one(ask):
         h = ask.holding
         item = describe(int(h.entry)) or {"name": h.name, "item_level": h.item_level}
         state, questions = recipient_question(ask, item, closet)
         async with gate:
-            outcome = await client.ask(KIND_GUILD, state, questions)
+            outcome = await client.ask(KIND_GUILD, state, questions, wait=wait)
         return recipient_judgment(ask, outcome, mode)
 
     return list(await asyncio.gather(*(one(a) for a in asks[: max(0, int(limit))])))

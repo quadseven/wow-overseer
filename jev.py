@@ -63,6 +63,8 @@ MODEL = "jev-latest"
 TIMEOUT_SECONDS = 3.0
 CONCURRENCY = 4
 CACHE_SIZE = 512
+# How often a pass queued for a free slot looks again (see Client.ask's wait).
+SLOT_POLL_SECONDS = 0.05
 
 OFF, SHADOW, ACT = "off", "shadow", "act"
 MODES = (OFF, SHADOW, ACT)
@@ -430,12 +432,33 @@ class Client:
     def _release(self, _future) -> None:
         self._in_flight -= 1
 
-    async def ask(self, kind: str, state, questions: dict) -> Outcome:
+    async def _free_slot(self, wait: float) -> bool:
+        """True once a request slot is free, waiting at most `wait` seconds.
+
+        Every kind shares the one client, so a background pass that fires
+        while another kind's burst holds every slot met `busy` at once: 26 of
+        607 guild_recipient and 162 of 950 item_keep questions in one day on
+        the dev realm (#267). A pass nothing waits on can afford to queue
+        briefly; one the world waits on passes 0 and keeps the old answer.
+        """
+        deadline = self._clock() + max(0.0, float(wait))
+        while self._in_flight >= self._slots:
+            if self._clock() >= deadline:
+                return False
+            await asyncio.sleep(SLOT_POLL_SECONDS)
+        return True
+
+    async def ask(
+        self, kind: str, state, questions: dict, wait: float = 0.0
+    ) -> Outcome:
         """Ask every question about `state` in one request.
 
         All or nothing: every question must come back well-typed, or
         `answers` is None. A partial answer would have the caller act on half
         a judgment, and the other half is exactly the one that went wrong.
+
+        `wait` is how long to queue for a free slot before answering `busy`;
+        0, the default, answers `busy` at once.
         """
         started = self._clock()
 
@@ -449,9 +472,11 @@ class Client:
         if hit is not None:
             self._cache.move_to_end(key)
             return Outcome(CACHED, 0, answers=hit[0], model=hit[1])
-        if self._in_flight >= self._slots:
+        if not await self._free_slot(wait):
             log.info("jev: kind=%s status=busy in_flight=%d", kind, self._in_flight)
-            return Outcome(BUSY, 0)
+            return Outcome(BUSY, elapsed())
+        # The deadline starts when the request is sent, not while it queued.
+        started = self._clock()
         body = json.dumps(
             {"state": state, "model": self.model, "questions": questions}
         ).encode("utf-8")
