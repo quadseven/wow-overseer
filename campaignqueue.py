@@ -29,6 +29,7 @@ import re
 from dataclasses import dataclass
 
 import achievements
+import campaignplan
 import council
 import jobs
 import raidrun
@@ -513,6 +514,23 @@ def step(rows: list, leader: dict | None) -> Move:
 
 # --- saying it -----------------------------------------------------------------
 
+# Who chose a planned entry, as the queue line says it. An operator's order is
+# said bare: it is the queue's ordinary entry, and everything else is marked.
+CHOOSERS = {
+    campaignplan.SOURCE_JEV: "Jev's choice",
+    campaignplan.SOURCE: "planned",
+}
+
+
+def chooser(row: dict) -> str:
+    """ "Jev's choice", "planned", or "" for an operator's entry."""
+    return CHOOSERS.get(str(row.get("source") or ""), "")
+
+
+def _marked(row: dict, said: str) -> str:
+    by = chooser(row)
+    return "%s (%s)" % (said, by) if by else said
+
 
 def progress_line(rows: list, done: int | None) -> str:
     """ "Ragefire Chasm 12 of 50, then Wailing Caverns 50", or "" when empty.
@@ -528,11 +546,12 @@ def progress_line(rows: list, done: int | None) -> str:
         place = _place(str(row["keyword"]))
         runs = int(row["runs_wanted"])
         if i == 0 and str(row["status"]) == ACTIVE and done is not None:
-            parts.append("%s %d of %d" % (place, min(int(done), runs), runs))
+            said = "%s %d of %d" % (place, min(int(done), runs), runs)
         elif i == 0:
-            parts.append("%s %d (starting)" % (place, runs))
+            said = "%s %d (starting)" % (place, runs)
         else:
-            parts.append("%s %d" % (place, runs))
+            said = "%s %d" % (place, runs)
+        parts.append(_marked(row, said))
     return ", then ".join(parts)
 
 
@@ -548,6 +567,7 @@ def view(rows: list, done: int | None, family: str = "") -> dict:
                 "place": _place(str(r["keyword"])),
                 "runs": int(r["runs_wanted"]),
                 "status": str(r["status"]),
+                "by": chooser(r),
             }
             for r in rows or []
         ],

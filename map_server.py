@@ -29,6 +29,7 @@ import campaignqueue
 import chat
 import council
 import decree
+import dungeonladder
 import dungeonpath
 import dungeonplan
 import eye
@@ -2858,6 +2859,7 @@ def _fetch_dungeonplan() -> dict:
             runs: list = []
             quest_rows: list = []
             rewarded: list = []
+            records: dict = {}
             if names:
                 holes = ", ".join(["%s"] * len(names))
                 # S608 on the roster reads: `holes` is a run of placeholders
@@ -2896,6 +2898,17 @@ def _fetch_dungeonplan() -> dict:
                 rewarded = _wide_guarded(
                     cur, campaignplan.REWARDED_SQL.format(holes=holes),
                     tuple(names), "", "character_queststatus_rewarded")
+                # THE LADDER AND JEV'S REASONS (dungeonladder.py): per family,
+                # the record the planner weighs, the door keys, what a capped
+                # family's runs are worth, and the last dungeon choice Jev was
+                # asked for. The bridge planner's own statements.
+                levels = {r["name"]: int(r.get("level") or 0) for r in chars}
+                for head, members in families.items():
+                    records[head] = _fetch_ladder_record(
+                        cur, head, members,
+                        all(levels.get(n, 0) >= campaignplan.LEVEL_CAP
+                            for n in members))
+                records[""] = {"bosses": _ladder_bosses(cur)}
     finally:
         conn.close()
     return {"catalogue_rows": catalogue, "encounter_rows": encounters,
@@ -2903,7 +2916,62 @@ def _fetch_dungeonplan() -> dict:
             "skill_rows": skills, "families": families,
             "guild_rows": guild_rows, "run_rows": runs,
             "queue_views": queue_views, "quest_rows": quest_rows,
-            "rewarded_rows": rewarded}
+            "rewarded_rows": rewarded, "records": records}
+
+
+# The level range of each dungeon's bosses, read once per process like the
+# bridge planner's copy: the world does not change under a running server.
+_LADDER_BOSSES: dict | None = None
+
+
+def _ladder_bosses(cur) -> dict | None:
+    """campaignplan.bosses off the world, read once; None when unread."""
+    global _LADDER_BOSSES
+    if _LADDER_BOSSES is None:
+        found = campaignplan.bosses(_wide_guarded(
+            cur, campaignplan.BOSSES_SQL, (), "", "instance_encounters"))
+        if found:
+            _LADDER_BOSSES = found
+        return found or None
+    return _LADDER_BOSSES
+
+
+def _fetch_ladder_record(cur, head: str, members: list, capped: bool) -> dict:
+    """One family's rows for the ladder and Jev's reasons. Reads only.
+
+    `capped` reads the pre-raid plan too, because at the level cap a lower
+    dungeon stays on the ladder only while its loot upgrades somebody.
+    """
+    holes = campaignplan.holes(len(members))
+    args = tuple(members)
+    # S608: `holes` is a run of placeholders sized by the roster; every value
+    # is bound by the driver.
+    record = {
+        "died": _wide_guarded(
+            cur, campaignplan.DEATHS_SQL.format(holes=holes),  # noqa: S608
+            args + (campaignplan.DEATH_HOURS,), "", "overseer_death"),
+        "won": _wide_guarded(cur, campaignplan.WON_SQL, (head,), "",
+                             "overseer_loot_council"),
+        "keys": _wide_guarded(
+            cur, campaignplan.KEYS_SQL.format(holes=holes),  # noqa: S608
+            args, "", "character_inventory"),
+        "choice": _wide_guarded(
+            cur, campaignplan.CHOICE_SQL,
+            (campaignplan.CHOICE_KIND, head[:12]), "", "overseer_jev_judgment"),
+        "upgrades": None,
+        "progress": None,
+    }
+    if capped:
+        prep = _fetch_preraid(cur, members)
+        if prep["items"] and prep["member_rows"]:
+            plans = [preraid.plan(m, prep["items"])
+                     for m in preraid.members(prep["member_rows"],
+                                              prep["worn_rows"])]
+            record["upgrades"] = preraid.run_gains(plans)
+            record["progress"] = preraid.progress(
+                members, prep["rewarded_rows"], prep["log_rows"],
+                prep["held_rows"])
+    return record
 
 
 def _dungeon_paths(fetched: dict) -> dict:
@@ -2953,10 +3021,15 @@ def _dungeon_paths(fetched: dict) -> dict:
         path["queue"] = fetched.get("queue_views", {}).get(
             head, campaignqueue.view([], None, head))
         # NOW AND NEXT: the queue's head, and what follows it, as queued or as
-        # the campaign planner would choose once the queue runs out.
+        # the campaign planner would choose once the queue runs out, with the
+        # last dungeon choice Jev was asked for and its reasons.
+        facts = _planner_facts(head, roster, chars, fetched)
+        record = fetched.get("records", {}).get(head) or {}
         path["plan"] = campaignplan.page_view(
-            path["queue"], _planner_facts(head, roster, chars, fetched),
-            path["queue"].get("done"))
+            path["queue"], facts, path["queue"].get("done"),
+            (record.get("choice") or [None])[0])
+        # THE LADDER: every door before the raid, as this family stands to it.
+        path["ladder"] = dungeonladder.view(facts)
         families.append(path)
         basis = plan["basis"]
     return {
@@ -2974,8 +3047,10 @@ def _planner_facts(head: str, roster: list, chars: dict, fetched: dict):
     """campaignplan.Facts for one family off the Dungeons page's own reads.
 
     The roster is ordered leader first (_PLAN_FAMILIES), which is the member
-    whose map says which continent the family is on. Gear and loot are left
-    unread: the heuristic does not weigh them, only Jev does.
+    whose map says which continent the family is on. The worn-gear summary
+    and the boss loot level are left unread: only Jev weighs them. The
+    record, the keys, the bosses' levels and a capped family's upgrades are
+    read (_fetch_ladder_record), because the heuristic and the ladder use them.
     """
     level_rows = tuple(
         {"name": n, "level": chars[n].get("level"), "race": chars[n].get("race"),
@@ -2987,8 +3062,20 @@ def _planner_facts(head: str, roster: list, chars: dict, fetched: dict):
         quest_rows, [r for r in fetched.get("rewarded_rows") or []
                      if r.get("name") in roster], list(level_rows))
         if quest_rows else None)
-    return campaignplan.Facts(family=head, level_rows=level_rows, done=done,
-                              failed=failed, quests=quests)
+    record = fetched.get("records", {}).get(head)
+    if record is None:
+        return campaignplan.Facts(family=head, level_rows=level_rows, done=done,
+                                  failed=failed, quests=quests)
+    runs = fetched.get("run_rows") or []
+    return campaignplan.Facts(
+        family=head, level_rows=level_rows, done=done, failed=failed,
+        quests=quests, upgrades=record.get("upgrades"),
+        progress=record.get("progress"),
+        outcomes=campaignplan.outcomes(runs, roster),
+        deaths=campaignplan.per_map(record.get("died")),
+        won=campaignplan.per_map(record.get("won")),
+        bosses=(fetched.get("records", {}).get("") or {}).get("bosses"),
+        keys=campaignplan.keys_held(record.get("keys")))
 
 
 # --- the campaign queue (#209) ------------------------------------------------

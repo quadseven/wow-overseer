@@ -67,6 +67,8 @@ class DungeonChoiceTest(unittest.TestCase):
             quests={2557: 4},
             gear={n: (44.0, 2) for n in NAMES},
             loot={429: 60},
+            # The Crescent Key, so Dire Maul West and North are open too.
+            keys=frozenset({18249}),
         )
 
     def ask(self, fake, key="k", environ=None):

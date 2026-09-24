@@ -216,9 +216,17 @@ def dungeon_question(facts, opts, where=None):
                 "door": o.keyword,
                 "dungeon": o.place,
                 "levels": "%d to %d" % (o.floor, o.ceiling),
+                "boss_levels": _unknown(
+                    None if o.bosses is None else "%d to %d" % o.bosses
+                ),
+                "level_fit": o.fit or "unknown",
                 "weakest_member_ready": o.ready,
                 "completed_runs": o.done,
                 "failed_attempts": o.failed,
+                "wiped_runs": o.wipes,
+                "runs_that_never_got_in": o.staged,
+                "family_deaths_there_in_the_last_week": _unknown(o.deaths),
+                "pieces_the_loot_council_gave_a_member_there": _unknown(o.won),
                 "runs_it_would_be_queued_for": o.runs,
                 "open_quests": _unknown(o.quests),
                 "boss_gear_item_level": _unknown(o.loot_level),
@@ -260,11 +268,17 @@ def dungeon_question(facts, opts, where=None):
         "wear (with drop chances), the item levels the family should gain per "
         "run summed over every member's slots, the raid progress a run gives "
         "(the Molten Core attunement, the Upper Blackrock Spire key), and "
-        "whether it needs a continent crossing. Choose the dungeon a sensible group would run next: one "
+        "whether it needs a continent crossing. Each dungeon also carries the "
+        "family's record there: its bosses' levels against the weakest "
+        "member's, runs completed, wiped, ended early or never started, the "
+        "family's deaths there in the last week, and how many pieces the loot "
+        "council has already handed a member from it. Choose the dungeon a "
+        "sensible group would run next: one "
         "that suits the weakest member's level, levels and gears the party, "
         "moves the raid's attunement or key along when it can, finishes open "
         "quests, does not cross a continent for little, and is not one they "
-        "have run to exhaustion or keep failing at."
+        "have run to exhaustion or keep dying or failing at. When unsure, "
+        "prefer the dungeon the family has cleared safely before."
     )
     if where is not None:
         instructions += (
@@ -281,8 +295,8 @@ def facts_line(facts, opts, where=None) -> str:
     parts = ["weakest %s %d" % (who, level)]
     for o in opts:
         parts.append(
-            "%s %d-%d done %d/%d failed %d quests %s loot %s below %d "
-            "exp %s prog %d%s"
+            "%s %d-%d done %d/%d failed %d wiped %d died %s won %s quests %s "
+            "loot %s below %d exp %s prog %d%s"
             % (
                 o.keyword,
                 o.floor,
@@ -290,6 +304,9 @@ def facts_line(facts, opts, where=None) -> str:
                 o.done,
                 o.target,
                 o.failed,
+                o.wipes,
+                _unknown(o.deaths),
+                _unknown(o.won),
                 _unknown(o.quests),
                 _unknown(o.loot_level),
                 len(o.below),
@@ -346,6 +363,13 @@ def dungeon_carried(opts, pick, judgment):
     if judgment is None or judgment.acted != jev.JEV:
         return pick
     return next((o for o in opts if o.keyword == judgment.jev), pick)
+
+
+def dungeon_by_jev(judgment) -> bool:
+    """Whether the queued run is Jev's answer: Jev acted alone, or Jev and the
+    heuristic agreed and Jev was sure enough (or the rule acts on agreement).
+    The queue entry's source says so (campaignplan.SOURCE_JEV)."""
+    return judgment is not None and judgment.acted in (jev.JEV, jev.BOTH)
 
 
 # ---------------------------------------------------------------------------

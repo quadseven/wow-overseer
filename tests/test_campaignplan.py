@@ -46,6 +46,9 @@ ALLIANCE = (
     ("Grog", 60, 3),
 )
 
+# The Crescent Key in a member's bags, which opens Dire Maul West and North.
+CRESCENT = frozenset({18249})
+
 
 def rows(family=HORDE, map_id=RAGEFIRE, level=None):
     return tuple(
@@ -105,7 +108,7 @@ class WhatAFamilyIsOffered(unittest.TestCase):
         self.assertIn("Uzza is level 22", refused["razorfen-kraul"])
 
     def test_the_alliance_at_60_on_kalimdor_runs_dire_maul(self):
-        opts = campaignplan.options(facts(ALLIANCE, KALIMDOR))
+        opts = campaignplan.options(facts(ALLIANCE, KALIMDOR, keys=CRESCENT))
         self.assertEqual(
             keywords(opts),
             ["dire-maul-east-east", "dire-maul-west-north", "dire-maul-north"],
@@ -164,7 +167,7 @@ class HowManyRuns(unittest.TestCase):
         self.assertEqual(blackfathom.runs, campaignplan.MAX_RUNS)
 
     def test_a_capped_family_farms_in_rounds(self):
-        first = campaignplan.options(facts(ALLIANCE, KALIMDOR))
+        first = campaignplan.options(facts(ALLIANCE, KALIMDOR, keys=CRESCENT))
         self.assertEqual({o.runs for o in first}, {campaignplan.AT_CAP_RUNS})
         self.assertTrue(all(o.capped for o in first))
         one_left = campaignplan.options(
@@ -172,6 +175,7 @@ class HowManyRuns(unittest.TestCase):
                 ALLIANCE,
                 KALIMDOR,
                 done={"dire-maul-east-east": 10, "dire-maul-west-north": 10},
+                keys=CRESCENT,
             )
         )
         self.assertEqual(keywords(one_left), ["dire-maul-north"])
@@ -184,6 +188,7 @@ class HowManyRuns(unittest.TestCase):
                     "dire-maul-west-north": 10,
                     "dire-maul-north": 10,
                 },
+                keys=CRESCENT,
             )
         )
         self.assertEqual(len(round_two), 3)
@@ -204,7 +209,7 @@ class WhichOne(unittest.TestCase):
 
     def test_at_the_cap_the_least_run_first(self):
         opts = campaignplan.options(
-            facts(ALLIANCE, KALIMDOR, done={"dire-maul-east-east": 4})
+            facts(ALLIANCE, KALIMDOR, done={"dire-maul-east-east": 4}, keys=CRESCENT)
         )
         self.assertEqual(campaignplan.heuristic(opts).keyword, "dire-maul-west-north")
 
@@ -330,7 +335,7 @@ class TheForecast(unittest.TestCase):
         self.assertEqual(levels, sorted(levels))
 
     def test_the_alliance_rotates_dire_maul(self):
-        ahead = campaignplan.sequence(facts(ALLIANCE, KALIMDOR), count=6)
+        ahead = campaignplan.sequence(facts(ALLIANCE, KALIMDOR, keys=CRESCENT), count=6)
         self.assertEqual(
             [o.keyword for o, _ in ahead],
             ["dire-maul-east-east", "dire-maul-west-north", "dire-maul-north"] * 2,
@@ -395,9 +400,12 @@ class TheBridgePass(unittest.TestCase):
         log = _Log()
         written, recorded = [], []
 
-        def append(family, rows_, finish, option):
+        def append(family, rows_, finish, option, source):
             written.append((family, finish, option.keyword, option.runs))
+            self.sources.append(source)
             return 1
+
+        self.sources = []
 
         ns = _load(
             ["_plan_campaigns", "_plan_campaign"],
@@ -445,17 +453,29 @@ class TheBridgePass(unittest.TestCase):
             (judgment.kind, judgment.acted), ("dungeon_choice", jev.HEURISTIC)
         )
         self.assertTrue(any("chosen by the heuristic" in line for line in lines))
+        self.assertEqual(self.sources, [campaignplan.SOURCE])
 
     def test_a_confident_jev_chooses(self):
         _w, written, recorded, lines, _me = self.run_pass({}, jev_pick="blackfathom")
         self.assertEqual(written[0][2], "blackfathom")
         self.assertEqual(recorded[0].acted, jev.JEV)
         self.assertTrue(any("chosen by Jev" in line for line in lines))
+        # THE ENTRY SAYS JEV CHOSE IT, in the queue's own row.
+        self.assertEqual(self.sources, [campaignplan.SOURCE_JEV])
+        self.assertTrue(any("source=overseer:jev" in line for line in lines))
+
+    def test_jev_agreeing_with_the_heuristic_is_still_jevs_entry(self):
+        _w, written, recorded, lines, _me = self.run_pass({}, jev_pick="wailing")
+        self.assertEqual(written[0][2], "wailing")
+        self.assertEqual(recorded[0].acted, jev.BOTH)
+        self.assertEqual(self.sources, [campaignplan.SOURCE_JEV])
+        self.assertTrue(any("chosen by Jev" in line for line in lines))
 
     def test_without_a_key_the_heuristic_still_plans(self):
         _w, written, recorded, _lines, _me = self.run_pass({}, key="")
         self.assertEqual(written[0][2], "wailing")
         self.assertEqual(recorded, [])
+        self.assertEqual(self.sources, [campaignplan.SOURCE])
 
     def test_an_order_in_progress_is_not_touched(self):
         pending = {

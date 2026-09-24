@@ -336,7 +336,11 @@ class TheAttunementAndTheKey(unittest.TestCase):
         self.assertFalse(moved.needed)
 
 
-def facts(upgrades=None, progress=None, done=None):
+# The Crescent Key in a member's bags, which opens Dire Maul West and North.
+CRESCENT = frozenset({18249})
+
+
+def facts(upgrades=None, progress=None, done=None, keys=CRESCENT):
     return campaignplan.Facts(
         family="Grug",
         level_rows=tuple(
@@ -347,6 +351,7 @@ def facts(upgrades=None, progress=None, done=None):
         failed={},
         upgrades=upgrades,
         progress=progress,
+        keys=keys,
     )
 
 
@@ -460,8 +465,15 @@ class TheRaidTab(unittest.TestCase):
     def test_a_capped_family_on_kalimdor_sees_dire_maul_and_why_the_rest_is_closed(
         self,
     ):
+        crescent = [{"name": "Og", "entry": 18249, "count": 1}]
         view = preraid.family_view(
-            ["Grug", "Ugga", "Og"], member_rows(), worn_rows(), catalog(), [], [], []
+            ["Grug", "Ugga", "Og"],
+            member_rows(),
+            worn_rows(),
+            catalog(),
+            [],
+            [],
+            crescent,
         )
         self.assertIn("Dire Maul (the North wing)", view["line"])
         grug = next(m for m in view["members"] if m["name"] == "Grug")
