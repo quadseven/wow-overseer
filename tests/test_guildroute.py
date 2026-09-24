@@ -689,6 +689,75 @@ class HoldersWalkToAMailbox(unittest.TestCase):
         self.assertEqual(guildroute.runs_today([20.0], now, posted=4), 4)
 
 
+class TheFarWalk(unittest.TestCase):
+    """quadseven/mod-overseer#633: a guild walk may go past the near cap, and a
+    fight pauses it."""
+
+    def test_the_far_cap_is_the_modules(self):
+        self.assertEqual(guildroute.walk_cap(True), 20000.0)
+        self.assertEqual(guildroute.walk_cap(False), guildroute.MAIL_RUN_YARDS)
+        self.assertEqual(
+            guildroute.mailbox_walk_command(guildroute.FAR_WALK_YARDS),
+            "walk-to-mailbox max:20000",
+        )
+        self.assertEqual(guildroute.mailbox_walk_command(), "walk-to-mailbox max:600")
+
+    def test_a_trainer_or_vendor_row_names_a_cap_only_past_its_own(self):
+        self.assertEqual(guildroute.errand_cap_word(guildroute.MAIL_RUN_YARDS), "")
+        self.assertEqual(guildroute.errand_cap_word(1000.0), "")
+        self.assertEqual(guildroute.errand_cap_word(20000.0), " max:20000")
+
+    def test_a_far_row_is_followed_for_the_far_ceiling(self):
+        self.assertEqual(
+            guildroute.follow_seconds(guildroute.MAIL_RUN_YARDS),
+            guildroute.WALK_FOLLOW_SECONDS,
+        )
+        self.assertGreaterEqual(
+            guildroute.follow_seconds(guildroute.FAR_WALK_YARDS), 1800.0 + 180.0
+        )
+        self.assertGreater(
+            guildroute.GUILD_STEP_SECONDS, guildroute.FAR_WALK_FOLLOW_SECONDS
+        )
+
+    def test_a_walker_past_600_yards_may_go_far(self):
+        far = _walker(spawn=_box(d2=1953.0 * 1953.0), leader_of={}, roster=set())
+        self.assertIn("past the 600", guildroute.cannot_walk(far, "Velalenn"))
+        self.assertEqual(
+            guildroute.cannot_walk(far, "Velalenn", guildroute.FAR_WALK_YARDS), ""
+        )
+
+    def test_a_fight_that_ended_a_walk_is_read_and_retried_once(self):
+        ended = guildroute.judge_walk(
+            "Zora",
+            "error",
+            "entered combat on the way to the mailbox",
+            '{"outcome":"entered_combat","retryable":true}',
+        )
+        self.assertEqual(ended.state, guildroute.ENDED)
+        self.assertTrue(ended.combat)
+        self.assertTrue(guildroute.retry_after_combat(ended, 1))
+        self.assertFalse(guildroute.retry_after_combat(ended, 2))
+        vendor = guildroute.judge_walk(
+            "Zora", "error", "entered combat on the way to the vendor", "{}"
+        )
+        self.assertTrue(vendor.combat)
+        other = guildroute.judge_walk(
+            "Bytkiz", "error", "nearest mailbox is beyond the cap", "{}"
+        )
+        self.assertFalse(other.combat)
+        self.assertFalse(guildroute.retry_after_combat(other, 1))
+
+    def test_an_older_worldserver_refusing_a_far_row_is_read_as_such(self):
+        answer = guildroute.judge_walk(
+            "Bytkiz", "error", "malformed walk-to-mailbox command", "{}", far=True
+        )
+        self.assertEqual(answer.state, guildroute.FAR_UNSUPPORTED)
+        near = guildroute.judge_walk(
+            "Bytkiz", "error", "malformed walk-to-mailbox command", "{}"
+        )
+        self.assertEqual(near.state, guildroute.ENDED)
+
+
 class TheBridgeWalksAndNeverGives(unittest.TestCase):
     def body(self, name):
         bridge = (HERE / "bridge.py").read_text(encoding="utf-8")

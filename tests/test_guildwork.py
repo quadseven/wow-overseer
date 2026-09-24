@@ -97,6 +97,49 @@ class TheLetter(unittest.TestCase):
         )
 
 
+class TheFarWalk(unittest.TestCase):
+    """quadseven/mod-overseer#633: dues walks may go far, and the nearest
+    member is asked first."""
+
+    masters = {"Cave": "Grug"}
+
+    def test_the_far_cap_is_on_the_walk_row(self):
+        plan = guildwork.plan_dues(
+            [member("Velalenn")],
+            self.masters,
+            {"Velalenn": walker("Velalenn", yards=1953.0)},
+            (),
+            (),
+            max_yards=guildroute.FAR_WALK_YARDS,
+        )
+        self.assertEqual(len(plan.runs), 1)
+        self.assertEqual(plan.runs[0].walk_command, "walk-to-mailbox max:20000")
+
+    def test_at_the_near_cap_1953_yards_still_waits(self):
+        plan = guildwork.plan_dues(
+            [member("Velalenn")],
+            self.masters,
+            {"Velalenn": walker("Velalenn", yards=1953.0)},
+            (),
+            (),
+        )
+        self.assertEqual(plan.runs, ())
+        self.assertIn("1953 yards away, past the 600", plan.notes[0])
+
+    def test_the_nearest_members_take_the_guilds_two_walks(self):
+        crew = [member("Far"), member("Near"), member("Mid"), member("Unknown")]
+        walkers = {
+            "Far": walker("Far", yards=1953.0),
+            "Near": walker("Near", yards=44.0),
+            "Mid": walker("Mid", yards=516.0),
+            "Unknown": walker("Unknown", yards=None),
+        }
+        plan = guildwork.plan_dues(
+            crew, self.masters, walkers, (), (), max_yards=guildroute.FAR_WALK_YARDS
+        )
+        self.assertEqual([r.holder for r in plan.runs], ["Near", "Mid"])
+
+
 class ThePlan(unittest.TestCase):
     masters = {"Cave": "Grug", "Bonkers": "Zug"}
 
@@ -345,7 +388,26 @@ class TheBridgePass(unittest.TestCase):
 
     def test_both_walk_passes_read_a_walk_row_the_same_way(self):
         self.assertIn("_await_mail_walk", self.body("_follow_mail_walk"))
-        self.assertIn("_await_mail_walk", self.body("_follow_dues_walk"))
+        # Through the guild passes' shared follow since #633, which is the one
+        # that writes a walk a fight ended once more.
+        self.assertIn("_follow_guild_walk", self.body("_follow_dues_walk"))
+        self.assertIn("_await_mail_walk", self.body("_follow_guild_walk"))
+
+    def test_the_dues_pass_asks_the_far_cap_and_follows_it(self):
+        """quadseven/mod-overseer#633: the pass asks the far cap while the
+        worldserver carries it, follows the row for the far ceiling, and walks a
+        walk a fight ended once more."""
+        self.assertIn("max_yards=self._guild_walk_cap()", self.body("_guild_dues_once"))
+        follow = self.body("_follow_dues_walk")
+        self.assertIn("self._follow_guild_walk(", follow)
+        self.assertIn("run.cap", follow)
+        self.assertLess(
+            follow.index("_follow_guild_walk("), follow.index("guildroute.ARRIVED")
+        )
+        await_walk = self.body("_await_mail_walk")
+        self.assertIn("guildroute.follow_seconds(cap)", await_walk)
+        self.assertIn("guildroute.FAR_UNSUPPORTED", await_walk)
+        self.assertIn("guildroute.GUILD_STEP_SECONDS", self.body("_guild_dues_once"))
 
     def test_the_recent_read_uses_the_modules_own_prefixes(self):
         body = self.body("_dues_recent_holders")

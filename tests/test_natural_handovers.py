@@ -291,7 +291,13 @@ class TheBridgeFollowsTheWalk(unittest.TestCase):
         """The read loop is shared with the guild dues walks (#234), so it
         lives in `_await_mail_walk` and the follow calls it."""
         loop = _block("    async def _await_mail_walk(")
-        self.assertIn("guildroute.WALK_FOLLOW_SECONDS", loop)
+        # Bounded by the row's own cap since quadseven/mod-overseer#633: the
+        # near cap is still WALK_FOLLOW_SECONDS, the far one the far ceiling.
+        self.assertIn("guildroute.follow_seconds(cap)", loop)
+        self.assertEqual(
+            guildroute.follow_seconds(guildroute.MAIL_RUN_YARDS),
+            guildroute.WALK_FOLLOW_SECONDS,
+        )
         self.assertIn("await asyncio.sleep(MAIL_WALK_POLL_SECONDS)", loop)
         self.assertIn("_command_answer, row_id", loop)
         self.assertIn("guildroute.judge_walk(", loop)

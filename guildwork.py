@@ -130,6 +130,7 @@ class DuesRun:
     copper: int
     aim: str
     yards: float
+    cap: float = guildroute.MAIL_RUN_YARDS
 
     @property
     def command(self) -> str:
@@ -138,8 +139,9 @@ class DuesRun:
 
     @property
     def walk_command(self) -> str:
-        """The module's walk row (#570), capped at the gear route's own cap."""
-        return "%s max:%d" % (guildroute.WALK_VERB, int(guildroute.MAIL_RUN_YARDS))
+        """The module's walk row (#570) at the pass's cap: the gear route's own
+        600 yards, or the far cap once the worldserver walks that far (#633)."""
+        return guildroute.mailbox_walk_command(self.cap)
 
     @property
     def source(self) -> str:
@@ -220,12 +222,16 @@ def plan_dues(
     `guildroute.Walker`. `posted` holds the members that already posted, or
     were already asked to, inside INTERVAL_HOURS. `busy` holds members already
     walking to a mailbox for any pass. One note per member left out.
+
+    THE NEAREST FIRST (#633). Inside a guild the members nearest a mailbox are
+    asked first, so the guild's two walks a pass go to the shortest ones and a
+    member a continent away waits for a pass nobody nearer needs.
     """
     runs, notes = [], []
     started = {}
     busy = {str(n) for n in busy or ()}
     posted = {str(n) for n in posted or ()}
-    for member in members or ():
+    for member in _nearest_first(members, walkers):
         name = str(member.name)
         taker = str((masters or {}).get(member.guild) or "")
         walker = (walkers or {}).get(name)
@@ -248,10 +254,28 @@ def plan_dues(
                 copper=dues_for(member.money),
                 aim=walker.aim,
                 yards=float(walker.yards),
+                cap=float(max_yards),
             )
         )
         busy.add(name)
     return DuesPlan(runs=tuple(runs), notes=tuple(notes))
+
+
+def _nearest_first(members, walkers) -> list:
+    """The members in the order a dues pass asks them: nearest a mailbox first.
+
+    Stable, so members at the same distance, and members whose distance is not
+    known, keep the lineup's order; an unknown distance goes last.
+    """
+    members = list(members or ())
+
+    def key(pair):
+        index, member = pair
+        walker = (walkers or {}).get(str(member.name))
+        yards = getattr(walker, "yards", None)
+        return (yards is None, float(yards or 0.0), index)
+
+    return [m for _, m in sorted(enumerate(members), key=key)]
 
 
 # ---------------------------------------------------------------------------

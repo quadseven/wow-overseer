@@ -175,6 +175,74 @@ WALK_UNSUPPORTED_SECONDS = 3600.0
 UNKNOWN_MAIL_VERB = "malformed mail command"
 NOT_LEADING = "follows its family's leader, and only a leader can be walked"
 
+# ---------------------------------------------------------------------------
+# THE FAR WALK (quadseven/mod-overseer#633)
+#
+# A walk row may ask for a cap up to FAR_WALK_YARDS. When the destination the
+# module chooses lies past the verb's own near cap (600 yards for a mailbox,
+# 1,000 for a trainer or a vendor), the module walks the bot the way the family
+# travels: mounted, by a flight path it knows where one beats the road, and
+# along the travel survey, on the Eastern Kingdoms and Kalimdor only, two far
+# walks per bot per hour and four under way on the realm. A fight pauses any
+# walk and it walks on afterwards. Measured before it: most guild corps and
+# dues walks ended "nearest mailbox is beyond the cap" at 1,000 to 2,300 yards.
+#
+# A worldserver older than #633 answers a far row as a malformed walk; that is
+# read as "no far walks here yet", and the guild passes go back to the near cap
+# for WALK_UNSUPPORTED_SECONDS.
+
+# The far cap a guild walk row asks for: the module's own FAR_WALK_MAX_YARDS.
+FAR_WALK_YARDS = 20000.0
+# The near caps the module keeps for a row that names no larger one.
+TRAINER_WALK_YARDS = 1000.0
+# How long a far walk row is followed: the module's far ceiling (1,800 s), its
+# fighting allowance (180 s) and a margin for the polls.
+FAR_WALK_FOLLOW_SECONDS = 2100.0
+# How long a guild pass keeps a holder reserved for one step: the far follow
+# and a margin for the rows written after the arrival.
+GUILD_STEP_SECONDS = FAR_WALK_FOLLOW_SECONDS + 600.0
+# A walk a fight ended is written once more, after this long.
+WALK_COMBAT_RETRIES = 1
+WALK_COMBAT_RETRY_SECONDS = 30.0
+# What the three walks answer a row they cannot parse with (#570, #621): on a
+# far row, a worldserver older than #633.
+MALFORMED_WALK = "malformed walk-to-"
+# The endings a fight gives a walk, whichever destination it was for.
+COMBAT_ENDING = "entered combat on the way to the"
+
+
+def walk_cap(far_supported) -> float:
+    """The cap a guild pass asks for: far while the worldserver carries it."""
+    return FAR_WALK_YARDS if far_supported else MAIL_RUN_YARDS
+
+
+def mailbox_walk_command(cap=MAIL_RUN_YARDS) -> str:
+    """The `walk-to-mailbox` row at this cap."""
+    return "%s max:%d" % (WALK_VERB, int(cap))
+
+
+def errand_cap_word(cap) -> str:
+    """` max:<cap>` for a trainer or vendor row asking past its near cap, else ""."""
+    return " max:%d" % int(cap) if float(cap) > TRAINER_WALK_YARDS else ""
+
+
+def follow_seconds(cap) -> float:
+    """How long a walk row at this cap is followed."""
+    return (
+        FAR_WALK_FOLLOW_SECONDS
+        if float(cap) > TRAINER_WALK_YARDS
+        else WALK_FOLLOW_SECONDS
+    )
+
+
+def retry_after_combat(answer, attempt) -> bool:
+    """Is a walk a fight ended worth writing once more? `attempt` counts from 1."""
+    return (
+        getattr(answer, "state", "") == ENDED
+        and bool(getattr(answer, "combat", False))
+        and int(attempt) <= WALK_COMBAT_RETRIES
+    )
+
 
 @dataclass(frozen=True)
 class Walker:
@@ -428,6 +496,7 @@ WALKING = "walking"
 ARRIVED = "arrived"
 ENDED = "ended"
 UNSUPPORTED = "unsupported"
+FAR_UNSUPPORTED = "far unsupported"
 
 
 @dataclass(frozen=True)
@@ -438,12 +507,15 @@ class WalkAnswer:
     `mailbox` and the letter may be written now. ENDED: the walk is over
     without arriving (`retryable` says whether a later run may try again).
     UNSUPPORTED: the worldserver does not know the walk row at all.
+    FAR_UNSUPPORTED: it knows the walk but not a far cap (#633). `combat` is
+    True when a fight ended the walk.
     """
 
     state: str
     said: str = ""
     mailbox: str = ""
     retryable: bool = False
+    combat: bool = False
 
 
 def _result_of(result) -> dict:
@@ -457,38 +529,58 @@ def _result_of(result) -> dict:
     return parsed if isinstance(parsed, dict) else {}
 
 
-def judge_walk(holder, status, detail, result) -> WalkAnswer:
-    """What one `walk-to-mailbox` row's status, detail and result say."""
+def judge_walk(holder, status, detail, result, far=False) -> WalkAnswer:
+    """What one walk row's status, detail and result say.
+
+    `far` is True when the row asked for a cap past the near one, so a
+    malformed answer means a worldserver older than #633.
+    """
     status = str(status or "").strip().lower()
     detail = str(detail or "").strip()
     body = _result_of(result)
     if status in ("pending", "claimed", "verifying", ""):
         return WalkAnswer(WALKING)
     if status == "applied":
-        # The module answers 'applied' only on arrival, and says so in the
-        # result. A body that does not say "arrived" is not trusted as one.
-        reached = body.get("reached") if isinstance(body.get("reached"), dict) else {}
-        if body.get("outcome") != "arrived" or not reached.get("name"):
-            return WalkAnswer(
-                ENDED,
-                "%s's walk row read 'applied' without an arrival in its result"
-                % holder,
-            )
-        box = str(reached["name"])
-        return WalkAnswer(ARRIVED, "%s stands at %s" % (holder, box), mailbox=box)
+        return _arrival(holder, body)
     if status == "unchanged":
         why = detail or str(body.get("reason") or "did not reach the mailbox")
         return WalkAnswer(ENDED, "%s %s" % (holder, why), retryable=True)
+    return _refusal(holder, status, detail, body, far)
+
+
+def _arrival(holder, body) -> WalkAnswer:
+    """An 'applied' walk row. The module answers 'applied' only on arrival, and
+    says so in the result; a body that does not say "arrived" is not trusted."""
+    reached = body.get("reached") if isinstance(body.get("reached"), dict) else {}
+    if body.get("outcome") != "arrived" or not reached.get("name"):
+        return WalkAnswer(
+            ENDED,
+            "%s's walk row read 'applied' without an arrival in its result" % holder,
+        )
+    box = str(reached["name"])
+    return WalkAnswer(ARRIVED, "%s stands at %s" % (holder, box), mailbox=box)
+
+
+def _refusal(holder, status, detail, body, far) -> WalkAnswer:
+    """An 'error' walk row, or one with a status nothing here knows."""
+    minutes = int(WALK_UNSUPPORTED_SECONDS // 60)
+    if status == "error" and far and detail.startswith(MALFORMED_WALK):
+        return WalkAnswer(
+            FAR_UNSUPPORTED,
+            "this worldserver answered a far walk as %r, so it cannot walk a guild "
+            "bot past the near cap yet; the near cap is asked for %d minutes"
+            % (detail, minutes),
+        )
     if status == "error" and UNKNOWN_MAIL_VERB in detail:
         return WalkAnswer(
             UNSUPPORTED,
             "this worldserver answered the walk as %r, so it cannot walk a "
-            "guild bot yet; not asking again for %d minutes"
-            % (detail, int(WALK_UNSUPPORTED_SECONDS // 60)),
+            "guild bot yet; not asking again for %d minutes" % (detail, minutes),
         )
     why = detail or "the world refused the walk and said nothing about why"
     return WalkAnswer(
         ENDED,
         "%s cannot walk to a mailbox: %s" % (holder, why),
         retryable=bool(body.get("retryable")),
+        combat=why.startswith(COMBAT_ENDING),
     )
