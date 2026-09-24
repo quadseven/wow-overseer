@@ -37,6 +37,7 @@ import clearance
 import council
 import core
 import craftpleas
+import crossing
 import digest
 import disposition
 import events
@@ -2410,6 +2411,25 @@ def _fetch_queue_rows() -> list:
         if exc.args and exc.args[0] in (1054, 1146):
             return []
         raise
+
+
+# WHETHER THE MODULE BOARDS TRANSPORTS (mod-overseer#671). Its build report
+# carries `crossing = boards` when it does; a realm with no such row, or no
+# overseer_build table at all, reads as a module that refuses every crossing.
+_MODULE_CROSSING_SQL = "SELECT value FROM overseer_build WHERE name = 'crossing'"
+
+
+def _fetch_module_crossing() -> str:
+    """The module's `crossing` build fact, or "" with no row or no table."""
+    try:
+        with _connect() as conn, conn.cursor() as cur:
+            cur.execute(_MODULE_CROSSING_SQL)
+            row = cur.fetchone()
+    except pymysql.err.MySQLError as exc:
+        if exc.args and exc.args[0] in (1054, 1146):
+            return ""
+        raise
+    return str((row or {}).get("value") or "")
 
 
 # The family column arrives with mod-overseer#506's SQL; a roster without it
@@ -12985,6 +13005,15 @@ class Bridge(discord.Client):
 
     async def _campaign_queue_once(self) -> None:
         """One pass: every family with a pending entry, off its own leader."""
+        # WHAT THE MODULE CAN CROSS, read before any door is judged, so a
+        # queued or planned door on the other continent is refused or allowed
+        # by what the running worldserver says it can do (mod-overseer#671).
+        crosses = await asyncio.to_thread(_fetch_module_crossing)
+        if crossing.note_module_crossing(crosses):
+            log.info("queue: the module reports crossing=%r, so a dungeon door "
+                     "on the other continent is %s", crosses or "",
+                     "reachable by its boats" if crossing.module_boards()
+                     else "refused until it can cross")
         pending = campaignqueue.pending_by_family(
             await asyncio.to_thread(_fetch_queue_rows))
         fams = campaignqueue.families(await asyncio.to_thread(_fetch_queue_roster))

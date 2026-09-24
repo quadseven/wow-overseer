@@ -16,6 +16,7 @@ from test_decree_order import FakeConn, FakeCursor  # sets up the pymysql stub
 import campaignqueue  # noqa: E402
 import core  # noqa: E402
 import council  # noqa: E402
+import crossing  # noqa: E402
 import decree  # noqa: E402
 import jobs  # noqa: E402
 import map_server  # noqa: E402
@@ -351,6 +352,10 @@ def _queue_pass(world, holds=None):
             "log": log,
             "_fetch_queue_rows": world.fetch_queue,
             "_fetch_queue_roster": world.fetch_roster,
+            # No build report: the module refuses every crossing, as before
+            # mod-overseer#671, and the pass says nothing about it.
+            "_fetch_module_crossing": lambda: "",
+            "crossing": crossing,
             "_mark_queue": world.mark,
             "_drive_dungeon": world.drive,
             "_drive_raid": world.drive_raid,
