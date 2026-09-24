@@ -78,8 +78,10 @@ INSERT_SEAT_DUTY_SQL = (
 # EVERY MEMBER OF THE FAMILY'S GUILD, found from the family's own names, which
 # is the same read the Raid tab's lineup is chosen from (map_server's
 # _RAID_GUILD), so the seats written are the lineup the operator saw.
+# Built from constant strings only (raidroles.TALENTS_COLUMN is one); every
+# value is bound by the driver.
 GUILD_MEMBERS_SQL = (
-    "SELECT c.name, c.level, c.class AS class_id, c.race, "
+    "SELECT c.name, c.level, c.class AS class_id, c.race, "  # noqa: S608 - constant fragments only
     + raidroles.TALENTS_COLUMN
     + " FROM characters c JOIN guild_member gm ON gm.guid = c.guid "
     "WHERE gm.guildid IN (SELECT gm2.guildid FROM guild_member gm2 "

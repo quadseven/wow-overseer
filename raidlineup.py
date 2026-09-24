@@ -164,6 +164,57 @@ def _placed(member: dict, role: str, duty: str) -> dict:
     return out
 
 
+def _healer_order(healers) -> list:
+    """The healers placed, a priest first: group 1's shields the tanks."""
+    rest = list(healers)
+    first = next((h for h in rest if h.get("class_id") == PRIEST), None)
+    if first is None and rest:
+        first = rest[0]
+    order = ([first] if first is not None else []) + [h for h in rest if h is not first]
+    return [_placed(h, "healer", raidroles.HEALER) for h in order]
+
+
+def _deal_healers(groups: list, healers: list, size: int) -> None:
+    """One healer to each group in order while they last, then the rest into
+    the last groups, the raid's healing group."""
+    for group in groups:
+        if healers and len(group) < size:
+            group.append(healers.pop(0))
+    for group in reversed(groups):
+        while healers and len(group) < size:
+            group.append(healers.pop(0))
+
+
+def _damage_queue(spare_tanks, dps) -> list:
+    """Spare tanks as off tanks, then melee, hunters and casters in turn."""
+    ordered = sorted(
+        dps, key=lambda m: _DPS_ORDER.get(m.get("raid_role"), len(_DPS_ORDER))
+    )
+    duty = lambda m: (  # noqa: E731
+        m.get("raid_role") if m.get("raid_role") in _DPS_ORDER else DAMAGE_WORD
+    )
+    return [_placed(m, "tank", OFF_TANK) for m in spare_tanks] + [
+        _placed(m, "dps", duty(m)) for m in ordered
+    ]
+
+
+def _deal_damage(groups: list, damage: list, size: int) -> None:
+    """EVEN, THEN FULL. The groups after the tanks' are filled in order to an
+    even share first, so a short roster makes seven thin groups rather than
+    four full ones and three with only a healer, and a full one still fills
+    group by group, each kind together. Whatever is left fills any room."""
+    rest = groups[1:]
+    if rest:
+        share = (sum(len(g) for g in rest) + len(damage)) // len(rest)
+        for cap in (share, share + 1):
+            for group in rest:
+                while damage and len(group) < min(cap, size):
+                    group.append(damage.pop(0))
+    for group in groups:
+        while damage and len(group) < size:
+            group.append(damage.pop(0))
+
+
 def _groups(tanks, healers, dps, count: int, size: int) -> list:
     """Deal the raid into `count` groups of `size`.
 
@@ -177,47 +228,10 @@ def _groups(tanks, healers, dps, count: int, size: int) -> list:
     groups = [[] for _ in range(count)]
     if not count:
         return groups
-    front = tanks[: size - 1]
-    spare_tanks = tanks[size - 1 :]
-    for index, member in enumerate(front):
+    for index, member in enumerate(tanks[: size - 1]):
         groups[0].append(_placed(member, "tank", MAIN_TANK if index == 0 else OFF_TANK))
-    rest = list(healers)
-    first = next((h for h in rest if h.get("class_id") == PRIEST), None)
-    if first is None and rest:
-        first = rest[0]
-    order = ([first] if first is not None else []) + [h for h in rest if h is not first]
-    placed_healers = [_placed(h, "healer", raidroles.HEALER) for h in order]
-    for index in range(count):
-        if not placed_healers:
-            break
-        if len(groups[index]) < size:
-            groups[index].append(placed_healers.pop(0))
-    for index in reversed(range(count)):
-        while placed_healers and len(groups[index]) < size:
-            groups[index].append(placed_healers.pop(0))
-    damage = [_placed(m, "tank", OFF_TANK) for m in spare_tanks] + [
-        _placed(m, "dps", m.get("raid_role") or DAMAGE_WORD)
-        if m.get("raid_role") in _DPS_ORDER
-        else _placed(m, "dps", DAMAGE_WORD)
-        for m in sorted(
-            dps,
-            key=lambda m: _DPS_ORDER.get(m.get("raid_role"), len(_DPS_ORDER)),
-        )
-    ]
-    # EVEN, THEN FULL. The groups after the tanks' are filled in order to an
-    # even share first, so a short roster makes seven thin groups rather than
-    # four full ones and three with only a healer, and a full one still fills
-    # group by group, each kind together.
-    rest = groups[1:]
-    if rest:
-        share = (sum(len(g) for g in rest) + len(damage)) // len(rest)
-        for cap in (share, share + 1):
-            for group in rest:
-                while damage and len(group) < min(cap, size):
-                    group.append(damage.pop(0))
-    for group in groups:
-        while damage and len(group) < size:
-            group.append(damage.pop(0))
+    _deal_healers(groups, _healer_order(healers), size)
+    _deal_damage(groups, _damage_queue(tanks[size - 1 :], dps), size)
     return groups
 
 

@@ -118,6 +118,16 @@ class Raider:
         return sum(int(f) for s, f in self.worn_fire if int(s) == int(slot))
 
 
+def _worn_fire(fire_rows) -> dict:
+    """name -> ((equipment slot, fire resistance), ...) off the worn items."""
+    worn: dict = {}
+    for row in fire_rows or ():
+        name = str(row.get("name") or "")
+        fire = int(row.get("fire_res") or 0)
+        worn.setdefault(name, []).append((int(row.get("slot") or 0), fire))
+    return worn
+
+
 def raiders_from_lineup(lineup, classes, fire_rows=(), family=()) -> list:
     """Raider rows from a raidlineup result.
 
@@ -125,44 +135,40 @@ def raiders_from_lineup(lineup, classes, fire_rows=(), family=()) -> list:
     `name`, `slot` and `fire_res`. The main tank is the one the lineup named
     (raidlineup.MAIN_TANK), else the first tank it placed.
     """
-    named = any(
-        m.get("duty") == MAIN_TANK
+    placed = [
+        m
         for group in (lineup or {}).get("groups") or ()
         for m in group.get("members") or ()
-    )
-    worn = {}
-    for row in fire_rows or ():
-        name = str(row.get("name") or "")
-        fire = int(row.get("fire_res") or 0)
-        worn.setdefault(name, []).append((int(row.get("slot") or 0), fire))
+        if str(m.get("name") or "")
+    ]
+    named = any(m.get("duty") == MAIN_TANK for m in placed)
+    worn = _worn_fire(fire_rows)
     out, main_taken = [], False
-    for group in (lineup or {}).get("groups") or ():
-        for member in group.get("members") or ():
-            name = str(member.get("name") or "")
-            if not name:
-                continue
-            role = role_of(
-                member.get("role", "dps"),
-                classes.get(name),
-                str(member.get("raid_role") or ""),
+    for member in placed:
+        name = str(member.get("name"))
+        role = role_of(
+            member.get("role", "dps"),
+            classes.get(name),
+            str(member.get("raid_role") or ""),
+        )
+        main = (
+            member.get("duty") == MAIN_TANK
+            if named
+            else role == TANK and not main_taken
+        )
+        main_taken = main_taken or main
+        items = tuple(worn.get(name, ()))
+        out.append(
+            Raider(
+                name=name,
+                role=role,
+                class_id=int(classes.get(name) or 0),
+                main_tank=main,
+                family=name in set(family or ()),
+                fire=sum(f for _, f in items),
+                worn_fire=items,
             )
-            if named:
-                main = member.get("duty") == MAIN_TANK
-            else:
-                main = role == TANK and not main_taken
-            main_taken = main_taken or main
-            items = tuple(worn.get(name, ()))
-            out.append(
-                Raider(
-                    name=name,
-                    role=role,
-                    class_id=int(classes.get(name) or 0),
-                    main_tank=main,
-                    family=name in set(family or ()),
-                    fire=sum(f for _, f in items),
-                    worn_fire=items,
-                )
-            )
+        )
     return out
 
 
