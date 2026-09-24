@@ -552,19 +552,23 @@ ITEMS_SQL = (
     "  qt.RequiredItemId4, qt.RequiredItemId5, qt.RequiredItemId6, "
     "  qt.ItemDrop1, qt.ItemDrop2, qt.ItemDrop3, qt.ItemDrop4, qt.StartItem)"
     ") AS quest_needed, "
-    "EXISTS (SELECT 1 FROM acore_world.npc_vendor v "
-    "  JOIN acore_world.creature_template ct ON ct.entry = v.entry "
-    "  WHERE v.item = it.entry AND v.ExtendedCost > 0 AND ("
-    # LOCATE, NOT LIKE: this string passes through `% marks` and then
-    # pymysql's own `query % args`, and a LIKE pattern's percent signs would
-    # have to survive both.
-    + " OR ".join("LOCATE('%s', ct.subname) > 0" % w for w in PVP_VENDOR_WORDS)
-    + ")) AS pvp_vendor, "
+    "pv.item IS NOT NULL AS pvp_vendor, "
     + _STAT_COLUMNS
     + " FROM character_inventory ci "
     "JOIN characters c ON c.guid = ci.guid "
     "JOIN item_instance ii ON ii.guid = ci.item "
     "JOIN acore_world.item_template it ON it.entry = ii.itemEntry "
+    # THE HONOR VENDORS' ITEMS, READ ONCE PER QUERY. An EXISTS per row scanned
+    # npc_vendor (37,753 rows, keyed by vendor first) for every stack, about
+    # two seconds a family on the dev realm; one derived table is one scan.
+    "LEFT JOIN (SELECT DISTINCT v.item FROM acore_world.npc_vendor v "
+    "  JOIN acore_world.creature_template ct ON ct.entry = v.entry "
+    "  WHERE v.ExtendedCost > 0 AND ("
+    # LOCATE, NOT LIKE: this string passes through `% marks` and then
+    # pymysql's own `query % args`, and a LIKE pattern's percent signs would
+    # have to survive both.
+    + " OR ".join("LOCATE('%s', ct.subname) > 0" % w for w in PVP_VENDOR_WORDS)
+    + ")) pv ON pv.item = it.entry "
     "WHERE c.name IN (%s) AND NOT (ci.bag = 0 AND ci.slot < 19)"
 )
 
