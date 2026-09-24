@@ -477,6 +477,21 @@ def fire_resistance(worn_rows: list) -> dict:
     return out
 
 
+def carried_each(holding_rows: list, names: list, items: tuple) -> dict:
+    """name -> {item name: how many that character carries or banks}, for
+    `items` only. The same count `carried` makes, kept per item."""
+    wanted = frozenset(items)
+    out: dict = {name: {} for name in names}
+    for member in bank.members_from_rows(holding_rows or [], sorted(names)):
+        mine = out.setdefault(member.name, {})
+        for holding in list(member.carried) + list(member.banked):
+            if holding.item.name in wanted:
+                mine[holding.item.name] = mine.get(holding.item.name, 0) + int(
+                    holding.count
+                )
+    return out
+
+
 def carried(holding_rows: list, names: list, items: tuple) -> dict:
     """name -> how many of `items` that character carries or banks.
 
@@ -502,8 +517,36 @@ RAIDER_COLUMNS = (
     "fire resistance",
     "attuned",
     "fire protection potions",
+    "consumables",
     "where",
+    "ready for the core",
 )
+
+# A RAIDER IS READY FOR THE CORE when three things hold, each a convention
+# named elsewhere and none a gate the instance keeps: the gear average reaches
+# GEAR_CONVENTION, the worn fire resistance reaches raidsupply's target for the
+# role (200 for the main tank, 120 for another tank, 60 for a healer, none for
+# a damage dealer), and the bags hold the night's supplies raidsupply lists
+# for the role (four Greater Fire Protection Potions and five Major Healing
+# Potions for a tank, and so on). The attunement is shown and does not count:
+# the Molten Core window admits a raid without it.
+READY = "yes"
+
+
+def _short(row: dict) -> list:
+    """What keeps one raider from being ready, in the column order."""
+    out = []
+    if row["gear"] is None:
+        out.append("gear not read")
+    elif row["gear"] < GEAR_CONVENTION:
+        out.append("gear %d of %d" % (row["gear"], GEAR_CONVENTION))
+    if row["fire_target"] and row["fire_res"] < row["fire_target"]:
+        out.append("fire resistance %d of %d" % (row["fire_res"], row["fire_target"]))
+    if row["supplies_carried"] < row["supplies_wanted"]:
+        out.append(
+            "supplies %d of %d" % (row["supplies_carried"], row["supplies_wanted"])
+        )
+    return out
 
 
 def _cells(row: dict) -> list:
@@ -513,10 +556,16 @@ def _cells(row: dict) -> list:
         row["role"],
         "?" if row["level"] is None else str(row["level"]),
         "not read" if row["gear"] is None else str(row["gear"]),
-        str(row["fire_res"]),
+        (
+            "%d of %d" % (row["fire_res"], row["fire_target"])
+            if row["fire_target"]
+            else str(row["fire_res"])
+        ),
         "yes" if row["attuned"] else "no",
         str(row["fire_potions"]),
+        "%d of %d" % (row["supplies_carried"], row["supplies_wanted"]),
         row["where"],
+        READY if row["ready"] else "no: " + "; ".join(row["short"]),
     ]
 
 
@@ -528,6 +577,20 @@ def _where(member: dict) -> str:
     return place if member.get("online") else "%s, offline" % place
 
 
+def _supplies(raider, held: dict) -> tuple:
+    """(carried, wanted) of one night's supplies for one raider: each supply
+    counted up to what the night wants of it, so a stack of twenty healing
+    potions does not stand in for a missing flask."""
+    carried_n = wanted = 0
+    for supply in raidsupply.SUPPLIES:
+        want = supply.per_raider(raider) if raider else 0
+        if want <= 0:
+            continue
+        wanted += want
+        carried_n += min(want, int(held.get(supply.name, 0)))
+    return carried_n, wanted
+
+
 def raider_rows(
     lineup: dict,
     members: list,
@@ -535,20 +598,30 @@ def raider_rows(
     fire: dict,
     attuned: set,
     potions: dict,
+    *,
+    supply_raiders: list = (),
+    held: dict | None = None,
 ) -> list:
     """One row per placed raider: what the operator asked to see, per person.
 
     Group and role are the lineup's; level from characters; gear the average
-    item level worn; fire resistance summed from worn items; attuned from the
-    rewarded quest; where, from the saved map and the online flag, because a
-    raider on another continent cannot follow the head to the door.
+    item level worn; fire resistance summed from worn items, against the
+    role's target; attuned from the rewarded quest; the night's supplies
+    carried against what the role wants (`supply_raiders` are
+    raidsupply.Raider rows, `held` name -> item name -> count); where, from
+    the saved map and the online flag, because a raider on another continent
+    cannot follow the head to the door; and whether the raider is ready.
     """
     by_name = {m["name"]: m for m in members}
+    supply_by_name = {r.name: r for r in supply_raiders or ()}
+    held = held or {}
     rows = []
     for group in lineup["groups"]:
         for member in group["members"]:
             name = member["name"]
             seen = by_name.get(name, {})
+            raider = supply_by_name.get(name)
+            got, want = _supplies(raider, held.get(name) or {})
             rows.append(
                 {
                     "name": name,
@@ -562,8 +635,14 @@ def raider_rows(
                     "where": _where(seen),
                     "at_door_continent": seen.get("map") is not None
                     and int(seen["map"]) == DOOR_MAP,
+                    "main_tank": bool(raider and raider.main_tank),
+                    "fire_target": raidsupply.fire_target(raider) if raider else 0,
+                    "supplies_carried": got,
+                    "supplies_wanted": want,
                 }
             )
+            rows[-1]["short"] = _short(rows[-1])
+            rows[-1]["ready"] = not rows[-1]["short"]
             rows[-1]["cells"] = _cells(rows[-1])
     return rows
 
@@ -576,10 +655,23 @@ def _raiders_line(rows: list) -> str:
     fire = sum(r["fire_res"] for r in rows)
     potions = sum(r["fire_potions"] for r in rows)
     away = len([r for r in rows if not r["at_door_continent"]])
+    ready = len([r for r in rows if r.get("ready")])
     return (
-        "%d raiders: %d attuned, %d wearing any fire resistance (%d in all), "
-        "%d fire protection potions carried, %d not on Eastern Kingdoms where "
-        "the door is." % (len(rows), attuned, with_fire, fire, potions, away)
+        "%d raiders: %d ready for the core, %d attuned, %d wearing any fire "
+        "resistance (%d in all), %d fire protection potions carried, %d not on "
+        "Eastern Kingdoms where the door is. Ready means gear averaging item "
+        "level %d, the role's fire resistance and the night's supplies in the "
+        "bags."
+        % (
+            len(rows),
+            ready,
+            attuned,
+            with_fire,
+            fire,
+            potions,
+            away,
+            GEAR_CONVENTION,
+        )
     )
 
 
@@ -627,6 +719,7 @@ def build_guild(
         raidrun.CLEARS,
     )
     names = [m["name"] for m in raiders]
+    classes = {m["name"]: m.get("class_id") for m in members}
     rows = raider_rows(
         lineup,
         members,
@@ -634,6 +727,12 @@ def build_guild(
         fire_resistance(worn_rows),
         attuned,
         carried(holding_rows, names, FIRE_PROTECTION),
+        supply_raiders=raidsupply.raiders_from_lineup(
+            lineup, classes, worn_rows, group["family_names"]
+        ),
+        held=carried_each(
+            holding_rows, names, tuple(s.name for s in raidsupply.SUPPLIES)
+        ),
     )
     in_log = {
         r["name"]
