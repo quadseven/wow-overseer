@@ -126,33 +126,44 @@ class Request:
     heuristic_why: str
 
 
+def _offered(kind: str, raw) -> tuple:
+    """The options a row offers that this pass knows the meaning of."""
+    criteria = RECOVERY_CRITERIA if kind == KIND_RECOVERY else STALL_CRITERIA
+    words = (o.strip() for o in str(raw or "").split(","))
+    return tuple(o for o in words if o in criteria)
+
+
+def _text(row: dict, key: str) -> str:
+    return str(row.get(key) or "")
+
+
+def _number(row: dict, key: str) -> int:
+    return int(row.get(key) or 0)
+
+
 def request_from_row(row: dict) -> Request | None:
-    """A Request, or None for a row this pass cannot ask about."""
-    kind = str(row.get("kind") or "")
+    """A Request, or None for a row this pass cannot ask about: an unknown
+    kind, fewer than two known options, or a heuristic it does not offer."""
+    kind = _text(row, "kind")
     if kind not in KINDS:
         return None
-    criteria = RECOVERY_CRITERIA if kind == KIND_RECOVERY else STALL_CRITERIA
-    options = tuple(
-        o.strip()
-        for o in str(row.get("options") or "").split(",")
-        if o.strip() in criteria
-    )
-    heuristic = str(row.get("heuristic") or "")
+    options = _offered(kind, row.get("options"))
+    heuristic = _text(row, "heuristic")
     if heuristic not in options or len(options) < 2:
         return None
     return Request(
-        id=int(row.get("id") or 0),
-        family=str(row.get("family") or ""),
-        leader=str(row.get("leader_name") or ""),
-        campaign_id=int(row.get("campaign_id") or 0),
-        run_number=int(row.get("run_number") or 0),
+        id=_number(row, "id"),
+        family=_text(row, "family"),
+        leader=_text(row, "leader_name"),
+        campaign_id=_number(row, "campaign_id"),
+        run_number=_number(row, "run_number"),
         kind=kind,
-        attempt=int(row.get("attempt") or 0),
-        failure=str(row.get("failure") or ""),
-        facts=str(row.get("facts") or ""),
+        attempt=_number(row, "attempt"),
+        failure=_text(row, "failure"),
+        facts=_text(row, "facts"),
         options=options,
         heuristic=heuristic,
-        heuristic_why=str(row.get("heuristic_why") or ""),
+        heuristic_why=_text(row, "heuristic_why"),
     )
 
 
