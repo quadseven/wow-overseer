@@ -191,6 +191,21 @@ def _unknown(value):
     return "unknown" if value is None else value
 
 
+def _record(o) -> dict:
+    """One run's fit and the family's record there, for the question."""
+    return {
+        "boss_levels": _unknown(None if o.bosses is None else "%d to %d" % o.bosses),
+        "level_fit": o.fit or "unknown",
+        "weakest_member_ready": o.ready,
+        "completed_runs": o.done,
+        "failed_attempts": o.failed,
+        "wiped_runs": o.wipes,
+        "runs_that_never_got_in": o.staged,
+        "family_deaths_there_in_the_last_week": _unknown(o.deaths),
+        "pieces_the_loot_council_gave_a_member_there": _unknown(o.won),
+    }
+
+
 def dungeon_question(facts, opts, where=None):
     """(state, questions) for "which dungeon next", over campaignplan Options.
 
@@ -216,17 +231,7 @@ def dungeon_question(facts, opts, where=None):
                 "door": o.keyword,
                 "dungeon": o.place,
                 "levels": "%d to %d" % (o.floor, o.ceiling),
-                "boss_levels": _unknown(
-                    None if o.bosses is None else "%d to %d" % o.bosses
-                ),
-                "level_fit": o.fit or "unknown",
-                "weakest_member_ready": o.ready,
-                "completed_runs": o.done,
-                "failed_attempts": o.failed,
-                "wiped_runs": o.wipes,
-                "runs_that_never_got_in": o.staged,
-                "family_deaths_there_in_the_last_week": _unknown(o.deaths),
-                "pieces_the_loot_council_gave_a_member_there": _unknown(o.won),
+                **_record(o),
                 "runs_it_would_be_queued_for": o.runs,
                 "open_quests": _unknown(o.quests),
                 "boss_gear_item_level": _unknown(o.loot_level),

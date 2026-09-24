@@ -1590,21 +1590,9 @@ def family_view(
             "basis": WEIGHTS_LINE,
         }
     family = members(rows, [r for r in worn_rows or [] if r.get("member") in wanted])
-    # The upgrades first: a lower dungeon is open to a level 60 family only
-    # while it still holds one (campaignplan.refusals), the planner's rule.
-    upgrades = run_gains([plan(m, items) for m in family])
-    held = [r for r in held_rows or [] if r.get("name") in wanted]
-    facts = campaignplan.Facts(
-        family=names[0] if names else "",
-        level_rows=tuple(rows),
-        done={},
-        failed={},
-        upgrades=upgrades,
-        keys=campaignplan.keys_held(
-            [r for r in held if int(r.get("entry") or 0) in campaignplan.KEY_ITEMS]
-        ),
+    refused = campaignplan.refusals(
+        _planner_facts(names, rows, family, items, held_rows)
     )
-    refused = campaignplan.refusals(facts)
     reachable = {r.keyword for r in campaignplan.RUNS if r.keyword not in refused}
     plans = [plan(m, items, reachable) for m in family]
     moved = progress(
@@ -1614,6 +1602,28 @@ def family_view(
         [r for r in held_rows or [] if r.get("name") in wanted],
     )
     return build_view(plans, open_places(reachable), refused, moved)
+
+
+def _planner_facts(names, rows, family, items, held_rows):
+    """campaignplan.Facts for the Raid tab's refusals. The upgrades first: a
+    lower dungeon is open to a level 60 family only while it still holds one
+    (campaignplan.refusals), the planner's rule; the door keys off the held
+    items read."""
+    wanted = set(names)
+    held = [
+        r
+        for r in held_rows or []
+        if r.get("name") in wanted
+        and int(r.get("entry") or 0) in campaignplan.KEY_ITEMS
+    ]
+    return campaignplan.Facts(
+        family=names[0] if names else "",
+        level_rows=tuple(rows),
+        done={},
+        failed={},
+        upgrades=run_gains([plan(m, items) for m in family]),
+        keys=campaignplan.keys_held(held),
+    )
 
 
 def open_places(reachable) -> set:

@@ -95,7 +95,7 @@ class TheLadderIsPerFactionAndPerLevel(unittest.TestCase):
         self.assertTrue(view["line"].startswith("Open now: Blackfathom Deeps."))
 
     def test_ragefire_is_the_hordes_and_not_the_alliances(self):
-        young = dict(zip(("Grug", "Ugga", "Og", "Bork", "Grog"), [15] * 5))
+        young = dict.fromkeys(("Grug", "Ugga", "Og", "Bork", "Grog"), 15)
         low = campaignplan.Facts(
             family="Grug",
             level_rows=tuple(

@@ -2902,13 +2902,7 @@ def _fetch_dungeonplan() -> dict:
                 # the record the planner weighs, the door keys, what a capped
                 # family's runs are worth, and the last dungeon choice Jev was
                 # asked for. The bridge planner's own statements.
-                levels = {r["name"]: int(r.get("level") or 0) for r in chars}
-                for head, members in families.items():
-                    records[head] = _fetch_ladder_record(
-                        cur, head, members,
-                        all(levels.get(n, 0) >= campaignplan.LEVEL_CAP
-                            for n in members))
-                records[""] = {"bosses": _ladder_bosses(cur)}
+                records = _fetch_ladder_records(cur, families, chars)
     finally:
         conn.close()
     return {"catalogue_rows": catalogue, "encounter_rows": encounters,
@@ -2934,6 +2928,19 @@ def _ladder_bosses(cur) -> dict | None:
             _LADDER_BOSSES = found
         return found or None
     return _LADDER_BOSSES
+
+
+def _fetch_ladder_records(cur, families: dict, chars: list) -> dict:
+    """family -> _fetch_ladder_record, and "" -> the world's boss levels."""
+    levels = {r["name"]: int(r.get("level") or 0) for r in chars}
+    records = {
+        head: _fetch_ladder_record(
+            cur, head, members,
+            all(levels.get(n, 0) >= campaignplan.LEVEL_CAP for n in members))
+        for head, members in families.items()
+    }
+    records[""] = {"bosses": _ladder_bosses(cur)}
+    return records
 
 
 def _fetch_ladder_record(cur, head: str, members: list, capped: bool) -> dict:
