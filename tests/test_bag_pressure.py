@@ -166,6 +166,22 @@ class BagPressureTests(unittest.TestCase):
         ]
         self.assertEqual(vendor_candidates(rows), ())
 
+    def test_guild_tabard_is_never_a_vendor_candidate(self):
+        rows = [
+            {
+                "holder": "Og",
+                "item_guid": 44,
+                "entry": 5976,
+                "count": 1,
+                "quality": 0,
+                "sell_price": 1,
+                "quest_item": False,
+                "reagent": False,
+                "profession_needed": False,
+            }
+        ]
+        self.assertEqual(vendor_candidates(rows), ())
+
     def test_vendor_batch_scopes_one_travelling_holder(self):
         rows = vendor_candidates(
             [
