@@ -1146,7 +1146,7 @@ class TheSetupBranchClosedTheDepositBranch(unittest.TestCase):
                 "bank grant-deposit rank:3",
                 "bank grant-deposit rank:4",
             ],
-            [a.command for a in actions],
+            [a.command for a in actions if "grant-deposit" in a.command],
         )
 
     def test_the_old_rule_plans_no_deposit_for_as_long_as_setup_has_work(self):

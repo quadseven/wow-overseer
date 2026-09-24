@@ -898,7 +898,7 @@ class TheDepositQueueWaitsForTheWalkTests(unittest.TestCase):
 class BankSetupPlannerTests(unittest.TestCase):
     def test_missing_tab_is_bought_by_the_leader(self):
         self.assertEqual(
-            (guildbank.SetupAction("Grug", "bank buy-tab"),),
+            (guildbank.SetupAction("Grug", "bank buy-tab tab:0"),),
             guildbank.plan_setup(
                 leader="Grug", purchased_tabs=0, rank_ids=(0, 1, 2), deposit_rank_ids=()
             ),
@@ -907,6 +907,7 @@ class BankSetupPlannerTests(unittest.TestCase):
     def test_existing_tab_opens_only_missing_non_master_ranks(self):
         self.assertEqual(
             (
+                guildbank.SetupAction("Grug", "bank buy-tab tab:1"),
                 guildbank.SetupAction("Grug", "bank grant-deposit rank:2"),
                 guildbank.SetupAction("Grug", "bank grant-deposit rank:4"),
             ),
@@ -922,9 +923,146 @@ class BankSetupPlannerTests(unittest.TestCase):
         self.assertEqual((), guildbank.plan_setup(leader="", purchased_tabs=0))
 
 
+class TheGuildBuysItsTabsInOrderAndNamesThem(unittest.TestCase):
+    """#319: three tabs, bought in order by the master and named."""
+
+    def test_the_tabs_fit_the_column_and_the_verb(self):
+        self.assertEqual([0, 1, 2], [t.tab_id for t in guildbank.TABS])
+        for tab in guildbank.TABS:
+            self.assertLessEqual(len(tab.name), 16, tab.name)
+            self.assertRegex(tab.icon, r"^[A-Za-z0-9_]+$")
+        self.assertEqual("Materials", guildbank.TABS[0].name)
+
+    def test_the_prices_are_the_realms(self):
+        self.assertEqual(
+            (1_000_000, 2_500_000, 5_000_000, 10_000_000, 25_000_000, 50_000_000),
+            guildbank.TAB_COSTS_COPPER,
+        )
+        self.assertEqual(guildbank.TAB0_COST_COPPER, guildbank.tab_cost(0))
+        self.assertEqual(0, guildbank.tab_cost(6))
+        self.assertEqual(0, guildbank.tab_cost("x"))
+
+    def test_the_next_tab_is_bought_and_named(self):
+        got = guildbank.plan_setup(
+            leader="Grug",
+            purchased_tabs=1,
+            rank_ids=(0, 1),
+            deposit_rank_ids=(1,),
+            purse=2_600_000,
+            tab_names={0: ""},
+        )
+        self.assertEqual(
+            [
+                "bank buy-tab tab:1",
+                "bank name-tab tab:0 icon:INV_Fabric_Linen_01 Materials",
+            ],
+            [a.command for a in got],
+        )
+
+    def test_a_later_tab_leaves_the_master_its_float(self):
+        self.assertFalse(guildbank.can_buy_tab(2_500_000, 1))
+        self.assertFalse(guildbank.can_buy_tab(2_599_999, 1))
+        self.assertTrue(guildbank.can_buy_tab(2_600_000, 1))
+        # Tab 0 is the price alone, the rule #246 set.
+        self.assertTrue(guildbank.can_buy_tab(1_000_000, 0))
+
+    def test_three_tabs_is_every_tab_the_guild_keeps(self):
+        got = guildbank.plan_setup(
+            leader="Grug",
+            purchased_tabs=3,
+            rank_ids=(0, 1),
+            deposit_rank_ids=(1,),
+            purse=900_000_000,
+            tab_names={t.tab_id: t.name for t in guildbank.TABS},
+        )
+        self.assertEqual((), got)
+        self.assertIsNone(guildbank.next_tab(3))
+        self.assertEqual(0, guildbank.buyer_reserve(3))
+        self.assertEqual(5_000_000, guildbank.buyer_reserve(2))
+
+    def test_a_named_tab_is_not_renamed_and_an_unread_name_is_left(self):
+        named = guildbank.plan_setup(
+            leader="Grug",
+            purchased_tabs=2,
+            rank_ids=(0,),
+            deposit_rank_ids=(),
+            purse=0,
+            tab_names={0: "Materials", 1: "Gear for Later"},
+        )
+        self.assertEqual((), named)
+        unread = guildbank.plan_setup(
+            leader="Grug",
+            purchased_tabs=2,
+            rank_ids=(0,),
+            deposit_rank_ids=(),
+            purse=0,
+        )
+        self.assertEqual((), unread)
+
+
+class DuesInTheMailboxFundTheNextTab(unittest.TestCase):
+    """#319: measured 2026-09-24, the Horde master held 501 copper while about
+    2,400 gold of dues waited in its mailbox."""
+
+    def test_the_horde_master_s_dues_would_buy_tab_0(self):
+        self.assertTrue(guildbank.dues_fund_tab(0, 501, 24_000_000))
+
+    def test_a_purse_that_already_pays_needs_no_mail_run(self):
+        self.assertFalse(guildbank.dues_fund_tab(0, 1_000_000, 24_000_000))
+
+    def test_dues_short_of_the_price_do_not_make_it_urgent(self):
+        self.assertFalse(guildbank.dues_fund_tab(0, 501, 500_000))
+
+    def test_a_guild_with_every_tab_has_nothing_to_fund(self):
+        self.assertFalse(guildbank.dues_fund_tab(3, 0, 900_000_000))
+
+    def test_an_unreadable_read_is_not_urgent(self):
+        self.assertFalse(guildbank.dues_fund_tab(0, "x", 24_000_000))
+
+    def test_the_wait_line_names_the_dues(self):
+        line = guildbank.tab_waits_line("Zug", 501, 0, 24_000_000)
+        self.assertIn("tab 0 waits - Zug holds 0g of the 100g", line)
+        self.assertIn("2400g of dues wait unopened in Zug's mailbox", line)
+        self.assertNotIn("mailbox", guildbank.tab_waits_line("Zug", 501))
+
+
+class TheBuyerKeepsTheNextTabsPrice(unittest.TestCase):
+    def test_only_the_buyer_holds_the_price_back(self):
+        members = [
+            {"name": "Grug", "money": 5_000_000, "in_guild": True},
+            {"name": "Bork", "money": 5_000_000, "in_guild": True},
+        ]
+        got = guildbank.plan_deposits(
+            members, guild_has_tab=True, buyer="Grug", reserve_for_buyer=2_500_000
+        )
+        self.assertEqual(
+            [
+                guildbank.Deposit("Grug", 5_000_000 - 100_000 - 2_500_000),
+                guildbank.Deposit("Bork", 5_000_000 - 100_000),
+            ],
+            got,
+        )
+
+    def test_without_a_tab_the_old_reserve_stands(self):
+        members = [{"name": "Zug", "money": 2_000_000, "in_guild": True}]
+        got = guildbank.plan_deposits(
+            members, guild_has_tab=False, buyer="Zug", reserve_for_buyer=1_000_000
+        )
+        self.assertEqual([guildbank.Deposit("Zug", 900_000)], got)
+
+
 class BankSetupBridgeTests(unittest.TestCase):
     def setUp(self):
         self.source = BRIDGE.read_text(encoding="utf-8")
+
+    def test_setup_reads_every_tab_and_the_masters_dues(self):
+        body = self.source[self.source.index("def _fetch_guild_bank_setup(") :]
+        body = body[: body.index("\ndef _recent_guild_setup_keys")]
+        self.assertIn("HAVING COUNT(*) = %s", body)
+        self.assertIn('"tab_names": tab_names', body)
+        self.assertIn('"tab_items": tab_items', body)
+        self.assertIn("SUM(m.money)", body)
+        self.assertIn('"master_mailed_copper": mailed', body)
 
     def test_setup_reads_all_tables_and_handles_old_realms(self):
         body = self.source[self.source.index("def _fetch_guild_bank_setup(") :]

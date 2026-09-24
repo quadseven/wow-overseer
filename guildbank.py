@@ -120,6 +120,81 @@ FLOAT_COPPER = 100_000
 # is a tab that cannot be afforded, not a corrupted deposit.
 TAB0_COST_COPPER = 1_000_000
 
+# WHAT EVERY TAB COSTS, tab 0 first, in copper. Read from the same deployed
+# worldserver.conf on 2026-09-24 (`Guild.BankTabCost0` to `Guild.BankTabCost5`),
+# which agrees with the core's own defaults: 100g, 250g, 500g, 1000g, 2500g and
+# 5000g. The core sells the tabs in this order and no other (#496).
+TAB_COSTS_COPPER = (1_000_000, 2_500_000, 5_000_000, 10_000_000, 25_000_000, 50_000_000)
+
+
+@dataclass(frozen=True)
+class Tab:
+    """One guild bank tab the guild keeps, and what goes in it."""
+
+    tab_id: int
+    name: str  # at most 16 characters, the width of `guild_bank_tab.TabName`
+    icon: str  # a texture name, one word
+    holds: str
+
+
+# THE TABS A CLASSIC RAID GUILD KEEPS, IN THE ORDER IT BUYS THEM (#319).
+#
+# Tab 0 is Materials because that is what it already holds: every stack the
+# keeper rule has ever deposited is a gem, a cloth, a hide or a lockbox, and a
+# layout that called tab 0 anything else would start by being wrong about the
+# bank it describes. Gear kept for a guildmate comes next, then the raid's
+# supplies. Three tabs cost 850 gold; the other three would cost 8,500 more
+# and would hold nothing this policy files.
+TABS = (
+    Tab(
+        0,
+        "Materials",
+        "INV_Fabric_Linen_01",
+        "crafting materials for the corps: cloth, leather, ore, gems, "
+        "lockboxes and recipes nobody can learn yet",
+    ),
+    Tab(
+        1,
+        "Gear for Later",
+        "INV_Chest_Chain_05",
+        "rare and epic gear nobody can use now that a raider or a family "
+        "member will use later",
+    ),
+    Tab(
+        2,
+        "Raid Supplies",
+        "INV_Potion_24",
+        "raid consumables, their reagents, and fire resistance gear for Molten Core",
+    ),
+)
+TAB_BY_ID = {t.tab_id: t for t in TABS}
+
+
+def tab_cost(tab_id) -> int:
+    """What tab `tab_id` costs, in copper; 0 for a tab the realm does not sell."""
+    try:
+        tab = int(tab_id)
+    except (TypeError, ValueError):
+        return 0
+    return TAB_COSTS_COPPER[tab] if 0 <= tab < len(TAB_COSTS_COPPER) else 0
+
+
+def next_tab(purchased_tabs, wanted_tabs: int = len(TABS)):
+    """The tab the guild buys next, or None when it has every tab it keeps."""
+    try:
+        have = int(purchased_tabs)
+    except (TypeError, ValueError):
+        return None
+    if have < 0 or have >= wanted_tabs or have >= len(TAB_COSTS_COPPER):
+        return None
+    return have
+
+
+def buyer_reserve(purchased_tabs, wanted_tabs: int = len(TABS)) -> int:
+    """Copper the buyer holds back for the next tab: its price, or 0."""
+    tab = next_tab(purchased_tabs, wanted_tabs)
+    return tab_cost(tab) if tab is not None else 0
+
 
 @dataclass(frozen=True)
 class Deposit:
@@ -142,62 +217,157 @@ def plan_setup(
     rank_ids: tuple[int, ...] = (),
     deposit_rank_ids: tuple[int, ...] = (),
     purse: int | None = None,
+    tab_names: dict | None = None,
+    wanted_tabs: int = len(TABS),
 ) -> tuple[SetupAction, ...]:
-    """Plan the one-time tab and deposit-rights setup, without doing I/O.
+    """Plan the tab purchases, deposit rights and tab names, without doing I/O.
 
-    Tab 0 is bought by the guild master from that character's purse. Once it
-    exists, the same master opens tab 0 to every non-master rank that lacks the
-    deposit right. The returned commands are idempotent when the caller reads
-    the persisted state before planning, and malformed state fails closed.
+    Every tab is bought by the guild master from that character's purse, in
+    order, and named as `TABS` names it. Each purchased tab is opened to every
+    non-master rank that lacks the deposit right on it. The commands are
+    idempotent when the caller reads the persisted state before planning, and
+    malformed state fails closed.
+
+    THE PURCHASE NAMES ITS TAB (#496). `bank buy-tab tab:<n>` is refused by
+    the module unless tab n is the next one, so a count read before the
+    core's last purchase committed can never buy the next, dearer tab.
 
     `purse` is the buyer's `characters.money` when the caller read it. A buyer
-    holding less than `TAB0_COST_COPPER` is not asked (#246): the core
+    holding less than the next tab's price is not asked (#246): the core
     refuses the purchase, and the row would cost a walk to the vault for
-    nothing. None keeps the old answer, so a caller that has not read the
+    nothing. Tab 0 needs only its price; a later tab needs its price on top
+    of the buyer's float, because a master emptied by a tab cannot pay a
+    repair bill. None keeps the old answer, so a caller that has not read the
     purse still asks.
+
+    `deposit_rank_ids` are the ranks that can deposit into EVERY purchased
+    tab, so a tab bought after the grants reopens the grant for each rank.
+    `tab_names` maps a purchased tab to its current name; None means unread,
+    and no rename is asked for.
     """
     if not isinstance(leader, str) or not leader.strip():
         return ()
     if not isinstance(purchased_tabs, int) or purchased_tabs < 0:
         return ()
+    actions = list(_purchase(leader, purchased_tabs, purse, wanted_tabs))
     if purchased_tabs == 0:
-        if purse is not None and not can_buy_tab(purse):
-            return ()
-        return (SetupAction(leader, "bank buy-tab"),)
+        return tuple(actions)
+    grants = _grants(leader, rank_ids, deposit_rank_ids)
+    if grants is None:
+        return tuple(actions)
+    actions.extend(grants)
+    actions.extend(_names(leader, purchased_tabs, tab_names))
+    return tuple(actions)
+
+
+def _purchase(leader, purchased_tabs, purse, wanted_tabs) -> tuple:
+    """The next tab's purchase, when the buyer's purse pays or was not read."""
+    tab = next_tab(purchased_tabs, wanted_tabs)
+    if tab is None or (purse is not None and not can_buy_tab(purse, tab)):
+        return ()
+    return (SetupAction(leader, f"bank buy-tab tab:{tab}"),)
+
+
+def _grants(leader, rank_ids, deposit_rank_ids):
+    """The deposit grants still missing, or None when the ranks are unreadable."""
     try:
         ranks = sorted({int(r) for r in rank_ids if int(r) > 0})
         granted = {int(r) for r in deposit_rank_ids if int(r) > 0}
     except (TypeError, ValueError):
-        return ()
-    return tuple(
+        return None
+    return [
         SetupAction(leader, f"bank grant-deposit rank:{rid}")
         for rid in ranks
         if rid not in granted
-    )
+    ]
 
 
-def can_buy_tab(purse) -> bool:
-    """Whether a purse, in copper, pays for tab 0; unreadable reads as no."""
+def _names(leader, purchased_tabs, tab_names) -> list:
+    """A rename for each purchased tab not yet called what TABS calls it;
+    nothing when the names were not read."""
+    if not isinstance(tab_names, dict):
+        return []
+    return [
+        SetupAction(
+            leader, f"bank name-tab tab:{kept.tab_id} icon:{kept.icon} {kept.name}"
+        )
+        for kept in TABS
+        if kept.tab_id < purchased_tabs
+        and str(tab_names.get(kept.tab_id) or "") != kept.name
+    ]
+
+
+def can_buy_tab(purse, tab_id: int = 0) -> bool:
+    """Whether a purse, in copper, pays for tab `tab_id`; unreadable reads as no.
+
+    Tab 0 needs its price alone, the rule #246 set. A later tab also leaves the
+    buyer its float (see plan_setup).
+    """
+    price = tab_cost(tab_id)
+    if price <= 0:
+        return False
     try:
-        return int(purse) >= TAB0_COST_COPPER
+        held = int(purse)
     except (TypeError, ValueError):
         return False
+    return held >= price + (FLOAT_COPPER if int(tab_id) > 0 else 0)
 
 
-def tab_waits_line(buyer: str, purse) -> str:
+def dues_fund_tab(
+    purchased_tabs, purse, mailed_copper, wanted_tabs: int = len(TABS)
+) -> bool:
+    """Whether money waiting in the buyer's mailbox is what stands between
+    the guild and its next tab (#319).
+
+    The guild's dues are posted to the guild master by mail
+    (guildwork.plan_dues). Until the master collects them the purse the tab
+    is bought from stays short, and measured on the dev realm the Horde master
+    held 5 silver with 2,400 gold of dues unopened in its mailbox while the
+    mail pass lost the travel column cycle after cycle. True means the purse
+    alone cannot pay for the next tab and the purse with the letters can, so
+    the mail run is worth making urgently.
+    """
+    tab = next_tab(purchased_tabs, wanted_tabs)
+    if tab is None:
+        return False
+    try:
+        held = max(0, int(purse or 0))
+        waiting = max(0, int(mailed_copper or 0))
+    except (TypeError, ValueError):
+        return False
+    return not can_buy_tab(held, tab) and can_buy_tab(held + waiting, tab)
+
+
+def tab_waits_line(buyer: str, purse, tab_id: int = 0, mailed_copper: int = 0) -> str:
     """The pass's sentence for a tab its buyer cannot pay for yet (#246)."""
     try:
         held = max(0, int(purse or 0))
     except (TypeError, ValueError):
         held = 0
-    return (
-        "guild bank setup: tab 0 waits - %s holds %dg of the %dg it costs, "
+    try:
+        waiting = max(0, int(mailed_copper or 0))
+    except (TypeError, ValueError):
+        waiting = 0
+    line = (
+        "guild bank setup: tab %d waits - %s holds %dg of the %dg it costs, "
         "and the guild's dues are what fill that purse"
-        % (buyer or "nobody", held // 10_000, TAB0_COST_COPPER // 10_000)
+        % (int(tab_id), buyer or "nobody", held // 10_000, tab_cost(tab_id) // 10_000)
     )
+    if waiting:
+        line += "; %dg of dues wait unopened in %s's mailbox" % (
+            waiting // 10_000,
+            buyer or "nobody",
+        )
+    return line
 
 
-def plan_deposits(members: list[dict], *, guild_has_tab: bool = False) -> list[Deposit]:
+def plan_deposits(
+    members: list[dict],
+    *,
+    guild_has_tab: bool = False,
+    buyer: str = "",
+    reserve_for_buyer: int = 0,
+) -> list[Deposit]:
     """One Deposit per character holding more than the reserve, or none.
 
     `members` is a list of {"name": str, "money": int, "in_guild": bool}. A
@@ -245,9 +415,16 @@ def plan_deposits(members: list[dict], *, guild_has_tab: bool = False) -> list[D
         if not name:
             continue
         money = member.get("money") or 0
-        if not isinstance(money, int) or money <= reserve:
+        # THE BUYER KEEPS THE NEXT TAB'S PRICE (#319). Once tab 0 exists the
+        # every-member reserve above is gone, and the next tab is bought from
+        # the guild master's purse alone, so that purse is the one that must
+        # still hold its price after a deposit.
+        held_back = reserve
+        if buyer and name == buyer and guild_has_tab:
+            held_back += max(0, int(reserve_for_buyer or 0))
+        if not isinstance(money, int) or money <= held_back:
             continue
-        deposits.append(Deposit(name=name, copper=money - reserve))
+        deposits.append(Deposit(name=name, copper=money - held_back))
     return deposits
 
 
