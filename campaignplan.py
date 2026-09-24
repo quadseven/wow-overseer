@@ -279,9 +279,14 @@ RUNS_SQL_OLD = (
 # int() or range(); no value from outside reaches them.
 QUESTS_SQL = (
     "SELECT ID AS quest, QuestSortID AS zone, MinLevel AS min_level, "  # noqa: S608
-    "AllowableRaces AS races FROM acore_world.quest_template "
+    "AllowableRaces AS races, a.PrevQuestID AS prev_quest "
+    "FROM acore_world.quest_template q "
+    "LEFT JOIN acore_world.quest_template_addon a ON a.ID = q.ID "
     "WHERE QuestSortID IN (" + ", ".join(str(int(z)) for z in ZONES) + ") "
-    "AND LogTitle NOT LIKE '<%%'"
+    "AND q.LogTitle NOT LIKE '<%%' "
+    "AND EXISTS (SELECT 1 FROM acore_world.creature_queststarter s "
+    "WHERE s.quest = q.ID) AND EXISTS (SELECT 1 FROM acore_world.creature_questender e "
+    "WHERE e.quest = q.ID)"
 )
 
 REWARDED_SQL = (
@@ -436,10 +441,13 @@ def _can_do(row: dict, member: tuple, done_by: dict) -> bool:
     """Whether one member (name, level, race bit) can still do one quest."""
     name, level, bit = member
     races = int(row.get("races") or 0)
+    previous = int(row.get("prev_quest") or 0)
+    done = done_by.get(name, set())
     return (
         (not races or bool(races & bit))
         and level >= int(row.get("min_level") or 0)
-        and int(row["quest"]) not in done_by.get(name, set())
+        and (not previous or abs(previous) in done)
+        and int(row["quest"]) not in done
     )
 
 

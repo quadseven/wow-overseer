@@ -46,6 +46,7 @@ import fanout
 import flightlearn
 import goals
 import attunestep
+import dungeonquests
 import bonds
 import campaignplan
 import campaignqueue
@@ -620,6 +621,7 @@ LEVEL_CLAIMANT = "level"
 # Blackrock Mountain (attunestep.py), across the Eastern Kingdoms, so it is
 # held to the flight pass's lease too. attunestep.CLAIMANT is the same word.
 ATTUNE_CLAIMANT = "attunement"
+DUNGEON_QUEST_CLAIMANT = "dungeon quests"
 
 # How often the leveling pass looks, and how long a leveling choice stands
 # before Jev is asked again on unchanged facts. A level, a new option or a
@@ -2584,6 +2586,64 @@ def _insert_attunement_row(name: str, command: str) -> int:
                     "attunement: overseer_command.kind has no 'quest' value - "
                     "%s for %s needs mod-overseer's "
                     "2026_09_24_04_overseer_quest.sql applied", command, name)
+                return 0
+            raise
+        return cur.lastrowid or 0
+
+
+def _dungeonquest_facts(family: dict, keyword: str, leader: str,
+                        due: bool, mid_run: bool) -> dungeonquests.Facts:
+    names = list(family["names"])
+    holes = ", ".join(["%s"] * len(names))
+    zones = ", ".join(str(int(z)) for z in campaignplan.ZONES)
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(dungeonquests.MEMBERS_SQL.format(holes=holes), tuple(names))
+        members = list(cur.fetchall())
+        try:
+            cur.execute(dungeonquests.SNAPSHOT_SQL.format(holes=holes), tuple(names))
+            snapshots = list(cur.fetchall())
+        except pymysql.err.MySQLError as exc:
+            if not (exc.args and exc.args[0] in (1054, 1146)):
+                raise
+            snapshots = []
+        cur.execute(dungeonquests.QUEST_SQL.format(zones=zones))
+        quests = list(cur.fetchall())
+        cur.execute(dungeonquests.REWARDED_SQL.format(holes=holes), tuple(names))
+        rewarded = list(cur.fetchall())
+        cur.execute(dungeonquests.LOG_SQL.format(holes=holes), tuple(names))
+        log_rows = list(cur.fetchall())
+        entries = sorted(
+            ({int(row.get("starter") or 0) for row in quests}
+             | {int(row.get("ender") or 0) for row in quests}) - {0}
+        )
+        givers = []
+        if entries:
+            cur.execute(dungeonquests.GIVERS_SQL.format(
+                entries=", ".join(str(x) for x in entries)))
+            givers = list(cur.fetchall())
+        try:
+            cur.execute(dungeonquests.RECENT_SQL,
+                        ("overseer:dungeon-quests", 600))
+            recent = list(cur.fetchall())
+        except pymysql.err.MySQLError as exc:
+            if not (exc.args and exc.args[0] in (1054, 1146)):
+                raise
+            recent = []
+    return dungeonquests.facts_from_rows(
+        keyword, leader, members, quests, rewarded, log_rows, snapshots,
+        givers, recent, due=due, mid_run=mid_run)
+
+
+def _insert_dungeonquest_row(name: str, command: str) -> int:
+    with _connect() as conn, conn.cursor() as cur:
+        try:
+            cur.execute(dungeonquests.INSERT_SQL,
+                        (name, command, "overseer:dungeon-quests"))
+        except pymysql.err.MySQLError as exc:
+            if exc.args and exc.args[0] == 1265:
+                log.warning("dungeon quests: command kind is unavailable; %s for %s "
+                            "needs mod-overseer's quest command migration",
+                            command, name)
                 return 0
             raise
         return cur.lastrowid or 0
@@ -4655,6 +4715,7 @@ class Bridge(discord.Client):
                 FLIGHT_CLAIMANT: TOWN_SLOT_FLIGHT_LEASE_SECONDS,
                 LEVEL_CLAIMANT: TOWN_SLOT_FLIGHT_LEASE_SECONDS,
                 ATTUNE_CLAIMANT: TOWN_SLOT_FLIGHT_LEASE_SECONDS,
+                "dungeon quests": TOWN_SLOT_FLIGHT_LEASE_SECONDS,
             },
         )
         # WHICH NODE HAS BEEN ASKED FOR, HOW OFTEN, AND WITH WHAT MASK BEHIND
@@ -6449,6 +6510,7 @@ class Bridge(discord.Client):
                     FLIGHT_CLAIMANT: TOWN_SLOT_FLIGHT_LEASE_SECONDS,
                     LEVEL_CLAIMANT: TOWN_SLOT_FLIGHT_LEASE_SECONDS,
                     ATTUNE_CLAIMANT: TOWN_SLOT_FLIGHT_LEASE_SECONDS,
+                    "dungeon quests": TOWN_SLOT_FLIGHT_LEASE_SECONDS,
                 },
             )
             self._cohort_town_slots[key] = slot
@@ -13268,10 +13330,15 @@ class Bridge(discord.Client):
         # THE TRAVEL COLUMN FIRST, AND FOR EVERY FAMILY (#227): a family whose
         # queue emptied must get its town errands back this pass too.
         await self._campaign_owns_travel(pending, fams)
+        dungeonquest_pass = getattr(self, "_dungeonquest_pass", None)
+        held = (await dungeonquest_pass(pending, fams)
+                if dungeonquest_pass is not None else set())
         await self._leave_town_when_done(fams)
         if not pending:
             return
         for key, rows in pending.items():
+            if key in held:
+                continue
             fam = fams.get(key)
             if fam is None:
                 log.warning("queue: %s has queued dungeons and no enabled "
@@ -13478,6 +13545,51 @@ class Bridge(discord.Client):
             if released:
                 log.info("attunement: %s: %s stands at Lothos Riftwaker, so the "
                          "walk is handed back", who, leader)
+
+    async def _dungeonquest_pass(self, pending: dict, fams: dict) -> set:
+        """Take or hand in dungeon quests before advancing a campaign run."""
+        held = set()
+        own = await asyncio.to_thread(_cohort_of, bonds.head_of_family())
+        for key, rows in sorted(pending.items()):
+            fam = fams.get(key)
+            if not fam or not rows:
+                continue
+            head = rows[0]
+            if str(head.get("status")) not in (campaignqueue.QUEUED,
+                                                campaignqueue.ACTIVE):
+                continue
+            leader = str(fam["leader"].get("name") or "")
+            if not leader:
+                continue
+            try:
+                mid = await self._mid_run(list(fam["names"]))
+                facts = await asyncio.to_thread(
+                    _dungeonquest_facts, fam, str(head["keyword"]), leader,
+                    True, mid)
+                step = dungeonquests.step(facts)
+                if step.hold_planner:
+                    held.add(key)
+                for name, command in step.rows:
+                    written = await asyncio.to_thread(
+                        _insert_dungeonquest_row, name, command)
+                    if written:
+                        log.info("dungeon quests: %s wrote %s for %s (%d)",
+                                 campaignqueue._family(key), command, name,
+                                 written)
+                if step.aim:
+                    await self._claim_town_slot(
+                        DUNGEON_QUEST_CLAIMANT, leader, str(step.aim),
+                        cohort=None if key == (own or "") else key)
+                if step.release:
+                    await asyncio.to_thread(_release_trade_errand, leader,
+                                            str(step.giver or ""))
+                if step.rows or step.aim:
+                    log.info("dungeon quests: %s: %s",
+                             campaignqueue._family(key), step.line)
+            except Exception:
+                log.exception("dungeon quests: pass failed for %s",
+                              campaignqueue._family(key))
+        return held
 
     async def _campaign_owns_travel(self, pending: dict, fams: dict) -> None:
         """Give a staging campaign its leader's travel column (#227).
