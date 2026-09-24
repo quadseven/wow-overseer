@@ -10,6 +10,7 @@ already do (infra#3205).
 """
 
 import pathlib
+import re
 import unittest
 from unittest import mock
 
@@ -267,12 +268,24 @@ class ImplementedMatchesTheModule(unittest.TestCase):
                 "check.python-units.yml passes submodules: true for this dir"
             )
         cls.source = MODULE.read_text(encoding="utf-8", errors="replace")
+        # The same text with // comments stripped. A pin a comment can satisfy
+        # pins nothing (#48): the old dungeon pins survived only inside a
+        # comment that said it was kept for these tests.
+        cls.code = "\n".join(line.split("//", 1)[0] for line in cls.source.splitlines())
 
     def test_the_dungeon_job_really_does_drive_the_run_coordinator(self):
-        """The leader's job being `dungeon` is the sole trigger for reset,
-        stage, gather, cross, clear, exit and the campaign loop."""
-        self.assertIn('leaderJob != "dungeon"', self.source)
-        self.assertIn('leaderJob == "dungeon"', self.source)
+        """The leader's job being `dungeon` or `dungeon:<keyword>` is the sole
+        trigger for reset, stage, gather, cross, clear, exit and the campaign
+        loop.
+
+        EVERY STRING BELOW IS EXECUTABLE CODE, read from the comment-stripped
+        source: the predicate's body, the coordinator's gate on it, and the
+        portal lookup that turns the qualified form into a run."""
+        self.assertIn(
+            'return job == "dungeon" || job.rfind("dungeon:", 0) == 0;', self.code
+        )
+        self.assertIn("if (!IsDungeonJob(leaderJob))", self.code)
+        self.assertIn("FindDungeonPortal(DungeonKeywordForJob(leaderJob))", self.code)
         self.assertIn("dungeon", jobs.IMPLEMENTED)
 
     def test_the_quest_job_really_does_gate_the_quest_drive(self):
@@ -308,15 +321,27 @@ class ImplementedMatchesTheModule(unittest.TestCase):
         had been orphaned."""
         self.assertIn("DriveCraft();", self.source)
 
+    # A job value compared against a mode literal, in any of the shapes the
+    # module's wired drives use: `job == "dungeon"`, `jobIt->second != "craft"`,
+    # `entry.second == "fish"`. A `kind == "bank"` command verb is not a job.
+    _JOB_COMPARISON = r'(?:[Jj]ob\w*|second)\s*[!=]=\s*"%s"'
+
+    def test_the_wiring_shape_is_one_the_module_really_uses(self):
+        """The check below is only as good as its pattern, so the pattern is
+        held to the modes that ARE wired: each of these is found in code."""
+        for mode in ("dungeon", "craft", "fish"):
+            self.assertRegex(self.code, self._JOB_COMPARISON % re.escape(mode), mode)
+
     def test_no_other_mode_claims_to_be_wired(self):
         """DoJob validates the rest against a list and writes the column,
         and nothing else reads them. Widening IMPLEMENTED without a branch in
-        the module to point at is the drift this class exists to stop."""
+        the module to point at is the drift this class exists to stop, and a
+        mode NOT in IMPLEMENTED that gains a job comparison in code is the
+        mirror of it: a drive wired that Discord would still call NOT BUILT."""
         for mode in jobs.MODES:
             if mode in jobs.IMPLEMENTED:
                 continue
-            self.assertNotIn('leaderJob == "%s"' % mode, self.source, mode)
-            self.assertNotIn('Job == "%s"' % mode, self.source, mode)
+            self.assertNotRegex(self.code, self._JOB_COMPARISON % re.escape(mode), mode)
 
 
 if __name__ == "__main__":
