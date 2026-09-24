@@ -8470,18 +8470,18 @@ class Bridge(discord.Client):
                      bag_pressure.TOWN_RUN_FREE_SLOTS)
             return
         if in_run:
-            # Bag pressure outranks an unfinished dungeon. The world-side
-            # coordinator already treats job=quest as the operator's request
-            # to exit through the known portal; issuing it here prevents a
-            # full inventory from trapping the party in an instance forever.
-            for name in names:
-                await asyncio.to_thread(
-                    _insert_job, name, "quest", "overseer:vendor"
-                )
-            log.warning(
-                "economy: bag pressure is urgent during a dungeon; requested "
-                "quest mode for %d roster members before vendor maintenance",
-                len(names),
+            # A FULL BAG NEVER ENDS A RUN. This used to write job=quest for
+            # every member, which the world-side coordinator reads as the
+            # operator ending the run: the family walked out of Ragefire
+            # after two bosses, and nothing ever wrote the dungeon job back,
+            # so the campaign sat abandoned (the operator's rule is never to
+            # cancel a campaign). mod-overseer#644 makes bag room inside the
+            # run instead; this pass only says so and leaves the job alone.
+            log.info(
+                "economy: bag pressure is urgent during a dungeon; the job "
+                "stays on the dungeon and the run makes bag room inside "
+                "(free slots %s)",
+                free_slots,
             )
             return
         # `rows`, `bag_rows` and `equipped_bag_slots` were read above the
