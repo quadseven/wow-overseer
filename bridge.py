@@ -72,6 +72,7 @@ import jobs
 import kin
 import learnaim
 import lockbox
+import lootcouncil
 # NOT `mailbox` - that is a Python standard library module, and this package is
 # imported with its own directory first on sys.path. See mailrun.py's docstring.
 import mailrun
@@ -161,6 +162,14 @@ JEV_RETENTION_DAYS = int(os.environ.get("JEV_RETENTION_DAYS", "30"))
 # acts without it: the client's own deadline, so a slow Jev costs a pass at
 # most that and never more. The answers still arrive and are recorded.
 JEV_ACT_WAIT_SECONDS = float(os.environ.get("JEV_TIMEOUT_SECONDS", "3"))
+# The loot council's poll (#194). mod-overseer holds a roll's votes for 20
+# seconds and a master-loot drop for 30 before its own heuristic decides, so
+# a question has to be noticed within a couple of seconds to be answered at all.
+LOOT_COUNCIL_POLL_SECONDS = 2.0
+# item guid -> why, for the family's BoE gear the guild bank keeps for a
+# lower-level guild member (bag_pressure.guild_bank_keeps, #194). Written by
+# the guild gear share pass, read by the bank plan and the auction pass.
+_GUILD_BANK_KEEPS: dict = {}
 # What gets said in game when NOBODY in the family could answer an order the operator
 # gave - the voice is down, or none of them are in the world. Said once, by the
 # most senior of them, and in the family's own register because it is one of
@@ -4176,6 +4185,7 @@ class Bridge(discord.Client):
                 self._campaign_queue_loop,
                 self._activity_loop,
                 self._run_recovery_loop,
+                self._loot_council_loop,
             )
         }
 
@@ -6542,6 +6552,8 @@ class Bridge(discord.Client):
                     "quality": int(row.get("quality", 0) or 0),
                     "binding": disposition.BIND_ON_EQUIP,
                     "quest_item": False,
+                    # The guild bank's claim blocks the listing (#194).
+                    "recipient": "the guild bank" if guid in _GUILD_BANK_KEEPS else "",
                     "sell_price": int(row.get("sell_price", 0) or 0),
                 })
             except (KeyError, TypeError, ValueError):
@@ -7501,9 +7513,18 @@ class Bridge(discord.Client):
             _fetch_surplus_gear, family_names,
         )
         if not gear_rows:
+            _GUILD_BANK_KEEPS.clear()
             return
         all_names = [str(member.name) for member in roster]
         equipped = await asyncio.to_thread(_fetch_family_equipped, all_names)
+        # THE GUILD BANK'S SHARE (#194): a BoE nobody in the guild wears yet
+        # but a lower-level member will. The bank pass deposits these; the
+        # auction pass leaves them alone.
+        keeps = bag_pressure.guild_bank_keeps(
+            gear_rows, equipped, family_names, roster)
+        _GUILD_BANK_KEEPS.clear()
+        _GUILD_BANK_KEEPS.update(keeps)
+        _log_capped("guild bank keep", list(keeps.values()))
         positions = await asyncio.to_thread(_fetch_positions, all_names)
         free_slots = await asyncio.to_thread(_fetch_free_slots, all_names)
         # A family holder at a mailbox posts the piece; apart otherwise, it
@@ -8895,7 +8916,7 @@ class Bridge(discord.Client):
             self._jev, gear_rows=gear_rows, worn_rows=worn,
             worn_items=worn_items, names=names, describe=describe,
             specs=specs, keep_names=OWNER_KEEPS, modes=modes,
-            limit=JEV_SHADOW_LIMIT,
+            limit=JEV_SHADOW_LIMIT, heads=tuple(bonds.HOUSES),
         )
 
     async def _jev_describer(self, entries):
@@ -8957,9 +8978,73 @@ class Bridge(discord.Client):
         entries |= {int(r["entry"]) for r in worn_items if r.get("entry")}
         describe = await self._jev_describer(entries)
         specs = jev_items.specs_for(family_names, bonds.FAMILY, _jev_trees_for)
-        closet = jev_items.wardrobes(people, worn_items, describe, specs)
+        closet = jev_items.wardrobes(people, worn_items, describe, specs,
+                                     tuple(bonds.HOUSES))
         return await jev_items.recipient_pass(
             self._jev, asks, describe, closet, mode, limit=JEV_SHADOW_LIMIT)
+
+    async def _loot_council_loop(self) -> None:
+        """Answer the loot council's open rows (#194), every two seconds.
+
+        Each row is asked once, concurrently with the others, and written back
+        only while still open. Without a Jev key the heuristic's pick is
+        written at once, which is the answer the module would have reached
+        after its wait anyway, only sooner.
+        """
+        asking: set = set()
+        missing_said = False
+        while True:
+            await asyncio.sleep(LOOT_COUNCIL_POLL_SECONDS)
+            try:
+                rows = await asyncio.to_thread(_fetch_open_councils)
+            except Exception:
+                log.exception("loot council: the open rows could not be read")
+                continue
+            if rows is None:
+                if not missing_said:
+                    log.warning(
+                        "loot council: overseer_loot_council is missing - "
+                        "mod-overseer's 2026_09_24_01_overseer_loot_council.sql "
+                        "is not applied, so there is nothing to answer")
+                    missing_said = True
+                await asyncio.sleep(60)
+                continue
+            for row in rows:
+                council_row = lootcouncil.council_from_row(row)
+                if council_row is None or council_row.key in asking:
+                    continue
+                asking.add(council_row.key)
+                task = asyncio.create_task(
+                    self._answer_loot_council(council_row, asking))
+                self._jev_tasks["loot_council:" + council_row.key] = task
+                task.add_done_callback(_jev_task_done)
+
+    async def _answer_loot_council(self, council_row, asking: set) -> None:
+        """Decide one council row and write it back."""
+        try:
+            rule = lootcouncil.policy()
+            if self._jev.ready(lootcouncil.KIND):
+                describe = await self._jev_describer({council_row.item_entry})
+                decision = await lootcouncil.answer(
+                    self._jev, council_row, describe, rule)
+            else:
+                decision = lootcouncil.skipped(council_row)
+            wrote = await asyncio.to_thread(_decide_council, decision)
+            if wrote:
+                log.info(
+                    "loot council: %s goes to %s (%s) - %s",
+                    council_row.item_name, decision.recipient or "nobody",
+                    decision.decided_by, decision.reason)
+            else:
+                log.info(
+                    "loot council: %s was already decided by the module's "
+                    "heuristic before this answer (%s) landed",
+                    council_row.item_name, decision.decided_by)
+            if decision.judgment.status not in ("unasked",):
+                await asyncio.to_thread(_insert_jev_judgment, decision.judgment)
+        finally:
+            asking.discard(council_row.key)
+            self._jev_tasks.pop("loot_council:" + council_row.key, None)
 
     def _jev_quest_shadow(self, plan, seen: dict, level_rows: list) -> None:
         """Ask Jev which quest the aim should drive, beside questbook (#95)."""
@@ -14902,6 +14987,49 @@ def _jev_trees_for(class_id: int) -> list:
     return book.trees_for(class_id) if book is not None else []
 
 
+# THE LOOT COUNCIL'S ROWS (#194). mod-overseer opens one per weapon or armour
+# drop (its #642) and decides any this process leaves open with its own
+# heuristic, so a question older than its wait is not worth asking: two
+# minutes bounds the read, and the module's own lapse is what closes the rest.
+_LOOT_COUNCIL_OPEN_SQL = (
+    "SELECT council_key, kind, family, source, item_entry, item_name, "
+    "candidates, heuristic, heuristic_why FROM overseer_loot_council "
+    "WHERE status = 'open' AND opened_at >= NOW() - INTERVAL 2 MINUTE "
+    "ORDER BY opened_at LIMIT 16"
+)
+# Only while still open: a row the module's heuristic closed first stays its.
+_LOOT_COUNCIL_DECIDE_SQL = (
+    "UPDATE overseer_loot_council SET status = 'decided', recipient = %s, "
+    "reason = %s, decided_by = %s, decided_at = NOW() "
+    "WHERE council_key = %s AND status = 'open'"
+)
+
+
+def _fetch_open_councils() -> list | None:
+    """The open council rows, or None when the table is not there (1146)."""
+    try:
+        with _connect() as conn, conn.cursor() as cur:
+            cur.execute(_LOOT_COUNCIL_OPEN_SQL)
+            return [dict(r) for r in cur.fetchall()]
+    except pymysql.err.MySQLError as exc:
+        if exc.args and exc.args[0] == 1146:
+            return None
+        raise
+
+
+def _decide_council(decision) -> bool:
+    """Write one decision; True when this process's answer was the one kept."""
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(
+            _LOOT_COUNCIL_DECIDE_SQL,
+            (decision.recipient[:12], decision.reason, decision.decided_by,
+             decision.key),
+        )
+        wrote = cur.rowcount > 0
+        conn.commit()
+        return wrote
+
+
 def _jev_task_done(task: asyncio.Task) -> None:
     """A shadow pass that failed says so; it never takes the bridge down."""
     if task.cancelled():
@@ -17421,6 +17549,7 @@ def _plan_bank(names: list) -> "bank.Plan":
     storage = bank.storage_from(
         held, _worked_by(names), REAGENT_TRADES, _fetch_guild_bank_setup(names),
         routed=_crafter_plan(names).routed,
+        guild_later=dict(_GUILD_BANK_KEEPS),
     )
     return bank.plan(
         bank.members_from_rows(rows, names), bank.family_from_skills(held),

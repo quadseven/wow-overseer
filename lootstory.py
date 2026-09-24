@@ -52,6 +52,8 @@ VIA_GREED = "greed"
 VIA_GIVE = "give"
 VIA_TRADE = "trade"
 VIA_MAIL = "mail"
+# Handed over by a raid's master looter on the loot council's word (#194).
+VIA_COUNCIL = "council"
 
 EMPTY = "No rare, epic or legendary item has been looted, handed over or equipped yet."
 BASIS = (
@@ -88,6 +90,22 @@ def place(row: dict, zones: dict) -> str:
     return recap.place_name(map_id, zone_id, achievements.MAP_NAMES, zones)
 
 
+def _loot_clause(via: str, source: str, where: str) -> str:
+    """How the item was first got: looted, won on a roll, or awarded by the
+    loot council (#194), from what and where."""
+    if via in (VIA_NEED, VIA_GREED):
+        text = "won it on a %s roll" % via
+    elif via == VIA_COUNCIL:
+        text = "was awarded it by the loot council"
+    else:
+        text = "looted it"
+    if source:
+        text += " from " + source
+    if where:
+        text += " in " + where
+    return text
+
+
 def clause(row: dict, zones: dict) -> str:
     """One step of the story, with the item as "it" and no subject.
 
@@ -99,15 +117,7 @@ def clause(row: dict, zones: dict) -> str:
     where = place(row, zones)
     source = row.get("source") or ""
     if kind == ITEM_LOOT:
-        if via in (VIA_NEED, VIA_GREED):
-            text = "won it on a %s roll" % via
-        else:
-            text = "looted it"
-        if source:
-            text += " from " + source
-        if where:
-            text += " in " + where
-        return text
+        return _loot_clause(via, source, where)
     if kind == ITEM_GIVEN:
         to = row.get("counterpart") or "somebody"
         if via == VIA_TRADE:
@@ -243,6 +253,15 @@ def wanted_entries(rows: list[dict]) -> list[int]:
     )
 
 
+def _council_for(story: dict, council: dict) -> dict | None:
+    """The loot council's award for any item guid in this story, or None."""
+    for row in story["steps"]:
+        award = council.get(_int(row.get("item_guid")))
+        if award:
+            return award
+    return None
+
+
 def build_loot(
     rows: list[dict],
     zones: dict,
@@ -250,11 +269,14 @@ def build_loot(
     icons: dict | None = None,
     book=None,
     limit: int = STORY_LIMIT,
+    council: dict | None = None,
 ) -> dict:
     """The payload /api/loot serves.
 
     `rows` are overseer_event rows of the three kinds, each optionally with a
-    `guild` (the guild name of the character on the row). `zones` is area id
+    `guild` (the guild name of the character on the row). `council` is
+    lootcouncil.by_item_guid over the loot council's rows: a story whose item
+    the council handed out ends with who it went to and why (#194). `zones` is area id
     to zone name, recap.zone_names. `items`, `icons` and `book` are what
     achievements.item_payload draws an item from; without them an item still
     renders by the name the event row recorded.
@@ -268,6 +290,9 @@ def build_loot(
         line = sentence(story["steps"], zones)
         if not line:
             continue
+        award = _council_for(story, council or {})
+        if award and award.get("reason"):
+            line += " Loot council: %s" % award["reason"]
         item = achievements.item_payload(story["entry"], items, icons, book)
         if story["entry"] not in items:
             # The world database did not answer for this entry, so the name

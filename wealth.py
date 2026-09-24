@@ -459,6 +459,9 @@ def item_payload(
         "container": container,
         "position": position,
         "wowhead": WOWHEAD % row["entry"],
+        # The item's own guid, so the page can hang the loot council's line
+        # (why it was handed to this character) on the tooltip (#194).
+        "guid": row.get("item_guid"),
     }
     payload["stack"] = stack_label(payload)
     payload["place"] = place_label(where, container)

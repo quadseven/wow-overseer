@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Iterable
 
 import disposition
@@ -1591,6 +1591,50 @@ def guild_routes_from_rows(gear_rows, equipped_rows, family_names, members):
         guild_route_holdings(gear_rows),
         guild_route_candidates(equipped_rows, members, family_names),
     )
+
+
+def guild_bank_keeps(gear_rows, equipped_rows, family_names, members) -> dict:
+    """item guid -> why, for the family's bind-on-equip gear the guild bank
+    should keep (#194).
+
+    THE MIDDLE OF THREE HOMES FOR A BoE EXTRA. A guildmate it upgrades today
+    gets it (`guild_gear_gifts`); nobody at all is the auction house's
+    (`auction.plan_sales`). Between them is the piece nobody in the guild can
+    use YET: a guild member below its required level who will wear it on
+    reaching that level, the way a guild keeps a blue for the alt coming up
+    behind. `gear.would_wear` is asked at the required level, so the class,
+    armour-training and weapon-skill rules are the ones every hand-off uses.
+
+    Every guild member counts, online or not: the bank waits for them.
+    """
+    family = [str(n) for n in family_names or ()]
+    names = [str(m.name) for m in members or ()]
+    roles = {c.name: c.role for c in family_characters(equipped_rows, family)}
+    characters = gear.characters_from_rows(equipped_rows, names, roles=roles)
+    keeps = {}
+    for holding in guild_route_holdings(gear_rows):
+        if any(
+            gear.upgrade_gain(holding, c)[0] > 0
+            for c in characters
+            if c.name != holding.holder
+        ):
+            continue
+        later = sorted(
+            c.name
+            for c in characters
+            if c.name != holding.holder
+            and c.level < int(holding.required_level)
+            and gear.would_wear(holding, replace(c, level=int(holding.required_level)))[
+                0
+            ]
+        )
+        if later:
+            keeps[int(holding.guid)] = (
+                "%s is bind-on-equip and %s can wear it at level %d, so the "
+                "guild bank keeps it"
+                % (holding.name, later[0], int(holding.required_level))
+            )
+    return keeps
 
 
 def weakest_slot_of(name, class_id, level, equipped: dict):

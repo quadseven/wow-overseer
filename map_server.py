@@ -37,6 +37,7 @@ import frames
 import guildcraft
 import guildroute
 import jevview
+import lootcouncil
 import lootstory
 import modelviewer
 import needs
@@ -1448,7 +1449,10 @@ def _fetch_loot() -> dict:
                 fallback=base.format(story=""),
                 what="the loot story",
             )
-            entries = lootstory.wanted_entries(rows)
+            council_rows = _guarded(
+                cur, _LOOT_COUNCIL_SQL % 14, what="the loot council")
+            entries = sorted(set(lootstory.wanted_entries(rows)) | {
+                int(r["item_entry"]) for r in council_rows if r.get("item_entry")})
             items = {}
             if entries:
                 iholes = ", ".join(["%s"] * len(entries))
@@ -1461,7 +1465,39 @@ def _fetch_loot() -> dict:
                 items = {int(r["entry"]): r for r in cur.fetchall()}
     finally:
         conn.close()
-    return {"rows": rows, "items": items, "icons": ITEMS.icons, "book": ITEMS}
+    return {"rows": rows, "items": items, "icons": ITEMS.icons, "book": ITEMS,
+            "council_rows": council_rows}
+
+
+# THE LOOT COUNCIL'S ROWS (#194), newest first, for the Chronicle and Bags.
+# mod-overseer writes them (its #642); the bridge answers them. A realm that
+# has not applied the table (1146) reads as no rows through _guarded.
+_LOOT_COUNCIL_SQL = (
+    "SELECT council_key, kind, family, source, item_entry, item_name, "
+    "item_quality, status, recipient, reason, decided_by, given_to, item_guid, "
+    "outcome, opened_at, decided_at, given_at FROM overseer_loot_council "
+    "WHERE opened_at >= NOW() - INTERVAL %d DAY "
+    "ORDER BY opened_at DESC LIMIT 200"
+)
+
+
+def _fetch_loot_council_view() -> dict:
+    """lootcouncil.view over the last day's council rows; never raises.
+
+    One strip at the foot of the Bags tab, like the guild hand-overs, so a
+    failed read is an empty strip rather than a 503 for the bags.
+    """
+    try:
+        conn = _connect()
+        try:
+            with conn.cursor() as cur:
+                rows = _guarded(cur, _LOOT_COUNCIL_SQL % 1, what="the loot council")
+        finally:
+            conn.close()
+        return lootcouncil.view(rows)
+    except Exception:
+        log.exception("loot council read failed; the Bags tab runs without it")
+        return lootcouncil.view([])
 
 
 # --- the Family view's needs, handovers and bonds (infra#2597) ------------
@@ -4405,9 +4441,12 @@ class Handler(BaseHTTPRequestHandler):
         """
         try:
             fetched = _fetch_loot()
+            council = fetched.get("council_rows") or []
             payload = lootstory.build_loot(
                 fetched["rows"], recap.zone_names(GEO.continents),
-                items=fetched["items"], icons=fetched["icons"], book=fetched["book"])
+                items=fetched["items"], icons=fetched["icons"], book=fetched["book"],
+                council=lootcouncil.by_item_guid(council))
+            payload["council"] = lootcouncil.board(council)
             self._send(200, "application/json", json.dumps(payload).encode())
         except Exception:
             # The Chronicle keeps the list it has drawn and says it may be
@@ -4733,6 +4772,8 @@ class Handler(BaseHTTPRequestHandler):
             payload = wealth.build_wealth(**_fetch_wealth(names), icons=ITEMS.icons,
                                           families=groups)
             payload["guild_routes"] = _fetch_guild_routes()
+            payload["loot_council"] = _fetch_loot_council_view()
+            lootcouncil.annotate_tips(payload, payload["loot_council"]["by_guid"])
             self._send(200, "application/json", json.dumps(payload).encode())
         except Exception:
             # Same contract as every other poll: the view keeps the bags it

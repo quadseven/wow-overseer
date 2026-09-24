@@ -48,6 +48,7 @@ import bag_pressure
 import disposition
 import jev
 import raidlineup
+import statweights
 
 KIND_DISPOSITION = "item_disposition"
 KIND_WEAPON = "weapon_choice"
@@ -365,14 +366,24 @@ class Wardrobe:
     level: int
     spec: str
     worn: dict  # equipment slot -> item description (dict)
+    # The family's head (bonds.HOUSES), who tanks for it by the operator's
+    # decision. Said to Jev with the tank flag (#194).
+    head: bool = False
+
+    @property
+    def role(self) -> str:
+        """statweights' role for this class and talent tree."""
+        return statweights.role_for(self.class_id, self.spec)
 
 
-def wardrobes(characters, worn_items, describe, specs) -> dict:
-    """name -> Wardrobe, from the worn rows (name, slot, entry)."""
+def wardrobes(characters, worn_items, describe, specs, heads=()) -> dict:
+    """name -> Wardrobe, from the worn rows (name, slot, entry). `heads` are
+    the families' heads, marked on their Wardrobe."""
+    heads = frozenset(heads or ())
     by_name = {}
     for c in characters:
         by_name[c.name] = Wardrobe(
-            c.name, c.class_id, c.level, specs.get(c.name, ""), {}
+            c.name, c.class_id, c.level, specs.get(c.name, ""), {}, c.name in heads
         )
     for row in worn_items:
         try:
@@ -386,7 +397,45 @@ def wardrobes(characters, worn_items, describe, specs) -> dict:
     return by_name
 
 
-def _who(w: Wardrobe, slots) -> dict:
+def upgrade_slots(inventory_type) -> tuple:
+    """The worn slots an upgrade is measured against: the main hand for a
+    main-hand or two-handed weapon, the off hand for a shield or held item,
+    and otherwise every slot the piece fits, the weakest of which it replaces
+    (a ring, a trinket)."""
+    kind = int(inventory_type or 0)
+    if kind in (13, 17, 21):
+        return (_HANDS[0],)
+    if kind in (14, 22, 23):
+        return (_HANDS[1],)
+    return _WORN_SLOTS.get(kind, ())
+
+
+def upgrade_item_levels(w: Wardrobe, slots, item_level) -> int | None:
+    """How many item levels `item_level` is over the weakest piece worn in
+    `slots` (the one it would replace), or None when unknown. An empty slot
+    counts as item level 0: all of it is an upgrade."""
+    try:
+        level = int(item_level)
+    except (TypeError, ValueError):
+        return None
+    if not slots:
+        return None
+    worn = []
+    for s in slots:
+        if s not in w.worn:
+            return level
+        try:
+            worn.append(int(w.worn[s].get("item_level")))
+        except (TypeError, ValueError, AttributeError):
+            return None
+    return level - min(worn)
+
+
+def _who(w: Wardrobe, slots, item_level=None, measure=None) -> dict:
+    """One character as a question shows them: class, level, talent tree,
+    role, the tank and head flags, what the role values (statweights), and
+    what they wear where the item goes, with the upgrade size in item levels
+    when the caller knows the item's (#194)."""
     out = {
         "name": w.name,
         "class": class_name(w.class_id),
@@ -394,21 +443,35 @@ def _who(w: Wardrobe, slots) -> dict:
     }
     if w.spec:
         out["talent_specialization"] = w.spec
+    role = w.role
+    out["role"] = role
+    out["tank"] = role == statweights.TANK
+    if w.head:
+        out["family_head"] = True
+    weights = statweights.stat_weights(role)
+    if weights:
+        out["stat_weights"] = weights
     out["wearing_in_those_slots"] = [
         w.worn[s] for s in slots if s in w.worn
     ] or "nothing"
+    gain = upgrade_item_levels(w, slots if measure is None else measure, item_level)
+    if gain is not None:
+        out["upgrade_item_levels"] = gain
     return out
 
 
 def disposition_question(holding, item: dict, closet: dict, offered: dict):
     """(state, questions) for one carried piece."""
     slots = _WORN_SLOTS.get(int(holding.inventory_type), ())
+    measure = upgrade_slots(holding.inventory_type)
     holder = closet.get(holding.holder)
     others = [closet[n] for n in sorted(closet) if n != holding.holder]
     state = {
         "item": dict(item, copy_is_soulbound=bool(holding.soulbound)),
-        "holder": _who(holder, slots) if holder else {"name": holding.holder},
-        "family": [_who(w, slots) for w in others],
+        "holder": _who(holder, slots, holding.item_level, measure)
+        if holder
+        else {"name": holding.holder},
+        "family": [_who(w, slots, holding.item_level, measure) for w in others],
     }
     instructions = (
         "`holder` carries `item` in their bags. They are a World of Warcraft "
@@ -446,13 +509,12 @@ def weapon_question(holding, item: dict, wardrobe: Wardrobe):
         (wardrobe.spec + " ") if wardrobe.spec else "",
         class_name(wardrobe.class_id),
     )
+    character = _who(
+        wardrobe, _HANDS, holding.item_level, upgrade_slots(holding.inventory_type)
+    )
+    del character["wearing_in_those_slots"]
     state = {
-        "character": {
-            "name": wardrobe.name,
-            "class": class_name(wardrobe.class_id),
-            "level": wardrobe.level,
-            **({"talent_specialization": wardrobe.spec} if wardrobe.spec else {}),
-        },
+        "character": character,
         "carried": item,
         "worn": worn,
     }
@@ -694,6 +756,7 @@ async def shadow_pass(
     keep_names=(),
     modes=None,
     limit: int = 16,
+    heads=(),
 ) -> list:
     """Ask Jev about each carried piece, beside the heuristic. Acts on nothing.
 
@@ -706,7 +769,7 @@ async def shadow_pass(
     characters = tuple(bag_pressure.family_characters(worn_rows, names))
     family = _Family(
         characters=characters,
-        closet=wardrobes(characters, worn_items, describe, specs or {}),
+        closet=wardrobes(characters, worn_items, describe, specs or {}, heads),
         pipeline=Pipeline.read(gear_rows, worn_rows, names, keep_names),
         modes=dict(modes or {}),
     )
@@ -983,7 +1046,16 @@ def recipient_question(ask: RecipientAsk, item: dict, closet: dict):
     members, criteria = [], {}
     for r in ask.offered:
         w = closet.get(r.name)
-        who = _who(w, slots) if w is not None else {"name": r.name}
+        who = (
+            _who(
+                w,
+                slots,
+                ask.holding.item_level,
+                upgrade_slots(ask.holding.inventory_type),
+            )
+            if w is not None
+            else {"name": r.name}
+        )
         who["in_the_holders_family"] = bool(r.family)
         members.append(who)
         criteria[r.name] = recipient_option(r, w, slots)
