@@ -3510,7 +3510,7 @@ def _fetch_recap(map_id: int | None, names: list[str] | None = None) -> dict:
 # have always existed rather than raising, and agenda.build_agenda is written
 # to say less when it is handed less.
 _ROSTER_FULL = (
-    "SELECT name, enabled, `lead`, job, drive_quest, travel_npc, learn_skill, "
+    "SELECT name, family, enabled, `lead`, job, drive_quest, travel_npc, learn_skill, "
     "dungeon_runs_wanted, dungeon_runs_done FROM overseer_roster"
 )
 # The lead column is back-quoted because it is a reserved word in MySQL 8; an

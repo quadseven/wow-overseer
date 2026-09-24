@@ -281,6 +281,12 @@ class EveryOverseerTableReadIsGuarded(unittest.TestCase):
         self.assertEqual(block.count("`lead`"), 2)
         self.assertNotIn(" lead,", block)
 
+    def test_the_agenda_roster_read_carries_family(self):
+        block = self.server[
+            self.server.index("_ROSTER_FULL =") : self.server.index("_RUNS_FULL =")
+        ]
+        self.assertIn("family", block)
+
 
 if __name__ == "__main__":
     unittest.main()
