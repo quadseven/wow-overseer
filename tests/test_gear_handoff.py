@@ -516,3 +516,18 @@ class TheOneOpinionIsStillTheOnlyOpinion(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class BagPressureNeverEndsARun(unittest.TestCase):
+    """mod-overseer#644 makes bag room inside a run. The vendor pass used to
+    write job=quest for every member mid-dungeon, which the coordinator reads
+    as the run being over, and nothing restored the dungeon job afterwards:
+    on wow-dev the Horde's Ragefire campaign was walked out on every roll."""
+
+    def test_the_mid_dungeon_branch_writes_no_job(self):
+        body = _block("    async def _vendor_once(self")
+        start = body.index("if in_run:")
+        end = body.index("return", start)
+        branch = body[start:end]
+        self.assertNotIn("_insert_job", branch)
+        self.assertNotIn('"quest"', branch)
